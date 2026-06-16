@@ -20,6 +20,7 @@ import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
 interface SessionApiModule {
   listSessions: (opts?: import('./public-api.js').ListSessionsOptions) => Promise<import('./public-api.js').SessionSummary[]>;
   loadSession: (id: string) => Promise<import('./public-api.js').SessionSummary | null>;
+  loadFullTranscript: (id: string) => Promise<import('./public-api.js').FullTranscriptSessionData | null>;
   forkSession: (id: string, opts?: { selector?: string; sessionId?: string; title?: string }) => Promise<{ sessionId: string; data: unknown } | null>;
   rewindSession: (id: string, opts?: { selector?: string }) => Promise<unknown | null>;
   setActiveEntry: (id: string, selector: string) => Promise<unknown | null>;
@@ -461,6 +462,7 @@ describe('Session Management Public SDK', () => {
     const expectedMethods = [
       'listSessions',
       'loadSession',
+      'loadFullTranscript',
       'forkSession',
       'rewindSession',
       'setActiveEntry',
@@ -544,6 +546,206 @@ describe('Session Management Public SDK', () => {
   });
 
   // ── Test 14: v0.7.43 — listRunningSessions surfaces sessionId from heartbeat ──
+  it('loadFullTranscript returns append-order entries across disconnected lineage roots', async () => {
+    const overrideDir = path.join(tempHome, 'full-transcript-test');
+    await mkdir(overrideDir, { recursive: true });
+
+    const mgr = api.createSessionManager({ sessionsDir: overrideDir }) as {
+      storage: { save: (id: string, data: unknown) => Promise<void> };
+      loadSession: (id: string) => Promise<{ messages: Array<{ content: unknown }> } | null>;
+      loadFullTranscript: (id: string) => Promise<{
+        messages: Array<{ content: unknown }>;
+        activeMessages: Array<{ content: unknown }>;
+        transcriptEntries: Array<{ active: boolean; type: string }>;
+      } | null>;
+    };
+
+    await mgr.storage.save('full-transcript-001', {
+      messages: [
+        { role: 'user', content: 'first prompt' },
+        { role: 'assistant', content: 'first answer' },
+      ],
+      title: 'Full transcript',
+      gitRoot: tempHome,
+      scope: 'user',
+    });
+    await mgr.storage.save('full-transcript-001', {
+      messages: [
+        { role: 'system', content: '[对话历史摘要]\n\nsummary' },
+        { role: 'user', content: 'second prompt' },
+      ],
+      title: 'Full transcript',
+      gitRoot: tempHome,
+      scope: 'user',
+    });
+
+    const active = await mgr.loadSession('full-transcript-001');
+    const full = await mgr.loadFullTranscript('full-transcript-001');
+
+    expect(active?.messages.map((message) => message.content)).toEqual([
+      '[对话历史摘要]\n\nsummary',
+      'second prompt',
+    ]);
+    expect(full?.activeMessages.map((message) => message.content)).toEqual([
+      '[对话历史摘要]\n\nsummary',
+      'second prompt',
+    ]);
+    expect(full?.messages.map((message) => message.content)).toEqual([
+      'first prompt',
+      'first answer',
+      '[对话历史摘要]\n\nsummary',
+      'second prompt',
+    ]);
+    expect(full?.transcriptEntries.map((entry) => entry.active)).toEqual([
+      false,
+      false,
+      true,
+      true,
+    ]);
+  });
+
+  it('loadFullTranscript includes entries archived into the islands sidecar', async () => {
+    const overrideDir = path.join(tempHome, 'full-transcript-sidecar-test');
+    const projectDir = path.join(overrideDir, 'project-a');
+    await mkdir(projectDir, { recursive: true });
+    const id = 'sidecar-transcript-001';
+    const mainPath = path.join(projectDir, `${id}.jsonl`);
+    const sidecarPath = path.join(projectDir, `${id}.islands.jsonl`);
+    const legacySidecarPath = path.join(projectDir, `${id}.archive.jsonl`);
+
+    await writeFile(
+      mainPath,
+      [
+        JSON.stringify({
+          _type: 'meta',
+          id,
+          title: 'Sidecar transcript',
+          gitRoot: '/tmp/test-repo',
+          createdAt: '2026-06-16T00:00:00.000Z',
+          scope: 'user',
+          lineageVersion: 2,
+          activeEntryId: 'entry_current',
+          activeMessageCount: 1,
+          lineageEntryCount: 3,
+        }),
+        JSON.stringify({
+          _type: 'lineage_entry',
+          entry: {
+            id: 'entry_marker',
+            parentId: null,
+            timestamp: '2026-06-16T00:00:01.000Z',
+            type: 'archive_marker',
+            archiveBatchId: 'batch_old',
+            archivedEntryCount: 2,
+            summary: 'Old island',
+          },
+        }),
+        JSON.stringify({
+          _type: 'lineage_entry',
+          entry: {
+            id: 'entry_old_user',
+            parentId: null,
+            timestamp: '2026-06-15T00:00:00.000Z',
+            type: 'message',
+            message: { role: 'user', content: 'old prompt still in main' },
+          },
+        }),
+        JSON.stringify({
+          _type: 'lineage_entry',
+          entry: {
+            id: 'entry_current',
+            parentId: null,
+            timestamp: '2026-06-16T00:00:02.000Z',
+            type: 'message',
+            message: { role: 'user', content: 'current prompt' },
+          },
+        }),
+      ].join('\n') + '\n',
+      'utf-8',
+    );
+    await writeFile(
+      sidecarPath,
+      [
+        JSON.stringify({
+          _type: 'archive_batch',
+          archiveBatchId: 'batch_old',
+          sessionId: id,
+          archivedAt: '2026-06-16T00:00:03.000Z',
+          entryCount: 2,
+        }),
+        JSON.stringify({
+          _type: 'archived_entry',
+          archiveBatchId: 'batch_old',
+          entry: {
+            id: 'entry_old_user',
+            parentId: null,
+            timestamp: '2026-06-15T00:00:00.000Z',
+            type: 'message',
+            message: { role: 'user', content: 'old prompt' },
+          },
+        }),
+        JSON.stringify({
+          _type: 'archived_entry',
+          archiveBatchId: 'batch_old',
+          entry: {
+            id: 'entry_old_assistant',
+            parentId: 'entry_old_user',
+            timestamp: '2026-06-15T00:00:01.000Z',
+            type: 'message',
+            message: { role: 'assistant', content: 'old answer' },
+          },
+        }),
+      ].join('\n') + '\n',
+      'utf-8',
+    );
+    await writeFile(
+      legacySidecarPath,
+      [
+        JSON.stringify({
+          _type: 'archived_entry',
+          archiveBatchId: 'batch_old',
+          entry: {
+            id: 'entry_old_user',
+            parentId: null,
+            timestamp: '2026-06-15T00:00:00.000Z',
+            type: 'message',
+            message: { role: 'user', content: 'old prompt duplicate' },
+          },
+        }),
+      ].join('\n') + '\n',
+      'utf-8',
+    );
+
+    const mgr = api.createSessionManager({ sessionsDir: overrideDir }) as {
+      loadSession: (sessionId: string) => Promise<{ messages: Array<{ content: unknown }> } | null>;
+      loadFullTranscript: (sessionId: string) => Promise<{
+        messages: Array<{ content: unknown }>;
+        activeMessages: Array<{ content: unknown }>;
+        transcriptEntries: Array<{ active: boolean }>;
+      } | null>;
+    };
+
+    const active = await mgr.loadSession(id);
+    const full = await mgr.loadFullTranscript(id);
+
+    expect(active?.messages.map((message) => message.content)).toEqual([
+      'current prompt',
+    ]);
+    expect(full?.messages.map((message) => message.content)).toEqual([
+      'old prompt',
+      'old answer',
+      'current prompt',
+    ]);
+    expect(full?.activeMessages.map((message) => message.content)).toEqual([
+      'current prompt',
+    ]);
+    expect(full?.transcriptEntries.map((entry) => entry.active)).toEqual([
+      false,
+      false,
+      true,
+    ]);
+  });
+
   it('listRunningSessions().sessionId is sourced from PersistedSessionState.sessionId', async () => {
     // Plant a fake live instance directory under <agentConfigHome>/instances/<pid>/
     // with sessionId in its state.json. discoverInstances reads

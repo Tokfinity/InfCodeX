@@ -317,12 +317,18 @@ export async function buildManagedTaskCompactionHook(
             }
           }
 
-          compactionUpdate = result.artifactLedger
+          compactionUpdate = result.anchor
             ? {
               anchor: result.anchor,
-              artifactLedger: result.artifactLedger,
-              memorySeed: result.memorySeed,
-              postCompactAttachments,
+              ...(result.artifactLedger !== undefined
+                ? { artifactLedger: result.artifactLedger }
+                : {}),
+              ...(result.memorySeed !== undefined
+                ? { memorySeed: result.memorySeed }
+                : {}),
+              ...(postCompactAttachments !== undefined
+                ? { postCompactAttachments }
+                : {}),
             }
             : undefined;
 

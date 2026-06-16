@@ -620,7 +620,7 @@ but `session.storage` is missing** — it points at this section.
 
 ```ts
 import { runKodaX } from '@kodax-ai/kodax/coding';
-import { createSessionManager } from '@kodax-ai/kodax/repl';
+import { createSessionManager } from '@kodax-ai/kodax/session';
 
 // One manager per host process; reuse across runs so the
 // per-session write queue + append-watermark caches stay coherent.
@@ -642,6 +642,7 @@ await runKodaX(
 // Same `storage` instance reads back through SessionManager:
 const recent = await listSessions({ scope: 'user', limit: 50 });
 const replay = await loadSession('s_my_chat');
+const scrollback = await loadFullTranscript('s_my_chat');
 ```
 
 ### What `createSessionManager()` returns (v0.7.43+)
@@ -651,6 +652,7 @@ interface SessionManager {
   // Read side (FEATURE_173 v0.7.42)
   listSessions(...): Promise<SessionSummary[]>;
   loadSession(id): Promise<...>;
+  loadFullTranscript(id): Promise<...>;
   forkSession(id, opts?): Promise<...>;
   rewindSession(id, opts?): Promise<...>;
   setActiveEntry(id, selector): Promise<void>;
@@ -661,6 +663,31 @@ interface SessionManager {
   storage: FileSessionStorage;     // ← NEW — pass into runKodaX
 }
 ```
+
+### Active context vs full transcript vs UI replay
+
+Session persistence exposes three related but different layers:
+
+| Need | Use | Meaning |
+|---|---|---|
+| Continue a model turn | `loadSession(id)` | Active branch only. This is the context KodaX would resume from. |
+| Render a host sidebar / scrollback | `loadFullTranscript(id)` | Append-order transcript entries, including entries no longer on the active branch when available. |
+| Reuse TUI display projection | `SessionData.uiHistory` | Optional bounded replay cache. Interactive REPL sessions may write it; headless SDK sessions may not. |
+
+For product UI, prefer `loadFullTranscript(id)` for conversation history and
+treat `loadSession(id)` as the model-context API. Do not assume `uiHistory`
+exists. It is intentionally a small, lossy replay cache; canonical facts remain
+in `messages` / `lineage`.
+
+v0.7.51 extends the `uiHistory` schema so interactive sessions can persist
+sanitized terminal tool cards. Headless SDK sessions can still reconstruct
+tool-call display from canonical assistant `tool_use` and user `tool_result`
+messages when no TUI replay cache exists. Workflow progress remains on the
+`WorkflowProcessSnapshot` / lifecycle-controller surfaces from v0.7.50; session
+history should replay durable child digests and final answers, not workflow live
+process state. The neutral replay types live with the session data model in
+`@kodax-ai/kodax/agent`; use `KodaXSessionUiHistoryItem` when a host needs to
+type-check `SessionData.uiHistory`.
 
 ### Custom sessions directory (multi-tenant / tests)
 

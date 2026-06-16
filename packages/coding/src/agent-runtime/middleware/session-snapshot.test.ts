@@ -11,6 +11,7 @@
  */
 
 import { describe, it, expect, vi, beforeEach, afterEach } from 'vitest';
+import type { KodaXSessionData, KodaXSessionStorage } from '@kodax-ai/agent';
 import type { KodaXOptions } from '../../types.js';
 import { saveSessionSnapshot } from './session-snapshot.js';
 
@@ -155,6 +156,110 @@ describe('saveSessionSnapshot — happy path with storage', () => {
       errorMetadata: { lastError: 'boom', lastErrorTime: 1, consecutiveErrors: 1 },
     });
     expect(saveMock).toHaveBeenCalledTimes(1);
+  });
+
+  it('error snapshot keeps a valid user-starting transcript authoritative', async () => {
+    const saveMock = vi.fn().mockResolvedValue(undefined);
+    const loadMock = vi.fn().mockResolvedValue(null);
+    const opts = {
+      provider: 'anthropic',
+      session: {
+        id: `safe-error-${Date.now()}`,
+        storage: { save: saveMock, load: loadMock } as KodaXSessionStorage,
+      },
+    } as unknown as KodaXOptions;
+    const messages = [
+      { role: 'user' as const, content: 'please continue' },
+    ];
+
+    await saveSessionSnapshot(opts, opts.session!.id!, {
+      messages,
+      title: 't',
+      errorMetadata: { lastError: 'provider 500', lastErrorTime: 1, consecutiveErrors: 1 },
+    });
+
+    expect(loadMock).not.toHaveBeenCalled();
+    expect(saveMock).toHaveBeenCalledTimes(1);
+    expect(saveMock.mock.calls[0]?.[1]?.messages).toBe(messages);
+  });
+
+  it('error snapshot rejects headless assistant tool_use fragments as authoritative history', async () => {
+    const existingLineage: KodaXSessionData['lineage'] = {
+      version: 2,
+      activeEntryId: 'entry_good',
+      entries: [],
+    };
+    const existingMessages = [
+      { role: 'user' as const, content: 'previous clean prompt' },
+      { role: 'assistant' as const, content: 'previous clean answer' },
+    ];
+    const existing: KodaXSessionData = {
+      messages: existingMessages,
+      title: 'old',
+      gitRoot: '/repo',
+      lineage: existingLineage,
+    };
+    const saveMock = vi.fn().mockResolvedValue(undefined);
+    const loadMock = vi.fn().mockResolvedValue(existing);
+    const opts = {
+      provider: 'zhipu-coding',
+      session: {
+        id: `bad-error-${Date.now()}`,
+        storage: { save: saveMock, load: loadMock } as KodaXSessionStorage,
+      },
+    } as unknown as KodaXOptions;
+
+    await saveSessionSnapshot(opts, opts.session!.id!, {
+      messages: [
+        {
+          role: 'assistant',
+          content: [{ type: 'tool_use', id: 'call_1', name: 'skill', input: {} }],
+        },
+        {
+          role: 'user',
+          content: [{ type: 'tool_result', tool_use_id: 'call_1', content: 'done' }],
+        },
+      ],
+      title: 'errored',
+      errorMetadata: { lastError: 'zhipu 1214', lastErrorTime: 2, consecutiveErrors: 1 },
+    });
+
+    expect(loadMock).toHaveBeenCalledWith(opts.session!.id!);
+    expect(saveMock).toHaveBeenCalledTimes(1);
+    const persisted = saveMock.mock.calls[0]?.[1] as KodaXSessionData;
+    expect(persisted.messages).toBe(existingMessages);
+    expect(persisted.lineage).toBe(existingLineage);
+    expect(persisted.errorMetadata?.lastError).toBe('zhipu 1214');
+  });
+
+  it('error snapshot with no clean existing session records error without inventing lineage', async () => {
+    const saveMock = vi.fn().mockResolvedValue(undefined);
+    const loadMock = vi.fn().mockResolvedValue(null);
+    const opts = {
+      provider: 'zhipu-coding',
+      session: {
+        id: `bad-first-error-${Date.now()}`,
+        storage: { save: saveMock, load: loadMock } as KodaXSessionStorage,
+      },
+    } as unknown as KodaXOptions;
+
+    await saveSessionSnapshot(opts, opts.session!.id!, {
+      messages: [
+        {
+          role: 'assistant',
+          content: [{ type: 'tool_use', id: 'call_1', name: 'skill', input: {} }],
+        },
+      ],
+      title: 'errored',
+      errorMetadata: { lastError: 'zhipu 1214', lastErrorTime: 2, consecutiveErrors: 1 },
+    });
+
+    expect(loadMock).toHaveBeenCalledWith(opts.session!.id!);
+    expect(saveMock).toHaveBeenCalledTimes(1);
+    const persisted = saveMock.mock.calls[0]?.[1] as KodaXSessionData;
+    expect(persisted.messages).toEqual([]);
+    expect(persisted.lineage).toBeUndefined();
+    expect(persisted.errorMetadata?.lastError).toBe('zhipu 1214');
   });
 
   it('absorbs storage.save errors via console.error (does NOT throw to caller)', async () => {

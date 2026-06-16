@@ -14,7 +14,12 @@ import fsPromises from 'node:fs/promises';
 import path from 'node:path';
 
 import { discoverInstances } from '@kodax-ai/agent';
-import type { KodaXSessionRuntimeInfo } from '@kodax-ai/agent';
+import type {
+  KodaXMessage,
+  KodaXSessionEntry,
+  KodaXSessionLineage,
+  KodaXSessionRuntimeInfo,
+} from '@kodax-ai/agent';
 
 import { FileSessionStorage } from '../interactive/storage.js';
 import { deriveProjectKeyFromRoot } from '../interactive/project-key.js';
@@ -126,6 +131,24 @@ export interface SessionSummary {
   readonly archived?: boolean;
 }
 
+export type SessionTranscriptEntryType = 'message' | 'compaction' | 'branch_summary';
+
+export interface SessionTranscriptEntry {
+  readonly entryId: string;
+  readonly parentId: string | null;
+  readonly timestamp: string;
+  readonly type: SessionTranscriptEntryType;
+  readonly message: KodaXMessage;
+  readonly active: boolean;
+  readonly summary?: string;
+}
+
+export interface FullTranscriptSessionData extends Omit<SessionData, 'messages'> {
+  readonly messages: KodaXMessage[];
+  readonly activeMessages: KodaXMessage[];
+  readonly transcriptEntries: SessionTranscriptEntry[];
+}
+
 export interface ListSessionsOptions {
   /**
    * Alias for gitRoot; backwards-compat with KodaX Space terminology.
@@ -163,6 +186,7 @@ export type WatchSessionsCallback = (
 export interface SessionManager {
   listSessions: typeof listSessions;
   loadSession: typeof loadSession;
+  loadFullTranscript: typeof loadFullTranscript;
   forkSession: typeof forkSession;
   rewindSession: typeof rewindSession;
   setActiveEntry: typeof setActiveEntry;
@@ -396,7 +420,238 @@ function toSessionSummary(raw: {
   };
 }
 
+function isRecord(value: unknown): value is Record<string, unknown> {
+  return typeof value === 'object' && value !== null;
+}
+
+function isMessage(value: unknown): value is KodaXMessage {
+  if (!isRecord(value)) {
+    return false;
+  }
+  return (
+    value.role === 'user'
+    || value.role === 'assistant'
+    || value.role === 'system'
+  ) && (
+    typeof value.content === 'string'
+    || Array.isArray(value.content)
+  );
+}
+
+function hasEntryBase(value: unknown): value is {
+  id: string;
+  parentId: string | null;
+  timestamp: string;
+  type: string;
+} {
+  return isRecord(value)
+    && typeof value.id === 'string'
+    && (value.parentId === null || typeof value.parentId === 'string')
+    && typeof value.timestamp === 'string'
+    && typeof value.type === 'string';
+}
+
+function isTranscriptSidecarEntry(value: unknown): value is KodaXSessionEntry {
+  if (!hasEntryBase(value)) {
+    return false;
+  }
+  const entry = value as Record<string, unknown> & {
+    id: string;
+    parentId: string | null;
+    timestamp: string;
+    type: string;
+  };
+  switch (entry.type) {
+    case 'message':
+      return isMessage(entry.message);
+    case 'compaction':
+      return typeof entry.summary === 'string';
+    case 'branch_summary':
+      return typeof entry.summary === 'string';
+    case 'archive_marker':
+      return typeof entry.archiveBatchId === 'string'
+        && typeof entry.archivedEntryCount === 'number'
+        && typeof entry.summary === 'string';
+    case 'label':
+      return typeof entry.targetId === 'string'
+        && (entry.label === undefined || typeof entry.label === 'string');
+    case 'goal':
+      return typeof entry.event === 'string';
+    default:
+      return false;
+  }
+}
+
+function isArchivedEntryLine(value: unknown): value is {
+  _type: 'archived_entry';
+  archiveBatchId: string;
+  entry: KodaXSessionEntry;
+} {
+  return isRecord(value)
+    && value._type === 'archived_entry'
+    && typeof value.archiveBatchId === 'string'
+    && isTranscriptSidecarEntry(value.entry);
+}
+
+async function readArchivedTranscriptEntries(
+  id: string,
+  sessionsDir: string,
+): Promise<KodaXSessionEntry[]> {
+  let sessionFile: string | undefined;
+  const candidateNames = new Set([`${id}.jsonl`, `archived-${id}.jsonl`]);
+  for (const filePath of await collectSessionFilePaths(sessionsDir, true)) {
+    if (candidateNames.has(path.basename(filePath))) {
+      sessionFile = filePath;
+      break;
+    }
+  }
+  if (!sessionFile) {
+    return [];
+  }
+
+  const dir = path.dirname(sessionFile);
+  const stem = path.basename(sessionFile, '.jsonl');
+  const stems = Array.from(new Set([id, stem]));
+  const sidecarPaths = stems.flatMap((candidate) => [
+    path.join(dir, `${candidate}.islands.jsonl`),
+    path.join(dir, `${candidate}.archive.jsonl`),
+  ]);
+
+  const entries: KodaXSessionEntry[] = [];
+  const seenEntryIds = new Set<string>();
+  for (const sidecarPath of sidecarPaths) {
+    let text = '';
+    try {
+      text = await fsPromises.readFile(sidecarPath, 'utf-8');
+    } catch {
+      continue;
+    }
+    for (const line of text.split(/\r?\n/)) {
+      if (!line.trim()) {
+        continue;
+      }
+      try {
+        const parsed: unknown = JSON.parse(line);
+        if (isArchivedEntryLine(parsed)) {
+          if (!seenEntryIds.has(parsed.entry.id)) {
+            seenEntryIds.add(parsed.entry.id);
+            entries.push(parsed.entry);
+          }
+        }
+      } catch {
+        // Ignore malformed sidecar records; the main session is still useful.
+      }
+    }
+  }
+  return entries;
+}
+
+function mergeTranscriptLineageEntries(
+  archivedEntries: readonly KodaXSessionEntry[],
+  lineageEntries: readonly KodaXSessionEntry[],
+): KodaXSessionEntry[] {
+  const seenEntryIds = new Set<string>();
+  const merged: KodaXSessionEntry[] = [];
+
+  for (const entry of archivedEntries) {
+    if (!seenEntryIds.has(entry.id)) {
+      seenEntryIds.add(entry.id);
+      merged.push(entry);
+    }
+  }
+  for (const entry of lineageEntries) {
+    if (!seenEntryIds.has(entry.id)) {
+      seenEntryIds.add(entry.id);
+      merged.push(entry);
+    }
+  }
+
+  return merged;
+}
+
 // ── loadSession ───────────────────────────────────────────────────────────────
+
+// Full transcript helpers preserve append order without changing active
+// lineage semantics.
+function collectActiveIds(lineage: KodaXSessionLineage): Set<string> {
+  const byId = new Map(lineage.entries.map((entry) => [entry.id, entry]));
+  const activeIds = new Set<string>();
+  let currentId = lineage.activeEntryId;
+  while (currentId) {
+    const entry = byId.get(currentId);
+    if (!entry) {
+      break;
+    }
+    activeIds.add(entry.id);
+    currentId = entry.parentId;
+  }
+  return activeIds;
+}
+
+function summaryMessage(summary: string, kind: SessionTranscriptEntryType): KodaXMessage {
+  if (kind === 'branch_summary') {
+    return {
+      role: 'user',
+      content: `The following is a summary of a branch that this conversation came back from:\n\n<summary>\n${summary}\n</summary>`,
+    };
+  }
+  return {
+    role: 'system',
+    content: `[\u5bf9\u8bdd\u5386\u53f2\u6458\u8981]\n\n${summary}`,
+  };
+}
+
+function toTranscriptEntry(
+  entry: KodaXSessionEntry,
+  activeIds: ReadonlySet<string>,
+): SessionTranscriptEntry | null {
+  switch (entry.type) {
+    case 'message':
+      return {
+        entryId: entry.id,
+        parentId: entry.parentId,
+        timestamp: entry.timestamp,
+        type: 'message',
+        message: entry.message,
+        active: activeIds.has(entry.id),
+      };
+    case 'compaction':
+      return {
+        entryId: entry.id,
+        parentId: entry.parentId,
+        timestamp: entry.timestamp,
+        type: 'compaction',
+        message: summaryMessage(entry.summary, 'compaction'),
+        active: activeIds.has(entry.id),
+        summary: entry.summary,
+      };
+    case 'branch_summary':
+      return {
+        entryId: entry.id,
+        parentId: entry.parentId,
+        timestamp: entry.timestamp,
+        type: 'branch_summary',
+        message: summaryMessage(entry.summary, 'branch_summary'),
+        active: activeIds.has(entry.id),
+        summary: entry.summary,
+      };
+    case 'archive_marker':
+    case 'label':
+    case 'goal':
+      return null;
+    default: {
+      const exhaustiveCheck: never = entry;
+      return exhaustiveCheck;
+    }
+  }
+}
+
+function buildTranscriptEntries(lineage: KodaXSessionLineage): SessionTranscriptEntry[] {
+  const activeIds = collectActiveIds(lineage);
+  return lineage.entries
+    .map((entry) => toTranscriptEntry(entry, activeIds))
+    .filter((entry): entry is SessionTranscriptEntry => entry !== null);
+}
 
 /**
  * Load full session data by ID.
@@ -412,6 +667,54 @@ async function loadSessionImpl(
 ): Promise<SessionData | null> {
   try {
     return await getStorage(sessionsDirOverride).load(id);
+  } catch {
+    return null;
+  }
+}
+
+/**
+ * Load append-order transcript data by ID.
+ *
+ * `loadSession` remains the active model-context API. This helper is for UI
+ * scrollback: it returns every persisted transcript-bearing lineage entry in
+ * append order and keeps the active branch in `activeMessages`.
+ */
+export async function loadFullTranscript(id: string): Promise<FullTranscriptSessionData | null> {
+  return loadFullTranscriptImpl(id, undefined);
+}
+
+async function loadFullTranscriptImpl(
+  id: string,
+  sessionsDirOverride: string | undefined,
+): Promise<FullTranscriptSessionData | null> {
+  try {
+    const sessionsDir = resolveSessionsDir(sessionsDirOverride);
+    await ensureLayoutMigrated(sessionsDir);
+    const storage = getStorage(sessionsDirOverride);
+    const activeData = await storage.load(id);
+    if (!activeData) {
+      return null;
+    }
+    const lineage = await storage.getLineage(id);
+    if (!lineage) {
+      return {
+        ...activeData,
+        activeMessages: activeData.messages,
+        transcriptEntries: [],
+      };
+    }
+    const archivedEntries = await readArchivedTranscriptEntries(id, sessionsDir);
+    const fullLineage = archivedEntries.length > 0
+      ? { ...lineage, entries: mergeTranscriptLineageEntries(archivedEntries, lineage.entries) }
+      : lineage;
+    const transcriptEntries = buildTranscriptEntries(fullLineage);
+    return {
+      ...activeData,
+      messages: transcriptEntries.map((entry) => entry.message),
+      activeMessages: activeData.messages,
+      transcriptEntries,
+      lineage: fullLineage,
+    };
   } catch {
     return null;
   }
@@ -813,6 +1116,7 @@ export function createSessionManager(opts?: { sessionsDir?: string }): SessionMa
     return {
       listSessions,
       loadSession,
+      loadFullTranscript,
       forkSession,
       rewindSession,
       setActiveEntry,
@@ -827,6 +1131,7 @@ export function createSessionManager(opts?: { sessionsDir?: string }): SessionMa
   return {
     listSessions: (o) => listSessionsImpl(o, sessionsDir),
     loadSession: (id) => loadSessionImpl(id, sessionsDir),
+    loadFullTranscript: (id) => loadFullTranscriptImpl(id, sessionsDir),
     forkSession: (id, o) => forkSessionImpl(id, o, sessionsDir),
     rewindSession: (id, o) => rewindSessionImpl(id, o, sessionsDir),
     setActiveEntry: (id, selector) => setActiveEntryImpl(id, selector, sessionsDir),

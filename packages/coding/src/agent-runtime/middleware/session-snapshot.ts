@@ -44,7 +44,8 @@
 import { exec } from 'child_process';
 import { promisify } from 'util';
 
-import type { KodaXMessage } from '@kodax-ai/llm';
+import type { KodaXContentBlock, KodaXMessage } from '@kodax-ai/llm';
+import type { KodaXSessionLineage } from '@kodax-ai/agent';
 
 import type { KodaXOptions, SessionErrorMetadata } from '../../types.js';
 import {
@@ -78,6 +79,50 @@ async function getGitRoot(cwd?: string): Promise<string | null> {
  * only warns once.
  */
 const warnedSessionIds = new Set<string>();
+
+function contentBlocks(message: KodaXMessage): readonly KodaXContentBlock[] {
+  return Array.isArray(message.content) ? message.content : [];
+}
+
+function collectToolUseIds(message: KodaXMessage): string[] {
+  return contentBlocks(message)
+    .filter((block) => block.type === 'tool_use')
+    .map((block) => block.id);
+}
+
+function collectToolResultIds(message: KodaXMessage): string[] {
+  return contentBlocks(message)
+    .filter((block) => block.type === 'tool_result')
+    .map((block) => block.tool_use_id);
+}
+
+function isSafeAuthoritativeTranscript(messages: readonly KodaXMessage[]): boolean {
+  const firstNonSystem = messages.find((message) => message.role !== 'system');
+  if (!firstNonSystem) {
+    return messages.length === 0;
+  }
+  if (firstNonSystem.role !== 'user') {
+    return false;
+  }
+
+  const pendingToolUseIds = new Set<string>();
+  for (const message of messages) {
+    if (message.role === 'assistant') {
+      for (const id of collectToolUseIds(message)) {
+        pendingToolUseIds.add(id);
+      }
+      continue;
+    }
+    if (message.role === 'user') {
+      for (const id of collectToolResultIds(message)) {
+        if (!pendingToolUseIds.delete(id)) {
+          return false;
+        }
+      }
+    }
+  }
+  return pendingToolUseIds.size === 0;
+}
 
 export async function saveSessionSnapshot(
   options: KodaXOptions,
@@ -149,6 +194,26 @@ export async function saveSessionSnapshot(
   //   3. `getGitRoot(executionCwd)` — fallback git rev-parse, now run in
   //      the SDK consumer's executionCwd rather than process.cwd().
   //   4. `''` — empty string when git resolution fails (legacy behavior).
+  let messagesToPersist = data.messages;
+  let lineageToPreserve: KodaXSessionLineage | undefined;
+  if (data.errorMetadata && !isSafeAuthoritativeTranscript(data.messages)) {
+    try {
+      const existing = await options.session.storage.load(sessionId);
+      if (existing) {
+        messagesToPersist = existing.messages;
+        lineageToPreserve = existing.lineage;
+      } else {
+        // No clean persisted state exists yet: record the error metadata, but
+        // do not promote the unsafe provider fragment into authoritative history.
+        messagesToPersist = [];
+        lineageToPreserve = undefined;
+      }
+    } catch {
+      messagesToPersist = [];
+      lineageToPreserve = undefined;
+    }
+  }
+
   const gitRoot =
     data.gitRoot
     ?? options.context?.gitRoot
@@ -160,12 +225,13 @@ export async function saveSessionSnapshot(
   // Snapshots are best-effort; resume just won't see the latest state.
   try {
     await options.session.storage.save(sessionId, {
-      messages: data.messages,
+      messages: messagesToPersist,
       title: data.title,
       gitRoot,
       tag: options.session.tag,
       scope: options.session.scope ?? 'user',
       errorMetadata: data.errorMetadata,
+      ...(lineageToPreserve !== undefined ? { lineage: lineageToPreserve } : {}),
       extensionState: data.runtimeSessionState
         ? snapshotRuntimeExtensionState(data.runtimeSessionState.extensionState)
         : undefined,

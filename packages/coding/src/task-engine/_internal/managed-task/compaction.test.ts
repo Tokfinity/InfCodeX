@@ -223,6 +223,45 @@ describe('buildManagedTaskCompactionHook — v0.7.40 parity gaps', () => {
       expect(result).toBeUndefined();
       expect(compactMock).not.toHaveBeenCalled();
     });
+
+    it('passes compaction anchor to host even when no artifact ledger is present', async () => {
+      const messages: KodaXMessage[] = [{ role: 'user', content: 'tiny' }];
+      const snapshotRef: ContextTokenSnapshotRef = {
+        current: snapshotAtApiTotal(150_000, messages),
+      };
+      const onCompactedMessages = vi.fn();
+      const compactedMessages: KodaXMessage[] = [
+        { role: 'system', content: '[对话历史摘要]\n\nsummary' },
+        { role: 'user', content: 'tail' },
+      ];
+      const anchor = {
+        summary: 'summary',
+        tokensBefore: 150_000,
+        tokensAfter: 50_000,
+        entriesRemoved: 3,
+        reason: 'context_window',
+      };
+      compactMock.mockResolvedValueOnce({
+        compacted: true,
+        messages: compactedMessages,
+        tokensBefore: 150_000,
+        tokensAfter: 50_000,
+        entriesRemoved: 3,
+        summary: 'summary',
+        anchor,
+      } satisfies CompactionResult);
+
+      const hook = await buildManagedTaskCompactionHook(
+        makeOptions({ events: { onCompactedMessages } }),
+        { contextTokenSnapshotRef: snapshotRef },
+      );
+      const result = await hook!(messages);
+
+      expect(result).toEqual(compactedMessages);
+      expect(onCompactedMessages).toHaveBeenCalledTimes(1);
+      expect(onCompactedMessages.mock.calls[0]?.[1]?.anchor).toBe(anchor);
+      expect(onCompactedMessages.mock.calls[0]?.[1]?.artifactLedger).toBeUndefined();
+    });
   });
 
   describe('Phase 3: graceful degradation fallback', () => {

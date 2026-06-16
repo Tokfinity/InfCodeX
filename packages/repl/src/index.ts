@@ -142,7 +142,10 @@ export type {
 // Also available via the `@kodax-ai/kodax/session` SDK subpath.
 export type {
   SessionSummary,
+  FullTranscriptSessionData,
   ListSessionsOptions,
+  SessionTranscriptEntry,
+  SessionTranscriptEntryType,
   WatchSessionsCallback,
   SessionManager,
   RunningSessionInfo,
@@ -151,6 +154,7 @@ export type {
 export {
   listSessions,
   loadSession,
+  loadFullTranscript,
   forkSession,
   rewindSession,
   setActiveEntry,

@@ -11,6 +11,7 @@
  * import {
  *   listSessions,
  *   loadSession,
+ *   loadFullTranscript,
  *   forkSession,
  *   rewindSession,
  *   setActiveEntry,
@@ -38,7 +39,10 @@
 // workspace packages in this build configuration.
 export type {
   SessionSummary,
+  FullTranscriptSessionData,
   ListSessionsOptions,
+  SessionTranscriptEntry,
+  SessionTranscriptEntryType,
   WatchSessionsCallback,
   SessionManager,
   RunningSessionInfo,
@@ -47,6 +51,7 @@ export type {
 export {
   listSessions,
   loadSession,
+  loadFullTranscript,
   forkSession,
   rewindSession,
   setActiveEntry,

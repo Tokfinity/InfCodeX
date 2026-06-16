@@ -1,6 +1,6 @@
 # Known Issues
 
-_Last Updated: 2026-06-13_
+_Last Updated: 2026-06-16_
 
 ---
 
@@ -82,12 +82,73 @@ _Last Updated: 2026-06-13_
 | 135 | Medium | Resolved | FEATURE_167 B2 synth verdict path bypasses `autoCompleteOnAccept` — UI shows `0/N completed` even when run terminates as `accept` | v0.7.41 | v0.7.42 | 2026-05-19 | 2026-05-19 |
 | 136 | Low | Open | 流式 / 滚动时 spinner 动画卡顿 + 计时变慢 — 根因在 CPU 侧每帧渲染（React reconciliation + outputToScreen 全量重建），**非**终端写入字节量（cell-diff + DECSTBM 两次否证 I/O 假设） | 待调研 | - | 2026-05-31 | - |
 | 137 | High | Resolved | Streamable HTTP MCP transport drops `Mcp-Session-Id` on sessionful servers | v0.7.16 | v0.7.45 | 2026-06-05 | 2026-06-05 |
+| 139 | High | Resolved | SDK session full transcript hidden by active-lineage load + error snapshots can orphan activeEntryId | long-standing | v0.7.49 | 2026-06-16 | 2026-06-16 |
 | 138 | High | Resolved | Workflow host RPC 边界对对象载荷零校验 — `synthesize` 传非数组 inputs 崩裸 TypeError + `runAgent`/`spawnAgent` 缺 name/prompt 静默烧 token | v0.7.49 | v0.7.49 | 2026-06-15 | 2026-06-15 |
 
 ---
 
 ## Issue Details
 <!-- Full details for each issue - REQUIRED for all issues -->
+
+### 139: SDK session full transcript hidden by active-lineage load + error snapshots can orphan activeEntryId
+
+- **Priority**: High
+- **Status**: **Resolved** (v0.7.49)
+- **Introduced**: long-standing / pre-existing
+- **Created**: 2026-06-16
+- **Resolved**: 2026-06-16
+- **Fixed**: v0.7.49
+
+#### Original Problem
+
+KodaX Space renders SDK sessions through public `loadSession(id)`. For a session compacted four times, on-disk lineage contained 164 entries, but `loadSession` returned only the active branch's 10 messages. The earlier entries remained on disk, but users saw most conversation history disappear.
+
+The same session ended with an error snapshot whose first message was an assistant `tool_use`, not a clean system/user start. The provider rejected the request with zhipu code 1214, then the error snapshot advanced active lineage to that malformed tool-loop fragment.
+
+#### Root Cause
+
+- `loadSession` exposes active model context, not append-order full transcript.
+- Headless SDK persistence does not write TUI-style `uiHistory`.
+- Error snapshots can persist in-flight provider messages that are unsafe as authoritative session history.
+- Runner-driven compaction can drop the compaction anchor when no artifact ledger is present.
+
+#### Resolution
+
+- Added public `loadFullTranscript(id)` / `createSessionManager().loadFullTranscript(id)` for append-order UI scrollback while keeping `loadSession` active-context semantics.
+- Guarded error snapshots so malformed provider transcripts may record `errorMetadata` but cannot update active lineage.
+- Changed Runner-driven compaction to pass compaction anchors whenever they exist, independent of artifact ledger presence.
+
+#### Files Changed
+
+- `packages/coding/src/agent-runtime/middleware/session-snapshot.ts`
+- `packages/coding/src/task-engine/_internal/managed-task/compaction.ts`
+- `packages/repl/src/session/public-api.ts`
+- `packages/repl/src/index.ts`
+- `src/sdk-session.ts`
+- Regression tests in the matching `*.test.ts` files.
+
+#### Tests Added
+
+- Error snapshot guard tests for valid user-starting transcripts and invalid assistant-tool fragments.
+- Public API tests proving `loadFullTranscript` returns append-order entries across disconnected lineage roots, including `.islands.jsonl` sidecar entries, while `loadSession` stays active-only.
+- Compaction hook test proving anchor propagation without artifact ledger.
+
+#### Verification
+
+- `npx vitest run packages/coding/src/agent-runtime/middleware/session-snapshot.test.ts packages/coding/src/task-engine/_internal/managed-task/compaction.test.ts packages/repl/src/session/public-api.test.ts` -> 61 passed.
+- `npm run build:packages` -> passed.
+- `npm run build:dts` -> passed; bundled SDK declarations include `loadFullTranscript`.
+- `git diff --check` -> passed.
+
+Additional suite observations:
+
+- `npx vitest run packages/repl` exposed the existing workflow-command parallel-suite flake; `npx vitest run packages/repl/src/commands/workflow-command.test.ts` passed in isolation.
+- `npx vitest run packages/coding` exposed the existing Issue 133 repo-intelligence atomic rename flake; `npx vitest run packages/coding/src/repo-intelligence/runtime.test.ts` passed in isolation.
+
+#### Context
+
+Evidence session: `C:\Users\iceto\.kodax\sessions\c-works-gitworks-kodax-author-kodax-space-fad022fc3b\s_8b5c4bc1-4034-438a-8258-04e0eb5d4723.jsonl`.
+
 ---
 ### 138: Workflow host RPC 边界对对象载荷零校验 — `synthesize` 传非数组 inputs 崩裸 TypeError + `runAgent`/`spawnAgent` 缺 name/prompt 静默烧 token
 
@@ -4295,7 +4356,7 @@ Commit `ef085fc` 把 V1 精简到 V2 时没区分"信息载体"和"脚手架"，
 ---
 
 ## Summary
-- Total: 65 (24 Open, 41 Resolved, 0 Partially Resolved, 0 Won't Fix)
+- Total: 66 (24 Open, 42 Resolved, 0 Partially Resolved, 0 Won't Fix)
 - Highest Priority Open: 091 - 缺少一等公民 MCP / Web Search / Code Search 工具体系 (High)
 - Historical archived issues are maintained in ISSUES_ARCHIVED.md
 
