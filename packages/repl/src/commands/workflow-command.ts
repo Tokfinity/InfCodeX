@@ -187,15 +187,20 @@ export const workflowCommand: Command = {
         console.log(chalk.yellow(`\nUsage: /workflow runs [--all] [--limit N]\n${options.error}\n`));
         return;
       }
+      const processSnapshots = new Map(
+        manager.listWorkflowProcessSnapshots({ activeOnly: false })
+          .map((snapshot) => [snapshot.runId, snapshot]),
+      );
       const active = manager.list().filter(isActiveManagedWorkflowRun);
       if (active.length > 0) {
         console.log(chalk.bold('\nActive workflow runs:'));
-        console.log(formatManagedRunsList(active));
+        console.log(formatManagedRunsList(active, { processSnapshots }));
       }
       console.log(chalk.bold('\nWorkflow runs:'));
       console.log(formatRunsList(readWorkflowRuns(baseDir), {
         limit: options.all ? undefined : options.limit,
         showLimitHint: !options.all,
+        processSnapshots,
       }));
       console.log();
       return;
@@ -212,8 +217,12 @@ export const workflowCommand: Command = {
       if (!ensureSafeRunId(runId)) return;
       const managed = manager.get(runId);
       const detail = readWorkflowRunDetail(baseDir, runId);
+      const processSnapshot = manager.getWorkflowProcessSnapshot(runId);
       console.log(chalk.bold('\nWorkflow run:'));
-      console.log(formatWorkflowRunSnapshot(managed, detail, { full: invocation.full === true }));
+      console.log(formatWorkflowRunSnapshot(managed, detail, {
+        full: invocation.full === true,
+        ...(processSnapshot ? { processSnapshot } : {}),
+      }));
       console.log();
       return;
     }

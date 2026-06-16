@@ -11,6 +11,7 @@ import type {
   WorkflowEvent,
   WorkflowMeta,
   WorkflowModule,
+  WorkflowProcessSnapshot,
   WorkflowScriptManifest,
 } from '@kodax-ai/agent';
 import {
@@ -53,7 +54,7 @@ export {
   type WorkflowRunPresentation,
 } from './workflow-command-results.js';
 
-const TERMINAL_WORKFLOW_STATUSES = new Set(['completed', 'failed', 'stopped', 'denied']);
+const TERMINAL_WORKFLOW_STATUSES = new Set(['completed', 'failed', 'stopped', 'denied', 'cancelled']);
 
 export function formatWorkflowList(metas: readonly WorkflowMeta[]): string {
   if (metas.length === 0) return '  (no built-in workflows)';
@@ -330,6 +331,7 @@ function statusIcon(status: string): string {
   if (status === 'paused') return chalk.yellow('pause');
   if (status === 'stopped') return chalk.dim('stop');
   if (status === 'denied') return chalk.dim('deny');
+  if (status === 'cancelled') return chalk.dim('cancel');
   return chalk.dim('-');
 }
 
@@ -340,6 +342,19 @@ export function isTerminalWorkflowStatus(status: string): boolean {
 export interface WorkflowRunsListFormatOptions {
   readonly limit?: number;
   readonly showLimitHint?: boolean;
+  readonly processSnapshots?: ReadonlyMap<string, WorkflowProcessSnapshot>;
+}
+
+function formatProcessListMeta(snapshot: WorkflowProcessSnapshot | undefined): string | undefined {
+  if (!snapshot) return undefined;
+  const parts: string[] = [];
+  if (snapshot.displayName && snapshot.displayName !== snapshot.workflowName) {
+    parts.push(`display: ${snapshot.displayName}`);
+  }
+  if (snapshot.source) parts.push(`source: ${snapshot.source}`);
+  if (snapshot.savedWorkflowName) parts.push(`saved: ${snapshot.savedWorkflowName}`);
+  if (snapshot.revisionOf) parts.push(`revision of: ${snapshot.revisionOf}`);
+  return parts.length > 0 ? parts.join(', ') : undefined;
 }
 
 export function formatRunsList(
@@ -351,6 +366,20 @@ export function formatRunsList(
     ? undefined
     : Math.max(1, Math.floor(options.limit));
   const visibleRuns = limit === undefined ? runs : runs.slice(0, limit);
+  if (options.processSnapshots) {
+    const lines = visibleRuns.map((r) => {
+      const processMeta = formatProcessListMeta(options.processSnapshots?.get(r.runId));
+      return `  ${statusIcon(r.status)} ${chalk.cyan(r.workflow)} ${chalk.dim(r.runId)} - ${r.status} (${r.totalSpawned} agents)${
+        processMeta ? chalk.dim(` [${processMeta}]`) : ''
+      }`;
+    });
+    if (options.showLimitHint === true && limit !== undefined && runs.length > visibleRuns.length) {
+      lines.push(
+        chalk.dim(`  Showing ${visibleRuns.length} of ${runs.length} persisted runs. Use /workflow runs --all to show all.`),
+      );
+    }
+    return lines.join('\n');
+  }
   const lines = visibleRuns
     .map(
       (r) =>
@@ -364,8 +393,21 @@ export function formatRunsList(
   return lines.join('\n');
 }
 
-export function formatManagedRunsList(runs: readonly ManagedWorkflowSnapshot[]): string {
+export function formatManagedRunsList(
+  runs: readonly ManagedWorkflowSnapshot[],
+  options: { readonly processSnapshots?: ReadonlyMap<string, WorkflowProcessSnapshot> } = {},
+): string {
   if (runs.length === 0) return '  (no active workflow runs)';
+  if (options.processSnapshots) {
+    return runs
+      .map((r) => {
+        const processMeta = formatProcessListMeta(options.processSnapshots?.get(r.runId));
+        return `  ${statusIcon(r.status)} ${chalk.cyan(r.workflow)} ${chalk.dim(r.runId)} - ${r.status} (${r.totalSpawned} agents, ${r.eventCount} events)${
+          processMeta ? chalk.dim(` [${processMeta}]`) : ''
+        }`;
+      })
+      .join('\n');
+  }
   return runs
     .map(
       (r) =>
@@ -485,6 +527,7 @@ export function formatWorkflowFailureAction(runId: string, canRerun: boolean): s
 
 export interface WorkflowRunSnapshotFormatOptions {
   readonly full?: boolean;
+  readonly processSnapshot?: WorkflowProcessSnapshot;
 }
 
 export function formatWorkflowRunSnapshot(
@@ -493,15 +536,16 @@ export function formatWorkflowRunSnapshot(
   options: WorkflowRunSnapshotFormatOptions = {},
 ): string {
   if (!run && !detail) return '  (unknown workflow run)';
-  const workflow = run?.workflow ?? detail?.workflow ?? '?';
+  const processSnapshot = options.processSnapshot;
+  const workflow = processSnapshot?.workflowName ?? run?.workflow ?? detail?.workflow ?? '?';
   const runId = run?.runId ?? detail?.runId ?? '?';
-  const status = run?.status ?? detail?.status ?? '?';
-  const totalSpawned = run?.totalSpawned ?? detail?.totalSpawned ?? 0;
+  const status = processSnapshot?.status ?? run?.status ?? detail?.status ?? '?';
+  const totalSpawned = processSnapshot?.progress.spawnedAgents ?? run?.totalSpawned ?? detail?.totalSpawned ?? 0;
   const eventCount = run?.eventCount ?? detail?.eventCount ?? 0;
   const runDir = run?.runDir ?? detail?.runDir ?? '';
   const startedAt = formatTime(run?.startedAt ?? detail?.startedAt);
   const endedAt = formatTime(run?.endedAt ?? detail?.endedAt);
-  const error = run?.error ?? detail?.error;
+  const error = processSnapshot?.error ?? run?.error ?? detail?.error;
   const artifacts = detail?.artifacts ?? [];
   const artifactRefs = workflowArtifactRefs(detail);
   const managedResultText = run?.resultText;
@@ -509,10 +553,12 @@ export function formatWorkflowRunSnapshot(
     ? formatArtifactResult(artifactRefs, detectWorkflowLocale(workflow), { full: options.full === true })
     : undefined;
   const rawResultText = options.full === true
-    ? artifactResult ?? managedResultText
+    ? artifactResult ?? managedResultText ?? processSnapshot?.resultSummary
     : managedResultText !== undefined
       ? formatResult(managedResultText)
-      : artifactResult;
+      : processSnapshot?.resultSummary !== undefined
+        ? formatResult(processSnapshot.resultSummary)
+        : artifactResult;
   const resultText = rawResultText
     ? replaceWorkflowResultTruncationMarker(rawResultText, runId, detectWorkflowLocale(rawResultText))
     : undefined;
@@ -523,7 +569,15 @@ export function formatWorkflowRunSnapshot(
   const canRerun = canRerunWorkflowRun(run, detail);
   return [
     `  ${chalk.cyan(workflow)} ${chalk.dim(runId)}`,
+    ...(processSnapshot?.displayName && processSnapshot.displayName !== workflow
+      ? [`  display name: ${processSnapshot.displayName}`]
+      : []),
     `  status: ${status}`,
+    ...(processSnapshot?.source ? [`  source: ${processSnapshot.source}`] : []),
+    ...(processSnapshot?.savedWorkflowName ? [`  saved workflow: ${processSnapshot.savedWorkflowName}`] : []),
+    ...(processSnapshot?.sourceRunId ? [`  source run: ${processSnapshot.sourceRunId}`] : []),
+    ...(processSnapshot?.sourceWorkflowName ? [`  source workflow: ${processSnapshot.sourceWorkflowName}`] : []),
+    ...(processSnapshot?.revisionOf ? [`  revision of: ${processSnapshot.revisionOf}`] : []),
     `  agents: ${totalSpawned}`,
     `  events: ${eventCount}`,
     ...(startedAt ? [`  started: ${startedAt}`] : []),

@@ -19,7 +19,12 @@ import {
   type WorkflowGenerationResult,
   type WorkflowRunManager,
 } from '@kodax-ai/coding';
-import { createWorkflowCapsule, getAgentConfigPath, type WorkflowEvent } from '@kodax-ai/agent';
+import {
+  createWorkflowCapsule,
+  getAgentConfigPath,
+  type WorkflowEvent,
+  type WorkflowProcessSnapshot,
+} from '@kodax-ai/agent';
 
 import {
   parseWorkflowInvocation,
@@ -939,6 +944,44 @@ describe('readWorkflowRuns + formatRunsList', () => {
     expect(out).toContain('2 agents');
   });
 
+  it('formats workflow process metadata when snapshots are available', () => {
+    const snapshot: WorkflowProcessSnapshot = {
+      runId: 'r1',
+      workflowName: 'wf',
+      displayName: 'Customer audit',
+      status: 'completed',
+      startedAt: '2026-06-16T00:00:00.000Z',
+      updatedAt: '2026-06-16T00:00:01.000Z',
+      source: 'sdk',
+      savedWorkflowName: 'audit.saved',
+      revisionOf: 'audit.base',
+      items: [],
+      counts: {
+        pending: 0,
+        running: 0,
+        completed: 0,
+        failed: 0,
+        cancelled: 0,
+        skipped: 0,
+      },
+      progress: {
+        spawnedAgents: 0,
+        finishedAgents: 0,
+        activeAgents: 0,
+        failedAgents: 0,
+        stoppedAgents: 0,
+      },
+    };
+    const out = formatRunsList([
+      { runId: 'r1', workflow: 'wf', status: 'completed', totalSpawned: 2, endedAt: 1 },
+    ], { processSnapshots: new Map([['r1', snapshot]]) });
+
+    expect(out).toContain('display: Customer audit');
+    expect(out).toContain('source: sdk');
+    expect(out).toContain('saved: audit.saved');
+    expect(out).toContain('revision of: audit.base');
+  });
+
   it('limits persisted runs output with a clear hint', () => {
     const out = formatRunsList([
       { runId: 'r3', workflow: 'wf', status: 'completed', totalSpawned: 1, endedAt: 3 },
@@ -993,10 +1036,41 @@ describe('readWorkflowRuns + formatRunsList', () => {
       startedAt: 1,
       resultText: 'final workflow report',
     };
+    const processSnapshot: WorkflowProcessSnapshot = {
+      runId: 'run-active',
+      workflowName: 'wf',
+      displayName: 'Paused audit',
+      status: 'paused',
+      startedAt: '2026-06-16T00:00:00.000Z',
+      updatedAt: '2026-06-16T00:00:01.000Z',
+      source: 'command',
+      items: [],
+      counts: {
+        pending: 0,
+        running: 1,
+        completed: 0,
+        failed: 0,
+        cancelled: 0,
+        skipped: 0,
+      },
+      progress: {
+        spawnedAgents: 2,
+        finishedAgents: 1,
+        activeAgents: 1,
+        failedAgents: 0,
+        stoppedAgents: 0,
+      },
+      resultSummary: 'process result',
+    };
     expect(formatManagedRunsList([run])).toContain('paused');
     expect(formatManagedRunsList([run])).toContain('5 events');
+    expect(formatManagedRunsList([run], {
+      processSnapshots: new Map([['run-active', processSnapshot]]),
+    })).toContain('display: Paused audit');
     expect(formatWorkflowRunSnapshot(run)).toContain('/tmp/run-active');
     expect(formatWorkflowRunSnapshot(run)).toContain('final workflow report');
+    expect(formatWorkflowRunSnapshot(run, undefined, { processSnapshot })).toContain('display name: Paused audit');
+    expect(formatWorkflowRunSnapshot(run, undefined, { processSnapshot })).toContain('source: command');
     expect(formatWorkflowRunSnapshot(run)).not.toContain('/workflow rerun run-active');
     expect(formatWorkflowRunSnapshot(undefined)).toContain('unknown workflow');
   });
@@ -1047,6 +1121,13 @@ describe('readWorkflowRuns + formatRunsList', () => {
 
     const managedFull = formatWorkflowRunSnapshot(managed, detail, { full: true });
     expect(managedFull).toContain('full report end');
+  });
+
+  it('treats cancelled persisted runs as terminal prune candidates', () => {
+    expect(selectWorkflowPruneCandidates([
+      { runId: 'cancelled', workflow: 'wf', status: 'cancelled', totalSpawned: 1, endedAt: 1 },
+    ], { dryRun: false, olderThanMs: 1 }, 10).map((run) => run.runId))
+      .toEqual(['cancelled']);
   });
 
   it('counts persisted workflow events from events.jsonl instead of stale run.json metadata', () => {
