@@ -243,6 +243,13 @@ describe('FEATURE_114 Slice 2 — worker role prompt entry wire', () => {
     expect(rendered).toContain('Preserve any exact machine-readable closing contract');
   });
 
+  it('teaches language continuity across idle-yield resumes', () => {
+    const rendered = renderWorker();
+    expect(rendered).toContain('Language continuity: Match the primary natural language');
+    expect(rendered).toContain('idle-yield resume summaries');
+    expect(rendered).toContain('Tool outputs, code identifiers, and quoted evidence may remain');
+  });
+
   it('does NOT route Worker through emit_handoff (FEATURE_190: text-only termination)', () => {
     // FEATURE_190 (v0.7.43) — Worker is excluded from PROTOCOL EMISSION
     // teaching and from the kodax-task-handoff fenced-block fallback.
