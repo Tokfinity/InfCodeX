@@ -62,6 +62,7 @@ import {
   type WorkflowRunManager,
 } from '@kodax-ai/coding';
 
+import { KODAX_VERSION } from '../common/utils.js';
 import { deriveProjectKeyFromRoot } from '../interactive/project-key.js';
 import { workflowLiveSnapshotFromProcess } from '../ui/view-models/workflow-live.js';
 import type { Command, CommandCallbacks } from './types.js';
@@ -791,7 +792,7 @@ function buildWorkflowRevisionProvenance(input: {
     ...(revisionOf !== undefined ? { revisionOf } : {}),
     ...(input.replacesWorkflowName !== undefined ? { replacesWorkflowName: input.replacesWorkflowName } : {}),
     createdAt: new Date().toISOString(),
-    kodaxVersion: process.env.npm_package_version ?? '0.7.50',
+    kodaxVersion: KODAX_VERSION,
   };
 }
 

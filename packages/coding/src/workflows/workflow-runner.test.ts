@@ -10,8 +10,9 @@ import { existsSync, mkdtempSync, readFileSync, rmSync } from 'node:fs';
 import { join } from 'node:path';
 import { tmpdir } from 'node:os';
 
-import { afterEach, beforeEach, describe, expect, it } from 'vitest';
+import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
 
+import type { InputGuardrail } from '@kodax-ai/agent';
 import type {
   WorkflowAgentBackend,
   WorkflowModule,
@@ -19,8 +20,46 @@ import type {
 } from '@kodax-ai/agent/workflow';
 import { WorkflowAbortError, WorkflowLimitError } from '@kodax-ai/agent/workflow';
 
+import type { KodaXOptions } from '../types.js';
 import { parallelInvestigation } from './builtin/parallel-investigation.js';
-import { buildApprovalSummary, runWorkflowModule } from './workflow-runner.js';
+import { buildApprovalSummary, runWorkflowFromOptions, runWorkflowModule } from './workflow-runner.js';
+
+const childExecutorMock = vi.hoisted(() => ({
+  calls: [] as Array<{
+    readonly options: {
+      readonly guardrails?: readonly unknown[];
+      readonly planModeBlockCheck?: unknown;
+    };
+  }>,
+}));
+
+vi.mock('../child-executor.js', () => ({
+  executeChildAgents: vi.fn(async (
+    _bundles: unknown,
+    _ctx: unknown,
+    options: {
+      readonly guardrails?: readonly unknown[];
+      readonly planModeBlockCheck?: unknown;
+    },
+  ) => {
+    childExecutorMock.calls.push({ options });
+    return {
+      results: [{
+        childId: 'wf-child-1',
+        fanoutClass: 'evidence-scan',
+        status: 'completed',
+        disposition: 'valid',
+        summary: 'child ok',
+        evidenceRefs: [],
+        contradictions: [],
+      }],
+      mergedFindings: [],
+      mergedArtifacts: [],
+      totalTokensUsed: 0,
+      cancelledChildren: [],
+    };
+  }),
+}));
 
 function fakeBackend(): WorkflowAgentBackend {
   let n = 0;
@@ -57,6 +96,7 @@ describe('buildApprovalSummary', () => {
 describe('runWorkflowModule', () => {
   let dir = '';
   beforeEach(() => {
+    childExecutorMock.calls.length = 0;
     dir = mkdtempSync(join(tmpdir(), 'wf-run-'));
   });
   afterEach(() => {
@@ -145,6 +185,47 @@ describe('runWorkflowModule', () => {
         resultSummary: expect.stringContaining('result for'),
       },
     });
+  });
+
+  it('threads parent guardrails and plan-mode checks into workflow children', async () => {
+    const guardrail: InputGuardrail = {
+      kind: 'input',
+      name: 'parent-guardrail',
+      check: async () => ({ action: 'allow' }),
+    };
+    const planModeBlockCheck = (_tool: string, _input: Record<string, unknown>): string | null =>
+      null;
+    const module: WorkflowModule<unknown, string> = {
+      meta: {
+        name: 'guarded-workflow',
+        description: 'Spawns one child',
+        readOnly: true,
+        phases: ['spawn'],
+      },
+      run: async (wf) => {
+        const task = await wf.spawnAgent({ name: 'child', prompt: 'check guardrails' });
+        const result = await wf.wait(task.taskId);
+        return result.finalText;
+      },
+    };
+    const options: KodaXOptions = {
+      provider: 'anthropic',
+      guardrails: [guardrail],
+      context: { planModeBlockCheck },
+    };
+
+    const outcome = await runWorkflowFromOptions({
+      module,
+      args: {},
+      options,
+      runId: 'run-guardrails',
+      runDir: dir,
+    });
+
+    expect(outcome.kind).toBe('completed');
+    expect(childExecutorMock.calls).toHaveLength(1);
+    expect(childExecutorMock.calls[0]?.options.guardrails).toBe(options.guardrails);
+    expect(childExecutorMock.calls[0]?.options.planModeBlockCheck).toBe(planModeBlockCheck);
   });
 
   it('writes stopped status for user-aborted workflow runs', async () => {

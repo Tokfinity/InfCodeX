@@ -287,6 +287,8 @@ const WORKFLOW_SUBCOMMAND_ARGS: ArgumentDefinition[] = [
   { name: 'prune', description: 'Preview or delete old terminal workflow runs', type: 'enum' },
   { name: 'rerun', description: 'Rerun a run id or saved workflow name', type: 'enum' },
   { name: 'save', description: 'Save a generated run as a workflow capsule', type: 'enum' },
+  { name: 'rename', description: 'Rename a run display name or saved workflow capsule', type: 'enum' },
+  { name: 'revise', description: 'Generate a revised workflow capsule', type: 'enum' },
   { name: 'help', description: 'Show workflow help', type: 'enum' },
 ];
 
@@ -298,9 +300,18 @@ const WORKFLOW_RUN_ID_SUBCOMMANDS = new Set([
   'delete',
   'rerun',
   'save',
+  'rename',
+  'revise',
 ]);
 
-const WORKFLOW_PERSISTED_RUN_ID_SUBCOMMANDS = new Set(['show', 'delete', 'rerun', 'save']);
+const WORKFLOW_PERSISTED_RUN_ID_SUBCOMMANDS = new Set([
+  'show',
+  'delete',
+  'rerun',
+  'save',
+  'rename',
+  'revise',
+]);
 
 const WORKFLOW_RUNS_OPTION_ARGS: ArgumentDefinition[] = [
   { name: '--all', description: 'Show all persisted workflow runs', type: 'enum' },
@@ -462,6 +473,33 @@ function getWorkflowRerunArgs(): ArgumentDefinition[] {
   return [...byName.values()];
 }
 
+function getWorkflowRunOrSavedNameArgs(subcommand: string): ArgumentDefinition[] {
+  const byName = new Map<string, ArgumentDefinition>();
+  for (const arg of getWorkflowRunIdArgs(subcommand)) {
+    byName.set(arg.name, {
+      ...arg,
+      description: `workflow run: ${arg.description}`,
+      type: 'string',
+    });
+  }
+  for (const arg of getSavedWorkflowNameArgs()) {
+    const existing = byName.get(arg.name);
+    if (existing) {
+      byName.set(arg.name, {
+        ...existing,
+        description: `${existing.description}; also ${arg.description}`,
+      });
+      continue;
+    }
+    byName.set(arg.name, {
+      ...arg,
+      description: arg.description,
+      type: 'string',
+    });
+  }
+  return [...byName.values()];
+}
+
 function getWorkflowArgs(argParts: string[]): ArgumentDefinition[] {
   const [subcommand = ''] = argParts;
   const normalizedSubcommand = subcommand.toLowerCase();
@@ -481,6 +519,22 @@ function getWorkflowArgs(argParts: string[]): ArgumentDefinition[] {
 
   if (normalizedSubcommand === 'rerun' && effectiveLength <= 2) {
     return getWorkflowRerunArgs();
+  }
+
+  if (normalizedSubcommand === 'rename' && effectiveLength <= 2) {
+    return getWorkflowRunOrSavedNameArgs('rename');
+  }
+
+  if (normalizedSubcommand === 'revise') {
+    if (effectiveLength <= 2) {
+      return [
+        { name: '--replace', description: 'Replace a saved workflow after confirmation', type: 'enum' },
+        ...getWorkflowRunOrSavedNameArgs('revise'),
+      ];
+    }
+    if (argParts[1] === '--replace' && effectiveLength <= 3) {
+      return getSavedWorkflowNameArgs();
+    }
   }
 
   if (WORKFLOW_RUN_ID_SUBCOMMANDS.has(normalizedSubcommand) && effectiveLength <= 2) {

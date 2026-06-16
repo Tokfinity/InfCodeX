@@ -353,6 +353,8 @@ describe('ArgumentCompleter', () => {
         expect(completions.some(c => c.display === 'stop')).toBe(true);
         expect(completions.some(c => c.display === 'delete')).toBe(true);
         expect(completions.some(c => c.display === 'prune')).toBe(true);
+        expect(completions.some(c => c.display === 'rename')).toBe(true);
+        expect(completions.some(c => c.display === 'revise')).toBe(true);
         expect(completions.some(c => c.display === 'parallel-investigation')).toBe(true);
       });
 
@@ -432,6 +434,22 @@ describe('ArgumentCompleter', () => {
           expect(rerun.some((c) => c.display === 'run-persisted-complete')).toBe(true);
           const saved = rerun.find((c) => c.display === 'saved-audit');
           expect(saved?.description).toContain('saved workflow');
+
+          const renameInput = '/workflow rename ';
+          const rename = await completer.getCompletions(renameInput, renameInput.length);
+          expect(rename.some((c) => c.display === 'run-persisted-complete')).toBe(true);
+          expect(rename.some((c) => c.display === 'saved-audit')).toBe(true);
+
+          const reviseInput = '/workflow revise ';
+          const revise = await completer.getCompletions(reviseInput, reviseInput.length);
+          expect(revise.some((c) => c.display === '--replace')).toBe(true);
+          expect(revise.some((c) => c.display === 'run-persisted-complete')).toBe(true);
+          expect(revise.some((c) => c.display === 'saved-audit')).toBe(true);
+
+          const replaceInput = '/workflow revise --replace ';
+          const replace = await completer.getCompletions(replaceInput, replaceInput.length);
+          expect(replace.some((c) => c.display === 'saved-audit')).toBe(true);
+          expect(replace.some((c) => c.display === 'run-persisted-complete')).toBe(false);
         } finally {
           process.chdir(previousCwd);
           rmSync(baseDir, { recursive: true, force: true });

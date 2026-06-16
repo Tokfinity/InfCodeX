@@ -357,6 +357,10 @@ export async function runWorkflowFromOptions(
       extensionRuntime: input.options.extensionRuntime,
       events: input.options.events,
     },
+    ...(input.options.guardrails ? { guardrails: input.options.guardrails } : {}),
+    ...(ctx.planModeBlockCheck
+      ? { planModeBlockCheck: ctx.planModeBlockCheck }
+      : {}),
   };
   const onWorkflowProcessEvent =
     input.onWorkflowProcessEvent || input.options.events?.onWorkflowProcessEvent
