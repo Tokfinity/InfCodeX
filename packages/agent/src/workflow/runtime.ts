@@ -220,6 +220,8 @@ export interface CreateWorkflowRuntimeOptions {
   readonly backend: WorkflowAgentBackend;
   readonly limits?: WorkflowLimits;
   readonly signal?: AbortSignal;
+  /** Optional host/domain summarizer for the terminal workflow result. */
+  readonly summarizeResult?: (result: unknown) => string | undefined;
   /** Sink for every run-graph event (durable writer / UI subscribe here). */
   readonly onEvent?: (event: WorkflowEvent) => void;
   /** Sink for free-text `wf.log(...)` progress lines. */
@@ -658,7 +660,24 @@ export async function runWorkflow<T>(
     const result = await script(rt.api, opts.args);
     const stopErrors = await rt.stopActiveTasks('workflow completed');
     rt.setStatus('completed');
-    rt.recorder.emit('workflow_completed', stopErrors.length > 0 ? { stopErrors } : undefined);
+    let resultSummary: string | undefined;
+    let resultSummaryError: string | undefined;
+    try {
+      resultSummary = opts.summarizeResult?.(result);
+    } catch (summaryError) {
+      resultSummaryError = summaryError instanceof Error
+        ? summaryError.message
+        : String(summaryError);
+    }
+    const completionData: Record<string, unknown> = {
+      ...(resultSummary !== undefined ? { resultSummary } : {}),
+      ...(resultSummaryError !== undefined ? { resultSummaryError } : {}),
+      ...(stopErrors.length > 0 ? { stopErrors } : {}),
+    };
+    rt.recorder.emit(
+      'workflow_completed',
+      Object.keys(completionData).length > 0 ? completionData : undefined,
+    );
     return { ok: true, result, state: rt.getState() };
   } catch (error) {
     const err = error instanceof Error ? error : new Error(String(error));

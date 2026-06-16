@@ -18,6 +18,7 @@ import {
   type RunWorkflowModuleOptions,
   type RunWorkflowModuleOutcome,
 } from './workflow-runner.js';
+import type { WorkflowRunProcessMetadata } from './run-graph.js';
 
 export type ManagedWorkflowStatus =
   | 'running'
@@ -182,6 +183,7 @@ export function createWorkflowRunManager(
       readonly maxAgents?: number;
       readonly plannedAgents?: number;
       readonly tokenBudget?: number;
+      readonly processMetadata?: WorkflowRunProcessMetadata;
     },
     runDir: string,
     signal: AbortSignal | undefined,
@@ -203,7 +205,19 @@ export function createWorkflowRunManager(
       process: createWorkflowProcessTracker({
         runId: opts.runId,
         workflowName: opts.workflow,
-        displayName: opts.workflow,
+        displayName: opts.processMetadata?.displayName ?? opts.workflow,
+        ...(opts.processMetadata?.goal !== undefined ? { goal: opts.processMetadata.goal } : {}),
+        ...(opts.processMetadata?.source !== undefined ? { source: opts.processMetadata.source } : {}),
+        ...(opts.processMetadata?.savedWorkflowName !== undefined
+          ? { savedWorkflowName: opts.processMetadata.savedWorkflowName }
+          : {}),
+        ...(opts.processMetadata?.sourceRunId !== undefined
+          ? { sourceRunId: opts.processMetadata.sourceRunId }
+          : {}),
+        ...(opts.processMetadata?.sourceWorkflowName !== undefined
+          ? { sourceWorkflowName: opts.processMetadata.sourceWorkflowName }
+          : {}),
+        ...(opts.processMetadata?.revisionOf !== undefined ? { revisionOf: opts.processMetadata.revisionOf } : {}),
         ...(opts.phases !== undefined ? { phases: opts.phases } : {}),
         ...(opts.maxAgents !== undefined ? { maxAgents: opts.maxAgents } : {}),
         ...(opts.plannedAgents !== undefined ? { plannedAgents: opts.plannedAgents } : {}),
@@ -223,9 +237,7 @@ export function createWorkflowRunManager(
     run.endedAt = now();
     if (outcome.kind === 'failed' && run.status !== 'stopped') run.error = outcome.error.message;
     if (outcome.kind === 'completed') run.resultText = resultText(outcome.result);
-    if (outcome.kind === 'completed' && run.resultText !== undefined) {
-      notifyProcess(run.process.setResultSummary(run.resultText));
-    } else if (outcome.kind === 'failed' && !isFinalWorkflowProcessStatus(run.process.getSnapshot().status)) {
+    if (outcome.kind === 'failed' && !isFinalWorkflowProcessStatus(run.process.getSnapshot().status)) {
       notifyProcess(run.process.setStatus('failed', outcome.error.message));
     } else if (outcome.kind === 'denied') {
       notifyProcess(run.process.setStatus('cancelled', 'workflow denied'));
@@ -248,6 +260,7 @@ export function createWorkflowRunManager(
           ? { plannedAgents: opts.module.meta.plannedAgents }
           : {}),
         ...(limits.tokenBudget !== undefined ? { tokenBudget: limits.tokenBudget } : {}),
+        ...(opts.processMetadata !== undefined ? { processMetadata: opts.processMetadata } : {}),
       }, opts.runDir, opts.signal);
       const done = runWorkflowModule({
         ...opts,
@@ -276,6 +289,7 @@ export function createWorkflowRunManager(
           ? { plannedAgents: input.module.meta.plannedAgents }
           : {}),
         ...(limits.tokenBudget !== undefined ? { tokenBudget: limits.tokenBudget } : {}),
+        ...(input.processMetadata !== undefined ? { processMetadata: input.processMetadata } : {}),
       }, input.runDir, input.signal);
       const done = runWorkflowFromOptions({
         ...input,

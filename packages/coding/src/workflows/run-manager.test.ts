@@ -118,6 +118,11 @@ describe('WorkflowRunManager', () => {
       runId: 'run-process',
       runDir: dir,
       backend,
+      processMetadata: {
+        source: 'sdk',
+        displayName: 'SDK process test',
+        goal: 'inspect process metadata',
+      },
     });
 
     await run.done;
@@ -127,6 +132,9 @@ describe('WorkflowRunManager', () => {
     expect(snapshot).toMatchObject({
       runId: 'run-process',
       workflowName: 'process-test',
+      displayName: 'SDK process test',
+      goal: 'inspect process metadata',
+      source: 'sdk',
       status: 'completed',
       resultSummary: 'final process result',
       progress: {

@@ -95,6 +95,7 @@ export const reviewCommand: Command = {
           request: buildReviewWorkflowRequest(label),
           source: 'command',
           displayName: '/review --workflow',
+          processSource: 'review',
         },
       };
     }

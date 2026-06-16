@@ -36,6 +36,7 @@ import {
 } from './identity.js';
 
 import { safeWorkflowArtifactName } from './run-graph.js';
+import type { WorkflowRunProcessMetadata } from './run-graph.js';
 import type { WorkflowRunManager } from './run-manager.js';
 
 export interface WorkflowRunListOptions {
@@ -92,6 +93,8 @@ interface PersistedWorkflowRun {
   readonly runId: string;
   readonly workflow: string;
   readonly displayName?: string;
+  readonly resultSummary?: string;
+  readonly processMetadata?: WorkflowRunProcessMetadata;
   readonly status: string;
   readonly endedAt: number;
   readonly artifacts: readonly string[];
@@ -129,6 +132,43 @@ function readStringArray(value: unknown): readonly string[] {
     : [];
 }
 
+function readWorkflowProcessSource(value: unknown): WorkflowRunProcessMetadata['source'] | undefined {
+  if (
+    value === 'command'
+    || value === 'amaw'
+    || value === 'review'
+    || value === 'sdk'
+    || value === 'capsule'
+    || value === 'extension'
+    || value === 'automation'
+  ) {
+    return value;
+  }
+  return undefined;
+}
+
+function readRunProcessMetadata(
+  data: Record<string, unknown>,
+  displayName: string | undefined,
+): WorkflowRunProcessMetadata | undefined {
+  const goal = readString(data.goal);
+  const source = readWorkflowProcessSource(data.source);
+  const savedWorkflowName = readString(data.savedWorkflowName);
+  const sourceRunId = readString(data.sourceRunId);
+  const sourceWorkflowName = readString(data.sourceWorkflowName);
+  const revisionOf = readString(data.revisionOf);
+  const metadata: WorkflowRunProcessMetadata = {
+    ...(displayName !== undefined ? { displayName } : {}),
+    ...(goal !== undefined ? { goal } : {}),
+    ...(source !== undefined ? { source } : {}),
+    ...(savedWorkflowName !== undefined ? { savedWorkflowName } : {}),
+    ...(sourceRunId !== undefined ? { sourceRunId } : {}),
+    ...(sourceWorkflowName !== undefined ? { sourceWorkflowName } : {}),
+    ...(revisionOf !== undefined ? { revisionOf } : {}),
+  };
+  return Object.keys(metadata).length > 0 ? metadata : undefined;
+}
+
 function isSafeWorkflowRunId(runId: string): boolean {
   return runId !== '.' && /^[a-zA-Z0-9._-]+$/.test(runId) && !runId.includes('..');
 }
@@ -145,10 +185,15 @@ function readPersistedRun(baseDir: string, runId: string): PersistedWorkflowRun 
   if (!dir) return undefined;
   const data = readRecord(join(dir, 'run.json'));
   if (!data) return undefined;
+  const displayName = readRunDisplayName(dir) ?? readString(data.displayName);
+  const resultSummary = readString(data.resultSummary);
+  const processMetadata = readRunProcessMetadata(data, displayName);
   return {
     runId,
     workflow: readString(data.workflow) ?? '?',
-    ...(readRunDisplayName(dir) !== undefined ? { displayName: readRunDisplayName(dir) } : {}),
+    ...(displayName !== undefined ? { displayName } : {}),
+    ...(resultSummary !== undefined ? { resultSummary } : {}),
+    ...(processMetadata !== undefined ? { processMetadata } : {}),
     status: readString(data.status) ?? '?',
     endedAt: readNumber(data.endedAt) ?? 0,
     artifacts: readStringArray(data.artifacts),
@@ -206,7 +251,22 @@ function snapshotFromPersistedRun(
   const tracker = createWorkflowProcessTracker({
     runId: run.runId,
     workflowName: run.workflow,
-    displayName: run.displayName ?? run.workflow,
+    displayName: run.displayName ?? run.processMetadata?.displayName ?? run.workflow,
+    ...(run.processMetadata?.goal !== undefined ? { goal: run.processMetadata.goal } : {}),
+    ...(run.processMetadata?.source !== undefined ? { source: run.processMetadata.source } : {}),
+    ...(run.processMetadata?.savedWorkflowName !== undefined
+      ? { savedWorkflowName: run.processMetadata.savedWorkflowName }
+      : {}),
+    ...(run.processMetadata?.sourceRunId !== undefined
+      ? { sourceRunId: run.processMetadata.sourceRunId }
+      : {}),
+    ...(run.processMetadata?.sourceWorkflowName !== undefined
+      ? { sourceWorkflowName: run.processMetadata.sourceWorkflowName }
+      : {}),
+    ...(run.processMetadata?.revisionOf !== undefined
+      ? { revisionOf: run.processMetadata.revisionOf }
+      : {}),
+    ...(run.resultSummary !== undefined ? { resultSummary: run.resultSummary } : {}),
     artifacts: run.artifacts.map((name) => ({
       name,
       path: join(dir, 'artifacts', `${safeWorkflowArtifactName(name)}.json`),
@@ -229,6 +289,10 @@ function snapshotFromPersistedRun(
 
 function readEventSummary(events: readonly WorkflowEvent[]): string | undefined {
   for (const event of [...events].reverse()) {
+    if (event.type === 'workflow_completed') {
+      const summary = readString(event.data?.resultSummary);
+      if (summary) return summary;
+    }
     if (event.type !== 'agent_completed') continue;
     const summary = readString(event.data?.summary);
     if (summary) return summary;
@@ -340,6 +404,9 @@ export function createWorkflowLifecycleController(
       if (live) return live;
       const dir = runDir(runBaseDir, runId);
       if (!dir) return undefined;
+      const persisted = readPersistedRun(runBaseDir, runId);
+      if (!persisted) return undefined;
+      if (persisted.resultSummary) return persisted.resultSummary;
       return readEventSummary(readWorkflowEvents(dir));
     },
 

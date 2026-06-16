@@ -109,6 +109,46 @@ describe('runWorkflow — event envelope + ordering', () => {
     expect(seqs).toEqual([...seqs].sort((a, b) => a - b));
   });
 
+  it('includes summarized workflow results on the terminal completion event', async () => {
+    const { backend } = fakeBackend();
+    const outcome = await runWorkflow(
+      baseOpts(backend, {
+        summarizeResult: (result: unknown) =>
+          typeof result === 'string' ? `summary:${result}` : undefined,
+      }),
+      async () => 'ok',
+    );
+
+    expect(outcome.ok).toBe(true);
+    expect(outcome.state.events.at(-1)).toMatchObject({
+      type: 'workflow_completed',
+      data: {
+        resultSummary: 'summary:ok',
+      },
+    });
+  });
+
+  it('records result summarizer errors without failing a completed workflow', async () => {
+    const { backend } = fakeBackend();
+    const outcome = await runWorkflow(
+      baseOpts(backend, {
+        summarizeResult: () => {
+          throw new Error('summary unavailable');
+        },
+      }),
+      async () => 'ok',
+    );
+
+    expect(outcome.ok).toBe(true);
+    expect(outcome.state.status).toBe('completed');
+    expect(outcome.state.events.at(-1)).toMatchObject({
+      type: 'workflow_completed',
+      data: {
+        resultSummaryError: 'summary unavailable',
+      },
+    });
+  });
+
   it('prefers the child self-distilled digest for completed-agent events', async () => {
     const finalText = [
       'I now have a complete picture of the workflow changes.',

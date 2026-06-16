@@ -19,9 +19,21 @@ import type {
   WorkflowArtifactRef,
   WorkflowEvent,
   WorkflowMeta,
+  WorkflowProcessTrackerOptions,
   WorkflowRunState,
   WorkflowScriptManifest,
 } from '@kodax-ai/agent';
+
+export type WorkflowRunProcessMetadata = Pick<
+  WorkflowProcessTrackerOptions,
+  | 'displayName'
+  | 'goal'
+  | 'source'
+  | 'savedWorkflowName'
+  | 'sourceRunId'
+  | 'sourceWorkflowName'
+  | 'revisionOf'
+>;
 
 export interface RunGraphWriterDeps {
   /** Clock for the per-event `ts` stamp. Defaults to `Date.now`. */
@@ -35,6 +47,8 @@ export interface RunJsonInput {
   readonly startedAt: number;
   readonly endedAt: number;
   readonly scriptSnapshot?: WorkflowScriptSnapshotRef;
+  readonly resultSummary?: string;
+  readonly processMetadata?: WorkflowRunProcessMetadata;
 }
 
 export interface WorkflowScriptSnapshotInput {
@@ -99,6 +113,24 @@ export function createRunGraphWriter(runDir: string, deps: RunGraphWriterDeps = 
         startedAt: input.startedAt,
         endedAt: input.endedAt,
         args: input.args,
+        ...(input.resultSummary !== undefined ? { resultSummary: input.resultSummary } : {}),
+        ...(input.processMetadata?.displayName !== undefined
+          ? { displayName: input.processMetadata.displayName }
+          : {}),
+        ...(input.processMetadata?.goal !== undefined ? { goal: input.processMetadata.goal } : {}),
+        ...(input.processMetadata?.source !== undefined ? { source: input.processMetadata.source } : {}),
+        ...(input.processMetadata?.savedWorkflowName !== undefined
+          ? { savedWorkflowName: input.processMetadata.savedWorkflowName }
+          : {}),
+        ...(input.processMetadata?.sourceRunId !== undefined
+          ? { sourceRunId: input.processMetadata.sourceRunId }
+          : {}),
+        ...(input.processMetadata?.sourceWorkflowName !== undefined
+          ? { sourceWorkflowName: input.processMetadata.sourceWorkflowName }
+          : {}),
+        ...(input.processMetadata?.revisionOf !== undefined
+          ? { revisionOf: input.processMetadata.revisionOf }
+          : {}),
         ...(input.scriptSnapshot
           ? {
               scriptSnapshotPath: input.scriptSnapshot.scriptPath,

@@ -28,7 +28,11 @@ import { dirname } from 'node:path';
 
 import { createCodingWorkflowBackend, type WorkflowChildOptions } from './agent-adapter.js';
 import type { WorkflowHostPolicy } from './invocation-policy.js';
-import { createRunGraphWriter, type WorkflowScriptSnapshotInput } from './run-graph.js';
+import {
+  createRunGraphWriter,
+  type WorkflowRunProcessMetadata,
+  type WorkflowScriptSnapshotInput,
+} from './run-graph.js';
 import {
   workflowWorktreeBaseDir,
   sweepWorkflowRunWorktrees,
@@ -70,6 +74,7 @@ export interface RunWorkflowModuleOptions {
   readonly onWorkflowProcessEvent?: (event: WorkflowProcessEvent) => void;
   readonly now?: () => number;
   readonly scriptSnapshot?: WorkflowScriptSnapshotInput;
+  readonly processMetadata?: WorkflowRunProcessMetadata;
   /** Optional lifecycle gate, used by WorkflowRunManager pause/resume. */
   readonly beforeSpawn?: () => Promise<void>;
   /** Test seam: inject git/mtime for the worktree sweep (FEATURE_217 Layer 2/3). */
@@ -195,7 +200,21 @@ export async function runWorkflowModule(
     ? createWorkflowProcessTracker({
         runId: opts.runId,
         workflowName: opts.module.meta.name,
-        displayName: opts.module.meta.name,
+        displayName: opts.processMetadata?.displayName ?? opts.module.meta.name,
+        ...(opts.processMetadata?.goal !== undefined ? { goal: opts.processMetadata.goal } : {}),
+        ...(opts.processMetadata?.source !== undefined ? { source: opts.processMetadata.source } : {}),
+        ...(opts.processMetadata?.savedWorkflowName !== undefined
+          ? { savedWorkflowName: opts.processMetadata.savedWorkflowName }
+          : {}),
+        ...(opts.processMetadata?.sourceRunId !== undefined
+          ? { sourceRunId: opts.processMetadata.sourceRunId }
+          : {}),
+        ...(opts.processMetadata?.sourceWorkflowName !== undefined
+          ? { sourceWorkflowName: opts.processMetadata.sourceWorkflowName }
+          : {}),
+        ...(opts.processMetadata?.revisionOf !== undefined
+          ? { revisionOf: opts.processMetadata.revisionOf }
+          : {}),
         ...(opts.module.meta.phases !== undefined ? { phases: opts.module.meta.phases } : {}),
         ...(limits.maxAgents !== undefined ? { maxAgents: limits.maxAgents } : {}),
         ...(opts.module.meta.plannedAgents !== undefined
@@ -228,6 +247,7 @@ export async function runWorkflowModule(
         backend,
         limits,
         ...(opts.signal ? { signal: opts.signal } : {}),
+        summarizeResult: workflowResultSummary,
         onEvent: (event) => {
           writer.onEvent(event);
           if (processTracker) {
@@ -249,6 +269,7 @@ export async function runWorkflowModule(
     );
   }
 
+  const resultSummary = outcome.ok ? workflowResultSummary(outcome.result) : undefined;
   writer.writeRunJson({
     meta: opts.module.meta,
     args: opts.args,
@@ -256,14 +277,9 @@ export async function runWorkflowModule(
     startedAt,
     endedAt: now(),
     ...(scriptSnapshot ? { scriptSnapshot } : {}),
+    ...(resultSummary !== undefined ? { resultSummary } : {}),
+    ...(opts.processMetadata !== undefined ? { processMetadata: opts.processMetadata } : {}),
   });
-
-  if (processTracker && outcome.ok) {
-    const summaryText = workflowResultSummary(outcome.result);
-    if (summaryText !== undefined) {
-      opts.onWorkflowProcessEvent?.(processTracker.setResultSummary(summaryText));
-    }
-  }
 
   return outcome.ok
     ? { kind: 'completed', result: outcome.result, state: outcome.state }
@@ -302,6 +318,7 @@ export interface RunWorkflowFromOptionsInput {
   readonly onWorkflowProcessEvent?: (event: WorkflowProcessEvent) => void;
   readonly now?: () => number;
   readonly scriptSnapshot?: WorkflowScriptSnapshotInput;
+  readonly processMetadata?: WorkflowRunProcessMetadata;
   readonly beforeSpawn?: () => Promise<void>;
 }
 
@@ -362,6 +379,7 @@ export async function runWorkflowFromOptions(
     ...(input.options.workflowHostPolicy ? { hostPolicy: input.options.workflowHostPolicy } : {}),
     ...(input.now ? { now: input.now } : {}),
     ...(input.scriptSnapshot ? { scriptSnapshot: input.scriptSnapshot } : {}),
+    ...(input.processMetadata ? { processMetadata: input.processMetadata } : {}),
     ...(input.beforeSpawn ? { beforeSpawn: input.beforeSpawn } : {}),
   });
 }

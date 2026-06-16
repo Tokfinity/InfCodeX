@@ -31,6 +31,7 @@ import type {
   WorkflowMeta,
   WorkflowModule,
   WorkflowProcessEvent,
+  WorkflowProcessSource,
   WorkflowCapsule,
   WorkflowCapsuleProvenance,
   WorkflowScriptManifest,
@@ -57,6 +58,7 @@ import {
   type ManagedWorkflowSnapshot,
   type SavedWorkflowDirs,
   type SavedWorkflowRef,
+  type WorkflowRunProcessMetadata,
   type WorkflowRunManager,
 } from '@kodax-ai/coding';
 
@@ -1795,6 +1797,7 @@ export interface StartGeneratedWorkflowFromRequestOptions {
   readonly approval: GeneratedWorkflowApprovalMode;
   readonly presentation?: WorkflowRunPresentation;
   readonly sourceLabel?: string;
+  readonly processSource?: WorkflowProcessSource;
   readonly generateWorkflow?: GenerateWorkflowForRequest;
   readonly runBaseDir?: string;
   readonly runManager?: WorkflowRunManager;
@@ -1821,6 +1824,26 @@ function emitWorkflowBuilderEvent(
   )) {
     console.log(chalk.dim(`\n[workflow] ${event.message}\n`));
   }
+}
+
+function buildWorkflowProcessMetadata(input: {
+  readonly source: WorkflowProcessSource;
+  readonly displayName: string;
+  readonly goal?: string;
+  readonly savedWorkflowName?: string;
+  readonly sourceRunId?: string;
+  readonly sourceWorkflowName?: string;
+  readonly revisionOf?: string;
+}): WorkflowRunProcessMetadata {
+  return {
+    source: input.source,
+    displayName: input.displayName,
+    ...(input.goal !== undefined ? { goal: input.goal } : {}),
+    ...(input.savedWorkflowName !== undefined ? { savedWorkflowName: input.savedWorkflowName } : {}),
+    ...(input.sourceRunId !== undefined ? { sourceRunId: input.sourceRunId } : {}),
+    ...(input.sourceWorkflowName !== undefined ? { sourceWorkflowName: input.sourceWorkflowName } : {}),
+    ...(input.revisionOf !== undefined ? { revisionOf: input.revisionOf } : {}),
+  };
 }
 
 export async function startGeneratedWorkflowFromRequest(
@@ -1960,6 +1983,11 @@ export async function startGeneratedWorkflowFromRequest(
     runId,
     runDir,
     scriptSnapshot: generated.scriptSnapshot,
+    processMetadata: buildWorkflowProcessMetadata({
+      source: input.processSource ?? 'command',
+      displayName: generated.module.meta.name,
+      goal: input.request,
+    }),
     onEvent: workflowEventSink(input.callbacks, undefined, {
       presentation: input.presentation ?? 'command',
       locale,
@@ -2400,6 +2428,12 @@ export const workflowCommand: Command = {
           runId: newRunId,
           runDir: newRunDir,
           ...(prepared.scriptSnapshot ? { scriptSnapshot: prepared.scriptSnapshot } : {}),
+          processMetadata: buildWorkflowProcessMetadata({
+            source: 'capsule',
+            displayName: prepared.module.meta.name,
+            savedWorkflowName: savedRef.name,
+            sourceWorkflowName: savedRef.name,
+          }),
           onEvent: workflowEventSink(callbacks, undefined, { presentation, locale, runId: newRunId }),
         });
         void managed.done.finally(unsubscribeProcess);
@@ -2464,6 +2498,11 @@ export const workflowCommand: Command = {
           manifest: loaded.capsule.manifest,
           source: loaded.capsule.source,
         },
+        processMetadata: buildWorkflowProcessMetadata({
+          source: 'command',
+          displayName: loaded.module.meta.name,
+          sourceRunId: invocation.runId,
+        }),
         onEvent: workflowEventSink(callbacks, undefined, { presentation, locale, runId: newRunId }),
       });
       void managed.done.finally(unsubscribeProcess);
@@ -2486,6 +2525,7 @@ export const workflowCommand: Command = {
         approval: currentConfig.permissionMode === 'plan' ? 'required' : 'silent',
         presentation: 'agentic',
         sourceLabel: 'generated',
+        processSource: 'command',
         onBuilderEvent: callbacks.onWorkflowBuilderEvent,
       });
       return;
@@ -2505,6 +2545,7 @@ export const workflowCommand: Command = {
     };
     let scriptSnapshot: { readonly manifest: WorkflowScriptManifest; readonly source: string } | undefined;
     let module: WorkflowModule | undefined = getBuiltinWorkflow(invocation.name);
+    let savedWorkflowRef: SavedWorkflowRef | undefined;
     if (!module) {
       // Not a built-in — try a saved workflow. Loading EXECUTES local
       // code, so it is hard-gated behind a trusted-local confirmation:
@@ -2516,6 +2557,7 @@ export const workflowCommand: Command = {
         console.log();
         return;
       }
+      savedWorkflowRef = ref;
       if (ref.execution === 'trusted-local') {
         const trusted = await confirm(
           `Run local workflow file? This EXECUTES local code:\n  ${ref.path}`,
@@ -2594,6 +2636,17 @@ export const workflowCommand: Command = {
       runId,
       runDir,
       ...(scriptSnapshot ? { scriptSnapshot } : {}),
+      processMetadata: savedWorkflowRef
+        ? buildWorkflowProcessMetadata({
+            source: 'capsule',
+            displayName: module.meta.name,
+            savedWorkflowName: savedWorkflowRef.name,
+            sourceWorkflowName: savedWorkflowRef.name,
+          })
+        : buildWorkflowProcessMetadata({
+            source: 'command',
+            displayName: module.meta.name,
+          }),
       onEvent: workflowEventSink(callbacks, undefined, { presentation, locale, runId }),
     });
     void managed.done.finally(unsubscribeProcess);

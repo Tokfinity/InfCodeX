@@ -366,6 +366,11 @@ describe('WorkflowLifecycleController', () => {
         eventCount: 3,
         startedAt: 1,
         endedAt: 2,
+        resultSummary: 'final persisted workflow result',
+        displayName: 'Persisted Audit',
+        source: 'capsule',
+        savedWorkflowName: 'saved-audit',
+        sourceWorkflowName: 'saved-audit',
         args: {},
       }),
       'utf8',
@@ -385,13 +390,28 @@ describe('WorkflowLifecycleController', () => {
             summary: 'persisted result',
           },
         }),
-        JSON.stringify({ seq: 2, type: 'workflow_completed' }),
+        JSON.stringify({
+          seq: 2,
+          type: 'workflow_completed',
+          data: {
+            resultSummary: 'final persisted workflow result',
+          },
+        }),
       ].join('\n'),
       'utf8',
     );
 
     expect(controller.getWorkflowProcessSnapshot('.')?.status).toBeUndefined();
-    expect(controller.getWorkflowProcessSnapshot('run-persisted')?.status).toBe('completed');
-    await expect(controller.readWorkflowResult('run-persisted')).resolves.toBe('persisted result');
+    expect(controller.getWorkflowProcessSnapshot('run-persisted')).toMatchObject({
+      status: 'completed',
+      displayName: 'Persisted Audit',
+      resultSummary: 'final persisted workflow result',
+      source: 'capsule',
+      savedWorkflowName: 'saved-audit',
+      sourceWorkflowName: 'saved-audit',
+    });
+    await expect(controller.readWorkflowResult('run-persisted')).resolves.toBe(
+      'final persisted workflow result',
+    );
   });
 });

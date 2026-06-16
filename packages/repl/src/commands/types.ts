@@ -3,6 +3,9 @@
  */
 
 import type {
+  WorkflowProcessSource,
+} from '@kodax-ai/agent';
+import type {
   AgentsFile,
   KodaXAgentMode,
   KodaXRepoIntelligenceMode,
@@ -176,6 +179,7 @@ export interface CommandWorkflowInvocationRequest {
   request: string;
   source: 'command' | 'natural-language';
   displayName: string;
+  processSource?: WorkflowProcessSource;
 }
 
 export type CommandResult = boolean | CommandResultData;

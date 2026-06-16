@@ -98,6 +98,7 @@ describe('runWorkflowModule', () => {
     expect(runJson.status).toBe('completed');
     expect(runJson.workflow).toBe('parallel-investigation');
     expect(runJson.totalSpawned).toBe(4); // 3 investigators + 1 gated synthesizer
+    expect(runJson.resultSummary).toEqual(expect.stringContaining('result for'));
 
     // Live event sink saw the same envelope.
     expect(events[0]).toBe('workflow_started');
@@ -112,6 +113,11 @@ describe('runWorkflowModule', () => {
       runId: 'run-process',
       runDir: dir,
       backend: fakeBackend(),
+      processMetadata: {
+        source: 'sdk',
+        displayName: 'SDK audit',
+        goal: 'where is the bug?',
+      },
       onWorkflowProcessEvent: (event) => processEvents.push(event),
     });
 
@@ -122,7 +128,11 @@ describe('runWorkflowModule', () => {
       snapshot: {
         runId: 'run-process',
         workflowName: 'parallel-investigation',
+        displayName: 'SDK audit',
+        goal: 'where is the bug?',
+        source: 'sdk',
         status: 'completed',
+        resultSummary: expect.stringContaining('result for'),
         progress: {
           spawnedAgents: 4,
           finishedAgents: 4,
@@ -130,7 +140,7 @@ describe('runWorkflowModule', () => {
       },
     });
     expect(processEvents.at(-1)).toMatchObject({
-      type: 'workflow_updated',
+      type: 'workflow_finished',
       snapshot: {
         resultSummary: expect.stringContaining('result for'),
       },

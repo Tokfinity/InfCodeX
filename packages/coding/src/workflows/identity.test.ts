@@ -39,7 +39,12 @@ describe('resolveWorkflowIdentity', () => {
     mkdirSync(runDir, { recursive: true });
     writeFileSync(
       join(runDir, 'run.json'),
-      JSON.stringify({ runId: 'run-1', workflow: 'generated-audit', status: 'completed' }),
+      JSON.stringify({
+        runId: 'run-1',
+        workflow: 'generated-audit',
+        status: 'completed',
+        displayName: 'Generated Audit',
+      }),
       'utf8',
     );
     await saveGeneratedWorkflow({
@@ -57,6 +62,7 @@ describe('resolveWorkflowIdentity', () => {
       kind: 'run',
       runId: 'run-1',
       workflowName: 'generated-audit',
+      displayName: 'Generated Audit',
     });
     await expect(resolveWorkflowIdentity({
       target: 'saved-audit',

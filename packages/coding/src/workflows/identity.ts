@@ -76,6 +76,13 @@ function readMetadataDisplayName(runDir: string): string | undefined {
   }
 }
 
+function readRunJsonDisplayName(record: Record<string, unknown>): string | undefined {
+  const displayName = record.displayName;
+  return typeof displayName === 'string' && displayName.trim().length > 0
+    ? displayName
+    : undefined;
+}
+
 function resolveRun(
   target: string,
   runBaseDir: string | undefined,
@@ -86,15 +93,14 @@ function resolveRun(
   const record = readRunRecord(dir);
   if (!record) return undefined;
   const workflow = record.workflow;
+  const displayName = readMetadataDisplayName(dir) ?? readRunJsonDisplayName(record);
   return {
     kind: 'run',
     target,
     runId: target,
     runDir: dir,
     ...(typeof workflow === 'string' && workflow.length > 0 ? { workflowName: workflow } : {}),
-    ...(readMetadataDisplayName(dir) !== undefined
-      ? { displayName: readMetadataDisplayName(dir) }
-      : {}),
+    ...(displayName !== undefined ? { displayName } : {}),
   };
 }
 

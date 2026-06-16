@@ -1247,6 +1247,8 @@ Keyboard Shortcuts:
       approval: currentConfig.permissionMode === 'plan' ? 'required' : 'silent',
       presentation: 'agentic',
       sourceLabel: workflow.displayName,
+      processSource: workflow.processSource
+        ?? (workflow.source === 'natural-language' ? 'amaw' : 'command'),
     });
 
     return outcome === 'started' || outcome === 'cancelled';

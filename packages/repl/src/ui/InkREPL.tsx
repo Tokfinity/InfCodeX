@@ -7496,6 +7496,8 @@ const InkREPLInner: React.FC<InkREPLProps> = ({
             approval: currentConfig.permissionMode === 'plan' ? 'required' : 'silent',
             presentation: 'agentic',
             sourceLabel: workflow.displayName,
+            processSource: workflow.processSource
+              ?? (workflow.source === 'natural-language' ? 'amaw' : 'command'),
             onBuilderEvent: workflowCallbacks.onWorkflowBuilderEvent,
           });
           if (outcome === 'started' && streamingStateRef.current.pendingInputs.length > 0) {

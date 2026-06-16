@@ -7,7 +7,7 @@
  * `workflow-runner` tests in @kodax-ai/coding.
  */
 
-import { mkdtempSync, mkdirSync, writeFileSync, rmSync } from 'node:fs';
+import { mkdtempSync, mkdirSync, readFileSync, readdirSync, writeFileSync, rmSync } from 'node:fs';
 import { join } from 'node:path';
 import { tmpdir } from 'node:os';
 
@@ -1351,6 +1351,7 @@ describe('startGeneratedWorkflowFromRequest launch policy', () => {
       request: 'Generate a parallel audit workflow',
       approval: 'silent',
       presentation: 'agentic',
+      processSource: 'amaw',
       callbacks: {
         confirm,
         createKodaXOptions: () => ({}) as ReturnType<NonNullable<WorkflowHandlerCallbacks['createKodaXOptions']>>,
@@ -1390,6 +1391,16 @@ describe('startGeneratedWorkflowFromRequest launch policy', () => {
       && event.final === true
       && event.text.includes('/workflow show')
     ))).toBe(false);
+    const [runId] = readdirSync(runBaseDir);
+    const runJson = JSON.parse(
+      readFileSync(join(runBaseDir, runId ?? '', 'run.json'), 'utf8'),
+    ) as Record<string, unknown>;
+    expect(runJson).toMatchObject({
+      workflow: 'generated-fast-audit',
+      displayName: 'generated-fast-audit',
+      source: 'amaw',
+      goal: 'Generate a parallel audit workflow',
+    });
   });
 
   it('uses artifact content as the agentic completion answer when no synthesis text is returned', async () => {
