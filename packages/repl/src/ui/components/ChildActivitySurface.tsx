@@ -3,47 +3,45 @@ import React from "react";
 import { Box, Text } from "../tui.js";
 import { getTheme } from "../themes/index.js";
 import type {
-  WorkflowLiveRow,
-  WorkflowLiveSymbolColor,
-  WorkflowLiveViewModel,
-} from "../view-models/workflow-live.js";
+  ChildActivityRow,
+  ChildActivitySymbolColor,
+  ChildActivityViewModel,
+} from "../view-models/child-activity.js";
 import {
-  padWorkflowLiveSymbol,
-  WORKFLOW_LIVE_LABEL_WIDTH,
-} from "../view-models/workflow-live.js";
+  CHILD_ACTIVITY_LABEL_WIDTH,
+  padChildActivitySymbol,
+} from "../view-models/child-activity.js";
 
-const LABEL_WIDTH = WORKFLOW_LIVE_LABEL_WIDTH;
+const LABEL_WIDTH = CHILD_ACTIVITY_LABEL_WIDTH;
 
-function resolveSymbolColor(color: WorkflowLiveSymbolColor): string | undefined {
+function resolveSymbolColor(color: ChildActivitySymbolColor): string | undefined {
   const theme = getTheme("dark");
   switch (color) {
     case "cyan":
       return theme.colors.primary;
     case "green":
       return theme.colors.success;
-    case "red":
-      return theme.colors.error;
     case "dim":
     default:
       return theme.colors.dim;
   }
 }
 
-interface WorkflowRunRowProps {
-  readonly row: WorkflowLiveRow;
+interface ChildActivityRowProps {
+  readonly row: ChildActivityRow;
 }
 
-const WorkflowRunRow: React.FC<WorkflowRunRowProps> = ({ row }) => {
+const ChildActivityRowView: React.FC<ChildActivityRowProps> = ({ row }) => {
   const symbolColor = resolveSymbolColor(row.symbolColor);
   return (
     <Box flexDirection="row">
       <Box width={LABEL_WIDTH} flexShrink={0}>
         <Text color={symbolColor} bold={row.isActive} wrap="truncate">
-          {padWorkflowLiveSymbol(row.symbol, LABEL_WIDTH)}
+          {padChildActivitySymbol(row.symbol, LABEL_WIDTH)}
         </Text>
       </Box>
       <Text
-        color={row.kind === "hint" ? getTheme("dark").colors.dim : undefined}
+        color={row.kind === "summary" ? getTheme("dark").colors.dim : undefined}
         bold={row.isActive}
         wrap="truncate"
       >
@@ -53,12 +51,12 @@ const WorkflowRunRow: React.FC<WorkflowRunRowProps> = ({ row }) => {
   );
 };
 
-export interface WorkflowRunSurfaceProps {
-  readonly viewModel: WorkflowLiveViewModel;
+export interface ChildActivitySurfaceProps {
+  readonly viewModel: ChildActivityViewModel;
 }
 
-export function measureWorkflowRunSurfaceRows(
-  viewModel: WorkflowLiveViewModel,
+export function measureChildActivitySurfaceRows(
+  viewModel: ChildActivityViewModel,
 ): number {
   if (!viewModel.shouldRender || viewModel.rows.length === 0) {
     return 0;
@@ -67,15 +65,15 @@ export function measureWorkflowRunSurfaceRows(
   return viewModel.rows.length;
 }
 
-export const WorkflowRunSurface: React.FC<WorkflowRunSurfaceProps> = ({
+export const ChildActivitySurface: React.FC<ChildActivitySurfaceProps> = ({
   viewModel,
 }) => {
   if (!viewModel.shouldRender) return null;
   if (viewModel.rows.length === 0) return null;
   return (
     <Box flexDirection="column" flexGrow={1}>
-      {viewModel.rows.map((row, index) => (
-        <WorkflowRunRow key={`${row.kind}-${row.id ?? index}`} row={row} />
+      {viewModel.rows.map((row) => (
+        <ChildActivityRowView key={`${row.kind}-${row.id}`} row={row} />
       ))}
     </Box>
   );

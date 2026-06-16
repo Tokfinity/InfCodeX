@@ -36,6 +36,10 @@ import { Spinner, SpinnerStatsTail, useSharedSpinnerTick } from "./components/Lo
 import { BackgroundTaskBar } from "./components/BackgroundTaskBar.js";
 import { TodoListSurface } from "./components/TodoListSurface.js";
 import {
+  ChildActivitySurface,
+  measureChildActivitySurfaceRows,
+} from "./components/ChildActivitySurface.js";
+import {
   measureWorkflowRunSurfaceRows,
   WorkflowRunSurface,
 } from "./components/WorkflowRunSurface.js";
@@ -43,6 +47,18 @@ import {
   buildTodoPlanViewModel,
   formatTodoPlanViewModelForTranscript,
 } from "./view-models/todo-plan.js";
+import {
+  buildChildActivityViewModel,
+  childActivityId,
+  childActivityLabel,
+  childActivitySource,
+  MAX_CHILD_ACTIVITY_ROWS,
+  shouldRouteToChildActivity,
+  toolActivityDetail,
+  truncateChildActivityDetail,
+  type ChildActivityKind,
+  type ChildActivityRecord,
+} from "./view-models/child-activity.js";
 import {
   buildWorkflowLiveViewModel,
   formatWorkflowLiveViewModelForTranscript,
@@ -104,6 +120,7 @@ import {
   getRegisteredToolDefinition,
   createBashPrefixExtractor,
   decideWorkflowInvocation,
+  workflowStartOutcomeConsumesTurn,
   getDefaultWorkflowRunManager,
   resolveProvider,
   prewarmRepoIntelligenceCaches,
@@ -114,6 +131,8 @@ import type {
   CompactionUpdate,
   KodaXSessionArtifactLedgerEntry,
   KodaXSessionLineage,
+  KodaXActivityEventMeta,
+  KodaXToolEventMeta,
   TodoItem,
   TodoList,
 } from "@kodax-ai/coding";
@@ -515,6 +534,8 @@ interface BannerProps {
 type StreamingEvents = import("@kodax-ai/coding").KodaXEvents & {
   onCompactedMessages?: (messages: KodaXMessage[], update?: CompactionUpdate) => void;
 };
+
+const CHILD_ACTIVITY_MAX_RECORDS = 12;
 
 interface TranscriptMouseSelectionState {
   anchor: TranscriptScreenPoint;
@@ -1191,6 +1212,7 @@ const InkREPLInner: React.FC<InkREPLProps> = ({
 }) => {
   const { exit } = useApp();
   const { stdout } = useStdout();
+  const terminalRows = stdout.rows ?? 24;
   const { stdin, setRawMode, isRawModeSupported } = useStdin();
   const writeTerminal = useTerminalWrite();
   const { history } = useUIState();
@@ -1495,11 +1517,74 @@ const InkREPLInner: React.FC<InkREPLProps> = ({
   const iterationToolCallsRef = useRef<ToolCall[]>([]);
   const [activeToolCalls, setActiveToolCalls] = useState<ToolCall[]>([]);
   const activeToolCallsRef = useRef<ToolCall[]>([]);
+  const [childActivityRecords, setChildActivityRecords] = useState<ChildActivityRecord[]>([]);
+  const childActivityRecordsRef = useRef<ChildActivityRecord[]>([]);
 
   const setLiveToolCalls = useCallback((nextToolCalls: ToolCall[]) => {
     activeToolCallsRef.current = nextToolCalls;
     setActiveToolCalls(nextToolCalls);
   }, []);
+
+  const setChildActivityRecordState = useCallback((nextRecords: ChildActivityRecord[]) => {
+    childActivityRecordsRef.current = nextRecords;
+    setChildActivityRecords(nextRecords);
+  }, []);
+
+  const clearChildActivityRecords = useCallback(() => {
+    setChildActivityRecordState([]);
+  }, [setChildActivityRecordState]);
+
+  const completeChildActivityRecord = useCallback((
+    meta: KodaXActivityEventMeta | undefined,
+  ): boolean => {
+    if (!shouldRouteToChildActivity(meta)) {
+      return false;
+    }
+    const id = childActivityId(meta);
+    const nextRecords = childActivityRecordsRef.current.filter((record) => record.id !== id);
+    if (nextRecords.length === childActivityRecordsRef.current.length) {
+      return true;
+    }
+    setChildActivityRecordState(nextRecords);
+    return true;
+  }, [setChildActivityRecordState]);
+
+  const upsertChildActivityRecord = useCallback((
+    meta: KodaXActivityEventMeta | undefined,
+    kind: ChildActivityKind,
+    detail: string,
+    options?: {
+      readonly append?: boolean;
+      readonly skipIfExisting?: boolean;
+    },
+  ): boolean => {
+    if (!shouldRouteToChildActivity(meta)) {
+      return false;
+    }
+    const id = childActivityId(meta);
+    const existing = childActivityRecordsRef.current.find((record) => record.id === id);
+    if (options?.skipIfExisting && existing?.kind === kind) {
+      return true;
+    }
+    const nextDetail = options?.append && existing?.kind === kind
+      ? `${existing.detail}${detail}`
+      : detail || existing?.detail || "running";
+    const nextRecord: ChildActivityRecord = {
+      id,
+      label: childActivityLabel(meta),
+      source: childActivitySource(meta),
+      status: "running",
+      kind,
+      detail: truncateChildActivityDetail(nextDetail),
+    };
+    const currentRecords = childActivityRecordsRef.current;
+    const existingIndex = currentRecords.findIndex((record) => record.id === id);
+    const nextRecords = existingIndex >= 0
+      ? currentRecords.map((record, index) => (index === existingIndex ? nextRecord : record))
+      : [...currentRecords, nextRecord].slice(0, CHILD_ACTIVITY_MAX_RECORDS);
+    setChildActivityRecordState(nextRecords);
+    return true;
+  }, [setChildActivityRecordState]);
 
   const setManagedLiveEventItems = useCallback((nextEvents: HistoryItem[]) => {
     managedLiveEventsRef.current = nextEvents;
@@ -2650,6 +2735,14 @@ const InkREPLInner: React.FC<InkREPLProps> = ({
     }),
     [todoItems],
   );
+  const childActivityMaxRows = terminalRows <= 20 ? 1 : MAX_CHILD_ACTIVITY_ROWS;
+  const childActivityViewModel = useMemo(
+    () => buildChildActivityViewModel(childActivityRecords, childActivityMaxRows),
+    [childActivityMaxRows, childActivityRecords],
+  );
+  const shouldRenderChildActivitySurface = !isTranscriptMode
+    && (isLoading || workflowLiveViewModel.shouldRender)
+    && childActivityViewModel.shouldRender;
   const transcriptLiveStatusLines = useMemo(() => {
     if (!isTranscriptMode) {
       return [] as readonly string[];
@@ -3508,7 +3601,6 @@ const InkREPLInner: React.FC<InkREPLProps> = ({
   const activeFooterNotices = isTranscriptMode
     ? transcriptFooterBudgetNotices
     : promptFooterNotices;
-  const terminalRows = stdout.rows ?? 24;
   const budgetedTerminalRows = terminalRows;
   const footerBudgetInputText = isTranscriptMode ? "" : inputText;
   const footerBudgetPendingInputSummary = isTranscriptMode ? undefined : pendingInputSummary;
@@ -3519,6 +3611,9 @@ const InkREPLInner: React.FC<InkREPLProps> = ({
     : 0;
   const todoFooterRows = isLoading && todoPlanViewModel.shouldRender
     ? todoPlanViewModel.rows.length
+    : 0;
+  const childActivityFooterRows = shouldRenderChildActivitySurface
+    ? measureChildActivitySurfaceRows(childActivityViewModel)
     : 0;
   const viewportBudget = useMemo(
     // Budget transcript, footer, overlay, status, and task slots together so
@@ -3543,8 +3638,9 @@ const InkREPLInner: React.FC<InkREPLProps> = ({
       // composer.
       activityBarVisible: isTranscriptMode
         ? false
-        : Boolean(promptBusyText) || workflowFooterRows > 0 || todoFooterRows > 0,
+        : Boolean(promptBusyText) || workflowFooterRows > 0 || todoFooterRows > 0 || childActivityFooterRows > 0,
       workflowSurfaceRows: isTranscriptMode ? 0 : workflowFooterRows,
+      childActivitySurfaceRows: isTranscriptMode ? 0 : childActivityFooterRows,
       // FEATURE_114 v0.7.36 Slice 4 (UX bugfix v0.7.38) — TodoListSurface
       // is rendered between activityBar and composer in PromptFooter.
       // Each viewModel row is a single Ink Box (1 line). Without this
@@ -3603,6 +3699,7 @@ const InkREPLInner: React.FC<InkREPLProps> = ({
       promptBusyText,
       isTranscriptMode,
       workflowFooterRows,
+      childActivityFooterRows,
       todoFooterRows,
       footerBudgetPendingInputSummary,
       stashNoticeText,
@@ -5378,8 +5475,11 @@ const InkREPLInner: React.FC<InkREPLProps> = ({
   // Process special syntax (shell commands, file references)
   // Create KodaXEvents for streaming updates
   const createStreamingEvents = useCallback((): StreamingEvents => ({
-    onThinkingDelta: (text: string) => {
+    onThinkingDelta: (text: string, meta?: KodaXActivityEventMeta) => {
       if (userInterruptedRef.current) {
+        return;
+      }
+      if (upsertChildActivityRecord(meta, "thinking", text, { append: true })) {
         return;
       }
       if (streamingState.currentTool) {
@@ -5405,8 +5505,11 @@ const InkREPLInner: React.FC<InkREPLProps> = ({
         appendManagedForegroundTextBlock("thinking", text);
       }
     },
-    onThinkingEnd: (thinking: string) => {
+    onThinkingEnd: (thinking: string, meta?: KodaXActivityEventMeta) => {
       if (userInterruptedRef.current) {
+        return;
+      }
+      if (upsertChildActivityRecord(meta, "thinking", thinking)) {
         return;
       }
       const currentThinking = getThinkingContent();
@@ -5422,8 +5525,11 @@ const InkREPLInner: React.FC<InkREPLProps> = ({
       }
       stopThinking();
     },
-    onTextDelta: (text: string) => {
+    onTextDelta: (text: string, meta?: KodaXActivityEventMeta) => {
       if (userInterruptedRef.current) {
+        return;
+      }
+      if (upsertChildActivityRecord(meta, "assistant", text, { append: true })) {
         return;
       }
       if (streamingState.currentTool) {
@@ -5437,8 +5543,14 @@ const InkREPLInner: React.FC<InkREPLProps> = ({
         appendManagedForegroundTextBlock("assistant", text);
       }
     },
-    onToolUseStart: (tool: { name: string; id: string; input?: Record<string, unknown> }) => {
+    onToolUseStart: (
+      tool: { name: string; id: string; input?: Record<string, unknown> },
+      meta?: KodaXToolEventMeta,
+    ) => {
       if (userInterruptedRef.current) {
+        return;
+      }
+      if (upsertChildActivityRecord(meta, "tool", toolActivityDetail(tool.name, tool.input))) {
         return;
       }
       if (!iterationToolsRef.current.includes(tool.name)) {
@@ -5465,9 +5577,12 @@ const InkREPLInner: React.FC<InkREPLProps> = ({
     onToolInputDelta: (
       toolName: string,
       partialJson: string,
-      meta?: { toolId?: string },
+      meta?: KodaXToolEventMeta,
     ) => {
       if (userInterruptedRef.current) {
+        return;
+      }
+      if (upsertChildActivityRecord(meta, "tool", toolName, { skipIfExisting: true })) {
         return;
       }
       appendToolInputChars(partialJson.length);
@@ -5492,8 +5607,11 @@ const InkREPLInner: React.FC<InkREPLProps> = ({
         );
       }
     },
-    onToolResult: (result) => {
+    onToolResult: (result, meta?: KodaXToolEventMeta) => {
       if (userInterruptedRef.current) {
+        return;
+      }
+      if (upsertChildActivityRecord(meta, "tool", `${result.name} completed`)) {
         return;
       }
       const content = typeof result.content === "string" ? result.content : String(result.content ?? "");
@@ -5550,8 +5668,11 @@ const InkREPLInner: React.FC<InkREPLProps> = ({
         );
       }
     },
-    onToolProgress: (update: { id: string; message: string }) => {
+    onToolProgress: (update: { id: string; message: string }, meta?: KodaXToolEventMeta) => {
       if (userInterruptedRef.current) return;
+      if (upsertChildActivityRecord(meta, "progress", update.message)) {
+        return;
+      }
       const truncated = update.message.length > 100
         ? update.message.slice(0, 97) + '...'
         : update.message;
@@ -5568,12 +5689,15 @@ const InkREPLInner: React.FC<InkREPLProps> = ({
       // 3. Update spinner label
       setLastLiveActivityLabel(truncated);
     },
-    onStreamEnd: () => {
+    onStreamEnd: (meta?: KodaXActivityEventMeta) => {
       // Issue 116: guard against stale onStreamEnd from aborted round.
       // The agent AbortError path calls events.onStreamEnd() after the UI has
       // already reset via resetInterruptedPromptState(). Without this guard,
       // it would corrupt tool-call state of the new round.
       if (userInterruptedRef.current) {
+        return;
+      }
+      if (shouldRouteToChildActivity(meta)) {
         return;
       }
       const finalizedTools = finalizeAllExecutingToolCalls(
@@ -5592,6 +5716,9 @@ const InkREPLInner: React.FC<InkREPLProps> = ({
       stopThinking();
       clearToolInputContent();
       setCurrentTool(undefined);
+    },
+    onChildActivityEnd: (meta?: KodaXActivityEventMeta) => {
+      completeChildActivityRecord(meta);
     },
     hasPendingInputs: () => pendingInputsRef.current.length > 0,
     // FEATURE_164 (v0.7.41) — mid-turn user message injection visibility.
@@ -6384,6 +6511,8 @@ const InkREPLInner: React.FC<InkREPLProps> = ({
     findLatestExecutingTool,
     resetLiveToolCalls,
     setLiveToolCalls,
+    completeChildActivityRecord,
+    upsertChildActivityRecord,
     streamingState.currentTool,
   ]);
 
@@ -7288,6 +7417,7 @@ const InkREPLInner: React.FC<InkREPLProps> = ({
       iterationToolsRef.current = [];
       iterationToolCallsRef.current = [];
       resetLiveToolCalls();
+      clearChildActivityRecords();
       clearResponse();
       clearToolInputContent();
       setCurrentTool(undefined);
@@ -7503,7 +7633,22 @@ const InkREPLInner: React.FC<InkREPLProps> = ({
           if (outcome === 'started' && streamingStateRef.current.pendingInputs.length > 0) {
             workflowIntentBoundaryQueueLockedRef.current = true;
           }
-          return outcome === 'started' || outcome === 'cancelled';
+          const consumesTurn = workflowStartOutcomeConsumesTurn({
+            outcome,
+          });
+          if (
+            !consumesTurn
+            && workflow.source === 'natural-language'
+            && (outcome === 'failed' || outcome === 'declined')
+          ) {
+            addHistoryItem({
+              type: "info",
+              text: outcome === 'failed'
+                ? "Workflow builder failed after repair attempts. Falling back to normal Agent for this turn."
+                : "Workflow builder declined to create a workflow. Continuing with normal Agent for this turn.",
+            });
+          }
+          return consumesTurn;
         } finally {
           setWorkflowBuilderMessage(null);
           console.log = originalWorkflowLog;
@@ -8289,6 +8434,7 @@ const InkREPLInner: React.FC<InkREPLProps> = ({
         setIsLoading(false);
         stopStreaming();
         clearResponse(); // Fix: clear stale buffer to prevent ghost [Interrupted] on next submit
+        clearChildActivityRecords();
         clearThinkingContent();
         // After a run ends (success or abort), worker-scoped onIterationEnd events
         // may have left context.contextTokenSnapshot pointing at a sub-agent's
@@ -8338,6 +8484,7 @@ const InkREPLInner: React.FC<InkREPLProps> = ({
       startCompacting,
       stopCompacting,
       resetLiveToolCalls,
+      clearChildActivityRecords,
       finalizeAllExecutingToolCalls,
       syncManagedForegroundToolGroup,
       clearWorkStripTimers,
@@ -8354,10 +8501,16 @@ const InkREPLInner: React.FC<InkREPLProps> = ({
       <TodoListSurface viewModel={todoPlanViewModel} />
     </Box>
   ) : undefined;
-  const promptEmbeddedStatusSurface = workflowFooterSurface || todoFooterSurface ? (
+  const childActivityFooterSurface = shouldRenderChildActivitySurface ? (
+    <Box paddingX={1}>
+      <ChildActivitySurface viewModel={childActivityViewModel} />
+    </Box>
+  ) : undefined;
+  const promptEmbeddedStatusSurface = workflowFooterSurface || todoFooterSurface || childActivityFooterSurface ? (
     <Box flexDirection="column">
       {workflowFooterSurface}
       {todoFooterSurface}
+      {childActivityFooterSurface}
     </Box>
   ) : undefined;
   const workflowFooterCounterText = workflowLiveViewModel.shouldRender
@@ -8374,7 +8527,7 @@ const InkREPLInner: React.FC<InkREPLProps> = ({
       inlineNotices={promptFooterNotices.length > 0 ? (
         <StatusNoticesSurface notices={promptFooterNotices} />
       ) : undefined}
-      activityBar={(promptActivityViewModel || workflowLiveViewModel.shouldRender || (isLoading && todoPlanViewModel.shouldRender)) ? (
+      activityBar={(promptActivityViewModel || workflowLiveViewModel.shouldRender || (isLoading && todoPlanViewModel.shouldRender) || shouldRenderChildActivitySurface) ? (
         // FEATURE_151 (v0.7.38) Slice H' — spinner verb + todo counter
         // share one line. Left column: existing spinner glyph + verb
         // text (when any activity is present). Right column: dim

@@ -73,6 +73,7 @@ export interface ViewportBudgetOptions {
    */
   todoSurfaceRows?: number;
   workflowSurfaceRows?: number;
+  childActivitySurfaceRows?: number;
   /**
    * Whether the activityBar slot (containing the spinner + activity
    * verb + "X/N completed" counter) is rendered at all. The slot
@@ -120,6 +121,7 @@ export interface ViewportBudgetResult {
   /** Rows reserved for TodoListSurface in the footer (0 when hidden). */
   todoSurfaceRows: number;
   workflowSurfaceRows: number;
+  childActivitySurfaceRows: number;
   slots: ViewportBudgetSlot[];
 }
 
@@ -181,10 +183,12 @@ export function calculateViewportBudget(options: ViewportBudgetOptions): Viewpor
     reviewHint,
     todoSurfaceRows: todoSurfaceRowsRaw = 0,
     workflowSurfaceRows: workflowSurfaceRowsRaw = 0,
+    childActivitySurfaceRows: childActivitySurfaceRowsRaw = 0,
     activityBarVisible = false,
   } = options;
   const todoSurfaceRows = Math.max(0, Math.floor(todoSurfaceRowsRaw));
   const workflowSurfaceRows = Math.max(0, Math.floor(workflowSurfaceRowsRaw));
+  const childActivitySurfaceRows = Math.max(0, Math.floor(childActivitySurfaceRowsRaw));
 
   const headerRows = footerHeaderText
     ? wrapLineCount(footerHeaderText, Math.max(1, terminalWidth - 2))
@@ -323,6 +327,7 @@ export function calculateViewportBudget(options: ViewportBudgetOptions): Viewpor
     activityRows +
     workflowSurfaceRows +
     todoSurfaceRows +
+    childActivitySurfaceRows +
     pendingInputRows +
     stashNoticeRows +
     notificationRows +
@@ -372,6 +377,7 @@ export function calculateViewportBudget(options: ViewportBudgetOptions): Viewpor
     reviewHintRows,
     todoSurfaceRows,
     workflowSurfaceRows,
+    childActivitySurfaceRows,
     slots,
   };
 }

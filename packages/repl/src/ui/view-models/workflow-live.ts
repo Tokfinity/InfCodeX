@@ -1,4 +1,5 @@
 import type { WorkflowProcessSnapshot } from "@kodax-ai/agent";
+import stringWidth from "string-width";
 
 export type WorkflowLiveStatus = "running" | "completed" | "failed" | "stopped";
 export type WorkflowLiveLocale = "en" | "zh";
@@ -52,6 +53,20 @@ export interface WorkflowLiveViewModel {
   readonly stoppedAgents: number;
   readonly counterText?: string;
   readonly rows: readonly WorkflowLiveRow[];
+}
+
+export const WORKFLOW_LIVE_LABEL_WIDTH = 9;
+
+export function padWorkflowLiveSymbol(
+  symbol: string,
+  width: number = WORKFLOW_LIVE_LABEL_WIDTH,
+): string {
+  const visibleWidth = stringWidth(symbol);
+  if (visibleWidth >= width) {
+    return symbol;
+  }
+
+  return `${symbol}${" ".repeat(width - visibleWidth)}`;
 }
 
 export function workflowLiveSnapshotFromProcess(
@@ -113,7 +128,7 @@ export function formatWorkflowLiveViewModelForTranscript(
     return [];
   }
 
-  return viewModel.rows.map((row) => `${row.symbol.padEnd(9)}${row.text}`);
+  return viewModel.rows.map((row) => `${padWorkflowLiveSymbol(row.symbol)}${row.text}`);
 }
 
 const MAX_VISIBLE_ROWS = 6;

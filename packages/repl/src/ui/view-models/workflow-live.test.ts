@@ -127,6 +127,28 @@ describe("buildWorkflowLiveViewModel", () => {
     ]);
   });
 
+  it("serializes Chinese workflow labels using terminal display width", () => {
+    const vm = buildWorkflowLiveViewModel(runningSnapshot({
+      locale: "zh",
+      workflow: "探查Feature 217使用者掌控感反馈设计",
+      phase: "探查改动",
+      phaseIndex: 1,
+      phaseTotal: 3,
+      activeAgents: ["diff-explorer"],
+      totalSpawned: 1,
+      plannedAgents: 5,
+      agentCap: 11,
+      completedAgents: 0,
+      message: "agent spawned: diff-explorer",
+    }));
+
+    const transcriptRows = formatWorkflowLiveViewModelForTranscript(vm);
+
+    expect(transcriptRows[0]).toContain("工作流   探查Feature 217使用者掌控感反馈设计");
+    expect(transcriptRows[1]).toBe("阶段     1/3 探查改动");
+    expect(transcriptRows.join("\n")).not.toContain("…");
+  });
+
   it("localizes labels and progress text for Chinese workflow requests", () => {
     const vm = buildWorkflowLiveViewModel(runningSnapshot({
       locale: "zh",

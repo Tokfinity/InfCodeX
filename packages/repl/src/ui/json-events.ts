@@ -6,11 +6,13 @@
  */
 
 import type {
+  KodaXActivityEventMeta,
   KodaXContextTokenSnapshot,
   KodaXEvents,
   KodaXManagedTaskStatusEvent,
   KodaXRepoIntelligenceTraceEvent,
   KodaXTokenUsage,
+  WorkflowEventCorrelation,
 } from '@kodax-ai/coding';
 
 type JsonWritable = Pick<NodeJS.WritableStream, 'write'>;
@@ -31,14 +33,30 @@ type JsonEvent =
       tokenSource: 'api' | 'estimate';
       usage?: KodaXTokenUsage;
       contextTokenSnapshot?: KodaXContextTokenSnapshot;
+      scope?: 'parent' | 'worker';
     }
-  | { type: 'text.delta'; text: string }
-  | { type: 'thinking.delta'; text: string }
-  | { type: 'thinking.end'; thinking: string }
-  | { type: 'tool.start'; id: string; name: string; input?: Record<string, unknown> }
-  | { type: 'tool.input.delta'; toolName: string; partialJson: string; toolId?: string }
-  | { type: 'tool.result'; id: string; name: string; content: string }
-  | { type: 'stream.end' }
+  | ({ type: 'text.delta'; text: string } & JsonActivityMeta)
+  | ({ type: 'thinking.delta'; text: string } & JsonActivityMeta)
+  | ({ type: 'thinking.end'; thinking: string } & JsonActivityMeta)
+  | ({
+      type: 'tool.start';
+      id: string;
+      name: string;
+      input?: Record<string, unknown>;
+    } & JsonActivityMeta)
+  | ({
+      type: 'tool.input.delta';
+      toolName: string;
+      partialJson: string;
+      toolId?: string;
+    } & JsonActivityMeta)
+  | ({
+      type: 'tool.result';
+      id: string;
+      name: string;
+      content: string;
+    } & JsonActivityMeta)
+  | ({ type: 'stream.end' } & JsonActivityMeta)
   | { type: 'compact.start' }
   | { type: 'compact.finish'; estimatedTokens: number }
   | { type: 'compact.stats'; tokensBefore: number; tokensAfter: number }
@@ -63,7 +81,11 @@ type JsonEvent =
       capability?: KodaXRepoIntelligenceTraceEvent['capability'];
       trace?: KodaXRepoIntelligenceTraceEvent['trace'];
     }
-  | { type: 'tool.progress'; id: string; message: string }
+  | ({
+      type: 'tool.progress';
+      id: string;
+      message: string;
+    } & JsonActivityMeta)
   | {
       type: 'managed_task.status';
       agentMode: KodaXManagedTaskStatusEvent['agentMode'];
@@ -96,6 +118,24 @@ type JsonErrorEvent = {
   message: string;
   stack?: string;
 };
+
+type JsonActivityMeta = {
+  workflowCorrelation?: WorkflowEventCorrelation;
+  childAgentId?: string;
+  childAgentName?: string;
+  parentToolId?: string;
+  liveOnly?: boolean;
+};
+
+function activityMetaFields(meta?: KodaXActivityEventMeta): JsonActivityMeta {
+  return {
+    ...(meta?.workflowCorrelation !== undefined ? { workflowCorrelation: meta.workflowCorrelation } : {}),
+    ...(meta?.childAgentId !== undefined ? { childAgentId: meta.childAgentId } : {}),
+    ...(meta?.childAgentName !== undefined ? { childAgentName: meta.childAgentName } : {}),
+    ...(meta?.parentToolId !== undefined ? { parentToolId: meta.parentToolId } : {}),
+    ...(meta?.liveOnly !== undefined ? { liveOnly: meta.liveOnly } : {}),
+  };
+}
 
 function writeJsonLine(stream: JsonWritable, value: JsonEvent | JsonErrorEvent): void {
   stream.write(`${JSON.stringify(value)}\n`);
@@ -136,27 +176,29 @@ export function createJsonEvents(options: JsonEventOutputOptions = {}): KodaXEve
         tokenSource: info.tokenSource,
         usage: info.usage,
         contextTokenSnapshot: info.contextTokenSnapshot,
+        ...(info.scope !== undefined ? { scope: info.scope } : {}),
       });
     },
 
-    onTextDelta: (text) => {
-      writeJsonLine(stdout, { type: 'text.delta', text });
+    onTextDelta: (text, meta) => {
+      writeJsonLine(stdout, { type: 'text.delta', text, ...activityMetaFields(meta) });
     },
 
-    onThinkingDelta: (text) => {
-      writeJsonLine(stdout, { type: 'thinking.delta', text });
+    onThinkingDelta: (text, meta) => {
+      writeJsonLine(stdout, { type: 'thinking.delta', text, ...activityMetaFields(meta) });
     },
 
-    onThinkingEnd: (thinking) => {
-      writeJsonLine(stdout, { type: 'thinking.end', thinking });
+    onThinkingEnd: (thinking, meta) => {
+      writeJsonLine(stdout, { type: 'thinking.end', thinking, ...activityMetaFields(meta) });
     },
 
-    onToolUseStart: (tool) => {
+    onToolUseStart: (tool, meta) => {
       writeJsonLine(stdout, {
         type: 'tool.start',
         id: tool.id,
         name: tool.name,
         input: tool.input,
+        ...activityMetaFields(meta),
       });
     },
 
@@ -166,20 +208,22 @@ export function createJsonEvents(options: JsonEventOutputOptions = {}): KodaXEve
         toolName,
         partialJson,
         toolId: meta?.toolId,
+        ...activityMetaFields(meta),
       });
     },
 
-    onToolResult: (result) => {
+    onToolResult: (result, meta) => {
       writeJsonLine(stdout, {
         type: 'tool.result',
         id: result.id,
         name: result.name,
         content: result.content,
+        ...activityMetaFields(meta),
       });
     },
 
-    onStreamEnd: () => {
-      writeJsonLine(stdout, { type: 'stream.end' });
+    onStreamEnd: (meta) => {
+      writeJsonLine(stdout, { type: 'stream.end', ...activityMetaFields(meta) });
     },
 
     onCompactStart: () => {
@@ -247,11 +291,12 @@ export function createJsonEvents(options: JsonEventOutputOptions = {}): KodaXEve
       });
     },
 
-    onToolProgress: (update) => {
+    onToolProgress: (update, meta) => {
       writeJsonLine(stdout, {
         type: 'tool.progress',
         id: update.id,
         message: update.message,
+        ...activityMetaFields(meta),
       });
     },
 

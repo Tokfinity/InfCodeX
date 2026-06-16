@@ -30,13 +30,34 @@ describe('createJsonEvents', () => {
     const stdout = createWritable();
     const stderr = createWritable();
     const events = createJsonEvents({ stdout: stdout.stream, stderr: stderr.stream });
+    const workflowCorrelation = {
+      workflowRunId: 'run-1',
+      childAgentId: 'child-1',
+      itemId: 'agent:child-1',
+    };
 
     events.onSessionStart?.({ provider: 'openai', sessionId: 'session-123' });
     events.onIterationStart?.(1, 5);
     events.onTextDelta?.('hello');
-    events.onToolUseStart?.({ id: 'tool-1', name: 'read', input: { path: 'README.md' } });
-    events.onToolInputDelta?.('read', '{"path":"README.md"}', { toolId: 'tool-1' });
-    events.onToolResult?.({ id: 'tool-1', name: 'read', content: 'file contents' });
+    events.onToolUseStart?.(
+      { id: 'tool-1', name: 'read', input: { path: 'README.md' } },
+      { toolId: 'tool-1', workflowCorrelation },
+    );
+    events.onToolInputDelta?.('read', '{"path":"README.md"}', {
+      toolId: 'tool-1',
+      workflowCorrelation,
+    });
+    events.onToolResult?.(
+      { id: 'tool-1', name: 'read', content: 'file contents' },
+      { toolId: 'tool-1', workflowCorrelation },
+    );
+    events.onToolProgress?.(
+      { id: 'tool-1', message: 'reading README.md' },
+      {
+        toolId: 'tool-1',
+        workflowCorrelation,
+      },
+    );
     events.onProviderRecovery?.({
       stage: 'mid_stream_text',
       errorClass: 'stream_idle_timeout',
@@ -72,6 +93,7 @@ describe('createJsonEvents', () => {
       maxIter: 5,
       tokenCount: 42,
       tokenSource: 'estimate',
+      scope: 'worker',
     });
     events.onComplete?.();
 
@@ -84,18 +106,27 @@ describe('createJsonEvents', () => {
         id: 'tool-1',
         name: 'read',
         input: { path: 'README.md' },
+        workflowCorrelation,
       },
       {
         type: 'tool.input.delta',
         toolName: 'read',
         partialJson: '{"path":"README.md"}',
         toolId: 'tool-1',
+        workflowCorrelation,
       },
       {
         type: 'tool.result',
         id: 'tool-1',
         name: 'read',
         content: 'file contents',
+        workflowCorrelation,
+      },
+      {
+        type: 'tool.progress',
+        id: 'tool-1',
+        message: 'reading README.md',
+        workflowCorrelation,
       },
       {
         type: 'provider.recovery',
@@ -135,8 +166,66 @@ describe('createJsonEvents', () => {
         maxIter: 5,
         tokenCount: 42,
         tokenSource: 'estimate',
+        scope: 'worker',
       },
       { type: 'complete' },
+    ]);
+    expect(stderr.readLines()).toEqual([]);
+  });
+
+  it('serializes child activity metadata for live telemetry callbacks', () => {
+    const stdout = createWritable();
+    const stderr = createWritable();
+    const events = createJsonEvents({ stdout: stdout.stream, stderr: stderr.stream });
+    const workflowCorrelation = {
+      workflowRunId: 'run-1',
+      childAgentId: 'child-1',
+      itemId: 'agent:child-1',
+    };
+    const meta = {
+      workflowCorrelation,
+      childAgentId: 'child-1',
+      childAgentName: 'diff-explorer',
+      liveOnly: true,
+    };
+
+    events.onTextDelta?.('child text', meta);
+    events.onThinkingDelta?.('child thinking', meta);
+    events.onThinkingEnd?.('final thinking', meta);
+    events.onStreamEnd?.(meta);
+
+    expect(stdout.readLines()).toEqual([
+      {
+        type: 'text.delta',
+        text: 'child text',
+        workflowCorrelation,
+        childAgentId: 'child-1',
+        childAgentName: 'diff-explorer',
+        liveOnly: true,
+      },
+      {
+        type: 'thinking.delta',
+        text: 'child thinking',
+        workflowCorrelation,
+        childAgentId: 'child-1',
+        childAgentName: 'diff-explorer',
+        liveOnly: true,
+      },
+      {
+        type: 'thinking.end',
+        thinking: 'final thinking',
+        workflowCorrelation,
+        childAgentId: 'child-1',
+        childAgentName: 'diff-explorer',
+        liveOnly: true,
+      },
+      {
+        type: 'stream.end',
+        workflowCorrelation,
+        childAgentId: 'child-1',
+        childAgentName: 'diff-explorer',
+        liveOnly: true,
+      },
     ]);
     expect(stderr.readLines()).toEqual([]);
   });

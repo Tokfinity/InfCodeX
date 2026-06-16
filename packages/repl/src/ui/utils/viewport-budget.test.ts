@@ -356,6 +356,34 @@ describe("viewport-budget", () => {
     expect(budget.workflowSurfaceRows).toBe(4);
   });
 
+  it("reserves rows for child activity so composer + status-bar stay visible", () => {
+    const withoutChildActivity = calculateViewportBudget({
+      terminalRows: 24,
+      terminalWidth: 80,
+      inputText: "",
+      suggestionsReserved: false,
+      showHelp: false,
+      statusBarText: "status",
+      todoSurfaceRows: 3,
+      activityBarVisible: true,
+    });
+    const withChildActivity = calculateViewportBudget({
+      terminalRows: 24,
+      terminalWidth: 80,
+      inputText: "",
+      suggestionsReserved: false,
+      showHelp: false,
+      statusBarText: "status",
+      todoSurfaceRows: 3,
+      childActivitySurfaceRows: 2,
+      activityBarVisible: true,
+    });
+
+    expect(withChildActivity.childActivitySurfaceRows).toBe(2);
+    expect(withChildActivity.messageRows).toBe(withoutChildActivity.messageRows - 2);
+    expect(withChildActivity.footerRows).toBe(withoutChildActivity.footerRows + 2);
+  });
+
   it("does not reserve plan-list rows when shouldRender is false", () => {
     const noPlan = calculateViewportBudget({
       terminalRows: 24,

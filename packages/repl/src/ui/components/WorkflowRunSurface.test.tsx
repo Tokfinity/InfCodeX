@@ -42,6 +42,37 @@ describe("WorkflowRunSurface", () => {
     expect(frame).toContain("/workflow show run-mqc7av6y");
   });
 
+  it("does not ellipsize Chinese row labels at normal widths", () => {
+    const vm = buildWorkflowLiveViewModel({
+      runId: "run-mqgjmy9g",
+      workflow: "探查Feature 217使用者掌控感反馈设计",
+      status: "running",
+      phase: "探查改动",
+      phaseIndex: 1,
+      phaseTotal: 3,
+      activeAgents: ["diff-explorer"],
+      totalSpawned: 1,
+      plannedAgents: 5,
+      agentCap: 11,
+      completedAgents: 0,
+      failedAgents: 0,
+      stoppedAgents: 0,
+      message: "agent spawned: diff-explorer",
+      locale: "zh",
+    });
+
+    const { lastFrame } = render(
+      <Box width={120}>
+        <WorkflowRunSurface viewModel={vm} />
+      </Box>,
+    );
+    const frame = lastFrame() ?? "";
+
+    expect(frame).toContain("工作流   探查Feature 217使用者掌控感反馈设计");
+    expect(frame).toContain("阶段     1/3 探查改动");
+    expect(frame).not.toContain("…");
+  });
+
   it("returns null when hidden", () => {
     const vm = buildWorkflowLiveViewModel(null);
     const { lastFrame } = render(<WorkflowRunSurface viewModel={vm} />);

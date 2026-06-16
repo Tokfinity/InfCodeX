@@ -75,6 +75,12 @@ export type {
 export { BackgroundTaskBar } from "./BackgroundTaskBar.js";
 export type { BackgroundTaskBarProps, BackgroundTaskBarItem } from "./BackgroundTaskBar.js";
 
+export {
+  ChildActivitySurface,
+  measureChildActivitySurfaceRows,
+} from "./ChildActivitySurface.js";
+export type { ChildActivitySurfaceProps } from "./ChildActivitySurface.js";
+
 export { QueuedCommandsSurface } from "./QueuedCommandsSurface.js";
 export type { QueuedCommandsSurfaceProps } from "./QueuedCommandsSurface.js";
 
