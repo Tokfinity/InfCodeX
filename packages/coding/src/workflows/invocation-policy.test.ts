@@ -1,7 +1,10 @@
 import { describe, expect, it } from 'vitest';
 
 import type { KodaXAgentMode } from '../types.js';
-import { decideWorkflowInvocation } from './invocation-policy.js';
+import {
+  decideWorkflowInvocation,
+  workflowStartOutcomeConsumesTurn,
+} from './invocation-policy.js';
 
 describe('decideWorkflowInvocation', () => {
   it('treats AMAW as a first-class agent mode', () => {
@@ -146,5 +149,20 @@ describe('decideWorkflowInvocation', () => {
         hostPolicy: { autoStart: 'off' },
       }),
     ).toMatchObject({ action: 'auto-start', trigger: 'explicit' });
+  });
+
+  it('only consumes turns for started or cancelled workflow outcomes', () => {
+    expect(workflowStartOutcomeConsumesTurn({
+      outcome: 'started',
+    })).toBe(true);
+    expect(workflowStartOutcomeConsumesTurn({
+      outcome: 'cancelled',
+    })).toBe(true);
+    expect(workflowStartOutcomeConsumesTurn({
+      outcome: 'failed',
+    })).toBe(false);
+    expect(workflowStartOutcomeConsumesTurn({
+      outcome: 'declined',
+    })).toBe(false);
   });
 });

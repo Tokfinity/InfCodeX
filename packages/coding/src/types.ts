@@ -170,23 +170,49 @@ export type {
 
 // ============== 事件接口 ==============
 
+export interface KodaXWorkflowEventMeta {
+  readonly workflowCorrelation?: WorkflowEventCorrelation;
+}
+
+export interface KodaXActivityEventMeta extends KodaXWorkflowEventMeta {
+  readonly childAgentId?: string;
+  readonly childAgentName?: string;
+  readonly parentToolId?: string;
+  readonly liveOnly?: boolean;
+}
+
+export interface KodaXToolEventMeta extends KodaXActivityEventMeta {
+  readonly toolId?: string;
+}
+
 export interface KodaXEvents {
   /** FEATURE_229: correlates child-agent SDK callbacks back to a workflow run/item. */
   workflowCorrelation?: WorkflowEventCorrelation;
   // 流式输出
-  onTextDelta?: (text: string) => void;
-  onThinkingDelta?: (text: string) => void;
-  onThinkingEnd?: (thinking: string) => void;
-  onToolUseStart?: (tool: { name: string; id: string; input?: Record<string, unknown> }) => void;
-  onToolResult?: (result: { id: string; name: string; content: string }) => void;
+  onTextDelta?: (text: string, meta?: KodaXActivityEventMeta) => void;
+  onThinkingDelta?: (text: string, meta?: KodaXActivityEventMeta) => void;
+  onThinkingEnd?: (thinking: string, meta?: KodaXActivityEventMeta) => void;
+  onToolUseStart?: (
+    tool: { name: string; id: string; input?: Record<string, unknown> },
+    meta?: KodaXToolEventMeta,
+  ) => void;
+  onToolResult?: (
+    result: { id: string; name: string; content: string },
+    meta?: KodaXToolEventMeta,
+  ) => void;
   /** FEATURE_067 v2: Real-time tool execution progress update. Updates the tool's display in the REPL transcript. */
-  onToolProgress?: (update: { id: string; message: string }) => void;
+  onToolProgress?: (
+    update: { id: string; message: string },
+    meta?: KodaXToolEventMeta,
+  ) => void;
   onToolInputDelta?: (
     toolName: string,
     partialJson: string,
-    meta?: { toolId?: string },
+    meta?: KodaXToolEventMeta,
   ) => void;
-  onStreamEnd?: () => void;
+  onStreamEnd?: (meta?: KodaXActivityEventMeta) => void;
+  /** Fired once when a child-agent run fully leaves the child executor. */
+  onChildActivityEnd?: (meta?: KodaXActivityEventMeta) => void;
 
   // 状态通知
   onSessionStart?: (info: { provider: string; sessionId: string }) => void;
@@ -332,14 +358,20 @@ export interface KodaXEvents {
   beforeToolExecute?: (
     tool: string,
     input: Record<string, unknown>,
-    meta?: { toolId?: string; workflowCorrelation?: WorkflowEventCorrelation }
+    meta?: KodaXToolEventMeta
   ) => Promise<boolean | string>;
   /** Ask user a question interactively - Issue 069 - 交互式向用户提问 */
-  askUser?: (options: AskUserQuestionOptions) => Promise<string>;
+  askUser?: (options: AskUserQuestionOptions, meta?: KodaXToolEventMeta) => Promise<string>;
   /** Ask user multiple independent questions sequentially - 多问题顺序提问 */
-  askUserMulti?: (options: AskUserMultiOptions) => Promise<Record<string, string> | undefined>;
+  askUserMulti?: (
+    options: AskUserMultiOptions,
+    meta?: KodaXToolEventMeta,
+  ) => Promise<Record<string, string> | undefined>;
   /** Ask user for free-text input - 自由文本输入 (Issue 112) */
-  askUserInput?: (options: { question: string; default?: string }) => Promise<string | undefined>;
+  askUserInput?: (
+    options: { question: string; default?: string },
+    meta?: KodaXToolEventMeta,
+  ) => Promise<string | undefined>;
   /**
    * FEATURE_074: Exit plan mode with user approval. Called by the `exit_plan_mode` tool.
    * Returns:
@@ -1437,6 +1469,12 @@ export interface KodaXToolExecutionContext {
     readonly model?: string;
     readonly reasoningMode?: KodaXReasoningMode;
   };
+  /**
+   * Parent SDK/REPL callback surface available to child-dispatch tools.
+   * `dispatch_child_task` uses this to preserve live child telemetry without
+   * copying every callback onto KodaXToolExecutionContext as a separate field.
+   */
+  parentEvents?: KodaXEvents;
   /**
    * FEATURE_123 v0.7.44 — agentId of the agent whose tool call this
    * context backs. `undefined` for the top-level Worker (main runtime

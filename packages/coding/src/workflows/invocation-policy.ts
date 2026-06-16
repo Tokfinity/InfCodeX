@@ -3,6 +3,7 @@ import type { KodaXAgentMode } from '../types.js';
 export type WorkflowInvocationSource = 'natural-language' | 'command';
 export type WorkflowInvocationAction = 'none' | 'suggest' | 'auto-start';
 export type WorkflowInvocationTrigger = 'explicit' | 'complexity' | 'negated' | 'none';
+export type WorkflowStartOutcome = 'started' | 'declined' | 'cancelled' | 'failed';
 
 export interface WorkflowHostPolicy {
   readonly autoStart?: 'off' | 'confirm' | 'on';
@@ -109,4 +110,10 @@ export function decideWorkflowInvocation(
   }
 
   return decision('none', explicit ? 'explicit' : 'complexity', 'SA does not route natural-language prompts into workflow');
+}
+
+export function workflowStartOutcomeConsumesTurn(input: {
+  readonly outcome: WorkflowStartOutcome;
+}): boolean {
+  return input.outcome === 'started' || input.outcome === 'cancelled';
 }
