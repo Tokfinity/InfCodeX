@@ -427,6 +427,9 @@ export function createWorkflowProcessTracker(
     if (!item) return;
     item.status = item.status === 'failed' ? 'failed' : 'completed';
     item.endedAt = updatedAt;
+    if (activePhaseId === id) {
+      activePhaseId = undefined;
+    }
     latestMessage = `phase completed: ${item.title}`;
   }
 
@@ -535,6 +538,18 @@ export function createWorkflowProcessTracker(
     }
   }
 
+  function cancelOpenItems(): void {
+    for (const item of items) {
+      if (item.status !== 'pending' && item.status !== 'running') continue;
+      item.status = item.status === 'running' ? 'cancelled' : 'skipped';
+      item.endedAt = updatedAt;
+    }
+  }
+
+  function clearActivePhase(): void {
+    activePhaseId = undefined;
+  }
+
   return {
     applyEvent: (event) => {
       touch();
@@ -580,17 +595,20 @@ export function createWorkflowProcessTracker(
           status = 'completed';
           resultSummary = readString(event.data, 'resultSummary') ?? resultSummary;
           finishOpenItems('skipped');
+          clearActivePhase();
           latestMessage = 'workflow completed';
           return processEvent('workflow_finished');
         case 'workflow_failed':
           status = 'failed';
           error = readString(event.data, 'error') ?? 'workflow failed';
           finishOpenItems('skipped');
+          clearActivePhase();
           latestMessage = error;
           return processEvent('workflow_finished');
         case 'workflow_stopped':
           status = 'cancelled';
-          finishOpenItems('skipped');
+          cancelOpenItems();
+          clearActivePhase();
           latestMessage = 'workflow cancelled';
           return processEvent('workflow_finished');
         default:
@@ -611,7 +629,12 @@ export function createWorkflowProcessTracker(
       touch();
       status = nextStatus;
       if (isFinalWorkflowProcessStatus(nextStatus)) {
-        finishOpenItems('skipped');
+        if (nextStatus === 'cancelled') {
+          cancelOpenItems();
+        } else {
+          finishOpenItems('skipped');
+        }
+        clearActivePhase();
       }
       latestMessage = message ?? latestMessage;
       return processEvent(isFinalWorkflowProcessStatus(nextStatus) ? 'workflow_finished' : 'workflow_updated', message);

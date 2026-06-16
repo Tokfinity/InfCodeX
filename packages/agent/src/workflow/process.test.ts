@@ -50,7 +50,6 @@ describe('workflow process tracker', () => {
       displayName: 'Feature review',
       source: 'command',
       status: 'completed',
-      activePhaseIndex: 1,
       phaseCount: 2,
       counts: {
         pending: 0,
@@ -81,6 +80,8 @@ describe('workflow process tracker', () => {
       model: 'claude-sonnet-4-5',
     });
     expect(snapshot.artifacts).toEqual([{ name: 'report', path: 'artifacts/report.json' }]);
+    expect(snapshot.activePhaseId).toBeUndefined();
+    expect(snapshot.activePhaseIndex).toBeUndefined();
   });
 
   it('maps stopped workflows to process cancellation and exposes terminal helper', () => {
@@ -96,9 +97,28 @@ describe('workflow process tracker', () => {
 
     const snapshot = tracker.getSnapshot();
     expect(snapshot.status).toBe('cancelled');
-    expect(snapshot.items.find((item) => item.id === 'agent:child-1')?.status).toBe('skipped');
+    expect(snapshot.items.find((item) => item.id === 'agent:child-1')?.status).toBe('cancelled');
     expect(isFinalWorkflowProcessStatus(snapshot.status)).toBe(true);
     expect(isFinalWorkflowProcessStatus('paused')).toBe(false);
+  });
+
+  it('clears the active phase after phase completion', () => {
+    const tracker = createWorkflowProcessTracker({
+      runId: 'run-phase-gap',
+      workflowName: 'phase-gap',
+      phases: ['scan', 'synthesize'],
+      now: () => '2026-06-15T00:00:00.000Z',
+    });
+
+    tracker.applyEvent({ seq: 0, type: 'workflow_started' });
+    tracker.applyEvent({ seq: 1, type: 'phase_started', data: { name: 'scan' } });
+    tracker.applyEvent({ seq: 2, type: 'phase_finished', data: { name: 'scan' } });
+
+    const snapshot = tracker.getSnapshot();
+    expect(snapshot.activePhaseId).toBeUndefined();
+    expect(snapshot.activePhaseIndex).toBeUndefined();
+    expect(snapshot.items.find((item) => item.id === 'phase:1')?.status).toBe('completed');
+    expect(snapshot.items.find((item) => item.id === 'phase:2')?.status).toBe('pending');
   });
 
   it('lets late summaries update completed children without changing terminal status', () => {
@@ -183,6 +203,7 @@ describe('workflow process tracker', () => {
     const snapshot = tracker.getSnapshot();
     expect(snapshot.status).toBe('cancelled');
     expect(snapshot.counts.running).toBe(0);
-    expect(snapshot.items.map((item) => item.status)).toEqual(['skipped', 'skipped']);
+    expect(snapshot.activePhaseId).toBeUndefined();
+    expect(snapshot.items.map((item) => item.status)).toEqual(['cancelled', 'cancelled']);
   });
 });
