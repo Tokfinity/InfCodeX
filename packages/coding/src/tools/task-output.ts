@@ -38,6 +38,8 @@
  * the snapshot is read AS-IS at the timeout boundary.
  */
 
+import { getMessageQueue } from '@kodax-ai/agent';
+
 import type { KodaXToolExecutionContext } from '../types.js';
 import type {
   ChildProgressSnapshot,
@@ -116,7 +118,23 @@ export async function toolTaskOutput(
     return renderNotFound(taskId);
   }
 
-  return renderSnapshot(snap, retrievalStatus);
+  const output = renderSnapshot(snap, retrievalStatus);
+  if (snap.status !== 'running') {
+    // task_output is an explicit read of the terminal child result; keeping
+    // the same completion banner queued can wake idle-yield after final text.
+    drainConsumedTaskNotification(taskId);
+  }
+  return output;
+}
+
+function drainConsumedTaskNotification(taskId: string): void {
+  const prefix = `<task-completed task_id="${taskId}">`;
+  getMessageQueue().dequeue({
+    agentId: undefined,
+    maxPriority: 'background',
+    mode: 'task-notification',
+    predicate: (message) => message.content.startsWith(prefix),
+  });
 }
 
 function renderNotFound(taskId: string): string {

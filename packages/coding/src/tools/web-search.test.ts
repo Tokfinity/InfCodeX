@@ -1,6 +1,6 @@
 import { createServer } from 'node:http';
 import { afterEach, beforeEach, describe, expect, it } from 'vitest';
-import { toolWebSearch } from './web-search.js';
+import { parseBingResults, toolWebSearch } from './web-search.js';
 
 describe('toolWebSearch', () => {
   let server: ReturnType<typeof createServer> | undefined;
@@ -58,6 +58,29 @@ describe('toolWebSearch', () => {
     expect(result).toContain('Retrieval result for web_search');
     expect(result).toContain('kodax result A');
     expect(result).toContain('https://example.com/a');
+  });
+
+  it('extracts organic results from bing heading anchors', () => {
+    const html = [
+      '<html><body>',
+      // Navigation chrome the generic anchor scanner would otherwise pick up.
+      '<a href="https://cn.bing.com/images/search?q=x">图片</a>',
+      // Paid ad stacked above the organic block must be skipped.
+      '<li class="b_ad"><h2><a href="https://ad.example/buy">广告 Ad</a></h2></li>',
+      '<li class="b_algo"><h2><a href="https://www.typescriptlang.org/">TypeScript</a></h2></li>',
+      '<li class="b_algo"><h2><a href="https://www.runoob.com/typescript/?a=1&amp;b=2">菜鸟教程</a></h2></li>',
+      '</body></html>',
+    ].join('');
+
+    const items = parseBingResults(html, 5);
+
+    expect(items).toHaveLength(2);
+    expect(items[0]).toEqual({
+      title: 'TypeScript',
+      locator: 'https://www.typescriptlang.org/',
+    });
+    // HTML entity in the href is decoded back to a usable URL.
+    expect(items[1]?.locator).toBe('https://www.runoob.com/typescript/?a=1&b=2');
   });
 
   it('uses provider-backed search when requested', async () => {

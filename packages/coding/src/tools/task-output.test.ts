@@ -23,9 +23,13 @@
  *   - pin: tool name is in CHILD_EXCLUDE_TOOLS_BASE and PLANNER_EXTRA_EXCLUDE
  */
 
-import { describe, expect, it } from 'vitest';
+import { afterEach, beforeEach, describe, expect, it } from 'vitest';
 
-import type { ChildTaskRegistry } from '@kodax-ai/agent';
+import {
+  _resetMessageQueueForTests,
+  getMessageQueue,
+  type ChildTaskRegistry,
+} from '@kodax-ai/agent';
 
 import type { KodaXChildExecutionResult, KodaXToolExecutionContext } from '../types.js';
 
@@ -391,5 +395,80 @@ describe('toolTaskOutput — tail-to-bytes', () => {
 describe('toolTaskOutput — security contract pin', () => {
   it('task_output is in CHILD_EXCLUDE_TOOLS_BASE (children cannot peek at siblings)', () => {
     expect(CHILD_EXCLUDE_TOOLS_BASE).toContain('task_output');
+  });
+});
+
+describe('toolTaskOutput - completion notification consumption', () => {
+  beforeEach(() => {
+    _resetMessageQueueForTests();
+  });
+
+  afterEach(() => {
+    _resetMessageQueueForTests();
+  });
+
+  it('drains the matching task-completed banner after reading a terminal snapshot', async () => {
+    const snapshots = new Map<string, ChildProgressSnapshot>();
+    initChildSnapshot(snapshots, {
+      childId: 'c1',
+      startedAt: 1000,
+      maxIterations: 200,
+    });
+    finalizeChildSnapshot(snapshots, 'c1', {
+      status: 'completed',
+      finalText: 'c1 final output',
+      endedAt: 2000,
+    });
+
+    const queue = getMessageQueue();
+    queue.enqueue({
+      priority: 'background',
+      mode: 'task-notification',
+      content: '<task-completed task_id="c1">\nc1 final output\n</task-completed>',
+    });
+    queue.enqueue({
+      priority: 'background',
+      mode: 'task-notification',
+      content: '<task-completed task_id="c2">\nc2 still unread\n</task-completed>',
+    });
+
+    const ctx = makeCtx({ childProgressSnapshots: snapshots });
+    const out = await toolTaskOutput({ task_id: 'c1' }, ctx);
+
+    expect(out).toMatch(/<status>completed<\/status>/);
+    const remaining = queue.peek({
+      agentId: undefined,
+      maxPriority: 'background',
+      mode: 'task-notification',
+    });
+    expect(remaining.map((message) => message.content)).toEqual([
+      '<task-completed task_id="c2">\nc2 still unread\n</task-completed>',
+    ]);
+  });
+
+  it('does not drain task-completed banners while the task is still running', async () => {
+    const snapshots = new Map<string, ChildProgressSnapshot>();
+    initChildSnapshot(snapshots, {
+      childId: 'c1',
+      startedAt: 1000,
+      maxIterations: 200,
+    });
+
+    const queue = getMessageQueue();
+    queue.enqueue({
+      priority: 'background',
+      mode: 'task-notification',
+      content: '<task-completed task_id="c1">\nc1 pending\n</task-completed>',
+    });
+
+    const ctx = makeCtx({ childProgressSnapshots: snapshots });
+    const out = await toolTaskOutput({ task_id: 'c1' }, ctx);
+
+    expect(out).toMatch(/<status>running<\/status>/);
+    expect(queue.has({
+      agentId: undefined,
+      maxPriority: 'background',
+      mode: 'task-notification',
+    })).toBe(true);
   });
 });

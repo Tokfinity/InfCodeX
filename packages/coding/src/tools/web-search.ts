@@ -12,7 +12,9 @@ const MAX_LIMIT = 10;
 const FETCH_TIMEOUT_MS = 12_000;
 const SEARCH_MAX_BYTES = 256 * 1024;
 const SEARCH_ENDPOINT_ENV = 'KODAX_WEB_SEARCH_ENDPOINT';
-const DEFAULT_SEARCH_ENDPOINT = 'https://html.duckduckgo.com/html/';
+// Bing is reachable from mainland China (DuckDuckGo is GFW-blocked), so it is the
+// default engine. Node fetch follows Bing's regional redirect automatically.
+const DEFAULT_SEARCH_ENDPOINT = 'https://www.bing.com/search';
 
 function clampLimit(input: unknown): number {
   const value = typeof input === 'number' && Number.isFinite(input)
@@ -90,6 +92,53 @@ function parseSearchResults(html: string, searchUrl: URL, limit: number) {
   return results;
 }
 
+function isBingHost(host: string): boolean {
+  return host === 'bing.com' || host.endsWith('.bing.com');
+}
+
+// Bing renders each organic result title as `<h2><a href="...">title</a></h2>`,
+// so the generic anchor scan (which depends on DuckDuckGo's `uddg=` redirect
+// markers) would otherwise return Bing's own navigation chrome instead.
+export function parseBingResults(html: string, limit: number) {
+  const results: Array<{
+    title: string;
+    locator: string;
+    snippet?: string;
+  }> = [];
+  const seen = new Set<string>();
+  const headingPattern = /<h2\b[^>]*>\s*<a\b[^>]*href="([^"]+)"[^>]*>([\s\S]*?)<\/a>/gi;
+
+  // Bing stacks paid ads (`b_ad`) above the organic block (`b_algo`). Scanning
+  // from the first organic block skips that ad stack so results stay relevant.
+  const organicStart = html.indexOf('b_algo');
+  const scope = organicStart >= 0 ? html.slice(organicStart) : html;
+
+  for (const match of scope.matchAll(headingPattern)) {
+    const href = (match[1] ?? '').trim().replace(/&amp;/g, '&');
+    const title = stripHtmlToText(match[2] ?? '').trim();
+    if (!href || !title || !/^https?:\/\//i.test(href)) {
+      continue;
+    }
+    // Drop Bing's ad/click-tracking redirects; keep only direct destinations.
+    if (/\/(aclk|aclick)\b/i.test(href) || /\/ck\/a\b/i.test(href)) {
+      continue;
+    }
+    if (seen.has(href)) {
+      continue;
+    }
+    seen.add(href);
+    results.push({
+      title,
+      locator: href,
+    });
+    if (results.length >= limit) {
+      break;
+    }
+  }
+
+  return results;
+}
+
 export async function toolWebSearch(
   input: Record<string, unknown>,
   ctx: KodaXToolExecutionContext,
@@ -133,7 +182,9 @@ export async function toolWebSearch(
       },
     });
     const { text: html, truncated, bytesRead } = await readResponseTextLimited(response, SEARCH_MAX_BYTES);
-    const items = parseSearchResults(html, searchUrl, limit);
+    const items = isBingHost(searchUrl.hostname)
+      ? parseBingResults(html, limit)
+      : parseSearchResults(html, searchUrl, limit);
 
     return finalizeRetrievalResult({
       tool: 'web_search',
