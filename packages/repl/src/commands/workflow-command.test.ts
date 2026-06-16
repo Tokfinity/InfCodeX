@@ -1263,8 +1263,8 @@ describe('renderWorkflowHelp', () => {
     expect(text).toContain('/workflow delete <runId>');
     expect(text).toContain('/workflow prune');
     expect(text).toContain('/workflow save <runId> <name>');
-    expect(text).toContain('/workflow rename <runId|savedName> <newName>');
-    expect(text).toContain('/workflow revise [--replace] <runId|savedName> <change>');
+    expect(text).toContain('/workflow rename <runId|alias|savedName> <newName>');
+    expect(text).toContain('/workflow revise [--replace] <runId|alias|savedName> <change>');
     expect(text).toContain('/workflow rerun <runId|savedName> [args]');
     expect(text).toContain('revise --replace');
     expect(text).toContain('run id reruns');

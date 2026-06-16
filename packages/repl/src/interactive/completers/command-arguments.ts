@@ -357,6 +357,27 @@ interface WorkflowRunArgumentCandidate {
   readonly endedAt: number;
 }
 
+function readWorkflowRunDisplayName(runDir: string, record: Record<string, unknown>): string | undefined {
+  const metadataPath = join(runDir, 'workflow-metadata.json');
+  if (existsSync(metadataPath)) {
+    try {
+      const metadata = JSON.parse(readFileSync(metadataPath, 'utf8')) as unknown;
+      if (typeof metadata === 'object' && metadata !== null) {
+        const displayName = (metadata as Record<string, unknown>).displayName;
+        if (typeof displayName === 'string' && isWorkflowRunEntryName(displayName.trim())) {
+          return displayName.trim();
+        }
+      }
+    } catch {
+      // Ignore malformed metadata; run id completion remains available.
+    }
+  }
+  const displayName = record.displayName;
+  return typeof displayName === 'string' && isWorkflowRunEntryName(displayName.trim())
+    ? displayName.trim()
+    : undefined;
+}
+
 function getPersistedWorkflowRunIdArgs(): ArgumentDefinition[] {
   const projectKey = deriveProjectKeyFromRoot(process.cwd()).key;
   const baseDir = getAgentConfigPath('workflow-runs', projectKey);
@@ -371,14 +392,26 @@ function getPersistedWorkflowRunIdArgs(): ArgumentDefinition[] {
       const data = JSON.parse(readFileSync(runJsonPath, 'utf8')) as Record<string, unknown>;
       const workflow = typeof data.workflow === 'string' ? data.workflow : '?';
       const status = typeof data.status === 'string' ? data.status : '?';
+      const endedAt = typeof data.endedAt === 'number' ? data.endedAt : 0;
       candidates.push({
         arg: {
           name: entry,
           description: `${workflow} - ${status}`,
           type: 'string',
         },
-        endedAt: typeof data.endedAt === 'number' ? data.endedAt : 0,
+        endedAt,
       });
+      const displayName = readWorkflowRunDisplayName(join(baseDir, entry), data);
+      if (displayName && displayName !== entry) {
+        candidates.push({
+          arg: {
+            name: displayName,
+            description: `${workflow} alias for ${entry} - ${status}`,
+            type: 'string',
+          },
+          endedAt,
+        });
+      }
     } catch {
       // Malformed persisted runs should not break command completion.
     }

@@ -425,6 +425,25 @@ describe('ArgumentCompleter', () => {
           }),
           'utf8',
         );
+        writeFileSync(
+          join(runDir, 'workflow-metadata.json'),
+          JSON.stringify({ displayName: 'AliasAudit' }),
+          'utf8',
+        );
+        const spacedRunDir = join(baseDir, 'run-spaced-alias');
+        mkdirSync(spacedRunDir, { recursive: true });
+        writeFileSync(
+          join(spacedRunDir, 'run.json'),
+          JSON.stringify({
+            runId: 'run-spaced-alias',
+            workflow: 'persisted-audit',
+            status: 'completed',
+            totalSpawned: 0,
+            endedAt: Date.now(),
+            displayName: 'Alias Audit',
+          }),
+          'utf8',
+        );
 
         try {
           const topLevel = await completer.getCompletions('/workflow ', 10);
@@ -438,12 +457,15 @@ describe('ArgumentCompleter', () => {
           const renameInput = '/workflow rename ';
           const rename = await completer.getCompletions(renameInput, renameInput.length);
           expect(rename.some((c) => c.display === 'run-persisted-complete')).toBe(true);
+          expect(rename.some((c) => c.display === 'AliasAudit')).toBe(true);
+          expect(rename.some((c) => c.display === 'Alias Audit')).toBe(false);
           expect(rename.some((c) => c.display === 'saved-audit')).toBe(true);
 
           const reviseInput = '/workflow revise ';
           const revise = await completer.getCompletions(reviseInput, reviseInput.length);
           expect(revise.some((c) => c.display === '--replace')).toBe(true);
           expect(revise.some((c) => c.display === 'run-persisted-complete')).toBe(true);
+          expect(revise.some((c) => c.display === 'AliasAudit')).toBe(true);
           expect(revise.some((c) => c.display === 'saved-audit')).toBe(true);
 
           const replaceInput = '/workflow revise --replace ';

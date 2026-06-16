@@ -1,4 +1,4 @@
-import { existsSync, readFileSync } from 'node:fs';
+import { existsSync, readdirSync, readFileSync } from 'node:fs';
 import { join, resolve, sep } from 'node:path';
 
 import {
@@ -24,7 +24,7 @@ export type WorkflowIdentityResolution =
   | {
       readonly kind: 'ambiguous';
       readonly target: string;
-      readonly matches: readonly ['run', 'saved'];
+      readonly matches: readonly ('run' | 'saved')[];
     }
   | {
       readonly kind: 'missing';
@@ -83,6 +83,10 @@ function readRunJsonDisplayName(record: Record<string, unknown>): string | undef
     : undefined;
 }
 
+function displayNameMatches(displayName: string | undefined, target: string): boolean {
+  return displayName?.trim() === target;
+}
+
 function resolveRun(
   target: string,
   runBaseDir: string | undefined,
@@ -104,6 +108,20 @@ function resolveRun(
   };
 }
 
+function resolveRunsByDisplayName(
+  target: string,
+  runBaseDir: string | undefined,
+): readonly Extract<WorkflowIdentityResolution, { readonly kind: 'run' }>[] {
+  if (!runBaseDir || !existsSync(runBaseDir)) return [];
+  const matches: Extract<WorkflowIdentityResolution, { readonly kind: 'run' }>[] = [];
+  for (const entry of readdirSync(runBaseDir)) {
+    if (!isSafeWorkflowRunId(entry)) continue;
+    const run = resolveRun(entry, runBaseDir);
+    if (run && displayNameMatches(run.displayName, target)) matches.push(run);
+  }
+  return matches;
+}
+
 async function resolveSaved(
   target: string,
   savedWorkflowDirs: SavedWorkflowDirs | undefined,
@@ -119,9 +137,15 @@ export async function resolveWorkflowIdentity(
   const target = input.target.trim();
   if (!target) return { kind: 'missing', target: input.target };
   const run = resolveRun(target, input.runBaseDir);
+  const displayNameRuns = run ? [] : resolveRunsByDisplayName(target, input.runBaseDir);
   const saved = await resolveSaved(target, input.savedWorkflowDirs);
-  if (run && saved) return { kind: 'ambiguous', target, matches: ['run', 'saved'] };
+  const runMatches = run ? [run] : displayNameRuns;
+  if (runMatches.length > 1) {
+    return { kind: 'ambiguous', target, matches: saved ? ['run', 'saved'] : ['run'] };
+  }
+  if (runMatches.length === 1 && saved) return { kind: 'ambiguous', target, matches: ['run', 'saved'] };
   if (run) return run;
+  if (displayNameRuns.length === 1) return displayNameRuns[0]!;
   if (saved) return { kind: 'saved', target, savedWorkflow: saved };
   return { kind: 'missing', target };
 }

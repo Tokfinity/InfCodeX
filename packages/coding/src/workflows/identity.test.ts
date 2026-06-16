@@ -101,4 +101,87 @@ describe('resolveWorkflowIdentity', () => {
       matches: ['run', 'saved'],
     });
   });
+
+  it('resolves a unique run display name alias', async () => {
+    const runDir = join(runs, 'run-readable');
+    mkdirSync(runDir, { recursive: true });
+    writeFileSync(
+      join(runDir, 'run.json'),
+      JSON.stringify({ runId: 'run-readable', workflow: 'generated', status: 'completed' }),
+      'utf8',
+    );
+    writeFileSync(
+      join(runDir, 'workflow-metadata.json'),
+      JSON.stringify({ displayName: 'ReadableAudit' }),
+      'utf8',
+    );
+
+    await expect(resolveWorkflowIdentity({
+      target: 'ReadableAudit',
+      runBaseDir: runs,
+      savedWorkflowDirs: { project: saved },
+    })).resolves.toMatchObject({
+      kind: 'run',
+      runId: 'run-readable',
+      displayName: 'ReadableAudit',
+    });
+  });
+
+  it('fails closed when a display name alias matches more than one run', async () => {
+    for (const runId of ['run-a', 'run-b']) {
+      const runDir = join(runs, runId);
+      mkdirSync(runDir, { recursive: true });
+      writeFileSync(
+        join(runDir, 'run.json'),
+        JSON.stringify({
+          runId,
+          workflow: 'generated',
+          status: 'completed',
+          displayName: 'ReadableAudit',
+        }),
+        'utf8',
+      );
+    }
+
+    await expect(resolveWorkflowIdentity({
+      target: 'ReadableAudit',
+      runBaseDir: runs,
+      savedWorkflowDirs: { project: saved },
+    })).resolves.toEqual({
+      kind: 'ambiguous',
+      target: 'ReadableAudit',
+      matches: ['run'],
+    });
+  });
+
+  it('fails closed when a display name alias matches a saved workflow name', async () => {
+    const runDir = join(runs, 'run-readable');
+    mkdirSync(runDir, { recursive: true });
+    writeFileSync(
+      join(runDir, 'run.json'),
+      JSON.stringify({
+        runId: 'run-readable',
+        workflow: 'generated',
+        status: 'completed',
+        displayName: 'saved-audit',
+      }),
+      'utf8',
+    );
+    await saveGeneratedWorkflow({
+      dir: saved,
+      name: 'saved-audit',
+      manifest,
+      source: 'export default async function run() { return "ok"; }',
+    });
+
+    await expect(resolveWorkflowIdentity({
+      target: 'saved-audit',
+      runBaseDir: runs,
+      savedWorkflowDirs: { project: saved },
+    })).resolves.toEqual({
+      kind: 'ambiguous',
+      target: 'saved-audit',
+      matches: ['run', 'saved'],
+    });
+  });
 });

@@ -149,7 +149,7 @@ export const workflowCommand: Command = {
   name: 'workflow',
   description: 'Run a dynamic multi-agent workflow (FEATURE_217)',
   usage: '/workflow [help | list | runs | show | pause | resume | stop | delete | prune | rerun | save | rename | revise | create | <name> [args]]',
-  argumentHint: 'help | list | runs [--all|--limit N] | show [runId] | pause <runId> | resume <runId> | stop [runId] | delete <runId> | prune --dry-run|--keep N|--older-than Nd | rerun <runId|savedName> [args] | save <runId> <name> | rename <runId|savedName> <newName> | revise [--replace] <runId|savedName> <change> | create <request> | <name> [args]',
+  argumentHint: 'help | list | runs [--all|--limit N] | show [runId] | pause <runId> | resume <runId> | stop [runId] | delete <runId> | prune --dry-run|--keep N|--older-than Nd | rerun <runId|savedName> [args] | save <runId> <name> | rename <runId|alias|savedName> <newName> | revise [--replace] <runId|alias|savedName> <change> | create <request> | <name> [args]',
   detailedHelp: printWorkflowHelp,
   handler: async (args, _context, callbacks, currentConfig) => {
     const invocation = parseWorkflowInvocation(args);
@@ -319,7 +319,7 @@ export const workflowCommand: Command = {
 
     if (invocation.kind === 'rename') {
       if (!invocation.target || !invocation.newName) {
-        console.log(chalk.yellow('\nUsage: /workflow rename <runId|savedName> <newName>\n'));
+        console.log(chalk.yellow('\nUsage: /workflow rename <runId|alias|savedName> <newName>\n'));
         return;
       }
       const resolution = await resolveWorkflowIdentity({
@@ -364,7 +364,7 @@ export const workflowCommand: Command = {
 
     if (invocation.kind === 'revise') {
       if (!invocation.target || !invocation.request) {
-        console.log(chalk.yellow('\nUsage: /workflow revise [--replace] <runId|savedName> <change request>\n'));
+        console.log(chalk.yellow('\nUsage: /workflow revise [--replace] <runId|alias|savedName> <change request>\n'));
         return;
       }
       const confirm = resolveConfirm(callbacks);
