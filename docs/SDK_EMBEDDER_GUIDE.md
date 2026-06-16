@@ -1298,6 +1298,59 @@ is intentionally ANSI-free and UI-neutral. It carries workflow status, phases,
 child item status, result-bearing child summaries, provider/model routing hints,
 and final `resultSummary`.
 
+### Live child-agent telemetry
+
+F229 also preserves parent `KodaXEvents` callbacks for child-agent execution.
+Treat these callbacks as live telemetry, not canonical assistant messages.
+Tool callbacks, prompt callbacks, `onTextDelta`, `onThinkingDelta`,
+`onThinkingEnd`, and `onStreamEnd` can receive optional trailing metadata.
+
+The child-agent event bridge is intentionally an allow-list. KodaX does not
+blindly clone the parent `KodaXEvents` object into child runs, because unscoped
+callbacks such as compaction, retry history, session start, and parent
+iteration start would otherwise mutate the parent host state. Child activity
+callbacks carry child metadata; child `onIterationEnd` events that are surfaced
+to a host are worker-scoped (`scope:'worker'`).
+
+For workflow children, tool/progress/prompt callbacks can carry
+`workflowCorrelation` metadata that identifies the workflow run, child agent,
+and workflow item. Use that metadata to update a workflow panel or activity log.
+Keep `WorkflowProcessEvent` / `WorkflowProcessSnapshot` as the durable source of
+workflow state, summaries, terminal status, result reads, and artifact reads.
+Async digest failures are still summary-bearing: hosts should render
+`summaryStatus:'unavailable'` / `summaryKind:'digest-failed'` with the provided
+bounded fallback summary instead of treating the child as silent.
+KodaX gives async digest a longer best-effort window than blocking digest, so
+late `agent_summary_updated` messages can arrive noticeably after the child
+terminal event without restarting the workflow.
+
+For normal `dispatch_child_task` children, hosts should render child activity
+under the dispatch tool or a separate child-activity panel, while leaving the
+main TodoList/plan visible. A good default is:
+
+- show the main agent plan as the work contract;
+- show child-agent tool/thinking/progress as bounded live-only activity;
+- persist only the child final summary, explicit approvals/audit records, and
+  the parent assistant's final answer in the user-visible conversation history.
+
+Callbacks use optional trailing metadata so existing consumers remain
+source-compatible:
+
+```ts
+events.onToolProgress = (update, meta) => {
+  if (meta?.workflowCorrelation) {
+    renderWorkflowToolProgress(meta.workflowCorrelation, update);
+    return;
+  }
+  renderMainToolProgress(update);
+};
+```
+
+Hosts that want full child transcripts should put them in an explicit debug or
+trace drawer. Do not append raw child thinking/text/tool streams into the normal
+conversation by default; it makes the parent assistant appear to have authored
+every child step and can overwhelm users.
+
 The lifecycle controller also exposes terminal-run controls: stop, pause,
 resume, artifact reads, delete, prune, display-name changes, saved-capsule
 revision/replace provenance, and capsule preflight. Provenance fields such as
@@ -1305,6 +1358,26 @@ revision/replace provenance, and capsule preflight. Provenance fields such as
 `revisionOf` let a host distinguish AMAW, `/workflow`, `/review --workflow`,
 saved-name reruns, and capsule revisions while still consuming one process
 contract.
+
+### Generated harness validation
+
+Generated workflow source is treated as a restricted harness, not as trusted
+application code. `generateWorkflowFromOptions()` validates the source before a
+run is launched, including wrapped JavaScript compilation, the generated
+`async function run(wf, args)` contract, source-policy checks that ignore
+strings/comments, and a no-effect smoke execution with a fake `wf`
+implementation. Smoke validation catches common early harness defects such as
+malformed `wf.runAgent` inputs, wrong `wf.wait` arguments, startup
+`ReferenceError`, synchronous runaway startup code, and stalled startup awaits;
+those errors feed the generator repair loop instead of creating a doomed
+workflow run.
+
+`preflightWorkflowCapsule()` also reports invalid restricted source as a
+`workflow:source` error. Hosts should show that as a capsule/harness problem
+before asking the user to approve a run. If a run still fails before launching
+any child agents, render it as a generated harness or saved capsule failure,
+not as a failed child-agent task. `/workflow rerun <runId>` repeats the saved
+script snapshot; it does not regenerate a broken generated harness.
 
 Layer boundary:
 

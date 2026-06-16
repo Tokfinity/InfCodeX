@@ -24,7 +24,7 @@ results without parsing terminal text.
 
 ### TC-001: SDK process subscription and polling
 
-**Priority**: High  
+**Priority**: High
 **Type**: Positive
 
 **Steps**:
@@ -35,11 +35,12 @@ results without parsing terminal text.
 **Expected Results**:
 - [ ] `workflow_started`, `workflow_updated`, and terminal event snapshots are emitted.
 - [ ] Polled snapshots agree with subscribed snapshots for `runId`, `status`, phase, item counts, and result summary.
+- [ ] Tool callbacks, including progress updates, include workflow correlation metadata for child-agent work.
 - [ ] Snapshot payloads do not contain ANSI or REPL-only view model fields.
 
 ### TC-002: Host policy for AMAW auto-start
 
-**Priority**: High  
+**Priority**: High
 **Type**: Positive / Negative
 
 **Steps**:
@@ -56,7 +57,7 @@ results without parsing terminal text.
 
 ### TC-003: Lifecycle controller controls an active workflow
 
-**Priority**: High  
+**Priority**: High
 **Type**: Positive
 
 **Steps**:
@@ -72,7 +73,7 @@ results without parsing terminal text.
 
 ### TC-004: Result and artifact reads
 
-**Priority**: High  
+**Priority**: High
 **Type**: Positive
 
 **Steps**:
@@ -149,18 +150,86 @@ results without parsing terminal text.
 2. Run prune dry-run with a low keep count.
 3. Run prune for real.
 4. List runs again.
+5. Attempt `/workflow delete <running-or-paused-runId>`.
+6. For a confirmed stale non-terminal record, attempt `/workflow delete --force <runId>`.
 
 **Expected Results**:
 - [ ] Dry-run reports candidates without deleting.
 - [ ] Real prune deletes only terminal candidate runs.
 - [ ] Running and paused runs are protected.
-- [ ] SDK/REPL retention result explains deleted and protected counts.
+- [ ] `/workflow delete` refuses active non-terminal runs and leaves the run directory intact.
+- [ ] `/workflow delete --force` removes a stale non-terminal persisted record only after explicit operator intent.
+- [ ] SDK/REPL retention result explains deleted and protected counts, including active protected runs.
+
+### TC-009: Workflow child activity stays in the live surface
+
+**Priority**: High
+**Type**: UX / Regression
+
+**Steps**:
+1. Start an AMAW or explicit workflow that launches at least one child agent.
+2. Watch live output while the child runs tools and emits thinking/text.
+3. Let the workflow finish and inspect the scrollback/session history.
+
+**Expected Results**:
+- [ ] Workflow live progress remains visible and shows active child-agent status.
+- [ ] Child text/thinking/tool/progress callbacks are attributable through workflow correlation metadata.
+- [ ] Child runs do not inherit unscoped parent lifecycle callbacks such as compaction/retry history or parent iteration start.
+- [ ] Raw child thinking/tool chatter does not become ordinary assistant history.
+- [ ] The durable history contains the workflow launch/progress summary, child final digest or fallback notice, and final synthesis.
+- [ ] Async digest pending completions are not rendered as final "extracted summary" messages; the final child summary appears when `agent_summary_updated` arrives.
+- [ ] Async digest is allowed a longer best-effort window than the old blocking digest path; a child should remain completed while its digest is still pending.
+- [ ] If async digest fails or times out, `agent_summary_updated` still carries a bounded fallback summary and the transcript labels it as smart-summary-unavailable/local excerpt instead of dropping the child completion report.
+
+### TC-010: Normal child activity coexists with TodoList
+
+**Priority**: High
+**Type**: UX / SDK Boundary
+
+**Steps**:
+1. Run a normal non-workflow task that creates a TodoList and dispatches at least one `dispatch_child_task` child.
+2. Observe the live area while the main agent plan and child activity are both active.
+3. Repeat in a narrow terminal height.
+4. In an SDK harness, attach `KodaXEvents` callbacks and record child tool/progress metadata.
+
+**Expected Results**:
+- [ ] The TodoList remains the main work-plan surface and is not replaced by child-agent telemetry.
+- [ ] Child-agent activity renders as a bounded live-only surface under the plan or active dispatch tool.
+- [ ] Narrow viewports collapse child activity to a compact summary instead of pushing the prompt/status bar off-screen.
+- [ ] SDK consumers can distinguish workflow-correlated child events and normal child activity from main-agent events.
+- [ ] JSONL/SDK iteration-end telemetry preserves `scope:'worker'` for child/worker turns instead of overwriting parent context state.
+- [ ] Raw child telemetry is not appended to the normal conversation by default.
+
+### TC-011: Generated harness errors are caught before launch
+
+**Priority**: High
+**Type**: UX / Regression
+
+**Steps**:
+1. Generate a workflow whose source would otherwise fail at startup, for example
+   a multi-line prompt in an ordinary string or a `wf.runAgent` call missing
+   `prompt`.
+2. Repeat with a saved `.workflow.json` capsule whose source is syntactically
+   invalid or does not define `async function run(wf, args)`.
+3. Start or preflight the workflow through REPL and SDK paths.
+
+**Expected Results**:
+- [ ] Generated-source syntax and restricted-runner contract errors enter the
+  generator validation/repair loop before a run id is launched.
+- [ ] Early harness/API-shape failures are caught by safe smoke validation and
+  repaired or reported as builder failures.
+- [ ] Capsule preflight reports invalid source as `workflow:source` before user
+  approval.
+- [ ] If a harness still fails before any child agent is spawned, the UI labels
+  it as a workflow harness/capsule failure rather than a child-agent task
+  failure.
+- [ ] `/workflow rerun <runId>` messaging makes clear that rerun repeats the
+  saved script snapshot and does not regenerate a broken harness.
 
 ## Summary
 
 | Case Count | Passed | Failed | Blocked |
 |---:|---:|---:|---:|
-| 8 | TBD | TBD | TBD |
+| 11 | TBD | TBD | TBD |
 
 **Conclusion**: TBD
-
