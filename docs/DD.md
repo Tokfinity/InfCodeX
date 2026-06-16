@@ -1,6 +1,6 @@
 # KodaX Detailed Design
 
-> Last updated: 2026-06-13
+> Last updated: 2026-06-16
 >
 > Current release baseline: `@kodax-ai/kodax@0.7.49`
 >
@@ -260,22 +260,26 @@ until KodaX needs third-party generation, marketplace-style distribution, or
 complex cross-tool requirement validation; v0.7.49 uses TypeScript contracts and
 runtime validation to stay minimal.
 
-FEATURE_229 (`v0.7.50`) adds the missing process contract without changing the
-dynamic harness model. The agent workflow package should expose
-`WorkflowProcessSnapshot`, `WorkflowProcessEvent`, and
-`isFinalWorkflowProcessStatus`. The first event model stays intentionally small:
+FEATURE_229 (`v0.7.50`, implementation complete; release validation pending)
+adds the process contract without changing the dynamic harness model. The agent
+workflow package exposes `WorkflowProcessSnapshot`, `WorkflowProcessEvent`, and
+`isFinalWorkflowProcessStatus`; the event model stays intentionally small:
 `workflow_started`, `workflow_updated`, and `workflow_finished`, each carrying a
-snapshot with phase/agent/item status. `WorkflowRunManager` updates and emits the
-snapshot after runtime events; coding commands and SDK callers receive
-callbacks/read APIs plus host-owned lifecycle controls; REPL surfaces render
-snapshots only. KodaX Space and other SDK hosts should configure invocation
+snapshot with phase/agent/item status. `WorkflowRunManager` updates and emits
+snapshots after runtime events, while `createWorkflowLifecycleController`
+provides host-owned stop/pause/resume, result/artifact reads, terminal-run
+delete/prune, identity, and preflight controls. Coding commands and SDK callers
+share the same process callbacks/read APIs; REPL inline/fullscreen surfaces
+render snapshots only. KodaX Space and other SDK hosts configure invocation
 policy, subscribe to process snapshots, and control runs through the SDK
 controller instead of replaying slash commands or depending on REPL callback
 text. This keeps progress semantics reusable and prevents terminal UI state from
-becoming the hidden source of truth. F229 also requires workflow child agents to
-inherit or explicitly fail closed on parent guardrails, existing SDK event
-callbacks, workflow logs, capsule preflight, and provider/model policy. Durable
-run graphs remain audit/result records in this slice; they are not
+becoming the hidden source of truth. F229 also preserves workflow source and
+revision provenance (`source`, `sourceRunId`, `sourceWorkflowName`,
+`savedWorkflowName`, `revisionOf`) plus `resultSummary` in the durable run graph.
+Workflow child agents inherit or fail closed on parent guardrails, existing SDK
+event callbacks, workflow logs, capsule preflight, and provider/model policy.
+Durable run graphs remain audit/result records in this slice; they are not
 cross-process executable checkpoints.
 
 ## 14. REPL Detail

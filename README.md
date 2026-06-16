@@ -400,12 +400,15 @@ KodaX has two layers that consumers should understand separately:
 
 **Dynamic Workflows (FEATURE_217, v0.7.49)**: the domain-neutral workflow runtime is part of `/agent` — `import { createWorkflowRuntime, runWorkflow, WorkflowAbortError, WorkflowLimitError } from '@kodax-ai/kodax/agent'`. The coding-side integration (agent backend + built-in workflows + saved-workflow discovery/generation: `createCodingWorkflowBackend`, `runWorkflowFromOptions`, `parallelInvestigation`, `discoverSavedWorkflows`, `generateWorkflowFromOptions`, …) is part of `/coding`. FEATURE_217 is the v0.7.49 home for the full Dynamic Workflow product loop: `/workflow create <request>` generates restricted scripts, `/workflow save <runId> <name>` stores `.workflow.json` rerunnable workflows, generated/saved scripts coordinate agents through `WorkflowApi`, run lifecycle state stays observable, opt-in `isolation:"worktree"` routes selected children to parent-managed worktrees, and all file/shell effects still pass through agent tools and the existing permission gates. There is **no** separate `@kodax-ai/kodax/agent/workflow` root-package subpath; source-package consumers of `@kodax-ai/agent` can still use that package's `./workflow` subpath.
 
+**Workflow Process Surface (FEATURE_229, v0.7.50 implementation complete; release validation pending)**: workflow progress is now a reusable Agent-layer process contract rather than private REPL text. SDK hosts can subscribe to `WorkflowProcessEvent`/poll `WorkflowProcessSnapshot`, use `createWorkflowRunManager` and `createWorkflowLifecycleController` for stop/pause/resume/result/artifact/delete/prune/identity/preflight controls, and receive ANSI-free provenance fields (`source`, `sourceRunId`, `sourceWorkflowName`, `savedWorkflowName`, `revisionOf`) plus `resultSummary`. `/coding` owns the coding workflow backend and run graph, `/repl` renders the same snapshots, and the terminal UI is not the hidden source of truth.
+
 ---
 
 ## Features
 
 - **Modular Architecture** - Use as CLI, as a library, or as a Node-free single binary
 - **14 Built-in Provider Aliases** - Anthropic, OpenAI, DeepSeek, Kimi, Kimi Code, Qwen, Zhipu, Zhipu Coding, MiniMax Coding, MiMo Coding, MiMo, Ark Coding, Gemini CLI, Codex CLI - plus user-defined OpenAI/Anthropic-compatible providers
+- **Dynamic Workflows + SDK Process Surface** - Generate/reuse capability-routed workflows, observe live progress through `WorkflowProcessSnapshot`, and control workflow lifecycle from SDK hosts without parsing REPL output
 - **V2 Worker single-loop + Sidecar Verifier (default)** - Single-agent main loop with an out-of-band Sidecar Verifier as Stop-hook (claudecode-shape; FEATURE_184 v0.7.42, ADR-030). Verifier returns accept/revise/blocked verdict on Worker text-only termination. The pre-v0.7.43 V1 chain is retired, `emit_handoff` is deleted, accept-verdict UI silently passes through, and content-aware gating skips trivial-chat sidecar calls. Async child steering uses `dispatch_child_task` + `send_message` + `task_stop` with idle-yield wait; specialist routing uses `subagent_type`.
 - **Reasoning Modes** - Unified `off/auto/quick/balanced/deep` interface across providers
 - **Streaming Output** - Real-time response display
@@ -959,18 +962,18 @@ await runInkInteractiveMode({ provider: 'zhipu-coding', reasoningMode: 'auto' })
 
 | Provider | Environment Variable | Reasoning Support | Default Model |
 |----------|----------------------|-------------------|---------------|
-| anthropic | `ANTHROPIC_API_KEY` | Native | claude-sonnet-4-6 |
-| openai | `OPENAI_API_KEY` | Native | gpt-5.3-codex |
-| kimi | `KIMI_API_KEY` | Native | kimi-k2.6 |
+| anthropic | `ANTHROPIC_API_KEY` | Native | claude-sonnet-4-6 (`claude-opus-4-6` / `claude-haiku-4-5` via `/model`) |
+| openai | `OPENAI_API_KEY` | Native | gpt-5.3-codex (`gpt-5.4` / `gpt-5.3-codex-spark` via `/model`) |
+| kimi | `KIMI_API_KEY` | Native | kimi-k2.6 (`kimi-k2.7-code` 256K / `k2.5` via `/model`) |
 | kimi-code | `KIMI_CODE_API_KEY` | Native | kimi-for-coding |
 | qwen | `QWEN_API_KEY` | Native | qwen3.5-plus |
-| zhipu | `ZHIPU_API_KEY` | Native | glm-5 |
-| zhipu-coding | `ZHIPU_CODING_API_KEY` | Native | glm-5 |
-| minimax-coding | `MINIMAX_CODING_API_KEY` | Native | MiniMax-M2.7 (M2 family default; `MiniMax-M3` Frontier Coding with native multimodal + 1M ctx available via `/model`, plus M2.7-highspeed / M2.5 / M2.5-highspeed / M2.1 / M2.1-highspeed / M2 on the same gateway) |
+| zhipu | `ZHIPU_API_KEY` | Native | glm-5 (`glm-5.2` 1M ctx / `glm-5.1` / `glm-5-turbo` via `/model`) |
+| zhipu-coding | `ZHIPU_CODING_API_KEY` | Native | glm-5 (`glm-5.2` 1M ctx / `glm-5.1` / `glm-5-turbo` via `/model`) |
+| minimax-coding | `MINIMAX_CODING_API_KEY` | Native | MiniMax-M2.7 (`MiniMax-M3` Frontier Coding, native multimodal + 1M ctx, plus `MiniMax-M2.7-highspeed` via `/model`) |
 | mimo | `MIMO_API_KEY` | Native | mimo-v2.5-pro (Xiaomi MiMo pay-per-token, Anthropic-compat) |
 | mimo-coding | `MIMO_CODING_API_KEY` | Native | mimo-v2.5-pro (Xiaomi Token Plan, Anthropic-compat) |
-| ark-coding | `ARK_CODING_API_KEY` | Native | glm-5.1 (Volcengine Ark Coding Plan, multi-model gateway, Anthropic-compat) |
-| deepseek | `DEEPSEEK_API_KEY` | Native | deepseek-v4-flash |
+| ark-coding | `ARK_CODING_API_KEY` | Native | glm-5.1 (Volcengine Ark Coding Plan: GLM, Kimi, MiniMax M3/M2.7, DeepSeek V3.2/V4, Doubao Seed 2.0 routes) |
+| deepseek | `DEEPSEEK_API_KEY` | Native | deepseek-v4-flash (`deepseek-v4-pro` via `/model`) |
 | gemini-cli | `GEMINI_API_KEY` | Prompt-only / CLI bridge | (via gemini CLI) |
 | codex-cli | `OPENAI_API_KEY` | Prompt-only / CLI bridge | (via codex CLI) |
 

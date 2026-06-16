@@ -15,8 +15,12 @@ are NOT obvious from inspecting the type definitions alone:
 5. [Consuming from a CommonJS context (Electron main, CJS bundles)](#5-consuming-from-a-commonjs-context-electron-main-cjs-bundles)
 6. [Session persistence — wiring `runKodaX` to disk](#6-session-persistence--wiring-runkodax-to-disk)
 7. [Local development via `npm link` (iterating against in-tree KodaX)](#7-local-development-via-npm-link-iterating-against-in-tree-kodax)
-8. [Electron + `stdio: 'inherit'` on Windows — PowerShell input hijack](#8-electron--stdio-inherit-on-windows--powershell-input-hijack)
-9. [Model capabilities — context window, reasoning, descriptors](#9-model-capabilities--context-window-reasoning-descriptors)
+8. [User-authored agents — markdown loader + extension `registerAgent`](#8-user-authored-agents--markdown-loader--extension-registeragent-feature_191-v0743)
+9. [Electron + `stdio: 'inherit'` on Windows — PowerShell input hijack](#9-electron--stdio-inherit-on-windows--powershell-input-hijack)
+10. [Model capabilities — context window, reasoning, descriptors](#10-model-capabilities--context-window-reasoning-descriptors)
+11. [Workflow process events and lifecycle controls](#11-workflow-process-events-and-lifecycle-controls-feature_229-v0750)
+12. [Provider credential verification — `verifyProviderCredential`](#12-provider-credential-verification--verifyprovidercredential-feature_216-v0745)
+13. [Inject your product's manual — `selfManual`](#13-inject-your-products-manual--selfmanual-feature_221-v0747)
 
 §1–§3 (and the Phase-7/8 MCP-popout surface in §1) land in v0.7.42
 under FEATURE_186 (see [ADR-032](ADR.md#adr-032-sdk-embedder-surface-closure-feature_186-v0742)).
@@ -931,7 +935,7 @@ this as "non-Worker/Generator"; Generator is historical after FEATURE_193.
 
 ---
 
-## 8. Electron + `stdio: 'inherit'` on Windows — PowerShell input hijack
+## 9. Electron + `stdio: 'inherit'` on Windows — PowerShell input hijack
 
 ### Symptom
 
@@ -1028,7 +1032,7 @@ and your Node / OS / SDK version.
 
 ---
 
-## 9. Model capabilities — context window, reasoning, descriptors
+## 10. Model capabilities — context window, reasoning, descriptors
 
 ### Why this exists
 
@@ -1044,9 +1048,10 @@ show "Anthropic Sonnet 4.6 / 200K context" until the user had set
 data** (we know what context windows the upstream models advertise),
 so gating it on credentials is wrong.
 
-v0.7.43 promotes this metadata into `KODAX_PROVIDER_SNAPSHOTS` (a plain
-const map) and adds getters that read directly from it — no provider
-instance, no API key, no env vars touched.
+v0.7.43 promoted this metadata into registry-layer snapshots and getters; the
+current implementation backs `KODAX_PROVIDER_SNAPSHOTS` with
+`provider-capabilities.json`. The getters still read without a provider
+instance, API key, or env var.
 
 ### The new surface
 
@@ -1179,12 +1184,15 @@ tables, capability-aware routing.
 
 ### Confirming snapshot accuracy
 
-Snapshot values are encoded in
-[`packages/llm/src/providers/registry.ts`](../packages/llm/src/providers/registry.ts)
-(`KODAX_PROVIDER_SNAPSHOTS`). When upstream providers publish a new
-model or change a context-window cap, that file is the patch site —
-the new value flows to runtime (via `buildProviderConfig`) AND to SDK
-consumers (via the getters) in a single edit. The test suite at
+Snapshot values are sourced from
+[`packages/llm/src/providers/provider-capabilities.json`](../packages/llm/src/providers/provider-capabilities.json)
+and loaded into the in-memory `KODAX_PROVIDER_SNAPSHOTS` export. When upstream
+providers publish a new model or change a context-window cap, the JSON file is
+the patch site — the new value flows to runtime (via `buildProviderConfig`) AND
+to SDK consumers (via the getters) in a single edit. The current snapshot is
+dated 2026-06-14 and includes the GPT-5.4, Kimi K2.7 Code, GLM-5.2, MiniMax
+M3/M2.7, DeepSeek V4, and Doubao Seed 2.0 route refreshes where supported. The
+test suite at
 [`packages/llm/src/providers/model-capabilities.test.ts`](../packages/llm/src/providers/model-capabilities.test.ts)
 locks in specific values (e.g. kimi-k2.6 at 256K, deepseek-v4-pro at 1M)
 so accidental drift is caught at PR time.
@@ -1197,7 +1205,95 @@ metadata, we can promote the snapshot to derive from it.
 
 ---
 
-## 10. Provider credential verification — `verifyProviderCredential` (FEATURE_216, v0.7.45)
+## 11. Workflow process events and lifecycle controls (FEATURE_229, v0.7.50)
+
+FEATURE_229 makes dynamic workflow progress a reusable SDK process surface
+instead of terminal-only text. Hosts can observe and control workflows without
+parsing `/workflow` output, replaying slash commands, or depending on Ink view
+models.
+
+Use the Agent subpath for neutral process types:
+
+```ts
+import type {
+  WorkflowProcessEvent,
+  WorkflowProcessSnapshot,
+} from '@kodax-ai/kodax/agent';
+```
+
+Use the Coding subpath for workflow execution, process subscription, and
+lifecycle control:
+
+```ts
+import {
+  createWorkflowLifecycleController,
+  createWorkflowRunManager,
+  generateWorkflowFromOptions,
+} from '@kodax-ai/kodax/coding';
+
+const runManager = createWorkflowRunManager();
+const unsubscribe = runManager.subscribeWorkflowProcess((event) => {
+  renderWorkflowPanel(event.snapshot);
+});
+
+const controller = createWorkflowLifecycleController({
+  runManager,
+  runBaseDir: '.kodax/workflows/runs',
+});
+
+const generated = await generateWorkflowFromOptions({
+  options,
+  request: 'Review the payment flow',
+});
+
+if (generated.kind !== 'generated') throw new Error(generated.reason);
+
+const runId = makeRunId();
+const runDir = makeRunDir(runId);
+const run = runManager.startFromOptions({
+  module: generated.module,
+  args: { request: 'Review the payment flow' },
+  options,
+  runId,
+  runDir,
+  scriptSnapshot: generated.scriptSnapshot,
+  onWorkflowProcessEvent: (event) => auditWorkflow(event.snapshot),
+});
+
+await run.done;
+const snapshot = controller.getWorkflowProcessSnapshot(runId);
+const result = await controller.readWorkflowResult(runId);
+```
+
+`KodaXOptions.events.onWorkflowProcessEvent` receives the same events when a
+host runs normal coding tasks that enter workflow mode. `WorkflowProcessSnapshot`
+is intentionally ANSI-free and UI-neutral. It carries workflow status, phases,
+child item status, result-bearing child summaries, provider/model routing hints,
+and final `resultSummary`.
+
+The lifecycle controller also exposes terminal-run controls: stop, pause,
+resume, artifact reads, delete, prune, display-name changes, saved-capsule
+revision/replace provenance, and capsule preflight. Provenance fields such as
+`source`, `sourceRunId`, `sourceWorkflowName`, `savedWorkflowName`, and
+`revisionOf` let a host distinguish AMAW, `/workflow`, `/review --workflow`,
+saved-name reruns, and capsule revisions while still consuming one process
+contract.
+
+Layer boundary:
+
+- `@kodax-ai/kodax/agent` owns neutral workflow process/event/status types.
+- `@kodax-ai/kodax/coding` owns the coding backend, generated/saved workflow
+  execution, run graph, host policy, lifecycle controller, result/artifact
+  reads, and retention.
+- `@kodax-ai/kodax/repl` renders snapshots; it is not required for SDK workflow
+  execution or progress UI.
+
+Release note: v0.7.50 implementation is complete; release validation is still
+required before publishing the package version.
+
+---
+
+## 12. Provider credential verification — `verifyProviderCredential` (FEATURE_216, v0.7.45)
 
 ### Why
 
@@ -1299,7 +1395,7 @@ Cli-bridge providers (`gemini-cli`, `codex-cli`) return their CLI binary's known
 
 ---
 
-## 11. Inject your product's manual — `selfManual` (FEATURE_221, v0.7.47)
+## 13. Inject your product's manual — `selfManual` (FEATURE_221, v0.7.47)
 
 ### Why
 

@@ -1,6 +1,6 @@
 # KodaX Product Requirements
 
-> Last updated: 2026-06-13
+> Last updated: 2026-06-16
 >
 > Current release baseline: `@kodax-ai/kodax@0.7.49`
 >
@@ -84,7 +84,10 @@ KodaX must support 14 built-in provider aliases plus user-defined compatible
 providers. Provider behavior must be described by capability metadata rather
 than scattered prompt prose. Custom providers must support base URL, protocol,
 model, API key env var, reasoning replay, and multimodal capability flags where
-needed.
+needed. The current provider capability snapshot is maintained in
+`packages/llm/src/providers/provider-capabilities.json` and includes the
+2026-06-14 model refresh for GPT-5.4, Kimi K2.7 Code, GLM-5.2, MiniMax M3/M2.7,
+DeepSeek V4, and Doubao Seed 2.0 routes where supported.
 
 ### Tools
 
@@ -119,6 +122,19 @@ budget checks, opt-in worktree routing, and richer workflow pattern templates.
 Generated workflows can be promoted into lightweight capsules that preserve the
 script plus manifest, intent, input examples, requirements, and provenance so
 they remain reusable across sessions and understandable to SDK consumers.
+
+### Workflow Process Surface
+
+FEATURE_229 (`v0.7.50`) standardizes workflow execution as an Agent-layer
+process contract. SDK hosts must be able to subscribe to
+`WorkflowProcessEvent`, poll `WorkflowProcessSnapshot`, and use lifecycle
+controls for stop, pause, resume, final result reads, artifact reads, terminal
+run delete/prune, identity changes, saved-capsule revision/replace provenance,
+and preflight checks. REPL and future UI hosts render the same snapshots; they
+must not become the source of truth by parsing terminal text, slash-command
+output, or Ink view models. Coding-layer workflow APIs own coding run graphs,
+host policy, source/provenance fields, and result summaries while preserving the
+Agent-layer package boundary.
 
 ### Safety And Control
 

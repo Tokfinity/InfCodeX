@@ -24,7 +24,7 @@ import { getProvider } from '@kodax-ai/llm';
 
 ## 内置 Provider Alias
 
-Capability 数据的单一来源是 `src/providers/provider-capabilities.json`（当前更新时间：2026-06-02）。
+Capability 数据的单一来源是 `src/providers/provider-capabilities.json`（当前更新时间：2026-06-14）。
 
 | Alias | Environment variable | Reasoning | Default model |
 |---|---|---|---|
@@ -42,6 +42,14 @@ Capability 数据的单一来源是 `src/providers/provider-capabilities.json`�
 | `ark-coding` | `ARK_CODING_API_KEY` | Yes | `glm-5.1` |
 | `gemini-cli` | `GEMINI_API_KEY` | No | CLI bridge default |
 | `codex-cli` | `OPENAI_API_KEY` | No | CLI bridge default |
+
+2026-06-14 模型快照重点：
+
+- OpenAI 默认 `gpt-5.3-codex`，并提供 `gpt-5.4` / `gpt-5.3-codex-spark`。
+- Kimi 默认 `kimi-k2.6`，并提供 `kimi-k2.7-code`（256K）/ `k2.5`。
+- Zhipu / Zhipu Coding 默认 `glm-5`，并提供 `glm-5.2`（1M context, 131072 max output）/ `glm-5.1` / `glm-5-turbo`。
+- MiniMax Coding 默认 `MiniMax-M2.7`，并保留 `MiniMax-M3`（Frontier Coding, native multimodal, 1M context）/ `MiniMax-M2.7-highspeed`；旧 M2.5/M2.1/M2 路由已移除。
+- Ark Coding 默认 `glm-5.1`，同一 gateway 暴露 GLM、Kimi K2.6、MiniMax M3/M2.7、DeepSeek V3.2/V4、Doubao Seed 2.0 Code/Pro/Lite。
 
 ## 使用示例
 

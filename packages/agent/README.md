@@ -11,7 +11,7 @@
 - Session lineage: branchable session tree、compaction、persistence helpers
 - Capabilities: MCP integration、Skills loader、builtin skills
 - Observability: tracing spans / trace store
-- Workflow runtime: domain-neutral workflow execution primitives
+- Workflow runtime: domain-neutral workflow execution primitives plus `WorkflowProcessEvent` / `WorkflowProcessSnapshot` process types
 
 ## 安装 / 导入
 
@@ -63,7 +63,7 @@ The generic `Runner` path can be used with a caller-provided `llm` callback. The
 - Skills: `SkillRegistry`, `loadFullSkill`, `expandSkillForLLM`
 - MCP: `McpCapabilityProvider`, `createMcpTransport`, catalog helpers
 - Tracing: trace / span primitives and stores
-- Workflow: `createWorkflowRuntime`, `runWorkflow`, `WorkflowAbortError`, `WorkflowLimitError`
+- Workflow: `createWorkflowRuntime`, `runWorkflow`, `WorkflowAbortError`, `WorkflowLimitError`, `WorkflowProcessEvent`, `WorkflowProcessSnapshot`, `isFinalWorkflowProcessStatus`
 
 ## Subpath 说明
 

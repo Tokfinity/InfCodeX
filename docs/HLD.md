@@ -1,6 +1,6 @@
 # KodaX High-Level Design
 
-> Last updated: 2026-06-13
+> Last updated: 2026-06-16
 >
 > Current release baseline: `@kodax-ai/kodax@0.7.49`
 >
@@ -198,19 +198,20 @@ requirements, and provenance. The capsule protocol belongs in `agent`; checks
 that depend on the local repository, skills, MCPs, or `.kodax` paths belong in
 `coding`; command help and approval text belong in `repl`.
 
-FEATURE_229 (`v0.7.50`) is the planned process layer on top of FEATURE_217. It
-standardizes workflow progress as agent-layer snapshots and events so SDK
-embedders, coding commands, REPL inline/fullscreen surfaces, and future system
-event bridges can subscribe to the same source of truth. This follows the same
-boundary rule as the runtime itself: `agent` owns process state and terminal
-status semantics, `coding` maps domain workflow runs, host policy, and lifecycle
-controls into that state, and `repl` renders it. REPL workflow callbacks are a
-v0.7.49 bridge for terminal UX; Space-style hosts must consume the F229
-snapshot/controller contract rather than parsing terminal text or Ink view
-models. The host contract must also preserve parent guardrails, existing SDK
-event callbacks, workflow logs, capsule preflight, and provider/model policy
-when a workflow spawns child agents; entering workflow mode must not weaken
-safety or observability.
+FEATURE_229 (`v0.7.50`, implementation complete; release validation pending)
+is the process layer on top of FEATURE_217. It standardizes workflow progress as
+agent-layer snapshots and events so SDK embedders, coding commands, REPL
+inline/fullscreen surfaces, and future system event bridges can subscribe to the
+same source of truth. This follows the same boundary rule as the runtime itself:
+`agent` owns process state and terminal status semantics; `coding` maps domain
+workflow runs, host policy, lifecycle controls, source/provenance fields, final
+result summaries, artifacts, and retention into that state; `repl` renders it.
+Space-style hosts must consume the F229 snapshot/controller contract rather than
+parsing terminal text, slash-command output, or Ink view models. The host
+contract also preserves parent guardrails, existing SDK event callbacks,
+workflow logs, capsule preflight, and provider/model policy when a workflow
+spawns child agents; entering workflow mode must not weaken safety or
+observability.
 
 ## 11. REPL And CLI
 

@@ -369,18 +369,18 @@ dist/binary/linux-x64/
 
 | Provider | 环境变量 | Reasoning | 默认 Model |
 |----------|----------|-----------|-----------|
-| anthropic | `ANTHROPIC_API_KEY` | Native | claude-sonnet-4-6 |
-| openai | `OPENAI_API_KEY` | Native | gpt-5.3-codex |
-| kimi | `KIMI_API_KEY` | Native | kimi-k2.6 |
+| anthropic | `ANTHROPIC_API_KEY` | Native | claude-sonnet-4-6（可 `/model` 切换 `claude-opus-4-6` / `claude-haiku-4-5`） |
+| openai | `OPENAI_API_KEY` | Native | gpt-5.3-codex（可 `/model` 切换 `gpt-5.4` / `gpt-5.3-codex-spark`） |
+| kimi | `KIMI_API_KEY` | Native | kimi-k2.6（可 `/model` 切换 `kimi-k2.7-code` 256K / `k2.5`） |
 | kimi-code | `KIMI_CODE_API_KEY` | Native | kimi-for-coding |
 | qwen | `QWEN_API_KEY` | Native | qwen3.5-plus |
-| zhipu | `ZHIPU_API_KEY` | Native | glm-5 |
-| zhipu-coding | `ZHIPU_CODING_API_KEY` | Native | glm-5（GLM Coding Plan 端点） |
-| minimax-coding | `MINIMAX_CODING_API_KEY` | Native | MiniMax-M2.7（M2 系列默认；`MiniMax-M3` 原生多模态 + 1M 上下文 Frontier Coding 模型可 `/model` 切换，同网关还有 M2.7-highspeed / M2.5 / M2.5-highspeed / M2.1 / M2.1-highspeed / M2）|
+| zhipu | `ZHIPU_API_KEY` | Native | glm-5（可 `/model` 切换 `glm-5.2` 1M ctx / `glm-5.1` / `glm-5-turbo`） |
+| zhipu-coding | `ZHIPU_CODING_API_KEY` | Native | glm-5（GLM Coding Plan；可 `/model` 切换 `glm-5.2` 1M ctx / `glm-5.1` / `glm-5-turbo`） |
+| minimax-coding | `MINIMAX_CODING_API_KEY` | Native | MiniMax-M2.7（可 `/model` 切换 `MiniMax-M3` Frontier Coding，原生多模态 + 1M ctx；以及 `MiniMax-M2.7-highspeed`） |
 | mimo | `MIMO_API_KEY` | Native | mimo-v2.5-pro（小米 MiMo 按量计费，Anthropic 协议） |
 | mimo-coding | `MIMO_CODING_API_KEY` | Native | mimo-v2.5-pro（小米 MiMo Token Plan，Anthropic 协议） |
-| ark-coding | `ARK_CODING_API_KEY` | Native | glm-5.1（火山方舟 Coding Plan，多模型网关，Anthropic 协议） |
-| deepseek | `DEEPSEEK_API_KEY` | Native | deepseek-v4-flash |
+| ark-coding | `ARK_CODING_API_KEY` | Native | glm-5.1（火山方舟 Coding Plan：GLM、Kimi、MiniMax M3/M2.7、DeepSeek V3.2/V4、Doubao Seed 2.0 路由） |
+| deepseek | `DEEPSEEK_API_KEY` | Native | deepseek-v4-flash（可 `/model` 切换 `deepseek-v4-pro`） |
 | gemini-cli | `GEMINI_API_KEY` | Prompt-only / CLI bridge | （通过 gemini CLI） |
 | codex-cli | `OPENAI_API_KEY` | Prompt-only / CLI bridge | （通过 codex CLI） |
 
@@ -494,6 +494,8 @@ KodaX 有两层结构，SDK 用户需要分开理解：
 | `packages/repl`   | `@kodax-ai/kodax/session` | **窄子集** | 仅会话管理 —— `listSessions` / `forkSession` / `watchSessions` 等 (9 exports) | 读取 session 历史的 IDE 插件 |
 
 **经验法则**：需要 Runner / Agent / fan-out 时从 `/agent` 引入；只需要 skills 或 mcp API 时从 `/skills` 或 `/mcp` 引入，bundle 更小。窄子集是完整包的真子集 —— **不会**有额外符号。
+
+**Workflow process surface（FEATURE_229，v0.7.50 实现已完成，发布验证待跑）**：动态工作流不再只是 REPL 私有文本，而是 Agent 层可复用的 process/event/snapshot 契约。SDK 宿主可以订阅 `WorkflowProcessEvent`、轮询 `WorkflowProcessSnapshot`，并通过 `createWorkflowRunManager` / `createWorkflowLifecycleController` 做 stop/pause/resume、读取 final result/artifact、删除/清理 terminal runs、管理 workflow identity/preflight。`/coding` 负责 coding workflow backend 与 run graph，`/repl` 只是消费同一份 snapshot 渲染 UI；SDK 不需要解析 slash-command 输出或 Ink view-model。
 
 ```
 KodaX/                       # 4 workspace packages(FEATURE_194 v0.7.43)
