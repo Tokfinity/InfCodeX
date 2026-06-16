@@ -119,6 +119,34 @@ function restoreRootPackageJson(rawBytes) {
   writeFileSync(rootPkgPath, rawBytes, 'utf8');
 }
 
+// ---- package-lock version sync guard -------------------------------------
+//
+// package-lock.json must agree with package.json on the release version —
+// both the root and every workspace entry. A stale lock (e.g. the whole lock
+// frozen one version behind) ships a tarball whose recorded version
+// disagrees with the package, a low-level defect that has slipped through
+// before. Returns the list of mismatches so the caller can decide whether to
+// hard-fail (real publish) or warn (dry-run / pack-only).
+function findPackageLockVersionMismatches(version) {
+  const lockPath = path.join(repoRoot, 'package-lock.json');
+  const lock = JSON.parse(readFileSync(lockPath, 'utf8'));
+  const mismatches = [];
+  if (lock.version !== version) {
+    mismatches.push(`package-lock.json#version is ${JSON.stringify(lock.version)}`);
+  }
+  const entries = lock.packages ?? {};
+  for (const [key, entry] of Object.entries(entries)) {
+    // Only the root ("") and in-repo workspace packages carry a version we
+    // own; external deps under node_modules/* are pinned independently.
+    const isWorkspace = key === '' || (key.startsWith('packages/') && !key.includes('node_modules'));
+    if (!isWorkspace || !entry || typeof entry.version !== 'string') continue;
+    if (entry.version !== version) {
+      mismatches.push(`package-lock.json#packages[${JSON.stringify(key)}].version is ${JSON.stringify(entry.version)}`);
+    }
+  }
+  return mismatches;
+}
+
 // ---- main ----------------------------------------------------------------
 
 function main() {
@@ -141,6 +169,20 @@ function main() {
   log(`Version: ${version}`);
   log(`Mode: ${packOnly ? 'PACK-ONLY (local tarball for SDK consumer testing)' : isDryRun ? 'DRY RUN' : 'REAL PUBLISH (irreversible)'}`);
   log('');
+
+  // Sanity: package-lock must agree with package.json on the version (root +
+  // every workspace entry). Hard fail for real publish; warn-only for
+  // dry-run / pack-only so operators can still validate the pipeline mid-edit.
+  const lockMismatches = findPackageLockVersionMismatches(version);
+  if (lockMismatches.length > 0) {
+    const detail = `package-lock.json is out of sync with package.json@${version}: ${lockMismatches.join('; ')}. Run \`npm install --package-lock-only\` and commit the lock.`;
+    if (isDryRun || packOnly) {
+      log(`WARNING: ${detail} Real publish would refuse.`);
+    } else {
+      logError(detail);
+      process.exit(1);
+    }
+  }
 
   // Step 1: build sub-packages, esbuild bundle, and root .d.ts.
   // `npm run build` is the single safe entry — it chains
