@@ -36,7 +36,7 @@
  * STATUS: ACTIVE since FEATURE_100 P2 for the dispatch sequence.
  */
 
-import { describe, expect, it } from 'vitest';
+import { describe, expect, it, vi } from 'vitest';
 
 import type {
   KodaXEvents,
@@ -161,6 +161,61 @@ describe('CAP-024: executeToolCall — active-tool gate', () => {
 });
 
 describe('CAP-024: executeToolCall — permission gate (CAP-010) override', () => {
+  it('CAP-TOOL-DISPATCH-META-1: visible tool start and askUser callbacks receive tool/workflow meta', async () => {
+    const workflowCorrelation = {
+      workflowRunId: 'run-1',
+      childAgentId: 'child-1',
+      itemId: 'agent:child-1',
+    };
+    const onToolUseStart = vi.fn();
+    const askUser = vi.fn(async () => 'yes');
+    const events: KodaXEvents = {
+      workflowCorrelation,
+      onToolUseStart,
+      askUser,
+    };
+
+    const result = await executeToolCall(
+      events,
+      makeToolCall('ask_user_question', {
+        question: 'Proceed?',
+        options: [{ label: 'Yes', value: 'yes' }],
+      }),
+      makeCtx(),
+      freshState(),
+      ['ask_user_question'],
+    );
+
+    expect(result).toContain('"choice":"yes"');
+    expect(onToolUseStart).toHaveBeenCalledWith(
+      {
+        name: 'ask_user_question',
+        id: 't1',
+        input: {
+          question: 'Proceed?',
+          options: [{ label: 'Yes', value: 'yes' }],
+        },
+      },
+      {
+        toolId: 't1',
+        workflowCorrelation,
+      },
+    );
+    expect(askUser).toHaveBeenCalledWith(
+      {
+        question: 'Proceed?',
+        kind: 'select',
+        options: [{ label: 'Yes', value: 'yes' }],
+        multiSelect: false,
+        default: undefined,
+      },
+      {
+        toolId: 't1',
+        workflowCorrelation,
+      },
+    );
+  });
+
   it('CAP-TOOL-DISPATCH-PERMISSION-1: `beforeToolExecute` returning a string short-circuits dispatch and uses the returned string as the result', async () => {
     let registryCalled = false;
     const events: KodaXEvents = {

@@ -45,7 +45,7 @@ import type { KodaXMessage, KodaXToolUseBlock, KodaXToolResultBlock } from '@kod
 import { checkIncompleteToolCalls } from '../messages.js';
 import { getRequiredToolParams } from '../tools/index.js';
 import { rebaseContextTokenSnapshot } from '../token-accounting.js';
-import { createToolResultBlock } from './tool-dispatch.js';
+import { createToolEventMeta, createToolResultBlock } from './tool-dispatch.js';
 import { KODAX_MAX_INCOMPLETE_RETRIES } from '../constants.js';
 import type { ExtensionEventEmitter } from './stream-handler-wiring.js';
 
@@ -145,7 +145,10 @@ export async function checkAndRetryIncompleteTools(
         name: tc.name,
         content: errorMsg,
       });
-      input.events.onToolResult?.({ id: tc.id, name: tc.name, content: errorMsg });
+      input.events.onToolResult?.(
+        { id: tc.id, name: tc.name, content: errorMsg },
+        createToolEventMeta(input.events, tc.id),
+      );
       errorResults.push(createToolResultBlock(tc.id, errorMsg));
     }
   }

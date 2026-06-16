@@ -109,7 +109,15 @@ export function wrapCodingToolAsRunnable(
         ? {
           ...baseCtx,
           reportToolProgress: (message: string) => {
-            events.onToolProgress?.({ id: toolCallId, message });
+            events.onToolProgress?.(
+              { id: toolCallId, message },
+              {
+                toolId: toolCallId,
+                ...(events.workflowCorrelation !== undefined
+                  ? { workflowCorrelation: events.workflowCorrelation }
+                  : {}),
+              },
+            );
           },
         }
         : baseCtx;

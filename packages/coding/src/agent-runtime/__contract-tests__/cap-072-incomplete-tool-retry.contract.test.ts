@@ -140,9 +140,14 @@ describe('CAP-072: checkAndRetryIncompleteTools — at cap (maxed-out path)', ()
     const onRetry = vi.fn();
     const onToolResult = vi.fn();
     const emit = fakeEmitter();
+    const workflowCorrelation = {
+      workflowRunId: 'run-1',
+      childAgentId: 'child-1',
+      itemId: 'agent:child-1',
+    };
     const result = await checkAndRetryIncompleteTools({
       toolBlocks: [incompleteWriteTool('tool-1')],
-      events: { onRetry, onToolResult } as unknown as KodaXEvents,
+      events: { onRetry, onToolResult, workflowCorrelation } as unknown as KodaXEvents,
       emitActiveExtensionEvent: emit,
       messages,
       incompleteRetryCount: KODAX_MAX_INCOMPLETE_RETRIES, // next attempt = cap+1
@@ -158,8 +163,10 @@ describe('CAP-072: checkAndRetryIncompleteTools — at cap (maxed-out path)', ()
 
     expect(onToolResult).toHaveBeenCalledOnce();
     const toolResultArg = onToolResult.mock.calls[0]![0] as { id: string; content: string };
+    const toolResultMeta = onToolResult.mock.calls[0]![1] as { toolId?: string; workflowCorrelation?: unknown };
     expect(toolResultArg.id).toBe('tool-1');
     expect(toolResultArg.content).toMatch(/Skipped due to missing required parameters/);
+    expect(toolResultMeta).toEqual({ toolId: 'tool-1', workflowCorrelation });
     expect(emit).toHaveBeenCalledOnce();
     expect(onRetry).toHaveBeenCalledOnce();
     expect(onRetry.mock.calls[0]![0]).toMatch(/Max retries exceeded/);

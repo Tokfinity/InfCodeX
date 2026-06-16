@@ -43,7 +43,7 @@ import type {
 import { CANCELLED_TOOL_RESULT_MESSAGE } from '../constants.js';
 import { isVisibleToolName, hasQueuedFollowUp, emitStreamEnd } from './event-emitter.js';
 import { isCancelledToolResultContent } from './tool-result-classify.js';
-import { createToolResultBlock } from './tool-dispatch.js';
+import { createToolEventMeta, createToolResultBlock } from './tool-dispatch.js';
 import { rebaseContextTokenSnapshot } from '../token-accounting.js';
 import type { ExtensionEventEmitter } from './stream-handler-wiring.js';
 
@@ -85,7 +85,7 @@ export async function checkPreToolAbort(
         id: tc.id,
         name: tc.name,
         content: CANCELLED_TOOL_RESULT_MESSAGE,
-      });
+      }, createToolEventMeta(input.events, tc.id));
       cancelled.push(createToolResultBlock(tc.id, CANCELLED_TOOL_RESULT_MESSAGE));
     }
   }

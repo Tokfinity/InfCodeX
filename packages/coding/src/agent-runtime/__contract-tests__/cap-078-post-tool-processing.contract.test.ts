@@ -260,6 +260,11 @@ describe('CAP-078: applyPostToolProcessing — visibility events', () => {
       ['vis', 'visible result'],
       ['hid', 'managed protocol result'],
     ]);
+    const workflowCorrelation = {
+      workflowRunId: 'run-1',
+      childAgentId: 'child-1',
+      itemId: 'agent:child-1',
+    };
 
     const out = await applyPostToolProcessing({
       toolBlocks: [
@@ -267,7 +272,7 @@ describe('CAP-078: applyPostToolProcessing — visibility events', () => {
         tool('hid', 'emit_managed_protocol'),
       ],
       resultMap,
-      events: { onToolResult } as unknown as KodaXEvents,
+      events: { onToolResult, workflowCorrelation } as unknown as KodaXEvents,
       emitActiveExtensionEvent: emit,
       ctx: makeCtx(),
       runtimeSessionState: freshState(),
@@ -277,11 +282,17 @@ describe('CAP-078: applyPostToolProcessing — visibility events', () => {
     expect(out.toolResults).toHaveLength(1);
     expect(out.toolResults[0]!.tool_use_id).toBe('vis');
     expect(out.toolResults[0]!.content).toBe('visible result');
-    expect(onToolResult).toHaveBeenCalledExactlyOnceWith({
-      id: 'vis',
-      name: 'read',
-      content: 'visible result',
-    });
+    expect(onToolResult).toHaveBeenCalledExactlyOnceWith(
+      {
+        id: 'vis',
+        name: 'read',
+        content: 'visible result',
+      },
+      {
+        toolId: 'vis',
+        workflowCorrelation,
+      },
+    );
     expect(emit).toHaveBeenCalledExactlyOnceWith('tool:result', {
       id: 'vis',
       name: 'read',

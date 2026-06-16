@@ -32,7 +32,7 @@
 
 import { describe, expect, it } from 'vitest';
 
-import type { KodaXManagedProtocolPayload, KodaXOptions } from '../../types.js';
+import type { KodaXEvents, KodaXManagedProtocolPayload, KodaXOptions } from '../../types.js';
 import { buildToolExecutionContext } from '../tool-execution-context.js';
 
 function makeRef(): { current: KodaXManagedProtocolPayload | undefined } {
@@ -151,5 +151,19 @@ describe('CAP-048: tool execution context construction contract', () => {
     expect(ctx.askUser).toBe(askUser);
     expect(ctx.askUserInput).toBe(askUserInput);
     expect(ctx.exitPlanMode).toBe(exitPlanMode);
+  });
+
+  it('CAP-TOOL-CTX-007: parentEvents preserves the full callback surface for child-dispatch telemetry', () => {
+    const events: KodaXEvents = {
+      onTextDelta: () => {},
+      onToolProgress: () => {},
+    };
+    const ctx = buildToolExecutionContext({
+      options: { events } as KodaXOptions,
+      runtime: undefined,
+      managedProtocolPayloadRef: makeRef(),
+    });
+
+    expect(ctx.parentEvents).toBe(events);
   });
 });

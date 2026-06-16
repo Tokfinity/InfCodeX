@@ -103,6 +103,7 @@
 
 import type {
   KodaXEvents,
+  KodaXToolEventMeta,
   KodaXToolExecutionContext,
   KodaXToolResultBlock,
 } from '../types.js';
@@ -154,6 +155,7 @@ export async function executeToolCall(
   }
 
   const visibleTool = isVisibleToolName(toolCall.name);
+  const toolMeta = createToolEventMeta(events, toolCall.id);
   if (visibleTool) {
     await emitActiveExtensionEvent('tool:start', {
       name: toolCall.name,
@@ -164,7 +166,7 @@ export async function executeToolCall(
       name: toolCall.name,
       id: toolCall.id,
       input: toolCall.input,
-    });
+    }, toolMeta);
   }
 
   const override = await getToolExecutionOverride(
@@ -188,17 +190,31 @@ export async function executeToolCall(
     return blockedWrite;
   }
 
-  // FEATURE_067 v2: Inject reportToolProgress for long-running tools (dispatch_child_tasks)
-  const ctxWithProgress: KodaXToolExecutionContext = events.onToolProgress
+  // FEATURE_067/229: inject per-call host hooks with stable tool/workflow meta.
+  const ctxWithToolHooks: KodaXToolExecutionContext =
+    events.onToolProgress || events.askUser || events.askUserMulti || events.askUserInput
     ? {
         ...ctx,
-        reportToolProgress: (message: string) => {
-          events.onToolProgress?.({ id: toolCall.id, message });
-        },
+        ...(events.onToolProgress
+          ? {
+              reportToolProgress: (message: string) => {
+                events.onToolProgress?.({ id: toolCall.id, message }, toolMeta);
+              },
+            }
+          : {}),
+        ...(events.askUser
+          ? { askUser: (options) => events.askUser!(options, toolMeta) }
+          : {}),
+        ...(events.askUserMulti
+          ? { askUserMulti: (options) => events.askUserMulti!(options, toolMeta) }
+          : {}),
+        ...(events.askUserInput
+          ? { askUserInput: (options) => events.askUserInput!(options, toolMeta) }
+          : {}),
       }
     : ctx;
 
-  const result = await executeTool(toolCall.name, toolCall.input ?? {}, ctxWithProgress);
+  const result = await executeTool(toolCall.name, toolCall.input ?? {}, ctxWithToolHooks);
 
   // MCP fallback: when a built-in tool fails, try to find a same-name MCP tool.
   if (result.startsWith('[Tool Error]') && ctx.extensionRuntime) {
@@ -213,6 +229,16 @@ export async function executeToolCall(
   }
 
   return result;
+}
+
+export function createToolEventMeta(
+  events: Pick<KodaXEvents, 'workflowCorrelation'>,
+  toolId: string,
+): KodaXToolEventMeta {
+  return {
+    toolId,
+    ...(events.workflowCorrelation !== undefined ? { workflowCorrelation: events.workflowCorrelation } : {}),
+  };
 }
 
 // Only allow MCP fallback for read-only / network-fetch tools.
@@ -426,7 +452,10 @@ export async function applyPostToolProcessing(
         name: tc.name,
         content,
       });
-      input.events.onToolResult?.({ id: tc.id, name: tc.name, content });
+      input.events.onToolResult?.(
+        { id: tc.id, name: tc.name, content },
+        createToolEventMeta(input.events, tc.id),
+      );
       toolResults.push(createToolResultBlock(tc.id, content));
     }
   }

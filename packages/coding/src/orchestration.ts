@@ -948,16 +948,16 @@ function mergeBeforeToolExecute(
     return undefined;
   }
 
-  return async (tool, input) => {
+  return async (tool, input, meta) => {
     if (taskHook) {
-      const taskDecision = await taskHook(tool, input);
+      const taskDecision = await taskHook(tool, input, meta);
       if (taskDecision !== true) {
         return taskDecision;
       }
     }
 
     if (baseHook) {
-      return baseHook(tool, input);
+      return baseHook(tool, input, meta);
     }
 
     return true;
@@ -983,9 +983,9 @@ export function createKodaXTaskRunner<TTask extends KodaXAgentWorkerSpec = KodaX
       ...baseEvents,
       ...taskEvents,
       beforeToolExecute: mergeBeforeToolExecute(baseEvents.beforeToolExecute, task.beforeToolExecute),
-      onToolResult: (result) => {
-        baseEvents.onToolResult?.(result);
-        taskEvents.onToolResult?.(result);
+      onToolResult: (result, meta) => {
+        baseEvents.onToolResult?.(result, meta);
+        taskEvents.onToolResult?.(result, meta);
       },
     };
 

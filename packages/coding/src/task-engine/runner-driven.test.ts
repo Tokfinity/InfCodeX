@@ -42,7 +42,13 @@ import type {
   KodaXToolDefinition,
   KodaXToolUseBlock,
 } from '@kodax-ai/llm';
-import type { KodaXChildExecutionResult, KodaXEvents, KodaXOptions, KodaXToolExecutionContext } from '../types.js';
+import type {
+  KodaXChildExecutionResult,
+  KodaXEvents,
+  KodaXOptions,
+  KodaXToolEventMeta,
+  KodaXToolExecutionContext,
+} from '../types.js';
 
 // Shared scratch directory for `managedTaskWorkspaceDir` so the
 // Shard 6d-h artifact writes (contract.json / managed-task.json /

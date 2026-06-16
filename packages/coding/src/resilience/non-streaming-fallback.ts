@@ -10,6 +10,7 @@
  */
 
 import type { KodaXMessage } from '@kodax-ai/llm';
+import type { KodaXActivityEventMeta, KodaXToolEventMeta } from '../types.js';
 
 // ============== Types ==============
 
@@ -21,9 +22,12 @@ export interface NonStreamingFallbackOptions {
   /** The provider client to use for the non-streaming call. */
   callNonStreaming: (messages: KodaXMessage[]) => Promise<KodaXMessage>;
   /** Callback to deliver text content from the fallback response. */
-  onTextDelta: (text: string) => void;
+  onTextDelta: (text: string, meta?: KodaXActivityEventMeta) => void;
   /** Callback to deliver tool use blocks from the fallback response. */
-  onToolUseStart?: (tool: { name: string; id: string; input?: Record<string, unknown> }) => void;
+  onToolUseStart?: (
+    tool: { name: string; id: string; input?: Record<string, unknown> },
+    meta?: KodaXToolEventMeta,
+  ) => void;
 }
 
 // ============== Fallback Executor ==============

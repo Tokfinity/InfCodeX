@@ -112,6 +112,7 @@ export function buildToolExecutionContext(
       model: options.model,
       reasoningMode: options.reasoningMode,
     },
+    parentEvents: events,
     // FEATURE_067: onChildProgress removed — progress flows through
     // reportToolProgress → onToolProgress instead.
     onChildProgress: undefined,

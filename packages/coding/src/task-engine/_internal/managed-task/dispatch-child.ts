@@ -85,7 +85,15 @@ export function wrapDispatchChildTaskForRole(
       // already does.
       const toolCallId = runnerCtx?.toolCallId;
       const progressHook = events?.onToolProgress && toolCallId
-        ? (message: string) => events.onToolProgress?.({ id: toolCallId, message })
+        ? (message: string) => events.onToolProgress?.(
+          { id: toolCallId, message },
+          {
+            toolId: toolCallId,
+            ...(events.workflowCorrelation !== undefined
+              ? { workflowCorrelation: events.workflowCorrelation }
+              : {}),
+          },
+        )
         : undefined;
       // Shallow clone so the managedProtocolRole + per-call progress hook
       // are local to this invocation. The base ctx stays pristine

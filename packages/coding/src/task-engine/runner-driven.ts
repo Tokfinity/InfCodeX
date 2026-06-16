@@ -50,6 +50,7 @@ import type {
   KodaXTaskEvidenceEntry,
   KodaXTaskRole,
   KodaXTaskRoutingDecision,
+  KodaXToolEventMeta,
   KodaXToolExecutionContext,
   ManagedMutationTracker,
 } from '../types.js';
@@ -254,6 +255,16 @@ export type {
 export function isRunnerDrivenRuntimeEnabled(): boolean {
   const value = process.env.KODAX_MANAGED_TASK_RUNTIME?.trim().toLowerCase();
   return value === 'runner';
+}
+
+function runnerToolEventMeta(
+  events: KodaXOptions['events'] | undefined,
+  toolId: string,
+): KodaXToolEventMeta {
+  return {
+    toolId,
+    ...(events?.workflowCorrelation !== undefined ? { workflowCorrelation: events.workflowCorrelation } : {}),
+  };
 }
 
 // =============================================================================
@@ -1278,7 +1289,7 @@ async function runManagedTaskViaRunnerInner(
         name: call.name,
         id: call.id,
         input: call.input,
-      });
+      }, runnerToolEventMeta(options.events, call.id));
     },
     onToolResult: (call, result) => {
       // F4 parity — track whether any tool result was truncated by the
@@ -1305,7 +1316,7 @@ async function runManagedTaskViaRunnerInner(
                 .filter((i) => i.type === 'text')
                 .map((i) => (i.type === 'text' ? i.text : ''))
                 .join(''),
-      });
+      }, runnerToolEventMeta(options.events, call.id));
     },
   };
   const runnerToolObserver = composeToolObservers(

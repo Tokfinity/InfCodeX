@@ -108,10 +108,15 @@ describe('CAP-076: checkPreToolAbort — signal aborted', () => {
     ctrl.abort();
     const onToolResult = vi.fn();
     const emit = fakeEmitter();
+    const workflowCorrelation = {
+      workflowRunId: 'run-1',
+      childAgentId: 'child-1',
+      itemId: 'agent:child-1',
+    };
     await checkPreToolAbort({
       toolBlocks: [tool('t1', 'read'), tool('invisible', 'emit_managed_protocol')],
       abortSignal: ctrl.signal,
-      events: { onToolResult } as unknown as KodaXEvents,
+      events: { onToolResult, workflowCorrelation } as unknown as KodaXEvents,
       emitActiveExtensionEvent: emit,
     });
     // Only 1 visible tool — exactly one extension event + one consumer event
@@ -120,10 +125,16 @@ describe('CAP-076: checkPreToolAbort — signal aborted', () => {
       name: 'read',
       content: CANCELLED_TOOL_RESULT_MESSAGE,
     });
-    expect(onToolResult).toHaveBeenCalledExactlyOnceWith({
-      id: 't1',
-      name: 'read',
-      content: CANCELLED_TOOL_RESULT_MESSAGE,
-    });
+    expect(onToolResult).toHaveBeenCalledExactlyOnceWith(
+      {
+        id: 't1',
+        name: 'read',
+        content: CANCELLED_TOOL_RESULT_MESSAGE,
+      },
+      {
+        toolId: 't1',
+        workflowCorrelation,
+      },
+    );
   });
 });
