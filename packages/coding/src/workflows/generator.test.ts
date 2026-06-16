@@ -17,8 +17,11 @@ describe('buildWorkflowGenerationUserPrompt', () => {
     const prompt = buildWorkflowGenerationUserPrompt('rank 80 resumes');
     expect(prompt).toContain('wf.spawnAgent');
     expect(prompt).toContain('wf.parallel');
+    expect(prompt).toContain('wf.snapshot(taskId)');
     expect(prompt).toContain('wf.runAgent/wf.wait return');
-    expect(prompt).toContain('Never use a non-existent .output field');
+    expect(prompt).toContain('wf.snapshot returns');
+    expect(prompt).not.toContain('wf.output(taskId)');
+    expect(prompt).toContain('never use anyVariable.output');
     expect(prompt).toContain('Artifact-only or empty returns are invalid');
     expect(prompt).toContain('always wait or stop each handle');
     expect(prompt).toContain('lifetime total cap');
@@ -27,6 +30,15 @@ describe('buildWorkflowGenerationUserPrompt', () => {
     expect(prompt).toContain('fan-out-and-synthesize');
     expect(prompt).toContain('loop-until-done');
     expect(prompt).toContain('rank 80 resumes');
+  });
+
+  it('includes a canonical source pattern with finalText/text result fields', () => {
+    const prompt = buildWorkflowGenerationUserPrompt('audit workflow contracts');
+    expect(prompt).toContain('Canonical source field-usage pattern to follow');
+    expect(prompt).toContain('first.finalText');
+    expect(prompt).toContain('second.finalText');
+    expect(prompt).toContain('const finalText = synthesis.text');
+    expect(prompt).toContain('return { synthesis: finalText }');
   });
 
   it('asks generated workflows to preserve the request language in user-facing text', () => {
@@ -75,10 +87,47 @@ describe('validateGeneratedWorkflowSource', () => {
     ).toThrow(/forbidden generated workflow token: require/);
   });
 
+  it('allows forbidden-token words inside prompts and rubrics', () => {
+    const source = [
+      'async function run(wf) {',
+      '  const result = await wf.runAgent({',
+      '    name: "process-reviewer",',
+      '    prompt: "Review Workflow Process Events and output formatting.",',
+      '    readOnly: true',
+      '  });',
+      '  const synthesis = await wf.synthesize({',
+      '    inputs: [result.finalText],',
+      '    rubric: "Explain process risks without using raw child output."',
+      '  });',
+      '  return { synthesis: synthesis.text };',
+      '}',
+    ].join('\n');
+
+    expect(validateGeneratedWorkflowSource(source)).toBe(source);
+  });
+
+  it('rejects syntactically invalid generated JavaScript before launching a run', () => {
+    const source = [
+      'async function run(wf) {',
+      '  const synthesis = await wf.synthesize({',
+      '    inputs: [],',
+      '    rubric: "line one',
+      'line two"',
+      '  });',
+      '  return { synthesis: synthesis.text };',
+      '}',
+    ].join('\n');
+
+    expect(() => validateGeneratedWorkflowSource(source)).toThrow(/invalid JavaScript syntax/);
+  });
+
   it('rejects workflow API result misuse that would hide final output', () => {
     expect(() =>
       validateGeneratedWorkflowSource('async function run(wf) { const r = await wf.runAgent({ name: "a", prompt: "x" }); return { synthesis: r.output }; }'),
     ).toThrow(/finalText\/text/);
+    expect(() =>
+      validateGeneratedWorkflowSource('async function run(wf) { const snap = await wf.output("task-1"); return { status: snap.status }; }'),
+    ).toThrow(/wf\.snapshot\(taskId\)/);
     expect(() =>
       validateGeneratedWorkflowSource('async function run(wf) { wf.artifact("report", { text: "x" }); return { synthesis: "x" }; }'),
     ).toThrow(/await wf\.artifact/);
@@ -348,6 +397,190 @@ describe('generateWorkflow', () => {
     expect(calls).toHaveLength(2);
     expect(calls[1]).toContain('Validation error: workflow manifest readOnly must be a boolean');
     expect(calls[1]).toContain('Return corrected JSON only');
+  });
+
+  it('feeds source validation errors back for multiple repair attempts', async () => {
+    const calls: string[] = [];
+    const manifest = {
+      name: 'source-repair-audit',
+      description: 'Repair invalid generated source.',
+      phases: ['inspect', 'synthesize'],
+      readOnly: true,
+      maxAgents: 3,
+      maxConcurrency: 2,
+      patterns: ['fan-out-and-synthesize'],
+    };
+
+    const result = await generateWorkflow({
+      request: 'Create a workflow to audit source contracts.',
+      generateText: async ({ prompt }) => {
+        calls.push(prompt);
+        const source = calls.length < 3
+          ? 'async function run(wf) { const r = await wf.runAgent({ name: "a", prompt: "x" }); return { synthesis: r.output }; }'
+          : 'async function run(wf) { const r = await wf.runAgent({ name: "a", prompt: "x" }); return { synthesis: r.finalText }; }';
+        return JSON.stringify({
+          action: 'generate',
+          manifest,
+          source,
+        });
+      },
+    });
+
+    expect(result.kind).toBe('generated');
+    expect(calls).toHaveLength(3);
+    expect(calls[1]).toContain('Repair attempt: 2 of 3');
+    expect(calls[2]).toContain('Repair attempt: 3 of 3');
+    expect(calls[2]).toContain('Validation error: workflow generation source must use finalText/text');
+    expect(calls[2]).toContain('Replace result.output from wf.runAgent');
+    expect(calls[2]).not.toContain('Replace wf.output(taskId) with wf.snapshot(taskId)');
+  });
+
+  it('only mentions the legacy wf.output alias in repair prompts when that call was used', async () => {
+    const calls: string[] = [];
+    const manifest = {
+      name: 'snapshot-repair-audit',
+      description: 'Repair legacy snapshot calls.',
+      phases: ['inspect'],
+      readOnly: true,
+      maxAgents: 1,
+      maxConcurrency: 1,
+      patterns: ['classify-and-act'],
+    };
+
+    const result = await generateWorkflow({
+      request: 'Create a workflow to inspect a running task snapshot.',
+      generateText: async ({ prompt }) => {
+        calls.push(prompt);
+        const source = calls.length === 1
+          ? 'async function run(wf) { const snap = await wf.output("task-1"); return { status: snap.status }; }'
+          : 'async function run(wf) { const snap = await wf.snapshot("task-1"); return { status: snap.status }; }';
+        return JSON.stringify({
+          action: 'generate',
+          manifest,
+          source,
+        });
+      },
+    });
+
+    expect(result.kind).toBe('generated');
+    expect(calls).toHaveLength(2);
+    expect(calls[0]).not.toContain('wf.output(taskId)');
+    expect(calls[1]).toContain('Validation error: workflow generation source must use wf.snapshot(taskId)');
+    expect(calls[1]).toContain('Replace wf.output(taskId) with wf.snapshot(taskId)');
+  });
+
+  it('repairs generated source that used a multiline ordinary string literal', async () => {
+    const calls: string[] = [];
+    const manifest = {
+      name: 'multiline-rubric-audit',
+      description: 'Repair a multiline rubric string.',
+      phases: ['synthesize'],
+      readOnly: true,
+      maxAgents: 1,
+      maxConcurrency: 1,
+      patterns: ['fan-out-and-synthesize'],
+    };
+
+    const result = await generateWorkflow({
+      request: 'Create a workflow with a structured final report rubric.',
+      generateText: async ({ prompt }) => {
+        calls.push(prompt);
+        const source = calls.length === 1
+          ? [
+              'async function run(wf) {',
+              '  const synthesis = await wf.synthesize({',
+              '    inputs: [],',
+              '    rubric: "line one',
+              'line two"',
+              '  });',
+              '  return { synthesis: synthesis.text };',
+              '}',
+            ].join('\n')
+          : [
+              'async function run(wf) {',
+              '  const synthesis = await wf.synthesize({',
+              '    inputs: [],',
+              '    rubric: `line one',
+              'line two`',
+              '  });',
+              '  return { synthesis: synthesis.text };',
+              '}',
+            ].join('\n');
+        return JSON.stringify({
+          action: 'generate',
+          manifest,
+          source,
+        });
+      },
+    });
+
+    expect(result.kind).toBe('generated');
+    expect(calls).toHaveLength(2);
+    expect(calls[1]).toContain('Validation error: workflow generation source has invalid JavaScript syntax');
+  });
+
+  it('repairs generated source that fails safe smoke validation', async () => {
+    const calls: string[] = [];
+    const manifest = {
+      name: 'smoke-repair-audit',
+      description: 'Repair a harness that fails before child launch.',
+      phases: ['inspect'],
+      readOnly: true,
+      maxAgents: 1,
+      maxConcurrency: 1,
+      patterns: ['classify-and-act'],
+    };
+
+    const result = await generateWorkflow({
+      request: 'Create a workflow to inspect an implementation.',
+      generateText: async ({ prompt }) => {
+        calls.push(prompt);
+        const source = calls.length === 1
+          ? [
+              'async function run(wf) {',
+              '  const result = await wf.runAgent({ name: "reader" });',
+              '  return { synthesis: result.finalText };',
+              '}',
+            ].join('\n')
+          : [
+              'async function run(wf) {',
+              '  const result = await wf.runAgent({ name: "reader", prompt: "Inspect the implementation.", readOnly: true });',
+              '  return { synthesis: result.finalText };',
+              '}',
+            ].join('\n');
+        return JSON.stringify({
+          action: 'generate',
+          manifest,
+          source,
+        });
+      },
+    });
+
+    expect(result.kind).toBe('generated');
+    expect(calls).toHaveLength(2);
+    expect(calls[1]).toContain('Validation error: workflow generation source failed safe smoke validation');
+    expect(calls[1]).toContain('wrong wf.* argument shapes');
+  });
+
+  it('reports the final validation error after all workflow repair attempts fail', async () => {
+    await expect(
+      generateWorkflow({
+        request: 'Create a workflow to audit source contracts.',
+        generateText: async () => JSON.stringify({
+          action: 'generate',
+          manifest: {
+            name: 'still-bad',
+            description: 'Still invalid.',
+            phases: ['run'],
+            readOnly: true,
+            maxAgents: 1,
+            maxConcurrency: 1,
+            patterns: ['fan-out-and-synthesize'],
+          },
+          source: 'async function run(wf) { const r = await wf.runAgent({ name: "a", prompt: "x" }); return { synthesis: r.output }; }',
+        }),
+      }),
+    ).rejects.toThrow(/after 3 attempts.*finalText\/text/);
   });
 
   it('fails closed on invalid generated source', async () => {

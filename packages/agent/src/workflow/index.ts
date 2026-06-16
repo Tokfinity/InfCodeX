@@ -69,10 +69,12 @@ export {
   WorkflowScriptExecutionError,
   createRestrictedWorkflowModule,
   runRestrictedWorkflowScript,
+  validateRestrictedWorkflowSource,
 } from './script-runner.js';
 export type {
   RestrictedWorkflowModuleInput,
   RunRestrictedWorkflowScriptOptions,
+  ValidateRestrictedWorkflowSourceOptions,
 } from './script-runner.js';
 
 export {

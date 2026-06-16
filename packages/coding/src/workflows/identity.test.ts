@@ -51,7 +51,7 @@ describe('resolveWorkflowIdentity', () => {
       dir: saved,
       name: 'saved-audit',
       manifest,
-      source: 'export default async function run() { return "ok"; }',
+      source: 'async function run() { return "ok"; }',
     });
 
     await expect(resolveWorkflowIdentity({
@@ -88,7 +88,7 @@ describe('resolveWorkflowIdentity', () => {
       dir: saved,
       name: 'same-name',
       manifest: { ...manifest, name: 'same-name' },
-      source: 'export default async function run() { return "ok"; }',
+      source: 'async function run() { return "ok"; }',
     });
 
     await expect(resolveWorkflowIdentity({
@@ -171,7 +171,7 @@ describe('resolveWorkflowIdentity', () => {
       dir: saved,
       name: 'saved-audit',
       manifest,
-      source: 'export default async function run() { return "ok"; }',
+      source: 'async function run() { return "ok"; }',
     });
 
     await expect(resolveWorkflowIdentity({

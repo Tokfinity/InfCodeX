@@ -20,6 +20,7 @@ import { pathToFileURL } from 'node:url';
 import {
   createWorkflowCapsule,
   createWorkflowModuleFromCapsule,
+  validateRestrictedWorkflowSource,
   validateWorkflowCapsule,
   validateWorkflowScriptManifest,
   type WorkflowCapsule,
@@ -298,11 +299,19 @@ function deriveRequirements(manifest: WorkflowScriptManifest): WorkflowCapsuleRe
   return { environment: ['git-repo', 'worktree-capable'] };
 }
 
+function assertGeneratedCapsuleSource(manifest: WorkflowScriptManifest, source: string): void {
+  validateRestrictedWorkflowSource(source, {
+    filename: `${manifest.name}.workflow.js`,
+    requireAsyncRun: true,
+  });
+}
+
 export async function saveGeneratedWorkflow(
   input: SaveGeneratedWorkflowInput,
 ): Promise<SavedWorkflowRef> {
   const safeName = safeWorkflowName(input.name);
   const manifest = validateWorkflowScriptManifest(input.manifest);
+  assertGeneratedCapsuleSource(manifest, input.source);
   const requirements = input.requires ?? deriveRequirements(manifest);
   const capsule = createWorkflowCapsule({
     minKodaxVersion: input.minKodaxVersion ?? KODAX_WORKFLOW_CAPSULE_MIN_VERSION,
@@ -359,6 +368,7 @@ export async function renameSavedWorkflow(
     throw new Error(`saved workflow already exists: ${safeName}`);
   }
   const capsule = await loadSavedWorkflowCapsule(ref.path);
+  assertGeneratedCapsuleSource(capsule.manifest, capsule.source);
   const renamed = createWorkflowCapsule({
     minKodaxVersion: capsule.minKodaxVersion,
     manifest: {
@@ -403,6 +413,7 @@ export async function replaceSavedWorkflow(
     ...input.manifest,
     name: safeName,
   });
+  assertGeneratedCapsuleSource(manifest, input.source);
   const requirements = input.requires ?? deriveRequirements(manifest);
   const capsule = createWorkflowCapsule({
     minKodaxVersion: input.minKodaxVersion ?? KODAX_WORKFLOW_CAPSULE_MIN_VERSION,
@@ -467,6 +478,7 @@ async function readCapsuleFromRun(input: LoadGeneratedWorkflowFromRunInput): Pro
   const manifest = validateWorkflowScriptManifest(
     JSON.parse(await readFile(manifestPath, 'utf8')) as unknown,
   );
+  assertGeneratedCapsuleSource(manifest, source);
   const runId = typeof runRaw.runId === 'string' && runRaw.runId.length > 0
     ? runRaw.runId
     : basename(input.runDir);
@@ -641,6 +653,20 @@ export function preflightWorkflowCapsule(
       'error',
       'environment:worktree-capable',
       'workflow may request git worktree isolation',
+    );
+  }
+  try {
+    validateRestrictedWorkflowSource(validated.source, {
+      filename: `${validated.manifest.name}.workflow.js`,
+      requireAsyncRun: true,
+    });
+  } catch (error) {
+    const message = error instanceof Error ? error.message : String(error);
+    addRequirementIssue(
+      issues,
+      'error',
+      'workflow:source',
+      message,
     );
   }
   addMissingItems(issues, 'tools', requirements?.tools, env.availableTools);

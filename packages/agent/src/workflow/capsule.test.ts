@@ -46,6 +46,7 @@ function fakeWorkflowApi(): WorkflowApi {
       status: 'completed',
       finalText: 'done',
     }),
+    snapshot: async () => ({ taskId: 'task-1', name: 'task', status: 'completed' }),
     output: async () => ({ taskId: 'task-1', name: 'task', status: 'completed' }),
     send: async () => {},
     stop: async () => {},

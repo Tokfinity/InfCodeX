@@ -125,7 +125,7 @@ describe('loadSavedWorkflow', () => {
     expect(await mod.run({} as never, {})).toBe('done');
   });
 
-  it('loads .workflow.json through the restricted workflow runner', async () => {
+  it('rejects .workflow.json direct Node access before launch', async () => {
     const file = join(dir, 'generated.workflow.json');
     writeFileSync(
       file,
@@ -144,8 +144,7 @@ describe('loadSavedWorkflow', () => {
       'utf8',
     );
 
-    const mod = await loadSavedWorkflow(file);
-    await expect(mod.run({} as never, {})).rejects.toThrow(/restricted workflow script failed/);
+    await expect(loadSavedWorkflow(file)).rejects.toThrow(/forbidden restricted workflow token: process/);
   });
 
   it('rejects .workflow.json files with an unsupported explicit format', async () => {
@@ -268,6 +267,26 @@ describe('saveGeneratedWorkflow', () => {
     const loaded = await loadGeneratedWorkflowFromRun({ runDir });
     expect(loaded.capsule.provenance?.fromRunId).toBe('run-2');
     expect(await loaded.module.run({} as never, {})).toBe('rerun-ok');
+  });
+
+  it('rejects invalid restricted source when saving generated capsules', async () => {
+    await expect(
+      saveGeneratedWorkflow({
+        dir,
+        name: 'bad-generated-source',
+        manifest,
+        source: 'export default async function run() { return "not restricted source"; }',
+      }),
+    ).rejects.toThrow(/failed to compile|async function run/);
+
+    await expect(
+      saveGeneratedWorkflow({
+        dir,
+        name: 'bad-node-access',
+        manifest,
+        source: 'async function run() { return process.cwd(); }',
+      }),
+    ).rejects.toThrow(/forbidden restricted workflow token: process/);
   });
 
   it('uses bundled KODAX_VERSION for run provenance when npm version env is absent', async () => {
@@ -424,6 +443,26 @@ describe('saveGeneratedWorkflow', () => {
       severity: 'error',
       requirement: 'kodax:min-version',
       message: 'workflow requires KodaX >= 99.0.0, current version is 0.7.49',
+    });
+  });
+
+  it('preflights invalid restricted workflow source before launch', async () => {
+    const capsule = {
+      format: 'kodax.workflow',
+      version: 1,
+      workflowApiVersion: 1,
+      minKodaxVersion: '0.7.49',
+      manifest,
+      source: 'function run() { return "not generated async source"; }',
+    } as const;
+
+    const result = preflightWorkflowCapsule(capsule, { kodaxVersion: '0.7.50' });
+
+    expect(result.ok).toBe(false);
+    expect(result.issues).toContainEqual({
+      severity: 'error',
+      requirement: 'workflow:source',
+      message: 'restricted workflow script must define async function run(wf, args)',
     });
   });
 

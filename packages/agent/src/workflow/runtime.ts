@@ -252,20 +252,29 @@ function buildRuntime(opts: CreateWorkflowRuntimeOptions): InternalRuntime {
   let status: WorkflowRunStatus = 'running';
   const artifacts: WorkflowArtifactRef[] = [];
   const releaseByTask = new Map<string, () => void>();
+  const taskNames = new Map<string, string>();
+  const pendingTaskSummaries = new Map<string, string>();
   const activeTaskIds = new Set<string>();
   const terminalTaskIds = new Set<string>();
   let activeReleaseOperations = 0;
 
   opts.backend.subscribeTaskSummaryUpdates?.((taskId, update) => {
     if (status === 'stopped') return;
+    const name = taskNames.get(taskId);
+    const summary = update.summary
+      ?? (update.summaryKind === 'digest-failed' ? pendingTaskSummaries.get(taskId) : undefined);
     recorder.emit('agent_summary_updated', {
       taskId,
-      ...(update.summary !== undefined
-        ? { summary: boundedTaskEventSummary(update.summary) }
+      ...(name !== undefined ? { name } : {}),
+      ...(summary !== undefined
+        ? { summary: boundedTaskEventSummary(summary) }
         : {}),
       summaryKind: update.summaryKind,
       ...(update.usage !== undefined ? { usage: update.usage } : {}),
     });
+    if (update.summaryKind === 'digest' || update.summaryKind === 'digest-failed') {
+      pendingTaskSummaries.delete(taskId);
+    }
   });
 
   const checkAbort = (): void => {
@@ -320,6 +329,7 @@ function buildRuntime(opts: CreateWorkflowRuntimeOptions): InternalRuntime {
       checkAgentCap();
       handle = await opts.backend.spawn(input);
       totalSpawned += 1;
+      taskNames.set(handle.taskId, handle.name);
       activeTaskIds.add(handle.taskId);
       releaseByTask.set(handle.taskId, () => {
         if (!acquired) return;
@@ -440,6 +450,9 @@ function buildRuntime(opts: CreateWorkflowRuntimeOptions): InternalRuntime {
       const wait = opts.backend.wait(taskId, opts2);
       const result = abortRace ? await Promise.race([wait, abortRace.promise]) : await wait;
       const summary = result.status === 'completed' ? summarizeTaskResult(result) : undefined;
+      if (summary?.kind === 'pending' && summary.text !== undefined) {
+        pendingTaskSummaries.set(result.taskId, summary.text);
+      }
       if (emitTerminalTaskEvent(result.taskId, terminalEventType(result.status), {
         taskId: result.taskId,
         name: result.name,
@@ -496,6 +509,9 @@ function buildRuntime(opts: CreateWorkflowRuntimeOptions): InternalRuntime {
       tokenBudget === null ? Infinity : Math.max(0, tokenBudget - spentOutputTokens),
   };
 
+  const snapshotTask = (taskId: string): Promise<WorkflowTaskSnapshot> =>
+    opts.backend.output(taskId);
+
   const api: WorkflowApi = {
     runId: opts.runId,
     args: opts.args,
@@ -516,7 +532,9 @@ function buildRuntime(opts: CreateWorkflowRuntimeOptions): InternalRuntime {
 
     wait: (taskId, waitOpts) => doWait(taskId, waitOpts),
 
-    output: (taskId): Promise<WorkflowTaskSnapshot> => opts.backend.output(taskId),
+    snapshot: snapshotTask,
+
+    output: snapshotTask,
 
     send: async (taskId, content) => {
       await opts.backend.send(taskId, content);

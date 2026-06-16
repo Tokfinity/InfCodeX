@@ -12,6 +12,7 @@ import type {
 import {
   createRestrictedWorkflowModule,
   runRestrictedWorkflowScript,
+  validateRestrictedWorkflowSource,
   WorkflowScriptExecutionError,
 } from './index.js';
 import { DEFAULT_WORKFLOW_SCRIPT_SYNC_TIMEOUT_MS } from './script-runner.js';
@@ -53,6 +54,7 @@ function fakeWorkflowApi(): { wf: WorkflowApi; prompts: string[]; phases: string
       };
     },
     wait: async (): Promise<WorkflowTaskResult> => notImplemented('wait'),
+    snapshot: async (): Promise<WorkflowTaskSnapshot> => notImplemented('snapshot'),
     output: async (): Promise<WorkflowTaskSnapshot> => notImplemented('output'),
     send: async (): Promise<void> => notImplemented('send'),
     stop: async (): Promise<void> => notImplemented('stop'),
@@ -129,6 +131,29 @@ describe('runRestrictedWorkflowScript', () => {
     expect(prompts).toEqual(['where is the bug?']);
   });
 
+  it('exposes snapshot as the preferred task snapshot alias', async () => {
+    const { wf } = fakeWorkflowApi();
+    const result = await runRestrictedWorkflowScript({
+      wf: {
+        ...wf,
+        snapshot: async (taskId): Promise<WorkflowTaskSnapshot> => ({
+          taskId,
+          name: 'reader',
+          status: 'running',
+          lastText: 'partial',
+        }),
+      },
+      source: `
+        async function run(wf) {
+          const snapshot = await wf.snapshot('task-123');
+          return { status: snapshot.status, lastText: snapshot.lastText };
+        }
+      `,
+    });
+
+    expect(result).toEqual({ status: 'running', lastText: 'partial' });
+  });
+
   it('denies direct Node process, require, and dynamic import access', async () => {
     const { wf } = fakeWorkflowApi();
     await expect(
@@ -151,6 +176,21 @@ describe('runRestrictedWorkflowScript', () => {
         source: 'async function run() { return await import("node:fs"); }',
       }),
     ).rejects.toBeInstanceOf(WorkflowScriptExecutionError);
+  });
+
+  it('wraps compile failures as workflow script execution errors', async () => {
+    const { wf } = fakeWorkflowApi();
+    await expect(
+      runRestrictedWorkflowScript({
+        wf,
+        source: [
+          'async function run() {',
+          '  return "line one',
+          'line two";',
+          '}',
+        ].join('\n'),
+      }),
+    ).rejects.toThrow(/restricted workflow script failed to compile/);
   });
 
   it('does not expose host objects through constructor-chain escapes', async () => {
@@ -454,6 +494,23 @@ describe('runRestrictedWorkflowScript', () => {
 });
 
 describe('createRestrictedWorkflowModule', () => {
+  it('validates generated source before returning a runnable module', () => {
+    expect(() =>
+      createRestrictedWorkflowModule({
+        manifest: {
+          name: 'bad-generated-demo',
+          description: 'demo',
+          phases: ['run'],
+          readOnly: true,
+          maxAgents: 1,
+          maxConcurrency: 1,
+          patterns: ['fan-out-and-synthesize'],
+        },
+        source: 'function run() { return "not the generated async contract"; }',
+      }),
+    ).toThrow(/async function run/);
+  });
+
   it('turns a manifest + generated source into a WorkflowModule', async () => {
     const { wf } = fakeWorkflowApi();
     const module = createRestrictedWorkflowModule({
@@ -476,5 +533,44 @@ describe('createRestrictedWorkflowModule', () => {
       maxConcurrency: 1,
     });
     expect(await module.run(wf, {})).toBe('ok');
+  });
+});
+
+describe('validateRestrictedWorkflowSource', () => {
+  it('validates the wrapped restricted workflow source', () => {
+    expect(() =>
+      validateRestrictedWorkflowSource('async function run() { return "ok"; }', {
+        requireAsyncRun: true,
+      }),
+    ).not.toThrow();
+
+    expect(() =>
+      validateRestrictedWorkflowSource('async function run() { return "unterminated; }', {
+        requireAsyncRun: true,
+      }),
+    ).toThrow(/failed to compile/);
+  });
+
+  it('ignores forbidden words inside strings while rejecting real host access', () => {
+    expect(() =>
+      validateRestrictedWorkflowSource(
+        [
+          'async function run(wf) {',
+          '  return await wf.runAgent({',
+          '    name: "reader",',
+          '    prompt: "Review Workflow Process Events and output rendering.",',
+          '    readOnly: true',
+          '  });',
+          '}',
+        ].join('\n'),
+        { requireAsyncRun: true },
+      ),
+    ).not.toThrow();
+
+    expect(() =>
+      validateRestrictedWorkflowSource('async function run() { return process.cwd(); }', {
+        requireAsyncRun: true,
+      }),
+    ).toThrow(/forbidden restricted workflow token: process/);
   });
 });

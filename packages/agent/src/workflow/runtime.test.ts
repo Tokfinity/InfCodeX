@@ -272,8 +272,56 @@ describe('runWorkflow — event envelope + ordering', () => {
       type: 'agent_summary_updated',
       data: {
         taskId: 'task-async',
+        name: 'async-child',
         summary: '- Finding: async digest arrived.',
         summaryKind: 'digest',
+      },
+    });
+  });
+
+  it('keeps a fallback summary when an async digest attempt fails', async () => {
+    let summaryListener:
+      | ((taskId: string, update: { readonly summaryKind: 'digest-failed' }) => void)
+      | undefined;
+    const events: WorkflowEvent[] = [];
+    const backend: WorkflowAgentBackend = {
+      spawn: async (input: WorkflowSpawnAgentInput) => ({ taskId: 'task-digest-failed', name: input.name }),
+      wait: async (taskId: string): Promise<WorkflowTaskResult> => ({
+        taskId,
+        name: 'digest-failed-child',
+        status: 'completed',
+        finalText: 'Fallback report with evidence while digest is unavailable.',
+        digestPending: true,
+      }),
+      output: async (taskId: string) => ({ taskId, name: 'digest-failed-child', status: 'running' }),
+      send: async () => {},
+      stop: async () => {},
+      subscribeTaskSummaryUpdates: (listener) => {
+        summaryListener = listener;
+        return () => {
+          summaryListener = undefined;
+        };
+      },
+    };
+
+    const outcome = await runWorkflow(
+      baseOpts(backend, { onEvent: (event: WorkflowEvent) => events.push(event) }),
+      async (wf) => {
+        await wf.runAgent({ name: 'digest-failed-child', prompt: 'x' });
+        return 'ok';
+      },
+    );
+
+    expect(outcome.ok).toBe(true);
+    summaryListener?.('task-digest-failed', { summaryKind: 'digest-failed' });
+
+    expect(events.at(-1)).toMatchObject({
+      type: 'agent_summary_updated',
+      data: {
+        taskId: 'task-digest-failed',
+        name: 'digest-failed-child',
+        summary: 'Fallback report with evidence while digest is unavailable.',
+        summaryKind: 'digest-failed',
       },
     });
   });

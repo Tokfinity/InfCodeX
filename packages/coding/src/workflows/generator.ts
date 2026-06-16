@@ -9,10 +9,16 @@
 
 import {
   createRestrictedWorkflowModule,
+  runRestrictedWorkflowScript,
+  validateRestrictedWorkflowSource,
   validateWorkflowScriptManifest,
   WORKFLOW_PATTERN_IDS,
+  type WorkflowApi,
   type WorkflowModule,
   type WorkflowScriptManifest,
+  type WorkflowTaskHandle,
+  type WorkflowTaskResult,
+  type WorkflowTaskSnapshot,
 } from '@kodax-ai/agent';
 import { resolveProvider, sideQuery } from '@kodax-ai/llm';
 import type { KodaXMessage } from '@kodax-ai/llm';
@@ -35,6 +41,8 @@ export const WORKFLOW_GENERATION_SYSTEM_PROMPT = [
 export const DEFAULT_WORKFLOW_GENERATION_TIMEOUT_MS = 120_000;
 const WORKFLOW_GENERATION_TIMEOUT_ENV = 'KODAX_WORKFLOW_GENERATION_TIMEOUT_MS';
 const GENERATED_WORKFLOW_MAX_AGENTS_HARD_CAP = 64;
+const WORKFLOW_GENERATION_REPAIR_ATTEMPTS = 2;
+const GENERATED_WORKFLOW_SMOKE_TIMEOUT_MS = 2_000;
 
 export interface WorkflowGenerationTextRequest {
   readonly system: string;
@@ -78,13 +86,13 @@ const FORBIDDEN_SOURCE_PATTERNS: readonly {
 }[] = [
   { id: 'import', pattern: /\bimport\s*(?:\(|['"*{]|\w+\s+from\b)/ },
   { id: 'require', pattern: /\brequire\s*\(/ },
-  { id: 'process', pattern: /\bprocess\b/ },
+  { id: 'process', pattern: /\bprocess\s*(?:\.|\[)/ },
   { id: 'fs', pattern: /\b(?:node:)?fs\b/ },
   { id: 'child_process', pattern: /\bchild_process\b/ },
   { id: 'shell', pattern: /\b(?:exec|spawn|execFile)\s*\(/ },
   { id: 'fetch', pattern: /\bfetch\s*\(/ },
-  { id: 'Deno', pattern: /\bDeno\b/ },
-  { id: 'Bun', pattern: /\bBun\b/ },
+  { id: 'Deno', pattern: /\bDeno\s*(?:\.|\[)/ },
+  { id: 'Bun', pattern: /\bBun\s*(?:\.|\[)/ },
 ];
 
 export function resolveWorkflowGenerationTimeoutMs(
@@ -452,6 +460,91 @@ function hasDisplayableRunReturn(source: string): boolean {
   return isDisplayableReturnExpression(source, expression);
 }
 
+function assertGeneratedWorkflowSyntax(source: string): void {
+  try {
+    validateRestrictedWorkflowSource(source, {
+      filename: 'generated-workflow.js',
+      requireAsyncRun: true,
+      checkSourcePolicy: false,
+    });
+  } catch (error) {
+    const message = error instanceof Error ? error.message : String(error);
+    throw new Error(`workflow generation source has invalid JavaScript syntax: ${message}`);
+  }
+}
+
+function createSmokeWorkflowApi(): WorkflowApi {
+  let nextTask = 0;
+  const names = new Map<string, string>();
+  const nextHandle = (name: string): WorkflowTaskHandle => {
+    nextTask += 1;
+    const taskId = `smoke-${nextTask}`;
+    names.set(taskId, name);
+    return { taskId, name };
+  };
+  const resultFor = (taskId: string, fallbackName?: string): WorkflowTaskResult => {
+    const name = names.get(taskId) ?? fallbackName ?? taskId;
+    return {
+      taskId,
+      name,
+      status: 'completed',
+      finalText: `Smoke result for ${name}: completed, done, verified.`,
+    };
+  };
+  return {
+    runId: 'run-smoke',
+    args: undefined,
+    budget: {
+      total: null,
+      spent: () => 0,
+      remaining: () => Infinity,
+    },
+    phase: async (_name, fn) => fn(),
+    spawnAgent: async (input) => nextHandle(input.name),
+    runAgent: async (input) => {
+      const handle = nextHandle(input.name);
+      return resultFor(handle.taskId, input.name);
+    },
+    wait: async (taskId) => resultFor(taskId),
+    snapshot: async (taskId): Promise<WorkflowTaskSnapshot> => ({
+      taskId,
+      name: names.get(taskId) ?? taskId,
+      status: 'completed',
+      lastText: `Smoke snapshot for ${names.get(taskId) ?? taskId}`,
+    }),
+    output: async (taskId): Promise<WorkflowTaskSnapshot> => ({
+      taskId,
+      name: names.get(taskId) ?? taskId,
+      status: 'completed',
+      lastText: `Smoke snapshot for ${names.get(taskId) ?? taskId}`,
+    }),
+    send: async () => undefined,
+    stop: async () => undefined,
+    parallel: async (items) => Promise.all(items.map((item) => item())),
+    synthesize: async () => ({ text: 'Smoke synthesis: completed, done, verified.' }),
+    artifact: async (name) => ({ name }),
+    log: () => undefined,
+  };
+}
+
+async function assertGeneratedWorkflowSmoke(input: {
+  readonly source: string;
+  readonly request: string;
+}): Promise<void> {
+  try {
+    await runRestrictedWorkflowScript({
+      source: input.source,
+      wf: createSmokeWorkflowApi(),
+      args: { request: input.request },
+      filename: 'generated-workflow-smoke.js',
+      timeoutMs: GENERATED_WORKFLOW_SMOKE_TIMEOUT_MS,
+    });
+  } catch (error) {
+    const message = error instanceof Error ? error.message : String(error);
+    throw new Error(`workflow generation source failed safe smoke validation: ${message}`);
+  }
+}
+
 export function validateGeneratedWorkflowSource(source: string): string {
   if (source.trim().length === 0) {
     throw new Error('workflow generation source must be non-empty');
@@ -459,15 +552,20 @@ export function validateGeneratedWorkflowSource(source: string): string {
   if (!/\basync\s+function\s+run\s*\(/.test(source)) {
     throw new Error('workflow generation source must define async function run(wf, args)');
   }
+  assertGeneratedWorkflowSyntax(source);
+  const strippedSource = stripGeneratedSourceLiterals(source);
   for (const forbidden of FORBIDDEN_SOURCE_PATTERNS) {
-    if (forbidden.pattern.test(source)) {
+    if (forbidden.pattern.test(strippedSource)) {
       throw new Error(`forbidden generated workflow token: ${forbidden.id}`);
     }
   }
-  if (/\.\s*output\b/.test(source)) {
+  if (/\.\s*output\b/.test(strippedSource)) {
+    if (/\bwf\s*\.\s*output\s*\(/.test(strippedSource)) {
+      throw new Error('workflow generation source must use wf.snapshot(taskId) instead of legacy wf.output(taskId)');
+    }
     throw new Error('workflow generation source must use finalText/text instead of non-existent .output');
   }
-  for (const line of source.split(/\r?\n/)) {
+  for (const line of strippedSource.split(/\r?\n/)) {
     const artifactCall = line.search(/\bwf\.artifact\s*\(/);
     if (artifactCall >= 0 && !/\b(?:await|return)\b/.test(line.slice(0, artifactCall))) {
       throw new Error('workflow generation source must await wf.artifact(...)');
@@ -494,17 +592,29 @@ export function buildWorkflowGenerationUserPrompt(request: string): string {
     '- wf.phase(name, async () => ...)',
     '- wf.spawnAgent({ name, prompt, readOnly, modelHint, isolation, evidenceRefs })',
     '- wf.runAgent({ name, prompt, readOnly, modelHint, isolation, evidenceRefs })',
-    '- wf.wait(taskId), wf.output(taskId), wf.send(taskId, content), wf.stop(taskId, reason)',
+    '- wf.wait(taskId), wf.snapshot(taskId), wf.send(taskId, content), wf.stop(taskId, reason)',
     '- wf.parallel([() => promise], { concurrency })',
     '- wf.synthesize({ inputs, rubric }); inputs may be an array of materials, one already-formatted string, or a named object of materials',
     '- wf.artifact(name, value), wf.log({ message, data })',
-    '- Return shapes: wf.runAgent/wf.wait return { taskId, name, status, finalText, usage }; wf.synthesize returns { text }; wf.artifact returns { name, path? }. Never use a non-existent .output field.',
+    '- Return shapes: wf.runAgent/wf.wait return { taskId, name, status, finalText, usage }; wf.snapshot returns { taskId, name, status, lastText? }; wf.synthesize returns { text }; wf.artifact returns { name, path? }.',
+    '- Important naming trap: never use anyVariable.output in generated source. Agent results use finalText; synthesis results use text; task snapshots use lastText.',
     '- Always await asynchronous workflow calls, especially wf.artifact(...), before returning.',
     '- For fan-out, prefer wf.parallel with thunks that call wf.runAgent; if using wf.spawnAgent, always wait or stop each handle so maxConcurrency capacity can release.',
     '- Keep intermediate findings in local variables and pass their finalText/text values forward; artifacts are durable outputs, not mutable args.',
     '- The outer run function must return displayable final text, preferably { synthesis: finalText }. Returning only inside a wf.phase callback is invalid. Artifact-only or empty returns are invalid.',
     '- Also await wf.artifact("final-report", { summary/report/text: finalText }) for durable inspection when a final report is produced.',
+    '- For multi-line prompts, rubrics, or report templates inside source, use JavaScript template literals (`...`) or arrays joined with "\\n"; never place raw newlines inside single-quoted or double-quoted strings.',
     '- Do not ask child agents to emit special transcript marker blocks. KodaX derives child-agent transcript digests after each child finishes; child prompts should focus on the actual work product and final report.',
+    '',
+    'Canonical source field-usage pattern to follow; adapt agent count, names, phases, and prompts to the task:',
+    'async function run(wf, args) {',
+    '  const first = await wf.runAgent({ name: "first-pass", prompt: String(args.request || ""), readOnly: true });',
+    '  const second = await wf.runAgent({ name: "second-pass", prompt: first.finalText, readOnly: true });',
+    '  const synthesis = await wf.synthesize({ inputs: [first.finalText, second.finalText], rubric: "Synthesize a final answer." });',
+    '  const finalText = synthesis.text;',
+    '  await wf.artifact("final-report", { report: finalText });',
+    '  return { synthesis: finalText };',
+    '}',
     '',
     `Supported pattern ids: ${WORKFLOW_PATTERN_IDS.join(', ')}`,
     '',
@@ -528,12 +638,35 @@ function buildWorkflowGenerationRepairPrompt(input: {
   readonly request: string;
   readonly previousOutput: string;
   readonly error: string;
+  readonly attempt: number;
+  readonly maxAttempts: number;
 }): string {
+  const commonFixes = [
+    '- Replace result.output from wf.runAgent(...) or wf.wait(...) with result.finalText.',
+    '- Replace result.output from wf.synthesize(...) with result.text.',
+    '- Keep the outer run() return displayable, such as { synthesis: finalText }.',
+    '- Fix generated JavaScript harness errors, including ReferenceError, wrong wf.* argument shapes, and multi-line prompts/rubrics that need template literals or "\\n".',
+  ];
+  if (
+    /\bwf\s*\.\s*output\s*\(/.test(input.previousOutput) ||
+    input.error.includes('wf.snapshot(taskId)')
+  ) {
+    commonFixes.splice(
+      2,
+      0,
+      '- Replace wf.output(taskId) with wf.snapshot(taskId) for in-flight task snapshots.',
+    );
+  }
+
   return [
     buildWorkflowGenerationUserPrompt(input.request),
     '',
     'Your previous output failed KodaX workflow validation.',
+    `Repair attempt: ${input.attempt} of ${input.maxAttempts}.`,
     `Validation error: ${input.error}`,
+    '',
+    'Common contract fixes:',
+    ...commonFixes,
     '',
     'Previous output:',
     input.previousOutput,
@@ -615,26 +748,42 @@ export async function generateWorkflow(
     return { kind: 'declined', reason: 'Workflow request is empty.', rawText: '' };
   }
 
-  const rawText = await input.generateText({
-    system: WORKFLOW_GENERATION_SYSTEM_PROMPT,
-    prompt: buildWorkflowGenerationUserPrompt(request),
-    ...(input.signal ? { signal: input.signal } : {}),
-  });
-  try {
-    return parseWorkflowGeneration(rawText, { request });
-  } catch (error) {
-    const message = error instanceof Error ? error.message : String(error);
-    const repairedText = await input.generateText({
+  const maxAttempts = WORKFLOW_GENERATION_REPAIR_ATTEMPTS + 1;
+  let prompt = buildWorkflowGenerationUserPrompt(request);
+  let lastError = '';
+
+  for (let attempt = 1; attempt <= maxAttempts; attempt += 1) {
+    const rawText = await input.generateText({
       system: WORKFLOW_GENERATION_SYSTEM_PROMPT,
-      prompt: buildWorkflowGenerationRepairPrompt({
-        request,
-        previousOutput: rawText,
-        error: message,
-      }),
+      prompt,
       ...(input.signal ? { signal: input.signal } : {}),
     });
-    return parseWorkflowGeneration(repairedText, { request });
+
+    try {
+      const parsed = parseWorkflowGeneration(rawText, { request });
+      if (parsed.kind === 'generated') {
+        await assertGeneratedWorkflowSmoke({
+          source: parsed.source,
+          request,
+        });
+      }
+      return parsed;
+    } catch (error) {
+      lastError = error instanceof Error ? error.message : String(error);
+      if (attempt >= maxAttempts) break;
+      prompt = buildWorkflowGenerationRepairPrompt({
+        request,
+        previousOutput: rawText,
+        error: lastError,
+        attempt: attempt + 1,
+        maxAttempts,
+      });
+    }
   }
+
+  throw new Error(
+    `workflow generation did not produce a valid workflow after ${maxAttempts} attempts. Last validation error: ${lastError}`,
+  );
 }
 
 export async function generateWorkflowFromOptions(

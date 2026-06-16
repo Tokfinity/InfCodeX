@@ -152,6 +152,9 @@ export interface WorkflowApi {
   /** Await a spawned agent's terminal result. */
   wait(taskId: string, opts?: WorkflowWaitOptions): Promise<WorkflowTaskResult>;
   /** Snapshot a (possibly running) agent. */
+  snapshot(taskId: string): Promise<WorkflowTaskSnapshot>;
+  /** Snapshot a (possibly running) agent.
+   *  @deprecated Prefer `snapshot(taskId)`; `output` is kept as a compatibility alias. */
   output(taskId: string): Promise<WorkflowTaskSnapshot>;
   /** Send a message to a running agent (via MessageQueue routing). */
   send(taskId: string, content: string): Promise<void>;

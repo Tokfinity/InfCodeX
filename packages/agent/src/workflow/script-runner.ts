@@ -38,7 +38,28 @@ export interface RestrictedWorkflowModuleInput {
   readonly timeoutMs?: number;
 }
 
+export interface ValidateRestrictedWorkflowSourceOptions {
+  readonly filename?: string;
+  readonly requireAsyncRun?: boolean;
+  readonly checkSourcePolicy?: boolean;
+}
+
 export const DEFAULT_WORKFLOW_SCRIPT_SYNC_TIMEOUT_MS = 10_000;
+
+const FORBIDDEN_RESTRICTED_SOURCE_PATTERNS: readonly {
+  readonly id: string;
+  readonly pattern: RegExp;
+}[] = [
+  { id: 'import', pattern: /\bimport\s*(?:\(|['"*{]|\w+\s+from\b)/ },
+  { id: 'require', pattern: /\brequire\s*\(/ },
+  { id: 'process', pattern: /\bprocess\s*(?:\.|\[)/ },
+  { id: 'fs', pattern: /\b(?:node:)?fs\b/ },
+  { id: 'child_process', pattern: /\bchild_process\b/ },
+  { id: 'shell', pattern: /\b(?:exec|spawn|execFile)\s*\(/ },
+  { id: 'fetch', pattern: /\bfetch\s*\(/ },
+  { id: 'Deno', pattern: /\bDeno\s*(?:\.|\[)/ },
+  { id: 'Bun', pattern: /\bBun\s*(?:\.|\[)/ },
+];
 
 function wrapSource(source: string): string {
   return [
@@ -59,6 +80,7 @@ type WorkflowRpcMethod =
   | 'phaseExit'
   | 'runAgent'
   | 'send'
+  | 'snapshot'
   | 'spawnAgent'
   | 'stop'
   | 'synthesize'
@@ -229,6 +251,95 @@ function errorMessage(error: unknown): string {
   return error instanceof Error ? error.message : String(error);
 }
 
+function stripRestrictedSourceLiterals(source: string): string {
+  let stripped = '';
+  let i = 0;
+  while (i < source.length) {
+    const ch = source[i];
+    const next = source[i + 1];
+    if (ch === '/' && next === '/') {
+      stripped += '  ';
+      i += 2;
+      while (i < source.length && source[i] !== '\n') {
+        stripped += ' ';
+        i += 1;
+      }
+      continue;
+    }
+    if (ch === '/' && next === '*') {
+      stripped += '  ';
+      i += 2;
+      while (i < source.length) {
+        if (source[i] === '*' && source[i + 1] === '/') {
+          stripped += '  ';
+          i += 2;
+          break;
+        }
+        stripped += source[i] === '\n' ? '\n' : ' ';
+        i += 1;
+      }
+      continue;
+    }
+    if (ch === '"' || ch === "'" || ch === '`') {
+      const quote = ch;
+      stripped += ' ';
+      i += 1;
+      while (i < source.length) {
+        const current = source[i];
+        stripped += current === '\n' ? '\n' : ' ';
+        i += 1;
+        if (current === '\\') {
+          if (i < source.length) {
+            stripped += source[i] === '\n' ? '\n' : ' ';
+            i += 1;
+          }
+          continue;
+        }
+        if (current === quote) break;
+      }
+      continue;
+    }
+    stripped += ch ?? '';
+    i += 1;
+  }
+  return stripped;
+}
+
+function assertRestrictedWorkflowSourcePolicy(source: string): void {
+  const stripped = stripRestrictedSourceLiterals(source);
+  for (const forbidden of FORBIDDEN_RESTRICTED_SOURCE_PATTERNS) {
+    if (forbidden.pattern.test(stripped)) {
+      throw new WorkflowScriptExecutionError(`forbidden restricted workflow token: ${forbidden.id}`);
+    }
+  }
+}
+
+export function validateRestrictedWorkflowSource(
+  source: string,
+  options: ValidateRestrictedWorkflowSourceOptions = {},
+): void {
+  if (source.trim().length === 0) {
+    throw new WorkflowScriptExecutionError('restricted workflow script source must be non-empty');
+  }
+  if (options.requireAsyncRun === true && !/\basync\s+function\s+run\s*\(/.test(source)) {
+    throw new WorkflowScriptExecutionError(
+      'restricted workflow script must define async function run(wf, args)',
+    );
+  }
+  try {
+    new Script(wrapSource(source), {
+      filename: options.filename ?? 'generated-workflow.js',
+    });
+  } catch (error) {
+    throw new WorkflowScriptExecutionError(
+      `restricted workflow script failed to compile: ${errorMessage(error)}`,
+    );
+  }
+  if (options.checkSourcePolicy !== false) {
+    assertRestrictedWorkflowSourcePolicy(source);
+  }
+}
+
 function buildBootstrap(opts: RunRestrictedWorkflowScriptOptions): string {
   const argsJson =
     opts.args === undefined ? 'undefined' : JSON.stringify(jsonStringify(opts.args, 'workflow args'));
@@ -369,6 +480,7 @@ const wf = Object.freeze({
   spawnAgent: (input) => __kodaxEnqueue("spawnAgent", __kodaxRecord(input, "spawnAgent input")),
   runAgent: (input) => __kodaxEnqueue("runAgent", __kodaxRecord(input, "runAgent input")),
   wait: (taskId, opts) => __kodaxEnqueue("wait", { taskId: __kodaxNonEmptyString(taskId, "taskId"), opts }),
+  snapshot: (taskId) => __kodaxEnqueue("snapshot", { taskId: __kodaxNonEmptyString(taskId, "taskId") }),
   output: (taskId) => __kodaxEnqueue("output", { taskId: __kodaxNonEmptyString(taskId, "taskId") }),
   send: (taskId, content) => __kodaxEnqueue("send", {
     taskId: __kodaxNonEmptyString(taskId, "taskId"),
@@ -445,7 +557,11 @@ async function handleCommand(
       return undefined;
     case 'output': {
       const record = readRecord(input, 'workflow output input');
-      return wf.output(readString(record, 'taskId')) satisfies Promise<WorkflowTaskSnapshot>;
+      return wf.snapshot(readString(record, 'taskId')) satisfies Promise<WorkflowTaskSnapshot>;
+    }
+    case 'snapshot': {
+      const record = readRecord(input, 'workflow snapshot input');
+      return wf.snapshot(readString(record, 'taskId')) satisfies Promise<WorkflowTaskSnapshot>;
     }
     case 'phaseEnter': {
       const record = readRecord(input, 'workflow phase input');
@@ -537,17 +653,17 @@ export async function runRestrictedWorkflowScript(
   const syncTimeoutMs = wallTimeoutMs === undefined
     ? DEFAULT_WORKFLOW_SCRIPT_SYNC_TIMEOUT_MS
     : Math.min(wallTimeoutMs, DEFAULT_WORKFLOW_SCRIPT_SYNC_TIMEOUT_MS);
-  const context = createContext({});
-  new Script(buildBootstrap(opts), { filename: 'workflow-capability-bootstrap.js' }).runInContext(context);
-  const script = new Script(wrapSource(opts.source), {
-    filename: opts.filename ?? 'generated-workflow.js',
-  });
-
   let settled = false;
   let result: unknown;
   let failure: unknown;
   let hostState: WorkflowRpcHostState | undefined;
   try {
+    validateRestrictedWorkflowSource(opts.source, { filename: opts.filename });
+    const context = createContext({});
+    new Script(buildBootstrap(opts), { filename: 'workflow-capability-bootstrap.js' }).runInContext(context);
+    const script = new Script(wrapSource(opts.source), {
+      filename: opts.filename ?? 'generated-workflow.js',
+    });
     const scriptResult = script.runInContext(context, { timeout: syncTimeoutMs }) as unknown;
     void Promise.resolve(scriptResult).then(
       (value) => {
@@ -629,6 +745,10 @@ export function createRestrictedWorkflowModule(
   input: RestrictedWorkflowModuleInput,
 ): WorkflowModule {
   const manifest = validateWorkflowScriptManifest(input.manifest);
+  validateRestrictedWorkflowSource(input.source, {
+    filename: `${manifest.name}.workflow.js`,
+    requireAsyncRun: true,
+  });
   return {
     meta: {
       name: manifest.name,
