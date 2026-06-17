@@ -126,6 +126,44 @@ describe('openai message serialization', () => {
     expect(second?.max_completion_tokens).toBe(1024);
   });
 
+  it('retries judge streams without forced tool choice when a compat gateway masks it as 500', async () => {
+    async function* streamChunks() {
+      yield {
+        choices: [{ delta: {}, finish_reason: 'stop' }],
+        usage: { prompt_tokens: 1, completion_tokens: 1, total_tokens: 2 },
+      };
+    }
+    const create = vi.fn()
+      .mockRejectedValueOnce(Object.assign(new Error('Internal Server Error'), { status: 500 }))
+      .mockResolvedValueOnce(streamChunks());
+    const provider = new TestOpenAIProvider({
+      chat: {
+        completions: { create },
+      },
+    });
+
+    await provider.stream(
+      [{ role: 'user', content: 'judge this' }],
+      [REPORT_TOOL],
+      'judge system',
+      false,
+      {
+        forcedToolName: 'emit_verdict',
+        maxOutputTokensOverride: 1024,
+      },
+    );
+
+    const first = create.mock.calls[0]?.[0];
+    const second = create.mock.calls[1]?.[0];
+    expect(first?.tool_choice).toEqual({
+      type: 'function',
+      function: { name: 'emit_verdict' },
+    });
+    expect(second?.tool_choice).toBeUndefined();
+    expect(second?.tools).toHaveLength(1);
+    expect(second?.max_completion_tokens).toBe(1024);
+  });
+
   it('retries judge complete() without forced tool choice when an upstream rejects tool_choice (single-capability)', async () => {
     // Regression for the complete() path: reasoning off → attempts === ['none']
     // (one capability). A flat for+continue skipped to a non-existent next

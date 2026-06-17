@@ -51,6 +51,10 @@ class TestProvider extends KodaXBaseProvider {
     return this.shouldFallbackForReasoningError(error, ...terms);
   }
 
+  exposeShouldFallbackForForcedToolChoiceError(error: unknown): boolean {
+    return this.shouldFallbackForForcedToolChoiceError(error);
+  }
+
   exposeReasoningFallbackChain(capability: KodaXReasoningCapability): KodaXReasoningCapability[] {
     return this.getReasoningFallbackChain(capability);
   }
@@ -99,6 +103,25 @@ describe('KodaXBaseProvider', () => {
       provider.exposeShouldFallbackForReasoningError(
         new Error('network disconnected'),
         'reasoning_effort',
+      ),
+    ).toBe(false);
+  });
+
+  it('treats generic upstream 5xx as forced tool_choice fallback candidates', () => {
+    const provider = new TestProvider();
+    expect(
+      provider.exposeShouldFallbackForForcedToolChoiceError(
+        Object.assign(new Error('Internal Server Error'), { status: 500 }),
+      ),
+    ).toBe(true);
+    expect(
+      provider.exposeShouldFallbackForForcedToolChoiceError(
+        new Error('unsupported parameter: tool_choice'),
+      ),
+    ).toBe(true);
+    expect(
+      provider.exposeShouldFallbackForForcedToolChoiceError(
+        new Error('network disconnected'),
       ),
     ).toBe(false);
   });

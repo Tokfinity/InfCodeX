@@ -68,6 +68,27 @@ function waitForRetryDelay(delayMs: number, signal?: AbortSignal): Promise<void>
   });
 }
 
+function normalizeHttpStatus(value: unknown): number | undefined {
+  if (typeof value === 'number' && Number.isInteger(value)) {
+    return value;
+  }
+  if (typeof value === 'string' && /^\d{3}$/.test(value)) {
+    return Number(value);
+  }
+  return undefined;
+}
+
+function extractHttpStatus(error: unknown): number | undefined {
+  if (!error || typeof error !== 'object') {
+    return undefined;
+  }
+  const record = error as Record<string, unknown>;
+  return normalizeHttpStatus(record.status)
+    ?? normalizeHttpStatus(record.statusCode)
+    ?? normalizeHttpStatus(record.code)
+    ?? extractHttpStatus(record.cause);
+}
+
 /**
  * FEATURE_130 (v0.7.36): structured payload fired through
  * `KodaXEvents.onRetryAfter` whenever a provider's `withRateLimit`
@@ -364,15 +385,24 @@ export abstract class KodaXBaseProvider {
       message.includes('tool_choice') ||
       message.includes('tool choice') ||
       message.includes('toolchoice');
-
-    if (!mentionsToolChoice) {
-      return false;
-    }
-
-    return (
+    const explicitToolChoiceRejection = mentionsToolChoice && (
       message.includes('unknown parameter') ||
       message.includes('invalid parameter') ||
       message.includes('unsupported')
+    );
+    if (explicitToolChoiceRejection) {
+      return true;
+    }
+
+    const status = extractHttpStatus(error);
+    if (status !== undefined && status >= 500 && status <= 599) {
+      return true;
+    }
+
+    return (
+      message.includes('internal server error') ||
+      message.includes('server error') ||
+      /\b5\d\d\b/.test(message)
     );
   }
 
