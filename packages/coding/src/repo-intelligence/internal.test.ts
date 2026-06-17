@@ -77,6 +77,22 @@ describe('writeJsonFileAtomic', () => {
     expect(tempFiles(await readdir(dir))).toEqual([]);
   });
 
+  it('uses distinct temp files for same-millisecond concurrent writes', async () => {
+    const target = path.join(dir, 'changed-scope.json');
+    const nowSpy = vi.spyOn(Date, 'now').mockReturnValue(1_700_000_000_000);
+    try {
+      await Promise.all([
+        writeJsonFileAtomic(target, { a: 1 }),
+        writeJsonFileAtomic(target, { a: 2 }),
+      ]);
+
+      expect([{ a: 1 }, { a: 2 }]).toContainEqual(JSON.parse(await readFile(target, 'utf8')));
+      expect(tempFiles(await readdir(dir))).toEqual([]);
+    } finally {
+      nowSpy.mockRestore();
+    }
+  });
+
   it('removes its own temp file when rename fails (no orphan accumulation)', async () => {
     // Making the target a directory forces rename() to fail, simulating the
     // Windows EPERM-on-locked-target / interrupted-write failure mode that

@@ -52,10 +52,19 @@ export function resolveRepoIntelligenceStorageDir(
 // concurrent writer's in-flight temp, whose mtime is always near-now.
 const STALE_TEMP_FILE_MS = 60 * 60 * 1000;
 
-// Matches only the `<pid>.<epoch-ms>.tmp` suffix this module produces, so the
-// sweep never deletes an unrelated sibling that merely shares the base name
-// and a `.tmp` extension (e.g. a hypothetical `<base>.backup.tmp`).
-const OWN_TEMP_SUFFIX = /^\d+\.\d+\.tmp$/;
+// Matches only the temp suffixes this module produces, so the sweep never
+// deletes an unrelated sibling that merely shares the base name and a `.tmp`
+// extension (e.g. a hypothetical `<base>.backup.tmp`). The two-part form keeps
+// compatibility with stale temps produced before the per-process sequence was
+// added.
+const OWN_TEMP_SUFFIX = /^\d+\.\d+(?:\.\d+)?\.tmp$/;
+
+let atomicWriteSequence = 0;
+
+function nextAtomicTempPath(filePath: string): string {
+  atomicWriteSequence = (atomicWriteSequence + 1) % Number.MAX_SAFE_INTEGER;
+  return `${filePath}.${process.pid}.${Date.now()}.${atomicWriteSequence}.tmp`;
+}
 
 // Windows transiently fails `rename` with these codes when the target (or the
 // temp source) is momentarily locked by AV / the search indexer / a concurrent
@@ -88,7 +97,7 @@ export async function writeJsonFileAtomic(
 ): Promise<void> {
   const directory = path.dirname(filePath);
   await fs.mkdir(directory, { recursive: true });
-  const tempPath = `${filePath}.${process.pid}.${Date.now()}.tmp`;
+  const tempPath = nextAtomicTempPath(filePath);
   try {
     await fs.writeFile(tempPath, `${JSON.stringify(value, null, 2)}\n`, 'utf8');
     await renameWithRetry(tempPath, filePath);
