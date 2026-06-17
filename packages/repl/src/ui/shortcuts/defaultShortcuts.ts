@@ -9,7 +9,7 @@ export const DEFAULT_SHORTCUTS: ShortcutDefinition[] = [
     id: 'interrupt',
     name: 'Interrupt',
     description: 'Interrupt the current streaming response',
-    defaultBindings: [{ key: 'c', ctrl: true }, { key: 'escape' }],
+    defaultBindings: [{ key: 'c', ctrl: true }],
     context: 'global',
     priority: 200,
     category: 'global',

@@ -19,7 +19,7 @@
  */
 
 export const SLASH_MID_TASK_GUARD_MESSAGE =
-  'Slash commands cannot be queued mid-task. Press Esc to abort the current task, then run the command.';
+  'Slash commands cannot be queued mid-task. Press Esc twice or Ctrl+C to abort the current task, then run the command.';
 
 /** Dedupe key — kept distinct from `'queue-limit'` so the two messages
  *  don't suppress each other within the notice dedupe window. */

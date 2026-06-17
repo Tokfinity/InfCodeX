@@ -160,12 +160,11 @@ export function shouldDeferInterruptToTranscriptSelectionCopy(
 /**
  * FEATURE_111 absorbed soft-pause UX (v0.7.36 FEATURE_115 Phase 1D).
  *
- * The "single ESC during a run while the input is empty and no pending
- * input is queued" path interrupts immediately. This supersedes the older
- * double-ESC requirement, which was unreliable in some terminals because
- * fast ESC presses can be coalesced into escape-sequence parsing.
+ * Empty-prompt interrupts require Ctrl+C or a double ESC. Some terminals
+ * coalesce fast ESC presses into one meta escape event, so callers pass the
+ * interpreted double-ESC state instead of making this pure policy track time.
  *
- *   1. ESC on an empty prompt interrupts the active run.
+ *   1. Ctrl+C or double ESC on an empty prompt interrupts the active run.
  *   2. If queued follow-ups exist, ESC removes the latest queued item.
  *   3. If the user is typing a follow-up, prompt input owns ESC for editing.
  *   4. The user can type a follow-up; on Enter, `addPendingInput`
@@ -194,6 +193,7 @@ export interface ResolveStreamingInterruptActionOptions {
   isTranscriptMode: boolean;
   isAwaitingUserInteraction: boolean;
   isInputEmpty: boolean;
+  isDoubleEscape: boolean;
   pendingInputCount: number;
   hasTranscriptTextSelection: boolean;
 }
@@ -204,6 +204,7 @@ export interface ResolveWorkflowInterruptOptions {
   isTranscriptMode: boolean;
   isAwaitingUserInteraction: boolean;
   isInputEmpty: boolean;
+  isDoubleEscape: boolean;
   pendingInputCount: number;
   hasTranscriptTextSelection: boolean;
   hasActiveWorkflow: boolean;
@@ -231,7 +232,7 @@ export function shouldStopWorkflowFromInterruptKey(
     return false;
   }
 
-  return options.isInputEmpty && options.pendingInputCount === 0;
+  return options.isDoubleEscape && options.isInputEmpty && options.pendingInputCount === 0;
 }
 
 export function resolveStreamingInterruptAction(
@@ -262,5 +263,5 @@ export function resolveStreamingInterruptAction(
     return { kind: "none" };
   }
 
-  return { kind: "interrupt" };
+  return options.isDoubleEscape ? { kind: "interrupt" } : { kind: "none" };
 }

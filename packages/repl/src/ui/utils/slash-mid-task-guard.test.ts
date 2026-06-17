@@ -45,11 +45,13 @@ describe('slash-mid-task-guard (FEATURE_149 Slice C6)', () => {
   });
 
   describe('exported constants', () => {
-    it('message text mentions Esc as the abort gesture', () => {
+    it('message text mentions double Esc and Ctrl+C as abort gestures', () => {
       // The message must tell the user how to recover. Pin both the
       // gesture name and the imperative form so a wording drift gets
       // caught — the parity-audit ship gate depends on this UX.
       expect(SLASH_MID_TASK_GUARD_MESSAGE).toContain('Esc');
+      expect(SLASH_MID_TASK_GUARD_MESSAGE).toContain('twice');
+      expect(SLASH_MID_TASK_GUARD_MESSAGE).toContain('Ctrl+C');
       expect(SLASH_MID_TASK_GUARD_MESSAGE).toContain('abort');
     });
 

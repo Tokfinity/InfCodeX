@@ -348,7 +348,7 @@ describe('GlobalShortcuts', () => {
     expect(setShowHelp).not.toHaveBeenCalled();
   });
 
-  it('interrupts an active run and clears live state', () => {
+  it('interrupts an active run with Ctrl+C and clears live state', () => {
     const currentConfig: CurrentConfig = {
       provider: 'openai',
       model: 'gpt-5.4',
@@ -378,12 +378,47 @@ describe('GlobalShortcuts', () => {
       isInputEmpty: true,
     });
 
-    expect(shortcutHandlers.get('interrupt')?.()).toBe(true);
+    expect(shortcutHandlers.get('interrupt')?.(
+      createKey({ name: 'c', sequence: '\u0003', ctrl: true }),
+    )).toBe(true);
     expect(abort).toHaveBeenCalledOnce();
     expect(stopThinking).toHaveBeenCalledOnce();
     expect(clearThinkingContent).toHaveBeenCalledOnce();
     expect(setCurrentTool).toHaveBeenCalledWith(undefined);
     expect(setIsLoading).toHaveBeenCalledWith(false);
+    logSpy.mockRestore();
+  });
+
+  it('does not interrupt an active run with a single Escape shortcut call', () => {
+    const currentConfig: CurrentConfig = {
+      provider: 'openai',
+      model: 'gpt-5.4',
+      thinking: false,
+      reasoningMode: 'off',
+      agentMode: 'ama',
+      permissionMode: 'accept-edits',
+    };
+    const abort = vi.fn();
+    const logSpy = vi.spyOn(console, 'log').mockImplementation(() => undefined);
+
+    GlobalShortcuts({
+      currentConfig,
+      setCurrentConfig: vi.fn(),
+      isLoading: true,
+      abort,
+      stopThinking: vi.fn(),
+      clearThinkingContent: vi.fn(),
+      setCurrentTool: vi.fn(),
+      setIsLoading: vi.fn(),
+      onToggleHelp: vi.fn(),
+      setShowHelp: vi.fn(),
+      isInputEmpty: true,
+    });
+
+    expect(shortcutHandlers.get('interrupt')?.(
+      createKey({ name: 'escape' }),
+    )).toBe(false);
+    expect(abort).not.toHaveBeenCalled();
     logSpy.mockRestore();
   });
 
@@ -431,9 +466,9 @@ describe('GlobalShortcuts', () => {
     logSpy.mockRestore();
   });
 
-  it('binds interrupt to both Ctrl+C and Escape while loading', () => {
+  it('binds interrupt to Ctrl+C while loading', () => {
     const interrupt = DEFAULT_SHORTCUTS.find((shortcut) => shortcut.id === 'interrupt');
     expect(interrupt?.defaultBindings).toContainEqual({ key: 'c', ctrl: true });
-    expect(interrupt?.defaultBindings).toContainEqual({ key: 'escape' });
+    expect(interrupt?.defaultBindings).not.toContainEqual({ key: 'escape' });
   });
 });

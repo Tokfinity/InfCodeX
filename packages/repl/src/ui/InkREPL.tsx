@@ -53,6 +53,7 @@ import {
   childActivityLabel,
   childActivitySource,
   MAX_CHILD_ACTIVITY_ROWS,
+  shouldShowChildActivitySurface,
   shouldRouteToChildActivity,
   shouldRouteWorkflowLiveOnlyNotice,
   toolActivityDetail,
@@ -427,6 +428,8 @@ import {
   type TranscriptSelectionSpan,
 } from "./utils/transcript-selection-gestures.js";
 import { buildHostSessionPayload } from "./utils/session-payload.js";
+
+const DOUBLE_INTERRUPT_ESCAPE_INTERVAL_MS = 500;
 
 // REPL options
 export interface InkREPLOptions extends KodaXOptions {
@@ -2812,9 +2815,12 @@ const InkREPLInner: React.FC<InkREPLProps> = ({
     () => buildChildActivityViewModel(childActivityRecords, childActivityMaxRows),
     [childActivityMaxRows, childActivityRecords],
   );
-  const shouldRenderChildActivitySurface = !isTranscriptMode
-    && (isLoading || workflowLiveViewModel.shouldRender)
-    && childActivityViewModel.shouldRender;
+  const shouldRenderChildActivitySurface = shouldShowChildActivitySurface({
+    isTranscriptMode,
+    isLoading,
+    hasWorkflowLiveSurface: workflowLiveViewModel.shouldRender,
+    childActivityVisible: childActivityViewModel.shouldRender,
+  });
   const transcriptLiveStatusLines = useMemo(() => {
     if (!isTranscriptMode) {
       return [] as readonly string[];
@@ -4622,6 +4628,7 @@ const InkREPLInner: React.FC<InkREPLProps> = ({
   }, [autoModeBootstrap]);
   const pendingInputsRef = useRef<string[]>(streamingState.pendingInputs);
   const userInterruptedRef = useRef(false);
+  const lastInterruptEscapeAtRef = useRef(0);
 
   // Issue 116: generation counter to discard results from stale (interrupted) rounds.
   // Incremented on each prompt submission; checked after await to detect supersession.
@@ -4784,12 +4791,28 @@ const InkREPLInner: React.FC<InkREPLProps> = ({
   useKeypress(
     KeypressHandlerPriority.Critical,
     (key) => {
+      const isEscapeKey = key.name === "escape";
+      const now = Date.now();
+      const canEscapeInterrupt = isEscapeKey
+        && !isTranscriptMode
+        && !isAwaitingUserInteraction
+        && isInputEmpty
+        && streamingState.pendingInputs.length === 0
+        && (isLoading || workflowLiveViewModel.shouldRender);
+      const isDoubleEscape = canEscapeInterrupt && (
+        key.meta === true ||
+        now - lastInterruptEscapeAtRef.current < DOUBLE_INTERRUPT_ESCAPE_INTERVAL_MS
+      );
+
+      lastInterruptEscapeAtRef.current = canEscapeInterrupt ? now : 0;
+
       if (shouldStopWorkflowFromInterruptKey({
         keyName: key.name,
         ctrl: Boolean(key.ctrl),
         isTranscriptMode,
         isAwaitingUserInteraction,
         isInputEmpty,
+        isDoubleEscape,
         pendingInputCount: streamingState.pendingInputs.length,
         hasTranscriptTextSelection: Boolean(transcriptModeTextSelection),
         hasActiveWorkflow: workflowLiveViewModel.shouldRender,
@@ -4809,6 +4832,7 @@ const InkREPLInner: React.FC<InkREPLProps> = ({
         isTranscriptMode,
         isAwaitingUserInteraction,
         isInputEmpty,
+        isDoubleEscape,
         pendingInputCount: streamingState.pendingInputs.length,
         hasTranscriptTextSelection: Boolean(transcriptModeTextSelection),
       });

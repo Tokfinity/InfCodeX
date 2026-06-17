@@ -73,7 +73,7 @@ export function GlobalShortcuts({
   useShortcut(
     'interrupt',
     (keyInfo) => {
-      if (isInteractiveDialogActive && !isCtrlCInterrupt(keyInfo)) {
+      if (!isCtrlCInterrupt(keyInfo)) {
         return false;
       }
       if (isLoading) {

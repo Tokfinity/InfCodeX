@@ -162,6 +162,7 @@ describe("transcript-input-policy", () => {
       isTranscriptMode: true,
       isAwaitingUserInteraction: false,
       isInputEmpty: true,
+      isDoubleEscape: false,
       pendingInputCount: 0,
       hasTranscriptTextSelection: true,
     })).toEqual({ kind: "none" });
@@ -172,6 +173,7 @@ describe("transcript-input-policy", () => {
       isTranscriptMode: false,
       isAwaitingUserInteraction: false,
       isInputEmpty: true,
+      isDoubleEscape: false,
       pendingInputCount: 0,
       hasTranscriptTextSelection: false,
     })).toEqual({ kind: "interrupt" });
@@ -182,6 +184,7 @@ describe("transcript-input-policy", () => {
       isTranscriptMode: false,
       isAwaitingUserInteraction: false,
       isInputEmpty: true,
+      isDoubleEscape: false,
       pendingInputCount: 1,
       hasTranscriptTextSelection: false,
     })).toEqual({ kind: "pop-pending-input" });
@@ -192,18 +195,31 @@ describe("transcript-input-policy", () => {
       isTranscriptMode: false,
       isAwaitingUserInteraction: false,
       isInputEmpty: true,
+      isDoubleEscape: false,
+      pendingInputCount: 0,
+      hasTranscriptTextSelection: false,
+    })).toEqual({ kind: "none" });
+
+    expect(resolveStreamingInterruptAction({
+      keyName: "escape",
+      ctrl: false,
+      isTranscriptMode: false,
+      isAwaitingUserInteraction: false,
+      isInputEmpty: true,
+      isDoubleEscape: true,
       pendingInputCount: 0,
       hasTranscriptTextSelection: false,
     })).toEqual({ kind: "interrupt" });
   });
 
-  it("routes Esc and Ctrl+C to an active background workflow without waiting for foreground loading", () => {
+  it("routes double Esc and Ctrl+C to an active background workflow without waiting for foreground loading", () => {
     expect(shouldStopWorkflowFromInterruptKey({
       keyName: "escape",
       ctrl: false,
       isTranscriptMode: false,
       isAwaitingUserInteraction: false,
       isInputEmpty: true,
+      isDoubleEscape: true,
       pendingInputCount: 0,
       hasTranscriptTextSelection: false,
       hasActiveWorkflow: true,
@@ -215,6 +231,7 @@ describe("transcript-input-policy", () => {
       isTranscriptMode: false,
       isAwaitingUserInteraction: false,
       isInputEmpty: true,
+      isDoubleEscape: false,
       pendingInputCount: 0,
       hasTranscriptTextSelection: false,
       hasActiveWorkflow: true,
@@ -228,6 +245,7 @@ describe("transcript-input-policy", () => {
       isTranscriptMode: false,
       isAwaitingUserInteraction: false,
       isInputEmpty: false,
+      isDoubleEscape: true,
       pendingInputCount: 0,
       hasTranscriptTextSelection: false,
       hasActiveWorkflow: true,
@@ -239,6 +257,19 @@ describe("transcript-input-policy", () => {
       isTranscriptMode: false,
       isAwaitingUserInteraction: false,
       isInputEmpty: true,
+      isDoubleEscape: false,
+      pendingInputCount: 0,
+      hasTranscriptTextSelection: false,
+      hasActiveWorkflow: true,
+    })).toBe(false);
+
+    expect(shouldStopWorkflowFromInterruptKey({
+      keyName: "escape",
+      ctrl: false,
+      isTranscriptMode: false,
+      isAwaitingUserInteraction: false,
+      isInputEmpty: true,
+      isDoubleEscape: true,
       pendingInputCount: 1,
       hasTranscriptTextSelection: false,
       hasActiveWorkflow: true,
@@ -250,6 +281,7 @@ describe("transcript-input-policy", () => {
       isTranscriptMode: true,
       isAwaitingUserInteraction: false,
       isInputEmpty: true,
+      isDoubleEscape: false,
       pendingInputCount: 0,
       hasTranscriptTextSelection: true,
       hasActiveWorkflow: true,
