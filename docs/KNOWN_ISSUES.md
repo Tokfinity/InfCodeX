@@ -100,7 +100,7 @@ _Last Updated: 2026-06-18_
 - **Created**: 2026-06-18
 - **Fixed**: -
 
-#### Summary
+#### Overview
 
 The GitHub Actions `CI` workflow (`.github/workflows/ci.yml`, Ubuntu, full
 `npm test`) has been failing on every push for 40+ runs. This is **not a
@@ -4453,7 +4453,7 @@ Commit `ef085fc` 把 V1 精简到 V2 时没区分"信息载体"和"脚手架"，
 ---
 
 ## Summary
-- Total: 67 (25 Open, 42 Resolved, 0 Partially Resolved, 0 Won't Fix)
+- Total: 68 (26 Open, 42 Resolved, 0 Partially Resolved, 0 Won't Fix)
 - Highest Priority Open: 091 - 缺少一等公民 MCP / Web Search / Code Search 工具体系 (High)
 - Historical archived issues are maintained in ISSUES_ARCHIVED.md
 
