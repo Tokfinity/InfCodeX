@@ -49,6 +49,15 @@
 
 ---
 
+## 进行中的 Feature
+
+> 当前无进行中的 feature（`230 / 234 / 236` 已随 `v0.7.51` 发布，移入「已完成 Feature」）。本段按 tracker 约定常驻，空表即可。
+
+| ID | Title | Planned | Design |
+|---|---|---|---|
+
+---
+
 ## 计划中的 Feature
 
 | ID | Title | Category | Priority | Planned | Design |
