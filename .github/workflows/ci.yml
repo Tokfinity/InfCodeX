@@ -1,11 +1,13 @@
 name: CI
 
 # Verifies the declared runtime floor actually holds. `engines.node` is
-# ">=18.0.0" across the root and every workspace package, but nothing was
+# ">=20.0.0" across the root and every workspace package, but nothing was
 # proving the suite runs on anything other than the release build's Node 22.
-# This matrix runs the full build + test suite on the engines floor (18), the
-# current LTS many users are on (20), and the build version (22) so a
-# Node-version regression is caught on push/PR instead of at a user's install.
+# This matrix runs the full build + test suite on the engines floor (20) and
+# the build version (22) so a Node-version regression is caught on push/PR
+# instead of at a user's install. Node 18 was dropped from the floor: the
+# codebase relies on Node 20+ features (e.g. the RegExp `v` flag), so 18 is no
+# longer supported.
 
 on:
   push:
@@ -25,7 +27,7 @@ jobs:
     strategy:
       fail-fast: false
       matrix:
-        node: ['18', '20', '22']
+        node: ['20', '22']
     steps:
       - uses: actions/checkout@v6
 

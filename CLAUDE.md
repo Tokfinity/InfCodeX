@@ -60,7 +60,7 @@ When writing or modifying any LLM-facing prompt (role prompts in `packages/codin
 
 | Category | Technology | Version |
 |---|---|---|
-| Runtime | Node.js | >= 18.0.0 |
+| Runtime | Node.js | >= 20.0.0 |
 | Language | TypeScript | >= 5.7.0 (root uses 5.9.x) |
 | Package Manager | npm workspaces | — |
 | CLI Framework | Ink (React for CLI) | ^6.7.0 / React >= 19 |
