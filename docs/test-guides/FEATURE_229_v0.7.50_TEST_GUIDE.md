@@ -4,8 +4,8 @@
 
 **Feature**: Workflow Process Events + SDK/System Progress Surface  
 **Version**: v0.7.50  
-**Tester**: TBD  
-**Date**: TBD
+**Tester**: Codex automated release validation
+**Date**: 2026-06-17
 
 FEATURE_229 turns workflow progress into a shared agent-layer process contract.
 REPL, SDK hosts, and future Space-style surfaces should consume the same
@@ -228,8 +228,19 @@ results without parsing terminal text.
 
 ## Summary
 
-| Case Count | Passed | Failed | Blocked |
-|---:|---:|---:|---:|
-| 11 | TBD | TBD | TBD |
+| Scope | Passed | Failed | Notes |
+|---|---:|---:|---|
+| Automated release gate | 5 | 0 | `npm run build`, `npm test`, `npm test -- --coverage`, `npm pack --dry-run`, `git diff --check` |
+| Manual host/provider checklist | - | - | The 11 cases above remain the optional provider-backed human QA checklist and were not re-run interactively in this pass. |
 
-**Conclusion**: TBD
+### Automated Release Gate
+
+| Check | Result | Notes |
+|---|---|---|
+| `npm run build` | Passed | Build, bundle, and DTS generation completed. |
+| `npm test` | Passed | Default full Vitest suite passed. |
+| `npm test -- --coverage` | Passed | Coverage mode now caps Vitest workers at 4 on Windows to avoid worker RPC starvation under V8 coverage load. |
+| `npm pack --dry-run` | Passed | Produced `kodax-ai-kodax-0.7.50.tgz`; `@kodax-ai/kodax@0.7.50`, 1.9 MB package size, 92 files. |
+| `git diff --check` | Passed | No whitespace errors; Git reported line-ending normalization warnings only. |
+
+**Conclusion**: Automated release validation passed on 2026-06-17. `v0.7.50` still needs the tag/release publication step before final release.
