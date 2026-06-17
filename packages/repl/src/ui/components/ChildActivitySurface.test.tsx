@@ -35,7 +35,7 @@ describe("ChildActivitySurface", () => {
     expect(measureChildActivitySurfaceRows(vm)).toBe(1);
   });
 
-  it("keeps measured rows equal to rendered rows at narrow widths", () => {
+  it("keeps measured rows equal to rendered activity rows at narrow widths", () => {
     const vm = buildChildActivityViewModel([
       {
         id: "child-1",
@@ -63,6 +63,6 @@ describe("ChildActivitySurface", () => {
     const frame = lastFrame() ?? "";
 
     expect(measureChildActivitySurfaceRows(vm)).toBe(visibleRowCount(frame));
-    expect(measureChildActivitySurfaceRows(vm)).toBe(3);
+    expect(measureChildActivitySurfaceRows(vm)).toBe(2);
   });
 });

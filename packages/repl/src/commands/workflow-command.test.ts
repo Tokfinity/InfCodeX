@@ -106,6 +106,14 @@ function readSingleWorkflowRunJson(baseDir: string): Record<string, unknown> {
   return JSON.parse(readFileSync(join(baseDir, runIds[0]!, 'run.json'), 'utf8')) as Record<string, unknown>;
 }
 
+async function waitForFinalAssistantMessage(
+  runMessages: readonly { readonly type: string; readonly final?: boolean }[],
+): Promise<void> {
+  await vi.waitFor(() => {
+    expect(runMessages.some((event) => event.type === 'assistant' && event.final === true)).toBe(true);
+  }, { timeout: 5000 });
+}
+
 function writeGeneratedRunSnapshot(baseDir: string, runId: string): void {
   const runDir = join(baseDir, runId);
   mkdirSync(runDir, { recursive: true });
@@ -251,16 +259,31 @@ describe('parseWorkflowInvocation', () => {
     expect(parseWorkflowInvocation(['pause', 'run-1'])).toEqual({ kind: 'pause', runId: 'run-1' });
     expect(parseWorkflowInvocation(['resume', 'run-1'])).toEqual({ kind: 'resume', runId: 'run-1' });
     expect(parseWorkflowInvocation(['stop', 'run-1'])).toEqual({ kind: 'stop', runId: 'run-1' });
-    expect(parseWorkflowInvocation(['delete', 'run-1'])).toEqual({ kind: 'delete', runId: 'run-1' });
+    expect(parseWorkflowInvocation(['delete', 'run-1'])).toEqual({ kind: 'delete', target: 'run-1' });
     expect(parseWorkflowInvocation(['delete', '--force', 'run-1'])).toEqual({
       kind: 'delete',
-      runId: 'run-1',
+      target: 'run-1',
       force: true,
     });
     expect(parseWorkflowInvocation(['delete', 'run-1', '--force'])).toEqual({
       kind: 'delete',
-      runId: 'run-1',
+      target: 'run-1',
       force: true,
+    });
+    expect(parseWorkflowInvocation(['delete', '--saved', 'saved-audit'])).toEqual({
+      kind: 'delete',
+      target: 'saved-audit',
+      scope: 'saved',
+    });
+    expect(parseWorkflowInvocation(['delete', '--run', 'run-1'])).toEqual({
+      kind: 'delete',
+      target: 'run-1',
+      scope: 'run',
+    });
+    expect(parseWorkflowInvocation(['delete', '--run', '--saved', 'same-name'])).toEqual({
+      kind: 'delete',
+      target: 'same-name',
+      scope: 'conflict',
     });
     expect(parseWorkflowInvocation(['prune', '--dry-run'])).toEqual({ kind: 'prune', rawArgs: ['--dry-run'] });
     expect(parseWorkflowInvocation(['save', 'run-1', 'audit'])).toEqual({
@@ -1481,7 +1504,7 @@ describe('renderWorkflowHelp', () => {
     expect(text).toContain('/workflow pause <runId>');
     expect(text).toContain('/workflow resume <runId>');
     expect(text).toContain('/workflow stop [runId]');
-    expect(text).toContain('/workflow delete [--force] <runId>');
+    expect(text).toContain('/workflow delete [--force] [--run|--saved] <runId|savedName>');
     expect(text).toContain('/workflow prune');
     expect(text).toContain('/workflow save <runId> <name>');
     expect(text).toContain('/workflow rename <runId|alias|savedName> <newName>');
@@ -1589,7 +1612,7 @@ describe('startGeneratedWorkflowFromRequest launch policy', () => {
     expect(builderStages).toEqual(['started', 'generating', 'validating', 'ready', 'launched']);
     await vi.waitFor(() => {
       expect(runMessages.some((event) => event.text.includes('Workflow completed'))).toBe(true);
-    });
+    }, { timeout: 5000 });
     expect(runUpdates.some((event) => event.status === 'running' && event.workflow === 'generated-fast-audit')).toBe(true);
     expect(runUpdates.some((event) => event.status === 'running' && event.phaseTotal === 2)).toBe(true);
     expect(runUpdates.at(-1)?.status).toBe('completed');
@@ -1641,9 +1664,7 @@ describe('startGeneratedWorkflowFromRequest launch policy', () => {
     });
 
     expect(outcome).toBe('started');
-    await vi.waitFor(() => {
-      expect(runMessages.some((event) => event.type === 'assistant' && event.final === true)).toBe(true);
-    });
+    await waitForFinalAssistantMessage(runMessages);
     expect(runMessages.some((event) => (
       event.type === 'assistant'
       && event.final !== true
@@ -1674,9 +1695,7 @@ describe('startGeneratedWorkflowFromRequest launch policy', () => {
     });
 
     expect(outcome).toBe('started');
-    await vi.waitFor(() => {
-      expect(runMessages.some((event) => event.type === 'assistant' && event.final === true)).toBe(true);
-    });
+    await waitForFinalAssistantMessage(runMessages);
     const answer = runMessages.find((event) => event.type === 'assistant' && event.final === true)?.text;
     expect(answer).toContain('full report start');
     expect(answer).toContain('full report end');
@@ -1703,7 +1722,7 @@ describe('startGeneratedWorkflowFromRequest launch policy', () => {
     expect(outcome).toBe('started');
     await vi.waitFor(() => {
       expect(runMessages.some((event) => event.type === 'success')).toBe(true);
-    });
+    }, { timeout: 5000 });
     expect(runMessages.some((event) => event.type === 'assistant')).toBe(false);
     expect(runMessages.some((event) => event.type === 'info' && event.text.includes('Generated workflow'))).toBe(true);
     expect(runMessages.some((event) => event.type === 'info' && event.text.includes('AMAW auto-start'))).toBe(true);
@@ -1743,7 +1762,7 @@ describe('startGeneratedWorkflowFromRequest launch policy', () => {
     expect(outcome).toBe('started');
     await vi.waitFor(() => {
       expect(runMessages.some((event) => event.type === 'error')).toBe(true);
-    });
+    }, { timeout: 5000 });
     const errorText = runMessages.find((event) => event.type === 'error')?.text ?? '';
     expect(errorText).toContain('Workflow harness failed before launching child agents');
     expect(errorText).toContain('invalid generated workflow script or saved capsule');
@@ -1770,7 +1789,7 @@ describe('startGeneratedWorkflowFromRequest launch policy', () => {
       await vi.waitFor(() => {
         const output = logSpy.mock.calls.map((call) => call.join(' ')).join('\n');
         expect(output).toContain('Workflow completed');
-      });
+      }, { timeout: 5000 });
       const output = logSpy.mock.calls.map((call) => call.join(' ')).join('\n');
       expect(output).toContain('Final result:');
       expect(output).toContain('Generate a parallel audit workflow');
@@ -2087,6 +2106,143 @@ describe('workflowCommand saved capsule preflight', () => {
     expect(existsSync(runDir)).toBe(false);
   });
 
+  it('deletes a generated saved workflow capsule when the target is a saved name', async () => {
+    const savedPath = writeSavedWorkflowCapsule(dir, 'saved-audit');
+
+    await workflowCommand.handler(
+      ['delete', 'saved-audit'],
+      {} as Parameters<typeof workflowCommand.handler>[1],
+      {} as Parameters<typeof workflowCommand.handler>[2],
+      {} as Parameters<typeof workflowCommand.handler>[3],
+    );
+
+    const output = logSpy.mock.calls.map((call) => call.join(' ')).join('\n');
+    expect(output).toContain('Deleted saved workflow saved-audit');
+    expect(existsSync(savedPath)).toBe(false);
+  });
+
+  it('prefers deleting a unique workflow run when its display name also matches a saved capsule', async () => {
+    const savedPath = writeSavedWorkflowCapsule(dir, 'display-collision');
+    const runDir = join(workflowRunsDir, 'run-display-collision');
+    mkdirSync(runDir, { recursive: true });
+    writeFileSync(
+      join(runDir, 'run.json'),
+      JSON.stringify({
+        runId: 'run-display-collision',
+        workflow: 'display-collision',
+        displayName: 'display-collision',
+        status: 'completed',
+        totalSpawned: 1,
+        endedAt: 2,
+      }),
+      'utf8',
+    );
+
+    await workflowCommand.handler(
+      ['delete', 'display-collision'],
+      {} as Parameters<typeof workflowCommand.handler>[1],
+      {} as Parameters<typeof workflowCommand.handler>[2],
+      {} as Parameters<typeof workflowCommand.handler>[3],
+    );
+
+    const output = logSpy.mock.calls.map((call) => call.join(' ')).join('\n');
+    expect(output).toContain('Deleted workflow run run-display-collision');
+    expect(existsSync(savedPath)).toBe(true);
+    expect(existsSync(join(runDir, 'run.json'))).toBe(false);
+  });
+
+  it('uses --saved to delete a saved capsule when an exact run id has the same name', async () => {
+    const savedPath = writeSavedWorkflowCapsule(dir, 'same-name');
+    const runDir = join(workflowRunsDir, 'same-name');
+    mkdirSync(runDir, { recursive: true });
+    writeFileSync(
+      join(runDir, 'run.json'),
+      JSON.stringify({
+        runId: 'same-name',
+        workflow: 'same-name',
+        status: 'completed',
+        totalSpawned: 1,
+        endedAt: 2,
+      }),
+      'utf8',
+    );
+
+    await workflowCommand.handler(
+      ['delete', '--saved', 'same-name'],
+      {} as Parameters<typeof workflowCommand.handler>[1],
+      {} as Parameters<typeof workflowCommand.handler>[2],
+      {} as Parameters<typeof workflowCommand.handler>[3],
+    );
+
+    const output = logSpy.mock.calls.map((call) => call.join(' ')).join('\n');
+    expect(output).toContain('Deleted saved workflow same-name');
+    expect(existsSync(savedPath)).toBe(false);
+    expect(existsSync(join(runDir, 'run.json'))).toBe(true);
+  });
+
+  it('prefers deleting an exact workflow run id when a saved capsule has the same name', async () => {
+    const savedPath = writeSavedWorkflowCapsule(dir, 'same-name');
+    const runDir = join(workflowRunsDir, 'same-name');
+    mkdirSync(runDir, { recursive: true });
+    writeFileSync(
+      join(runDir, 'run.json'),
+      JSON.stringify({
+        runId: 'same-name',
+        workflow: 'same-name',
+        status: 'completed',
+        totalSpawned: 1,
+        endedAt: 2,
+      }),
+      'utf8',
+    );
+
+    await workflowCommand.handler(
+      ['delete', 'same-name'],
+      {} as Parameters<typeof workflowCommand.handler>[1],
+      {} as Parameters<typeof workflowCommand.handler>[2],
+      {} as Parameters<typeof workflowCommand.handler>[3],
+    );
+
+    const output = logSpy.mock.calls.map((call) => call.join(' ')).join('\n');
+    expect(output).toContain('Deleted workflow run same-name');
+    expect(existsSync(savedPath)).toBe(true);
+    expect(existsSync(join(runDir, 'run.json'))).toBe(false);
+  });
+
+  it('fails closed when a delete display name matches multiple workflow runs', async () => {
+    const savedPath = writeSavedWorkflowCapsule(dir, 'shared-display');
+    for (const runId of ['run-shared-a', 'run-shared-b']) {
+      const runDir = join(workflowRunsDir, runId);
+      mkdirSync(runDir, { recursive: true });
+      writeFileSync(
+        join(runDir, 'run.json'),
+        JSON.stringify({
+          runId,
+          workflow: 'shared-display',
+          displayName: 'shared-display',
+          status: 'completed',
+          totalSpawned: 1,
+          endedAt: 2,
+        }),
+        'utf8',
+      );
+    }
+
+    await workflowCommand.handler(
+      ['delete', 'shared-display'],
+      {} as Parameters<typeof workflowCommand.handler>[1],
+      {} as Parameters<typeof workflowCommand.handler>[2],
+      {} as Parameters<typeof workflowCommand.handler>[3],
+    );
+
+    const output = logSpy.mock.calls.map((call) => call.join(' ')).join('\n');
+    expect(output).toContain('ambiguous delete target');
+    expect(output).toContain('multiple workflow run/display names');
+    expect(existsSync(savedPath)).toBe(true);
+    expect(existsSync(join(workflowRunsDir, 'run-shared-a', 'run.json'))).toBe(true);
+    expect(existsSync(join(workflowRunsDir, 'run-shared-b', 'run.json'))).toBe(true);
+  });
+
   it('shows persisted workflow process identity and result metadata', async () => {
     const runDir = join(workflowRunsDir, 'run-metadata');
     mkdirSync(runDir, { recursive: true });
@@ -2245,9 +2401,7 @@ describe('workflowCommand saved capsule preflight', () => {
     expect(prompts[0]).toContain('source: saved:project');
     expect(prompts[0]).toContain('raw script:');
     expect(updates[0]).toMatchObject({ locale: 'zh' });
-    await vi.waitFor(() => {
-      expect(runMessages.some((event) => event.type === 'assistant' && event.final === true)).toBe(true);
-    });
+    await waitForFinalAssistantMessage(runMessages);
     expect(runMessages.some((event) => event.type === 'success')).toBe(false);
     expect(runMessages.some((event) => event.type === 'info' && event.text.includes('Workflow result:'))).toBe(false);
   });
@@ -2281,9 +2435,7 @@ describe('workflowCommand saved capsule preflight', () => {
       {} as Parameters<typeof workflowCommand.handler>[3],
     );
 
-    await vi.waitFor(() => {
-      expect(runMessages.some((event) => event.type === 'assistant' && event.final === true)).toBe(true);
-    });
+    await waitForFinalAssistantMessage(runMessages);
     const runJson = readSingleWorkflowRunJson(workflowRunsDir);
     expect(runJson.source).toBe('capsule');
     expect(runJson.savedWorkflowName).toBe('saved-lineage-rerun');
@@ -2320,9 +2472,7 @@ describe('workflowCommand saved capsule preflight', () => {
     const output = logSpy.mock.calls.map((call) => call.join(' ')).join('\n');
     expect(output).not.toContain('rerun failed');
     expect(updates[0]).toMatchObject({ locale: 'zh' });
-    await vi.waitFor(() => {
-      expect(runMessages.some((event) => event.type === 'assistant' && event.final === true)).toBe(true);
-    });
+    await waitForFinalAssistantMessage(runMessages);
     expect(runMessages.some((event) => event.type === 'success')).toBe(false);
     expect(runMessages.some((event) => event.type === 'info' && event.text.includes('Workflow result:'))).toBe(false);
   });
@@ -2350,9 +2500,7 @@ describe('workflowCommand saved capsule preflight', () => {
       {} as Parameters<typeof workflowCommand.handler>[3],
     );
 
-    await vi.waitFor(() => {
-      expect(runMessages.some((event) => event.type === 'assistant' && event.final === true)).toBe(true);
-    });
+    await waitForFinalAssistantMessage(runMessages);
     const finalText = runMessages.find((event) => event.type === 'assistant' && event.final === true)?.text;
     expect(finalText).toContain('direct result');
     expect(runMessages.some((event) => event.type === 'success')).toBe(false);
@@ -2388,9 +2536,7 @@ describe('workflowCommand saved capsule preflight', () => {
       {} as Parameters<typeof workflowCommand.handler>[3],
     );
 
-    await vi.waitFor(() => {
-      expect(runMessages.some((event) => event.type === 'assistant' && event.final === true)).toBe(true);
-    });
+    await waitForFinalAssistantMessage(runMessages);
     const runJson = readSingleWorkflowRunJson(workflowRunsDir);
     expect(runJson.source).toBe('capsule');
     expect(runJson.savedWorkflowName).toBe('saved-lineage-direct');

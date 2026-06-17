@@ -365,7 +365,7 @@ describe("viewport-budget", () => {
       showHelp: false,
       statusBarText: "status",
       todoSurfaceRows: 3,
-      activityBarVisible: true,
+      activityBarVisible: false,
     });
     const withChildActivity = calculateViewportBudget({
       terminalRows: 24,
@@ -376,7 +376,7 @@ describe("viewport-budget", () => {
       statusBarText: "status",
       todoSurfaceRows: 3,
       childActivitySurfaceRows: 2,
-      activityBarVisible: true,
+      activityBarVisible: false,
     });
 
     expect(withChildActivity.childActivitySurfaceRows).toBe(2);

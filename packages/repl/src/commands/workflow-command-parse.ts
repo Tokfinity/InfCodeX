@@ -8,7 +8,12 @@ export type WorkflowInvocation =
   | { readonly kind: 'pause'; readonly runId: string }
   | { readonly kind: 'resume'; readonly runId: string }
   | { readonly kind: 'stop'; readonly runId: string }
-  | { readonly kind: 'delete'; readonly runId: string; readonly force?: boolean }
+  | {
+      readonly kind: 'delete';
+      readonly target: string;
+      readonly force?: boolean;
+      readonly scope?: 'run' | 'saved' | 'conflict';
+    }
   | { readonly kind: 'prune'; readonly rawArgs: readonly string[] }
   | { readonly kind: 'save'; readonly runId: string; readonly name: string }
   | { readonly kind: 'rename'; readonly target: string; readonly newName: string }
@@ -38,8 +43,16 @@ export function parseWorkflowInvocation(args: readonly string[]): WorkflowInvoca
   if (first === 'delete') {
     const rest = args.slice(1);
     const force = rest.includes('--force');
-    const runId = rest.find((arg) => arg !== '--force') ?? '';
-    return force ? { kind: 'delete', runId, force: true } : { kind: 'delete', runId };
+    const saved = rest.includes('--saved');
+    const run = rest.includes('--run');
+    const target = rest.find((arg) => arg !== '--force' && arg !== '--saved' && arg !== '--run') ?? '';
+    const scope = saved && run ? 'conflict' : saved ? 'saved' : run ? 'run' : undefined;
+    return {
+      kind: 'delete',
+      target,
+      ...(force ? { force: true } : {}),
+      ...(scope ? { scope } : {}),
+    };
   }
   if (first === 'prune') return { kind: 'prune', rawArgs: args.slice(1) };
   if (first === 'save') return { kind: 'save', runId: args[1] ?? '', name: args[2] ?? '' };

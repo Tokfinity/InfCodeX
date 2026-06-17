@@ -240,8 +240,11 @@ describe('ArgumentCompleter', () => {
           expect(c.display.startsWith('anthropic/')).toBe(true);
           return c.display.toLowerCase().includes('cl');
         })).toBe(true);
-        // Should match claude-sonnet-4-6, claude-opus-4-6, claude-haiku-4-5
-        expect(completions.length).toBe(3);
+        expect(completions.map(c => c.display)).toEqual(expect.arrayContaining([
+          'anthropic/claude-sonnet-4-6',
+          'anthropic/claude-opus-4-6',
+          'anthropic/claude-haiku-4-5',
+        ]));
       });
 
       it('should filter models by partial matching haiku', async () => {
@@ -477,6 +480,23 @@ describe('ArgumentCompleter', () => {
           expect(rename.some((c) => c.display === 'AliasAudit')).toBe(true);
           expect(rename.some((c) => c.display === 'Alias Audit')).toBe(false);
           expect(rename.some((c) => c.display === 'saved-audit')).toBe(true);
+
+          const deleteInput = '/workflow delete ';
+          const deleteCompletions = await completer.getCompletions(deleteInput, deleteInput.length);
+          expect(deleteCompletions.some((c) => c.display === '--saved')).toBe(true);
+          expect(deleteCompletions.some((c) => c.display === '--run')).toBe(true);
+          expect(deleteCompletions.some((c) => c.display === 'run-persisted-complete')).toBe(true);
+          expect(deleteCompletions.some((c) => c.display === 'saved-audit')).toBe(true);
+
+          const deleteSavedInput = '/workflow delete --saved ';
+          const deleteSavedCompletions = await completer.getCompletions(deleteSavedInput, deleteSavedInput.length);
+          expect(deleteSavedCompletions.some((c) => c.display === 'saved-audit')).toBe(true);
+          expect(deleteSavedCompletions.some((c) => c.display === 'run-persisted-complete')).toBe(false);
+
+          const deleteRunInput = '/workflow delete --run ';
+          const deleteRunCompletions = await completer.getCompletions(deleteRunInput, deleteRunInput.length);
+          expect(deleteRunCompletions.some((c) => c.display === 'run-persisted-complete')).toBe(true);
+          expect(deleteRunCompletions.some((c) => c.display === 'saved-audit')).toBe(false);
 
           const reviseInput = '/workflow revise ';
           const revise = await completer.getCompletions(reviseInput, reviseInput.length);

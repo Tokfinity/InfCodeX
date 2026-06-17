@@ -9,6 +9,7 @@ import {
   setAgentConfigHome,
 } from "@kodax-ai/agent";
 
+import { removeTempDirSync } from "../../test-utils/temp-dir.js";
 import { ToolCallStatus, type ToolCall } from "../types.js";
 import {
   collapseToolCalls,
@@ -291,12 +292,12 @@ describe("FEATURE_124 Phase D.2 — memory badge in tool-display", () => {
     // not the filesystem, so we don't need to create the dir on disk.
     const tempCwd = fs.mkdtempSync(path.join(os.tmpdir(), "kodax-tool-display-cwd-"));
     memoryDir = resolveMemoryRoot(tempCwd);
-    fs.rmSync(tempCwd, { recursive: true, force: true });
+    removeTempDirSync(tempCwd);
   });
 
   afterEach(() => {
     setAgentConfigHome(undefined);
-    fs.rmSync(tempHome, { recursive: true, force: true });
+    removeTempDirSync(tempHome);
   });
 
   it("prefixes [memory:feedback] when Write target is a feedback_*.md file in memory dir", () => {

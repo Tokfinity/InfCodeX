@@ -202,7 +202,7 @@ export const workflowCommand: Command = {
   name: 'workflow',
   description: 'Run a dynamic multi-agent workflow (FEATURE_217)',
   usage: '/workflow [help | list | runs | show | pause | resume | stop | delete | prune | rerun | save | rename | revise | create | <name> [args]]',
-  argumentHint: 'help | list | runs [--all|--limit N] | show [runId] | pause <runId> | resume <runId> | stop [runId] | delete [--force] <runId> | prune --dry-run|--keep N|--older-than Nd | rerun <runId|savedName> [args] | save <runId> <name> | rename <runId|alias|savedName> <newName> | revise [--replace] <runId|alias|savedName> <change> | create <request> | <name> [args]',
+  argumentHint: 'help | list | runs [--all|--limit N] | show [runId] | pause <runId> | resume <runId> | stop [runId] | delete [--force] [--run|--saved] <runId|savedName> | prune --dry-run|--keep N|--older-than Nd | rerun <runId|savedName> [args] | save <runId> <name> | rename <runId|alias|savedName> <newName> | revise [--replace] <runId|alias|savedName> <change> | create <request> | <name> [args]',
   detailedHelp: printWorkflowHelp,
   handler: async (args, _context, callbacks, currentConfig) => {
     const invocation = parseWorkflowInvocation(args);
@@ -326,27 +326,90 @@ export const workflowCommand: Command = {
     }
 
     if (invocation.kind === 'delete') {
-      if (!ensureSafeRunId(invocation.runId)) return;
-      const deleted = await lifecycle.deleteWorkflowRun(invocation.runId, { force: invocation.force });
+      if (!invocation.target) {
+        console.log(chalk.yellow('\nUsage: /workflow delete [--force] [--run|--saved] <runId|savedName>\n'));
+        return;
+      }
+      if (invocation.scope === 'conflict') {
+        console.log(chalk.red('\n[workflow] choose only one delete scope: --run or --saved.\n'));
+        return;
+      }
+      const deleteSavedWorkflowTarget = async (
+        name: string,
+        source?: SavedWorkflowRef['source'],
+      ): Promise<void> => {
+        try {
+          const deleted = await lifecycle.deleteSavedWorkflow(name, source);
+          if (!deleted) {
+            console.log(chalk.red('\n[workflow] saved workflow deletion is unavailable in this context.\n'));
+            return;
+          }
+          console.log(chalk.dim(`\nDeleted saved workflow ${deleted.name}.\n`));
+        } catch (error) {
+          const message = error instanceof Error ? error.message : String(error);
+          console.log(chalk.red(`\n[workflow] delete failed: ${message}\n`));
+        }
+      };
+      if (invocation.scope === 'saved') {
+        await deleteSavedWorkflowTarget(invocation.target);
+        return;
+      }
+      const activeSnapshot = manager.getWorkflowProcessSnapshot(invocation.target);
+      const resolution = activeSnapshot
+        ? undefined
+        : await lifecycle.resolveWorkflowIdentity(invocation.target);
+      let resolvedRunId: string | undefined;
+      if (resolution?.kind === 'ambiguous') {
+        if (resolution.run) {
+          resolvedRunId = resolution.run.runId;
+        } else {
+          console.log(
+            chalk.red(
+              `\n[workflow] ambiguous delete target: ${invocation.target} matches multiple workflow run/display names${resolution.matches.includes('saved') ? ' and a saved workflow name' : ''}. Use the concrete run id, or --saved when deleting a generated saved capsule.\n`,
+            ),
+          );
+          return;
+        }
+      }
+      if (resolution?.kind === 'saved') {
+        if (invocation.scope === 'run') {
+          console.log(chalk.yellow(`\nNo persisted workflow run ${invocation.target}. Use --saved to delete the saved workflow.\n`));
+          return;
+        }
+        await deleteSavedWorkflowTarget(
+          resolution.savedWorkflow.name,
+          resolution.savedWorkflow.source,
+        );
+        return;
+      }
+      if (resolution?.kind === 'missing') {
+        console.log(chalk.yellow(`\nNo persisted workflow run or generated saved workflow ${invocation.target}.\n`));
+        return;
+      }
+      const runId = resolution?.kind === 'run'
+        ? resolution.runId
+        : resolvedRunId ?? invocation.target;
+      if (!ensureSafeRunId(runId)) return;
+      const deleted = await lifecycle.deleteWorkflowRun(runId, { force: invocation.force });
       if (deleted) {
-        console.log(chalk.dim(`\nDeleted workflow run ${invocation.runId}${invocation.force ? ' with --force' : ''}.\n`));
+        console.log(chalk.dim(`\nDeleted workflow run ${runId}${invocation.force ? ' with --force' : ''}.\n`));
         return;
       }
-      const activeSnapshot = manager.getWorkflowProcessSnapshot(invocation.runId);
-      const processSnapshot = lifecycle.getWorkflowProcessSnapshot(invocation.runId);
-      if (!processSnapshot && !existsSync(join(baseDir, invocation.runId, 'run.json'))) {
-        console.log(chalk.yellow(`\nNo persisted workflow run ${invocation.runId}.\n`));
+      const currentActiveSnapshot = activeSnapshot ?? manager.getWorkflowProcessSnapshot(runId);
+      const processSnapshot = lifecycle.getWorkflowProcessSnapshot(runId);
+      if (!processSnapshot && !existsSync(join(baseDir, runId, 'run.json'))) {
+        console.log(chalk.yellow(`\nNo persisted workflow run or generated saved workflow ${invocation.target}.\n`));
         return;
       }
-      if (activeSnapshot && !isFinalWorkflowProcessStatus(activeSnapshot.status)) {
-        console.log(chalk.yellow(`\nWorkflow ${invocation.runId} is ${activeSnapshot.status}. Stop it before deleting the run record.\n`));
+      if (currentActiveSnapshot && !isFinalWorkflowProcessStatus(currentActiveSnapshot.status)) {
+        console.log(chalk.yellow(`\nWorkflow ${runId} is ${currentActiveSnapshot.status}. Stop it before deleting the run record.\n`));
         return;
       }
       if (processSnapshot && !isFinalWorkflowProcessStatus(processSnapshot.status)) {
-        console.log(chalk.yellow(`\nWorkflow ${invocation.runId} is a non-terminal persisted ${processSnapshot.status} record. If it is stale, run /workflow delete --force ${invocation.runId}.\n`));
+        console.log(chalk.yellow(`\nWorkflow ${runId} is a non-terminal persisted ${processSnapshot.status} record. If it is stale, run /workflow delete --force ${runId}.\n`));
         return;
       }
-      console.log(chalk.yellow(`\nWorkflow ${invocation.runId} is not a deletable terminal run.\n`));
+      console.log(chalk.yellow(`\nWorkflow ${runId} is not a deletable terminal run.\n`));
       return;
     }
 

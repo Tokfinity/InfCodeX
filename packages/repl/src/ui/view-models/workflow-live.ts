@@ -132,7 +132,6 @@ export function formatWorkflowLiveViewModelForTranscript(
 }
 
 const MAX_VISIBLE_ROWS = 6;
-const MAX_ACTIVE_AGENT_ROWS = 2;
 
 const labels = {
   en: {
@@ -153,7 +152,6 @@ const labels = {
     waitingForFirstAgent: "waiting for first agent",
     showStopHint: (runId: string): string => `show: /workflow show ${runId} | stop: /workflow stop ${runId}`,
     activeAgents: (count: number): string => `${count} active agent${count === 1 ? "" : "s"}`,
-    moreActive: (count: number): string => `${count} more active agent${count === 1 ? "" : "s"}`,
   },
   zh: {
     workflow: "工作流",
@@ -173,7 +171,6 @@ const labels = {
     waitingForFirstAgent: "等待第一个智能体启动",
     showStopHint: (runId: string): string => `查看: /workflow show ${runId} | 停止: /workflow stop ${runId}`,
     activeAgents: (count: number): string => `${count} 个智能体运行中`,
-    moreActive: (count: number): string => `另有 ${count} 个运行中`,
   },
 } as const;
 
@@ -348,33 +345,6 @@ export function buildWorkflowLiveViewModel(
       symbolColor: "cyan",
       text: phase,
       isActive: true,
-    });
-  }
-
-  const maxAgentRows = snapshot.activeAgents.length > MAX_ACTIVE_AGENT_ROWS
-    ? 1
-    : MAX_ACTIVE_AGENT_ROWS;
-  const visibleAgents = snapshot.activeAgents.slice(0, maxAgentRows);
-  for (const [index, agent] of visibleAgents.entries()) {
-    rows.push({
-      kind: "agent",
-      id: `active-${index}-${agent}`,
-      symbol: label.agent,
-      symbolColor: "cyan",
-      text: agent,
-      isActive: true,
-    });
-  }
-
-  const hiddenActive = snapshot.activeAgents.length - visibleAgents.length;
-  if (hiddenActive > 0) {
-    rows.push({
-      kind: "summary",
-      id: "more-active",
-      symbol: label.more,
-      symbolColor: "dim",
-      text: label.moreActive(hiddenActive),
-      isActive: false,
     });
   }
 

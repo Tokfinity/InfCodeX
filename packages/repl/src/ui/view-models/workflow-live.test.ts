@@ -48,16 +48,12 @@ describe("buildWorkflowLiveViewModel", () => {
     expect(vm.rows.map((row) => row.symbol)).toEqual([
       "workflow",
       "phase",
-      "agent",
-      "agent",
       "progress",
       "hint",
     ]);
     expect(vm.rows.map((row) => row.text)).toEqual([
       "feature-217-ui-regression-audit (run-mqc7av6y) - 2 active agents",
       "2/4 fan-out-ui-audit",
-      "layout-and-positioning-auditor",
-      "styling-and-visual-auditor",
       "1/3 finished (2 active agents, cap 8)",
       "Use /workflow show run-mqc7av6y for status or /workflow stop run-mqc7av6y to stop.",
     ]);
@@ -72,7 +68,7 @@ describe("buildWorkflowLiveViewModel", () => {
     }));
 
     expect(vm.rows.map((row) => row.text)).toContain("3/4 finished (1 active agent, 1 failed, cap 8)");
-    expect(vm.rows.map((row) => row.text)).toContain("remaining-auditor");
+    expect(vm.rows.map((row) => row.text)).not.toContain("remaining-auditor");
   });
 
   it("renders elapsed time and token usage when available", () => {
@@ -100,7 +96,7 @@ describe("buildWorkflowLiveViewModel", () => {
     );
   });
 
-  it("keeps progress and the show/stop hint visible when many agents are active", () => {
+  it("keeps workflow progress and the show/stop hint visible when many agents are active", () => {
     const vm = buildWorkflowLiveViewModel(runningSnapshot({
       activeAgents: ["a1", "a2", "a3", "a4", "a5"],
       completedAgents: 0,
@@ -108,8 +104,7 @@ describe("buildWorkflowLiveViewModel", () => {
       message: undefined,
     }));
 
-    expect(vm.rows).toHaveLength(6);
-    expect(vm.rows.map((row) => row.text)).toContain("4 more active agents");
+    expect(vm.rows).toHaveLength(4);
     expect(vm.rows.map((row) => row.text)).toContain("0/3 finished (5 active agents, cap 8)");
     expect(vm.rows.at(-1)?.text).toBe("show: /workflow show run-mqc7av6y | stop: /workflow stop run-mqc7av6y");
   });
@@ -120,8 +115,6 @@ describe("buildWorkflowLiveViewModel", () => {
     expect(formatWorkflowLiveViewModelForTranscript(vm)).toEqual([
       "workflow feature-217-ui-regression-audit (run-mqc7av6y) - 2 active agents",
       "phase    2/4 fan-out-ui-audit",
-      "agent    layout-and-positioning-auditor",
-      "agent    styling-and-visual-auditor",
       "progress 1/3 finished (2 active agents, cap 8)",
       "hint     Use /workflow show run-mqc7av6y for status or /workflow stop run-mqc7av6y to stop.",
     ]);
@@ -164,7 +157,6 @@ describe("buildWorkflowLiveViewModel", () => {
     expect(vm.rows.map((row) => row.symbol)).toEqual([
       "工作流",
       "阶段",
-      "智能体",
       "进度",
       "提示",
     ]);

@@ -4,6 +4,7 @@ import {
   buildPromptActivityText,
   buildPromptActivityViewModel,
   buildPromptPlaceholderText,
+  shouldRenderPromptActivityInFooter,
 } from "./surface-liveness.js";
 import { setLocale } from "../../common/i18n.js";
 
@@ -68,6 +69,73 @@ describe("surface-liveness", () => {
         isCompacting: false,
       },
     })).toContain("Thinking");
+  });
+
+  it("keeps foreground worker activity text visible", () => {
+    expect(buildPromptActivityViewModel({
+      isTranscriptMode: false,
+      isLoading: true,
+      streamingState: {
+        isThinking: true,
+        thinkingCharCount: 42,
+        currentTool: undefined,
+        activeToolCalls: [],
+        toolInputCharCount: 0,
+        toolInputContent: "",
+        isCompacting: false,
+      },
+      managedState: {
+        phase: "worker",
+        harnessProfile: "ama",
+        workerTitle: "Worker",
+      },
+    })).toMatchObject({
+      kind: "busy",
+      showSpinner: true,
+      text: expect.stringContaining("Worker"),
+    });
+  });
+
+  it("keeps ordinary footer activity only when no dedicated progress surface is visible", () => {
+    const busyActivity = {
+      kind: "busy" as const,
+      text: "[Worker] Thinking",
+      showSpinner: true,
+    };
+
+    expect(shouldRenderPromptActivityInFooter({
+      activity: busyActivity,
+      hasWorkflowBuilderMessage: false,
+      hasDedicatedProgressSurface: false,
+    })).toBe(true);
+
+    expect(shouldRenderPromptActivityInFooter({
+      activity: busyActivity,
+      hasWorkflowBuilderMessage: false,
+      hasDedicatedProgressSurface: true,
+    })).toBe(false);
+  });
+
+  it("keeps waiting and workflow builder footer activity visible", () => {
+    expect(shouldRenderPromptActivityInFooter({
+      activity: {
+        kind: "waiting",
+        text: "Waiting: approval required",
+        showSpinner: false,
+      },
+      hasWorkflowBuilderMessage: false,
+      hasDedicatedProgressSurface: true,
+    })).toBe(true);
+
+    expect(shouldRenderPromptActivityInFooter({
+      activity: {
+        kind: "busy",
+        text: "Workflow - generating harness",
+        showSpinner: true,
+      },
+      hasWorkflowBuilderMessage: true,
+      hasDedicatedProgressSurface: true,
+    })).toBe(true);
   });
 
   it("surfaces workflow builder status as spinner activity", () => {

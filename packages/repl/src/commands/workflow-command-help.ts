@@ -13,7 +13,7 @@ export function renderWorkflowHelp(): string {
     `  ${chalk.cyan('/workflow pause <runId>')}                Pause future child launches for an active run.`,
     `  ${chalk.cyan('/workflow resume <runId>')}               Resume a paused run.`,
     `  ${chalk.cyan('/workflow stop [runId]')}                 Stop an active run through abort propagation. Defaults to the active run.`,
-    `  ${chalk.cyan('/workflow delete [--force] <runId>')}     Delete one persisted run record; --force removes stale non-terminal records.`,
+    `  ${chalk.cyan('/workflow delete [--force] [--run|--saved] <runId|savedName>')} Delete one persisted run record or generated saved capsule; --force removes stale non-terminal run records.`,
     `  ${chalk.cyan('/workflow prune --dry-run|--keep N|--older-than Nd')}`,
     `                                            Preview or delete old terminal run records.`,
     `  ${chalk.cyan('/workflow rerun <runId|savedName> [args]')} Rerun a historical generated run, or run the current saved workflow by name.`,

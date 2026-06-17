@@ -283,7 +283,7 @@ const WORKFLOW_SUBCOMMAND_ARGS: ArgumentDefinition[] = [
   { name: 'pause', description: 'Pause future child launches for a run', type: 'enum' },
   { name: 'resume', description: 'Resume a paused run', type: 'enum' },
   { name: 'stop', description: 'Stop an active workflow run', type: 'enum' },
-  { name: 'delete', description: 'Delete one persisted workflow run', type: 'enum' },
+  { name: 'delete', description: 'Delete one persisted workflow run or generated saved capsule', type: 'enum' },
   { name: 'prune', description: 'Preview or delete old terminal workflow runs', type: 'enum' },
   { name: 'rerun', description: 'Rerun a run id or saved workflow name', type: 'enum' },
   { name: 'save', description: 'Save a generated run as a workflow capsule', type: 'enum' },
@@ -322,6 +322,12 @@ const WORKFLOW_PRUNE_OPTION_ARGS: ArgumentDefinition[] = [
   { name: '--dry-run', description: 'Preview cleanup without deleting runs', type: 'enum' },
   { name: '--keep', description: 'Keep the newest N terminal runs', type: 'enum' },
   { name: '--older-than', description: 'Delete terminal runs older than Nd or Nh', type: 'enum' },
+];
+
+const WORKFLOW_DELETE_OPTION_ARGS: ArgumentDefinition[] = [
+  { name: '--force', description: 'Delete stale non-terminal run records', type: 'enum' },
+  { name: '--run', description: 'Treat the target as a workflow run record', type: 'enum' },
+  { name: '--saved', description: 'Treat the target as a generated saved workflow capsule', type: 'enum' },
 ];
 
 const WORKFLOW_SAVED_FILE_SUFFIXES = ['.workflow.json', '.ts', '.mjs', '.js'] as const;
@@ -452,7 +458,9 @@ function savedWorkflowNameFromFile(entry: string): string | undefined {
   return undefined;
 }
 
-function getSavedWorkflowNameArgs(): ArgumentDefinition[] {
+function getSavedWorkflowNameArgs(
+  options: { readonly generatedOnly?: boolean } = {},
+): ArgumentDefinition[] {
   const dirs = [
     { path: getAgentConfigPath('workflows'), source: 'personal' },
     { path: join(process.cwd(), '.kodax', 'workflows'), source: 'project' },
@@ -463,6 +471,7 @@ function getSavedWorkflowNameArgs(): ArgumentDefinition[] {
     if (!existsSync(dir.path)) continue;
     try {
       for (const entry of readdirSync(dir.path)) {
+        if (options.generatedOnly === true && !entry.endsWith('.workflow.json')) continue;
         const name = savedWorkflowNameFromFile(entry);
         if (!name) continue;
         byName.set(name, {
@@ -515,7 +524,7 @@ function getWorkflowRunOrSavedNameArgs(subcommand: string): ArgumentDefinition[]
       type: 'string',
     });
   }
-  for (const arg of getSavedWorkflowNameArgs()) {
+  for (const arg of getSavedWorkflowNameArgs({ generatedOnly: subcommand === 'delete' })) {
     const existing = byName.get(arg.name);
     if (existing) {
       byName.set(arg.name, {
@@ -531,6 +540,17 @@ function getWorkflowRunOrSavedNameArgs(subcommand: string): ArgumentDefinition[]
     });
   }
   return [...byName.values()];
+}
+
+function getWorkflowDeleteTargetArgs(argParts: readonly string[]): ArgumentDefinition[] {
+  const flags = new Set(argParts.slice(1).filter((arg) => arg.startsWith("--")));
+  if (flags.has("--saved")) {
+    return getSavedWorkflowNameArgs({ generatedOnly: true });
+  }
+  if (flags.has("--run")) {
+    return getWorkflowRunIdArgs("delete");
+  }
+  return getWorkflowRunOrSavedNameArgs("delete");
 }
 
 function getWorkflowArgs(argParts: string[]): ArgumentDefinition[] {
@@ -556,6 +576,21 @@ function getWorkflowArgs(argParts: string[]): ArgumentDefinition[] {
 
   if (normalizedSubcommand === 'rename' && effectiveLength <= 2) {
     return getWorkflowRunOrSavedNameArgs('rename');
+  }
+
+  if (normalizedSubcommand === 'delete' && effectiveLength <= 2) {
+    return [
+      ...WORKFLOW_DELETE_OPTION_ARGS,
+      ...getWorkflowDeleteTargetArgs(argParts),
+    ];
+  }
+
+  if (
+    normalizedSubcommand === 'delete'
+    && effectiveLength <= 3
+    && argParts.slice(1).some((arg) => arg.startsWith("--"))
+  ) {
+    return getWorkflowDeleteTargetArgs(argParts);
   }
 
   if (normalizedSubcommand === 'revise') {

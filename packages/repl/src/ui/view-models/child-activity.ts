@@ -70,7 +70,7 @@ export function truncateChildActivityDetail(text: string): string {
 export function shouldRouteToChildActivity(
   meta: KodaXActivityEventMeta | undefined,
 ): meta is KodaXActivityEventMeta {
-  return Boolean(meta?.workflowCorrelation || meta?.childAgentId);
+  return Boolean(meta?.liveOnly === true && (meta.workflowCorrelation || meta.childAgentId));
 }
 
 export function shouldRouteWorkflowLiveOnlyNotice(
@@ -82,6 +82,18 @@ export function shouldRouteWorkflowLiveOnlyNotice(
     && meta.workflowCorrelation?.workflowRunId
     && workflowRunId
     && meta.workflowCorrelation.workflowRunId === workflowRunId,
+  );
+}
+
+export function shouldShowChildActivitySurface(input: {
+  readonly isTranscriptMode: boolean;
+  readonly isLoading: boolean;
+  readonly childActivityVisible: boolean;
+}): boolean {
+  return (
+    !input.isTranscriptMode &&
+    input.isLoading &&
+    input.childActivityVisible
   );
 }
 
@@ -149,18 +161,9 @@ export function buildChildActivityViewModel(
 
   const safeMaxRows = Math.max(1, Math.floor(maxRows));
   const rows: ChildActivityRow[] = [];
-  const activityBudget = active.length > 1 ? Math.max(1, safeMaxRows - 1) : safeMaxRows;
-
-  if (active.length > 1) {
-    rows.push({
-      kind: "summary",
-      id: "children-summary",
-      symbol: "children",
-      symbolColor: "dim",
-      text: `${active.length} active child agents`,
-      isActive: false,
-    });
-  }
+  const activityBudget = active.length > safeMaxRows && safeMaxRows > 1
+    ? safeMaxRows - 1
+    : safeMaxRows;
 
   const visible = active.slice(0, activityBudget);
   for (const record of visible) {

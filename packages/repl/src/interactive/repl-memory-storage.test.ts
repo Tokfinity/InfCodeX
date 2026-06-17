@@ -1,5 +1,7 @@
 import { describe, expect, it } from 'vitest';
 
+import { MemorySessionStorage } from './repl.js';
+
 interface MemorySessionStorageLike {
   save(
     id: string,
@@ -19,23 +21,9 @@ interface MemorySessionStorageLike {
   ): Promise<{ data: { tag?: string } } | null>;
 }
 
-type MemorySessionStorageConstructor = new () => MemorySessionStorageLike;
-
-async function createInteractiveMemoryStorage(): Promise<MemorySessionStorageLike> {
-  const mod = await import('./repl.js') as unknown as {
-    MemorySessionStorage?: MemorySessionStorageConstructor;
-  };
-  const Storage = mod.MemorySessionStorage;
-  expect(Storage).toBeDefined();
-  if (!Storage) {
-    throw new Error('MemorySessionStorage export is missing');
-  }
-  return new Storage();
-}
-
 describe('interactive MemorySessionStorage session tag', () => {
   it('preserves tag through save, load, list, and fork', async () => {
-    const storage = await createInteractiveMemoryStorage();
+    const storage: MemorySessionStorageLike = new MemorySessionStorage();
 
     await storage.save('interactive-memory-source', {
       messages: [{ role: 'user', content: 'hello' }],

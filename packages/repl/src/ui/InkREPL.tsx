@@ -391,6 +391,7 @@ import { buildStatusBarViewModel } from "./view-models/status-bar.js";
 import {
   buildPromptActivityViewModel,
   buildPromptPlaceholderText,
+  shouldRenderPromptActivityInFooter,
 } from "./view-models/surface-liveness.js";
 import { resolveEffectiveCompactionInfo } from "./view-models/compaction-info.js";
 import { buildSurfaceStatusBarProps } from "./view-models/surface-status.js";
@@ -2818,7 +2819,6 @@ const InkREPLInner: React.FC<InkREPLProps> = ({
   const shouldRenderChildActivitySurface = shouldShowChildActivitySurface({
     isTranscriptMode,
     isLoading,
-    hasWorkflowLiveSurface: workflowLiveViewModel.shouldRender,
     childActivityVisible: childActivityViewModel.shouldRender,
   });
   const transcriptLiveStatusLines = useMemo(() => {
@@ -3544,7 +3544,19 @@ const InkREPLInner: React.FC<InkREPLProps> = ({
       workflowActivityText,
     ],
   );
-  const promptBusyText = promptActivityViewModel?.text;
+  const hasDedicatedFooterProgressSurface = workflowLiveViewModel.shouldRender
+    || (isLoading && todoPlanViewModel.shouldRender)
+    || shouldRenderChildActivitySurface;
+  const promptActivityShouldRenderInFooter = shouldRenderPromptActivityInFooter({
+    activity: promptActivityViewModel,
+    hasWorkflowBuilderMessage: Boolean(workflowBuilderMessage),
+    hasDedicatedProgressSurface: hasDedicatedFooterProgressSurface,
+  });
+  const footerActivityViewModel = promptActivityShouldRenderInFooter
+    ? promptActivityViewModel
+    : undefined;
+  const footerActivityText = footerActivityViewModel?.text;
+  const promptActivityBarVisible = Boolean(footerActivityViewModel);
 
   // v0.7.38 hotfix (2026-05-11) — FEATURE_151 Slice C correction.
   // Clear `todoItems` when the loading lifecycle transitions
@@ -3702,21 +3714,13 @@ const InkREPLInner: React.FC<InkREPLProps> = ({
       windowedTranscript: useRendererViewportShell,
       inputText: footerBudgetInputText,
       footerHeaderText: footerHeaderSummary,
-      activitySummary: isTranscriptMode ? undefined : promptBusyText,
-      // FEATURE_114 v0.7.36 Slice 4 (UX bugfix v0.7.38) — activityBar
-      // slot in the prompt footer renders whenever EITHER the spinner
-      // verb OR the plan-list "X/N completed" counter is visible.
-      // Mirrors the JSX at the activityBar prop site below.
-      //
-      // v0.7.38 hotfix (2026-05-11) — gate plan-list contribution on
-      // `isLoading` to match the TodoListSurface mount gate. Without
-      // this, the budget keeps reserving rows for one frame after
-      // `isLoading` flips to false but before the `useEffect` clears
-      // `todoItems`, leaving blank lines between transcript and
-      // composer.
+      activitySummary: isTranscriptMode ? undefined : footerActivityText,
+      // Mirrors the activityBar prop below: reserve this row only when a
+      // footer-only prompt affordance is visible. Ordinary progress is
+      // already represented in transcript/live preview rows.
       activityBarVisible: isTranscriptMode
         ? false
-        : Boolean(promptBusyText) || workflowFooterRows > 0 || todoFooterRows > 0 || childActivityFooterRows > 0,
+        : promptActivityBarVisible,
       workflowSurfaceRows: isTranscriptMode ? 0 : workflowFooterRows,
       childActivitySurfaceRows: isTranscriptMode ? 0 : childActivityFooterRows,
       // FEATURE_114 v0.7.36 Slice 4 (UX bugfix v0.7.38) — TodoListSurface
@@ -3774,7 +3778,8 @@ const InkREPLInner: React.FC<InkREPLProps> = ({
       terminalWidth,
       footerBudgetInputText,
       footerHeaderSummary,
-      promptBusyText,
+      footerActivityText,
+      promptActivityBarVisible,
       isTranscriptMode,
       workflowFooterRows,
       childActivityFooterRows,
@@ -8655,37 +8660,28 @@ const InkREPLInner: React.FC<InkREPLProps> = ({
       inlineNotices={promptFooterNotices.length > 0 ? (
         <StatusNoticesSurface notices={promptFooterNotices} />
       ) : undefined}
-      activityBar={(promptActivityViewModel || workflowLiveViewModel.shouldRender || (isLoading && todoPlanViewModel.shouldRender) || shouldRenderChildActivitySurface) ? (
-        // FEATURE_151 (v0.7.38) Slice H' — spinner verb + todo counter
-        // share one line. Left column: existing spinner glyph + verb
-        // text (when any activity is present). Right column: dim
-        // "X/N completed" counter (when the todo store has items).
-        // Mirrors CC's tendency to keep status fragments compact on a
-        // single line; was previously a dedicated header inside
-        // TodoListSurface, which forced an extra blank line above the
-        // todo rows when only counter changes occurred.
-        //
-        // v0.7.38 hotfix (2026-05-11) — gate the plan-counter half on
-        // `isLoading` for the same reason as the TodoListSurface mount
-        // (see line ~7603). If the run terminated but `todoItems` has
-        // not yet been cleared by the post-run `useEffect`, the counter
-        // would otherwise linger as a stray dim line above the prompt.
+      activityBar={footerActivityViewModel ? (
+        // Footer-only activity is limited to waiting/confirmation-style
+        // prompts and workflow builder/background affordances. Normal
+        // foreground Worker/Thinking/Tools progress is rendered in the
+        // transcript/live preview, so duplicating it here costs a row
+        // without adding signal.
         <Box paddingX={1} flexDirection="row">
           <Box flexGrow={1}>
-            {promptActivityViewModel?.showSpinner ? (
+            {footerActivityViewModel?.showSpinner ? (
               <Spinner color={getTheme("dark").colors.accent} />
             ) : null}
-            {promptActivityViewModel ? (
+            {footerActivityViewModel ? (
               <Text
                 color={
-                  promptActivityViewModel.kind === "waiting"
+                  footerActivityViewModel.kind === "waiting"
                     ? getTheme("dark").colors.warning
                     : getTheme("dark").colors.accent
                 }
                 wrap="truncate"
               >
-                {promptActivityViewModel.showSpinner ? " " : ""}
-                {promptActivityViewModel.text}
+                {footerActivityViewModel.showSpinner ? " " : ""}
+                {footerActivityViewModel.text}
               </Text>
             ) : null}
             {/*
@@ -8700,7 +8696,7 @@ const InkREPLInner: React.FC<InkREPLProps> = ({
               `(MmSs · ↓ N tokens)`; for queries crossing 1h the elapsed
               rolls to `HhMmSs`.
             */}
-            {promptActivityViewModel?.showSpinner
+            {footerActivityViewModel?.showSpinner
               && streamingState.roundStartedAt != null ? (
               <SpinnerStatsTail
                 roundStartedAt={streamingState.roundStartedAt}

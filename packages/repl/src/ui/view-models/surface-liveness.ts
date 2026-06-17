@@ -26,6 +26,25 @@ export interface PromptActivityViewModel {
   showSpinner: boolean;
 }
 
+export interface ShouldRenderPromptActivityInFooterOptions {
+  activity?: PromptActivityViewModel;
+  hasWorkflowBuilderMessage: boolean;
+  hasDedicatedProgressSurface: boolean;
+}
+
+export function shouldRenderPromptActivityInFooter(
+  options: ShouldRenderPromptActivityInFooterOptions,
+): boolean {
+  if (!options.activity) {
+    return false;
+  }
+  return (
+    options.activity.kind === "waiting"
+    || options.hasWorkflowBuilderMessage
+    || !options.hasDedicatedProgressSurface
+  );
+}
+
 export interface BuildPromptActivityTextOptions {
   isTranscriptMode: boolean;
   isLoading: boolean;
