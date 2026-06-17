@@ -25,8 +25,8 @@
 | Status | Count | Feature IDs | Next checkpoint |
 |---|---:|---|---|
 | Completed | 4 | `229, 230, 234, 236` | `229` released v0.7.50; `230, 234, 236` released v0.7.51 |
-| Planned, near-term | 11 | `231, 232, 235, 233, 224, 228, 225, 174, 105, 211, 108` | `v0.7.52` -> `v0.7.68` |
-| Planned, v0.8.x | 5 | `007, 030, 093, 113, 139` | `v0.8.0+` |
+| Planned, near-term | 11 | `231, 232, 235, 233, 224, 228, 225, 174, 105, 211, 108` | `v0.7.57` -> `v0.7.73` |
+| Planned, v0.8.x | 5 | `007, 030, 093, 113, 139` | `v0.8.5+` |
 
 > v0.7.49 / v0.7.50 workflow split：`FEATURE_217` remains the human-facing workflow mode. Manual testing reopened required UI/UX and reliability deltas inside [v0.7.49](features/v0.7.49.md#13-v0749-completion-delta): bounded live progress with phase index / running 智能体 wording / preserved progress row / elapsed time / completed-child token usage, localized assistant-style launch notes, result-bearing child-agent digests or folded long-report notices, non-`info` agentic transcript, clear separation between `finished/spawned` progress and lifetime `maxAgents` cap, final synthesis, generated final-result contract lint, implicit `tokenBudget` stripping, generated task-command crash hardening, tighter AMAW invocation policy, wait timeout propagation, no default total workflow wall-clock timeout, terminal cleanup for un-awaited children, accurate template read/write metadata, capsule min-version preflight, manual run cleanup controls, and the closed minimal saved-workflow named reuse delta (`/workflow <savedName>` plus `/workflow rerun <runId|savedName>` with help/completion). `FEATURE_229` in v0.7.50 is the platform layer: it standardizes the same process as agent-layer snapshot/events, SDK subscription/polling, Space-style host policy and lifecycle controls, terminal-state helpers, workflow identity/lifecycle controls beyond named reuse (`display name | revise | rename | revision provenance`), REPL-as-consumer rendering, conservative retention, and durable source/provenance/resultSummary persistence; it is not the first implementation of the user-visible UX.
 
@@ -34,18 +34,18 @@
 
 | Version | Planned features |
 |---|---:|
-| `v0.7.52` | `1` |
-| `v0.7.53` | `2` |
-| `v0.7.55` | `1` |
-| `v0.7.61` | `1` |
-| `v0.7.62` | `1` |
-| `v0.7.63` | `1` |
-| `v0.7.64` | `1` |
-| `v0.7.67` | `2` |
+| `v0.7.57` | `1` |
+| `v0.7.58` | `2` |
+| `v0.7.60` | `1` |
+| `v0.7.66` | `1` |
+| `v0.7.67` | `1` |
 | `v0.7.68` | `1` |
-| `v0.8.0` | `3` |
-| `v0.8.2` | `1` |
-| `v0.8.20` | `1` |
+| `v0.7.69` | `1` |
+| `v0.7.72` | `2` |
+| `v0.7.73` | `1` |
+| `v0.8.5` | `3` |
+| `v0.8.7` | `1` |
+| `v0.8.25` | `1` |
 
 ---
 
@@ -62,22 +62,22 @@
 
 | ID | Title | Category | Priority | Planned | Design |
 |---|---|---|---|---|---|
-| `231` | Durable Workflow Replay Resume | Core / Workflow Persistence | High | `v0.7.52` | [v0.7.52](features/v0.7.52.md#feature_231-durable-workflow-replay-resume) |
-| `232` | Replay-Aware Workflow Pipeline Primitive | Core / Workflow Scheduling | Medium | `v0.7.53` | [v0.7.53](features/v0.7.53.md#feature_232-replay-aware-workflow-pipeline-primitive) |
-| `235` | Draft Workflow — Generate-without-Run / Review-before-Start | Core / Workflow Lifecycle | Medium | `v0.7.53` | [v0.7.53](features/v0.7.53.md#feature_235-draft-workflow--generate-without-run--review-before-start) |
-| `233` | Effort-First Reasoning Control System | LLM / Provider Capability + Runtime UX | High | `v0.7.55` | [v0.7.55](features/v0.7.55.md#feature_233-effort-first-reasoning-control-system) |
-| `224` | Self-Improvement Skill Loop | Core / Skills + Self-Improvement | High | `v0.7.61` | [v0.7.61](features/v0.7.61.md#feature_224-self-improvement-skill-loop--rescheduled-from-v0750) |
-| `228` | Unified Memory Control Plane + Memory Governance | Core / Memory + Governance | High | `v0.7.62` | [v0.7.62](features/v0.7.62.md#feature_228-unified-memory-control-plane--memory-governance--rescheduled-from-v0751) |
-| `225` | REPL Dead / Legacy Code Cleanup | Internal / Refactor + Tech Debt | Medium | `v0.7.63` | [v0.7.63](features/v0.7.63.md#feature_225-repl-dead--legacy-code-cleanup--rescheduled-from-v0752) |
-| `174` | `kodax sessions dedupe` | Internal / Maintenance + CLI | Low | `v0.7.64` | [v0.7.64](features/v0.7.64.md#feature_174-kodax-sessions-dedupe--rescheduled-from-v0753) |
-| `105` | Verifiable Advisor Consult Primitive | Internal / Core | High | `v0.7.67` | [v0.7.67](features/v0.7.67.md#feature_105-verifiable-advisor-consult-primitive--rescheduled-from-v0756) |
-| `211` | Interactive-Mode Extension/MCP Session State Cross-Resume Persistence | Internal / Session Persistence | Medium | `v0.7.67` | [v0.7.67](features/v0.7.67.md#feature_211-interactive-mode-extensionmcp-session-state-cross-resume-persistence--rescheduled-from-v0756) |
-| `108` | Session-Driven Reflective Prompt Patcher | Internal / Test Infrastructure | Medium | `v0.7.68` | [v0.7.68](features/v0.7.68.md#feature_108-session-driven-reflective-prompt-patcher--rescheduled-from-v0757) |
-| `007` | Theme System Consolidation | Enhancement | Medium | `v0.8.0` | [v0.8.0](features/v0.8.0.md#feature_007-theme-system-consolidation) |
-| `030` | Multi-Surface Delivery | Enhancement | High | `v0.8.0` | [v0.8.0](features/v0.8.0.md#feature_030-multi-surface-delivery) |
-| `093` | Coding and REPL Internal Circular Dependency Decoupling | Internal | Medium | `v0.8.0` | [v0.8.0](features/v0.8.0.md#feature_093-coding-and-repl-internal-circular-dependency-decoupling) |
-| `113` | TodoList JSON / CLI Surface | Enhancement | Medium | `v0.8.2` | [v0.8.2](features/v0.8.2.md#feature_113-todolist-json--cli-surface) |
-| `139` | NotebookEdit Tool | Enhancement / Tool | Low | `v0.8.20` | [v0.8.20](features/v0.8.20.md#feature_139-notebookedit-tool--jupyter-cell-level-crud) |
+| `231` | Durable Workflow Replay Resume | Core / Workflow Persistence | High | `v0.7.57` | [v0.7.57](features/v0.7.57.md#feature_231-durable-workflow-replay-resume) |
+| `232` | Replay-Aware Workflow Pipeline Primitive | Core / Workflow Scheduling | Medium | `v0.7.58` | [v0.7.58](features/v0.7.58.md#feature_232-replay-aware-workflow-pipeline-primitive) |
+| `235` | Draft Workflow — Generate-without-Run / Review-before-Start | Core / Workflow Lifecycle | Medium | `v0.7.58` | [v0.7.58](features/v0.7.58.md#feature_235-draft-workflow--generate-without-run--review-before-start) |
+| `233` | Effort-First Reasoning Control System | LLM / Provider Capability + Runtime UX | High | `v0.7.60` | [v0.7.60](features/v0.7.60.md#feature_233-effort-first-reasoning-control-system) |
+| `224` | Self-Improvement Skill Loop | Core / Skills + Self-Improvement | High | `v0.7.66` | [v0.7.66](features/v0.7.66.md#feature_224-self-improvement-skill-loop--rescheduled-from-v0750) |
+| `228` | Unified Memory Control Plane + Memory Governance | Core / Memory + Governance | High | `v0.7.67` | [v0.7.67](features/v0.7.67.md#feature_228-unified-memory-control-plane--memory-governance--rescheduled-from-v0751) |
+| `225` | REPL Dead / Legacy Code Cleanup | Internal / Refactor + Tech Debt | Medium | `v0.7.68` | [v0.7.68](features/v0.7.68.md#feature_225-repl-dead--legacy-code-cleanup--rescheduled-from-v0752) |
+| `174` | `kodax sessions dedupe` | Internal / Maintenance + CLI | Low | `v0.7.69` | [v0.7.69](features/v0.7.69.md#feature_174-kodax-sessions-dedupe--rescheduled-from-v0753) |
+| `105` | Verifiable Advisor Consult Primitive | Internal / Core | High | `v0.7.72` | [v0.7.72](features/v0.7.72.md#feature_105-verifiable-advisor-consult-primitive--rescheduled-from-v0756) |
+| `211` | Interactive-Mode Extension/MCP Session State Cross-Resume Persistence | Internal / Session Persistence | Medium | `v0.7.72` | [v0.7.72](features/v0.7.72.md#feature_211-interactive-mode-extensionmcp-session-state-cross-resume-persistence--rescheduled-from-v0756) |
+| `108` | Session-Driven Reflective Prompt Patcher | Internal / Test Infrastructure | Medium | `v0.7.73` | [v0.7.73](features/v0.7.73.md#feature_108-session-driven-reflective-prompt-patcher--rescheduled-from-v0757) |
+| `007` | Theme System Consolidation | Enhancement | Medium | `v0.8.5` | [v0.8.5](features/v0.8.5.md#feature_007-theme-system-consolidation) |
+| `030` | Multi-Surface Delivery | Enhancement | High | `v0.8.5` | [v0.8.5](features/v0.8.5.md#feature_030-multi-surface-delivery) |
+| `093` | Coding and REPL Internal Circular Dependency Decoupling | Internal | Medium | `v0.8.5` | [v0.8.5](features/v0.8.5.md#feature_093-coding-and-repl-internal-circular-dependency-decoupling) |
+| `113` | TodoList JSON / CLI Surface | Enhancement | Medium | `v0.8.7` | [v0.8.7](features/v0.8.7.md#feature_113-todolist-json--cli-surface) |
+| `139` | NotebookEdit Tool | Enhancement / Tool | Low | `v0.8.25` | [v0.8.25](features/v0.8.25.md#feature_139-notebookedit-tool--jupyter-cell-level-crud) |
 
 ---
 

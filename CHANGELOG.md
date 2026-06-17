@@ -33,7 +33,7 @@ All notable changes to this project will be documented in this file.
 
 ## [0.7.50] - 2026-06-16
 
-> Scope note: v0.7.50 is a single-feature slot for **FEATURE_229**. It does **not** rewrite FEATURE_217 (v0.7.49) — the dynamic JS harness, capsule model, save/rerun, worktree isolation, and permission gates all stay. F229 lifts the v0.7.49 user-visible workflow process into a subscribable Agent-layer event/snapshot model and a Coding/SDK lifecycle surface. `FEATURE_224` was rescheduled to [v0.7.61](docs/features/v0.7.61.md).
+> Scope note: v0.7.50 is a single-feature slot for **FEATURE_229**. It does **not** rewrite FEATURE_217 (v0.7.49) — the dynamic JS harness, capsule model, save/rerun, worktree isolation, and permission gates all stay. F229 lifts the v0.7.49 user-visible workflow process into a subscribable Agent-layer event/snapshot model and a Coding/SDK lifecycle surface. `FEATURE_224` was rescheduled to [v0.7.61](docs/features/v0.7.66.md).
 
 ### Added
 
@@ -579,7 +579,7 @@ Production trace showed Evaluator emitting `emit_verdict` accept before children
   - **Slice B — Throttle-Reminder Fix**: `shouldFireTodoReminder` no longer requires `todoStore.hasItems()` — the chicken-and-egg deadlock that prevented the LLM from learning the plan-list infrastructure existed when Scout did not seed is resolved. `buildTodoReminderText` now branches: empty-store nudges the LLM toward `op:'init'` with the trivial-task exemption clause; populated-store text unchanged from v0.7.34. Mirrors Claude Code's `getTodoReminderAttachments` ([attachments.ts:3266](c:/Works/claudecode/src/utils/attachments.ts#L3266)) which fires every 10 turns regardless of store state.
   - **FEATURE_104 prompt eval**: 4 new cases in `benchmark/datasets/feature-151-todo-self-seeding/` (2 positive: multi-file audit + 3-file rename should call op:'init'; 2 negative: typo fix + info request should not). Driver `tests/feature-151-todo-self-seeding.eval.ts` runs 5 alias × 4 case = 20 cells per pilot run; stage-1 acceptance pending post-pilot calibration.
   - **Slice I — Fan-Out Plan Granularity** (added 2026-05-10 after user reported "派 5 个 dispatch_child_task 做 review 时整个过程完全看不到任何 plan list"). Worker role-prompt (`packages/coding/src/agents/worker-role-prompt.ts`) gains a `FAN-OUT PLAN GRANULARITY` section between dispatch rules and Evaluator handoff: when the plan involves dispatching ≥3 children, the model MUST emit `todo_update({op:"init", ...})` as its FIRST tool call and the items array MUST contain EXACTLY N items — one per child's `bundle.objective` — never collapsed into 1-2 items. v2 prompt rewrite (commit `7c508a2`) added explicit MANDATORY TRIGGER framing, COUNT-FIRST imperative ("Not 1. Not 2. Not N-1. Exactly N."), 5-package worked example, and an enumerated ANTI-PATTERNS list after Phase 1 found v1 prompt at 25% positive on the floor model. Mechanism is prompt-only (no code change) — closes the visibility gap in CC default-subagent parity (CC's main agent natively expands plan items per dispatched child via TodoWrite, KodaX Worker was retreating to 1-item plan in fan-out). **Eval ship gate cleared (LLM-judge corrected)**: 3 of 5 aliases (mmx/m27 + ark/glm51 + ds/v4pro) hit ≥80% on each positive case AND ≤20% trigger on each negative case (full pass; mmx 100%/80%, ark+ds_v4pro 100%/100%). zhipu/glm51 + kimi miss the gate due to verbose narration-only single-turn responses (model says "I'll plan first..." but doesn't emit the tool call inline) — this is a single-turn probe limitation against verbose models, not a v2 prompt regression: in the production multi-turn agent loop those models naturally emit the tool call on the second turn. Eval methodology lesson sealed in `EVAL_GUIDELINES.md` anti-pattern 7 + raw output preservation section: regex-only judges on "DOES NOT contain X" assertions falsely fail verbose models that mention X in negation context (kimi was reported as "60/40 negative-case regression" by regex; LLM-judge of the raw outputs found 100/100 — kimi was correctly NOT calling todo_update, just verbalizing the decision). Eval driver dumps `runsRaw[].text` to `os.tmpdir()/kodax-eval-dumps/feature-151-fan-out-plan-granularity/<case>.json` for offline LLM-judge audit. Test pins: 2 unit cases in `worker-role-prompt.test.ts` (presence + ordering after dispatch rules) — 15/15 pass. Design doc: `docs/features/v0.7.38.md#slice-i--fan-out-plan-granularity-review-类-fan-out-抱怨收口2026-05-10-加入`.
-  - **Downstream impact**: FEATURE_113 (v0.8.2 TodoList JSON / CLI Surface) gains a new event source (LLM-driven init) but `KodaXEvents.onTodoUpdate` payload schema unchanged — `v0.8.2.md` updated with intersection note. No impact on FEATURE_120 / FEATURE_124 / FEATURE_125. Test guide forthcoming. Design doc: `docs/features/v0.7.38.md#feature_151-todolist-visibility--llm-self-seeding-parity--closing-the-feature_097-coverage-gap`.
+  - **Downstream impact**: FEATURE_113 (v0.8.2 TodoList JSON / CLI Surface) gains a new event source (LLM-driven init) but `KodaXEvents.onTodoUpdate` payload schema unchanged — `v0.8.7.md` updated with intersection note. No impact on FEATURE_120 / FEATURE_124 / FEATURE_125. Test guide forthcoming. Design doc: `docs/features/v0.7.38.md#feature_151-todolist-visibility--llm-self-seeding-parity--closing-the-feature_097-coverage-gap`.
 
 ### Changed
 
@@ -861,7 +861,7 @@ Two features close out v0.7.32 and the Plan B roadmap. **FEATURE_090** is the ro
 ### Documentation
 
 - **EVAL_GUIDELINES rewrite** — `benchmark/EVAL_GUIDELINES.md` now documents the **single-turn probe methodology** as the official KodaX eval pattern and removes end-to-end loop comparisons from the recommended set. Loops conflate prompt quality with tool-availability artefacts (model tries to verify with `read`/`grep`/`bash`, harness can't provide tools, benchmark scores the format-fail). Single-turn probes test the prompt-only contract.
-- **FEATURE_108 design** (`docs/features/v0.7.47.md`) — Session-Driven Reflective Prompt Patcher spec landed for v0.7.47 design preview.（注：版本重排后 FEATURE_108 先于 2026-06-05 迁至 v0.7.54，再于 2026-06-11 顺延至 [`docs/features/v0.7.67.md`](docs/features/v0.7.67.md)；`v0.7.47.md` 现为 FEATURE_218 + FEATURE_132）
+- **FEATURE_108 design** (`docs/features/v0.7.47.md`) — Session-Driven Reflective Prompt Patcher spec landed for v0.7.47 design preview.（注：版本重排后 FEATURE_108 先于 2026-06-05 迁至 v0.7.54，再于 2026-06-11 顺延至 [`docs/features/v0.7.72.md`](docs/features/v0.7.72.md)；`v0.7.47.md` 现为 FEATURE_218 + FEATURE_132）
 - **FEATURE_109 design** (`docs/features/v0.7.48.md`) — Harness Observability Substrate (long-term memory + prediction contract + cross-family prose guard) spec landed for v0.7.48 design preview.
 - **`docs/features/v0.7.29.md` 1496-line expansion** — folds back the historical capability-inventory artifact (`v0.7.29-capability-inventory.md` deleted) and adds deeper FEATURE_103/104/107-related context to the v0.7.29 retrospective.
 - **`docs/CODING_AGENT_PROMPTS.md`** — cross-project prompt-system reference (4 open-source coding agents) for KodaX prompt design comparison. Research artefact, not a project doc.
@@ -1273,7 +1273,7 @@ Structural hygiene tail — legacy cleanup + repo-intelligence protocol extracti
 
 ### Documentation
 - `docs/features/v0.7.25.md`: 075 scope narrowed (dropped editor + markdown, added LLM prompt structural constraint), 076 Q1-Q4 decisions captured, 058 section added with FEATURE_057 dependency-free rationale.
-- `docs/features/v0.8.0.md`: FEATURE_058 moved out to v0.7.25 with migration note.
+- `docs/features/v0.8.5.md`: FEATURE_058 moved out to v0.7.25 with migration note.
 - `docs/FEATURE_LIST.md`: FEATURE_051 / FEATURE_058 / FEATURE_075 / FEATURE_076 marked Completed; v0.7.25 progress recorded; "Current released version" bumped to v0.7.25.
 
 ### Test Status
@@ -1310,7 +1310,7 @@ Structural hygiene tail — legacy cleanup + repo-intelligence protocol extracti
 ### Documentation
 - `docs/features/v0.7.24.md`: Implementation Notes section with slice breakdown (LoC + file count per slice), design deviations (FM-2 capabilities drop, P3 cli-events deferral, Capability type extraction), FEATURE_093 opportunistic completion, test summary, final dependency graph
 - `docs/features/v0.7.27.md` (FEATURE_086): added item #9 capturing the deferred cli-events relocation work
-- `docs/features/v0.8.0.md`: added FEATURE_093 section documenting the remaining 1-cycle scope (`repl/commands` triangle blocker)
+- `docs/features/v0.8.5.md`: added FEATURE_093 section documenting the remaining 1-cycle scope (`repl/commands` triangle blocker)
 - `docs/FEATURE_LIST.md`: FEATURE_082 and FEATURE_083 marked Completed; FEATURE_093 added to Planned; v0.7.24 progress recorded; "Current released version" bumped to v0.7.24
 
 ### Test Status
@@ -1378,7 +1378,7 @@ repl            → coding, skills
 ### Documentation
 - Remove `docs/features/v1.0.0.md` (all features migrated to earlier versions)
 - Add feature docs for v0.7.22, v0.7.23, v0.7.24, v0.7.26–v0.7.29, v0.7.31, v0.7.32
-- Update `KNOWN_ISSUES.md`, `v0.8.0.md`, and `features/README.md` references
+- Update `KNOWN_ISSUES.md`, `v0.8.5.md`, and `features/README.md` references
 
 ---
 

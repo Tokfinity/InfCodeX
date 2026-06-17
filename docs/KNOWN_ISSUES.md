@@ -1,6 +1,6 @@
 # Known Issues
 
-_Last Updated: 2026-06-17_
+_Last Updated: 2026-06-18_
 
 ---
 
@@ -85,11 +85,68 @@ _Last Updated: 2026-06-17_
 | 139 | High | Resolved | SDK session full transcript hidden by active-lineage load + error snapshots can orphan activeEntryId | long-standing | v0.7.49 | 2026-06-16 | 2026-06-16 |
 | 138 | High | Resolved | Workflow host RPC 边界对对象载荷零校验 — `synthesize` 传非数组 inputs 崩裸 TypeError + `runAgent`/`spawnAgent` 缺 name/prompt 静默烧 token | v0.7.49 | v0.7.49 | 2026-06-15 | 2026-06-15 |
 | 140 | High | Open | Published bundle leaves computed `./agent.js` child-executor import, breaking workflow child agents | v0.7.37 bundle distribution; confirmed v0.7.48-v0.7.50 | - | 2026-06-17 | - |
+| 141 | Medium | Open | CI workflow long-red on Linux: cross-platform test bugs (storage list() runtime-inspection, bash background-process, h2 spawn env, skill-creator API-key-at-load) | long-standing (pre-v0.7.49) | - | 2026-06-18 | - |
 
 ---
 
 ## Issue Details
 <!-- Full details for each issue - REQUIRED for all issues -->
+
+### 141: CI workflow long-red on Linux — cross-platform test bugs
+
+- **Priority**: Medium
+- **Status**: **Open** (partially fixed — see Progress)
+- **Introduced**: long-standing; CI `ci.yml` has been red on the `KodaX` branch across many releases (v0.7.48–v0.7.51) while the product itself is unaffected
+- **Created**: 2026-06-18
+- **Fixed**: -
+
+#### Summary
+
+The GitHub Actions `CI` workflow (`.github/workflows/ci.yml`, Ubuntu, full
+`npm test`) has been failing on every push for 40+ runs. This is **not a
+product regression** — the suite is green locally on Windows and the
+tag-triggered `Release` workflow (binaries + GitHub Release) succeeds
+independently. The red is a cluster of **cross-platform / environment test
+bugs** that only surface on the Linux CI runner.
+
+#### Root Causes (diagnosed 2026-06-18 via CI as the repro environment)
+
+1. **`packages/repl/src/interactive/storage.test.ts` (6 tests)** — `FileSessionStorage.list()` (`storage.ts:~1307`) derives the per-project session key from a **live** `inspectWorkspaceRuntime({ cwd: gitRoot })`, whereas `save()` derives it from the persisted session data. When the test's `gitRoot` is a non-existent directory, the `git`-spawn-with-bad-cwd fallback diverges between Windows and Linux, so the list-time key ≠ the save-time key and `list()` returns `[]`. **A portable-path fix was tried and DISPROVEN by CI** — the failure is the runtime-inspection layer, not path format. **Robust fix:** mock `inspectWorkspaceRuntime` in these 6 tests (as the passing "lists sibling workspace sessions" test already does) so the key derivation is deterministic on all platforms. Needs a Linux repro to verify.
+2. **`benchmark/harness/h2-boundary-runner.test.ts` (3 tests)** — env propagation to the spawned fake-kodax process (`KODAX_FORCE_MAX_HARNESS`, `KODAX_PLANNER_INPUTFILTER`) + `mustNotTouchViolations` forbidden-path detection behave differently under the Linux spawn/path semantics.
+3. **`packages/coding/src/tools/bash.test.ts` (2 tests)** — "registers background commands for managed cleanup" / "stops background commands when the caller aborts": background-process registration + kill/abort lifecycle differs on Linux (process-tree semantics). (The third bash failure, "keeps the tail for large command output", was a shell-quoting bug and is **fixed**.)
+4. **`packages/agent/src/capabilities/skills/skill-creator-tools.test.ts` (collection failure)** — the file throws at module-load time: `agent-task-runner: API key env DEEPSEEK_API_KEY not set for alias ds/v4flash`. **Fix:** skip (or lazily construct) when the API key is absent, so the suite collects without provider credentials.
+
+#### Progress (fixed and CI-confirmed, 2026-06-17→18)
+
+- **Node 18 floor dropped** (commit `f9ab5596`): a `v`-flag RegExp (unicodeSets, requires Node 20+) in a dependency made ~65 of 71 node-18 test files fail to even load. `engines.node` raised to `>=20.0.0` (root + 4 packages), `ci.yml` matrix reduced to `['20','22']`, README/AGENTS/CLAUDE tech-stack tables synced. This eliminated the bulk of the red.
+- **`bash.test.ts` large-output** (`e9b88a95`): backtick/`${}` in a `node -e` script was expanded by POSIX `sh`; switched to single-quoted concatenation.
+- **`terminalCapabilities.test.ts`** + **`workspace-runtime.test.ts`** (`8344a13a`): `isScreenReader()` treats `CI` as a signal (Actions sets `CI=true`) — test now clears it; `resolveSessionRuntimeInfo` normalizes via `path.resolve`, so the legacy-gitRoot case now uses a both-absolute root.
+
+Net: node 22 went from **71 failed files → 4 failed files / 11 failed tests**.
+
+#### Why this is tracked rather than fixed now
+
+The remaining failures (storage `list()`, h2 spawn, bash background) are Linux
+runtime/process/workspace behaviors that **cannot be fixed confidently without a
+Linux reproduction environment** — the one blind hypothesis attempted (storage
+portable path) was disproven by CI. The dev machine has no Docker and no
+installed WSL distro, and `node_modules` deps were wiped post-publish
+(`npm ls` = empty), so local verification is currently impossible.
+
+#### Proposed Solution
+
+Pick up with a Linux repro env (WSL distro / Docker / Linux box):
+1. Mock `inspectWorkspaceRuntime` in the 6 storage `list()` tests.
+2. Make `skill-creator-tools.test.ts` skip when `DEEPSEEK_API_KEY` is absent.
+3. Reproduce + fix the h2-boundary-runner env-propagation and bash background-process tests on Linux.
+4. Verify the full matrix (node 20 + 22) goes green, then keep CI green as a gate.
+
+#### Context
+
+- Full per-root-cause diagnosis captured in this session; the analysis is the hard part — once on Linux the fixes are largely mechanical.
+- `Release` workflow is independent of `CI` and remains green.
+
+---
 
 ### 140: Published bundle leaves computed `./agent.js` child-executor import, breaking workflow child agents
 
@@ -3618,7 +3675,7 @@ Commit `ef085fc` 把 V1 精简到 V2 时没区分"信息载体"和"脚手架"，
 - **Context**:
   - `docs/FEATURE_LIST.md`
   - `docs/features/v0.7.0.md`
-  - `docs/features/v0.8.0.md`
+  - `docs/features/v0.8.5.md`
 - **Root Cause**:
   1. 多个 Markdown 文件同时承载重叠的真相字段
   2. 缺少 consistency validator 或 summary regeneration
