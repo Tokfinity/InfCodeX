@@ -1,6 +1,6 @@
 # Known Issues
 
-_Last Updated: 2026-06-16_
+_Last Updated: 2026-06-17_
 
 ---
 
@@ -84,11 +84,51 @@ _Last Updated: 2026-06-16_
 | 137 | High | Resolved | Streamable HTTP MCP transport drops `Mcp-Session-Id` on sessionful servers | v0.7.16 | v0.7.45 | 2026-06-05 | 2026-06-05 |
 | 139 | High | Resolved | SDK session full transcript hidden by active-lineage load + error snapshots can orphan activeEntryId | long-standing | v0.7.49 | 2026-06-16 | 2026-06-16 |
 | 138 | High | Resolved | Workflow host RPC 边界对对象载荷零校验 — `synthesize` 传非数组 inputs 崩裸 TypeError + `runAgent`/`spawnAgent` 缺 name/prompt 静默烧 token | v0.7.49 | v0.7.49 | 2026-06-15 | 2026-06-15 |
+| 140 | High | Open | Published bundle leaves computed `./agent.js` child-executor import, breaking workflow child agents | v0.7.37 bundle distribution; confirmed v0.7.48-v0.7.50 | - | 2026-06-17 | - |
 
 ---
 
 ## Issue Details
 <!-- Full details for each issue - REQUIRED for all issues -->
+
+### 140: Published bundle leaves computed `./agent.js` child-executor import, breaking workflow child agents
+
+- **Priority**: High
+- **Status**: **Open**
+- **Introduced**: v0.7.37 bundle distribution; confirmed in published `0.7.48`, `0.7.49`, and `0.7.50`
+- **Created**: 2026-06-17
+- **Fixed**: -
+
+#### Original Problem
+
+When a locally linked or published `kodax` package runs a workflow that dispatches child agents, the run can fail with:
+
+```text
+[child-executor] Failed to lazy-load agent module (`./agent.js`) for dispatch_child_task. This usually means the @kodax-ai/coding build is broken or out of date. Underlying cause: Cannot find module '...\dist\agent.js' imported from ...\dist\kodax_cli.js
+```
+
+The npm `@kodax-ai/kodax@0.7.50` tarball has the same failure signature: `package/dist/agent.js` is absent, while `package/dist/kodax_cli.js` and an SDK shared chunk still contain a runtime `./agent.js` dynamic import.
+
+#### Root Cause
+
+`packages/coding/src/child-executor.ts` used a computed dynamic import (`const spec = './agent.js'; await import(spec)`) to hide the `child-executor -> agent` edge from circular dependency tooling. That works in `packages/coding/dist`, where `agent.js` is a sibling file.
+
+In the bundled root distribution, esbuild cannot statically see the computed import and leaves it as a runtime import. At runtime it resolves relative to `dist/kodax_cli.js`, so Node looks for root `dist/agent.js`, which is not shipped.
+
+#### Proposed Solution
+
+- Keep the import lazy, but make the import target a string literal (`await import('./agent.js')`) so esbuild bundles the target into `dist/kodax_cli.js` / SDK chunks instead of leaving a raw runtime import.
+- Add a build/package regression guard that fails if built `dist/kodax_cli.js` or `dist/chunks/*.js` still contain the child-executor lazy-load error plus a raw `./agent.js` import.
+- Verify the fix against the packed tarball, not only TypeScript unit tests: `npm run build`, `npm pack`, inspect/extract the tarball, then run/grep the generated bundle.
+
+#### Context
+
+- Reproduced from a local `npm link` workflow run on 2026-06-17.
+- Confirmed against the online npm package `@kodax-ai/kodax@0.7.50` tarball on 2026-06-17.
+- Spot-checked published `0.7.49` and `0.7.48`; both have the same missing `dist/agent.js` plus raw `./agent.js` import signature.
+- Local working tree now contains the literal lazy import plus build/release/tarball verification; keep this issue open until a fixed npm version is published.
+
+---
 
 ### 139: SDK session full transcript hidden by active-lineage load + error snapshots can orphan activeEntryId
 
@@ -4356,7 +4396,7 @@ Commit `ef085fc` 把 V1 精简到 V2 时没区分"信息载体"和"脚手架"，
 ---
 
 ## Summary
-- Total: 66 (24 Open, 42 Resolved, 0 Partially Resolved, 0 Won't Fix)
+- Total: 67 (25 Open, 42 Resolved, 0 Partially Resolved, 0 Won't Fix)
 - Highest Priority Open: 091 - 缺少一等公民 MCP / Web Search / Code Search 工具体系 (High)
 - Historical archived issues are maintained in ISSUES_ARCHIVED.md
 
