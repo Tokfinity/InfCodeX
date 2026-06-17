@@ -17,7 +17,7 @@ async function writeSkillMd(
   name: string,
   description: string,
   body: string,
-): Promise<void> {
+): Promise<string> {
   const skillDir = path.join(rootDir, sourceDir, name);
   await mkdir(skillDir, { recursive: true });
   await writeFile(
@@ -25,6 +25,7 @@ async function writeSkillMd(
     `---\nname: ${name}\ndescription: ${description}\n---\n\n${body}\n`,
     'utf8',
   );
+  return skillDir;
 }
 
 // The skill tool reaches the registry via getSkillRegistry() (singleton).
@@ -106,9 +107,47 @@ describe('toolSkill (claudecode-parity skill invocation)', () => {
       executionCwd: tempDir,
     });
     expect(typeof result).toBe('string');
+    expect(result).toContain('<skill name="kodax-test-skill-found"');
+    expect(result).toContain('Skill root:');
     expect(result).toContain('Body header');
     expect(result).toContain('Do X then Y.');
     expect(result).not.toContain('[Tool Error]');
+  });
+
+  it('returns support file locations for user skills', async () => {
+    const skillDir = await writeSkillMd(
+      tempDir,
+      'user',
+      'kodax-test-user-support',
+      'User skill with resources',
+      'Read references/guide.md and use scripts/check.mjs.',
+    );
+    await mkdir(path.join(skillDir, 'references'), { recursive: true });
+    await mkdir(path.join(skillDir, 'scripts'), { recursive: true });
+    await writeFile(path.join(skillDir, 'references', 'guide.md'), '# Guide', 'utf8');
+    await writeFile(path.join(skillDir, 'scripts', 'check.mjs'), 'export {};', 'utf8');
+
+    const { getSkillRegistry } = await import('@kodax-ai/agent');
+    const registry = getSkillRegistry(tempDir, {
+      projectPaths: [],
+      userPaths: [path.join(tempDir, 'user')],
+      pluginPaths: [],
+      builtinPath: path.join(tempDir, 'builtin'),
+    });
+    await registry.discover();
+
+    const result = await toolSkill({ skill: 'kodax-test-user-support' }, {
+      backups: new Map(),
+      executionCwd: tempDir,
+    });
+
+    expect(result).toContain(`Skill root: ${skillDir.replace(/\\/g, '/')}`);
+    expect(result).toContain(
+      `references/guide.md: ${path.join(skillDir, 'references', 'guide.md').replace(/\\/g, '/')}`,
+    );
+    expect(result).toContain(
+      `scripts/check.mjs: ${path.join(skillDir, 'scripts', 'check.mjs').replace(/\\/g, '/')}`,
+    );
   });
 
   it('tolerates a leading slash in the skill name', async () => {

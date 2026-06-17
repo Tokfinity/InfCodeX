@@ -686,6 +686,7 @@ async function runManagedTaskViaRunnerInner(
     summarizeBlob,
     contentHashCache,
     readFileStateCache,
+    ...(skillInvocationCtx ? { skillInvocation: skillInvocationCtx } : {}),
   };
   // Mount `siblingSnapshot` as a live getter so tools always see the
   // latest per-round snapshot. The factory below updates the ref in

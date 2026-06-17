@@ -2299,6 +2299,7 @@ function printSkillsListPiMonoStyle(skills: SkillMetadata[]): void {
     console.log(chalk.dim('\n  Skills can be placed in:'));
     console.log(chalk.dim('    - .kodax/skills/'));
     console.log(chalk.dim('    - ~/.kodax/skills/'));
+    console.log(chalk.dim('    - ~/.agents/skills/'));
     return;
   }
 

@@ -477,6 +477,58 @@ describe('executeChildAgents', () => {
     );
   });
 
+  it('passes active skill resource roots into child briefings', async () => {
+    mockRunKodaX.mockResolvedValueOnce({
+      success: true,
+      lastText: 'inspected skill resources',
+      messages: [{ role: 'assistant', content: '' }],
+      sessionId: 's-skill',
+    });
+
+    await executeChildAgents(
+      [createBundle({ id: 'cb-skill', objective: 'Inspect the active skill references' })],
+      {
+        ...createCtx(),
+        skillInvocation: {
+          name: 'huashu-design',
+          path: 'C:/Users/iceto/.agents/skills/huashu-design/SKILL.md',
+          description: 'Design skill',
+          expandedContent: [
+            '<skill name="huashu-design" location="C:/Users/iceto/.agents/skills/huashu-design">',
+            '',
+            'Skill root: C:/Users/iceto/.agents/skills/huashu-design',
+            '',
+            'Support roots:',
+            '- references/: C:/Users/iceto/.agents/skills/huashu-design/references (24 files)',
+            '- scripts/: C:/Users/iceto/.agents/skills/huashu-design/scripts (15 files)',
+            '- assets/: C:/Users/iceto/.agents/skills/huashu-design/assets (104 files)',
+            '',
+            'Support file inventory:',
+            '- references/animation-best-practices.md: C:/Users/iceto/.agents/skills/huashu-design/references/animation-best-practices.md',
+            '- assets/animations.jsx: C:/Users/iceto/.agents/skills/huashu-design/assets/animations.jsx',
+            '</skill>',
+          ].join('\n'),
+        },
+      },
+      createOptions(),
+    );
+
+    const prompt = mockRunKodaX.mock.calls[0]![1] as string;
+    expect(prompt).toContain('## Active Skill Resources');
+    expect(prompt).toContain('Parent task is using skill "huashu-design"');
+    expect(prompt).toContain('Skill root: C:/Users/iceto/.agents/skills/huashu-design');
+    expect(prompt).toContain('references/: C:/Users/iceto/.agents/skills/huashu-design/references');
+    expect(prompt).toContain('assets/animations.jsx: C:/Users/iceto/.agents/skills/huashu-design/assets/animations.jsx');
+
+    const childOptions = mockRunKodaX.mock.calls[0]![0] as {
+      context?: { skillInvocation?: { name?: string; path?: string } };
+    };
+    expect(childOptions.context?.skillInvocation).toMatchObject({
+      name: 'huashu-design',
+      path: 'C:/Users/iceto/.agents/skills/huashu-design/SKILL.md',
+    });
+  });
+
   it('executes read-only bundles in parallel', async () => {
     const bundles = [
       createBundle({ id: 'cb-1', objective: 'Check auth module' }),

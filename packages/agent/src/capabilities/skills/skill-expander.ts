@@ -11,7 +11,7 @@
  * - Handles dynamic context (!`command`)
  */
 
-import type { Skill, SkillContext } from './types.js';
+import type { Skill, SkillContext, SkillFile } from './types.js';
 import { resolveSkillContent } from './skill-resolver.js';
 
 /**
@@ -38,6 +38,60 @@ function escapeXml(str: string): string {
     .replace(/'/g, '&apos;');
 }
 
+const SUPPORT_FILE_LINE_LIMIT = 120;
+
+function formatDisplayPath(filePath: string): string {
+  return filePath.replace(/\\/g, '/');
+}
+
+function collectSupportFiles(skill: Skill): Array<{ folder: string; file: SkillFile }> {
+  return [
+    ...(skill.references ?? []).map((file) => ({ folder: 'references', file })),
+    ...(skill.scripts ?? []).map((file) => ({ folder: 'scripts', file })),
+    ...(skill.assets ?? []).map((file) => ({ folder: 'assets', file })),
+    ...(skill.templates ?? []).map((file) => ({ folder: 'templates', file })),
+    ...(skill.resources ?? []).map((file) => ({ folder: 'resources', file })),
+  ];
+}
+
+function buildSupportFileContext(skill: Skill): string[] {
+  const supportFiles = collectSupportFiles(skill);
+  if (supportFiles.length === 0) {
+    return [];
+  }
+
+  const roots = [
+    ['references', skill.references],
+    ['scripts', skill.scripts],
+    ['assets', skill.assets],
+    ['templates', skill.templates],
+    ['resources', skill.resources],
+  ] as const;
+
+  const lines = [
+    'Skill support files are rooted at the skill root above. When the skill references `references/...`, `assets/...`, `scripts/...`, `templates/...`, or `resources/...`, read it from this skill root.',
+    '',
+    'Support roots:',
+  ];
+
+  for (const [folder, files] of roots) {
+    if (files?.length) {
+      lines.push(`- ${folder}/: ${formatDisplayPath(`${skill.path}/${folder}`)} (${files.length} files)`);
+    }
+  }
+
+  lines.push('', 'Support file inventory:');
+  for (const { folder, file } of supportFiles.slice(0, SUPPORT_FILE_LINE_LIMIT)) {
+    lines.push(`- ${folder}/${file.relativePath}: ${formatDisplayPath(file.path)}`);
+  }
+
+  if (supportFiles.length > SUPPORT_FILE_LINE_LIMIT) {
+    lines.push(`- ... ${supportFiles.length - SUPPORT_FILE_LINE_LIMIT} more files under ${formatDisplayPath(skill.path)}`);
+  }
+
+  return lines;
+}
+
 /**
  * Build the skill block in XML format
  *
@@ -56,18 +110,23 @@ function buildSkillBlock(skill: Skill, content: string, args: string): string {
   // Opening tag with metadata
   lines.push(`<skill name="${escapeXml(skill.name)}" location="${escapeXml(skill.path)}">`);
   lines.push('');
+  lines.push(`Skill root: ${formatDisplayPath(skill.path)}`);
 
   // Add context reference information
   if (skill.source === 'builtin') {
     lines.push('This is a built-in KodaX skill.');
   } else if (skill.source === 'project') {
-    // For project skills, note that paths are relative to project root
-    lines.push(`References are relative to the project root.`);
+    lines.push('This is a project-defined skill. Project work paths are relative to the project root; skill support files are relative to the skill root above.');
   } else if (skill.source === 'user') {
     lines.push(`This is a user-defined skill.`);
   }
 
   lines.push('');
+  const supportContext = buildSupportFileContext(skill);
+  if (supportContext.length > 0) {
+    lines.push(...supportContext);
+    lines.push('');
+  }
 
   // Add skill content (already resolved)
   lines.push(content);

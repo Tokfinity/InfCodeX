@@ -27,7 +27,7 @@
  * claudecode layers on top (those can come incrementally if needed).
  */
 
-import { getSkillRegistry } from '@kodax-ai/agent';
+import { expandSkillForLLM, getSkillRegistry } from '@kodax-ai/agent';
 import type { KodaXToolExecutionContext } from '../types.js';
 
 export async function toolSkill(
@@ -55,14 +55,20 @@ export async function toolSkill(
     return `[Tool Error] skill: unknown skill "${skillName}". Available skills: ${available || '(none)'}.`;
   }
 
-  const cwd = ctx.executionCwd ?? process.cwd();
-  const result = await registry.invoke(skillName, args, {
-    workingDirectory: cwd,
-    projectRoot: ctx.gitRoot ?? cwd,
-  });
+  try {
+    const fullSkill = await registry.loadFull(skillName);
+    if (fullSkill.disableModelInvocation) {
+      return `[Tool Error] skill ${skillName}: Skill "${skillName}" has model invocation disabled`;
+    }
 
-  if (!result.success) {
-    return `[Tool Error] skill ${skillName}: ${result.error ?? 'invocation failed'}`;
+    const cwd = ctx.executionCwd ?? process.cwd();
+    const expanded = await expandSkillForLLM(fullSkill, args, {
+      workingDirectory: cwd,
+      projectRoot: ctx.gitRoot ?? cwd,
+    });
+
+    return expanded.content;
+  } catch (error) {
+    return `[Tool Error] skill ${skillName}: ${error instanceof Error ? error.message : String(error)}`;
   }
-  return result.content;
 }

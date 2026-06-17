@@ -1447,6 +1447,11 @@ export interface KodaXToolExecutionContext {
   /** Working directory used to resolve relative paths and execute shell commands. */
   executionCwd?: string;
   /**
+   * Active skill invocation for the current managed run. Child dispatch uses
+   * this to preserve the skill's support-file roots in sub-agent briefings.
+   */
+  skillInvocation?: KodaXSkillInvocationContext;
+  /**
    * FEATURE_217 (v0.7.49): parent dir for `isolation:'worktree'` workflow child
    * worktrees. Workflow runs point this at `<runDir>/worktrees` so worktrees are
    * reclaimable (Layer 2/3 sweep) and never pollute the user's project tree.

@@ -119,6 +119,7 @@ const WORKFLOW_CHILD_DIGEST_MAX_LINES = 4;
 // visible and the late summary is presentation-only.
 const WORKFLOW_CHILD_DIGEST_BLOCKING_TIMEOUT_MS = 10_000;
 const WORKFLOW_CHILD_DIGEST_ASYNC_TIMEOUT_MS = 45_000;
+const CHILD_SKILL_SUPPORT_FILE_LINE_LIMIT = 40;
 
 /* ---------- Public API ---------- */
 
@@ -458,6 +459,80 @@ function shouldCreateWorkflowChildDigest(
     result.lastText.trim().length > 0;
 }
 
+function deriveSkillRootFromSkillFile(skillFilePath: string): string {
+  return skillFilePath.replace(/[\\/]+SKILL\.md$/i, '');
+}
+
+function extractPrefixedLine(content: string, prefix: string): string | undefined {
+  const line = content
+    .split(/\r?\n/)
+    .find((candidate) => candidate.trim().startsWith(prefix));
+  return line?.trim().slice(prefix.length).trim() || undefined;
+}
+
+function extractListSection(
+  content: string,
+  heading: string,
+  limit: number,
+): string[] {
+  const lines = content.split(/\r?\n/);
+  const start = lines.findIndex((line) => line.trim() === heading);
+  if (start < 0) {
+    return [];
+  }
+
+  const items: string[] = [];
+  for (const line of lines.slice(start + 1)) {
+    const trimmed = line.trim();
+    if (!trimmed) {
+      if (items.length > 0) break;
+      continue;
+    }
+    if (!trimmed.startsWith('- ')) break;
+    items.push(trimmed);
+    if (items.length >= limit) break;
+  }
+  return items;
+}
+
+function buildActiveSkillResourceBriefing(
+  skillInvocation: KodaXToolExecutionContext['skillInvocation'],
+): string | undefined {
+  if (!skillInvocation) {
+    return undefined;
+  }
+
+  const root =
+    extractPrefixedLine(skillInvocation.expandedContent, 'Skill root:')
+    ?? deriveSkillRootFromSkillFile(skillInvocation.path);
+  const supportRoots = extractListSection(
+    skillInvocation.expandedContent,
+    'Support roots:',
+    12,
+  );
+  const supportFiles = extractListSection(
+    skillInvocation.expandedContent,
+    'Support file inventory:',
+    CHILD_SKILL_SUPPORT_FILE_LINE_LIMIT,
+  );
+
+  const lines = [
+    '## Active Skill Resources',
+    `Parent task is using skill "${skillInvocation.name}". If this child needs skill support files, use these exact paths instead of broad home/workspace searches.`,
+    `- Skill file: ${skillInvocation.path}`,
+    root ? `- Skill root: ${root}` : undefined,
+    supportRoots.length > 0 ? 'Support roots:' : undefined,
+    ...supportRoots,
+    supportFiles.length > 0 ? 'Selected support files:' : undefined,
+    ...supportFiles,
+    supportRoots.length > 0
+      ? 'If a needed support file is not listed above, combine its relative path with the matching support root.'
+      : undefined,
+  ].filter((line): line is string => Boolean(line));
+
+  return lines.join('\n');
+}
+
 function shouldRunWorkflowDigestAsync(
   bundle: KodaXChildContextBundle,
   options: ChildExecutorOptions,
@@ -696,6 +771,7 @@ async function runReadChildBody(
           currentAgentId: bundle.id,
           parentAgentId: scope.ctx.currentAgentId,
           inheritedChildTaskRegistry: scope.ctx.childTaskRegistry,
+          ...(scope.ctx.skillInvocation ? { skillInvocation: scope.ctx.skillInvocation } : {}),
         },
         events: childEvents,
       },
@@ -872,6 +948,7 @@ async function runWriteChildBody(
           currentAgentId: bundle.id,
           parentAgentId: childCtx.currentAgentId,
           inheritedChildTaskRegistry: childCtx.childTaskRegistry,
+          ...(childCtx.skillInvocation ? { skillInvocation: childCtx.skillInvocation } : {}),
         },
         events: childEvents,
       },
@@ -962,6 +1039,7 @@ async function buildChildBriefing(
   const shellHint = platform === 'win32'
     ? 'Shell defaults: Windows. Use: dir, move, copy, del, type. Avoid Unix-only tools like `head`, `tail`, `rm`, `cp`, `mv`.'
     : 'Shell defaults: Unix. Use: ls, mv, cp, rm, cat, head, tail.';
+  const activeSkillResourceBriefing = buildActiveSkillResourceBriefing(ctx.skillInvocation);
 
   const parts: string[] = [
     `# Child Agent Task`,
@@ -984,6 +1062,7 @@ async function buildChildBriefing(
     ``,
     `## Scope`,
     bundle.scopeSummary ?? (bundle.constraints.join(', ') || 'No specific scope constraints.'),
+    ...(activeSkillResourceBriefing ? [``, activeSkillResourceBriefing] : []),
     ``,
     `## Constraints`,
     bundle.readOnly
