@@ -4,6 +4,20 @@ All notable changes to this project will be documented in this file.
 
 > Full history for versions prior to v0.7.0: [CHANGELOG_ARCHIVE.md](docs/CHANGELOG_ARCHIVE.md)
 
+## [0.7.52] - 2026-06-18
+
+> Scope note: a maintenance release of fixes landed right after v0.7.51 — OpenAI-compat provider robustness, the Node runtime floor raised to 20, and the cross-platform CI test cleanup. No new features; no LLM-facing prompt changes (ADR-033 eval non-trigger).
+
+### Changed
+
+- **Node runtime floor raised to 20 (Node 18 dropped).** The codebase relies on Node 20+ runtime features (notably the RegExp `v`/unicodeSets flag pulled in transitively), so Node 18 could no longer even load large parts of the suite. `engines.node` is now `>=20.0.0` across the root and all four workspace packages, the CI matrix runs Node 20 + 22, and the README/AGENTS/CLAUDE tech-stack tables are updated. The release build continues to run Node 22.
+
+### Fixed
+
+- **Forced `tool_choice` now falls back on upstream 5xx / unsupported-parameter errors.** OpenAI-compat providers that reject a forced `tool_choice` request with a generic 5xx (or an `unsupported parameter: tool_choice` message) now retry without the forced choice instead of surfacing a hard error. HTTP status is extracted from `status` / `statusCode` so the fallback fires consistently across SDK error shapes.
+- **OpenAI tool history is repaired before replay.** Malformed tool history — orphan assistant `tool_calls` with no matching tool result, or orphan `tool` messages with no preceding assistant `tool_call` — is now sanitized before the conversation is replayed to OpenAI-compat endpoints, preventing avoidable 400s on resume / multi-turn tool runs.
+- **Cross-platform CI test reliability.** Test-only fixes so the Linux CI matrix reflects real regressions: the bash large-output test no longer relies on shell-interpreted backticks/`${}` in a `node -e` script; `isScreenReader` test clears `CI` (GitHub Actions sets `CI=true`); and `resolveSessionRuntimeInfo` / `FileSessionStorage` tests use platform-portable absolute roots instead of Windows-only `C:/…` paths. Remaining Linux-only test gaps are tracked in [docs/KNOWN_ISSUES.md #141](docs/KNOWN_ISSUES.md).
+
 ## [0.7.51] - 2026-06-17
 
 > Scope note: v0.7.51 closes the **"host reads persisted history"** loop on top of the v0.7.49/v0.7.50 workflow split. Two co-shipped, additive features: **FEATURE_230** makes the TUI tool transcript durable across resume, and **FEATURE_234** gives workflow runs a host-owned attribution slot. Neither rewrites FEATURE_217 (v0.7.49) or FEATURE_229 (v0.7.50); both treat the v0.7.50 process/snapshot model as a dependency, not future work. `FEATURE_230` was pulled forward from v0.7.59 into this release window; the original v0.7.51–v0.7.58 plan group shifted +10 (→ v0.7.61–v0.7.68).
