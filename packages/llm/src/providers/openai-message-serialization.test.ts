@@ -310,6 +310,108 @@ describe('openai message serialization', () => {
     expect(toolMsg.content).not.toContain('image_url');
   });
 
+  it('repairs orphan assistant tool_calls before replaying history', async () => {
+    const completion = {
+      choices: [{ message: { role: 'assistant', content: 'ok', tool_calls: [] } }],
+      usage: { prompt_tokens: 1, completion_tokens: 1, total_tokens: 2 },
+    };
+    const create = vi.fn().mockResolvedValue(completion);
+    const provider = new TestOpenAIProvider({ chat: { completions: { create } } });
+    const messages: KodaXMessage[] = [
+      { role: 'user', content: 'Inspect package.json' },
+      {
+        role: 'assistant',
+        content: [
+          { type: 'tool_use', id: 'call_orphan', name: 'read', input: { path: 'package.json' } },
+        ],
+      },
+      { role: 'user', content: 'continue' },
+    ];
+
+    await provider.complete(messages, TOOLS, 'sys');
+
+    const kwargs = create.mock.calls[0]?.[0];
+    const assistant = kwargs.messages.find(
+      (message: { role: string }) => message.role === 'assistant',
+    ) as Record<string, unknown>;
+    expect(assistant.tool_calls).toBeUndefined();
+    expect(assistant.content).toBe('...');
+    expect(
+      kwargs.messages.some((message: { role: string }) => message.role === 'tool'),
+    ).toBe(false);
+  });
+
+  it('keeps matched tool calls and drops only missing tool-call pairs', async () => {
+    const completion = {
+      choices: [{ message: { role: 'assistant', content: 'ok', tool_calls: [] } }],
+      usage: { prompt_tokens: 1, completion_tokens: 1, total_tokens: 2 },
+    };
+    const create = vi.fn().mockResolvedValue(completion);
+    const provider = new TestOpenAIProvider({ chat: { completions: { create } } });
+    const messages: KodaXMessage[] = [
+      { role: 'user', content: 'Inspect files' },
+      {
+        role: 'assistant',
+        content: [
+          { type: 'tool_use', id: 'call_a', name: 'read', input: { path: 'a.ts' } },
+          { type: 'tool_use', id: 'call_b', name: 'read', input: { path: 'b.ts' } },
+        ],
+      },
+      {
+        role: 'user',
+        content: [
+          { type: 'tool_result', tool_use_id: 'call_a', content: 'a contents' },
+        ],
+      },
+      { role: 'user', content: 'continue' },
+    ];
+
+    await provider.complete(messages, TOOLS, 'sys');
+
+    const kwargs = create.mock.calls[0]?.[0];
+    const assistant = kwargs.messages.find(
+      (message: { role: string }) => message.role === 'assistant',
+    ) as Record<string, unknown>;
+    const toolCalls = assistant.tool_calls as Array<Record<string, unknown>>;
+    const toolMessages = kwargs.messages.filter(
+      (message: { role: string }) => message.role === 'tool',
+    ) as Array<Record<string, unknown>>;
+    expect(toolCalls.map((toolCall) => toolCall.id)).toEqual(['call_a']);
+    expect(toolMessages.map((message) => message.tool_call_id)).toEqual(['call_a']);
+    expect(
+      kwargs.messages.some(
+        (message: Record<string, unknown>) => message.tool_call_id === 'call_b',
+      ),
+    ).toBe(false);
+  });
+
+  it('drops orphan tool messages without a preceding assistant tool_call', async () => {
+    const completion = {
+      choices: [{ message: { role: 'assistant', content: 'ok', tool_calls: [] } }],
+      usage: { prompt_tokens: 1, completion_tokens: 1, total_tokens: 2 },
+    };
+    const create = vi.fn().mockResolvedValue(completion);
+    const provider = new TestOpenAIProvider({ chat: { completions: { create } } });
+    const messages: KodaXMessage[] = [
+      {
+        role: 'user',
+        content: [
+          { type: 'tool_result', tool_use_id: 'call_missing', content: 'late result' },
+        ],
+      },
+      { role: 'user', content: 'continue' },
+    ];
+
+    await provider.complete(messages, TOOLS, 'sys');
+
+    const kwargs = create.mock.calls[0]?.[0];
+    expect(kwargs.messages.map((message: { role: string }) => message.role)).toEqual([
+      'system',
+      'user',
+    ]);
+    expect(kwargs.messages[1].content).toBe('continue');
+  });
+
   // Regression: third-party Qwen proxies reject any `role: 'system'` that is
   // not at position 0 ("System message must at the begin"). Post-compact
   // attachments + compaction summaries + handoff replaceSystemMessage could

@@ -173,6 +173,68 @@ function extractOpenAIMessageReasoning(message: unknown): string {
     .join('');
 }
 
+type WireToolCall = {
+  readonly id: string;
+  readonly value: unknown;
+};
+
+function getWireRole(message: OpenAI.Chat.ChatCompletionMessageParam): string | undefined {
+  const role = (message as unknown as Record<string, unknown>).role;
+  return typeof role === 'string' ? role : undefined;
+}
+
+function getAssistantWireToolCalls(
+  message: OpenAI.Chat.ChatCompletionMessageParam,
+): WireToolCall[] | undefined {
+  if (getWireRole(message) !== 'assistant') {
+    return undefined;
+  }
+  const rawToolCalls = (message as unknown as Record<string, unknown>).tool_calls;
+  if (!Array.isArray(rawToolCalls)) {
+    return undefined;
+  }
+
+  return rawToolCalls.flatMap((toolCall): WireToolCall[] => {
+    if (!toolCall || typeof toolCall !== 'object') {
+      return [];
+    }
+    const id = (toolCall as Record<string, unknown>).id;
+    return typeof id === 'string' && id.trim().length > 0
+      ? [{ id, value: toolCall }]
+      : [];
+  });
+}
+
+function getToolWireCallId(
+  message: OpenAI.Chat.ChatCompletionMessageParam,
+): string | undefined {
+  if (getWireRole(message) !== 'tool') {
+    return undefined;
+  }
+  const id = (message as unknown as Record<string, unknown>).tool_call_id;
+  return typeof id === 'string' && id.trim().length > 0 ? id : undefined;
+}
+
+function rewriteAssistantWireToolCalls(
+  message: OpenAI.Chat.ChatCompletionMessageParam,
+  toolCalls: WireToolCall[],
+): OpenAI.Chat.ChatCompletionMessageParam {
+  const clone: Record<string, unknown> = {
+    ...(message as unknown as Record<string, unknown>),
+  };
+
+  if (toolCalls.length > 0) {
+    clone.tool_calls = toolCalls.map((toolCall) => toolCall.value);
+    return clone as unknown as OpenAI.Chat.ChatCompletionMessageParam;
+  }
+
+  delete clone.tool_calls;
+  if (clone.content == null || clone.content === '') {
+    clone.content = '...';
+  }
+  return clone as unknown as OpenAI.Chat.ChatCompletionMessageParam;
+}
+
 export abstract class KodaXOpenAICompatProvider extends KodaXBaseProvider {
   abstract override readonly name: string;
   readonly supportsThinking = true;
@@ -1114,6 +1176,58 @@ export abstract class KodaXOpenAICompatProvider extends KodaXBaseProvider {
       converted.push(...await this.serializeUserMessage(message.content));
     }
 
-    return converted;
+    return this.repairToolCallHistory(converted);
+  }
+
+  private repairToolCallHistory(
+    messages: OpenAI.Chat.ChatCompletionMessageParam[],
+  ): OpenAI.Chat.ChatCompletionMessageParam[] {
+    const repaired: OpenAI.Chat.ChatCompletionMessageParam[] = [];
+    let index = 0;
+
+    while (index < messages.length) {
+      const message = messages[index]!;
+      const toolCalls = getAssistantWireToolCalls(message);
+
+      if (toolCalls === undefined) {
+        if (getWireRole(message) !== 'tool') {
+          repaired.push(message);
+        }
+        index += 1;
+        continue;
+      }
+
+      const expectedIds = new Set(toolCalls.map((toolCall) => toolCall.id));
+      const seenIds = new Set<string>();
+      const matchedToolMessages: OpenAI.Chat.ChatCompletionMessageParam[] = [];
+      let nextIndex = index + 1;
+
+      while (nextIndex < messages.length && getWireRole(messages[nextIndex]!) === 'tool') {
+        const toolMessage = messages[nextIndex]!;
+        const toolCallId = getToolWireCallId(toolMessage);
+        if (
+          toolCallId !== undefined &&
+          expectedIds.has(toolCallId) &&
+          !seenIds.has(toolCallId)
+        ) {
+          seenIds.add(toolCallId);
+          matchedToolMessages.push(toolMessage);
+        }
+        nextIndex += 1;
+      }
+
+      const matchedToolCalls = toolCalls.filter((toolCall) => seenIds.has(toolCall.id));
+      const assistantMessage = matchedToolCalls.length === toolCalls.length && toolCalls.length > 0
+        ? message
+        : rewriteAssistantWireToolCalls(message, matchedToolCalls);
+
+      repaired.push(assistantMessage);
+      if (matchedToolCalls.length > 0) {
+        repaired.push(...matchedToolMessages);
+      }
+      index = nextIndex;
+    }
+
+    return repaired;
   }
 }

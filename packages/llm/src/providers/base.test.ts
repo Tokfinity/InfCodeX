@@ -124,6 +124,11 @@ describe('KodaXBaseProvider', () => {
         new Error('network disconnected'),
       ),
     ).toBe(false);
+    expect(
+      provider.exposeShouldFallbackForForcedToolChoiceError(
+        new Error('requested 550 tokens, reduce max output'),
+      ),
+    ).toBe(false);
   });
 
   it('returns the expected fallback chains for reasoning capabilities', () => {

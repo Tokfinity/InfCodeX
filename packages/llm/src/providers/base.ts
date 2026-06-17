@@ -89,6 +89,10 @@ function extractHttpStatus(error: unknown): number | undefined {
     ?? extractHttpStatus(record.cause);
 }
 
+function getErrorMessage(error: unknown): string {
+  return error instanceof Error ? error.message.toLowerCase() : String(error).toLowerCase();
+}
+
 /**
  * FEATURE_130 (v0.7.36): structured payload fired through
  * `KodaXEvents.onRetryAfter` whenever a provider's `withRateLimit`
@@ -380,7 +384,7 @@ export abstract class KodaXBaseProvider {
   }
 
   protected shouldFallbackForForcedToolChoiceError(error: unknown): boolean {
-    const message = error instanceof Error ? error.message.toLowerCase() : String(error).toLowerCase();
+    const message = getErrorMessage(error);
     const mentionsToolChoice =
       message.includes('tool_choice') ||
       message.includes('tool choice') ||
@@ -394,15 +398,19 @@ export abstract class KodaXBaseProvider {
       return true;
     }
 
+    return this.isServerError(error);
+  }
+
+  protected isServerError(error: unknown): boolean {
     const status = extractHttpStatus(error);
     if (status !== undefined && status >= 500 && status <= 599) {
       return true;
     }
 
+    const message = getErrorMessage(error);
     return (
       message.includes('internal server error') ||
-      message.includes('server error') ||
-      /\b5\d\d\b/.test(message)
+      message.includes('server error')
     );
   }
 
