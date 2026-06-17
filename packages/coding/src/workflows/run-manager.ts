@@ -218,6 +218,9 @@ export function createWorkflowRunManager(
           ? { sourceWorkflowName: opts.processMetadata.sourceWorkflowName }
           : {}),
         ...(opts.processMetadata?.revisionOf !== undefined ? { revisionOf: opts.processMetadata.revisionOf } : {}),
+        ...(opts.processMetadata?.hostMetadata !== undefined
+          ? { hostMetadata: { ...opts.processMetadata.hostMetadata } }
+          : {}),
         ...(opts.phases !== undefined ? { phases: opts.phases } : {}),
         ...(opts.maxAgents !== undefined ? { maxAgents: opts.maxAgents } : {}),
         ...(opts.plannedAgents !== undefined ? { plannedAgents: opts.plannedAgents } : {}),

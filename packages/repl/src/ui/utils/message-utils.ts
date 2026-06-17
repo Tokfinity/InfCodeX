@@ -2,21 +2,39 @@
  * Utilities for extracting message content for history rendering, copy, and previews.
  */
 
-import type { KodaXContentBlock, KodaXMessage } from "@kodax-ai/agent";
+import type {
+  KodaXContentBlock,
+  KodaXMessage,
+  KodaXSessionUiToolCall,
+  KodaXSessionUiToolCallStatus,
+} from "@kodax-ai/agent";
+import { ToolCallStatus, type CreatableHistoryItem, type ToolCall } from "../types.js";
+import {
+  sanitizeToolInput,
+  stringifyToolReplayValue,
+  truncateToolReplayText,
+} from "./tool-sanitizer.js";
 
 export type RestoredHistorySeed =
   | { type: "user"; text: string }
   | { type: "assistant"; text: string }
   | { type: "system"; text: string }
   | { type: "thinking"; text: string }
-  | { type: "tool_summary"; text: string };
+  | { type: "tool_summary"; text: string }
+  | { type: "tool_group"; tools: KodaXSessionUiToolCall[] };
 
 /** Convert a RestoredHistorySeed to a CreatableHistoryItem. tool_summary → event with icon. */
 export function seedToHistoryItem(
   seed: RestoredHistorySeed,
-): { type: "user"; text: string } | { type: "assistant"; text: string } | { type: "system"; text: string } | { type: "thinking"; text: string } | { type: "event"; text: string; icon: string } {
+): CreatableHistoryItem {
   if (seed.type === "tool_summary") {
     return { type: "event" as const, text: seed.text, icon: "tool" };
+  }
+  if (seed.type === "tool_group") {
+    return {
+      type: "tool_group",
+      tools: seed.tools.map(toolCallSeedToHistoryToolCall),
+    };
   }
   return seed;
 }
@@ -51,6 +69,44 @@ const CONTROL_PLANE_PATTERNS = [
 ];
 const LEGACY_THINKING_BLOCK_RE =
   /(^|\r?\n)\[Thinking\]\r?\n([\s\S]*?)\r?\n\[\/Thinking\](?=\r?\n|$)/g;
+const INCOMPLETE_TOOL_ERROR = "Session ended before the tool completed.";
+
+interface ToolResultSeed {
+  status: KodaXSessionUiToolCallStatus;
+  output?: string;
+  error?: string;
+}
+
+function toolCallSeedToHistoryToolStatus(status: KodaXSessionUiToolCallStatus): ToolCallStatus {
+  switch (status) {
+    case "success":
+      return ToolCallStatus.Success;
+    case "error":
+      return ToolCallStatus.Error;
+    case "cancelled":
+      return ToolCallStatus.Cancelled;
+    case "awaiting_approval":
+      return ToolCallStatus.AwaitingApproval;
+    default: {
+      const exhaustiveCheck: never = status;
+      return exhaustiveCheck;
+    }
+  }
+}
+
+export function toolCallSeedToHistoryToolCall(tool: KodaXSessionUiToolCall): ToolCall {
+  return {
+    id: tool.id,
+    name: tool.name,
+    status: toolCallSeedToHistoryToolStatus(tool.status),
+    ...(tool.input !== undefined ? { input: tool.input } : {}),
+    ...(tool.preview !== undefined ? { preview: tool.preview } : {}),
+    ...(tool.output !== undefined ? { output: tool.output } : {}),
+    ...(tool.error !== undefined ? { error: tool.error } : {}),
+    startTime: tool.startTime ?? Date.now(),
+    ...(tool.endTime !== undefined ? { endTime: tool.endTime } : {}),
+  };
+}
 
 function findControlPlaneCutIndex(text: string): number {
   let cutIndex = -1;
@@ -95,6 +151,80 @@ function collectTextBlocks(content: readonly unknown[]): string[] {
   return textParts;
 }
 
+function isRecord(value: unknown): value is Record<string, unknown> {
+  return typeof value === "object" && value !== null && !Array.isArray(value);
+}
+
+function toolResultContentToString(content: unknown): string {
+  if (typeof content === "string") {
+    return truncateToolReplayText(content);
+  }
+  if (content === undefined) {
+    return "";
+  }
+  try {
+    return stringifyToolReplayValue(content) ?? "";
+  } catch {
+    return truncateToolReplayText(String(content));
+  }
+}
+
+function inferToolResultSeed(block: Record<string, unknown>): ToolResultSeed {
+  const content = toolResultContentToString(block.content);
+  const trimmed = content.trimStart();
+  const isError = block.is_error === true
+    || trimmed.startsWith("[Tool Error]")
+    || trimmed.startsWith("[Error]");
+  const isCancelled = trimmed.startsWith("[Cancelled]")
+    || trimmed.startsWith("[Blocked]");
+
+  if (isError) {
+    return { status: "error", error: content };
+  }
+  if (isCancelled) {
+    return { status: "cancelled", error: content };
+  }
+  return { status: "success", output: content };
+}
+
+function collectToolResultSeeds(message: HistorySeedSourceMessage | undefined): Map<string, ToolResultSeed> {
+  const results = new Map<string, ToolResultSeed>();
+  if (!message || message.role !== "user" || !Array.isArray(message.content)) {
+    return results;
+  }
+
+  for (const block of message.content) {
+    if (!isRecord(block) || block.type !== "tool_result" || typeof block.tool_use_id !== "string") {
+      continue;
+    }
+    results.set(block.tool_use_id, inferToolResultSeed(block));
+  }
+  return results;
+}
+
+function buildToolCallSeed(
+  block: Record<string, unknown>,
+  toolResults: ReadonlyMap<string, ToolResultSeed>,
+): KodaXSessionUiToolCall | undefined {
+  if (block.type !== "tool_use" || typeof block.id !== "string" || typeof block.name !== "string") {
+    return undefined;
+  }
+
+  const result = toolResults.get(block.id) ?? {
+    status: "cancelled" as const,
+    error: INCOMPLETE_TOOL_ERROR,
+  };
+
+  return {
+    id: block.id,
+    name: block.name,
+    status: result.status,
+    ...(block.input !== undefined ? { input: sanitizeToolInput(isRecord(block.input) ? block.input : {}) ?? {} } : {}),
+    ...(result.output !== undefined ? { output: result.output } : {}),
+    ...(result.error !== undefined ? { error: result.error } : {}),
+  };
+}
+
 function extractAssistantTextOnly(content: string | readonly unknown[]): string {
   if (typeof content === "string") {
     return content;
@@ -109,7 +239,7 @@ function extractAssistantTextOnly(content: string | readonly unknown[]): string 
 
 function pushSeed(
   items: RestoredHistorySeed[],
-  type: RestoredHistorySeed["type"],
+  type: Exclude<RestoredHistorySeed["type"], "tool_group">,
   text: string
 ): void {
   if (text.trim().length === 0) {
@@ -182,7 +312,10 @@ function parseLegacyAssistantContent(content: string): RestoredHistorySeed[] {
   return items;
 }
 
-function extractAssistantHistorySeeds(content: string | readonly unknown[]): RestoredHistorySeed[] {
+function extractAssistantHistorySeeds(
+  content: string | readonly unknown[],
+  toolResults?: ReadonlyMap<string, ToolResultSeed>,
+): RestoredHistorySeed[] {
   if (typeof content === "string") {
     return parseLegacyAssistantContent(content);
   }
@@ -193,6 +326,7 @@ function extractAssistantHistorySeeds(content: string | readonly unknown[]): Res
 
   const items: RestoredHistorySeed[] = [];
   const textBuffer: string[] = [];
+  const toolBuffer: KodaXSessionUiToolCall[] = [];
 
   const flushAssistantBuffer = () => {
     if (textBuffer.length === 0) {
@@ -203,27 +337,46 @@ function extractAssistantHistorySeeds(content: string | readonly unknown[]): Res
     textBuffer.length = 0;
   };
 
+  const flushToolBuffer = () => {
+    if (toolBuffer.length === 0) {
+      return;
+    }
+
+    items.push({ type: "tool_group", tools: [...toolBuffer] });
+    toolBuffer.length = 0;
+  };
+
   for (const block of content) {
-    if (!block || typeof block !== "object" || !("type" in block)) {
+    if (!isRecord(block) || typeof block.type !== "string") {
       continue;
     }
 
     switch (block.type) {
       case "text":
+        flushToolBuffer();
         if ("text" in block) {
           textBuffer.push(String(block.text));
         }
         break;
       case "thinking":
         flushAssistantBuffer();
+        flushToolBuffer();
         if ("thinking" in block) {
           pushSeed(items, "thinking", String(block.thinking));
         }
         break;
       case "tool_use":
         flushAssistantBuffer();
-        if ("name" in block) {
-          const summary = formatToolUseSummary(block as { name: string; input?: Record<string, unknown> });
+        if (toolResults) {
+          const tool = buildToolCallSeed(block, toolResults);
+          if (tool) {
+            toolBuffer.push(tool);
+          }
+        } else if (typeof block.name === "string") {
+          const summary = formatToolUseSummary({
+            name: block.name,
+            ...(isRecord(block.input) ? { input: block.input } : {}),
+          });
           if (summary) {
             items.push({ type: "tool_summary", text: summary });
           }
@@ -237,6 +390,7 @@ function extractAssistantHistorySeeds(content: string | readonly unknown[]): Res
     }
   }
 
+  flushToolBuffer();
   flushAssistantBuffer();
   return items;
 }
@@ -279,9 +433,13 @@ export function extractHistorySeedsFromMessage(message: HistorySeedSourceMessage
     case "assistant": {
       const seeds = extractAssistantHistorySeeds(message.content);
       // Strip protocol blocks from assistant text; drop seeds that become empty.
-      return seeds
-        .map((seed) => ({ ...seed, text: stripManagedProtocolBlocks(seed.text) }))
-        .filter((seed) => seed.text.length > 0);
+      return seeds.flatMap((seed): RestoredHistorySeed[] => {
+        if (seed.type !== "assistant") {
+          return [seed];
+        }
+        const text = stripManagedProtocolBlocks(seed.text);
+        return text.length > 0 ? [{ ...seed, text }] : [];
+      });
     }
     case "user": {
       // Skip synthetic messages (auto-continue, retry prompts injected by the system).
@@ -309,6 +467,38 @@ export function extractHistorySeedsFromMessage(message: HistorySeedSourceMessage
     default:
       return [];
   }
+}
+
+export function extractHistorySeedsFromMessages(
+  messages: readonly HistorySeedSourceMessage[],
+): RestoredHistorySeed[] {
+  const seeds: RestoredHistorySeed[] = [];
+
+  for (let index = 0; index < messages.length; index += 1) {
+    const message = messages[index];
+    if (!message) {
+      continue;
+    }
+
+    if (message.role === "assistant") {
+      const toolResults = collectToolResultSeeds(messages[index + 1]);
+      const assistantSeeds = extractAssistantHistorySeeds(message.content, toolResults);
+      seeds.push(
+        ...assistantSeeds
+          .map((seed) => (
+            seed.type === "assistant"
+              ? { ...seed, text: stripManagedProtocolBlocks(seed.text) }
+              : seed
+          ))
+          .filter((seed) => seed.type !== "assistant" || seed.text.length > 0),
+      );
+      continue;
+    }
+
+    seeds.push(...extractHistorySeedsFromMessage(message));
+  }
+
+  return seeds;
 }
 
 /**

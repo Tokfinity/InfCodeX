@@ -215,6 +215,9 @@ export async function runWorkflowModule(
         ...(opts.processMetadata?.revisionOf !== undefined
           ? { revisionOf: opts.processMetadata.revisionOf }
           : {}),
+        ...(opts.processMetadata?.hostMetadata !== undefined
+          ? { hostMetadata: { ...opts.processMetadata.hostMetadata } }
+          : {}),
         ...(opts.module.meta.phases !== undefined ? { phases: opts.module.meta.phases } : {}),
         ...(limits.maxAgents !== undefined ? { maxAgents: limits.maxAgents } : {}),
         ...(opts.module.meta.plannedAgents !== undefined

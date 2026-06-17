@@ -78,6 +78,11 @@ export type {
   KodaXSessionTreeNode,
   KodaXSessionUiHistoryItem,
   KodaXSessionUiHistoryItemType,
+  KodaXSessionUiTextHistoryItem,
+  KodaXSessionUiTextHistoryItemType,
+  KodaXSessionUiToolCall,
+  KodaXSessionUiToolCallStatus,
+  KodaXSessionUiToolGroupHistoryItem,
   KodaXSessionWorkspaceKind,
   SessionErrorMetadata,
 } from './types.js';

@@ -15,6 +15,7 @@
 import { mkdirSync, appendFileSync, writeFileSync } from 'node:fs';
 import { join } from 'node:path';
 
+import { normalizeHostMetadata } from '@kodax-ai/agent';
 import type {
   WorkflowArtifactRef,
   WorkflowEvent,
@@ -33,6 +34,7 @@ export type WorkflowRunProcessMetadata = Pick<
   | 'sourceRunId'
   | 'sourceWorkflowName'
   | 'revisionOf'
+  | 'hostMetadata'
 >;
 
 export interface RunGraphWriterDeps {
@@ -103,6 +105,7 @@ export function createRunGraphWriter(runDir: string, deps: RunGraphWriterDeps = 
       return { scriptPath, manifestPath };
     },
     writeRunJson: (input) => {
+      const hostMetadata = normalizeHostMetadata(input.processMetadata?.hostMetadata);
       const runJson = {
         runId: input.state.runId,
         workflow: input.meta.name,
@@ -131,6 +134,7 @@ export function createRunGraphWriter(runDir: string, deps: RunGraphWriterDeps = 
         ...(input.processMetadata?.revisionOf !== undefined
           ? { revisionOf: input.processMetadata.revisionOf }
           : {}),
+        ...(hostMetadata !== undefined ? { hostMetadata } : {}),
         ...(input.scriptSnapshot
           ? {
               scriptSnapshotPath: input.scriptSnapshot.scriptPath,

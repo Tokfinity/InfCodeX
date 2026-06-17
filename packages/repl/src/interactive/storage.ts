@@ -17,6 +17,7 @@ import type {
   KodaXSessionRuntimeInfo,
   KodaXSessionScope,
   KodaXSessionStorage,
+  KodaXSessionUiHistoryItem,
 } from '@kodax-ai/agent';
 import {
   appendSessionLineageLabel,
@@ -50,7 +51,7 @@ import {
   isKodaXExtensionSessionState,
   isKodaXJsonValue,
   isKodaXMessage,
-  isKodaXSessionUiHistory,
+  isKodaXSessionUiHistoryItem,
   isRecord,
   isSessionErrorMetadata,
 } from './json-guards.js';
@@ -75,7 +76,7 @@ interface PersistedMetaUpdateLine {
   tag?: string;
   activeEntryId?: string | null;
   activeMessageCount?: number;
-  uiHistory?: KodaXSessionMeta['uiHistory'];
+  uiHistory?: unknown[];
   scope?: string;
 }
 
@@ -87,8 +88,23 @@ function isPersistedMetaUpdateLine(value: unknown): value is PersistedMetaUpdate
     && (value.tag === undefined || typeof value.tag === 'string')
     && (value.activeEntryId === undefined || typeof value.activeEntryId === 'string' || value.activeEntryId === null)
     && (value.activeMessageCount === undefined || typeof value.activeMessageCount === 'number')
-    && (value.uiHistory === undefined || isKodaXSessionUiHistory(value.uiHistory))
+    && (value.uiHistory === undefined || Array.isArray(value.uiHistory))
     && (value.scope === undefined || typeof value.scope === 'string');
+}
+
+function normalizeKodaXSessionUiHistory(value: unknown): KodaXSessionUiHistoryItem[] | undefined {
+  if (!Array.isArray(value)) {
+    return undefined;
+  }
+
+  const items = value
+    .filter(isKodaXSessionUiHistoryItem)
+    .map((item): KodaXSessionUiHistoryItem => (
+      item.type === 'tool_group'
+        ? { ...item, tools: item.tools.map((tool) => ({ ...tool })) }
+        : { ...item }
+    ));
+  return items.length > 0 ? items : undefined;
 }
 
 interface PersistedSessionSnapshot {
@@ -372,9 +388,7 @@ function buildSessionData(snapshot: PersistedSessionSnapshot): ResolvedSessionSn
           ? { ...snapshot.meta.runtimeInfo }
           : undefined,
         scope: snapshot.meta?.scope ?? 'user',
-        uiHistory: isKodaXSessionUiHistory(snapshot.meta?.uiHistory)
-          ? snapshot.meta.uiHistory.map((item) => ({ ...item }))
-          : undefined,
+        uiHistory: normalizeKodaXSessionUiHistory(snapshot.meta?.uiHistory),
         errorMetadata: isSessionErrorMetadata(snapshot.meta?.errorMetadata)
           ? { ...snapshot.meta!.errorMetadata }
           : undefined,
@@ -462,7 +476,9 @@ async function readPersistedSessionFile(filePath: string): Promise<PersistedSess
           if (parsed.tag !== undefined) snapshot.meta.tag = parsed.tag;
           if (parsed.activeEntryId !== undefined) snapshot.meta.activeEntryId = parsed.activeEntryId;
           if (parsed.activeMessageCount !== undefined) snapshot.meta.activeMessageCount = parsed.activeMessageCount;
-          if (parsed.uiHistory !== undefined) snapshot.meta.uiHistory = parsed.uiHistory;
+          if (parsed.uiHistory !== undefined) {
+            snapshot.meta.uiHistory = normalizeKodaXSessionUiHistory(parsed.uiHistory);
+          }
           if (parsed.scope !== undefined) snapshot.meta.scope = parsed.scope as KodaXSessionScope;
         }
         continue;

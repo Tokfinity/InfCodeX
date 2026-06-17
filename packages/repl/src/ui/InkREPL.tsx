@@ -103,6 +103,8 @@ import {
   KodaXReasoningMode,
   KodaXResult,
   KodaXSessionUiHistoryItem,
+  KodaXSessionUiToolCall,
+  KodaXSessionUiToolCallStatus,
   mergeArtifactLedger,
   runManagedTask,
   drainPendingSwaps,
@@ -239,6 +241,18 @@ import {
   extractTextContent,
   extractTitle,
 } from "./utils/message-utils.js";
+import {
+  sanitizeToolInput,
+  stringifyToolReplayValue,
+  TOOL_REPLAY_PREVIEW_MAX_LENGTH,
+  truncateToolReplayText,
+} from "./utils/tool-sanitizer.js";
+import {
+  normalizePersistedUiHistory,
+  restoreHistoryItemsFromSession,
+  trimPersistedUiHistorySnapshot,
+} from "./utils/restore-history.js";
+export { restoreHistoryItemsFromSession, trimPersistedUiHistorySnapshot };
 import { withCapture, ConsoleCapturer } from "./utils/console-capturer.js";
 import { createRecoveryHistoryItem, createRetryHistoryItem } from "./utils/retry-history.js";
 import { createRepoIntelTraceHistoryItem, emitRepoIntelTraceHistoryItem } from "./utils/repo-intel-history.js";
@@ -894,30 +908,100 @@ export function buildAmaWorkStripFromStatus(
   return buildAmaWorkStripTextFromStatus(status, isLoading);
 }
 
-function toPersistedUiHistoryItem(
-  item: { type: HistoryItem["type"]; text?: string; icon?: string; compactText?: string },
-): KodaXSessionUiHistoryItem | undefined {
-  if (item.type === "tool_group") {
+const MAX_PERSISTED_TOOL_GROUP_TOOLS = 20;
+const INCOMPLETE_PERSISTED_TOOL_ERROR = "Session ended before the tool completed.";
+
+function toPersistedToolStatus(tool: ToolCall): {
+  status: KodaXSessionUiToolCallStatus;
+  error?: string;
+} {
+  switch (tool.status) {
+    case ToolCallStatus.Success:
+      return { status: "success" };
+    case ToolCallStatus.Error:
+      return { status: "error" };
+    case ToolCallStatus.Cancelled:
+      return { status: "cancelled" };
+    case ToolCallStatus.AwaitingApproval:
+    case ToolCallStatus.Scheduled:
+    case ToolCallStatus.Validating:
+    case ToolCallStatus.Executing:
+      // Persisted replay is terminal-only; unfinished tools, including pending
+      // approvals, are rendered as cancelled instead of being revived on resume.
+      return { status: "cancelled", error: INCOMPLETE_PERSISTED_TOOL_ERROR };
+    default: {
+      const exhaustiveCheck: never = tool.status;
+      return exhaustiveCheck;
+    }
+  }
+}
+
+function toPersistedToolCall(tool: ToolCall): KodaXSessionUiToolCall | undefined {
+  if (!tool.id || !tool.name) {
     return undefined;
   }
 
-  const text = typeof item.text === "string" ? item.text.trimEnd() : "";
+  const status = toPersistedToolStatus(tool);
+  const output = status.status === "success"
+    ? stringifyToolReplayValue(tool.output)
+    : undefined;
+  const error = status.status === "error" || status.status === "cancelled"
+    ? truncateToolReplayText(tool.error ?? stringifyToolReplayValue(tool.output) ?? status.error ?? "")
+    : undefined;
+
+  const input = sanitizeToolInput(tool.input);
+
+  return {
+    id: tool.id,
+    name: tool.name,
+    status: status.status,
+    ...(input ? { input } : {}),
+    ...(typeof tool.preview === "string" && tool.preview.trim().length > 0
+      ? { preview: truncateToolReplayText(tool.preview.trim(), TOOL_REPLAY_PREVIEW_MAX_LENGTH) }
+      : {}),
+    ...(output && output.trim().length > 0 ? { output } : {}),
+    ...(error && error.trim().length > 0 ? { error } : {}),
+    ...(typeof tool.startTime === "number" ? { startTime: tool.startTime } : {}),
+    ...(typeof tool.endTime === "number" ? { endTime: tool.endTime } : {}),
+  };
+}
+
+function toPersistedToolGroup(
+  item: Extract<HistoryItem | CreatableHistoryItem, { type: "tool_group" }>,
+): KodaXSessionUiHistoryItem | undefined {
+  const tools = item.tools
+    .slice(0, MAX_PERSISTED_TOOL_GROUP_TOOLS)
+    .map(toPersistedToolCall)
+    .filter((tool): tool is KodaXSessionUiToolCall => Boolean(tool));
+  return tools.length > 0 ? { type: "tool_group", tools } : undefined;
+}
+
+function toPersistedUiHistoryItem(
+  item: HistoryItem | CreatableHistoryItem,
+): KodaXSessionUiHistoryItem | undefined {
+  if (item.type === "tool_group") {
+    return toPersistedToolGroup(item);
+  }
+
+  const text = "text" in item && typeof item.text === "string" ? item.text.trimEnd() : "";
   if (!text) {
     return undefined;
   }
 
+  const icon = "icon" in item && typeof item.icon === "string" && item.icon.length > 0
+    ? item.icon
+    : undefined;
+  const compactText = "compactText" in item && typeof item.compactText === "string" && item.compactText.length > 0
+    ? item.compactText.trimEnd()
+    : undefined;
+
   return {
     type: item.type,
     text,
-    ...(typeof item.icon === "string" && item.icon.length > 0 ? { icon: item.icon } : {}),
-    ...(typeof item.compactText === "string" && item.compactText.length > 0
-      ? { compactText: item.compactText.trimEnd() }
-      : {}),
+    ...(icon ? { icon } : {}),
+    ...(compactText ? { compactText } : {}),
   };
 }
-
-const MAX_PERSISTED_UI_HISTORY_ITEMS = 150;
-const MAX_PERSISTED_UI_HISTORY_ROUNDS = 50;
 
 // v0.7.38 (2026-05-11) — opt-in flag for the legacy harness-lifecycle
 // markers that used to appear in the transcript ("AMA H0 - Task
@@ -943,45 +1027,6 @@ const TRANSCRIPT_HARNESS_MARKERS_ENABLED =
 // flipping this default.
 const FULLSCREEN_SCROLL_OVERSCAN_ROWS =
   process.env.KODAX_SCROLL_OVERSCAN === '1' ? OVERSCAN_ROWS : undefined;
-
-export function trimPersistedUiHistorySnapshot(
-  items: readonly KodaXSessionUiHistoryItem[],
-): KodaXSessionUiHistoryItem[] {
-  if (items.length === 0) {
-    return [];
-  }
-
-  const userIndices: number[] = [];
-  for (let index = 0; index < items.length; index += 1) {
-    if (items[index]?.type === "user") {
-      userIndices.push(index);
-    }
-  }
-
-  let trimmed = [...items];
-  if (userIndices.length > MAX_PERSISTED_UI_HISTORY_ROUNDS) {
-    const startIndex = userIndices[userIndices.length - MAX_PERSISTED_UI_HISTORY_ROUNDS] ?? 0;
-    trimmed = items.slice(startIndex);
-  }
-
-  if (trimmed.length > MAX_PERSISTED_UI_HISTORY_ITEMS) {
-    const windowed = trimmed.slice(-MAX_PERSISTED_UI_HISTORY_ITEMS);
-    const firstUserIndex = windowed.findIndex((item) => item.type === "user");
-    trimmed = firstUserIndex > 0 ? windowed.slice(firstUserIndex) : windowed;
-  }
-
-  return [...trimmed];
-}
-
-function normalizePersistedUiHistory(
-  items: readonly KodaXSessionUiHistoryItem[] | undefined,
-): KodaXSessionUiHistoryItem[] | undefined {
-  if (!items) {
-    return undefined;
-  }
-
-  return trimPersistedUiHistorySnapshot(items);
-}
 
 function serializeUiHistorySnapshot(
   items: readonly HistoryItem[],
@@ -5456,21 +5501,14 @@ const InkREPLInner: React.FC<InkREPLProps> = ({
         // FEATURE_212 (v0.7.45) — bulk-add in ONE dispatch. The per-item loop
         // here triggered N dispatches → N re-renders, each re-resolving the
         // growing transcript: O(n²) resume lag on long `kodax -c` sessions.
-        addHistoryItems(
-          persistedHistory.map((item) => ({
-            type: item.type,
-            text: item.text,
-            ...(item.icon ? { icon: item.icon } : {}),
-            ...(item.compactText ? { compactText: item.compactText } : {}),
-          })),
-        );
+        addHistoryItems(restoreHistoryItemsFromSession({
+          messages: context.messages,
+          uiHistory: persistedHistory,
+        }));
         return;
       }
 
-      const seededItems = context.messages.flatMap((msg) =>
-        extractHistorySeedsFromMessage(msg).map(seedToHistoryItem),
-      );
-      addHistoryItems(seededItems);
+      addHistoryItems(restoreHistoryItemsFromSession({ messages: context.messages }));
     }
   }, [context.messages, context.uiHistory, history.length, addHistoryItems]);
 
@@ -5883,7 +5921,7 @@ const InkREPLInner: React.FC<InkREPLProps> = ({
       }
       // In AMA managed-foreground mode the active rendering anchor is the
       // managed foreground turn layer; addHistoryItem would land in the
-      // wrong position. Mirrors the 09cd7ae fix for onProviderRecovery -
+      // wrong position. Mirrors the 09cd7ae fix for onProviderRecovery —
       // onRetry was the missed sibling of that fix.
       const inManagedForeground = !!managedForegroundOwnerRef.current.workerId;
       if (inManagedForeground) {
@@ -6031,10 +6069,10 @@ const InkREPLInner: React.FC<InkREPLProps> = ({
       const seconds = Math.round(event.waitMs / 1000);
       const sourceLabel =
         event.source === 'exponential-backoff'
-          ? 'no-header -> backoff'
+          ? 'no-header \u2192 backoff'
           : event.source;
       const reasonLabel = event.reason === 'overloaded' ? 'Overloaded' : 'Rate limited';
-      const text = `[${reasonLabel}] (${event.provider}) - retrying in ${seconds}s [${sourceLabel}] (${event.attempt}/${event.maxAttempts})`;
+      const text = `[${reasonLabel}] (${event.provider}) \u2014 retrying in ${seconds}s [${sourceLabel}] (${event.attempt}/${event.maxAttempts})`;
       if (routeWorkflowLiveOnlyNotice(meta, text)) {
         return;
       }
@@ -6144,8 +6182,8 @@ const InkREPLInner: React.FC<InkREPLProps> = ({
       const prevToolCalls = iter > 1 ? [...iterationToolCallsRef.current] : [];
       const ownsForegroundLedger = Boolean(managedForegroundOwnerRef.current.workerId);
 
-      // Always update iteration counter BEFORE adding to history 
-      // This implicitly clears the text buffer so we don't double-render the old streaming 
+      // Always update iteration counter BEFORE adding to history
+      // This implicitly clears the text buffer so we don't double-render the old streaming
       // content simultaneously with the new static HistoryItem!
       startNewIteration(iter);
       if (ownsForegroundLedger) {

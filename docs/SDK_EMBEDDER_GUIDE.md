@@ -685,9 +685,35 @@ tool-call display from canonical assistant `tool_use` and user `tool_result`
 messages when no TUI replay cache exists. Workflow progress remains on the
 `WorkflowProcessSnapshot` / lifecycle-controller surfaces from v0.7.50; session
 history should replay durable child digests and final answers, not workflow live
-process state. The neutral replay types live with the session data model in
-`@kodax-ai/kodax/agent`; use `KodaXSessionUiHistoryItem` when a host needs to
+process state. The neutral replay types live with the session data model and are
+exported from both `@kodax-ai/kodax/agent` and `@kodax-ai/kodax/session`; use
+`KodaXSessionUiHistoryItem` / `KodaXSessionUiToolCall` when a host needs to
 type-check `SessionData.uiHistory`.
+
+SDK hosts that want the same neutral replay projection as the TUI can call the
+session helper directly without importing Ink/React:
+
+```ts
+import {
+  loadSession,
+  restoreHistoryItemsFromSession,
+  type CreatableHistoryItem,
+} from '@kodax-ai/kodax/session';
+
+const session = await loadSession(sessionId);
+const replayItems: CreatableHistoryItem[] = session
+  ? restoreHistoryItemsFromSession({
+      messages: session.messages,
+      uiHistory: session.uiHistory,
+    })
+  : [];
+```
+
+`restoreHistoryItemsFromSession()` prefers persisted `uiHistory.tool_group`
+items when present, and otherwise reconstructs sanitized terminal tool cards
+from adjacent `tool_use` / `tool_result` message blocks. The lower-level
+`extractHistorySeedsFromMessages()` helper is also exported from
+`@kodax-ai/kodax/session` for hosts that want to apply their own projection.
 
 ### Custom sessions directory (multi-tenant / tests)
 

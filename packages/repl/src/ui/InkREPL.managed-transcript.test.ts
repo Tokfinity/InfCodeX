@@ -1,4 +1,5 @@
 import { afterEach, beforeEach, describe, expect, it } from "vitest";
+import type { KodaXMessage } from "@kodax-ai/agent";
 import { setLocale } from "../common/i18n.js";
 import { ToolCallStatus } from "./types.js";
 import {
@@ -7,6 +8,7 @@ import {
   buildManagedForegroundTurnHistoryItems,
   buildManagedTaskTranscriptItems,
   buildRoundHistoryItems,
+  restoreHistoryItemsFromSession,
   shouldShowStatusBarBusyStatus,
 } from "./InkREPL.js";
 
@@ -575,7 +577,7 @@ describe("appendPersistedUiHistorySnapshot", () => {
     ]);
   });
 
-  it("keeps the latest user prompt when a round later adds only tool output", () => {
+  it("keeps terminal tool groups when a round later adds only tool output", () => {
     const afterPrompt = appendPersistedUiHistorySnapshot([
       { type: "assistant", text: "Round 1 answer" },
     ], [
@@ -602,6 +604,101 @@ describe("appendPersistedUiHistorySnapshot", () => {
     expect(afterToolOnlyUpdate).toEqual([
       { type: "assistant", text: "Round 1 answer" },
       { type: "user", text: "Round 2 prompt" },
+      {
+        type: "tool_group",
+        tools: [
+          {
+            id: "tool-2",
+            name: "changed_diff",
+            status: "success",
+            input: {
+              preview: "{\"path\":\"packages/repl/src/ui/InkREPL.tsx\"}",
+            },
+            startTime: 100,
+          },
+        ],
+      },
+    ]);
+  });
+
+  it("normalizes in-flight tool groups before persisting", () => {
+    const history = appendPersistedUiHistorySnapshot([], [
+      {
+        type: "tool_group",
+        tools: [
+          {
+            id: "tool-running",
+            name: "bash",
+            status: ToolCallStatus.Executing,
+            input: {
+              command: "npm test",
+              apiKey: "secret-value",
+            },
+            preview: "running npm test",
+            progress: 50,
+            progressLines: ["halfway"],
+            startTime: 100,
+          },
+        ],
+      },
+    ]);
+
+    expect(history).toEqual([
+      {
+        type: "tool_group",
+        tools: [
+          {
+            id: "tool-running",
+            name: "bash",
+            status: "cancelled",
+            input: {
+              command: "npm test",
+              apiKey: "[redacted]",
+            },
+            preview: "running npm test",
+            error: "Session ended before the tool completed.",
+            startTime: 100,
+          },
+        ],
+      },
+    ]);
+  });
+
+  it("does not recurse forever on cyclic tool inputs while persisting", () => {
+    const input: Record<string, unknown> = { command: "npm test" };
+    input.self = input;
+
+    const history = appendPersistedUiHistorySnapshot([], [
+      {
+        type: "tool_group",
+        tools: [
+          {
+            id: "tool-cyclic",
+            name: "bash",
+            status: ToolCallStatus.Success,
+            input,
+            startTime: 100,
+          },
+        ],
+      },
+    ]);
+
+    expect(history).toEqual([
+      {
+        type: "tool_group",
+        tools: [
+          {
+            id: "tool-cyclic",
+            name: "bash",
+            status: "success",
+            input: {
+              command: "npm test",
+              self: "[truncated]",
+            },
+            startTime: 100,
+          },
+        ],
+      },
     ]);
   });
 
@@ -618,6 +715,168 @@ describe("appendPersistedUiHistorySnapshot", () => {
     expect(history).toHaveLength(100);
     expect(history[0]).toEqual({ type: "user", text: "Round 6 prompt" });
     expect(history[history.length - 1]).toEqual({ type: "assistant", text: "Round 55 answer" });
+  });
+});
+
+describe("restoreHistoryItemsFromSession", () => {
+  it("enriches old text-only uiHistory with tool groups from canonical messages", () => {
+    const messages: KodaXMessage[] = [
+      { role: "user", content: "Inspect README" },
+      {
+        role: "assistant",
+        content: [
+          { type: "thinking", thinking: "Need to read the file first." },
+          { type: "tool_use", id: "tool-1", name: "read", input: { path: "README.md" } },
+          { type: "text", text: "I found the answer." },
+        ],
+      },
+      {
+        role: "user",
+        content: [
+          { type: "tool_result", tool_use_id: "tool-1", content: "README contents" },
+        ],
+      },
+    ];
+
+    expect(restoreHistoryItemsFromSession({
+      messages,
+      uiHistory: [
+        { type: "user", text: "Inspect README" },
+        { type: "thinking", text: "Need to read the file first." },
+        { type: "assistant", text: "I found the answer." },
+      ],
+    })).toEqual([
+      { type: "user", text: "Inspect README" },
+      { type: "thinking", text: "Need to read the file first." },
+      {
+        type: "tool_group",
+        tools: [
+          {
+            id: "tool-1",
+            name: "read",
+            status: ToolCallStatus.Success,
+            input: { path: "README.md" },
+            output: "README contents",
+            startTime: expect.any(Number),
+          },
+        ],
+      },
+      { type: "assistant", text: "I found the answer." },
+    ]);
+  });
+
+  it("restores persisted tool groups without deriving duplicates", () => {
+    expect(restoreHistoryItemsFromSession({
+      messages: [],
+      uiHistory: [
+        {
+          type: "tool_group",
+          tools: [
+            {
+              id: "tool-1",
+              name: "grep",
+              status: "error",
+              error: "grep failed",
+            },
+          ],
+        },
+      ],
+    })).toEqual([
+      {
+        type: "tool_group",
+        tools: [
+          {
+            id: "tool-1",
+            name: "grep",
+            status: ToolCallStatus.Error,
+            error: "grep failed",
+            startTime: expect.any(Number),
+          },
+        ],
+      },
+    ]);
+  });
+
+  it("enriches only text-only rounds when persisted history mixes old and new tool formats", () => {
+    const messages: KodaXMessage[] = [
+      { role: "user", content: "Inspect README" },
+      {
+        role: "assistant",
+        content: [
+          { type: "tool_use", id: "tool-1", name: "read", input: { path: "README.md" } },
+          { type: "text", text: "First answer." },
+        ],
+      },
+      {
+        role: "user",
+        content: [{ type: "tool_result", tool_use_id: "tool-1", content: "README contents" }],
+      },
+      { role: "user", content: "Search TODOs" },
+      {
+        role: "assistant",
+        content: [
+          { type: "tool_use", id: "tool-2", name: "grep", input: { pattern: "TODO" } },
+          { type: "text", text: "Second answer." },
+        ],
+      },
+      {
+        role: "user",
+        content: [{ type: "tool_result", tool_use_id: "tool-2", content: "TODO list" }],
+      },
+    ];
+
+    expect(restoreHistoryItemsFromSession({
+      messages,
+      uiHistory: [
+        { type: "user", text: "Inspect README" },
+        { type: "assistant", text: "First answer." },
+        { type: "user", text: "Search TODOs" },
+        {
+          type: "tool_group",
+          tools: [
+            {
+              id: "tool-2",
+              name: "grep",
+              status: "success",
+              input: { pattern: "TODO" },
+              output: "TODO list",
+            },
+          ],
+        },
+        { type: "assistant", text: "Second answer." },
+      ],
+    })).toEqual([
+      { type: "user", text: "Inspect README" },
+      {
+        type: "tool_group",
+        tools: [
+          {
+            id: "tool-1",
+            name: "read",
+            status: ToolCallStatus.Success,
+            input: { path: "README.md" },
+            output: "README contents",
+            startTime: expect.any(Number),
+          },
+        ],
+      },
+      { type: "assistant", text: "First answer." },
+      { type: "user", text: "Search TODOs" },
+      {
+        type: "tool_group",
+        tools: [
+          {
+            id: "tool-2",
+            name: "grep",
+            status: ToolCallStatus.Success,
+            input: { pattern: "TODO" },
+            output: "TODO list",
+            startTime: expect.any(Number),
+          },
+        ],
+      },
+      { type: "assistant", text: "Second answer." },
+    ]);
   });
 });
 

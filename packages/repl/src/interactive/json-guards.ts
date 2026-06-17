@@ -5,11 +5,29 @@ import type {
   KodaXJsonValue,
   KodaXMessage,
   KodaXSessionUiHistoryItem,
+  KodaXSessionUiToolCall,
+  KodaXSessionUiToolCallStatus,
   SessionErrorMetadata,
 } from '@kodax-ai/agent';
 import type { KodaXManagedTask } from '@kodax-ai/coding';
 
 const MESSAGE_ROLES = new Set<KodaXMessage['role']>(['user', 'assistant', 'system']);
+const UI_TEXT_ITEM_TYPES = new Set([
+  'user',
+  'assistant',
+  'system',
+  'thinking',
+  'error',
+  'event',
+  'info',
+  'hint',
+]);
+const UI_TOOL_STATUSES = new Set<KodaXSessionUiToolCallStatus>([
+  'success',
+  'error',
+  'cancelled',
+  'awaiting_approval',
+]);
 const TASK_SURFACES = new Set<NonNullable<KodaXManagedTask['contract']['surface']>>(['cli', 'repl', 'plan']);
 const TASK_STATUSES = new Set<NonNullable<KodaXManagedTask['contract']['status']>>([
   'planned',
@@ -136,21 +154,45 @@ export function isSessionErrorMetadata(value: unknown): value is SessionErrorMet
     && (value.consecutiveErrors === undefined || typeof value.consecutiveErrors === 'number');
 }
 
-export function isKodaXSessionUiHistoryItem(value: unknown): value is KodaXSessionUiHistoryItem {
-  return isRecord(value)
-    && typeof value.type === 'string'
-    && (
-      value.type === 'user'
-      || value.type === 'assistant'
-      || value.type === 'system'
-      || value.type === 'thinking'
-      || value.type === 'error'
-      || value.type === 'info'
-      || value.type === 'hint'
-    )
-    && typeof value.text === 'string';
+function isKodaXSessionUiToolInput(value: unknown): value is { [key: string]: KodaXJsonValue } {
+  return isRecord(value) && Object.values(value).every(isKodaXJsonValue);
 }
 
+function isKodaXSessionUiToolCall(value: unknown): value is KodaXSessionUiToolCall {
+  return isRecord(value)
+    && typeof value.id === 'string'
+    && typeof value.name === 'string'
+    && typeof value.status === 'string'
+    && UI_TOOL_STATUSES.has(value.status as KodaXSessionUiToolCallStatus)
+    && (value.input === undefined || isKodaXSessionUiToolInput(value.input))
+    && (value.preview === undefined || typeof value.preview === 'string')
+    && (value.output === undefined || typeof value.output === 'string')
+    && (value.error === undefined || typeof value.error === 'string')
+    && (value.startTime === undefined || typeof value.startTime === 'number')
+    && (value.endTime === undefined || typeof value.endTime === 'number');
+}
+
+export function isKodaXSessionUiHistoryItem(value: unknown): value is KodaXSessionUiHistoryItem {
+  if (!isRecord(value) || typeof value.type !== 'string') {
+    return false;
+  }
+
+  if (value.type === 'tool_group') {
+    return Array.isArray(value.tools)
+      && value.tools.length > 0
+      && value.tools.every(isKodaXSessionUiToolCall);
+  }
+
+  return UI_TEXT_ITEM_TYPES.has(value.type)
+    && typeof value.text === 'string'
+    && (value.icon === undefined || typeof value.icon === 'string')
+    && (value.compactText === undefined || typeof value.compactText === 'string');
+}
+
+/**
+ * @deprecated Prefer per-item filtering with isKodaXSessionUiHistoryItem so one
+ * malformed persisted entry does not discard the whole UI history snapshot.
+ */
 export function isKodaXSessionUiHistory(value: unknown): value is KodaXSessionUiHistoryItem[] {
   return Array.isArray(value) && value.every(isKodaXSessionUiHistoryItem);
 }

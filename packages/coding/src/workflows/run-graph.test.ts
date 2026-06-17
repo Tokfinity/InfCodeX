@@ -82,6 +82,10 @@ describe('createRunGraphWriter', () => {
         scriptPath: join(dir, 'script.js'),
         manifestPath: join(dir, 'manifest.json'),
       },
+      processMetadata: {
+        source: 'sdk',
+        hostMetadata: { sessionId: 'session-1', tag: 'coder' },
+      },
     });
     const runJson = JSON.parse(readFileSync(join(dir, 'run.json'), 'utf8'));
     expect(runJson).toMatchObject({
@@ -93,6 +97,7 @@ describe('createRunGraphWriter', () => {
       eventCount: 1,
       scriptSnapshotPath: join(dir, 'script.js'),
       manifestSnapshotPath: join(dir, 'manifest.json'),
+      hostMetadata: { sessionId: 'session-1', tag: 'coder' },
     });
   });
 });

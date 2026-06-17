@@ -47,7 +47,20 @@ export type {
   SessionManager,
   RunningSessionInfo,
   DeleteSessionResult,
+  CreatableHistoryItem,
+  HistorySeedSourceMessage,
+  RestoredHistorySeed,
+  RestoreHistoryItemsFromSessionInput,
 } from '@kodax-ai/repl';
+export type {
+  KodaXSessionUiHistoryItem,
+  KodaXSessionUiHistoryItemType,
+  KodaXSessionUiTextHistoryItem,
+  KodaXSessionUiTextHistoryItemType,
+  KodaXSessionUiToolCall,
+  KodaXSessionUiToolCallStatus,
+  KodaXSessionUiToolGroupHistoryItem,
+} from '@kodax-ai/agent';
 export {
   listSessions,
   loadSession,
@@ -61,4 +74,7 @@ export {
   listRunningSessions,
   watchSessions,
   createSessionManager,
+  extractHistorySeedsFromMessage,
+  extractHistorySeedsFromMessages,
+  restoreHistoryItemsFromSession,
 } from '@kodax-ai/repl';

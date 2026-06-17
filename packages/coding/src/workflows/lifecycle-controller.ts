@@ -16,6 +16,7 @@ import type {
 import {
   createWorkflowProcessTracker,
   isFinalWorkflowProcessStatus,
+  normalizeHostMetadata,
 } from '@kodax-ai/agent';
 import type {
   SavedWorkflowDirs,
@@ -161,6 +162,7 @@ function readRunProcessMetadata(
   const sourceRunId = readString(data.sourceRunId);
   const sourceWorkflowName = readString(data.sourceWorkflowName);
   const revisionOf = readString(data.revisionOf);
+  const hostMetadata = normalizeHostMetadata(data.hostMetadata);
   const metadata: WorkflowRunProcessMetadata = {
     ...(displayName !== undefined ? { displayName } : {}),
     ...(goal !== undefined ? { goal } : {}),
@@ -169,6 +171,7 @@ function readRunProcessMetadata(
     ...(sourceRunId !== undefined ? { sourceRunId } : {}),
     ...(sourceWorkflowName !== undefined ? { sourceWorkflowName } : {}),
     ...(revisionOf !== undefined ? { revisionOf } : {}),
+    ...(hostMetadata !== undefined ? { hostMetadata } : {}),
   };
   return Object.keys(metadata).length > 0 ? metadata : undefined;
 }
@@ -279,6 +282,9 @@ function snapshotFromPersistedRun(
       : {}),
     ...(run.processMetadata?.revisionOf !== undefined
       ? { revisionOf: run.processMetadata.revisionOf }
+      : {}),
+    ...(run.processMetadata?.hostMetadata !== undefined
+      ? { hostMetadata: { ...run.processMetadata.hostMetadata } }
       : {}),
     ...(run.resultSummary !== undefined ? { resultSummary: run.resultSummary } : {}),
     artifacts: run.artifacts.map((name) => ({

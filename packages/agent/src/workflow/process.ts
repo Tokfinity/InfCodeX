@@ -102,6 +102,7 @@ export interface WorkflowProcessSnapshot {
   readonly sourceRunId?: string;
   readonly sourceWorkflowName?: string;
   readonly revisionOf?: string;
+  readonly hostMetadata?: Record<string, string>;
   readonly activePhaseId?: string;
   readonly activePhaseIndex?: number;
   readonly phaseCount?: number;
@@ -134,6 +135,7 @@ export interface WorkflowProcessTrackerOptions {
   readonly sourceRunId?: string;
   readonly sourceWorkflowName?: string;
   readonly revisionOf?: string;
+  readonly hostMetadata?: Record<string, string>;
   readonly phases?: readonly string[];
   readonly maxAgents?: number;
   readonly plannedAgents?: number;
@@ -180,6 +182,29 @@ export function isFinalWorkflowProcessStatus(status: WorkflowProcessStatus): boo
 
 function defaultNow(): string {
   return new Date().toISOString();
+}
+
+const HOST_METADATA_MAX_KEYS = 16;
+const HOST_METADATA_MAX_KEY_LENGTH = 64;
+const HOST_METADATA_MAX_VALUE_LENGTH = 512;
+
+export function normalizeHostMetadata(value: unknown): Record<string, string> | undefined {
+  if (typeof value !== 'object' || value === null || Array.isArray(value)) return undefined;
+
+  const metadata: Record<string, string> = {};
+  let retained = 0;
+  for (const [key, item] of Object.entries(value as Record<string, unknown>)) {
+    if (typeof item !== 'string') continue;
+    // hostMetadata is an opaque host-owned string map; empty strings can be a
+    // meaningful host marker, so the SDK preserves them instead of applying
+    // readString-style non-empty semantics.
+    metadata[key.slice(0, HOST_METADATA_MAX_KEY_LENGTH)] =
+      item.slice(0, HOST_METADATA_MAX_VALUE_LENGTH);
+    retained += 1;
+    if (retained >= HOST_METADATA_MAX_KEYS) break;
+  }
+
+  return Object.keys(metadata).length > 0 ? metadata : undefined;
 }
 
 function readString(data: Record<string, unknown> | undefined, key: string): string | undefined {
@@ -273,6 +298,7 @@ export function createWorkflowProcessTracker(
 ): WorkflowProcessTracker {
   const now = options.now ?? defaultNow;
   const startedAt = now();
+  const hostMetadata = normalizeHostMetadata(options.hostMetadata);
   let updatedAt = startedAt;
   let status: WorkflowProcessStatus = 'running';
   let activePhaseId: string | undefined;
@@ -381,6 +407,7 @@ export function createWorkflowProcessTracker(
         ? { sourceWorkflowName: options.sourceWorkflowName }
         : {}),
       ...(options.revisionOf !== undefined ? { revisionOf: options.revisionOf } : {}),
+      ...(hostMetadata !== undefined ? { hostMetadata: { ...hostMetadata } } : {}),
       ...(activePhaseId !== undefined ? { activePhaseId } : {}),
       ...(activeIndex >= 0 ? { activePhaseIndex: activeIndex + 1 } : {}),
       ...(phaseIdByName.size > 0 ? { phaseCount: phaseIdByName.size } : {}),

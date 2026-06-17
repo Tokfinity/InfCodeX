@@ -76,7 +76,25 @@ export {
 } from "./retry-history.js";
 
 // Message processing utilities
-export { extractTextContent, extractTitle, formatMessagePreview } from "./message-utils.js";
+export {
+  extractHistorySeedsFromMessage,
+  extractHistorySeedsFromMessages,
+  extractTextContent,
+  extractTitle,
+  formatMessagePreview,
+  seedToHistoryItem,
+  toolCallSeedToHistoryToolCall,
+} from "./message-utils.js";
+export type {
+  HistorySeedSourceMessage,
+  RestoredHistorySeed,
+} from "./message-utils.js";
+
+export {
+  restoreHistoryItemsFromSession,
+  trimPersistedUiHistorySnapshot,
+} from "./restore-history.js";
+export type { RestoreHistoryItemsFromSessionInput } from "./restore-history.js";
 
 // Session storage utilities
 export {

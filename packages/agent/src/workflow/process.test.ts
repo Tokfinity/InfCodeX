@@ -4,6 +4,7 @@ import type { WorkflowEvent } from './events.js';
 import {
   createWorkflowProcessTracker,
   isFinalWorkflowProcessStatus,
+  normalizeHostMetadata,
 } from './process.js';
 
 describe('workflow process tracker', () => {
@@ -13,6 +14,7 @@ describe('workflow process tracker', () => {
       workflowName: 'feature-review',
       displayName: 'Feature review',
       source: 'command',
+      hostMetadata: { sessionId: 'session-1', tag: 'coder' },
       phases: ['scan', 'synthesize'],
       maxAgents: 4,
       now: () => '2026-06-15T00:00:00.000Z',
@@ -49,6 +51,7 @@ describe('workflow process tracker', () => {
       workflowName: 'feature-review',
       displayName: 'Feature review',
       source: 'command',
+      hostMetadata: { sessionId: 'session-1', tag: 'coder' },
       status: 'completed',
       phaseCount: 2,
       counts: {
@@ -82,6 +85,29 @@ describe('workflow process tracker', () => {
     expect(snapshot.artifacts).toEqual([{ name: 'report', path: 'artifacts/report.json' }]);
     expect(snapshot.activePhaseId).toBeUndefined();
     expect(snapshot.activePhaseIndex).toBeUndefined();
+  });
+
+  it('normalizes host metadata before exposing it in snapshots', () => {
+    const longKey = 'k'.repeat(80);
+    const longValue = 'v'.repeat(600);
+    const manyEntries: Record<string, unknown> = Object.fromEntries(
+      Array.from({ length: 18 }, (_, index) => [`k${index}`, `v${index}`]),
+    );
+
+    expect(normalizeHostMetadata(undefined)).toBeUndefined();
+    expect(normalizeHostMetadata('metadata')).toBeUndefined();
+    expect(normalizeHostMetadata({ ignored: 1 })).toBeUndefined();
+    expect(Object.keys(normalizeHostMetadata(manyEntries) ?? {})).toEqual(
+      Array.from({ length: 16 }, (_, index) => `k${index}`),
+    );
+    expect(normalizeHostMetadata({
+      [longKey]: longValue,
+      ok: 'yes',
+      ignored: 1,
+    })).toEqual({
+      [longKey.slice(0, 64)]: longValue.slice(0, 512),
+      ok: 'yes',
+    });
   });
 
   it('maps stopped workflows to process cancellation and exposes terminal helper', () => {

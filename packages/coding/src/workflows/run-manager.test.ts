@@ -122,6 +122,7 @@ describe('WorkflowRunManager', () => {
         source: 'sdk',
         displayName: 'SDK process test',
         goal: 'inspect process metadata',
+        hostMetadata: { sessionId: 'session-1', tag: 'coder' },
       },
     });
 
@@ -135,6 +136,7 @@ describe('WorkflowRunManager', () => {
       displayName: 'SDK process test',
       goal: 'inspect process metadata',
       source: 'sdk',
+      hostMetadata: { sessionId: 'session-1', tag: 'coder' },
       status: 'completed',
       resultSummary: 'final process result',
       progress: {

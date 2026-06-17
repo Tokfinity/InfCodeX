@@ -151,6 +151,15 @@ export type {
   RunningSessionInfo,
   DeleteSessionResult,
 } from "./session/public-api.js";
+export type {
+  KodaXSessionUiHistoryItem,
+  KodaXSessionUiHistoryItemType,
+  KodaXSessionUiTextHistoryItem,
+  KodaXSessionUiTextHistoryItemType,
+  KodaXSessionUiToolCall,
+  KodaXSessionUiToolCallStatus,
+  KodaXSessionUiToolGroupHistoryItem,
+} from "@kodax-ai/agent";
 export {
   listSessions,
   loadSession,

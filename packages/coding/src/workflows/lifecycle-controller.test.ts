@@ -410,6 +410,7 @@ describe('WorkflowLifecycleController', () => {
         source: 'capsule',
         savedWorkflowName: 'saved-audit',
         sourceWorkflowName: 'saved-audit',
+        hostMetadata: { sessionId: 'session-persisted', tag: 'coder', ignored: 1 },
         args: {},
       }),
       'utf8',
@@ -448,7 +449,14 @@ describe('WorkflowLifecycleController', () => {
       source: 'capsule',
       savedWorkflowName: 'saved-audit',
       sourceWorkflowName: 'saved-audit',
+      hostMetadata: { sessionId: 'session-persisted', tag: 'coder' },
     });
+    expect(controller.listWorkflowProcessSnapshots()).toEqual([
+      expect.objectContaining({
+        runId: 'run-persisted',
+        hostMetadata: { sessionId: 'session-persisted', tag: 'coder' },
+      }),
+    ]);
     await expect(controller.readWorkflowResult('run-persisted')).resolves.toBe(
       'final persisted workflow result',
     );

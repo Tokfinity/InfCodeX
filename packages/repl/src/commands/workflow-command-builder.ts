@@ -58,6 +58,7 @@ export function buildWorkflowProcessMetadata(input: {
   readonly sourceRunId?: string;
   readonly sourceWorkflowName?: string;
   readonly revisionOf?: string;
+  readonly hostMetadata?: Record<string, string>;
 }): WorkflowRunProcessMetadata {
   return {
     source: input.source,
@@ -67,6 +68,7 @@ export function buildWorkflowProcessMetadata(input: {
     ...(input.sourceRunId !== undefined ? { sourceRunId: input.sourceRunId } : {}),
     ...(input.sourceWorkflowName !== undefined ? { sourceWorkflowName: input.sourceWorkflowName } : {}),
     ...(input.revisionOf !== undefined ? { revisionOf: input.revisionOf } : {}),
+    ...(input.hostMetadata !== undefined ? { hostMetadata: { ...input.hostMetadata } } : {}),
   };
 }
 

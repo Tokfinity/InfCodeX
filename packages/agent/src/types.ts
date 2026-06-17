@@ -263,7 +263,7 @@ export interface KodaXSessionTreeNode {
 
 export type KodaXSessionScope = 'user' | 'managed-task-worker';
 
-export type KodaXSessionUiHistoryItemType =
+export type KodaXSessionUiTextHistoryItemType =
   | 'user'
   | 'assistant'
   | 'system'
@@ -273,12 +273,43 @@ export type KodaXSessionUiHistoryItemType =
   | 'info'
   | 'hint';
 
-export interface KodaXSessionUiHistoryItem {
-  type: KodaXSessionUiHistoryItemType;
+export type KodaXSessionUiHistoryItemType =
+  | KodaXSessionUiTextHistoryItemType
+  | 'tool_group';
+
+export interface KodaXSessionUiTextHistoryItem {
+  type: KodaXSessionUiTextHistoryItemType;
   text: string;
   icon?: string;
   compactText?: string;
 }
+
+export type KodaXSessionUiToolCallStatus =
+  | 'success'
+  | 'error'
+  | 'cancelled'
+  | 'awaiting_approval';
+
+export interface KodaXSessionUiToolCall {
+  id: string;
+  name: string;
+  status: KodaXSessionUiToolCallStatus;
+  input?: { [key: string]: KodaXJsonValue };
+  preview?: string;
+  output?: string;
+  error?: string;
+  startTime?: number;
+  endTime?: number;
+}
+
+export interface KodaXSessionUiToolGroupHistoryItem {
+  type: 'tool_group';
+  tools: KodaXSessionUiToolCall[];
+}
+
+export type KodaXSessionUiHistoryItem =
+  | KodaXSessionUiTextHistoryItem
+  | KodaXSessionUiToolGroupHistoryItem;
 
 export type KodaXSessionWorkspaceKind = 'detected' | 'managed';
 

@@ -42,6 +42,7 @@ export { WorkflowEventRecorder } from './events.js';
 export {
   createWorkflowProcessTracker,
   isFinalWorkflowProcessStatus,
+  normalizeHostMetadata,
 } from './process.js';
 export type {
   WorkflowEventCorrelation,

@@ -1,8 +1,10 @@
 import { describe, expect, it } from "vitest";
 import type { KodaXMessage } from "@kodax-ai/agent";
+import { ToolCallStatus } from "../types.js";
 import {
   type HistorySeedSourceMessage,
   extractHistorySeedsFromMessage,
+  extractHistorySeedsFromMessages,
   extractLastAssistantText,
   extractTitle,
   extractTextContent,
@@ -11,6 +13,7 @@ import {
   resolveAssistantHistoryText,
   resolveCompletedAssistantText,
   sanitizeUserFacingAssistantText,
+  seedToHistoryItem,
 } from "./message-utils.js";
 
 describe("message-utils", () => {
@@ -128,6 +131,179 @@ describe("message-utils", () => {
       content: [{ type: "text", text: "internal scaffolding" }],
     };
     expect(extractHistorySeedsFromMessage(message)).toEqual([]);
+  });
+
+  it("restores paired tool_use and tool_result blocks as a tool group seed", () => {
+    const messages: KodaXMessage[] = [
+      { role: "user", content: "Inspect README" },
+      {
+        role: "assistant",
+        content: [
+          { type: "thinking", thinking: "Need to read the file first." },
+          { type: "tool_use", id: "tool-1", name: "read", input: { path: "README.md" } },
+          { type: "text", text: "I found the answer." },
+        ],
+      },
+      {
+        role: "user",
+        content: [
+          { type: "tool_result", tool_use_id: "tool-1", content: "README contents" },
+        ],
+      },
+    ];
+
+    expect(extractHistorySeedsFromMessages(messages)).toEqual([
+      { type: "user", text: "Inspect README" },
+      { type: "thinking", text: "Need to read the file first." },
+      {
+        type: "tool_group",
+        tools: [
+          {
+            id: "tool-1",
+            name: "read",
+            status: "success",
+            input: { path: "README.md" },
+            output: "README contents",
+          },
+        ],
+      },
+      { type: "assistant", text: "I found the answer." },
+    ]);
+  });
+
+  it("caps restored tool result text when deriving replay seeds", () => {
+    const messages: KodaXMessage[] = [
+      {
+        role: "assistant",
+        content: [
+          { type: "tool_use", id: "tool-1", name: "read", input: { path: "huge.log" } },
+        ],
+      },
+      {
+        role: "user",
+        content: [
+          { type: "tool_result", tool_use_id: "tool-1", content: "x".repeat(2100) },
+        ],
+      },
+    ];
+
+    const seed = extractHistorySeedsFromMessages(messages).find((item) => item.type === "tool_group");
+    if (seed?.type !== "tool_group") {
+      throw new Error("expected a restored tool group");
+    }
+
+    const output = seed.tools[0]?.output;
+    expect(output).toHaveLength(2000);
+    expect(output?.endsWith("...")).toBe(true);
+  });
+
+  it("bounds and redacts restored tool input when deriving replay seeds", () => {
+    const messages: KodaXMessage[] = [
+      {
+        role: "assistant",
+        content: [
+          {
+            type: "tool_use",
+            id: "tool-1",
+            name: "bash",
+            input: {
+              command: "x".repeat(2100),
+              password: "plain-password",
+              apiKey: "plain-api-key",
+              cookie: "session-cookie",
+              items: Array.from({ length: 60 }, (_, index) => index),
+              nested: { a: { b: { c: { d: { e: { f: "too deep" } } } } } },
+            },
+          },
+        ],
+      },
+      {
+        role: "user",
+        content: [
+          { type: "tool_result", tool_use_id: "tool-1", content: "ok" },
+        ],
+      },
+    ];
+
+    const seed = extractHistorySeedsFromMessages(messages).find((item) => item.type === "tool_group");
+    if (seed?.type !== "tool_group") {
+      throw new Error("expected a restored tool group");
+    }
+
+    const input = seed.tools[0]?.input;
+    if (!input) {
+      throw new Error("expected restored tool input");
+    }
+    expect(input["password"]).toBe("[redacted]");
+    expect(input["apiKey"]).toBe("[redacted]");
+    expect(input["cookie"]).toBe("[redacted]");
+    expect(typeof input["command"]).toBe("string");
+    expect(String(input["command"])).toHaveLength(2000);
+    expect(String(input["command"]).endsWith("...")).toBe(true);
+    expect(Array.isArray(input["items"])).toBe(true);
+    if (!Array.isArray(input["items"])) {
+      throw new Error("expected bounded input.items array");
+    }
+    expect(input["items"]).toHaveLength(50);
+    const nestedJson = JSON.stringify(input["nested"]);
+    expect(nestedJson).toContain("[truncated]");
+    expect(nestedJson).not.toContain("too deep");
+  });
+
+  it("does not recurse forever on cyclic restored tool inputs", () => {
+    const input: Record<string, unknown> = { command: "npm test" };
+    input.self = input;
+
+    const messages: KodaXMessage[] = [
+      {
+        role: "assistant",
+        content: [
+          {
+            type: "tool_use",
+            id: "tool-1",
+            name: "bash",
+            input,
+          },
+        ],
+      },
+    ];
+
+    const seed = extractHistorySeedsFromMessages(messages).find((item) => item.type === "tool_group");
+    if (seed?.type !== "tool_group") {
+      throw new Error("expected a restored tool group");
+    }
+
+    expect(seed.tools[0]?.input).toEqual({
+      command: "npm test",
+      self: "[truncated]",
+    });
+  });
+
+  it("maps restored tool group seeds to creatable history items", () => {
+    expect(seedToHistoryItem({
+      type: "tool_group",
+      tools: [
+        {
+          id: "tool-1",
+          name: "grep",
+          status: "error",
+          input: { pattern: "TODO" },
+          error: "grep failed",
+        },
+      ],
+    })).toEqual({
+      type: "tool_group",
+      tools: [
+        {
+          id: "tool-1",
+          name: "grep",
+          status: ToolCallStatus.Error,
+          input: { pattern: "TODO" },
+          error: "grep failed",
+          startTime: expect.any(Number),
+        },
+      ],
+    });
   });
 
   it("extracts the latest assistant text from structured content", () => {

@@ -157,6 +157,7 @@ describe('runWorkflowModule', () => {
         source: 'sdk',
         displayName: 'SDK audit',
         goal: 'where is the bug?',
+        hostMetadata: { sessionId: 'session-1', tag: 'coder' },
       },
       onWorkflowProcessEvent: (event) => processEvents.push(event),
     });
@@ -171,6 +172,7 @@ describe('runWorkflowModule', () => {
         displayName: 'SDK audit',
         goal: 'where is the bug?',
         source: 'sdk',
+        hostMetadata: { sessionId: 'session-1', tag: 'coder' },
         status: 'completed',
         resultSummary: expect.stringContaining('result for'),
         progress: {

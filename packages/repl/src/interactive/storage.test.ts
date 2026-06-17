@@ -1,7 +1,7 @@
 import os from 'os';
 import path from 'path';
 import { existsSync } from 'fs';
-import { mkdtemp, readFile, rm, utimes, writeFile } from 'fs/promises';
+import { mkdir, mkdtemp, readFile, rm, utimes, writeFile } from 'fs/promises';
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
 import { applySessionCompaction, createSessionLineage } from '@kodax-ai/agent';
 
@@ -167,6 +167,70 @@ describe('FileSessionStorage', () => {
       runtimeInfo,
     });
     expect(typeof listed[0]?.createdAt).toBe('string');
+  });
+
+  it('keeps valid uiHistory siblings when one persisted item is malformed', async () => {
+    const sessionsDir = path.join(tempHome, '.kodax', 'sessions');
+    await mkdir(sessionsDir, { recursive: true });
+    await writeFile(
+      path.join(sessionsDir, 'malformed-ui-history.jsonl'),
+      `${JSON.stringify({
+        _type: 'meta',
+        title: 'Malformed UI History',
+        id: 'malformed-ui-history',
+        gitRoot: 'C:/repo',
+        createdAt: '2026-06-17T00:00:00.000Z',
+        uiHistory: [
+          { type: 'user', text: 'read the file' },
+          {
+            type: 'tool_group',
+            tools: [
+              {
+                id: 'tool-live',
+                name: 'read',
+                status: 'executing',
+              },
+            ],
+          },
+          {
+            type: 'tool_group',
+            tools: [
+              {
+                id: 'tool-done',
+                name: 'read',
+                status: 'success',
+                input: { path: 'README.md' },
+                output: 'ok',
+              },
+            ],
+          },
+          { type: 'assistant', text: 'done' },
+        ],
+      })}\n`,
+      'utf8',
+    );
+
+    const { FileSessionStorage } = await import('./storage.js');
+    const storage = new FileSessionStorage();
+
+    await expect(storage.load('malformed-ui-history')).resolves.toMatchObject({
+      uiHistory: [
+        { type: 'user', text: 'read the file' },
+        {
+          type: 'tool_group',
+          tools: [
+            {
+              id: 'tool-done',
+              name: 'read',
+              status: 'success',
+              input: { path: 'README.md' },
+              output: 'ok',
+            },
+          ],
+        },
+        { type: 'assistant', text: 'done' },
+      ],
+    });
   });
 
   it('lists sibling workspace sessions when canonical repo identity matches', async () => {
