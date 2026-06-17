@@ -11,13 +11,13 @@
 | Item | Value |
 |---|---|
 | Current released version | `v0.7.49` |
-| Current package version | `@kodax-ai/kodax@0.7.50` (release validation pending) |
+| Current package version | `@kodax-ai/kodax@0.7.50` (automated release validation complete; tag pending) |
 | Workspace baseline | `llm / agent / coding / repl` 4 packages |
-| Total tracked features | `14` |
+| Total tracked features | `16` |
 | InProgress | `0` |
-| Planned | `13` |
+| Planned | `15` |
 | Completed | `1` |
-| Tracked feature IDs | `007, 030, 093, 105, 108, 113, 139, 174, 211, 224, 225, 228, 229, 230` |
+| Tracked feature IDs | `007, 030, 093, 105, 108, 113, 139, 174, 211, 224, 225, 228, 229, 230, 231, 232` |
 | Archive cutoff | Shipped / canceled / absorbed / shelved items through `v0.7.49` are archived. |
 
 ### 一览表
@@ -25,8 +25,8 @@
 | Status | Count | Feature IDs | Next checkpoint |
 |---|---:|---|---|
 | InProgress | 0 | - | - |
-| Completed | 1 | `229` | implementation complete; release validation pending |
-| Planned, near-term | 8 | `230, 224, 228, 225, 174, 105, 211, 108` | `v0.7.51` -> `v0.7.68` |
+| Completed | 1 | `229` | automated release validation complete; tag pending |
+| Planned, near-term | 10 | `230, 231, 232, 224, 228, 225, 174, 105, 211, 108` | `v0.7.51` -> `v0.7.68` |
 | Planned, v0.8.x | 5 | `007, 030, 093, 113, 139` | `v0.8.0+` |
 
 > v0.7.49 / v0.7.50 workflow split：`FEATURE_217` remains the human-facing workflow mode. Manual testing reopened required UI/UX and reliability deltas inside [v0.7.49](features/v0.7.49.md#13-v0749-completion-delta): bounded live progress with phase index / running 智能体 wording / preserved progress row / elapsed time / completed-child token usage, localized assistant-style launch notes, result-bearing child-agent digests or folded long-report notices, non-`info` agentic transcript, clear separation between `finished/spawned` progress and lifetime `maxAgents` cap, final synthesis, generated final-result contract lint, implicit `tokenBudget` stripping, generated task-command crash hardening, tighter AMAW invocation policy, wait timeout propagation, no default total workflow wall-clock timeout, terminal cleanup for un-awaited children, accurate template read/write metadata, capsule min-version preflight, manual run cleanup controls, and the closed minimal saved-workflow named reuse delta (`/workflow <savedName>` plus `/workflow rerun <runId|savedName>` with help/completion). `FEATURE_229` in v0.7.50 is the platform layer: it standardizes the same process as agent-layer snapshot/events, SDK subscription/polling, Space-style host policy and lifecycle controls, terminal-state helpers, workflow identity/lifecycle controls beyond named reuse (`display name | revise | rename | revision provenance`), REPL-as-consumer rendering, conservative retention, and durable source/provenance/resultSummary persistence; it is not the first implementation of the user-visible UX.
@@ -36,6 +36,8 @@
 | Version | Planned features |
 |---|---:|
 | `v0.7.51` | `1` |
+| `v0.7.52` | `1` |
+| `v0.7.53` | `1` |
 | `v0.7.61` | `1` |
 | `v0.7.62` | `1` |
 | `v0.7.63` | `1` |
@@ -60,6 +62,8 @@
 | ID | Title | Category | Priority | Planned | Design |
 |---|---|---|---|---|---|
 | `230` | Durable TUI Tool Transcript Replay | Internal / Session Persistence | High | `v0.7.51` | [v0.7.51](features/v0.7.51.md#feature_230-durable-tui-tool-transcript-replay) |
+| `231` | Durable Workflow Replay Resume | Core / Workflow Persistence | High | `v0.7.52` | [v0.7.52](features/v0.7.52.md#feature_231-durable-workflow-replay-resume) |
+| `232` | Replay-Aware Workflow Pipeline Primitive | Core / Workflow Scheduling | Medium | `v0.7.53` | [v0.7.53](features/v0.7.53.md#feature_232-replay-aware-workflow-pipeline-primitive) |
 | `224` | Self-Improvement Skill Loop | Core / Skills + Self-Improvement | High | `v0.7.61` | [v0.7.61](features/v0.7.61.md#feature_224-self-improvement-skill-loop--rescheduled-from-v0750) |
 | `228` | Unified Memory Control Plane + Memory Governance | Core / Memory + Governance | High | `v0.7.62` | [v0.7.62](features/v0.7.62.md#feature_228-unified-memory-control-plane--memory-governance--rescheduled-from-v0751) |
 | `225` | REPL Dead / Legacy Code Cleanup | Internal / Refactor + Tech Debt | Medium | `v0.7.63` | [v0.7.63](features/v0.7.63.md#feature_225-repl-dead--legacy-code-cleanup--rescheduled-from-v0752) |
@@ -90,7 +94,7 @@
 
 | ID | Title | Released | Design | Notes |
 |---|---|---|---|---|
-| `229` | Workflow Process Events + SDK/System Progress Surface | `v0.7.50` | [v0.7.50](features/v0.7.50.md#feature_229-workflow-process-events--sdksystem-progress-surface) | Implementation complete; release validation pending. |
+| `229` | Workflow Process Events + SDK/System Progress Surface | `v0.7.50` | [v0.7.50](features/v0.7.50.md#feature_229-workflow-process-events--sdksystem-progress-surface) | Implementation and automated release validation complete; tag pending. |
 
 ---
 
