@@ -131,6 +131,11 @@ export class LogUpdate {
     const prev = clampRestingCursor(prevRaw, inlineBottomAnchored);
     const next = clampRestingCursor(nextRaw, inlineBottomAnchored);
 
+    // Alt-screen can keep physical cells after shell transitions reset prevFrame.
+    if (opts.altScreen === true && prevRaw.screen.height === 0 && next.screen.height > 0) {
+      return fullResetSequence_CAUSES_FLICKER(next, "clear", inlineBottomAnchored);
+    }
+
     // Reset short-circuit. Decision logic is in `shouldFullReset` (Phase 3b)
     // — see `viewport-state.ts` for the four-case taxonomy. `readLine` is
     // passed as a callback to break the would-be circular dependency
@@ -442,4 +447,3 @@ function renderIncremental(
 
   return screen.diff;
 }
-

@@ -260,3 +260,44 @@ describe("fullscreen viewport-fill drift (real engine sequence)", () => {
     expect(model.rows(VH)).toEqual(screenRows(full(ROWS_1).screen));
   });
 });
+
+describe("alt-screen first paint after renderer state reset", () => {
+  const W = 16;
+  const VH = 6;
+
+  it("clears stale physical cells when prevFrame is empty but the terminal is not", () => {
+    const stale = frameFromRows([
+      "KODAX KODAX KODA",
+      "LOGO  LOGO  LOGO",
+      "BLUE  BLUE  BLUE",
+      "                ",
+      "                ",
+      "                ",
+    ], W, VH);
+    const next = frameFromRows([
+      "## section      ",
+      "1. row          ",
+      "2. row          ",
+      "                ",
+      "You             ",
+      "KodaX status    ",
+    ], W, VH);
+
+    const diff = new LogUpdate({ isTTY: true }).render(emptyFrame(VH, W), next, {
+      altScreen: true,
+    });
+    const model = new TerminalModel(W, VH, stale.screen);
+    model.apply(diff.map((p) => patchToBytes(p)).join(""));
+
+    expect(diff[0]).toEqual({ type: "clearTerminal", reason: "clear" });
+    expect(model.rows(VH)).toEqual(screenRows(next.screen));
+  });
+
+  it("keeps the non-alt first render incremental for main-screen callers", () => {
+    const next = frameFromRows(["hello"], W, VH);
+
+    const diff = new LogUpdate({ isTTY: true }).render(emptyFrame(VH, W), next);
+
+    expect(diff.some((p) => p.type === "clearTerminal")).toBe(false);
+  });
+});
