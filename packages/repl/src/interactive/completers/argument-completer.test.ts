@@ -358,6 +358,23 @@ describe('ArgumentCompleter', () => {
         expect(completions.some(c => c.display === 'parallel-investigation')).toBe(true);
       });
 
+      it('should include rerun and preserve declared subcommand order at empty prefix', async () => {
+        const completions = await completer.getCompletions('/workflow ', 10);
+        const names = completions.map((c) => c.display);
+
+        // `rerun` is the entry the autocomplete cap + length-sort used to drop
+        // out of reach (it sorted to position 9, past the truncation limit).
+        expect(names).toContain('rerun');
+
+        // Empty prefix must preserve the declared subcommand order, not collapse
+        // to a length sort. Under a length sort 'runs'(4) would precede
+        // 'create'(6); the declared order is the reverse — assert it holds so the
+        // regression that buried `rerun` cannot silently come back.
+        expect(names.indexOf('create')).toBeLessThan(names.indexOf('runs'));
+        expect(names.indexOf('runs')).toBeLessThan(names.indexOf('rerun'));
+        expect(names.indexOf('rerun')).toBeLessThan(names.indexOf('save'));
+      });
+
       it('should return workflow list and prune options', async () => {
         const runsOptions = await completer.getCompletions('/workflow runs ', 15);
         expect(runsOptions.some(c => c.display === '--all')).toBe(true);

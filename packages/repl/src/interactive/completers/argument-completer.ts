@@ -115,6 +115,11 @@ export class ArgumentCompleter implements Completer {
         type: 'argument' as const,
       }))
       .sort((a, b) => {
+        // No partial typed yet: preserve the declared argument order instead of
+        // collapsing to a length sort (every name startsWith('') so the prefix
+        // branches below would no-op and reorder by length, pushing entries like
+        // `rerun` out of a predictable position). Stable sort keeps input order.
+        if (!currentPartial) return 0;
         // Prefix matches first - 前缀匹配优先
         const aIsPrefix = a.display.toLowerCase().startsWith(currentPartial);
         const bIsPrefix = b.display.toLowerCase().startsWith(currentPartial);

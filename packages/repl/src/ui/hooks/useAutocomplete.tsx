@@ -189,7 +189,12 @@ function useAutocompleteImpl(
       gitRoot,
       debounceDelay: 100,
       minTriggerChars: 1,
-      maxCompletions: 8,
+      // Scroll window (SuggestionsDisplay) renders only `maxVisible` rows at a
+      // time regardless of array size, so this cap is purely a safety bound for
+      // pathological lists — not a UX limit. Keep it well above any real command
+      // argument list (e.g. /workflow has 14 subcommands) so every entry stays
+      // reachable by scrolling instead of being silently truncated.
+      maxCompletions: 50,
     });
   }, []); // Don't recreate on cwd/gitRoot change - use updateOptions instead
 
