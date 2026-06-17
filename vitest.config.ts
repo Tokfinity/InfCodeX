@@ -4,6 +4,8 @@ import { defineConfig, type Plugin } from 'vitest/config';
 const resolveFromRoot = (...segments: string[]): string =>
   path.resolve(__dirname, ...segments);
 
+const isCoverageRun = process.argv.some((arg) => arg === '--coverage' || arg.startsWith('--coverage='));
+
 function stripShebang(): Plugin {
   return {
     name: 'strip-shebang',
@@ -54,6 +56,17 @@ export default defineConfig({
     // FEATURE_159 (v0.7.40) — global MessageQueue singleton reset before
     // each test. See `vitest.setup.queue.ts` for the rationale.
     setupFiles: [resolveFromRoot('vitest.setup.queue.ts')],
+    ...(isCoverageRun
+      ? {
+          // V8 coverage collection is substantially heavier on Windows; the
+          // default worker count can starve Vitest's worker RPC during final
+          // task updates even after all tests pass. Keep normal test runs fast,
+          // but cap coverage workers so `npm test -- --coverage` remains a
+          // stable release gate instead of a load-sensitive runner flake.
+          maxWorkers: 4,
+          minWorkers: 1,
+        }
+      : {}),
     include: [
       'packages/*/src/**/*.test.ts',
       'packages/*/src/**/*.test.tsx',

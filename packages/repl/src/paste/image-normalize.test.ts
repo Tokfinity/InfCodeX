@@ -13,6 +13,22 @@ async function makePng(width: number, height: number, color = 0xff0000ff): Promi
   return Buffer.from(out);
 }
 
+async function makePoorlyCompressingPng(width: number, height: number): Promise<Buffer> {
+  const img = new Jimp({ width, height });
+  const data = img.bitmap.data;
+  let i = 0;
+  for (let y = 0; y < height; y++) {
+    for (let x = 0; x < width; x++) {
+      data[i++] = (x * 31 + y * 17) & 0xff;
+      data[i++] = (x * 53 + y * 41) & 0xff;
+      data[i++] = (x * 11 + y * 73) & 0xff;
+      data[i++] = 0xff;
+    }
+  }
+  const out = await img.getBuffer('image/png');
+  return Buffer.from(out);
+}
+
 describe('normalizePastedImage', () => {
   it('returns the input as-is when small enough (PNG fast path)', async () => {
     const input = await makePng(100, 100);
@@ -24,19 +40,19 @@ describe('normalizePastedImage', () => {
   });
 
   it('clamps width/height to MAX_DIMENSION when larger', async () => {
-    const input = await makePng(3000, 1500);
+    const input = await makePng(MAX_DIMENSION + 10, (MAX_DIMENSION + 10) / 2);
     const result = await normalizePastedImage(input);
     expect(Math.max(result.width, result.height)).toBeLessThanOrEqual(MAX_DIMENSION);
-    // 3000:1500 aspect ratio = 2:1 → clamped to 2000:1000
-    expect(result.width).toBe(2000);
-    expect(result.height).toBe(1000);
+    // 2010:1005 aspect ratio = 2:1 -> clamped to 2000:1000.
+    expect(result.width).toBe(MAX_DIMENSION);
+    expect(result.height).toBe(MAX_DIMENSION / 2);
   });
 
   it('preserves aspect ratio on portrait images', async () => {
-    const input = await makePng(1500, 3000);
+    const input = await makePng((MAX_DIMENSION + 10) / 2, MAX_DIMENSION + 10);
     const result = await normalizePastedImage(input);
-    expect(result.width).toBe(1000);
-    expect(result.height).toBe(2000);
+    expect(result.width).toBe(MAX_DIMENSION / 2);
+    expect(result.height).toBe(MAX_DIMENSION);
   });
 
   it('does not upscale small images', async () => {
@@ -46,26 +62,10 @@ describe('normalizePastedImage', () => {
     expect(result.height).toBe(50);
   });
 
-  // This test generates a 2500×2500 noise PNG which is slow under parallel
-  // vitest load (4-9s wall clock). Default 5s timeout flaps; bump to 30s.
-  it('produces output ≤ TARGET_RAW_SIZE_BYTES even for large noisy input', { timeout: 30_000 }, async () => {
-    // Random-ish content compresses poorly under PNG. Large dimensions
-    // ensure the post-clamp 2000×2000 result still has enough entropy to
-    // force the JPEG quality ladder (PNG won't fit budget for noise).
-    const w = 2500;
-    const h = 2500;
-    const img = new Jimp({ width: w, height: h });
-    for (let y = 0; y < h; y++) {
-      for (let x = 0; x < w; x++) {
-        const r = (x * 31 + y * 17) & 0xff;
-        const g = (x * 53 + y * 41) & 0xff;
-        const b = (x * 11 + y * 73) & 0xff;
-        // RGBA packed as unsigned 32-bit (Jimp expects uint32).
-        const rgba = ((r * 0x1000000) + (g * 0x10000) + (b * 0x100) + 0xff) >>> 0;
-        img.setPixelColor(rgba, x, y);
-      }
-    }
-    const pngInput = Buffer.from(await img.getBuffer('image/png'));
+  it('produces output ≤ TARGET_RAW_SIZE_BYTES even for large noisy input', { timeout: 45_000 }, async () => {
+    // Random-ish content compresses poorly under PNG; separate tests cover
+    // the clamp path, so keep this focused on the output-size contract.
+    const pngInput = await makePoorlyCompressingPng(MAX_DIMENSION - 100, MAX_DIMENSION - 100);
     const result = await normalizePastedImage(pngInput);
     // The output may be PNG or JPEG — either is fine, the contract is
     // "fit under TARGET_RAW_SIZE_BYTES".
