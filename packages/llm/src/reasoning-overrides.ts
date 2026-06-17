@@ -25,6 +25,7 @@ function isReasoningOverride(
   return value === 'budget'
     || value === 'effort'
     || value === 'toggle'
+    || value === 'adaptive'
     || value === 'none';
 }
 
@@ -74,6 +75,8 @@ export function reasoningCapabilityToOverride(
       return 'effort';
     case 'native-toggle':
       return 'toggle';
+    case 'native-adaptive':
+      return 'adaptive';
     case 'none':
       return 'none';
     default:
@@ -91,6 +94,8 @@ export function reasoningOverrideToCapability(
       return 'native-effort';
     case 'toggle':
       return 'native-toggle';
+    case 'adaptive':
+      return 'native-adaptive';
     case 'none':
     default:
       return 'none';

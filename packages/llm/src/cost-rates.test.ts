@@ -55,7 +55,7 @@ describe('cost-rates', () => {
     it('should have Anthropic models with cache pricing', () => {
       const anthropic = DEFAULT_COST_RATES.anthropic;
       expect(anthropic['claude-opus-4-6']).toBeDefined();
-      expect(anthropic['claude-opus-4-6'].cachePer1M).toBe(1.875);
+      expect(anthropic['claude-opus-4-6'].cachePer1M).toBe(0.5);
       expect(anthropic['claude-haiku-4-5']).toBeDefined();
       expect(anthropic['claude-haiku-4-5'].cachePer1M).toBe(0.08);
     });
@@ -161,7 +161,7 @@ describe('cost-rates', () => {
     it('should calculate with real Anthropic rates', () => {
       const rate = DEFAULT_COST_RATES.anthropic['claude-opus-4-6']!;
       const cost = calculateCost(rate, 1_000_000, 100_000, 50_000);
-      expect(cost).toBeCloseTo(22.59375); // 15 (input) + 7.5 (output) + 0.09375 (cache)
+      expect(cost).toBeCloseTo(7.525); // 5 (input) + 2.5 (output) + 0.025 (cache)
     });
   });
 });

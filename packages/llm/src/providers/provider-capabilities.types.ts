@@ -97,6 +97,7 @@ const VALID_REASONING_CAPABILITIES: readonly KodaXReasoningCapability[] = [
   'native-effort',
   'native-budget',
   'native-toggle',
+  'native-adaptive',
   'unknown',
 ];
 

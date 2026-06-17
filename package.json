@@ -87,7 +87,7 @@
   "dependencies": {
     "@agentclientprotocol/sdk": "^0.15.0",
     "@alcalzone/ansi-tokenize": "^0.2.5",
-    "@anthropic-ai/sdk": "^0.80.0",
+    "@anthropic-ai/sdk": "^0.104.2",
     "ansi-escapes": "^7.3.0",
     "auto-bind": "^5.0.1",
     "chalk": "^5.4.1",

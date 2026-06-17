@@ -94,6 +94,8 @@ describe('built-in provider model capabilities (no API key required)', () => {
     expect(descriptors[0]?.id).toBe('claude-sonnet-4-6'); // default
     expect(descriptors.map((d) => d.id)).toEqual([
       'claude-sonnet-4-6',
+      'claude-opus-4-8',
+      'claude-opus-4-7',
       'claude-opus-4-6',
       'claude-haiku-4-5',
     ]);

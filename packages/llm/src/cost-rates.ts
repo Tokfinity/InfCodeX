@@ -12,10 +12,12 @@ export interface CostRate {
 }
 
 // Default rates for all built-in providers (approximate, user can override)
-// Rates are from official pricing pages as of 2026-04
+// Rates are from official pricing pages as of 2026-06
 export const DEFAULT_COST_RATES: Readonly<Record<string, Readonly<Record<string, CostRate>>>> = {
   anthropic: {
-    'claude-opus-4-6': { inputPer1M: 15.0, outputPer1M: 75.0, cachePer1M: 1.875 },
+    'claude-opus-4-8': { inputPer1M: 5.0, outputPer1M: 25.0, cachePer1M: 0.5 },
+    'claude-opus-4-7': { inputPer1M: 5.0, outputPer1M: 25.0, cachePer1M: 0.5 },
+    'claude-opus-4-6': { inputPer1M: 5.0, outputPer1M: 25.0, cachePer1M: 0.5 },
     'claude-sonnet-4-6': { inputPer1M: 3.0, outputPer1M: 15.0, cachePer1M: 0.375 },
     'claude-haiku-4-5': { inputPer1M: 0.8, outputPer1M: 4.0, cachePer1M: 0.08 },
   },

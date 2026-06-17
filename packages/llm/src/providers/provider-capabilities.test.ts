@@ -169,6 +169,8 @@ describe('FEATURE_198 — provider-capabilities loader', () => {
       expect(a.maxOutputTokens).toBe(64000);
       expect(a.thinkingBudgetCap).toBe(28000);
       expect(a.models).toEqual([
+        { id: 'claude-opus-4-8', displayName: 'Opus 4.8', reasoningCapability: 'native-adaptive', contextWindow: 1000000, maxOutputTokens: 128000 },
+        { id: 'claude-opus-4-7', displayName: 'Opus 4.7', reasoningCapability: 'native-adaptive', contextWindow: 1000000, maxOutputTokens: 128000 },
         { id: 'claude-opus-4-6', displayName: 'Opus 4.6', thinkingBudgetCap: 28000 },
         { id: 'claude-haiku-4-5', displayName: 'Haiku 4.5', thinkingBudgetCap: 10000 },
       ]);

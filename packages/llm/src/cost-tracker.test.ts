@@ -160,7 +160,7 @@ describe('cost-tracker', () => {
       });
 
       const record = tracker.records[0];
-      const expected = 15 + 7.5 + 1.875; // input + output + cache (1M * 1.875 per 1M)
+      const expected = 5 + 2.5 + 0.5; // input + output + cache (1M * 0.5 per 1M)
       expect(record.cost).toBeCloseTo(expected);
     });
 

@@ -384,6 +384,11 @@ export abstract class KodaXBaseProvider {
         return ['native-budget', 'native-toggle', 'none'];
       case 'native-effort':
         return ['native-effort', 'none'];
+      case 'native-adaptive':
+        // Adaptive is the only on-mode for Opus 4.7+; budget/toggle both
+        // 400. Fall straight to no-thinking rather than retrying a shape
+        // the model already rejects.
+        return ['native-adaptive', 'none'];
       case 'native-toggle':
         return ['native-toggle', 'none'];
       case 'none':

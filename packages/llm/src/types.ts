@@ -158,6 +158,10 @@ export type KodaXReasoningCapability =
   | 'native-effort'
   | 'native-budget'
   | 'native-toggle'
+  // Model decides when/how much to think on its own (Anthropic
+  // `thinking: { type: 'adaptive' }`). The only on-mode for Opus 4.7+,
+  // which 400 on `budget_tokens` / `{ type: 'enabled' }`.
+  | 'native-adaptive'
   | 'none'
   | 'prompt-only'
   | 'unknown';
@@ -198,6 +202,7 @@ export type KodaXReasoningOverride =
   | 'budget'
   | 'effort'
   | 'toggle'
+  | 'adaptive'
   | 'none';
 
 export type KodaXReasoningMode =

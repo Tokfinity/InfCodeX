@@ -272,18 +272,19 @@ export abstract class KodaXAnthropicCompatProvider extends KodaXBaseProvider {
       const initialCapability = normalizedReasoning.enabled
         ? this.getReasoningCapability(model)
         : 'none';
-      const attempts: Array<'native-budget' | 'native-toggle' | 'none'> = normalizedReasoning.enabled
+      const attempts: Array<'native-budget' | 'native-toggle' | 'native-adaptive' | 'none'> = normalizedReasoning.enabled
         ? this.getReasoningFallbackChain(initialCapability)
-            .filter((capability): capability is 'native-budget' | 'native-toggle' | 'none' =>
+            .filter((capability): capability is 'native-budget' | 'native-toggle' | 'native-adaptive' | 'none' =>
               capability === 'native-budget' ||
               capability === 'native-toggle' ||
+              capability === 'native-adaptive' ||
               capability === 'none',
             )
         : ['none'];
       let shouldForceToolChoice = Boolean(streamOptions?.forcedToolName);
 
       const buildRequest = (
-        capability: 'native-budget' | 'native-toggle' | 'none',
+        capability: 'native-budget' | 'native-toggle' | 'native-adaptive' | 'none',
       ): Anthropic.Messages.MessageCreateParams => {
         const kwargs: Anthropic.Messages.MessageCreateParams = {
           model,
@@ -313,6 +314,13 @@ export abstract class KodaXAnthropicCompatProvider extends KodaXBaseProvider {
         } else if (capability === 'native-toggle') {
           kwargs.thinking = {
             type: 'enabled',
+          } as Anthropic.Messages.ThinkingConfigParam;
+        } else if (capability === 'native-adaptive') {
+          // Opus 4.7+ only accept adaptive thinking — the model itself
+          // decides depth, so KodaX sends no budget. `output_config.effort`
+          // would refine depth but isn't plumbed through KodaX yet.
+          kwargs.thinking = {
+            type: 'adaptive',
           } as Anthropic.Messages.ThinkingConfigParam;
         }
 
@@ -373,7 +381,9 @@ export abstract class KodaXAnthropicCompatProvider extends KodaXBaseProvider {
                 ? ['budget_tokens', 'thinking']
                 : capability === 'native-toggle'
                   ? ['thinking']
-                  : [];
+                  : capability === 'native-adaptive'
+                    ? ['adaptive', 'thinking']
+                    : [];
 
             if (!this.shouldFallbackForReasoningError(error, ...fallbackTerms)) {
               throw error;
@@ -625,18 +635,19 @@ export abstract class KodaXAnthropicCompatProvider extends KodaXBaseProvider {
       const initialCapability = normalizedReasoning.enabled
         ? this.getReasoningCapability(model)
         : 'none';
-      const attempts: Array<'native-budget' | 'native-toggle' | 'none'> = normalizedReasoning.enabled
+      const attempts: Array<'native-budget' | 'native-toggle' | 'native-adaptive' | 'none'> = normalizedReasoning.enabled
         ? this.getReasoningFallbackChain(initialCapability)
-            .filter((capability): capability is 'native-budget' | 'native-toggle' | 'none' =>
+            .filter((capability): capability is 'native-budget' | 'native-toggle' | 'native-adaptive' | 'none' =>
               capability === 'native-budget' ||
               capability === 'native-toggle' ||
+              capability === 'native-adaptive' ||
               capability === 'none',
             )
         : ['none'];
       let shouldForceToolChoice = Boolean(streamOptions?.forcedToolName);
 
       const buildRequest = (
-        capability: 'native-budget' | 'native-toggle' | 'none',
+        capability: 'native-budget' | 'native-toggle' | 'native-adaptive' | 'none',
       ): Anthropic.Messages.MessageCreateParams => {
         const kwargs: Anthropic.Messages.MessageCreateParams = {
           model,
@@ -665,6 +676,13 @@ export abstract class KodaXAnthropicCompatProvider extends KodaXBaseProvider {
         } else if (capability === 'native-toggle') {
           kwargs.thinking = {
             type: 'enabled',
+          } as Anthropic.Messages.ThinkingConfigParam;
+        } else if (capability === 'native-adaptive') {
+          // Opus 4.7+ only accept adaptive thinking — the model itself
+          // decides depth, so KodaX sends no budget. `output_config.effort`
+          // would refine depth but isn't plumbed through KodaX yet.
+          kwargs.thinking = {
+            type: 'adaptive',
           } as Anthropic.Messages.ThinkingConfigParam;
         }
 
@@ -698,7 +716,9 @@ export abstract class KodaXAnthropicCompatProvider extends KodaXBaseProvider {
                 ? ['budget_tokens', 'thinking']
                 : capability === 'native-toggle'
                   ? ['thinking']
-                  : [];
+                  : capability === 'native-adaptive'
+                    ? ['adaptive', 'thinking']
+                    : [];
 
             if (!this.shouldFallbackForReasoningError(error, ...fallbackTerms)) {
               throw error;

@@ -516,6 +516,8 @@ export function formatReasoningCapabilityShort(
       return 'E';
     case 'native-toggle':
       return 'T';
+    case 'native-adaptive':
+      return 'A';
     case 'none':
     case 'prompt-only':
     case 'unknown':
@@ -534,6 +536,8 @@ export function describeReasoningCapabilityControl(
       return 'effort';
     case 'native-toggle':
       return 'toggle';
+    case 'native-adaptive':
+      return 'adaptive';
     case 'none':
     case 'prompt-only':
     case 'unknown':
@@ -557,6 +561,8 @@ export function describeReasoningExecution(
       return 'Uses native reasoning effort control';
     case 'native-toggle':
       return 'Uses provider-native thinking toggle only';
+    case 'native-adaptive':
+      return 'Model adaptively decides thinking depth (Opus 4.7+)';
     case 'none':
       return 'Runs without native reasoning parameters';
     case 'prompt-only':
