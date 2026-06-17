@@ -29,12 +29,12 @@ import { resolveModelHintTier } from './model-hint-routing.js';
 import { invokeChildWithFallback } from './child-fallback.js';
 import { toolWorktreeCreate, toolWorktreeRemove } from './tools/worktree.js';
 import { loadAgentsFiles, formatAgentsForPrompt } from './context/agents-loader.js';
-import { uniqueInlineSkillNames } from './skill-references.js';
+import { uniqueBareInlineSlashNames, uniqueInlineSkillNames } from './skill-references.js';
 // FEATURE_120 v0.7.39 Step 0d (Option D) — generic fan-out lifted to
 // @kodax-ai/agent (ADR-021). All coding-side concerns (read vs write,
 // worktree isolation, briefing, role policy) stay below; the wrapper
 // owns only bounded concurrency + abort + progress eventing.
-import { runFanOut } from '@kodax-ai/agent';
+import { getSkillRegistry, initializeSkillRegistry, runFanOut } from '@kodax-ai/agent';
 // FEATURE_191 — specialist agent override resolution. `resolveConstructedAgent`
 // returns `Agent | undefined`; the dispatch-child-tasks layer has already
 // rejected unknown names before bundle construction, so a re-resolve here is
@@ -541,9 +541,41 @@ function buildActiveSkillResourceBriefing(
   return lines.join('\n');
 }
 
-function buildReferencedSkillBriefing(objective: string): string | undefined {
-  const names = uniqueInlineSkillNames(objective)
+async function resolveKnownBareSlashSkillNames(
+  objective: string,
+  explicitNames: readonly string[],
+  projectRoot: string,
+): Promise<readonly string[]> {
+  const candidates = uniqueBareInlineSlashNames(objective)
+    .filter((name) =>
+      !explicitNames.includes(name) &&
+      !objective.includes(`<skill name="${name}"`)
+    );
+  if (candidates.length === 0) return [];
+
+  try {
+    const registry = getSkillRegistry(projectRoot);
+    if (registry.size === 0) {
+      await initializeSkillRegistry(projectRoot);
+    }
+    return candidates.filter((name) => registry.has(name));
+  } catch {
+    return [];
+  }
+}
+
+async function buildReferencedSkillBriefing(
+  objective: string,
+  projectRoot: string,
+): Promise<string | undefined> {
+  const explicitNames = uniqueInlineSkillNames(objective)
     .filter((name) => !objective.includes(`<skill name="${name}"`));
+  const bareNames = await resolveKnownBareSlashSkillNames(
+    objective,
+    explicitNames,
+    projectRoot,
+  );
+  const names = Array.from(new Set([...explicitNames, ...bareNames]));
   if (names.length === 0) return undefined;
 
   return [
@@ -1060,7 +1092,10 @@ async function buildChildBriefing(
     ? 'Shell defaults: Windows. Use: dir, move, copy, del, type. Avoid Unix-only tools like `head`, `tail`, `rm`, `cp`, `mv`.'
     : 'Shell defaults: Unix. Use: ls, mv, cp, rm, cat, head, tail.';
   const activeSkillResourceBriefing = buildActiveSkillResourceBriefing(ctx.skillInvocation);
-  const referencedSkillBriefing = buildReferencedSkillBriefing(bundle.objective);
+  const referencedSkillBriefing = await buildReferencedSkillBriefing(
+    bundle.objective,
+    childGitRoot ?? childCwd,
+  );
 
   const parts: string[] = [
     `# Child Agent Task`,

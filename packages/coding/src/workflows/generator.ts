@@ -28,7 +28,7 @@ import { resolveProvider, sideQuery } from '@kodax-ai/llm';
 import type { KodaXMessage } from '@kodax-ai/llm';
 
 import type { WorkflowScriptSnapshotInput } from './run-graph.js';
-import { uniqueInlineSkillNames } from '../skill-references.js';
+import { uniqueBareInlineSlashNames, uniqueInlineSkillNames } from '../skill-references.js';
 import type { KodaXOptions } from '../types.js';
 
 export const WORKFLOW_GENERATION_SYSTEM_PROMPT = [
@@ -692,8 +692,9 @@ export async function buildWorkflowGenerationSkillContext(
   request: string,
   options: Pick<KodaXOptions, 'context'>,
 ): Promise<string | undefined> {
-  const skillNames = uniqueInlineSkillNames(request);
-  if (skillNames.length === 0) return undefined;
+  const explicitSkillNames = uniqueInlineSkillNames(request);
+  const bareSlashNames = uniqueBareInlineSlashNames(request);
+  if (explicitSkillNames.length === 0 && bareSlashNames.length === 0) return undefined;
 
   const projectRoot = options.context?.gitRoot
     ?? options.context?.executionCwd
@@ -709,15 +710,26 @@ export async function buildWorkflowGenerationSkillContext(
     projectRoot,
     environment: {},
   };
+  const skillNames = [
+    ...explicitSkillNames,
+    ...bareSlashNames.filter((name) =>
+      !explicitSkillNames.includes(name) && registry.has(name)
+    ),
+  ];
+  if (skillNames.length === 0) return undefined;
+
   const blocks: string[] = [];
 
-  for (const skillName of skillNames) {
+  for (const skillName of explicitSkillNames) {
     if (!registry.has(skillName)) {
       const available = registry.list().map((skill) => skill.name).sort().join(', ');
       throw new Error(
         `workflow generation referenced unknown skill "${skillName}". Available skills: ${available || '(none)'}`,
       );
     }
+  }
+
+  for (const skillName of skillNames) {
     const skill = await registry.loadFull(skillName);
     const expanded = await expandSkillForLLM(skill, '', skillContext);
     if (expanded.disableModelInvocation) {

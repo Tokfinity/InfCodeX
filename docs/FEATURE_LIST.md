@@ -13,18 +13,18 @@
 | Current released version | `v0.7.51` |
 | Current package version | `@kodax-ai/kodax@0.7.51` (released 2026-06-17) |
 | Workspace baseline | `llm / agent / coding / repl` 4 packages |
-| Total tracked features | `19` |
+| Total tracked features | `20` |
 | InProgress | `0` |
 | Planned | `16` |
-| Completed | `3` |
-| Tracked feature IDs | `007, 030, 093, 105, 108, 113, 139, 174, 211, 224, 225, 228, 229, 230, 231, 232, 233, 234, 235` |
+| Completed | `4` |
+| Tracked feature IDs | `007, 030, 093, 105, 108, 113, 139, 174, 211, 224, 225, 228, 229, 230, 231, 232, 233, 234, 235, 236` |
 | Archive cutoff | Shipped / canceled / absorbed / shelved items through `v0.7.49` are archived. |
 
 ### 一览表
 
 | Status | Count | Feature IDs | Next checkpoint |
 |---|---:|---|---|
-| Completed | 3 | `229, 230, 234` | `229` released v0.7.50; `230, 234` released v0.7.51 |
+| Completed | 4 | `229, 230, 234, 236` | `229` released v0.7.50; `230, 234, 236` released v0.7.51 |
 | Planned, near-term | 11 | `231, 232, 235, 233, 224, 228, 225, 174, 105, 211, 108` | `v0.7.52` -> `v0.7.68` |
 | Planned, v0.8.x | 5 | `007, 030, 093, 113, 139` | `v0.8.0+` |
 
@@ -87,6 +87,7 @@
 
 | ID | Title | Released | Design | Notes |
 |---|---|---|---|---|
+| `236` | Workflow Inline Skill Reference Propagation | `v0.7.51` | [v0.7.51](features/v0.7.51.md#feature_236-workflow-inline-skill-reference-propagation) | Released v0.7.51 (2026-06-17). Workflow generator expands inline `/skill:<name>` and known bare slash skill references before harness generation; child briefings fail closed to the `skill` tool for unexpanded references. |
 | `234` | Workflow Run Host Attribution (`hostMetadata`) | `v0.7.51` | [v0.7.51](features/v0.7.51.md#feature_234-workflow-run-host-attribution-hostmetadata) | Released v0.7.51 (2026-06-17). Additive `hostMetadata?: Record<string,string>` on workflow snapshot/options; eval non-trigger. |
 | `230` | Durable TUI Tool Transcript Replay | `v0.7.51` | [v0.7.51](features/v0.7.51.md#feature_230-durable-tui-tool-transcript-replay) | Released v0.7.51 (2026-06-17). Terminal `tool_group` replay cache + message-derived fallback + SDK transcript contract. |
 | `229` | Workflow Process Events + SDK/System Progress Surface | `v0.7.50` | [v0.7.50](features/v0.7.50.md#feature_229-workflow-process-events--sdksystem-progress-surface) | Released v0.7.50 (npm + tag + GitHub Release, 2026-06-17). |

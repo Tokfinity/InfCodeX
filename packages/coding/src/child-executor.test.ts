@@ -1,8 +1,9 @@
-import { mkdtempSync, rmSync, writeFileSync } from 'node:fs';
+import { mkdirSync, mkdtempSync, rmSync, writeFileSync } from 'node:fs';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
+import { resetSkillRegistry } from '@kodax-ai/agent';
 
 // Mock runKodaX before importing child-executor
 vi.mock('./agent.js', () => ({
@@ -553,6 +554,51 @@ describe('executeChildAgents', () => {
     expect(prompt).toContain('/skill:feature-list-tracker');
     expect(prompt).toContain('invoke the `skill` tool');
     expect(prompt).toContain('Do not infer skill-specific rules from the slash token alone.');
+  });
+
+  it('tells child agents to invoke known bare slash skill references before acting', async () => {
+    const tempDir = mkdtempSync(join(tmpdir(), 'kodax-child-bare-skill-'));
+    try {
+      const skillDir = join(tempDir, '.kodax', 'skills', 'feature-list-tracker');
+      mkdirSync(skillDir, { recursive: true });
+      writeFileSync(
+        join(skillDir, 'SKILL.md'),
+        [
+          '---',
+          'name: feature-list-tracker',
+          'description: Track features with FEATURE_LIST.md.',
+          '---',
+          '',
+          'Use docs/features/v{VERSION}.md.',
+        ].join('\n'),
+        'utf8',
+      );
+      mockRunKodaX.mockResolvedValueOnce({
+        success: true,
+        lastText: 'registered feature correctly',
+        messages: [{ role: 'assistant', content: '' }],
+        sessionId: 's-bare-skill',
+      });
+
+      await executeChildAgents(
+        [
+          createBundle({
+            id: 'cb-bare-skill',
+            objective: 'Register the work according to /feature-list-tracker and ignore /kodax-test-not-a-skill-236.',
+          }),
+        ],
+        { ...createCtx(), gitRoot: tempDir, executionCwd: tempDir },
+        createOptions(),
+      );
+
+      const prompt = mockRunKodaX.mock.calls[0]![1] as string;
+      expect(prompt).toContain('## Referenced Skills');
+      expect(prompt).toContain('/skill:feature-list-tracker');
+      expect(prompt).not.toContain('/skill:kodax-test-not-a-skill-236');
+    } finally {
+      resetSkillRegistry();
+      rmSync(tempDir, { recursive: true, force: true });
+    }
   });
 
   it('executes read-only bundles in parallel', async () => {

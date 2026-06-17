@@ -155,6 +155,52 @@ describe('buildWorkflowGenerationSkillContext', () => {
       rmSync(tempDir, { recursive: true, force: true });
     }
   });
+
+  it('expands bare slash skill references only when the registry knows the skill', async () => {
+    const tempDir = mkdtempSync(join(tmpdir(), 'kodax-workflow-bare-skill-'));
+    try {
+      const skillDir = join(tempDir, '.kodax', 'skills', 'feature-list-tracker');
+      mkdirSync(skillDir, { recursive: true });
+      writeFileSync(
+        join(skillDir, 'SKILL.md'),
+        [
+          '---',
+          'name: feature-list-tracker',
+          'description: Track features with FEATURE_LIST.md.',
+          '---',
+          '',
+          'Use `docs/features/v{VERSION}.md` as the design document.',
+        ].join('\n'),
+        'utf8',
+      );
+
+      const skillContext = await buildWorkflowGenerationSkillContext(
+        'Create a workflow using /feature-list-tracker and ignore /kodax-test-not-a-skill-236.',
+        { context: { gitRoot: tempDir, executionCwd: tempDir } },
+      );
+
+      expect(skillContext).toContain('<skill name="feature-list-tracker"');
+      expect(skillContext).not.toContain('<skill name="kodax-test-not-a-skill-236"');
+    } finally {
+      resetSkillRegistry();
+      rmSync(tempDir, { recursive: true, force: true });
+    }
+  });
+
+  it('fails closed for explicit unknown /skill references', async () => {
+    const tempDir = mkdtempSync(join(tmpdir(), 'kodax-workflow-missing-skill-'));
+    try {
+      await expect(
+        buildWorkflowGenerationSkillContext(
+          'Create a workflow using /skill:kodax-test-definitely-missing-236.',
+          { context: { gitRoot: tempDir, executionCwd: tempDir } },
+        ),
+      ).rejects.toThrow('workflow generation referenced unknown skill "kodax-test-definitely-missing-236"');
+    } finally {
+      resetSkillRegistry();
+      rmSync(tempDir, { recursive: true, force: true });
+    }
+  });
 });
 
 describe('validateGeneratedWorkflowSource', () => {

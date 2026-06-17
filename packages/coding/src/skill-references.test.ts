@@ -1,6 +1,11 @@
 import { describe, expect, it } from 'vitest';
 
-import { parseInlineSkillReferences, uniqueInlineSkillNames } from './skill-references.js';
+import {
+  parseBareInlineSlashReferences,
+  parseInlineSkillReferences,
+  uniqueBareInlineSlashNames,
+  uniqueInlineSkillNames,
+} from './skill-references.js';
 
 describe('parseInlineSkillReferences', () => {
   it('returns no references for empty input', () => {
@@ -36,5 +41,28 @@ describe('uniqueInlineSkillNames', () => {
     expect(
       uniqueInlineSkillNames('/workflow create using /skill:a then /skill:b then /skill:a'),
     ).toEqual(['a', 'b']);
+  });
+});
+
+describe('parseBareInlineSlashReferences', () => {
+  it('finds bare slash candidates without consuming /skill references', () => {
+    expect(
+      parseBareInlineSlashReferences('Use /feature-list-tracker and /skill:huashu-design.'),
+    ).toEqual([
+      { name: 'feature-list-tracker', raw: '/feature-list-tracker', start: 4, end: 25 },
+    ]);
+  });
+
+  it('does not treat urls or path fragments as bare slash candidates', () => {
+    expect(parseBareInlineSlashReferences('https://example.com/feature-list-tracker')).toEqual([]);
+    expect(parseBareInlineSlashReferences('Path is dir/feature-list-tracker/file')).toEqual([]);
+  });
+});
+
+describe('uniqueBareInlineSlashNames', () => {
+  it('deduplicates bare slash candidates in textual order', () => {
+    expect(
+      uniqueBareInlineSlashNames('/workflow create using /a then /b then /a'),
+    ).toEqual(['workflow', 'a', 'b']);
   });
 });
