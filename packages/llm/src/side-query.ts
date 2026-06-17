@@ -22,7 +22,7 @@ import type {
   KodaXTokenUsage,
 } from './types.js';
 import { KodaXBaseProvider } from './providers/base.js';
-import { type CostTracker, recordUsage } from './cost-tracker.js';
+import { type CostTracker, recordRetry, recordUsage } from './cost-tracker.js';
 
 export type SideQueryStopReason =
   | 'end_turn'
@@ -62,6 +62,7 @@ const DEFAULT_TIMEOUT_MS = 30_000;
 export async function sideQuery(req: SideQueryRequest): Promise<SideQueryResult> {
   const controller = new AbortController();
   const timeoutMs = req.timeoutMs ?? DEFAULT_TIMEOUT_MS;
+  let costTracker = req.costTracker;
 
   // Track which source aborted FIRST so the resulting stopReason label is
   // deterministic when timeout and parent-abort fire near-simultaneously.
@@ -90,7 +91,18 @@ export async function sideQuery(req: SideQueryRequest): Promise<SideQueryResult>
       [],
       req.system,
       req.reasoning ?? { mode: 'off' },
-      { modelOverride: req.model },
+      {
+        modelOverride: req.model,
+        onRetryAfter: (event) => {
+          if (!costTracker) return;
+          costTracker = recordRetry(costTracker, {
+            provider: event.provider,
+            waitMs: event.waitMs,
+            reason: event.reason,
+            source: event.source,
+          });
+        },
+      },
       controller.signal,
     );
 
@@ -103,7 +115,7 @@ export async function sideQuery(req: SideQueryRequest): Promise<SideQueryResult>
       return {
         text,
         usage,
-        costTracker: req.costTracker,
+        costTracker,
         stopReason: 'error',
         error: new Error(
           `sideQuery: provider returned ${toolBlocks.length} tool_use block(s); sideQuery expects text-only output`,
@@ -111,7 +123,6 @@ export async function sideQuery(req: SideQueryRequest): Promise<SideQueryResult>
       };
     }
 
-    let costTracker = req.costTracker;
     if (costTracker) {
       costTracker = recordUsage(costTracker, {
         provider: req.provider.name,
@@ -141,7 +152,7 @@ export async function sideQuery(req: SideQueryRequest): Promise<SideQueryResult>
     return {
       text: '',
       usage: EMPTY_USAGE,
-      costTracker: req.costTracker,
+      costTracker,
       stopReason,
       error,
     };

@@ -620,7 +620,11 @@ async function runManagedTaskViaRunnerInner(
       // as `(default)`. Same sentinel-truthiness pitfall as the
       // FEATURE_187 Phase B verifier + stall wiring fix.
       const model = options.modelOverride ?? options.model;
-      cachedSummarizer = createBlobSummarizer({ provider, model });
+      cachedSummarizer = createBlobSummarizer({
+        provider,
+        model,
+        events: options.events,
+      });
     }
     return cachedSummarizer(content, summaryOpts);
   };

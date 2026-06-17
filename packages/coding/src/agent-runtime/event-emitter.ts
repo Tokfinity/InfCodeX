@@ -45,7 +45,11 @@
  *     `agent.ts:511-528` and `agent.ts:577` during FEATURE_100 P3.1.
  */
 
-import type { KodaXEvents, KodaXContextTokenSnapshot } from '../types.js';
+import type {
+  KodaXActivityEventMeta,
+  KodaXEvents,
+  KodaXContextTokenSnapshot,
+} from '../types.js';
 import type { KodaXMessage } from '@kodax-ai/llm';
 import { getMessageQueue } from '@kodax-ai/agent';
 import { isManagedProtocolToolName } from '../managed-protocol.js';
@@ -162,7 +166,12 @@ export function emitProviderRateLimit(
   attempt: number,
   maxRetries: number,
   delayMs: number,
+  meta?: KodaXActivityEventMeta,
 ): void {
+  if (meta !== undefined) {
+    events.onProviderRateLimit?.(attempt, maxRetries, delayMs, meta);
+    return;
+  }
   events.onProviderRateLimit?.(attempt, maxRetries, delayMs);
 }
 

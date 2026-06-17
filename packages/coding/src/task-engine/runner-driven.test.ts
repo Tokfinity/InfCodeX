@@ -322,6 +322,84 @@ describe('buildRunnerLlmAdapter — max_tokens escalation (FEATURE_085 Scout par
     };
   }
 
+  it('forwards provider retry callbacks from managed-worker stream options', async () => {
+    const onProviderRateLimit = vi.fn();
+    const onRetryAfter = vi.fn();
+
+    class Scripted extends KodaXBaseProviderRef {
+      readonly name = ESCALATION_PROVIDER_NAME;
+      readonly supportsThinking = false;
+      protected readonly config = {
+        apiKeyEnv: ESCALATION_PROVIDER_API_KEY_ENV,
+        model: 'scripted',
+        supportsThinking: false,
+        reasoningCapability: 'prompt-only' as const,
+        maxOutputTokens: KODAX_CAPPED,
+        capabilityProfile: {
+          transport: 'native-api' as const,
+          conversationSemantics: 'full-history' as const,
+          mcpSupport: 'none' as const,
+          contextFidelity: 'full' as const,
+          toolCallingFidelity: 'full' as const,
+          sessionSupport: 'stateless' as const,
+          longRunningSupport: 'limited' as const,
+          multimodalSupport: 'none' as const,
+          evidenceSupport: 'limited' as const,
+        },
+      };
+
+      async stream(
+        _messages: KodaXMessage[],
+        _tools: KodaXToolDefinition[],
+        _system: string,
+        _reasoning?: boolean | KodaXReasoningRequest,
+        streamOptions?: KodaXProviderStreamOptions,
+      ): Promise<KodaXStreamResult> {
+        streamOptions?.onRateLimit?.(1, 3, 500);
+        streamOptions?.onRetryAfter?.({
+          provider: this.name,
+          waitMs: 500,
+          reason: 'rate-limit',
+          source: 'retry-after-ms',
+          attempt: 1,
+          maxAttempts: 3,
+        });
+        return {
+          textBlocks: [{ type: 'text', text: 'done' }],
+          toolBlocks: [],
+          thinkingBlocks: [],
+          stopReason: 'end_turn',
+        };
+      }
+    }
+
+    process.env[ESCALATION_PROVIDER_API_KEY_ENV] = 'test-key';
+    registerModelProviderFn(ESCALATION_PROVIDER_NAME, () => new Scripted());
+
+    const adapter = buildRunnerLlmAdapter({
+      ...makeAdapterOptions(),
+      events: {
+        onProviderRateLimit,
+        onRetryAfter,
+      },
+    });
+    const result = await adapter(
+      [{ role: 'system', content: 'sys' }, { role: 'user', content: 'Retry please.' }],
+      { name: 'worker', instructions: '' },
+    );
+
+    expect(result.text).toBe('done');
+    expect(onProviderRateLimit).toHaveBeenCalledWith(1, 3, 500);
+    expect(onRetryAfter).toHaveBeenCalledWith({
+      provider: ESCALATION_PROVIDER_NAME,
+      waitMs: 500,
+      reason: 'rate-limit',
+      source: 'retry-after-ms',
+      attempt: 1,
+      maxAttempts: 3,
+    });
+  }, 15_000);
+
   it('passes the requested model into every provider stream call, including L5 continuation', async () => {
     const observedModels: Array<string | undefined> = [];
     const responses: KodaXStreamResult[] = [

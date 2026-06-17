@@ -39,6 +39,7 @@ import {
   evaluateProviderPolicy,
   type KodaXProviderPolicyDecision,
 } from './provider-policy.js';
+import { emitProviderRateLimit } from './agent-runtime/event-emitter.js';
 
 export { KODAX_REASONING_MODE_SEQUENCE };
 
@@ -1965,6 +1966,7 @@ async function routeTaskWithLLM(
       },
     ];
 
+    const events = options.events;
     const result = await provider.stream(
       messages,
       [],
@@ -1973,6 +1975,16 @@ async function routeTaskWithLLM(
       {
         modelOverride: options.modelOverride ?? options.model,
         signal: options.abortSignal,
+        ...(events
+          ? {
+              onRateLimit: (attempt, maxRetries, delayMs) => {
+                emitProviderRateLimit(events, attempt, maxRetries, delayMs);
+              },
+              onRetryAfter: (event) => {
+                events.onRetryAfter?.(event);
+              },
+            }
+          : {}),
       },
       options.abortSignal,
     );
@@ -2139,6 +2151,7 @@ async function judgeAutoRerouteWithLLM(
       },
     ];
 
+    const events = options.events;
     const result = await provider.stream(
       messages,
       [],
@@ -2147,6 +2160,16 @@ async function judgeAutoRerouteWithLLM(
       {
         modelOverride: options.modelOverride ?? options.model,
         signal: options.abortSignal,
+        ...(events
+          ? {
+              onRateLimit: (attempt, maxRetries, delayMs) => {
+                emitProviderRateLimit(events, attempt, maxRetries, delayMs);
+              },
+              onRetryAfter: (event) => {
+                events.onRetryAfter?.(event);
+              },
+            }
+          : {}),
       },
       options.abortSignal,
     );

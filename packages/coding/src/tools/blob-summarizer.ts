@@ -27,8 +27,11 @@
 import type {
   KodaXBaseProvider,
   KodaXMessage,
+  KodaXProviderStreamOptions,
   KodaXTextBlock,
 } from '@kodax-ai/llm';
+import type { KodaXEvents } from '../types.js';
+import { emitProviderRateLimit } from '../agent-runtime/event-emitter.js';
 
 /** ~100 KB inline budget — beyond this, inlining alone risks blowing the
  * Worker's context window on common 128 K-token models (≈ 25 K tokens
@@ -94,6 +97,7 @@ export interface CreateBlobSummarizerOptions {
    *  like `'unknown'` — see FEATURE_187 Phase B code review (same
    *  sentinel-truthiness pitfall as sidecar-verifier / stall-sidecar). */
   readonly model: string | undefined;
+  readonly events?: KodaXEvents;
   /** Override the 30 s wall. Tests pass small values to keep them fast. */
   readonly timeoutMs?: number;
 }
@@ -156,6 +160,17 @@ export function createBlobSummarizer(
     const messages: KodaXMessage[] = [
       { role: 'user', content: buildSummarizerUserMessage(content, maxChars) },
     ];
+    const events = opts.events;
+    const streamOptions: KodaXProviderStreamOptions | undefined = events
+      ? {
+          onRateLimit: (attempt, maxRetries, delayMs) => {
+            emitProviderRateLimit(events, attempt, maxRetries, delayMs);
+          },
+          onRetryAfter: (event) => {
+            events.onRetryAfter?.(event);
+          },
+        }
+      : undefined;
 
     try {
       const result = await opts.provider.stream(
@@ -163,7 +178,7 @@ export function createBlobSummarizer(
         [],
         SUMMARIZER_SYSTEM_PROMPT,
         undefined,
-        undefined,
+        streamOptions,
         combinedSignal,
       );
       const text = (result.textBlocks as readonly KodaXTextBlock[])

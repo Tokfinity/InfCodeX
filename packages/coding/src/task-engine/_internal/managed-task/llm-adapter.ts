@@ -23,6 +23,7 @@ import type {
   KodaXMessage,
   KodaXReasoningRequest,
   KodaXRedactedThinkingBlock,
+  KodaXRetryAfterEvent,
   KodaXThinkingBlock,
   KodaXTokenUsage,
   KodaXToolDefinition,
@@ -59,6 +60,7 @@ import {
   createCostTracker,
   formatCostReport,
   getSummary as getCostSummary,
+  recordRetry as recordCostRetry,
   recordUsage as recordCostUsage,
   type CostTracker,
 } from '../../../agent-runtime/middleware/cost-tracker.js';
@@ -445,6 +447,22 @@ export function buildRunnerLlmAdapter(
             options.events?.onThinkingEnd?.(thinking);
           },
           onToolInputDelta: options.events?.onToolInputDelta,
+          onRateLimit: (rateAttempt: number, maxRetries: number, delayMs: number) => {
+            resetIdleTimer();
+            if (options.events) {
+              emitProviderRateLimit(options.events, rateAttempt, maxRetries, delayMs);
+            }
+          },
+          onRetryAfter: (event: KodaXRetryAfterEvent) => {
+            resetIdleTimer();
+            costTracker = recordCostRetry(costTracker, {
+              provider: event.provider,
+              waitMs: event.waitMs,
+              reason: event.reason,
+              source: event.source,
+            });
+            options.events?.onRetryAfter?.(event);
+          },
         };
 
         try {
@@ -754,6 +772,20 @@ export function buildRunnerLlmAdapter(
                 options.events?.onThinkingEnd?.(thinking);
               },
               onToolInputDelta: options.events?.onToolInputDelta,
+              onRateLimit: (rateAttempt: number, maxRetries: number, delayMs: number) => {
+                if (options.events) {
+                  emitProviderRateLimit(options.events, rateAttempt, maxRetries, delayMs);
+                }
+              },
+              onRetryAfter: (event: KodaXRetryAfterEvent) => {
+                costTracker = recordCostRetry(costTracker, {
+                  provider: event.provider,
+                  waitMs: event.waitMs,
+                  reason: event.reason,
+                  source: event.source,
+                });
+                options.events?.onRetryAfter?.(event);
+              },
             },
             l5Signal,
           );

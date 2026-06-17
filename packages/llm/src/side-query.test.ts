@@ -188,6 +188,38 @@ describe('sideQuery — cost tracking', () => {
     expect(tracker.records).toHaveLength(0);
   });
 
+  it('records provider retry waits through streamOptions.onRetryAfter', async () => {
+    const provider = new StubProvider(async ({ streamOptions }) => {
+      expect(streamOptions?.onRetryAfter).toBeTypeOf('function');
+      streamOptions?.onRetryAfter?.({
+        provider: 'stub',
+        waitMs: 250,
+        reason: 'rate-limit',
+        source: 'retry-after-ms',
+        attempt: 1,
+        maxAttempts: 3,
+      });
+      return okResult();
+    });
+
+    const result = await sideQuery({
+      provider,
+      model: 'stub-default',
+      system: 'sys',
+      messages: baseMessages,
+      querySource: 'auto_mode',
+      costTracker: createCostTracker(),
+    });
+
+    expect(result.costTracker?.retries).toHaveLength(1);
+    expect(result.costTracker?.retries[0]).toMatchObject({
+      provider: 'stub',
+      waitMs: 250,
+      reason: 'rate-limit',
+      source: 'retry-after-ms',
+    });
+  });
+
   it('does not record usage when sideQuery contract is violated (tool_use blocks returned)', async () => {
     const provider = new StubProvider(async () => okResult({
       textBlocks: [text('partial')],
