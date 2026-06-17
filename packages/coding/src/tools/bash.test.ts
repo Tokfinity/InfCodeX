@@ -115,7 +115,11 @@ describe('toolBash', () => {
   });
 
   it('keeps the tail for large command output', async () => {
-    const command = 'node -e "for (let i = 1; i <= 3000; i++) console.log(`line-${i}`)"';
+    // NOTE: keep this shell-portable — backticks / ${...} inside the double-
+    // quoted -e script get interpreted by POSIX `sh` (command substitution +
+    // parameter expansion) before node sees them, which on Linux CI produced
+    // blank lines instead of "line-N". Use single-quoted string concatenation.
+    const command = 'node -e "for (let i = 1; i <= 3000; i++) console.log(\'line-\' + i)"';
     const result = await toolBash({ command }, {
       backups: new Map(),
       executionCwd: tempDir,
