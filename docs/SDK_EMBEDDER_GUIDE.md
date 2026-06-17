@@ -1324,6 +1324,42 @@ is intentionally ANSI-free and UI-neutral. It carries workflow status, phases,
 child item status, result-bearing child summaries, provider/model routing hints,
 and final `resultSummary`.
 
+### Workflow run host attribution (v0.7.51)
+
+Hosts that need to attach a workflow run back to an external session, surface,
+or tab can stamp an opaque string map on the run:
+
+```ts
+const run = runManager.startFromOptions({
+  module: generated.module,
+  args: { request: 'Review the payment flow' },
+  options,
+  runId,
+  runDir,
+  scriptSnapshot: generated.scriptSnapshot,
+  processMetadata: {
+    source: 'sdk',
+    hostMetadata: {
+      sessionId: 'space-session-123',
+      tag: 'coder',
+    },
+  },
+});
+
+runManager.subscribeWorkflowProcess((event) => {
+  const owner = event.snapshot.hostMetadata;
+  if (owner?.sessionId === 'space-session-123') {
+    renderSessionWorkflow(event.snapshot);
+  }
+});
+```
+
+`hostMetadata` is host-owned and KodaX does not interpret its keys. It is
+normalized as a small string-only map, persisted in `run.json`, and echoed on
+live and restored `WorkflowProcessSnapshot` values. Unstamped runs return
+`hostMetadata === undefined`; hosts should treat that as "no declared owner",
+not infer ownership from session replay text.
+
 ### Live child-agent telemetry
 
 F229 also preserves parent `KodaXEvents` callbacks for child-agent execution.
