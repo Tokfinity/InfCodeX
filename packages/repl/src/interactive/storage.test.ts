@@ -5,6 +5,13 @@ import { mkdir, mkdtemp, readFile, rm, utimes, writeFile } from 'fs/promises';
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
 import { applySessionCompaction, createSessionLineage } from '@kodax-ai/agent';
 
+// 'C:/...' is absolute on win32 but RELATIVE on POSIX, so path.resolve() would
+// prepend the cwd on Linux CI and break the per-project session-key derivation
+// these tests rely on. Use a repo root that is absolute on both platforms.
+const KODAX_REPO_ROOT = process.platform === 'win32'
+  ? 'C:/Works/GitWorks/KodaX'
+  : '/Works/GitWorks/KodaX';
+
 describe('FileSessionStorage', () => {
   let tempHome: string;
   let previousHome: string | undefined;
@@ -37,7 +44,7 @@ describe('FileSessionStorage', () => {
   });
 
   it('round-trips extension state and extension records through JSONL session storage', async () => {
-    const gitRoot = path.resolve('C:/Works/GitWorks/KodaX').replace(/\\/g, '/');
+    const gitRoot = path.resolve(KODAX_REPO_ROOT).replace(/\\/g, '/');
     vi.doMock('./workspace-runtime.js', async () => {
       const actual = await vi.importActual<typeof import('./workspace-runtime.js')>('./workspace-runtime.js');
       return {
@@ -383,7 +390,7 @@ describe('FileSessionStorage', () => {
   it('supports branch switching, checkpoint labels, and forking without losing prior history', async () => {
     const { FileSessionStorage } = await import('./storage.js');
     const storage = new FileSessionStorage();
-    const gitRoot = path.resolve('C:/Works/GitWorks/KodaX').replace(/\\/g, '/');
+    const gitRoot = path.resolve(KODAX_REPO_ROOT).replace(/\\/g, '/');
 
     await storage.save('session-tree', {
       messages: [
@@ -453,7 +460,7 @@ describe('FileSessionStorage', () => {
   it('persists compaction anchors and artifact ledgers through JSONL round-trips', async () => {
     const { FileSessionStorage } = await import('./storage.js');
     const storage = new FileSessionStorage();
-    const gitRoot = path.resolve('C:/Works/GitWorks/KodaX').replace(/\\/g, '/');
+    const gitRoot = path.resolve(KODAX_REPO_ROOT).replace(/\\/g, '/');
 
     const baseLineage = createSessionLineage([
       { role: 'user', content: 'root task' },
@@ -544,7 +551,7 @@ describe('FileSessionStorage', () => {
   it('hides managed-task worker sessions from default session listing and sorts by createdAt', async () => {
     const { FileSessionStorage } = await import('./storage.js');
     const storage = new FileSessionStorage();
-    const gitRoot = path.resolve('C:/Works/GitWorks/KodaX').replace(/\\/g, '/');
+    const gitRoot = path.resolve(KODAX_REPO_ROOT).replace(/\\/g, '/');
 
     await storage.save('20260326_100000', {
       messages: [{ role: 'user', content: 'older user session' }],
@@ -611,7 +618,7 @@ describe('FileSessionStorage', () => {
   it('excludes .archive.jsonl and archived- prefixed files from the session list', async () => {
     const { FileSessionStorage } = await import('./storage.js');
     const storage = new FileSessionStorage();
-    const gitRoot = path.resolve('C:/Works/GitWorks/KodaX').replace(/\\/g, '/');
+    const gitRoot = path.resolve(KODAX_REPO_ROOT).replace(/\\/g, '/');
 
     await storage.save('20260401_120000', {
       messages: [{ role: 'user', content: 'live session' }],
@@ -644,7 +651,7 @@ describe('FileSessionStorage', () => {
   it('reports msgCount from the meta head only — ignores appended body lines (no full-file read)', async () => {
     const { FileSessionStorage } = await import('./storage.js');
     const storage = new FileSessionStorage();
-    const gitRoot = path.resolve('C:/Works/GitWorks/KodaX').replace(/\\/g, '/');
+    const gitRoot = path.resolve(KODAX_REPO_ROOT).replace(/\\/g, '/');
 
     await storage.save('20260401_130000', {
       messages: [{ role: 'user', content: 'hi' }],
@@ -669,7 +676,7 @@ describe('FileSessionStorage', () => {
   it('cleanupOldSessions removes files (and archives) older than the retention window, keeps recent', async () => {
     const { FileSessionStorage } = await import('./storage.js');
     const storage = new FileSessionStorage();
-    const gitRoot = path.resolve('C:/Works/GitWorks/KodaX').replace(/\\/g, '/');
+    const gitRoot = path.resolve(KODAX_REPO_ROOT).replace(/\\/g, '/');
 
     await storage.save('20260101_000000', {
       messages: [{ role: 'user', content: 'old' }],
@@ -705,7 +712,7 @@ describe('FileSessionStorage', () => {
   it('cleanupOldSessions is a no-op when retention is disabled (0 / negative / NaN)', async () => {
     const { FileSessionStorage } = await import('./storage.js');
     const storage = new FileSessionStorage();
-    const gitRoot = path.resolve('C:/Works/GitWorks/KodaX').replace(/\\/g, '/');
+    const gitRoot = path.resolve(KODAX_REPO_ROOT).replace(/\\/g, '/');
 
     await storage.save('20260101_010000', {
       messages: [{ role: 'user', content: 'old' }],
@@ -1033,7 +1040,7 @@ describe('FileSessionStorage', () => {
     const { FileSessionStorage } = await import('./storage.js');
     const { deriveProjectKeyFromRoot } = await import('./project-key.js');
     const storage = new FileSessionStorage();
-    const gitRoot = path.resolve('C:/Works/GitWorks/KodaX').replace(/\\/g, '/');
+    const gitRoot = path.resolve(KODAX_REPO_ROOT).replace(/\\/g, '/');
 
     await storage.save('20260601_120000', {
       messages: [{ role: 'user', content: 'hi' }],
@@ -1053,7 +1060,7 @@ describe('FileSessionStorage', () => {
 
   it('FEATURE_219: id-only locator resolves a project-dir session from a cold storage instance', async () => {
     const { FileSessionStorage } = await import('./storage.js');
-    const gitRoot = path.resolve('C:/Works/GitWorks/KodaX').replace(/\\/g, '/');
+    const gitRoot = path.resolve(KODAX_REPO_ROOT).replace(/\\/g, '/');
 
     await new FileSessionStorage().save('20260601_130000', {
       messages: [{ role: 'user', content: 'persisted' }],
@@ -1092,7 +1099,7 @@ describe('FileSessionStorage', () => {
   it('FEATURE_219: saving a legacy flat session migrates it into the project dir + removes the flat copy', async () => {
     const { FileSessionStorage } = await import('./storage.js');
     const { deriveProjectKeyFromRoot } = await import('./project-key.js');
-    const gitRoot = path.resolve('C:/Works/GitWorks/KodaX').replace(/\\/g, '/');
+    const gitRoot = path.resolve(KODAX_REPO_ROOT).replace(/\\/g, '/');
     const sessionsDir = path.join(tempHome, '.kodax', 'sessions');
     const { mkdir } = await import('fs/promises');
     await mkdir(sessionsDir, { recursive: true });
@@ -1117,7 +1124,7 @@ describe('FileSessionStorage', () => {
   it('FEATURE_219: first list() auto-migrates the flat pool into per-project dirs + stamps marker', async () => {
     const { FileSessionStorage } = await import('./storage.js');
     const { deriveProjectKeyFromRoot } = await import('./project-key.js');
-    const gitRoot = path.resolve('C:/Works/GitWorks/KodaX').replace(/\\/g, '/');
+    const gitRoot = path.resolve(KODAX_REPO_ROOT).replace(/\\/g, '/');
     const sessionsDir = path.join(tempHome, '.kodax', 'sessions');
     const { mkdir } = await import('fs/promises');
     await mkdir(sessionsDir, { recursive: true });
@@ -1141,7 +1148,7 @@ describe('FileSessionStorage', () => {
     const { FileSessionStorage } = await import('./storage.js');
     const { deriveProjectKeyFromRoot } = await import('./project-key.js');
     const storage = new FileSessionStorage();
-    const gitRoot = path.resolve('C:/Works/GitWorks/KodaX').replace(/\\/g, '/');
+    const gitRoot = path.resolve(KODAX_REPO_ROOT).replace(/\\/g, '/');
 
     await storage.save('20260801_000000', {
       messages: [{ role: 'user', content: 'to archive' }],

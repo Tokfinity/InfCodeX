@@ -210,6 +210,10 @@ describe("TerminalCapabilities", () => {
 
     it("should return false for normal terminals", () => {
       delete process.env.NO_COLOR;
+      // isScreenReader() also treats CI as a screen-reader signal, and CI
+      // runners (GitHub Actions) export CI=true — clear it so this case
+      // exercises a genuinely "normal" terminal on every environment.
+      delete process.env.CI;
       process.env.TERM = "xterm-256color";
       expect(isScreenReader()).toBe(false);
     });

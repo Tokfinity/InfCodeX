@@ -3,13 +3,20 @@ import { formatWorkspaceTruth, isSameCanonicalRepo, resolveSessionRuntimeInfo } 
 
 describe('workspace-runtime helpers', () => {
   it('resolves runtime info from persisted legacy gitRoot data', () => {
+    // resolveSessionRuntimeInfo normalizes via path.resolve(). 'C:/...' is
+    // absolute on win32 but RELATIVE on POSIX (path.resolve would prepend the
+    // cwd), so use a root that is absolute on both platforms — otherwise the
+    // normalized output diverges from the input on Linux CI.
+    const root = process.platform === 'win32'
+      ? 'C:/repo/worktrees/feature-runtime'
+      : '/repo/worktrees/feature-runtime';
     expect(resolveSessionRuntimeInfo({
-      gitRoot: 'C:/repo/worktrees/feature-runtime',
+      gitRoot: root,
       runtimeInfo: undefined,
     })).toEqual({
-      canonicalRepoRoot: 'C:/repo/worktrees/feature-runtime',
-      workspaceRoot: 'C:/repo/worktrees/feature-runtime',
-      executionCwd: 'C:/repo/worktrees/feature-runtime',
+      canonicalRepoRoot: root,
+      workspaceRoot: root,
+      executionCwd: root,
       branch: undefined,
       workspaceKind: 'detected',
     });
