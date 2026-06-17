@@ -4,7 +4,7 @@
 
 import { describe, expect, it } from 'vitest';
 
-import { validateWorkflowScriptManifest } from '@kodax-ai/agent';
+import { WORKFLOW_PATTERN_IDS, validateWorkflowScriptManifest } from '@kodax-ai/agent';
 
 import {
   createWorkflowPatternTemplateModule,
@@ -16,14 +16,10 @@ import { validateGeneratedWorkflowSource } from './generator.js';
 describe('workflow pattern templates', () => {
   it('ships reusable templates for the richer dynamic workflow patterns', () => {
     const templates = listWorkflowPatternTemplates();
-    expect(templates.length).toBeGreaterThanOrEqual(3);
-    expect(templates.map((template) => template.pattern)).toEqual(
-      expect.arrayContaining([
-        'adversarial-verification',
-        'tournament',
-        'loop-until-done',
-      ]),
-    );
+    const shippedPatterns = templates.map((template) => template.pattern);
+
+    expect(shippedPatterns).toEqual(expect.arrayContaining([...WORKFLOW_PATTERN_IDS]));
+    expect(new Set(shippedPatterns).size).toBe(WORKFLOW_PATTERN_IDS.length);
   });
 
   it('keeps every template manifest and generated source valid', () => {
@@ -44,6 +40,7 @@ describe('workflow pattern templates', () => {
     expect(getWorkflowPatternTemplate('tournament')?.manifest.readOnly).toBe(true);
     expect(getWorkflowPatternTemplate('loop-until-done')?.manifest.readOnly).toBe(true);
     expect(getWorkflowPatternTemplate('generate-and-filter')?.manifest.readOnly).toBe(true);
+    expect(getWorkflowPatternTemplate('fan-out-and-synthesize')?.manifest.readOnly).toBe(true);
     expect(getWorkflowPatternTemplate('adversarial-verification')?.manifest.readOnly).toBe(false);
   });
 

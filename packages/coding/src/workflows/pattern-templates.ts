@@ -22,6 +22,26 @@ export interface WorkflowPatternTemplate {
   readonly source: string;
 }
 
+const FAN_OUT_AND_SYNTHESIZE_SOURCE = `
+async function run(wf, args) {
+  const request = args.request ?? args.question ?? "Split the task and synthesize the results.";
+  const angles = ["scope", "evidence", "risks", "recommendation"];
+  const results = await wf.parallel(
+    angles.map((angle) => () => wf.runAgent({
+      name: "fanout-" + angle,
+      prompt: "Analyze the request from the " + angle + " angle. Return concise, evidence-backed findings.\\n" + request,
+      readOnly: true,
+      modelHint: angle === "risks" ? "deep" : "balanced"
+    })),
+    { concurrency: 4 }
+  );
+  return await wf.synthesize({
+    inputs: results.map((result) => result.finalText),
+    rubric: "Merge the independent findings into one deduplicated answer with clear conclusions."
+  });
+}
+`.trim();
+
 const ADVERSARIAL_VERIFICATION_SOURCE = `
 async function run(wf, args) {
   const request = args.request ?? args.question ?? "Review the target work.";
@@ -164,6 +184,20 @@ function manifest(
 }
 
 const TEMPLATES: readonly WorkflowPatternTemplate[] = [
+  {
+    name: 'fan-out-and-synthesize',
+    pattern: 'fan-out-and-synthesize',
+    description: 'Run independent read-only workers in parallel, then synthesize their findings.',
+    manifest: manifest(
+      'fan-out-and-synthesize-template',
+      'Parallel workers followed by a synthesis barrier.',
+      ['fan-out-and-synthesize'],
+      ['fan-out', 'synthesize'],
+      5,
+      true,
+    ),
+    source: FAN_OUT_AND_SYNTHESIZE_SOURCE,
+  },
   {
     name: 'adversarial-verification',
     pattern: 'adversarial-verification',
