@@ -100,6 +100,29 @@ describe('sweepWorkflowRunWorktrees (Layer 2)', () => {
     expect(result.removed).toEqual(['/runs/p/r1/worktrees/b']);
     expect(result.warnings.some((w) => w.includes('locked'))).toBe(true);
   });
+
+  it('retains dirty worktrees instead of force-removing unmerged changes', async () => {
+    const dirtyPath = '/runs/p/r1/worktrees/dirty';
+    const cleanPath = '/runs/p/r1/worktrees/clean';
+    const git = fakeGit([
+      { path: dirtyPath, branch: 'dirty' },
+      { path: cleanPath, branch: 'clean' },
+    ]);
+    const runGit = async (args: readonly string[], cwd: string): Promise<string> => {
+      if (cwd === dirtyPath && args[0] === 'status') return ' M docs/features/v0.1.16.md\n';
+      return git.runGit(args, cwd);
+    };
+
+    const result = await sweepWorkflowRunWorktrees(
+      { baseDir: '/runs/p/r1/worktrees', gitRoot: '/repo' },
+      { runGit },
+    );
+
+    expect(result.removed).toEqual([cleanPath]);
+    expect(git.worktrees.has(dirtyPath)).toBe(true);
+    expect(result.warnings.some((warning) => warning.includes('unmerged changes'))).toBe(true);
+    expect(git.calls).not.toContainEqual(['worktree', 'remove', dirtyPath, '--force']);
+  });
 });
 
 describe('pruneStaleWorkflowWorktrees (Layer 3)', () => {

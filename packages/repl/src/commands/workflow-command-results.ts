@@ -116,11 +116,19 @@ export function formatFinalEventSummary(
 ): string | undefined {
   const completed = [...events]
     .reverse()
-    .filter((event) => event.type === 'agent_completed' && readEventString(event, 'status') === 'completed');
+    .filter((event) =>
+      (event.type === 'agent_completed' && readEventString(event, 'status') === 'completed') ||
+      event.type === 'agent_unverified'
+    );
   const synthesis = completed.find((event) => readEventString(event, 'name') === 'synthesize');
   const event = synthesis ?? completed[0];
   const summary = event ? readEventString(event, 'summary') : undefined;
-  return summary ? trimResultPreview(summary, options) : undefined;
+  if (summary) return trimResultPreview(summary, options);
+  const failed = [...events].reverse().find((item) => item.type === 'agent_failed');
+  const failedText = failed
+    ? readEventString(failed, 'summary') ?? readEventString(failed, 'error')
+    : undefined;
+  return failedText ? trimResultPreview(failedText, options) : undefined;
 }
 
 function formatArtifactPreview(
@@ -260,13 +268,21 @@ export function formatWorkflowAgentDigest(
   locale: WorkflowRunLocale = 'en',
   runId?: string,
 ): string | undefined {
-  if (event.type !== 'agent_completed' && event.type !== 'agent_summary_updated') {
+  if (
+    event.type !== 'agent_completed' &&
+    event.type !== 'agent_unverified' &&
+    event.type !== 'agent_failed' &&
+    event.type !== 'agent_summary_updated'
+  ) {
     return undefined;
   }
-  if (event.type === 'agent_completed' && readEventString(event, 'status') !== 'completed') {
+  if (
+    event.type === 'agent_completed' &&
+    readEventString(event, 'status') !== 'completed'
+  ) {
     return undefined;
   }
-  const rawSummary = readEventString(event, 'summary');
+  const rawSummary = readEventString(event, 'summary') ?? readEventString(event, 'error');
   if (!rawSummary) return undefined;
   const rawKind = readEventString(event, 'summaryKind');
   if (rawKind === 'pending') return undefined;

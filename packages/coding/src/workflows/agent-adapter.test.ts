@@ -88,7 +88,7 @@ describe('createCodingWorkflowBackend — spawn + wait', () => {
       }),
       generateId: () => 'task-x',
     });
-    const handle = await backend.spawn({ name: 'security', prompt: 'audit' });
+    const handle = await backend.spawn({ name: 'security', prompt: 'audit', readOnly: true });
     expect(handle).toEqual({ taskId: 'task-x', name: 'security' });
     const result = await backend.wait(handle.taskId);
     expect(result.status).toBe('completed');
@@ -105,7 +105,7 @@ describe('createCodingWorkflowBackend — spawn + wait', () => {
       childOptions,
       runChild: async () => execResult({ status: 'failed', summary: '[Crash] boom' }),
     });
-    const handle = await backend.spawn({ name: 'a', prompt: 'x' });
+    const handle = await backend.spawn({ name: 'a', prompt: 'x', readOnly: true });
     expect((await backend.wait(handle.taskId)).status).toBe('failed');
   });
 
@@ -116,7 +116,7 @@ describe('createCodingWorkflowBackend — spawn + wait', () => {
       runChild: async () => execResult({}, { cancelledChildren: ['task-c'] }),
       generateId: () => 'task-c',
     });
-    const handle = await backend.spawn({ name: 'a', prompt: 'x' });
+    const handle = await backend.spawn({ name: 'a', prompt: 'x', readOnly: true });
     expect((await backend.wait(handle.taskId)).status).toBe('stopped');
   });
 
@@ -133,7 +133,7 @@ describe('createCodingWorkflowBackend — spawn + wait', () => {
       },
     });
 
-    const handle = await backend.spawn({ name: 'slow', prompt: 'x' });
+    const handle = await backend.spawn({ name: 'slow', prompt: 'x', readOnly: true });
 
     await expect(backend.wait(handle.taskId, { timeoutMs: 5 })).rejects.toThrow(
       /timed out after 5ms/,
@@ -153,7 +153,7 @@ describe('createCodingWorkflowBackend — spawn + wait', () => {
       },
     });
 
-    await backend.spawn({ name: 'x', prompt: 'x' });
+    await backend.spawn({ name: 'x', prompt: 'x', readOnly: true });
     // The backend stamps `workflowChild` regardless of parentHarness, so the
     // digest fires in production where parentHarness stays 'tool-dispatch'
     // (write children must not be dropped by validateWriteBundles).
@@ -189,7 +189,7 @@ describe('createCodingWorkflowBackend — spawn + wait', () => {
     });
     backend.subscribeTaskSummaryUpdates?.((taskId, update) => updates.push({ taskId, update }));
 
-    const handle = await backend.spawn({ name: 'x', prompt: 'x' });
+    const handle = await backend.spawn({ name: 'x', prompt: 'x', readOnly: true });
     const result = await backend.wait(handle.taskId);
 
     expect(seenDigestMode).toBe('async');
@@ -227,7 +227,7 @@ describe('createCodingWorkflowBackend — spawn + wait', () => {
       },
     });
 
-    const handle = await backend.spawn({ name: 'x', prompt: 'x' });
+    const handle = await backend.spawn({ name: 'x', prompt: 'x', readOnly: true });
     await backend.wait(handle.taskId);
 
     expect(seenCorrelation).toEqual({
@@ -275,6 +275,303 @@ describe('createCodingWorkflowBackend — spawn + wait', () => {
       objective: 'review sql',
     });
   });
+
+  it('uses a digest instead of preparatory last text as the workflow finalText', async () => {
+    const backend = createCodingWorkflowBackend({
+      ctx: fakeCtx(),
+      childOptions,
+      runChild: async () => execResult({
+        status: 'completed',
+        summary: 'Let me create the implementation plan and start building.',
+        digest: '- Implemented the requested workflow verification changes.',
+      }),
+    });
+
+    const handle = await backend.spawn({ name: 'writer', prompt: 'implement', readOnly: true });
+    const result = await backend.wait(handle.taskId);
+
+    expect(result.status).toBe('completed');
+    expect(result.finalText).toBe('- Implemented the requested workflow verification changes.');
+  });
+
+  it('marks an implicit write-capable child unverified when no mutation evidence is observed', async () => {
+    const snapshots: readonly string[][] = [[], []];
+    let index = 0;
+    const backend = createCodingWorkflowBackend({
+      ctx: fakeCtx(),
+      childOptions,
+      listChangedFiles: async () => snapshots[Math.min(index++, snapshots.length - 1)]!,
+      runChild: async () => execResult({
+        status: 'completed',
+        summary: 'Implementation completed with a sufficiently detailed terminal report for the parent workflow.',
+      }),
+    });
+
+    const handle = await backend.spawn({ name: 'writer', prompt: 'write files', readOnly: false });
+    const result = await backend.wait(handle.taskId);
+
+    expect(result.status).toBe('completed_unverified');
+    expect(result.verification?.ok).toBe(false);
+    expect(result.verification?.enforcement).toBe('warn');
+    expect(result.verification?.reasons.join('\n')).toContain('expected file mutations');
+    expect(result.finalText).toContain('completed without verification');
+  });
+
+  it('fails explicit mutation verification when no mutation evidence is observed', async () => {
+    const snapshots: readonly string[][] = [[], []];
+    let index = 0;
+    const backend = createCodingWorkflowBackend({
+      ctx: fakeCtx(),
+      childOptions,
+      listChangedFiles: async () => snapshots[Math.min(index++, snapshots.length - 1)]!,
+      runChild: async () => execResult({
+        status: 'completed',
+        summary: 'Implementation completed with a detailed terminal report for the parent workflow.',
+      }),
+    });
+
+    const handle = await backend.spawn({
+      name: 'writer',
+      prompt: 'write files',
+      readOnly: false,
+      verification: { requiresMutation: true },
+    });
+    const result = await backend.wait(handle.taskId);
+
+    expect(result.status).toBe('failed');
+    expect(result.verification?.ok).toBe(false);
+    expect(result.verification?.enforcement).toBe('hard');
+    expect(result.verification?.reasons.join('\n')).toContain('expected file mutations');
+  });
+
+  it('passes a write-capable child when required changed paths appear', async () => {
+    const snapshots: readonly string[][] = [[], ['docs/features/v0.1.16.md', 'docs/FEATURE_LIST.md']];
+    let index = 0;
+    const backend = createCodingWorkflowBackend({
+      ctx: fakeCtx(),
+      childOptions,
+      listChangedFiles: async () => snapshots[Math.min(index++, snapshots.length - 1)]!,
+      runChild: async () => execResult({
+        status: 'completed',
+        summary: 'Implemented the requested feature documentation and updated the feature list with the new version entries.',
+      }),
+    });
+
+    const handle = await backend.spawn({
+      name: 'feature-design-author',
+      prompt: 'write feature docs',
+      readOnly: false,
+      verification: {
+        requiresMutation: true,
+        requiredChangedPaths: ['docs/features/v0.1.16.md', 'docs/FEATURE_LIST.md'],
+      },
+    });
+    const result = await backend.wait(handle.taskId);
+
+    expect(result.status).toBe('completed');
+    expect(result.verification?.ok).toBe(true);
+    expect(result.verification?.changedPaths).toContain('docs/features/v0.1.16.md');
+  });
+
+  it('allows successful shared-cwd write tools as mutation evidence', async () => {
+    const backend = createCodingWorkflowBackend({
+      ctx: fakeCtx(),
+      childOptions,
+      listChangedFiles: async () => [],
+      runChild: async (_bundles, _ctx, opts) => {
+        opts.parentOptions.events?.onToolUseStart?.({
+          id: 'tool-1',
+          name: 'write',
+          input: { path: 'docs/features/v0.1.16.md' },
+        });
+        opts.parentOptions.events?.onToolResult?.({
+          id: 'tool-1',
+          name: 'write',
+          content: 'ok',
+        });
+        return execResult({
+          status: 'completed',
+          summary: 'Wrote the requested feature design document, updated the tracked workspace target, and reported the changed files.',
+        });
+      },
+    });
+
+    const handle = await backend.spawn({
+      name: 'writer',
+      prompt: 'write docs',
+      readOnly: false,
+      verification: {
+        requiresMutation: true,
+        requiredChangedPaths: ['docs/features/v0.1.16.md'],
+      },
+    });
+    const result = await backend.wait(handle.taskId);
+
+    expect(result.status).toBe('completed');
+    expect(result.verification?.mutationToolCalls).toEqual(['write']);
+  });
+
+  it('does not treat isolated worktree write tools as delivered workspace changes', async () => {
+    const backend = createCodingWorkflowBackend({
+      ctx: fakeCtx(),
+      childOptions,
+      listChangedFiles: async () => [],
+      runChild: async (_bundles, _ctx, opts) => {
+        opts.parentOptions.events?.onToolUseStart?.({
+          id: 'tool-1',
+          name: 'write',
+          input: { path: 'docs/features/v0.1.16.md' },
+        });
+        opts.parentOptions.events?.onToolResult?.({
+          id: 'tool-1',
+          name: 'write',
+          content: 'ok',
+        });
+        return execResult({
+          status: 'completed',
+          summary: 'Wrote the requested feature design document inside the isolated workspace.',
+        });
+      },
+    });
+
+    const handle = await backend.spawn({
+      name: 'isolated-writer',
+      prompt: 'write docs',
+      readOnly: false,
+      isolation: 'worktree',
+    });
+    const result = await backend.wait(handle.taskId);
+
+    expect(result.status).toBe('completed_unverified');
+    expect(result.verification?.reasons.join('\n')).toContain('isolated worktree');
+    expect(result.verification?.mutationToolCalls).toEqual(['write']);
+  });
+
+  it('marks an implicit read-only child unverified after reaching the iteration limit', async () => {
+    const backend = createCodingWorkflowBackend({
+      ctx: fakeCtx(),
+      childOptions,
+      runChild: async () => execResult({
+        status: 'completed',
+        summary: 'Partial result after running out of iterations.',
+        limitReached: true,
+      }),
+    });
+
+    const handle = await backend.spawn({ name: 'limited', prompt: 'finish', readOnly: true });
+    const result = await backend.wait(handle.taskId);
+
+    expect(result.status).toBe('completed_unverified');
+    expect(result.limitReached).toBe(true);
+    expect(result.verification).toMatchObject({
+      ok: false,
+      enforcement: 'warn',
+      reasons: ['workflow child reached its iteration limit before satisfying the task'],
+      mutationEvidence: false,
+    });
+    expect(result.finalText).toContain('completed without verification');
+  });
+
+  it('keeps explicit verification as a hard failure when limitReached has no evidence', async () => {
+    const backend = createCodingWorkflowBackend({
+      ctx: fakeCtx(),
+      childOptions,
+      runChild: async () => execResult({
+        status: 'completed',
+        summary: 'Partial result after running out of iterations.',
+        limitReached: true,
+      }),
+    });
+
+    const handle = await backend.spawn({
+      name: 'limited',
+      prompt: 'finish',
+      readOnly: true,
+      verification: { rejectPreparatoryFinalText: true },
+    });
+    const result = await backend.wait(handle.taskId);
+
+    expect(result.status).toBe('failed');
+    expect(result.limitReached).toBe(true);
+    expect(result.verification).toMatchObject({
+      ok: false,
+      enforcement: 'hard',
+      reasons: ['workflow child reached its iteration limit before satisfying the task'],
+      mutationEvidence: false,
+    });
+  });
+
+  it('does not fail a write-capable child solely for short finalText when mutation evidence exists', async () => {
+    const backend = createCodingWorkflowBackend({
+      ctx: fakeCtx(),
+      childOptions,
+      listChangedFiles: async () => [],
+      runChild: async (_bundles, _ctx, opts) => {
+        opts.parentOptions.events?.onToolUseStart?.({
+          id: 'tool-1',
+          name: 'write',
+          input: { path: 'docs/features/v0.1.16.md' },
+        });
+        opts.parentOptions.events?.onToolResult?.({
+          id: 'tool-1',
+          name: 'write',
+          content: 'ok',
+        });
+        return execResult({ status: 'completed', summary: 'Done.' });
+      },
+    });
+
+    const handle = await backend.spawn({
+      name: 'writer',
+      prompt: 'write docs',
+      readOnly: false,
+      verification: {
+        requiresMutation: true,
+        minFinalTextChars: 80,
+      },
+    });
+    const result = await backend.wait(handle.taskId);
+
+    expect(result.status).toBe('completed');
+    expect(result.verification?.ok).toBe(true);
+  });
+
+  it('does not fail a write-capable child solely for limitReached when mutation evidence exists', async () => {
+    const backend = createCodingWorkflowBackend({
+      ctx: fakeCtx(),
+      childOptions,
+      listChangedFiles: async () => [],
+      runChild: async (_bundles, _ctx, opts) => {
+        opts.parentOptions.events?.onToolUseStart?.({
+          id: 'tool-1',
+          name: 'write',
+          input: { path: 'docs/features/v0.1.16.md' },
+        });
+        opts.parentOptions.events?.onToolResult?.({
+          id: 'tool-1',
+          name: 'write',
+          content: 'ok',
+        });
+        return execResult({
+          status: 'completed',
+          summary: 'Partial files were written before the child hit its iteration limit.',
+          limitReached: true,
+        });
+      },
+    });
+
+    const handle = await backend.spawn({
+      name: 'writer',
+      prompt: 'write docs',
+      readOnly: false,
+      verification: { requiresMutation: true },
+    });
+    const result = await backend.wait(handle.taskId);
+
+    expect(result.status).toBe('completed');
+    expect(result.limitReached).toBe(true);
+    expect(result.verification?.ok).toBe(true);
+  });
 });
 
 describe('createCodingWorkflowBackend — output snapshot', () => {
@@ -287,7 +584,7 @@ describe('createCodingWorkflowBackend — output snapshot', () => {
       generateId: () => 'task-o',
       runChild: () => new Promise<KodaXChildExecutionResult>((r) => { release = r; }),
     });
-    const handle = await backend.spawn({ name: 'a', prompt: 'x' });
+    const handle = await backend.spawn({ name: 'a', prompt: 'x', readOnly: true });
     const mid = await backend.output(handle.taskId);
     expect(mid.status).toBe('running');
 
@@ -313,7 +610,7 @@ describe('createCodingWorkflowBackend — stop + send', () => {
         return new Promise<KodaXChildExecutionResult>((r) => { release = r; });
       },
     });
-    const handle = await backend.spawn({ name: 'a', prompt: 'x' });
+    const handle = await backend.spawn({ name: 'a', prompt: 'x', readOnly: true });
     await backend.stop(handle.taskId, 'user cancel');
     expect(seenSignal?.aborted).toBe(true);
     release(execResult());
@@ -330,7 +627,7 @@ describe('createCodingWorkflowBackend — stop + send', () => {
       generateId: () => 'task-m',
       runChild: () => new Promise<KodaXChildExecutionResult>((r) => { release = r; }),
     });
-    const handle = await backend.spawn({ name: 'a', prompt: 'x' });
+    const handle = await backend.spawn({ name: 'a', prompt: 'x', readOnly: true });
     await backend.send(handle.taskId, 'keep going');
     expect(enqueued).toHaveLength(1);
     expect(enqueued[0]).toMatchObject({ agentId: 'task-m', content: 'keep going', priority: 'user', mode: 'prompt' });

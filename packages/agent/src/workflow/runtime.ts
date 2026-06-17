@@ -55,6 +55,25 @@ export class WorkflowBudgetError extends Error {
   }
 }
 
+/** Thrown by wf.runAgent when the child reaches a non-completed status. */
+export class WorkflowTaskFailedError extends Error {
+  readonly taskId: string;
+  readonly taskName: string;
+  readonly taskStatus: WorkflowTaskResult['status'];
+
+  constructor(result: WorkflowTaskResult) {
+    const detail = result.finalText.trim();
+    super(
+      `workflow task ${result.name} (${result.taskId}) ${result.status}` +
+        (detail ? `: ${boundedTaskEventSummary(detail)}` : ''),
+    );
+    this.name = 'WorkflowTaskFailedError';
+    this.taskId = result.taskId;
+    this.taskName = result.name;
+    this.taskStatus = result.status;
+  }
+}
+
 const STOP_ACTIVE_TASK_TIMEOUT_MS = 250;
 const CONCURRENCY_DEADLOCK_CHECK_MS = 50;
 const MAX_TASK_EVENT_SUMMARY_CHARS = 4096;
@@ -370,8 +389,17 @@ function buildRuntime(opts: CreateWorkflowRuntimeOptions): InternalRuntime {
     spentOutputTokens += result.usage?.outputTokens ?? result.usage?.totalTokens ?? 0;
   };
 
+  const isCompletedTaskStatus = (s: WorkflowTaskResult['status']): boolean =>
+    s === 'completed' || s === 'completed_unverified';
+
   const terminalEventType = (s: WorkflowTaskResult['status']): WorkflowEventType =>
-    s === 'stopped' ? 'agent_stopped' : 'agent_completed';
+    s === 'stopped'
+      ? 'agent_stopped'
+      : s === 'failed'
+        ? 'agent_failed'
+        : s === 'completed_unverified'
+          ? 'agent_unverified'
+          : 'agent_completed';
 
   const summarizeTaskResult = (
     result: WorkflowTaskResult,
@@ -457,7 +485,7 @@ function buildRuntime(opts: CreateWorkflowRuntimeOptions): InternalRuntime {
       abortRace = createAbortRace();
       const wait = opts.backend.wait(taskId, opts2);
       const result = abortRace ? await Promise.race([wait, abortRace.promise]) : await wait;
-      const summary = result.status === 'completed' ? summarizeTaskResult(result) : undefined;
+      const summary = isCompletedTaskStatus(result.status) ? summarizeTaskResult(result) : undefined;
       if (summary?.kind === 'pending' && summary.text !== undefined) {
         pendingTaskSummaries.set(result.taskId, summary.text);
       }
@@ -465,11 +493,16 @@ function buildRuntime(opts: CreateWorkflowRuntimeOptions): InternalRuntime {
         taskId: result.taskId,
         name: result.name,
         status: result.status,
+        ...(result.status === 'failed' && result.finalText.trim()
+          ? { error: boundedTaskEventSummary(result.finalText.trim()) }
+          : {}),
         ...(result.provider !== undefined ? { provider: result.provider } : {}),
         ...(result.model !== undefined ? { model: result.model } : {}),
         ...(result.usage !== undefined
           ? { usage: result.usage }
           : {}),
+        ...(result.verification !== undefined ? { verification: result.verification } : {}),
+        ...(result.limitReached === true ? { limitReached: true } : {}),
         ...(summary !== undefined
           ? {
               ...(summary.text !== undefined ? { summary: summary.text } : {}),
@@ -507,7 +540,11 @@ function buildRuntime(opts: CreateWorkflowRuntimeOptions): InternalRuntime {
   const runAgentImpl = async (input: WorkflowSpawnAgentInput): Promise<WorkflowTaskResult> => {
     checkAbort();
     const handle = await doSpawn(input);
-    return await doWait(handle.taskId, undefined);
+    const result = await doWait(handle.taskId, undefined);
+    if (result.status === 'failed' || result.status === 'stopped') {
+      throw new WorkflowTaskFailedError(result);
+    }
+    return result;
   };
 
   const budget: WorkflowBudget = {

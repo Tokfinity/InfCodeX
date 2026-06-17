@@ -41,7 +41,8 @@ describe('workflow pattern templates', () => {
     expect(getWorkflowPatternTemplate('loop-until-done')?.manifest.readOnly).toBe(true);
     expect(getWorkflowPatternTemplate('generate-and-filter')?.manifest.readOnly).toBe(true);
     expect(getWorkflowPatternTemplate('fan-out-and-synthesize')?.manifest.readOnly).toBe(true);
-    expect(getWorkflowPatternTemplate('adversarial-verification')?.manifest.readOnly).toBe(false);
+    expect(getWorkflowPatternTemplate('adversarial-verification')?.manifest.readOnly).toBe(true);
+    expect(getWorkflowPatternTemplate('classify-and-act')?.manifest.readOnly).toBe(true);
   });
 
   it('returns undefined for unknown templates and throws on materialization', () => {

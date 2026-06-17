@@ -14,6 +14,7 @@ import {
   WorkflowAbortError,
   WorkflowBudgetError,
   WorkflowLimitError,
+  WorkflowTaskFailedError,
   type WorkflowAgentBackend,
   type WorkflowEvent,
   type WorkflowSpawnAgentInput,
@@ -454,6 +455,85 @@ describe('runWorkflow — event envelope + ordering', () => {
     if (!outcome.ok) expect(outcome.error.message).toBe('script boom');
     expect(outcome.state.status).toBe('failed');
     expect(outcome.state.events.at(-1)?.type).toBe('workflow_failed');
+  });
+
+  it('makes wf.runAgent fail loud when the child returns failed status', async () => {
+    const backend: WorkflowAgentBackend = {
+      spawn: async (input) => ({ taskId: 'task-failed', name: input.name }),
+      wait: async (taskId) => ({
+        taskId,
+        name: 'writer',
+        status: 'failed',
+        finalText: 'Workflow task verification failed: expected file mutations.',
+        verification: {
+          ok: false,
+          reasons: ['expected file mutations'],
+        },
+      }),
+      output: async (taskId) => ({ taskId, name: 'writer', status: 'running' }),
+      send: async () => {},
+      stop: async () => {},
+    };
+
+    const outcome = await runWorkflow(baseOpts(backend), async (wf) => {
+      await wf.runAgent({ name: 'writer', prompt: 'write files', readOnly: false });
+      return 'unreached';
+    });
+
+    expect(outcome.ok).toBe(false);
+    if (!outcome.ok) expect(outcome.error).toBeInstanceOf(WorkflowTaskFailedError);
+    expect(outcome.state.status).toBe('failed');
+    expect(outcome.state.events.map((event) => event.type)).toEqual([
+      'workflow_started',
+      'agent_spawned',
+      'agent_failed',
+      'workflow_failed',
+    ]);
+    expect(outcome.state.events.find((event) => event.type === 'agent_failed')).toMatchObject({
+      data: {
+        taskId: 'task-failed',
+        status: 'failed',
+        verification: {
+          ok: false,
+          reasons: ['expected file mutations'],
+        },
+      },
+    });
+  });
+
+  it('allows wf.runAgent to return completed_unverified without failing the workflow', async () => {
+    const backend: WorkflowAgentBackend = {
+      spawn: async (input) => ({ taskId: 'task-unverified', name: input.name }),
+      wait: async (taskId) => ({
+        taskId,
+        name: 'writer',
+        status: 'completed_unverified',
+        finalText: 'Finished, but no mutation evidence was observed.',
+        verification: {
+          ok: false,
+          enforcement: 'warn',
+          reasons: ['expected file mutations'],
+        },
+      }),
+      output: async (taskId) => ({ taskId, name: 'writer', status: 'running' }),
+      send: async () => {},
+      stop: async () => {},
+    };
+
+    const outcome = await runWorkflow(baseOpts(backend), async (wf) => {
+      const result = await wf.runAgent({ name: 'writer', prompt: 'write files', readOnly: false });
+      return result.status;
+    });
+
+    expect(outcome.ok).toBe(true);
+    if (outcome.ok) expect(outcome.result).toBe('completed_unverified');
+    expect(outcome.state.status).toBe('completed');
+    expect(outcome.state.events.map((event) => event.type)).toEqual([
+      'workflow_started',
+      'agent_spawned',
+      'agent_unverified',
+      'workflow_completed',
+    ]);
   });
 
   it('records user aborts as stopped instead of failed', async () => {

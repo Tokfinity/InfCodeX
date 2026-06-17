@@ -369,7 +369,7 @@ async function cleanupChildIsolationScope(
       {
         action: 'remove',
         worktree_path: scope.worktreePath,
-        discard_changes: true,
+        discard_changes: false,
       },
       parentCtx,
     );
@@ -735,8 +735,10 @@ async function runReadChildBody(
       {
         actualIterations: iterations,
         interrupted: result.interrupted === true,
+        limitReached: result.limitReached === true,
         totalTokensUsed: totalTokensUsed + digest.totalTokensUsed,
         sessionId: result.sessionId,
+        artifactPaths: extractMutationArtifactPaths(result),
         digest: digest.digest,
         digestFailed: digest.attemptFailed,
         digestPending: runDigestAsync,
@@ -910,8 +912,10 @@ async function runWriteChildBody(
       {
         actualIterations: iterations,
         interrupted: result.interrupted === true,
+        limitReached: result.limitReached === true,
         totalTokensUsed: totalTokensUsed + digest.totalTokensUsed,
         sessionId: result.sessionId,
+        artifactPaths: extractMutationArtifactPaths(result),
         digest: digest.digest,
         digestFailed: digest.attemptFailed,
         digestPending: runDigestAsync,
@@ -1491,13 +1495,27 @@ export function buildChildEvents(
 interface ExtractChildResultMeta {
   readonly actualIterations?: number;
   readonly interrupted?: boolean;
+  readonly limitReached?: boolean;
   readonly totalTokensUsed?: number;
   readonly sessionId?: string;
+  readonly artifactPaths?: readonly string[];
   readonly digest?: string;
   readonly digestFailed?: boolean;
   readonly digestPending?: boolean;
   readonly provider?: string;
   readonly model?: string;
+}
+
+function extractMutationArtifactPaths(result: KodaXResult): readonly string[] {
+  const mutationKinds = new Set(['file_modified', 'file_created', 'file_deleted']);
+  return [
+    ...new Set(
+      (result.artifactLedger ?? [])
+        .filter((entry) => mutationKinds.has(entry.kind))
+        .map((entry) => entry.target)
+        .filter((target) => target.trim().length > 0),
+    ),
+  ];
 }
 
 function extractChildResult(
@@ -1519,12 +1537,16 @@ function extractChildResult(
       ? { totalTokensUsed: meta.totalTokensUsed }
       : {}),
     ...(meta.sessionId ? { sessionId: meta.sessionId } : {}),
+    ...(meta.artifactPaths !== undefined && meta.artifactPaths.length > 0
+      ? { artifactPaths: [...meta.artifactPaths] }
+      : {}),
     ...(meta.digest ? { digest: meta.digest } : {}),
     ...(meta.digestFailed ? { digestFailed: true } : {}),
     ...(meta.digestPending ? { digestPending: true } : {}),
     ...(meta.provider ? { provider: meta.provider } : {}),
     ...(meta.model ? { model: meta.model } : {}),
     interrupted: meta.interrupted,
+    ...(meta.limitReached ? { limitReached: true } : {}),
   };
 }
 

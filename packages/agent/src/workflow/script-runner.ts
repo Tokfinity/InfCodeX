@@ -10,6 +10,7 @@ import type {
   WorkflowSynthesizeInput,
   WorkflowTaskHandle,
   WorkflowTaskResult,
+  WorkflowTaskVerification,
   WorkflowTaskSnapshot,
   WorkflowWaitOptions,
 } from './types.js';
@@ -150,6 +151,71 @@ function readNonEmptyField(record: Record<string, unknown>, key: string, label: 
   return value;
 }
 
+function readOptionalBoolean(
+  record: Record<string, unknown>,
+  key: string,
+  label: string,
+): boolean | undefined {
+  const value = record[key];
+  if (value === undefined) return undefined;
+  if (typeof value !== 'boolean') {
+    throw new WorkflowScriptExecutionError(`${label} ${key} must be a boolean when provided`);
+  }
+  return value;
+}
+
+function readOptionalPositiveInteger(
+  record: Record<string, unknown>,
+  key: string,
+  label: string,
+): number | undefined {
+  const value = record[key];
+  if (value === undefined) return undefined;
+  if (!Number.isInteger(value) || typeof value !== 'number' || value <= 0) {
+    throw new WorkflowScriptExecutionError(`${label} ${key} must be a positive integer when provided`);
+  }
+  return value;
+}
+
+function readOptionalStringArray(
+  record: Record<string, unknown>,
+  key: string,
+  label: string,
+): readonly string[] | undefined {
+  const value = record[key];
+  if (value === undefined) return undefined;
+  if (
+    !Array.isArray(value) ||
+    value.some((item) => typeof item !== 'string' || item.trim().length === 0)
+  ) {
+    throw new WorkflowScriptExecutionError(`${label} ${key} must be an array of non-empty strings when provided`);
+  }
+  return value as readonly string[];
+}
+
+function readTaskVerification(value: unknown, label: string): WorkflowTaskVerification {
+  const record = readRecord(value, label);
+  const enforcement = record.enforcement;
+  if (
+    enforcement !== undefined &&
+    enforcement !== 'hard' &&
+    enforcement !== 'warn'
+  ) {
+    throw new WorkflowScriptExecutionError(`${label} enforcement must be "hard" or "warn" when provided`);
+  }
+  const requiresMutation = readOptionalBoolean(record, 'requiresMutation', label);
+  const requiredChangedPaths = readOptionalStringArray(record, 'requiredChangedPaths', label);
+  const minFinalTextChars = readOptionalPositiveInteger(record, 'minFinalTextChars', label);
+  const rejectPreparatoryFinalText = readOptionalBoolean(record, 'rejectPreparatoryFinalText', label);
+  return {
+    ...(enforcement !== undefined ? { enforcement } : {}),
+    ...(requiresMutation !== undefined ? { requiresMutation } : {}),
+    ...(requiredChangedPaths !== undefined ? { requiredChangedPaths } : {}),
+    ...(minFinalTextChars !== undefined ? { minFinalTextChars } : {}),
+    ...(rejectPreparatoryFinalText !== undefined ? { rejectPreparatoryFinalText } : {}),
+  };
+}
+
 /** Validate a `WorkflowSpawnAgentInput` payload at the host boundary so a
  *  malformed generated call fails loudly with a clear message instead of
  *  silently spawning a real child agent with an undefined name/prompt. */
@@ -163,6 +229,7 @@ function readSpawnAgentInput(value: unknown, label: string): WorkflowSpawnAgentI
     modelHint?: WorkflowSpawnAgentInput['modelHint'];
     isolation?: WorkflowSpawnAgentInput['isolation'];
     evidenceRefs?: readonly string[];
+    verification?: WorkflowTaskVerification;
   } = {
     name: readNonEmptyField(record, 'name', label),
     prompt: readNonEmptyField(record, 'prompt', label),
@@ -190,6 +257,9 @@ function readSpawnAgentInput(value: unknown, label: string): WorkflowSpawnAgentI
       throw new WorkflowScriptExecutionError(`${label} evidenceRefs must be an array of strings when provided`);
     }
     input.evidenceRefs = record.evidenceRefs as readonly string[];
+  }
+  if (record.verification !== undefined) {
+    input.verification = readTaskVerification(record.verification, `${label} verification`);
   }
   return input;
 }

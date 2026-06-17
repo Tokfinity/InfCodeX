@@ -313,9 +313,15 @@ function readEventSummary(events: readonly WorkflowEvent[]): string | undefined 
       const summary = readString(event.data?.resultSummary);
       if (summary) return summary;
     }
-    if (event.type !== 'agent_completed') continue;
+    if (
+      event.type !== 'agent_completed' &&
+      event.type !== 'agent_unverified' &&
+      event.type !== 'agent_failed'
+    ) continue;
     const summary = readString(event.data?.summary);
     if (summary) return summary;
+    const error = readString(event.data?.error);
+    if (error) return error;
   }
   return undefined;
 }

@@ -19,6 +19,7 @@ describe('buildWorkflowGenerationUserPrompt', () => {
     expect(prompt).toContain('wf.parallel');
     expect(prompt).toContain('wf.snapshot(taskId)');
     expect(prompt).toContain('wf.runAgent/wf.wait return');
+    expect(prompt).toContain('verification');
     expect(prompt).toContain('wf.snapshot returns');
     expect(prompt).not.toContain('wf.output(taskId)');
     expect(prompt).toContain('never use anyVariable.output');
@@ -27,6 +28,8 @@ describe('buildWorkflowGenerationUserPrompt', () => {
     expect(prompt).toContain('lifetime total cap');
     expect(prompt).toContain('plannedAgents is the best estimate of how many child agents');
     expect(prompt).toContain('Do not set tokenBudget unless the user explicitly asks');
+    expect(prompt).toContain('File-writing/implementation requests are not report-only workflows');
+    expect(prompt).toContain('Prefer shared-cwd for write children');
     expect(prompt).toContain('fan-out-and-synthesize');
     expect(prompt).toContain('loop-until-done');
     expect(prompt).toContain('rank 80 resumes');
@@ -39,6 +42,18 @@ describe('buildWorkflowGenerationUserPrompt', () => {
     expect(prompt).toContain('second.finalText');
     expect(prompt).toContain('const finalText = synthesis.text');
     expect(prompt).toContain('return { synthesis: finalText }');
+  });
+
+  it('includes a canonical write-and-verify workflow pattern', () => {
+    const prompt = buildWorkflowGenerationUserPrompt('落地 feature 文件并实现代码');
+    expect(prompt).toContain('Canonical write-and-verify pattern');
+    expect(prompt).toContain('readOnly: false');
+    expect(prompt).toContain('requiresMutation: true');
+    expect(prompt).toContain('requiredChangedPaths');
+    expect(prompt).toContain('rejectPreparatoryFinalText: true');
+    expect(prompt).toContain('Never put placeholder paths');
+    expect(prompt).not.toContain('requiredChangedPaths: ["docs/features/vNEXT.md"');
+    expect(prompt).not.toContain('minFinalTextChars: 80');
   });
 
   it('asks generated workflows to preserve the request language in user-facing text', () => {

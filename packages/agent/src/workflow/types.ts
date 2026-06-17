@@ -11,7 +11,12 @@
  */
 
 /** Lifecycle status of a single workflow-spawned agent. */
-export type WorkflowTaskStatus = 'running' | 'completed' | 'failed' | 'stopped';
+export type WorkflowTaskStatus =
+  | 'running'
+  | 'completed'
+  | 'completed_unverified'
+  | 'failed'
+  | 'stopped';
 
 /** Routing hint for which provider/model tier the child should use. */
 export type WorkflowModelHint = 'fast' | 'balanced' | 'deep';
@@ -19,6 +24,28 @@ export type WorkflowModelHint = 'fast' | 'balanced' | 'deep';
 /** Isolation policy for a spawned agent. `shared-cwd` is the default
  *  (FEATURE_188); `worktree` is opt-in for high-risk parallel writes. */
 export type WorkflowIsolation = 'shared-cwd' | 'worktree';
+
+/**
+ * Machine-checkable postconditions for a workflow child task. The agent
+ * package only defines the contract; concrete backends decide which evidence
+ * they can verify.
+ */
+export interface WorkflowTaskVerification {
+  readonly enforcement?: 'hard' | 'warn';
+  readonly requiresMutation?: boolean;
+  readonly requiredChangedPaths?: readonly string[];
+  readonly minFinalTextChars?: number;
+  readonly rejectPreparatoryFinalText?: boolean;
+}
+
+export interface WorkflowTaskVerificationResult {
+  readonly ok: boolean;
+  readonly enforcement?: 'hard' | 'warn';
+  readonly reasons: readonly string[];
+  readonly changedPaths?: readonly string[];
+  readonly mutationToolCalls?: readonly string[];
+  readonly mutationEvidence?: boolean;
+}
 
 export interface WorkflowSpawnAgentInput {
   /** Human-readable label for the agent — surfaces in events / UI. */
@@ -35,6 +62,8 @@ export interface WorkflowSpawnAgentInput {
   readonly isolation?: WorkflowIsolation;
   /** Evidence refs (`task_id:<id>` etc.) seeded into the child context. */
   readonly evidenceRefs?: readonly string[];
+  /** Optional machine-checkable postconditions for this child task. */
+  readonly verification?: WorkflowTaskVerification;
 }
 
 /** Returned by `spawnAgent` — the child is in-flight, not yet complete. */
@@ -69,6 +98,10 @@ export interface WorkflowTaskResult {
   readonly digestFailed?: boolean;
   /** True when a digest was scheduled asynchronously and may arrive via `agent_summary_updated`. */
   readonly digestPending?: boolean;
+  /** Task postcondition check, when a backend evaluated one. */
+  readonly verification?: WorkflowTaskVerificationResult;
+  /** True when the child exhausted its iteration budget before completing. */
+  readonly limitReached?: boolean;
   /** Best-known provider/model used by the child, for host correlation only. */
   readonly provider?: string;
   readonly model?: string;

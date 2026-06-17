@@ -517,7 +517,9 @@ export function createWorkflowProcessTracker(
     tokenSpent += readTokenUsage(data);
     latestMessage = itemStatus === 'failed'
       ? `agent failed: ${title}`
-      : `agent completed: ${title}`;
+      : statusValue === 'completed_unverified'
+        ? `agent completed without verification: ${title}`
+        : `agent completed: ${title}`;
   }
 
   function applyAgentSummaryUpdated(data: Record<string, unknown> | undefined): void {
@@ -595,6 +597,12 @@ export function createWorkflowProcessTracker(
           applyAgentSpawned(event.data);
           return processEvent('workflow_updated', latestMessage);
         case 'agent_completed':
+          applyAgentCompleted(event.data);
+          return processEvent('workflow_updated', latestMessage);
+        case 'agent_unverified':
+          applyAgentCompleted(event.data);
+          return processEvent('workflow_updated', latestMessage);
+        case 'agent_failed':
           applyAgentCompleted(event.data);
           return processEvent('workflow_updated', latestMessage);
         case 'agent_summary_updated':

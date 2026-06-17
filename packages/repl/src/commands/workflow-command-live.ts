@@ -116,7 +116,13 @@ export function workflowEventSink(
     : undefined;
   let terminal = false;
   return (event) => {
-    if (terminal && (event.type === 'agent_completed' || event.type === 'agent_summary_updated')) {
+    if (
+      terminal &&
+      (event.type === 'agent_completed' ||
+        event.type === 'agent_unverified' ||
+        event.type === 'agent_failed' ||
+        event.type === 'agent_summary_updated')
+    ) {
       return;
     }
     live?.onEvent(event);
@@ -274,6 +280,22 @@ export function createWorkflowLiveUpdateEmitter(
           } else {
             completedAgents += 1;
           }
+          emit('running');
+          break;
+        }
+        case 'agent_unverified': {
+          const taskId = typeof event.data?.taskId === 'string' ? event.data.taskId : undefined;
+          if (taskId) activeAgents.delete(taskId);
+          tokenBudgetSpent += readWorkflowEventUsageTokens(event.data);
+          completedAgents += 1;
+          emit('running');
+          break;
+        }
+        case 'agent_failed': {
+          const taskId = typeof event.data?.taskId === 'string' ? event.data.taskId : undefined;
+          if (taskId) activeAgents.delete(taskId);
+          tokenBudgetSpent += readWorkflowEventUsageTokens(event.data);
+          failedAgents += 1;
           emit('running');
           break;
         }

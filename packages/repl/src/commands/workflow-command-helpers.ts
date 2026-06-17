@@ -837,7 +837,13 @@ export function formatWorkflowEvent(event: WorkflowEvent): string | undefined {
     case 'agent_completed':
       return status === 'failed'
         ? `    failed ${label}`
+        : status === 'completed_unverified'
+          ? `    unverified ${label}`
         : `    done ${label}`;
+    case 'agent_unverified':
+      return `    unverified ${label}`;
+    case 'agent_failed':
+      return `    failed ${label}`;
     case 'agent_stopped':
       return `    stopped ${label}`;
     case 'workflow_log':

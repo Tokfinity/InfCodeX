@@ -449,6 +449,85 @@ describe('runRestrictedWorkflowScript', () => {
     expect(prompts).toEqual([]);
   });
 
+  it('validates runAgent verification postconditions at the script boundary', async () => {
+    const { wf, prompts } = fakeWorkflowApi();
+    await expect(
+      runRestrictedWorkflowScript({
+        wf,
+        source: `
+          async function run(wf) {
+            return await wf.runAgent({
+              name: 'writer',
+              prompt: 'write docs',
+              readOnly: false,
+              verification: { requiresMutation: 'yes' }
+            });
+          }
+        `,
+      }),
+    ).rejects.toThrow(/verification requiresMutation must be a boolean/);
+    expect(prompts).toEqual([]);
+
+    await expect(
+      runRestrictedWorkflowScript({
+        wf,
+        source: `
+          async function run(wf) {
+            return await wf.runAgent({
+              name: 'writer',
+              prompt: 'write docs',
+              readOnly: false,
+              verification: { enforcement: 'loud' }
+            });
+          }
+        `,
+      }),
+    ).rejects.toThrow(/verification enforcement must be "hard" or "warn"/);
+
+    const seen: Array<unknown> = [];
+    const wfWithVerifier: WorkflowApi = {
+      ...wf,
+      runAgent: async (input): Promise<WorkflowTaskResult> => {
+        seen.push(input.verification);
+        return {
+          taskId: 'task-1',
+          name: input.name,
+          status: 'completed',
+          finalText: 'done',
+        };
+      },
+    };
+
+    await runRestrictedWorkflowScript({
+      wf: wfWithVerifier,
+      source: `
+        async function run(wf) {
+          const result = await wf.runAgent({
+            name: 'writer',
+            prompt: 'write docs',
+            readOnly: false,
+            verification: {
+              requiresMutation: true,
+              enforcement: 'warn',
+              requiredChangedPaths: ['docs/features/v0.1.16.md'],
+              minFinalTextChars: 80,
+              rejectPreparatoryFinalText: true
+            }
+          });
+          return result.finalText;
+        }
+      `,
+    });
+
+    expect(seen).toEqual([{
+      enforcement: 'warn',
+      requiresMutation: true,
+      requiredChangedPaths: ['docs/features/v0.1.16.md'],
+      minFinalTextChars: 80,
+      rejectPreparatoryFinalText: true,
+    }]);
+  });
+
   it('rejects a synthesize call with a missing rubric', async () => {
     const { wf } = fakeWorkflowApi();
     await expect(

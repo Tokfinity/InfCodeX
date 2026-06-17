@@ -20,6 +20,9 @@
 
 import { registerChildTask, routeMessage, getMessageQueue } from '@kodax-ai/agent';
 import type { ChildTaskRegistry, MessageQueue } from '@kodax-ai/agent';
+import { execFile } from 'node:child_process';
+import path from 'node:path';
+import { promisify } from 'node:util';
 import type {
   WorkflowAgentBackend,
   WorkflowSpawnAgentInput,
@@ -28,6 +31,8 @@ import type {
   WorkflowTaskSummaryEventUpdate,
   WorkflowTaskSnapshot,
   WorkflowTaskStatus,
+  WorkflowTaskVerification,
+  WorkflowTaskVerificationResult,
   WorkflowWaitOptions,
 } from '@kodax-ai/agent';
 
@@ -42,8 +47,15 @@ import type { ChildProgressStatus } from '../child-progress-snapshot.js';
 import type {
   KodaXChildContextBundle,
   KodaXChildExecutionResult,
+  KodaXEvents,
   KodaXToolExecutionContext,
 } from '../types.js';
+
+const execFileAsync = promisify(execFile);
+const GIT_STATUS_TIMEOUT_MS = 10_000;
+const MUTATING_TOOL_NAMES = new Set(['write', 'edit', 'multi_edit', 'insert_after_anchor']);
+const PREPARATORY_FINAL_TEXT_RE =
+  /^\s*(?:let me|i will|i'll|i am going to)\b[\s\S]{0,120}\b(?:start|create|implement|write|build|plan)\b|^\s*(?:我将|让我|接下来)[\s\S]{0,80}(?:开始|创建|编写|实现|制定)/i;
 
 /** The subset of `ChildExecutorOptions` the caller fixes once per run;
  *  the adapter adds `maxParallel` / `abortSignal` / `snapshotUpdater`
@@ -79,12 +91,34 @@ export interface CodingWorkflowBackendDeps {
   readonly now?: () => number;
   /** Workflow run id for correlating child-agent SDK callbacks. */
   readonly runId?: string;
+  /** Seam: workspace changed path reader. Defaults to git status/diff. */
+  readonly listChangedFiles?: (ctx: KodaXToolExecutionContext) => Promise<readonly string[]>;
   readonly onTaskSummary?: (taskId: string, update: WorkflowTaskSummaryEventUpdate) => void;
 }
 
 interface TaskEntry {
   readonly name: string;
   readonly promise: Promise<KodaXChildExecutionResult>;
+  readonly verification?: WorkflowTaskVerification;
+  readonly changedPathBaseline: Promise<ChangedPathSnapshot>;
+  readonly mutationRecorder: MutationRecorder;
+  readonly acceptToolMutationEvidence: boolean;
+}
+
+interface ChangedPathSnapshot {
+  readonly paths: readonly string[];
+  readonly error?: string;
+}
+
+interface MutationRecorder {
+  readonly toolNameById: Map<string, string>;
+  readonly toolPathById: Map<string, string>;
+  readonly succeededToolCalls: string[];
+  readonly succeededPaths: string[];
+}
+
+interface ResolvedVerification {
+  readonly verification?: WorkflowTaskVerification;
 }
 
 function normalizeWaitTimeoutMs(opts: WorkflowWaitOptions | undefined): number | undefined {
@@ -93,6 +127,273 @@ function normalizeWaitTimeoutMs(opts: WorkflowWaitOptions | undefined): number |
     throw new Error('workflow wait timeoutMs must be a positive number');
   }
   return Math.floor(opts.timeoutMs);
+}
+
+function hasVerificationWork(verification: WorkflowTaskVerification | undefined): boolean {
+  return verification?.requiresMutation === true ||
+    (verification?.requiredChangedPaths?.length ?? 0) > 0;
+}
+
+function normalizeWorkspacePath(value: string): string {
+  return value.replace(/\\/g, '/').replace(/^\.\//, '').trim();
+}
+
+function normalizeRequiredPath(value: string, ctx: KodaXToolExecutionContext): string {
+  const root = ctx.gitRoot ? path.resolve(ctx.gitRoot) : undefined;
+  const candidate = path.isAbsolute(value) && root
+    ? path.relative(root, path.resolve(value))
+    : value;
+  return normalizeWorkspacePath(candidate);
+}
+
+function resolveVerificationForInput(
+  input: WorkflowSpawnAgentInput,
+): ResolvedVerification {
+  const writeDefault: WorkflowTaskVerification | undefined = (input.readOnly ?? false) === false
+    ? {
+        enforcement: 'warn',
+        requiresMutation: true,
+        rejectPreparatoryFinalText: true,
+      }
+    : undefined;
+  if (input.verification !== undefined) {
+    const merged = {
+      ...(writeDefault ?? {}),
+      ...input.verification,
+      enforcement: input.verification.enforcement ?? 'hard',
+    };
+    const requiredChangedPaths = input.verification.requiredChangedPaths;
+    return {
+      verification: {
+        ...merged,
+        ...(requiredChangedPaths !== undefined &&
+          requiredChangedPaths.length > 0 &&
+          merged.requiresMutation === undefined
+          ? { requiresMutation: true }
+          : {}),
+      },
+    };
+  }
+  return { verification: writeDefault };
+}
+
+function isPreparatoryOnlyText(text: string): boolean {
+  const trimmed = text.trim();
+  return trimmed.length > 0 && PREPARATORY_FINAL_TEXT_RE.test(trimmed);
+}
+
+function selectWorkflowFinalText(childSummary: string, digest: string | undefined): string {
+  const summary = childSummary.trim();
+  const cleanDigest = digest?.trim();
+  if (cleanDigest && (summary.length === 0 || isPreparatoryOnlyText(summary))) {
+    return cleanDigest;
+  }
+  return childSummary;
+}
+
+async function runGit(args: readonly string[], cwd: string): Promise<string> {
+  const result = await execFileAsync('git', [...args], {
+    cwd,
+    timeout: GIT_STATUS_TIMEOUT_MS,
+    windowsHide: true,
+    maxBuffer: 4 * 1024 * 1024,
+  });
+  return result.stdout.toString();
+}
+
+async function listGitChangedFiles(ctx: KodaXToolExecutionContext): Promise<readonly string[]> {
+  const cwd = ctx.gitRoot ?? ctx.executionCwd ?? process.cwd();
+  const root = (await runGit(['rev-parse', '--show-toplevel'], cwd)).trim();
+  const outputs = await Promise.all([
+    runGit(['diff', '--name-only', '--'], root),
+    runGit(['diff', '--cached', '--name-only', '--'], root),
+    runGit(['ls-files', '--others', '--exclude-standard'], root),
+  ]);
+  return [
+    ...new Set(
+      outputs
+        .flatMap((output) => output.split(/\r?\n/))
+        .map(normalizeWorkspacePath)
+        .filter((item) => item.length > 0),
+    ),
+  ];
+}
+
+async function captureChangedPaths(
+  ctx: KodaXToolExecutionContext,
+  listChangedFiles: (ctx: KodaXToolExecutionContext) => Promise<readonly string[]>,
+): Promise<ChangedPathSnapshot> {
+  try {
+    const paths = await listChangedFiles(ctx);
+    return { paths: paths.map(normalizeWorkspacePath).filter((item) => item.length > 0) };
+  } catch (error) {
+    return {
+      paths: [],
+      error: error instanceof Error ? error.message : String(error),
+    };
+  }
+}
+
+function createMutationRecorder(): MutationRecorder {
+  return {
+    toolNameById: new Map(),
+    toolPathById: new Map(),
+    succeededToolCalls: [],
+    succeededPaths: [],
+  };
+}
+
+function readMutationPath(input: Record<string, unknown> | undefined): string | undefined {
+  if (!input) return undefined;
+  for (const key of ['path', 'file_path', 'target_path']) {
+    const value = input[key];
+    if (typeof value === 'string' && value.trim().length > 0) {
+      return normalizeWorkspacePath(value);
+    }
+  }
+  return undefined;
+}
+
+function wrapEventsForMutationRecording(
+  original: KodaXEvents | undefined,
+  recorder: MutationRecorder,
+): KodaXEvents {
+  return {
+    ...(original ?? {}),
+    onToolUseStart: (tool, meta) => {
+      if (MUTATING_TOOL_NAMES.has(tool.name)) {
+        recorder.toolNameById.set(tool.id, tool.name);
+        const targetPath = readMutationPath(tool.input);
+        if (targetPath !== undefined) {
+          recorder.toolPathById.set(tool.id, targetPath);
+        }
+      }
+      original?.onToolUseStart?.(tool, meta);
+    },
+    onToolResult: (result, meta) => {
+      const toolName = recorder.toolNameById.get(result.id) ?? result.name;
+      if (
+        MUTATING_TOOL_NAMES.has(toolName) &&
+        !result.content.trimStart().startsWith('[Tool Error]')
+      ) {
+        recorder.succeededToolCalls.push(toolName);
+        const targetPath = recorder.toolPathById.get(result.id);
+        if (targetPath !== undefined) {
+          recorder.succeededPaths.push(targetPath);
+        }
+      }
+      original?.onToolResult?.(result, meta);
+    },
+  };
+}
+
+function uniqueItems(items: readonly string[]): readonly string[] {
+  return [...new Set(items.filter((item) => item.trim().length > 0))];
+}
+
+function evaluateVerification(input: {
+  readonly verification: WorkflowTaskVerification | undefined;
+  readonly term: ReturnType<typeof deriveTerminal>;
+  readonly before: ChangedPathSnapshot;
+  readonly after: ChangedPathSnapshot;
+  readonly mutationRecorder: MutationRecorder;
+  readonly ctx: KodaXToolExecutionContext;
+  readonly acceptToolMutationEvidence: boolean;
+}): WorkflowTaskVerificationResult | undefined {
+  const verification = input.verification;
+  if (!verification) return undefined;
+
+  const reasons: string[] = [];
+  const beforePaths = new Set(input.before.paths.map(normalizeWorkspacePath));
+  const afterPaths = uniqueItems(input.after.paths.map(normalizeWorkspacePath));
+  const newlyChangedPaths = afterPaths.filter((item) => !beforePaths.has(item));
+  const observedToolCalls = uniqueItems(input.mutationRecorder.succeededToolCalls);
+  const toolCalls = input.acceptToolMutationEvidence ? observedToolCalls : [];
+  const toolPaths = input.acceptToolMutationEvidence
+    ? uniqueItems(input.mutationRecorder.succeededPaths.map(normalizeWorkspacePath))
+    : [];
+  const mutationEvidence = newlyChangedPaths.length > 0 || toolCalls.length > 0;
+  const enforcement = verification.enforcement ?? 'hard';
+  const requiredPaths = (verification.requiredChangedPaths ?? [])
+    .map((item) => normalizeRequiredPath(item, input.ctx));
+
+  if (verification.requiresMutation === true) {
+    if (input.before.error !== undefined || input.after.error !== undefined) {
+      reasons.push(
+        `workspace mutation verification could not read changed files: ${
+          input.after.error ?? input.before.error
+        }`,
+      );
+    } else if (!mutationEvidence) {
+      reasons.push(
+        input.acceptToolMutationEvidence || observedToolCalls.length === 0
+          ? 'expected file mutations, but no new workspace changes or successful write tools were observed'
+          : 'write tools ran in an isolated worktree, but no main workspace changes were present after cleanup',
+      );
+    }
+  }
+
+  if (input.term.limitReached === true && !mutationEvidence) {
+    reasons.push('workflow child reached its iteration limit before satisfying the task');
+  }
+
+  for (const requiredPath of requiredPaths) {
+    if (!afterPaths.includes(requiredPath) && !toolPaths.includes(requiredPath)) {
+      reasons.push(`required changed path was not present in workspace changes: ${requiredPath}`);
+    }
+  }
+
+  const minFinalTextChars = verification.minFinalTextChars;
+  if (
+    minFinalTextChars !== undefined &&
+    !mutationEvidence &&
+    input.term.finalText.trim().length < minFinalTextChars
+  ) {
+    reasons.push(
+      `finalText was shorter than the required ${minFinalTextChars} characters`,
+    );
+  }
+
+  if (
+    verification.rejectPreparatoryFinalText === true &&
+    !mutationEvidence &&
+    isPreparatoryOnlyText(input.term.finalText)
+  ) {
+    reasons.push('finalText looks preparatory instead of terminal');
+  }
+
+  return {
+    ok: reasons.length === 0,
+    enforcement,
+    reasons,
+    changedPaths: afterPaths,
+    mutationToolCalls: observedToolCalls,
+    mutationEvidence,
+  };
+}
+
+function appendVerificationFailure(
+  finalText: string,
+  verification: WorkflowTaskVerificationResult,
+): string {
+  if (verification.ok) return finalText;
+  const header = verification.enforcement === 'warn'
+    ? '[Workflow task completed without verification]'
+    : '[Workflow task verification failed]';
+  const suffix = [
+    header,
+    ...verification.reasons.map((reason) => `- ${reason}`),
+  ].join('\n');
+  return finalText.trim().length > 0 ? `${finalText}\n\n${suffix}` : suffix;
+}
+
+function limitReachedWarningVerification(): WorkflowTaskVerificationResult {
+  return {
+    ok: false,
+    enforcement: 'warn',
+    reasons: ['workflow child reached its iteration limit before satisfying the task'],
+    mutationEvidence: false,
+  };
 }
 
 async function waitForChildResult(
@@ -146,6 +447,7 @@ function deriveTerminal(
   digest?: string;
   digestFailed?: boolean;
   digestPending?: boolean;
+  limitReached?: boolean;
   provider?: string;
   model?: string;
 } {
@@ -153,7 +455,7 @@ function deriveTerminal(
     return { status: 'stopped', snapStatus: 'aborted', finalText: '' };
   }
   const child = result.results[0];
-  const finalText = child?.summary ?? '';
+  const finalText = selectWorkflowFinalText(child?.summary ?? '', child?.digest);
   if (child?.status === 'completed') {
     return {
       status: 'completed',
@@ -162,11 +464,19 @@ function deriveTerminal(
       ...(child.digest ? { digest: child.digest } : {}),
       ...(child.digestFailed ? { digestFailed: true } : {}),
       ...(child.digestPending ? { digestPending: true } : {}),
+      ...(child.limitReached ? { limitReached: true } : {}),
       ...(child.provider ? { provider: child.provider } : {}),
       ...(child.model ? { model: child.model } : {}),
     };
   }
-  return { status: 'failed', snapStatus: 'failed', finalText };
+  return {
+    status: 'failed',
+    snapStatus: 'failed',
+    finalText,
+    ...(child?.limitReached ? { limitReached: true } : {}),
+    ...(child?.provider ? { provider: child.provider } : {}),
+    ...(child?.model ? { model: child.model } : {}),
+  };
 }
 
 /**
@@ -176,6 +486,7 @@ export function createCodingWorkflowBackend(deps: CodingWorkflowBackendDeps): Wo
   const { ctx, childOptions } = deps;
   const runChild = deps.runChild ?? executeChildAgents;
   const queue = deps.queue ?? getMessageQueue();
+  const listChangedFiles = deps.listChangedFiles ?? listGitChangedFiles;
   const now = deps.now ?? (() => Date.now());
   let counter = 0;
   const genId = deps.generateId ?? (() => `wf-child-${(counter += 1)}`);
@@ -213,6 +524,13 @@ export function createCodingWorkflowBackend(deps: CodingWorkflowBackendDeps): Wo
   const spawn = async (input: WorkflowSpawnAgentInput): Promise<WorkflowTaskHandle> => {
     const childId = genId();
     const bundle = buildBundle(childId, input);
+    const resolvedVerification = resolveVerificationForInput(input);
+    const verification = resolvedVerification.verification;
+    const mutationRecorder = createMutationRecorder();
+    const acceptToolMutationEvidence = input.isolation !== 'worktree';
+    const changedPathBaseline = hasVerificationWork(verification)
+      ? captureChangedPaths(ctx, listChangedFiles)
+      : Promise.resolve({ paths: [] });
     const abort = new AbortController();
     ctx.childAbortControllers?.set(childId, abort);
     const snapshotMap = ctx.childProgressSnapshots;
@@ -228,6 +546,13 @@ export function createCodingWorkflowBackend(deps: CodingWorkflowBackendDeps): Wo
     }
     const perChild: ChildExecutorOptions = {
       ...childOptions,
+      parentOptions: {
+        ...childOptions.parentOptions,
+        events: wrapEventsForMutationRecording(
+          childOptions.parentOptions.events,
+          mutationRecorder,
+        ),
+      },
       maxParallel: 1,
       // FEATURE_217 — every child launched through the workflow backend gets the
       // self-distill digest. This is the single workflow boundary, so it marks
@@ -267,6 +592,7 @@ export function createCodingWorkflowBackend(deps: CodingWorkflowBackendDeps): Wo
     const promise = (async (): Promise<KodaXChildExecutionResult> => {
       let result: KodaXChildExecutionResult | undefined;
       try {
+        await changedPathBaseline;
         result = await runChild([bundle], ctx, perChild);
         return result;
       } finally {
@@ -284,7 +610,14 @@ export function createCodingWorkflowBackend(deps: CodingWorkflowBackendDeps): Wo
       }
     })();
 
-    tasks.set(childId, { name: input.name, promise });
+    tasks.set(childId, {
+      name: input.name,
+      promise,
+      verification,
+      changedPathBaseline,
+      mutationRecorder,
+      acceptToolMutationEvidence,
+    });
     registerChildTask(registry, childId, promise);
     return { taskId: childId, name: input.name };
   };
@@ -296,7 +629,43 @@ export function createCodingWorkflowBackend(deps: CodingWorkflowBackendDeps): Wo
     const entry = tasks.get(taskId);
     if (!entry) throw new Error(`unknown workflow task: ${taskId}`);
     const result = await waitForChildResult(entry, taskId, opts, ctx);
-    const term = deriveTerminal(result, taskId);
+    let term = deriveTerminal(result, taskId);
+    let verification = entry.verification
+      ? evaluateVerification({
+          verification: entry.verification,
+          term,
+          before: await entry.changedPathBaseline,
+          after: hasVerificationWork(entry.verification)
+            ? await captureChangedPaths(ctx, listChangedFiles)
+            : { paths: [] },
+          mutationRecorder: entry.mutationRecorder,
+          ctx,
+          acceptToolMutationEvidence: entry.acceptToolMutationEvidence,
+        })
+      : undefined;
+    if (term.limitReached === true && verification === undefined && term.status === 'completed') {
+      verification = limitReachedWarningVerification();
+      term = {
+        ...term,
+        status: 'completed_unverified',
+        snapStatus: 'completed',
+        finalText: appendVerificationFailure(term.finalText, verification),
+      };
+    }
+    if (verification !== undefined && !verification.ok && term.status === 'completed') {
+      const warnOnly = verification.enforcement === 'warn';
+      term = {
+        ...term,
+        status: warnOnly ? 'completed_unverified' : 'failed',
+        snapStatus: warnOnly ? 'completed' : 'failed',
+        finalText: appendVerificationFailure(term.finalText, verification),
+      };
+    }
+    finalizeChildSnapshot(ctx.childProgressSnapshots, taskId, {
+      status: term.snapStatus,
+      finalText: term.finalText,
+      endedAt: now(),
+    });
     return {
       taskId,
       name: entry.name,
@@ -305,6 +674,8 @@ export function createCodingWorkflowBackend(deps: CodingWorkflowBackendDeps): Wo
       ...(term.digest ? { digest: term.digest } : {}),
       ...(term.digestFailed ? { digestFailed: true } : {}),
       ...(term.digestPending ? { digestPending: true } : {}),
+      ...(verification !== undefined ? { verification } : {}),
+      ...(term.limitReached ? { limitReached: true } : {}),
       ...(term.provider ? { provider: term.provider } : {}),
       ...(term.model ? { model: term.model } : {}),
       usage: { totalTokens: result.totalTokensUsed },

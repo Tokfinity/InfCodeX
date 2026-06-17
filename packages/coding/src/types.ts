@@ -683,6 +683,8 @@ export interface KodaXChildAgentResult {
   actualIterations?: number;
   /** Best-known token usage for this child run. Used by workflow budget accounting. */
   totalTokensUsed?: number;
+  /** True when the child exhausted its iteration budget before completing. */
+  limitReached?: boolean;
   /**
    * True when the child's `runKodaX` exited via CAP-083 AbortError silent
    * terminal (`KodaXResult.interrupted === true`). Surfaces the

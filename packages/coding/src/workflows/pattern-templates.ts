@@ -49,8 +49,7 @@ async function run(wf, args) {
     const candidate = await wf.runAgent({
       name: "candidate-worker",
       prompt: "Produce the strongest answer for this request:\\n" + request,
-      readOnly: false,
-      isolation: "worktree",
+      readOnly: true,
       modelHint: "deep"
     });
     const verifier = await wf.runAgent({
@@ -145,14 +144,13 @@ async function run(wf, args) {
   });
   const label = classification.finalText.toLowerCase();
   const action = label.includes("verification") ? "verify every claim" :
-    label.includes("migration") ? "plan safe code changes" :
+    label.includes("migration") ? "plan safe code changes without editing files" :
     label.includes("triage") ? "dedupe and prioritize" :
     "research and synthesize";
   const result = await wf.runAgent({
     name: "routed-worker",
     prompt: "Route: " + action + "\\nRequest:\\n" + request,
-    readOnly: !label.includes("migration"),
-    isolation: label.includes("migration") ? "worktree" : "shared-cwd",
+    readOnly: true,
     evidenceRefs: ["task_id:" + classification.taskId]
   });
   return await wf.synthesize({
@@ -208,7 +206,7 @@ const TEMPLATES: readonly WorkflowPatternTemplate[] = [
       ['adversarial-verification'],
       ['adversarial-verification', 'synthesize'],
       3,
-      false,
+      true,
     ),
     source: ADVERSARIAL_VERIFICATION_SOURCE,
   },
@@ -264,7 +262,7 @@ const TEMPLATES: readonly WorkflowPatternTemplate[] = [
       ['classify-and-act'],
       ['classify', 'act', 'synthesize'],
       3,
-      false,
+      true,
     ),
     source: CLASSIFY_AND_ACT_SOURCE,
   },

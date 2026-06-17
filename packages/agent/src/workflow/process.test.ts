@@ -128,6 +128,64 @@ describe('workflow process tracker', () => {
     expect(isFinalWorkflowProcessStatus('paused')).toBe(false);
   });
 
+  it('maps agent_failed events to failed agent items', () => {
+    const tracker = createWorkflowProcessTracker({
+      runId: 'run-agent-failed',
+      workflowName: 'agent-failed-test',
+      now: () => '2026-06-15T00:00:00.000Z',
+    });
+
+    tracker.applyEvent({ seq: 0, type: 'workflow_started' });
+    tracker.applyEvent({ seq: 1, type: 'agent_spawned', data: { taskId: 'child-1', name: 'writer' } });
+    tracker.applyEvent({
+      seq: 2,
+      type: 'agent_failed',
+      data: {
+        taskId: 'child-1',
+        name: 'writer',
+        status: 'failed',
+        error: 'expected file mutations',
+      },
+    });
+
+    const snapshot = tracker.getSnapshot();
+    expect(snapshot.progress.failedAgents).toBe(1);
+    expect(snapshot.items.find((item) => item.id === 'agent:child-1')).toMatchObject({
+      status: 'failed',
+      error: 'expected file mutations',
+    });
+  });
+
+  it('maps agent_unverified events to completed agent items with a warning message', () => {
+    const tracker = createWorkflowProcessTracker({
+      runId: 'run-agent-unverified',
+      workflowName: 'agent-unverified-test',
+      now: () => '2026-06-15T00:00:00.000Z',
+    });
+
+    tracker.applyEvent({ seq: 0, type: 'workflow_started' });
+    tracker.applyEvent({ seq: 1, type: 'agent_spawned', data: { taskId: 'child-1', name: 'writer' } });
+    const event = tracker.applyEvent({
+      seq: 2,
+      type: 'agent_unverified',
+      data: {
+        taskId: 'child-1',
+        name: 'writer',
+        status: 'completed_unverified',
+        summary: 'Finished without observed file mutations.',
+      },
+    });
+
+    const snapshot = tracker.getSnapshot();
+    expect(snapshot.progress.finishedAgents).toBe(1);
+    expect(snapshot.progress.failedAgents).toBe(0);
+    expect(event.message).toBe('agent completed without verification: writer');
+    expect(snapshot.items.find((item) => item.id === 'agent:child-1')).toMatchObject({
+      status: 'completed',
+      summary: 'Finished without observed file mutations.',
+    });
+  });
+
   it('clears the active phase after phase completion', () => {
     const tracker = createWorkflowProcessTracker({
       runId: 'run-phase-gap',

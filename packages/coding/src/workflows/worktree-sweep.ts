@@ -97,7 +97,31 @@ function isUnder(child: string, parent: string): boolean {
   return c === p || c.startsWith(`${p}/`);
 }
 
-/** Force-remove one worktree + its ephemeral branch. Collects, never throws. */
+async function worktreeHasChanges(
+  entry: WorktreeEntry,
+  runGit: (args: readonly string[], cwd: string) => Promise<string>,
+  warnings: string[],
+): Promise<boolean> {
+  try {
+    const status = await runGit(['status', '--porcelain'], entry.path);
+    const uncommittedFiles = status
+      .split(/\r?\n/)
+      .filter((line) => line.trim().length > 0)
+      .length;
+    const revList = await runGit(['rev-list', '--count', 'HEAD', '--not', '--remotes'], entry.path);
+    const localCommits = Number.parseInt(revList.trim(), 10) || 0;
+    return uncommittedFiles > 0 || localCommits > 0;
+  } catch (error) {
+    warnings.push(
+      `retain ${entry.path}: cannot verify worktree cleanliness: ${
+        error instanceof Error ? error.message : String(error)
+      }`,
+    );
+    return true;
+  }
+}
+
+/** Remove one clean worktree + its ephemeral branch. Collects, never throws. */
 async function removeWorktree(
   entry: WorktreeEntry,
   gitRoot: string,
@@ -105,6 +129,10 @@ async function removeWorktree(
   removed: string[],
   warnings: string[],
 ): Promise<void> {
+  if (await worktreeHasChanges(entry, runGit, warnings)) {
+    warnings.push(`retain ${entry.path}: worktree has unmerged changes`);
+    return;
+  }
   try {
     await runGit(['worktree', 'remove', entry.path, '--force'], gitRoot);
     removed.push(entry.path);
