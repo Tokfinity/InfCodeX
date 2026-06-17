@@ -29,6 +29,7 @@ import { resolveModelHintTier } from './model-hint-routing.js';
 import { invokeChildWithFallback } from './child-fallback.js';
 import { toolWorktreeCreate, toolWorktreeRemove } from './tools/worktree.js';
 import { loadAgentsFiles, formatAgentsForPrompt } from './context/agents-loader.js';
+import { uniqueInlineSkillNames } from './skill-references.js';
 // FEATURE_120 v0.7.39 Step 0d (Option D) — generic fan-out lifted to
 // @kodax-ai/agent (ADR-021). All coding-side concerns (read vs write,
 // worktree isolation, briefing, role policy) stay below; the wrapper
@@ -54,8 +55,10 @@ import type { Agent, WorkflowEventCorrelation } from '@kodax-ai/agent';
 // `typeof import('./agent.js')` references — both count as edges in madge.
 type RunKodaXFn = (options: KodaXOptions, prompt: string) => Promise<KodaXResult>;
 let _runKodaXCache: RunKodaXFn | undefined;
+let _runKodaXLoadPromise: Promise<RunKodaXFn> | undefined;
 async function getRunKodaX(): Promise<RunKodaXFn> {
-  if (!_runKodaXCache) {
+  if (_runKodaXCache) return _runKodaXCache;
+  if (!_runKodaXLoadPromise) {
     // The specifier MUST be a string literal inside import(). esbuild only
     // bundles dynamic imports whose argument is a literal; a computed
     // specifier (e.g. `const spec = './agent.js'; import(spec)`) is left as a
@@ -74,28 +77,33 @@ async function getRunKodaX(): Promise<RunKodaXFn> {
     // still tripping), the vanilla native error surfaces as a cryptic
     // "Cannot find module './agent.js'" deep inside a dispatch call.
     // Restate what went wrong + what the caller should check.
-    let agentModule: { runKodaX?: RunKodaXFn };
-    try {
-      agentModule = (await import('./agent.js')) as { runKodaX?: RunKodaXFn };
-    } catch (err) {
-      const detail = err instanceof Error ? err.message : String(err);
-      throw new Error(
-        `[child-executor] Failed to lazy-load agent module (\`${spec}\`) for dispatch_child_task. ` +
-        `This usually means the @kodax-ai/coding build is broken or out of date. ` +
-        `Underlying cause: ${detail}`,
-      );
-    }
-    const runKodaX = agentModule.runKodaX;
-    if (typeof runKodaX !== 'function') {
-      throw new Error(
-        `[child-executor] Agent module loaded but \`runKodaX\` export is missing or not a function. ` +
-        `This indicates an API break in packages/coding/src/agent.ts. ` +
-        `Check that \`export { runKodaX }\` is still present.`,
-      );
-    }
-    _runKodaXCache = runKodaX;
+    _runKodaXLoadPromise = import('./agent.js')
+      .then((agentModule: { runKodaX?: RunKodaXFn }) => {
+        const runKodaX = agentModule.runKodaX;
+        if (typeof runKodaX !== 'function') {
+          throw new Error(
+            `[child-executor] Agent module loaded but \`runKodaX\` export is missing or not a function. ` +
+            `This indicates an API break in packages/coding/src/agent.ts. ` +
+            `Check that \`export { runKodaX }\` is still present.`,
+          );
+        }
+        _runKodaXCache = runKodaX;
+        return runKodaX;
+      })
+      .catch((err: unknown) => {
+        _runKodaXLoadPromise = undefined;
+        if (err instanceof Error && err.message.startsWith('[child-executor]')) {
+          throw err;
+        }
+        const detail = err instanceof Error ? err.message : String(err);
+        throw new Error(
+          `[child-executor] Failed to lazy-load agent module (\`${spec}\`) for dispatch_child_task. ` +
+          `This usually means the @kodax-ai/coding build is broken or out of date. ` +
+          `Underlying cause: ${detail}`,
+        );
+      });
   }
-  return _runKodaXCache;
+  return _runKodaXLoadPromise;
 }
 
 const WORKFLOW_CHILD_DIGEST_SYSTEM_PROMPT = [
@@ -531,6 +539,18 @@ function buildActiveSkillResourceBriefing(
   ].filter((line): line is string => Boolean(line));
 
   return lines.join('\n');
+}
+
+function buildReferencedSkillBriefing(objective: string): string | undefined {
+  const names = uniqueInlineSkillNames(objective)
+    .filter((name) => !objective.includes(`<skill name="${name}"`));
+  if (names.length === 0) return undefined;
+
+  return [
+    '## Referenced Skills',
+    `The objective mentions skill reference(s): ${names.map((name) => `/skill:${name}`).join(', ')}.`,
+    'Before acting on those instructions, invoke the `skill` tool for each referenced skill that is not already expanded in this briefing, then follow the returned skill instructions. Do not infer skill-specific rules from the slash token alone.',
+  ].join('\n');
 }
 
 function shouldRunWorkflowDigestAsync(
@@ -1040,6 +1060,7 @@ async function buildChildBriefing(
     ? 'Shell defaults: Windows. Use: dir, move, copy, del, type. Avoid Unix-only tools like `head`, `tail`, `rm`, `cp`, `mv`.'
     : 'Shell defaults: Unix. Use: ls, mv, cp, rm, cat, head, tail.';
   const activeSkillResourceBriefing = buildActiveSkillResourceBriefing(ctx.skillInvocation);
+  const referencedSkillBriefing = buildReferencedSkillBriefing(bundle.objective);
 
   const parts: string[] = [
     `# Child Agent Task`,
@@ -1059,6 +1080,7 @@ async function buildChildBriefing(
     ``,
     `## Objective`,
     bundle.objective,
+    ...(referencedSkillBriefing ? [``, referencedSkillBriefing] : []),
     ``,
     `## Scope`,
     bundle.scopeSummary ?? (bundle.constraints.join(', ') || 'No specific scope constraints.'),

@@ -85,6 +85,12 @@ export interface RenameSavedWorkflowInput {
   readonly source?: SavedWorkflowSource;
 }
 
+export interface DeleteSavedWorkflowInput {
+  readonly dirs: SavedWorkflowDirs;
+  readonly name: string;
+  readonly source?: SavedWorkflowSource;
+}
+
 export interface ReplaceSavedWorkflowInput extends Omit<SaveGeneratedWorkflowInput, 'dir'> {
   readonly dirs: SavedWorkflowDirs;
   readonly savedSource?: SavedWorkflowSource;
@@ -389,6 +395,26 @@ export async function renameSavedWorkflow(
     source: ref.source,
     execution: 'capability-generated',
   };
+}
+
+export async function deleteSavedWorkflow(
+  input: DeleteSavedWorkflowInput,
+): Promise<SavedWorkflowRef> {
+  const refs = (await discoverSavedWorkflows(input.dirs))
+    .filter((ref) => ref.name === input.name)
+    .filter((ref) => input.source === undefined || ref.source === input.source);
+  if (refs.length === 0) {
+    throw new Error(`saved workflow not found: ${input.name}`);
+  }
+  if (refs.length > 1) {
+    throw new Error(`ambiguous saved workflow name: ${input.name}`);
+  }
+  const ref = refs[0]!;
+  if (!ref.path.endsWith('.workflow.json')) {
+    throw new Error('only generated workflow capsules can be deleted');
+  }
+  await unlink(ref.path);
+  return ref;
 }
 
 export async function replaceSavedWorkflow(

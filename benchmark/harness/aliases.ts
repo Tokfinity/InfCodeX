@@ -37,6 +37,7 @@
 
 export type ModelAlias =
   | 'zhipu/glm51'
+  | 'zhipu/glm52'
   | 'kimi'
   | 'mimo/v25'
   | 'mimo/v25pro'
@@ -59,6 +60,7 @@ export interface ModelAliasTarget {
 
 export const MODEL_ALIASES: Readonly<Record<ModelAlias, ModelAliasTarget>> = Object.freeze({
   'zhipu/glm51':  { provider: 'zhipu-coding',   model: 'glm-5.1',           apiKeyEnv: 'ZHIPU_CODING_API_KEY' },
+  'zhipu/glm52':  { provider: 'zhipu-coding',   model: 'glm-5.2',           apiKeyEnv: 'ZHIPU_CODING_API_KEY' },
   'kimi':         { provider: 'kimi-code',      model: 'kimi-for-coding',   apiKeyEnv: 'KIMI_CODE_API_KEY' },
   'mimo/v25':     { provider: 'mimo-coding',    model: 'mimo-v2.5',         apiKeyEnv: 'MIMO_CODING_API_KEY' },
   'mimo/v25pro':  { provider: 'mimo-coding',    model: 'mimo-v2.5-pro',     apiKeyEnv: 'MIMO_CODING_API_KEY' },

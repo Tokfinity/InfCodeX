@@ -95,10 +95,12 @@ describe('resolveWorkflowIdentity', () => {
       target: 'same-name',
       runBaseDir: runs,
       savedWorkflowDirs: { project: saved },
-    })).resolves.toEqual({
+    })).resolves.toMatchObject({
       kind: 'ambiguous',
       target: 'same-name',
       matches: ['run', 'saved'],
+      run: { runId: 'same-name' },
+      savedWorkflow: { name: 'same-name' },
     });
   });
 
@@ -178,10 +180,12 @@ describe('resolveWorkflowIdentity', () => {
       target: 'saved-audit',
       runBaseDir: runs,
       savedWorkflowDirs: { project: saved },
-    })).resolves.toEqual({
+    })).resolves.toMatchObject({
       kind: 'ambiguous',
       target: 'saved-audit',
       matches: ['run', 'saved'],
+      run: { runId: 'run-readable' },
+      savedWorkflow: { name: 'saved-audit' },
     });
   });
 });

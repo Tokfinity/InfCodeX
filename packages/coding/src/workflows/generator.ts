@@ -9,10 +9,14 @@
 
 import {
   createRestrictedWorkflowModule,
+  expandSkillForLLM,
+  getSkillRegistry,
+  initializeSkillRegistry,
   runRestrictedWorkflowScript,
   validateRestrictedWorkflowSource,
   validateWorkflowScriptManifest,
   WORKFLOW_PATTERN_IDS,
+  type SkillContext,
   type WorkflowApi,
   type WorkflowModule,
   type WorkflowScriptManifest,
@@ -24,6 +28,7 @@ import { resolveProvider, sideQuery } from '@kodax-ai/llm';
 import type { KodaXMessage } from '@kodax-ai/llm';
 
 import type { WorkflowScriptSnapshotInput } from './run-graph.js';
+import { uniqueInlineSkillNames } from '../skill-references.js';
 import type { KodaXOptions } from '../types.js';
 
 export const WORKFLOW_GENERATION_SYSTEM_PROMPT = [
@@ -57,12 +62,14 @@ export type WorkflowGenerationTextFn = (
 export interface GenerateWorkflowInput {
   readonly request: string;
   readonly generateText: WorkflowGenerationTextFn;
+  readonly skillContext?: string;
   readonly signal?: AbortSignal;
 }
 
 export interface GenerateWorkflowFromOptionsInput {
   readonly request: string;
   readonly options: KodaXOptions;
+  readonly skillContext?: string;
   readonly timeoutMs?: number;
   readonly signal?: AbortSignal;
 }
@@ -583,10 +590,29 @@ export function validateGeneratedWorkflowSource(source: string): string {
   return source;
 }
 
-export function buildWorkflowGenerationUserPrompt(request: string): string {
+function buildReferencedSkillPromptSection(skillContext: string | undefined): string[] {
+  const trimmed = skillContext?.trim();
+  if (!trimmed) return [];
+  return [
+    '',
+    'Referenced skill instructions (authoritative):',
+    trimmed,
+    '',
+    'Skill handling requirements:',
+    '- Treat the referenced skill instructions above as binding requirements for this workflow generation.',
+    '- Preserve skill-specific file layout, naming, and process requirements in child-agent prompts that do the work.',
+    '- Do not replace concrete skill requirements with vague paths such as "or similar"; choose paths from the skill or instruct the child to invoke the skill before acting.',
+  ];
+}
+
+export function buildWorkflowGenerationUserPrompt(
+  request: string,
+  skillContext?: string,
+): string {
   return [
     'Task request:',
     request,
+    ...buildReferencedSkillPromptSection(skillContext),
     '',
     'Available WorkflowApi calls:',
     '- wf.phase(name, async () => ...)',
@@ -662,8 +688,50 @@ export function buildWorkflowGenerationUserPrompt(request: string): string {
   ].join('\n');
 }
 
+export async function buildWorkflowGenerationSkillContext(
+  request: string,
+  options: Pick<KodaXOptions, 'context'>,
+): Promise<string | undefined> {
+  const skillNames = uniqueInlineSkillNames(request);
+  if (skillNames.length === 0) return undefined;
+
+  const projectRoot = options.context?.gitRoot
+    ?? options.context?.executionCwd
+    ?? process.cwd();
+  const workingDirectory = options.context?.executionCwd ?? projectRoot;
+  const registry = getSkillRegistry(projectRoot);
+  if (registry.size === 0) {
+    await initializeSkillRegistry(projectRoot);
+  }
+
+  const skillContext: SkillContext = {
+    workingDirectory,
+    projectRoot,
+    environment: {},
+  };
+  const blocks: string[] = [];
+
+  for (const skillName of skillNames) {
+    if (!registry.has(skillName)) {
+      const available = registry.list().map((skill) => skill.name).sort().join(', ');
+      throw new Error(
+        `workflow generation referenced unknown skill "${skillName}". Available skills: ${available || '(none)'}`,
+      );
+    }
+    const skill = await registry.loadFull(skillName);
+    const expanded = await expandSkillForLLM(skill, '', skillContext);
+    if (expanded.disableModelInvocation) {
+      throw new Error(`workflow generation referenced disabled skill "${skillName}"`);
+    }
+    blocks.push(expanded.content);
+  }
+
+  return blocks.join('\n\n');
+}
+
 function buildWorkflowGenerationRepairPrompt(input: {
   readonly request: string;
+  readonly skillContext?: string;
   readonly previousOutput: string;
   readonly error: string;
   readonly attempt: number;
@@ -687,7 +755,7 @@ function buildWorkflowGenerationRepairPrompt(input: {
   }
 
   return [
-    buildWorkflowGenerationUserPrompt(input.request),
+    buildWorkflowGenerationUserPrompt(input.request, input.skillContext),
     '',
     'Your previous output failed KodaX workflow validation.',
     `Repair attempt: ${input.attempt} of ${input.maxAttempts}.`,
@@ -777,7 +845,7 @@ export async function generateWorkflow(
   }
 
   const maxAttempts = WORKFLOW_GENERATION_REPAIR_ATTEMPTS + 1;
-  let prompt = buildWorkflowGenerationUserPrompt(request);
+  let prompt = buildWorkflowGenerationUserPrompt(request, input.skillContext);
   let lastError = '';
 
   for (let attempt = 1; attempt <= maxAttempts; attempt += 1) {
@@ -801,6 +869,7 @@ export async function generateWorkflow(
       if (attempt >= maxAttempts) break;
       prompt = buildWorkflowGenerationRepairPrompt({
         request,
+        ...(input.skillContext ? { skillContext: input.skillContext } : {}),
         previousOutput: rawText,
         error: lastError,
         attempt: attempt + 1,
@@ -820,8 +889,11 @@ export async function generateWorkflowFromOptions(
   const provider = resolveProvider(input.options.provider);
   const model = input.options.modelOverride ?? input.options.model ?? provider.getModel();
   const timeoutMs = input.timeoutMs ?? resolveWorkflowGenerationTimeoutMs();
+  const skillContext = input.skillContext
+    ?? await buildWorkflowGenerationSkillContext(input.request, input.options);
   return generateWorkflow({
     request: input.request,
+    ...(skillContext ? { skillContext } : {}),
     ...(input.signal ? { signal: input.signal } : {}),
     generateText: async (request) => {
       const messages: readonly KodaXMessage[] = [

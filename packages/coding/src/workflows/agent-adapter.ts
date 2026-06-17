@@ -53,6 +53,7 @@ import type {
 
 const execFileAsync = promisify(execFile);
 const GIT_STATUS_TIMEOUT_MS = 10_000;
+const DEFAULT_VERIFICATION_REPAIR_ATTEMPTS = 2;
 const MUTATING_TOOL_NAMES = new Set(['write', 'edit', 'multi_edit', 'insert_after_anchor']);
 const PREPARATORY_FINAL_TEXT_RE =
   /^\s*(?:let me|i will|i'll|i am going to)\b[\s\S]{0,120}\b(?:start|create|implement|write|build|plan)\b|^\s*(?:我将|让我|接下来)[\s\S]{0,80}(?:开始|创建|编写|实现|制定)/i;
@@ -98,11 +99,15 @@ export interface CodingWorkflowBackendDeps {
 
 interface TaskEntry {
   readonly name: string;
-  readonly promise: Promise<KodaXChildExecutionResult>;
+  readonly input: WorkflowSpawnAgentInput;
+  readonly bundle: KodaXChildContextBundle;
+  promise: Promise<KodaXChildExecutionResult>;
+  readonly runBundle: (bundle: KodaXChildContextBundle) => Promise<KodaXChildExecutionResult>;
   readonly verification?: WorkflowTaskVerification;
   readonly changedPathBaseline: Promise<ChangedPathSnapshot>;
   readonly mutationRecorder: MutationRecorder;
   readonly acceptToolMutationEvidence: boolean;
+  repairAttempts: number;
 }
 
 interface ChangedPathSnapshot {
@@ -396,23 +401,66 @@ function limitReachedWarningVerification(): WorkflowTaskVerificationResult {
   };
 }
 
-async function waitForChildResult(
-  entry: TaskEntry,
+function shouldRepairVerificationFailure(input: {
+  readonly entry: TaskEntry;
+  readonly term: ReturnType<typeof deriveTerminal>;
+  readonly verification: WorkflowTaskVerificationResult | undefined;
+}): boolean {
+  return input.entry.bundle.readOnly !== true &&
+    input.entry.repairAttempts < DEFAULT_VERIFICATION_REPAIR_ATTEMPTS &&
+    input.term.status === 'completed' &&
+    input.verification !== undefined &&
+    input.verification.ok !== true &&
+    input.verification.enforcement !== 'warn';
+}
+
+function buildVerificationRepairPrompt(input: {
+  readonly originalPrompt: string;
+  readonly previousFinalText: string;
+  readonly verification: WorkflowTaskVerificationResult;
+  readonly attempt: number;
+}): string {
+  const reasons = input.verification.reasons.map((reason) => `- ${reason}`).join('\n');
+  const changedPaths = (input.verification.changedPaths ?? []).length > 0
+    ? `\nWorkspace changes already present before this repair attempt:\n${
+        input.verification.changedPaths?.map((item) => `- ${item}`).join('\n') ?? ''
+      }`
+    : '';
+  return [
+    input.originalPrompt,
+    '',
+    '[Workflow verification repair]',
+    `Repair attempt ${input.attempt}/${DEFAULT_VERIFICATION_REPAIR_ATTEMPTS}.`,
+    'The previous attempt did not satisfy the workflow postconditions.',
+    'Do not stop at analysis, planning, or a promise to begin. Complete the required file writes in the real workspace now.',
+    'Use the available file editing tools when a file change is required, then report the exact files changed.',
+    '',
+    'Verification failures:',
+    reasons,
+    changedPaths,
+    '',
+    'Previous terminal response:',
+    input.previousFinalText.trim() || '(empty)',
+  ].join('\n');
+}
+
+async function waitForChildPromise(
+  promise: Promise<KodaXChildExecutionResult>,
   taskId: string,
-  opts: WorkflowWaitOptions | undefined,
+  timeoutMs: number | undefined,
   ctx: KodaXToolExecutionContext,
+  timeoutLabelMs: number | undefined = timeoutMs,
 ): Promise<KodaXChildExecutionResult> {
-  const timeoutMs = normalizeWaitTimeoutMs(opts);
-  if (timeoutMs === undefined) return entry.promise;
+  if (timeoutMs === undefined) return promise;
 
   let timer: ReturnType<typeof setTimeout> | undefined;
   try {
     return await Promise.race([
-      entry.promise,
+      promise,
       new Promise<KodaXChildExecutionResult>((_resolve, reject) => {
         timer = setTimeout(() => {
           ctx.childAbortControllers?.get(taskId)?.abort();
-          reject(new Error(`workflow task ${taskId} timed out after ${timeoutMs}ms`));
+          reject(new Error(`workflow task ${taskId} timed out after ${timeoutLabelMs ?? timeoutMs}ms`));
         }, timeoutMs);
       }),
     ]);
@@ -531,17 +579,18 @@ export function createCodingWorkflowBackend(deps: CodingWorkflowBackendDeps): Wo
     const changedPathBaseline = hasVerificationWork(verification)
       ? captureChangedPaths(ctx, listChangedFiles)
       : Promise.resolve({ paths: [] });
-    const abort = new AbortController();
-    ctx.childAbortControllers?.set(childId, abort);
     const snapshotMap = ctx.childProgressSnapshots;
+    const runBundle = async (runBundleInput: KodaXChildContextBundle): Promise<KodaXChildExecutionResult> => {
+      const abort = new AbortController();
+      ctx.childAbortControllers?.set(childId, abort);
     if (snapshotMap) {
       initChildSnapshot(snapshotMap, {
         childId,
         startedAt: now(),
         maxIterations: childOptions.maxIterationsPerChild,
         parentRole: childOptions.parentRole,
-        readOnly: bundle.readOnly,
-        specialistName: bundle.specialistName,
+        readOnly: runBundleInput.readOnly,
+        specialistName: runBundleInput.specialistName,
       });
     }
     const perChild: ChildExecutorOptions = {
@@ -589,11 +638,10 @@ export function createCodingWorkflowBackend(deps: CodingWorkflowBackendDeps): Wo
         : undefined,
     };
 
-    const promise = (async (): Promise<KodaXChildExecutionResult> => {
       let result: KodaXChildExecutionResult | undefined;
       try {
         await changedPathBaseline;
-        result = await runChild([bundle], ctx, perChild);
+        result = await runChild([runBundleInput], ctx, perChild);
         return result;
       } finally {
         ctx.childAbortControllers?.delete(childId);
@@ -608,15 +656,21 @@ export function createCodingWorkflowBackend(deps: CodingWorkflowBackendDeps): Wo
           });
         }
       }
-    })();
+    };
+
+    const promise = runBundle(bundle);
 
     tasks.set(childId, {
       name: input.name,
+      input,
+      bundle,
       promise,
+      runBundle,
       verification,
       changedPathBaseline,
       mutationRecorder,
       acceptToolMutationEvidence,
+      repairAttempts: 0,
     });
     registerChildTask(registry, childId, promise);
     return { taskId: childId, name: input.name };
@@ -628,7 +682,30 @@ export function createCodingWorkflowBackend(deps: CodingWorkflowBackendDeps): Wo
   ): Promise<WorkflowTaskResult> => {
     const entry = tasks.get(taskId);
     if (!entry) throw new Error(`unknown workflow task: ${taskId}`);
-    const result = await waitForChildResult(entry, taskId, opts, ctx);
+    const totalWaitTimeoutMs = normalizeWaitTimeoutMs(opts);
+    const waitStartedAt = Date.now();
+    const waitForAttempt = async (
+      promise: Promise<KodaXChildExecutionResult>,
+    ): Promise<KodaXChildExecutionResult> => {
+      if (totalWaitTimeoutMs === undefined) {
+        return waitForChildPromise(promise, taskId, undefined, ctx);
+      }
+      const elapsedMs = Date.now() - waitStartedAt;
+      const remainingMs = totalWaitTimeoutMs - elapsedMs;
+      if (remainingMs <= 0) {
+        ctx.childAbortControllers?.get(taskId)?.abort();
+        throw new Error(`workflow task ${taskId} timed out after ${totalWaitTimeoutMs}ms`);
+      }
+      return waitForChildPromise(
+        promise,
+        taskId,
+        Math.max(1, Math.floor(remainingMs)),
+        ctx,
+        totalWaitTimeoutMs,
+      );
+    };
+    let result = await waitForAttempt(entry.promise);
+    let totalTokensUsed = result.totalTokensUsed;
     let term = deriveTerminal(result, taskId);
     let verification = entry.verification
       ? evaluateVerification({
@@ -651,6 +728,45 @@ export function createCodingWorkflowBackend(deps: CodingWorkflowBackendDeps): Wo
         snapStatus: 'completed',
         finalText: appendVerificationFailure(term.finalText, verification),
       };
+    }
+    while (shouldRepairVerificationFailure({ entry, term, verification })) {
+      entry.repairAttempts += 1;
+      const repairBundle = buildBundle(taskId, {
+        ...entry.input,
+        prompt: buildVerificationRepairPrompt({
+          originalPrompt: entry.input.prompt,
+          previousFinalText: term.finalText,
+          verification: verification!,
+          attempt: entry.repairAttempts,
+        }),
+      });
+      entry.promise = entry.runBundle(repairBundle);
+      registerChildTask(registry, taskId, entry.promise);
+      result = await waitForAttempt(entry.promise);
+      totalTokensUsed += result.totalTokensUsed;
+      term = deriveTerminal(result, taskId);
+      verification = entry.verification
+        ? evaluateVerification({
+            verification: entry.verification,
+            term,
+            before: await entry.changedPathBaseline,
+            after: hasVerificationWork(entry.verification)
+              ? await captureChangedPaths(ctx, listChangedFiles)
+              : { paths: [] },
+            mutationRecorder: entry.mutationRecorder,
+            ctx,
+            acceptToolMutationEvidence: entry.acceptToolMutationEvidence,
+          })
+        : undefined;
+      if (term.limitReached === true && verification === undefined && term.status === 'completed') {
+        verification = limitReachedWarningVerification();
+        term = {
+          ...term,
+          status: 'completed_unverified',
+          snapStatus: 'completed',
+          finalText: appendVerificationFailure(term.finalText, verification),
+        };
+      }
     }
     if (verification !== undefined && !verification.ok && term.status === 'completed') {
       const warnOnly = verification.enforcement === 'warn';
@@ -678,7 +794,7 @@ export function createCodingWorkflowBackend(deps: CodingWorkflowBackendDeps): Wo
       ...(term.limitReached ? { limitReached: true } : {}),
       ...(term.provider ? { provider: term.provider } : {}),
       ...(term.model ? { model: term.model } : {}),
-      usage: { totalTokens: result.totalTokensUsed },
+      usage: { totalTokens: totalTokensUsed },
     };
   };
 

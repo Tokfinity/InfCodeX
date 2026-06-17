@@ -332,6 +332,39 @@ describe('WorkflowLifecycleController', () => {
     });
   });
 
+  it('deletes saved workflow capsules through the lifecycle controller', async () => {
+    const manager = createWorkflowRunManager();
+    const savedDir = join(dir, 'saved-delete');
+    const controller = createWorkflowLifecycleController({
+      runManager: manager,
+      runBaseDir: dir,
+      savedWorkflowDirs: { project: savedDir },
+    });
+    const saved = await saveGeneratedWorkflow({
+      dir: savedDir,
+      name: 'saved-audit',
+      manifest: {
+        name: 'saved-audit',
+        description: 'saved audit',
+        phases: ['scan'],
+        readOnly: true,
+        maxAgents: 1,
+        maxConcurrency: 1,
+        patterns: ['classify-and-act'],
+      },
+      source: 'async function run() { return "ok"; }',
+    });
+
+    await expect(controller.deleteSavedWorkflow('saved-audit')).resolves.toMatchObject({
+      name: 'saved-audit',
+      path: saved.path,
+    });
+    expect(existsSync(saved.path)).toBe(false);
+    await expect(controller.resolveWorkflowIdentity('saved-audit')).resolves.toMatchObject({
+      kind: 'missing',
+    });
+  });
+
   it('replaces saved workflow capsules through the lifecycle controller', async () => {
     const manager = createWorkflowRunManager();
     const savedDir = join(dir, 'saved-replace');

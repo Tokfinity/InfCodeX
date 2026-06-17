@@ -51,7 +51,7 @@ import os from 'os';
 // ---------------------------------------------------------------------------
 
 describe('FEATURE_104 aliases', () => {
-  it('exposes all 10 user-supplied aliases (8 coding-plan + 2 deepseek-official)', () => {
+  it('exposes all 11 user-supplied aliases (9 coding-plan + 2 deepseek-official)', () => {
     // 2026-05-21: ark/v4{flash,pro} added on coding-plan provider (ark-coding
     // gateway routes deepseek-v4-{flash,pro}); ds/v4* kept for legacy + cross-
     // panel comparison. See benchmark/EVAL_GUIDELINES.md §"Canonical alias panel".
@@ -68,6 +68,7 @@ describe('FEATURE_104 aliases', () => {
         'mmx/m27',
         'mmx/m3',
         'zhipu/glm51',
+        'zhipu/glm52',
       ].sort(),
     );
   });

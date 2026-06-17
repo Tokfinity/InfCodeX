@@ -106,7 +106,7 @@ export function decideWorkflowInvocation(
   }
 
   if (input.agentMode === 'ama') {
-    return decision('suggest', explicit ? 'explicit' : 'complexity', 'AMA asks before starting workflow');
+    return decision('none', explicit ? 'explicit' : 'complexity', 'AMA only starts workflows from explicit /workflow commands');
   }
 
   return decision('none', explicit ? 'explicit' : 'complexity', 'SA does not route natural-language prompts into workflow');

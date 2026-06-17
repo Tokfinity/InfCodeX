@@ -2,9 +2,15 @@
  * FEATURE_217 (v0.7.49) Phase G — generated workflow prompt + parser tests.
  */
 
+import { mkdtempSync, mkdirSync, rmSync, writeFileSync } from 'node:fs';
+import { join } from 'node:path';
+import { tmpdir } from 'node:os';
+
 import { describe, expect, it } from 'vitest';
+import { resetSkillRegistry } from '@kodax-ai/agent';
 
 import {
+  buildWorkflowGenerationSkillContext,
   buildWorkflowGenerationUserPrompt,
   DEFAULT_WORKFLOW_GENERATION_TIMEOUT_MS,
   generateWorkflow,
@@ -68,6 +74,86 @@ describe('buildWorkflowGenerationUserPrompt', () => {
     expect(prompt).not.toContain('[workflow handoff]');
     expect(prompt).not.toContain('[/workflow handoff]');
     expect(prompt).toContain('KodaX derives child-agent transcript digests after each child finishes');
+  });
+
+  it('includes expanded referenced skill instructions as authoritative workflow context', () => {
+    const prompt = buildWorkflowGenerationUserPrompt(
+      'Use /skill:feature-list-tracker to register the feature',
+      '<skill name="feature-list-tracker">\nCreate/update docs/features/v{VERSION}.md\n</skill>',
+    );
+    expect(prompt).toContain('Referenced skill instructions (authoritative)');
+    expect(prompt).toContain('Create/update docs/features/v{VERSION}.md');
+    expect(prompt).toContain('Preserve skill-specific file layout, naming, and process requirements');
+    expect(prompt).toContain('Do not replace concrete skill requirements with vague paths');
+  });
+});
+
+describe('buildWorkflowGenerationSkillContext', () => {
+  it('expands inline skill references from the workflow project root', async () => {
+    const tempDir = mkdtempSync(join(tmpdir(), 'kodax-workflow-skill-'));
+    try {
+      const skillDir = join(tempDir, '.kodax', 'skills', 'feature-list-tracker');
+      mkdirSync(skillDir, { recursive: true });
+      writeFileSync(
+        join(skillDir, 'SKILL.md'),
+        [
+          '---',
+          'name: feature-list-tracker',
+          'description: Track features with FEATURE_LIST.md.',
+          '---',
+          '',
+          '# Feature List Tracker',
+          '',
+          'Create/update design document at `docs/features/v{VERSION}.md`.',
+        ].join('\n'),
+        'utf8',
+      );
+
+      const skillContext = await buildWorkflowGenerationSkillContext(
+        'Create a workflow using /skill:feature-list-tracker',
+        { context: { gitRoot: tempDir, executionCwd: tempDir } },
+      );
+
+      expect(skillContext).toContain('<skill name="feature-list-tracker"');
+      expect(skillContext).toContain('Skill root:');
+      expect(skillContext).toContain('docs/features/v{VERSION}.md');
+    } finally {
+      resetSkillRegistry();
+      rmSync(tempDir, { recursive: true, force: true });
+    }
+  });
+
+  it('uses executionCwd as the project root fallback when gitRoot is null', async () => {
+    const tempDir = mkdtempSync(join(tmpdir(), 'kodax-workflow-skill-cwd-'));
+    try {
+      const skillDir = join(tempDir, '.kodax', 'skills', 'feature-list-tracker');
+      mkdirSync(skillDir, { recursive: true });
+      writeFileSync(
+        join(skillDir, 'SKILL.md'),
+        [
+          '---',
+          'name: feature-list-tracker',
+          'description: Track features with FEATURE_LIST.md.',
+          '---',
+          '',
+          '# Feature List Tracker',
+          '',
+          'Use `docs/FEATURE_LIST.md` as the authoritative feature ledger.',
+        ].join('\n'),
+        'utf8',
+      );
+
+      const skillContext = await buildWorkflowGenerationSkillContext(
+        'Create a workflow using /skill:feature-list-tracker',
+        { context: { gitRoot: null, executionCwd: tempDir } },
+      );
+
+      expect(skillContext).toContain('<skill name="feature-list-tracker"');
+      expect(skillContext).toContain('docs/FEATURE_LIST.md');
+    } finally {
+      resetSkillRegistry();
+      rmSync(tempDir, { recursive: true, force: true });
+    }
   });
 });
 

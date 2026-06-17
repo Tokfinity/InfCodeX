@@ -402,7 +402,7 @@ describe('executeChildAgents — workflow accounting and isolation cleanup', () 
       {
         action: 'remove',
         worktree_path: '/tmp/kodax-worktree-cb-worktree',
-        discard_changes: true,
+        discard_changes: false,
       },
       expect.objectContaining({ executionCwd: '/test/repo' }),
     );
@@ -527,6 +527,32 @@ describe('executeChildAgents', () => {
       name: 'huashu-design',
       path: 'C:/Users/iceto/.agents/skills/huashu-design/SKILL.md',
     });
+  });
+
+  it('tells child agents to invoke referenced inline skills before acting', async () => {
+    mockRunKodaX.mockResolvedValueOnce({
+      success: true,
+      lastText: 'registered feature correctly',
+      messages: [{ role: 'assistant', content: '' }],
+      sessionId: 's-inline-skill',
+    });
+
+    await executeChildAgents(
+      [
+        createBundle({
+          id: 'cb-inline-skill',
+          objective: 'Register the animation work according to /skill:feature-list-tracker.',
+        }),
+      ],
+      createCtx(),
+      createOptions(),
+    );
+
+    const prompt = mockRunKodaX.mock.calls[0]![1] as string;
+    expect(prompt).toContain('## Referenced Skills');
+    expect(prompt).toContain('/skill:feature-list-tracker');
+    expect(prompt).toContain('invoke the `skill` tool');
+    expect(prompt).toContain('Do not infer skill-specific rules from the slash token alone.');
   });
 
   it('executes read-only bundles in parallel', async () => {

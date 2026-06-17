@@ -19,6 +19,7 @@ import {
   normalizeHostMetadata,
 } from '@kodax-ai/agent';
 import type {
+  DeleteSavedWorkflowInput,
   SavedWorkflowDirs,
   SavedWorkflowRef,
   ReplaceSavedWorkflowInput,
@@ -27,6 +28,7 @@ import type {
   WorkflowCapsulePreflightResult,
 } from './discovery.js';
 import {
+  deleteSavedWorkflow as deleteSavedWorkflowCapsule,
   preflightWorkflowCapsule as runWorkflowCapsulePreflight,
   replaceSavedWorkflow as replaceSavedWorkflowCapsule,
   renameSavedWorkflow as renameSavedWorkflowCapsule,
@@ -78,6 +80,10 @@ export interface WorkflowLifecycleController {
   resumeWorkflow(runId: string): Promise<boolean>;
   renameWorkflowRun(runId: string, displayName: string): Promise<boolean>;
   renameSavedWorkflow(name: string, newName: string): Promise<SavedWorkflowRef | undefined>;
+  deleteSavedWorkflow(
+    name: string,
+    source?: DeleteSavedWorkflowInput['source'],
+  ): Promise<SavedWorkflowRef | undefined>;
   replaceSavedWorkflow(
     input: Omit<ReplaceSavedWorkflowInput, 'dirs'>,
   ): Promise<ReplaceSavedWorkflowResult | undefined>;
@@ -414,6 +420,15 @@ export function createWorkflowLifecycleController(
         dirs: options.savedWorkflowDirs,
         name,
         newName,
+      });
+    },
+
+    deleteSavedWorkflow: async (name, source) => {
+      if (!options.savedWorkflowDirs) return undefined;
+      return deleteSavedWorkflowCapsule({
+        dirs: options.savedWorkflowDirs,
+        name,
+        ...(source !== undefined ? { source } : {}),
       });
     },
 

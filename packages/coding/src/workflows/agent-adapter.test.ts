@@ -6,7 +6,7 @@
  * stop (abort), MessageQueue send routing, and synthesize.
  */
 
-import { describe, expect, it } from 'vitest';
+import { describe, expect, it, vi } from 'vitest';
 
 import type { MessageQueue, WorkflowTaskSummaryEventUpdate } from '@kodax-ai/agent';
 
@@ -342,6 +342,128 @@ describe('createCodingWorkflowBackend — spawn + wait', () => {
     expect(result.verification?.ok).toBe(false);
     expect(result.verification?.enforcement).toBe('hard');
     expect(result.verification?.reasons.join('\n')).toContain('expected file mutations');
+  });
+
+  it('repairs a hard write verification failure before returning failed', async () => {
+    let attempts = 0;
+    const objectives: string[] = [];
+    const backend = createCodingWorkflowBackend({
+      ctx: fakeCtx(),
+      childOptions,
+      listChangedFiles: async () => [],
+      runChild: async (bundles, _ctx, opts) => {
+        attempts += 1;
+        objectives.push(bundles[0]?.objective ?? '');
+        if (attempts === 2) {
+          opts.parentOptions.events?.onToolUseStart?.({
+            id: 'tool-1',
+            name: 'write',
+            input: { path: 'docs/FEATURE_LIST.md' },
+          });
+          opts.parentOptions.events?.onToolResult?.({
+            id: 'tool-1',
+            name: 'write',
+            content: 'ok',
+          });
+          return execResult({
+            status: 'completed',
+            summary: 'Updated docs/FEATURE_LIST.md with the requested feature entry.',
+          });
+        }
+        return execResult({
+          status: 'completed',
+          summary: 'I now understand the docs. Let me set up a plan and execute.',
+        });
+      },
+    });
+
+    const handle = await backend.spawn({
+      name: 'feature-tracker-writer',
+      prompt: 'Add the feature to docs/FEATURE_LIST.md.',
+      readOnly: false,
+      verification: { requiresMutation: true },
+    });
+    const result = await backend.wait(handle.taskId);
+
+    expect(result.status).toBe('completed');
+    expect(result.verification?.ok).toBe(true);
+    expect(result.verification?.mutationToolCalls).toEqual(['write']);
+    expect(attempts).toBe(2);
+    expect(objectives[1]).toContain('[Workflow verification repair]');
+    expect(objectives[1]).toContain('expected file mutations');
+  });
+
+  it('stops repairing after two hard verification repair attempts', async () => {
+    let attempts = 0;
+    const backend = createCodingWorkflowBackend({
+      ctx: fakeCtx(),
+      childOptions,
+      listChangedFiles: async () => [],
+      runChild: async () => {
+        attempts += 1;
+        return execResult({
+          status: 'completed',
+          summary: `Attempt ${attempts}: I will start writing the files now.`,
+        });
+      },
+    });
+
+    const handle = await backend.spawn({
+      name: 'feature-tracker-writer',
+      prompt: 'Add the feature to docs/FEATURE_LIST.md.',
+      readOnly: false,
+      verification: { requiresMutation: true },
+    });
+    const result = await backend.wait(handle.taskId);
+
+    expect(result.status).toBe('failed');
+    expect(result.verification?.ok).toBe(false);
+    expect(attempts).toBe(3);
+    expect(result.finalText).toContain('[Workflow task verification failed]');
+  });
+
+  it('uses one wait timeout budget across verification repair attempts', async () => {
+    vi.useFakeTimers();
+    try {
+      let attempts = 0;
+      const ctx = fakeCtx();
+      const backend = createCodingWorkflowBackend({
+        ctx,
+        childOptions,
+        generateId: () => 'task-repair-timeout',
+        listChangedFiles: async () => [],
+        runChild: () => {
+          attempts += 1;
+          return new Promise<KodaXChildExecutionResult>((resolve) => {
+            setTimeout(() => {
+              resolve(execResult({
+                status: 'completed',
+                summary: `Attempt ${attempts}: I will start writing the files now.`,
+              }));
+            }, 10);
+          });
+        },
+      });
+
+      const handle = await backend.spawn({
+        name: 'feature-tracker-writer',
+        prompt: 'Add the feature to docs/FEATURE_LIST.md.',
+        readOnly: false,
+        verification: { requiresMutation: true },
+      });
+      const waitPromise = backend.wait(handle.taskId, { timeoutMs: 15 });
+      const waitRejection = expect(waitPromise).rejects.toThrow(/timed out after 15ms/);
+
+      await vi.advanceTimersByTimeAsync(10);
+      await vi.advanceTimersByTimeAsync(5);
+
+      await waitRejection;
+      expect(attempts).toBe(2);
+      expect(ctx.childAbortControllers?.get(handle.taskId)?.signal.aborted).toBe(true);
+      await vi.advanceTimersByTimeAsync(10);
+    } finally {
+      vi.useRealTimers();
+    }
   });
 
   it('passes a write-capable child when required changed paths appear', async () => {

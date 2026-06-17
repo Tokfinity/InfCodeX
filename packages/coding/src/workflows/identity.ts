@@ -25,6 +25,8 @@ export type WorkflowIdentityResolution =
       readonly kind: 'ambiguous';
       readonly target: string;
       readonly matches: readonly ('run' | 'saved')[];
+      readonly run?: Extract<WorkflowIdentityResolution, { readonly kind: 'run' }>;
+      readonly savedWorkflow?: SavedWorkflowRef;
     }
   | {
       readonly kind: 'missing';
@@ -141,9 +143,22 @@ export async function resolveWorkflowIdentity(
   const saved = await resolveSaved(target, input.savedWorkflowDirs);
   const runMatches = run ? [run] : displayNameRuns;
   if (runMatches.length > 1) {
-    return { kind: 'ambiguous', target, matches: saved ? ['run', 'saved'] : ['run'] };
+    return {
+      kind: 'ambiguous',
+      target,
+      matches: saved ? ['run', 'saved'] : ['run'],
+      ...(saved ? { savedWorkflow: saved } : {}),
+    };
   }
-  if (runMatches.length === 1 && saved) return { kind: 'ambiguous', target, matches: ['run', 'saved'] };
+  if (runMatches.length === 1 && saved) {
+    return {
+      kind: 'ambiguous',
+      target,
+      matches: ['run', 'saved'],
+      run: runMatches[0]!,
+      savedWorkflow: saved,
+    };
+  }
   if (run) return run;
   if (displayNameRuns.length === 1) return displayNameRuns[0]!;
   if (saved) return { kind: 'saved', target, savedWorkflow: saved };

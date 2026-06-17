@@ -22,14 +22,14 @@ describe('decideWorkflowInvocation', () => {
     ).toMatchObject({ action: 'none' });
   });
 
-  it('suggests workflow for explicit natural-language requests in AMA mode', () => {
+  it('does not route natural-language workflow requests in AMA mode', () => {
     expect(
       decideWorkflowInvocation({
         agentMode: 'ama',
         source: 'natural-language',
         input: 'please create a workflow to analyze this flaky test',
       }),
-    ).toMatchObject({ action: 'suggest', trigger: 'explicit' });
+    ).toMatchObject({ action: 'none', trigger: 'explicit' });
   });
 
   it('auto-starts restricted workflow candidates in AMAW mode', () => {
@@ -81,7 +81,7 @@ describe('decideWorkflowInvocation', () => {
         source: 'natural-language',
         input: 'please create a workflow for this UI regression audit',
       }),
-    ).toMatchObject({ action: 'suggest', trigger: 'explicit' });
+    ).toMatchObject({ action: 'none', trigger: 'explicit' });
   });
 
   it('lets explicit negation override workflow triggers', () => {
@@ -106,6 +106,13 @@ describe('decideWorkflowInvocation', () => {
         agentMode: 'sa',
         source: 'command',
         input: '/review --workflow',
+      }),
+    ).toMatchObject({ action: 'suggest', trigger: 'explicit' });
+    expect(
+      decideWorkflowInvocation({
+        agentMode: 'ama',
+        source: 'command',
+        input: '/workflow create audit this feature',
       }),
     ).toMatchObject({ action: 'suggest', trigger: 'explicit' });
   });
