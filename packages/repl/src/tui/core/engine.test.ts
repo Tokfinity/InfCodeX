@@ -3,6 +3,7 @@ import { beforeEach, describe, expect, it, vi } from "vitest";
 const mocks = vi.hoisted(() => {
   const renderTree = vi.fn();
   const stdoutWrite = vi.fn();
+  const stderrWrite = vi.fn();
   const stdoutOn = vi.fn();
   const stdoutOff = vi.fn();
   const stdout = {
@@ -23,7 +24,7 @@ const mocks = vi.hoisted(() => {
     resume: vi.fn(),
   } as unknown as NodeJS.ReadStream;
   const stderr = {
-    write: vi.fn(),
+    write: stderrWrite,
     on: vi.fn(),
     off: vi.fn(),
   } as unknown as NodeJS.WriteStream;
@@ -34,6 +35,7 @@ const mocks = vi.hoisted(() => {
     stdin,
     stderr,
     stdoutWrite,
+    stderrWrite,
     stdoutOn,
     stdoutOff,
   };
@@ -136,9 +138,39 @@ function fakeRenderResult(width: number, height: number, output: string) {
 }
 
 describe("tui engine (Phase 6: cell renderer is sole render path)", () => {
+  type ManagedExternalWriteEngine = {
+    onRender: () => void;
+    setAltScreenActive: (active: boolean) => void;
+    writeToStdout: (data: string) => void;
+    writeToStderr: (data: string) => void;
+    prevFrame: { screen: { height: number } };
+  };
+
+  const makeManagedExternalWriteEngine = (): ManagedExternalWriteEngine =>
+    new Engine({
+      stdout: mocks.stdout,
+      stdin: mocks.stdin,
+      stderr: mocks.stderr,
+      shellMode: "virtual",
+      exitOnCtrlC: false,
+      patchConsole: false,
+      kittyKeyboard: { mode: "disabled" },
+    } as ConstructorParameters<typeof Engine>[0]) as unknown as ManagedExternalWriteEngine;
+
+  const seedManagedExternalFrame = (engine: ManagedExternalWriteEngine) => {
+    mocks.renderTree.mockReturnValue(fakeRenderResult(80, 2, "status\ninput"));
+    engine.setAltScreenActive(true);
+    engine.onRender();
+    expect(engine.prevFrame.screen.height).toBe(2);
+    mocks.stdoutWrite.mockClear();
+  };
+
   beforeEach(() => {
+    (mocks.stdout as unknown as { write: typeof mocks.stdoutWrite }).write = mocks.stdoutWrite;
+    (mocks.stderr as unknown as { write: typeof mocks.stderrWrite }).write = mocks.stderrWrite;
     mocks.renderTree.mockReset();
     mocks.stdoutWrite.mockClear();
+    mocks.stderrWrite.mockClear();
     mocks.stdoutOn.mockClear();
     mocks.stdoutOff.mockClear();
   });
@@ -273,6 +305,44 @@ describe("tui engine (Phase 6: cell renderer is sole render path)", () => {
     engine.onRender();
 
     expect(mocks.stdoutWrite).toHaveBeenCalled();
+  });
+
+  it("managed stdout writes invalidate the replayed frame before the next render", () => {
+    const engine = makeManagedExternalWriteEngine();
+    seedManagedExternalFrame(engine);
+
+    engine.writeToStdout("external log line\n");
+
+    expect(engine.prevFrame.screen.height).toBe(0);
+  });
+
+  it("managed stderr writes invalidate the replayed frame before the next render", () => {
+    const engine = makeManagedExternalWriteEngine();
+    seedManagedExternalFrame(engine);
+
+    engine.writeToStderr("external warning line\n");
+
+    expect(engine.prevFrame.screen.height).toBe(0);
+  });
+
+  it("direct stdout writes through the guarded stream invalidate the next frame", () => {
+    const engine = makeManagedExternalWriteEngine();
+    seedManagedExternalFrame(engine);
+
+    mocks.stdout.write("sdk stdout line\n");
+
+    expect(mocks.stdoutWrite).toHaveBeenCalledWith("sdk stdout line\n");
+    expect(engine.prevFrame.screen.height).toBe(0);
+  });
+
+  it("direct stderr writes through the guarded stream invalidate the next frame", () => {
+    const engine = makeManagedExternalWriteEngine();
+    seedManagedExternalFrame(engine);
+
+    mocks.stderr.write("sdk stderr line\n");
+
+    expect(mocks.stderrWrite).toHaveBeenCalledWith("sdk stderr line\n");
+    expect(engine.prevFrame.screen.height).toBe(0);
   });
 
   it("hides the OS cursor (DECTCEM ?25l) once when no input cursor anchor (frame.cursor.visible false)", () => {

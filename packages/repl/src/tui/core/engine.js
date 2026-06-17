@@ -155,6 +155,10 @@ const Ink = class Ink {
     exitResult;
     beforeExitHandler;
     restoreConsole;
+    restoreStreamWriteGuard;
+    rawStdoutWrite;
+    rawStderrWrite;
+    internalStreamWriteDepth = 0;
     unsubscribeResize;
     throttledOnRender;
     hasPendingThrottledRender = false;
@@ -168,6 +172,8 @@ const Ink = class Ink {
     constructor(options) {
         autoBind(this);
         this.options = options;
+        this.rawStdoutWrite = options.stdout.write.bind(options.stdout);
+        this.rawStderrWrite = options.stderr.write.bind(options.stderr);
         this.rootNode = dom.createNode('ink-root');
         this.rootNode.onComputeLayout = this.calculateLayout;
         this.isScreenReaderEnabled =
@@ -207,6 +213,7 @@ const Ink = class Ink {
         this.cursorPosition = undefined;
         this.isUnmounted = false;
         this.isUnmounting = false;
+        this.installExternalStreamWriteGuard();
         this.isConcurrent = options.concurrent ?? false;
         this.lastOutput = '';
         this.lastOutputToRender = '';
@@ -256,7 +263,7 @@ const Ink = class Ink {
                 ? (this.lastOutputHeight > 0 ? ansiEscapes.eraseLines(this.lastOutputHeight) : '')
                 : this.eraseInlineLiveBlock();
             if (eraseSeq.length > 0) {
-                this.options.stdout.write(eraseSeq);
+                this.writeStdout(eraseSeq);
             }
             this.lastOutput = '';
             this.lastOutputToRender = '';
@@ -365,6 +372,60 @@ const Ink = class Ink {
     }
     clearTextSelection() {
     }
+    installExternalStreamWriteGuard() {
+        if (this.options.debug || isInCi) {
+            return;
+        }
+        const stdout = this.options.stdout;
+        const stderr = this.options.stderr;
+        const originalStdoutWrite = stdout.write;
+        const originalStderrWrite = stderr.write;
+        const guardedStdoutWrite = (...args) => {
+            const result = this.rawStdoutWrite(...args);
+            if (this.internalStreamWriteDepth === 0) {
+                this.handleExternalStreamWrite();
+            }
+            return result;
+        };
+        const guardedStderrWrite = (...args) => {
+            const result = this.rawStderrWrite(...args);
+            if (this.internalStreamWriteDepth === 0) {
+                this.handleExternalStreamWrite();
+            }
+            return result;
+        };
+        stdout.write = guardedStdoutWrite;
+        stderr.write = guardedStderrWrite;
+        this.restoreStreamWriteGuard = () => {
+            if (stdout.write === guardedStdoutWrite) {
+                stdout.write = originalStdoutWrite;
+            }
+            if (stderr.write === guardedStderrWrite) {
+                stderr.write = originalStderrWrite;
+            }
+        };
+    }
+    handleExternalStreamWrite() {
+        if (this.isUnmounted) {
+            return;
+        }
+        this.invalidateCellFrame();
+    }
+    withInternalStreamWrite(write) {
+        this.internalStreamWriteDepth += 1;
+        try {
+            return write();
+        }
+        finally {
+            this.internalStreamWriteDepth -= 1;
+        }
+    }
+    writeStdout(data, ...args) {
+        return this.withInternalStreamWrite(() => this.rawStdoutWrite(data, ...args));
+    }
+    writeStderr(data, ...args) {
+        return this.withInternalStreamWrite(() => this.rawStderrWrite(data, ...args));
+    }
     restoreLastOutput = () => {
         // Phase 6: replay the last cell-level frame at the current cursor
         // position. Used after `writeToStdout` / `writeToStderr` injects
@@ -379,7 +440,7 @@ const Ink = class Ink {
             this.getTerminalWidth(),
         );
         const diff = this.cellLogUpdate.render(empty, this.prevFrame);
-        applyDiff(this.options.stdout, diff);
+        this.withInternalStreamWrite(() => applyDiff(this.options.stdout, diff));
     };
     shouldRestoreManagedShellAfterExternalWrite = () => this.altScreenActive;
     calculateLayout = () => {
@@ -409,7 +470,7 @@ const Ink = class Ink {
         // anchor travels via `frame.inputCursor`, NOT `frame.cursor.visible` (always
         // false now), so there is no per-render show/hide toggling.
         if (!isInCi && !this.options.debug && !this.isScreenReaderEnabled && !this.cursorHidden) {
-            this.options.stdout.write(ansiEscapes.cursorHide);
+            this.writeStdout(ansiEscapes.cursorHide);
             this.cursorHidden = true;
         }
         const hasStaticOutput = staticOutput && staticOutput !== '\n';
@@ -417,12 +478,12 @@ const Ink = class Ink {
             if (hasStaticOutput) {
                 this.fullStaticOutput += staticOutput;
             }
-            this.options.stdout.write(this.fullStaticOutput + output);
+            this.writeStdout(this.fullStaticOutput + output);
             return;
         }
         if (isInCi) {
             if (hasStaticOutput) {
-                this.options.stdout.write(staticOutput);
+                this.writeStdout(staticOutput);
             }
             this.lastOutput = output;
             this.lastOutputToRender = output + '\n';
@@ -432,18 +493,18 @@ const Ink = class Ink {
         if (this.isScreenReaderEnabled) {
             const sync = shouldSynchronize(this.options.stdout);
             if (sync) {
-                this.options.stdout.write(bsu);
+                this.writeStdout(bsu);
             }
             if (hasStaticOutput) {
                 const erase = this.lastOutputHeight > 0
                     ? ansiEscapes.eraseLines(this.lastOutputHeight)
                     : '';
-                this.options.stdout.write(erase + staticOutput);
+                this.writeStdout(erase + staticOutput);
                 this.lastOutputHeight = 0;
             }
             if (output === this.lastOutput && !hasStaticOutput) {
                 if (sync) {
-                    this.options.stdout.write(esu);
+                    this.writeStdout(esu);
                 }
                 return;
             }
@@ -453,20 +514,20 @@ const Ink = class Ink {
                 hard: true,
             });
             if (hasStaticOutput) {
-                this.options.stdout.write(wrappedOutput);
+                this.writeStdout(wrappedOutput);
             }
             else {
                 const erase = this.lastOutputHeight > 0
                     ? ansiEscapes.eraseLines(this.lastOutputHeight)
                     : '';
-                this.options.stdout.write(erase + wrappedOutput);
+                this.writeStdout(erase + wrappedOutput);
             }
             this.lastOutput = output;
             this.lastOutputToRender = wrappedOutput;
             this.lastOutputHeight =
                 wrappedOutput === '' ? 0 : wrappedOutput.split('\n').length;
             if (sync) {
-                this.options.stdout.write(esu);
+                this.writeStdout(esu);
             }
             return;
         }
@@ -488,7 +549,7 @@ const Ink = class Ink {
         const emit = (seq) => {
             if (!seq) return;
             if (txn) txn.push(seq);
-            else this.options.stdout.write(seq);
+            else this.writeStdout(seq);
         };
         const sink = txn ? { write: emit } : null;
         // PREFIX: every render path past this point (eraseLines, cell growth, cell
@@ -528,11 +589,11 @@ const Ink = class Ink {
                 && this.fullStaticOutput === '') {
                 const cellSync = shouldSynchronize(this.options.stdout);
                 if (cellSync) {
-                    this.options.stdout.write(bsu);
+                    this.writeStdout(bsu);
                 }
                 this.applyCellFrame(frame);
                 if (cellSync) {
-                    this.options.stdout.write(esu);
+                    this.writeStdout(esu);
                 }
                 this.lastOutput = output;
                 this.lastOutputToRender = outputToRender;
@@ -550,7 +611,7 @@ const Ink = class Ink {
             // Win10 OpenSSH/ConPTY where two-write erase+paint flickers).
             const sync = shouldSynchronize(this.options.stdout);
             if (sync) {
-                this.options.stdout.write(bsu);
+                this.writeStdout(bsu);
             }
             const fullFrameOutput = this.fullStaticOutput + outputToRender;
             if (this.altScreenActive) {
@@ -559,10 +620,10 @@ const Ink = class Ink {
                 const eraseSeq = this.lastOutputHeight > 0
                     ? ansiEscapes.eraseLines(this.lastOutputHeight)
                     : '';
-                this.options.stdout.write(eraseSeq + fullFrameOutput);
+                this.writeStdout(eraseSeq + fullFrameOutput);
             }
             else {
-                this.options.stdout.write(ansiEscapes.clearTerminal + this.fullStaticOutput + output);
+                this.writeStdout(ansiEscapes.clearTerminal + this.fullStaticOutput + output);
             }
             this.lastOutput = output;
             this.lastOutputToRender = this.altScreenActive
@@ -574,7 +635,7 @@ const Ink = class Ink {
             // content to stdout outside the cell-renderer pipeline.
             this.invalidateCellFrame();
             if (sync) {
-                this.options.stdout.write(esu);
+                this.writeStdout(esu);
             }
             return;
         }
@@ -711,7 +772,7 @@ const Ink = class Ink {
             // the alt-screen (fullscreen) path, which owns the whole viewport.
             inlineBottomAnchored: !this.altScreenActive,
         };
-        const applied = applyCellFrameHelper(state, frame, opts);
+        const applied = this.withInternalStreamWrite(() => applyCellFrameHelper(state, frame, opts));
         this.prevFrame = state.prevFrame;
         return applied;
     };
@@ -854,7 +915,7 @@ const Ink = class Ink {
             return;
         }
         const sync = shouldSynchronize(this.options.stdout);
-        this.options.stdout.write(sync ? bsu + out + esu : out);
+        this.writeStdout(sync ? bsu + out + esu : out);
     }
     render(node) {
         const tree = (React.createElement(AccessibilityContext.Provider, { value: { isScreenReaderEnabled: this.isScreenReaderEnabled } },
@@ -896,18 +957,18 @@ const Ink = class Ink {
         // Non-transaction callers (writeToStdout / writeToStderr / resize) write the
         // prefix directly; onRender's inline path uses computeReturnToRestSeq + the txn.
         const seq = this.computeReturnToRestSeq();
-        if (seq) this.options.stdout.write(seq);
+        if (seq) this.writeStdout(seq);
     }
     writeToStdout(data) {
         if (this.isUnmounted) {
             return;
         }
         if (this.options.debug) {
-            this.options.stdout.write(data + this.fullStaticOutput + this.lastOutput);
+            this.writeStdout(data + this.fullStaticOutput + this.lastOutput);
             return;
         }
         if (isInCi) {
-            this.options.stdout.write(data);
+            this.writeStdout(data);
             return;
         }
         if (!this.shouldRestoreManagedShellAfterExternalWrite()) {
@@ -916,7 +977,7 @@ const Ink = class Ink {
             // lands at content-bottom, not the input bar, and the next render is not
             // computed from a stale parked position. No-op when displayCursor is null.
             this.returnCursorToRest();
-            this.options.stdout.write(data);
+            this.writeStdout(data);
             // Raw stdout write bypasses the cell-renderer pipeline; the
             // next applyCellFrame must repaint from a clean slate.
             this.invalidateCellFrame();
@@ -924,23 +985,24 @@ const Ink = class Ink {
         }
         const sync = shouldSynchronize(this.options.stdout);
         if (sync) {
-            this.options.stdout.write(bsu);
+            this.writeStdout(bsu);
         }
         // Phase 6: erase the rendered UI area, write the external `data`
         // (which lands above the UI in scrollback / scroll history), then
         // replay the last cell frame at the new cursor position via
-        // `restoreLastOutput`. After the replay the cell renderer's
-        // prevFrame is in sync with the screen — no invalidation needed.
+        // `restoreLastOutput`. The raw external write bypasses the cell
+        // renderer, so make the next render repaint from a clean slate.
         // FEATURE_214: return the cursor from the input anchor to content-bottom
         // before the erase, which erases upward assuming that resting position.
         this.returnCursorToRest();
         const eraseSeq = this.lastOutputHeight > 0
             ? ansiEscapes.eraseLines(this.lastOutputHeight)
             : '';
-        this.options.stdout.write(eraseSeq + data);
+        this.writeStdout(eraseSeq + data);
         this.restoreLastOutput();
+        this.invalidateCellFrame();
         if (sync) {
-            this.options.stdout.write(esu);
+            this.writeStdout(esu);
         }
     }
     writeToStderr(data) {
@@ -948,32 +1010,32 @@ const Ink = class Ink {
             return;
         }
         if (this.options.debug) {
-            this.options.stderr.write(data);
-            this.options.stdout.write(this.fullStaticOutput + this.lastOutput);
+            this.writeStderr(data);
+            this.writeStdout(this.fullStaticOutput + this.lastOutput);
             return;
         }
         if (isInCi) {
-            this.options.stderr.write(data);
+            this.writeStderr(data);
             return;
         }
         if (!this.shouldRestoreManagedShellAfterExternalWrite()) {
             // FEATURE_214: return the cursor from the input anchor to the resting row
             // before injecting external data (see writeToStdout). No-op when unparked.
             this.returnCursorToRest();
-            this.options.stderr.write(data);
+            this.writeStderr(data);
             // Raw stderr write bypasses the cell-renderer pipeline.
             this.invalidateCellFrame();
             return;
         }
         const sync = shouldSynchronize(this.options.stdout);
         if (sync) {
-            this.options.stdout.write(bsu);
+            this.writeStdout(bsu);
         }
         // Phase 6: erase rendered UI on stdout, write `data` to stderr,
         // replay last cell frame on stdout. The erase + write needs two
         // separate streams (stdout for erase, stderr for data), so it's
-        // inherently a two-write sequence — cell-renderer atomicity does
-        // not apply across stream boundaries.
+        // inherently a two-write sequence. The stderr write still bypasses
+        // the cell renderer, so make the next render repaint from scratch.
         // FEATURE_214: return the cursor from the input anchor to content-bottom
         // before the erase, which erases upward assuming that resting position.
         this.returnCursorToRest();
@@ -981,12 +1043,13 @@ const Ink = class Ink {
             ? ansiEscapes.eraseLines(this.lastOutputHeight)
             : '';
         if (eraseSeq.length > 0) {
-            this.options.stdout.write(eraseSeq);
+            this.writeStdout(eraseSeq);
         }
-        this.options.stderr.write(data);
+        this.writeStderr(data);
         this.restoreLastOutput();
+        this.invalidateCellFrame();
         if (sync) {
-            this.options.stdout.write(esu);
+            this.writeStdout(esu);
         }
     }
     unmount(error) {
@@ -1025,6 +1088,10 @@ const Ink = class Ink {
         if (typeof this.restoreConsole === 'function') {
             this.restoreConsole();
         }
+        if (typeof this.restoreStreamWriteGuard === 'function') {
+            this.restoreStreamWriteGuard();
+            this.restoreStreamWriteGuard = undefined;
+        }
         if (typeof this.unsubscribeResize === 'function') {
             this.unsubscribeResize();
         }
@@ -1034,13 +1101,13 @@ const Ink = class Ink {
         if (canWriteToStdout) {
             if (this.kittyProtocolEnabled) {
                 try {
-                    this.options.stdout.write('\u001B[<u');
+                    this.writeStdout('\u001B[<u');
                 }
                 catch {
                 }
             }
             if (isInCi) {
-                this.options.stdout.write(this.lastOutput + '\n');
+                this.writeStdout(this.lastOutput + '\n');
             }
             // Phase 6: no `this.log.done()` cleanup needed — cell renderer
             // is stateless at the stream level. The cursor visibility
@@ -1074,7 +1141,7 @@ const Ink = class Ink {
             resolveOrReject();
         }
         else if (canWriteToStdout && hasWritableState) {
-            this.options.stdout.write('', resolveOrReject);
+            this.writeStdout('', resolveOrReject);
         }
         else {
             setImmediate(resolveOrReject);
@@ -1106,7 +1173,7 @@ const Ink = class Ink {
                 ? (this.lastOutputHeight > 0 ? ansiEscapes.eraseLines(this.lastOutputHeight) : '')
                 : this.eraseInlineLiveBlock();
             if (eraseSeq.length > 0) {
-                this.options.stdout.write(eraseSeq);
+                this.writeStdout(eraseSeq);
             }
             this.lastOutput = '';
             this.lastOutputToRender = '';
@@ -1157,7 +1224,7 @@ const Ink = class Ink {
         }
     }
     confirmKittySupport(flags) {
-        const { stdin, stdout } = this.options;
+        const { stdin } = this.options;
         let responseBuffer = [];
         const cleanup = () => {
             this.cancelKittyDetection = undefined;
@@ -1184,10 +1251,10 @@ const Ink = class Ink {
         stdin.on('data', onData);
         const timer = setTimeout(cleanup, 200);
         this.cancelKittyDetection = cleanup;
-        stdout.write('\u001B[?u');
+        this.writeStdout('\u001B[?u');
     }
     enableKittyProtocol(flags) {
-        this.options.stdout.write(`\u001B[>${resolveFlags(flags)}u`);
+        this.writeStdout(`\u001B[>${resolveFlags(flags)}u`);
         this.kittyProtocolEnabled = true;
     }
 };
