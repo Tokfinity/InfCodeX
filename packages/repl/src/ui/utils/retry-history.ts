@@ -1,5 +1,7 @@
 import type { ProviderRecoveryEvent } from "@kodax-ai/coding";
-import type { CreatableHistoryItem } from "../types.js";
+import type { CreatableHistoryItem, HistoryItemInfo } from "../types.js";
+
+type CreatableInfoHistoryItem = Omit<HistoryItemInfo, "id" | "timestamp">;
 
 /**
  * Build the retry info history item shown during automatic provider retries.
@@ -10,7 +12,7 @@ export function createRetryHistoryItem(
   reason: string,
   attempt: number,
   maxAttempts: number,
-): CreatableHistoryItem {
+): CreatableInfoHistoryItem {
   const trimmed = reason.trim();
   const text = /\bretry\s+\d+\/\d+\b/i.test(trimmed) || /\b\d+\/\d+\b/.test(trimmed)
     ? trimmed
@@ -37,7 +39,7 @@ export function emitRetryHistoryItem(
  */
 export function createRecoveryHistoryItem(
   event: ProviderRecoveryEvent,
-): CreatableHistoryItem {
+): CreatableInfoHistoryItem {
   const { recoveryAction, attempt, maxAttempts, delayMs, stage, fallbackUsed } = event;
   const delaySec = Math.round(delayMs / 1000);
 

@@ -270,8 +270,18 @@ export interface KodaXEvents {
    * prompt contents in queue order. Empty arrays are not surfaced.
    */
   onMidTurnUserMessages?: (contents: readonly string[]) => void;
-  onRetry?: (reason: string, attempt: number, maxAttempts: number) => void;
-  onProviderRateLimit?: (attempt: number, maxRetries: number, delayMs: number) => void;
+  onRetry?: (
+    reason: string,
+    attempt: number,
+    maxAttempts: number,
+    meta?: KodaXActivityEventMeta,
+  ) => void;
+  onProviderRateLimit?: (
+    attempt: number,
+    maxRetries: number,
+    delayMs: number,
+    meta?: KodaXActivityEventMeta,
+  ) => void;
   /**
    * FEATURE_130 (v0.7.36) — structured retry-after notification.
    *
@@ -289,18 +299,21 @@ export interface KodaXEvents {
    * surface concurrent waits — the UI deduplicates by provider, not
    * by call site.
    */
-  onRetryAfter?: (payload: {
-    provider: string;
-    waitMs: number;
-    reason: 'rate-limit' | 'overloaded';
-    source:
-      | 'retry-after-seconds'
-      | 'retry-after-date'
-      | 'retry-after-ms'
-      | 'exponential-backoff';
-    attempt: number;
-    maxAttempts: number;
-  }) => void;
+  onRetryAfter?: (
+    payload: {
+      provider: string;
+      waitMs: number;
+      reason: 'rate-limit' | 'overloaded';
+      source:
+        | 'retry-after-seconds'
+        | 'retry-after-date'
+        | 'retry-after-ms'
+        | 'exponential-backoff';
+      attempt: number;
+      maxAttempts: number;
+    },
+    meta?: KodaXActivityEventMeta,
+  ) => void;
   onRepoIntelligenceTrace?: (event: KodaXRepoIntelligenceTraceEvent) => void;
   /**
    * FEATURE_097 (v0.7.34): emitted whenever the Scout-seeded todo list
@@ -313,7 +326,10 @@ export interface KodaXEvents {
    */
   onTodoUpdate?: (items: TodoList) => void;
   /** Structured provider recovery event (Feature 045) */
-  onProviderRecovery?: (event: ProviderRecoveryEvent) => void;
+  onProviderRecovery?: (
+    event: ProviderRecoveryEvent,
+    meta?: KodaXActivityEventMeta,
+  ) => void;
   onComplete?: () => void;
   onError?: (error: Error) => void;
   onManagedTaskStatus?: (status: KodaXManagedTaskStatusEvent) => void;

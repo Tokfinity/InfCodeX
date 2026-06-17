@@ -73,6 +73,18 @@ export function shouldRouteToChildActivity(
   return Boolean(meta?.workflowCorrelation || meta?.childAgentId);
 }
 
+export function shouldRouteWorkflowLiveOnlyNotice(
+  meta: KodaXActivityEventMeta | undefined,
+  workflowRunId: string | undefined,
+): meta is KodaXActivityEventMeta {
+  return Boolean(
+    meta?.liveOnly === true
+    && meta.workflowCorrelation?.workflowRunId
+    && workflowRunId
+    && meta.workflowCorrelation.workflowRunId === workflowRunId,
+  );
+}
+
 export function childActivityId(meta: KodaXActivityEventMeta): string {
   const childId = meta.childAgentId ?? meta.workflowCorrelation?.childAgentId ?? "child";
   const runId = meta.workflowCorrelation?.workflowRunId;

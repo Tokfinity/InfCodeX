@@ -1358,11 +1358,33 @@ export function buildChildEvents(
     onStreamEnd: (meta) => {
       parentEvents?.onStreamEnd?.(activityEventMeta(meta, { liveOnly: true }));
     },
-    onProviderRateLimit: (attempt, maxRetries, delayMs) => {
-      parentEvents?.onProviderRateLimit?.(attempt, maxRetries, delayMs);
+    onProviderRateLimit: (attempt, maxRetries, delayMs, meta) => {
+      parentEvents?.onProviderRateLimit?.(
+        attempt,
+        maxRetries,
+        delayMs,
+        activityEventMeta(meta, { liveOnly: true }),
+      );
     },
-    onRetryAfter: (payload) => {
-      parentEvents?.onRetryAfter?.(payload);
+    onRetryAfter: (payload, meta) => {
+      parentEvents?.onRetryAfter?.(
+        payload,
+        activityEventMeta(meta, { liveOnly: true }),
+      );
+    },
+    onRetry: (reason, attempt, maxAttempts, meta) => {
+      parentEvents?.onRetry?.(
+        reason,
+        attempt,
+        maxAttempts,
+        activityEventMeta(meta, { liveOnly: true }),
+      );
+    },
+    onProviderRecovery: (event, meta) => {
+      parentEvents?.onProviderRecovery?.(
+        event,
+        activityEventMeta(meta, { liveOnly: true }),
+      );
     },
     // Block AMA-specific and recursive tools, then enforce live plan mode.
     // planModeBlockCheck reads parent state at call time, so mid-run mode toggles

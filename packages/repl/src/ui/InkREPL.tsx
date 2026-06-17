@@ -54,6 +54,7 @@ import {
   childActivitySource,
   MAX_CHILD_ACTIVITY_ROWS,
   shouldRouteToChildActivity,
+  shouldRouteWorkflowLiveOnlyNotice,
   toolActivityDetail,
   truncateChildActivityDetail,
   type ChildActivityKind,
@@ -239,7 +240,7 @@ import {
   extractTitle,
 } from "./utils/message-utils.js";
 import { withCapture, ConsoleCapturer } from "./utils/console-capturer.js";
-import { createRecoveryHistoryItem, createRetryHistoryItem, emitRecoveryHistoryItem, emitRetryHistoryItem } from "./utils/retry-history.js";
+import { createRecoveryHistoryItem, createRetryHistoryItem } from "./utils/retry-history.js";
 import { createRepoIntelTraceHistoryItem, emitRepoIntelTraceHistoryItem } from "./utils/repo-intel-history.js";
 import {
   formatManagedTaskBreadcrumb,
@@ -1372,6 +1373,32 @@ const InkREPLInner: React.FC<InkREPLProps> = ({
   const [managedTaskStatus, setManagedTaskStatus] = useState<KodaXManagedTaskStatusEvent | null>(null);
   const [workflowBuilderMessage, setWorkflowBuilderMessage] = useState<string | null>(null);
   const [workflowLiveStatus, setWorkflowLiveStatus] = useState<WorkflowLiveSnapshot | null>(null);
+  const workflowLiveStatusRef = useRef<WorkflowLiveSnapshot | null>(null);
+  const replaceWorkflowLiveStatus = useCallback((next: WorkflowLiveSnapshot | null): void => {
+    workflowLiveStatusRef.current = next;
+    setWorkflowLiveStatus(next);
+  }, []);
+  const updateWorkflowLiveStatus = useCallback((
+    updater: (current: WorkflowLiveSnapshot | null) => WorkflowLiveSnapshot | null,
+  ): void => {
+    const next = updater(workflowLiveStatusRef.current);
+    workflowLiveStatusRef.current = next;
+    setWorkflowLiveStatus(next);
+  }, []);
+  const routeWorkflowLiveOnlyNotice = useCallback((
+    meta: KodaXActivityEventMeta | undefined,
+    message: string,
+  ): boolean => {
+    const current = workflowLiveStatusRef.current;
+    if (
+      current?.status !== "running"
+      || !shouldRouteWorkflowLiveOnlyNotice(meta, current.runId)
+    ) {
+      return false;
+    }
+    replaceWorkflowLiveStatus({ ...current, message });
+    return true;
+  }, [replaceWorkflowLiveStatus]);
   // FEATURE_097 (v0.7.34) — todo plan surface state. Single source of
   // truth for the rendered list; the runner-side `onTodoUpdate` handler
   // does `setTodoItems(items)` directly (no managedForegroundLedger
@@ -4660,7 +4687,7 @@ const InkREPLInner: React.FC<InkREPLProps> = ({
       manager.stop(run.runId, reason);
     }
 
-    setWorkflowLiveStatus((current) => {
+    updateWorkflowLiveStatus((current) => {
       if (!current || current.status !== "running") {
         return current;
       }
@@ -4689,7 +4716,7 @@ const InkREPLInner: React.FC<InkREPLProps> = ({
     }
 
     return true;
-  }, [emitInfoItemToCorrectLayer]);
+  }, [emitInfoItemToCorrectLayer, updateWorkflowLiveStatus]);
 
   useEffect(() => {
     if (!workflowLiveViewModel.shouldRender) {
@@ -5838,28 +5865,46 @@ const InkREPLInner: React.FC<InkREPLProps> = ({
         });
       }
     },
-    onRetry: (reason: string, attempt: number, maxAttempts: number) => {
+    onRetry: (
+      reason: string,
+      attempt: number,
+      maxAttempts: number,
+      meta?: KodaXActivityEventMeta,
+    ) => {
       if (userInterruptedRef.current) {
+        return;
+      }
+      const retryItem = createRetryHistoryItem(reason, attempt, maxAttempts);
+      if (routeWorkflowLiveOnlyNotice(meta, retryItem.text)) {
+        return;
+      }
+      if (upsertChildActivityRecord(meta, "progress", retryItem.text)) {
         return;
       }
       // In AMA managed-foreground mode the active rendering anchor is the
       // managed foreground turn layer; addHistoryItem would land in the
-      // wrong position. Mirrors the 09cd7ae fix for onProviderRecovery —
+      // wrong position. Mirrors the 09cd7ae fix for onProviderRecovery -
       // onRetry was the missed sibling of that fix.
       const inManagedForeground = !!managedForegroundOwnerRef.current.workerId;
       if (inManagedForeground) {
-        const item = createRetryHistoryItem(reason, attempt, maxAttempts);
         appendManagedForegroundLedgerItem({
-          ...item,
+          ...retryItem,
           id: `retry-${Date.now()}-${Math.random().toString(36).slice(2, 7)}`,
           timestamp: Date.now(),
         } as HistoryItem);
       } else {
-        emitRetryHistoryItem(addHistoryItem, reason, attempt, maxAttempts);
+        addHistoryItem(retryItem);
       }
     },
-    onProviderRecovery: (event) => {
+    onProviderRecovery: (event, meta?: KodaXActivityEventMeta) => {
       if (userInterruptedRef.current) {
+        return;
+      }
+      const recoveryItem = createRecoveryHistoryItem(event);
+      if (routeWorkflowLiveOnlyNotice(meta, recoveryItem.text)) {
+        return;
+      }
+      if (upsertChildActivityRecord(meta, "progress", recoveryItem.text)) {
         return;
       }
       const inManagedForeground = !!managedForegroundOwnerRef.current.workerId;
@@ -5885,14 +5930,13 @@ const InkREPLInner: React.FC<InkREPLProps> = ({
 
       // 3. Commit recovery info to the correct layer (same as partial text)
       if (inManagedForeground) {
-        const recoveryItem = createRecoveryHistoryItem(event);
         appendManagedForegroundLedgerItem({
           ...recoveryItem,
           id: `recovery-${Date.now()}-${Math.random().toString(36).slice(2, 7)}`,
           timestamp: Date.now(),
         } as HistoryItem);
       } else {
-        emitRecoveryHistoryItem(addHistoryItem, event);
+        addHistoryItem(recoveryItem);
       }
     },
     onManagedTaskStatus: (status) => {
@@ -5949,8 +5993,20 @@ const InkREPLInner: React.FC<InkREPLProps> = ({
         managedTaskBreadcrumbRef.current = breadcrumbText;
       }
     },
-    onProviderRateLimit: (attempt: number, maxAttempts: number, delayMs: number) => {
+    onProviderRateLimit: (
+      attempt: number,
+      maxAttempts: number,
+      delayMs: number,
+      meta?: KodaXActivityEventMeta,
+    ) => {
       if (userInterruptedRef.current) {
+        return;
+      }
+      const text = `[Rate Limit] Retrying in ${delayMs / 1000}s (${attempt}/${maxAttempts})...`;
+      if (routeWorkflowLiveOnlyNotice(meta, text)) {
+        return;
+      }
+      if (upsertChildActivityRecord(meta, "progress", text)) {
         return;
       }
       // Route through the layer-aware emitter so rate-limit notices
@@ -5959,7 +6015,7 @@ const InkREPLInner: React.FC<InkREPLProps> = ({
       emitInfoItemToCorrectLayer({
         type: "info",
         icon: "\u23F3",
-        text: `[Rate Limit] Retrying in ${delayMs / 1000}s (${attempt}/${maxAttempts})...`,
+        text,
       }, 'ratelimit');
     },
     // FEATURE_130 (v0.7.36): structured retry-after display. Coexists
@@ -5968,20 +6024,27 @@ const InkREPLInner: React.FC<InkREPLProps> = ({
     // carries `provider` + `source`, letting the spinner show whether
     // we're honoring a server-supplied wait or guessing with backoff \u2014
     // the design's "user knows it's not a bug, it's quota" goal.
-    onRetryAfter: (event) => {
+    onRetryAfter: (event, meta?: KodaXActivityEventMeta) => {
       if (userInterruptedRef.current) {
         return;
       }
       const seconds = Math.round(event.waitMs / 1000);
       const sourceLabel =
         event.source === 'exponential-backoff'
-          ? 'no-header \u2192 backoff'
+          ? 'no-header -> backoff'
           : event.source;
       const reasonLabel = event.reason === 'overloaded' ? 'Overloaded' : 'Rate limited';
+      const text = `[${reasonLabel}] (${event.provider}) - retrying in ${seconds}s [${sourceLabel}] (${event.attempt}/${event.maxAttempts})`;
+      if (routeWorkflowLiveOnlyNotice(meta, text)) {
+        return;
+      }
+      if (upsertChildActivityRecord(meta, "progress", text)) {
+        return;
+      }
       emitInfoItemToCorrectLayer({
         type: "info",
         icon: "\u23F3",
-        text: `[${reasonLabel}] (${event.provider}) \u2014 retrying in ${seconds}s [${sourceLabel}] (${event.attempt}/${event.maxAttempts})`,
+        text,
       }, 'ratelimit');
     },
     onRepoIntelligenceTrace: (event) => {
@@ -6512,6 +6575,7 @@ const InkREPLInner: React.FC<InkREPLProps> = ({
     resetLiveToolCalls,
     setLiveToolCalls,
     completeChildActivityRecord,
+    routeWorkflowLiveOnlyNotice,
     upsertChildActivityRecord,
     streamingState.currentTool,
   ]);
@@ -7450,7 +7514,7 @@ const InkREPLInner: React.FC<InkREPLProps> = ({
       };
       const handleWorkflowRunUpdate = (event: WorkflowRunUiEvent): void => {
         if (event.status === "running") {
-          setWorkflowLiveStatus({
+          replaceWorkflowLiveStatus({
             runId: event.runId,
             workflow: event.workflow,
             status: event.status,
@@ -7473,7 +7537,7 @@ const InkREPLInner: React.FC<InkREPLProps> = ({
           });
           return;
         }
-        setWorkflowLiveStatus((current) => (
+        updateWorkflowLiveStatus((current) => (
           current?.runId === event.runId ? null : current
         ));
       };
@@ -8488,6 +8552,8 @@ const InkREPLInner: React.FC<InkREPLProps> = ({
       finalizeAllExecutingToolCalls,
       syncManagedForegroundToolGroup,
       clearWorkStripTimers,
+      replaceWorkflowLiveStatus,
+      updateWorkflowLiveStatus,
     ]
   );
 

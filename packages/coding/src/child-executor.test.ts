@@ -20,6 +20,7 @@ vi.mock('./tools/worktree.js', () => ({
 import type {
   KodaXChildContextBundle,
   KodaXAmaFanoutClass,
+  ProviderRecoveryEvent,
 } from './types.js';
 import {
   executeChildAgents,
@@ -1065,6 +1066,7 @@ describe('buildChildEvents plan-mode propagation (FEATURE_074)', () => {
     const parentProviderRateLimit = vi.fn();
     const parentRetryAfter = vi.fn();
     const parentRetry = vi.fn();
+    const parentProviderRecovery = vi.fn();
     const parentCompactStart = vi.fn();
     const parentAskUser = vi.fn(async () => 'approve');
     const parentAskUserMulti = vi.fn(async () => ({ choice: 'yes' }));
@@ -1089,6 +1091,7 @@ describe('buildChildEvents plan-mode propagation (FEATURE_074)', () => {
         onProviderRateLimit: parentProviderRateLimit,
         onRetryAfter: parentRetryAfter,
         onRetry: parentRetry,
+        onProviderRecovery: parentProviderRecovery,
         onCompactStart: parentCompactStart,
         askUser: parentAskUser,
         askUserMulti: parentAskUserMulti,
@@ -1125,6 +1128,17 @@ describe('buildChildEvents plan-mode propagation (FEATURE_074)', () => {
       maxAttempts: 3,
     });
     events!.onRetry?.('rate-limit', 1, 3);
+    const recoveryEvent: ProviderRecoveryEvent = {
+      stage: 'before_first_delta',
+      errorClass: 'rate_limit',
+      attempt: 1,
+      maxAttempts: 3,
+      delayMs: 500,
+      recoveryAction: 'fresh_connection_retry',
+      ladderStep: 1,
+      fallbackUsed: false,
+    };
+    events!.onProviderRecovery?.(recoveryEvent);
     events!.onCompactStart?.();
     await expect(events!.askUser!({
       question: 'Proceed?',
@@ -1218,16 +1232,40 @@ describe('buildChildEvents plan-mode propagation (FEATURE_074)', () => {
       childAgentName: 'cb-test',
       liveOnly: true,
     });
-    expect(parentProviderRateLimit).toHaveBeenCalledWith(1, 3, 500);
-    expect(parentRetryAfter).toHaveBeenCalledWith({
-      provider: 'anthropic',
-      waitMs: 500,
-      reason: 'rate-limit',
-      source: 'retry-after-ms',
-      attempt: 1,
-      maxAttempts: 3,
+    expect(parentProviderRateLimit).toHaveBeenCalledWith(1, 3, 500, {
+      workflowCorrelation: correlation,
+      childAgentId: 'cb-test',
+      childAgentName: 'cb-test',
+      liveOnly: true,
     });
-    expect(parentRetry).not.toHaveBeenCalled();
+    expect(parentRetryAfter).toHaveBeenCalledWith(
+      {
+        provider: 'anthropic',
+        waitMs: 500,
+        reason: 'rate-limit',
+        source: 'retry-after-ms',
+        attempt: 1,
+        maxAttempts: 3,
+      },
+      {
+        workflowCorrelation: correlation,
+        childAgentId: 'cb-test',
+        childAgentName: 'cb-test',
+        liveOnly: true,
+      },
+    );
+    expect(parentRetry).toHaveBeenCalledWith('rate-limit', 1, 3, {
+      workflowCorrelation: correlation,
+      childAgentId: 'cb-test',
+      childAgentName: 'cb-test',
+      liveOnly: true,
+    });
+    expect(parentProviderRecovery).toHaveBeenCalledWith(recoveryEvent, {
+      workflowCorrelation: correlation,
+      childAgentId: 'cb-test',
+      childAgentName: 'cb-test',
+      liveOnly: true,
+    });
     expect(parentCompactStart).not.toHaveBeenCalled();
     expect(parentAskUser).toHaveBeenCalledWith(
       {

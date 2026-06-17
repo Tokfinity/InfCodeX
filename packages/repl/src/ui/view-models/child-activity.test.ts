@@ -4,6 +4,7 @@ import {
   buildChildActivityViewModel,
   padChildActivitySymbol,
   shouldRouteToChildActivity,
+  shouldRouteWorkflowLiveOnlyNotice,
   type ChildActivityRecord,
 } from "./child-activity.js";
 
@@ -103,6 +104,22 @@ describe("buildChildActivityViewModel", () => {
         itemId: "item-1",
       },
     })).toBe(true);
+  });
+
+  it("identifies workflow live-only notices for stable workflow footer updates", () => {
+    const meta = {
+      liveOnly: true,
+      workflowCorrelation: {
+        workflowRunId: "run-1",
+        childAgentId: "diff-explorer",
+        itemId: "item-1",
+      },
+    };
+
+    expect(shouldRouteWorkflowLiveOnlyNotice(meta, "run-1")).toBe(true);
+    expect(shouldRouteWorkflowLiveOnlyNotice(meta, "run-2")).toBe(false);
+    expect(shouldRouteWorkflowLiveOnlyNotice({ ...meta, liveOnly: false }, "run-1")).toBe(false);
+    expect(shouldRouteWorkflowLiveOnlyNotice({ childAgentId: "diff-explorer" }, "run-1")).toBe(false);
   });
 
   it("pads labels by display width", () => {
