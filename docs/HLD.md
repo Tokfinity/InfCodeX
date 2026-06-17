@@ -198,7 +198,7 @@ requirements, and provenance. The capsule protocol belongs in `agent`; checks
 that depend on the local repository, skills, MCPs, or `.kodax` paths belong in
 `coding`; command help and approval text belong in `repl`.
 
-FEATURE_229 (`v0.7.50`, implementation complete; release validation pending)
+FEATURE_229 (`v0.7.50`, released)
 is the process layer on top of FEATURE_217. It standardizes workflow progress as
 agent-layer snapshots and events so SDK embedders, coding commands, REPL
 inline/fullscreen surfaces, and future system event bridges can subscribe to the

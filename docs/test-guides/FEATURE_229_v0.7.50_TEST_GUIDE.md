@@ -243,4 +243,4 @@ results without parsing terminal text.
 | `npm pack --dry-run` | Passed | Produced `kodax-ai-kodax-0.7.50.tgz`; `@kodax-ai/kodax@0.7.50`, 1.9 MB package size, 92 files. |
 | `git diff --check` | Passed | No whitespace errors; Git reported line-ending normalization warnings only. |
 
-**Conclusion**: Automated release validation passed on 2026-06-17. `v0.7.50` still needs the tag/release publication step before final release.
+**Conclusion**: Automated release validation passed on 2026-06-17 and `v0.7.50` shipped the same day (npm `latest` + git tag `v0.7.50` + GitHub Release with five-platform binaries).

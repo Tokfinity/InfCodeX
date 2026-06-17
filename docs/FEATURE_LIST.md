@@ -10,8 +10,8 @@
 
 | Item | Value |
 |---|---|
-| Current released version | `v0.7.49` |
-| Current package version | `@kodax-ai/kodax@0.7.50` (automated release validation complete; tag pending) |
+| Current released version | `v0.7.50` |
+| Current package version | `@kodax-ai/kodax@0.7.50` (released 2026-06-17) |
 | Workspace baseline | `llm / agent / coding / repl` 4 packages |
 | Total tracked features | `16` |
 | InProgress | `0` |
@@ -25,7 +25,7 @@
 | Status | Count | Feature IDs | Next checkpoint |
 |---|---:|---|---|
 | InProgress | 0 | - | - |
-| Completed | 1 | `229` | automated release validation complete; tag pending |
+| Completed | 1 | `229` | released in v0.7.50 |
 | Planned, near-term | 10 | `230, 231, 232, 224, 228, 225, 174, 105, 211, 108` | `v0.7.51` -> `v0.7.68` |
 | Planned, v0.8.x | 5 | `007, 030, 093, 113, 139` | `v0.8.0+` |
 
@@ -94,7 +94,7 @@
 
 | ID | Title | Released | Design | Notes |
 |---|---|---|---|---|
-| `229` | Workflow Process Events + SDK/System Progress Surface | `v0.7.50` | [v0.7.50](features/v0.7.50.md#feature_229-workflow-process-events--sdksystem-progress-surface) | Implementation and automated release validation complete; tag pending. |
+| `229` | Workflow Process Events + SDK/System Progress Surface | `v0.7.50` | [v0.7.50](features/v0.7.50.md#feature_229-workflow-process-events--sdksystem-progress-surface) | Released v0.7.50 (npm + tag + GitHub Release, 2026-06-17). |
 
 ---
 

@@ -260,7 +260,7 @@ until KodaX needs third-party generation, marketplace-style distribution, or
 complex cross-tool requirement validation; v0.7.49 uses TypeScript contracts and
 runtime validation to stay minimal.
 
-FEATURE_229 (`v0.7.50`, implementation complete; release validation pending)
+FEATURE_229 (`v0.7.50`, released)
 adds the process contract without changing the dynamic harness model. The agent
 workflow package exposes `WorkflowProcessSnapshot`, `WorkflowProcessEvent`, and
 `isFinalWorkflowProcessStatus`; the event model stays intentionally small:
