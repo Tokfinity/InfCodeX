@@ -44,7 +44,7 @@
 const HELPER_SCRIPT_DEPTH_TO_DIST = 3;
 
 import { build } from 'esbuild';
-import { cpSync, existsSync, mkdirSync, readFileSync, rmSync, statSync, writeFileSync } from 'node:fs';
+import { cpSync, existsSync, mkdirSync, readdirSync, readFileSync, rmSync, statSync, writeFileSync } from 'node:fs';
 import path from 'node:path';
 import { fileURLToPath } from 'node:url';
 
@@ -65,6 +65,44 @@ function log(msg) {
 
 function readPkg(p) {
   return JSON.parse(readFileSync(p, 'utf8'));
+}
+
+function listJsFiles(dir) {
+  const files = [];
+  for (const entry of readdirSync(dir, { withFileTypes: true })) {
+    const fullPath = path.join(dir, entry.name);
+    if (entry.isDirectory()) {
+      files.push(...listJsFiles(fullPath));
+    } else if (entry.isFile() && entry.name.endsWith('.js')) {
+      files.push(fullPath);
+    }
+  }
+  return files;
+}
+
+function assertNoRawAgentDynamicImport(dir) {
+  const directAgentImportPattern = /\bimport\(\s*(['"])\.\/agent\.js\1\s*\)/;
+  const computedAgentImportPattern =
+    /\b(?:const|let|var)\s+([A-Za-z_$][\w$]*)\s*=\s*(['"])\.\/agent\.js\2[\s\S]{0,500}?\bimport\(\s*\1\s*\)/;
+  const violations = [];
+
+  for (const file of listJsFiles(dir)) {
+    const source = readFileSync(file, 'utf8');
+    if (directAgentImportPattern.test(source) || computedAgentImportPattern.test(source)) {
+      violations.push(path.relative(repoRoot, file));
+    }
+  }
+
+  if (violations.length > 0) {
+    console.error(
+      '[build-bundle] ERROR: bundle still contains a raw dynamic import of ./agent.js. ' +
+      'Use a literal import that esbuild can rewrite into the bundled agent chunk.',
+    );
+    for (const file of violations) {
+      console.error(`[build-bundle]   ${file}`);
+    }
+    process.exit(1);
+  }
 }
 
 // ---- compute external list from root package.json ------------------------
@@ -371,6 +409,9 @@ if (writeMetafile) {
   );
   log(`  ✓ dist/bundle-meta.json (esbuild analysis)`);
 }
+
+assertNoRawAgentDynamicImport(distDir);
+log(`  OK bundle import guard: no raw ./agent.js dynamic import`);
 
 // ---- summary -------------------------------------------------------------
 

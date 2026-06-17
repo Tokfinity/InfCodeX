@@ -34,7 +34,7 @@
 // Idempotent failure mode: pristine bytes are captured BEFORE any mutation;
 // restore writes them back verbatim even if npm publish throws.
 
-import { readFileSync, writeFileSync } from 'node:fs';
+import { readdirSync, readFileSync, writeFileSync } from 'node:fs';
 import { spawnSync } from 'node:child_process';
 import path from 'node:path';
 import { fileURLToPath } from 'node:url';
@@ -70,6 +70,40 @@ function runCmd(cmd, args, opts = {}) {
   });
   if (result.status !== 0) {
     throw new Error(`${cmd} ${args.join(' ')} exited with code ${result.status}`);
+  }
+}
+
+function listJsFiles(dir) {
+  const files = [];
+  for (const entry of readdirSync(dir, { withFileTypes: true })) {
+    const fullPath = path.join(dir, entry.name);
+    if (entry.isDirectory()) {
+      files.push(...listJsFiles(fullPath));
+    } else if (entry.isFile() && entry.name.endsWith('.js')) {
+      files.push(fullPath);
+    }
+  }
+  return files;
+}
+
+function assertNoRawAgentDynamicImport(dir) {
+  const directAgentImportPattern = /\bimport\(\s*(['"])\.\/agent\.js\1\s*\)/;
+  const computedAgentImportPattern =
+    /\b(?:const|let|var)\s+([A-Za-z_$][\w$]*)\s*=\s*(['"])\.\/agent\.js\2[\s\S]{0,500}?\bimport\(\s*\1\s*\)/;
+  const violations = [];
+
+  for (const file of listJsFiles(dir)) {
+    const source = readFileSync(file, 'utf8');
+    if (directAgentImportPattern.test(source) || computedAgentImportPattern.test(source)) {
+      violations.push(path.relative(repoRoot, file));
+    }
+  }
+
+  if (violations.length > 0) {
+    for (const file of violations) {
+      logError(`raw ./agent.js dynamic import found in ${file}`);
+    }
+    throw new Error('dist contains a raw dynamic import of ./agent.js; rebuild before publishing');
   }
 }
 
@@ -197,6 +231,8 @@ function main() {
   } else {
     log('-- --skip-build: assuming dist/ is already current');
   }
+  assertNoRawAgentDynamicImport(path.join(repoRoot, 'dist'));
+  log('-- bundle import guard passed');
 
   // Step 3: toggle private:true → false (root package.json is already in
   // published shape; this is the only mutation needed).

@@ -56,9 +56,17 @@ type RunKodaXFn = (options: KodaXOptions, prompt: string) => Promise<KodaXResult
 let _runKodaXCache: RunKodaXFn | undefined;
 async function getRunKodaX(): Promise<RunKodaXFn> {
   if (!_runKodaXCache) {
-    // Computed module specifier hides the edge from madge while TypeScript
-    // keeps the string literal at compile time.
-    const spec = './agent.js' as const;
+    // The specifier MUST be a string literal inside import(). esbuild only
+    // bundles dynamic imports whose argument is a literal; a computed
+    // specifier (e.g. `const spec = './agent.js'; import(spec)`) is left as a
+    // raw runtime import that resolves relative to the *bundle* location
+    // (dist/kodax_cli.js → dist/agent.js, which does not exist) and breaks
+    // every dispatch_child_task in the packaged CLI. The dynamic import still
+    // breaks the require cycle (FEATURE_093) because it defers agent-module
+    // initialisation to first child spawn — esbuild wraps the inlined target
+    // in a lazily-evaluated factory, so the literal does not re-introduce an
+    // eager-eval cycle.
+    const spec = './agent.js';
     // v0.7.26 Risk-6 fix — wrap the dynamic import in an explicit
     // error envelope. The cycle-break via dynamic-import is a deliberate
     // design choice (FEATURE_093), but if `./agent.js` ever fails to
@@ -68,7 +76,7 @@ async function getRunKodaX(): Promise<RunKodaXFn> {
     // Restate what went wrong + what the caller should check.
     let agentModule: { runKodaX?: RunKodaXFn };
     try {
-      agentModule = (await import(spec)) as { runKodaX?: RunKodaXFn };
+      agentModule = (await import('./agent.js')) as { runKodaX?: RunKodaXFn };
     } catch (err) {
       const detail = err instanceof Error ? err.message : String(err);
       throw new Error(
