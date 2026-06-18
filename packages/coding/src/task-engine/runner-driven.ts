@@ -153,7 +153,10 @@ import { resolveInitialMessages } from '../agent-runtime/middleware/auto-resume.
 // `tool:before` hook fires on AMA path (pre-FEATURE_100 only SA hit
 // it).
 import { getToolExecutionOverride } from '../agent-runtime/permission-gate.js';
-import { CANCELLED_TOOL_RESULT_MESSAGE } from '../constants.js';
+import {
+  CANCELLED_TOOL_RESULT_MESSAGE,
+  MANAGED_TASK_MAX_TOOL_LOOP_ITERATIONS,
+} from '../constants.js';
 // CAP-048: shared tool-execution-context builder. Centralizes
 // FEATURE_074 (set_permission_mode NOT forwarded) and FEATURE_067
 // (onChildProgress undefined) invariants so AMA and SA can't drift.
@@ -1122,6 +1125,12 @@ async function runManagedTaskViaRunnerInner(
   // callback retired — Scout role gone, no payload to surface. The
   // adapter still accepts the getter slot for signature compatibility;
   // it permanently returns `undefined` on V2.
+  // Per-run iteration counter shared with the adapter. `runOnce` resets it
+  // to 0 at the top of every fresh `Runner.run` so the `iter` reported to
+  // `onIterationStart`/`onIterationEnd` stays in the same per-invocation
+  // scope as the Runner's tool loop (`iter <= maxIter` holds across
+  // idle-yield resumes instead of accumulating past the cap).
+  const iterationStateRef = { current: 0 };
   const llm = buildRunnerLlmAdapter(
     options,
     adapterOverride,
@@ -1130,6 +1139,7 @@ async function runManagedTaskViaRunnerInner(
     contextTokenSnapshotRef,
     todoStore,
     todoReminderState,
+    iterationStateRef,
   );
 
   // FEATURE_143 (v0.7.36) — `plan.promptOverlay` (routing-notes block:
@@ -1411,8 +1421,14 @@ async function runManagedTaskViaRunnerInner(
   // + sessionId), not the wrapper's narrower `RunWithIdleYieldRunResult`
   // (the wrapper only requires `messages`, so the wider type is
   // structurally OK).
-  const runOnce = (agent: Agent, input: readonly KodaXMessage[]) =>
-    Runner.run(agent, input, {
+  const runOnce = (agent: Agent, input: readonly KodaXMessage[]) => {
+    // Reset the iteration counter for this fresh Runner.run so the
+    // reported `iter` shares scope with the Runner's tool loop (which
+    // counts 0..iterationCap). Across idle-yield resumes each runOnce is a
+    // new Runner.run with its own loop, so the counter restarts here —
+    // keeping `iter <= maxIter` true rather than accumulating across runs.
+    iterationStateRef.current = 0;
+    return Runner.run(agent, input, {
       llm,
       abortSignal: options.abortSignal,
       compactionHook,
@@ -1477,7 +1493,9 @@ async function runManagedTaskViaRunnerInner(
       // the 90% threshold long before this cap, so reaching 500
       // genuinely indicates a prompt / tool-design bug worth
       // flagging.
-      maxToolLoopIterations: 500,
+      // Shared with the LLM adapter as the reported `maxIter` denominator
+      // so the SDK iteration callbacks reflect the real cap, not a stale 20.
+      maxToolLoopIterations: MANAGED_TASK_MAX_TOOL_LOOP_ITERATIONS,
     }).catch(async (err: unknown) => {
       // Issue 127: clean up checkpoint on abort (Esc / Ctrl-C) and
       // any LLM / Runner error before the rejection propagates.
@@ -1488,6 +1506,7 @@ async function runManagedTaskViaRunnerInner(
       await cleanupRunCheckpoint();
       throw err;
     });
+  };
 
   // FEATURE_155 (v0.7.39) idle-yield outer loop, wrapped by
   // FEATURE_120 v0.7.39 Step 0c's `runWithIdleYield` generic helper.

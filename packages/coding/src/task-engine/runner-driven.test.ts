@@ -33,6 +33,7 @@ import {
   isRunnerDrivenRuntimeEnabled,
   runManagedTaskViaRunner,
 } from './runner-driven.js';
+import { MANAGED_TASK_MAX_TOOL_LOOP_ITERATIONS } from '../constants.js';
 import type { RunnableTool } from '@kodax-ai/agent';
 import type {
   KodaXMessage,
@@ -183,6 +184,60 @@ describe('buildRunnerLlmAdapter (via overrideStream)', () => {
     expect(capturedTranscript).toHaveLength(1);
     expect(capturedTranscript[0]!.role).toBe('user');
     expect(capturedTranscript[0]!.content).toBe('follow-up');
+  });
+
+  // SDK bug: AMA `onIterationStart`/`onIterationEnd` reported a hardcoded
+  // `maxIter = 20` (the engine's stand-alone `MAX_TOOL_LOOP_ITERATIONS`
+  // default) that the Runner-driven path never actually enforces — the
+  // real per-invocation cap is `MANAGED_TASK_MAX_TOOL_LOOP_ITERATIONS`.
+  // The denominator must reflect the real ceiling so the spinner never
+  // shows `1/20` / `5/20`.
+  it('reports the real per-invocation cap as maxIter, not the stale 20', async () => {
+    const starts: Array<{ iter: number; maxIter: number }> = [];
+    const ends: Array<{ iter: number; maxIter: number }> = [];
+    const adapter = buildRunnerLlmAdapter({
+      ...makeOptions(),
+      events: {
+        onIterationStart: (iter, maxIter) => starts.push({ iter, maxIter }),
+        onIterationEnd: (info) => ends.push({ iter: info.iter, maxIter: info.maxIter }),
+      },
+    } as unknown as KodaXOptions, async () => ({ textBlocks: [{ text: 'ok' }], toolBlocks: [] }));
+    await adapter([{ role: 'user', content: 'q' }], { name: 'x', instructions: 'i' });
+    expect(starts).toEqual([{ iter: 1, maxIter: MANAGED_TASK_MAX_TOOL_LOOP_ITERATIONS }]);
+    expect(ends[0]!.maxIter).toBe(MANAGED_TASK_MAX_TOOL_LOOP_ITERATIONS);
+    expect(starts[0]!.maxIter).not.toBe(20);
+  });
+
+  // SDK bug: the adapter counted iterations monotonically across the whole
+  // task while the Runner cap is per-invocation, so `iter` could exceed
+  // `maxIter` (e.g. `24/20`). The shared `iterationStateRef` lets the
+  // idle-yield outer loop reset the counter at each `runOnce`, keeping the
+  // reported `iter` in the same per-invocation scope as the Runner loop so
+  // `iter <= maxIter` always holds.
+  it('iteration counter shares scope via iterationStateRef and resets per run', async () => {
+    const iters: number[] = [];
+    const iterationStateRef = { current: 0 };
+    const adapter = buildRunnerLlmAdapter(
+      {
+        ...makeOptions(),
+        events: { onIterationStart: (iter) => iters.push(iter) },
+      } as unknown as KodaXOptions,
+      async () => ({ textBlocks: [{ text: 'ok' }], toolBlocks: [] }),
+      undefined,
+      undefined,
+      undefined,
+      undefined,
+      undefined,
+      iterationStateRef,
+    );
+    const agent = { name: 'x', instructions: 'i' };
+    await adapter([{ role: 'user', content: 'q1' }], agent);
+    await adapter([{ role: 'user', content: 'q2' }], agent);
+    // Caller (runOnce) resets at the top of a fresh Runner.run.
+    iterationStateRef.current = 0;
+    await adapter([{ role: 'user', content: 'q3' }], agent);
+    expect(iters).toEqual([1, 2, 1]);
+    expect(iters.every((i) => i <= MANAGED_TASK_MAX_TOOL_LOOP_ITERATIONS)).toBe(true);
   });
 
   it('stops at the first non-system message — later role:system stays in transcript for provider-layer merge', async () => {
@@ -2349,6 +2404,13 @@ describe('FEATURE_155 v0.7.39 Slice A2 — idle-yield outer loop', () => {
     );
 
     const workerTurns: number[] = [];
+    // Capture the per-turn iteration index the adapter reports. This run
+    // crosses an idle-yield resume → two real `runOnce` (two fresh
+    // `Runner.run`), so the reset at the top of `runOnce` must restart the
+    // counter: turns 1+2 in the first run, turn 3 in the second → [1,2,1].
+    // This protects the reset LOCATION inside `runOnce` (the direct-adapter
+    // unit test only simulates the reset, it cannot catch a moved reset).
+    const iterStarts: number[] = [];
     let resumeTranscriptHadBanner = false;
 
     const mock = makeChainMockLlm({
@@ -2413,10 +2475,19 @@ describe('FEATURE_155 v0.7.39 Slice A2 — idle-yield outer loop', () => {
       },
     });
 
-    const result = await runManagedTaskViaRunner(makeOptions(), 'count imports of foo', mock);
+    const optsWithIter = {
+      ...makeOptions(),
+      events: { onIterationStart: (iter: number) => iterStarts.push(iter) },
+    } as unknown as Parameters<typeof runManagedTaskViaRunner>[0];
+    const result = await runManagedTaskViaRunner(optsWithIter, 'count imports of foo', mock);
 
     expect(result.success).toBe(true);
     expect(result.signal).toBe('COMPLETE');
+    // Counter resets across the idle-yield resume: the post-resume run
+    // starts a fresh Runner.run, so the reported iter drops back to 1
+    // rather than accumulating. Guarantees `iter <= maxIter` per run.
+    expect(iterStarts).toEqual([1, 2, 1]);
+    expect(iterStarts.every((i) => i <= MANAGED_TASK_MAX_TOOL_LOOP_ITERATIONS)).toBe(true);
     // Worker MUST have been called at least three times:
     //   turn 1 — dispatch
     //   turn 2 — idle-yield (text-only)

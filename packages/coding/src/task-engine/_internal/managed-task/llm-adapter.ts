@@ -36,6 +36,7 @@ import {
   KODAX_MAX_MAXTOKENS_RETRIES,
   KODAX_MAX_EMPTY_COMPLETION_RETRIES,
   KODAX_EMPTY_COMPLETION_RETRY_BASE_DELAY_MS,
+  MANAGED_TASK_MAX_TOOL_LOOP_ITERATIONS,
 } from '../../../constants.js';
 import {
   bucketProviderPayloadSize,
@@ -179,13 +180,27 @@ export function buildRunnerLlmAdapter(
    */
   todoStore?: TodoStore,
   todoReminderState?: TodoReminderState,
+  /**
+   * Per-run iteration counter holder shared with the idle-yield outer
+   * loop. The counter must live in the SAME scope as the Runner's tool
+   * loop it reports against: the caller resets `current` to 0 at the top
+   * of every `runOnce` (each fresh `Runner.run`), so the value the
+   * adapter reports stays aligned with the Runner's per-invocation
+   * iteration index and `iter <= maxIter` holds even across idle-yield
+   * resumes. Omitting it (tests / direct invocations) falls back to a
+   * local per-adapter counter — same shape, just not reset across runs.
+   */
+  iterationStateRef?: { current: number },
 ): (messages: readonly KodaXMessage[], agent: Agent) => Promise<RunnerLlmResult> {
   // FEATURE_072 parity: the REPL's token-count indicator reads
-  // `onIterationEnd` to refresh after each worker LLM turn. Track a
-  // monotonically-increasing iteration counter across the entire runner
-  // chain so the REPL sees progress for every role's turn.
-  let iteration = 0;
-  const MAX_ITER_HINT = 20; // matches core/src/runner-tool-loop.ts MAX_TOOL_LOOP_ITERATIONS
+  // `onIterationEnd` to refresh after each worker LLM turn. The iteration
+  // index is reported as the `iter` of `onIterationStart`/`onIterationEnd`;
+  // its denominator (`maxIter`) is the real per-invocation Runner cap
+  // (`MANAGED_TASK_MAX_TOOL_LOOP_ITERATIONS`), not a stale constant — so
+  // the SDK callback reflects the ceiling the Runner actually enforces.
+  const localIterationState = { current: 0 };
+  const iterationState = iterationStateRef ?? localIterationState;
+  const MAX_ITER_HINT = MANAGED_TASK_MAX_TOOL_LOOP_ITERATIONS;
 
   // Cost tracker — one per session; `recordUsage` is called after every
   // provider.stream usage payload. REPL /cost reads through
@@ -275,8 +290,8 @@ export function buildRunnerLlmAdapter(
             depth: reasoningModeToDepth(reasoningMode),
           };
 
-    iteration += 1;
-    options.events?.onIterationStart?.(iteration, MAX_ITER_HINT);
+    iterationState.current += 1;
+    options.events?.onIterationStart?.(iterationState.current, MAX_ITER_HINT);
 
     // FEATURE_164 (v0.7.41) — mid-iteration yield retired here.
     //
@@ -870,7 +885,7 @@ export function buildRunnerLlmAdapter(
       const usage = streamResult.usage;
       const tokenCount = usage?.totalTokens ?? usage?.outputTokens ?? 0;
       options.events.onIterationEnd({
-        iter: iteration,
+        iter: iterationState.current,
         maxIter: MAX_ITER_HINT,
         tokenCount,
         tokenSource: usage ? 'api' : 'estimate',
