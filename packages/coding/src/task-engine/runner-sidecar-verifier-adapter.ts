@@ -24,7 +24,7 @@
  */
 
 import type { KodaXBaseProvider } from '@kodax-ai/llm';
-import type { StopHookFn } from '@kodax-ai/agent';
+import type { StopHookContext, StopHookFn } from '@kodax-ai/agent';
 import { getMessageQueue } from '@kodax-ai/agent';
 
 import type { KodaXTaskRole, ManagedMutationTracker } from '../types.js';
@@ -61,7 +61,10 @@ export interface RunnerSidecarVerifierAdapterDeps {
    * triggers budget-extension dialog). Kept at the call site so the adapter
    * need not depend on recorder/todoStore/budget/budgetExtension.
    */
-  readonly onVerdict: (verdict: SidecarVerifierVerdict) => void;
+  readonly onVerdict: (
+    verdict: SidecarVerifierVerdict,
+    context: Pick<StopHookContext, 'reanimateCount' | 'reanimateBudget'>,
+  ) => void;
   /** Session id accessor for the extension turn:complete stop hook. */
   readonly getSessionId: () => string | undefined;
   /**
@@ -124,7 +127,6 @@ export function buildRunnerSidecarVerifierAdapter(
           }),
         onVerdict: (verdict) => {
           capturedSidecarVerdictRef.current = verdict;
-          deps.onVerdict(verdict);
         },
       })
     : undefined;
@@ -180,6 +182,9 @@ export function buildRunnerSidecarVerifierAdapter(
           const captured = capturedSidecarVerdictRef.current as
             | SidecarVerifierVerdict
             | undefined;
+          if (captured) {
+            deps.onVerdict(captured, ctx);
+          }
           if (
             process.env.KODAX_VERIFIER_LOG === '1' &&
             captured &&

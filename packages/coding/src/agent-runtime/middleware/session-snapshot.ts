@@ -21,10 +21,10 @@
  *   (silent no-op).
  * - When `data.gitRoot` is not provided, falls back to `getGitRoot()`
  *   (a `git rev-parse --show-toplevel` call), then `''` if git fails.
- * - `extensionState` is snapshotted via `snapshotRuntimeExtensionState`
- *   (drops empty buckets, returns `undefined` if no records).
- * - `extensionRecords` are deep-cloned at the field level so subsequent
- *   in-memory mutations do not mutate the persisted snapshot.
+ * - durable extension state is snapshotted via `snapshotRuntimeSessionState`
+ *   (drops empty buckets unless a dirty clear must be represented).
+ * - `extensionRecords` are cloned at the field level so subsequent in-memory
+ *   mutations do not mutate the persisted snapshot.
  *
  * **Storage failure isolation (CAP-013-003 / CAP-SESSION-SNAPSHOT-003)**:
  * `storage.save` rejections are absorbed locally and logged via
@@ -45,12 +45,12 @@ import { exec } from 'child_process';
 import { promisify } from 'util';
 
 import type { KodaXContentBlock, KodaXMessage } from '@kodax-ai/llm';
-import type { KodaXSessionLineage } from '@kodax-ai/agent';
+import type { KodaXSessionData, KodaXSessionLineage } from '@kodax-ai/agent';
 
 import type { KodaXOptions, SessionErrorMetadata } from '../../types.js';
 import {
   type RuntimeSessionState,
-  snapshotRuntimeExtensionState,
+  snapshotRuntimeSessionState,
 } from '../runtime-session-state.js';
 
 const execAsync = promisify(exec);
@@ -196,21 +196,33 @@ export async function saveSessionSnapshot(
   //   4. `''` — empty string when git resolution fails (legacy behavior).
   let messagesToPersist = data.messages;
   let lineageToPreserve: KodaXSessionLineage | undefined;
+  let extensionStateToPersist: KodaXSessionData['extensionState'];
+  let extensionRecordsToPersist: KodaXSessionData['extensionRecords'];
+  let shouldUseRuntimeSessionSnapshot = true;
   if (data.errorMetadata && !isSafeAuthoritativeTranscript(data.messages)) {
+    shouldUseRuntimeSessionSnapshot = false;
     try {
       const existing = await options.session.storage.load(sessionId);
       if (existing) {
         messagesToPersist = existing.messages;
         lineageToPreserve = existing.lineage;
+        extensionStateToPersist = existing.extensionState
+          ? structuredClone(existing.extensionState)
+          : undefined;
+        extensionRecordsToPersist = existing.extensionRecords?.map((record) => ({ ...record }));
       } else {
         // No clean persisted state exists yet: record the error metadata, but
         // do not promote the unsafe provider fragment into authoritative history.
         messagesToPersist = [];
         lineageToPreserve = undefined;
+        extensionStateToPersist = undefined;
+        extensionRecordsToPersist = undefined;
       }
     } catch {
       messagesToPersist = [];
       lineageToPreserve = undefined;
+      extensionStateToPersist = undefined;
+      extensionRecordsToPersist = undefined;
     }
   }
 
@@ -219,6 +231,13 @@ export async function saveSessionSnapshot(
     ?? options.context?.gitRoot
     ?? (await getGitRoot(options.context?.executionCwd))
     ?? '';
+  const runtimeSessionSnapshot = data.runtimeSessionState
+    ? snapshotRuntimeSessionState(data.runtimeSessionState)
+    : undefined;
+  if (shouldUseRuntimeSessionSnapshot) {
+    extensionStateToPersist = runtimeSessionSnapshot?.extensionState;
+    extensionRecordsToPersist = runtimeSessionSnapshot?.extensionRecords;
+  }
   // CAP-013-003 / CAP-SESSION-SNAPSHOT-003: storage failures are absorbed
   // here so a transient backend issue (disk full, FS permission, race) cannot
   // mask the caller's original error nor abort an otherwise-successful run.
@@ -232,10 +251,8 @@ export async function saveSessionSnapshot(
       scope: options.session.scope ?? 'user',
       errorMetadata: data.errorMetadata,
       ...(lineageToPreserve !== undefined ? { lineage: lineageToPreserve } : {}),
-      extensionState: data.runtimeSessionState
-        ? snapshotRuntimeExtensionState(data.runtimeSessionState.extensionState)
-        : undefined,
-      extensionRecords: data.runtimeSessionState?.extensionRecords.map((record) => ({ ...record })),
+      extensionState: extensionStateToPersist,
+      extensionRecords: extensionRecordsToPersist,
     });
   } catch (storageError) {
     console.error(

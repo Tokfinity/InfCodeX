@@ -80,7 +80,10 @@ import { attachManagedTaskRepoIntelligence } from './_internal/managed-task/repo
 import { buildManagedWorkerToolPolicy } from './_internal/managed-task/tool-policy.js';
 import { applyCurrentDiffReviewRoutingFloor } from './_internal/managed-task/review-routing.js';
 import { createTodoStore, type TodoStore } from './todo-store.js';
-import { applySidecarVerdictToRecorder } from '../agent-runtime/middleware/sidecar-verifier/verifier-recorder-bridge.js';
+import {
+  applySidecarVerdictToRecorder,
+  emitSidecarMessageEvent,
+} from '../agent-runtime/middleware/sidecar-verifier/verifier-recorder-bridge.js';
 import { buildRunnerSidecarVerifierAdapter } from './runner-sidecar-verifier-adapter.js';
 import { createTodoReminderState } from './todo-throttle-reminder.js';
 // FEATURE_193 (v0.7.43) deep V1 cleanup: the entire `scout-signals.ts`
@@ -148,11 +151,18 @@ import {
 // (inline → storage.load → empty) for AMA frame entry; SA already
 // uses this from `run-substrate.ts`.
 import { resolveInitialMessages } from '../agent-runtime/middleware/auto-resume.js';
+import { createExtensionRuntimeSessionController } from '../agent-runtime/middleware/extension-queue.js';
+import {
+  buildRuntimeSessionState,
+  snapshotRuntimeSessionState,
+} from '../agent-runtime/runtime-session-state.js';
 // CAP-010: shared tri-state permission gate. AMA's
 // `toolObserver.beforeTool` delegates to this so the extension
 // `tool:before` hook fires on AMA path (pre-FEATURE_100 only SA hit
 // it).
 import { getToolExecutionOverride } from '../agent-runtime/permission-gate.js';
+import { filterExcludedTools } from '../agent-runtime/tool-resolution.js';
+import { listToolDefinitions } from '../tools/index.js';
 import {
   CANCELLED_TOOL_RESULT_MESSAGE,
   MANAGED_TASK_MAX_TOOL_LOOP_ITERATIONS,
@@ -250,6 +260,20 @@ export type {
   RunnerAgentChain,
   RunnerAdapterTokenState,
 };
+
+type RunnerRuntimeSessionController = ReturnType<typeof createExtensionRuntimeSessionController>;
+type SessionBindableExtensionRuntime = NonNullable<KodaXOptions['extensionRuntime']> & {
+  bindController(controller: RunnerRuntimeSessionController): unknown;
+  hydrateSession(sessionId: string): Promise<void>;
+};
+
+function isSessionBindableExtensionRuntime(
+  runtime: KodaXOptions['extensionRuntime'],
+): runtime is SessionBindableExtensionRuntime {
+  const candidate: Partial<SessionBindableExtensionRuntime> | undefined = runtime;
+  return typeof candidate?.bindController === 'function'
+    && typeof candidate.hydrateSession === 'function';
+}
 
 /**
  * Env-flag check. `KODAX_MANAGED_TASK_RUNTIME=runner` enables the Runner-
@@ -395,7 +419,7 @@ export async function runManagedTaskViaRunner(
     emitSessionStart(effectiveOptions.events, { provider: providerName, sessionId: initialSessionId });
   }
   try {
-    return await runManagedTaskViaRunnerInner(effectiveOptions, prompt, adapterOverride, plan);
+    return await runManagedTaskViaRunnerInner(effectiveOptions, prompt, adapterOverride, plan, initialSessionId);
   } catch (err) {
     // Surface onError so top-level consumers can flush telemetry /
     // show UI toast before the rejection propagates.
@@ -451,6 +475,7 @@ async function runManagedTaskViaRunnerInner(
   prompt: string,
   adapterOverride: Parameters<typeof buildRunnerLlmAdapter>[1] | undefined,
   plan: ReasoningPlan | undefined,
+  resolvedSessionId: string,
 ): Promise<KodaXResult> {
   // F3 parity (v0.7.26) — apply the diff-driven review routing floor so
   // `decision.reviewTarget` / `reviewScale` / diff-driven `primaryTask`
@@ -746,7 +771,7 @@ async function runManagedTaskViaRunnerInner(
   // entry's `sessionId` mirrors legacy (useful for REPL transcript dump
   // + resume flow when reconstructing per-role session lineage).
   const sessionIdRef: { current: string | undefined } = {
-    current: options.session?.id,
+    current: options.session?.id ?? resolvedSessionId,
   };
 
   // Shard 6c + 6d-N: per-role-emit hook. Two responsibilities:
@@ -1178,7 +1203,20 @@ async function runManagedTaskViaRunnerInner(
   //      messages were provided. Pre-FEATURE_100 the AMA path skipped this
   //      tier and started fresh; substrate parity restores it.
   //   3. empty messages — first turn / unknown session
-  const resolvedInitial = await resolveInitialMessages(options, options.session?.id);
+  const resolvedInitial = await resolveInitialMessages(options, options.session?.id ?? resolvedSessionId);
+  const runtimeSessionState = buildRuntimeSessionState({
+    loadedExtensionState: resolvedInitial.loadedExtensionState,
+    loadedExtensionRecords: resolvedInitial.loadedExtensionRecords,
+    activeTools: filterExcludedTools(
+      listToolDefinitions().map((tool) => tool.name),
+      options.context?.excludeTools,
+    ),
+    modelSelection: {
+      provider: options.provider,
+      model: options.modelOverride ?? options.model,
+    },
+    thinkingLevel: options.reasoningMode,
+  });
   const userMessageContent = buildPromptMessageContent(
     promptWithOverlay,
     options.context?.inputArtifacts,
@@ -1352,7 +1390,8 @@ async function runManagedTaskViaRunnerInner(
     mainModel: options.modelOverride ?? options.model,
     mutationTracker,
     observer,
-    onVerdict: (verdict) => {
+    onVerdict: (verdict, context) => {
+      emitSidecarMessageEvent(options.events, verdict, context);
       void applySidecarVerdictToRecorder({
         recorder,
         observer,
@@ -1555,7 +1594,25 @@ async function runManagedTaskViaRunnerInner(
   //     verbatim then stops; Q2 never gets answered.
   //   - Bug F (abort listener cleanup): owned by the agent-layer
   //     `waitForWakeEvent`.
-  const runResult = await runWithIdleYield({
+  const runResult = await (async () => {
+    const sessionRuntime = isSessionBindableExtensionRuntime(extensionRuntime)
+      ? extensionRuntime
+      : undefined;
+    const releaseRuntimeBindingCandidate = sessionRuntime?.bindController(
+      createExtensionRuntimeSessionController(runtimeSessionState),
+    );
+    const releaseRuntimeBinding = typeof releaseRuntimeBindingCandidate === 'function'
+      ? releaseRuntimeBindingCandidate
+      : undefined;
+
+    try {
+      if (sessionRuntime) {
+        // Storage-hydrated state is the baseline; hydrateSession runs after
+        // binding so extension runtimes can reconcile and intentionally win
+        // duplicate-key conflicts for the current runtime version.
+        await sessionRuntime.hydrateSession(options.session?.id ?? resolvedSessionId);
+      }
+      return await runWithIdleYield({
     initialAgent: entryAgent,
     initialInput: runnerInput,
     runOnce,
@@ -1636,7 +1693,11 @@ async function runManagedTaskViaRunnerInner(
     // the (max+1)th iteration AFTER runOnce returns but BEFORE the
     // snapshot, so a legitimate run that completes at the cap still
     // returns its result.
-  });
+      });
+    } finally {
+      releaseRuntimeBinding?.();
+    }
+  })();
 
   // Issue 127 (review feedback): clean up the checkpoint EARLY — the
   // moment Runner.run resolves successfully — so any throw from the
@@ -1739,10 +1800,10 @@ async function runManagedTaskViaRunnerInner(
     // file, format `YYYYMMDD_HHMMSS`) always wins. `runOnce` does NOT
     // currently pass an agent-layer Session into Runner.run (would trigger
     // `session.append()`), so `effectiveRunResult.sessionId` is always
-    // undefined for production callers — the `runner-${Date.now()}`
-    // synthetic-id branch is left as a last-resort for SDK callers that
-    // explicitly opt out of session.id (vanishingly rare).
-    sessionId: options.session?.id ?? effectiveRunResult.sessionId ?? `runner-${Date.now()}`,
+    // undefined for production callers. The fallback is the same id emitted
+    // through onSessionStart, keeping hydrate/result/snapshot keys aligned
+    // even when callers omit an explicit session.id.
+    sessionId: options.session?.id ?? effectiveRunResult.sessionId ?? resolvedSessionId,
     managedProtocolPayload,
     managedTask,
     contextTokenSnapshot,
@@ -1753,6 +1814,13 @@ async function runManagedTaskViaRunnerInner(
     // legacy path.
     routingDecision: plan?.decision,
   };
+  const runtimeSessionSnapshot = snapshotRuntimeSessionState(
+    runtimeSessionState,
+    { includeUnchanged: false },
+  );
+  if (runtimeSessionSnapshot) {
+    result.runtimeSessionSnapshot = runtimeSessionSnapshot;
+  }
 
   // Shard 6d-i: capture task-scoped repo-intelligence snapshots
   // (repo-overview / changed-scope / active-module / impact-estimate /
@@ -1822,6 +1890,7 @@ async function runManagedTaskViaRunnerInner(
     messages: result.messages,
     title: prompt.slice(0, 80),
     gitRoot: options.context?.gitRoot ?? undefined,
+    runtimeSessionState,
   });
 
   return result;

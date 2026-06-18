@@ -56,6 +56,23 @@ describe('session lineage helpers', () => {
     ]);
   });
 
+  it('treats synthetic and real messages with the same content as distinct lineage entries', () => {
+    const initial = createSessionLineage([
+      createTextMessage('user', 'repeat'),
+    ]);
+    const syntheticMessage: KodaXMessage = {
+      role: 'user',
+      content: 'repeat',
+      _synthetic: true,
+    };
+
+    const branched = createSessionLineage([syntheticMessage], initial);
+
+    expect(branched.activeEntryId).not.toBe(initial.activeEntryId);
+    expect(branched.entries.filter((entry) => entry.type === 'message')).toHaveLength(2);
+    expect(getSessionMessagesFromLineage(branched)).toEqual([syntheticMessage]);
+  });
+
   it('stores labels as lightweight checkpoints and resolves them for forking', () => {
     const lineage = createSessionLineage([
       createTextMessage('user', 'checkpoint root'),

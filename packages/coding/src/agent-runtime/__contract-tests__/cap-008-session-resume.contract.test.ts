@@ -82,8 +82,22 @@ describe('CAP-008: initialMessages session continuation contract', () => {
     expect(result.loadedExtensionRecords).toEqual([]);
   });
 
-  it('CAP-SESSION-RESUME-001d: initialMessages takes precedence over storage — when both are present, storage.load is NOT called', async () => {
-    const load = vi.fn();
+  it('CAP-SESSION-RESUME-001d: initialMessages keep transcript precedence while storage restores extension state', async () => {
+    const load = vi.fn().mockResolvedValue({
+      messages: [{ role: 'user', content: 'persisted but stale' }],
+      title: 'Persisted Session',
+      gitRoot: '/repo',
+      extensionState: { 'ext-a': { visits: 2 } },
+      extensionRecords: [
+        {
+          id: 'record-1',
+          extensionId: 'ext-a',
+          type: 'turn',
+          ts: 1,
+          data: { ok: true },
+        },
+      ],
+    });
     const options = {
       session: {
         initialMessages: [{ role: 'user', content: 'live turn' }],
@@ -91,8 +105,37 @@ describe('CAP-008: initialMessages session continuation contract', () => {
       },
     } as KodaXOptions;
 
-    await resolveInitialMessages(options, 'sid-both');
+    const result = await resolveInitialMessages(options, 'sid-both');
+    expect(load).toHaveBeenCalledWith('sid-both');
+    expect(result.messages).toEqual([{ role: 'user', content: 'live turn' }]);
+    expect(result.title).toBe('live turn');
+    expect(result.loadedExtensionState).toEqual({ 'ext-a': { visits: 2 } });
+    expect(result.loadedExtensionRecords).toEqual([
+      expect.objectContaining({
+        id: 'record-1',
+        extensionId: 'ext-a',
+        type: 'turn',
+      }),
+    ]);
+  });
+
+  it('FEATURE_211: host-provided extension snapshot avoids storage.load on initialMessages path', async () => {
+    const load = vi.fn();
+    const options = {
+      session: {
+        initialMessages: [{ role: 'user', content: 'live turn' }],
+        initialExtensionState: { 'ext-a': { visits: 3 } },
+        initialExtensionRecords: [],
+        storage: { load, save: vi.fn() } as KodaXSessionStorage,
+      },
+    } as KodaXOptions;
+
+    const result = await resolveInitialMessages(options, 'sid-host-snapshot');
+
     expect(load).not.toHaveBeenCalled();
+    expect(result.messages).toEqual([{ role: 'user', content: 'live turn' }]);
+    expect(result.loadedExtensionState).toEqual({ 'ext-a': { visits: 3 } });
+    expect(result.loadedExtensionRecords).toEqual([]);
   });
 
   it('CAP-SESSION-RESUME-001e: when neither initialMessages nor storage+sessionId, returns empty bundle (no throw)', async () => {

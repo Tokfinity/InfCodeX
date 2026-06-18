@@ -11,6 +11,7 @@ import type {
   KodaXEvents,
   KodaXManagedTaskStatusEvent,
   KodaXRepoIntelligenceTraceEvent,
+  KodaXSidecarMessageEvent,
   KodaXTokenUsage,
   WorkflowEventCorrelation,
 } from '@kodax-ai/coding';
@@ -80,6 +81,16 @@ type JsonEvent =
       summary: string;
       capability?: KodaXRepoIntelligenceTraceEvent['capability'];
       trace?: KodaXRepoIntelligenceTraceEvent['trace'];
+    }
+  | {
+      type: 'sidecar.message';
+      source: KodaXSidecarMessageEvent['source'];
+      verdict: KodaXSidecarMessageEvent['verdict'];
+      recipient: KodaXSidecarMessageEvent['recipient'];
+      delivery: KodaXSidecarMessageEvent['delivery'];
+      content: string;
+      suggestedFix?: string;
+      trace?: string;
     }
   | ({
       type: 'tool.progress';
@@ -288,6 +299,19 @@ export function createJsonEvents(options: JsonEventOutputOptions = {}): KodaXEve
         summary: event.summary,
         capability: event.capability,
         trace: event.trace,
+      });
+    },
+
+    onSidecarMessage: (event) => {
+      writeJsonLine(stdout, {
+        type: 'sidecar.message',
+        source: event.source,
+        verdict: event.verdict,
+        recipient: event.recipient,
+        delivery: event.delivery,
+        content: event.content,
+        ...(event.suggestedFix !== undefined ? { suggestedFix: event.suggestedFix } : {}),
+        ...(event.trace !== undefined ? { trace: event.trace } : {}),
       });
     },
 

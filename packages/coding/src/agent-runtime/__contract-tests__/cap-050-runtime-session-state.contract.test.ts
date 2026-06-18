@@ -31,7 +31,9 @@ import {
   createRuntimeExtensionState,
   getExtensionStateBucket,
   snapshotRuntimeExtensionState,
+  snapshotRuntimeSessionState,
 } from '../runtime-session-state.js';
+import { createExtensionRuntimeSessionController } from '../middleware/extension-queue.js';
 
 type ExtensionStateMap = Map<string, Map<string, KodaXJsonValue>>;
 
@@ -114,6 +116,79 @@ describe('CAP-050: RuntimeSessionState construction contract', () => {
 
     const snapshot = snapshotRuntimeExtensionState(stateMap);
     expect(snapshot).toBeUndefined();
+  });
+
+  it('FEATURE_211: snapshotRuntimeSessionState returns serializable extension state and cloned records', () => {
+    const state = buildRuntimeSessionState({
+      activeTools: [],
+      modelSelection: {},
+    });
+    getExtensionStateBucket(state.extensionState, 'ext-a').set('visits', 2);
+    state.extensionRecords.push({
+      id: 'record-1',
+      extensionId: 'ext-a',
+      type: 'turn',
+      ts: 1,
+      data: { ok: true },
+    });
+
+    const snapshot = snapshotRuntimeSessionState(state);
+    expect(snapshot).toEqual({
+      extensionState: { 'ext-a': { visits: 2 } },
+      extensionRecords: [
+        {
+          id: 'record-1',
+          extensionId: 'ext-a',
+          type: 'turn',
+          ts: 1,
+          data: { ok: true },
+        },
+      ],
+    });
+
+    state.extensionRecords[0]!.id = 'mutated-after-snapshot';
+    expect(snapshot?.extensionRecords?.[0]?.id).toBe('record-1');
+  });
+
+  it('FEATURE_211: changed-only runtime snapshots represent cleared extension state', () => {
+    const state = buildRuntimeSessionState({
+      loadedExtensionState: { 'ext-a': { visits: 1 } },
+      activeTools: [],
+      modelSelection: {},
+    });
+    const controller = createExtensionRuntimeSessionController(state);
+
+    expect(snapshotRuntimeSessionState(state, { includeUnchanged: false })).toBeUndefined();
+
+    controller.setSessionState('ext-a', 'visits', undefined);
+
+    expect(snapshotRuntimeSessionState(state, { includeUnchanged: false })).toEqual({
+      extensionState: {},
+    });
+  });
+
+  it('FEATURE_211: changed-only runtime snapshots represent cleared extension records', () => {
+    const state = buildRuntimeSessionState({
+      loadedExtensionRecords: [
+        {
+          id: 'record-1',
+          extensionId: 'ext-a',
+          type: 'turn',
+          ts: 1,
+        },
+      ],
+      activeTools: [],
+      modelSelection: {},
+    });
+    const controller = createExtensionRuntimeSessionController(state);
+
+    expect(snapshotRuntimeSessionState(state, { includeUnchanged: false })).toBeUndefined();
+
+    expect(controller.clearSessionRecords('ext-a')).toBe(1);
+
+    expect(snapshotRuntimeSessionState(state, { includeUnchanged: false })).toEqual({
+      extensionRecords: [],
+    });
   });
 
   it('CAP-RUNTIME-STATE-BUCKET: getExtensionStateBucket lazily creates and persists a sub-Map for a new extensionId', () => {

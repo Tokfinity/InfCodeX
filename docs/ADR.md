@@ -1,11 +1,11 @@
 # KodaX Architecture Decision Records
 
-> Last updated: 2026-06-13
+> Last updated: 2026-06-18
 >
 > **⚠️ Architecture state notice (2026-05-25)**: 早期 ADR (ADR-005/006/007/008 等) 描述 `FEATURE_061/062` Scout-first + Planner/Generator/Evaluator H2 chain 模型，已被 [**ADR-030 claudecode-shape Main Agent + Sidecar Verifier**](#adr-030-claudecode-shape-main-agent--sidecar-verifier-substrate-feature_184-v0745) (FEATURE_184 v0.7.42) 取代。
 > 当前运行时架构：**V2 Worker 单循环 + Sidecar Verifier**。V1 chain (Scout/Planner/Generator/Evaluator) 已于 [ADR-030 §F193 cross-ref](#adr-030-claudecode-shape-main-agent--sidecar-verifier-substrate-feature_184-v0745) FEATURE_193 v0.7.43 全量退役；`emit_handoff` 工具已于 FEATURE_190 v0.7.43 删除。
 > 早期 Scout-first ADR 保留以便 archive 查阅，不反映当前实现。
-> **Current package / SDK state (2026-06-13 / v0.7.49)**: 源码 workspace 为 `llm / agent / coding / repl` 4 包；根 npm 包 `@kodax-ai/kodax` 暴露 7 个 SDK subpath（`/agent`、`/llm`、`/coding`、`/repl`、`/skills`、`/mcp`、`/session`）；LLM registry 有 14 个内置 provider alias。
+> **Current package / SDK state (2026-06-18 / v0.7.52)**: 源码 workspace 为 `llm / agent / coding / repl` 4 包；根 npm 包 `@kodax-ai/kodax` 暴露 7 个 SDK subpath（`/agent`、`/llm`、`/coding`、`/repl`、`/skills`、`/mcp`、`/session`）；LLM registry 有 14 个内置 provider alias。v0.7.50 的 workflow process contract、v0.7.51 的 durable tool replay / `hostMetadata` / inline skill-reference propagation，以及 v0.7.52 的 Node 20+ maintenance baseline 均为当前事实。
 >
 > 之前的执行模型注脚（v0.7.42 前）：
 > 这组 ADR 反映 `FEATURE_061/062` 之后的执行模型：
@@ -650,7 +650,7 @@ KodaX 跳过 tree-sitter，直接用 shell-quote 作为唯一 AST 后端。新�
 
 **Status**: Accepted (2026-05-12)
 
-> **Later status (2026-06-13 / v0.7.49)**: 本 ADR 记录 v0.7.39 当时的 5-subpath 形式化决策。后续 ADR-032 增加 `/mcp`，ADR-038 增加 `/session`，ADR-036 / FEATURE_194 将 skills/mcp/session-lineage/tracing 等源码包内联。当前根发布包为 `@kodax-ai/kodax`，SDK subpath 为 7 个：`/agent`、`/llm`、`/coding`、`/repl`、`/skills`、`/mcp`、`/session`。
+> **Later status (2026-06-18 / v0.7.52)**: 本 ADR 记录 v0.7.39 当时的 5-subpath 形式化决策。后续 ADR-032 增加 `/mcp`，ADR-038 增加 `/session`，ADR-036 / FEATURE_194 将 skills/mcp/session-lineage/tracing 等源码包内联。当前根发布包为 `@kodax-ai/kodax`，SDK subpath 为 7 个：`/agent`、`/llm`、`/coding`、`/repl`、`/skills`、`/mcp`、`/session`。
 
 **TL;DR**：把 npm 发布物从 `@kodax-ai/kodax-cli`（v0.7.38 中间形态）改为 `@kodax-ai/kodax`（去 `-cli` 后缀），同时通过 ESM subpath exports 把 5 个内部包（agent / llm / coding / repl / skills）显式开放给 SDK 消费者。源码层分包（ADR-001 / ADR-021）**完全不变**；ADR-022 的"单 bundle 发布"决策**仍然成立** —— 本 ADR 只是在 bundle 内部增加 6 个 entry（root + 5 subpath）并共享 chunks。
 
@@ -2381,6 +2381,14 @@ packages/
 ## ADR-040: Workflow Process Layer — Agent-Layer Domain-Neutral Snapshot/Event + Child Telemetry Correlation + Restricted-Source Validation (FEATURE_229, v0.7.50)
 
 **Status**: Accepted
+
+> **Later status (2026-06-18 / v0.7.52)**: FEATURE_229 remains the current
+> workflow process boundary. v0.7.51 added durable session tool replay,
+> workflow run `hostMetadata`, and inline workflow skill-reference propagation
+> on top of this contract. v0.7.52 was maintenance-only for this area: no
+> workflow architecture change, but the runtime/docs baseline is now Node.js
+> 20+.
+
 **Context**: FEATURE_217 (v0.7.49) 已交付动态工作流的完整产品闭环（生成 JS harness、capsule、save/rerun、worktree isolation、REPL `/workflow`）。但工作流的「运行过程」本身还不是 agent 层标准的 process/event/snapshot——SDK 宿主、REPL inline/fullscreen、未来 extension/automation 只能各自拼 UI 和状态解释。FEATURE_229 把这一层抽象成可订阅契约。本 ADR 记录其架构取舍（feature 设计见 [features/v0.7.50.md](features/v0.7.50.md)）。
 
 **Decisions**:

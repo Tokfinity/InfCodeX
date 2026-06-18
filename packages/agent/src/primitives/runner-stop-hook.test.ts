@@ -140,6 +140,7 @@ describe('Runner stopHook — FEATURE_184 Phase A primitive', () => {
     // Final transcript contains the synthetic user message.
     const userMessages = result.messages.filter((m) => m.role === 'user');
     expect(userMessages.some((m) => m.content === 'please redo X')).toBe(true);
+    expect(userMessages.find((m) => m.content === 'please redo X')?._synthetic).toBe(true);
   });
 
   it('hook ctx.reanimateCount increments across iterations', async () => {
@@ -315,6 +316,7 @@ describe('Runner stopHook — FEATURE_184 Phase A primitive', () => {
     // 2nd assistant message and the abort.
     const userMessages = result.messages.filter((m) => m.role === 'user');
     expect(userMessages.some((m) => m.content === 'fix your output')).toBe(true);
+    expect(userMessages.find((m) => m.content === 'fix your output')?._synthetic).toBe(true);
   });
 
   it('budget=0 immediately aborts on first string return', async () => {

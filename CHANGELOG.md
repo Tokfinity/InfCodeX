@@ -4,6 +4,25 @@ All notable changes to this project will be documented in this file.
 
 > Full history for versions prior to v0.7.0: [CHANGELOG_ARCHIVE.md](docs/CHANGELOG_ARCHIVE.md)
 
+## [Unreleased]
+
+## [0.7.53] - 2026-06-18
+
+> Scope note: a maintenance release focused on session hygiene and interactive resume-state persistence. Two features were pulled forward into this window — **FEATURE_174** (`kodax sessions dedupe`, from v0.7.69) and **FEATURE_211** (durable extension/MCP session state across host-owned resume, from v0.7.72) — alongside host-readable Sidecar Verifier messages and fixes for AMA iteration-cap reporting, child-executor progress seeding, and synthetic sidecar follow-up message identity. No LLM-facing prompt changes (ADR-033 eval non-trigger).
+
+### Added
+
+- **Sidecar Verifier actionable messages are now host-readable.** `KodaXEvents.onSidecarMessage` emits `KodaXSidecarMessageEvent` for verifier `revise` and `blocked` verdicts, and JSONL/headless output mirrors the same payload as `sidecar.message`. Accept verdicts remain silent.
+- **FEATURE_174 - `kodax sessions dedupe`.** A dry-run-first `kodax sessions dedupe [--apply]` command finds historical `runner-*.jsonl` ghost sessions and only moves uniquely matched ghosts into a reversible `.dedupe-archive`, leaving canonical user sessions and managed-task-worker sessions untouched.
+- **FEATURE_211 - Interactive extension/MCP session state now survives host-owned resume.** Runtime extension state is snapshotted back to the REPL host, restored through `initialExtensionState` / `initialExtensionRecords`, and dirty-tracked so normal Ink saves stay on the append-only hot path while explicit extension clears persist correctly.
+
+### Fixed
+
+- **AMA iteration events report the real per-invocation cap.** Runner-driven task-engine iteration start/end events now use the actual invocation `maxIter` denominator instead of the stale standalone task-engine hint, so hosts do not see impossible counters such as `24/20`.
+- **Child-executor progress is seeded from the real cap.** Child-agent progress state now shares the same real-cap denominator used by the runner adapter, keeping progress displays aligned with the current invocation limit.
+- **Synthetic sidecar follow-ups no longer collapse into real user messages.** Sidecar revise prompts are marked as synthetic user messages, and session-lineage/storage fingerprinting now treats synthetic and real same-content messages as distinct entries.
+- **FEATURE_211 crash recovery keeps extension snapshots consistent with rolled-back transcripts.** Unsafe error snapshots now preserve the existing persisted extension state/records when they roll messages and lineage back to the last clean session state.
+
 ## [0.7.52] - 2026-06-18
 
 > Scope note: a maintenance release of fixes landed right after v0.7.51 — OpenAI-compat provider robustness, the Node runtime floor raised to 20, and the cross-platform CI test cleanup. No new features; no LLM-facing prompt changes (ADR-033 eval non-trigger).

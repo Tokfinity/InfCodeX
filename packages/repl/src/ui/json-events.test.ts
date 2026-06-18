@@ -88,6 +88,15 @@ describe('createJsonEvents', () => {
         daemonLatencyMs: 12,
       },
     });
+    events.onSidecarMessage?.({
+      source: 'sidecar-verifier',
+      verdict: 'revise',
+      recipient: 'main-agent',
+      delivery: 'synthetic-user-message',
+      content: 'Run the missing regression test.',
+      suggestedFix: 'npm test -- foo.test.ts',
+      trace: 'verifier_ok',
+    });
     events.onIterationEnd?.({
       iter: 1,
       maxIter: 5,
@@ -159,6 +168,16 @@ describe('createJsonEvents', () => {
           source: 'premium',
           daemonLatencyMs: 12,
         },
+      },
+      {
+        type: 'sidecar.message',
+        source: 'sidecar-verifier',
+        verdict: 'revise',
+        recipient: 'main-agent',
+        delivery: 'synthetic-user-message',
+        content: 'Run the missing regression test.',
+        suggestedFix: 'npm test -- foo.test.ts',
+        trace: 'verifier_ok',
       },
       {
         type: 'iteration.end',

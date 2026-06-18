@@ -284,6 +284,10 @@ export KODAX_VERIFIER_MODEL=claude-haiku-4-5-20251001
 
 `KODAX_VERIFIER_LOG=1` 等价于在 `~/.kodax/config.json` 写 `"verifierLog": true`，会显示 verifier gate、elapsedMs 和 trace；`KODAX_VERIFIER_PROVIDER` / `KODAX_VERIFIER_MODEL` 需要成对设置，用独立模型执行 verifier；`KODAX_VERIFIER_ALWAYS=1` 仅建议调试和回归测试时使用。
 
+SDK / headless 宿主可以通过 `KodaXEvents.onSidecarMessage` 观察 Sidecar
+Verifier 的 `revise` / `blocked` 可执行消息；JSONL 输出使用同形
+`sidecar.message` 事件。`accept` 仍保持静默。
+
 #### 给自定义 provider 开图片 / vision 输入（FEATURE_134 v0.7.40）
 
 如果你的自定义 provider 后面的模型支持 vision，加 `capabilityProfile.multimodalSupport: "image-input"` 显式开启，KodaX 的 SA-path policy gate 就不会人为拦截多模态请求。内置 vision-capable alias（Anthropic、OpenAI、DeepSeek、Kimi、Qwen、Zhipu、MiniMax、MiMo、Ark，以及通过 CLI `@<path>` file-include 语法传图的 Gemini-CLI）已经默认开了这个 flag。Codex-CLI 和自定义 provider 在底层模型支持图片输入时需要手动 opt-in。

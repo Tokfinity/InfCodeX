@@ -99,4 +99,4 @@ npm test -- packages/llm/src
 
 ## License
 
-MIT
+Apache-2.0

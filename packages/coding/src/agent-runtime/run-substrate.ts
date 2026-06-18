@@ -166,6 +166,7 @@ import { resolveContextWindow } from '@kodax-ai/agent';
 import {
   type RuntimeSessionState,
   buildRuntimeSessionState,
+  snapshotRuntimeSessionState,
 } from './runtime-session-state.js';
 import { saveSessionSnapshot } from './middleware/session-snapshot.js';
 import { emitRepoIntelligenceTrace } from './middleware/repo-intelligence.js';
@@ -457,18 +458,6 @@ export async function runSubstrate(
     managedProtocolPayloadRef,
   });
 
-  const finalizeManagedProtocolResult = (result: KodaXResult): KodaXResult => {
-    const payload = mergeManagedProtocolPayload(
-      result.managedProtocolPayload,
-      managedProtocolPayloadRef.current,
-    );
-    return payload
-      ? {
-          ...result,
-          managedProtocolPayload: payload,
-        }
-      : result;
-  };
   let contextTokenSnapshot = rebaseContextTokenSnapshot(
     messages,
     options.context?.contextTokenSnapshot,
@@ -486,6 +475,23 @@ export async function runSubstrate(
     },
     thinkingLevel: turnState.runtimeThinkingLevel,
   });
+  const finalizeManagedProtocolResult = (result: KodaXResult): KodaXResult => {
+    const payload = mergeManagedProtocolPayload(
+      result.managedProtocolPayload,
+      managedProtocolPayloadRef.current,
+    );
+    const runtimeSessionSnapshot = snapshotRuntimeSessionState(
+      runtimeSessionState,
+      { includeUnchanged: false },
+    );
+    return payload || runtimeSessionSnapshot
+      ? {
+          ...result,
+          ...(payload ? { managedProtocolPayload: payload } : {}),
+          ...(runtimeSessionSnapshot ? { runtimeSessionSnapshot } : {}),
+        }
+      : result;
+  };
   // v0.7.42 — wire optional embedder-facing session control. CAP-055 reads
   // these fields at the start of every turn, so direct mutation here is
   // sufficient — no re-resolve dance required.

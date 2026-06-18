@@ -6,6 +6,8 @@ import type {
   KodaXContextTokenSnapshot,
 } from '@kodax-ai/coding';
 import type {
+  KodaXExtensionSessionRecord,
+  KodaXExtensionSessionState,
   KodaXMessage,
   KodaXSessionArtifactLedgerEntry,
   KodaXSessionLineage,
@@ -23,6 +25,10 @@ export interface InteractiveContext {
   contextTokenSnapshot?: KodaXContextTokenSnapshot;
   lineage?: KodaXSessionLineage;
   artifactLedger?: KodaXSessionArtifactLedgerEntry[];
+  extensionState?: KodaXExtensionSessionState;
+  extensionRecords?: KodaXExtensionSessionRecord[];
+  extensionStateDirty?: boolean;
+  extensionRecordsDirty?: boolean;
   sessionId: string;
   title: string;
   gitRoot?: string;
@@ -41,12 +47,20 @@ export async function createInteractiveContext(options: {
   existingUiHistory?: KodaXSessionUiHistoryItem[];
   existingLineage?: KodaXSessionLineage;
   existingArtifactLedger?: KodaXSessionArtifactLedgerEntry[];
+  existingExtensionState?: KodaXExtensionSessionState;
+  existingExtensionRecords?: KodaXExtensionSessionRecord[];
 }): Promise<InteractiveContext> {
   return {
     messages: options.existingMessages ?? [],
     uiHistory: options.existingUiHistory?.map((item) => ({ ...item })),
     lineage: options.existingLineage ?? undefined,
     artifactLedger: options.existingArtifactLedger?.map((entry) => ({ ...entry, metadata: entry.metadata ? { ...entry.metadata } : undefined })),
+    extensionState: options.existingExtensionState
+      ? structuredClone(options.existingExtensionState)
+      : undefined,
+    extensionRecords: options.existingExtensionRecords?.map((record) => ({ ...record })),
+    extensionStateDirty: false,
+    extensionRecordsDirty: false,
     sessionId: options.sessionId ?? generateSessionId(),
     title: '',
     gitRoot: options.gitRoot,

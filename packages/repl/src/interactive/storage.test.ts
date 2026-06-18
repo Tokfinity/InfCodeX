@@ -176,6 +176,29 @@ describe('FileSessionStorage', () => {
     expect(typeof listed[0]?.createdAt).toBe('string');
   });
 
+  it('does not collapse synthetic and real same-content messages during snapshot merge', async () => {
+    const { FileSessionStorage } = await import('./storage.js');
+    const storage = new FileSessionStorage();
+    const gitRoot = path.resolve(KODAX_REPO_ROOT).replace(/\\/g, '/');
+    const realMessage = { role: 'user' as const, content: 'repeat' };
+    const syntheticMessage = { role: 'user' as const, content: 'repeat', _synthetic: true };
+
+    await storage.save('synthetic-prefix', {
+      messages: [realMessage],
+      title: 'Synthetic Prefix',
+      gitRoot,
+    });
+    await storage.save('synthetic-prefix', {
+      messages: [syntheticMessage],
+      title: 'Synthetic Prefix',
+      gitRoot,
+    });
+
+    await expect(storage.load('synthetic-prefix')).resolves.toMatchObject({
+      messages: [syntheticMessage],
+    });
+  });
+
   it('keeps valid uiHistory siblings when one persisted item is malformed', async () => {
     const sessionsDir = path.join(tempHome, '.kodax', 'sessions');
     await mkdir(sessionsDir, { recursive: true });
@@ -814,6 +837,79 @@ describe('FileSessionStorage', () => {
     expect(loaded2?.title).toBe('Updated Title');
     // extensionState is in the meta line (first save), meta_update doesn't overwrite it
     expect(loaded2?.extensionState).toEqual({ 'ext:sample': { phase: 'active', visits: 5 } });
+  });
+
+  it('appendSessionDelta full-merges when caller provides updated extensionState', async () => {
+    const { FileSessionStorage } = await import('./storage.js');
+    const storage = new FileSessionStorage();
+    const gitRoot = tempHome.replace(/\\/g, '/');
+
+    await storage.save('session-extension-state-update', {
+      messages: [{ role: 'user', content: 'test' }],
+      title: 'Original Title',
+      gitRoot,
+      extensionState: { 'ext:sample': { visits: 1 } },
+    });
+
+    const loaded1 = await storage.load('session-extension-state-update');
+    expect(loaded1?.extensionState).toEqual({ 'ext:sample': { visits: 1 } });
+
+    const messages = [
+      { role: 'user' as const, content: 'test' },
+      { role: 'assistant' as const, content: 'reply' },
+    ];
+    await storage.appendSessionDelta('session-extension-state-update', {
+      messages,
+      title: 'Updated Title',
+      gitRoot,
+      lineage: createSessionLineage(messages, loaded1!.lineage),
+      extensionState: { 'ext:sample': { visits: 2 } },
+    });
+
+    const loaded2 = await storage.load('session-extension-state-update');
+    expect(loaded2?.title).toBe('Updated Title');
+    expect(loaded2?.extensionState).toEqual({ 'ext:sample': { visits: 2 } });
+  });
+
+  it('appendSessionDelta full-merges when caller clears extensionRecords', async () => {
+    const { FileSessionStorage } = await import('./storage.js');
+    const storage = new FileSessionStorage();
+    const gitRoot = tempHome.replace(/\\/g, '/');
+    const initialMessages = [{ role: 'user' as const, content: 'test' }];
+
+    await storage.save('session-extension-records-clear', {
+      messages: initialMessages,
+      title: 'Original Title',
+      gitRoot,
+      lineage: createSessionLineage(initialMessages),
+      extensionRecords: [
+        {
+          id: 'record-1',
+          extensionId: 'ext:sample',
+          type: 'turn',
+          ts: 1,
+        },
+      ],
+    });
+
+    const loaded1 = await storage.load('session-extension-records-clear');
+    expect(loaded1?.extensionRecords).toHaveLength(1);
+
+    const messages = [
+      ...initialMessages,
+      { role: 'assistant' as const, content: 'reply' },
+    ];
+    await storage.appendSessionDelta('session-extension-records-clear', {
+      messages,
+      title: 'Updated Title',
+      gitRoot,
+      lineage: createSessionLineage(messages, loaded1!.lineage),
+      extensionRecords: [],
+    });
+
+    const loaded2 = await storage.load('session-extension-records-clear');
+    expect(loaded2?.title).toBe('Updated Title');
+    expect(loaded2?.extensionRecords).toEqual([]);
   });
 
   it('appendSessionDelta fallback preserves runtimeInfo and errorMetadata', async () => {

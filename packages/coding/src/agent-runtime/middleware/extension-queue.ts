@@ -169,6 +169,7 @@ export function createExtensionRuntimeSessionController(state: RuntimeSessionSta
       state.extensionState.get(extensionId)?.get(key) as T | undefined,
     setSessionState: (extensionId: string, key: string, value: KodaXJsonValue | undefined) => {
       const bucket = getExtensionStateBucket(state.extensionState, extensionId);
+      state.extensionStateDirty = true;
       if (value === undefined) {
         bucket.delete(key);
         if (bucket.size === 0) {
@@ -205,11 +206,13 @@ export function createExtensionRuntimeSessionController(state: RuntimeSessionSta
         );
         if (existingIndex >= 0) {
           state.extensionRecords.splice(existingIndex, 1, record);
+          state.extensionRecordsDirty = true;
           return record;
         }
       }
 
       state.extensionRecords.push(record);
+      state.extensionRecordsDirty = true;
       return record;
     },
     listSessionRecords: (extensionId: string, type?: string) =>
@@ -225,7 +228,11 @@ export function createExtensionRuntimeSessionController(state: RuntimeSessionSta
         record.extensionId !== extensionId
         || (type !== undefined && record.type !== type),
       );
-      return before - state.extensionRecords.length;
+      const removed = before - state.extensionRecords.length;
+      if (removed > 0) {
+        state.extensionRecordsDirty = true;
+      }
+      return removed;
     },
     getActiveTools: () => [...state.activeTools],
     setActiveTools: (toolNames: string[]) => {

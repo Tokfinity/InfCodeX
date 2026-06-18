@@ -1015,6 +1015,225 @@ describe('runManagedTaskViaRunner — end-to-end', () => {
     expect(result.managedTask?.contract.harnessProfile).toBe('H0_DIRECT');
   });
 
+  it('FEATURE_211: returns and persists extension runtime session snapshots', async () => {
+    type TestSessionController = {
+      setSessionState(extensionId: string, key: string, value: unknown | undefined): void;
+      appendSessionRecord(
+        extensionId: string,
+        type: string,
+        data?: unknown,
+        options?: { dedupeKey?: string },
+      ): unknown;
+    };
+
+    let controller: TestSessionController | undefined;
+    let released = false;
+    const save = vi.fn(async () => undefined);
+    const extensionRuntime = {
+      searchCapabilities: vi.fn(async () => []),
+      describeCapability: vi.fn(async () => ({})),
+      executeCapability: vi.fn(async () => ({ content: [] })),
+      readCapability: vi.fn(async () => ({ content: [] })),
+      getCapabilityPrompt: vi.fn(async () => undefined),
+      getCapabilityPromptContext: vi.fn(async () => undefined),
+      bindController: (nextController: TestSessionController) => {
+        controller = nextController;
+        return () => {
+          released = true;
+          controller = undefined;
+        };
+      },
+      hydrateSession: async (sessionId: string) => {
+        controller?.setSessionState('ext:runner', 'visits', 1);
+        controller?.appendSessionRecord('ext:runner', 'hydrate', { sessionId });
+      },
+    } as unknown as KodaXOptions['extensionRuntime'];
+
+    const result = await runManagedTaskViaRunner(
+      {
+        ...makeOptions(),
+        extensionRuntime,
+        session: {
+          id: 'runner-feature-211',
+          storage: {
+            load: vi.fn(async () => null),
+            save,
+          },
+        },
+      },
+      'Say hello',
+      async () => ({ textBlocks: [{ text: 'done' }], toolBlocks: [] }),
+    );
+
+    expect(result.runtimeSessionSnapshot?.extensionState).toEqual({
+      'ext:runner': { visits: 1 },
+    });
+    expect(result.runtimeSessionSnapshot?.extensionRecords).toEqual([
+      expect.objectContaining({
+        extensionId: 'ext:runner',
+        type: 'hydrate',
+        data: { sessionId: 'runner-feature-211' },
+      }),
+    ]);
+    expect(save).toHaveBeenCalledWith(
+      'runner-feature-211',
+      expect.objectContaining({
+        extensionState: { 'ext:runner': { visits: 1 } },
+        extensionRecords: [
+          expect.objectContaining({
+            extensionId: 'ext:runner',
+            type: 'hydrate',
+          }),
+        ],
+      }),
+    );
+    expect(released).toBe(true);
+  });
+
+  it('FEATURE_211: hydrates extension runtime with the resolved fallback session id', async () => {
+    type TestSessionController = {
+      setSessionState(extensionId: string, key: string, value: unknown | undefined): void;
+    };
+
+    let controller: TestSessionController | undefined;
+    let hydratedSessionId: string | undefined;
+    const extensionRuntime = {
+      searchCapabilities: vi.fn(async () => []),
+      describeCapability: vi.fn(async () => ({})),
+      executeCapability: vi.fn(async () => ({ content: [] })),
+      readCapability: vi.fn(async () => ({ content: [] })),
+      getCapabilityPrompt: vi.fn(async () => undefined),
+      getCapabilityPromptContext: vi.fn(async () => undefined),
+      bindController: (nextController: TestSessionController) => {
+        controller = nextController;
+        return () => {
+          controller = undefined;
+        };
+      },
+      hydrateSession: async (sessionId: string) => {
+        hydratedSessionId = sessionId;
+        controller?.setSessionState('ext:runner', 'sessionId', sessionId);
+      },
+    } as unknown as KodaXOptions['extensionRuntime'];
+
+    const result = await runManagedTaskViaRunner(
+      {
+        ...makeOptions(),
+        extensionRuntime,
+        session: {
+          storage: {
+            load: vi.fn(async () => null),
+            save: vi.fn(async () => undefined),
+          },
+        },
+      },
+      'Say hello',
+      async () => ({ textBlocks: [{ text: 'done' }], toolBlocks: [] }),
+    );
+
+    expect(result.sessionId).toMatch(/^runner-/);
+    expect(hydratedSessionId).toBe(result.sessionId);
+    expect(result.runtimeSessionSnapshot?.extensionState).toEqual({
+      'ext:runner': { sessionId: result.sessionId },
+    });
+  });
+
+  it('FEATURE_211: hydrateSession intentionally wins duplicate keys over storage state', async () => {
+    type TestSessionController = {
+      setSessionState(extensionId: string, key: string, value: unknown | undefined): void;
+    };
+
+    let controller: TestSessionController | undefined;
+    const extensionRuntime = {
+      searchCapabilities: vi.fn(async () => []),
+      describeCapability: vi.fn(async () => ({})),
+      executeCapability: vi.fn(async () => ({ content: [] })),
+      readCapability: vi.fn(async () => ({ content: [] })),
+      getCapabilityPrompt: vi.fn(async () => undefined),
+      getCapabilityPromptContext: vi.fn(async () => undefined),
+      bindController: (nextController: TestSessionController) => {
+        controller = nextController;
+        return () => {
+          controller = undefined;
+        };
+      },
+      hydrateSession: async () => {
+        controller?.setSessionState('ext:runner', 'phase', 'hydrate');
+      },
+    } as unknown as KodaXOptions['extensionRuntime'];
+
+    const result = await runManagedTaskViaRunner(
+      {
+        ...makeOptions(),
+        extensionRuntime,
+        session: {
+          id: 'runner-feature-211-hydrate-order',
+          storage: {
+            load: vi.fn(async () => ({
+              messages: [{ role: 'user', content: 'previous turn' }],
+              title: 'Previous',
+              gitRoot: '/repo',
+              extensionState: {
+                'ext:runner': { phase: 'storage', keep: true },
+              },
+            })),
+            save: vi.fn(async () => undefined),
+          },
+        },
+      },
+      'Say hello',
+      async () => ({ textBlocks: [{ text: 'done' }], toolBlocks: [] }),
+    );
+
+    expect(result.runtimeSessionSnapshot?.extensionState).toEqual({
+      'ext:runner': { phase: 'hydrate', keep: true },
+    });
+  });
+
+  it('FEATURE_211: ignores invalid extension runtime release handles', async () => {
+    type TestSessionController = {
+      setSessionState(extensionId: string, key: string, value: unknown | undefined): void;
+    };
+
+    let controller: TestSessionController | undefined;
+    const extensionRuntime = {
+      searchCapabilities: vi.fn(async () => []),
+      describeCapability: vi.fn(async () => ({})),
+      executeCapability: vi.fn(async () => ({ content: [] })),
+      readCapability: vi.fn(async () => ({ content: [] })),
+      getCapabilityPrompt: vi.fn(async () => undefined),
+      getCapabilityPromptContext: vi.fn(async () => undefined),
+      bindController: (nextController: TestSessionController) => {
+        controller = nextController;
+        return { release: true };
+      },
+      hydrateSession: async () => {
+        controller?.setSessionState('ext:runner', 'phase', 'hydrate');
+      },
+    } as unknown as KodaXOptions['extensionRuntime'];
+
+    const result = await runManagedTaskViaRunner(
+      {
+        ...makeOptions(),
+        extensionRuntime,
+        session: {
+          id: 'runner-feature-211-invalid-release',
+          storage: {
+            load: vi.fn(async () => null),
+            save: vi.fn(async () => undefined),
+          },
+        },
+      },
+      'Say hello',
+      async () => ({ textBlocks: [{ text: 'done' }], toolBlocks: [] }),
+    );
+
+    expect(result.success).toBe(true);
+    expect(result.runtimeSessionSnapshot?.extensionState).toEqual({
+      'ext:runner': { phase: 'hydrate' },
+    });
+  });
+
   it('surfaces tool errors back to the LLM without failing the run', async () => {
     let turn = 0;
     const result = await runManagedTaskViaRunner(

@@ -1,8 +1,8 @@
 # KodaX High-Level Design
 
-> Last updated: 2026-06-16
+> Last updated: 2026-06-18
 >
-> Current release baseline: `@kodax-ai/kodax@0.7.49`
+> Current release baseline: `@kodax-ai/kodax@0.7.52`
 >
 > This HLD is intentionally current-state only. The old pre-v0.7.43
 > chain/harness model has been removed from this active design document because
@@ -146,6 +146,8 @@ requirements span both product and SDK:
 - CLI and REPL resume/list/fork/rewind flows;
 - SDK session APIs via `@kodax-ai/kodax/session`;
 - session snapshots and runtime state persistence;
+- durable terminal tool-card replay from sanitized `uiHistory`, with canonical
+  `messages` / `lineage` remaining the source of truth;
 - tags, filters, archive state, and project-aware storage evolution;
 - compatibility with old session records where practical.
 
@@ -212,6 +214,14 @@ contract also preserves parent guardrails, existing SDK event callbacks,
 workflow logs, capsule preflight, and provider/model policy when a workflow
 spawns child agents; entering workflow mode must not weaken safety or
 observability.
+
+FEATURE_230 and FEATURE_234 (`v0.7.51`, released) close the host-read
+persistence loop around sessions and workflow runs. Resumed TUI sessions replay
+bounded terminal tool cards from sanitized `uiHistory` while headless hosts can
+still reconstruct tool facts from canonical messages. Workflow process snapshots
+also carry optional `hostMetadata`, a small string-only map persisted in
+`run.json` and echoed after restart so hosts can attribute runs without a side
+table.
 
 ## 11. REPL And CLI
 

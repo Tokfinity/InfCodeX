@@ -530,6 +530,11 @@ async function appendMessageEntry(session: Session, message: AgentMessage): Prom
     payload: {
       role: message.role,
       content: message.content,
+      // Session entries keep this only as an audit marker. The Layer A
+      // session reader does not hydrate it back to `_synthetic`; transcript
+      // round-trips that need UI hiding preserve the KodaXMessage object
+      // directly through lineage/session payload storage.
+      ...(message._synthetic === true ? { synthetic: true } : {}),
     },
   });
 }
@@ -820,6 +825,7 @@ async function genericRun<TData>(
           const syntheticUserMessage: AgentMessage = {
             role: 'user',
             content: stopResult,
+            _synthetic: true,
           };
           transcript.push(syntheticUserMessage);
           if (opts.session) {

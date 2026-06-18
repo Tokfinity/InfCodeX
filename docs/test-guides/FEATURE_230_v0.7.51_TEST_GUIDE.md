@@ -14,7 +14,7 @@ progress remains on `WorkflowProcessSnapshot` and lifecycle APIs.
 
 ## Environment
 
-- Node.js >= 18
+- Node.js >= 20
 - Repository built with `npm run build`
 - A configured provider for one real REPL tool-using turn
 - Disposable sessions directory or scratch project

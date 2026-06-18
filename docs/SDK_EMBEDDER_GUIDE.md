@@ -1413,6 +1413,47 @@ trace drawer. Do not append raw child thinking/text/tool streams into the normal
 conversation by default; it makes the parent assistant appear to have authored
 every child step and can overwhelm users.
 
+### Sidecar verifier actionable messages
+
+`KodaXEvents.onSidecarMessage` fires when the Sidecar Verifier produces an
+actionable `revise` or `blocked` verdict. `accept` remains silent because there
+is no message to deliver.
+
+```ts
+events.onSidecarMessage = (event) => {
+  if (event.delivery === 'synthetic-user-message') {
+    renderAudit(`Sidecar asked the main agent to revise: ${event.content}`);
+    return;
+  }
+  if (event.delivery === 'budget-exhausted') {
+    renderTerminalBlock(`Sidecar requested a revision, but the reanimate budget is exhausted: ${event.content}`);
+    return;
+  }
+  renderTerminalBlock(event.content);
+};
+```
+
+The payload is:
+
+```ts
+interface KodaXSidecarMessageEvent {
+  source: 'sidecar-verifier';
+  verdict: 'revise' | 'blocked';
+  recipient: 'main-agent' | 'user';
+  delivery: 'synthetic-user-message' | 'budget-exhausted' | 'terminal-block';
+  content: string;
+  suggestedFix?: string;
+  trace?: string;
+}
+```
+
+For `revise`, `content` is the exact synthetic user message injected back into
+the main agent. Treat it as sidecar-authored control text rather than a
+user-authored chat turn. When `delivery` is `budget-exhausted`, that same
+revise text was not injected because the runner is terminating instead. For
+`blocked`, `content` is terminal user-facing text. Headless JSONL output emits
+the same information as `{"type":"sidecar.message", ...}`.
+
 The lifecycle controller also exposes terminal-run controls: stop, pause,
 resume, artifact reads, delete, prune, display-name changes, saved-capsule
 revision/replace provenance, and capsule preflight. Provenance fields such as

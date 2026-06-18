@@ -84,7 +84,7 @@ _Last Updated: 2026-06-18_
 | 137 | High | Resolved | Streamable HTTP MCP transport drops `Mcp-Session-Id` on sessionful servers | v0.7.16 | v0.7.45 | 2026-06-05 | 2026-06-05 |
 | 139 | High | Resolved | SDK session full transcript hidden by active-lineage load + error snapshots can orphan activeEntryId | long-standing | v0.7.49 | 2026-06-16 | 2026-06-16 |
 | 138 | High | Resolved | Workflow host RPC 边界对对象载荷零校验 — `synthesize` 传非数组 inputs 崩裸 TypeError + `runAgent`/`spawnAgent` 缺 name/prompt 静默烧 token | v0.7.49 | v0.7.49 | 2026-06-15 | 2026-06-15 |
-| 140 | High | Open | Published bundle leaves computed `./agent.js` child-executor import, breaking workflow child agents | v0.7.37 bundle distribution; confirmed v0.7.48-v0.7.50 | - | 2026-06-17 | - |
+| 140 | High | Resolved | Published bundle leaves computed `./agent.js` child-executor import, breaking workflow child agents | v0.7.37 bundle distribution; confirmed v0.7.48-v0.7.50 | v0.7.52 | 2026-06-17 | 2026-06-18 |
 | 141 | Medium | Open | CI workflow long-red on Linux: cross-platform test bugs (storage list() runtime-inspection, bash background-process, h2 spawn env, skill-creator API-key-at-load) | long-standing (pre-v0.7.49) | - | 2026-06-18 | - |
 
 ---
@@ -151,10 +151,11 @@ Pick up with a Linux repro env (WSL distro / Docker / Linux box):
 ### 140: Published bundle leaves computed `./agent.js` child-executor import, breaking workflow child agents
 
 - **Priority**: High
-- **Status**: **Open**
+- **Status**: **Resolved** (v0.7.52)
 - **Introduced**: v0.7.37 bundle distribution; confirmed in published `0.7.48`, `0.7.49`, and `0.7.50`
 - **Created**: 2026-06-17
-- **Fixed**: -
+- **Resolved**: 2026-06-18
+- **Fixed**: v0.7.52
 
 #### Original Problem
 
@@ -178,12 +179,20 @@ In the bundled root distribution, esbuild cannot statically see the computed imp
 - Add a build/package regression guard that fails if built `dist/kodax_cli.js` or `dist/chunks/*.js` still contain the child-executor lazy-load error plus a raw `./agent.js` import.
 - Verify the fix against the packed tarball, not only TypeScript unit tests: `npm run build`, `npm pack`, inspect/extract the tarball, then run/grep the generated bundle.
 
+#### Resolution
+
+v0.7.52 changed the child-executor lazy load to a literal `import('./agent.js')`
+while keeping the import lazy, and added bundle/release guards so raw
+child-executor `./agent.js` imports fail the build or release check before
+publishing. The fixed release line was verified against the packaged bundle
+rather than only against TypeScript source output.
+
 #### Context
 
 - Reproduced from a local `npm link` workflow run on 2026-06-17.
 - Confirmed against the online npm package `@kodax-ai/kodax@0.7.50` tarball on 2026-06-17.
 - Spot-checked published `0.7.49` and `0.7.48`; both have the same missing `dist/agent.js` plus raw `./agent.js` import signature.
-- Local working tree now contains the literal lazy import plus build/release/tarball verification; keep this issue open until a fixed npm version is published.
+- Fixed release line: v0.7.52.
 
 ---
 
@@ -4453,11 +4462,16 @@ Commit `ef085fc` 把 V1 精简到 V2 时没区分"信息载体"和"脚手架"，
 ---
 
 ## Summary
-- Total: 68 (26 Open, 42 Resolved, 0 Partially Resolved, 0 Won't Fix)
+- Total: 68 (25 Open, 43 Resolved, 0 Partially Resolved, 0 Won't Fix)
 - Highest Priority Open: 091 - 缺少一等公民 MCP / Web Search / Code Search 工具体系 (High)
 - Historical archived issues are maintained in ISSUES_ARCHIVED.md
 
 ## Changelog
+
+### 2026-06-18: Issue 140 resolved (v0.7.52)
+- Resolved 140: Published bundle leaves computed `./agent.js` child-executor import, breaking workflow child agents (High).
+- Fix: child-executor keeps lazy loading but uses a literal `import('./agent.js')`, and build/release guards reject raw child-executor runtime imports in generated bundles before publishing.
+- Verification: fixed release line v0.7.52 was checked at the bundle/package level, not only through source-level TypeScript tests.
 
 ### 2026-06-15: Issue 138 added & resolved
 - Added & Resolved 138: Workflow host RPC 边界对对象载荷零校验 — `synthesize` 传非数组 inputs 崩裸 TypeError + `runAgent`/`spawnAgent` 缺 name/prompt 静默烧 token (High)

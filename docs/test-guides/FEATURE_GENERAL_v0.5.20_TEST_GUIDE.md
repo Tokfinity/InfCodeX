@@ -27,7 +27,7 @@ KodaX 是一个极致轻量化的 Coding Agent，支持 10 种 LLM 提供商。�
 
 ### 前置条件
 - ✅ KodaX 已安装（`npm install && npm run build`）
-- ✅ Node.js >= 18.0.0
+- ✅ Node.js >= 20.0.0
 - ✅ 至少一个 AI Provider 已配置：
   - 智谱: `export ZHIPU_API_KEY=your-key`（推荐，便宜）
   - Kimi: `export KIMI_API_KEY=your-key`

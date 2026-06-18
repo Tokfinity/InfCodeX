@@ -136,6 +136,7 @@ import type {
   KodaXSessionArtifactLedgerEntry,
   KodaXSessionLineage,
   KodaXActivityEventMeta,
+  KodaXSidecarMessageEvent,
   KodaXToolEventMeta,
   TodoItem,
   TodoList,
@@ -231,7 +232,7 @@ import { memDiagEnabled, memDiagSnapshot, memDiagReset, buildMemDiagBreakdown } 
 import { preparePromptInputArtifacts } from "../common/input-artifacts.js";
 
 // Extracted modules
-import { MemorySessionStorage, type SessionStorage } from "./utils/session-storage.js";
+import { MemorySessionStorage, type SessionData, type SessionStorage } from "./utils/session-storage.js";
 import { processSpecialSyntax, isShellCommandHandled } from "./utils/shell-executor.js";
 import {
   extractHistorySeedsFromMessage,
@@ -431,6 +432,33 @@ import {
 import { buildHostSessionPayload } from "./utils/session-payload.js";
 
 const DOUBLE_INTERRUPT_ESCAPE_INTERVAL_MS = 500;
+
+type AppendSessionDeltaStorage = SessionStorage & {
+  appendSessionDelta(id: string, data: SessionData): Promise<void>;
+};
+
+function hasAppendSessionDelta(storage: SessionStorage): storage is AppendSessionDeltaStorage {
+  const candidate: Partial<AppendSessionDeltaStorage> = storage;
+  return typeof candidate.appendSessionDelta === "function";
+}
+
+function applyRuntimeSessionSnapshot(context: InteractiveContext, result: KodaXResult): void {
+  const snapshot = result.runtimeSessionSnapshot;
+  if (!snapshot) {
+    return;
+  }
+
+  if ('extensionState' in snapshot) {
+    context.extensionState = snapshot.extensionState
+      ? structuredClone(snapshot.extensionState)
+      : {};
+    context.extensionStateDirty = true;
+  }
+  if ('extensionRecords' in snapshot) {
+    context.extensionRecords = snapshot.extensionRecords?.map((record) => ({ ...record })) ?? [];
+    context.extensionRecordsDirty = true;
+  }
+}
 
 // REPL options
 export interface InkREPLOptions extends KodaXOptions {
@@ -5851,6 +5879,24 @@ const InkREPLInner: React.FC<InkREPLProps> = ({
         }
       }
     },
+    onSidecarMessage: (event: KodaXSidecarMessageEvent) => {
+      if (userInterruptedRef.current) {
+        return;
+      }
+      const label = event.delivery === "budget-exhausted"
+        ? "[Sidecar budget exhausted]"
+        : event.verdict === "revise"
+        ? "[Sidecar -> Agent]"
+        : "[Sidecar blocked]";
+      const suggestedFix = event.suggestedFix
+        ? `\nSuggested fix: ${event.suggestedFix}`
+        : "";
+      emitInfoItemToCorrectLayer({
+        type: "info",
+        icon: ">",
+        text: `${label}\n${event.content}${suggestedFix}`,
+      }, "sidecar-message");
+    },
     onError: (error: Error) => {
       const latestExecutingTool = findLatestExecutingTool();
       if (latestExecutingTool?.name) {
@@ -6644,6 +6690,7 @@ const InkREPLInner: React.FC<InkREPLProps> = ({
     completeChildActivityRecord,
     routeWorkflowLiveOnlyNotice,
     upsertChildActivityRecord,
+    emitInfoItemToCorrectLayer,
     streamingState.currentTool,
   ]);
 
@@ -6785,6 +6832,8 @@ const InkREPLInner: React.FC<InkREPLProps> = ({
           session: {
             ...opts.session,
             initialMessages,
+            initialExtensionState: context.extensionState ?? {},
+            initialExtensionRecords: context.extensionRecords ?? [],
           },
           context: managedRunContext,
           events,
@@ -6825,6 +6874,10 @@ const InkREPLInner: React.FC<InkREPLProps> = ({
     context.uiHistory = persistedUiHistory;
     const lineage = context.lineage ?? reconcileContextLineage(context.messages);
     context.lineage = lineage;
+    const extensionSessionPayload = {
+      ...(context.extensionStateDirty ? { extensionState: context.extensionState ?? {} } : {}),
+      ...(context.extensionRecordsDirty ? { extensionRecords: context.extensionRecords ?? [] } : {}),
+    };
     const sessionPayload = buildHostSessionPayload({
       messages: context.messages,
       title,
@@ -6833,14 +6886,17 @@ const InkREPLInner: React.FC<InkREPLProps> = ({
       uiHistory: persistedUiHistory,
       lineage,
       artifactLedger: context.artifactLedger,
+      ...extensionSessionPayload,
     });
     // Prefer append-only hot path when available (FileSessionStorage).
     // Falls back to full save() for other storage implementations.
-    if ('appendSessionDelta' in storage && typeof (storage as any).appendSessionDelta === 'function') {
-      await (storage as any).appendSessionDelta(context.sessionId, sessionPayload);
+    if (hasAppendSessionDelta(storage)) {
+      await storage.appendSessionDelta(context.sessionId, sessionPayload);
     } else {
       await storage.save(context.sessionId, sessionPayload);
     }
+    context.extensionStateDirty = false;
+    context.extensionRecordsDirty = false;
     if (memDiagEnabled()) {
       memDiagSnapshot('persist', buildMemDiagBreakdown(
         context.messages, lineage,
@@ -6987,6 +7043,7 @@ const InkREPLInner: React.FC<InkREPLProps> = ({
   const recordCompletedAgentRound = useCallback(async (result: KodaXResult) => {
     context.messages = result.messages;
     context.contextTokenSnapshot = result.contextTokenSnapshot;
+    applyRuntimeSessionSnapshot(context, result);
     reconcileContextLineage(result.messages);
 
     // Issue 117: When the round failed (API error, etc.), skip the full
@@ -7305,6 +7362,7 @@ const InkREPLInner: React.FC<InkREPLProps> = ({
           }
         }
 
+        applyRuntimeSessionSnapshot(context, result);
         await persistContextState(
           appendPersistedUiHistorySnapshot(persistedHistoryBase, persistedAdditions),
         );
@@ -7833,7 +7891,11 @@ const InkREPLInner: React.FC<InkREPLProps> = ({
                 uiHistory: persistedUiHistoryRef.current,
                 lineage,
                 artifactLedger: context.artifactLedger,
+                extensionState: context.extensionState,
+                extensionRecords: context.extensionRecords,
               }));
+              context.extensionStateDirty = false;
+              context.extensionRecordsDirty = false;
             }
           },
           startNewSession: () => {
@@ -7845,6 +7907,10 @@ const InkREPLInner: React.FC<InkREPLProps> = ({
             context.contextTokenSnapshot = undefined;
             context.lineage = undefined;
             context.artifactLedger = undefined;
+            context.extensionState = undefined;
+            context.extensionRecords = undefined;
+            context.extensionStateDirty = false;
+            context.extensionRecordsDirty = false;
             persistedUiHistoryRef.current = [];
             context.createdAt = now;
             context.lastAccessed = now;
@@ -7881,6 +7947,12 @@ const InkREPLInner: React.FC<InkREPLProps> = ({
               context.uiHistory = normalizePersistedUiHistory(loaded.uiHistory);
               context.lineage = loaded.lineage;
               context.artifactLedger = loaded.artifactLedger;
+              context.extensionState = loaded.extensionState
+                ? structuredClone(loaded.extensionState)
+                : undefined;
+              context.extensionRecords = loaded.extensionRecords?.map((record) => ({ ...record }));
+              context.extensionStateDirty = false;
+              context.extensionRecordsDirty = false;
               context.title = loaded.title;
               context.sessionId = id;
               context.contextTokenSnapshot = undefined;
@@ -8067,6 +8139,12 @@ const InkREPLInner: React.FC<InkREPLProps> = ({
 
             context.messages = loaded.messages;
             context.uiHistory = normalizePersistedUiHistory(loaded.uiHistory);
+            context.extensionState = loaded.extensionState
+              ? structuredClone(loaded.extensionState)
+              : undefined;
+            context.extensionRecords = loaded.extensionRecords?.map((record) => ({ ...record }));
+            context.extensionStateDirty = false;
+            context.extensionRecordsDirty = false;
             context.title = loaded.title;
             context.contextTokenSnapshot = undefined;
             persistedUiHistoryRef.current = context.uiHistory ?? [];
@@ -8108,6 +8186,12 @@ const InkREPLInner: React.FC<InkREPLProps> = ({
             context.sessionId = forked.sessionId;
             context.messages = forked.data.messages;
             context.uiHistory = normalizePersistedUiHistory(forked.data.uiHistory);
+            context.extensionState = forked.data.extensionState
+              ? structuredClone(forked.data.extensionState)
+              : undefined;
+            context.extensionRecords = forked.data.extensionRecords?.map((record) => ({ ...record }));
+            context.extensionStateDirty = false;
+            context.extensionRecordsDirty = false;
             context.title = forked.data.title;
             context.contextTokenSnapshot = undefined;
             persistedUiHistoryRef.current = context.uiHistory ?? [];
@@ -8146,6 +8230,12 @@ const InkREPLInner: React.FC<InkREPLProps> = ({
 
             context.messages = rewound.messages;
             context.uiHistory = normalizePersistedUiHistory(rewound.uiHistory);
+            context.extensionState = rewound.extensionState
+              ? structuredClone(rewound.extensionState)
+              : undefined;
+            context.extensionRecords = rewound.extensionRecords?.map((record) => ({ ...record }));
+            context.extensionStateDirty = false;
+            context.extensionRecordsDirty = false;
             context.title = rewound.title;
             context.contextTokenSnapshot = undefined;
             persistedUiHistoryRef.current = context.uiHistory ?? [];
@@ -9184,6 +9274,8 @@ export async function runInkInteractiveMode(options: InkREPLOptions): Promise<vo
   let existingUiHistory: KodaXSessionUiHistoryItem[] | undefined;
   let existingLineage: KodaXSessionLineage | undefined;
   let existingArtifactLedger: KodaXSessionArtifactLedgerEntry[] | undefined;
+  let existingExtensionState: InteractiveContext['extensionState'];
+  let existingExtensionRecords: InteractiveContext['extensionRecords'];
   let sessionTitle = "";
   const gitRoot = (await getGitRoot().catch(() => null)) ?? undefined;
 
@@ -9284,6 +9376,8 @@ export async function runInkInteractiveMode(options: InkREPLOptions): Promise<vo
       existingUiHistory = normalizePersistedUiHistory(loaded.uiHistory);
       existingLineage = loaded.lineage;
       existingArtifactLedger = loaded.artifactLedger;
+      existingExtensionState = loaded.extensionState;
+      existingExtensionRecords = loaded.extensionRecords;
       sessionTitle = loaded.title;
       sessionId = options.session.id;
       // FEATURE_226: carry the resumed session's tag into options so the
@@ -9304,6 +9398,8 @@ export async function runInkInteractiveMode(options: InkREPLOptions): Promise<vo
           existingUiHistory = normalizePersistedUiHistory(loaded.uiHistory);
           existingLineage = loaded.lineage;
           existingArtifactLedger = loaded.artifactLedger;
+          existingExtensionState = loaded.extensionState;
+          existingExtensionRecords = loaded.extensionRecords;
           sessionTitle = loaded.title;
           sessionId = recentSession.id;
           // FEATURE_226: carry the resumed session's tag into options.
@@ -9325,6 +9421,8 @@ export async function runInkInteractiveMode(options: InkREPLOptions): Promise<vo
     existingUiHistory,
     existingLineage,
     existingArtifactLedger,
+    existingExtensionState,
+    existingExtensionRecords,
   });
   context.title = sessionTitle;
 

@@ -319,6 +319,43 @@ function applyRuntimeContext(
   };
 }
 
+function applyRuntimeSessionSnapshot(context: InteractiveContext, result: KodaXResult): void {
+  const snapshot = result.runtimeSessionSnapshot;
+  if (!snapshot) return;
+  if ('extensionState' in snapshot) {
+    context.extensionState = snapshot.extensionState
+      ? structuredClone(snapshot.extensionState)
+      : {};
+    context.extensionStateDirty = true;
+  }
+  if ('extensionRecords' in snapshot) {
+    context.extensionRecords = snapshot.extensionRecords?.map((record) => ({ ...record })) ?? [];
+    context.extensionRecordsDirty = true;
+  }
+}
+
+function contextExtensionSessionData(
+  context: InteractiveContext,
+): Pick<KodaXSessionData, 'extensionState' | 'extensionRecords'> {
+  return {
+    ...(context.extensionStateDirty
+      ? { extensionState: context.extensionState ?? {} }
+      : context.extensionState !== undefined
+        ? { extensionState: context.extensionState }
+        : {}),
+    ...(context.extensionRecordsDirty
+      ? { extensionRecords: context.extensionRecords ?? [] }
+      : context.extensionRecords !== undefined
+        ? { extensionRecords: context.extensionRecords }
+        : {}),
+  };
+}
+
+function markExtensionSessionPersisted(context: InteractiveContext): void {
+  context.extensionStateDirty = false;
+  context.extensionRecordsDirty = false;
+}
+
 // REPL options - REPL 选项
 export interface RepLOptions extends KodaXOptions {
   storage?: SessionStorage;
@@ -665,10 +702,12 @@ Keyboard Shortcuts:
           gitRoot: context.gitRoot ?? '',
           runtimeInfo: context.runtimeInfo,
           artifactLedger: context.artifactLedger,
+          ...contextExtensionSessionData(context),
           // FEATURE_226: carry the session tag so a brand-new session's first
           // save persists it (storage merges `data.tag ?? existing` otherwise).
           ...(currentOptions.session?.tag !== undefined ? { tag: currentOptions.session.tag } : {}),
         });
+        markExtensionSessionPersisted(context);
       }
     },
     startNewSession: () => {
@@ -676,6 +715,10 @@ Keyboard Shortcuts:
       context.title = '';
       context.contextTokenSnapshot = undefined;
       context.artifactLedger = undefined;
+      context.extensionState = undefined;
+      context.extensionRecords = undefined;
+      context.extensionStateDirty = false;
+      context.extensionRecordsDirty = false;
       context.createdAt = new Date().toISOString();
       context.lastAccessed = context.createdAt;
       applyRuntimeContext(context, currentOptions, startupRuntime);
@@ -718,6 +761,12 @@ Keyboard Shortcuts:
         context.sessionId = id;
         context.contextTokenSnapshot = undefined;
         context.artifactLedger = loaded.artifactLedger;
+        context.extensionState = loaded.extensionState
+          ? structuredClone(loaded.extensionState)
+          : undefined;
+        context.extensionRecords = loaded.extensionRecords?.map((record) => ({ ...record }));
+        context.extensionStateDirty = false;
+        context.extensionRecordsDirty = false;
         context.lastAccessed = new Date().toISOString();
         applyRuntimeContext(context, currentOptions, appliedRuntime);
         currentOptions.session = {
@@ -1330,6 +1379,7 @@ Keyboard Shortcuts:
         context.messages = runResult.messages;
         context.contextTokenSnapshot = runResult.contextTokenSnapshot;
       }
+      applyRuntimeSessionSnapshot(context, runResult);
 
       statusBar?.update({ messageCount: context.messages.length });
       if (context.messages.length > 0) {
@@ -1340,8 +1390,10 @@ Keyboard Shortcuts:
           title,
           gitRoot: context.gitRoot ?? '',
           runtimeInfo: context.runtimeInfo,
+          ...contextExtensionSessionData(context),
           ...(currentOptions.session?.tag !== undefined ? { tag: currentOptions.session.tag } : {}),
         });
+        markExtensionSessionPersisted(context);
       }
       await prepared.finalize();
     } catch (error) {
@@ -1419,8 +1471,10 @@ Keyboard Shortcuts:
                     runtimeInfo: context.runtimeInfo,
                     artifactLedger: context.artifactLedger,
                     lineage: context.lineage,
+                    ...contextExtensionSessionData(context),
                     ...(currentOptions.session?.tag !== undefined ? { tag: currentOptions.session.tag } : {}),
                   });
+                  markExtensionSessionPersisted(context);
                 },
                 // getLatestUsage + getTurnStartMs are overridden inside
                 // runner-driven.ts (it owns the per-turn token state +
@@ -1467,6 +1521,8 @@ Keyboard Shortcuts:
                 initialMessages: context.lineage
                   ? getSessionMessagesFromLineage(context.lineage, context.lineage.activeEntryId)
                   : context.messages,
+                initialExtensionState: context.extensionState ?? {},
+                initialExtensionRecords: context.extensionRecords ?? [],
               },
               context: {
                 ...currentOptions.context,
@@ -1487,6 +1543,7 @@ Keyboard Shortcuts:
           );
           context.messages = result.messages;
           context.contextTokenSnapshot = result.contextTokenSnapshot;
+          applyRuntimeSessionSnapshot(context, result);
           // FEATURE_076: prefer pre-extracted result.artifactLedger; fall
           // back to walking result.messages for backward compatibility
           // with paths that have not yet been reshape-updated.
@@ -1506,8 +1563,10 @@ Keyboard Shortcuts:
               gitRoot: context.gitRoot ?? '',
               runtimeInfo: context.runtimeInfo,
               artifactLedger: context.artifactLedger,
+              ...contextExtensionSessionData(context),
               ...(currentOptions.session?.tag !== undefined ? { tag: currentOptions.session.tag } : {}),
             });
+            markExtensionSessionPersisted(context);
           }
         } catch (err) {
           const error = err instanceof Error ? err : new Error(String(err));
@@ -1589,6 +1648,7 @@ Keyboard Shortcuts:
       // Update context messages (runKodaX returns complete message list) - 更新上下文中的消息（runKodaX 返回完整的消息列表）
       context.messages = result.messages;
       context.contextTokenSnapshot = result.contextTokenSnapshot;
+      applyRuntimeSessionSnapshot(context, result);
       // FEATURE_076: prefer pre-extracted result.artifactLedger; fall back
       // to walking result.messages for backward compatibility with paths
       // that have not yet been reshape-updated.
@@ -1613,8 +1673,10 @@ Keyboard Shortcuts:
           gitRoot: context.gitRoot ?? '',
           runtimeInfo: context.runtimeInfo,
           artifactLedger: context.artifactLedger,
+          ...contextExtensionSessionData(context),
           ...(currentOptions.session?.tag !== undefined ? { tag: currentOptions.session.tag } : {}),
         });
+        markExtensionSessionPersisted(context);
       }
     } catch (err) {
       // Handle different error types - 处理不同类型的错误
@@ -1686,6 +1748,8 @@ async function runAgentRound(
       events,
       session: {
         ...options.session,
+        initialExtensionState: context.extensionState ?? {},
+        initialExtensionRecords: context.extensionRecords ?? [],
         initialMessages,  // Pass existing messages - 传递已有消息
       },
       context: {

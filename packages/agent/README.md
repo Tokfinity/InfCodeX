@@ -84,4 +84,4 @@ npm test -- packages/agent/src
 
 ## License
 
-MIT
+Apache-2.0

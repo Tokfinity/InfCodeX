@@ -11,11 +11,11 @@
 | Item | Value |
 |---|---|
 | Current released version | `v0.7.52` |
-| Current package version | `@kodax-ai/kodax@0.7.52` (released 2026-06-18) |
+| Current package version | `@kodax-ai/kodax@0.7.53` (unreleased release candidate) |
 | Workspace baseline | `llm / agent / coding / repl` 4 packages |
 | Total tracked features | `20` |
-| InProgress | `0` |
-| Planned | `16` |
+| InProgress | `2` |
+| Planned | `14` |
 | Completed | `4` |
 | Tracked feature IDs | `007, 030, 093, 105, 108, 113, 139, 174, 211, 224, 225, 228, 229, 230, 231, 232, 233, 234, 235, 236` |
 | Archive cutoff | Shipped / canceled / absorbed / shelved items through `v0.7.49` are archived. |
@@ -25,7 +25,8 @@
 | Status | Count | Feature IDs | Next checkpoint |
 |---|---:|---|---|
 | Completed | 4 | `229, 230, 234, 236` | `229` released v0.7.50; `230, 234, 236` released v0.7.51 |
-| Planned, near-term | 11 | `231, 232, 235, 233, 224, 228, 225, 174, 105, 211, 108` | `v0.7.57` -> `v0.7.73` |
+| InProgress | 2 | `174, 211` | `v0.7.53` release validation |
+| Planned, near-term | 9 | `231, 232, 235, 233, 224, 228, 225, 105, 108` | `v0.7.57` -> `v0.7.73` |
 | Planned, v0.8.x | 5 | `007, 030, 093, 113, 139` | `v0.8.5+` |
 
 > v0.7.49 / v0.7.50 workflow split：`FEATURE_217` remains the human-facing workflow mode. Manual testing reopened required UI/UX and reliability deltas inside [v0.7.49](features/v0.7.49.md#13-v0749-completion-delta): bounded live progress with phase index / running 智能体 wording / preserved progress row / elapsed time / completed-child token usage, localized assistant-style launch notes, result-bearing child-agent digests or folded long-report notices, non-`info` agentic transcript, clear separation between `finished/spawned` progress and lifetime `maxAgents` cap, final synthesis, generated final-result contract lint, implicit `tokenBudget` stripping, generated task-command crash hardening, tighter AMAW invocation policy, wait timeout propagation, no default total workflow wall-clock timeout, terminal cleanup for un-awaited children, accurate template read/write metadata, capsule min-version preflight, manual run cleanup controls, and the closed minimal saved-workflow named reuse delta (`/workflow <savedName>` plus `/workflow rerun <runId|savedName>` with help/completion). `FEATURE_229` in v0.7.50 is the platform layer: it standardizes the same process as agent-layer snapshot/events, SDK subscription/polling, Space-style host policy and lifecycle controls, terminal-state helpers, workflow identity/lifecycle controls beyond named reuse (`display name | revise | rename | revision provenance`), REPL-as-consumer rendering, conservative retention, and durable source/provenance/resultSummary persistence; it is not the first implementation of the user-visible UX.
@@ -40,8 +41,7 @@
 | `v0.7.66` | `1` |
 | `v0.7.67` | `1` |
 | `v0.7.68` | `1` |
-| `v0.7.69` | `1` |
-| `v0.7.72` | `2` |
+| `v0.7.72` | `1` |
 | `v0.7.73` | `1` |
 | `v0.8.5` | `3` |
 | `v0.8.7` | `1` |
@@ -51,10 +51,12 @@
 
 ## 进行中的 Feature
 
-> 当前无进行中的 feature（`230 / 234 / 236` 已随 `v0.7.51` 发布，移入「已完成 Feature」）。本段按 tracker 约定常驻，空表即可。
+> `174` / `211` are implemented in the v0.7.53 release-candidate branch and remain here until release validation completes.
 
 | ID | Title | Planned | Design |
 |---|---|---|---|
+| `174` | `kodax sessions dedupe` | `v0.7.53` | [v0.7.53](features/v0.7.53.md#feature_174-kodax-sessions-dedupe) |
+| `211` | Interactive-Mode Extension/MCP Session State Cross-Resume Persistence | `v0.7.53` | [v0.7.53](features/v0.7.53.md#feature_211-interactive-mode-extensionmcp-session-state-cross-resume-persistence) |
 
 ---
 
@@ -69,9 +71,7 @@
 | `224` | Self-Improvement Skill Loop | Core / Skills + Self-Improvement | High | `v0.7.66` | [v0.7.66](features/v0.7.66.md#feature_224-self-improvement-skill-loop--rescheduled-from-v0750) |
 | `228` | Unified Memory Control Plane + Memory Governance | Core / Memory + Governance | High | `v0.7.67` | [v0.7.67](features/v0.7.67.md#feature_228-unified-memory-control-plane--memory-governance--rescheduled-from-v0751) |
 | `225` | REPL Dead / Legacy Code Cleanup | Internal / Refactor + Tech Debt | Medium | `v0.7.68` | [v0.7.68](features/v0.7.68.md#feature_225-repl-dead--legacy-code-cleanup--rescheduled-from-v0752) |
-| `174` | `kodax sessions dedupe` | Internal / Maintenance + CLI | Low | `v0.7.69` | [v0.7.69](features/v0.7.69.md#feature_174-kodax-sessions-dedupe--rescheduled-from-v0753) |
 | `105` | Verifiable Advisor Consult Primitive | Internal / Core | High | `v0.7.72` | [v0.7.72](features/v0.7.72.md#feature_105-verifiable-advisor-consult-primitive--rescheduled-from-v0756) |
-| `211` | Interactive-Mode Extension/MCP Session State Cross-Resume Persistence | Internal / Session Persistence | Medium | `v0.7.72` | [v0.7.72](features/v0.7.72.md#feature_211-interactive-mode-extensionmcp-session-state-cross-resume-persistence--rescheduled-from-v0756) |
 | `108` | Session-Driven Reflective Prompt Patcher | Internal / Test Infrastructure | Medium | `v0.7.73` | [v0.7.73](features/v0.7.73.md#feature_108-session-driven-reflective-prompt-patcher--rescheduled-from-v0757) |
 | `007` | Theme System Consolidation | Enhancement | Medium | `v0.8.5` | [v0.8.5](features/v0.8.5.md#feature_007-theme-system-consolidation) |
 | `030` | Multi-Surface Delivery | Enhancement | High | `v0.8.5` | [v0.8.5](features/v0.8.5.md#feature_030-multi-surface-delivery) |

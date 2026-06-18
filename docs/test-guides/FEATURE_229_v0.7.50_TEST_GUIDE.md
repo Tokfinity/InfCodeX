@@ -14,7 +14,7 @@ results without parsing terminal text.
 
 ## Environment
 
-- Node.js >= 18
+- Node.js >= 20
 - Repository built with `npm run build`
 - At least one configured provider for real workflow generation
 - A clean scratch repository or disposable branch for workflow run artifacts

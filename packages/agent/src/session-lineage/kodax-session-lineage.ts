@@ -153,7 +153,8 @@ function getMessageFingerprint(message: KodaXMessage): string {
     return cached;
   }
 
-  const fingerprint = `${message.role}:${serializeMessageContent(message.content)}`;
+  const synthetic = message._synthetic === true ? 'synthetic' : 'real';
+  const fingerprint = `${message.role}:${synthetic}:${serializeMessageContent(message.content)}`;
   messageFingerprintCache.set(message, fingerprint);
   return fingerprint;
 }

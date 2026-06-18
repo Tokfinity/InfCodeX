@@ -101,9 +101,18 @@ export async function resolveInitialMessages(
 ): Promise<ResolvedInitialMessages> {
   if (options.session?.initialMessages && options.session.initialMessages.length > 0) {
     const messages = [...options.session.initialMessages];
+    const hasHostExtensionSnapshot =
+      options.session.initialExtensionState !== undefined
+      || options.session.initialExtensionRecords !== undefined;
+    const loaded = !hasHostExtensionSnapshot && options.session.storage && sessionId
+      ? await options.session.storage.load(sessionId).catch(() => null)
+      : null;
     return {
       messages,
       title: extractTitleFromMessages(messages),
+      errorMetadata: loaded?.errorMetadata,
+      loadedExtensionState: options.session.initialExtensionState ?? loaded?.extensionState,
+      loadedExtensionRecords: options.session.initialExtensionRecords ?? loaded?.extensionRecords,
     };
   }
 

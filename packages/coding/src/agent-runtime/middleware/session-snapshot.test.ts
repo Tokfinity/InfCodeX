@@ -13,6 +13,7 @@
 import { describe, it, expect, vi, beforeEach, afterEach } from 'vitest';
 import type { KodaXSessionData, KodaXSessionStorage } from '@kodax-ai/agent';
 import type { KodaXOptions } from '../../types.js';
+import { buildRuntimeSessionState } from '../runtime-session-state.js';
 import { saveSessionSnapshot } from './session-snapshot.js';
 
 let warnSpy: ReturnType<typeof vi.spyOn>;
@@ -230,6 +231,64 @@ describe('saveSessionSnapshot — happy path with storage', () => {
     expect(persisted.messages).toBe(existingMessages);
     expect(persisted.lineage).toBe(existingLineage);
     expect(persisted.errorMetadata?.lastError).toBe('zhipu 1214');
+  });
+
+  it('error snapshot with unsafe transcript preserves the existing extension snapshot', async () => {
+    const existing: KodaXSessionData = {
+      messages: [{ role: 'user', content: 'previous clean prompt' }],
+      title: 'old',
+      gitRoot: '/repo',
+      extensionState: { 'ext:sample': { visits: 1, phase: 'clean' } },
+      extensionRecords: [
+        {
+          id: 'record-clean',
+          extensionId: 'ext:sample',
+          type: 'hydrate',
+          ts: 1,
+        },
+      ],
+    };
+    const runtimeSessionState = buildRuntimeSessionState({
+      loadedExtensionState: existing.extensionState,
+      loadedExtensionRecords: existing.extensionRecords,
+      activeTools: [],
+      modelSelection: {},
+    });
+    runtimeSessionState.extensionState.get('ext:sample')?.set('phase', 'crash');
+    runtimeSessionState.extensionStateDirty = true;
+    runtimeSessionState.extensionRecords.push({
+      id: 'record-crash',
+      extensionId: 'ext:sample',
+      type: 'crash',
+      ts: 2,
+    });
+    runtimeSessionState.extensionRecordsDirty = true;
+    const saveMock = vi.fn().mockResolvedValue(undefined);
+    const loadMock = vi.fn().mockResolvedValue(existing);
+    const opts = {
+      provider: 'zhipu-coding',
+      session: {
+        id: `bad-error-ext-${Date.now()}`,
+        storage: { save: saveMock, load: loadMock } as KodaXSessionStorage,
+      },
+    } as unknown as KodaXOptions;
+
+    await saveSessionSnapshot(opts, opts.session!.id!, {
+      messages: [
+        {
+          role: 'assistant',
+          content: [{ type: 'tool_use', id: 'call_1', name: 'skill', input: {} }],
+        },
+      ],
+      title: 'errored',
+      errorMetadata: { lastError: 'provider 500', lastErrorTime: 2, consecutiveErrors: 1 },
+      runtimeSessionState,
+    });
+
+    const persisted = saveMock.mock.calls[0]?.[1] as KodaXSessionData;
+    expect(persisted.messages).toBe(existing.messages);
+    expect(persisted.extensionState).toEqual(existing.extensionState);
+    expect(persisted.extensionRecords).toEqual(existing.extensionRecords);
   });
 
   it('error snapshot with no clean existing session records error without inventing lineage', async () => {

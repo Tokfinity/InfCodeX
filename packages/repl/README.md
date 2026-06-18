@@ -128,6 +128,7 @@ Session-only consumers can import the same session APIs from `@kodax-ai/kodax/se
 - Config: `loadConfig`, `prepareRuntimeConfig`, `saveConfig`, custom-provider CRUD, MCP-server CRUD
 - Sessions: `FileSessionStorage`, `listSessions`, `loadSession`, `forkSession`, `rewindSession`, `archiveSession`, `watchSessions`
 - Permissions: `computeConfirmTools`, `isPermissionMode`, `isToolCallAllowed`, `getPlanModeBlockReason`
+- Headless events: JSON/CLI event output includes `sidecar.message` for Sidecar Verifier `revise` / `blocked` messages
 - UI exports: `App`, `SimpleApp`, hooks, contexts, components, terminal-host utilities
 
 ## 构建与测试
@@ -139,4 +140,4 @@ npm test -- packages/repl/src
 
 ## License
 
-MIT
+Apache-2.0

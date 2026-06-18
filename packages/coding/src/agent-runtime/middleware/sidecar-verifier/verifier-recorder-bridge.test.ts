@@ -11,10 +11,13 @@ import { describe, expect, it, vi } from 'vitest';
 
 import {
   applySidecarVerdictToRecorder,
+  buildSidecarMessageEvent,
   buildSidecarVerdictMetadata,
   buildSidecarVerdictPayload,
+  emitSidecarMessageEvent,
 } from './verifier-recorder-bridge.js';
 import type { SidecarVerifierVerdict } from './verifier.js';
+import type { KodaXSidecarMessageEvent } from '../../../types.js';
 import type {
   ObserverBridge,
   VerdictRecorder,
@@ -71,6 +74,122 @@ describe('buildSidecarVerdictPayload — shape parity with Evaluator emit_verdic
     });
     expect(payload.followups).toEqual(['see foo.ts:42']);
     expect(payload.reason).toBe('add tests');
+  });
+});
+
+describe('buildSidecarMessageEvent', () => {
+  it('returns undefined for accept because no message is delivered', () => {
+    const event = buildSidecarMessageEvent({
+      verdict: 'accept',
+      reason: 'looks good',
+      trace: 'verifier_ok',
+    });
+    expect(event).toBeUndefined();
+  });
+
+  it('maps revise to a main-agent synthetic-user-message event', () => {
+    const event = buildSidecarMessageEvent({
+      verdict: 'revise',
+      reason: 'Run the missing regression test.',
+      suggestedFix: 'npm test -- foo.test.ts',
+      trace: 'verifier_ok',
+    });
+    expect(event).toEqual({
+      source: 'sidecar-verifier',
+      verdict: 'revise',
+      recipient: 'main-agent',
+      delivery: 'synthetic-user-message',
+      content: 'Run the missing regression test.',
+      suggestedFix: 'npm test -- foo.test.ts',
+      trace: 'verifier_ok',
+    });
+  });
+
+  it('maps revise to budget-exhausted when no reanimate delivery can occur', () => {
+    const event = buildSidecarMessageEvent(
+      {
+        verdict: 'revise',
+        reason: 'Run the missing regression test.',
+        trace: 'verifier_ok',
+      },
+      {
+        reanimateCount: 2,
+        reanimateBudget: 2,
+      },
+    );
+    expect(event).toEqual({
+      source: 'sidecar-verifier',
+      verdict: 'revise',
+      recipient: 'user',
+      delivery: 'budget-exhausted',
+      content: 'Run the missing regression test.',
+      trace: 'verifier_ok',
+    });
+  });
+
+  it('maps blocked to a terminal user-facing event', () => {
+    const event = buildSidecarMessageEvent({
+      verdict: 'blocked',
+      reason: 'Need the target API version.',
+      trace: 'verifier_ok',
+    });
+    expect(event).toMatchObject({
+      verdict: 'blocked',
+      recipient: 'user',
+      delivery: 'terminal-block',
+      content: 'Need the target API version.',
+    });
+  });
+
+  it('returns undefined for empty revise or blocked reasons', () => {
+    expect(buildSidecarMessageEvent({
+      verdict: 'revise',
+      reason: '  ',
+      trace: 'verifier_ok',
+    })).toBeUndefined();
+    expect(buildSidecarMessageEvent({
+      verdict: 'blocked',
+      reason: '',
+      trace: 'verifier_ok',
+    })).toBeUndefined();
+  });
+
+  it('emits through KodaXEvents when an actionable sidecar message exists', () => {
+    const observed: KodaXSidecarMessageEvent[] = [];
+    emitSidecarMessageEvent(
+      {
+        onSidecarMessage: (event) => observed.push(event),
+      },
+      {
+        verdict: 'revise',
+        reason: 'Add the missing assertion.',
+        trace: 'verifier_ok',
+      },
+    );
+    expect(observed).toHaveLength(1);
+    expect(observed[0]?.content).toBe('Add the missing assertion.');
+  });
+
+  it('does not let event sink failures change verifier behavior', () => {
+    const onError = vi.fn();
+    expect(() =>
+      emitSidecarMessageEvent(
+        {
+          onSidecarMessage: () => {
+            throw new Error('sink failed');
+          },
+          onError,
+        },
+        {
+          verdict: 'revise',
+          reason: 'Add the missing assertion.',
+          trace: 'verifier_ok',
+        },
+      ),
+    ).not.toThrow();
+    expect(onError).toHaveBeenCalledWith(expect.objectContaining({
+      message: 'sink failed',
+    }));
   });
 });
 

@@ -24,4 +24,31 @@ describe('buildHostSessionPayload', () => {
 
     expect(payload).toHaveProperty('tag', '');
   });
+
+  it('carries extension session state and records into host-owned persistence payloads', () => {
+    const payload = buildHostSessionPayload({
+      messages: [{ role: 'user', content: 'extension request' }],
+      title: 'Extension Session',
+      gitRoot: '/repo',
+      extensionState: { 'ext:sample': { visits: 2 } },
+      extensionRecords: [
+        {
+          id: 'record-1',
+          extensionId: 'ext:sample',
+          type: 'turn',
+          ts: 1,
+          data: { ok: true },
+        },
+      ],
+    });
+
+    expect(payload.extensionState).toEqual({ 'ext:sample': { visits: 2 } });
+    expect(payload.extensionRecords).toEqual([
+      expect.objectContaining({
+        id: 'record-1',
+        extensionId: 'ext:sample',
+        type: 'turn',
+      }),
+    ]);
+  });
 });

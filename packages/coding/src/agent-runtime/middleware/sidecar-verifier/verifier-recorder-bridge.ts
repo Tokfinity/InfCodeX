@@ -41,6 +41,7 @@ import type {
   KodaXEvents,
   KodaXHarnessProfile,
   KodaXManagedVerdictPayload,
+  KodaXSidecarMessageEvent,
   KodaXTaskRole,
 } from '../../../types.js';
 import type {
@@ -102,6 +103,82 @@ export function buildSidecarVerdictMetadata(
     // produce its own verdict if model terminates text-only again).
     isTerminal: true,
   };
+}
+
+export interface SidecarMessageDeliveryContext {
+  readonly reanimateCount: number;
+  readonly reanimateBudget: number;
+}
+
+function isReanimateBudgetExhausted(
+  context: SidecarMessageDeliveryContext | undefined,
+): boolean {
+  return context !== undefined && context.reanimateCount >= context.reanimateBudget;
+}
+
+export function buildSidecarMessageEvent(
+  verdict: SidecarVerifierVerdict,
+  context?: SidecarMessageDeliveryContext,
+): KodaXSidecarMessageEvent | undefined {
+  const content = verdict.reason.trim();
+  if (!content) return undefined;
+  if (verdict.verdict === 'revise') {
+    const budgetExhausted = isReanimateBudgetExhausted(context);
+    return {
+      source: 'sidecar-verifier',
+      verdict: 'revise',
+      recipient: budgetExhausted ? 'user' : 'main-agent',
+      delivery: budgetExhausted ? 'budget-exhausted' : 'synthetic-user-message',
+      content,
+      ...(verdict.suggestedFix ? { suggestedFix: verdict.suggestedFix } : {}),
+      trace: verdict.trace,
+    };
+  }
+  if (verdict.verdict === 'blocked') {
+    return {
+      source: 'sidecar-verifier',
+      verdict: 'blocked',
+      recipient: 'user',
+      delivery: 'terminal-block',
+      content,
+      ...(verdict.suggestedFix ? { suggestedFix: verdict.suggestedFix } : {}),
+      trace: verdict.trace,
+    };
+  }
+  return undefined;
+}
+
+function writeSidecarMessageEventError(error: Error): void {
+  try {
+    process.stderr.write(`[KodaX] Sidecar message event sink failed: ${error.message}\n`);
+  } catch {
+    // No remaining diagnostic sink is available here; keep verifier behavior unchanged.
+  }
+}
+
+export function emitSidecarMessageEvent(
+  events: KodaXEvents | undefined,
+  verdict: SidecarVerifierVerdict,
+  context?: SidecarMessageDeliveryContext,
+): void {
+  const event = buildSidecarMessageEvent(verdict, context);
+  if (!event) return;
+  try {
+    events?.onSidecarMessage?.(event);
+  } catch (error) {
+    const normalizedError = error instanceof Error
+      ? error
+      : new Error(`Sidecar message event sink failed: ${String(error)}`);
+    if (events?.onError) {
+      try {
+        events.onError(normalizedError);
+        return;
+      } catch {
+        // Fall through to stderr; diagnostics should not change verifier behavior.
+      }
+    }
+    writeSidecarMessageEventError(normalizedError);
+  }
 }
 
 export interface ApplySidecarVerdictOptions {

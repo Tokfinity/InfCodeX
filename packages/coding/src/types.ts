@@ -195,6 +195,17 @@ export interface KodaXToolEventMeta extends KodaXActivityEventMeta {
   readonly toolId?: string;
 }
 
+export interface KodaXSidecarMessageEvent {
+  readonly source: 'sidecar-verifier';
+  readonly verdict: 'revise' | 'blocked';
+  readonly recipient: 'main-agent' | 'user';
+  readonly delivery: 'synthetic-user-message' | 'budget-exhausted' | 'terminal-block';
+  /** Exact actionable text from the sidecar. `budget-exhausted` means it was not injected. */
+  readonly content: string;
+  readonly suggestedFix?: string;
+  readonly trace?: string;
+}
+
 export interface KodaXEvents {
   /** FEATURE_229: correlates child-agent SDK callbacks back to a workflow run/item. */
   workflowCorrelation?: WorkflowEventCorrelation;
@@ -326,6 +337,16 @@ export interface KodaXEvents {
   ) => void;
   onRepoIntelligenceTrace?: (event: KodaXRepoIntelligenceTraceEvent) => void;
   /**
+   * Fired when the Sidecar Verifier produces an actionable message.
+   *
+   * `revise` is usually injected back into the main agent as a synthetic user
+   * message; if the reanimate budget is already exhausted, the same verdict is
+   * surfaced with `delivery: "budget-exhausted"` and no injection occurs.
+   * `blocked` is surfaced terminally to the user. Accept remains silent here
+   * because there is no sidecar-to-agent reply to show.
+   */
+  onSidecarMessage?: (event: KodaXSidecarMessageEvent) => void;
+  /**
    * FEATURE_097 (v0.7.34): emitted whenever the Scout-seeded todo list
    * changes — initial seed at `emit_scout_verdict`, per-item updates from
    * `todo_update` tool calls, and Evaluator-verdict auto-handling
@@ -451,6 +472,10 @@ export interface KodaXSessionOptions {
   tag?: string;
   storage?: KodaXSessionStorage;
   initialMessages?: KodaXMessage[];
+  /** Host-provided extension state paired with initialMessages, avoiding a full storage load. */
+  initialExtensionState?: KodaXExtensionSessionState;
+  /** Host-provided extension records paired with initialMessages, avoiding a full storage load. */
+  initialExtensionRecords?: KodaXExtensionSessionRecord[];
   /**
    * Persistence ownership signal (FEATURE_173 dual-writer fix).
    *
@@ -1387,6 +1412,11 @@ export interface KodaXManagedProtocolPayload {
   verdict?: KodaXManagedVerdictPayload;
 }
 
+export interface KodaXRuntimeSessionSnapshot {
+  extensionState?: KodaXExtensionSessionState;
+  extensionRecords?: KodaXExtensionSessionRecord[];
+}
+
 export interface KodaXResult {
   success: boolean;
   lastText: string;
@@ -1407,6 +1437,8 @@ export interface KodaXResult {
   contextTokenSnapshot?: KodaXContextTokenSnapshot;
   /** Latest provider usage when the caller has it directly. */
   usage?: KodaXTokenUsage;
+  /** Serializable runtime-owned session state for host-owned persistence. */
+  runtimeSessionSnapshot?: KodaXRuntimeSessionSnapshot;
   /**
    * FEATURE_076: artifact ledger pre-extracted before round-boundary reshape.
    * Populated when the reshape replaces `messages` with a clean {user, assistant}

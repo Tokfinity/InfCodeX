@@ -37,7 +37,7 @@ LoongArch64 / MIPS are **not supported** (Bun has no toolchain for them).
 
 ### Prerequisites
 
-- Node.js 18+ (for build orchestration)
+- Node.js 20+ (for build orchestration)
 - Bun on PATH:
   ```
   Windows : scoop install bun       # or: npm i -g bun

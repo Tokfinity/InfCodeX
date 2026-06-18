@@ -712,6 +712,11 @@ export KODAX_VERIFIER_MODEL=claude-haiku-4-5-20251001
 - `KODAX_VERIFIER_PROVIDER` + `KODAX_VERIFIER_MODEL` route the verifier to a separate provider/model instead of inheriting the main Worker model. Set both together.
 - `KODAX_VERIFIER_ALWAYS=1` forces the verifier to fire on every text-only completion for debugging/regression sweeps.
 
+SDK/headless hosts can observe actionable Sidecar Verifier messages via
+`KodaXEvents.onSidecarMessage`; JSONL output emits the same payload as
+`sidecar.message`. Only `revise` and `blocked` verdicts are surfaced; `accept`
+stays silent.
+
 ## Advanced Library Usage
 
 #### Simple Mode (runKodaX)
@@ -723,6 +728,7 @@ const events: KodaXEvents = {
   onTextDelta: (text) => process.stdout.write(text),
   onThinkingDelta: (text) => console.log(`Thinking delta: ${text.length} chars`),
   onToolResult: (result) => console.log(`Tool ${result.name}: ${result.content.slice(0, 100)}`),
+  onSidecarMessage: (event) => console.log(`[sidecar:${event.verdict}] ${event.content}`),
   onComplete: () => console.log('\nDone!'),
   onError: (e) => console.error(e.message),
 };

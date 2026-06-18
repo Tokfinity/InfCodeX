@@ -320,6 +320,7 @@ function sameMessageByContent(left: KodaXMessage, right: KodaXMessage): boolean 
     return true;
   }
   return left.role === right.role
+    && (left._synthetic === true) === (right._synthetic === true)
     && serializeMessageContentForCompare(left.content) === serializeMessageContentForCompare(right.content);
 }
 
@@ -934,6 +935,19 @@ export class FileSessionStorage implements KodaXSessionStorage {
       }
 
       if (data.tag !== undefined && data.tag !== cached.tag) {
+        await this.mergeAndWriteInternal(id, data);
+        return;
+      }
+
+      if (data.extensionState !== undefined) {
+        await this.mergeAndWriteInternal(id, data);
+        return;
+      }
+
+      if (
+        data.extensionRecords !== undefined
+        && data.extensionRecords.length <= cached.extensionCount
+      ) {
         await this.mergeAndWriteInternal(id, data);
         return;
       }

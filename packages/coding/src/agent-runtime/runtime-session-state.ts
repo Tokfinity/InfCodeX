@@ -40,12 +40,15 @@ import type {
   KodaXJsonValue,
   KodaXMessage,
   KodaXReasoningMode,
+  KodaXRuntimeSessionSnapshot,
 } from '../types.js';
 
 export interface RuntimeSessionState {
   queuedMessages: KodaXMessage[];
   extensionState: Map<string, Map<string, KodaXJsonValue>>;
+  extensionStateDirty: boolean;
   extensionRecords: KodaXExtensionSessionRecord[];
+  extensionRecordsDirty: boolean;
   activeTools: string[];
   editRecoveryAttempts: Map<string, number>;
   blockedEditWrites: Set<string>;
@@ -89,6 +92,32 @@ export function snapshotRuntimeExtensionState(
   return Object.keys(snapshot).length > 0 ? snapshot : undefined;
 }
 
+export function snapshotRuntimeSessionState(
+  state: RuntimeSessionState,
+  options: { includeUnchanged?: boolean } = {},
+): KodaXRuntimeSessionSnapshot | undefined {
+  const includeUnchanged = options.includeUnchanged ?? true;
+  const rawExtensionState = snapshotRuntimeExtensionState(state.extensionState);
+  const extensionState = includeUnchanged || state.extensionStateDirty
+    ? rawExtensionState ?? (state.extensionStateDirty ? {} : undefined)
+    : undefined;
+  const includeExtensionRecords = includeUnchanged
+    ? state.extensionRecords.length > 0 || state.extensionRecordsDirty
+    : state.extensionRecordsDirty;
+  const extensionRecords = includeExtensionRecords
+    ? state.extensionRecords.map((record) => ({ ...record }))
+    : undefined;
+
+  if (!extensionState && !extensionRecords) {
+    return undefined;
+  }
+
+  return {
+    ...(extensionState ? { extensionState } : {}),
+    ...(extensionRecords ? { extensionRecords } : {}),
+  };
+}
+
 export function getExtensionStateBucket(
   state: RuntimeSessionState['extensionState'],
   extensionId: string,
@@ -116,7 +145,9 @@ export function buildRuntimeSessionState(input: BuildRuntimeSessionStateInput): 
   return {
     queuedMessages: [],
     extensionState: createRuntimeExtensionState(input.loadedExtensionState),
+    extensionStateDirty: false,
     extensionRecords: input.loadedExtensionRecords?.map((record) => ({ ...record })) ?? [],
+    extensionRecordsDirty: false,
     activeTools: input.activeTools,
     editRecoveryAttempts: new Map(),
     blockedEditWrites: new Set(),

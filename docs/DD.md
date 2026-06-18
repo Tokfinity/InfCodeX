@@ -1,8 +1,8 @@
 # KodaX Detailed Design
 
-> Last updated: 2026-06-16
+> Last updated: 2026-06-18
 >
-> Current release baseline: `@kodax-ai/kodax@0.7.49`
+> Current release baseline: `@kodax-ai/kodax@0.7.52`
 >
 > This DD describes current implementation structure. Retired V1 chain details
 > were deleted from this active document; use git history and historical feature
@@ -19,7 +19,7 @@ reference and does not duplicate every type. It should answer three questions:
 
 ## 2. Published Package And Build Entries
 
-The root package is `@kodax-ai/kodax@0.7.49`.
+The root package is `@kodax-ai/kodax@0.7.52`.
 
 `package.json` exposes:
 
@@ -191,10 +191,14 @@ Session behavior spans agent, coding, and repl:
 - `packages/repl/src/session/public-api.ts`: public session SDK.
 - `packages/repl/src/interactive/storage.ts`: file-backed storage behavior.
 - coding runtime records snapshots, runtime session state, and result metadata.
+- `SessionData.uiHistory`: optional bounded replay cache for sanitized terminal
+  tool groups. It is a display projection, not the canonical model transcript.
 
 Public session APIs should preserve id-based usage while allowing storage layout
 to evolve. New storage features must be backward-compatible with old JSONL
-records whenever practical.
+records whenever practical. Host code should treat `loadSession()` as active
+model context, `loadFullTranscript()` as append-order scrollback, and
+`uiHistory` as an optional replay hint.
 
 ## 11. Skills
 
@@ -281,6 +285,13 @@ Workflow child agents inherit or fail closed on parent guardrails, existing SDK
 event callbacks, workflow logs, capsule preflight, and provider/model policy.
 Durable run graphs remain audit/result records in this slice; they are not
 cross-process executable checkpoints.
+
+FEATURE_230 / FEATURE_234 (`v0.7.51`, released) add persistence readback on top
+of that process contract. TUI sessions persist sanitized terminal tool groups in
+`uiHistory`, with malformed siblings filtered rather than dropping the full
+array. Workflow process metadata accepts optional `hostMetadata`, normalizes it
+to a small string-only map, persists it in `run.json`, and echoes it through
+`WorkflowProcessSnapshot` / process events after restart.
 
 ## 14. REPL Detail
 

@@ -102,6 +102,7 @@ export type {
   KodaXSessionUiToolGroupHistoryItem,
   KodaXSessionWorkspaceKind,
   KodaXEvents,
+  KodaXSidecarMessageEvent,
   WorkflowEventCorrelation,
   KodaXWorkflowEventMeta,
   KodaXActivityEventMeta,

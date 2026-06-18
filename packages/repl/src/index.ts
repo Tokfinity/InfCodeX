@@ -106,6 +106,15 @@ export {
 
 // === 会话存储 ===
 export { FileSessionStorage } from "./interactive/storage.js";
+export {
+  dedupeSessions,
+  type SessionDedupeMatch,
+  type SessionDedupeMove,
+  type SessionDedupeOptions,
+  type SessionDedupeReport,
+  type SessionDedupeSkip,
+  type SessionDedupeSkipReason,
+} from "./session/dedupe.js";
 
 // === Permission helpers ===
 export type { PermissionMode, ConfirmResult, PermissionContext } from "./permission/index.js";

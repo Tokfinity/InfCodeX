@@ -102,7 +102,8 @@ console.log(result.success);
 - Repo intelligence: protocol helpers and premium/native mode integration
 - Provider policy: capability checks, model hints, fallback helpers
 - Workflows: `createCodingWorkflowBackend`, `runWorkflowFromOptions`, `generateWorkflowFromOptions`, `createWorkflowRunManager`, `createWorkflowLifecycleController`, built-in/saved workflow discovery
-- Types: `KodaXOptions`, `KodaXResult`, `KodaXEvents`, `KodaXToolExecutionContext`, session and task types
+- Events: `KodaXEvents.onSidecarMessage` surfaces Sidecar Verifier `revise` / `blocked` messages for SDK and headless hosts
+- Types: `KodaXOptions`, `KodaXResult`, `KodaXEvents`, `KodaXSidecarMessageEvent`, `KodaXToolExecutionContext`, session and task types
 
 ## 构建与测试
 
@@ -113,4 +114,4 @@ npm test -- packages/coding/src
 
 ## License
 
-MIT
+Apache-2.0

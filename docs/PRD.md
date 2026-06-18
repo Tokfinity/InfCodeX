@@ -1,8 +1,8 @@
 # KodaX Product Requirements
 
-> Last updated: 2026-06-16
+> Last updated: 2026-06-18
 >
-> Current release baseline: `@kodax-ai/kodax@0.7.49`
+> Current release baseline: `@kodax-ai/kodax@0.7.52`
 >
 > This document describes the current product. Historical pre-v0.7.43
 > chain/harness designs have been removed from this current PRD because they no
@@ -100,8 +100,12 @@ must be visible to the runtime.
 ### Sessions
 
 Users must be able to resume, list, fork, rewind, tag, archive, and inspect
-sessions. Session records are local JSONL data, and public session APIs must
-remain stable for SDK consumers.
+sessions. Session records are local JSONL data, public session APIs must remain
+stable for SDK consumers, and host-facing reads must distinguish active model
+context from append-order transcript history. Resumed interactive sessions
+should preserve durable terminal tool-card replay where sanitized `uiHistory`
+is available, while canonical `messages` / `lineage` remain the source of
+truth.
 
 ### Skills And MCP
 
@@ -135,6 +139,11 @@ must not become the source of truth by parsing terminal text, slash-command
 output, or Ink view models. Coding-layer workflow APIs own coding run graphs,
 host policy, source/provenance fields, and result summaries while preserving the
 Agent-layer package boundary.
+
+FEATURE_234 (`v0.7.51`) adds workflow run host attribution through
+`hostMetadata`. SDK hosts can stamp a small string-only ownership map on process
+metadata, have it persisted in `run.json`, and read it back through snapshots
+after restart without KodaX interpreting host-specific meaning.
 
 ### Safety And Control
 

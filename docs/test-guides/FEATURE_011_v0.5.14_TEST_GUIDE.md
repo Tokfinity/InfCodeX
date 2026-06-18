@@ -36,7 +36,7 @@
 ## 测试环境
 
 ### 前置条件
-- ✅ 已安装 Node.js 18+ 和 npm/pnpm
+- ✅ 已安装 Node.js 20+ 和 npm/pnpm
 - ✅ 已克隆 KodaX 仓库并安装依赖
 - ✅ 已配置至少一个 LLM Provider (Anthropic/OpenAI/Kimi/Qwen/Zhipu/MiniMax)
 - ✅ 已构建项目 (`npm run build` 或 `pnpm build`)

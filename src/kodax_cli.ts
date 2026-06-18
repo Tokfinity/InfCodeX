@@ -98,10 +98,12 @@ import {
   getGitRoot,
   prepareRuntimeConfig,
   FileSessionStorage,
+  dedupeSessions,
   KODAX_CONFIG_FILE,
   resolveInteractiveSurfacePreference,
   runInteractiveMode,
   runInkInteractiveMode,
+  type SessionDedupeReport,
 } from '@kodax-ai/repl';
 import type { AcpPermissionMode } from './acp_server.js';
 export {
@@ -121,6 +123,43 @@ function hasConfiguredMcpServers(config: { mcpServers?: Record<string, { connect
   return Object.values(config.mcpServers ?? {}).some(
     (server) => (server.connect ?? 'lazy') !== 'disabled',
   );
+}
+
+function printSessionDedupeReport(report: SessionDedupeReport, applied: boolean): void {
+  const action = applied ? 'Applied' : 'Dry run';
+  console.log(chalk.cyan(`\nSession dedupe ${action}\n`));
+  console.log(`Scanned: ${report.scanned}`);
+  console.log(`Runner candidates: ${report.runnerCandidates}`);
+  console.log(`Matched: ${report.matches.length}`);
+  console.log(`Moved: ${report.moved.length}`);
+  if (report.archiveDir) {
+    console.log(`Archive: ${report.archiveDir}`);
+  }
+
+  if (report.matches.length > 0) {
+    console.log(chalk.bold('\nMatches:'));
+    for (const match of report.matches) {
+      const marker = report.moved.some((move) => move.runnerId === match.runnerId)
+        ? 'moved'
+        : 'candidate';
+      console.log(`  ${match.runnerId} -> ${match.canonicalId} (${marker}, score=${match.score})`);
+    }
+  }
+
+  if (report.skipped.length > 0) {
+    const reasonCounts = new Map<string, number>();
+    for (const skipped of report.skipped) {
+      reasonCounts.set(skipped.reason, (reasonCounts.get(skipped.reason) ?? 0) + 1);
+    }
+    console.log(chalk.bold('\nSkipped:'));
+    for (const [reason, count] of reasonCounts.entries()) {
+      console.log(`  ${reason}: ${count}`);
+    }
+  }
+
+  if (!applied) {
+    console.log(chalk.dim('\nRun `kodax sessions dedupe --apply` to move uniquely matched runner ghosts.'));
+  }
 }
 // ============== CLI Help Topics ==============
 
@@ -615,7 +654,7 @@ _kodax_complete() {
   COMPREPLY=()
   cur="\${COMP_WORDS[COMP_CWORD]}"
   prev="\${COMP_WORDS[COMP_CWORD-1]}"
-  subcmds="acp skill tools completion"
+  subcmds="acp skill tools sessions completion"
   opts="-p -c -r -n -m -t -s -y -h --print --continue --resume --new --provider --model --thinking --reasoning --agent-mode --repo-intelligence --repo-intelligence-trace --repointel-endpoint --repointel-bin --auto --session --extension --no-session --max-iter --version"
 
   case "\${prev}" in
@@ -637,7 +676,7 @@ complete -F _kodax_complete kodax`);
 #   eval "$(kodax completion zsh)"
 _kodax() {
   local -a subcmds opts providers reasoning_modes agent_modes repo_modes
-  subcmds=(acp skill tools completion)
+  subcmds=(acp skill tools sessions completion)
   providers=(${providerNames.replace(/ /g, ' ')})
   reasoning_modes=(off auto quick balanced deep)
   agent_modes=(ama amaw sa)
@@ -663,7 +702,7 @@ compdef _kodax kodax`);
       } else if (shell === 'fish') {
         console.log(`# KodaX fish completion — add to ~/.config/fish/completions/kodax.fish:
 #   kodax completion fish > ~/.config/fish/completions/kodax.fish
-complete -c kodax -n '__fish_use_subcommand' -a 'acp skill tools completion' -d 'Subcommands'
+complete -c kodax -n '__fish_use_subcommand' -a 'acp skill tools sessions completion' -d 'Subcommands'
 complete -c kodax -s p -l print -d 'Print mode'
 complete -c kodax -s c -l continue -d 'Continue most recent conversation'
 complete -c kodax -s r -l resume -d 'Resume session by ID'
@@ -678,6 +717,29 @@ complete -c kodax -l version -d 'Show version'`);
         console.error(`Unknown shell: ${shell}. Supported: bash, zsh, fish`);
         process.exit(1);
       }
+    });
+
+  // ============== sessions subcommands ==============
+  const sessionsCommand = program
+    .command('sessions')
+    .description('Manage saved KodaX sessions')
+    .action(() => {
+      console.log(chalk.cyan('\nKodaX Sessions\n'));
+      console.log(chalk.bold('Commands:'));
+      console.log(chalk.dim('  kodax sessions dedupe          ') + 'Dry-run historical runner ghost cleanup');
+      console.log(chalk.dim('  kodax sessions dedupe --apply  ') + 'Move uniquely matched runner ghosts to .dedupe-archive');
+      console.log(chalk.dim('\nLegacy:'));
+      console.log(chalk.dim('  kodax -s list                  ') + 'List saved sessions');
+    });
+
+  sessionsCommand
+    .command('dedupe')
+    .description('Find and optionally move historical runner ghost session files')
+    .option('--apply', 'Move uniquely matched runner ghost files into .dedupe-archive')
+    .action(async (subOpts: { apply?: boolean }) => {
+      const applied = subOpts.apply === true;
+      const report = await dedupeSessions({ apply: applied });
+      printSessionDedupeReport(report, applied);
     });
 
   // ============== doctor subcommand (FEATURE_204) ==============
@@ -1143,7 +1205,13 @@ complete -c kodax -l version -d 'Show version'`);
   }
 
   await program.parseAsync(process.argv);
-  if (argv[0] === 'skill' || argv[0] === 'acp' || argv[0] === 'tools' || argv[0] === 'doctor') {
+  if (
+    argv[0] === 'skill'
+    || argv[0] === 'acp'
+    || argv[0] === 'tools'
+    || argv[0] === 'doctor'
+    || argv[0] === 'sessions'
+  ) {
     return;
   }
 
