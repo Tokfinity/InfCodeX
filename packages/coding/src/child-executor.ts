@@ -769,6 +769,7 @@ async function runReadChildBody(
     options.parentOptions.events,
     options.workflowCorrelation,
     options.childActivityName,
+    options.maxIterationsPerChild,
   );
 
   // FEATURE_191 — specialist override switch (no-op when bundle.specialistName
@@ -942,6 +943,7 @@ async function runWriteChildBody(
     options.parentOptions.events,
     options.workflowCorrelation,
     options.childActivityName,
+    options.maxIterationsPerChild,
   );
   // FEATURE_117 v2 (v0.7.38): write children inherit AGENTS.md mutation
   // policy. Read-only children stay on the bare `CHILD_AGENT_SYSTEM_PROMPT`
@@ -1431,9 +1433,15 @@ export function buildChildEvents(
   parentEvents?: KodaXEvents,
   workflowCorrelation?: WorkflowEventCorrelation,
   childName?: string,
+  // Real per-child iteration cap (`options.maxIterationsPerChild`). Seeds
+  // the progress-line denominator so it shows the true ceiling from the
+  // start instead of a hardcoded guess. `onIterationStart` overwrites it
+  // every turn, but seeding from the real value removes the latent trap of
+  // a stale default surfacing if a caller ever passes a non-200 cap.
+  initialMaxIterations = 200,
 ): KodaXEvents | undefined {
   let iterationCount = 0;
-  let maxIterations = 200;
+  let maxIterations = initialMaxIterations;
   let lastProgressTime = 0;
   const PROGRESS_THROTTLE_MS = 150; // Limit updates to ~6/sec per child
 
