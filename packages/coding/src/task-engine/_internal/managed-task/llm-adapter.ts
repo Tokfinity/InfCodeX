@@ -95,6 +95,10 @@ import {
   tickTodoReminder,
   type TodoReminderState,
 } from '../../todo-throttle-reminder.js';
+import {
+  consumeTodoDriftReminderText,
+  type TodoDriftReminderState,
+} from '../../todo-drift-reminder.js';
 
 /**
  * Cumulative token state captured by the LLM adapter across a full
@@ -191,6 +195,12 @@ export function buildRunnerLlmAdapter(
    * local per-adapter counter — same shape, just not reset across runs.
    */
   iterationStateRef?: { current: number },
+  /**
+   * Warn-only todo drift nudge. The runner arms this after a successful
+   * work tool completes while pending todos exist but no item is active;
+   * the adapter consumes it once on the next provider call.
+   */
+  todoDriftReminderState?: TodoDriftReminderState,
 ): (messages: readonly KodaXMessage[], agent: Agent) => Promise<RunnerLlmResult> {
   // FEATURE_072 parity: the REPL's token-count indicator reads
   // `onIterationEnd` to refresh after each worker LLM turn. The iteration
@@ -238,6 +248,13 @@ export function buildRunnerLlmAdapter(
     }
     let system = systemParts.join('\n\n');
     const transcript = messages.slice(cut);
+
+    if (todoStore && todoDriftReminderState) {
+      const reminder = consumeTodoDriftReminderText(todoDriftReminderState, todoStore);
+      if (reminder) {
+        system = system.length > 0 ? `${system}\n\n${reminder}` : reminder;
+      }
+    }
 
     // FEATURE_097 (v0.7.34) §5 ② — Layer 2 throttle reminder. Detect
     // agent transitions to reset the counter (per-task scope, but a

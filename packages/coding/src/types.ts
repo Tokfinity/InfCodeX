@@ -206,6 +206,17 @@ export interface KodaXSidecarMessageEvent {
   readonly trace?: string;
 }
 
+export interface KodaXTodoDriftWarningEvent {
+  readonly kind: 'work_started_without_claimed_todo';
+  readonly toolName: string;
+  readonly toolCallId?: string;
+  readonly count: number;
+  readonly pendingCount: number;
+  readonly openCount: number;
+  readonly firstPendingTodoId?: string;
+  readonly firstPendingTodoSubject?: string;
+}
+
 export interface KodaXEvents {
   /** FEATURE_229: correlates child-agent SDK callbacks back to a workflow run/item. */
   workflowCorrelation?: WorkflowEventCorrelation;
@@ -356,6 +367,13 @@ export interface KodaXEvents {
    * (FEATURE_086 onRepoIntelligenceTrace single-rail precedent).
    */
   onTodoUpdate?: (items: TodoList) => void;
+  /**
+   * Warn-only telemetry: a successful real work tool completed while the
+   * visible todo list had pending items but no item marked in_progress.
+   * The runner does not mutate the todo list for this signal; it only
+   * nudges the next model turn to call todo_update explicitly.
+   */
+  onTodoDriftWarning?: (event: KodaXTodoDriftWarningEvent) => void;
   /** Structured provider recovery event (Feature 045) */
   onProviderRecovery?: (
     event: ProviderRecoveryEvent,
@@ -1335,6 +1353,12 @@ export interface KodaXManagedTaskRuntimeState {
   reviewFilesOrAreas?: string[];
   toolOutputTruncated?: boolean;
   toolOutputTruncationNotes?: string[];
+  /**
+   * Warn-only todo hygiene telemetry: successful real work started while
+   * pending todos existed and no item was marked in_progress. The runner
+   * never mutates todo state from this signal.
+   */
+  todoDriftWarnings?: KodaXTodoDriftWarningEvent[];
   managedTimeline?: KodaXManagedLiveEvent[];
   evidenceAcquisitionMode?: 'overview' | 'diff-bundle' | 'diff-slice' | 'file-read';
   consecutiveEvidenceOnlyIterations?: number;

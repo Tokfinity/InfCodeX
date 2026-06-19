@@ -43,6 +43,7 @@ import {
 } from '../agent.js';
 import type {
   KodaXHarnessProfile,
+  KodaXManagedTask,
   KodaXManagedProtocolPayload,
   KodaXOptions,
   KodaXResult,
@@ -132,6 +133,12 @@ import { createContentHashCache } from '../multi-instance/content-hash-cache.js'
 import { createReadFileStateCache } from '../multi-instance/read-file-state-cache.js';
 import { buildRunnerStallSidecarAdapter } from './runner-stall-sidecar-adapter.js';
 import { composeToolObservers } from '../agent-runtime/middleware/compose-tool-observers.js';
+import {
+  createTodoDriftObserver,
+  createTodoDriftReminderState,
+  getTodoDriftWarnings,
+  type TodoDriftReminderState,
+} from './todo-drift-reminder.js';
 // FEATURE_193 (v0.7.43): createScopeAwareHarnessGuardrail import removed —
 // scope-aware-harness-guardrail.ts deleted (V1 Scout H0→H1/H2 guardrail).
 import { createToolResultTruncationGuardrail } from '../tools/tool-result-truncation-guardrail.js';
@@ -291,6 +298,21 @@ function runnerToolEventMeta(
   return {
     toolId,
     ...(events?.workflowCorrelation !== undefined ? { workflowCorrelation: events.workflowCorrelation } : {}),
+  };
+}
+
+function attachTodoDriftWarnings(
+  task: KodaXManagedTask,
+  state: TodoDriftReminderState,
+): KodaXManagedTask {
+  const warnings = getTodoDriftWarnings(state);
+  if (warnings.length === 0) return task;
+  return {
+    ...task,
+    runtime: {
+      ...task.runtime,
+      todoDriftWarnings: [...warnings],
+    },
   };
 }
 
@@ -630,6 +652,7 @@ async function runManagedTaskViaRunnerInner(
   // call, the `todo_update` wrapper resets it on success, the agent-
   // transition detector resets it on role switches.
   const todoReminderState = createTodoReminderState();
+  const todoDriftReminderState = createTodoDriftReminderState();
 
   // FEATURE_121 v0.7.40 follow-up — lazy-once summarizer factory.
   // Constructed on first call (when a child task actually triggers the
@@ -812,7 +835,7 @@ async function runManagedTaskViaRunnerInner(
     // `writeManagedSkillArtifacts` at the bootstrap site (raw skill +
     // initial skillMap markdown), and never re-derived mid-run.
     void role;
-    const snapshot = buildManagedTaskPayload({
+    const snapshot = attachTodoDriftWarnings(buildManagedTaskPayload({
       prompt,
       options,
       recorder,
@@ -829,7 +852,7 @@ async function runManagedTaskViaRunnerInner(
       routingOverrideReason,
       toolOutputTruncated: toolTruncationRef.truncated,
       toolOutputTruncationNotes: toolTruncationRef.notes,
-    });
+    }), todoDriftReminderState);
     // Snapshot write — best-effort, must not throw out of the observer
     // callback or we'd abort the Runner mid-emit.
     void writeManagedTaskSnapshotArtifacts(snapshot.evidence.workspaceDir, snapshot)
@@ -1165,6 +1188,7 @@ async function runManagedTaskViaRunnerInner(
     todoStore,
     todoReminderState,
     iterationStateRef,
+    todoDriftReminderState,
   );
 
   // FEATURE_143 (v0.7.36) — `plan.promptOverlay` (routing-notes block:
@@ -1294,13 +1318,15 @@ async function runManagedTaskViaRunnerInner(
   // dispatches `options.events.onToolResult`.
   //
   // FEATURE_187 (v0.7.43) Phase D — toolObserver assembled via
-  // `composeToolObservers` for explicit precedence. Two observers in
+  // `composeToolObservers` for explicit precedence. Observers in
   // order: (1) `stallSidecar.observer` runs first so its
   // pending-nudge consume in beforeTool gates everything else (a
   // permission denial AFTER nudge consume would swallow the nudge);
   // (2) `permissionEventsObserver` handles CAP-010 permission gate +
   // CAP-035 visibility filter + events.onToolUseStart /
   // events.onToolResult dispatch + F4 truncation tracking.
+  // (3) `todoDriftObserver` records warn-only todo drift telemetry and
+  // arms the next-turn nudge after successful real work.
   // composeToolObservers short-circuits beforeTool on the first
   // non-pass verdict (so stall nudge correctly blocks downstream
   // permission); fans out onToolCall / onToolResult to every observer.
@@ -1372,9 +1398,17 @@ async function runManagedTaskViaRunnerInner(
       }, runnerToolEventMeta(options.events, call.id));
     },
   };
+  const todoDriftObserver = createTodoDriftObserver({
+    todoStore,
+    state: todoDriftReminderState,
+    onWarning: (event) => {
+      options.events?.onTodoDriftWarning?.(event);
+    },
+  });
   const runnerToolObserver = composeToolObservers(
     stallSidecar.observer,
     permissionEventsObserver,
+    todoDriftObserver,
   );
 
   // FEATURE_184 Sidecar Verifier stop-hook wiring — extracted to
@@ -1738,7 +1772,7 @@ async function runManagedTaskViaRunnerInner(
     : lastText;
 
   const managedProtocolPayload = buildManagedProtocolPayload(recorder);
-  const managedTask = buildManagedTaskPayload({
+  const managedTask = attachTodoDriftWarnings(buildManagedTaskPayload({
     prompt,
     options,
     recorder,
@@ -1757,7 +1791,7 @@ async function runManagedTaskViaRunnerInner(
     routingOverrideReason,
     toolOutputTruncated: toolTruncationRef.truncated,
     toolOutputTruncationNotes: toolTruncationRef.notes,
-  });
+  }), todoDriftReminderState);
 
   observer.completed(signal, reason ?? userAnswer);
 

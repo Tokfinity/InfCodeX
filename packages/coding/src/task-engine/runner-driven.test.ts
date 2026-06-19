@@ -33,6 +33,11 @@ import {
   isRunnerDrivenRuntimeEnabled,
   runManagedTaskViaRunner,
 } from './runner-driven.js';
+import { createTodoStore } from './todo-store.js';
+import {
+  createTodoDriftReminderState,
+  observeTodoDriftAfterToolResult,
+} from './todo-drift-reminder.js';
 import { MANAGED_TASK_MAX_TOOL_LOOP_ITERATIONS } from '../constants.js';
 import type { RunnableTool } from '@kodax-ai/agent';
 import type {
@@ -147,6 +152,46 @@ describe('buildRunnerLlmAdapter (via overrideStream)', () => {
     expect(capturedSystem).toBe('sys-text');
     expect(capturedTranscript).toHaveLength(1);
     expect(capturedTranscript[0]!.content).toBe('user-q');
+  });
+
+  it('injects a one-shot todo drift reminder into the next provider call', async () => {
+    const todoStore = createTodoStore();
+    todoStore.init([{ id: 'todo_1', subject: 'Inspect implementation' }]);
+    const driftState = createTodoDriftReminderState();
+    observeTodoDriftAfterToolResult({
+      state: driftState,
+      todoStore,
+      call: {
+        id: 'read-1',
+        name: 'read',
+        input: { file_path: 'packages/coding/src/x.ts' },
+      },
+      result: { content: 'file contents' },
+    });
+
+    const capturedSystems: string[] = [];
+    const adapter = buildRunnerLlmAdapter(
+      makeOptions(),
+      async (_transcript, _tools, system) => {
+        capturedSystems.push(system);
+        return { textBlocks: [{ text: 'ok' }], toolBlocks: [] };
+      },
+      undefined,
+      undefined,
+      undefined,
+      todoStore,
+      undefined,
+      undefined,
+      driftState,
+    );
+
+    await adapter([{ role: 'system', content: 'sys-text' }], { name: 'worker', instructions: 'ignored' });
+    await adapter([{ role: 'system', content: 'sys-text' }], { name: 'worker', instructions: 'ignored' });
+
+    expect(capturedSystems[0]).toContain('sys-text');
+    expect(capturedSystems[0]).toContain('no item marked in_progress');
+    expect(capturedSystems[0]).toContain('call todo_update now');
+    expect(capturedSystems[1]).toBe('sys-text');
   });
 
   // Regression: after compaction + `injectPostCompactAttachments`, the
@@ -1013,6 +1058,67 @@ describe('runManagedTaskViaRunner — end-to-end', () => {
     expect(result.success).toBe(true);
     expect(result.lastText).toBe('Hello, world.');
     expect(result.managedTask?.contract.harnessProfile).toBe('H0_DIRECT');
+  });
+
+  it('records todo drift telemetry and injects the next-turn reminder through runner wiring', async () => {
+    const warnings: Array<Parameters<NonNullable<KodaXEvents['onTodoDriftWarning']>>[0]> = [];
+    const todoSnapshots: Array<Parameters<NonNullable<KodaXEvents['onTodoUpdate']>>[0]> = [];
+    const systems: string[] = [];
+    let callCount = 0;
+    const options: KodaXOptions = {
+      ...makeOptions(),
+      events: {
+        onTodoDriftWarning: (event) => {
+          warnings.push(event);
+        },
+        onTodoUpdate: (items) => {
+          todoSnapshots.push(items);
+        },
+      },
+    };
+
+    const result = await runManagedTaskViaRunner(
+      options,
+      'Inspect todo drift wiring',
+      async (_transcript, _tools, system) => {
+        systems.push(system);
+        callCount += 1;
+        if (callCount === 1) {
+          return {
+            textBlocks: [],
+            toolBlocks: [
+              {
+                type: 'tool_use',
+                id: 'todo-create-1',
+                name: 'todo_create',
+                input: { subject: 'Inspect implementation' },
+              },
+              {
+                type: 'tool_use',
+                id: 'read-1',
+                name: 'read',
+                input: { path: path.join(process.cwd(), 'README.md') },
+              },
+            ],
+          };
+        }
+        return {
+          textBlocks: [{ text: 'Done after reminder.' }],
+          toolBlocks: [],
+        };
+      },
+    );
+
+    expect(warnings).toHaveLength(1);
+    expect(warnings[0]).toMatchObject({
+      kind: 'work_started_without_claimed_todo',
+      toolName: 'read',
+      firstPendingTodoSubject: 'Inspect implementation',
+    });
+    expect(todoSnapshots.some((snapshot) => snapshot[0]?.status === 'pending')).toBe(true);
+    expect(systems[1]).toContain('no item marked in_progress');
+    expect(systems[1]).toContain('call todo_update now');
+    expect(result.managedTask?.runtime?.todoDriftWarnings).toEqual(warnings);
   });
 
   it('FEATURE_211: returns and persists extension runtime session snapshots', async () => {
