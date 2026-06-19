@@ -10,13 +10,13 @@
 
 | Item | Value |
 |---|---|
-| Current released version | `v0.7.52` |
-| Current package version | `@kodax-ai/kodax@0.7.53` (unreleased release candidate) |
+| Current released version | `v0.7.53` |
+| Current package version | `@kodax-ai/kodax@0.7.53` (released 2026-06-19) |
 | Workspace baseline | `llm / agent / coding / repl` 4 packages |
 | Total tracked features | `21` |
-| InProgress | `3` |
+| InProgress | `0` |
 | Planned | `14` |
-| Completed | `4` |
+| Completed | `7` |
 | Tracked feature IDs | `007, 030, 093, 105, 108, 113, 139, 174, 211, 224, 225, 228, 229, 230, 231, 232, 233, 234, 235, 236, 237` |
 | Archive cutoff | Shipped / canceled / absorbed / shelved items through `v0.7.49` are archived. |
 
@@ -24,8 +24,8 @@
 
 | Status | Count | Feature IDs | Next checkpoint |
 |---|---:|---|---|
-| Completed | 4 | `229, 230, 234, 236` | `229` released v0.7.50; `230, 234, 236` released v0.7.51 |
-| InProgress | 3 | `174, 211, 237` | `v0.7.53` release validation |
+| Completed | 7 | `174, 211, 237, 229, 230, 234, 236` | `174, 211, 237` released v0.7.53; `229` v0.7.50; `230, 234, 236` v0.7.51 |
+| InProgress | 0 | — | — |
 | Planned, near-term | 9 | `231, 232, 235, 233, 224, 228, 225, 105, 108` | `v0.7.57` -> `v0.7.73` |
 | Planned, v0.8.x | 5 | `007, 030, 093, 113, 139` | `v0.8.5+` |
 
@@ -51,13 +51,10 @@
 
 ## 进行中的 Feature
 
-> `174` / `211` / `237` are implemented in the v0.7.53 release-candidate branch and remain here until release validation completes.
+> 当前无进行中的 feature（`174` / `211` / `237` 已随 `v0.7.53` 发布，移入「已完成 Feature」）。本段按 tracker 约定常驻，空表即可。
 
 | ID | Title | Planned | Design |
 |---|---|---|---|
-| `174` | `kodax sessions dedupe` | `v0.7.53` | [v0.7.53](features/v0.7.53.md#feature_174-kodax-sessions-dedupe) |
-| `211` | Interactive-Mode Extension/MCP Session State Cross-Resume Persistence | `v0.7.53` | [v0.7.53](features/v0.7.53.md#feature_211-interactive-mode-extensionmcp-session-state-cross-resume-persistence) |
-| `237` | Todo-drift nudge (warn-only unclaimed-work reminder) | `v0.7.53` | [v0.7.53](features/v0.7.53.md#feature_237-todo-drift-nudge-warn-only-unclaimed-work-reminder) |
 
 ---
 
@@ -97,6 +94,9 @@
 
 | ID | Title | Released | Design | Notes |
 |---|---|---|---|---|
+| `174` | `kodax sessions dedupe` | `v0.7.53` | [v0.7.53](features/v0.7.53.md#feature_174-kodax-sessions-dedupe) | Released v0.7.53 (npm + tag + GitHub Release, 2026-06-19). Dry-run-first ghost-session cleanup; only uniquely-matched `runner-*` ghosts move to a reversible `.dedupe-archive`. |
+| `211` | Interactive-Mode Extension/MCP Session State Cross-Resume Persistence | `v0.7.53` | [v0.7.53](features/v0.7.53.md#feature_211-interactive-mode-extensionmcp-session-state-cross-resume-persistence) | Released v0.7.53 (2026-06-19). Runtime extension state snapshotted back to the REPL host and restored across `-r` / `-c`; preserves the FEATURE_173 single-writer invariant. |
+| `237` | Todo-drift nudge (warn-only unclaimed-work reminder) | `v0.7.53` | [v0.7.53](features/v0.7.53.md#feature_237-todo-drift-nudge-warn-only-unclaimed-work-reminder) | Released v0.7.53 (2026-06-19). Warn-only observer arms a one-shot `<system-reminder>` + `onTodoDriftWarning` telemetry when work starts with pending-but-unclaimed todos; paired prompt eval. |
 | `236` | Workflow Inline Skill Reference Propagation | `v0.7.51` | [v0.7.51](features/v0.7.51.md#feature_236-workflow-inline-skill-reference-propagation) | Released v0.7.51 (2026-06-17). Workflow generator expands inline `/skill:<name>` and known bare slash skill references before harness generation; child briefings fail closed to the `skill` tool for unexpanded references. |
 | `234` | Workflow Run Host Attribution (`hostMetadata`) | `v0.7.51` | [v0.7.51](features/v0.7.51.md#feature_234-workflow-run-host-attribution-hostmetadata) | Released v0.7.51 (2026-06-17). Additive `hostMetadata?: Record<string,string>` on workflow snapshot/options; eval non-trigger. |
 | `230` | Durable TUI Tool Transcript Replay | `v0.7.51` | [v0.7.51](features/v0.7.51.md#feature_230-durable-tui-tool-transcript-replay) | Released v0.7.51 (2026-06-17). Terminal `tool_group` replay cache + message-derived fallback + SDK transcript contract. |
