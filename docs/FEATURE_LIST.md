@@ -13,11 +13,11 @@
 | Current released version | `v0.7.52` |
 | Current package version | `@kodax-ai/kodax@0.7.53` (unreleased release candidate) |
 | Workspace baseline | `llm / agent / coding / repl` 4 packages |
-| Total tracked features | `20` |
-| InProgress | `2` |
+| Total tracked features | `21` |
+| InProgress | `3` |
 | Planned | `14` |
 | Completed | `4` |
-| Tracked feature IDs | `007, 030, 093, 105, 108, 113, 139, 174, 211, 224, 225, 228, 229, 230, 231, 232, 233, 234, 235, 236` |
+| Tracked feature IDs | `007, 030, 093, 105, 108, 113, 139, 174, 211, 224, 225, 228, 229, 230, 231, 232, 233, 234, 235, 236, 237` |
 | Archive cutoff | Shipped / canceled / absorbed / shelved items through `v0.7.49` are archived. |
 
 ### 一览表
@@ -25,7 +25,7 @@
 | Status | Count | Feature IDs | Next checkpoint |
 |---|---:|---|---|
 | Completed | 4 | `229, 230, 234, 236` | `229` released v0.7.50; `230, 234, 236` released v0.7.51 |
-| InProgress | 2 | `174, 211` | `v0.7.53` release validation |
+| InProgress | 3 | `174, 211, 237` | `v0.7.53` release validation |
 | Planned, near-term | 9 | `231, 232, 235, 233, 224, 228, 225, 105, 108` | `v0.7.57` -> `v0.7.73` |
 | Planned, v0.8.x | 5 | `007, 030, 093, 113, 139` | `v0.8.5+` |
 
@@ -51,12 +51,13 @@
 
 ## 进行中的 Feature
 
-> `174` / `211` are implemented in the v0.7.53 release-candidate branch and remain here until release validation completes.
+> `174` / `211` / `237` are implemented in the v0.7.53 release-candidate branch and remain here until release validation completes.
 
 | ID | Title | Planned | Design |
 |---|---|---|---|
 | `174` | `kodax sessions dedupe` | `v0.7.53` | [v0.7.53](features/v0.7.53.md#feature_174-kodax-sessions-dedupe) |
 | `211` | Interactive-Mode Extension/MCP Session State Cross-Resume Persistence | `v0.7.53` | [v0.7.53](features/v0.7.53.md#feature_211-interactive-mode-extensionmcp-session-state-cross-resume-persistence) |
+| `237` | Todo-drift nudge (warn-only unclaimed-work reminder) | `v0.7.53` | [v0.7.53](features/v0.7.53.md#feature_237-todo-drift-nudge-warn-only-unclaimed-work-reminder) |
 
 ---
 

@@ -103,8 +103,7 @@ describe('SkillCompleter', () => {
       const first = completions[0]!;
       expect(first.text).toMatch(/^\/skill:/);
       expect(first.display).toBeDefined();
-      // Note: Implementation returns 'command' type, not 'skill'
-      expect(first.type).toBe('command');
+      expect(first.type).toBe('skill');
       expect(first.description).toBeDefined();
     });
 

@@ -6,15 +6,20 @@ All notable changes to this project will be documented in this file.
 
 ## [Unreleased]
 
-## [0.7.53] - 2026-06-18
+## [0.7.53] - 2026-06-19
 
-> Scope note: a maintenance release focused on session hygiene and interactive resume-state persistence. Two features were pulled forward into this window — **FEATURE_174** (`kodax sessions dedupe`, from v0.7.69) and **FEATURE_211** (durable extension/MCP session state across host-owned resume, from v0.7.72) — alongside host-readable Sidecar Verifier messages and fixes for AMA iteration-cap reporting, child-executor progress seeding, and synthetic sidecar follow-up message identity. No LLM-facing prompt changes (ADR-033 eval non-trigger).
+> Scope note: a maintenance release focused on session hygiene, interactive resume-state persistence, and a warn-only todo-drift nudge. Three features were authored in this still-open window — **FEATURE_174** (`kodax sessions dedupe`, from v0.7.69), **FEATURE_211** (durable extension/MCP session state across host-owned resume, from v0.7.72), and **FEATURE_237** (warn-only todo-drift reminder) — alongside host-readable Sidecar Verifier messages, CLI completion/liveness polish, and fixes for AMA iteration-cap reporting, child-executor progress seeding, and synthetic sidecar follow-up message identity. FEATURE_237 is the only LLM-facing prompt change and ships with a paired prompt eval (`tests/todo-drift-reminder.eval.ts`); all other changes are ADR-033 eval non-triggers.
 
 ### Added
 
 - **Sidecar Verifier actionable messages are now host-readable.** `KodaXEvents.onSidecarMessage` emits `KodaXSidecarMessageEvent` for verifier `revise` and `blocked` verdicts, and JSONL/headless output mirrors the same payload as `sidecar.message`. Accept verdicts remain silent.
-- **FEATURE_174 - `kodax sessions dedupe`.** A dry-run-first `kodax sessions dedupe [--apply]` command finds historical `runner-*.jsonl` ghost sessions and only moves uniquely matched ghosts into a reversible `.dedupe-archive`, leaving canonical user sessions and managed-task-worker sessions untouched.
+- **FEATURE_174 - `kodax sessions dedupe`.** A dry-run-first `kodax sessions dedupe [--apply]` command finds historical `runner-*.jsonl` ghost sessions and only moves uniquely matched ghosts into a reversible `.dedupe-archive`, leaving canonical user sessions and managed-task-worker sessions untouched. Match selection now treats any second strong canonical (≥ threshold) as ambiguous and skips it, and `--apply` moves each ghost under a per-file guard that records a `move-failed` skip instead of aborting the whole run.
 - **FEATURE_211 - Interactive extension/MCP session state now survives host-owned resume.** Runtime extension state is snapshotted back to the REPL host, restored through `initialExtensionState` / `initialExtensionRecords`, and dirty-tracked so normal Ink saves stay on the append-only hot path while explicit extension clears persist correctly.
+- **FEATURE_237 - Warn-only todo-drift nudge.** A runner-boundary observer detects the soft-contract drift where the Worker starts real work while its todo list has pending items but nothing marked `in_progress`. It never mutates the todo store and never blocks a run — it records `KodaXTodoDriftWarningEvent` telemetry (surfaced via `KodaXEvents.onTodoDriftWarning` and `KodaXResult.todoDriftWarnings`) and arms a one-shot `<system-reminder>` nudging the model to `todo_update` the matching item. A successful `todo_update` clears the armed state. The LLM-facing reminder ships with a paired prompt eval (`tests/todo-drift-reminder.eval.ts`).
+
+### Changed
+
+- **CLI completion and live-surface polish.** Root-command option wiring is consolidated into a single `configureKodaXRootCommand`, argument/skill/command completion is broadened (skill completions are now typed `skill` rather than `command`), and the REPL child-activity / surface-liveness view-models are hardened against stale rows.
 
 ### Fixed
 
