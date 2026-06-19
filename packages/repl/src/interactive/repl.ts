@@ -334,20 +334,12 @@ function applyRuntimeSessionSnapshot(context: InteractiveContext, result: KodaXR
   }
 }
 
-function contextExtensionSessionData(
+export function contextExtensionSessionData(
   context: InteractiveContext,
 ): Pick<KodaXSessionData, 'extensionState' | 'extensionRecords'> {
   return {
-    ...(context.extensionStateDirty
-      ? { extensionState: context.extensionState ?? {} }
-      : context.extensionState !== undefined
-        ? { extensionState: context.extensionState }
-        : {}),
-    ...(context.extensionRecordsDirty
-      ? { extensionRecords: context.extensionRecords ?? [] }
-      : context.extensionRecords !== undefined
-        ? { extensionRecords: context.extensionRecords }
-        : {}),
+    ...(context.extensionStateDirty ? { extensionState: context.extensionState ?? {} } : {}),
+    ...(context.extensionRecordsDirty ? { extensionRecords: context.extensionRecords ?? [] } : {}),
   };
 }
 

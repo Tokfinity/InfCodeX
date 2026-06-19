@@ -8,7 +8,8 @@ export type SessionDedupeSkipReason =
   | 'managed-task-worker'
   | 'unreadable'
   | 'no-match'
-  | 'ambiguous-match';
+  | 'ambiguous-match'
+  | 'move-failed';
 
 export interface SessionDedupeOptions {
   sessionsDir?: string;
@@ -335,12 +336,12 @@ export async function dedupeSessions(
       continue;
     }
 
-    if (scored.length > 1 && scored[0]!.score === scored[1]!.score) {
+    if (scored.length > 1) {
       skipped.push({
         runnerId: runner.id,
         path: runner.filePath,
         reason: 'ambiguous-match',
-        detail: scored.map((match) => match.canonical.id).join(', '),
+        detail: scored.map((match) => `${match.canonical.id}:${match.score}`).join(', '),
       });
       continue;
     }
@@ -366,14 +367,26 @@ export async function dedupeSessions(
   if (options.apply) {
     for (const match of matches) {
       const relativePath = path.relative(sessionsDir, match.runnerPath);
-      const targetPath = await uniqueTargetPath(path.join(archiveDir, relativePath));
-      await fs.mkdir(path.dirname(targetPath), { recursive: true });
-      await fs.rename(match.runnerPath, targetPath);
-      moved.push({
-        runnerId: match.runnerId,
-        from: match.runnerPath,
-        to: targetPath,
-      });
+      let targetPath: string | undefined;
+      try {
+        targetPath = await uniqueTargetPath(path.join(archiveDir, relativePath));
+        await fs.mkdir(path.dirname(targetPath), { recursive: true });
+        await fs.rename(match.runnerPath, targetPath);
+        moved.push({
+          runnerId: match.runnerId,
+          from: match.runnerPath,
+          to: targetPath,
+        });
+      } catch (error) {
+        skipped.push({
+          runnerId: match.runnerId,
+          path: match.runnerPath,
+          reason: 'move-failed',
+          detail: `target=${targetPath ?? path.join(archiveDir, relativePath)}; ${
+            error instanceof Error ? error.message : String(error)
+          }`,
+        });
+      }
     }
   }
 

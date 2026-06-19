@@ -1,7 +1,6 @@
 import fs from 'node:fs';
 import path from 'node:path';
 import os from 'node:os';
-import fs from 'node:fs';
 import { mkdir, mkdtemp, rm, writeFile } from 'node:fs/promises';
 import { afterEach, beforeEach, describe, expect, it } from 'vitest';
 
@@ -120,6 +119,55 @@ describe('dedupeSessions', () => {
     expect(fs.existsSync(archivedRunner)).toBe(true);
   });
 
+  it('continues reporting when one apply move fails', async () => {
+    await writeSession('project-a/20260618_120000.jsonl', meta('20260618_120000', {
+      lineageVersion: 2,
+      activeEntryId: 'entry-4',
+      uiHistory: [{ type: 'assistant', text: 'done' }],
+    }));
+    const runnerAPath = await writeSession('project-a/runner-a.jsonl', meta('runner-a'));
+    await writeSession('project-b/20260618_120100.jsonl', meta('20260618_120100', {
+      gitRoot: '/repo/other',
+      runtimeInfo: {
+        canonicalRepoRoot: '/repo/other',
+        workspaceRoot: '/repo/other',
+      },
+      lineageVersion: 2,
+      activeEntryId: 'entry-4',
+      uiHistory: [{ type: 'assistant', text: 'done' }],
+    }));
+    const runnerBPath = await writeSession('project-b/runner-b.jsonl', meta('runner-b', {
+      gitRoot: '/repo/other',
+      runtimeInfo: {
+        canonicalRepoRoot: '/repo/other',
+        workspaceRoot: '/repo/other',
+      },
+    }));
+    const archiveBatchDir = path.join(sessionsDir, '.dedupe-archive', '20260618-123456');
+    await mkdir(archiveBatchDir, { recursive: true });
+    await writeFile(path.join(archiveBatchDir, 'project-a'), 'not a directory', 'utf8');
+
+    const report = await dedupeSessions({
+      sessionsDir,
+      apply: true,
+      now: new Date('2026-06-18T12:34:56.000Z'),
+    });
+
+    expect(report.moved).toEqual([
+      expect.objectContaining({
+        runnerId: 'runner-b',
+        from: runnerBPath,
+      }),
+    ]);
+    expect(report.skipped).toContainEqual(expect.objectContaining({
+      runnerId: 'runner-a',
+      path: runnerAPath,
+      reason: 'move-failed',
+    }));
+    expect(fs.existsSync(runnerAPath)).toBe(true);
+    expect(fs.existsSync(runnerBPath)).toBe(false);
+  });
+
   it('skips ambiguous runner ghost matches', async () => {
     await writeSession('project-a/20260618_120000.jsonl', meta('20260618_120000', {
       lineageVersion: 2,
@@ -145,6 +193,62 @@ describe('dedupeSessions', () => {
       }),
     ]);
     expect(fs.existsSync(runnerPath)).toBe(true);
+  });
+
+  it('skips runner ghosts with multiple non-tied strong canonical matches', async () => {
+    await writeSession('project-a/20260618_120000.jsonl', meta('20260618_120000', {
+      lineageVersion: 2,
+      activeEntryId: 'entry-4',
+      uiHistory: [{ type: 'assistant', text: 'done' }],
+    }));
+    await writeSession('project-a/20260618_123000.jsonl', meta('20260618_123000', {
+      createdAt: '2026-06-18T12:30:00.000Z',
+    }));
+    const runnerPath = await writeSession('project-a/runner-123.jsonl', meta('runner-123'));
+
+    const report = await dedupeSessions({ sessionsDir, apply: true });
+
+    expect(report.matches).toEqual([]);
+    expect(report.moved).toEqual([]);
+    expect(report.skipped).toEqual([
+      expect.objectContaining({
+        runnerId: 'runner-123',
+        reason: 'ambiguous-match',
+      }),
+    ]);
+    expect(fs.existsSync(runnerPath)).toBe(true);
+  });
+
+  it('skips unreadable runner ghost files', async () => {
+    await mkdir(path.join(sessionsDir, 'project-a'), { recursive: true });
+    const runnerPath = path.join(sessionsDir, 'project-a', 'runner-bad.jsonl');
+    await writeFile(runnerPath, 'not json\n', 'utf8');
+
+    const report = await dedupeSessions({ sessionsDir });
+
+    expect(report.matches).toEqual([]);
+    expect(report.skipped).toEqual([
+      expect.objectContaining({
+        runnerId: 'runner-bad',
+        path: runnerPath,
+        reason: 'unreadable',
+      }),
+    ]);
+  });
+
+  it('skips runner ghosts without a canonical match', async () => {
+    const runnerPath = await writeSession('project-a/runner-123.jsonl', meta('runner-123'));
+
+    const report = await dedupeSessions({ sessionsDir });
+
+    expect(report.matches).toEqual([]);
+    expect(report.skipped).toEqual([
+      expect.objectContaining({
+        runnerId: 'runner-123',
+        path: runnerPath,
+        reason: 'no-match',
+      }),
+    ]);
   });
 
   it('skips managed-task-worker runner sessions', async () => {
