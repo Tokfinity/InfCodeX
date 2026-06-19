@@ -132,22 +132,31 @@ describe("buildChildActivityViewModel", () => {
     expect(shouldRouteWorkflowLiveOnlyNotice({ childAgentId: "diff-explorer" }, "run-1")).toBe(false);
   });
 
-  it("shows child activity independently from workflow live status", () => {
+  it("shows child activity while loading or while a workflow live surface is active", () => {
     expect(shouldShowChildActivitySurface({
       isTranscriptMode: false,
       isLoading: true,
+      hasWorkflowLiveSurface: false,
       childActivityVisible: true,
     })).toBe(true);
     expect(shouldShowChildActivitySurface({
       isTranscriptMode: true,
       isLoading: true,
+      hasWorkflowLiveSurface: true,
       childActivityVisible: true,
     })).toBe(false);
     expect(shouldShowChildActivitySurface({
       isTranscriptMode: false,
       isLoading: false,
+      hasWorkflowLiveSurface: false,
       childActivityVisible: true,
     })).toBe(false);
+    expect(shouldShowChildActivitySurface({
+      isTranscriptMode: false,
+      isLoading: false,
+      hasWorkflowLiveSurface: true,
+      childActivityVisible: true,
+    })).toBe(true);
   });
 
   it("pads labels by display width", () => {

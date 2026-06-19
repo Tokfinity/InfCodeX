@@ -96,7 +96,7 @@ describe("surface-liveness", () => {
     });
   });
 
-  it("keeps ordinary footer activity only when no dedicated progress surface is visible", () => {
+  it("keeps footer activity visible alongside dedicated progress surfaces", () => {
     const busyActivity = {
       kind: "busy" as const,
       text: "[Worker] Thinking",
@@ -105,15 +105,19 @@ describe("surface-liveness", () => {
 
     expect(shouldRenderPromptActivityInFooter({
       activity: busyActivity,
-      hasWorkflowBuilderMessage: false,
-      hasDedicatedProgressSurface: false,
     })).toBe(true);
 
+    expect(shouldRenderPromptActivityInFooter({})).toBe(false);
+  });
+
+  it("keeps background workflow liveness visible with a dedicated progress surface", () => {
     expect(shouldRenderPromptActivityInFooter({
-      activity: busyActivity,
-      hasWorkflowBuilderMessage: false,
-      hasDedicatedProgressSurface: true,
-    })).toBe(false);
+      activity: {
+        kind: "busy",
+        text: "Workflow feature-audit - discover",
+        showSpinner: true,
+      },
+    })).toBe(true);
   });
 
   it("keeps waiting and workflow builder footer activity visible", () => {
@@ -123,8 +127,6 @@ describe("surface-liveness", () => {
         text: "Waiting: approval required",
         showSpinner: false,
       },
-      hasWorkflowBuilderMessage: false,
-      hasDedicatedProgressSurface: true,
     })).toBe(true);
 
     expect(shouldRenderPromptActivityInFooter({
@@ -133,9 +135,27 @@ describe("surface-liveness", () => {
         text: "Workflow - generating harness",
         showSpinner: true,
       },
-      hasWorkflowBuilderMessage: true,
-      hasDedicatedProgressSurface: true,
     })).toBe(true);
+  });
+
+  it("falls back to a spinner heartbeat while loading even without a specific activity", () => {
+    expect(buildPromptActivityViewModel({
+      isTranscriptMode: false,
+      isLoading: true,
+      streamingState: {
+        isThinking: false,
+        thinkingCharCount: 0,
+        currentTool: undefined,
+        activeToolCalls: [],
+        toolInputCharCount: 0,
+        toolInputContent: "",
+        isCompacting: false,
+      },
+    })).toEqual({
+      kind: "busy",
+      text: "Thinking",
+      showSpinner: true,
+    });
   });
 
   it("surfaces workflow builder status as spinner activity", () => {

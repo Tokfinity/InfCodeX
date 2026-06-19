@@ -56,6 +56,8 @@ import {
   parseOptionalNonNegativeInt,
   parseOutputModeOption,
   parsePermissionModeOption,
+  parseReasoningModeOption,
+  parseRepoIntelligenceModeOption,
   resolveCliAgentMode,
   resolveCliModelSelection,
   resolveCliReasoningMode,
@@ -114,6 +116,8 @@ export {
   parseCommandCall,
   parseAgentModeOption,
   parsePermissionModeOption,
+  parseReasoningModeOption,
+  parseRepoIntelligenceModeOption,
   processCommandCall,
   resolveCliAgentMode,
 };
@@ -329,6 +333,36 @@ const CLI_HELP_TOPICS: Record<string, () => void> = {
 
 function collectRepeatedOption(value: string, previous: string[] = []): string[] {
   return [...previous, value];
+}
+
+export function configureKodaXRootCommand(program: Command): Command {
+  return program
+    // Disable commander default help so the custom topic help can take over.
+    .helpOption(false)
+    .argument('[prompt...]', 'Prompt text for a single CLI run')
+    .option('-h, --help [topic]', 'Show help, or detailed help for a topic')
+    .option('-p, --print <text>', 'Print mode: run single task and exit')
+    .option('--mode <mode>', 'Output mode: json', parseOutputModeOption)
+    .option('-c, --continue', 'Continue most recent conversation in current directory')
+    .option('-n, --new', 'Legacy no-op; current CLI already starts a fresh session by default')
+    .option('-r, --resume [id]', 'Resume session by ID (no ID = list recent sessions, then resume the latest)')
+    .option('-m, --provider <name>', 'LLM provider')
+    .option('--model <name>', 'Model override')
+    .option('-t, --thinking', 'Compatibility alias for --reasoning auto')
+    .option('--reasoning <mode>', 'Reasoning mode: off, auto, quick, balanced, deep', parseReasoningModeOption)
+    .option('--agent-mode <mode>', 'Agent mode: ama, amaw, sa', parseAgentModeOption)
+    .option('--repo-intelligence <mode>', 'Repo intelligence mode: auto, off, oss, premium-shared, premium-native', parseRepoIntelligenceModeOption)
+    .option('--repo-intelligence-trace', 'Enable repo intelligence trace metadata/logging')
+    .option('--repointel-endpoint <url>', 'Premium daemon endpoint override')
+    .option('--repointel-bin <path>', 'Premium CLI path used to warm/start daemon')
+    .option('-y, --auto', 'Backward-compat alias; no effect in non-REPL CLI')
+    .option('-s, --session <op>', 'Legacy session operations: list, resume, delete <id>, delete-all, or raw session ID')
+    .option('--extension <path>', 'Load local extension module (.js/.mjs/.cjs/.ts/.mts/.cts)', collectRepeatedOption, [])
+    .option('--no-session', 'Disable session persistence (print mode only)')
+    .option('--max-iter <n>', 'Max iterations (default: 200 from coding package)')
+    .allowUnknownOption(false)
+    // Keep the root command executable even when subcommands like `skill` exist.
+    .action(() => {});
 }
 
 function showCliHelpTopic(topic: string): boolean {
@@ -604,37 +638,10 @@ async function main() {
   const sessionRetentionDays = Number(process.env.KODAX_SESSION_RETENTION_DAYS ?? 0);
   void new FileSessionStorage().cleanupOldSessions(sessionRetentionDays);
 
-  const program = new Command()
+  const program = configureKodaXRootCommand(new Command()
     .name('kodax')
     .description('KodaX - Intelligent Coding Agent')
-    .version(version)
-    // Disable commander default help so the custom topic help can take over.
-    .helpOption(false)
-    .option('-h, --help [topic]', 'Show help, or detailed help for a topic')
-    // Short options.
-    .option('-p, --print <text>', 'Print mode: run single task and exit')
-    .option('--mode <mode>', 'Output mode: json', parseOutputModeOption)
-    .option('-c, --continue', 'Continue most recent conversation in current directory')
-    .option('-n, --new', 'Legacy no-op; current CLI already starts a fresh session by default')
-    .option('-r, --resume [id]', 'Resume session by ID (no ID = list recent sessions, then resume the latest)')
-    .option('-m, --provider <name>', 'LLM provider')
-    .option('--model <name>', 'Model override')
-    .option('-t, --thinking', 'Compatibility alias for --reasoning auto')
-    .option('--reasoning <mode>', 'Reasoning mode: off, auto, quick, balanced, deep')
-    .option('--agent-mode <mode>', 'Agent mode: ama, amaw, sa', parseAgentModeOption)
-    .option('--repo-intelligence <mode>', 'Repo intelligence mode: auto, off, oss, premium-shared, premium-native')
-    .option('--repo-intelligence-trace', 'Enable repo intelligence trace metadata/logging')
-    .option('--repointel-endpoint <url>', 'Premium daemon endpoint override')
-    .option('--repointel-bin <path>', 'Premium CLI path used to warm/start daemon')
-    .option('-y, --auto', 'Backward-compat alias; no effect in non-REPL CLI')
-    .option('-s, --session <op>', 'Legacy session operations: list, resume, delete <id>, delete-all, or raw session ID')
-    .option('--extension <path>', 'Load local extension module (.js/.mjs/.cjs/.ts/.mts/.cts)', collectRepeatedOption, [])
-    .option('--no-session', 'Disable session persistence (print mode only)')
-    // Long options.
-    .option('--max-iter <n>', 'Max iterations (default: 200 from coding package)')
-    .allowUnknownOption(false)
-    // Keep the root command executable even when subcommands like `skill` exist.
-    .action(() => {});
+    .version(version));
 
   // ============== completion subcommand ==============
   program
@@ -645,6 +652,23 @@ async function main() {
       const providerNames = getAvailableProviderNames().join(' ');
       const reasoningModes = 'off auto quick balanced deep';
       const agentModes = 'ama amaw sa';
+      const repoModes = 'auto off oss premium-shared premium-native';
+      const rootSubcommands = 'acp skill tools sessions constructed doctor completion';
+      const allOptions = [
+        '-p', '-c', '-r', '-n', '-m', '-t', '-s', '-y', '-h',
+        '--help', '--print', '--mode', '--continue', '--resume', '--new',
+        '--provider', '--model', '--thinking', '--reasoning', '--agent-mode',
+        '--repo-intelligence', '--repo-intelligence-trace', '--repointel-endpoint',
+        '--repointel-bin', '--auto', '--session', '--extension', '--no-session',
+        '--max-iter', '--version', '--json', '--ping', '--cwd', '--permission-mode',
+        '--dest', '--description', '--force', '--no-evals', '--skill-path',
+        '--evals', '--workspace', '--config-a', '--config-b', '--output',
+        '--apply', '--all',
+      ].join(' ');
+      const skillSubcommands = 'init validate eval grade analyze compare package install';
+      const toolsSubcommands = 'list inspect revoke';
+      const sessionsSubcommands = 'dedupe';
+      const constructedSubcommands = 'reset-self-modify-budget audit disable-self-modify rollback';
 
       if (shell === 'bash') {
         console.log(`# KodaX bash completion — add to ~/.bashrc:
@@ -654,14 +678,22 @@ _kodax_complete() {
   COMPREPLY=()
   cur="\${COMP_WORDS[COMP_CWORD]}"
   prev="\${COMP_WORDS[COMP_CWORD-1]}"
-  subcmds="acp skill tools sessions completion"
-  opts="-p -c -r -n -m -t -s -y -h --print --continue --resume --new --provider --model --thinking --reasoning --agent-mode --repo-intelligence --repo-intelligence-trace --repointel-endpoint --repointel-bin --auto --session --extension --no-session --max-iter --version"
+  subcmds="${rootSubcommands}"
+  opts="${allOptions}"
 
   case "\${prev}" in
     --provider|-m) COMPREPLY=( $(compgen -W "${providerNames}" -- "\${cur}") ); return 0 ;;
+    --mode) COMPREPLY=( $(compgen -W "json" -- "\${cur}") ); return 0 ;;
     --reasoning) COMPREPLY=( $(compgen -W "${reasoningModes}" -- "\${cur}") ); return 0 ;;
     --agent-mode) COMPREPLY=( $(compgen -W "${agentModes}" -- "\${cur}") ); return 0 ;;
-    --repo-intelligence) COMPREPLY=( $(compgen -W "auto off oss premium-shared premium-native" -- "\${cur}") ); return 0 ;;
+    --repo-intelligence) COMPREPLY=( $(compgen -W "${repoModes}" -- "\${cur}") ); return 0 ;;
+    --session|-s) COMPREPLY=( $(compgen -W "list resume delete delete-all" -- "\${cur}") ); return 0 ;;
+    completion) COMPREPLY=( $(compgen -W "bash zsh fish" -- "\${cur}") ); return 0 ;;
+    acp) COMPREPLY=( $(compgen -W "serve" -- "\${cur}") ); return 0 ;;
+    skill) COMPREPLY=( $(compgen -W "${skillSubcommands}" -- "\${cur}") ); return 0 ;;
+    tools) COMPREPLY=( $(compgen -W "${toolsSubcommands}" -- "\${cur}") ); return 0 ;;
+    sessions) COMPREPLY=( $(compgen -W "${sessionsSubcommands}" -- "\${cur}") ); return 0 ;;
+    constructed) COMPREPLY=( $(compgen -W "${constructedSubcommands}" -- "\${cur}") ); return 0 ;;
   esac
 
   if [[ "\${cur}" == -* ]]; then
@@ -676,25 +708,41 @@ complete -F _kodax_complete kodax`);
 #   eval "$(kodax completion zsh)"
 _kodax() {
   local -a subcmds opts providers reasoning_modes agent_modes repo_modes
-  subcmds=(acp skill tools sessions completion)
+  subcmds=(${rootSubcommands})
   providers=(${providerNames.replace(/ /g, ' ')})
   reasoning_modes=(off auto quick balanced deep)
   agent_modes=(ama amaw sa)
-  repo_modes=(auto off oss premium-shared premium-native)
+  repo_modes=(${repoModes})
 
   _arguments -C \\
     '-p[Print mode]+:text:' \\
+    '--print+[Print mode]:text:' \\
+    '--mode+[Output mode]:mode:(json)' \\
     '-c[Continue most recent conversation]' \\
+    '--continue[Continue most recent conversation]' \\
+    '-n[Start fresh session]' \\
+    '--new[Start fresh session]' \\
     '-r[Resume session by ID]::id:' \\
+    '--resume[Resume session by ID]::id:' \\
     '-m[LLM provider]+:provider:($providers)' \\
     '--provider+[LLM provider]:provider:($providers)' \\
     '--model+[Model override]:model:' \\
     '-t[Enable thinking]' \\
+    '--thinking[Enable thinking]' \\
     '--reasoning+[Reasoning mode]:mode:($reasoning_modes)' \\
     '--agent-mode+[Agent mode]:mode:($agent_modes)' \\
     '--repo-intelligence+[Repo intelligence mode]:mode:($repo_modes)' \\
+    '--repo-intelligence-trace[Enable repo intelligence trace]' \\
+    '--repointel-endpoint+[Premium daemon endpoint]:url:' \\
+    '--repointel-bin+[Premium CLI path]:path:_files' \\
+    '-s[Legacy session operation]+:operation:(list resume delete delete-all)' \\
+    '--session+[Legacy session operation]:operation:(list resume delete delete-all)' \\
+    '--extension+[Load local extension]:path:_files' \\
+    '--no-session[Disable session persistence in print mode]' \\
+    '--max-iter+[Max iterations]:n:' \\
     '--version[Show version]' \\
-    '-h[Show help]' \\
+    '-h[Show help]::topic:' \\
+    '--help[Show help]::topic:' \\
     '1:subcommand:($subcmds)' \\
     '*::arg:->args'
 }
@@ -702,16 +750,33 @@ compdef _kodax kodax`);
       } else if (shell === 'fish') {
         console.log(`# KodaX fish completion — add to ~/.config/fish/completions/kodax.fish:
 #   kodax completion fish > ~/.config/fish/completions/kodax.fish
-complete -c kodax -n '__fish_use_subcommand' -a 'acp skill tools sessions completion' -d 'Subcommands'
-complete -c kodax -s p -l print -d 'Print mode'
+complete -c kodax -n '__fish_use_subcommand' -a '${rootSubcommands}' -d 'Subcommands'
+complete -c kodax -n '__fish_seen_subcommand_from completion' -a 'bash zsh fish' -d 'Shell'
+complete -c kodax -n '__fish_seen_subcommand_from acp' -a 'serve' -d 'ACP subcommand'
+complete -c kodax -n '__fish_seen_subcommand_from skill' -a '${skillSubcommands}' -d 'Skill subcommand'
+complete -c kodax -n '__fish_seen_subcommand_from tools' -a '${toolsSubcommands}' -d 'Tools subcommand'
+complete -c kodax -n '__fish_seen_subcommand_from sessions' -a '${sessionsSubcommands}' -d 'Sessions subcommand'
+complete -c kodax -n '__fish_seen_subcommand_from constructed' -a '${constructedSubcommands}' -d 'Constructed subcommand'
+complete -c kodax -s h -l help -d 'Show help'
+complete -c kodax -s p -l print -d 'Print mode' -r
+complete -c kodax -l mode -d 'Output mode' -xa 'json'
 complete -c kodax -s c -l continue -d 'Continue most recent conversation'
-complete -c kodax -s r -l resume -d 'Resume session by ID'
+complete -c kodax -s n -l new -d 'Start fresh session'
+complete -c kodax -s r -l resume -d 'Resume session by ID' -r
 complete -c kodax -s m -l provider -d 'LLM provider' -xa '${providerNames}'
-complete -c kodax -l model -d 'Model override'
+complete -c kodax -l model -d 'Model override' -r
 complete -c kodax -s t -l thinking -d 'Enable thinking'
 complete -c kodax -l reasoning -d 'Reasoning mode' -xa '${reasoningModes}'
 complete -c kodax -l agent-mode -d 'Agent mode' -xa '${agentModes}'
-complete -c kodax -l repo-intelligence -d 'Repo intelligence mode' -xa 'auto off oss premium-shared premium-native'
+complete -c kodax -l repo-intelligence -d 'Repo intelligence mode' -xa '${repoModes}'
+complete -c kodax -l repo-intelligence-trace -d 'Enable repo intelligence trace'
+complete -c kodax -l repointel-endpoint -d 'Premium daemon endpoint' -r
+complete -c kodax -l repointel-bin -d 'Premium CLI path' -r
+complete -c kodax -s y -l auto -d 'Backward-compatible no-op'
+complete -c kodax -s s -l session -d 'Legacy session operation' -xa 'list resume delete delete-all'
+complete -c kodax -l extension -d 'Load local extension' -r
+complete -c kodax -l no-session -d 'Disable session persistence in print mode'
+complete -c kodax -l max-iter -d 'Max iterations' -r
 complete -c kodax -l version -d 'Show version'`);
       } else {
         console.error(`Unknown shell: ${shell}. Supported: bash, zsh, fish`);
@@ -769,8 +834,8 @@ complete -c kodax -l version -d 'Show version'`);
     .option('-m, --provider <name>', 'Provider to use')
     .option('--model <name>', 'Model override')
     .option('-t, --thinking', 'Compatibility alias for --reasoning auto')
-    .option('--reasoning <mode>', 'Reasoning mode: off, auto, quick, balanced, deep')
-    .option('--repo-intelligence <mode>', 'Repo intelligence mode: auto, off, oss, premium-shared, premium-native')
+    .option('--reasoning <mode>', 'Reasoning mode: off, auto, quick, balanced, deep', parseReasoningModeOption)
+    .option('--repo-intelligence <mode>', 'Repo intelligence mode: auto, off, oss, premium-shared, premium-native', parseRepoIntelligenceModeOption)
     .option('--repo-intelligence-trace', 'Enable repo intelligence trace metadata/logging')
     .option('--repointel-endpoint <url>', 'Premium daemon endpoint override')
     .option('--repointel-bin <path>', 'Premium CLI path used to warm/start daemon')
@@ -859,7 +924,7 @@ complete -c kodax -l version -d 'Show version'`);
     .option('--model <name>', 'Model override')
     .option('--runs <n>', 'Runs per config')
     .option('--max-iter <n>', 'Max iterations per run')
-    .option('--reasoning <mode>', 'Reasoning mode')
+    .option('--reasoning <mode>', 'Reasoning mode', parseReasoningModeOption)
     .option('--cwd <dir>', 'Working directory for the runs')
     .option('--configs <list>', 'Comma-separated configs, e.g. with_skill,without_skill')
     .option('-o, --output <file>', 'Optional JSON summary output')
@@ -913,7 +978,7 @@ complete -c kodax -l version -d 'Show version'`);
     .description('Grade eval runs into grading.json files')
     .option('--provider <name>', 'Provider to use')
     .option('--model <name>', 'Model override')
-    .option('--reasoning <mode>', 'Reasoning mode')
+    .option('--reasoning <mode>', 'Reasoning mode', parseReasoningModeOption)
     .option('--max-iter <n>', 'Max iterations per grading run')
     .option('--configs <list>', 'Comma-separated configs, e.g. with_skill,without_skill')
     .option('--overwrite', 'Re-grade runs that already have grading.json')
@@ -956,7 +1021,7 @@ complete -c kodax -l version -d 'Show version'`);
     .option('--skill-name <name>', 'Skill name if benchmark.json must be regenerated')
     .option('--provider <name>', 'Provider to use')
     .option('--model <name>', 'Model override')
-    .option('--reasoning <mode>', 'Reasoning mode')
+    .option('--reasoning <mode>', 'Reasoning mode', parseReasoningModeOption)
     .action(async (workspace: string, subcommandOptions: {
       benchmark?: string;
       output?: string;
@@ -1001,7 +1066,7 @@ complete -c kodax -l version -d 'Show version'`);
     .option('--max-pairs <n>', 'Limit pairs per eval')
     .option('--provider <name>', 'Provider to use')
     .option('--model <name>', 'Model override')
-    .option('--reasoning <mode>', 'Reasoning mode')
+    .option('--reasoning <mode>', 'Reasoning mode', parseReasoningModeOption)
     .action(async (workspace: string, subcommandOptions: {
       configA: string;
       configB: string;
@@ -1211,6 +1276,8 @@ complete -c kodax -l version -d 'Show version'`);
     || argv[0] === 'tools'
     || argv[0] === 'doctor'
     || argv[0] === 'sessions'
+    || argv[0] === 'constructed'
+    || argv[0] === 'completion'
   ) {
     return;
   }
@@ -1278,11 +1345,47 @@ complete -c kodax -l version -d 'Show version'`);
   let extensionRuntime: ReturnType<typeof createExtensionRuntime> | undefined;
 
   try {
+  const isLegacySessionManagement =
+    options.session === 'list'
+    || options.session === 'delete'
+    || options.session === 'delete-all'
+    || options.session?.startsWith('delete ');
+
+  if (options.outputMode === 'json' && isLegacySessionManagement) {
+    validateCliModeSelection(options, { resumeWithoutId: opts.resume === true });
+  }
+
   // Session list: show all saved sessions.
   if (options.session === 'list') {
     const storage = new FileSessionStorage();
     const sessions = await storage.list();
     console.log(sessions.length ? 'Sessions:\n' + sessions.map(s => `  ${s.id} [${s.msgCount}] ${s.title}`).join('\n') : 'No sessions.');
+    return;
+  }
+
+  if (options.session === 'delete-all') {
+    const storage = new FileSessionStorage();
+    await storage.deleteAll();
+    console.log('Deleted all sessions.');
+    return;
+  }
+
+  const sessionOperation = options.session;
+  if (sessionOperation === 'delete' || sessionOperation?.startsWith('delete ')) {
+    const quotedId = sessionOperation.startsWith('delete ')
+      ? sessionOperation.slice('delete '.length).trim()
+      : undefined;
+    const positionalId = sessionOperation === 'delete' ? options.prompt[0]?.trim() : undefined;
+    const sessionId = quotedId || positionalId;
+    if (!sessionId) {
+      throw new Error('`-s delete` requires a session id. Usage: kodax -s delete <id>');
+    }
+    if (sessionOperation === 'delete' && options.prompt.length > 1) {
+      throw new Error('`-s delete` accepts exactly one session id.');
+    }
+    const storage = new FileSessionStorage();
+    await storage.delete(sessionId);
+    console.log(`Deleted session: ${sessionId}`);
     return;
   }
 

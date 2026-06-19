@@ -6,6 +6,8 @@ import {
   parseAgentModeOption,
   parseOptionalNonNegativeInt,
   parseOutputModeOption,
+  parseReasoningModeOption,
+  parseRepoIntelligenceModeOption,
   resolveCliModelSelection,
   validateCliModeSelection,
   type CliOptions,
@@ -128,6 +130,30 @@ describe('parseAgentModeOption', () => {
   });
 });
 
+describe('parseReasoningModeOption', () => {
+  it('accepts supported reasoning modes', () => {
+    expect(parseReasoningModeOption('balanced')).toBe('balanced');
+  });
+
+  it('rejects unsupported reasoning modes', () => {
+    expect(() => parseReasoningModeOption('verbose')).toThrow(
+      'Expected one of: off, auto, quick, balanced, deep.',
+    );
+  });
+});
+
+describe('parseRepoIntelligenceModeOption', () => {
+  it('accepts supported repo-intelligence modes', () => {
+    expect(parseRepoIntelligenceModeOption('premium-native')).toBe('premium-native');
+  });
+
+  it('rejects unsupported repo-intelligence modes', () => {
+    expect(() => parseRepoIntelligenceModeOption('premium')).toThrow(
+      'Expected one of: auto, off, oss, premium-shared, premium-native.',
+    );
+  });
+});
+
 describe('numeric CLI helpers', () => {
   it('accepts a valid non-negative integer', () => {
     expect(parseOptionalNonNegativeInt('12')).toBe(12);
@@ -136,6 +162,15 @@ describe('numeric CLI helpers', () => {
   it('throws on invalid non-negative integers instead of silently swallowing them', () => {
     expect(() => parseOptionalNonNegativeInt('abc')).toThrow(
       'Expected a non-negative integer, got "abc".',
+    );
+  });
+
+  it('rejects partially numeric and decimal values', () => {
+    expect(() => parseOptionalNonNegativeInt('12abc')).toThrow(
+      'Expected a non-negative integer, got "12abc".',
+    );
+    expect(() => parseOptionalNonNegativeInt('1.5')).toThrow(
+      'Expected a non-negative integer, got "1.5".',
     );
   });
 });

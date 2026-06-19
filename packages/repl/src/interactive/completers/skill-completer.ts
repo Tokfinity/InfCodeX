@@ -83,7 +83,7 @@ export class SkillCompleter implements Completer {
         text: `/skill:${skill.name}`,
         display: skill.name,
         description: this.truncateDescription(skill.description),
-        type: 'command' as const,
+        type: 'skill' as const,
       }))
       .sort((a, b) => {
         // Prefix matches first, then by name length

@@ -28,21 +28,12 @@ export interface PromptActivityViewModel {
 
 export interface ShouldRenderPromptActivityInFooterOptions {
   activity?: PromptActivityViewModel;
-  hasWorkflowBuilderMessage: boolean;
-  hasDedicatedProgressSurface: boolean;
 }
 
 export function shouldRenderPromptActivityInFooter(
   options: ShouldRenderPromptActivityInFooterOptions,
 ): boolean {
-  if (!options.activity) {
-    return false;
-  }
-  return (
-    options.activity.kind === "waiting"
-    || options.hasWorkflowBuilderMessage
-    || !options.hasDedicatedProgressSurface
-  );
+  return Boolean(options.activity);
 }
 
 export interface BuildPromptActivityTextOptions {
@@ -142,13 +133,11 @@ export function buildPromptActivityViewModel(
     managedWorkerTitle: options.managedState?.workerTitle,
   });
 
-  return text
-    ? {
-        kind: "busy",
-        text,
-        showSpinner: true,
-      }
-    : undefined;
+  return {
+    kind: "busy",
+    text: text ?? "Thinking",
+    showSpinner: true,
+  };
 }
 
 export function buildPromptActivityText(

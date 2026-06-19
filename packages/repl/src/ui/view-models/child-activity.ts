@@ -88,12 +88,13 @@ export function shouldRouteWorkflowLiveOnlyNotice(
 export function shouldShowChildActivitySurface(input: {
   readonly isTranscriptMode: boolean;
   readonly isLoading: boolean;
+  readonly hasWorkflowLiveSurface: boolean;
   readonly childActivityVisible: boolean;
 }): boolean {
   return (
     !input.isTranscriptMode &&
-    input.isLoading &&
-    input.childActivityVisible
+    input.childActivityVisible &&
+    (input.isLoading || input.hasWorkflowLiveSurface)
   );
 }
 

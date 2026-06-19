@@ -13,6 +13,7 @@ import { Command } from 'commander';
 
 // 从 kodax_cli 导入 Commands 系统
 import {
+  configureKodaXRootCommand,
   loadCommands,
   parseCommandCall,
   parsePermissionModeOption,
@@ -22,8 +23,6 @@ import {
 } from '../src/kodax_cli.js';
 
 // 默认 provider
-const KODAX_DEFAULT_PROVIDER = 'zhipu-coding';
-
 // ============== 模拟测试环境 ==============
 
 const TEST_DIR = path.join(os.tmpdir(), 'kodax-cli-test-' + Date.now());
@@ -132,7 +131,12 @@ describe('parseCommandCall', () => {
     const result = parseCommandCall('/search find this pattern');
     expect(result).not.toBeNull();
     expect(result![0]).toBe('search');
-    // Note: current implementation only captures first word after command
+    expect(result![1]).toBe('find this pattern');
+  });
+
+  it('should trim whitespace around command args', () => {
+    const result = parseCommandCall('/review   src/auth.ts --deep  ');
+    expect(result).toEqual(['review', 'src/auth.ts --deep']);
   });
 });
 
@@ -365,20 +369,7 @@ describe('CLI Entry Point', () => {
 
 // 创建与 kodax_cli.ts 一致的 Command 配置（全局可复用）
 function createTestCommand(): Command {
-  return new Command()
-    .allowUnknownOption(false)
-    .option('-p, --print <text>', 'Print mode: run single task and exit')
-    .option('-c, --continue', 'Continue most recent conversation in current directory')
-    .option('-n, --new', 'Legacy no-op; current CLI already starts a fresh session by default')
-    .option('-r, --resume [id]', 'Resume session by ID (no ID = list recent sessions, then resume the latest)')
-    .option('-m, --provider <name>', 'LLM provider', KODAX_DEFAULT_PROVIDER)
-    .option('--model <name>', 'Model override')
-    .option('-t, --thinking', 'Enable thinking mode')
-    .option('--reasoning <mode>', 'Reasoning mode: off, auto, quick, balanced, deep')
-    .option('-y, --auto', 'Backward-compat alias; no effect in non-REPL CLI')
-    .option('-s, --session <op>', 'Legacy session operations: list, resume, delete <id>, delete-all, or raw session ID')
-    .option('-j, --parallel', 'Parallel tool execution')
-    .option('--no-session', 'Disable session persistence (print mode only)');
+  return configureKodaXRootCommand(new Command().name('kodax').version('0.0.0'));
 }
 
 // ============== CLI 选项解析测试 ==============
@@ -455,11 +446,11 @@ describe('CLI Option Parsing', () => {
     expect(opts.model).toBe('gpt-5.4');
   });
 
-  it('should have default provider', () => {
+  it('should leave provider unset for runtime config resolution', () => {
     const program = createTestCommand();
     program.parse(['node', 'test']);
     const opts = program.opts();
-    expect(opts.provider).toBe(KODAX_DEFAULT_PROVIDER);
+    expect(opts.provider).toBeUndefined();
   });
 
   it('should parse -t (thinking) option', () => {
@@ -506,26 +497,48 @@ describe('CLI Option Parsing', () => {
 
   it('should parse -s (session) option with delete', () => {
     const program = createTestCommand();
-    program.parse(['node', 'test', '-s', 'delete abc123']);
+    program.parse(['node', 'test', '-s', 'delete', 'abc123']);
     const opts = program.opts();
-    expect(opts.session).toBe('delete abc123');
-  });
-
-  it('should parse -j (parallel) option', () => {
-    const program = createTestCommand();
-    program.parse(['node', 'test', '-j']);
-    const opts = program.opts();
-    expect(opts.parallel).toBe(true);
+    expect(opts.session).toBe('delete');
+    expect(program.args).toEqual(['abc123']);
   });
 
   it('should parse multiple short options together', () => {
     const program = createTestCommand();
-    program.parse(['node', 'test', '-t', '-j', '-m', 'kimi', '-c']);
+    program.parse(['node', 'test', '-t', '-m', 'kimi', '-c']);
     const opts = program.opts();
     expect(opts.thinking).toBe(true);
-    expect(opts.parallel).toBe(true);
     expect(opts.provider).toBe('kimi');
     expect(opts.continue).toBe(true);
+  });
+
+  it('should reject retired -j option', () => {
+    const program = createTestCommand();
+    program.exitOverride();
+    expect(() => program.parse(['node', 'test', '-j'])).toThrow();
+  });
+
+  it('should parse current root-only options', () => {
+    const program = createTestCommand();
+    program.parse([
+      'node',
+      'test',
+      '--mode',
+      'json',
+      '--agent-mode',
+      'amaw',
+      '--repo-intelligence',
+      'premium-native',
+      '--repo-intelligence-trace',
+      '--max-iter',
+      '12',
+    ]);
+    const opts = program.opts();
+    expect(opts.mode).toBe('json');
+    expect(opts.agentMode).toBe('amaw');
+    expect(opts.repoIntelligence).toBe('premium-native');
+    expect(opts.repoIntelligenceTrace).toBe(true);
+    expect(opts.maxIter).toBe('12');
   });
 
   it('should parse short and long options mixed', () => {
@@ -567,9 +580,10 @@ describe('Session Management', () => {
 
   it('should parse session delete command', () => {
     const program = createTestCommand();
-    program.parse(['node', 'test', '-s', 'delete abc123']);
+    program.parse(['node', 'test', '-s', 'delete', 'abc123']);
     const opts = program.opts();
-    expect(opts.session).toBe('delete abc123');
+    expect(opts.session).toBe('delete');
+    expect(program.args).toEqual(['abc123']);
   });
 
   it('should parse session delete-all command', () => {
@@ -619,7 +633,7 @@ describe('CLI Behavior', () => {
     const program = createTestCommand();
     program.parse(['node', 'test']);
     const opts = program.opts();
-    expect(opts.provider).toBe(KODAX_DEFAULT_PROVIDER);
+    expect(opts.provider).toBeUndefined();
     expect(opts.thinking).toBeUndefined();
     expect(opts.continue).toBeUndefined();
     expect(opts.resume).toBeUndefined();

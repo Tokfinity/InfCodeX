@@ -2847,6 +2847,7 @@ const InkREPLInner: React.FC<InkREPLProps> = ({
   const shouldRenderChildActivitySurface = shouldShowChildActivitySurface({
     isTranscriptMode,
     isLoading,
+    hasWorkflowLiveSurface: workflowLiveViewModel.shouldRender,
     childActivityVisible: childActivityViewModel.shouldRender,
   });
   const transcriptLiveStatusLines = useMemo(() => {
@@ -3572,13 +3573,8 @@ const InkREPLInner: React.FC<InkREPLProps> = ({
       workflowActivityText,
     ],
   );
-  const hasDedicatedFooterProgressSurface = workflowLiveViewModel.shouldRender
-    || (isLoading && todoPlanViewModel.shouldRender)
-    || shouldRenderChildActivitySurface;
   const promptActivityShouldRenderInFooter = shouldRenderPromptActivityInFooter({
     activity: promptActivityViewModel,
-    hasWorkflowBuilderMessage: Boolean(workflowBuilderMessage),
-    hasDedicatedProgressSurface: hasDedicatedFooterProgressSurface,
   });
   const footerActivityViewModel = promptActivityShouldRenderInFooter
     ? promptActivityViewModel
@@ -3743,9 +3739,9 @@ const InkREPLInner: React.FC<InkREPLProps> = ({
       inputText: footerBudgetInputText,
       footerHeaderText: footerHeaderSummary,
       activitySummary: isTranscriptMode ? undefined : footerActivityText,
-      // Mirrors the activityBar prop below: reserve this row only when a
-      // footer-only prompt affordance is visible. Ordinary progress is
-      // already represented in transcript/live preview rows.
+      // Mirrors the activityBar prop below: the spinner row is the stable
+      // liveness heartbeat and should stay visible alongside progress
+      // surfaces such as workflow, todo, or child activity panels.
       activityBarVisible: isTranscriptMode
         ? false
         : promptActivityBarVisible,
@@ -8751,11 +8747,9 @@ const InkREPLInner: React.FC<InkREPLProps> = ({
         <StatusNoticesSurface notices={promptFooterNotices} />
       ) : undefined}
       activityBar={footerActivityViewModel ? (
-        // Footer-only activity is limited to waiting/confirmation-style
-        // prompts and workflow builder/background affordances. Normal
-        // foreground Worker/Thinking/Tools progress is rendered in the
-        // transcript/live preview, so duplicating it here costs a row
-        // without adding signal.
+        // The spinner row is the user's liveness heartbeat. Keep it
+        // mounted whenever an agent/workflow is active, even when a richer
+        // progress panel is also visible below it.
         <Box paddingX={1} flexDirection="row">
           <Box flexGrow={1}>
             {footerActivityViewModel?.showSpinner ? (

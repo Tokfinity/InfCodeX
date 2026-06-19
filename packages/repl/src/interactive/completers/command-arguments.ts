@@ -37,8 +37,8 @@ const MODE_ARGS: ArgumentDefinition[] = [
     type: 'enum',
   },
   {
-    name: 'auto-in-project',
-    description: 'All tools auto within project directory',
+    name: 'auto',
+    description: 'Use auto-mode classifier for tool permissions',
     type: 'enum',
   },
 ];
@@ -124,41 +124,8 @@ function getModelArgs(partial?: string): ArgumentDefinition[] {
 }
 
 /**
- * Plan command arguments - /plan 命令参数
+ * Status command arguments - /status 命令参数
  */
-const PLAN_ARGS: ArgumentDefinition[] = [
-  {
-    name: 'on',
-    description: 'Enable plan mode for all requests',
-    type: 'enum',
-  },
-  {
-    name: 'off',
-    description: 'Disable plan mode',
-    type: 'enum',
-  },
-  {
-    name: 'once',
-    description: 'Run plan mode for a single request (followed by task)',
-    type: 'enum',
-  },
-  {
-    name: 'list',
-    description: 'List all saved plans',
-    type: 'enum',
-  },
-  {
-    name: 'resume',
-    description: 'Resume a saved plan (followed by plan ID)',
-    type: 'enum',
-  },
-  {
-    name: 'clear',
-    description: 'Clear completed plans',
-    type: 'enum',
-  },
-];
-
 const STATUS_ARGS: ArgumentDefinition[] = [
   {
     name: 'workspace',
@@ -186,6 +153,61 @@ const DELETE_ARGS: ArgumentDefinition[] = [
     description: 'Delete ALL sessions',
     type: 'enum',
   },
+];
+
+const MCP_ARGS: ArgumentDefinition[] = [
+  { name: 'status', description: 'Show MCP server status', type: 'enum' },
+  { name: 'refresh', description: 'Refresh MCP server catalogs', type: 'enum' },
+];
+
+const FALLBACK_ARGS: ArgumentDefinition[] = [
+  { name: 'status', description: 'Show child-task fallback order', type: 'enum' },
+  { name: 'off', description: 'Disable child-task fallback providers', type: 'enum' },
+];
+
+const AUTO_ENGINE_ARGS: ArgumentDefinition[] = [
+  { name: 'llm', description: 'Use LLM classifier for auto mode', type: 'enum' },
+  { name: 'rules', description: 'Use rules-only auto mode', type: 'enum' },
+];
+
+const AGENT_MODE_ARGS: ArgumentDefinition[] = [
+  { name: 'ama', description: 'Use AMA agent mode', type: 'enum' },
+  { name: 'amaw', description: 'Use AMA workflow agent mode', type: 'enum' },
+  { name: 'ama-workflow', description: 'Alias for amaw', type: 'enum' },
+  { name: 'sa', description: 'Use single-agent mode', type: 'enum' },
+  { name: 'toggle', description: 'Cycle to the next agent mode', type: 'enum' },
+];
+
+const TOGGLE_ARGS: ArgumentDefinition[] = [
+  { name: 'on', description: 'Enable logging', type: 'enum' },
+  { name: 'off', description: 'Disable logging', type: 'enum' },
+];
+
+const MEMORY_ARGS: ArgumentDefinition[] = [
+  { name: 'list', description: 'List project memory files', type: 'enum' },
+  { name: 'rebuild', description: 'Rebuild MEMORY.md index', type: 'enum' },
+  { name: 'open', description: 'Print the memory entrypoint path', type: 'enum' },
+  { name: 'help', description: 'Show memory help', type: 'enum' },
+];
+
+const GOAL_ARGS: ArgumentDefinition[] = [
+  { name: 'status', description: 'Show current persistent goal', type: 'enum' },
+  { name: 'pause', description: 'Pause the active goal', type: 'enum' },
+  { name: 'resume', description: 'Resume a paused goal', type: 'enum' },
+  { name: 'clear', description: 'Clear the current goal', type: 'enum' },
+  { name: 'help', description: 'Show goal help', type: 'enum' },
+  { name: '--tokens', description: 'Set an optional goal token budget', type: 'enum' },
+];
+
+const PASTE_ARGS: ArgumentDefinition[] = [
+  { name: 'show', description: 'Show a captured paste by id', type: 'enum' },
+  { name: 'list', description: 'List captured pastes', type: 'enum' },
+];
+
+const REVIEW_ARGS: ArgumentDefinition[] = [
+  { name: '--workflow', description: 'Review through a dynamic workflow', type: 'enum' },
+  { name: 'base', description: 'Review changes against the detected base branch', type: 'enum' },
+  { name: 'sha', description: 'Review a specific commit', type: 'enum' },
 ];
 
 const REPOINTEL_SUBCOMMAND_ARGS: ArgumentDefinition[] = [
@@ -670,12 +692,21 @@ export const COMMAND_ARGUMENTS: CommandArgumentsRegistry = new Map([
   ['t', THINKING_ARGS], // alias
   ['reasoning', REASONING_ARGS],
   ['reason', REASONING_ARGS],
-  // 'model' and 'm' handled dynamically in getCommandArguments()
-  ['plan', PLAN_ARGS],
-  ['p', PLAN_ARGS], // alias
+  // 'model', 'm', and 'provider' handled dynamically in getCommandArguments()
   ['status', STATUS_ARGS],
   ['info', STATUS_ARGS],
   ['ctx', STATUS_ARGS],
+  ['mcp', MCP_ARGS],
+  ['fallback', FALLBACK_ARGS],
+  ['auto-engine', AUTO_ENGINE_ARGS],
+  ['agent-mode', AGENT_MODE_ARGS],
+  ['am', AGENT_MODE_ARGS],
+  ['verifier-log', TOGGLE_ARGS],
+  ['stall-log', TOGGLE_ARGS],
+  ['memory', MEMORY_ARGS],
+  ['goal', GOAL_ARGS],
+  ['paste', PASTE_ARGS],
+  ['review', REVIEW_ARGS],
   ['delete', DELETE_ARGS],
   ['rm', DELETE_ARGS], // alias
   ['del', DELETE_ARGS], // alias
@@ -687,7 +718,7 @@ export const COMMAND_ARGUMENTS: CommandArgumentsRegistry = new Map([
  * Returns dynamic list for /model (includes custom providers).
  * For /model, supports two-stage completion when partial contains provider/.
  */
-const MODEL_COMMAND_NAMES = new Set(['model', 'm']);
+const MODEL_COMMAND_NAMES = new Set(['model', 'm', 'provider']);
 const REPOINTEL_COMMAND_NAMES = new Set(['repointel', 'ri']);
 const WORKFLOW_COMMAND_NAMES = new Set(['workflow']);
 

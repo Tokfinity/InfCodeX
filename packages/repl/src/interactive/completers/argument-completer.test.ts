@@ -81,7 +81,8 @@ describe('ArgumentCompleter', () => {
         // Check for known mode arguments (default mode removed)
         expect(completions.some(c => c.display === 'plan')).toBe(true);
         expect(completions.some(c => c.display === 'accept-edits')).toBe(true);
-        expect(completions.some(c => c.display === 'auto-in-project')).toBe(true);
+        expect(completions.some(c => c.display === 'auto')).toBe(true);
+        expect(completions.some(c => c.display === 'auto-in-project')).toBe(false);
       });
 
       it('should filter by substring (case-insensitive)', async () => {
@@ -280,13 +281,41 @@ describe('ArgumentCompleter', () => {
     });
 
     describe('/plan command', () => {
-      it('should return plan arguments', async () => {
+      it('should not return arguments for a non-existent command', async () => {
         const completions = await completer.getCompletions('/plan ', 6);
 
-        expect(completions.length).toBeGreaterThan(0);
-        expect(completions.some(c => c.display === 'on')).toBe(true);
-        expect(completions.some(c => c.display === 'off')).toBe(true);
-        expect(completions.some(c => c.display === 'once')).toBe(true);
+        expect(completions).toEqual([]);
+      });
+    });
+
+    describe('built-in command arguments', () => {
+      it('returns simple subcommand arguments for commands with declared usage', async () => {
+        const cases = [
+          ['/mcp ', ['status', 'refresh']],
+          ['/fallback ', ['status', 'off']],
+          ['/auto-engine ', ['llm', 'rules']],
+          ['/agent-mode ', ['ama', 'amaw', 'ama-workflow', 'sa', 'toggle']],
+          ['/verifier-log ', ['on', 'off']],
+          ['/stall-log ', ['on', 'off']],
+          ['/memory ', ['list', 'rebuild', 'open', 'help']],
+          ['/goal ', ['status', 'pause', 'resume', 'clear', 'help']],
+          ['/paste ', ['show', 'list']],
+          ['/review ', ['--workflow', 'base', 'sha']],
+        ] as const;
+
+        for (const [input, expected] of cases) {
+          const completions = await completer.getCompletions(input, input.length);
+          expect(completions.map(c => c.display)).toEqual(expect.arrayContaining([...expected]));
+        }
+      });
+
+      it('shares provider/model completion with /provider', async () => {
+        const providerCompletions = await completer.getCompletions('/provider ', 10);
+        expect(providerCompletions.length).toBeGreaterThan(0);
+        expect(providerCompletions.every(c => !c.display.includes('/'))).toBe(true);
+
+        const modelCompletions = await completer.getCompletions('/provider anthropic/', 20);
+        expect(modelCompletions.some(c => c.display === 'anthropic/claude-sonnet-4-6')).toBe(true);
       });
     });
 

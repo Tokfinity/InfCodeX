@@ -10,6 +10,7 @@ import {
   findCommandSlashIndex,
   getCompletionSuggestions,
 } from './autocomplete.js';
+import { SkillCompleter } from './completers/skill-completer.js';
 import { getRecentWorkingSetFiles } from './recent-files.js';
 import { getCommandRegistry } from './commands.js';
 
@@ -314,5 +315,23 @@ describe('legacy completion helpers', () => {
     expect(original).toBe('/workflow');
     expect(completions).toContain('/workflow runs');
     expect(completions).not.toContain('runs');
+  });
+
+  it('includes skill-name completions in the classic readline completer', async () => {
+    vi.spyOn(SkillCompleter.prototype, 'canComplete').mockReturnValue(true);
+    vi.spyOn(SkillCompleter.prototype, 'getCompletions').mockResolvedValue([
+      {
+        text: '/skill:code-review',
+        display: 'code-review',
+        description: 'Review code',
+        type: 'skill',
+      },
+    ]);
+
+    const completer = createCompleter();
+    const [completions, original] = await completer('/skill:code');
+
+    expect(original).toBe('/skill:code');
+    expect(completions).toContain('/skill:code-review');
   });
 });

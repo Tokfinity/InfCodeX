@@ -7,7 +7,7 @@
  * Trigger: After a command name with space (e.g., /mode <cursor>)
  * 触发条件: 命令名称后跟空格（如 /mode <光标>）
  *
- * Example: /mode ac -> suggests accept-edits, auto-in-project
+ * Example: /mode ac -> suggests accept-edits, auto
  */
 
 import type { Completer, Completion } from '../autocomplete.js';

@@ -10,6 +10,7 @@ import * as path from 'path';
 import type * as readline from 'readline';
 import { getActiveExtensionRuntime } from '@kodax-ai/coding';
 import { getCommandRegistry } from './commands.js';
+import { SkillCompleter } from './completers/skill-completer.js';
 import { getRecentWorkingSetFiles } from './recent-files.js';
 
 /**
@@ -331,6 +332,7 @@ export class CommandCompleter implements Completer {
  */
 export function createCompleter(cwd?: string | (() => string)): (line: string) => Promise<[string[], string]> {
   const fileCompleter = new FileCompleter(cwd);
+  const skillCompleter = new SkillCompleter();
   const commandCompleter = new CommandCompleter();
 
   return async (line: string): Promise<[string[], string]> => {
@@ -346,6 +348,11 @@ export function createCompleter(cwd?: string | (() => string)): (line: string) =
 
     if (hasSlash) {
       const completions = await getArgumentCompletions(line, line.length);
+      allCompletions.push(...completions);
+    }
+
+    if (hasSlash && skillCompleter.canComplete(line, line.length)) {
+      const completions = await skillCompleter.getCompletions(line, line.length);
       allCompletions.push(...completions);
     }
 
@@ -409,7 +416,7 @@ async function getArgumentCompletions(input: string, cursorPos: number): Promise
 
 function formatReadlineCompletion(line: string, completion: Completion): string {
   if (completion.type !== 'argument') {
-    return completion.display;
+    return completion.text;
   }
   const commandSlashIndex = findCommandSlashIndex(line);
   if (commandSlashIndex !== -1 && !/\s/.test(line.slice(commandSlashIndex))) {
@@ -427,11 +434,16 @@ export async function getCompletionSuggestions(
   cwd?: string
 ): Promise<Completion[]> {
   const fileCompleter = new FileCompleter(cwd);
+  const skillCompleter = new SkillCompleter();
   const commandCompleter = new CommandCompleter();
 
   const results: Completion[] = [];
 
   results.push(...await getArgumentCompletions(input, cursorPos));
+
+  if (skillCompleter.canComplete(input, cursorPos)) {
+    results.push(...await skillCompleter.getCompletions(input, cursorPos));
+  }
 
   if (commandCompleter.canComplete(input, cursorPos)) {
     results.push(...await commandCompleter.getCompletions(input, cursorPos));

@@ -110,11 +110,17 @@ export function parseCommandCall(input: string): [string, string?] | null {
     return null;
   }
 
-  const parts = input.slice(1).split(/\s+/, 2);
-  if (parts.length === 0) {
+  const body = input.slice(1).trim();
+  if (!body) {
     return null;
   }
 
-  const [commandName, args] = parts;
-  return commandName ? [commandName, args] : null;
+  const firstSpace = body.search(/\s/);
+  if (firstSpace === -1) {
+    return [body];
+  }
+
+  const commandName = body.slice(0, firstSpace);
+  const args = body.slice(firstSpace).trim();
+  return args ? [commandName, args] : [commandName];
 }

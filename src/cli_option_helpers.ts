@@ -3,6 +3,7 @@ import {
   KodaXAgentMode,
   KodaXOptions,
   KodaXExtensionRuntime,
+  type KodaXRepoIntelligenceMode,
   KodaXReasoningMode,
   KODAX_REASONING_MODE_SEQUENCE,
 } from '@kodax-ai/coding';
@@ -16,6 +17,13 @@ import type { AcpPermissionMode } from './acp_server.js';
 export const ACP_PERMISSION_MODES: AcpPermissionMode[] = ['plan', 'accept-edits', 'auto-in-project'];
 export const CLI_OUTPUT_MODES = ['text', 'json'] as const;
 export const KODAX_AGENT_MODES = ['ama', 'amaw', 'sa'] as const;
+export const KODAX_REPO_INTELLIGENCE_MODES: KodaXRepoIntelligenceMode[] = [
+  'auto',
+  'off',
+  'oss',
+  'premium-shared',
+  'premium-native',
+];
 export type CliOutputMode = typeof CLI_OUTPUT_MODES[number];
 
 export interface CliOptions {
@@ -44,14 +52,8 @@ function resolveRepoIntelligenceModeFromEnv():
   | 'premium-native'
   | undefined {
   const value = process.env.KODAX_REPO_INTELLIGENCE_MODE?.trim();
-  if (
-    value === 'auto'
-    || value === 'off'
-    || value === 'oss'
-    || value === 'premium-shared'
-    || value === 'premium-native'
-  ) {
-    return value;
+  if (value && KODAX_REPO_INTELLIGENCE_MODES.includes(value as KodaXRepoIntelligenceMode)) {
+    return value as KodaXRepoIntelligenceMode;
   }
   return undefined;
 }
@@ -87,6 +89,7 @@ export function validateCliModeSelection(
 
   if (
     cliOptions.session === 'list'
+    || cliOptions.session === 'delete'
     || cliOptions.session === 'delete-all'
     || cliOptions.session?.startsWith('delete ')
   ) {
@@ -134,6 +137,28 @@ export function parseAgentModeOption(value: string): KodaXAgentMode {
   );
 }
 
+export function parseReasoningModeOption(value: string): KodaXReasoningMode {
+  const normalized = value.trim().toLowerCase();
+  if (KODAX_REASONING_MODE_SEQUENCE.includes(normalized as KodaXReasoningMode)) {
+    return normalized as KodaXReasoningMode;
+  }
+
+  throw new InvalidArgumentError(
+    `Expected one of: ${KODAX_REASONING_MODE_SEQUENCE.join(', ')}.`,
+  );
+}
+
+export function parseRepoIntelligenceModeOption(value: string): KodaXRepoIntelligenceMode {
+  const normalized = value.trim().toLowerCase();
+  if (KODAX_REPO_INTELLIGENCE_MODES.includes(normalized as KodaXRepoIntelligenceMode)) {
+    return normalized as KodaXRepoIntelligenceMode;
+  }
+
+  throw new InvalidArgumentError(
+    `Expected one of: ${KODAX_REPO_INTELLIGENCE_MODES.join(', ')}.`,
+  );
+}
+
 export function resolveCliReasoningMode(
   program: Command,
   opts: Record<string, unknown>,
@@ -141,12 +166,7 @@ export function resolveCliReasoningMode(
 ): KodaXReasoningMode {
   const reasoningSource = program.getOptionValueSource('reasoning');
   if (reasoningSource === 'cli' && typeof opts.reasoning === 'string') {
-    if (!KODAX_REASONING_MODE_SEQUENCE.includes(opts.reasoning as KodaXReasoningMode)) {
-      throw new Error(
-        `Invalid reasoning mode "${opts.reasoning}". Expected one of: ${KODAX_REASONING_MODE_SEQUENCE.join(', ')}`,
-      );
-    }
-    return opts.reasoning as KodaXReasoningMode;
+    return parseReasoningModeOption(opts.reasoning);
   }
 
   const thinkingSource = program.getOptionValueSource('thinking');
@@ -240,8 +260,14 @@ export function parseOptionalNonNegativeInt(value: string | undefined): number |
     return undefined;
   }
 
-  const parsed = Number.parseInt(trimmed, 10);
-  if (!Number.isFinite(parsed) || parsed < 0) {
+  if (!/^\d+$/.test(trimmed)) {
+    throw new InvalidArgumentError(
+      `Expected a non-negative integer, got "${value}".`,
+    );
+  }
+
+  const parsed = Number(trimmed);
+  if (!Number.isSafeInteger(parsed)) {
     throw new InvalidArgumentError(
       `Expected a non-negative integer, got "${value}".`,
     );
@@ -294,6 +320,7 @@ export function buildSessionOptions(
   if (
     cliOptions.session
     && cliOptions.session !== 'list'
+    && cliOptions.session !== 'delete'
     && cliOptions.session !== 'delete-all'
     && !cliOptions.session.startsWith('delete ')
   ) {
