@@ -97,7 +97,7 @@ import {
   type Completion,
 } from './autocomplete.js';
 import { getCurrentTheme, setTheme, type Theme } from './themes.js';
-import { getSkillRegistry } from '@kodax-ai/agent';
+import { initializeSkillRegistry } from '@kodax-ai/agent';
 import { ReadlineUIContext } from '../ui/readline-ui.js';
 import { extractLastAssistantText, extractTitle as extractSessionTitle } from '../ui/utils/message-utils.js';
 import { executeShellCommand, isShellCommandHandled } from '../ui/utils/shell-executor.js';
@@ -127,6 +127,11 @@ interface SessionStorage extends KodaXSessionStorage {
     tag?: string;
     runtimeInfo?: KodaXSessionData['runtimeInfo'];
   }>>;
+}
+
+export async function buildClassicCliSkillsPrompt(gitRoot?: string): Promise<string> {
+  const registry = await initializeSkillRegistry(gitRoot);
+  return registry.getSystemPromptSnippet();
 }
 
 // Simple in-memory session storage (replaceable with persistent storage) - 简单的内存会话存储（可替换为持久化存储）
@@ -641,8 +646,7 @@ Keyboard Shortcuts:
   // skills list in the system prompt while Ink TUI users got the full
   // hardened skills manifest. See `getSystemPromptSnippet()` for the
   // hardened wording.
-  const classicCliSkillRegistry = getSkillRegistry(gitRoot);
-  const classicCliSkillsPrompt = classicCliSkillRegistry.getSystemPromptSnippet();
+  const classicCliSkillsPrompt = await buildClassicCliSkillsPrompt(gitRoot);
 
   let isRunning = true;
   // Fix: Ensure session.id is set to reuse same session - 修复：确保 session.id 被设置以复用同一 session

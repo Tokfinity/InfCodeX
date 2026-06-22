@@ -69,7 +69,7 @@ export interface SkillMetadata {
   argumentHint?: string;
   path: string;
   source: SkillSource;
-  /** If true, exclude from system prompt (only invokable via /skill:name) */
+  /** If true, exclude from system prompt; still invokable by explicit slash forms. */
   disableModelInvocation: boolean;
 }
 

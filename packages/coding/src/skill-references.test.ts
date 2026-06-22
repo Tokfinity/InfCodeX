@@ -53,6 +53,14 @@ describe('parseBareInlineSlashReferences', () => {
     ]);
   });
 
+  it('keeps namespaced bare slash candidates intact', () => {
+    expect(
+      parseBareInlineSlashReferences('Use /github:yeet before publishing.'),
+    ).toEqual([
+      { name: 'github:yeet', raw: '/github:yeet', start: 4, end: 16 },
+    ]);
+  });
+
   it('does not treat urls or path fragments as bare slash candidates', () => {
     expect(parseBareInlineSlashReferences('https://example.com/feature-list-tracker')).toEqual([]);
     expect(parseBareInlineSlashReferences('Path is dir/feature-list-tracker/file')).toEqual([]);

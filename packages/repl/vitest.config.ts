@@ -37,5 +37,11 @@ export default defineConfig({
     globals: true,
     environment: 'node',
     include: ['src/**/*.test.ts', 'src/**/*.test.tsx'],
+    // Keep package-local runs aligned with the root Vitest config. Some
+    // fs-heavy storage tests dynamically reload modules and can legitimately
+    // approach Vitest's 5s default on Windows; a timeout should indicate a
+    // real hang, not first-import/IO overhead.
+    testTimeout: 30_000,
+    hookTimeout: 30_000,
   },
 });

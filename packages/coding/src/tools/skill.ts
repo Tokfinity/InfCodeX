@@ -27,8 +27,16 @@
  * claudecode layers on top (those can come incrementally if needed).
  */
 
-import { expandSkillForLLM, getSkillRegistry } from '@kodax-ai/agent';
+import { expandSkillForLLM, getSkillRegistry, initializeSkillRegistry } from '@kodax-ai/agent';
 import type { KodaXToolExecutionContext } from '../types.js';
+
+function normalizeSkillToolName(rawSkill: string): string {
+  const trimmed = rawSkill.trim();
+  if (trimmed.startsWith('/skill:')) return trimmed.slice('/skill:'.length);
+  if (trimmed.startsWith('skill:')) return trimmed.slice('skill:'.length);
+  if (trimmed.startsWith('/')) return trimmed.slice(1);
+  return trimmed;
+}
 
 export async function toolSkill(
   input: Record<string, unknown>,
@@ -40,12 +48,17 @@ export async function toolSkill(
   }
   // Strip a leading slash if present — users sometimes type `/commit`
   // out of slash-command muscle memory. Stay forgiving.
-  const trimmed = rawSkill.trim();
-  const skillName = trimmed.startsWith('/') ? trimmed.slice(1) : trimmed;
+  const skillName = normalizeSkillToolName(rawSkill);
 
   const args = typeof input.args === 'string' ? input.args : '';
+  const cwd = ctx.executionCwd ?? process.cwd();
+  const projectRoot = ctx.gitRoot ?? cwd;
 
-  const registry = getSkillRegistry();
+  const registry = getSkillRegistry(projectRoot);
+  if (registry.size === 0) {
+    await initializeSkillRegistry(projectRoot);
+  }
+
   if (!registry.has(skillName)) {
     const available = registry
       .list()
@@ -61,10 +74,9 @@ export async function toolSkill(
       return `[Tool Error] skill ${skillName}: Skill "${skillName}" has model invocation disabled`;
     }
 
-    const cwd = ctx.executionCwd ?? process.cwd();
     const expanded = await expandSkillForLLM(fullSkill, args, {
       workingDirectory: cwd,
-      projectRoot: ctx.gitRoot ?? cwd,
+      projectRoot,
     });
 
     return expanded.content;

@@ -63,11 +63,16 @@ import {
 } from '@kodax-ai/agent';
 import { CommandRegistry } from '../commands/registry.js';
 import { copyCommand } from '../commands/copy-command.js';
+import { learnCommand } from '../commands/learn-command.js';
 import { memoryCommand } from '../commands/memory-command.js';
 import { goalCommand } from '../commands/goal-command.js';
 import { workflowCommand } from '../commands/workflow-command.js';
 import { newCommand } from '../commands/new-command.js';
 import { reviewCommand } from '../commands/review-command.js';
+import {
+  printLearningPendingForFilter,
+  resolveLearningCommandCwd,
+} from '../commands/learning-inbox.js';
 import { getActivePasteStore } from '../ui/utils/paste-store.js';
 import { retrievePastedText } from '../ui/utils/paste-cache.js';
 import {
@@ -1637,46 +1642,36 @@ export const BUILTIN_COMMANDS: Command[] = [
     },
   },
   {
-    name: 'skills',
-    description: '(Deprecated) Use /skill instead',
-    usage: '/skill',
-    handler: async (args, context) => {
-      // Redirect to the /skill namespace command.
-      console.log(chalk.dim('\n[/skills is deprecated. Use /skill instead]'));
-      await handleSkillNamespaceCommand(args, context);
-    },
-    detailedHelp: () => {
-      console.log(chalk.cyan('\n/skills - Deprecated\n'));
-      console.log(chalk.yellow('This command is deprecated. Use /skill instead.'));
-      console.log();
-      console.log(chalk.dim('  /skill           ') + 'List all available skills');
-      console.log(chalk.dim('  /skill:<name>    ') + 'Invoke a skill');
-      console.log();
-    },
-  },
-  {
     name: 'skill',
-    description: 'Skill namespace - invoke skills with /skill:name',
-    usage: '/skill[:name] [args]',
-    handler: async (args, context, callbacks, currentConfig) => {
-      // This handler is called when /skill is typed without :name
+    description: 'Skill namespace - list, invoke, or review skill learning',
+    usage: '/skill[:name] [pending|args]',
+    handler: async (args, context) => {
+      if ((args[0] ?? '').toLowerCase() === 'pending') {
+        await printLearningPendingForFilter(resolveLearningCommandCwd(context), 'skill');
+        return;
+      }
       // When /skill:name is used, parseCommand extracts the name and executeCommand
-      // calls executeSkillCommand directly
+      // calls executeSkillCommand directly. Plain /skill lists the namespace.
       await handleSkillNamespaceCommand(args, context);
     },
     detailedHelp: () => {
       console.log(chalk.cyan('\n/skill - Skill Namespace\n'));
       console.log(chalk.bold('Usage:'));
       console.log(chalk.dim('  /skill               ') + 'List all available skills');
-      console.log(chalk.dim('  /skill:<name> [args] ') + 'Invoke a skill by name');
+      console.log(chalk.dim('  /<skill-name> [args] ') + 'Invoke a skill when no command uses that name');
+      console.log(chalk.dim('  /skill:<name> [args] ') + 'Invoke a skill with the compatibility form');
+      console.log(chalk.dim('  /skill pending       ') + 'List pending method-guide learning suggestions');
       console.log();
       console.log(chalk.bold('Description:'));
-      console.log(chalk.dim('  This is the pi-mono style skill invocation format.'));
+      console.log(chalk.dim('  Direct slash skill invocation follows the Claude Code style.'));
+      console.log(chalk.dim('  Built-in and extension commands keep priority when names overlap.'));
+      console.log(chalk.dim('  The /skill:<name> form remains supported for compatibility.'));
       console.log(chalk.dim('  Skills can also be triggered by natural language - just ask!'));
       console.log();
       console.log(chalk.bold('Examples:'));
       console.log(chalk.dim('  /skill                    ') + '# List all skills');
-      console.log(chalk.dim('  /skill:code-review src/   ') + '# Invoke code-review skill');
+      console.log(chalk.dim('  /code-review src/         ') + '# Invoke code-review skill');
+      console.log(chalk.dim('  /skill:code-review src/   ') + '# Compatibility form');
       console.log(chalk.dim('  /skill:tdd auth           ') + '# Invoke TDD skill');
       console.log();
     },
@@ -1832,6 +1827,7 @@ export const BUILTIN_COMMANDS: Command[] = [
     },
   },
   copyCommand,
+  learnCommand,
   memoryCommand,
   goalCommand,
   workflowCommand,
@@ -1845,7 +1841,7 @@ const COMMAND_CATEGORIES: Record<string, string[]> = {
   Permission: ['mode', 'auto'],
   Session: ['new', 'save', 'load', 'sessions', 'history', 'delete'],
   Settings: ['model', 'provider', 'thinking', 'reasoning', 'agent-mode', 'plan', 'repointel'],
-  Skills: ['skill'],
+  Skills: ['skill', 'learn'],
 };
 
 function getCommandsForCategory(names: string[]) {
@@ -2153,7 +2149,9 @@ function printHelp(): void {
   console.log();
   console.log(chalk.dim('Skills:'));
   console.log(`  ${chalk.cyan('/skill')}            List all available skills`);
-  console.log(`  ${chalk.cyan('/skill:<name>')}     Invoke a skill (e.g., /skill:code-review)`);
+  console.log(`  ${chalk.cyan('/<skill-name>')}     Invoke a skill when no command has that name`);
+  console.log(`  ${chalk.cyan('/skill:<name>')}     Compatibility form (e.g., /skill:code-review)`);
+  console.log(`  ${chalk.cyan('/skill pending')}    Review pending skill learning suggestions`);
   console.log();
   console.log(chalk.dim(`Tip: ${chalk.cyan('/<command> help')} shows command-specific help.`));
   console.log();
@@ -2277,7 +2275,7 @@ async function printStatus(
   console.log();
 }
 
-// Handle /skill namespace command (pi-mono style).
+// Handle the /skill namespace command.
 async function handleSkillNamespaceCommand(args: string[], context: InteractiveContext): Promise<void> {
   const registry = getSkillRegistry(context.gitRoot);
 
@@ -2290,7 +2288,7 @@ async function handleSkillNamespaceCommand(args: string[], context: InteractiveC
   printSkillsListPiMonoStyle(registry.listUserInvocable());
 }
 
-// Print skills list in pi-mono style.
+// Print skills list with direct slash invocation as the primary form.
 function printSkillsListPiMonoStyle(skills: SkillMetadata[]): void {
   console.log(chalk.bold('\nAvailable Skills:\n'));
 
@@ -2303,27 +2301,39 @@ function printSkillsListPiMonoStyle(skills: SkillMetadata[]): void {
     return;
   }
 
-  const maxNameLen = Math.max(...skills.map(s => s.name.length));
+  const slashCommands = getCommandRegistry();
+  const rows = skills.map((skill) => {
+    const commandNameTaken =
+      slashCommands.get(skill.name) !== undefined || getActiveExtensionCommand(skill.name) !== undefined;
+    return {
+      skill,
+      invocation: commandNameTaken ? `/skill:${skill.name}` : `/${skill.name}`,
+      commandNameTaken,
+    };
+  });
+  const maxInvocationLen = Math.max(...rows.map((row) => row.invocation.length));
 
-  for (const skill of skills) {
+  for (const row of rows) {
+    const { skill } = row;
     // Pad first, then color so ANSI escapes do not affect width calculation.
-    const paddedName = skill.name.padEnd(maxNameLen);
+    const paddedInvocation = row.invocation.padEnd(maxInvocationLen);
     const hint = skill.argumentHint ? ` ${skill.argumentHint}` : '';
     // Show source for all skills except project level, which is the default.
     const sourceLabel = skill.source === 'builtin' ? ' [builtin]'
       : skill.source === 'user' ? ' [user]'
       : skill.source === 'plugin' ? ' [plugin]'
       : '';
-    // pi-mono style: /skill:name
+    const conflictLabel = row.commandNameTaken ? ' [command name exists]' : '';
     const desc = skill.description.length > 50
       ? skill.description.slice(0, 50) + '...'
       : skill.description;
-    console.log(`  ${chalk.cyan(`/skill:${paddedName}`)}${chalk.dim(hint)}${chalk.dim(sourceLabel)}  ${chalk.dim(desc)}`);
+    console.log(`  ${chalk.cyan(paddedInvocation)}${chalk.dim(hint)}${chalk.dim(sourceLabel)}${chalk.dim(conflictLabel)}  ${chalk.dim(desc)}`);
   }
 
   console.log();
   console.log(chalk.dim(`Total: ${skills.length} skills`));
-  console.log(chalk.dim('Usage: /skill:<name> [args] or ask naturally'));
+  console.log(chalk.dim('Usage: /<skill-name> [args], legacy /skill:<name> [args], or ask naturally'));
+  console.log(chalk.dim('Review pending skill learning suggestions with /skill pending'));
   console.log();
 }
 
@@ -2583,7 +2593,7 @@ export function parseCommand(input: string): { command: string; args: string[]; 
 
   if (!command) return null;
 
-  // Check for /skill:name format (pi-mono style).
+  // Check for legacy /skill:name format.
   if (command.startsWith('skill:')) {
     const skillName = command.slice(6); // Remove 'skill:' prefix
     if (skillName) {
@@ -2626,7 +2636,7 @@ export async function executeCommand(
     initCommandRegistry(context.gitRoot);
   }
 
-  // Handle /skill:name format (pi-mono style).
+  // Handle legacy /skill:name format.
   if (parsed.skillInvocation) {
     return await executeSkillCommand(
       { command: parsed.skillInvocation.name, args: parsed.args },
@@ -2674,8 +2684,55 @@ export async function executeCommand(
     }
   }
 
+  const namespacedDirectSkill = await resolveNamespacedDirectSkillCommand(parsed, context);
+  if (namespacedDirectSkill) {
+    return await executeSkillCommand(
+      { command: namespacedDirectSkill.skill.name, args: namespacedDirectSkill.args },
+      context
+    );
+  }
+
+  const directSkill = await resolveDirectSkillCommand(parsed.command, context);
+  if (directSkill) {
+    return await executeSkillCommand(
+      { command: directSkill.name, args: parsed.args },
+      context
+    );
+  }
+
   console.log(chalk.yellow(`\n[Unknown command: /${parsed.command}. Type /help for available commands]`));
   return false;
+}
+
+async function resolveNamespacedDirectSkillCommand(
+  parsed: { command: string; args: string[] },
+  context: InteractiveContext
+): Promise<{ skill: SkillMetadata; args: string[] } | undefined> {
+  const firstArg = parsed.args[0];
+  if (!firstArg) return undefined;
+
+  const candidateName = `${parsed.command}:${firstArg}`;
+  const skill = await resolveDirectSkillCommand(candidateName, context);
+  if (!skill) return undefined;
+
+  return {
+    skill,
+    args: parsed.args.slice(1),
+  };
+}
+
+async function resolveDirectSkillCommand(
+  name: string,
+  context: InteractiveContext
+): Promise<SkillMetadata | undefined> {
+  const registry = getSkillRegistry(context.gitRoot);
+
+  if (registry.size === 0) {
+    await initializeSkillRegistry(context.gitRoot);
+  }
+
+  const skill = registry.get(name);
+  return skill?.userInvocable ? skill : undefined;
 }
 
 // Execute skill command.

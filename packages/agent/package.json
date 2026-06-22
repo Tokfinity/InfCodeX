@@ -38,6 +38,10 @@
     "./workflow": {
       "types": "./dist/workflow/index.d.ts",
       "import": "./dist/workflow/index.js"
+    },
+    "./learning": {
+      "types": "./dist/learning/index.d.ts",
+      "import": "./dist/learning/index.js"
     }
   },
   "scripts": {

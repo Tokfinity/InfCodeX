@@ -10,6 +10,7 @@ const mockSkills = [
   { name: 'human-test-guide', description: 'Generate test guides' },
   { name: 'start-next-feature', description: 'Start feature implementation' },
   { name: 'complete-feature', description: 'Complete feature' },
+  { name: 'github:yeet', description: 'Publish local changes' },
 ];
 
 // Create mock function at module scope
@@ -49,8 +50,14 @@ describe('SkillCompleter', () => {
       expect(completer.canComplete('/skill:feature', 14)).toBe(true);
     });
 
-    it('should not trigger without /skill: prefix', () => {
-      expect(completer.canComplete('/help', 5)).toBe(false);
+    it('should trigger on direct slash skill prefixes', () => {
+      expect(completer.canComplete('/', 1)).toBe(true);
+      expect(completer.canComplete('/feat', 5)).toBe(true);
+      expect(completer.canComplete('/github:', 8)).toBe(true);
+      expect(completer.canComplete('hello /feat', 11)).toBe(true);
+    });
+
+    it('should not trigger without a slash prefix', () => {
       expect(completer.canComplete('skill:', 6)).toBe(false);
       expect(completer.canComplete('@file', 5)).toBe(false);
     });
@@ -69,21 +76,35 @@ describe('SkillCompleter', () => {
 
     it('should trigger after a newline boundary', () => {
       expect(completer.canComplete('hello\n/skill:feature', 20)).toBe(true);
+      expect(completer.canComplete('hello\n/feature', 14)).toBe(true);
     });
   });
 
   describe('getCompletions', () => {
-    it('should return matching skills', async () => {
+    it('should return matching skills for legacy /skill: input', async () => {
       const completions = await completer.getCompletions('/skill:f', 7);
 
       expect(completions.length).toBeGreaterThan(0);
       expect(completions.some(c => c.display.includes('feature'))).toBe(true);
     });
 
+    it('should return matching skills for direct slash input', async () => {
+      const completions = await completer.getCompletions('/feat', 5);
+
+      expect(completions.length).toBeGreaterThan(0);
+      expect(completions.some(c => c.text === '/feature-list-tracker')).toBe(true);
+    });
+
     it('should return all skills when pattern is empty', async () => {
       const completions = await completer.getCompletions('/skill:', 7);
 
-      expect(completions.length).toBe(4); // All mock skills
+      expect(completions.length).toBe(5); // All mock skills
+    });
+
+    it('should complete namespaced direct slash skills', async () => {
+      const completions = await completer.getCompletions('/github:', 8);
+
+      expect(completions.some(c => c.text === '/github:yeet')).toBe(true);
     });
 
     it('should filter skills by prefix (case-insensitive)', async () => {
@@ -96,7 +117,19 @@ describe('SkillCompleter', () => {
       expect(completions.some(c => c.display === 'start-next-feature')).toBe(true);
     });
 
-    it('should return completion with correct format', async () => {
+    it('should return completion with direct slash format by default', async () => {
+      const completions = await completer.getCompletions('/feature', 8);
+
+      expect(completions.length).toBeGreaterThan(0);
+      const first = completions[0]!;
+      expect(first.text).toMatch(/^\/[^/]/);
+      expect(first.text).not.toMatch(/^\/skill:/);
+      expect(first.display).toBeDefined();
+      expect(first.type).toBe('skill');
+      expect(first.description).toBeDefined();
+    });
+
+    it('should preserve legacy /skill: completion format', async () => {
       const completions = await completer.getCompletions('/skill:feature', 14);
 
       expect(completions.length).toBeGreaterThan(0);

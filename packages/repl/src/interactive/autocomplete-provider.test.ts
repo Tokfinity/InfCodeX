@@ -6,7 +6,7 @@ import { describe, it, expect, vi, beforeEach, afterEach } from 'vitest';
 import { AutocompleteProvider, createAutocompleteProvider } from './autocomplete-provider.js';
 
 // Mock completers
-vi.mock('../completers/skill-completer.js', () => ({
+vi.mock('./completers/skill-completer.js', () => ({
   SkillCompleter: vi.fn().mockImplementation(() => ({
     canComplete: vi.fn().mockReturnValue(false),
     getCompletions: vi.fn().mockResolvedValue([]),
@@ -14,14 +14,14 @@ vi.mock('../completers/skill-completer.js', () => ({
   })),
 }));
 
-vi.mock('../completers/argument-completer.js', () => ({
+vi.mock('./completers/argument-completer.js', () => ({
   ArgumentCompleter: vi.fn().mockImplementation(() => ({
     canComplete: vi.fn().mockReturnValue(false),
     getCompletions: vi.fn().mockResolvedValue([]),
   })),
 }));
 
-vi.mock('../autocomplete.js', async () => {
+vi.mock('./autocomplete.js', async () => {
   const actual = await vi.importActual<typeof import('./autocomplete.js')>('./autocomplete.js');
   return {
     ...actual,

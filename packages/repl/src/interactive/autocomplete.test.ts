@@ -321,7 +321,7 @@ describe('legacy completion helpers', () => {
     vi.spyOn(SkillCompleter.prototype, 'canComplete').mockReturnValue(true);
     vi.spyOn(SkillCompleter.prototype, 'getCompletions').mockResolvedValue([
       {
-        text: '/skill:code-review',
+        text: '/code-review',
         display: 'code-review',
         description: 'Review code',
         type: 'skill',
@@ -329,9 +329,9 @@ describe('legacy completion helpers', () => {
     ]);
 
     const completer = createCompleter();
-    const [completions, original] = await completer('/skill:code');
+    const [completions, original] = await completer('/code');
 
-    expect(original).toBe('/skill:code');
-    expect(completions).toContain('/skill:code-review');
+    expect(original).toBe('/code');
+    expect(completions).toContain('/code-review');
   });
 });

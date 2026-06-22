@@ -71,7 +71,7 @@ All notable changes to this project will be documented in this file.
 
 ## [0.7.50] - 2026-06-16
 
-> Scope note: v0.7.50 is a single-feature slot for **FEATURE_229**. It does **not** rewrite FEATURE_217 (v0.7.49) — the dynamic JS harness, capsule model, save/rerun, worktree isolation, and permission gates all stay. F229 lifts the v0.7.49 user-visible workflow process into a subscribable Agent-layer event/snapshot model and a Coding/SDK lifecycle surface. `FEATURE_224` was rescheduled to [v0.7.61](docs/features/v0.7.66.md).
+> Scope note: v0.7.50 is a single-feature slot for **FEATURE_229**. It does **not** rewrite FEATURE_217 (v0.7.49) — the dynamic JS harness, capsule model, save/rerun, worktree isolation, and permission gates all stay. F229 lifts the v0.7.49 user-visible workflow process into a subscribable Agent-layer event/snapshot model and a Coding/SDK lifecycle surface. `FEATURE_224` is tracked in [v0.7.54](docs/features/v0.7.54.md).
 
 ### Added
 

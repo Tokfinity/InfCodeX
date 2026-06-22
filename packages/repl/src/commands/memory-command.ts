@@ -37,6 +37,7 @@ import {
   type MemoryType,
 } from '@kodax-ai/agent';
 
+import { printLearningPendingForFilter } from './learning-inbox.js';
 import type { Command } from './types.js';
 
 function resolveCwd(context: { runtimeInfo?: { workspaceRoot?: string; executionCwd?: string } }): string {
@@ -221,6 +222,7 @@ function printHelp(): void {
   console.log(chalk.cyan('\n/memory - Inspect or rebuild per-project memory'));
   console.log(chalk.dim('  /memory                 List MEMORY.md + memory directory'));
   console.log(chalk.dim('  /memory list            Same as `/memory`'));
+  console.log(chalk.dim('  /memory pending         List pending context-note learning suggestions'));
   console.log(chalk.dim('  /memory rebuild         Regenerate MEMORY.md from topic frontmatter'));
   console.log(chalk.dim('  /memory open            Print paths so you can open them in your editor'));
   console.log(chalk.dim('  /memory help            Show this help'));
@@ -232,6 +234,7 @@ function printDetailedHelp(): void {
   console.log('Usage:');
   console.log(chalk.cyan('  /memory                 ') + chalk.dim('Show MEMORY.md + topic file count'));
   console.log(chalk.cyan('  /memory list            ') + chalk.dim('Alias for `/memory`'));
+  console.log(chalk.cyan('  /memory pending         ') + chalk.dim('List pending context-note learning suggestions'));
   console.log(chalk.cyan('  /memory rebuild         ') + chalk.dim('Regenerate MEMORY.md (newest first by mtime)'));
   console.log(chalk.cyan('  /memory open            ') + chalk.dim('Print the index + dir paths for editor use'));
   console.log(chalk.cyan('  /memory help            ') + chalk.dim('Show this help\n'));
@@ -259,8 +262,8 @@ function printDetailedHelp(): void {
 export const memoryCommand: Command = {
   name: 'memory',
   description: 'Inspect or rebuild per-project memory (FEATURE_124)',
-  usage: '/memory [list|rebuild|open|help]',
-  argumentHint: 'list | rebuild | open | help',
+  usage: '/memory [list|pending|rebuild|open|help]',
+  argumentHint: 'list | pending | rebuild | open | help',
   handler: async (args, context) => {
     const cwd = resolveCwd(context);
     const memoryDir = resolveMemoryRoot(cwd);
@@ -273,6 +276,10 @@ export const memoryCommand: Command = {
     }
     if (sub === 'list') {
       await listMemory(memoryDir, entrypointPath);
+      return;
+    }
+    if (sub === 'pending') {
+      await printLearningPendingForFilter(cwd, 'memory');
       return;
     }
     if (sub === 'rebuild') {

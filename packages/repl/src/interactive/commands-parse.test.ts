@@ -16,6 +16,13 @@ describe('parseCommand', () => {
       skillInvocation: { name: 'smart-context' },
     });
   });
+
+  it('parses direct slash skill names as ordinary command candidates', () => {
+    expect(parseCommand('/smart-context compact now')).toEqual({
+      command: 'smart-context',
+      args: ['compact', 'now'],
+    });
+  });
 });
 
 describe('parseInlineSkillReferences (FEATURE_143 v0.7.36)', () => {

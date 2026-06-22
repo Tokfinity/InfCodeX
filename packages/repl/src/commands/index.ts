@@ -30,6 +30,7 @@ export { CommandRegistry, globalCommandRegistry } from './registry.js';
 export { registerBuiltinCommands, getBuiltinCommandCount } from './builtin.js';
 
 export { copyCommand } from './copy-command.js';
+export { learnCommand } from './learn-command.js';
 export { memoryCommand } from './memory-command.js';
 export { newCommand } from './new-command.js';
 
@@ -67,4 +68,3 @@ export function registerAllCommands(registry: CommandRegistry, projectRoot?: str
     console.error('Failed to discover commands:', error);
   }
 }
-

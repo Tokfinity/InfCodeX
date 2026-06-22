@@ -16,7 +16,7 @@ const MANUAL_REFERENCED_COMMANDS = [
   'model',
   'fallback',
   'mcp',
-  'skills',
+  'skill',
   'goal',
 ] as const;
 

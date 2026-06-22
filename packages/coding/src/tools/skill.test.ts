@@ -2,7 +2,7 @@ import { afterEach, beforeEach, describe, expect, it } from 'vitest';
 import { mkdir, mkdtemp, rm, writeFile } from 'node:fs/promises';
 import { tmpdir } from 'node:os';
 import path from 'node:path';
-import { SkillRegistry } from '@kodax-ai/agent';
+import { resetSkillRegistry } from '@kodax-ai/agent';
 import { toolSkill } from './skill.js';
 
 // The skill tool reads the global singleton via `getSkillRegistry()`. To
@@ -17,8 +17,9 @@ async function writeSkillMd(
   name: string,
   description: string,
   body: string,
+  dirName = name,
 ): Promise<string> {
-  const skillDir = path.join(rootDir, sourceDir, name);
+  const skillDir = path.join(rootDir, sourceDir, dirName);
   await mkdir(skillDir, { recursive: true });
   await writeFile(
     path.join(skillDir, 'SKILL.md'),
@@ -47,6 +48,7 @@ describe('toolSkill (claudecode-parity skill invocation)', () => {
 
   afterEach(async () => {
     process.chdir(originalCwd);
+    resetSkillRegistry();
     if (tempDir) {
       await rm(tempDir, { recursive: true, force: true });
       tempDir = '';
@@ -61,6 +63,26 @@ describe('toolSkill (claudecode-parity skill invocation)', () => {
     expect(typeof result).toBe('string');
     expect(result).toContain('[Tool Error]');
     expect(result).toContain('missing required argument `skill`');
+  });
+
+  it('discovers project skills when the registry was not prewarmed', async () => {
+    await writeSkillMd(
+      tempDir,
+      path.join('.kodax', 'skills'),
+      'kodax-test-auto-discover',
+      'Auto discovered skill',
+      'Auto discover body',
+    );
+
+    resetSkillRegistry();
+
+    const result = await toolSkill({ skill: 'kodax-test-auto-discover' }, {
+      backups: new Map(),
+      executionCwd: tempDir,
+    });
+
+    expect(result).toContain('Auto discover body');
+    expect(result).not.toContain('[Tool Error]');
   });
 
   it('errors when called with an empty skill name', async () => {
@@ -172,6 +194,57 @@ describe('toolSkill (claudecode-parity skill invocation)', () => {
       executionCwd: tempDir,
     });
     expect(result).toContain('Slash body');
+    expect(result).not.toContain('[Tool Error]');
+  });
+
+  it('tolerates legacy slash skill tokens in the skill name', async () => {
+    await writeSkillMd(
+      tempDir,
+      'project',
+      'kodax-test-skill-legacy-token',
+      'Legacy-token skill',
+      'Legacy token body',
+    );
+    const { getSkillRegistry } = await import('@kodax-ai/agent');
+    const registry = getSkillRegistry(tempDir, {
+      projectPaths: [path.join(tempDir, 'project')],
+      userPaths: [],
+      pluginPaths: [],
+      builtinPath: path.join(tempDir, 'builtin'),
+    });
+    await registry.discover();
+
+    const result = await toolSkill({ skill: '/skill:kodax-test-skill-legacy-token' }, {
+      backups: new Map(),
+      executionCwd: tempDir,
+    });
+    expect(result).toContain('Legacy token body');
+    expect(result).not.toContain('[Tool Error]');
+  });
+
+  it('tolerates legacy namespaced skill tokens in the skill name', async () => {
+    await writeSkillMd(
+      tempDir,
+      'project',
+      'github:yeet',
+      'Namespaced-token skill',
+      'Namespaced token body',
+      'github-yeet',
+    );
+    const { getSkillRegistry } = await import('@kodax-ai/agent');
+    const registry = getSkillRegistry(tempDir, {
+      projectPaths: [path.join(tempDir, 'project')],
+      userPaths: [],
+      pluginPaths: [],
+      builtinPath: path.join(tempDir, 'builtin'),
+    });
+    await registry.discover();
+
+    const result = await toolSkill({ skill: '/skill:github:yeet' }, {
+      backups: new Map(),
+      executionCwd: tempDir,
+    });
+    expect(result).toContain('Namespaced token body');
     expect(result).not.toContain('[Tool Error]');
   });
 

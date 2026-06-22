@@ -511,6 +511,11 @@ export type {
 // `@kodax-ai/repl` `/memory` slash + transcript badge (Phase D).
 export * from './memory/index.js';
 
+// FEATURE_224 (v0.7.54) - Procedural learning triage + SkillCurator v1
+// substrate. Owns learning intake, skill governance, and safe skill proposal
+// apply primitives; workflow and memory mutation remain destination-specific.
+export * from './learning/index.js';
+
 // ============== FEATURE_194 v0.7.43 — MCP capability (inlined from @kodax-ai/mcp) ==============
 // Originally a standalone package, inlined per ADR-036 to consolidate single-consumer
 // agent capabilities. Public API is byte-identical; downstream import via

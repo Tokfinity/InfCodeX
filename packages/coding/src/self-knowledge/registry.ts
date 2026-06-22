@@ -164,7 +164,7 @@ const TOPICS: readonly KodaXManualTopic[] = [
     aliases: ['command', 'slash', 'cli', 'flags', '命令', '斜杠命令', '指令'],
     summary: 'REPL slash commands, CLI flags, and the doctor command.',
     body: [
-      'Common REPL slash commands: /help, /compact, /model, /fallback, /mcp, /skills, /goal.',
+      'Common REPL slash commands: /help, /compact, /model, /fallback, /mcp, /skill, /goal.',
       'Use /help <topic> to read this manual from inside the REPL.',
       'CLI: `kodax` (start), `kodax -c` (continue last session), `kodax -r` (resume picker),',
       '`kodax doctor` (diagnose config/providers, add --ping for live reachability).',
