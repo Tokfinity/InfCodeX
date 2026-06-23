@@ -105,6 +105,15 @@ export const PROMPT_SECTION_REGISTRY: Record<string, KodaXPromptSectionDefinitio
     order: 200,
     stability: 'dynamic',
   },
+  'session-scratch-directory': {
+    id: 'session-scratch-directory',
+    title: 'Session Scratch Directory',
+    owner: 'prompts',
+    feature: 'FEATURE_071',
+    slot: 'runtime-context',
+    order: 250,
+    stability: 'dynamic',
+  },
   'git-context': {
     id: 'git-context',
     title: 'Git Context',

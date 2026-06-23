@@ -140,6 +140,19 @@ describe('toolBash', () => {
     expect(result).toContain('timeout-error');
   });
 
+  it('passes sessionScratchDir to commands as KODAX_SESSION_TMP', async () => {
+    const scratchDir = path.join(tempDir, '.agent', 'tmp', 'sessions', 'session-1');
+    const command = 'node -e "console.log(process.env.KODAX_SESSION_TMP || \'missing\')"';
+
+    const result = await toolBash({ command }, {
+      backups: new Map(),
+      executionCwd: tempDir,
+      sessionScratchDir: scratchDir,
+    });
+
+    expect(result).toContain(scratchDir);
+  });
+
   it('runs command in background and returns output file path', async () => {
     const command = 'node -e "console.log(\'bg-output\')"';
     const result = await toolBash({ command, run_in_background: true }, {

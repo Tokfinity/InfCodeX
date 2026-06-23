@@ -39,6 +39,7 @@ import type {
 import type { CapabilityRuntimeContract } from '../extensions/runtime-contract.js';
 import { mergeManagedProtocolPayload } from '../managed-protocol.js';
 import { resolveExecutionCwd } from '../runtime-paths.js';
+import { getSessionScratchDir } from '../session-scratch.js';
 import { getDefaultLspService } from '../lsp/service.js';
 
 export interface ToolExecutionContextInput {
@@ -64,6 +65,7 @@ export function buildToolExecutionContext(
   const { options, runtime, managedProtocolPayloadRef } = input;
   const events = options.events ?? {};
   const executionCwd = resolveExecutionCwd(options.context);
+  const sessionScratchDir = getSessionScratchDir(options);
 
   return {
     backups: new Map(),
@@ -74,6 +76,7 @@ export function buildToolExecutionContext(
     // a no-op unless a language server is installed; `KODAX_LSP=0` disables).
     lspService: options.context?.lspService ?? getDefaultLspService(),
     executionCwd,
+    sessionScratchDir,
     extensionRuntime: runtime,
     askUser: events.askUser, // Issue 069
     askUserMulti: events.askUserMulti,

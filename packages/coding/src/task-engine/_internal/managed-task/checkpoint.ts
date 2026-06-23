@@ -30,6 +30,10 @@ export const CHECKPOINT_FILE = 'checkpoint.json';
 export interface ManagedTaskCheckpoint {
   version: 1;
   taskId: string;
+  /** Session that owns this checkpoint. Ownerless legacy checkpoints are ambiguous. */
+  sessionId?: string;
+  /** Process that wrote the checkpoint. Diagnostic only; sessionId owns recovery. */
+  processId?: number;
   createdAt: string;
   gitCommit: string;
   objective: string;
@@ -43,6 +47,21 @@ export interface ValidatedCheckpoint {
   checkpoint: ManagedTaskCheckpoint;
   workspaceDir: string;
   managedTask: KodaXManagedTask;
+}
+
+export function getCheckpointSessionId(options: KodaXOptions): string | undefined {
+  const raw = options.session?.id?.trim();
+  return raw ? raw : undefined;
+}
+
+function checkpointBelongsToSession(
+  checkpoint: ManagedTaskCheckpoint,
+  currentSessionId: string | undefined,
+): boolean {
+  if (!currentSessionId) {
+    return false;
+  }
+  return checkpoint.sessionId === currentSessionId;
 }
 
 export async function getGitHeadCommit(gitRoot: string | undefined | null): Promise<string | undefined> {
@@ -89,6 +108,7 @@ export async function findValidCheckpoint(
   }
 
   const currentCommit = await getGitHeadCommit(gitRoot);
+  const currentSessionId = getCheckpointSessionId(options);
   const now = Date.now();
 
   for (const entry of entries) {
@@ -114,9 +134,25 @@ export async function findValidCheckpoint(
       ) {
         continue;
       }
+      if (candidate.sessionId !== undefined && typeof candidate.sessionId !== 'string') {
+        continue;
+      }
+      if (candidate.processId !== undefined || candidate.pid !== undefined) {
+        const rawProcessId = candidate.processId ?? candidate.pid;
+        if (typeof rawProcessId !== 'number' || !Number.isFinite(rawProcessId)) {
+          continue;
+        }
+      }
+      const rawProcessId = candidate.processId ?? candidate.pid;
       const checkpoint: ManagedTaskCheckpoint = {
         version: 1,
         taskId: candidate.taskId,
+        ...(typeof candidate.sessionId === 'string' && candidate.sessionId.trim()
+          ? { sessionId: candidate.sessionId }
+          : {}),
+        ...(typeof rawProcessId === 'number' && Number.isFinite(rawProcessId)
+          ? { processId: rawProcessId }
+          : {}),
         createdAt: candidate.createdAt,
         gitCommit: candidate.gitCommit,
         objective: typeof candidate.objective === 'string' ? candidate.objective : '',
@@ -136,6 +172,9 @@ export async function findValidCheckpoint(
       if (age > CHECKPOINT_MAX_AGE_MS || age < 0) {
         // Auto-clean expired checkpoints to prevent accumulation.
         await deleteCheckpoint(workspaceDir);
+        continue;
+      }
+      if (!checkpointBelongsToSession(checkpoint, currentSessionId)) {
         continue;
       }
       // Validate git commit — code has changed since checkpoint, context is stale.

@@ -129,6 +129,7 @@ describe('Checkpoint: findValidCheckpoint', () => {
 
     const expiredCheckpoint = buildValidCheckpoint({
       createdAt: new Date(Date.now() - CHECKPOINT_MAX_AGE_MS - 1000).toISOString(),
+      sessionId: 'session-current',
     });
     await writeFile(
       path.join(taskDir, CHECKPOINT_FILE),
@@ -138,9 +139,40 @@ describe('Checkpoint: findValidCheckpoint', () => {
 
     const result = await findValidCheckpoint({
       provider: 'test',
+      session: { id: 'session-current' },
       context: { managedTaskWorkspaceDir: root },
     });
     expect(result).toBeUndefined();
+  });
+
+  it('cleans expired checkpoints before session ownership filtering', async () => {
+    const root = await createTempDir('ckpt-expired-peer-');
+    const taskDir = path.join(root, 'task-001');
+    const checkpointPath = path.join(taskDir, CHECKPOINT_FILE);
+    await mkdir(taskDir, { recursive: true });
+
+    const expiredCheckpoint = buildValidCheckpoint({
+      createdAt: new Date(Date.now() - CHECKPOINT_MAX_AGE_MS - 1000).toISOString(),
+      gitCommit: '',
+      sessionId: 'session-left',
+    });
+    await writeFile(
+      checkpointPath,
+      JSON.stringify(expiredCheckpoint),
+      'utf8',
+    );
+
+    const result = await findValidCheckpoint({
+      provider: 'test',
+      session: { id: 'session-right' },
+      context: {
+        managedTaskWorkspaceDir: root,
+        gitRoot: '/nonexistent',
+      },
+    });
+
+    expect(result).toBeUndefined();
+    await expect(readFile(checkpointPath, 'utf8')).rejects.toThrow();
   });
 
   it('returns undefined when git commit does not match', async () => {
@@ -148,7 +180,10 @@ describe('Checkpoint: findValidCheckpoint', () => {
     const taskDir = path.join(root, 'task-001');
     await mkdir(taskDir, { recursive: true });
 
-    const checkpoint = buildValidCheckpoint({ gitCommit: 'old-commit' });
+    const checkpoint = buildValidCheckpoint({
+      gitCommit: 'old-commit',
+      sessionId: 'session-current',
+    });
     await writeFile(
       path.join(taskDir, CHECKPOINT_FILE),
       JSON.stringify(checkpoint),
@@ -166,6 +201,7 @@ describe('Checkpoint: findValidCheckpoint', () => {
     // The checkpoint has gitCommit='old-commit' which won't match, so it should be discarded.
     const result = await findValidCheckpoint({
       provider: 'test',
+      session: { id: 'session-current' },
       context: { managedTaskWorkspaceDir: root },
     });
     expect(result).toBeUndefined();
@@ -178,7 +214,112 @@ describe('Checkpoint: findValidCheckpoint', () => {
 
     // Use empty string git commit to bypass git validation
     // (when currentCommit is undefined/empty, the git check is skipped)
-    const checkpoint = buildValidCheckpoint({ gitCommit: '' });
+    const checkpoint = buildValidCheckpoint({
+      gitCommit: '',
+      sessionId: 'session-current',
+    });
+    await writeFile(
+      path.join(taskDir, CHECKPOINT_FILE),
+      JSON.stringify(checkpoint),
+      'utf8',
+    );
+    await writeFile(
+      path.join(taskDir, 'managed-task.json'),
+      JSON.stringify(buildMinimalManagedTask('task-001')),
+      'utf8',
+    );
+
+    const result = await findValidCheckpoint({
+      provider: 'test',
+      session: { id: 'session-current' },
+      context: {
+        managedTaskWorkspaceDir: root,
+        gitRoot: '/nonexistent-git-root', // Will fail to get HEAD, skipping git check
+      },
+    });
+    // The git check is: if (currentCommit && checkpoint.gitCommit && ...)
+    // With empty gitCommit, the condition is falsy so it passes.
+    expect(result).toBeDefined();
+    expect(result!.checkpoint.taskId).toBe('task-test-001');
+    expect(result!.managedTask.contract.taskId).toBe('task-001');
+  });
+
+  it('skips a valid checkpoint owned by a different session', async () => {
+    const root = await createTempDir('ckpt-session-mismatch-');
+    const taskDir = path.join(root, 'task-001');
+    await mkdir(taskDir, { recursive: true });
+
+    const checkpoint = buildValidCheckpoint({
+      gitCommit: '',
+      sessionId: 'session-left',
+      processId: 111,
+    });
+    await writeFile(
+      path.join(taskDir, CHECKPOINT_FILE),
+      JSON.stringify(checkpoint),
+      'utf8',
+    );
+    await writeFile(
+      path.join(taskDir, 'managed-task.json'),
+      JSON.stringify(buildMinimalManagedTask('task-001')),
+      'utf8',
+    );
+
+    const result = await findValidCheckpoint({
+      provider: 'test',
+      session: { id: 'session-right' },
+      context: {
+        managedTaskWorkspaceDir: root,
+        gitRoot: '/nonexistent',
+      },
+    });
+
+    expect(result).toBeUndefined();
+  });
+
+  it('returns a checkpoint owned by the current session', async () => {
+    const root = await createTempDir('ckpt-session-match-');
+    const taskDir = path.join(root, 'task-001');
+    await mkdir(taskDir, { recursive: true });
+
+    const checkpoint = buildValidCheckpoint({
+      gitCommit: '',
+      sessionId: 'session-current',
+      processId: 111,
+    });
+    await writeFile(
+      path.join(taskDir, CHECKPOINT_FILE),
+      JSON.stringify(checkpoint),
+      'utf8',
+    );
+    await writeFile(
+      path.join(taskDir, 'managed-task.json'),
+      JSON.stringify(buildMinimalManagedTask('task-001')),
+      'utf8',
+    );
+
+    const result = await findValidCheckpoint({
+      provider: 'test',
+      session: { id: 'session-current' },
+      context: {
+        managedTaskWorkspaceDir: root,
+        gitRoot: '/nonexistent',
+      },
+    });
+
+    expect(result).toBeDefined();
+    expect(result!.checkpoint.sessionId).toBe('session-current');
+  });
+
+  it('skips session-owned checkpoints when the caller has no session id', async () => {
+    const root = await createTempDir('ckpt-no-current-session-');
+    const taskDir = path.join(root, 'task-001');
+    await mkdir(taskDir, { recursive: true });
+
+    const checkpoint = buildValidCheckpoint({
+      gitCommit: '',
+      sessionId: 'session-current',
+    });
     await writeFile(
       path.join(taskDir, CHECKPOINT_FILE),
       JSON.stringify(checkpoint),
@@ -194,14 +335,90 @@ describe('Checkpoint: findValidCheckpoint', () => {
       provider: 'test',
       context: {
         managedTaskWorkspaceDir: root,
-        gitRoot: '/nonexistent-git-root', // Will fail to get HEAD, skipping git check
+        gitRoot: '/nonexistent',
       },
     });
-    // The git check is: if (currentCommit && checkpoint.gitCommit && ...)
-    // With empty gitCommit, the condition is falsy so it passes.
+
+    expect(result).toBeUndefined();
+  });
+
+  it('skips peer-session checkpoints and returns the current session checkpoint', async () => {
+    const root = await createTempDir('ckpt-session-mixed-');
+    const leftTaskDir = path.join(root, 'aaa-left-task');
+    const rightTaskDir = path.join(root, 'zzz-right-task');
+    await mkdir(leftTaskDir, { recursive: true });
+    await mkdir(rightTaskDir, { recursive: true });
+
+    await writeFile(
+      path.join(leftTaskDir, CHECKPOINT_FILE),
+      JSON.stringify(buildValidCheckpoint({
+        taskId: 'aaa-left-task',
+        gitCommit: '',
+        sessionId: 'session-left',
+      })),
+      'utf8',
+    );
+    await writeFile(
+      path.join(leftTaskDir, 'managed-task.json'),
+      JSON.stringify(buildMinimalManagedTask('aaa-left-task')),
+      'utf8',
+    );
+    await writeFile(
+      path.join(rightTaskDir, CHECKPOINT_FILE),
+      JSON.stringify(buildValidCheckpoint({
+        taskId: 'zzz-right-task',
+        gitCommit: '',
+        sessionId: 'session-right',
+      })),
+      'utf8',
+    );
+    await writeFile(
+      path.join(rightTaskDir, 'managed-task.json'),
+      JSON.stringify(buildMinimalManagedTask('zzz-right-task')),
+      'utf8',
+    );
+
+    const result = await findValidCheckpoint({
+      provider: 'test',
+      session: { id: 'session-right' },
+      context: {
+        managedTaskWorkspaceDir: root,
+        gitRoot: '/nonexistent',
+      },
+    });
+
     expect(result).toBeDefined();
-    expect(result!.checkpoint.taskId).toBe('task-test-001');
-    expect(result!.managedTask.contract.taskId).toBe('task-001');
+    expect(result!.checkpoint.taskId).toBe('zzz-right-task');
+    expect(result!.managedTask.contract.taskId).toBe('zzz-right-task');
+  });
+
+  it('skips ownerless legacy checkpoints when the caller has a session id', async () => {
+    const root = await createTempDir('ckpt-ownerless-');
+    const taskDir = path.join(root, 'task-001');
+    await mkdir(taskDir, { recursive: true });
+
+    const checkpoint = buildValidCheckpoint({ gitCommit: '' });
+    await writeFile(
+      path.join(taskDir, CHECKPOINT_FILE),
+      JSON.stringify(checkpoint),
+      'utf8',
+    );
+    await writeFile(
+      path.join(taskDir, 'managed-task.json'),
+      JSON.stringify(buildMinimalManagedTask('task-001')),
+      'utf8',
+    );
+
+    const result = await findValidCheckpoint({
+      provider: 'test',
+      session: { id: 'session-current' },
+      context: {
+        managedTaskWorkspaceDir: root,
+        gitRoot: '/nonexistent',
+      },
+    });
+
+    expect(result).toBeUndefined();
   });
 
   it('skips malformed checkpoint JSON', async () => {

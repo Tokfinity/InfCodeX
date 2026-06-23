@@ -30,6 +30,8 @@
  * STATUS: ACTIVE since FEATURE_100 P3.6p.
  */
 
+import path from 'node:path';
+
 import { describe, expect, it } from 'vitest';
 
 import type { KodaXEvents, KodaXManagedProtocolPayload, KodaXOptions } from '../../types.js';
@@ -165,5 +167,21 @@ describe('CAP-048: tool execution context construction contract', () => {
     });
 
     expect(ctx.parentEvents).toBe(events);
+  });
+
+  it('CAP-TOOL-CTX-008: sessionScratchDir is derived from session id and git root', () => {
+    const gitRoot = path.resolve('cap-048-repo');
+    const ctx = buildToolExecutionContext({
+      options: {
+        context: { gitRoot },
+        session: { id: 'session A' },
+      } as unknown as KodaXOptions,
+      runtime: undefined,
+      managedProtocolPayloadRef: makeRef(),
+    });
+
+    expect(ctx.sessionScratchDir).toBe(
+      path.join(gitRoot, '.agent', 'tmp', 'sessions', 'session_A'),
+    );
   });
 });

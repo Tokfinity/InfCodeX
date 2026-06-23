@@ -36,6 +36,7 @@ import { Runner, getMessageQueue } from '@kodax-ai/agent';
 import { WORKER_AGENT_NAME } from '../agents/task-engine-agents.js';
 import { resolveProvider } from '../providers/index.js';
 import { buildCapabilityContextSections } from '../prompts/capability-sections.js';
+import { getSessionScratchDir } from '../session-scratch.js';
 import {
   buildAutoRepoIntelligenceContext,
   emitResilienceDebug,
@@ -437,16 +438,30 @@ export async function runManagedTaskViaRunner(
   const providerName = effectiveOptions.provider ?? 'anthropic';
   const initialSessionId = effectiveOptions.session?.id
     ?? `runner-${Date.now()}-${Math.random().toString(36).slice(2, 8)}`;
-  if (effectiveOptions.events) {
-    emitSessionStart(effectiveOptions.events, { provider: providerName, sessionId: initialSessionId });
+  // Ad-hoc askUser callers without a stable host session id get a run-local id:
+  // checkpoint resume should prefer a safe miss over cross-session attachment.
+  const shouldAttachInitialSessionId = Boolean(effectiveOptions.session?.id)
+    || Boolean(effectiveOptions.session?.storage)
+    || Boolean(effectiveOptions.events?.askUser);
+  const optionsWithSessionId: KodaXOptions = shouldAttachInitialSessionId
+    ? {
+      ...effectiveOptions,
+      session: {
+        ...(effectiveOptions.session ?? {}),
+        id: initialSessionId,
+      },
+    }
+    : effectiveOptions;
+  if (optionsWithSessionId.events) {
+    emitSessionStart(optionsWithSessionId.events, { provider: providerName, sessionId: initialSessionId });
   }
   try {
-    return await runManagedTaskViaRunnerInner(effectiveOptions, prompt, adapterOverride, plan, initialSessionId);
+    return await runManagedTaskViaRunnerInner(optionsWithSessionId, prompt, adapterOverride, plan, initialSessionId);
   } catch (err) {
     // Surface onError so top-level consumers can flush telemetry /
     // show UI toast before the rejection propagates.
     const error = err instanceof Error ? err : new Error(String(err));
-    if (effectiveOptions.events) emitError(effectiveOptions.events, error);
+    if (optionsWithSessionId.events) emitError(optionsWithSessionId.events, error);
     // v0.7.26 parity (C3): persist an error snapshot so /resume can
     // pick up the last turn even after a crash. Legacy does the same at
     // agent.ts:2824. Best-effort.
@@ -457,17 +472,17 @@ export async function runManagedTaskViaRunner(
     // write `messages: []`, which wiped the user's conversation on any
     // permanent error (e.g., deepseek thinking-mode 400) and made the
     // next prompt start as a fresh session.
-    if (effectiveOptions.session?.storage) {
+    if (optionsWithSessionId.session?.storage) {
       try {
         const recoveredMessages = (err as { __kodaxRecoveredMessages?: unknown })
           ?.__kodaxRecoveredMessages;
         const messagesToPersist = Array.isArray(recoveredMessages)
           ? (recoveredMessages as KodaXMessage[])
           : [];
-        await saveSessionSnapshot(effectiveOptions, initialSessionId, {
+        await saveSessionSnapshot(optionsWithSessionId, initialSessionId, {
           messages: messagesToPersist,
           title: prompt.slice(0, 80),
-          gitRoot: effectiveOptions.context?.gitRoot ?? undefined,
+          gitRoot: optionsWithSessionId.context?.gitRoot ?? undefined,
           errorMetadata: {
             lastError: error.message,
             lastErrorTime: Date.now(),
@@ -488,7 +503,7 @@ export async function runManagedTaskViaRunner(
     // divergence preserved deliberately — REPL listeners on the AMA
     // path rely on the universal-cleanup semantics. Future work to
     // unify would touch REPL contract.
-    if (effectiveOptions.events) emitComplete(effectiveOptions.events);
+    if (optionsWithSessionId.events) emitComplete(optionsWithSessionId.events);
   }
 }
 
@@ -971,6 +986,7 @@ async function runManagedTaskViaRunnerInner(
   const managedWorkspace = {
     executionCwd: resolveExecutionCwd(options.context),
     gitRoot: options.context?.gitRoot ?? undefined,
+    scratchDir: getSessionScratchDir(options),
     platform: process.platform,
     osRelease: os.release(),
     // Forward the active provider/model so each role's `## Environment`
@@ -1010,6 +1026,7 @@ async function runManagedTaskViaRunnerInner(
       'environment-context',
       'runtime-fact',
       'working-directory',
+      'session-scratch-directory',
       'repo-intelligence-context',
       'prompt-overlay',
     ]);

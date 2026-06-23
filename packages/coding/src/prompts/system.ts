@@ -51,7 +51,8 @@ Tool outputs are also bounded:
 If you truly need a script:
 - Do NOT create temporary scripts or scratch files in the project root — they leak into \`git status\` and file listings, confusing the user about what was actually changed
 - Do NOT place them at \`.agent/\` top level — that directory is reserved for system-managed artifacts (managed-tasks/, project/, repo-intelligence/, etc.)
-- Write them to \`.agent/tmp/\` (relative to the git root). This is the designated ephemeral workspace; files there can be safely cleaned up later
+- Write them to the Session Scratch Directory when one is shown in the environment
+- If no Session Scratch Directory is shown, write them under a unique session-scoped subdirectory of \`.agent/tmp/sessions/\` (relative to the git root), not directly in the shared \`.agent/tmp/\` root
 - Alternatively, use the system temp directory if the script does not need to be inspectable from the project
 - Treat helper scripts as a last resort, not the default recovery path
 

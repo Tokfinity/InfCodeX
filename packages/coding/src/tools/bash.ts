@@ -141,6 +141,12 @@ export async function toolBash(input: Record<string, unknown>, ctx: KodaXToolExe
   const capped = userTimeout && userTimeout > KODAX_HARD_TIMEOUT;
   const runInBackground = (input.run_in_background as boolean) ?? false;
   const cwd = resolveExecutionCwd(ctx);
+  const env = ctx.sessionScratchDir
+    ? {
+      ...process.env,
+      KODAX_SESSION_TMP: ctx.sessionScratchDir,
+    }
+    : process.env;
 
   if (runInBackground) {
     const jobId = `${Date.now()}-${Math.random().toString(36).slice(2, 8)}`;
@@ -155,6 +161,7 @@ export async function toolBash(input: Record<string, unknown>, ctx: KodaXToolExe
       shell: true,
       windowsHide: true,
       cwd,
+      env,
       detached: process.platform !== 'win32',
     });
     const unregisterManagedChild = registerManagedChildProcess(proc, {
@@ -214,6 +221,7 @@ export async function toolBash(input: Record<string, unknown>, ctx: KodaXToolExe
       shell: true,
       windowsHide: true,
       cwd,
+      env,
       detached: process.platform !== 'win32',
     });
     const unregisterManagedChild = registerManagedChildProcess(proc, {

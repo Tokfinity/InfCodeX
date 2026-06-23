@@ -1,27 +1,28 @@
 /**
  * v0.7.35.1 FEATURE_142 Batch E — Capability Context Sections.
  *
- * Single source of truth for the 13 capability-context prompt sections
+ * Single source of truth for the 14 capability-context prompt sections
  * the SA path (`buildSystemPromptSnapshot` in `builder.ts`) assembles.
  * Extracted to dedupe with a future AMA worker integration (Batch F /
  * v0.7.36 FEATURE_143). Each section's id, order, content shape, and
  * inclusion condition is preserved byte-equivalently from
  * builder.ts:32-181 (pre-Batch E).
  *
- * The 13 sections, in order:
+ * The 14 sections, in order:
  *   1.  base-system               (always)
  *   2.  base-system-suffix        (when SYSTEM_PROMPT has `{context}` marker)
  *   3.  environment-context       (always)
  *   4.  runtime-fact              (when provider or model is set)
  *   5.  working-directory         (always)
- *   6.  git-context               (when isNewSession AND repo has git output)
- *   7.  project-snapshot          (when isNewSession)
- *   8.  repo-intelligence-context (when context.repoIntelligenceContext)
- *   9.  mcp-capability-context    (when extensionRuntime returns mcp ctx)
- *   10. prompt-overlay            (when context.promptOverlay)
- *   11. project-agents            (when AGENTS.md / CLAUDE.md found)
- *   12. skills-addendum           (when context.skillsPrompt)
- *   13. tool-construction         (when toolConstructionMode includes it)
+ *   6.  session-scratch-directory (when session id is set)
+ *   7.  git-context               (when isNewSession AND repo has git output)
+ *   8.  project-snapshot          (when isNewSession)
+ *   9.  repo-intelligence-context (when context.repoIntelligenceContext)
+ *   10. mcp-capability-context    (when extensionRuntime returns mcp ctx)
+ *   11. prompt-overlay            (when context.promptOverlay)
+ *   12. project-agents            (when AGENTS.md / CLAUDE.md found)
+ *   13. skills-addendum           (when context.skillsPrompt)
+ *   14. tool-construction         (when toolConstructionMode includes it)
  *
  * Why this lives in `@kodax-ai/coding/src/prompts/` and NOT
  * `@kodax-ai/agent/`:
@@ -52,6 +53,7 @@ import { promisify } from 'node:util';
 import { loadAgentsFiles, formatAgentsForPrompt } from '../context/agents-loader.js';
 import { listConstructedAgents } from '../construction/agent-resolver.js';
 import { resolveExecutionCwd } from '../runtime-paths.js';
+import { getSessionScratchDir } from '../session-scratch.js';
 import type { KodaXOptions } from '../types.js';
 
 import { buildMemoryRulesSection } from './memory-rules.js';
@@ -134,6 +136,16 @@ export async function buildCapabilityContextSections(
       'Always disclose the resolved execution directory for deterministic file operations.',
     ),
   );
+  const scratchDir = getSessionScratchDir(options);
+  if (scratchDir) {
+    sections.push(
+      createPromptSection(
+        'session-scratch-directory',
+        `Session Scratch Directory: ${scratchDir}`,
+        'Disclose the per-session scratch directory so temporary helper files never collide across same-directory sessions.',
+      ),
+    );
+  }
 
   if (isNewSession) {
     const gitContext = await getGitContext(executionCwd);

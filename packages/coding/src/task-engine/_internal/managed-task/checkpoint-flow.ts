@@ -35,6 +35,7 @@ import type {
 import {
   deleteCheckpoint,
   findValidCheckpoint,
+  getCheckpointSessionId,
   getGitHeadCommit,
   writeCheckpoint,
 } from './checkpoint.js';
@@ -231,9 +232,12 @@ export async function writeCurrentCheckpoint(args: {
     const workspaceRoot = getManagedTaskWorkspaceRoot(options, surface);
     const workspaceDir = path.join(workspaceRoot, managedTask.contract.taskId);
     const gitCommit = (await getGitHeadCommit(options.context?.gitRoot)) ?? 'unknown';
+    const sessionId = getCheckpointSessionId(options);
     const checkpoint: ManagedTaskCheckpoint = {
       version: 1,
       taskId: managedTask.contract.taskId,
+      ...(sessionId ? { sessionId } : {}),
+      processId: process.pid,
       createdAt: managedTask.contract.createdAt,
       gitCommit,
       objective: managedTask.contract.objective,

@@ -1,7 +1,7 @@
 import os from 'os';
 import path from 'path';
-import { mkdtemp, rm } from 'fs/promises';
-import { afterEach, beforeEach, describe, expect, it } from 'vitest';
+import fs, { mkdtemp, rm } from 'fs/promises';
+import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
 import { FileExtensionStore, createExtensionStore } from './persistence.js';
 
 describe('FileExtensionStore (FEATURE_034 manual persistence)', () => {
@@ -62,6 +62,31 @@ describe('FileExtensionStore (FEATURE_034 manual persistence)', () => {
 
     const loaded = await store.get('score');
     expect(loaded).toEqual(second);
+  });
+
+  it('uses a unique temp file for atomic rewrites', async () => {
+    const writeFileSpy = vi.spyOn(fs, 'writeFile');
+    try {
+      const store = createExtensionStore(uniqueNs());
+      await store.put('key', 'value');
+
+      const tempPath = writeFileSpy.mock.calls
+        .map(([file]) => file)
+        .find((file): file is string => typeof file === 'string' && file.endsWith('.tmp'));
+
+      expect(tempPath).toEqual(expect.any(String));
+      if (typeof tempPath !== 'string') {
+        throw new Error('expected writeFile to receive a temp path');
+      }
+
+      const tempBase = path.basename(tempPath);
+      expect(tempBase).not.toBe('store.jsonl.tmp');
+      expect(tempBase).toMatch(
+        new RegExp(`^\\.store\\.jsonl\\.${process.pid}\\.[a-z0-9]+-[0-9a-f]{8}\\.tmp$`),
+      );
+    } finally {
+      writeFileSpy.mockRestore();
+    }
   });
 
   it('supports optimistic concurrency via expectedVersion', async () => {
