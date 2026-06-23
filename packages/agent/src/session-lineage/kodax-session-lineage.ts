@@ -1283,14 +1283,20 @@ export function archiveOldIslands(lineage: KodaXSessionLineage): {
   };
 }
 
+function isTextContentBlock(block: unknown): block is { type: 'text'; text: string } {
+  return typeof block === 'object'
+    && block !== null
+    && (block as { type?: unknown }).type === 'text'
+    && typeof (block as { text?: unknown }).text === 'string';
+}
+
 function extractArchivePreview(entries: KodaXSessionMessageEntry[]): string {
   const first = entries.find((e) => e.message?.role === 'user');
   if (!first?.message) return '';
   const msg = first.message;
   if (typeof msg.content === 'string') return msg.content.slice(0, 200);
   if (Array.isArray(msg.content)) {
-    const textBlock = msg.content.find((b: any) => b.type === 'text' && b.text);
-    if (textBlock && 'text' in textBlock) return (textBlock as any).text.slice(0, 200);
+    return msg.content.find(isTextContentBlock)?.text.slice(0, 200) ?? '';
   }
   return '';
 }

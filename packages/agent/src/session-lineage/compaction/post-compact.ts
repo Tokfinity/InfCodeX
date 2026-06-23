@@ -420,7 +420,7 @@ async function readFileHead(filePath: string, maxTokens: number): Promise<string
     const chunks: string[] = [];
     let tokens = 0;
     for (const line of lines) {
-      // Rough estimate: 1 token ≈ 4 chars
+      // Rough estimate: 1 token ~= 4 chars
       const lineTokens = Math.ceil(line.length / 4) + 1;
       if (tokens + lineTokens > maxTokens) {
         chunks.push('[... truncated for post-compact budget]');
@@ -430,8 +430,9 @@ async function readFileHead(filePath: string, maxTokens: number): Promise<string
       tokens += lineTokens;
     }
     return chunks.length > 0 ? chunks.join('\n') : null;
-  } catch {
-    // File may have been deleted or moved since the ledger was recorded
+  } catch (error) {
+    // File may have been deleted or moved since the ledger was recorded.
+    void error;
     return null;
   }
 }

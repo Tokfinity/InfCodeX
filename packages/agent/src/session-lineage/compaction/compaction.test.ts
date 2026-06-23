@@ -743,7 +743,7 @@ describe('FEATURE_183 (v0.7.42): PROTECTED_TOOL_NAMES whitelist expansion', () =
     //       non-protected count crosses the threshold and prune fires.
     //   (2) After structured prune marks 8 older greps with [Pruned: ...]
     //       placeholders, the resulting prunedQueue is ~50K tokens, well
-    //       below the F182 fast-path threshold (triggerTokens × 0.8 ≈ 67K),
+    //       below the F182 fast-path threshold (triggerTokens × 0.8 ~= 67K),
     //       AND the system anchor message supplies `previousSummary` so
     //       fast-path conditions all hold. Fast-path returns
     //       [createSummaryMessage(prevSummary), ...prunedQueue] verbatim —

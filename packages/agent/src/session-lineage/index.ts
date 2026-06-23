@@ -120,6 +120,15 @@ export type {
   PostCompactAttachments,
 } from './compaction/post-compact.js';
 
+export {
+  buildRecoverySeed,
+  normalizeRecoveryPrompt,
+} from './recovery-seed.js';
+export type {
+  RecoverySeed,
+  RecoverySeedInput,
+} from './recovery-seed.js';
+
 // ============== Extension persistence (FEATURE_034; v0.7.35.1 FEATURE_142 Batch B) ==============
 export {
   FileExtensionStore,

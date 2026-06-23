@@ -518,7 +518,7 @@ describe('buildFileContentMessages', () => {
   });
 
   it('caps per-file tokens at POST_COMPACT_MAX_TOKENS_PER_FILE even with huge budget', async () => {
-    // 400 KB of content ≈ 100k tokens — far above the 5k per-file cap.
+    // 400 KB of content ~= 100k tokens — far above the 5k per-file cap.
     const bigContent = 'a '.repeat(200_000);
     const filePath = await createTmpFile('big.ts', bigContent);
     const ledger = [createLedgerEntry('file_modified', filePath)];

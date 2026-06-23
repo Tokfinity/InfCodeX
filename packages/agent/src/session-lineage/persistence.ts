@@ -91,7 +91,9 @@ function fromPersistedLine(raw: string): KodaXExtensionStoreEntry | null {
       };
     }
     return null;
-  } catch {
+  } catch (error) {
+    // Corrupt JSONL entries are ignored; valid later lines still participate.
+    void error;
     return null;
   }
 }
@@ -227,7 +229,9 @@ export class FileExtensionStore implements KodaXExtensionStore {
         }
       }
       return map;
-    } catch {
+    } catch (error) {
+      // Store reads are best-effort; callers can continue with an empty store.
+      void error;
       return new Map();
     }
   }
@@ -245,8 +249,9 @@ export class FileExtensionStore implements KodaXExtensionStore {
     await fs.writeFile(tmpPath, lines.join('\n'), 'utf-8');
     try {
       await fs.rename(tmpPath, this.filePath);
-    } catch {
+    } catch (error) {
       // On Windows, rename fails when the target exists. Fall back to copy + unlink.
+      void error;
       await fs.copyFile(tmpPath, this.filePath);
       await fs.unlink(tmpPath);
     }
