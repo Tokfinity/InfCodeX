@@ -49,6 +49,7 @@ import type {
   KodaXMessage,
   KodaXSessionData,
   KodaXSessionStorage,
+  KodaXSessionUiHistoryItem,
 } from '@kodax-ai/agent';
 import type { AgentsFile } from '@kodax-ai/coding';
 import type { PermissionMode, ConfirmResult } from '../permission/types.js';
@@ -78,7 +79,7 @@ import {
   CommandCallbacks,
   CurrentConfig,
 } from './commands.js';
-import type { CommandWorkflowInvocationRequest } from '../commands/types.js';
+import type { CommandWorkflowInvocationRequest, SessionRecoverStatus } from '../commands/types.js';
 import { loadCompactionConfig } from '../common/compaction-config.js';
 import { loadAlwaysAllowTools, loadAutoModeSettings, saveAlwaysAllowToolPattern } from '../common/permission-config.js';
 import {
@@ -117,6 +118,13 @@ import {
   workspaceExists,
 } from './workspace-runtime.js';
 import { preparePromptInputArtifacts } from '../common/input-artifacts.js';
+import {
+  buildRecoverySeed,
+  normalizeRecoveryPrompt,
+  SESSION_RECOVERY_CONFIRM_MESSAGE,
+  SESSION_RECOVERY_HINT_MESSAGE,
+  shouldOfferSessionRecovery,
+} from '../session/recovery.js';
 
 // Extended session storage interface (adds list method) - 扩展的会话存储接口（增加 list 方法）
 interface SessionStorage extends KodaXSessionStorage {
@@ -678,6 +686,119 @@ Keyboard Shortcuts:
   // Cost tracking ref — agent populates this via events.getCostReport, /cost command reads it
   costReportRef.current = null;
 
+  const recoverCurrentSession = async (prompt?: string): Promise<SessionRecoverStatus> => {
+    if (context.messages.length === 0) {
+      return 'empty';
+    }
+    if (!guardSessionTransition('Recovering into a new session')) {
+      return 'blocked';
+    }
+
+    const sourceSessionId = context.sessionId;
+    const sourceLineage = context.lineage ?? createSessionLineage(context.messages);
+    context.lineage = sourceLineage;
+    const sourceArtifactLedger = context.artifactLedger
+      ? structuredClone(context.artifactLedger)
+      : undefined;
+    const sourceTitle = context.title || extractTitle(context.messages);
+    const seed = buildRecoverySeed({
+      sourceSessionId,
+      messages: context.messages,
+      lineage: sourceLineage,
+      artifactLedger: sourceArtifactLedger,
+      reason: 'provider session recovery',
+    });
+
+    await storage.save(sourceSessionId, {
+      messages: context.messages,
+      title: sourceTitle,
+      gitRoot: context.gitRoot ?? '',
+      runtimeInfo: context.runtimeInfo,
+      lineage: sourceLineage,
+      artifactLedger: sourceArtifactLedger,
+      uiHistory: context.uiHistory,
+      ...contextExtensionSessionData(context),
+      ...(currentOptions.session?.tag !== undefined ? { tag: currentOptions.session.tag } : {}),
+    });
+
+    const nextSessionId = generateInteractiveSessionId();
+    const seedLineage = createSessionLineage(seed.messages);
+    await storage.save(nextSessionId, {
+      messages: seed.messages,
+      title: seed.title,
+      gitRoot: context.gitRoot ?? '',
+      runtimeInfo: context.runtimeInfo,
+      lineage: seedLineage,
+      artifactLedger: sourceArtifactLedger,
+      ...(currentOptions.session?.tag !== undefined ? { tag: currentOptions.session.tag } : {}),
+    });
+
+    const now = new Date().toISOString();
+    context.sessionId = nextSessionId;
+    context.messages = seed.messages;
+    context.title = seed.title;
+    context.contextTokenSnapshot = undefined;
+    context.lineage = seedLineage;
+    context.artifactLedger = sourceArtifactLedger;
+    context.extensionState = undefined;
+    context.extensionRecords = undefined;
+    context.extensionStateDirty = false;
+    context.extensionRecordsDirty = false;
+    context.createdAt = now;
+    context.lastAccessed = now;
+    currentOptions.session = {
+      ...currentOptions.session,
+      id: nextSessionId,
+    };
+    statusBar?.update({
+      sessionId: nextSessionId,
+      messageCount: context.messages.length,
+    });
+    teamModeHandle?.writer.update({ sessionId: nextSessionId });
+
+    console.log(chalk.green(`\n[Recovered session: ${nextSessionId}]`));
+    console.log(chalk.dim(`  Source session saved: ${sourceSessionId}`));
+    console.log(chalk.dim('  Raw provider history was not replayed.'));
+
+    let result: KodaXResult;
+    try {
+      result = await runAgentRound(
+        currentOptions,
+        context,
+        normalizeRecoveryPrompt(prompt),
+        context.messages,
+      );
+    } catch (error: unknown) {
+      const message = error instanceof Error ? error.message : String(error);
+      console.log(chalk.red(`\n[Recover failed] ${message}`));
+      return 'failed';
+    }
+    context.messages = result.messages;
+    context.contextTokenSnapshot = result.contextTokenSnapshot;
+    applyRuntimeSessionSnapshot(context, result);
+    context.artifactLedger = mergeArtifactLedger(
+      context.artifactLedger ?? [],
+      (result.artifactLedger as typeof context.artifactLedger | undefined)
+        ?? extractArtifactLedger(result.messages),
+    );
+    context.lineage = createSessionLineage(context.messages, context.lineage);
+    const title = extractTitle(context.messages);
+    context.title = title;
+    statusBar?.update({ messageCount: context.messages.length });
+    await storage.save(context.sessionId, {
+      messages: context.messages,
+      title,
+      gitRoot: context.gitRoot ?? '',
+      runtimeInfo: context.runtimeInfo,
+      lineage: context.lineage,
+      artifactLedger: context.artifactLedger,
+      ...contextExtensionSessionData(context),
+      ...(currentOptions.session?.tag !== undefined ? { tag: currentOptions.session.tag } : {}),
+    });
+    markExtensionSessionPersisted(context);
+    return 'recovered';
+  };
+
   // Command callbacks - 命令回调
   const callbacks: CommandCallbacks = {
     exit: () => {
@@ -1008,6 +1129,7 @@ Keyboard Shortcuts:
       console.log(chalk.dim(`  Messages: ${forked.data.messages.length}`));
       return 'forked';
     },
+    recoverSession: recoverCurrentSession,
     rewindSession: async (selector?: string) => {
       if (!guardSessionTransition('Rewinding session')) {
         return 'blocked';
@@ -1179,6 +1301,62 @@ Keyboard Shortcuts:
     },
     readline: rl,
     ui: new ReadlineUIContext(rl),
+  };
+
+  const appendPersistedUiHistoryItem = async (item: KodaXSessionUiHistoryItem): Promise<void> => {
+    context.uiHistory = [...(context.uiHistory ?? []), item];
+    const title = context.title || extractTitle(context.messages);
+    context.title = title;
+    await storage.save(context.sessionId, {
+      messages: context.messages,
+      title,
+      gitRoot: context.gitRoot ?? '',
+      runtimeInfo: context.runtimeInfo,
+      lineage: context.lineage,
+      artifactLedger: context.artifactLedger,
+      uiHistory: context.uiHistory,
+      ...contextExtensionSessionData(context),
+      ...(currentOptions.session?.tag !== undefined ? { tag: currentOptions.session.tag } : {}),
+    });
+  };
+
+  const maybeRecoverAfterProviderError = async (error: Error, prompt: string): Promise<boolean> => {
+    if (!shouldOfferSessionRecovery({ error, messageCount: context.messages.length })) {
+      return false;
+    }
+    console.log(chalk.dim(`\n${SESSION_RECOVERY_HINT_MESSAGE}`));
+    try {
+      await appendPersistedUiHistoryItem({
+        type: 'info',
+        text: SESSION_RECOVERY_HINT_MESSAGE,
+      });
+    } catch (historyError: unknown) {
+      const message = historyError instanceof Error ? historyError.message : String(historyError);
+      console.log(chalk.dim(`Could not persist recovery hint: ${message}`));
+    }
+    const confirm = resolveConfirm(callbacks);
+    if (!confirm) {
+      console.log();
+      return false;
+    }
+
+    const approved = await confirm(SESSION_RECOVERY_CONFIRM_MESSAGE);
+    if (!approved) {
+      return false;
+    }
+
+    let status: SessionRecoverStatus | undefined;
+    try {
+      status = await callbacks.recoverSession?.(prompt);
+    } catch (recoverError: unknown) {
+      const message = recoverError instanceof Error ? recoverError.message : String(recoverError);
+      console.log(chalk.red(`\n[Recover failed] ${message}`));
+      return false;
+    }
+    if (status === 'failed') {
+      console.log(chalk.dim('Recovery session was created, but the continuation request still failed.\n'));
+    }
+    return status === 'recovered';
   };
 
   // Handle Ctrl+C - 处理 Ctrl+C
@@ -1568,6 +1746,9 @@ Keyboard Shortcuts:
           const error = err instanceof Error ? err : new Error(String(err));
           context.messages.pop();
           console.log(chalk.red(`\n[Error] ${error.message}`));
+          if (await maybeRecoverAfterProviderError(error, processed)) {
+            continue;
+          }
         }
         continue;
       } else if (edited === lastUserMessage) {
@@ -1698,6 +1879,7 @@ Keyboard Shortcuts:
         console.log(chalk.red(`\n[Error] ${error.message}`));
         console.log(chalk.dim('Your message was not sent. Please try again.\n'));
       }
+      await maybeRecoverAfterProviderError(error, processed);
     }
   }
 }

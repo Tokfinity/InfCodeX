@@ -1,8 +1,8 @@
-import fs from 'fs/promises';
 import path from 'path';
 import { pathToFileURL } from 'url';
 import type { KodaXMessage, KodaXReasoningMode } from '@kodax-ai/llm';
 import { exec as extensionExec, webhook as extensionWebhook } from './helpers.js';
+import { isSupportedExtensionModulePath, resolveExtensionEntrypoint } from './discovery.js';
 import {
   registerModelProvider,
 } from '@kodax-ai/llm';
@@ -72,6 +72,14 @@ interface LoadedExtensionRecord {
   label: string;
   loadSource: ExtensionLoadSource;
   disposeAll: () => Promise<void>;
+}
+
+function getExtensionLabel(entryPath: string): string {
+  const basename = path.basename(entryPath);
+  const entryName = path.parse(basename).name;
+  return entryName === 'extension' || entryName === 'index'
+    ? path.basename(path.dirname(entryPath))
+    : basename;
 }
 
 interface RuntimeDefaultsSnapshot {
@@ -256,9 +264,9 @@ export class KodaXExtensionRuntime implements ExtensionRuntimeContract {
   }
 
   async loadExtension(extensionPath: string, options: ExtensionLoadOptions = {}): Promise<void> {
-    const resolvedPath = path.resolve(extensionPath);
+    let resolvedPath = path.resolve(extensionPath);
     try {
-      await fs.access(resolvedPath);
+      resolvedPath = await resolveExtensionEntrypoint(resolvedPath);
       const existing = this.loadedExtensions.get(resolvedPath);
       const loadSource = options.loadSource ?? existing?.loadSource ?? 'api';
 
@@ -293,7 +301,7 @@ export class KodaXExtensionRuntime implements ExtensionRuntimeContract {
         const api = this.createExtensionApi(resolvedPath, disposables, loadSource);
         const nextRecord: LoadedExtensionRecord = {
           path: resolvedPath,
-          label: path.basename(resolvedPath),
+          label: getExtensionLabel(resolvedPath),
           loadSource,
           disposeAll: async () => {
             for (const dispose of disposables.reverse()) {
@@ -1249,6 +1257,12 @@ export class KodaXExtensionRuntime implements ExtensionRuntimeContract {
     resolvedPath: string,
   ): Promise<KodaXExtensionModule> {
     const extension = path.extname(resolvedPath).toLowerCase();
+    if (!isSupportedExtensionModulePath(resolvedPath)) {
+      throw new Error(
+        `Unsupported extension module "${resolvedPath}". FEATURE_034 currently loads .js/.mjs/.cjs/.ts/.mts/.cts files.`,
+      );
+    }
+
     if (['.js', '.mjs', '.cjs'].includes(extension)) {
       const moduleUrl = new URL(pathToFileURL(resolvedPath).href);
       moduleUrl.searchParams.set('kodax_ext_reload', `${Date.now()}:${Math.random()}`);

@@ -80,6 +80,7 @@ import {
   KodaXEvents,
   KodaXReasoningMode,
   createExtensionRuntime,
+  discoverDefaultExtensions,
   registerConfiguredMcpCapabilityProvider,
   buildMcpReverseCapabilities,
   KODAX_DEFAULT_PROVIDER,
@@ -127,6 +128,16 @@ function hasConfiguredMcpServers(config: { mcpServers?: Record<string, { connect
   return Object.values(config.mcpServers ?? {}).some(
     (server) => (server.connect ?? 'lazy') !== 'disabled',
   );
+}
+
+async function discoverCliDefaultExtensions(): Promise<string[]> {
+  try {
+    return await discoverDefaultExtensions();
+  } catch (error) {
+    const message = error instanceof Error ? error.message : String(error);
+    console.warn(chalk.yellow('[extensions] Failed to discover default extensions: ' + message));
+    return [];
+  }
 }
 
 function printSessionDedupeReport(report: SessionDedupeReport, applied: boolean): void {
@@ -1310,12 +1321,18 @@ complete -c kodax -l version -d 'Show version'`);
       .filter((value): value is string => typeof value === 'string' && value.trim().length > 0)
       .map((value) => path.resolve(value))
     : [];
+  const discoveredExtensions = await discoverCliDefaultExtensions();
+  const dedupedDiscoveredExtensions = mergeConfiguredExtensions([], discoveredExtensions);
   const dedupedConfiguredExtensions = mergeConfiguredExtensions([], configuredExtensions);
   const dedupedCliExtensions = mergeConfiguredExtensions(cliExtensions, []);
   const configuredOnlyExtensions = dedupedConfiguredExtensions.filter(
     (value) => !dedupedCliExtensions.includes(value),
   );
-  const activeExtensions = mergeConfiguredExtensions(dedupedCliExtensions, configuredOnlyExtensions);
+  const discoveredOnlyExtensions = dedupedDiscoveredExtensions.filter(
+    (value) => !dedupedConfiguredExtensions.includes(value) && !dedupedCliExtensions.includes(value),
+  );
+  const baseExtensions = mergeConfiguredExtensions(configuredOnlyExtensions, discoveredOnlyExtensions);
+  const activeExtensions = mergeConfiguredExtensions(dedupedCliExtensions, baseExtensions);
   const hasActiveMcp = hasConfiguredMcpServers(configWithExtensions);
   const selectedProvider = opts.provider ?? config.provider ?? KODAX_DEFAULT_PROVIDER;
   const selectedModel = resolveCliModelSelection(
@@ -1421,9 +1438,13 @@ complete -c kodax -l version -d 'Show version'`);
     const extensionLoader = extensionRuntime as typeof extensionRuntime & {
       loadExtensions: (
         paths: string[],
-        options?: { continueOnError?: boolean; loadSource?: 'config' | 'cli' | 'api' },
+        options?: { continueOnError?: boolean; loadSource?: 'discovery' | 'config' | 'cli' | 'api' },
       ) => Promise<void>;
     };
+    await extensionLoader.loadExtensions(discoveredOnlyExtensions, {
+      continueOnError: true,
+      loadSource: 'discovery',
+    });
     await extensionLoader.loadExtensions(configuredOnlyExtensions, {
       continueOnError: true,
       loadSource: 'config',

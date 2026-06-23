@@ -61,3 +61,11 @@ export {
 
 export { exec, webhook } from './helpers.js';
 export type { ExecOptions, ExecResult, WebhookOptions, WebhookResult } from './helpers.js';
+
+export {
+  discoverDefaultExtensions,
+  discoverExtensionsInDirectory,
+  getDefaultExtensionDirectory,
+  isSupportedExtensionModulePath,
+  resolveExtensionEntrypoint,
+} from './discovery.js';

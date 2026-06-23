@@ -49,6 +49,11 @@ interface ValidatedSkillMutationPlan {
   readonly changes: readonly ValidatedSkillChange[];
 }
 
+export interface SkillSnapshotLocation {
+  readonly snapshotBase: string;
+  readonly proposalPrefix: string;
+}
+
 async function resolveSkillRootForValidation(input: SkillMutationApplyInput): Promise<SkillRootResolution> {
   try {
     return {
@@ -71,8 +76,36 @@ function isInside(root: string, target: string): boolean {
   return rel === '' || (!rel.startsWith('..') && !isAbsolute(rel));
 }
 
+function isMissingFile(error: unknown): boolean {
+  return typeof error === 'object'
+    && error !== null
+    && 'code' in error
+    && (error as NodeJS.ErrnoException).code === 'ENOENT';
+}
+
 function sanitizeProposalId(proposalId: string): string {
   return proposalId.replace(/[^a-zA-Z0-9._-]/g, '_').slice(0, 96) || 'proposal';
+}
+
+async function resolveSnapshotSkillRoot(skillRoot: string): Promise<string> {
+  try {
+    return await realpath(skillRoot);
+  } catch (error) {
+    if (!isMissingFile(error)) throw error;
+    return resolve(skillRoot);
+  }
+}
+
+export async function resolveSkillSnapshotLocation(input: {
+  readonly proposalId: string;
+  readonly skillRoot: string;
+  readonly snapshotRoot?: string;
+}): Promise<SkillSnapshotLocation> {
+  const root = await resolveSnapshotSkillRoot(input.skillRoot);
+  return {
+    snapshotBase: resolve(input.snapshotRoot ?? join(dirname(root), '.kodax-learning-snapshots')),
+    proposalPrefix: `${sanitizeProposalId(input.proposalId)}-`,
+  };
 }
 
 function normalizeRelativePath(relativePath: string): string {
@@ -126,10 +159,11 @@ async function assertExistingTargetSafe(
   let targetStat: Awaited<ReturnType<typeof lstat>>;
   try {
     targetStat = await lstat(absolutePath);
-  } catch {
-    if (change.kind === 'delete') {
+  } catch (error) {
+    if (isMissingFile(error) && change.kind === 'delete') {
       throw new Error(`skill proposal delete target does not exist: ${change.relativePath}`);
     }
+    if (!isMissingFile(error)) throw error;
     return;
   }
 
@@ -150,7 +184,8 @@ async function assertExistingAncestorsSafe(root: string, normalizedRelativePath:
     let ancestorStat: Awaited<ReturnType<typeof lstat>>;
     try {
       ancestorStat = await lstat(current);
-    } catch {
+    } catch (error) {
+      if (!isMissingFile(error)) throw error;
       return;
     }
     if (ancestorStat.isSymbolicLink()) {
@@ -206,28 +241,27 @@ async function validateSkillMutationPlan(
   };
 }
 
-function needsSnapshot(changes: readonly SkillMutationChange[]): boolean {
-  return changes.length > 1 || changes.some((change) => change.kind === 'delete');
-}
-
 async function createSnapshot(
   input: SkillMutationApplyInput,
   root: string,
   changes: readonly ValidatedSkillChange[],
-): Promise<string | undefined> {
-  if (!needsSnapshot(input.changes)) return undefined;
-
-  const snapshotBase = resolve(input.snapshotRoot ?? join(dirname(root), '.kodax-learning-snapshots'));
+): Promise<string> {
+  const location = await resolveSkillSnapshotLocation({
+    proposalId: input.proposalId,
+    skillRoot: root,
+    ...(input.snapshotRoot !== undefined ? { snapshotRoot: input.snapshotRoot } : {}),
+  });
   const snapshotPath = join(
-    snapshotBase,
-    `${sanitizeProposalId(input.proposalId)}-${Date.now().toString(36)}`,
+    location.snapshotBase,
+    `${location.proposalPrefix}${Date.now().toString(36)}`,
   );
   await mkdir(snapshotPath, { recursive: true });
 
   for (const item of changes) {
     try {
       await lstat(item.absolutePath);
-    } catch {
+    } catch (error) {
+      if (!isMissingFile(error)) throw error;
       continue;
     }
     const target = join(snapshotPath, item.normalizedRelativePath);

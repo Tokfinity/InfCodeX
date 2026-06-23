@@ -9,7 +9,7 @@
 import { describe, it, expect } from 'vitest';
 import { KodaXProviderError } from '@kodax-ai/llm';
 import { resolveResilienceConfig, DEFAULT_RESILIENCE_CONFIG } from './config.js';
-import { classifyResilienceError } from './classifier.js';
+import { classifyResilienceError, isSessionRecoveryCandidateError } from './classifier.js';
 import { StableBoundaryTracker } from './stable-boundary.js';
 import { ProviderRecoveryCoordinator, sanitizeThinkingBlocks } from './recovery-coordinator.js';
 import { reconstructMessagesWithToolGuard } from './tool-guard.js';
@@ -145,6 +145,51 @@ describe('classifyResilienceError', () => {
     expect(result.errorClass).toBe('connection_failure');
     expect(result.retryable).toBe(true);
     expect(result.maxRetries).toBe(3);
+  });
+
+  it('classifies provider-service try-later errors as provider_overloaded', () => {
+    const error = new KodaXProviderError(
+      'custom API error: Provider service Error, Try a moment later',
+      'custom',
+    );
+    const result = classifyResilienceError(error);
+    expect(result.errorClass).toBe('provider_overloaded');
+    expect(result.retryable).toBe(true);
+    expect(result.maxRetries).toBe(3);
+  });
+
+  it('classifies explicit provider 500 errors as provider_overloaded', () => {
+    const error = new KodaXProviderError('custom API error: 500', 'custom');
+    const result = classifyResilienceError(error);
+    expect(result.errorClass).toBe('provider_overloaded');
+    expect(result.retryable).toBe(true);
+    expect(result.maxRetries).toBe(3);
+  });
+
+  it('does not treat unrelated 500-like numbers as provider overload', () => {
+    const error = new KodaXProviderError('requested 500 tokens is below the minimum', 'custom');
+    const result = classifyResilienceError(error);
+    expect(result.errorClass).toBe('non_retryable_provider_error');
+    expect(result.retryable).toBe(false);
+  });
+
+  it('identifies session recovery candidate errors with shared classifier rules', () => {
+    expect(isSessionRecoveryCandidateError(
+      new Error('Provider service Error, Try a moment later'),
+      5,
+    )).toBe(true);
+    expect(isSessionRecoveryCandidateError(
+      new KodaXProviderError('custom API error: context too long', 'custom'),
+      5,
+    )).toBe(true);
+    expect(isSessionRecoveryCandidateError(
+      new KodaXProviderError('Provider API error: 401 unauthorized', 'custom'),
+      5,
+    )).toBe(false);
+    expect(isSessionRecoveryCandidateError(
+      new KodaXProviderError('requested 500 tokens is below the minimum', 'custom'),
+      5,
+    )).toBe(false);
   });
 
   it('classifies generic aborted error as retryable connection_failure', () => {

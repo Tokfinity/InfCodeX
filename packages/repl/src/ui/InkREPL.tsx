@@ -177,6 +177,7 @@ import { formatSessionTree } from "../interactive/session-tree.js";
 import type {
   CommandInvocationRequest,
   CommandWorkflowInvocationRequest,
+  SessionRecoverStatus,
 } from "../commands/types.js";
 import {
   startGeneratedWorkflowFromRequest,
@@ -230,6 +231,13 @@ import {
 import { prepareInvocationExecution } from "../interactive/invocation-runtime.js";
 import { memDiagEnabled, memDiagSnapshot, memDiagReset, buildMemDiagBreakdown } from "../interactive/memory-diagnostics.js";
 import { preparePromptInputArtifacts } from "../common/input-artifacts.js";
+import {
+  buildRecoverySeed,
+  normalizeRecoveryPrompt,
+  SESSION_RECOVERY_CONFIRM_MESSAGE,
+  SESSION_RECOVERY_HINT_MESSAGE,
+  shouldOfferSessionRecovery,
+} from "../session/recovery.js";
 
 // Extracted modules
 import { MemorySessionStorage, type SessionData, type SessionStorage } from "./utils/session-storage.js";
@@ -7238,6 +7246,144 @@ const InkREPLInner: React.FC<InkREPLProps> = ({
     }
   }, [recordCompletedAgentRound, shiftPendingInput, stageQueuedPrompt]);
 
+  const recoverCurrentSession = useCallback(async (prompt?: string): Promise<SessionRecoverStatus> => {
+    if (context.messages.length === 0) {
+      return "empty";
+    }
+    const allowed = enforceSessionTransitionGuard(
+      currentConfig,
+      "Recovering into a new session",
+      logSessionTransitionGuard,
+    );
+    if (!allowed) {
+      return "blocked";
+    }
+
+    const sourceSessionId = context.sessionId;
+    const sourceLineage = context.lineage ?? reconcileContextLineage(context.messages);
+    context.lineage = sourceLineage;
+    const sourceArtifactLedger = context.artifactLedger
+      ? structuredClone(context.artifactLedger)
+      : undefined;
+    const seed = buildRecoverySeed({
+      sourceSessionId,
+      messages: context.messages,
+      lineage: sourceLineage,
+      artifactLedger: sourceArtifactLedger,
+      reason: "provider session recovery",
+    });
+    const sourceTitle = context.title || extractTitle(context.messages);
+
+    await storage.save(context.sessionId, buildHostSessionPayload({
+      messages: context.messages,
+      title: sourceTitle,
+      gitRoot: context.gitRoot ?? "",
+      tag: currentOptionsRef.current.session?.tag,
+      uiHistory: persistedUiHistoryRef.current,
+      lineage: sourceLineage,
+      artifactLedger: sourceArtifactLedger,
+      extensionState: context.extensionState,
+      extensionRecords: context.extensionRecords,
+    }));
+
+    const nextSessionId = generateSessionId();
+    const seedLineage = createSessionLineage(seed.messages);
+    await storage.save(nextSessionId, buildHostSessionPayload({
+      messages: seed.messages,
+      title: seed.title,
+      gitRoot: context.gitRoot ?? "",
+      tag: currentOptionsRef.current.session?.tag,
+      uiHistory: [],
+      lineage: seedLineage,
+      artifactLedger: sourceArtifactLedger,
+    }));
+
+    const now = new Date().toISOString();
+    context.sessionId = nextSessionId;
+    context.messages = seed.messages;
+    context.uiHistory = [];
+    context.title = seed.title;
+    context.contextTokenSnapshot = undefined;
+    context.lineage = seedLineage;
+    context.artifactLedger = sourceArtifactLedger;
+    context.extensionState = undefined;
+    context.extensionRecords = undefined;
+    context.extensionStateDirty = false;
+    context.extensionRecordsDirty = false;
+    context.createdAt = now;
+    context.lastAccessed = now;
+    persistedUiHistoryRef.current = [];
+    currentOptionsRef.current.session = {
+      ...currentOptionsRef.current.session,
+      id: nextSessionId,
+    };
+
+    setLiveTokenCount(null);
+    clearUIHistory();
+    setTodoItems([]);
+    getActivePasteStore()?.reset();
+    setSessionId(nextSessionId);
+    teamModeHandle?.writer.update({ sessionId: nextSessionId });
+
+    appendHistoryItemsToCurrentSnapshot([{
+      type: "info",
+      text: `Recovered into new session ${nextSessionId}\nSource session saved: ${sourceSessionId}\nRaw provider history was not replayed.`,
+    }]);
+
+    await storage.save(nextSessionId, buildHostSessionPayload({
+      messages: context.messages,
+      title: context.title,
+      gitRoot: context.gitRoot ?? "",
+      tag: currentOptionsRef.current.session?.tag,
+      uiHistory: persistedUiHistoryRef.current,
+      lineage: context.lineage,
+      artifactLedger: context.artifactLedger,
+    }));
+
+    const continuation = normalizeRecoveryPrompt(prompt);
+    try {
+      await stageQueuedPrompt(continuation);
+      await runQueueableAgentSequence(
+        continuation,
+        async (nextPrompt) => {
+          const preparedArtifacts = preparePromptInputArtifacts(
+            nextPrompt,
+            currentOptionsRef.current.context?.executionCwd ?? process.cwd(),
+          );
+          for (const warning of preparedArtifacts.warnings) {
+            addHistoryItem({ type: "info", text: warning });
+          }
+          return runAgentRound(
+            currentOptionsRef.current,
+            preparedArtifacts.promptText,
+            context.messages,
+            preparedArtifacts.inputArtifacts,
+          );
+        },
+      );
+    } catch (error: unknown) {
+      const message = error instanceof Error ? error.message : String(error);
+      appendHistoryItemsWithPersistence([{
+        type: "error",
+        text: `[Recover failed] ${message}`,
+      }]);
+      return "failed";
+    }
+    return "recovered";
+  }, [
+    addHistoryItem,
+    appendHistoryItemsWithPersistence,
+    appendHistoryItemsToCurrentSnapshot,
+    clearUIHistory,
+    context,
+    currentConfig,
+    reconcileContextLineage,
+    runQueueableAgentSequence,
+    stageQueuedPrompt,
+    storage,
+    teamModeHandle,
+  ]);
+
   // Issue 120: drain pending inputs left over from skill / plan-mode rounds.
   // Hands the first queued prompt to `runQueueableAgentSequence`, which then
   // drains the remainder via its internal loop. Keeps behaviour identical to
@@ -8209,6 +8355,7 @@ const InkREPLInner: React.FC<InkREPLProps> = ({
             console.log(chalk.dim(`  Messages: ${forked.data.messages.length}`));
             return "forked";
           },
+          recoverSession: recoverCurrentSession,
           rewindSession: async (selector?: string) => {
             const allowed = enforceSessionTransitionGuard(
               currentConfig,
@@ -8598,6 +8745,41 @@ const InkREPLInner: React.FC<InkREPLProps> = ({
               text: errorContent,
             }]);
           }
+
+          if (shouldOfferSessionRecovery({ error, messageCount: context.messages.length })) {
+            const recoveryHintItem = {
+              type: "info" as const,
+              text: SESSION_RECOVERY_HINT_MESSAGE,
+            };
+            if (managedForegroundOwnerRef.current.workerId) {
+              appendManagedForegroundLedgerItem({
+                id: `recover-hint-${Date.now()}-${Math.random().toString(36).slice(2, 7)}`,
+                ...recoveryHintItem,
+                timestamp: Date.now(),
+              } as HistoryItem);
+              persistHistoryAdditionsInBackground([recoveryHintItem]);
+            } else {
+              appendHistoryItemsWithPersistence([recoveryHintItem]);
+            }
+
+            const result = await showConfirmDialog("confirm", {
+              _alwaysConfirm: true,
+              _message: SESSION_RECOVERY_CONFIRM_MESSAGE,
+            });
+            if (result.confirmed) {
+              try {
+                await recoverCurrentSession(processed);
+              } catch (recoverError) {
+                const message = recoverError instanceof Error
+                  ? recoverError.message
+                  : String(recoverError);
+                appendHistoryItemsWithPersistence([{
+                  type: "error",
+                  text: `[Recover failed] ${message}`,
+                }]);
+              }
+            }
+          }
         }
       } finally {
         // Restore console.log
@@ -8690,11 +8872,13 @@ const InkREPLInner: React.FC<InkREPLProps> = ({
       getSignal,
       getFullResponse,
       getThinkingContent,
+      appendManagedForegroundLedgerItem,
       appendHistoryItemsToCurrentSnapshot,
       appendHistoryItemsWithPersistence,
       appendLastAssistantToHistory,
       persistContextState,
       persistContextStateInBackground,
+      persistHistoryAdditionsInBackground,
       reconcileContextLineage,
       runQueueableAgentSequence,
       drainPendingInputsAsFollowUps,

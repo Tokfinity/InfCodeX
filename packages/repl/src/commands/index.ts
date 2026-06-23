@@ -33,6 +33,7 @@ export { copyCommand } from './copy-command.js';
 export { learnCommand } from './learn-command.js';
 export { memoryCommand } from './memory-command.js';
 export { newCommand } from './new-command.js';
+export { recoverCommand } from './recover-command.js';
 
 export { discoverCommands, registerDiscoveredCommands } from './discovery.js';
 

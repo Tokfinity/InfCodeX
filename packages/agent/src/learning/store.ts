@@ -200,6 +200,9 @@ function parseStoredProposal(value: unknown, index: number, warnings: string[]):
   const applyPlan = value.applyPlan;
   const createdAt = value.createdAt;
   const updatedAt = value.updatedAt;
+  const appliedAt = value.appliedAt;
+  const appliedChangedPaths = value.appliedChangedPaths;
+  const appliedSnapshotPath = value.appliedSnapshotPath;
   const rejectedReason = value.rejectedReason;
 
   if (typeof proposalId !== 'string' || proposalId.length === 0) {
@@ -226,6 +229,18 @@ function parseStoredProposal(value: unknown, index: number, warnings: string[]):
     warnings.push(`proposal entry ${proposalId} has invalid apply plan`);
     return undefined;
   }
+  if (appliedAt !== undefined && typeof appliedAt !== 'string') {
+    warnings.push(`proposal entry ${proposalId} has invalid appliedAt`);
+    return undefined;
+  }
+  if (appliedChangedPaths !== undefined && !isStringArray(appliedChangedPaths)) {
+    warnings.push(`proposal entry ${proposalId} has invalid applied changed paths`);
+    return undefined;
+  }
+  if (appliedSnapshotPath !== undefined && typeof appliedSnapshotPath !== 'string') {
+    warnings.push(`proposal entry ${proposalId} has invalid applied snapshot path`);
+    return undefined;
+  }
 
   return {
     proposalId,
@@ -234,6 +249,9 @@ function parseStoredProposal(value: unknown, index: number, warnings: string[]):
     ...(applyPlan !== undefined ? { applyPlan } : {}),
     createdAt,
     updatedAt,
+    ...(typeof appliedAt === 'string' ? { appliedAt } : {}),
+    ...(isStringArray(appliedChangedPaths) ? { appliedChangedPaths } : {}),
+    ...(typeof appliedSnapshotPath === 'string' ? { appliedSnapshotPath } : {}),
     ...(typeof rejectedReason === 'string' ? { rejectedReason } : {}),
   };
 }
@@ -367,6 +385,9 @@ export async function updateLearningProposalStatus(
   status: LearningProposalReviewStatus,
   options: {
     readonly rejectedReason?: string;
+    readonly appliedAt?: string;
+    readonly appliedChangedPaths?: readonly string[];
+    readonly appliedSnapshotPath?: string;
     readonly now?: () => string;
   } = {},
 ): Promise<StoredLearningProposal> {
@@ -385,6 +406,15 @@ export async function updateLearningProposalStatus(
     ...existing,
     status,
     updatedAt: now(),
+    ...(status === 'approved' && options.appliedAt !== undefined
+      ? { appliedAt: options.appliedAt }
+      : {}),
+    ...(status === 'approved' && options.appliedChangedPaths !== undefined
+      ? { appliedChangedPaths: options.appliedChangedPaths }
+      : {}),
+    ...(status === 'approved' && options.appliedSnapshotPath !== undefined
+      ? { appliedSnapshotPath: options.appliedSnapshotPath }
+      : {}),
     ...(status === 'rejected' && options.rejectedReason !== undefined
       ? { rejectedReason: options.rejectedReason }
       : { rejectedReason: undefined }),

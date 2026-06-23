@@ -5,8 +5,26 @@ import type {
   SkillLearningProposal,
 } from './types.js';
 
-const DEFAULT_CONFIDENCE = 0.5;
-const ACTIVE_SUGGESTION_CONFIDENCE_FLOOR = 0.3;
+const DEFAULT_CONFIDENCE_ENV = 'KODAX_LEARNING_DEFAULT_CONFIDENCE';
+const CONFIDENCE_FLOOR_ENV = 'KODAX_LEARNING_CONFIDENCE_FLOOR';
+const FALLBACK_DEFAULT_CONFIDENCE = 0.5;
+const FALLBACK_ACTIVE_SUGGESTION_CONFIDENCE_FLOOR = 0.3;
+
+function readConfidenceEnv(name: string, fallback: number): number {
+  const raw = process.env[name];
+  if (raw === undefined || raw.trim() === '') return fallback;
+  const parsed = Number(raw);
+  if (!Number.isFinite(parsed) || parsed < 0 || parsed > 1) return fallback;
+  return parsed;
+}
+
+function defaultConfidence(): number {
+  return readConfidenceEnv(DEFAULT_CONFIDENCE_ENV, FALLBACK_DEFAULT_CONFIDENCE);
+}
+
+function activeSuggestionConfidenceFloor(): number {
+  return readConfidenceEnv(CONFIDENCE_FLOOR_ENV, FALLBACK_ACTIVE_SUGGESTION_CONFIDENCE_FLOOR);
+}
 
 function discard(proposalId: string, reason: string): DiscardedLearningReport {
   return {
@@ -33,7 +51,7 @@ function skillProposal(
     trigger: candidate.trigger,
     changeSummary: candidate.changeSummary,
     sourceTraceIds: input.sourceRefs,
-    confidence: candidate.confidence ?? DEFAULT_CONFIDENCE,
+    confidence: candidate.confidence ?? defaultConfidence(),
   };
 }
 
@@ -46,7 +64,7 @@ export function triageProceduralLearning(
 
   const candidate = input.candidate;
   if ('confidence' in candidate && typeof candidate.confidence === 'number') {
-    if (candidate.confidence < ACTIVE_SUGGESTION_CONFIDENCE_FLOOR) {
+    if (candidate.confidence < activeSuggestionConfidenceFloor()) {
       return {
         destination: 'trace_only',
         proposalId: input.proposalId,

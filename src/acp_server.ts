@@ -34,6 +34,7 @@ import {
   isToolFileMutation,
   runKodaX,
   createExtensionRuntime,
+  discoverDefaultExtensions,
   registerConfiguredMcpCapabilityProvider,
   buildMcpReverseCapabilities,
   shutdownDefaultLspService,
@@ -51,6 +52,7 @@ import {
   isPathInsideProject,
   isToolCallAllowed,
   prepareRuntimeConfig,
+  KODAX_CONFIG_FILE,
 } from '@kodax-ai/repl';
 import {
   createBashPrefixExtractor,
@@ -206,6 +208,55 @@ function convertAcpMcpServers(
   return result;
 }
 
+function dedupeExtensionPaths(paths: string[]): string[] {
+  const result: string[] = [];
+  for (const value of paths) {
+    const normalized = value.trim();
+    if (normalized && !result.includes(normalized)) {
+      result.push(normalized);
+    }
+  }
+  return result;
+}
+
+function normalizeConfiguredExtensionPaths(value: unknown): string[] {
+  if (!Array.isArray(value)) {
+    return [];
+  }
+
+  return dedupeExtensionPaths(
+    value
+      .filter((entry): entry is string => typeof entry === 'string' && entry.trim().length > 0)
+      .map((entry) => path.isAbsolute(entry) ? entry : path.resolve(path.dirname(KODAX_CONFIG_FILE), entry)),
+  );
+}
+
+function excludeExtensionPaths(paths: string[], blocked: string[]): string[] {
+  return paths.filter((value) => !blocked.includes(value));
+}
+
+async function discoverAcpDefaultExtensions(): Promise<string[]> {
+  try {
+    return await discoverDefaultExtensions();
+  } catch (error) {
+    const message = error instanceof Error ? error.message : String(error);
+    // eslint-disable-next-line no-console
+    console.warn('[kodax:acp] Extension discovery failed: ' + message);
+    return [];
+  }
+}
+
+async function loadAcpExtensionGroups(
+  runtime: KodaXExtensionRuntime,
+  discoveredExtensions: string[],
+  configuredExtensions: string[],
+): Promise<void> {
+  const configured = dedupeExtensionPaths(configuredExtensions);
+  const discoveredOnly = excludeExtensionPaths(dedupeExtensionPaths(discoveredExtensions), configured);
+  await runtime.loadExtensions(discoveredOnly, { continueOnError: true, loadSource: 'discovery' });
+  await runtime.loadExtensions(configured, { continueOnError: true, loadSource: 'config' });
+}
+
 interface ToolPermissionDecision {
   allowed: boolean;
   override?: string;
@@ -345,6 +396,8 @@ export class KodaXAcpServer implements Agent {
    * sessions, mirroring the REPL's session-scoped pattern.
    */
   private readonly bashPrefixExtractor: BashPrefixExtractor;
+  private readonly configuredExtensions: string[];
+  private readonly discoveredExtensions: Promise<string[]>;
 
   private connection: AgentSideConnection | null = null;
   private readonly sessions = new Map<string, KodaXAcpSessionState>();
@@ -355,6 +408,7 @@ export class KodaXAcpServer implements Agent {
 
   constructor(options: KodaXAcpServerOptions = {}) {
     const config = prepareRuntimeConfig();
+    const configWithExtensions = config as typeof config & { extensions?: unknown };
     this.provider = options.provider ?? config.provider ?? KODAX_DEFAULT_PROVIDER;
     this.model = options.model;
     this.thinking = options.thinking ?? config.thinking ?? false;
@@ -368,6 +422,8 @@ export class KodaXAcpServer implements Agent {
     this.agentName = options.agentName ?? 'kodax-acp-server';
     this.agentVersion = options.agentVersion ?? '0.0.0';
     this.storage = options.storage ?? new FileSessionStorage();
+    this.configuredExtensions = normalizeConfiguredExtensionPaths(configWithExtensions.extensions);
+    this.discoveredExtensions = discoverAcpDefaultExtensions();
     this.events = new AcpEventEmitter({
       sinks: [
         ...(options.eventSinks ?? []),
@@ -385,27 +441,35 @@ export class KodaXAcpServer implements Agent {
       getModel: () => this.model ?? '',
     });
 
-    // Initialize MCP extension runtime (non-blocking).
+    // Initialize extension runtime (non-blocking). Default/config extensions
+    // share the same runtime as configured MCP so tool/capability surfaces stay
+    // consistent across CLI, ACP, and desktop-style hosts.
     const mcpServers = config.mcpServers;
     const hasMcp = mcpServers && Object.values(mcpServers).some(
       (s) => (s.connect ?? 'lazy') !== 'disabled',
     );
-    if (hasMcp) {
+    this.extensionRuntimeReady = (async () => {
+      const discoveredExtensions = await this.discoveredExtensions;
+      const configuredExtensions = this.configuredExtensions;
+      const hasExtensions = discoveredExtensions.length > 0 || configuredExtensions.length > 0;
+      if (!hasMcp && !hasExtensions) {
+        return;
+      }
+
       const rt = createExtensionRuntime({ config });
-      this.extensionRuntimeReady = registerConfiguredMcpCapabilityProvider(rt, mcpServers, {
-        reverse: buildMcpReverseCapabilities({ cwd: this.defaultCwd }),
-      })
-        .then(() => {
-          rt.activate();
-          this.extensionRuntime = rt;
-        })
-        .catch((error) => {
-          // MCP setup failure should not block the ACP server, but log it.
-          const message = error instanceof Error ? error.message : String(error);
-          // eslint-disable-next-line no-console
-          console.warn(`[kodax:acp] MCP initialization failed: ${message}`);
+      if (hasMcp) {
+        await registerConfiguredMcpCapabilityProvider(rt, mcpServers, {
+          reverse: buildMcpReverseCapabilities({ cwd: this.defaultCwd }),
         });
-    }
+      }
+      await loadAcpExtensionGroups(rt, discoveredExtensions, configuredExtensions);
+      rt.activate();
+      this.extensionRuntime = rt;
+    })().catch((error) => {
+      const message = error instanceof Error ? error.message : String(error);
+      // eslint-disable-next-line no-console
+      console.warn('[kodax:acp] Extension initialization failed: ' + message);
+    });
   }
 
   attach(
@@ -520,7 +584,7 @@ export class KodaXAcpServer implements Agent {
     };
 
     // If the client provides per-session MCP servers, create a dedicated
-    // extension runtime that merges them with the global config.
+    // runtime and still load the global extension package set into it.
     if (clientMcpServers.length > 0) {
       const converted = convertAcpMcpServers(clientMcpServers);
       const rt = createExtensionRuntime({});
@@ -531,6 +595,7 @@ export class KodaXAcpServer implements Agent {
         // eslint-disable-next-line no-console
         console.warn(`[kodax:acp] Per-session MCP init failed for ${sessionId}: ${msg}`);
       });
+      await loadAcpExtensionGroups(rt, await this.discoveredExtensions, this.configuredExtensions);
       rt.activate();
       session.extensionRuntime = rt;
     }

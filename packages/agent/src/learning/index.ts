@@ -45,6 +45,10 @@ export {
   MAX_SKILL_MD_BYTES,
   MAX_SKILL_SUPPORT_FILE_BYTES,
   applySkillMutationProposal,
+  resolveSkillSnapshotLocation,
+} from './skill-safe-apply.js';
+export type {
+  SkillSnapshotLocation,
 } from './skill-safe-apply.js';
 export {
   readLearningProposalStore,

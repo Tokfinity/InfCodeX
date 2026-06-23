@@ -594,6 +594,11 @@ export {
   mcpRootsFromWorkspace,
   type McpReverseWorkspace,
   registerOfficialSandboxExtension,
+  discoverDefaultExtensions,
+  discoverExtensionsInDirectory,
+  getDefaultExtensionDirectory,
+  isSupportedExtensionModulePath,
+  resolveExtensionEntrypoint,
 } from './extensions/index.js';
 
 // ============== Orchestration ==============
@@ -720,6 +725,7 @@ export {
 
 export {
   classifyResilienceError,
+  isSessionRecoveryCandidateError,
 } from './resilience/classifier.js';
 
 export {

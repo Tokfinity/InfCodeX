@@ -15,6 +15,7 @@ import {
   recordCompletedTurnLearning,
   recordProceduralLearning,
   recordSkillUsage,
+  resolveSkillSnapshotLocation,
   resolveSkillTrustLedger,
   resolveSkillUsageLedger,
   triageProceduralLearning,
@@ -43,6 +44,14 @@ const noConsumerImpact: SkillConsumerImpact = {
   promptReferences: [],
   action: 'none',
 };
+
+function restoreEnv(name: string, value: string | undefined): void {
+  if (value === undefined) {
+    delete process.env[name];
+    return;
+  }
+  process.env[name] = value;
+}
 
 describe('procedural learning triage', () => {
   it('discards interrupted turns before any durable proposal is created', () => {
@@ -86,6 +95,61 @@ describe('procedural learning triage', () => {
     if (result.destination === 'skill_patch') {
       expect(result.skillName).toBe('release-notes');
       expect(result.whyDurable).toContain('Three completed tasks');
+    }
+  });
+
+  it('uses env-configured confidence defaults for skill proposals', () => {
+    const previous = process.env.KODAX_LEARNING_DEFAULT_CONFIDENCE;
+    process.env.KODAX_LEARNING_DEFAULT_CONFIDENCE = '0.72';
+    try {
+      const result = triageProceduralLearning({
+        proposalId: 'p-skill-env-confidence',
+        origin: 'background_learning',
+        completedTurn: true,
+        sourceRefs: ['turn:env-confidence'],
+        candidate: {
+          kind: 'skill_patch',
+          skillName: 'release-notes',
+          whyDurable: 'The same release-note checklist was reused.',
+          trigger: 'When drafting release notes.',
+          changeSummary: 'Patch the checklist.',
+        },
+      });
+
+      expect(result.destination).toBe('skill_patch');
+      if (result.destination === 'skill_patch') {
+        expect(result.confidence).toBe(0.72);
+      }
+    } finally {
+      restoreEnv('KODAX_LEARNING_DEFAULT_CONFIDENCE', previous);
+    }
+  });
+
+  it('uses env-configured confidence floor for active suggestions', () => {
+    const previous = process.env.KODAX_LEARNING_CONFIDENCE_FLOOR;
+    process.env.KODAX_LEARNING_CONFIDENCE_FLOOR = '0.8';
+    try {
+      const result = triageProceduralLearning({
+        proposalId: 'p-skill-env-floor',
+        origin: 'background_learning',
+        completedTurn: true,
+        sourceRefs: ['turn:env-floor'],
+        candidate: {
+          kind: 'skill_patch',
+          skillName: 'release-notes',
+          whyDurable: 'The same release-note checklist was reused.',
+          trigger: 'When drafting release notes.',
+          changeSummary: 'Patch the checklist.',
+          confidence: 0.7,
+        },
+      });
+
+      expect(result.destination).toBe('trace_only');
+      if (result.destination === 'trace_only') {
+        expect(result.reason).toContain('confidence');
+      }
+    } finally {
+      restoreEnv('KODAX_LEARNING_CONFIDENCE_FLOOR', previous);
     }
   });
 
@@ -243,6 +307,35 @@ describe('skill mutation proposal apply path', () => {
     expect(applied.snapshotPath).toBeTruthy();
     expect(await readFile(join(skillRoot, 'SKILL.md'), 'utf8')).toBe('new skill');
     expect(await readFile(join(skillRoot, 'references', 'checklist.md'), 'utf8')).toBe('checklist');
+  });
+
+  it('snapshots single-file writes before applying approved changes', async () => {
+    const skillRoot = await createTempDir('kodax-learning-single-snapshot-');
+    const snapshotRoot = await createTempDir('kodax-learning-single-snapshot-root-');
+    await writeFile(join(skillRoot, 'SKILL.md'), 'old skill', 'utf8');
+
+    const applied = await applySkillMutationProposal({
+      proposalId: 'proposal-single-file',
+      skillRoot,
+      snapshotRoot,
+      approved: true,
+      changes: [
+        { kind: 'write', relativePath: 'SKILL.md', content: 'new skill' },
+      ],
+    });
+
+    expect(applied.snapshotPath).toBeTruthy();
+    if (applied.snapshotPath === undefined) {
+      throw new Error('test setup expected a snapshot path');
+    }
+    const location = await resolveSkillSnapshotLocation({
+      proposalId: 'proposal-single-file',
+      skillRoot,
+      snapshotRoot,
+    });
+    expect(applied.snapshotPath.startsWith(join(location.snapshotBase, location.proposalPrefix))).toBe(true);
+    expect(await readFile(join(applied.snapshotPath, 'SKILL.md'), 'utf8')).toBe('old skill');
+    expect(await readFile(join(skillRoot, 'SKILL.md'), 'utf8')).toBe('new skill');
   });
 
   it('rejects path traversal and unsupported support directories', async () => {
@@ -590,6 +683,44 @@ describe('learning proposal store', () => {
 
     expect(approved.status).toBe('approved');
     expect(approved.rejectedReason).toBeUndefined();
+  });
+
+  it('persists skill application metadata when a proposal is approved', async () => {
+    const dir = await createTempDir('kodax-learning-store-applied-');
+    const storePath = join(dir, 'proposals.json');
+    const proposal = triageProceduralLearning({
+      proposalId: 'p-applied',
+      origin: 'background_learning',
+      completedTurn: true,
+      sourceRefs: ['turn:applied'],
+      candidate: {
+        kind: 'skill_patch',
+        skillName: 'release-notes',
+        whyDurable: 'The same checklist was reused across completed sessions.',
+        trigger: 'When release notes are requested.',
+        changeSummary: 'Add the checklist.',
+      },
+    });
+    if (proposal.destination === 'discard' || proposal.destination === 'trace_only') {
+      throw new Error('test setup expected a reviewable proposal');
+    }
+
+    await upsertLearningProposal(storePath, proposal);
+    await updateLearningProposalStatus(storePath, 'p-applied', 'approved', {
+      appliedAt: '2026-06-21T00:02:00.000Z',
+      appliedChangedPaths: ['SKILL.md'],
+      appliedSnapshotPath: join(dir, 'snapshot'),
+      now: () => '2026-06-21T00:02:00.000Z',
+    });
+
+    const read = await readLearningProposalStore(storePath);
+    expect(read.warnings).toEqual([]);
+    expect(read.proposals[0]).toMatchObject({
+      status: 'approved',
+      appliedAt: '2026-06-21T00:02:00.000Z',
+      appliedChangedPaths: ['SKILL.md'],
+      appliedSnapshotPath: join(dir, 'snapshot'),
+    });
   });
 
   it('degrades corrupt stores to warnings without returning proposals', async () => {

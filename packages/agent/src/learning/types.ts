@@ -201,6 +201,9 @@ export interface StoredLearningProposal {
   readonly applyPlan?: StoredLearningApplyPlan;
   readonly createdAt: string;
   readonly updatedAt: string;
+  readonly appliedAt?: string;
+  readonly appliedChangedPaths?: readonly string[];
+  readonly appliedSnapshotPath?: string;
   readonly rejectedReason?: string;
 }
 

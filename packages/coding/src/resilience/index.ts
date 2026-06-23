@@ -37,6 +37,7 @@ export {
 // ============== Classifier ==============
 export {
   classifyResilienceError,
+  isSessionRecoveryCandidateError,
 } from './classifier.js';
 
 // ============== Stable Boundary ==============

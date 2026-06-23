@@ -75,7 +75,7 @@ export type ExtensionContributionSource =
   | ExtensionFileContributionSource
   | RuntimeContributionSource;
 
-export type ExtensionLoadSource = 'api' | 'cli' | 'config';
+export type ExtensionLoadSource = 'api' | 'cli' | 'config' | 'discovery';
 
 export interface LoadedExtensionDiagnostic {
   path: string;

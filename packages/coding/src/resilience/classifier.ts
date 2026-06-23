@@ -38,6 +38,10 @@ const OVERLOADED_PATTERNS = [
   /\boverloaded\b/i,
   /\bcapacity\b/i,
   /\bserver (error|busy)\b/i,
+  /\bprovider service error\b/i,
+  /\btry (again )?(a )?moment later\b/i,
+  /\b(api|http|provider|status( code)?)\b[^\n]{0,40}\b5(00|02|03|29)\b/i,
+  /\b5(00|02|03|29)\b[^\n]{0,40}\b(api|http|provider|server|status( code)?)\b/i,
   /\b503\b/,
   /\b502\b/,
   /\binternal server error\b/i,
@@ -142,6 +146,19 @@ const REASONING_CONTENT_REQUIRED_PATTERNS = [
   // "request signature mismatch").
   /thinking.{0,40}signature/i,
   /signature.{0,40}thinking/i,
+];
+
+const SESSION_HISTORY_REJECTED_PATTERNS = [
+  /\bcontext too long\b/i,
+  /\bmaximum context\b/i,
+  /\bcontext length\b/i,
+  /\bcontext window\b/i,
+  /\btoo many tokens\b/i,
+];
+
+const AUTH_OR_CONFIGURATION_PATTERNS = [
+  /\b(401|403)\b/,
+  /\b(auth|unauthorized|forbidden|api key|not configured|permission denied)\b/i,
 ];
 
 // ============== Classification ==============
@@ -314,6 +331,16 @@ export function classifyResilienceError(
   }
 
   // 10. Generic error — check for transient patterns
+  if (matchesAny(message, OVERLOADED_PATTERNS)) {
+    return {
+      errorClass: 'provider_overloaded',
+      failureStage: currentStage ?? 'before_first_delta',
+      retryable: true,
+      maxRetries: 3,
+      baseRetryDelay: 5_000,
+    };
+  }
+
   if (matchesAny(message, [...CONNECTION_PATTERNS, ...TIMEOUT_PATTERNS, ...STREAM_INCOMPLETE_PATTERNS])) {
     return {
       errorClass: 'connection_failure',
@@ -332,6 +359,22 @@ export function classifyResilienceError(
     maxRetries: 0,
     baseRetryDelay: 0,
   };
+}
+
+export function isSessionRecoveryCandidateError(error: Error, messageCount: number): boolean {
+  if (messageCount <= 0) {
+    return false;
+  }
+
+  const message = collectErrorText(error);
+  if (matchesAny(message, AUTH_OR_CONFIGURATION_PATTERNS)) {
+    return false;
+  }
+
+  const classified = classifyResilienceError(error);
+  return classified.errorClass === 'provider_overloaded'
+    || classified.errorClass === 'reasoning_content_required'
+    || matchesAny(message, SESSION_HISTORY_REJECTED_PATTERNS);
 }
 
 // ============== Helpers ==============

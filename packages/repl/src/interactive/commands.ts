@@ -68,6 +68,7 @@ import { memoryCommand } from '../commands/memory-command.js';
 import { goalCommand } from '../commands/goal-command.js';
 import { workflowCommand } from '../commands/workflow-command.js';
 import { newCommand } from '../commands/new-command.js';
+import { recoverCommand } from '../commands/recover-command.js';
 import { reviewCommand } from '../commands/review-command.js';
 import {
   printLearningPendingForFilter,
@@ -1832,6 +1833,7 @@ export const BUILTIN_COMMANDS: Command[] = [
   goalCommand,
   workflowCommand,
   newCommand,
+  recoverCommand,
   reviewCommand,
 ];
 
@@ -1839,7 +1841,7 @@ export const BUILTIN_COMMANDS: Command[] = [
 const COMMAND_CATEGORIES: Record<string, string[]> = {
   General: ['help', 'copy', 'exit', 'clear', 'compact', 'reload', 'extensions', 'status'],
   Permission: ['mode', 'auto'],
-  Session: ['new', 'save', 'load', 'sessions', 'history', 'delete'],
+  Session: ['new', 'recover', 'save', 'load', 'sessions', 'history', 'delete'],
   Settings: ['model', 'provider', 'thinking', 'reasoning', 'agent-mode', 'plan', 'repointel'],
   Skills: ['skill', 'learn'],
 };
