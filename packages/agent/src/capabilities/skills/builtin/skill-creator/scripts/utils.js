@@ -48,9 +48,12 @@ export async function loadKodaXSDK() {
   }
   errors.push(`relative SDK path not found: ${relSdkPath}`);
 
-  // Strategy 2: bare-name canonical (dev monorepo / rare edge-case fallback)
+  // Strategy 2: bare-name canonical (dev monorepo / rare edge-case fallback).
+  // Keep the specifier computed so Vite does not resolve the root package
+  // during test collection before the root dist entry exists.
   try {
-    _cachedSdk = await import('@kodax-ai/kodax');
+    const packageName = ['@kodax-ai', 'kodax'].join('/');
+    _cachedSdk = await import(packageName);
     return _cachedSdk;
   } catch (err) {
     errors.push(`bare-name @kodax-ai/kodax failed: ${err?.code ?? err?.message}`);

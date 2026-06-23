@@ -26,6 +26,7 @@ describe('FileSessionStorage', () => {
     process.env.HOME = tempHome;
     process.env.USERPROFILE = tempHome;
     process.env.KODAX_HOME = path.join(tempHome, '.kodax');
+    vi.doUnmock('./workspace-runtime.js');
     vi.resetModules();
   });
 
@@ -47,6 +48,8 @@ describe('FileSessionStorage', () => {
     } else {
       process.env.KODAX_HOME = previousKodaXHome;
     }
+
+    vi.doUnmock('./workspace-runtime.js');
 
     vi.resetModules();
     await rm(tempHome, { recursive: true, force: true });
