@@ -151,7 +151,12 @@ export async function toolBash(input: Record<string, unknown>, ctx: KodaXToolExe
       // The background job output is best-effort; the user can re-run if needed.
     });
 
-    const proc = spawn(command, [], { shell: true, windowsHide: true, cwd });
+    const proc = spawn(command, [], {
+      shell: true,
+      windowsHide: true,
+      cwd,
+      detached: process.platform !== 'win32',
+    });
     const unregisterManagedChild = registerManagedChildProcess(proc, {
       kind: 'bash-background',
       command,

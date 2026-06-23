@@ -52,6 +52,8 @@ describe('FileSessionStorage', () => {
     await rm(tempHome, { recursive: true, force: true });
   });
 
+  const testSessionsDir = (): string => path.join(tempHome, '.kodax', 'sessions');
+
   it('round-trips extension state and extension records through JSONL session storage', async () => {
     const gitRoot = path.resolve(KODAX_REPO_ROOT).replace(/\\/g, '/');
     vi.doMock('./workspace-runtime.js', async () => {
@@ -69,7 +71,7 @@ describe('FileSessionStorage', () => {
     });
 
     const { FileSessionStorage } = await import('./storage.js');
-    const storage = new FileSessionStorage();
+    const storage = new FileSessionStorage({ sessionsDir: testSessionsDir() });
     const runtimeInfo = {
       canonicalRepoRoot: gitRoot,
       workspaceRoot: gitRoot,
@@ -187,7 +189,7 @@ describe('FileSessionStorage', () => {
 
   it('does not collapse synthetic and real same-content messages during snapshot merge', async () => {
     const { FileSessionStorage } = await import('./storage.js');
-    const storage = new FileSessionStorage();
+    const storage = new FileSessionStorage({ sessionsDir: testSessionsDir() });
     const gitRoot = path.resolve(KODAX_REPO_ROOT).replace(/\\/g, '/');
     const realMessage = { role: 'user' as const, content: 'repeat' };
     const syntheticMessage = { role: 'user' as const, content: 'repeat', _synthetic: true };
@@ -250,7 +252,7 @@ describe('FileSessionStorage', () => {
     );
 
     const { FileSessionStorage } = await import('./storage.js');
-    const storage = new FileSessionStorage();
+    const storage = new FileSessionStorage({ sessionsDir: testSessionsDir() });
 
     await expect(storage.load('malformed-ui-history')).resolves.toMatchObject({
       uiHistory: [
@@ -288,7 +290,7 @@ describe('FileSessionStorage', () => {
     });
 
     const { FileSessionStorage } = await import('./storage.js');
-    const storage = new FileSessionStorage();
+    const storage = new FileSessionStorage({ sessionsDir: testSessionsDir() });
     const canonicalRepoRoot = 'C:/repo';
     const mainWorkspace = 'C:/repo/worktrees/main';
     const siblingWorkspace = 'C:/repo/worktrees/feature-runtime';
@@ -402,7 +404,7 @@ describe('FileSessionStorage', () => {
     });
 
     const { FileSessionStorage } = await import('./storage.js');
-    const storage = new FileSessionStorage();
+    const storage = new FileSessionStorage({ sessionsDir: testSessionsDir() });
 
     // Save a session as it appears on disk in the production
     // reproduction — no runtimeInfo (legacy sessions don't have it).
@@ -421,7 +423,7 @@ describe('FileSessionStorage', () => {
 
   it('supports branch switching, checkpoint labels, and forking without losing prior history', async () => {
     const { FileSessionStorage } = await import('./storage.js');
-    const storage = new FileSessionStorage();
+    const storage = new FileSessionStorage({ sessionsDir: testSessionsDir() });
     const gitRoot = path.resolve(KODAX_REPO_ROOT).replace(/\\/g, '/');
 
     await storage.save('session-tree', {
@@ -491,7 +493,7 @@ describe('FileSessionStorage', () => {
 
   it('persists compaction anchors and artifact ledgers through JSONL round-trips', async () => {
     const { FileSessionStorage } = await import('./storage.js');
-    const storage = new FileSessionStorage();
+    const storage = new FileSessionStorage({ sessionsDir: testSessionsDir() });
     const gitRoot = path.resolve(KODAX_REPO_ROOT).replace(/\\/g, '/');
 
     const baseLineage = createSessionLineage([
@@ -582,7 +584,7 @@ describe('FileSessionStorage', () => {
 
   it('hides managed-task worker sessions from default session listing and sorts by createdAt', async () => {
     const { FileSessionStorage } = await import('./storage.js');
-    const storage = new FileSessionStorage();
+    const storage = new FileSessionStorage({ sessionsDir: testSessionsDir() });
     const gitRoot = path.resolve(KODAX_REPO_ROOT).replace(/\\/g, '/');
 
     await storage.save('20260326_100000', {
@@ -649,7 +651,7 @@ describe('FileSessionStorage', () => {
 
   it('excludes .archive.jsonl and archived- prefixed files from the session list', async () => {
     const { FileSessionStorage } = await import('./storage.js');
-    const storage = new FileSessionStorage();
+    const storage = new FileSessionStorage({ sessionsDir: testSessionsDir() });
     const gitRoot = path.resolve(KODAX_REPO_ROOT).replace(/\\/g, '/');
 
     await storage.save('20260401_120000', {
@@ -682,7 +684,7 @@ describe('FileSessionStorage', () => {
 
   it('reports msgCount from the meta head only — ignores appended body lines (no full-file read)', async () => {
     const { FileSessionStorage } = await import('./storage.js');
-    const storage = new FileSessionStorage();
+    const storage = new FileSessionStorage({ sessionsDir: testSessionsDir() });
     const gitRoot = path.resolve(KODAX_REPO_ROOT).replace(/\\/g, '/');
 
     await storage.save('20260401_130000', {
@@ -707,7 +709,7 @@ describe('FileSessionStorage', () => {
 
   it('cleanupOldSessions removes files (and archives) older than the retention window, keeps recent', async () => {
     const { FileSessionStorage } = await import('./storage.js');
-    const storage = new FileSessionStorage();
+    const storage = new FileSessionStorage({ sessionsDir: testSessionsDir() });
     const gitRoot = path.resolve(KODAX_REPO_ROOT).replace(/\\/g, '/');
 
     await storage.save('20260101_000000', {
@@ -743,7 +745,7 @@ describe('FileSessionStorage', () => {
 
   it('cleanupOldSessions is a no-op when retention is disabled (0 / negative / NaN)', async () => {
     const { FileSessionStorage } = await import('./storage.js');
-    const storage = new FileSessionStorage();
+    const storage = new FileSessionStorage({ sessionsDir: testSessionsDir() });
     const gitRoot = path.resolve(KODAX_REPO_ROOT).replace(/\\/g, '/');
 
     await storage.save('20260101_010000', {
@@ -767,7 +769,7 @@ describe('FileSessionStorage', () => {
 
   it('appendSessionDelta round-trips correctly: append → load → data consistent', async () => {
     const { FileSessionStorage } = await import('./storage.js');
-    const storage = new FileSessionStorage();
+    const storage = new FileSessionStorage({ sessionsDir: testSessionsDir() });
     const gitRoot = tempHome.replace(/\\/g, '/');
 
     // First save to seed the file
@@ -815,7 +817,7 @@ describe('FileSessionStorage', () => {
 
   it('appendSessionDelta meta_update overwrites title but preserves extensionState from disk', async () => {
     const { FileSessionStorage } = await import('./storage.js');
-    const storage = new FileSessionStorage();
+    const storage = new FileSessionStorage({ sessionsDir: testSessionsDir() });
     const gitRoot = tempHome.replace(/\\/g, '/');
 
     // Save with extensionState
@@ -850,7 +852,7 @@ describe('FileSessionStorage', () => {
 
   it('appendSessionDelta full-merges when caller provides updated extensionState', async () => {
     const { FileSessionStorage } = await import('./storage.js');
-    const storage = new FileSessionStorage();
+    const storage = new FileSessionStorage({ sessionsDir: testSessionsDir() });
     const gitRoot = tempHome.replace(/\\/g, '/');
 
     await storage.save('session-extension-state-update', {
@@ -882,7 +884,7 @@ describe('FileSessionStorage', () => {
 
   it('appendSessionDelta full-merges when caller clears extensionRecords', async () => {
     const { FileSessionStorage } = await import('./storage.js');
-    const storage = new FileSessionStorage();
+    const storage = new FileSessionStorage({ sessionsDir: testSessionsDir() });
     const gitRoot = tempHome.replace(/\\/g, '/');
     const initialMessages = [{ role: 'user' as const, content: 'test' }];
 
@@ -923,7 +925,7 @@ describe('FileSessionStorage', () => {
 
   it('appendSessionDelta fallback preserves runtimeInfo and errorMetadata', async () => {
     const { FileSessionStorage } = await import('./storage.js');
-    const storage = new FileSessionStorage();
+    const storage = new FileSessionStorage({ sessionsDir: testSessionsDir() });
     const gitRoot = tempHome.replace(/\\/g, '/');
 
     // Save with runtimeInfo and errorMetadata
@@ -964,7 +966,7 @@ describe('FileSessionStorage', () => {
   it('appendSessionDelta fallback persists session tag into the initial meta line', async () => {
     const { FileSessionStorage } = await import('./storage.js');
     const { deriveProjectKeyFromRoot } = await import('./project-key.js');
-    const storage = new FileSessionStorage();
+    const storage = new FileSessionStorage({ sessionsDir: testSessionsDir() });
     const gitRoot = tempHome.replace(/\\/g, '/');
 
     await storage.appendSessionDelta('session-host-tag', {
@@ -991,7 +993,7 @@ describe('FileSessionStorage', () => {
 
   it('appendSessionDelta hot path preserves an existing tag when the partial payload omits it', async () => {
     const { FileSessionStorage } = await import('./storage.js');
-    const storage = new FileSessionStorage();
+    const storage = new FileSessionStorage({ sessionsDir: testSessionsDir() });
     const gitRoot = tempHome.replace(/\\/g, '/');
 
     const lineage1 = createSessionLineage([
@@ -1030,7 +1032,7 @@ describe('FileSessionStorage', () => {
   it('appendSessionDelta makes a newly provided tag visible to list by rewriting the initial meta line', async () => {
     const { FileSessionStorage } = await import('./storage.js');
     const { deriveProjectKeyFromRoot } = await import('./project-key.js');
-    const storage = new FileSessionStorage();
+    const storage = new FileSessionStorage({ sessionsDir: testSessionsDir() });
     const gitRoot = tempHome.replace(/\\/g, '/');
 
     const lineage1 = createSessionLineage([
@@ -1076,7 +1078,7 @@ describe('FileSessionStorage', () => {
 
   it('mixed path: append → rewind (cold save) → append → load consistent', async () => {
     const { FileSessionStorage } = await import('./storage.js');
-    const storage = new FileSessionStorage();
+    const storage = new FileSessionStorage({ sessionsDir: testSessionsDir() });
     const gitRoot = tempHome.replace(/\\/g, '/');
 
     // Seed
@@ -1144,7 +1146,7 @@ describe('FileSessionStorage', () => {
   it('FEATURE_219: writes sessions under a per-project directory (not flat) + project.json', async () => {
     const { FileSessionStorage } = await import('./storage.js');
     const { deriveProjectKeyFromRoot } = await import('./project-key.js');
-    const storage = new FileSessionStorage();
+    const storage = new FileSessionStorage({ sessionsDir: testSessionsDir() });
     const gitRoot = path.resolve(KODAX_REPO_ROOT).replace(/\\/g, '/');
 
     await storage.save('20260601_120000', {
@@ -1167,7 +1169,7 @@ describe('FileSessionStorage', () => {
     const { FileSessionStorage } = await import('./storage.js');
     const gitRoot = path.resolve(KODAX_REPO_ROOT).replace(/\\/g, '/');
 
-    await new FileSessionStorage().save('20260601_130000', {
+    await new FileSessionStorage({ sessionsDir: testSessionsDir() }).save('20260601_130000', {
       messages: [{ role: 'user', content: 'persisted' }],
       title: 'Cold Load',
       gitRoot,
@@ -1175,7 +1177,7 @@ describe('FileSessionStorage', () => {
     });
 
     // Fresh instance → empty sessionDirCache → must locate by bounded scan.
-    const cold = new FileSessionStorage();
+    const cold = new FileSessionStorage({ sessionsDir: testSessionsDir() });
     const loaded = await cold.load('20260601_130000');
     expect(loaded?.title).toBe('Cold Load');
     expect(loaded?.messages[0]).toEqual({ role: 'user', content: 'persisted' });
@@ -1197,7 +1199,7 @@ describe('FileSessionStorage', () => {
     const msg = JSON.stringify({ role: 'user', content: 'old flat session' });
     await writeFile(path.join(sessionsDir, '20260101_999999.jsonl'), `${meta}\n${msg}\n`, 'utf8');
 
-    const loaded = await new FileSessionStorage().load('20260101_999999');
+    const loaded = await new FileSessionStorage({ sessionsDir: testSessionsDir() }).load('20260101_999999');
     expect(loaded?.title).toBe('Legacy Flat');
   });
 
@@ -1214,7 +1216,7 @@ describe('FileSessionStorage', () => {
     });
     await writeFile(flatPath, `${meta}\n${JSON.stringify({ role: 'user', content: 'x' })}\n`, 'utf8');
 
-    const storage = new FileSessionStorage();
+    const storage = new FileSessionStorage({ sessionsDir: testSessionsDir() });
     const loaded = await storage.load('20260101_888888');
     await storage.save('20260101_888888', { ...loaded!, title: 'Migrated', gitRoot });
 
@@ -1239,7 +1241,7 @@ describe('FileSessionStorage', () => {
       await writeFile(path.join(sessionsDir, `${id}.jsonl`), `${meta}\n${JSON.stringify({ role: 'user', content: 'x' })}\n`, 'utf8');
     }
 
-    const storage = new FileSessionStorage();
+    const storage = new FileSessionStorage({ sessionsDir: testSessionsDir() });
     const listed = await storage.list(gitRoot); // first entry point → triggers migration
 
     const projectDir = path.join(sessionsDir, deriveProjectKeyFromRoot(gitRoot).key);
@@ -1252,7 +1254,7 @@ describe('FileSessionStorage', () => {
   it('FEATURE_219: archive() hides a session from the default list; includeArchived + unarchive restore it', async () => {
     const { FileSessionStorage } = await import('./storage.js');
     const { deriveProjectKeyFromRoot } = await import('./project-key.js');
-    const storage = new FileSessionStorage();
+    const storage = new FileSessionStorage({ sessionsDir: testSessionsDir() });
     const gitRoot = path.resolve(KODAX_REPO_ROOT).replace(/\\/g, '/');
 
     await storage.save('20260801_000000', {
