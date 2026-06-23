@@ -219,6 +219,15 @@ describe('FEATURE_198 — provider-capabilities loader', () => {
         contextWindow: 1_000_000,
         maxOutputTokens: 131_072,
       });
+      // 2026-06: GLM-5 / GLM-5.1 retired (auto-routed to GLM-5.2 upstream);
+      // catalogue is now GLM-5.2 / GLM-5 Turbo / GLM-4.7, default GLM-5.2.
+      expect(z.model).toBe('glm-5.2');
+      expect(z.models?.map((m) => m.id)).toEqual(['glm-5.2', 'glm-5-turbo', 'glm-4.7']);
+      expect(z.models?.find((m) => m.id === 'glm-4.7')).toEqual({
+        id: 'glm-4.7',
+        displayName: 'GLM-4.7',
+        contextWindow: 200_000,
+      });
     });
 
     it('ark-coding: per-model contextWindow overrides preserved', () => {

@@ -184,5 +184,10 @@ describe('provider registry', () => {
     expect(zhipuCoding.getEffectiveContextWindow('glm-5.2')).toBe(1_000_000);
     expect(zhipuCoding.getEffectiveMaxOutputTokens('glm-5.2')).toBe(131_072);
     expect(zhipuCoding.getEffectiveContextWindow('glm-5-turbo')).toBe(200_000);
+    // 2026-06: Zhipu Coding Plan now serves GLM-5.2 / GLM-5 Turbo / GLM-4.7
+    // on every tier; GLM-5 and GLM-5.1 are retired and auto-routed to
+    // GLM-5.2 server-side. GLM-4.7 inherits the 200K provider default.
+    expect(zhipuCoding.getAvailableModels()).toContain('glm-4.7');
+    expect(zhipuCoding.getEffectiveContextWindow('glm-4.7')).toBe(200_000);
   });
 });

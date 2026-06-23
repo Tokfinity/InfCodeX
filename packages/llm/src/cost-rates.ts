@@ -53,9 +53,11 @@ export const DEFAULT_COST_RATES: Readonly<Record<string, Readonly<Record<string,
     'glm-5-turbo': { inputPer1M: 0.01, outputPer1M: 0.03 },
   },
   'zhipu-coding': {
-    'glm-5': { inputPer1M: 0.05, outputPer1M: 0.1 },
-    'glm-5.1': { inputPer1M: 0.05, outputPer1M: 0.1 },
+    // 2026-06: GLM-5 / GLM-5.1 retired (auto-routed to GLM-5.2 upstream).
+    // Coding Plan now serves GLM-5.2 / GLM-5 Turbo / GLM-4.7.
+    'glm-5.2': { inputPer1M: 0.05, outputPer1M: 0.1 },
     'glm-5-turbo': { inputPer1M: 0.01, outputPer1M: 0.03 },
+    'glm-4.7': { inputPer1M: 0.01, outputPer1M: 0.03 },
   },
   'minimax-coding': {
     // 2026-06: official MiniMax Coding Plan endpoint retired the
