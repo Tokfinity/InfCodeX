@@ -1,24 +1,30 @@
 import { TransformStream } from 'node:stream/web';
+import { mkdir, mkdtemp, rm, writeFile } from 'node:fs/promises';
+import os from 'node:os';
 import path from 'node:path';
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
 import {
   ClientSideConnection,
   PROTOCOL_VERSION,
   ndJsonStream,
+  type McpServer,
   type RequestPermissionRequest,
   type RequestPermissionResponse,
   type SessionNotification,
 } from '@agentclientprotocol/sdk';
+import type { KodaXExtensionRuntime } from '@kodax-ai/coding';
 import type { AcpLogLevel } from '../src/acp_logger.js';
 import type { AcpEventSink, AcpRuntimeEvent } from '../src/acp_events.js';
 
 const {
   runKodaXMock,
   buildMcpReverseCapabilitiesMock,
+  discoverDefaultExtensionsMock,
   registerConfiguredMcpCapabilityProviderMock,
 } = vi.hoisted(() => ({
   runKodaXMock: vi.fn(),
   buildMcpReverseCapabilitiesMock: vi.fn(),
+  discoverDefaultExtensionsMock: vi.fn(async () => [] as string[]),
   registerConfiguredMcpCapabilityProviderMock: vi.fn(),
 }));
 
@@ -43,6 +49,7 @@ vi.mock('@kodax-ai/coding', async (importOriginal) => {
     ...actual,
     runKodaX: runKodaXMock,
     buildMcpReverseCapabilities: buildMcpReverseCapabilitiesMock,
+    discoverDefaultExtensions: discoverDefaultExtensionsMock,
     registerConfiguredMcpCapabilityProvider: registerConfiguredMcpCapabilityProviderMock,
     createBashPrefixExtractor: () => ({
       async extract(command: string) {
@@ -63,6 +70,11 @@ vi.mock('@kodax-ai/repl', async (importOriginal) => {
 });
 
 import { KodaXAcpServer } from '../src/acp_server.js';
+
+declare global {
+  // eslint-disable-next-line no-var
+  var __kodaxAcpExtensionActivations: string[] | undefined;
+}
 
 let stderrWriteSpy: ReturnType<typeof vi.spyOn>;
 const stderrLines: string[] = [];
@@ -85,6 +97,7 @@ async function createHarness(options: {
   sessionCwd?: string;
   logLevel?: AcpLogLevel;
   eventSinks?: AcpEventSink[];
+  mcpServers?: McpServer[];
 } = {}) {
   const requestStream = new TransformStream<Uint8Array, Uint8Array>();
   const responseStream = new TransformStream<Uint8Array, Uint8Array>();
@@ -140,7 +153,7 @@ async function createHarness(options: {
 
   const session = await client.newSession({
     cwd: options.sessionCwd ?? process.cwd(),
-    mcpServers: [],
+    mcpServers: options.mcpServers ?? [],
   });
 
   return {
@@ -165,6 +178,7 @@ describe('KodaXAcpServer', () => {
     buildMcpReverseCapabilitiesMock.mockImplementation((workspace: { cwd: string }) => ({
       listRoots: () => [{ uri: `mock://${workspace.cwd}`, name: 'mock' }],
     }));
+    discoverDefaultExtensionsMock.mockResolvedValue([]);
     registerConfiguredMcpCapabilityProviderMock.mockResolvedValue(undefined);
     stderrLines.length = 0;
     stderrWriteSpy = vi.spyOn(process.stderr, 'write').mockImplementation((chunk) => {
@@ -175,6 +189,7 @@ describe('KodaXAcpServer', () => {
 
   afterEach(() => {
     stderrWriteSpy.mockRestore();
+    delete globalThis.__kodaxAcpExtensionActivations;
   });
 
   it('streams assistant and tool events over ACP notifications', async () => {
@@ -233,6 +248,73 @@ describe('KodaXAcpServer', () => {
     });
 
     expect(prepareRuntimeConfigMock).toHaveBeenCalledTimes(1);
+  });
+
+  it('does not activate discovered extensions twice for sessions with client MCP servers', async () => {
+    const tempDir = await mkdtemp(path.join(os.tmpdir(), 'kodax-acp-ext-'));
+    const extensionDir = path.join(tempDir, 'pdf4agent');
+    const extensionPath = path.join(extensionDir, 'extension.mjs');
+    await mkdir(extensionDir, { recursive: true });
+    await writeFile(
+      extensionPath,
+      [
+        'export default function() {',
+        '  globalThis.__kodaxAcpExtensionActivations = globalThis.__kodaxAcpExtensionActivations ?? [];',
+        '  globalThis.__kodaxAcpExtensionActivations.push("activated");',
+        '}',
+      ].join('\n'),
+      'utf8',
+    );
+    discoverDefaultExtensionsMock.mockResolvedValue([extensionPath]);
+    registerConfiguredMcpCapabilityProviderMock.mockImplementationOnce(
+      async (runtime: KodaXExtensionRuntime) => {
+        runtime.registerCapabilityProvider({
+          id: 'mcp',
+          kinds: ['tool'],
+          search: async () => [{ id: 'session-mcp/tool:echo', kind: 'tool' }],
+          getPromptContext: async () => 'session MCP context',
+        });
+        return undefined;
+      },
+    );
+    runKodaXMock.mockImplementation(async (options) => {
+      const runtime = options.extensionRuntime;
+      expect(runtime).toBeDefined();
+      if (!runtime) {
+        throw new Error('Expected ACP prompt to receive extension runtime.');
+      }
+      expect(runtime.getDiagnostics().loadedExtensions).toEqual([
+        expect.objectContaining({ path: extensionPath, label: 'pdf4agent' }),
+      ]);
+      await expect(runtime.searchCapabilities('mcp', 'echo', { kind: 'tool' }))
+        .resolves
+        .toEqual([expect.objectContaining({ id: 'session-mcp/tool:echo' })]);
+      await expect(runtime.getCapabilityPromptContext('mcp'))
+        .resolves
+        .toContain('session MCP context');
+      return createResult();
+    });
+
+    try {
+      const harness = await createHarness({
+        mcpServers: [{
+          name: 'session-mcp',
+          command: process.execPath,
+          args: ['-e', ''],
+          env: [],
+        }],
+      });
+
+      expect(globalThis.__kodaxAcpExtensionActivations).toEqual(['activated']);
+      await harness.client.prompt({
+        sessionId: harness.sessionId,
+        prompt: [{ type: 'text', text: 'Use extension once' }],
+      });
+      expect(globalThis.__kodaxAcpExtensionActivations).toEqual(['activated']);
+      await harness.server.dispose();
+    } finally {
+      await rm(tempDir, { recursive: true, force: true });
+    }
   });
 
   it('bridges tool permission requests through ACP', async () => {
@@ -529,7 +611,7 @@ describe('KodaXAcpServer', () => {
     });
   });
 
-  it('uses the configured server cwd for global MCP reverse roots', () => {
+  it('uses the configured server cwd for global MCP reverse roots', async () => {
     const serverCwd = path.join(process.cwd(), 'configured-acp-root');
     const mcpServers = {
       local: {
@@ -547,10 +629,11 @@ describe('KodaXAcpServer', () => {
       mcpServers,
     });
 
-    new KodaXAcpServer({
+    const server = new KodaXAcpServer({
       cwd: serverCwd,
       logLevel: 'off',
     });
+    await new Promise<void>((resolve) => setTimeout(resolve, 0));
 
     expect(buildMcpReverseCapabilitiesMock).toHaveBeenCalledWith({
       cwd: path.resolve(serverCwd),
@@ -560,6 +643,7 @@ describe('KodaXAcpServer', () => {
       mcpServers,
       { reverse: expect.objectContaining({ listRoots: expect.any(Function) }) },
     );
+    await server.dispose();
   });
 
   it('fails closed when the ACP client cannot complete a permission request', async () => {
@@ -593,7 +677,10 @@ describe('KodaXAcpServer', () => {
     });
 
     const harness = await createHarness({ logLevel: 'error' });
-    vi.spyOn((harness.server as any).connection, 'sessionUpdate').mockRejectedValue(
+    const connection = (harness.server as unknown as {
+      connection: { sessionUpdate: (...args: unknown[]) => Promise<void> };
+    }).connection;
+    vi.spyOn(connection, 'sessionUpdate').mockRejectedValue(
       new Error('notification sink offline'),
     );
 

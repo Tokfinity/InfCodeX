@@ -6,6 +6,7 @@ import { listPluginSkillPaths } from '@kodax-ai/agent';
 import { executeTool } from '../tools/index.js';
 import type { KodaXToolExecutionContext } from '../types.js';
 import {
+  combineExtensionRuntimes,
   createExtensionRuntime,
   emitActiveExtensionEvent,
   getActiveExtensionRuntime,
@@ -437,6 +438,35 @@ describe('KodaXExtensionRuntime', () => {
     expect(runtime.listCapabilityProviders()).toEqual([]);
   });
 
+  it('combines extension runtimes with primary capability priority and deduped tool diagnostics', async () => {
+    const sessionRuntime = createExtensionRuntime();
+    const globalRuntime = createExtensionRuntime();
+    sessionRuntime.registerCapabilityProvider({
+      id: 'mcp',
+      kinds: ['tool'],
+      search: async () => [{ id: 'session/tool:echo', name: 'echo', kind: 'tool' }],
+      getPromptContext: async () => 'session MCP context',
+    });
+    globalRuntime.registerCapabilityProvider({
+      id: 'mcp',
+      kinds: ['tool'],
+      search: async () => [{ id: 'global/tool:echo', name: 'echo', kind: 'tool' }],
+      getPromptContext: async () => 'global MCP context',
+    });
+
+    const combined = combineExtensionRuntimes(sessionRuntime, globalRuntime);
+
+    await expect(combined.searchCapabilities('mcp', 'echo', { kind: 'tool', limit: 1 }))
+      .resolves
+      .toEqual([{ id: 'session/tool:echo', name: 'echo', kind: 'tool' }]);
+    await expect(combined.getCapabilityPromptContext('mcp'))
+      .resolves
+      .toBe('global MCP context\n\nsession MCP context');
+
+    const toolDiagnostics = combined.getDiagnostics().tools;
+    const toolKeys = toolDiagnostics.map((tool) => `${tool.name}:${tool.source.kind}:${tool.source.id}`);
+    expect(new Set(toolKeys).size).toBe(toolKeys.length);
+  });
   it('supports runtime-owned capability providers with prompt context and diagnostics metadata', async () => {
     const runtime = createExtensionRuntime();
     const refreshSpy = vi.fn(async () => undefined);

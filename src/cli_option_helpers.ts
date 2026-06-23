@@ -233,23 +233,6 @@ export function resolveCliModelSelection(
     : undefined;
 }
 
-export function mergeConfiguredExtensions(
-  cliExtensions: string[] = [],
-  configExtensions: string[] = [],
-): string[] {
-  const merged: string[] = [];
-
-  for (const value of [...configExtensions, ...cliExtensions]) {
-    const normalized = value.trim();
-    if (!normalized || merged.includes(normalized)) {
-      continue;
-    }
-    merged.push(normalized);
-  }
-
-  return merged;
-}
-
 export function parseOptionalNonNegativeInt(value: string | undefined): number | undefined {
   if (value === undefined) {
     return undefined;

@@ -33,11 +33,15 @@ import {
   type KodaXReasoningMode,
   isToolFileMutation,
   runKodaX,
+  combineExtensionRuntimes,
   createExtensionRuntime,
+  dedupeExtensionPathsByEntrypoint,
   discoverDefaultExtensions,
+  excludeExtensionPathsByEntrypoint,
   registerConfiguredMcpCapabilityProvider,
   buildMcpReverseCapabilities,
   shutdownDefaultLspService,
+  type CombinedExtensionRuntime,
   type KodaXExtensionRuntime,
 } from '@kodax-ai/coding';
 import {
@@ -153,6 +157,8 @@ export interface KodaXAcpServerOptions {
   storage?: FileSessionStorage;
 }
 
+type AcpPromptExtensionRuntime = KodaXExtensionRuntime | CombinedExtensionRuntime;
+
 interface KodaXAcpSessionState {
   sessionId: string;
   cwd: string;
@@ -161,8 +167,10 @@ interface KodaXAcpSessionState {
   alwaysAllowTools: string[];
   activeController: AbortController | null;
   contextTokenSnapshot?: KodaXContextTokenSnapshot;
-  /** Per-session extension runtime when client provides MCP servers. */
-  extensionRuntime?: KodaXExtensionRuntime;
+  /** Runtime view used for prompts when client provides per-session MCP servers. */
+  extensionRuntime?: AcpPromptExtensionRuntime;
+  /** Per-session MCP runtime owned by this session and disposed with it. */
+  ownedExtensionRuntime?: KodaXExtensionRuntime;
 }
 
 /** Convert ACP McpServer[] to KodaX flat server config. */
@@ -231,10 +239,6 @@ function normalizeConfiguredExtensionPaths(value: unknown): string[] {
   );
 }
 
-function excludeExtensionPaths(paths: string[], blocked: string[]): string[] {
-  return paths.filter((value) => !blocked.includes(value));
-}
-
 async function discoverAcpDefaultExtensions(): Promise<string[]> {
   try {
     return await discoverDefaultExtensions();
@@ -251,8 +255,11 @@ async function loadAcpExtensionGroups(
   discoveredExtensions: string[],
   configuredExtensions: string[],
 ): Promise<void> {
-  const configured = dedupeExtensionPaths(configuredExtensions);
-  const discoveredOnly = excludeExtensionPaths(dedupeExtensionPaths(discoveredExtensions), configured);
+  const configured = await dedupeExtensionPathsByEntrypoint(configuredExtensions);
+  const discoveredOnly = await excludeExtensionPathsByEntrypoint(
+    await dedupeExtensionPathsByEntrypoint(discoveredExtensions),
+    configured,
+  );
   await runtime.loadExtensions(discoveredOnly, { continueOnError: true, loadSource: 'discovery' });
   await runtime.loadExtensions(configured, { continueOnError: true, loadSource: 'config' });
 }
@@ -518,10 +525,11 @@ export class KodaXAcpServer implements Agent {
 
       const runtimes = new Set<KodaXExtensionRuntime>();
       for (const session of this.sessions.values()) {
-        if (session.extensionRuntime) {
-          runtimes.add(session.extensionRuntime);
-          session.extensionRuntime = undefined;
+        if (session.ownedExtensionRuntime) {
+          runtimes.add(session.ownedExtensionRuntime);
+          session.ownedExtensionRuntime = undefined;
         }
+        session.extensionRuntime = undefined;
       }
       this.sessions.clear();
       this.connection = null;
@@ -583,8 +591,10 @@ export class KodaXAcpServer implements Agent {
       activeController: null,
     };
 
-    // If the client provides per-session MCP servers, create a dedicated
-    // runtime and still load the global extension package set into it.
+    // If the client provides per-session MCP servers, keep that MCP runtime
+    // session-owned and compose it with the already-activated global runtime.
+    // Global extensions are not loaded again, so sidecar-style extensions stay
+    // single-instance in the ACP process.
     if (clientMcpServers.length > 0) {
       const converted = convertAcpMcpServers(clientMcpServers);
       const rt = createExtensionRuntime({});
@@ -593,11 +603,13 @@ export class KodaXAcpServer implements Agent {
       }).catch((error) => {
         const msg = error instanceof Error ? error.message : String(error);
         // eslint-disable-next-line no-console
-        console.warn(`[kodax:acp] Per-session MCP init failed for ${sessionId}: ${msg}`);
+        console.warn('[kodax:acp] Per-session MCP init failed for ' + sessionId + ': ' + msg);
       });
-      await loadAcpExtensionGroups(rt, await this.discoveredExtensions, this.configuredExtensions);
-      rt.activate();
-      session.extensionRuntime = rt;
+      await this.extensionRuntimeReady;
+      session.ownedExtensionRuntime = rt;
+      session.extensionRuntime = this.extensionRuntime
+        ? combineExtensionRuntimes(rt, this.extensionRuntime)
+        : rt;
     }
 
     this.sessions.set(sessionId, session);
@@ -1034,13 +1046,14 @@ export class KodaXAcpServer implements Agent {
         toolCall,
         options: permissionOptions,
       });
-    } catch {
+    } catch (error) {
       this.events.emit({
         type: 'tool_permission_resolved',
         sessionId: session.sessionId,
         tool: toolName,
         toolId: toolCall.toolCallId,
         outcome: 'request_failed_incomplete',
+        error: error instanceof Error ? error.message : String(error),
       });
       return {
         allowed: false,

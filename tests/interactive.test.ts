@@ -160,9 +160,11 @@ describe('BUILTIN_COMMANDS', () => {
     expect(sessions).toBeDefined();
   });
 
-  it('should have skills command', () => {
+  it('should expose only the singular skill command', () => {
+    const skill = BUILTIN_COMMANDS.find(c => c.name === 'skill');
     const skills = BUILTIN_COMMANDS.find(c => c.name === 'skills');
-    expect(skills).toBeDefined();
+    expect(skill).toBeDefined();
+    expect(skills).toBeUndefined();
   });
 });
 
@@ -889,7 +891,9 @@ describe('Config Loading and Saving', () => {
   afterEach(async () => {
     try {
       await fs.rm(TEST_CONFIG_FILE, { recursive: true, force: true });
-    } catch { }
+    } catch (error) {
+      void error;
+    }
   });
 
   it('should load empty config when file does not exist', async () => {

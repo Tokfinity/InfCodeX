@@ -1,5 +1,5 @@
 import path from 'path';
-import { access, readdir, stat } from 'fs/promises';
+import { access, readdir, realpath, stat } from 'fs/promises';
 import { constants } from 'fs';
 import { getAgentConfigHome } from '@kodax-ai/agent';
 
@@ -9,6 +9,23 @@ interface ExtensionDirectoryEntry {
   name: string;
   isFile: () => boolean;
   isDirectory: () => boolean;
+  isSymbolicLink: () => boolean;
+}
+
+export type ExtensionDiscoverySkipReason =
+  | 'unsupported_module'
+  | 'missing_entrypoint'
+  | 'unsupported_target';
+
+export interface SkippedExtensionDiscoveryEntry {
+  path: string;
+  reason: ExtensionDiscoverySkipReason;
+  message: string;
+}
+
+export interface ExtensionDiscoveryResult {
+  paths: string[];
+  skipped: SkippedExtensionDiscoveryEntry[];
 }
 
 const EXTENSION_ENTRY_FILENAMES = [
@@ -95,34 +112,166 @@ async function tryResolveDirectoryEntrypoint(directoryPath: string): Promise<str
   return undefined;
 }
 
-export async function discoverExtensionsInDirectory(directory: string): Promise<string[]> {
+async function tryResolveDiscoveredEntrypoint(candidate: string): Promise<string | undefined> {
+  try {
+    const candidateStat = await stat(candidate);
+    if (candidateStat.isFile()) {
+      return isSupportedExtensionModulePath(candidate)
+        ? path.resolve(candidate)
+        : undefined;
+    }
+    if (candidateStat.isDirectory()) {
+      return tryResolveDirectoryEntrypoint(candidate);
+    }
+    return undefined;
+  } catch (error) {
+    if (isMissingPathError(error)) {
+      return undefined;
+    }
+    throw error;
+  }
+}
+
+async function canonicalEntrypointIdentity(entrypoint: string): Promise<string> {
+  try {
+    return await realpath(entrypoint);
+  } catch (error) {
+    // If realpath cannot canonicalize the target, keep a deterministic path
+    // identity and let the later load step surface the actionable diagnostic.
+    void error;
+    return path.resolve(entrypoint);
+  }
+}
+
+async function getExtensionEntrypointIdentity(extensionPath: string): Promise<string> {
+  const normalized = extensionPath.trim();
+  try {
+    return await canonicalEntrypointIdentity(await resolveExtensionEntrypoint(normalized));
+  } catch (error) {
+    // Identity calculation must not consume load diagnostics; invalid paths
+    // still flow to KodaXExtensionRuntime.loadExtension and fail there.
+    void error;
+    return path.resolve(normalized);
+  }
+}
+
+export async function dedupeExtensionPathsByEntrypoint(paths: string[]): Promise<string[]> {
+  const result: string[] = [];
+  const seen = new Set<string>();
+  for (const value of paths) {
+    const normalized = value.trim();
+    if (!normalized) {
+      continue;
+    }
+    const identity = await getExtensionEntrypointIdentity(normalized);
+    if (seen.has(identity)) {
+      continue;
+    }
+    seen.add(identity);
+    result.push(normalized);
+  }
+  return result;
+}
+
+export async function excludeExtensionPathsByEntrypoint(
+  paths: string[],
+  blockedPaths: string[],
+): Promise<string[]> {
+  const blocked = new Set<string>();
+  for (const value of blockedPaths) {
+    const normalized = value.trim();
+    if (normalized) {
+      blocked.add(await getExtensionEntrypointIdentity(normalized));
+    }
+  }
+
+  const result: string[] = [];
+  const seen = new Set<string>();
+  for (const value of paths) {
+    const normalized = value.trim();
+    if (!normalized) {
+      continue;
+    }
+    const identity = await getExtensionEntrypointIdentity(normalized);
+    if (blocked.has(identity) || seen.has(identity)) {
+      continue;
+    }
+    seen.add(identity);
+    result.push(normalized);
+  }
+  return result;
+}
+
+function skippedEntry(
+  candidate: string,
+  reason: ExtensionDiscoverySkipReason,
+  message: string,
+): SkippedExtensionDiscoveryEntry {
+  return { path: candidate, reason, message };
+}
+
+export async function discoverExtensionsInDirectoryDetailed(
+  directory: string,
+): Promise<ExtensionDiscoveryResult> {
   const resolvedDirectory = path.resolve(directory);
   let entries: ExtensionDirectoryEntry[];
   try {
     entries = await readdir(resolvedDirectory, { withFileTypes: true }) as ExtensionDirectoryEntry[];
   } catch (error) {
     if (isMissingPathError(error)) {
-      return [];
+      return { paths: [], skipped: [] };
     }
     throw error;
   }
 
-  const discovered: string[] = [];
+  const paths: string[] = [];
+  const skipped: SkippedExtensionDiscoveryEntry[] = [];
   for (const entry of entries.sort((left, right) => left.name.localeCompare(right.name))) {
     const candidate = path.join(resolvedDirectory, entry.name);
-    if (entry.isFile() && isSupportedExtensionModulePath(candidate)) {
-      discovered.push(candidate);
+    if (entry.isFile()) {
+      if (isSupportedExtensionModulePath(candidate)) {
+        paths.push(candidate);
+      } else {
+        skipped.push(skippedEntry(
+          candidate,
+          'unsupported_module',
+          'File extension is not supported for KodaX runtime extensions.',
+        ));
+      }
       continue;
     }
     if (entry.isDirectory()) {
       const entrypoint = await tryResolveDirectoryEntrypoint(candidate);
       if (entrypoint) {
-        discovered.push(entrypoint);
+        paths.push(entrypoint);
+      } else {
+        skipped.push(skippedEntry(
+          candidate,
+          'missing_entrypoint',
+          `Directory does not contain one of: ${EXTENSION_ENTRY_FILENAMES.join(', ')}.`,
+        ));
+      }
+      continue;
+    }
+    if (entry.isSymbolicLink()) {
+      const entrypoint = await tryResolveDiscoveredEntrypoint(candidate);
+      if (entrypoint) {
+        paths.push(entrypoint);
+      } else {
+        skipped.push(skippedEntry(
+          candidate,
+          'unsupported_target',
+          'Symlink target is not a supported extension file or package directory.',
+        ));
       }
     }
   }
 
-  return discovered;
+  return { paths, skipped };
+}
+
+export async function discoverExtensionsInDirectory(directory: string): Promise<string[]> {
+  return (await discoverExtensionsInDirectoryDetailed(directory)).paths;
 }
 
 export async function discoverDefaultExtensions(): Promise<string[]> {

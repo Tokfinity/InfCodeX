@@ -203,6 +203,7 @@ function mapPermissionOutcomeToLogEntry(
     sessionId: event.sessionId,
     tool: event.tool,
     toolId: event.toolId,
+    error: event.error,
   };
 
   switch (event.outcome) {

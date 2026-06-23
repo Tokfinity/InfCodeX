@@ -96,7 +96,10 @@ import type { CompactionUpdate } from '@kodax-ai/agent';
 // circular imports. The concrete `KodaXExtensionRuntime` class implements
 // this contract plus ~40 internal methods that consumers do not reach
 // through Options / ToolExecutionContext fields.
-import type { ExtensionRuntimeContract } from './extensions/runtime-contract.js';
+import type {
+  CapabilityRuntimeContract,
+  ExtensionRuntimeContract,
+} from './extensions/runtime-contract.js';
 import type {
   FailureStage,
   ResilienceErrorClass,
@@ -1515,7 +1518,7 @@ export interface KodaXToolExecutionContext {
    */
   workflowWorktreeBaseDir?: string;
   /** Shared extension capability runtime used by retrieval-family tools. */
-  extensionRuntime?: ExtensionRuntimeContract;
+  extensionRuntime?: CapabilityRuntimeContract;
   /** Ask user a question interactively (select mode) - 交互式向用户提问 (Issue 069) */
   askUser?: (options: AskUserQuestionOptions) => Promise<string>;
   /** Ask user multiple independent questions sequentially - 多问题顺序提问 */

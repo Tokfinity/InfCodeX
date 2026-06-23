@@ -11,22 +11,22 @@
  * Class: 1
  *
  * Verified location: agent-runtime/tool-dispatch.ts (extracted from
- * agent.ts:1384-1392 + 1394-1428 — pre-FEATURE_100 baseline — during
+ * agent.ts:1384-1392 + 1394-1428 -pre-FEATURE_100 baseline -during
  * FEATURE_100 P2)
  *
  * Time-ordering constraint: AFTER local registry lookup fails; BEFORE
  * error propagation.
  *
  * Active here:
- *   1. **Allow-list gate** — only the seven read-only/network-fetch
+ *   1. **Allow-list gate** -only the seven read-only/network-fetch
  *      tools in `MCP_FALLBACK_ALLOWED_TOOLS` may fall back. Mutating
  *      tools (`write`, `edit`, `bash`) MUST never silently redirect.
- *   2. **Name-match gate** — capability `id` ends in `:<toolName>` OR
+ *   2. **Name-match gate** -capability `id` ends in `:<toolName>` OR
  *      capability `name` equals `toolName`; otherwise return undefined.
- *   3. **Result wrapping** — successful MCP fallback wraps content with
+ *   3. **Result wrapping** -successful MCP fallback wraps content with
  *      `[MCP Fallback via <id>]` marker so CAP-037 classifiers can
  *      distinguish it from a primary result.
- *   4. **Best-effort error swallow** — exceptions inside the MCP call
+ *   4. **Best-effort error swallow** -exceptions inside the MCP call
  *      return undefined (caller surfaces the original `[Tool Error]`).
  *
  * STATUS: ACTIVE since FEATURE_100 P2.
@@ -36,7 +36,7 @@ import { describe, expect, it } from 'vitest';
 
 import type { CapabilityResult } from '@kodax-ai/agent';
 import type { KodaXToolExecutionContext } from '../../types.js';
-import type { ExtensionRuntimeContract } from '../../extensions/runtime-contract.js';
+import type { CapabilityRuntimeContract } from '../../extensions/runtime-contract.js';
 import {
   MCP_FALLBACK_ALLOWED_TOOLS,
   tryMcpFallback,
@@ -52,7 +52,7 @@ function fakeRuntime(opts: {
   result?: CapabilityResult;
   searchThrows?: Error;
   executeThrows?: Error;
-}): ExtensionRuntimeContract {
+}): CapabilityRuntimeContract {
   return {
     searchCapabilities: async () => {
       if (opts.searchThrows) throw opts.searchThrows;
@@ -69,11 +69,11 @@ function fakeRuntime(opts: {
   };
 }
 
-function makeCtx(runtime: ExtensionRuntimeContract): KodaXToolExecutionContext {
+function makeCtx(runtime: CapabilityRuntimeContract): KodaXToolExecutionContext {
   return { backups: new Map(), extensionRuntime: runtime };
 }
 
-describe('CAP-025: tryMcpFallback — allow-list gate', () => {
+describe('CAP-025: tryMcpFallback -allow-list gate', () => {
   it('CAP-MCP-FALLBACK-ALLOWLIST-1: the seven allowed tool names are exactly read/grep/glob/web_search/web_fetch/code_search/semantic_lookup (parity guard)', () => {
     expect([...MCP_FALLBACK_ALLOWED_TOOLS].sort()).toEqual([
       'code_search',
@@ -86,9 +86,9 @@ describe('CAP-025: tryMcpFallback — allow-list gate', () => {
     ]);
   });
 
-  it('CAP-MCP-FALLBACK-ALLOWLIST-2: mutating tools (`write`, `edit`, `bash`) MUST return undefined without ever calling the runtime — silent redirect would bypass CAP-010 permission gate', async () => {
+  it('CAP-MCP-FALLBACK-ALLOWLIST-2: mutating tools (`write`, `edit`, `bash`) MUST return undefined without ever calling the runtime -silent redirect would bypass CAP-010 permission gate', async () => {
     let searchCalled = false;
-    const runtime: ExtensionRuntimeContract = {
+    const runtime: CapabilityRuntimeContract = {
       searchCapabilities: async () => {
         searchCalled = true;
         return [{ id: 'mcp:bash', name: 'bash' }];
@@ -107,7 +107,7 @@ describe('CAP-025: tryMcpFallback — allow-list gate', () => {
   });
 });
 
-describe('CAP-025: tryMcpFallback — name-match gate', () => {
+describe('CAP-025: tryMcpFallback -name-match gate', () => {
   it('CAP-MCP-FALLBACK-001: hit with `name === toolName` resolves and result is wrapped with [MCP Fallback via <id>] marker', async () => {
     const runtime = fakeRuntime({
       hits: [{ id: 'mcp-server-x:read', name: 'read' }],
@@ -127,19 +127,19 @@ describe('CAP-025: tryMcpFallback — name-match gate', () => {
     expect(result).toContain('[MCP Fallback via mcp-server:read]');
   });
 
-  it('CAP-MCP-FALLBACK-NAME-MISMATCH: hit whose name does NOT match AND whose id does not end in `:<toolName>` → undefined (name-mismatch guard)', async () => {
+  it('CAP-MCP-FALLBACK-NAME-MISMATCH: hit whose name does NOT match AND whose id does not end in `:<toolName>` ->undefined (name-mismatch guard)', async () => {
     const runtime = fakeRuntime({
       hits: [{ id: 'mcp-server:other-tool', name: 'other-tool' }],
     });
     expect(await tryMcpFallback('read', {}, makeCtx(runtime))).toBeUndefined();
   });
 
-  it('CAP-MCP-FALLBACK-EMPTY-HITS: zero hits → undefined', async () => {
+  it('CAP-MCP-FALLBACK-EMPTY-HITS: zero hits ->undefined', async () => {
     const runtime = fakeRuntime({ hits: [] });
     expect(await tryMcpFallback('read', {}, makeCtx(runtime))).toBeUndefined();
   });
 
-  it('CAP-MCP-FALLBACK-MISSING-ID: hit with no `id` field → undefined', async () => {
+  it('CAP-MCP-FALLBACK-MISSING-ID: hit with no `id` field ->undefined', async () => {
     const runtime = fakeRuntime({
       hits: [{ name: 'read' }],
     });
@@ -147,7 +147,7 @@ describe('CAP-025: tryMcpFallback — name-match gate', () => {
   });
 });
 
-describe('CAP-025: tryMcpFallback — result wrapping + error best-effort', () => {
+describe('CAP-025: tryMcpFallback -result wrapping + error best-effort', () => {
   it('CAP-MCP-FALLBACK-STRUCTURED: structuredContent is JSON-stringified when content is not a string', async () => {
     const runtime = fakeRuntime({
       hits: [{ id: 'mcp:read', name: 'read' }],
@@ -158,12 +158,12 @@ describe('CAP-025: tryMcpFallback — result wrapping + error best-effort', () =
     expect(result).toContain('"lines": 42');
   });
 
-  it('CAP-MCP-FALLBACK-SEARCH-ERROR: searchCapabilities throws → undefined (best-effort, original [Tool Error] surfaces)', async () => {
+  it('CAP-MCP-FALLBACK-SEARCH-ERROR: searchCapabilities throws ->undefined (best-effort, original [Tool Error] surfaces)', async () => {
     const runtime = fakeRuntime({ searchThrows: new Error('mcp connection lost') });
     expect(await tryMcpFallback('read', {}, makeCtx(runtime))).toBeUndefined();
   });
 
-  it('CAP-MCP-FALLBACK-EXEC-ERROR: executeCapability throws → undefined', async () => {
+  it('CAP-MCP-FALLBACK-EXEC-ERROR: executeCapability throws ->undefined', async () => {
     const runtime = fakeRuntime({
       hits: [{ id: 'mcp:read', name: 'read' }],
       executeThrows: new Error('mcp execute failed'),

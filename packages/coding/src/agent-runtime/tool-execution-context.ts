@@ -36,7 +36,7 @@ import type {
   KodaXOptions,
   KodaXToolExecutionContext,
 } from '../types.js';
-import type { ExtensionRuntimeContract } from '../extensions/runtime-contract.js';
+import type { CapabilityRuntimeContract } from '../extensions/runtime-contract.js';
 import { mergeManagedProtocolPayload } from '../managed-protocol.js';
 import { resolveExecutionCwd } from '../runtime-paths.js';
 import { getDefaultLspService } from '../lsp/service.js';
@@ -44,14 +44,10 @@ import { getDefaultLspService } from '../lsp/service.js';
 export interface ToolExecutionContextInput {
   readonly options: KodaXOptions;
   /**
-   * Extension runtime to bind onto the tool ctx. Typed against the
-   * interface (`ExtensionRuntimeContract`) rather than the concrete
-   * `KodaXExtensionRuntime` class so AMA — which receives the runtime
-   * via `options.extensionRuntime` (interface-typed) — can call this
-   * helper without an unsafe cast. SA passes the concrete class
-   * unchanged (it implements the interface).
+   * Capability runtime to bind onto the tool ctx. Tool execution only needs
+   * capability lookup methods, not the extension lifecycle surface.
    */
-  readonly runtime: ExtensionRuntimeContract | undefined;
+  readonly runtime: CapabilityRuntimeContract | undefined;
   /**
    * Mutable wrapper for the accumulated managed-protocol payload.
    * The `emitManagedProtocol` closure inside the constructed context

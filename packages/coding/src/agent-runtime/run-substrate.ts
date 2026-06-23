@@ -187,6 +187,7 @@ import {
   settleExtensionTurn,
 } from './middleware/extension-queue.js';
 import {
+  bindActiveExtensionExecutionRuntime,
   emitActiveExtensionEvent,
   getActiveExtensionRuntime,
   setActiveExtensionRuntime,
@@ -362,19 +363,20 @@ export async function runSubstrate(
   prompt: string
 ): Promise<KodaXResult> {
   const previousActiveRuntime = getActiveExtensionRuntime();
-  // FEATURE_093 (v0.7.24): `options.extensionRuntime` is typed as the narrow
-  // `ExtensionRuntimeContract` in `types.ts` to break the types↔runtime
-  // cycle, but agent internals consume the full class surface. Cast here at
-  // the single entry point rather than at every call site.
-  const runtime = (options.extensionRuntime as KodaXExtensionRuntime | undefined) ?? previousActiveRuntime;
-  if (runtime && runtime !== previousActiveRuntime) {
-    setActiveExtensionRuntime(runtime);
+  const runtime = options.extensionRuntime ?? previousActiveRuntime;
+  const activeRegistryRuntime = options.extensionRuntime instanceof KodaXExtensionRuntime
+    ? options.extensionRuntime
+    : undefined;
+  const didSetActiveRuntime = !!activeRegistryRuntime && activeRegistryRuntime !== previousActiveRuntime;
+  if (didSetActiveRuntime && activeRegistryRuntime) {
+    setActiveExtensionRuntime(activeRegistryRuntime);
   }
+  const releaseActiveExecutionRuntime = bindActiveExtensionExecutionRuntime(runtime);
   let releaseRuntimeBinding: (() => void) | undefined;
   try {
   const maxIter = options.maxIter ?? 200;
   const events = options.events ?? {};
-  const runtimeDefaults = runtime?.getDefaults();
+  const runtimeDefaults = runtime?.getDefaults?.();
 
   // FEATURE_100 P3.6b/d/e — ten per-loop counters/latches/accumulators
   // consolidated into one mutable accumulator. The substrate executor
@@ -506,9 +508,12 @@ export async function runSubstrate(
       runtimeSessionState.thinkingLevel = mode;
     },
   });
-  releaseRuntimeBinding = runtime?.bindController(
+  const releaseRuntimeBindingCandidate = runtime?.bindController?.(
     createExtensionRuntimeSessionController(runtimeSessionState),
   );
+  releaseRuntimeBinding = typeof releaseRuntimeBindingCandidate === 'function'
+    ? releaseRuntimeBindingCandidate
+    : undefined;
 
   const autoRepoMode = resolveKodaXAutoRepoMode(options.context?.repoIntelligenceMode);
 
@@ -532,7 +537,7 @@ export async function runSubstrate(
         }).catch(() => null)
       : Promise.resolve(null);
   const [, repoRoutingSignals] = await Promise.all([
-    runtime?.hydrateSession(sessionId),
+    runtime?.hydrateSession?.(sessionId),
     routingSignalsPromise,
   ]);
   emitRepoIntelligenceTrace(
@@ -1563,7 +1568,8 @@ export async function runSubstrate(
   });
   } finally {
     releaseRuntimeBinding?.();
-    if (options.extensionRuntime && (options.extensionRuntime as KodaXExtensionRuntime) !== previousActiveRuntime) {
+    releaseActiveExecutionRuntime();
+    if (didSetActiveRuntime) {
       setActiveExtensionRuntime(previousActiveRuntime);
     }
   }

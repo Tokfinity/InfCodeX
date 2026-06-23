@@ -28,7 +28,9 @@ export type {
 } from './types.js';
 
 export {
+  CombinedExtensionRuntime,
   KodaXExtensionRuntime,
+  combineExtensionRuntimes,
   createExtensionRuntime,
   setActiveExtensionRuntime,
   getActiveExtensionRuntime,
@@ -63,9 +65,23 @@ export { exec, webhook } from './helpers.js';
 export type { ExecOptions, ExecResult, WebhookOptions, WebhookResult } from './helpers.js';
 
 export {
+  dedupeExtensionPathsByEntrypoint,
   discoverDefaultExtensions,
   discoverExtensionsInDirectory,
+  discoverExtensionsInDirectoryDetailed,
+  excludeExtensionPathsByEntrypoint,
   getDefaultExtensionDirectory,
   isSupportedExtensionModulePath,
   resolveExtensionEntrypoint,
 } from './discovery.js';
+export type {
+  ExtensionDiscoveryResult,
+  ExtensionDiscoverySkipReason,
+  SkippedExtensionDiscoveryEntry,
+} from './discovery.js';
+export type {
+  BoundExtensionRuntimeController,
+  CapabilityRuntimeContract,
+  ExtensionRuntimeContract,
+  RuntimeDefaultsSnapshot,
+} from './runtime-contract.js';

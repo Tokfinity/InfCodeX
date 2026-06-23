@@ -2,7 +2,11 @@ import path from 'path';
 import { pathToFileURL } from 'url';
 import type { KodaXMessage, KodaXReasoningMode } from '@kodax-ai/llm';
 import { exec as extensionExec, webhook as extensionWebhook } from './helpers.js';
-import { isSupportedExtensionModulePath, resolveExtensionEntrypoint } from './discovery.js';
+import {
+  dedupeExtensionPathsByEntrypoint,
+  isSupportedExtensionModulePath,
+  resolveExtensionEntrypoint,
+} from './discovery.js';
 import {
   registerModelProvider,
 } from '@kodax-ai/llm';
@@ -82,33 +86,6 @@ function getExtensionLabel(entryPath: string): string {
     : basename;
 }
 
-interface RuntimeDefaultsSnapshot {
-  activeTools?: string[];
-  modelSelection: ExtensionModelSelection;
-  thinkingLevel?: KodaXReasoningMode;
-}
-
-interface BoundExtensionRuntimeController {
-  queueUserMessage(message: string | KodaXMessage): void;
-  getSessionState<T = KodaXJsonValue>(extensionId: string, key: string): T | undefined;
-  setSessionState(extensionId: string, key: string, value: KodaXJsonValue | undefined): void;
-  getSessionStateSnapshot(extensionId: string): Record<string, KodaXJsonValue>;
-  appendSessionRecord(
-    extensionId: string,
-    type: string,
-    data?: KodaXJsonValue,
-    options?: { dedupeKey?: string },
-  ): KodaXExtensionSessionRecord;
-  listSessionRecords(extensionId: string, type?: string): KodaXExtensionSessionRecord[];
-  clearSessionRecords(extensionId: string, type?: string): number;
-  getActiveTools(): string[];
-  setActiveTools(toolNames: string[]): void;
-  getModelSelection(): ExtensionModelSelection;
-  setModelSelection(next: ExtensionModelSelection): void;
-  getThinkingLevel(): KodaXReasoningMode | undefined;
-  setThinkingLevel(level: KodaXReasoningMode): void;
-}
-
 interface ExtensionLoadOptions {
   continueOnError?: boolean;
   loadSource?: ExtensionLoadSource;
@@ -116,6 +93,26 @@ interface ExtensionLoadOptions {
 }
 
 let activeExtensionRuntime: KodaXExtensionRuntime | null = null;
+let activeExtensionExecutionRuntime: ActiveExtensionExecutionRuntime | null = null;
+
+interface ActiveExtensionExecutionRuntime {
+  emit<TEvent extends keyof ExtensionEventMap>(
+    event: TEvent,
+    payload: ExtensionEventMap[TEvent],
+  ): Promise<void>;
+  runHook<THook extends keyof ExtensionHookMap>(
+    hook: THook,
+    payload: Parameters<ExtensionHookMap[THook]>[0],
+  ): Promise<Awaited<ReturnType<ExtensionHookMap[THook]>> | undefined>;
+}
+
+function isActiveExtensionExecutionRuntime(
+  runtime: unknown,
+): runtime is ActiveExtensionExecutionRuntime {
+  if (typeof runtime !== 'object' || runtime === null) return false;
+  const candidate = runtime as { emit?: unknown; runHook?: unknown };
+  return typeof candidate.emit === 'function' && typeof candidate.runHook === 'function';
+}
 
 function dedupeStrings(values: string[]): string[] {
   const result: string[] = [];
@@ -174,7 +171,11 @@ function isJsonValue(value: unknown): value is KodaXJsonValue {
   return Object.values(value).every(isJsonValue);
 }
 
-import type { ExtensionRuntimeContract } from './runtime-contract.js';
+import type {
+  BoundExtensionRuntimeController,
+  ExtensionRuntimeContract,
+  RuntimeDefaultsSnapshot,
+} from './runtime-contract.js';
 
 export class KodaXExtensionRuntime implements ExtensionRuntimeContract {
   private readonly capabilityProviders = new Map<string, RuntimeRecord<CapabilityProvider>[]>();
@@ -242,10 +243,14 @@ export class KodaXExtensionRuntime implements ExtensionRuntimeContract {
     if (activeExtensionRuntime === this) {
       activeExtensionRuntime = null;
     }
+    if (activeExtensionExecutionRuntime === this) {
+      activeExtensionExecutionRuntime = null;
+    }
   }
 
   async loadExtensions(paths: string[], options: ExtensionLoadOptions = {}): Promise<void> {
-    for (const extensionPath of paths) {
+    const extensionPaths = await dedupeExtensionPathsByEntrypoint(paths);
+    for (const extensionPath of extensionPaths) {
       try {
         await this.loadExtension(extensionPath, {
           loadSource: options.loadSource,
@@ -1281,6 +1286,228 @@ export class KodaXExtensionRuntime implements ExtensionRuntimeContract {
   }
 }
 
+export class CombinedExtensionRuntime implements ExtensionRuntimeContract {
+  constructor(
+    private readonly primary: KodaXExtensionRuntime,
+    private readonly secondary: KodaXExtensionRuntime,
+  ) {}
+
+  getDefaults(): RuntimeDefaultsSnapshot {
+    const primary = this.primary.getDefaults();
+    const secondary = this.secondary.getDefaults();
+    return {
+      activeTools: primary.activeTools ?? secondary.activeTools,
+      modelSelection: {
+        ...secondary.modelSelection,
+        ...primary.modelSelection,
+      },
+      thinkingLevel: primary.thinkingLevel ?? secondary.thinkingLevel,
+    };
+  }
+
+  bindController(controller: BoundExtensionRuntimeController): () => void {
+    const releases = [
+      this.secondary.bindController(controller),
+      this.primary.bindController(controller),
+    ];
+    return () => {
+      for (const release of releases.reverse()) {
+        release();
+      }
+    };
+  }
+
+  async hydrateSession(sessionId: string): Promise<void> {
+    await this.secondary.hydrateSession(sessionId);
+    await this.primary.hydrateSession(sessionId);
+  }
+
+  async runHook<THook extends keyof ExtensionHookMap>(
+    hook: THook,
+    payload: Parameters<ExtensionHookMap[THook]>[0],
+  ): Promise<Awaited<ReturnType<ExtensionHookMap[THook]>> | undefined> {
+    const secondaryResult = await this.secondary.runHook(hook, payload);
+    if (secondaryResult !== undefined) {
+      return secondaryResult;
+    }
+    return this.primary.runHook(hook, payload);
+  }
+
+  async emit<TEvent extends keyof ExtensionEventMap>(
+    event: TEvent,
+    payload: ExtensionEventMap[TEvent],
+  ): Promise<void> {
+    await this.secondary.emit(event, payload);
+    await this.primary.emit(event, payload);
+  }
+
+  async searchCapabilities(
+    providerId: string,
+    query: string,
+    options: Parameters<KodaXExtensionRuntime['searchCapabilities']>[2] = {},
+  ): Promise<unknown[]> {
+    const results: unknown[] = [];
+    let firstError: unknown;
+    for (const runtime of [this.primary, this.secondary]) {
+      try {
+        results.push(...await runtime.searchCapabilities(providerId, query, options));
+      } catch (error) {
+        if (!this.shouldTryNextCapabilityRuntime(error, providerId)) {
+          throw error;
+        }
+        firstError ??= error;
+      }
+    }
+    if (results.length === 0 && firstError) {
+      throw firstError;
+    }
+    return typeof options.limit === 'number'
+      ? results.slice(0, options.limit)
+      : results;
+  }
+
+  describeCapability(
+    providerId: string,
+    capabilityId: string,
+  ): ReturnType<KodaXExtensionRuntime['describeCapability']> {
+    return this.firstCapabilityResult(providerId, [
+      () => this.primary.describeCapability(providerId, capabilityId),
+      () => this.secondary.describeCapability(providerId, capabilityId),
+    ]);
+  }
+
+  executeCapability(
+    providerId: string,
+    capabilityId: string,
+    input: Record<string, unknown>,
+  ): ReturnType<KodaXExtensionRuntime['executeCapability']> {
+    return this.firstCapabilityResult(providerId, [
+      () => this.primary.executeCapability(providerId, capabilityId, input),
+      () => this.secondary.executeCapability(providerId, capabilityId, input),
+    ]);
+  }
+
+  readCapability(
+    providerId: string,
+    capabilityId: string,
+    options: Record<string, unknown> = {},
+  ): ReturnType<KodaXExtensionRuntime['readCapability']> {
+    return this.firstCapabilityResult(providerId, [
+      () => this.primary.readCapability(providerId, capabilityId, options),
+      () => this.secondary.readCapability(providerId, capabilityId, options),
+    ]);
+  }
+
+  getCapabilityPrompt(
+    providerId: string,
+    capabilityId: string,
+    args: Record<string, unknown> = {},
+  ): ReturnType<KodaXExtensionRuntime['getCapabilityPrompt']> {
+    return this.firstCapabilityResult(providerId, [
+      () => this.primary.getCapabilityPrompt(providerId, capabilityId, args),
+      () => this.secondary.getCapabilityPrompt(providerId, capabilityId, args),
+    ]);
+  }
+
+  async getCapabilityPromptContext(providerId: string): Promise<string | undefined> {
+    const contexts = await Promise.all([
+      this.secondary.getCapabilityPromptContext(providerId),
+      this.primary.getCapabilityPromptContext(providerId),
+    ]);
+    const content = contexts
+      .filter((value): value is string => typeof value === 'string' && value.trim().length > 0)
+      .join('\n\n');
+    return content || undefined;
+  }
+
+  async refreshCapabilityProviders(providerId?: string): Promise<void> {
+    let refreshed = false;
+    let firstError: unknown;
+    for (const runtime of [this.primary, this.secondary]) {
+      try {
+        await runtime.refreshCapabilityProviders(providerId);
+        refreshed = true;
+      } catch (error) {
+        firstError ??= error;
+        if (!providerId || !this.shouldTryNextCapabilityRuntime(error, providerId)) {
+          throw error;
+        }
+      }
+    }
+    if (!refreshed && firstError) {
+      throw firstError;
+    }
+  }
+
+  getDiagnostics(): ExtensionRuntimeDiagnostics {
+    const primary = this.primary.getDiagnostics();
+    const secondary = this.secondary.getDiagnostics();
+    return {
+      loadedExtensions: [...secondary.loadedExtensions, ...primary.loadedExtensions]
+        .sort((left, right) => left.path.localeCompare(right.path)),
+      capabilityProviders: [...secondary.capabilityProviders, ...primary.capabilityProviders]
+        .sort((left, right) => left.id.localeCompare(right.id)),
+      commands: [...secondary.commands, ...primary.commands]
+        .sort((left, right) => left.name.localeCompare(right.name)),
+      tools: this.dedupeToolDiagnostics([...secondary.tools, ...primary.tools]),
+      hooks: [...secondary.hooks, ...primary.hooks]
+        .sort((left, right) => left.hook.localeCompare(right.hook) || left.order - right.order),
+      failures: [...secondary.failures, ...primary.failures],
+      defaults: this.getDefaults(),
+    };
+  }
+
+  private async firstCapabilityResult<T>(
+    providerId: string,
+    calls: Array<() => Promise<T>>,
+  ): Promise<T> {
+    let firstError: unknown;
+    for (const call of calls) {
+      try {
+        return await call();
+      } catch (error) {
+        firstError ??= error;
+        if (!this.shouldTryNextCapabilityRuntime(error, providerId)) {
+          throw error;
+        }
+      }
+    }
+    throw firstError;
+  }
+
+  private shouldTryNextCapabilityRuntime(error: unknown, providerId: string): boolean {
+    if (!(error instanceof Error)) {
+      return false;
+    }
+    return error.message === 'Unknown capability provider: ' + providerId
+      || error.message.startsWith('Capability provider "' + providerId + '" does not implement ')
+      || (providerId === 'mcp' && error.message.startsWith('Unknown MCP server:'));
+  }
+
+  private dedupeToolDiagnostics(
+    tools: ExtensionRuntimeDiagnostics['tools'],
+  ): ExtensionRuntimeDiagnostics['tools'] {
+    const seen = new Set<string>();
+    const result: ExtensionRuntimeDiagnostics['tools'] = [];
+    for (const tool of tools) {
+      const key = `${tool.name}\0${tool.source.kind}\0${tool.source.id}`;
+      if (seen.has(key)) {
+        continue;
+      }
+      seen.add(key);
+      result.push(tool);
+    }
+    return result.sort((left, right) => left.name.localeCompare(right.name));
+  }
+}
+
+export function combineExtensionRuntimes(
+  primary: KodaXExtensionRuntime,
+  secondary: KodaXExtensionRuntime,
+): CombinedExtensionRuntime {
+  return new CombinedExtensionRuntime(primary, secondary);
+}
+
 export function createExtensionRuntime(
   options: { config?: Readonly<Record<string, unknown>> } = {},
 ): KodaXExtensionRuntime {
@@ -1297,16 +1524,26 @@ export function getActiveExtensionRuntime(): KodaXExtensionRuntime | null {
   return activeExtensionRuntime;
 }
 
+export function bindActiveExtensionExecutionRuntime(runtime: unknown): () => void {
+  const previous = activeExtensionExecutionRuntime;
+  activeExtensionExecutionRuntime = isActiveExtensionExecutionRuntime(runtime)
+    ? runtime
+    : null;
+  return () => {
+    activeExtensionExecutionRuntime = previous;
+  };
+}
+
 export async function emitActiveExtensionEvent<TEvent extends keyof ExtensionEventMap>(
   event: TEvent,
   payload: ExtensionEventMap[TEvent],
 ): Promise<void> {
-  await activeExtensionRuntime?.emit(event, payload);
+  await (activeExtensionExecutionRuntime ?? activeExtensionRuntime)?.emit(event, payload);
 }
 
 export async function runActiveExtensionHook<THook extends keyof ExtensionHookMap>(
   hook: THook,
   payload: Parameters<ExtensionHookMap[THook]>[0],
 ): Promise<Awaited<ReturnType<ExtensionHookMap[THook]>> | undefined> {
-  return activeExtensionRuntime?.runHook(hook, payload);
+  return (activeExtensionExecutionRuntime ?? activeExtensionRuntime)?.runHook(hook, payload);
 }

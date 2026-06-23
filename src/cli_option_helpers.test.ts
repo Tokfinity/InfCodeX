@@ -2,7 +2,6 @@ import { describe, expect, it } from 'vitest';
 import {
   buildSessionOptions,
   createKodaXOptions,
-  mergeConfiguredExtensions,
   parseAgentModeOption,
   parseOptionalNonNegativeInt,
   parseOutputModeOption,
@@ -172,21 +171,6 @@ describe('numeric CLI helpers', () => {
     expect(() => parseOptionalNonNegativeInt('1.5')).toThrow(
       'Expected a non-negative integer, got "1.5".',
     );
-  });
-});
-
-describe('mergeConfiguredExtensions', () => {
-  it('merges configured and CLI extension lists with deduplication', () => {
-    expect(
-      mergeConfiguredExtensions(
-        ['  ./local-ext.mjs  ', './shared-ext.mjs'],
-        ['./shared-ext.mjs', './config-ext.mjs', ''],
-      ),
-    ).toEqual([
-      './shared-ext.mjs',
-      './config-ext.mjs',
-      './local-ext.mjs',
-    ]);
   });
 });
 

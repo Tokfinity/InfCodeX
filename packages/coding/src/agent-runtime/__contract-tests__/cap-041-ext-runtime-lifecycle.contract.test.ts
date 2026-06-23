@@ -48,6 +48,7 @@ import type {
 
 import { runKodaX } from '../../agent.js';
 import {
+  combineExtensionRuntimes,
   createExtensionRuntime,
   getActiveExtensionRuntime,
 } from '../../extensions/index.js';
@@ -124,6 +125,34 @@ describe('CAP-041: extension runtime activation lifecycle contract', { timeout: 
     const bindOrder = bindSpy.mock.invocationCallOrder[0]!;
     const hydrateOrder = hydrateSpy.mock.invocationCallOrder[0]!;
     expect(bindOrder).toBeLessThan(hydrateOrder);
+  });
+
+  it('CAP-EXT-RUNTIME-004: options-supplied combined runtime drives active hooks during the run', async () => {
+    const primary = createExtensionRuntime();
+    const secondary = createExtensionRuntime();
+    let primaryHookCalled = false;
+    primary.registerHook('provider:before', (ctx) => {
+      primaryHookCalled = true;
+      ctx.block('combined primary hook blocked provider call');
+    });
+
+    registerModelProvider(PROVIDER_NAME, () => new LifecycleProvider('success'));
+    try {
+      const result = await runKodaX(
+        {
+          provider: PROVIDER_NAME,
+          model: 'baseline-model',
+          extensionRuntime: combineExtensionRuntimes(primary, secondary),
+        },
+        'do thing',
+      );
+
+      expect(primaryHookCalled).toBe(true);
+      expect(result.success).toBe(false);
+    } finally {
+      await primary.dispose();
+      await secondary.dispose();
+    }
   });
 
   it('CAP-EXT-RUNTIME-002: releaseRuntimeBinding fires on success path (the disposer returned by bindController is invoked)', async () => {

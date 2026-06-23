@@ -7,11 +7,17 @@ import { executeTool } from '../tools/index.js';
 import type { KodaXToolExecutionContext } from '../types.js';
 import { createExtensionRuntime, getActiveExtensionRuntime } from './index.js';
 
+declare global {
+  // eslint-disable-next-line no-var
+  var __kodaxDirectoryPackageLoadCount: number | undefined;
+}
+
 describe('KodaXExtensionRuntime directory packages', () => {
   let tempDir: string;
 
   beforeEach(async () => {
     tempDir = await mkdtemp(path.join(os.tmpdir(), 'kodax-ext-dir-'));
+    globalThis.__kodaxDirectoryPackageLoadCount = 0;
   });
 
   afterEach(async () => {
@@ -19,7 +25,33 @@ describe('KodaXExtensionRuntime directory packages', () => {
     if (runtime) {
       await runtime.dispose();
     }
+    delete globalThis.__kodaxDirectoryPackageLoadCount;
     await rm(tempDir, { recursive: true, force: true });
+  });
+
+  it('dedupes equivalent package directory and entry module paths in one batch', async () => {
+    const extensionDir = path.join(tempDir, 'pdf4agent');
+    const entrypoint = path.join(extensionDir, 'extension.mjs');
+    await mkdir(extensionDir, { recursive: true });
+    await writeFile(
+      entrypoint,
+      `export default function() {
+        globalThis.__kodaxDirectoryPackageLoadCount = (globalThis.__kodaxDirectoryPackageLoadCount ?? 0) + 1;
+      }`,
+      'utf8',
+    );
+
+    const runtime = createExtensionRuntime().activate();
+    await runtime.loadExtensions([extensionDir, entrypoint], { loadSource: 'config' });
+
+    expect(globalThis.__kodaxDirectoryPackageLoadCount).toBe(1);
+    expect(runtime.getDiagnostics().loadedExtensions).toEqual([
+      expect.objectContaining({
+        path: entrypoint,
+        label: 'pdf4agent',
+        loadSource: 'config',
+      }),
+    ]);
   });
 
   it('loads a package directory and resolves skill paths from the package root', async () => {

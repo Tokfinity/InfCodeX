@@ -96,6 +96,7 @@ export type AcpRuntimeEvent =
       | 'request_rejected'
       | 'request_granted';
     remember?: boolean;
+    error?: string;
   }
   | {
     type: 'permission_requested';
@@ -143,8 +144,9 @@ export class AcpEventEmitter {
     for (const sink of this.sinks) {
       try {
         sink.handleEvent(event);
-      } catch {
+      } catch (error) {
         // Observability sinks must never break the ACP protocol flow.
+        void error;
       }
     }
   }

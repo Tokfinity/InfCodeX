@@ -51,7 +51,6 @@ import {
 import {
   ACP_PERMISSION_MODES,
   createKodaXOptions,
-  mergeConfiguredExtensions,
   parseAgentModeOption,
   parseOptionalNonNegativeInt,
   parseOutputModeOption,
@@ -80,7 +79,9 @@ import {
   KodaXEvents,
   KodaXReasoningMode,
   createExtensionRuntime,
+  dedupeExtensionPathsByEntrypoint,
   discoverDefaultExtensions,
+  excludeExtensionPathsByEntrypoint,
   registerConfiguredMcpCapabilityProvider,
   buildMcpReverseCapabilities,
   KODAX_DEFAULT_PROVIDER,
@@ -1322,17 +1323,22 @@ complete -c kodax -l version -d 'Show version'`);
       .map((value) => path.resolve(value))
     : [];
   const discoveredExtensions = await discoverCliDefaultExtensions();
-  const dedupedDiscoveredExtensions = mergeConfiguredExtensions([], discoveredExtensions);
-  const dedupedConfiguredExtensions = mergeConfiguredExtensions([], configuredExtensions);
-  const dedupedCliExtensions = mergeConfiguredExtensions(cliExtensions, []);
-  const configuredOnlyExtensions = dedupedConfiguredExtensions.filter(
-    (value) => !dedupedCliExtensions.includes(value),
+  const dedupedDiscoveredExtensions = await dedupeExtensionPathsByEntrypoint(discoveredExtensions);
+  const dedupedConfiguredExtensions = await dedupeExtensionPathsByEntrypoint(configuredExtensions);
+  const dedupedCliExtensions = await dedupeExtensionPathsByEntrypoint(cliExtensions);
+  const configuredOnlyExtensions = await excludeExtensionPathsByEntrypoint(
+    dedupedConfiguredExtensions,
+    dedupedCliExtensions,
   );
-  const discoveredOnlyExtensions = dedupedDiscoveredExtensions.filter(
-    (value) => !dedupedConfiguredExtensions.includes(value) && !dedupedCliExtensions.includes(value),
+  const discoveredOnlyExtensions = await excludeExtensionPathsByEntrypoint(
+    dedupedDiscoveredExtensions,
+    [...dedupedConfiguredExtensions, ...dedupedCliExtensions],
   );
-  const baseExtensions = mergeConfiguredExtensions(configuredOnlyExtensions, discoveredOnlyExtensions);
-  const activeExtensions = mergeConfiguredExtensions(dedupedCliExtensions, baseExtensions);
+  const activeExtensions = [
+    ...discoveredOnlyExtensions,
+    ...configuredOnlyExtensions,
+    ...dedupedCliExtensions,
+  ];
   const hasActiveMcp = hasConfiguredMcpServers(configWithExtensions);
   const selectedProvider = opts.provider ?? config.provider ?? KODAX_DEFAULT_PROVIDER;
   const selectedModel = resolveCliModelSelection(
