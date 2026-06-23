@@ -343,7 +343,7 @@ function wrapText(text: string, width: number): string[] {
   return layout.visualLines.length > 0 ? layout.visualLines : [""];
 }
 
-function buildThinkingPreview(
+export function buildThinkingPreview(
   text: string,
   maxLines: number,
   showFullThinking: boolean,

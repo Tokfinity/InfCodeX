@@ -4,6 +4,7 @@ import { computeInlineLedgerStep } from "./inline-ledger-controller.js";
 import { EMPTY_INLINE_SCROLLBACK_STATE, planInlineScrollback } from "../../tui/substrate/ink/inline-scrollback-ledger.js";
 import {
   buildCollapsedThinkingLine,
+  buildThinkingPreview,
   buildDynamicTranscriptSection,
   buildHistoryItemTranscriptSections,
   buildInlinePromptRenderModel,
@@ -1647,28 +1648,15 @@ describe("transcript-layout", () => {
     it("under showAllContent, an oversized thinking block is truncated at THINKING_SHOW_ALL_HARD_CHAR_CAP with a hint", () => {
       // Build a thinking item with text larger than the show-all cap.
       const oversize = "a".repeat(THINKING_SHOW_ALL_HARD_CHAR_CAP + 5_000);
-      const items: HistoryItem[] = [
-        {
-          id: "thinking-1",
-          type: "thinking",
-          text: oversize,
-          timestamp: Date.now(),
-        },
-      ];
-
-      const rows = buildTranscriptRows({
-        items,
-        viewportWidth: 80,
+      const flat = buildThinkingPreview(
+        oversize,
+        TRANSCRIPT_HARD_LINE_CAP,
+        true,
         // showAllContent=true is the show-all transcript-mode signal that
         // legacy code combined with `transcriptMaxLines = POSITIVE_INFINITY`
-        // — Tier 1 still caps individual blocks via the hard char cap.
-        showAllContent: true,
-        showFullThinking: true,
-        // Stays a finite line budget too.
-        maxLines: TRANSCRIPT_HARD_LINE_CAP,
-      });
-
-      const flat = rows.map((row) => row.text).join("\n");
+        // Tier 1 still caps individual blocks via the hard char cap.
+        true,
+      );
       // Must contain the truncation hint, must NOT contain the full
       // (uncapped) "a" sequence — the body was sliced.
       expect(flat).toMatch(/show-all truncated/i);
@@ -1681,24 +1669,12 @@ describe("transcript-layout", () => {
     it("under showAllContent, a thinking block under the cap is rendered in full (no truncation hint)", () => {
       // Stay well under the cap.
       const text = "a".repeat(1_000);
-      const items: HistoryItem[] = [
-        {
-          id: "thinking-2",
-          type: "thinking",
-          text,
-          timestamp: Date.now(),
-        },
-      ];
-
-      const rows = buildTranscriptRows({
-        items,
-        viewportWidth: 80,
-        showAllContent: true,
-        showFullThinking: true,
-        maxLines: TRANSCRIPT_HARD_LINE_CAP,
-      });
-
-      const flat = rows.map((row) => row.text).join("\n");
+      const flat = buildThinkingPreview(
+        text,
+        TRANSCRIPT_HARD_LINE_CAP,
+        true,
+        true,
+      );
       expect(flat).not.toMatch(/show-all truncated/i);
     });
   });
