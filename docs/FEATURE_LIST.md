@@ -26,7 +26,7 @@
 |---|---:|---|---|
 | Completed | 8 | `224, 174, 211, 237, 229, 230, 234, 236` | `224` released v0.7.54; `174, 211, 237` v0.7.53; `229` v0.7.50; `230, 234, 236` v0.7.51 |
 | InProgress | 0 | `—` | no feature in active implementation |
-| Planned, near-term | 11 | `239, 240, 233, 228, 231, 235, 238, 232, 105, 108, 225` | `v0.7.56` -> `v0.7.81` |
+| Planned, near-term | 11 | `239, 240, 233, 228, 231, 235, 238, 232, 105, 108, 225` | `v0.7.57` -> `v0.7.81` |
 | Planned, v0.8.x | 5 | `007, 030, 093, 113, 139` | `v0.8.5+` |
 
 > v0.7.49 / v0.7.50 workflow split：`FEATURE_217` remains the human-facing workflow mode. Manual testing reopened required UI/UX and reliability deltas inside [v0.7.49](features/v0.7.49.md#13-v0749-completion-delta): bounded live progress with phase index / running 智能体 wording / preserved progress row / elapsed time / completed-child token usage, localized assistant-style launch notes, result-bearing child-agent digests or folded long-report notices, non-`info` agentic transcript, clear separation between `finished/spawned` progress and lifetime `maxAgents` cap, final synthesis, generated final-result contract lint, implicit `tokenBudget` stripping, generated task-command crash hardening, tighter AMAW invocation policy, wait timeout propagation, no default total workflow wall-clock timeout, terminal cleanup for un-awaited children, accurate template read/write metadata, capsule min-version preflight, manual run cleanup controls, and the closed minimal saved-workflow named reuse delta (`/workflow <savedName>` plus `/workflow rerun <runId|savedName>` with help/completion). `FEATURE_229` in v0.7.50 is the platform layer: it standardizes the same process as agent-layer snapshot/events, SDK subscription/polling, Space-style host policy and lifecycle controls, terminal-state helpers, workflow identity/lifecycle controls beyond named reuse (`display name | revise | rename | revision provenance`), REPL-as-consumer rendering, conservative retention, and durable source/provenance/resultSummary persistence; it is not the first implementation of the user-visible UX.
@@ -37,8 +37,8 @@
 |---|---:|
 | `v0.7.54` | `1` |
 | `v0.7.55` | `0` |
-| `v0.7.56` | `2` |
-| `v0.7.57` | `1` |
+| `v0.7.56` | `0` |
+| `v0.7.57` | `3` |
 | `v0.7.60` | `1` |
 | `v0.7.63` | `1` |
 | `v0.7.66` | `1` |
@@ -52,10 +52,10 @@
 | `v0.8.25` | `1` |
 
 > Release cadence rule: every `v0.7.x` feature-bearing release normally leaves
-> the next two patch versions for debug/patch releases. `v0.7.55` is intentionally
-> left without a planned feature so it can be used for the temporary emergency
-> release. `FEATURE_239` and `FEATURE_240` both move to `v0.7.56`; `v0.7.57`
-> remains the next planned feature slot.
+> the next two patch versions for debug/patch releases. `v0.7.55` and `v0.7.56`
+> are intentionally left without planned features so they can be used for
+> temporary emergency releases. `FEATURE_239` and `FEATURE_240` both move to
+> `v0.7.57`, alongside `FEATURE_233`.
 
 ---
 
@@ -72,8 +72,8 @@
 
 | ID | Title | Category | Priority | Planned | Design |
 |---|---|---|---|---|---|
-| `239` | SDK Multimodal Input + Clipboard Image Public API | SDK / Media + Provider Capability | High | `v0.7.56` | [v0.7.56](features/v0.7.56.md#feature_239-sdk-multimodal-input--clipboard-image-public-api) |
-| `240` | Cross-Protocol `stopReason` Normalization + Terminal Semantics Dispatch | LLM / Provider Protocol + Runtime Robustness | High | `v0.7.56` | [v0.7.56](features/v0.7.56.md#feature_240-cross-protocol-stopreason-normalization--terminal-semantics-dispatch) |
+| `239` | SDK Multimodal Input + Clipboard Image Public API | SDK / Media + Provider Capability | High | `v0.7.57` | [v0.7.57](features/v0.7.57.md#feature_239-sdk-multimodal-input--clipboard-image-public-api) |
+| `240` | Cross-Protocol `stopReason` Normalization + Terminal Semantics Dispatch | LLM / Provider Protocol + Runtime Robustness | High | `v0.7.57` | [v0.7.57](features/v0.7.57.md#feature_240-cross-protocol-stopreason-normalization--terminal-semantics-dispatch) |
 | `233` | Effort-First Reasoning Control System | LLM / Provider Capability + Runtime UX | High | `v0.7.57` | [v0.7.57](features/v0.7.57.md#feature_233-effort-first-reasoning-control-system) |
 | `228` | Unified Memory Control Plane + Memory Governance | Core / Memory + Governance | High | `v0.7.60` | [v0.7.60](features/v0.7.60.md#feature_228-unified-memory-control-plane--memory-governance) |
 | `231` | Durable Workflow Replay Resume | Core / Workflow Persistence | High | `v0.7.63` | [v0.7.63](features/v0.7.63.md#feature_231-durable-workflow-replay-resume) |
