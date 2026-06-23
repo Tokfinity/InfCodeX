@@ -1,14 +1,9 @@
-import type { Dirent } from 'node:fs';
-import { readdir, readFile, stat } from 'node:fs/promises';
-import { isAbsolute, join, relative, resolve } from 'node:path';
-
 import chalk from 'chalk';
 
 import {
-  applySkillLearningProposal,
+  approveStoredLearningProposal,
   readLearningProposalStore,
   resolveLearningProposalStore,
-  resolveSkillSnapshotLocation,
   updateLearningProposalStatus,
   type SkillConsumerImpact,
   type StoredLearningProposal,
@@ -49,131 +44,6 @@ function printWarnings(warnings: readonly string[]): void {
   }
 }
 
-function isMissingFile(error: unknown): boolean {
-  return typeof error === 'object'
-    && error !== null
-    && 'code' in error
-    && (error as NodeJS.ErrnoException).code === 'ENOENT';
-}
-
-function normalizePlanRelativePath(relativePath: string): string | undefined {
-  if (relativePath.includes('\0') || isAbsolute(relativePath)) return undefined;
-  const normalized = relativePath.replace(/\\/g, '/');
-  const segments = normalized.split('/');
-  if (
-    segments.length === 0
-    || segments.some((segment) => segment.length === 0 || segment === '.' || segment === '..')
-  ) {
-    return undefined;
-  }
-  return segments.join('/');
-}
-
-function isInside(root: string, target: string): boolean {
-  const rel = relative(root, target);
-  return rel === '' || (!rel.startsWith('..') && !isAbsolute(rel));
-}
-
-function resolvePlanTarget(
-  skillRoot: string,
-  relativePath: string,
-): { readonly absolutePath: string; readonly normalizedRelativePath: string } | undefined {
-  const normalizedRelativePath = normalizePlanRelativePath(relativePath);
-  if (normalizedRelativePath === undefined) return undefined;
-  const root = resolve(skillRoot);
-  const absolutePath = resolve(root, ...normalizedRelativePath.split('/'));
-  if (!isInside(root, absolutePath)) return undefined;
-  return { absolutePath, normalizedRelativePath };
-}
-
-async function readUtf8IfExists(
-  filePath: string,
-): Promise<{ readonly exists: true; readonly content: string } | { readonly exists: false }> {
-  try {
-    return { exists: true, content: await readFile(filePath, 'utf8') };
-  } catch (error) {
-    if (isMissingFile(error)) return { exists: false };
-    throw error;
-  }
-}
-
-function plannedSkillChangedPaths(entry: StoredLearningProposal): readonly string[] {
-  const plan = entry.applyPlan;
-  if (plan?.kind !== 'skill') return [];
-  return plan.changes.map((change) => normalizePlanRelativePath(change.relativePath) ?? change.relativePath);
-}
-
-async function skillFilesAlreadyMatchPlan(entry: StoredLearningProposal): Promise<boolean> {
-  const plan = entry.applyPlan;
-  if (plan?.kind !== 'skill' || plan.changes.length === 0) return false;
-
-  for (const change of plan.changes) {
-    if (change.kind !== 'write') return false;
-    const target = resolvePlanTarget(plan.skillRoot, change.relativePath);
-    if (target === undefined) return false;
-    const current = await readUtf8IfExists(target.absolutePath);
-    if (!current.exists || current.content !== change.content) return false;
-  }
-
-  return true;
-}
-
-async function findLatestSnapshotPath(entry: StoredLearningProposal): Promise<string | undefined> {
-  const plan = entry.applyPlan;
-  if (plan?.kind !== 'skill') return undefined;
-  const location = await resolveSkillSnapshotLocation({
-    proposalId: entry.proposalId,
-    skillRoot: plan.skillRoot,
-    ...(plan.snapshotRoot !== undefined ? { snapshotRoot: plan.snapshotRoot } : {}),
-  });
-  let entries: Dirent[];
-  try {
-    entries = await readdir(location.snapshotBase, { withFileTypes: true });
-  } catch (error) {
-    if (isMissingFile(error)) return undefined;
-    throw error;
-  }
-
-  const candidates: { readonly path: string; readonly mtimeMs: number }[] = [];
-  for (const entryDir of entries) {
-    if (!entryDir.isDirectory() || !entryDir.name.startsWith(location.proposalPrefix)) continue;
-    const candidatePath = join(location.snapshotBase, entryDir.name);
-    const candidateStat = await stat(candidatePath);
-    candidates.push({ path: candidatePath, mtimeMs: candidateStat.mtimeMs });
-  }
-  candidates.sort((left, right) => right.mtimeMs - left.mtimeMs);
-  return candidates[0]?.path;
-}
-
-async function findSnapshotConflict(
-  entry: StoredLearningProposal,
-): Promise<{ readonly relativePath: string; readonly snapshotPath: string } | undefined> {
-  const plan = entry.applyPlan;
-  if (plan?.kind !== 'skill') return undefined;
-  const snapshotPath = await findLatestSnapshotPath(entry);
-  if (snapshotPath === undefined) return undefined;
-
-  for (const change of plan.changes) {
-    if (change.kind !== 'write') continue;
-    const target = resolvePlanTarget(plan.skillRoot, change.relativePath);
-    if (target === undefined) return undefined;
-    const current = await readUtf8IfExists(target.absolutePath);
-    if (current.exists && current.content === change.content) continue;
-
-    const snapshotFile = join(snapshotPath, ...target.normalizedRelativePath.split('/'));
-    const snapshot = await readUtf8IfExists(snapshotFile);
-    if (!current.exists && !snapshot.exists) continue;
-    if (current.exists && snapshot.exists && current.content === snapshot.content) continue;
-
-    return {
-      relativePath: target.normalizedRelativePath,
-      snapshotPath,
-    };
-  }
-
-  return undefined;
-}
-
 function printConsumerImpact(impact: SkillConsumerImpact): void {
   writeOutput(chalk.yellow('\nConsumer impact:'));
   writeOutput(chalk.dim(`  action: ${impact.action}`));
@@ -192,10 +62,6 @@ function printConsumerImpact(impact: SkillConsumerImpact): void {
   }
 }
 
-function requiresConsumerImpactAck(entry: StoredLearningProposal): boolean {
-  return entry.proposal.destination === 'workflow_handoff'
-    && entry.proposal.consumerImpact.action === 'block_until_manual_review';
-}
 
 async function readStore(cwd: string) {
   const storePath = resolveLearningProposalStore(cwd);
@@ -248,28 +114,6 @@ function printDiff(entry: StoredLearningProposal): void {
   writeOutput();
 }
 
-async function markApproved(
-  storePath: string,
-  entry: StoredLearningProposal,
-  options: {
-    readonly appliedChangedPaths?: readonly string[];
-    readonly appliedSnapshotPath?: string;
-  } = {},
-): Promise<void> {
-  const timestamp = new Date().toISOString();
-  const hasAppliedMetadata = options.appliedChangedPaths !== undefined || options.appliedSnapshotPath !== undefined;
-  await updateLearningProposalStatus(storePath, entry.proposalId, 'approved', {
-    now: () => timestamp,
-    ...(hasAppliedMetadata ? { appliedAt: timestamp } : {}),
-    ...(options.appliedChangedPaths !== undefined
-      ? { appliedChangedPaths: options.appliedChangedPaths }
-      : {}),
-    ...(options.appliedSnapshotPath !== undefined
-      ? { appliedSnapshotPath: options.appliedSnapshotPath }
-      : {}),
-  });
-}
-
 async function approveProposal(
   storePath: string,
   entry: StoredLearningProposal,
@@ -277,63 +121,38 @@ async function approveProposal(
     readonly acknowledgeImpact?: boolean;
   } = {},
 ): Promise<void> {
-  if (entry.applyPlan?.kind === 'skill') {
-    if (await skillFilesAlreadyMatchPlan(entry)) {
-      const snapshotPath = await findLatestSnapshotPath(entry);
-      await markApproved(storePath, entry, {
-        appliedChangedPaths: plannedSkillChangedPaths(entry),
-        ...(snapshotPath !== undefined ? { appliedSnapshotPath: snapshotPath } : {}),
-      });
+  const result = await approveStoredLearningProposal(storePath, entry, options);
+  switch (result.status) {
+    case 'approved_already_applied':
       writeOutput(chalk.green(`\n[learn] approved ${entry.proposalId}; files already match the apply plan.`));
       writeOutput(chalk.dim('  recovered a pending proposal without applying it again.\n'));
       return;
-    }
-
-    const conflict = await findSnapshotConflict(entry);
-    if (conflict !== undefined) {
-      writeOutput(chalk.red(`\n[learn] refusing to reapply ${entry.proposalId}; ${conflict.relativePath} changed after the last snapshot.`));
-      writeOutput(chalk.dim(`  snapshot: ${conflict.snapshotPath}`));
+    case 'blocked_snapshot_conflict':
+      writeOutput(chalk.red(`\n[learn] refusing to reapply ${entry.proposalId}; ${result.relativePath} changed after the last snapshot.`));
+      writeOutput(chalk.dim(`  snapshot: ${result.snapshotPath}`));
       writeOutput(chalk.dim('  Review the file manually, then reject or recreate the learning proposal.\n'));
       return;
-    }
-
-    const result = await applySkillLearningProposal({
-      proposal: entry.proposal,
-      governance: entry.applyPlan.governance,
-      skillRoot: entry.applyPlan.skillRoot,
-      changes: entry.applyPlan.changes,
-      approved: true,
-      ...(entry.applyPlan.snapshotRoot !== undefined ? { snapshotRoot: entry.applyPlan.snapshotRoot } : {}),
-    });
-    await markApproved(storePath, entry, {
-      appliedChangedPaths: result.changedPaths,
-      ...(result.snapshotPath !== undefined ? { appliedSnapshotPath: result.snapshotPath } : {}),
-    });
-    writeOutput(chalk.green(`\n[learn] approved and applied ${entry.proposalId}.`));
-    writeOutput(chalk.dim(`  changed: ${result.changedPaths.join(', ') || '(none)'}\n`));
-    return;
+    case 'approved_applied':
+      writeOutput(chalk.green(`\n[learn] approved and applied ${entry.proposalId}.`));
+      writeOutput(chalk.dim(`  changed: ${result.changedPaths.join(', ') || '(none)'}\n`));
+      return;
+    case 'blocked_missing_apply_plan':
+      writeOutput(chalk.red(`\n[learn] ${entry.proposalId} has no skill apply plan; nothing was applied.\n`));
+      return;
+    case 'blocked_consumer_impact':
+      writeOutput(chalk.yellow(`\n[learn] ${entry.proposalId} requires manual consumer-impact review before approval.`));
+      writeOutput(chalk.dim(`  Run /learn diff ${entry.proposalId}, then /learn approve ${entry.proposalId} --ack-impact after review.\n`));
+      printConsumerImpact(result.impact);
+      writeOutput();
+      return;
+    case 'approved_handoff':
+      writeOutput(chalk.green(`\n[learn] approved ${entry.proposalId} as a downstream handoff.`));
+      writeOutput(chalk.dim('  F224 does not mutate workflow, memory, or reasoning carriers directly.\n'));
+      return;
+    case 'blocked_not_pending':
+      writeOutput(chalk.dim(`\n[learn] ${entry.proposalId} is already ${result.reviewStatus}.\n`));
+      return;
   }
-
-  if (entry.proposal.destination === 'skill_patch' || entry.proposal.destination === 'skill_create') {
-    writeOutput(chalk.red(`\n[learn] ${entry.proposalId} has no skill apply plan; nothing was applied.\n`));
-    return;
-  }
-
-  if (
-    entry.proposal.destination === 'workflow_handoff'
-    && requiresConsumerImpactAck(entry)
-    && options.acknowledgeImpact !== true
-  ) {
-    writeOutput(chalk.yellow(`\n[learn] ${entry.proposalId} requires manual consumer-impact review before approval.`));
-    writeOutput(chalk.dim(`  Run /learn diff ${entry.proposalId}, then /learn approve ${entry.proposalId} --ack-impact after review.\n`));
-    printConsumerImpact(entry.proposal.consumerImpact);
-    writeOutput();
-    return;
-  }
-
-  await markApproved(storePath, entry);
-  writeOutput(chalk.green(`\n[learn] approved ${entry.proposalId} as a downstream handoff.`));
-  writeOutput(chalk.dim('  F224 does not mutate workflow, memory, or reasoning carriers directly.\n'));
 }
 
 function printHelp(): void {

@@ -4,9 +4,13 @@ import { join } from 'path';
 import { afterEach, describe, expect, it } from 'vitest';
 
 import {
-  computeSkillConsumerImpact,
   applySkillMutationProposal,
+} from './skill-safe-apply.js';
+
+import {
+  computeSkillConsumerImpact,
   applySkillLearningProposal,
+  approveStoredLearningProposal,
   canMarkCreatedByAgent,
   decideSkillGovernance,
   readLearningProposalStore,
@@ -683,6 +687,108 @@ describe('learning proposal store', () => {
 
     expect(approved.status).toBe('approved');
     expect(approved.rejectedReason).toBeUndefined();
+  });
+
+  it('blocks consumer-impact workflow handoff approval until acknowledged', async () => {
+    const dir = await createTempDir('kodax-learning-approval-');
+    const storePath = join(dir, 'proposals.json');
+    const blockingImpact: SkillConsumerImpact = {
+      workflowCapsules: ['workflow:release'],
+      savedWorkflows: [],
+      constructedAgents: [],
+      promptReferences: [],
+      action: 'block_until_manual_review',
+    };
+    const proposal = triageProceduralLearning({
+      proposalId: 'p-approval-impact',
+      origin: 'background_learning',
+      completedTurn: true,
+      sourceRefs: ['turn:approval'],
+      candidate: {
+        kind: 'workflow_handoff',
+        workflowRunId: 'workflow-run-approval',
+        workflowStatus: 'completed',
+        suggestedAction: 'save_from_run',
+        whyWorkflowNotSkill: 'The captured behavior is executable workflow state, not a method guide.',
+        requiredWorkflowEvidence: ['workflow-run-approval'],
+        risk: 'medium',
+        consumerImpact: blockingImpact,
+      },
+    });
+    if (proposal.destination !== 'workflow_handoff') {
+      throw new Error('test setup expected a workflow handoff proposal');
+    }
+
+    const stored = await upsertLearningProposal(storePath, proposal, {
+      now: () => '2026-06-21T00:03:00.000Z',
+    });
+    const blocked = await approveStoredLearningProposal(storePath, stored);
+    expect(blocked.status).toBe('blocked_consumer_impact');
+    if (blocked.status === 'blocked_consumer_impact') {
+      expect(blocked.impact).toEqual(blockingImpact);
+    }
+    const stillPending = await readLearningProposalStore(storePath);
+    expect(stillPending.proposals[0]?.status).toBe('pending');
+
+    const approved = await approveStoredLearningProposal(storePath, stored, {
+      acknowledgeImpact: true,
+      now: () => '2026-06-21T00:04:00.000Z',
+    });
+    expect(approved.status).toBe('approved_handoff');
+    if (approved.status === 'approved_handoff') {
+      expect(approved.proposal).toMatchObject({
+        proposalId: 'p-approval-impact',
+        status: 'approved',
+        updatedAt: '2026-06-21T00:04:00.000Z',
+      });
+      expect(approved.proposal.appliedAt).toBeUndefined();
+    }
+  });
+
+  it('does not approve a stale pending entry after the current store entry changed status', async () => {
+    const dir = await createTempDir('kodax-learning-approval-stale-');
+    const storePath = join(dir, 'proposals.json');
+    const proposal = triageProceduralLearning({
+      proposalId: 'p-approval-stale',
+      origin: 'background_learning',
+      completedTurn: true,
+      sourceRefs: ['turn:approval-stale'],
+      candidate: {
+        kind: 'workflow_handoff',
+        workflowRunId: 'workflow-run-stale',
+        workflowStatus: 'completed',
+        suggestedAction: 'report_only',
+        whyWorkflowNotSkill: 'The captured behavior is workflow-specific evidence.',
+        requiredWorkflowEvidence: ['workflow-run-stale'],
+        risk: 'low',
+        consumerImpact: noConsumerImpact,
+      },
+    });
+    if (proposal.destination !== 'workflow_handoff') {
+      throw new Error('test setup expected a workflow handoff proposal');
+    }
+
+    const stalePending = await upsertLearningProposal(storePath, proposal, {
+      now: () => '2026-06-21T00:05:00.000Z',
+    });
+    await updateLearningProposalStatus(storePath, 'p-approval-stale', 'rejected', {
+      rejectedReason: 'user declined',
+      now: () => '2026-06-21T00:06:00.000Z',
+    });
+
+    const result = await approveStoredLearningProposal(storePath, stalePending, {
+      acknowledgeImpact: true,
+      now: () => '2026-06-21T00:07:00.000Z',
+    });
+
+    expect(result).toEqual({ status: 'blocked_not_pending', reviewStatus: 'rejected' });
+    const read = await readLearningProposalStore(storePath);
+    expect(read.proposals[0]).toMatchObject({
+      proposalId: 'p-approval-stale',
+      status: 'rejected',
+      rejectedReason: 'user declined',
+      updatedAt: '2026-06-21T00:06:00.000Z',
+    });
   });
 
   it('persists skill application metadata when a proposal is approved', async () => {

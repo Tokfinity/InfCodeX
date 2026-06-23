@@ -23,7 +23,6 @@ export type {
   SkillGovernanceMode,
   SkillLearningApplyInput,
   SkillLearningProposal,
-  SkillMutationApplyInput,
   SkillMutationApplyResult,
   SkillMutationChange,
   SkillOwnership,
@@ -44,7 +43,6 @@ export {
 export {
   MAX_SKILL_MD_BYTES,
   MAX_SKILL_SUPPORT_FILE_BYTES,
-  applySkillMutationProposal,
   resolveSkillSnapshotLocation,
 } from './skill-safe-apply.js';
 export type {
@@ -59,6 +57,13 @@ export {
 export {
   applySkillLearningProposal,
 } from './skill-learning-apply.js';
+export {
+  approveStoredLearningProposal,
+} from './approval.js';
+export type {
+  ApproveStoredLearningProposalOptions,
+  StoredLearningApprovalResult,
+} from './approval.js';
 export type {
   RecordProceduralLearningInput,
 } from './intake.js';
