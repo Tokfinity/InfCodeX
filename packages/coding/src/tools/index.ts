@@ -91,6 +91,10 @@ export {
   toolActivateTool,
 } from './construction.js';
 export {
+  AGENT_CONSTRUCTION_TOOL_NAMES,
+  filterAgentConstructionToolNames,
+} from './agent-construction.js';
+export {
   stripHtmlToText,
   extractHtmlTitle,
   renderRetrievalResult,

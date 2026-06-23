@@ -26,14 +26,17 @@ import {
   getAmaRoleEffectiveExclude,
   getAmaRoleExpectedToolNames,
 } from './runner-driven.js';
-import { listToolDefinitions } from '../tools/registry.js';
+import { listToolDefinitions, MCP_TOOL_NAMES } from '../tools/registry.js';
 import type { KodaXToolExecutionContext } from '../types.js';
 
-function makeCtx(): KodaXToolExecutionContext {
+function makeCtx(hasCapabilityRuntime = true): KodaXToolExecutionContext {
   return {
     backups: new Map<string, string>(),
     gitRoot: process.cwd(),
     executionCwd: process.cwd(),
+    ...(hasCapabilityRuntime
+      ? { extensionRuntime: {} as KodaXToolExecutionContext['extensionRuntime'] }
+      : {}),
   };
 }
 
@@ -41,8 +44,8 @@ function makeRecorder() {
   return {} as Parameters<typeof buildRunnerAgentChain>[1];
 }
 
-function getAgentToolNames(role: AmaRole): readonly string[] {
-  const chain = buildRunnerAgentChain(makeCtx(), makeRecorder());
+function getAgentToolNames(role: AmaRole, hasCapabilityRuntime = true): readonly string[] {
+  const chain = buildRunnerAgentChain(makeCtx(hasCapabilityRuntime), makeRecorder());
   if (role !== 'worker') {
     throw new Error(`FEATURE_193: role '${role}' retired with V1 chain`);
   }
@@ -57,6 +60,22 @@ describe('FEATURE_168 — AMA agent tool wiring (per-role full set)', () => {
     const actual = getAgentToolNames('worker');
     const expected = getAmaRoleExpectedToolNames('worker');
     expect(actual).toEqual(expected);
+  });
+
+  it('worker hides MCP tools when no extension runtime is bound', () => {
+    const actual = getAgentToolNames('worker', false);
+    const expected = getAmaRoleExpectedToolNames('worker', false);
+    expect(actual).toEqual(expected);
+    for (const mcpTool of MCP_TOOL_NAMES) {
+      expect(actual, `worker should hide ${mcpTool} without extension runtime`).not.toContain(mcpTool);
+    }
+  });
+
+  it('worker exposes MCP tools when an extension runtime is bound', () => {
+    const actual = getAgentToolNames('worker', true);
+    for (const mcpTool of MCP_TOOL_NAMES) {
+      expect(actual, `worker should expose ${mcpTool} with extension runtime`).toContain(mcpTool);
+    }
   });
 
   it('worker has no V1 emit tools (F193 V1 chain retired) and no emit_handoff (F190)', () => {

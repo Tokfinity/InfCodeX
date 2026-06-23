@@ -28,7 +28,7 @@
  * rather than five missing push lines).
  */
 
-import { listToolDefinitions } from '../../../tools/registry.js';
+import { filterMcpToolNames, listToolDefinitions } from '../../../tools/registry.js';
 import type { AmaRole } from './types.js';
 
 /** Tools every AMA role excludes — specialized paths (SA-root, construction). */
@@ -80,12 +80,16 @@ export function getAmaRoleEffectiveExclude(role: AmaRole): ReadonlySet<string> {
  * builds them via `protocol-emitters.ts` and splices them in separately).
  *
  * Exported for the FEATURE_168 contract test that pins each role's
- * expected tool surface.
+ * expected tool surface. MCP tools are runtime-backed, so callers pass
+ * whether a capability runtime is actually bound for the run.
  */
-export function getAmaRoleExpectedToolNames(role: AmaRole): readonly string[] {
+export function getAmaRoleExpectedToolNames(
+  role: AmaRole,
+  hasCapabilityRuntime = true,
+): readonly string[] {
   const exclude = getAmaRoleEffectiveExclude(role);
-  return listToolDefinitions()
+  const names = listToolDefinitions()
     .map((def) => def.name)
-    .filter((name) => !exclude.has(name))
-    .sort();
+    .filter((name) => !exclude.has(name));
+  return (hasCapabilityRuntime ? names : filterMcpToolNames(names)).sort();
 }

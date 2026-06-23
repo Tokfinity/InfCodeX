@@ -53,6 +53,7 @@ import { toolMcpGetPrompt } from '../../../tools/mcp-get-prompt.js';
 import {
   getToolDefinition,
   getRegisteredToolDefinition,
+  isMcpToolName,
   listToolDefinitions,
   MCP_TOOL_NAMES,
 } from '../../../tools/registry.js';
@@ -266,6 +267,7 @@ function buildAgentToolsFromRegistry(
 
   for (const def of listToolDefinitions()) {
     if (exclude.has(def.name)) continue;
+    if (!ctx.extensionRuntime && isMcpToolName(def.name)) continue;
 
     const override = overrides.get(def.name);
     if (override) {

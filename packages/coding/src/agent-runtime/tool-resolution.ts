@@ -16,16 +16,16 @@
  *      reference unchanged when the exclude list is empty / undefined
  *      — callers MAY rely on this short-circuit for object identity.
  *
- *   2. **`getRuntimeActiveToolNames`** (CAP-022) — applies three runtime
+ *   2. **`getRuntimeActiveToolNames`** (CAP-022) — applies runtime
  *      filters in order:
  *        a) repo-intelligence: when `auto-repo` mode resolves to `'off'`,
  *           strip the working set of repo-intel tools (lookup, scan, etc.)
  *           so the model can't try to invoke them.
  *        b) MCP: when there's no capability runtime bound, strip MCP
  *           tool names (the dispatch fallback would just throw).
- *        c) construction: when `toolConstructionMode` is set, strip the
- *           dynamically-constructed tool names (FEATURE_087 — they only
- *           surface AFTER `ConstructionRuntime.activate()`).
+ *        c) construction: when `toolConstructionMode` is unset, strip
+ *           tool/agent construction and self-modify tool names. These only
+ *           surface after an explicit construction activation.
  *      Returns a flat `string[]` for permission / display logic.
  *
  *   3. **`getActiveToolDefinitions`** (CAP-021) — top-level resolver:
@@ -49,6 +49,7 @@
 import type { KodaXRepoIntelligenceMode } from '../types.js';
 import {
   filterConstructionToolNames,
+  filterAgentConstructionToolNames,
   filterMcpToolNames,
   filterRepoIntelligenceWorkingToolNames,
   listToolDefinitions,
@@ -80,6 +81,7 @@ export function getRuntimeActiveToolNames(
     result = filterMcpToolNames(result);
   }
   result = filterConstructionToolNames(result, toolConstructionMode);
+  result = filterAgentConstructionToolNames(result, toolConstructionMode);
   return result;
 }
 

@@ -99,6 +99,21 @@ describe('CAP-022: getRuntimeActiveToolNames — runtime filter chain', () => {
   it('CAP-RUNTIME-TOOLS-001c: empty input → empty output (chain short-circuits naturally on empty array)', () => {
     expect(getRuntimeActiveToolNames([], 'auto', true)).toEqual([]);
   });
+
+  it('CAP-RUNTIME-TOOLS-001d: construction, agent-construction, and self-modify tools are hidden unless construction mode is enabled', () => {
+    const tools = [
+      'read',
+      'scaffold_tool',
+      'scaffold_agent',
+      'stage_self_modify',
+      'validate_agent',
+      'bash',
+    ];
+
+    expect(getRuntimeActiveToolNames(tools, 'auto', true, undefined)).toEqual(['read', 'bash']);
+    expect(getRuntimeActiveToolNames(tools, 'auto', true, false)).toEqual(['read', 'bash']);
+    expect(getRuntimeActiveToolNames(tools, 'auto', true, true)).toEqual(tools);
+  });
 });
 
 describe('CAP-021: getActiveToolDefinitions — top-level resolver', () => {

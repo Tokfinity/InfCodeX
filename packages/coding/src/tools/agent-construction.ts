@@ -29,6 +29,7 @@
 
 import type { KodaXToolExecutionContext } from '../types.js';
 import { Runner, listRegisteredInvariants } from '@kodax-ai/agent';
+import { SELF_MODIFY_TOOL_NAME } from './self-modify-tool.js';
 
 import {
   type AgentArtifact,
@@ -58,6 +59,10 @@ export const AGENT_CONSTRUCTION_TOOL_NAMES = [
 ] as const;
 
 const AGENT_CONSTRUCTION_TOOL_NAME_SET = new Set<string>(AGENT_CONSTRUCTION_TOOL_NAMES);
+const AGENT_CONSTRUCTION_RUNTIME_TOOL_NAME_SET = new Set<string>([
+  ...AGENT_CONSTRUCTION_TOOL_NAMES,
+  SELF_MODIFY_TOOL_NAME,
+]);
 
 export function isAgentConstructionToolName(name: string): boolean {
   return AGENT_CONSTRUCTION_TOOL_NAME_SET.has(name);
@@ -72,7 +77,7 @@ export function filterAgentConstructionToolNames<T extends string>(
   agentConstructionMode: boolean | undefined,
 ): T[] {
   if (agentConstructionMode) return [...toolNames];
-  return toolNames.filter((name) => !isAgentConstructionToolName(name));
+  return toolNames.filter((name) => !AGENT_CONSTRUCTION_RUNTIME_TOOL_NAME_SET.has(name));
 }
 
 // ---------------------------------------------------------------------------
