@@ -24,7 +24,7 @@
 import { promises as fs } from 'fs';
 import path from 'path';
 import { tmpdir } from 'os';
-import { describe, expect, it, afterEach } from 'vitest';
+import { describe, expect, it, afterEach, beforeEach } from 'vitest';
 
 import { runH2BoundaryEval } from './h2-boundary-runner.js';
 
@@ -88,15 +88,19 @@ const ALIAS_KEY_ENV = 'DEEPSEEK_API_KEY';
 
 describe('h2-boundary-runner — end-to-end plumbing (fake kodax)', () => {
   const cleanups: Array<() => Promise<void>> = [];
-  // Stub the API key the alias expects so providerEnv() doesn't throw.
-  const originalKey = process.env[ALIAS_KEY_ENV];
-  process.env[ALIAS_KEY_ENV] = 'fake-key-for-plumbing-test';
+  let originalKey: string | undefined;
+
+  beforeEach(() => {
+    // Stub the API key the alias expects so providerEnv() doesn't throw.
+    originalKey = process.env[ALIAS_KEY_ENV];
+    process.env[ALIAS_KEY_ENV] = 'fake-key-for-plumbing-test';
+  });
 
   afterEach(async () => {
     for (const c of cleanups.splice(0)) await c();
   });
 
-  // Restore the real key after the suite — vitest doesn't auto-isolate envs.
+  // Restore the real key after each test — vitest doesn't auto-isolate envs.
   afterEach(() => {
     if (originalKey === undefined) delete process.env[ALIAS_KEY_ENV];
     else process.env[ALIAS_KEY_ENV] = originalKey;

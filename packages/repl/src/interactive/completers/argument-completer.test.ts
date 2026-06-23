@@ -6,9 +6,9 @@ import { mkdirSync, mkdtempSync, rmSync, writeFileSync } from 'node:fs';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 
-import { getAgentConfigPath, type WorkflowAgentBackend, type WorkflowModule } from '@kodax-ai/agent';
+import { getAgentConfigPath, setAgentConfigHome, type WorkflowAgentBackend, type WorkflowModule } from '@kodax-ai/agent';
 import { getDefaultWorkflowRunManager } from '@kodax-ai/coding';
-import { describe, it, expect, beforeEach } from 'vitest';
+import { describe, it, expect, beforeEach, afterEach } from 'vitest';
 import { ArgumentCompleter } from '../completers/argument-completer.js';
 import { deriveProjectKeyFromRoot } from '../project-key.js';
 
@@ -17,6 +17,10 @@ describe('ArgumentCompleter', () => {
 
   beforeEach(() => {
     completer = new ArgumentCompleter();
+  });
+
+  afterEach(() => {
+    setAgentConfigHome(undefined);
   });
 
   describe('canComplete', () => {
@@ -422,6 +426,7 @@ describe('ArgumentCompleter', () => {
         const cwd = mkdtempSync(join(tmpdir(), 'kodax-workflow-persisted-complete-'));
         const previousCwd = process.cwd();
         process.chdir(cwd);
+        setAgentConfigHome(join(cwd, '.kodax-home'));
         const projectKey = deriveProjectKeyFromRoot(cwd).key;
         const baseDir = getAgentConfigPath('workflow-runs', projectKey);
         const runDir = join(baseDir, 'run-persisted-complete');
@@ -455,6 +460,7 @@ describe('ArgumentCompleter', () => {
         const cwd = mkdtempSync(join(tmpdir(), 'kodax-workflow-saved-complete-'));
         const previousCwd = process.cwd();
         process.chdir(cwd);
+        setAgentConfigHome(join(cwd, '.kodax-home'));
         const workflowsDir = join(cwd, '.kodax', 'workflows');
         mkdirSync(workflowsDir, { recursive: true });
         writeFileSync(join(workflowsDir, 'saved-audit.workflow.json'), '{}', 'utf8');

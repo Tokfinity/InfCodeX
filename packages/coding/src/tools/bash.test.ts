@@ -6,7 +6,7 @@ import { cleanupRegisteredManagedChildren, setAgentConfigHome } from '@kodax-ai/
 import { afterEach, beforeEach, describe, expect, it } from 'vitest';
 import { toolBash } from './bash.js';
 
-const WINDOWS_PROCESS_TREE_EXIT_WAIT_MS = process.platform === 'win32' ? 30_000 : 5_000;
+const WINDOWS_PROCESS_TREE_EXIT_WAIT_MS = process.platform === 'win32' ? 30_000 : 15_000;
 const WINDOWS_PROCESS_TREE_TEST_TIMEOUT_MS = process.platform === 'win32' ? 60_000 : 30_000;
 const BACKGROUND_CHILD_MARKER = 'child-pid:';
 

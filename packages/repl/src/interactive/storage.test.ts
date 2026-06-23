@@ -16,13 +16,16 @@ describe('FileSessionStorage', () => {
   let tempHome: string;
   let previousHome: string | undefined;
   let previousUserProfile: string | undefined;
+  let previousKodaXHome: string | undefined;
 
   beforeEach(async () => {
     tempHome = await mkdtemp(path.join(os.tmpdir(), 'kodax-storage-'));
     previousHome = process.env.HOME;
     previousUserProfile = process.env.USERPROFILE;
+    previousKodaXHome = process.env.KODAX_HOME;
     process.env.HOME = tempHome;
     process.env.USERPROFILE = tempHome;
+    process.env.KODAX_HOME = path.join(tempHome, '.kodax');
     vi.resetModules();
   });
 
@@ -37,6 +40,12 @@ describe('FileSessionStorage', () => {
       delete process.env.USERPROFILE;
     } else {
       process.env.USERPROFILE = previousUserProfile;
+    }
+
+    if (previousKodaXHome === undefined) {
+      delete process.env.KODAX_HOME;
+    } else {
+      process.env.KODAX_HOME = previousKodaXHome;
     }
 
     vi.resetModules();
