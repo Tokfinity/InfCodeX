@@ -1,6 +1,6 @@
 {
   "name": "@kodax-ai/coding",
-  "version": "0.7.53",
+  "version": "0.7.54",
   "description": "KodaX Coding Agent - Coding 工具 + Prompts",
   "private": true,
   "type": "module",
@@ -14,6 +14,10 @@
     "./repo-intelligence-bridge": {
       "types": "./dist/repo-intelligence/public-bridge.d.ts",
       "import": "./dist/repo-intelligence/public-bridge.js"
+    },
+    "./extensions": {
+      "types": "./dist/extensions/index.d.ts",
+      "import": "./dist/extensions/index.js"
     }
   },
   "scripts": {
