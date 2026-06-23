@@ -51,6 +51,11 @@ function generateVersion(): string {
   return crypto.randomBytes(8).toString('hex');
 }
 
+function createAtomicWriteTempPath(filePath: string): string {
+  const nonce = `${Date.now().toString(36)}-${crypto.randomBytes(4).toString('hex')}`;
+  return path.join(path.dirname(filePath), `.${path.basename(filePath)}.${process.pid}.${nonce}.tmp`);
+}
+
 interface PersistedEntry {
   _type: 'entry';
   key: string;
@@ -244,8 +249,8 @@ export class FileExtensionStore implements KodaXExtensionStore {
       lines.push(toPersistedLine(entry));
     }
 
-    // Atomic write via temp file + rename.
-    const tmpPath = this.filePath + '.tmp';
+    // Atomic write via per-process temp file + rename.
+    const tmpPath = createAtomicWriteTempPath(this.filePath);
     await fs.writeFile(tmpPath, lines.join('\n'), 'utf-8');
     try {
       await fs.rename(tmpPath, this.filePath);

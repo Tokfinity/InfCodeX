@@ -51,6 +51,7 @@ interface MakeOptionsExtras {
   provider?: string;
   model?: string;
   extensionRuntime?: KodaXOptions['extensionRuntime'];
+  sessionId?: string;
 }
 
 /**
@@ -67,6 +68,7 @@ function makeOptions(
     ...(extras.provider !== undefined ? { provider: extras.provider } : {}),
     ...(extras.model ? { model: extras.model } : {}),
     ...(extras.extensionRuntime ? { extensionRuntime: extras.extensionRuntime } : {}),
+    ...(extras.sessionId ? { session: { id: extras.sessionId } } : {}),
     context: ctx,
   } as unknown as KodaXOptions;
 }
@@ -210,6 +212,36 @@ describe('buildCapabilityContextSections', () => {
 
     const wd = sections.find((s) => s.id === 'working-directory');
     expect(wd?.content).toBe(`Working Directory: ${cwd}`);
+  });
+
+  it('emits session-scratch-directory only when a session id is available', async () => {
+    const cwd = await createTempDir('kodax-capsec-scratch-');
+    cleanupDirs.push(cwd);
+
+    const withoutSession = await buildCapabilityContextSections(
+      makeOptions({ executionCwd: cwd, gitRoot: cwd }),
+      false,
+      cwd,
+    );
+    expect(ids(withoutSession)).not.toContain('session-scratch-directory');
+
+    const withSession = await buildCapabilityContextSections(
+      makeOptions(
+        { executionCwd: cwd, gitRoot: cwd },
+        { sessionId: 'session A' },
+      ),
+      false,
+      cwd,
+    );
+
+    const sectionIds = ids(withSession);
+    expect(sectionIds).toContain('session-scratch-directory');
+    expect(sectionIds.indexOf('working-directory'))
+      .toBeLessThan(sectionIds.indexOf('session-scratch-directory'));
+    const scratch = withSession.find((s) => s.id === 'session-scratch-directory');
+    expect(scratch?.content).toBe(
+      `Session Scratch Directory: ${path.join(cwd, '.agent', 'tmp', 'sessions', 'session_A')}`,
+    );
   });
 });
 

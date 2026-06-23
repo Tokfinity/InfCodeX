@@ -6,6 +6,21 @@ All notable changes to this project will be documented in this file.
 
 ## [Unreleased]
 
+## [0.7.55] - 2026-06-23
+
+> Scope note: a fast emergency release hardening **concurrent same-directory session safety**. When two KodaX sessions run against the same git root, they previously shared one scratch root, one extension-store temp file, and an ownerless managed-task checkpoint — so they could overwrite each other's helper files, clobber each other's atomic writes, and resume each other's in-flight tasks. This release scopes each of those to the owning session/process. The one LLM-facing surface (the Worker / role / system workspace-discipline block plus a new `Session Scratch Directory` environment line) ships with a paired prompt eval (`tests/v0755-session-scratch-discipline.eval.ts`); the 5-alias panel shows the reworded discipline introduces **zero** new scratch leakage to the project root or system tmp (`no_leak` 5/5 on every alias for both the v0.7.54 and v0.7.55 wording), with positive session-directory adoption wherever a model writes its scratch file in-turn (ADR-033 / FEATURE_104).
+
+### Added
+
+- **Per-session scratch directory.** Each session now gets an isolated `.agent/tmp/sessions/<session-id>/` scratch directory (`getSessionScratchDir`, sanitized + length-capped id). It is disclosed to the model through a new `session-scratch-directory` capability section, the Worker/role `## Environment` block, and the system-prompt scratch guidance, and is exported to shell commands as `KODAX_SESSION_TMP`. The workspace-discipline wording now points scratch writes at the session directory (falling back to a session-scoped `.agent/tmp/sessions/` subdirectory when no absolute path is shown) instead of the shared `.agent/tmp/` root, so concurrent same-directory sessions no longer collide.
+
+### Fixed
+
+- **Managed-task checkpoints no longer resume across sessions.** Checkpoints now record the owning `sessionId` (plus a diagnostic `processId`), and `findValidCheckpoint` only resumes a checkpoint that belongs to the current session — preventing one session from picking up another session's in-flight task. Expired checkpoints are still garbage-collected by any session, so ownerless legacy checkpoints do not accumulate. The runner attaches a stable session id only when a real host session, storage, or `askUser` channel is present, so ad-hoc callers prefer a safe checkpoint miss over a cross-session attachment.
+- **Extension-store atomic writes are now per-process.** `FileExtensionStore` writes through a `pid`+nonce-scoped temp file before the rename instead of a single shared `<file>.tmp`, so concurrent processes can no longer clobber each other's in-flight write.
+- **MCP tools are stripped when no capability runtime is bound.** AMA role tool assembly and the role expected-tool surface now drop MCP tool names when no extension runtime is present (the dispatch fallback would otherwise just throw), and the role contract helper takes whether a runtime is actually bound.
+- **Agent-construction and self-modify tools are gated consistently.** The runtime active-tool resolver now also applies the agent-construction filter, and that filter strips the `stage_self_modify` tool alongside the agent-construction tools, so neither surfaces unless construction mode is explicitly active.
+
 ## [0.7.54] - 2026-06-23
 
 > Scope note: a feature release headlined by **FEATURE_224** (procedural learning triage + SkillCurator v1), with several supporting capabilities folded into the same window — opt-in **session recovery** from a safe summary when a provider rejects the current history, filesystem **extension discovery** plus a reusable extension-runtime composition primitive and ACP capability multiplexing/logging, and a GLM provider-model refresh. The learning loop is user-driven through `/learn` and never auto-applies. Most of the batch is ADR-033 eval non-triggering infrastructure; the only prompt-surface touch is the `manual` self-knowledge tool gaining an `extensions` topic — the paired `self-knowledge-roundtrip` eval was not re-run in this window (additive enumeration, low cross-case risk).

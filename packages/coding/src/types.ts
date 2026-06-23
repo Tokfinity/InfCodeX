@@ -1505,6 +1505,8 @@ export interface KodaXToolExecutionContext {
   selfManual?: KodaXSelfManualConfig;
   /** Working directory used to resolve relative paths and execute shell commands. */
   executionCwd?: string;
+  /** Session-scoped directory for helper scripts and scratch outputs. */
+  sessionScratchDir?: string;
   /**
    * Active skill invocation for the current managed run. Child dispatch uses
    * this to preserve the skill's support-file roots in sub-agent briefings.

@@ -84,6 +84,15 @@ describe('createRolePrompt — runtime identity in workspace section', () => {
     expect(rendered).toContain('Platform: Windows');
   });
 
+  it('emits Session Scratch Directory and scratch discipline when supplied', () => {
+    const scratchDir = 'C:\\Works\\GitWorks\\KodaX-author\\KodaX\\.agent\\tmp\\sessions\\session-1';
+    const rendered = callWorker(buildContext({ scratchDir }));
+
+    expect(rendered).toContain(`Session Scratch Directory: ${scratchDir}`);
+    expect(rendered).toContain(`write it under the Session Scratch Directory above: ${scratchDir}`);
+    expect(rendered).toContain('Do not write directly in the shared `.agent/tmp/` root.');
+  });
+
   // FEATURE_193 v0.7.43: emits identity facts for non-Scout roles (Generator) it deleted (V1 generator role retired)
 });
 

@@ -10,14 +10,14 @@
 
 | Item | Value |
 |---|---|
-| Current released version | `v0.7.54` |
-| Current package version | `@kodax-ai/kodax@0.7.54` (released 2026-06-23) |
+| Current released version | `v0.7.55` |
+| Current package version | `@kodax-ai/kodax@0.7.55` (released 2026-06-23) |
 | Workspace baseline | `llm / agent / coding / repl` 4 packages |
-| Total tracked features | `23` |
+| Total tracked features | `24` |
 | InProgress | `0` |
-| Planned | `15` |
+| Planned | `16` |
 | Completed | `8` |
-| Tracked feature IDs | `007, 030, 093, 105, 108, 113, 139, 174, 211, 224, 225, 228, 229, 230, 231, 232, 233, 234, 235, 236, 237, 238, 239` |
+| Tracked feature IDs | `007, 030, 093, 105, 108, 113, 139, 174, 211, 224, 225, 228, 229, 230, 231, 232, 233, 234, 235, 236, 237, 238, 239, 240` |
 | Archive cutoff | Shipped / canceled / absorbed / shelved items through `v0.7.49` are archived. |
 
 ### 一览表
@@ -26,7 +26,7 @@
 |---|---:|---|---|
 | Completed | 8 | `224, 174, 211, 237, 229, 230, 234, 236` | `224` released v0.7.54; `174, 211, 237` v0.7.53; `229` v0.7.50; `230, 234, 236` v0.7.51 |
 | InProgress | 0 | `—` | no feature in active implementation |
-| Planned, near-term | 10 | `239, 233, 228, 231, 235, 238, 232, 105, 108, 225` | `v0.7.55` -> `v0.7.81` |
+| Planned, near-term | 11 | `239, 240, 233, 228, 231, 235, 238, 232, 105, 108, 225` | `v0.7.56` -> `v0.7.81` |
 | Planned, v0.8.x | 5 | `007, 030, 093, 113, 139` | `v0.8.5+` |
 
 > v0.7.49 / v0.7.50 workflow split：`FEATURE_217` remains the human-facing workflow mode. Manual testing reopened required UI/UX and reliability deltas inside [v0.7.49](features/v0.7.49.md#13-v0749-completion-delta): bounded live progress with phase index / running 智能体 wording / preserved progress row / elapsed time / completed-child token usage, localized assistant-style launch notes, result-bearing child-agent digests or folded long-report notices, non-`info` agentic transcript, clear separation between `finished/spawned` progress and lifetime `maxAgents` cap, final synthesis, generated final-result contract lint, implicit `tokenBudget` stripping, generated task-command crash hardening, tighter AMAW invocation policy, wait timeout propagation, no default total workflow wall-clock timeout, terminal cleanup for un-awaited children, accurate template read/write metadata, capsule min-version preflight, manual run cleanup controls, and the closed minimal saved-workflow named reuse delta (`/workflow <savedName>` plus `/workflow rerun <runId|savedName>` with help/completion). `FEATURE_229` in v0.7.50 is the platform layer: it standardizes the same process as agent-layer snapshot/events, SDK subscription/polling, Space-style host policy and lifecycle controls, terminal-state helpers, workflow identity/lifecycle controls beyond named reuse (`display name | revise | rename | revision provenance`), REPL-as-consumer rendering, conservative retention, and durable source/provenance/resultSummary persistence; it is not the first implementation of the user-visible UX.
@@ -36,7 +36,8 @@
 | Version | Planned features |
 |---|---:|
 | `v0.7.54` | `1` |
-| `v0.7.55` | `1` |
+| `v0.7.55` | `0` |
+| `v0.7.56` | `2` |
 | `v0.7.57` | `1` |
 | `v0.7.60` | `1` |
 | `v0.7.63` | `1` |
@@ -51,10 +52,10 @@
 | `v0.8.25` | `1` |
 
 > Release cadence rule: every `v0.7.x` feature-bearing release normally leaves
-> the next two patch versions for debug/patch releases. `FEATURE_239` is an
-> explicit exception for the Space-blocking SDK multimodal input gap and takes
-> the `v0.7.55` slot; `v0.7.56` remains the immediate patch window before the
-> next planned feature slot at `v0.7.57`.
+> the next two patch versions for debug/patch releases. `v0.7.55` is intentionally
+> left without a planned feature so it can be used for the temporary emergency
+> release. `FEATURE_239` and `FEATURE_240` both move to `v0.7.56`; `v0.7.57`
+> remains the next planned feature slot.
 
 ---
 
@@ -71,7 +72,8 @@
 
 | ID | Title | Category | Priority | Planned | Design |
 |---|---|---|---|---|---|
-| `239` | SDK Multimodal Input + Clipboard Image Public API | SDK / Media + Provider Capability | High | `v0.7.55` | [v0.7.55](features/v0.7.55.md#feature_239-sdk-multimodal-input--clipboard-image-public-api) |
+| `239` | SDK Multimodal Input + Clipboard Image Public API | SDK / Media + Provider Capability | High | `v0.7.56` | [v0.7.56](features/v0.7.56.md#feature_239-sdk-multimodal-input--clipboard-image-public-api) |
+| `240` | Cross-Protocol `stopReason` Normalization + Terminal Semantics Dispatch | LLM / Provider Protocol + Runtime Robustness | High | `v0.7.56` | [v0.7.56](features/v0.7.56.md#feature_240-cross-protocol-stopreason-normalization--terminal-semantics-dispatch) |
 | `233` | Effort-First Reasoning Control System | LLM / Provider Capability + Runtime UX | High | `v0.7.57` | [v0.7.57](features/v0.7.57.md#feature_233-effort-first-reasoning-control-system) |
 | `228` | Unified Memory Control Plane + Memory Governance | Core / Memory + Governance | High | `v0.7.60` | [v0.7.60](features/v0.7.60.md#feature_228-unified-memory-control-plane--memory-governance) |
 | `231` | Durable Workflow Replay Resume | Core / Workflow Persistence | High | `v0.7.63` | [v0.7.63](features/v0.7.63.md#feature_231-durable-workflow-replay-resume) |
@@ -97,6 +99,7 @@
 - 已完成、取消、吸收、搁置的历史项归档到 [FEATURES_ARCHIVED.md](FEATURES_ARCHIVED.md)，避免它们继续污染待办统计。
 - 新 feature 进入本表前，应先确认是否已有相同目标、是否可被现有 feature 吸收、是否需要单独设计文档。
 - 发布后把对应行移出本表，并把发布事实写入 [CHANGELOG.md](../CHANGELOG.md) 或归档。
+- Emergency patch absorption: Session Scratch Directory / `KODAX_SESSION_TMP` is tracked as a `FEATURE_071` workspace-discipline extension, not as a new active feature ID. The patch gives each session a repo-local `.agent/tmp/sessions/<session-id>/` scratch path and keeps temporary helper files out of shared roots.
 
 ---
 
