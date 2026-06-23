@@ -10,7 +10,7 @@ export function buildSelfKnowledgeRoutingRule(productName = 'KodaX'): string {
   return [
     `${productName} self-knowledge: when the user asks how to use, install, configure,`,
     `troubleshoot, or extend ${productName} itself — providers, custom providers, config,`,
-    'permissions, slash commands, tools, custom agents, skills, MCP, repo',
+    'permissions, slash commands, tools, custom agents, skills, extensions, MCP, repo',
     'intelligence, sessions, the doctor command, or the SDK — call the',
     'kodax_manual tool first and answer from it.',
     '',

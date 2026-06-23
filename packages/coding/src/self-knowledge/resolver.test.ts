@@ -28,6 +28,13 @@ describe('FEATURE_218 resolveKodaXManual', () => {
     expect(['providers', 'custom-providers', 'config']).toContain(r.matchedTopic);
   });
 
+  it('resolves extension authoring questions', () => {
+    const r = resolveKodaXManual({ query: 'how do I write a KodaX extension' });
+    expect(r.matchedTopic).toBe('extensions');
+    expect(r.content).toContain('~/.kodax/extensions');
+    expect(r.content).toContain('/extensions');
+  });
+
   it('resolves a Chinese free-text query', () => {
     const r = resolveKodaXManual({ query: '怎么 resume 上一次 session' });
     expect(r.matchedTopic).toBe('sessions');
@@ -42,8 +49,9 @@ describe('FEATURE_218 resolveKodaXManual', () => {
   it('returns the full index for empty input', () => {
     const r = resolveKodaXManual({});
     expect(r.matchedTopic).toBe('index');
-    // index lists all 17 topic ids
+    // index lists all bundled topic ids
     expect(r.content).toContain('overview');
+    expect(r.content).toContain('extensions');
     expect(r.content).toContain('troubleshooting');
   });
 

@@ -127,7 +127,7 @@ export const BUILTIN_TOOL_DEFINITIONS: LocalToolDefinition[] = [
     name: 'kodax_manual',
     description: [
       'Look up how to use, install, configure, troubleshoot, or extend KodaX itself.',
-      'Covers providers, custom providers, config, permissions, slash commands, tools, custom agents, skills, MCP, repo intelligence, sessions, the doctor command, and the SDK.',
+      'Covers providers, custom providers, config, permissions, slash commands, tools, custom agents, skills, extensions, MCP, repo intelligence, sessions, the doctor command, and the SDK.',
       'Call this first for any "how do I … in KodaX" question and answer from its result.',
       'Do not answer KodaX product questions from pretraining, because pretraining mixes in Claude Code and Codex CLI details that do not match KodaX — KodaX uses ~/.kodax/config.json and KODAX_* env vars, not .claude/settings.json or config.toml.',
       'Pass an exact topic id, or a free-text query, or neither to get the topic index. It explains where to check a value rather than reading your secrets.',
@@ -137,7 +137,7 @@ export const BUILTIN_TOOL_DEFINITIONS: LocalToolDefinition[] = [
       properties: {
         topic: {
           type: 'string',
-          description: 'A manual topic id (e.g. "providers", "config", "agents", "doctor"). Unknown topics return the index.',
+          description: 'A manual topic id (e.g. "providers", "config", "agents", "extensions", "doctor"). Unknown topics return the index.',
         },
         query: {
           type: 'string',

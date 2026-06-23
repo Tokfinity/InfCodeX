@@ -18,6 +18,8 @@ const MANUAL_REFERENCED_COMMANDS = [
   'mcp',
   'skill',
   'goal',
+  'learn',
+  'recover',
 ] as const;
 
 describe('FEATURE_218 manual ↔ commands drift guard', () => {

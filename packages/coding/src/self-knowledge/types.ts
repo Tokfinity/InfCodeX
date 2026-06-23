@@ -18,6 +18,7 @@ export type KodaXManualTopicId =
   | 'tools'
   | 'agents'
   | 'skills'
+  | 'extensions'
   | 'mcp'
   | 'repo-intelligence'
   | 'sessions'
