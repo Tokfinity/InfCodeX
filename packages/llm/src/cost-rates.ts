@@ -91,7 +91,9 @@ export const DEFAULT_COST_RATES: Readonly<Record<string, Readonly<Record<string,
     // sliding-window quota. Listed at ~10% of the standard pay-per-token
     // Ark API rates per the Plan announcement.
     'glm-5.1': { inputPer1M: 0.005, outputPer1M: 0.015 },
+    'glm-5.2': { inputPer1M: 0.005, outputPer1M: 0.015 },
     'glm-4.7': { inputPer1M: 0.005, outputPer1M: 0.015 },
+    'kimi-k2.7-code': { inputPer1M: 0.005, outputPer1M: 0.015 },
     'kimi-k2.6': { inputPer1M: 0.005, outputPer1M: 0.015 },
     'MiniMax-M3': { inputPer1M: 0.005, outputPer1M: 0.015 },
     'MiniMax-M2.7': { inputPer1M: 0.005, outputPer1M: 0.015 },

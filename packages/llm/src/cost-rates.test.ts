@@ -29,12 +29,14 @@ describe('cost-rates', () => {
       });
     });
 
-    it('should have ark-coding subscription placeholder rates for all 11 routed models', () => {
+    it('should have ark-coding subscription placeholder rates for all 13 routed models', () => {
       const ark = DEFAULT_COST_RATES['ark-coding'];
       expect(ark).toBeDefined();
       const expectedModels = [
         'glm-5.1',
+        'glm-5.2',
         'glm-4.7',
+        'kimi-k2.7-code',
         'kimi-k2.6',
         'MiniMax-M3',
         'MiniMax-M2.7',

@@ -79,14 +79,17 @@ describe('provider registry', () => {
     const ark = getProvider('ark-coding');
     expect(ark.name).toBe('ark-coding');
 
-    // Default + alts together must cover all 11 models the gateway routes
+    // Default + alts together must cover all 13 models the gateway routes
     // to (V4 Pro / V4 Flash added 2026-05; kimi-k2.5 + minimax-latest
-    // retired and MiniMax-M3 + MiniMax-M2.7 added 2026-06 per user
-    // confirmation against the Ark console).
+    // retired and MiniMax-M3 + MiniMax-M2.7 added 2026-06; GLM-5.2 +
+    // Kimi K2.7 Code added late-2026-06 per user confirmation against
+    // the Ark console).
     const models = ark.getAvailableModels();
     expect(models).toEqual([
       'glm-5.1',
+      'glm-5.2',
       'glm-4.7',
+      'kimi-k2.7-code',
       'kimi-k2.6',
       'MiniMax-M3',
       'MiniMax-M2.7',
@@ -99,11 +102,14 @@ describe('provider registry', () => {
     ]);
 
     // Per-model context window pins (user-confirmed against Volcengine
-    // console catalog). Default GLM family at 200K, Kimi-K2.6/Doubao
-    // at 256K, MiniMax-M2.7 at 204_800, MiniMax-M3 at 1M (Frontier
-    // Coding), DeepSeek V3.2 at 128K, DeepSeek V4 at 1M.
+    // console catalog). Default GLM family at 200K, GLM-5.2 at 1M
+    // (matches zhipu-coding/glm-5.2), Kimi at 256K, MiniMax-M2.7 at
+    // 204_800, MiniMax-M3 at 1M (Frontier Coding), DeepSeek V3.2 at
+    // 128K, DeepSeek V4 at 1M.
     expect(ark.getEffectiveContextWindow('glm-5.1')).toBe(200_000);
+    expect(ark.getEffectiveContextWindow('glm-5.2')).toBe(1_000_000);
     expect(ark.getEffectiveContextWindow('glm-4.7')).toBe(200_000);
+    expect(ark.getEffectiveContextWindow('kimi-k2.7-code')).toBe(256_000);
     expect(ark.getEffectiveContextWindow('kimi-k2.6')).toBe(256_000);
     expect(ark.getEffectiveContextWindow('MiniMax-M3')).toBe(1_000_000);
     expect(ark.getEffectiveContextWindow('MiniMax-M2.7')).toBe(204_800);
@@ -113,6 +119,11 @@ describe('provider registry', () => {
     expect(ark.getEffectiveContextWindow('doubao-seed-2.0-code')).toBe(256_000);
     expect(ark.getEffectiveContextWindow('doubao-seed-2.0-pro')).toBe(256_000);
     expect(ark.getEffectiveContextWindow('doubao-seed-2.0-lite')).toBe(256_000);
+
+    // GLM-5.2 carries an explicit maxOutputTokens override (131_072,
+    // matches zhipu-coding/glm-5.2) — pin it so future JSON edits
+    // can't silently regress to the provider-level 32_000 default.
+    expect(ark.getEffectiveMaxOutputTokens('glm-5.2')).toBe(131_072);
 
     expect(getProviderConfiguredReasoningCapability('ark-coding', 'glm-5.1')).toBe('native-budget');
   });
