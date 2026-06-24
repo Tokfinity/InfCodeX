@@ -144,7 +144,10 @@ export type {
   KodaXTaskRoleAssignment,
   KodaXTaskWorkItem,
   KodaXTaskEvidenceArtifact,
+  KodaXImageInputArtifact,
+  KodaXImageMediaType,
   KodaXInputArtifact,
+  KodaXInputArtifactSource,
   KodaXTaskEvidenceEntry,
   KodaXTaskEvidenceBundle,
   KodaXTaskToolPolicy,
@@ -185,6 +188,10 @@ export {
   KodaXSessionError,
   KodaXTerminalError,
 } from './errors.js';
+
+// ============== Media / Input Artifacts ==============
+
+export * from './media/index.js';
 
 // ============== Error Classification ==============
 

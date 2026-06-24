@@ -1,6 +1,7 @@
 #!/usr/bin/env node
 // FEATURE_150 (v0.7.37) — npm distribution bundle builder.
 // ADR-024 (v0.7.39) — SDK subpath exports added (agent / llm / coding / repl / skills).
+// Later releases added mcp / session / media subpaths.
 //
 // Produces the following artifacts under dist/:
 //   1. dist/kodax_cli.js     — CLI entry (bin command runs this; self-contained)
@@ -8,12 +9,14 @@
 //   3. dist/sdk-agent.js     — SDK subpath `@kodax-ai/kodax/agent`
 //   4. dist/sdk-llm.js       — SDK subpath `@kodax-ai/kodax/llm`
 //   5. dist/sdk-coding.js    — SDK subpath `@kodax-ai/kodax/coding`
-//   6. dist/sdk-repl.js      — SDK subpath `@kodax-ai/kodax/repl`
-//   7. dist/sdk-skills.js    — SDK subpath `@kodax-ai/kodax/skills`
-//   8. dist/sdk-mcp.js       — SDK subpath `@kodax-ai/kodax/mcp` (v0.7.42)
-//   9. dist/chunks/*.js      — shared chunks produced by ESM code-splitting
-//                                across the 7 SDK entries (avoids 7× bundle bloat).
-//  10. dist/builtin/         — verbatim copy of
+//   6. dist/sdk-media.js     — SDK subpath `@kodax-ai/kodax/media`
+//   7. dist/sdk-repl.js      — SDK subpath `@kodax-ai/kodax/repl`
+//   8. dist/sdk-skills.js    — SDK subpath `@kodax-ai/kodax/skills`
+//   9. dist/sdk-mcp.js       — SDK subpath `@kodax-ai/kodax/mcp` (v0.7.42)
+//  10. dist/sdk-session.js   — SDK subpath `@kodax-ai/kodax/session`
+//  11. dist/chunks/*.js      — shared chunks produced by ESM code-splitting
+//                                across the 9 SDK entries (avoids repeated bundle bloat).
+//  12. dist/builtin/         — verbatim copy of
 //                                packages/agent/dist/capabilities/skills/builtin/
 //                                (FEATURE_194 v0.7.43; pre-v0.7.43 source was
 //                                packages/skills/dist/builtin/).
@@ -28,7 +31,7 @@
 // esbuild's automatic transitive import tracking. All third-party packages
 // (and node built-ins) stay external and are listed in root package.json#dependencies.
 //
-// CLI stays self-contained (no chunk hops) for fastest bin startup. The 6
+// CLI stays self-contained (no chunk hops) for fastest bin startup. The 9
 // SDK entries share code via `splitting: true` so re-exporting the same
 // internal package from multiple subpaths doesn't multiply tarball size.
 //
@@ -278,17 +281,17 @@ log(`  ✓ dist/kodax_cli.js (${(cliBytes / 1024).toFixed(0)} kB)`);
 
 // ---- build SDK entries (multi-entry + code-splitting) -------------------
 //
-// ADR-024: the 7 SDK entries (root + 6 subpaths) share large internal
+// ADR-024: the 9 SDK entries (root + 8 subpaths) share large internal
 // packages (e.g. sdk-coding re-exports @kodax-ai/coding which also surfaces
 // through the root index.ts). Without splitting, each entry would inline
-// the same code → 6× tarball bloat. With `splitting: true`, esbuild emits
+// the same code across entries. With `splitting: true`, esbuild emits
 // shared `dist/chunks/*.js` and each entry imports only what it needs.
 //
 // Helper scripts (`loadKodaXSDK()`) use `await import('../../../index.js')`
 // — Node's ESM resolver follows chunk imports transparently, so splitting
 // does not affect the helper-depth contract verified below.
 
-const sdkEntryNames = ['index', 'sdk-agent', 'sdk-llm', 'sdk-coding', 'sdk-repl', 'sdk-skills', 'sdk-mcp', 'sdk-session'];
+const sdkEntryNames = ['index', 'sdk-agent', 'sdk-llm', 'sdk-coding', 'sdk-media', 'sdk-repl', 'sdk-skills', 'sdk-mcp', 'sdk-session'];
 const sdkEntryPoints = sdkEntryNames.map((name) => {
   // index.ts lives directly under src/, the others as src/sdk-<name>.ts.
   const filename = name === 'index' ? 'index.ts' : `${name}.ts`;

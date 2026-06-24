@@ -6,6 +6,18 @@ All notable changes to this project will be documented in this file.
 
 ## [Unreleased]
 
+### Added
+
+- **FEATURE_239 - SDK media input artifacts.** Added `@kodax-ai/kodax/media` and `@kodax-ai/coding/media` with shared image clipboard, normalization, persistence, artifact construction, model input capability, and artifact validation helpers. REPL paste internals now re-export the shared media helpers, and runtime validation rejects unsupported image/video/file artifacts before provider send.
+
+### Changed
+
+- **SDK typing note.** `KodaXInputArtifact.mediaType` is now narrowed from `string` to `KodaXImageMediaType` (`image/png` | `image/jpeg` | `image/webp` | `image/gif`). The runtime shape remains image-only for v0.7.56, but TypeScript SDK consumers passing arbitrary media strings may need to narrow or validate them first.
+
+### Fixed
+
+- **FEATURE_240 - Cross-protocol stop reason handling.** Added a provider-neutral stop-reason classifier while keeping `KodaXStreamResult.stopReason` as the raw upstream string. OpenAI-compatible `length` now reaches max-token continuation, `stop` reaches managed-protocol recovery, and pause/refusal/unknown terminal cases are handled explicitly.
+
 ## [0.7.55] - 2026-06-23
 
 > Scope note: a fast emergency release hardening **concurrent same-directory session safety**. When two KodaX sessions run against the same git root, they previously shared one scratch root, one extension-store temp file, and an ownerless managed-task checkpoint — so they could overwrite each other's helper files, clobber each other's atomic writes, and resume each other's in-flight tasks. This release scopes each of those to the owning session/process. The one LLM-facing surface (the Worker / role / system workspace-discipline block plus a new `Session Scratch Directory` environment line) ships with a paired prompt eval (`tests/v0755-session-scratch-discipline.eval.ts`); the 5-alias panel shows the reworded discipline introduces **zero** new scratch leakage to the project root or system tmp (`no_leak` 5/5 on every alias for both the v0.7.54 and v0.7.55 wording), with positive session-directory adoption wherever a model writes its scratch file in-turn (ADR-033 / FEATURE_104).

@@ -11,7 +11,7 @@
 // `tsc` reading those .d.ts files fails to resolve @kodax-ai/coding etc. with
 // "no exported member" — even though the runtime import works.
 //
-// Fix: bundle the 6 SDK entry .d.ts the same way esbuild bundles their .js,
+// Fix: bundle the 9 SDK entry .d.ts the same way esbuild bundles their .js,
 // using rollup-plugin-dts with code-splitting. The output is self-contained:
 // no residual @kodax-ai/* imports, only third-party externals stay as imports
 // (consumers npm-install those anyway via root package.json#dependencies).
@@ -21,9 +21,11 @@
 //   dist/sdk-agent.d.ts
 //   dist/sdk-llm.d.ts
 //   dist/sdk-coding.d.ts
+//   dist/sdk-media.d.ts
 //   dist/sdk-repl.d.ts
 //   dist/sdk-skills.d.ts
 //   dist/sdk-mcp.d.ts
+//   dist/sdk-session.d.ts
 //   dist/types-chunks/*.d.ts     ← shared chunks (mirrors esbuild splitting)
 //
 // External list mirrors build-bundle.mjs: anything in root dependencies stays
@@ -82,14 +84,25 @@ const sdkEntries = {
   'sdk-agent': 'src/sdk-agent.ts',
   'sdk-llm': 'src/sdk-llm.ts',
   'sdk-coding': 'src/sdk-coding.ts',
+  'sdk-media': 'src/sdk-media.ts',
   'sdk-repl': 'src/sdk-repl.ts',
   'sdk-skills': 'src/sdk-skills.ts',
   'sdk-mcp': 'src/sdk-mcp.ts',
   'sdk-session': 'src/sdk-session.ts',
 };
 
+const internalSubpathDtsResolver = {
+  name: 'internal-subpath-dts-resolver',
+  resolveId(id) {
+    if (id === '@kodax-ai/coding/media') {
+      return path.join(repoRoot, 'packages/coding/src/media/index.ts');
+    }
+    return null;
+  },
+};
+
 // Clean prior tsc emit so stale per-file .d.ts (acp_*.d.ts, cli_commands.d.ts,
-// kodax_cli.d.ts, *.test.d.ts) don't ship. Only the 6 SDK entries + chunks
+// kodax_cli.d.ts, *.test.d.ts) don't ship. Only the 9 SDK entries + chunks
 // remain after this script.
 function cleanStaleEmit() {
   log('Cleaning stale dist/*.d.ts (prior tsc emit)…');
@@ -123,7 +136,7 @@ async function main() {
     // respectExternal: don't try to inline third-party type definitions even
     // if they happen to be resolvable on disk. Keeps the bundle scoped to
     // first-party (@kodax-ai/*) + local src code.
-    plugins: [dts({ respectExternal: true })],
+    plugins: [internalSubpathDtsResolver, dts({ respectExternal: true })],
     // Silence Rollup's "unused external import" warnings only — type
     // re-exports legitimately produce these (e.g. `export type { X } from
     // 'pkg'` where X is the only consumer). Do NOT silence other warnings

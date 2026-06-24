@@ -25,7 +25,7 @@
 //      will accept the publish. Capture pristine bytes for restore.
 //      Name / exports / bin / publishConfig are NOT rewritten — root
 //      package.json is already in published shape (v0.7.43 SDK consumer
-//      `npm link` ergonomics: name=@kodax-ai/kodax, all 7 SDK subpath
+//      `npm link` ergonomics: name=@kodax-ai/kodax, all 8 SDK subpath
 //      exports baked in, bin path published-clean). See ADR-024.
 //   5. Run `npm publish` (or --dry-run).
 //   6. Restore pristine package.json bytes — re-asserts `private: true`

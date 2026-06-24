@@ -179,6 +179,10 @@ export {
 // transports. See `tool-input-parser.ts` JSDoc for the salvage strategy.
 export { parseToolInputWithSalvage } from './providers/tool-input-parser.js';
 
+// FEATURE_240 (v0.7.56): provider-neutral consumer-side stopReason classifier.
+export { classifyStopReason } from './stop-reason.js';
+export type { KodaXStopClass } from './stop-reason.js';
+
 // ============== Cost Tracking ==============
 export { DEFAULT_COST_RATES, getCostRate, calculateCost } from './cost-rates.js';
 export type { CostRate } from './cost-rates.js';

@@ -20,6 +20,7 @@ import {
 } from '../types.js';
 import type { KodaXMessage, KodaXStreamResult } from '@kodax-ai/llm';
 import {
+  classifyStopReason,
   createCostTracker,
   recordUsage,
   recordRetry,
@@ -109,6 +110,7 @@ import { buildToolExecutionContext } from './tool-execution-context.js';
 import { resolvePerTurnReasoning } from './per-turn-reasoning.js';
 import { buildStreamTimers } from './stream-timers.js';
 import { applyProviderPolicyGate } from './provider-policy-gate.js';
+import { validateInputArtifactsForModel } from '../media/index.js';
 import { buildStreamHandlers } from './stream-handler-wiring.js';
 import { BoundaryTrackerSession } from './boundary-tracker-session.js';
 import {
@@ -719,6 +721,13 @@ export async function runSubstrate(
         executionMode: effectiveReasoningPlan.decision.recommendedMode,
         baseSystemPrompt: preparedProviderState.systemPrompt,
       });
+      validateInputArtifactsForModel(
+        currentExecution.effectiveOptions.context?.inputArtifacts ?? [],
+        {
+          provider: turnState.currentProviderName,
+          model: turnState.currentModelOverride,
+        },
+      );
       assertProviderConfigured(streamProvider, turnState.currentProviderName);
 
       await emitActiveExtensionEvent('provider:selected', {
@@ -1078,6 +1087,19 @@ export async function runSubstrate(
       if (protocolContinueOutcome.outcome === 'continue') {
         contextTokenSnapshot = protocolContinueOutcome.nextContextTokenSnapshot;
         continue;
+      }
+
+      const stopClass = classifyStopReason(result.stopReason);
+      if (stopClass === 'refused') {
+        events.onTextDelta?.('\n\n[model declined to answer]\n\n');
+      } else if (stopClass === 'unknown' && typeof result.stopReason === 'string') {
+        console.warn('[kodax:stop-reason]', {
+          rawStopReason: result.stopReason,
+          provider: turnState.currentProviderName,
+          model: turnState.currentModelOverride ?? streamProvider.getModel(),
+          hasToolBlocks: result.toolBlocks.length > 0,
+          hasTextBlocks: result.textBlocks.length > 0,
+        });
       }
 
       if (result.toolBlocks.length === 0) {

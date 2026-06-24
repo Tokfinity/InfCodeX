@@ -2,11 +2,12 @@ import fs from 'node:fs';
 import path from 'node:path';
 import type {
   KodaXContentBlock,
+  KodaXImageMediaType,
   KodaXInputArtifact,
 } from '@kodax-ai/coding';
 import { buildPromptMessageContent } from '@kodax-ai/coding';
 
-const IMAGE_MEDIA_TYPES: Record<string, string> = {
+const IMAGE_MEDIA_TYPES: Record<string, KodaXImageMediaType> = {
   '.gif': 'image/gif',
   '.jpeg': 'image/jpeg',
   '.jpg': 'image/jpeg',
@@ -23,7 +24,7 @@ export interface PreparedPromptInputArtifacts {
   warnings: string[];
 }
 
-function resolveImageMediaType(filePath: string): string | undefined {
+function resolveImageMediaType(filePath: string): KodaXImageMediaType | undefined {
   return IMAGE_MEDIA_TYPES[path.extname(filePath).toLowerCase()];
 }
 

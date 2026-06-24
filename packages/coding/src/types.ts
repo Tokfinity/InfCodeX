@@ -1274,13 +1274,27 @@ export interface KodaXTaskEvidenceArtifact {
   description?: string;
 }
 
-export interface KodaXInputArtifact {
-  kind: 'image';
-  path: string;
-  mediaType?: string;
-  source: 'user-inline';
-  description?: string;
+export type KodaXImageMediaType =
+  | 'image/png'
+  | 'image/jpeg'
+  | 'image/webp'
+  | 'image/gif';
+
+export type KodaXInputArtifactSource =
+  | 'user-inline'
+  | 'clipboard'
+  | 'drag-drop'
+  | 'file-picker';
+
+export interface KodaXImageInputArtifact {
+  readonly kind: 'image';
+  readonly path: string;
+  readonly mediaType?: KodaXImageMediaType;
+  readonly source?: KodaXInputArtifactSource;
+  readonly description?: string;
 }
+
+export type KodaXInputArtifact = KodaXImageInputArtifact;
 
 export interface KodaXTaskEvidenceEntry {
   assignmentId: string;

@@ -32,6 +32,10 @@
       "types": "./dist/sdk-coding.d.ts",
       "import": "./dist/sdk-coding.js"
     },
+    "./media": {
+      "types": "./dist/sdk-media.d.ts",
+      "import": "./dist/sdk-media.js"
+    },
     "./repl": {
       "types": "./dist/sdk-repl.d.ts",
       "import": "./dist/sdk-repl.js"

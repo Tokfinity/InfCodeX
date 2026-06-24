@@ -18,6 +18,10 @@
     "./extensions": {
       "types": "./dist/extensions/index.d.ts",
       "import": "./dist/extensions/index.js"
+    },
+    "./media": {
+      "types": "./dist/media/index.d.ts",
+      "import": "./dist/media/index.js"
     }
   },
   "scripts": {
@@ -32,6 +36,7 @@
     "@kodax-ai/llm": "*",
     "glob": "^11.0.1",
     "iconv-lite": "^0.6.3",
+    "jimp": "^1.6.0",
     "tsx": "^4.21.0",
     "typescript": "^5.9.3",
     "vscode-languageserver-protocol": "^3.17.5"

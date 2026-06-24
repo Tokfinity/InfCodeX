@@ -15,8 +15,8 @@
 | Workspace baseline | `llm / agent / coding / repl` 4 packages |
 | Total tracked features | `24` |
 | InProgress | `0` |
-| Planned | `16` |
-| Completed | `8` |
+| Planned | `14` |
+| Completed | `10` |
 | Tracked feature IDs | `007, 030, 093, 105, 108, 113, 139, 174, 211, 224, 225, 228, 229, 230, 231, 232, 233, 234, 235, 236, 237, 238, 239, 240` |
 | Archive cutoff | Shipped / canceled / absorbed / shelved items through `v0.7.49` are archived. |
 
@@ -24,9 +24,9 @@
 
 | Status | Count | Feature IDs | Next checkpoint |
 |---|---:|---|---|
-| Completed | 8 | `224, 174, 211, 237, 229, 230, 234, 236` | `224` released v0.7.54; `174, 211, 237` v0.7.53; `229` v0.7.50; `230, 234, 236` v0.7.51 |
+| Completed | 10 | `240, 239, 224, 174, 211, 237, 229, 230, 234, 236` | `239, 240` implemented for v0.7.56; `224` released v0.7.54; `174, 211, 237` v0.7.53; `229` v0.7.50; `230, 234, 236` v0.7.51 |
 | InProgress | 0 | `—` | no feature in active implementation |
-| Planned, near-term | 11 | `239, 240, 233, 228, 231, 235, 238, 232, 105, 108, 225` | `v0.7.56` -> `v0.7.81` |
+| Planned, near-term | 9 | `233, 228, 231, 235, 238, 232, 105, 108, 225` | `v0.7.57` -> `v0.7.81` |
 | Planned, v0.8.x | 5 | `007, 030, 093, 113, 139` | `v0.8.5+` |
 
 > v0.7.49 / v0.7.50 workflow split：`FEATURE_217` remains the human-facing workflow mode. Manual testing reopened required UI/UX and reliability deltas inside [v0.7.49](features/v0.7.49.md#13-v0749-completion-delta): bounded live progress with phase index / running 智能体 wording / preserved progress row / elapsed time / completed-child token usage, localized assistant-style launch notes, result-bearing child-agent digests or folded long-report notices, non-`info` agentic transcript, clear separation between `finished/spawned` progress and lifetime `maxAgents` cap, final synthesis, generated final-result contract lint, implicit `tokenBudget` stripping, generated task-command crash hardening, tighter AMAW invocation policy, wait timeout propagation, no default total workflow wall-clock timeout, terminal cleanup for un-awaited children, accurate template read/write metadata, capsule min-version preflight, manual run cleanup controls, and the closed minimal saved-workflow named reuse delta (`/workflow <savedName>` plus `/workflow rerun <runId|savedName>` with help/completion). `FEATURE_229` in v0.7.50 is the platform layer: it standardizes the same process as agent-layer snapshot/events, SDK subscription/polling, Space-style host policy and lifecycle controls, terminal-state helpers, workflow identity/lifecycle controls beyond named reuse (`display name | revise | rename | revision provenance`), REPL-as-consumer rendering, conservative retention, and durable source/provenance/resultSummary persistence; it is not the first implementation of the user-visible UX.
@@ -37,7 +37,7 @@
 |---|---:|
 | `v0.7.54` | `1` |
 | `v0.7.55` | `0` |
-| `v0.7.56` | `2` |
+| `v0.7.56` | `0` |
 | `v0.7.57` | `1` |
 | `v0.7.60` | `1` |
 | `v0.7.63` | `1` |
@@ -72,8 +72,6 @@
 
 | ID | Title | Category | Priority | Planned | Design |
 |---|---|---|---|---|---|
-| `239` | SDK Multimodal Input + Clipboard Image Public API | SDK / Media + Provider Capability | High | `v0.7.56` | [v0.7.56](features/v0.7.56.md#feature_239-sdk-multimodal-input--clipboard-image-public-api) |
-| `240` | Cross-Protocol `stopReason` Normalization + Terminal Semantics Dispatch | LLM / Provider Protocol + Runtime Robustness | High | `v0.7.56` | [v0.7.56](features/v0.7.56.md#feature_240-cross-protocol-stopreason-normalization--terminal-semantics-dispatch) |
 | `233` | Effort-First Reasoning Control System | LLM / Provider Capability + Runtime UX | High | `v0.7.57` | [v0.7.57](features/v0.7.57.md#feature_233-effort-first-reasoning-control-system) |
 | `228` | Unified Memory Control Plane + Memory Governance | Core / Memory + Governance | High | `v0.7.60` | [v0.7.60](features/v0.7.60.md#feature_228-unified-memory-control-plane--memory-governance) |
 | `231` | Durable Workflow Replay Resume | Core / Workflow Persistence | High | `v0.7.63` | [v0.7.63](features/v0.7.63.md#feature_231-durable-workflow-replay-resume) |
@@ -107,6 +105,8 @@
 
 | ID | Title | Released | Design | Notes |
 |---|---|---|---|---|
+| `240` | Cross-Protocol `stopReason` Normalization + Terminal Semantics Dispatch | `v0.7.56` | [v0.7.56](features/v0.7.56.md#feature_240-cross-protocol-stopreason-normalization--terminal-semantics-dispatch) | Implemented 2026-06-24. Adds provider-neutral stop-reason classifier in `@kodax-ai/llm`, wires max-token and managed-protocol gates through it, and gives `pause_turn`, refusal/content-filter, and unknown values explicit terminal handling. |
+| `239` | SDK Multimodal Input + Clipboard Image Public API | `v0.7.56` | [v0.7.56](features/v0.7.56.md#feature_239-sdk-multimodal-input--clipboard-image-public-api) | Implemented 2026-06-24. Adds `@kodax-ai/kodax/media` and `@kodax-ai/coding/media`, shared image clipboard/normalization/persistence helpers, image artifact construction, model-level input capabilities, and runtime artifact validation before provider send. |
 | `224` | Self-Improvement Skill Loop (procedural learning triage + SkillCurator v1) | `v0.7.54` | [v0.7.54](features/v0.7.54.md#feature_224-self-improvement-skill-loop) | Released v0.7.54 (2026-06-23). Turn-level learning triage → durable proposal store + usage/trust ledgers → governed, snapshot-safe skill apply via `/learn` (`pending`/`diff`/`approve [--ack-impact]`/`reject`). Approve-apply orchestration exposed from `@kodax-ai/agent` as `approveStoredLearningProposal`. Shipped alongside session recovery, extension discovery + runtime composition, ACP capability multiplexing, and a GLM model refresh. |
 | `174` | `kodax sessions dedupe` | `v0.7.53` | [v0.7.53](features/v0.7.53.md#feature_174-kodax-sessions-dedupe) | Released v0.7.53 (npm + tag + GitHub Release, 2026-06-19). Dry-run-first ghost-session cleanup; only uniquely-matched `runner-*` ghosts move to a reversible `.dedupe-archive`. |
 | `211` | Interactive-Mode Extension/MCP Session State Cross-Resume Persistence | `v0.7.53` | [v0.7.53](features/v0.7.53.md#feature_211-interactive-mode-extensionmcp-session-state-cross-resume-persistence) | Released v0.7.53 (2026-06-19). Runtime extension state snapshotted back to the REPL host and restored across `-r` / `-c`; preserves the FEATURE_173 single-writer invariant. |

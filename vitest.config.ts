@@ -25,6 +25,8 @@ export default defineConfig({
     // full rationale). Subpath aliases must come before package-root
     // aliases (Vite prefix-match order).
     alias: {
+      '@kodax-ai/kodax/media': resolveFromRoot('src', 'sdk-media.ts'),
+      '@kodax-ai/coding/media': resolveFromRoot('packages', 'coding', 'src', 'media', 'index.ts'),
       '@kodax-ai/agent/capabilities/skills/shared/yaml': resolveFromRoot('packages', 'agent', 'src', 'capabilities', 'skills', 'shared', 'yaml.ts'),
       '@kodax-ai/agent/messaging/queue': resolveFromRoot('packages', 'agent', 'src', 'messaging', 'queue.ts'),
       // FEATURE_217: value-imported subpath — MUST precede the root alias

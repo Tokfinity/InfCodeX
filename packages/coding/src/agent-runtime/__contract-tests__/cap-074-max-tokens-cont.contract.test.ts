@@ -155,3 +155,20 @@ describe('CAP-074: maybeContinueAfterMaxTokens — at cap (exhausted path)', () 
     expect(onRetryArgs[2]).toBe(KODAX_MAX_MAXTOKENS_RETRIES);
   });
 });
+
+describe('FEATURE_240: maybeContinueAfterMaxTokens cross-protocol stopReason', () => {
+  it('treats OpenAI finish_reason=length as max-token truncation', () => {
+    const messages: KodaXMessage[] = [{ role: 'assistant', content: 'cut' }];
+    const onTextDelta = vi.fn();
+    const out = maybeContinueAfterMaxTokens({
+      result: makeResult({ stopReason: 'length' }),
+      messages,
+      maxTokensRetryCount: 0,
+      completedTurnTokenSnapshot: fakeSnapshot(),
+      events: { onTextDelta },
+    });
+    expect(out.outcome).toBe('continue');
+    expect(onTextDelta).toHaveBeenCalledOnce();
+    expect(messages.at(-1)?.role).toBe('user');
+  });
+});

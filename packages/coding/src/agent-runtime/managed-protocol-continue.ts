@@ -34,7 +34,7 @@
  * helper's input/output round-trip.
  */
 
-import type { KodaXMessage, KodaXStreamResult } from '@kodax-ai/llm';
+import { classifyStopReason, type KodaXMessage, type KodaXStreamResult } from '@kodax-ai/llm';
 
 import type {
   KodaXContextTokenSnapshot,
@@ -92,7 +92,7 @@ export function maybeAutoContinueManagedProtocol(
   const emission = options.context?.managedProtocolEmission;
   if (
     continueAttempted
-    || result.stopReason !== 'end_turn'
+    || classifyStopReason(result.stopReason) !== 'end'
     || result.toolBlocks.length !== 0
     || !lastText
     || !emission?.enabled

@@ -21,6 +21,7 @@ are NOT obvious from inspecting the type definitions alone:
 11. [Workflow process events and lifecycle controls](#11-workflow-process-events-and-lifecycle-controls-feature_229-v0750)
 12. [Provider credential verification — `verifyProviderCredential`](#12-provider-credential-verification--verifyprovidercredential-feature_216-v0745)
 13. [Inject your product's manual — `selfManual`](#13-inject-your-products-manual--selfmanual-feature_221-v0747)
+14. [Media input artifacts — `@kodax-ai/kodax/media`](#14-media-input-artifacts--kodax-aikodaxmedia-feature_239-v0756)
 
 §1–§3 (and the Phase-7/8 MCP-popout surface in §1) land in v0.7.42
 under FEATURE_186 (see [ADR-032](ADR.md#adr-032-sdk-embedder-surface-closure-feature_186-v0742)).
@@ -812,7 +813,7 @@ running your project's test suite against `main` — you can `npm link`
 the in-tree KodaX checkout instead of waiting for a published version.
 
 As of v0.7.43 the root `package.json` is in **already-published shape**:
-`"name": "@kodax-ai/kodax"` is baked in along with all 7 SDK subpath
+`"name": "@kodax-ai/kodax"` is baked in along with all 8 SDK subpath
 exports. `npm link` "just works" — no need to run `scripts/release.mjs`
 first.
 
@@ -1637,6 +1638,99 @@ runKodaX({
 
 - Types/exports: `KodaXManualTopicInput`, `KodaXSelfManualConfig`, `ResolveKodaXManualOptions`, `buildSelfKnowledgeRoutingRule` from `@kodax-ai/coding`.
 - Design: [docs/features/v0.7.47.md FEATURE_221](features/v0.7.47.md#feature_221-injectable-self-manual-for-sdk-consumers).
+
+---
+
+## 14. Media input artifacts — `@kodax-ai/kodax/media` (FEATURE_239, v0.7.56)
+
+### Why
+
+Host apps such as KodaX Space own paste/drop UI, sandbox storage, and path
+authorization, but they should not import REPL-private files to normalize images
+or construct `runKodaX` artifacts. v0.7.56 exposes the shared image path through
+`@kodax-ai/kodax/media` and the source-side `@kodax-ai/coding/media`.
+
+### Quick start
+
+```ts
+import {
+  createImageArtifactFromPath,
+  getModelInputCapabilities,
+  readAndNormalizeClipboardImage,
+  validateInputArtifactsForModel,
+} from '@kodax-ai/kodax/media';
+
+const image = await readAndNormalizeClipboardImage();
+if (!image) {
+  // Clipboard did not provide a native image fallback. Continue normal text paste.
+  return;
+}
+
+const stored = await spaceImageStore.write({
+  bytes: image.buffer,
+  mediaType: image.mediaType,
+});
+
+const artifact = createImageArtifactFromPath(stored.path, {
+  mediaType: image.mediaType,
+  source: 'clipboard',
+  description: 'Clipboard image',
+});
+
+validateInputArtifactsForModel([artifact], {
+  provider: selectedProvider,
+  model: selectedModel,
+});
+
+await client.send(promptText, {
+  context: {
+    inputArtifacts: [artifact],
+  },
+});
+```
+
+### Capability query
+
+Use provider and model together. The same model name behind a gateway route is
+not assumed to support media unless that route is verified.
+
+```ts
+const caps = getModelInputCapabilities({
+  provider: 'minimax-coding',
+  model: 'MiniMax-M3',
+});
+
+if (caps.image.sdkSupported) {
+  enableImageDropZone();
+}
+
+if (caps.video.status === 'provider-native-unwired') {
+  showVideoComingSoonCopy();
+}
+```
+
+P0 supports image artifacts only. Known native-video models report
+`video.status = 'provider-native-unwired'` so hosts can show accurate UI without
+enabling a send path KodaX cannot serialize yet. File artifacts are unsupported
+in v0.7.56.
+
+### Boundaries
+
+- `readAndNormalizeClipboardImage()` returns `null` when there is no clipboard
+  image fallback; thrown `KodaXMediaError` values are stable enough for host copy.
+- Direct image path artifacts preserve `image/png`, `image/jpeg`, `image/webp`,
+  and `image/gif`; clipboard normalization emits static PNG/JPEG bytes.
+- `persistImageAsBlock()` is a convenience helper. Embedded hosts should usually
+  pass `directory` or store bytes in their own sandbox before constructing an
+  artifact path.
+- `validateInputArtifactsForModel()` is pure shape/model validation. It does not
+  probe host-owned sandbox paths.
+
+### Reference
+
+- Public SDK entry: `src/sdk-media.ts`.
+- Shared implementation: `packages/coding/src/media/`.
+- Design: [docs/features/v0.7.56.md FEATURE_239](features/v0.7.56.md#feature_239-sdk-multimodal-input--clipboard-image-public-api).
 
 ---
 

@@ -192,3 +192,21 @@ describe('CAP-075: maybeAutoContinueManagedProtocol — fires once', () => {
     expect(out.nextContinueAttempted).toBe(false);
   });
 });
+
+describe('FEATURE_240: maybeAutoContinueManagedProtocol cross-protocol stopReason', () => {
+  it('treats OpenAI finish_reason=stop as natural completion', () => {
+    const messages: KodaXMessage[] = [{ role: 'assistant', content: 'plain text answer' }];
+    const out = maybeAutoContinueManagedProtocol({
+      result: makeResult({ stopReason: 'stop' }),
+      lastText: 'plain text answer',
+      messages,
+      continueAttempted: false,
+      options: makeOptions({ enabled: true, role: 'evaluator' }),
+      emittedManagedProtocolPayload: undefined,
+      completedTurnTokenSnapshot: fakeSnapshot(),
+    });
+    expect(out.outcome).toBe('continue');
+    expect(out.nextContinueAttempted).toBe(true);
+    expect(messages.at(-1)?.role).toBe('user');
+  });
+});

@@ -29,7 +29,7 @@
  * counter is folded into the helper's input/output round-trip.
  */
 
-import type { KodaXMessage, KodaXStreamResult } from '@kodax-ai/llm';
+import { classifyStopReason, type KodaXMessage, type KodaXStreamResult } from '@kodax-ai/llm';
 
 import type { KodaXContextTokenSnapshot, KodaXEvents } from '../types.js';
 import { KODAX_MAX_MAXTOKENS_RETRIES } from '../constants.js';
@@ -66,7 +66,7 @@ export function maybeContinueAfterMaxTokens(
 ): MaxTokensContinuationOutcome {
   const { result, messages, maxTokensRetryCount, completedTurnTokenSnapshot, events } = input;
 
-  if (result.stopReason !== 'max_tokens' || result.toolBlocks.length !== 0) {
+  if (classifyStopReason(result.stopReason) !== 'truncated' || result.toolBlocks.length !== 0) {
     return { outcome: 'no_op', nextMaxTokensRetryCount: maxTokensRetryCount };
   }
 
