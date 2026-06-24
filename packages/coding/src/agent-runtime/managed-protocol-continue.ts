@@ -4,7 +4,8 @@
  * Capability inventory: docs/features/v0.7.29-capability-inventory.md#cap-075-managed-protocol-auto-continue-fallback
  *
  * Class 1 (substrate). Single-shot per session. When the model
- * stops with `stopReason === 'end_turn'` and `lastText` is non-empty
+ * stops with an `'end'`-class stop reason (`classifyStopReason` maps
+ * `end_turn` / `stop` / `stop_sequence` here) and `lastText` is non-empty
  * but the required managed-protocol block is missing, push a synthetic
  * user message that demands ONLY the protocol emission (no other text)
  * and continue the turn. The flag prevents oscillation: if the model
@@ -13,7 +14,7 @@
  *
  * The gate has 7 conjunctive conditions:
  *   1. NOT already attempted in this session (`!continueAttempted`)
- *   2. `stopReason === 'end_turn'`
+ *   2. stop reason classifies as `'end'` (`end_turn` / `stop` / `stop_sequence`)
  *   3. `result.toolBlocks.length === 0` (any tool call satisfies the
  *      protocol naturally)
  *   4. `lastText` non-empty (otherwise managed-protocol-empty has its

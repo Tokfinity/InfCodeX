@@ -1682,11 +1682,19 @@ validateInputArtifactsForModel([artifact], {
   model: selectedModel,
 });
 
-await client.send(promptText, {
-  context: {
-    inputArtifacts: [artifact],
+// Pass the artifacts through `runKodaX` (or the `KodaXClient` constructor) —
+// `context.inputArtifacts` is the public entry point. `KodaXClient.send`
+// takes only a prompt string, so per-call artifacts go through `runKodaX`.
+import { runKodaX } from '@kodax-ai/kodax/coding';
+
+await runKodaX(
+  {
+    provider: selectedProvider,
+    model: selectedModel,
+    context: { inputArtifacts: [artifact] },
   },
-});
+  promptText,
+);
 ```
 
 ### Capability query
