@@ -6,12 +6,17 @@ All notable changes to this project will be documented in this file.
 
 ## [Unreleased]
 
+## [0.7.56] - 2026-06-25
+
+> Scope note: a feature release pairing **FEATURE_239** (a public SDK media-input contract so host apps like KodaX Space can build image paste/drop without importing REPL internals) with **FEATURE_240** (provider-neutral `stopReason` normalization), plus a GLM/Kimi provider-model refresh. No LLM-facing prompt surface changed (these are SDK + runtime infrastructure), so per ADR-033 / FEATURE_104 no prompt eval is triggered. The new media helpers ship behind dedicated unit tests; FEATURE_240 ships a cross-protocol integration test (`agent.stop-reason.test.ts`).
+
 ### Added
 
 - **FEATURE_239 - SDK media input artifacts.** Added `@kodax-ai/kodax/media` and `@kodax-ai/coding/media` with shared image clipboard, normalization, persistence, artifact construction, model input capability, and artifact validation helpers. REPL paste internals now re-export the shared media helpers, and runtime validation rejects unsupported image/video/file artifacts before provider send.
 
 ### Changed
 
+- **GLM-5.2 and Kimi K2.7 Code on `ark-coding`.** The `ark-coding` provider now serves `glm-5.2` (1M context) and `kimi-k2.7-code` (256K context); the `kimi` provider also exposes `kimi-k2.7-code`. Effective context-window / max-output values are pinned by regression tests.
 - **SDK typing note.** `KodaXInputArtifact.mediaType` is now narrowed from `string` to `KodaXImageMediaType` (`image/png` | `image/jpeg` | `image/webp` | `image/gif`). The runtime shape remains image-only for v0.7.56, but TypeScript SDK consumers passing arbitrary media strings may need to narrow or validate them first.
 
 ### Fixed

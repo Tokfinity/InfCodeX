@@ -10,8 +10,8 @@
 
 | Item | Value |
 |---|---|
-| Current released version | `v0.7.55` |
-| Current package version | `@kodax-ai/kodax@0.7.55` (released 2026-06-23) |
+| Current released version | `v0.7.56` |
+| Current package version | `@kodax-ai/kodax@0.7.56` (released 2026-06-25) |
 | Workspace baseline | `llm / agent / coding / repl` 4 packages |
 | Total tracked features | `24` |
 | InProgress | `0` |
