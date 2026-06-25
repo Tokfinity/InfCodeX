@@ -762,6 +762,36 @@ function sanitizeInterruptedAssistantText(text: string): string {
   return sanitizeUserFacingAssistantText(text).trim();
 }
 
+function escapeRegExpLiteral(value: string): string {
+  return value.replace(/[.*+?^${}()|[\]\\]/g, "\\$&");
+}
+
+function stripManagedWorkerPrefix(text: string, workerTitle: string | undefined): string {
+  const title = workerTitle?.trim();
+  if (!title) {
+    return text;
+  }
+  return text.replace(new RegExp(`^\\[${escapeRegExpLiteral(title)}\\]\\s*`), "");
+}
+
+export function hasSubstantiveManagedAssistantText(
+  text: string,
+  workerTitle: string | undefined,
+): boolean {
+  const sanitized = sanitizeUserFacingAssistantText(text);
+  return stripManagedWorkerPrefix(sanitized, workerTitle).trim().length > 0;
+}
+
+export function shouldAppendManagedAssistantTextDelta(
+  text: string,
+  hasActiveAssistantBlock: boolean,
+): boolean {
+  if (!text) {
+    return false;
+  }
+  return hasActiveAssistantBlock || text.trim().length > 0;
+}
+
 function isForegroundManagedStreamingStatus(
   status: KodaXManagedTaskStatusEvent | null | undefined,
 ): status is KodaXManagedTaskStatusEvent & { activeWorkerId: string } {
@@ -2006,7 +2036,17 @@ const InkREPLInner: React.FC<InkREPLProps> = ({
     if (!text) {
       return;
     }
-    const workerTitle = managedForegroundLedgerRef.current.workerTitle;
+    const currentLedger = managedForegroundLedgerRef.current;
+    if (
+      kind === "assistant"
+      && !shouldAppendManagedAssistantTextDelta(
+        text,
+        currentLedger.activeKind === "assistant" && Boolean(currentLedger.activeAssistantItemId),
+      )
+    ) {
+      return;
+    }
+    const workerTitle = currentLedger.workerTitle;
     const itemId = startManagedForegroundLedgerBlock(kind, workerTitle);
 
     const buf = foregroundTextBufferRef.current;
@@ -7045,6 +7085,7 @@ const InkREPLInner: React.FC<InkREPLProps> = ({
   }, [appendHistoryItemsWithPersistence]);
 
   const recordCompletedAgentRound = useCallback(async (result: KodaXResult) => {
+    flushForegroundTextBuffer();
     context.messages = result.messages;
     context.contextTokenSnapshot = result.contextTokenSnapshot;
     applyRuntimeSessionSnapshot(context, result);
@@ -7063,6 +7104,7 @@ const InkREPLInner: React.FC<InkREPLProps> = ({
       result.managedTask?.verdict.summary,
       result.lastText,
     );
+    const foregroundWorkerTitle = managedForegroundLedgerRef.current.workerTitle;
     const managedForegroundRoundItems = [...managedForegroundTurnItemsRef.current];
     const hasManagedForegroundLedger = managedForegroundRoundItems.length > 0;
     // FEATURE_213 (v0.7.45) — a mid-turn user message that this round commits
@@ -7076,8 +7118,16 @@ const InkREPLInner: React.FC<InkREPLProps> = ({
       && managedForegroundRoundItems.some(
         (item) => item.type === "assistant"
           && "text" in item
-          && sanitizeUserFacingAssistantText(String(item.text ?? "")).length > 0,
+          && hasSubstantiveManagedAssistantText(
+            String(item.text ?? ""),
+            foregroundWorkerTitle,
+          ),
       );
+    const durableManagedForegroundRoundItems = managedForegroundRoundItems.filter((item) => (
+      item.type !== "assistant"
+      || !("text" in item)
+      || hasSubstantiveManagedAssistantText(String(item.text ?? ""), foregroundWorkerTitle)
+    ));
     const needsFinalResponseItem = !roundFailed && finalResponse && !foregroundCoversAssistantText;
     const managedRoundEvents = [...managedRoundEventHistoryRef.current];
     // Skip routing diagnostics for failed rounds — they mislead users into
@@ -7100,7 +7150,7 @@ const InkREPLInner: React.FC<InkREPLProps> = ({
           toolNames: iterationToolsRef.current,
         });
     const persistedAdditions: CreatableHistoryItem[] = [
-      ...managedForegroundRoundItems.map((item) => toCreatableHistoryItem(item)),
+      ...durableManagedForegroundRoundItems.map((item) => toCreatableHistoryItem(item)),
       ...roundHistoryItems,
       ...(roundFailed ? [] : managedRoundEvents.map((item) => toCreatableHistoryItem(item))),
       ...managedTranscriptItems.map((text) => toManagedTranscriptEventItem(text)),
@@ -7129,7 +7179,7 @@ const InkREPLInner: React.FC<InkREPLProps> = ({
     // Order + conditions preserved exactly (foreground → round → [transcript →
     // events, unless failed] → final/empty-notice).
     const roundUiAdditions: CreatableHistoryItem[] = [
-      ...managedForegroundRoundItems.map((item) => toCreatableHistoryItem(item)),
+      ...durableManagedForegroundRoundItems.map((item) => toCreatableHistoryItem(item)),
       ...roundHistoryItems,
       ...(roundFailed
         ? []
@@ -7173,6 +7223,7 @@ const InkREPLInner: React.FC<InkREPLProps> = ({
     clearResponse,
     clearThinkingContent,
     context,
+    flushForegroundTextBuffer,
     getFullResponse,
     getThinkingContent,
     persistContextStateInBackground,

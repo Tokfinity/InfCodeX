@@ -974,7 +974,57 @@ describe('buildRunnerLlmAdapter — empty-completion retry', () => {
     expect(result.text).toBe('recovered answer');
   }, 15_000);
 
-  it('gives up after KODAX_MAX_EMPTY_COMPLETION_RETRIES and returns the empty turn', async () => {
+  it('re-streams on a thinking-only turn, then returns the recovered public answer', async () => {
+    const callLog: number[] = [];
+    registerScriptedProvider(
+      [
+        {
+          textBlocks: [],
+          toolBlocks: [],
+          thinkingBlocks: [{ type: 'thinking', thinking: 'The user greeted me; answer briefly.' }],
+          stopReason: 'end_turn',
+        },
+        { textBlocks: [{ type: 'text', text: 'hello there' }], stopReason: 'end_turn' },
+      ],
+      callLog,
+    );
+
+    const adapter = buildRunnerLlmAdapter(makeEmptyAdapterOptions());
+    const result = await adapter(
+      [{ role: 'system', content: 'sys' }, { role: 'user', content: 'hello' }],
+      { name: 'scout', instructions: '' },
+    );
+
+    expect(callLog.length).toBe(2);
+    expect(result.text).toBe('hello there');
+  }, 15_000);
+
+  it('re-streams when text is only whitespace even if thinking is present', async () => {
+    const callLog: number[] = [];
+    registerScriptedProvider(
+      [
+        {
+          textBlocks: [{ type: 'text', text: ' \n\t ' }],
+          toolBlocks: [],
+          thinkingBlocks: [{ type: 'thinking', thinking: 'I know the answer.' }],
+          stopReason: 'end_turn',
+        },
+        { textBlocks: [{ type: 'text', text: 'visible answer' }], stopReason: 'end_turn' },
+      ],
+      callLog,
+    );
+
+    const adapter = buildRunnerLlmAdapter(makeEmptyAdapterOptions());
+    const result = await adapter(
+      [{ role: 'system', content: 'sys' }, { role: 'user', content: 'do work' }],
+      { name: 'scout', instructions: '' },
+    );
+
+    expect(callLog.length).toBe(2);
+    expect(result.text).toBe('visible answer');
+  }, 15_000);
+
+  it('gives up after KODAX_MAX_EMPTY_COMPLETION_RETRIES and fails locally', async () => {
     const { KODAX_MAX_EMPTY_COMPLETION_RETRIES } = await import('../constants.js');
     const callLog: number[] = [];
     const turns: ScriptedTurn[] = [];
@@ -987,15 +1037,13 @@ describe('buildRunnerLlmAdapter — empty-completion retry', () => {
     registerScriptedProvider(turns, callLog);
 
     const adapter = buildRunnerLlmAdapter(makeEmptyAdapterOptions());
-    const result = await adapter(
+    await expect(adapter(
       [{ role: 'system', content: 'sys' }, { role: 'user', content: 'do work' }],
       { name: 'scout', instructions: '' },
-    );
+    )).rejects.toThrow(/no user-visible text or tool calls/);
 
     // original (1) + cap retries — sentinel never reached.
     expect(callLog.length).toBe(KODAX_MAX_EMPTY_COMPLETION_RETRIES + 1);
-    expect(result.text).toBe('');
-    expect(result.text).not.toContain('SHOULD_NEVER_APPEAR');
   }, 15_000);
 
   it('does NOT retry a canonical text-only termination (FEATURE_190 guard)', async () => {
@@ -1025,6 +1073,7 @@ describe('buildRunnerLlmAdapter — empty-completion retry', () => {
         {
           textBlocks: [],
           toolBlocks: [{ type: 'tool_use', id: 't1', name: 'read', input: { path: 'x' } }],
+          thinkingBlocks: [{ type: 'thinking', thinking: 'Need to read first.' }],
           stopReason: 'tool_use',
         },
         { textBlocks: [{ type: 'text', text: 'SHOULD_NEVER_APPEAR' }], stopReason: 'stop' },

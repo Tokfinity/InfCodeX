@@ -29,7 +29,7 @@ import type {
   KodaXToolDefinition,
   KodaXToolUseBlock,
 } from '@kodax-ai/llm';
-import { KODAX_ESCALATED_MAX_OUTPUT_TOKENS } from '@kodax-ai/llm';
+import { KODAX_ESCALATED_MAX_OUTPUT_TOKENS, KodaXProviderError } from '@kodax-ai/llm';
 import type { Agent, RunnerLlmResult } from '@kodax-ai/agent';
 import { resolveProvider } from '../../../providers/index.js';
 import {
@@ -124,8 +124,8 @@ export interface RunnerAdapterTokenState {
 // to the fence-synthesizer.
 
 /**
- * True when a successfully-returned provider turn carries nothing
- * actionable — no text, no tool calls, and no thinking. Distinct from a
+ * True when a successfully-returned provider turn carries no public output:
+ * no text and no tool calls. Thinking blocks do not count here. Distinct from a
  * stream-incomplete error (which throws before reaching here) and from a
  * canonical text-only termination (text present, no tool — the FEATURE_190
  * V2 exit path). See KODAX_MAX_EMPTY_COMPLETION_RETRIES for why the
@@ -134,12 +134,10 @@ export interface RunnerAdapterTokenState {
 function isEmptyCompletion(raw: {
   textBlocks?: readonly { text: string }[];
   toolBlocks?: readonly KodaXToolUseBlock[];
-  thinkingBlocks?: readonly unknown[];
 }): boolean {
   const text = (raw.textBlocks ?? []).map((b) => b.text).join('').trim();
   const toolCount = raw.toolBlocks?.length ?? 0;
-  const thinkingCount = raw.thinkingBlocks?.length ?? 0;
-  return text.length === 0 && toolCount === 0 && thinkingCount === 0;
+  return text.length === 0 && toolCount === 0;
 }
 
 export function buildRunnerLlmAdapter(
@@ -538,7 +536,7 @@ export function buildRunnerLlmAdapter(
             continue;
           }
           // Empty-completion retry: a finish_reason-complete turn with no
-          // text, no tool calls, and no thinking is a degraded response
+          // public text and no tool calls is a degraded response
           // (common on budget OpenAI-compat providers under load / right
           // after a 429). Handing it back would hit the runner's no-tool
           // terminal branch and end the task silently. Re-stream the same
@@ -722,8 +720,23 @@ export function buildRunnerLlmAdapter(
         }
       }
 
-      // M6 parity (v0.7.26) — L5 continuation ladder. When L1 escalation
-      // is exhausted and the model still hit max_tokens mid-text (no
+      // Refuse no-public-output turns after all same-turn recovery attempts;
+      // returning one would commit an empty assistant turn into the runner
+      // transcript.
+      if (isEmptyCompletion(raw)) {
+        const error = new KodaXProviderError(
+          'Provider returned no user-visible text or tool calls after recovery attempts; refusing to commit an empty assistant turn.',
+          providerName,
+        );
+        Object.defineProperty(error, '__kodaxRecoveredMessages', {
+          value: providerMessages,
+          enumerable: false,
+        });
+        throw error;
+      }
+
+      // M6 parity (v0.7.26) — L5 continuation ladder. When escalation is
+      // exhausted and the model still hit max_tokens mid-text (no
       // tool blocks, has text), inject a synthetic user "Continue from
       // where you left off" message and re-stream up to
       // KODAX_MAX_MAXTOKENS_RETRIES times, accumulating text +

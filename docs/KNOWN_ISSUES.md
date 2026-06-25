@@ -1,6 +1,6 @@
 # Known Issues
 
-_Last Updated: 2026-06-18_
+_Last Updated: 2026-06-25_
 
 ---
 
@@ -86,11 +86,113 @@ _Last Updated: 2026-06-18_
 | 138 | High | Resolved | Workflow host RPC 边界对对象载荷零校验 — `synthesize` 传非数组 inputs 崩裸 TypeError + `runAgent`/`spawnAgent` 缺 name/prompt 静默烧 token | v0.7.49 | v0.7.49 | 2026-06-15 | 2026-06-15 |
 | 140 | High | Resolved | Published bundle leaves computed `./agent.js` child-executor import, breaking workflow child agents | v0.7.37 bundle distribution; confirmed v0.7.48-v0.7.50 | v0.7.52 | 2026-06-17 | 2026-06-18 |
 | 141 | Medium | Open | CI workflow long-red on Linux: cross-platform test bugs (storage list() runtime-inspection, bash background-process, h2 spawn env, skill-creator API-key-at-load) | long-standing (pre-v0.7.49) | - | 2026-06-18 | - |
+| 142 | High | Resolved | kimi-code thinking-only completion can terminate Worker with only `[Worker]` visible | v0.7.56 | v0.7.56 (pending patch) | 2026-06-25 | 2026-06-25 |
 
 ---
 
 ## Issue Details
 <!-- Full details for each issue - REQUIRED for all issues -->
+
+### 142: kimi-code thinking-only completion can terminate Worker with only `[Worker]` visible
+
+- **Priority**: High
+- **Status**: **Resolved** (v0.7.56 pending patch)
+- **Introduced**: v0.7.56
+- **Created**: 2026-06-25
+- **Resolved**: 2026-06-25
+- **Fixed**: v0.7.56 (pending patch)
+
+#### Original Problem
+
+In v0.7.56, users can intermittently see an Assistant turn that contains only
+the managed role label, for example:
+
+```text
+Assistant [04:33 AM]
+[Worker]
+```
+
+The reported repro used `/model kimi-code` followed by a trivial Chinese
+greeting (`你好`). The first run produced a visible Thinking block but no
+assistant answer after `[Worker]`; sending the same greeting again produced a
+normal Chinese response. This makes the CLI look like it finished successfully
+while giving no user-facing answer.
+
+#### Context
+
+- Affected provider path: `kimi-code`, which uses the Anthropic-compatible
+  coding endpoint and supports thinking blocks.
+- Affected runtime path: managed Worker / Runner-driven adapter.
+- The symptom is intermittent because it depends on whether the upstream
+  reasoning model emits final public text after its thinking block.
+- Probe evidence: a scripted-provider reproduction with `thinkingBlocks`
+  present, empty `textBlocks`, empty `toolBlocks`, and stop reason `end_turn`
+  returns `text === ''` and does not consume the retry sentinel.
+
+#### Root Cause
+
+The current empty-completion retry guard in
+`packages/coding/src/task-engine/_internal/managed-task/llm-adapter.ts`
+classifies a turn as empty only when text, tool calls, and thinking blocks are
+all absent. A thinking-only completion therefore bypasses the retry branch even
+though it has no user-visible answer and no tool action.
+
+Downstream, the Runner treats `toolCalls.length === 0` as a valid text-only
+terminal turn. The final assistant text is empty, but the REPL managed
+foreground renderer may have already created an assistant block with the
+`[Worker]` prefix, so the transcript shows a role label with no body.
+
+#### Proposed Solution
+
+Treat "no user-visible text and no tool calls" as a degraded empty completion,
+even when thinking blocks are present. Let the existing bounded re-stream
+mechanism retry the same turn, while preserving thinking blocks for legitimate
+history replay when a real assistant turn exists.
+
+Implementation guardrails:
+
+1. Change the adapter predicate to trim concatenated `textBlocks` and ignore
+   `thinkingBlocks` for empty-output detection.
+2. Keep `stopReason === 'max_tokens'` excluded so max-token continuation and
+   escalation keep owning that path.
+3. Do not use thinking content as fallback public output.
+4. Keep the retry inside the adapter before the Runner commits the assistant
+   turn, so the failed attempt's empty public output never becomes model-facing
+   history.
+5. Add UI defensive handling so leading whitespace deltas do not create a
+   managed assistant ledger item containing only `[Worker]`.
+6. If the bounded retries are exhausted, fail the turn with a local provider
+   empty-output notice instead of committing an empty or thinking-only
+   assistant message to the model-facing transcript.
+7. Add regression tests for thinking-only, whitespace-text-only,
+   normal text-only, tool-only, and max-token cases.
+
+#### Expected Outcome
+
+When kimi-code or another reasoning provider emits a thinking-only or
+whitespace-only final turn, KodaX retries transparently. If a retry returns real
+public text or a tool call, the user sees the normal answer/tool flow. If the
+bounded retries are exhausted, the run should surface an explicit local
+empty-output failure rather than a bare `[Worker]` line, and the next user turn
+must not replay a malformed empty assistant message to the provider.
+
+#### Resolution
+
+- `packages/coding/src/task-engine/_internal/managed-task/llm-adapter.ts` now
+  treats empty/whitespace public text plus no tool calls as a degraded empty
+  completion even when thinking blocks are present.
+- The existing bounded same-turn re-stream path handles recoverable
+  thinking-only completions. If all retries are exhausted, the adapter throws a
+  local provider error and preserves only the safe pre-turn provider messages,
+  so no empty or thinking-only assistant turn is committed for the next request.
+- `packages/repl/src/ui/InkREPL.tsx` now avoids opening a managed assistant
+  block from leading whitespace deltas and treats a bare `[Worker]` prefix as
+  non-substantive assistant text during finalization.
+- Regression tests were added in
+  `packages/coding/src/task-engine/runner-driven.test.ts` and
+  `packages/repl/src/ui/InkREPL.managed-transcript.test.ts`.
+
+---
 
 ### 141: CI workflow long-red on Linux — cross-platform test bugs
 
@@ -4462,11 +4564,16 @@ Commit `ef085fc` 把 V1 精简到 V2 时没区分"信息载体"和"脚手架"，
 ---
 
 ## Summary
-- Total: 68 (25 Open, 43 Resolved, 0 Partially Resolved, 0 Won't Fix)
+- Total: 69 (25 Open, 44 Resolved, 0 Partially Resolved, 0 Won't Fix)
 - Highest Priority Open: 091 - 缺少一等公民 MCP / Web Search / Code Search 工具体系 (High)
 - Historical archived issues are maintained in ISSUES_ARCHIVED.md
 
 ## Changelog
+
+### 2026-06-25: Issue 142 added and resolved
+- Added and resolved 142: kimi-code thinking-only completion can terminate Worker with only `[Worker]` visible (High).
+- Diagnosis: upstream reasoning provider can return a completed thinking-only/whitespace-only turn; KodaX v0.7.56 only retried fully-empty turns, so the Runner could incorrectly accept it as a terminal text-only completion.
+- Fix: classify "no user-visible text and no tool calls" as degraded empty output, retry via the existing bounded re-stream path, fail locally if retries are exhausted, and guard the UI against committing bare managed role labels.
 
 ### 2026-06-18: Issue 140 resolved (v0.7.52)
 - Resolved 140: Published bundle leaves computed `./agent.js` child-executor import, breaking workflow child agents (High).

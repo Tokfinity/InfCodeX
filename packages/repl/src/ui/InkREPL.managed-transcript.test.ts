@@ -8,7 +8,9 @@ import {
   buildManagedForegroundTurnHistoryItems,
   buildManagedTaskTranscriptItems,
   buildRoundHistoryItems,
+  hasSubstantiveManagedAssistantText,
   restoreHistoryItemsFromSession,
+  shouldAppendManagedAssistantTextDelta,
   shouldShowStatusBarBusyStatus,
 } from "./InkREPL.js";
 
@@ -912,6 +914,20 @@ describe("buildManagedForegroundTurnHistoryItems", () => {
       type: "assistant",
       text: "[Planner] Planner narrowed the bug to the fullscreen transcript geometry.",
     });
+  });
+});
+
+describe("managed foreground assistant text guards", () => {
+  it("does not treat the worker prefix alone as substantive assistant text", () => {
+    expect(hasSubstantiveManagedAssistantText("[Worker] ", "Worker")).toBe(false);
+    expect(hasSubstantiveManagedAssistantText("[Worker] hello", "Worker")).toBe(true);
+    expect(hasSubstantiveManagedAssistantText("plain answer", "Worker")).toBe(true);
+  });
+
+  it("does not open a new assistant block for leading whitespace deltas", () => {
+    expect(shouldAppendManagedAssistantTextDelta(" \n\t", false)).toBe(false);
+    expect(shouldAppendManagedAssistantTextDelta(" \n\t", true)).toBe(true);
+    expect(shouldAppendManagedAssistantTextDelta("hello", false)).toBe(true);
   });
 });
 
