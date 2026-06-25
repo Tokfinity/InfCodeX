@@ -23,6 +23,7 @@
  */
 
 import type { KodaXContentBlock, KodaXInputArtifact } from '../types.js';
+import { KodaXMediaError } from '../media/errors.js';
 
 export function buildPromptMessageContent(
   prompt: string,
@@ -32,16 +33,20 @@ export function buildPromptMessageContent(
     return prompt;
   }
 
-  return [
-    { type: 'text', text: prompt },
-    ...inputArtifacts.flatMap<KodaXContentBlock>((artifact) => (
-      artifact.kind === 'image'
-        ? [{
-          type: 'image',
-          path: artifact.path,
-          mediaType: artifact.mediaType,
-        }]
-        : []
-    )),
-  ];
+  const blocks: KodaXContentBlock[] = [{ type: 'text', text: prompt }];
+  for (const artifact of inputArtifacts) {
+    if (artifact.kind !== 'image') {
+      throw new KodaXMediaError(
+        'MODEL_INPUT_UNSUPPORTED',
+        `${artifact.kind} artifact reached prompt content builder before validation.`,
+        { detail: 'Call validateInputArtifactsForModel before buildPromptMessageContent.' },
+      );
+    }
+    blocks.push({
+      type: 'image',
+      path: artifact.path,
+      mediaType: artifact.mediaType,
+    });
+  }
+  return blocks;
 }

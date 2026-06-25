@@ -4,17 +4,8 @@ import {
 } from '@kodax-ai/llm';
 import type {
   KodaXImageMediaType,
+  KodaXVideoMediaType,
 } from '../types.js';
-
-export type KodaXVideoMediaType =
-  | 'video/mp4'
-  | 'video/mpeg'
-  | 'video/quicktime'
-  | 'video/x-msvideo'
-  | 'video/x-flv'
-  | 'video/webm'
-  | 'video/x-ms-wmv'
-  | 'video/3gpp';
 
 export type KodaXInputCapabilityStatus =
   | 'supported'
@@ -62,6 +53,8 @@ export const KODAX_VIDEO_MEDIA_TYPES: readonly KodaXVideoMediaType[] = [
   'video/3gpp',
 ];
 
+export const KODAX_FILE_MEDIA_TYPES: readonly string[] = [];
+
 const OFFICIAL_IMAGE_PROVIDERS = new Set(['anthropic', 'openai']);
 const SOURCE_BACKED_NATIVE_MEDIA_ROUTES = new Set([
   'kimi-code/kimi-for-coding',
@@ -82,6 +75,7 @@ function unsupported<TMediaType extends string>(
     sdkSupported: false,
     status: 'unsupported',
     mediaTypes: [],
+    maxCount: 0,
     reason,
   };
 }
@@ -94,6 +88,7 @@ function supportedImage(
     sdkSupported: true,
     status: 'supported',
     mediaTypes: KODAX_IMAGE_MEDIA_TYPES,
+    nativeMediaTypes: KODAX_IMAGE_MEDIA_TYPES,
     reason,
   };
 }
@@ -107,6 +102,7 @@ function nativeVideoUnwired(
     status: 'provider-native-unwired',
     mediaTypes: [],
     nativeMediaTypes: KODAX_VIDEO_MEDIA_TYPES,
+    maxCount: 0,
     reason,
   };
 }
@@ -148,23 +144,45 @@ function hasSourceBackedNativeMedia(provider: string, model: string | undefined)
   return SOURCE_BACKED_NATIVE_MEDIA_ROUTES.has(route);
 }
 
+function imageCapabilityReason(
+  provider: string,
+  officialImageSupported: boolean,
+  sourceBackedNativeMedia: boolean,
+): string {
+  if (provider === 'openai' && officialImageSupported) {
+    return 'Model route supports KodaX image input. Direct-path image/gif is sent as image/gif, but OpenAI requires non-animated GIF semantics.';
+  }
+  if (provider === 'anthropic' && officialImageSupported) {
+    return 'Model route supports KodaX image input. Direct-path image/gif is sent as image/gif, but Anthropic uses only the first frame of animated GIFs.';
+  }
+  if (sourceBackedNativeMedia) {
+    return 'Model route supports KodaX image input. Direct-path image/gif is sent as image/gif; animated-GIF interpretation is provider-owned.';
+  }
+  return 'Model route supports KodaX image input.';
+}
+
 export function getModelInputCapabilities(
   input: GetModelInputCapabilitiesInput,
 ): ModelInputCapabilities {
   const provider = normalizeProvider(input.provider);
   const model = input.model?.trim() || resolveProviderDefaultModel(provider);
-  const imageSupported = hasOfficialImageSupport(provider)
-    || hasSourceBackedNativeMedia(provider, model);
-  const videoNative = hasSourceBackedNativeMedia(provider, model);
+  const officialImageSupported = hasOfficialImageSupport(provider);
+  const sourceBackedNativeMedia = hasSourceBackedNativeMedia(provider, model);
+  const imageSupported = officialImageSupported || sourceBackedNativeMedia;
+  const videoNative = sourceBackedNativeMedia;
 
   return {
     text: true,
     image: imageSupported
-      ? supportedImage('Model route supports KodaX image input.')
+      ? supportedImage(imageCapabilityReason(
+        provider,
+        officialImageSupported,
+        sourceBackedNativeMedia,
+      ))
       : unsupported('No verified KodaX image-input route for this provider/model.'),
     video: videoNative
-      ? nativeVideoUnwired('Model route is native-video capable, but KodaX video sending is not wired in v0.7.56.')
+      ? nativeVideoUnwired('Model route is native-video capable, but KodaX SDK video sending is not wired yet. Reject or downgrade before send.')
       : unsupported('No verified native video route for this provider/model.'),
-    file: unsupported('File artifacts are not part of the v0.7.56 media send path.'),
+    file: unsupported('File artifact contract is stable, but KodaX SDK file sending/extraction is not wired yet. Reject or downgrade before send.'),
   };
 }

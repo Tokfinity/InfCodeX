@@ -55,8 +55,58 @@
 
 import type { KodaXMessage, KodaXContentBlock } from '@kodax-ai/llm';
 
-import type { MessageQueue, QueuedMessage } from '../messaging/index.js';
+import type {
+  MessageQueue,
+  QueuedInputArtifact,
+  QueuedMessage,
+} from '../messaging/index.js';
 import type { ChildTaskRegistry } from './task-registry.js';
+
+interface PromptFragment {
+  readonly content: string;
+  readonly inputArtifacts?: readonly QueuedInputArtifact[];
+}
+
+export class QueuedInputArtifactError extends Error {
+  readonly code = 'MODEL_INPUT_UNSUPPORTED';
+  readonly detail: string;
+  readonly artifactKind: QueuedInputArtifact['kind'];
+
+  constructor(artifact: QueuedInputArtifact) {
+    const label = artifact.kind === 'file'
+      ? artifact.name ?? artifact.path
+      : artifact.path;
+    super(
+      `Queued ${artifact.kind} artifacts are not supported by the generic idle-yield queue: ${label}.`,
+    );
+    this.name = 'QueuedInputArtifactError';
+    this.artifactKind = artifact.kind;
+    this.detail =
+      'Only image artifacts can be rendered by @kodax-ai/agent idle-yield. Validate file/video artifacts in the SDK runtime before enqueue.';
+  }
+}
+
+function buildQueuedPromptContent(
+  fragments: readonly PromptFragment[],
+): string | KodaXContentBlock[] {
+  const text = fragments.map((fragment) => fragment.content).join('\n\n---\n\n');
+  const artifacts = fragments.flatMap((fragment) => fragment.inputArtifacts ?? []);
+  if (artifacts.length === 0) return text;
+
+  const blocks: KodaXContentBlock[] = [{ type: 'text', text }];
+  for (const artifact of artifacts) {
+    if (artifact.kind === 'image') {
+      blocks.push({
+        type: 'image',
+        path: artifact.path,
+        mediaType: artifact.mediaType,
+      });
+    } else {
+      throw new QueuedInputArtifactError(artifact);
+    }
+  }
+  return blocks;
+}
 
 /**
  * Env-flag gate for the runner outer-loop wiring.
@@ -458,13 +508,16 @@ export async function composeIdleYieldUserMessage<TChildResult = unknown>(
   // only signal the UI gets about a follow-up typed during idle-yield.
   onUserPrompts?: (prompts: readonly string[]) => void,
 ): Promise<readonly KodaXMessage[]> {
-  const promptFragments: string[] = [];
+  const promptFragments: PromptFragment[] = [];
   const syntheticFragments: string[] = [];
 
   const intake = (msg: QueuedMessage): void => {
     if (typeof msg.content !== 'string' || msg.content.length === 0) return;
     if (msg.mode === 'prompt') {
-      promptFragments.push(msg.content);
+      promptFragments.push({
+        content: msg.content,
+        inputArtifacts: msg.inputArtifacts,
+      });
     } else {
       // 'task-notification' / 'system-reminder' / future synthetic modes.
       syntheticFragments.push(msg.content);
@@ -519,7 +572,8 @@ export async function composeIdleYieldUserMessage<TChildResult = unknown>(
     // FEATURE_213 — tell the caller about the user's typed prompt(s) so the UI
     // records them. The message below only reaches the AGENT transcript; the UI
     // renders from its own history/ledger and would otherwise never see this.
-    onUserPrompts?.(promptFragments);
+    const content = buildQueuedPromptContent(promptFragments);
+    onUserPrompts?.(promptFragments.map((fragment) => fragment.content));
     messages.push({
       role: 'user',
       // No `_synthetic` flag — this IS the user's typed input echoed
@@ -527,7 +581,7 @@ export async function composeIdleYieldUserMessage<TChildResult = unknown>(
       // prompts (rare: user typed N before wake) are joined with the
       // same `\n\n---\n\n` separator the REPL's `popAllEditable` uses,
       // so the agent sees a structured boundary between them.
-      content: promptFragments.join('\n\n---\n\n'),
+      content,
     });
   }
 

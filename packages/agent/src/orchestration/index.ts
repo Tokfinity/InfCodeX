@@ -29,6 +29,7 @@ export {
   countLastAssistantToolCalls,
   detectIdleYield,
   isIdleYieldEnabled,
+  QueuedInputArtifactError,
   waitForWakeEvent,
 } from './idle-yield.js';
 

@@ -28,7 +28,12 @@
  */
 
 import type { KodaXMessage, KodaXToolResultContentItem } from '@kodax-ai/llm';
-import type { Agent, RunnerToolObserver, StopHookFn } from '@kodax-ai/agent';
+import type {
+  Agent,
+  QueuedInputArtifact,
+  RunnerToolObserver,
+  StopHookFn,
+} from '@kodax-ai/agent';
 import { Runner, getMessageQueue } from '@kodax-ai/agent';
 // FEATURE_193 (v0.7.43): SCOUT_AGENT_NAME / PLANNER_AGENT_NAME /
 // GENERATOR_AGENT_NAME imports removed alongside the V1 chain agents —
@@ -44,6 +49,9 @@ import {
 } from '../agent.js';
 import type {
   KodaXHarnessProfile,
+  KodaXImageMediaType,
+  KodaXInputArtifact,
+  KodaXInputArtifactSource,
   KodaXManagedTask,
   KodaXManagedProtocolPayload,
   KodaXOptions,
@@ -52,6 +60,7 @@ import type {
   KodaXTaskEvidenceEntry,
   KodaXTaskRole,
   KodaXTaskRoutingDecision,
+  KodaXVideoMediaType,
   KodaXToolEventMeta,
   KodaXToolExecutionContext,
   ManagedMutationTracker,
@@ -146,6 +155,7 @@ import { createToolResultTruncationGuardrail } from '../tools/tool-result-trunca
 import { createEnvelopeAggregateBudgetEnforcer } from '../tools/envelope-budget.js';
 import { createBlobSummarizer } from '../tools/blob-summarizer.js';
 import { buildPromptMessageContent } from '../input-artifacts.js';
+import { validateInputArtifactsForModel } from '../media/index.js';
 // CAP-003/004/005/006/007: shared event emit helpers. Both SA (substrate
 // frame) and AMA (this runner-driven path) fire through the same
 // surface so the contract for each event lives in exactly one place.
@@ -281,6 +291,53 @@ function isSessionBindableExtensionRuntime(
   const candidate: Partial<SessionBindableExtensionRuntime> | undefined = runtime;
   return typeof candidate?.bindController === 'function'
     && typeof candidate.hydrateSession === 'function';
+}
+
+function toKodaXInputArtifacts(
+  inputArtifacts: readonly QueuedInputArtifact[] | undefined,
+): readonly KodaXInputArtifact[] | undefined {
+  if (!inputArtifacts || inputArtifacts.length === 0) return undefined;
+
+  return inputArtifacts.map((artifact): KodaXInputArtifact => {
+    if (artifact.kind === 'image') {
+      return {
+        kind: 'image',
+        path: artifact.path,
+        ...(artifact.mediaType
+          ? { mediaType: artifact.mediaType as KodaXImageMediaType }
+          : {}),
+        ...(artifact.source
+          ? { source: artifact.source as KodaXInputArtifactSource }
+          : {}),
+        ...(artifact.description ? { description: artifact.description } : {}),
+      };
+    }
+
+    if (artifact.kind === 'video') {
+      return {
+        kind: 'video',
+        path: artifact.path,
+        mediaType: artifact.mediaType as KodaXVideoMediaType,
+        ...(artifact.name ? { name: artifact.name } : {}),
+        ...(artifact.source
+          ? { source: artifact.source as KodaXInputArtifactSource }
+          : {}),
+        ...(artifact.description ? { description: artifact.description } : {}),
+      };
+    }
+
+    return {
+      kind: 'file',
+      path: artifact.path,
+      ...(artifact.mediaType ? { mediaType: artifact.mediaType } : {}),
+      ...(artifact.mimeType ? { mimeType: artifact.mimeType } : {}),
+      ...(artifact.name ? { name: artifact.name } : {}),
+      ...(artifact.source
+        ? { source: artifact.source as KodaXInputArtifactSource }
+        : {}),
+      ...(artifact.description ? { description: artifact.description } : {}),
+    };
+  });
 }
 
 /**
@@ -1478,10 +1535,17 @@ async function runManagedTaskViaRunnerInner(
     if (drained.length === 0) return [];
     const contents = drained.map((m) => m.content);
     options.events?.onMidTurnUserMessages?.(contents);
-    return drained.map((m) => ({
-      role: 'user' as const,
-      content: m.content,
-    }));
+    return drained.map((m) => {
+      const inputArtifacts = toKodaXInputArtifacts(m.inputArtifacts);
+      validateInputArtifactsForModel(inputArtifacts ?? [], {
+        provider: options.provider,
+        model: options.modelOverride ?? options.model,
+      });
+      return {
+        role: 'user' as const,
+        content: buildPromptMessageContent(m.content, inputArtifacts),
+      };
+    });
   };
   // Transcript snapshot ref — populated by the adapter's beforeNextTurn
   // each turn boundary; read by the goal verifyComplete closure when

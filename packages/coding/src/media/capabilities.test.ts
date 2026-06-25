@@ -8,6 +8,7 @@ describe('getModelInputCapabilities', () => {
     expect(caps.image.status).toBe('supported');
     expect(caps.image.sdkSupported).toBe(true);
     expect(caps.video.status).toBe('unsupported');
+    expect(caps.file.status).toBe('unsupported');
   });
 
   it('supports documented Kimi model aliases without inferring gateway routes', () => {
@@ -27,6 +28,9 @@ describe('getModelInputCapabilities', () => {
     expect(supported.video.nativeSupported).toBe(true);
     expect(supported.video.sdkSupported).toBe(false);
     expect(supported.video.mediaTypes).toEqual([]);
+    expect(supported.video.nativeMediaTypes).toContain('video/mp4');
+    expect(supported.video.reason).toContain('not wired');
+    expect(supported.file.maxCount).toBe(0);
 
     expect(getModelInputCapabilities({ provider: 'minimax-coding' }).image.status).toBe('unsupported');
     expect(getModelInputCapabilities({ provider: 'mimo-coding' }).image.status).toBe('unsupported');

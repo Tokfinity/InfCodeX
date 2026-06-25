@@ -1654,7 +1654,10 @@ or construct `runKodaX` artifacts. v0.7.56 exposes the shared image path through
 
 ```ts
 import {
+  createFileArtifactFromPath,
   createImageArtifactFromPath,
+  createVideoArtifactFromPath,
+  enqueueWithArtifacts,
   getModelInputCapabilities,
   readAndNormalizeClipboardImage,
   validateInputArtifactsForModel,
@@ -1717,17 +1720,72 @@ if (caps.video.status === 'provider-native-unwired') {
 }
 ```
 
-P0 supports image artifacts only. Known native-video models report
+v0.7.56 can send image artifacts. File and video artifact shapes are stable, but
+the SDK runtime does not serialize them yet. Known native-video models report
 `video.status = 'provider-native-unwired'` so hosts can show accurate UI without
-enabling a send path KodaX cannot serialize yet. File artifacts are unsupported
-in v0.7.56.
+enabling a send path KodaX cannot serialize yet.
+
+### Artifact contract
+
+`KodaXInputArtifact` is a stable union:
+
+```ts
+type KodaXInputArtifact =
+  | { kind: 'image'; path: string; mediaType?: KodaXImageMediaType; source?: KodaXInputArtifactSource; description?: string }
+  | { kind: 'file'; path: string; mediaType?: string; mimeType?: string; name?: string; source?: KodaXInputArtifactSource; description?: string }
+  | { kind: 'video'; path: string; mediaType: KodaXVideoMediaType; name?: string; source?: KodaXInputArtifactSource; description?: string };
+```
+
+Use `createFileArtifactFromPath()` for stable file metadata and
+`createVideoArtifactFromPath()` when a video path has a supported media type
+(`mp4`, `mpeg`, `mov`, `avi`, `flv`, `webm`, `wmv`, `3gp`). Video construction
+throws `KodaXMediaError('UNSUPPORTED_MEDIA_TYPE')` if the type cannot be
+inferred or supplied.
+
+### File/video downgrade strategy
+
+`getModelInputCapabilities()` distinguishes native provider support from SDK
+runtime support:
+
+- `image.status === 'supported'`: SDK can send image artifacts.
+- `video.status === 'provider-native-unwired'`: the selected provider/model is
+  native-video capable, but KodaX SDK does not serialize video artifacts yet.
+- `file.status === 'unsupported'`: file artifacts are contract-stable, but KodaX
+  SDK does not upload or extract files yet.
+
+`validateInputArtifactsForModel()` enforces that policy before provider send.
+Hosts should use the thrown `KodaXMediaError.code` and `detail` to disable send
+or show downgrade UI. If Space wants to support files before SDK runtime wiring,
+Space should perform its own extraction and include the extracted text in the
+prompt rather than passing the file artifact through as sendable media.
+
+### Queued follow-ups with artifacts
+
+For streaming follow-ups, use `enqueueWithArtifacts()` instead of the raw
+message queue:
+
+```ts
+enqueueWithArtifacts({
+  provider: selectedProvider,
+  model: selectedModel,
+  content: followupText,
+  inputArtifacts: [artifact],
+});
+```
+
+The helper validates first and then stores `inputArtifacts` on the queued prompt.
+Queued image follow-ups are rebuilt as multimodal content blocks on the next
+runner turn. Unsupported file/video attachments are rejected before enqueueing.
 
 ### Boundaries
 
 - `readAndNormalizeClipboardImage()` returns `null` when there is no clipboard
   image fallback; thrown `KodaXMediaError` values are stable enough for host copy.
 - Direct image path artifacts preserve `image/png`, `image/jpeg`, `image/webp`,
-  and `image/gif`; clipboard normalization emits static PNG/JPEG bytes.
+  and `image/gif`; clipboard normalization emits static PNG/JPEG bytes and may
+  flatten animated GIFs before artifact creation. `image/gif` capability means
+  SDK can pass the bytes and media type; provider animation semantics vary
+  (for example, first-frame-only or non-animated GIF handling).
 - `persistImageAsBlock()` is a convenience helper. Embedded hosts should usually
   pass `directory` or store bytes in their own sandbox before constructing an
   artifact path.

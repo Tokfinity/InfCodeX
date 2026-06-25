@@ -53,6 +53,30 @@ describe('MessageQueue', () => {
       expect(drained[0]?.enqueuedAt).toBeGreaterThanOrEqual(before);
       expect(drained[0]?.enqueuedAt).toBeLessThanOrEqual(after);
     });
+
+    it('preserves input artifacts on queued prompt messages', () => {
+      const q = new MessageQueue();
+      q.enqueue({
+        priority: 'user',
+        mode: 'prompt',
+        content: 'look',
+        inputArtifacts: [
+          {
+            kind: 'image',
+            path: '/tmp/shot.png',
+            mediaType: 'image/png',
+          },
+        ],
+      });
+      const drained = q.dequeue({ maxPriority: 'user', mode: 'prompt' });
+      expect(drained[0]?.inputArtifacts).toEqual([
+        {
+          kind: 'image',
+          path: '/tmp/shot.png',
+          mediaType: 'image/png',
+        },
+      ]);
+    });
   });
 
   describe('priority ordering (user > background)', () => {

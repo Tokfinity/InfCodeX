@@ -22,6 +22,19 @@ describe('validateInputArtifactsForModel', () => {
     })).not.toThrow();
   });
 
+  it('accepts direct-path image/gif when the model route supports images', () => {
+    expect(() => validateInputArtifactsForModel([
+      {
+        kind: 'image',
+        path: '/tmp/animated.gif',
+        mediaType: 'image/gif',
+      },
+    ], {
+      provider: 'mimo-coding',
+      model: 'mimo-v2.5',
+    })).not.toThrow();
+  });
+
   it('rejects text-only providers before send', () => {
     expect(() => validateInputArtifactsForModel([
       {
@@ -69,7 +82,7 @@ describe('validateInputArtifactsForModel', () => {
           kind: 'video',
           path: '/tmp/movie.mp4',
           mediaType: 'video/mp4',
-        } as unknown as KodaXInputArtifact,
+        },
       ], {
         provider: 'minimax-coding',
         model: 'MiniMax-M3',
@@ -81,5 +94,61 @@ describe('validateInputArtifactsForModel', () => {
       return;
     }
     throw new Error('Expected validation to reject video artifacts');
+  });
+
+  it('rejects unsupported video media types before capability status checks', () => {
+    try {
+      validateInputArtifactsForModel([
+        {
+          kind: 'video',
+          path: '/tmp/movie.mkv',
+          mediaType: 'video/x-matroska',
+        } as KodaXInputArtifact,
+      ], {
+        provider: 'minimax-coding',
+        model: 'minimax-m3',
+      });
+    } catch (error) {
+      expect(error).toBeInstanceOf(KodaXMediaError);
+      expect((error as KodaXMediaError).code).toBe('UNSUPPORTED_MEDIA_TYPE');
+      return;
+    }
+    throw new Error('Expected validation to reject unsupported video media type');
+  });
+
+  it('rejects file artifacts with a stable model-input error', () => {
+    try {
+      validateInputArtifactsForModel([
+        {
+          kind: 'file',
+          path: '/tmp/report.pdf',
+          mediaType: 'application/pdf',
+          name: 'report.pdf',
+        },
+      ], {
+        provider: 'kimi',
+        model: 'k2.6',
+      });
+    } catch (error) {
+      expect(error).toBeInstanceOf(KodaXMediaError);
+      expect((error as KodaXMediaError).code).toBe('MODEL_INPUT_UNSUPPORTED');
+      expect((error as KodaXMediaError).detail).toContain('not wired');
+      return;
+    }
+    throw new Error('Expected validation to reject file artifacts');
+  });
+
+  it('rejects disagreeing file mediaType aliases', () => {
+    expect(() => validateInputArtifactsForModel([
+      {
+        kind: 'file',
+        path: '/tmp/report.pdf',
+        mediaType: 'application/pdf',
+        mimeType: 'text/plain',
+      },
+    ], {
+      provider: 'kimi',
+      model: 'k2.6',
+    })).toThrow(KodaXMediaError);
   });
 });

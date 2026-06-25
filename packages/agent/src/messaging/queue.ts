@@ -128,6 +128,7 @@ export class MessageQueue {
       mode: input.mode,
       content: input.content,
       agentId: input.agentId,
+      inputArtifacts: input.inputArtifacts,
       enqueuedAt: Date.now(),
     };
     this.messages = [...this.messages, message];

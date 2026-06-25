@@ -389,6 +389,7 @@ export type {
   MaybeDrainMidTurnInput,
   MessageMode,
   MessagePriority,
+  QueuedInputArtifact,
   QueuedMessage,
 } from './messaging/index.js';
 export {
@@ -431,6 +432,7 @@ export {
   countLastAssistantToolCalls,
   detectIdleYield,
   isIdleYieldEnabled,
+  QueuedInputArtifactError,
   registerChildTask,
   requestTaskStop,
   routeMessage,

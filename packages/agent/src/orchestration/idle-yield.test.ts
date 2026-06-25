@@ -33,7 +33,7 @@
 import { describe, expect, it, beforeEach, afterEach } from 'vitest';
 
 import { MessageQueue } from '../messaging/index.js';
-import type { QueuedMessage } from '../messaging/index.js';
+import type { QueuedInputArtifact, QueuedMessage } from '../messaging/index.js';
 import type { KodaXMessage } from '@kodax-ai/llm';
 
 import {
@@ -41,6 +41,7 @@ import {
   countLastAssistantToolCalls,
   detectIdleYield,
   isIdleYieldEnabled,
+  QueuedInputArtifactError,
   waitForWakeEvent,
   type WakeEvent,
 } from './idle-yield.js';
@@ -599,12 +600,14 @@ describe('composeIdleYieldUserMessage', () => {
     content: string,
     priority: 'user' | 'background' = 'background',
     mode: QueuedMessage['mode'] = 'task-notification',
+    inputArtifacts: QueuedMessage['inputArtifacts'] = undefined,
   ): QueuedMessage {
     return {
       id: 'qm-' + Math.random().toString(36).slice(2, 8),
       priority,
       mode,
       content,
+      ...(inputArtifacts ? { inputArtifacts } : {}),
       enqueuedAt: Date.now(),
     } as QueuedMessage;
   }
@@ -660,6 +663,74 @@ describe('composeIdleYieldUserMessage', () => {
     expect(promptMsg?.content).toBe('did you dispatch the agents?');
     expect(reported).toEqual([['did you dispatch the agents?']]);
   });
+
+  it('preserves queued prompt image artifacts as multimodal content blocks', async () => {
+    const result = await composeIdleYieldUserMessage(
+      {
+        kind: 'messages-arrived',
+        messages: [
+          queuedMessage('look at this', 'user', 'prompt', [
+            {
+              kind: 'image',
+              path: '/tmp/shot.png',
+              mediaType: 'image/png',
+            },
+          ]),
+        ],
+      },
+      () => [],
+    );
+    const promptMsg = result.find((m) => !m._synthetic);
+    expect(promptMsg?.content).toEqual([
+      { type: 'text', text: 'look at this' },
+      { type: 'image', path: '/tmp/shot.png', mediaType: 'image/png' },
+    ]);
+  });
+
+  it.each(['file', 'video'] as const)(
+    'fails fast for queued prompt %s artifacts instead of rendering text markers',
+    async (kind) => {
+      const artifact: QueuedInputArtifact = kind === 'file'
+        ? {
+            kind: 'file',
+            path: '/tmp/report.pdf',
+            mediaType: 'application/pdf',
+            name: 'report.pdf',
+          }
+        : {
+            kind: 'video',
+            path: '/tmp/clip.mp4',
+            mediaType: 'video/mp4',
+          };
+      const reported: string[][] = [];
+
+      let caught: unknown;
+      try {
+        await composeIdleYieldUserMessage(
+          {
+            kind: 'messages-arrived',
+            messages: [queuedMessage('review this', 'user', 'prompt', [artifact])],
+          },
+          () => [],
+          undefined,
+          (prompts) => { reported.push([...prompts]); },
+        );
+      } catch (error) {
+        caught = error;
+      }
+
+      expect(caught).toBeInstanceOf(QueuedInputArtifactError);
+      expect(caught).toMatchObject({
+        name: 'QueuedInputArtifactError',
+        code: 'MODEL_INPUT_UNSUPPORTED',
+        artifactKind: kind,
+      });
+      expect((caught as QueuedInputArtifactError).detail).toContain(
+        'Validate file/video artifacts in the SDK runtime before enqueue',
+      );
+      expect(reported).toEqual([]);
+    },
+  );
 
   it('FEATURE_213: does NOT fire onUserPrompts for banner-only (synthetic) wakes', async () => {
     const reported: string[][] = [];

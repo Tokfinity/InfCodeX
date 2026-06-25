@@ -17,6 +17,32 @@ export type MessagePriority = 'user' | 'background';
 
 export type MessageMode = 'prompt' | 'task-notification' | 'system-reminder';
 
+export type QueuedInputArtifact =
+  | {
+      readonly kind: 'image';
+      readonly path: string;
+      readonly mediaType?: string;
+      readonly source?: string;
+      readonly description?: string;
+    }
+  | {
+      readonly kind: 'file';
+      readonly path: string;
+      readonly mediaType?: string;
+      readonly mimeType?: string;
+      readonly name?: string;
+      readonly source?: string;
+      readonly description?: string;
+    }
+  | {
+      readonly kind: 'video';
+      readonly path: string;
+      readonly mediaType: string;
+      readonly name?: string;
+      readonly source?: string;
+      readonly description?: string;
+    };
+
 export interface QueuedMessage {
   /** Stable id for tracing / dedup. Format: `msg-<sequence>`. */
   readonly id: string;
@@ -32,6 +58,7 @@ export interface QueuedMessage {
   readonly agentId?: string;
   readonly mode: MessageMode;
   readonly content: string;
+  readonly inputArtifacts?: readonly QueuedInputArtifact[];
   /** Wall-clock timestamp (`Date.now()`) for tracing only — not used for ordering. */
   readonly enqueuedAt: number;
 }
@@ -115,4 +142,5 @@ export interface EnqueueInput {
   readonly mode: MessageMode;
   readonly content: string;
   readonly agentId?: string;
+  readonly inputArtifacts?: readonly QueuedInputArtifact[];
 }

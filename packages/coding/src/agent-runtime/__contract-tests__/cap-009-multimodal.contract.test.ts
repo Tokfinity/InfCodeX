@@ -21,6 +21,7 @@ import { describe, expect, it } from 'vitest';
 import type { KodaXInputArtifact } from '@kodax-ai/coding';
 
 import { buildPromptMessageContent } from '../prompt-content.js';
+import { KodaXMediaError } from '../../media/errors.js';
 
 describe('CAP-009: buildPromptMessageContent multimodal contract', () => {
   it('CAP-MULTIMODAL-001a: text-only prompt with no input artifacts returns the prompt as a plain string', () => {
@@ -58,20 +59,11 @@ describe('CAP-009: buildPromptMessageContent multimodal contract', () => {
     ]);
   });
 
-  it('CAP-MULTIMODAL-001e: non-image artifact kinds are silently skipped (forward-compat)', () => {
-    // Forward-compat: KodaXInputArtifact's `kind` is currently only 'image',
-    // but the implementation uses flatMap with a kind check so adding new
-    // artifact kinds in the future doesn't accidentally pass through as
-    // unknown content blocks. Enforce that contract.
+  it('CAP-MULTIMODAL-001e: non-image artifact kinds fail fast instead of being silently dropped', () => {
     const artifacts: KodaXInputArtifact[] = [
       { kind: 'image', path: '/tmp/a.png', mediaType: 'image/png', source: 'user-inline' },
-      // simulate a future non-image artifact kind
-      { kind: 'audio', path: '/tmp/b.mp3', source: 'user-inline' } as unknown as KodaXInputArtifact,
+      { kind: 'file', path: '/tmp/b.pdf', mediaType: 'application/pdf', source: 'user-inline' },
     ];
-    const result = buildPromptMessageContent('mixed', artifacts);
-    expect(result).toEqual([
-      { type: 'text', text: 'mixed' },
-      { type: 'image', path: '/tmp/a.png', mediaType: 'image/png' },
-    ]);
+    expect(() => buildPromptMessageContent('mixed', artifacts)).toThrow(KodaXMediaError);
   });
 });

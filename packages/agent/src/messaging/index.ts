@@ -11,6 +11,7 @@ export type {
   MessagePriority,
   QueueEvent,
   QueueEventListener,
+  QueuedInputArtifact,
   QueuedMessage,
 } from './types.js';
 
