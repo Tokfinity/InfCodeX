@@ -38,8 +38,8 @@ export function buildPromptMessageContent(
     if (artifact.kind !== 'image') {
       throw new KodaXMediaError(
         'MODEL_INPUT_UNSUPPORTED',
-        `${artifact.kind} artifact reached prompt content builder before validation.`,
-        { detail: 'Call validateInputArtifactsForModel before buildPromptMessageContent.' },
+        `${artifact.kind} artifacts cannot be attached to the provider prompt yet.`,
+        { detail: 'Only image artifacts are currently lowered into provider prompt content.' },
       );
     }
     blocks.push({

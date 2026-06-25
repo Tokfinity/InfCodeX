@@ -163,17 +163,86 @@ describe('FEATURE_198 — provider-capabilities loader', () => {
       const a = getProviderSnapshots().anthropic;
       expect(a.apiKeyEnv).toBe('ANTHROPIC_API_KEY');
       expect(a.model).toBe('claude-sonnet-4-6');
-      expect(a.reasoningCapability).toBe('native-budget');
+      expect(a.reasoningCapability).toBe('native-adaptive');
+      expect(a.reasoningCapabilityV2).toMatchObject({
+        reasoningPreset: 'claude-adaptive-max',
+        effortStrategy: 'anthropic-output-effort',
+        thinkingStrategy: 'anthropic-adaptive',
+        defaultEffort: 'high',
+      });
       expect(a.supportsThinking).toBe(true);
       expect(a.contextWindow).toBe(200000);
       expect(a.maxOutputTokens).toBe(64000);
       expect(a.thinkingBudgetCap).toBe(28000);
       expect(a.models).toEqual([
-        { id: 'claude-opus-4-8', displayName: 'Opus 4.8', reasoningCapability: 'native-adaptive', contextWindow: 1000000, maxOutputTokens: 128000 },
-        { id: 'claude-opus-4-7', displayName: 'Opus 4.7', reasoningCapability: 'native-adaptive', contextWindow: 1000000, maxOutputTokens: 128000 },
-        { id: 'claude-opus-4-6', displayName: 'Opus 4.6', thinkingBudgetCap: 28000 },
-        { id: 'claude-haiku-4-5', displayName: 'Haiku 4.5', thinkingBudgetCap: 10000 },
+        expect.objectContaining({
+          id: 'claude-opus-4-8',
+          displayName: 'Opus 4.8',
+          reasoningCapability: 'native-adaptive',
+          reasoningCapabilityV2: expect.objectContaining({
+            reasoningPreset: 'claude-adaptive-xhigh',
+            effortStrategy: 'anthropic-output-effort',
+            thinkingStrategy: 'anthropic-adaptive',
+            defaultEffort: 'high',
+          }),
+          contextWindow: 1000000,
+          maxOutputTokens: 128000,
+        }),
+        expect.objectContaining({
+          id: 'claude-opus-4-7',
+          displayName: 'Opus 4.7',
+          reasoningCapability: 'native-adaptive',
+          reasoningCapabilityV2: expect.objectContaining({
+            reasoningPreset: 'claude-adaptive-xhigh',
+            effortStrategy: 'anthropic-output-effort',
+            thinkingStrategy: 'anthropic-adaptive',
+            defaultEffort: 'high',
+          }),
+          contextWindow: 1000000,
+          maxOutputTokens: 128000,
+        }),
+        expect.objectContaining({
+          id: 'claude-opus-4-6',
+          displayName: 'Opus 4.6',
+          reasoningCapability: 'native-adaptive',
+          reasoningCapabilityV2: expect.objectContaining({
+            reasoningPreset: 'claude-adaptive-max',
+          }),
+          thinkingBudgetCap: 28000,
+        }),
+        expect.objectContaining({
+          id: 'claude-haiku-4-5',
+          displayName: 'Haiku 4.5',
+          reasoningCapability: 'native-budget',
+          reasoningCapabilityV2: expect.objectContaining({
+            reasoningPreset: 'anthropic-budget',
+            effortStrategy: 'provider-budget',
+          }),
+          thinkingBudgetCap: 10000,
+        }),
       ]);
+    });
+
+    it('exposes effort-first reasoning metadata for OpenAI and Codex CLI', () => {
+      const snap = getProviderSnapshots();
+      expect(snap.openai.reasoningCapabilityV2).toMatchObject({
+        effortStrategy: 'openai-chat-effort',
+        defaultEffort: 'medium',
+        supportsReasoningEffort: true,
+      });
+      expect(snap.openai.reasoningCapabilityV2?.supportedEfforts?.map((preset) => preset.value)).toEqual([
+        'none',
+        'minimal',
+        'low',
+        'medium',
+        'high',
+        'xhigh',
+      ]);
+      expect(snap['codex-cli'].reasoningCapabilityV2).toMatchObject({
+        effortStrategy: 'codex-cli-config',
+        defaultEffort: 'medium',
+        allowCustomEffort: true,
+      });
     });
 
     it('deepseek: KODAX_ESCALATED_MAX_OUTPUT_TOKENS resolved to 64000', () => {
@@ -191,21 +260,34 @@ describe('FEATURE_198 — provider-capabilities loader', () => {
 
     it('kimi: K2.7 Code model descriptor is available at 256K context', () => {
       const k = getProviderSnapshots().kimi;
-      expect(k.models?.find((m) => m.id === 'kimi-k2.7-code')).toEqual({
+      expect(k.models?.find((m) => m.id === 'kimi-k2.7-code')).toEqual(expect.objectContaining({
         id: 'kimi-k2.7-code',
         displayName: 'Kimi K2.7 Code',
         contextWindow: 256_000,
-      });
+        reasoningCapability: 'native-toggle',
+        reasoningCapabilityV2: expect.objectContaining({
+          reasoningPreset: 'kimi-k2.7-code',
+          effortStrategy: 'prompt-only',
+          localRejectEfforts: ['none', 'minimal'],
+        }),
+      }));
     });
 
     it('zhipu: GLM-5.2 model descriptor carries its 1M context override', () => {
       const z = getProviderSnapshots().zhipu;
-      expect(z.models?.find((m) => m.id === 'glm-5.2')).toEqual({
+      expect(z.models?.find((m) => m.id === 'glm-5.2')).toEqual(expect.objectContaining({
         id: 'glm-5.2',
         displayName: 'GLM-5.2',
         contextWindow: 1_000_000,
         maxOutputTokens: 131_072,
-      });
+        reasoningCapability: 'native-effort',
+        reasoningCapabilityV2: expect.objectContaining({
+          reasoningPreset: 'zai-glm-5.2',
+          effortStrategy: 'openai-chat-effort',
+          defaultEffort: 'max',
+          effortAliases: { low: 'high', medium: 'high', xhigh: 'max' },
+        }),
+      }));
     });
 
     it('zhipu-coding: bench-tuned 16K maxOutputTokens + thinkingBudgetCap', () => {
@@ -213,21 +295,32 @@ describe('FEATURE_198 — provider-capabilities loader', () => {
       expect(z.maxOutputTokens).toBe(16000);
       expect(z.thinkingBudgetCap).toBe(16000);
       expect(z.contextWindow).toBe(200000);
-      expect(z.models?.find((m) => m.id === 'glm-5.2')).toEqual({
+      expect(z.models?.find((m) => m.id === 'glm-5.2')).toEqual(expect.objectContaining({
         id: 'glm-5.2',
         displayName: 'GLM-5.2',
         contextWindow: 1_000_000,
         maxOutputTokens: 131_072,
-      });
+        reasoningCapability: 'native-effort',
+        reasoningCapabilityV2: expect.objectContaining({
+          reasoningPreset: 'zai-glm-5.2',
+          effortStrategy: 'openai-chat-effort',
+          defaultEffort: 'max',
+        }),
+      }));
       // 2026-06: GLM-5 / GLM-5.1 retired (auto-routed to GLM-5.2 upstream);
       // catalogue is now GLM-5.2 / GLM-5 Turbo / GLM-4.7, default GLM-5.2.
       expect(z.model).toBe('glm-5.2');
       expect(z.models?.map((m) => m.id)).toEqual(['glm-5.2', 'glm-5-turbo', 'glm-4.7']);
-      expect(z.models?.find((m) => m.id === 'glm-4.7')).toEqual({
+      expect(z.models?.find((m) => m.id === 'glm-4.7')).toEqual(expect.objectContaining({
         id: 'glm-4.7',
         displayName: 'GLM-4.7',
         contextWindow: 200_000,
-      });
+        reasoningCapability: 'native-toggle',
+        reasoningCapabilityV2: expect.objectContaining({
+          reasoningPreset: 'zai-glm-toggle',
+          effortStrategy: 'provider-toggle',
+        }),
+      }));
     });
 
     it('ark-coding: per-model contextWindow overrides preserved', () => {

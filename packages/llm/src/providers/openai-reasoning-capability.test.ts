@@ -132,6 +132,20 @@ class TestOpenAIProvider extends KodaXOpenAICompatProvider {
       model: 'test-model',
       supportsThinking: capability !== 'none' && capability !== 'prompt-only',
       reasoningCapability: capability,
+      ...(capability === 'native-effort'
+        ? {
+            reasoningCapabilityV2: {
+              effortStrategy: 'openai-chat-effort',
+              supportedEfforts: [
+                { value: 'low' },
+                { value: 'medium' },
+                { value: 'high' },
+                { value: 'xhigh' },
+              ],
+              supportsReasoningEffort: true,
+            },
+          }
+        : {}),
       maxOutputTokens: 32768,
       ...configOverrides,
     };
@@ -173,6 +187,124 @@ describe('openai reasoning capability', () => {
     await provider.stream(MESSAGES, TOOLS, 'system', reasoning);
 
     expect(create.mock.calls[0]?.[0].reasoning_effort).toBe('medium');
+  });
+
+  it('passes explicit provider effort values through for native-effort providers', async () => {
+    const create = vi.fn().mockResolvedValue(createCompletedOpenAIStream());
+    const provider = new TestOpenAIProvider('openai', 'native-effort', {
+      chat: { completions: { create } },
+    });
+
+    await provider.stream(MESSAGES, TOOLS, 'system', {
+      ...reasoning,
+      effort: 'xhigh',
+    });
+
+    expect(create.mock.calls[0]?.[0].reasoning_effort).toBe('xhigh');
+  });
+
+  it('omits reasoning_effort when explicit effort auto clears the provider field', async () => {
+    const create = vi.fn().mockResolvedValue(createCompletedOpenAIStream());
+    const provider = new TestOpenAIProvider('openai', 'native-effort', {
+      chat: { completions: { create } },
+    });
+
+    await provider.stream(MESSAGES, TOOLS, 'system', {
+      ...reasoning,
+      effort: 'auto',
+    });
+
+    expect(create.mock.calls[0]?.[0]).not.toHaveProperty('reasoning_effort');
+  });
+
+  it('sends DeepSeek V4 thinking plus aliased reasoning_effort through V2 metadata', async () => {
+    const create = vi.fn().mockResolvedValue(createCompletedOpenAIStream());
+    const provider = new TestOpenAIProvider('deepseek', 'native-effort', {
+      chat: { completions: { create } },
+    }, {
+      reasoningCapabilityV2: {
+        reasoningPreset: 'deepseek-v4-openai',
+        effortStrategy: 'openai-chat-effort',
+        thinkingStrategy: 'provider-toggle',
+        supportedEfforts: [
+          { value: 'none' },
+          { value: 'minimal' },
+          { value: 'high' },
+          { value: 'xhigh' },
+          { value: 'max' },
+        ],
+        effortAliases: { xhigh: 'max' },
+        disabledEfforts: ['none', 'minimal'],
+      },
+    });
+
+    await provider.stream(MESSAGES, TOOLS, 'system', {
+      ...reasoning,
+      effort: 'xhigh',
+    });
+
+    expect(create.mock.calls[0]?.[0]).toMatchObject({
+      thinking: { type: 'enabled' },
+      reasoning_effort: 'max',
+    });
+  });
+
+  it('resolves GLM-5.2 auto effort to the V2 model default before lowering', async () => {
+    const create = vi.fn().mockResolvedValue(createCompletedOpenAIStream());
+    const provider = new TestOpenAIProvider('zhipu', 'native-effort', {
+      chat: { completions: { create } },
+    }, {
+      reasoningCapabilityV2: {
+        reasoningPreset: 'zai-glm-5.2',
+        effortStrategy: 'openai-chat-effort',
+        thinkingStrategy: 'provider-toggle',
+        defaultEffort: 'max',
+        supportedEfforts: [
+          { value: 'high' },
+          { value: 'max', isDefault: true },
+        ],
+        effortAliases: { low: 'high', medium: 'high', xhigh: 'max' },
+        disabledEfforts: ['none', 'minimal'],
+      },
+    });
+
+    await provider.stream(MESSAGES, TOOLS, 'system', {
+      ...reasoning,
+      effort: 'auto',
+    });
+
+    expect(create.mock.calls[0]?.[0]).toMatchObject({
+      thinking: { type: 'enabled' },
+      reasoning_effort: 'max',
+    });
+  });
+
+  it('sends disabled thinking for OpenAI-compatible disabled efforts through V2 metadata', async () => {
+    const create = vi.fn().mockResolvedValue(createCompletedOpenAIStream());
+    const provider = new TestOpenAIProvider('zhipu', 'native-effort', {
+      chat: { completions: { create } },
+    }, {
+      reasoningCapabilityV2: {
+        reasoningPreset: 'zai-glm-5.2',
+        effortStrategy: 'openai-chat-effort',
+        thinkingStrategy: 'provider-toggle',
+        supportedEfforts: [
+          { value: 'none' },
+          { value: 'minimal' },
+          { value: 'high' },
+          { value: 'max' },
+        ],
+        disabledEfforts: ['none', 'minimal'],
+      },
+    });
+
+    await provider.stream(MESSAGES, TOOLS, 'system', {
+      ...reasoning,
+      effort: 'minimal',
+    });
+
+    expect(create.mock.calls[0]?.[0].thinking).toEqual({ type: 'disabled' });
+    expect(create.mock.calls[0]?.[0]).not.toHaveProperty('reasoning_effort');
   });
 
   it('requests stream usage and prefers returned usage totals when available', async () => {
@@ -225,6 +357,35 @@ describe('openai reasoning capability', () => {
       extra_body: {
         enable_thinking: true,
         thinking_budget: 10000,
+      },
+    });
+  });
+
+  it('caps V2 budgetByEffort values with thinkingBudgetCap for qwen-style providers', async () => {
+    const create = vi.fn().mockResolvedValue(createCompletedOpenAIStream());
+    const provider = new TestOpenAIProvider('qwen', 'native-budget', {
+      chat: { completions: { create } },
+    }, {
+      thinkingBudgetCap: 12000,
+      reasoningCapabilityV2: {
+        reasoningPreset: 'qwen-hybrid-thinking',
+        effortStrategy: 'provider-budget',
+        thinkingStrategy: 'provider-budget',
+        supportedEfforts: [{ value: 'max' }],
+        budgetByEffort: { max: 32000 },
+        supportsManualThinkingBudget: true,
+      },
+    });
+
+    await provider.stream(MESSAGES, TOOLS, 'system', {
+      ...reasoning,
+      effort: 'max',
+    });
+
+    expect(create.mock.calls[0]?.[0]).toMatchObject({
+      extra_body: {
+        enable_thinking: true,
+        thinking_budget: 12000,
       },
     });
   });

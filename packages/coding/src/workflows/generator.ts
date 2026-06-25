@@ -30,6 +30,11 @@ import type { KodaXMessage } from '@kodax-ai/llm';
 import type { WorkflowScriptSnapshotInput } from './run-graph.js';
 import { uniqueBareInlineSlashNames, uniqueInlineSkillNames } from '../skill-references.js';
 import type { KodaXOptions } from '../types.js';
+import {
+  parseTimeoutSecEnvMs,
+  timeoutSecToMs,
+  type KodaXTimeoutConfig,
+} from '../timeouts.js';
 
 export const WORKFLOW_GENERATION_SYSTEM_PROMPT = [
   'You generate KodaX Dynamic Workflow scripts.',
@@ -44,6 +49,7 @@ export const WORKFLOW_GENERATION_SYSTEM_PROMPT = [
 ].join('\n');
 
 export const DEFAULT_WORKFLOW_GENERATION_TIMEOUT_MS = 120_000;
+const WORKFLOW_GENERATION_TIMEOUT_SEC_ENV = 'KODAX_WORKFLOW_GENERATION_TIMEOUT_SEC';
 const WORKFLOW_GENERATION_TIMEOUT_ENV = 'KODAX_WORKFLOW_GENERATION_TIMEOUT_MS';
 const GENERATED_WORKFLOW_MAX_AGENTS_HARD_CAP = 64;
 const WORKFLOW_GENERATION_REPAIR_ATTEMPTS = 2;
@@ -70,6 +76,8 @@ export interface GenerateWorkflowFromOptionsInput {
   readonly request: string;
   readonly options: KodaXOptions;
   readonly skillContext?: string;
+  readonly timeoutSec?: number;
+  /** @deprecated Prefer timeoutSec for public SDK calls. */
   readonly timeoutMs?: number;
   readonly signal?: AbortSignal;
 }
@@ -104,7 +112,17 @@ const FORBIDDEN_SOURCE_PATTERNS: readonly {
 
 export function resolveWorkflowGenerationTimeoutMs(
   env: NodeJS.ProcessEnv = process.env,
+  timeouts?: KodaXTimeoutConfig,
 ): number {
+  const configured = timeoutSecToMs(
+    timeouts?.workflow?.generationTimeoutSec,
+    'timeouts.workflow.generationTimeoutSec',
+  );
+  if (configured !== undefined) return configured;
+
+  const secEnv = parseTimeoutSecEnvMs(env[WORKFLOW_GENERATION_TIMEOUT_SEC_ENV]);
+  if (secEnv !== undefined) return secEnv;
+
   const raw = env[WORKFLOW_GENERATION_TIMEOUT_ENV];
   if (raw === undefined || raw.trim().length === 0) {
     return DEFAULT_WORKFLOW_GENERATION_TIMEOUT_MS;
@@ -900,7 +918,12 @@ export async function generateWorkflowFromOptions(
 ): Promise<WorkflowGenerationResult> {
   const provider = resolveProvider(input.options.provider);
   const model = input.options.modelOverride ?? input.options.model ?? provider.getModel();
-  const timeoutMs = input.timeoutMs ?? resolveWorkflowGenerationTimeoutMs();
+  if (input.timeoutMs !== undefined && input.timeoutSec !== undefined) {
+    throw new Error('workflow generation timeoutSec and timeoutMs cannot both be set');
+  }
+  const timeoutMs = input.timeoutMs
+    ?? timeoutSecToMs(input.timeoutSec, 'workflow generation timeoutSec')
+    ?? resolveWorkflowGenerationTimeoutMs(process.env, input.options.timeouts);
   const skillContext = input.skillContext
     ?? await buildWorkflowGenerationSkillContext(input.request, input.options);
   return generateWorkflow({

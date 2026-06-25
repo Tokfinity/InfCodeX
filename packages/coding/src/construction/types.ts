@@ -11,6 +11,8 @@
  *   - docs/features/v0.7.28.md — capability schema, generation flow.
  */
 
+import type { KodaXWireReasoningEffort } from '@kodax-ai/llm';
+
 /**
  * Handler script source. v0.7.28 limits language to `'javascript'` so that
  * `loadHandler()` can `await import()` the file directly without an
@@ -159,6 +161,7 @@ export interface AgentContent {
   readonly guardrails?: readonly GuardrailRef[];
   readonly model?: string;
   readonly provider?: string;
+  readonly effort?: KodaXWireReasoningEffort;
   /**
    * FEATURE_191 — one-sentence human-readable summary surfaced in the
    * Worker system prompt's `=== Available specialist agents ===`

@@ -3,6 +3,7 @@ import { KodaXBaseProvider } from './base.js';
 import type { KodaXOnRetryAfterCallback } from './base.js';
 import type {
   KodaXMessage,
+  KodaXNormalizedReasoningRequest,
   KodaXProviderConfig,
   KodaXProviderStreamOptions,
   KodaXReasoningCapability,
@@ -28,6 +29,13 @@ class TestProvider extends KodaXBaseProvider {
     ],
     supportsThinking: true,
     reasoningCapability: 'native-budget',
+    reasoningCapabilityV2: {
+      effortStrategy: 'provider-budget',
+      supportedEfforts: [
+        { value: 'low' },
+        { value: 'high' },
+      ],
+    },
     contextWindow: 200_000,
     maxOutputTokens: 32_000,
   };
@@ -59,8 +67,12 @@ class TestProvider extends KodaXBaseProvider {
     return this.getReasoningFallbackChain(capability);
   }
 
-  exposeNormalizeReasoning(reasoning?: boolean | KodaXReasoningRequest): Required<KodaXReasoningRequest> {
+  exposeNormalizeReasoning(reasoning?: boolean | KodaXReasoningRequest): KodaXNormalizedReasoningRequest {
     return this.normalizeReasoning(reasoning);
+  }
+
+  exposeValidateExplicitReasoningEffort(reasoning: KodaXReasoningRequest, modelOverride?: string): void {
+    this.validateExplicitReasoningEffort(this.normalizeReasoning(reasoning), modelOverride);
   }
 
   exposeWithRateLimit<T>(
@@ -71,6 +83,32 @@ class TestProvider extends KodaXBaseProvider {
     onRetryAfter?: KodaXOnRetryAfterCallback,
   ): Promise<T> {
     return this.withRateLimit(fn, signal, retries, onRateLimit, onRetryAfter);
+  }
+}
+
+class NoEffortMetadataProvider extends KodaXBaseProvider {
+  readonly name = 'no-effort-metadata';
+  readonly supportsThinking = true;
+  protected readonly config: KodaXProviderConfig = {
+    apiKeyEnv: 'TEST_PROVIDER_API_KEY',
+    model: 'default-model',
+    supportsThinking: true,
+    reasoningCapability: 'native-budget',
+  };
+
+  async stream(
+    _messages: KodaXMessage[],
+    _tools: KodaXToolDefinition[],
+    _system: string,
+    _reasoning?: boolean | KodaXReasoningRequest,
+    _streamOptions?: KodaXProviderStreamOptions,
+    _signal?: AbortSignal,
+  ): Promise<KodaXStreamResult> {
+    throw new Error('not implemented in unit test');
+  }
+
+  exposeValidateExplicitReasoningEffort(reasoning: KodaXReasoningRequest): void {
+    this.validateExplicitReasoningEffort(this.normalizeReasoning(reasoning));
   }
 }
 
@@ -155,6 +193,20 @@ describe('KodaXBaseProvider', () => {
       enabled: false,
       mode: 'off',
     });
+  });
+
+  it('rejects explicit unsupported reasoning effort when metadata enumerates values', () => {
+    const provider = new TestProvider();
+    expect(() => provider.exposeValidateExplicitReasoningEffort({ effort: 'low' })).not.toThrow();
+    expect(() => provider.exposeValidateExplicitReasoningEffort({ effort: 'minimal' }))
+      .toThrow(/does not support reasoning effort "minimal"/);
+  });
+
+  it('rejects provider-specific effort values when metadata is absent', () => {
+    const provider = new NoEffortMetadataProvider();
+    expect(() => provider.exposeValidateExplicitReasoningEffort({ effort: 'high' })).not.toThrow();
+    expect(() => provider.exposeValidateExplicitReasoningEffort({ effort: 'xhigh' }))
+      .toThrow(/does not advertise provider-specific reasoning effort "xhigh"/);
   });
 
   it('reads contextWindow from the active model descriptor when present', () => {

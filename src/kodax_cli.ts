@@ -52,12 +52,14 @@ import {
   ACP_PERMISSION_MODES,
   createKodaXOptions,
   parseAgentModeOption,
+  parseEffortOption,
   parseOptionalNonNegativeInt,
   parseOutputModeOption,
   parsePermissionModeOption,
   parseReasoningModeOption,
   parseRepoIntelligenceModeOption,
   resolveCliAgentMode,
+  resolveCliEffort,
   resolveCliModelSelection,
   resolveCliReasoningMode,
   type CliOutputMode,
@@ -191,7 +193,8 @@ const CLI_HELP_TOPICS: Record<string, () => void> = {
     console.log(chalk.dim('  --cwd <dir>                  ') + 'Working directory exposed to ACP sessions');
     console.log(chalk.dim('  -m, --provider <name>        ') + 'Provider to use');
     console.log(chalk.dim('  --model <name>               ') + 'Model override');
-    console.log(chalk.dim('  --reasoning <mode>           ') + 'Reasoning mode: off, auto, quick, balanced, deep');
+    console.log(chalk.dim('  --effort <level>             ') + 'Reasoning effort: auto, none, low, medium, high, or model-supported value');
+    console.log(chalk.dim('  --reasoning <mode>           ') + 'Compatibility mode: off, auto, quick, balanced, deep');
     console.log(chalk.dim('  --agent-mode <mode>          ') + 'Agent mode: ama, amaw, sa');
     console.log(chalk.dim('  --repo-intelligence <mode>   ') + 'Repo intelligence mode: auto, off, oss, premium-shared, premium-native');
     console.log(chalk.dim('  --repo-intelligence-trace    ') + 'Emit repo intelligence trace metadata/logging');
@@ -314,11 +317,13 @@ const CLI_HELP_TOPICS: Record<string, () => void> = {
     console.log(chalk.dim('  Reasoning controls how much deliberate analysis KodaX should apply.'));
     console.log(chalk.dim('  Use off, auto, quick, balanced, or deep depending on the task.\n'));
     console.log(chalk.bold('Options:'));
-    console.log(chalk.dim('  --reasoning <mode>   ') + 'Set reasoning mode: off, auto, quick, balanced, deep');
+    console.log(chalk.dim('  --effort <level>     ') + 'Set reasoning effort: auto, none, low, medium, high, or model-supported value');
+    console.log(chalk.dim('  --reasoning <mode>   ') + 'Compatibility mode: off, auto, quick, balanced, deep');
     console.log(chalk.dim('  --agent-mode <mode>  ') + 'Set agent mode: ama, sa');
     console.log(chalk.dim('  -t, --thinking       ') + 'Compatibility alias for --reasoning auto\n');
     console.log(chalk.bold('Examples:'));
-    console.log(chalk.dim('  kodax --reasoning deep "design the architecture"   ') + '# High-depth reasoning');
+    console.log(chalk.dim('  kodax --effort high "design the architecture"     ') + '# High effort');
+    console.log(chalk.dim('  kodax --reasoning deep "design the architecture"   ') + '# Legacy alias for high effort');
     console.log(chalk.dim('  kodax --reasoning balanced -p "analyze this bug"   ') + '# Medium-depth reasoning');
     console.log(chalk.dim('  kodax -t "review this PR"                           ') + '# Alias for auto');
     console.log(chalk.dim('  /reasoning balanced                                 ') + '# Set in REPL\n');
@@ -361,6 +366,7 @@ export function configureKodaXRootCommand(program: Command): Command {
     .option('-m, --provider <name>', 'LLM provider')
     .option('--model <name>', 'Model override')
     .option('-t, --thinking', 'Compatibility alias for --reasoning auto')
+    .option('--effort <level>', 'Reasoning effort: auto, none, low, medium, high, or model-supported value', parseEffortOption)
     .option('--reasoning <mode>', 'Reasoning mode: off, auto, quick, balanced, deep', parseReasoningModeOption)
     .option('--agent-mode <mode>', 'Agent mode: ama, amaw, sa', parseAgentModeOption)
     .option('--repo-intelligence <mode>', 'Repo intelligence mode: auto, off, oss, premium-shared, premium-native', parseRepoIntelligenceModeOption)
@@ -586,7 +592,8 @@ function showBasicHelp(): void {
   console.log(`  -m, --provider NAME     LLM provider (${providerNames})`);
   console.log('  --model NAME            Model override for the selected provider');
   console.log('  -t, --thinking          Compatibility alias for --reasoning auto');
-  console.log('  --reasoning MODE        Reasoning mode: off, auto, quick, balanced, deep');
+  console.log('  --effort LEVEL          Reasoning effort: auto, none, low, medium, high, or model-supported value');
+  console.log('  --reasoning MODE        Compatibility mode: off, auto, quick, balanced, deep');
   console.log('  --agent-mode MODE       Agent mode: ama, amaw, sa');
   console.log('  -y, --auto              Backward-compat alias; no effect in non-REPL CLI');
   console.log('  -s, --session OP        Legacy session operations: list, resume, delete <id>, delete-all, or raw session ID');
@@ -663,13 +670,14 @@ async function main() {
     .action((shell: string) => {
       const providerNames = getAvailableProviderNames().join(' ');
       const reasoningModes = 'off auto quick balanced deep';
+      const effortModes = 'auto none low medium high';
       const agentModes = 'ama amaw sa';
       const repoModes = 'auto off oss premium-shared premium-native';
       const rootSubcommands = 'acp skill tools sessions constructed doctor completion';
       const allOptions = [
         '-p', '-c', '-r', '-n', '-m', '-t', '-s', '-y', '-h',
         '--help', '--print', '--mode', '--continue', '--resume', '--new',
-        '--provider', '--model', '--thinking', '--reasoning', '--agent-mode',
+        '--provider', '--model', '--thinking', '--effort', '--reasoning', '--agent-mode',
         '--repo-intelligence', '--repo-intelligence-trace', '--repointel-endpoint',
         '--repointel-bin', '--auto', '--session', '--extension', '--no-session',
         '--max-iter', '--version', '--json', '--ping', '--cwd', '--permission-mode',
@@ -696,6 +704,7 @@ _kodax_complete() {
   case "\${prev}" in
     --provider|-m) COMPREPLY=( $(compgen -W "${providerNames}" -- "\${cur}") ); return 0 ;;
     --mode) COMPREPLY=( $(compgen -W "json" -- "\${cur}") ); return 0 ;;
+    --effort) COMPREPLY=( $(compgen -W "${effortModes}" -- "\${cur}") ); return 0 ;;
     --reasoning) COMPREPLY=( $(compgen -W "${reasoningModes}" -- "\${cur}") ); return 0 ;;
     --agent-mode) COMPREPLY=( $(compgen -W "${agentModes}" -- "\${cur}") ); return 0 ;;
     --repo-intelligence) COMPREPLY=( $(compgen -W "${repoModes}" -- "\${cur}") ); return 0 ;;
@@ -723,6 +732,7 @@ _kodax() {
   subcmds=(${rootSubcommands})
   providers=(${providerNames.replace(/ /g, ' ')})
   reasoning_modes=(off auto quick balanced deep)
+  effort_modes=(auto none low medium high)
   agent_modes=(ama amaw sa)
   repo_modes=(${repoModes})
 
@@ -741,7 +751,8 @@ _kodax() {
     '--model+[Model override]:model:' \\
     '-t[Enable thinking]' \\
     '--thinking[Enable thinking]' \\
-    '--reasoning+[Reasoning mode]:mode:($reasoning_modes)' \\
+    '--effort+[Reasoning effort]:level:($effort_modes)' \\
+    '--reasoning+[Compatibility reasoning mode]:mode:($reasoning_modes)' \\
     '--agent-mode+[Agent mode]:mode:($agent_modes)' \\
     '--repo-intelligence+[Repo intelligence mode]:mode:($repo_modes)' \\
     '--repo-intelligence-trace[Enable repo intelligence trace]' \\
@@ -778,6 +789,7 @@ complete -c kodax -s r -l resume -d 'Resume session by ID' -r
 complete -c kodax -s m -l provider -d 'LLM provider' -xa '${providerNames}'
 complete -c kodax -l model -d 'Model override' -r
 complete -c kodax -s t -l thinking -d 'Enable thinking'
+complete -c kodax -l effort -d 'Reasoning effort' -xa 'auto none low medium high'
 complete -c kodax -l reasoning -d 'Reasoning mode' -xa '${reasoningModes}'
 complete -c kodax -l agent-mode -d 'Agent mode' -xa '${agentModes}'
 complete -c kodax -l repo-intelligence -d 'Repo intelligence mode' -xa '${repoModes}'
@@ -1311,6 +1323,7 @@ complete -c kodax -l version -d 'Show version'`);
     process.env.KODAX_REPOINTEL_BIN = opts.repointelBin.trim();
   }
   const reasoningMode = resolveCliReasoningMode(program, opts, config);
+  const effort = resolveCliEffort(program, opts, config);
   const agentMode = resolveCliAgentMode(program, opts, config);
   const configuredExtensions = Array.isArray(configWithExtensions.extensions)
     ? configWithExtensions.extensions
@@ -1352,6 +1365,7 @@ complete -c kodax -l version -d 'Show version'`);
     // Priority: CLI args > config file > defaults.
     provider: selectedProvider,
     model: selectedModel,
+    effort,
     thinking: reasoningMode !== 'off',
     reasoningMode,
     agentMode,

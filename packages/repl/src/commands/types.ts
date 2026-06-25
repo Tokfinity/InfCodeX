@@ -52,6 +52,9 @@ export interface CommandExecutionMetadata {
 export interface CurrentConfig {
   provider: string;
   model?: string;
+  effort?: string;
+  effortOverride?: boolean;
+  planModeEffort?: string;
   thinking: boolean;
   reasoningMode: KodaXReasoningMode;
   agentMode: KodaXAgentMode;
@@ -79,6 +82,7 @@ export interface CommandCallbacks {
   clearHistory: () => void;
   printHistory: () => void;
   switchProvider?: (provider: string, model?: string) => void;
+  setEffort?: (effort?: string) => void;
   setThinking?: (enabled: boolean) => void;
   setReasoningMode?: (mode: KodaXReasoningMode) => void;
   setAgentMode?: (mode: KodaXAgentMode) => void;

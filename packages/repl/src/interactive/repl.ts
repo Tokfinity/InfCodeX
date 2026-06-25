@@ -65,7 +65,14 @@ import { createBashPrefixExtractor, type BashPrefixExtractor } from '@kodax-ai/c
 import { bootstrapTeamMode, type TeamModeHandle } from '@kodax-ai/agent';
 import { isToolCallAllowed, isAlwaysConfirmPath, isBashReadCommand, getPlanModeBlockReason } from '../permission/permission.js';
 import { replBashPathSignalCollector } from '../permission/repl-bash-signals.js';
-import { getGitRoot, prepareRuntimeConfig, getProviderModel, getProviderAvailableModels, KODAX_VERSION } from '../common/utils.js';
+import {
+  getGitRoot,
+  prepareRuntimeConfig,
+  getProviderModel,
+  getProviderAvailableModels,
+  KODAX_VERSION,
+  resolvePermissionModeEffort,
+} from '../common/utils.js';
 import {
   InteractiveContext,
   InteractiveMode,
@@ -382,6 +389,13 @@ function resolveInitialReasoningMode(
   return 'auto';
 }
 
+function resolveInitialEffort(
+  options: Pick<KodaXOptions, 'effort'>,
+  config: { effort?: string },
+): string | undefined {
+  return options.effort ?? config.effort;
+}
+
 // Module-level cost report ref — agent populates via events.getCostReport, /cost reads it
 const costReportRef: { current: (() => string) | null } = { current: null };
 
@@ -412,6 +426,8 @@ export async function runInteractiveMode(options: RepLOptions): Promise<void> {
   const initialProvider = options.provider ?? config.provider ?? KODAX_DEFAULT_PROVIDER;
   const initialModel = options.model ?? config.model;
   const initialReasoningMode = resolveInitialReasoningMode(options, config);
+  const initialEffort = resolveInitialEffort(options, config);
+  const initialEffortOverride = options.effort !== undefined;
   const initialAgentMode = options.agentMode ?? (config as { agentMode?: KodaXAgentMode }).agentMode ?? 'ama';
   const initialThinking = initialReasoningMode !== 'off';
   const initialPermissionMode: PermissionMode =
@@ -436,6 +452,9 @@ export async function runInteractiveMode(options: RepLOptions): Promise<void> {
   let currentConfig: CurrentConfig = {
     provider: initialProvider,
     model: initialModel,
+    effort: initialEffort,
+    effortOverride: initialEffortOverride,
+    planModeEffort: config.planModeEffort,
     thinking: initialThinking,
     reasoningMode: initialReasoningMode,
     agentMode: initialAgentMode,
@@ -450,6 +469,9 @@ export async function runInteractiveMode(options: RepLOptions): Promise<void> {
   // Local permission state - 本地权限状态
   let currentPermissionMode: PermissionMode = initialPermissionMode;
   let alwaysAllowTools: string[] = loadAlwaysAllowTools();
+
+  const resolveCurrentEffort = (): string | undefined =>
+    resolvePermissionModeEffort(currentConfig);
 
   // Esc+Esc edit state - Esc+Esc 编辑状态
   let lastEscTime = 0;
@@ -551,7 +573,6 @@ export async function runInteractiveMode(options: RepLOptions): Promise<void> {
       return result.confirmed ? 'allow' : 'block';
     },
     projectRoot: gitRoot ?? process.cwd(),
-    getAgentsFiles: () => agentsFiles,
     getCurrentProviderName: () => currentConfig.provider,
     getCurrentModel: () => currentConfig.model,
     getCurrentPermissionMode: () => currentPermissionMode,
@@ -593,6 +614,7 @@ export async function runInteractiveMode(options: RepLOptions): Promise<void> {
       currentConfig.provider,
       effectiveModel,
       currentConfig.reasoningMode,
+      resolveCurrentEffort(),
     ));
     // FEATURE_092 phase 2b.8: seed the engine indicator if the session
     // started in auto mode. The guardrail factory is built but the
@@ -662,6 +684,7 @@ Keyboard Shortcuts:
     ...options,
     provider: initialProvider,
     model: initialModel,
+    effort: resolveCurrentEffort(),
     agentMode: initialAgentMode,
     reasoningMode: initialReasoningMode,
     thinking: initialThinking,
@@ -684,6 +707,12 @@ Keyboard Shortcuts:
   };
 
   // Cost tracking ref — agent populates this via events.getCostReport, /cost command reads it
+  const refreshCurrentEffort = (): void => {
+    const effort = resolveCurrentEffort();
+    currentOptions.effort = effort;
+    statusBar?.update({ effort });
+  };
+
   costReportRef.current = null;
 
   const recoverCurrentSession = async (prompt?: string): Promise<SessionRecoverStatus> => {
@@ -976,6 +1005,11 @@ Keyboard Shortcuts:
       currentOptions.reasoningMode = currentConfig.reasoningMode;
       statusBar?.update({ reasoningMode: currentConfig.reasoningMode });
     },
+    setEffort: (effort?: string) => {
+      currentConfig.effort = effort;
+      currentConfig.effortOverride = effort !== undefined;
+      refreshCurrentEffort();
+    },
     setReasoningMode: (mode: KodaXReasoningMode) => {
       const thinking = mode !== 'off';
       currentConfig.reasoningMode = mode;
@@ -991,6 +1025,7 @@ Keyboard Shortcuts:
     setPermissionMode: (mode: PermissionMode) => {
       currentConfig.permissionMode = mode;
       currentPermissionMode = mode; // Sync with local permission state
+      refreshCurrentEffort();
       // FEATURE_092 phase 2b.8: keep the status bar engine indicator in sync
       // when the user toggles in/out of auto mode. Outside auto modes,
       // setting `autoModeEngine: undefined` removes the [LLM]/[RULES] suffix.
@@ -1183,6 +1218,7 @@ Keyboard Shortcuts:
         ...currentOptions,
         provider: currentConfig.provider,
         model: currentConfig.model,
+        effort: resolveCurrentEffort(),
         thinking: currentConfig.thinking,
         reasoningMode: currentConfig.reasoningMode,
         guardrails,
@@ -1206,6 +1242,7 @@ Keyboard Shortcuts:
             if (result.confirmed) {
               currentConfig.permissionMode = 'accept-edits';
               currentPermissionMode = 'accept-edits';
+              refreshCurrentEffort();
               statusBar?.update({ permissionMode: 'accept-edits' });
               return true;
             }

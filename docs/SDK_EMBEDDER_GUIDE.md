@@ -1325,6 +1325,35 @@ is intentionally ANSI-free and UI-neutral. It carries workflow status, phases,
 child item status, result-bearing child summaries, provider/model routing hints,
 and final `resultSummary`.
 
+### Timeout configuration
+
+SDK hosts can configure user-facing timeout budgets with seconds-based fields:
+
+```ts
+const options = {
+  provider: 'anthropic',
+  timeouts: {
+    workflow: {
+      generationTimeoutSec: 300,
+    },
+    llm: {
+      requestTimeoutSec: 900,
+      streamIdleTimeoutSec: 0,
+      chunkTimeoutSec: 45,
+      maxRetryDelaySec: 90,
+    },
+  },
+};
+```
+
+`timeouts.workflow.generationTimeoutSec` controls dynamic workflow harness
+generation. It replaces the legacy millisecond-only environment override for
+SDK callers while keeping `KODAX_WORKFLOW_GENERATION_TIMEOUT_MS` compatible.
+`timeouts.llm.*Sec` maps onto the provider resilience request/stream timeout
+configuration. The public timeout config intentionally does not control
+internal cleanup or resource-protection watchdogs such as process kill probes,
+workflow stop cleanup, VM smoke checks, or daemon readiness checks.
+
 ### Workflow run host attribution (v0.7.51)
 
 Hosts that need to attach a workflow run back to an external session, surface,

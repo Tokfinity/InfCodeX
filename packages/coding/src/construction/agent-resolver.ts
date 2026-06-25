@@ -349,6 +349,7 @@ function buildAgentFromContent(name: string, content: AgentContent): Agent {
       : {}),
     ...(content.model ? { model: content.model } : {}),
     ...(content.provider ? { provider: content.provider } : {}),
+    ...(content.effort ? { effort: content.effort } : {}),
     ...(content.outputSchema ? { outputSchema: content.outputSchema } : {}),
     // FEATURE_191 — propagate description so the Worker SP `specialist-
     // agents` capability section (`prompts/capability-sections.ts`) can

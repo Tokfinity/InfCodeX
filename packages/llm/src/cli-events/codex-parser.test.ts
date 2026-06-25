@@ -51,6 +51,39 @@ describe('CodexCLIExecutor', () => {
       '--json',
       '--full-auto',
     ]);
+
+    expect(executor.buildArgsForTest({ prompt: 'think harder', reasoningEffort: 'high' })).toEqual([
+      'exec',
+      '--json',
+      '--full-auto',
+      '--config',
+      'model_reasoning_effort="high"',
+      'think harder',
+    ]);
+
+    expect(executor.buildArgsForTest({
+      prompt: 'resume hard',
+      sessionId: 'thread-1',
+      reasoningEffort: 'xhigh',
+    })).toEqual([
+      'exec',
+      'resume',
+      'thread-1',
+      '--config',
+      'model_reasoning_effort="xhigh"',
+      'resume hard',
+      '--json',
+      '--full-auto',
+    ]);
+
+    expect(executor.buildArgsForTest({ prompt: 'disable thinking', reasoningEffort: 'none' })).toEqual([
+      'exec',
+      '--json',
+      '--full-auto',
+      '--config',
+      'model_reasoning_effort="none"',
+      'disable thinking',
+    ]);
   });
 
   it('parses Codex thread, message, tool, completion, and failure events', () => {

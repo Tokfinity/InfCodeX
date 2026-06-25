@@ -1533,9 +1533,7 @@ async function runManagedTaskViaRunnerInner(
       mode: 'prompt',
     });
     if (drained.length === 0) return [];
-    const contents = drained.map((m) => m.content);
-    options.events?.onMidTurnUserMessages?.(contents);
-    return drained.map((m) => {
+    const validatedMessages = drained.map((m) => {
       const inputArtifacts = toKodaXInputArtifacts(m.inputArtifacts);
       validateInputArtifactsForModel(inputArtifacts ?? [], {
         provider: options.provider,
@@ -1546,6 +1544,8 @@ async function runManagedTaskViaRunnerInner(
         content: buildPromptMessageContent(m.content, inputArtifacts),
       };
     });
+    options.events?.onMidTurnUserMessages?.(drained.map((m) => m.content));
+    return validatedMessages;
   };
   // Transcript snapshot ref — populated by the adapter's beforeNextTurn
   // each turn boundary; read by the goal verifyComplete closure when

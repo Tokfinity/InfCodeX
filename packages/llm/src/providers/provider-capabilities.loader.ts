@@ -48,7 +48,7 @@ import type {
   ProviderSnapshot,
 } from './provider-capabilities.types.js';
 import { validateProviderCapabilitiesJson } from './provider-capabilities.types.js';
-import type { KodaXProviderCapabilityProfile } from '../types.js';
+import type { KodaXProviderCapabilityProfile, KodaXReasoningCapabilityV2 } from '../types.js';
 
 const PROFILE_BY_NAME: Readonly<
   Record<CapabilityProfileName, KodaXProviderCapabilityProfile>
@@ -106,13 +106,43 @@ function resolveJsonPath(): string {
 
 function deepFreezeSnapshot(snapshot: ProviderSnapshot): ProviderSnapshot {
   if (snapshot.models) {
+    for (const m of snapshot.models) {
+      if (m.reasoningCapabilityV2) {
+        freezeReasoningCapabilityV2(m.reasoningCapabilityV2);
+      }
+    }
     for (const m of snapshot.models) Object.freeze(m);
     Object.freeze(snapshot.models);
+  }
+  if (snapshot.reasoningCapabilityV2) {
+    freezeReasoningCapabilityV2(snapshot.reasoningCapabilityV2);
   }
   if (snapshot.modelReasoningCapabilities) {
     Object.freeze(snapshot.modelReasoningCapabilities);
   }
   return Object.freeze(snapshot);
+}
+
+function freezeReasoningCapabilityV2(
+  capability: KodaXReasoningCapabilityV2,
+): void {
+  if (capability.supportedEfforts) {
+    for (const preset of capability.supportedEfforts) Object.freeze(preset);
+    Object.freeze(capability.supportedEfforts);
+  }
+  if (capability.budgetByEffort) {
+    Object.freeze(capability.budgetByEffort);
+  }
+  if (capability.effortAliases) {
+    Object.freeze(capability.effortAliases);
+  }
+  if (capability.disabledEfforts) {
+    Object.freeze(capability.disabledEfforts);
+  }
+  if (capability.localRejectEfforts) {
+    Object.freeze(capability.localRejectEfforts);
+  }
+  Object.freeze(capability);
 }
 
 function resolveCliBridgeModels(name: string): {
@@ -163,6 +193,10 @@ function buildSnapshot(
       capabilityProfile,
       verifyStrategy: entry.verifyStrategy,
     };
+    if (entry.reasoningCapabilityV2 !== undefined) {
+      (snapshot as { reasoningCapabilityV2: typeof entry.reasoningCapabilityV2 }).reasoningCapabilityV2 =
+        entry.reasoningCapabilityV2;
+    }
     if (entry.supportsThinking !== undefined) {
       (snapshot as { supportsThinking: boolean }).supportsThinking =
         entry.supportsThinking;
@@ -179,6 +213,10 @@ function buildSnapshot(
     capabilityProfile,
     verifyStrategy: entry.verifyStrategy,
   };
+  if (entry.reasoningCapabilityV2 !== undefined) {
+    (snapshot as { reasoningCapabilityV2: typeof entry.reasoningCapabilityV2 }).reasoningCapabilityV2 =
+      entry.reasoningCapabilityV2;
+  }
   if (entry.models !== undefined) {
     (snapshot as { models: typeof entry.models }).models = entry.models;
   }

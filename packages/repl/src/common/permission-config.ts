@@ -87,6 +87,15 @@ export interface AutoModeSettings {
   classifierModel?: string;
   /** sideQuery timeout in ms. Default 8000. */
   timeoutMs?: number;
+  /**
+   * Issue 143 (WS3): speculative-classify quiet window in ms. Default 500.
+   * The window only controls "resolve instantly vs wait for the verdict" — the
+   * classifier verdict is always adopted (WS1), so this never decides
+   * "dialog vs no dialog". `0` disables the speculative race (synchronous
+   * classify). Lets users on slow/remote providers widen the window so a fast
+   * local classify still short-circuits while a slow one simply waits.
+   */
+  speculativeWindowMs?: number;
 }
 
 export interface ResolvedAutoModeSettings {
@@ -94,6 +103,7 @@ export interface ResolvedAutoModeSettings {
   readonly classifierModel?: string;
   readonly classifierModelEnv?: string;
   readonly timeoutMs?: number;
+  readonly speculativeWindowMs?: number;
 }
 
 /**
@@ -105,6 +115,9 @@ export interface ResolvedAutoModeSettings {
  *   - KODAX_AUTO_MODE_CLASSIFIER_MODEL: model spec — surfaced as `classifierModelEnv`
  *     so it reaches `AutoModeGuardrailConfig.envVar` (the resolver's layer 2)
  *   - KODAX_AUTO_MODE_TIMEOUT_MS: integer ms — overrides settings.timeoutMs
+ *   - KODAX_AUTO_SPECULATIVE_WINDOW_MS: integer ms (0 disables) — overrides
+ *     settings.speculativeWindowMs (Issue 143 WS3; reuses the same env name
+ *     speculative.ts reads, so a single var controls the knob everywhere)
  *
  * Invalid env values fall through to settings (defensive: a typo in an env
  * var must not silently disable the classifier).
@@ -135,12 +148,37 @@ export function loadAutoModeSettings(env: NodeJS.ProcessEnv = process.env): Reso
       ? Math.floor(fileSettings.timeoutMs)
       : undefined;
 
+  // Issue 143 (WS3): speculative window. Unlike timeoutMs, `0` is a meaningful
+  // value (disables the race), so the guard accepts >= 0 and negatives clamp to
+  // 0 — mirroring speculative.ts `readWindowFromEnv`. Env overrides file.
+  const envSpeculativeMs = parseSpeculativeWindow(env.KODAX_AUTO_SPECULATIVE_WINDOW_MS?.trim());
+  const fileSpeculativeMs =
+    typeof fileSettings.speculativeWindowMs === 'number'
+      ? parseSpeculativeWindow(String(fileSettings.speculativeWindowMs))
+      : undefined;
+
   return {
     engine,
     classifierModel,
     classifierModelEnv,
     timeoutMs: envTimeoutMs ?? fileTimeoutMs,
+    speculativeWindowMs: envSpeculativeMs ?? fileSpeculativeMs,
   };
+}
+
+/**
+ * Parse a speculative-window value (env string or stringified file number).
+ * Returns `undefined` for unset / empty / non-numeric (caller falls back), a
+ * non-negative integer otherwise, clamping negatives to `0` (disabled).
+ * Mirrors `readWindowFromEnv` in
+ * `packages/coding/src/guardrails/auto-mode/speculative.ts`.
+ */
+function parseSpeculativeWindow(raw: string | undefined): number | undefined {
+  if (raw === undefined || raw === '') return undefined;
+  const parsed = Number(raw);
+  if (!Number.isFinite(parsed)) return undefined;
+  if (parsed < 0) return 0;
+  return Math.floor(parsed);
 }
 
 function nonEmptyString(s: unknown): string | undefined {

@@ -21,9 +21,12 @@
  *     config (FEATURE_092 v0.7.34 hotfix-3). They are evaluated on every
  *     classify() call, so mid-session `/model` and `/provider` swaps DO
  *     retarget the classifier without the user re-entering auto mode.
- *     `claudeMd` and `rules` remain captured-at-init by design (CLAUDE.md
- *     and `~/.kodax/auto-rules.jsonc` mid-session edits are rare; restart
- *     applies them).
+ *     AGENTS.md is wired the same way via the `getClaudeMd` live getter
+ *     (FEATURE_092 follow-up) — it reads `loadAgentsFiles` (mtime-cached)
+ *     on every classify so mid-session AGENTS.md edits reach the classifier
+ *     without a restart or `/reload`. Only `rules`
+ *     (`~/.kodax/auto-rules.jsonc`) remains captured-at-init; those edits
+ *     are rare and a restart applies them.
  */
 
 import {
@@ -32,9 +35,9 @@ import {
   getBuiltinRegisteredToolDefinition,
   getKodaxGlobalDir,
   getRegisteredToolDefinition,
+  loadAgentsFiles,
   loadAutoRules,
   resolveProvider as resolveCodingProvider,
-  type AgentsFile,
   type AutoModeAskUser,
   type AutoModeToolGuardrail,
   type RulesLoadResult,
@@ -52,7 +55,6 @@ export interface AutoModeBootstrapDeps {
    */
   readonly askUser: AutoModeAskUser;
   readonly projectRoot: string;
-  readonly getAgentsFiles: () => AgentsFile[];
   readonly getCurrentProviderName: () => string;
   readonly getCurrentModel: () => string | undefined;
   readonly getCurrentPermissionMode: () => PermissionMode;
@@ -99,6 +101,12 @@ export interface ResolvedAutoModeBootstrapSettings {
   readonly classifierModel?: string;
   readonly classifierModelEnv?: string;
   readonly timeoutMs?: number;
+  /**
+   * Issue 143 (WS3): speculative-classify quiet window in ms. Forwarded to the
+   * guardrail's `speculativeWindowMs`. When undefined, the guardrail falls back
+   * to the `KODAX_AUTO_SPECULATIVE_WINDOW_MS` env / `DEFAULT_WINDOW_MS = 500`.
+   */
+  readonly speculativeWindowMs?: number;
 }
 
 export interface AutoModeBootstrapResult {
@@ -134,7 +142,15 @@ export async function bootstrapAutoMode(
     if (guardrail) return guardrail;
     guardrail = createAutoModeToolGuardrail({
       rules: rulesLoadResult.merged,
-      claudeMd: formatAgentsForPrompt(deps.getAgentsFiles()),
+      // FEATURE_092 follow-up: live getter instead of a captured string so the
+      // classifier never reads a frozen AGENTS.md snapshot. Goes straight to
+      // `loadAgentsFiles` (mtime-cached) so mid-session edits take effect on
+      // the next classify with no `/reload` needed — same source the system
+      // prompt uses. Cheap: a cache hit is a per-level statSync + byte reuse.
+      getClaudeMd: () =>
+        formatAgentsForPrompt(
+          loadAgentsFiles({ cwd: process.cwd(), projectRoot: deps.projectRoot }),
+        ),
       getToolProjection: (toolName) => {
         const def =
           getRegisteredToolDefinition(toolName)
@@ -185,6 +201,10 @@ export async function bootstrapAutoMode(
       timeoutMs: deps.autoModeSettings.timeoutMs,
       userSettings: deps.autoModeSettings.classifierModel,
       envVar: deps.autoModeSettings.classifierModelEnv,
+      // Issue 143 (WS3): thread the resolved speculative window so REPL + Space
+      // honour `autoMode.speculativeWindowMs` (config.json) /
+      // `KODAX_AUTO_SPECULATIVE_WINDOW_MS` (env). Undefined → guardrail default.
+      speculativeWindowMs: deps.autoModeSettings.speculativeWindowMs,
     });
     return guardrail;
   };

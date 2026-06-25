@@ -101,4 +101,55 @@ describe('loadAutoModeSettings — FEATURE_092 phase 2b.7b slice C', () => {
     const r = loadAutoModeSettings({});
     expect(r.timeoutMs).toBe(3000);
   });
+
+  // ===== Issue 143 (WS3): speculativeWindowMs =====
+
+  it('speculativeWindowMs is undefined by default (guardrail falls back to 500)', () => {
+    const r = loadAutoModeSettings({});
+    expect(r.speculativeWindowMs).toBeUndefined();
+  });
+
+  it('reads speculativeWindowMs from the settings file', () => {
+    writeFakeConfig({ speculativeWindowMs: 1500 });
+    const r = loadAutoModeSettings({});
+    expect(r.speculativeWindowMs).toBe(1500);
+  });
+
+  it('accepts speculativeWindowMs: 0 from file (disables the race — distinct from unset)', () => {
+    writeFakeConfig({ speculativeWindowMs: 0 });
+    const r = loadAutoModeSettings({});
+    expect(r.speculativeWindowMs).toBe(0);
+  });
+
+  it('KODAX_AUTO_SPECULATIVE_WINDOW_MS env wins over settings.speculativeWindowMs', () => {
+    writeFakeConfig({ speculativeWindowMs: 500 });
+    const r = loadAutoModeSettings({ KODAX_AUTO_SPECULATIVE_WINDOW_MS: '2000' });
+    expect(r.speculativeWindowMs).toBe(2000);
+  });
+
+  it('env speculative window of 0 wins over file (explicit disable)', () => {
+    writeFakeConfig({ speculativeWindowMs: 500 });
+    const r = loadAutoModeSettings({ KODAX_AUTO_SPECULATIVE_WINDOW_MS: '0' });
+    expect(r.speculativeWindowMs).toBe(0);
+  });
+
+  it('negative speculative window clamps to 0 (mirrors readWindowFromEnv)', () => {
+    writeFakeConfig({ speculativeWindowMs: -100 });
+    const r = loadAutoModeSettings({});
+    expect(r.speculativeWindowMs).toBe(0);
+  });
+
+  it('non-numeric / empty env speculative window falls through to file', () => {
+    writeFakeConfig({ speculativeWindowMs: 750 });
+    for (const v of ['fast', '', 'NaN']) {
+      const r = loadAutoModeSettings({ KODAX_AUTO_SPECULATIVE_WINDOW_MS: v });
+      expect(r.speculativeWindowMs).toBe(750);
+    }
+  });
+
+  it('floats in speculativeWindowMs are floored', () => {
+    writeFakeConfig({ speculativeWindowMs: 480.9 });
+    const r = loadAutoModeSettings({});
+    expect(r.speculativeWindowMs).toBe(480);
+  });
 });

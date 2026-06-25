@@ -6,6 +6,8 @@ import {
   type KodaXRepoIntelligenceMode,
   KodaXReasoningMode,
   KODAX_REASONING_MODE_SEQUENCE,
+  normalizeReasoningEffortValue,
+  parseReasoningEffortEnv,
 } from '@kodax-ai/coding';
 import {
   createCliEvents,
@@ -29,6 +31,7 @@ export type CliOutputMode = typeof CLI_OUTPUT_MODES[number];
 export interface CliOptions {
   provider: string;
   model?: string;
+  effort?: string;
   thinking: boolean;
   reasoningMode: KodaXReasoningMode;
   agentMode: KodaXAgentMode;
@@ -148,6 +151,15 @@ export function parseReasoningModeOption(value: string): KodaXReasoningMode {
   );
 }
 
+export function parseEffortOption(value: string): string {
+  try {
+    return normalizeReasoningEffortValue(value);
+  } catch (error) {
+    const message = error instanceof Error ? error.message : String(error);
+    throw new InvalidArgumentError(message);
+  }
+}
+
 export function parseRepoIntelligenceModeOption(value: string): KodaXRepoIntelligenceMode {
   const normalized = value.trim().toLowerCase();
   if (KODAX_REPO_INTELLIGENCE_MODES.includes(normalized as KodaXRepoIntelligenceMode)) {
@@ -183,6 +195,28 @@ export function resolveCliReasoningMode(
   }
 
   return 'auto';
+}
+
+export function resolveCliEffort(
+  program: Command,
+  opts: Record<string, unknown>,
+  config: { effort?: string },
+): string | undefined {
+  const effortSource = program.getOptionValueSource('effort');
+  if (effortSource === 'cli' && typeof opts.effort === 'string') {
+    return parseEffortOption(opts.effort);
+  }
+
+  const envEffort = parseReasoningEffortEnv(process.env.KODAX_EFFORT);
+  if (envEffort.kind === 'value') {
+    return envEffort.value;
+  }
+
+  if (config.effort) {
+    return normalizeReasoningEffortValue(config.effort);
+  }
+
+  return undefined;
 }
 
 export function resolveCliAgentMode(
@@ -263,8 +297,9 @@ export function createKodaXOptions(cliOptions: CliOptions, isPrintMode = false):
   return {
     provider: cliOptions.provider,
     model: cliOptions.model,
-    thinking: cliOptions.thinking,
-    reasoningMode: cliOptions.reasoningMode,
+    effort: cliOptions.effort,
+    thinking: cliOptions.effort === 'none' ? false : cliOptions.thinking,
+    reasoningMode: cliOptions.effort === 'none' ? 'off' : cliOptions.reasoningMode,
     agentMode: cliOptions.agentMode,
     maxIter: cliOptions.maxIter,
     extensionRuntime: cliOptions.extensionRuntime,

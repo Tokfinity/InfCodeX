@@ -56,6 +56,7 @@ import {
   telemetryDecision,
   telemetryRecovery,
 } from '../../../resilience/index.js';
+import { providerResilienceConfigFromTimeouts } from '../../../timeouts.js';
 import { waitForRetryDelay } from '../../../retry-handler.js';
 import {
   createCostTracker,
@@ -353,7 +354,10 @@ export function buildRunnerLlmAdapter(
       // Mirrors the legacy loop: classify → decide → onProviderRecovery →
       // optional non-streaming fallback → executeRecovery (prune
       // incomplete tool_use turns) → waitForRetryDelay → retry.
-      const resilienceCfg = resolveResilienceConfig(providerName);
+      const resilienceCfg = resolveResilienceConfig(
+        providerName,
+        providerResilienceConfigFromTimeouts(options.timeouts),
+      );
       const API_HARD_TIMEOUT_MS = resilienceCfg.requestTimeoutMs;
       const API_IDLE_TIMEOUT_MS = resilienceCfg.streamIdleTimeoutMs;
       const boundaryTracker = new StableBoundaryTracker();

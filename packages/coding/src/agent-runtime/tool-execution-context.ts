@@ -110,6 +110,7 @@ export function buildToolExecutionContext(
       provider: options.provider,
       model: options.model,
       reasoningMode: options.reasoningMode,
+      effort: options.effort,
     },
     parentEvents: events,
     // FEATURE_067: onChildProgress removed — progress flows through

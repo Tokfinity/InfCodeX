@@ -9,6 +9,7 @@
 
 // FEATURE_221: SDK consumers inject their own product manual topics.
 import type { KodaXManualTopicInput } from './self-knowledge/types.js';
+import type { KodaXTimeoutConfig } from './timeouts.js';
 
 import type {
   KodaXImageBlock,
@@ -89,6 +90,14 @@ import type {
   KodaXAmaFanoutPolicy,
   KodaXAmaControllerDecision,
   KodaXReviewScale,
+  KodaXStableEffortIntent,
+  KodaXWireReasoningEffort,
+  KodaXReasoningEffortRequest,
+  KodaXReasoningEffortPreset,
+  KodaXReasoningEffortWireStrategy,
+  KodaXThinkingWireStrategy,
+  KodaXReasoningCapabilityV2,
+  KodaXNormalizedReasoningRequest,
 } from '@kodax-ai/llm';
 import type { CompactionUpdate } from '@kodax-ai/agent';
 // FEATURE_093 (v0.7.24): use the narrow runtime contract from
@@ -123,6 +132,13 @@ export type {
   KodaXProviderConfig,
   KodaXProviderStreamOptions,
   KodaXReasoningCapability,
+  KodaXStableEffortIntent,
+  KodaXWireReasoningEffort,
+  KodaXReasoningEffortRequest,
+  KodaXReasoningEffortPreset,
+  KodaXReasoningEffortWireStrategy,
+  KodaXThinkingWireStrategy,
+  KodaXReasoningCapabilityV2,
   KodaXReasoningMode,
   KodaXThinkingDepth,
   KodaXTaskType,
@@ -146,6 +162,7 @@ export type {
   KodaXThinkingBudgetMap,
   KodaXTaskBudgetOverrides,
   KodaXReasoningRequest,
+  KodaXNormalizedReasoningRequest,
   KodaXJsonValue,
   KodaXExtensionSessionRecord,
   KodaXExtensionSessionState,
@@ -692,6 +709,8 @@ export interface KodaXChildContextBundle {
    */
   provider?: string;
   model?: string;
+  /** Optional per-dispatch reasoning effort. Omit to inherit the parent effort. */
+  effort?: KodaXWireReasoningEffort;
 }
 
 /**
@@ -1150,6 +1169,7 @@ export interface KodaXOptions {
   provider: string;
   model?: string;
   modelOverride?: string;
+  effort?: KodaXWireReasoningEffort;
   thinking?: boolean;
   reasoningMode?: KodaXReasoningMode;
   agentMode?: KodaXAgentMode;
@@ -1189,6 +1209,12 @@ export interface KodaXOptions {
    * and `~/.kodax/config.json`. See {@link KodaXCompactionOverride}.
    */
   compaction?: KodaXCompactionOverride;
+  /**
+   * SDK-consumer timeout budgets for user-facing waits. Values are seconds at
+   * the public API boundary; KodaX converts them to milliseconds internally.
+   * This does not control internal cleanup/resource-protection watchdogs.
+   */
+  timeouts?: KodaXTimeoutConfig;
 }
 
 /**
@@ -1608,6 +1634,7 @@ export interface KodaXToolExecutionContext {
     readonly provider: string;
     readonly model?: string;
     readonly reasoningMode?: KodaXReasoningMode;
+    readonly effort?: KodaXWireReasoningEffort;
   };
   /**
    * Parent SDK/REPL callback surface available to child-dispatch tools.

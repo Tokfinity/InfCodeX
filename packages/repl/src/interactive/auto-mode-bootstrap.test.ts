@@ -31,15 +31,22 @@ vi.mock('@kodax-ai/coding', async () => {
       errors: [],
     })),
     formatAgentsForPrompt: vi.fn(() => ''),
+    // Issue 143 (WS3): wrap the real factory in a capturing spy (still delegates
+    // to the real implementation, so guardrail behavior is unchanged) so wiring
+    // tests can assert which config the bootstrap forwarded.
+    createAutoModeToolGuardrail: vi.fn(
+      (config: import('@kodax-ai/coding').AutoModeGuardrailConfig) =>
+        actual.createAutoModeToolGuardrail(config),
+    ),
   };
 });
 
 import { bootstrapAutoMode } from './auto-mode-bootstrap.js';
+import { createAutoModeToolGuardrail } from '@kodax-ai/coding';
 
 const baseDeps = () => ({
   askUser: vi.fn(async () => 'allow' as const),
   projectRoot: '/test/project',
-  getAgentsFiles: () => [],
   getCurrentProviderName: () => 'kimi-code',
   getCurrentModel: () => 'kimi-for-coding',
   getCurrentPermissionMode: () => 'auto' as const,
@@ -144,6 +151,29 @@ describe('bootstrapAutoMode', () => {
     // the swap returns the new value — which is the contract the getter
     // closure relies on.
     expect(getCurrentProviderName()).toBe('glm-coding');
+  });
+
+  it('Issue 143 WS3: forwards autoModeSettings.speculativeWindowMs to the guardrail config', async () => {
+    const result = await bootstrapAutoMode({
+      ...baseDeps(),
+      autoModeSettings: {
+        engine: 'llm' as const,
+        classifierModel: undefined,
+        classifierModelEnv: undefined,
+        timeoutMs: undefined,
+        speculativeWindowMs: 1500,
+      },
+    });
+    result.getGuardrail(); // trigger lazy construction
+    const cfg = vi.mocked(createAutoModeToolGuardrail).mock.calls.at(-1)?.[0];
+    expect(cfg?.speculativeWindowMs).toBe(1500);
+  });
+
+  it('Issue 143 WS3: omitted speculativeWindowMs forwards undefined (guardrail uses its 500 default)', async () => {
+    const result = await bootstrapAutoMode(baseDeps());
+    result.getGuardrail();
+    const cfg = vi.mocked(createAutoModeToolGuardrail).mock.calls.at(-1)?.[0];
+    expect(cfg?.speculativeWindowMs).toBeUndefined();
   });
 
   it('getDefaultModel surfaces empty-model warn through deps.log', async () => {

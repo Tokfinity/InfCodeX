@@ -233,18 +233,24 @@
   //                      置空则复用主会话 (provider, model)。
   //                      详见 docs/features/v0.7.33.md §"跨 provider 配置"
   //   timeoutMs          分类器 sideQuery 超时毫秒数。默认 8000。
+  //   speculativeWindowMs  投机分类静默窗口毫秒数。默认 500，0 关闭投机（同步等裁决）。
+  //                      窗口只决定「快路径直接返回 vs 等裁决到达」——裁决永远被采纳
+  //                      (Issue 143 WS1)，allow 永不弹确认框，无论分类器多慢。远程/慢
+  //                      provider 想让本地快分类仍短路、慢分类静默等待时可调大此值。
   //
   // 环境变量覆盖（优先级高于本字段）:
   //   KODAX_AUTO_MODE_ENGINE             "llm" | "rules"
   //   KODAX_AUTO_MODE_CLASSIFIER_MODEL   "provider:model" 或 "model"
   //   KODAX_AUTO_MODE_TIMEOUT_MS         整数毫秒
+  //   KODAX_AUTO_SPECULATIVE_WINDOW_MS   整数毫秒（0 关闭投机）
   //
-  // 详见 docs/features/v0.7.33.md。
+  // 详见 docs/features/v0.7.33.md；投机窗口 late-verdict 采纳见 docs/KNOWN_ISSUES.md Issue 143。
 
   // "autoMode": {
   //   "engine": "llm",
   //   "classifierModel": "minimax:abab6.5t-chat",
-  //   "timeoutMs": 8000
+  //   "timeoutMs": 8000,
+  //   "speculativeWindowMs": 500
   // },
 
   // ─── 10. 仓库智能 Repo Intelligence ────────────────────────────────────

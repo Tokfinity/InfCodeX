@@ -107,7 +107,7 @@ export class AcpClient {
         text: string,
         sessionId: string,
         signal?: AbortSignal,
-        options?: { model?: string },
+        options?: { model?: string; reasoningEffort?: string },
     ): Promise<PromptResponse> {
         if (!this.client) throw new Error('Client not connected');
 
@@ -115,6 +115,7 @@ export class AcpClient {
             sessionId: string;
             prompt: Array<{ type: 'text'; text: string }>;
             model?: string;
+            effort?: string;
         } = {
             sessionId,
             prompt: [{ type: 'text', text }]
@@ -122,6 +123,9 @@ export class AcpClient {
 
         if (options?.model) {
             request.model = options.model;
+        }
+        if (options?.reasoningEffort) {
+            request.effort = options.reasoningEffort;
         }
 
         let responsePromise = (this.client as unknown as {

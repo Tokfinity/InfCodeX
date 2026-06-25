@@ -1142,6 +1142,77 @@ describe('FEATURE_191 — dispatch_child_task subagent_type guards (A.2 + A.2c)'
     expect(bundles[0]?.specialistName).toBe('db-reviewer');
   });
 
+  it('A.2: specialist-declared effort is applied to the dispatch bundle', async () => {
+    const { registerConstructedAgent } = await import('../construction/agent-resolver.js');
+    registerConstructedAgent({
+      kind: 'agent',
+      name: 'deep-reviewer',
+      version: '1.0.0',
+      content: {
+        instructions: 'DEEP REVIEWER',
+        tools: [{ ref: 'builtin:read' }],
+        effort: 'xhigh',
+      },
+      status: 'active',
+      createdAt: Date.now(),
+      testedAt: Date.now(),
+      activatedAt: Date.now(),
+    });
+    mockExec.mockResolvedValue(buildSuccessResult('sp-effort', ['ok']));
+    const registry = new Map<string, Promise<KodaXChildExecutionResult>>();
+    const ctx = buildBaseCtx(registry);
+
+    const result = await drainGeneratorReturn(
+      toolDispatchChildTask(
+        { id: 'sp-effort', objective: 'review deeply', subagent_type: 'deep-reviewer' },
+        ctx,
+      ),
+    );
+
+    expect(result).toContain('task_id:sp-effort');
+    expect(mockExec).toHaveBeenCalledTimes(1);
+    const bundles = mockExec.mock.calls[0]![0] as readonly { effort?: string }[];
+    expect(bundles[0]?.effort).toBe('xhigh');
+  });
+
+  it('A.2: rejects dispatch effort that conflicts with specialist-declared effort', async () => {
+    const { registerConstructedAgent } = await import('../construction/agent-resolver.js');
+    registerConstructedAgent({
+      kind: 'agent',
+      name: 'locked-reviewer',
+      version: '1.0.0',
+      content: {
+        instructions: 'LOCKED REVIEWER',
+        tools: [{ ref: 'builtin:read' }],
+        effort: 'high',
+      },
+      status: 'active',
+      createdAt: Date.now(),
+      testedAt: Date.now(),
+      activatedAt: Date.now(),
+    });
+    const registry = new Map<string, Promise<KodaXChildExecutionResult>>();
+    const ctx = buildBaseCtx(registry);
+
+    const result = await drainGeneratorReturn(
+      toolDispatchChildTask(
+        {
+          id: 'sp-effort-conflict',
+          objective: 'review cheaply',
+          subagent_type: 'locked-reviewer',
+          effort: 'low',
+        },
+        ctx,
+      ),
+    );
+
+    expect(result).toMatch(/^\[Tool Error\]/);
+    expect(result).toContain('locked-reviewer');
+    expect(result).toContain('locks effort "high"');
+    expect(result).toContain('dispatch requested "low"');
+    expect(mockExec).not.toHaveBeenCalled();
+  });
+
   it('A.2c: rejects write specialist dispatch from scout role with explicit error', async () => {
     const { registerConstructedAgent } = await import('../construction/agent-resolver.js');
     registerConstructedAgent({

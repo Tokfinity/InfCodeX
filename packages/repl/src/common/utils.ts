@@ -640,6 +640,8 @@ export function isProviderConfigured(name: string): boolean {
 export function loadConfig(): {
   provider?: string;
   model?: string;
+  effort?: string;
+  planModeEffort?: string;
   thinking?: boolean;
   reasoningMode?: KodaXReasoningMode;
   /**
@@ -694,6 +696,8 @@ export function loadConfig(): {
       const parsed = JSON.parse(fsSync.readFileSync(KODAX_CONFIG_FILE, 'utf-8')) as {
         provider?: string;
         model?: string;
+        effort?: string;
+        planModeEffort?: string;
         thinking?: boolean;
         reasoningMode?: KodaXReasoningMode;
         reasoningCeiling?: KodaXReasoningMode;
@@ -814,6 +818,8 @@ export function prepareRuntimeConfig(): ReturnType<typeof loadConfig> {
 export function saveConfig(config: {
   provider?: string;
   model?: string;
+  effort?: string;
+  planModeEffort?: string;
   thinking?: boolean;
   reasoningMode?: KodaXReasoningMode;
   agentMode?: KodaXAgentMode;
@@ -849,6 +855,22 @@ export function saveConfig(config: {
   }
   fsSync.mkdirSync(path.dirname(KODAX_CONFIG_FILE), { recursive: true });
   fsSync.writeFileSync(KODAX_CONFIG_FILE, JSON.stringify(merged, null, 2));
+}
+
+export function resolvePermissionModeEffort(config: {
+  effort?: string;
+  effortOverride?: boolean;
+  permissionMode?: string;
+  planModeEffort?: string;
+}): string | undefined {
+  if (
+    config.permissionMode === 'plan'
+    && config.effortOverride !== true
+    && config.planModeEffort !== undefined
+  ) {
+    return config.planModeEffort;
+  }
+  return config.effort;
 }
 
 /**

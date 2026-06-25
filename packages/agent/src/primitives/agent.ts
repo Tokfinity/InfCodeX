@@ -18,7 +18,12 @@
  *   - AgentReasoningProfile behavior → FEATURE_078 (v0.7.29)
  */
 
-import type { KodaXMessage, KodaXReasoningMode, KodaXToolDefinition } from '@kodax-ai/llm';
+import type {
+  KodaXMessage,
+  KodaXReasoningMode,
+  KodaXToolDefinition,
+  KodaXWireReasoningEffort,
+} from '@kodax-ai/llm';
 
 /**
  * Reasoning depth / mode selector. Alias for `KodaXReasoningMode` to keep the
@@ -140,6 +145,7 @@ export interface Agent<TContext = unknown> {
   readonly outputSchema?: unknown;
   readonly model?: string;
   readonly provider?: string;
+  readonly effort?: KodaXWireReasoningEffort;
   /**
    * FEATURE_100 (v0.7.29) substrate executor: when set, `Runner.run`
    * delegates execution to this function instead of consulting the

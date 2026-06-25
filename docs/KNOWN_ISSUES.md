@@ -87,11 +87,126 @@ _Last Updated: 2026-06-25_
 | 140 | High | Resolved | Published bundle leaves computed `./agent.js` child-executor import, breaking workflow child agents | v0.7.37 bundle distribution; confirmed v0.7.48-v0.7.50 | v0.7.52 | 2026-06-17 | 2026-06-18 |
 | 141 | Medium | Open | CI workflow long-red on Linux: cross-platform test bugs (storage list() runtime-inspection, bash background-process, h2 spawn env, skill-creator API-key-at-load) | long-standing (pre-v0.7.49) | - | 2026-06-18 | - |
 | 142 | High | Resolved | kimi-code thinking-only completion can terminate Worker with only `[Worker]` visible | v0.7.56 | v0.7.56 (pending patch) | 2026-06-25 | 2026-06-25 |
+| 143 | High | Open | Auto[llm] speculative classify 窗口默认 500ms + late verdict 被丢弃 → 远程/慢 provider 下 near-100% 误弹确认框，auto 模式形同虚设 | v0.7.39 | - | 2026-06-25 | - |
 
 ---
 
 ## Issue Details
 <!-- Full details for each issue - REQUIRED for all issues -->
+
+### 143: Auto[llm] speculative classify 窗口默认 500ms + late verdict 被丢弃 → 远程/慢 provider 下 near-100% 误弹确认框，auto 模式形同虚设
+
+- **Priority**: High
+- **Status**: **Open**
+- **Introduced**: v0.7.39（FEATURE_158 / ADR-025，commit `97e99d7d`；0.7.39 之前完整 await classify，只在真 block/escalate 才弹）
+- **Created**: 2026-06-25
+- **Fixed**: -
+
+#### Original Problem
+
+SDK 用户报告：在 `auto[llm]` 模式下，几乎每个经过 classifier 的非 Tier-1 工具调用
+（bash 跑的 cat/ls/grep、write/edit、web_fetch、mcp_call、semantic_lookup 等以及重型
+repo-intelligence 工具）都会弹出确认框。只读类 Tier-1（read/grep/glob/repo_overview
+投影为 `''`）不弹，但凡需要 classifier 裁决的调用近乎 100% 误弹。等于 auto 模式形同虚设。
+
+复现条件：远程 provider / 走代理 / 较大模型——classifier 是一次真实 LLM sideQuery，
+单次往返典型 1–5s，几乎不可能在 500ms 投机窗口内返回。
+
+#### Context
+
+- 组件：`AutoModeToolGuardrail` 的 speculative classify。
+- 受影响表面：REPL 与 Space 都中招——
+  [`auto-mode-bootstrap.ts:137-198`](../packages/repl/src/interactive/auto-mode-bootstrap.ts#L137-L198)
+  构造 guardrail 时传了 `timeoutMs` 却**没传 `speculativeWindowMs`**，两个 host 都退回
+  env / 默认值。这是 guardrail 默认值层面的问题，不是某个 surface 的接线遗漏。
+- 配置面缺失：[`config.example.jsonc`](../config.example.jsonc#L244-L247) 的 `autoMode`
+  段暴露了 `engine` / `classifierModel` / `timeoutMs`，**唯独 speculative window 没有
+  config.json 面**，只能靠 `KODAX_AUTO_SPECULATIVE_WINDOW_MS` 环境变量，普通用户无从调。
+
+#### Root Cause
+
+三个根因叠加，按严重度排序：
+
+1. **late verdict 被硬丢弃（核心放大器）**。窗口过期后后台 classify 仍在跑且**不**被
+   abort，但其裁决在 v1 被明确丢弃。三处代码互证：
+   [`speculative.ts:13-17`](../packages/coding/src/guardrails/auto-mode/speculative.ts#L13-L17)、
+   [`guardrail.ts:443-449`](../packages/coding/src/guardrails/auto-mode/guardrail.ts#L443-L449)
+   （注释 *"its result is dropped in v1"*，直接 `escalateOrAsk(...)`）、
+   接口文档 [`guardrail.ts:257-268`](../packages/coding/src/guardrails/auto-mode/guardrail.ts#L257-L268)
+   （*"its eventual result is discarded in v1 (UI doesn't adopt late verdicts yet)"*）。
+   因此即便 200ms 后 classifier 返回 allow 也没用——窗口一过就是一个必须人点的硬弹窗。
+   CC 的 `peekSpeculativeClassifierCheck` 对应能力在 KodaX 未接。
+
+2. **500ms 是占位值，micro-bench 从未回填**。设计稿
+   [`v0.7.39.md` commit 4](features/v0.7.39.md#L711) 承诺 "Anthropic/DeepSeek/Zhipu
+   micro-bench 报告附在文档末尾"，但文档末尾（结尾第 769 行）没有任何 bench 报告；
+   release gate [`v0.7.39.md:729`](features/v0.7.39.md#L729) "Speculative classify
+   p50/p95 < 1500ms p95" 是 `[ ]` 未勾选；`benchmark/` 下搜不到任何 speculative /
+   classifier-latency 数据集或结果。代码注释
+   [`speculative.ts:21-23`](../packages/coding/src/guardrails/auto-mode/speculative.ts#L21-L23)
+   自承 "finalized after micro-bench in commit body"——那个 bench 不存在。
+
+3. **窗口与 timeout 的 16× 内部矛盾**。同一 guardrail 内 classifier sideQuery 的
+   `timeoutMs` 默认 **8000ms**（[`guardrail.ts:306`](../packages/coding/src/guardrails/auto-mode/guardrail.ts#L306)），
+   speculative 窗口默认 **500ms**。设计上允许 classifier 跑 8s，却只给它 500ms 自证，
+   远程/慢 provider 的 p95 必然秒级 → 误弹是数学必然，非偶发。
+
+补充事实（影响修复设计）：cost-tracker 在
+[`classify.ts:96-98`](../packages/coding/src/guardrails/auto-mode/classify.ts#L96-L98)
+内部、sideQuery 返回时结算，每次 classify 恰好一次，与窗口是否过期无关——**采纳 late
+verdict 不会 double-settle cost**。当前窗口过期路径不记录 denial-tracker/breaker（裁决被丢），
+这是采纳 late verdict 时需要补齐的点。
+
+#### Proposed Solution（完整修复，非治标；按 KodaX 极简原则裁掉冗余 knob）
+
+分 5 个 workstream，WS1 治本、WS2 把 SDK/非交互路径一并修对、WS3 补可配置面、WS4 还文档债、
+WS5 是 WS1 内的验证项。**显式 descope**：原报告建议的"provider/latency-aware 默认窗口表"
+不做——一旦 WS1 采纳 late verdict，慢 provider 只意味着确认框先出现再自动消失，per-provider
+调参变成多余的 knob（违反 YAGNI / 无 3+ 用例不抽象）。这是比加 knob 更合理的完整方案。
+
+- **WS1（核心）— 采纳 late verdict / peek 模式**。窗口从"是否硬弹一个需人点的框"降级为
+  "是否先显示一个 pending（analyzing…）UI"。guardrail 不再丢弃 `classifyPromise`，把它
+  透传到 escalate 路径；`AutoModeAskUser` 契约扩展为可接收一个 late-verdict promise（或
+  AbortSignal + resolver），REPL 确认框 race 两件事：(a) 用户手动作答，(b) 迟到裁决。迟到
+  `allow` → 自动放行并关框；迟到 `block` → 自动关框并 block（带 reason）；迟到 `escalate`
+  → 保持等待用户（这才是真正需要人判的场景）；用户先作答 → 以用户为准。无论哪条路径，
+  `classifyPromise` 结算时按裁决补记 denial-tracker/breaker（reset/increment），且保证
+  user-answer 与 late-verdict 两条路径不重复记录（WS5）。
+
+- **WS2 — host/surface-aware 策略：无 askUser ⇒ 不投机**。speculative race 只在"有人会因此
+  干等"时才有意义。非交互 / SDK / 无 askUser 表面下，窗口过期提前 escalate 是纯伤害（没有人
+  可被抢答，还把 transient 的早退当裁决）。规则：无 `askUser` 时禁用 speculative，退回完整
+  await classify（即 0.7.39 之前行为）。这一条单独就修对 SDK / 非交互路径，并把原报告的
+  "GUI/非交互默认"收敛成一条干净规则。
+
+- **WS3 — 补 config 面 + 合理默认**。`autoMode.speculativeWindowMs` 加入 config.json（与
+  `timeoutMs` 并列），bootstrap 透传到 guardrail 与 Space。采纳 WS1 后默认窗口只决定"几 ms 后
+  显示 pending UI"，把默认提到一个不靠运气、又不至于让快裁决闪一下 pending 的值（候选由 WS4
+  实测）。
+
+- **WS4 — 回填并固化 micro-bench**。按 canonical 5-alias provider panel 实测 classifier
+  sideQuery 的 p50/p95，据此定 WS3 默认值，更新 `v0.7.39.md` 文档末尾报告并勾掉 release gate；
+  落 `benchmark/` 永久回归。
+
+- **WS5 — 防 double-record / double-settle 验证**。证实 cost-tracker 仍恰好结算一次；
+  新增 denial-tracker/breaker 记录在 "user 先答" 与 "late verdict 先到" 两条路径下互斥不重复；
+  late verdict 抵达后若用户已作答则只结算 cost + 记 tracker，不再触发 UI。
+
+#### Expected Outcome
+
+`auto[llm]` 模式在远程/慢 provider 下恢复可用：classifier 判 allow 的调用不再弹框（快则
+无感、慢则先显 pending 再自动放行），只有 classifier 真正判 escalate / 用户需介入时才落人工
+确认框。SDK / 非交互路径行为正确（完整 await，不再因 500ms 早退假弹）。speculative window 既
+可经 env 也可经 config.json 调整。default 值由实测固化、release gate 勾齐。
+
+#### Related
+
+- FEATURE_158 / ADR-025（v0.7.39）：speculative classify 的引入版本。
+- Issue 131（v0.7.39，已修）：同 feature 的 Windows-flag 误判；本 issue 是同 feature 的
+  另一类回归（投机窗口默认值 + late-verdict 丢弃），独立成项。
+- 参考实现：Claude Code `peekSpeculativeClassifierCheck` 模式（WS1 对标对象）。
+
+---
 
 ### 142: kimi-code thinking-only completion can terminate Worker with only `[Worker]` visible
 
@@ -4564,11 +4679,17 @@ Commit `ef085fc` 把 V1 精简到 V2 时没区分"信息载体"和"脚手架"，
 ---
 
 ## Summary
-- Total: 69 (25 Open, 44 Resolved, 0 Partially Resolved, 0 Won't Fix)
+- Total: 70 (26 Open, 44 Resolved, 0 Partially Resolved, 0 Won't Fix)
 - Highest Priority Open: 091 - 缺少一等公民 MCP / Web Search / Code Search 工具体系 (High)
 - Historical archived issues are maintained in ISSUES_ARCHIVED.md
 
 ## Changelog
+
+### 2026-06-25: Issue 143 added
+- Added 143: Auto[llm] speculative classify 窗口默认 500ms + late verdict 被丢弃 → 远程/慢 provider 下 near-100% 误弹确认框，auto 模式形同虚设 (High, Open).
+- Diagnosis (代码实证): 三根因叠加 —— (1) 窗口过期后后台 classify 裁决在 v1 被硬丢弃，即便迟到 allow 也变成必须人点的硬弹窗 (`guardrail.ts:443-449` / `speculative.ts:13-17`); (2) 500ms 是占位值，FEATURE_158 承诺的 Anthropic/DeepSeek/Zhipu micro-bench 从未回填 (文档末尾无报告 + release gate 未勾 + benchmark 无数据); (3) 窗口 500ms 与 classifier timeout 8000ms 的 16× 内部矛盾使远程/慢 provider 误弹成数学必然。REPL 与 Space 均未传 `speculativeWindowMs`，且无 config.json 面。
+- Proposed (完整修复，非治标): WS1 采纳 late verdict / peek 模式 (窗口降级为"是否显示 pending UI") + WS2 无 askUser ⇒ 不投机 (修对 SDK/非交互) + WS3 补 `autoMode.speculativeWindowMs` config 面 + WS4 回填 micro-bench 固化默认 + WS5 防 double-record 验证。显式 descope provider/latency-aware knob (采纳 WS1 后冗余)。
+- cost-tracker 在 `classify.ts:96-98` 内部结算，每次 classify 恰好一次，与窗口无关 → 采纳 late verdict 不会 double-settle。
 
 ### 2026-06-25: Issue 142 added and resolved
 - Added and resolved 142: kimi-code thinking-only completion can terminate Worker with only `[Worker]` visible (High).

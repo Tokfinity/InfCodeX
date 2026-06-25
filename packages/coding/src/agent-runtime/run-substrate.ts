@@ -705,6 +705,7 @@ export async function runSubstrate(
         enabled: effectiveProviderReasoningMode !== 'off',
         mode: effectiveProviderReasoningMode,
         depth: reasoningModeToDepth(effectiveProviderReasoningMode),
+        effort: currentExecution.providerReasoning.effort,
       };
 
       const streamProvider = resolveProvider(turnState.currentProviderName);
@@ -747,6 +748,7 @@ export async function runSubstrate(
         turnState.currentProviderName,
         streamProvider,
         boundaryTracker,
+        options.timeouts,
       );
       const API_HARD_TIMEOUT_MS = resilienceCfg.requestTimeoutMs; // Issue 084: 10-min hard timeout
       const API_IDLE_TIMEOUT_MS = resilienceCfg.streamIdleTimeoutMs; // Issue 084: 60s idle, reset on delta

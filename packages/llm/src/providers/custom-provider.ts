@@ -7,12 +7,17 @@
 
 import {
   type KodaXCustomProviderConfig,
+  type KodaXModelDescriptor,
+  type KodaXProtocolFamily,
   type KodaXProviderConfig,
+  type KodaXReasoningCapability,
+  type KodaXReasoningCapabilityV2,
   type KodaXVerifyStrategy,
 } from '../types.js';
 import { KodaXBaseProvider } from './base.js';
 import { KodaXAnthropicCompatProvider } from './anthropic.js';
 import { KodaXOpenAICompatProvider } from './openai.js';
+import { createReasoningCapabilityFromPreset } from '../reasoning.js';
 
 const VALID_CUSTOM_PROVIDER_USER_AGENT_MODES = new Set(['compat', 'sdk']);
 const VALID_CUSTOM_PROVIDER_VERIFY_STRATEGIES = new Set<KodaXVerifyStrategy>([
@@ -34,6 +39,123 @@ function defaultVerifyStrategyForProtocol(
   protocol: 'anthropic' | 'openai',
 ): KodaXVerifyStrategy {
   return protocol === 'anthropic' ? 'count-tokens' : 'models-list';
+}
+
+export function legacyCapabilityFromV2(
+  capability: KodaXReasoningCapabilityV2 | undefined,
+): KodaXReasoningCapability | undefined {
+  if (!capability) {
+    return undefined;
+  }
+  if (capability.effortStrategy === 'none') {
+    return 'none';
+  }
+  if (capability.effortStrategy === 'prompt-only') {
+    return 'prompt-only';
+  }
+  if (capability.thinkingStrategy === 'anthropic-adaptive') {
+    return 'native-adaptive';
+  }
+  if (capability.effortStrategy === 'provider-budget') {
+    return 'native-budget';
+  }
+  if (capability.effortStrategy === 'provider-toggle') {
+    return 'native-toggle';
+  }
+  return 'native-effort';
+}
+
+function legacyReasoningPresetForProtocol(
+  protocol: KodaXProtocolFamily,
+  reasoningCapability: KodaXReasoningCapability | undefined,
+  supportsThinking?: boolean,
+): KodaXModelDescriptor['reasoningPreset'] | undefined {
+  if (supportsThinking === false) {
+    return 'none';
+  }
+  switch (reasoningCapability) {
+    case 'none':
+    case 'prompt-only':
+      return 'none';
+    case 'native-toggle':
+      return 'generic-thinking-toggle';
+    case 'native-budget':
+      return protocol === 'anthropic' ? 'anthropic-budget' : 'qwen-hybrid-thinking';
+    case 'native-effort':
+      return protocol === 'anthropic' ? 'claude-adaptive-max' : 'openai-chat-reasoning';
+    case 'native-adaptive':
+      return protocol === 'anthropic' ? 'claude-adaptive-max' : 'generic-thinking-toggle';
+    default:
+      return supportsThinking === true ? 'generic-thinking-toggle' : undefined;
+  }
+}
+
+function resolveCustomReasoningCapabilityV2(
+  reasoningCapabilityV2: KodaXReasoningCapabilityV2 | undefined,
+  reasoningPreset: KodaXModelDescriptor['reasoningPreset'],
+  reasoning: KodaXModelDescriptor['reasoning'],
+  legacy?: {
+    readonly protocol: KodaXProtocolFamily;
+    readonly reasoningCapability?: KodaXReasoningCapability;
+    readonly supportsThinking?: boolean;
+  },
+): KodaXReasoningCapabilityV2 | undefined {
+  if (reasoningCapabilityV2) {
+    return { ...reasoningCapabilityV2, ...(reasoning ?? {}) };
+  }
+  const effectivePreset = reasoningPreset ?? (legacy
+    ? legacyReasoningPresetForProtocol(
+        legacy.protocol,
+        legacy.reasoningCapability,
+        legacy.supportsThinking,
+      )
+    : undefined);
+  return effectivePreset
+    ? createReasoningCapabilityFromPreset(effectivePreset, reasoning)
+    : undefined;
+}
+
+export function resolveCustomProviderReasoningCapabilityV2(
+  config: KodaXCustomProviderConfig,
+): KodaXReasoningCapabilityV2 | undefined {
+  return resolveCustomReasoningCapabilityV2(
+    config.reasoningCapabilityV2,
+    config.reasoningPreset,
+    config.reasoning,
+    {
+      protocol: config.protocol,
+      reasoningCapability: config.reasoningCapability,
+      supportsThinking: config.supportsThinking,
+    },
+  );
+}
+
+export function resolveCustomModelReasoningCapabilityV2(
+  descriptor: KodaXModelDescriptor,
+  protocol: KodaXProtocolFamily,
+): KodaXReasoningCapabilityV2 | undefined {
+  return resolveCustomReasoningCapabilityV2(
+    descriptor.reasoningCapabilityV2,
+    descriptor.reasoningPreset,
+    descriptor.reasoning,
+    {
+      protocol,
+      reasoningCapability: descriptor.reasoningCapability,
+    },
+  );
+}
+
+function customModelDescriptorToFull(
+  entry: string | KodaXModelDescriptor,
+  protocol: KodaXProtocolFamily,
+): KodaXModelDescriptor {
+  if (typeof entry === 'string') {
+    return { id: entry };
+  }
+  const reasoningCapabilityV2 = resolveCustomModelReasoningCapabilityV2(entry, protocol);
+  return reasoningCapabilityV2
+    ? { ...entry, reasoningCapabilityV2 }
+    : entry;
 }
 
 export function validateCustomProviderConfig(
@@ -84,8 +206,15 @@ function buildProviderConfig(custom: KodaXCustomProviderConfig): KodaXProviderCo
   // can express real differences instead of a single provider-wide
   // value.
   const models = custom.models?.length
-    ? custom.models.map(entry => (typeof entry === 'string' ? { id: entry } : entry))
+    ? custom.models.map((entry) => customModelDescriptorToFull(entry, custom.protocol))
     : undefined;
+  const reasoningCapabilityV2 = resolveCustomProviderReasoningCapabilityV2(custom);
+  const reasoningCapability =
+    custom.reasoningCapability ??
+    legacyCapabilityFromV2(reasoningCapabilityV2) ??
+    (custom.supportsThinking ? 'native-toggle' : 'none');
+  const supportsThinking = custom.supportsThinking ??
+    (reasoningCapability !== 'none' && reasoningCapability !== 'prompt-only');
 
   return {
     apiKeyEnv: custom.apiKeyEnv,
@@ -93,8 +222,9 @@ function buildProviderConfig(custom: KodaXCustomProviderConfig): KodaXProviderCo
     baseUrl: custom.baseUrl,
     models,
     userAgentMode: custom.userAgentMode,
-    supportsThinking: custom.supportsThinking ?? false,
-    reasoningCapability: custom.reasoningCapability ?? 'none',
+    supportsThinking,
+    reasoningCapability,
+    reasoningCapabilityV2,
     capabilityProfile: custom.capabilityProfile,
     contextWindow: custom.contextWindow,
     maxOutputTokens: custom.maxOutputTokens,

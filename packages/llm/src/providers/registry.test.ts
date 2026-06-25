@@ -1,6 +1,7 @@
 import { afterEach, describe, expect, it, vi } from 'vitest';
 import {
   KODAX_DEFAULT_PROVIDER,
+  getModelCapabilities,
   getProvider,
   getProviderConfiguredReasoningCapability,
   getProviderList,
@@ -13,6 +14,14 @@ describe('provider registry', () => {
   afterEach(() => {
     vi.unstubAllEnvs();
   });
+
+  function expectReasoningPreset(
+    provider: string,
+    model: string,
+    preset: string,
+  ): void {
+    expect(getModelCapabilities(provider, model)?.reasoningCapabilityV2?.reasoningPreset).toBe(preset);
+  }
 
   it('includes CLI bridge providers in the built-in registry snapshot', () => {
     const gemini = getProviderList().find((provider) => provider.name === 'gemini-cli');
@@ -49,7 +58,9 @@ describe('provider registry', () => {
     expect(minimax.name).toBe('minimax-coding');
     expect(minimax.getEffectiveContextWindow('MiniMax-M2.7')).toBe(204_800);
     expect(minimax.getEffectiveContextWindow('MiniMax-M3')).toBe(1_000_000);
-    expect(getProviderConfiguredReasoningCapability('minimax-coding', 'MiniMax-M3')).toBe('native-budget');
+    expect(getProviderConfiguredReasoningCapability('minimax-coding', 'MiniMax-M3')).toBe('native-adaptive');
+    expectReasoningPreset('minimax-coding', 'MiniMax-M3', 'minimax-m3');
+    expectReasoningPreset('minimax-coding', 'MiniMax-M2.7', 'minimax-m2-always');
   });
 
   it('registers Xiaomi MiMo Token Plan as mimo-coding (Anthropic-compat, MIMO_CODING_API_KEY)', () => {
@@ -58,7 +69,8 @@ describe('provider registry', () => {
     expect(mimo.name).toBe('mimo-coding');
     expect(mimo.getEffectiveContextWindow('mimo-v2.5-pro')).toBe(1_000_000);
     expect(mimo.getEffectiveContextWindow('mimo-v2.5')).toBe(1_000_000);
-    expect(getProviderConfiguredReasoningCapability('mimo-coding', 'mimo-v2.5-pro')).toBe('native-budget');
+    expect(getProviderConfiguredReasoningCapability('mimo-coding', 'mimo-v2.5-pro')).toBe('native-toggle');
+    expectReasoningPreset('mimo-coding', 'mimo-v2.5-pro', 'mimo-v2.5-toggle');
   });
 
   it('registers Xiaomi MiMo pay-per-token as mimo (Anthropic-compat, MIMO_API_KEY)', () => {
@@ -71,7 +83,8 @@ describe('provider registry', () => {
     expect(mimo.name).toBe('mimo');
     expect(mimo.getEffectiveContextWindow('mimo-v2.5-pro')).toBe(1_000_000);
     expect(mimo.getEffectiveContextWindow('mimo-v2.5')).toBe(1_000_000);
-    expect(getProviderConfiguredReasoningCapability('mimo', 'mimo-v2.5-pro')).toBe('native-budget');
+    expect(getProviderConfiguredReasoningCapability('mimo', 'mimo-v2.5-pro')).toBe('native-toggle');
+    expectReasoningPreset('mimo', 'mimo-v2.5-pro', 'mimo-v2.5-toggle');
   });
 
   it('registers Volcengine Ark Coding Plan as ark-coding (Anthropic-compat, ARK_CODING_API_KEY)', () => {
@@ -125,7 +138,13 @@ describe('provider registry', () => {
     // can't silently regress to the provider-level 32_000 default.
     expect(ark.getEffectiveMaxOutputTokens('glm-5.2')).toBe(131_072);
 
-    expect(getProviderConfiguredReasoningCapability('ark-coding', 'glm-5.1')).toBe('native-budget');
+    expect(getProviderConfiguredReasoningCapability('ark-coding', 'glm-5.1')).toBe('native-toggle');
+    expectReasoningPreset('ark-coding', 'glm-5.1', 'zai-glm-toggle');
+    expectReasoningPreset('ark-coding', 'glm-5.2', 'zai-glm-5.2');
+    expectReasoningPreset('ark-coding', 'kimi-k2.7-code', 'kimi-k2.7-code');
+    expectReasoningPreset('ark-coding', 'MiniMax-M3', 'minimax-m3');
+    expectReasoningPreset('ark-coding', 'deepseek-v4-pro', 'deepseek-v4-anthropic');
+    expectReasoningPreset('ark-coding', 'doubao-seed-2.0-code', 'none');
   });
 
   it('exposes a stable default provider snapshot', () => {

@@ -11,11 +11,14 @@ import {
   KodaXToolDefinition,
   KodaXProviderStreamOptions,
   KodaXProviderCapabilityProfile,
+  KodaXNormalizedReasoningRequest,
   KodaXReasoningCapability,
+  KodaXReasoningCapabilityV2,
   KodaXReasoningOverride,
   KodaXReasoningRequest,
   KodaXStreamResult,
   KodaXVerifyCredentialResult,
+  KodaXWireReasoningEffort,
 } from '../types.js';
 import { KodaXError, KodaXRateLimitError, KodaXProviderError } from '../errors.js';
 import { parseRetryAfter, extractHeadersFromError } from '../retry/retry-after.js';
@@ -26,8 +29,10 @@ import {
   NATIVE_PROVIDER_CAPABILITY_PROFILE,
 } from './capability-profile.js';
 import {
+  KODAX_STABLE_EFFORT_INTENTS,
   getReasoningCapability,
   normalizeReasoningRequest,
+  resolveReasoningEffort,
 } from '../reasoning.js';
 import {
   buildReasoningOverrideKey,
@@ -41,6 +46,27 @@ function parseEnvInt(raw: string | undefined): number | undefined {
   if (!raw) return undefined;
   const n = parseInt(raw, 10);
   return Number.isFinite(n) && n > 0 ? n : undefined;
+}
+
+interface ResolvedV2ReasoningIntent {
+  readonly disabled: boolean;
+  readonly effort?: KodaXWireReasoningEffort;
+  readonly requestedEffort?: KodaXWireReasoningEffort;
+}
+
+function shouldLowerAutoReasoningEffort(
+  capability: KodaXReasoningCapabilityV2,
+): boolean {
+  switch (capability.reasoningPreset) {
+    case 'zai-glm-5.2':
+    case 'deepseek-v4-openai':
+    case 'deepseek-v4-anthropic':
+    case 'qwen-hybrid-thinking':
+      return true;
+    default:
+      break;
+  }
+  return capability.effortStrategy === 'provider-budget';
 }
 
 function abortError(): DOMException {
@@ -211,6 +237,10 @@ export abstract class KodaXBaseProvider {
     return this.config.strictThinkingSignature ?? false;
   }
 
+  protected getEffectiveThinkingBudgetCap(model?: string): number | undefined {
+    return this.getModelDescriptor(model)?.thinkingBudgetCap ?? this.config.thinkingBudgetCap;
+  }
+
   abstract stream(
     messages: KodaXMessage[],
     tools: KodaXToolDefinition[],
@@ -325,6 +355,11 @@ export abstract class KodaXBaseProvider {
     return override
       ? reasoningOverrideToCapability(override)
       : this.getConfiguredReasoningCapability(modelOverride);
+  }
+
+  getReasoningCapabilityV2(modelOverride?: string): KodaXReasoningCapabilityV2 | undefined {
+    return this.getModelDescriptor(modelOverride)?.reasoningCapabilityV2
+      ?? this.config.reasoningCapabilityV2;
   }
 
   getReasoningOverride(modelOverride?: string): KodaXReasoningOverride | undefined {
@@ -485,8 +520,124 @@ export abstract class KodaXBaseProvider {
 
   protected normalizeReasoning(
     reasoning?: boolean | KodaXReasoningRequest,
-  ): Required<KodaXReasoningRequest> {
+  ): KodaXNormalizedReasoningRequest {
     return normalizeReasoningRequest(reasoning);
+  }
+
+  protected validateExplicitReasoningEffort(
+    reasoning: KodaXNormalizedReasoningRequest,
+    modelOverride?: string,
+  ): void {
+    if (reasoning.effortSource !== 'explicit') {
+      return;
+    }
+    const effort = reasoning.effort;
+    if (!effort || effort === 'auto') {
+      return;
+    }
+
+    const isStableIntent = KODAX_STABLE_EFFORT_INTENTS.includes(
+      effort as (typeof KODAX_STABLE_EFFORT_INTENTS)[number],
+    );
+    const capability = this.getReasoningCapabilityV2(modelOverride);
+    if (!capability) {
+      if (effort === 'none') {
+        return;
+      }
+      if (isStableIntent) {
+        return;
+      }
+      const modelLabel = modelOverride ? `/${modelOverride}` : '';
+      throw new KodaXProviderError(
+        `${this.name}${modelLabel} does not advertise provider-specific reasoning effort "${effort}". Supported stable efforts: ${KODAX_STABLE_EFFORT_INTENTS.join(', ')}.`,
+        this.name,
+      );
+    }
+    if (capability.localRejectEfforts?.includes(effort)) {
+      const modelLabel = modelOverride ? `/${modelOverride}` : '';
+      throw new KodaXProviderError(
+        `${this.name}${modelLabel} does not support reasoning effort "${effort}".`,
+        this.name,
+      );
+    }
+    if (effort === 'none' || capability.disabledEfforts?.includes(effort)) {
+      return;
+    }
+    if (capability.allowCustomEffort) {
+      return;
+    }
+    const supported = capability.supportedEfforts?.map((preset) => preset.value) ?? [];
+    const aliasedEffort = capability.effortAliases?.[effort] ?? effort;
+    if (
+      supported.includes(effort) ||
+      supported.includes(aliasedEffort) ||
+      (supported.length === 0 && isStableIntent)
+    ) {
+      return;
+    }
+
+    const modelLabel = modelOverride ? `/${modelOverride}` : '';
+    const supportedLabel = supported.length > 0
+      ? supported.join(', ')
+      : KODAX_STABLE_EFFORT_INTENTS.join(', ');
+    throw new KodaXProviderError(
+      `${this.name}${modelLabel} does not support reasoning effort "${effort}". Supported efforts: ${supportedLabel}.`,
+      this.name,
+    );
+  }
+
+  protected resolveV2ReasoningIntent(
+    reasoning: KodaXNormalizedReasoningRequest,
+    capability: KodaXReasoningCapabilityV2,
+    modelOverride?: string,
+  ): ResolvedV2ReasoningIntent {
+    const requestedEffort = reasoning.effort;
+    if (requestedEffort && capability.localRejectEfforts?.includes(requestedEffort)) {
+      const modelLabel = modelOverride ? `/${modelOverride}` : '';
+      throw new KodaXProviderError(
+        `${this.name}${modelLabel} does not support reasoning effort "${requestedEffort}".`,
+        this.name,
+      );
+    }
+
+    if (
+      !reasoning.enabled ||
+      requestedEffort === 'none' ||
+      (requestedEffort !== undefined && capability.disabledEfforts?.includes(requestedEffort))
+    ) {
+      return { disabled: true, requestedEffort };
+    }
+
+    if (!requestedEffort || requestedEffort === 'auto') {
+      if (shouldLowerAutoReasoningEffort(capability)) {
+        const resolved = resolveReasoningEffort({
+          capability,
+          explicitEffort: requestedEffort ?? 'auto',
+        }).effectiveEffort;
+        if (
+          resolved === 'none' ||
+          (resolved !== undefined && capability.disabledEfforts?.includes(resolved))
+        ) {
+          return {
+            disabled: true,
+            effort: resolved,
+            requestedEffort,
+          };
+        }
+        return {
+          disabled: false,
+          effort: resolved,
+          requestedEffort,
+        };
+      }
+      return { disabled: false, requestedEffort };
+    }
+
+    return {
+      disabled: false,
+      effort: capability.effortAliases?.[requestedEffort] ?? requestedEffort,
+      requestedEffort,
+    };
   }
 
   /**

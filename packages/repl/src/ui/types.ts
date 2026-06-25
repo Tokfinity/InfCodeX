@@ -216,6 +216,7 @@ export interface StatusBarProps {
   activeToolCount?: number;
   thinking?: boolean;
   reasoningMode?: KodaXReasoningMode;
+  effort?: string;
   reasoningCapability?: string;
   /** Is context currently compacting - 是否正在压缩上下文 */
   isCompacting?: boolean;

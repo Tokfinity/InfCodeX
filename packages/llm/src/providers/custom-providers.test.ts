@@ -4,6 +4,7 @@ import { createCustomProvider } from './custom-provider.js';
 import {
   getCustomProvider,
   getCustomProviderList,
+  getCustomModelCapabilities,
   getCustomProviderModels,
   getCustomProviderNames,
   isCustomProviderName,
@@ -96,8 +97,41 @@ describe('custom providers', () => {
     expect(provider.getBaseUrl()).toBe('https://example.test/v1');
     expect(provider.getAvailableModels()).toEqual(['custom-main', 'custom-alt']);
     expect(provider.getConfiguredReasoningCapability()).toBe('native-toggle');
+    expect(provider.getReasoningCapabilityV2()).toMatchObject({
+      reasoningPreset: 'generic-thinking-toggle',
+      effortStrategy: 'provider-toggle',
+      thinkingStrategy: 'provider-toggle',
+    });
     expect(provider.getCapabilityProfile()).toEqual(EXPECTED_NATIVE_CUSTOM_PROFILE);
     expect(provider.getContextWindow()).toBe(123456);
+  });
+
+  it('creates custom provider V2 reasoning profiles from reasoningPreset templates', () => {
+    vi.stubEnv('CUSTOM_GLM_API_KEY', 'test-key');
+    const provider = createCustomProvider({
+      name: 'custom-glm',
+      protocol: 'openai',
+      baseUrl: 'https://glm.example/v1',
+      apiKeyEnv: 'CUSTOM_GLM_API_KEY',
+      model: 'glm-5.2',
+      reasoningPreset: 'zai-glm-5.2',
+      reasoning: { defaultEffort: 'high' },
+      models: [
+        { id: 'kimi-code', reasoningPreset: 'kimi-k2.7-code' },
+      ],
+    });
+
+    expect(provider.getConfiguredReasoningCapability()).toBe('native-effort');
+    expect(provider.getReasoningCapabilityV2('glm-5.2')).toMatchObject({
+      reasoningPreset: 'zai-glm-5.2',
+      effortStrategy: 'openai-chat-effort',
+      defaultEffort: 'high',
+    });
+    expect(provider.getReasoningCapabilityV2('kimi-code')).toMatchObject({
+      reasoningPreset: 'kimi-k2.7-code',
+      effortStrategy: 'prompt-only',
+      localRejectEfforts: ['none', 'minimal'],
+    });
   });
 
   it('creates Anthropic-compatible custom providers with the expected metadata', () => {
@@ -110,6 +144,26 @@ describe('custom providers', () => {
     expect(provider.getBaseUrl()).toBe('https://example.test/anthropic');
     expect(provider.getAvailableModels()).toEqual(['claude-custom', 'claude-custom-fast']);
     expect(provider.getConfiguredReasoningCapability()).toBe('native-budget');
+    expect(provider.getReasoningCapabilityV2()).toMatchObject({
+      reasoningPreset: 'anthropic-budget',
+      effortStrategy: 'provider-budget',
+      thinkingStrategy: 'anthropic-budget',
+    });
+  });
+
+  it('maps legacy supportsThinking false to a disabled V2 reasoning profile', () => {
+    vi.stubEnv('CUSTOM_OPENAI_API_KEY', 'test-key');
+    const provider = createCustomProvider({
+      ...cloneConfig(OPENAI_CUSTOM),
+      supportsThinking: false,
+      reasoningCapability: undefined,
+    });
+
+    expect(provider.getConfiguredReasoningCapability()).toBe('none');
+    expect(provider.getReasoningCapabilityV2()).toMatchObject({
+      reasoningPreset: 'none',
+      effortStrategy: 'none',
+    });
   });
 
   it('rejects invalid custom provider definitions up front', () => {
@@ -168,6 +222,22 @@ describe('custom providers', () => {
 
     providers[0]!.capabilityProfile.mcpSupport = 'none';
     expect(getCustomProviderList()[0]!.capabilityProfile.mcpSupport).toBe('native');
+
+    expect(getCustomModelCapabilities('custom-openai', 'custom-main')).toMatchObject({
+      reasoningCapability: 'native-toggle',
+      reasoningCapabilityV2: {
+        reasoningPreset: 'generic-thinking-toggle',
+        effortStrategy: 'provider-toggle',
+      },
+      thinkingBudgetCap: 2048,
+    });
+    expect(getCustomModelCapabilities('custom-anthropic', 'claude-custom')).toMatchObject({
+      reasoningCapability: 'native-budget',
+      reasoningCapabilityV2: {
+        reasoningPreset: 'anthropic-budget',
+        effortStrategy: 'provider-budget',
+      },
+    });
   });
 
   it('instantiates registered custom providers on demand', () => {

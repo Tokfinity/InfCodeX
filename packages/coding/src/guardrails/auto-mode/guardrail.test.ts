@@ -801,16 +801,19 @@ describe('AutoModeToolGuardrail — speculative classify (FEATURE_158)', () => {
     expect(verdict.action).toBe('allow');
   });
 
-  it('escalates when classifier outruns window (slow classifier)', async () => {
+  it('Issue 143 WS1: adopts a late ALLOW verdict when classifier outruns window — NO confirm dialog', async () => {
+    // This is the core regression fix. Pre-fix, a slow classifier (200ms) with
+    // a tight window (10ms) would window-expire and hard-escalate, surfacing a
+    // confirm dialog even though the classifier was about to say allow. With
+    // WS1 the late allow is adopted directly and askUser is NEVER consulted.
     let askUserCalled = false;
     const askUser: AutoModeAskUser = async () => {
       askUserCalled = true;
-      return 'allow';
+      return 'block'; // would block if (wrongly) consulted — proves we don't ask
     };
-    // Slow classifier: 200ms delay
     const provider = new StubProvider(async () => {
       await new Promise((resolve) => setTimeout(resolve, 200));
-      return okResult('<block>no</block><reason>slow</reason>');
+      return okResult('<block>no</block><reason>slow-but-allow</reason>');
     });
     const g = createAutoModeToolGuardrail({
       ...baseConfig(''),
@@ -819,8 +822,143 @@ describe('AutoModeToolGuardrail — speculative classify (FEATURE_158)', () => {
       askUser,
     });
     const verdict = await g.beforeTool!(callBash('ls'), ctx());
+    expect(verdict.action).toBe('allow');
+    expect(askUserCalled).toBe(false);
+  });
+
+  it('Issue 143 WS1: adopts a late BLOCK verdict when classifier outruns window — NO confirm dialog', async () => {
+    let askUserCalled = false;
+    const askUser: AutoModeAskUser = async () => {
+      askUserCalled = true;
+      return 'allow';
+    };
+    const provider = new StubProvider(async () => {
+      await new Promise((resolve) => setTimeout(resolve, 200));
+      return okResult('<block>yes</block><reason>slow-but-block</reason>');
+    });
+    const g = createAutoModeToolGuardrail({
+      ...baseConfig(''),
+      resolveProvider: () => provider,
+      speculativeWindowMs: 10,
+      askUser,
+    });
+    const verdict = await g.beforeTool!(callBash('rm important.txt'), ctx());
+    expect(verdict.action).toBe('block');
+    if (verdict.action === 'block') {
+      expect(verdict.reason).toContain('slow-but-block');
+    }
+    expect(askUserCalled).toBe(false);
+  });
+
+  it('Issue 143 WS1: a genuine late ESCALATE verdict still reaches the user after window expiry', async () => {
+    // Adoption does not swallow real escalate verdicts — the classifier
+    // explicitly wanting a human still surfaces the confirm dialog.
+    let askUserCalled = false;
+    const askUser: AutoModeAskUser = async () => {
+      askUserCalled = true;
+      return 'allow';
+    };
+    // Slow provider that errors → classify maps to escalate.
+    const provider = new StubProvider(async () => {
+      await new Promise((resolve) => setTimeout(resolve, 50));
+      throw new Error('500 transient');
+    });
+    const g = createAutoModeToolGuardrail({
+      ...baseConfig(''),
+      resolveProvider: () => provider,
+      speculativeWindowMs: 5,
+      askUser,
+    });
+    const verdict = await g.beforeTool!(callBash('ls'), ctx());
     expect(askUserCalled).toBe(true);
-    expect(verdict.action).toBe('allow'); // askUser returned 'allow'
+    expect(verdict.action).toBe('allow'); // user answered allow at the dialog
+  });
+
+  it('Issue 143 WS1+WS5: a late BLOCK verdict after window expiry feeds the denial tracker (no double-count)', async () => {
+    const askUser: AutoModeAskUser = async () => 'allow';
+    const provider = new StubProvider(async () => {
+      await new Promise((resolve) => setTimeout(resolve, 30));
+      return okResult('<block>yes</block><reason>slow block</reason>');
+    });
+    const g = createAutoModeToolGuardrail({
+      ...baseConfig(''),
+      resolveProvider: () => provider,
+      speculativeWindowMs: 5,
+      askUser,
+    });
+    await g.beforeTool!(callBash('git push --force origin main'), ctx());
+    const stats = g.getStatsForTest();
+    // exactly one block recorded — not zero (pre-fix dropped it) and not two
+    expect(stats.denials.consecutive).toBe(1);
+    expect(stats.denials.cumulative).toBe(1);
+  });
+
+  it('Issue 143 WS2: no askUser surface disables speculative — awaits full verdict instead of early-escalating', async () => {
+    // SDK / non-interactive: classifier is slow (200ms) but the window is tight
+    // (10ms). Pre-fix this would window-expire and return escalate. With WS2,
+    // the absence of askUser forces the window to 0 so the real allow verdict
+    // is awaited and returned.
+    const provider = new StubProvider(async () => {
+      await new Promise((resolve) => setTimeout(resolve, 200));
+      return okResult('<block>no</block><reason>slow-but-allow</reason>');
+    });
+    const g = createAutoModeToolGuardrail({
+      ...baseConfig(''),
+      resolveProvider: () => provider,
+      speculativeWindowMs: 10, // tight window — would expire if speculative ran
+      // askUser intentionally omitted (SDK / non-interactive surface)
+    });
+    const verdict = await g.beforeTool!(callBash('ls'), ctx());
+    expect(verdict.action).toBe('allow');
+  });
+
+  it('Issue 143 WS2: no askUser + slow classifier that blocks → returns block (not premature escalate)', async () => {
+    const provider = new StubProvider(async () => {
+      await new Promise((resolve) => setTimeout(resolve, 200));
+      return okResult('<block>yes</block><reason>slow-but-block</reason>');
+    });
+    const g = createAutoModeToolGuardrail({
+      ...baseConfig(''),
+      resolveProvider: () => provider,
+      speculativeWindowMs: 10,
+    });
+    const verdict = await g.beforeTool!(callBash('rm important.txt'), ctx());
+    expect(verdict.action).toBe('block');
+    if (verdict.action === 'block') {
+      expect(verdict.reason).toContain('slow-but-block');
+    }
+  });
+
+  it('Issue 143 WS1: AbortError fired AFTER window expiry (during late await) still propagates', async () => {
+    // Covers the post-window-expiry abort path: the window expires, the
+    // guardrail is parked in `await classifyPromise`, then ctx.abortSignal
+    // fires. The AbortError must propagate, not get mis-mapped to escalate.
+    const controller = new AbortController();
+    const provider = new StubProvider(
+      () =>
+        new Promise<KodaXStreamResult>((_, reject) => {
+          controller.signal.addEventListener(
+            'abort',
+            () => reject(new DOMException('Request aborted', 'AbortError')),
+            { once: true },
+          );
+        }),
+    );
+    const g = createAutoModeToolGuardrail({
+      ...baseConfig(''),
+      resolveProvider: () => provider,
+      speculativeWindowMs: 1, // expire almost immediately, then park on await
+      askUser: async () => 'allow',
+    });
+    const promise = g.beforeTool!(
+      callBash('ls'),
+      {
+        agent: { name: 'a', instructions: '' } as GuardrailContext['agent'],
+        abortSignal: controller.signal,
+      } as GuardrailContext,
+    );
+    setTimeout(() => controller.abort(), 20); // abort well after the 1ms window
+    await expect(promise).rejects.toMatchObject({ name: 'AbortError' });
   });
 
   it('windowMs=0 disables speculative race (waits for classifier)', async () => {
@@ -920,6 +1058,82 @@ describe('FEATURE_158 Step 9 — engine downgrade re-engages escalate path', () 
     expect(classifierCalls).toBe(callsBefore); // no new classifier call
     expect(askUserCalls).toBe(1);
     expect(v4.action).toBe('allow');
+  });
+});
+
+describe('AutoModeToolGuardrail — getClaudeMd live getter (FEATURE_092 follow-up: AGENTS.md staleness fix)', () => {
+  // The bug: pre-fix, `claudeMd` was a `string` field captured when the lazy
+  // guardrail singleton was first built. The auto-mode classifier then kept
+  // judging tool calls against a frozen AGENTS.md snapshot — even `/reload`
+  // couldn't refresh it because the singleton (and its captured string) never
+  // rebuilt. The fix: an optional `getClaudeMd` getter, evaluated INSIDE the
+  // classify path on every call, taking precedence over the static string.
+  // Mirrors the getDefaultProvider/getDefaultModel live-getter fix above.
+
+  const hookSystem = () => {
+    const captured: string[] = [];
+    const provider = new StubProvider(okResult('<block>no</block><reason>safe</reason>'));
+    const orig = provider.stream.bind(provider);
+    provider.stream = async (msgs, tools, system, reasoning, streamOptions, signal) => {
+      captured.push(system);
+      return orig(msgs, tools, system, reasoning, streamOptions, signal);
+    };
+    return { provider, captured };
+  };
+
+  it('calls getClaudeMd fresh on every classify', async () => {
+    const getClaudeMd = vi.fn(() => 'PROJECT RULES v1');
+    const g = createAutoModeToolGuardrail({
+      ...baseConfig('<block>no</block><reason>safe</reason>'),
+      getClaudeMd,
+    });
+    await g.beforeTool!(callBash('ls'), ctx());
+    expect(getClaudeMd).toHaveBeenCalledOnce();
+    await g.beforeTool!(callBash('pwd'), ctx());
+    expect(getClaudeMd).toHaveBeenCalledTimes(2);
+  });
+
+  it('getClaudeMd takes precedence over the static claudeMd string', async () => {
+    const { provider, captured } = hookSystem();
+    const g = createAutoModeToolGuardrail({
+      ...baseConfig(''),
+      resolveProvider: () => provider,
+      claudeMd: 'STATIC-SNAPSHOT',
+      getClaudeMd: () => 'LIVE-CONTENT',
+    });
+    await g.beforeTool!(callBash('ls'), ctx());
+    expect(captured.at(-1)).toContain('LIVE-CONTENT');
+    expect(captured.at(-1)).not.toContain('STATIC-SNAPSHOT');
+  });
+
+  it('reflects mid-session AGENTS.md changes (no frozen snapshot)', async () => {
+    const { provider, captured } = hookSystem();
+    // Closure variable simulates the on-disk AGENTS.md content; flipping it
+    // between calls models the user editing AGENTS.md mid-session.
+    let liveContent = 'RULES BEFORE EDIT';
+    const g = createAutoModeToolGuardrail({
+      ...baseConfig(''),
+      resolveProvider: () => provider,
+      getClaudeMd: () => liveContent,
+    });
+    await g.beforeTool!(callBash('ls'), ctx());
+    expect(captured.at(-1)).toContain('RULES BEFORE EDIT');
+    liveContent = 'RULES AFTER EDIT';
+    await g.beforeTool!(callBash('pwd'), ctx());
+    expect(captured.at(-1)).toContain('RULES AFTER EDIT');
+    expect(captured.at(-1)).not.toContain('RULES BEFORE EDIT');
+  });
+
+  it('back-compat: static claudeMd string still reaches the classifier when no getter is set', async () => {
+    const { provider, captured } = hookSystem();
+    const g = createAutoModeToolGuardrail({
+      ...baseConfig(''),
+      resolveProvider: () => provider,
+      claudeMd: 'STATIC-ONLY-RULES',
+      // getClaudeMd intentionally omitted — exercises the back-compat path.
+    });
+    await g.beforeTool!(callBash('ls'), ctx());
+    expect(captured.at(-1)).toContain('STATIC-ONLY-RULES');
   });
 });
 

@@ -280,6 +280,59 @@ describe('loadAgentsFromMarkdown', () => {
     const agent = resolveConstructedAgent('with-model');
     expect(agent?.model).toBe('claude-sonnet-4-6');
   });
+
+  it('passes effort field through to the registered agent', async () => {
+    await writeUserAgent(
+      'with-effort.md',
+      [
+        '---',
+        'name: with-effort',
+        'description: tests effort passthrough',
+        'effort: high',
+        '---',
+        'body',
+      ].join('\n'),
+    );
+    const result = await load();
+    expect(result.loaded).toBe(1);
+    const agent = resolveConstructedAgent('with-effort');
+    expect(agent?.effort).toBe('high');
+  });
+
+  it('normalizes effort field before registering the agent', async () => {
+    await writeUserAgent(
+      'with-normalized-effort.md',
+      [
+        '---',
+        'name: with-normalized-effort',
+        'description: tests effort normalization',
+        'effort: " High "',
+        '---',
+        'body',
+      ].join('\n'),
+    );
+    const result = await load();
+    expect(result.loaded).toBe(1);
+    const agent = resolveConstructedAgent('with-normalized-effort');
+    expect(agent?.effort).toBe('high');
+  });
+
+  it('reports invalid effort frontmatter before admission', async () => {
+    await writeUserAgent(
+      'bad-effort.md',
+      [
+        '---',
+        'name: bad-effort',
+        'description: tests effort validation',
+        'effort: high now',
+        '---',
+        'body',
+      ].join('\n'),
+    );
+    const result = await load();
+    expect(result.loaded).toBe(0);
+    expect(result.failed[0]?.reason).toContain('frontmatter "effort" is invalid');
+  });
 });
 
 /**
@@ -532,6 +585,23 @@ describe('discoverMarkdownAgents', () => {
     const result = await discover();
     expect(result.agents).toHaveLength(1);
     expect(result.agents[0].model).toBe('claude-sonnet-4-6');
+  });
+
+  it('exposes effort from frontmatter', async () => {
+    await writeUserAgent(
+      'with-effort.md',
+      [
+        '---',
+        'name: with-effort',
+        'description: effort passthrough',
+        'effort: xhigh',
+        '---',
+        'body',
+      ].join('\n'),
+    );
+    const result = await discover();
+    expect(result.agents).toHaveLength(1);
+    expect(result.agents[0].effort).toBe('xhigh');
   });
 
   it('does NOT validate admission (returns agents loader would later reject)', async () => {

@@ -48,6 +48,13 @@ export type {
   KodaXProviderCapabilityProfile,
   KodaXProviderStreamOptions,
   KodaXReasoningCapability,
+  KodaXStableEffortIntent,
+  KodaXWireReasoningEffort,
+  KodaXReasoningEffortRequest,
+  KodaXReasoningEffortPreset,
+  KodaXReasoningEffortWireStrategy,
+  KodaXThinkingWireStrategy,
+  KodaXReasoningCapabilityV2,
   KodaXReasoningOverride,
   KodaXReasoningMode,
   KodaXThinkingDepth,
@@ -64,6 +71,7 @@ export type {
   KodaXThinkingBudgetMap,
   KodaXTaskBudgetOverrides,
   KodaXReasoningRequest,
+  KodaXNormalizedReasoningRequest,
 } from '@kodax-ai/llm';
 
 export {
@@ -662,6 +670,16 @@ export type {
 
 // ============== Reasoning ==============
 export {
+  KODAX_STABLE_EFFORT_INTENTS,
+  normalizeReasoningEffortValue,
+  mapLegacyReasoningModeToEffortIntent,
+  effortToLegacyReasoningMode,
+  parseReasoningEffortEnv,
+  resolveReasoningEffort,
+  resolveReasoningEffortForModelSwitch,
+} from '@kodax-ai/llm';
+
+export {
   KODAX_REASONING_MODE_SEQUENCE,
   resolveReasoningMode,
   reasoningModeToDepth,
@@ -739,6 +757,18 @@ export type {
   ProviderResilienceConfig,
   ProviderResiliencePolicy,
 } from './resilience/types.js';
+
+export type {
+  KodaXLlmTimeoutConfig,
+  KodaXWorkflowTimeoutConfig,
+  KodaXTimeoutConfig,
+} from './timeouts.js';
+
+export {
+  timeoutSecToMs,
+  parseTimeoutSecEnvMs,
+  providerResilienceConfigFromTimeouts,
+} from './timeouts.js';
 
 export {
   DEFAULT_RESILIENCE_CONFIG,

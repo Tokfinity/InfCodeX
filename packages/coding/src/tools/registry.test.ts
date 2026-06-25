@@ -60,6 +60,19 @@ describe('tool registry', () => {
     expect(props?.subagent_type?.description).not.toMatch(/✗|FEATURE_\d/);
   });
 
+  it('FEATURE_233: dispatch_child_task schema exposes optional effort field', () => {
+    const def = getToolDefinition('dispatch_child_task');
+    const props = (def?.input_schema as {
+      properties?: Record<string, { type?: string; description?: string }>;
+      required?: readonly string[];
+    } | undefined)?.properties;
+    const required = (def?.input_schema as { required?: readonly string[] } | undefined)?.required ?? [];
+
+    expect(props?.effort?.type).toBe('string');
+    expect(props?.effort?.description).toMatch(/Reasoning effort/);
+    expect(required).not.toContain('effort');
+  });
+
   it('FEATURE_191 A.0: KodaXChildContextBundle declares optional specialistName field', () => {
     // Type-level guard — the bundle must carry specialistName from
     // toolDispatchChildTask through executeChildAgents to

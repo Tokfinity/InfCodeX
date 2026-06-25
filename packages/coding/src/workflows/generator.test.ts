@@ -302,6 +302,17 @@ describe('resolveWorkflowGenerationTimeoutMs', () => {
     expect(resolveWorkflowGenerationTimeoutMs({ KODAX_WORKFLOW_GENERATION_TIMEOUT_MS: '45000' })).toBe(45000);
   });
 
+  it('accepts a positive seconds override from env', () => {
+    expect(resolveWorkflowGenerationTimeoutMs({ KODAX_WORKFLOW_GENERATION_TIMEOUT_SEC: '300' })).toBe(300000);
+  });
+
+  it('prefers SDK workflow timeout config over env', () => {
+    expect(resolveWorkflowGenerationTimeoutMs(
+      { KODAX_WORKFLOW_GENERATION_TIMEOUT_SEC: '300' },
+      { workflow: { generationTimeoutSec: 600 } },
+    )).toBe(600000);
+  });
+
   it('falls back to the default for invalid env values', () => {
     expect(resolveWorkflowGenerationTimeoutMs({ KODAX_WORKFLOW_GENERATION_TIMEOUT_MS: '0' })).toBe(DEFAULT_WORKFLOW_GENERATION_TIMEOUT_MS);
     expect(resolveWorkflowGenerationTimeoutMs({ KODAX_WORKFLOW_GENERATION_TIMEOUT_MS: 'nope' })).toBe(DEFAULT_WORKFLOW_GENERATION_TIMEOUT_MS);

@@ -104,6 +104,7 @@ export function createPseudoAcpServer(executor: CLIExecutor): {
                 sessionId,
                 req.params.prompt,
                 typeof req.params.model === 'string' ? req.params.model : undefined,
+                typeof req.params.effort === 'string' ? req.params.effort : undefined,
                 controller.signal,
             ).finally(() => {
                 activePrompts.delete(sessionId);
@@ -144,6 +145,7 @@ export function createPseudoAcpServer(executor: CLIExecutor): {
         sessionId: string,
         promptBlocks: any[],
         model: string | undefined,
+        reasoningEffort: string | undefined,
         signal: AbortSignal,
     ): Promise<{ stopReason: 'end_turn' | 'cancelled'; usage?: Extract<CLIEvent, { type: 'complete' }>['usage'] }> => {
         const text = promptBlocks.find((b: any) => b.type === 'text')?.text ?? '';
@@ -152,6 +154,7 @@ export function createPseudoAcpServer(executor: CLIExecutor): {
             const events = executor.execute({
                 prompt: text,
                 model,
+                reasoningEffort,
                 sessionId: sessionId === 'default' ? undefined : sessionId,
                 signal
             });

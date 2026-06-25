@@ -14,6 +14,9 @@ import type {
 import type { KodaXBaseProvider } from './base.js';
 import {
   createCustomProvider,
+  legacyCapabilityFromV2,
+  resolveCustomModelReasoningCapabilityV2,
+  resolveCustomProviderReasoningCapabilityV2,
   validateCustomProviderConfig,
 } from './custom-provider.js';
 import {
@@ -109,6 +112,7 @@ export function getCustomProviderList(): Array<{
   }> = [];
   for (const [name, config] of customProviders) {
     const configured = !!process.env[config.apiKeyEnv];
+    const reasoningCapabilityV2 = resolveCustomProviderReasoningCapabilityV2(config);
     const modelIds = (config.models ?? []).map(entry =>
       typeof entry === 'string' ? entry : entry.id,
     );
@@ -120,7 +124,9 @@ export function getCustomProviderList(): Array<{
       model: config.model,
       models,
       configured,
-      reasoningCapability: config.reasoningCapability ?? 'none',
+      reasoningCapability: config.reasoningCapability
+        ?? legacyCapabilityFromV2(reasoningCapabilityV2)
+        ?? 'none',
       capabilityProfile: cloneCapabilityProfile(
         config.capabilityProfile ?? NATIVE_PROVIDER_CAPABILITY_PROFILE,
       ),
@@ -155,8 +161,15 @@ export function getCustomProviderModels(name: string): string[] | undefined {
 
 function customDescriptorToFull(
   entry: string | KodaXModelDescriptor,
+  protocol: KodaXCustomProviderConfig['protocol'],
 ): KodaXModelDescriptor {
-  return typeof entry === 'string' ? { id: entry } : entry;
+  if (typeof entry === 'string') {
+    return { id: entry };
+  }
+  const reasoningCapabilityV2 = resolveCustomModelReasoningCapabilityV2(entry, protocol);
+  return reasoningCapabilityV2
+    ? { ...entry, reasoningCapabilityV2 }
+    : entry;
 }
 
 /**
@@ -172,7 +185,7 @@ export function getCustomProviderModelDescriptors(
   if (!config) return undefined;
   const defaultEntry: KodaXModelDescriptor = { id: config.model };
   const alternatives = (config.models ?? [])
-    .map(customDescriptorToFull)
+    .map((entry) => customDescriptorToFull(entry, config.protocol))
     .filter((m) => m.id !== config.model);
   return [defaultEntry, ...alternatives];
 }
@@ -190,19 +203,28 @@ export function getCustomModelCapabilities(
   const config = customProviders.get(providerName);
   if (!config) return undefined;
   const isDefault = modelId === config.model;
+  const providerReasoningCapabilityV2 = resolveCustomProviderReasoningCapabilityV2(config);
   const descriptor = isDefault
     ? ({ id: config.model } as KodaXModelDescriptor)
     : (config.models ?? [])
-        .map(customDescriptorToFull)
+        .map((entry) => customDescriptorToFull(entry, config.protocol))
         .find((m) => m.id === modelId);
   if (!descriptor) return undefined;
+  const effectiveReasoningCapabilityV2 =
+    descriptor.reasoningCapabilityV2 ?? providerReasoningCapabilityV2;
+  const effectiveReasoningCapability =
+    descriptor.reasoningCapability ??
+    legacyCapabilityFromV2(effectiveReasoningCapabilityV2) ??
+    config.reasoningCapability ??
+    'none';
   return {
     provider: providerName,
     model: descriptor.id,
     displayName: descriptor.displayName ?? descriptor.id,
-    supportsThinking: config.supportsThinking ?? false,
-    reasoningCapability:
-      descriptor.reasoningCapability ?? config.reasoningCapability ?? 'none',
+    supportsThinking: config.supportsThinking ??
+      (effectiveReasoningCapability !== 'none' && effectiveReasoningCapability !== 'prompt-only'),
+    reasoningCapability: effectiveReasoningCapability,
+    reasoningCapabilityV2: effectiveReasoningCapabilityV2,
     contextWindow: descriptor.contextWindow ?? config.contextWindow,
     maxOutputTokens: descriptor.maxOutputTokens ?? config.maxOutputTokens,
     thinkingBudgetCap:

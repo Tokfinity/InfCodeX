@@ -70,6 +70,7 @@ export interface ReasoningExecutionState {
     enabled: boolean;
     mode: KodaXReasoningMode;
     depth: KodaXThinkingDepth;
+    effort?: KodaXOptions['effort'];
     taskType: KodaXTaskType;
     executionMode: KodaXExecutionMode;
   };
@@ -115,6 +116,7 @@ export async function buildReasoningExecutionState(
       enabled: reasoningPlan.depth !== 'off',
       mode: reasoningPlan.mode,
       depth: reasoningPlan.depth,
+      effort: options.effort,
       taskType: reasoningPlan.decision.primaryTask,
       executionMode: reasoningPlan.decision.recommendedMode,
     },

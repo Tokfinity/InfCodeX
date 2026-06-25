@@ -8,6 +8,7 @@ import { stripCacheBoundaries } from '../cache-control.js';
 import type {
     KodaXImageBlock,
     KodaXMessage,
+    KodaXNormalizedReasoningRequest,
     KodaXProviderCapabilityProfile,
     KodaXReasoningRequest,
     KodaXStreamResult,
@@ -54,6 +55,18 @@ function normalizeAcpUsage(usage: unknown): KodaXTokenUsage | undefined {
         thoughtTokens:
             typeof usageRecord.thoughtTokens === 'number' ? usageRecord.thoughtTokens : undefined,
     };
+}
+
+function selectAcpReasoningEffort(
+    reasoning: KodaXNormalizedReasoningRequest,
+): string | undefined {
+    if (reasoning.effort === 'none') {
+        return 'none';
+    }
+    if (!reasoning.enabled || reasoning.effort === 'auto') {
+        return undefined;
+    }
+    return reasoning.effort;
 }
 
 /**
@@ -144,10 +157,12 @@ export abstract class KodaXAcpProvider extends KodaXBaseProvider {
         messages: KodaXMessage[],
         tools: KodaXToolDefinition[],
         system: string,
-        _reasoning?: boolean | KodaXReasoningRequest,
+        reasoning?: boolean | KodaXReasoningRequest,
         streamOptions?: KodaXProviderStreamOptions,
         signal?: AbortSignal
     ): Promise<KodaXStreamResult> {
+        const normalizedReasoning = this.normalizeReasoning(reasoning);
+        const reasoningEffort = selectAcpReasoningEffort(normalizedReasoning);
 
         // FEATURE_116 (v0.7.37): strip boundary markers up front so the
         // CLI bridge never sees them.
@@ -267,7 +282,10 @@ export abstract class KodaXAcpProvider extends KodaXBaseProvider {
                 promptText,
                 acpSessionId,
                 signal,
-                { model: streamOptions?.modelOverride },
+                {
+                    model: streamOptions?.modelOverride,
+                    reasoningEffort,
+                },
             );
         } catch (err) {
             if (err instanceof Error && err.name === 'AbortError') {

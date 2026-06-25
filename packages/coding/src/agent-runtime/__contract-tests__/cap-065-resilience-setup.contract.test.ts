@@ -55,6 +55,23 @@ describe('CAP-065: buildResilienceSession — config resolution', () => {
     expect(resilienceCfg.maxRetries).toBeGreaterThan(0);
   });
 
+  it('CAP-RESILIENCE-SETUP-001c: applies SDK LLM timeout overrides in seconds', () => {
+    const tracker = new StableBoundaryTracker();
+    const { resilienceCfg } = buildResilienceSession('anthropic', fakeProvider(true), tracker, {
+      llm: {
+        requestTimeoutSec: 900,
+        streamIdleTimeoutSec: 0,
+        chunkTimeoutSec: 45,
+        maxRetryDelaySec: 90,
+      },
+    });
+
+    expect(resilienceCfg.requestTimeoutMs).toBe(900_000);
+    expect(resilienceCfg.streamIdleTimeoutMs).toBe(0);
+    expect(resilienceCfg.chunkTimeoutMs).toBe(45_000);
+    expect(resilienceCfg.maxRetryDelayMs).toBe(90_000);
+  });
+
   it('CAP-RESILIENCE-SETUP-001b: enableNonStreamingFallback respects provider veto', () => {
     const tracker = new StableBoundaryTracker();
     const withFallback = buildResilienceSession('anthropic', fakeProvider(true), tracker);

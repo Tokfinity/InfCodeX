@@ -185,7 +185,7 @@ describe('CAP-052: buildReasoningExecutionState — providerReasoning envelope',
 
   it('CAP-REASONING-PLAN-003b: providerReasoning fields mirror plan (mode/depth) + decision (primaryTask/recommendedMode)', async () => {
     const result = await buildReasoningExecutionState(
-      freshOptions(),
+      freshOptions({ effort: 'high' }),
       freshPlan({
         mode: 'deep',
         depth: 'high',
@@ -198,6 +198,7 @@ describe('CAP-052: buildReasoningExecutionState — providerReasoning envelope',
       enabled: true,
       mode: 'deep',
       depth: 'high',
+      effort: 'high',
       taskType: 'review',
       executionMode: 'deep',
     });

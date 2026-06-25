@@ -41,6 +41,7 @@ export interface BuildSurfaceStatusBarPropsOptions {
   model: string;
   thinking?: boolean;
   reasoningMode?: StatusBarProps["reasoningMode"];
+  effort?: string;
   reasoningCapability?: string;
   isTranscriptMode: boolean;
   streamingState: SurfaceStatusStreamingState;
@@ -66,6 +67,7 @@ export function buildSurfaceStatusBarProps(
     ).length,
     thinking: options.thinking,
     reasoningMode: options.reasoningMode,
+    effort: options.effort,
     reasoningCapability: options.reasoningCapability,
     isThinkingActive: options.streamingState.isThinking,
     thinkingCharCount: options.streamingState.thinkingCharCount,

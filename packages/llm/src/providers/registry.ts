@@ -14,6 +14,7 @@ import {
   KodaXProviderCapabilityProfile,
   KodaXProviderConfig,
   KodaXReasoningCapability,
+  KodaXReasoningCapabilityV2,
   KodaXVerifyStrategy,
 } from '../types.js';
 import { KodaXProviderError } from '../errors.js';
@@ -71,6 +72,7 @@ type ProviderSnapshot = {
   readonly models?: readonly KodaXModelDescriptor[];
   readonly apiKeyEnv: string;
   readonly reasoningCapability: KodaXReasoningCapability;
+  readonly reasoningCapabilityV2?: KodaXReasoningCapabilityV2;
   readonly modelReasoningCapabilities?: Readonly<
     Record<string, KodaXReasoningCapability>
   >;
@@ -115,7 +117,7 @@ export const KODAX_PROVIDER_SNAPSHOTS: Record<ProviderName, ProviderSnapshot> =
 // replayReasoningContent, strictThinkingSignature, etc.). All capability
 // fields (`apiKeyEnv` / `model` / `reasoningCapability` / `models` /
 // `contextWindow` / `maxOutputTokens` / `thinkingBudgetCap` /
-// `supportsThinking`) are sourced exclusively from the snapshot so the
+// `supportsThinking` / `reasoningCapabilityV2`) are sourced exclusively from the snapshot so the
 // snapshot stays the single source of truth — Provider classes only
 // supply runtime knobs.
 type ProviderRuntimeExtras = Omit<
@@ -123,6 +125,7 @@ type ProviderRuntimeExtras = Omit<
   | 'apiKeyEnv'
   | 'model'
   | 'reasoningCapability'
+  | 'reasoningCapabilityV2'
   | 'models'
   | 'contextWindow'
   | 'maxOutputTokens'
@@ -140,6 +143,7 @@ function buildProviderConfig<K extends ProviderName>(
     apiKeyEnv: snapshot.apiKeyEnv,
     model: snapshot.model,
     reasoningCapability: snapshot.reasoningCapability,
+    reasoningCapabilityV2: snapshot.reasoningCapabilityV2,
     models: snapshot.models,
     contextWindow: snapshot.contextWindow,
     maxOutputTokens: snapshot.maxOutputTokens,
@@ -392,8 +396,10 @@ export function getProviderConfiguredReasoningCapability(
 
   const snapshot = KODAX_PROVIDER_SNAPSHOTS[name];
   const effectiveModel = modelOverride ?? snapshot.model;
+  const descriptor = snapshot.models?.find((m) => m.id === effectiveModel);
 
-  return snapshot.modelReasoningCapabilities?.[effectiveModel]
+  return descriptor?.reasoningCapability
+    ?? snapshot.modelReasoningCapabilities?.[effectiveModel]
     ?? snapshot.reasoningCapability;
 }
 
@@ -412,6 +418,7 @@ export function getProviderList(): Array<{
   models: string[];
   configured: boolean;
   reasoningCapability: KodaXReasoningCapability;
+  reasoningCapabilityV2?: KodaXReasoningCapabilityV2;
   capabilityProfile: KodaXProviderCapabilityProfile;
 }> {
   const result: Array<{
@@ -420,6 +427,7 @@ export function getProviderList(): Array<{
     models: string[];
     configured: boolean;
     reasoningCapability: KodaXReasoningCapability;
+    reasoningCapabilityV2?: KodaXReasoningCapabilityV2;
     capabilityProfile: KodaXProviderCapabilityProfile;
   }> = [];
   for (const name of Object.keys(KODAX_PROVIDERS) as ProviderName[]) {
@@ -432,6 +440,7 @@ export function getProviderList(): Array<{
         : [snapshot.model],
       configured: !!process.env[snapshot.apiKeyEnv],
       reasoningCapability: snapshot.reasoningCapability,
+      reasoningCapabilityV2: snapshot.reasoningCapabilityV2,
       capabilityProfile: cloneCapabilityProfile(snapshot.capabilityProfile),
     });
   }
@@ -494,6 +503,8 @@ export interface KodaXModelCapabilities {
   supportsThinking: boolean;
   /** Effective reasoning capability for THIS model (per-model override aware). */
   reasoningCapability: KodaXReasoningCapability;
+  /** Effort-first reasoning capability metadata for THIS model, when known. */
+  reasoningCapabilityV2?: KodaXReasoningCapabilityV2;
   /** Maximum input context window (tokens). `undefined` for CLI-bridge providers. */
   contextWindow?: number;
   /**
@@ -533,6 +544,8 @@ function effectiveCapabilities(
     supportsThinking: snapshot.supportsThinking ?? false,
     reasoningCapability:
       descriptor.reasoningCapability ?? snapshot.reasoningCapability,
+    reasoningCapabilityV2:
+      descriptor.reasoningCapabilityV2 ?? snapshot.reasoningCapabilityV2,
     contextWindow: descriptor.contextWindow ?? snapshot.contextWindow,
     maxOutputTokens: descriptor.maxOutputTokens ?? snapshot.maxOutputTokens,
     thinkingBudgetCap:

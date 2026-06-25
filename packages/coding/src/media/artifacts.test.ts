@@ -87,4 +87,11 @@ describe('media artifacts', () => {
   it('rejects video artifact construction when media type cannot be inferred', () => {
     expect(() => createVideoArtifactFromPath('/tmp/demo.bin')).toThrow(KodaXMediaError);
   });
+
+  it('rejects file artifact construction when mediaType and mimeType disagree', () => {
+    expect(() => createFileArtifactFromPath('/tmp/report.pdf', {
+      mediaType: 'application/pdf',
+      mimeType: 'text/plain',
+    })).toThrow(KodaXMediaError);
+  });
 });

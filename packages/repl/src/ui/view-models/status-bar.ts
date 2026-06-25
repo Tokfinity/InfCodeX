@@ -428,6 +428,7 @@ function buildStatusBarSegments(props: StatusBarProps): StatusBarSegment[] {
     isThinkingActive,
     thinkingCharCount,
     reasoningMode = thinking ? "auto" : "off",
+    effort,
     reasoningCapability,
     isCompacting,
     toolInputCharCount,
@@ -468,6 +469,14 @@ function buildStatusBarSegments(props: StatusBarProps): StatusBarSegment[] {
     text: reasoningCapability ? `${rModeShort}/${rCapShort}` : rModeShort,
     color: getReasoningColor(reasoningMode),
   });
+
+  if (effort) {
+    segments.push({
+      id: "reasoning-effort",
+      text: `effort:${effort}`,
+      color: "warning",
+    });
+  }
 
   const iterationSegments = resolveIterationSegments({
     agentMode,

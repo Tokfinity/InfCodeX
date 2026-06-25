@@ -10,7 +10,9 @@ import { KodaXProviderError } from '../errors.js';
 import { parseToolInputWithSalvage } from './tool-input-parser.js';
 import {
   KodaXContentBlock,
+  KodaXNormalizedReasoningRequest,
   KodaXReasoningCapability,
+  KodaXReasoningCapabilityV2,
   KodaXProviderConfig,
   KodaXMessage,
   KodaXToolDefinition,
@@ -36,12 +38,42 @@ import { buildImageDataUrl } from './image-serialization.js';
 
 const KODAX_OPENAI_COMPAT_USER_AGENT = 'KodaX';
 
+type OpenAIReasoningAttempt =
+  | 'native-budget'
+  | 'native-effort'
+  | 'native-toggle'
+  | 'none';
+
+function isOpenAIReasoningAttempt(
+  capability: KodaXReasoningCapability,
+): capability is OpenAIReasoningAttempt {
+  return capability === 'native-budget' ||
+    capability === 'native-effort' ||
+    capability === 'native-toggle' ||
+    capability === 'none';
+}
+
 function getOpenAICompatDefaultHeaders(
   config: KodaXProviderConfig,
 ): Record<string, string> | undefined {
   return config.userAgentMode === 'sdk'
     ? undefined
     : { 'User-Agent': KODAX_OPENAI_COMPAT_USER_AGENT };
+}
+
+function selectOpenAIReasoningEffort(
+  reasoning: KodaXNormalizedReasoningRequest,
+): string | undefined {
+  if (reasoning.effort === 'none') {
+    return undefined;
+  }
+  if (reasoning.effort && reasoning.effort !== 'auto') {
+    return reasoning.effort;
+  }
+  if (reasoning.effort === 'auto' && reasoning.effortSource === 'explicit') {
+    return undefined;
+  }
+  return mapDepthToOpenAIReasoningEffort(reasoning.depth);
 }
 
 export type OpenAIUsageLike = {
@@ -449,7 +481,7 @@ export abstract class KodaXOpenAICompatProvider extends KodaXBaseProvider {
   private applyReasoningCapability(
     createParams: OpenAI.Chat.ChatCompletionCreateParamsStreaming,
     capability: KodaXReasoningCapability,
-    reasoning: Required<KodaXReasoningRequest>,
+    reasoning: KodaXNormalizedReasoningRequest,
   ): void {
     // The OpenAI SDK types do not expose provider-specific extensions like
     // Qwen's extra_body or Zhipu's thinking block, so we intentionally attach
@@ -464,10 +496,22 @@ export abstract class KodaXOpenAICompatProvider extends KodaXBaseProvider {
       ),
       maxOutputTokens,
     );
+    const capabilityV2 = this.getReasoningCapabilityV2(createParams.model);
+    if (capabilityV2) {
+      this.applyReasoningCapabilityV2(
+        params,
+        capabilityV2,
+        reasoning,
+        createParams.model,
+        requestedBudget,
+      );
+      return;
+    }
 
     switch (capability) {
       case 'native-effort': {
-        const reasoningEffort = mapDepthToOpenAIReasoningEffort(reasoning.depth);
+        this.validateExplicitReasoningEffort(reasoning, createParams.model);
+        const reasoningEffort = selectOpenAIReasoningEffort(reasoning);
         if (reasoningEffort) {
           params.reasoning_effort = reasoningEffort;
         }
@@ -502,6 +546,120 @@ export abstract class KodaXOpenAICompatProvider extends KodaXBaseProvider {
       default:
         break;
     }
+  }
+
+  private applyReasoningCapabilityV2(
+    params: Record<string, unknown>,
+    capability: KodaXReasoningCapabilityV2,
+    reasoning: KodaXNormalizedReasoningRequest,
+    model: string,
+    requestedBudget: number,
+  ): void {
+    this.validateExplicitReasoningEffort(reasoning, model);
+    const intent = this.resolveV2ReasoningIntent(reasoning, capability, model);
+    const preset = capability.reasoningPreset;
+
+    if (
+      preset === 'none' ||
+      capability.effortStrategy === 'none' ||
+      capability.effortStrategy === 'prompt-only' ||
+      preset === 'kimi-k2.7-code'
+    ) {
+      return;
+    }
+
+    if (preset === 'qwen-hybrid-thinking') {
+      if (intent.disabled) {
+        this.appendExtraBody(params, { enable_thinking: false });
+        return;
+      }
+      const budget = this.resolveV2ThinkingBudget(
+        capability,
+        intent.effort,
+        model,
+        requestedBudget,
+      );
+      this.appendExtraBody(params, {
+        enable_thinking: true,
+        ...(budget !== undefined ? { thinking_budget: budget } : {}),
+      });
+      return;
+    }
+
+    if (
+      preset === 'deepseek-v4-openai' ||
+      preset === 'zai-glm-5.2'
+    ) {
+      params.thinking = { type: intent.disabled ? 'disabled' : 'enabled' };
+      if (!intent.disabled && intent.effort) {
+        params.reasoning_effort = intent.effort;
+      }
+      return;
+    }
+
+    if (
+      preset === 'zai-glm-toggle' ||
+      preset === 'deepseek-toggle' ||
+      preset === 'kimi-hybrid-toggle' ||
+      capability.thinkingStrategy === 'provider-toggle'
+    ) {
+      params.thinking = { type: intent.disabled ? 'disabled' : 'enabled' };
+      return;
+    }
+
+    if (capability.effortStrategy === 'openai-chat-effort') {
+      if (intent.disabled) {
+        if (capability.supportedEfforts?.some((entry) => entry.value === 'none')) {
+          params.reasoning_effort = 'none';
+        }
+        return;
+      }
+      if (intent.effort) {
+        params.reasoning_effort = intent.effort;
+      }
+      return;
+    }
+
+    if (capability.effortStrategy === 'provider-budget') {
+      if (intent.disabled) {
+        params.thinking = { type: 'disabled' };
+        return;
+      }
+      const budget = this.resolveV2ThinkingBudget(
+        capability,
+        intent.effort,
+        model,
+        requestedBudget,
+      );
+      params.thinking = {
+        type: 'enabled',
+        ...(budget !== undefined ? { budget_tokens: budget } : {}),
+      };
+      return;
+    }
+
+    if (capability.effortStrategy === 'provider-toggle') {
+      params.thinking = { type: intent.disabled ? 'disabled' : 'enabled' };
+    }
+  }
+
+  private resolveV2ThinkingBudget(
+    capability: KodaXReasoningCapabilityV2,
+    effort: string | undefined,
+    model: string,
+    fallbackBudget: number,
+  ): number | undefined {
+    if (!capability.supportsManualThinkingBudget && capability.effortStrategy !== 'provider-budget') {
+      return undefined;
+    }
+    const budget = effort && capability.budgetByEffort?.[effort] !== undefined
+      ? capability.budgetByEffort[effort]
+      : fallbackBudget;
+    const cap = this.getEffectiveThinkingBudgetCap(model);
+    if (cap !== undefined) {
+      return Math.min(budget, cap);
+    }
+    return budget;
   }
 
   private getFallbackTerms(capability: KodaXReasoningCapability): string[] {
@@ -564,15 +722,10 @@ export abstract class KodaXOpenAICompatProvider extends KodaXBaseProvider {
         isReasoningEnabled(normalizedReasoning)
           ? this.getReasoningCapability(model)
           : 'none';
-      const attempts: Array<'native-budget' | 'native-effort' | 'native-toggle' | 'none'> = isReasoningEnabled(normalizedReasoning)
-        ? this.getReasoningFallbackChain(initialCapability)
-            .filter((capability): capability is 'native-budget' | 'native-effort' | 'native-toggle' | 'none' =>
-              capability === 'native-budget' ||
-              capability === 'native-effort' ||
-              capability === 'native-toggle' ||
-              capability === 'none',
-            )
-        : ['none'];
+      const attempts: OpenAIReasoningAttempt[] =
+        isReasoningEnabled(normalizedReasoning)
+          ? this.getReasoningFallbackChain(initialCapability).filter(isOpenAIReasoningAttempt)
+          : ['none'];
       const createParams: OpenAI.Chat.ChatCompletionCreateParamsStreaming = {
         model,
         messages: fullMessages,

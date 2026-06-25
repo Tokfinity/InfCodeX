@@ -1,12 +1,15 @@
 import { describe, expect, it } from 'vitest';
+import { Command } from 'commander';
 import {
   buildSessionOptions,
   createKodaXOptions,
   parseAgentModeOption,
+  parseEffortOption,
   parseOptionalNonNegativeInt,
   parseOutputModeOption,
   parseReasoningModeOption,
   parseRepoIntelligenceModeOption,
+  resolveCliEffort,
   resolveCliModelSelection,
   validateCliModeSelection,
   type CliOptions,
@@ -17,6 +20,7 @@ function createCliOptions(overrides: Partial<CliOptions> = {}): CliOptions {
     provider: 'openai',
     thinking: true,
     reasoningMode: 'auto',
+    effort: 'auto',
     agentMode: 'ama',
     outputMode: 'text',
     prompt: ['inspect', 'repo'],
@@ -108,6 +112,78 @@ describe('createKodaXOptions', () => {
         delete process.env.KODAX_REPO_INTELLIGENCE_TRACE;
       } else {
         process.env.KODAX_REPO_INTELLIGENCE_TRACE = previousTrace;
+      }
+    }
+  });
+
+  it('projects resolved effort into KodaX options', () => {
+    const options = createKodaXOptions(createCliOptions({ effort: 'high' }));
+    expect(options.effort).toBe('high');
+  });
+
+  it('projects effort none as disabled thinking', () => {
+    const options = createKodaXOptions(createCliOptions({
+      effort: 'none',
+      thinking: true,
+      reasoningMode: 'auto',
+    }));
+
+    expect(options.thinking).toBe(false);
+    expect(options.reasoningMode).toBe('off');
+  });
+});
+
+describe('parseEffortOption', () => {
+  it('normalizes effort values case-insensitively', () => {
+    expect(parseEffortOption(' HIGH ')).toBe('high');
+  });
+
+  it('rejects empty effort values', () => {
+    expect(() => parseEffortOption('   ')).toThrow('Reasoning effort cannot be empty.');
+  });
+});
+
+describe('resolveCliEffort', () => {
+  it('uses explicit --effort before config and legacy reasoning', () => {
+    const program = new Command();
+    program.option('--effort <level>', 'effort');
+    program.parse(['node', 'kodax', '--effort', 'high']);
+
+    expect(resolveCliEffort(program, program.opts(), { effort: 'low' })).toBe('high');
+  });
+
+  it('uses explicit --effort before KODAX_EFFORT', () => {
+    const previous = process.env.KODAX_EFFORT;
+    process.env.KODAX_EFFORT = 'low';
+    const program = new Command();
+    program.option('--effort <level>', 'effort');
+    program.parse(['node', 'kodax', '--effort', 'high']);
+
+    try {
+      expect(resolveCliEffort(program, program.opts(), { effort: 'medium' })).toBe('high');
+    } finally {
+      if (previous === undefined) {
+        delete process.env.KODAX_EFFORT;
+      } else {
+        process.env.KODAX_EFFORT = previous;
+      }
+    }
+  });
+
+  it('lets KODAX_EFFORT=auto clear only the env layer', () => {
+    const previous = process.env.KODAX_EFFORT;
+    process.env.KODAX_EFFORT = 'auto';
+    const program = new Command();
+    program.option('--effort <level>', 'effort');
+    program.parse(['node', 'kodax']);
+
+    try {
+      expect(resolveCliEffort(program, program.opts(), { effort: 'medium' })).toBe('medium');
+    } finally {
+      if (previous === undefined) {
+        delete process.env.KODAX_EFFORT;
+      } else {
+        process.env.KODAX_EFFORT = previous;
       }
     }
   });

@@ -4,24 +4,32 @@
  * Races an in-flight classifier promise against a short "quiet window".
  * When the classifier returns within the window, callers can use the
  * decision immediately — no confirm dialog, no perceptible latency. When
- * the window expires first, callers fall through to the normal escalate
- * flow (confirm dialog, with the classifier still running in background
- * so the dialog can adopt the verdict if it arrives in time).
+ * the window expires first, the caller (the auto-mode guardrail) awaits the
+ * SAME promise and adopts whatever verdict arrives — see Issue 143 (WS1).
+ * The window therefore only controls "resolve instantly vs wait a little
+ * longer"; it never decides "escalate vs not". An `allow` verdict never
+ * surfaces a confirm dialog no matter how slow the classifier is.
  *
- * Design ref: ADR-025 + FEATURE_158 (docs/features/v0.7.39.md).
+ * Design ref: ADR-025 + FEATURE_158 (docs/features/v0.7.39.md);
+ * late-verdict adoption: Issue 143 (docs/KNOWN_ISSUES.md).
  *
  * **The promise is NOT aborted on window expiry.** The caller retains
  * ownership; they pass the same `Promise<T>` to `speculativeRace` and
- * can `await` it elsewhere. This keeps the classifier from being
- * cancelled mid-flight when 95% of calls are sub-window — wasting the
- * remaining 5% would burn tokens already spent.
+ * then `await` it to adopt the late verdict. Cancelling mid-flight would
+ * waste tokens already spent AND throw away the verdict the caller is
+ * about to use.
+ *
+ * Callers may also force `windowMs = 0` to disable the race entirely when no
+ * interactive surface is present (Issue 143 WS2 — the guardrail does this for
+ * SDK / non-interactive / child-agent contexts, where there is no human to
+ * spare from latency, so it just awaits the verdict directly).
  *
  * Env knob: `KODAX_AUTO_SPECULATIVE_WINDOW_MS`
- *   - default: 500 (CC's equivalent race uses ~2000ms with timeout race;
- *     500ms is conservative for first iteration, finalized after
- *     micro-bench in commit body)
- *   - `0`     : disabled — `speculativeRace` waits forever for the promise
- *     (degrades to synchronous classify)
+ *   - default: 500 — the threshold past which a slow classify waits for its
+ *     real verdict instead of resolving instantly. See WS4 micro-bench in
+ *     docs/features/v0.7.39.md for the measured p50/p95 this is set against.
+ *   - `0`     : disabled — `speculativeRace` waits for the promise
+ *     (synchronous classify; identical verdict outcome to a non-zero window)
  *   - negative: treated as `0` (disabled)
  *   - non-numeric: ignored, default used
  */

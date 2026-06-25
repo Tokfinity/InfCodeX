@@ -59,6 +59,7 @@ import {
   LARGE_CONTENT_THRESHOLD_BYTES,
   DEFAULT_SUMMARY_MAX_CHARS,
 } from './blob-summarizer.js';
+import { normalizeReasoningEffortValue } from '@kodax-ai/llm';
 import { formatSize } from './truncate.js';
 // FEATURE_155 (v0.7.39) — dispatch banner steers the LLM to idle-yield
 // (end the turn text-only when out of useful work). The v0.7.38
@@ -438,6 +439,7 @@ export async function* toolDispatchChildTask(
   // anonymous dispatch.
   const subagentTypeRaw = typeof input.subagent_type === 'string' ? input.subagent_type.trim() : '';
   const specialistName = subagentTypeRaw || undefined;
+  let specialistEffort: KodaXChildContextBundle['effort'];
   if (specialistName) {
     const specialist = resolveConstructedAgent(specialistName);
     if (!specialist) {
@@ -458,6 +460,15 @@ export async function* toolDispatchChildTask(
     if (!readOnly && role !== 'worker') {
       return `[Tool Error] ${TOOL_NAME}: specialist "${specialistName}" is a write dispatch (readOnly=false) but current role "${role ?? 'unknown'}" cannot dispatch write children. Only Worker may dispatch write specialists.`;
     }
+    if (specialist.effort !== undefined && specialist.effort.trim().length > 0) {
+      try {
+        const normalizedEffort = normalizeReasoningEffortValue(specialist.effort);
+        specialistEffort = normalizedEffort === 'auto' ? undefined : normalizedEffort;
+      } catch (error) {
+        const message = error instanceof Error ? error.message : String(error);
+        return `[Tool Error] ${TOOL_NAME}: specialist "${specialistName}" declares invalid effort "${specialist.effort}". ${message}`;
+      }
+    }
   }
 
   // FEATURE_102 Phase 2 — optional explicit provider/model for this child.
@@ -467,6 +478,20 @@ export async function* toolDispatchChildTask(
     typeof input.provider === 'string' && input.provider.trim() ? input.provider.trim() : undefined;
   const childModel =
     typeof input.model === 'string' && input.model.trim() ? input.model.trim() : undefined;
+  let childEffort: KodaXChildContextBundle['effort'];
+  if (typeof input.effort === 'string' && input.effort.trim()) {
+    try {
+      const normalizedEffort = normalizeReasoningEffortValue(input.effort);
+      childEffort = normalizedEffort === 'auto' ? undefined : normalizedEffort;
+    } catch (error) {
+      const message = error instanceof Error ? error.message : String(error);
+      return `[Tool Error] ${TOOL_NAME}: invalid effort "${input.effort}". ${message}`;
+    }
+  }
+  if (specialistEffort !== undefined && childEffort !== undefined && childEffort !== specialistEffort) {
+    return `[Tool Error] ${TOOL_NAME}: specialist "${specialistName ?? 'unknown'}" locks effort "${specialistEffort}", but dispatch requested "${childEffort}". Remove the dispatch effort or match the specialist effort.`;
+  }
+  const effectiveChildEffort = specialistEffort ?? childEffort;
 
   const bundle: KodaXChildContextBundle = {
     id: childId,
@@ -484,6 +509,7 @@ export async function* toolDispatchChildTask(
     specialistName,
     ...(childProvider ? { provider: childProvider } : {}),
     ...(childModel ? { model: childModel } : {}),
+    ...(effectiveChildEffort ? { effort: effectiveChildEffort } : {}),
   };
 
   // --- Build executor options ---
@@ -496,6 +522,7 @@ export async function* toolDispatchChildTask(
       provider: parentConfig?.provider,
       model: parentConfig?.model,
       reasoningMode: parentConfig?.reasoningMode,
+      effort: parentConfig?.effort,
       extensionRuntime: ctx.extensionRuntime,
       events: ctx.parentEvents,
     },

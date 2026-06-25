@@ -87,5 +87,6 @@ export interface CLIExecutionOptions {
     prompt: string;
     sessionId?: string; // Session identifier for resume flows
     model?: string; // Model override for CLIs that support explicit selection
+    reasoningEffort?: string; // Reasoning effort override for CLIs that expose model_reasoning_effort
     signal?: AbortSignal; // Cancellation signal
 }

@@ -77,6 +77,16 @@ export function createFileArtifactFromPath(
   filePath: string,
   options: CreateFileArtifactFromPathOptions = {},
 ): KodaXFileInputArtifact {
+  if (
+    options.mediaType !== undefined
+    && options.mimeType !== undefined
+    && options.mediaType !== options.mimeType
+  ) {
+    throw new KodaXMediaError(
+      'UNSUPPORTED_MEDIA_TYPE',
+      `File artifact mediaType and mimeType disagree: ${options.mediaType} != ${options.mimeType}.`,
+    );
+  }
   return {
     kind: 'file',
     path: filePath,

@@ -131,7 +131,7 @@ describe('registerConstructedAgent / resolveConstructedAgent', () => {
     expect(planner?.handoffs?.[0]?.target.instructions).toBe('');
   });
 
-  it('passes through reasoning / model / provider fields', () => {
+  it('passes through reasoning / model / provider / effort fields', () => {
     registerConstructedAgent(
       buildAgentArtifact({
         name: 'rich',
@@ -140,6 +140,7 @@ describe('registerConstructedAgent / resolveConstructedAgent', () => {
           reasoning: { default: 'balanced', max: 'deep' },
           model: 'claude-sonnet-4-6',
           provider: 'anthropic',
+          effort: 'high',
         },
       }),
     );
@@ -147,6 +148,7 @@ describe('registerConstructedAgent / resolveConstructedAgent', () => {
     expect(agent?.reasoning?.default).toBe('balanced');
     expect(agent?.model).toBe('claude-sonnet-4-6');
     expect(agent?.provider).toBe('anthropic');
+    expect(agent?.effort).toBe('high');
   });
 });
 

@@ -10,7 +10,9 @@ import { parseToolInputWithSalvage } from './tool-input-parser.js';
 import { KodaXProviderError } from '../errors.js';
 import {
   KodaXContentBlock,
+  KodaXNormalizedReasoningRequest,
   KodaXProviderConfig,
+  KodaXReasoningCapabilityV2,
   KodaXMessage,
   KodaXToolDefinition,
   KodaXProviderStreamOptions,
@@ -36,6 +38,12 @@ import {
 import { readImageFileAsBase64, resolveImageMediaType } from './image-serialization.js';
 
 const KODAX_ANTHROPIC_COMPAT_USER_AGENT = 'KodaX';
+const KODAX_ANTHROPIC_EFFORT_BETA_HEADER = 'effort-2025-11-24';
+
+interface AnthropicRequestOptions {
+  readonly signal?: AbortSignal;
+  readonly headers?: Record<string, string>;
+}
 
 function getAnthropicCompatDefaultHeaders(
   config: KodaXProviderConfig,
@@ -102,6 +110,58 @@ function normalizeAnthropicUsage(
   };
 }
 
+function isRecord(value: unknown): value is Record<string, unknown> {
+  return typeof value === 'object' && value !== null && !Array.isArray(value);
+}
+
+function selectAnthropicOutputEffort(
+  reasoning: KodaXNormalizedReasoningRequest,
+): string | undefined {
+  if (!reasoning.enabled || reasoning.effort === 'auto' || reasoning.effort === 'none') {
+    return undefined;
+  }
+  return reasoning.effort;
+}
+
+function applyAnthropicOutputEffort(
+  params: Anthropic.Messages.MessageCreateParams,
+  reasoning: KodaXNormalizedReasoningRequest,
+): void {
+  const effort = selectAnthropicOutputEffort(reasoning);
+  if (!effort) {
+    return;
+  }
+  const rawParams = params as unknown as Record<string, unknown>;
+  const existing = rawParams.output_config;
+  rawParams.output_config = {
+    ...(isRecord(existing) ? existing : {}),
+    effort,
+  };
+}
+
+function setAnthropicOutputEffort(
+  params: Anthropic.Messages.MessageCreateParams,
+  effort: string | undefined,
+): void {
+  if (!effort) {
+    return;
+  }
+  const rawParams = params as unknown as Record<string, unknown>;
+  const existing = rawParams.output_config;
+  rawParams.output_config = {
+    ...(isRecord(existing) ? existing : {}),
+    effort,
+  };
+}
+
+function hasAnthropicOutputEffort(
+  params: Anthropic.Messages.MessageCreateParams,
+): boolean {
+  const rawParams = params as unknown as Record<string, unknown>;
+  const outputConfig = rawParams.output_config;
+  return isRecord(outputConfig) && typeof outputConfig.effort === 'string';
+}
+
 export abstract class KodaXAnthropicCompatProvider extends KodaXBaseProvider {
   abstract override readonly name: string;
   readonly supportsThinking = true;
@@ -140,6 +200,148 @@ export abstract class KodaXAnthropicCompatProvider extends KodaXBaseProvider {
     // Drop the memoized client so the next call rebuilds it, discarding the
     // stale keep-alive socket pool.
     this._client = undefined;
+  }
+
+  private buildMessageCreateOptions(
+    params: Anthropic.Messages.MessageCreateParams,
+    model: string,
+    signal?: AbortSignal,
+  ): AnthropicRequestOptions {
+    const capability = this.getReasoningCapabilityV2(model);
+    const headers = capability?.requiresEffortBetaHeader && hasAnthropicOutputEffort(params)
+      ? { 'anthropic-beta': KODAX_ANTHROPIC_EFFORT_BETA_HEADER }
+      : undefined;
+    return {
+      ...(signal ? { signal } : {}),
+      ...(headers ? { headers } : {}),
+    };
+  }
+
+  private applyReasoningCapabilityV2(
+    params: Anthropic.Messages.MessageCreateParams,
+    capability: KodaXReasoningCapabilityV2,
+    reasoning: KodaXNormalizedReasoningRequest,
+    model: string,
+    maxOutputTokens: number,
+  ): void {
+    this.validateExplicitReasoningEffort(reasoning, model);
+    const intent = this.resolveV2ReasoningIntent(reasoning, capability, model);
+    const preset = capability.reasoningPreset;
+    const rawParams = params as unknown as Record<string, unknown>;
+
+    if (
+      preset === 'none' ||
+      capability.effortStrategy === 'none' ||
+      capability.effortStrategy === 'prompt-only' ||
+      preset === 'kimi-k2.7-code' ||
+      preset === 'minimax-m2-always'
+    ) {
+      return;
+    }
+
+    if (intent.disabled) {
+      if (
+        preset === 'zai-glm-5.2' ||
+        preset === 'zai-glm-toggle' ||
+        preset === 'deepseek-v4-anthropic' ||
+        preset === 'deepseek-toggle' ||
+        preset === 'kimi-hybrid-toggle' ||
+        preset === 'minimax-m3' ||
+        preset === 'mimo-v2.5-toggle' ||
+        capability.thinkingStrategy === 'provider-toggle'
+      ) {
+        params.thinking = {
+          type: 'disabled',
+        } as Anthropic.Messages.ThinkingConfigParam;
+      }
+      return;
+    }
+
+    if (preset === 'zai-glm-5.2') {
+      params.thinking = {
+        type: 'enabled',
+      } as Anthropic.Messages.ThinkingConfigParam;
+      if (intent.effort) {
+        rawParams.reasoning_effort = intent.effort;
+      }
+      return;
+    }
+
+    if (preset === 'deepseek-v4-anthropic') {
+      params.thinking = {
+        type: 'enabled',
+      } as Anthropic.Messages.ThinkingConfigParam;
+      setAnthropicOutputEffort(params, intent.effort);
+      return;
+    }
+
+    if (preset === 'minimax-m3') {
+      params.thinking = {
+        type: 'adaptive',
+      } as Anthropic.Messages.ThinkingConfigParam;
+      return;
+    }
+
+    if (
+      preset === 'zai-glm-toggle' ||
+      preset === 'deepseek-toggle' ||
+      preset === 'kimi-hybrid-toggle' ||
+      preset === 'mimo-v2.5-toggle' ||
+      capability.effortStrategy === 'provider-toggle'
+    ) {
+      params.thinking = {
+        type: 'enabled',
+      } as Anthropic.Messages.ThinkingConfigParam;
+      return;
+    }
+
+    if (
+      capability.effortStrategy === 'anthropic-output-effort' ||
+      capability.thinkingStrategy === 'anthropic-adaptive'
+    ) {
+      params.thinking = {
+        type: 'adaptive',
+      } as Anthropic.Messages.ThinkingConfigParam;
+      setAnthropicOutputEffort(params, intent.effort);
+      return;
+    }
+
+    if (
+      capability.effortStrategy === 'provider-budget' ||
+      capability.thinkingStrategy === 'anthropic-budget'
+    ) {
+      const budget = this.resolveV2ThinkingBudget(
+        capability,
+        intent.effort,
+        reasoning,
+        model,
+        maxOutputTokens,
+      );
+      params.thinking = {
+        type: 'enabled',
+        budget_tokens: budget,
+      };
+    }
+  }
+
+  private resolveV2ThinkingBudget(
+    capability: KodaXReasoningCapabilityV2,
+    effort: string | undefined,
+    reasoning: KodaXNormalizedReasoningRequest,
+    model: string,
+    maxOutputTokens: number,
+  ): number {
+    const budgetFromEffort = effort ? capability.budgetByEffort?.[effort] : undefined;
+    const requestedBudget = budgetFromEffort ?? resolveThinkingBudget(
+      this.config,
+      reasoning.depth,
+      reasoning.taskType,
+    );
+    const cap = this.getEffectiveThinkingBudgetCap(model);
+    const cappedBudget = cap !== undefined
+      ? Math.min(requestedBudget, cap)
+      : requestedBudget;
+    return clampThinkingBudget(cappedBudget, maxOutputTokens);
   }
 
   /**
@@ -266,6 +468,7 @@ export abstract class KodaXAnthropicCompatProvider extends KodaXBaseProvider {
     return this.withRateLimit(async () => {
       const normalizedReasoning = this.normalizeReasoning(reasoning);
       const model = streamOptions?.modelOverride ?? this.config.model;
+      this.validateExplicitReasoningEffort(normalizedReasoning, model);
       const maxOutputTokens =
         streamOptions?.maxOutputTokensOverride ?? this.getEffectiveMaxOutputTokens(model);
       const convertedMessages = await this.convertMessages(messages, model);
@@ -301,7 +504,16 @@ export abstract class KodaXAnthropicCompatProvider extends KodaXBaseProvider {
           };
         }
 
-        if (capability === 'native-budget') {
+        const capabilityV2 = this.getReasoningCapabilityV2(model);
+        if (capabilityV2) {
+          this.applyReasoningCapabilityV2(
+            kwargs,
+            capabilityV2,
+            normalizedReasoning,
+            model,
+            maxOutputTokens,
+          );
+        } else if (capability === 'native-budget') {
           const requestedBudget = resolveThinkingBudget(
             this.config,
             normalizedReasoning.depth,
@@ -317,11 +529,11 @@ export abstract class KodaXAnthropicCompatProvider extends KodaXBaseProvider {
           } as Anthropic.Messages.ThinkingConfigParam;
         } else if (capability === 'native-adaptive') {
           // Opus 4.7+ only accept adaptive thinking — the model itself
-          // decides depth, so KodaX sends no budget. `output_config.effort`
-          // would refine depth but isn't plumbed through KodaX yet.
+          // decides depth, so KodaX sends no budget.
           kwargs.thinking = {
             type: 'adaptive',
           } as Anthropic.Messages.ThinkingConfigParam;
+          applyAnthropicOutputEffort(kwargs, normalizedReasoning);
         }
 
         return kwargs;
@@ -360,9 +572,10 @@ export abstract class KodaXAnthropicCompatProvider extends KodaXBaseProvider {
       for (const capability of attempts) {
         while (!response) {
           try {
+            const request = buildRequest(capability);
             response = await this.client.messages.create(
-              buildRequest(capability),
-              signal ? { signal } : {},
+              request,
+              this.buildMessageCreateOptions(request, model, signal),
             );
             if (capability !== initialCapability) {
               this.persistReasoningCapabilityOverride(capability, model);
@@ -629,6 +842,7 @@ export abstract class KodaXAnthropicCompatProvider extends KodaXBaseProvider {
     return this.withRateLimit(async () => {
       const normalizedReasoning = this.normalizeReasoning(reasoning);
       const model = streamOptions?.modelOverride ?? this.config.model;
+      this.validateExplicitReasoningEffort(normalizedReasoning, model);
       const maxOutputTokens =
         streamOptions?.maxOutputTokensOverride ?? this.getEffectiveMaxOutputTokens(model);
       const convertedMessages = await this.convertMessages(messages, model);
@@ -663,7 +877,16 @@ export abstract class KodaXAnthropicCompatProvider extends KodaXBaseProvider {
           };
         }
 
-        if (capability === 'native-budget') {
+        const capabilityV2 = this.getReasoningCapabilityV2(model);
+        if (capabilityV2) {
+          this.applyReasoningCapabilityV2(
+            kwargs,
+            capabilityV2,
+            normalizedReasoning,
+            model,
+            maxOutputTokens,
+          );
+        } else if (capability === 'native-budget') {
           const requestedBudget = resolveThinkingBudget(
             this.config,
             normalizedReasoning.depth,
@@ -679,11 +902,11 @@ export abstract class KodaXAnthropicCompatProvider extends KodaXBaseProvider {
           } as Anthropic.Messages.ThinkingConfigParam;
         } else if (capability === 'native-adaptive') {
           // Opus 4.7+ only accept adaptive thinking — the model itself
-          // decides depth, so KodaX sends no budget. `output_config.effort`
-          // would refine depth but isn't plumbed through KodaX yet.
+          // decides depth, so KodaX sends no budget.
           kwargs.thinking = {
             type: 'adaptive',
           } as Anthropic.Messages.ThinkingConfigParam;
+          applyAnthropicOutputEffort(kwargs, normalizedReasoning);
         }
 
         return kwargs;
@@ -695,9 +918,10 @@ export abstract class KodaXAnthropicCompatProvider extends KodaXBaseProvider {
       for (const capability of attempts) {
         while (!response) {
           try {
+            const request = buildRequest(capability);
             response = await this.client.messages.create(
-              buildRequest(capability),
-              signal ? { signal } : {},
+              request,
+              this.buildMessageCreateOptions(request, model, signal),
             );
             if (capability !== initialCapability) {
               this.persistReasoningCapabilityOverride(capability, model);

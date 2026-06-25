@@ -166,6 +166,85 @@ export type KodaXReasoningCapability =
   | 'prompt-only'
   | 'unknown';
 
+export type KodaXStableEffortIntent =
+  | 'auto'
+  | 'none'
+  | 'low'
+  | 'medium'
+  | 'high';
+
+export type KodaXWireReasoningEffort = string;
+
+export type KodaXReasoningPresetName =
+  | 'zai-glm-5.2'
+  | 'zai-glm-toggle'
+  | 'deepseek-v4-openai'
+  | 'deepseek-v4-anthropic'
+  | 'deepseek-toggle'
+  | 'kimi-k2.7-code'
+  | 'kimi-hybrid-toggle'
+  | 'minimax-m3'
+  | 'minimax-m2-always'
+  | 'mimo-v2.5-toggle'
+  | 'qwen-hybrid-thinking'
+  | 'openai-chat-reasoning'
+  | 'openai-responses-reasoning'
+  | 'codex-cli-effort'
+  | 'claude-adaptive-xhigh'
+  | 'claude-adaptive-max'
+  | 'anthropic-budget'
+  | 'generic-thinking-toggle'
+  | 'none';
+
+export interface KodaXReasoningEffortRequest {
+  readonly value: KodaXWireReasoningEffort;
+  readonly isExplicit: boolean;
+}
+
+export interface KodaXReasoningEffortPreset {
+  readonly value: KodaXWireReasoningEffort;
+  readonly description?: string;
+  readonly isDefault?: boolean;
+  readonly isUserVisible?: boolean;
+}
+
+export type KodaXReasoningEffortWireStrategy =
+  | 'openai-responses-effort'
+  | 'openai-chat-effort'
+  | 'codex-cli-config'
+  | 'anthropic-output-effort'
+  | 'provider-budget'
+  | 'provider-toggle'
+  | 'prompt-only'
+  | 'none';
+
+export type KodaXThinkingWireStrategy =
+  | 'anthropic-adaptive'
+  | 'anthropic-budget'
+  | 'provider-budget'
+  | 'provider-toggle'
+  | 'none';
+
+export interface KodaXReasoningCapabilityV2 {
+  readonly reasoningPreset?: KodaXReasoningPresetName;
+  readonly effortStrategy: KodaXReasoningEffortWireStrategy;
+  readonly thinkingStrategy?: KodaXThinkingWireStrategy;
+  readonly defaultEffort?: KodaXWireReasoningEffort;
+  readonly supportedEfforts?: readonly KodaXReasoningEffortPreset[];
+  readonly effortAliases?: Partial<Record<KodaXWireReasoningEffort, KodaXWireReasoningEffort>>;
+  readonly disabledEfforts?: readonly KodaXWireReasoningEffort[];
+  readonly localRejectEfforts?: readonly KodaXWireReasoningEffort[];
+  readonly allowCustomEffort?: boolean;
+  readonly budgetByEffort?: Partial<Record<KodaXWireReasoningEffort, number>>;
+  readonly supportsReasoningEffort?: boolean;
+  readonly supportsReasoningSummary?: boolean;
+  readonly supportsEncryptedReasoningReplay?: boolean;
+  readonly supportsAdaptiveThinking?: boolean;
+  readonly supportsManualThinkingBudget?: boolean;
+  readonly supportsDisabledThinking?: boolean;
+  readonly requiresEffortBetaHeader?: boolean;
+}
+
 export type KodaXProviderTransport = 'native-api' | 'cli-bridge';
 
 export type KodaXProviderConversationSemantics =
@@ -366,8 +445,19 @@ export interface KodaXReasoningRequest {
   enabled?: boolean;
   mode?: KodaXReasoningMode;
   depth?: KodaXThinkingDepth;
+  effort?: KodaXWireReasoningEffort;
   taskType?: KodaXTaskType;
   executionMode?: KodaXExecutionMode;
+}
+
+export interface KodaXNormalizedReasoningRequest {
+  enabled: boolean;
+  mode: KodaXReasoningMode;
+  depth: KodaXThinkingDepth;
+  effort?: KodaXWireReasoningEffort;
+  effortSource?: 'explicit' | 'legacy';
+  taskType: KodaXTaskType;
+  executionMode: KodaXExecutionMode;
 }
 
 // ============== Provider 配置 ==============
@@ -379,6 +469,11 @@ export interface KodaXModelDescriptor {
   maxOutputTokens?: number;
   thinkingBudgetCap?: number;
   reasoningCapability?: KodaXReasoningCapability;
+  /** Preferred V2 template name for this model descriptor. */
+  reasoningPreset?: KodaXReasoningPresetName;
+  /** Optional overrides layered onto `reasoningPreset` for this model. */
+  reasoning?: Partial<KodaXReasoningCapabilityV2>;
+  reasoningCapabilityV2?: KodaXReasoningCapabilityV2;
   /**
    * Per-model override for `replayReasoningContent`. Falls through to the
    * provider-level flag when undefined. Lets a single gateway endpoint
@@ -486,6 +581,8 @@ export interface KodaXCustomProviderConfig {
   baseUrl: string;
   apiKeyEnv: string;
   model: string;
+  reasoningPreset?: KodaXReasoningPresetName;
+  reasoning?: Partial<KodaXReasoningCapabilityV2>;
   /**
    * Additional available models beyond the default. Accepts either a
    * plain model id string (legacy) or a KodaXModelDescriptor object
@@ -501,6 +598,7 @@ export interface KodaXCustomProviderConfig {
   userAgentMode?: KodaXProviderUserAgentMode;
   supportsThinking?: boolean;
   reasoningCapability?: KodaXReasoningCapability;
+  reasoningCapabilityV2?: KodaXReasoningCapabilityV2;
   capabilityProfile?: KodaXProviderCapabilityProfile;
   contextWindow?: number;
   maxOutputTokens?: number;
@@ -548,6 +646,7 @@ export interface KodaXProviderConfig {
   userAgentMode?: KodaXProviderUserAgentMode;
   supportsThinking: boolean;
   reasoningCapability?: KodaXReasoningCapability;
+  reasoningCapabilityV2?: KodaXReasoningCapabilityV2;
   capabilityProfile?: KodaXProviderCapabilityProfile;
   /** 模型的上下文窗口大小 (tokens) */
   contextWindow?: number;

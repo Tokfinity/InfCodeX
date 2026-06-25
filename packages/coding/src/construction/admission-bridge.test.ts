@@ -64,12 +64,13 @@ describe('buildAdmissionManifest', () => {
     expect(manifest.handoffs?.[1]?.description).toBe('classify');
   });
 
-  it('passes through reasoning / model / provider / outputSchema / maxBudget unchanged', () => {
+  it('passes through reasoning / model / provider / effort / outputSchema / maxBudget unchanged', () => {
     const content: AgentContent = {
       instructions: 'i',
       reasoning: { default: 'balanced', max: 'deep', escalateOnRevise: true },
       model: 'claude-sonnet-4-6',
       provider: 'anthropic',
+      effort: 'high',
       outputSchema: { type: 'object', properties: { ok: { type: 'boolean' } } },
       maxBudget: 5000,
     };
@@ -77,6 +78,7 @@ describe('buildAdmissionManifest', () => {
     expect(manifest.reasoning?.default).toBe('balanced');
     expect(manifest.model).toBe('claude-sonnet-4-6');
     expect(manifest.provider).toBe('anthropic');
+    expect(manifest.effort).toBe('high');
     expect(manifest.outputSchema).toEqual({
       type: 'object',
       properties: { ok: { type: 'boolean' } },

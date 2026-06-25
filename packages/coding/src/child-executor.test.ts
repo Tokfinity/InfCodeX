@@ -1579,6 +1579,85 @@ describe('executeChildAgents — FEATURE_191 specialist routing (A.2b)', () => {
     expect(childOptions.model).toBe('deepseek-v4-pro');
   });
 
+  it('inherits parent reasoning effort when the dispatch does not override it', async () => {
+    mockRunKodaX.mockResolvedValue(okResult());
+
+    const bundles = [createBundle({ id: 'cb-effort-parent', readOnly: true })];
+    await executeChildAgents(bundles, createCtx(), createOptions({
+      parentOptions: { provider: 'anthropic', model: 'claude-opus-4-8', effort: 'high' },
+    }));
+
+    const childOptions = mockRunKodaX.mock.calls[0]![0] as { effort?: string };
+    expect(childOptions.effort).toBe('high');
+  });
+
+  it('lets a dispatch-level reasoning effort override the parent effort', async () => {
+    mockRunKodaX.mockResolvedValue(okResult());
+
+    const bundles = [createBundle({
+      id: 'cb-effort-bundle',
+      readOnly: true,
+      provider: 'deepseek',
+      model: 'deepseek-v4-pro',
+      effort: 'max',
+    })];
+    await executeChildAgents(bundles, createCtx(), createOptions({
+      parentOptions: { provider: 'anthropic', model: 'claude-opus-4-8', effort: 'high' },
+    }));
+
+    const childOptions = mockRunKodaX.mock.calls[0]![0] as { effort?: string };
+    expect(childOptions.effort).toBe('max');
+  });
+
+  it('uses a specialist-declared reasoning effort before the parent effort', async () => {
+    registerConstructedAgent(buildSpecialistArtifact({
+      name: 'deep-reviewer',
+      content: {
+        instructions: 'DEEP REVIEWER',
+        tools: [{ ref: 'builtin:read' }],
+        description: 'deep review',
+        effort: 'xhigh',
+      },
+    }));
+    mockRunKodaX.mockResolvedValue(okResult());
+
+    const bundles = [createBundle({ id: 'cb-effort-specialist', readOnly: true, specialistName: 'deep-reviewer' })];
+    await executeChildAgents(bundles, createCtx(), createOptions({
+      parentOptions: { provider: 'anthropic', model: 'claude-opus-4-8', effort: 'low' },
+    }));
+
+    const childOptions = mockRunKodaX.mock.calls[0]![0] as { effort?: string };
+    expect(childOptions.effort).toBe('xhigh');
+  });
+
+  it('fails when a dispatch effort conflicts with a specialist-declared effort', async () => {
+    registerConstructedAgent(buildSpecialistArtifact({
+      name: 'locked-reviewer',
+      content: {
+        instructions: 'LOCKED REVIEWER',
+        tools: [{ ref: 'builtin:read' }],
+        description: 'locked review',
+        effort: 'high',
+      },
+    }));
+    mockRunKodaX.mockResolvedValue(okResult());
+
+    const bundles = [createBundle({
+      id: 'cb-effort-conflict',
+      readOnly: true,
+      specialistName: 'locked-reviewer',
+      effort: 'low',
+    })];
+    const result = await executeChildAgents(bundles, createCtx(), createOptions({
+      parentOptions: { provider: 'anthropic', model: 'claude-opus-4-8', effort: 'medium' },
+    }));
+
+    expect(mockRunKodaX).not.toHaveBeenCalled();
+    expect(result.results[0]?.status).toBe('failed');
+    expect(result.results[0]?.summary).toContain('locks effort "high"');
+    expect(result.results[0]?.summary).toContain('dispatch requested "low"');
+  });
+
   it('bundle.provider/model take priority over the specialist override (FEATURE_102 P2 > P1)', async () => {
     registerConstructedAgent(buildSpecialistArtifact({
       name: 'opus-spec',

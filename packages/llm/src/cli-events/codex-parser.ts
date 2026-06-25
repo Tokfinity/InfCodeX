@@ -26,6 +26,13 @@ interface CodexRawEvent {
     response?: unknown;
 }
 
+function buildReasoningEffortArgs(effort: string | undefined): string[] {
+    if (!effort || effort === 'auto') {
+        return [];
+    }
+    return ['--config', `model_reasoning_effort=${JSON.stringify(effort)}`];
+}
+
 export class CodexCLIExecutor extends CLIExecutor {
     private model: string;
 
@@ -46,6 +53,7 @@ export class CodexCLIExecutor extends CLIExecutor {
     protected buildArgs(options: CLIExecutionOptions): string[] {
         this.model = options.model ?? this.model;
         const modelArgs = options.model ? ['-m', options.model] : [];
+        const effortArgs = buildReasoningEffortArgs(options.reasoningEffort);
 
         // Codex CLI shapes:
         //   first prompt: codex exec --json --full-auto "prompt"
@@ -57,13 +65,14 @@ export class CodexCLIExecutor extends CLIExecutor {
             return [
                 'exec', 'resume', options.sessionId,
                 ...modelArgs,
+                ...effortArgs,
                 options.prompt,
                 ...this.config.baseArgs.filter(a => a !== 'exec'), // `exec` was inserted manually above.
             ];
         }
 
         // Fresh execution.
-        return [...this.config.baseArgs, ...modelArgs, options.prompt];
+        return [...this.config.baseArgs, ...modelArgs, ...effortArgs, options.prompt];
     }
 
     protected parseLine(line: string): CLIEvent | null {

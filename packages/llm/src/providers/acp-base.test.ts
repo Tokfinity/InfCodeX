@@ -11,7 +11,7 @@ const acpMockState = vi.hoisted(() => ({
   instances: [] as MockAcpClient[],
   nextSessionId: 1,
   promptImpl: undefined as
-    | ((client: MockAcpClient, text: string, sessionId: string, signal?: AbortSignal, options?: { model?: string }) => Promise<{
+    | ((client: MockAcpClient, text: string, sessionId: string, signal?: AbortSignal, options?: { model?: string; reasoningEffort?: string }) => Promise<{
       usage?: {
         inputTokens: number;
         outputTokens: number;
@@ -31,7 +31,7 @@ class MockAcpClient {
   readonly connect = vi.fn(async () => {});
   readonly createNewSession = vi.fn(async () => `acp-session-${acpMockState.nextSessionId++}`);
   readonly disconnect = vi.fn(() => {});
-  readonly prompt = vi.fn(async (text: string, sessionId: string, signal?: AbortSignal, options?: { model?: string }) => {
+  readonly prompt = vi.fn(async (text: string, sessionId: string, signal?: AbortSignal, options?: { model?: string; reasoningEffort?: string }) => {
     return await acpMockState.promptImpl?.(this, text, sessionId, signal, options);
   });
 
@@ -205,6 +205,48 @@ describe('KodaXAcpProvider', () => {
       'system',
       undefined,
       { sessionId: 'thread-model', modelOverride: 'codex-mini' },
+    );
+  });
+
+  it('forwards concrete reasoning effort into ACP prompt requests', async () => {
+    const provider = new TestAcpProvider();
+
+    acpMockState.promptImpl = async (_client, _text, _sessionId, _signal, options) => {
+      expect(options?.reasoningEffort).toBe('high');
+    };
+
+    await provider.stream(
+      [{ role: 'user', content: 'latest prompt' }],
+      [] as KodaXToolDefinition[],
+      'system',
+      {
+        enabled: true,
+        mode: 'deep',
+        depth: 'high',
+        effort: 'high',
+      },
+      { sessionId: 'thread-effort' },
+    );
+  });
+
+  it('forwards reasoning effort none into ACP prompt requests', async () => {
+    const provider = new TestAcpProvider();
+
+    acpMockState.promptImpl = async (_client, _text, _sessionId, _signal, options) => {
+      expect(options?.reasoningEffort).toBe('none');
+    };
+
+    await provider.stream(
+      [{ role: 'user', content: 'latest prompt' }],
+      [] as KodaXToolDefinition[],
+      'system',
+      {
+        enabled: false,
+        mode: 'off',
+        depth: 'off',
+        effort: 'none',
+      },
+      { sessionId: 'thread-none' },
     );
   });
 

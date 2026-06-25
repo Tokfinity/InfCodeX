@@ -135,6 +135,7 @@ export function buildAdmissionManifest(
       : {}),
     ...(content.model !== undefined ? { model: content.model } : {}),
     ...(content.provider !== undefined ? { provider: content.provider } : {}),
+    ...(content.effort !== undefined ? { effort: content.effort } : {}),
     ...(content.outputSchema !== undefined ? { outputSchema: content.outputSchema } : {}),
     ...(content.maxBudget !== undefined ? { maxBudget: content.maxBudget } : {}),
     ...(declaredInvariants !== undefined ? { declaredInvariants } : {}),

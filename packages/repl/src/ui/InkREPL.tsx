@@ -186,6 +186,7 @@ import {
   formatReasoningCapabilityShort,
   getProviderModel,
   getProviderReasoningCapability,
+  resolvePermissionModeEffort,
 } from "../common/utils.js";
 import { buildToolConfirmationPrompt } from "../common/tool-confirmation.js";
 import { t } from "../common/i18n.js";
@@ -545,17 +546,6 @@ interface InkREPLProps {
    */
   setCurrentConfigRef: (cfg: CurrentConfig) => void;
   /**
-   * Hook the component invokes after `/reload-agents` so the bootstrap's
-   * agents-files ref refreshes. Without this, a `/reload-agents` after
-   * AGENTS.md edits would update the React state but the auto-mode
-   * guardrail's `getAgentsFiles` closure would still return the original
-   * snapshot (the guardrail itself caches `claudeMd` at construction time
-   * so this only helps when the user reloads BEFORE the first auto-mode
-   * tool call — but that's the intended semantics and matches the
-   * readline REPL).
-   */
-  onAgentsFilesReload: (files: AgentsFile[]) => void;
-  /**
    * v0.7.43 (FEATURE_173 Part B follow-up): the Team Mode handle bootstrapped
    * in `runInkInteractiveMode`. Threaded into the component so `/new`,
    * `/resume`, and `/fork` slash command handlers can republish the resolved
@@ -667,6 +657,13 @@ function resolveInitialReasoningMode(
     return 'auto';
   }
   return 'off';
+}
+
+function resolveInitialEffort(
+  options: Pick<KodaXOptions, 'effort'>,
+  config: { effort?: string },
+): string | undefined {
+  return options.effort ?? config.effort;
 }
 
 function formatCapturedConsoleOutput(args: readonly unknown[]): string {
@@ -1186,6 +1183,12 @@ const Banner: React.FC<BannerProps> = ({
             <Text color={theme.colors.warning}>{`reason:${config.reasoningMode}`}</Text>
           </>
         )}
+        {config.effort && (
+          <>
+            <Text dimColor>{"  路  "}</Text>
+            <Text color={theme.colors.warning}>{`effort:${config.effort}`}</Text>
+          </>
+        )}
       </Box>
 
       {/* Compaction — amber gutter */}
@@ -1224,7 +1227,8 @@ function buildBannerTranscriptSection(props: BannerProps): TranscriptSection {
     ? Math.round(props.compactionInfo.contextWindow * props.compactionInfo.triggerPercent / 100 / 1000)
     : 0;
   const taglineLine = "  ▎ AI Coding Agent · Minimalist & Intelligent";
-  const versionLine = `  ▎ v${KODAX_VERSION}  ·  ${props.config.provider}/${model} [${reasoningCapabilityShort}]  ·  ${props.config.agentMode.toUpperCase()} / ${props.config.permissionMode}${props.config.reasoningMode !== "off" ? `  ·  reason:${props.config.reasoningMode}` : ""}`;
+  const effortSuffix = props.config.effort ? `  ·  effort:${props.config.effort}` : "";
+  const versionLine = `  ▎ v${KODAX_VERSION}  ·  ${props.config.provider}/${model} [${reasoningCapabilityShort}]  ·  ${props.config.agentMode.toUpperCase()} / ${props.config.permissionMode}${props.config.reasoningMode !== "off" ? `  ·  reason:${props.config.reasoningMode}` : ""}${effortSuffix}`;
   const compactionLine = props.compactionInfo
     ? `  ▎ ctx ${ctxK}k  ·  compaction ${props.compactionInfo.enabled ? "on" : "off"} @ ${props.compactionInfo.triggerPercent}% (${triggerK}k)`
     : undefined;
@@ -1323,7 +1327,6 @@ const InkREPLInner: React.FC<InkREPLProps> = ({
   setAutoModeAskUser,
   setAutoModeEngineChange,
   setCurrentConfigRef,
-  onAgentsFilesReload,
   teamModeHandle,
 }) => {
   const { exit } = useApp();
@@ -1412,6 +1415,22 @@ const InkREPLInner: React.FC<InkREPLProps> = ({
   // State
   const [isLoading, setIsLoading] = useState(false);
   const [currentConfig, setCurrentConfig] = useState<CurrentConfig>(config);
+  const effectiveEffort = useMemo(
+    () => resolvePermissionModeEffort(currentConfig),
+    [
+      currentConfig.effort,
+      currentConfig.effortOverride,
+      currentConfig.permissionMode,
+      currentConfig.planModeEffort,
+    ],
+  );
+  const displayedConfig = useMemo<CurrentConfig>(
+    () => ({
+      ...currentConfig,
+      effort: effectiveEffort,
+    }),
+    [currentConfig, effectiveEffort],
+  );
 
   // Reactive contextWindow resolution. See
   // `view-models/compaction-info.ts` for the documented cascade — the
@@ -2911,7 +2930,7 @@ const InkREPLInner: React.FC<InkREPLProps> = ({
     return lines;
   }, [isTranscriptMode, isLoading, todoPlanViewModel, workflowLiveViewModel]);
   const bannerProps = useMemo<BannerProps>(() => ({
-    config: currentConfig,
+    config: displayedConfig,
     sessionId: context.sessionId,
     workingDir: options.context?.gitRoot || process.cwd(),
     terminalWidth,
@@ -2924,7 +2943,7 @@ const InkREPLInner: React.FC<InkREPLProps> = ({
   }), [
     effectiveCompactionInfo,
     context.sessionId,
-    currentConfig,
+    displayedConfig,
     options.context?.gitRoot,
     terminalWidth,
   ]);
@@ -3535,6 +3554,7 @@ const InkREPLInner: React.FC<InkREPLProps> = ({
         model: currentConfig.model ?? getProviderModel(currentConfig.provider) ?? currentConfig.provider,
         thinking: currentConfig.thinking,
         reasoningMode: currentConfig.reasoningMode,
+        effort: effectiveEffort,
         reasoningCapability: formatReasoningCapabilityShort(
           getProviderReasoningCapability(currentConfig.provider, currentConfig.model),
         ),
@@ -3565,6 +3585,7 @@ const InkREPLInner: React.FC<InkREPLProps> = ({
       currentConfig.model,
       currentConfig.thinking,
       currentConfig.reasoningMode,
+      effectiveEffort,
       isTranscriptMode,
       statusBarStreamingState,
       streamingState.maxIter,
@@ -4615,6 +4636,7 @@ const InkREPLInner: React.FC<InkREPLProps> = ({
     ...options,
     thinking: currentConfig.thinking,
     reasoningMode: currentConfig.reasoningMode,
+    effort: effectiveEffort,
     agentMode: currentConfig.agentMode,
     context: {
       ...options.context,
@@ -4640,6 +4662,9 @@ const InkREPLInner: React.FC<InkREPLProps> = ({
     // mode. setSessionPermissionMode keeps this in sync on subsequent toggles.
     guardrails: buildAutoModeGuardrails(currentConfig.permissionMode, autoModeBootstrap),
   });
+  useEffect(() => {
+    currentOptionsRef.current.effort = effectiveEffort;
+  }, [effectiveEffort]);
   // Permission-related refs (not part of KodaXOptions anymore)
   const permissionModeRef = useRef<PermissionMode>(currentConfig.permissionMode);
   useEffect(() => {
@@ -4691,6 +4716,7 @@ const InkREPLInner: React.FC<InkREPLProps> = ({
     // tool call, and stepping out of auto removes it.
     currentOptionsRef.current = {
       ...currentOptionsRef.current,
+      effort: resolvePermissionModeEffort({ ...currentConfigRef.current, permissionMode: mode }),
       guardrails: buildAutoModeGuardrails(mode, autoModeBootstrap),
     };
     // FEATURE_092 phase 2b.8: refresh the status-bar engine indicator. Outside
@@ -7899,6 +7925,7 @@ const InkREPLInner: React.FC<InkREPLProps> = ({
           ...currentOptionsRef.current,
           provider: currentConfig.provider,
           model: currentConfig.model,
+          effort: resolvePermissionModeEffort(currentConfig),
           thinking: currentConfig.thinking,
           reasoningMode: currentConfig.reasoningMode,
           agentMode: currentConfig.agentMode,
@@ -8232,6 +8259,13 @@ const InkREPLInner: React.FC<InkREPLProps> = ({
             currentOptionsRef.current.thinking = enabled;
             currentOptionsRef.current.reasoningMode = reasoningMode;
           },
+          setEffort: (effort?: string) => {
+            setCurrentConfig((prev) => ({
+              ...prev,
+              effort,
+              effortOverride: effort !== undefined,
+            }));
+          },
           setReasoningMode: (mode: KodaXReasoningMode) => {
             const thinking = mode !== 'off';
             setCurrentConfig((prev) => ({
@@ -8460,6 +8494,7 @@ const InkREPLInner: React.FC<InkREPLProps> = ({
             ...currentOptionsRef.current,
             provider: currentConfig.provider,
             model: currentConfig.model,
+            effort: resolvePermissionModeEffort(currentConfig),
             thinking: currentConfig.thinking,
             reasoningMode: currentConfig.reasoningMode,
             agentMode: currentConfig.agentMode,
@@ -8475,11 +8510,6 @@ const InkREPLInner: React.FC<InkREPLProps> = ({
               cwd: process.cwd(),
               projectRoot: context.gitRoot ?? undefined,
             });
-            // Propagate to the bootstrap's mutable ref so the auto-mode
-            // guardrail's `getAgentsFiles` closure sees the refresh on its
-            // next read (helps if the reload happens BEFORE the guardrail
-            // is lazy-constructed; after that, claudeMd is frozen).
-            onAgentsFilesReload(fresh);
             return fresh;
           },
           // Start and stop the compacting indicator.
@@ -9468,6 +9498,8 @@ export async function runInkInteractiveMode(options: InkREPLOptions): Promise<vo
   const initialProvider = options.provider ?? config.provider ?? KODAX_DEFAULT_PROVIDER;
   const initialModel = options.model ?? config.model;
   const initialReasoningMode = resolveInitialReasoningMode(options, config);
+  const initialEffort = resolveInitialEffort(options, config);
+  const initialEffortOverride = options.effort !== undefined;
   const initialAgentMode = options.agentMode ?? config.agentMode ?? 'ama';
   const initialThinking = initialReasoningMode !== 'off';
   // Load permission mode from config file (not from CLI options)
@@ -9487,6 +9519,9 @@ export async function runInkInteractiveMode(options: InkREPLOptions): Promise<vo
   const currentConfig: CurrentConfig = {
     provider: initialProvider,
     model: initialModel,
+    effort: initialEffort,
+    effortOverride: initialEffortOverride,
+    planModeEffort: config.planModeEffort,
     thinking: initialThinking,
     reasoningMode: initialReasoningMode,
     agentMode: initialAgentMode,
@@ -9661,18 +9696,12 @@ export async function runInkInteractiveMode(options: InkREPLOptions): Promise<vo
   teamModeHandle?.writer.update({ sessionId: context.sessionId });
 
   // FEATURE_092 phase 2b.7b: bootstrap the auto-mode guardrail factory before
-  // render so the Ink component receives a ready-to-use accessor. Agents files
-  // are loaded once here and exposed via a mutable ref so /reload-agents
-  // refreshes propagate into the guardrail's claudeMd snapshot when the
-  // guardrail is first constructed (lazy on first auto-mode tool call).
-  // askUser is wired to a ref the component fills in once `showConfirmDialog`
-  // is in scope; until then escalations fail closed (block) — see
-  // `inkAutoModeAskUserRef` below.
-  const initialAgentsFiles = await loadAgentsFiles({
-    cwd: process.cwd(),
-    projectRoot: gitRoot ?? undefined,
-  });
-  const agentsFilesRef: { current: AgentsFile[] } = { current: initialAgentsFiles };
+  // render so the Ink component receives a ready-to-use accessor. The
+  // classifier reads project AGENTS.md fresh via `loadAgentsFiles`
+  // (mtime-cached) on every classify, so no agents-files ref bridge is needed
+  // (FEATURE_092 follow-up — AGENTS.md staleness fix). askUser is wired to a
+  // ref the component fills in once `showConfirmDialog` is in scope; until
+  // then escalations fail closed (block) — see `inkAutoModeAskUserRef` below.
   const inkAutoModeAskUserRef: {
     current:
       | ((
@@ -9704,7 +9733,7 @@ export async function runInkInteractiveMode(options: InkREPLOptions): Promise<vo
   // observe the latest values whenever the classifier or askUser fires.
   //
   // The same pattern is used for `inkAutoModeAskUserRef` /
-  // `inkAutoModeEngineChangeRef` / `agentsFilesRef` above.
+  // `inkAutoModeEngineChangeRef` above.
   const inkCurrentConfigRef: { current: CurrentConfig } = { current: currentConfig };
   const autoModeSettings = loadAutoModeSettings();
   const autoModeBootstrap: AutoModeBootstrapResult = await bootstrapAutoMode({
@@ -9719,7 +9748,6 @@ export async function runInkInteractiveMode(options: InkREPLOptions): Promise<vo
       return handler(call, reason, signals);
     },
     projectRoot: gitRoot ?? process.cwd(),
-    getAgentsFiles: () => agentsFilesRef.current,
     getCurrentProviderName: () => inkCurrentConfigRef.current.provider,
     getCurrentModel: () => inkCurrentConfigRef.current.model,
     getCurrentPermissionMode: () => inkCurrentConfigRef.current.permissionMode,
@@ -9788,9 +9816,6 @@ export async function runInkInteractiveMode(options: InkREPLOptions): Promise<vo
         }}
         setCurrentConfigRef={(cfg) => {
           inkCurrentConfigRef.current = cfg;
-        }}
-        onAgentsFilesReload={(files) => {
-          agentsFilesRef.current = files;
         }}
         teamModeHandle={teamModeHandle}
         onExit={() => {

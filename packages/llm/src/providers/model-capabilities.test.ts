@@ -68,6 +68,22 @@ describe('built-in provider model capabilities (no API key required)', () => {
     expect(getModelCapabilities('deepseek', 'deepseek-v4-pro')?.contextWindow).toBe(1_000_000);
   });
 
+  it('exposes effort-first reasoning metadata on built-in model capabilities', () => {
+    expect(getModelCapabilities('openai', 'gpt-5.3-codex')?.reasoningCapabilityV2).toMatchObject({
+      effortStrategy: 'openai-chat-effort',
+      defaultEffort: 'medium',
+    });
+    expect(getModelCapabilities('codex-cli', KODAX_PROVIDER_SNAPSHOTS['codex-cli'].model)?.reasoningCapabilityV2)
+      .toMatchObject({
+        effortStrategy: 'codex-cli-config',
+        allowCustomEffort: true,
+      });
+    expect(getModelCapabilities('anthropic', 'claude-opus-4-8')?.reasoningCapabilityV2).toMatchObject({
+      effortStrategy: 'anthropic-output-effort',
+      thinkingStrategy: 'anthropic-adaptive',
+    });
+  });
+
   it('exposes Ark Coding per-model context windows (k2.6=256K, M3=1M, M2.7=204K, v4-pro=1M, doubao=256K, glm-5.1=200K)', () => {
     expect(getModelCapabilities('ark-coding', 'kimi-k2.6')?.contextWindow).toBe(256_000);
     expect(getModelCapabilities('ark-coding', 'deepseek-v4-pro')?.contextWindow).toBe(1_000_000);
@@ -241,6 +257,58 @@ describe('custom provider model capabilities', () => {
       'legacy-alt-1',
       'legacy-alt-2',
     ]);
+  });
+
+  it('maps custom provider reasoningPreset into effective V2 metadata', () => {
+    registerCustomProviders([
+      {
+        name: 'glm-custom',
+        baseUrl: 'https://glm.example/v1',
+        apiKeyEnv: 'GLM_CUSTOM_API_KEY',
+        protocol: 'openai',
+        model: 'glm-5.2',
+        reasoningPreset: 'zai-glm-5.2',
+        reasoning: { defaultEffort: 'high' },
+      },
+    ]);
+
+    const caps = getCustomModelCapabilities('glm-custom', 'glm-5.2');
+    expect(caps?.reasoningCapability).toBe('native-effort');
+    expect(caps?.supportsThinking).toBe(true);
+    expect(caps?.reasoningCapabilityV2).toMatchObject({
+      reasoningPreset: 'zai-glm-5.2',
+      effortStrategy: 'openai-chat-effort',
+      defaultEffort: 'high',
+    });
+  });
+
+  it('maps per-model custom reasoningPreset and keeps prompt-only supportsThinking false', () => {
+    registerCustomProviders([
+      {
+        name: 'mixed-custom',
+        baseUrl: 'https://mixed.example/v1',
+        apiKeyEnv: 'MIXED_CUSTOM_API_KEY',
+        protocol: 'anthropic',
+        model: 'default-toggle',
+        reasoningPreset: 'mimo-v2.5-toggle',
+        models: [
+          { id: 'kimi-code', reasoningPreset: 'kimi-k2.7-code' },
+        ],
+      },
+    ]);
+
+    const defaultCaps = getCustomModelCapabilities('mixed-custom', 'default-toggle');
+    expect(defaultCaps?.reasoningCapability).toBe('native-toggle');
+    expect(defaultCaps?.supportsThinking).toBe(true);
+
+    const kimiCaps = getCustomModelCapabilities('mixed-custom', 'kimi-code');
+    expect(kimiCaps?.reasoningCapability).toBe('prompt-only');
+    expect(kimiCaps?.supportsThinking).toBe(false);
+    expect(kimiCaps?.reasoningCapabilityV2).toMatchObject({
+      reasoningPreset: 'kimi-k2.7-code',
+      effortStrategy: 'prompt-only',
+      localRejectEfforts: ['none', 'minimal'],
+    });
   });
 });
 

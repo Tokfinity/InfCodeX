@@ -424,6 +424,10 @@ export const BUILTIN_TOOL_DEFINITIONS: LocalToolDefinition[] = [
           type: 'string',
           description: 'Optional. Specific model id for this child, paired with `provider`. Omit to inherit your model.',
         },
+        effort: {
+          type: 'string',
+          description: 'Optional. Reasoning effort for this child (for example none, low, medium, high, xhigh, max). Omit or use auto to inherit the parent/default effort. If subagent_type names a specialist with a declared effort, that specialist effort is locked and a different dispatch effort is rejected. Unsupported values are rejected by the selected provider/model.',
+        },
       },
       required: ['objective'],
     },

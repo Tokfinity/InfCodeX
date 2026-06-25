@@ -104,6 +104,7 @@ class TestAnthropicProvider extends KodaXAnthropicCompatProvider {
   constructor(
     capability: KodaXReasoningCapability,
     client: unknown,
+    configOverrides: Partial<KodaXProviderConfig> = {},
   ) {
     super();
     this.config = {
@@ -112,6 +113,7 @@ class TestAnthropicProvider extends KodaXAnthropicCompatProvider {
       supportsThinking: capability !== 'prompt-only',
       reasoningCapability: capability,
       maxOutputTokens: 32768,
+      ...configOverrides,
     };
     this.client = client as any;
   }
@@ -213,6 +215,33 @@ describe('anthropic reasoning capability', () => {
     });
   });
 
+  it('caps V2 budgetByEffort values with thinkingBudgetCap for native-budget providers', async () => {
+    const create = vi.fn().mockResolvedValue(createCompletedAnthropicStream());
+    const provider = new TestAnthropicProvider('native-budget', {
+      messages: { create },
+    }, {
+      thinkingBudgetCap: 8000,
+      reasoningCapabilityV2: {
+        reasoningPreset: 'anthropic-budget',
+        effortStrategy: 'provider-budget',
+        thinkingStrategy: 'anthropic-budget',
+        supportedEfforts: [{ value: 'high' }],
+        budgetByEffort: { high: 16000 },
+        supportsManualThinkingBudget: true,
+      },
+    });
+
+    await provider.stream(MESSAGES, TOOLS, 'system', {
+      ...reasoning,
+      effort: 'high',
+    });
+
+    expect(create.mock.calls[0]?.[0].thinking).toMatchObject({
+      type: 'enabled',
+      budget_tokens: 8000,
+    });
+  });
+
   it('sends only enabled thinking for native-toggle providers', async () => {
     const create = vi.fn().mockResolvedValue(createCompletedAnthropicStream());
     const provider = new TestAnthropicProvider('native-toggle', {
@@ -226,6 +255,147 @@ describe('anthropic reasoning capability', () => {
       type: 'enabled',
     });
     expect(kwargs.thinking).not.toHaveProperty('budget_tokens');
+  });
+
+  it('sends adaptive thinking plus output effort for native-adaptive providers', async () => {
+    const create = vi.fn().mockResolvedValue(createCompletedAnthropicStream());
+    const provider = new TestAnthropicProvider('native-adaptive', {
+      messages: { create },
+    });
+
+    await provider.stream(MESSAGES, TOOLS, 'system', {
+      ...reasoning,
+      effort: 'high',
+    });
+
+    const kwargs = create.mock.calls[0]?.[0];
+    expect(kwargs.thinking).toMatchObject({
+      type: 'adaptive',
+    });
+    expect(kwargs.thinking).not.toHaveProperty('budget_tokens');
+    expect(kwargs.output_config).toEqual({ effort: 'high' });
+  });
+
+  it('omits output effort for native-adaptive providers when effort is explicit auto', async () => {
+    const create = vi.fn().mockResolvedValue(createCompletedAnthropicStream());
+    const provider = new TestAnthropicProvider('native-adaptive', {
+      messages: { create },
+    });
+
+    await provider.stream(MESSAGES, TOOLS, 'system', {
+      ...reasoning,
+      effort: 'auto',
+    });
+
+    const kwargs = create.mock.calls[0]?.[0];
+    expect(kwargs.thinking).toMatchObject({
+      type: 'adaptive',
+    });
+    expect(kwargs).not.toHaveProperty('output_config');
+  });
+
+  it('adds the effort beta header only when a V2 profile explicitly requires it', async () => {
+    const create = vi.fn().mockResolvedValue(createCompletedAnthropicStream());
+    const provider = new TestAnthropicProvider('native-adaptive', {
+      messages: { create },
+    }, {
+      reasoningCapabilityV2: {
+        reasoningPreset: 'claude-adaptive-max',
+        effortStrategy: 'anthropic-output-effort',
+        thinkingStrategy: 'anthropic-adaptive',
+        supportedEfforts: [
+          { value: 'high', isDefault: true },
+          { value: 'max' },
+        ],
+        requiresEffortBetaHeader: true,
+      },
+    });
+
+    await provider.stream(MESSAGES, TOOLS, 'system', {
+      ...reasoning,
+      effort: 'high',
+    });
+
+    expect(create.mock.calls[0]?.[0].output_config).toEqual({ effort: 'high' });
+    expect(create.mock.calls[0]?.[1]).toMatchObject({
+      headers: { 'anthropic-beta': 'effort-2025-11-24' },
+    });
+  });
+
+  it('sends GLM-5.2 top-level reasoning_effort with aliases through V2 metadata', async () => {
+    const create = vi.fn().mockResolvedValue(createCompletedAnthropicStream());
+    const provider = new TestAnthropicProvider('native-effort', {
+      messages: { create },
+    }, {
+      reasoningCapabilityV2: {
+        reasoningPreset: 'zai-glm-5.2',
+        effortStrategy: 'openai-chat-effort',
+        thinkingStrategy: 'provider-toggle',
+        supportedEfforts: [
+          { value: 'none' },
+          { value: 'minimal' },
+          { value: 'high' },
+          { value: 'xhigh' },
+          { value: 'max' },
+        ],
+        effortAliases: { xhigh: 'max' },
+        disabledEfforts: ['none', 'minimal'],
+      },
+    });
+
+    await provider.stream(MESSAGES, TOOLS, 'system', {
+      ...reasoning,
+      effort: 'xhigh',
+    });
+
+    const kwargs = create.mock.calls[0]?.[0];
+    expect(kwargs.thinking).toEqual({ type: 'enabled' });
+    expect(kwargs.reasoning_effort).toBe('max');
+  });
+
+  it('rejects impossible Kimi K2.7 Code disabling efforts locally', async () => {
+    const create = vi.fn().mockResolvedValue(createCompletedAnthropicStream());
+    const provider = new TestAnthropicProvider('native-toggle', {
+      messages: { create },
+    }, {
+      reasoningCapabilityV2: {
+        reasoningPreset: 'kimi-k2.7-code',
+        effortStrategy: 'prompt-only',
+        localRejectEfforts: ['none', 'minimal'],
+      },
+    });
+
+    await expect(provider.stream(MESSAGES, TOOLS, 'system', {
+      ...reasoning,
+      effort: 'none',
+    })).rejects.toThrow(/does not support reasoning effort "none"/);
+    expect(create).not.toHaveBeenCalled();
+  });
+
+  it('sends disabled thinking for MiniMax M3 disabling efforts', async () => {
+    const create = vi.fn().mockResolvedValue(createCompletedAnthropicStream());
+    const provider = new TestAnthropicProvider('native-adaptive', {
+      messages: { create },
+    }, {
+      reasoningCapabilityV2: {
+        reasoningPreset: 'minimax-m3',
+        effortStrategy: 'provider-toggle',
+        thinkingStrategy: 'anthropic-adaptive',
+        disabledEfforts: ['none', 'minimal'],
+        supportedEfforts: [
+          { value: 'none' },
+          { value: 'minimal' },
+          { value: 'medium' },
+        ],
+      },
+    });
+
+    await provider.stream(MESSAGES, TOOLS, 'system', {
+      ...reasoning,
+      effort: 'minimal',
+    });
+
+    expect(create.mock.calls[0]?.[0].thinking).toEqual({ type: 'disabled' });
   });
 
   it('does not send native thinking config for prompt-only providers', async () => {

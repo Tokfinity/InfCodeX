@@ -67,6 +67,11 @@ const SOURCE_BACKED_NATIVE_MEDIA_ROUTES = new Set([
   'mimo/mimo-v2.5',
 ]);
 
+type ImageCapabilityRoute =
+  | 'anthropic-official'
+  | 'openai-official'
+  | 'source-backed';
+
 function unsupported<TMediaType extends string>(
   reason: string,
 ): KodaXModalityInputCapability<TMediaType> {
@@ -144,21 +149,29 @@ function hasSourceBackedNativeMedia(provider: string, model: string | undefined)
   return SOURCE_BACKED_NATIVE_MEDIA_ROUTES.has(route);
 }
 
-function imageCapabilityReason(
+function resolveImageCapabilityRoute(
   provider: string,
   officialImageSupported: boolean,
   sourceBackedNativeMedia: boolean,
+): ImageCapabilityRoute | undefined {
+  if (sourceBackedNativeMedia) return 'source-backed';
+  if (!officialImageSupported) return undefined;
+  if (provider === 'openai') return 'openai-official';
+  if (provider === 'anthropic') return 'anthropic-official';
+  return undefined;
+}
+
+function imageCapabilityReason(
+  route: ImageCapabilityRoute,
 ): string {
-  if (provider === 'openai' && officialImageSupported) {
-    return 'Model route supports KodaX image input. Direct-path image/gif is sent as image/gif, but OpenAI requires non-animated GIF semantics.';
+  switch (route) {
+    case 'openai-official':
+      return 'Model route supports KodaX image input. Direct-path image/gif is sent as image/gif, but OpenAI requires non-animated GIF semantics.';
+    case 'anthropic-official':
+      return 'Model route supports KodaX image input. Direct-path image/gif is sent as image/gif, but Anthropic uses only the first frame of animated GIFs.';
+    case 'source-backed':
+      return 'Model route supports KodaX image input. Direct-path image/gif is sent as image/gif; animated-GIF interpretation is provider-owned.';
   }
-  if (provider === 'anthropic' && officialImageSupported) {
-    return 'Model route supports KodaX image input. Direct-path image/gif is sent as image/gif, but Anthropic uses only the first frame of animated GIFs.';
-  }
-  if (sourceBackedNativeMedia) {
-    return 'Model route supports KodaX image input. Direct-path image/gif is sent as image/gif; animated-GIF interpretation is provider-owned.';
-  }
-  return 'Model route supports KodaX image input.';
 }
 
 export function getModelInputCapabilities(
@@ -168,17 +181,18 @@ export function getModelInputCapabilities(
   const model = input.model?.trim() || resolveProviderDefaultModel(provider);
   const officialImageSupported = hasOfficialImageSupport(provider);
   const sourceBackedNativeMedia = hasSourceBackedNativeMedia(provider, model);
-  const imageSupported = officialImageSupported || sourceBackedNativeMedia;
+  const imageCapabilityRoute = resolveImageCapabilityRoute(
+    provider,
+    officialImageSupported,
+    sourceBackedNativeMedia,
+  );
+  const imageSupported = imageCapabilityRoute !== undefined;
   const videoNative = sourceBackedNativeMedia;
 
   return {
     text: true,
     image: imageSupported
-      ? supportedImage(imageCapabilityReason(
-        provider,
-        officialImageSupported,
-        sourceBackedNativeMedia,
-      ))
+      ? supportedImage(imageCapabilityReason(imageCapabilityRoute))
       : unsupported('No verified KodaX image-input route for this provider/model.'),
     video: videoNative
       ? nativeVideoUnwired('Model route is native-video capable, but KodaX SDK video sending is not wired yet. Reject or downgrade before send.')

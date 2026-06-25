@@ -14,6 +14,10 @@ import type {
   KodaXModelDescriptor,
   KodaXProviderCapabilityProfile,
   KodaXReasoningCapability,
+  KodaXReasoningCapabilityV2,
+  KodaXReasoningPresetName,
+  KodaXReasoningEffortWireStrategy,
+  KodaXThinkingWireStrategy,
   KodaXVerifyStrategy,
 } from '../types.js';
 
@@ -44,6 +48,7 @@ export interface ProviderCapabilityJsonEntry {
   readonly model?: string;
   readonly models?: ReadonlyArray<KodaXModelDescriptor>;
   readonly reasoningCapability: KodaXReasoningCapability;
+  readonly reasoningCapabilityV2?: KodaXReasoningCapabilityV2;
   readonly modelReasoningCapabilities?: Readonly<
     Record<string, KodaXReasoningCapability>
   >;
@@ -79,6 +84,7 @@ export interface ProviderSnapshot {
   readonly models?: ReadonlyArray<KodaXModelDescriptor>;
   readonly apiKeyEnv: string;
   readonly reasoningCapability: KodaXReasoningCapability;
+  readonly reasoningCapabilityV2?: KodaXReasoningCapabilityV2;
   readonly modelReasoningCapabilities?: Readonly<
     Record<string, KodaXReasoningCapability>
   >;
@@ -99,6 +105,47 @@ const VALID_REASONING_CAPABILITIES: readonly KodaXReasoningCapability[] = [
   'native-toggle',
   'native-adaptive',
   'unknown',
+];
+
+const VALID_EFFORT_STRATEGIES: readonly KodaXReasoningEffortWireStrategy[] = [
+  'openai-responses-effort',
+  'openai-chat-effort',
+  'codex-cli-config',
+  'anthropic-output-effort',
+  'provider-budget',
+  'provider-toggle',
+  'prompt-only',
+  'none',
+];
+
+const VALID_THINKING_STRATEGIES: readonly KodaXThinkingWireStrategy[] = [
+  'anthropic-adaptive',
+  'anthropic-budget',
+  'provider-budget',
+  'provider-toggle',
+  'none',
+];
+
+const VALID_REASONING_PRESETS: readonly KodaXReasoningPresetName[] = [
+  'zai-glm-5.2',
+  'zai-glm-toggle',
+  'deepseek-v4-openai',
+  'deepseek-v4-anthropic',
+  'deepseek-toggle',
+  'kimi-k2.7-code',
+  'kimi-hybrid-toggle',
+  'minimax-m3',
+  'minimax-m2-always',
+  'mimo-v2.5-toggle',
+  'qwen-hybrid-thinking',
+  'openai-chat-reasoning',
+  'openai-responses-reasoning',
+  'codex-cli-effort',
+  'claude-adaptive-xhigh',
+  'claude-adaptive-max',
+  'anthropic-budget',
+  'generic-thinking-toggle',
+  'none',
 ];
 
 const VALID_PROFILE_NAMES: readonly CapabilityProfileName[] = [
@@ -155,6 +202,44 @@ function optionalBoolean(value: unknown, path: string): boolean | undefined {
   return value;
 }
 
+function optionalStringArray(value: unknown, path: string): readonly string[] | undefined {
+  if (value === undefined) return undefined;
+  if (!Array.isArray(value)) {
+    throw new Error(`provider-capabilities.json: ${path} must be an array`);
+  }
+  return value.map((entry, index) =>
+    requireString(entry, `${path}[${index}]`),
+  );
+}
+
+function optionalStringMap(value: unknown, path: string): Record<string, string> | undefined {
+  if (value === undefined) return undefined;
+  if (!isPlainObject(value)) {
+    throw new Error(`provider-capabilities.json: ${path} must be an object`);
+  }
+  const out: Record<string, string> = {};
+  for (const [key, entry] of Object.entries(value)) {
+    out[key] = requireString(entry, `${path}.${key}`);
+  }
+  return out;
+}
+
+function optionalReasoningPreset(
+  value: unknown,
+  path: string,
+): KodaXReasoningPresetName | undefined {
+  if (value === undefined) return undefined;
+  if (
+    typeof value !== 'string' ||
+    !VALID_REASONING_PRESETS.includes(value as KodaXReasoningPresetName)
+  ) {
+    throw new Error(
+      `provider-capabilities.json: ${path} must be one of ${VALID_REASONING_PRESETS.join(', ')}, got ${JSON.stringify(value)}`,
+    );
+  }
+  return value as KodaXReasoningPresetName;
+}
+
 function requireReasoningCapability(
   value: unknown,
   path: string,
@@ -168,6 +253,180 @@ function requireReasoningCapability(
     );
   }
   return value as KodaXReasoningCapability;
+}
+
+function requireEffortStrategy(
+  value: unknown,
+  path: string,
+): KodaXReasoningEffortWireStrategy {
+  if (
+    typeof value !== 'string' ||
+    !VALID_EFFORT_STRATEGIES.includes(value as KodaXReasoningEffortWireStrategy)
+  ) {
+    throw new Error(
+      `provider-capabilities.json: ${path} must be one of ${VALID_EFFORT_STRATEGIES.join(', ')}, got ${JSON.stringify(value)}`,
+    );
+  }
+  return value as KodaXReasoningEffortWireStrategy;
+}
+
+function optionalThinkingStrategy(
+  value: unknown,
+  path: string,
+): KodaXThinkingWireStrategy | undefined {
+  if (value === undefined) return undefined;
+  if (
+    typeof value !== 'string' ||
+    !VALID_THINKING_STRATEGIES.includes(value as KodaXThinkingWireStrategy)
+  ) {
+    throw new Error(
+      `provider-capabilities.json: ${path} must be one of ${VALID_THINKING_STRATEGIES.join(', ')}, got ${JSON.stringify(value)}`,
+    );
+  }
+  return value as KodaXThinkingWireStrategy;
+}
+
+function validateReasoningCapabilityV2(
+  raw: unknown,
+  path: string,
+): KodaXReasoningCapabilityV2 | undefined {
+  if (raw === undefined) return undefined;
+  if (!isPlainObject(raw)) {
+    throw new Error(`provider-capabilities.json: ${path} must be an object`);
+  }
+  const effortStrategy = requireEffortStrategy(
+    raw.effortStrategy,
+    `${path}.effortStrategy`,
+  );
+  const reasoningPreset = optionalReasoningPreset(
+    raw.reasoningPreset,
+    `${path}.reasoningPreset`,
+  );
+  const thinkingStrategy = optionalThinkingStrategy(
+    raw.thinkingStrategy,
+    `${path}.thinkingStrategy`,
+  );
+  const defaultEffort = optionalString(raw.defaultEffort, `${path}.defaultEffort`);
+  const effortAliases = optionalStringMap(
+    raw.effortAliases,
+    `${path}.effortAliases`,
+  );
+  const disabledEfforts = optionalStringArray(
+    raw.disabledEfforts,
+    `${path}.disabledEfforts`,
+  );
+  const localRejectEfforts = optionalStringArray(
+    raw.localRejectEfforts,
+    `${path}.localRejectEfforts`,
+  );
+  const allowCustomEffort = optionalBoolean(raw.allowCustomEffort, `${path}.allowCustomEffort`);
+  const supportsReasoningEffort = optionalBoolean(
+    raw.supportsReasoningEffort,
+    `${path}.supportsReasoningEffort`,
+  );
+  const supportsReasoningSummary = optionalBoolean(
+    raw.supportsReasoningSummary,
+    `${path}.supportsReasoningSummary`,
+  );
+  const supportsEncryptedReasoningReplay = optionalBoolean(
+    raw.supportsEncryptedReasoningReplay,
+    `${path}.supportsEncryptedReasoningReplay`,
+  );
+  const supportsAdaptiveThinking = optionalBoolean(
+    raw.supportsAdaptiveThinking,
+    `${path}.supportsAdaptiveThinking`,
+  );
+  const supportsManualThinkingBudget = optionalBoolean(
+    raw.supportsManualThinkingBudget,
+    `${path}.supportsManualThinkingBudget`,
+  );
+  const supportsDisabledThinking = optionalBoolean(
+    raw.supportsDisabledThinking,
+    `${path}.supportsDisabledThinking`,
+  );
+  const requiresEffortBetaHeader = optionalBoolean(
+    raw.requiresEffortBetaHeader,
+    `${path}.requiresEffortBetaHeader`,
+  );
+
+  const capability: KodaXReasoningCapabilityV2 = { effortStrategy };
+  if (reasoningPreset !== undefined) {
+    (capability as { reasoningPreset: KodaXReasoningPresetName }).reasoningPreset = reasoningPreset;
+  }
+  if (thinkingStrategy !== undefined) {
+    (capability as { thinkingStrategy: KodaXThinkingWireStrategy }).thinkingStrategy = thinkingStrategy;
+  }
+  if (defaultEffort !== undefined) {
+    (capability as { defaultEffort: string }).defaultEffort = defaultEffort;
+  }
+  if (effortAliases !== undefined) {
+    (capability as { effortAliases: Record<string, string> }).effortAliases = effortAliases;
+  }
+  if (disabledEfforts !== undefined) {
+    (capability as { disabledEfforts: readonly string[] }).disabledEfforts = disabledEfforts;
+  }
+  if (localRejectEfforts !== undefined) {
+    (capability as { localRejectEfforts: readonly string[] }).localRejectEfforts = localRejectEfforts;
+  }
+  if (raw.supportedEfforts !== undefined) {
+    if (!Array.isArray(raw.supportedEfforts)) {
+      throw new Error(`provider-capabilities.json: ${path}.supportedEfforts must be an array`);
+    }
+    (capability as { supportedEfforts: NonNullable<KodaXReasoningCapabilityV2['supportedEfforts']> }).supportedEfforts =
+      raw.supportedEfforts.map((entry, index) => {
+        if (!isPlainObject(entry)) {
+          throw new Error(`provider-capabilities.json: ${path}.supportedEfforts[${index}] must be an object`);
+        }
+        const value = requireString(entry.value, `${path}.supportedEfforts[${index}].value`);
+        return {
+          value,
+          ...(optionalString(entry.description, `${path}.supportedEfforts[${index}].description`) !== undefined
+            ? { description: optionalString(entry.description, `${path}.supportedEfforts[${index}].description`) }
+            : {}),
+          ...(optionalBoolean(entry.isDefault, `${path}.supportedEfforts[${index}].isDefault`) !== undefined
+            ? { isDefault: optionalBoolean(entry.isDefault, `${path}.supportedEfforts[${index}].isDefault`) }
+            : {}),
+          ...(optionalBoolean(entry.isUserVisible, `${path}.supportedEfforts[${index}].isUserVisible`) !== undefined
+            ? { isUserVisible: optionalBoolean(entry.isUserVisible, `${path}.supportedEfforts[${index}].isUserVisible`) }
+            : {}),
+        };
+      });
+  }
+  if (raw.budgetByEffort !== undefined) {
+    if (!isPlainObject(raw.budgetByEffort)) {
+      throw new Error(`provider-capabilities.json: ${path}.budgetByEffort must be an object`);
+    }
+    const budgetByEffort: Record<string, number> = {};
+    for (const [effort, budget] of Object.entries(raw.budgetByEffort)) {
+      budgetByEffort[effort] = optionalNumber(budget, `${path}.budgetByEffort.${effort}`) ?? 0;
+    }
+    (capability as { budgetByEffort: Record<string, number> }).budgetByEffort = budgetByEffort;
+  }
+  if (allowCustomEffort !== undefined) {
+    (capability as { allowCustomEffort: boolean }).allowCustomEffort = allowCustomEffort;
+  }
+  if (supportsReasoningEffort !== undefined) {
+    (capability as { supportsReasoningEffort: boolean }).supportsReasoningEffort = supportsReasoningEffort;
+  }
+  if (supportsReasoningSummary !== undefined) {
+    (capability as { supportsReasoningSummary: boolean }).supportsReasoningSummary = supportsReasoningSummary;
+  }
+  if (supportsEncryptedReasoningReplay !== undefined) {
+    (capability as { supportsEncryptedReasoningReplay: boolean }).supportsEncryptedReasoningReplay = supportsEncryptedReasoningReplay;
+  }
+  if (supportsAdaptiveThinking !== undefined) {
+    (capability as { supportsAdaptiveThinking: boolean }).supportsAdaptiveThinking = supportsAdaptiveThinking;
+  }
+  if (supportsManualThinkingBudget !== undefined) {
+    (capability as { supportsManualThinkingBudget: boolean }).supportsManualThinkingBudget = supportsManualThinkingBudget;
+  }
+  if (supportsDisabledThinking !== undefined) {
+    (capability as { supportsDisabledThinking: boolean }).supportsDisabledThinking = supportsDisabledThinking;
+  }
+  if (requiresEffortBetaHeader !== undefined) {
+    (capability as { requiresEffortBetaHeader: boolean }).requiresEffortBetaHeader = requiresEffortBetaHeader;
+  }
+  return capability;
 }
 
 function requireProfileName(value: unknown, path: string): CapabilityProfileName {
@@ -231,6 +490,10 @@ function validateModelDescriptor(
           raw.reasoningCapability,
           `${path}.reasoningCapability`,
         );
+  const reasoningCapabilityV2 = validateReasoningCapabilityV2(
+    raw.reasoningCapabilityV2,
+    `${path}.reasoningCapabilityV2`,
+  );
   const descriptor: KodaXModelDescriptor = { id };
   if (displayName !== undefined) descriptor.displayName = displayName;
   if (contextWindow !== undefined) descriptor.contextWindow = contextWindow;
@@ -240,6 +503,9 @@ function validateModelDescriptor(
   }
   if (reasoningCapability !== undefined) {
     descriptor.reasoningCapability = reasoningCapability;
+  }
+  if (reasoningCapabilityV2 !== undefined) {
+    descriptor.reasoningCapabilityV2 = reasoningCapabilityV2;
   }
   if (replayReasoningContent !== undefined) {
     descriptor.replayReasoningContent = replayReasoningContent;
@@ -282,6 +548,10 @@ function validateProviderEntry(
   const reasoningCapability = requireReasoningCapability(
     raw.reasoningCapability,
     `providers.${name}.reasoningCapability`,
+  );
+  const reasoningCapabilityV2 = validateReasoningCapabilityV2(
+    raw.reasoningCapabilityV2,
+    `providers.${name}.reasoningCapabilityV2`,
   );
   const capabilityProfile = requireProfileName(
     raw.capabilityProfile,
@@ -350,6 +620,10 @@ function validateProviderEntry(
     capabilityProfile,
     verifyStrategy,
   };
+  if (reasoningCapabilityV2 !== undefined) {
+    (entry as { reasoningCapabilityV2: KodaXReasoningCapabilityV2 }).reasoningCapabilityV2 =
+      reasoningCapabilityV2;
+  }
   if (model !== undefined) (entry as { model: string }).model = model;
   if (models !== undefined) (entry as { models: typeof models }).models = models;
   if (contextWindow !== undefined) {

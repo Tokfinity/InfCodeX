@@ -31,7 +31,9 @@ import {
   type KodaXContextTokenSnapshot,
   type KodaXOptions,
   type KodaXReasoningMode,
+  type KodaXWireReasoningEffort,
   isToolFileMutation,
+  normalizeReasoningEffortValue,
   runKodaX,
   combineExtensionRuntimes,
   createExtensionRuntime,
@@ -140,6 +142,10 @@ export interface KodaXAcpServerOptions {
   provider?: string;
   /** Optional model override forwarded to the coding runtime. */
   model?: string;
+  /** Optional default reasoning effort forwarded to the coding runtime. */
+  effort?: KodaXWireReasoningEffort;
+  /** Optional plan-mode default; ignored when `effort` is provided directly. */
+  planModeEffort?: KodaXWireReasoningEffort;
   thinking?: boolean;
   reasoningMode?: KodaXReasoningMode;
   /**
@@ -171,6 +177,44 @@ interface KodaXAcpSessionState {
   extensionRuntime?: AcpPromptExtensionRuntime;
   /** Per-session MCP runtime owned by this session and disposed with it. */
   ownedExtensionRuntime?: KodaXExtensionRuntime;
+}
+
+type AcpPromptRequestWithEffort = PromptRequest & {
+  effort?: unknown;
+};
+
+type AcpPromptEffortOverride =
+  | { readonly kind: 'absent' }
+  | { readonly kind: 'value'; readonly value?: KodaXWireReasoningEffort };
+
+function normalizeOptionalEffort(
+  value: unknown,
+  label: string,
+): KodaXWireReasoningEffort | undefined {
+  if (value === undefined || value === null) {
+    return undefined;
+  }
+  if (typeof value !== 'string') {
+    throw new Error(`${label} must be a string.`);
+  }
+  const normalized = normalizeReasoningEffortValue(value);
+  return normalized === 'auto' ? undefined : normalized;
+}
+
+function resolvePromptEffortOverride(params: PromptRequest): AcpPromptEffortOverride {
+  const rawEffort = (params as AcpPromptRequestWithEffort).effort;
+  if (rawEffort === undefined) {
+    return { kind: 'absent' };
+  }
+  try {
+    return {
+      kind: 'value',
+      value: normalizeOptionalEffort(rawEffort, 'Prompt effort'),
+    };
+  } catch (error) {
+    const message = error instanceof Error ? error.message : String(error);
+    throw RequestError.invalidParams({ effort: rawEffort }, message);
+  }
 }
 
 /** Convert ACP McpServer[] to KodaX flat server config. */
@@ -386,6 +430,8 @@ function toAcpUsage(snapshot: KodaXContextTokenSnapshot | undefined): PromptResp
 export class KodaXAcpServer implements Agent {
   private readonly provider: string;
   private readonly model?: string;
+  private readonly effort?: KodaXWireReasoningEffort;
+  private readonly planModeEffort?: KodaXWireReasoningEffort;
   private readonly thinking: boolean;
   private readonly reasoningMode: KodaXReasoningMode;
   private readonly defaultPermissionMode: AcpPermissionMode;
@@ -418,19 +464,31 @@ export class KodaXAcpServer implements Agent {
     const configWithExtensions = config as typeof config & { extensions?: unknown };
     this.provider = options.provider ?? config.provider ?? KODAX_DEFAULT_PROVIDER;
     this.model = options.model;
+    const hasExplicitEffort = options.effort !== undefined;
+    this.effort = normalizeOptionalEffort(options.effort ?? config.effort, 'Configured effort');
+    this.planModeEffort = hasExplicitEffort
+      ? undefined
+      : normalizeOptionalEffort(
+          options.planModeEffort ?? config.planModeEffort,
+          'Configured plan-mode effort',
+        );
     this.thinking = options.thinking ?? config.thinking ?? false;
     this.reasoningMode = options.reasoningMode ?? config.reasoningMode ?? 'auto';
     this.defaultPermissionMode = normalizeAcpPermissionMode(
       options.permissionMode ?? config.permissionMode,
       'accept-edits',
     );
-    this.defaultCwd = path.resolve(options.cwd ?? process.cwd());
+    const defaultCwd = path.resolve(options.cwd ?? process.cwd());
+    const configuredExtensions = normalizeConfiguredExtensionPaths(configWithExtensions.extensions);
+    const discoveredExtensionsPromise = discoverAcpDefaultExtensions();
+
+    this.defaultCwd = defaultCwd;
     this.hasFixedCwd = options.cwd !== undefined;
     this.agentName = options.agentName ?? 'kodax-acp-server';
     this.agentVersion = options.agentVersion ?? '0.0.0';
     this.storage = options.storage ?? new FileSessionStorage();
-    this.configuredExtensions = normalizeConfiguredExtensionPaths(configWithExtensions.extensions);
-    this.discoveredExtensions = discoverAcpDefaultExtensions();
+    this.configuredExtensions = configuredExtensions;
+    this.discoveredExtensions = discoveredExtensionsPromise;
     this.events = new AcpEventEmitter({
       sinks: [
         ...(options.eventSinks ?? []),
@@ -456,8 +514,7 @@ export class KodaXAcpServer implements Agent {
       (s) => (s.connect ?? 'lazy') !== 'disabled',
     );
     this.extensionRuntimeReady = (async () => {
-      const discoveredExtensions = await this.discoveredExtensions;
-      const configuredExtensions = this.configuredExtensions;
+      const discoveredExtensions = await discoveredExtensionsPromise;
       const hasExtensions = discoveredExtensions.length > 0 || configuredExtensions.length > 0;
       if (!hasMcp && !hasExtensions) {
         return;
@@ -466,7 +523,7 @@ export class KodaXAcpServer implements Agent {
       const rt = createExtensionRuntime({ config });
       if (hasMcp) {
         await registerConfiguredMcpCapabilityProvider(rt, mcpServers, {
-          reverse: buildMcpReverseCapabilities({ cwd: this.defaultCwd }),
+          reverse: buildMcpReverseCapabilities({ cwd: defaultCwd }),
         });
       }
       await loadAcpExtensionGroups(rt, discoveredExtensions, configuredExtensions);
@@ -655,6 +712,7 @@ export class KodaXAcpServer implements Agent {
   async prompt(params: PromptRequest): Promise<PromptResponse> {
     const session = this.requireSession(params.sessionId);
     const promptText = extractPromptText(params.prompt);
+    const promptEffortOverride = resolvePromptEffortOverride(params);
     if (!promptText) {
       throw RequestError.invalidParams(
         { prompt: params.prompt },
@@ -698,7 +756,7 @@ export class KodaXAcpServer implements Agent {
           await this.extensionRuntimeReady;
         }
         const result = await runKodaX(
-          this.buildKodaXOptions(session, abortController.signal),
+          this.buildKodaXOptions(session, abortController.signal, promptEffortOverride),
           promptText,
         );
         session.contextTokenSnapshot = result.contextTokenSnapshot;
@@ -770,10 +828,20 @@ export class KodaXAcpServer implements Agent {
     return session;
   }
 
-  private buildKodaXOptions(session: KodaXAcpSessionState, abortSignal: AbortSignal): KodaXOptions {
+  private buildKodaXOptions(
+    session: KodaXAcpSessionState,
+    abortSignal: AbortSignal,
+    effortOverride: AcpPromptEffortOverride = { kind: 'absent' },
+  ): KodaXOptions {
+    const effort = effortOverride.kind === 'value'
+      ? effortOverride.value
+      : session.permissionMode === 'plan' && this.planModeEffort !== undefined
+        ? this.planModeEffort
+        : this.effort;
     return {
       provider: this.provider,
       model: this.model,
+      effort,
       thinking: this.thinking,
       reasoningMode: this.reasoningMode,
       abortSignal,

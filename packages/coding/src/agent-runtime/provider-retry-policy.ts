@@ -46,6 +46,10 @@ import {
 } from '../resilience/index.js';
 import { telemetryClassify, telemetryDecision } from '../resilience/telemetry.js';
 import type { StableBoundaryTracker } from '../resilience/stable-boundary.js';
+import {
+  providerResilienceConfigFromTimeouts,
+  type KodaXTimeoutConfig,
+} from '../timeouts.js';
 
 // ── CAP-031 ──────────────────────────────────────────────────────────────
 
@@ -102,8 +106,12 @@ export function buildResilienceSession(
   providerName: string,
   streamProvider: KodaXBaseProvider,
   tracker: StableBoundaryTracker,
+  timeouts?: KodaXTimeoutConfig,
 ): ResilienceSession {
-  const resilienceCfg = resolveResilienceConfig(providerName);
+  const resilienceCfg = resolveResilienceConfig(
+    providerName,
+    providerResilienceConfigFromTimeouts(timeouts),
+  );
   const recoveryCoordinator = new ProviderRecoveryCoordinator(tracker, {
     ...resilienceCfg,
     enableNonStreamingFallback:

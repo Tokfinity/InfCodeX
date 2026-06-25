@@ -113,6 +113,21 @@ export interface AutoModeGuardrailConfig {
   readonly rules: AutoRules;
   readonly claudeMd?: string;
   /**
+   * FEATURE_092 follow-up (auto-mode classifier AGENTS.md staleness fix):
+   * live getter for the project AGENTS.md content. Takes precedence over the
+   * static `claudeMd` string and is evaluated INSIDE the classify path on
+   * every call — same live-getter pattern as `getDefaultProvider` /
+   * `getDefaultModel` (v0.7.34 hotfix-3).
+   *
+   * The bug it fixes: the guardrail is a lazy-cached singleton, so a
+   * captured `claudeMd` string froze the project rules at first
+   * construction. Even `/reload` couldn't refresh it — the classifier kept
+   * judging tool calls against a stale AGENTS.md snapshot. The REPL wires
+   * this to `loadAgentsFiles` (mtime-cached), so the classifier sees the
+   * same fresh project rules the system prompt does.
+   */
+  readonly getClaudeMd?: () => string | undefined;
+  /**
    * FEATURE_092 phase 2b.7b: optional user-prompt callback for escalate
    * paths. See `AutoModeAskUser` for semantics.
    */
@@ -242,14 +257,21 @@ export interface AutoModeGuardrailConfig {
   /**
    * Speculative-classify quiet window (ms). When a classifier promise
    * settles within this window, the guardrail uses the verdict directly
-   * (no confirm dialog). When the window expires, the call escalates to
-   * the user; the background classifier is left running for cost-tracker
-   * settlement but its eventual result is discarded in v1 (UI doesn't
-   * adopt late verdicts yet).
+   * with no perceptible latency.
+   *
+   * Issue 143 (WS1): when the window expires the guardrail does NOT
+   * hard-escalate — it waits for the real classifier verdict and adopts it
+   * (late-verdict adoption). The window therefore only controls "fast path
+   * vs wait", never "dialog vs no dialog": an `allow` never surfaces a
+   * confirm dialog regardless of how long the classifier takes, and only an
+   * `escalate` verdict (explicit LLM escalation, classifier timeout, or infra
+   * error — all mapped to `escalate` by classify()) reaches the user.
+   * The background classifier's cost is settled exactly once inside
+   * classify(), so awaiting it after window expiry does not double-count.
    *
    * Precedence: explicit arg > `KODAX_AUTO_SPECULATIVE_WINDOW_MS` env >
-   * `DEFAULT_WINDOW_MS = 500`. Set to 0 to disable speculative race
-   * (degrades to synchronous classify).
+   * `DEFAULT_WINDOW_MS = 500`. Set to 0 to disable the speculative race
+   * (degrades to a synchronous classify — identical verdict outcome).
    */
   readonly speculativeWindowMs?: number;
 }
@@ -395,21 +417,31 @@ export function createAutoModeToolGuardrail(
       return escalateOrAsk(`classifier provider "${resolved.providerName}" is not configured`);
     }
 
-    // FEATURE_158: kick off classifier with signals attached. The promise
-    // is held locally so speculativeRace can race it against a quiet window
-    // (default 500ms) — when the verdict arrives within the window, we use
-    // it directly; when the window expires we escalate to confirm dialog.
+    // FEATURE_158: kick off classifier with signals attached. The promise is
+    // held locally so speculativeRace can race it against a quiet window — when
+    // the verdict arrives within the window, we use it directly with no
+    // perceptible latency.
     //
-    // The background classifyPromise is NOT aborted on window expiry —
-    // tokens are already burned and speculativeRace silently absorbs late
-    // rejections to prevent UnhandledPromiseRejection. v1 does not adopt
-    // late verdicts; a future iteration could wire UI to peek the promise
-    // (CC's peekSpeculativeClassifierCheck pattern).
+    // Issue 143 (WS1): the classifier verdict is ALWAYS adopted, even when the
+    // window expires. The window only decides whether we resolve instantly
+    // (fast classify) or wait a bit longer (slow/remote provider) — it does NOT
+    // decide "hard-escalate vs not". A late `allow`/`block` is applied directly,
+    // so allow verdicts never surface a confirm dialog; only a genuine
+    // `escalate` verdict (or a classifier timeout) reaches the user. This is the
+    // late-verdict adoption (CC's peekSpeculativeClassifierCheck equivalent) that
+    // makes auto[llm] usable on remote/slow providers where a single classify
+    // round-trip routinely outruns the window. The background classifyPromise is
+    // never aborted on window expiry (tokens are already in flight) and its cost
+    // is settled exactly once inside classify(), so awaiting it again here does
+    // not double-count.
     const classifyPromise: Promise<ClassifyDecision> = classify({
       provider,
       model: resolved.model,
       rules: config.rules,
-      claudeMd: config.claudeMd,
+      // FEATURE_092 follow-up: prefer the live getter so mid-session AGENTS.md
+      // edits reach the classifier; fall back to the static string for SDK
+      // consumers that pre-date the getter.
+      claudeMd: config.getClaudeMd?.() ?? config.claudeMd,
       transcript: ctx.messages ?? [],
       action,
       signals,
@@ -419,18 +451,30 @@ export function createAutoModeToolGuardrail(
       setCostTracker: config.setCostTracker,
     });
 
+    // Issue 143 (WS2): the speculative window only earns its keep when a human
+    // is waiting on the confirm dialog — it trades a possible early escalate for
+    // hiding classifier latency. With no `askUser` surface (SDK / non-interactive
+    // / child-agent contexts) there is nobody to pre-empt, so an early
+    // `window-expired` escalate is pure harm: it surfaces a transient 500ms
+    // timeout as a verdict even though the classifier is about to return
+    // allow/block. Force the window to 0 (wait for the full verdict) in that
+    // case. When askUser IS present, `undefined` flows through to
+    // speculativeRace's env/default resolution unchanged.
+    const effectiveWindowMs = config.askUser ? config.speculativeWindowMs : 0;
+
     let decision: ClassifyDecision;
     try {
-      const raceResult = await speculativeRace(classifyPromise, config.speculativeWindowMs);
+      const raceResult = await speculativeRace(classifyPromise, effectiveWindowMs);
       if (raceResult.kind === 'window-expired') {
-        // Speculative window expired — escalate to confirm dialog with the
-        // signals collected up front. The background classifier still
-        // resolves/rejects but its result is dropped in v1.
-        return escalateOrAsk(
-          'speculative classifier window expired; user confirmation required while analysis continues',
-        );
+        // Issue 143 (WS1): window expired — do NOT hard-escalate. Wait for the
+        // real verdict and adopt it. The existing agent spinner covers the wait;
+        // allow/block resolve without ever showing a dialog, and only an
+        // `escalate` verdict (handled by the switch below) reaches the user. A
+        // late AbortError re-surfaces here and is re-thrown by the catch below.
+        decision = await classifyPromise;
+      } else {
+        decision = raceResult.value;
       }
-      decision = raceResult.value;
     } catch (err) {
       if (err instanceof DOMException && err.name === 'AbortError') {
         throw err;

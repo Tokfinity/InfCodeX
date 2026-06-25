@@ -23,6 +23,7 @@ import type {
   KodaXResult,
   KodaXToolEventMeta,
   KodaXToolExecutionContext,
+  KodaXWireReasoningEffort,
 } from './types.js';
 import { resolveExecutionCwd } from './runtime-paths.js';
 import { resolveModelHintTier } from './model-hint-routing.js';
@@ -35,6 +36,7 @@ import { uniqueBareInlineSlashNames, uniqueInlineSkillNames } from './skill-refe
 // worktree isolation, briefing, role policy) stay below; the wrapper
 // owns only bounded concurrency + abort + progress eventing.
 import { getSkillRegistry, initializeSkillRegistry, runFanOut } from '@kodax-ai/agent';
+import { normalizeReasoningEffortValue } from '@kodax-ai/llm';
 // FEATURE_191 — specialist agent override resolution. `resolveConstructedAgent`
 // returns `Agent | undefined`; the dispatch-child-tasks layer has already
 // rejected unknown names before bundle construction, so a re-resolve here is
@@ -156,7 +158,7 @@ export interface ChildExecutorOptions {
   readonly maxParallel: number;
   readonly maxIterationsPerChild: number;
   readonly abortSignal?: AbortSignal;
-  readonly parentOptions: Readonly<Partial<Pick<KodaXOptions, 'provider' | 'model' | 'reasoningMode' | 'extensionRuntime' | 'events'>>>;
+  readonly parentOptions: Readonly<Partial<Pick<KodaXOptions, 'provider' | 'model' | 'effort' | 'reasoningMode' | 'extensionRuntime' | 'events'>>>;
   readonly parentRole: string;
   readonly parentHarness: string;
   /**
@@ -313,6 +315,7 @@ interface SpecialistOverride {
    */
   modelOverride?: string;
   providerOverride?: string;
+  effortOverride?: KodaXWireReasoningEffort;
 }
 
 interface ChildIsolationScope {
@@ -602,6 +605,7 @@ async function createWorkflowChildDigest(
     readonly result: KodaXResult;
     readonly provider: string;
     readonly model?: string;
+    readonly effort?: KodaXWireReasoningEffort;
     readonly scopeCtx: KodaXToolExecutionContext;
     readonly bundle: KodaXChildContextBundle;
     readonly options: ChildExecutorOptions;
@@ -622,6 +626,7 @@ async function createWorkflowChildDigest(
       {
         provider: input.provider,
         ...(input.model ? { model: input.model } : {}),
+        effort: input.effort ?? input.options.parentOptions.effort,
         reasoningMode: input.options.parentOptions.reasoningMode,
         agentMode: 'sa',
         maxIter: 1,
@@ -663,6 +668,7 @@ function scheduleWorkflowChildDigest(
     readonly result: KodaXResult;
     readonly provider: string;
     readonly model?: string;
+    readonly effort?: KodaXWireReasoningEffort;
     readonly scopeCtx: KodaXToolExecutionContext;
     readonly bundle: KodaXChildContextBundle;
     readonly options: ChildExecutorOptions;
@@ -703,9 +709,10 @@ function resolveSpecialistOverride(
     return { systemPromptOverride: defaultSystemPrompt, excludeTools: defaultExcludeTools };
   }
   // FEATURE_102 Phase 1: surface the specialist's explicit model/provider.
-  const modelProvider: Pick<SpecialistOverride, 'modelOverride' | 'providerOverride'> = {
+  const modelProviderEffort: Pick<SpecialistOverride, 'modelOverride' | 'providerOverride' | 'effortOverride'> = {
     ...(specialist.model ? { modelOverride: specialist.model } : {}),
     ...(specialist.provider ? { providerOverride: specialist.provider } : {}),
+    ...(specialist.effort ? { effortOverride: specialist.effort } : {}),
   };
   // Agent.instructions is `string | ((ctx) => string)`. Constructed agents
   // built by agent-resolver.buildAgentFromContent assign the literal
@@ -724,12 +731,36 @@ function resolveSpecialistOverride(
     // Specialist declared no tools — fall back to defaults so the child
     // still has the standard CHILD_EXCLUDE_TOOLS_BASE/READONLY guard
     // rather than an unrestricted toolset.
-    return { systemPromptOverride, excludeTools: defaultExcludeTools, ...modelProvider };
+    return { systemPromptOverride, excludeTools: defaultExcludeTools, ...modelProviderEffort };
   }
   const specialistToolNames = new Set(specialist.tools.map(t => t.name));
   const allToolNames = getAllRegisteredTools().map(t => t.name);
   const excludeTools = allToolNames.filter(n => !specialistToolNames.has(n));
-  return { systemPromptOverride, excludeTools, ...modelProvider };
+  return { systemPromptOverride, excludeTools, ...modelProviderEffort };
+}
+
+function normalizeChildEffort(
+  effort: KodaXWireReasoningEffort | undefined,
+): KodaXWireReasoningEffort | undefined {
+  if (effort === undefined || effort.trim().length === 0) return undefined;
+  const normalized = normalizeReasoningEffortValue(effort);
+  return normalized === 'auto' ? undefined : normalized;
+}
+
+function resolveChildEffort(
+  bundle: KodaXChildContextBundle,
+  specialistEffort: KodaXWireReasoningEffort | undefined,
+  parentEffort: KodaXWireReasoningEffort | undefined,
+): KodaXWireReasoningEffort | undefined {
+  const lockedEffort = normalizeChildEffort(specialistEffort);
+  const dispatchEffort = normalizeChildEffort(bundle.effort);
+  if (lockedEffort !== undefined && dispatchEffort !== undefined && dispatchEffort !== lockedEffort) {
+    throw new Error(
+      `specialist "${bundle.specialistName ?? 'unknown'}" locks effort "${lockedEffort}", ` +
+      `but dispatch requested "${dispatchEffort}". Remove the dispatch effort or match the specialist effort.`,
+    );
+  }
+  return lockedEffort ?? dispatchEffort ?? parentEffort;
 }
 
 /* ---------- Read-only child execution ---------- */
@@ -774,8 +805,8 @@ async function runReadChildBody(
 
   // FEATURE_191 — specialist override switch (no-op when bundle.specialistName
   // is undefined; falls through to v0.7.42 defaults).
-  // FEATURE_102 Phase 1 — also surfaces the specialist's explicit model/provider.
-  const { systemPromptOverride, excludeTools, modelOverride, providerOverride } =
+  // FEATURE_102 Phase 1 — also surfaces the specialist's explicit model/provider/effort.
+  const { systemPromptOverride, excludeTools, modelOverride, providerOverride, effortOverride } =
     resolveSpecialistOverride(
       bundle,
       CHILD_AGENT_SYSTEM_PROMPT,
@@ -799,10 +830,12 @@ async function runReadChildBody(
   let childResult: KodaXChildAgentResult;
   try {
     const runFn = await getRunKodaX();
+    const childEffort = resolveChildEffort(bundle, effortOverride, options.parentOptions.effort);
     const result = await invokeChildWithFallback(
       {
         provider,
         model,
+        effort: childEffort,
         reasoningMode: options.parentOptions.reasoningMode,
         agentMode: 'sa',
         maxIter: options.maxIterationsPerChild,
@@ -845,6 +878,7 @@ async function runReadChildBody(
       result,
       provider,
       ...(model ? { model } : {}),
+      ...(childEffort ? { effort: childEffort } : {}),
       scopeCtx: scope.ctx,
       bundle,
       options,
@@ -952,8 +986,8 @@ async function runWriteChildBody(
 
   // FEATURE_191 — specialist override switch on the write path. Same fail-safe
   // semantic as the read path: unknown specialist falls back to defaults.
-  // FEATURE_102 Phase 1 — also surfaces the specialist's explicit model/provider.
-  const { systemPromptOverride, excludeTools, modelOverride, providerOverride } =
+  // FEATURE_102 Phase 1 — also surfaces the specialist's explicit model/provider/effort.
+  const { systemPromptOverride, excludeTools, modelOverride, providerOverride, effortOverride } =
     resolveSpecialistOverride(
       bundle,
       writeSystemPrompt,
@@ -978,10 +1012,12 @@ async function runWriteChildBody(
   let childResult: KodaXChildAgentResult;
   try {
     const runFn = await getRunKodaX();
+    const childEffort = resolveChildEffort(bundle, effortOverride, options.parentOptions.effort);
     const result = await invokeChildWithFallback(
       {
         provider,
         model,
+        effort: childEffort,
         reasoningMode: options.parentOptions.reasoningMode,
         agentMode: 'sa',
         maxIter: options.maxIterationsPerChild,
@@ -1023,6 +1059,7 @@ async function runWriteChildBody(
       result,
       provider,
       ...(model ? { model } : {}),
+      ...(childEffort ? { effort: childEffort } : {}),
       scopeCtx: childCtx,
       bundle,
       options,

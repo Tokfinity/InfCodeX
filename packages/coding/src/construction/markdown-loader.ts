@@ -16,6 +16,7 @@
  *   description: Reviews DB migrations for safety
  *   tools: [read, grep]
  *   model: claude-sonnet-4-6
+ *   effort: high
  *   ---
  *   You are a DB migration reviewer. ...
  *
@@ -36,6 +37,7 @@ import { readdir, readFile, stat } from 'node:fs/promises';
 import { join } from 'node:path';
 
 import { Runner, getAgentConfigHome } from '@kodax-ai/agent';
+import { normalizeReasoningEffortValue } from '@kodax-ai/llm';
 import { parseYamlFrontmatter } from '@kodax-ai/agent/capabilities/skills/shared/yaml';
 
 import { buildAdmissionManifest } from './admission-bridge.js';
@@ -106,6 +108,8 @@ export interface DiscoveredMarkdownAgent {
   readonly tools?: readonly string[];
   /** Optional model alias from frontmatter `model` field. */
   readonly model?: string;
+  /** Optional reasoning effort from frontmatter `effort` field. */
+  readonly effort?: string;
 }
 
 export interface DiscoverMarkdownAgentsResult {
@@ -193,7 +197,7 @@ async function loadOneAgentFile(
   if (parseOutcome.kind === 'silent-skip') return { ok: false, reason: null };
   if (parseOutcome.kind === 'fail') return { ok: false, reason: parseOutcome.reason };
 
-  const { name, description, instructions, toolNames, model } = parseOutcome.parsed;
+  const { name, description, instructions, toolNames, model, effort } = parseOutcome.parsed;
   const tools: readonly ToolRef[] | undefined = toolNames?.map((n) => ({
     ref: n.includes(':') ? n : `builtin:${n}`,
   }));
@@ -203,6 +207,7 @@ async function loadOneAgentFile(
     description,
     ...(tools !== undefined ? { tools } : {}),
     ...(model !== undefined ? { model } : {}),
+    ...(effort !== undefined ? { effort } : {}),
   };
 
   const manifest = buildAdmissionManifest({ name, content });
@@ -291,6 +296,7 @@ export async function discoverMarkdownAgents(
             ? { tools: outcome.parsed.toolNames }
             : {}),
           ...(outcome.parsed.model !== undefined ? { model: outcome.parsed.model } : {}),
+          ...(outcome.parsed.effort !== undefined ? { effort: outcome.parsed.effort } : {}),
         });
       } else if (outcome.kind === 'fail') {
         failed.push({ path: filePath, reason: outcome.reason });
@@ -309,6 +315,7 @@ interface ParsedAgent {
   /** Raw tool names without `builtin:` prefix. */
   readonly toolNames?: readonly string[];
   readonly model?: string;
+  readonly effort?: string;
 }
 
 type ParseOutcome =
@@ -363,6 +370,15 @@ async function parseMarkdownAgentFile(filePath: string): Promise<ParseOutcome> {
     typeof modelField === 'string' && modelField.trim().length > 0
       ? modelField.trim()
       : undefined;
+  const effortField = frontmatter.effort;
+  let effort: string | undefined;
+  if (typeof effortField === 'string' && effortField.trim().length > 0) {
+    try {
+      effort = normalizeReasoningEffortValue(effortField);
+    } catch (err) {
+      return { kind: 'fail', reason: `frontmatter "effort" is invalid: ${errMsg(err)}` };
+    }
+  }
 
   return {
     kind: 'ok',
@@ -372,6 +388,7 @@ async function parseMarkdownAgentFile(filePath: string): Promise<ParseOutcome> {
       instructions,
       ...(toolNames !== undefined ? { toolNames } : {}),
       ...(model !== undefined ? { model } : {}),
+      ...(effort !== undefined ? { effort } : {}),
     },
   };
 }
