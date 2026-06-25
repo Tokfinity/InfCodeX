@@ -70,6 +70,7 @@ import { workflowCommand } from '../commands/workflow-command.js';
 import { newCommand } from '../commands/new-command.js';
 import { recoverCommand } from '../commands/recover-command.js';
 import { reviewCommand } from '../commands/review-command.js';
+import { agentsCommand } from '../commands/agents-command.js';
 import {
   printLearningPendingForFilter,
   resolveLearningCommandCwd,
@@ -1835,11 +1836,12 @@ export const BUILTIN_COMMANDS: Command[] = [
   newCommand,
   recoverCommand,
   reviewCommand,
+  agentsCommand,
 ];
 
 // Print help.
 const COMMAND_CATEGORIES: Record<string, string[]> = {
-  General: ['help', 'copy', 'exit', 'clear', 'compact', 'reload', 'extensions', 'status'],
+  General: ['help', 'copy', 'exit', 'clear', 'compact', 'reload', 'extensions', 'status', 'agents'],
   Permission: ['mode', 'auto'],
   Session: ['new', 'recover', 'save', 'load', 'sessions', 'history', 'delete'],
   Settings: ['model', 'provider', 'thinking', 'reasoning', 'agent-mode', 'plan', 'repointel'],

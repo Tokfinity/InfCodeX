@@ -205,9 +205,17 @@ const PASTE_ARGS: ArgumentDefinition[] = [
 ];
 
 const REVIEW_ARGS: ArgumentDefinition[] = [
+  { name: '--lean', description: 'Add a minimal-diff/YAGNI review pass', type: 'enum' },
   { name: '--workflow', description: 'Review through a dynamic workflow', type: 'enum' },
   { name: 'base', description: 'Review changes against the detected base branch', type: 'enum' },
   { name: 'sha', description: 'Review a specific commit', type: 'enum' },
+  { name: 'help', description: 'Show review help', type: 'enum' },
+];
+
+const AGENTS_ARGS: ArgumentDefinition[] = [
+  { name: 'init', description: 'Create AGENTS.md in the target project if absent', type: 'enum' },
+  { name: 'lean', description: 'Initialize or LLM-review AGENTS.md for Lean Mode guidance', type: 'enum' },
+  { name: 'help', description: 'Show agents help', type: 'enum' },
 ];
 
 const REPOINTEL_SUBCOMMAND_ARGS: ArgumentDefinition[] = [
@@ -707,6 +715,7 @@ export const COMMAND_ARGUMENTS: CommandArgumentsRegistry = new Map([
   ['goal', GOAL_ARGS],
   ['paste', PASTE_ARGS],
   ['review', REVIEW_ARGS],
+  ['agents', AGENTS_ARGS],
   ['delete', DELETE_ARGS],
   ['rm', DELETE_ARGS], // alias
   ['del', DELETE_ARGS], // alias

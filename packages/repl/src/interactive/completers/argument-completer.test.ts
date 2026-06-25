@@ -304,7 +304,8 @@ describe('ArgumentCompleter', () => {
           ['/memory ', ['list', 'rebuild', 'open', 'help']],
           ['/goal ', ['status', 'pause', 'resume', 'clear', 'help']],
           ['/paste ', ['show', 'list']],
-          ['/review ', ['--workflow', 'base', 'sha']],
+          ['/review ', ['--lean', '--workflow', 'base', 'sha', 'help']],
+          ['/agents ', ['init', 'lean', 'help']],
         ] as const;
 
         for (const [input, expected] of cases) {

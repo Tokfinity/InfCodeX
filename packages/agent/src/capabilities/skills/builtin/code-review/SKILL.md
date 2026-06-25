@@ -61,3 +61,22 @@ compatibility: "Works best in a git repository or when the review target is prov
 - `/code-review src/auth.ts` - 审查单个文件
 - `/code-review packages/coding/src/` - 审查目录
 - `/code-review` - 审查当前 git 变更
+
+## Lean Review Lens
+
+When the user asks for lean review, minimal diff, YAGNI, over-engineering, or
+native/stdlib replacement opportunities, add this lens after correctness and
+security findings:
+
+- Look for code, files, abstractions, dependencies, configuration, or workflow
+  changes that can be deleted without losing requested behavior.
+- Prefer existing repository code, stdlib/native platform features, or an
+  already-installed dependency when that is verifiably simpler than new custom
+  code.
+- Do not recommend cutting trust-boundary validation, security checks,
+  data-loss protection, accessibility basics, observability needed for safety,
+  or explicitly requested behavior.
+- Do not present optional cleanup as a high-severity finding. Put non-blocking
+  deletion/replacement ideas under `## Lean Suggestions`.
+- For each lean suggestion, explain what can be skipped or removed and when it
+  should be added back.

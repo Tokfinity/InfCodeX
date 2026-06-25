@@ -13,11 +13,11 @@
 | Current released version | `v0.7.56` |
 | Current package version | `@kodax-ai/kodax@0.7.56` (released 2026-06-25) |
 | Workspace baseline | `llm / agent / coding / repl` 4 packages |
-| Total tracked features | `24` |
-| InProgress | `0` |
+| Total tracked features | `25` |
+| InProgress | `1` |
 | Planned | `14` |
 | Completed | `10` |
-| Tracked feature IDs | `007, 030, 093, 105, 108, 113, 139, 174, 211, 224, 225, 228, 229, 230, 231, 232, 233, 234, 235, 236, 237, 238, 239, 240` |
+| Tracked feature IDs | `007, 030, 093, 105, 108, 113, 139, 174, 211, 224, 225, 228, 229, 230, 231, 232, 233, 234, 235, 236, 237, 238, 239, 240, 242` |
 | Archive cutoff | Shipped / canceled / absorbed / shelved items through `v0.7.49` are archived. |
 
 ### 一览表
@@ -25,7 +25,7 @@
 | Status | Count | Feature IDs | Next checkpoint |
 |---|---:|---|---|
 | Completed | 10 | `240, 239, 224, 174, 211, 237, 229, 230, 234, 236` | `239, 240` implemented for v0.7.56; `224` released v0.7.54; `174, 211, 237` v0.7.53; `229` v0.7.50; `230, 234, 236` v0.7.51 |
-| InProgress | 0 | `—` | no feature in active implementation |
+| InProgress | 1 | `242` | Lean review and project instruction bootstrap implementation |
 | Planned, near-term | 9 | `233, 228, 231, 235, 238, 232, 105, 108, 225` | `v0.7.57` -> `v0.7.81` |
 | Planned, v0.8.x | 5 | `007, 030, 093, 113, 139` | `v0.8.5+` |
 
@@ -38,7 +38,7 @@
 | `v0.7.54` | `1` |
 | `v0.7.55` | `0` |
 | `v0.7.56` | `0` |
-| `v0.7.57` | `1` |
+| `v0.7.57` | `2` |
 | `v0.7.60` | `1` |
 | `v0.7.63` | `1` |
 | `v0.7.66` | `1` |
@@ -55,16 +55,18 @@
 > the next two patch versions for debug/patch releases. `v0.7.55` is intentionally
 > left without a planned feature so it can be used for the temporary emergency
 > release. `FEATURE_239` and `FEATURE_240` both move to `v0.7.56`; `v0.7.57`
-> remains the next planned feature slot.
+> remains the next planned feature slot and now carries the in-progress
+> `FEATURE_242` lean-review bootstrap work.
 
 ---
 
 ## 进行中的 Feature
 
-> 当前无进行中的 feature（`224` 已随 `v0.7.54` 发布，移入「已完成 Feature」）。本段按 tracker 约定常驻，空表即可。
+> `FEATURE_242` is implemented in the working tree, pending release. This section remains the active implementation index.
 
 | ID | Title | Planned | Design |
 |---|---|---|---|
+| `242` | Lean Review + Project Instructions Bootstrap | `v0.7.57` | [v0.7.57](features/v0.7.57.md#feature_242-lean-review--project-instructions-bootstrap) |
 
 ---
 
