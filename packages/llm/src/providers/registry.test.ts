@@ -220,4 +220,25 @@ describe('provider registry', () => {
     expect(zhipuCoding.getAvailableModels()).toContain('glm-4.7');
     expect(zhipuCoding.getEffectiveContextWindow('glm-4.7')).toBe(200_000);
   });
+
+  it('registers Zhipu Coding Plan overseas mirror as zai-coding (Anthropic-compat, ZAI_CODING_API_KEY)', () => {
+    // Same upstream model lineup + capability surface as zhipu-coding —
+    // only baseUrl (api.z.ai) and the API key env differ. Mirroring the
+    // zhipu-coding assertions guards against JSON ↔ class drift after
+    // the two-provider split.
+    vi.stubEnv('ZAI_CODING_API_KEY', 'zai-test-key');
+    const zai = getProvider('zai-coding');
+    expect(zai.name).toBe('zai-coding');
+    expect(zai.getAvailableModels()).toContain('glm-5.2');
+    expect(zai.getEffectiveContextWindow('glm-5.2')).toBe(1_000_000);
+    expect(zai.getEffectiveMaxOutputTokens('glm-5.2')).toBe(131_072);
+    expect(zai.getEffectiveContextWindow('glm-5-turbo')).toBe(200_000);
+    expect(zai.getAvailableModels()).toContain('glm-4.7');
+    expect(zai.getEffectiveContextWindow('glm-4.7')).toBe(200_000);
+    // Same 300s streamMaxDurationMs as zhipu-coding — overseas gateway
+    // proxies to the same upstream, so the kill-window characteristic
+    // applies identically.
+    expect(zai.getStreamMaxDurationMs?.()).toBe(300_000);
+    expect(getProviderConfiguredReasoningCapability('zai-coding', 'glm-5.2')).toBe('native-effort');
+  });
 });

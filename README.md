@@ -977,6 +977,7 @@ await runInkInteractiveMode({ provider: 'zhipu-coding', reasoningMode: 'auto' })
 | qwen | `QWEN_API_KEY` | Native | qwen3.5-plus |
 | zhipu | `ZHIPU_API_KEY` | Native | glm-5 (`glm-5.2` 1M ctx / `glm-5.1` / `glm-5-turbo` via `/model`) |
 | zhipu-coding | `ZHIPU_CODING_API_KEY` | Native | glm-5 (`glm-5.2` 1M ctx / `glm-5.1` / `glm-5-turbo` via `/model`) |
+| zai-coding | `ZAI_CODING_API_KEY` | Native | glm-5.2 (Zhipu Coding Plan overseas mirror via `api.z.ai`, Anthropic-compat — same model lineup as `zhipu-coding`, served from outside CN) |
 | minimax-coding | `MINIMAX_CODING_API_KEY` | Native | MiniMax-M2.7 (`MiniMax-M3` Frontier Coding, native multimodal + 1M ctx, plus `MiniMax-M2.7-highspeed` via `/model`) |
 | mimo | `MIMO_API_KEY` | Native | mimo-v2.5-pro (Xiaomi MiMo pay-per-token, Anthropic-compat) |
 | mimo-coding | `MIMO_CODING_API_KEY` | Native | mimo-v2.5-pro (Xiaomi Token Plan, Anthropic-compat) |

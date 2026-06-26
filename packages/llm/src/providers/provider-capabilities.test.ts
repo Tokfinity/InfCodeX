@@ -52,13 +52,14 @@ describe('FEATURE_198 — provider-capabilities loader', () => {
           'mimo-coding',
           'openai',
           'qwen',
+          'zai-coding',
           'zhipu',
           'zhipu-coding',
         ].sort(),
       );
     });
 
-    it('caches the snapshot — second call returns the same object identity', () => {
+    it('caches the snapshot 鈥?second call returns the same object identity', () => {
       const a = getProviderSnapshots();
       const b = getProviderSnapshots();
       expect(a).toBe(b);
@@ -376,7 +377,7 @@ describe('FEATURE_198 — provider-capabilities loader', () => {
       }
     });
 
-    it('all 14 providers have an explicit verifyStrategy (no silent default)', () => {
+    it('all 15 providers have an explicit verifyStrategy (no silent default)', () => {
       const snap = getProviderSnapshots();
       const expected = new Set(['count-tokens', 'models-list', 'minimal-message', 'unsupported']);
       let total = 0;
@@ -384,12 +385,12 @@ describe('FEATURE_198 — provider-capabilities loader', () => {
         expect(expected.has(s.verifyStrategy)).toBe(true);
         total++;
       }
-      expect(total).toBe(14);
+      expect(total).toBe(15);
     });
   });
 });
 
-describe('FEATURE_198 — validator failure modes', () => {
+describe('FEATURE_198 鈥?validator failure modes', () => {
   function shouldThrow(raw: unknown, matcher: RegExp | string): void {
     expect(() => validateProviderCapabilitiesJson(raw)).toThrow(matcher);
   }
