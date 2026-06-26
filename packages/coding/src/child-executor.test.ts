@@ -2083,7 +2083,9 @@ describe('resolveEvidenceRef — FEATURE_199 task_id prefix + regression', () =>
       'task_id:hooks-audit',
       makeEvidenceCtx({ childProgressSnapshots: snapshots }),
     );
-    expect(result).toContain('[…truncated 2000 chars; use `task_output` for the full text]');
+    expect(result).toContain('[truncated 2000 chars; full sibling output is not included in this child briefing.');
+    expect(result).toContain('note the dependency for the coordinator]');
+    expect(result).not.toContain('task_output');
     // First 10000 chars present, last 2000 not:
     expect(result.split('A').length - 1).toBe(10000);
   });

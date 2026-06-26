@@ -1273,7 +1273,7 @@ export async function resolveEvidenceRef(
     const FENCE = '```';
     const rawBody = snap.finalText ?? '(no final text recorded)';
     let body = rawBody.length > FINAL_TEXT_CAP
-      ? `${rawBody.slice(0, FINAL_TEXT_CAP)}\n[…truncated ${rawBody.length - FINAL_TEXT_CAP} chars; use \`task_output\` for the full text]`
+      ? `${rawBody.slice(0, FINAL_TEXT_CAP)}\n[truncated ${rawBody.length - FINAL_TEXT_CAP} chars; full sibling output is not included in this child briefing. Proceed with this excerpt, or note the dependency for the coordinator]`
       : rawBody;
     // Defensive: if the body itself contains the exact fence
     // sequence, escape it so the fence cannot be closed mid-body.
