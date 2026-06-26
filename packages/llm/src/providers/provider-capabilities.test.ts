@@ -59,7 +59,7 @@ describe('FEATURE_198 — provider-capabilities loader', () => {
       );
     });
 
-    it('caches the snapshot 鈥?second call returns the same object identity', () => {
+    it('caches the snapshot — second call returns the same object identity', () => {
       const a = getProviderSnapshots();
       const b = getProviderSnapshots();
       expect(a).toBe(b);
@@ -390,7 +390,7 @@ describe('FEATURE_198 — provider-capabilities loader', () => {
   });
 });
 
-describe('FEATURE_198 鈥?validator failure modes', () => {
+describe('FEATURE_198 — validator failure modes', () => {
   function shouldThrow(raw: unknown, matcher: RegExp | string): void {
     expect(() => validateProviderCapabilitiesJson(raw)).toThrow(matcher);
   }
