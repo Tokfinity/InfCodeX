@@ -358,8 +358,9 @@ export class ProviderRecoveryCoordinator {
  * - thinking and redacted_thinking blocks: removed
  * - text, tool_use, tool_result blocks: preserved
  * - assistant turns that become empty after stripping (were thinking-
- *   only) get a minimal '...' text placeholder so user/assistant
- *   alternation stays valid for the retry
+ *   only) get a minimal EMPTY text marker so user/assistant alternation
+ *   stays valid for the retry (the visible '...' is synthesized wire-only
+ *   by the serializer, never persisted)
  * - non-array (string) content: preserved as-is
  *
  * Idempotent: running it twice on the same messages produces the same
@@ -379,12 +380,15 @@ export function sanitizeThinkingBlocks(messages: KodaXMessage[]): KodaXMessage[]
     );
 
     if (filtered.length === 0) {
-      // Was thinking-only — keep a placeholder so the retry doesn't
-      // break user/assistant alternation. '...' is the same convention
-      // used by anthropic.ts:657 / openai.ts content fallback.
+      // Was thinking-only — keep an EMPTY text marker so the retry doesn't
+      // break user/assistant alternation. Not a persisted '...': this result
+      // can be assigned back into history (run-substrate.ts: messages =
+      // providerMessages) after a successful recovery, so a '...' here would
+      // leak as a fabricated reply. The wire serializer synthesizes '...'
+      // only if the gateway rejects empty content.
       return {
         ...msg,
-        content: [{ type: 'text' as const, text: '...' }],
+        content: [{ type: 'text' as const, text: '' }],
       };
     }
 

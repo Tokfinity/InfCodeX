@@ -107,6 +107,30 @@ describe('round-boundary/extractFinalAssistantText', () => {
     } as unknown as KodaXResult;
     expect(extractFinalAssistantText(result)).toBe('part one part two');
   });
+
+  it('treats a legacy bare placeholder fallback as no final answer', () => {
+    const result = {
+      lastText: '',
+      messages: [{
+        role: 'assistant',
+        content: [{ type: 'text', text: '...' }],
+      }],
+    } as unknown as KodaXResult;
+    expect(extractFinalAssistantText(result)).toBe('');
+  });
+
+  it('returns "" when the trailing message is a user turn (no assistant answer this run)', () => {
+    // Interrupted / error before the assistant: the fallback must NOT surface
+    // the user's own prompt text as the final assistant answer.
+    const result = {
+      lastText: '',
+      messages: [
+        { role: 'assistant', content: 'old answer' },
+        { role: 'user', content: 'a different new question' },
+      ],
+    } as unknown as KodaXResult;
+    expect(extractFinalAssistantText(result)).toBe('');
+  });
 });
 
 describe('round-boundary/buildUserFacingMessages', () => {
@@ -192,6 +216,22 @@ describe('round-boundary/reshapeToUserConversation', () => {
     expect(out.messages).toEqual([
       { role: 'user', content: 'what is X?' },
       { role: 'assistant', content: 'the answer to your question' },
+    ]);
+  });
+
+  it('does not write a legacy bare placeholder into the clean completed dialog', () => {
+    const result = makeResult({
+      managedTask: makeManagedTask('completed', 'done'),
+      lastText: '',
+      messages: [
+        { role: 'user', content: 'q' },
+        { role: 'assistant', content: [{ type: 'text', text: '...' }] },
+      ],
+    });
+    const out = reshapeToUserConversation(result, makeOptions(), 'q');
+    expect(out.messages).toEqual([
+      { role: 'user', content: 'q' },
+      { role: 'assistant', content: '' },
     ]);
   });
 

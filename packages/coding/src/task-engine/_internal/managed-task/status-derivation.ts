@@ -32,7 +32,10 @@ export function extractUserFacingText(result: { messages: readonly KodaXMessage[
   // might emit in assistant text despite using structured emit tools.
   // Legacy task-engine.ts applied this at 14 call sites; re-added at the
   // single Runner-driven extraction point.
-  return sanitizeManagedUserFacingText(raw);
+  const sanitized = sanitizeManagedUserFacingText(raw);
+  // A bare empty-content placeholder ('...' from legacy pre-fix sessions) is
+  // not real user-facing text. New sessions use an empty text block (raw "").
+  return sanitized.trim() === '...' ? '' : sanitized;
 }
 
 export function extractUserFacingRaw(result: { messages: readonly KodaXMessage[]; output: string }): string {

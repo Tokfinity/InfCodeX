@@ -49,6 +49,11 @@ export function isUnconvergedVerdict(status?: KodaXTaskStatus): boolean {
   return status === 'running' || status === 'planned';
 }
 
+function isPlaceholderOnlyAssistantText(text: string): boolean {
+  const trimmed = text.trim();
+  return trimmed === '' || trimmed === '...';
+}
+
 /**
  * Extract the user-facing final assistant text from a run result.
  *
@@ -57,12 +62,15 @@ export function isUnconvergedVerdict(status?: KodaXTaskStatus): boolean {
  *   2. last message's text content (fallback for corner cases)
  *   3. empty string
  *
- * Delegates to `extractMessageText` which already implements this priority.
+ * A bare legacy `'...'` or empty marker is not a real answer. Provider
+ * serializers may synthesize `'...'` at the wire boundary, but clean
+ * user-facing conversation history must keep that as empty text.
  */
 export function extractFinalAssistantText(
   result: KodaXResult | undefined,
 ): string {
-  return extractMessageText(result);
+  const text = extractMessageText(result);
+  return isPlaceholderOnlyAssistantText(text) ? '' : text;
 }
 
 /**

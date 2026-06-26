@@ -412,6 +412,38 @@ describe('openai message serialization', () => {
     expect(kwargs.messages[1].content).toBe('continue');
   });
 
+  // P1 target: an empty-text marker `{ type: 'text', text: '' }` is the
+  // honest in-history representation of a turn that produced no visible
+  // content (e.g. hidden-tool-only turn, sanitized thinking-only turn).
+  // The serializer must NOT drop it (returning [] would erase the assistant
+  // slot and risk user,user adjacency); it must synthesize a wire-only '...'
+  // so the gateway accepts the turn — mirroring the Anthropic empty guard.
+  it('synthesizes wire-only "..." for an empty-text-marker assistant turn', async () => {
+    const completion = {
+      choices: [{ message: { role: 'assistant', content: 'ok', tool_calls: [] } }],
+      usage: { prompt_tokens: 1, completion_tokens: 1, total_tokens: 2 },
+    };
+    const create = vi.fn().mockResolvedValue(completion);
+    const provider = new TestOpenAIProvider({ chat: { completions: { create } } });
+    const messages: KodaXMessage[] = [
+      { role: 'user', content: 'do x' },
+      { role: 'assistant', content: [{ type: 'text', text: '' }] },
+      { role: 'user', content: 'continue' },
+    ];
+
+    await provider.complete(messages, TOOLS, 'sys');
+
+    const kwargs = create.mock.calls[0]?.[0];
+    const roles = kwargs.messages.map((message: { role: string }) => message.role);
+    // The assistant slot survives (not dropped) and carries the wire placeholder.
+    expect(roles).toEqual(['system', 'user', 'assistant', 'user']);
+    const assistant = kwargs.messages.find(
+      (message: { role: string }) => message.role === 'assistant',
+    ) as Record<string, unknown>;
+    expect(assistant.content).toBe('...');
+    expect(assistant.tool_calls).toBeUndefined();
+  });
+
   // Regression: third-party Qwen proxies reject any `role: 'system'` that is
   // not at position 0 ("System message must at the begin"). Post-compact
   // attachments + compaction summaries + handoff replaceSystemMessage could

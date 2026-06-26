@@ -56,14 +56,60 @@ function extractPrompt(input: string | readonly AgentMessage[]): string {
   return '';
 }
 
-function extractFinalAssistantText(result: KodaXResult): string {
-  if (result.lastText) return result.lastText;
+/**
+ * An assistant turn whose text is empty or a bare `'...'` is NOT a real
+ * reply — it is the empty-content marker (new sessions) or a legacy
+ * persisted placeholder (old sessions). Such turns must never surface as
+ * SDK output. The wire-only `'...'` the serializer adds lives only in the
+ * provider payload, never in `result.messages`, so this filter only ever
+ * sees an in-history marker, not a legitimate model answer.
+ */
+function isPlaceholderOnlyAssistantText(text: string): boolean {
+  const trimmed = text.trim();
+  return trimmed === '' || trimmed === '...';
+}
+
+/**
+ * A user message whose content is ONLY tool_result block(s) — the trailing
+ * turn that legitimately follows the final assistant answer. It is the only
+ * trailing message kind we skip when locating this run's final assistant.
+ */
+function isPureToolResultUserMessage(message: { role: string; content: unknown }): boolean {
+  if (message.role !== 'user') return false;
+  const content = message.content;
+  if (!Array.isArray(content) || content.length === 0) return false;
+  return content.every(
+    (b) => !!b && typeof b === 'object' && 'type' in b && (b as { type: string }).type === 'tool_result',
+  );
+}
+
+/**
+ * Derive THIS run's final assistant output. Exported for unit testing the
+ * empty/placeholder filter (P1③).
+ *
+ * Only the most-recent assistant turn represents this run's output. We skip
+ * solely a trailing pure-tool_result user turn (the assistant answer sits
+ * just before it), then stop at the first assistant message. Any OTHER
+ * trailing message — a normal user prompt or a system message — means this
+ * run produced no assistant reply (provider error / interrupted before the
+ * assistant turn), so we return `''`. Likewise, if that assistant turn is an
+ * empty marker or legacy `'...'` placeholder, return `''`. We must NEVER
+ * resurface a stale answer from an earlier turn: in a resumed `-c` session
+ * the earlier turns answered a DIFFERENT question.
+ */
+export function extractFinalAssistantText(result: KodaXResult): string {
+  if (result.lastText && !isPlaceholderOnlyAssistantText(result.lastText)) {
+    return result.lastText;
+  }
   for (let i = result.messages.length - 1; i >= 0; i--) {
     const message = result.messages[i];
-    if (message?.role === 'assistant') {
+    if (!message) continue;
+    if (message.role === 'assistant') {
       const text = extractAssistantTextFromMessage(message);
-      if (text) return text;
+      return text && !isPlaceholderOnlyAssistantText(text) ? text : '';
     }
+    if (isPureToolResultUserMessage(message)) continue;
+    return '';
   }
   return '';
 }

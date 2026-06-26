@@ -438,7 +438,9 @@ export function extractHistorySeedsFromMessage(message: HistorySeedSourceMessage
           return [seed];
         }
         const text = stripManagedProtocolBlocks(seed.text);
-        return text.length > 0 ? [{ ...seed, text }] : [];
+        // Drop empty + bare '...' placeholder seeds (legacy pre-fix sessions
+        // persisted '...'); they must not restore as a fake assistant bubble.
+        return text.length > 0 && text.trim() !== "..." ? [{ ...seed, text }] : [];
       });
     }
     case "user": {
@@ -490,7 +492,9 @@ export function extractHistorySeedsFromMessages(
               ? { ...seed, text: stripManagedProtocolBlocks(seed.text) }
               : seed
           ))
-          .filter((seed) => seed.type !== "assistant" || seed.text.length > 0),
+          // Drop empty + bare '...' placeholder assistant seeds (legacy
+          // pre-fix sessions); they must not restore as a fake assistant bubble.
+          .filter((seed) => seed.type !== "assistant" || (seed.text.length > 0 && seed.text.trim() !== "...")),
       );
       continue;
     }
@@ -529,19 +533,41 @@ function formatSessionTitle(text: string): string {
 }
 
 /**
- * Extract the last assistant text from a message list.
+ * A user message whose content is ONLY tool_result block(s) — the trailing
+ * turn that legitimately follows the final assistant answer.
+ */
+function isPureToolResultUserMessage(message: KodaXMessage): boolean {
+  if (message.role !== "user") return false;
+  const content = message.content;
+  if (!Array.isArray(content) || content.length === 0) return false;
+  return content.every(
+    (b) => !!b && typeof b === "object" && "type" in b && (b as { type: string }).type === "tool_result",
+  );
+}
+
+/**
+ * Extract the MOST-RECENT assistant text from a message list. We skip only a
+ * trailing pure-tool_result user turn (the answer sits just before it); any
+ * other trailing message — a normal user prompt or system — stops the search
+ * and yields "". A bare '...' placeholder (legacy) or empty marker also yields
+ * "". This must NOT punch back to an earlier turn's answer: in a resumed
+ * session that earlier turn answered a DIFFERENT question, so resurfacing it
+ * would mislabel a stale answer as the current reply.
  */
 export function extractLastAssistantText(messages: KodaXMessage[]): string {
   for (let i = messages.length - 1; i >= 0; i--) {
     const msg = messages[i];
-    if (msg?.role !== "assistant") {
+    if (!msg) {
       continue;
     }
-
-    const content = extractAssistantTextOnly(msg.content);
-    if (content) {
-      return content;
+    if (msg.role === "assistant") {
+      const content = extractAssistantTextOnly(msg.content);
+      return content && content.trim() !== "..." ? content : "";
     }
+    if (isPureToolResultUserMessage(msg)) {
+      continue;
+    }
+    return "";
   }
 
   return "";
@@ -588,6 +614,12 @@ export function resolveCompletedAssistantText(
 export function sanitizeUserFacingAssistantText(text: string): string {
   const trimmed = text.trim();
   if (!trimmed) {
+    return "";
+  }
+
+  // A bare empty-content placeholder ('...' from legacy pre-fix sessions) is
+  // not a real reply. New sessions use an empty text block (caught above).
+  if (trimmed === "...") {
     return "";
   }
 

@@ -17,8 +17,10 @@
  *     history and fixes mis-pairings on both sides — orphan `tool_use` in
  *     assistant messages, orphan `tool_result` in user messages, and ensures
  *     no message becomes empty after stripping (Kimi specifically rejects
- *     empty assistant messages with 400, so we inject a `'...'` placeholder
- *     when stripping would empty an assistant message).
+ *     empty assistant messages with 400, so we inject an EMPTY text-block
+ *     marker when stripping would empty an assistant message — the visible
+ *     `'...'` is synthesized wire-only by the provider serializer, never
+ *     persisted into history).
  *
  * Migration history: extracted from `agent.ts` (originally lines 517–758)
  * during FEATURE_100 P2. Both `agent.ts` and `task-engine/runner-driven.ts`
@@ -62,8 +64,9 @@ function isToolResultContentBlock(
  *     message → removed
  *   - user `tool_result` with empty / missing tool_use_id → removed
  *   - assistant message that becomes content-empty after stripping → inject
- *     a `'...'` placeholder text block (preserves message-alternation invariant
- *     downstream providers like Kimi require)
+ *     an EMPTY text-block marker (preserves message-alternation invariant
+ *     downstream providers like Kimi require; the visible '...' is added
+ *     wire-only by the serializer, never persisted)
  */
 export function validateAndFixToolHistory(messages: KodaXMessage[]): KodaXMessage[] {
   if (process.env.KODAX_DEBUG_TOOL_HISTORY) {
@@ -186,7 +189,13 @@ export function validateAndFixToolHistory(messages: KodaXMessage[]): KodaXMessag
           return true; // preserve unknown block types
         });
         if (!hasSubstantiveContent) {
-          fixedMessages.push({ ...msg, content: [{ type: 'text', text: '...' }] });
+          // Inject an EMPTY text block, not a persisted '...'. The empty
+          // marker preserves message alternation (dropping would orphan
+          // adjacent tool_result blocks) while keeping history honest — a
+          // persisted '...' leaks to SDK/REPL as a fabricated reply. The
+          // provider serializer synthesizes a wire-only '...' if the
+          // gateway (e.g. Kimi) rejects empty content.
+          fixedMessages.push({ ...msg, content: [{ type: 'text', text: '' }] });
           continue;
         }
       }

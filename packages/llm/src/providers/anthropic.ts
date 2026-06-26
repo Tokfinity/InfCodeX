@@ -1209,8 +1209,16 @@ export abstract class KodaXAnthropicCompatProvider extends KodaXBaseProvider {
       // Guard: providers like Kimi reject messages with empty/substance-free content
       // (400 "must not be empty"). Inject minimal placeholder rather than dropping,
       // because dropping breaks the alternating user/assistant pattern.
+      //
+      // Applies to user messages too, not just assistant: an empty-text marker
+      // (`{ text: '' }`) can land on a USER turn when a recovery pass
+      // (tool-guard.filterIncompleteToolCalls) strips a dropped tool_result
+      // that was the user message's sole content. Without this, that user
+      // turn would serialize to an empty text block and 400. (The OpenAI side
+      // drops such an empty user turn in serializeUserMessage; Anthropic keeps
+      // the slot with a wire-only '...' to preserve alternation.)
       const isEffectivelyEmpty = content.length === 0 || (
-        role === 'assistant' && content.every((b) => {
+        (role === 'assistant' || role === 'user') && content.every((b) => {
           const t = b as unknown as { type: string; thinking?: string; text?: string };
           return (t.type === 'thinking' && !t.thinking)
             || (t.type === 'text' && !t.text);
@@ -1225,6 +1233,73 @@ export abstract class KodaXAnthropicCompatProvider extends KodaXBaseProvider {
       } as Anthropic.Messages.MessageParam);
     }
 
-    return converted;
+    return this.repairToolCallHistory(converted);
+  }
+
+  /**
+   * Wire-only defense-in-depth: drop orphan `tool_use` / `tool_result` blocks
+   * so the Anthropic API never 400s on "tool_use ids ... were not found in
+   * tool_result blocks" or "unexpected tool_result". The upstream
+   * `validateAndFixToolHistory` (run every turn before serialization) is the
+   * primary guard; this mirrors the OpenAI-side `repairToolCallHistory` so
+   * both provider families have the same last-mile net for any path that
+   * bypasses validate (custom callers, side queries). Never mutates input.
+   *
+   * Pairing is computed against adjacent messages (same rule as validate): a
+   * `tool_use` is orphan when the immediately-following user message has no
+   * matching `tool_result`; a `tool_result` is orphan when the
+   * immediately-preceding assistant message has no matching `tool_use`. A
+   * message emptied by repair is replaced with a minimal wire-only `'...'`
+   * text block to keep user/assistant alternation and satisfy gateways that
+   * reject empty content.
+   */
+  private repairToolCallHistory(
+    messages: Anthropic.Messages.MessageParam[],
+  ): Anthropic.Messages.MessageParam[] {
+    const collectIds = (
+      msg: Anthropic.Messages.MessageParam | undefined,
+      kind: 'tool_use' | 'tool_result',
+    ): Set<string> => {
+      const ids = new Set<string>();
+      if (!msg || typeof msg.content === 'string' || !Array.isArray(msg.content)) {
+        return ids;
+      }
+      for (const block of msg.content) {
+        const b = block as { type?: string; id?: string; tool_use_id?: string };
+        if (kind === 'tool_use' && b.type === 'tool_use' && b.id) ids.add(b.id);
+        if (kind === 'tool_result' && b.type === 'tool_result' && b.tool_use_id) {
+          ids.add(b.tool_use_id);
+        }
+      }
+      return ids;
+    };
+
+    return messages.map((msg, i) => {
+      if (typeof msg.content === 'string' || !Array.isArray(msg.content)) return msg;
+
+      let fixed = msg.content as Anthropic.Messages.ContentBlockParam[];
+      if (msg.role === 'assistant') {
+        const resultIds = collectIds(messages[i + 1], 'tool_result');
+        fixed = fixed.filter((block) => {
+          const b = block as { type?: string; id?: string };
+          return b.type !== 'tool_use' || (!!b.id && resultIds.has(b.id));
+        });
+      } else if (msg.role === 'user') {
+        const useIds = collectIds(messages[i - 1], 'tool_use');
+        fixed = fixed.filter((block) => {
+          const b = block as { type?: string; tool_use_id?: string };
+          return b.type !== 'tool_result' || (!!b.tool_use_id && useIds.has(b.tool_use_id));
+        });
+      }
+
+      if (fixed.length === msg.content.length) return msg;
+      if (fixed.length === 0) {
+        return {
+          ...msg,
+          content: [{ type: 'text', text: '...' }],
+        } as Anthropic.Messages.MessageParam;
+      }
+      return { ...msg, content: fixed } as Anthropic.Messages.MessageParam;
+    });
   }
 }

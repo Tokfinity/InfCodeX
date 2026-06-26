@@ -539,6 +539,94 @@ describe('anthropic message serialization', () => {
     expect(thinkingBlocks[0]).toMatchObject({ thinking: '...', signature: '' });
   });
 
+  // P2: wire-only orphan repair (defense-in-depth, mirrors the OpenAI-side
+  // repairToolCallHistory). validateAndFixToolHistory removes orphans upstream
+  // every turn; this is the Anthropic last-mile net so a stray orphan never
+  // 400s the API ("tool_use ids were not found" / "unexpected tool_result").
+  it('drops an orphan tool_result with no preceding tool_use', async () => {
+    const create = vi.fn().mockResolvedValue(createCompletedAnthropicStream());
+    const provider = new TestAnthropicProvider({ messages: { create } });
+    const messages: KodaXMessage[] = [
+      { role: 'user', content: [{ type: 'tool_result', tool_use_id: 'call_missing', content: 'late' }] },
+      { role: 'user', content: 'continue' },
+    ];
+
+    await provider.stream(messages, TOOLS, 'system');
+
+    const kwargs = create.mock.calls[0]?.[0];
+    const firstUser = kwargs.messages[0];
+    const hasOrphanResult = (firstUser.content as Array<{ type: string }>).some(
+      (b) => b.type === 'tool_result',
+    );
+    expect(hasOrphanResult).toBe(false);
+  });
+
+  it('drops an orphan tool_use with no following tool_result and replaces the emptied turn with a wire "..."', async () => {
+    const create = vi.fn().mockResolvedValue(createCompletedAnthropicStream());
+    const provider = new TestAnthropicProvider({ messages: { create } });
+    const messages: KodaXMessage[] = [
+      { role: 'user', content: 'do x' },
+      { role: 'assistant', content: [{ type: 'tool_use', id: 'call_orphan', name: 'read', input: {} }] },
+      { role: 'user', content: 'continue' },
+    ];
+
+    await provider.stream(messages, TOOLS, 'system');
+
+    const kwargs = create.mock.calls[0]?.[0];
+    const assistant = kwargs.messages.find((m: { role: string }) => m.role === 'assistant');
+    const toolUses = (assistant.content as Array<{ type: string }>).filter(
+      (b) => b.type === 'tool_use',
+    );
+    expect(toolUses).toHaveLength(0);
+    expect(assistant.content).toEqual([{ type: 'text', text: '...' }]);
+  });
+
+  it('keeps matched tool_use/tool_result pairs and drops only the unmatched', async () => {
+    const create = vi.fn().mockResolvedValue(createCompletedAnthropicStream());
+    const provider = new TestAnthropicProvider({ messages: { create } });
+    const messages: KodaXMessage[] = [
+      { role: 'user', content: 'do x' },
+      {
+        role: 'assistant',
+        content: [
+          { type: 'tool_use', id: 'call_a', name: 'read', input: { path: 'a' } },
+          { type: 'tool_use', id: 'call_b', name: 'read', input: { path: 'b' } },
+        ],
+      },
+      { role: 'user', content: [{ type: 'tool_result', tool_use_id: 'call_a', content: 'a' }] },
+      { role: 'user', content: 'continue' },
+    ];
+
+    await provider.stream(messages, TOOLS, 'system');
+
+    const kwargs = create.mock.calls[0]?.[0];
+    const assistant = kwargs.messages.find((m: { role: string }) => m.role === 'assistant');
+    const ids = (assistant.content as Array<{ type: string; id?: string }>)
+      .filter((b) => b.type === 'tool_use')
+      .map((b) => b.id);
+    expect(ids).toEqual(['call_a']);
+  });
+
+  it('replaces an all-empty-text USER turn with a wire "..." (empty-marker on user role)', async () => {
+    // A recovery pass (tool-guard) can strip a dropped tool_result that was a
+    // user turn's sole content, leaving an empty-text marker on a USER turn.
+    // It must serialize to a wire-only '...' (not an empty text block that 400s).
+    const create = vi.fn().mockResolvedValue(createCompletedAnthropicStream());
+    const provider = new TestAnthropicProvider({ messages: { create } });
+    const messages: KodaXMessage[] = [
+      { role: 'user', content: 'first' },
+      { role: 'assistant', content: 'ok' },
+      { role: 'user', content: [{ type: 'text', text: '' }] },
+    ];
+
+    await provider.stream(messages, TOOLS, 'system');
+
+    const kwargs = create.mock.calls[0]?.[0];
+    const lastUser = kwargs.messages[kwargs.messages.length - 1];
+    expect(lastUser.role).toBe('user');
+    expect(lastUser.content).toEqual([{ type: 'text', text: '...' }]);
+  });
+
   it('serializes image input blocks as base64 image parts', async () => {
     const cwd = await createTempDir('kodax-anthropic-images-');
     const imagePath = path.join(cwd, 'diagram.png');

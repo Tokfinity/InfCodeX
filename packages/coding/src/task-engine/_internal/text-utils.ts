@@ -81,7 +81,11 @@ export function extractMessageText(result: Partial<KodaXResult> | undefined): st
   }
 
   const lastMessage = result.messages?.[result.messages.length - 1];
-  if (!lastMessage) {
+  // Only the LAST message qualifies as the assistant answer when it is an
+  // assistant turn. A trailing user/system message means this run produced no
+  // assistant text (interrupted / error before the assistant); returning its
+  // text would surface the user's own prompt as the "final assistant text".
+  if (!lastMessage || lastMessage.role !== 'assistant') {
     return '';
   }
 

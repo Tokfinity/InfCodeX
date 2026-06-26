@@ -140,11 +140,14 @@ describe('CAP-002: history cleanup contract', () => {
     );
   });
 
-  it('CAP-HISTORY-CLEANUP-005: assistant message with only non-substantive blocks (e.g. empty thinking) gets a "..." placeholder', () => {
+  it('CAP-HISTORY-CLEANUP-005: assistant message with only non-substantive blocks (e.g. empty thinking) gets an empty-text marker', () => {
     // Provider compatibility: Kimi rejects empty assistant messages with 400.
     // Microcompaction can clear thinking text in-place (`thinking: ''`); after
     // tool_use stripping the message may have content blocks that are all
-    // non-substantive. The placeholder branch injects a `'...'` text block.
+    // non-substantive. The guard injects an EMPTY text block `{ text: '' }`
+    // (honest in-history marker); the wire serializer synthesizes '...' only
+    // when a gateway rejects empty content. A persisted '...' would leak to
+    // the SDK/REPL as a fabricated reply, so it must NOT reach history.
     const messages: KodaXMessage[] = [
       { role: 'user', content: 'do x' },
       {
@@ -161,6 +164,6 @@ describe('CAP-002: history cleanup contract', () => {
     const assistantBlock = fixed[1]!;
 
     expect(assistantBlock.role).toBe('assistant');
-    expect(assistantBlock.content).toEqual([{ type: 'text', text: '...' }]);
+    expect(assistantBlock.content).toEqual([{ type: 'text', text: '' }]);
   });
 });

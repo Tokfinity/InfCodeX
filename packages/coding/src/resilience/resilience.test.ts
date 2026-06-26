@@ -629,7 +629,7 @@ describe('ProviderRecoveryCoordinator', () => {
     expect((result.messages[2] as KodaXMessage).content).toBe('Continue.');
   });
 
-  it('sanitize collapses thinking-only assistant turn into "..." placeholder', () => {
+  it('sanitize collapses thinking-only assistant turn into an empty-text marker', () => {
     const tracker = new StableBoundaryTracker();
     tracker.beginRequest('deepseek', 'deepseek-v4-flash', []);
     const coordinator = new ProviderRecoveryCoordinator(tracker, {});
@@ -656,7 +656,10 @@ describe('ProviderRecoveryCoordinator', () => {
     const blocks = assistant.content as Array<{ type: string; text?: string }>;
     expect(blocks).toHaveLength(1);
     expect(blocks[0].type).toBe('text');
-    expect(blocks[0].text).toBe('...');
+    // Empty-text marker, not a persisted '...'. The DeepSeek retry path
+    // attaches reasoning_content separately; the wire serializer adds '...'
+    // only if the gateway rejects empty content.
+    expect(blocks[0].text).toBe('');
   });
 });
 

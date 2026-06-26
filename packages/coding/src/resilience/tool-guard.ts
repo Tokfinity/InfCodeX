@@ -88,13 +88,16 @@ function filterIncompleteToolCalls(
       return true;
     });
 
-    // If filtering removed all content, inject a minimal placeholder.
-    // CRITICAL: text must be non-empty — providers like Kimi reject messages
-    // with empty content (400 "must not be empty").
+    // If filtering removed all content, inject an EMPTY text marker to
+    // preserve message alternation. Not a persisted '...': this result can be
+    // assigned back into history after a successful boundary-retry recovery,
+    // so a '...' would leak as a fabricated reply. The wire serializer adds
+    // '...' only when the gateway (e.g. Kimi "must not be empty") rejects
+    // empty content.
     if (filteredContent.length === 0) {
       return {
         ...msg,
-        content: [{ type: 'text', text: '...' }],
+        content: [{ type: 'text', text: '' }],
       };
     }
 

@@ -15,23 +15,32 @@
  * provider call can be made — the guard prevents that. Others tolerate
  * empty content but produce degenerate next turns. Either way, an
  * empty assistant message is a corrupt history shape; replacing it
- * with a minimal `[{ type: 'text', text: '...' }]` placeholder is
- * the cheapest correct intervention.
+ * with a minimal `[{ type: 'text', text: '' }]` marker is the cheapest
+ * correct intervention.
  *
- * The placeholder is intentionally short (`'...'`) so it does not
- * pollute the visible transcript when the host renders the turn —
- * three dots read as "the assistant continued silently" rather than
- * looking like a substantive response.
+ * The marker is an EMPTY text block, NOT the literal `'...'`. A persisted
+ * `'...'` leaks to the SDK output (`coding-preset.extractFinalAssistantText`)
+ * and the REPL transcript as a fabricated assistant reply, and pollutes the
+ * model's replayed context. The empty marker keeps history honest while
+ * still occupying the assistant slot (preserving user/assistant alternation
+ * and avoiding orphaned adjacent tool_result blocks). The visible `'...'`
+ * placeholder is synthesized wire-only by the provider serializers
+ * (anthropic.ts / openai.ts) ONLY when a gateway rejects empty content;
+ * it is never written back into KodaX history. Mirrors the generic Agent
+ * Runner convention (`runner-tool-loop.ts`: empty text block keeps a
+ * message well-formed).
  *
  * Migration history: extracted from `agent.ts:1064-1070` —
- * pre-FEATURE_100 baseline — during FEATURE_100 P3.3a.
+ * pre-FEATURE_100 baseline — during FEATURE_100 P3.3a. Switched from a
+ * persisted `'...'` to an empty-text marker during the empty-content
+ * placeholder root-cause fix.
  */
 
 import type { KodaXContentBlock } from '@kodax-ai/llm';
 
 export const EMPTY_ASSISTANT_CONTENT_PLACEHOLDER: KodaXContentBlock = {
   type: 'text',
-  text: '...',
+  text: '',
 };
 
 /**

@@ -389,6 +389,48 @@ describe("message-utils", () => {
     expect(resolved).toBe("managed summary");
   });
 
+  it("extractLastAssistantText returns '' when the trailing turn is a normal user prompt (no assistant this round)", () => {
+    // Shape [prev assistant, this-turn user]: interrupted / error before the
+    // assistant. Must NOT punch back to the previous turn's answer.
+    const text = extractLastAssistantText([
+      { role: "assistant", content: "old answer" },
+      { role: "user", content: "a different new question" },
+    ] satisfies KodaXMessage[]);
+    expect(text).toBe("");
+  });
+
+  it("extractLastAssistantText skips a trailing pure tool_result user turn to reach the real final assistant", () => {
+    const text = extractLastAssistantText([
+      { role: "assistant", content: "the answer" },
+      { role: "user", content: [{ type: "tool_result", tool_use_id: "c1", content: "ok" }] },
+    ] satisfies KodaXMessage[]);
+    expect(text).toBe("the answer");
+  });
+
+  it("resolveCompletedAssistantText does NOT punch through a placeholder final assistant", () => {
+    // Latest assistant is a legacy '...'; the completed-round text must be ''
+    // (falls through to empty), never the earlier turn's "old answer".
+    const resolved = resolveCompletedAssistantText(
+      [
+        { role: "assistant", content: "old answer" },
+        { role: "user", content: "new question" },
+        { role: "assistant", content: [{ type: "text", text: "..." }] },
+      ] satisfies KodaXMessage[],
+      "",
+      undefined,
+      ""
+    );
+    expect(resolved).toBe("");
+  });
+
+  it("restore seeds drop a legacy '...' placeholder assistant (no fake bubble)", () => {
+    const seeds = extractHistorySeedsFromMessages([
+      { role: "user", content: "hi" },
+      { role: "assistant", content: [{ type: "text", text: "..." }] },
+    ] as unknown as HistorySeedSourceMessage[]);
+    expect(seeds.some((seed) => seed.type === "assistant")).toBe(false);
+  });
+
   it("builds session titles from structured user text blocks", () => {
     const title = extractTitle([
       {

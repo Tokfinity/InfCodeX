@@ -1153,17 +1153,29 @@ export abstract class KodaXOpenAICompatProvider extends KodaXBaseProvider {
       (block) => block.type === 'thinking' || block.type === 'redacted_thinking',
     );
 
-    // Thinking-only turns must survive: dropping them breaks user/assistant
-    // alternation and erases reasoning_content the next replay needs.
-    if (!text && toolCalls.length === 0 && !hasAnyThinking) {
+    // An empty-text marker (`{ type: 'text', text: '' }`) is the honest
+    // in-history representation of a turn that produced no visible content
+    // (hidden-tool-only turn, sanitized thinking-only turn). It must NOT be
+    // dropped: returning [] erases the assistant slot and can leave
+    // user,user adjacency that some gateways reject. "Has a text block (even
+    // empty)" means the turn must occupy a slot and falls through to the
+    // wire-only '...' fallback below — mirroring the Anthropic empty guard.
+    const hasTextBlock = contentBlocks.some((block) => block.type === 'text');
+
+    // Only a GENUINELY empty turn (no text block at all, no tools, no
+    // thinking) is dropped. Thinking-only and empty-text-marker turns survive
+    // — dropping them breaks user/assistant alternation and erases
+    // reasoning_content the next replay needs.
+    if (!text && toolCalls.length === 0 && !hasAnyThinking && !hasTextBlock) {
       return [];
     }
 
-    // text → send text; tool-only → null (per OpenAI spec); thinking-only
-    // (or redacted-only) → '...' placeholder so gateways don't reject null
-    // content without tool_calls. The placeholder is wire-only, never
-    // written back into KodaX history. The actual thinking, if any, rides
-    // on reasoning_content below (redacted blocks contribute none).
+    // text → send text; tool-only → null (per OpenAI spec); thinking-only,
+    // redacted-only, or empty-text-marker → '...' placeholder so gateways
+    // don't reject null/empty content without tool_calls. The placeholder is
+    // wire-only, never written back into KodaX history. The actual thinking,
+    // if any, rides on reasoning_content below (redacted blocks contribute
+    // none).
     let content: string | null;
     if (text) {
       content = text;
