@@ -134,7 +134,7 @@ class TestOpenAIProvider extends KodaXOpenAICompatProvider {
       reasoningCapability: capability,
       ...(capability === 'native-effort'
         ? {
-            reasoningCapabilityV2: {
+            reasoningProfile: {
               effortStrategy: 'openai-chat-effort',
               supportedEfforts: [
                 { value: 'low' },
@@ -160,8 +160,7 @@ class TestOpenAIProvider extends KodaXOpenAICompatProvider {
 describe('openai reasoning capability', () => {
   const reasoning: KodaXReasoningRequest = {
     enabled: true,
-    mode: 'balanced',
-    depth: 'medium',
+    effort: 'medium',
     taskType: 'review',
     executionMode: 'pr-review',
   };
@@ -217,12 +216,12 @@ describe('openai reasoning capability', () => {
     expect(create.mock.calls[0]?.[0]).not.toHaveProperty('reasoning_effort');
   });
 
-  it('sends DeepSeek V4 thinking plus aliased reasoning_effort through V2 metadata', async () => {
+  it('sends DeepSeek V4 thinking plus aliased reasoning_effort through reasoning metadata', async () => {
     const create = vi.fn().mockResolvedValue(createCompletedOpenAIStream());
     const provider = new TestOpenAIProvider('deepseek', 'native-effort', {
       chat: { completions: { create } },
     }, {
-      reasoningCapabilityV2: {
+      reasoningProfile: {
         reasoningPreset: 'deepseek-v4-openai',
         effortStrategy: 'openai-chat-effort',
         thinkingStrategy: 'provider-toggle',
@@ -249,12 +248,12 @@ describe('openai reasoning capability', () => {
     });
   });
 
-  it('resolves GLM-5.2 auto effort to the V2 model default before lowering', async () => {
+  it('resolves GLM-5.2 auto effort to the reasoning model default before lowering', async () => {
     const create = vi.fn().mockResolvedValue(createCompletedOpenAIStream());
     const provider = new TestOpenAIProvider('zhipu', 'native-effort', {
       chat: { completions: { create } },
     }, {
-      reasoningCapabilityV2: {
+      reasoningProfile: {
         reasoningPreset: 'zai-glm-5.2',
         effortStrategy: 'openai-chat-effort',
         thinkingStrategy: 'provider-toggle',
@@ -279,12 +278,12 @@ describe('openai reasoning capability', () => {
     });
   });
 
-  it('sends disabled thinking for OpenAI-compatible disabled efforts through V2 metadata', async () => {
+  it('sends disabled thinking for OpenAI-compatible disabled efforts through reasoning metadata', async () => {
     const create = vi.fn().mockResolvedValue(createCompletedOpenAIStream());
     const provider = new TestOpenAIProvider('zhipu', 'native-effort', {
       chat: { completions: { create } },
     }, {
-      reasoningCapabilityV2: {
+      reasoningProfile: {
         reasoningPreset: 'zai-glm-5.2',
         effortStrategy: 'openai-chat-effort',
         thinkingStrategy: 'provider-toggle',
@@ -361,13 +360,13 @@ describe('openai reasoning capability', () => {
     });
   });
 
-  it('caps V2 budgetByEffort values with thinkingBudgetCap for qwen-style providers', async () => {
+  it('caps reasoning profile budgetByEffort values with thinkingBudgetCap for qwen-style providers', async () => {
     const create = vi.fn().mockResolvedValue(createCompletedOpenAIStream());
     const provider = new TestOpenAIProvider('qwen', 'native-budget', {
       chat: { completions: { create } },
     }, {
       thinkingBudgetCap: 12000,
-      reasoningCapabilityV2: {
+      reasoningProfile: {
         reasoningPreset: 'qwen-hybrid-thinking',
         effortStrategy: 'provider-budget',
         thinkingStrategy: 'provider-budget',
@@ -599,7 +598,7 @@ describe('openai reasoning capability', () => {
   });
 
   // Edge case (Hidden bug B): a model can finish a turn having emitted only
-  // thinking — no visible text, no tool calls. The early `return []` in
+  // thinking 鈥?no visible text, no tool calls. The early `return []` in
   // serializeAssistantMessage used to drop the entire assistant turn from
   // the wire, breaking the user/assistant alternation contract some
   // OpenAI-compat gateways enforce, AND erasing the reasoning_content the
@@ -630,7 +629,7 @@ describe('openai reasoning capability', () => {
     await provider.stream(messages, TOOLS, 'system', reasoning);
 
     const requestMessages = create.mock.calls[0]?.[0].messages as Array<Record<string, unknown>>;
-    // Critical: the assistant turn must NOT vanish from the wire — that
+    // Critical: the assistant turn must NOT vanish from the wire 鈥?that
     // would break user/assistant alternation and discard the thinking
     // payload DeepSeek requires.
     const roles = requestMessages.map((m) => m.role);
@@ -722,7 +721,7 @@ describe('openai reasoning capability', () => {
       {
         role: 'assistant',
         content: [
-          { type: 'text', text: 'Got it — no OAuth references in the codebase.' },
+          { type: 'text', text: 'Got it 鈥?no OAuth references in the codebase.' },
         ],
       },
       { role: 'user', content: 'Now check for JWT.' },
@@ -733,7 +732,7 @@ describe('openai reasoning capability', () => {
     const requestMessages = create.mock.calls[0]?.[0].messages as Array<Record<string, unknown>>;
     const assistantWires = requestMessages.filter((m) => m.role === 'assistant');
     expect(assistantWires).toHaveLength(2);
-    // Both assistant turns — tool-only and text-only — must carry the
+    // Both assistant turns 鈥?tool-only and text-only 鈥?must carry the
     // field. Empty string is fine; what matters is field presence.
     for (const wire of assistantWires) {
       expect(wire).toHaveProperty('reasoning_content', '');
@@ -864,7 +863,7 @@ describe('openai reasoning capability', () => {
     // role:'system' that is not at position 0 ("System message must at the
     // begin"). The provider therefore collapses the system parameter and
     // every embedded system message into a single wire system entry while
-    // keeping the historical summary content intact — the previous behaviour
+    // keeping the historical summary content intact 鈥?the previous behaviour
     // of forwarding multiple separate system messages is what triggered the
     // 400s in the first place.
     const create = vi.fn().mockResolvedValue(createCompletedOpenAIStream());

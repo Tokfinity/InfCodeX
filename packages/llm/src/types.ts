@@ -1,10 +1,10 @@
 /**
  * KodaX AI Types
  *
- * AI 层类型定义 - 所有 Provider 共享的类型接口
+ * AI 灞傜被鍨嬪畾涔?- 鎵€鏈?Provider 鍏变韩鐨勭被鍨嬫帴鍙?
  */
 
-// ============== 内容块类型 ==============
+// ============== 鍐呭鍧楃被鍨?==============
 
 export interface KodaXTextBlock {
   type: 'text';
@@ -19,7 +19,7 @@ export interface KodaXToolUseBlock {
 }
 
 /**
- * Tool-result content blocks — a structural subset of the full
+ * Tool-result content blocks 鈥?a structural subset of the full
  * `KodaXContentBlock` union, restricted to what providers actually accept
  * inside a tool_result envelope. Anthropic / OpenAI multimodal APIs accept
  * text and image blocks inside tool_result; thinking / tool_use / nested
@@ -78,7 +78,7 @@ export interface KodaXRedactedThinkingBlock {
 }
 
 /**
- * FEATURE_116 (v0.7.37) — Cache boundary marker.
+ * FEATURE_116 (v0.7.37) 鈥?Cache boundary marker.
  *
  * Marks the end of a cacheable prefix in a request payload. Provider base
  * classes lower this to the wire-level cache mechanism their API supports:
@@ -87,7 +87,7 @@ export interface KodaXRedactedThinkingBlock {
  *   `cache_control: { type: 'ephemeral' }` on the immediately preceding
  *   block, then strips the marker itself.
  * - `KodaXOpenAICompatProvider`: strips the marker (OpenAI / DeepSeek
- *   auto prefix-cache; Kimi/Zhipu/通义 self-cache via separate cache_id
+ *   auto prefix-cache; Kimi/Zhipu/閫氫箟 self-cache via separate cache_id
  *   endpoint deferred to v0.7.45+).
  * - `KodaXAcpProvider` (CLI bridge): strips the marker (CLI bridge does
  *   not touch wire; avoids leaking marker into subprocess input).
@@ -111,7 +111,7 @@ export type KodaXContentBlock =
     | KodaXRedactedThinkingBlock
     | KodaXCacheBoundary;
 
-// ============== 消息类型 ==============
+// ============== 娑堟伅绫诲瀷 ==============
 
 export interface KodaXMessage {
   role: 'user' | 'assistant' | 'system';
@@ -120,7 +120,7 @@ export interface KodaXMessage {
   _synthetic?: boolean;
 }
 
-// ============== 流式结果类型 ==============
+// ============== 娴佸紡缁撴灉绫诲瀷 ==============
 
 export interface KodaXTokenUsage {
   inputTokens: number;
@@ -140,7 +140,7 @@ export interface KodaXStreamResult {
   stopReason?: string;
 }
 
-// ============== 工具定义 ==============
+// ============== 宸ュ叿瀹氫箟 ==============
 
 export interface KodaXToolDefinition {
   name: string;
@@ -152,7 +152,7 @@ export interface KodaXToolDefinition {
   };
 }
 
-// ============== 推理策略类型 ==============
+// ============== 鎺ㄧ悊绛栫暐绫诲瀷 ==============
 
 export type KodaXReasoningCapability =
   | 'native-effort'
@@ -225,7 +225,7 @@ export type KodaXThinkingWireStrategy =
   | 'provider-toggle'
   | 'none';
 
-export interface KodaXReasoningCapabilityV2 {
+export interface KodaXReasoningProfile {
   readonly reasoningPreset?: KodaXReasoningPresetName;
   readonly effortStrategy: KodaXReasoningEffortWireStrategy;
   readonly thinkingStrategy?: KodaXThinkingWireStrategy;
@@ -244,6 +244,28 @@ export interface KodaXReasoningCapabilityV2 {
   readonly supportsDisabledThinking?: boolean;
   readonly requiresEffortBetaHeader?: boolean;
 }
+
+/**
+ * Friendly reasoning declaration for CUSTOM providers / models — the canonical
+ * user-facing form. List the effort rungs the model accepts (order = the Ctrl+T
+ * ladder; include `"off"` to allow disabling thinking) plus an optional
+ * `default`. The wire strategy (effortStrategy / thinkingStrategy) is derived
+ * from the provider `protocol`, so users never touch preset names or strategy
+ * enums. Use the string `"none"` for a model with no thinking capability. For
+ * full, explicit control fall back to `reasoningProfile`.
+ *
+ * Example: `"reasoning": { "efforts": ["off", "low", "high", "max"], "default": "high" }`
+ */
+export interface KodaXSimpleReasoningConfig {
+  readonly efforts: readonly string[];
+  readonly default?: string;
+}
+
+/** User-facing reasoning declaration: friendly form, `"none"`, or (advanced) a raw profile override. */
+export type KodaXReasoningConfig =
+  | KodaXSimpleReasoningConfig
+  | 'none'
+  | Partial<KodaXReasoningProfile>;
 
 export type KodaXProviderTransport = 'native-api' | 'cli-bridge';
 
@@ -443,8 +465,12 @@ export type KodaXTaskBudgetOverrides = Partial<
 
 export interface KodaXReasoningRequest {
   enabled?: boolean;
-  mode?: KodaXReasoningMode;
-  depth?: KodaXThinkingDepth;
+  /**
+   * Canonical reasoning control. Reasoning single-tracking removed the legacy
+   * `mode` (KodaXReasoningMode) + `depth` (KodaXThinkingDepth) request fields —
+   * callers pass `effort` (or `enabled` as a boolean shorthand). Providers
+   * derive any thinking budget from the effort via `effortToThinkingDepth`.
+   */
   effort?: KodaXWireReasoningEffort;
   taskType?: KodaXTaskType;
   executionMode?: KodaXExecutionMode;
@@ -452,15 +478,13 @@ export interface KodaXReasoningRequest {
 
 export interface KodaXNormalizedReasoningRequest {
   enabled: boolean;
-  mode: KodaXReasoningMode;
-  depth: KodaXThinkingDepth;
-  effort?: KodaXWireReasoningEffort;
+  effort: KodaXWireReasoningEffort;
   effortSource?: 'explicit' | 'legacy';
   taskType: KodaXTaskType;
   executionMode: KodaXExecutionMode;
 }
 
-// ============== Provider 配置 ==============
+// ============== Provider 閰嶇疆 ==============
 
 export interface KodaXModelDescriptor {
   id: string;
@@ -468,12 +492,17 @@ export interface KodaXModelDescriptor {
   contextWindow?: number;
   maxOutputTokens?: number;
   thinkingBudgetCap?: number;
+  /** @deprecated Auto-migrated on load. Prefer `reasoning: { efforts, default }`. */
   reasoningCapability?: KodaXReasoningCapability;
-  /** Preferred V2 template name for this model descriptor. */
+  /** @deprecated Internal preset name; auto-migrated on load. Prefer `reasoning`. */
   reasoningPreset?: KodaXReasoningPresetName;
-  /** Optional overrides layered onto `reasoningPreset` for this model. */
-  reasoning?: Partial<KodaXReasoningCapabilityV2>;
-  reasoningCapabilityV2?: KodaXReasoningCapabilityV2;
+  /**
+   * Canonical reasoning declaration: friendly `{ efforts, default }`, `"none"`,
+   * or (advanced) a raw `Partial<KodaXReasoningProfile>` override. See
+   * `KodaXReasoningConfig`.
+   */
+  reasoning?: KodaXReasoningConfig;
+  reasoningProfile?: KodaXReasoningProfile;
   /**
    * Per-model override for `replayReasoningContent`. Falls through to the
    * provider-level flag when undefined. Lets a single gateway endpoint
@@ -498,23 +527,23 @@ export type KodaXProtocolFamily = 'anthropic' | 'openai';
 export type KodaXProviderUserAgentMode = 'compat' | 'sdk';
 
 /**
- * FEATURE_216 v0.7.45 — Strategy KodaX uses to verify a provider's API
+ * FEATURE_216 v0.7.45 鈥?Strategy KodaX uses to verify a provider's API
  * credentials. Per-provider data-driven (set in `provider-capabilities.json`)
  * because the 14 providers KodaX ships do not share a single zero-token
- * verify primitive — empirically 3 distinct strategies are needed:
+ * verify primitive 鈥?empirically 3 distinct strategies are needed:
  *
- *   - `count-tokens`: Anthropic-protocol `messages.countTokens()` —
+ *   - `count-tokens`: Anthropic-protocol `messages.countTokens()` 鈥?
  *     true 0-token (input_tokens reported but no model invocation).
  *     Use for Anthropic-compat providers whose upstream implements
  *     `/v1/messages/count_tokens`.
- *   - `models-list`: `models.list()` — 0-token, authenticated GET.
+ *   - `models-list`: `models.list()` 鈥?0-token, authenticated GET.
  *     Use ONLY when the provider's `/v1/models` endpoint actually
- *     gates on auth (some compat layers expose it publicly → false
- *     positives; others 401 even for valid keys → false negatives).
+ *     gates on auth (some compat layers expose it publicly 鈫?false
+ *     positives; others 401 even for valid keys 鈫?false negatives).
  *   - `minimal-message`: `{messages,chat.completions}.create({max_tokens:1})`
- *     — ~6-7 tokens / call. Universal fallback for providers where
+ *     鈥?~6-7 tokens / call. Universal fallback for providers where
  *     the above two are unreliable. Cost is trivial for UI-button
- *     "test connection" use cases (≈ $0.00001 per verify).
+ *     "test connection" use cases (鈮?$0.00001 per verify).
  *   - `unsupported`: Provider has no verify primitive (CLI bridges
  *     own credentials in their own subprocess token store; the SDK
  *     does not enter that surface).
@@ -526,10 +555,10 @@ export type KodaXVerifyStrategy =
   | 'unsupported';
 
 /**
- * FEATURE_216 v0.7.45 — Never-throws result envelope for
+ * FEATURE_216 v0.7.45 鈥?Never-throws result envelope for
  * `provider.verifyCredential()` / `verifyProviderCredential(name)`.
  * Mirrors `side-query.ts` `SideQueryResult` pattern: every failure
- * mode is captured in the returned object — no rejection, no throw.
+ * mode is captured in the returned object 鈥?no rejection, no throw.
  */
 export interface KodaXVerifyCredentialResult {
   readonly ok: boolean;
@@ -539,7 +568,7 @@ export interface KodaXVerifyCredentialResult {
    * Error category. Stable for UI consumers to map to user-facing
    * states ("invalid key", "no network", "provider doesn't support
    * verification", etc.). `unconfigured` is set by the top-level
-   * helper when env var is missing — avoids the provider ctor throw
+   * helper when env var is missing 鈥?avoids the provider ctor throw
    * (per FEATURE_198 model-capabilities exposure pattern).
    */
   readonly error?:
@@ -561,10 +590,10 @@ export interface KodaXVerifyCredentialResult {
 }
 
 /**
- * FEATURE_216 v0.7.45 — Best-effort upstream model listing. Distinct from
+ * FEATURE_216 v0.7.45 鈥?Best-effort upstream model listing. Distinct from
  * credential verification: this is for "model picker" UIs. Mixes upstream
  * `/v1/models` data with static `provider-capabilities.json` fallback when
- * the upstream endpoint is unreliable. NOT a cred test — for that, call
+ * the upstream endpoint is unreliable. NOT a cred test 鈥?for that, call
  * `verifyProviderCredential()`.
  */
 export interface KodaXListModelsResult {
@@ -581,8 +610,14 @@ export interface KodaXCustomProviderConfig {
   baseUrl: string;
   apiKeyEnv: string;
   model: string;
+  /** @deprecated Internal preset name; auto-migrated on load. Prefer `reasoning`. */
   reasoningPreset?: KodaXReasoningPresetName;
-  reasoning?: Partial<KodaXReasoningCapabilityV2>;
+  /**
+   * Canonical reasoning declaration for this provider: friendly
+   * `{ efforts, default }`, `"none"`, or (advanced) a raw profile override.
+   * See `KodaXReasoningConfig`.
+   */
+  reasoning?: KodaXReasoningConfig;
   /**
    * Additional available models beyond the default. Accepts either a
    * plain model id string (legacy) or a KodaXModelDescriptor object
@@ -596,9 +631,11 @@ export interface KodaXCustomProviderConfig {
    * - sdk: keep the upstream SDK default User-Agent
    */
   userAgentMode?: KodaXProviderUserAgentMode;
+  /** @deprecated Auto-migrated on load. Prefer `reasoning: "none"` (off) or `reasoning: { efforts, default }`. */
   supportsThinking?: boolean;
+  /** @deprecated Auto-migrated on load. Prefer `reasoning: { efforts, default }`. */
   reasoningCapability?: KodaXReasoningCapability;
-  reasoningCapabilityV2?: KodaXReasoningCapabilityV2;
+  reasoningProfile?: KodaXReasoningProfile;
   capabilityProfile?: KodaXProviderCapabilityProfile;
   contextWindow?: number;
   maxOutputTokens?: number;
@@ -606,7 +643,7 @@ export interface KodaXCustomProviderConfig {
   /**
    * Provider-level default for OpenAI-compat `reasoning_content` echo.
    * Required by DeepSeek V4 thinking mode (replay 400s without it).
-   * Defaults to false — must stay false for OpenAI proper or any gateway
+   * Defaults to false 鈥?must stay false for OpenAI proper or any gateway
    * that rejects unknown fields. Per-model values in `models[]` can
    * override on a model-by-model basis.
    */
@@ -614,21 +651,21 @@ export interface KodaXCustomProviderConfig {
   /**
    * Provider-level default for strict Anthropic thinking-signature
    * verification. Only Anthropic proper cryptographically verifies
-   * signatures — third-party Anthropic-compat gateways must keep this
+   * signatures 鈥?third-party Anthropic-compat gateways must keep this
    * false (default). Per-model values in `models[]` can override.
    */
   strictThinkingSignature?: boolean;
   /**
    * Provider-level default streaming wall-clock cap (ms). Set just below
-   * a known server-side kill window (zhipu-coding 308s → 300_000). Leave
+   * a known server-side kill window (zhipu-coding 308s 鈫?300_000). Leave
    * unset to disable the watchdog. Per-model values in `models[]` can
    * override.
    */
   streamMaxDurationMs?: number;
   /**
-   * FEATURE_216 v0.7.45 — Which verify primitive this provider supports.
+   * FEATURE_216 v0.7.45 鈥?Which verify primitive this provider supports.
    * Optional: when unset, the SDK derives a default from `protocol`
-   * (anthropic → count-tokens / openai → models-list). Set explicitly when
+   * (anthropic 鈫?count-tokens / openai 鈫?models-list). Set explicitly when
    * the upstream `/v1/models` is public (false-positive risk) or the
    * `messages.count_tokens` endpoint is unimplemented (404), in which
    * case `minimal-message` is the only safe fallback.
@@ -646,17 +683,17 @@ export interface KodaXProviderConfig {
   userAgentMode?: KodaXProviderUserAgentMode;
   supportsThinking: boolean;
   reasoningCapability?: KodaXReasoningCapability;
-  reasoningCapabilityV2?: KodaXReasoningCapabilityV2;
+  reasoningProfile?: KodaXReasoningProfile;
   capabilityProfile?: KodaXProviderCapabilityProfile;
-  /** 模型的上下文窗口大小 (tokens) */
+  /** 妯″瀷鐨勪笂涓嬫枃绐楀彛澶у皬 (tokens) */
   contextWindow?: number;
-  /** Provider 允许的最大输出 token */
+  /** Provider 鍏佽鐨勬渶澶ц緭鍑?token */
   maxOutputTokens?: number;
-  /** Provider thinking budget 上限 */
+  /** Provider thinking budget 涓婇檺 */
   thinkingBudgetCap?: number;
-  /** Provider 默认 thinking budget 映射 */
+  /** Provider 榛樿 thinking budget 鏄犲皠 */
   defaultThinkingBudgets?: Partial<KodaXThinkingBudgetMap>;
-  /** 按任务类型覆盖默认 budget */
+  /** 鎸変换鍔＄被鍨嬭鐩栭粯璁?budget */
   taskBudgetOverrides?: KodaXTaskBudgetOverrides;
   /**
    * Echo the prior turn's `reasoning_content` back on replayed assistant
@@ -669,7 +706,7 @@ export interface KodaXProviderConfig {
   /**
    * Strictly verify Anthropic-style `signature` on `thinking` blocks at
    * serialise time. Only Anthropic proper (anthropic.com) cryptographically
-   * verifies signatures — third-party Anthropic-compat servers (kimi-code /
+   * verifies signatures 鈥?third-party Anthropic-compat servers (kimi-code /
    * ark-coding / mimo-coding / zhipu-coding / minimax-coding) lack the
    * signing key and accept any signature.
    *
@@ -677,10 +714,10 @@ export interface KodaXProviderConfig {
    * converted to a `<prior_reasoning>` text block instead of being passed
    * through (which would 400 on signature verification). Cross-provider
    * `redacted_thinking` blocks (ciphertext signed by their origin) are
-   * dropped silently — there's no plaintext to recover and forging the
+   * dropped silently 鈥?there's no plaintext to recover and forging the
    * field would also fail server-side decryption.
    *
-   * When false (default), thinking blocks pass through unchanged — matches
+   * When false (default), thinking blocks pass through unchanged 鈥?matches
    * legacy behaviour and works for all third-party Anthropic-compat
    * providers. v0.7.28.
    */
@@ -694,16 +731,16 @@ export interface KodaXProviderConfig {
    * providers emit keepalive pings during long tool_use generation.
    *
    * Set per-provider just below the known server-side kill window
-   * (e.g. zhipu-coding observed 308s → set 300s here, accounting for
+   * (e.g. zhipu-coding observed 308s 鈫?set 300s here, accounting for
    * the ~RTT margin between client send and server kill timestamp).
    */
   streamMaxDurationMs?: number;
   /**
-   * FEATURE_216 v0.7.45 — Which verify primitive this provider's compat
+   * FEATURE_216 v0.7.45 鈥?Which verify primitive this provider's compat
    * base class uses for `verifyCredential()`. Sourced from
    * `provider-capabilities.json` for built-in providers; for custom
    * providers, falls back to a protocol-derived default
-   * (anthropic → count-tokens / openai → models-list) when the custom
+   * (anthropic 鈫?count-tokens / openai 鈫?models-list) when the custom
    * config does not set it explicitly.
    */
   verifyStrategy?: KodaXVerifyStrategy;
@@ -732,7 +769,7 @@ export interface KodaXProviderStreamOptions {
    *   The hard request timeout still guards against genuinely stuck connections.
    */
   onHeartbeat?: (pause?: boolean) => void;
-  /** 当底层 API 遇到 Rate Limit 进行重试时触发 */
+  /** 褰撳簳灞?API 閬囧埌 Rate Limit 杩涜閲嶈瘯鏃惰Е鍙?*/
   onRateLimit?: (attempt: number, maxRetries: number, delayMs: number) => void;
   /**
    * FEATURE_130 (v0.7.36): structured retry-after callback. Carries the
@@ -740,7 +777,7 @@ export interface KodaXProviderStreamOptions {
    * `retry-after-ms` / `exponential-backoff`) so UI surfaces and the
    * cost tracker can distinguish "provider-told us to wait" from
    * "we're guessing with backoff". Coexists with the legacy
-   * `onRateLimit` flat callback above — both fire if both are wired.
+   * `onRateLimit` flat callback above 鈥?both fire if both are wired.
    */
   onRetryAfter?: (event: {
     provider: string;
@@ -754,7 +791,18 @@ export interface KodaXProviderStreamOptions {
     attempt: number;
     maxAttempts: number;
   }) => void;
-  /** 会话标识，用于多轮对话上下文恢复 */
+  /** 浼氳瘽鏍囪瘑锛岀敤浜庡杞璇濅笂涓嬫枃鎭㈠ */
+  /**
+   * Passive capability learning — fired when a provider HARD-rejects a
+   * reasoning-effort value (400/422 naming the param). The REPL records it in
+   * `capability-cache.json` so the rung is removed from the ladder and never
+   * offered or sent again (see `classifyReasoningEffortRejection`).
+   */
+  onReasoningEffortRejected?: (event: {
+    provider: string;
+    model: string;
+    effort: string;
+  }) => void;
   sessionId?: string;
   /** Override the provider's default model for a single request */
   modelOverride?: string;

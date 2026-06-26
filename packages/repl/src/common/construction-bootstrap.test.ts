@@ -25,6 +25,7 @@ import fs from 'fs/promises';
 
 import {
   type AgentArtifact,
+  REPO_EXPLORER_AGENT_NAME,
   _resetRuntimeForTesting,
   configureRuntime,
   activate,
@@ -75,6 +76,13 @@ function buildAgent(overrides: Partial<AgentArtifact> = {}): AgentArtifact {
 }
 
 describe('bootstrapConstructionRuntime — self-modify ask-user', () => {
+  it('registers the built-in repo-explorer specialist without changing markdown counts', async () => {
+    const result = await bootstrapConstructionRuntime(tmpRoot);
+
+    expect(result.markdownLoaded).toBe(0);
+    expect(resolveConstructedAgent(REPO_EXPLORER_AGENT_NAME)).toBeDefined();
+  });
+
   it('rejects self-modify activation when no askUser is bound', async () => {
     await persistManifest(buildAgent({ name: 'alpha', version: '1.0.0' }));
     await bootstrapConstructionRuntime(tmpRoot);

@@ -23,18 +23,25 @@ function navRequest(ctx: KodaXToolExecutionContext): {
   return { gitRoot: ctx.gitRoot, signal: ctx.abortSignal, onProgress: ctx.reportToolProgress };
 }
 
-/** Convert 1-based tool input (line, optional character) to a 0-based LSP Position. */
+/** Convert 1-based tool input (line, optional character/column) to a 0-based LSP Position. */
 function toPosition(input: Record<string, unknown>): Position | string {
   const line = Number(input.line);
   if (!Number.isInteger(line) || line < 1) {
     return '`line` is required and must be a 1-based line number.';
   }
-  const rawChar = input.character;
+  const rawChar = input.character ?? input.column;
   const character = rawChar === undefined || rawChar === null ? 1 : Number(rawChar);
   if (!Number.isInteger(character) || character < 1) {
-    return '`character` must be a 1-based column number.';
+    return '`character`/`column` must be a 1-based column number.';
   }
   return { line: line - 1, character: character - 1 };
+}
+
+function requiredPath(input: Record<string, unknown>, toolName: string): string | undefined {
+  if (typeof input.path !== 'string' || !input.path.trim()) {
+    return `[Tool Error] ${toolName}: \`path\` is required.`;
+  }
+  return undefined;
 }
 
 export async function toolLspDefinition(
@@ -42,6 +49,8 @@ export async function toolLspDefinition(
   ctx: KodaXToolExecutionContext,
 ): Promise<string> {
   if (!ctx.lspService) return NO_SERVICE;
+  const pathError = requiredPath(input, 'lsp_definition');
+  if (pathError) return pathError;
   const position = toPosition(input);
   if (typeof position === 'string') return `[Tool Error] lsp_definition: ${position}`;
   const filePath = resolveExecutionPath(input.path as string, ctx);
@@ -53,6 +62,8 @@ export async function toolLspHover(
   ctx: KodaXToolExecutionContext,
 ): Promise<string> {
   if (!ctx.lspService) return NO_SERVICE;
+  const pathError = requiredPath(input, 'lsp_hover');
+  if (pathError) return pathError;
   const position = toPosition(input);
   if (typeof position === 'string') return `[Tool Error] lsp_hover: ${position}`;
   const filePath = resolveExecutionPath(input.path as string, ctx);
@@ -64,6 +75,8 @@ export async function toolLspReferences(
   ctx: KodaXToolExecutionContext,
 ): Promise<string> {
   if (!ctx.lspService) return NO_SERVICE;
+  const pathError = requiredPath(input, 'lsp_references');
+  if (pathError) return pathError;
   const position = toPosition(input);
   if (typeof position === 'string') return `[Tool Error] lsp_references: ${position}`;
   const filePath = resolveExecutionPath(input.path as string, ctx);
@@ -80,4 +93,65 @@ export async function toolLspDocumentSymbols(
   }
   const filePath = resolveExecutionPath(input.path, ctx);
   return ctx.lspService.getDocumentSymbols(filePath, navRequest(ctx));
+}
+
+export async function toolLspWorkspaceSymbols(
+  input: Record<string, unknown>,
+  ctx: KodaXToolExecutionContext,
+): Promise<string> {
+  if (!ctx.lspService) return NO_SERVICE;
+  const query = typeof input.query === 'string' ? input.query : '';
+  return ctx.lspService.getWorkspaceSymbols(query, navRequest(ctx));
+}
+
+export async function toolLspImplementation(
+  input: Record<string, unknown>,
+  ctx: KodaXToolExecutionContext,
+): Promise<string> {
+  if (!ctx.lspService) return NO_SERVICE;
+  const pathError = requiredPath(input, 'lsp_implementation');
+  if (pathError) return pathError;
+  const position = toPosition(input);
+  if (typeof position === 'string') return `[Tool Error] lsp_implementation: ${position}`;
+  const filePath = resolveExecutionPath(input.path as string, ctx);
+  return ctx.lspService.getImplementation(filePath, position, navRequest(ctx));
+}
+
+export async function toolLspPrepareCallHierarchy(
+  input: Record<string, unknown>,
+  ctx: KodaXToolExecutionContext,
+): Promise<string> {
+  if (!ctx.lspService) return NO_SERVICE;
+  const pathError = requiredPath(input, 'lsp_prepare_call_hierarchy');
+  if (pathError) return pathError;
+  const position = toPosition(input);
+  if (typeof position === 'string') return `[Tool Error] lsp_prepare_call_hierarchy: ${position}`;
+  const filePath = resolveExecutionPath(input.path as string, ctx);
+  return ctx.lspService.getPrepareCallHierarchy(filePath, position, navRequest(ctx));
+}
+
+export async function toolLspIncomingCalls(
+  input: Record<string, unknown>,
+  ctx: KodaXToolExecutionContext,
+): Promise<string> {
+  if (!ctx.lspService) return NO_SERVICE;
+  const pathError = requiredPath(input, 'lsp_incoming_calls');
+  if (pathError) return pathError;
+  const position = toPosition(input);
+  if (typeof position === 'string') return `[Tool Error] lsp_incoming_calls: ${position}`;
+  const filePath = resolveExecutionPath(input.path as string, ctx);
+  return ctx.lspService.getIncomingCalls(filePath, position, navRequest(ctx));
+}
+
+export async function toolLspOutgoingCalls(
+  input: Record<string, unknown>,
+  ctx: KodaXToolExecutionContext,
+): Promise<string> {
+  if (!ctx.lspService) return NO_SERVICE;
+  const pathError = requiredPath(input, 'lsp_outgoing_calls');
+  if (pathError) return pathError;
+  const position = toPosition(input);
+  if (typeof position === 'string') return `[Tool Error] lsp_outgoing_calls: ${position}`;
+  const filePath = resolveExecutionPath(input.path as string, ctx);
+  return ctx.lspService.getOutgoingCalls(filePath, position, navRequest(ctx));
 }

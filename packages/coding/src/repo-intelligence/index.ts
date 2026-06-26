@@ -332,7 +332,7 @@ async function exists(targetPath: string): Promise<boolean> {
 }
 
 async function ensureStorageDir(workspaceRoot: string): Promise<string> {
-  const storageRoot = path.join(workspaceRoot, getRepoIntelligenceDir());
+  const storageRoot = resolveRepoIntelligencePath(workspaceRoot);
   await fs.mkdir(storageRoot, { recursive: true });
   return storageRoot;
 }
@@ -662,7 +662,7 @@ async function readStoredRepoOverview(
   fileName: string,
 ): Promise<RepoOverview | null> {
   return safeReadJson<RepoOverview>(
-    path.join(workspaceRoot, getRepoIntelligenceDir(), fileName),
+    resolveRepoIntelligencePath(workspaceRoot, fileName),
     isRepoOverviewPayload,
   );
 }
@@ -672,7 +672,7 @@ async function readStoredRepoOverviewInventory(
   fileName: string,
 ): Promise<RepoOverviewInventory | null> {
   return safeReadJson<RepoOverviewInventory>(
-    path.join(workspaceRoot, getRepoIntelligenceDir(), fileName),
+    resolveRepoIntelligencePath(workspaceRoot, fileName),
     isRepoOverviewInventoryPayload,
   );
 }
@@ -681,7 +681,7 @@ async function readStoredRepoOverviewManifest(
   workspaceRoot: string,
 ): Promise<RepoOverviewManifest | null> {
   return safeReadJson<RepoOverviewManifest>(
-    path.join(workspaceRoot, getRepoIntelligenceDir(), MANIFEST_FILE),
+    resolveRepoIntelligencePath(workspaceRoot, MANIFEST_FILE),
     isRepoOverviewManifestPayload,
   );
 }
@@ -1574,4 +1574,12 @@ export function renderChangedScope(report: ChangedScopeReport): string {
 }
 function getRepoIntelligenceDir(): string {
   return resolveRepoIntelligenceStorageDir(DEFAULT_REPO_INTELLIGENCE_DIR);
+}
+
+function resolveRepoIntelligencePath(workspaceRoot: string, ...segments: string[]): string {
+  const configuredDir = getRepoIntelligenceDir();
+  const storageRoot = path.isAbsolute(configuredDir)
+    ? configuredDir
+    : path.join(workspaceRoot, configuredDir);
+  return path.join(storageRoot, ...segments);
 }

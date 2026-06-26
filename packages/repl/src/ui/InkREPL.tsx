@@ -183,11 +183,13 @@ import {
   startGeneratedWorkflowFromRequest,
 } from "../commands/workflow-command.js";
 import {
-  formatReasoningCapabilityShort,
+  formatReasoningEffortStatusLabel,
   getProviderModel,
-  getProviderReasoningCapability,
-  resolvePermissionModeEffort,
+  resolveInitialEffortOverride,
+  resolveProviderReasoningRuntimeEffort,
+  saveConfig,
 } from "../common/utils.js";
+import { recordRejectedEffort } from "../common/capability-cache.js";
 import { buildToolConfirmationPrompt } from "../common/tool-confirmation.js";
 import { t } from "../common/i18n.js";
 // FEATURE_200 Phase B.1 (v0.7.45) — leaf string/predicate helpers extracted.
@@ -1144,8 +1146,14 @@ const Banner: React.FC<BannerProps> = ({
 }) => {
   const theme = getTheme("dark");
   const model = config.model ?? getProviderModel(config.provider) ?? config.provider;
-  const reasoningCapability = getProviderReasoningCapability(config.provider, config.model);
-  const reasoningCapabilityShort = formatReasoningCapabilityShort(reasoningCapability);
+  const reasoningEffortLabel = formatReasoningEffortStatusLabel({
+    provider: config.provider,
+    model: config.model,
+    effort: config.effort,
+    effortOverride: config.effortOverride,
+    thinking: config.thinking,
+    reasoningMode: config.reasoningMode,
+  });
 
   // Compute compaction display values
   const ctxK = compactionInfo ? Math.round(compactionInfo.contextWindow / 1000) : 0;
@@ -1172,23 +1180,11 @@ const Banner: React.FC<BannerProps> = ({
         <Text bold color={theme.colors.text}>{"v"}{KODAX_VERSION}</Text>
         <Text dimColor>{"  ·  "}</Text>
         <Text color={theme.colors.success}>{config.provider}/{model}</Text>
-        <Text dimColor>{` [${reasoningCapabilityShort}]`}</Text>
+        <Text dimColor>{`  ·  effort:${reasoningEffortLabel}`}</Text>
         <Text dimColor>{"  ·  "}</Text>
         <Text color={theme.colors.primary}>{config.agentMode.toUpperCase()}</Text>
         <Text dimColor>{" / "}</Text>
         <Text color={theme.colors.accent}>{config.permissionMode}</Text>
-        {config.reasoningMode !== 'off' && (
-          <>
-            <Text dimColor>{"  ·  "}</Text>
-            <Text color={theme.colors.warning}>{`reason:${config.reasoningMode}`}</Text>
-          </>
-        )}
-        {config.effort && (
-          <>
-            <Text dimColor>{"  路  "}</Text>
-            <Text color={theme.colors.warning}>{`effort:${config.effort}`}</Text>
-          </>
-        )}
       </Box>
 
       {/* Compaction — amber gutter */}
@@ -1217,18 +1213,20 @@ const Banner: React.FC<BannerProps> = ({
 
 function buildBannerTranscriptSection(props: BannerProps): TranscriptSection {
   const model = props.config.model ?? getProviderModel(props.config.provider) ?? props.config.provider;
-  const reasoningCapability = getProviderReasoningCapability(
-    props.config.provider,
-    props.config.model,
-  );
-  const reasoningCapabilityShort = formatReasoningCapabilityShort(reasoningCapability);
+  const reasoningEffortLabel = formatReasoningEffortStatusLabel({
+    provider: props.config.provider,
+    model: props.config.model,
+    effort: props.config.effort,
+    effortOverride: props.config.effortOverride,
+    thinking: props.config.thinking,
+    reasoningMode: props.config.reasoningMode,
+  });
   const ctxK = props.compactionInfo ? Math.round(props.compactionInfo.contextWindow / 1000) : 0;
   const triggerK = props.compactionInfo
     ? Math.round(props.compactionInfo.contextWindow * props.compactionInfo.triggerPercent / 100 / 1000)
     : 0;
   const taglineLine = "  ▎ AI Coding Agent · Minimalist & Intelligent";
-  const effortSuffix = props.config.effort ? `  ·  effort:${props.config.effort}` : "";
-  const versionLine = `  ▎ v${KODAX_VERSION}  ·  ${props.config.provider}/${model} [${reasoningCapabilityShort}]  ·  ${props.config.agentMode.toUpperCase()} / ${props.config.permissionMode}${props.config.reasoningMode !== "off" ? `  ·  reason:${props.config.reasoningMode}` : ""}${effortSuffix}`;
+  const versionLine = `  ▎ v${KODAX_VERSION}  ·  ${props.config.provider}/${model}  ·  effort:${reasoningEffortLabel}  ·  ${props.config.agentMode.toUpperCase()} / ${props.config.permissionMode}`;
   const compactionLine = props.compactionInfo
     ? `  ▎ ctx ${ctxK}k  ·  compaction ${props.compactionInfo.enabled ? "on" : "off"} @ ${props.compactionInfo.triggerPercent}% (${triggerK}k)`
     : undefined;
@@ -1415,21 +1413,36 @@ const InkREPLInner: React.FC<InkREPLProps> = ({
   // State
   const [isLoading, setIsLoading] = useState(false);
   const [currentConfig, setCurrentConfig] = useState<CurrentConfig>(config);
-  const effectiveEffort = useMemo(
-    () => resolvePermissionModeEffort(currentConfig),
+  const runtimeEffortResolution = useMemo(
+    () => resolveProviderReasoningRuntimeEffort({
+      provider: currentConfig.provider,
+      model: currentConfig.model,
+      effort: currentConfig.effort,
+      effortOverride: currentConfig.effortOverride,
+      permissionMode: currentConfig.permissionMode,
+      planModeEffort: currentConfig.planModeEffort,
+      thinking: currentConfig.thinking,
+      reasoningMode: currentConfig.reasoningMode,
+    }),
     [
+      currentConfig.provider,
+      currentConfig.model,
       currentConfig.effort,
       currentConfig.effortOverride,
       currentConfig.permissionMode,
       currentConfig.planModeEffort,
+      currentConfig.thinking,
+      currentConfig.reasoningMode,
     ],
   );
+  const configuredEffort = runtimeEffortResolution.configuredEffort;
+  const runtimeEffort = runtimeEffortResolution.runtimeEffort;
   const displayedConfig = useMemo<CurrentConfig>(
     () => ({
       ...currentConfig,
-      effort: effectiveEffort,
+      effort: configuredEffort,
     }),
-    [currentConfig, effectiveEffort],
+    [currentConfig, configuredEffort],
   );
 
   // Reactive contextWindow resolution. See
@@ -3554,10 +3567,15 @@ const InkREPLInner: React.FC<InkREPLProps> = ({
         model: currentConfig.model ?? getProviderModel(currentConfig.provider) ?? currentConfig.provider,
         thinking: currentConfig.thinking,
         reasoningMode: currentConfig.reasoningMode,
-        effort: effectiveEffort,
-        reasoningCapability: formatReasoningCapabilityShort(
-          getProviderReasoningCapability(currentConfig.provider, currentConfig.model),
-        ),
+        effort: configuredEffort,
+        reasoningEffortLabel: formatReasoningEffortStatusLabel({
+          provider: currentConfig.provider,
+          model: currentConfig.model,
+          effort: configuredEffort,
+          effortOverride: currentConfig.effortOverride,
+          thinking: currentConfig.thinking,
+          reasoningMode: currentConfig.reasoningMode,
+        }),
         isTranscriptMode,
         streamingState: statusBarStreamingState,
         maxIter: streamingState.maxIter,
@@ -3585,7 +3603,8 @@ const InkREPLInner: React.FC<InkREPLProps> = ({
       currentConfig.model,
       currentConfig.thinking,
       currentConfig.reasoningMode,
-      effectiveEffort,
+      currentConfig.effortOverride,
+      configuredEffort,
       isTranscriptMode,
       statusBarStreamingState,
       streamingState.maxIter,
@@ -4636,7 +4655,7 @@ const InkREPLInner: React.FC<InkREPLProps> = ({
     ...options,
     thinking: currentConfig.thinking,
     reasoningMode: currentConfig.reasoningMode,
-    effort: effectiveEffort,
+    effort: runtimeEffort,
     agentMode: currentConfig.agentMode,
     context: {
       ...options.context,
@@ -4663,8 +4682,8 @@ const InkREPLInner: React.FC<InkREPLProps> = ({
     guardrails: buildAutoModeGuardrails(currentConfig.permissionMode, autoModeBootstrap),
   });
   useEffect(() => {
-    currentOptionsRef.current.effort = effectiveEffort;
-  }, [effectiveEffort]);
+    currentOptionsRef.current.effort = runtimeEffort;
+  }, [runtimeEffort]);
   // Permission-related refs (not part of KodaXOptions anymore)
   const permissionModeRef = useRef<PermissionMode>(currentConfig.permissionMode);
   useEffect(() => {
@@ -4711,12 +4730,22 @@ const InkREPLInner: React.FC<InkREPLProps> = ({
   const setSessionPermissionMode = useCallback((mode: PermissionMode) => {
     setCurrentConfig((prev) => ({ ...prev, permissionMode: mode }));
     permissionModeRef.current = mode;
+    const modeEffortResolution = resolveProviderReasoningRuntimeEffort({
+      provider: currentConfigRef.current.provider,
+      model: currentConfigRef.current.model,
+      effort: currentConfigRef.current.effort,
+      effortOverride: currentConfigRef.current.effortOverride,
+      permissionMode: mode,
+      planModeEffort: currentConfigRef.current.planModeEffort,
+      thinking: currentConfigRef.current.thinking,
+      reasoningMode: currentConfigRef.current.reasoningMode,
+    });
     // FEATURE_092 phase 2b.7b: keep the live KodaXOptions in sync so a
     // mid-session /auto switch lights up the guardrail on the very next
     // tool call, and stepping out of auto removes it.
     currentOptionsRef.current = {
       ...currentOptionsRef.current,
-      effort: resolvePermissionModeEffort({ ...currentConfigRef.current, permissionMode: mode }),
+      effort: modeEffortResolution.runtimeEffort,
       guardrails: buildAutoModeGuardrails(mode, autoModeBootstrap),
     };
     // FEATURE_092 phase 2b.8: refresh the status-bar engine indicator. Outside
@@ -5647,10 +5676,10 @@ const InkREPLInner: React.FC<InkREPLProps> = ({
   }, [context.gitRoot]);
 
   // v0.7.41 L2 — prewarm repo-intelligence session caches at REPL mount.
-  // Uses `refresh:false` (4s budget) — see prewarmRepoIntelligenceCaches docs.
+  // Uses `refresh:false`; see prewarmRepoIntelligenceCaches docs for budget/coalescing details.
   // Cache-coherent with L1 (middleware also uses refresh:false on first round),
-  // so user-path either coalesces onto the in-flight prewarm Promise (~2s) or
-  // hits the warmed P3+ cache (~0ms). Safe to opt out via
+  // so user-path can share in-flight worker work or hit the warmed P3+ cache.
+  // Safe to opt out via
   // `KODAX_PREWARM_REPO_INTELLIGENCE=0`.
   useEffect(() => {
     if (process.env.KODAX_PREWARM_REPO_INTELLIGENCE === '0') return;
@@ -6228,6 +6257,42 @@ const InkREPLInner: React.FC<InkREPLProps> = ({
         type: "info",
         icon: "\u23F3",
         text,
+      }, 'ratelimit');
+    },
+    onReasoningEffortRejected: (event) => {
+      // Passive capability learning: a provider HARD-rejected this effort, so
+      // record it (narrows the cycle / /effort / wire everywhere via the
+      // capability cache) and re-resolve a model-safe effort for the active
+      // config so the status bar follows and the next request won't resend it.
+      recordRejectedEffort(
+        event.provider,
+        event.model,
+        event.effort,
+        'observed',
+        new Date().toISOString(),
+      );
+      const resolution = resolveProviderReasoningRuntimeEffort({
+        provider: event.provider,
+        model: event.model,
+        effort: currentConfigRef.current.effort,
+        effortOverride: currentConfigRef.current.effortOverride,
+        permissionMode: currentConfigRef.current.permissionMode,
+        planModeEffort: currentConfigRef.current.planModeEffort,
+        thinking: currentConfigRef.current.thinking,
+        reasoningMode: currentConfigRef.current.reasoningMode,
+      });
+      const safeEffort = resolution.runtimeEffort;
+      setCurrentConfig((prev) => ({
+        ...prev,
+        effort: safeEffort,
+        effortOverride: safeEffort !== undefined,
+      }));
+      saveConfig({ effort: safeEffort });
+      currentOptionsRef.current.effort = safeEffort;
+      emitInfoItemToCorrectLayer({
+        type: "info",
+        icon: "\u26A0",
+        text: `[${event.provider}/${event.model} \u4E0D\u652F\u6301 effort "${event.effort}",\u5DF2\u8BB0\u5F55;\u540E\u7EED\u4E0D\u518D\u63D0\u4F9B\u8BE5\u6863${safeEffort ? `,\u5DF2\u5207\u5230 ${safeEffort}` : ''}]`,
       }, 'ratelimit');
     },
     onRepoIntelligenceTrace: (event) => {
@@ -7925,7 +7990,7 @@ const InkREPLInner: React.FC<InkREPLProps> = ({
           ...currentOptionsRef.current,
           provider: currentConfig.provider,
           model: currentConfig.model,
-          effort: resolvePermissionModeEffort(currentConfig),
+          effort: runtimeEffort,
           thinking: currentConfig.thinking,
           reasoningMode: currentConfig.reasoningMode,
           agentMode: currentConfig.agentMode,
@@ -8245,9 +8310,23 @@ const InkREPLInner: React.FC<InkREPLProps> = ({
             console.log();
           },
           switchProvider: (provider: string, model?: string) => {
+            const effortResolution = resolveProviderReasoningRuntimeEffort({
+              provider,
+              model,
+              effort: currentConfigRef.current.effort,
+              effortOverride: currentConfigRef.current.effortOverride,
+              permissionMode: currentConfigRef.current.permissionMode,
+              planModeEffort: currentConfigRef.current.planModeEffort,
+              thinking: currentConfigRef.current.thinking,
+              reasoningMode: currentConfigRef.current.reasoningMode,
+            });
             setCurrentConfig((prev) => ({ ...prev, provider, model }));
             currentOptionsRef.current.provider = provider;
             currentOptionsRef.current.model = model;
+            currentOptionsRef.current.effort = effortResolution.runtimeEffort;
+            if (effortResolution.diagnostic) {
+              console.log(chalk.yellow(`\n[${effortResolution.diagnostic}]`));
+            }
           },
           setThinking: (enabled: boolean) => {
             const reasoningMode: KodaXReasoningMode = enabled ? 'auto' : 'off';
@@ -8290,12 +8369,10 @@ const InkREPLInner: React.FC<InkREPLProps> = ({
             setCurrentConfig((prev) => ({
               ...prev,
               ...(update.mode !== undefined ? { repoIntelligenceMode: update.mode } : {}),
-              ...(update.endpoint !== undefined ? { repointelEndpoint: update.endpoint ?? undefined } : {}),
-              ...(update.bin !== undefined ? { repointelBin: update.bin ?? undefined } : {}),
               ...(update.trace !== undefined ? { repoIntelligenceTrace: update.trace } : {}),
             }));
             if (update.mode !== undefined) {
-              process.env.KODAX_REPO_INTELLIGENCE_MODE = update.mode;
+              process.env.KODAX_REPO_INTELLIGENCE = update.mode;
               currentOptionsRef.current.context = {
                 ...currentOptionsRef.current.context,
                 repoIntelligenceMode: update.mode,
@@ -8311,20 +8388,6 @@ const InkREPLInner: React.FC<InkREPLProps> = ({
                 ...currentOptionsRef.current.context,
                 repoIntelligenceTrace: update.trace,
               };
-            }
-            if (update.endpoint !== undefined) {
-              if (update.endpoint) {
-                process.env.KODAX_REPOINTEL_ENDPOINT = update.endpoint;
-              } else {
-                delete process.env.KODAX_REPOINTEL_ENDPOINT;
-              }
-            }
-            if (update.bin !== undefined) {
-              if (update.bin) {
-                process.env.KODAX_REPOINTEL_BIN = update.bin;
-              } else {
-                delete process.env.KODAX_REPOINTEL_BIN;
-              }
             }
           },
           deleteSession: async (id: string) => {
@@ -8494,7 +8557,7 @@ const InkREPLInner: React.FC<InkREPLProps> = ({
             ...currentOptionsRef.current,
             provider: currentConfig.provider,
             model: currentConfig.model,
-            effort: resolvePermissionModeEffort(currentConfig),
+            effort: runtimeEffort,
             thinking: currentConfig.thinking,
             reasoningMode: currentConfig.reasoningMode,
             agentMode: currentConfig.agentMode,
@@ -9499,7 +9562,7 @@ export async function runInkInteractiveMode(options: InkREPLOptions): Promise<vo
   const initialModel = options.model ?? config.model;
   const initialReasoningMode = resolveInitialReasoningMode(options, config);
   const initialEffort = resolveInitialEffort(options, config);
-  const initialEffortOverride = options.effort !== undefined;
+  const initialEffortOverride = resolveInitialEffortOverride(options, config);
   const initialAgentMode = options.agentMode ?? config.agentMode ?? 'ama';
   const initialThinking = initialReasoningMode !== 'off';
   // Load permission mode from config file (not from CLI options)
@@ -9527,8 +9590,6 @@ export async function runInkInteractiveMode(options: InkREPLOptions): Promise<vo
     agentMode: initialAgentMode,
     permissionMode: initialPermissionMode,
     repoIntelligenceMode: repoIntelligenceRuntime.mode,
-    repointelEndpoint: repoIntelligenceRuntime.endpoint,
-    repointelBin: repoIntelligenceRuntime.bin,
     repoIntelligenceTrace: repoIntelligenceTraceDefault,
   };
 

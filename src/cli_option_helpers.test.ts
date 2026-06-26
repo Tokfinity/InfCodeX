@@ -9,6 +9,7 @@ import {
   parseOutputModeOption,
   parseReasoningModeOption,
   parseRepoIntelligenceModeOption,
+  normalizeCliSessionFlags,
   resolveCliEffort,
   resolveCliModelSelection,
   validateCliModeSelection,
@@ -89,24 +90,46 @@ describe('buildSessionOptions', () => {
   });
 });
 
+describe('normalizeCliSessionFlags', () => {
+  it('treats Commander --no-session as noSession without a session id', () => {
+    const normalized = normalizeCliSessionFlags({ session: false });
+
+    expect(normalized).toEqual({
+      session: undefined,
+      noSession: true,
+    });
+  });
+
+  it('preserves real session strings, including the literal string "false"', () => {
+    expect(normalizeCliSessionFlags({ session: 'resume' })).toEqual({
+      session: 'resume',
+      noSession: false,
+    });
+    expect(normalizeCliSessionFlags({ session: 'false' })).toEqual({
+      session: 'false',
+      noSession: false,
+    });
+  });
+});
+
 describe('createKodaXOptions', () => {
   it('projects repo intelligence mode and trace flags from runtime env into context', () => {
-    const previousMode = process.env.KODAX_REPO_INTELLIGENCE_MODE;
+    const previousMode = process.env.KODAX_REPO_INTELLIGENCE;
     const previousTrace = process.env.KODAX_REPO_INTELLIGENCE_TRACE;
-    process.env.KODAX_REPO_INTELLIGENCE_MODE = 'premium-native';
+    process.env.KODAX_REPO_INTELLIGENCE = 'full';
     process.env.KODAX_REPO_INTELLIGENCE_TRACE = '1';
 
     try {
       const options = createKodaXOptions(createCliOptions());
       expect(options.context).toMatchObject({
-        repoIntelligenceMode: 'premium-native',
+        repoIntelligenceMode: 'full',
         repoIntelligenceTrace: true,
       });
     } finally {
       if (previousMode === undefined) {
-        delete process.env.KODAX_REPO_INTELLIGENCE_MODE;
+        delete process.env.KODAX_REPO_INTELLIGENCE;
       } else {
-        process.env.KODAX_REPO_INTELLIGENCE_MODE = previousMode;
+        process.env.KODAX_REPO_INTELLIGENCE = previousMode;
       }
       if (previousTrace === undefined) {
         delete process.env.KODAX_REPO_INTELLIGENCE_TRACE;
@@ -128,6 +151,19 @@ describe('createKodaXOptions', () => {
       reasoningMode: 'auto',
     }));
 
+    expect(options.thinking).toBe(false);
+    expect(options.reasoningMode).toBe('off');
+  });
+
+  it('treats effort off as the user-facing alias for none', () => {
+    const effort = parseEffortOption('off');
+    const options = createKodaXOptions(createCliOptions({
+      effort,
+      thinking: true,
+      reasoningMode: 'auto',
+    }));
+
+    expect(effort).toBe('none');
     expect(options.thinking).toBe(false);
     expect(options.reasoningMode).toBe('off');
   });
@@ -218,13 +254,16 @@ describe('parseReasoningModeOption', () => {
 });
 
 describe('parseRepoIntelligenceModeOption', () => {
-  it('accepts supported repo-intelligence modes', () => {
-    expect(parseRepoIntelligenceModeOption('premium-native')).toBe('premium-native');
+  it('accepts public repo-intelligence modes', () => {
+    expect(parseRepoIntelligenceModeOption('full')).toBe('full');
+    expect(parseRepoIntelligenceModeOption('light')).toBe('light');
+    expect(parseRepoIntelligenceModeOption('auto')).toBe('auto');
+    expect(parseRepoIntelligenceModeOption('off')).toBe('off');
   });
 
   it('rejects unsupported repo-intelligence modes', () => {
     expect(() => parseRepoIntelligenceModeOption('premium')).toThrow(
-      'Expected one of: auto, off, oss, premium-shared, premium-native.',
+      'Expected one of: auto, full, light, off.',
     );
   });
 });

@@ -1137,6 +1137,23 @@ describe('buildChildEvents plan-mode propagation (FEATURE_074)', () => {
     expect(decision).toBe(true);
   });
 
+  it('blocks write tools at runtime for read-only children', async () => {
+    const events = buildChildEvents(
+      'cb-test',
+      undefined,
+      undefined,
+      undefined,
+      undefined,
+      undefined,
+      undefined,
+      200,
+      true,
+    );
+    const decision = await events!.beforeToolExecute!('write', { path: '/x.ts', content: 'x' });
+    expect(typeof decision).toBe('string');
+    expect(decision).toContain('Not available in child agent context');
+  });
+
   it('skips the check entirely when planModeBlockCheck is undefined', async () => {
     const events = buildChildEvents('cb-test', undefined, undefined);
     const decision = await events!.beforeToolExecute!('edit', { path: '/x.ts' });
@@ -1504,6 +1521,33 @@ describe('executeChildAgents — FEATURE_191 specialist routing (A.2b)', () => {
     expect(excludeTools).toContain('write');
     expect(excludeTools).toContain('edit');
     expect(excludeTools).toContain('bash');
+  });
+
+  it('keeps read-only child mutation guards even when a specialist declares write tools', async () => {
+    registerConstructedAgent(buildSpecialistArtifact({
+      name: 'unsafe-reader',
+      content: {
+        instructions: 'UNSAFE READER PROMPT',
+        tools: [{ ref: 'builtin:read' }, { ref: 'builtin:write' }, { ref: 'builtin:edit' }],
+        description: 'reader',
+      },
+    }));
+    mockRunKodaX.mockResolvedValue(okResult());
+
+    const bundles = [createBundle({
+      id: 'cb-sp-readonly-guard',
+      readOnly: true,
+      specialistName: 'unsafe-reader',
+    })];
+    await executeChildAgents(bundles, createCtx(), createOptions());
+
+    const childOptions = mockRunKodaX.mock.calls[0]![0] as {
+      context?: { excludeTools?: readonly string[] };
+    };
+    const excludeTools = childOptions.context?.excludeTools ?? [];
+    expect(excludeTools).not.toContain('read');
+    expect(excludeTools).toContain('write');
+    expect(excludeTools).toContain('edit');
   });
 
   it('falls through to default systemPromptOverride when specialistName is undefined (backward compat)', async () => {
@@ -1983,7 +2027,7 @@ describe('resolveEvidenceRef — FEATURE_199 task_id prefix + regression', () =>
     expect(result).toContain('Found 5 files: a.tsx, b.tsx, c.tsx, d.tsx, e.tsx');
   });
 
-  it('task_id: friendly polling tip when child is still running (no finalText yet)', async () => {
+  it('task_id: still-running sibling briefing does not point a child at coordinator-only mechanics', async () => {
     const snapshots = new Map<string, ChildProgressSnapshot>();
     snapshots.set('hooks-audit', makeSnapshot({
       childId: 'hooks-audit',
@@ -1995,10 +2039,14 @@ describe('resolveEvidenceRef — FEATURE_199 task_id prefix + regression', () =>
       makeEvidenceCtx({ childProgressSnapshots: snapshots }),
     );
     expect(result).toContain('still running');
-    expect(result).toContain('task_output');
-    expect(result).toContain('<task-completed task_id="hooks-audit">');
+    expect(result).toContain('not available');
+    // The briefing feeds a CHILD agent, which cannot poll siblings
+    // (`task_output` is coordinator-only) and never receives
+    // `<task-completed>` blocks. Neither mechanic must be advertised here.
+    expect(result).not.toContain('task_output');
+    expect(result).not.toContain('<task-completed');
     // Do NOT inject finalText when status === 'running' (would surface
-    // undefined as the body and mislead the parent).
+    // undefined as the body).
     expect(result).not.toContain('### task: hooks-audit');
   });
 

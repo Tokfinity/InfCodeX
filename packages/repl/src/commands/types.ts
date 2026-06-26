@@ -60,8 +60,6 @@ export interface CurrentConfig {
   agentMode: KodaXAgentMode;
   permissionMode: PermissionMode;
   repoIntelligenceMode?: KodaXRepoIntelligenceMode;
-  repointelEndpoint?: string;
-  repointelBin?: string;
   repoIntelligenceTrace?: boolean;
   /** FEATURE_102 Phase 3 — cross-provider child fallback chain. */
   fallbackProviders?: string[];
@@ -89,8 +87,6 @@ export interface CommandCallbacks {
   setPermissionMode?: (mode: PermissionMode) => void;
   setRepoIntelligenceRuntime?: (update: {
     mode?: KodaXRepoIntelligenceMode;
-    endpoint?: string | null;
-    bin?: string | null;
     trace?: boolean;
   }) => void;
   deleteSession?: (id: string) => Promise<void>;

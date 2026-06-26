@@ -4,7 +4,7 @@
 import { describe, expect, it } from 'vitest';
 
 import { findCyclicDependencies } from './cyclic-deps.js';
-import type { ModuleCapsule, RepoIntelligenceIndex } from './query-fallback.js';
+import type { ModuleCapsule, RepoIntelligenceIndex } from './semantic-types.js';
 
 function mod(moduleId: string, dependencies: string[]): ModuleCapsule {
   // Only moduleId + dependencies are read by findCyclicDependencies; the rest

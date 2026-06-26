@@ -1,51 +1,54 @@
 /**
- * FEATURE_078 contract tests — Role-Aware Reasoning Profiles (v0.7.29).
+ * FEATURE_078 contract tests — Role-Aware Reasoning Profiles (effort-native).
  *
  * Covers:
- *   - `resolveRoleReasoning` L1 (user ceiling) / L2 (agent profile) / L3 (scout hint)
+ *   - `resolveRoleEffort` L1 (user ceiling) / L2 (agent profile default+max)
  *     interaction matrix
- *   - `clampReasoningMode` and `compareReasoningModes` invariants
- *   - Backward-compat: pre-FEATURE_078 callers (no profile, no ceiling, no hint)
- *     get exactly the old single-mode behavior
+ *   - `clampEffort` and `compareEfforts` invariants
+ *   - Backward-compat: callers with no profile collapse to the user ceiling
  *
- * The pre-FEATURE_078 contract was "all roles use the user's mode" (i.e. L1
- * pinned everything). The new contract is "L1 is a ceiling + bias; per-role
- * default is L2; Scout may suggest L3; L4 escalation clamped by L1". Anywhere
- * a role/profile/hint is omitted, the resolver collapses to the legacy answer.
+ * Reasoning single-tracking replaced the legacy reasoning-mode chain
+ * (`resolveRoleReasoning` / `clampReasoningMode` / `compareReasoningModes`)
+ * with effort-native helpers. The Agent declaration's `reasoning` profile is
+ * still expressed in legacy modes (`AgentReasoningProfile`), so the resolver
+ * maps its `default`/`max` onto the effort ladder. FEATURE_193 retired the
+ * Scout hint (L3) and the per-role split.
  */
 
 import { describe, expect, it } from 'vitest';
 import type { AgentReasoningProfile } from '@kodax-ai/agent';
 
 import {
-  clampReasoningMode,
-  compareReasoningModes,
-  resolveRoleReasoning,
+  clampEffort,
+  compareEfforts,
+  resolveRoleEffort,
 } from './reasoning.js';
 
 // ---------------------------------------------------------------------------
 // L0 invariants — comparator + clamp building blocks
 // ---------------------------------------------------------------------------
 
-describe('compareReasoningModes', () => {
-  it('orders the canonical sequence: off < auto < quick < balanced < deep', () => {
-    expect(compareReasoningModes('off', 'auto')).toBe(-1);
-    expect(compareReasoningModes('auto', 'quick')).toBe(-1);
-    expect(compareReasoningModes('quick', 'balanced')).toBe(-1);
-    expect(compareReasoningModes('balanced', 'deep')).toBe(-1);
+describe('compareEfforts', () => {
+  it('orders the canonical ladder: none < auto < low < medium < high < xhigh < max', () => {
+    expect(compareEfforts('none', 'auto')).toBe(-1);
+    expect(compareEfforts('auto', 'low')).toBe(-1);
+    expect(compareEfforts('low', 'medium')).toBe(-1);
+    expect(compareEfforts('medium', 'high')).toBe(-1);
+    expect(compareEfforts('high', 'xhigh')).toBe(-1);
+    expect(compareEfforts('xhigh', 'max')).toBe(-1);
   });
 
-  it('returns 0 for equal modes', () => {
-    expect(compareReasoningModes('balanced', 'balanced')).toBe(0);
-    expect(compareReasoningModes('off', 'off')).toBe(0);
+  it('returns 0 for equal efforts', () => {
+    expect(compareEfforts('medium', 'medium')).toBe(0);
+    expect(compareEfforts('none', 'none')).toBe(0);
   });
 
   it('is antisymmetric', () => {
-    const modes = ['off', 'auto', 'quick', 'balanced', 'deep'] as const;
-    for (const a of modes) {
-      for (const b of modes) {
-        const ab = compareReasoningModes(a, b);
-        const ba = compareReasoningModes(b, a);
+    const efforts = ['none', 'auto', 'low', 'medium', 'high', 'xhigh', 'max'] as const;
+    for (const a of efforts) {
+      for (const b of efforts) {
+        const ab = compareEfforts(a, b);
+        const ba = compareEfforts(b, a);
         if (ab === 0) expect(ba).toBe(0);
         else expect(ab).toBe(-ba);
       }
@@ -53,33 +56,30 @@ describe('compareReasoningModes', () => {
   });
 });
 
-describe('clampReasoningMode', () => {
-  it('passes through when mode <= ceiling', () => {
-    expect(clampReasoningMode('quick', 'balanced')).toBe('quick');
-    expect(clampReasoningMode('balanced', 'balanced')).toBe('balanced');
-    expect(clampReasoningMode('off', 'deep')).toBe('off');
+describe('clampEffort', () => {
+  it('passes through when effort <= ceiling', () => {
+    expect(clampEffort('low', 'medium')).toBe('low');
+    expect(clampEffort('medium', 'medium')).toBe('medium');
+    expect(clampEffort('none', 'high')).toBe('none');
   });
 
-  it('clamps when mode > ceiling', () => {
-    expect(clampReasoningMode('deep', 'balanced')).toBe('balanced');
-    expect(clampReasoningMode('balanced', 'quick')).toBe('quick');
-    expect(clampReasoningMode('deep', 'off')).toBe('off');
+  it('clamps when effort > ceiling', () => {
+    expect(clampEffort('high', 'medium')).toBe('medium');
+    expect(clampEffort('medium', 'low')).toBe('low');
+    expect(clampEffort('high', 'none')).toBe('none');
   });
 });
 
 // ---------------------------------------------------------------------------
-// L1-L4 resolution chain
+// L1-L2 resolution chain
 // ---------------------------------------------------------------------------
 
+// Agent profiles are still expressed in legacy reasoning modes; the resolver
+// maps default/max onto the effort ladder (quick→low, balanced→medium, deep→high).
 const SCOUT_PROFILE: AgentReasoningProfile = {
   default: 'quick',
   max: 'balanced',
   escalateOnRevise: false,
-};
-const PLANNER_PROFILE: AgentReasoningProfile = {
-  default: 'balanced',
-  max: 'deep',
-  escalateOnRevise: true,
 };
 const SA_PROFILE: AgentReasoningProfile = {
   default: 'balanced',
@@ -87,78 +87,39 @@ const SA_PROFILE: AgentReasoningProfile = {
   escalateOnRevise: true,
 };
 
-describe('resolveRoleReasoning — L1 hard kill switch', () => {
-  it('userCeiling=off short-circuits regardless of profile or hint', () => {
-    expect(resolveRoleReasoning('sa', 'off', SA_PROFILE)).toBe('off');
-    expect(resolveRoleReasoning('scout', 'off', SCOUT_PROFILE, 'deep')).toBe('off');
-    expect(resolveRoleReasoning('planner', 'off', PLANNER_PROFILE, 'balanced')).toBe('off');
+describe('resolveRoleEffort — L1 hard kill switch', () => {
+  it('userCeiling=none short-circuits regardless of profile', () => {
+    expect(resolveRoleEffort('none', SA_PROFILE)).toBe('none');
+    expect(resolveRoleEffort('none', SCOUT_PROFILE)).toBe('none');
   });
 });
 
-describe('resolveRoleReasoning — backward compat (no profile, no hint)', () => {
+describe('resolveRoleEffort — backward compat (no profile)', () => {
   it('collapses to userCeiling when no profile is supplied', () => {
-    expect(resolveRoleReasoning('sa', 'balanced')).toBe('balanced');
-    expect(resolveRoleReasoning('scout', 'deep')).toBe('deep');
-    expect(resolveRoleReasoning('planner', 'quick')).toBe('quick');
-    expect(resolveRoleReasoning('generator', 'auto')).toBe('auto');
+    expect(resolveRoleEffort('medium')).toBe('medium');
+    expect(resolveRoleEffort('high')).toBe('high');
+    expect(resolveRoleEffort('low')).toBe('low');
+    expect(resolveRoleEffort('auto')).toBe('auto');
   });
 });
 
-describe('resolveRoleReasoning — L2 (Agent profile default) under permissive ceiling', () => {
-  it('with deep ceiling, each role lands at its declared default', () => {
-    expect(resolveRoleReasoning('scout', 'deep', SCOUT_PROFILE)).toBe('quick');
-    expect(resolveRoleReasoning('planner', 'deep', PLANNER_PROFILE)).toBe('balanced');
-    expect(resolveRoleReasoning('sa', 'deep', SA_PROFILE)).toBe('balanced');
+describe('resolveRoleEffort — L2 (Agent profile default) under permissive ceiling', () => {
+  it('with high ceiling, the role lands at its declared default (mapped)', () => {
+    // SCOUT default quick → low
+    expect(resolveRoleEffort('high', SCOUT_PROFILE)).toBe('low');
+    // SA default balanced → medium
+    expect(resolveRoleEffort('high', SA_PROFILE)).toBe('medium');
   });
 });
 
-describe('resolveRoleReasoning — L1 ceiling clamps L2 default', () => {
+describe('resolveRoleEffort — L1 ceiling clamps L2 default', () => {
   it('caps higher L2 default at lower L1 ceiling', () => {
-    // SA profile.default = balanced, but user said --reasoning quick → quick.
-    expect(resolveRoleReasoning('sa', 'quick', SA_PROFILE)).toBe('quick');
-    // Planner profile.default = balanced, but user said --reasoning quick → quick.
-    expect(resolveRoleReasoning('planner', 'quick', PLANNER_PROFILE)).toBe('quick');
+    // SA default balanced→medium, but user said effort low → low.
+    expect(resolveRoleEffort('low', SA_PROFILE)).toBe('low');
   });
 
   it('leaves lower L2 default unchanged under higher L1 ceiling', () => {
-    // Scout profile.default = quick, user said --reasoning deep → quick (Scout self-limits).
-    expect(resolveRoleReasoning('scout', 'deep', SCOUT_PROFILE)).toBe('quick');
-  });
-});
-
-describe('resolveRoleReasoning — L2 max also clamps', () => {
-  it('Scout max=balanced caps even when L1 ceiling allows deep', () => {
-    // If a hypothetical higher-than-default scoutHint pushed Scout to deep,
-    // its own profile.max=balanced would still hold the line.
-    expect(resolveRoleReasoning('scout', 'deep', SCOUT_PROFILE, 'deep')).toBe('balanced');
-  });
-});
-
-describe('resolveRoleReasoning — L3 (scout hint)', () => {
-  it('overrides L2 default within ceilings', () => {
-    // Generator default=balanced, scout hints quick, ceiling=deep → quick.
-    expect(
-      resolveRoleReasoning('generator', 'deep', PLANNER_PROFILE, 'quick'),
-    ).toBe('quick');
-  });
-
-  it('clamped by L1 user ceiling', () => {
-    // Generator default=balanced, scout hints deep, ceiling=quick → quick.
-    expect(
-      resolveRoleReasoning('generator', 'quick', PLANNER_PROFILE, 'deep'),
-    ).toBe('quick');
-  });
-
-  it('clamped by L2 profile.max', () => {
-    // Scout profile.max=balanced, hint=deep, ceiling=deep → balanced.
-    expect(
-      resolveRoleReasoning('scout', 'deep', SCOUT_PROFILE, 'deep'),
-    ).toBe('balanced');
-  });
-
-  it('hint without profile and without ceiling-clamp uses hint as-is up to ceiling', () => {
-    // No profile → fall back to userCeiling as base; hint becomes the L3 input.
-    expect(resolveRoleReasoning('generator', 'deep', undefined, 'quick')).toBe('quick');
-    expect(resolveRoleReasoning('generator', 'quick', undefined, 'deep')).toBe('quick');
+    // SCOUT default quick→low, user said effort high → low (self-limits).
+    expect(resolveRoleEffort('high', SCOUT_PROFILE)).toBe('low');
   });
 });

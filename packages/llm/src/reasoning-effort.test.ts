@@ -1,5 +1,5 @@
 import { describe, expect, it } from 'vitest';
-import type { KodaXReasoningCapabilityV2 } from './types.js';
+import type { KodaXReasoningProfile } from './types.js';
 import {
   mapLegacyReasoningModeToEffortIntent,
   parseReasoningEffortEnv,
@@ -8,7 +8,7 @@ import {
   normalizeReasoningRequest,
 } from './reasoning.js';
 
-const openAiCapability: KodaXReasoningCapabilityV2 = {
+const openAiCapability: KodaXReasoningProfile = {
   effortStrategy: 'openai-chat-effort',
   defaultEffort: 'medium',
   supportedEfforts: [
@@ -31,25 +31,19 @@ describe('reasoning effort resolver', () => {
     expect(mapLegacyReasoningModeToEffortIntent('deep')).toBe('high');
   });
 
-  it('normalizes provider-specific effort as enabled high-depth reasoning', () => {
+  it('normalizes provider-specific effort as enabled reasoning', () => {
     expect(normalizeReasoningRequest({ effort: 'xhigh' })).toMatchObject({
       enabled: true,
-      mode: 'deep',
-      depth: 'high',
       effort: 'xhigh',
     });
   });
 
-  it('lets effort none disable reasoning even when legacy flags say enabled', () => {
+  it('lets effort none disable reasoning even when legacy enabled flag is set', () => {
     expect(normalizeReasoningRequest({
       enabled: true,
-      mode: 'auto',
-      depth: 'medium',
       effort: 'none',
     })).toMatchObject({
       enabled: false,
-      mode: 'off',
-      depth: 'off',
       effort: 'none',
     });
   });
@@ -59,6 +53,7 @@ describe('reasoning effort resolver', () => {
     expect(parseReasoningEffortEnv('')).toEqual({ kind: 'unset' });
     expect(parseReasoningEffortEnv('auto')).toEqual({ kind: 'clear' });
     expect(parseReasoningEffortEnv('unset')).toEqual({ kind: 'clear' });
+    expect(parseReasoningEffortEnv('off')).toEqual({ kind: 'value', value: 'none' });
     expect(parseReasoningEffortEnv(' HIGH ')).toEqual({ kind: 'value', value: 'high' });
   });
 
@@ -95,7 +90,7 @@ describe('reasoning effort resolver', () => {
   });
 
   it('reports provider alias as effective effort while preserving configured effort', () => {
-    const capability: KodaXReasoningCapabilityV2 = {
+    const capability: KodaXReasoningProfile = {
       effortStrategy: 'openai-chat-effort',
       defaultEffort: 'high',
       supportedEfforts: [
@@ -127,7 +122,7 @@ describe('reasoning effort resolver', () => {
   });
 
   it('accepts aliases whose wire target is supported even when the alias key is hidden', () => {
-    const capability: KodaXReasoningCapabilityV2 = {
+    const capability: KodaXReasoningProfile = {
       effortStrategy: 'openai-chat-effort',
       defaultEffort: 'high',
       supportedEfforts: [
@@ -187,7 +182,7 @@ describe('reasoning effort resolver', () => {
   });
 
   it('honors local reject profiles before treating none as globally supported', () => {
-    const alwaysOnCapability: KodaXReasoningCapabilityV2 = {
+    const alwaysOnCapability: KodaXReasoningProfile = {
       effortStrategy: 'prompt-only',
       defaultEffort: 'high',
       supportedEfforts: [{ value: 'high', isDefault: true }],

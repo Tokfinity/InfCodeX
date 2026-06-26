@@ -37,6 +37,11 @@ import {
   HoverRequest,
   ReferencesRequest,
   DocumentSymbolRequest,
+  WorkspaceSymbolRequest,
+  ImplementationRequest,
+  CallHierarchyPrepareRequest,
+  CallHierarchyIncomingCallsRequest,
+  CallHierarchyOutgoingCallsRequest,
   ShutdownRequest,
   ExitNotification,
   type Diagnostic,
@@ -48,6 +53,10 @@ import {
   type Hover,
   type DocumentSymbol,
   type SymbolInformation,
+  type WorkspaceSymbol,
+  type CallHierarchyItem,
+  type CallHierarchyIncomingCall,
+  type CallHierarchyOutgoingCall,
 } from 'vscode-languageserver-protocol';
 import { languageIdForPath } from './language.js';
 import { normalizeFsPath } from './paths.js';
@@ -89,6 +98,16 @@ export interface LspClient {
   references(file: string, position: Position): Promise<Location[]>;
   /** The document's symbol outline. */
   documentSymbols(file: string): Promise<Array<DocumentSymbol | SymbolInformation>>;
+  /** Project-wide symbols matching a query string. */
+  workspaceSymbols(query: string): Promise<Array<SymbolInformation | WorkspaceSymbol>>;
+  /** Implementation site(s) of the symbol at a position. */
+  implementation(file: string, position: Position): Promise<Location[]>;
+  /** Prepare the call hierarchy item(s) for a symbol at a position. */
+  prepareCallHierarchy(file: string, position: Position): Promise<CallHierarchyItem[]>;
+  /** Incoming callers for a prepared call hierarchy item. */
+  incomingCalls(item: CallHierarchyItem): Promise<CallHierarchyIncomingCall[]>;
+  /** Outgoing callees for a prepared call hierarchy item. */
+  outgoingCalls(item: CallHierarchyItem): Promise<CallHierarchyOutgoingCall[]>;
   /** Graceful shutdown (await server exit so the OS releases handles). */
   shutdown(): Promise<void>;
   /** Synchronous best-effort kill, for a `process.on('exit')` last resort. */
@@ -156,6 +175,7 @@ function buildInitializeParams(root: string, init: Record<string, unknown> | und
       workspace: {
         configuration: true,
         workspaceFolders: true,
+        symbol: { dynamicRegistration: true },
         didChangeConfiguration: { dynamicRegistration: true },
         didChangeWatchedFiles: { dynamicRegistration: true },
       },
@@ -163,9 +183,11 @@ function buildInitializeParams(root: string, init: Record<string, unknown> | und
         synchronization: { dynamicRegistration: true, didSave: true },
         publishDiagnostics: { relatedInformation: true },
         definition: { dynamicRegistration: true, linkSupport: true },
+        implementation: { dynamicRegistration: true, linkSupport: true },
         hover: { dynamicRegistration: true, contentFormat: ['markdown', 'plaintext'] },
         references: { dynamicRegistration: true },
         documentSymbol: { dynamicRegistration: true, hierarchicalDocumentSymbolSupport: true },
+        callHierarchy: { dynamicRegistration: true },
       },
       window: { workDoneProgress: true },
     },
@@ -376,6 +398,48 @@ export async function createLspClient(params: CreateLspClientParams): Promise<Ls
     return result ?? [];
   }
 
+  async function workspaceSymbols(query: string): Promise<Array<SymbolInformation | WorkspaceSymbol>> {
+    const result = await navTimeout(
+      connection.sendRequest(WorkspaceSymbolRequest.type, { query }),
+      'workspaceSymbol',
+    );
+    return result ?? [];
+  }
+
+  async function implementation(file: string, position: Position): Promise<Location[]> {
+    const textDocument = { uri: pathToFileURL(file).href };
+    const result = await navTimeout(
+      connection.sendRequest(ImplementationRequest.type, { textDocument, position }),
+      'implementation',
+    );
+    return normalizeLocations(result);
+  }
+
+  async function prepareCallHierarchy(file: string, position: Position): Promise<CallHierarchyItem[]> {
+    const textDocument = { uri: pathToFileURL(file).href };
+    const result = await navTimeout(
+      connection.sendRequest(CallHierarchyPrepareRequest.type, { textDocument, position }),
+      'prepareCallHierarchy',
+    );
+    return result ?? [];
+  }
+
+  async function incomingCalls(item: CallHierarchyItem): Promise<CallHierarchyIncomingCall[]> {
+    const result = await navTimeout(
+      connection.sendRequest(CallHierarchyIncomingCallsRequest.type, { item }),
+      'incomingCalls',
+    );
+    return result ?? [];
+  }
+
+  async function outgoingCalls(item: CallHierarchyItem): Promise<CallHierarchyOutgoingCall[]> {
+    const result = await navTimeout(
+      connection.sendRequest(CallHierarchyOutgoingCallsRequest.type, { item }),
+      'outgoingCalls',
+    );
+    return result ?? [];
+  }
+
   function killSync(): void {
     killChildProcessTreeSync(proc);
   }
@@ -424,6 +488,11 @@ export async function createLspClient(params: CreateLspClientParams): Promise<Ls
     hover,
     references,
     documentSymbols,
+    workspaceSymbols,
+    implementation,
+    prepareCallHierarchy,
+    incomingCalls,
+    outgoingCalls,
     shutdown,
     killSync,
   };

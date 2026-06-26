@@ -122,6 +122,8 @@ export function buildWorkerInstructions(
     '- RULE B — long-running probes: when a single investigation will take a while (full test suite, deep grep, repo-intel rebuild), dispatch as a child and continue with other tools while it runs.',
     '- RULE C — write fan-out (Generator-equivalent only): NON-conflicting file-level edits across multiple modules can be dispatched as `readOnly: false` children. Do NOT use write fan-out for single-file edits — it adds coordination cost without speedup.',
     '- IDLE-YIELD (the wait mechanic): after `dispatch_child_task` returns a `task_id:<id>`, do whatever interleaved work is useful (more dispatches, side-reads the user asked for, drafting a synthesis plan in text). When you have run out of useful work AND children are still in flight, end your turn with ONE short status sentence and NO tool calls. The runner will automatically resume you when a child completes — your next user message will start with one or more `<task-completed task_id="…">…</task-completed>` blocks carrying the result. This lets the user keep chatting with you while children run.',
+    '- PENDING CHILDREN ARE NOT FINAL: a child that has not produced its matching `<task-completed task_id="…">…</task-completed>` block is still in flight. Do not write a final review/report/summary from partial child evidence. If no useful work remains, end with one short waiting status sentence and NO tool calls.',
+    '- WAITING IS IDLE-YIELD, NOT A BLOCKING PEEK: when waiting on children is your only remaining purpose, do NOT call `task_output(block:true)` to wait — a blocking peek holds your whole turn open for the full read window and stops the user from chatting with you while children run. A `wait_expired` result means the child is still healthy, not that you should re-issue the wait with a longer `timeout_ms`; the right response is to end your turn text-only so the runner resumes you the instant a child completes. Reserve `task_output` for a quick `block:false` glance when you have a concrete decision to make right now (dispatch a sibling, or `task_stop` a stuck child).',
     '- LARGE CHILD OUTPUT (FEATURE_121 v0.7.40): when a child\'s report is too large to include inline, the `<task-completed>` banner contains a preview + a marker like `[Tool output truncated. ... Full output saved to: <ABSOLUTE_PATH>. Use the Read tool to view full output.]`. The preview is usually enough — read it first, and only call `Read` on the saved path when you need details beyond what the preview shows (e.g., specific code snippets the child cited, or items below the cutoff). Do NOT blindly Read every spillover path; that wastes context.',
     '- MODEL HINT (optional, FEATURE_120 v0.7.39): you may set `model_hint` on a dispatch to advertise the child\'s reasoning weight class. `"fast"` for trivial single-file lookups; `"deep"` for multi-file research or analytical synthesis; `"balanced"` (or omit) for everything else. Routing is a no-op today — every child runs on your model — but the hint is recorded for FEATURE_102 (v0.7.45). Mark intentionally; do not blanket-tag every child.',
     // FEATURE_169 v0.7.40 — dispatch objective quality (F0a + F0b). Suite 0
@@ -133,6 +135,7 @@ export function buildWorkerInstructions(
     '    - Review tasks: "scope via `changed_scope`, then drill specific files with `changed_diff_bundle`"',
     '    - Module exploration: "use `module_context` to map the module surface before reading individual files"',
     '    - Symbol tracing: "start with `symbol_context` to find callers"',
+    '    - Relationship mapping: "start with `relationship_scan` for upstream/downstream callers, callees, dependencies, and impact"',
     '    - Process flow / execution trace: "use `process_context` to map the flow before reading runner files"',
     '    - Rename / refactor impact: "use `impact_estimate` to estimate blast radius first"',
     '- SPECIALIST ROUTING: when a registered specialist agent matches the task domain (see "Available specialist agents" block above when present), prefer dispatching with `subagent_type=<name>` over a generic child.',
@@ -180,13 +183,14 @@ export function buildWorkerInstructions(
   // marginal +4-8pp). Decision matrix verdict: F7_USEFUL_FOR_WEAK.
   //
   // Section is unconditional. When `repoIntelligenceMode === 'off'` the
-  // 8 pull tools get stripped from the LLM-visible tool list (see
+  // repo-intelligence pull tools get stripped from the LLM-visible tool list (see
   // `agent-runtime/tool-resolution.ts`); the model will discover unknown
   // tool calls fail and fall back to read/grep. Off mode is opt-in and
   // rare, so the prompt-waste cost is acceptable vs. the threading cost
   // of plumbing mode into this context-light builder.
   const repoIntelligenceTools = [
     'REPO INTELLIGENCE TOOLS (FEATURE_161 v0.7.41 — prefer these over read+grep for module-level exploration):',
+    '- `relationship_scan(symbol|module|path|entry)` - single entrypoint for upstream/downstream, callers/callees, dependencies, process links, and impact. Use first for "what calls this", "what depends on this", "上下游", "调用链", and blast-radius questions.',
     '- `module_context(target_path|module)` — compact module capsule with deps, entry files, top symbols, tests, docs. Replaces 5-10 `read`/`grep` calls when you need to understand "what does this module do / what depends on what".',
     '- `symbol_context(symbol)` — definition + probable callers/callees + imports for one symbol. Replaces multiple `grep -n "symbolName"` + `read` rounds when tracing usage.',
     '- `impact_estimate(symbol|module|path)` — blast-radius estimate combining symbol/module info with current changed-scope overlap. Use BEFORE planning a rename/refactor instead of guessing from grep.',
@@ -195,8 +199,10 @@ export function buildWorkerInstructions(
     '- `changed_scope()` — list of changed files in current git state, with area/category labels. Use before any review/audit task to scope.',
     '- `changed_diff_bundle(paths[])` — paged diff for multiple changed files in one call. Use for review tasks instead of multiple `bash git diff` calls.',
     '- `changed_diff(path)` — paged diff for one file. Use when one file dominates the review.',
+    '- LSP precision tools (`lsp_workspace_symbols`, `lsp_implementation`, `lsp_incoming_calls`, `lsp_outgoing_calls`) - use when you have an exact file position or need compiler-backed symbol/call hierarchy edges.',
     '',
     'WHEN TO PREFER REPO-INTEL TOOLS:',
+    '- About to answer upstream/downstream, caller/callee, dependency, or impact questions → call `relationship_scan` first.',
     '- About to read 3+ files in the same module → call `module_context` first.',
     '- About to grep for a symbol\'s callers → call `symbol_context` first.',
     '- About to estimate impact of a change → call `impact_estimate` first.',
@@ -205,7 +211,7 @@ export function buildWorkerInstructions(
     'WHEN TO STICK WITH read/grep:',
     '- Single-file targeted edit or lookup in one or a few known files.',
     '- Need exact line numbers or code text (capsules summarize; files give you exact bytes).',
-    '- Pull-tool returned `[Tool Error]` / `unavailable` (repo-intel daemon not running) — fall back to read/grep without retrying the same pull-tool.',
+    '- Pull-tool returned `[Tool Error]` / `unavailable` (repo-intel full mode unavailable) — fall back to read/grep without retrying the same pull-tool.',
     '- Rationale: pull-tool capsules are much smaller than the equivalent multi-file read exploration; the token savings compound across a full task.',
     '',
     // FEATURE_169 v0.7.40 — F3 change-review positive reframe. Suite B v2
@@ -217,7 +223,7 @@ export function buildWorkerInstructions(
     'CHANGE-REVIEW POSITIVE REFRAME (FEATURE_169 v0.7.40 — review-specific):',
     '- For ANY task framed as "review", "audit", "compare changes", "check diff", or "what changed since X": your first scope-acquisition tool MUST be `changed_scope` (one call).',
     '- Follow with `changed_diff_bundle(paths[])` to read the specific files surfaced by `changed_scope`.',
-    '- Do NOT use `bash git diff …` for change review — that pattern reads opaque text the repo-intel daemon already structured for you.',
+    '- Do NOT use `bash git diff …` for change review — that pattern reads opaque text the repo-intel tools already structured for you.',
     '- `bash git …` is reserved for NON-review git ops: status, commit, tag, push, log (commit history), branch operations.',
   ].join('\n');
 
@@ -230,7 +236,7 @@ export function buildWorkerInstructions(
 
   const handoffRules = [
     'TERMINATION:',
-    '- When all non-cancelled plan items are `completed`, end your turn with a brief text-only summary covering what you did, what changed (files / behavior), and any caveats. No tool call needed to terminate — the absence of a `tool_use` block on your final assistant message IS the terminal signal.',
+    '- When all non-cancelled plan items are `completed` AND every dispatched child has produced its matching `<task-completed>` block, end your turn with a brief text-only summary covering what you did, what changed (files / behavior), and any caveats. No tool call needed to terminate — the absence of a `tool_use` block on your final assistant message IS the terminal signal.',
     '- If you cannot proceed (e.g. user-input blocker, irrecoverable failure), end your turn with a text-only summary of the blocker. Mark the affected plan items `failed` with a note BEFORE the final summary turn so the dashboard reflects the blocked state.',
     '- After your terminal turn, an independent Sidecar Verifier reads your work in a fresh read-only session and decides accept (success) / revise (your turn again, fix the called-out issues) / blocked (terminal failure). You do not call the verifier — it runs automatically.',
   ].join('\n');

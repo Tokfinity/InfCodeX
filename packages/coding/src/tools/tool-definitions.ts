@@ -1,7 +1,7 @@
 /**
  * FEATURE_200 Phase D (v0.7.45) — built-in tool definitions extracted from registry.ts.
  *
- * Flat data: the 53-entry BUILTIN_TOOL_DEFINITIONS array + its only local helper
+ * Flat data: the BUILTIN_TOOL_DEFINITIONS array + its only local helper
  * (stageArtifactPreview). Handlers are imported references; the registry
  * accessors (registry.ts) consume this array. No back-edges -> no cycle.
  */
@@ -32,12 +32,18 @@ import { toolModuleContext } from './module-context.js';
 import { toolSymbolContext } from './symbol-context.js';
 import { toolProcessContext } from './process-context.js';
 import { toolImpactEstimate } from './impact-estimate.js';
+import { toolRelationshipScan } from './relationship-scan.js';
 import { toolCyclicDependencies } from './cyclic-dependencies.js';
 import {
   toolLspDefinition,
   toolLspHover,
   toolLspReferences,
   toolLspDocumentSymbols,
+  toolLspWorkspaceSymbols,
+  toolLspImplementation,
+  toolLspPrepareCallHierarchy,
+  toolLspIncomingCalls,
+  toolLspOutgoingCalls,
 } from './lsp-navigation.js';
 import { toolWebSearch } from './web-search.js';
 import { toolWebFetch } from './web-fetch.js';
@@ -123,6 +129,7 @@ export const BUILTIN_TOOL_DEFINITIONS: LocalToolDefinition[] = [
       '- Text files: returns line-numbered content. Large files are capped per call; use offset/limit to continue in smaller slices.',
       '- Image files (PNG, JPG, JPEG, GIF, WEBP): returns the image as inline vision content. The model is multimodal — when an image is delivered through this tool, you can see the picture directly in your next turn. Describe what you see; do NOT claim binary files are unsupported — the tool decodes the image bytes into vision content for the model, so refusing as "binary file" skips a valid read and frustrates the user.',
       '- For pasted/attached images already inlined in the user message, you already perceive them via native vision — no `read` call is needed. Use `read` on an image path only when the file is on disk and not yet in the conversation (e.g., a fresh path the user mentioned in text without attaching).',
+      '- PDF files (.pdf): do not use this tool for PDF content. If the `read_pdf` tool is available, call `read_pdf` directly with the PDF path; it extracts page-marked text and can OCR scanned pages when configured. If `read_pdf` is unavailable, tell the user to enable/install the read_pdf extension.',
     ].join('\n'),
     input_schema: {
       type: 'object',
@@ -440,7 +447,7 @@ export const BUILTIN_TOOL_DEFINITIONS: LocalToolDefinition[] = [
         },
         effort: {
           type: 'string',
-          description: 'Optional. Reasoning effort for this child (for example none, low, medium, high, xhigh, max). Omit or use auto to inherit the parent/default effort. If subagent_type names a specialist with a declared effort, that specialist effort is locked and a different dispatch effort is rejected. Unsupported values are rejected by the selected provider/model.',
+          description: 'Optional. Reasoning effort for this child (for example off, low, medium, high, xhigh, max). Omit or use auto to inherit the parent/default effort. If subagent_type names a specialist with a declared effort, that specialist effort is locked and a different dispatch effort is rejected. Unsupported values are rejected by the selected provider/model.',
         },
       },
       required: ['objective'],
@@ -529,7 +536,7 @@ export const BUILTIN_TOOL_DEFINITIONS: LocalToolDefinition[] = [
   {
     name: 'task_output',
     description:
-      'Peek at the current state of a child task launched via dispatch_child_task. Returns a structured snapshot (status, iteration count, recent tool-call breadcrumbs, and final text once the child settles). Use when interleaving useful work between idle-yields and you need to decide whether to dispatch a sibling, call task_stop on a stuck child, or just keep waiting. Default block:false returns the current snapshot immediately. Set block:true to wait up to timeout_ms for the child to finish — but prefer idle-yield (end the turn text-only) for waits; block:true is for tightly-scoped synchronous patterns only. Coordinator-only: child agents cannot call this tool. Completed children\'s snapshots remain queryable for the lifetime of the parent runner; very old snapshots may be evicted under a per-runner cap.',
+      'Peek at the current state of a child task launched via dispatch_child_task. Returns a structured snapshot (status, iteration count, recent tool-call breadcrumbs, and final text once the child settles). Normal Worker usage is task_output({task_id}) with block omitted/false for a status snapshot. If block:true is used, timeout_ms is only a bounded read-window cap; retrieval_status=wait_expired with status=running means the child is still running, not timed out or failed. Prefer idle-yield (end the turn text-only) for normal waits. Coordinator-only: child agents cannot call this tool. Completed children\'s snapshots remain queryable for the lifetime of the parent runner; very old snapshots may be evicted under a per-runner cap.',
     input_schema: {
       type: 'object',
       properties: {
@@ -541,12 +548,12 @@ export const BUILTIN_TOOL_DEFINITIONS: LocalToolDefinition[] = [
         block: {
           type: 'boolean',
           description:
-            'When true, wait for the child to settle (up to timeout_ms) before returning the snapshot. When false (default), return the current snapshot immediately without waiting. Use block:false for status peeks during interleaved work; block:true only for tightly-scoped synchronous patterns. Idle-yield (end turn text-only) is the canonical wait — do not use block:true as a substitute for it, because block:true holds your turn open synchronously while idle-yield ends your turn so the user can chat with you while children run.',
+            'Optional compatibility knob. When false or omitted (normal Worker usage), return the current snapshot immediately. When true, wait only within a bounded read window (up to timeout_ms) before returning the snapshot; wait expiry is not child failure. Idle-yield (end turn text-only) is the canonical wait.',
         },
         timeout_ms: {
           type: 'number',
           description:
-            'Max wait time in milliseconds when block:true. Default 30000 (30s), max 120000 (120s). Ignored when block:false. On timeout, returns the current snapshot with retrieval_status=timeout.',
+            'Max bounded read-window time in milliseconds when block:true. Default 30000 (30s), max 120000 (120s). Ignored when block:false. If the read window expires, returns the current snapshot with retrieval_status=wait_expired; this is not a child task timeout.',
         },
       },
       required: ['task_id'],
@@ -1346,6 +1353,117 @@ export const BUILTIN_TOOL_DEFINITIONS: LocalToolDefinition[] = [
       required: ['path'],
     },
     handler: toolLspDocumentSymbols,
+    sideEffect: 'readonly',
+    toClassifierInput: (input) => defaultToClassifierInput('relationship_scan', input),
+  },
+  {
+    name: 'lsp_workspace_symbols',
+    description: 'Search project-wide symbols by name through available language servers. Use this when you know a class/function/type name but not its file, and want compiler-indexed candidates before reading files or running broader text search. An empty query asks the server for its broad symbol list when supported.',
+    input_schema: {
+      type: 'object',
+      properties: {
+        query: { type: 'string', description: 'Symbol query text; may be empty for a broad server-supported listing' },
+      },
+    },
+    handler: toolLspWorkspaceSymbols,
+    sideEffect: 'readonly',
+    toClassifierInput: () => '',
+  },
+  {
+    name: 'lsp_implementation',
+    description: 'Jump from an interface, abstract method, or declaration site to implementation locations using the language server. Use this when definition only lands on a contract and you need the concrete implementers before changing behavior.',
+    input_schema: {
+      type: 'object',
+      properties: {
+        path: { type: 'string', description: 'File containing the symbol' },
+        line: { type: 'number', description: '1-based line of the symbol' },
+        character: { type: 'number', description: 'Optional 1-based column of the symbol' },
+        column: { type: 'number', description: 'Alias for character' },
+      },
+      required: ['path', 'line'],
+    },
+    handler: toolLspImplementation,
+    sideEffect: 'readonly',
+    toClassifierInput: () => '',
+  },
+  {
+    name: 'lsp_prepare_call_hierarchy',
+    description: 'Prepare call hierarchy roots for the symbol at a file position. Use this to confirm the language server can identify the callable before asking for incoming or outgoing calls.',
+    input_schema: {
+      type: 'object',
+      properties: {
+        path: { type: 'string', description: 'File containing the callable symbol' },
+        line: { type: 'number', description: '1-based line of the symbol' },
+        character: { type: 'number', description: 'Optional 1-based column of the symbol' },
+        column: { type: 'number', description: 'Alias for character' },
+      },
+      required: ['path', 'line'],
+    },
+    handler: toolLspPrepareCallHierarchy,
+    sideEffect: 'readonly',
+    toClassifierInput: () => '',
+  },
+  {
+    name: 'lsp_incoming_calls',
+    description: 'List language-server incoming callers for the callable at a file position. Use this for upstream/caller questions when you have the exact symbol location.',
+    input_schema: {
+      type: 'object',
+      properties: {
+        path: { type: 'string', description: 'File containing the callable symbol' },
+        line: { type: 'number', description: '1-based line of the symbol' },
+        character: { type: 'number', description: 'Optional 1-based column of the symbol' },
+        column: { type: 'number', description: 'Alias for character' },
+      },
+      required: ['path', 'line'],
+    },
+    handler: toolLspIncomingCalls,
+    sideEffect: 'readonly',
+    toClassifierInput: () => '',
+  },
+  {
+    name: 'lsp_outgoing_calls',
+    description: 'List language-server outgoing callees from the callable at a file position. Use this for downstream/callee questions when you have the exact symbol location.',
+    input_schema: {
+      type: 'object',
+      properties: {
+        path: { type: 'string', description: 'File containing the callable symbol' },
+        line: { type: 'number', description: '1-based line of the symbol' },
+        character: { type: 'number', description: 'Optional 1-based column of the symbol' },
+        column: { type: 'number', description: 'Alias for character' },
+      },
+      required: ['path', 'line'],
+    },
+    handler: toolLspOutgoingCalls,
+    sideEffect: 'readonly',
+    toClassifierInput: () => '',
+  },
+  {
+    name: 'relationship_scan',
+    description: 'Answer upstream/downstream relationship questions for a symbol, module, path, or entry point in one compact scan. Returns identity, upstream callers/dependents, downstream callees/dependencies/process steps, impact, evidence, confidence, and gaps. Use this first for "what calls this", "what depends on this", "upstream/downstream", "调用链", "上下游", and blast-radius questions before falling back to separate module_context / symbol_context / process_context calls.',
+    input_schema: {
+      type: 'object',
+      properties: {
+        symbol: { type: 'string', description: 'Optional symbol/function/class name to trace' },
+        module: { type: 'string', description: 'Optional module/package label to trace' },
+        path: { type: 'string', description: 'Optional repository-relative or absolute path to trace' },
+        entry: { type: 'string', description: 'Optional entry symbol or file hint for execution/process tracing' },
+        direction: {
+          type: 'string',
+          enum: ['upstream', 'downstream', 'both'],
+          description: 'Relationship direction to emphasize. Defaults to both.',
+        },
+        depth: {
+          type: 'number',
+          enum: [1, 2, 3],
+          description: 'Requested traversal depth. Light mode reports bounded direct edges first.',
+        },
+        target_path: { type: 'string', description: 'Optional path used to resolve the repository root or narrow context' },
+        refresh: { type: 'boolean', description: 'When true, rebuild repo intelligence before the first relationship lookup' },
+        include_lsp: { type: 'boolean', description: 'When true, attach LSP incoming/outgoing call hierarchy evidence when an LSP service is available' },
+        include_text_search: { type: 'boolean', description: 'When true, attach bounded exact-name grep evidence for cross-checking static relationships' },
+      },
+    },
+    handler: toolRelationshipScan,
     sideEffect: 'readonly',
     toClassifierInput: () => '',
   },

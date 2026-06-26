@@ -1,6 +1,6 @@
 # Known Issues
 
-_Last Updated: 2026-06-25_
+_Last Updated: 2026-06-26_
 
 ---
 
@@ -87,12 +87,77 @@ _Last Updated: 2026-06-25_
 | 140 | High | Resolved | Published bundle leaves computed `./agent.js` child-executor import, breaking workflow child agents | v0.7.37 bundle distribution; confirmed v0.7.48-v0.7.50 | v0.7.52 | 2026-06-17 | 2026-06-18 |
 | 141 | Medium | Open | CI workflow long-red on Linux: cross-platform test bugs (storage list() runtime-inspection, bash background-process, h2 spawn env, skill-creator API-key-at-load) | long-standing (pre-v0.7.49) | - | 2026-06-18 | - |
 | 142 | High | Resolved | kimi-code thinking-only completion can terminate Worker with only `[Worker]` visible | v0.7.56 | v0.7.56 (pending patch) | 2026-06-25 | 2026-06-25 |
+| 144 | High | Resolved | Worker misreads task_output block wait expiry as child-agent timeout and writes final report before children complete | v0.7.45 | v0.7.57 (pending release) | 2026-06-26 | 2026-06-26 |
 | 143 | High | Resolved | Auto[llm] speculative classify 窗口默认 500ms + late verdict 被丢弃 → 远程/慢 provider 下 near-100% 误弹确认框，auto 模式形同虚设 | v0.7.39 | v0.7.57 (pending release) | 2026-06-25 | 2026-06-25 |
 
 ---
 
 ## Issue Details
 <!-- Full details for each issue - REQUIRED for all issues -->
+
+### 144: Worker misreads task_output block wait expiry as child-agent timeout and writes final report before children complete
+
+- **Priority**: High
+- **Status**: **Resolved** (v0.7.57 pending release)
+- **Introduced**: v0.7.45 (FEATURE_177 `task_output`)
+- **Created**: 2026-06-26
+- **Resolved**: 2026-06-26
+- **Fixed**: v0.7.57 (pending release)
+
+#### Original Problem
+
+When the Worker used `task_output({ block:true })` while child agents were still running, the bounded read window could expire after 30s and return:
+
+```xml
+<retrieval_status>timeout</retrieval_status>
+<status>running</status>
+```
+
+The child agent itself was still healthy, but the `timeout` label made the Worker summarize pending children as "timed out". In review fan-out flows, this could cascade into the Worker writing a final-looking review/report before all dispatched children had produced their matching `<task-completed>` blocks.
+
+#### Context
+
+- Component: `task_output` child-progress snapshot tool.
+- Affected flow: Worker-driven parallel review / audit / exploration with async child agents.
+- User-visible symptom: transcript says child agents are "timed out" even though child activity continues, and the Worker appears to finish from partial evidence.
+
+#### Root Cause
+
+`task_output` overloaded `retrieval_status=timeout` to mean "the synchronous read window expired". In agent language, `timeout` strongly implies task failure or cancellation, especially when shown next to a still-running child. The Worker prompt also allowed terminal summary once plan items were complete without explicitly requiring every dispatched child to have returned `<task-completed>`.
+
+#### Resolution
+
+- Renamed the bounded read-window result from `timeout` to `wait_expired`.
+- Added a result note clarifying that the child task has not timed out and callers must read the `status` field.
+- Updated `task_output` schema wording so normal Worker usage is `task_output({task_id})` / `block:false`, and `timeout_ms` is documented as a read-window cap rather than child lifetime.
+- Added Worker prompt guidance: pending children are not final evidence; while any dispatched child lacks a matching `<task-completed>` block, the Worker must idle-yield with a short waiting status rather than write a final report.
+- **Added an anti-block-peek Worker rule** ("waiting is idle-yield, not a blocking peek"). The first real pilot run exposed a *second* failure mode the initial wording missed: after `wait_expired`, models escalated to `task_output(block:true, timeout_ms:120000)` to "wait harder" — freezing the turn instead of idle-yielding. The rule explains why (a blocking peek holds the whole turn open and blocks chat-while-waiting) and redirects to text-only idle-yield.
+- Adjacent fix: `resolveEvidenceRef` no longer tells a *child* agent to poll a still-running sibling with `task_output` (coordinator-only) or to await a `<task-completed>` block (a parent-only mechanic) — it now states plainly that the sibling result is not available yet.
+- Added regression tests for runtime output, schema wording, Worker prompt gating, the pending-child gate, the child-facing sibling briefing, and Worker tool-surface preservation.
+- Added a pilot eval fixture (`tests/feature-177-wait-expired-idle-yield-pilot.eval.ts`) for the `wait_expired + status=running` cascade.
+
+#### Eval Result (2026-06-26, real provider runs)
+
+- Pilot `zhipu/glm51` 3/3 PASS — model explicitly refuses to fabricate pending reports and idle-yields text-only ("I'll wait … rather than block on them" / "rather than peek again").
+- 5-alias panel on the same case confirmed the acute bug is gone everywhere with data: no alias claimed a child timed out, none wrote a premature report, none re-issued the turn-freezing `block:true`. Weak "flash" aliases (ark/v4flash, ark/v4pro) downgrade to harmless `block:false` peeks / read-only re-scans instead of pure idle-yield — a known weak-model floor, validated by dump inspection.
+- Eval-quality fix during review: the `judgeNoFinalReport` regex matched the bare token "findings", false-failing clean waiting messages that mention the one completed child ("no blocking findings"); tightened to match overall-verdict structure only.
+- Adjacent infra bug surfaced **and fixed** in the same pass: any caller that omitted `reasoning` (e.g. the eval harness) crashed `kimi-code` / `minimax-coding` with `does not support reasoning effort "none"`. These are always-on-thinking models (`localRejectEfforts: ['none','minimal']`, no `supportsDisabledThinking`); `normalizeReasoningRequest(undefined)` produces an implicit legacy effort `none`, and `resolveReasoningProfileIntent` hard-threw on it without checking `effortSource`. Fix in `packages/llm/src/providers/base.ts`: hard-reject a `localRejectEfforts` effort **only when explicitly requested** (mirrors `validateExplicitReasoningEffort`); an implicit/default `none` now falls back to the model's `defaultEffort` so the model simply thinks. Verified: 5-alias panel re-run — `kimi` and `mmx/m27` now produce data (previously zero); `mmx/m27` 3/3, `kimi` idle-yields correctly (judge-undercounted, see below). Regression test: `packages/llm/src/providers/base.test.ts` (`resolveReasoningProfileIntent — always-on-thinking models`).
+- Eval judge tightening (this pilot): `judgeNoFinalReport` no longer trips on the bare token "findings"; `judgeWaitingStatus` broadened to recognize natural waiting phrasings ("I will wait … to finish/complete", "until their reports arrive") that were false-failing correct idle-yields (kimi/zhipu).
+
+#### Files Changed
+
+- `packages/coding/src/tools/task-output.ts`
+- `packages/coding/src/tools/tool-definitions.ts`
+- `packages/coding/src/agents/worker-role-prompt.ts`
+- `packages/coding/src/tools/task-output.test.ts`
+- `packages/coding/src/agents/worker-role-prompt.test.ts`
+- `packages/coding/src/task-engine/runner-driven-tool-wiring.test.ts`
+- `tests/feature-177-wait-expired-idle-yield-pilot.eval.ts`
+
+#### Tests Added / Run
+
+- `npm test -- packages/coding/src/tools/task-output.test.ts packages/coding/src/agents/worker-role-prompt.test.ts packages/coding/src/task-engine/runner-driven-tool-wiring.test.ts`
+- `ARK_CODING_API_KEY='' npm run test:eval -- feature-177-wait-expired-idle-yield-pilot` (skip-path compile check; real provider pilot intentionally not run automatically)
 
 ### 143: Auto[llm] speculative classify 窗口默认 500ms + late verdict 被丢弃 → 远程/慢 provider 下 near-100% 误弹确认框，auto 模式形同虚设
 
@@ -4723,7 +4788,7 @@ Commit `ef085fc` 把 V1 精简到 V2 时没区分"信息载体"和"脚手架"，
 ---
 
 ## Summary
-- Total: 70 (25 Open, 45 Resolved, 0 Partially Resolved, 0 Won't Fix)
+- Total: 71 (25 Open, 46 Resolved, 0 Partially Resolved, 0 Won't Fix)
 - Highest Priority Open: 091 - 缺少一等公民 MCP / Web Search / Code Search 工具体系 (High)
 - Historical archived issues are maintained in ISSUES_ARCHIVED.md
 

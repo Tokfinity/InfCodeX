@@ -724,9 +724,9 @@ function resolveSpecialistOverride(
     : defaultSystemPrompt;
 
   // Complementary exclusion: KodaXOptions.context has no `includeOnlyTools`
-  // API. Computing `allTools - specialist.tools` as the excludeTools list
-  // is semantically equivalent to an allowlist intersect without
-  // requiring a new option schema (ADR-035 R11, YAGNI-compliant).
+  // API. Computing `allTools - (specialist.tools - defaultExcludeTools)`
+  // is semantically equivalent to an allowlist intersected with the
+  // caller's child-safety guard, without requiring a new option schema.
   if (!specialist.tools || specialist.tools.length === 0) {
     // Specialist declared no tools — fall back to defaults so the child
     // still has the standard CHILD_EXCLUDE_TOOLS_BASE/READONLY guard
@@ -734,8 +734,9 @@ function resolveSpecialistOverride(
     return { systemPromptOverride, excludeTools: defaultExcludeTools, ...modelProviderEffort };
   }
   const specialistToolNames = new Set(specialist.tools.map(t => t.name));
+  const alwaysExcluded = new Set(defaultExcludeTools);
   const allToolNames = getAllRegisteredTools().map(t => t.name);
-  const excludeTools = allToolNames.filter(n => !specialistToolNames.has(n));
+  const excludeTools = allToolNames.filter(n => alwaysExcluded.has(n) || !specialistToolNames.has(n));
   return { systemPromptOverride, excludeTools, ...modelProviderEffort };
 }
 
@@ -801,6 +802,7 @@ async function runReadChildBody(
     options.workflowCorrelation,
     options.childActivityName,
     options.maxIterationsPerChild,
+    true,
   );
 
   // FEATURE_191 — specialist override switch (no-op when bundle.specialistName
@@ -978,6 +980,7 @@ async function runWriteChildBody(
     options.workflowCorrelation,
     options.childActivityName,
     options.maxIterationsPerChild,
+    false,
   );
   // FEATURE_117 v2 (v0.7.38): write children inherit AGENTS.md mutation
   // policy. Read-only children stay on the bare `CHILD_AGENT_SYSTEM_PROMPT`
@@ -1260,7 +1263,12 @@ export async function resolveEvidenceRef(
       return `- task_id:${childId} (not found — child unknown, already cap-pruned, or sync-dispatch mode without snapshot map; verify the id matches a recent dispatch_child_task return)`;
     }
     if (snap.status === 'running') {
-      return `- task_id:${childId} (still running — use the \`task_output\` tool to poll, or wait for the \`<task-completed task_id="${childId}">\` block in your next user message)`;
+      // Child-facing briefing: children cannot poll siblings (`task_output`
+      // is coordinator-only, see CHILD_EXCLUDE_TOOLS_BASE) and do not receive
+      // `<task-completed>` blocks (that is the parent's idle-yield mechanic).
+      // So neither "poll" nor "wait for the banner" is reachable here — say
+      // plainly that the sibling result is not available yet.
+      return `- task_id:${childId} (sibling still running — its result is not available to you yet; proceed with what you have, or note this dependency in your summary so the coordinator can follow up)`;
     }
     // Cap + code-fence wrap finalText so multi-hop prompt injection
     // through a compromised child cannot escape the briefing framing.
@@ -1425,11 +1433,11 @@ const CHILD_EXCLUDE_TOOLS_READONLY: readonly string[] = [
   'undo',
 ];
 
-/**
- * Tools blocked at execution time (defense-in-depth, in case tool list filtering is bypassed).
- * Unified with CHILD_EXCLUDE_TOOLS_BASE to prevent the two lists from drifting again.
- */
-const CHILD_BLOCKED_TOOLS = new Set<string>(CHILD_EXCLUDE_TOOLS_BASE);
+/** Tools blocked at execution time for every child agent. */
+const CHILD_BLOCKED_TOOLS_BASE = new Set<string>(CHILD_EXCLUDE_TOOLS_BASE);
+
+/** Runtime no-write floor for read-only children and read-only specialists. */
+const CHILD_BLOCKED_TOOLS_READONLY = new Set<string>(CHILD_EXCLUDE_TOOLS_READONLY);
 
 function childActivityEventMeta(
   childId: string,
@@ -1476,10 +1484,12 @@ export function buildChildEvents(
   // every turn, but seeding from the real value removes the latent trap of
   // a stale default surfacing if a caller ever passes a non-200 cap.
   initialMaxIterations = 200,
+  readOnly = false,
 ): KodaXEvents | undefined {
   let iterationCount = 0;
   let maxIterations = initialMaxIterations;
   let lastProgressTime = 0;
+  const blockedTools = readOnly ? CHILD_BLOCKED_TOOLS_READONLY : CHILD_BLOCKED_TOOLS_BASE;
   const PROGRESS_THROTTLE_MS = 150; // Limit updates to ~6/sec per child
 
   const throttledProgress = (msg: string, force = false): void => {
@@ -1579,7 +1589,7 @@ export function buildChildEvents(
       input: Record<string, unknown>,
       meta?: KodaXToolEventMeta,
     ) => {
-      if (CHILD_BLOCKED_TOOLS.has(tool)) {
+      if (blockedTools.has(tool)) {
         return `[Tool Error] ${tool}: Not available in child agent context.`;
       }
       if (planModeBlockCheck) {

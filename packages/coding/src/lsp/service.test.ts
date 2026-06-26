@@ -1,7 +1,8 @@
 import os from 'os';
 import path from 'path';
+import { pathToFileURL } from 'url';
 import { describe, expect, it, vi } from 'vitest';
-import type { Diagnostic } from 'vscode-languageserver-protocol';
+import type { CallHierarchyItem, Diagnostic } from 'vscode-languageserver-protocol';
 import { LspService } from './service.js';
 import type { LspClient } from './client.js';
 import type { LspServerInfo } from './servers.js';
@@ -25,8 +26,27 @@ function fakeClient(diagnostics: readonly Diagnostic[]): LspClient {
     hover: vi.fn(async () => null),
     references: vi.fn(async () => []),
     documentSymbols: vi.fn(async () => []),
+    workspaceSymbols: vi.fn(async () => []),
+    implementation: vi.fn(async () => []),
+    prepareCallHierarchy: vi.fn(async () => []),
+    incomingCalls: vi.fn(async () => []),
+    outgoingCalls: vi.fn(async () => []),
     shutdown: vi.fn(async () => undefined),
     killSync: vi.fn(() => undefined),
+  };
+}
+
+function range(line: number, character = 0) {
+  return { start: { line, character }, end: { line, character: character + 1 } };
+}
+
+function callItem(name: string, file: string, line: number): CallHierarchyItem {
+  return {
+    name,
+    kind: 12,
+    uri: pathToFileURL(file).href,
+    range: range(line),
+    selectionRange: range(line),
   };
 }
 
@@ -181,6 +201,48 @@ describe('LspService.getDiagnosticsBlock', () => {
     const service = new LspService({ servers: [fakeServer()], createClient: async () => client });
     const out = await service.getDocumentSymbols(TS_FILE, { gitRoot: ROOT });
     expect(out).toBe('Class Foo (5)');
+  });
+
+  it('getWorkspaceSymbols formats project-wide symbols', async () => {
+    const client = fakeClient([]);
+    client.workspaceSymbols = vi.fn(async () => [
+      { name: 'run', kind: 12, location: { uri: pathToFileURL(TS_FILE).href, range: range(0, 2) } },
+    ]);
+    const service = new LspService({ servers: [fakeServer()], createClient: async () => client });
+    const out = await service.getWorkspaceSymbols('run', { gitRoot: ROOT });
+    expect(out).toContain('Function run');
+    expect(out).toContain(`${TS_FILE}:1:3`);
+  });
+
+  it('getImplementation formats implementation locations', async () => {
+    const client = fakeClient([]);
+    client.implementation = vi.fn(async () => [
+      { uri: pathToFileURL(TS_FILE).href, range: range(6, 4) },
+    ]);
+    const service = new LspService({ servers: [fakeServer()], createClient: async () => client });
+    const out = await service.getImplementation(TS_FILE, { line: 0, character: 0 }, { gitRoot: ROOT });
+    expect(out).toBe(`${TS_FILE}:7:5`);
+  });
+
+  it('formats call hierarchy prepare, incoming, and outgoing calls', async () => {
+    const client = fakeClient([]);
+    const rootItem = callItem('run', TS_FILE, 0);
+    const caller = callItem('main', path.join(ROOT, 'src', 'main.ts'), 2);
+    const callee = callItem('save', path.join(ROOT, 'src', 'store.ts'), 4);
+    client.prepareCallHierarchy = vi.fn(async () => [rootItem]);
+    client.incomingCalls = vi.fn(async () => [{ from: caller, fromRanges: [range(7, 2)] }]);
+    client.outgoingCalls = vi.fn(async () => [{ to: callee, fromRanges: [range(1, 8)] }]);
+    const service = new LspService({ servers: [fakeServer()], createClient: async () => client });
+
+    const prepared = await service.getPrepareCallHierarchy(TS_FILE, { line: 0, character: 0 }, { gitRoot: ROOT });
+    const incoming = await service.getIncomingCalls(TS_FILE, { line: 0, character: 0 }, { gitRoot: ROOT });
+    const outgoing = await service.getOutgoingCalls(TS_FILE, { line: 0, character: 0 }, { gitRoot: ROOT });
+
+    expect(prepared).toContain('Function run');
+    expect(incoming).toContain('Function main');
+    expect(incoming).toContain('calls at 8:3');
+    expect(outgoing).toContain('Function save');
+    expect(outgoing).toContain('called at 2:9');
   });
 
   it('auto-installs (opt-in) when KODAX_LSP_DOWNLOAD=1 and discovery fails', async () => {

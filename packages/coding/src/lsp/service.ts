@@ -18,7 +18,15 @@ import path from 'path';
 import type { Diagnostic, Position } from 'vscode-languageserver-protocol';
 import { languageIdForPath } from './language.js';
 import { report } from './diagnostic.js';
-import { formatHover, formatLocations, formatSymbols } from './format.js';
+import {
+  formatCallHierarchyItems,
+  formatHover,
+  formatIncomingCalls,
+  formatLocations,
+  formatOutgoingCalls,
+  formatSymbols,
+  formatWorkspaceSymbols,
+} from './format.js';
 import { normalizeFsPath } from './paths.js';
 import { findNearestRoot } from './discovery.js';
 import { LSP_SERVERS, type LspServerInfo, type LspServerLaunch } from './servers.js';
@@ -138,6 +146,62 @@ export class LspService {
     return formatSymbols(symbols, 'No symbols found in this file.');
   }
 
+  /** Project-wide symbols matching `query`, across all available language servers. */
+  async getWorkspaceSymbols(query: string, request: DiagnosticsRequest = {}): Promise<string> {
+    const clients = await this.workspaceClients(request);
+    if (clients.length === 0) return 'No language server is available for workspace symbol search.';
+    const results = await Promise.all(
+      clients.map((client) => client.workspaceSymbols(query).catch(() => [])),
+    );
+    return formatWorkspaceSymbols(results.flat(), 'No workspace symbols found for that query.');
+  }
+
+  /** Implementation site(s) of the symbol at `position` (0-based), as text. */
+  async getImplementation(file: string, position: Position, request: DiagnosticsRequest = {}): Promise<string> {
+    const resolved = await this.navClient(file, request);
+    if (resolved.kind !== 'client') return resolved.message;
+    const locations = await resolved.client
+      .implementation(path.resolve(file), position)
+      .catch(() => []);
+    return formatLocations(locations, 'No implementation found at that position.');
+  }
+
+  /** Prepared call hierarchy item(s) for the symbol at `position` (0-based). */
+  async getPrepareCallHierarchy(file: string, position: Position, request: DiagnosticsRequest = {}): Promise<string> {
+    const resolved = await this.navClient(file, request);
+    if (resolved.kind !== 'client') return resolved.message;
+    const items = await resolved.client
+      .prepareCallHierarchy(path.resolve(file), position)
+      .catch(() => []);
+    return formatCallHierarchyItems(items, 'No call hierarchy item found at that position.');
+  }
+
+  /** Incoming callers of the symbol at `position` (0-based). */
+  async getIncomingCalls(file: string, position: Position, request: DiagnosticsRequest = {}): Promise<string> {
+    const resolved = await this.navClient(file, request);
+    if (resolved.kind !== 'client') return resolved.message;
+    const absolute = path.resolve(file);
+    const items = await resolved.client.prepareCallHierarchy(absolute, position).catch(() => []);
+    if (items.length === 0) return 'No call hierarchy item found at that position.';
+    const calls = await Promise.all(
+      items.map((item) => resolved.client.incomingCalls(item).catch(() => [])),
+    );
+    return formatIncomingCalls(calls.flat(), 'No incoming calls found for that symbol.');
+  }
+
+  /** Outgoing callees of the symbol at `position` (0-based). */
+  async getOutgoingCalls(file: string, position: Position, request: DiagnosticsRequest = {}): Promise<string> {
+    const resolved = await this.navClient(file, request);
+    if (resolved.kind !== 'client') return resolved.message;
+    const absolute = path.resolve(file);
+    const items = await resolved.client.prepareCallHierarchy(absolute, position).catch(() => []);
+    if (items.length === 0) return 'No call hierarchy item found at that position.';
+    const calls = await Promise.all(
+      items.map((item) => resolved.client.outgoingCalls(item).catch(() => [])),
+    );
+    return formatOutgoingCalls(calls.flat(), 'No outgoing calls found for that symbol.');
+  }
+
   /**
    * Resolve the primary client for a navigation request, opening the file so
    * the server has current content. Returns guidance text when no server is
@@ -167,6 +231,16 @@ export class LspService {
       }
     }
     return { kind: 'message', message: servers.map((server) => server.installGuidance).join('\n') };
+  }
+
+  private async workspaceClients(request: DiagnosticsRequest): Promise<LspClient[]> {
+    const root = path.resolve(request.gitRoot ?? process.cwd());
+    const clients: LspClient[] = [];
+    for (const server of this.servers) {
+      const client = await this.getClient(server, root, request);
+      if (client) clients.push(client);
+    }
+    return clients;
   }
 
   /** Shut down all spawned servers gracefully (call on session teardown). */

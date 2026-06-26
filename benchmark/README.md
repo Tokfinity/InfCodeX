@@ -38,6 +38,24 @@ npx vitest run -c vitest.eval.config.ts tests/your-case.eval.ts
 Tests skip gracefully when their required `*_API_KEY` env var is absent.
 A typical local run uses 1-3 model aliases from the 11-entry coding-plan alias registry; new canonical panels default to the 5 aliases documented in `benchmark/harness/aliases.ts`.
 
+Provider-boundary compatibility evals can cover all configured providers
+instead of the canonical prompt-quality panel. The empty-content contract eval
+is the mandatory gate before adding a provider or changing provider message
+serialization:
+
+```bash
+KODAX_EVAL_PROVIDER_EMPTY_CONTENT=1 npm run test:eval -- provider-empty-content-contract
+
+# Optional provider subset
+KODAX_EVAL_PROVIDER_EMPTY_CONTENT=1 \
+KODAX_EVAL_PROVIDER_EMPTY_CONTENT_PROVIDERS=kimi-code,deepseek \
+npm run test:eval -- provider-empty-content-contract
+```
+
+It writes raw dumps under
+`os.tmpdir()/kodax-eval-dumps/provider-empty-content-contract/` and records both
+the current KodaX adapter path and direct raw wire behavior.
+
 ## Module layout
 
 ```

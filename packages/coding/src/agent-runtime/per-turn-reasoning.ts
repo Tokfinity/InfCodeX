@@ -28,9 +28,9 @@
  * pre-FEATURE_100 baseline — during FEATURE_100 P3.1.
  */
 
-import type { KodaXOptions, KodaXReasoningMode } from '../types.js';
+import type { KodaXOptions, KodaXWireReasoningEffort } from '../types.js';
 import type { KodaXMessage } from '@kodax-ai/llm';
-import { reasoningModeToDepth, type ReasoningPlan } from '../reasoning.js';
+import { type ReasoningPlan } from '../reasoning.js';
 import {
   buildReasoningExecutionState,
   type ReasoningExecutionState,
@@ -45,22 +45,24 @@ export interface PerTurnReasoningInput {
   readonly options: KodaXOptions;
   readonly providerName: string;
   readonly modelOverride: string | undefined;
-  readonly thinkingLevel: KodaXReasoningMode | undefined;
+  readonly thinkingLevel: KodaXWireReasoningEffort | undefined;
   readonly reasoningPlan: ReasoningPlan;
   readonly messages: readonly KodaXMessage[];
 }
 
 export function buildEffectiveReasoningPlan(
   reasoningPlan: ReasoningPlan,
-  thinkingLevel: KodaXReasoningMode | undefined,
+  thinkingLevel: KodaXWireReasoningEffort | undefined,
 ): ReasoningPlan {
   if (!thinkingLevel) {
     return reasoningPlan;
   }
+  // The per-turn override (`thinkingLevel`) is the canonical effort set by an
+  // extension (`setThinkingLevel`) or runtime session state — it directly
+  // replaces the plan's effort for this turn.
   return {
     ...reasoningPlan,
-    mode: thinkingLevel,
-    depth: reasoningModeToDepth(thinkingLevel),
+    effort: thinkingLevel,
   };
 }
 
@@ -76,7 +78,7 @@ export async function resolvePerTurnReasoning(
       ...input.options,
       provider: input.providerName,
       modelOverride: input.modelOverride,
-      reasoningMode: input.thinkingLevel ?? input.options.reasoningMode,
+      effort: input.thinkingLevel ?? input.options.effort,
     },
     effectiveReasoningPlan,
     input.messages.length === 1,

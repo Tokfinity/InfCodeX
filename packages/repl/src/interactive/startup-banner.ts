@@ -1,10 +1,15 @@
 /**
- * FEATURE_200 Phase E (v0.7.45) — startup banner + workspace-entry notice
+ * FEATURE_200 Phase E (v0.7.45) �?startup banner + workspace-entry notice
  * extracted from repl.ts. Self-contained (params + module imports only).
  */
 import chalk from 'chalk';
 import type { AgentsFile } from '@kodax-ai/coding';
-import { getProviderModel, KODAX_VERSION } from '../common/utils.js';
+import {
+  formatReasoningEffortStatusLabel,
+  getProviderModel,
+  KODAX_VERSION,
+  resolvePermissionModeEffort,
+} from '../common/utils.js';
 import { getCurrentTheme } from './themes.js';
 import { formatWorkspaceTruth } from './workspace-runtime.js';
 import type { InteractiveContext } from './context.js';
@@ -24,16 +29,22 @@ export function printStartupBanner(config: CurrentConfig, mode: string, compacti
   const theme = getCurrentTheme();
   const model = config.model ?? getProviderModel(config.provider) ?? config.provider;
 
+  const reasoningEffortLabel = formatReasoningEffortStatusLabel({
+    provider: config.provider,
+    model: config.model,
+    effort: resolvePermissionModeEffort(config),
+    effortOverride: config.effortOverride,
+    thinking: config.thinking,
+    reasoningMode: config.reasoningMode,
+  });
   // KODAX block character logo - KODAX 方块字符 logo
   const logo = `
-  ██╗  ██╗  ██████╗  ██████╗    █████╗   ██╗  ██╗
-  ██║ ██╔╝ ██╔═══██╗ ██╔══██╗  ██╔══██╗  ╚██╗██╔╝
-  █████╔╝  ██║   ██║ ██║  ██║  ███████║   ╚███╔╝
-  ██╔═██╗  ██║   ██║ ██║  ██║  ██╔══██║   ██╔██╗
-  ██║  ██╗ ╚██████╔╝ ██████╔╝  ██║  ██║  ██╔╝ ██╗
-  ╚═╝  ╚═╝  ╚═════╝  ╚═════╝   ╚═╝  ╚═╝  ╚═╝  ╚═╝`;
+  ██�? ██�? ██████�? ██████�?   █████╗   ██�? ██�?  ██�?██╔╝ ██╔═══██�?██╔══██╗  ██╔══██╗  ╚██╗██╔╝
+  █████╔�? ██�?  ██�?██�? ██�? ███████║   ╚███╔╝
+  ██╔═██�? ██�?  ██�?██�? ██�? ██╔══██║   ██╔██╗
+  ██�? ██�?╚██████╔�?██████╔╝  ██�? ██�? ██╔╝ ██�?  ╚═�? ╚═�? ╚═════�? ╚═════�?  ╚═�? ╚═�? ╚═�? ╚═╝`;
 
-  const bar = (color: string): string => chalk.hex(color)('  ▎ ');
+  const bar = (color: string): string => chalk.hex(color)('  �?');
   const dot = chalk.hex(theme.colors.dim)('  ·  ');
 
   console.log(chalk.hex(theme.colors.primary)('\n' + logo));
@@ -48,9 +59,8 @@ export function printStartupBanner(config: CurrentConfig, mode: string, compacti
     chalk.hex(theme.colors.primary)(config.agentMode.toUpperCase()) +
     chalk.hex(theme.colors.dim)(' / ') +
     chalk.hex(theme.colors.accent)(mode) +
-    (config.reasoningMode === 'off'
-      ? ''
-      : chalk.hex(theme.colors.dim)('  ·  ') + chalk.hex(theme.colors.warning)(`reason:${config.reasoningMode}`))
+    chalk.hex(theme.colors.dim)('  ·  ') +
+    chalk.hex(theme.colors.warning)(`effort:${reasoningEffortLabel}`)
   );
 
   // Compaction info
@@ -63,7 +73,7 @@ export function printStartupBanner(config: CurrentConfig, mode: string, compacti
 
   // Show AGENTS.md loading status
   if (agentsFiles) {
-    console.log(bar(theme.colors.secondary) + chalk.hex(theme.colors.secondary)(`${agentsFiles.length} project rule file(s) loaded — `) + chalk.hex(theme.colors.dim)('/reload to refresh'));
+    console.log(bar(theme.colors.secondary) + chalk.hex(theme.colors.secondary)(`${agentsFiles.length} project rule file(s) loaded �?`) + chalk.hex(theme.colors.dim)('/reload to refresh'));
   }
 
   console.log('');
@@ -75,4 +85,3 @@ export function printStartupBanner(config: CurrentConfig, mode: string, compacti
   console.log(chalk.hex(theme.colors.primary)('    !cmd       ') + chalk.hex(theme.colors.dim)('Run read-only shell command'));
   console.log(chalk.hex(theme.colors.dim)('\n  Keyboard: Tab (complete) | Esc+Esc (edit last) | Ctrl+T (reasoning) | Ctrl+E (editor) | Ctrl+R (history)\n'));
 }
-

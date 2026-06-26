@@ -1,5 +1,6 @@
 import type { KodaXToolExecutionContext } from '../types.js';
 import {
+  readRepoIntelligenceToolWaitMs,
   getSymbolContext,
   renderSymbolContext,
 } from '../repo-intelligence/runtime.js';
@@ -20,6 +21,7 @@ export async function toolSymbolContext(
       module: readOptionalString(input, 'module'),
       targetPath: readOptionalString(input, 'target_path'),
       refresh: input.refresh === true,
+      maxWaitMs: readRepoIntelligenceToolWaitMs(),
     });
     return renderSymbolContext(result);
   } catch (error) {

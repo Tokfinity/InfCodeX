@@ -1,7 +1,8 @@
 import { mkdirSync, mkdtempSync, rmSync, writeFileSync } from 'node:fs';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
-import { afterEach, describe, expect, it } from 'vitest';
+import { afterEach, beforeEach, describe, expect, it } from 'vitest';
+import { shutdownRepoIntelligenceWorkerForTest } from '../repo-intelligence/semantic-worker-client.js';
 import { toolSemanticLookup } from './semantic-lookup.js';
 
 function createWorkspaceFixture(workspaceRoot: string): void {
@@ -34,8 +35,19 @@ function createWorkspaceFixture(workspaceRoot: string): void {
 
 describe('toolSemanticLookup', () => {
   let tempDir = '';
+  const previousToolWait = process.env.KODAX_REPO_INTELLIGENCE_TOOL_WAIT_MS;
 
-  afterEach(() => {
+  beforeEach(() => {
+    process.env.KODAX_REPO_INTELLIGENCE_TOOL_WAIT_MS = '30000';
+  });
+
+  afterEach(async () => {
+    if (previousToolWait === undefined) {
+      delete process.env.KODAX_REPO_INTELLIGENCE_TOOL_WAIT_MS;
+    } else {
+      process.env.KODAX_REPO_INTELLIGENCE_TOOL_WAIT_MS = previousToolWait;
+    }
+    await shutdownRepoIntelligenceWorkerForTest();
     if (tempDir) {
       rmSync(tempDir, { recursive: true, force: true });
       tempDir = '';

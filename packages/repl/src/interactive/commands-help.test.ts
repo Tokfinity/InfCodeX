@@ -58,6 +58,18 @@ describe('help command output', () => {
     expect(output).not.toContain('/internal-sync');
   });
 
+  it('shows /repo-intel and hides deprecated /repointel in top-level help', async () => {
+    const logSpy = vi.spyOn(console, 'log').mockImplementation(() => {});
+    const helpCommand = BUILTIN_COMMANDS.find((cmd) => cmd.name === 'help');
+
+    expect(helpCommand).toBeDefined();
+    await helpCommand!.handler([], {} as never, {} as never, {} as never);
+
+    const output = logSpy.mock.calls.flat().join('\n');
+    expect(output).toContain('/repo-intel');
+    expect(output).not.toContain('/repointel');
+  });
+
   it('routes /<command> help through detailed help without executing the command', async () => {
     const logSpy = vi.spyOn(console, 'log').mockImplementation(() => {});
     const context = await createInteractiveContext({});

@@ -134,7 +134,7 @@ const TOPICS: readonly KodaXManualTopic[] = [
       'permissionMode, customProviders, mcpServers, repoIntelligenceMode, fallbackProviders,',
       'autoMode, verifierLog, stallLog.',
       'Env mirrors / extras: KODAX_PROVIDER, KODAX_FALLBACK_PROVIDERS, KODAX_FAST_*/KODAX_DEEP_*,',
-      'KODAX_REPO_INTELLIGENCE_MODE. Env generally overrides file. Project vs user config:',
+      'KODAX_REPO_INTELLIGENCE. Env generally overrides file. Project vs user config:',
       'user config is ~/.kodax; project-scoped state lives under <repo>/.kodax/.',
     ].join('\n'),
     sources: [
@@ -298,8 +298,8 @@ const TOPICS: readonly KodaXManualTopic[] = [
     body: [
       'Repo intelligence gives the agent a repo-scope map (overview, symbols, module/flow',
       'capsules, change-impact) to narrow scope before large reviews/refactors — cached under',
-      '<repo>/.agent/repo-intelligence/. Modes via repoIntelligenceMode / KODAX_REPO_INTELLIGENCE_MODE',
-      '(auto/off/oss/premium). It is batch, pre-task context — not a realtime type checker.',
+      '<repo>/.agent/repo-intelligence/. Modes via repoIntelligenceMode / KODAX_REPO_INTELLIGENCE',
+      '(auto/off/light/full). It is batch, pre-task context — not a realtime type checker.',
     ].join('\n'),
     sources: [{ label: 'repo-intelligence', path: 'packages/coding/src/repo-intelligence/' }],
     nextTopics: ['tools', 'config', 'sessions'],

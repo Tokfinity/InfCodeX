@@ -12,6 +12,7 @@ export interface StatusBarState {
   permissionMode: string;
   reasoningMode?: string;
   effort?: string;
+  reasoningEffortLabel?: string;
   provider: string;
   model: string;
   tokenUsage?: {
@@ -108,12 +109,9 @@ export function buildStatusBarContent(state: StatusBarState, width = getTerminal
     : '';
   parts.push(modeColor(displayName) + engineSuffix);
 
-  if (state.reasoningMode) {
-    parts.push(chalk.yellow(`reason:${state.reasoningMode}`));
-  }
-
-  if (state.effort) {
-    parts.push(chalk.yellow(`effort:${state.effort}`));
+  const reasoningText = state.reasoningEffortLabel ?? state.effort ?? state.reasoningMode;
+  if (reasoningText) {
+    parts.push(chalk.yellow(`effort:${reasoningText}`));
   }
 
   parts.push(chalk.cyan(state.provider));
@@ -224,12 +222,14 @@ export function createStatusBarState(
   model: string,
   reasoningMode = 'off',
   effort?: string,
+  reasoningEffortLabel?: string,
 ): StatusBarState {
   return {
     sessionId,
     permissionMode,
     reasoningMode,
     effort,
+    reasoningEffortLabel,
     provider,
     model,
   };

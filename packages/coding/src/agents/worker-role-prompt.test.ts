@@ -84,11 +84,17 @@ describe('buildWorkerInstructions', () => {
   // only the prompt teaching is dropped. Eval kept as permanent regression
   // sweep at tests/feature-177-task-output.eval.ts. Lesson recorded in
   // ADR (TBD) — claudecode-style qualitative dispatch prompt design.
-  it('does NOT emit RULE D after FEATURE_177 REVERT', () => {
+  it('does NOT emit RULE D after FEATURE_177 REVERT (task_output only appears as anti-misuse guidance)', () => {
     delete process.env.KODAX_TASK_OUTPUT_PROMPT;
     const out = buildWorkerInstructions(baseDecision, undefined, false);
     expect(out).not.toContain('RULE D');
-    expect(out).not.toContain('task_output');
+    // Issue 144 (v0.7.57): `task_output` IS now referenced — but only to
+    // forbid `block:true` misuse and scope it to `block:false` decisions,
+    // never re-taught as a proactive RULE-D peek/poll pattern (which had
+    // regressed RULE C write fan-out). Pin the framing so a future edit
+    // cannot smuggle RULE D back under a different name.
+    expect(out).toContain('WAITING IS IDLE-YIELD, NOT A BLOCKING PEEK');
+    expect(out).not.toMatch(/use\s+`?task_output`?\s+to\s+(peek|poll)/i);
   });
 
   it('FEATURE_191 A.4: dispatchRules emits SPECIALIST ROUTING guidance as the last bullet (qualitative, no enumerated names)', () => {
@@ -127,8 +133,11 @@ describe('buildWorkerInstructions', () => {
   it('FEATURE_177 KODAX_TASK_OUTPUT_PROMPT env flag is no longer wired (REVERT)', () => {
     process.env.KODAX_TASK_OUTPUT_PROMPT = '1';
     const out = buildWorkerInstructions(baseDecision, undefined, false);
+    // Flag has no effect: no RULE D regardless of the flag. The only
+    // task_output reference is the Issue 144 anti-block-peek rule, not a
+    // flag-gated proactive peek teaching.
     expect(out).not.toContain('RULE D');
-    expect(out).not.toContain('task_output');
+    expect(out).not.toMatch(/use\s+`?task_output`?\s+to\s+(peek|poll)/i);
     delete process.env.KODAX_TASK_OUTPUT_PROMPT;
   });
 
@@ -189,7 +198,7 @@ describe('buildWorkerInstructions', () => {
   });
 
   // FEATURE_161 v0.7.41 — REPO INTELLIGENCE TOOLS section. Pin presence
-  // of the section + the 8 pull-tool names + the "when to prefer" /
+  // of the section + key pull-tool names + the "when to prefer" /
   // "when to stick with read/grep" branches. Eval-validated wording
   // (see tests/repointel-tool-adoption.eval.ts) — a future prompt edit
   // that drops any of these signals must re-run the panel eval.
@@ -197,7 +206,8 @@ describe('buildWorkerInstructions', () => {
     const out = buildWorkerInstructions(baseDecision, undefined, false);
     expect(out).toContain('REPO INTELLIGENCE TOOLS');
     expect(out).toContain('FEATURE_161');
-    // All 8 pull-tool names must be advertised by name.
+    // Key pull-tool names must be advertised by name.
+    expect(out).toContain('`relationship_scan');
     expect(out).toContain('`module_context');
     expect(out).toContain('`symbol_context');
     expect(out).toContain('`impact_estimate');
@@ -206,6 +216,8 @@ describe('buildWorkerInstructions', () => {
     expect(out).toContain('`changed_scope');
     expect(out).toContain('`changed_diff_bundle');
     expect(out).toContain('`changed_diff(');
+    expect(out).toContain('`lsp_workspace_symbols');
+    expect(out).toContain('`lsp_incoming_calls');
     // Decision-aid branches (the "when to use what" structure that
     // moved 4/6 panel aliases from <80% to ≥80% pull-tool first-tool
     // selection — F7 lift is wording-dependent).
@@ -258,6 +270,13 @@ describe('buildWorkerInstructions — FEATURE_155 idle-yield (always-on, Slice C
     expect(out).toContain('IDLE-YIELD (the wait mechanic)');
     expect(out).toContain('end your turn with ONE short status sentence and NO tool calls');
     expect(out).toContain('<task-completed task_id=');
+  });
+
+  it('does not allow a final summary while dispatched children are pending', () => {
+    const out = buildWorkerInstructions(baseDecision, undefined, false);
+    expect(out).toContain('PENDING CHILDREN ARE NOT FINAL');
+    expect(out).toContain('Do not write a final review/report/summary from partial child evidence');
+    expect(out).toContain('every dispatched child has produced its matching `<task-completed>` block');
   });
 
   it('does NOT mention await_child_task anywhere (tool was deleted in Slice C1)', () => {

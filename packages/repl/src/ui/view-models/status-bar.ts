@@ -25,11 +25,11 @@ function formatReasoningModeShort(mode: string): string {
     case "auto":
       return "auto";
     case "balanced":
-      return "balanced";
+      return "medium";
     case "quick":
-      return "quick";
+      return "low";
     case "deep":
-      return "deep";
+      return "high";
     case "off":
       return "off";
     default:
@@ -37,37 +37,25 @@ function formatReasoningModeShort(mode: string): string {
   }
 }
 
-function formatReasoningCapabilityShort(capability?: string): string {
-  switch (capability) {
-    case "budget":
-    case "B":
-      return "B";
-    case "effort":
-    case "E":
-      return "E";
-    case "toggle":
-    case "T":
-      return "T";
-    case "prompt":
-    case "-":
-      return "-";
-    case "unknown":
-    case "?":
-      return "?";
-    default:
-      return capability ?? "";
+function formatEffortShort(effort?: string): string | undefined {
+  if (!effort) {
+    return undefined;
   }
+  return effort === "none" ? "off" : effort;
 }
 
-function getReasoningColor(mode: string): string {
-  switch (mode) {
+function getReasoningColor(label: string): string {
+  const configured = label.split("->", 1)[0] ?? label;
+  switch (configured) {
     case "off":
       return "dim";
-    case "quick":
+    case "low":
       return "green";
-    case "balanced":
+    case "medium":
       return "yellow";
-    case "deep":
+    case "high":
+    case "xhigh":
+    case "max":
       return "magenta";
     case "auto":
     default:
@@ -429,7 +417,7 @@ function buildStatusBarSegments(props: StatusBarProps): StatusBarSegment[] {
     thinkingCharCount,
     reasoningMode = thinking ? "auto" : "off",
     effort,
-    reasoningCapability,
+    reasoningEffortLabel,
     isCompacting,
     toolInputCharCount,
     toolInputContent,
@@ -462,21 +450,14 @@ function buildStatusBarSegments(props: StatusBarProps): StatusBarSegment[] {
     },
   ];
 
-  const rModeShort = formatReasoningModeShort(reasoningMode);
-  const rCapShort = formatReasoningCapabilityShort(reasoningCapability);
+  const reasoningText = reasoningEffortLabel
+    ?? formatEffortShort(effort)
+    ?? formatReasoningModeShort(reasoningMode);
   segments.push({
     id: "reasoning-mode",
-    text: reasoningCapability ? `${rModeShort}/${rCapShort}` : rModeShort,
-    color: getReasoningColor(reasoningMode),
+    text: reasoningText,
+    color: getReasoningColor(reasoningText),
   });
-
-  if (effort) {
-    segments.push({
-      id: "reasoning-effort",
-      text: `effort:${effort}`,
-      color: "warning",
-    });
-  }
 
   const iterationSegments = resolveIterationSegments({
     agentMode,

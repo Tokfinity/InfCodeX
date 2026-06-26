@@ -42,8 +42,7 @@ import {
 
 function fakePlan(overrides: Partial<ReasoningPlan> = {}): ReasoningPlan {
   return {
-    mode: 'balanced',
-    depth: 'medium',
+    effort: 'medium',
     promptOverlay: '',
     decision: { primaryTask: 'edit', recommendedMode: 'balanced' },
     ...overrides,
@@ -67,44 +66,43 @@ function fakeOptions(overrides: Partial<KodaXOptions> = {}): KodaXOptions {
 
 describe('CAP-057: buildEffectiveReasoningPlan — pure function', () => {
   it('CAP-PER-TURN-REASONING-001a: undefined thinkingLevel returns plan reference-equal (no allocation)', () => {
-    const plan = fakePlan({ mode: 'balanced', depth: 'medium' });
+    const plan = fakePlan({ effort: 'medium' });
     const result = buildEffectiveReasoningPlan(plan, undefined);
     expect(result).toBe(plan); // reference equal — load-bearing for hot-path perf
   });
 
-  it('CAP-PER-TURN-REASONING-001b: thinkingLevel set overrides plan.mode and re-derives depth', () => {
-    const plan = fakePlan({ mode: 'balanced', depth: 'medium' });
-    const result = buildEffectiveReasoningPlan(plan, 'deep');
+  it('CAP-PER-TURN-REASONING-001b: thinkingLevel set overrides plan.effort directly', () => {
+    const plan = fakePlan({ effort: 'medium' });
+    const result = buildEffectiveReasoningPlan(plan, 'high');
     expect(result).not.toBe(plan); // fresh allocation
-    expect(result.mode).toBe('deep');
-    // depth must be re-derived via reasoningModeToDepth, not copied from plan
-    expect(result.depth).toBeDefined();
+    expect(result.effort).toBe('high');
   });
 
   it('CAP-PER-TURN-REASONING-001c: other plan fields (decision, promptOverlay) survive the override', () => {
     const plan = fakePlan({
-      mode: 'balanced',
+      effort: 'medium',
       decision: { primaryTask: 'review', recommendedMode: 'deep' } as unknown as ReasoningPlan['decision'],
       promptOverlay: 'CARRIED-OVER',
     });
-    const result = buildEffectiveReasoningPlan(plan, 'quick');
+    const result = buildEffectiveReasoningPlan(plan, 'low');
     expect(result.decision).toEqual({ primaryTask: 'review', recommendedMode: 'deep' });
     expect(result.promptOverlay).toBe('CARRIED-OVER');
   });
 });
 
 describe('CAP-057: resolvePerTurnReasoning — full step', () => {
-  it('CAP-PER-TURN-REASONING-001d: thinkingLevel propagates through to currentExecution.effectiveOptions.reasoningMode', async () => {
+  it('CAP-PER-TURN-REASONING-001d: thinkingLevel propagates through to currentExecution.effectiveOptions.effort', async () => {
     const result = await resolvePerTurnReasoning({
-      options: fakeOptions({ reasoningMode: 'balanced' }),
+      options: fakeOptions({ effort: 'medium' }),
       providerName: 'anthropic',
       modelOverride: undefined,
-      thinkingLevel: 'deep',
-      reasoningPlan: fakePlan({ mode: 'balanced' }),
+      thinkingLevel: 'high',
+      reasoningPlan: fakePlan({ effort: 'medium' }),
       messages: [{ role: 'user', content: 'hi' }] as Parameters<typeof resolvePerTurnReasoning>[0]['messages'],
     });
-    expect(result.effectiveReasoningPlan.mode).toBe('deep');
-    expect(result.currentExecution.effectiveOptions.reasoningMode).toBe('deep');
+    // 'deep' maps to the 'high' effort intent and the plan is the source of truth.
+    expect(result.effectiveReasoningPlan.effort).toBe('high');
+    expect(result.currentExecution.effectiveOptions.effort).toBe('high');
   });
 
   it('CAP-PER-TURN-REASONING-001e: thinkingLevel undefined → effectiveReasoningPlan is the input plan reference-equal', async () => {
@@ -112,9 +110,9 @@ describe('CAP-057: resolvePerTurnReasoning — full step', () => {
     // (CAP-052-001a: plan is source of truth), not by options.reasoningMode.
     // This test pins ONLY the resolvePerTurnReasoning-level invariant —
     // pass-through when thinkingLevel is undefined.
-    const plan = fakePlan({ mode: 'balanced' });
+    const plan = fakePlan({ effort: 'medium' });
     const result = await resolvePerTurnReasoning({
-      options: fakeOptions({ reasoningMode: 'quick' }),
+      options: fakeOptions({ effort: 'low' }),
       providerName: 'anthropic',
       modelOverride: undefined,
       thinkingLevel: undefined,
@@ -124,6 +122,6 @@ describe('CAP-057: resolvePerTurnReasoning — full step', () => {
     expect(result.effectiveReasoningPlan).toBe(plan); // reference-equal pass-through
     // CAP-052 owns the plan→effectiveOptions mapping; we only verify the
     // plan was reference-passed through this layer.
-    expect(result.currentExecution.effectiveOptions.reasoningMode).toBe('balanced');
+    expect(result.currentExecution.effectiveOptions.effort).toBe('medium');
   });
 });

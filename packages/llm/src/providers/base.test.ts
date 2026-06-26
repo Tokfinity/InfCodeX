@@ -29,7 +29,7 @@ class TestProvider extends KodaXBaseProvider {
     ],
     supportsThinking: true,
     reasoningCapability: 'native-budget',
-    reasoningCapabilityV2: {
+    reasoningProfile: {
       effortStrategy: 'provider-budget',
       supportedEfforts: [
         { value: 'low' },
@@ -112,6 +112,45 @@ class NoEffortMetadataProvider extends KodaXBaseProvider {
   }
 }
 
+// Mirrors the `kimi-k2.7-code` / `minimax-m2-always` capability shape:
+// thinking cannot be disabled, so `none`/`minimal` are hard-rejected, and
+// the model has a `defaultEffort` it always thinks at.
+class AlwaysOnThinkingProvider extends KodaXBaseProvider {
+  readonly name = 'always-on-thinking';
+  readonly supportsThinking = true;
+  protected readonly config: KodaXProviderConfig = {
+    apiKeyEnv: 'TEST_PROVIDER_API_KEY',
+    model: 'always-on-model',
+    supportsThinking: true,
+    reasoningCapability: 'native-effort',
+    reasoningProfile: {
+      effortStrategy: 'prompt-only',
+      defaultEffort: 'high',
+      supportedEfforts: [{ value: 'low' }, { value: 'medium' }, { value: 'high' }],
+      localRejectEfforts: ['none', 'minimal'],
+    },
+  };
+
+  async stream(
+    _messages: KodaXMessage[],
+    _tools: KodaXToolDefinition[],
+    _system: string,
+    _reasoning?: boolean | KodaXReasoningRequest,
+    _streamOptions?: KodaXProviderStreamOptions,
+    _signal?: AbortSignal,
+  ): Promise<KodaXStreamResult> {
+    throw new Error('not implemented in unit test');
+  }
+
+  exposeResolveIntent(reasoning?: boolean | KodaXReasoningRequest) {
+    const capability = this.getReasoningProfile();
+    if (!capability) {
+      throw new Error('expected reasoningProfile to resolve');
+    }
+    return this.resolveReasoningProfileIntent(this.normalizeReasoning(reasoning), capability);
+  }
+}
+
 describe('KodaXBaseProvider', () => {
   it('deduplicates the default model from getAvailableModels', () => {
     const provider = new TestProvider();
@@ -186,12 +225,11 @@ describe('KodaXBaseProvider', () => {
     const provider = new TestProvider();
     expect(provider.exposeNormalizeReasoning(true)).toMatchObject({
       enabled: true,
-      mode: 'auto',
-      depth: 'medium',
+      effort: 'auto',
     });
     expect(provider.exposeNormalizeReasoning(false)).toMatchObject({
       enabled: false,
-      mode: 'off',
+      effort: 'none',
     });
   });
 
@@ -282,12 +320,12 @@ describe('KodaXBaseProvider', () => {
 
   it('keeps backwards-compatible getContextWindow() reading the default model', () => {
     const provider = new TestProvider();
-    // Existing call sites still use the no-arg overload — must continue
+    // Existing call sites still use the no-arg overload 鈥?must continue
     // resolving to the provider-level (or default-model) value.
     expect(provider.getContextWindow()).toBe(200_000);
   });
 
-  it('cascades streamMaxDurationMs from per-model descriptor → provider → undefined', () => {
+  it('cascades streamMaxDurationMs from per-model descriptor 鈫?provider 鈫?undefined', () => {
     class ScopedProvider extends KodaXBaseProvider {
       readonly name = 'scoped';
       readonly supportsThinking = false;
@@ -334,7 +372,7 @@ describe('KodaXBaseProvider', () => {
     expect(nocap.getStreamMaxDurationMs()).toBeUndefined();
   });
 
-  it('cascades replayReasoningContent from per-model → provider → false', () => {
+  it('cascades replayReasoningContent from per-model 鈫?provider 鈫?false', () => {
     class ScopedProvider extends KodaXBaseProvider {
       readonly name = 'scoped';
       readonly supportsThinking = true;
@@ -381,7 +419,7 @@ describe('KodaXBaseProvider', () => {
     expect(new NoProviderDefault().getEffectiveReplayReasoningContent()).toBe(false);
   });
 
-  it('cascades strictThinkingSignature from per-model → provider → false', () => {
+  it('cascades strictThinkingSignature from per-model 鈫?provider 鈫?false', () => {
     class ScopedProvider extends KodaXBaseProvider {
       readonly name = 'scoped';
       readonly supportsThinking = true;
@@ -489,7 +527,7 @@ describe('KodaXBaseProvider', () => {
   it('FEATURE_130: classifies overloaded errors with reason="overloaded"', async () => {
     const provider = new TestProvider();
     const onRetryAfter = vi.fn();
-    const error = new Error('Server overloaded — please retry');
+    const error = new Error('Server overloaded 鈥?please retry');
     const task = vi
       .fn<() => Promise<string>>()
       .mockRejectedValueOnce(error)
@@ -501,7 +539,7 @@ describe('KodaXBaseProvider', () => {
       return undefined as unknown as ReturnType<typeof setTimeout>;
     });
     try {
-      // The classifier matches "overload" via isRateLimitError keywords —
+      // The classifier matches "overload" via isRateLimitError keywords 鈥?
       // confirm overloaded errors go through the same retry path.
       await expect(
         provider.exposeWithRateLimit(task, undefined, 2, undefined, onRetryAfter),
@@ -537,11 +575,47 @@ describe('KodaXBaseProvider', () => {
         provider.exposeWithRateLimit(task, undefined, 2, onRateLimit),
       ).resolves.toBe('ok');
       // First retry (i=0): baseDelay = min(500 * 2^0, 32_000) = 500ms,
-      // jitter = 0 (mocked) → total 500ms.
+      // jitter = 0 (mocked) 鈫?total 500ms.
       expect(onRateLimit).toHaveBeenCalledWith(1, 2, 500);
     } finally {
       timeoutSpy.mockRestore();
       randomSpy.mockRestore();
     }
+  });
+});
+
+// Issue 144 (v0.7.57): an always-on-thinking model (localRejectEfforts
+// includes 'none', e.g. kimi-k2.7-code / minimax-m2-always) must not crash
+// when the caller passes no reasoning at all. `normalizeReasoningRequest`
+// turns an omitted request into a legacy/implicit effort 'none'; that path
+// must fall back to the model's defaultEffort, not throw. Only an EXPLICIT
+// caller request for a rejected effort still throws.
+describe('KodaXBaseProvider.resolveReasoningProfileIntent 鈥?always-on-thinking models', () => {
+  it('implicit/omitted reasoning falls back to defaultEffort instead of throwing', () => {
+    const provider = new AlwaysOnThinkingProvider();
+    const intent = provider.exposeResolveIntent(undefined);
+    expect(intent.disabled).toBe(false);
+    expect(intent.effort).toBe('high');
+  });
+
+  it('legacy boolean reasoning=false (disable) does NOT crash an always-on model', () => {
+    const provider = new AlwaysOnThinkingProvider();
+    const intent = provider.exposeResolveIntent(false);
+    expect(intent.disabled).toBe(false);
+    expect(intent.effort).toBe('high');
+  });
+
+  it('an EXPLICIT effort:"none" request still throws (model cannot disable thinking)', () => {
+    const provider = new AlwaysOnThinkingProvider();
+    expect(() => provider.exposeResolveIntent({ effort: 'none' })).toThrow(
+      /does not support reasoning effort "none"/,
+    );
+  });
+
+  it('an explicitly supported effort resolves normally', () => {
+    const provider = new AlwaysOnThinkingProvider();
+    const intent = provider.exposeResolveIntent({ effort: 'high' });
+    expect(intent.disabled).toBe(false);
+    expect(intent.effort).toBe('high');
   });
 });

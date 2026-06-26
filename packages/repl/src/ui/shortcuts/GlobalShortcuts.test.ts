@@ -5,9 +5,11 @@ import type { KeyInfo } from '../types.js';
 const {
   shortcutHandlers,
   saveConfigMock,
+  effortCycleMock,
 } = vi.hoisted(() => ({
   shortcutHandlers: new Map<string, (keyInfo?: KeyInfo) => boolean | void>(),
   saveConfigMock: vi.fn(),
+  effortCycleMock: vi.fn(),
 }));
 
 // FEATURE_093 (v0.7.24): GlobalShortcuts now imports `useShortcut` directly
@@ -21,6 +23,7 @@ vi.mock('./useShortcut.js', () => ({
 
 vi.mock('../../common/utils.js', () => ({
   saveConfig: (...args: unknown[]) => saveConfigMock(...args),
+  getProviderReasoningEffortCycle: (...args: unknown[]) => effortCycleMock(...args),
 }));
 
 import { GlobalShortcuts } from './GlobalShortcuts.js';
@@ -42,6 +45,11 @@ describe('GlobalShortcuts', () => {
   beforeEach(() => {
     shortcutHandlers.clear();
     saveConfigMock.mockReset();
+    effortCycleMock.mockReset();
+    // glm-like ladder: off → low … max → auto (minimal folded out of the cycle).
+    effortCycleMock.mockReturnValue([
+      'off', 'low', 'medium', 'high', 'xhigh', 'max', 'auto',
+    ]);
   });
 
   it('lets Alt+M cycle agent mode AMA -> AMAW -> SA -> AMA and persist each change', () => {
@@ -346,6 +354,90 @@ describe('GlobalShortcuts', () => {
     expect(toggleThinking?.()).toBe(false);
     expect(saveConfigMock).not.toHaveBeenCalled();
     expect(setShowHelp).not.toHaveBeenCalled();
+  });
+
+  describe('Ctrl+T cycles the V2 reasoning effort ladder', () => {
+    function mount(initial: Partial<CurrentConfig>) {
+      let currentConfig: CurrentConfig = {
+        provider: 'zhipu-coding',
+        model: 'glm-5.2',
+        thinking: true,
+        reasoningMode: 'auto',
+        agentMode: 'ama',
+        permissionMode: 'accept-edits',
+        ...initial,
+      };
+      const onSetThinking = vi.fn();
+      const onSetReasoningMode = vi.fn();
+      GlobalShortcuts({
+        currentConfig,
+        setCurrentConfig: (updater) => {
+          currentConfig =
+            typeof updater === 'function' ? updater(currentConfig) : updater;
+        },
+        isLoading: false,
+        abort: vi.fn(),
+        stopThinking: vi.fn(),
+        clearThinkingContent: vi.fn(),
+        setCurrentTool: vi.fn(),
+        setIsLoading: vi.fn(),
+        onToggleHelp: vi.fn(),
+        setShowHelp: vi.fn(),
+        onSetThinking,
+        onSetReasoningMode,
+        isInputEmpty: true,
+      });
+      return {
+        step: () => shortcutHandlers.get('toggleThinking')?.(),
+        get config() {
+          return currentConfig;
+        },
+        onSetThinking,
+        onSetReasoningMode,
+      };
+    }
+
+    it('steps from auto (cleared) to the first rung off', () => {
+      const h = mount({ effort: undefined, effortOverride: false });
+      expect(h.step()).toBe(true);
+      expect(h.config.effort).toBe('none');
+      expect(h.config.effortOverride).toBe(true);
+      expect(h.config.thinking).toBe(false);
+      expect(h.config.reasoningMode).toBe('off');
+      expect(saveConfigMock).toHaveBeenLastCalledWith({
+        effort: 'none',
+        thinking: false,
+        reasoningMode: 'off',
+      });
+      expect(h.onSetThinking).toHaveBeenLastCalledWith(false);
+    });
+
+    it('steps off → low as an explicit override but keeps the auto escalation track', () => {
+      const h = mount({ effort: 'none', effortOverride: true, thinking: false });
+      expect(h.step()).toBe(true);
+      expect(h.config.effort).toBe('low');
+      expect(h.config.effortOverride).toBe(true);
+      expect(h.config.thinking).toBe(true);
+      // reasoningMode stays 'auto' (mirrors the `/effort` command, NOT a legacy
+      // quick/balanced/deep mode). It is now a pure derived compat field — the
+      // harness auto-UPGRADE mechanism it used to gate was retired with the
+      // auto-reroute path, so a pinned `effort` is the only reasoning control.
+      expect(h.config.reasoningMode).toBe('auto');
+    });
+
+    it('wraps from the last concrete rung max back through auto (clears override)', () => {
+      const h = mount({ effort: 'max', effortOverride: true });
+      // max → auto
+      expect(h.step()).toBe(true);
+      expect(h.config.effort).toBeUndefined();
+      expect(h.config.effortOverride).toBe(false);
+      expect(h.config.reasoningMode).toBe('auto');
+      expect(saveConfigMock).toHaveBeenLastCalledWith({
+        effort: undefined,
+        thinking: true,
+        reasoningMode: 'auto',
+      });
+    });
   });
 
   it('interrupts an active run with Ctrl+C and clears live state', () => {

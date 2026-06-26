@@ -5,7 +5,18 @@
  */
 
 import { fileURLToPath } from 'url';
-import { SymbolKind, type Location, type Hover, type DocumentSymbol, type SymbolInformation } from 'vscode-languageserver-protocol';
+import {
+  SymbolKind,
+  type Location,
+  type Hover,
+  type DocumentSymbol,
+  type SymbolInformation,
+  type WorkspaceSymbol,
+  type CallHierarchyItem,
+  type CallHierarchyIncomingCall,
+  type CallHierarchyOutgoingCall,
+  type Range,
+} from 'vscode-languageserver-protocol';
 
 function uriToPath(uri: string): string {
   try {
@@ -61,6 +72,16 @@ function kindName(kind: number): string {
   return SYMBOL_KIND_NAME[kind] ?? 'Symbol';
 }
 
+function rangeStart(range: Range): string {
+  return `${range.start.line + 1}:${range.start.character + 1}`;
+}
+
+function locationText(location: Location | WorkspaceSymbol['location']): string {
+  const path = uriToPath(location.uri);
+  if ('range' in location) return `${path}:${rangeStart(location.range)}`;
+  return path;
+}
+
 /** Render a document's symbols as an indented outline with 1-based lines. */
 export function formatSymbols(
   symbols: ReadonlyArray<DocumentSymbol | SymbolInformation>,
@@ -83,4 +104,50 @@ export function formatSymbols(
   };
   walk(symbols, 0);
   return lines.join('\n');
+}
+
+/** Render workspace symbols as `Kind name path:line:col`, or uri-only when range is absent. */
+export function formatWorkspaceSymbols(
+  symbols: ReadonlyArray<SymbolInformation | WorkspaceSymbol>,
+  emptyMessage: string,
+): string {
+  if (symbols.length === 0) return emptyMessage;
+  return symbols
+    .map((symbol) => {
+      const container = symbol.containerName ? ` in ${symbol.containerName}` : '';
+      return `${kindName(symbol.kind)} ${symbol.name}${container} ${locationText(symbol.location)}`;
+    })
+    .join('\n');
+}
+
+function formatCallHierarchyItem(item: CallHierarchyItem): string {
+  const detail = item.detail ? ` - ${item.detail}` : '';
+  return `${kindName(item.kind)} ${item.name} ${uriToPath(item.uri)}:${rangeStart(item.selectionRange)}${detail}`;
+}
+
+function formatRanges(ranges: readonly Range[]): string {
+  if (ranges.length === 0) return 'unknown call site';
+  return ranges.map(rangeStart).join(', ');
+}
+
+/** Render prepared call hierarchy roots. */
+export function formatCallHierarchyItems(items: readonly CallHierarchyItem[], emptyMessage: string): string {
+  if (items.length === 0) return emptyMessage;
+  return items.map(formatCallHierarchyItem).join('\n');
+}
+
+/** Render incoming callers for prepared call hierarchy items. */
+export function formatIncomingCalls(calls: readonly CallHierarchyIncomingCall[], emptyMessage: string): string {
+  if (calls.length === 0) return emptyMessage;
+  return calls
+    .map((call) => `${formatCallHierarchyItem(call.from)} calls at ${formatRanges(call.fromRanges)}`)
+    .join('\n');
+}
+
+/** Render outgoing callees for prepared call hierarchy items. */
+export function formatOutgoingCalls(calls: readonly CallHierarchyOutgoingCall[], emptyMessage: string): string {
+  if (calls.length === 0) return emptyMessage;
+  return calls
+    .map((call) => `${formatCallHierarchyItem(call.to)} called at ${formatRanges(call.fromRanges)}`)
+    .join('\n');
 }

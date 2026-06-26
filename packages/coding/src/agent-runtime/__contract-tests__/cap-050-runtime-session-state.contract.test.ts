@@ -42,7 +42,7 @@ describe('CAP-050: RuntimeSessionState construction contract', () => {
     const state = buildRuntimeSessionState({
       activeTools: ['read', 'edit'],
       modelSelection: { provider: 'deepseek', model: 'v4' },
-      thinkingLevel: 'balanced',
+      thinkingLevel: 'medium',
     });
 
     expect(state.queuedMessages).toEqual([]);
@@ -55,7 +55,7 @@ describe('CAP-050: RuntimeSessionState construction contract', () => {
     expect(state.blockedEditWrites).toBeInstanceOf(Set);
     expect(state.blockedEditWrites.size).toBe(0);
     expect(state.modelSelection).toEqual({ provider: 'deepseek', model: 'v4' });
-    expect(state.thinkingLevel).toBe('balanced');
+    expect(state.thinkingLevel).toBe('medium');
   });
 
   it('CAP-RUNTIME-STATE-002: loaded extensionRecords from storage are top-level cloned (no aliasing with caller-owned record objects)', () => {

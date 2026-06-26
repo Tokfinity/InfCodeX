@@ -30,7 +30,7 @@
  * pre-FEATURE_100 baseline — during FEATURE_100 P3.1.
  */
 
-import type { KodaXOptions, KodaXReasoningMode } from '../types.js';
+import type { KodaXOptions, KodaXWireReasoningEffort } from '../types.js';
 import type { CompactionConfig } from '@kodax-ai/agent';
 import type { KodaXBaseProvider } from '@kodax-ai/llm';
 import { resolveProvider } from '../providers/index.js';
@@ -40,7 +40,7 @@ import type { RuntimeSessionState } from './runtime-session-state.js';
 export interface PerTurnProviderResolution {
   readonly providerName: string;
   readonly modelOverride: string | undefined;
-  readonly thinkingLevel: KodaXReasoningMode | undefined;
+  readonly thinkingLevel: KodaXWireReasoningEffort | undefined;
   readonly provider: KodaXBaseProvider;
   readonly contextWindow: number;
 }

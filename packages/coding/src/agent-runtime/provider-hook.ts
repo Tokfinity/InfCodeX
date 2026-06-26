@@ -41,13 +41,13 @@
  * FEATURE_100 P2.
  */
 
-import type { KodaXReasoningMode } from '../types.js';
+import type { KodaXWireReasoningEffort } from '../types.js';
 import { runActiveExtensionHook } from '../extensions/runtime.js';
 
 export interface ProviderPrepareState {
   provider: string;
   model?: string;
-  reasoningMode?: KodaXReasoningMode;
+  reasoningMode?: KodaXWireReasoningEffort;
   systemPrompt: string;
   blockedReason?: string;
 }

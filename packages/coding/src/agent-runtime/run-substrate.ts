@@ -60,13 +60,14 @@ import {
 } from './middleware/auto-resume.js';
 import {
   createReasoningPlan,
-  reasoningModeToDepth,
   type ReasoningPlan,
 } from '../reasoning.js';
+import { effortToLegacyReasoningMode } from '@kodax-ai/llm';
 import { resolveExecutionCwd, resolveExecutionPath } from '../runtime-paths.js';
 import {
   getRepoRoutingSignals,
   resolveKodaXAutoRepoMode,
+  resolveKodaXHotPathRepoMode,
 } from '../repo-intelligence/runtime.js';
 import {
   createCompletedTurnTokenSnapshot,
@@ -176,12 +177,6 @@ import { emitRepoIntelligenceTrace } from './middleware/repo-intelligence.js';
 // CAP-016 mutation-reflection helpers are wired inside
 // `agent-runtime/tool-dispatch.ts:applyPostToolProcessing` since
 // FEATURE_100 P3.3d.
-import {
-  hasStrongToolFailureEvidence,
-  isReviewFinalAnswerCandidate,
-  summarizeToolEvidence,
-} from './middleware/judges.js';
-import { maybeAdvanceAutoReroute } from './middleware/auto-reroute.js';
 import {
   appendQueuedRuntimeMessages,
   createExtensionRuntimeSessionController,
@@ -518,6 +513,7 @@ export async function runSubstrate(
     : undefined;
 
   const autoRepoMode = resolveKodaXAutoRepoMode(options.context?.repoIntelligenceMode);
+  const hotPathRepoMode = resolveKodaXHotPathRepoMode(options.context?.repoIntelligenceMode);
 
   // v0.7.41 P1.b — hydrateSession (MCP extension state restoration) and the
   // routing-signals daemon lookup are independent, so run them concurrently
@@ -535,7 +531,7 @@ export async function runSubstrate(
           executionCwd,
           gitRoot: options.context?.gitRoot ?? undefined,
         }, {
-          mode: autoRepoMode,
+          mode: hotPathRepoMode,
         }).catch(() => null)
       : Promise.resolve(null);
   const [, repoRoutingSignals] = await Promise.all([
@@ -566,21 +562,16 @@ export async function runSubstrate(
       ...options,
       provider: turnState.currentProviderName,
       modelOverride: turnState.currentModelOverride,
-      reasoningMode: turnState.runtimeThinkingLevel ?? options.reasoningMode,
+      effort: turnState.runtimeThinkingLevel ?? options.effort,
     },
     turnState.runtimeThinkingLevel
       ? {
         ...reasoningPlan,
-        mode: turnState.runtimeThinkingLevel,
-        depth: reasoningModeToDepth(turnState.runtimeThinkingLevel),
+        effort: turnState.runtimeThinkingLevel,
       }
       : reasoningPlan,
     messages.length === 1,
   );
-  let autoFollowUpCount = 0;
-  let autoDepthEscalationCount = 0;
-  let autoTaskRerouteCount = 0;
-  const autoFollowUpLimit = 2;
 
   let incompleteRetryCount = 0;
   // CAP-085: `limitReached` flag — was a `let` toggled `true` only at
@@ -687,7 +678,7 @@ export async function runSubstrate(
       const preparedProviderState = await applyProviderPrepareHook({
         provider: turnState.currentProviderName,
         model: turnState.currentModelOverride,
-        reasoningMode: effectiveReasoningPlan.mode,
+        reasoningMode: effectiveReasoningPlan.effort,
         systemPrompt: currentExecution.systemPrompt,
       });
       if (preparedProviderState.blockedReason) {
@@ -699,13 +690,11 @@ export async function runSubstrate(
       runtimeSessionState.modelSelection.model = turnState.currentModelOverride;
       turnState.runtimeThinkingLevel = preparedProviderState.reasoningMode;
       runtimeSessionState.thinkingLevel = turnState.runtimeThinkingLevel;
-      const effectiveProviderReasoningMode = turnState.runtimeThinkingLevel ?? effectiveReasoningPlan.mode;
+      const effectiveProviderEffort = turnState.runtimeThinkingLevel ?? effectiveReasoningPlan.effort;
       const effectiveProviderReasoning = {
         ...currentExecution.providerReasoning,
-        enabled: effectiveProviderReasoningMode !== 'off',
-        mode: effectiveProviderReasoningMode,
-        depth: reasoningModeToDepth(effectiveProviderReasoningMode),
-        effort: currentExecution.providerReasoning.effort,
+        enabled: effectiveProviderEffort !== 'none',
+        effort: effectiveProviderEffort,
       };
 
       const streamProvider = resolveProvider(turnState.currentProviderName);
@@ -717,7 +706,7 @@ export async function runSubstrate(
         provider: streamProvider,
         prompt,
         effectiveOptions: currentExecution.effectiveOptions,
-        reasoningMode: effectiveProviderReasoningMode,
+        reasoningMode: effortToLegacyReasoningMode(effectiveProviderEffort) ?? 'auto',
         taskType: effectiveReasoningPlan.decision.primaryTask,
         executionMode: effectiveReasoningPlan.decision.recommendedMode,
         baseSystemPrompt: preparedProviderState.systemPrompt,
@@ -1033,9 +1022,11 @@ export async function runSubstrate(
       // via direct provider override, but the agent loop no longer wires it.
 
       // CAP-073: empty-content guard — if the model emitted only invisible
-      // tool calls (e.g. emit_managed_protocol) with no text/thinking,
-      // replace the empty array with a single '...' placeholder so
-      // providers that reject empty content (Kimi 400) don't trip.
+      // tool calls (e.g. hidden todo tools) with no text/thinking, replace the
+      // empty array with a single EMPTY text-block marker ({ text: '' }) so the
+      // turn stays well-formed without persisting a fake '...' reply. The
+      // provider serializer synthesizes a wire-only '...' if the gateway
+      // (e.g. Kimi 400 "must not be empty") rejects empty content.
       const assistantContent = guardEmptyAssistantContent([
         ...result.thinkingBlocks,
         ...result.textBlocks,
@@ -1141,45 +1132,9 @@ export async function runSubstrate(
           });
         }
 
-        if (
-          effectiveReasoningPlan.mode === 'auto' &&
-          autoFollowUpCount < autoFollowUpLimit &&
-          (autoDepthEscalationCount === 0 || autoTaskRerouteCount === 0) &&
-          !turnState.preAnswerJudgeConsumed &&
-          isReviewFinalAnswerCandidate(prompt, effectiveReasoningPlan, turnState.lastText)
-        ) {
-          turnState.preAnswerJudgeConsumed = true;
-          const rerouteState = await maybeAdvanceAutoReroute({
-            provider,
-            options,
-            prompt,
-            reasoningPlan: effectiveReasoningPlan,
-            lastText: turnState.lastText,
-            autoFollowUpCount,
-            autoDepthEscalationCount,
-            autoTaskRerouteCount,
-            autoFollowUpLimit,
-            events,
-            isNewSession: messages.length === 1,
-            retryLabelPrefix: 'Auto',
-            allowTaskReroute: !options.context?.disableAutoTaskReroute,
-            buildExecutionState: buildReasoningExecutionState,
-            onApply: () => {
-              messages.pop();
-            },
-          });
-          if (rerouteState) {
-            ({
-              reasoningPlan,
-              currentExecution,
-              autoFollowUpCount,
-              autoDepthEscalationCount,
-              autoTaskRerouteCount,
-            } = rerouteState);
-            contextTokenSnapshot = rebaseContextTokenSnapshot(messages, preAssistantTokenSnapshot);
-            continue;
-          }
-        }
+        // CAP-019 (auto-reroute depth-escalation + task-reroute) retired —
+        // reasoning is single-track effort now; no harness-level auto-upgrade
+        // (matches Codex / Claude Code, which fix effort per turn).
         emitIterationEnd(iter + 1, completedTurnTokenSnapshot);
         await emitActiveExtensionEvent('turn:end', {
           sessionId,
@@ -1443,51 +1398,7 @@ export async function runSubstrate(
         });
       }
 
-      if (
-        effectiveReasoningPlan.mode === 'auto' &&
-        autoFollowUpCount < autoFollowUpLimit &&
-        (autoDepthEscalationCount === 0 || autoTaskRerouteCount === 0) &&
-        !turnState.postToolJudgeConsumed
-      ) {
-        const toolEvidence = summarizeToolEvidence(result.toolBlocks, toolResults);
-        if (toolEvidence && hasStrongToolFailureEvidence(toolEvidence)) {
-          turnState.postToolJudgeConsumed = true;
-          const rerouteState = await maybeAdvanceAutoReroute({
-            provider,
-            options,
-            prompt,
-            reasoningPlan: effectiveReasoningPlan,
-            lastText: turnState.lastText,
-            autoFollowUpCount,
-            autoDepthEscalationCount,
-            autoTaskRerouteCount,
-            autoFollowUpLimit,
-            events,
-            isNewSession: false,
-            retryLabelPrefix: 'Post-tool auto',
-            toolEvidence,
-            allowTaskReroute: !options.context?.disableAutoTaskReroute,
-            buildExecutionState: buildReasoningExecutionState,
-            persistSession: {
-              sessionId,
-              messages,
-              title,
-              runtimeSessionState,
-            },
-          });
-
-          if (rerouteState) {
-            ({
-              reasoningPlan,
-              currentExecution,
-              autoFollowUpCount,
-              autoDepthEscalationCount,
-              autoTaskRerouteCount,
-            } = rerouteState);
-            continue;
-          }
-        }
-      }
+      // CAP-019 post-tool auto-reroute retired (see above).
 
       // 保存会话
       // v0.7.45 fix — explicitly thread context.gitRoot so in-process

@@ -176,6 +176,14 @@ export async function toolRead(
   // binary detector — the whole point of this branch is to route them
   // out of the text-only error path.
   const ext = path.extname(filePath).toLowerCase();
+  if (ext === '.pdf') {
+    return [
+      `[Tool Error] PDF files are not parsed by the built-in read tool: ${filePath}.`,
+      'If the read_pdf tool is available in this session, call read_pdf with this path to extract page-marked text and OCR scanned pages when configured.',
+      'If read_pdf is unavailable, ask the user to install or enable the read_pdf extension.',
+    ].join(' ');
+  }
+
   const imageMimeType = IMAGE_MIME_TYPES[ext];
   if (imageMimeType) {
     if (stat.size > READ_IMAGE_MAX_BYTES) {

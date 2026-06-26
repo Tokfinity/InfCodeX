@@ -85,13 +85,13 @@ describe('CAP-055: resolvePerTurnProvider — per-turn re-resolution', () => {
   });
 
   it('CAP-PER-TURN-PROVIDER-001b: thinkingLevel propagates from sessionState', () => {
-    const sessionState = fakeSessionState({ thinkingLevel: 'deep' });
+    const sessionState = fakeSessionState({ thinkingLevel: 'high' });
     const result = resolvePerTurnProvider(
       sessionState,
       fakeOptions(),
       compactionConfig,
     );
-    expect(result.thinkingLevel).toBe('deep');
+    expect(result.thinkingLevel).toBe('high');
   });
 
   it('CAP-PER-TURN-PROVIDER-001c: model resolution priority — modelSelection > options.modelOverride > options.model', () => {

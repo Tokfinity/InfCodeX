@@ -117,10 +117,7 @@ export type AcpRuntimeEvent =
     summary: string;
     mode?: string;
     engine?: string;
-    bridge?: string;
     status?: string;
-    daemonLatencyMs?: number;
-    cliLatencyMs?: number;
     cacheHit?: boolean;
     capsuleEstimatedTokens?: number;
   };

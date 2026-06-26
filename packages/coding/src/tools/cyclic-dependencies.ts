@@ -6,19 +6,20 @@
  * "is there a cycle".
  */
 import type { KodaXToolExecutionContext } from '../types.js';
-import { getRepoIntelligenceIndex } from '../repo-intelligence/runtime.js';
 import {
-  findCyclicDependencies,
-  renderCycleAnalysis,
-} from '../repo-intelligence/cyclic-deps.js';
+  getCyclicDependencyAnalysis,
+  readRepoIntelligenceToolWaitMs,
+} from '../repo-intelligence/runtime.js';
+import { renderCycleAnalysis } from '../repo-intelligence/cyclic-deps.js';
 
 export async function toolCyclicDependencies(
   _input: Record<string, unknown>,
   ctx: KodaXToolExecutionContext,
 ): Promise<string> {
   try {
-    const index = await getRepoIntelligenceIndex(ctx, {});
-    return renderCycleAnalysis(findCyclicDependencies(index));
+    return renderCycleAnalysis(await getCyclicDependencyAnalysis(ctx, {
+      maxWaitMs: readRepoIntelligenceToolWaitMs(),
+    }));
   } catch (error) {
     const message = error instanceof Error ? error.message : String(error);
     return `[Tool Error] cyclic_dependencies: ${message}`;

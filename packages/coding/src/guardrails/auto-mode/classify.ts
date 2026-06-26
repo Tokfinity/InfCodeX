@@ -86,7 +86,7 @@ export async function classify(opts: ClassifyOptions): Promise<ClassifyDecision>
     model: opts.model,
     system: prompt.system,
     messages: prompt.messages,
-    reasoning: { mode: 'off' },
+    reasoning: { effort: 'none' },
     timeoutMs: opts.timeoutMs ?? DEFAULT_TIMEOUT_MS,
     abortSignal: opts.abortSignal,
     querySource: QUERY_SOURCE,

@@ -22,14 +22,33 @@ describe('status bar', () => {
     const state = createStatusBarState('20260321_123456', 'accept-edits', 'openai', 'gpt-5.4', 'auto');
     const content = buildStatusBarContent(state, 160);
 
-    expect(content).toContain('reason:auto');
+    expect(content).toContain('effort:auto');
+    expect(content).not.toContain('reason:auto');
   });
 
   it('shows reasoning mode when enabled', () => {
     const state = createStatusBarState('20260321_123456', 'accept-edits', 'openai', 'gpt-5.4', 'balanced');
     const content = buildStatusBarContent(state, 160);
 
-    expect(content).toContain('reason:balanced');
+    expect(content).toContain('effort:balanced');
+    expect(content).not.toContain('reason:balanced');
+  });
+
+  it('uses configured-to-effective reasoning labels when supplied', () => {
+    const state = createStatusBarState(
+      '20260321_123456',
+      'accept-edits',
+      'openai',
+      'gpt-5.4',
+      'auto',
+      'max',
+      'max->medium',
+    );
+    const content = buildStatusBarContent(state, 160);
+
+    expect(content).toContain('effort:max->medium');
+    expect(content).not.toContain('reason:auto');
+    expect(content).not.toContain('effort:max |');
   });
 
   it('disables the classic status bar in VS Code terminals to preserve scrollback', () => {

@@ -27,8 +27,8 @@ export const DEFAULT_SHORTCUTS: ShortcutDefinition[] = [
   },
   {
     id: 'toggleThinking',
-    name: 'Cycle Reasoning',
-    description: 'Cycle reasoning mode: off, auto, quick, balanced, deep',
+    name: 'Cycle Reasoning Effort',
+    description: 'Cycle reasoning effort for the active model: off, low … max, auto',
     defaultBindings: [{ key: 't', ctrl: true }],
     context: 'global',
     priority: 150,

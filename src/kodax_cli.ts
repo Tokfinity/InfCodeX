@@ -58,6 +58,7 @@ import {
   parsePermissionModeOption,
   parseReasoningModeOption,
   parseRepoIntelligenceModeOption,
+  normalizeCliSessionFlags,
   resolveCliAgentMode,
   resolveCliEffort,
   resolveCliModelSelection,
@@ -68,11 +69,11 @@ import {
 } from './cli_option_helpers.js';
 import { runSkillCreatorTool } from './skill_cli.js';
 
-// Read the CLI version from package.json.
+// Read the CLI version from the binary build define first, then package.json.
 const packageJsonPath = path.join(path.dirname(fileURLToPath(import.meta.url)), '../package.json');
-const version = fsSync.existsSync(packageJsonPath)
+const version = process.env.KODAX_VERSION ?? (fsSync.existsSync(packageJsonPath)
   ? JSON.parse(fsSync.readFileSync(packageJsonPath, 'utf-8')).version
-  : '0.0.0';
+  : '0.0.0');
 
 import {
   runKodaX,
@@ -193,13 +194,11 @@ const CLI_HELP_TOPICS: Record<string, () => void> = {
     console.log(chalk.dim('  --cwd <dir>                  ') + 'Working directory exposed to ACP sessions');
     console.log(chalk.dim('  -m, --provider <name>        ') + 'Provider to use');
     console.log(chalk.dim('  --model <name>               ') + 'Model override');
-    console.log(chalk.dim('  --effort <level>             ') + 'Reasoning effort: auto, none, low, medium, high, or model-supported value');
+    console.log(chalk.dim('  --effort <level>             ') + 'Reasoning effort: off, auto, low, medium, high, xhigh, max, or model-supported value');
     console.log(chalk.dim('  --reasoning <mode>           ') + 'Compatibility mode: off, auto, quick, balanced, deep');
     console.log(chalk.dim('  --agent-mode <mode>          ') + 'Agent mode: ama, amaw, sa');
-    console.log(chalk.dim('  --repo-intelligence <mode>   ') + 'Repo intelligence mode: auto, off, oss, premium-shared, premium-native');
+    console.log(chalk.dim('  --repo-intelligence <mode>   ') + 'Repo intelligence mode: auto, full, light, off');
     console.log(chalk.dim('  --repo-intelligence-trace    ') + 'Emit repo intelligence trace metadata/logging');
-    console.log(chalk.dim('  --repointel-endpoint <url>   ') + 'Premium daemon endpoint override');
-    console.log(chalk.dim('  --repointel-bin <path>       ') + 'Premium CLI path used to warm/start daemon');
     console.log(chalk.dim('  -t, --thinking               ') + 'Compatibility alias for --reasoning auto');
     console.log(chalk.dim('  --permission-mode <mode>     ') + 'Initial mode: plan, accept-edits, auto-in-project');
     console.log(chalk.dim('  KODAX_ACP_LOG=<level>        ') + 'stderr log level: off, error, info, debug\n');
@@ -312,12 +311,12 @@ const CLI_HELP_TOPICS: Record<string, () => void> = {
     console.log(chalk.dim('  /model                        ') + '# Switch in REPL (saves to config)\n');
   },
   thinking: () => {
-    console.log(chalk.cyan('\nReasoning Modes\n'));
+    console.log(chalk.cyan('\nReasoning Effort\n'));
     console.log(chalk.bold('Overview:'));
     console.log(chalk.dim('  Reasoning controls how much deliberate analysis KodaX should apply.'));
-    console.log(chalk.dim('  Use off, auto, quick, balanced, or deep depending on the task.\n'));
+    console.log(chalk.dim('  Use --effort for new configs; --reasoning remains as a compatibility alias.\n'));
     console.log(chalk.bold('Options:'));
-    console.log(chalk.dim('  --effort <level>     ') + 'Set reasoning effort: auto, none, low, medium, high, or model-supported value');
+    console.log(chalk.dim('  --effort <level>     ') + 'Set reasoning effort: off, auto, low, medium, high, xhigh, max, or model-supported value');
     console.log(chalk.dim('  --reasoning <mode>   ') + 'Compatibility mode: off, auto, quick, balanced, deep');
     console.log(chalk.dim('  --agent-mode <mode>  ') + 'Set agent mode: ama, sa');
     console.log(chalk.dim('  -t, --thinking       ') + 'Compatibility alias for --reasoning auto\n');
@@ -366,13 +365,11 @@ export function configureKodaXRootCommand(program: Command): Command {
     .option('-m, --provider <name>', 'LLM provider')
     .option('--model <name>', 'Model override')
     .option('-t, --thinking', 'Compatibility alias for --reasoning auto')
-    .option('--effort <level>', 'Reasoning effort: auto, none, low, medium, high, or model-supported value', parseEffortOption)
+    .option('--effort <level>', 'Reasoning effort: off, auto, low, medium, high, xhigh, max, or model-supported value', parseEffortOption)
     .option('--reasoning <mode>', 'Reasoning mode: off, auto, quick, balanced, deep', parseReasoningModeOption)
     .option('--agent-mode <mode>', 'Agent mode: ama, amaw, sa', parseAgentModeOption)
-    .option('--repo-intelligence <mode>', 'Repo intelligence mode: auto, off, oss, premium-shared, premium-native', parseRepoIntelligenceModeOption)
+    .option('--repo-intelligence <mode>', 'Repo intelligence mode: auto, full, light, off', parseRepoIntelligenceModeOption)
     .option('--repo-intelligence-trace', 'Enable repo intelligence trace metadata/logging')
-    .option('--repointel-endpoint <url>', 'Premium daemon endpoint override')
-    .option('--repointel-bin <path>', 'Premium CLI path used to warm/start daemon')
     .option('-y, --auto', 'Backward-compat alias; no effect in non-REPL CLI')
     .option('-s, --session <op>', 'Legacy session operations: list, resume, delete <id>, delete-all, or raw session ID')
     .option('--extension <path>', 'Load local extension module (.js/.mjs/.cjs/.ts/.mts/.cts)', collectRepeatedOption, [])
@@ -449,10 +446,8 @@ function printAcpSubcommandHelp(name: string): boolean {
     console.log('  --model <name>               Model override');
     console.log('  -t, --thinking               Compatibility alias for --reasoning auto');
     console.log('  --reasoning <mode>           Reasoning mode: off, auto, quick, balanced, deep');
-    console.log('  --repo-intelligence <mode>   Repo intelligence mode: auto, off, oss, premium-shared, premium-native');
+    console.log('  --repo-intelligence <mode>   Repo intelligence mode: auto, full, light, off');
     console.log('  --repo-intelligence-trace    Emit repo intelligence trace metadata/logging');
-    console.log('  --repointel-endpoint <url>   Premium daemon endpoint override');
-    console.log('  --repointel-bin <path>       Premium CLI path used to warm/start daemon');
     console.log('  --permission-mode <mode>     Initial permission mode');
     console.log('  KODAX_ACP_LOG=<level>        stderr log level: off, error, info, debug');
     return true;
@@ -592,7 +587,7 @@ function showBasicHelp(): void {
   console.log(`  -m, --provider NAME     LLM provider (${providerNames})`);
   console.log('  --model NAME            Model override for the selected provider');
   console.log('  -t, --thinking          Compatibility alias for --reasoning auto');
-  console.log('  --effort LEVEL          Reasoning effort: auto, none, low, medium, high, or model-supported value');
+  console.log('  --effort LEVEL          Reasoning effort: off, auto, low, medium, high, xhigh, max, or model-supported value');
   console.log('  --reasoning MODE        Compatibility mode: off, auto, quick, balanced, deep');
   console.log('  --agent-mode MODE       Agent mode: ama, amaw, sa');
   console.log('  -y, --auto              Backward-compat alias; no effect in non-REPL CLI');
@@ -670,16 +665,16 @@ async function main() {
     .action((shell: string) => {
       const providerNames = getAvailableProviderNames().join(' ');
       const reasoningModes = 'off auto quick balanced deep';
-      const effortModes = 'auto none low medium high';
+      const effortModes = 'off auto low medium high xhigh max';
       const agentModes = 'ama amaw sa';
-      const repoModes = 'auto off oss premium-shared premium-native';
+      const repoModes = 'auto full light off';
       const rootSubcommands = 'acp skill tools sessions constructed doctor completion';
       const allOptions = [
         '-p', '-c', '-r', '-n', '-m', '-t', '-s', '-y', '-h',
         '--help', '--print', '--mode', '--continue', '--resume', '--new',
         '--provider', '--model', '--thinking', '--effort', '--reasoning', '--agent-mode',
-        '--repo-intelligence', '--repo-intelligence-trace', '--repointel-endpoint',
-        '--repointel-bin', '--auto', '--session', '--extension', '--no-session',
+        '--repo-intelligence', '--repo-intelligence-trace',
+        '--auto', '--session', '--extension', '--no-session',
         '--max-iter', '--version', '--json', '--ping', '--cwd', '--permission-mode',
         '--dest', '--description', '--force', '--no-evals', '--skill-path',
         '--evals', '--workspace', '--config-a', '--config-b', '--output',
@@ -732,7 +727,7 @@ _kodax() {
   subcmds=(${rootSubcommands})
   providers=(${providerNames.replace(/ /g, ' ')})
   reasoning_modes=(off auto quick balanced deep)
-  effort_modes=(auto none low medium high)
+  effort_modes=(off auto low medium high xhigh max)
   agent_modes=(ama amaw sa)
   repo_modes=(${repoModes})
 
@@ -756,8 +751,6 @@ _kodax() {
     '--agent-mode+[Agent mode]:mode:($agent_modes)' \\
     '--repo-intelligence+[Repo intelligence mode]:mode:($repo_modes)' \\
     '--repo-intelligence-trace[Enable repo intelligence trace]' \\
-    '--repointel-endpoint+[Premium daemon endpoint]:url:' \\
-    '--repointel-bin+[Premium CLI path]:path:_files' \\
     '-s[Legacy session operation]+:operation:(list resume delete delete-all)' \\
     '--session+[Legacy session operation]:operation:(list resume delete delete-all)' \\
     '--extension+[Load local extension]:path:_files' \\
@@ -789,13 +782,11 @@ complete -c kodax -s r -l resume -d 'Resume session by ID' -r
 complete -c kodax -s m -l provider -d 'LLM provider' -xa '${providerNames}'
 complete -c kodax -l model -d 'Model override' -r
 complete -c kodax -s t -l thinking -d 'Enable thinking'
-complete -c kodax -l effort -d 'Reasoning effort' -xa 'auto none low medium high'
+complete -c kodax -l effort -d 'Reasoning effort' -xa 'off auto low medium high xhigh max'
 complete -c kodax -l reasoning -d 'Reasoning mode' -xa '${reasoningModes}'
 complete -c kodax -l agent-mode -d 'Agent mode' -xa '${agentModes}'
 complete -c kodax -l repo-intelligence -d 'Repo intelligence mode' -xa '${repoModes}'
 complete -c kodax -l repo-intelligence-trace -d 'Enable repo intelligence trace'
-complete -c kodax -l repointel-endpoint -d 'Premium daemon endpoint' -r
-complete -c kodax -l repointel-bin -d 'Premium CLI path' -r
 complete -c kodax -s y -l auto -d 'Backward-compatible no-op'
 complete -c kodax -s s -l session -d 'Legacy session operation' -xa 'list resume delete delete-all'
 complete -c kodax -l extension -d 'Load local extension' -r
@@ -859,10 +850,8 @@ complete -c kodax -l version -d 'Show version'`);
     .option('--model <name>', 'Model override')
     .option('-t, --thinking', 'Compatibility alias for --reasoning auto')
     .option('--reasoning <mode>', 'Reasoning mode: off, auto, quick, balanced, deep', parseReasoningModeOption)
-    .option('--repo-intelligence <mode>', 'Repo intelligence mode: auto, off, oss, premium-shared, premium-native', parseRepoIntelligenceModeOption)
+    .option('--repo-intelligence <mode>', 'Repo intelligence mode: auto, full, light, off', parseRepoIntelligenceModeOption)
     .option('--repo-intelligence-trace', 'Enable repo intelligence trace metadata/logging')
-    .option('--repointel-endpoint <url>', 'Premium daemon endpoint override')
-    .option('--repointel-bin <path>', 'Premium CLI path used to warm/start daemon')
     .option('--permission-mode <mode>', 'Initial permission mode', parsePermissionModeOption, 'accept-edits')
     .action(async (subcommandOptions: {
       cwd?: string;
@@ -872,21 +861,13 @@ complete -c kodax -l version -d 'Show version'`);
       reasoning?: KodaXReasoningMode;
       repoIntelligence?: string;
       repoIntelligenceTrace?: boolean;
-      repointelEndpoint?: string;
-      repointelBin?: string;
       permissionMode?: AcpPermissionMode;
     }) => {
       if (typeof subcommandOptions.repoIntelligence === 'string' && subcommandOptions.repoIntelligence.trim()) {
-        process.env.KODAX_REPO_INTELLIGENCE_MODE = subcommandOptions.repoIntelligence.trim();
+        process.env.KODAX_REPO_INTELLIGENCE = subcommandOptions.repoIntelligence.trim();
       }
       if (subcommandOptions.repoIntelligenceTrace === true) {
         process.env.KODAX_REPO_INTELLIGENCE_TRACE = '1';
-      }
-      if (typeof subcommandOptions.repointelEndpoint === 'string' && subcommandOptions.repointelEndpoint.trim()) {
-        process.env.KODAX_REPOINTEL_ENDPOINT = subcommandOptions.repointelEndpoint.trim();
-      }
-      if (typeof subcommandOptions.repointelBin === 'string' && subcommandOptions.repointelBin.trim()) {
-        process.env.KODAX_REPOINTEL_BIN = subcommandOptions.repointelBin.trim();
       }
       await runAcpServer({
         cwd: subcommandOptions.cwd,
@@ -1311,16 +1292,10 @@ complete -c kodax -l version -d 'Show version'`);
   const config = prepareRuntimeConfig();
   const configWithExtensions = config as typeof config & { extensions?: string[] };
   if (typeof opts.repoIntelligence === 'string' && opts.repoIntelligence.trim()) {
-    process.env.KODAX_REPO_INTELLIGENCE_MODE = opts.repoIntelligence.trim();
+    process.env.KODAX_REPO_INTELLIGENCE = opts.repoIntelligence.trim();
   }
   if (opts.repoIntelligenceTrace === true) {
     process.env.KODAX_REPO_INTELLIGENCE_TRACE = '1';
-  }
-  if (typeof opts.repointelEndpoint === 'string' && opts.repointelEndpoint.trim()) {
-    process.env.KODAX_REPOINTEL_ENDPOINT = opts.repointelEndpoint.trim();
-  }
-  if (typeof opts.repointelBin === 'string' && opts.repointelBin.trim()) {
-    process.env.KODAX_REPOINTEL_BIN = opts.repointelBin.trim();
   }
   const reasoningMode = resolveCliReasoningMode(program, opts, config);
   const effort = resolveCliEffort(program, opts, config);
@@ -1360,6 +1335,7 @@ complete -c kodax -l version -d 'Show version'`);
     config.provider,
     config.model,
   );
+  const sessionFlags = normalizeCliSessionFlags(opts);
   // -y/--auto is kept for backward compatibility but has no effect in CLI.
   const options: CliOptions = {
     // Priority: CLI args > config file > defaults.
@@ -1371,12 +1347,12 @@ complete -c kodax -l version -d 'Show version'`);
     agentMode,
     outputMode: (opts.mode as CliOutputMode | undefined) ?? 'text',
     extensions: activeExtensions,
-    session: opts.session,
+    session: sessionFlags.session,
     maxIter: parseOptionalNonNegativeInt(opts.maxIter),
     prompt: opts.print ? [opts.print] : program.args,
     continue: opts.continue ?? false,
     resume: opts.resume,
-    noSession: opts.noSession ?? false,
+    noSession: sessionFlags.noSession,
     print: opts.print ? true : false,
   };
   let extensionRuntime: ReturnType<typeof createExtensionRuntime> | undefined;

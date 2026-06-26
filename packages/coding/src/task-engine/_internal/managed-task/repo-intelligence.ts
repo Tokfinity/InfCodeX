@@ -51,6 +51,7 @@ import {
   renderImpactEstimate,
   renderModuleContext,
   resolveKodaXAutoRepoMode,
+  resolveKodaXHotPathRepoMode,
 } from '../../../repo-intelligence/runtime.js';
 import { mergeEvidenceArtifacts } from './artifacts.js';
 
@@ -114,6 +115,7 @@ export async function captureManagedTaskRepoIntelligence(
   if (autoRepoMode === 'off') {
     return { artifacts: [] };
   }
+  const hotPathRepoMode = resolveKodaXHotPathRepoMode(context.repoIntelligenceMode);
   const repoSnapshotDir = path.join(workspaceDir, 'repo-intelligence');
   await mkdir(repoSnapshotDir, { recursive: true });
 
@@ -155,11 +157,12 @@ export async function captureManagedTaskRepoIntelligence(
   }
 
   if (activeModuleTargetPath) {
-    if (autoRepoMode === 'premium-native') {
+    const useFullPreturn = hotPathRepoMode === 'full';
+    if (useFullPreturn) {
       preturnBundle = await getRepoPreturnBundle(repoContext, {
         targetPath: activeModuleTargetPath,
         refresh: false,
-        mode: autoRepoMode,
+        mode: hotPathRepoMode,
       }).catch(() => null);
       if (preturnBundle && options) {
         emitManagedRepoIntelligenceTrace(
@@ -176,7 +179,7 @@ export async function captureManagedTaskRepoIntelligence(
       const moduleContext = preturnBundle?.moduleContext ?? await getModuleContext(repoContext, {
         targetPath: activeModuleTargetPath,
         refresh: false,
-        mode: autoRepoMode,
+        mode: hotPathRepoMode,
       });
       if (options) {
         const moduleId = (moduleContext as { module?: { moduleId?: string } })?.module?.moduleId
@@ -205,7 +208,7 @@ export async function captureManagedTaskRepoIntelligence(
       const impactEstimate = preturnBundle?.impactEstimate ?? await getImpactEstimate(repoContext, {
         targetPath: activeModuleTargetPath,
         refresh: false,
-        mode: autoRepoMode,
+        mode: hotPathRepoMode,
       });
       if (options) {
         const impactTarget = (impactEstimate as { target?: { label?: string } })?.target?.label

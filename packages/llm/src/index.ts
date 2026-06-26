@@ -1,7 +1,7 @@
 /**
- * KodaX AI - 独立的 LLM 抽象层
+ * KodaX AI - 鐙珛鐨?LLM 鎶借薄灞?
  *
- * @description 可被其他项目复用的 LLM Provider 抽象层
+ * @description 鍙鍏朵粬椤圭洰澶嶇敤鐨?LLM Provider 鎶借薄灞?
  * @module @kodax-ai/llm
  */
 
@@ -44,7 +44,7 @@ export type {
   KodaXReasoningEffortPreset,
   KodaXReasoningEffortWireStrategy,
   KodaXThinkingWireStrategy,
-  KodaXReasoningCapabilityV2,
+  KodaXReasoningProfile,
   KodaXReasoningOverride,
   KodaXReasoningMode,
   KodaXThinkingDepth,
@@ -241,7 +241,7 @@ export type {
   RetryAfterSource,
 } from './retry/retry-after.js';
 
-// FEATURE_116 (v0.7.37) — cache boundary helpers. Producer side
+// FEATURE_116 (v0.7.37) 鈥?cache boundary helpers. Producer side
 // (`insertCacheBoundary`) is called by prompt assembly; consumer side
 // (`lowerCacheBoundaries` / `stripCacheBoundaries`) is called by
 // provider base classes during request lowering.

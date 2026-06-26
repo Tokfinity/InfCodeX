@@ -46,21 +46,17 @@ const STAGES: SubstrateStage[] = ['routing', 'preturn', 'module', 'impact'];
 function makeCarrier(): KodaXRepoIntelligenceCarrier {
   return {
     capability: {
-      mode: 'premium-native',
-      engine: 'premium',
-      bridge: 'native',
+      mode: 'full',
+      engine: 'full',
       level: 'enhanced',
       status: 'ok',
       warnings: [],
     },
     trace: {
-      mode: 'premium-native',
-      engine: 'premium',
-      bridge: 'native',
+      mode: 'full',
+      engine: 'full',
       triggeredAt: new Date('2026-04-27T00:00:00Z').toISOString(),
-      source: 'premium',
-      daemonLatencyMs: 12,
-      cliLatencyMs: 4,
+      source: 'full',
       cacheHit: true,
       capsuleBytes: 1024,
       capsuleEstimatedTokens: 256,

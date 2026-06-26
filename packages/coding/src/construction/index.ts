@@ -105,6 +105,15 @@ export type {
   DiscoverMarkdownAgentsResult,
 } from './markdown-loader.js';
 
+// FEATURE_243 v0.7.57 — built-in read-only repo exploration specialist.
+export {
+  REPO_EXPLORER_AGENT_NAME,
+  REPO_EXPLORER_TOOL_NAMES,
+  buildRepoExplorerAgentArtifact,
+  buildRepoExplorerAgentContent,
+  ensureBuiltinRepoExplorerAgent,
+} from './builtin-agents.js';
+
 // FEATURE_089 Phase 3.5 — sandbox runner.
 export {
   runSandboxAgentTest,

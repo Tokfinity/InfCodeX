@@ -15,7 +15,7 @@
  *   - block:true with already-settled registry entry returns immediately
  *     with retrieval_status=success
  *   - block:true with in-flight unsettling promise + small timeout returns
- *     retrieval_status=timeout
+ *     retrieval_status=wait_expired
  *   - block:true with no registry entry (e.g. settled & cleaned) falls
  *     through to read snapshot, retrievalStatus=success
  *   - tail-to-bytes caps very large finalText at OUTPUT_TAIL_BYTES with
@@ -42,6 +42,7 @@ import {
 } from '../child-progress-snapshot.js';
 
 import { toolTaskOutput } from './task-output.js';
+import { getToolDefinition } from './registry.js';
 
 function makeCtx(
   overrides: Partial<KodaXToolExecutionContext> = {},
@@ -71,6 +72,25 @@ describe('toolTaskOutput — input validation', () => {
     const ctx = makeCtx({ childProgressSnapshots: undefined });
     const out = await toolTaskOutput({ task_id: 'c1' }, ctx);
     expect(out).toMatch(/Async dispatch is disabled/);
+  });
+});
+
+describe('toolTaskOutput — schema wording', () => {
+  it('describes block timeout as a read-window expiry, not child failure', () => {
+    const def = getToolDefinition('task_output');
+    const schema = def?.input_schema as {
+      properties?: Record<string, { description?: string }>;
+    } | undefined;
+    const visibleText = [
+      def?.description ?? '',
+      schema?.properties?.block?.description ?? '',
+      schema?.properties?.timeout_ms?.description ?? '',
+    ].join('\n');
+
+    expect(visibleText).toContain('Normal Worker usage');
+    expect(visibleText).toContain('retrieval_status=wait_expired');
+    expect(visibleText).toContain('not a child task timeout');
+    expect(visibleText).not.toContain('retrieval_status=timeout');
   });
 });
 
@@ -251,7 +271,7 @@ describe('toolTaskOutput — block parameter', () => {
     expect(out).toMatch(/<status>completed<\/status>/);
   });
 
-  it('block:true with in-flight unsettling promise + short timeout returns timeout', async () => {
+  it('block:true with in-flight unsettling promise + short timeout returns wait_expired', async () => {
     const snapshots = new Map<string, ChildProgressSnapshot>();
     initChildSnapshot(snapshots, {
       childId: 'c1',
@@ -269,8 +289,9 @@ describe('toolTaskOutput — block parameter', () => {
       { task_id: 'c1', block: true, timeout_ms: 50 },
       ctx,
     );
-    expect(out).toMatch(/<retrieval_status>timeout<\/retrieval_status>/);
+    expect(out).toMatch(/<retrieval_status>wait_expired<\/retrieval_status>/);
     expect(out).toMatch(/<status>running<\/status>/);
+    expect(out).toContain('The child task has not timed out');
   });
 
   it("block:true with no registry entry (cleaned post-settle) reads snapshot as success", async () => {

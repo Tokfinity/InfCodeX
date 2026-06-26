@@ -40,6 +40,15 @@ export function resolveToolCapability(toolName: string): ToolCapability {
     case 'grep':
     case 'code_search':
     case 'semantic_lookup':
+    case 'lsp_definition':
+    case 'lsp_hover':
+    case 'lsp_references':
+    case 'lsp_document_symbols':
+    case 'lsp_workspace_symbols':
+    case 'lsp_implementation':
+    case 'lsp_prepare_call_hierarchy':
+    case 'lsp_incoming_calls':
+    case 'lsp_outgoing_calls':
     // Read-only repo intelligence (no FS mutation; pure analysis).
     // Promoted out of the strictest 'subagent' default in 1A.5 review:
     // restrictive deployments that cap at 'read' would otherwise see
@@ -52,6 +61,7 @@ export function resolveToolCapability(toolName: string): ToolCapability {
     case 'symbol_context':
     case 'process_context':
     case 'impact_estimate':
+    case 'relationship_scan':
     case 'cyclic_dependencies':
     // Interaction-only tools (no FS / shell side effect — they just
     // surface state to the user or the planner).

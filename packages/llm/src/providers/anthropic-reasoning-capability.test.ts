@@ -126,8 +126,7 @@ class TestAnthropicProvider extends KodaXAnthropicCompatProvider {
 describe('anthropic reasoning capability', () => {
   const reasoning: KodaXReasoningRequest = {
     enabled: true,
-    mode: 'deep',
-    depth: 'high',
+    effort: 'high',
     taskType: 'plan',
     executionMode: 'planning',
   };
@@ -215,13 +214,13 @@ describe('anthropic reasoning capability', () => {
     });
   });
 
-  it('caps V2 budgetByEffort values with thinkingBudgetCap for native-budget providers', async () => {
+  it('caps reasoning profile budgetByEffort values with thinkingBudgetCap for native-budget providers', async () => {
     const create = vi.fn().mockResolvedValue(createCompletedAnthropicStream());
     const provider = new TestAnthropicProvider('native-budget', {
       messages: { create },
     }, {
       thinkingBudgetCap: 8000,
-      reasoningCapabilityV2: {
+      reasoningProfile: {
         reasoningPreset: 'anthropic-budget',
         effortStrategy: 'provider-budget',
         thinkingStrategy: 'anthropic-budget',
@@ -294,12 +293,12 @@ describe('anthropic reasoning capability', () => {
     expect(kwargs).not.toHaveProperty('output_config');
   });
 
-  it('adds the effort beta header only when a V2 profile explicitly requires it', async () => {
+  it('adds the effort beta header only when a reasoning profile explicitly requires it', async () => {
     const create = vi.fn().mockResolvedValue(createCompletedAnthropicStream());
     const provider = new TestAnthropicProvider('native-adaptive', {
       messages: { create },
     }, {
-      reasoningCapabilityV2: {
+      reasoningProfile: {
         reasoningPreset: 'claude-adaptive-max',
         effortStrategy: 'anthropic-output-effort',
         thinkingStrategy: 'anthropic-adaptive',
@@ -322,12 +321,12 @@ describe('anthropic reasoning capability', () => {
     });
   });
 
-  it('sends GLM-5.2 top-level reasoning_effort with aliases through V2 metadata', async () => {
+  it('sends GLM-5.2 top-level reasoning_effort with aliases through reasoning metadata', async () => {
     const create = vi.fn().mockResolvedValue(createCompletedAnthropicStream());
     const provider = new TestAnthropicProvider('native-effort', {
       messages: { create },
     }, {
-      reasoningCapabilityV2: {
+      reasoningProfile: {
         reasoningPreset: 'zai-glm-5.2',
         effortStrategy: 'openai-chat-effort',
         thinkingStrategy: 'provider-toggle',
@@ -358,7 +357,7 @@ describe('anthropic reasoning capability', () => {
     const provider = new TestAnthropicProvider('native-toggle', {
       messages: { create },
     }, {
-      reasoningCapabilityV2: {
+      reasoningProfile: {
         reasoningPreset: 'kimi-k2.7-code',
         effortStrategy: 'prompt-only',
         localRejectEfforts: ['none', 'minimal'],
@@ -377,7 +376,7 @@ describe('anthropic reasoning capability', () => {
     const provider = new TestAnthropicProvider('native-adaptive', {
       messages: { create },
     }, {
-      reasoningCapabilityV2: {
+      reasoningProfile: {
         reasoningPreset: 'minimax-m3',
         effortStrategy: 'provider-toggle',
         thinkingStrategy: 'anthropic-adaptive',
@@ -431,7 +430,7 @@ describe('anthropic reasoning capability', () => {
   // v0.7.28: Anthropic streams the redacted_thinking payload's `data`
   // field on `content_block_start` itself (no deltas, no `data` on the
   // stop event). Earlier code captured nothing at start and tried to
-  // read `event.content_block.data` at stop — which is always undefined,
+  // read `event.content_block.data` at stop 鈥?which is always undefined,
   // silently dropping the redacted reasoning. Verify the data reaches
   // thinkingBlocks intact.
   it('preserves redacted_thinking data captured at content_block_start', async () => {
@@ -448,7 +447,7 @@ describe('anthropic reasoning capability', () => {
               data: REDACTED_PAYLOAD,
             },
           },
-          // No deltas — redacted_thinking arrives as a single payload on start.
+          // No deltas 鈥?redacted_thinking arrives as a single payload on start.
           { type: 'content_block_stop' },
           { type: 'message_stop' },
         ];
@@ -477,7 +476,7 @@ describe('anthropic reasoning capability', () => {
   it('skips redacted_thinking blocks with empty payload (server quirk)', async () => {
     // Defensive: if the server emits redacted_thinking with no `data`,
     // there's nothing meaningful to replay. Skip the empty block rather
-    // than push one — keeps wire-format invariants clean.
+    // than push one 鈥?keeps wire-format invariants clean.
     const stream: AsyncIterable<unknown> = {
       [Symbol.asyncIterator]() {
         let i = 0;
@@ -507,8 +506,7 @@ describe('anthropic reasoning capability', () => {
   });
 
   it('isolates redacted_thinking state across consecutive blocks', async () => {
-    // Two redacted_thinking blocks back-to-back must not bleed state —
-    // the second block's data must not leak into the first, and an empty
+    // Two redacted_thinking blocks back-to-back must not bleed state 鈥?    // the second block's data must not leak into the first, and an empty
     // second block must not duplicate the first.
     const stream: AsyncIterable<unknown> = {
       [Symbol.asyncIterator]() {

@@ -11,13 +11,15 @@ import {
   type KodaXProtocolFamily,
   type KodaXProviderConfig,
   type KodaXReasoningCapability,
-  type KodaXReasoningCapabilityV2,
+  type KodaXReasoningConfig,
+  type KodaXReasoningProfile,
+  type KodaXSimpleReasoningConfig,
   type KodaXVerifyStrategy,
 } from '../types.js';
 import { KodaXBaseProvider } from './base.js';
 import { KodaXAnthropicCompatProvider } from './anthropic.js';
 import { KodaXOpenAICompatProvider } from './openai.js';
-import { createReasoningCapabilityFromPreset } from '../reasoning.js';
+import { createReasoningProfileFromPreset } from '../reasoning.js';
 
 const VALID_CUSTOM_PROVIDER_USER_AGENT_MODES = new Set(['compat', 'sdk']);
 const VALID_CUSTOM_PROVIDER_VERIFY_STRATEGIES = new Set<KodaXVerifyStrategy>([
@@ -27,11 +29,21 @@ const VALID_CUSTOM_PROVIDER_VERIFY_STRATEGIES = new Set<KodaXVerifyStrategy>([
   'unsupported',
 ]);
 
+type DeprecatedReasoningProfileAlias = {
+  readonly reasoningCapabilityV2?: KodaXReasoningProfile;
+};
+
+function getConfiguredReasoningProfile(
+  value: { readonly reasoningProfile?: KodaXReasoningProfile } & DeprecatedReasoningProfileAlias,
+): KodaXReasoningProfile | undefined {
+  return value.reasoningProfile ?? value.reasoningCapabilityV2;
+}
+
 /**
- * FEATURE_216 v0.7.45 — Derive the default verify strategy when a custom
+ * FEATURE_216 v0.7.45 �?Derive the default verify strategy when a custom
  * provider config does not set `verifyStrategy` explicitly:
- *   - anthropic protocol → count-tokens (true 0-token if implemented)
- *   - openai protocol    → models-list (auth-gated GET if implemented)
+ *   - anthropic protocol �?count-tokens (true 0-token if implemented)
+ *   - openai protocol    �?models-list (auth-gated GET if implemented)
  * Custom providers that hit an upstream where these defaults fail should
  * set `verifyStrategy: 'minimal-message'` explicitly in their config.
  */
@@ -41,8 +53,8 @@ function defaultVerifyStrategyForProtocol(
   return protocol === 'anthropic' ? 'count-tokens' : 'models-list';
 }
 
-export function legacyCapabilityFromV2(
-  capability: KodaXReasoningCapabilityV2 | undefined,
+export function legacyCapabilityFromReasoningProfile(
+  capability: KodaXReasoningProfile | undefined,
 ): KodaXReasoningCapability | undefined {
   if (!capability) {
     return undefined;
@@ -90,8 +102,49 @@ function legacyReasoningPresetForProtocol(
   }
 }
 
-function resolveCustomReasoningCapabilityV2(
-  reasoningCapabilityV2: KodaXReasoningCapabilityV2 | undefined,
+/** True for the canonical friendly form (`{ efforts }`) or `"none"`. */
+function isSimpleReasoning(
+  reasoning: KodaXReasoningConfig | undefined,
+): reasoning is KodaXSimpleReasoningConfig | 'none' {
+  return (
+    reasoning === 'none'
+    || (typeof reasoning === 'object'
+      && reasoning !== null
+      && Array.isArray((reasoning as KodaXSimpleReasoningConfig).efforts))
+  );
+}
+
+/**
+ * Build a full reasoning profile from the friendly `{ efforts, default }` form.
+ * The wire strategy is derived from `protocol` so users never name a preset;
+ * `"off"` maps to the internal `none` rung and lights up disable-thinking.
+ */
+function buildReasoningProfileFromSimple(
+  simple: KodaXSimpleReasoningConfig | 'none',
+  protocol: KodaXProtocolFamily,
+): KodaXReasoningProfile {
+  if (simple === 'none') {
+    return createReasoningProfileFromPreset('none');
+  }
+  const toWire = (effort: string): string => (effort === 'off' ? 'none' : effort);
+  const wireEfforts = simple.efforts.map(toWire);
+  const defaultWire = simple.default ? toWire(simple.default) : undefined;
+  const canDisable = wireEfforts.includes('none');
+  const supportedEfforts = wireEfforts.map((value) =>
+    value === defaultWire ? { value, isDefault: true } : { value },
+  );
+  return {
+    effortStrategy: protocol === 'anthropic' ? 'anthropic-output-effort' : 'openai-chat-effort',
+    thinkingStrategy: 'provider-toggle',
+    ...(defaultWire !== undefined ? { defaultEffort: defaultWire } : {}),
+    supportedEfforts,
+    ...(canDisable ? { disabledEfforts: ['none'], supportsDisabledThinking: true } : {}),
+    supportsReasoningEffort: true,
+  };
+}
+
+function resolveCustomReasoningProfile(
+  reasoningProfile: KodaXReasoningProfile | undefined,
   reasoningPreset: KodaXModelDescriptor['reasoningPreset'],
   reasoning: KodaXModelDescriptor['reasoning'],
   legacy?: {
@@ -99,10 +152,20 @@ function resolveCustomReasoningCapabilityV2(
     readonly reasoningCapability?: KodaXReasoningCapability;
     readonly supportsThinking?: boolean;
   },
-): KodaXReasoningCapabilityV2 | undefined {
-  if (reasoningCapabilityV2) {
-    return { ...reasoningCapabilityV2, ...(reasoning ?? {}) };
+): KodaXReasoningProfile | undefined {
+  const simple = isSimpleReasoning(reasoning) ? reasoning : undefined;
+  const partialOverride: Partial<KodaXReasoningProfile> | undefined =
+    reasoning !== undefined && !isSimpleReasoning(reasoning) ? reasoning : undefined;
+
+  // 1. Explicit full profile wins; an advanced partial override merges on top.
+  if (reasoningProfile) {
+    return { ...reasoningProfile, ...(partialOverride ?? {}) };
   }
+  // 2. Canonical friendly form — preferred over the deprecated preset/legacy path.
+  if (simple !== undefined) {
+    return buildReasoningProfileFromSimple(simple, legacy?.protocol ?? 'openai');
+  }
+  // 3. Deprecated (auto-migrated): explicit preset name or legacy capability mapping.
   const effectivePreset = reasoningPreset ?? (legacy
     ? legacyReasoningPresetForProtocol(
         legacy.protocol,
@@ -111,15 +174,15 @@ function resolveCustomReasoningCapabilityV2(
       )
     : undefined);
   return effectivePreset
-    ? createReasoningCapabilityFromPreset(effectivePreset, reasoning)
+    ? createReasoningProfileFromPreset(effectivePreset, partialOverride)
     : undefined;
 }
 
-export function resolveCustomProviderReasoningCapabilityV2(
+export function resolveCustomProviderReasoningProfile(
   config: KodaXCustomProviderConfig,
-): KodaXReasoningCapabilityV2 | undefined {
-  return resolveCustomReasoningCapabilityV2(
-    config.reasoningCapabilityV2,
+): KodaXReasoningProfile | undefined {
+  return resolveCustomReasoningProfile(
+    getConfiguredReasoningProfile(config),
     config.reasoningPreset,
     config.reasoning,
     {
@@ -130,12 +193,12 @@ export function resolveCustomProviderReasoningCapabilityV2(
   );
 }
 
-export function resolveCustomModelReasoningCapabilityV2(
+export function resolveCustomModelReasoningProfile(
   descriptor: KodaXModelDescriptor,
   protocol: KodaXProtocolFamily,
-): KodaXReasoningCapabilityV2 | undefined {
-  return resolveCustomReasoningCapabilityV2(
-    descriptor.reasoningCapabilityV2,
+): KodaXReasoningProfile | undefined {
+  return resolveCustomReasoningProfile(
+    getConfiguredReasoningProfile(descriptor),
     descriptor.reasoningPreset,
     descriptor.reasoning,
     {
@@ -152,9 +215,9 @@ function customModelDescriptorToFull(
   if (typeof entry === 'string') {
     return { id: entry };
   }
-  const reasoningCapabilityV2 = resolveCustomModelReasoningCapabilityV2(entry, protocol);
-  return reasoningCapabilityV2
-    ? { ...entry, reasoningCapabilityV2 }
+  const reasoningProfile = resolveCustomModelReasoningProfile(entry, protocol);
+  return reasoningProfile
+    ? { ...entry, reasoningProfile }
     : entry;
 }
 
@@ -182,7 +245,7 @@ export function validateCustomProviderConfig(
     );
   }
 
-  // FEATURE_216 v0.7.45 — Validate explicit verifyStrategy. Also guard
+  // FEATURE_216 v0.7.45 �?Validate explicit verifyStrategy. Also guard
   // against the most common misconfiguration: 'count-tokens' on openai
   // protocol (openai-compat servers do not implement count_tokens).
   if (custom.verifyStrategy !== undefined) {
@@ -208,10 +271,10 @@ function buildProviderConfig(custom: KodaXCustomProviderConfig): KodaXProviderCo
   const models = custom.models?.length
     ? custom.models.map((entry) => customModelDescriptorToFull(entry, custom.protocol))
     : undefined;
-  const reasoningCapabilityV2 = resolveCustomProviderReasoningCapabilityV2(custom);
+  const reasoningProfile = resolveCustomProviderReasoningProfile(custom);
   const reasoningCapability =
     custom.reasoningCapability ??
-    legacyCapabilityFromV2(reasoningCapabilityV2) ??
+    legacyCapabilityFromReasoningProfile(reasoningProfile) ??
     (custom.supportsThinking ? 'native-toggle' : 'none');
   const supportsThinking = custom.supportsThinking ??
     (reasoningCapability !== 'none' && reasoningCapability !== 'prompt-only');
@@ -224,7 +287,7 @@ function buildProviderConfig(custom: KodaXCustomProviderConfig): KodaXProviderCo
     userAgentMode: custom.userAgentMode,
     supportsThinking,
     reasoningCapability,
-    reasoningCapabilityV2,
+    reasoningProfile,
     capabilityProfile: custom.capabilityProfile,
     contextWindow: custom.contextWindow,
     maxOutputTokens: custom.maxOutputTokens,
@@ -236,7 +299,7 @@ function buildProviderConfig(custom: KodaXCustomProviderConfig): KodaXProviderCo
     replayReasoningContent: custom.replayReasoningContent ?? false,
     strictThinkingSignature: custom.strictThinkingSignature ?? false,
     streamMaxDurationMs: custom.streamMaxDurationMs,
-    // FEATURE_216 v0.7.45 — explicit verifyStrategy wins; otherwise
+    // FEATURE_216 v0.7.45 �?explicit verifyStrategy wins; otherwise
     // derive from protocol per the table in the type's JSDoc.
     verifyStrategy:
       custom.verifyStrategy ?? defaultVerifyStrategyForProtocol(custom.protocol),

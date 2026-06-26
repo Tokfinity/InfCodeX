@@ -76,6 +76,7 @@ export type StreamHandlerCallbacks = Pick<
   | 'onToolInputDelta'
   | 'onRateLimit'
   | 'onRetryAfter'
+  | 'onReasoningEffortRejected'
   | 'onHeartbeat'
 >;
 
@@ -125,6 +126,11 @@ export function buildStreamHandlers(input: StreamHandlerWiringInput): StreamHand
     onRetryAfter: (event) => {
       streamTimers.resetIdleTimer();
       events.onRetryAfter?.(event);
+    },
+    // Passive capability learning — forward a reasoning-effort rejection so the
+    // REPL records it in the capability cache and narrows the ladder.
+    onReasoningEffortRejected: (event) => {
+      events.onReasoningEffortRejected?.(event);
     },
     onHeartbeat: (pause) => {
       if (pause) {

@@ -13,7 +13,6 @@ import { join } from 'node:path';
 import type { ArgumentDefinition, CommandArgumentsRegistry } from './types.js';
 import { getAgentConfigPath } from '@kodax-ai/agent';
 import {
-  REPOINTEL_DEFAULT_ENDPOINT,
   getAvailableProviderNames,
   getDefaultWorkflowRunManager,
   isKnownProvider,
@@ -218,15 +217,10 @@ const AGENTS_ARGS: ArgumentDefinition[] = [
   { name: 'help', description: 'Show agents help', type: 'enum' },
 ];
 
-const REPOINTEL_SUBCOMMAND_ARGS: ArgumentDefinition[] = [
+const REPO_INTEL_SUBCOMMAND_ARGS: ArgumentDefinition[] = [
   {
     name: 'status',
     description: 'Inspect the current repo-intelligence runtime state',
-    type: 'enum',
-  },
-  {
-    name: 'warm',
-    description: 'Warm or start the local premium runtime if available',
     type: 'enum',
   },
   {
@@ -239,22 +233,22 @@ const REPOINTEL_SUBCOMMAND_ARGS: ArgumentDefinition[] = [
     description: 'Toggle repo-intelligence trace output',
     type: 'enum',
   },
-  {
-    name: 'endpoint',
-    description: 'Inspect or override the local repointel daemon endpoint',
-    type: 'enum',
-  },
-  {
-    name: 'bin',
-    description: 'Inspect or override the local repointel command or path',
-    type: 'enum',
-  },
 ];
 
-const REPOINTEL_MODE_ARGS: ArgumentDefinition[] = [
+const REPO_INTEL_MODE_ARGS: ArgumentDefinition[] = [
   {
     name: 'auto',
-    description: 'Resolve to premium-native when available, otherwise fall back to oss',
+    description: 'Let KodaX pick the best repo-intelligence engine',
+    type: 'enum',
+  },
+  {
+    name: 'full',
+    description: 'Prefer the full repo-intelligence engine',
+    type: 'enum',
+  },
+  {
+    name: 'light',
+    description: 'Use the light repo-intelligence engine',
     type: 'enum',
   },
   {
@@ -262,24 +256,9 @@ const REPOINTEL_MODE_ARGS: ArgumentDefinition[] = [
     description: 'Disable repo-intelligence injection',
     type: 'enum',
   },
-  {
-    name: 'oss',
-    description: 'Use only the public OSS repo-intelligence baseline',
-    type: 'enum',
-  },
-  {
-    name: 'premium-shared',
-    description: 'Use premium without the native KodaX auto lane',
-    type: 'enum',
-  },
-  {
-    name: 'premium-native',
-    description: 'Use premium through the native KodaX bridge',
-    type: 'enum',
-  },
 ];
 
-const REPOINTEL_TRACE_ARGS: ArgumentDefinition[] = [
+const REPO_INTEL_TRACE_ARGS: ArgumentDefinition[] = [
   {
     name: 'on',
     description: 'Enable repo-intelligence trace output',
@@ -297,10 +276,10 @@ const REPOINTEL_TRACE_ARGS: ArgumentDefinition[] = [
   },
 ];
 
-const REPOINTEL_RESETTABLE_ARGS: ArgumentDefinition[] = [
+const LEGACY_REPOINTEL_SUBCOMMAND_ARGS: ArgumentDefinition[] = [
   {
-    name: 'default',
-    description: 'Clear the override and use the default value again',
+    name: 'status',
+    description: 'Deprecated alias for /repo-intel status',
     type: 'enum',
   },
 ];
@@ -650,13 +629,13 @@ function getWorkflowArgs(argParts: string[]): ArgumentDefinition[] {
   return [];
 }
 
-function getRepointelArgs(argParts: string[]): ArgumentDefinition[] {
+function getRepoIntelArgs(argParts: string[]): ArgumentDefinition[] {
   const [subcommand = ''] = argParts;
   const normalizedSubcommand = subcommand.toLowerCase();
   const effectiveLength = argParts.length === 1 && argParts[0] === '' ? 0 : argParts.length;
 
   if (effectiveLength <= 1) {
-    return REPOINTEL_SUBCOMMAND_ARGS;
+    return REPO_INTEL_SUBCOMMAND_ARGS;
   }
 
   if (effectiveLength > 2) {
@@ -664,26 +643,11 @@ function getRepointelArgs(argParts: string[]): ArgumentDefinition[] {
   }
 
   if (normalizedSubcommand === 'mode') {
-    return REPOINTEL_MODE_ARGS;
+    return REPO_INTEL_MODE_ARGS;
   }
 
   if (normalizedSubcommand === 'trace') {
-    return REPOINTEL_TRACE_ARGS;
-  }
-
-  if (normalizedSubcommand === 'endpoint') {
-    return [
-      ...REPOINTEL_RESETTABLE_ARGS,
-      {
-        name: REPOINTEL_DEFAULT_ENDPOINT,
-        description: 'Default local repointel daemon endpoint',
-        type: 'string',
-      },
-    ];
-  }
-
-  if (normalizedSubcommand === 'bin') {
-    return REPOINTEL_RESETTABLE_ARGS;
+    return REPO_INTEL_TRACE_ARGS;
   }
 
   return [];
@@ -728,7 +692,8 @@ export const COMMAND_ARGUMENTS: CommandArgumentsRegistry = new Map([
  * For /model, supports two-stage completion when partial contains provider/.
  */
 const MODEL_COMMAND_NAMES = new Set(['model', 'm', 'provider']);
-const REPOINTEL_COMMAND_NAMES = new Set(['repointel', 'ri']);
+const REPO_INTEL_COMMAND_NAMES = new Set(['repo-intel']);
+const LEGACY_REPOINTEL_COMMAND_NAMES = new Set(['repointel', 'ri']);
 const WORKFLOW_COMMAND_NAMES = new Set(['workflow']);
 
 export function getCommandArguments(commandName: string, partial?: string, argParts: string[] = []): ArgumentDefinition[] {
@@ -736,8 +701,11 @@ export function getCommandArguments(commandName: string, partial?: string, argPa
   if (MODEL_COMMAND_NAMES.has(key)) {
     return getModelArgs(partial);
   }
-  if (REPOINTEL_COMMAND_NAMES.has(key)) {
-    return getRepointelArgs(argParts);
+  if (REPO_INTEL_COMMAND_NAMES.has(key)) {
+    return getRepoIntelArgs(argParts);
+  }
+  if (LEGACY_REPOINTEL_COMMAND_NAMES.has(key)) {
+    return argParts.length <= 1 ? LEGACY_REPOINTEL_SUBCOMMAND_ARGS : [];
   }
   if (WORKFLOW_COMMAND_NAMES.has(key)) {
     return getWorkflowArgs(argParts);

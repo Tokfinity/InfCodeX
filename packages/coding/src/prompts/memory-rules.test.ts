@@ -36,8 +36,8 @@ describe('FEATURE_124 Phase C — buildMemoryRulesSection', () => {
 
   afterEach(() => {
     setAgentConfigHome(undefined);
-    fs.rmSync(tempHome, { recursive: true, force: true });
-    fs.rmSync(cwd, { recursive: true, force: true });
+    fs.rmSync(tempHome, { recursive: true, force: true, maxRetries: 3, retryDelay: 100 });
+    fs.rmSync(cwd, { recursive: true, force: true, maxRetries: 3, retryDelay: 100 });
   });
 
   it('interpolates the memory directory path with forward slashes', () => {

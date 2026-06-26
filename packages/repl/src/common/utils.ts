@@ -1,6 +1,6 @@
 /**
  * KodaX CLI Utilities
- * CLI 层工具函数
+ * CLI 灞傚伐鍏峰嚱鏁?
  */
 
 import fsSync from 'fs';
@@ -11,6 +11,7 @@ import { getAgentConfigHome } from '@kodax-ai/agent';
 import { promisify } from 'util';
 import { fileURLToPath } from 'url';
 import { setLocale } from './i18n.js';
+import { getCachedRejectedEfforts, narrowReasoningProfile } from './capability-cache.js';
 import {
   buildProviderCapabilitySnapshot,
   evaluateProviderPolicy,
@@ -19,6 +20,9 @@ import {
   getProviderList as getBuiltInProviderList,
   getProviderModel as getBuiltInProviderModel,
   getProviderModels,
+  resolveModelCapabilities,
+  resolveReasoningEffort,
+  resolveReasoningEffortForModelSwitch,
   getCustomProviderList,
   getCustomProvider,
   isProviderConfigured as isBuiltInProviderConfigured,
@@ -34,20 +38,21 @@ import {
   type KodaXReasoningOverride,
   type KodaXMcpServersConfig,
   type KodaXCustomProviderConfig,
+  type KodaXReasoningProfile,
 } from '@kodax-ai/coding';
 
 const execAsync = promisify(exec);
 
 /**
- * CLI config directory paths — top-level constants frozen at module-load time.
+ * CLI config directory paths 鈥?top-level constants frozen at module-load time.
  *
- * **LOAD-TIME FREEZE WARNING (v0.7.35.1 FEATURE_145)** — these constants
+ * **LOAD-TIME FREEZE WARNING (v0.7.35.1 FEATURE_145)** 鈥?these constants
  * are computed ONCE when this module is first imported, by reading
  * `getAgentConfigHome()` (which itself reads `KODAX_HOME` env var and
  * the programmatic override at that single moment). Subsequent calls to
  * `setAgentConfigHome()` have NO effect on these constants. This
  * matches the prior v0.7.35 behavior where they were inlined as
- * `path.join(os.homedir(), '.kodax')` — same load-time semantics, just
+ * `path.join(os.homedir(), '.kodax')` 鈥?same load-time semantics, just
  * routed through the resolver so that `KODAX_HOME` env is now honored.
  *
  * **For substrate consumers**: if you intend to redirect the agent
@@ -55,18 +60,18 @@ const execAsync = promisify(exec);
  * importing any module that transitively imports `@kodax-ai/repl`'s
  * `utils.ts`. Common downstream consumers that capture these constants
  * include:
- *   - `repl/interactive/storage.ts` → `KODAX_SESSIONS_DIR` (session
+ *   - `repl/interactive/storage.ts` 鈫?`KODAX_SESSIONS_DIR` (session
  *     persistence; silent corruption risk if override is set late)
  *   - the SDK's `repl/index.ts` re-exports
  *   - root `src/index.ts` re-exports
  *
  * **For env-var users**: setting `KODAX_HOME=/path` before launching
- * the kodax CLI works as expected — the env var is read at first
+ * the kodax CLI works as expected 鈥?the env var is read at first
  * import.
  *
  * **For per-call resolution**: use `getAgentConfigHome()` /
  * `getAgentConfigPath(...)` directly from `@kodax-ai/agent` instead of
- * these constants — those resolve at call time and honor late
+ * these constants 鈥?those resolve at call time and honor late
  * `setAgentConfigHome()` calls.
  */
 export const KODAX_DIR = getAgentConfigHome();
@@ -291,12 +296,12 @@ function migrateAutoInProjectAliasInConfig<T extends { permissionMode?: string }
   return { ...config, permissionMode: 'auto' } as T;
 }
 
-// Read version from package.json dynamically - 动态读取版本号
+// Read version from package.json dynamically - 鍔ㄦ€佽鍙栫増鏈彿
 // In standalone binary builds (Bun --compile), package.json is not on disk;
 // the build script injects `process.env.KODAX_VERSION` via --define so this
 // function returns the baked-in version without filesystem access.
-// 在 Bun 编译后的单文件分发里读不到 package.json，由 build 脚本通过 --define
-// 注入 KODAX_VERSION，运行时优先返回该值。
+// 鍦?Bun 缂栬瘧鍚庣殑鍗曟枃浠跺垎鍙戦噷璇讳笉鍒?package.json锛岀敱 build 鑴氭湰閫氳繃 --define
+// 娉ㄥ叆 KODAX_VERSION锛岃繍琛屾椂浼樺厛杩斿洖璇ュ€笺€?
 export function getVersion(): string {
   if (cachedVersion) {
     return cachedVersion;
@@ -369,7 +374,7 @@ export function getProviderAvailableModels(name: string, providerModelsConfig?: 
     }
     return configModels;
   }
-  // No config override — use built-in models from snapshot
+  // No config override 鈥?use built-in models from snapshot
   try {
     const builtInModels = getProviderModels(name);
     if (builtInModels.length > 0) return builtInModels;
@@ -526,6 +531,241 @@ export function formatReasoningCapabilityShort(
   }
 }
 
+export function formatReasoningEffortForDisplay(
+  effort: string | undefined,
+): string | undefined {
+  if (!effort) {
+    return undefined;
+  }
+  return effort === 'none' ? 'off' : effort;
+}
+
+function pushUniqueEffortDisplay(
+  values: string[],
+  effort: string | undefined,
+): void {
+  const display = formatReasoningEffortForDisplay(effort);
+  if (display && !values.includes(display)) {
+    values.push(display);
+  }
+}
+
+export function getProviderReasoningEffortOptions(
+  provider: string,
+  model?: string,
+): string[] {
+  const values = ['auto'];
+  const capability = resolveReasoningProfileForDisplay(provider, model);
+  const presets = capability?.supportedEfforts?.filter(
+    (preset) => preset.isUserVisible !== false,
+  );
+  if (!presets || presets.length === 0) {
+    for (const effort of ['off', 'low', 'medium', 'high']) {
+      pushUniqueEffortDisplay(values, effort);
+    }
+    return values;
+  }
+  for (const preset of presets) {
+    pushUniqueEffortDisplay(values, preset.value);
+  }
+  return values;
+}
+
+/**
+ * Ordered effort ladder for the Ctrl+T cycle (and any keyboard stepper).
+ *
+ * Derived from the active model's reasoning profile so the rungs are always the
+ * ones that model actually exposes. Two deliberate shaping rules:
+ *
+ * - `off` (the canonical disable stop) is included only when the model can
+ *   disable thinking (`none` in supportedEfforts or `supportsDisabledThinking`).
+ *   Always-on models (kimi-k2.7-code / minimax-m2-always) get no `off` rung.
+ * - Efforts that merely FOLD to off on this model 鈥?e.g. `minimal` on a toggle
+ *   or budget provider where it sits in `disabledEfforts` 鈥?are dropped from the
+ *   cycle so the user doesn't hit a second, redundant disable stop next to
+ *   `off`. They remain reachable via the explicit `/effort <value>` command,
+ *   which renders them honestly as `minimal->off`.
+ *
+ * `auto` (clear the explicit override 鈫?model default) is always the last rung.
+ */
+export function getProviderReasoningEffortCycle(
+  provider: string,
+  model?: string,
+): string[] {
+  const capability = resolveReasoningProfileForDisplay(provider, model);
+  const disabled = new Set(capability?.disabledEfforts ?? []);
+  const presets = capability?.supportedEfforts?.filter(
+    (preset) => preset.isUserVisible !== false,
+  );
+
+  const concrete: string[] = [];
+  let canDisable = capability?.supportsDisabledThinking === true;
+  if (!presets || presets.length === 0) {
+    for (const effort of ['low', 'medium', 'high']) {
+      pushUniqueEffortDisplay(concrete, effort);
+    }
+    canDisable = true;
+  } else {
+    for (const preset of presets) {
+      if (preset.value === 'none') {
+        canDisable = true;
+        continue;
+      }
+      if (disabled.has(preset.value)) {
+        canDisable = true;
+        continue;
+      }
+      pushUniqueEffortDisplay(concrete, preset.value);
+    }
+  }
+
+  const cycle: string[] = [];
+  if (canDisable) {
+    cycle.push('off');
+  }
+  cycle.push(...concrete);
+  cycle.push('auto');
+  return cycle;
+}
+
+function legacyReasoningModeToEffortDisplay(
+  mode: KodaXReasoningMode | undefined,
+  thinking: boolean | undefined,
+): string {
+  if (thinking === false) {
+    return 'off';
+  }
+  switch (mode) {
+    case 'off':
+      return 'off';
+    case 'quick':
+      return 'low';
+    case 'balanced':
+      return 'medium';
+    case 'deep':
+      return 'high';
+    case 'auto':
+    default:
+      return 'auto';
+  }
+}
+
+function resolveReasoningProfileForDisplay(
+  provider: string,
+  model: string | undefined,
+): KodaXReasoningProfile | undefined {
+  const modelId = model ?? getProviderModel(provider);
+  if (!modelId) {
+    return undefined;
+  }
+  const profile = resolveModelCapabilities(provider, modelId)?.reasoningProfile;
+  if (!profile) {
+    return undefined;
+  }
+  // Apply the runtime capability cache: efforts observed/probed to be rejected
+  // by this provider/model are removed so the cycle, /effort options, and the
+  // status label all stop offering them (single funnel for every display
+  // consumer).
+  return narrowReasoningProfile(profile, getCachedRejectedEfforts(provider, modelId));
+}
+
+export function formatReasoningEffortStatusLabel(input: {
+  provider: string;
+  model?: string;
+  effort?: string;
+  effortOverride?: boolean;
+  thinking?: boolean;
+  reasoningMode?: KodaXReasoningMode;
+}): string {
+  const fallback = formatReasoningEffortForDisplay(input.effort)
+    ?? legacyReasoningModeToEffortDisplay(input.reasoningMode, input.thinking);
+  const capability = resolveReasoningProfileForDisplay(input.provider, input.model);
+  if (!capability) {
+    return fallback;
+  }
+
+  try {
+    const resolved = resolveReasoningEffort({
+      capability,
+      explicitEffort: input.effortOverride ? input.effort : undefined,
+      sessionEffort: input.effortOverride ? undefined : input.effort,
+      legacyReasoningMode: input.reasoningMode,
+      thinking: input.thinking,
+    });
+    const configured = formatReasoningEffortForDisplay(resolved.configuredEffort) ?? fallback;
+    // A configured effort that sits in `disabledEfforts` (e.g. `minimal` on a
+    // toggle/budget provider) folds to "off" at the wire layer (base.ts).
+    // Reflect that truth so the status reads `minimal->off` instead of a bare
+    // `minimal` that lies about thinking still being on.
+    const foldsToOff = resolved.configuredEffort !== undefined
+      && capability.disabledEfforts?.includes(resolved.configuredEffort) === true;
+    const effective = foldsToOff
+      ? 'off'
+      : formatReasoningEffortForDisplay(resolved.effectiveEffort);
+    return effective && effective !== configured
+      ? `${configured}->${effective}`
+      : configured;
+  } catch {
+    if (input.effort) {
+      try {
+        const switchResolution = resolveReasoningEffortForModelSwitch({
+          currentEffort: input.effort,
+          capability,
+        });
+        const configured = formatReasoningEffortForDisplay(input.effort) ?? fallback;
+        const effective = formatReasoningEffortForDisplay(switchResolution.effectiveEffort);
+        return effective && effective !== configured
+          ? `${configured}->${effective}`
+          : configured;
+      } catch {
+        return fallback;
+      }
+    }
+    return fallback;
+  }
+}
+
+export function resolveProviderReasoningRuntimeEffort(input: {
+  provider: string;
+  model?: string;
+  effort?: string;
+  effortOverride?: boolean;
+  permissionMode?: string;
+  planModeEffort?: string;
+  thinking?: boolean;
+  reasoningMode?: KodaXReasoningMode;
+}): {
+  configuredEffort?: string;
+  runtimeEffort?: string;
+  preserved: boolean;
+  diagnostic?: string;
+} {
+  const configuredEffort = resolvePermissionModeEffort(input);
+  if (!configuredEffort) {
+    return { preserved: true };
+  }
+
+  const capability = resolveReasoningProfileForDisplay(input.provider, input.model);
+  if (!capability) {
+    return {
+      configuredEffort,
+      runtimeEffort: configuredEffort,
+      preserved: true,
+    };
+  }
+  const resolution = resolveReasoningEffortForModelSwitch({
+    currentEffort: configuredEffort,
+    capability,
+  });
+
+  return {
+    configuredEffort,
+    runtimeEffort: resolution.effectiveEffort,
+    preserved: resolution.preserved,
+    diagnostic: resolution.diagnostic,
+  };
+}
+
 export function describeReasoningCapabilityControl(
   capability: KodaXReasoningCapability | 'unknown',
 ): string {
@@ -607,7 +847,7 @@ export function getProviderList(providerModelsConfig?: Record<string, string[]>)
       capabilityProfile: provider.capabilityProfile,
     });
   }
-  // Append custom providers - 追加自定义 Provider
+  // Append custom providers - 杩藉姞鑷畾涔?Provider
   try {
     const customList = getCustomProviderList().map((provider) => ({
       ...provider,
@@ -648,7 +888,7 @@ export function loadConfig(): {
    * FEATURE_078 (v0.7.29): preferred name for `reasoningMode`. Both
    * fields map to the same runtime L1 user-ceiling semantic; when both
    * are present `reasoningCeiling` wins. Prefer this name in new
-   * configs — `reasoningMode` is kept accepted for backward
+   * configs 鈥?`reasoningMode` is kept accepted for backward
    * compatibility and never auto-renamed (no user-visible churn).
    */
   reasoningCeiling?: KodaXReasoningMode;
@@ -660,30 +900,28 @@ export function loadConfig(): {
   customProviders?: KodaXCustomProviderConfig[];
   extensions?: string[];
   mcpServers?: KodaXMcpServersConfig;
-  repoIntelligenceMode?: 'auto' | 'off' | 'oss' | 'premium-shared' | 'premium-native';
-  repointelEndpoint?: string;
-  repointelBin?: string;
+  repoIntelligenceMode?: 'auto' | 'off' | 'light' | 'full';
   repoIntelligenceTrace?: boolean;
   streamIdleTimeoutMs?: number;
   /**
-   * FEATURE_184 Phase D.3 follow-up (v0.7.42) — opt-in Sidecar Verifier
+   * FEATURE_184 Phase D.3 follow-up (v0.7.42) 鈥?opt-in Sidecar Verifier
    * observability. When `true`, the runtime emits a persisted note per
    * verifier call:
-   *   `[Sidecar Verifier] {verdict} · {model} · {ms}ms · {trace}`
+   *   `[Sidecar Verifier] {verdict} 路 {model} 路 {ms}ms 路 {trace}`
    * Mirrored to env var `KODAX_VERIFIER_LOG=1` so the agent-runtime
    * layer (which has no access to `~/.kodax/config.json`) can read it.
    */
   verifierLog?: boolean;
   /**
-   * FEATURE_187 Phase C (v0.7.43) — opt-in Stall Sidecar observability.
+   * FEATURE_187 Phase C (v0.7.43) 鈥?opt-in Stall Sidecar observability.
    * When `true`, the runtime emits a persisted note per L2 stall
    * verdict (isStuck true OR false):
-   *   `[Stall Sidecar] isStuck={true|false} · {provider}/{model} · {ms}ms · {trace}`
+   *   `[Stall Sidecar] isStuck={true|false} 路 {provider}/{model} 路 {ms}ms 路 {trace}`
    * Mirrored to env var `KODAX_STALL_LOG=1`.
    */
   stallLog?: boolean;
   /**
-   * FEATURE_102 Phase 3 (v0.7.45) — ordered cross-provider fallback chain for
+   * FEATURE_102 Phase 3 (v0.7.45) 鈥?ordered cross-provider fallback chain for
    * child dispatch. When a child's primary provider is exhausted/down, the
    * runtime re-runs it on the next provider here. Empty/absent = OFF. Mirrored
    * to env var `KODAX_FALLBACK_PROVIDERS` (comma-separated) for the coding
@@ -709,9 +947,7 @@ export function loadConfig(): {
         customProviders?: KodaXCustomProviderConfig[];
         extensions?: unknown;
         mcpServers?: KodaXMcpServersConfig;
-        repoIntelligenceMode?: 'auto' | 'off' | 'oss' | 'premium-shared' | 'premium-native';
-        repointelEndpoint?: string;
-        repointelBin?: string;
+        repoIntelligenceMode?: 'auto' | 'off' | 'light' | 'full';
         repoIntelligenceTrace?: boolean;
         streamIdleTimeoutMs?: number;
         verifierLog?: boolean;
@@ -721,7 +957,7 @@ export function loadConfig(): {
       // FEATURE_078: collapse `reasoningCeiling` (preferred) onto
       // `reasoningMode` so existing call sites that read
       // `options.reasoningMode` keep working unchanged. When both are
-      // present we trust `reasoningCeiling` — that's the deliberately
+      // present we trust `reasoningCeiling` 鈥?that's the deliberately
       // named L1 ceiling field, and the legacy `reasoningMode` is
       // typically left over from older configs the user forgot about.
       const collapsedReasoning: KodaXReasoningMode | undefined =
@@ -741,7 +977,7 @@ export function loadConfig(): {
 }
 
 function applyResilienceRuntimeEnv(config: ReturnType<typeof loadConfig>): void {
-  // streamIdleTimeoutMs: config.json → env var → read by resilience/config.ts
+  // streamIdleTimeoutMs: config.json 鈫?env var 鈫?read by resilience/config.ts
   // Env var takes precedence over config.json (set first, check before overwrite).
   if (config.streamIdleTimeoutMs && !process.env.KODAX_STREAM_IDLE_TIMEOUT_MS) {
     process.env.KODAX_STREAM_IDLE_TIMEOUT_MS = String(config.streamIdleTimeoutMs);
@@ -749,14 +985,8 @@ function applyResilienceRuntimeEnv(config: ReturnType<typeof loadConfig>): void 
 }
 
 function applyRepoIntelligenceRuntimeEnv(config: ReturnType<typeof loadConfig>): void {
-  if (config.repoIntelligenceMode && !process.env.KODAX_REPO_INTELLIGENCE_MODE) {
-    process.env.KODAX_REPO_INTELLIGENCE_MODE = config.repoIntelligenceMode;
-  }
-  if (config.repointelEndpoint && !process.env.KODAX_REPOINTEL_ENDPOINT) {
-    process.env.KODAX_REPOINTEL_ENDPOINT = config.repointelEndpoint;
-  }
-  if (config.repointelBin && !process.env.KODAX_REPOINTEL_BIN) {
-    process.env.KODAX_REPOINTEL_BIN = config.repointelBin;
+  if (config.repoIntelligenceMode && !process.env.KODAX_REPO_INTELLIGENCE) {
+    process.env.KODAX_REPO_INTELLIGENCE = config.repoIntelligenceMode;
   }
   if (config.repoIntelligenceTrace === true && !process.env.KODAX_REPO_INTELLIGENCE_TRACE) {
     process.env.KODAX_REPO_INTELLIGENCE_TRACE = '1';
@@ -764,10 +994,10 @@ function applyRepoIntelligenceRuntimeEnv(config: ReturnType<typeof loadConfig>):
 }
 
 /**
- * FEATURE_184 Phase D.3 follow-up (v0.7.42) — propagate the user-config
+ * FEATURE_184 Phase D.3 follow-up (v0.7.42) 鈥?propagate the user-config
  * `verifierLog` boolean to the runtime env var the coding layer reads.
  * Env wins when both are set (mirrors `applyResilienceRuntimeEnv` /
- * `applyRepoIntelligenceRuntimeEnv` precedence — env-set-first means
+ * `applyRepoIntelligenceRuntimeEnv` precedence 鈥?env-set-first means
  * a developer can override via shell without editing config).
  */
 function applyVerifierRuntimeEnv(config: ReturnType<typeof loadConfig>): void {
@@ -777,7 +1007,7 @@ function applyVerifierRuntimeEnv(config: ReturnType<typeof loadConfig>): void {
 }
 
 /**
- * FEATURE_187 Phase C (v0.7.43) — propagate the user-config
+ * FEATURE_187 Phase C (v0.7.43) 鈥?propagate the user-config
  * `stallLog` boolean to `KODAX_STALL_LOG=1` env. Same env-wins
  * precedence as the verifier counterpart.
  */
@@ -788,7 +1018,7 @@ function applyStallSidecarRuntimeEnv(config: ReturnType<typeof loadConfig>): voi
 }
 
 /**
- * FEATURE_102 Phase 3 (v0.7.45) — propagate the user-config
+ * FEATURE_102 Phase 3 (v0.7.45) 鈥?propagate the user-config
  * `fallbackProviders` chain to `KODAX_FALLBACK_PROVIDERS` (comma-separated)
  * for the coding layer's child-fallback resolver. Same env-wins precedence as
  * the verifier/stall counterparts.
@@ -830,15 +1060,13 @@ export function saveConfig(config: {
   customProviders?: KodaXCustomProviderConfig[];
   extensions?: string[];
   mcpServers?: KodaXMcpServersConfig;
-  repoIntelligenceMode?: 'auto' | 'off' | 'oss' | 'premium-shared' | 'premium-native';
-  repointelEndpoint?: string;
-  repointelBin?: string;
+  repoIntelligenceMode?: 'auto' | 'off' | 'light' | 'full';
   repoIntelligenceTrace?: boolean;
-  /** FEATURE_184 Phase D.3 follow-up — opt-in verifier log line. */
+  /** FEATURE_184 Phase D.3 follow-up 鈥?opt-in verifier log line. */
   verifierLog?: boolean;
-  /** FEATURE_187 Phase C — opt-in stall sidecar log line. */
+  /** FEATURE_187 Phase C 鈥?opt-in stall sidecar log line. */
   stallLog?: boolean;
-  /** FEATURE_102 Phase 3 — cross-provider child fallback chain. */
+  /** FEATURE_102 Phase 3 鈥?cross-provider child fallback chain. */
   fallbackProviders?: string[];
 }): void {
   const current = loadConfig();
@@ -855,6 +1083,21 @@ export function saveConfig(config: {
   }
   fsSync.mkdirSync(path.dirname(KODAX_CONFIG_FILE), { recursive: true });
   fsSync.writeFileSync(KODAX_CONFIG_FILE, JSON.stringify(merged, null, 2));
+}
+
+/**
+ * Reconstruct `effortOverride` at startup. A persisted `config.effort` only
+ * ever comes from an explicit choice (Ctrl+T / `/effort <value>`; clearing to
+ * auto deletes the field), so a present config effort must restore as an
+ * override — otherwise the round-tripped value is mis-read as a session
+ * default and the Ctrl+T position detector treats it as `auto`. The CLI
+ * `--effort` flag also forces an override for the launched session.
+ */
+export function resolveInitialEffortOverride(
+  options: { effort?: string },
+  config: { effort?: string },
+): boolean {
+  return options.effort !== undefined || config.effort !== undefined;
 }
 
 export function resolvePermissionModeEffort(config: {
@@ -876,7 +1119,7 @@ export function resolvePermissionModeEffort(config: {
 /**
  * Get git root directory.
  *
- * v0.7.46 fix — accepts optional `cwd` so in-process SDK embedders (KodaX
+ * v0.7.46 fix 鈥?accepts optional `cwd` so in-process SDK embedders (KodaX
  * Space) that serve multiple projects from a single runtime can resolve
  * the git root of the project the user opened, NOT the embedder's
  * startup directory. Without `cwd`, `git rev-parse --show-toplevel`
@@ -884,7 +1127,7 @@ export function resolvePermissionModeEffort(config: {
  * for multi-project embedders (the same root cause as the
  * `saveSessionSnapshot` gitRoot bug in agent-runtime/middleware/ shipped in v0.7.45).
  *
- * No `cwd` arg → behaves identically to the pre-v0.7.46 form
+ * No `cwd` arg 鈫?behaves identically to the pre-v0.7.46 form
  * (process.cwd() of the host).
  */
 export async function getGitRoot(cwd?: string): Promise<string | null> {
@@ -969,7 +1212,7 @@ export function getProviderCommonPolicyScenarios(
     );
 }
 
-// API rate limiting - API 速率限制
+// API rate limiting - API 閫熺巼闄愬埗
 const KODAX_API_MIN_INTERVAL = 0.5;
 let lastApiCallTime = 0;
 const apiLock = { locked: false, queue: [] as (() => void)[] };

@@ -16,7 +16,7 @@ export function buildRepoIntelligenceMetadataLines(
   const lines: string[] = [];
   if (carrier.capability) {
     lines.push(
-      `Capability: mode=${carrier.capability.mode} | engine=${carrier.capability.engine} | bridge=${carrier.capability.bridge} | level=${carrier.capability.level} | status=${carrier.capability.status}`,
+      `Capability: mode=${carrier.capability.mode} | engine=${carrier.capability.engine} | level=${carrier.capability.level} | status=${carrier.capability.status}`,
     );
     const warnings = formatWarnings(carrier.capability.warnings);
     if (warnings) {
@@ -26,8 +26,6 @@ export function buildRepoIntelligenceMetadataLines(
   if (carrier.trace) {
     const traceParts = [
       `source=${carrier.trace.source}`,
-      carrier.trace.daemonLatencyMs !== undefined ? `daemon_ms=${carrier.trace.daemonLatencyMs}` : undefined,
-      carrier.trace.cliLatencyMs !== undefined ? `cli_ms=${carrier.trace.cliLatencyMs}` : undefined,
       carrier.trace.cacheHit !== undefined ? `cache_hit=${carrier.trace.cacheHit ? 'yes' : 'no'}` : undefined,
       carrier.trace.capsuleBytes !== undefined ? `capsule_bytes=${carrier.trace.capsuleBytes}` : undefined,
       carrier.trace.capsuleEstimatedTokens !== undefined ? `capsule_tokens=${carrier.trace.capsuleEstimatedTokens}` : undefined,
@@ -51,10 +49,8 @@ export function createRepoIntelligenceTraceEvent(
   const parts = [
     `stage=${stage}`,
     carrier.capability
-      ? `mode=${carrier.capability.mode}/${carrier.capability.engine}/${carrier.capability.bridge}/${carrier.capability.status}`
+      ? `mode=${carrier.capability.mode}/${carrier.capability.engine}/${carrier.capability.status}`
       : undefined,
-    carrier.trace?.daemonLatencyMs !== undefined ? `daemon_ms=${carrier.trace.daemonLatencyMs}` : undefined,
-    carrier.trace?.cliLatencyMs !== undefined ? `cli_ms=${carrier.trace.cliLatencyMs}` : undefined,
     carrier.trace?.cacheHit !== undefined ? `cache_hit=${carrier.trace.cacheHit ? 'yes' : 'no'}` : undefined,
     carrier.trace?.capsuleEstimatedTokens !== undefined ? `capsule_tokens=${carrier.trace.capsuleEstimatedTokens}` : undefined,
     detail,

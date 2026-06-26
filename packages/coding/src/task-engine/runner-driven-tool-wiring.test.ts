@@ -92,6 +92,11 @@ describe('FEATURE_168 — coordinator-class tools (send_message, task_stop) are 
     expect(names).toContain('send_message');
     expect(names).toContain('task_stop');
   });
+
+  it('worker has task_output for child status snapshots', () => {
+    const names = getAgentToolNames('worker');
+    expect(names).toContain('task_output');
+  });
 });
 
 describe('FEATURE_168 — repo-intel pull tools (FEATURE_161 v0.7.41 wiring fix)', () => {
@@ -104,9 +109,10 @@ describe('FEATURE_168 — repo-intel pull tools (FEATURE_161 v0.7.41 wiring fix)
     'symbol_context',
     'process_context',
     'impact_estimate',
+    'relationship_scan',
   ] as const;
 
-  it('worker has all 8 repo-intel pull tools (Worker prompt FEATURE_161 teaches them)', () => {
+  it('worker has all repo-intel pull tools (Worker prompt FEATURE_161+ teaches them)', () => {
     const names = getAgentToolNames('worker');
     for (const pullTool of PULL_TOOLS) {
       expect(names, `worker missing ${pullTool}`).toContain(pullTool);

@@ -23,9 +23,11 @@ import type {
   KodaXMutationSurface,
   KodaXAssuranceIntent,
   KodaXThinkingDepth,
+  KodaXWireReasoningEffort,
 } from './types.js';
 import {
   getDefaultThinkingDepthForMode,
+  mapLegacyReasoningModeToEffortIntent,
   KODAX_REASONING_MODE_SEQUENCE,
 } from '@kodax-ai/llm';
 import type { KodaXBaseProvider } from '@kodax-ai/llm';
@@ -301,8 +303,15 @@ const COMPLEXITY_COMPLEX_THRESHOLD = 4;
 const COMPLEXITY_SYSTEMIC_THRESHOLD = 6;
 
 export interface ReasoningPlan {
-  mode: KodaXReasoningMode;
-  depth: KodaXThinkingDepth;
+  /**
+   * Canonical per-turn reasoning control. Reasoning single-tracking (Phase B)
+   * replaced the V1 `mode` (KodaXReasoningMode) + `depth` (KodaXThinkingDepth)
+   * pair with a single `effort`. `'auto'` defers to the provider's
+   * capability-aware default; `'none'` disables thinking. Providers resolve
+   * the effective effort + any thinking budget from this value via
+   * `resolveReasoningEffort` / `normalizeReasoningRequest`.
+   */
+  effort: KodaXWireReasoningEffort;
   decision: KodaXTaskRoutingDecision;
   amaControllerDecision: KodaXAmaControllerDecision;
   promptOverlay: string;
@@ -362,96 +371,85 @@ export function reasoningModeToDepth(
 }
 
 // ---------------------------------------------------------------------------
-// FEATURE_078: Role-Aware Reasoning Profiles
+// Role-Aware Reasoning Profiles (FEATURE_078, effort-native)
 // ---------------------------------------------------------------------------
 
-/**
- * Roles whose Agent declarations carry a `reasoning` profile. Naming
- * matches the AMA topology workers + the SA single-agent declaration
- * (`'sa'` corresponds to `defaultCodingAgent`).
- */
-export type ReasoningRole = 'scout' | 'planner' | 'generator' | 'evaluator' | 'sa';
-
-const REASONING_MODE_RANK: Record<KodaXReasoningMode, number> = {
-  off: 0,
+const EFFORT_RANK: Record<string, number> = {
+  none: 0,
+  minimal: 0,
   auto: 1,
-  quick: 2,
-  balanced: 3,
-  deep: 4,
+  low: 2,
+  medium: 3,
+  high: 4,
+  xhigh: 5,
+  max: 6,
 };
 
+function effortRank(effort: KodaXWireReasoningEffort): number {
+  return EFFORT_RANK[effort] ?? EFFORT_RANK.medium;
+}
+
 /**
- * Compare two reasoning modes by depth. Returns -1, 0, or 1 mirroring
- * `Array.prototype.sort`'s comparator contract: lower-rank modes (`off`)
- * come first, higher-rank modes (`deep`) last. `auto` ranks above `off`
- * because the resolver treats it as "let the system pick a sensible
- * default", which is always >= no thinking at all.
+ * Compare two efforts by depth on the canonical ladder. Returns -1, 0, or 1
+ * mirroring `Array.prototype.sort`'s comparator contract: lower-rank efforts
+ * (`none`) come first, higher-rank (`max`) last. `auto` ranks just above the
+ * disabled floor — it means "let the provider pick", always >= no thinking.
+ * Unknown custom efforts rank as `medium`.
  */
-export function compareReasoningModes(
-  a: KodaXReasoningMode,
-  b: KodaXReasoningMode,
+export function compareEfforts(
+  a: KodaXWireReasoningEffort,
+  b: KodaXWireReasoningEffort,
 ): -1 | 0 | 1 {
-  const rankA = REASONING_MODE_RANK[a];
-  const rankB = REASONING_MODE_RANK[b];
+  const rankA = effortRank(a);
+  const rankB = effortRank(b);
   if (rankA < rankB) return -1;
   if (rankA > rankB) return 1;
   return 0;
 }
 
 /**
- * Clamp `mode` to be no deeper than `ceiling`. When `mode` is already
- * at or below the ceiling, it passes through unchanged. Used by the
- * L1-L4 resolver and by `escalateThinkingDepth` (after this commit) to
- * enforce the hard upper bound the user expressed via `--reasoning`.
+ * Clamp `effort` to be no deeper than `ceiling`. When `effort` is already at
+ * or below the ceiling, it passes through unchanged.
  */
-export function clampReasoningMode(
-  mode: KodaXReasoningMode,
-  ceiling: KodaXReasoningMode,
-): KodaXReasoningMode {
-  return compareReasoningModes(mode, ceiling) > 0 ? ceiling : mode;
+export function clampEffort(
+  effort: KodaXWireReasoningEffort,
+  ceiling: KodaXWireReasoningEffort,
+): KodaXWireReasoningEffort {
+  return compareEfforts(effort, ceiling) > 0 ? ceiling : effort;
 }
 
 /**
- * Resolve the effective per-role reasoning **mode** through the four-level
- * decision chain laid out in FEATURE_078:
+ * Resolve the effective per-role reasoning **effort** through the FEATURE_078
+ * decision chain (effort-native single-track form):
  *
  *   L1 (`userCeiling`)              — caller-supplied upper bound + bias
  *   L2 (`profile.default` / `.max`) — Agent declaration's role default
- *   L3 (`scoutHint`)                — optional hint from Scout's payload
- *   L4 (escalate-on-revise)         — handled by `escalateThinkingDepth(_, ceiling)`
  *
- * The chain combines L2/L3 to pick a base mode, then clamps to L1 (and
- * to `profile.max` if the agent declaration set one). Returns a mode
- * the caller can hand to `reasoningModeToDepth(...)` to get the
- * provider-facing depth, or pass into the next escalate step.
+ * The chain takes the agent declaration's default as the base, clamps it to
+ * the declaration's `max`, then clamps to the user ceiling as the absolute
+ * hard cap. The Agent profile is still expressed in legacy reasoning modes
+ * (`AgentReasoningProfile`), so its `default`/`max` are mapped onto the effort
+ * ladder. `none` is a hard kill switch. When `profile` is undefined, this
+ * collapses to `userCeiling` — exactly the pre-FEATURE_078 behaviour.
  *
- * **Backward compatibility**: when `profile` is undefined and there is
- * no `scoutHint`, this collapses to `userCeiling` — i.e. exactly what
- * pre-FEATURE_078 code did. The new behaviour only kicks in once
- * Agent declarations carry profiles.
+ * (FEATURE_193 retired the Scout hint (L3) and the per-role split — the Worker
+ * is the sole agent, so the `role` parameter is gone.)
  */
-export function resolveRoleReasoning(
-  _role: ReasoningRole,
-  userCeiling: KodaXReasoningMode,
+export function resolveRoleEffort(
+  userCeiling: KodaXWireReasoningEffort,
   profile?: AgentReasoningProfile,
-  scoutHint?: KodaXReasoningMode,
-): KodaXReasoningMode {
-  // Off short-circuit: `--reasoning off` is a hard kill switch — no
-  // role default or scout hint can re-enable thinking. This matches
-  // the legacy contract (`options.thinking === false` produced 'off').
-  if (userCeiling === 'off') return 'off';
+): KodaXWireReasoningEffort {
+  // Kill switch: `effort none` can never be re-enabled by a role default.
+  if (userCeiling === 'none') return 'none';
+  if (!profile) return userCeiling;
 
-  // No profile + no hint → behave exactly like the legacy resolver.
-  if (!profile && !scoutHint) return userCeiling;
-
-  // Pick the base from L3 (Scout hint, if provided) or L2 (declaration default).
-  const base: KodaXReasoningMode = scoutHint ?? profile?.default ?? userCeiling;
-
-  // Apply the agent's own max ceiling first (a Scout that says
-  // `max: 'balanced'` should never be pushed to 'deep' even if the user
-  // ceiling allows it). Then apply the user ceiling as the absolute hard cap.
-  const clampedToProfileMax = profile?.max ? clampReasoningMode(base, profile.max) : base;
-  return clampReasoningMode(clampedToProfileMax, userCeiling);
+  const base: KodaXWireReasoningEffort = profile.default
+    ? mapLegacyReasoningModeToEffortIntent(profile.default)
+    : userCeiling;
+  const clampedToProfileMax = profile.max
+    ? clampEffort(base, mapLegacyReasoningModeToEffortIntent(profile.max))
+    : base;
+  return clampEffort(clampedToProfileMax, userCeiling);
 }
 
 // ---------------------------------------------------------------------------
@@ -591,64 +589,73 @@ export function detectFollowupSignal(
 }
 
 /**
- * Single-rank bump for L5 escalation. `off` is sacrosanct (kill switch
- * dominates user pushback — if the user explicitly said "no thinking",
- * even doubt markers cannot re-enable it). Other modes step up one rank,
- * capped at `deep`.
+ * Single-rank bump for L5 escalation, on the canonical effort ladder. `none`
+ * is sacrosanct (kill switch dominates user pushback — if the user explicitly
+ * disabled thinking, even doubt markers cannot re-enable it). `minimal` is
+ * likewise a disable-ish floor and never bumps. `auto` enters the ladder at
+ * `low`; concrete efforts step up one rank but never past `high` — preserving
+ * the pre-effort behaviour where the deepest legacy mode (`deep`→`high`) did
+ * not escalate further. Efforts already at/above `high` (`xhigh`/`max`) stay.
  *
- * Sequence: off (no bump) | auto → quick → balanced → deep (no bump).
+ * Ladder: none/minimal (no bump) | auto → low → medium → high (no bump).
  */
-export function escalateUserCeiling(
-  ceiling: KodaXReasoningMode,
-): KodaXReasoningMode {
-  if (ceiling === 'off') return 'off';
-  if (compareReasoningModes(ceiling, 'auto') === 0) return 'quick';
-  if (compareReasoningModes(ceiling, 'quick') === 0) return 'balanced';
-  if (compareReasoningModes(ceiling, 'balanced') === 0) return 'deep';
-  return 'deep';
+export function escalateEffort(
+  effort: KodaXWireReasoningEffort,
+): KodaXWireReasoningEffort {
+  switch (effort) {
+    case 'auto':
+      return 'low';
+    case 'low':
+      return 'medium';
+    case 'medium':
+      return 'high';
+    default:
+      // none / minimal (disabled floor) and high / xhigh / max (already deep):
+      // no bump, matching the legacy `off`-stays-`off` + `deep`-stays-`deep`.
+      return effort;
+  }
 }
 
 export interface FollowupEscalation {
-  /** The ceiling effective for this round (post-L5 bump if applicable). */
-  readonly effective: KodaXReasoningMode;
-  /** True iff `effective !== input ceiling`. */
+  /** The effort effective for this round (post-L5 bump if applicable). */
+  readonly effective: KodaXWireReasoningEffort;
+  /** True iff `effective !== input effort`. */
   readonly escalated: boolean;
   /** Detected signal that triggered escalation, if any. */
   readonly signal: FollowupSignal;
 }
 
 /**
- * Apply L5 escalation to a user ceiling. Returns the ceiling unchanged
+ * Apply L5 escalation to a user effort. Returns the effort unchanged
  * (with `escalated: false`) when no signal fires or when bumping would
- * be a no-op (`off` stays `off`, `deep` stays `deep`).
+ * be a no-op (`none`/`minimal` stay; `high`/`xhigh`/`max` stay).
  *
  * Pure function — does not mutate inputs. Callers compute this ONCE per
  * `runKodaX` / `runManagedTaskViaRunner` invocation at the entry point,
- * then thread the resulting `effective` value through `options.reasoningMode`.
- * Per-iteration sites in the runner loop see the already-bumped value and
- * resolve L1-L4 normally on top of it.
+ * then thread the resulting `effective` value through `options.effort`.
+ * Per-iteration sites in the runner loop see the already-bumped value.
  */
 export function applyFollowupEscalation(
-  ceiling: KodaXReasoningMode,
+  effort: KodaXWireReasoningEffort,
   prompt: string,
   hasPriorAssistantTurn: boolean,
 ): FollowupEscalation {
   const signal = detectFollowupSignal(prompt, hasPriorAssistantTurn);
   if (signal.category === null) {
-    return { effective: ceiling, escalated: false, signal };
+    return { effective: effort, escalated: false, signal };
   }
-  const bumped = escalateUserCeiling(ceiling);
-  if (bumped === ceiling) {
-    return { effective: ceiling, escalated: false, signal };
+  const bumped = escalateEffort(effort);
+  if (bumped === effort) {
+    return { effective: effort, escalated: false, signal };
   }
   return { effective: bumped, escalated: true, signal };
 }
 
 /**
- * Convenience wrapper: read the L1 ceiling from `options`, count prior
- * assistant turns from `options.session?.initialMessages`, apply L5,
- * return both the escalation result and a fresh `KodaXOptions` with
- * `reasoningMode` updated to the bumped value (when bumped).
+ * Convenience wrapper: read the effective effort from `options`, count prior
+ * assistant turns from `options.session?.initialMessages`, apply L5, return
+ * both the escalation result and a fresh `KodaXOptions` with `effort` updated
+ * to the bumped value (when bumped).
  *
  * Returns the input options reference unchanged when no escalation fires
  * — callers can rely on `options === result.options` to skip downstream
@@ -658,15 +665,15 @@ export function applyFollowupEscalationToOptions<T extends KodaXOptions>(
   options: T,
   prompt: string,
 ): { options: T; escalation: FollowupEscalation } {
-  const ceiling = resolveReasoningMode(options);
+  const effort = options.effort ?? mapLegacyReasoningModeToEffortIntent(resolveReasoningMode(options));
   const initialMessages = options.session?.initialMessages ?? [];
   const hasPriorAssistantTurn = initialMessages.some((m) => m?.role === 'assistant');
-  const escalation = applyFollowupEscalation(ceiling, prompt, hasPriorAssistantTurn);
+  const escalation = applyFollowupEscalation(effort, prompt, hasPriorAssistantTurn);
   if (!escalation.escalated) {
     return { options, escalation };
   }
   return {
-    options: { ...options, reasoningMode: escalation.effective } as T,
+    options: { ...options, effort: escalation.effective } as T,
     escalation,
   };
 }
@@ -1646,6 +1653,16 @@ export async function createReasoningPlan(
     providerPolicy,
     routingEvidence,
   );
+  // Reasoning single-tracking: the plan carries a single canonical `effort`.
+  // Prefer the user/session-configured effort; fall back to mapping the legacy
+  // reasoning mode (off→none / auto→auto / quick→low / balanced→medium /
+  // deep→high) so pre-effort callers keep their behaviour. `'auto'` defers the
+  // concrete level to the provider's capability-aware resolver.
+  const effort: KodaXWireReasoningEffort =
+    options.effort ?? mapLegacyReasoningModeToEffortIntent(mode);
+  // `decision.recommendedThinkingDepth` stays on the routing decision (it is
+  // part of the router schema); derive it from the legacy mode for back-compat
+  // until the decision schema migrates.
   const depth = mode === 'off'
     ? 'off'
     : mode === 'auto'
@@ -1663,8 +1680,7 @@ export async function createReasoningPlan(
   const amaControllerDecision = buildAmaControllerDecision(finalDecision);
 
   return {
-    mode,
-    depth,
+    effort,
     amaControllerDecision,
     promptOverlay: buildPromptOverlay(
       finalDecision,

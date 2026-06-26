@@ -21,6 +21,7 @@ import {
   KODAX_COMMANDS_DIR,
   KodaXCommand,
 } from '../src/kodax_cli.js';
+import { normalizeCliSessionFlags } from '../src/cli_option_helpers.js';
 
 // 默认 provider
 // ============== 模拟测试环境 ==============
@@ -528,7 +529,7 @@ describe('CLI Option Parsing', () => {
       '--agent-mode',
       'amaw',
       '--repo-intelligence',
-      'premium-native',
+      'full',
       '--repo-intelligence-trace',
       '--max-iter',
       '12',
@@ -536,7 +537,7 @@ describe('CLI Option Parsing', () => {
     const opts = program.opts();
     expect(opts.mode).toBe('json');
     expect(opts.agentMode).toBe('amaw');
-    expect(opts.repoIntelligence).toBe('premium-native');
+    expect(opts.repoIntelligence).toBe('full');
     expect(opts.repoIntelligenceTrace).toBe(true);
     expect(opts.maxIter).toBe('12');
   });
@@ -606,7 +607,11 @@ describe('Session Management', () => {
     program.parse(['node', 'test', '-p', 'my task', '--no-session']);
     const opts = program.opts();
     expect(opts.print).toBe('my task');
-    // --no-session disables session persistence
+    expect(opts.session).toBe(false);
+    expect(normalizeCliSessionFlags(opts)).toEqual({
+      session: undefined,
+      noSession: true,
+    });
   });
 
   it('should handle continue mode without ID', () => {

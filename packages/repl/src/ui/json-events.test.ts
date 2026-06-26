@@ -70,22 +70,19 @@ describe('createJsonEvents', () => {
     });
     events.onRepoIntelligenceTrace?.({
       stage: 'preturn',
-      summary: 'stage=preturn | mode=premium-native/premium/native/ok',
+      summary: 'stage=preturn | mode=full/full/ok',
       capability: {
-        mode: 'premium-native',
-        engine: 'premium',
-        bridge: 'native',
+        mode: 'full',
+        engine: 'full',
         level: 'enhanced',
         status: 'ok',
         warnings: [],
       },
       trace: {
-        mode: 'premium-native',
-        engine: 'premium',
-        bridge: 'native',
+        mode: 'full',
+        engine: 'full',
         triggeredAt: '2026-04-01T00:00:00.000Z',
-        source: 'premium',
-        daemonLatencyMs: 12,
+        source: 'full',
       },
     });
     events.onSidecarMessage?.({
@@ -151,22 +148,19 @@ describe('createJsonEvents', () => {
       {
         type: 'repo_intelligence.trace',
         stage: 'preturn',
-        summary: 'stage=preturn | mode=premium-native/premium/native/ok',
+        summary: 'stage=preturn | mode=full/full/ok',
         capability: {
-          mode: 'premium-native',
-          engine: 'premium',
-          bridge: 'native',
+          mode: 'full',
+          engine: 'full',
           level: 'enhanced',
           status: 'ok',
           warnings: [],
         },
         trace: {
-          mode: 'premium-native',
-          engine: 'premium',
-          bridge: 'native',
+          mode: 'full',
+          engine: 'full',
           triggeredAt: '2026-04-01T00:00:00.000Z',
-          source: 'premium',
-          daemonLatencyMs: 12,
+          source: 'full',
         },
       },
       {

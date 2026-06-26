@@ -1,6 +1,7 @@
 import type { KodaXToolExecutionContext } from '../types.js';
 import {
   getImpactEstimate,
+  readRepoIntelligenceToolWaitMs,
   renderImpactEstimate,
 } from '../repo-intelligence/runtime.js';
 import { readOptionalString } from './internal.js';
@@ -23,6 +24,7 @@ export async function toolImpactEstimate(
       path: filePath,
       targetPath: readOptionalString(input, 'target_path'),
       refresh: input.refresh === true,
+      maxWaitMs: readRepoIntelligenceToolWaitMs(),
     });
     return renderImpactEstimate(result);
   } catch (error) {

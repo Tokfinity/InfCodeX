@@ -7,20 +7,17 @@
 export type KodaXRepoIntelligenceMode =
   | 'auto'
   | 'off'
-  | 'oss'
-  | 'premium-shared'
-  | 'premium-native';
+  | 'light'
+  | 'full';
 
 export type KodaXRepoIntelligenceResolvedMode =
   | 'off'
-  | 'oss'
-  | 'premium-shared'
-  | 'premium-native';
+  | 'light'
+  | 'full';
 
 export interface KodaXRepoIntelligenceCapability {
   mode: KodaXRepoIntelligenceResolvedMode;
-  engine: 'oss' | 'premium';
-  bridge: 'none' | 'shared' | 'native';
+  engine: 'light' | 'full';
   level: 'basic' | 'enhanced';
   status: 'ok' | 'limited' | 'unavailable' | 'warming';
   warnings: string[];
@@ -29,12 +26,9 @@ export interface KodaXRepoIntelligenceCapability {
 
 export interface KodaXRepoIntelligenceTrace {
   mode: KodaXRepoIntelligenceResolvedMode;
-  engine: 'oss' | 'premium';
-  bridge: 'none' | 'shared' | 'native';
+  engine: 'light' | 'full';
   triggeredAt: string;
-  source: 'fallback' | 'premium';
-  daemonLatencyMs?: number;
-  cliLatencyMs?: number;
+  source: 'light' | 'full';
   cacheHit?: boolean;
   capsuleBytes?: number;
   capsuleEstimatedTokens?: number;

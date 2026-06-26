@@ -90,8 +90,7 @@ describe('CAP-090: SA-path task-family prompt overlay (direct path rules) contra
       sessionId: 's',
     } as KodaXResult);
     const buildPlan = vi.fn().mockResolvedValue({
-      mode: 'off',
-      depth: 'off',
+      effort: 'none',
       decision: {},
       promptOverlay: '',
     });

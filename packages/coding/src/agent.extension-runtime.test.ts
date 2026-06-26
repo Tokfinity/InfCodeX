@@ -223,7 +223,7 @@ describe('runKodaX extension runtime integration', () => {
         });
         api.runtime.setActiveTools(['read']);
         api.runtime.setModelSelection({ model: 'extension-default-model' });
-        api.runtime.setThinkingLevel('deep');
+        api.runtime.setThinkingLevel('high');
         api.hook('provider:before', (context) => {
           context.replaceModel('hooked-model');
         });
@@ -257,7 +257,7 @@ describe('runKodaX extension runtime integration', () => {
     expect(Feature034TestProvider.calls).toHaveLength(2);
     expect(Feature034TestProvider.calls[0]?.tools.map((tool) => tool.name)).toEqual(['read']);
     expect(Feature034TestProvider.calls[0]?.streamOptions?.modelOverride).toBe('hooked-model');
-    expect(Feature034TestProvider.calls[0]?.reasoning).toMatchObject({ mode: 'deep', depth: 'high' });
+    expect(Feature034TestProvider.calls[0]?.reasoning).toMatchObject({ enabled: true, effort: 'high' });
     expect(
       Feature034TestProvider.calls[1]?.messages.some(
         (message) => message.role === 'user'
@@ -280,7 +280,7 @@ describe('runKodaX extension runtime integration', () => {
         });
         api.runtime.setActiveTools([]);
         api.hook('provider:before', (context) => {
-          context.setThinkingLevel('off');
+          context.setThinkingLevel('none');
         });
       }`,
       'utf8',
@@ -306,8 +306,7 @@ describe('runKodaX extension runtime integration', () => {
     expect(Feature034TestProvider.calls[0]?.tools).toEqual([]);
     expect(Feature034TestProvider.calls[0]?.reasoning).toMatchObject({
       enabled: false,
-      mode: 'off',
-      depth: 'off',
+      effort: 'none',
     });
 
     await runtime.dispose();

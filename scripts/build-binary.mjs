@@ -8,6 +8,8 @@
  *     kodax              ← Bun-compiled standalone executable
  *     builtin/           ← built-in skill assets (post-F194 v0.7.43:
  *                          packages/agent/dist/capabilities/skills/builtin/)
+ *     provider-capabilities.json
+ *     semantic-worker.js
  *
  * Usage:
  *   node scripts/build-binary.mjs                    # current platform
@@ -35,6 +37,7 @@ import { parseArgs } from 'node:util';
 
 const ROOT = resolve(dirname(fileURLToPath(import.meta.url)), '..');
 const ENTRY = join(ROOT, 'dist', 'kodax_cli.js');
+const WORKER_SIDECAR = join(ROOT, 'dist', 'semantic-worker.js');
 // Post-FEATURE_194 (v0.7.43) — `@kodax-ai/skills` was inlined into
 // `packages/agent/src/capabilities/skills/`; `copy:builtin` workspace
 // script (run by `npm run build:packages`) emits builtin assets to
@@ -194,6 +197,14 @@ function buildOne(target, version) {
     throw new Error(`Missing ${capJsonSrc}.`);
   }
   cpSync(capJsonSrc, join(outDir, 'provider-capabilities.json'));
+
+  // 4. Sidecar repo-intelligence worker. The compiled binary cannot load a
+  // worker from inside its single executable image; semantic-worker-client
+  // resolves this file next to process.execPath when KODAX_BUNDLED=true.
+  if (!existsSync(WORKER_SIDECAR)) {
+    throw new Error(`Missing ${WORKER_SIDECAR}. Run 'npm run build' first.`);
+  }
+  cpSync(WORKER_SIDECAR, join(outDir, 'semantic-worker.js'));
 
   console.log(`    ✓ ${target}: ${binaryPath}`);
 }

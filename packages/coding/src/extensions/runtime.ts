@@ -1,6 +1,6 @@
 import path from 'path';
 import { pathToFileURL } from 'url';
-import type { KodaXMessage, KodaXReasoningMode } from '@kodax-ai/llm';
+import type { KodaXMessage, KodaXWireReasoningEffort } from '@kodax-ai/llm';
 import { exec as extensionExec, webhook as extensionWebhook } from './helpers.js';
 import {
   dedupeExtensionPathsByEntrypoint,
@@ -192,7 +192,7 @@ export class KodaXExtensionRuntime implements ExtensionRuntimeContract {
   private boundController: BoundExtensionRuntimeController | null = null;
   private defaultActiveTools: string[] | undefined;
   private defaultModelSelection: ExtensionModelSelection = {};
-  private defaultThinkingLevel: KodaXReasoningMode | undefined;
+  private defaultThinkingLevel: KodaXWireReasoningEffort | undefined;
 
   constructor(options: { config?: Readonly<Record<string, unknown>> } = {}) {
     this.config = options.config ?? {};
@@ -1069,7 +1069,7 @@ export class KodaXExtensionRuntime implements ExtensionRuntimeContract {
     let capturedModelSelection = false;
     let previousModelSelection: ExtensionModelSelection = {};
     let capturedThinkingLevel = false;
-    let previousThinkingLevel: KodaXReasoningMode | undefined;
+    let previousThinkingLevel: KodaXWireReasoningEffort | undefined;
 
     const captureActiveToolsRestore = () => {
       if (capturedActiveTools || this.boundController) {

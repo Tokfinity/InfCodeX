@@ -1,7 +1,7 @@
 /**
  * KodaX Repo-Intelligence Protocol
  *
- * RPC contract types for repo-intelligence daemon requests/responses.
+ * Legacy command-envelope types retained for repo-intelligence bundle plumbing.
  *
  * FEATURE_194 (v0.7.43): inlined from former `@kodax-ai/repointel-protocol`
  * package. The original "multi-host (kodax/codex/claude/opencode)" intent
@@ -13,7 +13,6 @@
  */
 
 export const REPOINTEL_CONTRACT_VERSION = 1 as const;
-export const REPOINTEL_DEFAULT_ENDPOINT = 'http://127.0.0.1:47891';
 
 export type RepoIntelligenceHost = 'kodax' | 'codex' | 'claude' | 'opencode';
 export type RepoIntelligenceIntent = 'auto' | 'review' | 'edit' | 'plan' | 'explain';
@@ -57,7 +56,6 @@ export interface RepointelRpcResponse {
   cacheHit?: boolean;
   result?: unknown;
   trace?: {
-    daemonLatencyMs?: number;
     capsuleBytes?: number;
     capsuleEstimatedTokens?: number;
   };

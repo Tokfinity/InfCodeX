@@ -36,6 +36,24 @@ export class KodaXNetworkError extends KodaXError {
   }
 }
 
+/**
+ * Reasoning-effort rejection (passive capability learning). Thrown when a
+ * provider HARD-rejects a reasoning-effort value; the rejected rung has already
+ * been signalled via `onReasoningEffortRejected` so the caller can record it
+ * and retry with a safe effort.
+ */
+export class KodaXReasoningEffortRejectedError extends KodaXProviderError {
+  constructor(
+    message: string,
+    provider: string,
+    public readonly rejectedEffort: string,
+    public readonly model: string,
+  ) {
+    super(message, provider);
+    this.name = 'KodaXReasoningEffortRejectedError';
+  }
+}
+
 /** Tool call ID 不匹配错误 */
 export class KodaXToolCallIdError extends KodaXError {
   constructor(message: string) {

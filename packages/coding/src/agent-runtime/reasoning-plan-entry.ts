@@ -53,9 +53,7 @@
 import type {
   KodaXExecutionMode,
   KodaXOptions,
-  KodaXReasoningMode,
   KodaXTaskType,
-  KodaXThinkingDepth,
 } from '../types.js';
 import type { ReasoningPlan } from '../reasoning.js';
 import { buildProviderPolicyHintsForDecision } from '../reasoning.js';
@@ -68,9 +66,7 @@ export interface ReasoningExecutionState {
   systemPrompt: string;
   providerReasoning: {
     enabled: boolean;
-    mode: KodaXReasoningMode;
-    depth: KodaXThinkingDepth;
-    effort?: KodaXOptions['effort'];
+    effort: KodaXOptions['effort'];
     taskType: KodaXTaskType;
     executionMode: KodaXExecutionMode;
   };
@@ -90,7 +86,7 @@ export async function buildReasoningExecutionState(
 
   const effectiveOptions: KodaXOptions = {
     ...options,
-    reasoningMode: reasoningPlan.mode,
+    effort: reasoningPlan.effort,
     context: {
       ...options.context,
       executionCwd: resolveExecutionCwd(options.context),
@@ -113,10 +109,8 @@ export async function buildReasoningExecutionState(
     systemPrompt: options.context?.systemPromptOverride
       ?? await buildSystemPrompt(effectiveOptions, isNewSession),
     providerReasoning: {
-      enabled: reasoningPlan.depth !== 'off',
-      mode: reasoningPlan.mode,
-      depth: reasoningPlan.depth,
-      effort: options.effort,
+      enabled: reasoningPlan.effort !== 'none',
+      effort: reasoningPlan.effort,
       taskType: reasoningPlan.decision.primaryTask,
       executionMode: reasoningPlan.decision.recommendedMode,
     },

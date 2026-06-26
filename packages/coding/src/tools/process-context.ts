@@ -1,6 +1,7 @@
 import type { KodaXToolExecutionContext } from '../types.js';
 import {
   getProcessContext,
+  readRepoIntelligenceToolWaitMs,
   renderProcessContext,
 } from '../repo-intelligence/runtime.js';
 import { readOptionalString } from './internal.js';
@@ -22,6 +23,7 @@ export async function toolProcessContext(
       module,
       targetPath,
       refresh: input.refresh === true,
+      maxWaitMs: readRepoIntelligenceToolWaitMs(),
     });
     return renderProcessContext(result);
   } catch (error) {

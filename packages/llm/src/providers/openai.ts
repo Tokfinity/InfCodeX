@@ -1,7 +1,7 @@
 /**
  * KodaX OpenAI Compatible Provider
  *
- * 支持 OpenAI API 格式的 Provider 基类
+ * 鏀寔 OpenAI API 鏍煎紡鐨?Provider 鍩虹被
  */
 
 import OpenAI from 'openai';
@@ -12,7 +12,7 @@ import {
   KodaXContentBlock,
   KodaXNormalizedReasoningRequest,
   KodaXReasoningCapability,
-  KodaXReasoningCapabilityV2,
+  KodaXReasoningProfile,
   KodaXProviderConfig,
   KodaXMessage,
   KodaXToolDefinition,
@@ -29,6 +29,7 @@ import {
 import { runVerifyCredential, type VerifyPrimitiveRunner } from './verify-credential.js';
 import {
   clampThinkingBudget,
+  effortToThinkingDepth,
   isReasoningEnabled,
   mapDepthToOpenAIReasoningEffort,
   resolveThinkingBudget,
@@ -73,7 +74,7 @@ function selectOpenAIReasoningEffort(
   if (reasoning.effort === 'auto' && reasoning.effortSource === 'explicit') {
     return undefined;
   }
-  return mapDepthToOpenAIReasoningEffort(reasoning.depth);
+  return mapDepthToOpenAIReasoningEffort(effortToThinkingDepth(reasoning.effort));
 }
 
 export type OpenAIUsageLike = {
@@ -83,13 +84,13 @@ export type OpenAIUsageLike = {
   prompt_tokens_details?: {
     cached_tokens?: number | null;
   } | null;
-  // FEATURE_116 Sub-task D — DeepSeek private cache fields. DeepSeek's
+  // FEATURE_116 Sub-task D 鈥?DeepSeek private cache fields. DeepSeek's
   // OpenAI-compat /chat/completions returns cache stats at the TOP level
   // of `usage` (not nested), with prompt_tokens === hit + miss. Reading
   // these recovers a ~4x cost-report inflation for cached requests
   // (DeepSeek server-side cache fires regardless; only KodaX's local
   // accounting was blind to it). Verified against DeepSeek API docs
-  // 2026-05-08. See docs/features/v0.7.37.md § Sub-task 116-D.
+  // 2026-05-08. See docs/features/v0.7.37.md 搂 Sub-task 116-D.
   prompt_cache_hit_tokens?: number | null;
   prompt_cache_miss_tokens?: number | null;
 } | null | undefined;
@@ -117,7 +118,7 @@ export function normalizeOpenAIUsage(usage: OpenAIUsageLike): KodaXTokenUsage | 
   // OpenAI-standard `prompt_tokens_details.cached_tokens` wins on conflict
   // for forward compat (if DeepSeek ever adds the standard field, prefer
   // it). Falls back to DeepSeek's private `prompt_cache_hit_tokens` when
-  // the standard field is absent — same semantics (subset of prompt_tokens).
+  // the standard field is absent 鈥?same semantics (subset of prompt_tokens).
   const cachedReadTokens =
     typeof usage.prompt_tokens_details?.cached_tokens === 'number' &&
     usage.prompt_tokens_details.cached_tokens >= 0
@@ -308,16 +309,16 @@ export abstract class KodaXOpenAICompatProvider extends KodaXBaseProvider {
   }
 
   /**
-   * FEATURE_216 v0.7.45 — Lightweight credential verification.
+   * FEATURE_216 v0.7.45 鈥?Lightweight credential verification.
    * Dispatches by `this.config.verifyStrategy`:
    *   - `models-list` (default for OpenAI protocol): 0-token
-   *     `models.list()` — empirically reliable for openai-compat
+   *     `models.list()` 鈥?empirically reliable for openai-compat
    *     providers where `/v1/models` gates on auth (kimi / qwen /
    *     deepseek confirmed). Verified by opencode `setup-recording-env.ts`
    *     for OPENAI_API_KEY proper.
    *   - `minimal-message`: ~6-token `chat.completions.create({max_tokens:1})`
    *     fallback for OpenAI-compat providers whose `/v1/models` is
-   *     publicly accessible (zhipu — false-positive risk).
+   *     publicly accessible (zhipu 鈥?false-positive risk).
    *   - `count-tokens`: NOT supported on OpenAI protocol. Custom provider
    *     validator rejects this combo at config time; built-in providers
    *     never declare it. Orchestrator returns `unsupported` if it slips
@@ -366,10 +367,10 @@ export abstract class KodaXOpenAICompatProvider extends KodaXBaseProvider {
   }
 
   /**
-   * FEATURE_116 (v0.7.37) — Strip any `cache-boundary` markers from
+   * FEATURE_116 (v0.7.37) 鈥?Strip any `cache-boundary` markers from
    * KodaXMessage content arrays before they reach OpenAI wire
    * serialization. OpenAI / DeepSeek auto-cache prefix tokens
-   * server-side, so the client has no marker to lower; Kimi/Zhipu/通义
+   * server-side, so the client has no marker to lower; Kimi/Zhipu/閫氫箟
    * self-cache via separate `cache_id` endpoints that are deferred to
    * v0.7.45+ (FEATURE_102). Stripping is the correct universal action
    * for this base class.
@@ -383,7 +384,7 @@ export abstract class KodaXOpenAICompatProvider extends KodaXBaseProvider {
     return messages.map((m) => {
       if (typeof m.content === 'string') return m;
       const stripped = stripCacheBoundaries(m.content);
-      // Preserve identity when nothing changed — keeps downstream
+      // Preserve identity when nothing changed 鈥?keeps downstream
       // memoization and === checks behaving as before.
       return stripped.length === m.content.length
         ? m
@@ -395,7 +396,7 @@ export abstract class KodaXOpenAICompatProvider extends KodaXBaseProvider {
    * Collapse every `role: 'system'` message (the `system` parameter plus any
    * system messages embedded in `messages`) into a single top-of-wire system
    * content and return the remaining non-system messages. Some OpenAI-compat
-   * gateways — notably third-party Qwen proxies — reject any system message
+   * gateways 鈥?notably third-party Qwen proxies 鈥?reject any system message
    * that is not at position 0, so this normalization guarantees the wire has
    * exactly one system entry regardless of what the upstream caller passed.
    *
@@ -483,6 +484,12 @@ export abstract class KodaXOpenAICompatProvider extends KodaXBaseProvider {
     capability: KodaXReasoningCapability,
     reasoning: KodaXNormalizedReasoningRequest,
   ): void {
+    // Passive-learning self-heal retry: the prior attempt was rejected for its
+    // reasoning-effort value, so drop ALL reasoning params and let the provider
+    // use its default — the retried turn completes without the bad effort.
+    if (this.suppressReasoningEffort) {
+      return;
+    }
     // The OpenAI SDK types do not expose provider-specific extensions like
     // Qwen's extra_body or Zhipu's thinking block, so we intentionally attach
     // those fields on the raw request object here.
@@ -491,16 +498,16 @@ export abstract class KodaXOpenAICompatProvider extends KodaXBaseProvider {
     const requestedBudget = clampThinkingBudget(
       resolveThinkingBudget(
         this.config,
-        reasoning.depth,
+        effortToThinkingDepth(reasoning.effort),
         reasoning.taskType,
       ),
       maxOutputTokens,
     );
-    const capabilityV2 = this.getReasoningCapabilityV2(createParams.model);
-    if (capabilityV2) {
-      this.applyReasoningCapabilityV2(
+    const reasoningProfile = this.getReasoningProfile(createParams.model);
+    if (reasoningProfile) {
+      this.applyReasoningProfile(
         params,
-        capabilityV2,
+        reasoningProfile,
         reasoning,
         createParams.model,
         requestedBudget,
@@ -548,15 +555,15 @@ export abstract class KodaXOpenAICompatProvider extends KodaXBaseProvider {
     }
   }
 
-  private applyReasoningCapabilityV2(
+  private applyReasoningProfile(
     params: Record<string, unknown>,
-    capability: KodaXReasoningCapabilityV2,
+    capability: KodaXReasoningProfile,
     reasoning: KodaXNormalizedReasoningRequest,
     model: string,
     requestedBudget: number,
   ): void {
     this.validateExplicitReasoningEffort(reasoning, model);
-    const intent = this.resolveV2ReasoningIntent(reasoning, capability, model);
+    const intent = this.resolveReasoningProfileIntent(reasoning, capability, model);
     const preset = capability.reasoningPreset;
 
     if (
@@ -573,7 +580,7 @@ export abstract class KodaXOpenAICompatProvider extends KodaXBaseProvider {
         this.appendExtraBody(params, { enable_thinking: false });
         return;
       }
-      const budget = this.resolveV2ThinkingBudget(
+      const budget = this.resolveReasoningProfileBudget(
         capability,
         intent.effort,
         model,
@@ -625,7 +632,7 @@ export abstract class KodaXOpenAICompatProvider extends KodaXBaseProvider {
         params.thinking = { type: 'disabled' };
         return;
       }
-      const budget = this.resolveV2ThinkingBudget(
+      const budget = this.resolveReasoningProfileBudget(
         capability,
         intent.effort,
         model,
@@ -643,8 +650,8 @@ export abstract class KodaXOpenAICompatProvider extends KodaXBaseProvider {
     }
   }
 
-  private resolveV2ThinkingBudget(
-    capability: KodaXReasoningCapabilityV2,
+  private resolveReasoningProfileBudget(
+    capability: KodaXReasoningProfile,
     effort: string | undefined,
     model: string,
     fallbackBudget: number,
@@ -701,7 +708,7 @@ export abstract class KodaXOpenAICompatProvider extends KodaXBaseProvider {
       const forcedToolName = streamOptions?.forcedToolName;
       let shouldForceToolChoice = Boolean(forcedToolName);
 
-      // 检查是否已被取消
+      // 妫€鏌ユ槸鍚﹀凡琚彇娑?
       if (signal?.aborted) {
         throw new DOMException('Request aborted', 'AbortError');
       }
@@ -716,7 +723,7 @@ export abstract class KodaXOpenAICompatProvider extends KodaXBaseProvider {
       let finishReason: string | null = null;
       const streamStartTime = Date.now();
 
-      // 传递 signal 给 SDK，确保底层 HTTP 请求能被取消
+      // 浼犻€?signal 缁?SDK锛岀‘淇濆簳灞?HTTP 璇锋眰鑳借鍙栨秷
       const normalizedReasoning = this.normalizeReasoning(reasoning);
       const initialCapability =
         isReasoningEnabled(normalizedReasoning)
@@ -814,7 +821,7 @@ export abstract class KodaXOpenAICompatProvider extends KodaXBaseProvider {
       const STALL_THRESHOLD_MS = 30_000;
 
       for await (const chunk of stream) {
-        // 检查是否被中断 (双重保险)
+        // 妫€鏌ユ槸鍚﹁涓柇 (鍙岄噸淇濋櫓)
         if (signal?.aborted) {
           throw new DOMException('Request aborted', 'AbortError');
         }
@@ -927,7 +934,10 @@ export abstract class KodaXOpenAICompatProvider extends KodaXBaseProvider {
         }
       }
       return { textBlocks, toolBlocks, thinkingBlocks, usage, stopReason: finishReason ?? undefined };
-    }, signal, 3, streamOptions?.onRateLimit, streamOptions?.onRetryAfter);
+    }, signal, 3, streamOptions?.onRateLimit, streamOptions?.onRetryAfter, {
+      model: streamOptions?.modelOverride ?? this.config.model,
+      onRejected: streamOptions?.onReasoningEffortRejected,
+    });
   }
 
   override supportsNonStreamingFallback(): boolean {
@@ -998,7 +1008,7 @@ export abstract class KodaXOpenAICompatProvider extends KodaXBaseProvider {
         // Mirror the stream() path: an inner `while (!response)` so a
         // forced-tool-choice rejection retries the SAME capability without
         // tool_choice. A flat for+continue would instead skip to the next
-        // capability — and with a single-element `attempts` (reasoning off)
+        // capability 鈥?and with a single-element `attempts` (reasoning off)
         // the tool_choice fallback would never re-attempt at all.
         while (!response) {
           const attemptParams: OpenAI.Chat.ChatCompletionCreateParamsNonStreaming = {
@@ -1084,7 +1094,10 @@ export abstract class KodaXOpenAICompatProvider extends KodaXBaseProvider {
         usage: normalizeOpenAIUsage(response.usage as OpenAIUsageLike),
         stopReason: choice?.finish_reason ?? undefined,
       };
-    }, signal, 3, streamOptions?.onRateLimit, streamOptions?.onRetryAfter);
+    }, signal, 3, streamOptions?.onRateLimit, streamOptions?.onRetryAfter, {
+      model: streamOptions?.modelOverride ?? this.config.model,
+      onRejected: streamOptions?.onReasoningEffortRejected,
+    });
   }
 
   private extractReasoningDelta(
@@ -1146,7 +1159,7 @@ export abstract class KodaXOpenAICompatProvider extends KodaXBaseProvider {
       .join('\n\n');
 
     // Track presence (not just non-empty thinking string) so that turns
-    // carrying only a redacted_thinking block also survive — they have no
+    // carrying only a redacted_thinking block also survive 鈥?they have no
     // serializable content but must still occupy an assistant slot to keep
     // user/assistant alternation valid for cross-provider history replay.
     const hasAnyThinking = contentBlocks.some(
@@ -1159,19 +1172,19 @@ export abstract class KodaXOpenAICompatProvider extends KodaXBaseProvider {
     // dropped: returning [] erases the assistant slot and can leave
     // user,user adjacency that some gateways reject. "Has a text block (even
     // empty)" means the turn must occupy a slot and falls through to the
-    // wire-only '...' fallback below — mirroring the Anthropic empty guard.
+    // wire-only '...' fallback below 鈥?mirroring the Anthropic empty guard.
     const hasTextBlock = contentBlocks.some((block) => block.type === 'text');
 
     // Only a GENUINELY empty turn (no text block at all, no tools, no
     // thinking) is dropped. Thinking-only and empty-text-marker turns survive
-    // — dropping them breaks user/assistant alternation and erases
+    // 鈥?dropping them breaks user/assistant alternation and erases
     // reasoning_content the next replay needs.
     if (!text && toolCalls.length === 0 && !hasAnyThinking && !hasTextBlock) {
       return [];
     }
 
-    // text → send text; tool-only → null (per OpenAI spec); thinking-only,
-    // redacted-only, or empty-text-marker → '...' placeholder so gateways
+    // text 鈫?send text; tool-only 鈫?null (per OpenAI spec); thinking-only,
+    // redacted-only, or empty-text-marker 鈫?'...' placeholder so gateways
     // don't reject null/empty content without tool_calls. The placeholder is
     // wire-only, never written back into KodaX history. The actual thinking,
     // if any, rides on reasoning_content below (redacted blocks contribute
@@ -1197,12 +1210,12 @@ export abstract class KodaXOpenAICompatProvider extends KodaXBaseProvider {
     // DeepSeek V4 rejects replay turns that drop reasoning_content (400
     // "must be passed back to the API"). The strict reading of that
     // contract is *every* assistant turn in a thinking-mode request must
-    // carry the field — including turns that produced no thinking
+    // carry the field 鈥?including turns that produced no thinking
     // content (short text replies, follow-up tool turns, redacted-only
     // turns, pre-thinking history, cross-provider history before a
     // /model switch). Conditioning the attach on `thinking` being
     // non-empty was the original gap: it covered "history has thinking
-    // → echo it" but missed "history has no thinking → still need the
+    // 鈫?echo it" but missed "history has no thinking 鈫?still need the
     // field present". Always attach when the flag is set; default to
     // empty string when no thinking text is available, so any provider
     // opting into the flag (Qwen/Zhipu/Kimi/MiniMax all share the same
@@ -1242,7 +1255,7 @@ export abstract class KodaXOpenAICompatProvider extends KodaXBaseProvider {
           toolContent = block.content
             .map((item) => {
               if (item.type === 'text') return item.text;
-              // type === 'image' — provider can't render the image inline;
+              // type === 'image' 鈥?provider can't render the image inline;
               // surface its path so the model knows what was attempted.
               return `[Image at ${item.path}${item.mediaType ? ` (${item.mediaType})` : ''}] (provider does not support image content in tool_result; if the image was previously visible to you in the conversation, refer to it directly via native vision)`;
             })

@@ -30,8 +30,11 @@ import {
 import { resolveProvider } from './providers/index.js';
 import { reshapeToUserConversation } from './task-engine/_internal/round-boundary.js';
 import { runManagedTaskViaRunner } from './task-engine/runner-driven.js';
-import { getRepoRoutingSignals } from './repo-intelligence/runtime.js';
-import { resolveKodaXAutoRepoMode } from './repo-intelligence/runtime.js';
+import {
+  getRepoRoutingSignals,
+  resolveKodaXAutoRepoMode,
+  resolveKodaXHotPathRepoMode,
+} from './repo-intelligence/runtime.js';
 import {
   emitManagedRepoIntelligenceTrace,
 } from './task-engine/_internal/managed-task/repo-intelligence.js';
@@ -186,6 +189,7 @@ export async function buildManagedReasoningPlan(options: KodaXOptions, prompt: s
     options.context?.executionCwd || options.context?.gitRoot,
   );
   const autoRepoMode = resolveKodaXAutoRepoMode(options.context?.repoIntelligenceMode);
+  const hotPathRepoMode = resolveKodaXHotPathRepoMode(options.context?.repoIntelligenceMode);
   const repoRoutingSignals = options.context?.repoRoutingSignals
     ?? (
       shouldLoadRepoSignals && autoRepoMode !== 'off'
@@ -193,7 +197,7 @@ export async function buildManagedReasoningPlan(options: KodaXOptions, prompt: s
           executionCwd: options.context?.executionCwd,
           gitRoot: options.context?.gitRoot ?? undefined,
         }, {
-          mode: autoRepoMode,
+          mode: hotPathRepoMode,
         }).catch(() => null)
         : null
     );
@@ -228,8 +232,7 @@ export async function buildManagedReasoningPlan(options: KodaXOptions, prompt: s
     // context (decision summary, tool-policy, dispatch rules).
     const fallbackDecision = buildFallbackRoutingDecision(prompt);
     return {
-      mode: 'off' as const,
-      depth: 'off' as const,
+      effort: options.effort ?? 'none',
       decision: fallbackDecision,
       amaControllerDecision: buildAmaControllerDecision(fallbackDecision),
       promptOverlay: '',

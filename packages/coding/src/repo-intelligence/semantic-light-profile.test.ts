@@ -4,8 +4,27 @@ import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 import { afterEach, describe, expect, it, vi } from 'vitest';
 
-import { getRepoIntelligenceIndex, getRepoRoutingSignals } from './query.js';
-import { fallbackSymbolConfidence } from './query-fallback.js';
+import {
+  getRepoIntelligenceIndex as getSemanticRepoIntelligenceIndex,
+  getRepoRoutingSignals as getSemanticRepoRoutingSignals,
+} from './semantic-index.js';
+
+type RepoContext = { executionCwd?: string; gitRoot?: string };
+type LightQueryOptions = { targetPath?: string; refresh?: boolean };
+
+function getRepoIntelligenceIndex(
+  context: RepoContext,
+  options: LightQueryOptions = {},
+) {
+  return getSemanticRepoIntelligenceIndex(context, { ...options, profile: 'light' });
+}
+
+function getRepoRoutingSignals(
+  context: RepoContext,
+  options: LightQueryOptions = {},
+) {
+  return getSemanticRepoRoutingSignals(context, { ...options, profile: 'light' });
+}
 
 function createIncrementalFixture(workspaceRoot: string): void {
   mkdirSync(join(workspaceRoot, 'packages', 'app', 'src'), { recursive: true });
@@ -97,7 +116,7 @@ function createJavaCppFixture(workspaceRoot: string): void {
   );
 }
 
-describe('fallback repo-intelligence index', () => {
+describe('light-profile repo-intelligence index', () => {
   let tempDir = '';
 
   afterEach(() => {
@@ -140,7 +159,7 @@ describe('fallback repo-intelligence index', () => {
     expect(sourceReads.some((filePath) => filePath.endsWith('/packages/app/src/helper.ts'))).toBe(false);
   }, 15000);
 
-  it('extracts richer Java/C++ structural semantics through the existing intelligence surface', async () => {
+  it('extracts Java/C++ structural semantics through the shared light profile', async () => {
     tempDir = mkdtempSync(join(tmpdir(), 'kodax-ri-java-cpp-'));
     createJavaCppFixture(tempDir);
 
@@ -163,27 +182,7 @@ describe('fallback repo-intelligence index', () => {
     ]));
   }, 15000);
 
-  it('fallbackSymbolConfidence differentiates by tier and exported flag (FEATURE_162 B0)', () => {
-    // High > medium > low at the same exported status.
-    expect(fallbackSymbolConfidence('high', true)).toBeGreaterThan(fallbackSymbolConfidence('medium', true));
-    expect(fallbackSymbolConfidence('medium', true)).toBeGreaterThan(fallbackSymbolConfidence('low', true));
-    expect(fallbackSymbolConfidence('high', false)).toBeGreaterThan(fallbackSymbolConfidence('medium', false));
-    expect(fallbackSymbolConfidence('medium', false)).toBeGreaterThan(fallbackSymbolConfidence('low', false));
-
-    // Exported > unexported within tier.
-    expect(fallbackSymbolConfidence('high', true)).toBeGreaterThan(fallbackSymbolConfidence('high', false));
-    expect(fallbackSymbolConfidence('medium', true)).toBeGreaterThan(fallbackSymbolConfidence('medium', false));
-    expect(fallbackSymbolConfidence('low', true)).toBeGreaterThan(fallbackSymbolConfidence('low', false));
-
-    // OSS ceiling stays below the daemon's 0.99 — even the strongest input must not exceed 0.78.
-    expect(fallbackSymbolConfidence('high', true)).toBeLessThanOrEqual(0.78);
-
-    // OSS aggregate is calibrated to stay below the 0.72 lowConfidence threshold even at
-    // the strongest single-symbol value, so OSS reliably reports low confidence by design.
-    expect(fallbackSymbolConfidence('high', true)).toBeLessThan(0.80);
-  });
-
-  it('routing signals derive lowConfidence from activeModule/activeImpact confidence (FEATURE_162 B0.5)', async () => {
+  it('derives routing lowConfidence from active module and impact confidence', async () => {
     tempDir = mkdtempSync(join(tmpdir(), 'kodax-ri-routing-derived-'));
     createIncrementalFixture(tempDir);
 
@@ -194,17 +193,11 @@ describe('fallback repo-intelligence index', () => {
       refresh: true,
     });
 
-    // Structural property: lowConfidence MUST equal the derivation. Pre-FEATURE_162
-    // OSS had `lowConfidence: true` hardcoded regardless of conf values; this test
-    // pins the derivation contract so future edits can't silently re-introduce a hardcode.
     expect(routingSignals.lowConfidence).toBe(
       routingSignals.activeModuleConfidence < 0.72
       || routingSignals.activeImpactConfidence < 0.72,
     );
 
-    // OSS is regex-extracted → aggregates stay below threshold → lowConfidence true here.
-    // (If a future re-calibration moves OSS above the threshold, this assertion will fail
-    // visibly rather than silently — author must decide whether the new calibration is correct.)
     expect(routingSignals.activeModuleConfidence).toBeLessThan(0.72);
     expect(routingSignals.lowConfidence).toBe(true);
   }, 15000);

@@ -22,10 +22,10 @@ export const KODAX_AGENT_MODES = ['ama', 'amaw', 'sa'] as const;
 export const KODAX_REPO_INTELLIGENCE_MODES: KodaXRepoIntelligenceMode[] = [
   'auto',
   'off',
-  'oss',
-  'premium-shared',
-  'premium-native',
+  'light',
+  'full',
 ];
+export const KODAX_REPO_INTELLIGENCE_PUBLIC_MODES = ['auto', 'full', 'light', 'off'] as const;
 export type CliOutputMode = typeof CLI_OUTPUT_MODES[number];
 
 export interface CliOptions {
@@ -47,14 +47,28 @@ export interface CliOptions {
   print?: boolean;
 }
 
+export interface NormalizedCliSessionFlags {
+  session?: string;
+  noSession: boolean;
+}
+
+export function normalizeCliSessionFlags(opts: {
+  session?: unknown;
+  noSession?: unknown;
+}): NormalizedCliSessionFlags {
+  return {
+    session: typeof opts.session === 'string' ? opts.session : undefined,
+    noSession: opts.noSession === true || opts.session === false,
+  };
+}
+
 function resolveRepoIntelligenceModeFromEnv():
   | 'auto'
   | 'off'
-  | 'oss'
-  | 'premium-shared'
-  | 'premium-native'
+  | 'light'
+  | 'full'
   | undefined {
-  const value = process.env.KODAX_REPO_INTELLIGENCE_MODE?.trim();
+  const value = process.env.KODAX_REPO_INTELLIGENCE?.trim();
   if (value && KODAX_REPO_INTELLIGENCE_MODES.includes(value as KodaXRepoIntelligenceMode)) {
     return value as KodaXRepoIntelligenceMode;
   }
@@ -162,12 +176,18 @@ export function parseEffortOption(value: string): string {
 
 export function parseRepoIntelligenceModeOption(value: string): KodaXRepoIntelligenceMode {
   const normalized = value.trim().toLowerCase();
+  if (normalized === 'full') {
+    return 'full';
+  }
+  if (normalized === 'light') {
+    return 'light';
+  }
   if (KODAX_REPO_INTELLIGENCE_MODES.includes(normalized as KodaXRepoIntelligenceMode)) {
     return normalized as KodaXRepoIntelligenceMode;
   }
 
   throw new InvalidArgumentError(
-    `Expected one of: ${KODAX_REPO_INTELLIGENCE_MODES.join(', ')}.`,
+    `Expected one of: ${KODAX_REPO_INTELLIGENCE_PUBLIC_MODES.join(', ')}.`,
   );
 }
 

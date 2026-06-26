@@ -67,21 +67,14 @@ vi.mock('./repo-intelligence/index.js', async () => {
   };
 });
 
-vi.mock('./repo-intelligence/query.js', async () => {
-  const actual = await vi.importActual<typeof import('./repo-intelligence/query.js')>('./repo-intelligence/query.js');
-  return {
-    ...actual,
-    renderImpactEstimate: mockRenderImpactEstimate,
-    renderModuleContext: mockRenderModuleContext,
-  };
-});
-
 vi.mock('./repo-intelligence/runtime.js', async () => {
   const actual = await vi.importActual<typeof import('./repo-intelligence/runtime.js')>('./repo-intelligence/runtime.js');
   return {
     ...actual,
     getImpactEstimate: mockGetImpactEstimate,
     getModuleContext: mockGetModuleContext,
+    renderImpactEstimate: mockRenderImpactEstimate,
+    renderModuleContext: mockRenderModuleContext,
   };
 });
 
@@ -139,8 +132,7 @@ function buildPlan(
     ...overrides,
   };
   return {
-    mode: 'auto',
-    depth: 'low',
+    effort: 'auto',
     promptOverlay: '[Routing] test',
     decision,
     amaControllerDecision: buildAmaControllerDecision(decision),

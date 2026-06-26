@@ -1,7 +1,7 @@
 /**
  * KodaX Base Provider
  *
- * Provider 抽象基类 - 所有 Provider 的公共基础
+ * Provider 鎶借薄鍩虹被 - 鎵€鏈?Provider 鐨勫叕鍏卞熀纭€
  */
 
 import {
@@ -13,14 +13,27 @@ import {
   KodaXProviderCapabilityProfile,
   KodaXNormalizedReasoningRequest,
   KodaXReasoningCapability,
-  KodaXReasoningCapabilityV2,
+  KodaXReasoningProfile,
   KodaXReasoningOverride,
   KodaXReasoningRequest,
   KodaXStreamResult,
   KodaXVerifyCredentialResult,
   KodaXWireReasoningEffort,
 } from '../types.js';
-import { KodaXError, KodaXRateLimitError, KodaXProviderError } from '../errors.js';
+import { KodaXError, KodaXRateLimitError, KodaXProviderError, KodaXReasoningEffortRejectedError } from '../errors.js';
+import { classifyReasoningEffortRejection } from './reasoning-effort-rejection.js';
+
+/**
+ * Passive-learning guard threaded into `withRateLimit`: when the request fails
+ * with a reasoning-effort rejection, fire `onRejected` (so the REPL records it)
+ * and surface a typed error. `effort` is the value that was on the wire (used
+ * when the provider error doesn't echo a value).
+ */
+export interface ReasoningRejectionGuard {
+  readonly model: string;
+  readonly effort?: string;
+  readonly onRejected?: (event: { provider: string; model: string; effort: string }) => void;
+}
 import { parseRetryAfter, extractHeadersFromError } from '../retry/retry-after.js';
 import type { RetryAfterSource } from '../retry/retry-after.js';
 import { KODAX_MAX_TOKENS } from '../constants.js';
@@ -55,7 +68,7 @@ interface ResolvedV2ReasoningIntent {
 }
 
 function shouldLowerAutoReasoningEffort(
-  capability: KodaXReasoningCapabilityV2,
+  capability: KodaXReasoningProfile,
 ): boolean {
   switch (capability.reasoningPreset) {
     case 'zai-glm-5.2':
@@ -156,6 +169,15 @@ export abstract class KodaXBaseProvider {
   protected maxOutputTokensOverride?: number;
 
   /**
+   * One-shot flag for the passive-learning self-heal: when a request is
+   * rejected for its reasoning-effort value, `withRateLimit` flips this true
+   * and retries the SAME turn. The reasoning-application path then drops the
+   * effort param so the retry uses the provider default and the user's turn
+   * still completes — no interruption, no re-typed query. Cleared on success.
+   */
+  protected suppressReasoningEffort = false;
+
+  /**
    * Public setter for the one-shot override above. Callers outside the
    * provider package (notably the agent loop's escalation branch) use this
    * to stage a larger budget for the next stream call in the same logical
@@ -227,7 +249,7 @@ export abstract class KodaXBaseProvider {
    * Resolves whether Anthropic-style thinking signatures must verify
    * strictly (Anthropic proper only). Same cascade as
    * `getStreamMaxDurationMs`. Defaults to false (lenient) when neither
-   * layer sets it — matches third-party Anthropic-compat behavior.
+   * layer sets it 鈥?matches third-party Anthropic-compat behavior.
    */
   public getEffectiveStrictThinkingSignature(model?: string): boolean {
     const descriptorValue = this.getModelDescriptor(model)?.strictThinkingSignature;
@@ -270,13 +292,13 @@ export abstract class KodaXBaseProvider {
   }
 
   /**
-   * FEATURE_216 v0.7.45 — Lightweight credential verification. Returns
+   * FEATURE_216 v0.7.45 鈥?Lightweight credential verification. Returns
    * a never-throws envelope with `ok` + categorized `error`. Concrete
    * compat base classes (`KodaXAnthropicCompatProvider`,
    * `KodaXOpenAICompatProvider`) override this to dispatch by the
    * `verifyStrategy` field. The default here returns `unsupported` so
-   * Provider classes that don't extend a compat base — or future ones
-   * yet to be wired — fail safely instead of throwing.
+   * Provider classes that don't extend a compat base 鈥?or future ones
+   * yet to be wired 鈥?fail safely instead of throwing.
    *
    * Distinct from `isConfigured()`: that one is env-only (no network);
    * this one hits the wire (zero or ~7 tokens depending on strategy)
@@ -309,19 +331,18 @@ export abstract class KodaXBaseProvider {
     // Resolve undefined to the provider's default model so "the active
     // model" asks resolve to the same descriptor as an explicit id.
     const id = modelId ?? this.config.model;
-    // Prefer the full descriptor from `models[]` when present — it carries
+    // Prefer the full descriptor from `models[]` when present 鈥?it carries
     // per-model contextWindow / maxOutputTokens / reasoning fields. This
     // applies EVEN when `id` is the default model: previously the default
     // model short-circuited to a bare `{ id }`, dropping any per-model
     // fields declared for it in `models[]`. That made
     // `getEffectiveContextWindow(defaultModel)` fall back to the
-    // provider-level window even when `models[]` declared a larger one —
-    // e.g. a custom provider whose default model is GLM-5.2 (1M ctx)
+    // provider-level window even when `models[]` declared a larger one 鈥?    // e.g. a custom provider whose default model is GLM-5.2 (1M ctx)
     // silently resolved to the 200K provider default and fired compaction
     // ~5x early.
     const fromList = this.config.models?.find(m => m.id === id);
     if (fromList) return fromList;
-    // No per-model descriptor — return a bare default-model marker so the
+    // No per-model descriptor 鈥?return a bare default-model marker so the
     // getEffective* cascade drops to the provider-level config; unknown
     // non-default ids resolve to undefined (same as before).
     if (id === this.config.model) return { id: this.config.model };
@@ -357,9 +378,9 @@ export abstract class KodaXBaseProvider {
       : this.getConfiguredReasoningCapability(modelOverride);
   }
 
-  getReasoningCapabilityV2(modelOverride?: string): KodaXReasoningCapabilityV2 | undefined {
-    return this.getModelDescriptor(modelOverride)?.reasoningCapabilityV2
-      ?? this.config.reasoningCapabilityV2;
+  getReasoningProfile(modelOverride?: string): KodaXReasoningProfile | undefined {
+    return this.getModelDescriptor(modelOverride)?.reasoningProfile
+      ?? this.config.reasoningProfile;
   }
 
   getReasoningOverride(modelOverride?: string): KodaXReasoningOverride | undefined {
@@ -473,12 +494,12 @@ export abstract class KodaXBaseProvider {
   }
 
   /**
-   * 获取模型的上下文窗口大小
+   * 鑾峰彇妯″瀷鐨勪笂涓嬫枃绐楀彛澶у皬
    *
    * Backwards-compatible no-arg form: resolves against the provider's
    * default model descriptor. New call sites that know the active
    * model should use `getEffectiveContextWindow(model)` directly.
-   * @returns 上下文窗口大小 (tokens)
+   * @returns 涓婁笅鏂囩獥鍙ｅぇ灏?(tokens)
    */
   getContextWindow(): number {
     return this.getEffectiveContextWindow();
@@ -539,7 +560,7 @@ export abstract class KodaXBaseProvider {
     const isStableIntent = KODAX_STABLE_EFFORT_INTENTS.includes(
       effort as (typeof KODAX_STABLE_EFFORT_INTENTS)[number],
     );
-    const capability = this.getReasoningCapabilityV2(modelOverride);
+    const capability = this.getReasoningProfile(modelOverride);
     if (!capability) {
       if (effort === 'none') {
         return;
@@ -586,18 +607,35 @@ export abstract class KodaXBaseProvider {
     );
   }
 
-  protected resolveV2ReasoningIntent(
+  protected resolveReasoningProfileIntent(
     reasoning: KodaXNormalizedReasoningRequest,
-    capability: KodaXReasoningCapabilityV2,
+    capability: KodaXReasoningProfile,
     modelOverride?: string,
   ): ResolvedV2ReasoningIntent {
     const requestedEffort = reasoning.effort;
     if (requestedEffort && capability.localRejectEfforts?.includes(requestedEffort)) {
-      const modelLabel = modelOverride ? `/${modelOverride}` : '';
-      throw new KodaXProviderError(
-        `${this.name}${modelLabel} does not support reasoning effort "${requestedEffort}".`,
-        this.name,
-      );
+      // Hard-reject ONLY an explicit caller request for an effort this model
+      // cannot do (e.g. asking to disable thinking on an always-on model like
+      // kimi-k2.7-code / minimax-m2-always). Mirrors the explicit-only policy
+      // in `validateExplicitReasoningEffort`. An IMPLICIT/default 'none' 鈥?      // produced by `normalizeReasoningRequest(undefined)` when the caller
+      // passes no reasoning at all (effortSource 'legacy'/non-explicit) 鈥?must
+      // NOT crash the request: an always-on model simply falls back to its
+      // `defaultEffort` and thinks. Without this, every caller that omits
+      // reasoning (e.g. the eval harness) throws against these models.
+      if (reasoning.effortSource === 'explicit') {
+        const modelLabel = modelOverride ? `/${modelOverride}` : '';
+        throw new KodaXProviderError(
+          `${this.name}${modelLabel} does not support reasoning effort "${requestedEffort}".`,
+          this.name,
+        );
+      }
+      if (capability.defaultEffort) {
+        return {
+          disabled: false,
+          effort: capability.defaultEffort,
+          requestedEffort,
+        };
+      }
     }
 
     if (
@@ -655,10 +693,10 @@ export abstract class KodaXBaseProvider {
     const s = error.message.toLowerCase();
     // FEATURE_130 (v0.7.36): include 'overload' / '503' / '529' keywords so
     // server-overloaded responses also enter the retry path. Overload is
-    // labeled as `reason="overloaded"` by classifyRateLimitReason — both
+    // labeled as `reason="overloaded"` by classifyRateLimitReason 鈥?both
     // conditions flow through the same withRateLimit loop.
     return [
-      'rate', 'limit', '速率', '频率', '1302', '429', 'too many',
+      'rate', 'limit', '閫熺巼', '棰戠巼', '1302', '429', 'too many',
       'overload', 'overwhelmed', '503', '529', 'busy',
     ].some(k => s.includes(k));
   }
@@ -696,7 +734,7 @@ export abstract class KodaXBaseProvider {
    *   - `Retry-After: <HTTP-date>`
    *   - `retry-after-ms: <milliseconds>` (Anthropic extension)
    *   - exponential-backoff fallback (returned via `withRateLimit`,
-   *     not through this helper — it is `undefined` here when no
+   *     not through this helper 鈥?it is `undefined` here when no
    *     header is present, which the caller then resolves to backoff)
    */
   protected extractRetryAfterMs(error: unknown): number | undefined {
@@ -721,7 +759,7 @@ export abstract class KodaXBaseProvider {
     const patterns = [
       /(\d[\d,]*)\s*tokens?.*?(\d[\d,]*)\s*(?:maximum|limit|context)/i,
       /maximum.*?(\d[\d,]*)\s*tokens?.*?requested.*?(\d[\d,]*)/i,
-      /exceeds?\s+.*?(\d[\d,]*)\s*.*?(?:limit|max|上限).*?(\d[\d,]*)/i,
+      /exceeds?\s+.*?(\d[\d,]*)\s*.*?(?:limit|max|context).*?(\d[\d,]*)/i,
     ];
     for (const pat of patterns) {
       const m = msg.match(pat);
@@ -745,7 +783,7 @@ export abstract class KodaXBaseProvider {
       || msg.includes('context length')
       || msg.includes('context_length_exceeded')
       || msg.includes('context window')
-      || msg.includes('上下文长度');
+      || msg.includes('context limit');
   }
 
   protected async withRateLimit<T>(
@@ -754,11 +792,16 @@ export abstract class KodaXBaseProvider {
     retries = 3,
     onRateLimit?: (attempt: number, maxRetries: number, delayMs: number) => void,
     onRetryAfter?: KodaXOnRetryAfterCallback,
+    reasoningGuard?: ReasoningRejectionGuard,
   ): Promise<T> {
+    let effortRetried = false;
+    // Start each request clean so a prior turn's drop never leaks forward.
+    this.suppressReasoningEffort = false;
     for (let i = 0; i < retries; i++) {
       try {
         const result = await fn();
         this.maxOutputTokensOverride = undefined; // Clear on success
+        this.suppressReasoningEffort = false; // Clear on success
         return result;
       } catch (e) {
         // Context window overflow: compute reduced max_tokens and retry once
@@ -772,7 +815,7 @@ export abstract class KodaXBaseProvider {
         }
 
         if (this.isRateLimitError(e)) {
-          // Last retry exhausted — throw
+          // Last retry exhausted 鈥?throw
           if (i === retries - 1) {
             throw new KodaXRateLimitError(
               `API rate limit exceeded after ${retries} retries. Please wait and try again later.`,
@@ -781,7 +824,7 @@ export abstract class KodaXBaseProvider {
           }
 
           // FEATURE_130 (v0.7.36): centralized retry-after parsing through
-          // `parseRetryAfter` — covers `Retry-After: <seconds>` /
+          // `parseRetryAfter` 鈥?covers `Retry-After: <seconds>` /
           // `Retry-After: <HTTP-date>` / `retry-after-ms: <ms>` /
           // exponential-backoff fallback. The legacy 500*2^i backoff was
           // identical to base=500ms in the helper, so the wait math is
@@ -810,7 +853,7 @@ export abstract class KodaXBaseProvider {
             onRateLimit(i + 1, retries, delay);
           } else if (!onRetryAfter) {
             // Only log to console when neither the legacy nor the
-            // structured callback is wired — UI surfaces handle it
+            // structured callback is wired 鈥?UI surfaces handle it
             // when at least one is set.
             console.log(`[Rate Limit] Retrying in ${delay / 1000}s (${i + 1}/${retries})...`);
           }
@@ -826,6 +869,39 @@ export abstract class KodaXBaseProvider {
           }
 
           continue;
+        }
+        // Passive capability learning: a HARD reasoning-effort rejection is
+        // ground truth that this provider/model doesn't support the rung.
+        // Signal it (so the REPL narrows the ladder + switches to a safe
+        // effort) AND self-heal THIS turn: flip the suppress flag and retry
+        // once with the effort param dropped, so the request still completes
+        // and the user never has to re-send their query.
+        if (reasoningGuard && !effortRetried) {
+          const rejection = classifyReasoningEffortRejection(e, reasoningGuard.effort);
+          if (rejection) {
+            reasoningGuard.onRejected?.({
+              provider: this.name,
+              model: reasoningGuard.model,
+              effort: rejection.rejectedEffort,
+            });
+            this.suppressReasoningEffort = true;
+            effortRetried = true;
+            continue; // transparent retry without the rejected effort
+          }
+        }
+        // A second effort rejection after we already dropped the param is not
+        // expected; fall through to the typed error so the caller sees it.
+        if (reasoningGuard && effortRetried) {
+          const rejection = classifyReasoningEffortRejection(e, reasoningGuard.effort);
+          if (rejection) {
+            this.suppressReasoningEffort = false;
+            throw new KodaXReasoningEffortRejectedError(
+              `${this.name} rejected reasoning effort "${rejection.rejectedEffort}" even after dropping it.`,
+              this.name,
+              rejection.rejectedEffort,
+              reasoningGuard.model,
+            );
+          }
         }
         // Non-rate-limit errors
         if (e instanceof Error) {

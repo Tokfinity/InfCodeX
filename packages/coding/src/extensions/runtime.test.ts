@@ -134,7 +134,7 @@ describe('KodaXExtensionRuntime', () => {
       `export default function(api) {
         api.runtime.setActiveTools([]);
         api.runtime.setModelSelection({ model: 'ts-extension-model' });
-        api.runtime.setThinkingLevel('balanced');
+        api.runtime.setThinkingLevel('medium');
       }`,
       'utf8',
     );
@@ -145,7 +145,7 @@ describe('KodaXExtensionRuntime', () => {
     expect(runtime.getDefaults()).toEqual({
       activeTools: [],
       modelSelection: { model: 'ts-extension-model' },
-      thinkingLevel: 'balanced',
+      thinkingLevel: 'medium',
     });
 
     await runtime.dispose();

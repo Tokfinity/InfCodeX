@@ -63,6 +63,7 @@ function buildRepoIntelDetailLine(event: KodaXRepoIntelligenceTraceEvent): strin
   const capability = event.capability;
   if (capability) {
     parts.push(`mode=${capability.mode}`);
+    parts.push(`engine=${capability.engine}`);
     if (capability.status !== "ok") {
       parts.push(`status=${capability.status}`);
     }
@@ -70,12 +71,6 @@ function buildRepoIntelDetailLine(event: KodaXRepoIntelligenceTraceEvent): strin
 
   const trace = event.trace;
   if (trace) {
-    if (trace.daemonLatencyMs !== undefined) {
-      parts.push(`daemon ${trace.daemonLatencyMs}ms`);
-    }
-    if (trace.cliLatencyMs !== undefined) {
-      parts.push(`cli ${trace.cliLatencyMs}ms`);
-    }
     if (trace.cacheHit !== undefined) {
       parts.push(trace.cacheHit ? "cache hit" : "cache miss");
     }
@@ -102,7 +97,7 @@ function formatTokens(count: number): string {
 }
 
 function stripSummaryStagePrefix(summary: string): string {
-  // Emitter summary looks like `stage=routing | mode=... | daemon_ms=...`.
+  // Emitter summary looks like `stage=routing | mode=... | capsule_tokens=...`.
   // Drop the leading `stage=<value> | ` so the stage label doesn't
   // duplicate the prefix we already render.
   return summary.replace(/^stage=[^|]+\|\s*/, "").trim();

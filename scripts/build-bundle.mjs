@@ -108,6 +108,15 @@ function assertNoRawAgentDynamicImport(dir) {
   }
 }
 
+function assertSemanticWorkerSidecar(dir) {
+  const workerPath = path.join(dir, 'semantic-worker.js');
+  if (!existsSync(workerPath)) {
+    console.error('[build-bundle] ERROR: dist/semantic-worker.js missing.');
+    console.error('[build-bundle] The repo-intelligence worker must be emitted as a sidecar for full mode.');
+    process.exit(1);
+  }
+}
+
 // ---- compute external list from root package.json ------------------------
 
 // Everything in root deps stays external (npm installs them on the user
@@ -318,6 +327,21 @@ for (const name of sdkEntryNames) {
 }
 const sdkBytes = sdkBytesByEntry.index;
 
+// ---- build repo-intelligence worker sidecar -----------------------------
+//
+// semantic-worker-client starts a Node worker by URL at runtime. The main CLI
+// and SDK entries are bundled, so esbuild cannot discover that sidecar from a
+// computed `new Worker(resolveWorkerUrl())` call. Build it explicitly and keep
+// it next to the bundled entries/chunks.
+log('Building dist/semantic-worker.js (repo-intelligence worker sidecar)...');
+const workerResult = await build({
+  ...commonOptions,
+  entryPoints: [path.join(repoRoot, 'packages/coding/dist/repo-intelligence/semantic-worker.js')],
+  outfile: path.join(distDir, 'semantic-worker.js'),
+});
+const workerBytes = statSync(path.join(distDir, 'semantic-worker.js')).size;
+log(`  OK dist/semantic-worker.js (${(workerBytes / 1024).toFixed(0)} kB)`);
+
 // ---- copy builtin skill resources ---------------------------------------
 
 // Layout contract (see HLD §12.4 risk 3):
@@ -403,6 +427,7 @@ if (writeMetafile) {
   const meta = {
     cli: cliResult.metafile,
     sdk: sdkResult.metafile,
+    worker: workerResult.metafile,
     generatedAt: new Date().toISOString(),
   };
   writeFileSync(
@@ -415,6 +440,8 @@ if (writeMetafile) {
 
 assertNoRawAgentDynamicImport(distDir);
 log(`  OK bundle import guard: no raw ./agent.js dynamic import`);
+assertSemanticWorkerSidecar(distDir);
+log(`  OK worker sidecar guard: dist/semantic-worker.js present`);
 
 // ---- summary -------------------------------------------------------------
 
@@ -426,6 +453,7 @@ for (const name of sdkEntryNames) {
   log(`  ${label}:  ${(sdkBytesByEntry[name] / 1024).toFixed(0)} kB → dist/${name}.js`);
 }
 log(`  Builtin skills: dist/builtin/`);
+log(`  Worker:         dist/semantic-worker.js`);
 log(`  Shared chunks:  dist/chunks/`);
 log('');
 log('Next: `npm pack` to produce the publish-ready tarball.');

@@ -8,8 +8,8 @@
  * sections (in priority order):
  *
  *   1. caller-supplied `options.context.repoIntelligenceContext` passthrough
- *   2. `premiumContext` from `getRepoPreturnBundle` (only `premium-native`
- *      mode + active-module conditions)
+ *   2. full bundle context from `getRepoPreturnBundle` (full mode +
+ *      active-module conditions)
  *   3. `generatedContext` from `buildRepoIntelligenceContext` (Repository
  *      Overview + Changed Scope, gated by `includeRepoOverview` /
  *      `includeChangedScope` decision flags)
@@ -58,13 +58,135 @@ import {
   getModuleContext,
   getRepoPreturnBundle,
   resolveKodaXAutoRepoMode,
+  resolveKodaXHotPathRepoMode,
 } from '../../repo-intelligence/runtime.js';
 import {
   renderImpactEstimate,
   renderModuleContext,
-} from '../../repo-intelligence/query.js';
+} from '../../repo-intelligence/semantic-render.js';
 import { createRepoIntelligenceTraceEvent } from '../../repo-intelligence/trace-events.js';
 import type { ReasoningPlan } from '../../reasoning.js';
+
+const AUTO_CONTEXT_REPO_INTELLIGENCE_BUDGET_MS = 2_000;
+const AUTO_CONTEXT_PRETURN_STATE_TTL_MS = 60_000;
+const MAX_AUTO_CONTEXT_PRETURN_STATES = 64;
+type AutoPreturnResult = Awaited<ReturnType<typeof getRepoPreturnBundle>>;
+
+interface BudgetedRepoIntelligenceResult<T> {
+  value: T | null;
+  timedOut: boolean;
+}
+
+interface AutoContextPreturnState {
+  promise: Promise<AutoPreturnResult | null>;
+  budgetMissed: boolean;
+  settled: boolean;
+  expiresAt: number;
+}
+
+interface AutoContextPreturnKeyContext {
+  executionCwd?: string;
+  gitRoot?: string;
+}
+
+const autoContextPreturnStates = new Map<string, AutoContextPreturnState>();
+
+async function settleWithinAutoContextBudget<T>(
+  promise: Promise<T | null>,
+): Promise<BudgetedRepoIntelligenceResult<T>> {
+  let timer: ReturnType<typeof setTimeout> | undefined;
+  const timeout = new Promise<BudgetedRepoIntelligenceResult<T>>((resolve) => {
+    timer = setTimeout(() => {
+      resolve({ value: null, timedOut: true });
+    }, AUTO_CONTEXT_REPO_INTELLIGENCE_BUDGET_MS);
+    if (typeof timer === 'object' && typeof timer.unref === 'function') {
+      timer.unref();
+    }
+  });
+
+  try {
+    return await Promise.race([
+      promise.then((value): BudgetedRepoIntelligenceResult<T> => ({ value, timedOut: false })),
+      timeout,
+    ]);
+  } finally {
+    if (timer) {
+      clearTimeout(timer);
+    }
+  }
+}
+
+function pruneAutoContextPreturnStates(now = Date.now()): void {
+  for (const [key, state] of autoContextPreturnStates.entries()) {
+    if (state.settled && state.expiresAt <= now) {
+      autoContextPreturnStates.delete(key);
+    }
+  }
+
+  if (autoContextPreturnStates.size <= MAX_AUTO_CONTEXT_PRETURN_STATES) {
+    return;
+  }
+
+  const keys = Array.from(autoContextPreturnStates.keys());
+  for (const key of keys.slice(0, autoContextPreturnStates.size - MAX_AUTO_CONTEXT_PRETURN_STATES)) {
+    autoContextPreturnStates.delete(key);
+  }
+}
+
+function autoContextPreturnKey(
+  repoContext: AutoContextPreturnKeyContext,
+  mode: string,
+  targetPath: string | undefined,
+): string {
+  return JSON.stringify({
+    executionCwd: repoContext.executionCwd ?? '',
+    gitRoot: repoContext.gitRoot ?? '',
+    mode,
+    targetPath: targetPath ?? '',
+  });
+}
+
+function getAutoContextPreturnState(
+  key: string,
+  load: () => Promise<AutoPreturnResult | null>,
+): AutoContextPreturnState {
+  const now = Date.now();
+  pruneAutoContextPreturnStates(now);
+  const cached = autoContextPreturnStates.get(key);
+  if (cached && (!cached.settled || cached.expiresAt > now)) {
+    return cached;
+  }
+
+  let state: AutoContextPreturnState;
+  const promise = load()
+    .catch(() => null)
+    .finally(() => {
+      state.settled = true;
+      state.expiresAt = Date.now() + AUTO_CONTEXT_PRETURN_STATE_TTL_MS;
+    });
+  state = {
+    promise,
+    budgetMissed: false,
+    settled: false,
+    expiresAt: Number.POSITIVE_INFINITY,
+  };
+  autoContextPreturnStates.set(key, state);
+  pruneAutoContextPreturnStates(now);
+  return state;
+}
+
+async function settleAutoContextPreturn(
+  state: AutoContextPreturnState,
+): Promise<BudgetedRepoIntelligenceResult<AutoPreturnResult>> {
+  if (state.budgetMissed && !state.settled) {
+    return { value: null, timedOut: true };
+  }
+  const result = await settleWithinAutoContextBudget(state.promise);
+  if (result.timedOut) {
+    state.budgetMissed = true;
+  }
+  return result;
+}
 
 export function shouldEmitRepoIntelligenceTrace(options: KodaXOptions): boolean {
   return options.context?.repoIntelligenceTrace === true
@@ -97,6 +219,7 @@ export async function buildAutoRepoIntelligenceContext(
   if (autoRepoMode === 'off') {
     return options.context?.repoIntelligenceContext;
   }
+  const hotPathRepoMode = resolveKodaXHotPathRepoMode(options.context?.repoIntelligenceMode);
 
   const decision = reasoningPlan.decision;
   const includeRepoOverview =
@@ -126,27 +249,31 @@ export async function buildAutoRepoIntelligenceContext(
       || decision.primaryTask === 'edit'
       || decision.primaryTask === 'refactor';
 
-    // v0.7.41 L1 — first-round NEVER forces `refresh:true` on the daemon.
-    // Previously `refresh: isNewSession` paid the 30s `PREMIUM_REFRESH_TIMEOUT_MS`
-    // budget on every new session (~10-15s wall-time tax). The daemon's own
-    // background polling keeps its on-disk state fresh; the 4s budget path
-    // returns that state immediately. Users who need a forced rebuild can use
-    // `/refresh` (future) or restart the daemon.
+    // First-round preturn stays best-effort and never forces refresh. The
+    // worker-isolated engine can reuse a warm cache, while explicit tool
+    // calls can still request refresh and wait for high-fidelity results.
+    // Automatic prompt injection has a short budget so a cold semantic index
+    // cannot delay the first model request; the worker promise continues in
+    // the background and warms the shared repo-intelligence cache.
     //
-    // P1.a — Phase 1: OSS overview build and premium preturn fetch run in
-    // parallel (OSS reads local git+fs; preturn talks to the local daemon).
+    // P1.a — Phase 1: OSS overview build and full preturn fetch run in
+    // parallel (both local, with independent caches).
     // Behavioural pins preserved:
-    //   - preturn is only attempted when `includeActiveModule && premium-native`
+    //   - preturn is only attempted when `includeActiveModule && full mode`
     //   - `.catch(() => null)` keeps a failed preturn from poisoning the build
     //   - emit order: preturn → module → impact
-    const preturnPromise = includeActiveModule && autoRepoMode === 'premium-native'
-      ? getRepoPreturnBundle(repoContext, {
+    const useFullPreturn = hotPathRepoMode === 'full';
+    const preturnBudgetPromise = includeActiveModule && useFullPreturn
+      ? settleAutoContextPreturn(getAutoContextPreturnState(
+        autoContextPreturnKey(repoContext, hotPathRepoMode, activeModuleTargetPath),
+        () => getRepoPreturnBundle(repoContext, {
           targetPath: activeModuleTargetPath,
           refresh: false,
-          mode: autoRepoMode,
-        }).catch(() => null)
-      : Promise.resolve(null);
-    const [generatedContext, preturn] = await Promise.all([
+          mode: hotPathRepoMode,
+        }),
+      ))
+      : Promise.resolve({ value: null, timedOut: false });
+    const overviewBudgetPromise = settleWithinAutoContextBudget(
       buildRepoIntelligenceContext({
         executionCwd: options.context?.executionCwd,
         gitRoot: options.context?.gitRoot ?? undefined,
@@ -155,14 +282,20 @@ export async function buildAutoRepoIntelligenceContext(
         includeChangedScope,
         refreshOverview: false,
         changedScope: 'all',
-      }),
-      preturnPromise,
+      }).catch(() => null),
+    );
+    const [overviewBudget, preturnBudget] = await Promise.all([
+      overviewBudgetPromise,
+      preturnBudgetPromise,
     ]);
+    const generatedContext = overviewBudget.value ?? '';
+    const preturn = preturnBudget.value;
 
     let moduleContext = '';
     let impactContext = '';
     let fallbackGuidance = '';
-    let premiumContext = '';
+    let fullContext = '';
+    let repoIntelligenceBudgetTimedOut = overviewBudget.timedOut || preturnBudget.timedOut;
 
     let moduleResult: Awaited<ReturnType<typeof getModuleContext>> | null = null;
     let impactResult: Awaited<ReturnType<typeof getImpactEstimate>> | null = null;
@@ -171,7 +304,7 @@ export async function buildAutoRepoIntelligenceContext(
       emitRepoIntelligenceTrace(events, options, 'preturn', preturn, preturn.summary);
       moduleResult = preturn.moduleContext ?? null;
       impactResult = preturn.impactEstimate ?? null;
-      premiumContext = preturn.repoContext ?? '';
+      fullContext = preturn.repoContext ?? '';
     }
 
     if (includeActiveModule) {
@@ -180,20 +313,27 @@ export async function buildAutoRepoIntelligenceContext(
       // pre-refactor `??` short-circuit — if preturn populated moduleResult,
       // we still skip the getModuleContext call). When both are missing they
       // race in parallel instead of running sequentially.
+      const allowDirectFallback = !repoIntelligenceBudgetTimedOut;
       const [moduleFallback, impactFallback] = await Promise.all([
-        !moduleResult
-          ? getModuleContext(repoContext, {
-              targetPath: activeModuleTargetPath,
-              refresh: false,
-              mode: autoRepoMode,
-            }).catch(() => null)
+        allowDirectFallback && !moduleResult
+          ? settleWithinAutoContextBudget(getModuleContext(repoContext, {
+            targetPath: activeModuleTargetPath,
+            refresh: false,
+            mode: hotPathRepoMode,
+          }).catch(() => null)).then((result) => {
+            repoIntelligenceBudgetTimedOut = repoIntelligenceBudgetTimedOut || result.timedOut;
+            return result.value;
+          })
           : Promise.resolve(null),
-        !impactResult
-          ? getImpactEstimate(repoContext, {
-              targetPath: activeModuleTargetPath,
-              refresh: false,
-              mode: autoRepoMode,
-            }).catch(() => null)
+        allowDirectFallback && !impactResult
+          ? settleWithinAutoContextBudget(getImpactEstimate(repoContext, {
+            targetPath: activeModuleTargetPath,
+            refresh: false,
+            mode: hotPathRepoMode,
+          }).catch(() => null)).then((result) => {
+            repoIntelligenceBudgetTimedOut = repoIntelligenceBudgetTimedOut || result.timedOut;
+            return result.value;
+          })
           : Promise.resolve(null),
       ]);
       moduleResult = moduleResult ?? moduleFallback;
@@ -224,7 +364,7 @@ export async function buildAutoRepoIntelligenceContext(
       const lowConfidence =
         (moduleResult?.confidence ?? 1) < 0.72
         || (impactResult?.confidence ?? 1) < 0.72;
-      if (lowConfidence || (!moduleResult && !impactResult)) {
+      if (!repoIntelligenceBudgetTimedOut && (lowConfidence || (!moduleResult && !impactResult))) {
         fallbackGuidance = [
           '## Repo Intelligence Guidance',
           '- Current repository intelligence is low-confidence for this area.',
@@ -235,7 +375,7 @@ export async function buildAutoRepoIntelligenceContext(
 
     return [
       options.context?.repoIntelligenceContext,
-      premiumContext,
+      fullContext,
       generatedContext,
       moduleContext,
       impactContext,

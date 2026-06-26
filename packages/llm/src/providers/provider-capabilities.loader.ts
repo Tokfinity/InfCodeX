@@ -1,20 +1,20 @@
 /**
- * FEATURE_198 v0.7.44 — Provider capability JSON loader.
+ * FEATURE_198 v0.7.44 鈥?Provider capability JSON loader.
  *
  * Resolves `provider-capabilities.json` at runtime into the in-memory
  * `ProviderSnapshot` shape that `KODAX_PROVIDER_SNAPSHOTS` callers
  * expect. Owns three concerns:
  *
- *   1. **Lazy load** — parse + validate exactly once per process,
+ *   1. **Lazy load** 鈥?parse + validate exactly once per process,
  *      cache the result. `_resetProviderSnapshotsCache` for tests.
  *
- *   2. **Profile-name resolution** — JSON stores `"image-input-native"`
+ *   2. **Profile-name resolution** 鈥?JSON stores `"image-input-native"`
  *      etc., loader maps to the actual `KodaXProviderCapabilityProfile`
  *      object exported from `capability-profile.ts`. Profiles stay
  *      external rather than inlined in JSON to avoid duplicating the
  *      shape across two files.
  *
- *   3. **CLI-bridge fill** — `gemini-cli` and `codex-cli` static fields
+ *   3. **CLI-bridge fill** 鈥?`gemini-cli` and `codex-cli` static fields
  *      live in JSON, but their `model` + `models` are owned by the
  *      local CLI binary and read via `cli-bridge-models.ts`. The
  *      loader fills them in at load time so consumers see a uniform
@@ -24,7 +24,7 @@
  * at runtime (not `import ... from './*.json'`). Combined with esbuild
  * `--external:*.json` (see `scripts/build-bundle.mjs`), the JSON ships
  * as a sibling of `dist/index.js` and can be patched in-place without
- * rebuilding the bundle — that's the "hot-update" path F198 enables.
+ * rebuilding the bundle 鈥?that's the "hot-update" path F198 enables.
  */
 
 import { existsSync, readFileSync } from 'node:fs';
@@ -48,7 +48,7 @@ import type {
   ProviderSnapshot,
 } from './provider-capabilities.types.js';
 import { validateProviderCapabilitiesJson } from './provider-capabilities.types.js';
-import type { KodaXProviderCapabilityProfile, KodaXReasoningCapabilityV2 } from '../types.js';
+import type { KodaXProviderCapabilityProfile, KodaXReasoningProfile } from '../types.js';
 
 const PROFILE_BY_NAME: Readonly<
   Record<CapabilityProfileName, KodaXProviderCapabilityProfile>
@@ -64,22 +64,22 @@ let cachedSnapshots: Readonly<Record<string, ProviderSnapshot>> | null = null;
 /**
  * Resolve the JSON file path across four distribution modes:
  *
- *  1. **Dev / npm** (tsc-compiled, `node dist/...`) — loader at
+ *  1. **Dev / npm** (tsc-compiled, `node dist/...`) 鈥?loader at
  *     `packages/llm/dist/providers/loader.js` reads from
  *     `packages/llm/dist/providers/provider-capabilities.json`
  *     (copied by the package's `build` script).
  *
  *  2. **SDK bundle root entry** (e.g. `dist/kodax_cli.js`, the
- *     non-chunked CLI bundle) — loader inlined into `dist/index.js`;
+ *     non-chunked CLI bundle) 鈥?loader inlined into `dist/index.js`;
  *     reads `dist/provider-capabilities.json` (copied by
  *     `build-bundle.mjs`).
  *
- *  3. **SDK bundle chunk** (e.g. `dist/chunks/sdk-llm-XXX.js`) — esbuild
+ *  3. **SDK bundle chunk** (e.g. `dist/chunks/sdk-llm-XXX.js`) 鈥?esbuild
  *     `splitting: true` moves shared code into `dist/chunks/`; the
  *     loader's `import.meta.url` resolves there, so the JSON is one
  *     directory up. We probe `__dirname` first, then `dirname(__dirname)`.
  *
- *  4. **Bun --compile binary** — JSON sidecar next to the executable
+ *  4. **Bun --compile binary** 鈥?JSON sidecar next to the executable
  *     (same pattern `resolveBuiltinPath()` uses for builtin/ assets).
  *     `KODAX_BUNDLED='true'` is set by `scripts/build-binary.mjs`.
  *
@@ -94,7 +94,7 @@ function resolveJsonPath(): string {
   const here = path.dirname(fileURLToPath(import.meta.url));
   const candidates = [
     path.join(here, 'provider-capabilities.json'),       // dev/npm + bundle root
-    path.join(path.dirname(here), 'provider-capabilities.json'), // bundle chunk (dist/chunks/ → dist/)
+    path.join(path.dirname(here), 'provider-capabilities.json'), // bundle chunk (dist/chunks/ 鈫?dist/)
   ];
   for (const c of candidates) {
     if (existsSync(c)) return c;
@@ -107,15 +107,15 @@ function resolveJsonPath(): string {
 function deepFreezeSnapshot(snapshot: ProviderSnapshot): ProviderSnapshot {
   if (snapshot.models) {
     for (const m of snapshot.models) {
-      if (m.reasoningCapabilityV2) {
-        freezeReasoningCapabilityV2(m.reasoningCapabilityV2);
+      if (m.reasoningProfile) {
+        freezeReasoningProfile(m.reasoningProfile);
       }
     }
     for (const m of snapshot.models) Object.freeze(m);
     Object.freeze(snapshot.models);
   }
-  if (snapshot.reasoningCapabilityV2) {
-    freezeReasoningCapabilityV2(snapshot.reasoningCapabilityV2);
+  if (snapshot.reasoningProfile) {
+    freezeReasoningProfile(snapshot.reasoningProfile);
   }
   if (snapshot.modelReasoningCapabilities) {
     Object.freeze(snapshot.modelReasoningCapabilities);
@@ -123,8 +123,8 @@ function deepFreezeSnapshot(snapshot: ProviderSnapshot): ProviderSnapshot {
   return Object.freeze(snapshot);
 }
 
-function freezeReasoningCapabilityV2(
-  capability: KodaXReasoningCapabilityV2,
+function freezeReasoningProfile(
+  capability: KodaXReasoningProfile,
 ): void {
   if (capability.supportedEfforts) {
     for (const preset of capability.supportedEfforts) Object.freeze(preset);
@@ -193,9 +193,9 @@ function buildSnapshot(
       capabilityProfile,
       verifyStrategy: entry.verifyStrategy,
     };
-    if (entry.reasoningCapabilityV2 !== undefined) {
-      (snapshot as { reasoningCapabilityV2: typeof entry.reasoningCapabilityV2 }).reasoningCapabilityV2 =
-        entry.reasoningCapabilityV2;
+    if (entry.reasoningProfile !== undefined) {
+      (snapshot as { reasoningProfile: typeof entry.reasoningProfile }).reasoningProfile =
+        entry.reasoningProfile;
     }
     if (entry.supportsThinking !== undefined) {
       (snapshot as { supportsThinking: boolean }).supportsThinking =
@@ -205,7 +205,7 @@ function buildSnapshot(
   }
 
   // Non-cliBridge: validator already enforced `model` is set.
-  // (cast safe — validator throws when model is missing on static entries.)
+  // (cast safe 鈥?validator throws when model is missing on static entries.)
   const snapshot: ProviderSnapshot = {
     model: entry.model as string,
     apiKeyEnv: entry.apiKeyEnv,
@@ -213,9 +213,9 @@ function buildSnapshot(
     capabilityProfile,
     verifyStrategy: entry.verifyStrategy,
   };
-  if (entry.reasoningCapabilityV2 !== undefined) {
-    (snapshot as { reasoningCapabilityV2: typeof entry.reasoningCapabilityV2 }).reasoningCapabilityV2 =
-      entry.reasoningCapabilityV2;
+  if (entry.reasoningProfile !== undefined) {
+    (snapshot as { reasoningProfile: typeof entry.reasoningProfile }).reasoningProfile =
+      entry.reasoningProfile;
   }
   if (entry.models !== undefined) {
     (snapshot as { models: typeof entry.models }).models = entry.models;
@@ -252,7 +252,7 @@ function buildSnapshot(
  *
  * Throws with a path-qualified error message when the JSON is missing,
  * malformed, or references an unknown profile name. Callers SHOULD NOT
- * try/catch this — a broken capability file is unrecoverable and the
+ * try/catch this 鈥?a broken capability file is unrecoverable and the
  * loud failure surfaces the misconfiguration immediately.
  */
 export function getProviderSnapshots(): Readonly<
@@ -282,7 +282,7 @@ export function getProviderSnapshots(): Readonly<
 /**
  * Test-only hook. Clears the cached snapshot map so callers can patch
  * the JSON file on disk and re-load. Production code path never touches
- * this — the cache is process-lifetime by design.
+ * this 鈥?the cache is process-lifetime by design.
  */
 export function _resetProviderSnapshotsCache(): void {
   cachedSnapshots = null;

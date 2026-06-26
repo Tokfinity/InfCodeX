@@ -2,12 +2,36 @@ import { mkdirSync, mkdtempSync, readFileSync, rmSync, writeFileSync } from 'nod
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 import { afterEach, beforeEach, describe, expect, it } from 'vitest';
-import { getRepoIntelligenceIndex, getRepoRoutingSignals } from '../repo-intelligence/query.js';
+import {
+  getRepoIntelligenceIndex as getSemanticRepoIntelligenceIndex,
+  getRepoRoutingSignals as getSemanticRepoRoutingSignals,
+} from '../repo-intelligence/semantic-index.js';
+import { shutdownRepoIntelligenceWorkerForTest } from '../repo-intelligence/semantic-worker-client.js';
+import { QUERY_SCHEMA_VERSION } from '../repo-intelligence/semantic-shared.js';
+import type { KodaXToolExecutionContext } from '../types.js';
 import { toolImpactEstimate } from './impact-estimate.js';
 import { toolModuleContext } from './module-context.js';
 import { toolProcessContext } from './process-context.js';
+import { toolRelationshipScan } from './relationship-scan.js';
 import { toolSymbolContext } from './symbol-context.js';
 import { commitAll, initGitRepo } from './test-helpers.js';
+
+type RepoContext = Pick<KodaXToolExecutionContext, 'executionCwd' | 'gitRoot'>;
+type LightQueryOptions = { targetPath?: string; refresh?: boolean };
+
+function getRepoIntelligenceIndex(
+  context: RepoContext,
+  options: LightQueryOptions = {},
+) {
+  return getSemanticRepoIntelligenceIndex(context, { ...options, profile: 'light' });
+}
+
+function getRepoRoutingSignals(
+  context: RepoContext,
+  options: LightQueryOptions = {},
+) {
+  return getSemanticRepoRoutingSignals(context, { ...options, profile: 'light' });
+}
 
 function createWorkspaceFixture(workspaceRoot: string): void {
   mkdirSync(join(workspaceRoot, 'packages', 'shared', 'src'), { recursive: true });
@@ -147,7 +171,7 @@ function createPolyglotFixture(workspaceRoot: string): void {
 }
 
 function getRepoIntelligenceStorageRoot(workspaceRoot: string): string {
-  return join(workspaceRoot, '.agent', 'repo-intelligence');
+  return join(workspaceRoot, '.agent', 'repo-intelligence', 'light');
 }
 
 function readJson<T>(filePath: string): T {
@@ -156,25 +180,33 @@ function readJson<T>(filePath: string): T {
 
 describe('repo intelligence tool surfaces', () => {
   let tempDir = '';
-  const previousRepoMode = process.env.KODAX_REPO_INTELLIGENCE_MODE;
+  const previousRepoMode = process.env.KODAX_REPO_INTELLIGENCE;
+  const previousToolWait = process.env.KODAX_REPO_INTELLIGENCE_TOOL_WAIT_MS;
 
   beforeEach(() => {
-    process.env.KODAX_REPO_INTELLIGENCE_MODE = 'oss';
+    process.env.KODAX_REPO_INTELLIGENCE = 'light';
+    process.env.KODAX_REPO_INTELLIGENCE_TOOL_WAIT_MS = '30000';
   });
 
-  afterEach(() => {
+  afterEach(async () => {
     if (previousRepoMode === undefined) {
-      delete process.env.KODAX_REPO_INTELLIGENCE_MODE;
+      delete process.env.KODAX_REPO_INTELLIGENCE;
     } else {
-      process.env.KODAX_REPO_INTELLIGENCE_MODE = previousRepoMode;
+      process.env.KODAX_REPO_INTELLIGENCE = previousRepoMode;
     }
+    if (previousToolWait === undefined) {
+      delete process.env.KODAX_REPO_INTELLIGENCE_TOOL_WAIT_MS;
+    } else {
+      process.env.KODAX_REPO_INTELLIGENCE_TOOL_WAIT_MS = previousToolWait;
+    }
+    await shutdownRepoIntelligenceWorkerForTest();
     if (tempDir) {
-      rmSync(tempDir, { recursive: true, force: true });
+      rmSync(tempDir, { recursive: true, force: true, maxRetries: 3, retryDelay: 100 });
       tempDir = '';
     }
   });
 
-  it('returns fallback module, symbol, process, and impact capsules from a local repo', async () => {
+  it('returns module, symbol, process, and impact capsules from a local repo', async () => {
     tempDir = mkdtempSync(join(tmpdir(), 'kodax-repo-intel-tools-'));
     initGitRepo(tempDir);
     createWorkspaceFixture(tempDir);
@@ -214,9 +246,90 @@ describe('repo intelligence tool surfaces', () => {
     }, ctx);
     expect(impactResult).toContain('Impact estimate for sharedUtil');
     expect(impactResult).toContain('@demo/shared(packages/shared)');
+
+    const relationshipResult = await toolRelationshipScan({
+      symbol: 'createApp',
+      direction: 'both',
+      include_lsp: true,
+      refresh: false,
+    }, ctx);
+    expect(relationshipResult).toContain('Relationship scan for createApp');
+    expect(relationshipResult).toContain('Engine: light');
+    expect(relationshipResult).toContain('Identity');
+    expect(relationshipResult).toContain('Upstream');
+    expect(relationshipResult).toContain('startServer');
+    expect(relationshipResult).toContain('Downstream');
+    expect(relationshipResult).toContain('NameService');
+    expect(relationshipResult).toContain('Impact');
+    expect(relationshipResult).toContain('Evidence');
+    expect(relationshipResult).toContain('LSP validation: LSP service is unavailable');
+    expect(relationshipResult).not.toContain('not wired');
+
+    const moduleOnlyRelationshipResult = await toolRelationshipScan({
+      module: '@demo/app',
+      direction: 'downstream',
+      refresh: false,
+    }, ctx);
+    expect(moduleOnlyRelationshipResult).toContain('Relationship scan for @demo/app');
+    expect(moduleOnlyRelationshipResult).toContain('module_context freshness=');
+    expect(moduleOnlyRelationshipResult).not.toContain('process_context freshness=');
+    expect(moduleOnlyRelationshipResult).not.toContain('- Process ');
+  }, 60000);
+
+  it('adds LSP call hierarchy and text-search evidence to relationship scans', async () => {
+    tempDir = mkdtempSync(join(tmpdir(), 'kodax-repo-intel-relationship-evidence-'));
+    createWorkspaceFixture(tempDir);
+
+    let incomingPosition: { readonly line: number; readonly character: number } | undefined;
+    let outgoingPosition: { readonly line: number; readonly character: number } | undefined;
+    let incomingFile = '';
+    let outgoingFile = '';
+    const ctx = {
+      backups: new Map<string, string>(),
+      executionCwd: tempDir,
+      lspService: {
+        getIncomingCalls: async (
+          file: string,
+          position: { readonly line: number; readonly character: number },
+        ): Promise<string> => {
+          incomingFile = file;
+          incomingPosition = position;
+          return 'Incoming call: startServer (packages/app/src/index.ts:3)';
+        },
+        getOutgoingCalls: async (
+          file: string,
+          position: { readonly line: number; readonly character: number },
+        ): Promise<string> => {
+          outgoingFile = file;
+          outgoingPosition = position;
+          return 'Outgoing call: NameService.normalize (packages/shared/src/name-service.ts:4)';
+        },
+      },
+    } as unknown as KodaXToolExecutionContext;
+
+    const result = await toolRelationshipScan({
+      symbol: 'createApp',
+      direction: 'both',
+      include_lsp: true,
+      include_text_search: true,
+      refresh: true,
+    }, ctx);
+
+    expect(result).toContain('Relationship scan for createApp');
+    expect(result).toContain('LSP validation');
+    expect(result).toContain('Incoming call: startServer');
+    expect(result).toContain('Outgoing call: NameService.normalize');
+    expect(result).toContain('Text-search validation');
+    expect(result).toContain('grep exact-name evidence for "createApp"');
+    expect(result).toContain('packages/app/src/index.ts');
+    expect(result).not.toContain('not wired');
+    expect(incomingFile.endsWith(join('packages', 'app', 'src', 'create-app.ts'))).toBe(true);
+    expect(outgoingFile.endsWith(join('packages', 'app', 'src', 'create-app.ts'))).toBe(true);
+    expect(incomingPosition).toEqual({ line: 2, character: 16 });
+    expect(outgoingPosition).toEqual({ line: 2, character: 16 });
   }, 15000);
 
-  it('reuses the fallback query cache when nothing changed', async () => {
+  it('reuses the light-profile semantic cache when nothing changed', async () => {
     tempDir = mkdtempSync(join(tmpdir(), 'kodax-repo-intel-cache-hit-'));
     createWorkspaceFixture(tempDir);
 
@@ -237,7 +350,7 @@ describe('repo intelligence tool surfaces', () => {
     expect(second.sourceFingerprint).toBe(first.sourceFingerprint);
   });
 
-  it('refreshes the fallback query cache when source contents change', async () => {
+  it('refreshes the light-profile semantic cache when source contents change', async () => {
     tempDir = mkdtempSync(join(tmpdir(), 'kodax-repo-intel-fingerprint-'));
     createWorkspaceFixture(tempDir);
 
@@ -275,7 +388,7 @@ describe('repo intelligence tool surfaces', () => {
     expect(after.symbols.some((symbol) => symbol.name === 'stopServer')).toBe(true);
   });
 
-  it('invalidates older fallback cache schema versions before reuse', async () => {
+  it('invalidates older semantic cache schema versions before reuse', async () => {
     tempDir = mkdtempSync(join(tmpdir(), 'kodax-repo-intel-schema-'));
     createPolyglotFixture(tempDir);
 
@@ -299,11 +412,11 @@ describe('repo intelligence tool surfaces', () => {
       refresh: false,
     });
 
-    expect(rebuilt.schemaVersion).toBe(11);
-    expect(readJson<{ schemaVersion: number }>(join(storageRoot, 'repo-intelligence-manifest.json')).schemaVersion).toBe(11);
+    expect(rebuilt.schemaVersion).toBe(QUERY_SCHEMA_VERSION);
+    expect(readJson<{ schemaVersion: number }>(join(storageRoot, 'repo-intelligence-manifest.json')).schemaVersion).toBe(QUERY_SCHEMA_VERSION);
   }, 15000);
 
-  it('reports polyglot fallback language tiers without requiring premium parsers in the public path', async () => {
+  it('reports polyglot light-profile language tiers without requiring external parsers', async () => {
     tempDir = mkdtempSync(join(tmpdir(), 'kodax-repo-intel-polyglot-'));
     createPolyglotFixture(tempDir);
 
@@ -322,7 +435,7 @@ describe('repo intelligence tool surfaces', () => {
     ]));
   }, 15000);
 
-  it('returns conservative routing signals with low confidence in OSS fallback mode', async () => {
+  it('returns conservative routing signals with low confidence in light-profile mode', async () => {
     tempDir = mkdtempSync(join(tmpdir(), 'kodax-repo-intel-routing-'));
     createWorkspaceFixture(tempDir);
 
@@ -335,6 +448,6 @@ describe('repo intelligence tool surfaces', () => {
 
     expect(routingSignals.activeModuleId).toBeDefined();
     expect(routingSignals.lowConfidence).toBe(true);
-    expect(routingSignals.riskHints).toContain('Fallback repo routing uses OSS baseline heuristics.');
+    expect(routingSignals.riskHints).toContain('Light repo routing uses heuristic static analysis; validate low-confidence edges before editing.');
   });
 });

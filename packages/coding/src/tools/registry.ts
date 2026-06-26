@@ -21,6 +21,7 @@ export const REPO_INTELLIGENCE_WORKING_TOOL_NAMES = [
   'symbol_context',
   'process_context',
   'impact_estimate',
+  'relationship_scan',
   'cyclic_dependencies',
 ] as const;
 

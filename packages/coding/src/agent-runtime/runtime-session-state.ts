@@ -39,7 +39,7 @@ import type {
   KodaXExtensionSessionState,
   KodaXJsonValue,
   KodaXMessage,
-  KodaXReasoningMode,
+  KodaXWireReasoningEffort,
   KodaXRuntimeSessionSnapshot,
 } from '../types.js';
 
@@ -58,7 +58,7 @@ export interface RuntimeSessionState {
     provider?: string;
     model?: string;
   };
-  thinkingLevel?: KodaXReasoningMode;
+  thinkingLevel?: KodaXWireReasoningEffort;
 }
 
 export function createRuntimeExtensionState(
@@ -138,7 +138,7 @@ export interface BuildRuntimeSessionStateInput {
   /** Pre-filtered tool names — caller is responsible for `filterExcludedTools`. */
   activeTools: string[];
   modelSelection: { provider?: string; model?: string };
-  thinkingLevel?: KodaXReasoningMode;
+  thinkingLevel?: KodaXWireReasoningEffort;
 }
 
 export function buildRuntimeSessionState(input: BuildRuntimeSessionStateInput): RuntimeSessionState {

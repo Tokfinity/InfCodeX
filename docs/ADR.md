@@ -2424,3 +2424,135 @@ packages/
 - [`feedback_concurrent_thread_git_race`](../../memory/feedback_concurrent_thread_git_race.md) — 本版多线程并发开发，按功能分批原子提交。
 
 ---
+
+## ADR-041: Provider Empty-Content Compatibility Contract
+
+**Status**: Accepted
+
+**Context**: KodaX supports multiple OpenAI-compatible and
+Anthropic-compatible coding gateways. Several runtime paths can create
+assistant or tool-result turns with no user-visible substance:
+hidden-tool-only assistant turns, microcompaction, history cleanup,
+thinking sanitization, compressed/restored sessions, interrupted tool loops,
+and empty stdout/tool results. Some gateways reject empty assistant content,
+but writing a text placeholder such as `...` into KodaX history leaks a fake
+assistant answer to SDK users, changes the model-visible transcript, and can
+fragment provider prompt caches.
+
+**Decision**:
+
+1. Empty-content compatibility is a provider-boundary contract, not a prompt
+   behavior question. Provider serializers may use a minimal wire-only
+   placeholder only when the target gateway requires non-empty assistant
+   content. That placeholder must not become SDK output or persisted
+   user-visible assistant text.
+2. The mandatory verification artifact is
+   `tests/provider-empty-content-contract.eval.ts`. It runs each case through
+   both the current KodaX adapter path and a direct raw wire probe where the
+   protocol supports it.
+3. The default live panel is the customer-relevant provider set:
+   `kimi-code`, `zhipu-coding`, `minimax-coding`, `mimo-coding`, `mimo`,
+   `ark-coding`, and `deepseek`. Official `anthropic` / `openai` are not the
+   default gate for this project because they are not the primary customer
+   deployment path.
+4. Adding a new provider, changing a provider base class, changing message
+   serialization, changing history cleanup, changing compaction, or changing
+   recovery/sanitization logic must run this eval for every affected provider
+   with a configured key. If a key is unavailable, record the skipped provider
+   explicitly in the PR/release note and run it before declaring that provider
+   supported for the changed behavior.
+5. Raw eval dumps are the source of truth. Store them under the OS temp path
+   emitted by the eval (`kodax-eval-dumps/provider-empty-content-contract`),
+   not in the repo. Summaries in docs or PRs must cite the dump path and list
+   accepted/rejected cases per provider.
+
+**Runbook**:
+
+```bash
+KODAX_EVAL_PROVIDER_EMPTY_CONTENT=1 npm run test:eval -- provider-empty-content-contract
+
+KODAX_EVAL_PROVIDER_EMPTY_CONTENT=1 \
+KODAX_EVAL_PROVIDER_EMPTY_CONTENT_PROVIDERS=kimi-code,deepseek \
+npm run test:eval -- provider-empty-content-contract
+```
+
+**Acceptance**:
+
+- `kodax_path` must accept all cases marked required by the eval.
+- `raw_wire_probe` is observational. A raw rejection is acceptable and is
+  precisely the evidence that a provider may need a wire-only fallback.
+- Empty `tool_result` payloads must remain empty tool results; they must not
+  be rewritten to an assistant-visible `...`.
+- A provider change is not complete until this eval either passes for the
+  affected provider or the unsupported/missing-key exception is documented.
+
+## ADR-042: Reasoning Single-Tracking — `effort` as the Sole Reasoning Control (retire V1 reasoning-mode/depth dual track + CAP-019 harness auto-upgrade)
+
+**Status**: Accepted
+
+**Context**: Reasoning control had grown into a dual track. `effort`
+(`KodaXWireReasoningEffort`: `none`/`minimal`/`low`/`medium`/`high`/`xhigh`/`max`/`auto`)
+was the user-facing control (Ctrl+T ladder, `/effort`, `--effort`, per-model
+capability resolution via `resolveReasoningEffort`), while a parallel legacy
+track — `reasoningMode` (`off`/`auto`/`quick`/`balanced`/`deep`) + `thinking
+depth` (`off`/`low`/`medium`/`high`) — still flowed through the plan, the
+per-turn override, the worker role resolution, the extension hook, and the
+provider request. The legacy track was **lossy** (it cannot express
+`minimal`/`xhigh`/`max`) and forced every layer to carry both encodings.
+Separately, CAP-019 added a harness that could *auto-upgrade* reasoning
+mid-task (depth-escalation / task-reroute), and the `KodaXHarnessProfile`
+(H0/H1/H2/PLANNED) carried per-harness budget/round tables.
+
+**Industry comparison** (verified against a Claude Code reference tree):
+Claude Code and Codex have **no** harness-level reasoning auto-upgrade —
+effort is fixed per turn and only the user changes it. Claude Code's agent
+loop has **no per-complexity budget table**: `maxTurns` is set per agent
+*role* (fork=200 / hook=50 / …), not per task tier, and the main loop relies
+on the LLM's own stop signal. KodaX's per-harness budget tables were a
+V1-multi-harness vestige with no industry analogue.
+
+**Decision**:
+
+1. **`effort` is the single canonical reasoning control end to end.** The
+   routing plan (`ReasoningPlan.effort`), the per-turn override
+   (`thinkingLevel` / `runtimeThinkingLevel` / the `provider:before` extension
+   hook), the worker role resolution (`resolveRoleEffort`), and the provider
+   request (`KodaXReasoningRequest.effort`) all carry effort only. The legacy
+   `mode`/`depth` fields were removed from `KodaXReasoningRequest` /
+   `KodaXNormalizedReasoningRequest`; `normalizeReasoningRequest` is
+   effort-only.
+2. **CAP-019 harness auto-upgrade is retired** (no harness re-runs a turn with
+   "stronger reasoning"). This aligns with Claude Code / Codex: effort is the
+   user's lever, not the harness's.
+3. **Per-harness budget/round tables collapse to single constants**
+   (`MANAGED_WORK_BUDGET_CAP=200` / `MANAGED_MAX_ROUNDS=8` /
+   `MANAGED_WORK_BUDGET_EXTENSION=200`). The H0/H1/H2 tiers no longer selected
+   different agent topologies (V2 is a single Worker loop), so they were only
+   budget tiers reachable via the resume seed — a latent fresh-vs-resume
+   inconsistency. `MAX_ROUNDS` is a progress-display denominator (it grows by 1
+   on each approved budget extension), not a work cap; the real ceiling is the
+   budget controller plus the per-agent inner tool loop.
+4. **Two legacy types survive deliberately, demoted to bounded roles, not as a
+   reasoning track**: `KodaXReasoningMode` remains only as the deprecated
+   `KodaXOptions.reasoningMode` / `--reasoning` compat boundary (mapped to
+   effort on load via `mapLegacyReasoningModeToEffortIntent`);
+   `KodaXThinkingDepth` remains only as the internal *budget-size* enum
+   (`effortToThinkingDepth(effort)` → `resolveThinkingBudget`). Fully deleting
+   them is a follow-up gated on migrating the budget map to effort keys and the
+   CLI/config surface.
+5. **Provider wire is unchanged by construction.** `effortToThinkingDepth`
+   mirrors the exact `effort → mode → depth` derivation the old normalizer
+   used, so every provider × effort emits the same `reasoning_effort` /
+   `thinking.budget_tokens`. This is the behaviour-preservation contract for
+   the provider-budget change.
+
+**Consequences**:
+
+- One reasoning encoding to reason about; `minimal`/`xhigh`/`max` now survive
+  the per-turn override and worker path (previously collapsed to the nearest
+  legacy mode).
+- The `provider:before` extension hook and `setThinkingLevel` now carry effort
+  values (breaking for extensions that passed legacy mode strings).
+- The harness-prompt variants (`HARNESS_PROFILE_OVERLAYS` H0/H1/H2) are
+  LLM-facing and remain pending an EVAL_GUIDELINES 5-alias panel before
+  removal — they are NOT covered by this ADR's code changes.

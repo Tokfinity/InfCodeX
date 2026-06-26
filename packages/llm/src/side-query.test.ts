@@ -111,7 +111,7 @@ describe('sideQuery — happy path', () => {
     expect(call.tools).toEqual([]);
     expect(call.system).toBe('sys');
     expect(call.streamOptions?.modelOverride).toBe('requested-model');
-    expect(call.reasoning).toEqual({ mode: 'off' });
+    expect(call.reasoning).toEqual({ effort: 'none' });
   });
 
   it('honors caller-provided reasoning override', async () => {
@@ -123,10 +123,10 @@ describe('sideQuery — happy path', () => {
       system: 's',
       messages: baseMessages,
       querySource: 'auto_mode',
-      reasoning: { mode: 'deep' },
+      reasoning: { effort: 'high' },
     });
 
-    expect(provider.capturedCalls[0]!.reasoning).toEqual({ mode: 'deep' });
+    expect(provider.capturedCalls[0]!.reasoning).toEqual({ effort: 'high' });
   });
 
   it('maps provider stopReason max_tokens to SideQueryStopReason max_tokens', async () => {

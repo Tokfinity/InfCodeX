@@ -54,4 +54,44 @@ describe('status workspace output', () => {
     expect(output).toContain('Kind:');
     expect(output).toContain('managed');
   });
+
+  it('shows built-in repo-intel status without external endpoint/bin controls', async () => {
+    const logSpy = vi.spyOn(console, 'log').mockImplementation(() => {});
+    const repoIntelCommand = BUILTIN_COMMANDS.find((command) => command.name === 'repo-intel');
+
+    expect(repoIntelCommand).toBeDefined();
+    await repoIntelCommand!.handler(
+      ['status'],
+      context,
+      {} as CommandCallbacks,
+      {
+        ...currentConfig,
+        repoIntelligenceMode: 'full',
+        repoIntelligenceTrace: true,
+      },
+    );
+
+    const output = logSpy.mock.calls.flat().join('\n');
+    expect(output).toContain('Repo Intelligence');
+    expect(output).toContain('Mode:');
+    expect(output).toContain('full');
+    expect(output).toContain('Trace:');
+    expect(output).toContain('on');
+    expect(output).not.toContain('Endpoint:');
+    expect(output).not.toContain('Bin:');
+  });
+
+  it('keeps deprecated /repointel warm away from external runtime control', async () => {
+    const logSpy = vi.spyOn(console, 'log').mockImplementation(() => {});
+    const repointelCommand = BUILTIN_COMMANDS.find((command) => command.name === 'repointel');
+
+    expect(repointelCommand).toBeDefined();
+    await repointelCommand!.handler(['warm'], context, {} as CommandCallbacks, currentConfig);
+
+    const output = logSpy.mock.calls.flat().join('\n');
+    expect(output).toContain('/repointel is deprecated');
+    expect(output).toContain('external daemon/bin controls');
+    expect(output).toContain('/repo-intel status');
+    expect(output).not.toContain('warmed successfully');
+  });
 });

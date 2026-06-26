@@ -85,6 +85,20 @@ describe('toolRead', () => {
     expect(result).toContain('Binary file not supported');
   });
 
+  it('routes PDF files toward the read_pdf extension instead of generic binary fallback', async () => {
+    const filePath = path.join(tempDir, 'sample.pdf');
+    await fs.writeFile(filePath, Buffer.from('%PDF-1.4\n%binary-ish\n'));
+
+    const result = await toolRead({ path: filePath }, {
+      backups: new Map(),
+      executionCwd: tempDir,
+    });
+
+    expect(result).toContain('PDF files are not parsed by the built-in read tool');
+    expect(result).toContain('read_pdf');
+    expect(result).not.toContain('Binary file not supported');
+  });
+
   // 2026-05-20 — claudecode parity: `read` on image extensions returns a
   // multimodal `tool_result` content array (text descriptor + image block)
   // instead of the legacy `[Tool Error] Binary file not supported`. This

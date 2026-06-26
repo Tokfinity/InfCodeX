@@ -49,11 +49,10 @@ describe('CAP-091: AMA-only managed reasoning plan builder contract', () => {
 
     const plan = await buildManagedReasoningPlan(options, 'fix the auth bug');
 
-    // Fallback shape: mode/depth = 'off'; decision is non-empty (NOT
-    // the undefined that the legacy path returned, which would force
+    // Fallback shape: effort = 'none' (no thinking); decision is non-empty
+    // (NOT the undefined that the legacy path returned, which would force
     // runner-driven.ts to fall back to SCOUT_INSTRUCTIONS_FALLBACK).
-    expect(plan.mode).toBe('off');
-    expect(plan.depth).toBe('off');
+    expect(plan.effort).toBe('none');
     expect(plan.decision).toBeDefined();
     // The fallback decision is built from `buildFallbackRoutingDecision` and
     // should carry the prompt-derived task family + a non-empty primary task.

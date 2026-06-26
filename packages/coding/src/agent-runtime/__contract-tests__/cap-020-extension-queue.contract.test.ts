@@ -52,7 +52,7 @@ function freshState(): RuntimeSessionState {
   return buildRuntimeSessionState({
     activeTools: ['read'],
     modelSelection: { provider: 'p', model: 'm' },
-    thinkingLevel: 'balanced',
+    thinkingLevel: 'medium',
   });
 }
 
@@ -130,7 +130,7 @@ describe('CAP-020: settleExtensionTurn — turn:settle hook callbacks mutate Run
 
   it('CAP-EXT-QUEUE-THINKING-LEVEL: setThinkingLevel callback inside turn:settle writes through to state', async () => {
     runtime.registerHook('turn:settle', (ctx) => {
-      ctx.setThinkingLevel('deep');
+      ctx.setThinkingLevel('high');
     });
 
     const state = freshState();
@@ -139,7 +139,7 @@ describe('CAP-020: settleExtensionTurn — turn:settle hook callbacks mutate Run
       success: true,
     });
 
-    expect(state.thinkingLevel).toBe('deep');
+    expect(state.thinkingLevel).toBe('high');
   });
 
   it('CAP-EXT-QUEUE-ORDERING: settleExtensionTurn → appendQueuedRuntimeMessages preserves the invariant — queueUserMessage during settle is drained on the very next append', async () => {

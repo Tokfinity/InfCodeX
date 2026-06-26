@@ -34,7 +34,7 @@
 // Idempotent failure mode: pristine bytes are captured BEFORE any mutation;
 // restore writes them back verbatim even if npm publish throws.
 
-import { readdirSync, readFileSync, writeFileSync } from 'node:fs';
+import { existsSync, readdirSync, readFileSync, writeFileSync } from 'node:fs';
 import { spawnSync } from 'node:child_process';
 import path from 'node:path';
 import { fileURLToPath } from 'node:url';
@@ -104,6 +104,12 @@ function assertNoRawAgentDynamicImport(dir) {
       logError(`raw ./agent.js dynamic import found in ${file}`);
     }
     throw new Error('dist contains a raw dynamic import of ./agent.js; rebuild before publishing');
+  }
+}
+
+function assertSemanticWorkerSidecar(dir) {
+  if (!existsSync(path.join(dir, 'semantic-worker.js'))) {
+    throw new Error('dist/semantic-worker.js missing; repo-intelligence full mode would silently fall back in published builds');
   }
 }
 
@@ -232,7 +238,8 @@ function main() {
     log('-- --skip-build: assuming dist/ is already current');
   }
   assertNoRawAgentDynamicImport(path.join(repoRoot, 'dist'));
-  log('-- bundle import guard passed');
+  assertSemanticWorkerSidecar(path.join(repoRoot, 'dist'));
+  log('-- bundle import and worker sidecar guards passed');
 
   // Step 3: toggle private:true → false (root package.json is already in
   // published shape; this is the only mutation needed).

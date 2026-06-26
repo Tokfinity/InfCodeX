@@ -1,8 +1,7 @@
 /**
  * KodaX Core
  *
- * 极致轻量化 Coding Agent Core 层
- * 可作为独立库使用，零 UI 依赖
+ * 鏋佽嚧杞婚噺鍖?Coding Agent Core 灞? * 鍙綔涓虹嫭绔嬪簱浣跨敤锛岄浂 UI 渚濊禆
  *
  * @example
  * ```typescript
@@ -17,7 +16,7 @@
  *     },
  *     events: {},
  *   },
- *   "创建一个 HTTP 服务器"
+ *   "鍒涘缓涓€涓?HTTP 鏈嶅姟鍣?
  * );
  * ```
  */
@@ -54,7 +53,7 @@ export type {
   KodaXReasoningEffortPreset,
   KodaXReasoningEffortWireStrategy,
   KodaXThinkingWireStrategy,
-  KodaXReasoningCapabilityV2,
+  KodaXReasoningProfile,
   KodaXReasoningOverride,
   KodaXReasoningMode,
   KodaXThinkingDepth,
@@ -401,7 +400,7 @@ export type {
   SymbolContextResult,
   ProcessContextResult,
   ImpactEstimateResult,
-} from './repo-intelligence/query.js';
+} from './repo-intelligence/semantic-types.js';
 
 export type {
   KodaXRepoRoutingSignals,
@@ -420,26 +419,20 @@ export {
 
 export type {
   RepoIntelligenceRuntimeInspection,
-  RepoIntelligenceRuntimeWarmResult,
-} from './repo-intelligence/premium-client.js';
+} from './repo-intelligence/runtime.js';
 
 export {
   resolveRepoIntelligenceRuntimeConfig,
   resolveRepoIntelligenceMode,
   inspectRepoIntelligenceRuntime,
-  warmRepoIntelligenceRuntime,
-} from './repo-intelligence/premium-client.js';
-
-export {
-  REPOINTEL_DEFAULT_ENDPOINT,
-} from './repo-intelligence/protocol.js';
+} from './repo-intelligence/runtime.js';
 
 export {
   renderModuleContext,
   renderSymbolContext,
   renderProcessContext,
   renderImpactEstimate,
-} from './repo-intelligence/query.js';
+} from './repo-intelligence/semantic-render.js';
 
 // ============== Prompts ==============
 
@@ -513,7 +506,7 @@ export {
   checkPromiseSignal,
 } from './agent.js';
 
-// v0.7.42 — non-blocking SDK entry (closes gap 6 reported by KodaX Space).
+// v0.7.42 鈥?non-blocking SDK entry (closes gap 6 reported by KodaX Space).
 // `startKodaX` returns a `RunningSession` handle so embedders can flip
 // provider/model/reasoning mid-run and abort cooperatively without
 // forging an external AbortSignal. See `./running-session.ts`.
@@ -538,10 +531,10 @@ export {
   CODING_UPDATE_SUMMARY_PROMPT,
 } from './agent-runtime/coding-compaction-prompts.js';
 
-// FEATURE_101 (v0.7.31): admission contract — capability-coupled
+// FEATURE_101 (v0.7.31): admission contract 鈥?capability-coupled
 // invariants (budgetCeiling / toolPermission / boundedRevise) plus
 // the bootstrap that registers the full v1 set.
-// (FEATURE_184 Phase C.1: independentReview deleted — superseded by
+// (FEATURE_184 Phase C.1: independentReview deleted 鈥?superseded by
 // Sidecar Verifier.)
 export {
   CODING_INVARIANTS,
@@ -553,7 +546,7 @@ export {
 } from './agent-runtime/invariants/index.js';
 
 // FEATURE_093 (v0.7.24): KodaXClient imported directly from client.ts to
-// avoid re-creating the agent ↔ client cycle at the barrel.
+// avoid re-creating the agent 鈫?client cycle at the barrel.
 export { KodaXClient } from './client.js';
 
 export {
@@ -799,7 +792,7 @@ export { exec, webhook } from './extensions/helpers.js';
 // History: extracted to @kodax-ai/core in FEATURE_082 (v0.7.24); merged back
 // into @kodax-ai/agent in v0.7.35.1 FEATURE_142 (single-consumer rule). These
 // barrel re-exports preserve the batteries-included shape of @kodax-ai/coding
-// — not a deprecation shim, they stay permanently.
+// 鈥?not a deprecation shim, they stay permanently.
 //
 // The Option-Y dog-food registers the default coding dispatcher as a side
 // effect of importing `./coding-preset.js`.
@@ -816,7 +809,7 @@ export {
   registerPresetDispatcher,
 } from '@kodax-ai/agent';
 
-// v0.7.42 — agent config home + third-party app namespace helper.
+// v0.7.42 鈥?agent config home + third-party app namespace helper.
 // Re-exported from `@kodax-ai/coding` so SDK consumers reach them via the
 // root SDK or `/coding` subpath without depending on `@kodax-ai/agent`
 // directly. `getAppDataDir` is the entrypoint downstream SDK embedders
@@ -862,7 +855,7 @@ export {
 export type { ProtocolEmitterMetadata } from './agents/index.js';
 
 // FEATURE_085 (v0.7.26): adapter wrapping the legacy per-tool truncation
-// policy as a Layer A ToolGuardrail.afterTool. Opt-in — the SA preset path
+// policy as a Layer A ToolGuardrail.afterTool. Opt-in 鈥?the SA preset path
 // continues to call applyToolResultGuardrail directly.
 export {
   TOOL_RESULT_TRUNCATION_GUARDRAIL_NAME,
@@ -949,7 +942,7 @@ export {
   createMcpManager,
 } from '@kodax-ai/agent';
 
-// FEATURE_087 + FEATURE_088 (v0.7.28): Construction Runtime — runtime-
+// FEATURE_087 + FEATURE_088 (v0.7.28): Construction Runtime 鈥?runtime-
 // generated tools / agents / skills. v0.7.28 ships tool generation only.
 export type {
   ConstructionArtifact,
@@ -975,10 +968,10 @@ export type {
   LlmReviewResult,
   LlmReviewVerdict,
   TestArtifactOptions,
-  // FEATURE_090 (v0.7.32): self-modify governance types — surface
+  // FEATURE_090 (v0.7.32): self-modify governance types 鈥?surface
   // consumed by the `kodax constructed *` CLI commands (P5/P6) and
   // the REPL self-modify bootstrap. `AgentContent` stays
-  // package-private — it's a manifest internal, not a CLI/REPL-facing
+  // package-private 鈥?it's a manifest internal, not a CLI/REPL-facing
   // shape; if a downstream consumer ever needs it we add it back then.
   AgentArtifact,
   AuditEntry,
@@ -1016,7 +1009,7 @@ export {
   buildLlmReviewPrompt,
   parseLlmReviewVerdict,
   runLlmReview,
-  // FEATURE_090 (v0.7.32): self-modify governance — audit log,
+  // FEATURE_090 (v0.7.32): self-modify governance 鈥?audit log,
   // budget counter, deferred resolver swap. CLI surface and REPL
   // bootstrap consume these.
   appendAuditEntry,
@@ -1031,18 +1024,21 @@ export {
   drainPendingSwaps,
   hasPendingSwap,
   resolveConstructedAgent,
-  // FEATURE_191 (v0.7.43) — markdown-defined agent loader. REPL bootstrap
+  REPO_EXPLORER_AGENT_NAME,
+  REPO_EXPLORER_TOOL_NAMES,
+  ensureBuiltinRepoExplorerAgent,
+  // FEATURE_191 (v0.7.43) 鈥?markdown-defined agent loader. REPL bootstrap
   // calls `loadAgentsFromMarkdown` after `rehydrateActiveArtifacts` so
   // `.kodax/agents/*.md` agents register alongside on-disk artifacts.
   loadAgentsFromMarkdown,
-  // FEATURE_197 (v0.7.43) — read-only discovery API for SDK consumers
+  // FEATURE_197 (v0.7.43) 鈥?read-only discovery API for SDK consumers
   // (e.g. agent-picker UIs) that need to list markdown agents without
   // triggering admission/registration side effects.
   discoverMarkdownAgents,
-  // Test-only — reset module-singleton state between hermetic test runs.
+  // Test-only 鈥?reset module-singleton state between hermetic test runs.
   _resetRuntimeForTesting,
 } from './construction/index.js';
-// FEATURE_191 + FEATURE_197 — type exports for the markdown loader +
+// FEATURE_191 + FEATURE_197 鈥?type exports for the markdown loader +
 // discovery surfaces (consumed by REPL `BootstrapConstructionRuntimeResult`
 // + SDK embedders building agent-picker UIs).
 export type {
@@ -1088,7 +1084,7 @@ export { stripAssistantText } from './guardrails/auto-mode/transcript-strip.js';
 export type { StripOptions } from './guardrails/auto-mode/transcript-strip.js';
 export { parseClassifierOutput } from './guardrails/auto-mode/parse-output.js';
 export type { ClassifierDecision } from './guardrails/auto-mode/parse-output.js';
-// Auto-mode denial counter (cumulative + consecutive block tally) — distinct
+// Auto-mode denial counter (cumulative + consecutive block tally) 鈥?distinct
 // from the FEATURE_044/045 input-signature `DenialTracker` exported above.
 export {
   createDenialTracker as createAutoModeDenialTracker,
@@ -1173,7 +1169,7 @@ export type {
   CreateBashPrefixExtractorOptions,
 } from './guardrails/auto-mode/bash-prefix-extractor.js';
 
-// ============== FEATURE_192 v0.7.44 — /goal Persistent Goal ==============
+// ============== FEATURE_192 v0.7.44 鈥?/goal Persistent Goal ==============
 export {
   BLOCKER_REQUIRED_CONSECUTIVE_TURNS,
   applyAccountingDelta,
@@ -1211,7 +1207,7 @@ export type {
 export { bootstrapTracing, TRACING_ENV } from './runtime/tracing-bootstrap.js';
 export type { BootstrapTracingOptions } from './runtime/tracing-bootstrap.js';
 
-// FEATURE_218 (v0.7.47): self-knowledge manual — resolver reused by the
+// FEATURE_218 (v0.7.47): self-knowledge manual 鈥?resolver reused by the
 // kodax_manual tool and the REPL `/help <topic>` path.
 export { resolveKodaXManual } from './self-knowledge/resolver.js';
 export { MANUAL_TOPIC_IDS } from './self-knowledge/registry.js';
@@ -1227,7 +1223,7 @@ export type {
   ResolveKodaXManualResult,
 } from './self-knowledge/types.js';
 
-// FEATURE_132 (v0.7.47): native LSP integration — edit-time diagnostics
+// FEATURE_132 (v0.7.47): native LSP integration 鈥?edit-time diagnostics
 // reflux. Hosts inject/own a service via `options.context.lspService` and
 // call `shutdownAll()` on teardown; default is the process-wide singleton.
 export {
@@ -1244,6 +1240,6 @@ export type {
   LspServiceConfig,
 } from './lsp/index.js';
 
-// FEATURE_217 (v0.7.49) — Dynamic Workflow Harness: agent backend +
+// FEATURE_217 (v0.7.49) 鈥?Dynamic Workflow Harness: agent backend +
 // built-in workflows + run-graph + headless orchestrator.
 export * from './workflows/index.js';

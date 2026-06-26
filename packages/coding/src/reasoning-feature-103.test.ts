@@ -23,7 +23,7 @@ import {
   applyFollowupEscalation,
   applyFollowupEscalationToOptions,
   detectFollowupSignal,
-  escalateUserCeiling,
+  escalateEffort,
 } from './reasoning.js';
 import type { KodaXMessage, KodaXOptions } from './types.js';
 
@@ -132,28 +132,28 @@ describe('detectFollowupSignal — null cases', () => {
 });
 
 // ---------------------------------------------------------------------------
-// escalateUserCeiling — single-rank bump invariants
+// escalateEffort — single-rank bump invariants (effort ladder)
 // ---------------------------------------------------------------------------
 
-describe('escalateUserCeiling', () => {
-  it('off is sacrosanct (kill switch dominates)', () => {
-    expect(escalateUserCeiling('off')).toBe('off');
+describe('escalateEffort', () => {
+  it('none is sacrosanct (kill switch dominates)', () => {
+    expect(escalateEffort('none')).toBe('none');
   });
 
-  it('auto bumps to quick', () => {
-    expect(escalateUserCeiling('auto')).toBe('quick');
+  it('auto enters the ladder at low', () => {
+    expect(escalateEffort('auto')).toBe('low');
   });
 
-  it('quick bumps to balanced', () => {
-    expect(escalateUserCeiling('quick')).toBe('balanced');
+  it('low bumps to medium', () => {
+    expect(escalateEffort('low')).toBe('medium');
   });
 
-  it('balanced bumps to deep', () => {
-    expect(escalateUserCeiling('balanced')).toBe('deep');
+  it('medium bumps to high', () => {
+    expect(escalateEffort('medium')).toBe('high');
   });
 
-  it('deep is the fixed point at the top', () => {
-    expect(escalateUserCeiling('deep')).toBe('deep');
+  it('high is the fixed point at the top of the legacy range', () => {
+    expect(escalateEffort('high')).toBe('high');
   });
 });
 
@@ -162,46 +162,46 @@ describe('escalateUserCeiling', () => {
 // ---------------------------------------------------------------------------
 
 describe('applyFollowupEscalation', () => {
-  it('returns ceiling unchanged + escalated:false when no signal fires', () => {
-    const result = applyFollowupEscalation('balanced', 'add a test for X', true);
-    expect(result.effective).toBe('balanced');
+  it('returns effort unchanged + escalated:false when no signal fires', () => {
+    const result = applyFollowupEscalation('medium', 'add a test for X', true);
+    expect(result.effective).toBe('medium');
     expect(result.escalated).toBe(false);
     expect(result.signal.category).toBe(null);
   });
 
-  it('bumps balanced → deep on doubt with prior turn', () => {
-    const result = applyFollowupEscalation('balanced', '这个不对吧', true);
-    expect(result.effective).toBe('deep');
+  it('bumps medium → high on doubt with prior turn', () => {
+    const result = applyFollowupEscalation('medium', '这个不对吧', true);
+    expect(result.effective).toBe('high');
     expect(result.escalated).toBe(true);
     expect(result.signal.category).toBe('doubt');
   });
 
-  it('bumps quick → balanced on deepen marker (no prior turn required)', () => {
-    const result = applyFollowupEscalation('quick', '请仔细分析', false);
-    expect(result.effective).toBe('balanced');
+  it('bumps low → medium on deepen marker (no prior turn required)', () => {
+    const result = applyFollowupEscalation('low', '请仔细分析', false);
+    expect(result.effective).toBe('medium');
     expect(result.escalated).toBe(true);
     expect(result.signal.category).toBe('deepen');
   });
 
-  it('off stays off even when doubt marker present (kill switch)', () => {
-    const result = applyFollowupEscalation('off', '这个不对', true);
-    expect(result.effective).toBe('off');
+  it('none stays none even when doubt marker present (kill switch)', () => {
+    const result = applyFollowupEscalation('none', '这个不对', true);
+    expect(result.effective).toBe('none');
     expect(result.escalated).toBe(false);
     // Signal is still detected for telemetry/transparency, but does not
     // produce escalation.
     expect(result.signal.category).toBe('doubt');
   });
 
-  it('deep stays deep when doubt marker present (already at top)', () => {
-    const result = applyFollowupEscalation('deep', '这个不对', true);
-    expect(result.effective).toBe('deep');
+  it('high stays high when doubt marker present (already at top of legacy range)', () => {
+    const result = applyFollowupEscalation('high', '这个不对', true);
+    expect(result.effective).toBe('high');
     expect(result.escalated).toBe(false);
     expect(result.signal.category).toBe('doubt');
   });
 
   it('doubt without prior turn does not escalate', () => {
-    const result = applyFollowupEscalation('balanced', '这个不对', false);
-    expect(result.effective).toBe('balanced');
+    const result = applyFollowupEscalation('medium', '这个不对', false);
+    expect(result.effective).toBe('medium');
     expect(result.escalated).toBe(false);
     expect(result.signal.category).toBe(null);
   });
@@ -213,7 +213,7 @@ describe('applyFollowupEscalation', () => {
 
 const BASE_OPTIONS: KodaXOptions = {
   provider: 'anthropic',
-  reasoningMode: 'balanced',
+  effort: 'medium',
 };
 
 const PRIOR_ASSISTANT: KodaXMessage = {
@@ -234,7 +234,7 @@ describe('applyFollowupEscalationToOptions', () => {
     expect(result.escalation.escalated).toBe(false);
   });
 
-  it('bumps reasoningMode + returns fresh options on doubt with prior assistant turn', () => {
+  it('bumps effort + returns fresh options on doubt with prior assistant turn', () => {
     const opts: KodaXOptions = {
       ...BASE_OPTIONS,
       session: {
@@ -243,7 +243,7 @@ describe('applyFollowupEscalationToOptions', () => {
     };
     const result = applyFollowupEscalationToOptions(opts, '这个不对吧');
     expect(result.options).not.toBe(opts);
-    expect(result.options.reasoningMode).toBe('deep');
+    expect(result.options.effort).toBe('high');
     expect(result.escalation.escalated).toBe(true);
     expect(result.escalation.signal.category).toBe('doubt');
   });
@@ -263,19 +263,19 @@ describe('applyFollowupEscalationToOptions', () => {
   it('escalates deepen marker even on first turn (no prior history)', () => {
     const result = applyFollowupEscalationToOptions(BASE_OPTIONS, '请仔细分析');
     expect(result.options).not.toBe(BASE_OPTIONS);
-    expect(result.options.reasoningMode).toBe('deep');
+    expect(result.options.effort).toBe('high');
     expect(result.escalation.signal.category).toBe('deepen');
   });
 
-  it('honours off kill switch even when signal present', () => {
+  it('honours none kill switch even when signal present', () => {
     const opts: KodaXOptions = {
       provider: 'anthropic',
-      reasoningMode: 'off',
+      effort: 'none',
       session: { initialMessages: [PRIOR_USER, PRIOR_ASSISTANT] },
     };
     const result = applyFollowupEscalationToOptions(opts, '这个不对');
     expect(result.options).toBe(opts); // no escalation → identity
-    expect(result.options.reasoningMode).toBe('off');
+    expect(result.options.effort).toBe('none');
     expect(result.escalation.escalated).toBe(false);
   });
 });

@@ -42,8 +42,7 @@ import { buildReasoningExecutionState } from '../reasoning-plan-entry.js';
 
 function freshPlan(overrides: Record<string, unknown> = {}): ReasoningPlan {
   return {
-    mode: 'balanced',
-    depth: 'medium',
+    effort: 'medium',
     promptOverlay: '',
     decision: {
       primaryTask: 'edit',
@@ -74,13 +73,13 @@ function freshOptions(overrides: Record<string, unknown> = {}): KodaXOptions {
 }
 
 describe('CAP-052: buildReasoningExecutionState — input merging', () => {
-  it('CAP-REASONING-PLAN-001a: effectiveOptions.reasoningMode is overridden by plan.mode (plan is source of truth)', async () => {
+  it('CAP-REASONING-PLAN-001a: effectiveOptions.effort is overridden by plan.effort (plan is source of truth)', async () => {
     const result = await buildReasoningExecutionState(
-      freshOptions({ reasoningMode: 'balanced' }),
-      freshPlan({ mode: 'deep' }),
+      freshOptions({ effort: 'medium' }),
+      freshPlan({ effort: 'high' }),
       true,
     );
-    expect(result.effectiveOptions.reasoningMode).toBe('deep');
+    expect(result.effectiveOptions.effort).toBe('high');
   });
 
   it('CAP-REASONING-PLAN-001b: promptOverlay concatenates user.context.promptOverlay and plan.promptOverlay with double newline', async () => {
@@ -167,28 +166,27 @@ describe('CAP-052: buildReasoningExecutionState — systemPrompt resolution', ()
 });
 
 describe('CAP-052: buildReasoningExecutionState — providerReasoning envelope', () => {
-  it('CAP-REASONING-PLAN-003a: depth=`off` → enabled: false; otherwise enabled: true', async () => {
+  it('CAP-REASONING-PLAN-003a: effort=`none` → enabled: false; otherwise enabled: true', async () => {
     const off = await buildReasoningExecutionState(
       freshOptions(),
-      freshPlan({ depth: 'off' }),
+      freshPlan({ effort: 'none' }),
       true,
     );
     expect(off.providerReasoning.enabled).toBe(false);
 
     const on = await buildReasoningExecutionState(
       freshOptions(),
-      freshPlan({ depth: 'high' }),
+      freshPlan({ effort: 'high' }),
       true,
     );
     expect(on.providerReasoning.enabled).toBe(true);
   });
 
-  it('CAP-REASONING-PLAN-003b: providerReasoning fields mirror plan (mode/depth) + decision (primaryTask/recommendedMode)', async () => {
+  it('CAP-REASONING-PLAN-003b: providerReasoning mirrors plan.effort + decision (primaryTask/recommendedMode)', async () => {
     const result = await buildReasoningExecutionState(
-      freshOptions({ effort: 'high' }),
+      freshOptions(),
       freshPlan({
-        mode: 'deep',
-        depth: 'high',
+        effort: 'high',
         decision: { primaryTask: 'review', recommendedMode: 'deep' },
       }),
       true,
@@ -196,8 +194,6 @@ describe('CAP-052: buildReasoningExecutionState — providerReasoning envelope',
 
     expect(result.providerReasoning).toEqual({
       enabled: true,
-      mode: 'deep',
-      depth: 'high',
       effort: 'high',
       taskType: 'review',
       executionMode: 'deep',
@@ -208,14 +204,14 @@ describe('CAP-052: buildReasoningExecutionState — providerReasoning envelope',
 describe('CAP-052: buildReasoningExecutionState — input immutability', () => {
   it('CAP-REASONING-PLAN-IMMUTABILITY: original options object is not mutated (effectiveOptions is a fresh shallow copy)', async () => {
     const original = freshOptions({
-      reasoningMode: 'balanced',
+      effort: 'medium',
       context: { promptOverlay: 'ORIG', systemPromptOverride: 'X' },
     });
     const snapshot = JSON.stringify(original);
 
     await buildReasoningExecutionState(
       original,
-      freshPlan({ mode: 'deep', promptOverlay: 'PLAN' }),
+      freshPlan({ effort: 'high', promptOverlay: 'PLAN' }),
       true,
     );
 

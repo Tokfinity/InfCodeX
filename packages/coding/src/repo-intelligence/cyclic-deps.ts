@@ -4,7 +4,7 @@
  * `moduleId → dependencies[]`). Pure functions; no I/O. The 8 existing repo
  * pull-tools answer 1-hop blast radius; none answer "is there a cycle".
  */
-import type { RepoIntelligenceIndex } from './query-fallback.js';
+import type { RepoIntelligenceIndex } from './semantic-types.js';
 
 export interface CycleFinding {
   /** Module ids in cycle order; `chain[last] === chain[0]` to show it loops. */

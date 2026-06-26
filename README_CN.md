@@ -253,8 +253,7 @@ import { listSessions } from '@kodax-ai/kodax/session';         // session 历�
       "baseUrl": "https://example.com/v1",
       "apiKeyEnv": "MY_DEEPSEEK_API_KEY",
       "model": "deepseek-v4-flash",
-      "supportsThinking": true,
-      "reasoningCapability": "native-toggle",
+      "reasoningPreset": "deepseek-v4-openai",
       "replayReasoningContent": true
     }
   ]
@@ -453,18 +452,16 @@ KodaX 有 50+ 个内置工具，按类别分组如下（实际暴露给 LLM 是�
 | `exit_plan_mode` | Plan 模式下提交最终方案给用户审批（仅 REPL） |
 | `emit_managed_protocol` | managed-task 协议侧信道（verdict role payload）。v0.7.42 FEATURE_184 起默认走 V2 Worker 单循环 + Sidecar Verifier；v0.7.43 FEATURE_193 退役 V1 chain。 |
 
-## Repo Intelligence（可选 premium 引擎）
+## Repo Intelligence（内置 full/light 引擎）
 
-KodaX 内置 OSS repo intelligence（`repo_overview` / `module_context` / `symbol_context` / `process_context` / `impact_estimate` 等），让 coding agent 不靠零散 grep/glob 就能理解大型仓库。
+KodaX 内置 repo intelligence（`repo_overview` / `module_context` / `symbol_context` / `process_context` / `impact_estimate` 等），让 coding agent 不靠零散 grep/glob 就能理解大型仓库。
 
-可选的 **premium 引擎**（`repointel` 本地 daemon，通过 sibling `KodaX-private` 仓发布）增加主动上下文注入、更深的 module capsule，以及一条 KodaX 原生 auto-lane。premium 不可用时 KodaX 自动 fallback 到 OSS。
+REPL 中使用 `/repo-intel status` 查看当前引擎状态。旧的独立 `repointel` host skill 已移除；repo intelligence 已内置于 KodaX，无需任何外部安装。
 
 ```bash
-# 选一个运行模式（off | oss | premium-shared | premium-native | auto）
-kodax --repo-intelligence premium-native --repo-intelligence-trace
+# 选一个运行模式（auto | full | light | off）
+kodax --repo-intelligence full --repo-intelligence-trace
 ```
-
-完整安装 / 运行模式 / REPL 控制 / config schema / 第三方宿主接入，详见 [docs/REPOINTEL.md](docs/REPOINTEL.md)。
 
 ## 仓库结构
 
@@ -595,20 +592,20 @@ npm run clean
 
 ### Repo Intelligence 缓存目录
 
-KodaX 现在会把 Repo Intelligence 的本地缓存分成两条路径：
+KodaX 现在会把 Repo Intelligence 的本地缓存分成内置引擎 profile：
 
 - `.agent/repo-intelligence/`
-  - OSS baseline 的索引、缓存和现有 task-engine 产物。
-- `.repointel/`
-  - premium `repointel` 的 workspace 级共享缓存，供本地 daemon / native frontdoor 使用。
+  - full 引擎索引、缓存和现有 task-engine 产物。
+- `.agent/repo-intelligence/light/`
+  - light 模式启发式索引缓存。
 
 这样拆开的目的很明确：
 
-- premium 不可用时，OSS fallback 仍然可以稳定工作。
-- premium 缓存不会污染 OSS 产物目录。
-- KodaX 和其他宿主可以共享同一份 premium workspace cache。
+- full 和 light profile 可以独立重建。
+- light 模式的低置信度状态不会被误认为 full 引擎状态。
+- 未来缓存迁移可以删除一个 profile，而不破坏另一个。
 
-`.repointel/` 是本地生成目录，不应该提交到 Git。
+`.agent/repo-intelligence/` 是本地生成目录，不应该提交到 Git。
 
 ---
 

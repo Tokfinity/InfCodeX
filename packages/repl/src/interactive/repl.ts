@@ -71,7 +71,10 @@ import {
   getProviderModel,
   getProviderAvailableModels,
   KODAX_VERSION,
+  formatReasoningEffortStatusLabel,
+  resolveInitialEffortOverride,
   resolvePermissionModeEffort,
+  resolveProviderReasoningRuntimeEffort,
 } from '../common/utils.js';
 import {
   InteractiveContext,
@@ -427,7 +430,7 @@ export async function runInteractiveMode(options: RepLOptions): Promise<void> {
   const initialModel = options.model ?? config.model;
   const initialReasoningMode = resolveInitialReasoningMode(options, config);
   const initialEffort = resolveInitialEffort(options, config);
-  const initialEffortOverride = options.effort !== undefined;
+  const initialEffortOverride = resolveInitialEffortOverride(options, config);
   const initialAgentMode = options.agentMode ?? (config as { agentMode?: KodaXAgentMode }).agentMode ?? 'ama';
   const initialThinking = initialReasoningMode !== 'off';
   const initialPermissionMode: PermissionMode =
@@ -460,8 +463,6 @@ export async function runInteractiveMode(options: RepLOptions): Promise<void> {
     agentMode: initialAgentMode,
     permissionMode: initialPermissionMode,
     repoIntelligenceMode: repoIntelligenceRuntime.mode,
-    repointelEndpoint: repoIntelligenceRuntime.endpoint,
-    repointelBin: repoIntelligenceRuntime.bin,
     repoIntelligenceTrace: repoIntelligenceRuntime.trace,
     fallbackProviders: config.fallbackProviders,
   };
@@ -472,6 +473,38 @@ export async function runInteractiveMode(options: RepLOptions): Promise<void> {
 
   const resolveCurrentEffort = (): string | undefined =>
     resolvePermissionModeEffort(currentConfig);
+
+  const resolveCurrentRuntimeEffort = (override?: {
+    provider?: string;
+    model?: string;
+    permissionMode?: PermissionMode;
+  }): ReturnType<typeof resolveProviderReasoningRuntimeEffort> =>
+    resolveProviderReasoningRuntimeEffort({
+      provider: override?.provider ?? currentConfig.provider,
+      model: override?.model ?? currentConfig.model,
+      effort: currentConfig.effort,
+      effortOverride: currentConfig.effortOverride,
+      permissionMode: override?.permissionMode ?? currentConfig.permissionMode,
+      planModeEffort: currentConfig.planModeEffort,
+      thinking: currentConfig.thinking,
+      reasoningMode: currentConfig.reasoningMode,
+    });
+
+  const formatCurrentReasoningEffortLabel = (override?: {
+    provider?: string;
+    model?: string;
+    permissionMode?: PermissionMode;
+  }): string => {
+    const effortResolution = resolveCurrentRuntimeEffort(override);
+    return formatReasoningEffortStatusLabel({
+      provider: override?.provider ?? currentConfig.provider,
+      model: override?.model ?? currentConfig.model,
+      effort: effortResolution.configuredEffort,
+      effortOverride: currentConfig.effortOverride,
+      thinking: currentConfig.thinking,
+      reasoningMode: currentConfig.reasoningMode,
+    });
+  };
 
   // Esc+Esc edit state - Esc+Esc 编辑状态
   let lastEscTime = 0;
@@ -615,6 +648,7 @@ export async function runInteractiveMode(options: RepLOptions): Promise<void> {
       effectiveModel,
       currentConfig.reasoningMode,
       resolveCurrentEffort(),
+      formatCurrentReasoningEffortLabel({ model: effectiveModel }),
     ));
     // FEATURE_092 phase 2b.8: seed the engine indicator if the session
     // started in auto mode. The guardrail factory is built but the
@@ -638,7 +672,7 @@ export async function runInteractiveMode(options: RepLOptions): Promise<void> {
 Keyboard Shortcuts:
   Tab       Auto-complete (@paths, /commands)
   Esc+Esc   Edit last message
-  Ctrl+T    Cycle reasoning mode
+  Ctrl+T    Cycle reasoning effort
   Ctrl+E    Open external editor
   Ctrl+R    Search command history (built-in)
   Ctrl+C    Cancel current input
@@ -684,7 +718,7 @@ Keyboard Shortcuts:
     ...options,
     provider: initialProvider,
     model: initialModel,
-    effort: resolveCurrentEffort(),
+    effort: resolveCurrentRuntimeEffort().runtimeEffort,
     agentMode: initialAgentMode,
     reasoningMode: initialReasoningMode,
     thinking: initialThinking,
@@ -708,9 +742,12 @@ Keyboard Shortcuts:
 
   // Cost tracking ref — agent populates this via events.getCostReport, /cost command reads it
   const refreshCurrentEffort = (): void => {
-    const effort = resolveCurrentEffort();
-    currentOptions.effort = effort;
-    statusBar?.update({ effort });
+    const effortResolution = resolveCurrentRuntimeEffort();
+    currentOptions.effort = effortResolution.runtimeEffort;
+    statusBar?.update({
+      effort: effortResolution.configuredEffort,
+      reasoningEffortLabel: formatCurrentReasoningEffortLabel(),
+    });
   };
 
   costReportRef.current = null;
@@ -979,10 +1016,12 @@ Keyboard Shortcuts:
       console.log();
     },
     switchProvider: (provider: string, model?: string) => {
+      const effortResolution = resolveCurrentRuntimeEffort({ provider, model });
       currentConfig.provider = provider;
       currentConfig.model = model;
       currentOptions.provider = provider;
       currentOptions.model = model;
+      currentOptions.effort = effortResolution.runtimeEffort;
       let newModel = model ?? getProviderModel(provider);
       if (!newModel) {
         // Fallback for custom providers - 自定义 Provider 的后备
@@ -996,14 +1035,25 @@ Keyboard Shortcuts:
       statusBar?.update({
         provider,
         model: newModel,
+        effort: effortResolution.configuredEffort,
+        reasoningEffortLabel: formatCurrentReasoningEffortLabel({
+          provider,
+          model: newModel,
+        }),
       });
+      if (effortResolution.diagnostic) {
+        console.log(chalk.yellow(`\n[${effortResolution.diagnostic}]`));
+      }
     },
     setThinking: (enabled: boolean) => {
       currentConfig.thinking = enabled;
       currentOptions.thinking = enabled;
       currentConfig.reasoningMode = enabled ? 'auto' : 'off';
       currentOptions.reasoningMode = currentConfig.reasoningMode;
-      statusBar?.update({ reasoningMode: currentConfig.reasoningMode });
+      statusBar?.update({
+        reasoningMode: currentConfig.reasoningMode,
+        reasoningEffortLabel: formatCurrentReasoningEffortLabel(),
+      });
     },
     setEffort: (effort?: string) => {
       currentConfig.effort = effort;
@@ -1016,7 +1066,10 @@ Keyboard Shortcuts:
       currentConfig.thinking = thinking;
       currentOptions.reasoningMode = mode;
       currentOptions.thinking = thinking;
-      statusBar?.update({ reasoningMode: mode });
+      statusBar?.update({
+        reasoningMode: mode,
+        reasoningEffortLabel: formatCurrentReasoningEffortLabel(),
+      });
     },
     setAgentMode: (mode: KodaXAgentMode) => {
       currentConfig.agentMode = mode;
@@ -1046,7 +1099,7 @@ Keyboard Shortcuts:
     setRepoIntelligenceRuntime: (update) => {
       if (update.mode !== undefined) {
         currentConfig.repoIntelligenceMode = update.mode;
-        process.env.KODAX_REPO_INTELLIGENCE_MODE = update.mode;
+          process.env.KODAX_REPO_INTELLIGENCE = update.mode;
         currentOptions.context = {
           ...currentOptions.context,
           repoIntelligenceMode: update.mode,
@@ -1063,22 +1116,6 @@ Keyboard Shortcuts:
           ...currentOptions.context,
           repoIntelligenceTrace: update.trace,
         };
-      }
-      if (update.endpoint !== undefined) {
-        currentConfig.repointelEndpoint = update.endpoint ?? undefined;
-        if (update.endpoint) {
-          process.env.KODAX_REPOINTEL_ENDPOINT = update.endpoint;
-        } else {
-          delete process.env.KODAX_REPOINTEL_ENDPOINT;
-        }
-      }
-      if (update.bin !== undefined) {
-        currentConfig.repointelBin = update.bin ?? undefined;
-        if (update.bin) {
-          process.env.KODAX_REPOINTEL_BIN = update.bin;
-        } else {
-          delete process.env.KODAX_REPOINTEL_BIN;
-        }
       }
     },
     deleteSession: async (id: string) => {
@@ -1218,7 +1255,7 @@ Keyboard Shortcuts:
         ...currentOptions,
         provider: currentConfig.provider,
         model: currentConfig.model,
-        effort: resolveCurrentEffort(),
+        effort: resolveCurrentRuntimeEffort().runtimeEffort,
         thinking: currentConfig.thinking,
         reasoningMode: currentConfig.reasoningMode,
         guardrails,

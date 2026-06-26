@@ -6,7 +6,7 @@
  * state of a child task launched via `dispatch_child_task`. Returns a
  * structured envelope mirroring claudecode's `TaskOutput` shape:
  *
- *   <retrieval_status>success|timeout|not_found</retrieval_status>
+ *   <retrieval_status>success|wait_expired|not_found</retrieval_status>
  *   <task_id>...</task_id>
  *   <status>running|completed|failed|aborted</status>
  *   <iterations>n/maxN</iterations>
@@ -34,8 +34,8 @@
  * The `block` parameter races the child promise against `timeout_ms`.
  * On success the snapshot is read AFTER the registry promise settles
  * (snapshot is the source of truth — registry entries are deleted on
- * settle via `registerChildTask`'s built-in cleanup chain). On timeout
- * the snapshot is read AS-IS at the timeout boundary.
+ * settle via `registerChildTask`'s built-in cleanup chain). On wait expiry
+ * the snapshot is read AS-IS; the child may still be running.
  */
 
 import { getMessageQueue } from '@kodax-ai/agent';
@@ -87,7 +87,7 @@ export async function toolTaskOutput(
   }
 
   // --- Optional block: race the registry promise vs timeout ---
-  let retrievalStatus: 'success' | 'timeout' | 'not_found' = 'success';
+  let retrievalStatus: TaskOutputRetrievalStatus = 'success';
   if (block) {
     const registry = ctx.childTaskRegistry;
     const inFlight = registry?.get(taskId);
@@ -104,7 +104,7 @@ export async function toolTaskOutput(
       );
       const winner = await Promise.race([settle, timeout]);
       if (winner === '__timeout__') {
-        retrievalStatus = 'timeout';
+        retrievalStatus = 'wait_expired';
       }
     }
     // If `registry.get(taskId)` is undefined here, the child already
@@ -147,7 +147,7 @@ function renderNotFound(taskId: string): string {
 
 function renderSnapshot(
   snap: ChildProgressSnapshot,
-  retrievalStatus: 'success' | 'timeout' | 'not_found',
+  retrievalStatus: TaskOutputRetrievalStatus,
 ): string {
   const now = Date.now();
   const referenceEnd = snap.endedAt ?? now;
@@ -160,6 +160,12 @@ function renderSnapshot(
     `<iterations>${snap.iterations}/${snap.maxIterations}</iterations>`,
     `<duration_ms>${duration}</duration_ms>`,
   ];
+
+  if (retrievalStatus === 'wait_expired') {
+    lines.push(
+      '<note>The bounded read window expired. The child task has not timed out — read the `status` field above to decide whether it is still running.</note>',
+    );
+  }
 
   if (snap.recentToolCalls.length > 0) {
     lines.push(`<recent_tool_calls>`);
@@ -184,6 +190,8 @@ function renderSnapshot(
 
   return lines.join('\n');
 }
+
+type TaskOutputRetrievalStatus = 'success' | 'wait_expired' | 'not_found';
 
 function formatBreadcrumb(call: ChildToolCallBreadcrumb): string {
   const hint = call.inputHint ? ` ${call.inputHint}` : '';

@@ -1,6 +1,6 @@
 {
   "name": "@kodax-ai/kodax",
-  "version": "0.7.56",
+  "version": "0.7.57",
   "description": "极致轻量化 Coding Agent - TypeScript 实现，支持 12 个 LLM 提供商，可发布为免 Node 单文件二进制",
   "type": "module",
   "private": true,
@@ -72,6 +72,7 @@
     "test:eval": "vitest run -c vitest.eval.config.ts",
     "bench:perf": "tsx benchmark/perf/repl-render-perf.bench.ts",
     "bench:perf:e2e": "tsx benchmark/perf/repl-render-engine-e2e.bench.ts",
+    "bench:repo-intel": "tsx benchmark/perf/repo-intelligence-index.bench.ts",
     "clean": "node -e \"require('fs').rmSync('dist',{recursive:true,force:true})\"",
     "clean:packages": "npm run clean --workspaces"
   },
@@ -146,10 +147,16 @@
   },
   "repository": {
     "type": "git",
-    "url": "https://github.com/icetomoyo/KodaX.git"
+    "url": "git+https://github.com/icetomoyo/KodaX.git"
   },
   "files": [
-    "dist",
+    "dist/*.d.ts",
+    "dist/*.js",
+    "dist/builtin",
+    "dist/chunks",
+    "dist/provider-capabilities.json",
+    "dist/semantic-worker.js",
+    "dist/types-chunks",
     "scripts/kodax-bin.cjs",
     "scripts/production-env.cjs",
     "README.md",

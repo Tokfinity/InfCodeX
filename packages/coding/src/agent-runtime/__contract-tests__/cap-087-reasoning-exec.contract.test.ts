@@ -33,8 +33,7 @@ import type { ReasoningPlan } from '../../reasoning.js';
 
 function makeMinimalPlan(overrides?: Partial<ReasoningPlan>): ReasoningPlan {
   return {
-    mode: 'off',
-    depth: 'off',
+    effort: 'none',
     decision: {
       primaryTask: 'investigation',
       recommendedMode: 'plan',
@@ -128,11 +127,11 @@ describe('CAP-087: per-turn reasoning execution state builder contract', () => {
         executionCwd: process.cwd(),
       },
     } as unknown as KodaXOptions;
-    const plan = makeMinimalPlan({ mode: 'auto' });
+    const plan = makeMinimalPlan({ effort: 'auto' });
 
     const state = await buildReasoningExecutionState(options, plan, true);
 
-    expect(state.effectiveOptions.reasoningMode).toBe('auto');
+    expect(state.effectiveOptions.effort).toBe('auto');
     expect(state.effectiveOptions.context?.executionCwd).toBeDefined();
     // providerPolicyHints object is always created from the decision
     expect(state.effectiveOptions.context?.providerPolicyHints).toBeDefined();

@@ -90,7 +90,7 @@ export async function sideQuery(req: SideQueryRequest): Promise<SideQueryResult>
       [...req.messages],
       [],
       req.system,
-      req.reasoning ?? { mode: 'off' },
+      req.reasoning ?? { effort: 'none' },
       {
         modelOverride: req.model,
         onRetryAfter: (event) => {

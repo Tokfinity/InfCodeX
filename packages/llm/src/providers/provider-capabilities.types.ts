@@ -1,11 +1,11 @@
 /**
- * FEATURE_198 v0.7.44 — Provider capability JSON schema + validator.
+ * FEATURE_198 v0.7.44 鈥?Provider capability JSON schema + validator.
  *
  * Backs `KODAX_PROVIDER_SNAPSHOTS` with a separate JSON file so KodaX
  * consumers can hot-patch capability data (context window, max output
  * tokens, model lists) without waiting for a KodaX release.
  *
- * Hand-rolled validator (no zod) — single schema, lightweight package,
+ * Hand-rolled validator (no zod) 鈥?single schema, lightweight package,
  * aligns with the "no new deps unless 3+ use cases" rule. Validator
  * fails loudly with the field path so manual JSON edits surface clearly.
  */
@@ -14,7 +14,7 @@ import type {
   KodaXModelDescriptor,
   KodaXProviderCapabilityProfile,
   KodaXReasoningCapability,
-  KodaXReasoningCapabilityV2,
+  KodaXReasoningProfile,
   KodaXReasoningPresetName,
   KodaXReasoningEffortWireStrategy,
   KodaXThinkingWireStrategy,
@@ -48,7 +48,7 @@ export interface ProviderCapabilityJsonEntry {
   readonly model?: string;
   readonly models?: ReadonlyArray<KodaXModelDescriptor>;
   readonly reasoningCapability: KodaXReasoningCapability;
-  readonly reasoningCapabilityV2?: KodaXReasoningCapabilityV2;
+  readonly reasoningProfile?: KodaXReasoningProfile;
   readonly modelReasoningCapabilities?: Readonly<
     Record<string, KodaXReasoningCapability>
   >;
@@ -60,7 +60,7 @@ export interface ProviderCapabilityJsonEntry {
   /** When true, loader injects `model` + `models` from cli-bridge-models.ts. */
   readonly cliBridge?: boolean;
   /**
-   * FEATURE_216 v0.7.45 — Verify primitive this provider uses for
+   * FEATURE_216 v0.7.45 鈥?Verify primitive this provider uses for
    * credential checks. Required (no silent default) because the choice
    * is provider-empirical, not protocol-derived. cliBridge entries MUST
    * be 'unsupported' (CLI binary owns its own credentials).
@@ -75,7 +75,7 @@ export interface ProviderCapabilitiesJson {
 }
 
 /**
- * Resolved snapshot — what `KODAX_PROVIDER_SNAPSHOTS` callers see.
+ * Resolved snapshot 鈥?what `KODAX_PROVIDER_SNAPSHOTS` callers see.
  * Identical shape to the legacy in-memory type so consumers are
  * unchanged.
  */
@@ -84,7 +84,7 @@ export interface ProviderSnapshot {
   readonly models?: ReadonlyArray<KodaXModelDescriptor>;
   readonly apiKeyEnv: string;
   readonly reasoningCapability: KodaXReasoningCapability;
-  readonly reasoningCapabilityV2?: KodaXReasoningCapabilityV2;
+  readonly reasoningProfile?: KodaXReasoningProfile;
   readonly modelReasoningCapabilities?: Readonly<
     Record<string, KodaXReasoningCapability>
   >;
@@ -93,7 +93,7 @@ export interface ProviderSnapshot {
   readonly maxOutputTokens?: number;
   readonly thinkingBudgetCap?: number;
   readonly supportsThinking?: boolean;
-  /** FEATURE_216 v0.7.45 — verify primitive for this provider. */
+  /** FEATURE_216 v0.7.45 鈥?verify primitive for this provider. */
   readonly verifyStrategy: KodaXVerifyStrategy;
 }
 
@@ -286,10 +286,10 @@ function optionalThinkingStrategy(
   return value as KodaXThinkingWireStrategy;
 }
 
-function validateReasoningCapabilityV2(
+function validateReasoningProfile(
   raw: unknown,
   path: string,
-): KodaXReasoningCapabilityV2 | undefined {
+): KodaXReasoningProfile | undefined {
   if (raw === undefined) return undefined;
   if (!isPlainObject(raw)) {
     throw new Error(`provider-capabilities.json: ${path} must be an object`);
@@ -349,7 +349,7 @@ function validateReasoningCapabilityV2(
     `${path}.requiresEffortBetaHeader`,
   );
 
-  const capability: KodaXReasoningCapabilityV2 = { effortStrategy };
+  const capability: KodaXReasoningProfile = { effortStrategy };
   if (reasoningPreset !== undefined) {
     (capability as { reasoningPreset: KodaXReasoningPresetName }).reasoningPreset = reasoningPreset;
   }
@@ -372,7 +372,7 @@ function validateReasoningCapabilityV2(
     if (!Array.isArray(raw.supportedEfforts)) {
       throw new Error(`provider-capabilities.json: ${path}.supportedEfforts must be an array`);
     }
-    (capability as { supportedEfforts: NonNullable<KodaXReasoningCapabilityV2['supportedEfforts']> }).supportedEfforts =
+    (capability as { supportedEfforts: NonNullable<KodaXReasoningProfile['supportedEfforts']> }).supportedEfforts =
       raw.supportedEfforts.map((entry, index) => {
         if (!isPlainObject(entry)) {
           throw new Error(`provider-capabilities.json: ${path}.supportedEfforts[${index}] must be an object`);
@@ -427,6 +427,23 @@ function validateReasoningCapabilityV2(
     (capability as { requiresEffortBetaHeader: boolean }).requiresEffortBetaHeader = requiresEffortBetaHeader;
   }
   return capability;
+}
+
+function validateReasoningProfileField(
+  raw: Record<string, unknown>,
+  path: string,
+): KodaXReasoningProfile | undefined {
+  const canonical = raw.reasoningProfile;
+  const legacy = raw.reasoningCapabilityV2;
+  if (canonical !== undefined && legacy !== undefined) {
+    throw new Error(
+      `provider-capabilities.json: ${path} must not define both reasoningProfile and deprecated reasoningCapabilityV2`,
+    );
+  }
+  if (canonical !== undefined) {
+    return validateReasoningProfile(canonical, `${path}.reasoningProfile`);
+  }
+  return validateReasoningProfile(legacy, `${path}.reasoningCapabilityV2`);
 }
 
 function requireProfileName(value: unknown, path: string): CapabilityProfileName {
@@ -490,10 +507,7 @@ function validateModelDescriptor(
           raw.reasoningCapability,
           `${path}.reasoningCapability`,
         );
-  const reasoningCapabilityV2 = validateReasoningCapabilityV2(
-    raw.reasoningCapabilityV2,
-    `${path}.reasoningCapabilityV2`,
-  );
+  const reasoningProfile = validateReasoningProfileField(raw, path);
   const descriptor: KodaXModelDescriptor = { id };
   if (displayName !== undefined) descriptor.displayName = displayName;
   if (contextWindow !== undefined) descriptor.contextWindow = contextWindow;
@@ -504,8 +518,8 @@ function validateModelDescriptor(
   if (reasoningCapability !== undefined) {
     descriptor.reasoningCapability = reasoningCapability;
   }
-  if (reasoningCapabilityV2 !== undefined) {
-    descriptor.reasoningCapabilityV2 = reasoningCapabilityV2;
+  if (reasoningProfile !== undefined) {
+    descriptor.reasoningProfile = reasoningProfile;
   }
   if (replayReasoningContent !== undefined) {
     descriptor.replayReasoningContent = replayReasoningContent;
@@ -549,10 +563,7 @@ function validateProviderEntry(
     raw.reasoningCapability,
     `providers.${name}.reasoningCapability`,
   );
-  const reasoningCapabilityV2 = validateReasoningCapabilityV2(
-    raw.reasoningCapabilityV2,
-    `providers.${name}.reasoningCapabilityV2`,
-  );
+  const reasoningProfile = validateReasoningProfileField(raw, `providers.${name}`);
   const capabilityProfile = requireProfileName(
     raw.capabilityProfile,
     `providers.${name}.capabilityProfile`,
@@ -562,10 +573,10 @@ function validateProviderEntry(
     `providers.${name}.verifyStrategy`,
   );
   // cliBridge providers' credentials live in the CLI binary's own token
-  // store, outside SDK reach — there is no HTTP primitive to probe.
+  // store, outside SDK reach 鈥?there is no HTTP primitive to probe.
   if (cliBridge && verifyStrategy !== 'unsupported') {
     throw new Error(
-      `provider-capabilities.json: providers.${name} is a cliBridge entry but verifyStrategy="${verifyStrategy}" — must be "unsupported" (CLI binary owns credentials)`,
+      `provider-capabilities.json: providers.${name} is a cliBridge entry but verifyStrategy="${verifyStrategy}" 鈥?must be "unsupported" (CLI binary owns credentials)`,
     );
   }
   const contextWindow = optionalNumber(
@@ -589,12 +600,12 @@ function validateProviderEntry(
     `providers.${name}.modelReasoningCapabilities`,
   );
 
-  // CLI-bridge providers MUST omit model/models — they're filled at load
+  // CLI-bridge providers MUST omit model/models 鈥?they're filled at load
   // time from the local CLI config. Static providers MUST provide model.
   const model = optionalString(raw.model, `providers.${name}.model`);
   if (cliBridge && (model !== undefined || raw.models !== undefined)) {
     throw new Error(
-      `provider-capabilities.json: providers.${name} is a cliBridge entry but defines model/models — must be omitted (filled at load time)`,
+      `provider-capabilities.json: providers.${name} is a cliBridge entry but defines model/models 鈥?must be omitted (filled at load time)`,
     );
   }
   if (!cliBridge && model === undefined) {
@@ -620,9 +631,9 @@ function validateProviderEntry(
     capabilityProfile,
     verifyStrategy,
   };
-  if (reasoningCapabilityV2 !== undefined) {
-    (entry as { reasoningCapabilityV2: KodaXReasoningCapabilityV2 }).reasoningCapabilityV2 =
-      reasoningCapabilityV2;
+  if (reasoningProfile !== undefined) {
+    (entry as { reasoningProfile: KodaXReasoningProfile }).reasoningProfile =
+      reasoningProfile;
   }
   if (model !== undefined) (entry as { model: string }).model = model;
   if (models !== undefined) (entry as { models: typeof models }).models = models;

@@ -105,6 +105,7 @@ const PRUNE_PROTECTED_TOOLS: ReadonlySet<string> = new Set([
   'symbol_context',
   'process_context',
   'impact_estimate',
+  'relationship_scan',
   'cyclic_dependencies',
 ]);
 
@@ -859,6 +860,21 @@ function countToolResultTokens(content: string): number {
   return 4 + countTokens(content);
 }
 
+/**
+ * Group an assistant `tool_use` turn with its immediately-following user
+ * `tool_result` turn so the LLM-summarization cut never splits a tool pair.
+ *
+ * Adjacency assumption: KodaX's agent loop always pushes ALL tool_results for
+ * one assistant turn into a SINGLE user message placed immediately after it
+ * (see `pushToolResultsAndSettle`), so the `messages[i+1]` check covers every
+ * pair the loop produces. Non-adjacent / multi-message tool_results are not a
+ * shape KodaX emits; if one ever arose (hand-built history, external caller),
+ * the cut could split it — but `commitCompactedHistory` runs
+ * `validateAndFixToolHistory` on the compaction output every turn before the
+ * provider call, which strips any orphan that resulted. This function is an
+ * optimization (avoid splitting), not the correctness guarantee; the backstop
+ * is the validator (covered by CAP-002 contract tests).
+ */
 function getAtomicBlocks(messages: KodaXMessage[]): Array<{ start: number; end: number; tokens: number }> {
   const atomicBlocks: Array<{ start: number; end: number; tokens: number }> = [];
 

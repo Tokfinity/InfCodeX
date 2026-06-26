@@ -4,8 +4,28 @@ import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 import { afterEach, describe, expect, it, vi } from 'vitest';
 import { buildRepoIntelligenceContext, getRepoOverview } from './index.js';
-import { getImpactEstimate, getRepoRoutingSignals } from './query.js';
+import {
+  getImpactEstimate as getSemanticImpactEstimate,
+  getRepoRoutingSignals as getSemanticRepoRoutingSignals,
+} from './semantic-index.js';
 import { commitAll, initGitRepo } from '../tools/test-helpers.js';
+
+type RepoContext = { executionCwd?: string; gitRoot?: string };
+type LightQueryOptions = { targetPath?: string; refresh?: boolean };
+
+function getRepoRoutingSignals(
+  context: RepoContext,
+  options: LightQueryOptions = {},
+) {
+  return getSemanticRepoRoutingSignals(context, { ...options, profile: 'light' });
+}
+
+function getImpactEstimate(
+  context: RepoContext,
+  options: LightQueryOptions & { symbol?: string; module?: string; path?: string } = {},
+) {
+  return getSemanticImpactEstimate(context, { ...options, profile: 'light' });
+}
 
 function createWorkspaceFixture(workspaceRoot: string): void {
   mkdirSync(join(workspaceRoot, 'packages', 'app', 'src'), { recursive: true });
@@ -95,6 +115,29 @@ describe('repo overview baseline cache', () => {
     expect(rebuilt.generatedAt).not.toBe(initial.generatedAt);
     expect(rebuiltInventory.schemaVersion).toBe(initial.schemaVersion);
     expect(rebuiltInventory.overviewGeneratedAt).toBe(rebuilt.generatedAt);
+  }, 15000);
+
+  it('honors an absolute repo-intelligence storage dir override', async () => {
+    tempDir = mkdtempSync(join(tmpdir(), 'kodax-repo-overview-absolute-storage-'));
+    const storageDir = mkdtempSync(join(tmpdir(), 'kodax-ri-storage-'));
+    const originalStorageDir = process.env.KODAX_REPO_INTELLIGENCE_STORAGE_DIR;
+    createWorkspaceFixture(tempDir);
+
+    try {
+      process.env.KODAX_REPO_INTELLIGENCE_STORAGE_DIR = storageDir;
+      await getRepoOverview({ executionCwd: tempDir }, { refresh: true });
+
+      expect(existsSync(join(storageDir, 'repo-overview.json'))).toBe(true);
+      expect(existsSync(join(storageDir, 'repo-overview-inventory.json'))).toBe(true);
+      expect(existsSync(join(tempDir, storageDir, 'repo-overview.json'))).toBe(false);
+    } finally {
+      if (originalStorageDir === undefined) {
+        delete process.env.KODAX_REPO_INTELLIGENCE_STORAGE_DIR;
+      } else {
+        process.env.KODAX_REPO_INTELLIGENCE_STORAGE_DIR = originalStorageDir;
+      }
+      rmSync(storageDir, { recursive: true, force: true });
+    }
   }, 15000);
 
   it('does not write clean baseline artifacts for filesystem workspaces', async () => {

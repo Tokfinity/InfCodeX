@@ -32,6 +32,7 @@ import {
   type MarkdownLoadFailure,
   type SelfModifyAskUser,
   configureRuntime,
+  ensureBuiltinRepoExplorerAgent,
   loadAgentsFromMarkdown,
   rehydrateActiveArtifacts,
 } from '@kodax-ai/coding';
@@ -189,6 +190,7 @@ export async function bootstrapConstructionRuntime(
     selfModifyAskUser: replSelfModifyAskUser,
   });
   const rehydrated = await rehydrateActiveArtifacts();
+  await ensureBuiltinRepoExplorerAgent();
   // FEATURE_191 — load user + project markdown agents *after* rehydrate
   // so the resolver is populated for cross-agent handoff validation
   // during the markdown loader's `Runner.admit` step. Markdown failures

@@ -1,5 +1,27 @@
 import { describe, expect, it } from 'vitest';
-import { resolvePermissionModeEffort } from './utils.js';
+import {
+  formatReasoningEffortForDisplay,
+  formatReasoningEffortStatusLabel,
+  getProviderReasoningEffortCycle,
+  getProviderReasoningEffortOptions,
+  resolveInitialEffortOverride,
+  resolvePermissionModeEffort,
+  resolveProviderReasoningRuntimeEffort,
+} from './utils.js';
+
+describe('resolveInitialEffortOverride', () => {
+  it('restores override from a persisted config effort (Ctrl+T / /effort round-trip)', () => {
+    expect(resolveInitialEffortOverride({}, { effort: 'high' })).toBe(true);
+  });
+
+  it('treats a CLI --effort flag as an override', () => {
+    expect(resolveInitialEffortOverride({ effort: 'low' }, {})).toBe(true);
+  });
+
+  it('is not an override when neither CLI flag nor persisted effort exists (auto)', () => {
+    expect(resolveInitialEffortOverride({}, {})).toBe(false);
+  });
+});
 
 describe('resolvePermissionModeEffort', () => {
   it('uses planModeEffort in plan mode when no session override exists', () => {
@@ -33,5 +55,132 @@ describe('resolvePermissionModeEffort', () => {
       planModeEffort: 'medium',
       permissionMode: 'accept-edits',
     })).toBe('high');
+  });
+});
+
+describe('formatReasoningEffortStatusLabel', () => {
+  it('shows the user-facing off label for internal none', () => {
+    expect(formatReasoningEffortForDisplay('none')).toBe('off');
+  });
+
+  it('shows configured-to-effective auto defaults from the active model', () => {
+    expect(formatReasoningEffortStatusLabel({
+      provider: 'zhipu-coding',
+      model: 'glm-5.2',
+      effort: 'auto',
+      effortOverride: true,
+      thinking: true,
+      reasoningMode: 'auto',
+    })).toBe('auto->max');
+  });
+
+  it('shows provider aliases without changing the configured value', () => {
+    expect(formatReasoningEffortStatusLabel({
+      provider: 'zhipu-coding',
+      model: 'glm-5.2',
+      effort: 'xhigh',
+      effortOverride: true,
+      thinking: true,
+      reasoningMode: 'auto',
+    })).toBe('xhigh->max');
+  });
+
+  it('derives visible effort options from the active model capability', () => {
+    expect(getProviderReasoningEffortOptions('zhipu-coding', 'glm-5.2'))
+      .toEqual(['auto', 'off', 'low', 'medium', 'high', 'xhigh', 'max']);
+    expect(getProviderReasoningEffortOptions('openai', 'gpt-5.3-codex'))
+      .toEqual(['auto', 'off', 'minimal', 'low', 'medium', 'high', 'xhigh']);
+  });
+
+  it('shows unsupported configured effort clamped to the active model', () => {
+    expect(formatReasoningEffortStatusLabel({
+      provider: 'openai',
+      model: 'gpt-5.3-codex',
+      effort: 'max',
+      effortOverride: true,
+      thinking: true,
+      reasoningMode: 'auto',
+    })).toBe('max->medium');
+  });
+
+  it('folds a disabled-thinking effort (minimal on glm) to off', () => {
+    expect(formatReasoningEffortStatusLabel({
+      provider: 'zhipu-coding',
+      model: 'glm-5.2',
+      effort: 'minimal',
+      effortOverride: true,
+      thinking: true,
+      reasoningMode: 'auto',
+    })).toBe('minimal->off');
+  });
+
+  it('keeps minimal as a real tier where the model supports it (openai)', () => {
+    expect(formatReasoningEffortStatusLabel({
+      provider: 'openai',
+      model: 'gpt-5.3-codex',
+      effort: 'minimal',
+      effortOverride: true,
+      thinking: true,
+      reasoningMode: 'auto',
+    })).toBe('minimal');
+  });
+});
+
+describe('getProviderReasoningEffortCycle', () => {
+  it('drops the minimal-folds-to-off duplicate and puts auto last (glm)', () => {
+    expect(getProviderReasoningEffortCycle('zhipu-coding', 'glm-5.2'))
+      .toEqual(['off', 'low', 'medium', 'high', 'xhigh', 'max', 'auto']);
+  });
+
+  it('keeps minimal as a real rung where the model supports it (openai)', () => {
+    expect(getProviderReasoningEffortCycle('openai', 'gpt-5.3-codex'))
+      .toEqual(['off', 'minimal', 'low', 'medium', 'high', 'xhigh', 'auto']);
+  });
+});
+
+describe('resolveProviderReasoningRuntimeEffort', () => {
+  it('keeps the configured effort while returning the model-safe runtime effort', () => {
+    expect(resolveProviderReasoningRuntimeEffort({
+      provider: 'openai',
+      model: 'gpt-5.3-codex',
+      effort: 'max',
+      effortOverride: true,
+      thinking: true,
+      reasoningMode: 'auto',
+    })).toMatchObject({
+      configuredEffort: 'max',
+      runtimeEffort: 'medium',
+      preserved: false,
+      diagnostic: 'Effort max is not supported by the selected model; using medium.',
+    });
+  });
+
+  it('does not turn a plan-mode effort fallback into a session override', () => {
+    expect(resolveProviderReasoningRuntimeEffort({
+      provider: 'openai',
+      model: 'gpt-5.3-codex',
+      effort: 'high',
+      planModeEffort: 'max',
+      permissionMode: 'plan',
+      thinking: true,
+      reasoningMode: 'auto',
+    })).toMatchObject({
+      configuredEffort: 'max',
+      runtimeEffort: 'medium',
+      preserved: false,
+    });
+  });
+
+  it('keeps custom provider effort values when no V2 capability is available', () => {
+    expect(resolveProviderReasoningRuntimeEffort({
+      provider: 'custom-no-v2',
+      model: 'custom-model',
+      effort: 'max',
+      effortOverride: true,
+    })).toMatchObject({
+      configuredEffort: 'max',
+      runtimeEffort: 'max',
+      preserved: true,
+    });
   });
 });

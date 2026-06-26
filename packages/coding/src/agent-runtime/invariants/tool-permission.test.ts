@@ -34,6 +34,9 @@ describe('resolveToolCapability', () => {
     expect(resolveToolCapability('glob')).toBe('read');
     expect(resolveToolCapability('code_search')).toBe('read');
     expect(resolveToolCapability('semantic_lookup')).toBe('read');
+    expect(resolveToolCapability('lsp_definition')).toBe('read');
+    expect(resolveToolCapability('lsp_workspace_symbols')).toBe('read');
+    expect(resolveToolCapability('lsp_incoming_calls')).toBe('read');
   });
 
   it('maps repo-intelligence tools to "read" (no FS mutation)', () => {
@@ -45,6 +48,7 @@ describe('resolveToolCapability', () => {
     expect(resolveToolCapability('symbol_context')).toBe('read');
     expect(resolveToolCapability('process_context')).toBe('read');
     expect(resolveToolCapability('impact_estimate')).toBe('read');
+    expect(resolveToolCapability('relationship_scan')).toBe('read');
   });
 
   it('maps interaction-only tools to "read" (no side effect on workspace)', () => {

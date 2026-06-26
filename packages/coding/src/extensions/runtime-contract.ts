@@ -20,7 +20,7 @@ import type {
 } from '@kodax-ai/agent';
 import type {
   KodaXMessage,
-  KodaXReasoningMode,
+  KodaXWireReasoningEffort,
 } from '@kodax-ai/llm';
 
 export interface ExtensionRuntimeModelSelection {
@@ -31,7 +31,7 @@ export interface ExtensionRuntimeModelSelection {
 export interface RuntimeDefaultsSnapshot {
   activeTools?: string[];
   modelSelection: ExtensionRuntimeModelSelection;
-  thinkingLevel?: KodaXReasoningMode;
+  thinkingLevel?: KodaXWireReasoningEffort;
 }
 
 export interface BoundExtensionRuntimeController {
@@ -51,8 +51,8 @@ export interface BoundExtensionRuntimeController {
   setActiveTools(toolNames: string[]): void;
   getModelSelection(): ExtensionRuntimeModelSelection;
   setModelSelection(next: ExtensionRuntimeModelSelection): void;
-  getThinkingLevel(): KodaXReasoningMode | undefined;
-  setThinkingLevel(level: KodaXReasoningMode): void;
+  getThinkingLevel(): KodaXWireReasoningEffort | undefined;
+  setThinkingLevel(level: KodaXWireReasoningEffort): void;
 }
 
 export interface CapabilityRuntimeContract {

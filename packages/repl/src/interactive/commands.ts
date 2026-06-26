@@ -22,7 +22,6 @@ import {
   type KodaXReasoningMode,
   KodaXOptions,
   normalizeReasoningEffortValue,
-  warmRepoIntelligenceRuntime,
   CODING_SUMMARY_PROMPT,
   CODING_UPDATE_SUMMARY_PROMPT,
   resolveKodaXManual,
@@ -37,6 +36,8 @@ import {
   describeProviderCapabilitySummary,
   formatProviderCapabilityDetailLines,
   formatProviderSourceKind,
+  formatReasoningEffortStatusLabel,
+  getProviderReasoningEffortOptions,
   describeReasoningCapabilityControl,
   describeReasoningExecution,
   formatReasoningCapabilityShort,
@@ -48,8 +49,14 @@ import {
   getProviderAvailableModels,
   getProviderList,
   loadConfig,
+  resolvePermissionModeEffort,
   saveConfig,
 } from '../common/utils.js';
+import {
+  clearCapabilityCache,
+  getCachedRejectedEfforts,
+} from '../common/capability-cache.js';
+import { probeProviderReasoningEfforts } from '../common/capability-probe.js';
 import { savePermissionModeUser } from '../common/permission-config.js';
 import { nextAgentMode } from '../common/agent-mode.js';
 import { compact } from '@kodax-ai/agent';
@@ -709,10 +716,9 @@ export const BUILTIN_COMMANDS: Command[] = [
     },
   },
   {
-    name: 'repointel',
-    aliases: ['ri'],
-    description: 'Inspect or control the repo-intelligence premium runtime',
-    usage: '/repointel [status|mode|trace|warm|endpoint|bin]',
+    name: 'repo-intel',
+    description: 'Inspect built-in repo intelligence',
+    usage: '/repo-intel [status|mode|trace]',
     handler: async (args, _context, callbacks, currentConfig) => {
       const subcommand = args[0]?.toLowerCase() ?? 'status';
 
@@ -720,32 +726,22 @@ export const BUILTIN_COMMANDS: Command[] = [
         const inspection = await inspectRepoIntelligenceRuntime({
           mode: currentConfig.repoIntelligenceMode,
           trace: currentConfig.repoIntelligenceTrace,
-          probePremium: true,
         });
-        printRepoIntelligenceInspection(inspection);
-        return;
-      }
-
-      if (subcommand === 'warm') {
-        const result = await warmRepoIntelligenceRuntime({
-          mode: currentConfig.repoIntelligenceMode,
-          trace: currentConfig.repoIntelligenceTrace,
-        });
-        printRepoIntelligenceWarmResult(result);
+        printRepoIntelStatus(inspection);
         return;
       }
 
       if (subcommand === 'mode') {
         if (args.length === 1) {
-          console.log(chalk.dim(`\nCurrent repo-intelligence mode: ${chalk.cyan(currentConfig.repoIntelligenceMode ?? 'auto')}`));
-          console.log(chalk.dim('Usage: /repointel mode [auto|off|oss|premium-shared|premium-native]\n'));
+          console.log(chalk.dim(`\nCurrent repo-intelligence mode: ${chalk.cyan(formatRepoIntelPublicMode(currentConfig.repoIntelligenceMode ?? 'auto'))}`));
+          console.log(chalk.dim('Usage: /repo-intel mode [auto|full|light|off]\n'));
           return;
         }
 
-        const mode = normalizeRepoIntelligenceMode(args[1]);
+        const mode = normalizeRepoIntelPublicMode(args[1]);
         if (!mode) {
           console.log(chalk.red(`\n[Invalid repo-intelligence mode: ${args[1]}]`));
-          console.log(chalk.dim('Usage: /repointel mode [auto|off|oss|premium-shared|premium-native]\n'));
+          console.log(chalk.dim('Usage: /repo-intel mode [auto|full|light|off]\n'));
           return;
         }
 
@@ -755,7 +751,7 @@ export const BUILTIN_COMMANDS: Command[] = [
           callbacks,
           currentConfig,
         );
-        printPersistedCommandStatus(`Repo intelligence mode: ${mode}`, persistence);
+        printPersistedCommandStatus(`Repo intelligence mode: ${formatRepoIntelPublicMode(mode)}`, persistence);
         return;
       }
 
@@ -763,14 +759,14 @@ export const BUILTIN_COMMANDS: Command[] = [
         const raw = args[1]?.toLowerCase();
         if (!raw) {
           console.log(chalk.dim(`\nCurrent repo-intelligence trace: ${chalk.cyan(currentConfig.repoIntelligenceTrace ? 'on' : 'off')}`));
-          console.log(chalk.dim('Usage: /repointel trace [on|off|toggle]\n'));
+          console.log(chalk.dim('Usage: /repo-intel trace [on|off|toggle]\n'));
           return;
         }
 
         const nextValue = resolveToggleFlag(raw, currentConfig.repoIntelligenceTrace ?? false);
         if (nextValue === null) {
           console.log(chalk.red(`\n[Invalid trace value: ${args[1]}]`));
-          console.log(chalk.dim('Usage: /repointel trace [on|off|toggle]\n'));
+          console.log(chalk.dim('Usage: /repo-intel trace [on|off|toggle]\n'));
           return;
         }
 
@@ -784,81 +780,97 @@ export const BUILTIN_COMMANDS: Command[] = [
         return;
       }
 
-      if (subcommand === 'endpoint') {
-        if (args.length === 1) {
-          const inspection = await inspectRepoIntelligenceRuntime({
-            mode: currentConfig.repoIntelligenceMode,
-            trace: currentConfig.repoIntelligenceTrace,
-          });
-          console.log(chalk.dim(`\nCurrent repointel endpoint: ${chalk.cyan(inspection.endpoint)}`));
-          console.log(chalk.dim('Usage: /repointel endpoint [http://host:port|default]\n'));
-          return;
-        }
-
-        const nextEndpoint = normalizeRuntimeOverride(args[1]);
-        const persistence = applyRepoIntelligenceRuntimeConfig(
-          { endpoint: nextEndpoint },
-          { repointelEndpoint: nextEndpoint ?? undefined },
-          callbacks,
-          currentConfig,
-        );
-        printPersistedCommandStatus(
-          `Repointel endpoint: ${nextEndpoint ?? 'default'}`,
-          persistence,
-        );
+      if (subcommand === 'refresh') {
+        console.log(chalk.yellow('\n[Repo intelligence refresh is automatic in this build]'));
+        console.log(chalk.dim('Use /repo-intel status to inspect the current engine state.\n'));
         return;
       }
 
-      if (subcommand === 'bin') {
-        if (args.length === 1) {
-          const inspection = await inspectRepoIntelligenceRuntime({
-            mode: currentConfig.repoIntelligenceMode,
-            trace: currentConfig.repoIntelligenceTrace,
-          });
-          console.log(chalk.dim(`\nCurrent repointel bin: ${chalk.cyan(inspection.bin)}`));
-          console.log(chalk.dim('Usage: /repointel bin [<path-or-command>|default]\n'));
-          return;
-        }
-
-        const nextBin = normalizeRuntimeOverride(args.slice(1).join(' '));
-        const persistence = applyRepoIntelligenceRuntimeConfig(
-          { bin: nextBin },
-          { repointelBin: nextBin ?? undefined },
-          callbacks,
-          currentConfig,
-        );
-        printPersistedCommandStatus(
-          `Repointel bin: ${nextBin ?? 'default'}`,
-          persistence,
-        );
-        return;
-      }
-
-      console.log(chalk.red(`\n[Unknown /repointel subcommand: ${args[0]}]`));
-      console.log(chalk.dim('Usage: /repointel [status|mode|trace|warm|endpoint|bin]\n'));
+      console.log(chalk.red(`\n[Unknown /repo-intel subcommand: ${args[0]}]`));
+      console.log(chalk.dim('Usage: /repo-intel [status|mode|trace]\n'));
     },
     detailedHelp: () => {
-      console.log(chalk.cyan('\n/repointel - Repo-Intelligence Runtime Control\n'));
+      console.log(chalk.cyan('\n/repo-intel - Built-in Repo Intelligence\n'));
       console.log(chalk.bold('Usage:'));
-      console.log(chalk.dim('  /repointel                             ') + 'Show current repo-intelligence and premium runtime status');
-      console.log(chalk.dim('  /repointel status                      ') + 'Probe the local premium frontdoor and print detailed status');
-      console.log(chalk.dim('  /repointel mode auto                   ') + 'Prefer premium-native when available, otherwise fall back to OSS');
-      console.log(chalk.dim('  /repointel mode off                    ') + 'Strictly disable repo-intelligence working tools and auto lane for this session');
-      console.log(chalk.dim('  /repointel mode oss                    ') + 'Force the OSS baseline only');
-      console.log(chalk.dim('  /repointel mode premium-shared         ') + 'Use premium without KodaX native auto lane');
-      console.log(chalk.dim('  /repointel mode premium-native         ') + 'Use the KodaX flagship premium path');
-      console.log(chalk.dim('  /repointel trace on|off|toggle         ') + 'Toggle repo-intelligence trace output');
-      console.log(chalk.dim('  /repointel endpoint http://127.0.0.1:47891') + 'Override the local premium daemon endpoint');
-      console.log(chalk.dim('  /repointel endpoint default            ') + 'Clear the endpoint override and use the default');
-      console.log(chalk.dim('  /repointel bin repointel               ') + 'Use a PATH-visible repointel command');
-      console.log(chalk.dim('  /repointel bin <path>                  ') + 'Use an explicit repointel launcher path');
-      console.log(chalk.dim('  /repointel bin default                 ') + 'Clear the bin override and use the default command');
-      console.log(chalk.dim('  /repointel warm                        ') + 'Try to start or warm the local premium daemon');
+      console.log(chalk.dim('  /repo-intel                            ') + 'Show built-in repo-intelligence status');
+      console.log(chalk.dim('  /repo-intel status                     ') + 'Show built-in engine status without probing an external daemon');
+      console.log(chalk.dim('  /repo-intel mode auto                  ') + 'Let KodaX pick the best repo-intelligence engine');
+      console.log(chalk.dim('  /repo-intel mode full                  ') + 'Prefer the full repo-intelligence engine');
+      console.log(chalk.dim('  /repo-intel mode light                 ') + 'Use the light repo-intelligence engine');
+      console.log(chalk.dim('  /repo-intel mode off                   ') + 'Disable repo-intelligence injection');
+      console.log(chalk.dim('  /repo-intel trace on|off|toggle        ') + 'Toggle repo-intelligence trace output');
       console.log();
       console.log(chalk.bold('Notes:'));
       console.log(chalk.dim('  - /status now includes a compact repo-intelligence summary.'));
-      console.log(chalk.dim('  - /repointel warm is operational: it can warm the premium runtime even when your current mode is oss/off.'));
-      console.log(chalk.dim('  - If the local service cannot be started, KodaX will continue with the OSS baseline and this command will explain why.'));
+      console.log(chalk.dim('  - External repointel endpoint/bin controls are deprecated for built-in KodaX.'));
+      console.log();
+    },
+  },
+  {
+    name: 'repointel',
+    aliases: ['ri'],
+    description: 'Deprecated alias for /repo-intel status',
+    usage: '/repointel [status]',
+    userInvocable: false,
+    handler: async (args, _context, callbacks, currentConfig) => {
+      const subcommand = args[0]?.toLowerCase() ?? 'status';
+      console.log(chalk.yellow('\n[/repointel is deprecated; use /repo-intel status]\n'));
+
+      if (subcommand === 'status') {
+        const inspection = await inspectRepoIntelligenceRuntime({
+          mode: currentConfig.repoIntelligenceMode,
+          trace: currentConfig.repoIntelligenceTrace,
+        });
+        printRepoIntelStatus(inspection);
+        return;
+      }
+
+      if (subcommand === 'mode') {
+        const mode = normalizeRepoIntelligenceMode(args[1]);
+        if (!mode) {
+          console.log(chalk.dim('Usage: /repo-intel mode [auto|full|light|off]\n'));
+          return;
+        }
+        const persistence = applyRepoIntelligenceRuntimeConfig(
+          { mode },
+          { repoIntelligenceMode: mode },
+          callbacks,
+          currentConfig,
+        );
+        printPersistedCommandStatus(`Repo intelligence mode: ${formatRepoIntelPublicMode(mode)}`, persistence);
+        console.log(chalk.dim('Use /repo-intel mode [auto|full|light|off] going forward.\n'));
+        return;
+      }
+
+      if (subcommand === 'trace') {
+        const nextValue = resolveToggleFlag(args[1]?.toLowerCase(), currentConfig.repoIntelligenceTrace ?? false);
+        if (nextValue === null) {
+          console.log(chalk.dim('Usage: /repo-intel trace [on|off|toggle]\n'));
+          return;
+        }
+        const persistence = applyRepoIntelligenceRuntimeConfig(
+          { trace: nextValue },
+          { repoIntelligenceTrace: nextValue },
+          callbacks,
+          currentConfig,
+        );
+        printPersistedCommandStatus(`Repo intelligence trace: ${nextValue ? 'on' : 'off'}`, persistence);
+        console.log(chalk.dim('Use /repo-intel trace [on|off|toggle] going forward.\n'));
+        return;
+      }
+
+      if (subcommand === 'warm' || subcommand === 'endpoint' || subcommand === 'bin') {
+        console.log(chalk.dim('Repo intelligence is built into KodaX; external daemon/bin controls are no longer a normal REPL command surface.'));
+        console.log(chalk.dim('Use /repo-intel status to inspect the active engine.\n'));
+        return;
+      }
+
+      console.log(chalk.dim('Usage: /repo-intel [status|mode|trace]\n'));
+    },
+    detailedHelp: () => {
+      console.log(chalk.cyan('\n/repointel - Deprecated\n'));
+      console.log(chalk.dim('Use /repo-intel status for built-in repo-intelligence diagnostics.'));
+      console.log(chalk.dim('External endpoint/bin/warm controls are deprecated for KodaX.'));
       console.log();
     },
   },
@@ -1403,6 +1415,59 @@ export const BUILTIN_COMMANDS: Command[] = [
     handler: async (args, _context, _callbacks, currentConfig) => {
       const input = (args[0] ?? '').trim();
 
+      // `/provider forget-capability [<provider>[/<model>]]` — clear the learned
+      // capability cache so an effort that was (mis)recorded as rejected is
+      // offered again. With no target, clears the whole cache.
+      if (input === 'forget-capability') {
+        const target = (args[1] ?? '').trim();
+        if (!target) {
+          clearCapabilityCache();
+          console.log(chalk.dim('\n[Cleared all learned capability overrides]\n'));
+          return;
+        }
+        const slash = target.indexOf('/');
+        const fp = slash === -1 ? target : target.slice(0, slash);
+        const fm = slash === -1 ? undefined : target.slice(slash + 1) || undefined;
+        clearCapabilityCache(fp, fm);
+        console.log(chalk.dim(`\n[Cleared learned capability overrides for ${fp}${fm ? `/${fm}` : ''}]\n`));
+        return;
+      }
+
+      // `/provider probe` — proactively send a minimal request per candidate
+      // effort and record the ones the active model rejects. Reuses the same
+      // signal as passive learning (source: probed). Real requests, a few
+      // tokens each; explicit and user-invoked only.
+      if (input === 'probe') {
+        const candidates = getProviderReasoningEffortOptions(
+          currentConfig.provider,
+          currentConfig.model,
+        ).filter((e) => e !== 'auto' && e !== 'off');
+        const label = `${currentConfig.provider}/${currentConfig.model ?? '(default)'}`;
+        console.log(chalk.dim(`\n[Probing ${label} — ${candidates.length} efforts, minimal requests…]`));
+        try {
+          const results = await probeProviderReasoningEfforts({
+            provider: currentConfig.provider,
+            model: currentConfig.model,
+            efforts: candidates,
+            resolve: resolveProvider,
+            now: () => new Date().toISOString(),
+          });
+          for (const r of results) {
+            const mark = r.status === 'accepted'
+              ? chalk.green('✓')
+              : r.status === 'rejected'
+                ? chalk.red('✗')
+                : chalk.yellow('!');
+            console.log(chalk.dim(`  ${mark} ${r.effort}${r.error ? ` — ${r.error}` : ''}`));
+          }
+          console.log(chalk.dim('  (rejections recorded; undo with /provider forget-capability)\n'));
+        } catch (error) {
+          const message = error instanceof Error ? error.message : String(error);
+          console.log(chalk.red(`\n[Probe failed: ${message}]\n`));
+        }
+        return;
+      }
+
       let targetProvider = currentConfig.provider;
       let targetModel = currentConfig.model;
 
@@ -1446,6 +1511,10 @@ export const BUILTIN_COMMANDS: Command[] = [
         console.log(chalk.dim(`  - ${line}`));
       }
       console.log(chalk.dim(`  - Session effort: ${formatReasoningEffortDisplay(currentConfig.effort)}`));
+      const learnedRejections = getCachedRejectedEfforts(targetProvider, targetModel);
+      if (learnedRejections.length > 0) {
+        console.log(chalk.dim(`  - Learned unsupported: ${learnedRejections.join(', ')} (clear with /provider forget-capability)`));
+      }
       console.log();
 
       if (commonScenarios.length > 0) {
@@ -1469,6 +1538,9 @@ export const BUILTIN_COMMANDS: Command[] = [
       console.log(chalk.dim('  /provider                      ') + 'Inspect the current provider/model');
       console.log(chalk.dim('  /provider <provider>           ') + 'Inspect a provider using its default model');
       console.log(chalk.dim('  /provider <provider>/<model>   ') + 'Inspect a specific provider/model pair');
+      console.log(chalk.dim('  /provider probe                ') + 'Send minimal requests to learn which efforts the model rejects');
+      console.log(chalk.dim('  /provider forget-capability [<provider>[/<model>]]'));
+      console.log(chalk.dim('                                 ') + 'Clear learned (observed/probed) effort rejections; re-offer those rungs');
       console.log();
       console.log(chalk.bold('Description:'));
       console.log(chalk.dim('  Shows the provider capability matrix and common 029 policy outcomes.'));
@@ -1574,18 +1646,21 @@ export const BUILTIN_COMMANDS: Command[] = [
   {
     name: 'effort',
     description: 'Show or set native reasoning effort',
-    usage: '/effort [auto|none|low|medium|high|<provider-value>]',
+    usage: '/effort [level]',
     handler: async (args, _context, callbacks, currentConfig) => {
+      const usage = formatReasoningEffortUsage(currentConfig);
       if (args.length === 0) {
-        console.log(chalk.dim(`\nReasoning effort: ${chalk.cyan(formatReasoningEffortDisplay(currentConfig.effort))}`));
-        console.log(chalk.dim(`Reasoning mode:   ${chalk.cyan(currentConfig.reasoningMode)}`));
-        console.log(chalk.dim('Usage: /effort auto|none|low|medium|high|<provider-value>\n'));
+        const effortLabel = formatCurrentReasoningEffortStatus(currentConfig);
+        console.log(chalk.dim(`\nReasoning effort: ${chalk.cyan(effortLabel)}`));
+        console.log(chalk.dim(`Compatibility:    ${chalk.cyan(currentConfig.reasoningMode)}`));
+        console.log(chalk.dim(`Available:        ${getProviderReasoningEffortOptions(currentConfig.provider, currentConfig.model).join(', ')}`));
+        console.log(chalk.dim(`${usage}\n`));
         return;
       }
 
       if (args.length > 1) {
         console.log(chalk.red('\n[Reasoning effort accepts exactly one value]'));
-        console.log(chalk.dim('Usage: /effort auto|none|low|medium|high|<provider-value>\n'));
+        console.log(chalk.dim(`${usage}\n`));
         return;
       }
 
@@ -1596,26 +1671,33 @@ export const BUILTIN_COMMANDS: Command[] = [
       } catch (error) {
         const message = error instanceof Error ? error.message : String(error);
         console.log(chalk.red(`\n[Invalid reasoning effort: ${message}]`));
-        console.log(chalk.dim('Usage: /effort auto|none|low|medium|high|<provider-value>\n'));
+        console.log(chalk.dim(`${usage}\n`));
         return;
       }
 
       const effort = value === 'auto' || value === 'unset' || value === 'clear' || value === 'reset'
         ? undefined
         : value;
+      const nextConfig = resolveConfigAfterReasoningEffort(effort, currentConfig);
       const persistence = applyReasoningEffort(effort, callbacks, currentConfig);
-      printPersistedCommandStatus(`Reasoning effort: ${formatReasoningEffortDisplay(effort)}`, persistence);
+      printPersistedCommandStatus(
+        `Reasoning effort: ${formatCurrentReasoningEffortStatus(nextConfig)}`,
+        persistence,
+      );
     },
     detailedHelp: () => {
       console.log(chalk.cyan('\n/effort - Set Native Reasoning Effort\n'));
       console.log(chalk.bold('Usage:'));
       console.log(chalk.dim('  /effort             ') + 'Show current native reasoning effort');
       console.log(chalk.dim('  /effort auto        ') + 'Clear the explicit effort override');
-      console.log(chalk.dim('  /effort none        ') + 'Disable native reasoning effort');
+      console.log(chalk.dim('  /effort off         ') + 'Disable reasoning effort');
       console.log(chalk.dim('  /effort low         ') + 'Use low native reasoning effort');
       console.log(chalk.dim('  /effort medium      ') + 'Use medium native reasoning effort');
       console.log(chalk.dim('  /effort high        ') + 'Use high native reasoning effort');
-      console.log(chalk.dim('  /effort xhigh       ') + 'Pass a provider-specific effort value through');
+      console.log(chalk.dim('  /effort xhigh       ') + 'Use extra-high effort when the model supports it');
+      console.log(chalk.dim('  /effort max         ') + 'Use max effort when the model supports it');
+      console.log(chalk.dim('  /effort none        ') + 'Legacy alias for /effort off');
+      console.log(chalk.dim('\nRun /effort to see the active model\'s supported values.'));
       console.log();
     },
   },
@@ -1894,7 +1976,7 @@ const COMMAND_CATEGORIES: Record<string, string[]> = {
   General: ['help', 'copy', 'exit', 'clear', 'compact', 'reload', 'extensions', 'status', 'agents'],
   Permission: ['mode', 'auto'],
   Session: ['new', 'recover', 'save', 'load', 'sessions', 'history', 'delete'],
-  Settings: ['model', 'provider', 'thinking', 'reasoning', 'effort', 'agent-mode', 'plan', 'repointel'],
+  Settings: ['model', 'provider', 'thinking', 'reasoning', 'effort', 'agent-mode', 'plan', 'repo-intel'],
   Skills: ['skill', 'learn'],
 };
 
@@ -1911,16 +1993,36 @@ function reasoningModeToLegacyThinking(mode: KodaXReasoningMode): boolean {
 }
 
 function formatReasoningEffortDisplay(effort: string | undefined): string {
-  return effort ?? 'auto';
+  return effort === 'none' ? 'off' : effort ?? 'auto';
+}
+
+function formatReasoningEffortUsage(currentConfig: CurrentConfig): string {
+  const options = getProviderReasoningEffortOptions(
+    currentConfig.provider,
+    currentConfig.model,
+  );
+  return `Usage: /effort ${options.join('|')}|<provider-value>`;
+}
+
+function formatCurrentReasoningEffortStatus(config: CurrentConfig): string {
+  const effectiveEffort = resolvePermissionModeEffort(config);
+  return formatReasoningEffortStatusLabel({
+    provider: config.provider,
+    model: config.model,
+    effort: effectiveEffort,
+    effortOverride: config.effortOverride,
+    thinking: config.thinking,
+    reasoningMode: config.reasoningMode,
+  });
 }
 
 const REPO_INTELLIGENCE_MODES: KodaXRepoIntelligenceMode[] = [
   'auto',
   'off',
-  'oss',
-  'premium-shared',
-  'premium-native',
+  'light',
+  'full',
 ];
+type RepoIntelPublicMode = 'auto' | 'full' | 'light' | 'off';
 
 type ConfigPersistenceResult =
   | { saved: true }
@@ -1938,12 +2040,27 @@ function normalizeRepoIntelligenceMode(
     : null;
 }
 
-function normalizeRuntimeOverride(value: string | undefined): string | null {
-  const normalized = value?.trim();
-  if (!normalized || normalized === 'default' || normalized === 'reset' || normalized === 'clear') {
-    return null;
+function normalizeRepoIntelPublicMode(
+  value: string | undefined,
+): KodaXRepoIntelligenceMode | null {
+  const normalized = value?.trim().toLowerCase();
+  if (normalized === 'auto') {
+    return 'auto';
   }
-  return normalized;
+  if (normalized === 'full') {
+    return 'full';
+  }
+  if (normalized === 'light') {
+    return 'light';
+  }
+  if (normalized === 'off') {
+    return 'off';
+  }
+  return null;
+}
+
+function formatRepoIntelPublicMode(mode: KodaXRepoIntelligenceMode): RepoIntelPublicMode {
+  return mode;
 }
 
 function resolveToggleFlag(
@@ -2023,19 +2140,53 @@ function applyReasoningMode(
   return persistence;
 }
 
+function resolveReasoningModeAfterEffort(
+  effort: string | undefined,
+  currentConfig: CurrentConfig,
+): KodaXReasoningMode | undefined {
+  if (effort === 'none') {
+    return 'off';
+  }
+  if (
+    effort === undefined
+    && currentConfig.effort === 'none'
+    && currentConfig.reasoningMode === 'off'
+  ) {
+    return 'auto';
+  }
+  if (effort && currentConfig.reasoningMode === 'off') {
+    return 'auto';
+  }
+  return undefined;
+}
+
+function resolveConfigAfterReasoningEffort(
+  effort: string | undefined,
+  currentConfig: CurrentConfig,
+): CurrentConfig {
+  const nextReasoningMode = resolveReasoningModeAfterEffort(effort, currentConfig);
+  return {
+    ...currentConfig,
+    effort,
+    effortOverride: effort !== undefined,
+    ...(nextReasoningMode
+      ? {
+          reasoningMode: nextReasoningMode,
+          thinking: reasoningModeToLegacyThinking(nextReasoningMode),
+        }
+      : {}),
+  };
+}
+
 function applyReasoningEffort(
   effort: string | undefined,
   callbacks: CommandCallbacks,
   currentConfig: CurrentConfig,
 ): ConfigPersistenceResult {
-  const nextReasoningMode: KodaXReasoningMode | undefined =
-    effort === 'none'
-      ? 'off'
-      : effort === undefined && currentConfig.effort === 'none' && currentConfig.reasoningMode === 'off'
-        ? 'auto'
-      : effort && currentConfig.reasoningMode === 'off'
-        ? 'auto'
-        : undefined;
+  const nextReasoningMode = resolveReasoningModeAfterEffort(
+    effort,
+    currentConfig,
+  );
   const persistence = persistUserConfig({
     effort,
     ...(nextReasoningMode
@@ -2084,14 +2235,10 @@ function applyAgentMode(
 function applyRepoIntelligenceRuntimeConfig(
   update: {
     mode?: KodaXRepoIntelligenceMode;
-    endpoint?: string | null;
-    bin?: string | null;
     trace?: boolean;
   },
   persistedConfig: {
     repoIntelligenceMode?: KodaXRepoIntelligenceMode;
-    repointelEndpoint?: string | undefined;
-    repointelBin?: string | undefined;
     repoIntelligenceTrace?: boolean;
   },
   callbacks: CommandCallbacks,
@@ -2104,12 +2251,6 @@ function applyRepoIntelligenceRuntimeConfig(
   } else {
     if (update.mode !== undefined) {
       currentConfig.repoIntelligenceMode = update.mode;
-    }
-    if (update.endpoint !== undefined) {
-      currentConfig.repointelEndpoint = update.endpoint ?? undefined;
-    }
-    if (update.bin !== undefined) {
-      currentConfig.repointelBin = update.bin ?? undefined;
     }
     if (update.trace !== undefined) {
       currentConfig.repoIntelligenceTrace = update.trace;
@@ -2125,59 +2266,43 @@ function formatRepoIntelligenceSummary(
   const requestedLabel = inspection.configuredMode === inspection.requestedMode
     ? inspection.configuredMode
     : `${inspection.configuredMode} -> ${inspection.requestedMode}`;
-  const activeLabel = `${inspection.effectiveEngine}/${inspection.effectiveBridge}`;
-  const transportLabel = inspection.transport ? `, ${inspection.transport}` : '';
-  const fallbackLabel = inspection.fallbackToOss ? ', fallback=oss' : '';
-  return `${requestedLabel} => ${activeLabel} (${inspection.status}${transportLabel}${fallbackLabel})`;
+  const fallbackLabel = inspection.fallbackToLight ? ', fallback=light' : '';
+  return `${requestedLabel} => ${inspection.effectiveEngine} (${inspection.status}${fallbackLabel})`;
 }
 
-function printRepoIntelligenceInspection(
+function formatRepoIntelStatusLabel(inspection: RepoIntelligenceRuntimeInspection): string {
+  return inspection.status;
+}
+
+function formatRepoIntelActiveEngine(inspection: RepoIntelligenceRuntimeInspection): string {
+  if (inspection.effectiveEngine === 'off') {
+    return 'off';
+  }
+  return inspection.effectiveEngine;
+}
+
+function normalizeRepoIntelWarning(warning: string): string {
+  return warning;
+}
+
+function printRepoIntelStatus(
   inspection: RepoIntelligenceRuntimeInspection,
 ): void {
   console.log(chalk.bold('\nRepo Intelligence:\n'));
-  console.log(chalk.dim(`  Configured:  ${chalk.cyan(inspection.configuredMode)}`));
-  console.log(chalk.dim(`  Requested:   ${chalk.cyan(inspection.requestedMode)}`));
-  console.log(chalk.dim(`  Active:      ${chalk.cyan(`${inspection.effectiveEngine}/${inspection.effectiveBridge}`)}`));
-  console.log(chalk.dim(`  Status:      ${chalk.cyan(inspection.status)}${inspection.transport ? chalk.dim(` (${inspection.transport})`) : ''}`));
+  console.log(chalk.dim(`  Mode:        ${chalk.cyan(formatRepoIntelPublicMode(inspection.configuredMode))}`));
+  console.log(chalk.dim(`  Engine:      ${chalk.cyan(formatRepoIntelActiveEngine(inspection))}`));
+  console.log(chalk.dim(`  Status:      ${chalk.cyan(formatRepoIntelStatusLabel(inspection))}`));
   console.log(chalk.dim(`  Trace:       ${chalk.cyan(inspection.traceEnabled ? 'on' : 'off')}`));
-  console.log(chalk.dim(`  Endpoint:    ${inspection.endpoint}`));
-  console.log(chalk.dim(`  Bin:         ${inspection.bin}`));
-  if (inspection.clientBuildId) {
-    console.log(chalk.dim(`  Client ID:   ${inspection.clientBuildId}`));
-  }
-  if (inspection.daemonBuildId) {
-    console.log(chalk.dim(`  Daemon ID:   ${inspection.daemonBuildId}`));
-  }
-  if (inspection.daemonPid !== undefined) {
-    console.log(chalk.dim(`  Daemon PID:  ${inspection.daemonPid}`));
-  }
-  if (inspection.daemonStartedAt) {
-    console.log(chalk.dim(`  Daemon Up:   ${inspection.daemonStartedAt}`));
-  }
-  if (inspection.fallbackToOss) {
-    console.log(chalk.yellow('  Fallback:    OSS baseline is currently active'));
+  if (inspection.fallbackToLight) {
+    console.log(chalk.yellow('  Fallback:    light engine is currently active'));
   }
   if (inspection.error) {
     console.log(chalk.red(`  Error:       ${inspection.error}`));
   }
   for (const warning of inspection.warnings) {
-    console.log(chalk.yellow(`  Warning:     ${warning}`));
+    console.log(chalk.yellow(`  Warning:     ${normalizeRepoIntelWarning(warning)}`));
   }
   console.log();
-}
-
-function printRepoIntelligenceWarmResult(
-  result: Awaited<ReturnType<typeof warmRepoIntelligenceRuntime>>,
-): void {
-  if (result.warmed) {
-    console.log(chalk.green('\n[repointel warmed successfully]'));
-  } else {
-    console.log(chalk.yellow('\n[repointel warm did not reach a ready daemon state]'));
-  }
-  if (result.warmLatencyMs !== undefined) {
-    console.log(chalk.dim(`  Warm latency: ${result.warmLatencyMs} ms`));
-  }
-  printRepoIntelligenceInspection(result);
 }
 
 function printCommandSection(

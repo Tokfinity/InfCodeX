@@ -14,9 +14,9 @@ import type {
 import type { KodaXBaseProvider } from './base.js';
 import {
   createCustomProvider,
-  legacyCapabilityFromV2,
-  resolveCustomModelReasoningCapabilityV2,
-  resolveCustomProviderReasoningCapabilityV2,
+  legacyCapabilityFromReasoningProfile,
+  resolveCustomModelReasoningProfile,
+  resolveCustomProviderReasoningProfile,
   validateCustomProviderConfig,
 } from './custom-provider.js';
 import {
@@ -112,7 +112,7 @@ export function getCustomProviderList(): Array<{
   }> = [];
   for (const [name, config] of customProviders) {
     const configured = !!process.env[config.apiKeyEnv];
-    const reasoningCapabilityV2 = resolveCustomProviderReasoningCapabilityV2(config);
+    const reasoningProfile = resolveCustomProviderReasoningProfile(config);
     const modelIds = (config.models ?? []).map(entry =>
       typeof entry === 'string' ? entry : entry.id,
     );
@@ -125,7 +125,7 @@ export function getCustomProviderList(): Array<{
       models,
       configured,
       reasoningCapability: config.reasoningCapability
-        ?? legacyCapabilityFromV2(reasoningCapabilityV2)
+        ?? legacyCapabilityFromReasoningProfile(reasoningProfile)
         ?? 'none',
       capabilityProfile: cloneCapabilityProfile(
         config.capabilityProfile ?? NATIVE_PROVIDER_CAPABILITY_PROFILE,
@@ -166,16 +166,16 @@ function customDescriptorToFull(
   if (typeof entry === 'string') {
     return { id: entry };
   }
-  const reasoningCapabilityV2 = resolveCustomModelReasoningCapabilityV2(entry, protocol);
-  return reasoningCapabilityV2
-    ? { ...entry, reasoningCapabilityV2 }
+  const reasoningProfile = resolveCustomModelReasoningProfile(entry, protocol);
+  return reasoningProfile
+    ? { ...entry, reasoningProfile }
     : entry;
 }
 
 /**
  * List all model descriptors for a custom provider. Default model first,
  * then alternatives. Returns undefined when the name doesn't match any
- * registered custom provider — caller can fall through to the built-in
+ * registered custom provider 鈥?caller can fall through to the built-in
  * `getProviderModelDescriptors`.
  */
 export function getCustomProviderModelDescriptors(
@@ -203,18 +203,18 @@ export function getCustomModelCapabilities(
   const config = customProviders.get(providerName);
   if (!config) return undefined;
   const isDefault = modelId === config.model;
-  const providerReasoningCapabilityV2 = resolveCustomProviderReasoningCapabilityV2(config);
+  const providerReasoningProfile = resolveCustomProviderReasoningProfile(config);
   const descriptor = isDefault
     ? ({ id: config.model } as KodaXModelDescriptor)
     : (config.models ?? [])
         .map((entry) => customDescriptorToFull(entry, config.protocol))
         .find((m) => m.id === modelId);
   if (!descriptor) return undefined;
-  const effectiveReasoningCapabilityV2 =
-    descriptor.reasoningCapabilityV2 ?? providerReasoningCapabilityV2;
+  const effectiveReasoningProfile =
+    descriptor.reasoningProfile ?? providerReasoningProfile;
   const effectiveReasoningCapability =
     descriptor.reasoningCapability ??
-    legacyCapabilityFromV2(effectiveReasoningCapabilityV2) ??
+    legacyCapabilityFromReasoningProfile(effectiveReasoningProfile) ??
     config.reasoningCapability ??
     'none';
   return {
@@ -224,7 +224,7 @@ export function getCustomModelCapabilities(
     supportsThinking: config.supportsThinking ??
       (effectiveReasoningCapability !== 'none' && effectiveReasoningCapability !== 'prompt-only'),
     reasoningCapability: effectiveReasoningCapability,
-    reasoningCapabilityV2: effectiveReasoningCapabilityV2,
+    reasoningProfile: effectiveReasoningProfile,
     contextWindow: descriptor.contextWindow ?? config.contextWindow,
     maxOutputTokens: descriptor.maxOutputTokens ?? config.maxOutputTokens,
     thinkingBudgetCap:
@@ -234,17 +234,17 @@ export function getCustomModelCapabilities(
 }
 
 /**
- * FEATURE_216 v0.7.45 — Look up `(apiKeyEnv, verifyStrategy)` for a
+ * FEATURE_216 v0.7.45 鈥?Look up `(apiKeyEnv, verifyStrategy)` for a
  * registered custom provider without instantiation. Mirrors the
  * built-in `KODAX_PROVIDER_SNAPSHOTS` lookup. Returns undefined when
  * the name is not registered, signaling fall-through.
  *
  * verifyStrategy precedence:
  *   1. Explicit `customProviders[name].verifyStrategy` (user-provided)
- *   2. Protocol-derived default (anthropic → count-tokens / openai → models-list)
+ *   2. Protocol-derived default (anthropic 鈫?count-tokens / openai 鈫?models-list)
  *
  * Matches the same precedence `createCustomProvider()` applies when
- * building the runtime `KodaXProviderConfig` — keeps the two paths
+ * building the runtime `KodaXProviderConfig` 鈥?keeps the two paths
  * (resolver short-circuit vs in-class verifyCredential) consistent.
  */
 export function getCustomProviderVerifyMetadata(

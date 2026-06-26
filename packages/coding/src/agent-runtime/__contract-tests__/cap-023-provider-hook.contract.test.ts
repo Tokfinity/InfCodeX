@@ -40,7 +40,7 @@ function freshState(): ProviderPrepareState {
   return {
     provider: 'anthropic',
     model: 'claude-original',
-    reasoningMode: 'balanced',
+    reasoningMode: 'medium',
     systemPrompt: 'original prompt',
   };
 }
@@ -80,11 +80,11 @@ describe('CAP-023: applyProviderPrepareHook — five callbacks + immutability', 
 
   it('CAP-PROVIDER-HOOK-001c: setThinkingLevel writes through to reasoningMode', async () => {
     runtime.registerHook('provider:before', (ctx) => {
-      ctx.setThinkingLevel('deep');
+      ctx.setThinkingLevel('high');
     });
 
     const result = await applyProviderPrepareHook(freshState());
-    expect(result.reasoningMode).toBe('deep');
+    expect(result.reasoningMode).toBe('high');
   });
 
   it('CAP-PROVIDER-HOOK-001d: block(reason) sets blockedReason on the returned state', async () => {
@@ -103,7 +103,7 @@ describe('CAP-023: applyProviderPrepareHook — five callbacks + immutability', 
       ctx.replaceProvider('mutated-provider');
       ctx.replaceModel('mutated-model');
       ctx.replaceSystemPrompt('mutated-prompt');
-      ctx.setThinkingLevel('deep');
+      ctx.setThinkingLevel('high');
       ctx.block('blocked');
     });
 
@@ -114,7 +114,7 @@ describe('CAP-023: applyProviderPrepareHook — five callbacks + immutability', 
     expect(original.provider).toBe('anthropic');
     expect(original.model).toBe('claude-original');
     expect(original.systemPrompt).toBe('original prompt');
-    expect(original.reasoningMode).toBe('balanced');
+    expect(original.reasoningMode).toBe('medium');
     expect(original.blockedReason).toBeUndefined();
 
     // But the returned state reflects the hook

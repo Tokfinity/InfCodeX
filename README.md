@@ -191,8 +191,7 @@ Some OpenAI-compatible reasoning models require KodaX to replay the previous ass
       "baseUrl": "https://example.com/v1",
       "apiKeyEnv": "MY_DEEPSEEK_API_KEY",
       "model": "deepseek-v4-flash",
-      "supportsThinking": true,
-      "reasoningCapability": "native-toggle",
+      "reasoningPreset": "deepseek-v4-openai",
       "replayReasoningContent": true
     }
   ]
@@ -292,18 +291,16 @@ const result = await runKodaX(
 > surface (`startKodaX` + `RunningSession`), MCP popout manager API (`McpManager`),
 > Skill `` !`cmd` `` host hook, and per-app data dir namespacing (`getAppDataDir`).
 
-## Repo Intelligence (optional premium engine)
+## Repo Intelligence
 
-KodaX ships with built-in OSS repo intelligence (`repo_overview`, `module_context`, `symbol_context`, `process_context`, `impact_estimate`, …) that helps the coding agent understand large codebases without ad-hoc grep/glob exploration.
+KodaX ships with built-in repo intelligence (`repo_overview`, `module_context`, `symbol_context`, `process_context`, `impact_estimate`, and related tools) that helps the coding agent understand large codebases without ad-hoc grep/glob exploration.
 
-An optional **premium engine** (`repointel` local daemon, distributed via the sibling `KodaX-private` repo) adds proactive context injection, deeper module capsules, and a native auto-lane integration. KodaX automatically falls back to OSS when premium is unavailable.
+Use `/repo-intel status` in the REPL to inspect the active engine. The former standalone `repointel` host skill has been removed; repo intelligence is built into KodaX and requires no external installation.
 
 ```bash
-# Pick a runtime mode (off | oss | premium-shared | premium-native | auto)
-kodax --repo-intelligence premium-native --repo-intelligence-trace
+# Pick a runtime mode (auto | full | light | off)
+kodax --repo-intelligence full --repo-intelligence-trace
 ```
-
-Setup, runtime modes, REPL controls, config schema, and external-host integrations: see [docs/REPOINTEL.md](docs/REPOINTEL.md).
 
 ## Architecture
 
@@ -412,11 +409,11 @@ KodaX has two layers that consumers should understand separately:
 - **14 Built-in Provider Aliases** - Anthropic, OpenAI, DeepSeek, Kimi, Kimi Code, Qwen, Zhipu, Zhipu Coding, MiniMax Coding, MiMo Coding, MiMo, Ark Coding, Gemini CLI, Codex CLI - plus user-defined OpenAI/Anthropic-compatible providers
 - **Dynamic Workflows + SDK Process Surface** - Generate/reuse capability-routed workflows, observe live progress through `WorkflowProcessSnapshot`, and control workflow lifecycle from SDK hosts without parsing REPL output
 - **V2 Worker single-loop + Sidecar Verifier (default)** - Single-agent main loop with an out-of-band Sidecar Verifier as Stop-hook (claudecode-shape; FEATURE_184 v0.7.42, ADR-030). Verifier returns accept/revise/blocked verdict on Worker text-only termination. The pre-v0.7.43 V1 chain is retired, `emit_handoff` is deleted, accept-verdict UI silently passes through, and content-aware gating skips trivial-chat sidecar calls. Async child steering uses `dispatch_child_task` + `send_message` + `task_stop` with idle-yield wait; specialist routing uses `subagent_type`.
-- **Reasoning Modes** - Unified `off/auto/quick/balanced/deep` interface across providers
+- **Reasoning Effort** - Effort-first control (`off/auto/low/medium/high` plus model-supported extras) across providers
 - **Streaming Output** - Real-time response display
 - **Session Management** - JSONL format with branchable session lineage tree
 - **Skills System** - Natural language triggering, extensible, role-projected in AMA
-- **Repo Intelligence** - OSS baseline + optional `repointel` premium engine, with native KodaX auto-injection lane
+- **Repo Intelligence** - Built-in full/light repository intelligence with native KodaX auto-injection lane
 - **Rich Tool Surface** - 50+ built-in tools across file ops, shell, search, repo intelligence, MCP capabilities, git worktree, and agent control
 - **Permission Control** - 3 permission modes with pattern-based control
 - **Standalone Binary** - `bun --compile` releases for Win/macOS/Linux x64+arm64, no Node.js required on target machines
@@ -554,8 +551,8 @@ kodax "Help me create a TypeScript project"
 # Choose a provider explicitly
 kodax --provider openai --model gpt-5.4 "Create a REST API"
 
-# Use a deeper reasoning mode
-kodax --reasoning deep "Review this architecture"
+# Use higher reasoning effort
+kodax --effort high "Review this architecture"
 ```
 
 ### Session Workflows
@@ -664,7 +661,7 @@ kodax -h init          # Long-running project initialization
 kodax -h project       # Project mode / harness workflow
 kodax -h auto          # Auto-continue mode
 kodax -h provider      # LLM provider configuration
-kodax -h thinking      # Thinking/reasoning mode
+kodax -h thinking      # Thinking/reasoning effort and compatibility modes
 kodax -h team          # Multi-agent parallel execution
 kodax -h print         # Print configuration
 ```
@@ -840,7 +837,7 @@ for await (const result of stream) {
 }
 ```
 
-**Key Features**: unified provider interface · streaming · reasoning modes (`off/auto/quick/balanced/deep`) · per-provider retry + error handling · zero business-logic dependencies.
+**Key Features**: unified provider interface · streaming · reasoning effort (`off/auto/low/medium/high` plus model-supported extras) · per-provider retry + error handling · zero business-logic dependencies.
 
 ### `@kodax-ai/kodax/agent` — Agent Framework (standalone-consumable)
 
@@ -1169,20 +1166,20 @@ npm run clean
 
 ### Repo Intelligence cache directories
 
-KodaX now uses two repo-intelligence cache locations on disk:
+KodaX uses one repo-intelligence cache root with separate built-in engine profiles:
 
 - `.agent/repo-intelligence/`
-  - OSS baseline repo-intelligence artifacts and existing task-engine snapshots.
-- `.repointel/`
-  - Premium `repointel` workspace cache shared by the local daemon/native frontdoor.
+  - Full-engine repo-intelligence artifacts and existing task-engine snapshots.
+- `.agent/repo-intelligence/light/`
+  - Light-mode heuristic index artifacts.
 
 They are intentionally separated so:
 
-- OSS fallback stays available even when premium is disabled or unavailable.
-- Premium cache does not pollute OSS artifacts.
-- KodaX and other hosts can share the same premium workspace cache.
+- full and light profiles can be rebuilt independently.
+- light-mode confidence/capability state cannot be mistaken for full-engine state.
+- future cache migrations can delete one profile without corrupting the other.
 
-`.repointel/` is a local generated directory and should not be committed.
+`.agent/repo-intelligence/` is local generated state and should not be committed.
 
 ---
 

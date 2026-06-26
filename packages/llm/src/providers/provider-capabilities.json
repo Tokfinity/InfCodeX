@@ -10,7 +10,7 @@
           "id": "claude-opus-4-8",
           "displayName": "Opus 4.8",
           "reasoningCapability": "native-adaptive",
-          "reasoningCapabilityV2": {
+          "reasoningProfile": {
             "reasoningPreset": "claude-adaptive-xhigh",
             "effortStrategy": "anthropic-output-effort",
             "thinkingStrategy": "anthropic-adaptive",
@@ -32,7 +32,7 @@
           "id": "claude-opus-4-7",
           "displayName": "Opus 4.7",
           "reasoningCapability": "native-adaptive",
-          "reasoningCapabilityV2": {
+          "reasoningProfile": {
             "reasoningPreset": "claude-adaptive-xhigh",
             "effortStrategy": "anthropic-output-effort",
             "thinkingStrategy": "anthropic-adaptive",
@@ -54,7 +54,7 @@
           "id": "claude-opus-4-6",
           "displayName": "Opus 4.6",
           "reasoningCapability": "native-adaptive",
-          "reasoningCapabilityV2": {
+          "reasoningProfile": {
             "reasoningPreset": "claude-adaptive-max",
             "effortStrategy": "anthropic-output-effort",
             "thinkingStrategy": "anthropic-adaptive",
@@ -74,7 +74,7 @@
           "id": "claude-haiku-4-5",
           "displayName": "Haiku 4.5",
           "reasoningCapability": "native-budget",
-          "reasoningCapabilityV2": {
+          "reasoningProfile": {
             "reasoningPreset": "anthropic-budget",
             "effortStrategy": "provider-budget",
             "thinkingStrategy": "anthropic-budget",
@@ -98,7 +98,7 @@
         }
       ],
       "reasoningCapability": "native-adaptive",
-      "reasoningCapabilityV2": {
+      "reasoningProfile": {
         "reasoningPreset": "claude-adaptive-max",
         "effortStrategy": "anthropic-output-effort",
         "thinkingStrategy": "anthropic-adaptive",
@@ -127,7 +127,7 @@
         { "id": "gpt-5.3-codex-spark", "displayName": "GPT-5.3 Codex Spark" }
       ],
       "reasoningCapability": "native-effort",
-      "reasoningCapabilityV2": {
+      "reasoningProfile": {
         "reasoningPreset": "openai-chat-reasoning",
         "effortStrategy": "openai-chat-effort",
         "defaultEffort": "medium",
@@ -157,14 +157,14 @@
         { "id": "deepseek-v4-pro", "displayName": "DeepSeek V4 Pro" }
       ],
       "reasoningCapability": "native-effort",
-      "reasoningCapabilityV2": {
+      "reasoningProfile": {
         "reasoningPreset": "deepseek-v4-openai",
         "effortStrategy": "openai-chat-effort",
         "thinkingStrategy": "provider-toggle",
         "defaultEffort": "high",
         "supportedEfforts": [
           { "value": "none", "description": "Disable thinking" },
-          { "value": "minimal", "description": "Disable thinking" },
+          { "value": "minimal", "description": "Disable thinking", "isUserVisible": false },
           { "value": "low", "description": "Alias to high" },
           { "value": "medium", "description": "Alias to high" },
           { "value": "high", "description": "DeepSeek high reasoning", "isDefault": true },
@@ -195,7 +195,7 @@
           "displayName": "Kimi K2.7 Code",
           "contextWindow": 256000,
           "reasoningCapability": "native-toggle",
-          "reasoningCapabilityV2": {
+          "reasoningProfile": {
             "reasoningPreset": "kimi-k2.7-code",
             "effortStrategy": "prompt-only",
             "defaultEffort": "high",
@@ -212,13 +212,13 @@
         {
           "id": "k2.5",
           "displayName": "K2.5",
-          "reasoningCapabilityV2": {
+          "reasoningProfile": {
             "reasoningPreset": "kimi-hybrid-toggle",
             "effortStrategy": "provider-toggle",
             "thinkingStrategy": "provider-toggle",
             "supportedEfforts": [
               { "value": "none", "description": "Disable thinking" },
-              { "value": "minimal", "description": "Disable thinking" },
+              { "value": "minimal", "description": "Disable thinking", "isUserVisible": false },
               { "value": "low", "description": "Enable thinking" },
               { "value": "medium", "description": "Enable thinking", "isDefault": true },
               { "value": "high", "description": "Enable thinking" },
@@ -231,13 +231,13 @@
         }
       ],
       "reasoningCapability": "native-toggle",
-      "reasoningCapabilityV2": {
+      "reasoningProfile": {
         "reasoningPreset": "kimi-hybrid-toggle",
         "effortStrategy": "provider-toggle",
         "thinkingStrategy": "provider-toggle",
         "supportedEfforts": [
           { "value": "none", "description": "Disable thinking" },
-          { "value": "minimal", "description": "Disable thinking" },
+          { "value": "minimal", "description": "Disable thinking", "isUserVisible": false },
           { "value": "low", "description": "Enable thinking" },
           { "value": "medium", "description": "Enable thinking", "isDefault": true },
           { "value": "high", "description": "Enable thinking" },
@@ -257,7 +257,7 @@
       "apiKeyEnv": "KIMI_CODE_API_KEY",
       "model": "kimi-for-coding",
       "reasoningCapability": "native-toggle",
-      "reasoningCapabilityV2": {
+      "reasoningProfile": {
         "reasoningPreset": "kimi-k2.7-code",
         "effortStrategy": "prompt-only",
         "defaultEffort": "high",
@@ -280,14 +280,14 @@
       "apiKeyEnv": "QWEN_API_KEY",
       "model": "qwen3.5-plus",
       "reasoningCapability": "native-budget",
-      "reasoningCapabilityV2": {
+      "reasoningProfile": {
         "reasoningPreset": "qwen-hybrid-thinking",
         "effortStrategy": "provider-budget",
         "thinkingStrategy": "provider-budget",
         "defaultEffort": "medium",
         "supportedEfforts": [
           { "value": "none", "description": "Disable thinking" },
-          { "value": "minimal", "description": "Disable thinking" },
+          { "value": "minimal", "description": "Disable thinking", "isUserVisible": false },
           { "value": "low", "description": "Light thinking budget" },
           { "value": "medium", "description": "Balanced thinking budget", "isDefault": true },
           { "value": "high", "description": "High thinking budget" },
@@ -321,14 +321,14 @@
           "contextWindow": 1000000,
           "maxOutputTokens": 131072,
           "reasoningCapability": "native-effort",
-          "reasoningCapabilityV2": {
+          "reasoningProfile": {
             "reasoningPreset": "zai-glm-5.2",
             "effortStrategy": "openai-chat-effort",
             "thinkingStrategy": "provider-toggle",
             "defaultEffort": "max",
             "supportedEfforts": [
               { "value": "none", "description": "Disable thinking" },
-              { "value": "minimal", "description": "Disable thinking" },
+              { "value": "minimal", "description": "Disable thinking", "isUserVisible": false },
               { "value": "low", "description": "Alias to high" },
               { "value": "medium", "description": "Alias to high" },
               { "value": "high", "description": "GLM high reasoning" },
@@ -349,13 +349,13 @@
         { "id": "glm-5-turbo", "displayName": "GLM-5 Turbo" }
       ],
       "reasoningCapability": "native-toggle",
-      "reasoningCapabilityV2": {
+      "reasoningProfile": {
         "reasoningPreset": "zai-glm-toggle",
         "effortStrategy": "provider-toggle",
         "thinkingStrategy": "provider-toggle",
         "supportedEfforts": [
           { "value": "none", "description": "Disable thinking" },
-          { "value": "minimal", "description": "Disable thinking" },
+          { "value": "minimal", "description": "Disable thinking", "isUserVisible": false },
           { "value": "low", "description": "Enable thinking" },
           { "value": "medium", "description": "Enable thinking", "isDefault": true },
           { "value": "high", "description": "Enable thinking" },
@@ -381,14 +381,14 @@
           "contextWindow": 1000000,
           "maxOutputTokens": 131072,
           "reasoningCapability": "native-effort",
-          "reasoningCapabilityV2": {
+          "reasoningProfile": {
             "reasoningPreset": "zai-glm-5.2",
             "effortStrategy": "openai-chat-effort",
             "thinkingStrategy": "provider-toggle",
             "defaultEffort": "max",
             "supportedEfforts": [
               { "value": "none", "description": "Disable thinking" },
-              { "value": "minimal", "description": "Disable thinking" },
+              { "value": "minimal", "description": "Disable thinking", "isUserVisible": false },
               { "value": "low", "description": "Alias to high" },
               { "value": "medium", "description": "Alias to high" },
               { "value": "high", "description": "GLM high reasoning" },
@@ -409,13 +409,13 @@
           "id": "glm-5-turbo",
           "displayName": "GLM-5 Turbo",
           "reasoningCapability": "native-toggle",
-          "reasoningCapabilityV2": {
+          "reasoningProfile": {
             "reasoningPreset": "zai-glm-toggle",
             "effortStrategy": "provider-toggle",
             "thinkingStrategy": "provider-toggle",
             "supportedEfforts": [
               { "value": "none", "description": "Disable thinking" },
-              { "value": "minimal", "description": "Disable thinking" },
+              { "value": "minimal", "description": "Disable thinking", "isUserVisible": false },
               { "value": "low", "description": "Enable thinking" },
               { "value": "medium", "description": "Enable thinking", "isDefault": true },
               { "value": "high", "description": "Enable thinking" },
@@ -431,13 +431,13 @@
           "displayName": "GLM-4.7",
           "contextWindow": 200000,
           "reasoningCapability": "native-toggle",
-          "reasoningCapabilityV2": {
+          "reasoningProfile": {
             "reasoningPreset": "zai-glm-toggle",
             "effortStrategy": "provider-toggle",
             "thinkingStrategy": "provider-toggle",
             "supportedEfforts": [
               { "value": "none", "description": "Disable thinking" },
-              { "value": "minimal", "description": "Disable thinking" },
+              { "value": "minimal", "description": "Disable thinking", "isUserVisible": false },
               { "value": "low", "description": "Enable thinking" },
               { "value": "medium", "description": "Enable thinking", "isDefault": true },
               { "value": "high", "description": "Enable thinking" },
@@ -598,13 +598,13 @@
           "displayName": "MiniMax M3 (Frontier Coding, 1M ctx)",
           "contextWindow": 1000000,
           "reasoningCapability": "native-adaptive",
-          "reasoningCapabilityV2": {
+          "reasoningProfile": {
             "reasoningPreset": "minimax-m3",
             "effortStrategy": "provider-toggle",
             "thinkingStrategy": "anthropic-adaptive",
             "supportedEfforts": [
               { "value": "none", "description": "Disable thinking" },
-              { "value": "minimal", "description": "Disable thinking" },
+              { "value": "minimal", "description": "Disable thinking", "isUserVisible": false },
               { "value": "low", "description": "Adaptive thinking" },
               { "value": "medium", "description": "Adaptive thinking", "isDefault": true },
               { "value": "high", "description": "Adaptive thinking" },
@@ -619,7 +619,7 @@
         {
           "id": "MiniMax-M2.7-highspeed",
           "displayName": "MiniMax M2.7 Highspeed (higher-tier plan)",
-          "reasoningCapabilityV2": {
+          "reasoningProfile": {
             "reasoningPreset": "minimax-m2-always",
             "effortStrategy": "prompt-only",
             "supportedEfforts": [
@@ -634,7 +634,7 @@
         }
       ],
       "reasoningCapability": "native-toggle",
-      "reasoningCapabilityV2": {
+      "reasoningProfile": {
         "reasoningPreset": "minimax-m2-always",
         "effortStrategy": "prompt-only",
         "supportedEfforts": [
@@ -659,13 +659,13 @@
         { "id": "mimo-v2.5", "displayName": "MiMo V2.5" }
       ],
       "reasoningCapability": "native-toggle",
-      "reasoningCapabilityV2": {
+      "reasoningProfile": {
         "reasoningPreset": "mimo-v2.5-toggle",
         "effortStrategy": "provider-toggle",
         "thinkingStrategy": "provider-toggle",
         "supportedEfforts": [
           { "value": "none", "description": "Disable thinking" },
-          { "value": "minimal", "description": "Disable thinking" },
+          { "value": "minimal", "description": "Disable thinking", "isUserVisible": false },
           { "value": "low", "description": "Enable thinking" },
           { "value": "medium", "description": "Enable thinking", "isDefault": true },
           { "value": "high", "description": "Enable thinking" },
@@ -689,13 +689,13 @@
         { "id": "mimo-v2.5", "displayName": "MiMo V2.5" }
       ],
       "reasoningCapability": "native-toggle",
-      "reasoningCapabilityV2": {
+      "reasoningProfile": {
         "reasoningPreset": "mimo-v2.5-toggle",
         "effortStrategy": "provider-toggle",
         "thinkingStrategy": "provider-toggle",
         "supportedEfforts": [
           { "value": "none", "description": "Disable thinking" },
-          { "value": "minimal", "description": "Disable thinking" },
+          { "value": "minimal", "description": "Disable thinking", "isUserVisible": false },
           { "value": "low", "description": "Enable thinking" },
           { "value": "medium", "description": "Enable thinking", "isDefault": true },
           { "value": "high", "description": "Enable thinking" },
@@ -722,14 +722,14 @@
           "contextWindow": 1000000,
           "maxOutputTokens": 131072,
           "reasoningCapability": "native-effort",
-          "reasoningCapabilityV2": {
+          "reasoningProfile": {
             "reasoningPreset": "zai-glm-5.2",
             "effortStrategy": "openai-chat-effort",
             "thinkingStrategy": "provider-toggle",
             "defaultEffort": "max",
             "supportedEfforts": [
               { "value": "none", "description": "Disable thinking" },
-              { "value": "minimal", "description": "Disable thinking" },
+              { "value": "minimal", "description": "Disable thinking", "isUserVisible": false },
               { "value": "low", "description": "Alias to high" },
               { "value": "medium", "description": "Alias to high" },
               { "value": "high", "description": "GLM high reasoning" },
@@ -751,7 +751,7 @@
           "id": "kimi-k2.7-code",
           "displayName": "Kimi K2.7 Code",
           "contextWindow": 256000,
-          "reasoningCapabilityV2": {
+          "reasoningProfile": {
             "reasoningPreset": "kimi-k2.7-code",
             "effortStrategy": "prompt-only",
             "defaultEffort": "high",
@@ -769,13 +769,13 @@
           "id": "kimi-k2.6",
           "displayName": "Kimi K2.6",
           "contextWindow": 256000,
-          "reasoningCapabilityV2": {
+          "reasoningProfile": {
             "reasoningPreset": "kimi-hybrid-toggle",
             "effortStrategy": "provider-toggle",
             "thinkingStrategy": "provider-toggle",
             "supportedEfforts": [
               { "value": "none", "description": "Disable thinking" },
-              { "value": "minimal", "description": "Disable thinking" },
+              { "value": "minimal", "description": "Disable thinking", "isUserVisible": false },
               { "value": "low", "description": "Enable thinking" },
               { "value": "medium", "description": "Enable thinking", "isDefault": true },
               { "value": "high", "description": "Enable thinking" },
@@ -790,13 +790,13 @@
           "id": "MiniMax-M3",
           "displayName": "MiniMax M3 (Frontier Coding, 1M ctx)",
           "contextWindow": 1000000,
-          "reasoningCapabilityV2": {
+          "reasoningProfile": {
             "reasoningPreset": "minimax-m3",
             "effortStrategy": "provider-toggle",
             "thinkingStrategy": "anthropic-adaptive",
             "supportedEfforts": [
               { "value": "none", "description": "Disable thinking" },
-              { "value": "minimal", "description": "Disable thinking" },
+              { "value": "minimal", "description": "Disable thinking", "isUserVisible": false },
               { "value": "low", "description": "Adaptive thinking" },
               { "value": "medium", "description": "Adaptive thinking", "isDefault": true },
               { "value": "high", "description": "Adaptive thinking" },
@@ -812,7 +812,7 @@
           "id": "MiniMax-M2.7",
           "displayName": "MiniMax M2.7",
           "contextWindow": 204800,
-          "reasoningCapabilityV2": {
+          "reasoningProfile": {
             "reasoningPreset": "minimax-m2-always",
             "effortStrategy": "prompt-only",
             "supportedEfforts": [
@@ -829,13 +829,13 @@
           "id": "deepseek-v3.2",
           "displayName": "DeepSeek V3.2",
           "contextWindow": 128000,
-          "reasoningCapabilityV2": {
+          "reasoningProfile": {
             "reasoningPreset": "deepseek-toggle",
             "effortStrategy": "provider-toggle",
             "thinkingStrategy": "provider-toggle",
             "supportedEfforts": [
               { "value": "none", "description": "Disable thinking" },
-              { "value": "minimal", "description": "Disable thinking" },
+              { "value": "minimal", "description": "Disable thinking", "isUserVisible": false },
               { "value": "low", "description": "Enable thinking" },
               { "value": "medium", "description": "Enable thinking", "isDefault": true },
               { "value": "high", "description": "Enable thinking" },
@@ -850,14 +850,14 @@
           "id": "deepseek-v4-pro",
           "displayName": "DeepSeek V4 Pro",
           "contextWindow": 1000000,
-          "reasoningCapabilityV2": {
+          "reasoningProfile": {
             "reasoningPreset": "deepseek-v4-anthropic",
             "effortStrategy": "anthropic-output-effort",
             "thinkingStrategy": "provider-toggle",
             "defaultEffort": "high",
             "supportedEfforts": [
               { "value": "none", "description": "Disable thinking" },
-              { "value": "minimal", "description": "Disable thinking" },
+              { "value": "minimal", "description": "Disable thinking", "isUserVisible": false },
               { "value": "low", "description": "Alias to high" },
               { "value": "medium", "description": "Alias to high" },
               { "value": "high", "description": "DeepSeek high reasoning", "isDefault": true },
@@ -878,14 +878,14 @@
           "id": "deepseek-v4-flash",
           "displayName": "DeepSeek V4 Flash",
           "contextWindow": 1000000,
-          "reasoningCapabilityV2": {
+          "reasoningProfile": {
             "reasoningPreset": "deepseek-v4-anthropic",
             "effortStrategy": "anthropic-output-effort",
             "thinkingStrategy": "provider-toggle",
             "defaultEffort": "high",
             "supportedEfforts": [
               { "value": "none", "description": "Disable thinking" },
-              { "value": "minimal", "description": "Disable thinking" },
+              { "value": "minimal", "description": "Disable thinking", "isUserVisible": false },
               { "value": "low", "description": "Alias to high" },
               { "value": "medium", "description": "Alias to high" },
               { "value": "high", "description": "DeepSeek high reasoning", "isDefault": true },
@@ -907,31 +907,31 @@
           "displayName": "Doubao Seed 2.0 Code",
           "contextWindow": 256000,
           "reasoningCapability": "prompt-only",
-          "reasoningCapabilityV2": { "reasoningPreset": "none", "effortStrategy": "prompt-only" }
+          "reasoningProfile": { "reasoningPreset": "none", "effortStrategy": "prompt-only" }
         },
         {
           "id": "doubao-seed-2.0-pro",
           "displayName": "Doubao Seed 2.0 Pro",
           "contextWindow": 256000,
           "reasoningCapability": "prompt-only",
-          "reasoningCapabilityV2": { "reasoningPreset": "none", "effortStrategy": "prompt-only" }
+          "reasoningProfile": { "reasoningPreset": "none", "effortStrategy": "prompt-only" }
         },
         {
           "id": "doubao-seed-2.0-lite",
           "displayName": "Doubao Seed 2.0 Lite",
           "contextWindow": 256000,
           "reasoningCapability": "prompt-only",
-          "reasoningCapabilityV2": { "reasoningPreset": "none", "effortStrategy": "prompt-only" }
+          "reasoningProfile": { "reasoningPreset": "none", "effortStrategy": "prompt-only" }
         }
       ],
       "reasoningCapability": "native-toggle",
-      "reasoningCapabilityV2": {
+      "reasoningProfile": {
         "reasoningPreset": "zai-glm-toggle",
         "effortStrategy": "provider-toggle",
         "thinkingStrategy": "provider-toggle",
         "supportedEfforts": [
           { "value": "none", "description": "Disable thinking" },
-          { "value": "minimal", "description": "Disable thinking" },
+          { "value": "minimal", "description": "Disable thinking", "isUserVisible": false },
           { "value": "low", "description": "Enable thinking" },
           { "value": "medium", "description": "Enable thinking", "isDefault": true },
           { "value": "high", "description": "Enable thinking" },
@@ -951,7 +951,7 @@
       "apiKeyEnv": "GEMINI_API_KEY",
       "cliBridge": true,
       "reasoningCapability": "prompt-only",
-      "reasoningCapabilityV2": {
+      "reasoningProfile": {
         "reasoningPreset": "none",
         "effortStrategy": "prompt-only"
       },
@@ -963,7 +963,7 @@
       "apiKeyEnv": "OPENAI_API_KEY",
       "cliBridge": true,
       "reasoningCapability": "prompt-only",
-      "reasoningCapabilityV2": {
+      "reasoningProfile": {
         "reasoningPreset": "codex-cli-effort",
         "effortStrategy": "codex-cli-config",
         "defaultEffort": "medium",

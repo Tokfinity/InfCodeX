@@ -1,5 +1,5 @@
 import { afterEach, describe, expect, it, vi } from 'vitest';
-import type { KodaXCustomProviderConfig } from '../types.js';
+import type { KodaXCustomProviderConfig, KodaXReasoningProfile } from '../types.js';
 import { createCustomProvider } from './custom-provider.js';
 import {
   getCustomProvider,
@@ -97,7 +97,7 @@ describe('custom providers', () => {
     expect(provider.getBaseUrl()).toBe('https://example.test/v1');
     expect(provider.getAvailableModels()).toEqual(['custom-main', 'custom-alt']);
     expect(provider.getConfiguredReasoningCapability()).toBe('native-toggle');
-    expect(provider.getReasoningCapabilityV2()).toMatchObject({
+    expect(provider.getReasoningProfile()).toMatchObject({
       reasoningPreset: 'generic-thinking-toggle',
       effortStrategy: 'provider-toggle',
       thinkingStrategy: 'provider-toggle',
@@ -106,7 +106,7 @@ describe('custom providers', () => {
     expect(provider.getContextWindow()).toBe(123456);
   });
 
-  it('creates custom provider V2 reasoning profiles from reasoningPreset templates', () => {
+  it('creates custom provider reasoning profiles from reasoningPreset templates', () => {
     vi.stubEnv('CUSTOM_GLM_API_KEY', 'test-key');
     const provider = createCustomProvider({
       name: 'custom-glm',
@@ -122,15 +122,41 @@ describe('custom providers', () => {
     });
 
     expect(provider.getConfiguredReasoningCapability()).toBe('native-effort');
-    expect(provider.getReasoningCapabilityV2('glm-5.2')).toMatchObject({
+    expect(provider.getReasoningProfile('glm-5.2')).toMatchObject({
       reasoningPreset: 'zai-glm-5.2',
       effortStrategy: 'openai-chat-effort',
       defaultEffort: 'high',
     });
-    expect(provider.getReasoningCapabilityV2('kimi-code')).toMatchObject({
+    expect(provider.getReasoningProfile('kimi-code')).toMatchObject({
       reasoningPreset: 'kimi-k2.7-code',
       effortStrategy: 'prompt-only',
       localRejectEfforts: ['none', 'minimal'],
+    });
+  });
+
+  it('loads deprecated reasoningCapabilityV2 custom-provider fields as reasoningProfile', () => {
+    vi.stubEnv('CUSTOM_LEGACY_PROFILE_API_KEY', 'test-key');
+    const legacyConfig: KodaXCustomProviderConfig & {
+      reasoningCapabilityV2: KodaXReasoningProfile;
+    } = {
+      name: 'custom-legacy-profile',
+      protocol: 'openai',
+      baseUrl: 'https://legacy.example/v1',
+      apiKeyEnv: 'CUSTOM_LEGACY_PROFILE_API_KEY',
+      model: 'legacy-model',
+      reasoningCapability: 'native-effort',
+      reasoningCapabilityV2: {
+        reasoningPreset: 'openai-chat-reasoning',
+        effortStrategy: 'openai-chat-effort',
+        defaultEffort: 'medium',
+      },
+    };
+
+    const provider = createCustomProvider(legacyConfig);
+
+    expect(provider.getReasoningProfile()).toMatchObject({
+      reasoningPreset: 'openai-chat-reasoning',
+      effortStrategy: 'openai-chat-effort',
     });
   });
 
@@ -144,14 +170,14 @@ describe('custom providers', () => {
     expect(provider.getBaseUrl()).toBe('https://example.test/anthropic');
     expect(provider.getAvailableModels()).toEqual(['claude-custom', 'claude-custom-fast']);
     expect(provider.getConfiguredReasoningCapability()).toBe('native-budget');
-    expect(provider.getReasoningCapabilityV2()).toMatchObject({
+    expect(provider.getReasoningProfile()).toMatchObject({
       reasoningPreset: 'anthropic-budget',
       effortStrategy: 'provider-budget',
       thinkingStrategy: 'anthropic-budget',
     });
   });
 
-  it('maps legacy supportsThinking false to a disabled V2 reasoning profile', () => {
+  it('maps legacy supportsThinking false to a disabled reasoning profile', () => {
     vi.stubEnv('CUSTOM_OPENAI_API_KEY', 'test-key');
     const provider = createCustomProvider({
       ...cloneConfig(OPENAI_CUSTOM),
@@ -160,10 +186,78 @@ describe('custom providers', () => {
     });
 
     expect(provider.getConfiguredReasoningCapability()).toBe('none');
-    expect(provider.getReasoningCapabilityV2()).toMatchObject({
+    expect(provider.getReasoningProfile()).toMatchObject({
       reasoningPreset: 'none',
       effortStrategy: 'none',
     });
+  });
+
+  it('builds a profile from the friendly reasoning { efforts, default } form (off → disable)', () => {
+    vi.stubEnv('CUSTOM_SIMPLE_API_KEY', 'test-key');
+    const provider = createCustomProvider({
+      name: 'custom-simple',
+      protocol: 'openai',
+      baseUrl: 'https://simple.example/v1',
+      apiKeyEnv: 'CUSTOM_SIMPLE_API_KEY',
+      model: 'simple-model',
+      reasoning: { efforts: ['off', 'low', 'high', 'max'], default: 'high' },
+    });
+
+    const profile = provider.getReasoningProfile();
+    expect(profile?.effortStrategy).toBe('openai-chat-effort');
+    expect(profile?.supportedEfforts?.map((p) => p.value)).toEqual([
+      'none', 'low', 'high', 'max',
+    ]);
+    expect(profile?.defaultEffort).toBe('high');
+    expect(profile?.supportsDisabledThinking).toBe(true);
+    expect(profile?.disabledEfforts).toEqual(['none']);
+    expect(profile?.supportsReasoningEffort).toBe(true);
+  });
+
+  it('derives the anthropic wire strategy from protocol for the friendly form', () => {
+    vi.stubEnv('CUSTOM_SIMPLE_ANT_API_KEY', 'test-key');
+    const provider = createCustomProvider({
+      name: 'custom-simple-ant',
+      protocol: 'anthropic',
+      baseUrl: 'https://simple-ant.example',
+      apiKeyEnv: 'CUSTOM_SIMPLE_ANT_API_KEY',
+      model: 'claude-simple',
+      reasoning: { efforts: ['low', 'high'], default: 'high' },
+    });
+    expect(provider.getReasoningProfile()?.effortStrategy).toBe('anthropic-output-effort');
+  });
+
+  it('maps reasoning: "none" to a disabled profile', () => {
+    vi.stubEnv('CUSTOM_NONE_API_KEY', 'test-key');
+    const provider = createCustomProvider({
+      name: 'custom-none',
+      protocol: 'openai',
+      baseUrl: 'https://none.example/v1',
+      apiKeyEnv: 'CUSTOM_NONE_API_KEY',
+      model: 'none-model',
+      reasoning: 'none',
+    });
+    expect(provider.getReasoningProfile()).toMatchObject({
+      reasoningPreset: 'none',
+      effortStrategy: 'none',
+    });
+  });
+
+  it('prefers the friendly reasoning form over a deprecated reasoningPreset', () => {
+    vi.stubEnv('CUSTOM_PREC_API_KEY', 'test-key');
+    const provider = createCustomProvider({
+      name: 'custom-prec',
+      protocol: 'openai',
+      baseUrl: 'https://prec.example/v1',
+      apiKeyEnv: 'CUSTOM_PREC_API_KEY',
+      model: 'prec-model',
+      reasoningPreset: 'zai-glm-5.2', // deprecated; should be overridden
+      reasoning: { efforts: ['low', 'medium'], default: 'low' },
+    });
+    const profile = provider.getReasoningProfile();
+    expect(profile?.reasoningPreset).toBeUndefined(); // built fresh, not from preset
+    expect(profile?.supportedEfforts?.map((p) => p.value)).toEqual(['low', 'medium']);
+    expect(profile?.defaultEffort).toBe('low');
   });
 
   it('rejects invalid custom provider definitions up front', () => {
@@ -225,7 +319,7 @@ describe('custom providers', () => {
 
     expect(getCustomModelCapabilities('custom-openai', 'custom-main')).toMatchObject({
       reasoningCapability: 'native-toggle',
-      reasoningCapabilityV2: {
+      reasoningProfile: {
         reasoningPreset: 'generic-thinking-toggle',
         effortStrategy: 'provider-toggle',
       },
@@ -233,7 +327,7 @@ describe('custom providers', () => {
     });
     expect(getCustomModelCapabilities('custom-anthropic', 'claude-custom')).toMatchObject({
       reasoningCapability: 'native-budget',
-      reasoningCapabilityV2: {
+      reasoningProfile: {
         reasoningPreset: 'anthropic-budget',
         effortStrategy: 'provider-budget',
       },
@@ -254,8 +348,8 @@ describe('custom providers', () => {
   it('defaults the two-layer cascade fields when the custom config omits them', () => {
     vi.stubEnv('CUSTOM_OPENAI_API_KEY', 'test-key');
     const provider = createCustomProvider(cloneConfig(OPENAI_CUSTOM));
-    // No flags set in OPENAI_CUSTOM → all three cascade getters fall
-    // through to provider-level default → safe defaults (legacy behaviour).
+    // No flags set in OPENAI_CUSTOM 鈫?all three cascade getters fall
+    // through to provider-level default 鈫?safe defaults (legacy behaviour).
     expect(provider.getEffectiveReplayReasoningContent()).toBe(false);
     expect(provider.getEffectiveStrictThinkingSignature()).toBe(false);
     expect(provider.getStreamMaxDurationMs()).toBeUndefined();
@@ -278,7 +372,7 @@ describe('custom providers', () => {
     vi.stubEnv('CUSTOM_OPENAI_API_KEY', 'test-key');
     // Real-world shape: a single gateway routing models that need
     // different settings. Provider default replayReasoningContent=true
-    // (e.g. DeepSeek V4 alias) — but the gateway also exposes an
+    // (e.g. DeepSeek V4 alias) 鈥?but the gateway also exposes an
     // openai-proper passthrough that must NOT echo reasoning_content.
     const provider = createCustomProvider({
       ...cloneConfig(OPENAI_CUSTOM),
@@ -293,7 +387,7 @@ describe('custom providers', () => {
     // Inheriting model picks up the provider defaults.
     expect(provider.getEffectiveReplayReasoningContent('deepseek-v4-flash')).toBe(true);
     expect(provider.getStreamMaxDurationMs('deepseek-v4-flash')).toBe(120_000);
-    // gpt-5 forces both off — verifies per-model `false` beats `true`
+    // gpt-5 forces both off 鈥?verifies per-model `false` beats `true`
     // at provider level (the load-bearing case).
     expect(provider.getEffectiveReplayReasoningContent('gpt-5')).toBe(false);
     expect(provider.getStreamMaxDurationMs('gpt-5')).toBe(0);

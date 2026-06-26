@@ -1,7 +1,7 @@
 import {
   KodaXNormalizedReasoningRequest,
   KodaXProviderConfig,
-  KodaXReasoningCapabilityV2,
+  KodaXReasoningProfile,
   KodaXReasoningEffortPreset,
   KodaXReasoningPresetName,
   KodaXReasoningCapability,
@@ -40,7 +40,7 @@ export const KODAX_REASONING_SAFETY_RESERVE = 4096;
 
 const ENABLED_TOGGLE_EFFORTS: readonly KodaXReasoningEffortPreset[] = [
   { value: 'none', description: 'Disable thinking' },
-  { value: 'minimal', description: 'Disable thinking' },
+  { value: 'minimal', description: 'Disable thinking', isUserVisible: false },
   { value: 'low', description: 'Enable thinking' },
   { value: 'medium', description: 'Enable thinking', isDefault: true },
   { value: 'high', description: 'Enable thinking' },
@@ -50,7 +50,7 @@ const ENABLED_TOGGLE_EFFORTS: readonly KodaXReasoningEffortPreset[] = [
 
 const HIGH_MAX_EFFORTS: readonly KodaXReasoningEffortPreset[] = [
   { value: 'none', description: 'Disable thinking' },
-  { value: 'minimal', description: 'Disable thinking' },
+  { value: 'minimal', description: 'Disable thinking', isUserVisible: false },
   { value: 'low', description: 'Alias to high' },
   { value: 'medium', description: 'Alias to high' },
   { value: 'high', description: 'High reasoning', isDefault: true },
@@ -66,11 +66,11 @@ const ALWAYS_ON_EFFORTS: readonly KodaXReasoningEffortPreset[] = [
   { value: 'max', description: 'Thinking is always on' },
 ];
 
-export function createReasoningCapabilityFromPreset(
+export function createReasoningProfileFromPreset(
   preset: KodaXReasoningPresetName,
-  overrides: Partial<KodaXReasoningCapabilityV2> = {},
-): KodaXReasoningCapabilityV2 {
-  const base = createBaseReasoningCapabilityFromPreset(preset);
+  overrides: Partial<KodaXReasoningProfile> = {},
+): KodaXReasoningProfile {
+  const base = createBaseReasoningProfileFromPreset(preset);
   return {
     ...base,
     ...overrides,
@@ -78,9 +78,9 @@ export function createReasoningCapabilityFromPreset(
   };
 }
 
-function createBaseReasoningCapabilityFromPreset(
+function createBaseReasoningProfileFromPreset(
   preset: KodaXReasoningPresetName,
-): KodaXReasoningCapabilityV2 {
+): KodaXReasoningProfile {
   switch (preset) {
     case 'zai-glm-5.2':
       return {
@@ -286,53 +286,31 @@ export function normalizeReasoningRequest(
   reasoning?: boolean | KodaXReasoningRequest,
 ): KodaXNormalizedReasoningRequest {
   if (typeof reasoning === 'boolean') {
-    const mode = reasoning ? 'auto' : 'off';
     return {
       enabled: reasoning,
-      mode,
-      depth: reasoning ? 'medium' : 'off',
-      effort: mapLegacyReasoningModeToEffortIntent(mode),
+      effort: reasoning ? 'auto' : 'none',
       effortSource: 'legacy',
       taskType: 'unknown',
       executionMode: 'implementation',
     };
   }
 
-  const rawEffort = reasoning?.effort;
-  const effort = rawEffort ? normalizeReasoningEffortValue(rawEffort) : undefined;
-  const effortDisablesReasoning = effort === 'none';
-  const mode = effortDisablesReasoning
-    ? 'off'
-    : reasoning?.mode ?? inferReasoningModeFromEffort(effort) ?? 'off';
-  const depth = effortDisablesReasoning
-    ? 'off'
-    : reasoning?.depth ?? getDefaultThinkingDepthForMode(mode);
-  const enabled = effortDisablesReasoning
-    ? false
-    : reasoning?.enabled ?? (effort !== undefined ? true : mode !== 'off' && depth !== 'off');
+  // Reasoning single-tracking: effort is the sole control. An explicit effort
+  // wins; otherwise the legacy `enabled` boolean shorthand maps to auto/none.
+  const explicitEffort = reasoning?.effort
+    ? normalizeReasoningEffortValue(reasoning.effort)
+    : undefined;
+  const effort: KodaXWireReasoningEffort =
+    explicitEffort
+    ?? (reasoning?.enabled === true ? 'auto' : 'none');
 
   return {
-    enabled: enabled && mode !== 'off' && depth !== 'off',
-    mode,
-    depth: enabled ? depth : 'off',
-    effort: effort ?? mapLegacyReasoningModeToEffortIntent(mode),
-    effortSource: effort !== undefined ? 'explicit' : 'legacy',
+    enabled: effort !== 'none',
+    effort,
+    effortSource: explicitEffort !== undefined ? 'explicit' : 'legacy',
     taskType: reasoning?.taskType ?? 'unknown',
     executionMode: reasoning?.executionMode ?? 'implementation',
   };
-}
-
-function inferReasoningModeFromEffort(
-  effort: string | undefined,
-): KodaXReasoningMode | undefined {
-  if (!effort) {
-    return undefined;
-  }
-  const legacyMode = effortToLegacyReasoningMode(effort);
-  if (legacyMode) {
-    return legacyMode;
-  }
-  return 'deep';
 }
 
 export type KodaXReasoningEffortEnvOverride =
@@ -358,7 +336,7 @@ export interface KodaXResolvedReasoningEffort {
 }
 
 export interface KodaXResolveReasoningEffortInput {
-  readonly capability?: KodaXReasoningCapabilityV2;
+  readonly capability?: KodaXReasoningProfile;
   readonly envEffort?: string;
   readonly explicitEffort?: string;
   readonly sessionEffort?: string;
@@ -390,6 +368,9 @@ export function normalizeReasoningEffortValue(
   }
   if (/\s/.test(normalized)) {
     throw new Error(`Reasoning effort cannot contain whitespace: "${value}".`);
+  }
+  if (normalized === 'off') {
+    return 'none';
   }
   return normalized;
 }
@@ -511,7 +492,7 @@ export function resolveReasoningEffort(
 
 export function resolveReasoningEffortForModelSwitch(input: {
   readonly currentEffort: string | undefined;
-  readonly capability?: KodaXReasoningCapabilityV2;
+  readonly capability?: KodaXReasoningProfile;
 }): KodaXModelSwitchEffortResolution {
   const currentEffort = input.currentEffort
     ? normalizeReasoningEffortValue(input.currentEffort)
@@ -560,7 +541,7 @@ function pushEffortCandidate(
 
 function resolveAutoEffectiveEffort(
   candidates: readonly EffortCandidate[],
-  capability: KodaXReasoningCapabilityV2 | undefined,
+  capability: KodaXReasoningProfile | undefined,
 ): KodaXWireReasoningEffort | undefined {
   const concreteCandidate = candidates.find((candidate) => candidate.value !== 'auto');
   if (concreteCandidate) {
@@ -575,7 +556,7 @@ function resolveAutoEffectiveEffort(
 
 function validateReasoningEffort(
   effort: KodaXWireReasoningEffort,
-  capability: KodaXReasoningCapabilityV2 | undefined,
+  capability: KodaXReasoningProfile | undefined,
   isExplicit: boolean,
 ): KodaXWireReasoningEffort {
   if (capability?.localRejectEfforts?.includes(effort)) {
@@ -608,14 +589,14 @@ function validateReasoningEffort(
 
 function applyEffortAlias(
   effort: KodaXWireReasoningEffort,
-  capability: KodaXReasoningCapabilityV2 | undefined,
+  capability: KodaXReasoningProfile | undefined,
 ): KodaXWireReasoningEffort {
   return capability?.effortAliases?.[effort] ?? effort;
 }
 
 function isSupportedReasoningEffort(
   effort: KodaXWireReasoningEffort,
-  capability: KodaXReasoningCapabilityV2 | undefined,
+  capability: KodaXReasoningProfile | undefined,
 ): boolean {
   if (capability?.localRejectEfforts?.includes(effort)) {
     return false;
@@ -634,19 +615,19 @@ function isSupportedReasoningEffort(
 }
 
 function getSupportedEffortValues(
-  capability: KodaXReasoningCapabilityV2 | undefined,
+  capability: KodaXReasoningProfile | undefined,
 ): readonly KodaXWireReasoningEffort[] {
   return capability?.supportedEfforts?.map((preset) => preset.value) ?? [];
 }
 
 function getDefaultPresetValue(
-  capability: KodaXReasoningCapabilityV2 | undefined,
+  capability: KodaXReasoningProfile | undefined,
 ): KodaXWireReasoningEffort | undefined {
   return capability?.supportedEfforts?.find((preset) => preset.isDefault)?.value;
 }
 
 function getMiddleVisiblePresetValue(
-  capability: KodaXReasoningCapabilityV2 | undefined,
+  capability: KodaXReasoningProfile | undefined,
 ): KodaXWireReasoningEffort | undefined {
   const visible = capability?.supportedEfforts
     ?.filter(isUserVisiblePreset)
@@ -662,7 +643,7 @@ function isUserVisiblePreset(preset: KodaXReasoningEffortPreset): boolean {
 }
 
 function getFallbackEffortForCapability(
-  capability: KodaXReasoningCapabilityV2 | undefined,
+  capability: KodaXReasoningProfile | undefined,
 ): KodaXWireReasoningEffort | undefined {
   if (!capability || capability.effortStrategy === 'none' || capability.effortStrategy === 'prompt-only') {
     return 'none';
@@ -687,6 +668,33 @@ export function getDefaultThinkingDepthForMode(
     case 'off':
     default:
       return 'off';
+  }
+}
+
+/**
+ * Map a canonical effort onto a thinking-budget tier. Reasoning single-tracking
+ * keeps `KodaXThinkingDepth` as a pure internal *budget-size* enum (no longer a
+ * reasoning-control track): provider budget resolution keys off this instead of
+ * a separate depth field on the request. The mapping mirrors the legacy
+ * effort→mode→depth derivation `normalizeReasoningRequest` used, so the emitted
+ * `thinking.budget_tokens` / `reasoning_effort` wire values are unchanged:
+ *   none → off | low → low | medium/auto → medium |
+ *   high/xhigh/max/minimal/custom → high.
+ */
+export function effortToThinkingDepth(
+  effort: KodaXWireReasoningEffort | undefined,
+): KodaXThinkingDepth {
+  switch (effort) {
+    case 'none':
+      return 'off';
+    case 'low':
+      return 'low';
+    case undefined:
+    case 'medium':
+    case 'auto':
+      return 'medium';
+    default:
+      return 'high';
   }
 }
 

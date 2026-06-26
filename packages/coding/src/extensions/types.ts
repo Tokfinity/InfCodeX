@@ -1,7 +1,7 @@
 import type {
   KodaXBaseProvider,
   KodaXMessage,
-  KodaXReasoningMode,
+  KodaXWireReasoningEffort,
 } from '@kodax-ai/llm';
 import type {
   KodaXExtensionSessionRecord,
@@ -135,7 +135,7 @@ export interface ExtensionRuntimeDiagnostics {
   defaults: {
     activeTools?: string[];
     modelSelection: ExtensionModelSelection;
-    thinkingLevel?: KodaXReasoningMode;
+    thinkingLevel?: KodaXWireReasoningEffort;
   };
 }
 
@@ -175,13 +175,13 @@ export interface ExtensionToolBeforeHookContext {
 export interface ExtensionProviderBeforeHookContext {
   provider: string;
   model?: string;
-  reasoningMode?: KodaXReasoningMode;
+  reasoningMode?: KodaXWireReasoningEffort;
   systemPrompt: string;
   block: (reason: string) => void;
   replaceProvider: (provider: string) => void;
   replaceModel: (model?: string) => void;
   replaceSystemPrompt: (systemPrompt: string) => void;
-  setThinkingLevel: (level: KodaXReasoningMode) => void;
+  setThinkingLevel: (level: KodaXWireReasoningEffort) => void;
 }
 
 export interface ExtensionTurnSettleHookContext {
@@ -192,7 +192,7 @@ export interface ExtensionTurnSettleHookContext {
   signal?: 'COMPLETE' | 'BLOCKED' | 'DECIDE';
   queueUserMessage: (message: string | KodaXMessage) => void;
   setModelSelection: (next: ExtensionModelSelection) => void;
-  setThinkingLevel: (level: KodaXReasoningMode) => void;
+  setThinkingLevel: (level: KodaXWireReasoningEffort) => void;
 }
 
 /**
@@ -420,8 +420,8 @@ export interface ExtensionRuntimeController {
   setActiveTools(toolNames: string[]): void;
   getModelSelection(): ExtensionModelSelection;
   setModelSelection(next: ExtensionModelSelection): void;
-  getThinkingLevel(): KodaXReasoningMode | undefined;
-  setThinkingLevel(level: KodaXReasoningMode): void;
+  getThinkingLevel(): KodaXWireReasoningEffort | undefined;
+  setThinkingLevel(level: KodaXWireReasoningEffort): void;
 }
 
 export interface KodaXExtensionAPI {

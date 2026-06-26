@@ -68,15 +68,15 @@ import {
 } from '../../../agent-runtime/middleware/cost-tracker.js';
 import { estimateTokens } from '../../../tokenizer.js';
 import {
-  reasoningModeToDepth,
   resolveReasoningMode,
-  resolveRoleReasoning,
-  type ReasoningRole,
+  resolveRoleEffort,
 } from '../../../reasoning.js';
+import { mapLegacyReasoningModeToEffortIntent } from '@kodax-ai/llm';
 import type {
   KodaXEvents,
   KodaXOptions,
   KodaXReasoningMode,
+  KodaXWireReasoningEffort,
 } from '../../../types.js';
 import {
   emitProviderRateLimit,
@@ -280,31 +280,19 @@ export function buildRunnerLlmAdapter(
       input_schema: t.input_schema,
     }));
 
-    // FEATURE_078 (v0.7.29): resolve per-role reasoning through the L1-L4
-    // chain rather than reading `agent.reasoning?.default` directly:
-    //   L1 (user ceiling)   ← `--reasoning <mode>` / options.reasoningMode
-    //   L2 (agent default)  ← agent.reasoning.default + .max
-    //   L3 (scout hint)     ← Scout's downstream_reasoning_hint, if any
-    //   L4 (revise escalate) — handled later by escalateThinkingDepth
-    // Pre-FEATURE_078 path was L2 only; that path is preserved when no
-    // user ceiling override + no scout hint is in play (resolver collapses).
-    const userCeiling = resolveReasoningMode(options);
-    const scoutHint = getScoutReasoningHint?.();
-    // FEATURE_193 (v0.7.43): V1 chain retired — Worker is the sole agent
-    // exercised in the AMA Runner chain. The SCOUT/PLANNER/GENERATOR
-    // arms of this resolution always missed in V2 production and folded
-    // to `'sa'`; the explicit literal here matches that behaviour with
-    // zero functional change.
-    const role: ReasoningRole = 'sa';
-    const reasoningMode = resolveRoleReasoning(role, userCeiling, agent.reasoning, scoutHint);
+    // Reasoning single-tracking: resolve the per-turn reasoning EFFORT through
+    // the FEATURE_078 L1-L2 chain (effort-native):
+    //   L1 (user ceiling)  ← options.effort (or legacy reasoningMode mapped)
+    //   L2 (agent default) ← agent.reasoning.default + .max (mapped to effort)
+    // FEATURE_193 (v0.7.43): V1 chain retired — the Worker is the sole agent,
+    // so the per-role split and the Scout hint (L3) are gone.
+    const userCeiling: KodaXWireReasoningEffort =
+      options.effort ?? mapLegacyReasoningModeToEffortIntent(resolveReasoningMode(options));
+    const effort = resolveRoleEffort(userCeiling, agent.reasoning);
     const providerReasoning: KodaXReasoningRequest | undefined =
-      reasoningMode === 'off'
-        ? { enabled: false, mode: 'off' }
-        : {
-            enabled: true,
-            mode: reasoningMode,
-            depth: reasoningModeToDepth(reasoningMode),
-          };
+      effort === 'none'
+        ? { enabled: false, effort: 'none' }
+        : { enabled: true, effort };
 
     iterationState.current += 1;
     options.events?.onIterationStart?.(iterationState.current, MAX_ITER_HINT);

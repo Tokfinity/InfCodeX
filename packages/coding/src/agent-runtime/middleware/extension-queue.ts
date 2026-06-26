@@ -61,7 +61,7 @@ import type {
   KodaXContextTokenSnapshot,
   KodaXExtensionSessionRecord,
   KodaXJsonValue,
-  KodaXReasoningMode,
+  KodaXWireReasoningEffort,
 } from '../../types.js';
 import { runActiveExtensionHook } from '../../extensions/runtime.js';
 import {
@@ -245,7 +245,7 @@ export function createExtensionRuntimeSessionController(state: RuntimeSessionSta
       state.modelSelection = normalizeRuntimeModelSelection(next);
     },
     getThinkingLevel: () => state.thinkingLevel,
-    setThinkingLevel: (level: KodaXReasoningMode) => {
+    setThinkingLevel: (level: KodaXWireReasoningEffort) => {
       state.thinkingLevel = level;
     },
   };

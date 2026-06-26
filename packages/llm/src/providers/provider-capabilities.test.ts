@@ -1,5 +1,5 @@
 /**
- * FEATURE_198 v0.7.44 — Provider capability JSON loader tests.
+ * FEATURE_198 v0.7.44 鈥?Provider capability JSON loader tests.
  *
  * Coverage:
  *   - JSON file schema validation (happy path)
@@ -7,7 +7,7 @@
  *     wrong type, unknown profile, cliBridge contradiction)
  *   - Loader cache behavior (single read per process)
  *   - `_resetProviderSnapshotsCache` test hook
- *   - Profile-name → object resolution
+ *   - Profile-name 鈫?object resolution
  *   - CLI-bridge dynamic fill (gemini-cli / codex-cli)
  *   - **Drift guard**: every known KODAX provider exists in JSON with
  *     the right shape (catches accidental field deletions in JSON edits)
@@ -29,7 +29,7 @@ import {
 } from './provider-capabilities.loader.js';
 import { validateProviderCapabilitiesJson } from './provider-capabilities.types.js';
 
-describe('FEATURE_198 — provider-capabilities loader', () => {
+describe('FEATURE_198 鈥?provider-capabilities loader', () => {
   beforeEach(() => {
     _resetProviderSnapshotsCache();
   });
@@ -158,14 +158,14 @@ describe('FEATURE_198 — provider-capabilities loader', () => {
     // The following block hard-codes the EXPECTED values for each
     // statically-known field. If a JSON edit drops or mis-types a value,
     // this fails immediately. CLI-bridge dynamic fields (model/models)
-    // are NOT asserted here — they're verified separately above.
+    // are NOT asserted here 鈥?they're verified separately above.
 
     it('anthropic: full field set matches expected', () => {
       const a = getProviderSnapshots().anthropic;
       expect(a.apiKeyEnv).toBe('ANTHROPIC_API_KEY');
       expect(a.model).toBe('claude-sonnet-4-6');
       expect(a.reasoningCapability).toBe('native-adaptive');
-      expect(a.reasoningCapabilityV2).toMatchObject({
+      expect(a.reasoningProfile).toMatchObject({
         reasoningPreset: 'claude-adaptive-max',
         effortStrategy: 'anthropic-output-effort',
         thinkingStrategy: 'anthropic-adaptive',
@@ -180,7 +180,7 @@ describe('FEATURE_198 — provider-capabilities loader', () => {
           id: 'claude-opus-4-8',
           displayName: 'Opus 4.8',
           reasoningCapability: 'native-adaptive',
-          reasoningCapabilityV2: expect.objectContaining({
+          reasoningProfile: expect.objectContaining({
             reasoningPreset: 'claude-adaptive-xhigh',
             effortStrategy: 'anthropic-output-effort',
             thinkingStrategy: 'anthropic-adaptive',
@@ -193,7 +193,7 @@ describe('FEATURE_198 — provider-capabilities loader', () => {
           id: 'claude-opus-4-7',
           displayName: 'Opus 4.7',
           reasoningCapability: 'native-adaptive',
-          reasoningCapabilityV2: expect.objectContaining({
+          reasoningProfile: expect.objectContaining({
             reasoningPreset: 'claude-adaptive-xhigh',
             effortStrategy: 'anthropic-output-effort',
             thinkingStrategy: 'anthropic-adaptive',
@@ -206,7 +206,7 @@ describe('FEATURE_198 — provider-capabilities loader', () => {
           id: 'claude-opus-4-6',
           displayName: 'Opus 4.6',
           reasoningCapability: 'native-adaptive',
-          reasoningCapabilityV2: expect.objectContaining({
+          reasoningProfile: expect.objectContaining({
             reasoningPreset: 'claude-adaptive-max',
           }),
           thinkingBudgetCap: 28000,
@@ -215,7 +215,7 @@ describe('FEATURE_198 — provider-capabilities loader', () => {
           id: 'claude-haiku-4-5',
           displayName: 'Haiku 4.5',
           reasoningCapability: 'native-budget',
-          reasoningCapabilityV2: expect.objectContaining({
+          reasoningProfile: expect.objectContaining({
             reasoningPreset: 'anthropic-budget',
             effortStrategy: 'provider-budget',
           }),
@@ -226,12 +226,12 @@ describe('FEATURE_198 — provider-capabilities loader', () => {
 
     it('exposes effort-first reasoning metadata for OpenAI and Codex CLI', () => {
       const snap = getProviderSnapshots();
-      expect(snap.openai.reasoningCapabilityV2).toMatchObject({
+      expect(snap.openai.reasoningProfile).toMatchObject({
         effortStrategy: 'openai-chat-effort',
         defaultEffort: 'medium',
         supportsReasoningEffort: true,
       });
-      expect(snap.openai.reasoningCapabilityV2?.supportedEfforts?.map((preset) => preset.value)).toEqual([
+      expect(snap.openai.reasoningProfile?.supportedEfforts?.map((preset) => preset.value)).toEqual([
         'none',
         'minimal',
         'low',
@@ -239,7 +239,7 @@ describe('FEATURE_198 — provider-capabilities loader', () => {
         'high',
         'xhigh',
       ]);
-      expect(snap['codex-cli'].reasoningCapabilityV2).toMatchObject({
+      expect(snap['codex-cli'].reasoningProfile).toMatchObject({
         effortStrategy: 'codex-cli-config',
         defaultEffort: 'medium',
         allowCustomEffort: true,
@@ -266,7 +266,7 @@ describe('FEATURE_198 — provider-capabilities loader', () => {
         displayName: 'Kimi K2.7 Code',
         contextWindow: 256_000,
         reasoningCapability: 'native-toggle',
-        reasoningCapabilityV2: expect.objectContaining({
+        reasoningProfile: expect.objectContaining({
           reasoningPreset: 'kimi-k2.7-code',
           effortStrategy: 'prompt-only',
           localRejectEfforts: ['none', 'minimal'],
@@ -282,7 +282,7 @@ describe('FEATURE_198 — provider-capabilities loader', () => {
         contextWindow: 1_000_000,
         maxOutputTokens: 131_072,
         reasoningCapability: 'native-effort',
-        reasoningCapabilityV2: expect.objectContaining({
+        reasoningProfile: expect.objectContaining({
           reasoningPreset: 'zai-glm-5.2',
           effortStrategy: 'openai-chat-effort',
           defaultEffort: 'max',
@@ -302,7 +302,7 @@ describe('FEATURE_198 — provider-capabilities loader', () => {
         contextWindow: 1_000_000,
         maxOutputTokens: 131_072,
         reasoningCapability: 'native-effort',
-        reasoningCapabilityV2: expect.objectContaining({
+        reasoningProfile: expect.objectContaining({
           reasoningPreset: 'zai-glm-5.2',
           effortStrategy: 'openai-chat-effort',
           defaultEffort: 'max',
@@ -317,7 +317,7 @@ describe('FEATURE_198 — provider-capabilities loader', () => {
         displayName: 'GLM-4.7',
         contextWindow: 200_000,
         reasoningCapability: 'native-toggle',
-        reasoningCapabilityV2: expect.objectContaining({
+        reasoningProfile: expect.objectContaining({
           reasoningPreset: 'zai-glm-toggle',
           effortStrategy: 'provider-toggle',
         }),
@@ -342,7 +342,7 @@ describe('FEATURE_198 — provider-capabilities loader', () => {
     });
   });
 
-  // FEATURE_216 v0.7.45 — per-provider verifyStrategy drift guard.
+  // FEATURE_216 v0.7.45 鈥?per-provider verifyStrategy drift guard.
   // Distribution (from 2026-05-28 12-provider real+fake key probe):
   //   count-tokens (5):    anthropic + 4 anthropic-coding (zhipu/kimi/minimax/ark)
   //   models-list (4):     openai, deepseek, kimi, qwen
@@ -564,6 +564,59 @@ describe('FEATURE_198 — validator failure modes', () => {
     expect(result.providers.foo.verifyStrategy).toBe('models-list');
   });
 
+  it('accepts deprecated reasoningCapabilityV2 as a compatibility alias', () => {
+    const result = validateProviderCapabilitiesJson({
+      version: 1,
+      updatedAt: 'x',
+      providers: {
+        foo: {
+          apiKeyEnv: 'F',
+          model: 'm',
+          reasoningCapability: 'native-effort',
+          reasoningCapabilityV2: {
+            reasoningPreset: 'openai-chat-reasoning',
+            effortStrategy: 'openai-chat-effort',
+            defaultEffort: 'medium',
+          },
+          capabilityProfile: 'native',
+          verifyStrategy: 'models-list',
+        },
+      },
+    });
+
+    expect(result.providers.foo.reasoningProfile).toMatchObject({
+      reasoningPreset: 'openai-chat-reasoning',
+      effortStrategy: 'openai-chat-effort',
+    });
+  });
+
+  it('rejects mixed reasoningProfile and deprecated reasoningCapabilityV2', () => {
+    shouldThrow(
+      {
+        version: 1,
+        updatedAt: 'x',
+        providers: {
+          foo: {
+            apiKeyEnv: 'F',
+            model: 'm',
+            reasoningCapability: 'native-effort',
+            reasoningProfile: {
+              reasoningPreset: 'openai-chat-reasoning',
+              effortStrategy: 'openai-chat-effort',
+            },
+            reasoningCapabilityV2: {
+              reasoningPreset: 'openai-chat-reasoning',
+              effortStrategy: 'openai-chat-effort',
+            },
+            capabilityProfile: 'native',
+            verifyStrategy: 'models-list',
+          },
+        },
+      },
+      /must not define both reasoningProfile and deprecated reasoningCapabilityV2/,
+    );
+  });
+
   it('accepts minimal valid cliBridge entry', () => {
     const result = validateProviderCapabilitiesJson({
       version: 1,
@@ -583,7 +636,7 @@ describe('FEATURE_198 — validator failure modes', () => {
     expect(result.providers['foo-cli'].verifyStrategy).toBe('unsupported');
   });
 
-  // FEATURE_216 v0.7.45 — verifyStrategy validator
+  // FEATURE_216 v0.7.45 鈥?verifyStrategy validator
   it('rejects missing verifyStrategy', () => {
     shouldThrow(
       {

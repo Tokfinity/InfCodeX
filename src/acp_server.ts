@@ -919,10 +919,7 @@ export class KodaXAcpServer implements Agent {
             summary: event.summary,
             mode: event.capability?.mode,
             engine: event.capability?.engine,
-            bridge: event.capability?.bridge,
             status: event.capability?.status,
-            daemonLatencyMs: event.trace?.daemonLatencyMs,
-            cliLatencyMs: event.trace?.cliLatencyMs,
             cacheHit: event.trace?.cacheHit,
             capsuleEstimatedTokens: event.trace?.capsuleEstimatedTokens,
           });

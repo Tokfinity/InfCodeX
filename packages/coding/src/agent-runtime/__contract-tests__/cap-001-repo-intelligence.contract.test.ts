@@ -16,7 +16,7 @@
  *    `KODAX_REPO_INTELLIGENCE_TRACE === '1'`).
  *
  * Deferred (require fs / git mocking — out of P2 scope):
- * - CAP-REPO-INTEL-002: premium-native bundle path (full integration of
+ * - CAP-REPO-INTEL-002: full-engine bundle path (full integration of
  *   `getRepoPreturnBundle` requires repo-intel runtime mocks).
  * - CAP-REPO-INTEL-003: low-confidence fallback guidance (requires
  *   getModuleContext / getImpactEstimate mocks).
@@ -37,7 +37,11 @@
 
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
 
-import type { KodaXEvents, KodaXOptions } from '../../types.js';
+import type {
+  KodaXEvents,
+  KodaXOptions,
+  KodaXRepoIntelligenceCarrier,
+} from '../../types.js';
 import type { ReasoningPlan } from '../../reasoning.js';
 import {
   buildAutoRepoIntelligenceContext,
@@ -152,9 +156,15 @@ describe('CAP-001: repoIntelligenceContext injection contract', () => {
     const optionsTraceOff = {} as KodaXOptions;
     // `createRepoIntelligenceTraceEvent` returns null when both `capability`
     // and `trace` are absent — carrier must carry one to actually fire.
-    const carrier = {
-      capability: { mode: 'auto', engine: 'native', bridge: 'cli', level: 'standard', status: 'ok' },
-    } as never;
+    const carrier: KodaXRepoIntelligenceCarrier = {
+      capability: {
+        mode: 'light',
+        engine: 'light',
+        level: 'basic',
+        status: 'ok',
+        warnings: [],
+      },
+    };
 
     // (a) wired + (b) gate on + (c) carrier present → fires
     emitRepoIntelligenceTrace(events, optionsTraceOn, 'routing', carrier);
@@ -174,7 +184,7 @@ describe('CAP-001: repoIntelligenceContext injection contract', () => {
     emitRepoIntelligenceTrace({}, optionsTraceOn, 'routing', carrier);
   });
 
-  it.todo('CAP-REPO-INTEL-002: premium-native autoRepoMode + active-module conditions invoke getRepoPreturnBundle and prepend premiumContext (integration — repo-intel runtime mocks deferred to P3 substrate test layer)');
+  it.todo('CAP-REPO-INTEL-002: full autoRepoMode + active-module conditions invoke getRepoPreturnBundle and prepend repoContext (integration — repo-intel runtime mocks deferred to P3 substrate test layer)');
   it.todo('CAP-REPO-INTEL-003: module/impact confidence < 0.72 triggers fallbackGuidance with the four canonical lines (integration — getModuleContext / getImpactEstimate mocks deferred)');
   it.todo('CAP-REPO-INTEL-004: best-effort — when underlying repo-intel APIs throw, returns options.context.repoIntelligenceContext passthrough (integration — fault-injection test deferred)');
 });

@@ -201,7 +201,7 @@ export async function extractCommandPrefix(
     model: opts.model,
     system: BASH_POLICY_SPEC,
     messages: [{ role: 'user', content: `Command: ${trimmed}` }],
-    reasoning: { mode: 'off' },
+    reasoning: { effort: 'none' },
     timeoutMs: opts.timeoutMs ?? DEFAULT_TIMEOUT_MS,
     abortSignal: opts.abortSignal,
     querySource: QUERY_SOURCE,

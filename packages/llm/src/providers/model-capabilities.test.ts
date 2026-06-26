@@ -1,12 +1,12 @@
 /**
- * v0.7.43 SDK model-capability exposure — contract tests.
+ * v0.7.43 SDK model-capability exposure 鈥?contract tests.
  *
  * These verify the data SDK consumers (KodaX Space etc.) see when they
  * read context-window / max-output / thinking-budget metadata WITHOUT
- * a provider instance — i.e. without setting any API key env var.
+ * a provider instance 鈥?i.e. without setting any API key env var.
  *
  * If any assertion below fails, an embedder's popout UI will display
- * stale or missing model info — touch the snapshot in `registry.ts`
+ * stale or missing model info 鈥?touch the snapshot in `registry.ts`
  * or `custom-registry.ts` accordingly.
  */
 
@@ -52,7 +52,7 @@ describe('built-in provider model capabilities (no API key required)', () => {
 
     const k26 = getModelCapabilities('kimi', 'kimi-k2.6');
     expect(k26?.contextWindow).toBe(256_000);
-    // k2.5 inherits the same provider-level 256K — descriptor has no override.
+    // k2.5 inherits the same provider-level 256K 鈥?descriptor has no override.
     const k25 = getModelCapabilities('kimi', 'k2.5');
     expect(k25?.contextWindow).toBe(256_000);
   });
@@ -69,16 +69,16 @@ describe('built-in provider model capabilities (no API key required)', () => {
   });
 
   it('exposes effort-first reasoning metadata on built-in model capabilities', () => {
-    expect(getModelCapabilities('openai', 'gpt-5.3-codex')?.reasoningCapabilityV2).toMatchObject({
+    expect(getModelCapabilities('openai', 'gpt-5.3-codex')?.reasoningProfile).toMatchObject({
       effortStrategy: 'openai-chat-effort',
       defaultEffort: 'medium',
     });
-    expect(getModelCapabilities('codex-cli', KODAX_PROVIDER_SNAPSHOTS['codex-cli'].model)?.reasoningCapabilityV2)
+    expect(getModelCapabilities('codex-cli', KODAX_PROVIDER_SNAPSHOTS['codex-cli'].model)?.reasoningProfile)
       .toMatchObject({
         effortStrategy: 'codex-cli-config',
         allowCustomEffort: true,
       });
-    expect(getModelCapabilities('anthropic', 'claude-opus-4-8')?.reasoningCapabilityV2).toMatchObject({
+    expect(getModelCapabilities('anthropic', 'claude-opus-4-8')?.reasoningProfile).toMatchObject({
       effortStrategy: 'anthropic-output-effort',
       thinkingStrategy: 'anthropic-adaptive',
     });
@@ -100,9 +100,23 @@ describe('built-in provider model capabilities (no API key required)', () => {
     expect(getModelCapabilities('ark-coding', 'glm-4.7')?.contextWindow).toBe(200_000);
   });
 
-  it('returns undefined for unknown provider / unknown model', () => {
+  it('returns undefined only for an unknown provider', () => {
     expect(getModelCapabilities('nonexistent', 'whatever')).toBeUndefined();
-    expect(getModelCapabilities('anthropic', 'claude-2-not-shipped')).toBeUndefined();
+  });
+
+  it('inherits provider-level capability for an unknown model under a known provider', () => {
+    const caps = getModelCapabilities('anthropic', 'claude-2-not-shipped');
+    const defaultCaps = getModelCapabilities(
+      'anthropic',
+      KODAX_PROVIDER_SNAPSHOTS['anthropic'].model,
+    );
+    expect(caps).toBeDefined();
+    expect(caps?.model).toBe('claude-2-not-shipped');
+    expect(caps?.isDefault).toBe(false);
+    // Optimistic-wide default: a new/uncatalogued model id gets the family's
+    // reasoning ladder + context window instead of collapsing to undefined.
+    expect(caps?.reasoningProfile).toEqual(defaultCaps?.reasoningProfile);
+    expect(caps?.contextWindow).toBe(defaultCaps?.contextWindow);
   });
 
   it('descriptors list default first, then alternatives, per provider', () => {
@@ -146,7 +160,7 @@ describe('built-in provider model capabilities (no API key required)', () => {
     expect(minimaxModels).toContain('MiniMax-M3');
   });
 
-  it('NO API key needed — env vars stay unset throughout (refuted Space hypothesis)', () => {
+  it('NO API key needed 鈥?env vars stay unset throughout (refuted Space hypothesis)', () => {
     const originalKeys = [
       'ANTHROPIC_API_KEY',
       'OPENAI_API_KEY',
@@ -259,7 +273,7 @@ describe('custom provider model capabilities', () => {
     ]);
   });
 
-  it('maps custom provider reasoningPreset into effective V2 metadata', () => {
+  it('maps custom provider reasoningPreset into effective reasoning metadata', () => {
     registerCustomProviders([
       {
         name: 'glm-custom',
@@ -275,7 +289,7 @@ describe('custom provider model capabilities', () => {
     const caps = getCustomModelCapabilities('glm-custom', 'glm-5.2');
     expect(caps?.reasoningCapability).toBe('native-effort');
     expect(caps?.supportsThinking).toBe(true);
-    expect(caps?.reasoningCapabilityV2).toMatchObject({
+    expect(caps?.reasoningProfile).toMatchObject({
       reasoningPreset: 'zai-glm-5.2',
       effortStrategy: 'openai-chat-effort',
       defaultEffort: 'high',
@@ -304,7 +318,7 @@ describe('custom provider model capabilities', () => {
     const kimiCaps = getCustomModelCapabilities('mixed-custom', 'kimi-code');
     expect(kimiCaps?.reasoningCapability).toBe('prompt-only');
     expect(kimiCaps?.supportsThinking).toBe(false);
-    expect(kimiCaps?.reasoningCapabilityV2).toMatchObject({
+    expect(kimiCaps?.reasoningProfile).toMatchObject({
       reasoningPreset: 'kimi-k2.7-code',
       effortStrategy: 'prompt-only',
       localRejectEfforts: ['none', 'minimal'],
@@ -366,7 +380,7 @@ describe('snapshot drift guard: every Provider class config matches snapshot dat
   // capability fields to a Provider class's `buildProviderConfig({...})`
   // extras instead of editing the snapshot, the value would drift. Since
   // Provider construction throws on missing API key for built-ins, we
-  // verify the snapshot directly — `buildProviderConfig` is exercised
+  // verify the snapshot directly 鈥?`buildProviderConfig` is exercised
   // implicitly by every Provider import.
 
   it('every snapshot with supportsThinking=true also declares contextWindow + maxOutputTokens', () => {
@@ -389,7 +403,7 @@ describe('snapshot drift guard: every Provider class config matches snapshot dat
       for (const entry of snapshot.models ?? []) {
         expect(
           typeof entry,
-          `provider ${name} has string model entry — should be KodaXModelDescriptor`,
+          `provider ${name} has string model entry 鈥?should be KodaXModelDescriptor`,
         ).toBe('object');
         expect(entry).toHaveProperty('id');
       }

@@ -1,117 +1,84 @@
 {
-  // ═══════════════════════════════════════════════════════════════════════
+  // ════════════════════════════════════════════════════════════════════
   // KodaX 配置模板 (Config Template)
   //
-  // 将此文件复制到 `~/.kodax/config.json` 并按需修改。
-  // Copy this file to ~/.kodax/config.json and keep only the fields you need.
-  //
+  // 将本文件复制到 ~/.kodax/config.json 并按需修改。
   // 提示:
-  //   - 实际用户配置必须是合法 JSON（不支持注释/尾逗号）
-  //     The runtime reads config.json via JSON.parse — strip comments on copy.
-  //   - 所有字段均为可选。仅写你关心的字段即可。
-  //   - 字段优先级：CLI 参数 > config.json > 环境变量 > 默认值
-  //
-  // 权威字段定义来自 `packages/repl/src/common/utils.ts :: loadConfig()` 与
-  // 各子模块的独立加载器（见下方章节注释）。
-  // ═══════════════════════════════════════════════════════════════════════
+  //   - 真正的 config.json 必须是合法 JSON(不支持注释/尾逗号)——复制后请去掉注释。
+  //   - 所有字段均为可选,只写你关心的即可。
+  //   - 字段优先级:CLI 参数 > config.json > 环境变量 > 默认值。
+  //   - 权威定义见 packages/repl/src/common/utils.ts :: loadConfig()。
+  // ════════════════════════════════════════════════════════════════════
 
-  // ─── 1. 基础模型配置 Basic model setup ─────────────────────────────────
+  // ─── 1. 基础模型配置 ────────────────────────────────────────────────
 
-  // 默认 provider，可选内置或自定义 provider 名称。默认 "zhipu-coding"。
-  // 内置 provider:
-  //   "anthropic" | "openai" | "deepseek" | "kimi" | "kimi-code" | "qwen"
-  //   | "zhipu" | "zhipu-coding" | "minimax-coding" | "mimo" | "mimo-coding"
-  //   | "ark-coding" | "gemini-cli" | "codex-cli"
+  // 默认 provider。内置:anthropic | openai | deepseek | kimi | qwen
+  //   | zhipu | zhipu-coding | zai-coding | minimax-coding | mimo | ark-coding
+  //   | gemini-cli | codex-cli … 也可填下方自定义 provider 的 name。
   "provider": "zhipu-coding",
 
-  // 指定当前 provider 使用的模型 ID（可选，缺省即使用 provider 默认模型）
-  // "model": "glm-5-turbo",
+  // 当前 provider 使用的模型 ID(可选,缺省用 provider 默认模型)。
+  // "model": "glm-5.2",
 
-  // 推理模式 Reasoning mode: "off" | "auto" | "quick" | "balanced" | "deep"
-  "reasoningMode": "auto",
+  // 推理投入 Reasoning effort(当前模型能力派生;运行时按模型能力自动适配)。
+  //   "auto"   清除显式设置 → 用模型默认(很多模型会落到 max/high)
+  //   "off"    关闭思考(内部规范化为 none)
+  //   "low" | "medium" | "high" | "xhigh" | "max"
+  // 不是所有模型都支持全部档位:不支持的会自动别名或被记录后从梯子移除
+  // (见下方"能力缓存"说明)。用 Ctrl+T 在当前模型支持的档位间循环。
+  "effort": "auto",
 
-  // 旧版兼容开关（等价于 reasoningMode != "off"）。
-  // 若同时存在，reasoningMode 优先。建议新用户忽略此字段。
-  // "thinking": true,
-
-  // Agent 模式: "ama"（adaptive multi-agent，默认） | "sa"（single-agent）
+  // Agent 模式:"ama"(adaptive multi-agent,默认)| "amaw" | "sa"
   // "agentMode": "ama",
 
-  // 权限模式: "plan" | "accept-edits" | "auto" | "auto-in-project"
-  //   - plan:            只读规划模式，修改类工具一律要求确认
-  //   - accept-edits:    自动允许文件编辑，shell 命令仍需确认（默认）
-  //   - auto:            FEATURE_092 (v0.7.33) — LLM 分类器对每次工具调用做风险判定；
-  //                      详见下方 §9 autoMode。
-  //   - auto-in-project: 项目目录内自动允许所有工具，外部仍需确认（v0.8 起将作为
-  //                      "auto" 的 deprecated alias，建议新配置直接用 "auto"）
+  // 权限模式:"plan" | "accept-edits"(默认)| "auto"
+  //   - plan:         只读规划,修改类工具一律请求确认
+  //   - accept-edits: 自动允许文件编辑,shell 命令仍需确认
+  //   - auto:         LLM 分类器对每次工具调用做风险判定(见 §8 autoMode)
   "permissionMode": "accept-edits",
 
-  // UI 语言: "en" | "zh" | "auto"（根据 LANG/LC_ALL 自动检测）。缺省 "en"。
+  // UI 语言:"en" | "zh" | "auto"(按 LANG/LC_ALL 自动检测)。
   // "locale": "zh",
 
-  // ─── 2. Provider 可选模型列表覆盖 providerModels (可选) ────────────────
+  // ─── 2. Provider 可选模型列表 providerModels(可选) ─────────────────
   // 扩展/重排某个内置 provider 的 /model 可选模型列表。
-  // 配置中的模型优先显示（按用户顺序），未在列表的内置模型会追加到后面。
-  // 仅对内置 provider 生效；自定义 provider 请使用其自身的 "models" 字段。
-
+  // 配置中的模型优先显示,未在列表的内置模型会追加到后面。
   // "providerModels": {
-  //   "anthropic":  ["claude-sonnet-4-6", "claude-opus-4-6", "claude-haiku-4-5"],
-  //   "openai":     ["gpt-5.4", "gpt-5.3-codex", "gpt-5.3-codex-spark"],
-  //   "zhipu-coding": ["glm-5", "glm-5-turbo", "glm-5.1"]
+  //   "anthropic":    ["claude-sonnet-4-6", "claude-opus-4-8", "claude-haiku-4-5"],
+  //   "openai":       ["gpt-5.4", "gpt-5.3-codex"],
+  //   "zhipu-coding": ["glm-5.2", "glm-5.1"]
   // },
 
-  // ─── 3. Provider 推理能力缓存 providerReasoningOverrides (可选) ────────
-  // 首次探测推理能力后会写回此字段，避免重复探测。
-  // key 格式: "provider|baseUrl|model"
-  // value:    "budget" | "effort" | "toggle" | "none"
-  // 一般由 KodaX 自动维护，用户不需要手动修改。
-
-  // "providerReasoningOverrides": {
-  //   "openai|https://api.openai.com|gpt-5.4": "effort"
-  // },
-
-  // ─── 4. 自定义 Provider customProviders (可选) ─────────────────────────
-  // 注册任意 OpenAI / Anthropic 协议兼容网关。
-  // 注册后，"provider" 字段可直接引用这里的 name。
-  // 注意：自定义 provider 名不能与内置 provider 同名（内置优先）。
-
+  // ─── 3. 自定义 Provider customProviders(可选) ──────────────────────
+  // 注册任意 OpenAI / Anthropic 协议兼容网关。注册后 "provider" 字段可直接
+  // 引用其 name。注意:自定义 provider 名不能与内置 provider 同名。
+  //
+  // 关于 reasoning(推理能力声明)——只需一个字段:
+  //   "reasoning": { "efforts": [...], "default": "..." }
+  //       列出该模型接受的档位,顺序即 Ctrl+T 梯子;含 "off" 表示可关思考。
+  //       wire 策略(effortStrategy 等)由 protocol 自动推导,你不用关心。
+  //   "reasoning": "none"
+  //       该模型不支持思考。
+  //   不写 reasoning ⇒ 默认乐观给全量梯子(off/low/medium/high/xhigh/max),
+  //       不支持的档位会在首次被真实请求拒绝后自动记录并移除(被动学习)。
+  //   高级:需要完全自定义时用 "reasoningProfile": { ... }(原始 profile)。
+  //
   // "customProviders": [
   //   // ── OpenAI 协议族示例 ──
   //   {
-  //     "name": "my-ollama",                       // 必填 provider 唯一标识
-  //     "protocol": "openai",                       // "openai" | "anthropic"
-  //     "baseUrl": "http://localhost:11434/v1",     // 必填
-  //     "apiKeyEnv": "OLLAMA_API_KEY",              // 必填：API Key 环境变量名
-  //     "model": "llama3",                          // 必填：默认模型 ID
-  //     // 可选模型列表。FEATURE_098 起支持两种格式：
-  //     //   1. 旧字面量数组（所有 alt 模型继承 provider 级窗口）
-  //     //        "models": ["codellama", "mistral"]
-  //     //   2. 描述符对象数组（按需声明 per-model 真实窗口）
-  //     //        "models": [
-  //     //          { "id": "codellama", "contextWindow": 16000, "maxOutputTokens": 4096 },
-  //     //          "mistral"   // 字符串与对象可混合
-  //     //        ]
-  //     "models": ["codellama", "mistral"],
-  //     "userAgentMode": "compat",                   // "compat"（默认，UA=KodaX）
-  //                                                  // 或 "sdk"（保留官方 SDK UA）
-  //     "supportsThinking": false,
-  //     "reasoningCapability": "none",
-  //     //   "none" | "native-budget" | "native-effort" | "native-toggle" | "prompt-only"
-  //     //
-  //     // OpenAI-compat reasoning models that require replaying prior
-  //     // reasoning_content (notably DeepSeek V4 thinking mode) must opt in:
-  //     //     "replayReasoningContent": true
-  //     // Keep this unset/false for OpenAI proper and gateways that reject
-  //     // unknown assistant-message fields. For mixed gateways, prefer a
-  //     // per-model override:
-  //     //     "models": [
-  //     //       { "id": "deepseek-v4-flash", "replayReasoningContent": true },
-  //     //       { "id": "gpt-5", "replayReasoningContent": false }
-  //     //     ]
-  //     "contextWindow": 128000,                     // provider 默认窗口（同 provider 不同 model 不一致时，
-  //                                                  // 用上面 models[] 描述符 override）
-  //     "maxOutputTokens": 4096,
-  //     "thinkingBudgetCap": 10000                   // 仅 native-budget 有意义
+  //     "name": "my-ollama",                    // 必填:provider 唯一标识
+  //     "protocol": "openai",                    // "openai" | "anthropic"
+  //     "baseUrl": "http://localhost:11434/v1",  // 必填
+  //     "apiKeyEnv": "OLLAMA_API_KEY",           // 必填:API Key 的环境变量名
+  //     "model": "llama3",                       // 必填:默认模型 ID
+  //     "models": ["codellama", "mistral"],      // 可选:其它可用模型
+  //     "userAgentMode": "compat",               // "compat"(默认,UA=KodaX)| "sdk"
+  //     "reasoning": { "efforts": ["off", "low", "high"], "default": "high" },
+  //     // OpenAI-compat 思考模型若需回放 reasoning_content(如 DeepSeek V4)
+  //     // 才开启;OpenAI 原生 / 拒绝未知字段的网关保持 false:
+  //     //   "replayReasoningContent": true
+  //     "contextWindow": 128000,
+  //     "maxOutputTokens": 4096
   //   },
   //
   //   // ── Anthropic 协议族示例 ──
@@ -121,171 +88,113 @@
   //     "baseUrl": "https://my-proxy.example.com",
   //     "apiKeyEnv": "PROXY_API_KEY",
   //     "model": "claude-sonnet-4-6",
-  //     "models": ["claude-opus-4-6", "claude-haiku-4-5"],
-  //     "supportsThinking": true,
-  //     "reasoningCapability": "native-budget",
+  //     "models": ["claude-opus-4-8", "claude-haiku-4-5"],
+  //     "reasoning": { "efforts": ["low", "medium", "high", "max"], "default": "high" },
   //     "contextWindow": 200000,
-  //     "maxOutputTokens": 32768,
-  //     "thinkingBudgetCap": 16000
+  //     "maxOutputTokens": 32768
+  //   },
+  //
+  //   // ── 不支持思考的模型 ──
+  //   {
+  //     "name": "my-plain-llm",
+  //     "protocol": "openai",
+  //     "baseUrl": "https://plain.example/v1",
+  //     "apiKeyEnv": "PLAIN_API_KEY",
+  //     "model": "fast-chat",
+  //     "reasoning": "none"
   //   }
   // ],
-
-  // ─── 5. 压缩配置 compaction ───────────────────────────────────────────
-  // 由 `packages/repl/src/common/compaction-config.ts :: loadCompactionConfig()`
-  // 读取，再与 `packages/agent/src/compaction/types.ts :: CompactionConfig` 合并。
   //
-  // 完整字段:
-  //   enabled                  (bool,  默认 true)  — 是否开启自动压缩
-  //   triggerPercent           (0..100 默认 75)    — 上下文使用率超过此值时触发
-  //   protectionPercent        (0..100 默认 20)    — 最近多少比例的上下文永不压缩
-  //   rollingSummaryPercent    (0..100 默认 10)    — 每一轮滚动摘要处理的窗口比例
-  //   pruningThresholdTokens   (int,   默认 500)   — 超过该 token 数的工具结果会被裁剪
-  //   pruningGapRatio          (0..1   默认 0.8)   — 裁剪后仍超 trigger*ratio 则继续摘要
-  //   contextWindow            (int)               — manual override，最高优先级
-  //                                                  优先级：本字段 > 当前激活 model 描述符 contextWindow
-  //                                                            > customProviders[].contextWindow（自定义 provider）
-  //                                                            > 内置 provider 注册表里的真实窗口
-  //                                                            > 200_000 兜底
-  //                                                  内置 provider 通常不需要设此字段——KodaX 已为
-  //                                                  每个内置 model 维护准确窗口。仅当你接入的自定义
-  //                                                  provider 没有声明 contextWindow，且 KodaX 默认值
-  //                                                  与服务端不一致时才设此字段。
-  //   keepRecentPercent        (已废弃，V2 已不再使用)
+  // 注:旧字段 reasoningPreset / reasoningCapability / supportsThinking 已废弃,
+  // 仅为兼容老配置在加载时自动迁移,新配置请用上面的 "reasoning"。
+
+  // ─── 能力缓存 capability-cache.json(只读说明,勿手写) ─────────────
+  // KodaX 会把"某 provider/model 实测拒绝的 effort 档位"记录到
+  // ~/.kodax/capability-cache.json(被动学习,自动管理)。这不是你要维护的
+  // 配置:它只会收窄梯子,记错了可用 /provider forget-capability 清除。
+  //
+  // 注:另有一个独立的旧字段 providerReasoningOverrides,记录的是 V1 推理
+  // "机制"(toggle/effort/budget),与上面的 effort 值缓存是不同维度;它仍被
+  // 运行时机制自动纠正使用,通常无需手写。
+
+  // ─── 4. 压缩配置 compaction ─────────────────────────────────────────
+  //   enabled                (bool,  默认 true)  是否开启自动压缩
+  //   triggerPercent         (0..100 默认 75)    上下文使用率超过此值触发
+  //   protectionPercent      (0..100 默认 20)    最近多少比例的上下文不压缩
+  //   rollingSummaryPercent  (0..100 默认 10)    每轮滚动摘要处理的窗口比例
+  //   pruningThresholdTokens (int,   默认 500)   超过该 token 数的工具结果会被裁剪
+  //   contextWindow          (int)               手动覆盖,最高优先级
   "compaction": {
     "enabled": true,
     "triggerPercent": 75
-    // "protectionPercent": 20,
-    // "rollingSummaryPercent": 10,
-    // "pruningThresholdTokens": 500,
-    // "pruningGapRatio": 0.8
   },
 
-  // ─── 6. 总是允许的工具模式 alwaysAllowTools (可选) ─────────────────────
-  // accept-edits 模式下自动放行的 Bash 命令模式。项目级配置
-  // (`<project>/.kodax/config.local.json`) 会与用户级合并。
-  // 仅 Bash 需要模式，Read/Glob/Grep 永远放行，Edit/Write 在 accept-edits 模式自动允许。
-  //
-  // 模式格式:
-  //   "Bash(npm install)"     精确匹配
-  //   "Bash(git commit:*)"    前缀通配（匹配 "git commit -m ..." 等）
-  //   "Bash(npm:*)"           命令前缀通配（匹配 "npm install"/"npm run" 等）
-  // 注意: "Bash(*)" 出于安全考虑会被拒绝写入。
-
+  // ─── 5. 总是允许的工具模式 alwaysAllowTools(可选) ──────────────────
+  // accept-edits 模式下自动放行的 Bash 命令模式。
+  //   "Bash(npm install)"   精确匹配
+  //   "Bash(git commit:*)"  前缀通配
+  //   "Bash(npm:*)"         命令前缀通配
+  // 注意:"Bash(*)" 出于安全会被拒绝写入。
   // "alwaysAllowTools": [
   //   "Bash(git status)",
   //   "Bash(git diff:*)",
   //   "Bash(npm test:*)"
   // ],
 
-  // ─── 7. MCP 服务器 mcpServers (可选) ───────────────────────────────────
-  // 注册外部 MCP 服务器。支持 stdio / sse / streamable-http 三种传输。
-
+  // ─── 6. MCP 服务器 mcpServers(可选) ────────────────────────────────
+  // 注册外部 MCP 服务器,支持 stdio / sse / streamable-http 三种传输。
   // "mcpServers": {
   //   "my-stdio-server": {
-  //     "type": "stdio",                    // 默认 stdio
+  //     "type": "stdio",
   //     "command": "node",
   //     "args": ["./mcp-server.js"],
-  //     "cwd": "C:\\path\\to\\workdir",     // 可选
-  //     "env": { "FOO": "bar" },             // 可选
-  //     "connect": "lazy",                   // "lazy"（按需） | "prewarm" | "disabled"
-  //     "startupTimeoutMs": 10000,
-  //     "requestTimeoutMs": 30000
+  //     "connect": "lazy"
   //   },
-  //
   //   "my-http-server": {
-  //     "type": "streamable-http",           // 或 "sse"
+  //     "type": "streamable-http",
   //     "url": "https://mcp.example.com",
   //     "headers": { "Authorization": "Bearer ${MY_TOKEN}" },
-  //     "connect": "prewarm",
-  //     "auth": {                            // 可选：OAuth 2.0
-  //       "type": "oauth2",
-  //       "clientId": "my-client",
-  //       "authorizationUrl": "https://auth.example.com/oauth/authorize",
-  //       "tokenUrl": "https://auth.example.com/oauth/token",
-  //       "scopes": ["mcp.read", "mcp.write"],
-  //       "redirectPort": 8787
-  //     }
+  //     "connect": "prewarm"
   //   }
   // },
 
-  // ─── 8. 本地扩展 extensions (可选) ─────────────────────────────────────
-  // 启动时加载的本地扩展模块 (.js/.mjs/.cjs/.ts/.mts/.cts)。
-  // 相对路径相对于 `~/.kodax/config.json` 所在目录解析。
-  // 也可用 CLI `--extension <path>` 覆盖/追加。
-
+  // ─── 7. 本地扩展 extensions(可选) ──────────────────────────────────
+  // 启动时加载的本地扩展模块(.js/.mjs/.cjs/.ts)。相对路径相对于
+  // ~/.kodax/config.json 所在目录解析;也可用 CLI --extension 覆盖。
   // "extensions": [
-  //   "./extensions/my-ext.mjs",
-  //   "C:\\Tools\\kodax-ext\\index.js"
+  //   "./extensions/my-ext.mjs"
   // ],
 
-  // ─── 9. Auto Mode 分类器（FEATURE_092, v0.7.33）─────────────────────────
-  // 仅当 `permissionMode` 设为 "auto"（或别名 "auto-in-project"）时生效。
-  // 由 `packages/repl/src/common/permission-config.ts :: loadAutoModeSettings()`
-  // 读取，再经 `bootstrapAutoMode()` 注入到 AutoModeToolGuardrail。
-  //
-  // 字段:
-  //   engine             "llm"（默认） | "rules"
-  //                      - "llm"  :  分类器对每次非零成本工具调用做风险判定
-  //                      - "rules":  跳过分类器，所有非 Tier 1 调用都触发用户确认对话
-  //                      会话内一旦因连续 deny / circuit breaker 触发降级到 rules，
-  //                      不会自动恢复到 llm（设计 §"防绕阈值"）
-  //   classifierModel    "provider:model" 或 "model"（provider 继承主会话）。
-  //                      置空则复用主会话 (provider, model)。
-  //                      详见 docs/features/v0.7.33.md §"跨 provider 配置"
-  //   timeoutMs          分类器 sideQuery 超时毫秒数。默认 8000。
-  //   speculativeWindowMs  投机分类静默窗口毫秒数。默认 500，0 关闭投机（同步等裁决）。
-  //                      窗口只决定「快路径直接返回 vs 等裁决到达」——裁决永远被采纳
-  //                      (Issue 143 WS1)，allow 永不弹确认框，无论分类器多慢。远程/慢
-  //                      provider 想让本地快分类仍短路、慢分类静默等待时可调大此值。
-  //
-  // 环境变量覆盖（优先级高于本字段）:
-  //   KODAX_AUTO_MODE_ENGINE             "llm" | "rules"
-  //   KODAX_AUTO_MODE_CLASSIFIER_MODEL   "provider:model" 或 "model"
-  //   KODAX_AUTO_MODE_TIMEOUT_MS         整数毫秒
-  //   KODAX_AUTO_SPECULATIVE_WINDOW_MS   整数毫秒（0 关闭投机）
-  //
-  // 详见 docs/features/v0.7.33.md；投机窗口 late-verdict 采纳见 docs/KNOWN_ISSUES.md Issue 143。
-
+  // ─── 8. Auto Mode 分类器(仅 permissionMode = "auto" 时生效) ────────
+  //   engine            "llm"(默认)| "rules"
+  //   classifierModel   "provider:model" 或 "model"(缺省用主会话模型)
+  //   timeoutMs         分类器超时(毫秒),默认 8000
+  //   speculativeWindowMs 投机分类窗口(毫秒),默认 500(0 关闭)
+  // 环境变量覆盖:KODAX_AUTO_MODE_ENGINE / KODAX_AUTO_MODE_CLASSIFIER_MODEL …
   // "autoMode": {
   //   "engine": "llm",
-  //   "classifierModel": "minimax:abab6.5t-chat",
   //   "timeoutMs": 8000,
   //   "speculativeWindowMs": 500
   // },
 
-  // ─── 10. 仓库智能 Repo Intelligence ────────────────────────────────────
-  // 由 `applyRepoIntelligenceRuntimeEnv()` 转写为环境变量供 premium 子进程读取。
-  //
+  // ─── 9. 仓库智能 Repo Intelligence ──────────────────────────────────
   // repoIntelligenceMode:
-  //   "off"            严格基线，禁用 repo-intelligence 工作面
-  //   "oss"            仅使用公共 OSS 基线
-  //   "premium-shared" 使用 premium 引擎，但不走 KodaX 原生自动通路
-  //   "premium-native" 推荐：完整 KodaX 原生体验
-  //   "auto"           先尝试 premium-native，失败回退到 oss
-
-  // "repoIntelligenceMode": "premium-native",
-  // "repointelBin": "C:\\Tools\\repointel\\repointel.exe",   // 如 PATH 已含可省略
-  // "repointelEndpoint": "http://127.0.0.1:47891",          // 仅自定义守护端口时设置
+  //   "auto"  自动选择最佳引擎(默认)
+  //   "full"  完整仓库智能
+  //   "light" 轻量
+  //   "off"   关闭注入
+  // "repoIntelligenceMode": "auto",
   // "repoIntelligenceTrace": false,
 
-  // ─── 11. 流式稳健性 streamIdleTimeoutMs (可选) ─────────────────────────
-  // 流式响应空闲超时（毫秒）。0 = 禁用。
-  // 由 `applyResilienceRuntimeEnv()` 转写为 KODAX_STREAM_IDLE_TIMEOUT_MS。
-  // 同名环境变量优先级高于此字段。
+  // ─── 10. 流式稳健性 streamIdleTimeoutMs(可选) ─────────────────────
+  // 流式响应空闲超时(毫秒),0 = 禁用。对应 KODAX_STREAM_IDLE_TIMEOUT_MS。
+  // "streamIdleTimeoutMs": 120000,
 
-  // "streamIdleTimeoutMs": 120000
-
-  // ─── 12. Sidecar Verifier 诊断与验证调试 ─────────────────────────────
-  // 开启后会显示/持久化 verifier gate + verdict 摘要，等价于
-  // KODAX_VERIFIER_LOG=1。用于验证 Worker text-only 结束后的 sidecar
-  // 是否进入 Verifying、耗时多少、trace 是 verifier_ok / timeout /
-  // provider_error / no_tool_call。
+  // ─── 11. Sidecar Verifier 日志(可选) ──────────────────────────────
+  // 开启后持久化 verifier gate + verdict 摘要,等价于 KODAX_VERIFIER_LOG=1。
   // "verifierLog": true
 
-  // 相关环境变量（不写进 JSON；在 shell 里设置）：
-  //   KODAX_VERIFIER_LOG=1              打开 verifier 诊断日志
-  //   KODAX_VERIFIER_PROVIDER=<name>    verifier 使用独立 provider
-  //   KODAX_VERIFIER_MODEL=<model>      verifier 使用独立 model
-  //   KODAX_VERIFIER_ALWAYS=1           调试时强制所有 text-only 结束都 fire
-
+  // 相关环境变量(不写进 JSON,在 shell 里设置):
+  //   KODAX_VERIFIER_LOG=1            打开 verifier 诊断日志
+  //   KODAX_REASONING_EFFORT=<value> 启动时覆盖 effort(auto/off/low/…/max)
 }

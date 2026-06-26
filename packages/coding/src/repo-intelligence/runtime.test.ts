@@ -1,24 +1,18 @@
-import { mkdtempSync, mkdirSync, rmSync, writeFileSync } from 'node:fs';
+import { existsSync, mkdtempSync, mkdirSync, rmSync, writeFileSync } from 'node:fs';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
 
-vi.mock('./premium-client.js', async () => {
-  const actual = await vi.importActual<typeof import('./premium-client.js')>('./premium-client.js');
-  return {
-    ...actual,
-    callPremiumDaemon: vi.fn(),
-  };
-});
-
-import { callPremiumDaemon } from './premium-client.js';
 import {
   getModuleContext,
   getRepoPreturnBundle,
   getRepoRoutingSignals,
+  inspectRepoIntelligenceRuntime,
+  prewarmRepoIntelligenceCaches,
+  resolveKodaXHotPathRepoMode,
   _resetRepoIntelligenceCachesForTesting,
 } from './runtime.js';
-import { getModuleContext as getFallbackModuleContext } from './query.js';
+import { shutdownRepoIntelligenceWorkerForTest } from './semantic-worker-client.js';
 
 function createWorkspaceFixture(workspaceRoot: string): void {
   mkdirSync(join(workspaceRoot, 'packages', 'app', 'src'), { recursive: true });
@@ -27,267 +21,132 @@ function createWorkspaceFixture(workspaceRoot: string): void {
   writeFileSync(
     join(workspaceRoot, 'packages', 'app', 'src', 'index.ts'),
     [
-      'export function runApp(name: string): string {',
+      'export function trimName(name: string): string {',
       '  return name.trim();',
+      '}',
+      '',
+      'export function runApp(name: string): string {',
+      '  return trimName(name).toUpperCase();',
       '}',
       '',
     ].join('\n'),
   );
 }
 
+function restoreEnv(name: string, value: string | undefined): void {
+  if (value === undefined) {
+    delete process.env[name];
+    return;
+  }
+  process.env[name] = value;
+}
+
 describe('repo-intelligence runtime facade', () => {
   let tempDir = '';
-  const mockedCallPremiumDaemon = vi.mocked(callPremiumDaemon);
-  let originalEndpoint: string | undefined;
+  const originalEnv = {
+    intelligence: process.env.KODAX_REPO_INTELLIGENCE,
+    legacyMode: process.env.KODAX_REPO_INTELLIGENCE_MODE,
+    legacyEndpoint: process.env.KODAX_REPOINTEL_ENDPOINT,
+    legacyBin: process.env.KODAX_REPOINTEL_BIN,
+    legacyBuildId: process.env.KODAX_REPOINTEL_BUILD_ID,
+    prewarm: process.env.KODAX_PREWARM_REPO_INTELLIGENCE,
+  };
 
   beforeEach(() => {
     tempDir = mkdtempSync(join(tmpdir(), 'kodax-runtime-ri-'));
     createWorkspaceFixture(tempDir);
-    mockedCallPremiumDaemon.mockReset();
-    // v0.7.41: drop module-singleton caches so prior tests don't leak
-    // resolved values into the next test's mocked-daemon scenario.
     _resetRepoIntelligenceCachesForTesting();
-    originalEndpoint = process.env.KODAX_REPOINTEL_ENDPOINT;
+    delete process.env.KODAX_REPO_INTELLIGENCE;
+    delete process.env.KODAX_REPO_INTELLIGENCE_MODE;
+    delete process.env.KODAX_REPOINTEL_ENDPOINT;
+    delete process.env.KODAX_REPOINTEL_BIN;
+    delete process.env.KODAX_REPOINTEL_BUILD_ID;
+    delete process.env.KODAX_PREWARM_REPO_INTELLIGENCE;
   });
 
-  afterEach(() => {
-    vi.restoreAllMocks();
+  afterEach(async () => {
+    vi.useRealTimers();
     _resetRepoIntelligenceCachesForTesting();
-    if (originalEndpoint === undefined) {
-      delete process.env.KODAX_REPOINTEL_ENDPOINT;
-    } else {
-      process.env.KODAX_REPOINTEL_ENDPOINT = originalEndpoint;
-    }
+    restoreEnv('KODAX_REPO_INTELLIGENCE', originalEnv.intelligence);
+    restoreEnv('KODAX_REPO_INTELLIGENCE_MODE', originalEnv.legacyMode);
+    restoreEnv('KODAX_REPOINTEL_ENDPOINT', originalEnv.legacyEndpoint);
+    restoreEnv('KODAX_REPOINTEL_BIN', originalEnv.legacyBin);
+    restoreEnv('KODAX_REPOINTEL_BUILD_ID', originalEnv.legacyBuildId);
+    restoreEnv('KODAX_PREWARM_REPO_INTELLIGENCE', originalEnv.prewarm);
+    await shutdownRepoIntelligenceWorkerForTest();
     if (tempDir) {
-      rmSync(tempDir, { recursive: true, force: true });
+      rmSync(tempDir, { recursive: true, force: true, maxRetries: 3, retryDelay: 100 });
       tempDir = '';
     }
   });
 
-  it('falls back to the OSS baseline when premium is unavailable', async () => {
-    mockedCallPremiumDaemon.mockResolvedValue(null);
-
+  it('uses the built-in full engine by default', async () => {
     const result = await getModuleContext(
       { executionCwd: tempDir },
       {
-        targetPath: '.',
-        mode: 'premium-native',
+        targetPath: 'packages/app/src/index.ts',
+        mode: 'full',
       },
     );
 
     expect(result.capability).toMatchObject({
-      mode: 'oss',
-      engine: 'oss',
-      level: 'basic',
+      mode: 'full',
+      engine: 'full',
+      level: 'enhanced',
+      status: 'ok',
     });
-    expect(result.capability?.warnings.join(' ')).toContain('Premium repo intelligence unavailable');
+    expect(result.module.sourceFileCount).toBeGreaterThan(0);
   });
 
-  it('preserves premium preturn metadata and summaries when the daemon responds', async () => {
-    const fallbackModuleContext = await getFallbackModuleContext(
+  it('keeps the shared light profile available', async () => {
+    const result = await getModuleContext(
       { executionCwd: tempDir },
       {
-        targetPath: '.',
+        targetPath: 'packages/app/src/index.ts',
+        mode: 'light',
       },
     );
 
-    mockedCallPremiumDaemon.mockResolvedValue({
-      response: {
-        contractVersion: 1,
-        status: 'ok',
-        cacheHit: true,
-        trace: {
-          capsuleEstimatedTokens: 111,
-        },
-        result: {
-          summary: 'premium preturn summary',
-          repoContext: 'premium repo context',
-          recommendedFiles: ['packages/app/src/index.ts'],
-          lowConfidence: false,
-          moduleContext: fallbackModuleContext,
-        },
-      },
-      trace: {
-        mode: 'premium-native',
-        engine: 'premium',
-        bridge: 'native',
-        triggeredAt: '2026-04-01T00:00:00.000Z',
-        source: 'premium',
-        daemonLatencyMs: 9,
-        cacheHit: true,
-        capsuleEstimatedTokens: 111,
-      },
+    expect(result.capability).toMatchObject({
+      mode: 'light',
+      engine: 'light',
+      level: 'basic',
     });
+  });
 
+  it('builds preturn bundles from the built-in full engine', async () => {
     const bundle = await getRepoPreturnBundle(
       { executionCwd: tempDir },
       {
-        targetPath: '.',
-        mode: 'premium-native',
+        targetPath: 'packages/app/src/index.ts',
+        mode: 'full',
       },
     );
 
-    expect(bundle.summary).toBe('premium preturn summary');
-    expect(bundle.repoContext).toBe('premium repo context');
-    expect(bundle.recommendedFiles).toEqual(['packages/app/src/index.ts']);
     expect(bundle.capability).toMatchObject({
-      mode: 'premium-native',
-      engine: 'premium',
-      bridge: 'native',
+      mode: 'full',
+      engine: 'full',
       level: 'enhanced',
-      contractVersion: 1,
-    });
-    expect(bundle.trace).toMatchObject({
-      daemonLatencyMs: 9,
-      capsuleEstimatedTokens: 111,
-      cacheHit: true,
     });
     expect(bundle.moduleContext?.capability).toMatchObject({
-      mode: 'premium-native',
-      engine: 'premium',
+      mode: 'full',
+      engine: 'full',
     });
+    expect(bundle.routingSignals?.capability).toMatchObject({
+      mode: 'full',
+      engine: 'full',
+    });
+    expect(bundle.summary).toContain('active module:');
+    expect(bundle.recommendedFiles?.some((file) => file.endsWith('index.ts'))).toBe(true);
   });
 
-  it('reuses the same premium preturn response across routing and prompt preturn calls', async () => {
-    mockedCallPremiumDaemon.mockResolvedValue({
-      response: {
-        contractVersion: 1,
-        status: 'ok',
-        result: {
-          summary: 'shared premium preturn',
-          repoContext: 'repo context',
-          recommendedFiles: ['packages/app/src/index.ts'],
-          lowConfidence: false,
-          routingSignals: {
-            changedFileCount: 1,
-            changedLineCount: 3,
-            addedLineCount: 3,
-            deletedLineCount: 0,
-            touchedModuleCount: 1,
-            changedModules: ['@demo/app'],
-            crossModule: false,
-            activeModuleId: '@demo/app',
-            plannerBias: false,
-            investigationBias: false,
-            lowConfidence: false,
-            riskHints: [],
-          },
-        },
-      },
-      trace: {
-        mode: 'premium-native',
-        engine: 'premium',
-        bridge: 'native',
-        triggeredAt: '2026-04-01T00:00:00.000Z',
-        source: 'premium',
-        daemonLatencyMs: 5,
-      },
-    });
-
-    const context = { executionCwd: tempDir };
-    const routing = await getRepoRoutingSignals(context, {
-      targetPath: '.',
-      mode: 'premium-native',
-    });
-    const bundle = await getRepoPreturnBundle(context, {
-      targetPath: '.',
-      mode: 'premium-native',
-    });
-
-    expect(routing.capability).toMatchObject({
-      mode: 'premium-native',
-      engine: 'premium',
-    });
-    expect(bundle.summary).toBe('shared premium preturn');
-    expect(mockedCallPremiumDaemon).toHaveBeenCalledTimes(1);
-  });
-
-  it('falls back to OSS when premium returns malformed preturn payloads', async () => {
-    mockedCallPremiumDaemon.mockResolvedValue({
-      response: {
-        contractVersion: 1,
-        status: 'ok',
-        result: {
-          summary: 'bad payload',
-          moduleContext: {
-            freshness: 'now',
-          },
-        },
-      },
-      trace: {
-        mode: 'premium-native',
-        engine: 'premium',
-        bridge: 'native',
-        triggeredAt: '2026-04-01T00:00:00.000Z',
-        source: 'premium',
-      },
-    });
-
-    const bundle = await getRepoPreturnBundle(
-      { executionCwd: tempDir },
-      {
-        targetPath: '.',
-        mode: 'premium-native',
-      },
-    );
-
-    expect(bundle.capability).toMatchObject({
-      mode: 'oss',
-      engine: 'oss',
-      level: 'basic',
-    });
-    expect(bundle.summary).not.toBe('bad payload');
-  });
-
-  it('does not reuse a cached premium preturn after switching the repointel endpoint', async () => {
-    mockedCallPremiumDaemon
-      .mockResolvedValueOnce({
-        response: {
-          contractVersion: 1,
-          status: 'ok',
-          result: {
-            summary: 'endpoint-one',
-            repoContext: 'repo context one',
-            recommendedFiles: ['packages/app/src/index.ts'],
-            lowConfidence: false,
-          },
-        },
-        trace: {
-          mode: 'premium-native',
-          engine: 'premium',
-          bridge: 'native',
-          triggeredAt: '2026-04-01T00:00:00.000Z',
-          source: 'premium',
-          daemonLatencyMs: 4,
-        },
-      })
-      .mockResolvedValueOnce({
-        response: {
-          contractVersion: 1,
-          status: 'ok',
-          result: {
-            summary: 'endpoint-two',
-            repoContext: 'repo context two',
-            recommendedFiles: ['packages/app/src/index.ts'],
-            lowConfidence: false,
-          },
-        },
-        trace: {
-          mode: 'premium-native',
-          engine: 'premium',
-          bridge: 'native',
-          triggeredAt: '2026-04-01T00:00:01.000Z',
-          source: 'premium',
-          daemonLatencyMs: 6,
-        },
-      });
-
+  it('does not key the built-in full cache by legacy repointel endpoint', async () => {
     process.env.KODAX_REPOINTEL_ENDPOINT = 'http://127.0.0.1:47891';
     const first = await getRepoPreturnBundle(
       { executionCwd: tempDir },
       {
-        targetPath: '.',
-        mode: 'premium-native',
+        targetPath: 'packages/app/src/index.ts',
+        mode: 'full',
       },
     );
 
@@ -295,228 +154,74 @@ describe('repo-intelligence runtime facade', () => {
     const second = await getRepoPreturnBundle(
       { executionCwd: tempDir },
       {
-        targetPath: '.',
-        mode: 'premium-native',
+        targetPath: 'packages/app/src/index.ts',
+        mode: 'full',
       },
     );
 
-    expect(first.summary).toBe('endpoint-one');
-    expect(second.summary).toBe('endpoint-two');
-    expect(mockedCallPremiumDaemon).toHaveBeenCalledTimes(2);
+    expect(second.summary).toBe(first.summary);
   });
 
-  // v0.7.41 P2 — in-flight Promise sharing across same-round duplicate
-  // callers. Pre-fix the 1.5s TTL coalesced nothing when daemon latency
-  // exceeded the window; this test pins that *concurrent* duplicate calls
-  // (overlapping in time, regardless of latency) share one round-trip.
-  it('P2: in-flight preturn calls coalesce into one daemon call when fired concurrently', async () => {
-    // Deferred daemon — resolves only when we say so, so both calls land
-    // while the first call is still in-flight (worst-case for coalescing).
-    let resolveDaemon!: (value: Parameters<typeof mockedCallPremiumDaemon.mockResolvedValue>[0]) => void;
-    mockedCallPremiumDaemon.mockImplementationOnce(() => new Promise((res) => {
-      resolveDaemon = res as typeof resolveDaemon;
-    }));
+  it('ignores legacy mode and bridge env vars during runtime inspection', async () => {
+    process.env.KODAX_REPO_INTELLIGENCE_MODE = 'premium-native';
+    process.env.KODAX_REPOINTEL_ENDPOINT = 'http://127.0.0.1:47891';
+    process.env.KODAX_REPOINTEL_BIN = 'C:/tmp/repointel.exe';
+    process.env.KODAX_REPOINTEL_BUILD_ID = 'old';
 
-    const ctx = { executionCwd: tempDir };
-    const opts = { targetPath: '.', mode: 'premium-native' as const };
+    const inspection = await inspectRepoIntelligenceRuntime();
 
-    // Fire both calls concurrently. Internally each calls tryPremiumPreturn
-    // with the same cacheKey — they must share the single in-flight Promise.
-    const routingPromise = getRepoRoutingSignals(ctx, opts);
-    const bundlePromise = getRepoPreturnBundle(ctx, opts);
-
-    // Settle the deferred daemon.
-    resolveDaemon({
-      response: {
-        contractVersion: 1,
-        status: 'ok',
-        result: {
-          summary: 'shared',
-          repoContext: 'ctx',
-          recommendedFiles: [],
-          lowConfidence: false,
-          routingSignals: {
-            changedFileCount: 1,
-            changedLineCount: 3,
-            addedLineCount: 3,
-            deletedLineCount: 0,
-            touchedModuleCount: 1,
-            changedModules: ['@demo/app'],
-            crossModule: false,
-            activeModuleId: '@demo/app',
-            plannerBias: false,
-            investigationBias: false,
-            lowConfidence: false,
-            riskHints: [],
-          },
-        },
-      },
-      trace: {
-        mode: 'premium-native',
-        engine: 'premium',
-        bridge: 'native',
-        triggeredAt: '2026-05-18T00:00:00.000Z',
-        source: 'premium',
-        daemonLatencyMs: 1,
-      },
-    });
-
-    await Promise.all([routingPromise, bundlePromise]);
-    // ONE daemon call services both consumers.
-    expect(mockedCallPremiumDaemon).toHaveBeenCalledTimes(1);
+    expect(inspection.requestedMode).toBe('full');
+    expect(inspection.effectiveEngine).toBe('full');
+    expect(inspection.warnings.join(' ')).toContain('Ignoring deprecated KODAX_REPO_INTELLIGENCE_MODE');
+    expect(inspection.warnings.join(' ')).toContain('Ignoring legacy KODAX_REPOINTEL_ENDPOINT');
+    expect(inspection.warnings.join(' ')).toContain('Ignoring legacy KODAX_REPOINTEL_BIN');
+    expect(inspection.warnings.join(' ')).toContain('Ignoring legacy KODAX_REPOINTEL_BUILD_ID');
   });
 
-  // v0.7.41 P3 — cross-call routing-signals memoization. A second
-  // `getRepoRoutingSignals` with the same cacheKey must hit cache and
-  // NOT trigger a fresh daemon call. Pre-fix every round did a fresh
-  // daemon roundtrip.
-  it('P3: a second getRepoRoutingSignals with same cacheKey hits the cross-call cache', async () => {
-    mockedCallPremiumDaemon.mockResolvedValue({
-      response: {
-        contractVersion: 1,
-        status: 'ok',
-        result: {
-          summary: 'first',
-          repoContext: 'ctx',
-          recommendedFiles: [],
-          lowConfidence: false,
-          routingSignals: {
-            changedFileCount: 1,
-            changedLineCount: 3,
-            addedLineCount: 3,
-            deletedLineCount: 0,
-            touchedModuleCount: 1,
-            changedModules: ['@demo/app'],
-            crossModule: false,
-            activeModuleId: '@demo/app',
-            plannerBias: false,
-            investigationBias: false,
-            lowConfidence: false,
-            riskHints: [],
-          },
-        },
-      },
-      trace: {
-        mode: 'premium-native',
-        engine: 'premium',
-        bridge: 'native',
-        triggeredAt: '2026-05-18T00:00:00.000Z',
-        source: 'premium',
-        daemonLatencyMs: 1,
-      },
-    });
-
-    const ctx = { executionCwd: tempDir };
-    const opts = { targetPath: '.', mode: 'premium-native' as const };
-
-    const a = await getRepoRoutingSignals(ctx, opts);
-    const b = await getRepoRoutingSignals(ctx, opts);
-    // Same daemon call serves both rounds (1 not 2).
-    expect(mockedCallPremiumDaemon).toHaveBeenCalledTimes(1);
-    // Result identity preserved (same cached promise).
-    expect(a.activeModuleId).toBe(b.activeModuleId);
+  it('keeps automatic hot paths on the resolved full engine', () => {
+    expect(resolveKodaXHotPathRepoMode()).toBe('full');
+    expect(resolveKodaXHotPathRepoMode('auto')).toBe('full');
+    expect(resolveKodaXHotPathRepoMode('light')).toBe('light');
+    expect(resolveKodaXHotPathRepoMode('full')).toBe('full');
+    expect(resolveKodaXHotPathRepoMode('off')).toBe('off');
   });
 
-  // v0.7.41 P3 — semantics update: `refresh:true` within TTL must still hit
-  // the cache, because the cached data IS fresh (resolved within TTL). This
-  // is what lets startup prewarm (refresh:true) cover the first-round
-  // refresh:true call from buildAutoRepoIntelligenceContext — without this,
-  // prewarm would do daemon work the first round throws away.
-  it('P3: refresh:true within TTL still hits the fresh cache (prewarm/first-round coalesce)', async () => {
-    mockedCallPremiumDaemon.mockResolvedValue({
-      response: {
-        contractVersion: 1,
-        status: 'ok',
-        result: {
-          summary: 'r',
-          repoContext: 'ctx',
-          recommendedFiles: [],
-          lowConfidence: false,
-          routingSignals: {
-            changedFileCount: 1,
-            changedLineCount: 3,
-            addedLineCount: 3,
-            deletedLineCount: 0,
-            touchedModuleCount: 1,
-            changedModules: ['@demo/app'],
-            crossModule: false,
-            activeModuleId: '@demo/app',
-            plannerBias: false,
-            investigationBias: false,
-            lowConfidence: false,
-            riskHints: [],
-          },
-        },
-      },
-      trace: {
-        mode: 'premium-native',
-        engine: 'premium',
-        bridge: 'native',
-        triggeredAt: '2026-05-18T00:00:00.000Z',
-        source: 'premium',
-        daemonLatencyMs: 1,
-      },
-    });
-
-    const ctx = { executionCwd: tempDir };
-    // Cache-key invariant: refresh value MUST NOT be part of cacheKey, so
-    // calls with different refresh values share the same entry. This is
-    // exercised under the strictest scenario (both refresh:true, the budget
-    // hog), which strictly dominates the actual production path where
-    // both prewarm (L2) and first-round (L1) use refresh:false.
-    await getRepoRoutingSignals(ctx, { targetPath: '.', mode: 'premium-native', refresh: true });
-    await getRepoRoutingSignals(ctx, { targetPath: '.', mode: 'premium-native', refresh: true });
-    expect(mockedCallPremiumDaemon).toHaveBeenCalledTimes(1);
+  it('does not prewarm repo intelligence when startup prewarm is disabled', async () => {
+    process.env.KODAX_PREWARM_REPO_INTELLIGENCE = '0';
+    prewarmRepoIntelligenceCaches({ executionCwd: tempDir }, { mode: 'auto' });
+    await new Promise((resolve) => setTimeout(resolve, 20));
+    expect(existsSync(join(tempDir, '.agent', 'repo-intelligence'))).toBe(false);
   });
 
-  // v0.7.41 P3+ — preturn bundle session cache. Same cache-key invariant as
-  // routing signals: any refresh combination shares one entry. Production
-  // path after L1/L2 is refresh:false everywhere; this test asserts the
-  // invariant under the harder refresh:true scenario.
-  it('P3+: getRepoPreturnBundle shares one daemon call across prewarm + multiple rounds', async () => {
-    mockedCallPremiumDaemon.mockResolvedValue({
-      response: {
-        contractVersion: 1,
-        status: 'ok',
-        result: {
-          summary: 'shared bundle',
-          repoContext: 'ctx',
-          recommendedFiles: [],
-          lowConfidence: false,
-          routingSignals: {
-            changedFileCount: 1,
-            changedLineCount: 3,
-            addedLineCount: 3,
-            deletedLineCount: 0,
-            touchedModuleCount: 1,
-            changedModules: ['@demo/app'],
-            crossModule: false,
-            activeModuleId: '@demo/app',
-            plannerBias: false,
-            investigationBias: false,
-            lowConfidence: false,
-            riskHints: [],
-          },
-        },
-      },
-      trace: {
-        mode: 'premium-native',
-        engine: 'premium',
-        bridge: 'native',
-        triggeredAt: '2026-05-18T00:00:00.000Z',
-        source: 'premium',
-        daemonLatencyMs: 1,
-      },
-    });
+  it('does not schedule startup prewarm outside full mode', async () => {
+    vi.useFakeTimers();
+    process.env.KODAX_REPO_INTELLIGENCE = 'light';
 
-    const ctx = { executionCwd: tempDir };
-    // Three calls, mixed refresh values — cacheKey ignores refresh so all
-    // three share one daemon round-trip. Production path (post L1/L2) only
-    // ever uses refresh:false; the refresh:true calls below are the strictest
-    // regression check on the cacheKey invariant.
-    await getRepoPreturnBundle(ctx, { targetPath: '.', mode: 'premium-native', refresh: true });
-    await getRepoPreturnBundle(ctx, { targetPath: '.', mode: 'premium-native', refresh: true });
-    await getRepoPreturnBundle(ctx, { targetPath: '.', mode: 'premium-native' });
-    expect(mockedCallPremiumDaemon).toHaveBeenCalledTimes(1);
+    prewarmRepoIntelligenceCaches({ executionCwd: tempDir }, { mode: 'auto' });
+    await vi.advanceTimersByTimeAsync(2_000);
+
+    expect(existsSync(join(tempDir, '.agent', 'repo-intelligence'))).toBe(false);
+  });
+
+  it('coalesces concurrent routing and preturn requests on the full engine', async () => {
+    const context = { executionCwd: tempDir };
+    const options = {
+      targetPath: 'packages/app/src/index.ts',
+      mode: 'full' as const,
+    };
+
+    const [routing, bundle] = await Promise.all([
+      getRepoRoutingSignals(context, options),
+      getRepoPreturnBundle(context, options),
+    ]);
+
+    expect(routing.capability).toMatchObject({
+      mode: 'full',
+      engine: 'full',
+    });
+    expect(bundle.capability).toMatchObject({
+      mode: 'full',
+      engine: 'full',
+    });
   });
 });

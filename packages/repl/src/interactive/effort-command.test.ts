@@ -12,6 +12,7 @@ import type { CommandCallbacks, CurrentConfig, InteractiveContext } from '../com
 
 const effortCmd = BUILTIN_COMMANDS.find((command) => command.name === 'effort')!;
 const ctx = {} as unknown as InteractiveContext;
+const ANSI_PATTERN = /\u001b\[[0-9;]*m/g;
 
 function createConfig(overrides: Partial<CurrentConfig> = {}): CurrentConfig {
   return {
@@ -22,6 +23,13 @@ function createConfig(overrides: Partial<CurrentConfig> = {}): CurrentConfig {
     permissionMode: 'accept-edits',
     ...overrides,
   };
+}
+
+function getLoggedOutput(): string {
+  return vi.mocked(console.log).mock.calls
+    .map(([line]) => String(line))
+    .join('\n')
+    .replace(ANSI_PATTERN, '');
 }
 
 describe('/effort command', () => {
@@ -96,6 +104,23 @@ describe('/effort command', () => {
     });
     expect(setEffort).toHaveBeenCalledWith('none');
     expect(setReasoningMode).toHaveBeenCalledWith('off');
+  });
+
+  it('prints the effective effort label after provider capability fallback', async () => {
+    const setEffort = vi.fn();
+    const callbacks = { setEffort } as unknown as CommandCallbacks;
+    const config = createConfig({
+      model: 'gpt-5.3-codex',
+      effortOverride: false,
+      reasoningMode: 'auto',
+      thinking: true,
+    });
+
+    await effortCmd.handler(['max'], ctx, callbacks, config);
+
+    expect(saveConfig).toHaveBeenCalledWith({ effort: 'max' });
+    expect(setEffort).toHaveBeenCalledWith('max');
+    expect(getLoggedOutput()).toContain('Reasoning effort: max->medium');
   });
 
   it('rejects whitespace-split effort values without persisting', async () => {

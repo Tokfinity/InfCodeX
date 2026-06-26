@@ -62,8 +62,7 @@ describe('CAP-089: task-engine.ts mode dispatcher contract', () => {
     const runSA = vi.fn();
     const runAMA = vi.fn().mockResolvedValue(emptyResult());
     const buildPlan = vi.fn().mockResolvedValue({
-      mode: 'off',
-      depth: 'off',
+      effort: 'none',
       decision: { primaryTask: 'conversation' },
       amaControllerDecision: undefined,
       promptOverlay: '',
@@ -98,7 +97,7 @@ describe('CAP-089: task-engine.ts mode dispatcher contract', () => {
   it('CAP-DISPATCH-003d: dispatchManagedTask propagates the default ("ama") when no agentMode is set', async () => {
     const runSA = vi.fn();
     const runAMA = vi.fn().mockResolvedValue(emptyResult());
-    const buildPlan = vi.fn().mockResolvedValue({ mode: 'off', depth: 'off', decision: {}, promptOverlay: '' });
+    const buildPlan = vi.fn().mockResolvedValue({ effort: 'none', decision: {}, promptOverlay: '' });
     await dispatchManagedTask({} as KodaXOptions, 'p', { runSA, runAMA, buildPlan });
     expect(runSA).not.toHaveBeenCalled();
     expect(runAMA).toHaveBeenCalledTimes(1);

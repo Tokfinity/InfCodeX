@@ -10,7 +10,7 @@
 import { describe, expect, it } from "vitest";
 import { ToolCallStatus } from "../types.js";
 import type { StatusBarProps } from "../types.js";
-import { getStatusBarText } from "./status-bar.js";
+import { buildStatusBarViewModel, getStatusBarText } from "./status-bar.js";
 
 const baseProps = (overrides: Partial<StatusBarProps> = {}): StatusBarProps => ({
   sessionId: "s1",
@@ -29,6 +29,46 @@ const baseProps = (overrides: Partial<StatusBarProps> = {}): StatusBarProps => (
   toolInputContent: "",
   activeToolCount: 0,
   ...overrides,
+});
+
+describe("status-bar (Ink view-model) reasoning effort display", () => {
+  it("renders effort-first status instead of internal capability letters", () => {
+    const viewModel = buildStatusBarViewModel(baseProps({
+      reasoningMode: "auto",
+      effort: "high",
+      reasoningCapability: "E",
+    }));
+
+    expect(viewModel.segments.find((segment) => segment.id === "reasoning-mode")?.text)
+      .toBe("high");
+    expect(viewModel.segments.some((segment) => segment.id === "reasoning-effort"))
+      .toBe(false);
+    expect(viewModel.text).not.toContain("/E");
+    expect(viewModel.text).not.toContain("effort:high");
+  });
+
+  it("uses resolved configured-to-effective labels when supplied", () => {
+    const viewModel = buildStatusBarViewModel(baseProps({
+      reasoningMode: "auto",
+      effort: "xhigh",
+      reasoningEffortLabel: "xhigh->max",
+      reasoningCapability: "E",
+    }));
+
+    expect(viewModel.segments.find((segment) => segment.id === "reasoning-mode")?.text)
+      .toBe("xhigh->max");
+    expect(viewModel.text).not.toContain("/E");
+  });
+
+  it("shows off for the internal none effort", () => {
+    const viewModel = buildStatusBarViewModel(baseProps({
+      reasoningMode: "off",
+      effort: "none",
+    }));
+
+    expect(viewModel.segments.find((segment) => segment.id === "reasoning-mode")?.text)
+      .toBe("off");
+  });
 });
 
 describe("status-bar (Ink view-model) — auto-mode engine indicator (FEATURE_092 phase 2b.8)", () => {
