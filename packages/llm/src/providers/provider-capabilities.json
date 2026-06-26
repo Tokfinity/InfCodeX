@@ -450,14 +450,123 @@
         }
       ],
       "reasoningCapability": "native-effort",
-      "reasoningCapabilityV2": {
+      "reasoningProfile": {
         "reasoningPreset": "zai-glm-5.2",
         "effortStrategy": "openai-chat-effort",
         "thinkingStrategy": "provider-toggle",
         "defaultEffort": "max",
         "supportedEfforts": [
           { "value": "none", "description": "Disable thinking" },
-          { "value": "minimal", "description": "Disable thinking" },
+          { "value": "minimal", "description": "Disable thinking", "isUserVisible": false },
+          { "value": "low", "description": "Alias to high" },
+          { "value": "medium", "description": "Alias to high" },
+          { "value": "high", "description": "GLM high reasoning" },
+          { "value": "xhigh", "description": "Alias to max" },
+          { "value": "max", "description": "GLM maximum reasoning", "isDefault": true }
+        ],
+        "effortAliases": {
+          "low": "high",
+          "medium": "high",
+          "xhigh": "max"
+        },
+        "disabledEfforts": ["none", "minimal"],
+        "supportsReasoningEffort": true,
+        "supportsDisabledThinking": true
+      },
+      "capabilityProfile": "image-input-native",
+      "supportsThinking": true,
+      "contextWindow": 200000,
+      "maxOutputTokens": 16000,
+      "thinkingBudgetCap": 16000,
+      "verifyStrategy": "count-tokens"
+    },
+    "zai-coding": {
+      "apiKeyEnv": "ZAI_CODING_API_KEY",
+      "model": "glm-5.2",
+      "models": [
+        {
+          "id": "glm-5.2",
+          "displayName": "GLM-5.2",
+          "contextWindow": 1000000,
+          "maxOutputTokens": 131072,
+          "reasoningCapability": "native-effort",
+          "reasoningProfile": {
+            "reasoningPreset": "zai-glm-5.2",
+            "effortStrategy": "openai-chat-effort",
+            "thinkingStrategy": "provider-toggle",
+            "defaultEffort": "max",
+            "supportedEfforts": [
+              { "value": "none", "description": "Disable thinking" },
+              { "value": "minimal", "description": "Disable thinking", "isUserVisible": false },
+              { "value": "low", "description": "Alias to high" },
+              { "value": "medium", "description": "Alias to high" },
+              { "value": "high", "description": "GLM high reasoning" },
+              { "value": "xhigh", "description": "Alias to max" },
+              { "value": "max", "description": "GLM maximum reasoning", "isDefault": true }
+            ],
+            "effortAliases": {
+              "low": "high",
+              "medium": "high",
+              "xhigh": "max"
+            },
+            "disabledEfforts": ["none", "minimal"],
+            "supportsReasoningEffort": true,
+            "supportsDisabledThinking": true
+          }
+        },
+        {
+          "id": "glm-5-turbo",
+          "displayName": "GLM-5 Turbo",
+          "reasoningCapability": "native-toggle",
+          "reasoningProfile": {
+            "reasoningPreset": "zai-glm-toggle",
+            "effortStrategy": "provider-toggle",
+            "thinkingStrategy": "provider-toggle",
+            "supportedEfforts": [
+              { "value": "none", "description": "Disable thinking" },
+              { "value": "minimal", "description": "Disable thinking", "isUserVisible": false },
+              { "value": "low", "description": "Enable thinking" },
+              { "value": "medium", "description": "Enable thinking", "isDefault": true },
+              { "value": "high", "description": "Enable thinking" },
+              { "value": "xhigh", "description": "Enable thinking" },
+              { "value": "max", "description": "Enable thinking" }
+            ],
+            "disabledEfforts": ["none", "minimal"],
+            "supportsDisabledThinking": true
+          }
+        },
+        {
+          "id": "glm-4.7",
+          "displayName": "GLM-4.7",
+          "contextWindow": 200000,
+          "reasoningCapability": "native-toggle",
+          "reasoningProfile": {
+            "reasoningPreset": "zai-glm-toggle",
+            "effortStrategy": "provider-toggle",
+            "thinkingStrategy": "provider-toggle",
+            "supportedEfforts": [
+              { "value": "none", "description": "Disable thinking" },
+              { "value": "minimal", "description": "Disable thinking", "isUserVisible": false },
+              { "value": "low", "description": "Enable thinking" },
+              { "value": "medium", "description": "Enable thinking", "isDefault": true },
+              { "value": "high", "description": "Enable thinking" },
+              { "value": "xhigh", "description": "Enable thinking" },
+              { "value": "max", "description": "Enable thinking" }
+            ],
+            "disabledEfforts": ["none", "minimal"],
+            "supportsDisabledThinking": true
+          }
+        }
+      ],
+      "reasoningCapability": "native-effort",
+      "reasoningProfile": {
+        "reasoningPreset": "zai-glm-5.2",
+        "effortStrategy": "openai-chat-effort",
+        "thinkingStrategy": "provider-toggle",
+        "defaultEffort": "max",
+        "supportedEfforts": [
+          { "value": "none", "description": "Disable thinking" },
+          { "value": "minimal", "description": "Disable thinking", "isUserVisible": false },
           { "value": "low", "description": "Alias to high" },
           { "value": "medium", "description": "Alias to high" },
           { "value": "high", "description": "GLM high reasoning" },

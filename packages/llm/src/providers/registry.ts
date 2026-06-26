@@ -37,6 +37,7 @@ export type ProviderName =
   | 'qwen'
   | 'zhipu'
   | 'zhipu-coding'
+  | 'zai-coding'
   | 'minimax-coding'
   | 'mimo-coding'
   | 'mimo'
@@ -192,13 +193,27 @@ class ZhipuCodingProvider extends KodaXAnthropicCompatProvider {
   });
 }
 
+class ZaiCodingProvider extends KodaXAnthropicCompatProvider {
+  readonly name = 'zai-coding';
+  protected readonly config: KodaXProviderConfig = buildProviderConfig('zai-coding', {
+    // Zhipu Coding Plan overseas mirror (api.z.ai). Same upstream models
+    // and capability surface as zhipu-coding — the two providers differ
+    // only in baseUrl and the API-key env var. Inherits the 300s
+    // streamMaxDurationMs cap for the same GLM server-side kill-window
+    // reason documented above (the overseas gateway proxies to the same
+    // backend, so the timing characteristic applies identically).
+    baseUrl: 'https://api.z.ai/api/anthropic',
+    streamMaxDurationMs: 300_000,
+  });
+}
+
 class KimiCodeProvider extends KodaXAnthropicCompatProvider {
   readonly name = 'kimi-code';
   protected readonly config: KodaXProviderConfig = buildProviderConfig('kimi-code', {
     // api.kimi.com/coding/ is a unified subscription-routed coding endpoint:
     // the server ignores the request `model` field and always serves the
     // current K2.x GA model. Listing version-specific labels (K2.5 / K2.6)
-    // here would be misleading — the only honest identifier is the routing
+    // here would be misleading 鈥?the only honest identifier is the routing
     // alias `kimi-for-coding`, exposed via the snapshot's default model.
     // K2 server-side prefix caching is automatic on this endpoint, so
     // switching to the OpenAI-compat sibling (api.kimi.com/coding/v1) would
@@ -314,6 +329,7 @@ export const KODAX_PROVIDERS: Record<string, () => KodaXBaseProvider> = {
   qwen: () => new QwenProvider(),
   zhipu: () => new ZhipuProvider(),
   'zhipu-coding': () => new ZhipuCodingProvider(),
+  'zai-coding': () => new ZaiCodingProvider(),
   'minimax-coding': () => new MiniMaxCodingProvider(),
   'mimo-coding': () => new MimoCodingProvider(),
   mimo: () => new MimoProvider(),

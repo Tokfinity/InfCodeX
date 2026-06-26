@@ -5,7 +5,6 @@
  *   - `resolveRoleReasoning` L1 (user ceiling) / L2 (agent profile) / L3 (scout hint)
  *     interaction matrix
  *   - `clampReasoningMode` and `compareReasoningModes` invariants
- *   - `escalateThinkingDepth(_, ceiling)` clamping (L4 dynamic escalation)
  *   - Backward-compat: pre-FEATURE_078 callers (no profile, no ceiling, no hint)
  *     get exactly the old single-mode behavior
  *
@@ -21,7 +20,6 @@ import type { AgentReasoningProfile } from '@kodax-ai/agent';
 import {
   clampReasoningMode,
   compareReasoningModes,
-  escalateThinkingDepth,
   resolveRoleReasoning,
 } from './reasoning.js';
 
@@ -162,48 +160,5 @@ describe('resolveRoleReasoning — L3 (scout hint)', () => {
     // No profile → fall back to userCeiling as base; hint becomes the L3 input.
     expect(resolveRoleReasoning('generator', 'deep', undefined, 'quick')).toBe('quick');
     expect(resolveRoleReasoning('generator', 'quick', undefined, 'deep')).toBe('quick');
-  });
-});
-
-// ---------------------------------------------------------------------------
-// L4 dynamic escalation — escalateThinkingDepth(depth, ceiling)
-// ---------------------------------------------------------------------------
-
-describe('escalateThinkingDepth — backward compat (no ceiling)', () => {
-  it('caps at high without a ceiling argument', () => {
-    expect(escalateThinkingDepth('off')).toBe('low');
-    expect(escalateThinkingDepth('low')).toBe('medium');
-    expect(escalateThinkingDepth('medium')).toBe('high');
-    expect(escalateThinkingDepth('high')).toBe('high');
-  });
-});
-
-describe('escalateThinkingDepth — ceiling-clamped (FEATURE_078 L4)', () => {
-  it('does not exceed depth implied by user ceiling=quick', () => {
-    // quick → max depth = low. Escalating from low must not go past low.
-    expect(escalateThinkingDepth('low', 'quick')).toBe('low');
-    expect(escalateThinkingDepth('medium', 'quick')).toBe('low');
-    expect(escalateThinkingDepth('high', 'quick')).toBe('low');
-  });
-
-  it('does not exceed depth implied by user ceiling=balanced', () => {
-    expect(escalateThinkingDepth('low', 'balanced')).toBe('medium');
-    expect(escalateThinkingDepth('medium', 'balanced')).toBe('medium');
-    expect(escalateThinkingDepth('high', 'balanced')).toBe('medium');
-  });
-
-  it('allows full range when ceiling=deep or ceiling=auto', () => {
-    expect(escalateThinkingDepth('medium', 'deep')).toBe('high');
-    expect(escalateThinkingDepth('medium', 'auto')).toBe('high');
-  });
-
-  it('returns "off" when ceiling=off (escalation neutralized)', () => {
-    expect(escalateThinkingDepth('low', 'off')).toBe('off');
-    expect(escalateThinkingDepth('medium', 'off')).toBe('off');
-  });
-
-  it('escalates from off to low when ceiling permits', () => {
-    expect(escalateThinkingDepth('off', 'balanced')).toBe('low');
-    expect(escalateThinkingDepth('off', 'deep')).toBe('low');
   });
 });

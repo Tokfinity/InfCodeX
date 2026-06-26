@@ -85,6 +85,7 @@ describe('provider capability profiles', () => {
       'qwen',
       'zhipu',
       'zhipu-coding',
+      'zai-coding',
       'minimax-coding',
       'mimo-coding',
       'mimo',

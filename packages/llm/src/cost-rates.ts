@@ -59,6 +59,15 @@ export const DEFAULT_COST_RATES: Readonly<Record<string, Readonly<Record<string,
     'glm-5-turbo': { inputPer1M: 0.01, outputPer1M: 0.03 },
     'glm-4.7': { inputPer1M: 0.01, outputPer1M: 0.03 },
   },
+  'zai-coding': {
+    // Zhipu Coding Plan overseas mirror (api.z.ai). Same model lineup
+    // and per-token rates as zhipu-coding — both routes proxy to the
+    // same upstream backend. Mirror keeps cost-tracker output
+    // comparable when users split between the CN and overseas endpoint.
+    'glm-5.2': { inputPer1M: 0.05, outputPer1M: 0.1 },
+    'glm-5-turbo': { inputPer1M: 0.01, outputPer1M: 0.03 },
+    'glm-4.7': { inputPer1M: 0.01, outputPer1M: 0.03 },
+  },
   'minimax-coding': {
     // 2026-06: official MiniMax Coding Plan endpoint retired the
     // M2.x family (M2.5 / M2.1 / M2 + their -highspeed variants).

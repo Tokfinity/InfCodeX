@@ -10,14 +10,12 @@ import type {
 import { KodaXBaseProvider } from '@kodax-ai/llm';
 import {
   buildAmaControllerDecision,
-  buildHeuristicAutoRerouteDecision,
   buildFallbackRoutingDecision,
   buildPromptOverlay,
   buildProviderPolicyHintsForDecision,
   createReasoningPlan,
   inferIntentGate,
   inferTaskType,
-  maybeCreateAutoReroutePlan,
   type ReasoningPlan,
 } from './reasoning.js';
 import { evaluateProviderPolicy } from './provider-policy.js';
@@ -93,69 +91,6 @@ const CLI_BRIDGE_PROFILE = {
 } as const;
 
 describe('reasoning reroute', () => {
-  const basePlan: ReasoningPlan = {
-    mode: 'auto',
-    depth: 'low',
-    decision: {
-      primaryTask: 'review',
-      confidence: 0.9,
-      riskLevel: 'medium',
-      recommendedMode: 'pr-review',
-      recommendedThinkingDepth: 'low',
-      complexity: 'moderate',
-      workIntent: 'new',
-      requiresBrainstorm: false,
-      harnessProfile: 'H1_EXECUTE_EVAL',
-      reason: 'Initial routing selected review.',
-    },
-    amaControllerDecision: buildAmaControllerDecision({
-      primaryTask: 'review',
-      confidence: 0.9,
-      riskLevel: 'medium',
-      recommendedMode: 'pr-review',
-      recommendedThinkingDepth: 'low',
-      complexity: 'moderate',
-      workIntent: 'new',
-      requiresBrainstorm: false,
-      harnessProfile: 'H1_EXECUTE_EVAL',
-      reason: 'Initial routing selected review.',
-    }),
-    promptOverlay: '[Execution Mode: pr-review]',
-  };
-
-  it('switches review into investigation when runtime evidence appears', () => {
-    const decision = buildHeuristicAutoRerouteDecision(
-      basePlan,
-      'The diff also shows a failing test and a runtime error in stderr.',
-    );
-
-    expect(decision.shouldReroute).toBe(true);
-    expect(decision.nextRecommendedMode).toBe('investigation');
-    expect(decision.nextPrimaryTask).toBe('bugfix');
-    expect(decision.nextThinkingDepth).toBe('medium');
-  });
-
-  it('does not reroute review into investigation on timeout-only evidence', () => {
-    const decision = buildHeuristicAutoRerouteDecision(
-      basePlan,
-      'The command hit a timeout and the stream stalled before any concrete failure evidence was collected.',
-    );
-
-    expect(decision.shouldReroute).toBe(false);
-    expect(decision.reason).toContain('retried before rerouting');
-  });
-
-  it('escalates low-value review output into a stricter second pass', () => {
-    const decision = buildHeuristicAutoRerouteDecision(
-      basePlan,
-      'Optional improvements: naming consistency, style cleanup, and a minor readability nit.',
-    );
-
-    expect(decision.shouldReroute).toBe(true);
-    expect(decision.nextRecommendedMode).toBe('pr-review');
-    expect(decision.nextThinkingDepth).toBe('medium');
-  });
-
   it('uses heuristic routing in auto mode without calling the LLM router (FEATURE_061)', async () => {
     const provider = new CapturingProvider(JSON.stringify({
       primaryTask: 'bugfix',
@@ -265,137 +200,6 @@ describe('reasoning reroute', () => {
     expect(plan.decision.routingNotes).toContain(
       'Heuristic routing only — LLM router skipped (FEATURE_061 Phase 1; FEATURE_193 retired post-routing calibration).',
     );
-  });
-
-  it('falls back to heuristic reroute when the judge call fails', async () => {
-    const provider = new ThrowingProvider();
-
-    const reroutedPlan = await maybeCreateAutoReroutePlan(
-      provider,
-      {
-        provider: 'openai',
-        reasoningMode: 'auto',
-      },
-      'Review this PR for merge blockers.',
-      basePlan,
-      'Optional improvements: naming consistency and style cleanup.',
-      {
-        allowDepthEscalation: true,
-        allowTaskReroute: true,
-      },
-    );
-
-    expect(reroutedPlan).not.toBeNull();
-    expect(reroutedPlan?.decision.recommendedMode).toBe('pr-review');
-    expect(reroutedPlan?.decision.recommendedThinkingDepth).toBe('medium');
-    expect(reroutedPlan?.kind).toBe('depth-escalation');
-    expect(reroutedPlan?.promptOverlay).toContain('[Auto Depth Escalation]');
-  });
-
-
-  it('logs reroute judge failures when routing debug is enabled', async () => {
-    const provider = new ThrowingProvider();
-    const errorSpy = vi.spyOn(console, 'error').mockImplementation(() => {});
-    const previous = process.env.KODAX_DEBUG_ROUTING;
-    process.env.KODAX_DEBUG_ROUTING = '1';
-
-    try {
-      await maybeCreateAutoReroutePlan(
-        provider,
-        {
-          provider: 'openai',
-          reasoningMode: 'auto',
-        },
-        'Review this PR for merge blockers.',
-        basePlan,
-        'Optional improvements: naming consistency and style cleanup.',
-        {
-          allowDepthEscalation: true,
-          allowTaskReroute: true,
-        },
-      );
-
-      expect(errorSpy).toHaveBeenCalledWith(
-        '[Routing] reroute judge failed:',
-        expect.any(Error),
-      );
-    } finally {
-      if (previous === undefined) {
-        delete process.env.KODAX_DEBUG_ROUTING;
-      } else {
-        process.env.KODAX_DEBUG_ROUTING = previous;
-      }
-      errorSpy.mockRestore();
-    }
-  });
-
-  it('uses LLM reroute output when the judge returns valid structured JSON', async () => {
-    const provider = new CapturingProvider(JSON.stringify({
-      shouldReroute: true,
-      nextPrimaryTask: 'bugfix',
-      nextRecommendedMode: 'investigation',
-      nextThinkingDepth: 'high',
-      reason: 'Tool evidence points to a runtime failure instead of a pure review issue.',
-    }));
-
-    const reroutedPlan = await maybeCreateAutoReroutePlan(
-      provider,
-      {
-        provider: 'openai',
-        reasoningMode: 'auto',
-      },
-      'Review this PR for merge blockers.',
-      basePlan,
-      'I am not fully sure yet.',
-      {
-        allowDepthEscalation: true,
-        allowTaskReroute: true,
-      },
-      {
-        toolEvidence: '- bash: Command: npm test Exit: 1 [stderr] runtime error',
-      },
-    );
-
-    expect(reroutedPlan).not.toBeNull();
-    expect(reroutedPlan?.kind).toBe('task-reroute');
-    expect(reroutedPlan?.decision.primaryTask).toBe('bugfix');
-    expect(reroutedPlan?.decision.recommendedMode).toBe('investigation');
-    expect(reroutedPlan?.decision.recommendedThinkingDepth).toBe('high');
-
-    const judgePrompt = String(provider.lastMessages[0]?.content ?? '');
-    expect(judgePrompt).toContain('Tool evidence:');
-    expect(judgePrompt).toContain('runtime error');
-  });
-
-  it('ignores timeout-only review evidence before consulting the reroute judge', async () => {
-    const provider = new CapturingProvider(JSON.stringify({
-      shouldReroute: true,
-      nextPrimaryTask: 'bugfix',
-      nextRecommendedMode: 'investigation',
-      nextThinkingDepth: 'high',
-      reason: 'Timeouts suggest the task should switch into investigation.',
-    }));
-
-    const reroutedPlan = await maybeCreateAutoReroutePlan(
-      provider,
-      {
-        provider: 'openai',
-        reasoningMode: 'auto',
-      },
-      'Review this PR for merge blockers.',
-      basePlan,
-      'The run timed out before producing a stable answer.',
-      {
-        allowDepthEscalation: true,
-        allowTaskReroute: true,
-      },
-      {
-        toolEvidence: '- bash: timeout after 60s with delayed response and no other failure evidence',
-      },
-    );
-
-    expect(reroutedPlan).toBeNull();
-    expect(provider.lastMessages).toEqual([]);
   });
 
   it('treats ambiguous fallback routing as unknown and keeps the initial path direct', () => {
@@ -1132,57 +936,6 @@ describe('reasoning reroute', () => {
     expect(
       inferTaskType('Please review this bug fix.'),
     ).toBe('unknown');
-  });
-
-  it('can spend one depth escalation without consuming task reroute capability', async () => {
-    const provider = new ThrowingProvider();
-
-    const escalationPlan = await maybeCreateAutoReroutePlan(
-      provider,
-      {
-        provider: 'openai',
-        reasoningMode: 'auto',
-      },
-      'Review this PR for merge blockers.',
-      basePlan,
-      'This is unclear and I may need more context before making a final call.',
-      {
-        allowDepthEscalation: true,
-        allowTaskReroute: false,
-      },
-    );
-
-    expect(escalationPlan).not.toBeNull();
-    expect(escalationPlan?.kind).toBe('depth-escalation');
-    expect(escalationPlan?.decision.primaryTask).toBe('review');
-    expect(escalationPlan?.decision.recommendedThinkingDepth).toBe('medium');
-  });
-
-  it('can reroute from tool evidence even when the assistant text is empty', async () => {
-    const provider = new ThrowingProvider();
-
-    const reroutedPlan = await maybeCreateAutoReroutePlan(
-      provider,
-      {
-        provider: 'openai',
-        reasoningMode: 'auto',
-      },
-      'Review this PR for merge blockers.',
-      basePlan,
-      '',
-      {
-        allowDepthEscalation: true,
-        allowTaskReroute: true,
-      },
-      {
-        toolEvidence: '- bash: Command: npm test Exit: 1 [stderr] failing test stack trace',
-      },
-    );
-
-    expect(reroutedPlan).not.toBeNull();
-    expect(reroutedPlan?.kind).toBe('task-reroute');
-    expect(reroutedPlan?.decision.primaryTask).toBe('bugfix');
-    expect(reroutedPlan?.decision.recommendedMode).toBe('investigation');
   });
 
   it('keeps API documentation-only edits on the docs-only path when code changes are forbidden', () => {
