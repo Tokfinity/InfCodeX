@@ -87,7 +87,7 @@ _Last Updated: 2026-06-25_
 | 140 | High | Resolved | Published bundle leaves computed `./agent.js` child-executor import, breaking workflow child agents | v0.7.37 bundle distribution; confirmed v0.7.48-v0.7.50 | v0.7.52 | 2026-06-17 | 2026-06-18 |
 | 141 | Medium | Open | CI workflow long-red on Linux: cross-platform test bugs (storage list() runtime-inspection, bash background-process, h2 spawn env, skill-creator API-key-at-load) | long-standing (pre-v0.7.49) | - | 2026-06-18 | - |
 | 142 | High | Resolved | kimi-code thinking-only completion can terminate Worker with only `[Worker]` visible | v0.7.56 | v0.7.56 (pending patch) | 2026-06-25 | 2026-06-25 |
-| 143 | High | Open | Auto[llm] speculative classify 窗口默认 500ms + late verdict 被丢弃 → 远程/慢 provider 下 near-100% 误弹确认框，auto 模式形同虚设 | v0.7.39 | - | 2026-06-25 | - |
+| 143 | High | Resolved | Auto[llm] speculative classify 窗口默认 500ms + late verdict 被丢弃 → 远程/慢 provider 下 near-100% 误弹确认框，auto 模式形同虚设 | v0.7.39 | v0.7.57 (pending release) | 2026-06-25 | 2026-06-25 |
 
 ---
 
@@ -97,10 +97,11 @@ _Last Updated: 2026-06-25_
 ### 143: Auto[llm] speculative classify 窗口默认 500ms + late verdict 被丢弃 → 远程/慢 provider 下 near-100% 误弹确认框，auto 模式形同虚设
 
 - **Priority**: High
-- **Status**: **Open**
+- **Status**: **Resolved** (v0.7.57 pending release)
 - **Introduced**: v0.7.39（FEATURE_158 / ADR-025，commit `97e99d7d`；0.7.39 之前完整 await classify，只在真 block/escalate 才弹）
 - **Created**: 2026-06-25
-- **Fixed**: -
+- **Resolved**: 2026-06-25
+- **Fixed**: v0.7.57 (pending release)
 
 #### Original Problem
 
@@ -199,12 +200,55 @@ WS5 是 WS1 内的验证项。**显式 descope**：原报告建议的"provider/l
 确认框。SDK / 非交互路径行为正确（完整 await，不再因 500ms 早退假弹）。speculative window 既
 可经 env 也可经 config.json 调整。default 值由实测固化、release gate 勾齐。
 
+#### Resolution
+
+实施分 5 个 workstream（全部完成）。**WS1 落地时对原 Proposed Solution 做了一处精炼**：
+原计划走「窗口过期即弹 pending 确认框，迟到 allow 再 auto-dismiss（peek-race）」；实现时改为
+更简洁且更正确的**「窗口过期 → `await` 同一 classifyPromise → 采纳裁决」**——allow/block 直接
+落地不弹框，只有真正 `escalate` 才弹框。后者无需 auto-dismiss、无需扩 askUser 契约、无需碰
+readline/Ink UI（现有 agent spinner 覆盖等待期），无弹框闪烁，且 allow 裁决产生**零**弹框，
+正是对症修复。
+
+- **WS1（核心，late-verdict 采纳）**：`packages/coding/src/guardrails/auto-mode/guardrail.ts`
+  `beforeTool` —— `speculativeRace` 返回 `window-expired` 时不再 `escalateOrAsk`，改为
+  `decision = await classifyPromise` 后走既有 switch（allow→allow / block→block / escalate→弹框）。
+  迟到 block 现在正确喂 denial-tracker（旧路径丢弃，曾被误记为 breaker error）。cost-tracker 在
+  `classify.ts:96-98` 内部结算恰好一次，二次 await 不 double-settle（reviewer code-trace 证实）。
+- **WS2（host-aware）**：同文件 —— 无 `askUser` 表面（SDK / 非交互 / 子 Agent）时强制窗口为 0，
+  直接 await 完整裁决，不再因 500ms 早退把 transient timeout 当裁决。
+- **WS3（config 面）**：`packages/repl/src/common/permission-config.ts` 新增
+  `autoMode.speculativeWindowMs`（env `KODAX_AUTO_SPECULATIVE_WINDOW_MS` 覆盖，0 合法=禁用，
+  env>file）；`packages/repl/src/interactive/auto-mode-bootstrap.ts` 透传到 guardrail（REPL +
+  Space 同时生效）；`config.example.jsonc` 文档化。
+- **WS4（文档对账）**：`docs/features/v0.7.39.md` —— 记录 late-verdict 采纳使原「Commit 4
+  micro-bench → 固化默认值」失去正确性意义（任何窗口值都不再造成误 escalate），按
+  EVAL_GUIDELINES Layer 1 纪律不补跑无决策价值的付费 bench；release gate p95 项标记 obviated。
+- **WS5（防退化验证）**：double-settle / double-record 由 WS1 单测覆盖（「late block 恰好记一次」
+  + 「窗口过期后 abort 仍正确传播」）；coding 全包 3570 passed（1 项 `orchestration.test.ts`
+  maxConcurrent 并发计时 flaky，隔离复跑绿，与本修复无关）、repl 全包 2135 passed、coding+repl
+  `tsc -b` clean。
+
+**Files Changed**：
+- `packages/coding/src/guardrails/auto-mode/guardrail.ts`（WS1 窗口过期采纳 + WS2 host-aware 窗口 + 接口/注释更正）
+- `packages/coding/src/guardrails/auto-mode/speculative.ts`（模块文档更正：late-verdict 采纳 + WS2 说明）
+- `packages/repl/src/common/permission-config.ts`（WS3：`speculativeWindowMs` 解析 + `parseSpeculativeWindow`）
+- `packages/repl/src/interactive/auto-mode-bootstrap.ts`（WS3：透传 `speculativeWindowMs`）
+- `config.example.jsonc`（WS3 文档化）
+- `docs/features/v0.7.39.md`（WS4 对账）
+
+**Tests Added**：
+- `guardrail.test.ts`：WS2×2（无 askUser 慢分类器 allow / block）、WS1×4（采纳迟到 allow / block、
+  真 escalate 仍弹框、late block 喂 denial-tracker 恰好一次）、WS1 abort-after-window-expiry×1
+- `permission-config.test.ts`：WS3×8（默认 undefined / file 读取 / 0 合法 / env>file / env 0 / 负数 clamp / 非数字回落 / 取整）
+- `auto-mode-bootstrap.test.ts`：WS3×2（透传 1500 / 省略转 undefined，capturing-spy）
+
 #### Related
 
 - FEATURE_158 / ADR-025（v0.7.39）：speculative classify 的引入版本。
 - Issue 131（v0.7.39，已修）：同 feature 的 Windows-flag 误判；本 issue 是同 feature 的
   另一类回归（投机窗口默认值 + late-verdict 丢弃），独立成项。
-- 参考实现：Claude Code `peekSpeculativeClassifierCheck` 模式（WS1 对标对象）。
+- 参考实现：Claude Code `peekSpeculativeClassifierCheck` 模式（WS1 对标对象；KodaX 采用更简洁的
+  await-adopt 变体）。
 
 ---
 
@@ -4679,11 +4723,17 @@ Commit `ef085fc` 把 V1 精简到 V2 时没区分"信息载体"和"脚手架"，
 ---
 
 ## Summary
-- Total: 70 (26 Open, 44 Resolved, 0 Partially Resolved, 0 Won't Fix)
+- Total: 70 (25 Open, 45 Resolved, 0 Partially Resolved, 0 Won't Fix)
 - Highest Priority Open: 091 - 缺少一等公民 MCP / Web Search / Code Search 工具体系 (High)
 - Historical archived issues are maintained in ISSUES_ARCHIVED.md
 
 ## Changelog
+
+### 2026-06-25: Issue 143 resolved (v0.7.57 pending release)
+- Resolved 143: Auto[llm] speculative classify 窗口默认 500ms + late verdict 被丢弃 → 远程/慢 provider 下 near-100% 误弹确认框 (High).
+- Fix (5 workstream, all landed): WS1 late-verdict 采纳（窗口过期改为 `await` 同一 classifyPromise 并采纳裁决 — allow/block 不弹框，仅真 escalate 弹框；比原 peek-race 设计更简洁、无 UI 改动、无闪烁）+ WS2 无 askUser ⇒ 窗口强制 0（修对 SDK/非交互）+ WS3 `autoMode.speculativeWindowMs` config 面 + env 透传（REPL+Space）+ WS4 v0.7.39.md 对账（late-verdict 使 micro-bench 失去正确性意义，按 EVAL_GUIDELINES Layer 1 不补跑付费 bench）+ WS5 防 double-record/settle 验证。
+- Verification: coding 3570 passed（1 项 orchestration maxConcurrent 并发计时 flaky，隔离复跑绿，无关）、repl 2135 passed、coding+repl tsc clean；新增 17 个单测（guardrail 7 + permission-config 8 + bootstrap 2）。
+- cost-tracker 在 classify.ts:96-98 内部结算恰好一次 → 二次 await 不 double-settle（reviewer code-trace 证实）；迟到 block 现正确喂 denial-tracker（旧路径丢弃曾误记为 breaker error）。
 
 ### 2026-06-25: Issue 143 added
 - Added 143: Auto[llm] speculative classify 窗口默认 500ms + late verdict 被丢弃 → 远程/慢 provider 下 near-100% 误弹确认框，auto 模式形同虚设 (High, Open).
