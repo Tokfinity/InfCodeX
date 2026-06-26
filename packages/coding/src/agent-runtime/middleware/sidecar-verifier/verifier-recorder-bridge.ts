@@ -53,7 +53,7 @@ import {
   maybeRequestAdditionalWorkBudget,
   type ManagedTaskBudgetController,
 } from '../../../task-engine/_internal/managed-task/budget.js';
-import { BUDGET_EXTENSION_BY_HARNESS } from '../../../task-engine/_internal/managed-task/observer-bridge.js';
+import { MANAGED_WORK_BUDGET_EXTENSION } from '../../../task-engine/_internal/managed-task/observer-bridge.js';
 import type { BudgetExtensionContext } from '../../../task-engine/_internal/managed-task/verdict-recorder.js';
 import type { SidecarVerifierVerdict } from './verifier.js';
 
@@ -269,7 +269,7 @@ export async function applySidecarVerdictToRecorder(
           currentRound: budgetExtension.roundRef.current,
           maxRounds: budgetExtension.maxRoundsRef.current,
           originalTask: budgetExtension.originalTask,
-          additionalUnits: BUDGET_EXTENSION_BY_HARNESS[budget.currentHarness],
+          additionalUnits: MANAGED_WORK_BUDGET_EXTENSION,
         },
       );
       budgetExtension.budgetApprovalRef.current = false;

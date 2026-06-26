@@ -4,11 +4,11 @@
  * surface.
  *
  * Hosts:
- *   - `BUDGET_CAP_BY_HARNESS` + `BUDGET_EXTENSION_BY_HARNESS` —
- *     per-harness budget caps + extension increments (consumed by
+ *   - `MANAGED_WORK_BUDGET_CAP` + `MANAGED_WORK_BUDGET_EXTENSION` —
+ *     single-constant budget cap + extension increment (consumed by
  *     `wrapEmitterWithRecorder` in `verdict-recorder.ts`)
- *   - `ROLE_TO_TITLE` + `MAX_ROUNDS_BY_HARNESS` — display labels +
- *     role-chain length hints used by the status emit body
+ *   - `ROLE_TO_TITLE` + `MANAGED_MAX_ROUNDS` — display labels +
+ *     role-chain length hint used by the status emit body
  *   - `RUNNER_HARNESS_ORDER` + `getRunnerHarnessRank` +
  *     `applyScoutDecisionToPlanRunner` — M4 parity helpers consumed by
  *     the emit-wrapper to fold Scout's confirmed harness back into the
@@ -44,42 +44,36 @@ import {
   buildManagedStatusBudgetFields,
   type ManagedTaskBudgetController,
 } from './budget.js';
+import {
+  DEFAULT_MANAGED_WORK_BUDGET,
+  GLOBAL_WORK_BUDGET_INCREMENT,
+} from '../constants.js';
 import type { ObserverBridge, VerdictRecorder } from './types.js';
 
 /**
- * Base budget cap per harness tier, in LLM-turn units. Scout/Planner/
- * Generator/Evaluator each consume one unit per emit; coding tools consume
- * one unit per invocation (via `incrementManagedBudgetUsage`).
+ * Managed-task work-budget cap, in LLM-turn units. Each role emit + each
+ * coding-tool invocation consumes one unit (via `incrementManagedBudgetUsage`);
+ * the 90%-utilization extension dialog tops it up on demand.
  *
- * H0 default bumped from the legacy 50 → 100 because even a modest review
- * task easily burns 30 file reads + 15 grep scans + a few bash inspections
- * before Scout can commit a verdict. H1/H2 stay at 200 (the
- * `DEFAULT_MANAGED_WORK_BUDGET` baseline) — those tiers get the budget-extension
- * dialog at 90% utilization so a long task can top up as needed rather
- * than front-load a huge base cap.
+ * Reasoning single-tracking: the former per-harness tiered Records
+ * (`BUDGET_CAP_BY_HARNESS` H0=100/H1=H2=200, `BUDGET_EXTENSION_BY_HARNESS`,
+ * `MAX_ROUNDS_BY_HARNESS`) collapsed to single constants. Once FEATURE_114's
+ * V2 single-loop made every fresh run start at PLANNED, the H0/H1/H2 tiers no
+ * longer selected different agent topologies — they were *only* budget tiers,
+ * and the differentiation only stayed reachable via the resume path (a latent
+ * fresh-vs-resume inconsistency: a fresh run executes at PLANNED=200/8 but
+ * recorded its routing tier H0/H1, so resume diverged downward to 100/1 or
+ * 200/6). Collapsing removes that obsolete divergence so resume matches fresh.
+ * claudecode likewise has no per-complexity budget table — this matches its
+ * single-cap model.
  */
-export const BUDGET_CAP_BY_HARNESS: Record<KodaXHarnessProfile, number> = {
-  H0_DIRECT: 100,
-  H1_EXECUTE_EVAL: 200,
-  H2_PLAN_EXECUTE_EVAL: 200,
-  // FEATURE_114 v0.7.36: PLANNED inherits H2's cap — same upper
-  // bound for total tool-call budget, regardless of whether the
-  // chain is split across roles or condensed into one Worker.
-  PLANNED: 200,
-};
+export const MANAGED_WORK_BUDGET_CAP = DEFAULT_MANAGED_WORK_BUDGET;
 
 /**
- * Extension size per harness tier. When the budget-extension dialog fires
- * at the 90% threshold and the user approves, the budget grows by this
- * many units. H0 gets a smaller +100 bump (short exploration tasks) while
- * H1/H2 get +200 (long multi-role runs).
+ * Budget granted each time the user approves the 90%-threshold extension
+ * dialog. Single constant for the same reason as `MANAGED_WORK_BUDGET_CAP`.
  */
-export const BUDGET_EXTENSION_BY_HARNESS: Record<KodaXHarnessProfile, number> = {
-  H0_DIRECT: 100,
-  H1_EXECUTE_EVAL: 200,
-  H2_PLAN_EXECUTE_EVAL: 200,
-  PLANNED: 200,
-};
+export const MANAGED_WORK_BUDGET_EXTENSION = GLOBAL_WORK_BUDGET_INCREMENT;
 
 /**
  * Display-name mapping for each role. The REPL UI renders this as the
@@ -97,20 +91,16 @@ const ROLE_TO_TITLE: Record<KodaXTaskRole, string> = {
 };
 
 /**
- * Max-rounds hint for progress reporting. The Runner.run inner loop caps
- * per-agent tool iterations at `MAX_TOOL_LOOP_ITERATIONS` (20); `maxRounds`
- * here reflects the *role-chain* length upper bound per harness tier.
- * Consumers use it purely for "round i of N" display — the actual cap is
- * enforced by the LLM loop + budget controller, not by this number.
+ * Max-rounds hint for progress reporting only. The Runner.run inner loop caps
+ * per-agent tool iterations at `MAX_TOOL_LOOP_ITERATIONS` (20); this value is
+ * the role-chain length upper bound rendered as the "round i of N" denominator
+ * (and auto-grows by 1 on each approved budget extension). It does NOT cap
+ * work — the actual ceiling is the LLM loop + budget controller. Collapsed
+ * from the per-harness `MAX_ROUNDS_BY_HARNESS` Record (see
+ * `MANAGED_WORK_BUDGET_CAP` for the rationale); PLANNED's 8 is the canonical
+ * value every run (fresh + resume) now uses.
  */
-export const MAX_ROUNDS_BY_HARNESS: Record<KodaXHarnessProfile, number> = {
-  H0_DIRECT: 1, // Scout direct answer
-  H1_EXECUTE_EVAL: 6, // Scout + Gen + Eval (+ up to 3 revise cycles)
-  H2_PLAN_EXECUTE_EVAL: 8, // Scout + Planner + Gen + Eval (+ up to 4 revise cycles)
-  // FEATURE_114 v0.7.36: PLANNED is one Worker chain + Evaluator with
-  // up to ~4 revise cycles, matching H2's overall envelope.
-  PLANNED: 8,
-};
+export const MANAGED_MAX_ROUNDS = 8;
 
 /**
  * Shard 6d-R: derive a per-role evidence entry at emit time. Legacy

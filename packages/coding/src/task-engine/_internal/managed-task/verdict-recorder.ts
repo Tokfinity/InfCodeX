@@ -38,7 +38,7 @@ import {
   maybeRequestAdditionalWorkBudget,
   type ManagedTaskBudgetController,
 } from './budget.js';
-import { BUDGET_EXTENSION_BY_HARNESS } from './observer-bridge.js';
+import { MANAGED_WORK_BUDGET_EXTENSION } from './observer-bridge.js';
 import type { TodoStore } from '../../todo-store.js';
 import type { ObserverBridge, VerdictRecorder } from './types.js';
 
@@ -369,7 +369,7 @@ export function wrapEmitterWithRecorder(
               currentRound: budgetExtension.roundRef.current,
               maxRounds: budgetExtension.maxRoundsRef.current,
               originalTask: budgetExtension.originalTask,
-              additionalUnits: BUDGET_EXTENSION_BY_HARNESS[budget.currentHarness],
+              additionalUnits: MANAGED_WORK_BUDGET_EXTENSION,
               force: Boolean(evaluatorBudgetRequest),
             },
           );

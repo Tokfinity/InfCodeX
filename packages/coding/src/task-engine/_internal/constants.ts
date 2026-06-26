@@ -8,7 +8,6 @@
  * Not moved in Slice 2 (reserved for later slices):
  * - CHECKPOINT_FILE / CHECKPOINT_MAX_AGE_MS — exposed via __checkpointTestables,
  *   moves in Slice 7 (checkpoint helpers) so the test surface stays intact.
- * - MANAGED_TASK_BUDGET_BASE — type-dependent, moves with budget helpers (Slice 6).
  * - REVIEW_*_THRESHOLD — duplicated in reasoning.ts (separate GLM-like DRY issue,
  *   handled in follow-up).
  * - WRITE_ONLY_TOOLS / INSPECTION_SHELL_PATTERNS / DOCS_ONLY_WRITE_PATH_PATTERNS /

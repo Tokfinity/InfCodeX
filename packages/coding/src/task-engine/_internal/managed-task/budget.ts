@@ -13,20 +13,16 @@
  */
 
 import {
-  DEFAULT_MANAGED_WORK_BUDGET,
   GLOBAL_WORK_BUDGET_APPROVAL_THRESHOLD,
   GLOBAL_WORK_BUDGET_INCREMENT,
 } from '../constants.js';
 import { truncateText } from '../text-utils.js';
-import type { ReasoningPlan } from '../../../reasoning.js';
 import type {
-  KodaXAgentMode,
   KodaXBudgetDisclosureZone,
   KodaXEvents,
   KodaXManagedBudgetSnapshot,
   KodaXManagedTask,
   KodaXManagedTaskStatusEvent,
-  KodaXOptions,
   KodaXTaskRole,
   KodaXTaskRoutingDecision,
 } from '../../../types.js';
@@ -45,33 +41,10 @@ export interface ManagedTaskBudgetController {
   lastApprovalBudgetTotal?: number;
 }
 
-/**
- * Default budget cap per harness profile. H0 is 50 units (direct Scout
- * completion is cheap); H1/H2 both default to DEFAULT_MANAGED_WORK_BUDGET.
- */
-const MANAGED_TASK_BUDGET_BASE: Record<KodaXTaskRoutingDecision['harnessProfile'], number> = {
-  H0_DIRECT: 50,
-  H1_EXECUTE_EVAL: DEFAULT_MANAGED_WORK_BUDGET,
-  H2_PLAN_EXECUTE_EVAL: DEFAULT_MANAGED_WORK_BUDGET,
-  // FEATURE_114 v0.7.36: PLANNED matches H2's budget — the Worker
-  // single-loop collapses three roles into one, but the per-task
-  // tool-call envelope is still bounded by the same upper limit.
-  PLANNED: DEFAULT_MANAGED_WORK_BUDGET,
-};
-
-export function createManagedBudgetController(
-  _options: KodaXOptions,
-  plan: ReasoningPlan,
-  agentMode: KodaXAgentMode,
-): ManagedTaskBudgetController {
-  const isH0 = agentMode === 'sa' || plan.decision.harnessProfile === 'H0_DIRECT';
-  return {
-    totalBudget: isH0 ? MANAGED_TASK_BUDGET_BASE.H0_DIRECT : MANAGED_TASK_BUDGET_BASE[plan.decision.harnessProfile],
-    spentBudget: 0,
-    currentHarness: isH0 ? 'H0_DIRECT' : plan.decision.harnessProfile,
-    upgradeCeiling: isH0 ? undefined : plan.decision.upgradeCeiling,
-  };
-}
+// Reasoning single-tracking: the dead `createManagedBudgetController` +
+// per-harness `MANAGED_TASK_BUDGET_BASE` table were removed. The runner
+// constructs the controller inline with the single `MANAGED_WORK_BUDGET_CAP`
+// constant (observer-bridge.ts); nothing called this factory in production.
 
 // FEATURE_062: Simplified snapshot — zone derived from used/cap ratio, no per-role iter limits.
 export function createBudgetSnapshot(

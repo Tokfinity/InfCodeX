@@ -227,8 +227,8 @@ import {
   // Scout role.
   buildObserverBridge,
   buildRunnerRoutingNote,
-  BUDGET_CAP_BY_HARNESS,
-  MAX_ROUNDS_BY_HARNESS,
+  MANAGED_WORK_BUDGET_CAP,
+  MANAGED_MAX_ROUNDS,
 } from './_internal/managed-task/observer-bridge.js';
 import {
   H1_MAX_SAME_HARNESS_REVISES,
@@ -830,16 +830,16 @@ async function runManagedTaskViaRunnerInner(
   // new run's envelope (same contract as legacy resumeManagedTask:
   // `createManagedBudgetController` always started at 0).
   // FEATURE_114 v0.7.36 + v0.7.39 fix — V2 Worker has no analogue of
-  // Scout's `emit_scout_verdict.confirmedHarness` upgrade payload, so a
-  // fresh V2 run that initialized at `H0_DIRECT` would stay there for
-  // its entire lifetime and inherit the H0 budget (100 turns) /
   // FEATURE_193 v0.7.43: V1 chain retired — always start fresh V2 runs at
-  // PLANNED (budget=200, max-rounds=8). Resume seeds still override — they
-  // carry the committed harness from the prior session.
+  // PLANNED. Resume seeds still override `currentHarness` (it labels status
+  // events + flows to `contract.harnessProfile`), but budget/rounds no longer
+  // branch on it: reasoning single-tracking collapsed the per-harness budget
+  // tiers to single constants (see `MANAGED_WORK_BUDGET_CAP`). Every run —
+  // fresh or resume — gets the same 200-unit cap / 8-round display.
   const initialHarness: KodaXHarnessProfile =
     structuralResumeSeed?.harness ?? 'PLANNED';
   const budget: ManagedTaskBudgetController = {
-    totalBudget: BUDGET_CAP_BY_HARNESS[initialHarness],
+    totalBudget: MANAGED_WORK_BUDGET_CAP,
     spentBudget: 0,
     currentHarness: initialHarness,
   };
@@ -856,7 +856,7 @@ async function runManagedTaskViaRunnerInner(
     emitted: structuralResumeSeed ? [...structuralResumeSeed.rolesEmitted] : [],
   };
   const roundRef = { current: 0 };
-  const maxRoundsRef = { current: MAX_ROUNDS_BY_HARNESS[initialHarness] };
+  const maxRoundsRef = { current: MANAGED_MAX_ROUNDS };
   const budgetApprovalRef = { current: false };
   // Shard 6d-R: append-only evidence entries accumulator. Populated from
   // `onRoleEmit` so each role turn contributes exactly one entry to
