@@ -1,15 +1,8 @@
 # Client Integrations
 
-`clients/` now keeps only one Phase 1 third-party host integration surface:
+`clients/` is reserved for external third-party host integration surfaces.
 
-- [repointel/README.md](./repointel/README.md)
-
-That folder contains:
-- the installable skill directory
-- the install script
-- the demo script
-- the doctor script
-
-We intentionally keep those files together because they all belong to the same external-host integration unit.
-
-The premium engine itself still lives in the companion `KodaX-private` repository (not publicly published).
+It is currently empty: repo intelligence is built into KodaX, so no external
+host skill or standalone frontdoor is required for normal usage. See
+[docs/REPOINTEL.md](../docs/REPOINTEL.md) for the history of the former
+standalone `repointel` integration and the built-in replacement.

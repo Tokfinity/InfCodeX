@@ -1513,14 +1513,28 @@ export async function analyzeChangedScopeFromSnapshot(
   return report;
 }
 
+function describeChangedScope(report: ChangedScopeReport): string {
+  switch (report.scope) {
+    case 'staged':
+      return 'staged (index vs HEAD)';
+    case 'unstaged':
+      return 'unstaged (working tree vs index)';
+    case 'compare':
+      return `compare (${report.baseRef ?? 'HEAD~1'}...HEAD — committed range)`;
+    case 'all':
+    default:
+      return 'all (uncommitted working tree vs HEAD — excludes committed history)';
+  }
+}
+
 export function renderChangedScope(report: ChangedScopeReport): string {
   const lines: string[] = [
     `Changed scope for ${path.basename(report.workspaceRoot)}`,
     `Root: ${report.workspaceRoot}`,
-    `Scope: ${report.scope}${report.baseRef ? ` vs ${report.baseRef}` : ''}`,
+    `Scope: ${describeChangedScope(report)}`,
     `Snapshot: ${report.analyzedAt}`,
     `Changed files: ${report.totalChangedFiles}`,
-    `Changed lines: ${report.changedLineCount} (+${report.addedLineCount} / -${report.deletedLineCount})`,
+    `Changed lines: ${report.changedLineCount} (+${report.addedLineCount} / -${report.deletedLineCount}; line counts cover tracked diffs only, untracked files excluded)`,
     `Categories: source=${report.categories.source} docs=${report.categories.docs} tests=${report.categories.tests} config=${report.categories.config} other=${report.categories.other}`,
   ];
 
