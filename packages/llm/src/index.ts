@@ -45,7 +45,6 @@ export type {
   KodaXReasoningEffortWireStrategy,
   KodaXThinkingWireStrategy,
   KodaXReasoningProfile,
-  KodaXReasoningOverride,
   KodaXReasoningMode,
   KodaXThinkingDepth,
   KodaXTaskType,
@@ -113,15 +112,6 @@ export {
   clampThinkingBudget,
   mapDepthToOpenAIReasoningEffort,
 } from './reasoning.js';
-
-export {
-  buildReasoningOverrideKey,
-  loadReasoningOverride,
-  saveReasoningOverride,
-  clearReasoningOverride,
-  reasoningCapabilityToOverride,
-  reasoningOverrideToCapability,
-} from './reasoning-overrides.js';
 
 // ============== Providers ==============
 export {

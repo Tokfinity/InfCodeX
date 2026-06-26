@@ -21,8 +21,8 @@
  *      before any subsystem reads the path.
  *   2. **`KODAX_HOME` env var** — middle priority. Used by shell / CI /
  *      test isolation / multi-tenant shared machines. (Already honored
- *      historically by `@kodax-ai/llm/src/reasoning-overrides.ts`; this
- *      helper makes it the canonical path for all packages.)
+ *      historically by the llm-layer config helpers; this helper makes it
+ *      the canonical path for all packages.)
  *   3. **`~/.kodax/`** — lowest priority. Default for the standalone
  *      kodax CLI. With DI not set + env not set, the resolver returns
  *      the same byte sequence as the prior hardcoded
@@ -42,9 +42,9 @@
  * `~/.opsagent/` simultaneously).
  *
  * NOT migrated:
- *   - `@kodax-ai/llm/src/reasoning-overrides.ts:49` keeps its inline
+ *   - llm-layer config helpers keep their inline
  *     `process.env.KODAX_HOME ?? path.join(os.homedir(), '.kodax')`
- *     fallback because moving it to this helper would create an
+ *     fallback because moving them to this helper would create an
  *     `@kodax-ai/llm → @kodax-ai/agent` dependency cycle (agent already
  *     imports ai). The two implementations have identical observable
  *     behavior at the env / default tiers; the programmatic override

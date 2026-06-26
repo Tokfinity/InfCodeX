@@ -583,9 +583,6 @@ export abstract class KodaXAnthropicCompatProvider extends KodaXBaseProvider {
               request,
               this.buildMessageCreateOptions(request, model, signal),
             );
-            if (capability !== initialCapability) {
-              this.persistReasoningCapabilityOverride(capability, model);
-            }
           } catch (error) {
             lastError = error;
             if (shouldForceToolChoice && this.shouldFallbackForForcedToolChoiceError(error)) {
@@ -932,9 +929,6 @@ export abstract class KodaXAnthropicCompatProvider extends KodaXBaseProvider {
               request,
               this.buildMessageCreateOptions(request, model, signal),
             );
-            if (capability !== initialCapability) {
-              this.persistReasoningCapabilityOverride(capability, model);
-            }
           } catch (error) {
             lastError = error;
             if (shouldForceToolChoice && this.shouldFallbackForForcedToolChoiceError(error)) {

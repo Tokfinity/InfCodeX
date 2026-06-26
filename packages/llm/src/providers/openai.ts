@@ -771,9 +771,6 @@ export abstract class KodaXOpenAICompatProvider extends KodaXBaseProvider {
               attemptParams,
               signal ? { signal } : {},
             );
-            if (capability !== initialCapability) {
-              this.persistReasoningCapabilityOverride(capability, model);
-            }
           } catch (error) {
             lastError = error;
             if (shouldForceToolChoice && this.shouldFallbackForForcedToolChoiceError(error)) {
@@ -1025,9 +1022,6 @@ export abstract class KodaXOpenAICompatProvider extends KodaXBaseProvider {
               attemptParams,
               signal ? { signal } : {},
             ) as OpenAI.Chat.Completions.ChatCompletion;
-            if (capability !== initialCapability) {
-              this.persistReasoningCapabilityOverride(capability, model);
-            }
           } catch (error) {
             lastError = error;
             if (shouldForceToolChoice && this.shouldFallbackForForcedToolChoiceError(error)) {

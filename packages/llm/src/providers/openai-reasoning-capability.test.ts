@@ -10,7 +10,6 @@ import type {
   KodaXReasoningRequest,
   KodaXToolDefinition,
 } from '../types.js';
-import { loadReasoningOverride, resetReasoningOverrideCache } from '../reasoning-overrides.js';
 
 const MESSAGES: KodaXMessage[] = [{ role: 'user', content: 'hello' }];
 const TOOLS: KodaXToolDefinition[] = [];
@@ -168,13 +167,11 @@ describe('openai reasoning capability', () => {
   beforeEach(() => {
     process.env.KODAX_CONFIG_FILE = TEST_CONFIG_FILE;
     fs.rmSync(TEST_CONFIG_FILE, { force: true });
-    resetReasoningOverrideCache();
   });
 
   afterEach(() => {
     delete process.env.KODAX_CONFIG_FILE;
     fs.rmSync(TEST_CONFIG_FILE, { force: true });
-    resetReasoningOverrideCache();
   });
 
   it('sends reasoning_effort for native-effort providers', async () => {
@@ -389,7 +386,7 @@ describe('openai reasoning capability', () => {
     });
   });
 
-  it('falls back from budget to toggle and persists the override', async () => {
+  it('falls back from budget to toggle within the request (in-memory capability fallback)', async () => {
     const create = vi
       .fn()
       .mockRejectedValueOnce(new Error('unknown parameter: budget_tokens'))
@@ -409,12 +406,6 @@ describe('openai reasoning capability', () => {
       type: 'enabled',
     });
     expect(create.mock.calls[1]?.[0].thinking).not.toHaveProperty('budget_tokens');
-    expect(
-      loadReasoningOverride('zhipu', {
-        baseUrl: undefined,
-        model: 'test-model',
-      }),
-    ).toBe('toggle');
   });
 
   it('replays tool history and reasoning_content for deepseek tool turns', async () => {

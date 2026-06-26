@@ -14,7 +14,6 @@ import {
   KodaXNormalizedReasoningRequest,
   KodaXReasoningCapability,
   KodaXReasoningProfile,
-  KodaXReasoningOverride,
   KodaXReasoningRequest,
   KodaXStreamResult,
   KodaXVerifyCredentialResult,
@@ -47,13 +46,6 @@ import {
   normalizeReasoningRequest,
   resolveReasoningEffort,
 } from '../reasoning.js';
-import {
-  buildReasoningOverrideKey,
-  loadReasoningOverride,
-  reasoningCapabilityToOverride,
-  reasoningOverrideToCapability,
-  saveReasoningOverride,
-} from '../reasoning-overrides.js';
 
 function parseEnvInt(raw: string | undefined): number | undefined {
   if (!raw) return undefined;
@@ -372,34 +364,17 @@ export abstract class KodaXBaseProvider {
   }
 
   getReasoningCapability(modelOverride?: string): KodaXReasoningCapability {
-    const override = loadReasoningOverride(this.name, this.config, modelOverride);
-    return override
-      ? reasoningOverrideToCapability(override)
-      : this.getConfiguredReasoningCapability(modelOverride);
+    // Reasoning single-tracking (ADR-042): the disk-persisted
+    // `providerReasoningOverrides` capability self-heal was retired (it was a
+    // no-op once every provider carries a `reasoningProfile`, and real
+    // effort rejections are now handled by the effort-drop self-heal in
+    // `withRateLimit`). This is now a pure capability descriptor read.
+    return this.getConfiguredReasoningCapability(modelOverride);
   }
 
   getReasoningProfile(modelOverride?: string): KodaXReasoningProfile | undefined {
     return this.getModelDescriptor(modelOverride)?.reasoningProfile
       ?? this.config.reasoningProfile;
-  }
-
-  getReasoningOverride(modelOverride?: string): KodaXReasoningOverride | undefined {
-    return loadReasoningOverride(this.name, this.config, modelOverride);
-  }
-
-  getReasoningOverrideKey(modelOverride?: string): string {
-    return buildReasoningOverrideKey(this.name, this.config, modelOverride);
-  }
-
-  protected persistReasoningCapabilityOverride(
-    capability: KodaXReasoningCapability,
-    modelOverride?: string,
-  ): void {
-    const override = reasoningCapabilityToOverride(capability);
-    if (!override) {
-      return;
-    }
-    saveReasoningOverride(this.name, this.config, override, modelOverride);
   }
 
   protected shouldFallbackForReasoningError(

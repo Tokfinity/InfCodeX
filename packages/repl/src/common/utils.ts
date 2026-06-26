@@ -35,7 +35,6 @@ import {
   type KodaXReasoningCapability,
   type KodaXAgentMode,
   type KodaXReasoningMode,
-  type KodaXReasoningOverride,
   type KodaXMcpServersConfig,
   type KodaXCustomProviderConfig,
   type KodaXReasoningProfile,
@@ -895,7 +894,6 @@ export function loadConfig(): {
   agentMode?: KodaXAgentMode;
   permissionMode?: string;
   locale?: string;
-  providerReasoningOverrides?: Record<string, KodaXReasoningOverride>;
   providerModels?: Record<string, string[]>;
   customProviders?: KodaXCustomProviderConfig[];
   extensions?: string[];
@@ -942,7 +940,6 @@ export function loadConfig(): {
         agentMode?: KodaXAgentMode;
         permissionMode?: string;
         locale?: string;
-        providerReasoningOverrides?: Record<string, KodaXReasoningOverride>;
         providerModels?: Record<string, string[]>;
         customProviders?: KodaXCustomProviderConfig[];
         extensions?: unknown;
@@ -1055,7 +1052,6 @@ export function saveConfig(config: {
   agentMode?: KodaXAgentMode;
   permissionMode?: string;
   locale?: string;
-  providerReasoningOverrides?: Record<string, KodaXReasoningOverride>;
   providerModels?: Record<string, string[]>;
   customProviders?: KodaXCustomProviderConfig[];
   extensions?: string[];

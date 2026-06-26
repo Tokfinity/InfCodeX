@@ -362,12 +362,6 @@ export class RecorderProvider extends KodaXBaseProvider {
   override getConfiguredReasoningCapability(modelOverride?: string): KodaXReasoningCapability {
     return this.inner.getConfiguredReasoningCapability(modelOverride);
   }
-  override getReasoningOverride(modelOverride?: string): ReturnType<KodaXBaseProvider['getReasoningOverride']> {
-    return this.inner.getReasoningOverride(modelOverride);
-  }
-  override getReasoningOverrideKey(modelOverride?: string): string {
-    return this.inner.getReasoningOverrideKey(modelOverride);
-  }
   override getContextWindow(): number { return this.inner.getContextWindow(); }
   override getEffectiveContextWindow(model?: string): number { return this.inner.getEffectiveContextWindow(model); }
   override getEffectiveMaxOutputTokens(model?: string): number { return this.inner.getEffectiveMaxOutputTokens(model); }

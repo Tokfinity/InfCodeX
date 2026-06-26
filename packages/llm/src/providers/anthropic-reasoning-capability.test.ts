@@ -10,7 +10,6 @@ import type {
   KodaXReasoningRequest,
   KodaXToolDefinition,
 } from '../types.js';
-import { loadReasoningOverride, resetReasoningOverrideCache } from '../reasoning-overrides.js';
 
 const MESSAGES: KodaXMessage[] = [{ role: 'user', content: 'hello' }];
 const TOOLS: KodaXToolDefinition[] = [];
@@ -134,16 +133,14 @@ describe('anthropic reasoning capability', () => {
   beforeEach(() => {
     process.env.KODAX_CONFIG_FILE = TEST_CONFIG_FILE;
     fs.rmSync(TEST_CONFIG_FILE, { force: true });
-    resetReasoningOverrideCache();
   });
 
   afterEach(() => {
     delete process.env.KODAX_CONFIG_FILE;
     fs.rmSync(TEST_CONFIG_FILE, { force: true });
-    resetReasoningOverrideCache();
   });
 
-  it('falls back from budget to toggle and persists the override', async () => {
+  it('falls back from budget to toggle within the request (in-memory capability fallback)', async () => {
     const create = vi
       .fn()
       .mockRejectedValueOnce(new Error('unsupported parameter: budget_tokens'))
@@ -163,12 +160,6 @@ describe('anthropic reasoning capability', () => {
       type: 'enabled',
     });
     expect(create.mock.calls[1]?.[0].thinking).not.toHaveProperty('budget_tokens');
-    expect(
-      loadReasoningOverride('test-anthropic', {
-        baseUrl: undefined,
-        model: 'test-model',
-      }),
-    ).toBe('toggle');
   });
 
   it('merges input and output usage events into a single token snapshot', async () => {

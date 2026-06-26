@@ -299,13 +299,6 @@ export interface KodaXProviderCapabilityProfile {
   evidenceSupport?: KodaXProviderEvidenceSupport;
 }
 
-export type KodaXReasoningOverride =
-  | 'budget'
-  | 'effort'
-  | 'toggle'
-  | 'adaptive'
-  | 'none';
-
 export type KodaXReasoningMode =
   | 'off'
   | 'auto'
