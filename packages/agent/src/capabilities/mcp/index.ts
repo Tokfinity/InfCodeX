@@ -33,6 +33,7 @@ export type {
 export {
   defaultMcpCacheDir,
   createMcpCapabilityId,
+  normalizeMcpCapabilityId,
   parseMcpCapabilityId,
   searchMcpCatalog,
   getMcpCachePaths,

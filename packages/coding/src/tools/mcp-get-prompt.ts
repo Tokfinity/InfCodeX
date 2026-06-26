@@ -1,3 +1,4 @@
+import { normalizeMcpCapabilityId } from '@kodax-ai/agent';
 import type { KodaXToolExecutionContext } from '../types.js';
 import { readOptionalString } from './internal.js';
 import { finalizeRetrievalResult } from './retrieval.js';
@@ -29,28 +30,29 @@ export async function toolMcpGetPrompt(
     if (!id) {
       throw new Error('id is required.');
     }
+    const capabilityId = normalizeMcpCapabilityId(id);
 
     const args = input.args && typeof input.args === 'object' && !Array.isArray(input.args)
       ? input.args as Record<string, unknown>
       : {};
 
-    const result = await ctx.extensionRuntime.getCapabilityPrompt('mcp', id, args);
+    const result = await ctx.extensionRuntime.getCapabilityPrompt('mcp', capabilityId, args);
     return finalizeRetrievalResult({
       tool: 'mcp_get_prompt',
       scope: 'remote',
       trust: 'provider',
       freshness: 'unknown',
       provider: 'mcp',
-      summary: `Retrieved MCP prompt ${id}.`,
+      summary: `Retrieved MCP prompt ${capabilityId}.`,
       content: stringifyValue(result),
       items: [],
       artifacts: [{
         kind: 'provider',
-        label: id,
-        value: id,
+        label: capabilityId,
+        value: capabilityId,
       }],
       metadata: {
-        capabilityId: id,
+        capabilityId,
         capabilityKind: 'prompt',
       },
     }, ctx);

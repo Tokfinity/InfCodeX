@@ -244,7 +244,7 @@ export class McpManager {
     return (result as McpCapabilityDescriptor | undefined) ?? undefined;
   }
 
-  /** v0.7.42 — invoke a tool by capability id (`mcp://<serverId>/<kind>/<name>`). */
+  /** v0.7.42 — invoke a tool by capability id (`mcp:<serverId>:tool:<name>`). */
   async execute(id: string, input: Record<string, unknown>): Promise<CapabilityResult> {
     return this.capabilityProvider.execute(id, input);
   }

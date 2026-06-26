@@ -69,12 +69,37 @@ export function createMcpCapabilityId(
   return `mcp:${safeIdComponent(serverId)}:${kind}:${safeIdComponent(name)}`;
 }
 
+export function normalizeMcpCapabilityId(id: string): string {
+  const trimmed = id.trim();
+  const canonical = trimmed.match(/^mcp:([^:]+):(tool|resource|prompt):(.+)$/);
+  if (canonical?.[1] && canonical[2] && canonical[3]) {
+    return trimmed;
+  }
+
+  const withoutScheme = trimmed.match(/^([^:]+):(tool|resource|prompt):(.+)$/);
+  if (withoutScheme?.[1] && withoutScheme[2] && withoutScheme[3]) {
+    return `mcp:${withoutScheme[1]}:${withoutScheme[2]}:${withoutScheme[3]}`;
+  }
+
+  const legacyUri = trimmed.match(/^mcp:\/\/([^/]+)\/(tool|resource|prompt)\/(.+)$/);
+  if (legacyUri?.[1] && legacyUri[2] && legacyUri[3]) {
+    return createMcpCapabilityId(
+      decodeURIComponent(legacyUri[1]),
+      legacyUri[2] as McpCapabilityKind,
+      decodeURIComponent(legacyUri[3]),
+    );
+  }
+
+  return trimmed;
+}
+
 export function parseMcpCapabilityId(id: string): {
   serverId: string;
   kind: McpCapabilityKind;
   name: string;
 } {
-  const match = id.match(/^mcp:([^:]+):(tool|resource|prompt):(.+)$/);
+  const normalized = normalizeMcpCapabilityId(id);
+  const match = normalized.match(/^mcp:([^:]+):(tool|resource|prompt):(.+)$/);
   if (!match?.[1] || !match[2] || !match[3]) {
     throw new Error(`Invalid MCP capability id: ${id}`);
   }

@@ -45,23 +45,52 @@ describe('MCP retrieval tools', () => {
     const emptyQueryOutput = await toolMcpSearch({ query: '', server: fixture.serverId, kind: 'tool' }, ctx);
     expect(emptyQueryOutput).toContain(fixture.toolId);
 
+    const toolIdWithoutScheme = fixture.toolId.replace(/^mcp:/, '');
+    const resourceIdWithoutScheme = fixture.resourceId.replace(/^mcp:/, '');
+    const promptIdWithoutScheme = fixture.promptId.replace(/^mcp:/, '');
+
     const describeOutput = await toolMcpDescribe({ id: fixture.toolId }, ctx);
     expect(describeOutput).toContain('Retrieval result for mcp_describe');
     expect(describeOutput).toContain('Echo Tool');
     expect(describeOutput).toContain(fixture.serverId);
+
+    const describeWithoutSchemeOutput = await toolMcpDescribe({ id: toolIdWithoutScheme }, ctx);
+    expect(describeWithoutSchemeOutput).toContain('Retrieval result for mcp_describe');
+    expect(describeWithoutSchemeOutput).toContain(`Described MCP capability ${fixture.toolId}.`);
+    expect(describeWithoutSchemeOutput).toContain(fixture.toolId);
+    expect(describeWithoutSchemeOutput).not.toContain(`Described MCP capability ${toolIdWithoutScheme}.`);
 
     const callOutput = await toolMcpCall({ id: fixture.toolId, args: { text: 'hello', mode: 'demo' } }, ctx);
     expect(callOutput).toContain('Retrieval result for mcp_call');
     expect(callOutput).toContain('echo:hello');
     expect(callOutput).toContain('"mode":"demo"');
 
+    const callWithoutSchemeOutput = await toolMcpCall({ id: toolIdWithoutScheme, args: { text: 'legacy', mode: 'demo' } }, ctx);
+    expect(callWithoutSchemeOutput).toContain('Retrieval result for mcp_call');
+    expect(callWithoutSchemeOutput).toContain(`Executed MCP tool ${fixture.toolId}.`);
+    expect(callWithoutSchemeOutput).toContain('echo:legacy');
+    expect(callWithoutSchemeOutput).toContain(fixture.toolId);
+    expect(callWithoutSchemeOutput).not.toContain(`Executed MCP tool ${toolIdWithoutScheme}.`);
+
     const readOutput = await toolMcpReadResource({ id: fixture.resourceId }, ctx);
     expect(readOutput).toContain('Retrieval result for mcp_read_resource');
     expect(readOutput).toContain('resource:memory://guide');
 
+    const readWithoutSchemeOutput = await toolMcpReadResource({ id: resourceIdWithoutScheme }, ctx);
+    expect(readWithoutSchemeOutput).toContain('Retrieval result for mcp_read_resource');
+    expect(readWithoutSchemeOutput).toContain(`Read MCP resource ${fixture.resourceId}.`);
+    expect(readWithoutSchemeOutput).toContain('resource:memory://guide');
+    expect(readWithoutSchemeOutput).not.toContain(`Read MCP resource ${resourceIdWithoutScheme}.`);
+
     const promptOutput = await toolMcpGetPrompt({ id: fixture.promptId, args: { topic: 'test' } }, ctx);
     expect(promptOutput).toContain('Retrieval result for mcp_get_prompt');
     expect(promptOutput).toContain('prompt:draft_prompt:test');
+
+    const promptWithoutSchemeOutput = await toolMcpGetPrompt({ id: promptIdWithoutScheme, args: { topic: 'legacy' } }, ctx);
+    expect(promptWithoutSchemeOutput).toContain('Retrieval result for mcp_get_prompt');
+    expect(promptWithoutSchemeOutput).toContain(`Retrieved MCP prompt ${fixture.promptId}.`);
+    expect(promptWithoutSchemeOutput).toContain('prompt:draft_prompt:legacy');
+    expect(promptWithoutSchemeOutput).not.toContain(`Retrieved MCP prompt ${promptIdWithoutScheme}.`);
 
     await runtime.dispose();
   });

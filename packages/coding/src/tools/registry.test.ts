@@ -117,6 +117,23 @@ describe('tool registry', () => {
     expect(getRequiredToolParams('insert_after_anchor')).toEqual(['path', 'anchor', 'content']);
   });
 
+  it('keeps MCP tool descriptions on the canonical capability id format', () => {
+    const descriptions = [
+      'mcp_search',
+      'mcp_call',
+      'mcp_read_resource',
+      'mcp_get_prompt',
+    ]
+      .map((name) => getToolDefinition(name)?.description ?? '')
+      .join('\n');
+
+    expect(descriptions).toContain('mcp:<server-id>:<kind>:<capability-name>');
+    expect(descriptions).toContain('including the `mcp:` prefix');
+    expect(descriptions).not.toContain('server.name');
+    expect(descriptions).not.toContain('server.tool');
+    expect(descriptions).not.toContain('mcp://<serverId>');
+  });
+
   it('supports same-name override and restore via disposer', async () => {
     const originalHandler = getTool('read');
     const dispose = registerTool({

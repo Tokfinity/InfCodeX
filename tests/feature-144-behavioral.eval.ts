@@ -291,7 +291,7 @@ const D1_CAPABILITY_BLOCK = [
   'Use `mcp_search` to inspect input schemas; `mcp_call` to invoke.',
   '',
   '### web-tools | status=ready',
-  '- `mcp:web-tools.fetch_weather` (tool) — get current weather for a city',
+  '- `mcp:web-tools:tool:fetch_weather` (tool) — get current weather for a city',
   '',
   '## Project Agents',
   'Project rules:',
@@ -311,8 +311,8 @@ const D2_CAPABILITY_BLOCK = [
   'When a built-in tool fails or is unavailable, check whether an MCP tool below can accomplish the same goal.',
   '',
   '### web-tools | status=ready',
-  '- `mcp:web-tools.fetch_weather` (tool) — Get current weather for a city by name',
-  '- `mcp:web-tools.search_news` (tool) — Free-text search of recent news headlines',
+  '- `mcp:web-tools:tool:fetch_weather` (tool) — Get current weather for a city by name',
+  '- `mcp:web-tools:tool:search_news` (tool) — Free-text search of recent news headlines',
 ].join('\n');
 
 const D3_COMPLIANCE_MARKER = '// COMPLIANCE_MARKER_F144';
@@ -552,8 +552,8 @@ async function buildSaPrompt(
                   'When a built-in tool fails or is unavailable, check whether an MCP tool below can accomplish the same goal.',
                   '',
                   '### web-tools | status=ready',
-                  '- `mcp:web-tools.fetch_weather` (tool) — Get current weather for a city by name',
-                  '- `mcp:web-tools.search_news` (tool) — Free-text search of recent news headlines',
+                  '- `mcp:web-tools:tool:fetch_weather` (tool) — Get current weather for a city by name',
+                  '- `mcp:web-tools:tool:search_news` (tool) — Free-text search of recent news headlines',
                 ].join('\n')
               : undefined,
         } as unknown as KodaXOptions['extensionRuntime'])

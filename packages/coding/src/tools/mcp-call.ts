@@ -1,3 +1,4 @@
+import { normalizeMcpCapabilityId } from '@kodax-ai/agent';
 import type { KodaXToolExecutionContext } from '../types.js';
 import { readOptionalString } from './internal.js';
 import { finalizeRetrievalResult } from './retrieval.js';
@@ -29,28 +30,29 @@ export async function toolMcpCall(
     if (!id) {
       throw new Error('id is required.');
     }
+    const capabilityId = normalizeMcpCapabilityId(id);
 
     const args = input.args && typeof input.args === 'object' && !Array.isArray(input.args)
       ? input.args as Record<string, unknown>
       : {};
 
-    const result = await ctx.extensionRuntime.executeCapability('mcp', id, args);
+    const result = await ctx.extensionRuntime.executeCapability('mcp', capabilityId, args);
     return finalizeRetrievalResult({
       tool: 'mcp_call',
       scope: 'remote',
       trust: 'provider',
       freshness: 'unknown',
       provider: 'mcp',
-      summary: `Executed MCP tool ${id}.`,
+      summary: `Executed MCP tool ${capabilityId}.`,
       content: stringifyValue(result.content) ?? stringifyValue(result.structuredContent),
       items: [],
       artifacts: [{
         kind: 'provider',
-        label: id,
-        value: id,
+        label: capabilityId,
+        value: capabilityId,
       }],
       metadata: {
-        capabilityId: id,
+        capabilityId,
         capabilityKind: result.kind,
         ...(result.metadata ?? {}),
       },

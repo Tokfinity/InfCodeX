@@ -117,7 +117,7 @@ await manager.dispose();
 | `getCatalog(id, { forceRefresh? })` | `Promise<McpServerCatalog>` | Full catalog: `items` (lightweight) + `descriptors` (full) for tools, resources, and prompts. |
 | `dispose()` | `Promise<void>` | Dispose all runtimes. After this, build a fresh `McpManager` to reuse. |
 | `provider()` | `McpCapabilityProvider` | Escape hatch — the underlying capability-provider for advanced uses. |
-| `execute(id, input)` | `Promise<CapabilityResult>` | Invoke a tool by capability id (`mcp://<serverId>/tool/<name>`). |
+| `execute(id, input)` | `Promise<CapabilityResult>` | Invoke a tool by capability id (`mcp:<serverId>:tool:<name>`). |
 | `describe(id)` | `Promise<McpCapabilityDescriptor \| undefined>` | Resolve a single descriptor by capability id. |
 | `search(query, options?)` | `Promise<readonly McpCatalogItem[]>` | Cross-server catalog search. |
 | `read(id, options?)` | `Promise<CapabilityResult>` | Read a resource by capability id. |

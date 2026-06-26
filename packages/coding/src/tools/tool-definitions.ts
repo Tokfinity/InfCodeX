@@ -6,6 +6,7 @@
  * accessors (registry.ts) consume this array. No back-edges -> no cycle.
  */
 import type { KodaXToolDefinition } from '@kodax-ai/llm';
+import { normalizeMcpCapabilityId, parseMcpCapabilityId } from '@kodax-ai/agent';
 import type { LocalToolDefinition } from './types.js';
 import {
   defaultToClassifierInput,
@@ -98,6 +99,19 @@ function stageArtifactPreview(artifactJson: string | undefined): string {
     return `${name}@${version}`;
   } catch {
     return '<unparseable>';
+  }
+}
+
+function mcpCapabilityPreview(capabilityId: string | undefined, args: unknown): string {
+  if (!capabilityId) {
+    return mcpToClassifierInput('<no-server>', '<no-tool>', args);
+  }
+
+  try {
+    const { serverId, kind, name } = parseMcpCapabilityId(normalizeMcpCapabilityId(capabilityId));
+    return mcpToClassifierInput(serverId, `${kind}:${name}`, args);
+  } catch {
+    return mcpToClassifierInput(capabilityId, '<invalid-id>', args);
   }
 }
 
@@ -636,7 +650,7 @@ export const BUILTIN_TOOL_DEFINITIONS: LocalToolDefinition[] = [
   },
   {
     name: 'mcp_search',
-    description: 'Search active MCP tools, resources, and prompts through the shared capability runtime. The KodaX MCP surface is a meta-tool layer: capabilities live on remote MCP servers, and `mcp_search` is the discovery entry point. Returns capability ids in `server.name` form. Batch-call `mcp_describe` on the ids you actually plan to use rather than describing every result — describing capabilities you will not call wastes a turn. The `kind` filter (`tool` / `resource` / `prompt`) narrows the family: tools are the only family that can mutate remote state via `mcp_call`; resources are reads via `mcp_read_resource`; prompts are templates via `mcp_get_prompt`. The `server` filter scopes to a specific MCP server when multiple are connected.',
+    description: 'Search active MCP tools, resources, and prompts through the shared capability runtime. The KodaX MCP surface is a meta-tool layer: capabilities live on remote MCP servers, and `mcp_search` is the discovery entry point. Returns capability ids in the exact `mcp:<server-id>:<kind>:<capability-name>` format, for example `mcp:git-nexus:tool:list_branches`. Copy the Locator/ID from `mcp_search` exactly, including the `mcp:` prefix; do not rebuild or shorten it. Batch-call `mcp_describe` on the ids you actually plan to use rather than describing every result — describing capabilities you will not call wastes a turn. The `kind` filter (`tool` / `resource` / `prompt`) narrows the family: tools are the only family that can mutate remote state via `mcp_call`; resources are reads via `mcp_read_resource`; prompts are templates via `mcp_get_prompt`. The `server` filter scopes to a specific MCP server when multiple are connected.',
     input_schema: {
       type: 'object',
       properties: {
@@ -672,7 +686,7 @@ export const BUILTIN_TOOL_DEFINITIONS: LocalToolDefinition[] = [
   },
   {
     name: 'mcp_call',
-    description: 'Invoke an MCP tool capability by id with structured arguments. This is the ONLY side-effecting MCP entry point — the underlying capability can mutate remote state (file writes, database updates, API calls). Treat each `mcp_call` with the same care as a `bash` command against an unfamiliar shell: confirm the capability is what you intend by `mcp_describe` first when uncertain. The `id` is the `server.name` form from `mcp_search`; `args` must match the JSON Schema returned by `mcp_describe`. For pure reads use `mcp_read_resource` (no mutation) or `mcp_get_prompt` (template retrieval) instead — `mcp_call` is overkill when the goal is just reading.',
+    description: 'Invoke an MCP tool capability by id with structured arguments. This is the ONLY side-effecting MCP entry point — the underlying capability can mutate remote state (file writes, database updates, API calls). Treat each `mcp_call` with the same care as a `bash` command against an unfamiliar shell: confirm the capability is what you intend by `mcp_describe` first when uncertain. The `id` must be the exact `mcp:<server-id>:tool:<tool-name>` id from `mcp_search`, for example `mcp:git-nexus:tool:list_branches`; copy it exactly, including the `mcp:` prefix. `args` must match the JSON Schema returned by `mcp_describe`. For pure reads use `mcp_read_resource` (no mutation) or `mcp_get_prompt` (template retrieval) instead — `mcp_call` is overkill when the goal is just reading.',
     input_schema: {
       type: 'object',
       properties: {
@@ -689,18 +703,12 @@ export const BUILTIN_TOOL_DEFINITIONS: LocalToolDefinition[] = [
     toClassifierInput: (input) => {
       const i = input as { id?: string; args?: unknown };
       const capability = typeof i?.id === 'string' ? i.id : '<no-id>';
-      // Capability id (from mcp_search) is the "server.tool" form already.
-      // Split on the first '.' to recover the real server / tool pair so the
-      // helper produces `MCP[server.tool]: …` (not `MCP[server.tool.call]`).
-      const dotIdx = capability.indexOf('.');
-      const server = dotIdx > 0 ? capability.slice(0, dotIdx) : capability;
-      const tool = dotIdx > 0 ? capability.slice(dotIdx + 1) : '<no-tool>';
-      return mcpToClassifierInput(server, tool, i?.args ?? {});
+      return mcpCapabilityPreview(capability, i?.args ?? {});
     },
   },
   {
     name: 'mcp_read_resource',
-    description: 'Read an MCP resource capability by id. Resources are server-published read-only data sources — file contents, query results, config snapshots — and `mcp_read_resource` retrieves them without invoking remote code. Unlike `mcp_call`, this entry point cannot mutate remote state, so it is safe to use during plan-mode preview. The `id` is the `server.name` form from `mcp_search` (with `kind="resource"` filter). Use `mcp_call` instead when the capability is registered as a tool (mutation-capable), and `mcp_get_prompt` when it is a templated prompt.',
+    description: 'Read an MCP resource capability by id. Resources are server-published read-only data sources — file contents, query results, config snapshots — and `mcp_read_resource` retrieves them without invoking remote code. Unlike `mcp_call`, this entry point cannot mutate remote state, so it is safe to use during plan-mode preview. The `id` must be the exact `mcp:<server-id>:resource:<resource-name>` id from `mcp_search` (with `kind="resource"` filter); copy it exactly, including the `mcp:` prefix. Use `mcp_call` instead when the capability is registered as a tool (mutation-capable), and `mcp_get_prompt` when it is a templated prompt.',
     input_schema: {
       type: 'object',
       properties: {
@@ -719,7 +727,7 @@ export const BUILTIN_TOOL_DEFINITIONS: LocalToolDefinition[] = [
   },
   {
     name: 'mcp_get_prompt',
-    description: 'Retrieve an MCP prompt capability by id, expanding any template arguments. Prompts are server-published reusable text templates (system prompt snippets, structured query templates, task framings); `mcp_get_prompt` returns the expanded text after substituting `args`. Read-only with respect to remote state — the server resolves the template but does not run code. The `id` is the `server.name` form from `mcp_search` (with `kind="prompt"` filter); `args` must match the prompt template variables (which `mcp_describe` will list).',
+    description: 'Retrieve an MCP prompt capability by id, expanding any template arguments. Prompts are server-published reusable text templates (system prompt snippets, structured query templates, task framings); `mcp_get_prompt` returns the expanded text after substituting `args`. Read-only with respect to remote state — the server resolves the template but does not run code. The `id` must be the exact `mcp:<server-id>:prompt:<prompt-name>` id from `mcp_search` (with `kind="prompt"` filter); copy it exactly, including the `mcp:` prefix. `args` must match the prompt template variables (which `mcp_describe` will list).',
     input_schema: {
       type: 'object',
       properties: {

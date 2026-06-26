@@ -94,6 +94,7 @@ export {
   // catalog.js
   defaultMcpCacheDir,
   createMcpCapabilityId,
+  normalizeMcpCapabilityId,
   parseMcpCapabilityId,
   searchMcpCatalog,
   getMcpCachePaths,

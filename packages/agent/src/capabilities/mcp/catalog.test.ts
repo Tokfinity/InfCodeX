@@ -1,5 +1,45 @@
 import { describe, expect, it } from 'vitest';
-import { sanitizeMcpIcons } from './catalog.js';
+import {
+  createMcpCapabilityId,
+  normalizeMcpCapabilityId,
+  parseMcpCapabilityId,
+  sanitizeMcpIcons,
+} from './catalog.js';
+
+describe('MCP capability ids', () => {
+  it('creates and parses canonical mcp:<server>:<kind>:<name> ids', () => {
+    const id = createMcpCapabilityId('git-nexus', 'tool', 'list_branches');
+
+    expect(id).toBe('mcp:git-nexus:tool:list_branches');
+    expect(parseMcpCapabilityId(id)).toEqual({
+      serverId: 'git-nexus',
+      kind: 'tool',
+      name: 'list_branches',
+    });
+  });
+
+  it('normalizes the common missing-scheme form from model tool calls', () => {
+    const id = 'git-nexus:tool:list_branches';
+
+    expect(normalizeMcpCapabilityId(id)).toBe('mcp:git-nexus:tool:list_branches');
+    expect(parseMcpCapabilityId(id)).toEqual({
+      serverId: 'git-nexus',
+      kind: 'tool',
+      name: 'list_branches',
+    });
+  });
+
+  it('normalizes legacy mcp:// URI capability ids', () => {
+    const id = 'mcp://git-nexus/resource/memory%3A%2F%2Fguide';
+
+    expect(normalizeMcpCapabilityId(id)).toBe('mcp:git-nexus:resource:memory%3A%2F%2Fguide');
+    expect(parseMcpCapabilityId(id)).toEqual({
+      serverId: 'git-nexus',
+      kind: 'resource',
+      name: 'memory://guide',
+    });
+  });
+});
 
 describe('sanitizeMcpIcons', () => {
   it('keeps http(s) and data URIs and normalizes optional fields', () => {

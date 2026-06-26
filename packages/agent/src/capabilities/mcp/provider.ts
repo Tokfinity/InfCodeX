@@ -17,6 +17,7 @@ import type {
 import type { McpServerConfig, McpServersConfig } from './config.js';
 import {
   defaultMcpCacheDir,
+  normalizeMcpCapabilityId,
   parseMcpCapabilityId,
   searchMcpCatalog,
   type McpCatalogItem,
@@ -123,18 +124,20 @@ export class McpCapabilityProvider implements CapabilityProvider {
   }
 
   async describe(id: string): Promise<unknown> {
-    const { serverId } = parseMcpCapabilityId(id);
+    const normalizedId = normalizeMcpCapabilityId(id);
+    const { serverId } = parseMcpCapabilityId(normalizedId);
     const runtime = this.requireRuntime(serverId);
-    return runtime.describeCapability(id);
+    return runtime.describeCapability(normalizedId);
   }
 
   async execute(
     id: string,
     input: Record<string, unknown>,
   ): Promise<CapabilityResult> {
-    const { serverId, kind, name } = parseMcpCapabilityId(id);
+    const normalizedId = normalizeMcpCapabilityId(id);
+    const { serverId, kind, name } = parseMcpCapabilityId(normalizedId);
     if (kind !== 'tool') {
-      throw new Error(`Capability ${id} is not an MCP tool.`);
+      throw new Error(`Capability ${normalizedId} is not an MCP tool.`);
     }
     const runtime = this.requireRuntime(serverId);
     const result = await runtime.callTool(name, input);
@@ -144,12 +147,12 @@ export class McpCapabilityProvider implements CapabilityProvider {
       structuredContent: result.structuredContent,
       artifacts: [{
         kind: 'provider',
-        label: id,
-        value: id,
+        label: normalizedId,
+        value: normalizedId,
       }],
       metadata: {
         providerId: this.id,
-        capabilityId: id,
+        capabilityId: normalizedId,
         serverId,
         ...(result.metadata ?? {}),
       },
@@ -160,9 +163,10 @@ export class McpCapabilityProvider implements CapabilityProvider {
     id: string,
     options: Record<string, unknown> = {},
   ): Promise<CapabilityResult> {
-    const { serverId, kind, name } = parseMcpCapabilityId(id);
+    const normalizedId = normalizeMcpCapabilityId(id);
+    const { serverId, kind, name } = parseMcpCapabilityId(normalizedId);
     if (kind !== 'resource') {
-      throw new Error(`Capability ${id} is not an MCP resource.`);
+      throw new Error(`Capability ${normalizedId} is not an MCP resource.`);
     }
     const runtime = this.requireRuntime(serverId);
     const result = await runtime.readResource(name, options);
@@ -172,12 +176,12 @@ export class McpCapabilityProvider implements CapabilityProvider {
       structuredContent: result.structuredContent,
       artifacts: [{
         kind: 'provider',
-        label: id,
-        value: id,
+        label: normalizedId,
+        value: normalizedId,
       }],
       metadata: {
         providerId: this.id,
-        capabilityId: id,
+        capabilityId: normalizedId,
         serverId,
         ...(result.metadata ?? {}),
       },
@@ -188,9 +192,10 @@ export class McpCapabilityProvider implements CapabilityProvider {
     id: string,
     args: Record<string, unknown> = {},
   ): Promise<unknown> {
-    const { serverId, kind, name } = parseMcpCapabilityId(id);
+    const normalizedId = normalizeMcpCapabilityId(id);
+    const { serverId, kind, name } = parseMcpCapabilityId(normalizedId);
     if (kind !== 'prompt') {
-      throw new Error(`Capability ${id} is not an MCP prompt.`);
+      throw new Error(`Capability ${normalizedId} is not an MCP prompt.`);
     }
     const runtime = this.requireRuntime(serverId);
     return runtime.getPrompt(name, args);
@@ -204,6 +209,7 @@ export class McpCapabilityProvider implements CapabilityProvider {
     const diagnostics = this.listServerDiagnostics();
     const lines = [
       '## MCP Capability Provider',
+      'Capability ids use the exact format `mcp:<server-id>:<kind>:<capability-name>`; copy ids from `mcp_search` exactly, including the `mcp:` prefix.',
       'Use `mcp_describe` to inspect input schemas, then `mcp_call` to invoke. Use `mcp_read_resource` for resources.',
       'When a built-in tool fails or is unavailable, check whether an MCP tool below can accomplish the same goal.',
       '',

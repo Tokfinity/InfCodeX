@@ -932,6 +932,7 @@ export {
   McpExpiredSessionError,
   defaultMcpCacheDir,
   createMcpCapabilityId,
+  normalizeMcpCapabilityId,
   parseMcpCapabilityId,
   searchMcpCatalog,
   getMcpCachePaths,

@@ -1,3 +1,4 @@
+import { normalizeMcpCapabilityId } from '@kodax-ai/agent';
 import type { KodaXToolExecutionContext } from '../types.js';
 import { readOptionalString } from './internal.js';
 import { finalizeRetrievalResult } from './retrieval.js';
@@ -29,10 +30,11 @@ export async function toolMcpDescribe(
     if (!id) {
       throw new Error('id is required.');
     }
+    const capabilityId = normalizeMcpCapabilityId(id);
 
-    const descriptor = await ctx.extensionRuntime.describeCapability('mcp', id) as Record<string, unknown> | undefined;
+    const descriptor = await ctx.extensionRuntime.describeCapability('mcp', capabilityId) as Record<string, unknown> | undefined;
     if (!descriptor) {
-      throw new Error(`Unknown MCP capability: ${id}`);
+      throw new Error(`Unknown MCP capability: ${capabilityId}`);
     }
 
     const content = [
@@ -59,16 +61,16 @@ export async function toolMcpDescribe(
       trust: 'provider',
       freshness: 'unknown',
       provider: 'mcp',
-      summary: `Described MCP capability ${id}.`,
+      summary: `Described MCP capability ${capabilityId}.`,
       content,
       items: [],
       artifacts: [{
         kind: 'provider',
-        label: String(descriptor.name ?? descriptor.id ?? id),
-        value: id,
+        label: String(descriptor.name ?? descriptor.id ?? capabilityId),
+        value: capabilityId,
       }],
       metadata: {
-        capabilityId: id,
+        capabilityId,
         kind: descriptor.kind,
         serverId: descriptor.serverId,
       },
