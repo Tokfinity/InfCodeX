@@ -69,6 +69,10 @@ export function createMcpCapabilityId(
   return `mcp:${safeIdComponent(serverId)}:${kind}:${safeIdComponent(name)}`;
 }
 
+/**
+ * Applied defensively at handler, provider, and parse boundaries.
+ * Keep this idempotent so stacked normalization remains harmless.
+ */
 export function normalizeMcpCapabilityId(id: string): string {
   const trimmed = id.trim();
   const canonical = trimmed.match(/^mcp:([^:]+):(tool|resource|prompt):(.+)$/);
@@ -76,7 +80,9 @@ export function normalizeMcpCapabilityId(id: string): string {
     return trimmed;
   }
 
-  const withoutScheme = trimmed.match(/^([^:]+):(tool|resource|prompt):(.+)$/);
+  const withoutScheme = !trimmed.startsWith('mcp:')
+    ? trimmed.match(/^([^:]+):(tool|resource|prompt):(.+)$/)
+    : undefined;
   if (withoutScheme?.[1] && withoutScheme[2] && withoutScheme[3]) {
     return `mcp:${withoutScheme[1]}:${withoutScheme[2]}:${withoutScheme[3]}`;
   }

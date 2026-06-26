@@ -39,6 +39,45 @@ describe('MCP capability ids', () => {
       name: 'memory://guide',
     });
   });
+
+  it('preserves embedded colons in the capability name segment', () => {
+    const rawColonId = 'mcp:srv:tool:tool:read';
+    const encodedColonId = createMcpCapabilityId('srv', 'tool', 'tool:read');
+
+    expect(normalizeMcpCapabilityId(rawColonId)).toBe(rawColonId);
+    expect(parseMcpCapabilityId(rawColonId)).toEqual({
+      serverId: 'srv',
+      kind: 'tool',
+      name: 'tool:read',
+    });
+    expect(encodedColonId).toBe('mcp:srv:tool:tool%3Aread');
+    expect(parseMcpCapabilityId(encodedColonId).name).toBe('tool:read');
+  });
+
+  it('does not reinterpret malformed mcp-prefixed short ids as server ids', () => {
+    const malformed = 'mcp:tool:something';
+
+    expect(normalizeMcpCapabilityId(malformed)).toBe(malformed);
+    expect(() => parseMcpCapabilityId(malformed)).toThrow(
+      'Invalid MCP capability id: mcp:tool:something',
+    );
+  });
+
+  it('normalizes idempotently across accepted input shapes', () => {
+    const ids = [
+      'mcp:git-nexus:tool:list_branches',
+      'git-nexus:tool:list_branches',
+      'mcp://git-nexus/resource/memory%3A%2F%2Fguide',
+      'mcp:srv:tool:tool:read',
+      '  git-nexus:tool:x  ',
+      'mcp:tool:something',
+    ];
+
+    for (const id of ids) {
+      const once = normalizeMcpCapabilityId(id);
+      expect(normalizeMcpCapabilityId(once)).toBe(once);
+    }
+  });
 });
 
 describe('sanitizeMcpIcons', () => {
