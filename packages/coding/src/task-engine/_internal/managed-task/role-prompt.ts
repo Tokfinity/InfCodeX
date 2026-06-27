@@ -161,16 +161,12 @@ export function createRolePrompt(
     ? rolePromptContext.capabilityContextBlock
     : undefined;
 
-  // FEATURE_143 (v0.7.36) — `plan.promptOverlay` ("routing notes":
-  // task-family guidance, work intent, brainstorm directives,
-  // provider-policy notes, explicit-reason trail). v0.7.26 FEATURE_084
-  // stitched this onto the user prompt head; the v0.7.36 fix routes
-  // it through the system prompt instead so workers read it as
-  // platform truth, not user input. SA path already injects via
-  // `capability-sections.ts`; this is the AMA parity.
-  const promptOverlaySection = rolePromptContext?.promptOverlay?.trim()
-    ? rolePromptContext.promptOverlay.trim()
-    : undefined;
+  // Harness LLM-judgment refactor (H3): the Worker no longer receives the
+  // router-injected `plan.promptOverlay` (EXECUTION_MODE / HARNESS_PROFILE
+  // overlays + [Task Routing] classification dump). Those are replaced by the
+  // static EXECUTION GUIDANCE block in `buildWorkerInstructions`, which the
+  // Worker self-applies. 5-alias panel confirmed behavioural parity + a
+  // shorter prompt. See docs/harness-llm-judgment-design.md §2.1/§2.3.
 
   // FEATURE_125 v0.7.41 — "Other active KodaX sessions" block. Rendered
   // by the runner-driven adapter once per LLM round (sibling state can
@@ -311,7 +307,6 @@ export function createRolePrompt(
         // the legacy roles get.
         workspaceSection,
         capabilityContextSection,
-        promptOverlaySection,
         teamModeSection,
         decisionSummary,
         originalTaskSection,

@@ -234,6 +234,23 @@ export function buildWorkerInstructions(
     '- If mid fan-out you decide to dispatch another child, add the matching todo before the new dispatch.',
   ].join('\n');
 
+  // FEATURE_193 follow-up (harness LLM-judgment refactor, H3): static
+  // execution guidance replacing the router-injected EXECUTION_MODE /
+  // HARNESS_PROFILE overlays. The Worker self-judges which kind of work it is
+  // doing instead of being told by a keyword router. 5-alias panel
+  // (zhipu/glm52 + kimi + mimo/v25pro + mmx/m3 + ds/v4pro × 5 case × 3 run)
+  // confirmed behavioural parity with the old overlay injection + a shorter
+  // prompt. See docs/harness-llm-judgment-design.md §2.1 (B-class migration).
+  const executionGuidance = [
+    'EXECUTION GUIDANCE (match your approach to the kind of work — judge which fits):',
+    '- After you make a change, check the result against what was actually asked before you finalize. Confirm the change does what the request wanted, backed by evidence (a test run, a re-read of the edited region) rather than confidence alone — because a change that looks right but was never verified is how silent regressions ship.',
+    '- When you are reviewing code or a pull request: report only high-confidence issues that materially affect correctness, reliability, security, or merge-readiness. Do not list naming, formatting, or style preferences as findings — padding a review with nits buries the issues that matter. Lead with the must-fix items, then optional improvements, and for each issue state the concrete consequence it causes.',
+    '- When you are doing a broad audit: cover correctness, security, performance, and maintainability together, and keep issues you have confirmed separate from lower-confidence risks so the reader can tell which is which.',
+    '- When you are investigating a bug or an unknown: isolate the root cause and validate your assumptions with concrete evidence — a reproduction, a targeted check — before making broad changes, because a fix applied before the cause is understood usually treats a symptom.',
+    '- When the task is design or planning work: reason through architecture, constraints, sequencing, and risks before writing code.',
+    '- When the request is genuinely ambiguous: frame the options briefly and make the path you chose explicit before any irreversible edit, so the user can redirect before the cost is sunk.',
+  ].join('\n');
+
   const handoffRules = [
     'TERMINATION:',
     '- When all non-cancelled plan items are `completed` AND every dispatched child has produced its matching `<task-completed>` block, end your turn with a brief text-only summary covering what you did, what changed (files / behavior), and any caveats. No tool call needed to terminate — the absence of a `tool_use` block on your final assistant message IS the terminal signal.',
@@ -261,6 +278,7 @@ export function buildWorkerInstructions(
     dispatchRules,
     childSteeringRules,
     fanOutPlanGranularity,
+    executionGuidance,
     handoffRules,
   ]
     .filter((part) => part.length > 0)
