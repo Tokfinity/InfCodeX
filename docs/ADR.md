@@ -2556,3 +2556,78 @@ V1-multi-harness vestige with no industry analogue.
 - The harness-prompt variants (`HARNESS_PROFILE_OVERLAYS` H0/H1/H2) are
   LLM-facing and remain pending an EVAL_GUIDELINES 5-alias panel before
   removal — they are NOT covered by this ADR's code changes.
+
+---
+
+## ADR-043: Harness via Static LLM Judgment — Worker Self-Judges from Static Guidance + Verifier Fires on Objective Metrics (retire router→harness prompt injection for the Worker)
+
+**Status**: Accepted
+
+**Context**: KodaX classified every request with a keyword heuristic
+(`inferIntentGate` / `inferTaskSignal`) into a `harnessProfile` (H0/H1/H2) and a
+`recommendedMode`, then injected *different* prompt overlays
+(`HARNESS_PROFILE_OVERLAYS` + `EXECUTION_MODE_OVERLAYS` + a `[Task Routing]`
+classification dump) into the Worker's system prompt per the prediction. This
+router-predicts-then-tells-the-LLM shape violated KodaX's own ADR-033 ("the LLM
+is a colleague making a judgment, not a program looking up a table"). The
+Sidecar Verifier (FEATURE_196) also fired on a coarse "any tool use → verify"
+gate, wasting tokens on trivial work. **Industry comparison** (verified against
+Claude Code + Codex reference trees): neither has a router or complexity
+pre-classifier — "when to plan / dispatch / review" is static guidance the LLM
+self-applies; neither gates verification on a per-task complexity classifier.
+
+**Decision**:
+
+1. **Verifier activation is rule-based on objective execution metrics, not LLM
+   self-report** (H2). `composeGateDecision` reads `mutationTracker`
+   (writes / estimated lines / files + a new `riskyShellOps` count), `roundRef`
+   (rounds), and `todoStore` (plan committed). It fires on substantial / risky
+   work (risky shell op, a committed Todolist, > `ROUNDS_VERIFY_THRESHOLD`
+   rounds, multi-file, or > `TRIVIAL_LINES` single-file) and skips provably
+   trivial observed work (one small edit, or a grounded read-only lookup). LLM
+   self-report was rejected: a model that has finished a task does not
+   volunteer "I didn't finish / please review me". The conversational floor +
+   default-fire are preserved, so the F184 intent-vs-action floor (a text-only
+   claim with no tool evidence) still fires.
+
+2. **The Worker self-judges the kind of work from static EXECUTION GUIDANCE, not
+   from a router-injected overlay** (H3). `buildWorkerInstructions` carries a
+   static block (execute-then-self-check / review-high-signal / broad-audit /
+   investigation-root-cause / planning / ambiguity), written ADR-033-style as
+   informal use-cases, not RULE A/B/C labels. The Worker role-prompt no longer
+   splices `promptOverlaySection`. **Validated** by a 5-alias panel
+   (`zhipu/glm52` + `kimi` + `mimo/v25pro` + `mmx/m3` + `ds/v4pro`) × 5 case × 2
+   variant × 3 run, judged by the orchestrating Claude reading raw outputs (not
+   regex): behavioural parity with the old overlay across no-ceremony /
+   plan-first / review / investigation / dispatch, and a shorter prompt
+   (−21…−590 chars). Driver kept as a permanent regression sweep
+   (`tests/h3-static-guidance-{pilot,panel}.eval.ts`).
+
+3. **The dead LLM-router cluster is deleted** (−534 LoC): `routeTaskWithLLM` and
+   its whole transitive set went unreachable when FEATURE_193 switched
+   `createReasoningPlan` to `buildFallbackRoutingDecision`. `shouldUseModelRouter`
+   was renamed `requiresRoutingHeuristics` — it never selected an LLM router.
+
+**Scope boundaries (deliberately NOT changed)**:
+
+- **The overlay machinery (`buildPromptOverlay` / `HARNESS_PROFILE_OVERLAYS` /
+  `EXECUTION_MODE_OVERLAYS`) stays** — it is still live for the SA / direct path
+  (`capability-sections.ts` `prompt-overlay` section). H3 only removed the
+  *Worker's* consumption (`AMA_OWNED_SECTION_IDS` already excluded it from the
+  capability block, so there was no double-injection). Migrating the direct path
+  is out of scope (it handles trivial H0 tasks).
+- **`harnessProfile` / `KodaXTaskRoutingDecision` stay** — they remain live
+  decision fields (repo-intelligence gate, payload, checkpoint, budget, UI). A
+  rename to `workerChain` / `repoContextNeed` is high-churn (90–237 refs across
+  3 packages) and deferred; a non-`harnessProfile` repo-context gate is the
+  prerequisite for any future removal.
+
+**Consequences**:
+
+- The Worker's behaviour is now driven by static principles + its own judgment,
+  matching Claude Code / Codex and KodaX's ADR-033 stance.
+- Verifier activation is objective and explainable; trivial tasks skip
+  verification, substantial / risky work still fires.
+- The metric gate's `hasPlan` signal depends on Todolist generation, which the
+  static guidance must not regress — the H3 panel includes Todolist-generation
+  rate as a first-class metric (it did not regress).
