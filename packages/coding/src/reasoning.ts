@@ -1408,19 +1408,15 @@ function isAmaFanoutClassActive(
         && decision.executionPattern === 'checked-direct'
         && decision.primaryTask === 'lookup';
     case 'hypothesis-check':
-      // Issue 124 (v0.7.28): A2 — enable write-side hypothesis fan-out in H2,
-      // where worktree isolation + Evaluator review already exist. H1/H0 stay
-      // closed because they lack the merge-review story.
-      //
-      // Note on harnessProfile timing: at buildAmaControllerDecision time this
-      // is the pre-Scout *routing heuristic prediction*, not the Scout-confirmed
-      // value. The actual runtime gate for write fan-out lives in the
-      // Generator role-prompt (`role-prompt.ts:609` reads decision.harnessProfile
-      // via lazy thunk → post-Scout value). This controller-side check therefore
-      // affects fanout-scheduler signals + tactics array + reasoning artifact
-      // text, not the LLM's actual ability to dispatch write children. When
-      // routing predicts H2 but Scout downgrades to H1, the prompt-side gate
-      // closes write dispatch correctly.
+      // Write-side hypothesis fan-out, originally gated on H2.
+      // ⚠️ INACTIVE post-refactor: `decision.harnessProfile` collapsed to a
+      // constant 'H0_DIRECT' (the V1 Scout tier-confirmation that produced H2
+      // is retired), so this condition is never true and the class never
+      // activates. Its output only fed the (now SA-only) AMA-controller overlay
+      // text + tactics array anyway. Reviving write fan-out should NOT restore
+      // the harness check — it would need an objective gate
+      // (e.g. mutationSurface === 'code' && complexity >= complex &&
+      // needsIndependentQA). Left as-is (inactive) pending that feature call.
       return decision.harnessProfile === 'H2_PLAN_EXECUTE_EVAL'
         && (
           decision.primaryTask === 'bugfix'

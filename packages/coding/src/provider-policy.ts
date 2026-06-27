@@ -350,32 +350,11 @@ export function evaluateProviderPolicy(
     }
   }
 
-  if (hints.harnessProfile === 'H2_PLAN_EXECUTE_EVAL') {
-    if (
-      snapshot.toolCallingFidelity === 'none' ||
-      snapshot.evidenceSupport === 'none'
-    ) {
-      pushIssue(issues, {
-        code: 'plan-execute-eval-limited',
-        severity: 'warn',
-        summary: 'plan-execute-eval routing is constrained on this provider',
-        detail:
-          'H2 routing remains available, but the provider cannot fully preserve execution or evidence semantics for the evaluation step.',
-      });
-    } else if (
-      snapshot.transport === 'cli-bridge' ||
-      snapshot.contextFidelity === 'lossy'
-    ) {
-      pushIssue(issues, {
-        code: 'plan-execute-eval-bridge',
-        severity: 'warn',
-        summary: 'plan-execute-eval routing may lose fidelity on bridge providers',
-        detail:
-          'H2 routing should stay inspectable, but bridge-backed providers can lose context or semantic parity across the planning and evaluation phases.',
-      });
-    }
-  }
-
+  // (Removed) the `harnessProfile === 'H2_PLAN_EXECUTE_EVAL'` provider-policy
+  // warnings: a V1 H2-multi-stage-orchestration check that became unreachable
+  // once `decision.harnessProfile` collapsed to a constant 'H0_DIRECT'. The
+  // still-live provider-evidence protection below keys on taskType/executionMode
+  // instead, independent of any harness tier.
   const needsReliableEvidence =
     hints.evidenceHeavy === true ||
     options.taskType === 'review' ||

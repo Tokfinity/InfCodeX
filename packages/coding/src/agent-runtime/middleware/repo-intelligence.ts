@@ -222,10 +222,14 @@ export async function buildAutoRepoIntelligenceContext(
   const hotPathRepoMode = resolveKodaXHotPathRepoMode(options.context?.repoIntelligenceMode);
 
   const decision = reasoningPlan.decision;
+  // Repo-overview gate. The old `harnessProfile !== 'H0_DIRECT'` clause is
+  // dropped: after the harness-LLM-judgment refactor `decision.harnessProfile`
+  // collapsed to a constant 'H0_DIRECT', so that clause was always false and
+  // contributed nothing. The gate now keys on the still-meaningful signals
+  // (new session / planning task / non-simple complexity).
   const includeRepoOverview =
     isNewSession
     || decision.primaryTask === 'plan'
-    || decision.harnessProfile !== 'H0_DIRECT'
     || decision.complexity !== 'simple';
   const includeChangedScope =
     decision.primaryTask === 'review'
