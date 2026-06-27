@@ -46,24 +46,33 @@ import type { VerdictRecorder } from './types.js';
 // =============================================================================
 
 /**
- * File-mutating tool names. MUST mirror the tool registry's
- * `sideEffect: 'mutates-fs'` file tools (tool-definitions.ts). The earlier set
- * omitted `multi_edit` — which the Worker prompt actively encourages for
- * multi-spot edits — so a Worker that used `multi_edit` produced zero mutation
- * metrics and the Verifier work-scale gate saw `writeOps=0` and skipped
- * verification entirely. `multi_edit` is now included.
+ * File-mutating tool names. MUST mirror every tool registered with
+ * `sideEffect: 'mutates-fs'` in `tool-definitions.ts` — a Worker that uses ANY
+ * of them is doing mutation work the Verifier work-scale gate must see (the
+ * original set omitted `multi_edit`, `undo`, and the worktree/scaffold tools,
+ * so work done through them produced `writeOps=0` and skipped verification).
  *
- * NOTE: this is hardcoded rather than derived from `BUILTIN_TOOL_DEFINITIONS`
- * at module load — importing that registry here pulls its handler chain, which
+ * This is hardcoded rather than derived from `BUILTIN_TOOL_DEFINITIONS` at
+ * module load — importing that registry here pulls its handler chain, which
  * has a transitive cycle back through `construction/agent-resolver.ts` and
- * leaves `BUILTIN_TOOL_DEFINITIONS` uninitialised mid-load. Keep this set in
- * sync when a new `mutates-fs` file tool is added.
+ * leaves `BUILTIN_TOOL_DEFINITIONS` uninitialised mid-load. The drift risk that
+ * creates is closed by a registry-parity unit test (tool-wrappers.test.ts):
+ * it imports the registry and fails if any `mutates-fs` tool is missing here.
+ * Keep this set in sync (the test tells you exactly what to add).
  */
-const MUTATES_FS_TOOL_NAMES: ReadonlySet<string> = new Set([
+export const MUTATES_FS_TOOL_NAMES: ReadonlySet<string> = new Set([
   'write',
   'edit',
   'multi_edit',
   'insert_after_anchor',
+  'undo',
+  'worktree_create',
+  'worktree_remove',
+  'scaffold_tool',
+  'stage_construction',
+  'scaffold_agent',
+  'stage_agent_construction',
+  'activate_agent',
 ]);
 
 function lineCount(text: unknown): number {

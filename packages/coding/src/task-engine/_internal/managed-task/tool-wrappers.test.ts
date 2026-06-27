@@ -7,9 +7,12 @@
  *   - line estimation uses TOUCHED lines (max), so an equal-length rewrite
  *     is not collapsed to 1 line (which let large rewrites slip the gate).
  */
+import { readFileSync } from 'node:fs';
+import { join } from 'node:path';
+
 import { describe, expect, it } from 'vitest';
 
-import { recordMutationForTool } from './tool-wrappers.js';
+import { recordMutationForTool, MUTATES_FS_TOOL_NAMES } from './tool-wrappers.js';
 import type { ManagedMutationTracker } from '../../../types.js';
 
 function tracker(): ManagedMutationTracker {
@@ -84,5 +87,30 @@ describe('recordMutationForTool — file mutation tracking', () => {
 
   it('is a no-op when the tracker is undefined', () => {
     expect(() => recordMutationForTool(undefined, 'write', { path: '/x', content: 'y' })).not.toThrow();
+  });
+
+  // Drift guard: the production set is hardcoded (importing the registry at
+  // module load hits a handler-chain cycle through agent-resolver that leaves
+  // BUILTIN_TOOL_DEFINITIONS undefined — reproduced even via dynamic import).
+  // This test instead PARSES the registry source for `sideEffect: 'mutates-fs'`
+  // tools, so adding one without tracking it fails here with the exact name.
+  it('MUTATES_FS_TOOL_NAMES covers every mutates-fs tool in the registry source', () => {
+    const src = readFileSync(
+      join(process.cwd(), 'packages/coding/src/tools/tool-definitions.ts'),
+      'utf-8',
+    );
+    const mutatesFs: string[] = [];
+    let current: string | null = null;
+    for (const line of src.split('\n')) {
+      const nameMatch = line.match(/^\s*name:\s*['"]([a-z_]+)['"]/);
+      if (nameMatch) current = nameMatch[1];
+      if (/sideEffect:\s*['"]mutates-fs['"]/.test(line) && current) {
+        mutatesFs.push(current);
+        current = null;
+      }
+    }
+    expect(mutatesFs.length).toBeGreaterThan(4); // sanity: parser found tools
+    const missing = mutatesFs.filter((name) => !MUTATES_FS_TOOL_NAMES.has(name));
+    expect(missing).toEqual([]);
   });
 });
