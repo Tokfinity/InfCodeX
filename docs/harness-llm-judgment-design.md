@@ -1,7 +1,7 @@
-# 设计稿:路由/harness 预判 → 静态分层指引 + LLM 自主判断 + Verifier 信号激活
+# 设计稿:路由/harness 预判 → 静态分层指引 + LLM 自主判断 + Verifier 度量门控激活
 
-> 状态:**设计中,待用户确认后再动手**。这是 reasoning 单轨化(已完成,B1-D)之后的**新的、更大的架构改造**,与 effort 单轨化正交。
-> 目标:把"启发式关键词路由 → 按预判 harness 级别注入不同提示 + 门控"改成"静态分层指引(对所有任务注入)+ 工具常驻 + LLM 自主判断",Sidecar Verifier 改由 Worker LLM 发出的判别信号控制激活。
+> 状态:**设计已定稿(含 GPT review 8+2 条裁决),待开工 H2**。这是 reasoning 单轨化(**核心运行时单轨化完成,public compat 尾巴仍在**——CLI/REPL/ACP 里 `reasoningMode` 还很多,见 [[project_reasoning_single_track_migration]])之后的**新的、更大的架构改造**,与 effort 单轨化正交。
+> 目标:把"启发式关键词路由 → 按预判 harness 级别注入不同提示 + 门控"改成"静态分层指引(对所有任务注入)+ 工具常驻 + LLM 自主判断",Sidecar Verifier 改由**客观执行度量(规则触发)**控制激活——**不**用 Worker LLM 自报信号(LLM 完成后偏向声称做完,自报不可靠)。
 
 ---
 
@@ -56,70 +56,127 @@ KodaX 的关键词路由预分类是**两家都没有**的外层逻辑,且违背
                                             Worker(看定制提示)→ 终止 → FEATURE_196 内容 gate → Verifier
 
 目标:  用户请求 ─────────────────────────────────────────→ Worker(看统一静态分层指引,自己判断
-                                                              简单直答/复杂先计划/可派子Agent/
-                                                              需要时发"请验证/跳过验证"信号)
-                                                        ↓ 终止 + 携带判别信号
-                                            Layer0:读 Worker 信号 → 决定 → (回落 FEATURE_196 内容 gate) → Verifier
+                                                              简单直答/复杂先计划/可派子Agent)
+                                                        ↓ 终止
+                                  度量 gate(读 mutationTracker/roundRef/todoStore 客观度量,
+                                            规则判定 fire/skip)→ Verifier
 ```
 
 三块改动:
 
 ### 2.1 静态分层指引(替代 HARNESS_PROFILE_OVERLAYS + EXECUTION_MODE_OVERLAYS)
 - 落点:`worker-role-prompt.ts buildWorkerInstructions`(现有静态指引密度最高、每次必经的纯 builder)。
-- 内容:把"按级别"的指引改写成"按情况自判"的原则,一次性对所有任务注入:
-  - 简单/查询 → 直接答/直接做,不建 todo(已有)。
-  - 复杂/多步 → 先 todo_create 提交计划再动手(已有)。
-  - 执行后 → 对照请求自检(补 H1 这条)。
-  - review/audit/调查 → 把 7 种 execution-mode 的定向指引改成静态"当你在做 X 类工作时…"段落。
-  - 歧义 → 先框选项再动(brainstorm 原则)。
-- HARNESS_PROFILE_OVERLAYS 冗余段删除;EXECUTION_MODE_OVERLAYS 非冗余内容搬入静态。
+- **原则(用户拍板):删的是冗余投递 + 分类表干扰,绝不删有效提示。** buildPromptOverlay 路由注入层逐条分三类——A 删、B 搬静态、C 删:
+
+**A 类 — 冗余投递(有效指令已静态保留在 planFirstContract,删 overlay 零内容损失)**
+| 提示 | 为何冗余 |
+|---|---|
+| HARNESS.**PLANNED**「non-trivial MUST commit a plan first」 | 字面重复 `worker-role-prompt.ts:61`「Non-trivial → FIRST tool calls MUST be todo_create batch」(更详细)。删 overlay 后该指令仍由 planFirstContract 无条件注入,**"留下"已满足**。若 eval 显示 Todolist 生成率掉→强化 planFirstContract 那条措辞,不复活路由 echo。 |
+| HARNESS.**H0_DIRECT**「single direct pass」 | 重复 planFirstContract trivial 条 |
+| HARNESS.**H2** plan 部分「plan before changes」 | 重复 planFirstContract plan-first |
+| MODE.**conversation/lookup**「直接答别升级」 | 重复 planFirstContract trivial 条 |
+
+**B 类 — 有效且无静态对等(必须搬成静态,绝不删;H3 eval 专门验它们不退化)**
+| 提示 | 内容 |
+|---|---|
+| HARNESS.**H1_EXECUTE_EVAL** | 执行后对照请求自检再收尾,evidence-backed(planFirstContract 无对等) |
+| MODE.**pr-review** | 只报高置信可执行项 / 不算 nits / Must-fix≤5 / 每条说后果 |
+| MODE.**strict-audit** | 跨正确性/安全/性能广审,confirmed 与 risk 分开 |
+| MODE.**investigation** | 先定位根因/验证假设/repro 再大改 |
+| MODE.**planning** | 先架构/排序/风险/验证再写码(中等价值) |
+| **brainstormGuidance**(reasoning.ts:1606) | 歧义先框选项,不可逆编辑前明确路径 |
+
+**C 类 — 噪声/干扰(分类表 dump,ADR-033 反模式,删)**
+| 提示 | 为何是干扰 |
+|---|---|
+| **[Task Routing]** 行(reasoning.ts:1617)`primary=…;topologyCeiling=…;confidence=…` | 喂 LLM 分类表,违 ADR-033「同事做判断不是查表」 |
+| **[Task Routing Signals/Reason]** | 路由元数据,无行为指引 |
+| **roleAck**(worker-role-prompt.ts:244-251) 分类摘要 | 同样的分类表 dump |
+| `topologyCeiling=`/`upgradeCeiling=` 串 | A2b 死字段残留,本就 vestige |
+
+- 中等/边界:MODE.**implementation**(concise/progress)、**[Work Intent]**(append/overwrite/new)可精简后搬静态或保留。
 
 ### 2.2 fanout 常驻 + LLM 自判
-- 拆 Layer 1(buildAmaControllerDecision 的 admissible 建议文本 + fanout-scheduler admissible 门;dispatch 对 Worker 本就常驻可见)。
+- **🔴 GPT#5 更正:Layer 1 不是"纯建议",拆它是行为变更**。两处:
+  - `buildAmaControllerOverlay` 注入的 `[AMA Controller] fanoutAdmissible…` 文本是 **LLM-facing**(prompt 内容)。
+  - `createFanoutSchedulerInput`(fanout-scheduler.ts:45)在 `!fanout.admissible` 时 return undefined → **门控调度计划生成**(不只是建议)。
+- 故归入 **H1b**(需 targeted test,必要时跟 H3 eval 一起看),不进 H1a 安全清理。
 - 保留 Layer 2/3 安全约束(不依赖路由,不动)。
 - dispatch_child_task 的工具 description 补足 when-to-use(参考 Claude Code AgentTool),让 Worker 自判何时派。
 
-### 2.3 Sidecar Verifier:LLM 判别信号激活(本设计核心,KodaX 原创)
-保留 Verifier(原创结构性净网),但**不在过简任务上激活**。改为 Worker LLM 在终止时给出一个判别信号,作为 gate 的 **Layer 0**(优先于 FEATURE_196 内容检测)。
+### 2.3 Sidecar Verifier:客观度量规则激活(本设计核心,KodaX 原创)
+保留 Verifier(原创结构性净网),但**不在过简任务上激活**浪费 token。
 
-**接入点(调研已验,3 处改动,Verifier 侧零改动)**:
-1. worker-role-prompt:教 Worker 何时发信号。
-2. tool-resolution:把信号工具加入 Worker 工具集。
-3. runner-sidecar-verifier-adapter `composedStopHook`(或 gate.ts):读 `ctx.transcript` 最后一条 assistant 的 tool_use,作为 Layer 0。
+**✅ 已定(用户拍板):规则触发,不用 LLM 自报信号。**
+否决"Worker 终止前自报 verification_hint"——理由:**任何 LLM 做完后都不会偏向声称"我没干完/需人审"**,自报被完成 bias 污染。改为读 Worker **实际做了什么**的客观度量(可观测、不被 bias 污染),用规则决定 fire/skip。
 
-**✅ 已定(用户拍板):方案 C — 三态信号**
+**业界对照(已实地核实)**:claudecode/codex **都没有**"改动行数/写操作→触发验证"的度量 gate(行数只做展示/归因)。但"度量驱动 gating"本身是业界成熟模式:claudecode 用轮数软规则(每 5/10 轮注 reminder)+ token 阈值 auto-compact;codex 用 Guardian per-action verifier + 计数 circuit breaker(连拒 3 次/窗口 10-in-50 中止 turn)。所以**度量触发 verifier 是 KodaX 原创点,但有业界模式背书**。
 
-Worker 终止时发 `verification_hint('skip' | 'verify' | 'auto')`(工具调用或终止 metadata 字段):
-- `'skip'` → Worker 明确判定简单/低风险 → gate Layer 0 直接 skip Verifier。
-- `'verify'` → Worker 明确判定重要/有风险 → gate Layer 0 直接 fire Verifier。
-- `'auto'` → Worker 不确定 → **回落现有 FEATURE_196 内容 gate**(有动作就验、纯问候跳过)。
-- **未发信号(Worker 没调)→ 等同 `'auto'`**(回落内容 gate,默认安全)。
+**最终规则**(GPT review 后修订:度量只**精化** `detectActionSurface`「Worker 确实动手了」的分支,**保留** conversational floor + default-fire,不丢 F184 intent-vs-action floor):
+```
+composeGateDecision 顺序(纯代码,在 mutationTracker + roundRef + todoStore 上算):
+  1. env KODAX_VERIFIER_ALWAYS=1 ─────────────────────────────→ 验  (逃生开关)
+  2. 度量精化(仅当 Worker 有可观测工具动作 hasAnyToolAction):
+       高风险 bash(riskyShellOps>0:git push/rm/迁移/install)─→ 验  (危险且 bash 改哪文件/几行是盲区,保守判)
+       有 Todolist(todoStore 非空)─────────────────────────→ 验  ★Worker 自列计划=自判非琐碎(客观产物,非自报)
+       轮数 > ROUNDS_VERIFY_THRESHOLD(默认 10)────────────→ 验  ★长任务可能结果不完备/计划没做完
+       改动文件 ≥ 2 ────────────────────────────────────────→ 验  (多文件改动)
+       单文件 estimatedChangedLines > TRIVIAL_LINES(默认 20)→ 验  (大改;估算行数,非精确 diff)
+       否则(只读且短且无计划,或单文件≤20行无计划短轮)────→ 不验  ★新省 token,只作用于"确实动手的琐碎工作"
+     ── Worker 无任何工具动作 → 不在本层决定,落下一层 ──
+  3. conversational-intent(短问候且无祈使动词,detectConversationalIntent)→ 不验  (原样保留)
+  4. default ─────────────────────────────────────────────────→ 验  (原样:无动作+非问候=声称没证据,F184 floor 不丢)
+```
+设计理由:① 第 4 层 default-fire 保留 → "让查 README 却没调任何工具" 仍 fire(F184 floor 不丢,gate.ts:216 当前正是 default-fire 兜住此例);② 第 3 层问候 skip 不动;③ 度量 skip **只精化第 2 层「确实动手」的琐碎工作**(小改/只读调查),正是要省的 token,不碰无动作场景。常量 `ROUNDS_VERIFY_THRESHOLD=10`/`TRIVIAL_LINES=20` 做成可调常量+测试边界,后续按真实触发率 tune。
 
-设计理由:给 Worker 表达"我不确定,交给内容 gate 判"的能力;安全默认仍在(auto/忘发都回落到现有的"有动作就验");明确简单时才 skip 省 token。gate 判定顺序变为:env escape → **Layer 0: Worker verification_hint(skip/verify 直接决定;auto/缺省回落)** → Layer 1 内容(有 tool_use 则 fire)→ Layer 2 问候 skip → 默认 fire。
+**🟡 已知 tradeoff(用户认可)**:此方案下"短的只读调查任务"(有 read 证据但结论可能错)会 skip。可接受——它有工具证据(不同于无动作空声称),且本就要在简单只读任务省 token;真复杂的(>10 轮或有计划)仍 fire。
 
-被否决:A(opt-out,默认验不给 Worker 'verify' 主动权)、B(opt-in,默认跳,忘发漏验风险高)。
+**接入点(调研已验,Verifier 侧零改动,纯运行时逻辑 → 非 LLM-facing → 不用 eval,只单测)**:
+1. `mutationTracker` **已是 verifier adapter 的 dep**(runner-driven.ts:1499)→ 写操作数/`estimatedChangedLines`(`mutationTracker.files` Map,精确度=估算)/文件数现成可读。
+2. **GPT#4:高风险 bash 加窄字段** `riskyShellOps`(或 `riskyShellCommands`)到 `ManagedMutationTracker`——`recordMutationForTool`(tool-wrappers.ts:56)已有 `SHELL_MUTATION_EXTENSIONS` 正则识别,顺手 record,**不再靠 `totalOps` 猜**。
+3. `roundRef`(runner-driven.ts:858)、`todoStore`(runner-driven.ts:712,已在 onVerdict 闭包)在作用域内 → 照现有 `getChildTaskRegistrySize`/`getSessionId` getter 模式,给 adapter deps 加 `getRoundCount`/`getHasPlan`(各一行)。
+4. `composeGateDecision`(gate.ts:216)签名扩展接受这些度量,把第 2 层度量精化插在 `detectActionSurface` 位置;`detectConversationalIntent` + default-fire **保持不动**。
+
+**🔴 GPT#2:本变更不叫"零回退"**——它**有意改变 verifier 触发率**(部分现在 fire 的琐碎工作改 skip)。定性=**非 LLM-facing、可单测、低风险**,但需 **gate snapshot 测试覆盖 fire/skip 全部迁移**(构造各种 mutationTracker/round/todo/riskyShell/无动作 状态断言)。
+
+**🔴 与 A3 的耦合不变量(H2/H3 之间必守)**:
+- 本 gate 的 `hasPlan` = todoStore 非空 = **Todolist 生成行为的产物**。若 A3 让 Todolist 生成率退化 → hasPlan 触发率掉 → 漏验。
+- 缓解①:**A3 的 5-alias eval 把"Todolist 生成率"做成显式一等指标**(不只隐含检查),hasPlan 可靠性由该 eval 硬守。
+- 缓解②:**排序天然隔离**——H2(本 gate,非 LLM-facing)先落地时 HARNESS_PROFILE_OVERLAYS 还在,hasPlan 正常;H3(A3)删 overlay 时 eval 先守 plan-first。两者不同时变动。
+- 查实依据:Todolist 真正驱动 = 静态无条件注入的 planFirstContract(worker-role-prompt.ts:256,不被任何 router/harness gate);A3 删的 PLANNED 只是其字面冗余 echo(见 §2.1 A 类)。
 
 ---
 
 ## 3. 分阶段计划(非 prompt 先行、prompt 后行走 eval)
 
-**Phase H1 — 非 LLM-facing 运行时清理(可单测,零回退,先做)**
-- 删 Layer 1 fanout 建议门(buildAmaControllerDecision admissible 文本 + fanout-scheduler admissible 检查);保留 Layer 2/3。
-- 删 qualityAssuranceMode 死字段(纯 UI,可保留显示或一并清)。
-- 删 deriveTopologyCeiling + topologyCeiling/upgradeCeiling 字段(A2b 非 prompt 部分)+ verdict-recorder 死 gate。
+**Phase H1a — 真正非 LLM-facing 清理(可单测,安全先做)**
+- 删 qualityAssuranceMode 死字段(纯 UI/展示,可保留显示或一并清)。
+- 删 deriveTopologyCeiling + topologyCeiling/upgradeCeiling 字段(A2b 非 prompt 部分)+ verdict-recorder 死 gate + 陈旧注释。
 - gate:build + 全套件。
 
-**Phase H2 — Verifier 信号激活(非 prompt 逻辑 + prompt 教学)**
-- 加信号工具 + gate Layer 0(按定稿的 A/B/C)。
-- worker-role-prompt 教学段(LLM-facing → 进入 eval 范围)。
-- 单测:gate Layer 0 各分支 + 信号解析。
+**Phase H1b — fanout 策略改造(GPT#5:LLM-facing + 调度行为,非纯清理)**
+- 拆 `buildAmaControllerOverlay` 注入文本(LLM-facing)+ `createFanoutSchedulerInput` admissible 门(fanout-scheduler.ts:45,门控调度);保留 Layer 2/3 安全约束。
+- 需 targeted test 覆盖调度行为变化;dispatch description 补 when-to-use。**必要时跟 H3 eval 一起看**(overlay 文本属 LLM-facing)。
+
+**Phase H2 — Verifier 度量门控激活(非 LLM-facing、可单测、低风险,可独立先落地)**
+- adapter deps 加 `getRoundCount` + `getHasPlan` getter(mutationTracker 已是 dep);`ManagedMutationTracker` 加窄字段 `riskyShellOps`(GPT#4)。
+- `composeGateDecision` 按 §2.3 新顺序:度量精化 `detectActionSurface`,**保留** `detectConversationalIntent` + default-fire;加常量 `ROUNDS_VERIFY_THRESHOLD=10` / `TRIVIAL_LINES=20`。
+- **GPT#2:不叫零回退**——有意改 verifier 触发率。**gate snapshot 单测**覆盖 fire/skip 全迁移:0写/单文件小改/单文件大改/多文件 × round × todoStore × riskyShell × **无动作(F184 floor 必 fire)** × 问候(必 skip)。
+- 不碰 Worker 提示 → 不用 eval。gate:build + 全套件。
 
 **Phase H3 — 静态分层指引(LLM-facing,走 5-alias eval)**
-- 把 EXECUTION_MODE_OVERLAYS 非冗余内容 + H1 自检搬入 worker-role-prompt 静态段;删 HARNESS_PROFILE_OVERLAYS + EXECUTION_MODE_OVERLAYS + buildPromptOverlay 的 harness/mode 注入。
-- **🔴 必走 eval**(CLAUDE.md FEATURE_104):5-alias panel 对照"路由注入分层提示 vs 静态分层指引",确认 Worker 在 简单/复杂/review/调查 各类任务上行为不退化(尤其复杂任务还会不会先计划、review 还会不会聚焦高信号)。eval RUN 需 API key=用户跑。
+- 按 §2.1 A/B/C 表:**A 类删**(冗余投递,有效版静态保留)、**C 类删**(分类表噪声)、**B 类搬静态**(H1 自检 + pr-review/strict-audit/investigation/planning + brainstorm,搬入 worker-role-prompt 静态段);删 HARNESS_PROFILE_OVERLAYS + EXECUTION_MODE_OVERLAYS + buildPromptOverlay 的 harness/mode/分类表注入。
+- **🔴 必走 eval**(CLAUDE.md FEATURE_104)。**GPT#6 eval 一等指标(都要硬看)**:① 简单任务**不建 todo / 不 dispatch / 低 token**;② **Todolist 生成率**(守 H2 hasPlan 耦合不变量);③ review 只报高信号问题;④ investigation 先定位/repro;⑤ 复杂多模块任务仍**合理 dispatch**;⑥ **延迟/token 不回退**。eval RUN 需 API key=用户跑。
+- ⚠️ 误删防护:实施时对照 §2.1 B 类清单,逐条确认已搬入静态,不得随 overlay 一起删。
 
 **Phase H4 — 路由瘦身/退役**
-- 评估 createReasoningPlan 剩余消费(provider policy needsReliableEvidence、KodaXResult.routingDecision 导出);把还有价值的最小信号保住(或改 LLM 自述),其余路由逻辑退役。
+- **GPT#8 硬前置**:repo-intel 仍看 `decision.harnessProfile !== 'H0_DIRECT'`(repo-intelligence.ts:228)→ **先设计非-harness 的 repo-context gate** 再动 harnessProfile,不能裸删。
+- **GPT#7 名字债逐名裁决(已定,保守)**:
+  - **删(dead cluster,零 rename,~300+ LoC)**:`routeTaskWithLLM` + `buildRepositoryRoutingSummary` + `summarizeRoutingEvidence` + `retryStructuredDecision` + `parseRoutingDecision` + `ROUTER_SYSTEM_PROMPT` + `routingSource` 的 `'model'`/`'retried-model'` 枚举值(F193 后零生产 caller)。⚠️ **B1 memory 曾标此簇"live 救回"与本轮 fresh 调研"零 caller"矛盾 → 删前必对 HEAD 重跑零-caller 核验(正则含 `import\(`),不盲删**。
+  - **改名(唯一 live 改名)**:`shouldUseModelRouter` → `requiresHeuristicExpansion` 类(全在 reasoning.ts,低 churn;名字承诺 model router 但 F193 后纯启发式)。
+  - **顺手清**:`inferIntentGate` 3 处 "Scout will finalize/decide" 字符串(Scout 已退役;注入点随 H3 删 overlay 消失,源串清理 H4 顺手)。
+  - **保留(高 churn 或名字尚可)**:`harnessProfile`(237 引用,benchmark 有 `workerChain` 专项改名提案,不在本次)、`KodaXTaskRoutingDecision`(93 引用 breaking)、`recommendedMode`(准确)、`routingDecision`(KodaXResult 字段,描述性)、`looksLikeActionableRuntimeEvidence`(准确)、`createReasoningPlan`(加注释说明主产出是 routing decision)、`recommendedThinkingDepth`(已注释遗留桥接,随 effort 迁移废)。
+- 评估 createReasoningPlan 剩余消费(provider policy needsReliableEvidence、KodaXResult.routingDecision 导出);保住有价值的最小信号(或改 LLM 自述),其余退役。
 - ADR 记录最终架构。
 
 **收尾**:ADR + 全套件 + eval 绿后合并。
@@ -127,7 +184,8 @@ Worker 终止时发 `verification_hint('skip' | 'verify' | 'auto')`(工具调用
 ---
 
 ## 4. 风险与边界
-- Phase H1/H2 非 prompt,可单测兜底,零回退优先。
-- Phase H3 是唯一 LLM-facing 高风险段,eval gate 把关;eval 红则保留对应静态指引(不强删)。
+- Phase H1a/H2 非 LLM-facing,可单测兜底;H2 **有意改 verifier 触发率**(非零回退),gate snapshot 测试把关。
+- Phase H1b(fanout)+ H3(静态指引)是 LLM-facing 段,eval/ targeted test 把关;eval 红则保留对应内容(不强删)。
+- 🔴 **H2↔H3 耦合不变量**:H2 度量 gate 的 `hasPlan` 依赖 Todolist 生成,H3 删 overlay 不得让其退化 → H3 eval 把 Todolist 生成率列为显式一等指标(详 §2.3 末)。排序上 H2 先落地(overlay 还在,hasPlan 正常),H3 由 eval 守,二者不同时变动。
 - 不可拆的安全约束(防递归 Layer 2、写隔离 Layer 3)全程不动。
 - Phase 0 不变量:decision.harnessProfile 字段若仍被 repo-intel gate(repo-intelligence.ts:228 `!== 'H0_DIRECT'`)消费,需在 H4 一并处理(改成非 harness 的判断或保留最小路由)。
