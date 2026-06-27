@@ -995,13 +995,6 @@ async function runManagedTaskViaRunnerInner(
   // revise. Surfaced on `managedTask.runtime.degradedContinue` so the
   // REPL / CLI can warn the user.
   const degradedContinueRef: { current: boolean } = { current: false };
-  // Risk-2 fix — per-harness revise counter. The wrapper mutates this
-  // map in place so consecutive Evaluator emits across the same run
-  // share state. Initialised empty; first revise of any harness passes
-  // through and bumps to 1, second triggers the cap logic.
-  const reviseCountByHarnessRef: { current: Map<KodaXHarnessProfile, number> } = {
-    current: new Map(),
-  };
   const budgetExtension: BudgetExtensionContext = {
     events: options.events,
     originalTask: prompt,
@@ -1011,7 +1004,6 @@ async function runManagedTaskViaRunnerInner(
     planRef,
     degradedContinueRef,
     harnessRef,
-    reviseCountByHarnessRef,
   };
   const tokenStateRef: { current: RunnerAdapterTokenState } = {
     current: { totalTokens: 0, source: 'estimate' },

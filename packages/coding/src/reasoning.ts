@@ -1225,7 +1225,10 @@ export function buildFallbackRoutingDecision(
     complexity: 'moderate',
     workIntent: 'new',
     requiresBrainstorm: false,
-    harnessProfile: 'H1_EXECUTE_EVAL',
+    // Input harnessProfile is overwritten by selectHarnessProfile (always
+    // H0_DIRECT) in stabilizeRoutingDecision — kept as H0_DIRECT to avoid a
+    // misleading H1 literal that never survives (ADR-043).
+    harnessProfile: 'H0_DIRECT',
     routingSource: 'fallback',
     routingAttempts: 1,
     reason: inferred.reason,
@@ -1418,16 +1421,6 @@ function inferRequiresBrainstorm(
   }
 
   return false;
-}
-
-const HARNESS_ORDER: KodaXHarnessProfile[] = [
-  'H0_DIRECT',
-  'H1_EXECUTE_EVAL',
-  'H2_PLAN_EXECUTE_EVAL',
-];
-
-function getHarnessRank(harness: KodaXHarnessProfile): number {
-  return HARNESS_ORDER.indexOf(harness);
 }
 
 // FEATURE_061 + FEATURE_193 (v0.7.43): heuristic routing returns a verdict

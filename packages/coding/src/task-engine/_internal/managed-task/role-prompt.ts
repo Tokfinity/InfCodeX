@@ -238,9 +238,9 @@ export function createRolePrompt(
     ? [
       skillMap ? formatSkillMapSection(skillMap, rolePromptContext?.skillMapArtifactPath) : undefined,
       formatSkillInvocationSummary(skillInvocation, rolePromptContext?.skillExecutionArtifactPath),
-      decision.harnessProfile === 'H2_PLAN_EXECUTE_EVAL'
-        ? 'You own execution. Treat the raw skill as the authoritative execution reference and the skill map as the coordination surface shared with Planner/Evaluator.'
-        : 'You own execution. Treat the raw skill as the authoritative execution reference and the skill map as the lightweight coordination surface shared with Scout/Evaluator.',
+      // Harness collapsed to H0_DIRECT in V2 (ADR-043) — the H2/Planner variant
+      // never fired, so the emitted text is unchanged.
+      'You own execution. Treat the raw skill as the authoritative execution reference and the skill map as the lightweight coordination surface shared with Scout/Evaluator.',
       formatFullSkillSection(skillInvocation),
     ].filter((section): section is string => Boolean(section)).join('\n\n')
     : skillMap

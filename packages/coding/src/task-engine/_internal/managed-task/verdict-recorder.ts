@@ -66,20 +66,9 @@ export interface BudgetExtensionContext {
   readonly planRef: { current: ReasoningPlan | undefined };
   readonly degradedContinueRef: { current: boolean };
   readonly harnessRef: { current: KodaXHarnessProfile };
-  /**
-   * v0.7.26 Risk-2 fix — per-harness Evaluator revise counter. Mirrors
-   * legacy `h1CheckedDirectRevisesUsed`: H1 allows at most 1 same-harness
-   * revise before the wrapper auto-converts a second revise into either
-   * an H2 escalation (if `upgradeCeiling >= H2`) or an accept-with-
-   * followup (if upgradeCeiling blocks further escalation). Without this
-   * cap, the Runner-driven handoff topology allows Evaluator → Generator
-   * → Evaluator → ... up to `MAX_ROUNDS_BY_HARNESS[H1] = 6` rounds,
-   * which in the Scout-confusion loop the user reported keeps spinning
-   * for 3-4 revise cycles before budget exhaustion.
-   */
-  readonly reviseCountByHarnessRef: {
-    current: Map<KodaXHarnessProfile, number>;
-  };
+  // (Removed in ADR-043: `reviseCountByHarnessRef` — a per-harness revise
+  // counter that was created and passed but never read by the wrapper; the
+  // H1→H2 revise-escalation it was meant to cap no longer exists.)
 }
 
 /**
