@@ -73,6 +73,10 @@ export interface RunnerSidecarVerifierAdapterDeps {
    * terminal turn, so the sidecar is deferred to the next stop-hook fire.
    */
   readonly getChildTaskRegistrySize: () => number;
+  /** Total rounds (LLM turns) the Worker ran this task — `roundRef.current`. */
+  readonly getRoundCount: () => number;
+  /** Whether the Worker committed a Todolist — `todoStore.getAll().length > 0`. */
+  readonly getHasPlan: () => boolean;
 }
 
 export interface RunnerSidecarVerifierAdapter {
@@ -158,10 +162,23 @@ export function buildRunnerSidecarVerifierAdapter(
             mode: 'task-notification',
           });
         if (!isIdleYieldTurn) {
-          // FEATURE_196 content-aware fire gate — skip trivial chat (greeting
-          // + zero tool action); fire on the zhipu intent-vs-action floor.
-          // Conservative default = fire. Escape hatch KODAX_VERIFIER_ALWAYS=1.
-          const gateDecision = composeGateDecision(ctx, process.env);
+          // FEATURE_196 + H2 metric-refined fire gate — skip trivial chat
+          // (greeting) AND trivial observed work (single small edit / grounded
+          // read-only lookup); fire on substantial/risky work and on the zhipu
+          // intent-vs-action floor (text-only claim, no tools). Conservative
+          // default = fire. Escape hatch KODAX_VERIFIER_ALWAYS=1.
+          const tracker = deps.mutationTracker;
+          let estimatedChangedLines = 0;
+          for (const delta of tracker.files.values()) estimatedChangedLines += delta;
+          const gateMetrics = {
+            riskyShellOps: tracker.riskyShellOps ?? 0,
+            writeOps: tracker.totalOps,
+            filesChanged: tracker.files.size,
+            estimatedChangedLines,
+            hasPlan: deps.getHasPlan(),
+            rounds: deps.getRoundCount(),
+          };
+          const gateDecision = composeGateDecision(ctx, gateMetrics, process.env);
           if (process.env.KODAX_VERIFIER_LOG === '1') {
             process.stderr.write(
               `[sidecar-gate] ${gateDecision.fire ? 'fire' : 'skip'}: ${gateDecision.reason}\n`,

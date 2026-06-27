@@ -88,6 +88,8 @@ describe('buildRunnerSidecarVerifierAdapter', () => {
       },
       getSessionId: () => undefined,
       getChildTaskRegistrySize: () => 0,
+      getRoundCount: () => 1,
+      getHasPlan: () => false,
     });
 
     const priorAlways = process.env.KODAX_VERIFIER_ALWAYS;

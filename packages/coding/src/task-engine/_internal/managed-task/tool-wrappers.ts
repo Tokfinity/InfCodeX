@@ -77,6 +77,10 @@ export function recordMutationForTool(
       const cmd = typeof input.command === 'string' ? input.command : '';
       if (/\b(git\s+(add|commit|push|merge|rebase|reset)|npm\s+(publish|install)|rm\s|mv\s|cp\s)/i.test(cmd)) {
         tracker.totalOps += 1;
+        // High-risk shell mutation — bash cannot report which file / how many
+        // lines it touched, so the Verifier gate uses this count to fire
+        // conservatively rather than inferring risk out of `totalOps`.
+        tracker.riskyShellOps = (tracker.riskyShellOps ?? 0) + 1;
       }
     }
   }

@@ -666,6 +666,7 @@ async function runManagedTaskViaRunnerInner(
   const mutationTracker: ManagedMutationTracker = {
     files: new Map<string, number>(),
     totalOps: 0,
+    riskyShellOps: 0,
   };
   // baseCtx must carry the full KodaXToolExecutionContext
   // surface that tools expect — without these fields several tool families
@@ -1512,6 +1513,8 @@ async function runManagedTaskViaRunnerInner(
     },
     getSessionId: () => sessionIdRef.current,
     getChildTaskRegistrySize: () => baseCtx.childTaskRegistry?.size ?? 0,
+    getRoundCount: () => roundRef.current,
+    getHasPlan: () => todoStore.getAll().length > 0,
   });
   const resolvedVerifier = verifierAdapter.resolvedVerifier;
   const composedStopHook = verifierAdapter.composedStopHook;

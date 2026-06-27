@@ -13,7 +13,22 @@ import {
   composeGateDecision,
   detectActionSurface,
   detectConversationalIntent,
+  detectWorkScale,
+  type VerifierGateMetrics,
 } from './gate.js';
+
+/** Baseline = Worker did nothing measurable (no writes / plan / risky shell, 1 round). */
+const NO_WORK: VerifierGateMetrics = {
+  riskyShellOps: 0,
+  writeOps: 0,
+  filesChanged: 0,
+  estimatedChangedLines: 0,
+  hasPlan: false,
+  rounds: 1,
+};
+function metrics(over: Partial<VerifierGateMetrics>): VerifierGateMetrics {
+  return { ...NO_WORK, ...over };
+}
 
 /**
  * Test helper — builds a minimal StopHookContext from a transcript.
@@ -229,12 +244,81 @@ describe('FEATURE_196 — gate.detectConversationalIntent (Layer 2)', () => {
   });
 });
 
-describe('FEATURE_196 — gate.composeGateDecision', () => {
+describe('H2 — gate.detectWorkScale (metric refinement)', () => {
+  // Contexts whose tool-surface is irrelevant (metrics drive the decision);
+  // a text-only final turn is the realistic natural-end shape.
+  const editCtx = makeCtx([
+    { role: 'user', content: 'tweak foo.ts' },
+    { role: 'assistant', content: [{ type: 'text', text: 'Done.' }] },
+  ]);
+  const readOnlyCtx = makeCtx([
+    { role: 'user', content: '这个函数在哪定义?' },
+    {
+      role: 'assistant',
+      content: [{ type: 'tool_use', id: 't-1', name: 'grep', input: { pattern: 'foo' } }],
+    },
+    { role: 'assistant', content: [{ type: 'text', text: '定义在 foo.ts:10。' }] },
+  ]);
+  const noToolCtx = makeCtx([
+    { role: 'user', content: '查一下 README' },
+    { role: 'assistant', content: [{ type: 'text', text: '我查过了，没有相关内容。' }] },
+  ]);
+
+  it('skips a trivial single-file small edit', () => {
+    const d = detectWorkScale(editCtx, metrics({ writeOps: 1, filesChanged: 1, estimatedChangedLines: 5 }));
+    expect(d?.fire).toBe(false);
+    expect(d?.reason).toMatch(/trivial observed work/);
+  });
+
+  it('fires a large single-file edit (> TRIVIAL_LINES)', () => {
+    const d = detectWorkScale(editCtx, metrics({ writeOps: 1, filesChanged: 1, estimatedChangedLines: 50 }));
+    expect(d?.fire).toBe(true);
+    expect(d?.reason).toMatch(/large single-file/);
+  });
+
+  it('fires a multi-file change (filesChanged ≥ 2)', () => {
+    const d = detectWorkScale(editCtx, metrics({ writeOps: 3, filesChanged: 3, estimatedChangedLines: 18 }));
+    expect(d?.fire).toBe(true);
+    expect(d?.reason).toMatch(/multi-file/);
+  });
+
+  it('fires when the Worker committed a Todolist (hasPlan)', () => {
+    const d = detectWorkScale(editCtx, metrics({ hasPlan: true, writeOps: 1, filesChanged: 1, estimatedChangedLines: 3 }));
+    expect(d?.fire).toBe(true);
+    expect(d?.reason).toMatch(/Todolist/);
+  });
+
+  it('fires when rounds exceed the threshold (long task)', () => {
+    const d = detectWorkScale(editCtx, metrics({ rounds: 11, writeOps: 1, filesChanged: 1, estimatedChangedLines: 4 }));
+    expect(d?.fire).toBe(true);
+    expect(d?.reason).toMatch(/rounds/);
+  });
+
+  it('fires on a high-risk shell op even with no tracked file change', () => {
+    const d = detectWorkScale(editCtx, metrics({ riskyShellOps: 1 }));
+    expect(d?.fire).toBe(true);
+    expect(d?.reason).toMatch(/shell op/);
+  });
+
+  it('skips a short grounded read-only lookup (tool evidence, no writes)', () => {
+    // taskHasAnyToolUse sees the grep → observable work → trivial → skip.
+    const d = detectWorkScale(readOnlyCtx, metrics({}));
+    expect(d?.fire).toBe(false);
+    expect(d?.reason).toMatch(/trivial observed work/);
+  });
+
+  it('returns undefined when there is NO observable work (defers to floor)', () => {
+    // No writes, no plan, no tool_use anywhere → not decided here → F184 floor.
+    expect(detectWorkScale(noToolCtx, metrics({}))).toBeUndefined();
+  });
+});
+
+describe('H2 — gate.composeGateDecision', () => {
   const greetingCtx = makeCtx([
     { role: 'user', content: '你好' },
     { role: 'assistant', content: '你好! 我是 KodaX。' },
   ]);
-  const imperativeCtx = makeCtx([
+  const imperativeNoToolCtx = makeCtx([
     { role: 'user', content: '查一下 README 文件' },
     {
       role: 'assistant',
@@ -243,56 +327,52 @@ describe('FEATURE_196 — gate.composeGateDecision', () => {
       content: [{ type: 'text', text: '明白，我用 grep 搜索 README...' }],
     },
   ]);
-  const mutationCtx = makeCtx([
+  const trivialEditCtx = makeCtx([
     { role: 'user', content: 'add hello to foo.ts' },
-    {
-      role: 'assistant',
-      content: [
-        { type: 'text', text: 'Added.' },
-        {
-          type: 'tool_use',
-          id: 't-1',
-          name: 'edit',
-          input: { path: 'foo.ts' },
-        },
-      ],
-    },
+    { role: 'assistant', content: [{ type: 'text', text: 'Added.' }] },
   ]);
 
   it('fires when KODAX_VERIFIER_ALWAYS=1 even for trivial chat', () => {
-    const decision = composeGateDecision(greetingCtx, {
+    const decision = composeGateDecision(greetingCtx, NO_WORK, {
       KODAX_VERIFIER_ALWAYS: '1',
     });
     expect(decision.fire).toBe(true);
     expect(decision.reason).toMatch(/escape-hatch/);
   });
 
-  it('fires when Layer 1 action-surface signal present (mutation)', () => {
-    const decision = composeGateDecision(mutationCtx, {});
-    expect(decision.fire).toBe(true);
-    expect(decision.reason).toMatch(/action-surface/);
+  it('skips a trivial single-file edit (metric refinement)', () => {
+    const decision = composeGateDecision(
+      trivialEditCtx,
+      metrics({ writeOps: 1, filesChanged: 1, estimatedChangedLines: 6 }),
+      {},
+    );
+    expect(decision.fire).toBe(false);
+    expect(decision.reason).toMatch(/metric-gate/);
   });
 
-  it('skips when Layer 2 conversational-intent matches (trivial chat)', () => {
-    const decision = composeGateDecision(greetingCtx, {});
+  it('fires a substantial multi-file change (metric refinement)', () => {
+    const decision = composeGateDecision(
+      trivialEditCtx,
+      metrics({ writeOps: 4, filesChanged: 3, estimatedChangedLines: 120 }),
+      {},
+    );
+    expect(decision.fire).toBe(true);
+    expect(decision.reason).toMatch(/metric-gate/);
+  });
+
+  it('skips when conversational-intent matches (trivial chat, no work)', () => {
+    const decision = composeGateDecision(greetingCtx, NO_WORK, {});
     expect(decision.fire).toBe(false);
     expect(decision.reason).toMatch(/conversational-intent/);
   });
 
-  it('fires (safe default) when imperative + zero action — zhipu floor catch', () => {
-    // F184 CORE CONTRACT: imperative user + zero tool action = zhipu
-    // intent-vs-action floor case. The gate MUST NOT skip this.
-    const decision = composeGateDecision(imperativeCtx, {});
+  it('fires (safe default) when imperative + zero tool action — zhipu floor catch', () => {
+    // F184 CORE CONTRACT: imperative user + zero observable action = zhipu
+    // intent-vs-action floor case. The metric layer defers (no work), so the
+    // default-fire path MUST still catch it.
+    const decision = composeGateDecision(imperativeNoToolCtx, NO_WORK, {});
     expect(decision.fire).toBe(true);
     expect(decision.reason).toMatch(/default/);
-  });
-
-  it('escape hatch wins over Layer 2 — opt-in user gets verifier even on greetings', () => {
-    const decision = composeGateDecision(greetingCtx, {
-      KODAX_VERIFIER_ALWAYS: '1',
-    });
-    expect(decision.fire).toBe(true);
-    expect(decision.reason).toMatch(/escape-hatch/);
   });
 
   it('escape hatch is OFF when env var unset or any value other than "1"', () => {
@@ -304,7 +384,7 @@ describe('FEATURE_196 — gate.composeGateDecision', () => {
       { KODAX_VERIFIER_ALWAYS: undefined },
     ];
     for (const env of variants) {
-      const decision = composeGateDecision(greetingCtx, env);
+      const decision = composeGateDecision(greetingCtx, NO_WORK, env);
       expect(decision.fire, JSON.stringify(env)).toBe(false);
     }
   });

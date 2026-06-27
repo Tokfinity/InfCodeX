@@ -1003,6 +1003,15 @@ export interface KodaXManagedBudgetSnapshot {
 export interface ManagedMutationTracker {
   readonly files: Map<string, number>;
   totalOps: number;
+  /**
+   * Count of high-risk shell mutations (git push/commit/rm, npm install/publish,
+   * rm/mv/cp, etc.) the Worker ran via `bash`. Tracked separately from `totalOps`
+   * because bash writes are a blind spot — we cannot know which file / how many
+   * lines a shell command touched — so the Verifier gate fires conservatively on
+   * any risky shell op rather than inferring risk back out of `totalOps`.
+   * Optional: defaults to 0 when absent (read as `riskyShellOps ?? 0`).
+   */
+  riskyShellOps?: number;
   /** Set to true after scope reflection has been injected once. Prevents repeated injection. */
   reflectionInjected?: boolean;
 }

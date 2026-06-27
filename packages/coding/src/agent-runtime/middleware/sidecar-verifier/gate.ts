@@ -54,6 +54,45 @@ export interface GateDecision {
 }
 
 /**
+ * Objective execution metrics read at the gate point (cumulative for the
+ * current task run). Sourced from `mutationTracker` (writes), `roundRef`
+ * (rounds), and `todoStore` (plan). NOT self-reported by the Worker — these
+ * describe what the Worker actually DID, so they cannot be polluted by the
+ * LLM's completion bias (an LLM finishing a task won't volunteer "I didn't
+ * finish / please review me").
+ */
+export interface VerifierGateMetrics {
+  /** High-risk bash mutations (git push/rm/install/…). bash file/line is a blind spot → fire conservatively. */
+  readonly riskyShellOps: number;
+  /** write/edit/insert + risky-bash op count. 0 ⇒ no write happened this run. */
+  readonly writeOps: number;
+  /** Distinct files touched by write/edit tools (precise). */
+  readonly filesChanged: number;
+  /**
+   * Sum of per-file line deltas from write/edit tools. ESTIMATED (derived from
+   * old_string/new_string/content line counts), NOT a precise git diff.
+   */
+  readonly estimatedChangedLines: number;
+  /** Worker committed a Todolist (todoStore non-empty) ⇒ it self-judged the task non-trivial. */
+  readonly hasPlan: boolean;
+  /** Total rounds (LLM turns) the Worker ran this task. */
+  readonly rounds: number;
+}
+
+/**
+ * A task that runs longer than this many rounds is treated as substantial
+ * enough to warrant verification even when the visible output is small (a long
+ * investigation may have produced an incomplete / unreliable result). Tunable.
+ */
+export const ROUNDS_VERIFY_THRESHOLD = 10;
+
+/**
+ * A single-file change at or below this many ESTIMATED lines (with no plan and
+ * a short round count) is treated as trivial and skips verification. Tunable.
+ */
+export const TRIVIAL_LINES = 20;
+
+/**
  * Find the last assistant message in the transcript (closest to the
  * stop-hook fire point). Returns `undefined` for transcripts with no
  * assistant turn (defensive — Runner's stop-hook contract guarantees
@@ -138,6 +177,100 @@ export function detectActionSurface(
 }
 
 /**
+ * Did the Worker take ANY observable tool action (reads included) in response
+ * to the current request? Scans assistant turns AFTER the last non-synthetic
+ * user message for any `tool_use` block.
+ *
+ * This is broader than `lastAssistantHasToolUse` (which only inspects the final
+ * turn — text-only at a natural-end termination) and broader than the
+ * write-only `mutationTracker` (which never records reads/grep/glob). It lets
+ * the metric gate tell apart a *grounded* read-only lookup (skip-eligible) from
+ * a text-only claim with NO tool evidence (must fire — F184 floor).
+ */
+function taskHasAnyToolUse(transcript: readonly KodaXMessage[]): boolean {
+  let requestIdx = -1;
+  for (let i = transcript.length - 1; i >= 0; i -= 1) {
+    const msg = transcript[i];
+    if (msg.role === 'user' && !msg._synthetic) {
+      requestIdx = i;
+      break;
+    }
+  }
+  for (let i = requestIdx + 1; i < transcript.length; i += 1) {
+    const msg = transcript[i];
+    if (msg.role !== 'assistant') continue;
+    if (typeof msg.content === 'string') continue;
+    for (const block of msg.content as readonly KodaXContentBlock[]) {
+      if (block.type === 'tool_use') return true;
+    }
+  }
+  return false;
+}
+
+/**
+ * Metric-refinement layer (H2) — replaces FEATURE_196's blunt Layer 1
+ * ("any tool use → fire") for the cases where the Worker DID observable work.
+ *
+ * Returns `{fire}` when the work is measurable (write/plan/read), `undefined`
+ * when there is NO observable work at all — in which case the decision falls
+ * through to `detectConversationalIntent` + default-fire, preserving the F184
+ * intent-vs-action floor (a text-only claim with no tool evidence still fires).
+ *
+ * Fire on any substantial / risky signal; skip only provably-trivial observed
+ * work (single small edit, or a short grounded read-only lookup, with no plan).
+ */
+export function detectWorkScale(
+  ctx: StopHookContext,
+  metrics: VerifierGateMetrics,
+): GateDecision | undefined {
+  // Precondition for EVERY fire branch below (incl. the rounds check): the
+  // Worker did observable work. A long-running task that invoked NO tools and
+  // only claimed completion is NOT caught here — it returns undefined and is
+  // handled by the default-fire path (F184 floor), which is the correct result.
+  const didObservableWork =
+    metrics.writeOps > 0 ||
+    metrics.riskyShellOps > 0 ||
+    metrics.hasPlan ||
+    taskHasAnyToolUse(ctx.transcript);
+  if (!didObservableWork) return undefined;
+
+  if (metrics.riskyShellOps > 0) {
+    return {
+      fire: true,
+      reason: `metric-gate: ${metrics.riskyShellOps} high-risk shell op(s) — bash file/line is a blind spot, fire conservatively`,
+    };
+  }
+  if (metrics.hasPlan) {
+    return {
+      fire: true,
+      reason: 'metric-gate: Worker committed a Todolist — self-judged non-trivial',
+    };
+  }
+  if (metrics.rounds > ROUNDS_VERIFY_THRESHOLD) {
+    return {
+      fire: true,
+      reason: `metric-gate: ${metrics.rounds} rounds > ${ROUNDS_VERIFY_THRESHOLD} — long task may be incomplete`,
+    };
+  }
+  if (metrics.filesChanged >= 2) {
+    return {
+      fire: true,
+      reason: `metric-gate: ${metrics.filesChanged} files changed — multi-file edit`,
+    };
+  }
+  if (metrics.estimatedChangedLines > TRIVIAL_LINES) {
+    return {
+      fire: true,
+      reason: `metric-gate: ~${metrics.estimatedChangedLines} estimated lines > ${TRIVIAL_LINES} — large single-file edit`,
+    };
+  }
+  return {
+    fire: false,
+    reason: 'metric-gate: trivial observed work (single small edit or read-only lookup; no plan; short)',
+  };
+}
+
+/**
  * Greeting prefixes — Worker text-only response to one of these is
  * almost certainly a polite reciprocation, not a hallucinated
  * completion. Coverage: Chinese (你好/您好/嗨/早...) + English (hi/hello/
@@ -202,19 +335,27 @@ export function detectConversationalIntent(
 }
 
 /**
- * Compose final gate decision from L1 + L2 + escape hatch.
+ * Compose final gate decision (H2 metric-refined).
  *
  * Decision order (first match wins):
  *   1. Escape hatch `KODAX_VERIFIER_ALWAYS=1` env → fire (debug mode)
- *   2. Layer 1 action-surface signal → fire (Worker did real work)
- *   3. Layer 2 conversational-intent signal → skip (trivial chat)
- *   4. Safe default → fire
+ *   2. Metric work-scale (when Worker did observable work):
+ *        risky-shell / plan / >threshold rounds / multi-file / large edit → fire;
+ *        trivial observed work (single small edit, or grounded read-only) → skip.
+ *      No observable work at all → fall through (preserves F184 floor).
+ *   3. Conversational-intent (short greeting, no imperative) → skip.
+ *   4. Safe default → fire (no-action + non-greeting = claim without evidence).
+ *
+ * The metric layer ONLY refines the "Worker did work" branch — the
+ * conversational floor and default-fire are unchanged from FEATURE_196, so the
+ * F184 intent-vs-action floor (text-only claim, no tools) still fires.
  *
  * `env` is injected for testability (tests pass a fixed `Record<string,string>`
  * rather than mutating `process.env`).
  */
 export function composeGateDecision(
   ctx: StopHookContext,
+  metrics: VerifierGateMetrics,
   env: Record<string, string | undefined>,
 ): GateDecision {
   if (env.KODAX_VERIFIER_ALWAYS === '1') {
@@ -223,8 +364,8 @@ export function composeGateDecision(
       reason: 'escape-hatch: KODAX_VERIFIER_ALWAYS=1 forces 100% fire',
     };
   }
-  const actionSurface = detectActionSurface(ctx);
-  if (actionSurface) return actionSurface;
+  const workScale = detectWorkScale(ctx, metrics);
+  if (workScale) return workScale;
   const conversational = detectConversationalIntent(ctx);
   if (conversational) return conversational;
   return {
