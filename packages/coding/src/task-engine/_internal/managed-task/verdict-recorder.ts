@@ -4,27 +4,26 @@
  * Hosts:
  *   - `BudgetExtensionContext` — the per-run plan/harness/round refs
  *     the emit wrapper needs to fire the 90%-threshold budget-extension
- *     dialog and to enforce the H1 same-harness revise cap (consumed by
- *     `wrapEmitterWithRecorder` and `buildRunnerAgentChain` in R3)
- *   - `H1_MAX_SAME_HARNESS_REVISES` + `HARNESS_TIER_ORDER` +
- *     `isUpgradeBeyondCeiling` — Risk-2 / Shard 6d-U policy constants
- *     and the upgrade-ceiling comparator
+ *     dialog (consumed by `wrapEmitterWithRecorder`)
  *   - `wrapEmitterWithRecorder` — wraps a single protocol-emitter tool
  *     so every successful execution records its `ProtocolEmitterMetadata`
  *     into the recorder, fires the role-emit observer, runs the
- *     V2-routing + H1-cap + budget-extension dialog branches, and
- *     rewrites legacy V1 `handoffTarget=Generator` back to Worker
+ *     budget-extension dialog, and rewrites legacy V1
+ *     `handoffTarget=Generator` back to Worker
  *
  * Extracted from `task-engine/runner-driven.ts` lines ~398–870 of the
  * pre-FEATURE_171 monolith as part of FEATURE_171 (v0.7.41) modular
  * split. FEATURE_193 (v0.7.43) dropped the V1 scout/contract/handoff
- * slot branches; only the verdict slot remains.
+ * slot branches; the harness-LLM-judgment refactor then dropped the
+ * dead-on-V2 H1→H2 upgrade-ceiling gate + H1 same-harness revise cap
+ * (the Sidecar Verifier never carries `nextHarness`, and the V2 Worker
+ * runs at `PLANNED`, never `H1_EXECUTE_EVAL`). Only the verdict-record +
+ * budget-dialog logic remains.
  */
 
 import type { RunnableTool, RunnerToolResult } from '@kodax-ai/agent';
 import {
   GENERATOR_AGENT_NAME,
-  PLANNER_AGENT_NAME,
   WORKER_AGENT_NAME,
 } from '../../../agents/task-engine-agents.js';
 import type { ProtocolEmitterMetadata } from '../../../agents/protocol-emitters.js';
@@ -84,37 +83,6 @@ export interface BudgetExtensionContext {
 }
 
 /**
- * Risk-2 policy constants. H1 allows 1 same-harness revise before the
- * wrapper escalates or converts — matches legacy
- * `h1CheckedDirectRevisesUsed` semantics.
- */
-export const H1_MAX_SAME_HARNESS_REVISES = 1;
-
-/**
- * Shard 6d-U: harness ordering from low to high. Used to compare a
- * requested next_harness against `upgradeCeiling`. Mirrors legacy
- * `HARNESS_TIER_ORDER` (task-engine.ts constant used by the routing
- * coordinator).
- */
-const HARNESS_TIER_ORDER: Record<KodaXHarnessProfile, number> = {
-  H0_DIRECT: 0,
-  H1_EXECUTE_EVAL: 1,
-  H2_PLAN_EXECUTE_EVAL: 2,
-  // FEATURE_114 v0.7.36: PLANNED sits at the top of the ladder — it
-  // is the V2 single-loop profile that the upgrade path can't
-  // overshoot from H0/H1/H2 mid-task (V2 is selected at routing
-  // time via KODAX_HARNESS_V2, not via runtime escalation).
-  PLANNED: 3,
-};
-
-function isUpgradeBeyondCeiling(
-  requested: KodaXHarnessProfile,
-  ceiling: KodaXHarnessProfile,
-): boolean {
-  return HARNESS_TIER_ORDER[requested] > HARNESS_TIER_ORDER[ceiling];
-}
-
-/**
  * Wrap a protocol emitter so every successful execution records its
  * `ProtocolEmitterMetadata` into the per-run recorder AND fires a
  * managed-task status observer event. The wrapped tool otherwise behaves
@@ -166,129 +134,6 @@ export function wrapEmitterWithRecorder(
       if (budget) incrementManagedBudgetUsage(budget, 1);
       let result = await base.execute(input, ctx);
       if (!result.isError && result.metadata) {
-        // Shard 6d-U: guard against H1→H2 upgrade attempts that exceed
-        // `plan.decision.upgradeCeiling`. When the Evaluator issues
-        // `revise + next_harness=H2` but the plan only permits H1, we
-        // rewrite the emitter's `handoffTarget` from Planner back to
-        // Generator (continue at the current harness) and flip the
-        // degraded-continue ref so the final managed-task runtime carries
-        // `degradedContinue: true`. Mirrors legacy's
-        // `denyHarnessUpgrade → degradedContinue` branch.
-        // FEATURE_184 (v0.7.45) Phase C.3: this branch is no longer triggered in
-        // production — Generator is now terminal and the Sidecar Verifier writes
-        // `recorder.verdict` directly via `applySidecarVerdictToRecorder` (which
-        // replicates the budget logic). Preserved here for the
-        // `wrapEmitterWithRecorder` unit-test surface exposed through
-        // `__runnerDrivenTestables`; removing it would break those tests without
-        // equivalent coverage in the sidecar bridge.
-        if (budgetExtension) {
-          const emitterMeta = result.metadata as unknown as ProtocolEmitterMetadata;
-          const verdictPayload = emitterMeta.payload?.verdict;
-          const requested = verdictPayload?.nextHarness;
-          const ceiling = budgetExtension.planRef.current?.decision.upgradeCeiling;
-          if (
-            verdictPayload?.status === 'revise'
-            && requested
-            && ceiling
-            && isUpgradeBeyondCeiling(requested, ceiling)
-          ) {
-            budgetExtension.degradedContinueRef.current = true;
-            // Rewrite handoff target back to Generator so the next turn
-            // continues execution under the current harness rather than
-            // pivoting to Planner. Both the recorder copy and the result
-            // returned to the Runner must carry the redirected target.
-            const redirectedMetadata: ProtocolEmitterMetadata = {
-              ...emitterMeta,
-              handoffTarget: GENERATOR_AGENT_NAME,
-            };
-            result = { ...result, metadata: redirectedMetadata as unknown as Record<string, unknown> };
-          }
-
-          // v0.7.26 Risk-2 fix — H1 same-harness revise cap. Without
-          // this, Evaluator can emit `revise` repeatedly up to
-          // `MAX_ROUNDS_BY_HARNESS[H1] = 6`, which manifested in user
-          // reports as the Scout → Generator → Evaluator death loop.
-          // Legacy capped H1 at 1 same-harness revise via
-          // `h1CheckedDirectRevisesUsed`; we do the same here.
-          //
-          // Policy when cap is exceeded:
-          //   - upgradeCeiling permits H2 → auto-rewrite the verdict
-          //     into an H2 escalation (nextHarness=H2, handoffTarget
-          //     restored to Planner). User sees a planner turn added
-          //     rather than another revise cycle.
-          //   - upgradeCeiling blocks upgrade → auto-convert to accept:
-          //     status=accept, followups prepended with Evaluator's
-          //     reason so the remaining concern is visible to the user.
-          //     Flip degradedContinue so the runtime surfaces the
-          //     "accepted under cap" state. The accept is NOT silent —
-          //     the reason line is the first followup.
-          const currentHarness = budgetExtension.harnessRef.current;
-          const updatedEmitterMeta = result.metadata as unknown as ProtocolEmitterMetadata;
-          const updatedVerdict = updatedEmitterMeta.payload?.verdict;
-          if (
-            updatedVerdict?.status === 'revise'
-            && currentHarness === 'H1_EXECUTE_EVAL'
-          ) {
-            const revisesSoFar = budgetExtension.reviseCountByHarnessRef.current.get(currentHarness) ?? 0;
-            if (revisesSoFar >= H1_MAX_SAME_HARNESS_REVISES) {
-              const ceilingForUpgrade = budgetExtension.planRef.current?.decision.upgradeCeiling;
-              const canEscalateToH2 =
-                ceilingForUpgrade
-                && !isUpgradeBeyondCeiling('H2_PLAN_EXECUTE_EVAL', ceilingForUpgrade);
-              if (canEscalateToH2) {
-                // Auto-escalate: rewrite the verdict to an H2 revise so
-                // the Planner picks up the flow. The existing handoff
-                // routing (verdict → Planner for replan) kicks in.
-                const escalationReason = `Auto-escalated to H2 after H1 revise cap reached. Original reason: ${updatedVerdict.reason ?? '(none)'}`;
-                const escalatedMetadata: ProtocolEmitterMetadata = {
-                  ...updatedEmitterMeta,
-                  payload: {
-                    ...updatedEmitterMeta.payload,
-                    verdict: {
-                      ...updatedVerdict,
-                      nextHarness: 'H2_PLAN_EXECUTE_EVAL',
-                      reason: escalationReason,
-                    },
-                  },
-                  handoffTarget: PLANNER_AGENT_NAME,
-                };
-                result = { ...result, metadata: escalatedMetadata as unknown as Record<string, unknown> };
-              } else {
-                // Convert to accept-with-followup. Preserve Evaluator's
-                // reason as the leading followup line so the user sees
-                // what the Evaluator still wanted fixed.
-                const pendingConcern = updatedVerdict.reason
-                  ? `Pending concern from Evaluator (accepted under H1 revise cap): ${updatedVerdict.reason}`
-                  : 'Pending concern from Evaluator (accepted under H1 revise cap): revise reason not provided.';
-                const followupsList = [pendingConcern, ...(updatedVerdict.followups ?? [])];
-                const convertedMetadata: ProtocolEmitterMetadata = {
-                  ...updatedEmitterMeta,
-                  payload: {
-                    ...updatedEmitterMeta.payload,
-                    verdict: {
-                      ...updatedVerdict,
-                      status: 'accept',
-                      followups: followupsList,
-                      nextHarness: undefined,
-                    },
-                  },
-                  isTerminal: true,
-                  handoffTarget: undefined,
-                };
-                budgetExtension.degradedContinueRef.current = true;
-                result = { ...result, metadata: convertedMetadata as unknown as Record<string, unknown> };
-              }
-            } else {
-              // First same-harness revise — increment counter, pass
-              // through unchanged. The increment happens AFTER the
-              // comparison so the first revise is allowed.
-              budgetExtension.reviseCountByHarnessRef.current.set(
-                currentHarness,
-                revisesSoFar + 1,
-              );
-            }
-          }
-        }
         // FEATURE_193 v0.7.43: V1 chain retired. Worker is the executor; any
         // legacy V1 verdict metadata that names GENERATOR_AGENT_NAME as the
         // handoff target gets rewritten to WORKER_AGENT_NAME.

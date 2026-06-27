@@ -231,7 +231,6 @@ import {
   MANAGED_MAX_ROUNDS,
 } from './_internal/managed-task/observer-bridge.js';
 import {
-  H1_MAX_SAME_HARNESS_REVISES,
   wrapEmitterWithRecorder,
   type BudgetExtensionContext,
 } from './_internal/managed-task/verdict-recorder.js';
@@ -471,7 +470,6 @@ function attachTodoDriftWarnings(
  */
 export const __runnerDrivenTestables = {
   wrapEmitterWithRecorder,
-  H1_MAX_SAME_HARNESS_REVISES,
   buildStructuralResumeSeed,
 } as const;
 
