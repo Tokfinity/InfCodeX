@@ -163,11 +163,6 @@ export type {
   KodaXChildContextBundle,
   KodaXChildAgentResult,
   KodaXParentReductionContract,
-  KodaXFanoutSchedulerInput,
-  KodaXFanoutBranchLifecycle,
-  KodaXFanoutBranchTransition,
-  KodaXFanoutBranchRecord,
-  KodaXFanoutSchedulerPlan,
   KodaXTaskVerificationContract,
   KodaXOrchestrationVerdict,
   KodaXManagedTask,
@@ -541,17 +536,6 @@ export {
 // FEATURE_093 (v0.7.24): KodaXClient imported directly from client.ts to
 // avoid re-creating the agent 鈫?client cycle at the barrel.
 export { KodaXClient } from './client.js';
-
-export {
-  buildFanoutSchedulerPlan,
-  createFanoutSchedulerInput,
-  applyFanoutBranchTransition,
-  countActiveFanoutBranches,
-  getFanoutBranch,
-  assignFanoutBranchWorker,
-  markFanoutBranchCompleted,
-  markFanoutBranchCancelled,
-} from './fanout-scheduler.js';
 
 export {
   runManagedTask,

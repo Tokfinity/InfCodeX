@@ -793,54 +793,6 @@ export interface KodaXChildFinding {
   readonly artifacts: readonly string[];
 }
 
-export interface KodaXFanoutSchedulerInput {
-  profile: KodaXAmaProfile;
-  fanoutClass: KodaXAmaFanoutClass;
-  maxChildren?: number;
-  bundles: KodaXChildContextBundle[];
-  reductionStrategy: KodaXParentReductionContract['strategy'];
-}
-
-export type KodaXFanoutBranchLifecycle = 'scheduled' | 'deferred' | 'completed' | 'cancelled';
-
-export interface KodaXFanoutBranchRecord {
-  bundleId: string;
-  status: KodaXFanoutBranchLifecycle;
-  workerId?: string;
-  childId?: string;
-  reason?: string;
-}
-
-export type KodaXFanoutBranchTransition =
-  | {
-    type: 'assign';
-    bundleId: string;
-    workerId: string;
-  }
-  | {
-    type: 'complete';
-    bundleId: string;
-    childId?: string;
-  }
-  | {
-    type: 'cancel';
-    bundleId: string;
-    reason: string;
-  };
-
-export interface KodaXFanoutSchedulerPlan {
-  enabled: boolean;
-  profile: KodaXAmaProfile;
-  fanoutClass: KodaXAmaFanoutClass;
-  branches: KodaXFanoutBranchRecord[];
-  scheduledBundleIds: string[];
-  deferredBundleIds: string[];
-  maxParallel: number;
-  mergeStrategy: KodaXParentReductionContract['strategy'];
-  cancellationPolicy: 'none' | 'winner-cancel' | 'budget-cancel';
-  reason: string;
-}
-
 export type KodaXAgentMode = 'ama' | 'sa' | 'amaw';
 export type KodaXMemoryStrategy = 'continuous' | 'compact' | 'reset-handoff';
 export type KodaXBudgetDisclosureZone = 'green' | 'yellow' | 'orange' | 'red';
@@ -1409,7 +1361,6 @@ export interface KodaXManagedTaskRuntimeState {
   childContextBundles?: KodaXChildContextBundle[];
   childAgentResults?: KodaXChildAgentResult[];
   parentReductionContract?: KodaXParentReductionContract;
-  fanoutSchedulerPlan?: KodaXFanoutSchedulerPlan;
   budget?: KodaXManagedBudgetSnapshot;
   scorecard?: KodaXVerificationScorecard;
   qualityAssuranceMode?: 'required' | 'optional';
