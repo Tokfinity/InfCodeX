@@ -2726,5 +2726,42 @@ independent GPT pass, then build + 4053-test green):
 **Breaking (pre-1.0, internal):** removes incidental barrel exports
 (`buildPromptOverlay`, `buildAmaControllerDecision`, and the `KodaXAma*` advisory
 types — none in the SDK embedder guide) and the AMA runtime-state telemetry
-fields. A `KodaXAmaFanoutClass` → `KodaXChildFanoutClass` rename is a separate
-cosmetic follow-up.
+fields.
+
+### Phase 3 follow-ups — child-fanout rename, harness-tier dead-code, spent evals
+
+- **`KodaXAmaFanoutClass` → `KodaXChildFanoutClass`.** The type is the child-task
+  dispatch/display classification (used by `dispatch_child_task`, child
+  bundles/status, the REPL work strip), independent of the deleted AMA-controller
+  advisory; the legacy `Ama` prefix was misleading and was renamed across
+  llm/coding/repl.
+- **Harness-tier dead branches removed.** With `decision.harnessProfile` collapsed
+  to a constant `H0_DIRECT`, the remaining branches were dead-or-constant and were
+  folded out: `harnessToBudget` (→ the H0 constant), the payload-builder complexity
+  ternary + always-true `harness === 'H0_DIRECT'` guards, `HARNESS_ORDER` /
+  `getHarnessRank` (no callers), the role-prompt H2 skill-section variant (emitted
+  text unchanged), the `buildFallbackRoutingDecision` H1 literal (overwritten by
+  `selectHarnessProfile`), and `reviseCountByHarnessRef` (created/passed but never
+  read). All behavior-preserving (coding suite green).
+- **Harness-tier field KEPT as an accurate constant (decision).** The harness-tier
+  *concept* (multi-tier H0/H1/H2 routing) is retired — only the single tier H0
+  remains. The `harnessProfile` field (on `KodaXTaskRoutingDecision`,
+  `KodaXManagedTaskStatusEvent`, `KodaXTaskContract`, checkpoint, and the REPL
+  status display) now accurately reports `H0_DIRECT` (= single-pass execution),
+  so it is **not** dead/misleading — it is a constant-valued but honest field.
+  Removing it would be a UX change (drop the REPL harness indicator) + a public
+  schema break + a checkpoint migration for ~zero benefit, so per KodaX
+  minimalism the field is retained. The dead/misleading machinery (overlays,
+  AMA-controller, dead branches) is what mattered, and that is gone.
+- **Spent comparison evals removed.** The `h3-static-guidance-{panel,pilot}` and
+  `sa-static-guidance-panel` evals compared the router overlay (`buildPromptOverlay`)
+  against the static EXECUTION GUIDANCE; they reached their KEEP verdict and
+  shipped P1.7/H3, after which #6 deleted the overlay baseline. The comparison can
+  no longer run (baseline gone) and the substrate is unchanged since KEEP, so the
+  spent drivers were deleted. The behavior stays guarded by the role-prompt /
+  capability-sections unit assertions (P3#5); the KEEP verdict lives in git
+  history. `decision-summary-*` evals are unaffected.
+
+**Known small follow-up (not done):** `inferScoutMutationIntent` (tool-policy.ts)
+is an exported function only reached by its own tests (FEATURE_193 Scout residue,
+not harness-tier) — a candidate for a separate dead-Scout-code sweep.
