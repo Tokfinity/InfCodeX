@@ -82,22 +82,18 @@ export function createRolePrompt(
   // Issue 119: For post-Scout roles (generator/planner/evaluator), `decision.mutationSurface`
   // is a stale pre-Scout regex heuristic. Show it only to Scout — downstream workers get
   // scope cues from Scout's own scope/reviewFilesOrAreas via the handoff.
-  // FEATURE_112 (v0.7.34): Topology ceiling rendered as a bare value
-  // (H0_DIRECT / H1_EXECUTE_EVAL / H2_PLAN_EXECUTE_EVAL / PLANNED) for
-  // every role. FEATURE_193 (v0.7.43) removed the Scout-only semantic
-  // gloss + the Scout-only mutation-surface row + the Scout-only
-  // topology-ceiling-without-harness branch: V2 Worker is the only
-  // active createRolePrompt role, so the scout/non-scout split was
-  // permanently taking the non-scout branch.
-  const ceilingValue = decision.topologyCeiling ?? decision.upgradeCeiling ?? 'none';
+  // decisionSummary carries the SEMANTIC routing fields the Worker still
+  // benefits from (an eval showed Risk/assurance-intent help floor models
+  // orient a review task). The `Harness:` (constant 'H0_DIRECT') + `Topology
+  // ceiling:` (V1 vestige) lines were dropped — they were the ADR-033
+  // classification-table residue and an eval confirmed removing them is
+  // behaviour-neutral (the harness tier collapsed; see ADR-043 Phase 2).
   const decisionSummary = [
     `Primary task: ${decision.primaryTask}`,
     `Assurance intent: ${decision.assuranceIntent ?? 'default'}`,
     `Work intent: ${decision.workIntent}`,
     `Complexity hint: ${decision.complexity}`,
     `Risk: ${decision.riskLevel}`,
-    `Harness: ${decision.harnessProfile}`,
-    `Topology ceiling: ${ceilingValue}`,
     `Brainstorm required: ${decision.requiresBrainstorm ? 'yes' : 'no'}`,
   ].join('\n');
 
