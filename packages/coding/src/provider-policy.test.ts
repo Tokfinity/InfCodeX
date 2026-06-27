@@ -200,6 +200,25 @@ describe('provider policy', () => {
     expect(decision.issues).toEqual([]);
   });
 
+  it('surfaces evidence-reliability warnings for review / strict-audit tasks (no harness dependency)', () => {
+    // The retired harness H2 branch used to be the path that warned bridge
+    // providers; the still-live evidence protection keys on taskType /
+    // executionMode instead. This locks that non-harness path.
+    const decision = evaluateProviderPolicy({
+      providerName: 'gemini-cli',
+      capabilityProfile: CLI_BRIDGE_PROFILE,
+      reasoningCapability: 'prompt-only',
+      taskType: 'review',
+      executionMode: 'strict-audit',
+      reasoningMode: 'off',
+    });
+
+    expect(decision.status).toBe('warn');
+    expect(decision.issues.map((issue) => issue.code)).toEqual(
+      expect.arrayContaining(['evidence-context-loss', 'evidence-support-limited']),
+    );
+  });
+
   it('allows MCP-native capability workflows on full native providers', () => {
     const decision = evaluateProviderPolicy({
       providerName: 'openai',

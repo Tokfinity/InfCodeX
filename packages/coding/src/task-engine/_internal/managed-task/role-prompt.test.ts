@@ -252,6 +252,18 @@ describe('FEATURE_114 Slice 2 — worker role prompt entry wire', () => {
     expect(rendered).toContain('Preserve any exact machine-readable closing contract');
   });
 
+  it('decisionSummary is de-harnessed and the Worker self-judges via EXECUTION GUIDANCE (ADR-043)', () => {
+    const rendered = renderWorker();
+    // Semantic routing fields stay (they help; see decisionSummary eval).
+    expect(rendered).toContain('Primary task:');
+    expect(rendered).toContain('Risk:');
+    // The collapsed/vestige harness-tier classification lines were removed (P1.6).
+    expect(rendered).not.toContain('Harness:');
+    expect(rendered).not.toContain('Topology ceiling:');
+    // The Worker self-judges its approach from the static guidance (H3) instead.
+    expect(rendered).toContain('EXECUTION GUIDANCE');
+  });
+
   it('teaches language continuity across idle-yield resumes', () => {
     const rendered = renderWorker();
     expect(rendered).toContain('Language continuity: Match the primary natural language');
