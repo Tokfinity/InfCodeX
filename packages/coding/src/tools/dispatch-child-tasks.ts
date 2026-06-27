@@ -35,7 +35,7 @@ import type {
   KodaXChildAgentResult,
   KodaXChildContextBundle,
   KodaXChildModelHint,
-  KodaXAmaFanoutClass,
+  KodaXChildFanoutClass,
   KodaXChildExecutionResult,
   KodaXToolExecutionContext,
 } from '../types.js';
@@ -495,7 +495,7 @@ export async function* toolDispatchChildTask(
 
   const bundle: KodaXChildContextBundle = {
     id: childId,
-    fanoutClass: 'evidence-scan' as KodaXAmaFanoutClass,
+    fanoutClass: 'evidence-scan' as KodaXChildFanoutClass,
     objective,
     readOnly,
     scopeSummary: typeof input.scope_summary === 'string' ? input.scope_summary : undefined,

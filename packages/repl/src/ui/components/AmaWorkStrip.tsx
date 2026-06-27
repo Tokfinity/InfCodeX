@@ -1,11 +1,11 @@
 import React from "react";
 import { Box, Text } from "../tui.js";
-import type { KodaXAmaFanoutClass } from "@kodax-ai/coding";
+import type { KodaXChildFanoutClass } from "@kodax-ai/coding";
 import { getTheme } from "../themes/index.js";
 import { Spinner } from "./LoadingIndicator.js";
 
 export function formatAmaWorkStripText(
-  fanoutClass?: KodaXAmaFanoutClass,
+  fanoutClass?: KodaXChildFanoutClass,
   count?: number,
 ): string | undefined {
   if (!fanoutClass || !count || count <= 0) {

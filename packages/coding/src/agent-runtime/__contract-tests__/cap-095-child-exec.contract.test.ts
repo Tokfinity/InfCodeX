@@ -59,7 +59,7 @@ import {
 import type { AgentArtifact } from '../../construction/types.js';
 import type {
   KodaXChildContextBundle,
-  KodaXAmaFanoutClass,
+  KodaXChildFanoutClass,
 } from '../../types.js';
 
 const mockRunKodaX = runKodaX as ReturnType<typeof vi.fn>;
@@ -67,7 +67,7 @@ const mockRunKodaX = runKodaX as ReturnType<typeof vi.fn>;
 function createBundle(overrides: Partial<KodaXChildContextBundle> = {}): KodaXChildContextBundle {
   return {
     id: `cb-${Math.random().toString(36).slice(2, 6)}`,
-    fanoutClass: 'evidence-scan' as KodaXAmaFanoutClass,
+    fanoutClass: 'evidence-scan' as KodaXChildFanoutClass,
     objective: 'Test objective',
     evidenceRefs: [],
     constraints: [],

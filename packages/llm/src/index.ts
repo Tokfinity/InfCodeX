@@ -58,7 +58,7 @@ export type {
   KodaXMutationSurface,
   KodaXAssuranceIntent,
   KodaXHarnessProfile,
-  KodaXAmaFanoutClass,
+  KodaXChildFanoutClass,
   KodaXReviewScale,
   KodaXTaskRoutingDecision,
   KodaXThinkingBudgetMap,

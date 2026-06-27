@@ -59,7 +59,7 @@ export type {
   KodaXTaskType,
   KodaXExecutionMode,
   KodaXRiskLevel,
-  KodaXAmaFanoutClass,
+  KodaXChildFanoutClass,
   KodaXReviewScale,
   KodaXTaskRoutingDecision,
   KodaXThinkingBudgetMap,

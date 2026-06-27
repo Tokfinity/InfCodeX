@@ -20,7 +20,7 @@ vi.mock('./tools/worktree.js', () => ({
 
 import type {
   KodaXChildContextBundle,
-  KodaXAmaFanoutClass,
+  KodaXChildFanoutClass,
   ProviderRecoveryEvent,
 } from './types.js';
 import {
@@ -46,7 +46,7 @@ const mockToolWorktreeRemove = vi.mocked(toolWorktreeRemove);
 function createBundle(overrides: Partial<KodaXChildContextBundle> = {}): KodaXChildContextBundle {
   return {
     id: `cb-${Math.random().toString(36).slice(2, 6)}`,
-    fanoutClass: 'evidence-scan' as KodaXAmaFanoutClass,
+    fanoutClass: 'evidence-scan' as KodaXChildFanoutClass,
     objective: 'Test objective',
     evidenceRefs: [],
     constraints: [],

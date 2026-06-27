@@ -33,10 +33,10 @@ export type {
   KodaXExecutionPattern,
   KodaXMutationSurface,
   KodaXAssuranceIntent,
-  // v0.7.35.1 FEATURE_142 (A-R4): KodaXHarnessProfile / KodaXAmaProfile /
-  // KodaXAmaTactic / KodaXAmaFanoutClass / KodaXAmaFanoutPolicy /
-  // KodaXAmaControllerDecision removed — coding-AMA-specific, see ADR-021.
-  // Coding-side consumers import directly from `@kodax-ai/llm`.
+  // v0.7.35.1 FEATURE_142 (A-R4): KodaXHarnessProfile / KodaXChildFanoutClass
+  // removed — coding-routing-specific, see ADR-021. Coding-side consumers
+  // import directly from `@kodax-ai/llm`. (AMA-controller advisory types were
+  // deleted in ADR-043.)
   KodaXTaskRoutingDecision,
   KodaXThinkingBudgetMap,
   KodaXTaskBudgetOverrides,

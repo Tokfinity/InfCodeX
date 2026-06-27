@@ -81,7 +81,7 @@ describe('tool registry', () => {
     // field accepts a string.
     const bundle: import('../types.js').KodaXChildContextBundle = {
       id: 'test',
-      fanoutClass: 'read' as import('../types.js').KodaXAmaFanoutClass,
+      fanoutClass: 'read' as import('../types.js').KodaXChildFanoutClass,
       objective: 'noop',
       evidenceRefs: [],
       constraints: [],

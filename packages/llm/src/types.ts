@@ -387,10 +387,10 @@ export type KodaXReviewScale =
   | 'large'
   | 'massive';
 
-// KodaXAmaFanoutClass is the child-task display/dispatch classification used by
+// KodaXChildFanoutClass is the child-task display/dispatch classification used by
 // dispatch_child_task, child bundles/status, and the REPL work strip — it is
 // independent of the retired AMA-controller advisory (ADR-043) and stays live.
-export type KodaXAmaFanoutClass =
+export type KodaXChildFanoutClass =
   | 'finding-validation'
   | 'evidence-scan'
   | 'module-triage'

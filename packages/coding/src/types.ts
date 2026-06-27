@@ -84,7 +84,7 @@ import type {
 // going through @kodax-ai/agent's re-export, which has been removed.
 import type {
   KodaXHarnessProfile,
-  KodaXAmaFanoutClass,
+  KodaXChildFanoutClass,
   KodaXReviewScale,
   KodaXStableEffortIntent,
   KodaXWireReasoningEffort,
@@ -148,7 +148,7 @@ export type {
   KodaXMutationSurface,
   KodaXAssuranceIntent,
   KodaXHarnessProfile,
-  KodaXAmaFanoutClass,
+  KodaXChildFanoutClass,
   KodaXReviewScale,
   KodaXTaskRoutingDecision,
   KodaXThinkingBudgetMap,
@@ -669,7 +669,7 @@ export interface KodaXTaskToolPolicy {
 
 export interface KodaXChildContextBundle {
   id: string;
-  fanoutClass: KodaXAmaFanoutClass;
+  fanoutClass: KodaXChildFanoutClass;
   objective: string;
   scopeSummary?: string;
   evidenceRefs: string[];
@@ -728,7 +728,7 @@ export type KodaXChildModelHint = 'fast' | 'balanced' | 'deep';
 
 export interface KodaXChildAgentResult {
   childId: string;
-  fanoutClass: KodaXAmaFanoutClass;
+  fanoutClass: KodaXChildFanoutClass;
   status: 'completed' | 'blocked' | 'failed';
   disposition: 'candidate' | 'valid' | 'false-positive' | 'needs-more-evidence';
   summary: string;
@@ -831,7 +831,7 @@ export interface KodaXManagedTaskStatusEvent {
   harnessProfile: KodaXHarnessProfile;
   activeWorkerId?: string;
   activeWorkerTitle?: string;
-  childFanoutClass?: KodaXAmaFanoutClass;
+  childFanoutClass?: KodaXChildFanoutClass;
   childFanoutCount?: number;
   currentRound?: number;
   maxRounds?: number;
