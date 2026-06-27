@@ -2660,11 +2660,18 @@ produced `writeOps=0` and skipped verification; (2) line estimation used
 slipped the fire rule — now uses touched lines (`max(old,new)`, summed across
 `multi_edit` edits).
 
-**Known remaining gap**: H3 migrated only the **AMA Worker** to static
-self-judgment. The **SA / child-task path** (every dispatched child runs SA)
-still receives the full router overlay via `capability-sections.ts`, so the
-refactor is half-applied across the two execution paths; aligning SA is the
-main outstanding LLM-facing follow-up. `harnessProfile` /
-`KodaXTaskRoutingDecision` are retained (the live consumers now read only the
-semantic fields — primaryTask/recommendedMode/complexity/risk/mutationSurface/
-assuranceIntent/needsIndependentQA — not the tier).
+**Known remaining gap (narrow)**: H3 migrated the **AMA Worker** to static
+self-judgment. **Child tasks are already clean** — every dispatched child runs
+with a `systemPromptOverride` (`CHILD_AGENT_SYSTEM_PROMPT` / specialist
+instructions) that bypasses `buildSystemPrompt` entirely
+(`reasoning-plan-entry.ts` returns the override before
+`buildCapabilityContextSections`), so the router `prompt-overlay` section never
+reaches them. The only path that still injects the full router overlay is the
+**explicit top-level `--agent-mode sa` session** (`capability-sections.ts`
+`prompt-overlay` section) — a rare, user-selected mode. Aligning it (drop the
+overlay + port the static EXECUTION GUIDANCE into `system.ts`) is an optional
+LLM-facing follow-up, lower priority now that the common paths (Worker +
+children) are all clean. `harnessProfile` / `KodaXTaskRoutingDecision` are
+retained (the live consumers now read only the semantic fields —
+primaryTask/recommendedMode/complexity/risk/mutationSurface/assuranceIntent/
+needsIndependentQA — not the tier).
