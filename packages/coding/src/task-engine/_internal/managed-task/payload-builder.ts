@@ -46,17 +46,10 @@ import {
 } from './scorecard.js';
 import { buildCompletionContractStatus } from './role-prompts.js';
 
-/**
- * Map the harness tier to the assignment-id convention legacy consumers
- * expect. H0 uses 'direct', H1/H2 use the role name.
- */
-function harnessToBudget(harness: KodaXHarnessProfile): number {
-  // Legacy per-harness global work budget constants (approximate; tests
-  // only assert aggregate totals, not exact ceilings).
-  if (harness === 'H0_DIRECT') return 50;
-  if (harness === 'H1_EXECUTE_EVAL') return 400;
-  return 600;
-}
+// The legacy per-harness global work budget (H0→50 / H1→400 / H2→600) collapsed
+// with the harness tier (ADR-043): V2 is always H0_DIRECT, so the single-pass
+// default is the constant `DEFAULT_GLOBAL_WORK_BUDGET` below.
+const DEFAULT_GLOBAL_WORK_BUDGET = 50;
 
 /**
  * Build the full `KodaXManagedTask` payload from the recorder, role
@@ -137,9 +130,6 @@ export function buildManagedTaskPayload(args: {
   // `recorder.contract?.payload.contract` was the V1 H2 contract slot —
   // also deleted; contract summary/criteria/evidence/constraints sourced
   // directly from `options.context?.taskVerification`.
-  const harness: KodaXHarnessProfile =
-    plan?.decision.harnessProfile ?? 'H0_DIRECT';
-
   const nowIso = new Date().toISOString();
   // v0.7.26 C4 parity — honour the caller-supplied taskId so every
   // `buildManagedTaskPayload` call within a single run reuses the same
@@ -177,11 +167,11 @@ export function buildManagedTaskPayload(args: {
     status: contractStatus,
     primaryTask: decision?.primaryTask ?? 'conversation',
     workIntent: decision?.workIntent ?? 'new',
-    complexity:
-      decision?.complexity
-        ?? (harness === 'H0_DIRECT' ? 'simple' : harness === 'H1_EXECUTE_EVAL' ? 'moderate' : 'complex'),
+    complexity: decision?.complexity ?? 'simple',
     riskLevel: decision?.riskLevel ?? 'low',
-    harnessProfile: harness,
+    // Harness tier collapsed to a constant in V2 (ADR-043); the contract field
+    // is retained for SDK/checkpoint schema compat and always emits H0_DIRECT.
+    harnessProfile: 'H0_DIRECT',
     recommendedMode: decision?.recommendedMode ?? 'conversation',
     requiresBrainstorm: decision?.requiresBrainstorm ?? false,
     reason: decision?.reason ?? 'Runner-driven AMA path',
@@ -198,10 +188,10 @@ export function buildManagedTaskPayload(args: {
   for (const r of rolesEmitted) {
     if (!roleOrder.includes(r)) roleOrder.push(r);
   }
-  // H0_DIRECT convention: use 'direct' as the role when Scout answers
+  // Single-pass convention: use 'direct' as the role when the Worker answers
   // without handoff. The legacy path emits a single 'direct' assignment.
   const assignmentRoles: KodaXTaskRole[] =
-    harness === 'H0_DIRECT' && roleOrder.length <= 1 ? ['direct'] : roleOrder;
+    roleOrder.length <= 1 ? ['direct'] : roleOrder;
   const roleAssignments: KodaXTaskRoleAssignment[] = assignmentRoles.map((role) => ({
     id: role,
     role,
@@ -215,8 +205,10 @@ export function buildManagedTaskPayload(args: {
   // `dcac55ea`). On V2 the only execution agent that produces a managedTask
   // payload without a Sidecar Verifier verdictStatus is the Worker. H0_DIRECT
   // remains for the SA-fast-path pseudo-role.
-  const decidedByAssignmentId =
-    harness === 'H0_DIRECT' ? 'direct' : verdictStatus ? 'evaluator' : 'worker';
+  // Harness collapsed to H0_DIRECT in V2 (ADR-043), so this was already always
+  // 'direct' at runtime — made explicit. (A Worker/Evaluator assignment-id
+  // distinction, if wanted, is a separate behavior change, not this cleanup.)
+  const decidedByAssignmentId = 'direct';
   // FEATURE_159 follow-up (v0.7.40): fallback to '' instead of `prompt`.
   // The legacy `?? prompt` fallback was a copy from SA fast-path days when
   // the Scout always provided a `userAnswer`, so `?? prompt` was a never-
@@ -297,7 +289,7 @@ export function buildManagedTaskPayload(args: {
       signal,
     },
     runtime: {
-      globalWorkBudget: budget?.totalBudget ?? harnessToBudget(harness),
+      globalWorkBudget: budget?.totalBudget ?? DEFAULT_GLOBAL_WORK_BUDGET,
       budgetUsage: budget?.spentBudget ?? rolesEmitted.length,
       // FEATURE_193 (v0.7.43): legacy V1 semantics — Scout would emit a
       // `confirmedHarness` upgrading from H0_DIRECT to H1/H2 and the Runner
@@ -313,8 +305,8 @@ export function buildManagedTaskPayload(args: {
       // overlay was removed, so the runtime fields were dropped too.
       routingAttempts: plan?.decision.routingAttempts,
       routingSource: plan?.decision.routingSource,
-      currentHarness: harness,
-      upgradeCeiling: plan?.decision.upgradeCeiling ?? harness,
+      currentHarness: 'H0_DIRECT',
+      upgradeCeiling: plan?.decision.upgradeCeiling ?? 'H0_DIRECT',
       qualityAssuranceMode: deriveQualityAssuranceMode(plan),
       // FEATURE_193 (v0.7.43) deep V1 cleanup: `scoutDecision` + `skillMap`
       // runtime fields physically removed from `KodaXManagedTaskRuntimeState`
