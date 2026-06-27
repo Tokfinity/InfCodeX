@@ -657,7 +657,6 @@ export {
   buildAmaControllerDecision,
   buildFallbackRoutingDecision,
   buildProviderPolicyHintsForDecision,
-  buildPromptOverlay,
   createReasoningPlan,
 } from './reasoning.js';
 

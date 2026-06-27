@@ -35,10 +35,7 @@ import type {
   KodaXTaskRoutingDecision,
   KodaXTaskStatus,
 } from '../../../types.js';
-import {
-  buildAmaControllerDecision,
-  buildPromptOverlay,
-} from '../../../reasoning.js';
+import { buildAmaControllerDecision } from '../../../reasoning.js';
 import type { ReasoningPlan } from '../../../reasoning.js';
 import {
   buildManagedStatusBudgetFields,
@@ -260,12 +257,9 @@ export function applyScoutDecisionToPlanRunner(
     ...plan,
     decision,
     amaControllerDecision,
-    promptOverlay: buildPromptOverlay(
-      decision,
-      plan.providerPolicy?.routingNotes,
-      plan.providerPolicy,
-      amaControllerDecision,
-    ),
+    // Router prompt-overlay retired (ADR-043) — Worker self-judges from static
+    // EXECUTION GUIDANCE; the Scout-confirmed routing still updates the plan.
+    promptOverlay: '',
   };
 }
 

@@ -61,77 +61,6 @@ const THINKING_DEPTH_ORDER: Record<KodaXThinkingDepth, number> = {
   high: 3,
 };
 
-const EXECUTION_MODE_OVERLAYS: Record<KodaXExecutionMode, string> = {
-  conversation: [
-    '[Execution Mode: conversation]',
-    '- Answer conversationally and directly.',
-    '- Do not expand into repo analysis, planning, or tool-heavy investigation unless the user asks for work.',
-  ].join('\n'),
-  lookup: [
-    '[Execution Mode: lookup]',
-    '- Answer the navigation or lookup question directly.',
-    '- Prefer precise paths, symbols, or locations over broad commentary.',
-    '- Do not escalate into planning or validation ceremony unless the user explicitly asks for deeper analysis.',
-  ].join('\n'),
-  'pr-review': [
-    '[Execution Mode: pr-review]',
-    '- Report only high-confidence, actionable issues that materially affect correctness, reliability, security, or merge readiness.',
-    '- Do not count naming preferences, formatting, or minor best-practice nits as findings.',
-    '- Prefer the output structure: Must fix, then Optional improvements.',
-    '- Limit must-fix findings to the most important 5 items, ordered by impact.',
-    '- Every reported issue must explain the concrete consequence.',
-  ].join('\n'),
-  'strict-audit': [
-    '[Execution Mode: strict-audit]',
-    '- Perform a broad audit across correctness, security, performance, and maintainability.',
-    '- Separate confirmed issues from lower-confidence risks.',
-    '- You may include broader risks and follow-up checks when clearly labeled.',
-  ].join('\n'),
-  implementation: [
-    '[Execution Mode: implementation]',
-    '- Focus on direct execution and high-signal reasoning.',
-    '- Prefer making progress over extended commentary.',
-    '- Keep explanations concise unless a tradeoff materially affects the result.',
-  ].join('\n'),
-  planning: [
-    '[Execution Mode: planning]',
-    '- Focus on architecture, constraints, sequencing, and risk management.',
-    '- Prefer structured plans, tradeoffs, and validation steps before code changes.',
-  ].join('\n'),
-  investigation: [
-    '[Execution Mode: investigation]',
-    '- Focus on isolating root cause, validating assumptions, and narrowing uncertainty.',
-    '- Prefer concrete evidence, reproduction steps, and targeted checks before broad changes.',
-  ].join('\n'),
-};
-
-const HARNESS_PROFILE_OVERLAYS: Record<KodaXHarnessProfile, string> = {
-  H0_DIRECT: [
-    '[Harness Profile: H0_DIRECT]',
-    '- Keep the task in a single direct pass unless concrete evidence forces escalation.',
-    '- Prefer concise execution without extra discovery scaffolding.',
-  ].join('\n'),
-  H1_EXECUTE_EVAL: [
-    '[Harness Profile: H1_EXECUTE_EVAL]',
-    '- Execute the task, then self-check the result against the request before finalizing.',
-    '- Prefer evidence-backed completion over speculative confidence.',
-  ].join('\n'),
-  H2_PLAN_EXECUTE_EVAL: [
-    '[Harness Profile: H2_PLAN_EXECUTE_EVAL]',
-    '- Start with a short explicit plan or option framing before making changes.',
-    '- After execution, verify the result and call out any residual uncertainty.',
-  ].join('\n'),
-  // FEATURE_114 v0.7.36: PLANNED is the V2 single-loop profile. The
-  // Worker collapses Scout/Planner/Generator and emits its plan via
-  // todo_update before mutating; the Evaluator stays as the
-  // structural verification gate.
-  PLANNED: [
-    '[Harness Profile: PLANNED]',
-    '- Worker single-loop with todo_update plan-first contract; Evaluator preserved as structural gate.',
-    '- Trivial tasks may skip todo_update; non-trivial tasks MUST commit a plan as the first tool call.',
-  ].join('\n'),
-};
-
 const SOLO_BOUNDARY_DIRECT_THRESHOLD = 0.75;
 
 const UNCERTAINTY_MARKERS = [
@@ -1530,57 +1459,6 @@ export function buildAmaControllerDecision(
   };
 }
 
-function buildAmaControllerOverlay(
-  controller: KodaXAmaControllerDecision,
-): string {
-  return [
-    `[AMA Controller] profile=${controller.profile}; tactics=${controller.tactics.join(',')}; fanoutAdmissible=${controller.fanout.admissible ? 'yes' : 'no'}; fanoutClass=${controller.fanout.class ?? 'none'}; maxChildren=${controller.fanout.maxChildren ?? 'n/a'}.`,
-    `[AMA Controller Reason] ${controller.reason}`,
-    `[AMA Fan-Out] ${controller.fanout.reason}`,
-    controller.upgradeTriggers.length > 0
-      ? `[AMA Upgrade Triggers] ${controller.upgradeTriggers.join(' ')}`
-      : undefined,
-    controller.fanout.admissible
-      ? '[AMA Behavior] If scope is ambiguous, ask one focused clarifying question rather than guessing. If distinct sub-problems exist, delegate via the agent tool rather than walking through them yourself.'
-      : undefined,
-  ].filter(Boolean).join('\n');
-}
-
-export function buildPromptOverlay(
-  decision: KodaXTaskRoutingDecision,
-  extraNotes: string[] = [],
-  _providerPolicy?: KodaXProviderPolicyDecision,
-  amaControllerDecision: KodaXAmaControllerDecision = buildAmaControllerDecision(decision),
-): string {
-  const routingNotes = decision.routingNotes?.map(
-    (note) => `[Task Routing Note] ${note}`,
-  ) ?? [];
-  const workIntentGuidance = buildWorkIntentGuidance(decision.workIntent);
-  const brainstormGuidance = decision.requiresBrainstorm
-    ? [
-      '[Brainstorm Trigger] Resolve ambiguity with a brief option framing before locking in the implementation path.',
-      '- Make the chosen path explicit before performing irreversible edits.',
-    ].join('\n')
-    : null;
-
-  return [
-    EXECUTION_MODE_OVERLAYS[decision.recommendedMode],
-    HARNESS_PROFILE_OVERLAYS[decision.harnessProfile],
-    buildAmaControllerOverlay(amaControllerDecision),
-    `[Task Routing] primary=${decision.primaryTask}; family=${decision.taskFamily ?? 'unknown'}; actionability=${decision.actionability ?? 'unknown'}; mutationSurface=${decision.mutationSurface ?? 'unknown'}; assuranceIntent=${decision.assuranceIntent ?? 'default'}; pattern=${decision.executionPattern ?? 'unknown'}; risk=${decision.riskLevel}; complexity=${decision.complexity}; intent=${decision.workIntent}; brainstorm=${decision.requiresBrainstorm ? 'yes' : 'no'}; harness=${decision.harnessProfile}; topologyCeiling=${decision.topologyCeiling ?? 'none'}; upgradeCeiling=${decision.upgradeCeiling ?? 'none'}; reviewScale=${decision.reviewScale ?? 'unknown'}; confidence=${decision.confidence.toFixed(2)}.`,
-    decision.soloBoundaryConfidence !== undefined
-      ? `[Task Routing Signals] soloBoundaryConfidence=${decision.soloBoundaryConfidence.toFixed(2)}; needsIndependentQA=${decision.needsIndependentQA ? 'yes' : 'no'}; source=${decision.routingSource ?? 'unknown'}; attempts=${decision.routingAttempts ?? 1}.`
-      : undefined,
-    `[Task Routing Reason] ${decision.reason}`,
-    `[Work Intent] ${workIntentGuidance}`,
-    brainstormGuidance,
-    ...routingNotes,
-    ...extraNotes,
-  ]
-    .filter(Boolean)
-    .join('\n');
-}
-
 export async function createReasoningPlan(
   options: KodaXOptions,
   prompt: string,
@@ -1635,12 +1513,10 @@ export async function createReasoningPlan(
   return {
     effort,
     amaControllerDecision,
-    promptOverlay: buildPromptOverlay(
-      finalDecision,
-      providerPolicy.routingNotes,
-      providerPolicy,
-      amaControllerDecision,
-    ),
+    // Router prompt-overlay retired (ADR-043): the Worker (H3) and SA (P1.7)
+    // paths self-judge from the static EXECUTION GUIDANCE block, so the field
+    // stays on the plan type but no longer carries router-injected text.
+    promptOverlay: '',
     decision: finalDecision,
     providerPolicy,
   };
@@ -1653,18 +1529,6 @@ function clampUnitInterval(value: number, fallback = 0.5): number {
   return Math.max(0, Math.min(1, value));
 }
 
-
-function buildWorkIntentGuidance(workIntent: KodaXTaskWorkIntent): string {
-  switch (workIntent) {
-    case 'append':
-      return 'Extend or continue the existing artifact without rewriting stable parts unnecessarily.';
-    case 'overwrite':
-      return 'A substantial rewrite or replacement is expected, but keep the boundaries and consequences explicit.';
-    case 'new':
-    default:
-      return 'Treat this as net-new work unless repo evidence proves the request is really an append or rewrite.';
-  }
-}
 
 function inferWorkIntent(
   prompt: string,
@@ -1817,7 +1681,6 @@ function selectHarnessProfile(
   if (mutationSurface === 'system' && (decision.riskLevel === 'high' || decision.workIntent === 'overwrite')) {
     hints.push('High-risk system mutation detected. Proceed with caution; consider checkpointing intermediate state.');
   }
-  hints.push('Heuristic routing verdict — the harness profile above is the binding routing decision.');
 
   return {
     harnessProfile: 'H0_DIRECT',

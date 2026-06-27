@@ -11,7 +11,6 @@ import { KodaXBaseProvider } from '@kodax-ai/llm';
 import {
   buildAmaControllerDecision,
   buildFallbackRoutingDecision,
-  buildPromptOverlay,
   buildProviderPolicyHintsForDecision,
   createReasoningPlan,
   inferIntentGate,
@@ -122,7 +121,9 @@ describe('reasoning reroute', () => {
 
     expect(plan.decision.primaryTask).toBe('bugfix');
     expect(plan.decision.recommendedMode).toBe('investigation');
-    expect(plan.promptOverlay).toContain('[Execution Mode: investigation]');
+    // Router prompt-overlay retired (ADR-043): the mode lives on the decision,
+    // not in injected prompt text.
+    expect(plan.promptOverlay).toBe('');
     expect(plan.decision.routingNotes).toContain(
       'Heuristic routing only — LLM router skipped (FEATURE_061 Phase 1; FEATURE_193 retired post-routing calibration).',
     );
@@ -268,9 +269,11 @@ describe('reasoning reroute', () => {
     expect(decision.complexity).toBe('systemic');
     // FEATURE_061: Pre-Scout harness is always H0; Scout decides actual harness.
     expect(decision.harnessProfile).toBe('H0_DIRECT');
+    // The surviving advisory hint is the complexity signal for Scout (the
+    // misleading "binding routing decision" note was removed in ADR-043).
     expect(decision.routingNotes).toEqual(
       expect.arrayContaining([
-        expect.stringContaining('Heuristic routing verdict'),
+        expect.stringContaining('Complexity hint: systemic'),
       ]),
     );
   });
@@ -593,7 +596,6 @@ describe('reasoning reroute', () => {
       expect.arrayContaining([
         expect.stringContaining('Repository intelligence elevated task complexity'),
         expect.stringContaining('cross-module impact'),
-        expect.stringContaining('Heuristic routing verdict'),
       ]),
     );
   });
@@ -616,7 +618,7 @@ describe('reasoning reroute', () => {
     expect(decision.harnessProfile).toBe('H0_DIRECT');
     expect(decision.routingNotes).toEqual(
       expect.arrayContaining([
-        expect.stringContaining('Heuristic routing verdict'),
+        expect.stringContaining('Complexity hint: systemic'),
       ]),
     );
   });
@@ -1008,44 +1010,8 @@ describe('reasoning reroute', () => {
   });
 });
 
-describe('Phase C: AMA behavior guidance', () => {
-  it('appends [AMA Behavior] when fanout is admissible', () => {
-    const decision = buildFallbackRoutingDecision(
-      'Investigate why the ingestion worker silently drops events across several modules.',
-    );
-    const ama = buildAmaControllerDecision(decision);
-    // Force admissibility to guarantee the behavior branch is exercised
-    // regardless of heuristic drift in resolveAmaFanoutClass.
-    const admissibleAma = {
-      ...ama,
-      fanout: {
-        ...ama.fanout,
-        admissible: true,
-        class: ama.fanout.class ?? 'evidence-scan',
-        maxChildren: ama.fanout.maxChildren ?? 3,
-      },
-    };
-
-    const overlay = buildPromptOverlay(decision, [], undefined, admissibleAma);
-
-    expect(overlay).toContain('[AMA Behavior]');
-    expect(overlay).toContain('ask one focused clarifying question rather than guessing');
-    expect(overlay).toContain('delegate via the agent tool');
-  });
-
-  it('omits [AMA Behavior] when fanout is not admissible', () => {
-    const decision = buildFallbackRoutingDecision('Rename a local variable.');
-    const ama = buildAmaControllerDecision(decision);
-    const closedAma = {
-      ...ama,
-      fanout: {
-        ...ama.fanout,
-        admissible: false,
-      },
-    };
-
-    const overlay = buildPromptOverlay(decision, [], undefined, closedAma);
-
-    expect(overlay).not.toContain('[AMA Behavior]');
-  });
-});
+// NOTE: the former "Phase C: AMA behavior guidance" block tested the
+// [AMA Behavior] text emitted by buildPromptOverlay, which was retired in
+// ADR-043 (the Worker self-judges from static EXECUTION GUIDANCE). The live
+// fanout.admissible signal on buildAmaControllerDecision is covered by the
+// "selects managed AMA profile" / "does not expose child-fanout" tests above.
