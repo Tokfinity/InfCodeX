@@ -2631,3 +2631,40 @@ self-applies; neither gates verification on a per-task complexity classifier.
 - The metric gate's `hasPlan` signal depends on Todolist generation, which the
   static guidance must not regress — the H3 panel includes Todolist-generation
   rate as a first-class metric (it did not regress).
+
+### Phase 2 addendum — harness-tier collapse + Verifier metric fixes
+
+A follow-up full-chain trace (cross-checked against an independent GPT pass)
+established that the V1 H0/H1/H2 harness tier is **not just retired but
+collapsed to a single constant, and was never fully cleaned**:
+
+- `selectHarnessProfile` unconditionally returns `'H0_DIRECT'`, so
+  `decision.harnessProfile` is **always `H0_DIRECT`** in V2; the runtime
+  `harnessRef` is **always `'PLANNED'`**. `deriveTopologyCeiling` still emits
+  H1/H2 into `upgradeCeiling`, so a request is simultaneously `decision=H0`,
+  `runtime=PLANNED`, `ceiling=H2` — a semantic tear with no functional effect.
+- Every branch keyed on `decision.harnessProfile` is therefore dead-or-constant:
+  provider-policy's `=== H2` warning block, the repo-intelligence
+  `!== 'H0_DIRECT'` overview clause, `hypothesis-check` write fan-out
+  (`=== H2`, now permanently inactive), `deriveQualityAssuranceMode`'s
+  `!== 'H0_DIRECT'` clause, `harnessToBudget` (dead behind
+  `budget?.totalBudget ??`), and the checkpoint harness round-trip
+  (`PLANNED`-identity). The dead decision-clauses were removed (P1.1–1.4);
+  `harnessToBudget` + checkpoint-harness remain as harmless constants.
+
+**Verifier work-scale gate fixes (P0)** — two coverage regressions in the H2
+metric gate were found and fixed: (1) the mutation tracker omitted `multi_edit`
+(a `mutates-fs` tool the Worker prompt actively encourages), so multi_edit work
+produced `writeOps=0` and skipped verification; (2) line estimation used
+`abs(new-old)`, collapsing equal-length rewrites to 1 line so large rewrites
+slipped the fire rule — now uses touched lines (`max(old,new)`, summed across
+`multi_edit` edits).
+
+**Known remaining gap**: H3 migrated only the **AMA Worker** to static
+self-judgment. The **SA / child-task path** (every dispatched child runs SA)
+still receives the full router overlay via `capability-sections.ts`, so the
+refactor is half-applied across the two execution paths; aligning SA is the
+main outstanding LLM-facing follow-up. `harnessProfile` /
+`KodaXTaskRoutingDecision` are retained (the live consumers now read only the
+semantic fields — primaryTask/recommendedMode/complexity/risk/mutationSurface/
+assuranceIntent/needsIndependentQA — not the tier).

@@ -1,6 +1,12 @@
 # 设计稿:路由/harness 预判 → 静态分层指引 + LLM 自主判断 + Verifier 度量门控激活
 
-> 状态:**设计已定稿(含 GPT review 8+2 条裁决),待开工 H2**。这是 reasoning 单轨化(**核心运行时单轨化完成,public compat 尾巴仍在**——CLI/REPL/ACP 里 `reasoningMode` 还很多,见 [[project_reasoning_single_track_migration]])之后的**新的、更大的架构改造**,与 effort 单轨化正交。
+> ⚠️ **状态:已实现(H2/H3/H4 + Phase 2 收尾已提交)。本文是设计过程稿,权威的最终架构记录见 [`docs/ADR.md` ADR-043 + Phase 2 addendum](ADR.md)。**
+> 实施中有几处中途前提被代码核实推翻,本文未逐行回改(以 ADR-043 为准):
+> - **fanout-scheduler / `createFanoutSchedulerInput` admissible "调度门"(§1.3/§2.2/H1b 提到)实为死代码**(零生产 caller),已整模块删除;它从不门控真实 dispatch(worker 派子任务由 `validateWriteBundles` 的 parentRole/parentHarness 管)。
+> - overlay 机器对 **SA/direct 路径仍 live**(非死);H3 只迁了 AMA Worker。
+> - harness-tier(H0/H1/H2)已**塌缩为常量**(decision 恒 H0_DIRECT / runtime 恒 PLANNED),相关死分支已在 Phase 2 清理。
+>
+> 这是 reasoning 单轨化(核心运行时单轨化完成,public compat 尾巴仍在)之后的更大架构改造,与 effort 单轨化正交。
 > 目标:把"启发式关键词路由 → 按预判 harness 级别注入不同提示 + 门控"改成"静态分层指引(对所有任务注入)+ 工具常驻 + LLM 自主判断",Sidecar Verifier 改由**客观执行度量(规则触发)**控制激活——**不**用 Worker LLM 自报信号(LLM 完成后偏向声称做完,自报不可靠)。
 
 ---
