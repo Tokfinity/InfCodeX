@@ -2,8 +2,8 @@
  * Coding-tool runtime wrappers for the runner-driven AMA path.
  *
  * Hosts:
- *   - `WRITE_ONLY_TOOL_NAMES` + `SHELL_MUTATION_EXTENSIONS` — the
- *     write/edit + mutating-shell-command sets that drive both the
+ *   - `MUTATES_FS_TOOL_NAMES` (registry-derived) + `SHELL_MUTATION_EXTENSIONS`
+ *     — the file-mutating + mutating-shell-command sets that drive both the
  *     mutation tracker and the role-bound guard wrappers
  *   - `recordMutationForTool` — populates `ctx.mutationTracker` per
  *     legacy `beforeToolExecute` parity
@@ -45,13 +45,56 @@ import type { VerdictRecorder } from './types.js';
 // Tool wrapping: coding handler → RunnableTool
 // =============================================================================
 
-const WRITE_ONLY_TOOL_NAMES = new Set(['write', 'edit', 'insert_after_anchor']);
+/**
+ * File-mutating tool names. MUST mirror the tool registry's
+ * `sideEffect: 'mutates-fs'` file tools (tool-definitions.ts). The earlier set
+ * omitted `multi_edit` — which the Worker prompt actively encourages for
+ * multi-spot edits — so a Worker that used `multi_edit` produced zero mutation
+ * metrics and the Verifier work-scale gate saw `writeOps=0` and skipped
+ * verification entirely. `multi_edit` is now included.
+ *
+ * NOTE: this is hardcoded rather than derived from `BUILTIN_TOOL_DEFINITIONS`
+ * at module load — importing that registry here pulls its handler chain, which
+ * has a transitive cycle back through `construction/agent-resolver.ts` and
+ * leaves `BUILTIN_TOOL_DEFINITIONS` uninitialised mid-load. Keep this set in
+ * sync when a new `mutates-fs` file tool is added.
+ */
+const MUTATES_FS_TOOL_NAMES: ReadonlySet<string> = new Set([
+  'write',
+  'edit',
+  'multi_edit',
+  'insert_after_anchor',
+]);
+
+function lineCount(text: unknown): number {
+  return typeof text === 'string' ? text.split('\n').length : 0;
+}
 
 /**
- * Mirror of the legacy `beforeToolExecute` mutation-tracking branch in
- * task-engine.ts:~3907. Populates `ctx.mutationTracker` with files +
- * totalOps when a write/edit tool runs (or bash executes a destructive
- * command). Idempotent — missing tracker is a no-op.
+ * Estimated TOUCHED lines for a mutation (not net delta). An 80-line function
+ * rewritten into another 80-line function touches ~80 lines, not 0 — so we use
+ * `max(old, new)` per edit, never `abs(new - old)` (which collapsed equal-
+ * length rewrites to 1 line and let large rewrites slip past the gate).
+ * Handles all three mutating shapes: `write` (content), `edit` /
+ * `insert_after_anchor` (old/new), and `multi_edit` (an `edits[]` array).
+ */
+function estimateTouchedLines(input: Record<string, unknown>): number {
+  if (typeof input.content === 'string') return lineCount(input.content);
+  if (Array.isArray(input.edits)) {
+    const sum = input.edits.reduce((acc: number, raw) => {
+      const edit = raw as { old_string?: unknown; new_string?: unknown };
+      return acc + Math.max(lineCount(edit.old_string), lineCount(edit.new_string));
+    }, 0);
+    return sum || 1;
+  }
+  return Math.max(lineCount(input.old_string), lineCount(input.new_string)) || 1;
+}
+
+/**
+ * Populates `ctx.mutationTracker` with files + totalOps when a file-mutating
+ * tool runs (or bash executes a destructive command). Idempotent — missing
+ * tracker is a no-op. The tracked metrics feed the Sidecar Verifier work-scale
+ * gate (`composeGateDecision`).
  */
 export function recordMutationForTool(
   tracker: ManagedMutationTracker | undefined,
@@ -60,28 +103,26 @@ export function recordMutationForTool(
 ): void {
   if (!tracker) return;
   const normalized = toolName.toLowerCase();
-  if (WRITE_ONLY_TOOL_NAMES.has(normalized) || normalized === 'bash') {
+  if (MUTATES_FS_TOOL_NAMES.has(normalized)) {
     const filePath = typeof input.file_path === 'string'
       ? input.file_path
       : typeof input.path === 'string'
         ? input.path
         : undefined;
     if (filePath) {
-      const oldLen = typeof input.old_string === 'string' ? input.old_string.split('\n').length : 0;
-      const newLen = typeof input.new_string === 'string' ? input.new_string.split('\n').length : 0;
-      const contentLen = typeof input.content === 'string' ? input.content.split('\n').length : 0;
-      const linesDelta = contentLen || Math.abs(newLen - oldLen) || 1;
-      tracker.files.set(filePath, (tracker.files.get(filePath) ?? 0) + linesDelta);
+      tracker.files.set(filePath, (tracker.files.get(filePath) ?? 0) + estimateTouchedLines(input));
+    }
+    // A file-mutating tool always counts as a write op, even when it carries
+    // no attributable path (e.g. scene mutations) — the gate must still see it.
+    tracker.totalOps += 1;
+  } else if (normalized === 'bash') {
+    const cmd = typeof input.command === 'string' ? input.command : '';
+    if (/\b(git\s+(add|commit|push|merge|rebase|reset)|npm\s+(publish|install)|rm\s|mv\s|cp\s)/i.test(cmd)) {
       tracker.totalOps += 1;
-    } else if (normalized === 'bash') {
-      const cmd = typeof input.command === 'string' ? input.command : '';
-      if (/\b(git\s+(add|commit|push|merge|rebase|reset)|npm\s+(publish|install)|rm\s|mv\s|cp\s)/i.test(cmd)) {
-        tracker.totalOps += 1;
-        // High-risk shell mutation — bash cannot report which file / how many
-        // lines it touched, so the Verifier gate uses this count to fire
-        // conservatively rather than inferring risk out of `totalOps`.
-        tracker.riskyShellOps = (tracker.riskyShellOps ?? 0) + 1;
-      }
+      // High-risk shell mutation — bash cannot report which file / how many
+      // lines it touched, so the Verifier gate uses this count to fire
+      // conservatively rather than inferring risk out of `totalOps`.
+      tracker.riskyShellOps = (tracker.riskyShellOps ?? 0) + 1;
     }
   }
 }
