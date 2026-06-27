@@ -2452,7 +2452,6 @@ describe('wrapEmitterWithRecorder — Risk 2/3/5 behavioural guards', () => {
           reason: 'test',
         },
         effort: 'medium',
-        amaControllerDecision: undefined,
         promptOverlay: undefined,
       },
     };

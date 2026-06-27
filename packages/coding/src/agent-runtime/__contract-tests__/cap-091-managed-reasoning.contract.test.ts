@@ -59,7 +59,6 @@ describe('CAP-091: AMA-only managed reasoning plan builder contract', () => {
     expect(plan.decision).toMatchObject({
       primaryTask: expect.any(String),
     });
-    expect(plan.amaControllerDecision).toBeDefined();
     expect(plan.promptOverlay).toBe('');
   });
 

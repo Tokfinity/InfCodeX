@@ -84,11 +84,7 @@ import type {
 // going through @kodax-ai/agent's re-export, which has been removed.
 import type {
   KodaXHarnessProfile,
-  KodaXAmaProfile,
-  KodaXAmaTactic,
   KodaXAmaFanoutClass,
-  KodaXAmaFanoutPolicy,
-  KodaXAmaControllerDecision,
   KodaXReviewScale,
   KodaXStableEffortIntent,
   KodaXWireReasoningEffort,
@@ -152,11 +148,7 @@ export type {
   KodaXMutationSurface,
   KodaXAssuranceIntent,
   KodaXHarnessProfile,
-  KodaXAmaProfile,
-  KodaXAmaTactic,
   KodaXAmaFanoutClass,
-  KodaXAmaFanoutPolicy,
-  KodaXAmaControllerDecision,
   KodaXReviewScale,
   KodaXTaskRoutingDecision,
   KodaXThinkingBudgetMap,
@@ -1354,10 +1346,6 @@ export interface KodaXOrchestrationVerdict {
 }
 
 export interface KodaXManagedTaskRuntimeState {
-  amaProfile?: KodaXAmaProfile;
-  amaTactics?: KodaXAmaTactic[];
-  amaFanout?: KodaXAmaFanoutPolicy;
-  amaControllerReason?: string;
   childContextBundles?: KodaXChildContextBundle[];
   childAgentResults?: KodaXChildAgentResult[];
   parentReductionContract?: KodaXParentReductionContract;

@@ -22,7 +22,6 @@
  */
 import { runKodaX } from './agent.js';
 import {
-  buildAmaControllerDecision,
   buildFallbackRoutingDecision,
   createReasoningPlan,
   inferIntentGate,
@@ -234,7 +233,6 @@ export async function buildManagedReasoningPlan(options: KodaXOptions, prompt: s
     return {
       effort: options.effort ?? 'none',
       decision: fallbackDecision,
-      amaControllerDecision: buildAmaControllerDecision(fallbackDecision),
       promptOverlay: '',
     };
   }

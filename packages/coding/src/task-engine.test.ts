@@ -3,7 +3,7 @@ import path from 'node:path';
 import { tmpdir } from 'node:os';
 import { existsSync } from 'node:fs';
 import { afterEach, describe, expect, it, vi } from 'vitest';
-import { buildAmaControllerDecision, type ReasoningPlan } from './reasoning.js';
+import type { ReasoningPlan } from './reasoning.js';
 import type { KodaXManagedTaskStatusEvent, KodaXRepoRoutingSignals, KodaXTaskRoutingDecision } from './types.js';
 
 const {
@@ -135,7 +135,6 @@ function buildPlan(
     effort: 'auto',
     promptOverlay: '[Routing] test',
     decision,
-    amaControllerDecision: buildAmaControllerDecision(decision),
   };
 }
 

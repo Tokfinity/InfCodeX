@@ -64,7 +64,6 @@ describe('CAP-089: task-engine.ts mode dispatcher contract', () => {
     const buildPlan = vi.fn().mockResolvedValue({
       effort: 'none',
       decision: { primaryTask: 'conversation' },
-      amaControllerDecision: undefined,
       promptOverlay: '',
     });
     await dispatchManagedTask(

@@ -42,7 +42,6 @@ function makeMinimalPlan(overrides?: Partial<ReasoningPlan>): ReasoningPlan {
       riskLevel: 'low',
       harnessProfile: 'standard',
     } as unknown as ReasoningPlan['decision'],
-    amaControllerDecision: {} as ReasoningPlan['amaControllerDecision'],
     promptOverlay: '',
     ...(overrides ?? {}),
   };

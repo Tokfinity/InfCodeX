@@ -1,8 +1,4 @@
 import type {
-  KodaXAmaControllerDecision,
-  KodaXAmaFanoutClass,
-  KodaXAmaProfile,
-  KodaXAmaTactic,
   KodaXExecutionMode,
   KodaXHarnessProfile,
   KodaXMessage,
@@ -212,7 +208,6 @@ export interface ReasoningPlan {
    */
   effort: KodaXWireReasoningEffort;
   decision: KodaXTaskRoutingDecision;
-  amaControllerDecision: KodaXAmaControllerDecision;
   promptOverlay: string;
   providerPolicy?: KodaXProviderPolicyDecision;
 }
@@ -1255,210 +1250,6 @@ export function buildProviderPolicyHintsForDecision(
   };
 }
 
-function dedupeAmaTactics(
-  tactics: KodaXAmaTactic[],
-): KodaXAmaTactic[] {
-  return Array.from(new Set(tactics));
-}
-
-function resolveAmaFanoutClass(
-  decision: KodaXTaskRoutingDecision,
-): KodaXAmaFanoutClass | undefined {
-  if (decision.primaryTask === 'review') {
-    return 'finding-validation';
-  }
-  if (
-    decision.primaryTask === 'bugfix'
-    || decision.recommendedMode === 'investigation'
-  ) {
-    return decision.mutationSurface === 'read-only'
-      ? 'evidence-scan'
-      : 'hypothesis-check';
-  }
-  if (decision.primaryTask === 'lookup') {
-    return 'module-triage';
-  }
-  return undefined;
-}
-
-function resolveAmaFanoutMaxChildren(
-  decision: KodaXTaskRoutingDecision,
-): number | undefined {
-  if (decision.primaryTask === 'review') {
-    switch (decision.reviewScale) {
-      case 'massive':
-        return 4;
-      case 'large':
-        return 3;
-      default:
-        return 2;
-    }
-  }
-  if (
-    decision.primaryTask === 'bugfix'
-    || decision.recommendedMode === 'investigation'
-  ) {
-    return 2;
-  }
-  return undefined;
-}
-
-function isAmaFanoutClassActive(
-  fanoutClass: KodaXAmaFanoutClass | undefined,
-  decision: KodaXTaskRoutingDecision,
-): boolean {
-  if (!fanoutClass) {
-    return false;
-  }
-
-  if (
-    decision.primaryTask === 'plan'
-    || decision.taskFamily === 'conversation'
-    || decision.taskFamily === 'ambiguous'
-  ) {
-    return false;
-  }
-
-  switch (fanoutClass) {
-    case 'finding-validation':
-      return true;
-    case 'evidence-scan':
-      // Issue 124 (v0.7.28): A1 — drop the H0_DIRECT gate so H1 read-only
-      // investigation can also fan out. The earlier H0-only restriction made
-      // child dispatch effectively impossible once Scout escalated to H1.
-      return decision.mutationSurface === 'read-only'
-        && (
-          decision.primaryTask === 'bugfix'
-          || decision.recommendedMode === 'investigation'
-        );
-    case 'module-triage':
-      // Issue 124 (v0.7.28): A1 — same H0 gate removal for lookup tasks.
-      return decision.mutationSurface === 'read-only'
-        && decision.executionPattern === 'checked-direct'
-        && decision.primaryTask === 'lookup';
-    case 'hypothesis-check':
-      // Write-side hypothesis fan-out, originally gated on H2.
-      // ⚠️ INACTIVE post-refactor: `decision.harnessProfile` collapsed to a
-      // constant 'H0_DIRECT' (the V1 Scout tier-confirmation that produced H2
-      // is retired), so this condition is never true and the class never
-      // activates. Its output only fed the (now SA-only) AMA-controller overlay
-      // text + tactics array anyway. Reviving write fan-out should NOT restore
-      // the harness check — it would need an objective gate
-      // (e.g. mutationSurface === 'code' && complexity >= complex &&
-      // needsIndependentQA). Left as-is (inactive) pending that feature call.
-      return decision.harnessProfile === 'H2_PLAN_EXECUTE_EVAL'
-        && (
-          decision.primaryTask === 'bugfix'
-          || decision.recommendedMode === 'investigation'
-        );
-    default:
-      return false;
-  }
-}
-
-export function buildAmaControllerDecision(
-  decision: KodaXTaskRoutingDecision,
-): KodaXAmaControllerDecision {
-  const readOnlyLike = decision.mutationSurface === 'read-only'
-    || decision.mutationSurface === 'docs-only';
-  // FEATURE_061: profile is always tactical at routing time. FEATURE_193
-  // (v0.7.43) retired the Scout calibration round — V2 Worker honours the
-  // heuristic verdict directly, so the managed-profile upgrade path that
-  // used to flow through `applyScoutDecisionToPlan` no longer fires.
-  const managed =
-    decision.primaryTask === 'plan'
-    || decision.complexity === 'systemic'
-    || (
-      decision.complexity === 'complex'
-      && decision.mutationSurface === 'code'
-      && Boolean(decision.needsIndependentQA)
-    )
-    || (
-      decision.requiresBrainstorm
-      && decision.mutationSurface === 'code'
-    );
-  const profile: KodaXAmaProfile = managed ? 'managed' : 'tactical';
-  const fanoutClass = resolveAmaFanoutClass(decision);
-  // Issue 124 (v0.7.28): B1 — drop the blanket `profile === 'tactical'` filter
-  // for read-only fan-out classes. Plan / systemic / brainstorm tasks (managed
-  // profile) often need parallel investigation across modules during their
-  // scoping phase; only write-side hypothesis-check still requires tactical to
-  // keep H2-only worktree-merge semantics intact.
-  const isReadOnlyFanoutClass = fanoutClass === 'finding-validation'
-    || fanoutClass === 'evidence-scan'
-    || fanoutClass === 'module-triage';
-  // For hypothesis-check (write class), isReadOnlyFanoutClass is false, so
-  // profileGateOpen only opens when profile === 'tactical'. Managed-profile
-  // tasks therefore keep write fan-out blocked here (H2 worktree-merge
-  // semantics live in the tactical path's H2 prompt + Evaluator pipeline).
-  const profileGateOpen = isReadOnlyFanoutClass || profile === 'tactical';
-  const activeFanoutClass = profileGateOpen && isAmaFanoutClassActive(fanoutClass, decision)
-    ? fanoutClass
-    : undefined;
-  const fanoutAdmissible = Boolean(activeFanoutClass);
-
-  const tactics = dedupeAmaTactics([
-    'direct',
-    ...(profile === 'managed' ? ['planning-pass', 'verification-pass', 'repair-loop'] as KodaXAmaTactic[] : []),
-    ...(Boolean(decision.needsIndependentQA) ? ['verification-pass'] as KodaXAmaTactic[] : []),
-    ...(fanoutAdmissible ? ['child-fanout'] as KodaXAmaTactic[] : []),
-  ]);
-
-  const fanoutReason = !fanoutClass
-    ? decision.primaryTask === 'unknown'
-      // FEATURE_112 (v0.7.34): unknown tasks should not see "No high-value
-      // shard class detected" because that reads as a negative dispatch signal
-      // to the LLM. Replace with a neutral message: dispatch_child_task is
-      // still on the surface, RULE A/B/C in the Scout role-prompt govern when
-      // to use it. The fanoutAdmissible value is unchanged — this is only the
-      // human-readable reason text that lands in the controller overlay.
-      ? 'Task scope is unclassified; dispatch_child_task remains available if investigation threads emerge during scoping.'
-      : 'No high-value shard class was detected for this task.'
-    : !fanoutAdmissible
-      ? fanoutClass === 'hypothesis-check'
-        ? 'Hypothesis-check shards activate only in H2_PLAN_EXECUTE_EVAL where worktree isolation and Evaluator review can merge parallel write children.'
-        : fanoutClass === 'evidence-scan'
-          ? 'Evidence-scan shards activate for read-only investigation tasks; this task did not match the bugfix / investigation signal.'
-        : fanoutClass === 'module-triage'
-            ? 'Module-triage shards activate for read-only lookup with checked-direct execution; this task did not match.'
-        : 'Child fan-out stays disabled because no eligible shard class matched this routing decision.'
-      : activeFanoutClass === 'finding-validation'
-        ? 'Review work benefits from finding-level validation shards to keep the main context focused on synthesis.'
-        : activeFanoutClass === 'evidence-scan'
-          ? 'Investigation work benefits from bounded evidence shards before the parent commits to a diagnosis.'
-          : activeFanoutClass === 'module-triage'
-            ? 'Lookup work can shard module triage when the task stays read-only.'
-            : 'Investigation work benefits from hypothesis-check shards when multiple explanations can be tested independently.';
-
-  const upgradeTriggers: string[] = [];
-  if (profile === 'tactical') {
-    if (decision.complexity === 'complex' || decision.complexity === 'systemic') {
-      upgradeTriggers.push('Complex or systemic work may outgrow tactical reduction and need managed coordination.');
-    }
-    if (decision.requiresBrainstorm) {
-      upgradeTriggers.push('Explicit option framing or plan-first work should upgrade into managed planning.');
-    }
-  } else {
-    upgradeTriggers.push('Managed profile stays active because the task needs explicit planning, QA, or multi-round convergence.');
-  }
-
-  return {
-    profile,
-    tactics,
-    fanout: {
-      admissible: fanoutAdmissible,
-      class: activeFanoutClass,
-      reason: fanoutReason,
-      maxChildren: fanoutAdmissible ? resolveAmaFanoutMaxChildren(decision) : undefined,
-      requiresReadOnly: fanoutAdmissible && readOnlyLike ? true : undefined,
-    },
-    reason: profile === 'managed'
-      ? 'AMA controller selected the managed profile because explicit coordination, planning, or heavier assurance remains load-bearing.'
-      : 'AMA controller selected the tactical profile so one main agent can stay in control while using hidden tactics only when they reduce context pressure.',
-    upgradeTriggers,
-  };
-}
-
 export async function createReasoningPlan(
   options: KodaXOptions,
   prompt: string,
@@ -1508,11 +1299,9 @@ export async function createReasoningPlan(
       'Heuristic routing only — LLM router skipped (FEATURE_061 Phase 1; FEATURE_193 retired post-routing calibration).',
     ],
   };
-  const amaControllerDecision = buildAmaControllerDecision(finalDecision);
 
   return {
     effort,
-    amaControllerDecision,
     // Router prompt-overlay retired (ADR-043): the Worker (H3) and SA (P1.7)
     // paths self-judge from the static EXECUTION GUIDANCE block, so the field
     // stays on the plan type but no longer carries router-injected text.

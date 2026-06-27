@@ -9,10 +9,6 @@
  *     `wrapEmitterWithRecorder` in `verdict-recorder.ts`)
  *   - `ROLE_TO_TITLE` + `MANAGED_MAX_ROUNDS` — display labels +
  *     role-chain length hint used by the status emit body
- *   - `RUNNER_HARNESS_ORDER` + `getRunnerHarnessRank` +
- *     `applyScoutDecisionToPlanRunner` — M4 parity helpers consumed by
- *     the emit-wrapper to fold Scout's confirmed harness back into the
- *     plan ref
  *   - `buildEvidenceEntryForRoleEmit` — per-role evidence record
  *   - `buildRunnerRoutingNote` — preflight routing label
  *   - `buildObserverBridge` — the actual bridge factory
@@ -32,10 +28,8 @@ import type {
   KodaXResult,
   KodaXTaskEvidenceEntry,
   KodaXTaskRole,
-  KodaXTaskRoutingDecision,
   KodaXTaskStatus,
 } from '../../../types.js';
-import { buildAmaControllerDecision } from '../../../reasoning.js';
 import type { ReasoningPlan } from '../../../reasoning.js';
 import {
   buildManagedStatusBudgetFields,
@@ -186,83 +180,6 @@ function buildEvidenceEntryForRoleEmit(args: {
  *   - events[] — inline live-event list, currently one entry per observer
  *     tick so the REPL ticker has something to render
  */
-/**
- * M4 parity (v0.7.26) — 1:1 port of legacy
- * `task-engine.ts::applyScoutDecisionToPlan` (line 564). Updates the plan
- * in place once Scout emits its `confirmedHarness` so downstream role
- * prompts / tool-policy / budget controller see the post-Scout decision
- * instead of the stale pre-Scout snapshot. Without this, a plan=H2 but
- * Scout=H1 run leaks H2-only prompt guidance into the H1 workers.
- *
- * Critical nuance: Scout overriding the topology ceiling (its own
- * confirmed harness > `topologyCeiling`) is honoured without clamping —
- * Scout has strictly more information than the pre-Scout regex heuristic
- * (FEATURE_061). `upgradeCeiling` is lifted to match so the budget
- * controller + mid-run escalation see a consistent state.
- */
-const RUNNER_HARNESS_ORDER: readonly KodaXHarnessProfile[] = [
-  'H0_DIRECT',
-  'H1_EXECUTE_EVAL',
-  'H2_PLAN_EXECUTE_EVAL',
-];
-function getRunnerHarnessRank(harness: KodaXHarnessProfile): number {
-  return RUNNER_HARNESS_ORDER.indexOf(harness);
-}
-
-export function applyScoutDecisionToPlanRunner(
-  plan: ReasoningPlan,
-  scoutPayload:
-    | {
-        confirmedHarness?: KodaXHarnessProfile;
-        harnessRationale?: string;
-        summary?: string;
-      }
-    | undefined,
-): ReasoningPlan {
-  const confirmedHarness = scoutPayload?.confirmedHarness;
-  if (!confirmedHarness) {
-    return plan;
-  }
-  const topologyCeiling = plan.decision.topologyCeiling ?? plan.decision.upgradeCeiling;
-  const scoutOverrodeCeiling = topologyCeiling
-    ? getRunnerHarnessRank(confirmedHarness) > getRunnerHarnessRank(topologyCeiling)
-    : false;
-  const ceilingNote = scoutOverrodeCeiling
-    ? `Scout overrode topology ceiling ${topologyCeiling} → ${confirmedHarness}: ${scoutPayload.harnessRationale ?? 'task complexity requires escalation'}.`
-    : undefined;
-  if (
-    confirmedHarness === plan.decision.harnessProfile
-    && !scoutPayload.summary
-    && !ceilingNote
-  ) {
-    return plan;
-  }
-  const decision: KodaXTaskRoutingDecision = {
-    ...plan.decision,
-    harnessProfile: confirmedHarness,
-    upgradeCeiling: scoutOverrodeCeiling
-      ? confirmedHarness
-      : plan.decision.upgradeCeiling,
-    reason: scoutPayload.summary
-      ? `${plan.decision.reason} Scout confirmed ${confirmedHarness}: ${scoutPayload.summary}`
-      : plan.decision.reason,
-    routingNotes: [
-      ...(plan.decision.routingNotes ?? []),
-      ...(scoutPayload.summary ? [`Scout decision: ${scoutPayload.summary}`] : []),
-      ...(ceilingNote ? [ceilingNote] : []),
-    ],
-  };
-  const amaControllerDecision = buildAmaControllerDecision(decision);
-  return {
-    ...plan,
-    decision,
-    amaControllerDecision,
-    // Router prompt-overlay retired (ADR-043) — Worker self-judges from static
-    // EXECUTION GUIDANCE; the Scout-confirmed routing still updates the plan.
-    promptOverlay: '',
-  };
-}
-
 /**
  * H3 routing-note builder. Emitted once before Scout's preflight so the
  * REPL work-strip can label the task's routing context (review target,

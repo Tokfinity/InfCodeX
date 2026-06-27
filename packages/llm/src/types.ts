@@ -387,36 +387,14 @@ export type KodaXReviewScale =
   | 'large'
   | 'massive';
 
-export type KodaXAmaProfile = 'tactical' | 'managed';
-
-export type KodaXAmaTactic =
-  | 'direct'
-  | 'child-fanout'
-  | 'planning-pass'
-  | 'verification-pass'
-  | 'repair-loop';
-
+// KodaXAmaFanoutClass is the child-task display/dispatch classification used by
+// dispatch_child_task, child bundles/status, and the REPL work strip — it is
+// independent of the retired AMA-controller advisory (ADR-043) and stays live.
 export type KodaXAmaFanoutClass =
   | 'finding-validation'
   | 'evidence-scan'
   | 'module-triage'
   | 'hypothesis-check';
-
-export interface KodaXAmaFanoutPolicy {
-  admissible: boolean;
-  class?: KodaXAmaFanoutClass;
-  reason: string;
-  maxChildren?: number;
-  requiresReadOnly?: boolean;
-}
-
-export interface KodaXAmaControllerDecision {
-  profile: KodaXAmaProfile;
-  tactics: KodaXAmaTactic[];
-  fanout: KodaXAmaFanoutPolicy;
-  reason: string;
-  upgradeTriggers: string[];
-}
 
 export interface KodaXTaskRoutingDecision {
   primaryTask: KodaXTaskType;

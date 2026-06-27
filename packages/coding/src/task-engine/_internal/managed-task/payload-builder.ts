@@ -308,16 +308,9 @@ export function buildManagedTaskPayload(args: {
       // field stays on `KodaXManagedTaskRuntimeState` for pre-1.0 SDK
       // consumer compat (see `@deprecated` markers in `types.ts`).
       harnessTransitions: [],
-      // Shard 6d-O: fill runtime fields the legacy path populated so
-      // downstream consumers (REPL harness UI, evaluator guardrails,
-      // resume flow, session storage) see the same shape they did on
-      // the legacy path. Empty-ish runtime defaulted to placeholder
-      // values before this shard; the harness UI silently fell back to
-      // defaults and lost context for `amaProfile` / `upgradeCeiling` /
-      // `scoutDecision` etc.
-      amaProfile: plan?.amaControllerDecision?.profile,
-      amaTactics: plan?.amaControllerDecision?.tactics,
-      amaControllerReason: plan?.amaControllerDecision?.reason,
+      // AMA-controller telemetry (amaProfile/amaTactics/amaControllerReason)
+      // retired in ADR-043 — the advisory was write-only-unread after the
+      // overlay was removed, so the runtime fields were dropped too.
       routingAttempts: plan?.decision.routingAttempts,
       routingSource: plan?.decision.routingSource,
       currentHarness: harness,

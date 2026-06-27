@@ -23,7 +23,6 @@
 
 import type { KodaXRepoRoutingSignals, KodaXTaskRoutingDecision } from '../../../types.js';
 import type { ReasoningPlan } from '../../../reasoning.js';
-import { buildAmaControllerDecision } from '../../../reasoning.js';
 
 type ReviewTarget = NonNullable<KodaXTaskRoutingDecision['reviewTarget']>;
 
@@ -160,14 +159,13 @@ export function applyCurrentDiffReviewRoutingFloor(
     return { plan, rawDecision, reviewTarget };
   }
 
-  const amaControllerDecision = buildAmaControllerDecision(finalDecision);
   return {
     plan: {
       ...plan,
       decision: finalDecision,
-      amaControllerDecision,
-      // Router prompt-overlay retired (ADR-043) — review scope is recorded on
-      // the decision; the Worker self-judges from static EXECUTION GUIDANCE.
+      // Router prompt-overlay + AMA-controller retired (ADR-043) — review scope
+      // is recorded on the decision; the Worker self-judges from static
+      // EXECUTION GUIDANCE.
       promptOverlay: '',
     },
     rawDecision,
