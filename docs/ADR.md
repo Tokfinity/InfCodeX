@@ -2675,3 +2675,56 @@ children) are all clean. `harnessProfile` / `KodaXTaskRoutingDecision` are
 retained (the live consumers now read only the semantic fields —
 primaryTask/recommendedMode/complexity/risk/mutationSurface/assuranceIntent/
 needsIndependentQA — not the tier).
+
+### Phase 3 addendum — SA alignment + dead overlay & AMA-controller removal
+
+The "known remaining gap" above is now **closed**, and the dead routing-text
+machinery it sat on top of was removed (verified by a full-chain trace + an
+independent GPT pass, then build + 4053-test green):
+
+- **P1.7 — SA path aligned.** A single static `EXECUTION_GUIDANCE` block
+  (`prompts/execution-guidance.ts`) is now shared verbatim by the AMA Worker
+  (`buildWorkerInstructions`) and the top-level `--agent-mode sa` path
+  (`capability-sections.ts` swapped its `prompt-overlay` section for an
+  always-on `execution-guidance` section). Neither path receives router overlay
+  text; both self-judge from the same guidance. Validated against the canonical
+  5-alias panel for both paths.
+- **P1.6 — decisionSummary de-harnessed.** The role-prompt decision summary no
+  longer emits `Harness:` / `Topology ceiling:` lines (regression-guarded in
+  `role-prompt.test.ts`); the semantic routing fields stay.
+- **#6 — router prompt-overlay text machinery deleted.** Once the Worker (H3)
+  and SA (P1.7) stopped consuming it, `buildPromptOverlay`'s output reached no
+  prompt (all four consumer paths dead-ended; `builder.test.ts` proves the text
+  is dropped), so it was no longer LLM-facing and needed no eval — the
+  eval-backed migration already happened in H3/P1.7. Removed
+  `EXECUTION_MODE_OVERLAYS` + `HARNESS_PROFILE_OVERLAYS`, `buildAmaControllerOverlay`,
+  `buildPromptOverlay` (+ its barrel export), `buildWorkIntentGuidance`, and the
+  misleading "binding routing decision" hint. The 3 call sites set
+  `promptOverlay: ''` (field retained on the plan type).
+- **#4 — AMA-controller advisory chain deleted.** The FEATURE_061 AMA-controller
+  pre-computed a tactical/managed profile + tactics + child-fanout admissibility
+  and injected it as advice. Its consumers died in sequence (fanout-scheduler
+  gate deleted in 5b7d1dad; FEATURE_193 retired the Scout managed-upgrade path;
+  #6 cut the last text consumer), leaving only write-only-unread runtime
+  telemetry. Removed `buildAmaControllerDecision` + helpers, the
+  `KodaXAmaControllerDecision`/`KodaXAmaProfile`/`KodaXAmaTactic`/`KodaXAmaFanoutPolicy`
+  types, the `amaProfile`/`amaTactics`/`amaFanout`/`amaControllerReason` runtime
+  fields, the public export, and the dead `applyScoutDecisionToPlanRunner` Scout
+  residue. **Capabilities are carried by live mechanisms, not the advisory:**
+  approach selection by the static EXECUTION GUIDANCE, verification by the
+  Sidecar Verifier gate, child fan-out by `dispatch_child_task`, and write-fanout
+  safety by `validateWriteBundles` (`parentRole==='worker'`, never depended on
+  the routing decision). **KEPT: `KodaXAmaFanoutClass`** — it is the child-task
+  display/dispatch classification used by `dispatch_child_task`, child
+  bundles/status, and the REPL `AmaWorkStrip`, independent of the advisory.
+- **#1 / #5 — Verifier metric coverage + regression guards.** The mutation
+  tracker now covers every `mutates-fs` registry tool (a source-parity test
+  fails if a new one is added untracked); added the de-harness regression guards
+  (`role-prompt` Harness/Topology absent + a non-harness provider-policy evidence
+  case).
+
+**Breaking (pre-1.0, internal):** removes incidental barrel exports
+(`buildPromptOverlay`, `buildAmaControllerDecision`, and the `KodaXAma*` advisory
+types — none in the SDK embedder guide) and the AMA runtime-state telemetry
+fields. A `KodaXAmaFanoutClass` → `KodaXChildFanoutClass` rename is a separate
+cosmetic follow-up.
