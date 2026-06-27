@@ -816,7 +816,7 @@ export interface KodaXIntentGateDecision {
   actionability: KodaXTaskActionability;
   executionPattern: KodaXExecutionPattern;
   shouldUseRepoSignals: boolean;
-  shouldUseModelRouter: boolean;
+  requiresRoutingHeuristics: boolean;
   reason: string;
 }
 
@@ -873,7 +873,7 @@ export function inferIntentGate(prompt: string): KodaXIntentGateDecision {
       actionability: 'non_actionable',
       executionPattern: 'direct',
       shouldUseRepoSignals: false,
-      shouldUseModelRouter: false,
+      requiresRoutingHeuristics: false,
       reason: 'Empty input is treated as non-actionable conversation.',
     };
   }
@@ -885,7 +885,7 @@ export function inferIntentGate(prompt: string): KodaXIntentGateDecision {
       actionability: 'non_actionable',
       executionPattern: 'direct',
       shouldUseRepoSignals: false,
-      shouldUseModelRouter: false,
+      requiresRoutingHeuristics: false,
       reason: 'Pure greeting input should stay conversational and must not be escalated by repository state.',
     };
   }
@@ -896,11 +896,11 @@ export function inferIntentGate(prompt: string): KodaXIntentGateDecision {
   const hasInvestigationSignal = INVESTIGATION_PATTERN.test(trimmed) || INVESTIGATION_PATTERN_ZH_CLEAN.test(trimmed);
   const hasImplementationSignal = IMPLEMENTATION_PATTERN.test(trimmed) || IMPLEMENTATION_PATTERN_ZH_CLEAN.test(trimmed);
 
-  // FEATURE_067 AMA redesign: All actionable tasks go through the model router.
-  // FEATURE_193 (v0.7.43) retired Scout — the model router's verdict is now the
-  // routing authority directly (V2 Worker honours it without a separate Scout
-  // calibration round). Keyword-based heuristics still bypass the router only
-  // for empty input and greetings (non-actionable).
+  // Heuristic intent gate. FEATURE_193 (v0.7.43) retired both the LLM task
+  // router and the Scout calibration round; the harness-LLM-judgment refactor
+  // then removed the per-harness prompt overlay for the Worker. Actionable
+  // requests run the keyword routing heuristic below; empty input and greetings
+  // short-circuit as non-actionable (direct H0).
 
   if (hasReviewSignal) {
     return {
@@ -909,8 +909,8 @@ export function inferIntentGate(prompt: string): KodaXIntentGateDecision {
       actionability: 'actionable',
       executionPattern: 'checked-direct',
       shouldUseRepoSignals: true,
-      shouldUseModelRouter: true,
-      reason: 'Review tasks go through the model router for accurate harness assessment. Scout will finalize.',
+      requiresRoutingHeuristics: true,
+      reason: 'Review work is actionable and benefits from harness assessment for accurate scoping.',
     };
   }
 
@@ -921,7 +921,7 @@ export function inferIntentGate(prompt: string): KodaXIntentGateDecision {
       actionability: 'actionable',
       executionPattern: 'coordinated',
       shouldUseRepoSignals: true,
-      shouldUseModelRouter: true,
+      requiresRoutingHeuristics: true,
       reason: 'Planning and design requests may benefit from coordinated execution.',
     };
   }
@@ -933,7 +933,7 @@ export function inferIntentGate(prompt: string): KodaXIntentGateDecision {
       actionability: 'actionable',
       executionPattern: 'checked-direct',
       shouldUseRepoSignals: true,
-      shouldUseModelRouter: true,
+      requiresRoutingHeuristics: true,
       reason: 'Debugging and root-cause work starts as investigation.',
     };
   }
@@ -945,7 +945,7 @@ export function inferIntentGate(prompt: string): KodaXIntentGateDecision {
       actionability: 'actionable',
       executionPattern: 'checked-direct',
       shouldUseRepoSignals: true,
-      shouldUseModelRouter: true,
+      requiresRoutingHeuristics: true,
       reason: 'Implementation and editing work is actionable and may later escalate if the evidence warrants it.',
     };
   }
@@ -957,8 +957,8 @@ export function inferIntentGate(prompt: string): KodaXIntentGateDecision {
       actionability: 'actionable',
       executionPattern: 'direct',
       shouldUseRepoSignals: false,
-      shouldUseModelRouter: true,
-      reason: 'Lookup queries go through the model router. Scout will decide if H0 is appropriate.',
+      requiresRoutingHeuristics: true,
+      reason: 'Lookup queries are actionable but lightweight — direct execution unless deeper analysis is requested.',
     };
   }
 
@@ -968,8 +968,8 @@ export function inferIntentGate(prompt: string): KodaXIntentGateDecision {
     actionability: 'ambiguous',
     executionPattern: 'direct',
     shouldUseRepoSignals: false,
-    shouldUseModelRouter: true,
-    reason: 'Ambiguous requests go through the model router for accurate classification. Scout will finalize.',
+    requiresRoutingHeuristics: true,
+    reason: 'Ambiguous requests need classification before the work approach is locked in.',
   };
 }
 
@@ -1266,7 +1266,7 @@ export function buildFallbackRoutingDecision(
   routingEvidence?: RoutingEvidenceInput,
 ): KodaXTaskRoutingDecision {
   const gate = inferIntentGate(prompt);
-  if (!gate.shouldUseModelRouter) {
+  if (!gate.requiresRoutingHeuristics) {
     const primaryTask = gate.primaryTask;
     return stabilizeRoutingDecision(prompt, {
       primaryTask,

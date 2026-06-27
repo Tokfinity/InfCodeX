@@ -861,7 +861,7 @@ describe('reasoning reroute', () => {
       actionability: 'non_actionable',
       executionPattern: 'direct',
       shouldUseRepoSignals: false,
-      shouldUseModelRouter: false,
+      requiresRoutingHeuristics: false,
     });
   });
 
@@ -871,7 +871,7 @@ describe('reasoning reroute', () => {
       actionability: 'non_actionable',
       executionPattern: 'direct',
       shouldUseRepoSignals: false,
-      shouldUseModelRouter: false,
+      requiresRoutingHeuristics: false,
     });
   });
 
@@ -881,7 +881,7 @@ describe('reasoning reroute', () => {
       taskFamily: 'review',
       executionPattern: 'checked-direct',
       shouldUseRepoSignals: true,
-      shouldUseModelRouter: true,
+      requiresRoutingHeuristics: true,
     });
   });
 
@@ -890,7 +890,7 @@ describe('reasoning reroute', () => {
       taskFamily: 'review',
       executionPattern: 'checked-direct',
       shouldUseRepoSignals: true,
-      shouldUseModelRouter: true,
+      requiresRoutingHeuristics: true,
     });
   });
 
@@ -899,7 +899,7 @@ describe('reasoning reroute', () => {
       taskFamily: 'planning',
       executionPattern: 'coordinated',
       shouldUseRepoSignals: true,
-      shouldUseModelRouter: true,
+      requiresRoutingHeuristics: true,
     });
   });
 
@@ -908,7 +908,7 @@ describe('reasoning reroute', () => {
       taskFamily: 'investigation',
       executionPattern: 'checked-direct',
       shouldUseRepoSignals: true,
-      shouldUseModelRouter: true,
+      requiresRoutingHeuristics: true,
     });
   });
 
@@ -917,7 +917,7 @@ describe('reasoning reroute', () => {
       taskFamily: 'implementation',
       executionPattern: 'checked-direct',
       shouldUseRepoSignals: true,
-      shouldUseModelRouter: true,
+      requiresRoutingHeuristics: true,
     });
   });
 
@@ -928,7 +928,7 @@ describe('reasoning reroute', () => {
       actionability: 'ambiguous',
       executionPattern: 'direct',
       shouldUseRepoSignals: false,
-      shouldUseModelRouter: true,
+      requiresRoutingHeuristics: true,
     });
   });
 
