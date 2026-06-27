@@ -177,6 +177,15 @@ export const PROMPT_SECTION_REGISTRY: Record<string, KodaXPromptSectionDefinitio
     order: 350,
     stability: 'stable',
   },
+  'execution-guidance': {
+    id: 'execution-guidance',
+    title: 'Execution Guidance',
+    owner: 'prompts',
+    feature: 'FEATURE_048',
+    slot: 'capability-truth',
+    order: 360,
+    stability: 'stable',
+  },
   'long-running-overlay': {
     id: 'long-running-overlay',
     title: 'Long-Running Overlay',

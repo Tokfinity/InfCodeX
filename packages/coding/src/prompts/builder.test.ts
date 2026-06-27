@@ -164,10 +164,10 @@ describe('buildSystemPrompt', () => {
         },
         {
           "feature": "FEATURE_048",
-          "id": "prompt-overlay",
-          "owner": "reasoning",
-          "slot": "mode-overlay",
-          "stability": "dynamic",
+          "id": "execution-guidance",
+          "owner": "prompts",
+          "slot": "capability-truth",
+          "stability": "stable",
         },
         {
           "feature": "FEATURE_048",
@@ -202,9 +202,11 @@ describe('buildSystemPrompt', () => {
 
     expect(snapshot.metadata.longRunning).toBe(false);
     expect(snapshot.hash).toHaveLength(64);
-    expect(snapshot.rendered.indexOf('## Prompt Overlay')).toBeGreaterThan(-1);
+    // The router prompt-overlay section was retired (ADR-043 P1.7); the static
+    // EXECUTION GUIDANCE block replaces it (capability-truth slot, always on).
+    expect(snapshot.rendered.indexOf('EXECUTION GUIDANCE')).toBeGreaterThan(-1);
     expect(snapshot.rendered.indexOf('PROJECT RULE: prefer project-scoped constraints.')).toBeGreaterThan(
-      snapshot.rendered.indexOf('## Prompt Overlay'),
+      snapshot.rendered.indexOf('EXECUTION GUIDANCE'),
     );
     expect(snapshot.rendered.indexOf('## Skills')).toBeGreaterThan(
       snapshot.rendered.indexOf('PROJECT RULE: prefer project-scoped constraints.'),
@@ -377,19 +379,20 @@ describe('buildSystemPrompt', () => {
     expect(normalized).toContain('[Runtime] provider=deepseek; model=deepseek-v4.');
     expect(normalized).toContain('Working Directory: <CWD>');
     expect(normalized).toContain('## Repository Intelligence\nFROZEN-REPO-CTX');
-    expect(normalized).toContain('## Prompt Overlay\nFROZEN-OVERLAY');
+    // Router prompt-overlay retired (ADR-043 P1.7) → static EXECUTION GUIDANCE.
+    expect(normalized).toContain('EXECUTION GUIDANCE');
     expect(normalized).toContain('## Skills\nFROZEN-SKILLS');
 
     // Strict ordering — Batch E extraction must not reorder sections.
     const idxRuntimeFact = normalized.indexOf('[Runtime] provider=deepseek');
     const idxWorkingDir = normalized.indexOf('Working Directory: <CWD>');
     const idxRepoIntel = normalized.indexOf('## Repository Intelligence');
-    const idxOverlay = normalized.indexOf('## Prompt Overlay');
+    const idxExecGuidance = normalized.indexOf('EXECUTION GUIDANCE');
     const idxSkills = normalized.indexOf('## Skills');
     expect(idxRuntimeFact).toBeLessThan(idxWorkingDir);
     expect(idxWorkingDir).toBeLessThan(idxRepoIntel);
-    expect(idxRepoIntel).toBeLessThan(idxOverlay);
-    expect(idxOverlay).toBeLessThan(idxSkills);
+    expect(idxRepoIntel).toBeLessThan(idxExecGuidance);
+    expect(idxExecGuidance).toBeLessThan(idxSkills);
 
     // Hash is deterministic for fixed inputs (modulo cwd/platform/node — those
     // are baked into the rendered string, so the hash legitimately varies; what

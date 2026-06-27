@@ -120,9 +120,12 @@ describe('runKodaX provider policy integration', () => {
     expect(Feature029BridgeProvider.calls[0]?.system).toContain(
       '[Provider Constraint] WARN:',
     );
-    expect(Feature029BridgeProvider.calls[0]?.system).toContain(
-      '[Harness Profile: H0_DIRECT]',
-    );
+    // Router harness/mode overlay retired (ADR-043 P1.7): the SA agent now
+    // self-judges from the static EXECUTION GUIDANCE block instead of being
+    // told its harness tier. Provider-policy notes (asserted above) still flow
+    // via the separate provider-policy-gate path — they are NOT affected.
+    expect(Feature029BridgeProvider.calls[0]?.system).toContain('EXECUTION GUIDANCE');
+    expect(Feature029BridgeProvider.calls[0]?.system).not.toContain('[Harness Profile');
     expect(
       Feature029BridgeProvider.calls[0]?.system.match(
         new RegExp(`\\[Provider Policy\\] provider=${TEST_PROVIDER_NAME}; status=warn\\.`, 'g'),

@@ -60,6 +60,7 @@ import { buildMemoryRulesSection } from './memory-rules.js';
 import { buildMemorySection } from './memory-section.js';
 import { createPromptSection, type KodaXPromptSection } from './sections.js';
 import { buildSelfKnowledgeRoutingRule } from '../self-knowledge/routing-rule.js';
+import { EXECUTION_GUIDANCE } from './execution-guidance.js';
 import { SYSTEM_PROMPT } from './system.js';
 import {
   TOOL_CONSTRUCTION_PROMPT,
@@ -224,15 +225,19 @@ export async function buildCapabilityContextSections(
     ),
   );
 
-  if (options.context?.promptOverlay?.trim()) {
-    sections.push(
-      createPromptSection(
-        'prompt-overlay',
-        options.context.promptOverlay,
-        'Append runtime harness, routing, and provider truth for the current execution plan.',
-      ),
-    );
-  }
+  // Static EXECUTION GUIDANCE replaces the old router `prompt-overlay` section
+  // (EXECUTION_MODE / HARNESS_PROFILE overlays + [Task Routing] classification
+  // dump) — the SA agent self-judges the kind of work, matching the AMA Worker
+  // (ADR-043 P1.7). Shared verbatim via `execution-guidance.ts`. The AMA path
+  // excludes this section (it carries EXECUTION_GUIDANCE inside
+  // `buildWorkerInstructions`); see `AMA_OWNED_SECTION_IDS` in runner-driven.
+  sections.push(
+    createPromptSection(
+      'execution-guidance',
+      EXECUTION_GUIDANCE,
+      'Match your approach to the kind of work (review / audit / investigation / planning / ambiguity) by self-judgment, not router assignment.',
+    ),
+  );
 
   const agentsFiles = loadAgentsFiles({
     cwd: executionCwd,

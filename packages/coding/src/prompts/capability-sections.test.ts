@@ -130,7 +130,7 @@ describe('buildCapabilityContextSections', () => {
     expect(rf?.content).toContain('provider=anthropic');
   });
 
-  it('repo-intelligence-context, mcp-capability-context, prompt-overlay are conditional on context fields', async () => {
+  it('repo-intelligence-context, mcp-capability-context, skills-addendum are conditional; execution-guidance always present', async () => {
     const cwd = await createTempDir('kodax-capsec-cond-');
     cleanupDirs.push(cwd);
 
@@ -152,15 +152,16 @@ describe('buildCapabilityContextSections', () => {
     const sectionIds = ids(sections);
     expect(sectionIds).toContain('repo-intelligence-context');
     expect(sectionIds).toContain('mcp-capability-context');
-    expect(sectionIds).toContain('prompt-overlay');
     expect(sectionIds).toContain('skills-addendum');
+    // The router `prompt-overlay` section was retired (ADR-043 P1.7); the
+    // static `execution-guidance` block replaces it and is always emitted.
+    expect(sectionIds).toContain('execution-guidance');
+    expect(sectionIds).not.toContain('prompt-overlay');
 
-    // Canonical order: repo-intel → mcp → overlay → project-agents → skills.
+    // Canonical order: repo-intel → mcp → skills.
     expect(sectionIds.indexOf('repo-intelligence-context'))
       .toBeLessThan(sectionIds.indexOf('mcp-capability-context'));
     expect(sectionIds.indexOf('mcp-capability-context'))
-      .toBeLessThan(sectionIds.indexOf('prompt-overlay'));
-    expect(sectionIds.indexOf('prompt-overlay'))
       .toBeLessThan(sectionIds.indexOf('skills-addendum'));
   });
 

@@ -31,6 +31,7 @@ import type {
   KodaXTaskRoutingDecision,
   KodaXTaskVerificationContract,
 } from '../types.js';
+import { EXECUTION_GUIDANCE } from '../prompts/execution-guidance.js';
 // FEATURE_155 (v0.7.39) — Worker prompt teaches idle-yield as the
 // canonical wait mechanic. Slice C3 retired the flag-gated OFF branch
 // (the v0.7.38 `await_child_task` wording) because Slice C1 removed
@@ -234,22 +235,10 @@ export function buildWorkerInstructions(
     '- If mid fan-out you decide to dispatch another child, add the matching todo before the new dispatch.',
   ].join('\n');
 
-  // FEATURE_193 follow-up (harness LLM-judgment refactor, H3): static
-  // execution guidance replacing the router-injected EXECUTION_MODE /
-  // HARNESS_PROFILE overlays. The Worker self-judges which kind of work it is
-  // doing instead of being told by a keyword router. 5-alias panel
-  // (zhipu/glm52 + kimi + mimo/v25pro + mmx/m3 + ds/v4pro × 5 case × 3 run)
-  // confirmed behavioural parity with the old overlay injection + a shorter
-  // prompt. See docs/harness-llm-judgment-design.md §2.1 (B-class migration).
-  const executionGuidance = [
-    'EXECUTION GUIDANCE (match your approach to the kind of work — judge which fits):',
-    '- After you make a change, check the result against what was actually asked before you finalize. Confirm the change does what the request wanted, backed by evidence (a test run, a re-read of the edited region) rather than confidence alone — because a change that looks right but was never verified is how silent regressions ship.',
-    '- When you are reviewing code or a pull request: report only high-confidence issues that materially affect correctness, reliability, security, or merge-readiness. Do not list naming, formatting, or style preferences as findings — padding a review with nits buries the issues that matter. Lead with the must-fix items, then optional improvements, and for each issue state the concrete consequence it causes.',
-    '- When you are doing a broad audit: cover correctness, security, performance, and maintainability together, and keep issues you have confirmed separate from lower-confidence risks so the reader can tell which is which.',
-    '- When you are investigating a bug or an unknown: isolate the root cause and validate your assumptions with concrete evidence — a reproduction, a targeted check — before making broad changes, because a fix applied before the cause is understood usually treats a symptom.',
-    '- When the task is design or planning work: reason through architecture, constraints, sequencing, and risks before writing code.',
-    '- When the request is genuinely ambiguous: frame the options briefly and make the path you chose explicit before any irreversible edit, so the user can redirect before the cost is sunk.',
-  ].join('\n');
+  // Static EXECUTION GUIDANCE (shared with the SA path) replaces the
+  // router-injected EXECUTION_MODE / HARNESS_PROFILE overlays — the Worker
+  // self-judges the kind of work instead of being told by a keyword router.
+  // See `prompts/execution-guidance.ts` + ADR-043.
 
   const handoffRules = [
     'TERMINATION:',
@@ -278,7 +267,7 @@ export function buildWorkerInstructions(
     dispatchRules,
     childSteeringRules,
     fanOutPlanGranularity,
-    executionGuidance,
+    EXECUTION_GUIDANCE,
     handoffRules,
   ]
     .filter((part) => part.length > 0)

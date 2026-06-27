@@ -1070,12 +1070,12 @@ async function runManagedTaskViaRunnerInner(
       isNewSessionForCapabilities,
       managedWorkspace.executionCwd,
     );
-    // FEATURE_143 (v0.7.36): `prompt-overlay` is no longer "AMA-owned"
-    // via the user-prompt stitching path — it now flows through the
-    // role-prompt builder's `promptOverlaySection`. Keeping it in the
-    // exclusion list still makes sense (we don't want SA-style
-    // duplicate emission alongside the role-prompt section), so the
-    // ID stays in this set as a deduplication guard.
+    // The AMA Worker owns these sections via `buildWorkerInstructions` /
+    // `role-prompt.ts`, so they are excluded from the SA-style capability
+    // block to avoid double emission. `execution-guidance` is here because the
+    // Worker carries EXECUTION_GUIDANCE inside `buildWorkerInstructions`; the SA
+    // path gets the same block via the capability section instead (ADR-043 P1.7).
+    // The old `prompt-overlay` section was removed (router overlay retired).
     const AMA_OWNED_SECTION_IDS = new Set<string>([
       'base-system',
       'base-system-suffix',
@@ -1084,7 +1084,7 @@ async function runManagedTaskViaRunnerInner(
       'working-directory',
       'session-scratch-directory',
       'repo-intelligence-context',
-      'prompt-overlay',
+      'execution-guidance',
     ]);
     const filtered = capabilitySections.filter(
       (section) => !AMA_OWNED_SECTION_IDS.has(section.id),
