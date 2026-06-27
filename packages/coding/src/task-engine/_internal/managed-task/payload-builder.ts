@@ -322,7 +322,7 @@ export function buildManagedTaskPayload(args: {
       routingSource: plan?.decision.routingSource,
       currentHarness: harness,
       upgradeCeiling: plan?.decision.upgradeCeiling ?? harness,
-      qualityAssuranceMode: deriveQualityAssuranceMode(plan, harness),
+      qualityAssuranceMode: deriveQualityAssuranceMode(plan),
       // FEATURE_193 (v0.7.43) deep V1 cleanup: `scoutDecision` + `skillMap`
       // runtime fields physically removed from `KodaXManagedTaskRuntimeState`
       // (Scout role retired, no V2 source). The runtime literal omits them
@@ -386,9 +386,11 @@ export function buildManagedTaskPayload(args: {
  */
 function deriveQualityAssuranceMode(
   plan: ReasoningPlan | undefined,
-  harness: KodaXHarnessProfile,
 ): 'required' | 'optional' {
-  if (harness !== 'H0_DIRECT') return 'required';
+  // (Removed) the leading `harness !== 'H0_DIRECT' -> required` clause: with
+  // decision.harnessProfile collapsed to a constant 'H0_DIRECT' it was always
+  // false. The UI 'required'/'optional' label is now driven entirely by the
+  // semantic decision fields below.
   const decision = plan?.decision;
   if (!decision) return 'optional';
   if (decision.assuranceIntent === 'explicit-check') return 'required';
