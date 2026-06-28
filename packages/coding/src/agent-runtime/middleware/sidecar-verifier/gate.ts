@@ -264,6 +264,17 @@ export function detectWorkScale(
       reason: `metric-gate: ~${metrics.estimatedChangedLines} estimated lines > ${TRIVIAL_LINES} — large single-file edit`,
     };
   }
+  // A mutating tool whose file path is computed inside its handler (undo /
+  // worktree_create/remove / scaffold_* / stage_construction / activate_agent)
+  // records a write op but 0 filesChanged / 0 lines, so it would otherwise fall
+  // through to the trivial skip below despite having mutated the workspace. Like
+  // riskyShellOps, treat an unattributable write as a blind spot and fire.
+  if (metrics.writeOps > 0 && metrics.filesChanged === 0) {
+    return {
+      fire: true,
+      reason: `metric-gate: ${metrics.writeOps} write op(s) with no attributable file (undo / worktree / scaffold) — blind spot, fire conservatively`,
+    };
+  }
   return {
     fire: false,
     reason: 'metric-gate: trivial observed work (single small edit or read-only lookup; no plan; short)',

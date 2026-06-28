@@ -300,6 +300,15 @@ describe('H2 — gate.detectWorkScale (metric refinement)', () => {
     expect(d?.reason).toMatch(/shell op/);
   });
 
+  it('fires on an unattributable write op (undo / worktree / scaffold: writeOps>0 but filesChanged=0)', () => {
+    // recordMutationForTool counts these as a write op but cannot resolve the
+    // file (the path is computed inside the handler), so filesChanged/lines stay
+    // 0. Without the blind-spot branch this would fall to the trivial skip.
+    const d = detectWorkScale(editCtx, metrics({ writeOps: 1, filesChanged: 0, estimatedChangedLines: 0 }));
+    expect(d?.fire).toBe(true);
+    expect(d?.reason).toMatch(/no attributable file/);
+  });
+
   it('skips a short grounded read-only lookup (tool evidence, no writes)', () => {
     // taskHasAnyToolUse sees the grep → observable work → trivial → skip.
     const d = detectWorkScale(readOnlyCtx, metrics({}));
