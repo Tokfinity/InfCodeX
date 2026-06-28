@@ -202,21 +202,49 @@ export function _resetRepoIntelligenceCachesForTesting(): void {
   preturnBundleCache.clear();
 }
 
-function pruneExpiredFullPreturnCache(now = Date.now()): void {
-  for (const [key, entry] of fullPreturnCache.entries()) {
+export function _getRepoIntelligenceCacheSizesForTesting(): {
+  readonly fullPreturn: number;
+  readonly routingSignals: number;
+  readonly preturnBundle: number;
+} {
+  return {
+    fullPreturn: fullPreturnCache.size,
+    routingSignals: routingSignalsCache.size,
+    preturnBundle: preturnBundleCache.size,
+  };
+}
+
+function pruneCacheEntries<T extends { readonly expiresAt: number }>(
+  cache: Map<string, T>,
+  maxEntries: number,
+  now = Date.now(),
+): void {
+  for (const [key, entry] of cache.entries()) {
     if (entry.expiresAt <= now) {
-      fullPreturnCache.delete(key);
+      cache.delete(key);
     }
   }
 
-  if (fullPreturnCache.size <= MAX_PRETURN_CACHE_ENTRIES) {
+  if (cache.size <= maxEntries) {
     return;
   }
 
-  const keys = Array.from(fullPreturnCache.keys());
-  for (const key of keys.slice(0, fullPreturnCache.size - MAX_PRETURN_CACHE_ENTRIES)) {
-    fullPreturnCache.delete(key);
+  const keys = Array.from(cache.keys());
+  for (const key of keys.slice(0, cache.size - maxEntries)) {
+    cache.delete(key);
   }
+}
+
+function pruneExpiredFullPreturnCache(now = Date.now()): void {
+  pruneCacheEntries(fullPreturnCache, MAX_PRETURN_CACHE_ENTRIES, now);
+}
+
+function pruneRoutingSignalsCache(now = Date.now()): void {
+  pruneCacheEntries(routingSignalsCache, MAX_PRETURN_CACHE_ENTRIES, now);
+}
+
+function prunePreturnBundleCache(now = Date.now()): void {
+  pruneCacheEntries(preturnBundleCache, MAX_PRETURN_CACHE_ENTRIES, now);
 }
 
 function isFullRepoIntelligenceMode(mode: KodaXRepoIntelligenceResolvedMode): boolean {
@@ -957,12 +985,14 @@ export async function getRepoRoutingSignals(
     gitRoot: normalizeCachePath(context.gitRoot),
     targetPath: activeTargetPath ?? '',
   });
+  const now = Date.now();
+  pruneRoutingSignalsCache(now);
   const cached = routingSignalsCache.get(cacheKey);
   if (cached) {
     if (cached.pending) {
       return cached.promise;
     }
-    if (cached.expiresAt > Date.now()) {
+    if (cached.expiresAt > now) {
       return cached.promise;
     }
   }
@@ -1011,6 +1041,7 @@ export async function getRepoRoutingSignals(
     promise,
   };
   routingSignalsCache.set(cacheKey, entry);
+  pruneRoutingSignalsCache(now);
   return promise;
 }
 
@@ -1035,12 +1066,14 @@ export async function getRepoPreturnBundle(
     gitRoot: normalizeCachePath(context.gitRoot),
     targetPath: activeTargetPath ?? '',
   });
+  const now = Date.now();
+  prunePreturnBundleCache(now);
   const cached = preturnBundleCache.get(cacheKey);
   if (cached) {
     if (cached.pending) {
       return cached.promise;
     }
-    if (cached.expiresAt > Date.now()) {
+    if (cached.expiresAt > now) {
       return cached.promise;
     }
   }
@@ -1061,6 +1094,7 @@ export async function getRepoPreturnBundle(
     promise,
   };
   preturnBundleCache.set(cacheKey, entry);
+  prunePreturnBundleCache(now);
   return promise;
 }
 

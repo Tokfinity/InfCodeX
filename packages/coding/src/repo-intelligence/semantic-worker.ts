@@ -110,7 +110,7 @@ async function loadDevSemanticIndex(): Promise<typeof SemanticIndexModule> {
 }
 
 parentPort.on('message', (message: unknown) => {
-  queue = queue.then(async () => {
+  const next = queue.then(async () => {
     if (!isRequest(message)) {
       return;
     }
@@ -128,4 +128,5 @@ parentPort.on('message', (message: unknown) => {
       });
     }
   });
+  queue = next.catch(() => undefined);
 });

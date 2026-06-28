@@ -190,6 +190,9 @@ export function registerTypeScriptSymbol(
   if (duplicate) {
     return;
   }
+  if (analysis.symbols.length >= MAX_SYMBOLS_PER_FILE) {
+    return;
+  }
 
   analysis.symbols.push(record);
   let body: ts.Node | undefined;

@@ -8,6 +8,9 @@ import {
   getRepoIntelligenceIndex as getSemanticRepoIntelligenceIndex,
   getRepoRoutingSignals as getSemanticRepoRoutingSignals,
 } from './semantic-index.js';
+import { analyzeTypeScriptFiles } from './semantic-typescript-analyzer.js';
+import { MAX_SYMBOLS_PER_FILE } from './semantic-shared.js';
+import type { RepoAreaOverview } from './public-bridge.js';
 
 type RepoContext = { executionCwd?: string; gitRoot?: string };
 type LightQueryOptions = { targetPath?: string; refresh?: boolean };
@@ -180,6 +183,40 @@ describe('light-profile repo-intelligence index', () => {
       expect.objectContaining({ language: 'java', capabilityTier: 'medium' }),
       expect.objectContaining({ language: 'cpp', capabilityTier: 'low' }),
     ]));
+  }, 15000);
+
+  it('caps TypeScript symbols per file in the analyzer', async () => {
+    tempDir = mkdtempSync(join(tmpdir(), 'kodax-ri-ts-symbol-cap-'));
+    mkdirSync(join(tempDir, 'src'), { recursive: true });
+    const filePath = 'src/many.ts';
+    writeFileSync(
+      join(tempDir, filePath),
+      Array.from(
+        { length: MAX_SYMBOLS_PER_FILE + 5 },
+        (_, index) => `export function f${index}(): number { return ${index}; }`,
+      ).join('\n'),
+    );
+    const areas: RepoAreaOverview[] = [{
+      id: 'root',
+      label: 'root',
+      kind: 'root',
+      root: '.',
+      fileCount: 1,
+      manifests: [],
+      sampleFiles: [filePath],
+    }];
+
+    const analyses = await analyzeTypeScriptFiles(
+      tempDir,
+      [filePath],
+      areas,
+      new Set([filePath]),
+      new Map(),
+    );
+
+    expect(analyses[0]?.symbols).toHaveLength(MAX_SYMBOLS_PER_FILE);
+    expect(analyses[0]?.symbols.map((symbol) => symbol.name)).toContain(`f${MAX_SYMBOLS_PER_FILE - 1}`);
+    expect(analyses[0]?.symbols.map((symbol) => symbol.name)).not.toContain(`f${MAX_SYMBOLS_PER_FILE}`);
   }, 15000);
 
   it('derives routing lowConfidence from active module and impact confidence', async () => {

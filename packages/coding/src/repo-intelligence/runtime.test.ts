@@ -10,6 +10,7 @@ import {
   inspectRepoIntelligenceRuntime,
   prewarmRepoIntelligenceCaches,
   resolveKodaXHotPathRepoMode,
+  _getRepoIntelligenceCacheSizesForTesting,
   _resetRepoIntelligenceCachesForTesting,
 } from './runtime.js';
 import { shutdownRepoIntelligenceWorkerForTest } from './semantic-worker-client.js';
@@ -222,6 +223,19 @@ describe('repo-intelligence runtime facade', () => {
     expect(bundle.capability).toMatchObject({
       mode: 'full',
       engine: 'full',
+    });
+  });
+
+  it('bounds routing and preturn session caches on write', async () => {
+    for (let i = 0; i < 70; i += 1) {
+      const context = { executionCwd: `${tempDir}-${i}` };
+      await getRepoRoutingSignals(context, { mode: 'off' });
+      await getRepoPreturnBundle(context, { mode: 'off' });
+    }
+
+    expect(_getRepoIntelligenceCacheSizesForTesting()).toMatchObject({
+      routingSignals: 64,
+      preturnBundle: 64,
     });
   });
 });
