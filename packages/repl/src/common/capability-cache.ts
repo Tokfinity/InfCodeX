@@ -24,6 +24,10 @@ export const CAPABILITY_CACHE_FILE = path.join(
   'capability-cache.json',
 );
 
+function getCapabilityCacheFile(): string {
+  return path.join(getAgentConfigHome(), 'capability-cache.json');
+}
+
 export type CapabilityCacheSource = 'observed' | 'probed';
 
 export interface CapabilityCacheEntry {
@@ -136,9 +140,10 @@ export function loadCapabilityCache(): CapabilityCache {
   if (memo) {
     return memo;
   }
+  const cacheFile = getCapabilityCacheFile();
   try {
-    memo = fsSync.existsSync(CAPABILITY_CACHE_FILE)
-      ? sanitizeCache(JSON.parse(fsSync.readFileSync(CAPABILITY_CACHE_FILE, 'utf-8')))
+    memo = fsSync.existsSync(cacheFile)
+      ? sanitizeCache(JSON.parse(fsSync.readFileSync(cacheFile, 'utf-8')))
       : {};
   } catch {
     // Disposable cache: a corrupt file is reset, not migrated.
@@ -149,8 +154,9 @@ export function loadCapabilityCache(): CapabilityCache {
 
 function persistCapabilityCache(cache: CapabilityCache): void {
   memo = cache;
-  fsSync.mkdirSync(path.dirname(CAPABILITY_CACHE_FILE), { recursive: true });
-  fsSync.writeFileSync(CAPABILITY_CACHE_FILE, JSON.stringify(cache, null, 2));
+  const cacheFile = getCapabilityCacheFile();
+  fsSync.mkdirSync(path.dirname(cacheFile), { recursive: true });
+  fsSync.writeFileSync(cacheFile, JSON.stringify(cache, null, 2));
 }
 
 /** Cached rejections for the current provider/model (read path). */
