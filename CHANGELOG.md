@@ -6,6 +6,14 @@ All notable changes to this project will be documented in this file.
 
 ## [Unreleased]
 
+### Added
+
+- **Workflow generation robustness (FEATURE_245).** The dynamic-workflow generator now fails closed on more contract mistakes before a script ever runs: static rejection of string-literal task IDs passed to `wf.wait/snapshot/send/stop`, smoke-time assertion that task APIs receive real `taskId` values (not agent names) and that `evidenceRefs` use the `file:`/`diff:`/`finding:`/`task_id:` contract, a multi-scenario adversarial smoke pass (default / variant results / unverified-success / empty-rerun-args) that exercises data-dependent branches, randomized smoke task IDs, and hardened generator + repair prompts.
+
+### Fixed
+
+- **Workflows no longer discard completed work on a mid-run failure (FEATURE_245).** When a generated workflow throws after some child agents have already completed (e.g. a script that calls `wf.wait("<agent-name>")`), the run now surfaces the completed children's outputs alongside the error instead of a bare `Workflow failed` message. Failure hints also point at `/workflow revise` for repair.
+
 ## [0.7.57] - 2026-06-28
 
 > Scope note: a large architecture release for custom-provider / SDK embedders, built on three ADRs plus a repo-intelligence rewrite. **ADR-041** stops persisting placeholder `...` empty replies into history. **ADR-042** collapses the `mode`/`depth` reasoning dual-track into a single `effort` axis (wire behaviour preserved — `effortToThinkingDepth` mirrors the old `effort→mode→depth` derivation, so every provider×effort still emits the same `reasoning_effort` / `thinking.budget_tokens`). **ADR-043** turns harness routing into static LLM judgment: the keyword router, AMA-controller, fanout-scheduler and prompt-overlay machinery are deleted in favour of a shared static `EXECUTION GUIDANCE` block + an objective-metric Sidecar Verifier gate (`harnessProfile` is retained as a constant `H0_DIRECT`). Repo-intelligence moves from an external host/premium daemon to a fully built-in local semantic index engine with a worker sidecar. **This release contains breaking changes for SDK embedders and custom-provider authors — see the migration notes under Removed / Changed.**

@@ -13,11 +13,11 @@
 | Current released version | `v0.7.57` |
 | Current package version | `@kodax-ai/kodax@0.7.57` (released 2026-06-28) |
 | Workspace baseline | `llm / agent / coding / repl` 4 packages |
-| Total tracked features | `28` |
+| Total tracked features | `29` |
 | InProgress | `0` |
 | Planned | `14` |
-| Completed | `14` |
-| Tracked feature IDs | `007, 030, 093, 105, 108, 113, 139, 174, 211, 224, 225, 228, 229, 230, 231, 232, 233, 234, 235, 236, 237, 238, 239, 240, 241, 242, 243, 244` |
+| Completed | `15` |
+| Tracked feature IDs | `007, 030, 093, 105, 108, 113, 139, 174, 211, 224, 225, 228, 229, 230, 231, 232, 233, 234, 235, 236, 237, 238, 239, 240, 241, 242, 243, 244, 245` |
 | Archive cutoff | Shipped / canceled / absorbed / shelved items through `v0.7.49` are archived. |
 
 ### 一览表
@@ -104,6 +104,7 @@ No active feature is currently in implementation after the `v0.7.57` release syn
 
 | ID | Title | Released | Design | Notes |
 |---|---|---|---|---|
+| `245` | Workflow Generation Robustness + Runtime Partial-Result Salvage | `v0.7.58` | [v0.7.58](features/v0.7.58.md#feature_245-workflow-generation-robustness--runtime-partial-result-salvage) | Landed 2026-06-29 (pending release in `v0.7.58`). Generation-time: static literal-taskId rejection, smoke now asserts taskId/evidenceRefs identity, multi-scenario adversarial smoke, taskId randomization, prompt/repair hardening. Runtime: mid-run failures surface completed children's outputs instead of a bare failure. Eval per ADR-033 is deterministic Layer-1 unit tests (generator prompt is not a FEATURE_104 trigger). Runtime self-repair (replay completed agents) is explicitly deferred to `FEATURE_231`. |
 | `243` | Built-in Repository Intelligence + Codebase Mastery Parity | `v0.7.57` | [v0.7.57](features/v0.7.57.md#feature_243-built-in-repository-intelligence--codebase-mastery-parity) | Released v0.7.57 (2026-06-28). Replaces external Repointel runtime with built-in full/light repo-intelligence, semantic worker sidecar, `relationship_scan`, repo-explorer agent, and `/repo-intel` controls. |
 | `242` | Lean Review + Project Instructions Bootstrap | `v0.7.57` | [v0.7.57](features/v0.7.57.md#feature_242-lean-review--project-instructions-bootstrap) | Released v0.7.57 (2026-06-28). Adds lean review command path and project instruction bootstrap updates for the current Worker + Sidecar architecture. |
 | `241` | SDK Timeout Control Surface | `v0.7.57` | [v0.7.57](features/v0.7.57.md#feature_241-sdk-timeout-control-surface) | Released v0.7.57 (2026-06-28). Adds seconds-based SDK timeout config; LLM request timeout normalization lives in `@kodax-ai/llm`, with coding adapting it to provider resilience. |
