@@ -30,6 +30,7 @@ const childExecutorMock = vi.hoisted(() => ({
       readonly guardrails?: readonly unknown[];
       readonly planModeBlockCheck?: unknown;
       readonly parentOptions?: {
+        readonly effort?: unknown;
         readonly repoIntelligenceMode?: unknown;
         readonly repoIntelligenceTrace?: unknown;
       };
@@ -45,6 +46,7 @@ vi.mock('../child-executor.js', () => ({
       readonly guardrails?: readonly unknown[];
       readonly planModeBlockCheck?: unknown;
       readonly parentOptions?: {
+        readonly effort?: unknown;
         readonly repoIntelligenceMode?: unknown;
         readonly repoIntelligenceTrace?: unknown;
       };
@@ -220,6 +222,7 @@ describe('runWorkflowModule', () => {
     };
     const options: KodaXOptions = {
       provider: 'anthropic',
+      effort: 'high',
       guardrails: [guardrail],
       context: {
         planModeBlockCheck,
@@ -240,6 +243,7 @@ describe('runWorkflowModule', () => {
     expect(childExecutorMock.calls).toHaveLength(1);
     expect(childExecutorMock.calls[0]?.options.guardrails).toBe(options.guardrails);
     expect(childExecutorMock.calls[0]?.options.planModeBlockCheck).toBe(planModeBlockCheck);
+    expect(childExecutorMock.calls[0]?.options.parentOptions?.effort).toBe('high');
     expect(childExecutorMock.calls[0]?.options.parentOptions?.repoIntelligenceMode).toBe('off');
     expect(childExecutorMock.calls[0]?.options.parentOptions?.repoIntelligenceTrace).toBe(true);
   });

@@ -38,12 +38,14 @@ describe('buildWorkflowGenerationUserPrompt', () => {
     expect(prompt).toContain('Prefer shared-cwd for write children');
     expect(prompt).toContain('fan-out-and-synthesize');
     expect(prompt).toContain('loop-until-done');
+    expect(prompt).toContain('Pattern selection guidance');
+    expect(prompt).toContain('Do not collapse independent investigation');
     expect(prompt).toContain('rank 80 resumes');
   });
 
   it('includes a canonical source pattern with finalText/text result fields', () => {
     const prompt = buildWorkflowGenerationUserPrompt('audit workflow contracts');
-    expect(prompt).toContain('Canonical source field-usage pattern to follow');
+    expect(prompt).toContain('Minimal source field-usage example');
     expect(prompt).toContain('first.finalText');
     expect(prompt).toContain('second.finalText');
     expect(prompt).toContain('const finalText = synthesis.text');

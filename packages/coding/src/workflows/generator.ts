@@ -54,6 +54,14 @@ const WORKFLOW_GENERATION_TIMEOUT_ENV = 'KODAX_WORKFLOW_GENERATION_TIMEOUT_MS';
 const GENERATED_WORKFLOW_MAX_AGENTS_HARD_CAP = 64;
 const WORKFLOW_GENERATION_REPAIR_ATTEMPTS = 2;
 const GENERATED_WORKFLOW_SMOKE_TIMEOUT_MS = 2_000;
+const WORKFLOW_PATTERN_GUIDANCE: readonly string[] = [
+  '- classify-and-act: first classify a mixed request, then route to the right worker behavior.',
+  '- fan-out-and-synthesize: split independent areas, files, hypotheses, reviewers, or perspectives; run them with wf.parallel, then wf.synthesize.',
+  '- adversarial-verification: produce or inspect a candidate, then have an independent verifier attack assumptions, evidence, and edge cases.',
+  '- generate-and-filter: ask several generators for distinct candidates, then filter/dedupe/rank before synthesis.',
+  '- tournament: compare competing approaches or answers and use synthesis as the judge.',
+  '- loop-until-done: run bounded follow-up rounds when findings should drive the next prompt.',
+];
 
 export interface WorkflowGenerationTextRequest {
   readonly system: string;
@@ -654,7 +662,7 @@ export function buildWorkflowGenerationUserPrompt(
     '- For multi-line prompts, rubrics, or report templates inside source, use JavaScript template literals (`...`) or arrays joined with "\\n"; never place raw newlines inside single-quoted or double-quoted strings.',
     '- Do not ask child agents to emit special transcript marker blocks. KodaX derives child-agent transcript digests after each child finishes; child prompts should focus on the actual work product and final report.',
     '',
-    'Canonical source field-usage pattern to follow; adapt agent count, names, phases, and prompts to the task:',
+    'Minimal source field-usage example; use it for result fields/syntax, not as the default workflow shape:',
     'async function run(wf, args) {',
     '  const first = await wf.runAgent({ name: "first-pass", prompt: String(args.request || ""), readOnly: true });',
     '  const second = await wf.runAgent({ name: "second-pass", prompt: first.finalText, readOnly: true });',
@@ -689,6 +697,13 @@ export function buildWorkflowGenerationUserPrompt(
     '}',
     '',
     `Supported pattern ids: ${WORKFLOW_PATTERN_IDS.join(', ')}`,
+    '',
+    'Pattern selection guidance:',
+    ...WORKFLOW_PATTERN_GUIDANCE,
+    '- Complex multi-part work should normally include at least two work phases plus a final wf.synthesize barrier.',
+    '- Do not collapse independent investigation, verification, ranking, generation/filtering, or iteration into one child agent.',
+    '- A generated workflow with only one child agent is appropriate only when the request has one indivisible work product; otherwise decline simple tasks or generate a richer pattern.',
+    '- Use evidenceRefs when one child reviews another child result; use modelHint:"deep" for verifiers, judges, and synthesis-critical workers.',
     '',
     'Manifest requirements:',
     '- name, description, phases, readOnly, maxAgents, maxConcurrency, optional plannedAgents, optional tokenBudget',
@@ -918,6 +933,7 @@ export async function generateWorkflowFromOptions(
 ): Promise<WorkflowGenerationResult> {
   const provider = resolveProvider(input.options.provider);
   const model = input.options.modelOverride ?? input.options.model ?? provider.getModel();
+  const effort = input.options.effort?.trim();
   if (input.timeoutMs !== undefined && input.timeoutSec !== undefined) {
     throw new Error('workflow generation timeoutSec and timeoutMs cannot both be set');
   }
@@ -941,6 +957,7 @@ export async function generateWorkflowFromOptions(
         messages,
         querySource: 'workflow-generation',
         timeoutMs,
+        ...(effort ? { reasoning: { effort } } : {}),
         ...(request.signal ? { abortSignal: request.signal } : {}),
       });
 
