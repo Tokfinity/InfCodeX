@@ -133,10 +133,14 @@ describe('provider registry', () => {
     expect(ark.getEffectiveContextWindow('doubao-seed-2.0-pro')).toBe(256_000);
     expect(ark.getEffectiveContextWindow('doubao-seed-2.0-lite')).toBe(256_000);
 
-    // GLM-5.2 carries an explicit maxOutputTokens override (131_072,
-    // matches zhipu-coding/glm-5.2) 鈥?pin it so future JSON edits
-    // can't silently regress to the provider-level 32_000 default.
-    expect(ark.getEffectiveMaxOutputTokens('glm-5.2')).toBe(131_072);
+    // GLM-5.2 carries an explicit maxOutputTokens override. The Ark
+    // gateway caps at 128_000 even though Zhipu's direct endpoint
+    // accepts 131_072 — user-confirmed against an actual 400 from the
+    // Ark wire (2026-06): "max_tokens above maximum value, expected
+    // a value <= 128000". Pin the cap so future JSON edits can't
+    // silently regress to either the provider-level 32_000 default
+    // or the Zhipu-direct 131_072 value.
+    expect(ark.getEffectiveMaxOutputTokens('glm-5.2')).toBe(128_000);
 
     expect(getProviderConfiguredReasoningCapability('ark-coding', 'glm-5.1')).toBe('native-toggle');
     expectReasoningPreset('ark-coding', 'glm-5.1', 'zai-glm-toggle');
