@@ -10,8 +10,8 @@
 
 | Item | Value |
 |---|---|
-| Current released version | `v0.7.57` |
-| Current package version | `@kodax-ai/kodax@0.7.57` (released 2026-06-28) |
+| Current released version | `v0.7.58` |
+| Current package version | `@kodax-ai/kodax@0.7.58` (pending npm publish, 2026-06-29) |
 | Workspace baseline | `llm / agent / coding / repl` 4 packages |
 | Total tracked features | `29` |
 | InProgress | `0` |
@@ -24,7 +24,7 @@
 
 | Status | Count | Feature IDs | Next checkpoint |
 |---|---:|---|---|
-| Completed | 14 | `243, 242, 241, 233, 240, 239, 224, 174, 211, 237, 229, 230, 234, 236` | `233, 241, 242, 243` released v0.7.57; `239, 240` released v0.7.56; `224` released v0.7.54; `174, 211, 237` v0.7.53; `229` v0.7.50; `230, 234, 236` v0.7.51 |
+| Completed | 15 | `245, 243, 242, 241, 233, 240, 239, 224, 174, 211, 237, 229, 230, 234, 236` | `245` v0.7.58 (pending release); `233, 241, 242, 243` released v0.7.57; `239, 240` released v0.7.56; `224` released v0.7.54; `174, 211, 237` v0.7.53; `229` v0.7.50; `230, 234, 236` v0.7.51 |
 | InProgress | 0 | `-` | No active implementation slot after v0.7.57 release sync |
 | Planned, near-term | 9 | `228, 244, 231, 235, 238, 232, 105, 108, 225` | `v0.7.60` -> `v0.7.81` |
 | Planned, v0.8.x | 5 | `007, 030, 093, 113, 139` | `v0.8.5+` |

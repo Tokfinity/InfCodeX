@@ -408,7 +408,7 @@ console.log(session.id);                // freshly minted or echoes opts.session
 // Mid-run mutators — applied on the next turn (CAP-055 per-turn re-resolution).
 session.setProvider('zhipu');
 session.setModel('glm-4.6');
-session.setReasoning('medium');
+session.setReasoning('balanced');       // KodaXReasoningMode: 'off' | 'auto' | 'quick' | 'balanced' | 'deep'
 
 // Cooperative abort.
 setTimeout(() => session.abort('user cancelled'), 30_000);

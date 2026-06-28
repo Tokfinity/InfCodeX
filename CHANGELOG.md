@@ -6,13 +6,29 @@ All notable changes to this project will be documented in this file.
 
 ## [Unreleased]
 
+## [0.7.58] - 2026-06-29
+
+> Scope note: SDK public-surface alignment for the v0.7.57 feature set (reasoning
+> effort, passive capability learning, SDK timeout config, multimodal input
+> artifacts) plus workflow-generation robustness. There are no new end-user CLI
+> features — the focus is making v0.7.57's capabilities cleanly consumable by SDK
+> embedders such as KodaX Space.
+
 ### Added
 
+- **`@kodax-ai/kodax/llm` exports for effort / timeout / capability tooling.** The LLM subpath now exports the SDK timeout-config helpers (`resolveLlmTimeoutConfig`, `parseTimeoutSecEnvMs`, `timeoutSecToMs` + `KodaXLlmTimeoutConfig` / `KodaXResolvedLlmTimeoutConfig`) and the passive capability-learning helpers (`capabilityCacheKey`, `narrowReasoningProfile`, `sanitizeCapabilityCache` + `CapabilityCache` / `CapabilityCacheEntry` / `CapabilityCacheSource`), so embedders can drive effort pickers and capability caches from the same source of truth the REPL uses.
+- **Reasoning effort surface for embedder UIs.** `resolveModelCapabilities(...)` exposes `reasoningProfile.supportedEfforts` / `defaultEffort` so a host can build effort selectors dynamically (covering `xhigh` / `max` / custom-provider effort names) instead of a fixed five-option list.
+- **Embedder guide §15 — Space v0.7.57 follow-up ledger.** Documents the consumer integration decisions (custom-provider `reasoning: { efforts, default }` form, dynamic effort selector, repo-intelligence prewarm status, `relationship_scan` UI entry, Quick Ask / `sideQuery`) against the SDK contracts already exposed here.
 - **Workflow generation robustness (FEATURE_245).** The dynamic-workflow generator now fails closed on more contract mistakes before a script ever runs: static rejection of string-literal task IDs passed to `wf.wait/snapshot/send/stop`, smoke-time assertion that task APIs receive real `taskId` values (not agent names) and that `evidenceRefs` use the `file:`/`diff:`/`finding:`/`task_id:` contract, a multi-scenario adversarial smoke pass (default / variant results / unverified-success / empty-rerun-args) that exercises data-dependent branches, randomized smoke task IDs, and hardened generator + repair prompts.
+
+### Changed
+
+- **Multimodal input-artifact canonical layer moved to `@kodax-ai/agent`.** Queued multimodal input (`KodaXInputArtifact` plus the construction / validation / enqueue helpers) now lives in the agent layer, since queued multimodal input is not coding-specific; `@kodax-ai/coding` keeps compatibility re-exports so existing imports continue to work.
 
 ### Fixed
 
 - **Workflows no longer discard completed work on a mid-run failure (FEATURE_245).** When a generated workflow throws after some child agents have already completed (e.g. a script that calls `wf.wait("<agent-name>")`), the run now surfaces the completed children's outputs alongside the error instead of a bare `Workflow failed` message. Failure hints also point at `/workflow revise` for repair.
+- **Embedder guide `setReasoning` example used an invalid mode.** `session.setReasoning('medium')` was corrected to a valid `KodaXReasoningMode` value (`'balanced'`); `'medium'` is an effort/depth value, not a reasoning mode.
 
 ## [0.7.57] - 2026-06-28
 
