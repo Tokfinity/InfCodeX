@@ -2796,3 +2796,17 @@ both now fixed:
   gate fires on — which also catches a pathless write co-occurring with an
   attributed edit. Also dropped the `reviseCountByHarnessRef` test residue left
   by the P2 step-2 removal.
+- **topologyCeiling / upgradeCeiling collapsed to H0_DIRECT.** The remaining
+  H1/H2-valued residue was retired the same way as `harnessProfile`: kept as a
+  field but made an accurate constant. `deriveTopologyCeiling` (FEATURE_112:
+  read-only/docs → H1, code/system → H2) had no live consumer
+  (`inferRequiresBrainstorm` / `selectHarnessProfile` received it but never read
+  it; it only reached REPL/status/payload display, where it showed a misleading
+  `Upgrade ceiling: H2` for a run that can never escalate), so it was deleted and
+  both call sites set the ceiling to `H0_DIRECT`. The assurance signal it keyed
+  on stays queryable on the decision (mutationSurface / assuranceIntent /
+  complexity / needsIndependentQA). Tests migrated to semantic (the redundant
+  ceiling assertions removed — each mirrored an asserted `mutationSurface` — and
+  the `reasoning-feature-112` derivation matrix deleted), plus one invariant test
+  that the ceiling is always `H0_DIRECT`. This completes the harness-tier
+  retirement: every routing field is now either gone or an accurate H0 constant.
