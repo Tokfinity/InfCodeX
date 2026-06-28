@@ -153,10 +153,15 @@ describe('buildCapabilityContextSections', () => {
     expect(sectionIds).toContain('repo-intelligence-context');
     expect(sectionIds).toContain('mcp-capability-context');
     expect(sectionIds).toContain('skills-addendum');
-    // The router `prompt-overlay` section was retired (ADR-043 P1.7); the
-    // static `execution-guidance` block replaces it and is always emitted.
+    // The static `execution-guidance` block is always emitted (it replaced the
+    // router overlay text in P1.7). The `prompt-overlay` section is re-emitted
+    // when `context.promptOverlay` is set — it now carries only the SA Direct
+    // Path Rule + caller-supplied overlay, not the retired router overlay
+    // (ADR-043 Phase 3 regression fix).
     expect(sectionIds).toContain('execution-guidance');
-    expect(sectionIds).not.toContain('prompt-overlay');
+    expect(sectionIds).toContain('prompt-overlay');
+    const overlaySection = sections.find((s) => s.id === 'prompt-overlay');
+    expect(overlaySection?.content).toContain('## Overlay\n- bar');
 
     // Canonical order: repo-intel → mcp → skills.
     expect(sectionIds.indexOf('repo-intelligence-context'))

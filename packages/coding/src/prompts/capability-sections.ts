@@ -239,6 +239,23 @@ export async function buildCapabilityContextSections(
     ),
   );
 
+  // `context.promptOverlay` now carries ONLY the SA task-family Direct Path Rule
+  // (output-shaping, e.g. "lookup → concise answer with file paths", which the
+  // generic EXECUTION GUIDANCE does not cover) and any caller-supplied overlay —
+  // NOT the retired router overlay (that lived in `reasoningPlan.promptOverlay`,
+  // now always ''). Dropping it with the router overlay in P1.7 was an
+  // unintended regression (ADR-043 Phase 3 follow-up); re-emit it so the Direct
+  // Path Rule + SDK caller overlay reach the SA prompt again.
+  if (options.context?.promptOverlay?.trim()) {
+    sections.push(
+      createPromptSection(
+        'prompt-overlay',
+        options.context.promptOverlay,
+        'Task-shaping rule for this request plus any caller-supplied context.',
+      ),
+    );
+  }
+
   const agentsFiles = loadAgentsFiles({
     cwd: executionCwd,
     projectRoot: options.context?.gitRoot ?? undefined,

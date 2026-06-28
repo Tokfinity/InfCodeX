@@ -171,6 +171,13 @@ describe('buildSystemPrompt', () => {
         },
         {
           "feature": "FEATURE_048",
+          "id": "prompt-overlay",
+          "owner": "reasoning",
+          "slot": "mode-overlay",
+          "stability": "dynamic",
+        },
+        {
+          "feature": "FEATURE_048",
           "id": "project-agents",
           "owner": "project",
           "slot": "project-rules",
@@ -379,8 +386,12 @@ describe('buildSystemPrompt', () => {
     expect(normalized).toContain('[Runtime] provider=deepseek; model=deepseek-v4.');
     expect(normalized).toContain('Working Directory: <CWD>');
     expect(normalized).toContain('## Repository Intelligence\nFROZEN-REPO-CTX');
-    // Router prompt-overlay retired (ADR-043 P1.7) → static EXECUTION GUIDANCE.
+    // Static EXECUTION GUIDANCE is always present; the caller-supplied
+    // context.promptOverlay (Direct Path Rule / SDK overlay) is re-emitted
+    // alongside it (ADR-043 Phase 3 regression fix — P1.7 had dropped it with
+    // the retired router overlay). Only the router overlay text itself is gone.
     expect(normalized).toContain('EXECUTION GUIDANCE');
+    expect(normalized).toContain('FROZEN-OVERLAY');
     expect(normalized).toContain('## Skills\nFROZEN-SKILLS');
 
     // Strict ordering — Batch E extraction must not reorder sections.
