@@ -130,10 +130,10 @@ const TOPICS: readonly KodaXManualTopic[] = [
     summary: '~/.kodax/config.json fields and KODAX_* env precedence (no YAML).',
     body: [
       'KodaX config is JSON + env vars — there is no YAML and no single loader entry.',
-      'File: ~/.kodax/config.json. Common keys: provider, model, reasoningCeiling,',
+      'File: ~/.kodax/config.json. Common keys: provider, model, effort, planModeEffort,',
       'permissionMode, customProviders, mcpServers, repoIntelligenceMode, fallbackProviders,',
       'autoMode, verifierLog, stallLog.',
-      'Env mirrors / extras: KODAX_PROVIDER, KODAX_FALLBACK_PROVIDERS, KODAX_FAST_*/KODAX_DEEP_*,',
+      'Env mirrors / extras: KODAX_PROVIDER, KODAX_EFFORT, KODAX_FALLBACK_PROVIDERS, KODAX_FAST_*/KODAX_DEEP_*,',
       'KODAX_REPO_INTELLIGENCE. Env generally overrides file. Project vs user config:',
       'user config is ~/.kodax; project-scoped state lives under <repo>/.kodax/.',
     ].join('\n'),
@@ -165,7 +165,7 @@ const TOPICS: readonly KodaXManualTopic[] = [
     aliases: ['command', 'slash', 'cli', 'flags', '命令', '斜杠命令', '指令'],
     summary: 'REPL slash commands, CLI flags, and the doctor command.',
     body: [
-      'Common REPL slash commands: /help, /compact, /model, /fallback, /mcp, /skill, /goal,',
+      'Common REPL slash commands: /help, /compact, /model, /effort, /provider, /fallback, /mcp, /skill, /goal,',
       '/learn (review proposed skill improvements), /recover (rebuild a fresh session from a safe summary).',
       'Use /help <topic> to read this manual from inside the REPL.',
       'CLI: `kodax` (start), `kodax -c` (continue last session), `kodax -r` (resume picker),',
