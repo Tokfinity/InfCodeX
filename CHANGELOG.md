@@ -36,7 +36,8 @@ All notable changes to this project will be documented in this file.
 - **Empty-content contract (ADR-041).** Empty assistant turns are stored as `{ text: "" }`; the placeholder `...` is synthesized wire-only by the Anthropic/OpenAI serializers and never persisted into history. Anthropic gained orphan tool_use/result repair.
 - **Sidecar Verifier objective-metric gate.** Fires on write/risky-shell/round/plan/unattributed-write signals from a mutation tracker that now covers every `mutates-fs` registry tool (incl. `multi_edit`), counts touched lines as `max(old,new)`, and tracks handler-computed-path writes (`undo` / `worktree_*` / `stage_*`) via `unattributedWriteOps`. Restored the SA Direct Path Rule + caller overlay that an interim ADR-043 step had dropped.
 - **Deterministic child-task IDs** (monotonic counter, not `Math.random`/`Date.now`); rate-limit / context-limit provider-error classification; MCP capability-id normalization; child wait-expired review hardening; `glm-5.2` maxOutputTokens 131072 → 128000.
-- **Source-comment encoding.** Restored UTF-8 Chinese comments that a host-codepage editor had double-encoded; added `.editorconfig` (charset=utf-8) to prevent recurrence.
+- **Source-comment encoding.** A host-codepage (cp936) editor save mangled Unicode punctuation — em/en-dashes, arrows, check marks and section signs — into mojibake across 20 source files and the SDK embedder guide; all occurrences are restored against the clean v0.7.56 blobs (Chinese comments were unaffected). Added `.editorconfig` (charset=utf-8) to prevent recurrence.
+- **Self-knowledge manual.** Synced the `config` topic to the new `effort` / `planModeEffort` / `KODAX_EFFORT` reasoning axis and added `/effort` + `/provider` to the `commands` topic.
 
 ## [0.7.56] - 2026-06-25
 
