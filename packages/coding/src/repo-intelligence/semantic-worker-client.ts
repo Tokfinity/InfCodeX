@@ -1,3 +1,4 @@
+import { existsSync } from 'node:fs';
 import { basename, dirname, join } from 'node:path';
 import { fileURLToPath, pathToFileURL } from 'node:url';
 import { Worker, type WorkerOptions } from 'node:worker_threads';
@@ -90,6 +91,17 @@ function readWorkerTimeoutMs(): number {
 
 function resolveWorkerUrl(): URL {
   if (import.meta.url.endsWith('.ts')) {
+    // Running from TypeScript source (dev / vitest). Prefer the compiled
+    // sidecar when the package has been built — both `npm test` and CI run
+    // `build:packages` first — because the .js worker resolves its own
+    // dependencies as plain ESM. Spawning the .ts worker instead relies on a
+    // tsx loader registering inside the worker thread, which is not portable:
+    // Linux CI throws `ERR_UNKNOWN_FILE_EXTENSION: Unknown file extension
+    // ".ts"`, crashing the worker and silently degrading repo intelligence.
+    const compiledWorker = new URL('../../dist/repo-intelligence/semantic-worker.js', import.meta.url);
+    if (existsSync(fileURLToPath(compiledWorker))) {
+      return compiledWorker;
+    }
     return new URL('./semantic-worker.ts', import.meta.url);
   }
   if (process.env.KODAX_BUNDLED === 'true') {
@@ -104,16 +116,13 @@ export function getRepoIntelligenceWorkerPathForDiagnostics(): string {
   return fileURLToPath(resolveWorkerUrl());
 }
 
-function resolveWorkerExecArgv(): string[] {
-  // The semantic worker only needs the tsx ESM loader to execute its
-  // TypeScript source under a dev/test runtime; the production sidecar is
-  // plain JS and needs no execArgv at all. We deliberately do NOT inherit
-  // the parent's process.execArgv: under a test runner (vitest/tinypool on
-  // Linux CI) it carries worker-pool flags that tsx's CLI then rejects with
-  // `error: unknown option '-j'`, which crashes the worker thread and
-  // silently degrades repo intelligence to the lightweight fallback. Passing
-  // only the loader we require keeps the worker portable across runtimes.
-  if (import.meta.url.endsWith('.ts')) {
+function resolveWorkerExecArgv(workerUrl: URL): string[] {
+  // Only the .ts worker needs the tsx ESM loader; the compiled .js sidecar
+  // runs as plain ESM and needs no execArgv. We deliberately do NOT inherit
+  // the parent's process.execArgv — under a test runner it carries flags an
+  // injected loader can reject — and key the decision off the resolved worker
+  // file rather than this client's own extension.
+  if (workerUrl.href.endsWith('.ts')) {
     return ['--import', 'tsx'];
   }
   return [];
@@ -246,9 +255,10 @@ function getWorkerState(): WorkerState {
       maxOldGenerationSizeMb: readWorkerOldSpaceMb(),
     },
   };
-  workerOptions.execArgv = resolveWorkerExecArgv();
+  const workerUrl = resolveWorkerUrl();
+  workerOptions.execArgv = resolveWorkerExecArgv(workerUrl);
   const state: WorkerState = {
-    worker: new Worker(resolveWorkerUrl(), workerOptions),
+    worker: new Worker(workerUrl, workerOptions),
     pending: new Map<number, PendingRequest>(),
   };
   state.worker.on('message', (message: unknown) => {
