@@ -20,11 +20,13 @@
  * underlying helpers live in `./task-engine/_internal/managed-task/checkpoint.ts`
  * and are still used at runtime by the Runner path.
  */
+import { mapLegacyReasoningModeToEffortIntent } from '@kodax-ai/llm';
 import { runKodaX } from './agent.js';
 import {
   buildFallbackRoutingDecision,
   createReasoningPlan,
   inferIntentGate,
+  resolveReasoningMode,
 } from './reasoning.js';
 import { resolveProvider } from './providers/index.js';
 import { reshapeToUserConversation } from './task-engine/_internal/round-boundary.js';
@@ -231,7 +233,7 @@ export async function buildManagedReasoningPlan(options: KodaXOptions, prompt: s
     // context (decision summary, tool-policy, dispatch rules).
     const fallbackDecision = buildFallbackRoutingDecision(prompt);
     return {
-      effort: options.effort ?? 'none',
+      effort: options.effort ?? mapLegacyReasoningModeToEffortIntent(resolveReasoningMode(options)),
       decision: fallbackDecision,
       promptOverlay: '',
     };

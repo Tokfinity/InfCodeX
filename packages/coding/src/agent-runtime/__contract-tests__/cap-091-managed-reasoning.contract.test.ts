@@ -62,6 +62,19 @@ describe('CAP-091: AMA-only managed reasoning plan builder contract', () => {
     expect(plan.promptOverlay).toBe('');
   });
 
+  it('CAP-MANAGED-REASONING-001b: provider fallback preserves legacy reasoningMode as effort', async () => {
+    const options = {
+      provider: '__definitely_not_a_real_provider__',
+      reasoningMode: 'deep' as const,
+      context: { repoIntelligenceMode: 'off' as const },
+    } as unknown as KodaXOptions;
+
+    const plan = await buildManagedReasoningPlan(options, 'design the workflow architecture');
+
+    expect(plan.effort).toBe('high');
+    expect(plan.decision.primaryTask).toEqual(expect.any(String));
+  });
+
   it('CAP-MANAGED-REASONING-002a: extractRecentMessagesForPlan returns undefined for missing/empty initialMessages', () => {
     expect(extractRecentMessagesForPlan(undefined)).toBeUndefined();
     expect(extractRecentMessagesForPlan([])).toBeUndefined();

@@ -79,6 +79,10 @@ describe('KodaXAcpServer reasoning effort forwarding', () => {
     acpServerState.capturedOptions = [];
     acpServerState.runKodaX.mockClear();
     acpServerState.prepareRuntimeConfig.mockClear();
+    acpServerState.prepareRuntimeConfig.mockReturnValue({
+      provider: 'openai',
+      reasoningMode: 'auto',
+    });
   });
 
   afterEach(() => {
@@ -107,6 +111,60 @@ describe('KodaXAcpServer reasoning effort forwarding', () => {
     await server.prompt(makePrompt(sessionId));
 
     expect(lastRunOptions().effort).toBe('medium');
+    await server.dispose();
+  });
+
+  it('inherits config model when ACP provider is not overridden', async () => {
+    acpServerState.prepareRuntimeConfig.mockReturnValue({
+      provider: 'openai',
+      model: 'gpt-configured',
+      reasoningMode: 'auto',
+    });
+    const server = new KodaXAcpServer({ logLevel: 'off' });
+    const sessionId = await createSession(server);
+
+    await server.prompt(makePrompt(sessionId));
+
+    expect(lastRunOptions()).toMatchObject({
+      provider: 'openai',
+      model: 'gpt-configured',
+    });
+    await server.dispose();
+  });
+
+  it('does not carry config model across an ACP provider override', async () => {
+    acpServerState.prepareRuntimeConfig.mockReturnValue({
+      provider: 'openai',
+      model: 'gpt-configured',
+      reasoningMode: 'auto',
+    });
+    const server = new KodaXAcpServer({ provider: 'anthropic', logLevel: 'off' });
+    const sessionId = await createSession(server);
+
+    await server.prompt(makePrompt(sessionId));
+
+    expect(lastRunOptions()).toMatchObject({ provider: 'anthropic' });
+    expect(lastRunOptions().model).toBeUndefined();
+    await server.dispose();
+  });
+
+  it('normalizes ACP effort none into legacy reasoning off fields', async () => {
+    acpServerState.prepareRuntimeConfig.mockReturnValue({
+      provider: 'openai',
+      thinking: true,
+      reasoningMode: 'deep',
+      effort: 'none',
+    });
+    const server = new KodaXAcpServer({ logLevel: 'off' });
+    const sessionId = await createSession(server);
+
+    await server.prompt(makePrompt(sessionId));
+
+    expect(lastRunOptions()).toMatchObject({
+      effort: 'none',
+      thinking: false,
+      reasoningMode: 'off',
+    });
     await server.dispose();
   });
 

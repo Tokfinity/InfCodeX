@@ -308,6 +308,15 @@ describe('CLI Entry Point', () => {
     expect(source).toContain("command('acp')");
     expect(source).toContain('kodax -h acp');
     expect(source).toContain('kodax acp serve');
+    expect(source).toContain(".option('--effort <level>', 'Reasoning effort");
+    expect(source).toContain('effort: subcommandOptions.effort');
+    expect(source).not.toContain("--agent-mode <mode>          ') + 'Agent mode");
+  });
+
+  it('should pass resolved CLI effort into interactive mode startup options', async () => {
+    const source = await fs.readFile(path.join(process.cwd(), 'src', 'kodax_cli.ts'), 'utf-8');
+    expect(source).toContain('const interactiveOptions = {');
+    expect(source).toContain('effort: kodaXOptions.effort');
   });
 
   it('should keep the root command executable when subcommands are registered', () => {

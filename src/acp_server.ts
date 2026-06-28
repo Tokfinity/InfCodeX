@@ -187,6 +187,19 @@ type AcpPromptEffortOverride =
   | { readonly kind: 'absent' }
   | { readonly kind: 'value'; readonly value?: KodaXWireReasoningEffort };
 
+function resolveAcpModelSelection(
+  requestedProvider: string | undefined,
+  requestedModel: string | undefined,
+  configuredProvider: string | undefined,
+  configuredModel: string | undefined,
+): string | undefined {
+  if (requestedModel) return requestedModel;
+  if (!configuredModel) return undefined;
+  if (!requestedProvider) return configuredModel;
+  if (!configuredProvider) return undefined;
+  return requestedProvider === configuredProvider ? configuredModel : undefined;
+}
+
 function normalizeOptionalEffort(
   value: unknown,
   label: string,
@@ -463,7 +476,12 @@ export class KodaXAcpServer implements Agent {
     const config = prepareRuntimeConfig();
     const configWithExtensions = config as typeof config & { extensions?: unknown };
     this.provider = options.provider ?? config.provider ?? KODAX_DEFAULT_PROVIDER;
-    this.model = options.model;
+    this.model = resolveAcpModelSelection(
+      options.provider,
+      options.model,
+      config.provider,
+      config.model,
+    );
     const hasExplicitEffort = options.effort !== undefined;
     this.effort = normalizeOptionalEffort(options.effort ?? config.effort, 'Configured effort');
     this.planModeEffort = hasExplicitEffort
@@ -543,6 +561,8 @@ export class KodaXAcpServer implements Agent {
     const stream = ndJsonStream(output, input);
     const connection = new AgentSideConnection(() => this, stream);
     this.connection = connection;
+    const attachedThinking = this.effort === 'none' ? false : this.thinking;
+    const attachedReasoningMode = this.effort === 'none' ? 'off' : this.reasoningMode;
     this.events.emit({
       type: 'server_attached',
       agent: this.agentName,
@@ -551,8 +571,8 @@ export class KodaXAcpServer implements Agent {
       model: this.model ?? '(default)',
       cwd: this.defaultCwd,
       permissionMode: this.defaultPermissionMode,
-      reasoningMode: this.reasoningMode,
-      thinking: this.thinking,
+      reasoningMode: attachedReasoningMode,
+      thinking: attachedThinking,
       fixedCwd: this.hasFixedCwd,
     });
     connection.signal.addEventListener('abort', () => {
@@ -842,8 +862,8 @@ export class KodaXAcpServer implements Agent {
       provider: this.provider,
       model: this.model,
       effort,
-      thinking: this.thinking,
-      reasoningMode: this.reasoningMode,
+      thinking: effort === 'none' ? false : this.thinking,
+      reasoningMode: effort === 'none' ? 'off' : this.reasoningMode,
       abortSignal,
       // Per-session runtime (from client MCP servers) takes precedence over global.
       extensionRuntime: session.extensionRuntime ?? this.extensionRuntime,

@@ -196,7 +196,6 @@ const CLI_HELP_TOPICS: Record<string, () => void> = {
     console.log(chalk.dim('  --model <name>               ') + 'Model override');
     console.log(chalk.dim('  --effort <level>             ') + 'Reasoning effort: off, auto, low, medium, high, xhigh, max, or model-supported value');
     console.log(chalk.dim('  --reasoning <mode>           ') + 'Compatibility mode: off, auto, quick, balanced, deep');
-    console.log(chalk.dim('  --agent-mode <mode>          ') + 'Agent mode: ama, amaw, sa');
     console.log(chalk.dim('  --repo-intelligence <mode>   ') + 'Repo intelligence mode: auto, full, light, off');
     console.log(chalk.dim('  --repo-intelligence-trace    ') + 'Emit repo intelligence trace metadata/logging');
     console.log(chalk.dim('  -t, --thinking               ') + 'Compatibility alias for --reasoning auto');
@@ -444,6 +443,7 @@ function printAcpSubcommandHelp(name: string): boolean {
     console.log('  --cwd <dir>                  Working directory exposed to ACP sessions');
     console.log('  -m, --provider <name>        Provider to use');
     console.log('  --model <name>               Model override');
+    console.log('  --effort <level>             Reasoning effort: off, auto, low, medium, high, xhigh, max, or model-supported value');
     console.log('  -t, --thinking               Compatibility alias for --reasoning auto');
     console.log('  --reasoning <mode>           Reasoning mode: off, auto, quick, balanced, deep');
     console.log('  --repo-intelligence <mode>   Repo intelligence mode: auto, full, light, off');
@@ -848,6 +848,7 @@ complete -c kodax -l version -d 'Show version'`);
     .option('--cwd <dir>', 'Working directory exposed to ACP sessions')
     .option('-m, --provider <name>', 'Provider to use')
     .option('--model <name>', 'Model override')
+    .option('--effort <level>', 'Reasoning effort: off, auto, low, medium, high, xhigh, max, or model-supported value', parseEffortOption)
     .option('-t, --thinking', 'Compatibility alias for --reasoning auto')
     .option('--reasoning <mode>', 'Reasoning mode: off, auto, quick, balanced, deep', parseReasoningModeOption)
     .option('--repo-intelligence <mode>', 'Repo intelligence mode: auto, full, light, off', parseRepoIntelligenceModeOption)
@@ -857,6 +858,7 @@ complete -c kodax -l version -d 'Show version'`);
       cwd?: string;
       provider?: string;
       model?: string;
+      effort?: string;
       thinking?: boolean;
       reasoning?: KodaXReasoningMode;
       repoIntelligence?: string;
@@ -873,6 +875,7 @@ complete -c kodax -l version -d 'Show version'`);
         cwd: subcommandOptions.cwd,
         provider: subcommandOptions.provider,
         model: subcommandOptions.model,
+        effort: subcommandOptions.effort,
         thinking: subcommandOptions.thinking,
         reasoningMode: subcommandOptions.reasoning,
         permissionMode: subcommandOptions.permissionMode,
@@ -1528,6 +1531,7 @@ complete -c kodax -l version -d 'Show version'`);
       const interactiveOptions = {
         provider: kodaXOptions.provider,
         model: kodaXOptions.model,
+        effort: kodaXOptions.effort,
         thinking: kodaXOptions.thinking,
         reasoningMode: kodaXOptions.reasoningMode,
         agentMode: kodaXOptions.agentMode,
