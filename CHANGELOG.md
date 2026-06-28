@@ -6,6 +6,38 @@ All notable changes to this project will be documented in this file.
 
 ## [Unreleased]
 
+## [0.7.57] - 2026-06-28
+
+> Scope note: a large architecture release for custom-provider / SDK embedders, built on three ADRs plus a repo-intelligence rewrite. **ADR-041** stops persisting placeholder `...` empty replies into history. **ADR-042** collapses the `mode`/`depth` reasoning dual-track into a single `effort` axis (wire behaviour preserved — `effortToThinkingDepth` mirrors the old `effort→mode→depth` derivation, so every provider×effort still emits the same `reasoning_effort` / `thinking.budget_tokens`). **ADR-043** turns harness routing into static LLM judgment: the keyword router, AMA-controller, fanout-scheduler and prompt-overlay machinery are deleted in favour of a shared static `EXECUTION GUIDANCE` block + an objective-metric Sidecar Verifier gate (`harnessProfile` is retained as a constant `H0_DIRECT`). Repo-intelligence moves from an external host/premium daemon to a fully built-in local semantic index engine with a worker sidecar. **This release contains breaking changes for SDK embedders and custom-provider authors — see the migration notes under Removed / Changed.**
+
+### Added
+
+- **Reasoning effort v2 controls.** New `effort` axis end to end: `effort` / `planModeEffort` config, `--effort` CLI flag, `KODAX_EFFORT` env var, the `/effort` REPL command, Ctrl+T effort cycling, and effort-first status display. Custom providers declare support with `reasoning: { efforts: [...], default: "..." }`.
+- **`zai-coding` provider.** Zhipu's overseas mirror (`api.z.ai/anthropic`), keyed by `ZAI_CODING_API_KEY`.
+- **Built-in semantic repo-intelligence engine.** ~17 `semantic-*` modules (multi-language symbol extraction for ts/js/py/java/go/rust/cpp, build cache, materialize, workspace) plus a worker sidecar (`dist/semantic-worker.js`). New `relationship-scan` tool and a `repo-intelligence-index` perf benchmark + baseline.
+- **Passive capability learning.** `~/.kodax/capability-cache.json` records provider/model effort rejections (rebuildable; clear with `/provider forget-capability`); `/provider probe` and `/agents` (idempotent `AGENTS.md` bootstrap) commands.
+- **Multimodal input artifacts** extended; lean review command.
+
+### Changed
+
+- **Reasoning control is single-track `effort` (BREAKING).** `KodaXReasoningRequest.mode` / `.depth` were removed — use `.effort`. Legacy custom-provider fields (`reasoningCapability` / `reasoningPreset` / `supportsThinking`) are `@deprecated` and auto-migrated to the new `reasoning` shape at load; the `setThinkingLevel` / `provider:before` hooks now carry effort values rather than legacy mode strings.
+- **Harness is static (ADR-043).** `harnessProfile` / `topologyCeiling` / `upgradeCeiling` are now the single `H0_DIRECT` tier (retained as accurate constants for REPL/status/checkpoint schema). The REPL status bar no longer shows a per-task harness prefix.
+- **Repo-intelligence config (BREAKING).** `repoIntelligenceMode` enum narrows from `auto/off/oss/premium-shared/premium-native` to `auto/off/light/full` (old `oss`/`premium-*` values are rejected). The env var `KODAX_REPO_INTELLIGENCE_MODE` is renamed to `KODAX_REPO_INTELLIGENCE`; `repointelEndpoint` / `repointelBin` config and `KODAX_REPOINTEL_ENDPOINT` / `_BIN` env vars are removed.
+- **`package.json` `files`** tightened from `"dist"` to an explicit glob list (includes `dist/semantic-worker.js`, `dist/builtin`, `provider-capabilities.json`).
+
+### Removed
+
+- **Routing / harness machinery (BREAKING for embedders).** Removed the LLM-router cluster, the AMA-controller (`buildAmaControllerDecision` + `KodaXAmaProfile/Tactic/FanoutPolicy/ControllerDecision` types + the `amaProfile`/`amaTactics`/`amaFanout` runtime fields), the `fanout-scheduler` subsystem (`buildFanoutSchedulerPlan` / `createFanoutSchedulerInput` / `applyFanoutBranchTransition` + `KodaXFanout*` types), and `buildPromptOverlay` / `HARNESS_PROFILE_OVERLAYS` / `EXECUTION_MODE_OVERLAYS`. `KodaXAmaFanoutClass` is renamed to `KodaXChildFanoutClass`. None of these were in the SDK embedder guide.
+- **Repo-intel external clients (BREAKING).** `premium-client.ts` / `query-fallback.ts` and the `clients/repointel` host skill are deleted; `warmRepoIntelligenceRuntime` / `REPOINTEL_DEFAULT_ENDPOINT` are gone. Import paths move from `./repo-intelligence/query.js` → `./semantic-types.js` / `./semantic-render.js`, and `./premium-client.js` → `./runtime.js`.
+- **`reasoning-overrides.ts`** and the CAP-019 auto-reroute middleware (dead after the harness static-ization).
+
+### Fixed
+
+- **Empty-content contract (ADR-041).** Empty assistant turns are stored as `{ text: "" }`; the placeholder `...` is synthesized wire-only by the Anthropic/OpenAI serializers and never persisted into history. Anthropic gained orphan tool_use/result repair.
+- **Sidecar Verifier objective-metric gate.** Fires on write/risky-shell/round/plan/unattributed-write signals from a mutation tracker that now covers every `mutates-fs` registry tool (incl. `multi_edit`), counts touched lines as `max(old,new)`, and tracks handler-computed-path writes (`undo` / `worktree_*` / `stage_*`) via `unattributedWriteOps`. Restored the SA Direct Path Rule + caller overlay that an interim ADR-043 step had dropped.
+- **Deterministic child-task IDs** (monotonic counter, not `Math.random`/`Date.now`); rate-limit / context-limit provider-error classification; MCP capability-id normalization; child wait-expired review hardening; `glm-5.2` maxOutputTokens 131072 → 128000.
+- **Source-comment encoding.** Restored UTF-8 Chinese comments that a host-codepage editor had double-encoded; added `.editorconfig` (charset=utf-8) to prevent recurrence.
+
 ## [0.7.56] - 2026-06-25
 
 > Scope note: a feature release pairing **FEATURE_239** (a public SDK media-input contract so host apps like KodaX Space can build image paste/drop without importing REPL internals) with **FEATURE_240** (provider-neutral `stopReason` normalization), plus a GLM/Kimi provider-model refresh. No LLM-facing prompt surface changed (these are SDK + runtime infrastructure), so per ADR-033 / FEATURE_104 no prompt eval is triggered. The new media helpers ship behind dedicated unit tests; FEATURE_240 ships a cross-protocol integration test (`agent.stop-reason.test.ts`).
