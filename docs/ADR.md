@@ -2763,9 +2763,14 @@ fields.
   capability-sections unit assertions (P3#5); the KEEP verdict lives in git
   history. `decision-summary-*` evals are unaffected.
 
-**Known small follow-up (not done):** `inferScoutMutationIntent` (tool-policy.ts)
-is an exported function only reached by its own tests (FEATURE_193 Scout residue,
-not harness-tier) — a candidate for a separate dead-Scout-code sweep.
+**Dead Scout cluster removed (follow-up done):** `inferScoutMutationIntent` +
+its `ScoutMutationIntent` / `ScoutScopeHint` types + the
+`ManagedRolePromptContext.scoutScope` field + `isReviewEvidenceTask` were a
+self-contained FEATURE_193 residue (production call sites already deleted;
+reachable only from their own tests; `scoutScope` never set/read). Traced the
+`ScoutScopeHint ↔ scoutScope` entanglement (both dead) and removed the cluster.
+All internal (`_internal/managed-task`), so no SDK-surface impact; the live
+tool-policy guards are untouched.
 
 ### Phase 3 review-driven fixes (a second GPT pass on the cleanup)
 
