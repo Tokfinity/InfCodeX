@@ -1,11 +1,11 @@
 /**
- * FEATURE_198 v0.7.44 鈥?Provider capability JSON schema + validator.
+ * FEATURE_198 v0.7.44 — Provider capability JSON schema + validator.
  *
  * Backs `KODAX_PROVIDER_SNAPSHOTS` with a separate JSON file so KodaX
  * consumers can hot-patch capability data (context window, max output
  * tokens, model lists) without waiting for a KodaX release.
  *
- * Hand-rolled validator (no zod) 鈥?single schema, lightweight package,
+ * Hand-rolled validator (no zod) — single schema, lightweight package,
  * aligns with the "no new deps unless 3+ use cases" rule. Validator
  * fails loudly with the field path so manual JSON edits surface clearly.
  */
@@ -60,7 +60,7 @@ export interface ProviderCapabilityJsonEntry {
   /** When true, loader injects `model` + `models` from cli-bridge-models.ts. */
   readonly cliBridge?: boolean;
   /**
-   * FEATURE_216 v0.7.45 鈥?Verify primitive this provider uses for
+   * FEATURE_216 v0.7.45 — Verify primitive this provider uses for
    * credential checks. Required (no silent default) because the choice
    * is provider-empirical, not protocol-derived. cliBridge entries MUST
    * be 'unsupported' (CLI binary owns its own credentials).
@@ -75,7 +75,7 @@ export interface ProviderCapabilitiesJson {
 }
 
 /**
- * Resolved snapshot 鈥?what `KODAX_PROVIDER_SNAPSHOTS` callers see.
+ * Resolved snapshot — what `KODAX_PROVIDER_SNAPSHOTS` callers see.
  * Identical shape to the legacy in-memory type so consumers are
  * unchanged.
  */
@@ -93,7 +93,7 @@ export interface ProviderSnapshot {
   readonly maxOutputTokens?: number;
   readonly thinkingBudgetCap?: number;
   readonly supportsThinking?: boolean;
-  /** FEATURE_216 v0.7.45 鈥?verify primitive for this provider. */
+  /** FEATURE_216 v0.7.45 — verify primitive for this provider. */
   readonly verifyStrategy: KodaXVerifyStrategy;
 }
 
@@ -573,10 +573,10 @@ function validateProviderEntry(
     `providers.${name}.verifyStrategy`,
   );
   // cliBridge providers' credentials live in the CLI binary's own token
-  // store, outside SDK reach 鈥?there is no HTTP primitive to probe.
+  // store, outside SDK reach — there is no HTTP primitive to probe.
   if (cliBridge && verifyStrategy !== 'unsupported') {
     throw new Error(
-      `provider-capabilities.json: providers.${name} is a cliBridge entry but verifyStrategy="${verifyStrategy}" 鈥?must be "unsupported" (CLI binary owns credentials)`,
+      `provider-capabilities.json: providers.${name} is a cliBridge entry but verifyStrategy="${verifyStrategy}" — must be "unsupported" (CLI binary owns credentials)`,
     );
   }
   const contextWindow = optionalNumber(
@@ -600,12 +600,12 @@ function validateProviderEntry(
     `providers.${name}.modelReasoningCapabilities`,
   );
 
-  // CLI-bridge providers MUST omit model/models 鈥?they're filled at load
+  // CLI-bridge providers MUST omit model/models — they're filled at load
   // time from the local CLI config. Static providers MUST provide model.
   const model = optionalString(raw.model, `providers.${name}.model`);
   if (cliBridge && (model !== undefined || raw.models !== undefined)) {
     throw new Error(
-      `provider-capabilities.json: providers.${name} is a cliBridge entry but defines model/models 鈥?must be omitted (filled at load time)`,
+      `provider-capabilities.json: providers.${name} is a cliBridge entry but defines model/models — must be omitted (filled at load time)`,
     );
   }
   if (!cliBridge && model === undefined) {

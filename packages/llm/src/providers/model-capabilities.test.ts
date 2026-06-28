@@ -1,12 +1,12 @@
 /**
- * v0.7.43 SDK model-capability exposure 鈥?contract tests.
+ * v0.7.43 SDK model-capability exposure — contract tests.
  *
  * These verify the data SDK consumers (KodaX Space etc.) see when they
  * read context-window / max-output / thinking-budget metadata WITHOUT
- * a provider instance 鈥?i.e. without setting any API key env var.
+ * a provider instance — i.e. without setting any API key env var.
  *
  * If any assertion below fails, an embedder's popout UI will display
- * stale or missing model info 鈥?touch the snapshot in `registry.ts`
+ * stale or missing model info — touch the snapshot in `registry.ts`
  * or `custom-registry.ts` accordingly.
  */
 
@@ -52,7 +52,7 @@ describe('built-in provider model capabilities (no API key required)', () => {
 
     const k26 = getModelCapabilities('kimi', 'kimi-k2.6');
     expect(k26?.contextWindow).toBe(256_000);
-    // k2.5 inherits the same provider-level 256K 鈥?descriptor has no override.
+    // k2.5 inherits the same provider-level 256K — descriptor has no override.
     const k25 = getModelCapabilities('kimi', 'k2.5');
     expect(k25?.contextWindow).toBe(256_000);
   });
@@ -160,7 +160,7 @@ describe('built-in provider model capabilities (no API key required)', () => {
     expect(minimaxModels).toContain('MiniMax-M3');
   });
 
-  it('NO API key needed 鈥?env vars stay unset throughout (refuted Space hypothesis)', () => {
+  it('NO API key needed — env vars stay unset throughout (refuted Space hypothesis)', () => {
     const originalKeys = [
       'ANTHROPIC_API_KEY',
       'OPENAI_API_KEY',
@@ -380,7 +380,7 @@ describe('snapshot drift guard: every Provider class config matches snapshot dat
   // capability fields to a Provider class's `buildProviderConfig({...})`
   // extras instead of editing the snapshot, the value would drift. Since
   // Provider construction throws on missing API key for built-ins, we
-  // verify the snapshot directly 鈥?`buildProviderConfig` is exercised
+  // verify the snapshot directly — `buildProviderConfig` is exercised
   // implicitly by every Provider import.
 
   it('every snapshot with supportsThinking=true also declares contextWindow + maxOutputTokens', () => {
@@ -403,7 +403,7 @@ describe('snapshot drift guard: every Provider class config matches snapshot dat
       for (const entry of snapshot.models ?? []) {
         expect(
           typeof entry,
-          `provider ${name} has string model entry 鈥?should be KodaXModelDescriptor`,
+          `provider ${name} has string model entry — should be KodaXModelDescriptor`,
         ).toBe('object');
         expect(entry).toHaveProperty('id');
       }

@@ -227,7 +227,7 @@ export type {
   RetryAfterSource,
 } from './retry/retry-after.js';
 
-// FEATURE_116 (v0.7.37) 鈥?cache boundary helpers. Producer side
+// FEATURE_116 (v0.7.37) — cache boundary helpers. Producer side
 // (`insertCacheBoundary`) is called by prompt assembly; consumer side
 // (`lowerCacheBoundaries` / `stripCacheBoundaries`) is called by
 // provider base classes during request lowering.

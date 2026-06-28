@@ -175,7 +175,7 @@ function customDescriptorToFull(
 /**
  * List all model descriptors for a custom provider. Default model first,
  * then alternatives. Returns undefined when the name doesn't match any
- * registered custom provider 鈥?caller can fall through to the built-in
+ * registered custom provider — caller can fall through to the built-in
  * `getProviderModelDescriptors`.
  */
 export function getCustomProviderModelDescriptors(
@@ -234,17 +234,17 @@ export function getCustomModelCapabilities(
 }
 
 /**
- * FEATURE_216 v0.7.45 鈥?Look up `(apiKeyEnv, verifyStrategy)` for a
+ * FEATURE_216 v0.7.45 — Look up `(apiKeyEnv, verifyStrategy)` for a
  * registered custom provider without instantiation. Mirrors the
  * built-in `KODAX_PROVIDER_SNAPSHOTS` lookup. Returns undefined when
  * the name is not registered, signaling fall-through.
  *
  * verifyStrategy precedence:
  *   1. Explicit `customProviders[name].verifyStrategy` (user-provided)
- *   2. Protocol-derived default (anthropic 鈫?count-tokens / openai 鈫?models-list)
+ *   2. Protocol-derived default (anthropic → count-tokens / openai → models-list)
  *
  * Matches the same precedence `createCustomProvider()` applies when
- * building the runtime `KodaXProviderConfig` 鈥?keeps the two paths
+ * building the runtime `KodaXProviderConfig` — keeps the two paths
  * (resolver short-circuit vs in-class verifyCredential) consistent.
  */
 export function getCustomProviderVerifyMetadata(

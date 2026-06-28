@@ -1,5 +1,5 @@
 /**
- * FEATURE_198 v0.7.44 鈥?Provider capability JSON loader tests.
+ * FEATURE_198 v0.7.44 — Provider capability JSON loader tests.
  *
  * Coverage:
  *   - JSON file schema validation (happy path)
@@ -7,7 +7,7 @@
  *     wrong type, unknown profile, cliBridge contradiction)
  *   - Loader cache behavior (single read per process)
  *   - `_resetProviderSnapshotsCache` test hook
- *   - Profile-name 鈫?object resolution
+ *   - Profile-name → object resolution
  *   - CLI-bridge dynamic fill (gemini-cli / codex-cli)
  *   - **Drift guard**: every known KODAX provider exists in JSON with
  *     the right shape (catches accidental field deletions in JSON edits)
@@ -29,7 +29,7 @@ import {
 } from './provider-capabilities.loader.js';
 import { validateProviderCapabilitiesJson } from './provider-capabilities.types.js';
 
-describe('FEATURE_198 鈥?provider-capabilities loader', () => {
+describe('FEATURE_198 — provider-capabilities loader', () => {
   beforeEach(() => {
     _resetProviderSnapshotsCache();
   });
@@ -158,7 +158,7 @@ describe('FEATURE_198 鈥?provider-capabilities loader', () => {
     // The following block hard-codes the EXPECTED values for each
     // statically-known field. If a JSON edit drops or mis-types a value,
     // this fails immediately. CLI-bridge dynamic fields (model/models)
-    // are NOT asserted here 鈥?they're verified separately above.
+    // are NOT asserted here — they're verified separately above.
 
     it('anthropic: full field set matches expected', () => {
       const a = getProviderSnapshots().anthropic;
@@ -342,7 +342,7 @@ describe('FEATURE_198 鈥?provider-capabilities loader', () => {
     });
   });
 
-  // FEATURE_216 v0.7.45 鈥?per-provider verifyStrategy drift guard.
+  // FEATURE_216 v0.7.45 — per-provider verifyStrategy drift guard.
   // Distribution (from 2026-05-28 12-provider real+fake key probe):
   //   count-tokens (5):    anthropic + 4 anthropic-coding (zhipu/kimi/minimax/ark)
   //   models-list (4):     openai, deepseek, kimi, qwen
@@ -636,7 +636,7 @@ describe('FEATURE_198 — validator failure modes', () => {
     expect(result.providers['foo-cli'].verifyStrategy).toBe('unsupported');
   });
 
-  // FEATURE_216 v0.7.45 鈥?verifyStrategy validator
+  // FEATURE_216 v0.7.45 — verifyStrategy validator
   it('rejects missing verifyStrategy', () => {
     shouldThrow(
       {

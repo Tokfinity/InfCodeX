@@ -97,7 +97,7 @@ import type {
 } from '@kodax-ai/llm';
 import type { CompactionUpdate } from '@kodax-ai/agent';
 // FEATURE_093 (v0.7.24): use the narrow runtime contract from
-// `./extensions/runtime-contract.ts` to avoid `types.ts 鈫?extensions/runtime.ts`
+// `./extensions/runtime-contract.ts` to avoid `types.ts ↔ extensions/runtime.ts`
 // circular imports. The concrete `KodaXExtensionRuntime` class implements
 // this contract plus ~40 internal methods that consumers do not reach
 // through Options / ToolExecutionContext fields.
@@ -273,7 +273,7 @@ export interface KodaXEvents {
      * FEATURE_072: identifies whether this event originates from the parent
      * REPL's agent loop or from a worker (Scout / role worker / evaluator)
      * spawned by the task engine. The REPL uses this to avoid mutating the
-     * parent's `contextTokenSnapshot` with worker-derived values 鈥?workers
+     * parent's `contextTokenSnapshot` with worker-derived values — workers
      * still fire `onIterationEnd` for live-token-count UX, but they must not
      * overwrite the parent's context state. Absence is treated as 'parent'
      * for backward compatibility.
@@ -292,14 +292,14 @@ export interface KodaXEvents {
   /** Whether the caller has queued follow-up input waiting for the next round */
   hasPendingInputs?: () => boolean;
   /**
-   * FEATURE_164 (v0.7.41) 鈥?mid-turn user message injection.
+   * FEATURE_164 (v0.7.41) — mid-turn user message injection.
    *
    * Fired by the Runner-driven path's `beforeNextTurn` hook AFTER it
    * drains queued user prompts (mode:'prompt') from the canonical
    * MessageQueue and splices them into the transcript before the next
    * LLM call. Replaces the legacy v0.7.26 "mid-iteration yield" path
    * that returned an empty `{text:'', toolCalls:[]}` to force the round
-   * to terminate 鈥?that path polluted the transcript with an empty
+   * to terminate — that path polluted the transcript with an empty
    * assistant turn and confused the model when the next round picked
    * up the same prompts.
    *
@@ -307,7 +307,7 @@ export interface KodaXEvents {
    * prompts as user-role history items immediately, so the user sees
    * their typed query as part of the conversation without waiting for
    * the round to end. SDK consumers that don't care about UI visibility
-   * can omit this hook 鈥?the messages still reach the LLM via the
+   * can omit this hook — the messages still reach the LLM via the
    * transcript injection.
    *
    * Fires once per Runner iteration boundary, with the array of
@@ -327,19 +327,19 @@ export interface KodaXEvents {
     meta?: KodaXActivityEventMeta,
   ) => void;
   /**
-   * FEATURE_130 (v0.7.36) 鈥?structured retry-after notification.
+   * FEATURE_130 (v0.7.36) — structured retry-after notification.
    *
    * Fires whenever a provider's `withRateLimit` loop catches a 429 /
    * 503 / 529 (overloaded) response and decides to wait before
    * retrying. Supersedes the legacy `onProviderRateLimit` (kept for
-   * back-compat) by carrying the parsed source of the wait duration 鈥?   * UI layers (InkREPL spinner, cost tracker) can surface the
+   * back-compat) by carrying the parsed source of the wait duration —   * UI layers (InkREPL spinner, cost tracker) can surface the
    * difference between "provider told us to wait 45s" and "no header,
    * we're guessing 4s exp-backoff".
    *
    * Pattern B (FEATURE_119) interaction: each in-flight child agent
    * fires its own `onRetryAfter` independently. Multiple children
    * sharing a quota (e.g. 5 coding-plan providers under one tier)
-   * surface concurrent waits 鈥?the UI deduplicates by provider, not
+   * surface concurrent waits — the UI deduplicates by provider, not
    * by call site.
    */
   onRetryAfter?: (
@@ -380,7 +380,7 @@ export interface KodaXEvents {
   onSidecarMessage?: (event: KodaXSidecarMessageEvent) => void;
   /**
    * FEATURE_097 (v0.7.34): emitted whenever the Scout-seeded todo list
-   * changes 鈥?initial seed at `emit_scout_verdict`, per-item updates from
+   * changes — initial seed at `emit_scout_verdict`, per-item updates from
    * `todo_update` tool calls, and Evaluator-verdict auto-handling
    * (accept/revise/replan). Single-rail (no `KodaXManagedTaskStatusEvent`
    * snapshot fallback): KodaX is a single-process CLI, all consumers live
@@ -409,7 +409,7 @@ export interface KodaXEvents {
    * Fired when Scout's managed-task completion is inferred but the harness
    * detected suspicious signals (mutation expected but none happened, budget
    * exhausted, tool calls followed by text-only exit without explicit
-   * completion, etc.). The task still completes 鈥?this is an observability
+   * completion, etc.). The task still completes — this is an observability
    * signal, not a retry trigger. UI layers can surface a warning so users
    * know to verify the result.
    */
@@ -420,7 +420,7 @@ export interface KodaXEvents {
     lastTextPreview: string;
   }) => void;
   /**
-   * FEATURE_167 (v0.7.41) 鈥?Evaluator terminal-verdict fallback.
+   * FEATURE_167 (v0.7.41) — Evaluator terminal-verdict fallback.
    *
    * Fires when the runner-driven outer loop detects that the Evaluator
    * exited a turn without `emit_verdict` AND the B1 retry exhausted its
@@ -433,7 +433,7 @@ export interface KodaXEvents {
    *
    * Fires AFTER `recorder.verdict` is committed but BEFORE
    * `formatDeterministicEvaluatorResult` builds the final `KodaXResult`
-   * 鈥?consumers see the synth signal in causal order before the result
+   * — consumers see the synth signal in causal order before the result
    * surfaces.
    */
   /** Returns a formatted cost report for the current session. Set by agent at session start. */
@@ -519,7 +519,7 @@ export interface KodaXSessionOptions {
    * Persistence ownership signal (FEATURE_173 dual-writer fix).
    *
    * When `true`, a higher-level host (the interactive REPL) owns writing
-   * this session to `storage` 鈥?it persists the full lineage / uiHistory /
+   * this session to `storage` — it persists the full lineage / uiHistory /
    * artifactLedger incrementally via `appendSessionDelta`. The runner MUST
    * NOT also snapshot the session: `saveSessionSnapshot` early-returns so
    * the runner's flat full-rewrite `storage.save` can never race / clobber
@@ -528,7 +528,7 @@ export interface KodaXSessionOptions {
    *
    * `storage` is still consulted for LOAD (resume / `resolveInitialMessages`
    * tier 2). When absent (print CLI, ACP, SDK headless), the runner remains
-   * the sole writer 鈥?unchanged behaviour, fail-safe default.
+   * the sole writer — unchanged behaviour, fail-safe default.
    */
   persistedByHost?: boolean;
 }
@@ -676,7 +676,7 @@ export interface KodaXChildContextBundle {
   constraints: string[];
   readOnly: boolean;
   /**
-   * FEATURE_120 v0.7.39 Phase 4 鈥?optional model tier hint that the
+   * FEATURE_120 v0.7.39 Phase 4 — optional model tier hint that the
    * dispatching agent provides as a UX signal. Routing is a **no-op**
    * for now: every child runs on the parent's model regardless of
    * hint. FEATURE_102 (v0.7.45 capability profile) is the planned
@@ -692,18 +692,18 @@ export interface KodaXChildContextBundle {
    */
   isolation?: WorkflowIsolation;
   /**
-   * FEATURE_191 鈥?optional registered specialist agent name. When set,
+   * FEATURE_191 — optional registered specialist agent name. When set,
    * the child is dispatched with that agent's `instructions` /
    * `tools` / `reasoning` / `guardrails` instead of the stock Worker
    * bundle. Resolved via `resolveConstructedAgent(name)` at dispatch
    * time; unknown names are rejected by `toolDispatchChildTask` with
    * a tool-result error (not throw) before the bundle reaches
-   * `executeReadChild` / `executeWriteChild`. Optional 鈥?omitting
+   * `executeReadChild` / `executeWriteChild`. Optional — omitting
    * preserves byte-identical v0.7.42 baseline dispatch behavior.
    */
   specialistName?: string;
   /**
-   * FEATURE_102 Phase 2 (v0.7.45) 鈥?explicit per-dispatch provider/model the
+   * FEATURE_102 Phase 2 (v0.7.45) — explicit per-dispatch provider/model the
    * dispatching agent chose for this child (e.g. a cross-family second review).
    * Priority in child-executor: `bundle.provider/model` > specialist's declared
    * model > parent default. Omitting both inherits the parent (byte-identical).
@@ -715,12 +715,12 @@ export interface KodaXChildContextBundle {
 }
 
 /**
- * FEATURE_120 v0.7.39 Phase 4 鈥?model tier hint. Tier semantics:
- *   - `'fast'` 鈥?short lookups (read 1-2 files, simple grep).
- *   - `'balanced'` 鈥?normal subtasks (default behavior; same as omit).
- *   - `'deep'` 鈥?heavy reasoning (multi-file analysis, complex audit).
+ * FEATURE_120 v0.7.39 Phase 4 — model tier hint. Tier semantics:
+ *   - `'fast'` — short lookups (read 1-2 files, simple grep).
+ *   - `'balanced'` — normal subtasks (default behavior; same as omit).
+ *   - `'deep'` — heavy reasoning (multi-file analysis, complex audit).
  *
- * `omit` 鈮?`'balanced'` so the absent case maps to "default routing".
+ * `omit` ≡ `'balanced'` so the absent case maps to "default routing".
  * Validators MUST reject other strings (the dispatch tool drops
  * unknown values silently with a tolerant fallback to `undefined`).
  */
@@ -756,7 +756,7 @@ export interface KodaXChildAgentResult {
    * terminal (`KodaXResult.interrupted === true`). Surfaces the
    * "success but empty lastText" path that produces empty
    * `<task-completed task_id="X"></task-completed>` banners.
-   * Diagnostic field 鈥?populated by child-executor on the success branch
+   * Diagnostic field — populated by child-executor on the success branch
    * and consumed by dispatch-child-tasks' empty-summary fallback.
    */
   interrupted?: boolean;
@@ -845,13 +845,13 @@ export interface KodaXManagedTaskStatusEvent {
   budgetUsage?: number;
   budgetApprovalRequired?: boolean;
   /**
-   * v0.7.38 FEATURE_156 鈥?true while the runner-driven outer loop is
+   * v0.7.38 FEATURE_156 — true while the runner-driven outer loop is
    * parked in `waitForWakeEvent` (idle-yield from FEATURE_155). The
-   * agent is alive but suspended pending an external wake 鈥?typically
+   * agent is alive but suspended pending an external wake — typically
    * a dispatched child task completing, or a user message arriving via
    * the FEATURE_115 MessageQueue (chat-while-waiting).
    *
-   * Default (`undefined` / `false`) means "not idle-waiting" 鈥?every
+   * Default (`undefined` / `false`) means "not idle-waiting" — every
    * pre-FEATURE_156 emit site implicitly sets this. Consumers MUST
    * branch on `=== true` (not truthy / not undefined) so that
    * subsequent role-emits with `idleWaiting` unset naturally transition
@@ -861,18 +861,18 @@ export interface KodaXManagedTaskStatusEvent {
    * state (the dispatch tool is restricted to Scout/Generator/Worker,
    * and the `hasEmittedHandoff` gate blocks idle-yield post-handoff so
    * Evaluator can never park here), but the field carries no
-   * role-specific semantics 鈥?`activeWorkerTitle` carries the role
+   * role-specific semantics — `activeWorkerTitle` carries the role
    * identity for display.
    */
   idleWaiting?: boolean;
   /**
-   * v0.7.38 FEATURE_156 鈥?count of children the agent is actively
+   * v0.7.38 FEATURE_156 — count of children the agent is actively
    * waiting on at the idle-yield boundary (`registry.size` snapshot).
    * Status-bar renders this as "waiting for N children" so the user
    * can tell how many outstanding pieces of work are pending. 0 with
    * `idleWaiting=true` is the transitional "background banner queued,
    * registry already drained" state (fast-child race recovery path,
-   * see FEATURE_155 hotfix follow-up #2) and renders as "idle 鈥?   * resuming".
+   * see FEATURE_155 hotfix follow-up #2) and renders as "idle —   * resuming".
    */
   idleWaitingPendingCount?: number;
 }
@@ -1002,7 +1002,7 @@ export interface KodaXContextOptions {
   /**
    * FEATURE_087/088 (v0.7.28): when true, the prompt builder injects a
    * Tool Construction section that orients the LLM to the
-   * scaffold_tool 鈫?validate_tool 鈫?stage_construction 鈫?test_tool 鈫?   * activate_tool staircase. Off by default; the surrounding agent (REPL
+   * scaffold_tool → validate_tool → stage_construction → test_tool →   * activate_tool staircase. Off by default; the surrounding agent (REPL
    * config or task router) flips this on when self-construction is
    * authorized for the session. The corresponding builtin tool handlers
    * are still gated independently by the active-tool set.
@@ -1035,7 +1035,7 @@ export interface KodaXContextOptions {
   excludeTools?: readonly string[];
   /**
    * FEATURE_067 v3: Override the entire system prompt for this run.
-   * When set, buildSystemPromptSnapshot is skipped 鈥?only this string is used.
+   * When set, buildSystemPromptSnapshot is skipped — only this string is used.
    * Used for child agents that need a focused, lightweight prompt instead of the full system.
    */
   systemPromptOverride?: string;
@@ -1052,21 +1052,21 @@ export interface KodaXContextOptions {
    */
   planModeBlockCheck?: (tool: string, input: Record<string, unknown>) => string | null;
   /**
-   * FEATURE_123 v0.7.44 鈥?propagate the current agent's id into the
+   * FEATURE_123 v0.7.44 — propagate the current agent's id into the
    * spawned runtime so its tools can self-identify (and so peer
    * `send_message` calls can stamp a `from=...` framing tag + reject
    * self-targeted sends).
    */
   currentAgentId?: string;
   /**
-   * FEATURE_123 v0.7.44 鈥?propagate the dispatching agent's id (the
+   * FEATURE_123 v0.7.44 — propagate the dispatching agent's id (the
    * parent of the soon-to-be-spawned runtime) so `send_message(to:
    * "worker")` from a grand-child routes to its direct parent rather
    * than the top-level Worker.
    */
   parentAgentId?: string;
   /**
-   * FEATURE_123 v0.7.44 鈥?when set, the spawned runtime's
+   * FEATURE_123 v0.7.44 — when set, the spawned runtime's
    * `ctx.childTaskRegistry` reuses this Map instead of allocating a
    * fresh one. Children pass the parent's registry through so peer
    * routing (`send_message` to a sibling task_id) finds the target.
@@ -1075,7 +1075,7 @@ export interface KodaXContextOptions {
    */
   inheritedChildTaskRegistry?: ChildTaskRegistry<KodaXChildExecutionResult>;
   /**
-   * FEATURE_192 v0.7.44 Phase F 鈥?`/goal` runtime binding.
+   * FEATURE_192 v0.7.44 Phase F — `/goal` runtime binding.
    *
    * When set, the runner-driven adapter:
    *   1. Wires `binding.goalContext` onto the tool-execution context
@@ -1096,7 +1096,7 @@ export interface KodaXContextOptions {
   goalRuntime?: import('./goal/runtime-wiring.js').GoalRuntimeBinding;
 
   /**
-   * FEATURE_132 (v0.7.47) 鈥?native LSP service for edit-time diagnostics
+   * FEATURE_132 (v0.7.47) — native LSP service for edit-time diagnostics
    * reflux. When omitted, `buildToolExecutionContext` falls back to the
    * process-wide default (`getDefaultLspService()`), so diagnostics work
    * out of the box; hosts/tests inject their own to control or disable it.
@@ -1107,7 +1107,7 @@ export interface KodaXContextOptions {
 }
 
 /**
- * FEATURE_221 鈥?an SDK consumer (a product built on KodaX, e.g. KodaX-Space)
+ * FEATURE_221 — an SDK consumer (a product built on KodaX, e.g. KodaX-Space)
  * injects its own product manual so that when ITS users ask "how do I use /
  * configure <product>?", the kodax_manual tool answers with the consumer's
  * topics. `topics` extend the KodaX base (override by id); `productName`
@@ -1124,7 +1124,7 @@ export interface KodaXSelfManualConfig {
  * embedder that calls `runManagedTask` in-process pin the context window /
  * trigger for a model the built-in capability table doesn't cover (or that
  * it resolves through a custom provider), or disable auto-compaction for a
- * run 鈥?without writing to the user's home-dir config file. Omitted fields
+ * run — without writing to the user's home-dir config file. Omitted fields
  * fall through to the normal resolution cascade.
  */
 export interface KodaXCompactionOverride {
@@ -1165,7 +1165,7 @@ export interface KodaXOptions {
   /** AbortSignal for cancelling the API request */
   abortSignal?: AbortSignal;
   /**
-   * v0.7.42 鈥?`RunningSession` plumbing (closes gap 6 reported by KodaX
+   * v0.7.42 — `RunningSession` plumbing (closes gap 6 reported by KodaX
    * Space). When provided, the substrate `_attach`es low-level mutators
    * onto this control object so the embedder can flip provider / model
    * / reasoning between turns without restarting the run. The mutations
@@ -1206,7 +1206,7 @@ export interface KodaXSessionMutators {
  * methods apply live to the in-flight run.
  */
 export interface KodaXSessionControl {
-  /** @internal 鈥?wired by `run-substrate`. Do not call from user code. */
+  /** @internal — wired by `run-substrate`. Do not call from user code. */
   _attach(mutators: KodaXSessionMutators): void;
 }
 
@@ -1374,7 +1374,7 @@ export interface KodaXManagedTaskRuntimeState {
   // FEATURE_193 (v0.7.43) deep V1 cleanup: V1 Scout role retired. The
   // SDK fields `scoutDecision` (Scout's harness/scope decision) and
   // `skillMap` (Scout's skill-projection slot) have been removed
-  // physically 鈥?V2 Worker reads skillMap / scope context via
+  // physically — V2 Worker reads skillMap / scope context via
   // `ctx.skillInvocation` and the routing-overlay system-prompt section
   // (FEATURE_143) instead.
   completionContractStatus?: Record<string, 'ready' | 'incomplete' | 'blocked' | 'missing'>;
@@ -1422,7 +1422,7 @@ export interface KodaXManagedTask {
 }
 
 export interface KodaXManagedVerdictPayload {
-  /** FEATURE_184 (v0.7.45): `'sidecar'` is the new architectural source 鈥?   *  Sidecar Verifier replaces the in-chain Evaluator role. `'evaluator'`
+  /** FEATURE_184 (v0.7.45): `'sidecar'` is the new architectural source —   *  Sidecar Verifier replaces the in-chain Evaluator role. `'evaluator'`
    *  / `'worker'` are retained for backward-compat reads of session jsonl
    *  written before v0.7.45. New writes use `'sidecar'`. */
   source: 'evaluator' | 'worker' | 'sidecar';
@@ -1440,7 +1440,7 @@ export interface KodaXManagedVerdictPayload {
   verificationDegraded?: boolean;
   preferredFallbackWorkerId?: string;
   /**
-   * v0.7.26 Risk-3 fix 鈥?Evaluator explicit budget-extension request.
+   * v0.7.26 Risk-3 fix — Evaluator explicit budget-extension request.
    * When present, the Runner-driven `wrapEmitterWithRecorder` fires the
    * budget-extension dialog regardless of the 90% threshold, using this
    * string as the user-visible summary. Mirrors legacy Evaluator's
@@ -1469,7 +1469,7 @@ export type KodaXScoutSuspiciousSignal =
 // FEATURE_193 (v0.7.43) deep V1 cleanup: the V1 chain payload slots
 // (`scout` / `contract` / `handoff`) and their slice type defs
 // (`KodaXManagedScoutPayload` / `KodaXManagedContractPayload` /
-// `KodaXManagedHandoffPayload`) have been removed physically 鈥?V1 chain
+// `KodaXManagedHandoffPayload`) have been removed physically — V1 chain
 // retired, no V2 caller mints these payloads. Only the verdict slot
 // remains; the Sidecar Verifier (FEATURE_184) is the sole emitter on V2.
 export interface KodaXManagedProtocolPayload {
@@ -1506,7 +1506,7 @@ export interface KodaXResult {
   /**
    * FEATURE_076: artifact ledger pre-extracted before round-boundary reshape.
    * Populated when the reshape replaces `messages` with a clean {user, assistant}
-   * dialog 鈥?tool_result blocks (the source of artifact ledger entries) no
+   * dialog — tool_result blocks (the source of artifact ledger entries) no
    * longer live in `messages` after reshape. REPL consumers should read this
    * field first, falling back to `extractArtifactLedger(messages)` for
    * backward compatibility on code paths that have not yet been updated.
@@ -1523,7 +1523,7 @@ export interface KodaXResult {
 // ============== 工具执行上下文 ==============
 // Simplified - no permission checks in core
 
-// FEATURE_222 鈥?the user-interaction types now live at the agent layer so the
+// FEATURE_222 — the user-interaction types now live at the agent layer so the
 // MCP elicitation reverse capability can share the same primitive. Re-exported
 // here for backward compatibility (existing `../types.js` imports keep working).
 import type {
@@ -1553,7 +1553,7 @@ export interface KodaXToolExecutionContext {
    * FEATURE_217 (v0.7.49): parent dir for `isolation:'worktree'` workflow child
    * worktrees. Workflow runs point this at `<runDir>/worktrees` so worktrees are
    * reclaimable (Layer 2/3 sweep) and never pollute the user's project tree.
-   * Absent on non-workflow paths 鈫?worktrees fall back to the git root's parent.
+   * Absent on non-workflow paths → worktrees fall back to the git root's parent.
    */
   workflowWorktreeBaseDir?: string;
   /** Shared extension capability runtime used by retrieval-family tools. */
@@ -1572,13 +1572,13 @@ export interface KodaXToolExecutionContext {
   /** Abort signal for cancelling in-flight tool operations (Issue 113) */
   abortSignal?: AbortSignal;
   /**
-   * FEATURE_121 v0.7.40 鈥?last-resort LLM blob summarizer.
+   * FEATURE_121 v0.7.40 — last-resort LLM blob summarizer.
    *
    * Injected by `runner-driven.ts` at task-engine init using the
    * Worker's own provider/model (same panel, same key). The dispatch
    * tool calls this only when `applyToolResultGuardrail` returned
    * `spillFailed: true` AND the raw content exceeds
-   * `LARGE_CONTENT_THRESHOLD_BYTES` (100 KB) 鈥?i.e., spill is broken
+   * `LARGE_CONTENT_THRESHOLD_BYTES` (100 KB) — i.e., spill is broken
    * AND inlining the full payload would risk blowing context. The
    * callback compresses to roughly 2-10 KB while preserving structural
    * tokens (paths / line-numbers / error codes). On failure the caller
@@ -1610,7 +1610,7 @@ export interface KodaXToolExecutionContext {
    */
   parentEvents?: KodaXEvents;
   /**
-   * FEATURE_123 v0.7.44 鈥?agentId of the agent whose tool call this
+   * FEATURE_123 v0.7.44 — agentId of the agent whose tool call this
    * context backs. `undefined` for the top-level Worker (main runtime
    * loop); set to the child's `bundle.id` for sub-agent runtimes.
    *
@@ -1624,7 +1624,7 @@ export interface KodaXToolExecutionContext {
    */
   currentAgentId?: string;
   /**
-   * FEATURE_123 v0.7.44 鈥?agentId of the agent that dispatched the one
+   * FEATURE_123 v0.7.44 — agentId of the agent that dispatched the one
    * owning this context. `undefined` for the Worker (top of the tree)
    * and for first-tier children (parent == Worker; routing uses the
    * `'worker'` sentinel rather than an agentId). Set for grand-child
@@ -1637,20 +1637,20 @@ export interface KodaXToolExecutionContext {
    */
   parentAgentId?: string;
   /**
-   * FEATURE_123 v0.7.44 鈥?per-turn `send_message` flood throttle counter.
+   * FEATURE_123 v0.7.44 — per-turn `send_message` flood throttle counter.
    *
    * Mutable ref that the `send_message` tool increments on every
-   * outbound enqueue (broadcast counts as N 鈥?one per recipient).
+   * outbound enqueue (broadcast counts as N — one per recipient).
    * `runner-driven.ts`' `beforeNextTurn` resets `count = 0` at every
    * turn boundary so the limit is "per LLM turn", matching the
-   * design's "鈮? per child-turn / 鈮?0 per Worker-turn".
+   * design's "≤5 per child-turn / ≤20 per Worker-turn".
    *
    * The cap chosen by `send_message` is per-call:
    *   - Worker (`currentAgentId === undefined`): 20 outbound enqueues
-   *     per turn 鈥?Worker is the coordinator + has the higher fan-out
+   *     per turn — Worker is the coordinator + has the higher fan-out
    *     budget.
    *   - Child (`currentAgentId !== undefined`): 5 outbound enqueues
-   *     per turn 鈥?peer chatter that goes over this is almost always
+   *     per turn — peer chatter that goes over this is almost always
    *     a misfire (storm vs coordination).
    *
    * When undefined (sync-mode dispatch, no async substrate), the
@@ -1658,7 +1658,7 @@ export interface KodaXToolExecutionContext {
    */
   sendMessageTurnCounter?: { count: number };
   /**
-   * @deprecated FEATURE_067: Removed 鈥?use reportToolProgress instead.
+   * @deprecated FEATURE_067: Removed — use reportToolProgress instead.
    * Previously fired onManagedTaskStatus with activeWorkerId='child',
    * triggering a foreground worker transition that cleared all live tool calls.
    */
@@ -1670,7 +1670,7 @@ export interface KodaXToolExecutionContext {
   mutationTracker?: ManagedMutationTracker;
   /**
    * FEATURE_074: Predicate provided by the parent REPL that evaluates plan-mode
-   * block reasons for child tool calls. Read lazily at each call 鈥?closes over
+   * block reasons for child tool calls. Read lazily at each call — closes over
    * live parent state so mid-run mode toggles propagate into in-flight children.
    */
   planModeBlockCheck?: (tool: string, input: Record<string, unknown>) => string | null;
@@ -1684,23 +1684,23 @@ export interface KodaXToolExecutionContext {
    * rate-limit by hitting the threshold from a fresh tracker).
    *
    * Single-process / single-thread execution makes the shared mutable state
-   * safe under JS run-to-completion semantics 鈥?concurrent child tool calls
+   * safe under JS run-to-completion semantics — concurrent child tool calls
    * produce interleaved `recordBlock` / `recordAllow` updates with no tearing.
    */
   guardrails?: readonly import('@kodax-ai/agent').Guardrail[];
   /**
    * FEATURE_097 (v0.7.34): Scout-seeded todo plan store. Populated by
    * runner-driven setup whenever Scout's `executionObligations` reaches
-   * the display threshold (鈮? entries); the `todo_update` tool reads
+   * the display threshold (≥2 entries); the `todo_update` tool reads
    * `has(id)` / `allIds()` for unknown-id error reasons and calls
    * `updateStatus(...)` for state transitions. The store emits its own
    * `onTodoUpdate` events via the `onChange` callback wired at creation
-   * 鈥?tools do not have to forward events themselves.
+   * — tools do not have to forward events themselves.
    */
   todoStore?: import('./task-engine/todo-store.js').TodoStore;
 
   /**
-   * FEATURE_125 v0.7.41 鈥?Team Mode Layer 4 race-condition safety net.
+   * FEATURE_125 v0.7.41 — Team Mode Layer 4 race-condition safety net.
    *
    * Cross-process content-hash cache. The Read tool records a sha256
    * of the file content at read time; Edit / MultiEdit / Write tools
@@ -1712,7 +1712,7 @@ export interface KodaXToolExecutionContext {
    * Created once per managed-task in `runner-driven.ts`, passed
    * through to every tool execution. When undefined (e.g., a tool is
    * called outside a managed task or `KODAX_DISABLE_MULTI_INSTANCE=1`
-   * was set), the safety net is bypassed 鈥?tools fall back to the
+   * was set), the safety net is bypassed — tools fall back to the
    * single-process semantics.
    *
    * See `packages/coding/src/multi-instance/content-hash-cache.ts`.
@@ -1720,19 +1720,19 @@ export interface KodaXToolExecutionContext {
   contentHashCache?: import('./multi-instance/content-hash-cache.js').ContentHashCache;
 
   /**
-   * FEATURE_132 (v0.7.47) 鈥?native LSP service. The write-family tools call
-   * `getDiagnosticsBlock(filePath, 鈥?` after a successful write to reflux any
+   * FEATURE_132 (v0.7.47) — native LSP service. The write-family tools call
+   * `getDiagnosticsBlock(filePath, …)` after a successful write to reflux any
    * type errors into the tool result. Forwarded by `buildToolExecutionContext`
    * from `options.context.lspService` or the process-wide default.
    */
   lspService?: import('./lsp/service.js').LspService;
 
   /**
-   * FEATURE_177 v0.7.42 鈥?per-task read-file-state cache (anti-loop).
+   * FEATURE_177 v0.7.42 — per-task read-file-state cache (anti-loop).
    *
    * Tracks `(filePath, offset, limit)` tuples the LLM has already read
    * in this task. On a re-read with unchanged mtime, the Read tool
-   * returns a short stub instead of the full content 鈥?breaking
+   * returns a short stub instead of the full content — breaking
    * `narrate-then-re-read` loops on models with structural decoder
    * floors (kimi-code 2026-05). Edit / Write / MultiEdit call `forget`
    * after a successful mutation; the compaction post-hook calls
@@ -1743,14 +1743,14 @@ export interface KodaXToolExecutionContext {
   readFileStateCache?: import('./multi-instance/read-file-state-cache.js').ReadFileStateCache;
 
   /**
-   * FEATURE_125 v0.7.41 鈥?Team Mode Layer 3 input.
+   * FEATURE_125 v0.7.41 — Team Mode Layer 3 input.
    *
    * Snapshot of sibling KodaX instances captured at the start of the
    * current LLM round by the runner-driven adapter. Mutation tools
    * (Edit / MultiEdit / Write) read this when present to detect
    * `activeFiles` overlap and prepend a soft warning to their tool
    * result. The snapshot is per-round (no automatic refresh during a
-   * single tool execution) 鈥?slight staleness is acceptable; the
+   * single tool execution) — slight staleness is acceptable; the
    * warning is informational, not a hard gate.
    *
    * When undefined (Team Mode disabled, solo session, or tool invoked
@@ -1769,7 +1769,7 @@ export interface KodaXToolExecutionContext {
    * launches multiple children in parallel; under FEATURE_155 (v0.7.39)
    * idle-yield, the runner-driven outer loop awaits the registered
    * promises on the Worker's behalf and splices a `<task-completed>`
-   * banner into the next user turn 鈥?the Worker no longer pulls results
+   * banner into the next user turn — the Worker no longer pulls results
    * itself (the legacy `await_child_task` tool was removed in Slice C1).
    *
    * The map's value is the executor's full result promise, identical to
@@ -1782,8 +1782,8 @@ export interface KodaXToolExecutionContext {
    *
    * **v0.7.39 FEATURE_120 Step 0**: the type alias is now imported from
    * `@kodax-ai/agent`'s orchestration layer (`ChildTaskRegistry<T>`).
-   * Structure-compatible with the previous `Map<string, Promise<鈥?>`
-   * inline shape 鈥?the rename is a packaging-only change per ADR-021.
+   * Structure-compatible with the previous `Map<string, Promise<…>>`
+   * inline shape — the rename is a packaging-only change per ADR-021.
    * Coding-flavor consumers should keep using
    * `registerChildTask(registry, id, promise)` (also from
    * `@kodax-ai/agent`) to get the FEATURE_155 Bug A cleanup chain
@@ -1822,7 +1822,7 @@ export interface KodaXToolExecutionContext {
    *
    * Snapshots survive the child task settling (so post-completion peeks
    * work) and are bounded by `CHILD_PROGRESS_SNAPSHOT_CAP` (FIFO prune
-   * by `startedAt` when the cap is exceeded). No TTL 鈥?snapshots are
+   * by `startedAt` when the cap is exceeded). No TTL — snapshots are
    * cleared with the ctx itself when the parent runner exits.
    *
    * Undefined in legacy sync-mode dispatch (same gate as
@@ -1833,7 +1833,7 @@ export interface KodaXToolExecutionContext {
   childProgressSnapshots?: Map<string, import('./child-progress-snapshot.js').ChildProgressSnapshot>;
 
   /**
-   * FEATURE_192 v0.7.44 鈥?`/goal` Persistent Goal runtime hook.
+   * FEATURE_192 v0.7.44 — `/goal` Persistent Goal runtime hook.
    *
    * Wired by the REPL adapter for every session with a lineage. When
    * undefined (sync-dispatch / isolated test harness), the 3 goal

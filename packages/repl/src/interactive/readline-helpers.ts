@@ -1,5 +1,5 @@
 /**
- * FEATURE_200 Phase E (v0.7.45) 鈥?readline/input helpers extracted from repl.ts.
+ * FEATURE_200 Phase E (v0.7.45) — readline/input helpers extracted from repl.ts.
  * Self-contained (verified: no calls to repl.ts-local fns, zero closure state).
  * getPrompt / askInput / openExternalEditor / needsContinuation.
  */

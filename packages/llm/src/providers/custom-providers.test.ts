@@ -348,8 +348,8 @@ describe('custom providers', () => {
   it('defaults the two-layer cascade fields when the custom config omits them', () => {
     vi.stubEnv('CUSTOM_OPENAI_API_KEY', 'test-key');
     const provider = createCustomProvider(cloneConfig(OPENAI_CUSTOM));
-    // No flags set in OPENAI_CUSTOM 鈫?all three cascade getters fall
-    // through to provider-level default 鈫?safe defaults (legacy behaviour).
+    // No flags set in OPENAI_CUSTOM → all three cascade getters fall
+    // through to provider-level default → safe defaults (legacy behaviour).
     expect(provider.getEffectiveReplayReasoningContent()).toBe(false);
     expect(provider.getEffectiveStrictThinkingSignature()).toBe(false);
     expect(provider.getStreamMaxDurationMs()).toBeUndefined();
@@ -372,7 +372,7 @@ describe('custom providers', () => {
     vi.stubEnv('CUSTOM_OPENAI_API_KEY', 'test-key');
     // Real-world shape: a single gateway routing models that need
     // different settings. Provider default replayReasoningContent=true
-    // (e.g. DeepSeek V4 alias) 鈥?but the gateway also exposes an
+    // (e.g. DeepSeek V4 alias) — but the gateway also exposes an
     // openai-proper passthrough that must NOT echo reasoning_content.
     const provider = createCustomProvider({
       ...cloneConfig(OPENAI_CUSTOM),
@@ -387,7 +387,7 @@ describe('custom providers', () => {
     // Inheriting model picks up the provider defaults.
     expect(provider.getEffectiveReplayReasoningContent('deepseek-v4-flash')).toBe(true);
     expect(provider.getStreamMaxDurationMs('deepseek-v4-flash')).toBe(120_000);
-    // gpt-5 forces both off 鈥?verifies per-model `false` beats `true`
+    // gpt-5 forces both off — verifies per-model `false` beats `true`
     // at provider level (the load-bearing case).
     expect(provider.getEffectiveReplayReasoningContent('gpt-5')).toBe(false);
     expect(provider.getStreamMaxDurationMs('gpt-5')).toBe(0);

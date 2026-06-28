@@ -351,13 +351,13 @@ export abstract class KodaXAnthropicCompatProvider extends KodaXBaseProvider {
   }
 
   /**
-   * FEATURE_216 v0.7.45 鈥?Lightweight credential verification.
+   * FEATURE_216 v0.7.45 — Lightweight credential verification.
    * Dispatches by `this.config.verifyStrategy`:
    *   - `count-tokens` (default for Anthropic protocol): 0-token
-   *     `messages.countTokens()` 鈥?empirically reliable across 5/5
+   *     `messages.countTokens()` — empirically reliable across 5/5
    *     Anthropic-compat providers tested (anthropic / zhipu-coding /
    *     kimi-code / minimax-coding / ark-coding).
-   *   - `models-list`: 0-token `models.list()` 鈥?supported by Anthropic
+   *   - `models-list`: 0-token `models.list()` — supported by Anthropic
    *     SDK 0.80+; not used by any Anthropic built-in but available
    *     for custom providers that explicitly opt-in.
    *   - `minimal-message`: ~7-token `messages.create({max_tokens:1})`
@@ -413,7 +413,7 @@ export abstract class KodaXAnthropicCompatProvider extends KodaXBaseProvider {
   }
 
   /**
-   * FEATURE_116 (v0.7.37) 鈥?Wrap a string `system` prompt as a single
+   * FEATURE_116 (v0.7.37) — Wrap a string `system` prompt as a single
    * cacheable text block. v1 treats the entire system prompt as one cache
    * prefix (implicit boundary at the end). When upstream callers later
    * emit `KodaXContentBlock[]` with explicit `cache-boundary` markers
@@ -433,14 +433,14 @@ export abstract class KodaXAnthropicCompatProvider extends KodaXBaseProvider {
       [{ type: 'text', text: systemText }],
       'system',
     );
-    // After lowering, no boundary marker remains 鈥?the cache_control
+    // After lowering, no boundary marker remains — the cache_control
     // attribute now lives on the wrapping text block. Cast the lowered
     // shape to the Anthropic SDK's TextBlockParam union.
     return lowerCacheBoundaries(blocks, 'attach') as Anthropic.Messages.TextBlockParam[];
   }
 
   /**
-   * FEATURE_116 (v0.7.37) 鈥?Mark the last tool definition as the cache
+   * FEATURE_116 (v0.7.37) — Mark the last tool definition as the cache
    * suffix for the tools array. The Anthropic API caches the entire
    * prefix up to and including the marked tool, so this is equivalent
    * to "all tool defs are cacheable".
@@ -534,7 +534,7 @@ export abstract class KodaXAnthropicCompatProvider extends KodaXBaseProvider {
             type: 'enabled',
           } as Anthropic.Messages.ThinkingConfigParam;
         } else if (capability === 'native-adaptive') {
-          // Opus 4.7+ only accept adaptive thinking 鈥?the model itself
+          // Opus 4.7+ only accept adaptive thinking — the model itself
           // decides depth, so KodaX sends no budget.
           kwargs.thinking = {
             type: 'adaptive',
@@ -631,7 +631,7 @@ export abstract class KodaXAnthropicCompatProvider extends KodaXBaseProvider {
         }
 
         // Stall detection: passive diagnostic logging when gap > 30s.
-        // Does NOT abort 鈥?only records for debugging slow providers.
+        // Does NOT abort — only records for debugging slow providers.
         const now = Date.now();
         const gapMs = now - prevEventTime;
         if (gapMs > STALL_THRESHOLD_MS) {
@@ -643,13 +643,13 @@ export abstract class KodaXAnthropicCompatProvider extends KodaXBaseProvider {
         }
         prevEventTime = now;
 
-        // Idle timer management 鈥?state machine:
+        // Idle timer management — state machine:
         //
-        //   content_block_delta / message_delta 鈫?RESET (active data flowing)
-        //   content_block_start / content_block_stop 鈫?PAUSE (block boundary;
+        //   content_block_delta / message_delta → RESET (active data flowing)
+        //   content_block_start / content_block_stop → PAUSE (block boundary;
         //       server may go silent while generating the next block or the
         //       first delta of the current block, e.g. large tool_use JSON)
-        //   message_start / message_stop 鈫?RESET (stream lifecycle)
+        //   message_start / message_stop → RESET (stream lifecycle)
         //
         // The hard request timeout (10 min) still guards against genuinely
         // stuck connections when the idle timer is paused.
@@ -678,7 +678,7 @@ export abstract class KodaXAnthropicCompatProvider extends KodaXBaseProvider {
             currentThinkingSignature = (block as any).signature ?? '';
           } else if (block.type === 'redacted_thinking') {
             // The redacted-thinking payload (`data`) is a single opaque
-            // string carried on `content_block_start` itself 鈥?it does not
+            // string carried on `content_block_start` itself — it does not
             // arrive via deltas. Capture it here; `content_block_stop`
             // will not re-emit it (the stop event has no `content_block`
             // field). Defaults to '' for forward-compat with future
@@ -718,7 +718,7 @@ export abstract class KodaXAnthropicCompatProvider extends KodaXBaseProvider {
               streamOptions?.onThinkingEnd?.(currentThinking);
             }
           } else if (currentBlockType === 'redacted_thinking') {
-            // Read from state captured at content_block_start 鈥?the stop
+            // Read from state captured at content_block_start — the stop
             // event does not carry the `data` field in Anthropic's stream
             // protocol. Empty payload means the server emitted a
             // redacted_thinking block with no data, which is meaningless
@@ -907,7 +907,7 @@ export abstract class KodaXAnthropicCompatProvider extends KodaXBaseProvider {
             type: 'enabled',
           } as Anthropic.Messages.ThinkingConfigParam;
         } else if (capability === 'native-adaptive') {
-          // Opus 4.7+ only accept adaptive thinking 鈥?the model itself
+          // Opus 4.7+ only accept adaptive thinking — the model itself
           // decides depth, so KodaX sends no budget.
           kwargs.thinking = {
             type: 'adaptive',
@@ -1010,7 +1010,7 @@ export abstract class KodaXAnthropicCompatProvider extends KodaXBaseProvider {
     // FEATURE_116 fail-loud: a cache-boundary marker reaching the wire
     // serialization path means lowering was skipped somewhere upstream.
     // Silently dropping the marker would silently disable caching on
-    // that branch 鈥?refuse to serialize so the caller fixes the
+    // that branch — refuse to serialize so the caller fixes the
     // omission.
     for (const block of content) {
       if (isCacheBoundary(block)) {
@@ -1068,7 +1068,7 @@ export abstract class KodaXAnthropicCompatProvider extends KodaXBaseProvider {
       // strictThinkingSignature mode (Anthropic proper) cryptographically
       // verifies `signature` server-side. Cross-provider thinking blocks
       // (kept around when user /model-switches mid-session) carry empty
-      // or other-issuer signatures that fail verification 鈫?400 thinking
+      // or other-issuer signatures that fail verification → 400 thinking
       // signature invalid. Convert those to a `<prior_reasoning>` text
       // block so the reasoning context survives without being claimed
       // as Anthropic-generated thinking.
@@ -1086,7 +1086,7 @@ export abstract class KodaXAnthropicCompatProvider extends KodaXBaseProvider {
           if (trustedSignature) {
             content.push({ type: 'thinking', thinking: b.thinking, signature: b.signature ?? '' } as any);
           } else if (b.thinking) {
-            // Strict mode + empty/missing signature 鈫?preserve the
+            // Strict mode + empty/missing signature → preserve the
             // reasoning text via a text block, dropped from the
             // thinking-block channel.
             crossProviderReasoning.push(b.thinking);
@@ -1099,7 +1099,7 @@ export abstract class KodaXAnthropicCompatProvider extends KodaXBaseProvider {
           }
           // Strict mode: redacted blocks signed by another provider
           // would fail server-side decryption (data is provider-issued
-          // ciphertext, not plaintext we can salvage). Drop silently 鈥?
+          // ciphertext, not plaintext we can salvage). Drop silently —
           // there's nothing recoverable to convert. The original turn
           // already had no user-visible content; only the model's
           // sealed reasoning is lost.
@@ -1125,9 +1125,9 @@ export abstract class KodaXAnthropicCompatProvider extends KodaXBaseProvider {
       // 2. tool_result MUST come before text in user messages
       for (const b of m.content) {
         if (b.type === 'tool_result' && m.role === 'user') {
-          // Tool_result content can be (a) a plain string 鈥?passed through
+          // Tool_result content can be (a) a plain string — passed through
           // as-is (Anthropic accepts string), or (b) an array of typed
-          // content items 鈥?each item lowered to Anthropic's wire shape.
+          // content items — each item lowered to Anthropic's wire shape.
           // Image items are read from disk and base64-encoded just like
           // top-level image blocks above.
           let serializedContent: Anthropic.Messages.ToolResultBlockParam['content'];
@@ -1193,7 +1193,7 @@ export abstract class KodaXAnthropicCompatProvider extends KodaXBaseProvider {
       // fail Anthropic's cryptographic signature verification (400
       // "thinking signature invalid"). Anthropic doesn't require
       // thinking blocks on tool-use turns that didn't originally have
-      // them 鈥?the guard exists for lenient third-party servers (Kimi)
+      // them — the guard exists for lenient third-party servers (Kimi)
       // that strictly check field presence. If a cross-provider
       // tool-use turn legitimately lacks thinking and Anthropic does
       // 400 on it, the L3 sanitize_thinking_and_retry recovery cleans

@@ -51,7 +51,7 @@ describe('provider registry', () => {
     // Pin the load-bearing pieces of the multi-model gateway: the provider
     // default (M2.7 at the 204K provider window) and the M3 per-model
     // override (1M frontier context). M3 carries an explicit override
-    // because it diverges from the provider default 鈥?guard the value so
+    // because it diverges from the provider default — guard the value so
     // future edits to the JSON catalog have to update this assertion.
     vi.stubEnv('MINIMAX_CODING_API_KEY', 'mm-test-key');
     const minimax = getProvider('minimax-coding');
@@ -74,9 +74,9 @@ describe('provider registry', () => {
   });
 
   it('registers Xiaomi MiMo pay-per-token as mimo (Anthropic-compat, MIMO_API_KEY)', () => {
-    // Same upstream model family and capability shape as mimo-coding 鈥?
+    // Same upstream model family and capability shape as mimo-coding —
     // only the baseUrl and the API key env differ. Mirroring the
-    // mimo-coding assertions guards against JSON 鈫?class drift after
+    // mimo-coding assertions guards against JSON ↔ class drift after
     // the two-provider split.
     vi.stubEnv('MIMO_API_KEY', 'sk-test-key');
     const mimo = getProvider('mimo');
@@ -162,7 +162,7 @@ describe('provider registry', () => {
   // reasoning_content convention all opt into the replayReasoningContent
   // flag for max fault-tolerance (deepseek empirically verified;
   // kimi/qwen/zhipu unverified but identical failure-mode shape).
-  // OpenAI proper stays off 鈥?different protocol, would 400 on unknown
+  // OpenAI proper stays off — different protocol, would 400 on unknown
   // field.
   it('opts kimi/qwen/zhipu/deepseek into replayReasoningContent (and excludes openai)', () => {
     vi.stubEnv('DEEPSEEK_API_KEY', 'test-key');
@@ -209,7 +209,7 @@ describe('provider registry', () => {
     expect(zhipu.getEffectiveContextWindow('glm-5.1')).toBe(200_000);
     // User-confirmed (2026-05): GLM-5 Turbo is also 200K, not 128K. The
     // historical FEATURE_098 128K pin mirrored docs that were outdated
-    // or wrong 鈥?same correction pattern as kimi/k2.5 above. Both
+    // or wrong — same correction pattern as kimi/k2.5 above. Both
     // endpoints (public + coding) now inherit the 200K provider default.
     expect(zhipu.getEffectiveContextWindow('glm-5-turbo')).toBe(200_000);
 

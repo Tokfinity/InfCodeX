@@ -19,7 +19,7 @@ export interface KodaXToolUseBlock {
 }
 
 /**
- * Tool-result content blocks 鈥?a structural subset of the full
+ * Tool-result content blocks — a structural subset of the full
  * `KodaXContentBlock` union, restricted to what providers actually accept
  * inside a tool_result envelope. Anthropic / OpenAI multimodal APIs accept
  * text and image blocks inside tool_result; thinking / tool_use / nested
@@ -78,7 +78,7 @@ export interface KodaXRedactedThinkingBlock {
 }
 
 /**
- * FEATURE_116 (v0.7.37) 鈥?Cache boundary marker.
+ * FEATURE_116 (v0.7.37) — Cache boundary marker.
  *
  * Marks the end of a cacheable prefix in a request payload. Provider base
  * classes lower this to the wire-level cache mechanism their API supports:
@@ -498,23 +498,23 @@ export type KodaXProtocolFamily = 'anthropic' | 'openai';
 export type KodaXProviderUserAgentMode = 'compat' | 'sdk';
 
 /**
- * FEATURE_216 v0.7.45 鈥?Strategy KodaX uses to verify a provider's API
+ * FEATURE_216 v0.7.45 — Strategy KodaX uses to verify a provider's API
  * credentials. Per-provider data-driven (set in `provider-capabilities.json`)
  * because the 14 providers KodaX ships do not share a single zero-token
- * verify primitive 鈥?empirically 3 distinct strategies are needed:
+ * verify primitive — empirically 3 distinct strategies are needed:
  *
- *   - `count-tokens`: Anthropic-protocol `messages.countTokens()` 鈥?
+ *   - `count-tokens`: Anthropic-protocol `messages.countTokens()` —
  *     true 0-token (input_tokens reported but no model invocation).
  *     Use for Anthropic-compat providers whose upstream implements
  *     `/v1/messages/count_tokens`.
- *   - `models-list`: `models.list()` 鈥?0-token, authenticated GET.
+ *   - `models-list`: `models.list()` — 0-token, authenticated GET.
  *     Use ONLY when the provider's `/v1/models` endpoint actually
- *     gates on auth (some compat layers expose it publicly 鈫?false
- *     positives; others 401 even for valid keys 鈫?false negatives).
+ *     gates on auth (some compat layers expose it publicly → false
+ *     positives; others 401 even for valid keys → false negatives).
  *   - `minimal-message`: `{messages,chat.completions}.create({max_tokens:1})`
- *     鈥?~6-7 tokens / call. Universal fallback for providers where
+ *     — ~6-7 tokens / call. Universal fallback for providers where
  *     the above two are unreliable. Cost is trivial for UI-button
- *     "test connection" use cases (鈮?$0.00001 per verify).
+ *     "test connection" use cases (≈ $0.00001 per verify).
  *   - `unsupported`: Provider has no verify primitive (CLI bridges
  *     own credentials in their own subprocess token store; the SDK
  *     does not enter that surface).
@@ -526,10 +526,10 @@ export type KodaXVerifyStrategy =
   | 'unsupported';
 
 /**
- * FEATURE_216 v0.7.45 鈥?Never-throws result envelope for
+ * FEATURE_216 v0.7.45 — Never-throws result envelope for
  * `provider.verifyCredential()` / `verifyProviderCredential(name)`.
  * Mirrors `side-query.ts` `SideQueryResult` pattern: every failure
- * mode is captured in the returned object 鈥?no rejection, no throw.
+ * mode is captured in the returned object — no rejection, no throw.
  */
 export interface KodaXVerifyCredentialResult {
   readonly ok: boolean;
@@ -539,7 +539,7 @@ export interface KodaXVerifyCredentialResult {
    * Error category. Stable for UI consumers to map to user-facing
    * states ("invalid key", "no network", "provider doesn't support
    * verification", etc.). `unconfigured` is set by the top-level
-   * helper when env var is missing 鈥?avoids the provider ctor throw
+   * helper when env var is missing — avoids the provider ctor throw
    * (per FEATURE_198 model-capabilities exposure pattern).
    */
   readonly error?:
@@ -561,10 +561,10 @@ export interface KodaXVerifyCredentialResult {
 }
 
 /**
- * FEATURE_216 v0.7.45 鈥?Best-effort upstream model listing. Distinct from
+ * FEATURE_216 v0.7.45 — Best-effort upstream model listing. Distinct from
  * credential verification: this is for "model picker" UIs. Mixes upstream
  * `/v1/models` data with static `provider-capabilities.json` fallback when
- * the upstream endpoint is unreliable. NOT a cred test 鈥?for that, call
+ * the upstream endpoint is unreliable. NOT a cred test — for that, call
  * `verifyProviderCredential()`.
  */
 export interface KodaXListModelsResult {
@@ -614,7 +614,7 @@ export interface KodaXCustomProviderConfig {
   /**
    * Provider-level default for OpenAI-compat `reasoning_content` echo.
    * Required by DeepSeek V4 thinking mode (replay 400s without it).
-   * Defaults to false 鈥?must stay false for OpenAI proper or any gateway
+   * Defaults to false — must stay false for OpenAI proper or any gateway
    * that rejects unknown fields. Per-model values in `models[]` can
    * override on a model-by-model basis.
    */
@@ -622,21 +622,21 @@ export interface KodaXCustomProviderConfig {
   /**
    * Provider-level default for strict Anthropic thinking-signature
    * verification. Only Anthropic proper cryptographically verifies
-   * signatures 鈥?third-party Anthropic-compat gateways must keep this
+   * signatures — third-party Anthropic-compat gateways must keep this
    * false (default). Per-model values in `models[]` can override.
    */
   strictThinkingSignature?: boolean;
   /**
    * Provider-level default streaming wall-clock cap (ms). Set just below
-   * a known server-side kill window (zhipu-coding 308s 鈫?300_000). Leave
+   * a known server-side kill window (zhipu-coding 308s → 300_000). Leave
    * unset to disable the watchdog. Per-model values in `models[]` can
    * override.
    */
   streamMaxDurationMs?: number;
   /**
-   * FEATURE_216 v0.7.45 鈥?Which verify primitive this provider supports.
+   * FEATURE_216 v0.7.45 — Which verify primitive this provider supports.
    * Optional: when unset, the SDK derives a default from `protocol`
-   * (anthropic 鈫?count-tokens / openai 鈫?models-list). Set explicitly when
+   * (anthropic → count-tokens / openai → models-list). Set explicitly when
    * the upstream `/v1/models` is public (false-positive risk) or the
    * `messages.count_tokens` endpoint is unimplemented (404), in which
    * case `minimal-message` is the only safe fallback.
@@ -677,7 +677,7 @@ export interface KodaXProviderConfig {
   /**
    * Strictly verify Anthropic-style `signature` on `thinking` blocks at
    * serialise time. Only Anthropic proper (anthropic.com) cryptographically
-   * verifies signatures 鈥?third-party Anthropic-compat servers (kimi-code /
+   * verifies signatures — third-party Anthropic-compat servers (kimi-code /
    * ark-coding / mimo-coding / zhipu-coding / minimax-coding) lack the
    * signing key and accept any signature.
    *
@@ -685,10 +685,10 @@ export interface KodaXProviderConfig {
    * converted to a `<prior_reasoning>` text block instead of being passed
    * through (which would 400 on signature verification). Cross-provider
    * `redacted_thinking` blocks (ciphertext signed by their origin) are
-   * dropped silently 鈥?there's no plaintext to recover and forging the
+   * dropped silently — there's no plaintext to recover and forging the
    * field would also fail server-side decryption.
    *
-   * When false (default), thinking blocks pass through unchanged 鈥?matches
+   * When false (default), thinking blocks pass through unchanged — matches
    * legacy behaviour and works for all third-party Anthropic-compat
    * providers. v0.7.28.
    */
@@ -702,16 +702,16 @@ export interface KodaXProviderConfig {
    * providers emit keepalive pings during long tool_use generation.
    *
    * Set per-provider just below the known server-side kill window
-   * (e.g. zhipu-coding observed 308s 鈫?set 300s here, accounting for
+   * (e.g. zhipu-coding observed 308s → set 300s here, accounting for
    * the ~RTT margin between client send and server kill timestamp).
    */
   streamMaxDurationMs?: number;
   /**
-   * FEATURE_216 v0.7.45 鈥?Which verify primitive this provider's compat
+   * FEATURE_216 v0.7.45 — Which verify primitive this provider's compat
    * base class uses for `verifyCredential()`. Sourced from
    * `provider-capabilities.json` for built-in providers; for custom
    * providers, falls back to a protocol-derived default
-   * (anthropic 鈫?count-tokens / openai 鈫?models-list) when the custom
+   * (anthropic → count-tokens / openai → models-list) when the custom
    * config does not set it explicitly.
    */
   verifyStrategy?: KodaXVerifyStrategy;
@@ -748,7 +748,7 @@ export interface KodaXProviderStreamOptions {
    * `retry-after-ms` / `exponential-backoff`) so UI surfaces and the
    * cost tracker can distinguish "provider-told us to wait" from
    * "we're guessing with backoff". Coexists with the legacy
-   * `onRateLimit` flat callback above 鈥?both fire if both are wired.
+   * `onRateLimit` flat callback above — both fire if both are wired.
    */
   onRetryAfter?: (event: {
     provider: string;

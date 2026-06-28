@@ -421,7 +421,7 @@ describe('anthropic reasoning capability', () => {
   // v0.7.28: Anthropic streams the redacted_thinking payload's `data`
   // field on `content_block_start` itself (no deltas, no `data` on the
   // stop event). Earlier code captured nothing at start and tried to
-  // read `event.content_block.data` at stop 鈥?which is always undefined,
+  // read `event.content_block.data` at stop — which is always undefined,
   // silently dropping the redacted reasoning. Verify the data reaches
   // thinkingBlocks intact.
   it('preserves redacted_thinking data captured at content_block_start', async () => {
@@ -438,7 +438,7 @@ describe('anthropic reasoning capability', () => {
               data: REDACTED_PAYLOAD,
             },
           },
-          // No deltas 鈥?redacted_thinking arrives as a single payload on start.
+          // No deltas — redacted_thinking arrives as a single payload on start.
           { type: 'content_block_stop' },
           { type: 'message_stop' },
         ];
@@ -467,7 +467,7 @@ describe('anthropic reasoning capability', () => {
   it('skips redacted_thinking blocks with empty payload (server quirk)', async () => {
     // Defensive: if the server emits redacted_thinking with no `data`,
     // there's nothing meaningful to replay. Skip the empty block rather
-    // than push one 鈥?keeps wire-format invariants clean.
+    // than push one — keeps wire-format invariants clean.
     const stream: AsyncIterable<unknown> = {
       [Symbol.asyncIterator]() {
         let i = 0;
@@ -497,7 +497,7 @@ describe('anthropic reasoning capability', () => {
   });
 
   it('isolates redacted_thinking state across consecutive blocks', async () => {
-    // Two redacted_thinking blocks back-to-back must not bleed state 鈥?    // the second block's data must not leak into the first, and an empty
+    // Two redacted_thinking blocks back-to-back must not bleed state —    // the second block's data must not leak into the first, and an empty
     // second block must not duplicate the first.
     const stream: AsyncIterable<unknown> = {
       [Symbol.asyncIterator]() {

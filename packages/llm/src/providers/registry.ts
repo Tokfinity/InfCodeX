@@ -68,7 +68,7 @@ type ProviderSnapshot = {
    * `thinkingBudgetCap` / `reasoningCapability` / `replayReasoningContent` /
    * `strictThinkingSignature`). Provider-level defaults below fill any
    * gaps a descriptor leaves unset. The default model has no descriptor
-   * entry 鈥?it inherits provider-level defaults directly.
+   * entry — it inherits provider-level defaults directly.
    */
   readonly models?: readonly KodaXModelDescriptor[];
   readonly apiKeyEnv: string;
@@ -87,7 +87,7 @@ type ProviderSnapshot = {
   /** Whether the provider supports `thinking_budget` / native reasoning. */
   readonly supportsThinking?: boolean;
   /**
-   * FEATURE_216 v0.7.45 鈥?Which verify primitive this provider supports
+   * FEATURE_216 v0.7.45 — Which verify primitive this provider supports
    * for credential checks. Mirrors `provider-capabilities.types.ts`
    * ProviderSnapshot's required field.
    */
@@ -101,9 +101,9 @@ type ProviderSnapshot = {
 //
 // v0.7.44 FEATURE_198: backed by `provider-capabilities.json` via the
 // loader; the JSON is read once at module init, validated, and resolved
-// (profile-name strings 鈫?KodaXProviderCapabilityProfile objects;
+// (profile-name strings → KodaXProviderCapabilityProfile objects;
 // cliBridge entries filled with local CLI's default/known models). The
-// export surface is unchanged 鈥?every consumer that read this Record
+// export surface is unchanged — every consumer that read this Record
 // continues to read the same Record shape, no caller-side changes.
 export const KODAX_PROVIDER_SNAPSHOTS: Record<ProviderName, ProviderSnapshot> =
   // Loader returns Readonly<Record<string, ProviderSnapshot>>; the boot
@@ -119,7 +119,7 @@ export const KODAX_PROVIDER_SNAPSHOTS: Record<ProviderName, ProviderSnapshot> =
 // fields (`apiKeyEnv` / `model` / `reasoningCapability` / `models` /
 // `contextWindow` / `maxOutputTokens` / `thinkingBudgetCap` /
 // `supportsThinking` / `reasoningProfile`) are sourced exclusively from the snapshot so the
-// snapshot stays the single source of truth 鈥?Provider classes only
+// snapshot stays the single source of truth — Provider classes only
 // supply runtime knobs.
 type ProviderRuntimeExtras = Omit<
   KodaXProviderConfig,
@@ -163,7 +163,7 @@ class AnthropicProvider extends KodaXAnthropicCompatProvider {
     // Anthropic proper cryptographically verifies `signature` on
     // `thinking` blocks. Cross-provider thinking (kept around when
     // user /model-switches mid-session) carries empty or other-issuer
-    // signatures that fail verification 鈫?400. The serialiser converts
+    // signatures that fail verification → 400. The serialiser converts
     // those to a `<prior_reasoning>` text block; only Anthropic-issued
     // thinking blocks pass through. Third-party Anthropic-compat
     // providers (kimi-code, ark-coding, etc.) lack the signing key and
@@ -172,7 +172,7 @@ class AnthropicProvider extends KodaXAnthropicCompatProvider {
   });
 
   // Anthropic proper talks to api.anthropic.com and must keep the SDK's
-  // native user agent 鈥?unlike the compat base, it adds no gateway headers.
+  // native user agent — unlike the compat base, it adds no gateway headers.
   protected override buildClient(): Anthropic {
     return new Anthropic({ apiKey: this.getApiKey() });
   }
@@ -213,7 +213,7 @@ class KimiCodeProvider extends KodaXAnthropicCompatProvider {
     // api.kimi.com/coding/ is a unified subscription-routed coding endpoint:
     // the server ignores the request `model` field and always serves the
     // current K2.x GA model. Listing version-specific labels (K2.5 / K2.6)
-    // here would be misleading 鈥?the only honest identifier is the routing
+    // here would be misleading — the only honest identifier is the routing
     // alias `kimi-for-coding`, exposed via the snapshot's default model.
     // K2 server-side prefix caching is automatic on this endpoint, so
     // switching to the OpenAI-compat sibling (api.kimi.com/coding/v1) would
@@ -233,7 +233,7 @@ class MimoCodingProvider extends KodaXAnthropicCompatProvider {
   readonly name = 'mimo-coding';
   protected readonly config: KodaXProviderConfig = buildProviderConfig('mimo-coding', {
     // CN cluster (Token Plan also has SGP / AMS clusters at
-    // token-plan-{sgp,ams}.xiaomimimo.com/anthropic 鈥?same protocol,
+    // token-plan-{sgp,ams}.xiaomimimo.com/anthropic — same protocol,
     // pin to CN until users surface a region-switch need).
     baseUrl: 'https://token-plan-cn.xiaomimimo.com/anthropic',
   });
@@ -245,7 +245,7 @@ class MimoProvider extends KodaXAnthropicCompatProvider {
     // Xiaomi MiMo public pay-per-token Anthropic-compat endpoint
     // (https://platform.xiaomimimo.com/docs/zh-CN/api/chat/anthropic-api).
     // Same upstream model family as `mimo-coding` (mimo-v2.5-pro /
-    // mimo-v2.5) 鈥?the two providers differ only in baseUrl and the
+    // mimo-v2.5) — the two providers differ only in baseUrl and the
     // billing model (pay-per-token here vs Token-Plan subscription on
     // mimo-coding). All capability fields (context window, thinking
     // budget, max_tokens, etc.) come from `provider-capabilities.json`.
@@ -263,7 +263,7 @@ class ArkCodingProvider extends KodaXAnthropicCompatProvider {
     //
     // ⚠️  Use ONLY the `/api/coding` path. The sibling `/api/v3` (without
     // `coding/`) is the standard pay-per-token Ark API and does NOT consume
-    // Coding Plan quota 鈥?accidentally pointing here bills outside the
+    // Coding Plan quota — accidentally pointing here bills outside the
     // subscription.
     baseUrl: 'https://ark.cn-beijing.volces.com/api/coding',
   });
@@ -281,7 +281,7 @@ class DeepSeekProvider extends KodaXOpenAICompatProvider {
     // V4 thinking mode 400s on multi-turn replays that strip
     // reasoning_content (empirically verified via direct API probe).
     // Kimi/Qwen/Zhipu share the same OpenAI-compat field convention so
-    // they get the same flag for max fault-tolerance 鈥?see those
+    // they get the same flag for max fault-tolerance — see those
     // provider entries below.
     replayReasoningContent: true,
   });
@@ -294,7 +294,7 @@ class KimiProvider extends KodaXOpenAICompatProvider {
     // Same OpenAI-compat reasoning_content convention as DeepSeek V4.
     // Empirically unverified for Kimi specifically, but the failure mode
     // (multi-turn 400 when reasoning_content is stripped from history)
-    // is identical in shape 鈥?opting in for max fault-tolerance.
+    // is identical in shape — opting in for max fault-tolerance.
     // OpenAI proper stays explicitly off (different protocol).
     replayReasoningContent: true,
   });
@@ -304,7 +304,7 @@ class QwenProvider extends KodaXOpenAICompatProvider {
   readonly name = 'qwen';
   protected readonly config: KodaXProviderConfig = buildProviderConfig('qwen', {
     baseUrl: 'https://dashscope.aliyuncs.com/compatible-mode/v1',
-    // Same rationale as Kimi above 鈥?unverified, opting in.
+    // Same rationale as Kimi above — unverified, opting in.
     replayReasoningContent: true,
   });
 }
@@ -313,7 +313,7 @@ class ZhipuProvider extends KodaXOpenAICompatProvider {
   readonly name = 'zhipu';
   protected readonly config: KodaXProviderConfig = buildProviderConfig('zhipu', {
     baseUrl: 'https://open.bigmodel.cn/api/paas/v4',
-    // Same rationale as Kimi above 鈥?unverified, opting in.
+    // Same rationale as Kimi above — unverified, opting in.
     replayReasoningContent: true,
   });
 }
@@ -343,7 +343,7 @@ export const KODAX_DEFAULT_PROVIDER = process.env.KODAX_PROVIDER ?? 'zhipu-codin
 // Lazy singleton cache for built-in provider instances. Keyed on both the
 // provider name and the current apiKey env value so tests that mutate
 // `*_API_KEY` between cases still see a fresh SDK client (Issue: repeated
-// `new Anthropic({...})` is expensive and held onto process state 鈥?the
+// `new Anthropic({...})` is expensive and held onto process state — the
 // cache means each provider class wires its SDK client exactly once per
 // credential configuration, and shared across call sites).
 interface BuiltinProviderCacheEntry {
@@ -481,7 +481,7 @@ export function isProviderName(name: string): name is ProviderName {
 //
 // These getters read directly from `KODAX_PROVIDER_SNAPSHOTS` (the single
 // source of truth post-refactor) so SDK consumers can list provider /
-// model capabilities WITHOUT a Provider instance 鈥?meaning without
+// model capabilities WITHOUT a Provider instance — meaning without
 // requiring the API key env var to be set. KodaX itself maintains this
 // metadata; consumers only need to know the provider name.
 //
@@ -499,7 +499,7 @@ export function isProviderName(name: string): name is ProviderName {
  *
  * `displayName` falls back to `id` when not set; never undefined.
  *
- * **All fields below are KodaX-maintained values** 鈥?they reflect what
+ * **All fields below are KodaX-maintained values** — they reflect what
  * KodaX itself uses at runtime (the per-turn `max_tokens` we request,
  * the thinking budget we cap at, etc.), benchmarked against the upstream
  * model so they are honest representations of the agent's behavior. They
@@ -513,7 +513,7 @@ export interface KodaXModelCapabilities {
   provider: string;
   /** Model id (the value `runKodaX(... { model } ...)` accepts). */
   model: string;
-  /** Human-readable label 鈥?falls back to `model` when no descriptor entry. */
+  /** Human-readable label — falls back to `model` when no descriptor entry. */
   displayName: string;
   /** Whether the provider supports `thinking_budget` / native reasoning. */
   supportsThinking: boolean;
@@ -524,9 +524,9 @@ export interface KodaXModelCapabilities {
   /** Maximum input context window (tokens). `undefined` for CLI-bridge providers. */
   contextWindow?: number;
   /**
-   * Per-turn `max_tokens` KodaX requests. KodaX-side decision 鈥?
+   * Per-turn `max_tokens` KodaX requests. KodaX-side decision —
    * benchmarked against each provider (kill-windows, decode rate, cost
-   * predictability). NOT the upstream "theoretical maximum" 鈥?providers
+   * predictability). NOT the upstream "theoretical maximum" — providers
    * often advertise inflated ceilings; this value reflects what KodaX
    * actually asks for. If you display "expected output size" in your UI,
    * use this. Long generations escalate through the L5 continuation
@@ -542,7 +542,7 @@ export interface KodaXModelCapabilities {
 function makeDefaultDescriptor(
   snapshot: ProviderSnapshot,
 ): KodaXModelDescriptor {
-  // The default model has no descriptor entry in `models[]` 鈥?synthesize
+  // The default model has no descriptor entry in `models[]` — synthesize
   // one from provider-level defaults so callers see a uniform shape.
   return { id: snapshot.model };
 }
@@ -571,7 +571,7 @@ function effectiveCapabilities(
 }
 
 /**
- * List all model descriptors for a built-in provider 鈥?default model first,
+ * List all model descriptors for a built-in provider — default model first,
  * then alternatives. No API key required (reads from KODAX_PROVIDER_SNAPSHOTS).
  *
  * Returns an empty array for unknown provider names so SDK consumers can

@@ -320,12 +320,12 @@ describe('KodaXBaseProvider', () => {
 
   it('keeps backwards-compatible getContextWindow() reading the default model', () => {
     const provider = new TestProvider();
-    // Existing call sites still use the no-arg overload 鈥?must continue
+    // Existing call sites still use the no-arg overload — must continue
     // resolving to the provider-level (or default-model) value.
     expect(provider.getContextWindow()).toBe(200_000);
   });
 
-  it('cascades streamMaxDurationMs from per-model descriptor 鈫?provider 鈫?undefined', () => {
+  it('cascades streamMaxDurationMs from per-model descriptor → provider → undefined', () => {
     class ScopedProvider extends KodaXBaseProvider {
       readonly name = 'scoped';
       readonly supportsThinking = false;
@@ -372,7 +372,7 @@ describe('KodaXBaseProvider', () => {
     expect(nocap.getStreamMaxDurationMs()).toBeUndefined();
   });
 
-  it('cascades replayReasoningContent from per-model 鈫?provider 鈫?false', () => {
+  it('cascades replayReasoningContent from per-model → provider → false', () => {
     class ScopedProvider extends KodaXBaseProvider {
       readonly name = 'scoped';
       readonly supportsThinking = true;
@@ -419,7 +419,7 @@ describe('KodaXBaseProvider', () => {
     expect(new NoProviderDefault().getEffectiveReplayReasoningContent()).toBe(false);
   });
 
-  it('cascades strictThinkingSignature from per-model 鈫?provider 鈫?false', () => {
+  it('cascades strictThinkingSignature from per-model → provider → false', () => {
     class ScopedProvider extends KodaXBaseProvider {
       readonly name = 'scoped';
       readonly supportsThinking = true;
@@ -579,7 +579,7 @@ describe('KodaXBaseProvider', () => {
   it('FEATURE_130: classifies overloaded errors with reason="overloaded"', async () => {
     const provider = new TestProvider();
     const onRetryAfter = vi.fn();
-    const error = new Error('Server overloaded 鈥?please retry');
+    const error = new Error('Server overloaded — please retry');
     const task = vi
       .fn<() => Promise<string>>()
       .mockRejectedValueOnce(error)
@@ -591,7 +591,7 @@ describe('KodaXBaseProvider', () => {
       return undefined as unknown as ReturnType<typeof setTimeout>;
     });
     try {
-      // The classifier matches "overload" via isRateLimitError keywords 鈥?
+      // The classifier matches "overload" via isRateLimitError keywords —
       // confirm overloaded errors go through the same retry path.
       await expect(
         provider.exposeWithRateLimit(task, undefined, 2, undefined, onRetryAfter),
@@ -627,7 +627,7 @@ describe('KodaXBaseProvider', () => {
         provider.exposeWithRateLimit(task, undefined, 2, onRateLimit),
       ).resolves.toBe('ok');
       // First retry (i=0): baseDelay = min(500 * 2^0, 32_000) = 500ms,
-      // jitter = 0 (mocked) 鈫?total 500ms.
+      // jitter = 0 (mocked) → total 500ms.
       expect(onRateLimit).toHaveBeenCalledWith(1, 2, 500);
     } finally {
       timeoutSpy.mockRestore();
@@ -642,7 +642,7 @@ describe('KodaXBaseProvider', () => {
 // turns an omitted request into a legacy/implicit effort 'none'; that path
 // must fall back to the model's defaultEffort, not throw. Only an EXPLICIT
 // caller request for a rejected effort still throws.
-describe('KodaXBaseProvider.resolveReasoningProfileIntent 鈥?always-on-thinking models', () => {
+describe('KodaXBaseProvider.resolveReasoningProfileIntent — always-on-thinking models', () => {
   it('implicit/omitted reasoning falls back to defaultEffort instead of throwing', () => {
     const provider = new AlwaysOnThinkingProvider();
     const intent = provider.exposeResolveIntent(undefined);

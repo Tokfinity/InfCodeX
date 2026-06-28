@@ -43,15 +43,15 @@ import {
 const execAsync = promisify(exec);
 
 /**
- * CLI config directory paths 鈥?top-level constants frozen at module-load time.
+ * CLI config directory paths — top-level constants frozen at module-load time.
  *
- * **LOAD-TIME FREEZE WARNING (v0.7.35.1 FEATURE_145)** 鈥?these constants
+ * **LOAD-TIME FREEZE WARNING (v0.7.35.1 FEATURE_145)** — these constants
  * are computed ONCE when this module is first imported, by reading
  * `getAgentConfigHome()` (which itself reads `KODAX_HOME` env var and
  * the programmatic override at that single moment). Subsequent calls to
  * `setAgentConfigHome()` have NO effect on these constants. This
  * matches the prior v0.7.35 behavior where they were inlined as
- * `path.join(os.homedir(), '.kodax')` 鈥?same load-time semantics, just
+ * `path.join(os.homedir(), '.kodax')` — same load-time semantics, just
  * routed through the resolver so that `KODAX_HOME` env is now honored.
  *
  * **For substrate consumers**: if you intend to redirect the agent
@@ -59,18 +59,18 @@ const execAsync = promisify(exec);
  * importing any module that transitively imports `@kodax-ai/repl`'s
  * `utils.ts`. Common downstream consumers that capture these constants
  * include:
- *   - `repl/interactive/storage.ts` 鈫?`KODAX_SESSIONS_DIR` (session
+ *   - `repl/interactive/storage.ts` → `KODAX_SESSIONS_DIR` (session
  *     persistence; silent corruption risk if override is set late)
  *   - the SDK's `repl/index.ts` re-exports
  *   - root `src/index.ts` re-exports
  *
  * **For env-var users**: setting `KODAX_HOME=/path` before launching
- * the kodax CLI works as expected 鈥?the env var is read at first
+ * the kodax CLI works as expected — the env var is read at first
  * import.
  *
  * **For per-call resolution**: use `getAgentConfigHome()` /
  * `getAgentConfigPath(...)` directly from `@kodax-ai/agent` instead of
- * these constants 鈥?those resolve at call time and honor late
+ * these constants — those resolve at call time and honor late
  * `setAgentConfigHome()` calls.
  */
 export const KODAX_DIR = getAgentConfigHome();
@@ -373,7 +373,7 @@ export function getProviderAvailableModels(name: string, providerModelsConfig?: 
     }
     return configModels;
   }
-  // No config override 鈥?use built-in models from snapshot
+  // No config override — use built-in models from snapshot
   try {
     const builtInModels = getProviderModels(name);
     if (builtInModels.length > 0) return builtInModels;
@@ -579,13 +579,13 @@ export function getProviderReasoningEffortOptions(
  * - `off` (the canonical disable stop) is included only when the model can
  *   disable thinking (`none` in supportedEfforts or `supportsDisabledThinking`).
  *   Always-on models (kimi-k2.7-code / minimax-m2-always) get no `off` rung.
- * - Efforts that merely FOLD to off on this model 鈥?e.g. `minimal` on a toggle
- *   or budget provider where it sits in `disabledEfforts` 鈥?are dropped from the
+ * - Efforts that merely FOLD to off on this model — e.g. `minimal` on a toggle
+ *   or budget provider where it sits in `disabledEfforts` — are dropped from the
  *   cycle so the user doesn't hit a second, redundant disable stop next to
  *   `off`. They remain reachable via the explicit `/effort <value>` command,
  *   which renders them honestly as `minimal->off`.
  *
- * `auto` (clear the explicit override 鈫?model default) is always the last rung.
+ * `auto` (clear the explicit override → model default) is always the last rung.
  */
 export function getProviderReasoningEffortCycle(
   provider: string,
@@ -887,7 +887,7 @@ export function loadConfig(): {
    * FEATURE_078 (v0.7.29): preferred name for `reasoningMode`. Both
    * fields map to the same runtime L1 user-ceiling semantic; when both
    * are present `reasoningCeiling` wins. Prefer this name in new
-   * configs 鈥?`reasoningMode` is kept accepted for backward
+   * configs — `reasoningMode` is kept accepted for backward
    * compatibility and never auto-renamed (no user-visible churn).
    */
   reasoningCeiling?: KodaXReasoningMode;
@@ -902,7 +902,7 @@ export function loadConfig(): {
   repoIntelligenceTrace?: boolean;
   streamIdleTimeoutMs?: number;
   /**
-   * FEATURE_184 Phase D.3 follow-up (v0.7.42) 鈥?opt-in Sidecar Verifier
+   * FEATURE_184 Phase D.3 follow-up (v0.7.42) — opt-in Sidecar Verifier
    * observability. When `true`, the runtime emits a persisted note per
    * verifier call:
    *   `[Sidecar Verifier] {verdict} · {model} · {ms}ms · {trace}`
@@ -911,7 +911,7 @@ export function loadConfig(): {
    */
   verifierLog?: boolean;
   /**
-   * FEATURE_187 Phase C (v0.7.43) 鈥?opt-in Stall Sidecar observability.
+   * FEATURE_187 Phase C (v0.7.43) — opt-in Stall Sidecar observability.
    * When `true`, the runtime emits a persisted note per L2 stall
    * verdict (isStuck true OR false):
    *   `[Stall Sidecar] isStuck={true|false} · {provider}/{model} · {ms}ms · {trace}`
@@ -919,7 +919,7 @@ export function loadConfig(): {
    */
   stallLog?: boolean;
   /**
-   * FEATURE_102 Phase 3 (v0.7.45) 鈥?ordered cross-provider fallback chain for
+   * FEATURE_102 Phase 3 (v0.7.45) — ordered cross-provider fallback chain for
    * child dispatch. When a child's primary provider is exhausted/down, the
    * runtime re-runs it on the next provider here. Empty/absent = OFF. Mirrored
    * to env var `KODAX_FALLBACK_PROVIDERS` (comma-separated) for the coding
@@ -954,7 +954,7 @@ export function loadConfig(): {
       // FEATURE_078: collapse `reasoningCeiling` (preferred) onto
       // `reasoningMode` so existing call sites that read
       // `options.reasoningMode` keep working unchanged. When both are
-      // present we trust `reasoningCeiling` 鈥?that's the deliberately
+      // present we trust `reasoningCeiling` — that's the deliberately
       // named L1 ceiling field, and the legacy `reasoningMode` is
       // typically left over from older configs the user forgot about.
       const collapsedReasoning: KodaXReasoningMode | undefined =
@@ -974,7 +974,7 @@ export function loadConfig(): {
 }
 
 function applyResilienceRuntimeEnv(config: ReturnType<typeof loadConfig>): void {
-  // streamIdleTimeoutMs: config.json 鈫?env var 鈫?read by resilience/config.ts
+  // streamIdleTimeoutMs: config.json → env var → read by resilience/config.ts
   // Env var takes precedence over config.json (set first, check before overwrite).
   if (config.streamIdleTimeoutMs && !process.env.KODAX_STREAM_IDLE_TIMEOUT_MS) {
     process.env.KODAX_STREAM_IDLE_TIMEOUT_MS = String(config.streamIdleTimeoutMs);
@@ -991,10 +991,10 @@ function applyRepoIntelligenceRuntimeEnv(config: ReturnType<typeof loadConfig>):
 }
 
 /**
- * FEATURE_184 Phase D.3 follow-up (v0.7.42) 鈥?propagate the user-config
+ * FEATURE_184 Phase D.3 follow-up (v0.7.42) — propagate the user-config
  * `verifierLog` boolean to the runtime env var the coding layer reads.
  * Env wins when both are set (mirrors `applyResilienceRuntimeEnv` /
- * `applyRepoIntelligenceRuntimeEnv` precedence 鈥?env-set-first means
+ * `applyRepoIntelligenceRuntimeEnv` precedence — env-set-first means
  * a developer can override via shell without editing config).
  */
 function applyVerifierRuntimeEnv(config: ReturnType<typeof loadConfig>): void {
@@ -1004,7 +1004,7 @@ function applyVerifierRuntimeEnv(config: ReturnType<typeof loadConfig>): void {
 }
 
 /**
- * FEATURE_187 Phase C (v0.7.43) 鈥?propagate the user-config
+ * FEATURE_187 Phase C (v0.7.43) — propagate the user-config
  * `stallLog` boolean to `KODAX_STALL_LOG=1` env. Same env-wins
  * precedence as the verifier counterpart.
  */
@@ -1015,7 +1015,7 @@ function applyStallSidecarRuntimeEnv(config: ReturnType<typeof loadConfig>): voi
 }
 
 /**
- * FEATURE_102 Phase 3 (v0.7.45) 鈥?propagate the user-config
+ * FEATURE_102 Phase 3 (v0.7.45) — propagate the user-config
  * `fallbackProviders` chain to `KODAX_FALLBACK_PROVIDERS` (comma-separated)
  * for the coding layer's child-fallback resolver. Same env-wins precedence as
  * the verifier/stall counterparts.
@@ -1058,11 +1058,11 @@ export function saveConfig(config: {
   mcpServers?: KodaXMcpServersConfig;
   repoIntelligenceMode?: 'auto' | 'off' | 'light' | 'full';
   repoIntelligenceTrace?: boolean;
-  /** FEATURE_184 Phase D.3 follow-up 鈥?opt-in verifier log line. */
+  /** FEATURE_184 Phase D.3 follow-up — opt-in verifier log line. */
   verifierLog?: boolean;
-  /** FEATURE_187 Phase C 鈥?opt-in stall sidecar log line. */
+  /** FEATURE_187 Phase C — opt-in stall sidecar log line. */
   stallLog?: boolean;
-  /** FEATURE_102 Phase 3 鈥?cross-provider child fallback chain. */
+  /** FEATURE_102 Phase 3 — cross-provider child fallback chain. */
   fallbackProviders?: string[];
 }): void {
   const current = loadConfig();
@@ -1115,7 +1115,7 @@ export function resolvePermissionModeEffort(config: {
 /**
  * Get git root directory.
  *
- * v0.7.46 fix 鈥?accepts optional `cwd` so in-process SDK embedders (KodaX
+ * v0.7.46 fix — accepts optional `cwd` so in-process SDK embedders (KodaX
  * Space) that serve multiple projects from a single runtime can resolve
  * the git root of the project the user opened, NOT the embedder's
  * startup directory. Without `cwd`, `git rev-parse --show-toplevel`
@@ -1123,7 +1123,7 @@ export function resolvePermissionModeEffort(config: {
  * for multi-project embedders (the same root cause as the
  * `saveSessionSnapshot` gitRoot bug in agent-runtime/middleware/ shipped in v0.7.45).
  *
- * No `cwd` arg 鈫?behaves identically to the pre-v0.7.46 form
+ * No `cwd` arg → behaves identically to the pre-v0.7.46 form
  * (process.cwd() of the host).
  */
 export async function getGitRoot(cwd?: string): Promise<string | null> {
