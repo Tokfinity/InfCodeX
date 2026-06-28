@@ -25,7 +25,7 @@ are NOT obvious from inspecting the type definitions alone:
 
 搂1鈥撀? (and the Phase-7/8 MCP-popout surface in 搂1) land in v0.7.42
 under FEATURE_186 (see [ADR-032](ADR.md#adr-032-sdk-embedder-surface-closure-feature_186-v0742)).
-搂5 documents the ESM-only packaging contract and the canonical
+§5 documents the ESM-only packaging contract and the canonical
 `await import(...)` recipe for CJS / Electron main consumers.
 
 > **Code examples in 搂1鈥撀? use static ESM `import`** 鈥?that's the

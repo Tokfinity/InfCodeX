@@ -1,0 +1,16 @@
+# EditorConfig — https://editorconfig.org
+# Pins UTF-8 so editors do NOT re-save source/doc files in the host code page
+# (Chinese Windows GBK/936 reading UTF-8 Chinese comments as GBK and writing
+# them back is what produced the mojibake regression in v0.7.57).
+root = true
+
+[*]
+charset = utf-8
+end_of_line = lf
+insert_final_newline = true
+trim_trailing_whitespace = true
+indent_style = space
+indent_size = 2
+
+[*.md]
+trim_trailing_whitespace = false

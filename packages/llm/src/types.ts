@@ -87,7 +87,7 @@ export interface KodaXRedactedThinkingBlock {
  *   `cache_control: { type: 'ephemeral' }` on the immediately preceding
  *   block, then strips the marker itself.
  * - `KodaXOpenAICompatProvider`: strips the marker (OpenAI / DeepSeek
- *   auto prefix-cache; Kimi/Zhipu/閫氫箟 self-cache via separate cache_id
+ *   auto prefix-cache; Kimi/Zhipu/通义 self-cache via separate cache_id
  *   endpoint deferred to v0.7.45+).
  * - `KodaXAcpProvider` (CLI bridge): strips the marker (CLI bridge does
  *   not touch wire; avoids leaking marker into subprocess input).
@@ -111,7 +111,7 @@ export type KodaXContentBlock =
     | KodaXRedactedThinkingBlock
     | KodaXCacheBoundary;
 
-// ============== 娑堟伅绫诲瀷 ==============
+// ============== 消息类型 ==============
 
 export interface KodaXMessage {
   role: 'user' | 'assistant' | 'system';
@@ -120,7 +120,7 @@ export interface KodaXMessage {
   _synthetic?: boolean;
 }
 
-// ============== 娴佸紡缁撴灉绫诲瀷 ==============
+// ============== 流式结果类型 ==============
 
 export interface KodaXTokenUsage {
   inputTokens: number;
@@ -140,7 +140,7 @@ export interface KodaXStreamResult {
   stopReason?: string;
 }
 
-// ============== 宸ュ叿瀹氫箟 ==============
+// ============== 工具定义 ==============
 
 export interface KodaXToolDefinition {
   name: string;
@@ -152,7 +152,7 @@ export interface KodaXToolDefinition {
   };
 }
 
-// ============== 鎺ㄧ悊绛栫暐绫诲瀷 ==============
+// ============== 推理策略类型 ==============
 
 export type KodaXReasoningCapability =
   | 'native-effort'
@@ -455,7 +455,7 @@ export interface KodaXNormalizedReasoningRequest {
   executionMode: KodaXExecutionMode;
 }
 
-// ============== Provider 閰嶇疆 ==============
+// ============== Provider 配置 ==============
 
 export interface KodaXModelDescriptor {
   id: string;
@@ -656,13 +656,13 @@ export interface KodaXProviderConfig {
   reasoningCapability?: KodaXReasoningCapability;
   reasoningProfile?: KodaXReasoningProfile;
   capabilityProfile?: KodaXProviderCapabilityProfile;
-  /** 妯″瀷鐨勪笂涓嬫枃绐楀彛澶у皬 (tokens) */
+  /** 模型的上下文窗口大小 (tokens) */
   contextWindow?: number;
   /** Provider 鍏佽鐨勬渶澶ц緭鍑?token */
   maxOutputTokens?: number;
-  /** Provider thinking budget 涓婇檺 */
+  /** Provider thinking budget 上限 */
   thinkingBudgetCap?: number;
-  /** Provider 榛樿 thinking budget 鏄犲皠 */
+  /** Provider 默认 thinking budget 映射 */
   defaultThinkingBudgets?: Partial<KodaXThinkingBudgetMap>;
   /** 鎸変换鍔＄被鍨嬭鐩栭粯璁?budget */
   taskBudgetOverrides?: KodaXTaskBudgetOverrides;
@@ -762,7 +762,7 @@ export interface KodaXProviderStreamOptions {
     attempt: number;
     maxAttempts: number;
   }) => void;
-  /** 浼氳瘽鏍囪瘑锛岀敤浜庡杞璇濅笂涓嬫枃鎭㈠ */
+  /** 会话标识，用于多轮对话上下文恢复 */
   /**
    * Passive capability learning — fired when a provider HARD-rejects a
    * reasoning-effort value (400/422 naming the param). The REPL records it in

@@ -625,7 +625,7 @@ export abstract class KodaXAnthropicCompatProvider extends KodaXBaseProvider {
       const STALL_THRESHOLD_MS = 30_000;
 
       for await (const event of response as AsyncIterable<Anthropic.Messages.RawMessageStreamEvent>) {
-        // 妫€鏌ユ槸鍚﹁涓柇 (鍙岄噸淇濋櫓)
+        // 检查是否被中断 (双重保险)
         if (signal?.aborted) {
           throw new DOMException('Request aborted', 'AbortError');
         }

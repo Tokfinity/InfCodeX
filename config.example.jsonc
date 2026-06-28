@@ -130,7 +130,7 @@
   },
 
   // ─── 5. 总是允许的工具模式 alwaysAllowTools(可选) ──────────────────
-  // accept-edits 模式下自动放行的 Bash 命令模式。
+  // accept-edits 模式下自动放行的 Bash 命令模式。项目级配置
   //   "Bash(npm install)"   精确匹配
   //   "Bash(git commit:*)"  前缀通配
   //   "Bash(npm:*)"         命令前缀通配
@@ -196,5 +196,5 @@
 
   // 相关环境变量(不写进 JSON,在 shell 里设置):
   //   KODAX_VERIFIER_LOG=1            打开 verifier 诊断日志
-  //   KODAX_REASONING_EFFORT=<value> 启动时覆盖 effort(auto/off/low/…/max)
+  //   KODAX_EFFORT=<value>           启动时覆盖 effort(auto/off/low/…/max)
 }

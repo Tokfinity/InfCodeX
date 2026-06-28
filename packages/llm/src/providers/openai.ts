@@ -90,7 +90,7 @@ export type OpenAIUsageLike = {
   // these recovers a ~4x cost-report inflation for cached requests
   // (DeepSeek server-side cache fires regardless; only KodaX's local
   // accounting was blind to it). Verified against DeepSeek API docs
-  // 2026-05-08. See docs/features/v0.7.37.md 搂 Sub-task 116-D.
+  // 2026-05-08. See docs/features/v0.7.37.md § Sub-task 116-D.
   prompt_cache_hit_tokens?: number | null;
   prompt_cache_miss_tokens?: number | null;
 } | null | undefined;
@@ -370,7 +370,7 @@ export abstract class KodaXOpenAICompatProvider extends KodaXBaseProvider {
    * FEATURE_116 (v0.7.37) 鈥?Strip any `cache-boundary` markers from
    * KodaXMessage content arrays before they reach OpenAI wire
    * serialization. OpenAI / DeepSeek auto-cache prefix tokens
-   * server-side, so the client has no marker to lower; Kimi/Zhipu/閫氫箟
+   * server-side, so the client has no marker to lower; Kimi/Zhipu/通义
    * self-cache via separate `cache_id` endpoints that are deferred to
    * v0.7.45+ (FEATURE_102). Stripping is the correct universal action
    * for this base class.
@@ -818,7 +818,7 @@ export abstract class KodaXOpenAICompatProvider extends KodaXBaseProvider {
       const STALL_THRESHOLD_MS = 30_000;
 
       for await (const chunk of stream) {
-        // 妫€鏌ユ槸鍚﹁涓柇 (鍙岄噸淇濋櫓)
+        // 检查是否被中断 (双重保险)
         if (signal?.aborted) {
           throw new DOMException('Request aborted', 'AbortError');
         }

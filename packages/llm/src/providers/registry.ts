@@ -26,7 +26,7 @@ import { getProviderSnapshots } from './provider-capabilities.loader.js';
 import Anthropic from '@anthropic-ai/sdk';
 import OpenAI from 'openai';
 
-// ============== Provider 鍚嶇О绫诲瀷 ==============
+// ============== Provider 名称类型 ==============
 
 export type ProviderName =
   | 'anthropic'
@@ -155,7 +155,7 @@ function buildProviderConfig<K extends ProviderName>(
   };
 }
 
-// ============== 鍏蜂綋 Provider 瀹炵幇 ==============
+// ============== 具体 Provider 实现 ==============
 
 class AnthropicProvider extends KodaXAnthropicCompatProvider {
   readonly name = 'anthropic';
@@ -261,7 +261,7 @@ class ArkCodingProvider extends KodaXAnthropicCompatProvider {
     // the same protocol; users outside CN can override via baseUrl env or
     // a custom provider entry.
     //
-    // 鈿狅笍  Use ONLY the `/api/coding` path. The sibling `/api/v3` (without
+    // ⚠️  Use ONLY the `/api/coding` path. The sibling `/api/v3` (without
     // `coding/`) is the standard pay-per-token Ark API and does NOT consume
     // Coding Plan quota 鈥?accidentally pointing here bills outside the
     // subscription.
@@ -318,7 +318,7 @@ class ZhipuProvider extends KodaXOpenAICompatProvider {
   });
 }
 
-// ============== Provider 宸ュ巶 ==============
+// ============== Provider 工厂 ==============
 
 export const KODAX_PROVIDERS: Record<string, () => KodaXBaseProvider> = {
   anthropic: () => new AnthropicProvider(),
@@ -427,7 +427,7 @@ export function getProviderConfiguredCapabilityProfile(
     : null;
 }
 
-// 鑾峰彇鎵€鏈夊彲鐢ㄧ殑 Provider 鍒楄〃锛堝甫閰嶇疆鐘舵€侊級
+// 获取所有可用的 Provider 列表（带配置状态）
 export function getProviderList(): Array<{
   name: string;
   model: string;
@@ -472,7 +472,7 @@ export function getProviderModels(name: string): string[] {
     : [snapshot.model];
 }
 
-// 绫诲瀷瀹堝崼鍑芥暟锛氭鏌ュ瓧绗︿覆鏄惁涓烘湁鏁堢殑 Provider 鍚嶇О
+// 类型守卫函数：检查字符串是否为有效的 Provider 名称
 export function isProviderName(name: string): name is ProviderName {
   return name in KODAX_PROVIDERS;
 }
@@ -505,7 +505,7 @@ export function isProviderName(name: string): name is ProviderName {
  * model so they are honest representations of the agent's behavior. They
  * are deliberately NOT sourced from upstream `/models` API responses,
  * which a 2026-05 cross-provider probe confirmed are sparse and often
- * empty (see docs/SDK_EMBEDDER_GUIDE.md 搂9). Embedders showing these
+ * empty (see docs/SDK_EMBEDDER_GUIDE.md §9). Embedders showing these
  * values in a popout UI can trust them.
  */
 export interface KodaXModelCapabilities {

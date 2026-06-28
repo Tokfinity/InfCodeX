@@ -1,7 +1,7 @@
 /**
  * KodaX Core Types
  *
- * 鏍稿績绫诲瀷瀹氫箟 - 閲嶆柊瀵煎嚭 @kodax-ai/agent 绫诲瀷 + Coding 鐗瑰畾绫诲瀷
+ * 核心类型定义 - 重新导出 @kodax-ai/agent 类型 + Coding 特定类型
  */
 
 // ============== Import from @kodax-ai/agent ==============
@@ -190,7 +190,7 @@ export type {
   WorkflowProcessEvent,
 };
 
-// ============== 浜嬩欢鎺ュ彛 ==============
+// ============== 事件接口 ==============
 
 export interface KodaXWorkflowEventMeta {
   readonly workflowCorrelation?: WorkflowEventCorrelation;
@@ -232,7 +232,7 @@ export interface KodaXTodoDriftWarningEvent {
 export interface KodaXEvents {
   /** FEATURE_229: correlates child-agent SDK callbacks back to a workflow run/item. */
   workflowCorrelation?: WorkflowEventCorrelation;
-  // 娴佸紡杈撳嚭
+  // 流式输出
   onTextDelta?: (text: string, meta?: KodaXActivityEventMeta) => void;
   onThinkingDelta?: (text: string, meta?: KodaXActivityEventMeta) => void;
   onThinkingEnd?: (thinking: string, meta?: KodaXActivityEventMeta) => void;
@@ -258,7 +258,7 @@ export interface KodaXEvents {
   /** Fired once when a child-agent run fully leaves the child executor. */
   onChildActivityEnd?: (meta?: KodaXActivityEventMeta) => void;
 
-  // 鐘舵€侀€氱煡
+  // 状态通知
   onSessionStart?: (info: { provider: string; sessionId: string }) => void;
   onIterationStart?: (iter: number, maxIter: number) => void;
   /** Called after each iteration with current token count for UI updates */
@@ -446,14 +446,14 @@ export interface KodaXEvents {
     input: Record<string, unknown>,
     meta?: KodaXToolEventMeta
   ) => Promise<boolean | string>;
-  /** Ask user a question interactively - Issue 069 - 浜や簰寮忓悜鐢ㄦ埛鎻愰棶 */
+  /** Ask user a question interactively - Issue 069 - 交互式向用户提问 */
   askUser?: (options: AskUserQuestionOptions, meta?: KodaXToolEventMeta) => Promise<string>;
   /** Ask user multiple independent questions sequentially - 澶氶棶棰橀『搴忔彁闂?*/
   askUserMulti?: (
     options: AskUserMultiOptions,
     meta?: KodaXToolEventMeta,
   ) => Promise<Record<string, string> | undefined>;
-  /** Ask user for free-text input - 鑷敱鏂囨湰杈撳叆 (Issue 112) */
+  /** Ask user for free-text input - 自由文本输入 (Issue 112) */
   askUserInput?: (
     options: { question: string; default?: string },
     meta?: KodaXToolEventMeta,
@@ -500,7 +500,7 @@ export interface ProviderRecoveryEvent {
   serverRetryAfterMs?: number;
 }
 
-// ============== Agent 閫夐」 ==============
+// ============== Agent 选项 ==============
 
 export interface KodaXSessionOptions {
   id?: string;
@@ -1008,7 +1008,7 @@ export interface KodaXContextOptions {
    * are still gated independently by the active-tool set.
    */
   toolConstructionMode?: boolean;
-  /** Skills system prompt snippet for progressive disclosure - Skills 绯荤粺鎻愮ず璇嶇墖娈碉紙娓愯繘寮忔姭闇诧級 */
+  /** Skills system prompt snippet for progressive disclosure - Skills 系统提示词片段（渐进式披露） */
   skillsPrompt?: string;
   rawUserInput?: string;
   skillInvocation?: KodaXSkillInvocationContext;
@@ -1210,7 +1210,7 @@ export interface KodaXSessionControl {
   _attach(mutators: KodaXSessionMutators): void;
 }
 
-// ============== 缁撴灉绫诲瀷 ==============
+// ============== 结果类型 ==============
 
 export type KodaXTaskSurface = 'cli' | 'repl' | 'plan';
 export type KodaXTaskStatus = 'planned' | 'running' | 'blocked' | 'failed' | 'completed';
@@ -1514,7 +1514,7 @@ export interface KodaXResult {
   artifactLedger?: readonly KodaXSessionArtifactLedgerEntry[];
   /** 鏄惁琚敤鎴蜂腑鏂?(Ctrl+C) */
   interrupted?: boolean;
-  /** 鏄惁杈惧埌杩唬涓婇檺 */
+  /** 是否达到迭代上限 */
   limitReached?: boolean;
   /** Error metadata for recovery - 閿欒鍏冩暟鎹敤浜庢仮澶?*/
   errorMetadata?: SessionErrorMetadata;
@@ -1534,7 +1534,7 @@ import type {
 export type { AskUserQuestionItem, AskUserMultiOptions, AskUserQuestionOptions };
 
 export interface KodaXToolExecutionContext {
-  /** File backups for undo functionality - 鏂囦欢澶囦唤鐢ㄤ簬鎾ら攢鍔熻兘 */
+  /** File backups for undo functionality - 文件备份用于撤销功能 */
   backups: Map<string, string>;
   /** Git root directory - Git 鏍圭洰褰?*/
   gitRoot?: string;
@@ -1558,11 +1558,11 @@ export interface KodaXToolExecutionContext {
   workflowWorktreeBaseDir?: string;
   /** Shared extension capability runtime used by retrieval-family tools. */
   extensionRuntime?: CapabilityRuntimeContract;
-  /** Ask user a question interactively (select mode) - 浜や簰寮忓悜鐢ㄦ埛鎻愰棶 (Issue 069) */
+  /** Ask user a question interactively (select mode) - 交互式向用户提问 (Issue 069) */
   askUser?: (options: AskUserQuestionOptions) => Promise<string>;
   /** Ask user multiple independent questions sequentially - 澶氶棶棰橀『搴忔彁闂?*/
   askUserMulti?: (options: AskUserMultiOptions) => Promise<Record<string, string> | undefined>;
-  /** Ask user for free-text input - 鑷敱鏂囨湰杈撳叆 (Issue 112) */
+  /** Ask user for free-text input - 自由文本输入 (Issue 112) */
   askUserInput?: (options: { question: string; default?: string }) => Promise<string | undefined>;
   /**
    * FEATURE_074: Exit plan mode with user approval. Called by the `exit_plan_mode` tool.

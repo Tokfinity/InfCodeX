@@ -295,7 +295,7 @@ function migrateAutoInProjectAliasInConfig<T extends { permissionMode?: string }
   return { ...config, permissionMode: 'auto' } as T;
 }
 
-// Read version from package.json dynamically - 鍔ㄦ€佽鍙栫増鏈彿
+// Read version from package.json dynamically - 动态读取版本号
 // In standalone binary builds (Bun --compile), package.json is not on disk;
 // the build script injects `process.env.KODAX_VERSION` via --define so this
 // function returns the baked-in version without filesystem access.
@@ -905,7 +905,7 @@ export function loadConfig(): {
    * FEATURE_184 Phase D.3 follow-up (v0.7.42) 鈥?opt-in Sidecar Verifier
    * observability. When `true`, the runtime emits a persisted note per
    * verifier call:
-   *   `[Sidecar Verifier] {verdict} 路 {model} 路 {ms}ms 路 {trace}`
+   *   `[Sidecar Verifier] {verdict} · {model} · {ms}ms · {trace}`
    * Mirrored to env var `KODAX_VERIFIER_LOG=1` so the agent-runtime
    * layer (which has no access to `~/.kodax/config.json`) can read it.
    */
@@ -914,7 +914,7 @@ export function loadConfig(): {
    * FEATURE_187 Phase C (v0.7.43) 鈥?opt-in Stall Sidecar observability.
    * When `true`, the runtime emits a persisted note per L2 stall
    * verdict (isStuck true OR false):
-   *   `[Stall Sidecar] isStuck={true|false} 路 {provider}/{model} 路 {ms}ms 路 {trace}`
+   *   `[Stall Sidecar] isStuck={true|false} · {provider}/{model} · {ms}ms · {trace}`
    * Mirrored to env var `KODAX_STALL_LOG=1`.
    */
   stallLog?: boolean;
@@ -1208,7 +1208,7 @@ export function getProviderCommonPolicyScenarios(
     );
 }
 
-// API rate limiting - API 閫熺巼闄愬埗
+// API rate limiting - API 速率限制
 const KODAX_API_MIN_INTERVAL = 0.5;
 let lastApiCallTime = 0;
 const apiLock = { locked: false, queue: [] as (() => void)[] };
