@@ -13,14 +13,6 @@ import type {
   KodaXTaskRoutingDecision,
 } from '../../../types.js';
 
-// Re-export single-source-of-truth mutation intent helpers (they live with
-// the tool-policy module because the tool-policy builder also consumes them).
-export {
-  inferScoutMutationIntent,
-  type ScoutMutationIntent,
-  type ScoutScopeHint,
-} from './tool-policy.js';
-
 export interface ManagedRolePromptContext {
   originalTask: string;
   skillInvocation?: KodaXSkillInvocationContext;
@@ -30,12 +22,6 @@ export interface ManagedRolePromptContext {
   previousRoleSummaries?: Partial<Record<KodaXTaskRole, KodaXRoleRoundSummary>>;
   /** FEATURE_067: Evaluator review prompt for write fan-out diffs from Generator's child agents. */
   childWriteReviewPrompt?: string;
-  /**
-   * Issue 119: Scout's own scope hints. Downstream H1+ prompt/tool-policy logic
-   * infers mutation intent from these instead of the stale pre-Scout
-   * `plan.decision.mutationSurface` heuristic value.
-   */
-  scoutScope?: import('./tool-policy.js').ScoutScopeHint;
   /**
    * v0.7.26 NEW-1 — workspace environment the role should assume.
    * Without this the managed-worker system prompt never tells the LLM
@@ -118,10 +104,6 @@ export interface ManagedRolePromptContext {
   teamModeSection?: string;
 }
 
-/**
- * Simple predicate used by the role-prompt builder to decide whether a routing
- * decision should surface review-focused evidence guidance.
- */
-export function isReviewEvidenceTask(decision: KodaXTaskRoutingDecision): boolean {
-  return decision.primaryTask === 'review' || decision.recommendedMode === 'strict-audit';
-}
+// FEATURE_193 / ADR-043: isReviewEvidenceTask (a Scout-era review-evidence
+// predicate) was removed — it had no production caller after the Scout/Generator
+// chain was retired.

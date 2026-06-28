@@ -12,7 +12,6 @@ import {
   collectToolInputPaths,
   enforceShellWriteBoundary,
   enforceWritePathBoundary,
-  inferScoutMutationIntent,
   matchesShellPattern,
   matchesWritePathPattern,
 } from './tool-policy.js';
@@ -134,93 +133,3 @@ describe('enforceShellWriteBoundary', () => {
 // `PLANNER_ALLOWED_TOOLS` and `H1_READONLY_GENERATOR_ALLOWED_TOOLS`
 // constants it covered were dropped with the V1 chain retirement.
 
-describe('inferScoutMutationIntent', () => {
-  it('returns review-only when primaryTask is review and scope is empty', () => {
-    expect(inferScoutMutationIntent({ scope: [] }, 'review')).toBe('review-only');
-    expect(inferScoutMutationIntent(undefined, 'review')).toBe('review-only');
-  });
-
-  it('returns docs-scoped when every path is docs-like', () => {
-    expect(
-      inferScoutMutationIntent({ scope: ['docs/a.md', 'README.md'] }, 'edit'),
-    ).toBe('docs-scoped');
-    expect(
-      inferScoutMutationIntent(
-        { scope: ['docs/x.md'], reviewFilesOrAreas: ['CHANGELOG.md'] },
-        'edit',
-      ),
-    ).toBe('docs-scoped');
-  });
-
-  it('returns open when any path is code-like', () => {
-    expect(
-      inferScoutMutationIntent({ scope: ['docs/a.md', 'src/runner.ts'] }, 'edit'),
-    ).toBe('open');
-  });
-
-  it('returns open for review tasks when scope is non-empty', () => {
-    expect(
-      inferScoutMutationIntent({ scope: ['packages/coding/src/foo.ts'] }, 'review'),
-    ).toBe('open');
-  });
-
-  it('ignores blank / whitespace-only scope entries', () => {
-    expect(
-      inferScoutMutationIntent({ scope: ['', '  '], reviewFilesOrAreas: ['docs/x.md'] }, 'edit'),
-    ).toBe('docs-scoped');
-  });
-
-  it('returns open by default when no scope is available', () => {
-    expect(inferScoutMutationIntent(undefined, 'edit')).toBe('open');
-    expect(inferScoutMutationIntent({}, 'edit')).toBe('open');
-  });
-
-  describe('confirmedHarness override (v0.7.26 loop-fix)', () => {
-    it('returns open when Scout confirmed H1_EXECUTE_EVAL, even for review primaryTask + empty scope', () => {
-      expect(
-        inferScoutMutationIntent({ scope: [] }, 'review', 'H1_EXECUTE_EVAL'),
-      ).toBe('open');
-    });
-
-    it('returns open when Scout confirmed H2_PLAN_EXECUTE_EVAL, even for review primaryTask + empty scope', () => {
-      expect(
-        inferScoutMutationIntent({ scope: [] }, 'review', 'H2_PLAN_EXECUTE_EVAL'),
-      ).toBe('open');
-    });
-
-    it('still returns docs-scoped when execute harness is confirmed but all paths are docs-like', () => {
-      expect(
-        inferScoutMutationIntent(
-          { scope: ['docs/a.md', 'README.md'] },
-          'edit',
-          'H1_EXECUTE_EVAL',
-        ),
-      ).toBe('docs-scoped');
-    });
-
-    it('honors H0_DIRECT by falling through to legacy inference (review-only when primaryTask=review, empty scope)', () => {
-      expect(
-        inferScoutMutationIntent({ scope: [] }, 'review', 'H0_DIRECT'),
-      ).toBe('review-only');
-    });
-
-    it('also reads confirmedHarness from the hint when no explicit override is supplied', () => {
-      expect(
-        inferScoutMutationIntent(
-          { scope: [], confirmedHarness: 'H1_EXECUTE_EVAL' },
-          'review',
-        ),
-      ).toBe('open');
-    });
-
-    it('explicit confirmedHarness arg wins over the hint field', () => {
-      expect(
-        inferScoutMutationIntent(
-          { scope: [], confirmedHarness: 'H0_DIRECT' },
-          'review',
-          'H1_EXECUTE_EVAL',
-        ),
-      ).toBe('open');
-    });
-  });
-});

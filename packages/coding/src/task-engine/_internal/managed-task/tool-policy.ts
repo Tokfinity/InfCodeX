@@ -13,7 +13,6 @@
  *   - `DOCS_ONLY_WRITE_PATH_PATTERNS` / `SHELL_WRITE_PATTERNS` constants.
  *   - `matchesWritePathPattern` / `matchesShellPattern` / `collectToolInputPaths`.
  *   - `enforceWritePathBoundary` / `enforceShellWriteBoundary`.
- *   - `ScoutMutationIntent` / `inferScoutMutationIntent`.
  *
  * Policy assembly:
  *   - `INSPECTION_SHELL_PATTERNS` / `VERIFICATION_SHELL_PATTERNS`.
@@ -36,86 +35,12 @@ import type {
   KodaXTaskVerificationContract,
 } from '../../../types.js';
 
-/**
- * Scope hints the Scout emits on `emit_scout_verdict` — `scope` + the
- * reviewer's short-list `reviewFilesOrAreas` + the harness Scout actually
- * picked. The intent classifier below infers the mutation surface from
- * these paths + the routing primaryTask + Scout's confirmed harness
- * (authoritative for execute vs review-only — v0.7.26 loop-fix).
- */
-export interface ScoutScopeHint {
-  scope?: readonly string[];
-  reviewFilesOrAreas?: readonly string[];
-  confirmedHarness?: KodaXTaskRoutingDecision['harnessProfile'];
-}
-
-/**
- * Mutation-intent taxonomy used by Generator/Evaluator guards. Matches
- * legacy `_internal/prompts/role-prompt-types.ts::ScoutMutationIntent`
- * (deleted in Shard 6d-b).
- *
- * - `'review-only'`: pure review / audit task. Generator writes blocked.
- * - `'docs-scoped'`: every path Scout flagged is docs-like. Generator
- *   writes restricted to `DOCS_ONLY_WRITE_PATH_PATTERNS` + destructive
- *   shell commands blocked.
- * - `'open'`: default. No mutation boundary applied.
- */
-export type ScoutMutationIntent = 'review-only' | 'docs-scoped' | 'open';
-
-/**
- * Issue 119 (legacy) — pure function that infers Scout's mutation intent
- * from its structured outputs. Restored here verbatim from the deleted
- * `_internal/prompts/role-prompt-types.ts::inferScoutMutationIntent`.
- *
- * Scout does NOT self-declare this intent. Its authority is its scope
- * list: if every path is docs-like, the run is docs-scoped; if the
- * routing primaryTask is `'review'` and Scout emitted no scope, the run
- * is review-only; otherwise open.
- *
- * v0.7.26 loop-fix — added `confirmedHarness` override: when Scout has
- * explicitly picked an execute harness (H1_EXECUTE_EVAL /
- * H2_PLAN_EXECUTE_EVAL) the task IS execution; do not degrade to
- * 'review-only' just because `primaryTask === 'review'` and Scout
- * omitted its scope list. Without this override, prompts like
- * "这版PPT内容没有突出X，帮我调一下" get classified as review + empty
- * scope, Generator's write tools are blocked, and the Scout→Generator→
- * Evaluator loop cannot make progress.
- */
-export function inferScoutMutationIntent(
-  scoutScope: ScoutScopeHint | undefined,
-  primaryTask: KodaXTaskRoutingDecision['primaryTask'] | undefined,
-  confirmedHarness?: KodaXTaskRoutingDecision['harnessProfile'],
-): ScoutMutationIntent {
-  const scope = (scoutScope?.scope ?? []).filter((s) => s.trim().length > 0);
-  const reviewFiles = (scoutScope?.reviewFilesOrAreas ?? []).filter((s) => s.trim().length > 0);
-  const allPaths = [...scope, ...reviewFiles];
-
-  // Scout's confirmed harness is authoritative. When Scout picked an
-  // execute harness, the task IS execution — never degrade to
-  // review-only. docs-scoped still applies when every scoped path is
-  // documentation-like. The hint carries `confirmedHarness` as a
-  // convenience; the explicit 3rd arg still wins when both are set.
-  const effectiveHarness = confirmedHarness ?? scoutScope?.confirmedHarness;
-  const scoutChoseExecute =
-    effectiveHarness === 'H1_EXECUTE_EVAL'
-    || effectiveHarness === 'H2_PLAN_EXECUTE_EVAL';
-  if (scoutChoseExecute) {
-    if (allPaths.length > 0 && allPaths.every(isDocsLikePath)) {
-      return 'docs-scoped';
-    }
-    return 'open';
-  }
-
-  if (primaryTask === 'review' && scope.length === 0) {
-    return 'review-only';
-  }
-
-  if (allPaths.length > 0 && allPaths.every(isDocsLikePath)) {
-    return 'docs-scoped';
-  }
-
-  return 'open';
-}
+// FEATURE_193 / ADR-043: ScoutScopeHint + ScoutMutationIntent +
+// inferScoutMutationIntent (the Scout mutation-intent classifier) were removed —
+// the Scout role is retired and its only production call site was deleted in
+// FEATURE_193, leaving a test-only dead cluster. The live tool-policy guards
+// below (write-path / shell-write boundaries, buildManagedWorkerToolPolicy) are
+// unaffected.
 
 export const WRITE_ONLY_TOOLS: ReadonlySet<string> = new Set([
   'write',

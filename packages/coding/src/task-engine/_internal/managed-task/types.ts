@@ -105,7 +105,7 @@ export interface RunnerChainPromptContext {
     role: KodaXTaskRole,
     recorder: VerdictRecorder,
   ) => KodaXTaskToolPolicy | undefined;
-  /** Optional role-context factory for skillMap / scoutScope / childWriteReviewPrompt injection. */
+  /** Optional role-context factory for skillMap / childWriteReviewPrompt injection. */
   readonly contextFactory?: RolePromptContextFactory;
   /**
    * Pre-computed repo-intelligence context block (Repository Overview /
