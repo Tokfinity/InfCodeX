@@ -104,36 +104,19 @@ export function getRepoIntelligenceWorkerPathForDiagnostics(): string {
   return fileURLToPath(resolveWorkerUrl());
 }
 
-function hasTsxImport(execArgv: readonly string[]): boolean {
-  return execArgv.some((arg, index) =>
-    (arg === '--import' && execArgv[index + 1]?.includes('tsx') === true)
-    || arg.startsWith('--import=tsx'));
-}
-
-function sanitizeWorkerExecArgv(execArgv: readonly string[]): string[] {
-  const sanitized: string[] = [];
-  for (let index = 0; index < execArgv.length; index += 1) {
-    const arg = execArgv[index];
-    if (arg === '--input-type') {
-      index += 1;
-      continue;
-    }
-    if (arg.startsWith('--input-type=')) {
-      continue;
-    }
-    sanitized.push(arg);
-  }
-  return sanitized;
-}
-
 function resolveWorkerExecArgv(): string[] {
-  const execArgv = sanitizeWorkerExecArgv(process.execArgv);
-  if (!hasTsxImport(execArgv)) {
-    if (import.meta.url.endsWith('.ts')) {
-      execArgv.push('--import', 'tsx');
-    }
+  // The semantic worker only needs the tsx ESM loader to execute its
+  // TypeScript source under a dev/test runtime; the production sidecar is
+  // plain JS and needs no execArgv at all. We deliberately do NOT inherit
+  // the parent's process.execArgv: under a test runner (vitest/tinypool on
+  // Linux CI) it carries worker-pool flags that tsx's CLI then rejects with
+  // `error: unknown option '-j'`, which crashes the worker thread and
+  // silently degrades repo intelligence to the lightweight fallback. Passing
+  // only the loader we require keeps the worker portable across runtimes.
+  if (import.meta.url.endsWith('.ts')) {
+    return ['--import', 'tsx'];
   }
-  return execArgv;
+  return [];
 }
 
 function isRecord(value: unknown): value is Record<string, unknown> {
