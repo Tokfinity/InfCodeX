@@ -2766,3 +2766,33 @@ fields.
 **Known small follow-up (not done):** `inferScoutMutationIntent` (tool-policy.ts)
 is an exported function only reached by its own tests (FEATURE_193 Scout residue,
 not harness-tier) — a candidate for a separate dead-Scout-code sweep.
+
+### Phase 3 review-driven fixes (a second GPT pass on the cleanup)
+
+A follow-up review surfaced two real defects introduced earlier in this work,
+both now fixed:
+
+- **SA Direct Path Rule + caller overlay regression.** P1.7 replaced the
+  capability-sections `prompt-overlay` section (which rendered
+  `context.promptOverlay`) with the static EXECUTION GUIDANCE. Its intent was to
+  drop the *router* overlay, but `context.promptOverlay` also carried the SA
+  task-family Direct Path Rule (output-shaping, e.g. `lookup → concise answer
+  with file paths`, not covered by EXECUTION GUIDANCE) and any caller-supplied
+  overlay — both dropped as collateral, uncaught because the P1.7 eval compared
+  only router-overlay-vs-static. Re-emit the `prompt-overlay` section when
+  `context.promptOverlay` is set, alongside execution-guidance; the router
+  overlay no longer rides this channel (it lived in `reasoningPlan.promptOverlay`,
+  now `''`), so only the Direct Path Rule + caller overlay return.
+- **Verifier mutation-metric mislabels.** #1 added every registry `mutates-fs`
+  tool to the tracker, but `scaffold_tool` / `scaffold_agent` only return a
+  fillable JSON skeleton (no disk write) — they were mislabeled `mutates-fs`
+  (now `readonly`) — and `activate_agent` is `mutates-state`, not `mutates-fs`,
+  yet a fragile parity-test parser let it leak into the set. With the earlier
+  blind-write heuristic this made the Verifier over-fire on non-fs work. Fixed
+  the registry labels, hardened the parity parser (tool-level indent + reset on
+  every sideEffect), reduced the set to the 9 genuine fs-mutators, and replaced
+  the `writeOps>0 && filesChanged===0` heuristic with an explicit
+  `tracker.unattributedWriteOps` counter (undo / worktree_* / stage_*) that the
+  gate fires on — which also catches a pathless write co-occurring with an
+  attributed edit. Also dropped the `reviseCountByHarnessRef` test residue left
+  by the P2 step-2 removal.
