@@ -93,7 +93,14 @@ async function initializeAgentsFile(
     };
   }
   if (callbacks.reloadAgentsFiles) {
-    await callbacks.reloadAgentsFiles();
+    try {
+      await callbacks.reloadAgentsFiles();
+    } catch (error) {
+      return {
+        success: false,
+        message: `/agents init: created ${agentsPath} but failed to reload AGENTS.md files: ${errorMessage(error)}`,
+      };
+    }
   }
 
   console.log(chalk.green(`Created ${agentsPath}`));

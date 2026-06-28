@@ -120,8 +120,28 @@ function extractHttpStatus(error: unknown): number | undefined {
     ?? extractHttpStatus(record.cause);
 }
 
+function extractErrorCode(error: unknown): string {
+  if (!error || typeof error !== 'object') {
+    return '';
+  }
+  const record = error as Record<string, unknown>;
+  if (typeof record.code === 'string') {
+    return record.code;
+  }
+  return extractErrorCode(record.cause);
+}
+
 function getErrorMessage(error: unknown): string {
-  return error instanceof Error ? error.message.toLowerCase() : String(error).toLowerCase();
+  if (error instanceof Error) {
+    return error.message.toLowerCase();
+  }
+  if (error && typeof error === 'object') {
+    const message = (error as Record<string, unknown>).message;
+    if (typeof message === 'string') {
+      return message.toLowerCase();
+    }
+  }
+  return String(error).toLowerCase();
 }
 
 /**
@@ -729,22 +749,36 @@ export abstract class KodaXBaseProvider {
    * overflow error.
    */
   protected parseContextOverflow(error: unknown): number | undefined {
-    const msg = String((error as any)?.message ?? '');
+    const msg = getErrorMessage(error);
     // Anthropic: "prompt is too long: 180000 tokens > 200000 maximum"
     // OpenAI:    "maximum context length is 128000 tokens. However, you requested 150000 tokens"
     // Zhipu/Kimi variants with Chinese messages
-    const patterns = [
-      /(\d[\d,]*)\s*tokens?.*?(\d[\d,]*)\s*(?:maximum|limit|context)/i,
-      /maximum.*?(\d[\d,]*)\s*tokens?.*?requested.*?(\d[\d,]*)/i,
-      /exceeds?\s+.*?(\d[\d,]*)\s*.*?(?:limit|max|context|上限).*?(\d[\d,]*)/i,
+    const patterns: Array<{
+      readonly regex: RegExp;
+      readonly inputGroup: number;
+      readonly limitGroup: number;
+    }> = [
+      {
+        regex: /(\d[\d,]*)\s*tokens?.*?(\d[\d,]*)\s*(?:maximum|limit|context)/i,
+        inputGroup: 1,
+        limitGroup: 2,
+      },
+      {
+        regex: /maximum.*?(\d[\d,]*)\s*tokens?.*?requested.*?(\d[\d,]*)/i,
+        inputGroup: 2,
+        limitGroup: 1,
+      },
+      {
+        regex: /exceeds?\s+.*?(\d[\d,]*)\s*.*?(?:limit|max|context|上限).*?(\d[\d,]*)/i,
+        inputGroup: 1,
+        limitGroup: 2,
+      },
     ];
-    for (const pat of patterns) {
-      const m = msg.match(pat);
+    for (const pattern of patterns) {
+      const m = msg.match(pattern.regex);
       if (m) {
-        const a = Number(m[1]!.replace(/,/g, ''));
-        const b = Number(m[2]!.replace(/,/g, ''));
-        const inputTokens = Math.min(a, b);
-        const contextLimit = Math.max(a, b);
+        const inputTokens = Number(m[pattern.inputGroup]!.replace(/,/g, ''));
+        const contextLimit = Number(m[pattern.limitGroup]!.replace(/,/g, ''));
         const safetyBuffer = 1000;
         const available = Math.max(3000, contextLimit - inputTokens - safetyBuffer);
         return available;
@@ -754,7 +788,7 @@ export abstract class KodaXBaseProvider {
   }
 
   protected isContextOverflowError(error: unknown): boolean {
-    const msg = String((error as any)?.message ?? '').toLowerCase();
+    const msg = getErrorMessage(error);
     return msg.includes('prompt is too long')
       || msg.includes('prompt too long')
       || msg.includes('context length')
@@ -893,7 +927,7 @@ export abstract class KodaXBaseProvider {
           // ECONNRESET / EPIPE: stale keep-alive socket.
           // Flag the provider so subclasses can rebuild the client with
           // a fresh connection pool on the next request.
-          const errorCode = (e as any)?.cause?.code ?? (e as any)?.code ?? '';
+          const errorCode = extractErrorCode(e);
           if (errorCode === 'ECONNRESET' || errorCode === 'EPIPE') {
             this.onStaleConnection();
           }

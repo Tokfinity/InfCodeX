@@ -80,6 +80,23 @@ describe('/agents command', () => {
     expect(reloadAgentsFiles).not.toHaveBeenCalled();
   });
 
+  it('returns a structured failure when init creates the file but reload fails', async () => {
+    const reloadAgentsFiles = vi.fn(async () => {
+      throw new Error('reload exploded');
+    });
+
+    const result = await agentsCommand.handler(
+      ['init'],
+      buildContext(cwd) as never,
+      { reloadAgentsFiles } as never,
+      {} as never,
+    );
+
+    expect(fs.readFileSync(path.join(cwd, 'AGENTS.md'), 'utf8')).toBe(KODAX_LEAN_AGENTS_CONTENT);
+    expect(result).toMatchObject({ success: false });
+    expect(typeof result === 'object' ? result.message : '').toContain('failed to reload');
+  });
+
   it('lean initializes AGENTS.md when absent', async () => {
     vi.spyOn(console, 'log').mockImplementation(() => undefined);
     const reloadAgentsFiles = vi.fn(async () => []);

@@ -530,16 +530,23 @@ describe('KodaXBaseProvider', () => {
   it('retries Chinese context-overflow errors immediately', async () => {
     const provider = new TestProvider();
     const onRateLimit = vi.fn();
-    const task = vi
-      .fn<() => Promise<string>>()
-      .mockRejectedValueOnce(new Error('上下文长度 exceeds 150000 tokens 上限 128000'))
-      .mockResolvedValueOnce('ok');
+    let attempt = 0;
+    const observedMaxTokens: number[] = [];
+    const task = vi.fn<() => Promise<string>>(async () => {
+      attempt += 1;
+      observedMaxTokens.push(provider.getEffectiveMaxOutputTokens());
+      if (attempt === 1) {
+        throw new Error('上下文长度 exceeds 150000 tokens 上限 128000');
+      }
+      return 'ok';
+    });
 
     await expect(
       provider.exposeWithRateLimit(task, undefined, 2, onRateLimit),
     ).resolves.toBe('ok');
     expect(task).toHaveBeenCalledTimes(2);
     expect(onRateLimit).toHaveBeenCalledWith(1, 2, 0);
+    expect(observedMaxTokens).toEqual([32_000, 3_000]);
   });
 
   it('aborts rate-limit retry sleep when the signal aborts', async () => {
