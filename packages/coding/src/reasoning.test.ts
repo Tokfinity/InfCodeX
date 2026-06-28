@@ -214,6 +214,24 @@ describe('reasoning reroute', () => {
     expect(decision.harnessProfile).toBe('H0_DIRECT');
   });
 
+  it('collapses topologyCeiling / upgradeCeiling to the single H0_DIRECT tier (ADR-043)', () => {
+    // The harness tier retired: deriveTopologyCeiling (read-only/docs → H1,
+    // code/system → H2) is gone, so the ceiling fields are now accurate
+    // constants. The assurance signal stays on the semantic fields below.
+    for (const prompt of [
+      'Refactor the monorepo architecture across packages.', // was code → H2
+      'Audit this code for security issues and double-check findings.', // was read-only+explicit → H1
+      'Write the PRD and ADR docs.', // was docs-only → H0
+    ]) {
+      const decision = buildFallbackRoutingDecision(prompt);
+      expect(decision.topologyCeiling).toBe('H0_DIRECT');
+      expect(decision.upgradeCeiling).toBe('H0_DIRECT');
+      // Semantic signals that used to feed the ceiling remain queryable:
+      expect(decision.mutationSurface).toBeDefined();
+      expect(decision.complexity).toBeDefined();
+    }
+  });
+
   it('supports task inference across review, bugfix, and planning prompts', () => {
     expect(inferTaskType('Please review this PR change set.')).toBe('review');
     expect(inferTaskType('This endpoint is throwing an exception, please fix it.')).toBe('bugfix');
@@ -470,16 +488,10 @@ describe('reasoning reroute', () => {
     expect(decision.harnessProfile).toBe('H0_DIRECT');
     expect(decision.mutationSurface).toBe('read-only');
     expect(decision.needsIndependentQA).toBe(false);
-    // FEATURE_112 (v0.7.34): read-only + complex evidence now lifts ceiling
-    // to H1. The harnessProfile is still H0_DIRECT (FEATURE_061: Scout owns
-    // the upgrade decision); ceiling is only an upper bound, not a forced
-    // escalation. Scout can still elect to stay H0 for massive reviews if
-    // sharded fan-out (FEATURE_067) is the better strategy.
-    expect(decision.topologyCeiling).toBe('H1_EXECUTE_EVAL');
     expect(decision.reviewScale).toBe('massive');
   });
 
-  it('does not let prompt-declared massive review scope force H2', () => {
+  it('classifies a massive review as a read-only surface (no escalation tier exists)', () => {
     const decision = buildFallbackRoutingDecision(
       'Please review this 50 file, 7000 lines change set and call out merge blockers.',
     );
@@ -487,7 +499,6 @@ describe('reasoning reroute', () => {
     expect(decision.primaryTask).toBe('review');
     expect(decision.harnessProfile).toBe('H0_DIRECT');
     expect(decision.mutationSurface).toBe('read-only');
-    expect(decision.topologyCeiling).toBe('H0_DIRECT');
     expect(decision.reviewScale).toBe('massive');
   });
 
@@ -499,20 +510,18 @@ describe('reasoning reroute', () => {
     expect(decision.primaryTask).toBe('review');
     expect(decision.mutationSurface).toBe('read-only');
     expect(decision.assuranceIntent).toBe('explicit-check');
-    // FEATURE_061: Pre-Scout harness is always H0; Scout sees the explicit-check
-    // signal and decides whether to upgrade to H1.
+    // Harness tier retired (ADR-043): the harness is always H0_DIRECT; the
+    // explicit-check signal stays on `assuranceIntent` for downstream use.
     expect(decision.harnessProfile).toBe('H0_DIRECT');
-    expect(decision.topologyCeiling).toBe('H1_EXECUTE_EVAL');
   });
 
-  it('keeps docs-only work out of H2 even when the request is broad', () => {
+  it('classifies broad docs work as a docs-only surface', () => {
     const decision = buildFallbackRoutingDecision(
       'Write the PRD, ADR, and design docs for this feature and keep the docs consistent across the repo.',
     );
 
     expect(decision.mutationSurface).toBe('docs-only');
     expect(decision.harnessProfile).toBe('H0_DIRECT');
-    expect(decision.topologyCeiling).toBe('H0_DIRECT');
   });
 
   it('lets docs-only work signal explicit-check assurance while keeping H0 for Scout to decide', () => {
@@ -522,10 +531,9 @@ describe('reasoning reroute', () => {
 
     expect(decision.mutationSurface).toBe('docs-only');
     expect(decision.assuranceIntent).toBe('explicit-check');
-    // FEATURE_061: Pre-Scout harness is always H0; Scout sees the explicit-check
-    // signal and decides whether to upgrade to H1.
+    // Harness tier retired (ADR-043): the harness is always H0_DIRECT; the
+    // explicit-check signal stays on `assuranceIntent` for downstream use.
     expect(decision.harnessProfile).toBe('H0_DIRECT');
-    expect(decision.topologyCeiling).toBe('H1_EXECUTE_EVAL');
   });
 
   it('routes pure Chinese review prompts to read-only H0 by default', () => {
@@ -534,7 +542,6 @@ describe('reasoning reroute', () => {
     expect(decision.primaryTask).toBe('review');
     expect(decision.mutationSurface).toBe('read-only');
     expect(decision.harnessProfile).toBe('H0_DIRECT');
-    expect(decision.topologyCeiling).toBe('H0_DIRECT');
   });
 
   it('routes pure Chinese docs prompts to docs-only H0 by default', () => {
@@ -542,7 +549,6 @@ describe('reasoning reroute', () => {
 
     expect(decision.mutationSurface).toBe('docs-only');
     expect(decision.harnessProfile).toBe('H0_DIRECT');
-    expect(decision.topologyCeiling).toBe('H0_DIRECT');
   });
 
   it('lets pure Chinese review prompts signal explicit-check while keeping H0 for Scout to decide', () => {
@@ -551,10 +557,9 @@ describe('reasoning reroute', () => {
     expect(decision.primaryTask).toBe('review');
     expect(decision.mutationSurface).toBe('read-only');
     expect(decision.assuranceIntent).toBe('explicit-check');
-    // FEATURE_061: Pre-Scout harness is always H0; Scout sees the explicit-check
-    // signal and decides whether to upgrade to H1.
+    // Harness tier retired (ADR-043): the harness is always H0_DIRECT; the
+    // explicit-check signal stays on `assuranceIntent` for downstream use.
     expect(decision.harnessProfile).toBe('H0_DIRECT');
-    expect(decision.topologyCeiling).toBe('H1_EXECUTE_EVAL');
   });
 
   it('prefers explicit review language when review and planning signals are tied', () => {
@@ -673,10 +678,9 @@ describe('reasoning reroute', () => {
     expect(decision.primaryTask).toBe('edit');
     expect(decision.mutationSurface).toBe('docs-only');
     expect(decision.harnessProfile).toBe('H0_DIRECT');
-    expect(decision.topologyCeiling).toBe('H0_DIRECT');
   });
 
-  it('keeps backend and module documentation rewrites out of H2 when the prompt is docs-scoped', () => {
+  it('classifies docs-scoped backend/module rewrites as docs-only surface', () => {
     const decision = buildFallbackRoutingDecision(
       'Rewrite the ADR and module documentation only. Do not change code.',
     );
@@ -684,7 +688,6 @@ describe('reasoning reroute', () => {
     expect(decision.primaryTask).toBe('edit');
     expect(decision.mutationSurface).toBe('docs-only');
     expect(decision.harnessProfile).toBe('H0_DIRECT');
-    expect(decision.topologyCeiling).toBe('H0_DIRECT');
   });
 
   it('still treats mixed implementation plus docs requests as code work', () => {
@@ -694,7 +697,6 @@ describe('reasoning reroute', () => {
 
     expect(decision.primaryTask).toBe('edit');
     expect(decision.mutationSurface).toBe('code');
-    expect(decision.topologyCeiling).toBe('H2_PLAN_EXECUTE_EVAL');
   });
 
   it('keeps technical documentation edits on docs-only even without an explicit no-code suffix', () => {
@@ -705,7 +707,6 @@ describe('reasoning reroute', () => {
     expect(decision.primaryTask).toBe('edit');
     expect(decision.mutationSurface).toBe('docs-only');
     expect(decision.harnessProfile).toBe('H0_DIRECT');
-    expect(decision.topologyCeiling).toBe('H0_DIRECT');
   });
 
   it('treats migration guides with explicit no-code constraints as docs-only work', () => {
@@ -716,12 +717,9 @@ describe('reasoning reroute', () => {
     expect(decision.primaryTask).toBe('edit');
     expect(decision.mutationSurface).toBe('docs-only');
     expect(decision.harnessProfile).toBe('H0_DIRECT');
-    // FEATURE_112 (v0.7.34): "migration" keyword triggers complex complexity,
-    // and docs-only + complex now lifts ceiling to H1. The mutationSurface
-    // (docs-only) and harnessProfile (H0_DIRECT pre-Scout) are unchanged;
-    // only the upgrade ceiling moves. Scout can still keep this at H0 if
-    // the docs change really is bounded.
-    expect(decision.topologyCeiling).toBe('H1_EXECUTE_EVAL');
+    // A "migration guide" with an explicit no-code constraint stays docs-only
+    // (the complexity signal lives on decision.complexity; there is no longer a
+    // harness ceiling that it lifts — ADR-043).
   });
 
   it('does not let code-comment edits hide behind README-only phrasing', () => {
@@ -731,7 +729,6 @@ describe('reasoning reroute', () => {
 
     expect(decision.primaryTask).toBe('edit');
     expect(decision.mutationSurface).toBe('code');
-    expect(decision.topologyCeiling).toBe('H2_PLAN_EXECUTE_EVAL');
   });
 });
 

@@ -1030,28 +1030,11 @@ function deriveAssuranceIntent(
   return 'default';
 }
 
-export function deriveTopologyCeiling(
-  mutationSurface: KodaXMutationSurface,
-  assuranceIntent: KodaXAssuranceIntent,
-  complexity?: KodaXTaskComplexity,
-): KodaXHarnessProfile {
-  if (mutationSurface === 'read-only' || mutationSurface === 'docs-only') {
-    if (assuranceIntent === 'explicit-check') {
-      return 'H1_EXECUTE_EVAL';
-    }
-    // FEATURE_112 (v0.7.34): unlock H1 ceiling for heavy read-only investigation.
-    // The legacy rule only opened H1 on explicit assurance signals (audit/verify
-    // keywords), which left "read-many-files-to-form-a-conclusion" tasks capped
-    // at H0 even when complexity≥complex. Scout still owns the upgrade decision
-    // — this only widens the ceiling so the option is reachable.
-    if (complexity === 'complex' || complexity === 'systemic') {
-      return 'H1_EXECUTE_EVAL';
-    }
-    return 'H0_DIRECT';
-  }
-
-  return 'H2_PLAN_EXECUTE_EVAL';
-}
+// `deriveTopologyCeiling` (FEATURE_112 read-only/docs → H1, code/system → H2)
+// was removed in ADR-043: the harness tier collapsed to the single H0_DIRECT
+// tier, so the ceiling is a constant. The assurance signal it keyed on stays
+// queryable on the decision (mutationSurface / assuranceIntent / complexity /
+// needsIndependentQA).
 
 function inferTaskSignal(prompt: string): {
   task: KodaXTaskType;
@@ -1443,12 +1426,6 @@ function selectHarnessProfile(
     primaryTask: decision.primaryTask,
     taskFamily,
   });
-  const assuranceIntent = deriveAssuranceIntent(prompt, decision);
-  const topologyCeiling = deriveTopologyCeiling(
-    mutationSurface,
-    assuranceIntent,
-    decision.complexity,
-  );
 
   const hints: string[] = [];
   if (decision.complexity === 'complex' || decision.complexity === 'systemic') {
@@ -1465,8 +1442,11 @@ function selectHarnessProfile(
   }
 
   return {
+    // Harness tier retired (ADR-043): both the profile and the ceiling are the
+    // single H0_DIRECT tier. The fields are kept as accurate constants (REPL /
+    // status / checkpoint schema) — they no longer carry H1/H2.
     harnessProfile: 'H0_DIRECT',
-    upgradeCeiling: topologyCeiling,
+    upgradeCeiling: 'H0_DIRECT',
     notes: hints,
   };
 }
@@ -1943,11 +1923,11 @@ function stabilizeRoutingDecision(
     taskFamily: intentFields.taskFamily,
   });
   const assuranceIntent = deriveAssuranceIntent(prompt, stabilized);
-  const topologyCeiling = deriveTopologyCeiling(
-    mutationSurface,
-    assuranceIntent,
-    complexity,
-  );
+  // Harness tier retired (ADR-043): the ceiling collapsed to the single
+  // H0_DIRECT tier. The assurance/complexity signal that used to lift it to
+  // H1/H2 stays queryable on the decision (assuranceIntent / complexity /
+  // mutationSurface / needsIndependentQA); the ceiling field is a constant.
+  const topologyCeiling: KodaXHarnessProfile = 'H0_DIRECT';
   const requiresBrainstorm = inferRequiresBrainstorm(
     prompt,
     {
