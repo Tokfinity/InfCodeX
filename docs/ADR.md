@@ -2714,9 +2714,10 @@ independent GPT pass, then build + 4053-test green):
   approach selection by the static EXECUTION GUIDANCE, verification by the
   Sidecar Verifier gate, child fan-out by `dispatch_child_task`, and write-fanout
   safety by `validateWriteBundles` (`parentRole==='worker'`, never depended on
-  the routing decision). **KEPT: `KodaXAmaFanoutClass`** — it is the child-task
-  display/dispatch classification used by `dispatch_child_task`, child
-  bundles/status, and the REPL `AmaWorkStrip`, independent of the advisory.
+  the routing decision). **KEPT (then renamed): the child-fanout classification
+  type** — used by `dispatch_child_task`, child bundles/status, and the REPL work
+  strip, independent of the advisory. It was kept here and renamed
+  `KodaXAmaFanoutClass` → `KodaXChildFanoutClass` in the follow-up below.
 - **#1 / #5 — Verifier metric coverage + regression guards.** The mutation
   tracker now covers every `mutates-fs` registry tool (a source-parity test
   fails if a new one is added untracked); added the de-harness regression guards
