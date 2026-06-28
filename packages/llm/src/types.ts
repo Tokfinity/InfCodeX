@@ -1,10 +1,10 @@
 /**
  * KodaX AI Types
  *
- * AI 灞傜被鍨嬪畾涔?- 鎵€鏈?Provider 鍏变韩鐨勭被鍨嬫帴鍙?
+  * AI 层类型定义 - 所有 Provider 共享的类型接口
  */
 
-// ============== 鍐呭鍧楃被鍨?==============
+// ============== 内容块类型 ==============
 
 export interface KodaXTextBlock {
   type: 'text';
@@ -658,13 +658,13 @@ export interface KodaXProviderConfig {
   capabilityProfile?: KodaXProviderCapabilityProfile;
   /** 模型的上下文窗口大小 (tokens) */
   contextWindow?: number;
-  /** Provider 鍏佽鐨勬渶澶ц緭鍑?token */
+  /** Provider 允许的最大输出 token */
   maxOutputTokens?: number;
   /** Provider thinking budget 上限 */
   thinkingBudgetCap?: number;
   /** Provider 默认 thinking budget 映射 */
   defaultThinkingBudgets?: Partial<KodaXThinkingBudgetMap>;
-  /** 鎸変换鍔＄被鍨嬭鐩栭粯璁?budget */
+  /** 按任务类型覆盖默认 budget */
   taskBudgetOverrides?: KodaXTaskBudgetOverrides;
   /**
    * Echo the prior turn's `reasoning_content` back on replayed assistant
@@ -740,7 +740,7 @@ export interface KodaXProviderStreamOptions {
    *   The hard request timeout still guards against genuinely stuck connections.
    */
   onHeartbeat?: (pause?: boolean) => void;
-  /** 褰撳簳灞?API 閬囧埌 Rate Limit 杩涜閲嶈瘯鏃惰Е鍙?*/
+  /** 当底层 API 遇到 Rate Limit 进行重试时触发 */
   onRateLimit?: (attempt: number, maxRetries: number, delayMs: number) => void;
   /**
    * FEATURE_130 (v0.7.36): structured retry-after callback. Carries the

@@ -40,10 +40,10 @@ function getConfiguredReasoningProfile(
 }
 
 /**
- * FEATURE_216 v0.7.45 �?Derive the default verify strategy when a custom
+ * FEATURE_216 v0.7.45 — Derive the default verify strategy when a custom
  * provider config does not set `verifyStrategy` explicitly:
- *   - anthropic protocol �?count-tokens (true 0-token if implemented)
- *   - openai protocol    �?models-list (auth-gated GET if implemented)
+ *   - anthropic protocol → count-tokens (true 0-token if implemented)
+ *   - openai protocol    → models-list (auth-gated GET if implemented)
  * Custom providers that hit an upstream where these defaults fail should
  * set `verifyStrategy: 'minimal-message'` explicitly in their config.
  */
@@ -245,7 +245,7 @@ export function validateCustomProviderConfig(
     );
   }
 
-  // FEATURE_216 v0.7.45 �?Validate explicit verifyStrategy. Also guard
+  // FEATURE_216 v0.7.45 — Validate explicit verifyStrategy. Also guard
   // against the most common misconfiguration: 'count-tokens' on openai
   // protocol (openai-compat servers do not implement count_tokens).
   if (custom.verifyStrategy !== undefined) {
@@ -299,7 +299,7 @@ function buildProviderConfig(custom: KodaXCustomProviderConfig): KodaXProviderCo
     replayReasoningContent: custom.replayReasoningContent ?? false,
     strictThinkingSignature: custom.strictThinkingSignature ?? false,
     streamMaxDurationMs: custom.streamMaxDurationMs,
-    // FEATURE_216 v0.7.45 �?explicit verifyStrategy wins; otherwise
+    // FEATURE_216 v0.7.45 — explicit verifyStrategy wins; otherwise
     // derive from protocol per the table in the type's JSDoc.
     verifyStrategy:
       custom.verifyStrategy ?? defaultVerifyStrategyForProtocol(custom.protocol),

@@ -1649,11 +1649,11 @@ import { runKodaX, type KodaXManualTopicInput } from '@kodax-ai/coding';
 
 const SPACE_TOPICS: KodaXManualTopicInput[] = [
   { id: 'overview',  title: 'KodaX-Space', summary: 'What KodaX-Space is.', body: 'A desktop coding app built on KodaX.' },
-  { id: 'settings',  title: 'KodaX-Space Settings', summary: 'Configure KodaX-Space.', body: 'Open Settings 鈫?Providers 鈥?, aliases: ['閰嶇疆'] },
+  { id: 'settings',  title: 'KodaX-Space Settings', summary: 'Configure KodaX-Space.', body: 'Open Settings → Providers …', aliases: ['配置'] },
 ];
 
 runKodaX({
-  /* 鈥our usual config鈥?*/
+  /* …your usual config… */
   selfManual: {
     productName: 'KodaX-Space',   // re-brands the routing rule + every answer's scope anchor
     topics: SPACE_TOPICS,         // extend the KodaX base; same id overrides a base topic
@@ -1840,6 +1840,6 @@ runner turn. Unsupported file/video attachments are rejected before enqueueing.
 ## See also
 
 - [README.md](../README.md) 鈥?end-user CLI quick start
-- [docs/ADR.md ADR-024](ADR.md#adr-024-npm-鍙戝竷鐗╂鍚?kodax-aikodax--sdk-subpath-exports-褰㈠紡鍖?v0739) 鈥?SDK subpath architecture rationale
+- [docs/ADR.md ADR-024](ADR.md#adr-024-npm-发布物正名-kodax-aikodax--sdk-subpath-exports-形式化-v0739) — SDK subpath architecture rationale
 - [docs/ADR.md ADR-032](ADR.md#adr-032-sdk-embedder-surface-closure-feature_186-v0742) 鈥?FEATURE_186 design record (all 8 phases)
 - [docs/features/v0.7.42.md FEATURE_186](features/v0.7.42.md#feature_186-sdk-embedder-surface-closure--kodax-space-gap-list--mcp-popout) 鈥?gap-by-gap landing matrix

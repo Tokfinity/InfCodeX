@@ -1,7 +1,7 @@
 /**
  * KodaX Anthropic Compatible Provider
  *
- * 鏀寔 Anthropic API 鏍煎紡鐨?Provider 鍩虹被
+ * 支持 Anthropic API 格式的 Provider 基类
  */
 
 import Anthropic from '@anthropic-ai/sdk';
@@ -545,7 +545,7 @@ export abstract class KodaXAnthropicCompatProvider extends KodaXBaseProvider {
         return kwargs;
       };
 
-      // 妫€鏌ユ槸鍚﹀凡琚彇娑?
+      // 检查是否已被取消
       if (signal?.aborted) {
         throw new DOMException('Request aborted', 'AbortError');
       }
@@ -570,8 +570,8 @@ export abstract class KodaXAnthropicCompatProvider extends KodaXBaseProvider {
       let lastEventTime = Date.now();
       const streamStartTime = Date.now();
 
-      // 浼犻€?signal 缁?SDK锛岀‘淇濆簳灞?HTTP 璇锋眰鑳借鍙栨秷
-      // 鍙傝€? https://github.com/anthropics/anthropic-sdk-typescript
+      // 传递 signal 给 SDK，确保底层 HTTP 请求能被取消
+      // 参考: https://github.com/anthropics/anthropic-sdk-typescript
       let response: Awaited<ReturnType<typeof this.client.messages.create>> | undefined;
       let lastError: unknown;
 
@@ -714,7 +714,7 @@ export abstract class KodaXAnthropicCompatProvider extends KodaXBaseProvider {
           if (currentBlockType === 'thinking') {
             if (currentThinking) {
               thinkingBlocks.push({ type: 'thinking', thinking: currentThinking, signature: currentThinkingSignature });
-              // thinking block 缁撴潫鏃堕€氱煡 CLI 灞?
+              // thinking block 结束时通知 CLI 层
               streamOptions?.onThinkingEnd?.(currentThinking);
             }
           } else if (currentBlockType === 'redacted_thinking') {

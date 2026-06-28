@@ -1,7 +1,7 @@
 /**
  * KodaX Provider Registry
  *
- * Provider 娉ㄥ唽琛?- 缁熶竴绠＄悊鎵€鏈?Provider
+  * Provider 注册表 - 统一管理所有 Provider
  */
 
 import { KodaXBaseProvider } from './base.js';
@@ -387,7 +387,7 @@ export function resetBuiltinProviderCache(): void {
   builtinProviderCache.clear();
 }
 
-// 妫€鏌?Provider 鏄惁宸查厤缃?API Key
+// 检查 Provider 是否已配置 API Key
 export function isProviderConfigured(name: string): boolean {
   if (!isProviderName(name)) {
     return false;
@@ -395,7 +395,7 @@ export function isProviderConfigured(name: string): boolean {
   return !!process.env[KODAX_PROVIDER_SNAPSHOTS[name].apiKeyEnv];
 }
 
-// 鑾峰彇 Provider 浣跨敤鐨勬ā鍨嬪悕绉?
+// 获取 Provider 使用的模型名称
 export function getProviderModel(name: string): string | null {
   return isProviderName(name)
     ? KODAX_PROVIDER_SNAPSHOTS[name].model
@@ -463,7 +463,7 @@ export function getProviderList(): Array<{
   return result;
 }
 
-// 鑾峰彇鍐呯疆 Provider 鐨勫彲鐢ㄦā鍨嬪垪琛紙涓嶉渶瑕佸疄渚嬪寲 Provider锛屼笉渚濊禆 API Key锛?
+// 获取内置 Provider 的可用模型列表（不需要实例化 Provider，不依赖 API Key）
 export function getProviderModels(name: string): string[] {
   const snapshot = KODAX_PROVIDER_SNAPSHOTS[name as ProviderName];
   if (!snapshot) return [];

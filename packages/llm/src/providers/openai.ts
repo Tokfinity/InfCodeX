@@ -1,7 +1,7 @@
 /**
  * KodaX OpenAI Compatible Provider
  *
- * 鏀寔 OpenAI API 鏍煎紡鐨?Provider 鍩虹被
+ * 支持 OpenAI API 格式的 Provider 基类
  */
 
 import OpenAI from 'openai';
@@ -708,7 +708,7 @@ export abstract class KodaXOpenAICompatProvider extends KodaXBaseProvider {
       const forcedToolName = streamOptions?.forcedToolName;
       let shouldForceToolChoice = Boolean(forcedToolName);
 
-      // 妫€鏌ユ槸鍚﹀凡琚彇娑?
+      // 检查是否已被取消
       if (signal?.aborted) {
         throw new DOMException('Request aborted', 'AbortError');
       }
@@ -723,7 +723,7 @@ export abstract class KodaXOpenAICompatProvider extends KodaXBaseProvider {
       let finishReason: string | null = null;
       const streamStartTime = Date.now();
 
-      // 浼犻€?signal 缁?SDK锛岀‘淇濆簳灞?HTTP 璇锋眰鑳借鍙栨秷
+      // 传递 signal 给 SDK，确保底层 HTTP 请求能被取消
       const normalizedReasoning = this.normalizeReasoning(reasoning);
       const initialCapability =
         isReasoningEnabled(normalizedReasoning)

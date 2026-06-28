@@ -5,7 +5,7 @@
  */
 
 // ============== Import from @kodax-ai/agent ==============
-// 閫氱敤 Agent 绫诲瀷浠?@kodax-ai/agent 瀵煎叆
+// 通用 Agent 类型从 @kodax-ai/agent 导入
 
 // FEATURE_221: SDK consumers inject their own product manual topics.
 import type { KodaXManualTopicInput } from './self-knowledge/types.js';
@@ -439,8 +439,8 @@ export interface KodaXEvents {
   /** Returns a formatted cost report for the current session. Set by agent at session start. */
   getCostReport?: { current: (() => string) | null };
 
-  // 鐢ㄦ埛浜や簰锛堝彲閫夛紝鐢?REPL 灞傚疄鐜帮級
-  /** Tool execution hook - called before tool execution, return false to block - 宸ュ叿鎵ц鍓嶅洖璋?*/
+  // 用户交互（可选，由 REPL 层实现）
+  /** Tool execution hook - called before tool execution, return false to block - 工具执行前回调 */
   beforeToolExecute?: (
     tool: string,
     input: Record<string, unknown>,
@@ -1512,15 +1512,15 @@ export interface KodaXResult {
    * backward compatibility on code paths that have not yet been updated.
    */
   artifactLedger?: readonly KodaXSessionArtifactLedgerEntry[];
-  /** 鏄惁琚敤鎴蜂腑鏂?(Ctrl+C) */
+  /** 是否被用户中断 (Ctrl+C) */
   interrupted?: boolean;
   /** 是否达到迭代上限 */
   limitReached?: boolean;
-  /** Error metadata for recovery - 閿欒鍏冩暟鎹敤浜庢仮澶?*/
+  /** Error metadata for recovery - 错误元数据用于恢复 */
   errorMetadata?: SessionErrorMetadata;
 }
 
-// ============== 宸ュ叿鎵ц涓婁笅鏂?==============
+// ============== 工具执行上下文 ==============
 // Simplified - no permission checks in core
 
 // FEATURE_222 鈥?the user-interaction types now live at the agent layer so the
@@ -1680,7 +1680,7 @@ export interface KodaXToolExecutionContext {
    * tool-execution context so `dispatch_child_task` can forward them to the
    * child's `Runner.run` via `KodaXOptions.guardrails`. Sharing the SAME
    * guardrail instance means the auto-mode `engine` + `denialTracker` +
-   * `circuitBreaker` state is observed across the parent/child boundary 鈥?   * design doc "闃茬粫闃堝€? defense (a child can't escape the parent's
+   * `circuitBreaker` state is observed across the parent/child boundary —
    * rate-limit by hitting the threshold from a fresh tracker).
    *
    * Single-process / single-thread execution makes the shared mutable state

@@ -1,7 +1,8 @@
 /**
  * KodaX Core
  *
- * 鏋佽嚧杞婚噺鍖?Coding Agent Core 灞? * 鍙綔涓虹嫭绔嬪簱浣跨敤锛岄浂 UI 渚濊禆
+ * 极致轻量化 Coding Agent Core 层
+ * 可作为独立库使用，零 UI 依赖
  *
  * @example
  * ```typescript
@@ -16,7 +17,7 @@
  *     },
  *     events: {},
  *   },
- *   "鍒涘缓涓€涓?HTTP 鏈嶅姟鍣?
+  *   "创建一个 HTTP 服务器"
  * );
  * ```
  */

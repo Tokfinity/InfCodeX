@@ -299,8 +299,8 @@ function migrateAutoInProjectAliasInConfig<T extends { permissionMode?: string }
 // In standalone binary builds (Bun --compile), package.json is not on disk;
 // the build script injects `process.env.KODAX_VERSION` via --define so this
 // function returns the baked-in version without filesystem access.
-// 鍦?Bun 缂栬瘧鍚庣殑鍗曟枃浠跺垎鍙戦噷璇讳笉鍒?package.json锛岀敱 build 鑴氭湰閫氳繃 --define
-// 娉ㄥ叆 KODAX_VERSION锛岃繍琛屾椂浼樺厛杩斿洖璇ュ€笺€?
+// 在 Bun 编译后的单文件分发里读不到 package.json，由 build 脚本通过 --define
+// 注入 KODAX_VERSION，运行时优先返回该值。
 export function getVersion(): string {
   if (cachedVersion) {
     return cachedVersion;
@@ -846,7 +846,7 @@ export function getProviderList(providerModelsConfig?: Record<string, string[]>)
       capabilityProfile: provider.capabilityProfile,
     });
   }
-  // Append custom providers - 杩藉姞鑷畾涔?Provider
+  // Append custom providers - 追加自定义 Provider
   try {
     const customList = getCustomProviderList().map((provider) => ({
       ...provider,

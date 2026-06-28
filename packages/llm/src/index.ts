@@ -1,7 +1,7 @@
 /**
- * KodaX AI - 鐙珛鐨?LLM 鎶借薄灞?
+ * KodaX AI - 独立的 LLM 抽象层
  *
- * @description 鍙鍏朵粬椤圭洰澶嶇敤鐨?LLM Provider 鎶借薄灞?
+ * @description 可被其他项目复用的 LLM Provider 抽象层
  * @module @kodax-ai/llm
  */
 
