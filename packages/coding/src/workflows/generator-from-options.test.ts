@@ -37,13 +37,15 @@ describe('generateWorkflowFromOptions', () => {
       request: 'Create a workflow to review several modules and synthesize findings.',
       options: {
         provider: 'mock-provider',
+        model: 'base-model',
+        modelOverride: 'active-model',
         effort: 'high',
       },
     });
 
     expect(result.kind).toBe('generated');
     expect(llmMock.sideQuery).toHaveBeenCalledWith(expect.objectContaining({
-      model: 'mock-model',
+      model: 'active-model',
       querySource: 'workflow-generation',
       reasoning: { effort: 'high' },
     }));

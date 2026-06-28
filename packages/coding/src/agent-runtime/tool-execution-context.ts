@@ -108,7 +108,7 @@ export function buildToolExecutionContext(
     guardrails: options.guardrails,
     parentAgentConfig: {
       provider: options.provider,
-      model: options.model,
+      model: options.modelOverride ?? options.model,
       reasoningMode: options.reasoningMode,
       effort: options.effort,
       repoIntelligenceMode: options.context?.repoIntelligenceMode,

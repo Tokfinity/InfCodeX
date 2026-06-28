@@ -17,7 +17,7 @@
  * slot branches; the harness-LLM-judgment refactor then dropped the
  * dead-on-V2 H1→H2 upgrade-ceiling gate + H1 same-harness revise cap
  * (the Sidecar Verifier never carries `nextHarness`, and the V2 Worker
- * runs at `PLANNED`, never `H1_EXECUTE_EVAL`). Only the verdict-record +
+ * runs at `H0_DIRECT`, never `H1_EXECUTE_EVAL`). Only the verdict-record +
  * budget-dialog logic remains.
  */
 

@@ -45,6 +45,23 @@ describe('createBlobSummarizer', () => {
     expect(stream).toHaveBeenCalledTimes(1);
   });
 
+  it('uses the configured model override for the provider stream call', async () => {
+    const stream = vi.fn(async () => makeStreamResult('summary'));
+    const provider = { stream, name: 'mock' } as unknown as KodaXBaseProvider;
+
+    const summarize = createBlobSummarizer({ provider, model: 'selected-model' });
+    await summarize('content');
+
+    expect(stream).toHaveBeenCalledWith(
+      expect.any(Array),
+      [],
+      expect.any(String),
+      undefined,
+      expect.objectContaining({ modelOverride: 'selected-model' }),
+      expect.any(AbortSignal),
+    );
+  });
+
   it('propagates caller abort signal to the provider stream call mid-flight', async () => {
     // Mock provider hangs until the (forwarded) signal aborts, simulating
     // a long-running LLM call. This is the realistic shape: a caller mid-

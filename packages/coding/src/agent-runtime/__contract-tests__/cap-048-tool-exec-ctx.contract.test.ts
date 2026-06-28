@@ -72,6 +72,7 @@ describe('CAP-048: tool execution context construction contract', () => {
       options: {
         provider: 'anthropic',
         model: 'claude-sonnet-4-6',
+        modelOverride: 'claude-opus-4-8',
         effort: 'high',
         reasoningMode: 'deep',
         context: {
@@ -84,7 +85,7 @@ describe('CAP-048: tool execution context construction contract', () => {
     });
     expect(ctx.parentAgentConfig).toEqual({
       provider: 'anthropic',
-      model: 'claude-sonnet-4-6',
+      model: 'claude-opus-4-8',
       effort: 'high',
       reasoningMode: 'deep',
       repoIntelligenceMode: 'off',

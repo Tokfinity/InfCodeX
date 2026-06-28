@@ -24,6 +24,7 @@ class FakeSummaryProvider extends KodaXBaseProvider {
 
   public prompts: string[] = [];
   public systems: string[] = [];
+  public modelOverrides: Array<string | undefined> = [];
   public callCount = 0;
 
   constructor(
@@ -63,7 +64,7 @@ class FakeSummaryProvider extends KodaXBaseProvider {
     _tools: KodaXToolDefinition[],
     system: string,
     _thinking?: boolean,
-    _streamOptions?: KodaXProviderStreamOptions,
+    streamOptions?: KodaXProviderStreamOptions,
   ): Promise<KodaXStreamResult> {
     this.callCount += 1;
     if (this.failOnCall && this.callCount === this.failOnCall) {
@@ -73,6 +74,7 @@ class FakeSummaryProvider extends KodaXBaseProvider {
     const prompt = messages[0];
     this.prompts.push(typeof prompt?.content === 'string' ? prompt.content : JSON.stringify(prompt?.content));
     this.systems.push(system);
+    this.modelOverrides.push(streamOptions?.modelOverride);
 
     return {
       textBlocks: [{ type: 'text', text: this.summaryText }],
@@ -167,6 +169,33 @@ describe('compaction', () => {
       ...buildLongConversation(4, 220),
     ];
     expect(needsCompaction(largeGrowth, config, contextWindow)).toBe(true);
+  });
+
+  it('passes the active model override to summary generation', async () => {
+    const provider = new FakeSummaryProvider();
+    const contextWindow = 4000;
+    const config = {
+      enabled: true,
+      triggerPercent: 60,
+      protectionPercent: 20,
+      rollingSummaryPercent: 10,
+      pruningThresholdTokens: 500,
+    };
+
+    await compact(
+      buildLongConversation(10, 220),
+      config,
+      provider,
+      contextWindow,
+      undefined,
+      undefined,
+      undefined,
+      undefined,
+      undefined,
+      'active-model',
+    );
+
+    expect(provider.modelOverrides).toContain('active-model');
   });
 
   it('prunes older tool results while keeping recent tool context and normal messages', async () => {

@@ -143,6 +143,7 @@ describe('B-R1 byte-equivalence — runtime routing', () => {
       compactConsecutiveFailures: 0,
       compactionConfig: compactionConfig(),
       provider: new StubProvider(),
+      model: 'active-model',
       contextWindow: 10_000,
       systemPrompt: 'sys',
       currentTokens: 9_000,
@@ -152,9 +153,11 @@ describe('B-R1 byte-equivalence — runtime routing', () => {
     expect(compactMock).toHaveBeenCalledTimes(1);
     const args = compactMock.mock.calls[0];
     // compact(messages, config, provider, contextWindow, customInstructions,
-    //         systemPrompt, tokenCountOverride, summaryPrompt, updateSummaryPrompt)
+    //         systemPrompt, tokenCountOverride, summaryPrompt,
+    //         updateSummaryPrompt, modelOverride)
     expect(args[7]).toBe(CODING_SUMMARY_PROMPT);
     expect(args[8]).toBe(CODING_UPDATE_SUMMARY_PROMPT);
+    expect(args[9]).toBe('active-model');
   });
 });
 

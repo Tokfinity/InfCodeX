@@ -32,6 +32,7 @@ import {
   buildRunnerLlmAdapter,
   isRunnerDrivenRuntimeEnabled,
   runManagedTaskViaRunner,
+  __runnerDrivenTestables,
 } from './runner-driven.js';
 import { createTodoStore } from './todo-store.js';
 import {
@@ -128,6 +129,24 @@ describe('isRunnerDrivenRuntimeEnabled', () => {
     expect(isRunnerDrivenRuntimeEnabled()).toBe(false);
     process.env[envKey] = '1';
     expect(isRunnerDrivenRuntimeEnabled()).toBe(false);
+  });
+});
+
+describe('resolveInitialRuntimeThinkingLevel', () => {
+  it('maps legacy reasoningMode to effort and lets explicit effort win', () => {
+    expect(__runnerDrivenTestables.resolveInitialRuntimeThinkingLevel({
+      reasoningMode: 'balanced',
+    } as KodaXOptions)).toBe('medium');
+    expect(__runnerDrivenTestables.resolveInitialRuntimeThinkingLevel({
+      reasoningMode: 'deep',
+    } as KodaXOptions)).toBe('high');
+    expect(__runnerDrivenTestables.resolveInitialRuntimeThinkingLevel({
+      reasoningMode: 'off',
+    } as KodaXOptions)).toBe('none');
+    expect(__runnerDrivenTestables.resolveInitialRuntimeThinkingLevel({
+      effort: 'high',
+      reasoningMode: 'off',
+    } as KodaXOptions)).toBe('high');
   });
 });
 

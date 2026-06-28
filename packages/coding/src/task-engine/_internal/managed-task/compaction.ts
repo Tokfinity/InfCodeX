@@ -273,6 +273,7 @@ export async function buildManagedTaskCompactionHook(
           currentTokens,
           CODING_SUMMARY_PROMPT,
           CODING_UPDATE_SUMMARY_PROMPT,
+          activeModel,
         );
         tokensBeforeForEvent = result.tokensBefore;
 

@@ -380,6 +380,7 @@ export const BUILTIN_COMMANDS: Command[] = [
             currentTokens,
             CODING_SUMMARY_PROMPT,
             CODING_UPDATE_SUMMARY_PROMPT,
+            currentConfig.model,
           );
 
           if (!result.compacted) {

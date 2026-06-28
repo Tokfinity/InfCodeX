@@ -222,6 +222,8 @@ describe('runWorkflowModule', () => {
     };
     const options: KodaXOptions = {
       provider: 'anthropic',
+      model: 'claude-sonnet-4-6',
+      modelOverride: 'claude-opus-4-8',
       effort: 'high',
       guardrails: [guardrail],
       context: {
@@ -243,6 +245,7 @@ describe('runWorkflowModule', () => {
     expect(childExecutorMock.calls).toHaveLength(1);
     expect(childExecutorMock.calls[0]?.options.guardrails).toBe(options.guardrails);
     expect(childExecutorMock.calls[0]?.options.planModeBlockCheck).toBe(planModeBlockCheck);
+    expect(childExecutorMock.calls[0]?.options.parentOptions?.model).toBe('claude-opus-4-8');
     expect(childExecutorMock.calls[0]?.options.parentOptions?.effort).toBe('high');
     expect(childExecutorMock.calls[0]?.options.parentOptions?.repoIntelligenceMode).toBe('off');
     expect(childExecutorMock.calls[0]?.options.parentOptions?.repoIntelligenceTrace).toBe(true);

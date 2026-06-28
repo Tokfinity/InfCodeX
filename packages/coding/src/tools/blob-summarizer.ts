@@ -171,6 +171,13 @@ export function createBlobSummarizer(
           },
         }
       : undefined;
+    const effectiveStreamOptions: KodaXProviderStreamOptions | undefined =
+      streamOptions || opts.model
+        ? {
+            ...(streamOptions ?? {}),
+            ...(opts.model ? { modelOverride: opts.model } : {}),
+          }
+        : undefined;
 
     try {
       const result = await opts.provider.stream(
@@ -178,7 +185,7 @@ export function createBlobSummarizer(
         [],
         SUMMARIZER_SYSTEM_PROMPT,
         undefined,
-        streamOptions,
+        effectiveStreamOptions,
         combinedSignal,
       );
       const text = (result.textBlocks as readonly KodaXTextBlock[])

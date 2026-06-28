@@ -73,6 +73,7 @@ export interface TryIntelligentCompactInput {
   readonly compactConsecutiveFailures: number;
   readonly compactionConfig: CompactionConfig;
   readonly provider: KodaXBaseProvider;
+  readonly model?: string;
   readonly contextWindow: number;
   readonly systemPrompt: string;
   readonly currentTokens: number;
@@ -127,6 +128,7 @@ export async function tryIntelligentCompact(
       input.currentTokens,
       CODING_SUMMARY_PROMPT,
       CODING_UPDATE_SUMMARY_PROMPT,
+      input.model,
     );
 
     if (result.compacted) {
@@ -327,6 +329,7 @@ export interface CompactionLifecycleInput {
   readonly compactConsecutiveFailures: number;
   readonly compactionConfig: CompactionConfig;
   readonly provider: KodaXBaseProvider;
+  readonly model?: string;
   readonly contextWindow: number;
   readonly systemPrompt: string;
   readonly currentTokens: number;
@@ -364,6 +367,7 @@ export async function runCompactionLifecycle(
     compactConsecutiveFailures: input.compactConsecutiveFailures,
     compactionConfig: input.compactionConfig,
     provider: input.provider,
+    model: input.model,
     contextWindow: input.contextWindow,
     systemPrompt: input.systemPrompt,
     currentTokens: input.currentTokens,

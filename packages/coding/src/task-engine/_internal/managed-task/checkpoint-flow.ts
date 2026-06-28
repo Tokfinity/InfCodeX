@@ -1,7 +1,7 @@
 /**
  * Pre-run checkpoint flow + structural resume seed + per-role checkpoint
  * writer — FEATURE_171 v0.7.41 split extracted verbatim from
- * `task-engine/runner-driven.ts` (Shard 6c + H1 structural resume).
+ * `task-engine/runner-driven.ts` (Shard 6c + structural resume).
  * No behavior change.
  *
  * Public surface:
@@ -11,8 +11,8 @@
  *   - `buildResumePreamble(checkpoint)` — reconstruct a human-readable
  *     preamble from a validated checkpoint so the resumed run sees prior
  *     Scout findings, contract, and last verdict in plain text.
- *   - `buildStructuralResumeSeed(validated)` — H1 structural resume seed
- *     (recorder slots + harness + roles emitted + entry agent).
+ *   - `buildStructuralResumeSeed(validated)` — resume marker for the
+ *     runner. Harness-tier replay is retired; it always reports H0_DIRECT.
  *   - `writeCurrentCheckpoint(args)` — crash-safe per-role checkpoint
  *     writer; best-effort, returns the workspaceDir or `undefined`.
  *
@@ -45,7 +45,7 @@ import {
 } from './workspace.js';
 
 /**
- * Shard 6c + H1 structural resume (v0.7.26).
+ * Shard 6c + structural resume (v0.7.26).
  *
  * Legacy behaviour (task-engine.ts:~6644 + `resumeManagedTask`): ask the
  * user whether to continue or restart, then either replay the partial
@@ -146,7 +146,6 @@ export function buildResumePreamble(checkpoint: ValidatedCheckpoint): string {
     '=== RESUMING INCOMPLETE TASK ===',
     `Checkpoint from: ${checkpoint.checkpoint.createdAt}`,
     `Original objective: ${task.contract.objective}`,
-    `Harness: ${task.contract.harnessProfile}`,
     `Roles already executed: ${checkpoint.checkpoint.completedWorkerIds.join(', ') || 'none'}`,
   ];
   // FEATURE_193 (v0.7.43) deep V1 cleanup: the "Scout findings" preamble
@@ -180,9 +179,9 @@ export function buildResumePreamble(checkpoint: ValidatedCheckpoint): string {
 }
 
 /**
- * Structural resume seed — reconstruct the carry-forward state (harness
- * tier + completed-roles list) from a validated checkpoint so the
- * resumed run starts at the right Worker tier with the right budget cap.
+ * Structural resume seed — reconstruct the carry-forward marker from a
+ * validated checkpoint. Harness-tier replay is retired; V2 resumes always
+ * run through the same Worker path and budget cap.
  *
  * FEATURE_193 (v0.7.43): V1 `recorderSlots.scout` / `recorderSlots.contract`
  * population removed alongside the retired Scout/Planner roles. The
@@ -206,13 +205,11 @@ export interface StructuralResumeSeed {
   readonly rolesEmitted: readonly KodaXTaskRole[];
 }
 
-export function buildStructuralResumeSeed(validated: ValidatedCheckpoint): StructuralResumeSeed {
-  const task = validated.managedTask;
-  const harness: KodaXHarnessProfile = task.contract.harnessProfile ?? 'H0_DIRECT';
+export function buildStructuralResumeSeed(_validated: ValidatedCheckpoint): StructuralResumeSeed {
   const rolesEmitted: KodaXTaskRole[] = [];
   // FEATURE_193 (v0.7.43): no recorder slots populated on V2. The
   // empty Record literal carries the structural intent.
-  return { recorderSlots: {}, harness, rolesEmitted };
+  return { recorderSlots: {}, harness: 'H0_DIRECT', rolesEmitted };
 }
 
 /**

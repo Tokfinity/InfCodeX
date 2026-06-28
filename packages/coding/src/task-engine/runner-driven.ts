@@ -28,6 +28,7 @@
  */
 
 import type { KodaXMessage, KodaXToolResultContentItem } from '@kodax-ai/llm';
+import { mapLegacyReasoningModeToEffortIntent } from '@kodax-ai/llm';
 import type {
   Agent,
   QueuedInputArtifact,
@@ -373,6 +374,15 @@ function attachTodoDriftWarnings(
   };
 }
 
+function resolveInitialRuntimeThinkingLevel(
+  options: KodaXOptions,
+): KodaXOptions['effort'] {
+  if (options.effort) return options.effort;
+  if (!options.reasoningMode) return undefined;
+  const mapped = mapLegacyReasoningModeToEffortIntent(options.reasoningMode) as KodaXOptions['effort'] | undefined;
+  return mapped ?? options.reasoningMode;
+}
+
 // =============================================================================
 // Role instructions — moved to `./_internal/managed-task/role-prompts.ts`
 // (FEATURE_171 v0.7.41 split). FEATURE_193 (v0.7.43) retired four of the
@@ -468,6 +478,7 @@ function attachTodoDriftWarnings(
 export const __runnerDrivenTestables = {
   wrapEmitterWithRecorder,
   buildStructuralResumeSeed,
+  resolveInitialRuntimeThinkingLevel,
 } as const;
 
 export async function runManagedTaskViaRunner(
@@ -816,24 +827,10 @@ async function runManagedTaskViaRunnerInner(
     configurable: true,
   });
 
-  // Budget controller. Start with H0 cap (50); `wrapEmitterWithRecorder`
-  // upgrades the cap when Scout confirms a non-H0 tier. Mirrors the
-  // legacy `createManagedBudgetController` + Scout-commit bump pattern.
-  //
-  // H1 structural resume: when a checkpoint seeded a non-H0 harness,
-  // start the budget at the saved tier's cap. Spent is reset — the LLM
-  // enters a fresh turn on resume, so prior spend shouldn't eat into the
-  // new run's envelope (same contract as legacy resumeManagedTask:
-  // `createManagedBudgetController` always started at 0).
-  // FEATURE_114 v0.7.36 + v0.7.39 fix — V2 Worker has no analogue of
-  // FEATURE_193 v0.7.43: V1 chain retired — always start fresh V2 runs at
-  // PLANNED. Resume seeds still override `currentHarness` (it labels status
-  // events + flows to `contract.harnessProfile`), but budget/rounds no longer
-  // branch on it: reasoning single-tracking collapsed the per-harness budget
-  // tiers to single constants (see `MANAGED_WORK_BUDGET_CAP`). Every run —
-  // fresh or resume — gets the same 200-unit cap / 8-round display.
-  const initialHarness: KodaXHarnessProfile =
-    structuralResumeSeed?.harness ?? 'PLANNED';
+  // Budget controller. ADR-043 collapsed harness-tier routing to H0_DIRECT.
+  // The field remains for SDK/checkpoint/status compatibility, but live
+  // execution no longer replays PLANNED/H1/H2 tiers from old checkpoints.
+  const initialHarness: KodaXHarnessProfile = 'H0_DIRECT';
   const budget: ManagedTaskBudgetController = {
     totalBudget: MANAGED_WORK_BUDGET_CAP,
     spentBudget: 0,
@@ -1297,7 +1294,7 @@ async function runManagedTaskViaRunnerInner(
       provider: options.provider,
       model: options.modelOverride ?? options.model,
     },
-    thinkingLevel: options.reasoningMode,
+    thinkingLevel: resolveInitialRuntimeThinkingLevel(options),
   });
   const userMessageContent = buildPromptMessageContent(
     promptWithOverlay,

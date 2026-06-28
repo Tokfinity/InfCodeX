@@ -24,13 +24,14 @@ class RecordingSummaryProvider extends KodaXBaseProvider {
 
   public prompts: string[] = [];
   public systems: string[] = [];
+  public modelOverrides: Array<string | undefined> = [];
 
   async stream(
     messages: KodaXMessage[],
     _tools: KodaXToolDefinition[],
     system: string,
     _thinking?: boolean,
-    _streamOptions?: KodaXProviderStreamOptions,
+    streamOptions?: KodaXProviderStreamOptions,
   ): Promise<KodaXStreamResult> {
     const prompt = messages[0];
     this.prompts.push(
@@ -39,6 +40,7 @@ class RecordingSummaryProvider extends KodaXBaseProvider {
         : JSON.stringify(prompt?.content),
     );
     this.systems.push(system);
+    this.modelOverrides.push(streamOptions?.modelOverride);
 
     return {
       textBlocks: [{ type: 'text', text: '## Goal\nContinue safely.' }],
@@ -137,6 +139,24 @@ describe('buildCompactionPromptSnapshot', () => {
 
     expect(provider.systems[0]).toBe(snapshot.systemPrompt);
     expect(provider.prompts[0]).toBe(snapshot.userPrompt);
+  });
+
+  it('generateSummary forwards the active model override', async () => {
+    const provider = new RecordingSummaryProvider();
+
+    await generateSummary(
+      [{ role: 'user', content: 'continue the work' }],
+      provider,
+      { readFiles: [], modifiedFiles: [] },
+      undefined,
+      undefined,
+      undefined,
+      undefined,
+      undefined,
+      'active-model',
+    );
+
+    expect(provider.modelOverrides[0]).toBe('active-model');
   });
 
   it('generateSummary throws when the provider returns no usable text', async () => {

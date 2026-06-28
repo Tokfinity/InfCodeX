@@ -397,6 +397,7 @@ export async function generateSummary(
   previousSummary?: string,
   summaryPrompt?: string,
   updateSummaryPrompt?: string,
+  modelOverride?: string,
 ): Promise<string> {
   const promptSnapshot = buildCompactionPromptSnapshot({
     messages,
@@ -413,7 +414,7 @@ export async function generateSummary(
     [],
     promptSnapshot.systemPrompt,
     false,
-    undefined,
+    modelOverride ? { modelOverride } : undefined,
     undefined
   );
 

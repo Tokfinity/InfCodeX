@@ -355,7 +355,7 @@ export async function runWorkflowFromOptions(
     parentHarness: 'tool-dispatch',
     parentOptions: {
       provider: input.options.provider,
-      model: input.options.model,
+      model: input.options.modelOverride ?? input.options.model,
       effort: input.options.effort,
       reasoningMode: input.options.reasoningMode,
       repoIntelligenceMode: input.options.context?.repoIntelligenceMode,

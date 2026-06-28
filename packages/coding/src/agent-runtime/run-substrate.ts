@@ -26,6 +26,7 @@ import {
   recordRetry,
   getSummary,
   formatCostReport,
+  mapLegacyReasoningModeToEffortIntent,
   type CostTracker,
 } from '@kodax-ai/llm';
 import path from 'path';
@@ -343,6 +344,14 @@ import {
 // FEATURE_100 P3.3d. Imported above for the dispatch loop's two-step
 // invocation inside `runKodaX`.
 
+function legacyReasoningModeToRuntimeEffort(
+  mode: KodaXReasoningMode | undefined,
+): KodaXOptions['effort'] {
+  if (!mode) return undefined;
+  const mapped = mapLegacyReasoningModeToEffortIntent(mode) as KodaXOptions['effort'] | undefined;
+  return mapped ?? mode;
+}
+
 /**
  * Substrate executor body — the full SA execution pipeline (provider
  * resolution, tool loop, microcompact, edit recovery, extension queue,
@@ -502,7 +511,7 @@ export async function runSubstrate(
       runtimeSessionState.modelSelection.model = model;
     },
     setReasoning: (mode) => {
-      runtimeSessionState.thinkingLevel = mode;
+      runtimeSessionState.thinkingLevel = legacyReasoningModeToRuntimeEffort(mode);
     },
   });
   const releaseRuntimeBindingCandidate = runtime?.bindController?.(
@@ -664,6 +673,7 @@ export async function runSubstrate(
         compactConsecutiveFailures: turnState.compactConsecutiveFailures,
         compactionConfig,
         provider,
+        model: turnState.currentModelOverride,
         contextWindow,
         systemPrompt: currentExecution.systemPrompt,
         currentTokens,

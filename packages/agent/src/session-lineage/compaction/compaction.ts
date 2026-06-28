@@ -221,6 +221,7 @@ export async function compact(
   tokenCountOverride?: number,
   summaryPrompt?: string,
   updateSummaryPrompt?: string,
+  modelOverride?: string,
 ): Promise<CompactionResult> {
   const tokensBefore = tokenCountOverride ?? estimateTokens(messages);
 
@@ -361,6 +362,7 @@ export async function compact(
       summary,
       summaryPrompt,
       updateSummaryPrompt,
+      modelOverride,
     );
 
     if (summaryAttempt.summarizedMessages === 0) {
@@ -445,6 +447,7 @@ async function summarizeMessages(
   previousSummary: string,
   summaryPrompt: string | undefined,
   updateSummaryPrompt: string | undefined,
+  modelOverride: string | undefined,
 ): Promise<SummaryAttemptResult> {
   let summary = previousSummary;
   let summarizedMessages = 0;
@@ -464,6 +467,7 @@ async function summarizeMessages(
         summary || undefined,
         summaryPrompt,
         updateSummaryPrompt,
+        modelOverride,
       );
       summarizedMessages += chunk.length;
     } catch (error) {
