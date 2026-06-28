@@ -169,6 +169,35 @@ describe('FEATURE_119 Pattern B — async dispatch', () => {
     expect(mockExec).toHaveBeenCalledTimes(1);
   });
 
+  it('generates unique ids for same-millisecond auto dispatches', async () => {
+    const nowSpy = vi.spyOn(Date, 'now').mockReturnValue(1_234_567_890);
+    mockExec.mockReturnValue(new Promise(() => {})); // never resolves
+    const registry = new Map<string, Promise<KodaXChildExecutionResult>>();
+    const ctx = buildBaseCtx(registry);
+
+    try {
+      const first = await drainGeneratorReturn(
+        toolDispatchChildTask({ objective: 'a' }, ctx),
+      );
+      const second = await drainGeneratorReturn(
+        toolDispatchChildTask({ objective: 'b' }, ctx),
+      );
+
+      const firstId = first.match(/task_id:([^\s]+)/)?.[1];
+      const secondId = second.match(/task_id:([^\s]+)/)?.[1];
+      expect(firstId).toMatch(/^child-/);
+      expect(secondId).toMatch(/^child-/);
+      expect(firstId).not.toBe(secondId);
+      expect(first).not.toContain('already in flight');
+      expect(second).not.toContain('already in flight');
+      expect(registry.has(firstId ?? '')).toBe(true);
+      expect(registry.has(secondId ?? '')).toBe(true);
+      expect(mockExec).toHaveBeenCalledTimes(2);
+    } finally {
+      nowSpy.mockRestore();
+    }
+  });
+
   it('background notification is enqueued on child completion', async () => {
     mockExec.mockResolvedValue(buildSuccessResult('c3', ['done']));
     const registry = new Map<string, Promise<KodaXChildExecutionResult>>();

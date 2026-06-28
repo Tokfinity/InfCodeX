@@ -73,6 +73,15 @@ const DEFAULT_MAX_ITERATIONS_PER_CHILD = 200;
 // dispatch path now uses `applyToolResultGuardrail('child_task_summary', ...)`
 // (50KB threshold + spill-to-file) for parity with the async/envelope path.
 const TOOL_NAME = 'dispatch_child_task';
+let generatedChildTaskIdCounter = 0;
+
+function createGeneratedChildTaskId(): string {
+  generatedChildTaskIdCounter =
+    generatedChildTaskIdCounter >= Number.MAX_SAFE_INTEGER
+      ? 1
+      : generatedChildTaskIdCounter + 1;
+  return `child-${Date.now().toString(36)}-${generatedChildTaskIdCounter.toString(36)}`;
+}
 
 /**
  * FEATURE_121 v0.7.40 follow-up — child-task summary guardrail with
@@ -387,7 +396,7 @@ export async function* toolDispatchChildTask(
   // --- Validate input ---
   const id = typeof input.id === 'string' ? input.id.trim() : '';
   const objective = typeof input.objective === 'string' ? input.objective.trim() : '';
-  const childId = id || `child-${Date.now()}`;
+  const childId = id || createGeneratedChildTaskId();
 
   if (!objective) {
     yield { stage: 'error', message: `Child "${childId}": missing objective` };
