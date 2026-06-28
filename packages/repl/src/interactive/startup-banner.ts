@@ -1,5 +1,5 @@
 /**
- * FEATURE_200 Phase E (v0.7.45) �?startup banner + workspace-entry notice
+ * FEATURE_200 Phase E (v0.7.45) — startup banner + workspace-entry notice
  * extracted from repl.ts. Self-contained (params + module imports only).
  */
 import chalk from 'chalk';
@@ -39,12 +39,14 @@ export function printStartupBanner(config: CurrentConfig, mode: string, compacti
   });
   // KODAX block character logo - KODAX 方块字符 logo
   const logo = `
-  ██�? ██�? ██████�? ██████�?   █████╗   ██�? ██�?  ██�?██╔╝ ██╔═══██�?██╔══██╗  ██╔══██╗  ╚██╗██╔╝
-  █████╔�? ██�?  ██�?██�? ██�? ███████║   ╚███╔╝
-  ██╔═██�? ██�?  ██�?██�? ██�? ██╔══██║   ██╔██╗
-  ██�? ██�?╚██████╔�?██████╔╝  ██�? ██�? ██╔╝ ██�?  ╚═�? ╚═�? ╚═════�? ╚═════�?  ╚═�? ╚═�? ╚═�? ╚═╝`;
+  ██╗  ██╗  ██████╗  ██████╗    █████╗   ██╗  ██╗
+  ██║ ██╔╝ ██╔═══██╗ ██╔══██╗  ██╔══██╗  ╚██╗██╔╝
+  █████╔╝  ██║   ██║ ██║  ██║  ███████║   ╚███╔╝
+  ██╔═██╗  ██║   ██║ ██║  ██║  ██╔══██║   ██╔██╗
+  ██║  ██╗ ╚██████╔╝ ██████╔╝  ██║  ██║  ██╔╝ ██╗
+  ╚═╝  ╚═╝  ╚═════╝  ╚═════╝   ╚═╝  ╚═╝  ╚═╝  ╚═╝`;
 
-  const bar = (color: string): string => chalk.hex(color)('  �?');
+  const bar = (color: string): string => chalk.hex(color)('  ▎ ');
   const dot = chalk.hex(theme.colors.dim)('  ·  ');
 
   console.log(chalk.hex(theme.colors.primary)('\n' + logo));
@@ -73,7 +75,7 @@ export function printStartupBanner(config: CurrentConfig, mode: string, compacti
 
   // Show AGENTS.md loading status
   if (agentsFiles) {
-    console.log(bar(theme.colors.secondary) + chalk.hex(theme.colors.secondary)(`${agentsFiles.length} project rule file(s) loaded �?`) + chalk.hex(theme.colors.dim)('/reload to refresh'));
+    console.log(bar(theme.colors.secondary) + chalk.hex(theme.colors.secondary)(`${agentsFiles.length} project rule file(s) loaded — `) + chalk.hex(theme.colors.dim)('/reload to refresh'));
   }
 
   console.log('');
