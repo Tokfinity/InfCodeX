@@ -516,6 +516,8 @@ async function captureFullPreturnValue<T>(
   } catch (error) {
     warnings.push(`${label} unavailable`);
     debugLogRepoIntelligence(`Full repo-intelligence ${label} unavailable.`, error);
+    // TEMP-CI-DIAG: surface the real worker error on CI (revert after diagnosis).
+    console.error(`[CI-DIAG] full ${label} failed:`, error instanceof Error ? (error.stack ?? error.message) : error);
     return undefined;
   }
 }
