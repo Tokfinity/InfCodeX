@@ -139,6 +139,36 @@ describe('CAP-095: child-executor SA invocation contract', () => {
     );
   });
 
+  it('CAP-CHILD-EXEC-001b: executeReadChild inherits parent repo-intelligence mode and trace', async () => {
+    mockRunKodaX.mockResolvedValueOnce({
+      success: true,
+      lastText: 'read finding',
+      messages: [{ role: 'assistant', content: 'read finding' }],
+      sessionId: 's-ri',
+    });
+
+    await executeChildAgents(
+      [createBundle({ id: 'cb-ri', readOnly: true, objective: 'investigate auth' })],
+      createCtx(),
+      {
+        maxParallel: 1,
+        maxIterationsPerChild: 5,
+        parentOptions: {
+          provider: 'anthropic',
+          repoIntelligenceMode: 'off',
+          repoIntelligenceTrace: true,
+        },
+        parentRole: 'worker',
+        parentHarness: 'tool-dispatch',
+      },
+    );
+
+    expect(mockRunKodaX).toHaveBeenCalledTimes(1);
+    const [opts] = mockRunKodaX.mock.calls[0]!;
+    expect(opts.context?.repoIntelligenceMode).toBe('off');
+    expect(opts.context?.repoIntelligenceTrace).toBe(true);
+  });
+
   it('CAP-CHILD-EXEC-002: executeWriteChild inherits parent executionCwd / gitRoot and gets a fresh backups Map (FEATURE_188 v0.7.42, ADR-034 — forced worktree dropped)', async () => {
     mockRunKodaX.mockResolvedValueOnce({
       success: true,
@@ -153,7 +183,11 @@ describe('CAP-095: child-executor SA invocation contract', () => {
       {
         maxParallel: 1,
         maxIterationsPerChild: 5,
-        parentOptions: { provider: 'anthropic' },
+        parentOptions: {
+          provider: 'anthropic',
+          repoIntelligenceMode: 'off',
+          repoIntelligenceTrace: true,
+        },
         // Only Worker + tool-dispatch harness may emit write fan-out.
         parentRole: 'worker',
         parentHarness: 'tool-dispatch',
@@ -165,6 +199,8 @@ describe('CAP-095: child-executor SA invocation contract', () => {
     // Child shares parent executionCwd / gitRoot (no worktree).
     expect(opts.context?.executionCwd).toBe('/parent/repo');
     expect(opts.context?.gitRoot).toBe('/parent/repo');
+    expect(opts.context?.repoIntelligenceMode).toBe('off');
+    expect(opts.context?.repoIntelligenceTrace).toBe(true);
     // Write children keep write/edit tools (NOT in excludeTools)
     const excluded = opts.context?.excludeTools as readonly string[];
     expect(excluded).not.toContain('write');

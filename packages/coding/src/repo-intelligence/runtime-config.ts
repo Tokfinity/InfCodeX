@@ -2,6 +2,11 @@ import type {
   KodaXRepoIntelligenceMode,
   KodaXRepoIntelligenceResolvedMode,
 } from '../types.js';
+import fs from 'node:fs/promises';
+import path from 'node:path';
+import { resolveRepoIntelligenceStorageDir } from './internal.js';
+import { DEFAULT_REPO_INTELLIGENCE_DIR } from './semantic-shared.js';
+import { getRepoIntelligenceWorkerPathForDiagnostics } from './semantic-worker-client.js';
 
 export interface RepoIntelligenceRuntimeInspection {
   configuredMode: KodaXRepoIntelligenceMode;
@@ -12,6 +17,8 @@ export interface RepoIntelligenceRuntimeInspection {
   fallbackToLight: boolean;
   warnings: string[];
   error?: string;
+  workerPath?: string;
+  storageRoot?: string;
 }
 
 export interface RepoIntelligenceRuntimeConfig {
@@ -56,6 +63,18 @@ function legacyBridgeWarnings(): string[] {
   return warnings;
 }
 
+async function resolveProbeWorkspaceRoot(workspaceRoot: string | undefined): Promise<string> {
+  if (!workspaceRoot) return process.cwd();
+  try {
+    const stat = await fs.stat(workspaceRoot);
+    if (stat.isDirectory()) return workspaceRoot;
+  } catch {
+    // A stale/fake workspace path should not make a status probe create
+    // directories outside the active process tree.
+  }
+  return process.cwd();
+}
+
 export function resolveRepoIntelligenceRuntimeConfig(
   modeOverride?: KodaXRepoIntelligenceMode,
   traceOverride?: boolean,
@@ -90,11 +109,13 @@ export async function inspectRepoIntelligenceRuntime(
   options: {
     mode?: KodaXRepoIntelligenceMode;
     trace?: boolean;
+    probe?: boolean;
+    workspaceRoot?: string;
   } = {},
 ): Promise<RepoIntelligenceRuntimeInspection> {
   const config = resolveRepoIntelligenceRuntimeConfig(options.mode, options.trace);
   const requestedMode = resolveRepoIntelligenceMode(config.mode);
-  return {
+  const inspection: RepoIntelligenceRuntimeInspection = {
     configuredMode: config.mode,
     requestedMode,
     traceEnabled: config.trace,
@@ -103,4 +124,40 @@ export async function inspectRepoIntelligenceRuntime(
     fallbackToLight: false,
     warnings: config.warnings,
   };
+  if (requestedMode === 'off' || options.probe !== true) {
+    return inspection;
+  }
+
+  const workerPath = getRepoIntelligenceWorkerPathForDiagnostics();
+  inspection.workerPath = workerPath;
+  try {
+    await fs.access(workerPath);
+  } catch (error) {
+    inspection.status = 'unavailable';
+    inspection.error = error instanceof Error ? error.message : String(error);
+    inspection.warnings.push(`Repo intelligence worker sidecar is not readable: ${workerPath}`);
+    return inspection;
+  }
+
+  const configuredDir = resolveRepoIntelligenceStorageDir(DEFAULT_REPO_INTELLIGENCE_DIR);
+  const workspaceRoot = await resolveProbeWorkspaceRoot(options.workspaceRoot);
+  const storageRoot = path.isAbsolute(configuredDir)
+    ? configuredDir
+    : path.join(workspaceRoot, configuredDir);
+  inspection.storageRoot = storageRoot;
+  const probePath = path.join(
+    storageRoot,
+    `.repo-intelligence-status-${process.pid}-${Date.now()}.tmp`,
+  );
+  try {
+    await fs.mkdir(storageRoot, { recursive: true });
+    await fs.writeFile(probePath, 'ok', 'utf8');
+  } catch (error) {
+    inspection.status = 'limited';
+    inspection.error = error instanceof Error ? error.message : String(error);
+    inspection.warnings.push(`Repo intelligence cache directory is not writable: ${storageRoot}`);
+  } finally {
+    await fs.rm(probePath, { force: true }).catch(() => undefined);
+  }
+  return inspection;
 }

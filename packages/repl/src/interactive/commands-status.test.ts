@@ -94,4 +94,29 @@ describe('status workspace output', () => {
     expect(output).toContain('/repo-intel status');
     expect(output).not.toContain('warmed successfully');
   });
+
+  it('keeps deprecated /repointel mode and trace from mutating runtime config', async () => {
+    const logSpy = vi.spyOn(console, 'log').mockImplementation(() => {});
+    const saveConfig = vi.fn();
+    const repointelCommand = BUILTIN_COMMANDS.find((command) => command.name === 'repointel');
+
+    expect(repointelCommand).toBeDefined();
+    await repointelCommand!.handler(
+      ['mode', 'off'],
+      context,
+      { saveConfig } as unknown as CommandCallbacks,
+      { ...currentConfig, repoIntelligenceMode: 'full', repoIntelligenceTrace: false },
+    );
+    await repointelCommand!.handler(
+      ['trace', 'on'],
+      context,
+      { saveConfig } as unknown as CommandCallbacks,
+      { ...currentConfig, repoIntelligenceMode: 'full', repoIntelligenceTrace: false },
+    );
+
+    const output = logSpy.mock.calls.flat().join('\n');
+    expect(saveConfig).not.toHaveBeenCalled();
+    expect(output).toContain('Use /repo-intel mode');
+    expect(output).toContain('Use /repo-intel trace');
+  });
 });

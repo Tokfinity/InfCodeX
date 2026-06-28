@@ -357,6 +357,8 @@ export async function runWorkflowFromOptions(
       provider: input.options.provider,
       model: input.options.model,
       reasoningMode: input.options.reasoningMode,
+      repoIntelligenceMode: input.options.context?.repoIntelligenceMode,
+      repoIntelligenceTrace: input.options.context?.repoIntelligenceTrace,
       extensionRuntime: input.options.extensionRuntime,
       events: input.options.events,
     },

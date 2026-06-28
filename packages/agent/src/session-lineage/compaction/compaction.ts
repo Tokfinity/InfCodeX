@@ -30,9 +30,9 @@ const STRUCTURED_PRUNE_PROTECT_TOKENS = 40000;
  * reconstruct.
  *
  * **Design**: flip from blacklist to whitelist semantics implicitly by listing
- * everything *worth keeping*. The 12 tools still missing here are the
+ * everything *worth keeping*. The tools still missing here are the
  * "exploration / execution" set (read, edit, write, multi_edit,
- * insert_after_anchor, bash, glob, grep, code_search, semantic_lookup,
+ * insert_after_anchor, bash, glob, grep, code_search,
  * web_search, web_fetch) — high-frequency, large-result, low-density-of-decision
  * tools where pruning to a preview is the right call.
  *
@@ -42,7 +42,7 @@ const STRUCTURED_PRUNE_PROTECT_TOKENS = 40000;
  * here. The `protected-tools-registry-parity.test.ts` asserts both sides
  * stay in sync — any name drift breaks the test.
  *
- * **Categories** (size context: 1 baseline → 26):
+ * **Categories**:
  *   - skill content (1)        — already protected pre-F183
  *   - user-interaction (2)     — ask_user_question, exit_plan_mode
  *   - task delegation (3)      — dispatch_child_task, task_stop, send_message
@@ -55,10 +55,11 @@ const STRUCTURED_PRUNE_PROTECT_TOKENS = 40000;
  *                                memory mid-run
  *   - worktree / undo (3)      — worktree_create, worktree_remove, undo
  *   - MCP (5)                  — mcp_search/describe/call/read_resource/get_prompt
- *   - repo intelligence (9)    — repo_overview, changed_scope, changed_diff,
+ *   - repo intelligence (11)   — repo_overview, changed_scope, changed_diff,
  *                                changed_diff_bundle, module_context,
  *                                symbol_context, process_context, impact_estimate,
- *                                cyclic_dependencies
+ *                                relationship_scan, cyclic_dependencies,
+ *                                semantic_lookup
  */
 const PRUNE_PROTECTED_TOOLS: ReadonlySet<string> = new Set([
   // Pre-F183
@@ -107,6 +108,7 @@ const PRUNE_PROTECTED_TOOLS: ReadonlySet<string> = new Set([
   'impact_estimate',
   'relationship_scan',
   'cyclic_dependencies',
+  'semantic_lookup',
 ]);
 
 /**

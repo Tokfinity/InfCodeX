@@ -304,7 +304,7 @@ const RUNS_PER_CELL = 3;
 const PANEL_ALIASES = ['zhipu/glm51', 'kimi', 'mmx/m27', 'ark/glm51', 'ds/v4pro', 'ds/v4flash'] as const;
 const DUMP_ROOT = join(tmpdir(), 'kodax-eval-dumps', 'repointel-tool-adoption-child-v2');
 
-describe('Eval Suite A: Repointel pull-tool adoption — CHILD (F1v2 + F2) with real production objectives', () => {
+describe('Eval Suite A: Repo-intelligence pull-tool adoption — CHILD (F1v2 + F2) with real production objectives', () => {
   const aliases = availableAliases(...PANEL_ALIASES);
   if (aliases.length === 0) {
     it('skips: no provider API keys in env', () => {});

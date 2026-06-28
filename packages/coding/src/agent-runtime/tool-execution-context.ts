@@ -111,6 +111,8 @@ export function buildToolExecutionContext(
       model: options.model,
       reasoningMode: options.reasoningMode,
       effort: options.effort,
+      repoIntelligenceMode: options.context?.repoIntelligenceMode,
+      repoIntelligenceTrace: options.context?.repoIntelligenceTrace,
     },
     parentEvents: events,
     // FEATURE_067: onChildProgress removed — progress flows through

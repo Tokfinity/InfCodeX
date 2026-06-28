@@ -18,6 +18,10 @@ import type {
   RepoOverviewInventory,
   RepoOverviewSnapshot,
 } from './public-bridge.js';
+import {
+  resolveRepoIntelligenceStorageDir,
+  writeJsonFileAtomic as writeJsonFileAtomicInternal,
+} from './internal.js';
 
 export const DEFAULT_REPO_INTELLIGENCE_DIR = path.join('.agent', 'repo-intelligence');
 export const QUERY_INDEX_FILE = 'repo-intelligence-index.json';
@@ -606,25 +610,7 @@ export function getDirtySourcePathsForInputs(
 
 
 export async function writeJsonFileAtomic(filePath: string, payload: unknown): Promise<void> {
-  const tempPath = `${filePath}.${process.pid}.${Date.now()}.tmp`;
-  try {
-    await fs.writeFile(tempPath, `${JSON.stringify(payload, null, 2)}\n`, 'utf8');
-    try {
-      await fs.rename(tempPath, filePath);
-    } catch (error) {
-      const code = error && typeof error === 'object' && 'code' in error
-        ? String((error as NodeJS.ErrnoException).code)
-        : '';
-      if (code === 'EEXIST' || code === 'EPERM') {
-        await fs.rm(filePath, { force: true });
-        await fs.rename(tempPath, filePath);
-      } else {
-        throw error;
-      }
-    }
-  } finally {
-    await fs.rm(tempPath, { force: true }).catch(() => {});
-  }
+  return writeJsonFileAtomicInternal(filePath, payload);
 }
 
 export function isTestFile(relativePath: string): boolean {
@@ -733,5 +719,5 @@ export function extractImports(content: string, language: RepoLanguageId): strin
 }
 
 export function getRepoIntelligenceDir(): string {
-  return process.env.KODAX_REPO_INTELLIGENCE_STORAGE_DIR?.trim() || DEFAULT_REPO_INTELLIGENCE_DIR;
+  return resolveRepoIntelligenceStorageDir(DEFAULT_REPO_INTELLIGENCE_DIR);
 }

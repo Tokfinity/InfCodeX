@@ -6300,7 +6300,7 @@ const InkREPLInner: React.FC<InkREPLProps> = ({
       // (routing / preturn / module / impact / task-snapshot) inline so
       // users can see when the agent pulls repo context. OFF by default
       // to match the v0.7.20-era transcript density; enable via
-      // `/repointel trace on`. Gated upstream by
+      // `/repo-intel trace on`. Gated upstream by
       // `shouldEmitRepoIntelligenceTrace` in agent.ts — when the toggle
       // is off, the emitter short-circuits and this handler never fires.
       if (userInterruptedRef.current) {
@@ -9573,7 +9573,7 @@ export async function runInkInteractiveMode(options: InkREPLOptions): Promise<vo
   // v0.7.27 FEATURE_086 — repo-intelligence trace is OFF by default in
   // the Ink REPL to match v0.7.20-era transcript density (tool calls
   // surface normally; auto-injection stages stay silent unless the user
-  // opts in). Enable via `/repointel trace on` or persist
+  // opts in). Enable via `/repo-intel trace on` or persist
   // `repoIntelligenceTrace: true` in the config file. The
   // `KODAX_REPO_INTELLIGENCE_TRACE=1` env var and the CLI/ACP surfaces
   // retain their existing defaults.

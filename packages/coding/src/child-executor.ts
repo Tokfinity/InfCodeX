@@ -19,6 +19,7 @@ import type {
   KodaXChildFinding,
   KodaXActivityEventMeta,
   KodaXEvents,
+  KodaXContextOptions,
   KodaXOptions,
   KodaXResult,
   KodaXToolEventMeta,
@@ -158,7 +159,10 @@ export interface ChildExecutorOptions {
   readonly maxParallel: number;
   readonly maxIterationsPerChild: number;
   readonly abortSignal?: AbortSignal;
-  readonly parentOptions: Readonly<Partial<Pick<KodaXOptions, 'provider' | 'model' | 'effort' | 'reasoningMode' | 'extensionRuntime' | 'events'>>>;
+  readonly parentOptions: Readonly<Partial<
+    Pick<KodaXOptions, 'provider' | 'model' | 'effort' | 'reasoningMode' | 'extensionRuntime' | 'events'>
+    & Pick<KodaXContextOptions, 'repoIntelligenceMode' | 'repoIntelligenceTrace'>
+  >>;
   readonly parentRole: string;
   readonly parentHarness: string;
   /**
@@ -209,6 +213,19 @@ export interface ChildExecutorOptions {
   readonly snapshotUpdater?: (
     event: import('./child-progress-snapshot.js').ChildSnapshotEvent,
   ) => void;
+}
+
+function inheritRepoIntelligenceContext(
+  options: ChildExecutorOptions,
+): Partial<Pick<KodaXContextOptions, 'repoIntelligenceMode' | 'repoIntelligenceTrace'>> {
+  const inherited: Partial<Pick<KodaXContextOptions, 'repoIntelligenceMode' | 'repoIntelligenceTrace'>> = {};
+  if (options.parentOptions.repoIntelligenceMode !== undefined) {
+    inherited.repoIntelligenceMode = options.parentOptions.repoIntelligenceMode;
+  }
+  if (options.parentOptions.repoIntelligenceTrace !== undefined) {
+    inherited.repoIntelligenceTrace = options.parentOptions.repoIntelligenceTrace;
+  }
+  return inherited;
 }
 
 export async function executeChildAgents(
@@ -637,6 +654,7 @@ async function createWorkflowChildDigest(
         context: {
           gitRoot: input.scopeCtx.gitRoot,
           executionCwd: input.scopeCtx.executionCwd ?? input.scopeCtx.gitRoot,
+          ...inheritRepoIntelligenceContext(input.options),
           systemPromptOverride: WORKFLOW_CHILD_DIGEST_SYSTEM_PROMPT,
           excludeTools: getAllRegisteredTools().map((tool) => tool.name),
           currentAgentId: input.bundle.id,
@@ -850,6 +868,7 @@ async function runReadChildBody(
         context: {
           gitRoot: scope.ctx.gitRoot,
           executionCwd: scope.ctx.executionCwd ?? scope.ctx.gitRoot,
+          ...inheritRepoIntelligenceContext(options),
           systemPromptOverride,
           excludeTools,
           // FEATURE_123 v0.7.44 — propagate agentId + registry so the
@@ -1033,6 +1052,7 @@ async function runWriteChildBody(
         context: {
           gitRoot: childCtx.gitRoot,
           executionCwd: childCtx.executionCwd ?? childCtx.gitRoot,
+          ...inheritRepoIntelligenceContext(options),
           systemPromptOverride,
           excludeTools,
           // FEATURE_123 v0.7.44 — write children share the same peer-

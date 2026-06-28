@@ -1600,6 +1600,8 @@ export interface KodaXToolExecutionContext {
     readonly model?: string;
     readonly reasoningMode?: KodaXReasoningMode;
     readonly effort?: KodaXWireReasoningEffort;
+    readonly repoIntelligenceMode?: KodaXRepoIntelligenceMode;
+    readonly repoIntelligenceTrace?: boolean;
   };
   /**
    * Parent SDK/REPL callback surface available to child-dispatch tools.

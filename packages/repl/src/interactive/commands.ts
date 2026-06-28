@@ -719,13 +719,15 @@ export const BUILTIN_COMMANDS: Command[] = [
     name: 'repo-intel',
     description: 'Inspect built-in repo intelligence',
     usage: '/repo-intel [status|mode|trace]',
-    handler: async (args, _context, callbacks, currentConfig) => {
+    handler: async (args, context, callbacks, currentConfig) => {
       const subcommand = args[0]?.toLowerCase() ?? 'status';
 
       if (subcommand === 'status') {
         const inspection = await inspectRepoIntelligenceRuntime({
           mode: currentConfig.repoIntelligenceMode,
           trace: currentConfig.repoIntelligenceTrace,
+          probe: true,
+          workspaceRoot: getRepoIntelInspectionWorkspaceRoot(context),
         });
         printRepoIntelStatus(inspection);
         return;
@@ -812,7 +814,7 @@ export const BUILTIN_COMMANDS: Command[] = [
     description: 'Deprecated alias for /repo-intel status',
     usage: '/repointel [status]',
     userInvocable: false,
-    handler: async (args, _context, callbacks, currentConfig) => {
+    handler: async (args, context, _callbacks, currentConfig) => {
       const subcommand = args[0]?.toLowerCase() ?? 'status';
       console.log(chalk.yellow('\n[/repointel is deprecated; use /repo-intel status]\n'));
 
@@ -820,42 +822,20 @@ export const BUILTIN_COMMANDS: Command[] = [
         const inspection = await inspectRepoIntelligenceRuntime({
           mode: currentConfig.repoIntelligenceMode,
           trace: currentConfig.repoIntelligenceTrace,
+          probe: true,
+          workspaceRoot: getRepoIntelInspectionWorkspaceRoot(context),
         });
         printRepoIntelStatus(inspection);
         return;
       }
 
       if (subcommand === 'mode') {
-        const mode = normalizeRepoIntelligenceMode(args[1]);
-        if (!mode) {
-          console.log(chalk.dim('Usage: /repo-intel mode [auto|full|light|off]\n'));
-          return;
-        }
-        const persistence = applyRepoIntelligenceRuntimeConfig(
-          { mode },
-          { repoIntelligenceMode: mode },
-          callbacks,
-          currentConfig,
-        );
-        printPersistedCommandStatus(`Repo intelligence mode: ${formatRepoIntelPublicMode(mode)}`, persistence);
-        console.log(chalk.dim('Use /repo-intel mode [auto|full|light|off] going forward.\n'));
+        console.log(chalk.dim('Use /repo-intel mode [auto|full|light|off] to change repo-intelligence mode.\n'));
         return;
       }
 
       if (subcommand === 'trace') {
-        const nextValue = resolveToggleFlag(args[1]?.toLowerCase(), currentConfig.repoIntelligenceTrace ?? false);
-        if (nextValue === null) {
-          console.log(chalk.dim('Usage: /repo-intel trace [on|off|toggle]\n'));
-          return;
-        }
-        const persistence = applyRepoIntelligenceRuntimeConfig(
-          { trace: nextValue },
-          { repoIntelligenceTrace: nextValue },
-          callbacks,
-          currentConfig,
-        );
-        printPersistedCommandStatus(`Repo intelligence trace: ${nextValue ? 'on' : 'off'}`, persistence);
-        console.log(chalk.dim('Use /repo-intel trace [on|off|toggle] going forward.\n'));
+        console.log(chalk.dim('Use /repo-intel trace [on|off|toggle] to change repo-intelligence trace output.\n'));
         return;
       }
 
@@ -865,7 +845,7 @@ export const BUILTIN_COMMANDS: Command[] = [
         return;
       }
 
-      console.log(chalk.dim('Usage: /repo-intel [status|mode|trace]\n'));
+      console.log(chalk.dim('Usage: /repointel [status]\n'));
     },
     detailedHelp: () => {
       console.log(chalk.cyan('\n/repointel - Deprecated\n'));
@@ -2028,18 +2008,6 @@ type ConfigPersistenceResult =
   | { saved: true }
   | { saved: false; error: Error };
 
-function normalizeRepoIntelligenceMode(
-  value: string | undefined,
-): KodaXRepoIntelligenceMode | null {
-  if (!value) {
-    return null;
-  }
-
-  return REPO_INTELLIGENCE_MODES.includes(value as KodaXRepoIntelligenceMode)
-    ? value as KodaXRepoIntelligenceMode
-    : null;
-}
-
 function normalizeRepoIntelPublicMode(
   value: string | undefined,
 ): KodaXRepoIntelligenceMode | null {
@@ -2270,6 +2238,12 @@ function formatRepoIntelligenceSummary(
   return `${requestedLabel} => ${inspection.effectiveEngine} (${inspection.status}${fallbackLabel})`;
 }
 
+function getRepoIntelInspectionWorkspaceRoot(context: InteractiveContext): string | undefined {
+  return context.runtimeInfo?.workspaceRoot
+    ?? context.gitRoot
+    ?? context.runtimeInfo?.executionCwd;
+}
+
 function formatRepoIntelStatusLabel(inspection: RepoIntelligenceRuntimeInspection): string {
   return inspection.status;
 }
@@ -2293,6 +2267,12 @@ function printRepoIntelStatus(
   console.log(chalk.dim(`  Engine:      ${chalk.cyan(formatRepoIntelActiveEngine(inspection))}`));
   console.log(chalk.dim(`  Status:      ${chalk.cyan(formatRepoIntelStatusLabel(inspection))}`));
   console.log(chalk.dim(`  Trace:       ${chalk.cyan(inspection.traceEnabled ? 'on' : 'off')}`));
+  if (inspection.workerPath) {
+    console.log(chalk.dim(`  Worker:      ${inspection.workerPath}`));
+  }
+  if (inspection.storageRoot) {
+    console.log(chalk.dim(`  Cache:       ${inspection.storageRoot}`));
+  }
   if (inspection.fallbackToLight) {
     console.log(chalk.yellow('  Fallback:    light engine is currently active'));
   }
@@ -2488,6 +2468,8 @@ async function printStatus(
   const repoInspection = await inspectRepoIntelligenceRuntime({
     mode: currentConfig.repoIntelligenceMode,
     trace: currentConfig.repoIntelligenceTrace,
+    probe: true,
+    workspaceRoot: getRepoIntelInspectionWorkspaceRoot(context),
   });
   console.log(chalk.dim(`  Repo Intel:  ${chalk.cyan(formatRepoIntelligenceSummary(repoInspection))}`));
   if (context.runtimeInfo?.workspaceRoot) {

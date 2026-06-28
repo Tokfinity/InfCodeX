@@ -179,6 +179,18 @@ describe('repo-intelligence runtime facade', () => {
     expect(inspection.warnings.join(' ')).toContain('Ignoring legacy KODAX_REPOINTEL_BUILD_ID');
   });
 
+  it('probes built-in worker sidecar and cache writability during runtime inspection', async () => {
+    const inspection = await inspectRepoIntelligenceRuntime({
+      mode: 'full',
+      probe: true,
+      workspaceRoot: tempDir,
+    });
+
+    expect(inspection.status).toBe('ok');
+    expect(inspection.workerPath).toContain('semantic-worker');
+    expect(inspection.storageRoot).toBe(join(tempDir, '.agent', 'repo-intelligence'));
+  });
+
   it('keeps automatic hot paths on the resolved full engine', () => {
     expect(resolveKodaXHotPathRepoMode()).toBe('full');
     expect(resolveKodaXHotPathRepoMode('auto')).toBe('full');

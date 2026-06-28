@@ -44,3 +44,7 @@ should drive built-in KodaX rather than a standalone frontdoor.
   exists.
 - Do not document standalone daemon warmup as a KodaX setup step.
 - Keep `/repointel status` and `/ri` only as short-lived deprecated aliases.
+- Do not keep `/repointel mode`, `/repointel trace`, `/repointel warm`,
+  `/repointel endpoint`, or `/repointel bin` as runtime controls. They should
+  point users to `/repo-intel` diagnostics/configuration without mutating
+  config.

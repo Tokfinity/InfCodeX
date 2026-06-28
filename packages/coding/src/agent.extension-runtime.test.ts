@@ -560,6 +560,7 @@ describe('runKodaX extension runtime integration', () => {
     expect(toolNames).not.toContain('changed_diff');
     expect(toolNames).not.toContain('changed_diff_bundle');
     expect(toolNames).not.toContain('module_context');
+    expect(toolNames).not.toContain('semantic_lookup');
     expect(toolNames).not.toContain('impact_estimate');
 
     await runtime.dispose();

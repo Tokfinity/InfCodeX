@@ -23,6 +23,7 @@ export const REPO_INTELLIGENCE_WORKING_TOOL_NAMES = [
   'impact_estimate',
   'relationship_scan',
   'cyclic_dependencies',
+  'semantic_lookup',
 ] as const;
 
 const REPO_INTELLIGENCE_WORKING_TOOL_NAME_SET = new Set<string>(

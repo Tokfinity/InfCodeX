@@ -73,6 +73,8 @@ function buildBaseCtx(
     childTaskRegistry: registry,
     parentAgentConfig: {
       provider: 'anthropic',
+      repoIntelligenceMode: 'off',
+      repoIntelligenceTrace: true,
     },
   };
 }
@@ -144,6 +146,25 @@ describe('FEATURE_119 Pattern B — async dispatch', () => {
     expect(mockExec).toHaveBeenCalledOnce();
     const options = mockExec.mock.calls[0]![2] as { parentOptions: { events?: KodaXEvents } };
     expect(options.parentOptions.events).toBe(events);
+  });
+
+  it('passes parent repo-intelligence mode and trace into child executor options', async () => {
+    mockExec.mockResolvedValue(buildSuccessResult('repo-intel-child', ['done']));
+    const ctx = buildBaseCtx(undefined);
+
+    await drainGeneratorReturn(
+      toolDispatchChildTask({ id: 'repo-intel-child', objective: 'scan' }, ctx),
+    );
+
+    expect(mockExec).toHaveBeenCalledOnce();
+    const options = mockExec.mock.calls[0]![2] as {
+      parentOptions: {
+        repoIntelligenceMode?: string;
+        repoIntelligenceTrace?: boolean;
+      };
+    };
+    expect(options.parentOptions.repoIntelligenceMode).toBe('off');
+    expect(options.parentOptions.repoIntelligenceTrace).toBe(true);
   });
 
   it('rejects duplicate task_ids', async () => {

@@ -660,7 +660,7 @@ describe('FEATURE_183 (v0.7.42): PROTECTED_TOOL_NAMES whitelist expansion', () =
   // pin the membership + sanity-check the actual prune semantics against
   // representative protected tools.
 
-  it('contains the 29 canonical members exactly (+ todo_get v0.7.42, + cyclic_dependencies v0.7.45, + relationship_scan v0.7.57)', () => {
+  it('contains the 30 canonical members exactly (+ todo_get v0.7.42, + cyclic_dependencies v0.7.45, + relationship_scan/semantic_lookup v0.7.57)', () => {
     // Snapshot the full membership so any future drift (add / drop) is
     // caught immediately by this test rather than discovered in production.
     expect([...PROTECTED_TOOL_NAMES].sort()).toEqual(
@@ -705,9 +705,10 @@ describe('FEATURE_183 (v0.7.42): PROTECTED_TOOL_NAMES whitelist expansion', () =
         // v0.7.45 FEATURE_205-A — cyclic_dependencies (Tarjan SCC pull-tool)
         // joins the read-only repo-intelligence family.
         'cyclic_dependencies',
+        'semantic_lookup',
       ].sort(),
     );
-    expect(PROTECTED_TOOL_NAMES.size).toBe(29);
+    expect(PROTECTED_TOOL_NAMES.size).toBe(30);
   });
 
   it('exposes the set as a ReadonlySet (frozen API surface)', () => {
@@ -719,14 +720,14 @@ describe('FEATURE_183 (v0.7.42): PROTECTED_TOOL_NAMES whitelist expansion', () =
     expect(PROTECTED_TOOL_NAMES.has('skill')).toBe(true);
   });
 
-  it('still leaves the 12 "execution / exploration" tools compactable', () => {
+  it('still leaves high-volume "execution / exploration" tools compactable', () => {
     // Sanity: these high-volume / large-result / low-decision-density tools
     // MUST remain compactable. If F183 accidentally moved one of them into
     // PROTECTED, context budget regressions would silently follow.
     const compactable = [
       'read', 'write', 'edit', 'multi_edit', 'insert_after_anchor',
       'bash',
-      'glob', 'grep', 'code_search', 'semantic_lookup',
+      'glob', 'grep', 'code_search',
       'web_search', 'web_fetch',
     ];
     for (const name of compactable) {

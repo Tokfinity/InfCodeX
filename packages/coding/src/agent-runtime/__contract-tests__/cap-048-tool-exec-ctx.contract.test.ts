@@ -67,13 +67,17 @@ describe('CAP-048: tool execution context construction contract', () => {
     expect(ctx.onChildProgress).toBeUndefined();
   });
 
-  it('CAP-TOOL-CTX-003: parentAgentConfig snapshots options.provider / options.model / options.effort / options.reasoningMode', () => {
+  it('CAP-TOOL-CTX-003: parentAgentConfig snapshots provider/model/reasoning and repo-intelligence config', () => {
     const ctx = buildToolExecutionContext({
       options: {
         provider: 'anthropic',
         model: 'claude-sonnet-4-6',
         effort: 'high',
         reasoningMode: 'deep',
+        context: {
+          repoIntelligenceMode: 'off',
+          repoIntelligenceTrace: true,
+        },
       } as KodaXOptions,
       runtime: undefined,
       managedProtocolPayloadRef: makeRef(),
@@ -83,6 +87,8 @@ describe('CAP-048: tool execution context construction contract', () => {
       model: 'claude-sonnet-4-6',
       effort: 'high',
       reasoningMode: 'deep',
+      repoIntelligenceMode: 'off',
+      repoIntelligenceTrace: true,
     });
   });
 

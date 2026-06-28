@@ -17,6 +17,7 @@ import {
   withRepoIntelligenceStorageDir,
   writeJsonFileAtomic,
 } from './internal.js';
+import { getRepoIntelligenceDir as getSemanticRepoIntelligenceDir } from './semantic-shared.js';
 
 describe('repo-intelligence internal storage overrides', () => {
   const originalStorageDir = process.env.KODAX_REPO_INTELLIGENCE_STORAGE_DIR;
@@ -53,6 +54,15 @@ describe('repo-intelligence internal storage overrides', () => {
 
     delete process.env.KODAX_REPO_INTELLIGENCE_STORAGE_DIR;
     expect(resolveRepoIntelligenceStorageDir('.agent/repo-intelligence')).toBe('.agent/repo-intelligence');
+  });
+
+  it('keeps semantic shared storage resolution on the same async override path', async () => {
+    delete process.env.KODAX_REPO_INTELLIGENCE_STORAGE_DIR;
+
+    const observed = await withRepoIntelligenceStorageDir('.semantic-override', async () =>
+      getSemanticRepoIntelligenceDir());
+
+    expect(observed).toBe('.semantic-override');
   });
 });
 

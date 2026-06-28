@@ -1,5 +1,5 @@
 /**
- * Eval: Repointel pull-tool adoption — F7 prompt change validation.
+ * Eval: Repo-intelligence pull-tool adoption — F7 prompt change validation.
  *
  * ## Purpose
  *
@@ -11,7 +11,7 @@
  * the read+grep exploration the Worker actually performs.
  *
  * Root cause hypothesis: Worker role-prompt (default since v0.7.38 Slice 7)
- * never names these 8 tools. The repo-intel context section pushes daemon
+ * never names these 8 tools. The repo-intel context section pushes structured
  * results into prompt, but the LLM has no instruction telling it the pull
  * surface exists.
  *
@@ -76,7 +76,7 @@ import { availableAliases } from '../benchmark/harness/aliases.js';
 import { runOneShot } from '../benchmark/harness/harness.js';
 
 // ---------------------------------------------------------------------------
-// Tool definitions advertised to the LLM. Includes the 8 repointel pull
+// Tool definitions advertised to the LLM. Includes the 8 repo-intelligence pull
 // tools (so the model CAN call them) plus read/grep/glob/bash so it has the
 // fallback path it's used to. Schemas copied from
 // packages/coding/src/tools/registry.ts:941-1073.
@@ -437,7 +437,7 @@ const PANEL_ALIASES = [
 
 const DUMP_ROOT = join(tmpdir(), 'kodax-eval-dumps', 'repointel-tool-adoption');
 
-describe('Eval: Repointel pull-tool adoption (F7 prompt validation)', () => {
+describe('Eval: Repo-intelligence pull-tool adoption (F7 prompt validation)', () => {
   const aliases = availableAliases(...PANEL_ALIASES);
   if (aliases.length === 0) {
     it('skips: no provider API keys in env', () => {

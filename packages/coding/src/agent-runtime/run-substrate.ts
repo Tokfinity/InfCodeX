@@ -516,7 +516,7 @@ export async function runSubstrate(
   const hotPathRepoMode = resolveKodaXHotPathRepoMode(options.context?.repoIntelligenceMode);
 
   // v0.7.41 P1.b — hydrateSession (MCP extension state restoration) and the
-  // routing-signals daemon lookup are independent, so run them concurrently
+  // routing-signals lookup is independent, so run it concurrently
   // to collapse two sequential awaits into one wall-time slot. Pin:
   //   - if hydrate throws, Promise.all rejects with the same error (the outer
   //     catch / caller behaviour stays identical to a plain `await hydrate`)

@@ -86,7 +86,7 @@ describe('FEATURE_183 (v0.7.42): PROTECTED_TOOL_NAMES ↔ registry parity', () =
     const intentionallyCompactable = [
       'read', 'write', 'edit', 'multi_edit', 'insert_after_anchor',
       'bash',
-      'glob', 'grep', 'code_search', 'semantic_lookup',
+      'glob', 'grep', 'code_search',
       'web_search', 'web_fetch',
     ];
     for (const name of intentionallyCompactable) {

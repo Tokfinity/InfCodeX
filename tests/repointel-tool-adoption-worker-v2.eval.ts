@@ -208,7 +208,7 @@ const F3_SECTION = [
   '',
   'CHANGE-REVIEW POSITIVE REFRAME (FEATURE_162 — review-specific):',
   '- For ANY task framed as "review", "audit", "compare changes", "check diff", or "what changed since X": your first scope-acquisition tool MUST be `changed_scope` (one call), followed by `changed_diff_bundle(paths[])` for the files you need to read.',
-  '- Do NOT use `bash git diff ...` for change review — that pattern reads opaque text the daemon already structured for you.',
+  '- Do NOT use `bash git diff ...` for change review — that pattern reads opaque text the repo-intelligence tools already structured for you.',
   '- `bash git ...` is reserved for NON-review git ops: status, commit, tag, push, log of unrelated history, branch operations.',
 ].join('\n');
 

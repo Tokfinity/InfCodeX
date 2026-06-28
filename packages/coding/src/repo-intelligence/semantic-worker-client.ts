@@ -100,6 +100,10 @@ function resolveWorkerUrl(): URL {
   return pathToFileURL(join(sidecarDir, 'semantic-worker.js'));
 }
 
+export function getRepoIntelligenceWorkerPathForDiagnostics(): string {
+  return fileURLToPath(resolveWorkerUrl());
+}
+
 function hasTsxImport(execArgv: readonly string[]): boolean {
   return execArgv.some((arg, index) =>
     (arg === '--import' && execArgv[index + 1]?.includes('tsx') === true)

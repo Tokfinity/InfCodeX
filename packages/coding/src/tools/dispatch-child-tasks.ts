@@ -532,6 +532,8 @@ export async function* toolDispatchChildTask(
       model: parentConfig?.model,
       reasoningMode: parentConfig?.reasoningMode,
       effort: parentConfig?.effort,
+      repoIntelligenceMode: parentConfig?.repoIntelligenceMode,
+      repoIntelligenceTrace: parentConfig?.repoIntelligenceTrace,
       extensionRuntime: ctx.extensionRuntime,
       events: ctx.parentEvents,
     },

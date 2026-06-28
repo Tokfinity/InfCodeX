@@ -29,6 +29,10 @@ const childExecutorMock = vi.hoisted(() => ({
     readonly options: {
       readonly guardrails?: readonly unknown[];
       readonly planModeBlockCheck?: unknown;
+      readonly parentOptions?: {
+        readonly repoIntelligenceMode?: unknown;
+        readonly repoIntelligenceTrace?: unknown;
+      };
     };
   }>,
 }));
@@ -40,6 +44,10 @@ vi.mock('../child-executor.js', () => ({
     options: {
       readonly guardrails?: readonly unknown[];
       readonly planModeBlockCheck?: unknown;
+      readonly parentOptions?: {
+        readonly repoIntelligenceMode?: unknown;
+        readonly repoIntelligenceTrace?: unknown;
+      };
     },
   ) => {
     childExecutorMock.calls.push({ options });
@@ -189,7 +197,7 @@ describe('runWorkflowModule', () => {
     });
   });
 
-  it('threads parent guardrails and plan-mode checks into workflow children', async () => {
+  it('threads parent guardrails, plan-mode checks, and repo-intelligence config into workflow children', async () => {
     const guardrail: InputGuardrail = {
       kind: 'input',
       name: 'parent-guardrail',
@@ -213,7 +221,11 @@ describe('runWorkflowModule', () => {
     const options: KodaXOptions = {
       provider: 'anthropic',
       guardrails: [guardrail],
-      context: { planModeBlockCheck },
+      context: {
+        planModeBlockCheck,
+        repoIntelligenceMode: 'off',
+        repoIntelligenceTrace: true,
+      },
     };
 
     const outcome = await runWorkflowFromOptions({
@@ -228,6 +240,8 @@ describe('runWorkflowModule', () => {
     expect(childExecutorMock.calls).toHaveLength(1);
     expect(childExecutorMock.calls[0]?.options.guardrails).toBe(options.guardrails);
     expect(childExecutorMock.calls[0]?.options.planModeBlockCheck).toBe(planModeBlockCheck);
+    expect(childExecutorMock.calls[0]?.options.parentOptions?.repoIntelligenceMode).toBe('off');
+    expect(childExecutorMock.calls[0]?.options.parentOptions?.repoIntelligenceTrace).toBe(true);
   });
 
   it('writes stopped status for user-aborted workflow runs', async () => {
