@@ -1,8 +1,8 @@
 /**
- * InputPrompt - Input prompt component - 鏉堟挸鍙嗛幓鎰仛缂佸嫪娆?
+ * InputPrompt - Input prompt component - 输入提示组件
  *
  * Integrates multi-line input, history navigation, keyboard shortcuts
- * through a dedicated prompt input controller. - 闁俺绻冮悪顒傜彌閻ㄥ嫯绶崗銉﹀付閸掕泛娅掗梿鍡樺灇婢舵俺顢戞潏鎾冲弳閵嗕礁宸婚崣鎻掝嚤閼割亜鎷伴柨顔炬磸韫囶偅宓庨柨顔衡偓?
+ * through a dedicated prompt input controller. - 通过独立的输入控制器集成多行输入、历史导航和键盘快捷键
  */
 
 import React, { useState } from "react";
@@ -15,14 +15,14 @@ import { usePromptInputController } from "../utils/prompt-input-controller.js";
 
 /**
  * Extended props for InputPrompt with autocomplete support
- * InputPrompt 閻ㄥ嫭澧跨仦鏇炵潣閹嶇礉閺€顖涘瘮閼奉亜濮╃悰銉ュ弿
+ * InputPrompt 的扩展属性，支持自动补全
  */
 export interface InputPromptAutocompleteProps extends InputPromptProps {
   /** Working directory for file completion - 閺傚洣娆㈢悰銉ュ弿閻ㄥ嫬浼愭担婊呮窗瑜?*/
   cwd?: string;
-  /** Git root for skill discovery - 閹垛偓閼宠棄褰傞悳鎵畱 Git 閺嶅湱娲拌ぐ?*/
+  /** Git root for skill discovery - 技能发现的 Git 根目录 */
   gitRoot?: string;
-  /** Whether autocomplete is enabled (default: true) - 閺勵垰鎯侀崥顖滄暏閼奉亜濮╃悰銉ュ弿閿涘牓绮拋銈忕窗true閿?*/
+  /** Whether autocomplete is enabled (default: true) - 是否启用自动补全（默认：true） */
   autocompleteEnabled?: boolean;
 }
 
@@ -85,7 +85,7 @@ export const InputPrompt: React.FC<InputPromptAutocompleteProps> = ({
 };
 
 /**
- * Simplified InputPrompt - single-line mode - 缁犫偓閸栨牜澧?InputPrompt - 閸楁洝顢戝Ο鈥崇础
+ * Simplified InputPrompt - single-line mode - 简化版 InputPrompt - 单行模式
  */
 export const SimpleInputPrompt: React.FC<{
   onSubmit: (text: string) => void;

@@ -1,7 +1,7 @@
 /**
- * Utils exports - Utils 瀵煎嚭
+ * Utils exports - Utils 导出
  *
- * Centralizes exports of all utility modules, simplifying import paths - 闆嗕腑瀵煎嚭鎵€鏈夊伐鍏锋ā鍧楋紝绠€鍖栧鍏ヨ矾寰?
+ * Centralizes exports of all utility modules, simplifying import paths - 集中导出所有工具模块，简化导入路径
  * Includes modules extracted from InkREPL.tsx (Issue 016) - 鍖呭惈浠?InkREPL.tsx 鎻愬彇鐨勬ā鍧?(Issue 016)
  */
 
