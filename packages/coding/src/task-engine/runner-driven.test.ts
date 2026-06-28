@@ -2458,7 +2458,6 @@ describe('wrapEmitterWithRecorder — Risk 2/3/5 behavioural guards', () => {
     return {
       planRef,
       degradedContinueRef: { current: false },
-      reviseCountByHarnessRef: { current: new Map() },
       harnessRef: { current: opts.harness ?? 'H1_EXECUTE_EVAL' },
       events: opts.events,
       originalTask: 'test task',
@@ -2543,7 +2542,11 @@ describe('wrapEmitterWithRecorder — Risk 2/3/5 behavioural guards', () => {
     expect(askUserCalls.length).toBe(0);
   });
 
-  it('Risk-5: H2 harness is not subject to the H1 same-harness revise cap', async () => {
+  it('Risk-5: a revise verdict passes through unchanged (no same-harness revise cap)', async () => {
+    // The per-harness revise cap (reviseCountByHarnessRef) was never wired —
+    // the counter was created but never read — and was removed in ADR-043. A
+    // revise verdict therefore always passes through; the round cap is the only
+    // bound.
     const { wrapEmitterWithRecorder } = await harnessTestables();
     const base = makeFakeVerdictEmitter({ status: 'revise', reason: 'retry' });
     const recorder = makeRecorder();
@@ -2551,9 +2554,6 @@ describe('wrapEmitterWithRecorder — Risk 2/3/5 behavioural guards', () => {
     const budgetExtension = makeBudgetExtensionFixture({
       harness: 'H2_PLAN_EXECUTE_EVAL',
     });
-    // Even if we pre-seed a high revise count for H2, the wrapper must
-    // NOT apply the H1-only conversion — H2 runs to the global round cap.
-    budgetExtension.reviseCountByHarnessRef.current.set('H2_PLAN_EXECUTE_EVAL', 5);
 
     const wrapped = wrapEmitterWithRecorder(base, 'verdict', recorder, noopObserver, budget, budgetExtension);
     const result = await wrapped.execute({}, toolCtx);
@@ -2612,8 +2612,6 @@ describe('wrapEmitterWithRecorder — Risk 2/3/5 behavioural guards', () => {
     const result = await wrapped.execute({}, toolCtx);
 
     expect(result.isError).toBe(true);
-    // Revise counter untouched
-    expect(budgetExtension.reviseCountByHarnessRef.current.size).toBe(0);
     // Degraded-continue flag untouched
     expect(budgetExtension.degradedContinueRef.current).toBe(false);
   });
