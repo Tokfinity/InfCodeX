@@ -7,11 +7,10 @@ import fsSync from 'fs';
 import path from 'path';
 import os from 'os';
 import { exec, spawnSync, type SpawnSyncReturns } from 'child_process';
-import { getAgentConfigHome } from '@kodax-ai/agent';
+import { getAgentConfigHome, getCachedRejectedEfforts } from '@kodax-ai/agent';
 import { promisify } from 'util';
 import { fileURLToPath } from 'url';
 import { setLocale } from './i18n.js';
-import { getCachedRejectedEfforts, narrowReasoningProfile } from './capability-cache.js';
 import {
   buildProviderCapabilitySnapshot,
   evaluateProviderPolicy,
@@ -39,6 +38,7 @@ import {
   type KodaXCustomProviderConfig,
   type KodaXReasoningProfile,
 } from '@kodax-ai/coding';
+import { narrowReasoningProfile } from '@kodax-ai/llm';
 
 const execAsync = promisify(exec);
 
@@ -1232,4 +1232,3 @@ export async function rateLimitedCall<T>(fn: () => Promise<T>): Promise<T> {
     if (next) next();
   }
 }
-

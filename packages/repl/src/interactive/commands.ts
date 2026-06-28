@@ -52,14 +52,14 @@ import {
   resolvePermissionModeEffort,
   saveConfig,
 } from '../common/utils.js';
-import {
-  clearCapabilityCache,
-  getCachedRejectedEfforts,
-} from '../common/capability-cache.js';
 import { probeProviderReasoningEfforts } from '../common/capability-probe.js';
 import { savePermissionModeUser } from '../common/permission-config.js';
 import { nextAgentMode } from '../common/agent-mode.js';
-import { compact } from '@kodax-ai/agent';
+import {
+  clearCapabilityCache,
+  compact,
+  getCachedRejectedEfforts,
+} from '@kodax-ai/agent';
 import type { CompactionConfig } from '@kodax-ai/agent';
 import { loadCompactionConfig } from '../common/compaction-config.js';
 import {

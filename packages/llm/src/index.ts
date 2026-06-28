@@ -88,6 +88,32 @@ export {
   KODAX_ESCALATED_MAX_OUTPUT_TOKENS,
 } from './constants.js';
 
+// ============== Timeout config ==============
+export {
+  parseTimeoutSecEnvMs,
+  resolveLlmTimeoutConfig,
+  timeoutSecToMs,
+} from './timeouts.js';
+export type {
+  KodaXLlmTimeoutConfig,
+  KodaXResolvedLlmTimeoutConfig,
+} from './timeouts.js';
+
+// ============== Capability learning ==============
+export {
+  addRejectedEffort,
+  capabilityCacheKey,
+  getRejectedEfforts,
+  narrowReasoningProfile,
+  removeCacheEntry,
+  sanitizeCapabilityCache,
+} from './capability-learning.js';
+export type {
+  CapabilityCache,
+  CapabilityCacheEntry,
+  CapabilityCacheSource,
+} from './capability-learning.js';
+
 // ============== Reasoning ==============
 export {
   KODAX_REASONING_MODE_SEQUENCE,
@@ -214,7 +240,7 @@ export type {
 
 // ============== Retry-After helper (FEATURE_130, v0.7.36) ==============
 // Cross-provider Retry-After header parsing. Used inside the base
-// provider's `withRateLimit` path so all 12 provider adapters get
+// provider's `withRateLimit` path so all built-in provider adapters get
 // 4-form coverage (integer seconds / HTTP-date / Anthropic
 // `retry-after-ms` / exponential backoff fallback) without touching
 // each adapter individually. Re-exported so external consumers (custom

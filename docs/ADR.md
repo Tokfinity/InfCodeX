@@ -5,7 +5,7 @@
 > **⚠️ Architecture state notice (2026-05-25)**: 早期 ADR (ADR-005/006/007/008 等) 描述 `FEATURE_061/062` Scout-first + Planner/Generator/Evaluator H2 chain 模型，已被 [**ADR-030 claudecode-shape Main Agent + Sidecar Verifier**](#adr-030-claudecode-shape-main-agent--sidecar-verifier-substrate-feature_184-v0745) (FEATURE_184 v0.7.42) 取代。
 > 当前运行时架构：**V2 Worker 单循环 + Sidecar Verifier**。V1 chain (Scout/Planner/Generator/Evaluator) 已于 [ADR-030 §F193 cross-ref](#adr-030-claudecode-shape-main-agent--sidecar-verifier-substrate-feature_184-v0745) FEATURE_193 v0.7.43 全量退役；`emit_handoff` 工具已于 FEATURE_190 v0.7.43 删除。
 > 早期 Scout-first ADR 保留以便 archive 查阅，不反映当前实现。
-> **Current package / SDK state (2026-06-18 / v0.7.52)**: 源码 workspace 为 `llm / agent / coding / repl` 4 包；根 npm 包 `@kodax-ai/kodax` 暴露 7 个 SDK subpath（`/agent`、`/llm`、`/coding`、`/repl`、`/skills`、`/mcp`、`/session`）；LLM registry 有 14 个内置 provider alias。v0.7.50 的 workflow process contract、v0.7.51 的 durable tool replay / `hostMetadata` / inline skill-reference propagation，以及 v0.7.52 的 Node 20+ maintenance baseline 均为当前事实。
+> **Current package / SDK state (2026-06-28 / v0.7.57)**: 源码 workspace 为 `llm / agent / coding / repl` 4 包；根 npm 包 `@kodax-ai/kodax` 暴露 8 个 SDK subpath（`/agent`、`/llm`、`/coding`、`/media`、`/repl`、`/skills`、`/mcp`、`/session`）；LLM registry 有 15 个内置 provider alias（含 `zai-coding`）。v0.7.57 的当前事实包括 effort-first reasoning、`zai-coding` provider alias、内置 repo-intelligence semantic engine、`/media` SDK 入口，以及 workflow process / durable replay / `hostMetadata` / inline skill-reference propagation。
 >
 > 之前的执行模型注脚（v0.7.42 前）：
 > 这组 ADR 反映 `FEATURE_061/062` 之后的执行模型：
@@ -650,7 +650,7 @@ KodaX 跳过 tree-sitter，直接用 shell-quote 作为唯一 AST 后端。新�
 
 **Status**: Accepted (2026-05-12)
 
-> **Later status (2026-06-18 / v0.7.52)**: 本 ADR 记录 v0.7.39 当时的 5-subpath 形式化决策。后续 ADR-032 增加 `/mcp`，ADR-038 增加 `/session`，ADR-036 / FEATURE_194 将 skills/mcp/session-lineage/tracing 等源码包内联。当前根发布包为 `@kodax-ai/kodax`，SDK subpath 为 7 个：`/agent`、`/llm`、`/coding`、`/repl`、`/skills`、`/mcp`、`/session`。
+> **Later status (2026-06-28 / v0.7.57)**: 本 ADR 记录 v0.7.39 当时的 5-subpath 形式化决策。后续 ADR-032 增加 `/mcp`，ADR-038 增加 `/session`，ADR-036 / FEATURE_194 将 skills/mcp/session-lineage/tracing 等源码包内联，v0.7.56 增加 `/media`。当前根发布包为 `@kodax-ai/kodax`，SDK subpath 为 8 个：`/agent`、`/llm`、`/coding`、`/media`、`/repl`、`/skills`、`/mcp`、`/session`。
 
 **TL;DR**：把 npm 发布物从 `@kodax-ai/kodax-cli`（v0.7.38 中间形态）改为 `@kodax-ai/kodax`（去 `-cli` 后缀），同时通过 ESM subpath exports 把 5 个内部包（agent / llm / coding / repl / skills）显式开放给 SDK 消费者。源码层分包（ADR-001 / ADR-021）**完全不变**；ADR-022 的"单 bundle 发布"决策**仍然成立** —— 本 ADR 只是在 bundle 内部增加 6 个 entry（root + 5 subpath）并共享 chunks。
 
@@ -730,14 +730,14 @@ ADR-022 Addendum（"v0.7.39 改名 kodax-cli"）被 ADR-024 取代；保留为�
 
 **Status**: Accepted (2026-05-23)
 
-v0.7.39 ADR-024 落地时把 `name`、`exports`、`bin` normalize、`publishConfig` 全都放在 `scripts/release.mjs` 的 publish-time rewrite 里。dev 的 root `package.json` 保留 monorepo-internal 形态 `"name": "kodax"` + 单一 `exports: { "." }`，publish 那一刻 release.mjs 才把它改成 `@kodax-ai/kodax` + 7 个 SDK subpath。
+v0.7.39 ADR-024 落地时把 `name`、`exports`、`bin` normalize、`publishConfig` 全都放在 `scripts/release.mjs` 的 publish-time rewrite 里。dev 的 root `package.json` 保留 monorepo-internal 形态 `"name": "kodax"` + 单一 `exports: { "." }`，publish 那一刻 release.mjs 才把它改成 `@kodax-ai/kodax` + SDK subpaths。当前 dev package 常驻 8 个 SDK subpath。
 
 **Trigger**: v0.7.42 SDK consumer (KodaX Space) gap report 第 4 项 — embedder 希望对本地 KodaX checkout 直接 `npm link @kodax-ai/kodax`，dev tree 不在已发布形态下时这条路彻底不通：
 - `npm link` 按 root `name` 字段建 global symlink，dev tree 是 `kodax` 而非 `@kodax-ai/kodax`，consumer 端 `npm link @kodax-ai/kodax` 找不到目标
 - 即便硬 fs.symlink 整个仓库，`import('@kodax-ai/kodax/coding')` 也会被 Node ESM `exports` encapsulation 拒绝（dev tree 的 `exports` 只声明 `.`）
 - 强迫 embedder 先跑 `scripts/release.mjs --dry-run` 才能复制 publish-time 形态，对 in-tree SDK 迭代体验是结构性阻塞
 
-**v0.7.43 决策**: 把已发布形态搬进 dev `package.json` —— `name` 直接是 `@kodax-ai/kodax`，7 个 SDK subpath exports + `./package.json` 都常驻。**唯一的 publish-time 残留 mutation 是 toggle `private: true → false`**（保留 `private: true` 防止误 `npm publish` 裸根目录）。release.mjs 因此薄了大半：从 5 项 rewrite 变成单点 toggle，逻辑分支少了 4 个，出错面同步缩小。
+**v0.7.43 决策，v0.7.57 状态**: 把已发布形态搬进 dev `package.json` —— `name` 直接是 `@kodax-ai/kodax`，当前 8 个 SDK subpath exports + `./package.json` 都常驻。**唯一的 publish-time 残留 mutation 是 toggle `private: true → false`**（保留 `private: true` 防止误 `npm publish` 裸根目录）。release.mjs 因此薄了大半：从 5 项 rewrite 变成单点 toggle，逻辑分支少了 4 个，出错面同步缩小。
 
 **为什么不直接 `private: false` 进 dev**：失去防误发的最后一道闸门。当前 release flow 严格依赖 `scripts/release.mjs` 的 build + version-sanity 链路，bare `npm publish` 会跳过这些。`private: true` 是廉价的兜底，release.mjs 也会先做 sanity check（断言 `name === '@kodax-ai/kodax'` + `exports['./agent']` 存在 + `files` allowlist 非空）再 toggle —— dev tree drift 会在 publish 入口拒绝。
 
@@ -2188,7 +2188,7 @@ isolation: z.enum(['worktree']).optional().describe(
 
 ```
 packages/
-├── llm/        # 7.3k — LLM provider 抽象 (14 built-in aliases + stream 协议 + model registry)
+├── llm/        # 7.3k — LLM provider 抽象 (15 built-in aliases + stream 协议 + model registry)
 ├── agent/      # ~20.8k — Agent 框架 + capabilities + tracing + session-lineage
 │   └── src/
 │       ├── primitives/             # 现有：Agent / Runner / Handoff / Guardrail / Admission / Messaging / Memory / Team / Scratchpad / Construction

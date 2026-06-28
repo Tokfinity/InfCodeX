@@ -13,7 +13,7 @@
  */
 
 import type { KodaXBaseProvider } from '@kodax-ai/coding';
-import { recordRejectedEffort } from './capability-cache.js';
+import { recordRejectedEffort } from '@kodax-ai/agent';
 
 export type ProbeStatus = 'accepted' | 'rejected' | 'error';
 

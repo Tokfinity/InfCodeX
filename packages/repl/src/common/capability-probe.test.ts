@@ -5,9 +5,13 @@ const { recordRejectedEffortMock } = vi.hoisted(() => ({
   recordRejectedEffortMock: vi.fn(),
 }));
 
-vi.mock('./capability-cache.js', () => ({
-  recordRejectedEffort: (...args: unknown[]) => recordRejectedEffortMock(...args),
-}));
+vi.mock('@kodax-ai/agent', async () => {
+  const actual = await vi.importActual<typeof import('@kodax-ai/agent')>('@kodax-ai/agent');
+  return {
+    ...actual,
+    recordRejectedEffort: (...args: unknown[]) => recordRejectedEffortMock(...args),
+  };
+});
 
 import { probeProviderReasoningEfforts } from './capability-probe.js';
 

@@ -316,6 +316,9 @@ export {
 // types from @kodax-ai/core continue to work via @kodax-ai/agent without splitting
 // the import. Direct import from @kodax-ai/llm is also supported.
 export type {
+  CapabilityCache,
+  CapabilityCacheEntry,
+  CapabilityCacheSource,
   CapabilityKind,
   CapabilityProvider,
   CapabilityResult,
@@ -335,6 +338,16 @@ export {
   setAgentConfigHome,
   getAppDataDir,
 } from './runtime/agent-home.js';
+
+export {
+  CAPABILITY_CACHE_FILENAME,
+  clearCapabilityCache,
+  getCachedRejectedEfforts,
+  getCapabilityCacheFile,
+  loadCapabilityCache,
+  recordRejectedEffort,
+  resetCapabilityCacheMemoForTesting,
+} from './runtime/capability-cache.js';
 
 // FEATURE_208 (v0.7.45): process hardening (debug-preserving subset).
 export {
@@ -400,6 +413,12 @@ export {
   maybeDrainMidTurn,
   midTurnDrainPriority,
 } from './messaging/index.js';
+
+// ============== Media / input artifacts ==============
+// Generic artifact construction, validation, and enqueue helpers. Coding keeps
+// compatibility re-exports, but the canonical layer is agent because queued
+// multimodal input is not coding-specific.
+export * from './media/index.js';
 
 // ============== Orchestration (v0.7.39 FEATURE_120 Step 0) ==============
 // Generic fan-out / idle-yield / steering primitives lifted from

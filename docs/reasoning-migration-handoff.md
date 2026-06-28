@@ -12,8 +12,8 @@ effort 体系已经成型,**不要重做**:
 
 - **Ctrl+T 循环 V2 effort 梯**(`packages/repl/src/ui/shortcuts/GlobalShortcuts.tsx`):按当前模型 capability 派生档位;写 `config.effort`;`reasoningMode` 仅作为派生兼容字段(`'off'`/`'auto'`)——**Phase B 会彻底删掉它**。
 - **状态栏 effort-first**(`status-bar.ts` view-model + `surface-status.ts` + `InkREPL.tsx` Banner)。`minimal->off` 显示。
-- **`capability-cache.json`**(`packages/repl/src/common/capability-cache.ts`):被动学习存储 + `resolveReasoningProfileForDisplay` 单漏斗收窄。
-- **被动学习 + 自愈**:`reasoning-effort-rejection.ts` 分类器(只认真实 400/422 + 命名 effort 参数)+ `base.ts` withRateLimit 的 `suppressReasoningEffort` 自愈重试(剥 effort 重试一次,turn 不中断)+ `onReasoningEffortRejected` 事件 → REPL 记 cache + 切安全档。
+- **`capability-cache.json`**: LLM pure ops live in `packages/llm/src/capability-learning.ts`; default persistent store lives in `packages/agent/src/runtime/capability-cache.ts`; `packages/repl/src/common/capability-cache.ts` is only a compatibility barrel. `resolveReasoningProfileForDisplay` consumes the narrowed profile through the agent/LLM APIs.
+- **被动学习 + 自愈**:`reasoning-effort-rejection.ts` 分类器(只认真实 400/422 + 命名 effort 参数)+ `base.ts` withRateLimit 的 `suppressReasoningEffort` 自愈重试(剥 effort 重试一次,turn 不中断)+ `onReasoningEffortRejected` 事件 → host/REPL 通过 agent cache 记录 + 切安全档。
 - **自定义 provider 友好配置** `reasoning: {efforts,default} | "none"`(`custom-provider.ts`),legacy 字段标 `@deprecated` 加载迁移。
 - **registry 未知 model 乐观继承 provider 级**(`registry.ts:580` getModelCapabilities)。
 - **effort 持久化 override 重建**(`utils.ts` `resolveInitialEffortOverride`)。

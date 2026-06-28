@@ -22,6 +22,7 @@ are NOT obvious from inspecting the type definitions alone:
 12. [Provider credential verification — `verifyProviderCredential`](#12-provider-credential-verification--verifyprovidercredential-feature_216-v0745)
 13. [Inject your product's manual — `selfManual`](#13-inject-your-products-manual--selfmanual-feature_221-v0747)
 14. [Media input artifacts — `@kodax-ai/kodax/media`](#14-media-input-artifacts--kodax-aikodaxmedia-feature_239-v0756)
+15. [Space v0.7.57 follow-up ledger](#15-space-v0757-follow-up-ledger)
 
 §1–§3 (and the Phase-7/8 MCP-popout surface in §1) land in v0.7.42
 under FEATURE_186 (see [ADR-032](ADR.md#adr-032-sdk-embedder-surface-closure-feature_186-v0742)).
@@ -1182,6 +1183,23 @@ For picker/status UIs, use `reasoningProfile.supportedEfforts` and
 `defaultEffort`. The legacy `reasoningCapability` field describes the provider
 wire mechanism, not user-facing reasoning depth.
 
+### Passive effort capability learning
+
+KodaX v0.7.57 treats `effort` as the primary reasoning-depth input. When a
+provider hard-rejects a requested effort value, the SDK emits
+`KodaXEvents.onReasoningEffortRejected` with provider/model/effort metadata.
+The LLM layer owns the pure learning semantics (`narrowReasoningProfile` and
+cache record helpers), while the agent layer provides the default
+`~/.kodax/capability-cache.json` store (`recordRejectedEffort`,
+`getCachedRejectedEfforts`, `clearCapabilityCache`). The built-in REPL is just
+one consumer: it records the event through the agent store and narrows future
+effort choices for the same provider/model.
+
+Headless SDK hosts can use the same agent store, provide their own store around
+the LLM pure helpers, or ignore the event for deterministic no-learning runs.
+This keeps the mechanism reusable without forcing a cross-session disk cache on
+every embedded runtime.
+
 **Group by provider for a picker UI:**
 
 ```ts
@@ -1357,10 +1375,15 @@ const options = {
 `timeouts.workflow.generationTimeoutSec` controls dynamic workflow harness
 generation. It replaces the legacy millisecond-only environment override for
 SDK callers while keeping `KODAX_WORKFLOW_GENERATION_TIMEOUT_MS` compatible.
-`timeouts.llm.*Sec` maps onto the provider resilience request/stream timeout
-configuration. The public timeout config intentionally does not control
-internal cleanup or resource-protection watchdogs such as process kill probes,
-workflow stop cleanup, VM smoke checks, or daemon readiness checks.
+`timeouts.llm.*Sec` is normalized by the LLM-layer helper
+`resolveLlmTimeoutConfig()` from `@kodax-ai/kodax/llm`; the coding runtime then
+adapts the resolved millisecond values into provider resilience settings. Use
+the LLM helper directly when building a non-coding runner that still needs the
+same request/stream timeout semantics.
+
+The public timeout config intentionally does not control internal cleanup or
+resource-protection watchdogs such as process kill probes, workflow stop
+cleanup, VM smoke checks, or daemon readiness checks.
 
 ### Workflow run host attribution (v0.7.51)
 
@@ -1586,7 +1609,7 @@ Each provider has one `verifyStrategy` value baked into `provider-capabilities.j
 | `minimal-message` | `chat.completions.create({max_tokens:1, content:'hi'})` (or Anthropic equivalent) | ~6–7 token | `zhipu`, `mimo`, `mimo-coding` |
 | `unsupported` | nothing — short-circuits | — | `gemini-cli`, `codex-cli` (cli-bridge: credentials live in CLI binary) |
 
-`models-list` is NOT used as a universal default because (a) some providers' `/v1/models` is publicly accessible (so a bad key returns 200 — false positive), and (b) some compat layers don't implement it (404) or 401 even for valid keys (false negative). The 2026-05-28 provider probe matrix captured these empirically (12 providers at the time; 14 built-in aliases as of 2026-06-13); opencode's `setup-recording-env.ts` makes the same per-provider decision across its 20+ providers.
+`models-list` is NOT used as a universal default because (a) some providers' `/v1/models` is publicly accessible (so a bad key returns 200 — false positive), and (b) some compat layers don't implement it (404) or 401 even for valid keys (false negative). The 2026-05-28 provider probe matrix captured these empirically (12 providers at the time; 15 built-in aliases as of 2026-06-28); opencode's `setup-recording-env.ts` makes the same per-provider decision across its 20+ providers.
 
 ### Custom providers
 
@@ -1684,8 +1707,11 @@ runKodaX({
 
 Host apps such as KodaX Space own paste/drop UI, sandbox storage, and path
 authorization, but they should not import REPL-private files to normalize images
-or construct `runKodaX` artifacts. v0.7.56 exposes the shared image path through
-`@kodax-ai/kodax/media` and the source-side `@kodax-ai/coding/media`.
+or construct `runKodaX` artifacts. `@kodax-ai/kodax/media` is backed by the
+agent-layer `@kodax-ai/agent/media` implementation in v0.7.57, because input
+artifacts are an agent capability rather than a coding-only concept.
+`@kodax-ai/coding/media` remains as a compatibility re-export for existing
+source consumers.
 
 ### Quick start
 
@@ -1757,7 +1783,7 @@ if (caps.video.status === 'provider-native-unwired') {
 }
 ```
 
-v0.7.56 can send image artifacts. File and video artifact shapes are stable, but
+v0.7.57 can send image artifacts. File and video artifact shapes are stable, but
 the SDK runtime does not serialize them yet. Known native-video models report
 `video.status = 'provider-native-unwired'` so hosts can show accurate UI without
 enabling a send path KodaX cannot serialize yet.
@@ -1832,8 +1858,39 @@ runner turn. Unsupported file/video attachments are rejected before enqueueing.
 ### Reference
 
 - Public SDK entry: `src/sdk-media.ts`.
-- Shared implementation: `packages/coding/src/media/`.
+- Shared implementation: `packages/agent/src/media/`.
+- Compatibility source re-export: `packages/coding/src/media/`.
 - Design: [docs/features/v0.7.56.md FEATURE_239](features/v0.7.56.md#feature_239-sdk-multimodal-input--clipboard-image-public-api).
+
+---
+
+## 15. Space v0.7.57 follow-up ledger
+
+These are the remaining SDK-consumer integration decisions reported after the
+v0.7.57 source review. They are not all KodaX core regressions; most are Space
+UI/API follow-ups that should consume the SDK contracts already exposed here.
+
+- **Custom provider reasoning form**: Space should expose the v0.7.57 custom
+  provider shape `reasoning: { efforts, default }` or `"none"` instead of only
+  legacy reasoning-mode inputs. Keep using the SDK validator from
+  `@kodax-ai/kodax/llm` so Space does not maintain a parallel schema.
+- **Effort selector**: Space should build effort choices from
+  `resolveModelCapabilities(provider, model)?.reasoningProfile.supportedEfforts`
+  and `defaultEffort`. A fixed five-option selector will miss provider-specific
+  values such as `xhigh`, `max`, or custom-provider effort names.
+- **Repo-intelligence prewarm**: `prewarmRepoIntelligenceCaches()` is currently a
+  best-effort warmup call, not a progress/completion contract. Hosts can call it
+  opportunistically; if Space needs visible progress or a completed state, the
+  next SDK step should be a small handle/result API rather than inferring status
+  from cache side effects.
+- **Relationship scan**: `relationship_scan` is a v0.7.57 agent/tool capability.
+  It is intentionally model-facing today. Space can decide separately whether it
+  deserves a top-level UI entry or remains available through normal agent turns.
+- **Quick Ask / `sideQuery`**: `sideQuery` is exported from
+  `@kodax-ai/kodax/llm`, so the capability ledger can move from blocked to
+  partial. Migrating Space Quick Ask still needs an application-level decision
+  about transcript promotion and history semantics, because `sideQuery` is an
+  isolated text-only one-shot call rather than a chat-session append.
 
 ---
 

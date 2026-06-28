@@ -47,6 +47,13 @@ import type {
   KodaXExtensionSessionState,
   KodaXExtensionStoreEntry,
   KodaXExtensionStore,
+  KodaXFileInputArtifact,
+  KodaXImageInputArtifact,
+  KodaXImageMediaType,
+  KodaXInputArtifact,
+  KodaXInputArtifactSource,
+  KodaXVideoInputArtifact,
+  KodaXVideoMediaType,
   KodaXCompactMemoryProgress,
   KodaXCompactMemorySeed,
   KodaXSessionBranchSummaryEntry,
@@ -160,6 +167,13 @@ export type {
   KodaXExtensionSessionState,
   KodaXExtensionStoreEntry,
   KodaXExtensionStore,
+  KodaXFileInputArtifact,
+  KodaXImageInputArtifact,
+  KodaXImageMediaType,
+  KodaXInputArtifact,
+  KodaXInputArtifactSource,
+  KodaXVideoInputArtifact,
+  KodaXVideoMediaType,
   KodaXCompactMemoryProgress,
   KodaXCompactMemorySeed,
   KodaXSessionBranchSummaryEntry,
@@ -358,9 +372,10 @@ export interface KodaXEvents {
     meta?: KodaXActivityEventMeta,
   ) => void;
   /**
-   * Passive capability learning — fired when a provider HARD-rejects a
-   * reasoning-effort value. The REPL records it in `capability-cache.json` so
-   * the rung is narrowed out of the ladder and never offered/sent again.
+   * Passive capability learning: fired when a provider HARD-rejects a
+   * reasoning-effort value. Hosts can record it via the agent-layer capability
+   * cache so the rung is narrowed out of the ladder and never offered/sent
+   * again.
    */
   onReasoningEffortRejected?: (event: {
     provider: string;
@@ -1270,60 +1285,6 @@ export interface KodaXTaskEvidenceArtifact {
   path: string;
   description?: string;
 }
-
-export type KodaXImageMediaType =
-  | 'image/png'
-  | 'image/jpeg'
-  | 'image/webp'
-  | 'image/gif';
-
-export type KodaXVideoMediaType =
-  | 'video/mp4'
-  | 'video/mpeg'
-  | 'video/quicktime'
-  | 'video/x-msvideo'
-  | 'video/x-flv'
-  | 'video/webm'
-  | 'video/x-ms-wmv'
-  | 'video/3gpp';
-
-export type KodaXInputArtifactSource =
-  | 'user-inline'
-  | 'clipboard'
-  | 'drag-drop'
-  | 'file-picker';
-
-export interface KodaXImageInputArtifact {
-  readonly kind: 'image';
-  readonly path: string;
-  readonly mediaType?: KodaXImageMediaType;
-  readonly source?: KodaXInputArtifactSource;
-  readonly description?: string;
-}
-
-export interface KodaXFileInputArtifact {
-  readonly kind: 'file';
-  readonly path: string;
-  readonly mediaType?: string;
-  readonly mimeType?: string;
-  readonly name?: string;
-  readonly source?: KodaXInputArtifactSource;
-  readonly description?: string;
-}
-
-export interface KodaXVideoInputArtifact {
-  readonly kind: 'video';
-  readonly path: string;
-  readonly mediaType: KodaXVideoMediaType;
-  readonly name?: string;
-  readonly source?: KodaXInputArtifactSource;
-  readonly description?: string;
-}
-
-export type KodaXInputArtifact =
-  | KodaXImageInputArtifact
-  | KodaXFileInputArtifact
-  | KodaXVideoInputArtifact;
 
 export interface KodaXTaskEvidenceEntry {
   assignmentId: string;

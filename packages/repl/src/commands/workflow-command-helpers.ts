@@ -522,7 +522,7 @@ export function formatWorkflowNextActions(runId: string, canRerun: boolean): str
 
 export function formatWorkflowFailureAction(runId: string, canRerun: boolean): string {
   return canRerun
-    ? `Use /workflow show ${runId} for events. /workflow rerun ${runId} repeats the saved workflow script.`
+    ? `Use /workflow show ${runId} for events. /workflow revise ${runId} <change> can repair the saved script; /workflow rerun ${runId} repeats it unchanged.`
     : `Use /workflow show ${runId} for events.`;
 }
 

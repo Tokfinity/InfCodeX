@@ -1,8 +1,8 @@
 # KodaX High-Level Design
 
-> Last updated: 2026-06-18
+> Last updated: 2026-06-28
 >
-> Current release baseline: `@kodax-ai/kodax@0.7.52`
+> Current release baseline: `@kodax-ai/kodax@0.7.57`
 >
 > This HLD is intentionally current-state only. The old pre-v0.7.43
 > chain/harness model has been removed from this active design document because
@@ -24,9 +24,9 @@ clients/    optional external clients and protocol adapters
 benchmark/  eval harness, datasets, and prompt-change rules
 ```
 
-The published package is `@kodax-ai/kodax`. It exposes the root API plus seven
-SDK subpaths: `/agent`, `/llm`, `/coding`, `/repl`, `/skills`, `/mcp`, and
-`/session`.
+The published package is `@kodax-ai/kodax`. It exposes the root API plus eight
+SDK subpaths: `/agent`, `/llm`, `/coding`, `/media`, `/repl`, `/skills`,
+`/mcp`, and `/session`.
 
 ## 2. Layering
 
@@ -75,11 +75,12 @@ answer. Sidecar Verifier is out-of-band and only judges termination quality.
 
 `packages/llm` provides:
 
-- 14 built-in provider aliases,
+- 15 built-in provider aliases,
 - custom provider registration,
 - OpenAI- and Anthropic-compatible protocols,
 - CLI bridge providers for Gemini CLI and Codex CLI,
 - stream normalization,
+- effort-first reasoning and request-timeout config normalization,
 - capability metadata and provider policy gates,
 - side-query support for verifier and other out-of-band LLM calls.
 
@@ -98,7 +99,7 @@ family.
 - 50+ built-in tools from `tools/tool-definitions.ts`,
 - Worker prompts and capability sections,
 - permission and auto-mode integration,
-- repo-intelligence context,
+- built-in full/light repo-intelligence context and semantic worker wiring,
 - sidecar verifier integration,
 - session snapshots and runtime state,
 - construction and self-modification tools,
@@ -162,8 +163,13 @@ MCP integration lives under `packages/agent/src/capabilities/mcp` and includes
 catalog/search, transport, runtime connection, OAuth helpers, protected-resource
 discovery, prompts, resources, tools, and reverse capabilities.
 
+Media/input artifact helpers live under `packages/agent/src/media`. The
+published `/media` SDK subpath and `@kodax-ai/coding/media` compatibility
+barrel both point at this agent-layer implementation.
+
 Published SDK subpaths expose focused subsets:
 
+- `@kodax-ai/kodax/media`
 - `@kodax-ai/kodax/skills`
 - `@kodax-ai/kodax/mcp`
 

@@ -34,14 +34,14 @@ describe("transcript screen buffer", () => {
 
   it("tracks transcript row display width using rendered cell width, not UTF-16 length", () => {
     const buffer = buildTranscriptScreenBuffer([
-      { key: "row-cjk", text: "浣犲ソA" },
+      { key: "row-cjk", text: "你好A" },
     ]);
 
     expect(buffer.rows[0]).toMatchObject({
       key: "row-cjk",
-      textLength: 4,
+      textLength: 3,
       textStartColumn: 1,
-      textEndColumn: 8,
+      textEndColumn: 6,
     });
   });
 

@@ -16,7 +16,7 @@ const llmMock = vi.hoisted(() => ({
         maxAgents: 1,
         maxConcurrency: 1,
       },
-      source: 'async function run(wf, args) { return { synthesis: String(args.request || "") }; }',
+      source: 'async function run(wf, args) { return { synthesis: String(args.request || "Generated test workflow") }; }',
       approvalSummary: 'Run generated test workflow',
     }),
     usage: { inputTokens: 1, outputTokens: 1, totalTokens: 2 },
@@ -24,10 +24,14 @@ const llmMock = vi.hoisted(() => ({
   })),
 }));
 
-vi.mock('@kodax-ai/llm', () => ({
-  resolveProvider: llmMock.resolveProvider,
-  sideQuery: llmMock.sideQuery,
-}));
+vi.mock('@kodax-ai/llm', async (importOriginal) => {
+  const actual = await importOriginal<typeof import('@kodax-ai/llm')>();
+  return {
+    ...actual,
+    resolveProvider: llmMock.resolveProvider,
+    sideQuery: llmMock.sideQuery,
+  };
+});
 
 import { generateWorkflowFromOptions } from './generator.js';
 

@@ -764,10 +764,11 @@ export interface KodaXProviderStreamOptions {
   }) => void;
   /** 会话标识，用于多轮对话上下文恢复 */
   /**
-   * Passive capability learning — fired when a provider HARD-rejects a
-   * reasoning-effort value (400/422 naming the param). The REPL records it in
-   * `capability-cache.json` so the rung is removed from the ladder and never
-   * offered or sent again (see `classifyReasoningEffortRejection`).
+   * Passive capability learning: fired when a provider HARD-rejects a
+   * reasoning-effort value (400/422 naming the param). Hosts can record it via
+   * the agent-layer capability cache so the rung is removed from the effective
+   * ladder and never offered or sent again (see
+   * `classifyReasoningEffortRejection`).
    */
   onReasoningEffortRejected?: (event: {
     provider: string;

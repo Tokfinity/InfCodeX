@@ -94,6 +94,9 @@ const sdkEntries = {
 const internalSubpathDtsResolver = {
   name: 'internal-subpath-dts-resolver',
   resolveId(id) {
+    if (id === '@kodax-ai/agent/media') {
+      return path.join(repoRoot, 'packages/agent/src/media/index.ts');
+    }
     if (id === '@kodax-ai/coding/media') {
       return path.join(repoRoot, 'packages/coding/src/media/index.ts');
     }

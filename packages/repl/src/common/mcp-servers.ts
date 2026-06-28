@@ -28,10 +28,9 @@
  * mid-turn.
  *
  * Schema: this module relies on TypeScript's structural typing against
- * `KodaXMcpServerConfig` (exported from `@kodax-ai/agent` via the coding
- * barrel). Unlike custom providers — which have a runtime validator —
- * MCP entries have no canonical zod schema in the SDK today, so the
- * CRUD does shape-level checks only (required `name`, recognized
+ * `KodaXMcpServerConfig` exported directly from `@kodax-ai/agent`. Unlike
+ * custom providers, MCP entries have no canonical zod schema in the SDK today,
+ * so the CRUD does shape-level checks only (required `name`, recognized
  * transport `type`, transport-shape coherence: stdio→command, http-like
  * transports→url). Embedders that need stricter validation can
  * layer it on top.
@@ -45,7 +44,11 @@
 import fs from 'node:fs';
 import path from 'node:path';
 
-import { getAgentConfigPath, type KodaXMcpServerConfig, type KodaXMcpServersConfig } from '@kodax-ai/coding';
+import {
+  getAgentConfigPath,
+  type McpServerConfig as KodaXMcpServerConfig,
+  type McpServersConfig as KodaXMcpServersConfig,
+} from '@kodax-ai/agent';
 
 /**
  * Return a snapshot of every MCP server currently persisted in

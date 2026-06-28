@@ -189,7 +189,7 @@ import {
   resolveProviderReasoningRuntimeEffort,
   saveConfig,
 } from "../common/utils.js";
-import { recordRejectedEffort } from "../common/capability-cache.js";
+import { recordRejectedEffort } from "@kodax-ai/agent";
 import { buildToolConfirmationPrompt } from "../common/tool-confirmation.js";
 import { t } from "../common/i18n.js";
 // FEATURE_200 Phase B.1 (v0.7.45) — leaf string/predicate helpers extracted.

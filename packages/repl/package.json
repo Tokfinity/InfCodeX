@@ -26,6 +26,7 @@
   "dependencies": {
     "@kodax-ai/agent": "*",
     "@kodax-ai/coding": "*",
+    "@kodax-ai/llm": "*",
     "chalk": "^5.4.1",
     "clipboardy": "^4.0.0",
     "ink": "^6.7.0",

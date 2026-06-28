@@ -1,8 +1,8 @@
 # KodaX Product Requirements
 
-> Last updated: 2026-06-18
+> Last updated: 2026-06-28
 >
-> Current release baseline: `@kodax-ai/kodax@0.7.52`
+> Current release baseline: `@kodax-ai/kodax@0.7.57`
 >
 > This document describes the current product. Historical pre-v0.7.43
 > chain/harness designs have been removed from this current PRD because they no
@@ -53,7 +53,7 @@ server product around it.
 | REPL | `kodax` | Streaming terminal UI, sessions, slash commands, permissions, skills, MCP, child task visibility. |
 | One-shot CLI | `kodax "task"` | Non-interactive task execution with the same coding runtime and provider configuration. |
 | SDK root | `@kodax-ai/kodax` | `runKodaX`, `KodaXClient`, events, session storage helpers. |
-| SDK subpaths | `/agent`, `/llm`, `/coding`, `/repl`, `/skills`, `/mcp`, `/session` | Smaller import surfaces for embedders. |
+| SDK subpaths | `/agent`, `/llm`, `/coding`, `/media`, `/repl`, `/skills`, `/mcp`, `/session` | Smaller import surfaces for embedders. |
 | Binary release | `bun --compile` output | Runs without Node.js on the target machine. |
 
 ## 5. Current Execution Model
@@ -80,11 +80,12 @@ The main Worker remains responsible for final user-facing synthesis.
 
 ### Providers
 
-KodaX must support 14 built-in provider aliases plus user-defined compatible
+KodaX must support 15 built-in provider aliases plus user-defined compatible
 providers. Provider behavior must be described by capability metadata rather
 than scattered prompt prose. Custom providers must support base URL, protocol,
-model, API key env var, reasoning replay, and multimodal capability flags where
-needed. The current provider capability snapshot is maintained in
+model, API key env var, effort-first reasoning profile/preset, request timeout
+normalization, and multimodal capability flags where needed. The current
+provider capability snapshot is maintained in
 `packages/llm/src/providers/provider-capabilities.json` and includes the
 2026-06-14 model refresh for GPT-5.4, Kimi K2.7 Code, GLM-5.2, MiniMax M3/M2.7,
 DeepSeek V4, and Doubao Seed 2.0 routes where supported.
@@ -96,6 +97,13 @@ and edit tools, shell, search, repo intelligence, web fetch/search, LSP
 navigation, MCP calls, git worktree helpers, child task control, goals, todos,
 construction, and self-modification tools. Tool permissions and side effects
 must be visible to the runtime.
+
+### Media Inputs
+
+SDK and REPL hosts must be able to construct image/file/video input artifact
+metadata without importing REPL internals. The canonical media implementation
+lives in the agent layer and is exposed through `@kodax-ai/kodax/media`; coding
+uses the same validation and queue helpers before provider send.
 
 ### Sessions
 

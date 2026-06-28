@@ -1,8 +1,8 @@
 # KodaX Detailed Design
 
-> Last updated: 2026-06-18
+> Last updated: 2026-06-28
 >
-> Current release baseline: `@kodax-ai/kodax@0.7.52`
+> Current release baseline: `@kodax-ai/kodax@0.7.57`
 >
 > This DD describes current implementation structure. Retired V1 chain details
 > were deleted from this active document; use git history and historical feature
@@ -19,7 +19,7 @@ reference and does not duplicate every type. It should answer three questions:
 
 ## 2. Published Package And Build Entries
 
-The root package is `@kodax-ai/kodax@0.7.52`.
+The root package is `@kodax-ai/kodax@0.7.57`.
 
 `package.json` exposes:
 
@@ -29,6 +29,7 @@ The root package is `@kodax-ai/kodax@0.7.52`.
 | `./agent` | `dist/sdk-agent.js` | Generic agent framework. |
 | `./llm` | `dist/sdk-llm.js` | Provider abstraction. |
 | `./coding` | `dist/sdk-coding.js` | Coding agent SDK. |
+| `./media` | `dist/sdk-media.js` | Agent-layer media/input artifact helpers. |
 | `./repl` | `dist/sdk-repl.js` | REPL/config/session helpers. |
 | `./skills` | `dist/sdk-skills.js` | Focused skills subset. |
 | `./mcp` | `dist/sdk-mcp.js` | Focused MCP subset. |
@@ -96,13 +97,14 @@ Built-in aliases are:
 
 ```text
 anthropic, openai, deepseek, kimi, kimi-code, qwen, zhipu,
-zhipu-coding, minimax-coding, mimo-coding, mimo, ark-coding,
+zhipu-coding, zai-coding, minimax-coding, mimo-coding, mimo, ark-coding,
 gemini-cli, codex-cli
 ```
 
 Custom provider design must remain data-driven: protocol, base URL, API key env
-var, default model, reasoning replay, multimodal support, forced tool support,
-and session semantics belong in provider config/capabilities.
+var, default model, reasoning preset/profile, multimodal support, forced tool
+support, timeout normalization, and session semantics belong in provider
+config/capabilities.
 
 ## 6. Tool Registry
 
@@ -214,6 +216,15 @@ Core modules:
 
 The published `@kodax-ai/kodax/skills` subpath is a focused subset of agent
 capabilities. It should not require importing the full coding package.
+
+## 11. Media Input Artifacts
+
+Media/input artifacts are agent-layer primitives under `packages/agent/src/media`.
+The public `@kodax-ai/kodax/media` SDK entry and the legacy
+`@kodax-ai/coding/media` source-side path both re-export that implementation.
+Coding consumes validation/enqueue helpers from this layer; file and video
+artifact contracts remain stable even when a provider route is not wired for
+send.
 
 ## 12. MCP
 

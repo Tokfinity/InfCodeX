@@ -888,6 +888,59 @@ describe('workflow agentic presentation helpers', () => {
     expect(messages.some((event) => event.type === 'error')).toBe(false);
   });
 
+  it('includes completed child partial results when a managed workflow fails later', async () => {
+    type WorkflowHandlerCallbacks = Parameters<typeof workflowCommand.handler>[2];
+    type WorkflowRunMessage = Parameters<NonNullable<WorkflowHandlerCallbacks['onWorkflowRunMessage']>>[0];
+    const messages: WorkflowRunMessage[] = [];
+    const managed: ManagedWorkflowRun = {
+      runId: 'run-partial-failed',
+      done: Promise.resolve({
+        kind: 'failed',
+        error: new Error('unknown workflow task: changelog-extractor'),
+        state: {
+          runId: 'run-partial-failed',
+          status: 'failed',
+          totalSpawned: 2,
+          events: [
+            {
+              seq: 1,
+              type: 'agent_completed',
+              data: {
+                taskId: 'wf-child-1',
+                name: 'changelog-extractor',
+                status: 'completed',
+                summary: 'Found release notes gap and SDK migration follow-up.',
+              },
+            },
+          ],
+          artifacts: [],
+        },
+      }),
+    };
+
+    observeManagedWorkflowDone(
+      managed,
+      { onWorkflowRunMessage: (event) => messages.push(event) },
+      'run-partial-failed',
+      undefined,
+      { canRerun: true, presentation: 'agentic' },
+    );
+
+    await managed.done;
+    await Promise.resolve();
+
+    const errorText = messages.find((event) => event.type === 'error')?.text ?? '';
+    const assistantText = messages.find((event) => event.type === 'assistant' && event.final === true)?.text ?? '';
+    expect(errorText).toContain('Workflow failed (run-partial-failed): unknown workflow task: changelog-extractor');
+    expect(errorText).toContain('/workflow show run-partial-failed');
+    expect(errorText).not.toContain('Partial results before failure:');
+    expect(assistantText).toContain('Workflow failed (run-partial-failed): unknown workflow task: changelog-extractor');
+    expect(assistantText).toContain('Partial results before failure:');
+    expect(assistantText).toContain('Found release notes gap and SDK migration follow-up.');
+    expect(assistantText).toContain('/workflow revise run-partial-failed');
+    expect(assistantText).toContain('/workflow rerun run-partial-failed');
+  });
+
   it('does not treat Chinese report titles or markdown table headers as a digest', () => {
     const report = [
       '# FEATURE_217 变更地图 — Dynamic Workflow Harness Runtime',
@@ -1767,7 +1820,8 @@ describe('startGeneratedWorkflowFromRequest launch policy', () => {
     expect(errorText).toContain('Workflow harness failed before launching child agents');
     expect(errorText).toContain('invalid generated workflow script or saved capsule');
     expect(errorText).toContain('/workflow rerun');
-    expect(errorText).toContain('repeats the saved workflow script');
+    expect(errorText).toContain('/workflow revise');
+    expect(errorText).toContain('repeats it unchanged');
   });
 
   it('prints agentic completion through console fallback without info result framing', async () => {

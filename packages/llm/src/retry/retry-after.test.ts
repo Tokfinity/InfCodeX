@@ -4,7 +4,7 @@
  * Covers the four header forms in the design spec plus the helper's
  * boundary contracts: clamping, jitter-disable for determinism,
  * concurrent invocation safety, and shape detection of error objects
- * across the SDK variants the 12 provider adapters surface.
+ * across the SDK variants the built-in provider adapters surface.
  */
 import { describe, expect, it } from 'vitest';
 

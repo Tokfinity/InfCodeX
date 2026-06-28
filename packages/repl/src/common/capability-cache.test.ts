@@ -4,7 +4,7 @@ import { join } from 'node:path';
 
 import { afterEach, beforeEach, describe, expect, it } from 'vitest';
 import { setAgentConfigHome } from '@kodax-ai/agent';
-import type { KodaXReasoningProfile } from '@kodax-ai/coding';
+import type { KodaXReasoningProfile } from '@kodax-ai/llm';
 import {
   addRejectedEffort,
   capabilityCacheKey,

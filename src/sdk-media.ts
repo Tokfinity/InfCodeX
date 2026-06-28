@@ -5,4 +5,4 @@
  * artifacts without depending on REPL internals.
  */
 
-export * from '@kodax-ai/coding/media';
+export * from '@kodax-ai/agent/media';

@@ -10,7 +10,7 @@ import { join } from 'node:path';
 
 import { afterEach, beforeEach, describe, expect, it } from 'vitest';
 
-import { setAgentConfigHome } from '@kodax-ai/coding';
+import { setAgentConfigHome, type McpServerConfig } from '@kodax-ai/agent';
 
 import {
   getMcpServerConfig,
@@ -48,11 +48,11 @@ function readConfig(): { mcpServers?: Record<string, unknown> } {
 }
 
 // Minimal valid stdio MCP server.
-function makeStdioServer(command: string = 'echo'): import('@kodax-ai/coding').KodaXMcpServerConfig {
+function makeStdioServer(command: string = 'echo'): McpServerConfig {
   return { command, args: ['hello'] };
 }
 
-function makeSseServer(url: string = 'https://example.local/sse'): import('@kodax-ai/coding').KodaXMcpServerConfig {
+function makeSseServer(url: string = 'https://example.local/sse'): McpServerConfig {
   return { type: 'sse', url };
 }
 

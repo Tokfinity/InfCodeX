@@ -23,6 +23,7 @@ import {
   type WorkflowTaskHandle,
   type WorkflowTaskResult,
   type WorkflowTaskSnapshot,
+  type WorkflowTaskStatus,
 } from '@kodax-ai/agent';
 import { resolveProvider, sideQuery } from '@kodax-ai/llm';
 import type { KodaXMessage } from '@kodax-ai/llm';
@@ -54,6 +55,33 @@ const WORKFLOW_GENERATION_TIMEOUT_ENV = 'KODAX_WORKFLOW_GENERATION_TIMEOUT_MS';
 const GENERATED_WORKFLOW_MAX_AGENTS_HARD_CAP = 64;
 const WORKFLOW_GENERATION_REPAIR_ATTEMPTS = 2;
 const GENERATED_WORKFLOW_SMOKE_TIMEOUT_MS = 2_000;
+interface GeneratedWorkflowSmokeScenario {
+  readonly name: string;
+  readonly args?: (request: string) => unknown;
+  readonly status?: (name: string, taskId: string) => WorkflowTaskStatus;
+  readonly finalText?: (name: string, taskId: string) => string;
+  readonly synthesizeText?: string;
+}
+
+const GENERATED_WORKFLOW_SMOKE_SCENARIOS: readonly GeneratedWorkflowSmokeScenario[] = [
+  { name: 'default' },
+  {
+    name: 'variant-results',
+    finalText: (name, taskId) => `Variant smoke child report from ${name} (${taskId}).`,
+    synthesizeText: 'Variant smoke synthesis report.',
+  },
+  {
+    name: 'unverified-success',
+    status: () => 'completed_unverified',
+    finalText: (name) => `Smoke result for ${name}: completed with verification warnings.`,
+    synthesizeText: 'Smoke synthesis: completed with verification warnings.',
+  },
+  {
+    name: 'empty-args-rerun',
+    args: () => ({}),
+  },
+];
+
 const WORKFLOW_PATTERN_GUIDANCE: readonly string[] = [
   '- classify-and-act: first classify a mixed request, then route to the right worker behavior.',
   '- fan-out-and-synthesize: split independent areas, files, hypotheses, reviewers, or perspectives; run them with wf.parallel, then wf.synthesize.',
@@ -301,6 +329,41 @@ function stripGeneratedSourceLiterals(source: string): string {
   return stripped;
 }
 
+function templateLiteralHasExpression(source: string, start: number): boolean {
+  for (let i = start + 1; i < source.length; i += 1) {
+    const ch = source[i];
+    if (ch === '\\') {
+      i += 1;
+      continue;
+    }
+    if (ch === '`') return false;
+    if (ch === '$' && source[i + 1] === '{') return true;
+  }
+  return false;
+}
+
+function findLiteralWorkflowTaskTarget(source: string): { readonly method: string } | undefined {
+  const stripped = stripGeneratedSourceLiterals(source);
+  const pattern = /\bwf\s*\.\s*(wait|snapshot|send|stop)\s*\(/g;
+  let match: RegExpExecArray | null;
+  while ((match = pattern.exec(stripped)) !== null) {
+    const method = match[1];
+    if (!method) continue;
+    const open = stripped.indexOf('(', match.index);
+    if (open < 0) continue;
+    let argStart = open + 1;
+    while (/\s/.test(source[argStart] ?? '')) argStart += 1;
+    const firstArgChar = source[argStart];
+    if (firstArgChar === '`' && templateLiteralHasExpression(source, argStart)) {
+      continue;
+    }
+    if (firstArgChar === '"' || firstArgChar === "'" || firstArgChar === '`') {
+      return { method };
+    }
+  }
+  return undefined;
+}
+
 function isIdentifierPart(ch: string | undefined): boolean {
   return ch !== undefined && /[A-Za-z0-9_$]/.test(ch);
 }
@@ -506,25 +569,83 @@ function assertGeneratedWorkflowSyntax(source: string): void {
   }
 }
 
-function createSmokeWorkflowApi(): WorkflowApi {
+function createSmokeWorkflowApi(scenario: GeneratedWorkflowSmokeScenario): {
+  readonly api: WorkflowApi;
+  readonly artifactCount: () => number;
+} {
   let nextTask = 0;
   const names = new Map<string, string>();
+  const artifacts: string[] = [];
   const nextHandle = (name: string): WorkflowTaskHandle => {
     nextTask += 1;
-    const taskId = `smoke-${nextTask}`;
+    const taskId = `smoke-task-${nextTask}-${Math.random().toString(36).slice(2, 8)}`;
     names.set(taskId, name);
     return { taskId, name };
   };
+  const assertKnownTaskId = (method: string, taskId: string): void => {
+    if (names.has(taskId)) return;
+    const nameMatch = [...names.entries()].find((entry) => entry[1] === taskId);
+    if (nameMatch) {
+      throw new Error(
+        `wf.${method}("${taskId}") used an agent name, but workflow task APIs require ` +
+          'the taskId returned by spawnAgent/runAgent. Store the handle/result and pass ' +
+          'handle.taskId or result.taskId. wf.runAgent already returns the completed result; ' +
+          'wf.parallel returns the array of results.',
+      );
+    }
+    throw new Error(`wf.${method}("${taskId}") references an unknown workflow task id`);
+  };
+  const assertEvidenceRefs = (input: {
+    readonly name: string;
+    readonly evidenceRefs?: readonly string[];
+  }): void => {
+    for (const ref of input.evidenceRefs ?? []) {
+      if (ref.startsWith('file:') || ref.startsWith('diff:') || ref.startsWith('finding:')) {
+        continue;
+      }
+      if (ref.startsWith('task_id:')) {
+        const taskId = ref.slice('task_id:'.length).trim();
+        if (taskId.length === 0) {
+          throw new Error(`wf.runAgent("${input.name}") evidenceRefs contains empty task_id: reference`);
+        }
+        assertKnownTaskId('evidenceRefs', taskId);
+        continue;
+      }
+      const nameMatch = [...names.entries()].find((entry) => entry[1] === ref);
+      if (nameMatch) {
+        throw new Error(
+          `wf.runAgent("${input.name}") evidenceRefs contains agent name "${ref}". ` +
+            'Use "task_id:" + result.taskId from the child result.',
+        );
+      }
+      throw new Error(
+        `wf.runAgent("${input.name}") evidenceRefs contains unsupported ref "${ref}". ` +
+          'Use file:, diff:, finding:, or task_id:<id>.',
+      );
+    }
+  };
   const resultFor = (taskId: string, fallbackName?: string): WorkflowTaskResult => {
+    assertKnownTaskId('wait', taskId);
     const name = names.get(taskId) ?? fallbackName ?? taskId;
+    const status = scenario.status?.(name, taskId) ?? 'completed';
+    return {
+      taskId,
+      name,
+      status,
+      finalText: scenario.finalText?.(name, taskId) ?? `Smoke result for ${name}: completed, done, verified.`,
+    };
+  };
+  const snapshotFor = (method: string, taskId: string): WorkflowTaskSnapshot => {
+    assertKnownTaskId(method, taskId);
+    const name = names.get(taskId) ?? taskId;
     return {
       taskId,
       name,
       status: 'completed',
-      finalText: `Smoke result for ${name}: completed, done, verified.`,
+      lastText: `Smoke snapshot for ${name}`,
     };
   };
-  return {
+  const api: WorkflowApi = {
     runId: 'run-smoke',
     args: undefined,
     budget: {
@@ -533,48 +654,96 @@ function createSmokeWorkflowApi(): WorkflowApi {
       remaining: () => Infinity,
     },
     phase: async (_name, fn) => fn(),
-    spawnAgent: async (input) => nextHandle(input.name),
+    spawnAgent: async (input) => {
+      assertEvidenceRefs(input);
+      return nextHandle(input.name);
+    },
     runAgent: async (input) => {
+      assertEvidenceRefs(input);
       const handle = nextHandle(input.name);
-      return resultFor(handle.taskId, input.name);
+      const result = resultFor(handle.taskId, input.name);
+      if (result.status === 'failed' || result.status === 'stopped') {
+        throw new Error(`workflow task ${result.name} (${result.taskId}) ${result.status}`);
+      }
+      return result;
     },
     wait: async (taskId) => resultFor(taskId),
-    snapshot: async (taskId): Promise<WorkflowTaskSnapshot> => ({
-      taskId,
-      name: names.get(taskId) ?? taskId,
-      status: 'completed',
-      lastText: `Smoke snapshot for ${names.get(taskId) ?? taskId}`,
-    }),
-    output: async (taskId): Promise<WorkflowTaskSnapshot> => ({
-      taskId,
-      name: names.get(taskId) ?? taskId,
-      status: 'completed',
-      lastText: `Smoke snapshot for ${names.get(taskId) ?? taskId}`,
-    }),
-    send: async () => undefined,
-    stop: async () => undefined,
+    snapshot: async (taskId) => snapshotFor('snapshot', taskId),
+    output: async (taskId) => snapshotFor('output', taskId),
+    send: async (taskId) => {
+      assertKnownTaskId('send', taskId);
+    },
+    stop: async (taskId) => {
+      assertKnownTaskId('stop', taskId);
+    },
     parallel: async (items) => Promise.all(items.map((item) => item())),
-    synthesize: async () => ({ text: 'Smoke synthesis: completed, done, verified.' }),
-    artifact: async (name) => ({ name }),
+    synthesize: async () => ({ text: scenario.synthesizeText ?? 'Smoke synthesis: completed, done, verified.' }),
+    artifact: async (name) => {
+      artifacts.push(name);
+      return { name };
+    },
     log: () => undefined,
   };
+  return {
+    api,
+    artifactCount: () => artifacts.length,
+  };
+}
+
+function isSmokeResultDisplayable(value: unknown, artifactCount: number): boolean {
+  if (artifactCount > 0) return true;
+  if (typeof value === 'string') return value.trim().length > 0;
+  if (value === undefined || value === null) return false;
+  if (typeof value !== 'object') return true;
+  if (Array.isArray(value)) return value.length > 0;
+  const record = value as Record<string, unknown>;
+  let sawDisplayKey = false;
+  const synthesis = record.synthesis;
+  if (typeof synthesis === 'string') {
+    sawDisplayKey = true;
+    if (synthesis.trim().length > 0) return true;
+  }
+  if (synthesis && typeof synthesis === 'object') {
+    sawDisplayKey = true;
+    const text = (synthesis as Record<string, unknown>).text;
+    if (typeof text === 'string' && text.trim().length > 0) return true;
+  }
+  for (const key of ['summary', 'report', 'text', 'result']) {
+    const candidate = record[key];
+    if (candidate !== undefined) sawDisplayKey = true;
+    if (typeof candidate === 'string' && candidate.trim().length > 0) return true;
+  }
+  if (sawDisplayKey && Object.keys(record).every((key) =>
+    key === 'synthesis' || key === 'summary' || key === 'report' || key === 'text' || key === 'result'
+  )) {
+    return false;
+  }
+  return Object.keys(record).length > 0;
 }
 
 async function assertGeneratedWorkflowSmoke(input: {
   readonly source: string;
   readonly request: string;
 }): Promise<void> {
-  try {
-    await runRestrictedWorkflowScript({
-      source: input.source,
-      wf: createSmokeWorkflowApi(),
-      args: { request: input.request },
-      filename: 'generated-workflow-smoke.js',
-      timeoutMs: GENERATED_WORKFLOW_SMOKE_TIMEOUT_MS,
-    });
-  } catch (error) {
-    const message = error instanceof Error ? error.message : String(error);
-    throw new Error(`workflow generation source failed safe smoke validation: ${message}`);
+  for (const scenario of GENERATED_WORKFLOW_SMOKE_SCENARIOS) {
+    try {
+      const smoke = createSmokeWorkflowApi(scenario);
+      const result = await runRestrictedWorkflowScript({
+        source: input.source,
+        wf: smoke.api,
+        args: scenario.args?.(input.request) ?? { request: input.request },
+        filename: 'generated-workflow-smoke.js',
+        timeoutMs: GENERATED_WORKFLOW_SMOKE_TIMEOUT_MS,
+      });
+      if (!isSmokeResultDisplayable(result, smoke.artifactCount())) {
+        throw new Error('run() returned no displayable result or artifact');
+      }
+    } catch (error) {
+      const message = error instanceof Error ? error.message : String(error);
+      throw new Error(
+        `workflow generation source failed safe smoke validation (${scenario.name}): ${message}`,
+      );
+    }
   }
 }
 
@@ -597,6 +766,13 @@ export function validateGeneratedWorkflowSource(source: string): string {
       throw new Error('workflow generation source must use wf.snapshot(taskId) instead of legacy wf.output(taskId)');
     }
     throw new Error('workflow generation source must use finalText/text instead of non-existent .output');
+  }
+  const literalTaskTarget = findLiteralWorkflowTaskTarget(source);
+  if (literalTaskTarget) {
+    throw new Error(
+      `workflow generation source must pass taskId variables to wf.${literalTaskTarget.method}(...) instead of string literals; ` +
+        'use handle.taskId from wf.spawnAgent(...) or result.taskId from wf.runAgent(...).',
+    );
   }
   for (const line of strippedSource.split(/\r?\n/)) {
     const artifactCall = line.search(/\bwf\.artifact\s*\(/);
@@ -649,9 +825,12 @@ export function buildWorkflowGenerationUserPrompt(
     '- wf.synthesize({ inputs, rubric }); inputs may be an array of materials, one already-formatted string, or a named object of materials',
     '- wf.artifact(name, value), wf.log({ message, data })',
     '- Return shapes: wf.runAgent/wf.wait return { taskId, name, status, finalText, digest?, verification?, usage }; wf.snapshot returns { taskId, name, status, lastText? }; wf.synthesize returns { text }; wf.artifact returns { name, path? }.',
+    '- Task identity rule: taskId is the opaque result.taskId/handle.taskId value, never the agent name string. Do not hardcode task IDs or pass string literals to wf.wait/wf.snapshot/wf.send/wf.stop; pass handle.taskId or result.taskId variables.',
     '- Important naming trap: never use anyVariable.output in generated source. Agent results use finalText; synthesis results use text; task snapshots use lastText.',
     '- Always await asynchronous workflow calls, especially wf.artifact(...), before returning.',
+    '- Treat args as optional rerun input. Read request text with a fallback such as String(args.request || "the original request") or bake stable request context into child prompts.',
     '- For fan-out, prefer wf.parallel with thunks that call wf.runAgent; if using wf.spawnAgent, always wait or stop each handle so maxConcurrency capacity can release.',
+    '- Correct fan-out result pattern: const results = await wf.parallel([...].map((item) => () => wf.runAgent({...})), { concurrency }); then use results[n].finalText or results.map((r) => r.finalText). Do not call wf.wait after wf.runAgent.',
     '- Keep intermediate findings in local variables and pass their finalText/text values forward; artifacts are durable outputs, not mutable args.',
     '- File-writing/implementation requests are not report-only workflows. If the user asks to create, update, land, implement, or write project files, set manifest.readOnly=false, use readOnly:false child agents for the writing phases, give exact target paths in the prompt, and include verification:{ requiresMutation:true, requiredChangedPaths:[...], rejectPreparatoryFinalText:true } whenever target paths are knowable.',
     '- Never put placeholder paths such as vNEXT.md or TODO.md in requiredChangedPaths. If the exact path is not knowable, omit requiredChangedPaths and keep requiresMutation:true.',
@@ -703,7 +882,7 @@ export function buildWorkflowGenerationUserPrompt(
     '- Complex multi-part work should normally include at least two work phases plus a final wf.synthesize barrier.',
     '- Do not collapse independent investigation, verification, ranking, generation/filtering, or iteration into one child agent.',
     '- A generated workflow with only one child agent is appropriate only when the request has one indivisible work product; otherwise decline simple tasks or generate a richer pattern.',
-    '- Use evidenceRefs when one child reviews another child result; use modelHint:"deep" for verifiers, judges, and synthesis-critical workers.',
+    '- Use evidenceRefs when one child reviews another child result; reference child results as "task_id:" + result.taskId, never as bare agent names. Use modelHint:"deep" for verifiers, judges, and synthesis-critical workers.',
     '',
     'Manifest requirements:',
     '- name, description, phases, readOnly, maxAgents, maxConcurrency, optional plannedAgents, optional tokenBudget',
@@ -785,6 +964,9 @@ function buildWorkflowGenerationRepairPrompt(input: {
   const commonFixes = [
     '- Replace result.output from wf.runAgent(...) or wf.wait(...) with result.finalText.',
     '- Replace result.output from wf.synthesize(...) with result.text.',
+    '- Replace hardcoded wf.wait("...")/wf.snapshot("...")/wf.send("...", ...)/wf.stop("...", ...) calls with handle.taskId/result.taskId variables.',
+    '- Replace wf.wait("agent-name") after wf.runAgent(...) with captured runAgent/parallel results; wf.wait only accepts taskId values from spawnAgent handles.',
+    '- Preserve the existing phase, fan-out, cross-review, and synthesis topology unless that topology itself is invalid; fix API usage instead of collapsing the workflow.',
     '- Keep the outer run() return displayable, such as { synthesis: finalText }.',
     '- Fix generated JavaScript harness errors, including ReferenceError, wrong wf.* argument shapes, and multi-line prompts/rubrics that need template literals or "\\n".',
   ];

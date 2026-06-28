@@ -1,7 +1,7 @@
 /**
  * Retry-After header parsing — FEATURE_130 (v0.7.36).
  *
- * Handles the four forms KodaX's 12 provider adapters encounter when a
+ * Handles the four forms KodaX's built-in provider adapters encounter when a
  * model returns 429 (rate limit) or 503/529 (overloaded):
  *
  *   1. `Retry-After: 120`               — integer seconds (HTTP 7231 standard)

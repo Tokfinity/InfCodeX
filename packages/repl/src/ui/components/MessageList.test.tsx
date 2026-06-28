@@ -212,7 +212,7 @@ describe("MessageList", () => {
   });
 
   it("renders transcript text selections using grapheme-aware ranges", () => {
-    const row = { key: "assistant-1-body-0", text: "浣犲ソA", itemId: "assistant-1" };
+    const row = { key: "assistant-1-body-0", text: "你好A", itemId: "assistant-1" };
     const { lastFrame } = render(
       <MessageList
         items={[
@@ -220,7 +220,7 @@ describe("MessageList", () => {
             id: "assistant-1",
             type: "assistant",
             timestamp: 1,
-            text: "浣犲ソA",
+            text: "你好A",
           },
         ]}
         transcriptModel={{
@@ -243,7 +243,7 @@ describe("MessageList", () => {
       />,
     );
 
-    expect(lastFrame()).toContain("浣犲ソA");
+    expect(lastFrame()).toContain("你好A");
   });
   it("does not duplicate preview rows when a renderer-owned visible window is supplied", () => {
     const previewRow = { key: "streaming-body-0", text: "Preview row", itemId: "assistant-live" };

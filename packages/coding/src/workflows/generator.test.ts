@@ -36,6 +36,9 @@ describe('buildWorkflowGenerationUserPrompt', () => {
     expect(prompt).toContain('Do not set tokenBudget unless the user explicitly asks');
     expect(prompt).toContain('File-writing/implementation requests are not report-only workflows');
     expect(prompt).toContain('Prefer shared-cwd for write children');
+    expect(prompt).toContain('Do not hardcode task IDs');
+    expect(prompt).toContain('Correct fan-out result pattern');
+    expect(prompt).toContain('reference child results as "task_id:" + result.taskId');
     expect(prompt).toContain('fan-out-and-synthesize');
     expect(prompt).toContain('loop-until-done');
     expect(prompt).toContain('Pattern selection guidance');
@@ -221,6 +224,7 @@ describe('validateGeneratedWorkflowSource', () => {
       'async function run(wf) { return await wf.synthesize({ inputs: [], rubric: "x" }); }',
       'async function run(wf) { return await wf.phase("synthesize", async () => { return await wf.synthesize({ inputs: [], rubric: "x" }); }); }',
       'async function run(wf) { const finalText = "done"; const ref = await wf.artifact("final-report", { report: finalText }); return { report: finalText, artifact: ref.name }; }',
+      'async function run(wf) { const handle = await wf.spawnAgent({ name: "a", prompt: "x" }); const r = await wf.wait(`${handle.taskId}`); return { synthesis: r.finalText }; }',
     ];
     for (const source of sources) {
       expect(validateGeneratedWorkflowSource(source)).toBe(source);
@@ -277,6 +281,9 @@ describe('validateGeneratedWorkflowSource', () => {
     expect(() =>
       validateGeneratedWorkflowSource('async function run(wf) { const snap = await wf.output("task-1"); return { status: snap.status }; }'),
     ).toThrow(/wf\.snapshot\(taskId\)/);
+    expect(() =>
+      validateGeneratedWorkflowSource('async function run(wf) { const r = await wf.wait("task-1"); return { synthesis: r.finalText }; }'),
+    ).toThrow(/taskId variables/);
     expect(() =>
       validateGeneratedWorkflowSource('async function run(wf) { wf.artifact("report", { text: "x" }); return { synthesis: "x" }; }'),
     ).toThrow(/await wf\.artifact/);
@@ -360,7 +367,7 @@ describe('generateWorkflow', () => {
               mayUseWorktree: false,
               patterns: ['fan-out-and-synthesize', 'adversarial-verification'],
             },
-            source: 'async function run(wf, args) { return { synthesis: String(args.request || ""), runId: wf.runId }; }',
+            source: 'async function run(wf, args) { return { synthesis: String(args.request || "Compare three competing root-cause hypotheses and verify each one."), runId: wf.runId }; }',
           }),
           '```',
         ].join('\n'),
@@ -398,7 +405,7 @@ describe('generateWorkflow', () => {
           maxConcurrency: 3,
           patterns: ['fan-out-and-synthesize'],
         },
-        source: 'async function run(wf, args) { return { synthesis: String(args.request || "") }; }',
+        source: 'async function run(wf, args) { return { synthesis: String(args.request || "Compare three optimization hypotheses.") }; }',
       }),
     });
 
@@ -419,7 +426,7 @@ describe('generateWorkflow', () => {
           maxConcurrency: 3,
           patterns: ['fan-out-and-synthesize'],
         },
-        source: 'async function run(wf, args) { return { synthesis: String(args.request || "") }; }',
+        source: 'async function run(wf, args) { return { synthesis: String(args.request || "Compare three optimization hypotheses.") }; }',
       }),
     });
 
@@ -477,7 +484,7 @@ describe('generateWorkflow', () => {
           tokenBudget: 200_000,
           patterns: ['fan-out-and-synthesize'],
         },
-        source: 'async function run(wf, args) { return { synthesis: String(args.request || "") }; }',
+        source: 'async function run(wf, args) { return { synthesis: String(args.request || "Audit a large feature with several parallel reviewers and synthesize.") }; }',
       }),
     });
 
@@ -503,7 +510,7 @@ describe('generateWorkflow', () => {
           tokenBudget: 200_000,
           patterns: ['fan-out-and-synthesize'],
         },
-        source: 'async function run(wf, args) { return { synthesis: String(args.request || "") }; }',
+        source: 'async function run(wf, args) { return { synthesis: String(args.request || "Audit a large feature with several reviewers.") }; }',
       }),
     });
 
@@ -532,7 +539,7 @@ describe('generateWorkflow', () => {
               maxConcurrency: 3,
               patterns: ['fan-out-and-synthesize'],
             },
-            source: 'async function run(wf, args) { return { synthesis: String(args.request || "") }; }',
+            source: 'async function run(wf, args) { return { synthesis: String(args.request || "Compare three optimization hypotheses.") }; }',
           });
         }
         return JSON.stringify({
@@ -546,7 +553,7 @@ describe('generateWorkflow', () => {
             maxConcurrency: 3,
             patterns: ['fan-out-and-synthesize'],
           },
-          source: 'async function run(wf, args) { return { synthesis: String(args.request || "") }; }',
+          source: 'async function run(wf, args) { return { synthesis: String(args.request || "Compare three optimization hypotheses.") }; }',
         });
       },
     });
@@ -613,7 +620,14 @@ describe('generateWorkflow', () => {
         calls.push(prompt);
         const source = calls.length === 1
           ? 'async function run(wf) { const snap = await wf.output("task-1"); return { status: snap.status }; }'
-          : 'async function run(wf) { const snap = await wf.snapshot("task-1"); return { status: snap.status }; }';
+          : [
+              'async function run(wf) {',
+              '  const handle = await wf.spawnAgent({ name: "reader", prompt: "Inspect the task.", readOnly: true });',
+              '  const snap = await wf.snapshot(handle.taskId);',
+              '  const result = await wf.wait(handle.taskId);',
+              '  return { status: snap.status, synthesis: result.finalText };',
+              '}',
+            ].join('\n');
         return JSON.stringify({
           action: 'generate',
           manifest,
@@ -720,6 +734,313 @@ describe('generateWorkflow', () => {
     expect(calls).toHaveLength(2);
     expect(calls[1]).toContain('Validation error: workflow generation source failed safe smoke validation');
     expect(calls[1]).toContain('wrong wf.* argument shapes');
+  });
+
+  it('repairs generated source that waits for agent names after runAgent fan-out', async () => {
+    const calls: string[] = [];
+    const manifest = {
+      name: 'fanout-name-wait-repair',
+      description: 'Repair a fan-out workflow that waited on agent names.',
+      phases: ['investigate', 'synthesize'],
+      readOnly: true,
+      maxAgents: 3,
+      maxConcurrency: 2,
+      patterns: ['fan-out-and-synthesize'],
+    };
+
+    const result = await generateWorkflow({
+      request: 'Create a workflow to compare two independent reports and synthesize.',
+      generateText: async ({ prompt }) => {
+        calls.push(prompt);
+        const source = calls.length === 1
+          ? [
+              'async function run(wf) {',
+              '  await wf.phase("investigate", async () => {',
+              '    await wf.parallel([',
+              '      () => wf.runAgent({ name: "reader-a", prompt: "Read A", readOnly: true }),',
+              '      () => wf.runAgent({ name: "reader-b", prompt: "Read B", readOnly: true })',
+              '    ], { concurrency: 2 });',
+              '  });',
+              '  const readerA = await wf.wait("reader-a");',
+              '  return { synthesis: readerA.finalText };',
+              '}',
+            ].join('\n')
+          : [
+              'async function run(wf) {',
+              '  const [readerA, readerB] = await wf.phase("investigate", async () => wf.parallel([',
+              '    () => wf.runAgent({ name: "reader-a", prompt: "Read A", readOnly: true }),',
+              '    () => wf.runAgent({ name: "reader-b", prompt: "Read B", readOnly: true })',
+              '  ], { concurrency: 2 }));',
+              '  const synthesis = await wf.synthesize({',
+              '    inputs: [readerA.finalText, readerB.finalText],',
+              '    rubric: "Synthesize the independent reports."',
+              '  });',
+              '  return { synthesis: synthesis.text };',
+              '}',
+            ].join('\n');
+        return JSON.stringify({
+          action: 'generate',
+          manifest,
+          source,
+        });
+      },
+    });
+
+    expect(result.kind).toBe('generated');
+    expect(calls).toHaveLength(2);
+    expect(calls[1]).toContain('Validation error: workflow generation source must pass taskId variables');
+    expect(calls[1]).toContain('Replace hardcoded wf.wait("...")');
+    expect(calls[1]).toContain('Preserve the existing phase, fan-out, cross-review, and synthesis topology');
+  });
+
+  it('repairs generated source that passes agent names as evidenceRefs', async () => {
+    const calls: string[] = [];
+    const manifest = {
+      name: 'evidence-ref-name-repair',
+      description: 'Repair a workflow that used agent names as evidence refs.',
+      phases: ['inspect', 'review'],
+      readOnly: true,
+      maxAgents: 2,
+      maxConcurrency: 1,
+      patterns: ['adversarial-verification'],
+    };
+
+    const result = await generateWorkflow({
+      request: 'Create a workflow where a reviewer checks an earlier report.',
+      generateText: async ({ prompt }) => {
+        calls.push(prompt);
+        const source = calls.length === 1
+          ? [
+              'async function run(wf) {',
+              '  const baseline = await wf.runAgent({ name: "baseline", prompt: "Write the baseline report.", readOnly: true });',
+              '  const reviewer = await wf.runAgent({',
+              '    name: "reviewer",',
+              '    prompt: "Review the baseline report.",',
+              '    readOnly: true,',
+              '    evidenceRefs: ["baseline"]',
+              '  });',
+              '  return { synthesis: reviewer.finalText, baseline: baseline.finalText };',
+              '}',
+            ].join('\n')
+          : [
+              'async function run(wf) {',
+              '  const baseline = await wf.runAgent({ name: "baseline", prompt: "Write the baseline report.", readOnly: true });',
+              '  const reviewer = await wf.runAgent({',
+              '    name: "reviewer",',
+              '    prompt: "Review the baseline report.",',
+              '    readOnly: true,',
+              '    evidenceRefs: ["task_id:" + baseline.taskId]',
+              '  });',
+              '  return { synthesis: reviewer.finalText, baseline: baseline.finalText };',
+              '}',
+            ].join('\n');
+        return JSON.stringify({
+          action: 'generate',
+          manifest,
+          source,
+        });
+      },
+    });
+
+    expect(result.kind).toBe('generated');
+    expect(calls).toHaveLength(2);
+    expect(calls[1]).toContain('Validation error: workflow generation source failed safe smoke validation');
+    expect(calls[1]).toContain('evidenceRefs contains agent name "baseline"');
+    expect(calls[1]).toContain('reference child results as "task_id:" + result.taskId');
+  });
+
+  it('repairs generated source that assumes a fixed smoke result phrase', async () => {
+    const calls: string[] = [];
+    const manifest = {
+      name: 'fixed-smoke-text-repair',
+      description: 'Repair a workflow that depended on one smoke result wording.',
+      phases: ['inspect', 'synthesize'],
+      readOnly: true,
+      maxAgents: 2,
+      maxConcurrency: 1,
+      patterns: ['fan-out-and-synthesize'],
+    };
+
+    const result = await generateWorkflow({
+      request: 'Create a workflow that inspects release notes and synthesizes findings.',
+      generateText: async ({ prompt }) => {
+        calls.push(prompt);
+        const source = calls.length === 1
+          ? [
+              'async function run(wf) {',
+              '  const report = await wf.runAgent({ name: "release-reader", prompt: "Inspect release notes.", readOnly: true });',
+              '  if (!report.finalText.includes("completed")) throw new Error("unexpected child result shape");',
+              '  return { synthesis: report.finalText };',
+              '}',
+            ].join('\n')
+          : [
+              'async function run(wf) {',
+              '  const report = await wf.runAgent({ name: "release-reader", prompt: "Inspect release notes.", readOnly: true });',
+              '  const synthesis = await wf.synthesize({',
+              '    inputs: [report.finalText],',
+              '    rubric: "Summarize concrete release-note findings."',
+              '  });',
+              '  return { synthesis: synthesis.text };',
+              '}',
+            ].join('\n');
+        return JSON.stringify({
+          action: 'generate',
+          manifest,
+          source,
+        });
+      },
+    });
+
+    expect(result.kind).toBe('generated');
+    expect(calls).toHaveLength(2);
+    expect(calls[1]).toContain('Validation error: workflow generation source failed safe smoke validation');
+    expect(calls[1]).toContain('variant-results');
+    expect(calls[1]).toContain('unexpected child result shape');
+  });
+
+  it('repairs generated source with a data-dependent agent-name wait branch', async () => {
+    const calls: string[] = [];
+    const manifest = {
+      name: 'status-branch-name-wait-repair',
+      description: 'Repair a workflow that waits on an agent name in a status branch.',
+      phases: ['inspect', 'synthesize'],
+      readOnly: true,
+      maxAgents: 2,
+      maxConcurrency: 1,
+      patterns: ['adversarial-verification'],
+    };
+
+    const result = await generateWorkflow({
+      request: 'Create a workflow that reviews a report and handles verification warnings.',
+      generateText: async ({ prompt }) => {
+        calls.push(prompt);
+        const source = calls.length === 1
+          ? [
+              'async function run(wf) {',
+              '  const report = await wf.runAgent({ name: "reporter", prompt: "Write report.", readOnly: true });',
+              '  if (report.status !== "completed") {',
+              '    const retryId = report.name;',
+              '    const retry = await wf.wait(retryId);',
+              '    return { synthesis: retry.finalText };',
+              '  }',
+              '  return { synthesis: report.finalText };',
+              '}',
+            ].join('\n')
+          : [
+              'async function run(wf) {',
+              '  const report = await wf.runAgent({ name: "reporter", prompt: "Write report.", readOnly: true });',
+              '  const synthesis = await wf.synthesize({',
+              '    inputs: [report.finalText],',
+              '    rubric: "Summarize the report, preserving any verification warnings."',
+              '  });',
+              '  return { synthesis: synthesis.text };',
+              '}',
+            ].join('\n');
+        return JSON.stringify({
+          action: 'generate',
+          manifest,
+          source,
+        });
+      },
+    });
+
+    expect(result.kind).toBe('generated');
+    expect(calls).toHaveLength(2);
+    expect(calls[1]).toContain('Validation error: workflow generation source failed safe smoke validation');
+    expect(calls[1]).toContain('unverified-success');
+    expect(calls[1]).toContain('used an agent name');
+  });
+
+  it('repairs generated source whose runtime return is not displayable', async () => {
+    const calls: string[] = [];
+    const manifest = {
+      name: 'empty-runtime-result-repair',
+      description: 'Repair a workflow that returns an empty runtime result.',
+      phases: ['synthesize'],
+      readOnly: true,
+      maxAgents: 1,
+      maxConcurrency: 1,
+      patterns: ['classify-and-act'],
+    };
+
+    const result = await generateWorkflow({
+      request: 'Create a workflow that returns a final summary.',
+      generateText: async ({ prompt }) => {
+        calls.push(prompt);
+        const source = calls.length === 1
+          ? [
+              'async function run() {',
+              '  const finalText = "";',
+              '  return { synthesis: finalText };',
+              '}',
+            ].join('\n')
+          : [
+              'async function run() {',
+              '  return { synthesis: "Final summary placeholder replaced by generated workflow output." };',
+              '}',
+            ].join('\n');
+        return JSON.stringify({
+          action: 'generate',
+          manifest,
+          source,
+        });
+      },
+    });
+
+    expect(result.kind).toBe('generated');
+    expect(calls).toHaveLength(2);
+    expect(calls[1]).toContain('Validation error: workflow generation source failed safe smoke validation');
+    expect(calls[1]).toContain('run() returned no displayable result or artifact');
+  });
+
+  it('repairs generated source that crashes when rerun args omit request', async () => {
+    const calls: string[] = [];
+    const manifest = {
+      name: 'empty-rerun-args-repair',
+      description: 'Repair a workflow that assumes args.request is always present.',
+      phases: ['inspect', 'synthesize'],
+      readOnly: true,
+      maxAgents: 2,
+      maxConcurrency: 1,
+      patterns: ['fan-out-and-synthesize'],
+    };
+
+    const result = await generateWorkflow({
+      request: 'Create a reusable workflow for release audits.',
+      generateText: async ({ prompt }) => {
+        calls.push(prompt);
+        const source = calls.length === 1
+          ? [
+              'async function run(wf, args) {',
+              '  const request = args.request.trim();',
+              '  const report = await wf.runAgent({ name: "release-auditor", prompt: request, readOnly: true });',
+              '  return { synthesis: report.finalText };',
+              '}',
+            ].join('\n')
+          : [
+              'async function run(wf, args) {',
+              '  const request = String(args.request || "Create a reusable workflow for release audits.");',
+              '  const report = await wf.runAgent({ name: "release-auditor", prompt: request, readOnly: true });',
+              '  const synthesis = await wf.synthesize({',
+              '    inputs: [report.finalText],',
+              '    rubric: "Summarize the release audit findings."',
+              '  });',
+              '  return { synthesis: synthesis.text };',
+              '}',
+            ].join('\n');
+        return JSON.stringify({
+          action: 'generate',
+          manifest,
+          source,
+        });
+      },
+    });
+
+    expect(result.kind).toBe('generated');
+    expect(calls).toHaveLength(2);
+    expect(calls[0]).toContain('Treat args as optional rerun input');
+    expect(calls[1]).toContain('Validation error: workflow generation source failed safe smoke validation');
+    expect(calls[1]).toContain('empty-args-rerun');
   });
 
   it('reports the final validation error after all workflow repair attempts fail', async () => {

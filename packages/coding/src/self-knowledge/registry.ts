@@ -45,7 +45,7 @@ const TOPICS: readonly KodaXManualTopic[] = [
     summary: 'What KodaX is, what it is for, and how it differs from Claude Code / Codex CLI.',
     body: [
       'KodaX is a multi-provider AI coding CLI: an interactive REPL + SDK that plans,',
-      'edits code, runs tools, and reviews its own work across 12 LLM provider families.',
+      `edits code, runs tools, and reviews its own work across ${PROVIDER_NAMES.length} LLM provider aliases.`,
       '',
       'Boundary: KodaX is its own product. It does NOT read .claude/settings.json (Claude',
       'Code) or config.toml (Codex CLI). KodaX is configured via ~/.kodax/config.json and',
@@ -93,7 +93,7 @@ const TOPICS: readonly KodaXManualTopic[] = [
     aliases: ['provider', 'model', 'models', 'llm', '供应商', '模型', '提供商'],
     summary: 'Built-in providers, choosing a model, credential check, cross-provider fallback.',
     body: [
-      `KodaX ships ~12 provider families (capability entries: ${PROVIDER_NAMES.length}):`,
+      `KodaX ships ${PROVIDER_NAMES.length} built-in provider aliases:`,
       `  ${PROVIDER_LIST}`,
       '',
       `Default provider: ${KODAX_DEFAULT_PROVIDER} (override with KODAX_PROVIDER env or`,

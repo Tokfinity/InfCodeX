@@ -13,35 +13,13 @@
  * `'now'` priority has zero production usage; KodaX simplifies to 2 tiers.
  */
 
+import type { KodaXInputArtifact } from '../media/types.js';
+
 export type MessagePriority = 'user' | 'background';
 
 export type MessageMode = 'prompt' | 'task-notification' | 'system-reminder';
 
-export type QueuedInputArtifact =
-  | {
-      readonly kind: 'image';
-      readonly path: string;
-      readonly mediaType?: string;
-      readonly source?: string;
-      readonly description?: string;
-    }
-  | {
-      readonly kind: 'file';
-      readonly path: string;
-      readonly mediaType?: string;
-      readonly mimeType?: string;
-      readonly name?: string;
-      readonly source?: string;
-      readonly description?: string;
-    }
-  | {
-      readonly kind: 'video';
-      readonly path: string;
-      readonly mediaType: string;
-      readonly name?: string;
-      readonly source?: string;
-      readonly description?: string;
-    };
+export type QueuedInputArtifact = KodaXInputArtifact;
 
 export interface QueuedMessage {
   /** Stable id for tracing / dedup. Format: `msg-<sequence>`. */

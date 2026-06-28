@@ -10,13 +10,13 @@
 
 | Item | Value |
 |---|---|
-| Current released version | `v0.7.56` |
-| Current package version | `@kodax-ai/kodax@0.7.56` (released 2026-06-25) |
+| Current released version | `v0.7.57` |
+| Current package version | `@kodax-ai/kodax@0.7.57` (released 2026-06-28) |
 | Workspace baseline | `llm / agent / coding / repl` 4 packages |
 | Total tracked features | `28` |
-| InProgress | `2` |
-| Planned | `16` |
-| Completed | `10` |
+| InProgress | `0` |
+| Planned | `14` |
+| Completed | `14` |
 | Tracked feature IDs | `007, 030, 093, 105, 108, 113, 139, 174, 211, 224, 225, 228, 229, 230, 231, 232, 233, 234, 235, 236, 237, 238, 239, 240, 241, 242, 243, 244` |
 | Archive cutoff | Shipped / canceled / absorbed / shelved items through `v0.7.49` are archived. |
 
@@ -24,9 +24,9 @@
 
 | Status | Count | Feature IDs | Next checkpoint |
 |---|---:|---|---|
-| Completed | 10 | `240, 239, 224, 174, 211, 237, 229, 230, 234, 236` | `239, 240` implemented for v0.7.56; `224` released v0.7.54; `174, 211, 237` v0.7.53; `229` v0.7.50; `230, 234, 236` v0.7.51 |
-| InProgress | 2 | `242, 243` | Lean review / project instruction bootstrap and built-in repo intelligence release validation |
-| Planned, near-term | 11 | `233, 241, 228, 244, 231, 235, 238, 232, 105, 108, 225` | `v0.7.57` -> `v0.7.81` |
+| Completed | 14 | `243, 242, 241, 233, 240, 239, 224, 174, 211, 237, 229, 230, 234, 236` | `233, 241, 242, 243` released v0.7.57; `239, 240` released v0.7.56; `224` released v0.7.54; `174, 211, 237` v0.7.53; `229` v0.7.50; `230, 234, 236` v0.7.51 |
+| InProgress | 0 | `-` | No active implementation slot after v0.7.57 release sync |
+| Planned, near-term | 9 | `228, 244, 231, 235, 238, 232, 105, 108, 225` | `v0.7.60` -> `v0.7.81` |
 | Planned, v0.8.x | 5 | `007, 030, 093, 113, 139` | `v0.8.5+` |
 
 > v0.7.49 / v0.7.50 workflow split：`FEATURE_217` remains the human-facing workflow mode. Manual testing reopened required UI/UX and reliability deltas inside [v0.7.49](features/v0.7.49.md#13-v0749-completion-delta): bounded live progress with phase index / running 智能体 wording / preserved progress row / elapsed time / completed-child token usage, localized assistant-style launch notes, result-bearing child-agent digests or folded long-report notices, non-`info` agentic transcript, clear separation between `finished/spawned` progress and lifetime `maxAgents` cap, final synthesis, generated final-result contract lint, implicit `tokenBudget` stripping, generated task-command crash hardening, tighter AMAW invocation policy, wait timeout propagation, no default total workflow wall-clock timeout, terminal cleanup for un-awaited children, accurate template read/write metadata, capsule min-version preflight, manual run cleanup controls, and the closed minimal saved-workflow named reuse delta (`/workflow <savedName>` plus `/workflow rerun <runId|savedName>` with help/completion). `FEATURE_229` in v0.7.50 is the platform layer: it standardizes the same process as agent-layer snapshot/events, SDK subscription/polling, Space-style host policy and lifecycle controls, terminal-state helpers, workflow identity/lifecycle controls beyond named reuse (`display name | revise | rename | revision provenance`), REPL-as-consumer rendering, conservative retention, and durable source/provenance/resultSummary persistence; it is not the first implementation of the user-visible UX.
@@ -38,7 +38,7 @@
 | `v0.7.54` | `1` |
 | `v0.7.55` | `0` |
 | `v0.7.56` | `0` |
-| `v0.7.57` | `4` |
+| `v0.7.57` | `0` |
 | `v0.7.60` | `2` |
 | `v0.7.63` | `1` |
 | `v0.7.66` | `1` |
@@ -54,21 +54,16 @@
 > Release cadence rule: every `v0.7.x` feature-bearing release normally leaves
 > the next two patch versions for debug/patch releases. `v0.7.55` is intentionally
 > left without a planned feature so it can be used for the temporary emergency
-> release. `FEATURE_239` and `FEATURE_240` both move to `v0.7.56`; `v0.7.57`
-> remains the current active feature slot and now carries `FEATURE_233`,
-> `FEATURE_241`, plus working-tree implemented `FEATURE_242` and
-> `FEATURE_243` release validation.
+> release. `FEATURE_239` and `FEATURE_240` both moved to `v0.7.56`.
+> `FEATURE_233`, `FEATURE_241`, `FEATURE_242`, and `FEATURE_243` shipped in
+> `v0.7.57`; `v0.7.58` and `v0.7.59` remain patch/debug slots before the next
+> feature-bearing slot at `v0.7.60`.
 
 ---
 
 ## 进行中的 Feature
 
-> `FEATURE_242` and `FEATURE_243` are implemented in the working tree, pending release review/evals. This section remains the active implementation index.
-
-| ID | Title | Planned | Design |
-|---|---|---|---|
-| `242` | Lean Review + Project Instructions Bootstrap | `v0.7.57` | [v0.7.57](features/v0.7.57.md#feature_242-lean-review--project-instructions-bootstrap) |
-| `243` | Built-in Repository Intelligence + Codebase Mastery Parity | `v0.7.57` | [v0.7.57](features/v0.7.57.md#feature_243-built-in-repository-intelligence--codebase-mastery-parity) |
+No active feature is currently in implementation after the `v0.7.57` release sync.
 
 ---
 
@@ -76,8 +71,6 @@
 
 | ID | Title | Category | Priority | Planned | Design |
 |---|---|---|---|---|---|
-| `233` | Effort-First Reasoning Control System | LLM / Provider Capability + Runtime UX | High | `v0.7.57` | [v0.7.57](features/v0.7.57.md#feature_233-effort-first-reasoning-control-system) |
-| `241` | SDK Timeout Control Surface | SDK / Runtime Configuration | High | `v0.7.57` | [v0.7.57](features/v0.7.57.md#feature_241-sdk-timeout-control-surface) |
 | `228` | Unified Memory Control Plane + Memory Governance | Core / Memory + Governance | High | `v0.7.60` | [v0.7.60](features/v0.7.60.md#feature_228-unified-memory-control-plane--memory-governance) |
 | `244` | Repo Intelligence Graph-Only Index for Cold Module Queries | Core / Repo Intelligence + Performance | Medium | `v0.7.60` | [v0.7.60](features/v0.7.60.md#feature_244-repo-intelligence-graph-only-index-for-cold-module-queries) |
 | `231` | Durable Workflow Replay Resume | Core / Workflow Persistence | High | `v0.7.63` | [v0.7.63](features/v0.7.63.md#feature_231-durable-workflow-replay-resume) |
@@ -111,8 +104,12 @@
 
 | ID | Title | Released | Design | Notes |
 |---|---|---|---|---|
+| `243` | Built-in Repository Intelligence + Codebase Mastery Parity | `v0.7.57` | [v0.7.57](features/v0.7.57.md#feature_243-built-in-repository-intelligence--codebase-mastery-parity) | Released v0.7.57 (2026-06-28). Replaces external Repointel runtime with built-in full/light repo-intelligence, semantic worker sidecar, `relationship_scan`, repo-explorer agent, and `/repo-intel` controls. |
+| `242` | Lean Review + Project Instructions Bootstrap | `v0.7.57` | [v0.7.57](features/v0.7.57.md#feature_242-lean-review--project-instructions-bootstrap) | Released v0.7.57 (2026-06-28). Adds lean review command path and project instruction bootstrap updates for the current Worker + Sidecar architecture. |
+| `241` | SDK Timeout Control Surface | `v0.7.57` | [v0.7.57](features/v0.7.57.md#feature_241-sdk-timeout-control-surface) | Released v0.7.57 (2026-06-28). Adds seconds-based SDK timeout config; LLM request timeout normalization lives in `@kodax-ai/llm`, with coding adapting it to provider resilience. |
+| `233` | Effort-First Reasoning Control System | `v0.7.57` | [v0.7.57](features/v0.7.57.md#feature_233-effort-first-reasoning-control-system) | Released v0.7.57 (2026-06-28). Makes `effort` the primary reasoning control, keeps legacy `reasoningMode`/`--reasoning` as compatibility input, adds `zai-coding`, and documents LLM-layer passive effort learning semantics with the agent-layer default capability cache. |
 | `240` | Cross-Protocol `stopReason` Normalization + Terminal Semantics Dispatch | `v0.7.56` | [v0.7.56](features/v0.7.56.md#feature_240-cross-protocol-stopreason-normalization--terminal-semantics-dispatch) | Implemented 2026-06-24. Adds provider-neutral stop-reason classifier in `@kodax-ai/llm`, wires max-token and managed-protocol gates through it, and gives `pause_turn`, refusal/content-filter, and unknown values explicit terminal handling. |
-| `239` | SDK Multimodal Input + Clipboard Image Public API | `v0.7.56` | [v0.7.56](features/v0.7.56.md#feature_239-sdk-multimodal-input--clipboard-image-public-api) | Implemented 2026-06-24; expanded 2026-06-25 for Space. Adds `@kodax-ai/kodax/media` and `@kodax-ai/coding/media`, shared image clipboard/normalization/persistence helpers, stable image/file/video input artifact contracts, model-level input capabilities, runtime artifact validation, GIF boundary docs, and queued follow-up artifacts. |
+| `239` | SDK Multimodal Input + Clipboard Image Public API | `v0.7.56` | [v0.7.56](features/v0.7.56.md#feature_239-sdk-multimodal-input--clipboard-image-public-api) | Implemented 2026-06-24; expanded 2026-06-25 for Space and relayered in v0.7.57. Adds `@kodax-ai/kodax/media`, canonical `@kodax-ai/agent/media`, `@kodax-ai/coding/media` compatibility re-exports, shared image clipboard/normalization/persistence helpers, stable image/file/video input artifact contracts, model-level input capabilities, runtime artifact validation, GIF boundary docs, and queued follow-up artifacts. |
 | `224` | Self-Improvement Skill Loop (procedural learning triage + SkillCurator v1) | `v0.7.54` | [v0.7.54](features/v0.7.54.md#feature_224-self-improvement-skill-loop) | Released v0.7.54 (2026-06-23). Turn-level learning triage → durable proposal store + usage/trust ledgers → governed, snapshot-safe skill apply via `/learn` (`pending`/`diff`/`approve [--ack-impact]`/`reject`). Approve-apply orchestration exposed from `@kodax-ai/agent` as `approveStoredLearningProposal`. Shipped alongside session recovery, extension discovery + runtime composition, ACP capability multiplexing, and a GLM model refresh. |
 | `174` | `kodax sessions dedupe` | `v0.7.53` | [v0.7.53](features/v0.7.53.md#feature_174-kodax-sessions-dedupe) | Released v0.7.53 (npm + tag + GitHub Release, 2026-06-19). Dry-run-first ghost-session cleanup; only uniquely-matched `runner-*` ghosts move to a reversible `.dedupe-archive`. |
 | `211` | Interactive-Mode Extension/MCP Session State Cross-Resume Persistence | `v0.7.53` | [v0.7.53](features/v0.7.53.md#feature_211-interactive-mode-extensionmcp-session-state-cross-resume-persistence) | Released v0.7.53 (2026-06-19). Runtime extension state snapshotted back to the REPL host and restored across `-r` / `-c`; preserves the FEATURE_173 single-writer invariant. |

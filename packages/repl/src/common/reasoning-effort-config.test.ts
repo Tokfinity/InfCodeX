@@ -1,4 +1,14 @@
-import { describe, expect, it } from 'vitest';
+import { mkdtempSync, rmSync } from 'node:fs';
+import { tmpdir } from 'node:os';
+import { join } from 'node:path';
+
+import { afterEach, beforeEach, describe, expect, it } from 'vitest';
+import {
+  clearCapabilityCache,
+  recordRejectedEffort,
+  resetCapabilityCacheMemoForTesting,
+  setAgentConfigHome,
+} from '@kodax-ai/agent';
 import {
   formatReasoningEffortForDisplay,
   formatReasoningEffortStatusLabel,
@@ -8,6 +18,23 @@ import {
   resolvePermissionModeEffort,
   resolveProviderReasoningRuntimeEffort,
 } from './utils.js';
+
+let tempHome = '';
+
+beforeEach(() => {
+  tempHome = mkdtempSync(join(tmpdir(), 'kodax-reasoning-effort-config-'));
+  setAgentConfigHome(tempHome);
+  resetCapabilityCacheMemoForTesting();
+});
+
+afterEach(() => {
+  resetCapabilityCacheMemoForTesting();
+  setAgentConfigHome(undefined);
+  if (tempHome) {
+    rmSync(tempHome, { recursive: true, force: true });
+    tempHome = '';
+  }
+});
 
 describe('resolveInitialEffortOverride', () => {
   it('restores override from a persisted config effort (Ctrl+T / /effort round-trip)', () => {
@@ -123,6 +150,25 @@ describe('formatReasoningEffortStatusLabel', () => {
       thinking: true,
       reasoningMode: 'auto',
     })).toBe('minimal');
+  });
+
+  it('narrows options from the persisted agent capability cache and restores after clear', () => {
+    recordRejectedEffort('zhipu-coding', 'glm-5.2', 'max', 'observed', 'T0');
+
+    expect(getProviderReasoningEffortOptions('zhipu-coding', 'glm-5.2'))
+      .toEqual(['auto', 'off', 'low', 'medium', 'high', 'xhigh']);
+    expect(formatReasoningEffortStatusLabel({
+      provider: 'zhipu-coding',
+      model: 'glm-5.2',
+      effort: 'max',
+      effortOverride: true,
+      thinking: true,
+      reasoningMode: 'auto',
+    })).toBe('max->high');
+
+    clearCapabilityCache('zhipu-coding', 'glm-5.2');
+    expect(getProviderReasoningEffortOptions('zhipu-coding', 'glm-5.2'))
+      .toEqual(['auto', 'off', 'low', 'medium', 'high', 'xhigh', 'max']);
   });
 });
 

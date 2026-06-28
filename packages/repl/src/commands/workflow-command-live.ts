@@ -4,6 +4,7 @@ import type {
   WorkflowMeta,
   WorkflowProcessEvent,
   WorkflowProcessSource,
+  WorkflowRunState,
 } from '@kodax-ai/agent';
 import type {
   generateWorkflowFromOptions,
@@ -21,6 +22,7 @@ import {
   formatWorkflowCompletionAnswer,
   formatWorkflowEvent,
   formatWorkflowFailureAction,
+  replaceWorkflowResultTruncationMarker,
   renderWorkflowEvent,
   workflowEventStatus,
   type WorkflowRunLocale,
@@ -41,19 +43,42 @@ function formatWorkflowFailedMessage(input: {
   readonly error: Error;
   readonly canRerun: boolean;
   readonly totalSpawned?: number;
+  readonly partialResultText?: string;
+  readonly locale?: WorkflowRunLocale;
 }): string {
   const action = formatWorkflowFailureAction(input.runId, input.canRerun);
+  const partialResultText = input.partialResultText
+    ? replaceWorkflowResultTruncationMarker(
+        input.partialResultText,
+        input.runId,
+        input.locale ?? 'en',
+      )
+    : undefined;
+  const partialLines = partialResultText
+    ? ['', 'Partial results before failure:', partialResultText]
+    : [];
   if (!isWorkflowHarnessFailure(input.error, input.totalSpawned)) {
     return [
       `Workflow failed (${input.runId}): ${input.error.message}`,
+      ...partialLines,
       action,
     ].join('\n');
   }
   return [
     `Workflow harness failed before launching child agents (${input.runId}): ${input.error.message}`,
     'This points to an invalid generated workflow script or saved capsule, not a failed child-agent task.',
+    ...partialLines,
     action,
   ].join('\n');
+}
+
+function formatWorkflowFailurePartialResult(
+  state: WorkflowRunState,
+  locale: WorkflowRunLocale,
+  options: { readonly full?: boolean },
+): string | undefined {
+  return formatArtifactResult(state.artifacts, locale, options)
+    ?? formatFinalEventSummary(state.events, options);
 }
 
 function readWorkflowEventUsageTokens(data: Record<string, unknown> | undefined): number {
@@ -340,16 +365,41 @@ export function observeManagedWorkflowDone(
         live?.complete('stopped', 'Workflow stopped by user.');
         return;
       }
+      const locale = options.locale ?? 'en';
+      const resultOptions = { full: options.presentation === 'agentic' };
+      const partialResultText = formatWorkflowFailurePartialResult(
+        outcome.state,
+        locale,
+        resultOptions,
+      );
+      const failureText = formatWorkflowFailedMessage({
+        runId,
+        error: outcome.error,
+        canRerun: options.canRerun === true,
+        totalSpawned: outcome.state.totalSpawned,
+        ...(partialResultText !== undefined ? { partialResultText } : {}),
+        locale,
+      });
       live?.complete('failed', outcome.error.message);
       emitWorkflowRunMessage(callbacks, {
         type: 'error',
-        text: formatWorkflowFailedMessage({
-          runId,
-          error: outcome.error,
-          canRerun: options.canRerun === true,
-          totalSpawned: outcome.state.totalSpawned,
-        }),
+        text: options.presentation === 'agentic' && partialResultText !== undefined
+          ? formatWorkflowFailedMessage({
+              runId,
+              error: outcome.error,
+              canRerun: options.canRerun === true,
+              totalSpawned: outcome.state.totalSpawned,
+              locale,
+            })
+          : failureText,
       });
+      if (options.presentation === 'agentic' && partialResultText !== undefined) {
+        emitWorkflowRunMessage(callbacks, {
+          type: 'assistant',
+          text: failureText,
+          final: true,
+        });
+      }
       return;
     }
     if (outcome.kind === 'completed') {

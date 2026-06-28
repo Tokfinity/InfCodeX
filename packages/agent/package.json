@@ -42,6 +42,10 @@
     "./learning": {
       "types": "./dist/learning/index.d.ts",
       "import": "./dist/learning/index.js"
+    },
+    "./media": {
+      "types": "./dist/media/index.d.ts",
+      "import": "./dist/media/index.js"
     }
   },
   "scripts": {
@@ -56,6 +60,7 @@
     "@kodax-ai/llm": "*",
     "js-tiktoken": "^1.0.12",
     "fflate": "^0.8.2",
+    "jimp": "^1.6.0",
     "yaml": "^2.8.2"
   },
   "devDependencies": {

@@ -160,7 +160,7 @@ $env:ZHIPU_API_KEY="your_api_key"
 ```json
 {
   "provider": "zhipu-coding",
-  "reasoningMode": "auto"
+  "effort": "auto"
 }
 ```
 
@@ -194,7 +194,7 @@ import { runKodaX } from '@kodax-ai/kodax';
 const result = await runKodaX(
   {
     provider: 'zhipu-coding',
-    reasoningMode: 'auto',
+    effort: 'auto',
   },
   'Explain this codebase'
 );
@@ -206,15 +206,16 @@ const result = await runKodaX(
 
 ```typescript
 import { Runner } from '@kodax-ai/kodax/agent';                // Agent runtime
-import { getProvider } from '@kodax-ai/kodax/llm';              // LLM 抽象（14 个内置 alias）
+import { getProvider } from '@kodax-ai/kodax/llm';              // LLM 抽象（15 个内置 alias）
 import { runKodaX } from '@kodax-ai/kodax/coding';              // Coding tools + prompts
+import { createImageArtifactFromPath } from '@kodax-ai/kodax/media'; // 输入 artifact helpers
 import { SkillRegistry } from '@kodax-ai/kodax/skills';         // 零依赖 skill loader
 import { loadConfig } from '@kodax-ai/kodax/repl';              // REPL 配置 / session 工具
 import { createMcpManager } from '@kodax-ai/kodax/mcp';         // MCP popout manager（v0.7.42 起）
 import { listSessions } from '@kodax-ai/kodax/session';         // session 历史工具
 ```
 
-8 个 SDK 入口（root + 7 subpath）通过 ESM 共享 chunk 复用底层代码 —— 只 import `/agent` 不会把 `/repl` 的 Ink + React 一起拉进来。
+9 个 SDK 入口（root + 8 subpath）通过 ESM 共享 chunk 复用底层代码 —— 只 import `/agent` 不会把 `/repl` 的 Ink + React 一起拉进来。
 
 > **SDK 是 ESM-only**。在 CommonJS 上下文（Electron main 进程、传统 Webpack CJS bundle、`require()` 调用方）必须用 `await import('@kodax-ai/kodax/...')` 代替 `require()`。详见 [docs/SDK_EMBEDDER_GUIDE.md §5](docs/SDK_EMBEDDER_GUIDE.md#5-consuming-from-a-commonjs-context-electron-main-cjs-bundles)，含 Electron main 完整 recipe + 为什么大多数 subpath 物理上无法做 dual ESM/CJS bundle。
 
@@ -232,13 +233,19 @@ import { listSessions } from '@kodax-ai/kodax/session';         // session 历�
       "baseUrl": "https://example.com/v1",
       "apiKeyEnv": "MY_LLM_API_KEY",
       "model": "my-model",
-      "userAgentMode": "compat"
+      "userAgentMode": "compat",
+      "reasoning": {
+        "efforts": ["off", "low", "medium", "high", "max"],
+        "default": "high"
+      }
     }
   ]
 }
 ```
 
 `userAgentMode` 默认 `"compat"`（发送 `KodaX` 而非上游 SDK 的 User-Agent）；如果你的网关要求原生 SDK header，再切到 `"sdk"`。
+
+自定义 reasoning 模型优先使用 v0.7.57 的 `reasoning: { efforts, default }`；无 thinking 能力的模型使用 `"reasoning": "none"`。SDK 宿主的 effort 选择器应从 `reasoningProfile.supportedEfforts` / `defaultEffort` 动态生成，不要假定固定五档。
 
 #### OpenAI 兼容推理模型
 
@@ -465,29 +472,29 @@ kodax --repo-intelligence full --repo-intelligence-trace
 
 ## 仓库结构
 
-KodaX 是基于 npm workspaces 的 TypeScript monorepo，**源码层 4 个 workspace 包**（FEATURE_194 v0.7.43 包合并 — 9 → 4，ADR-036），npm 上以单 bundle 包 `@kodax-ai/kodax` 发布 + 7 个 SDK subpath exports（`/agent`、`/llm`、`/coding`、`/repl`、`/skills`、`/mcp`、`/session`；ADR-024 + ADR-032 + ADR-038）。核心包：
+KodaX 是基于 npm workspaces 的 TypeScript monorepo，**源码层 4 个 workspace 包**（FEATURE_194 v0.7.43 包合并 — 9 → 4，ADR-036），npm 上以单 bundle 包 `@kodax-ai/kodax` 发布 + 8 个 SDK subpath exports（`/agent`、`/llm`、`/coding`、`/media`、`/repl`、`/skills`、`/mcp`、`/session`；ADR-024 + ADR-032 + ADR-038）。核心包：
 
 | Workspace 包 | 作用 | 主要依赖 |
 |----|------|---------|
-| `@kodax-ai/llm` | LLM 抽象层（14 个内置 provider alias + 自定义 provider 注册），可独立使用 | `@anthropic-ai/sdk`, `openai` |
-| `@kodax-ai/agent` | 通用 Agent 框架 —— Runner / runFanOut / runWithIdleYield / ChildTaskRegistry + 会话管理 + tokenization + 可插拔 compaction + **inline 后**:session-lineage 子树 + capabilities (mcp + skills + builtin) + tracing（subpaths: `/session-lineage`、`/capabilities/mcp`、`/capabilities/skills`、`/tracing`） | `@kodax-ai/llm`, `js-tiktoken`, `fflate`, `yaml` |
+| `@kodax-ai/llm` | LLM 抽象层（15 个内置 provider alias + 自定义 provider 注册），可独立使用 | `@anthropic-ai/sdk`, `openai` |
+| `@kodax-ai/agent` | 通用 Agent 框架 —— Runner / runFanOut / runWithIdleYield / ChildTaskRegistry + media/input artifacts + 会话管理 + tokenization + 可插拔 compaction + **inline 后**:session-lineage 子树 + capabilities (mcp + skills + builtin) + tracing（subpaths: `/media`、`/session-lineage`、`/capabilities/mcp`、`/capabilities/skills`、`/tracing`） | `@kodax-ai/llm`, `js-tiktoken`, `fflate`, `jimp`, `yaml` |
 | `@kodax-ai/coding` | Coding Agent:50+ 工具(含 `dispatch_child_task`/`send_message`/`task_stop`)、role prompts、agent loop、auto-continue + repo-intelligence protocol(v0.7.43 inline) | `@kodax-ai/llm`, `@kodax-ai/agent` |
 | `@kodax-ai/repl` | 完整交互式终端 UI（Ink / React、权限模式、命令系统、流式渲染） | `@kodax-ai/coding`, `ink`, `react` |
 
-根目录 `src/kodax_cli.ts` 是 CLI 入口；`src/sdk-{agent,llm,coding,repl,skills,mcp,session}.ts` 是 SDK subpath 入口；构建产物在 `dist/`，单文件二进制在 `dist/binary/<target>/`。
+根目录 `src/kodax_cli.ts` 是 CLI 入口；`src/sdk-{agent,llm,coding,media,repl,skills,mcp,session}.ts` 是 SDK subpath 入口；构建产物在 `dist/`，单文件二进制在 `dist/binary/<target>/`。
 
 ### 源码层 vs npm 发布层
 
 KodaX 有两层结构，SDK 用户需要分开理解：
 
 - **源码层**：上面 4 个 workspace 包（开发者读代码时看到的物理结构）。
-- **npm 发布层**：单个 bundled 包 `@kodax-ai/kodax`，对外暴露 7 个 SDK subpath（SDK 消费者 `import` 时看到的接口）。subpath 分两种角色：
+- **npm 发布层**：单个 bundled 包 `@kodax-ai/kodax`，对外暴露 8 个 SDK subpath（SDK 消费者 `import` 时看到的接口）。subpath 分两种角色：
   - **完整包 subpath**（`/agent`、`/llm`、`/coding`、`/repl`）—— 每个 1:1 对应一个源码包，暴露完整公开 API。
-  - **窄子集 subpath**（`/skills`、`/mcp`、`/session`）—— 从 `/agent` 或 `/repl` 切出聚焦的能力子集，让"只用 Skills/MCP/会话管理"的消费者引入更小的依赖。
+  - **窄子集 subpath**（`/media`、`/skills`、`/mcp`、`/session`）—— 从 `/agent` 或 `/repl` 切出聚焦的能力子集，让"只用 Skills/MCP/会话管理"的消费者引入更小的依赖。
 
 | 源码包 | npm subpath | 类型 | 内容 | 典型消费者 |
 |---|---|---|---|---|
-| `packages/llm`    | `@kodax-ai/kodax/llm`     | 完整包 | 14-alias LLM 抽象 (77 exports) | 独立 LLM 客户端 |
+| `packages/llm`    | `@kodax-ai/kodax/llm`     | 完整包 | 15-alias LLM 抽象 (77 exports) | 独立 LLM 客户端 |
 | `packages/agent`  | `@kodax-ai/kodax/agent`   | 完整包 | Runner / fan-out / session-lineage / capabilities / tracing (202 exports) | 自定义 agent 框架 |
 | `packages/agent`  | `@kodax-ai/kodax/skills`  | **窄子集** | 仅 Skills 系统 —— `SkillRegistry` / `loadFullSkill` / `expandSkillForLLM` 等 (26 exports = v0.7.43 之前 `@kodax-ai/skills` 完整 API) | Skill 加载器、IDE 插件 |
 | `packages/agent`  | `@kodax-ai/kodax/mcp`     | **窄子集** | 仅 MCP —— `McpCapabilityProvider` / `createMcpTransport` / `searchMcpCatalog` 等 (11 exports = v0.7.43 之前 `@kodax-ai/mcp` 完整 API) | MCP server 宿主 |
@@ -504,7 +511,7 @@ KodaX 有两层结构，SDK 用户需要分开理解：
 ```
 KodaX/                       # 4 workspace packages(FEATURE_194 v0.7.43)
 ├── packages/
-│   ├── llm/                 # @kodax-ai/llm —— 14 个内置 provider alias
+│   ├── llm/                 # @kodax-ai/llm —— 15 个内置 provider alias
 │   ├── agent/               # @kodax-ai/agent —— Runner / fan-out / idle-yield + 子树:
 │   │   ├── session-lineage/ # 分支 session tree (v0.7.43 inline)
 │   │   ├── capabilities/
@@ -516,9 +523,9 @@ KodaX/                       # 4 workspace packages(FEATURE_194 v0.7.43)
 │   └── repl/                # @kodax-ai/repl —— Ink TUI
 ├── src/
 │   ├── kodax_cli.ts         # CLI 主入口（bin: `kodax`）
-│   └── sdk-*.ts             # SDK subpath 入口 → @kodax-ai/kodax/{agent,llm,coding,repl,skills,mcp,session}
+│   └── sdk-*.ts             # SDK subpath 入口 → @kodax-ai/kodax/{agent,llm,coding,media,repl,skills,mcp,session}
 ├── scripts/
-│   ├── build-bundle.mjs     # esbuild 单 bundle 多 entry 打包（CLI + root + 7 SDK subpath + chunks）
+│   ├── build-bundle.mjs     # esbuild 单 bundle 多 entry 打包（CLI + root + 8 SDK subpath + chunks）
 │   ├── build-binary.mjs     # Bun --compile 单文件二进制打包
 │   └── release.mjs          # ADR-024 release-time pkg name/exports 注入
 └── .github/workflows/

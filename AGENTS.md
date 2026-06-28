@@ -53,7 +53,7 @@ If the user did not give a concrete task, read `README.md`, then check `docs/` f
 | Package Manager | npm workspaces | — |
 | CLI Framework | Ink (React for CLI) | ^6.7.0 / React >= 19 |
 | Test | Vitest | ^3.2.4 |
-| LLM Providers | Anthropic, OpenAI, DeepSeek, Kimi, Qwen, Zhipu, MiniMax, MiMo, Ark, Gemini CLI, Codex CLI, … | 14 built-in aliases |
+| LLM Providers | Anthropic, OpenAI, DeepSeek, Kimi, Qwen, Zhipu, Zai, MiniMax, MiMo, Ark, Gemini CLI, Codex CLI, … | 15 built-in aliases |
 
 ## Monorepo Structure
 

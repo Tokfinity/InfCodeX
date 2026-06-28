@@ -725,7 +725,7 @@ export abstract class KodaXBaseProvider {
    * Returns milliseconds, or undefined when no usable header is present.
    *
    * FEATURE_130 (v0.7.36): now delegates to the shared `parseRetryAfter`
-   * helper so all 12 provider adapters get 4-form coverage without each
+   * helper so all built-in provider adapters get 4-form coverage without each
    * adapter rolling its own parser. The 4 forms supported are:
    *   - `Retry-After: <integer-seconds>`
    *   - `Retry-After: <HTTP-date>`
