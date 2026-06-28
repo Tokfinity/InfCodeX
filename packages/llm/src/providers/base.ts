@@ -1,7 +1,7 @@
 /**
  * KodaX Base Provider
  *
- * Provider 鎶借薄鍩虹被 - 鎵€鏈?Provider 鐨勫叕鍏卞熀纭€
+ * Provider 抽象基类 - 所有 Provider 的公共基础
  */
 
 import {
@@ -241,7 +241,7 @@ export abstract class KodaXBaseProvider {
    * Resolves whether Anthropic-style thinking signatures must verify
    * strictly (Anthropic proper only). Same cascade as
    * `getStreamMaxDurationMs`. Defaults to false (lenient) when neither
-   * layer sets it 鈥?matches third-party Anthropic-compat behavior.
+   * layer sets it — matches third-party Anthropic-compat behavior.
    */
   public getEffectiveStrictThinkingSignature(model?: string): boolean {
     const descriptorValue = this.getModelDescriptor(model)?.strictThinkingSignature;
@@ -284,13 +284,13 @@ export abstract class KodaXBaseProvider {
   }
 
   /**
-   * FEATURE_216 v0.7.45 鈥?Lightweight credential verification. Returns
+   * FEATURE_216 v0.7.45 — Lightweight credential verification. Returns
    * a never-throws envelope with `ok` + categorized `error`. Concrete
    * compat base classes (`KodaXAnthropicCompatProvider`,
    * `KodaXOpenAICompatProvider`) override this to dispatch by the
    * `verifyStrategy` field. The default here returns `unsupported` so
-   * Provider classes that don't extend a compat base 鈥?or future ones
-   * yet to be wired 鈥?fail safely instead of throwing.
+   * Provider classes that don't extend a compat base — or future ones
+   * yet to be wired — fail safely instead of throwing.
    *
    * Distinct from `isConfigured()`: that one is env-only (no network);
    * this one hits the wire (zero or ~7 tokens depending on strategy)
@@ -323,18 +323,19 @@ export abstract class KodaXBaseProvider {
     // Resolve undefined to the provider's default model so "the active
     // model" asks resolve to the same descriptor as an explicit id.
     const id = modelId ?? this.config.model;
-    // Prefer the full descriptor from `models[]` when present 鈥?it carries
+    // Prefer the full descriptor from `models[]` when present — it carries
     // per-model contextWindow / maxOutputTokens / reasoning fields. This
     // applies EVEN when `id` is the default model: previously the default
     // model short-circuited to a bare `{ id }`, dropping any per-model
     // fields declared for it in `models[]`. That made
     // `getEffectiveContextWindow(defaultModel)` fall back to the
-    // provider-level window even when `models[]` declared a larger one 鈥?    // e.g. a custom provider whose default model is GLM-5.2 (1M ctx)
+    // provider-level window even when `models[]` declared a larger one —
+    // e.g. a custom provider whose default model is GLM-5.2 (1M ctx)
     // silently resolved to the 200K provider default and fired compaction
     // ~5x early.
     const fromList = this.config.models?.find(m => m.id === id);
     if (fromList) return fromList;
-    // No per-model descriptor 鈥?return a bare default-model marker so the
+    // No per-model descriptor — return a bare default-model marker so the
     // getEffective* cascade drops to the provider-level config; unknown
     // non-default ids resolve to undefined (same as before).
     if (id === this.config.model) return { id: this.config.model };
@@ -469,12 +470,12 @@ export abstract class KodaXBaseProvider {
   }
 
   /**
-   * 鑾峰彇妯″瀷鐨勪笂涓嬫枃绐楀彛澶у皬
+   * 获取模型的上下文窗口大小
    *
    * Backwards-compatible no-arg form: resolves against the provider's
    * default model descriptor. New call sites that know the active
    * model should use `getEffectiveContextWindow(model)` directly.
-   * @returns 涓婁笅鏂囩獥鍙ｅぇ灏?(tokens)
+   * @returns 上下文窗口大小 (tokens)
    */
   getContextWindow(): number {
     return this.getEffectiveContextWindow();
@@ -592,8 +593,9 @@ export abstract class KodaXBaseProvider {
       // Hard-reject ONLY an explicit caller request for an effort this model
       // cannot do (e.g. asking to disable thinking on an always-on model like
       // kimi-k2.7-code / minimax-m2-always). Mirrors the explicit-only policy
-      // in `validateExplicitReasoningEffort`. An IMPLICIT/default 'none' 鈥?      // produced by `normalizeReasoningRequest(undefined)` when the caller
-      // passes no reasoning at all (effortSource 'legacy'/non-explicit) 鈥?must
+      // in `validateExplicitReasoningEffort`. An IMPLICIT/default 'none' —
+      // produced by `normalizeReasoningRequest(undefined)` when the caller
+      // passes no reasoning at all (effortSource 'legacy'/non-explicit) — must
       // NOT crash the request: an always-on model simply falls back to its
       // `defaultEffort` and thinks. Without this, every caller that omits
       // reasoning (e.g. the eval harness) throws against these models.
@@ -668,10 +670,10 @@ export abstract class KodaXBaseProvider {
     const s = error.message.toLowerCase();
     // FEATURE_130 (v0.7.36): include 'overload' / '503' / '529' keywords so
     // server-overloaded responses also enter the retry path. Overload is
-    // labeled as `reason="overloaded"` by classifyRateLimitReason 鈥?both
+    // labeled as `reason="overloaded"` by classifyRateLimitReason — both
     // conditions flow through the same withRateLimit loop.
     return [
-      'rate', 'limit', '閫熺巼', '棰戠巼', '1302', '429', 'too many',
+      'rate', 'limit', '速率', '频率', '1302', '429', 'too many',
       'overload', 'overwhelmed', '503', '529', 'busy',
     ].some(k => s.includes(k));
   }
@@ -709,7 +711,7 @@ export abstract class KodaXBaseProvider {
    *   - `Retry-After: <HTTP-date>`
    *   - `retry-after-ms: <milliseconds>` (Anthropic extension)
    *   - exponential-backoff fallback (returned via `withRateLimit`,
-   *     not through this helper 鈥?it is `undefined` here when no
+   *     not through this helper — it is `undefined` here when no
    *     header is present, which the caller then resolves to backoff)
    */
   protected extractRetryAfterMs(error: unknown): number | undefined {
@@ -734,7 +736,7 @@ export abstract class KodaXBaseProvider {
     const patterns = [
       /(\d[\d,]*)\s*tokens?.*?(\d[\d,]*)\s*(?:maximum|limit|context)/i,
       /maximum.*?(\d[\d,]*)\s*tokens?.*?requested.*?(\d[\d,]*)/i,
-      /exceeds?\s+.*?(\d[\d,]*)\s*.*?(?:limit|max|context).*?(\d[\d,]*)/i,
+      /exceeds?\s+.*?(\d[\d,]*)\s*.*?(?:limit|max|context|上限).*?(\d[\d,]*)/i,
     ];
     for (const pat of patterns) {
       const m = msg.match(pat);
@@ -758,7 +760,8 @@ export abstract class KodaXBaseProvider {
       || msg.includes('context length')
       || msg.includes('context_length_exceeded')
       || msg.includes('context window')
-      || msg.includes('context limit');
+      || msg.includes('context limit')
+      || msg.includes('上下文长度');
   }
 
   protected async withRateLimit<T>(
@@ -790,7 +793,7 @@ export abstract class KodaXBaseProvider {
         }
 
         if (this.isRateLimitError(e)) {
-          // Last retry exhausted 鈥?throw
+          // Last retry exhausted — throw
           if (i === retries - 1) {
             throw new KodaXRateLimitError(
               `API rate limit exceeded after ${retries} retries. Please wait and try again later.`,
@@ -799,7 +802,7 @@ export abstract class KodaXBaseProvider {
           }
 
           // FEATURE_130 (v0.7.36): centralized retry-after parsing through
-          // `parseRetryAfter` 鈥?covers `Retry-After: <seconds>` /
+          // `parseRetryAfter` — covers `Retry-After: <seconds>` /
           // `Retry-After: <HTTP-date>` / `retry-after-ms: <ms>` /
           // exponential-backoff fallback. The legacy 500*2^i backoff was
           // identical to base=500ms in the helper, so the wait math is
@@ -828,7 +831,7 @@ export abstract class KodaXBaseProvider {
             onRateLimit(i + 1, retries, delay);
           } else if (!onRetryAfter) {
             // Only log to console when neither the legacy nor the
-            // structured callback is wired 鈥?UI surfaces handle it
+            // structured callback is wired — UI surfaces handle it
             // when at least one is set.
             console.log(`[Rate Limit] Retrying in ${delay / 1000}s (${i + 1}/${retries})...`);
           }

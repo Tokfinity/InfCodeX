@@ -497,6 +497,51 @@ describe('KodaXBaseProvider', () => {
     }
   });
 
+  it('retries Chinese rate-limit errors', async () => {
+    const provider = new TestProvider();
+    const onRetryAfter = vi.fn();
+    const task = vi
+      .fn<() => Promise<string>>()
+      .mockRejectedValueOnce(new Error('请求速率过高'))
+      .mockResolvedValueOnce('ok');
+    const timeoutSpy = vi.spyOn(globalThis, 'setTimeout').mockImplementation((callback: Parameters<typeof setTimeout>[0]) => {
+      if (typeof callback === 'function') {
+        callback();
+      }
+      return undefined as unknown as ReturnType<typeof setTimeout>;
+    });
+    const randomSpy = vi.spyOn(Math, 'random').mockReturnValue(0);
+
+    try {
+      await expect(
+        provider.exposeWithRateLimit(task, undefined, 2, undefined, onRetryAfter),
+      ).resolves.toBe('ok');
+      expect(onRetryAfter).toHaveBeenCalledTimes(1);
+      expect(onRetryAfter.mock.calls[0]![0]).toMatchObject({
+        reason: 'rate-limit',
+        source: 'exponential-backoff',
+      });
+    } finally {
+      timeoutSpy.mockRestore();
+      randomSpy.mockRestore();
+    }
+  });
+
+  it('retries Chinese context-overflow errors immediately', async () => {
+    const provider = new TestProvider();
+    const onRateLimit = vi.fn();
+    const task = vi
+      .fn<() => Promise<string>>()
+      .mockRejectedValueOnce(new Error('上下文长度 exceeds 150000 tokens 上限 128000'))
+      .mockResolvedValueOnce('ok');
+
+    await expect(
+      provider.exposeWithRateLimit(task, undefined, 2, onRateLimit),
+    ).resolves.toBe('ok');
+    expect(task).toHaveBeenCalledTimes(2);
+    expect(onRateLimit).toHaveBeenCalledWith(1, 2, 0);
+  });
+
   it('aborts rate-limit retry sleep when the signal aborts', async () => {
     vi.useFakeTimers();
     const provider = new TestProvider();
