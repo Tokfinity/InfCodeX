@@ -68,11 +68,24 @@ export const MUTATES_FS_TOOL_NAMES: ReadonlySet<string> = new Set([
   'undo',
   'worktree_create',
   'worktree_remove',
-  'scaffold_tool',
   'stage_construction',
-  'scaffold_agent',
   'stage_agent_construction',
-  'activate_agent',
+]);
+
+/**
+ * The subset of `MUTATES_FS_TOOL_NAMES` whose mutated file path is NOT carried
+ * in the tool input (it is computed inside the handler), so it can never be
+ * attributed to `tracker.files`. Each call bumps `unattributedWriteOps` so the
+ * Verifier gate still sees the mutation. (`scaffold_tool` / `scaffold_agent` are
+ * NOT here — they are readonly draft generators; `activate_agent` is NOT here —
+ * it is mutates-state, not mutates-fs.)
+ */
+const UNATTRIBUTED_WRITE_TOOL_NAMES: ReadonlySet<string> = new Set([
+  'undo',
+  'worktree_create',
+  'worktree_remove',
+  'stage_construction',
+  'stage_agent_construction',
 ]);
 
 function lineCount(text: unknown): number {
@@ -120,9 +133,14 @@ export function recordMutationForTool(
         : undefined;
     if (filePath) {
       tracker.files.set(filePath, (tracker.files.get(filePath) ?? 0) + estimateTouchedLines(input));
+    } else if (UNATTRIBUTED_WRITE_TOOL_NAMES.has(normalized)) {
+      // No path in the input and the handler computes it (undo / worktree_* /
+      // stage_*) — record it as an unattributable write so the gate still fires
+      // even when it is the only mutation in the turn.
+      tracker.unattributedWriteOps = (tracker.unattributedWriteOps ?? 0) + 1;
     }
-    // A file-mutating tool always counts as a write op, even when it carries
-    // no attributable path (e.g. scene mutations) — the gate must still see it.
+    // A file-mutating tool always counts as a write op (drives the gate's
+    // didObservableWork precondition) even when its path is unattributable.
     tracker.totalOps += 1;
   } else if (normalized === 'bash') {
     const cmd = typeof input.command === 'string' ? input.command : '';

@@ -956,6 +956,16 @@ export interface ManagedMutationTracker {
    * Optional: defaults to 0 when absent (read as `riskyShellOps ?? 0`).
    */
   riskyShellOps?: number;
+  /**
+   * Count of filesystem mutations whose touched file could NOT be attributed
+   * from the tool input (the path is computed inside the handler): `undo`,
+   * `worktree_create` / `worktree_remove`, `stage_construction` /
+   * `stage_agent_construction`. These bump `totalOps` but leave `files` empty,
+   * so without a separate count they would look like trivial no-op work to the
+   * Verifier gate. Like `riskyShellOps`, an unattributable write is a blind spot
+   * the gate fires on conservatively. Optional: read as `unattributedWriteOps ?? 0`.
+   */
+  unattributedWriteOps?: number;
   /** Set to true after scope reflection has been injected once. Prevents repeated injection. */
   reflectionInjected?: boolean;
 }

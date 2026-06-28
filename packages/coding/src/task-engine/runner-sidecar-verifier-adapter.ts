@@ -172,6 +172,7 @@ export function buildRunnerSidecarVerifierAdapter(
           for (const delta of tracker.files.values()) estimatedChangedLines += delta;
           const gateMetrics = {
             riskyShellOps: tracker.riskyShellOps ?? 0,
+            unattributedWriteOps: tracker.unattributedWriteOps ?? 0,
             writeOps: tracker.totalOps,
             filesChanged: tracker.files.size,
             estimatedChangedLines,

@@ -64,6 +64,8 @@ export interface GateDecision {
 export interface VerifierGateMetrics {
   /** High-risk bash mutations (git push/rm/install/…). bash file/line is a blind spot → fire conservatively. */
   readonly riskyShellOps: number;
+  /** FS mutations whose touched file can't be attributed (undo / worktree_* / stage_*) — a blind spot → fire conservatively. */
+  readonly unattributedWriteOps: number;
   /** write/edit/insert + risky-bash op count. 0 ⇒ no write happened this run. */
   readonly writeOps: number;
   /** Distinct files touched by write/edit tools (precise). */
@@ -230,6 +232,7 @@ export function detectWorkScale(
   const didObservableWork =
     metrics.writeOps > 0 ||
     metrics.riskyShellOps > 0 ||
+    metrics.unattributedWriteOps > 0 ||
     metrics.hasPlan ||
     taskHasAnyToolUse(ctx.transcript);
   if (!didObservableWork) return undefined;
@@ -238,6 +241,12 @@ export function detectWorkScale(
     return {
       fire: true,
       reason: `metric-gate: ${metrics.riskyShellOps} high-risk shell op(s) — bash file/line is a blind spot, fire conservatively`,
+    };
+  }
+  if (metrics.unattributedWriteOps > 0) {
+    return {
+      fire: true,
+      reason: `metric-gate: ${metrics.unattributedWriteOps} write op(s) with no attributable file (undo / worktree / stage) — blind spot, fire conservatively`,
     };
   }
   if (metrics.hasPlan) {
@@ -262,17 +271,6 @@ export function detectWorkScale(
     return {
       fire: true,
       reason: `metric-gate: ~${metrics.estimatedChangedLines} estimated lines > ${TRIVIAL_LINES} — large single-file edit`,
-    };
-  }
-  // A mutating tool whose file path is computed inside its handler (undo /
-  // worktree_create/remove / scaffold_* / stage_construction / activate_agent)
-  // records a write op but 0 filesChanged / 0 lines, so it would otherwise fall
-  // through to the trivial skip below despite having mutated the workspace. Like
-  // riskyShellOps, treat an unattributable write as a blind spot and fire.
-  if (metrics.writeOps > 0 && metrics.filesChanged === 0) {
-    return {
-      fire: true,
-      reason: `metric-gate: ${metrics.writeOps} write op(s) with no attributable file (undo / worktree / scaffold) — blind spot, fire conservatively`,
     };
   }
   return {

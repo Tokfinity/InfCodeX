@@ -1563,7 +1563,12 @@ export const BUILTIN_TOOL_DEFINITIONS: LocalToolDefinition[] = [
       required: ['name'],
     },
     handler: toolScaffoldTool,
-    sideEffect: 'mutates-fs',
+    // Returns a fillable ConstructionArtifact JSON skeleton (you edit it, then
+    // stage_construction persists it) — does NOT touch disk, so it is readonly,
+    // not mutates-fs (ADR-043 / GPT review: it was mislabeled, which made the
+    // Verifier over-fire on a pure draft generator). stage_construction below is
+    // the genuine mutates-fs persist step.
+    sideEffect: 'readonly',
     toClassifierInput: () => '',
   },
   {
@@ -1674,7 +1679,10 @@ export const BUILTIN_TOOL_DEFINITIONS: LocalToolDefinition[] = [
       required: ['name'],
     },
     handler: toolScaffoldAgent,
-    sideEffect: 'mutates-fs',
+    // Returns a fillable agent skeleton (no disk write) — readonly, not
+    // mutates-fs (mislabel; see scaffold_tool). stage_agent_construction is the
+    // genuine persist step.
+    sideEffect: 'readonly',
     toClassifierInput: () => '',
   },
   {

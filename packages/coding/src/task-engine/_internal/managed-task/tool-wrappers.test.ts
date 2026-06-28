@@ -67,6 +67,22 @@ describe('recordMutationForTool — file mutation tracking', () => {
     expect(t.totalOps).toBe(2);
   });
 
+  it('records a pathless fs mutation (undo) as totalOps + unattributedWriteOps, no file', () => {
+    const t = tracker();
+    recordMutationForTool(t, 'undo', {}); // undo carries no path; handler resolves it
+    expect(t.totalOps).toBe(1);
+    expect(t.unattributedWriteOps).toBe(1);
+    expect(t.files.size).toBe(0);
+  });
+
+  it('does NOT track scaffold_tool / activate_agent (readonly / mutates-state, not fs)', () => {
+    const t = tracker();
+    recordMutationForTool(t, 'scaffold_tool', { name: 'foo' });
+    recordMutationForTool(t, 'activate_agent', { name: 'bar' });
+    expect(t.totalOps).toBe(0);
+    expect(t.unattributedWriteOps ?? 0).toBe(0);
+  });
+
   it('records a risky bash mutation as totalOps + riskyShellOps', () => {
     const t = tracker();
     recordMutationForTool(t, 'bash', { command: 'git push origin main' });
@@ -99,17 +115,29 @@ describe('recordMutationForTool — file mutation tracking', () => {
       join(process.cwd(), 'packages/coding/src/tools/tool-definitions.ts'),
       'utf-8',
     );
+    // Tool-level `name:` / `sideEffect:` are at exactly 4-space indent; input
+    // schema property names are deeper, so anchoring to 4 spaces avoids matching
+    // them. Reset `current` after EVERY sideEffect (each tool has exactly one),
+    // so a mutates-state tool (e.g. activate_agent) can't leak its name onto a
+    // later tool's mutates-fs line — the bug that originally mis-added
+    // activate_agent to the set.
     const mutatesFs: string[] = [];
     let current: string | null = null;
     for (const line of src.split('\n')) {
-      const nameMatch = line.match(/^\s*name:\s*['"]([a-z_]+)['"]/);
-      if (nameMatch) current = nameMatch[1];
-      if (/sideEffect:\s*['"]mutates-fs['"]/.test(line) && current) {
-        mutatesFs.push(current);
+      const nameMatch = line.match(/^ {4}name: ['"]([a-z_0-9]+)['"]/);
+      if (nameMatch) {
+        current = nameMatch[1];
+        continue;
+      }
+      const seMatch = line.match(/^ {4}sideEffect: ['"]([a-z-]+)['"]/);
+      if (seMatch) {
+        if (seMatch[1] === 'mutates-fs' && current) mutatesFs.push(current);
         current = null;
       }
     }
     expect(mutatesFs.length).toBeGreaterThan(4); // sanity: parser found tools
+    expect(mutatesFs).not.toContain('activate_agent'); // mutates-state, not -fs
+    expect(mutatesFs).not.toContain('scaffold_tool'); // readonly draft generator
     const missing = mutatesFs.filter((name) => !MUTATES_FS_TOOL_NAMES.has(name));
     expect(missing).toEqual([]);
   });

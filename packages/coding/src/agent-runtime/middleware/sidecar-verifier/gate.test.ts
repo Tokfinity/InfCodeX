@@ -20,6 +20,7 @@ import {
 /** Baseline = Worker did nothing measurable (no writes / plan / risky shell, 1 round). */
 const NO_WORK: VerifierGateMetrics = {
   riskyShellOps: 0,
+  unattributedWriteOps: 0,
   writeOps: 0,
   filesChanged: 0,
   estimatedChangedLines: 0,
@@ -300,11 +301,16 @@ describe('H2 — gate.detectWorkScale (metric refinement)', () => {
     expect(d?.reason).toMatch(/shell op/);
   });
 
-  it('fires on an unattributable write op (undo / worktree / scaffold: writeOps>0 but filesChanged=0)', () => {
+  it('fires on an unattributable write op (undo / worktree / stage) even amid an attributed edit', () => {
     // recordMutationForTool counts these as a write op but cannot resolve the
-    // file (the path is computed inside the handler), so filesChanged/lines stay
-    // 0. Without the blind-spot branch this would fall to the trivial skip.
-    const d = detectWorkScale(editCtx, metrics({ writeOps: 1, filesChanged: 0, estimatedChangedLines: 0 }));
+    // file (the path is computed inside the handler), so it bumps the separate
+    // unattributedWriteOps counter. The gate fires on it even when an attributed
+    // small edit is also present (writeOps=2, filesChanged=1) — which the older
+    // writeOps>0 && filesChanged===0 heuristic would have missed.
+    const d = detectWorkScale(
+      editCtx,
+      metrics({ writeOps: 2, filesChanged: 1, estimatedChangedLines: 3, unattributedWriteOps: 1 }),
+    );
     expect(d?.fire).toBe(true);
     expect(d?.reason).toMatch(/no attributable file/);
   });
