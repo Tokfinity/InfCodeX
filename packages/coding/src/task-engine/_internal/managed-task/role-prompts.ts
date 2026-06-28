@@ -6,9 +6,7 @@
  * (topology-only tests; V1 scout/planner/generator fallbacks deleted
  * by FEATURE_193 v0.7.43), plus the runtime resolver
  * `resolveRoleInstructions` that bridges `RunnerChainPromptContext`
- * through `createRolePrompt` for the v0.7.22-parity surface, with the
- * Scout-skillMap + runtime-verification + completion-contract helper
- * blocks layered on top.
+ * through `createRolePrompt` for the current Worker prompt surface.
  *
  * Extracted from `task-engine/runner-driven.ts` (lines 345–681 in the
  * pre-FEATURE_171 monolith) as part of FEATURE_171 (v0.7.41) modular
@@ -51,8 +49,8 @@ export const WORKER_INSTRUCTIONS_FALLBACK = [
  * Resolve the system prompt for a role. When the full `promptContext`
  * (prompt + decision) is present, delegate to `createRolePrompt` for the
  * v0.7.22-parity prompt (decision summary, contract, metadata,
- * verification, tool-policy, evidence strategies, dispatch_child_task
- * guidance, H0/H1/H2 framework, handoff/verdict/contract block specs).
+ * verification, tool-policy, evidence strategies, and dispatch_child_task
+ * guidance).
  * Otherwise fall back to the minimal static constants — keeps test
  * fixtures that call `buildRunnerAgentChain(ctx, {})` working.
  */
@@ -74,15 +72,14 @@ export function resolveRoleInstructions(
     ? promptContext.contextFactory(role, recorder)
     : { originalTask: promptContext.prompt };
   // P1 parity — resolve per-role tool policy at invocation time so the
-  // Generator branch can see Scout's mutation intent. Falls back to the
-  // static `toolPolicy` for tests / topology-only paths.
+  // Future role policies can attach here; falls back to the static
+  // `toolPolicy` for tests / topology-only paths.
   const toolPolicy = promptContext.toolPolicyFactory
     ? promptContext.toolPolicyFactory(role, recorder)
     : promptContext.toolPolicy;
   // M4 parity — resolve routing decision lazily. When the caller supplies
-  // a thunk, the Generator / Evaluator see the post-Scout decision
-  // (`applyScoutDecisionToPlan` output) rather than the pre-Scout
-  // snapshot. Tests pass a static decision for topology checks.
+  // a thunk, prompt construction reads the latest plan decision. Tests pass a
+  // static decision for topology checks.
   const decision = typeof promptContext.decision === 'function'
     ? promptContext.decision()
     : promptContext.decision;

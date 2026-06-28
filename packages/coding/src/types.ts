@@ -943,7 +943,7 @@ export interface KodaXManagedBudgetSnapshot {
   extensionReason?: string;
 }
 
-/** Mutable tracker for Scout mutation scope 鈥?shared between worker events and protocol tool. */
+/** Mutable tracker for filesystem/shell mutations observed during managed Worker execution. */
 export interface ManagedMutationTracker {
   readonly files: Map<string, number>;
   totalOps: number;
@@ -960,7 +960,8 @@ export interface ManagedMutationTracker {
    * Count of filesystem mutations whose touched file could NOT be attributed
    * from the tool input (the path is computed inside the handler): `undo`,
    * `worktree_create` / `worktree_remove`, `stage_construction` /
-   * `stage_agent_construction`. These bump `totalOps` but leave `files` empty,
+   * `stage_agent_construction`, or `stage_self_modify`. These bump `totalOps`
+   * but leave `files` empty,
    * so without a separate count they would look like trivial no-op work to the
    * Verifier gate. Like `riskyShellOps`, an unattributable write is a blind spot
    * the gate fires on conservatively. Optional: read as `unattributedWriteOps ?? 0`.

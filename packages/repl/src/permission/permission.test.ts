@@ -183,11 +183,14 @@ describe('plan mode — metadata-driven gating (v0.7.42 gap 2)', () => {
     );
   });
 
-  it('construction-staircase tools block in plan mode (mutates-fs/state, no escape)', () => {
+  it('construction-staircase WRITE/activate steps block in plan mode (scaffold is a readonly draft)', () => {
     const projectRoot = createProjectRoot();
-    expect(getPlanModeBlockReason('scaffold_tool', { name: 'foo' }, projectRoot)).toContain(
-      "Tool 'scaffold_tool'",
-    );
+    // scaffold_tool / scaffold_agent only return a fillable JSON skeleton (no
+    // disk write) — relabeled 'readonly' (ADR-043), so drafting a design during
+    // planning is permitted. The steps that actually persist / activate the
+    // artifact remain blocked.
+    expect(getPlanModeBlockReason('scaffold_tool', { name: 'foo' }, projectRoot)).toBeNull();
+    expect(getPlanModeBlockReason('scaffold_agent', { name: 'foo' }, projectRoot)).toBeNull();
     expect(
       getPlanModeBlockReason('stage_construction', { artifact_json: '{}' }, projectRoot),
     ).toContain("Tool 'stage_construction'");

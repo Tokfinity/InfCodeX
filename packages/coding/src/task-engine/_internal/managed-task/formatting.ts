@@ -18,7 +18,6 @@ import type {
   KodaXSkillInvocationContext,
   KodaXSkillMap,
   KodaXTaskCapabilityHint,
-  KodaXTaskRoutingDecision,
   KodaXTaskToolPolicy,
   KodaXTaskVerificationContract,
 } from '../../../types.js';
@@ -97,25 +96,6 @@ export function formatRoleRoundSummarySection(summary: KodaXRoleRoundSummary): s
     formatOptionalListSection('Unresolved questions:', summary.unresolvedQuestions),
     formatOptionalListSection('Next focus:', summary.nextFocus),
   ].filter((line): line is string => Boolean(line)).join('\n');
-}
-
-/**
- * Collapse a full harness identifier (e.g. `H2_PLAN_EXECUTE_EVAL`) to its
- * short label (`H2`). Returns the raw input for any unknown value.
- */
-export function formatHarnessProfileShort(
-  harnessProfile?: KodaXTaskRoutingDecision['harnessProfile'],
-): string | undefined {
-  switch (harnessProfile) {
-    case 'H0_DIRECT':
-      return 'H0';
-    case 'H1_EXECUTE_EVAL':
-      return 'H1';
-    case 'H2_PLAN_EXECUTE_EVAL':
-      return 'H2';
-    default:
-      return harnessProfile;
-  }
 }
 
 export function formatCapabilityHint(hint: KodaXTaskCapabilityHint): string {

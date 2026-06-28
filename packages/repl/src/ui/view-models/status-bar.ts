@@ -180,19 +180,6 @@ function formatToolAction(currentTool: string): string {
   return currentTool;
 }
 
-function formatHarnessProfileShort(harnessProfile?: string): string | undefined {
-  switch (harnessProfile) {
-    case "H0_DIRECT":
-      return "H0";
-    case "H1_EXECUTE_EVAL":
-      return "H1";
-    case "H2_PLAN_EXECUTE_EVAL":
-      return "H2";
-    default:
-      return harnessProfile;
-  }
-}
-
 function formatThinkingStatus(label: string, thinkingCharCount?: number): string {
   return thinkingCharCount && thinkingCharCount > 0
     ? `${label} (${thinkingCharCount} chars)`
@@ -289,8 +276,7 @@ export function buildBusyStatusText({
   }
 
   if (managedHarnessProfile) {
-    const harness = formatHarnessProfileShort(managedHarnessProfile);
-    const roleLabel = `${harness}${managedWorkerTitle ? ` - ${managedWorkerTitle}` : ""}`;
+    const roleLabel = managedWorkerTitle ?? "Worker";
     // v0.7.38 FEATURE_156 — idle-wait visual indicator. Distinct from
     // `currentTool` / `isThinkingActive`: the agent is alive but
     // suspended pending external wake, so the spinner is justified but

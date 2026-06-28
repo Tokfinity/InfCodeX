@@ -75,6 +75,14 @@ describe('recordMutationForTool — file mutation tracking', () => {
     expect(t.files.size).toBe(0);
   });
 
+  it('records stage_self_modify as a pathless fs mutation', () => {
+    const t = tracker();
+    recordMutationForTool(t, 'stage_self_modify', { artifact_json: '{"kind":"agent"}' });
+    expect(t.totalOps).toBe(1);
+    expect(t.unattributedWriteOps).toBe(1);
+    expect(t.files.size).toBe(0);
+  });
+
   it('does NOT track scaffold_tool / activate_agent (readonly / mutates-state, not fs)', () => {
     const t = tracker();
     recordMutationForTool(t, 'scaffold_tool', { name: 'foo' });
@@ -88,6 +96,26 @@ describe('recordMutationForTool — file mutation tracking', () => {
     recordMutationForTool(t, 'bash', { command: 'git push origin main' });
     expect(t.totalOps).toBe(1);
     expect(t.riskyShellOps).toBe(1);
+    expect(t.files.size).toBe(0);
+  });
+
+  it('records shell write-policy patterns as risky bash mutations', () => {
+    const t = tracker();
+    recordMutationForTool(t, 'bash', { command: 'Set-Content -Path a.txt -Value hi' });
+    recordMutationForTool(t, 'bash', { command: 'echo hi > a.txt' });
+    recordMutationForTool(t, 'bash', { command: 'sed -i s/old/new/ file.ts' });
+    expect(t.totalOps).toBe(3);
+    expect(t.riskyShellOps).toBe(3);
+    expect(t.files.size).toBe(0);
+  });
+
+  it('records shell state-change commands as risky bash mutations', () => {
+    const t = tracker();
+    recordMutationForTool(t, 'bash', { command: 'git rm old.ts' });
+    recordMutationForTool(t, 'bash', { command: 'pnpm update @scope/pkg' });
+    recordMutationForTool(t, 'bash', { command: 'chmod 600 secrets.txt' });
+    expect(t.totalOps).toBe(3);
+    expect(t.riskyShellOps).toBe(3);
     expect(t.files.size).toBe(0);
   });
 
@@ -115,6 +143,14 @@ describe('recordMutationForTool — file mutation tracking', () => {
       join(process.cwd(), 'packages/coding/src/tools/tool-definitions.ts'),
       'utf-8',
     );
+    const selfModifySrc = readFileSync(
+      join(process.cwd(), 'packages/coding/src/tools/self-modify-tool.ts'),
+      'utf-8',
+    );
+    const constNames = new Map<string, string>();
+    for (const match of selfModifySrc.matchAll(/export const ([A-Z_0-9]+) = ['"]([a-z_0-9]+)['"] as const/g)) {
+      constNames.set(match[1] ?? '', match[2] ?? '');
+    }
     // Tool-level `name:` / `sideEffect:` are at exactly 4-space indent; input
     // schema property names are deeper, so anchoring to 4 spaces avoids matching
     // them. Reset `current` after EVERY sideEffect (each tool has exactly one),
@@ -124,9 +160,9 @@ describe('recordMutationForTool — file mutation tracking', () => {
     const mutatesFs: string[] = [];
     let current: string | null = null;
     for (const line of src.split('\n')) {
-      const nameMatch = line.match(/^ {4}name: ['"]([a-z_0-9]+)['"]/);
+      const nameMatch = line.match(/^ {4}name: (?:['"]([a-z_0-9]+)['"]|([A-Z_0-9]+))/);
       if (nameMatch) {
-        current = nameMatch[1];
+        current = nameMatch[1] ?? constNames.get(nameMatch[2] ?? '') ?? `__unresolved:${nameMatch[2] ?? 'name'}`;
         continue;
       }
       const seMatch = line.match(/^ {4}sideEffect: ['"]([a-z-]+)['"]/);
@@ -136,6 +172,8 @@ describe('recordMutationForTool — file mutation tracking', () => {
       }
     }
     expect(mutatesFs.length).toBeGreaterThan(4); // sanity: parser found tools
+    expect(mutatesFs.filter((name) => name.startsWith('__unresolved:'))).toEqual([]);
+    expect(mutatesFs).toContain('stage_self_modify');
     expect(mutatesFs).not.toContain('activate_agent'); // mutates-state, not -fs
     expect(mutatesFs).not.toContain('scaffold_tool'); // readonly draft generator
     const missing = mutatesFs.filter((name) => !MUTATES_FS_TOOL_NAMES.has(name));

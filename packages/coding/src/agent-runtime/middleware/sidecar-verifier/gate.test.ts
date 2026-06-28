@@ -11,7 +11,6 @@ import type { KodaXMessage } from '@kodax-ai/llm';
 
 import {
   composeGateDecision,
-  detectActionSurface,
   detectConversationalIntent,
   detectWorkScale,
   type VerifierGateMetrics,
@@ -56,95 +55,6 @@ function makeCtx(transcript: readonly KodaXMessage[]): StopHookContext {
     reanimateBudget: 2,
   };
 }
-
-describe('FEATURE_196 — gate.detectActionSurface (Layer 1)', () => {
-  it('fires when last assistant turn invokes a mutation tool (write)', () => {
-    const ctx = makeCtx([
-      { role: 'user', content: 'add a hello function to foo.ts' },
-      {
-        role: 'assistant',
-        content: [
-          { type: 'text', text: 'I will add the function.' },
-          {
-            type: 'tool_use',
-            id: 't-1',
-            name: 'write',
-            input: { path: 'foo.ts', content: 'function hello() {}' },
-          },
-        ],
-      },
-    ]);
-    const decision = detectActionSurface(ctx);
-    expect(decision).toBeDefined();
-    expect(decision?.fire).toBe(true);
-    expect(decision?.reason).toMatch(/action-surface/);
-  });
-
-  it('fires when last assistant turn invokes a read-only tool (grep)', () => {
-    const ctx = makeCtx([
-      { role: 'user', content: 'search README for setup instructions' },
-      {
-        role: 'assistant',
-        content: [
-          {
-            type: 'tool_use',
-            id: 't-1',
-            name: 'grep',
-            input: { pattern: 'setup', path: 'README.md' },
-          },
-        ],
-      },
-    ]);
-    const decision = detectActionSurface(ctx);
-    expect(decision?.fire).toBe(true);
-  });
-
-  it('fires when last assistant turn invokes dispatch_child_task', () => {
-    const ctx = makeCtx([
-      { role: 'user', content: 'investigate the auth bug' },
-      {
-        role: 'assistant',
-        content: [
-          {
-            type: 'tool_use',
-            id: 't-1',
-            name: 'dispatch_child_task',
-            input: { id: 'p-1', objective: 'investigate auth' },
-          },
-        ],
-      },
-    ]);
-    const decision = detectActionSurface(ctx);
-    expect(decision?.fire).toBe(true);
-  });
-
-  it('returns undefined when last assistant turn has no tool_use (text-only)', () => {
-    const ctx = makeCtx([
-      { role: 'user', content: '你好' },
-      {
-        role: 'assistant',
-        content: [{ type: 'text', text: '你好! 我是 KodaX 的开发助手。' }],
-      },
-    ]);
-    const decision = detectActionSurface(ctx);
-    expect(decision).toBeUndefined();
-  });
-
-  it('returns undefined when last assistant turn has string content (text-only)', () => {
-    const ctx = makeCtx([
-      { role: 'user', content: 'hi' },
-      { role: 'assistant', content: 'Hello! How can I help?' },
-    ]);
-    const decision = detectActionSurface(ctx);
-    expect(decision).toBeUndefined();
-  });
-
-  it('returns undefined when transcript has no assistant message', () => {
-    const ctx = makeCtx([{ role: 'user', content: 'hi' }]);
-    const decision = detectActionSurface(ctx);
-    expect(decision).toBeUndefined();
-  });
-});
 
 describe('FEATURE_196 — gate.detectConversationalIntent (Layer 2)', () => {
   it('skips for Chinese greeting "你好"', () => {

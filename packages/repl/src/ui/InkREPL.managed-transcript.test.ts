@@ -570,12 +570,12 @@ describe("appendPersistedUiHistorySnapshot", () => {
       { type: "info", text: "> AMA Routing - Routing ready" },
     ]);
     const afterSecondAppend = appendPersistedUiHistorySnapshot(afterFirstAppend, [
-      { type: "info", text: "> AMA H1 - Starting refinement round 2" },
+      { type: "info", text: "> AMA - Starting refinement round 2" },
     ]);
 
     expect(afterSecondAppend).toEqual([
       { type: "info", text: "> AMA Routing - Routing ready" },
-      { type: "info", text: "> AMA H1 - Starting refinement round 2" },
+      { type: "info", text: "> AMA - Starting refinement round 2" },
     ]);
   });
 

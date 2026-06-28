@@ -5,18 +5,10 @@
  * termination — including "你好" trivial chat with zero action surface
  * to verify. 3-cost: latency (3-10s tail) + verifier LLM call + UI noise.
  *
- * F196 introduces a 2-layer content-aware gate to skip sidecar on
- * conversational turns while preserving the F184 core contract of
- * catching zhipu intent-vs-action floor ("Worker claims it did X but
- * never invoked X tool"):
- *
- *   Layer 1 (action-surface, deterministic): if the Worker invoked
- *   ANY tool in its last assistant turn → fire (something to verify).
- *
- *   Layer 2 (user intent, deterministic): if Layer 1 is empty AND the
- *   user's last message is a short conversational greeting → skip.
- *
- *   Default: fire (safe baseline — F184 contract preserved).
+ * The current H2 gate is metric-refined: objective work-scale signals fire the
+ * verifier, trivial observed work can skip, short conversational greetings can
+ * skip, and the default remains fire to preserve the F184 intent-vs-action
+ * floor ("Worker claims it did X but never invoked X tool").
  *
  * Escape hatch: `KODAX_VERIFIER_ALWAYS=1` env var (or
  * `verifierAlwaysOn: true` in `~/.kodax/config.json`) forces 100% fire
@@ -27,21 +19,6 @@
  */
 import type { StopHookContext } from '@kodax-ai/agent';
 import type { KodaXMessage, KodaXContentBlock } from '@kodax-ai/llm';
-
-/**
- * Tools whose presence in the last assistant turn means "Worker did
- * real work this turn — verify the claim."
- *
- * Includes the file-mutation set, dispatch_child_task (work was
- * delegated), AND all the repointel pull-tools / grep / read / glob /
- * bash / todo_* — basically any tool use whatsoever signals "non-
- * conversational turn", which is the cheap conservative gate. The
- * narrower "only mutations" cut would be unsafe because a Worker
- * grep → false-claim-of-finding flow needs verifier.
- *
- * Empty set (no tool use at all) is the only state that can reach
- * Layer 2 (conversational intent detection).
- */
 
 /**
  * Final gate decision: `fire=true` means run the sidecar verifier;
@@ -95,23 +72,6 @@ export const ROUNDS_VERIFY_THRESHOLD = 10;
 export const TRIVIAL_LINES = 20;
 
 /**
- * Find the last assistant message in the transcript (closest to the
- * stop-hook fire point). Returns `undefined` for transcripts with no
- * assistant turn (defensive — Runner's stop-hook contract guarantees
- * at least one assistant message, but the wider transcript type allows
- * the case).
- */
-function findLastAssistantMessage(
-  transcript: readonly KodaXMessage[],
-): KodaXMessage | undefined {
-  for (let i = transcript.length - 1; i >= 0; i -= 1) {
-    const msg = transcript[i];
-    if (msg.role === 'assistant') return msg;
-  }
-  return undefined;
-}
-
-/**
  * Find the last user message in the transcript. Used by Layer 2 to
  * detect conversational intent.
  *
@@ -143,51 +103,14 @@ function extractMessageText(msg: KodaXMessage): string {
 }
 
 /**
- * Returns true if the last assistant message contains at least one
- * `tool_use` content block — any tool, not just mutations. The
- * conservative gate: a tool call means there's something for the
- * verifier to check (real work or false claim that work happened).
- */
-function lastAssistantHasToolUse(
-  transcript: readonly KodaXMessage[],
-): boolean {
-  const last = findLastAssistantMessage(transcript);
-  if (!last) return false;
-  if (typeof last.content === 'string') return false;
-  for (const block of last.content as readonly KodaXContentBlock[]) {
-    if (block.type === 'tool_use') return true;
-  }
-  return false;
-}
-
-/**
- * Layer 1 — action-surface detector.
- *
- * Returns `{fire: true}` if the last assistant turn had any tool use.
- * Returns `undefined` if no signal (defer to Layer 2).
- */
-export function detectActionSurface(
-  ctx: StopHookContext,
-): GateDecision | undefined {
-  if (lastAssistantHasToolUse(ctx.transcript)) {
-    return {
-      fire: true,
-      reason: 'action-surface: last assistant turn invoked a tool',
-    };
-  }
-  return undefined;
-}
-
-/**
  * Did the Worker take ANY observable tool action (reads included) in response
  * to the current request? Scans assistant turns AFTER the last non-synthetic
  * user message for any `tool_use` block.
  *
- * This is broader than `lastAssistantHasToolUse` (which only inspects the final
- * turn — text-only at a natural-end termination) and broader than the
- * write-only `mutationTracker` (which never records reads/grep/glob). It lets
- * the metric gate tell apart a *grounded* read-only lookup (skip-eligible) from
- * a text-only claim with NO tool evidence (must fire — F184 floor).
+ * This is broader than the write-only `mutationTracker` (which never records
+ * reads/grep/glob). It lets the metric gate tell apart a grounded read-only
+ * lookup (skip-eligible) from a text-only claim with no tool evidence (must
+ * fire — F184 floor).
  */
 function taskHasAnyToolUse(transcript: readonly KodaXMessage[]): boolean {
   let requestIdx = -1;

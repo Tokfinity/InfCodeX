@@ -1,18 +1,5 @@
 import type { KodaXManagedTaskStatusEvent } from "@kodax-ai/coding";
 
-function formatHarnessProfileShort(harnessProfile?: string): string | undefined {
-  switch (harnessProfile) {
-    case "H0_DIRECT":
-      return "H0";
-    case "H1_EXECUTE_EVAL":
-      return "H1";
-    case "H2_PLAN_EXECUTE_EVAL":
-      return "H2";
-    default:
-      return harnessProfile;
-  }
-}
-
 export function mergeLiveThinkingContent(currentThinking: string, finalThinking: string): string {
   const current = currentThinking.trim();
   const finalText = finalThinking.trim();
@@ -52,7 +39,6 @@ function trimRepeatedWorkerPrefix(note: string | undefined, workerTitle?: string
 export function formatManagedTaskLiveStatusLabel(
   status: KodaXManagedTaskStatusEvent,
 ): string | undefined {
-  const harness = formatHarnessProfileShort(status.harnessProfile) ?? status.harnessProfile;
   const trimmedNote = trimRepeatedWorkerPrefix(status.note, status.activeWorkerTitle);
 
   if (status.phase === "verifying") {
@@ -74,7 +60,7 @@ export function formatManagedTaskLiveStatusLabel(
     if (status.phase === "routing") {
       return trimmedNote ? `[Routing] ${trimmedNote}` : "[Routing]";
     }
-    const prefix = `[Phase] ${status.agentMode.toUpperCase()} ${harness}${status.activeWorkerTitle ? ` - ${status.activeWorkerTitle}` : ""}`;
+    const prefix = `[Phase] ${status.agentMode.toUpperCase()} ${status.activeWorkerTitle}`;
     return trimmedNote ? `${prefix} - ${trimmedNote}` : prefix;
   }
 
@@ -101,8 +87,9 @@ export function formatManagedTaskBreadcrumb(
   options?: { expanded?: boolean },
 ): string | undefined {
   const note = options?.expanded ? (status.detailNote ?? status.note) : status.note;
-  const harness = formatHarnessProfileShort(status.harnessProfile) ?? status.harnessProfile;
-  const prefix = `${status.agentMode.toUpperCase()} ${harness}`;
+  const prefix = status.activeWorkerTitle
+    ? `${status.agentMode.toUpperCase()} ${status.activeWorkerTitle}`
+    : status.agentMode.toUpperCase();
   // FEATURE_114 v0.7.38 Slice 7 — preflight breadcrumb derives the
   // role label from the runner-supplied title. V1 keeps "AMA Scout";
   // V2 renders "AMA Worker". When the title is missing (legacy

@@ -133,7 +133,7 @@ describe("StatusBar", () => {
     expect(text).toContain("KodaX - SA");
   });
 
-  it("shows managed AMA harness and worker in busy status text while showing round and global work budget", () => {
+  it("shows managed worker in busy status text while showing round and global work budget", () => {
     const text = getStatusBarText({
       sessionId: "session-1",
       permissionMode: "accept-edits",
@@ -152,14 +152,15 @@ describe("StatusBar", () => {
       managedBudgetUsage: 87,
     });
 
-    expect(text).toContain("H2 - Planner");
+    expect(text).toContain("Planner");
     expect(text).not.toContain("AMA H2 - Planner");
+    expect(text).not.toContain("H2 - Planner");
     expect(text).toContain("42 chars");
     expect(text).toContain("Round 2/6");
     expect(text).toContain("Work 87/200");
     expect(text).not.toContain("Iter 14/24");
     expect(text).not.toContain("r2/6");
-    expect(text).toContain("session-1 | H2 - Planner");
+    expect(text).toContain("session-1 | Planner");
   });
 
   it("shows managed tool progress together with the active role", () => {
@@ -175,11 +176,12 @@ describe("StatusBar", () => {
       managedWorkerTitle: "Planner",
     });
 
-    expect(text).toContain("H2 - Planner");
+    expect(text).toContain("Planner");
     expect(text).not.toContain("AMA H2 - Planner");
-    expect(text).toContain("H2 - Planner - Bash (12 chars)");
+    expect(text).not.toContain("H2 - Planner");
+    expect(text).toContain("Planner - Bash (12 chars)");
     expect(text).toContain("Bash (12 chars)");
-    expect(text).toContain("session-1 | H2 - Planner");
+    expect(text).toContain("session-1 | Planner");
   });
 
   it("uses the original bullet separator inside multi-part iteration progress", () => {
@@ -215,7 +217,7 @@ describe("StatusBar", () => {
       managedWorkerTitle: "Scout",
     });
 
-    expect(text).toContain("session-1 | H2 - Scout - 3 tools running");
+    expect(text).toContain("session-1 | Scout - 3 tools running");
     expect(text).not.toContain("Bash (120 chars)");
   });
 
@@ -353,7 +355,8 @@ describe("StatusBar", () => {
         managedIdleWaiting: true,
         managedIdleWaitingPendingCount: 3,
       });
-      expect(text).toContain("H0 - Worker - waiting for 3 children");
+      expect(text).toContain("Worker - waiting for 3 children");
+      expect(text).not.toContain("H0 - Worker");
     });
 
     it("renders 'waiting for 1 child' (singular) when count=1", () => {
@@ -362,7 +365,8 @@ describe("StatusBar", () => {
         managedIdleWaiting: true,
         managedIdleWaitingPendingCount: 1,
       });
-      expect(text).toContain("H0 - Worker - waiting for 1 child");
+      expect(text).toContain("Worker - waiting for 1 child");
+      expect(text).not.toContain("H0 - Worker");
       expect(text).not.toContain("children");
     });
 
@@ -372,7 +376,8 @@ describe("StatusBar", () => {
         managedIdleWaiting: true,
         managedIdleWaitingPendingCount: 0,
       });
-      expect(text).toContain("H0 - Worker - idle - resuming");
+      expect(text).toContain("Worker - idle - resuming");
+      expect(text).not.toContain("H0 - Worker");
     });
 
     it("falls back to bare role label when idleWaiting is undefined (default = not idle)", () => {
@@ -384,7 +389,8 @@ describe("StatusBar", () => {
       // non-idle-yield emit sites that don't set the field.
       expect(text).not.toContain("waiting for");
       expect(text).not.toContain("idle");
-      expect(text).toContain("H0 - Worker");
+      expect(text).toContain("Worker");
+      expect(text).not.toContain("H0 - Worker");
     });
 
     it("falls back to bare role label when idleWaiting=false (explicit non-idle)", () => {
@@ -394,7 +400,8 @@ describe("StatusBar", () => {
         managedIdleWaitingPendingCount: 3,  // ignored when idleWaiting !== true
       });
       expect(text).not.toContain("waiting for");
-      expect(text).toContain("H0 - Worker");
+      expect(text).toContain("Worker");
+      expect(text).not.toContain("H0 - Worker");
     });
 
     it("idle-wait label is suppressed when a tool is currently running (active execution wins)", () => {
@@ -425,7 +432,8 @@ describe("StatusBar", () => {
         managedIdleWaiting: true,
         managedIdleWaitingPendingCount: 2,
       });
-      expect(text).toContain("H0 - Evaluator - waiting for 2 children");
+      expect(text).toContain("Evaluator - waiting for 2 children");
+      expect(text).not.toContain("H0 - Evaluator");
     });
   });
 });

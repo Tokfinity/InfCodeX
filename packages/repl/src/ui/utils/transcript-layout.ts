@@ -434,19 +434,6 @@ function buildToolInputPreview(tool: ToolCall): string[] {
     .map((line: string, index: number) => (index === 0 ? `input: ${line}` : line));
 }
 
-function formatHarnessProfileShort(harnessProfile?: string): string | undefined {
-  switch (harnessProfile) {
-    case "H0_DIRECT":
-      return "H0";
-    case "H1_EXECUTE_EVAL":
-      return "H1";
-    case "H2_PLAN_EXECUTE_EVAL":
-      return "H2";
-    default:
-      return harnessProfile;
-  }
-}
-
 function buildToolRows(
   rows: TranscriptRow[],
   itemKey: string,
@@ -870,7 +857,6 @@ export function buildTranscriptRows(options: TranscriptBuildOptions): Transcript
   if (isLoading) {
     let loadingText = "Thinking";
     let prefix = "";
-    const managedHarnessShort = formatHarnessProfileShort(managedHarnessProfile);
     const normalizedLiveActivityLabel = normalizeManagedLiveActivityLabel(lastLiveActivityLabel, managedWorkerTitle);
     // FEATURE_114 v0.7.38 Slice 7 — preflight prefix derives the role
     // label from `managedWorkerTitle`. The runner emits 'Worker' on
@@ -887,7 +873,7 @@ export function buildTranscriptRows(options: TranscriptBuildOptions): Transcript
         : managedPhase === "verifying"
           ? `[${managedAgentMode ? managedAgentMode.toUpperCase() : 'AMA'} Verifying] `
           : managedHarnessProfile
-            ? `[${managedAgentMode ? managedAgentMode.toUpperCase() : 'AMA'} ${managedHarnessShort ?? managedHarnessProfile}${managedWorkerTitle ? ` - ${managedWorkerTitle}` : ''}] `
+            ? `[${managedAgentMode ? managedAgentMode.toUpperCase() : 'AMA'} ${managedWorkerTitle ?? 'Worker'}] `
             : "";
     const activeToolCount = activeToolCalls.filter((tool) => tool.status === ToolCallStatus.Executing).length;
     const completedToolCount = activeToolCalls.filter((tool) => tool.status === ToolCallStatus.Success).length;

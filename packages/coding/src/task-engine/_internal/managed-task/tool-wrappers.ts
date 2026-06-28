@@ -2,23 +2,12 @@
  * Coding-tool runtime wrappers for the runner-driven AMA path.
  *
  * Hosts:
- *   - `MUTATES_FS_TOOL_NAMES` (registry-derived) + `SHELL_MUTATION_EXTENSIONS`
- *     — the file-mutating + mutating-shell-command sets that drive both the
- *     mutation tracker and the role-bound guard wrappers
- *   - `recordMutationForTool` — populates `ctx.mutationTracker` per
- *     legacy `beforeToolExecute` parity
- *   - `wrapCodingToolAsRunnable` — generic coding handler →
- *     `RunnableTool` adapter (per-call progress, budget metering,
- *     mutation tracker, error envelope)
- *   - `wrapReadOnlyBash` — verification-only bash guard (Evaluator)
- *   - the two Generator-side write/bash mutation-guard wrappers (now
- *     thin pass-throughs after FEATURE_193 retired the V1 Scout role
- *     that fed mutation intent; wrap signatures preserved for the
- *     `agent-chain.ts` Map-override call sites)
- *
- * Extracted from `task-engine/runner-driven.ts` lines ~1361–1621 of
- * the pre-FEATURE_171 monolith as part of FEATURE_171 (v0.7.41)
- * modular split.
+ *   - `MUTATES_FS_TOOL_NAMES` -- the file-mutating tool set that drives the
+ *     mutation tracker and Sidecar Verifier work-scale gate.
+ *   - `recordMutationForTool` -- populates `ctx.mutationTracker` per tool call.
+ *   - `wrapCodingToolAsRunnable` -- adapts a coding tool handler into a
+ *     `RunnableTool` with progress, budget metering, mutation tracking, and
+ *     a tool-error envelope.
  */
 
 import type { KodaXToolDefinition } from '@kodax-ai/llm';
@@ -29,36 +18,27 @@ import type {
 } from '@kodax-ai/agent';
 import { incrementManagedBudgetUsage } from './budget.js';
 import type { ManagedTaskBudgetController } from './budget.js';
-import {
-  matchesShellPattern,
-  SHELL_WRITE_PATTERNS,
-} from './tool-policy.js';
 import type {
   KodaXEvents,
   KodaXToolExecutionContext,
   ManagedMutationTracker,
 } from '../../../types.js';
-import type { ReasoningPlan } from '../../../reasoning.js';
-import type { VerdictRecorder } from './types.js';
+import { matchesShellPattern, SHELL_WRITE_PATTERNS } from './tool-policy.js';
 
 // =============================================================================
-// Tool wrapping: coding handler → RunnableTool
+// Tool wrapping: coding handler -> RunnableTool
 // =============================================================================
 
 /**
  * File-mutating tool names. MUST mirror every tool registered with
- * `sideEffect: 'mutates-fs'` in `tool-definitions.ts` — a Worker that uses ANY
- * of them is doing mutation work the Verifier work-scale gate must see (the
- * original set omitted `multi_edit`, `undo`, and the worktree/scaffold tools,
- * so work done through them produced `writeOps=0` and skipped verification).
+ * `sideEffect: 'mutates-fs'` in `tool-definitions.ts`; a Worker that uses any
+ * of them is doing mutation work the Verifier work-scale gate must see.
  *
  * This is hardcoded rather than derived from `BUILTIN_TOOL_DEFINITIONS` at
- * module load — importing that registry here pulls its handler chain, which
- * has a transitive cycle back through `construction/agent-resolver.ts` and
- * leaves `BUILTIN_TOOL_DEFINITIONS` uninitialised mid-load. The drift risk that
- * creates is closed by a registry-parity unit test (tool-wrappers.test.ts):
- * it imports the registry and fails if any `mutates-fs` tool is missing here.
- * Keep this set in sync (the test tells you exactly what to add).
+ * module load. Importing that registry here pulls its handler chain, which has
+ * a transitive cycle back through `construction/agent-resolver.ts` and leaves
+ * `BUILTIN_TOOL_DEFINITIONS` uninitialised mid-load. The drift risk is closed
+ * by a registry-parity unit test in `tool-wrappers.test.ts`.
  */
 export const MUTATES_FS_TOOL_NAMES: ReadonlySet<string> = new Set([
   'write',
@@ -70,15 +50,13 @@ export const MUTATES_FS_TOOL_NAMES: ReadonlySet<string> = new Set([
   'worktree_remove',
   'stage_construction',
   'stage_agent_construction',
+  'stage_self_modify',
 ]);
 
 /**
- * The subset of `MUTATES_FS_TOOL_NAMES` whose mutated file path is NOT carried
- * in the tool input (it is computed inside the handler), so it can never be
- * attributed to `tracker.files`. Each call bumps `unattributedWriteOps` so the
- * Verifier gate still sees the mutation. (`scaffold_tool` / `scaffold_agent` are
- * NOT here — they are readonly draft generators; `activate_agent` is NOT here —
- * it is mutates-state, not mutates-fs.)
+ * The subset of `MUTATES_FS_TOOL_NAMES` whose mutated file path is not carried
+ * in the tool input because the handler computes it internally. Each call bumps
+ * `unattributedWriteOps` so the Verifier gate still sees the mutation.
  */
 const UNATTRIBUTED_WRITE_TOOL_NAMES: ReadonlySet<string> = new Set([
   'undo',
@@ -86,19 +64,41 @@ const UNATTRIBUTED_WRITE_TOOL_NAMES: ReadonlySet<string> = new Set([
   'worktree_remove',
   'stage_construction',
   'stage_agent_construction',
+  'stage_self_modify',
 ]);
+
+const SHELL_STATE_CHANGE_PATTERNS: readonly string[] = [
+  '\\bchmod\\b',
+  '\\bchown\\b',
+  '\\bgit\\s+(?:add|commit|push|merge|rebase|reset|checkout\\s+[^-]|rm)\\b',
+  '\\bnpm\\s+(?:install|publish|update|rm|add|remove)\\b',
+  '\\bpnpm\\s+(?:install|publish|update|rm|add|remove)\\b',
+  '\\byarn\\s+(?:add|publish|remove|install|upgrade)\\b',
+];
+
+const RISKY_SHELL_MUTATION_PATTERNS: readonly string[] = [
+  ...SHELL_WRITE_PATTERNS,
+  ...SHELL_STATE_CHANGE_PATTERNS,
+];
+const RISKY_SHELL_MUTATION_PATTERNS_LOWER: readonly string[] =
+  RISKY_SHELL_MUTATION_PATTERNS.map((pattern) => pattern.toLowerCase());
 
 function lineCount(text: unknown): number {
   return typeof text === 'string' ? text.split('\n').length : 0;
 }
 
+function matchesRiskyShellMutation(command: string): boolean {
+  const trimmed = command.trim();
+  if (!trimmed) return false;
+  return (
+    matchesShellPattern(trimmed, RISKY_SHELL_MUTATION_PATTERNS)
+    || matchesShellPattern(trimmed.toLowerCase(), RISKY_SHELL_MUTATION_PATTERNS_LOWER)
+  );
+}
+
 /**
- * Estimated TOUCHED lines for a mutation (not net delta). An 80-line function
- * rewritten into another 80-line function touches ~80 lines, not 0 — so we use
- * `max(old, new)` per edit, never `abs(new - old)` (which collapsed equal-
- * length rewrites to 1 line and let large rewrites slip past the gate).
- * Handles all three mutating shapes: `write` (content), `edit` /
- * `insert_after_anchor` (old/new), and `multi_edit` (an `edits[]` array).
+ * Estimated touched lines for a mutation, not net delta. An 80-line function
+ * rewritten into another 80-line function touches about 80 lines, not 0.
  */
 function estimateTouchedLines(input: Record<string, unknown>): number {
   if (typeof input.content === 'string') return lineCount(input.content);
@@ -114,9 +114,8 @@ function estimateTouchedLines(input: Record<string, unknown>): number {
 
 /**
  * Populates `ctx.mutationTracker` with files + totalOps when a file-mutating
- * tool runs (or bash executes a destructive command). Idempotent — missing
- * tracker is a no-op. The tracked metrics feed the Sidecar Verifier work-scale
- * gate (`composeGateDecision`).
+ * tool runs, or when bash executes a destructive command. Missing tracker is a
+ * no-op. The tracked metrics feed the Sidecar Verifier work-scale gate.
  */
 export function recordMutationForTool(
   tracker: ManagedMutationTracker | undefined,
@@ -134,21 +133,13 @@ export function recordMutationForTool(
     if (filePath) {
       tracker.files.set(filePath, (tracker.files.get(filePath) ?? 0) + estimateTouchedLines(input));
     } else if (UNATTRIBUTED_WRITE_TOOL_NAMES.has(normalized)) {
-      // No path in the input and the handler computes it (undo / worktree_* /
-      // stage_*) — record it as an unattributable write so the gate still fires
-      // even when it is the only mutation in the turn.
       tracker.unattributedWriteOps = (tracker.unattributedWriteOps ?? 0) + 1;
     }
-    // A file-mutating tool always counts as a write op (drives the gate's
-    // didObservableWork precondition) even when its path is unattributable.
     tracker.totalOps += 1;
   } else if (normalized === 'bash') {
     const cmd = typeof input.command === 'string' ? input.command : '';
-    if (/\b(git\s+(add|commit|push|merge|rebase|reset)|npm\s+(publish|install)|rm\s|mv\s|cp\s)/i.test(cmd)) {
+    if (matchesRiskyShellMutation(cmd)) {
       tracker.totalOps += 1;
-      // High-risk shell mutation — bash cannot report which file / how many
-      // lines it touched, so the Verifier gate uses this count to fire
-      // conservatively rather than inferring risk out of `totalOps`.
       tracker.riskyShellOps = (tracker.riskyShellOps ?? 0) + 1;
     }
   }
@@ -172,10 +163,6 @@ export function wrapCodingToolAsRunnable(
     ): Promise<RunnerToolResult> => {
       if (budget) incrementManagedBudgetUsage(budget, 1);
       recordMutationForTool(baseCtx.mutationTracker, definition.name, input);
-      // Attach reportToolProgress per-call so async-generator
-      // tools (dispatch_child_task) can surface their internal progress via
-      // KodaXEvents.onToolProgress → REPL transcript. Mirrors
-      // `agent.ts:1345-1353` (ctxWithProgress wrapping).
       const toolCallId = runnerCtx?.toolCallId;
       const ctxForCall: KodaXToolExecutionContext = events?.onToolProgress && toolCallId
         ? {
@@ -201,140 +188,5 @@ export function wrapCodingToolAsRunnable(
         return { content: `[Tool Error] ${definition.name}: ${message}`, isError: true };
       }
     },
-  };
-}
-
-/**
- * Shell commands that mutate the filesystem / git state. Super-set of the
- * legacy `SHELL_WRITE_PATTERNS` allow-list (tool-policy.ts:110) so
- * verification-only roles (Evaluator) can still use `bash` for read-only
- * checks (ls, cat, git diff, etc.) without silently gaining write
- * capability.
- *
- * v0.7.26 H4 parity — the first group mirrors legacy exactly:
- *   - PowerShell verbs (Set-Content / Add-Content / Out-File / Tee-Object /
- *     Copy-Item / Move-Item / Rename-Item / Remove-Item / New-Item /
- *     Clear-Content)
- *   - Unix basic (rm / mv / cp / del / erase / touch / mkdir / rmdir /
- *     rename / ren)
- *   - Script exec (sed -i / perl -pi / python -c / node -e)
- *   - Redirect (> / >> outside of 2>&1 / &1 forms)
- * The second group extends legacy with v0.7.26 safety patterns:
- *   - chmod / chown
- *   - git write verbs (add / commit / push / merge / rebase / reset /
- *     checkout <ref> / rm)
- *   - package-manager install/publish/update verbs (npm / pnpm / yarn)
- *
- * Matches on leading command-word boundary — `rm /tmp/foo` blocks
- * but `node rm-stub.js` does not.
- */
-/**
- * v0.7.26 extensions to legacy `SHELL_WRITE_PATTERNS`. Legacy only guarded
- * classic filesystem-mutating shells; these cover state-changing shells
- * that surfaced as risks after FEATURE_084 landed. `SHELL_WRITE_PATTERNS`
- * (imported from `tool-policy.ts`) is applied first; these extensions
- * apply second so the combined set is a strict super-set.
- */
-const SHELL_MUTATION_EXTENSIONS: readonly string[] = [
-  '\\bchmod\\s',
-  '\\bchown\\s',
-  '\\bgit\\s+(?:add|commit|push|merge|rebase|reset|checkout\\s+[^-]|rm)',
-  '\\bnpm\\s+(?:install|publish|update|rm)',
-  '\\bpnpm\\s+(?:install|publish|update|rm)',
-  '\\byarn\\s+(?:add|publish|remove)',
-];
-
-/**
- * Wrap a bash tool so verification-only roles (Scout / Evaluator) cannot
- * execute shell commands that mutate the filesystem or git state.
- *
- * P2 parity — reuses the same `SHELL_WRITE_PATTERNS` set the Generator
- * docs-scoped / review-only guard uses, so all three roles share a
- * single source of truth. The v0.7.26 safety extensions sit on top of
- * the legacy set — never narrower.
- *
- * Mirrors legacy `createToolPolicyHook` behaviour at task-engine.ts
- * ~1915 which blocked `SHELL_WRITE_PATTERNS` on read-only role tool
- * policies. Non-bash tools pass through unchanged.
- */
-export function wrapReadOnlyBash(bashTool: RunnableTool, roleTitle: string): RunnableTool {
-  return {
-    ...bashTool,
-    execute: async (input, ctx): Promise<RunnerToolResult> => {
-      const command = typeof input.command === 'string' ? input.command.trim() : '';
-      if (command) {
-        // Shared super-set: legacy SHELL_WRITE_PATTERNS + v0.7.26 safety
-        // extensions. Using the shared set here (instead of calling
-        // enforceShellWriteBoundary, which carries the Generator-flavored
-        // "docs-only" message) lets Scout / Evaluator keep their own
-        // "verification-only" blocking message — matches legacy
-        // createToolPolicyHook branching.
-        if (
-          matchesShellPattern(command, SHELL_WRITE_PATTERNS)
-          || matchesShellPattern(command, SHELL_MUTATION_EXTENSIONS)
-        ) {
-          // v0.7.26: Scout no longer uses this wrapper (Scout has full
-          // tools per v22 parity); only Evaluator reaches here. Evaluator
-          // IS verification-only by architectural design — its job is to
-          // spot-check the Generator handoff, not mutate state. The
-          // block message names that role semantic + the read-intent
-          // hint for `python -c` / `node -e` so the LLM reaches for
-          // `read` / `grep` instead of re-trying shell.
-          const isReadIntent = /^python\s+-c|^node\s+-e/.test(command);
-          const hint = isReadIntent
-            ? 'If you only need to inspect a file, use the `read` or `grep` tool instead — both go around the shell.'
-            : 'If mutation is genuinely required by the verification contract, flag it in the verdict reason instead of performing it here.';
-          return {
-            content:
-              `[Managed Task ${roleTitle}] Shell command blocked because this role is verification-only. ${hint} Blocked command: ${command.slice(0, 120)}`,
-            isError: true,
-          };
-        }
-      }
-      return bashTool.execute(input, ctx);
-    },
-  };
-}
-
-/**
- * Shard 6d-j + 6d-M — Generator write / shell mutation boundary.
- *
- * Mirrors the legacy `createToolPolicyHook` behaviour (task-engine.ts
- * ~1891) for the runner-driven Generator:
- *   - `'review-only'` → Generator write/edit blocked; destructive shell
- *     commands blocked (review tasks must not mutate state).
- *   - `'docs-scoped'` → Generator write/edit gated against
- *     `DOCS_ONLY_WRITE_PATH_PATTERNS` (docs/*.md / CHANGELOG /
- *     FEATURE_LIST / etc.); destructive shell commands blocked.
- *   - `'open'` (default) → tools pass through unchanged.
- *
- * FEATURE_193 (v0.7.43): V1 Scout role retired — `recorder.scout` is never
- * populated on the V2 path, so `resolveGeneratorMutationIntent` permanently
- * returned `'open'`. The helper + its `inferScoutMutationIntent` call were
- * removed; the wrap functions now short-circuit on a constant `intent`. The
- * wrap function signatures keep `recorder` / `planRef` parameters so the
- * call sites in `agent-chain.ts` remain stable (the V2 Worker still threads
- * both refs for the worker `instructions` closure to consume).
- */
-
-export function wrapGeneratorWriteWithMutationGuard(
-  writeOrEdit: RunnableTool,
-  _recorder: VerdictRecorder,
-  _planRef: { current: ReasoningPlan | undefined },
-): RunnableTool {
-  return {
-    ...writeOrEdit,
-    execute: async (input, ctx): Promise<RunnerToolResult> => writeOrEdit.execute(input, ctx),
-  };
-}
-
-export function wrapGeneratorBashWithMutationGuard(
-  bashTool: RunnableTool,
-  _recorder: VerdictRecorder,
-  _planRef: { current: ReasoningPlan | undefined },
-): RunnableTool {
-  return {
-    ...bashTool,
-    execute: async (input, ctx): Promise<RunnerToolResult> => bashTool.execute(input, ctx),
   };
 }

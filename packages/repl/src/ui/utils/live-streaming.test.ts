@@ -37,7 +37,7 @@ describe("live-streaming", () => {
       currentRound: 1,
       maxRounds: 4,
       phase: "worker",
-    })).toBe("AMA H2 - Planner starting");
+    })).toBe("AMA Planner - Planner starting");
   });
 
   it("keeps worker completion summaries in managed-task breadcrumbs", () => {
@@ -49,7 +49,7 @@ describe("live-streaming", () => {
       maxRounds: 4,
       phase: "worker",
       note: "Planner completed: Compared ScrollBox ownership with Claude's fullscreen host.",
-    })).toBe("AMA H2 - Planner completed: Compared ScrollBox ownership with Claude's fullscreen host.");
+    })).toBe("AMA Planner - Planner completed: Compared ScrollBox ownership with Claude's fullscreen host.");
   });
 
   it("uses the expanded detail note when transcript show-all requests the full breadcrumb", () => {
@@ -63,7 +63,7 @@ describe("live-streaming", () => {
       note: "Planner completed: compact summary",
       detailNote: "Planner completed: compact summary\n\nFull multiline planner detail that should stay available in transcript mode.",
     }, { expanded: true })).toBe(
-      "AMA H2 - Planner completed: compact summary\n\nFull multiline planner detail that should stay available in transcript mode."
+      "AMA Planner - Planner completed: compact summary\n\nFull multiline planner detail that should stay available in transcript mode."
     );
   });
 
@@ -75,7 +75,7 @@ describe("live-streaming", () => {
       currentRound: 2,
       maxRounds: 4,
       phase: "worker",
-    })).toBe("AMA H2 - Generator starting - Round 2/4");
+    })).toBe("AMA Generator - Generator starting - Round 2/4");
   });
 
   it("formats managed-task routing breadcrumbs", () => {
@@ -95,7 +95,7 @@ describe("live-streaming", () => {
       maxRounds: 2,
       phase: "round",
       note: "Starting refinement round 2",
-    })).toBe("AMA H1 - Starting refinement round 2");
+    })).toBe("AMA - Starting refinement round 2");
   });
 
   it("formats sidecar verifier live labels instead of falling back to PLANNED", () => {
@@ -169,7 +169,7 @@ describe("live-streaming", () => {
       activeWorkerTitle: "Planner",
       phase: "worker",
       note: "Planner completed",
-    })).toBe("[Phase] AMA H1 - Planner - completed");
+    })).toBe("[Phase] AMA Planner - completed");
   });
 
   it("formats silent tool-only iteration summaries", () => {

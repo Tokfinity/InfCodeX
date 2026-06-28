@@ -7,10 +7,8 @@
  * uses four role-specific emit tools (`emit_scout_verdict`, `emit_contract`,
  * `emit_handoff`, `emit_verdict`). The only adaptation in this file is
  * `ROLE_EMIT_TOOL_NAMES` — every other prompt section is preserved verbatim
- * from v0.7.22 so the LLM gets the exact same guidance (H0/H1/H2 quality
- * framework, parallel child-agent rules, evidence strategies, review-task
- * framing, H1 mutation intent guards, Evaluator public answer rules,
- * handoff/verdict/contract block specs, shared closing rules).
+ * from v0.7.22 into the current Worker prompt surface (parallel child-agent
+ * rules, evidence strategies, review-task framing, and shared closing rules).
  *
  * Restoring this file during the v0.7.26 parity audit closes the biggest
  * regression found: the Runner-driven `SCOUT_INSTRUCTIONS` / etc constants
@@ -107,8 +105,8 @@ export function createRolePrompt(
   // v0.7.26 NEW-1 — inject the workspace environment at prompt head.
   // Legacy SA path gets this via `buildSystemPrompt` (Working Directory
   // + environment-context); the Runner-driven path bypasses that
-  // builder entirely. Without this block, Scout/Planner/Generator/
-  // Evaluator all guess paths (e.g. `cd /d/user/kodax/workspace` when
+  // builder entirely. Without this block, managed workers guess paths
+  // (e.g. `cd /d/user/kodax/workspace` when
   // the real cwd is `C:\Works\GitWorks\...`). Name the block after the
   // SA surface so the LLM can correlate with anything it already
   // learned from `buildSystemPrompt`.
@@ -283,8 +281,8 @@ export function createRolePrompt(
       // mutation + dispatch + handoff fragments) with the same
       // workspace / capability / overlay / decisionSummary / contract /
       // metadata / verification / tool-policy context layers the legacy
-      // Scout/Planner/Generator/Evaluator branches use, so the V2 path
-      // doesn't lose any FEATURE_144 (capability-context) or
+      // Worker prompt uses, so the V2 path doesn't lose any FEATURE_144
+      // (capability-context) or
       // FEATURE_086 (repo-intelligence) parity gains. Skill section
       // mirrors Generator (skillMap + full skill expansion) — Worker
       // both plans and executes, so it needs the planner-style map AND
@@ -317,9 +315,8 @@ export function createRolePrompt(
         previousRoleSummarySection,
         // The standalone Worker fragment (plan-first contract + scope
         // commitment + mutation discipline + dispatch RULE A/B/C +
-        // handoff rules) lives here, mirroring how Scout's H0/H1/H2
-        // framework lives between context blocks and the protocol
-        // emit instructions.
+        // handoff rules) lives here between context blocks and the shared
+        // closing rules.
         workerInstructions,
         // FEATURE_190 (v0.7.43): Worker no longer injects PROTOCOL EMISSION
         // or the kodax-task-handoff fenced-block fallback — under F184

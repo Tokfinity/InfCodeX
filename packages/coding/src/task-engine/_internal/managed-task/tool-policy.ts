@@ -27,10 +27,9 @@
  * retired).
  */
 
-import { isDocsLikePath, escapeRegexLiteral } from '../text-utils.js';
+import { escapeRegexLiteral } from '../text-utils.js';
 import type {
   KodaXTaskRole,
-  KodaXTaskRoutingDecision,
   KodaXTaskToolPolicy,
   KodaXTaskVerificationContract,
 } from '../../../types.js';

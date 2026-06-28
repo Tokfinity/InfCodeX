@@ -392,9 +392,9 @@ function attachTodoDriftWarnings(
 // =============================================================================
 // Tool wrapping — moved to `./_internal/managed-task/tool-wrappers.ts` and
 // `./_internal/managed-task/dispatch-child.ts` (FEATURE_171 v0.7.41 split).
-// `wrapCodingToolAsRunnable`, `wrapGeneratorBashWithMutationGuard`,
-// `wrapGeneratorWriteWithMutationGuard`, `wrapReadOnlyBash` and
-// `wrapDispatchChildTaskForRole` are imported at the top of this file.
+// `wrapCodingToolAsRunnable` and `wrapDispatchChildTaskForRole` are the live
+// tool adapters; retired Generator / Evaluator guard wrappers were removed
+// with the V1 chain.
 // =============================================================================
 
 // =============================================================================
@@ -410,12 +410,9 @@ function attachTodoDriftWarnings(
 // =============================================================================
 // Agent chain construction — moved to
 // `./_internal/managed-task/agent-chain.ts` (FEATURE_171 v0.7.41 split).
-// `CodingToolBundle`, `buildCodingToolBundle`, `buildAgentToolsFromRegistry`,
-// `RunnerAgentChain`, `buildRunnerAgentChain` and `buildRunnerScoutAgent`
-// were lifted there with byte-parity behavior. The public names
-// (`RunnerAgentChain`, `buildRunnerAgentChain`, `buildRunnerScoutAgent`)
-// are re-exported at the top of this file so existing import paths in
-// `task-engine.ts` and tests keep working.
+// `buildTodoToolBundle`, `buildAgentToolsFromRegistry`, `RunnerAgentChain` and
+// `buildRunnerAgentChain` live there. V1 Scout-agent construction has since
+// been retired.
 // =============================================================================
 
 // =============================================================================
@@ -964,12 +961,8 @@ async function runManagedTaskViaRunnerInner(
   // line — so the ref is safely populated before any onVerdict fires.
   stallAdapter.attachObserver(observer);
 
-  // H3 parity (v0.7.26) — emit the `routing` phase before Scout's
-  // preflight. Legacy `task-engine.ts:6545` fired this event right after
-  // the routing decision was finalised so the REPL's AMA work-strip could
-  // render "AMA routing · <scope>" before Scout starts thinking. Without
-  // it, the UI jumped straight to `preflight` and the routing context
-  // (review target, repo signals, override reason) was invisible.
+  // Emit the `routing` phase before Worker preflight so the REPL work-strip
+  // can show the pre-run scope/review context before execution starts.
   if (plan && options.events?.onManagedTaskStatus) {
     const routingNote = buildRunnerRoutingNote(plan);
     options.events.onManagedTaskStatus({

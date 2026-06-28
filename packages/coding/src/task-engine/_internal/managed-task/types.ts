@@ -55,10 +55,9 @@ export interface VerdictRecorder {
 export type AmaRole = 'worker';
 
 /**
- * Factory that resolves the `ManagedRolePromptContext` for a given role
- * from the current recorder state. Called by the dynamic `instructions`
- * closure on every agent invocation, so Scout's post-emit skillMap /
- * scope reach downstream role prompts in real time.
+ * Factory that resolves the `ManagedRolePromptContext` for a given role from
+ * current runtime state. Called by the dynamic `instructions` closure on every
+ * agent invocation so fresh context reaches the Worker prompt.
  */
 export type RolePromptContextFactory = (
   role: KodaXTaskRole,
@@ -76,12 +75,9 @@ export interface RunnerChainPromptContext {
   readonly prompt: string;
   /**
    * Routing decision. Legacy callers / tests pass a static
-   * `KodaXTaskRoutingDecision` captured at chain construction. The
-   * runtime path passes a `() => KodaXTaskRoutingDecision` thunk so the
-   * Generator / Evaluator see the post-Scout plan (M4 parity) instead of
-   * the stale pre-Scout decision captured when the agent graph was
-   * frozen. Without the thunk, a plan=H2 + Scout=H1 run leaks H2-only
-   * prompt guidance into H1 workers.
+   * `KodaXTaskRoutingDecision` captured at chain construction. The runtime
+   * path passes a thunk so prompt construction reads the latest plan decision
+   * without rebuilding the agent graph.
    */
   readonly decision: KodaXTaskRoutingDecision | (() => KodaXTaskRoutingDecision);
   /** Optional structured task metadata. */
@@ -96,24 +92,21 @@ export interface RunnerChainPromptContext {
   readonly toolPolicy?: KodaXTaskToolPolicy;
   /**
    * P1 parity — per-role tool policy factory. Called lazily at each
-   * Runner invocation so the Generator branch can see Scout's mutation
-   * intent (which is only known after Scout emits). Without this, every
-   * managed worker's prompt drops the "## Tool Policy" section. See
-   * `buildManagedWorkerToolPolicy` for the switch body.
+   * Runner invocation so future role policies can attach without changing
+   * prompt construction. The current Worker policy returns `undefined`.
    */
   readonly toolPolicyFactory?: (
     role: KodaXTaskRole,
     recorder: VerdictRecorder,
   ) => KodaXTaskToolPolicy | undefined;
-  /** Optional role-context factory for skillMap / childWriteReviewPrompt injection. */
+  /** Optional role-context factory for runtime prompt context injection. */
   readonly contextFactory?: RolePromptContextFactory;
   /**
    * Pre-computed repo-intelligence context block (Repository Overview /
    * Changed Scope / Active Module / Impact / Fallback Guidance /
    * Premium Context sections). Built once per `runManagedTaskViaRunner`
    * entry via `buildAutoRepoIntelligenceContext` and prepended to every
-   * role's system prompt so Scout/Planner/Generator/Evaluator see repo
-   * context from turn 1.
+   * role's system prompt so the Worker sees repo context from turn 1.
    */
   readonly repoIntelligenceContext?: string;
 }

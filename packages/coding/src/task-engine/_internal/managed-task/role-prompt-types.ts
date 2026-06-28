@@ -10,7 +10,6 @@ import type {
   KodaXSkillInvocationContext,
   KodaXSkillMap,
   KodaXTaskRole,
-  KodaXTaskRoutingDecision,
 } from '../../../types.js';
 
 export interface ManagedRolePromptContext {
@@ -27,8 +26,8 @@ export interface ManagedRolePromptContext {
    * Without this the managed-worker system prompt never tells the LLM
    * where it is running; the SA path injects `Working Directory: ...`
    * via `buildSystemPrompt`, but the Runner-driven path bypassed that
-   * builder entirely, causing Scout/Planner/Generator/Evaluator to
-   * guess paths (e.g. bash-cd into invented directories).
+   * builder entirely, causing managed workers to guess paths (e.g.
+   * bash-cd into invented directories).
    */
   workspace?: {
     executionCwd: string;

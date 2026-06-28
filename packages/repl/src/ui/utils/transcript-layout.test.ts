@@ -375,8 +375,8 @@ describe("transcript-layout", () => {
     const item: HistoryItem = {
       id: "info-detail-1",
       type: "info",
-      text: "AMA H2 - Planner completed: compact summary\n\nFull planner detail line 1\nFull planner detail line 2",
-      compactText: "AMA H2 - Planner completed: compact summary",
+      text: "AMA Planner - Planner completed: compact summary\n\nFull planner detail line 1\nFull planner detail line 2",
+      compactText: "AMA Planner - Planner completed: compact summary",
       icon: ">",
       timestamp: Date.now(),
     };
@@ -386,7 +386,7 @@ describe("transcript-layout", () => {
       viewportWidth: 80,
     });
     const compactText = compactRows.map((row) => row.text).join("\n");
-    expect(compactText).toContain("> AMA H2 - Planner completed: compact summary");
+    expect(compactText).toContain("> AMA Planner - Planner completed: compact summary");
     expect(compactText).not.toContain("Full planner detail line 2");
 
     const expandedRows = buildTranscriptRows({
@@ -945,7 +945,7 @@ describe("transcript-layout", () => {
     expect(bulletRows.every((r) => r.color === "dim")).toBe(true);
   });
 
-  it("shows AMA harness level and active worker in the live thinking row", () => {
+  it("shows AMA active worker in the live thinking row", () => {
     const rows = buildTranscriptRows({
       items: [],
       viewportWidth: 80,
@@ -960,7 +960,8 @@ describe("transcript-layout", () => {
     });
 
     const text = rows.map((row) => row.text).join("\n");
-    expect(text).toContain("[AMA H2 - Planner] 42 chars round 2/6...");
+    expect(text).toContain("[AMA Planner] 42 chars round 2/6...");
+    expect(text).not.toContain("[AMA H2");
   });
 
   it("uses a neutral Scout prefix during preflight instead of leaking the final harness", () => {
@@ -1078,7 +1079,8 @@ describe("transcript-layout", () => {
     });
 
     const text = rows.map((row) => row.text).join("\n");
-    expect(text).toContain("[AMA H2 - Planner] 42 chars...");
+    expect(text).toContain("[AMA Planner] 42 chars...");
+    expect(text).not.toContain("[AMA H2");
     expect(text).not.toContain("round 1/2");
   });
 
@@ -1095,7 +1097,7 @@ describe("transcript-layout", () => {
     expect(text).toContain("[Thinking] [Planner] changed_diff_bundle...");
   });
 
-  it("shows AMA harness level and active worker in the live tool row", () => {
+  it("shows AMA active worker in the live tool row", () => {
     const rows = buildTranscriptRows({
       items: [],
       viewportWidth: 80,
@@ -1108,7 +1110,8 @@ describe("transcript-layout", () => {
     });
 
     const text = rows.map((row) => row.text).join("\n");
-    expect(text).toContain("[AMA H2 - Planner] [Tools] changed_diff (18 chars)...");
+    expect(text).toContain("[AMA Planner] [Tools] changed_diff (18 chars)...");
+    expect(text).not.toContain("[AMA H2");
   });
 
   it("formats tool rows with progress for active tools", () => {
@@ -1346,7 +1349,8 @@ describe("transcript-layout", () => {
     });
 
     const text = rows.map((row) => row.text).join("\n");
-    expect(text).toContain("[AMA H2 - Planner] [Tools] changed_diff_bundle - packages/coding/src/task-engine.ts - limit=120...");
+    expect(text).toContain("[AMA Planner] [Tools] changed_diff_bundle - packages/coding/src/task-engine.ts - limit=120...");
+    expect(text).not.toContain("[AMA H2");
   });
 
   it("renders a live multi-tool block for concurrent tools", () => {
@@ -1388,7 +1392,8 @@ describe("transcript-layout", () => {
     });
 
     const text = rows.map((row) => row.text).join("\n");
-    expect(text).toContain("[AMA H2 - Scout] [Tools] 2 running, 1 done");
+    expect(text).toContain("[AMA Scout] [Tools] 2 running, 1 done");
+    expect(text).not.toContain("[AMA H2");
     expect(text).toContain("[Scout] changed_scope - packages/coding/src (84ms)");
     expect(text).toContain("[Scout] repo_overview - packages/coding/src");
     expect(text).toContain("[Scout] read - packages/coding/src/task-engine.ts - offset=3160 - limit=80");
@@ -1445,8 +1450,9 @@ describe("transcript-layout", () => {
     });
 
     const text = rows.map((row) => row.text).join("\n").replace(/\n/g, " ");
-    expect(text).toContain("[AMA H2 - Planner] [Tools] changed_diff_bundle - 4 files - packages/repl/src/ui/utils/message-utils.ts (107ms)...");
-    expect(text).not.toContain("[AMA H2 - Planner] [Tools] [Planner]");
+    expect(text).toContain("[AMA Planner] [Tools] changed_diff_bundle - 4 files - packages/repl/src/ui/utils/message-utils.ts (107ms)...");
+    expect(text).not.toContain("[AMA Planner] [Tools] [Planner]");
+    expect(text).not.toContain("[AMA H2");
   });
 
   it("does not repeat the active worker in AMA live tool labels", () => {
@@ -1462,8 +1468,9 @@ describe("transcript-layout", () => {
     });
 
     const text = rows.map((row) => row.text).join("\n").replace(/\n/g, " ");
-    expect(text).toContain("[AMA H2 - Generator] [Tools] changed_diff - packages/coding/src/task-engine.ts - offset=1775 - limit=480...");
-    expect(text).not.toContain("[AMA H2 - Generator] [Tools] [Generator]");
+    expect(text).toContain("[AMA Generator] [Tools] changed_diff - packages/coding/src/task-engine.ts - offset=1775 - limit=480...");
+    expect(text).not.toContain("[AMA Generator] [Tools] [Generator]");
+    expect(text).not.toContain("[AMA H2");
   });
 
   it("does not repeat the active worker in AMA live thinking labels", () => {
@@ -1479,8 +1486,9 @@ describe("transcript-layout", () => {
     });
 
     const text = rows.map((row) => row.text).join("\n").replace(/\n/g, " ");
-    expect(text).toContain("[AMA H2 - Planner] [Thinking]...");
-    expect(text).not.toContain("[AMA H2 - Planner] [Thinking] [Planner]");
+    expect(text).toContain("[AMA Planner] [Thinking]...");
+    expect(text).not.toContain("[AMA Planner] [Thinking] [Planner]");
+    expect(text).not.toContain("[AMA H2");
   });
 
   it("normalizes lowercase thinking activity labels to [Thinking]", () => {
@@ -1496,8 +1504,9 @@ describe("transcript-layout", () => {
     });
 
     const text = rows.map((row) => row.text).join("\n").replace(/\n/g, " ");
-    expect(text).toContain("[AMA H2 - Planner] [Thinking]...");
-    expect(text).not.toContain("[AMA H2 - Planner] thinking...");
+    expect(text).toContain("[AMA Planner] [Thinking]...");
+    expect(text).not.toContain("[AMA Planner] thinking...");
+    expect(text).not.toContain("[AMA H2");
   });
 
   it("builds transcript sections that preserve row order when flattened", () => {
