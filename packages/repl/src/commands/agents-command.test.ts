@@ -64,6 +64,22 @@ describe('/agents command', () => {
     expect(result).toMatchObject({ success: true });
   });
 
+  it('returns a structured failure when init cannot write AGENTS.md', async () => {
+    const missingRoot = path.join(cwd, 'missing', 'nested');
+    const reloadAgentsFiles = vi.fn(async () => []);
+
+    const result = await agentsCommand.handler(
+      ['init'],
+      buildContext(missingRoot) as never,
+      { reloadAgentsFiles } as never,
+      {} as never,
+    );
+
+    expect(result).toMatchObject({ success: false });
+    expect(typeof result === 'object' ? result.message : '').toContain('/agents init: failed to write');
+    expect(reloadAgentsFiles).not.toHaveBeenCalled();
+  });
+
   it('lean initializes AGENTS.md when absent', async () => {
     vi.spyOn(console, 'log').mockImplementation(() => undefined);
     const reloadAgentsFiles = vi.fn(async () => []);

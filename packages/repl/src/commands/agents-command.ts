@@ -59,11 +59,25 @@ function existingAgentsResult(agentsPath: string): { success: true; message: str
   };
 }
 
+function errorMessage(error: unknown): string {
+  return error instanceof Error ? error.message : String(error);
+}
+
 async function initializeAgentsFile(
   agentsPath: string,
   callbacks: { reloadAgentsFiles?: () => Promise<unknown> },
-): Promise<{ success: true; message: string }> {
-  if (await pathExists(agentsPath)) {
+): Promise<{ success: boolean; message: string }> {
+  let exists: boolean;
+  try {
+    exists = await pathExists(agentsPath);
+  } catch (error) {
+    return {
+      success: false,
+      message: `/agents init: failed to inspect ${agentsPath}: ${errorMessage(error)}`,
+    };
+  }
+
+  if (exists) {
     return existingAgentsResult(agentsPath);
   }
 
@@ -73,7 +87,10 @@ async function initializeAgentsFile(
     if ((error as NodeJS.ErrnoException).code === 'EEXIST') {
       return existingAgentsResult(agentsPath);
     }
-    throw error;
+    return {
+      success: false,
+      message: `/agents init: failed to write ${agentsPath}: ${errorMessage(error)}`,
+    };
   }
   if (callbacks.reloadAgentsFiles) {
     await callbacks.reloadAgentsFiles();
@@ -150,7 +167,17 @@ export const agentsCommand: Command = {
       return await initializeAgentsFile(agentsPath, callbacks);
     }
 
-    if (!await pathExists(agentsPath)) {
+    let agentsExists: boolean;
+    try {
+      agentsExists = await pathExists(agentsPath);
+    } catch (error) {
+      return {
+        success: false,
+        message: `/agents lean: failed to inspect ${agentsPath}: ${errorMessage(error)}`,
+      };
+    }
+
+    if (!agentsExists) {
       return await initializeAgentsFile(agentsPath, callbacks);
     }
 
