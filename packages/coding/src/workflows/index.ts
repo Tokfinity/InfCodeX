@@ -21,6 +21,7 @@ export * from './generator.js';
 export * from './pattern-templates.js';
 export * from './invocation-policy.js';
 export * from './identity.js';
+export * from './host.js';
 
 /**
  * Erase a workflow's concrete arg/result types for storage in the
