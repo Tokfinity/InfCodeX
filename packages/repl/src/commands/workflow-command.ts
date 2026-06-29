@@ -802,6 +802,27 @@ export const workflowCommand: Command = {
         console.log(chalk.yellow('\nUsage: /workflow create <request>\n'));
         return;
       }
+      // FEATURE_246 (ADR-047): in multi-agent modes the Worker authors the
+      // workflow itself — it investigates first, then runs run_workflow with the
+      // real findings baked into the child prompts. That scout-then-author path
+      // is far better than blind one-shot sideQuery generation, so redirect the
+      // explicit request into an agent turn. The blind generator stays ONLY as
+      // the single-agent / headless fallback (no Worker available to author).
+      if (currentConfig.agentMode === 'ama' || currentConfig.agentMode === 'amaw') {
+        return {
+          invocation: {
+            source: 'prompt',
+            displayName: 'workflow create',
+            disableModelInvocation: false,
+            prompt: [
+              'Set up and run a multi-agent workflow for this task.',
+              'First investigate the relevant files and sub-problems with your own tools, then author and run it with run_workflow — bake the concrete findings (exact paths, the specific dimensions to compare, a real outputSchema) into the child prompts rather than re-delegating the scouting.',
+              '',
+              invocation.request,
+            ].join('\n'),
+          },
+        };
+      }
       await startGeneratedWorkflowFromRequest({
         request: invocation.request,
         callbacks,

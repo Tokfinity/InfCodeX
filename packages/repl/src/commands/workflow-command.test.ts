@@ -2638,3 +2638,32 @@ describe('workflowCommand saved capsule preflight', () => {
     expect(prompts).toHaveLength(0);
   });
 });
+
+describe('workflowCommand create redirect (FEATURE_246 / ADR-047)', () => {
+  let logSpy: ReturnType<typeof vi.spyOn>;
+  beforeEach(() => {
+    logSpy = vi.spyOn(console, 'log').mockImplementation(() => undefined);
+  });
+  afterEach(() => {
+    logSpy.mockRestore();
+  });
+
+  for (const mode of ['ama', 'amaw'] as const) {
+    it(`redirects /workflow create to the Worker in ${mode} mode (scout-then-author, not blind generation)`, async () => {
+      const result = await workflowCommand.handler(
+        ['create', 'compare', 'three', 'repos'],
+        {} as Parameters<typeof workflowCommand.handler>[1],
+        {} as Parameters<typeof workflowCommand.handler>[2],
+        { agentMode: mode } as Parameters<typeof workflowCommand.handler>[3],
+      );
+      expect(result && typeof result === 'object' && 'invocation' in result).toBe(true);
+      if (result && typeof result === 'object' && result.invocation) {
+        expect(result.invocation.source).toBe('prompt');
+        expect(result.invocation.prompt).toContain('run_workflow');
+        expect(result.invocation.prompt).toContain('compare three repos');
+        // It hands an agent turn to the Worker — it does NOT blind-generate here.
+        expect(result.invocation.prompt).toContain('investigate');
+      }
+    });
+  }
+});
