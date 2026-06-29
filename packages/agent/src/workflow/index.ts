@@ -112,3 +112,18 @@ export type {
   WorkflowRuntimeHandle,
   WorkflowRunOutcome,
 } from './runtime.js';
+
+export {
+  createWorkflowRunManager,
+  getDefaultWorkflowRunManager,
+} from './run-manager.js';
+export type {
+  ManagedWorkflowStatus,
+  ManagedWorkflowSnapshot,
+  ManagedWorkflowRun,
+  ManagedRunHooks,
+  ManagedRunClassification,
+  StartManagedRunInput,
+  WorkflowRunManager,
+  WorkflowProcessMetadata,
+} from './run-manager.js';

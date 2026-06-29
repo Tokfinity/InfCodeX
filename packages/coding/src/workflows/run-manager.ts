@@ -1,13 +1,29 @@
+/**
+ * FEATURE_246 Part A0b (ADR-046) — coding adapter over the neutral agent-layer
+ * workflow run manager.
+ *
+ * The lifecycle core (registry / pause / resume / stop / process tracking /
+ * settle) now lives in `@kodax-ai/agent` (`createWorkflowRunManager`). This
+ * adapter preserves the coding-facing API (`start` / `startFromOptions` driven
+ * by `RunWorkflowModuleOptions` / `KodaXOptions` + durable run dirs) by building
+ * the agent manager's injected `runFn` from `runWorkflowModule` /
+ * `runWorkflowFromOptions`, and augments the neutral snapshot with the
+ * coding-specific `runDir`. Dependency arrows point coding → agent only.
+ */
+
+import {
+  createWorkflowRunManager as createAgentWorkflowRunManager,
+  getDefaultWorkflowRunManager as getDefaultAgentWorkflowRunManager,
+} from '@kodax-ai/agent';
 import type {
-  WorkflowEvent,
+  ManagedRunClassification,
+  ManagedRunHooks,
+  ManagedWorkflowSnapshot as AgentManagedWorkflowSnapshot,
+  WorkflowMeta,
   WorkflowProcessEvent,
   WorkflowProcessSnapshot,
-  WorkflowProcessTracker,
+  WorkflowRunManager as AgentWorkflowRunManager,
   WorkflowRunState,
-} from '@kodax-ai/agent';
-import {
-  createWorkflowProcessTracker,
-  isFinalWorkflowProcessStatus,
 } from '@kodax-ai/agent';
 
 import {
@@ -18,27 +34,14 @@ import {
   type RunWorkflowModuleOptions,
   type RunWorkflowModuleOutcome,
 } from './workflow-runner.js';
+import type { WorkflowHostPolicy } from './invocation-policy.js';
 import type { WorkflowRunProcessMetadata } from './run-graph.js';
 
-export type ManagedWorkflowStatus =
-  | 'running'
-  | 'paused'
-  | 'completed'
-  | 'failed'
-  | 'denied'
-  | 'stopped';
+export type { ManagedWorkflowStatus } from '@kodax-ai/agent';
 
-export interface ManagedWorkflowSnapshot {
-  readonly runId: string;
-  readonly workflow: string;
-  readonly status: ManagedWorkflowStatus;
+/** Coding snapshot = the neutral agent snapshot plus the durable run dir. */
+export interface ManagedWorkflowSnapshot extends AgentManagedWorkflowSnapshot {
   readonly runDir: string;
-  readonly totalSpawned: number;
-  readonly eventCount: number;
-  readonly startedAt: number;
-  readonly endedAt?: number;
-  readonly error?: string;
-  readonly resultText?: string;
 }
 
 export interface ManagedWorkflowRun {
@@ -48,22 +51,6 @@ export interface ManagedWorkflowRun {
   readonly getProcessSnapshot?: () => WorkflowProcessSnapshot | undefined;
 }
 
-interface MutableRun {
-  runId: string;
-  workflow: string;
-  status: ManagedWorkflowStatus;
-  runDir: string;
-  totalSpawned: number;
-  eventCount: number;
-  startedAt: number;
-  endedAt?: number;
-  error?: string;
-  resultText?: string;
-  controller: AbortController;
-  pauseWaiters: Array<() => void>;
-  process: WorkflowProcessTracker;
-}
-
 export interface WorkflowRunManager {
   start(opts: RunWorkflowModuleOptions): ManagedWorkflowRun;
   startFromOptions(input: RunWorkflowFromOptionsInput): ManagedWorkflowRun;
@@ -71,32 +58,13 @@ export interface WorkflowRunManager {
   get(runId: string): ManagedWorkflowSnapshot | undefined;
   subscribeWorkflowProcess(listener: (event: WorkflowProcessEvent) => void): () => void;
   getWorkflowProcessSnapshot(runId: string): WorkflowProcessSnapshot | undefined;
-  listWorkflowProcessSnapshots(options?: { readonly activeOnly?: boolean; readonly limit?: number }): readonly WorkflowProcessSnapshot[];
+  listWorkflowProcessSnapshots(options?: {
+    readonly activeOnly?: boolean;
+    readonly limit?: number;
+  }): readonly WorkflowProcessSnapshot[];
   pause(runId: string): boolean;
   resume(runId: string): boolean;
   stop(runId: string, reason?: string): boolean;
-}
-
-function snapshot(run: MutableRun): ManagedWorkflowSnapshot {
-  return {
-    runId: run.runId,
-    workflow: run.workflow,
-    status: run.status,
-    runDir: run.runDir,
-    totalSpawned: run.totalSpawned,
-    eventCount: run.eventCount,
-    startedAt: run.startedAt,
-    ...(run.endedAt !== undefined ? { endedAt: run.endedAt } : {}),
-    ...(run.error !== undefined ? { error: run.error } : {}),
-    ...(run.resultText !== undefined ? { resultText: run.resultText } : {}),
-  };
-}
-
-function terminalStatus(outcome: RunWorkflowModuleOutcome, aborted: boolean): ManagedWorkflowStatus {
-  if (aborted) return 'stopped';
-  if (outcome.kind === 'completed') return 'completed';
-  if (outcome.kind === 'denied') return 'denied';
-  return 'failed';
 }
 
 function resultText(value: unknown): string | undefined {
@@ -116,261 +84,133 @@ function resultText(value: unknown): string | undefined {
   return undefined;
 }
 
-function toError(error: unknown): Error {
-  return error instanceof Error ? error : new Error(String(error));
+function classifyOutcome(outcome: RunWorkflowModuleOutcome): ManagedRunClassification {
+  if (outcome.kind === 'completed') {
+    const text = resultText(outcome.result);
+    return text !== undefined ? { status: 'completed', resultText: text } : { status: 'completed' };
+  }
+  if (outcome.kind === 'denied') return { status: 'denied' };
+  return { status: 'failed', error: outcome.error };
 }
 
-function failedOutcome(run: MutableRun, error: unknown): RunWorkflowModuleOutcome {
-  const err = toError(error);
+function failedOutcome(runId: string, error: unknown): RunWorkflowModuleOutcome {
+  const err = error instanceof Error ? error : new Error(String(error));
   const state: WorkflowRunState = {
-    runId: run.runId,
+    runId,
     status: 'failed',
-    totalSpawned: run.totalSpawned,
+    totalSpawned: 0,
     events: [],
     artifacts: [],
   };
   return { kind: 'failed', error: err, state };
 }
 
+interface StartManagedParams {
+  readonly runId: string;
+  readonly runDir: string;
+  readonly meta: WorkflowMeta;
+  readonly hostPolicy: WorkflowHostPolicy | undefined;
+  readonly processMetadata: WorkflowRunProcessMetadata | undefined;
+  readonly signal: AbortSignal | undefined;
+}
+
 export function createWorkflowRunManager(
   deps: { readonly now?: () => number } = {},
+  agent: AgentWorkflowRunManager = createAgentWorkflowRunManager(deps),
 ): WorkflowRunManager {
-  const now = deps.now ?? (() => Date.now());
-  const runs = new Map<string, MutableRun>();
-  const subscribers = new Set<(event: WorkflowProcessEvent) => void>();
-  const isoNow = (): string => new Date(now()).toISOString();
+  const runDirs = new Map<string, string>();
 
-  const notifyProcess = (event: WorkflowProcessEvent): void => {
-    for (const subscriber of subscribers) {
-      try {
-        subscriber(event);
-      } catch {
-        // Process subscribers are observers. A host panel must not break the
-        // workflow runner or durable event writer.
-      }
-    }
-  };
+  const withRunDir = (
+    snap: AgentManagedWorkflowSnapshot | undefined,
+  ): ManagedWorkflowSnapshot | undefined =>
+    snap ? { ...snap, runDir: runDirs.get(snap.runId) ?? '' } : undefined;
 
-  const waitIfPaused = async (run: MutableRun): Promise<void> => {
-    while (run.status === 'paused' && !run.controller.signal.aborted) {
-      await new Promise<void>((resolve) => run.pauseWaiters.push(resolve));
-    }
-    if (run.controller.signal.aborted) {
-      throw new Error('workflow stopped');
-    }
-  };
-
-  const releasePauseWaiters = (run: MutableRun): void => {
-    const waiters = run.pauseWaiters.splice(0);
-    for (const resolve of waiters) resolve();
-  };
-
-  const onEvent = (
-    run: MutableRun,
-    original: ((event: WorkflowEvent) => void) | undefined,
-  ) => (event: WorkflowEvent): void => {
-    run.eventCount += 1;
-    if (event.type === 'agent_spawned') run.totalSpawned += 1;
-    notifyProcess(run.process.applyEvent(event));
-    original?.(event);
-  };
-
-  const createRun = (
-    opts: {
-      readonly runId: string;
-      readonly workflow: string;
-      readonly phases?: readonly string[];
-      readonly maxAgents?: number;
-      readonly plannedAgents?: number;
-      readonly tokenBudget?: number;
-      readonly processMetadata?: WorkflowRunProcessMetadata;
-    },
-    runDir: string,
-    signal: AbortSignal | undefined,
-  ): MutableRun => {
-    const controller = new AbortController();
-    if (signal) {
-      signal.addEventListener('abort', () => controller.abort(), { once: true });
-    }
-    const run: MutableRun = {
-      runId: opts.runId,
-      workflow: opts.workflow,
-      status: 'running',
-      runDir,
-      totalSpawned: 0,
-      eventCount: 0,
-      startedAt: now(),
-      controller,
-      pauseWaiters: [],
-      process: createWorkflowProcessTracker({
-        runId: opts.runId,
-        workflowName: opts.workflow,
-        displayName: opts.processMetadata?.displayName ?? opts.workflow,
-        ...(opts.processMetadata?.goal !== undefined ? { goal: opts.processMetadata.goal } : {}),
-        ...(opts.processMetadata?.source !== undefined ? { source: opts.processMetadata.source } : {}),
-        ...(opts.processMetadata?.savedWorkflowName !== undefined
-          ? { savedWorkflowName: opts.processMetadata.savedWorkflowName }
-          : {}),
-        ...(opts.processMetadata?.sourceRunId !== undefined
-          ? { sourceRunId: opts.processMetadata.sourceRunId }
-          : {}),
-        ...(opts.processMetadata?.sourceWorkflowName !== undefined
-          ? { sourceWorkflowName: opts.processMetadata.sourceWorkflowName }
-          : {}),
-        ...(opts.processMetadata?.revisionOf !== undefined ? { revisionOf: opts.processMetadata.revisionOf } : {}),
-        ...(opts.processMetadata?.hostMetadata !== undefined
-          ? { hostMetadata: { ...opts.processMetadata.hostMetadata } }
-          : {}),
-        ...(opts.phases !== undefined ? { phases: opts.phases } : {}),
-        ...(opts.maxAgents !== undefined ? { maxAgents: opts.maxAgents } : {}),
-        ...(opts.plannedAgents !== undefined ? { plannedAgents: opts.plannedAgents } : {}),
-        ...(opts.tokenBudget !== undefined ? { tokenBudget: opts.tokenBudget } : {}),
-        now: isoNow,
-      }),
+  const startManaged = (
+    params: StartManagedParams,
+    exec: (hooks: ManagedRunHooks) => Promise<RunWorkflowModuleOutcome>,
+  ): ManagedWorkflowRun => {
+    runDirs.set(params.runId, params.runDir);
+    const limits = clampWorkflowLimits(params.meta, params.hostPolicy);
+    const agentRun = agent.start<RunWorkflowModuleOutcome>({
+      runId: params.runId,
+      workflow: params.meta.name,
+      ...(params.meta.phases !== undefined ? { phases: params.meta.phases } : {}),
+      ...(limits.maxAgents !== undefined ? { maxAgents: limits.maxAgents } : {}),
+      ...(params.meta.plannedAgents !== undefined ? { plannedAgents: params.meta.plannedAgents } : {}),
+      ...(limits.tokenBudget !== undefined ? { tokenBudget: limits.tokenBudget } : {}),
+      ...(params.processMetadata !== undefined ? { processMetadata: params.processMetadata } : {}),
+      ...(params.signal ? { signal: params.signal } : {}),
+      runFn: exec,
+      classify: classifyOutcome,
+      onError: (error) => failedOutcome(params.runId, error),
+    });
+    return {
+      runId: agentRun.runId,
+      done: agentRun.done,
+      getSnapshot: () => withRunDir(agentRun.getSnapshot()),
+      getProcessSnapshot: () => agentRun.getProcessSnapshot(),
     };
-    runs.set(opts.runId, run);
-    return run;
-  };
-
-  const settle = (
-    run: MutableRun,
-    outcome: RunWorkflowModuleOutcome,
-  ): RunWorkflowModuleOutcome => {
-    run.status = terminalStatus(outcome, run.controller.signal.aborted || run.status === 'stopped');
-    run.endedAt = now();
-    if (outcome.kind === 'failed' && run.status !== 'stopped') run.error = outcome.error.message;
-    if (outcome.kind === 'completed') run.resultText = resultText(outcome.result);
-    if (outcome.kind === 'failed' && !isFinalWorkflowProcessStatus(run.process.getSnapshot().status)) {
-      notifyProcess(run.process.setStatus('failed', outcome.error.message));
-    } else if (outcome.kind === 'denied') {
-      notifyProcess(run.process.setStatus('cancelled', 'workflow denied'));
-    } else if (run.status === 'stopped' && run.process.getSnapshot().status !== 'cancelled') {
-      notifyProcess(run.process.setStatus('cancelled', 'workflow stopped'));
-    }
-    releasePauseWaiters(run);
-    return outcome;
   };
 
   return {
-    start: (opts) => {
-      const limits = clampWorkflowLimits(opts.module.meta, opts.hostPolicy);
-      const run = createRun({
-        runId: opts.runId,
-        workflow: opts.module.meta.name,
-        ...(opts.module.meta.phases !== undefined ? { phases: opts.module.meta.phases } : {}),
-        ...(limits.maxAgents !== undefined ? { maxAgents: limits.maxAgents } : {}),
-        ...(opts.module.meta.plannedAgents !== undefined
-          ? { plannedAgents: opts.module.meta.plannedAgents }
-          : {}),
-        ...(limits.tokenBudget !== undefined ? { tokenBudget: limits.tokenBudget } : {}),
-        ...(opts.processMetadata !== undefined ? { processMetadata: opts.processMetadata } : {}),
-      }, opts.runDir, opts.signal);
-      const done = runWorkflowModule({
-        ...opts,
-        signal: run.controller.signal,
-        beforeSpawn: () => waitIfPaused(run),
-        onEvent: onEvent(run, opts.onEvent),
-      })
-        .catch((error: unknown) => failedOutcome(run, error))
-        .then((outcome) => settle(run, outcome));
-      return {
-        runId: run.runId,
-        done,
-        getSnapshot: () => snapshot(run),
-        getProcessSnapshot: () => run.process.getSnapshot(),
-      };
-    },
+    start: (opts) =>
+      startManaged(
+        {
+          runId: opts.runId,
+          runDir: opts.runDir,
+          meta: opts.module.meta,
+          hostPolicy: opts.hostPolicy,
+          processMetadata: opts.processMetadata,
+          signal: opts.signal,
+        },
+        (hooks) =>
+          runWorkflowModule({
+            ...opts,
+            signal: hooks.signal,
+            beforeSpawn: hooks.beforeSpawn,
+            onEvent: (event) => {
+              hooks.onEvent(event);
+              opts.onEvent?.(event);
+            },
+          }),
+      ),
 
-    startFromOptions: (input) => {
-      const limits = clampWorkflowLimits(input.module.meta, input.options.workflowHostPolicy);
-      const run = createRun({
-        runId: input.runId,
-        workflow: input.module.meta.name,
-        ...(input.module.meta.phases !== undefined ? { phases: input.module.meta.phases } : {}),
-        ...(limits.maxAgents !== undefined ? { maxAgents: limits.maxAgents } : {}),
-        ...(input.module.meta.plannedAgents !== undefined
-          ? { plannedAgents: input.module.meta.plannedAgents }
-          : {}),
-        ...(limits.tokenBudget !== undefined ? { tokenBudget: limits.tokenBudget } : {}),
-        ...(input.processMetadata !== undefined ? { processMetadata: input.processMetadata } : {}),
-      }, input.runDir, input.signal);
-      const done = runWorkflowFromOptions({
-        ...input,
-        signal: run.controller.signal,
-        beforeSpawn: () => waitIfPaused(run),
-        onEvent: onEvent(run, input.onEvent),
-      })
-        .catch((error: unknown) => failedOutcome(run, error))
-        .then((outcome) => settle(run, outcome));
-      return {
-        runId: run.runId,
-        done,
-        getSnapshot: () => snapshot(run),
-        getProcessSnapshot: () => run.process.getSnapshot(),
-      };
-    },
+    startFromOptions: (input) =>
+      startManaged(
+        {
+          runId: input.runId,
+          runDir: input.runDir,
+          meta: input.module.meta,
+          hostPolicy: input.options.workflowHostPolicy,
+          processMetadata: input.processMetadata,
+          signal: input.signal,
+        },
+        (hooks) =>
+          runWorkflowFromOptions({
+            ...input,
+            signal: hooks.signal,
+            beforeSpawn: hooks.beforeSpawn,
+            onEvent: (event) => {
+              hooks.onEvent(event);
+              input.onEvent?.(event);
+            },
+          }),
+      ),
 
-    list: () =>
-      [...runs.values()]
-        .map(snapshot)
-        .sort((a, b) => b.startedAt - a.startedAt),
-
-    get: (runId) => {
-      const run = runs.get(runId);
-      return run ? snapshot(run) : undefined;
-    },
-
-    subscribeWorkflowProcess: (listener) => {
-      subscribers.add(listener);
-      return () => {
-        subscribers.delete(listener);
-      };
-    },
-
-    getWorkflowProcessSnapshot: (runId) => runs.get(runId)?.process.getSnapshot(),
-
-    listWorkflowProcessSnapshots: (options) => {
-      const snapshots = [...runs.values()]
-        .sort((a, b) => b.startedAt - a.startedAt)
-        .map((run) => run.process.getSnapshot())
-        .filter((process) =>
-          options?.activeOnly === true ? !isFinalWorkflowProcessStatus(process.status) : true,
-        );
-      return options?.limit === undefined ? snapshots : snapshots.slice(0, options.limit);
-    },
-
-    pause: (runId) => {
-      const run = runs.get(runId);
-      if (!run || run.status !== 'running') return false;
-      run.status = 'paused';
-      notifyProcess(run.process.setStatus('paused', 'workflow paused'));
-      return true;
-    },
-
-    resume: (runId) => {
-      const run = runs.get(runId);
-      if (!run || run.status !== 'paused') return false;
-      run.status = 'running';
-      notifyProcess(run.process.setStatus('running', 'workflow resumed'));
-      releasePauseWaiters(run);
-      return true;
-    },
-
-    stop: (runId, reason) => {
-      const run = runs.get(runId);
-      if (!run || ['completed', 'failed', 'denied', 'stopped'].includes(run.status)) return false;
-      run.status = 'stopped';
-      notifyProcess(run.process.setStatus('cancelled', reason ?? 'workflow stopped'));
-      run.controller.abort();
-      releasePauseWaiters(run);
-      return true;
-    },
+    list: () => agent.list().map((snap) => ({ ...snap, runDir: runDirs.get(snap.runId) ?? '' })),
+    get: (runId) => withRunDir(agent.get(runId)),
+    subscribeWorkflowProcess: (listener) => agent.subscribeWorkflowProcess(listener),
+    getWorkflowProcessSnapshot: (runId) => agent.getWorkflowProcessSnapshot(runId),
+    listWorkflowProcessSnapshots: (options) => agent.listWorkflowProcessSnapshots(options),
+    pause: (runId) => agent.pause(runId),
+    resume: (runId) => agent.resume(runId),
+    stop: (runId, reason) => agent.stop(runId, reason),
   };
 }
 
 let defaultWorkflowRunManager: WorkflowRunManager | undefined;
 
 export function getDefaultWorkflowRunManager(): WorkflowRunManager {
-  defaultWorkflowRunManager ??= createWorkflowRunManager();
+  defaultWorkflowRunManager ??= createWorkflowRunManager({}, getDefaultAgentWorkflowRunManager());
   return defaultWorkflowRunManager;
 }
