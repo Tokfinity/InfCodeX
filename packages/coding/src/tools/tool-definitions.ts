@@ -414,7 +414,7 @@ export const BUILTIN_TOOL_DEFINITIONS: LocalToolDefinition[] = [
   },
   {
     name: 'dispatch_child_task',
-    description: 'Execute a single child agent for an independent sub-task. The child runs its own multi-turn investigation loop and returns findings. Call multiple times in parallel for concurrent sub-tasks — each call appears as a separate tool with its own status in the transcript.',
+    description: 'Execute a single child agent for an independent sub-task. The child runs its own multi-turn investigation loop and returns findings. Call multiple times in parallel for concurrent sub-tasks — each call appears as a separate tool with its own status in the transcript. When you would otherwise fan several of these out and then synthesize or cross-check their results into one answer (comparing several codebases, reviewing a diff from multiple angles, fanning many files out and ranking what comes back), prefer run_workflow instead: one call gives you a bounded parallel/pipeline, per-child structured output, and same-session resume that dispatch_child_task does not.',
     input_schema: {
       type: 'object',
       properties: {
