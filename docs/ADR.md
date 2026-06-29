@@ -3319,12 +3319,23 @@ modes differ only in who may pull the trigger.**
   only; the AMA command turn reaches it already elevated. Tool **visibility follows
   capability** — `run_workflow` is shown to the managed Worker only when
   `ctx.workflowHost` is wired (`agent-chain.ts`), so plain AMA is never offered a
-  tool that would just error. Pinned by CAP-TOOL-CTX-009/010 and the FEATURE_168
-  worker-surface tests (run_workflow is host-conditional).
-- **Why structural, not prompt.** Activation is now a tool-availability fact
-  (present/absent), not a prompt nudge — so it is verified by contract/unit tests,
-  not an LLM eval. The prior A3 bridge-rate eval (does the *amaw* Worker bridge NL
-  → `run_workflow`) is unchanged and still applies to AMAW.
+  tool that would just error. The `dispatch_child_task → run_workflow` nudge is
+  likewise **host-conditional**: it is appended to the Worker's dispatch
+  description only when a host is wired (`DISPATCH_RUN_WORKFLOW_NUDGE`), so plain
+  AMA's dispatch description never points at a tool it lacks, and AMAW's stays
+  byte-identical to before. Pinned by CAP-TOOL-CTX-009/010 and the FEATURE_168
+  worker-surface tests (both run_workflow and its nudge are host-conditional).
+- **Verification.** The *gating* is a tool-availability fact (present/absent),
+  verified by contract/unit tests, not an LLM eval. The *host-conditional nudge*
+  is LLM-facing, so it carries a focused Layer-2 eval
+  (`tests/feature-246-ama-command-gating.eval.ts`): on a synthesizable fan-out
+  task the AMA Worker (no `run_workflow`, no nudge — byte-identical to the proven
+  pre-FEATURE_246 AMA surface) degrades to `dispatch_child_task` and never
+  references the absent tool. Result (canonical 5-alias panel, RUNS=3): **phantom
+  (mentions-absent-run_workflow) = 0% on every alias**; dispatch mean 53% (the one
+  0% alias scouts-first with bash, an anti-pattern-11 first-action floor, not a
+  failure). AMAW's surface is byte-identical to the post-A3 state, so the prior A3
+  bridge-rate eval still applies to it unchanged.
 
 **Hardening + non-goals (FEATURE_246 Part D/E round)**:
 - **Recursion guard is an invariant, not a runtime check.** A workflow child runs

@@ -94,6 +94,20 @@ describe('FEATURE_168 — AMA agent tool wiring (per-role full set)', () => {
     expect(getAgentToolNames('worker', true, false)).not.toContain('run_workflow');
   });
 
+  it('FEATURE_246: the dispatch_child_task → run_workflow nudge appears only when a workflow host is wired (no dangling pointer to an absent tool in plain AMA)', () => {
+    const dispatchDescription = (hasWorkflowHost: boolean): string => {
+      const chain = buildRunnerAgentChain(makeCtx(true, hasWorkflowHost), makeRecorder());
+      const dispatch = (chain.worker.tools ?? []).find(
+        (t) => (t as { name?: string }).name === 'dispatch_child_task',
+      ) as { description?: string } | undefined;
+      return dispatch?.description ?? '';
+    };
+    expect(dispatchDescription(true)).toContain('prefer run_workflow');
+    expect(dispatchDescription(false)).not.toContain('run_workflow');
+    // The base sub-task guidance is present in both.
+    expect(dispatchDescription(false)).toContain('Execute a single child agent');
+  });
+
   it('worker has no V1 emit tools (F193 V1 chain retired) and no emit_handoff (F190)', () => {
     const allNames = getAgentToolNames('worker');
     for (const banned of ['emit_scout_verdict', 'emit_contract', 'emit_handoff', 'emit_verdict']) {

@@ -25,6 +25,7 @@ import {
   isMcpToolName,
   listToolDefinitions,
 } from '../../../tools/registry.js';
+import { DISPATCH_RUN_WORKFLOW_NUDGE } from '../../../tools/tool-definitions.js';
 import type {
   KodaXEvents,
   KodaXToolExecutionContext,
@@ -347,10 +348,21 @@ export function buildRunnerAgentChain(
   if (!dispatchDefinition) {
     throw new Error('dispatch_child_task tool not registered — tools/registry.ts bootstrap failure');
   }
+  // FEATURE_246: surface the run_workflow nudge only when run_workflow is usable
+  // this turn (host wired = amaw, or an AMA /workflow command turn elevated to
+  // amaw). Plain AMA has no run_workflow on its surface, so omit the nudge rather
+  // than point the Worker at a tool it does not have. When present, the nudge is
+  // appended verbatim — AMAW's dispatch description stays byte-identical to before.
+  const dispatchDefForTurn = ctx.workflowHost
+    ? {
+        ...dispatchDefinition,
+        description: `${dispatchDefinition.description} ${DISPATCH_RUN_WORKFLOW_NUDGE}`,
+      }
+    : dispatchDefinition;
   // Worker owns the full dispatch surface: read-only fan-out via RULE A,
   // long-running probes via RULE B, write fan-out (readOnly:false) via RULE C.
   const workerDispatch = wrapDispatchChildTaskForRole(
-    dispatchDefinition,
+    dispatchDefForTurn,
     ctx,
     'worker',
     budget,

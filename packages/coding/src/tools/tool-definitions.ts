@@ -122,6 +122,15 @@ function mcpCapabilityPreview(capabilityId: string | undefined, args: unknown): 
   }
 }
 
+// FEATURE_246: the dispatch_child_task → run_workflow nudge. Kept separate from
+// the static description so it is appended to the Worker's dispatch tool ONLY when
+// run_workflow is actually usable this turn (a workflow host is wired — amaw, or an
+// AMA /workflow command turn elevated to amaw). In plain AMA run_workflow is not on
+// the surface, so the nudge is omitted rather than pointing the Worker at a tool it
+// does not have. Appended verbatim in agent-chain.ts buildAgentToolsFromRegistry.
+export const DISPATCH_RUN_WORKFLOW_NUDGE =
+  'When you would otherwise fan several of these out and then synthesize or cross-check their results into one answer (comparing several codebases, reviewing a diff from multiple angles, fanning many files out and ranking what comes back), prefer run_workflow instead: one call gives you a bounded parallel/pipeline, per-child structured output, and same-session resume that dispatch_child_task does not.';
+
 export const BUILTIN_TOOL_DEFINITIONS: LocalToolDefinition[] = [
   {
     name: 'read',
@@ -414,7 +423,7 @@ export const BUILTIN_TOOL_DEFINITIONS: LocalToolDefinition[] = [
   },
   {
     name: 'dispatch_child_task',
-    description: 'Execute a single child agent for an independent sub-task. The child runs its own multi-turn investigation loop and returns findings. Call multiple times in parallel for concurrent sub-tasks — each call appears as a separate tool with its own status in the transcript. When you would otherwise fan several of these out and then synthesize or cross-check their results into one answer (comparing several codebases, reviewing a diff from multiple angles, fanning many files out and ranking what comes back), prefer run_workflow instead: one call gives you a bounded parallel/pipeline, per-child structured output, and same-session resume that dispatch_child_task does not.',
+    description: 'Execute a single child agent for an independent sub-task. The child runs its own multi-turn investigation loop and returns findings. Call multiple times in parallel for concurrent sub-tasks — each call appears as a separate tool with its own status in the transcript.',
     input_schema: {
       type: 'object',
       properties: {
