@@ -139,6 +139,21 @@ describe('createCodingWorkflowBackend — spawn + wait', () => {
     expect(seenSchema).toEqual(schema);
   });
 
+  it('passes per-child effort into the bundle (FEATURE_246 Part E)', async () => {
+    let seenEffort: unknown;
+    const backend = createCodingWorkflowBackend({
+      ctx: fakeCtx(),
+      childOptions,
+      runChild: async (bundles) => {
+        seenEffort = bundles[0]?.effort;
+        return execResult({ status: 'completed', summary: 'ok' });
+      },
+    });
+    const handle = await backend.spawn({ name: 'r', prompt: 'p', readOnly: true, effort: 'high' });
+    await backend.wait(handle.taskId);
+    expect(seenEffort).toBe('high');
+  });
+
   it('maps a failed child to status=failed', async () => {
     const backend = createCodingWorkflowBackend({
       ctx: fakeCtx(),

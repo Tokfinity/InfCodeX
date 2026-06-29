@@ -231,6 +231,7 @@ function readSpawnAgentInput(value: unknown, label: string): WorkflowSpawnAgentI
     evidenceRefs?: readonly string[];
     verification?: WorkflowTaskVerification;
     outputSchema?: unknown;
+    effort?: string;
   } = {
     name: readNonEmptyField(record, 'name', label),
     prompt: readNonEmptyField(record, 'prompt', label),
@@ -249,6 +250,9 @@ function readSpawnAgentInput(value: unknown, label: string): WorkflowSpawnAgentI
   }
   if (record.isolation !== undefined) {
     input.isolation = readNonEmptyField(record, 'isolation', label) as WorkflowSpawnAgentInput['isolation'];
+  }
+  if (record.effort !== undefined) {
+    input.effort = readNonEmptyField(record, 'effort', label);
   }
   if (record.evidenceRefs !== undefined) {
     if (

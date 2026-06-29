@@ -49,6 +49,7 @@ import type {
   KodaXChildExecutionResult,
   KodaXEvents,
   KodaXToolExecutionContext,
+  KodaXWireReasoningEffort,
 } from '../types.js';
 
 const execFileAsync = promisify(execFile);
@@ -481,6 +482,9 @@ function buildBundle(childId: string, input: WorkflowSpawnAgentInput): KodaXChil
     ...(input.isolation ? { isolation: input.isolation } : {}),
     ...(input.subagentType ? { specialistName: input.subagentType } : {}),
     ...(input.outputSchema !== undefined ? { outputSchema: input.outputSchema } : {}),
+    // Per-child effort is normalized downstream by resolveChildEffort
+    // (normalizeReasoningEffortValue), so an opaque string is safe here.
+    ...(input.effort ? { effort: input.effort as KodaXWireReasoningEffort } : {}),
   };
 }
 

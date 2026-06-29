@@ -60,6 +60,11 @@ export interface WorkflowSpawnAgentInput {
   readonly modelHint?: WorkflowModelHint;
   /** Isolation policy; defaults to `shared-cwd`. */
   readonly isolation?: WorkflowIsolation;
+  /** Per-child reasoning effort hint (e.g. 'low' | 'medium' | 'high' | 'max').
+   *  The backend maps it onto the child's reasoning resolver; omit to inherit
+   *  the parent/default effort. Opaque string so the agent layer needs no
+   *  coding effort-enum dependency. */
+  readonly effort?: string;
   /** Evidence refs (`task_id:<id>` etc.) seeded into the child context. */
   readonly evidenceRefs?: readonly string[];
   /** Optional machine-checkable postconditions for this child task. */
