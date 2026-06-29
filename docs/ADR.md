@@ -3186,3 +3186,81 @@ consumes it already lives.
   / `workflow-command` tests stay green (parity), plus new agent-side manager
   tests with a fake `runFn` (zero coding).
 - **No eval**: pure structural refactor, no LLM-facing prompt content changed.
+
+---
+
+## ADR-047: Workflow Invocation — Worker-Authored "Scout-then-Author" Primary; Blind `sideQuery` Generation Demoted to Fallback; AMAW Defers to the Worker
+
+**Status**: Proposed (2026-06-29)
+
+> Extends [ADR-044](#adr-044-workflow-authoring-parity-with-the-claude-code-harness)
+> + [ADR-046](#adr-046-workflow-run-management--neutral-lifecycle-manager-in-kodax-aiagent-via-dependency-inversion).
+
+**Context**: KodaX's `/workflow create "<NL>"` generates a script via
+`generateWorkflowFromOptions` → a single `sideQuery` call with **`tools: []`**:
+the model that writes the script has **no tools — it cannot grep/read/investigate**,
+it only sees the one-line request. So it can only emit *generic* scripts
+("investigate X" / "review Y") and pushes all the real scouting onto the child
+agents, which then re-discover (often the wrong files). The AMAW path is worse:
+the pre-LLM natural-language intercept (`decideWorkflowInvocation` → `auto-start`
+→ `startGeneratedWorkflowFromRequest`) blind-generates **before the Worker ever
+sees the message**, so the Worker never gets to investigate.
+
+This is the **structural root** of why KodaX workflows feel disjointed while the
+Claude Code harness feels smooth: in the harness the script is the *product* of
+investigation (the orchestrating agent scouts first — discovering real files,
+sub-problems, data shapes — then bakes those findings into the child prompts),
+not its trigger. **Eval evidence** (FEATURE_246 A3 5-alias panel): coding-plan
+models *do* scout-first (read/grep) but most don't bridge to `run_workflow`; only
+kimi/mmx bridge. The missing piece is the *scout-then-author bridge*, not more
+generator tuning.
+
+**Decision**:
+
+1. **Worker-authored `run_workflow` (FEATURE_246 Part A) is the PRIMARY
+   interactive path.** The Worker has the full toolset + conversation context, so
+   it can scout first and then author a workflow whose child prompts carry
+   concrete findings (file:line, real dimensions, a real `outputSchema`).
+
+2. **The `run_workflow` description teaches scout-then-author (A3.1).** It must
+   say: investigate with your own tools first; bake the findings into the child
+   prompts; do **not** emit a generic blind script that re-delegates all scouting
+   (the failure mode that makes workflows feel disjointed). LLM-facing →
+   FEATURE_104 eval re-run on the 5-alias panel (expected: the scout-first models
+   now bridge; negatives still don't over-trigger).
+
+3. **AMAW no longer pre-empts the Worker.** The AMAW pre-LLM natural-language
+   intercept is removed — natural-language flows to the Worker, which has
+   `run_workflow` + the scout-first guidance and decides itself. This trades the
+   "blind-generate saves a Worker turn" micro-optimization for the smooth
+   experience (user-approved AMAW semantics change).
+
+4. **The blind `sideQuery` generator is DEMOTED to a fallback, not deleted.** It
+   survives only for (a) the explicit `/workflow create` command and (b)
+   non-interactive / CI / low-capability hosts that have no investigating Worker.
+   It is **not** upgraded with tools — that would rebuild a second full agent when
+   the Worker already is one (CLAUDE.md minimalism).
+
+5. **The REPL wires `options.workflowRunsBaseDir`** so the Worker's
+   `ctx.workflowHost` is live; without it `run_workflow` no-ops.
+
+**Cleanup (reliability + maintainability):** once the AMAW intercept is removed,
+the natural-language intercept glue becomes dead/redundant — the
+`decideWorkflowInvocation` `auto-start` branch for AMAW NL and the two REPL
+`runWorkflowInvocation` NL paths (repl.ts + InkREPL.tsx). Simplify
+`decideWorkflowInvocation` to the command-suggest + negation-detect surface it
+still needs, remove the dead NL-auto-start glue, and audit `generateWorkflow*` so
+the surviving fallback is cohesive and clearly documented as such. Re-verify
+against HEAD before deleting; preserve genuine fallback coverage.
+
+**Consequences**:
+- The smooth scout-then-author flow becomes the default; disjointed blind scripts
+  only happen on explicit `/workflow create` or headless hosts.
+- AMAW becomes "the Worker is equipped + nudged to use `run_workflow`", not "the
+  harness blind-generates ahead of the Worker".
+- Net REPL surface shrinks (one start path + the fallback command), improving
+  maintainability.
+
+**Scope boundaries**: `/workflow create`, `/workflow <name>`, saved capsules,
+run-graph, and the run manager are unchanged except for routing. The sideQuery
+generator's internals (validation/repair/smoke) stay as the fallback's safety.
