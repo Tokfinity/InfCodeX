@@ -59,6 +59,12 @@ describe('FEATURE_246 P1: run_workflow forwards live process events to options.e
     const types = seen.map((e) => e.type);
     expect(types).toContain('workflow_started');
     expect(types).toContain('workflow_finished');
+    // Each lifecycle event must arrive EXACTLY ONCE — the host must not add a
+    // second sink on top of the runner's existing onWorkflowProcessEvent forward
+    // (a double-subscription would double every event and double-render / pollute
+    // an SDK host's audit stream).
+    expect(types.filter((t) => t === 'workflow_started').length, 'exactly one workflow_started (no double-emit)').toBe(1);
+    expect(types.filter((t) => t === 'workflow_finished').length, 'exactly one workflow_finished (no double-emit)').toBe(1);
   });
 
   it('does not subscribe (no overhead) when no onWorkflowProcessEvent sink is wired', async () => {
