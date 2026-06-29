@@ -3376,10 +3376,19 @@ re-architecture):
 - A cache hit skips the spawn (no `agent_spawned`/`agent_completed` events), so
   the resume run's progress shows only the live effects — cached ones are
   "instant", matching the harness.
-- Known limitation: two effects with *identical inputs but position-dependent
-  meaning* may have their cached results assigned in a different occurrence order
-  on resume. Rare (agents normally have distinct prompts) and only affects
-  position-sensitive identical-input fan-outs; documented, not guarded.
+- Known limitations (documented, not guarded — adversarial review FEATURE_246
+  Part D):
+  - Two effects with *identical inputs but position-dependent meaning* may have
+    their cached results assigned in a different occurrence order on resume. Rare
+    (agents normally have distinct prompts) and only affects position-sensitive
+    identical-input fan-outs.
+  - `wf.budget.spent()`/`remaining()` reflect only *live-run* token usage — a
+    cache hit skips the spawn and the accrual, so budget under-reports on resume.
+    Don't gate live-agent launches on `remaining()` in scripts meant for resume.
+  - `wf.synthesize` is intentionally NOT cached (it runs through `runAgentImpl`
+    directly): it is the terminal fold over the (possibly cached) findings, cheap
+    relative to the fan-out, and freshly folding the replayed results each resume
+    is the desired behavior.
 - New behavior: the determinism guards can break a script that (mis)used
   `Date.now`/`Math.random`; the error names the banned API and how to fix it.
 - DROPPED (→ 231b): write-ahead journal as execution authority, cross-process /

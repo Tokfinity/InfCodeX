@@ -190,7 +190,12 @@ function buildWorkflowToolHost(options: KodaXOptions): WorkflowToolHost | undefi
         runsBaseDir,
         manager: getDefaultWorkflowRunManager(),
         // FEATURE_246 Part D: resume seeds the result cache from the prior run.
-        ...(resumeFromRunId ? { resumeFromRunDir: join(runsBaseDir, resumeFromRunId) } : {}),
+        // Guard against path traversal — resumeFromRunId is model-supplied, so a
+        // value like '../../etc' must not escape runsBaseDir. Run ids are
+        // `run-<base36>`; require that safe charset (no slashes / dots / abs path).
+        ...(resumeFromRunId && /^[A-Za-z0-9][A-Za-z0-9._-]*$/.test(resumeFromRunId) && !resumeFromRunId.includes('..')
+          ? { resumeFromRunDir: join(runsBaseDir, resumeFromRunId) }
+          : {}),
         ...(options.abortSignal ? { signal: options.abortSignal } : {}),
       });
       if (started.kind === 'declined') {

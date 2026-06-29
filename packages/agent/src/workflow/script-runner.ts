@@ -496,6 +496,13 @@ const Date = new Proxy(globalThis.Date, {
     return Reflect.get(target, prop, receiver);
   },
 });
+// Also route the globalThis references through the guard proxies, so
+// globalThis.Math.random() / globalThis.Date.now() (and anything reaching them
+// via AsyncFunction/GeneratorFunction constructors or Reflect) cannot bypass the
+// local const shadows. The proxies captured the real targets above, so this
+// does not recurse.
+globalThis.Math = Math;
+globalThis.Date = Date;
 
 const args = ${argsJson} === undefined ? undefined : JSON.parse(${argsJson});
 const __kodaxQueue = [];

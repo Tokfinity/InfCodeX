@@ -757,6 +757,9 @@ function buildRuntime(opts: CreateWorkflowRuntimeOptions): InternalRuntime {
       // Synthesis runs as a gated agent (counts toward maxAgents /
       // concurrency / budget and emits agent_spawned/completed events)
       // rather than a backend side-channel that bypasses the runtime.
+      // FEATURE_246 Part D: intentionally NOT routed through the resume cache —
+      // it is the terminal fold over the (possibly cached) findings and is
+      // re-run fresh on each resume by design (ADR-048 known limitations).
       const result = await runAgentImpl({
         name: 'synthesize',
         prompt: buildSynthesisPrompt(input),

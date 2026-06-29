@@ -36,7 +36,7 @@ async function run(wf, args) {
     { concurrency: 4 }
   );
   return await wf.synthesize({
-    inputs: results.map((result) => result.finalText),
+    inputs: results.filter((result) => result !== null).map((result) => result.finalText),
     rubric: "Merge the independent findings into one deduplicated answer with clear conclusions."
   });
 }
@@ -52,6 +52,7 @@ async function run(wf, args) {
       readOnly: true,
       modelHint: "deep"
     });
+    if (candidate === null) return "candidate-worker did not complete";
     const verifier = await wf.runAgent({
       name: "adversarial-verifier",
       prompt: "Attack this answer against the request and list only evidence-backed concerns:\\n" + candidate.finalText,
@@ -60,7 +61,7 @@ async function run(wf, args) {
       modelHint: "deep"
     });
     return await wf.synthesize({
-      inputs: [candidate.finalText, verifier.finalText],
+      inputs: [candidate.finalText, verifier === null ? "(verification did not complete)" : verifier.finalText],
       rubric: "Return the final answer plus any verified fixes or caveats."
     });
   });
@@ -81,7 +82,7 @@ async function run(wf, args) {
     { concurrency: 3 }
   );
   return await wf.synthesize({
-    inputs: entries.map((entry) => entry.finalText),
+    inputs: entries.filter((entry) => entry !== null).map((entry) => entry.finalText),
     rubric: "Judge pairwise, explain tradeoffs, and pick the top result."
   });
 }
@@ -98,6 +99,7 @@ async function run(wf, args) {
       readOnly: true,
       evidenceRefs: findings.map((item) => "task_id:" + item.taskId)
     });
+    if (result === null) break;
     findings.push(result);
     if (/NO_NEW_FINDINGS/i.test(result.finalText)) break;
   }
@@ -122,10 +124,11 @@ async function run(wf, args) {
   );
   const filtered = await wf.runAgent({
     name: "filter",
-    prompt: "Filter, dedupe, and rank these candidates against the request:\\n" + JSON.stringify(generated),
+    prompt: "Filter, dedupe, and rank these candidates against the request:\\n" + JSON.stringify(generated.filter((g) => g !== null)),
     readOnly: true,
     modelHint: "deep"
   });
+  if (filtered === null) return "filter step did not complete";
   return await wf.synthesize({
     inputs: [filtered.finalText],
     rubric: "Return only the strongest candidates with reasons."
@@ -142,6 +145,7 @@ async function run(wf, args) {
     readOnly: true,
     modelHint: "fast"
   });
+  if (classification === null) return "classifier did not complete";
   const label = classification.finalText.toLowerCase();
   const action = label.includes("verification") ? "verify every claim" :
     label.includes("migration") ? "plan safe code changes without editing files" :
@@ -154,7 +158,7 @@ async function run(wf, args) {
     evidenceRefs: ["task_id:" + classification.taskId]
   });
   return await wf.synthesize({
-    inputs: [classification.finalText, result.finalText],
+    inputs: [classification.finalText, result === null ? "(routed worker did not complete)" : result.finalText],
     rubric: "Explain the route and final result."
   });
 }

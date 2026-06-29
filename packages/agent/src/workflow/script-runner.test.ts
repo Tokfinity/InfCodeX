@@ -165,6 +165,23 @@ describe('runRestrictedWorkflowScript', () => {
     ).rejects.toThrow(/argless new Date\(\) is disabled/);
   });
 
+  it('closes the globalThis.Math / globalThis.Date determinism bypass (incl. AsyncFunction)', async () => {
+    const { wf } = fakeWorkflowApi();
+    await expect(
+      runRestrictedWorkflowScript({ wf, source: `async function run() { return globalThis.Math.random(); }` }),
+    ).rejects.toThrow(/Math\.random\(\) is disabled/);
+    await expect(
+      runRestrictedWorkflowScript({ wf, source: `async function run() { return globalThis.Date.now(); }` }),
+    ).rejects.toThrow(/Date\.now\(\) is disabled/);
+    // AsyncFunction-constructor escape reaches globalThis.Date — now the proxy.
+    await expect(
+      runRestrictedWorkflowScript({
+        wf,
+        source: `async function run() { return (async function(){}).constructor('return globalThis.Date.now()')(); }`,
+      }),
+    ).rejects.toThrow(/disabled/);
+  });
+
   it('still allows deterministic Math and new Date(ms) with an explicit value', async () => {
     const { wf } = fakeWorkflowApi();
     const result = await runRestrictedWorkflowScript({
