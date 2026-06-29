@@ -266,8 +266,20 @@ export function createWorkflowRunManager(
         signal: run.controller.signal,
         beforeSpawn: () => waitIfPaused(run),
       };
-      const done = Promise.resolve()
-        .then(() => input.runFn(hooks))
+      // Invoke runFn EAGERLY (synchronously), not via Promise.resolve().then().
+      // A deferred start adds a microtask before the run body begins, which
+      // lets a caller that starts a run and then resolves it on a later tick
+      // (e.g. a held-open run released after one await) call its release before
+      // the body is even entered — the run then never completes. Match the
+      // pre-A0 eager-start contract; the try/catch still routes a synchronous
+      // throw through onError exactly like an async rejection.
+      let started: Promise<TOutcome>;
+      try {
+        started = Promise.resolve(input.runFn(hooks));
+      } catch (error: unknown) {
+        started = Promise.resolve(input.onError(error));
+      }
+      const done = started
         .catch((error: unknown) => input.onError(error))
         .then((outcome) => {
           settle(run, input.classify(outcome));

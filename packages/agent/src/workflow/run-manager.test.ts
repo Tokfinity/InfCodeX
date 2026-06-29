@@ -145,6 +145,50 @@ describe('createWorkflowRunManager (neutral)', () => {
     expect(m.get('r6')?.status).toBe('stopped');
   });
 
+  it('invokes runFn eagerly (synchronously) — the body starts before start() returns', () => {
+    // Regression: A0 briefly deferred runFn via Promise.resolve().then(...),
+    // which let a caller that releases a held-open run right after a single
+    // await call its release before the body was even entered — the run then
+    // never settled (deadlock). Eager start keeps the pre-A0 contract.
+    const m = createWorkflowRunManager();
+    let entered = false;
+    m.start<Outcome>({
+      runId: 'eager',
+      workflow: 'wf',
+      runFn: async () => {
+        entered = true;
+        return { kind: 'completed' };
+      },
+      classify,
+      onError,
+    });
+    expect(entered).toBe(true);
+  });
+
+  it('settles a held-open run released only after the caller awaits — no deadlock', async () => {
+    // Mirrors the /workflow run-id completer test: start a run whose body holds
+    // open until an external release, do other awaited work, then release and
+    // await done. Must resolve (would hang under a deferred start).
+    const m = createWorkflowRunManager();
+    let release: () => void = () => {};
+    const run = m.start<Outcome>({
+      runId: 'held',
+      workflow: 'wf',
+      runFn: () =>
+        new Promise<Outcome>((resolve) => {
+          release = () => resolve({ kind: 'completed' });
+        }),
+      classify,
+      onError,
+    });
+    await tick(); // caller does other work first
+    expect(m.get('held')?.status).toBe('running');
+    release();
+    const outcome = await run.done;
+    expect(outcome.kind).toBe('completed');
+    expect(m.get('held')?.status).toBe('completed');
+  });
+
   it('forwards process events to subscribers and lists active snapshots', async () => {
     const m = createWorkflowRunManager();
     const received: number[] = [];
