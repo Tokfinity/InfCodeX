@@ -25,7 +25,7 @@ import type {
   WorkflowModule,
 } from '@kodax-ai/agent';
 
-import { generateWorkflowFromOptions } from './generator.js';
+import { generateWorkflowFromOptions, validateGeneratedWorkflowSource } from './generator.js';
 import {
   getDefaultWorkflowRunManager,
   type ManagedWorkflowRun,
@@ -93,6 +93,16 @@ async function resolveModule(
     // Validate manifest + source through the SAME gate generated workflows use,
     // so a malformed inline script fails closed exactly like a generated one.
     const manifest = validateWorkflowScriptManifest(source.manifest);
+    // FEATURE_246 (P2 review): run_workflow (inline) is the PRIMARY workflow path,
+    // so it must not have LESS pre-flight protection than the blind generator
+    // fallback. Apply the same static source checks here — literal task targets
+    // (e.g. wf.wait("name")), legacy `.output`, forbidden host/IO tokens, and a
+    // non-displayable run() return now fail fast with an actionable message that
+    // the Worker sees as a tool error and can correct, instead of a late runtime
+    // crash. The heavier multi-scenario smoke run stays generator-only (it would
+    // add latency to every run_workflow call, and the inline author is a Worker
+    // with a runtime-error retry loop, unlike the one-shot generator).
+    validateGeneratedWorkflowSource(source.source);
     const module = createRestrictedWorkflowModule({ manifest, source: source.source });
     return { module, scriptSnapshot: { manifest, source: source.source } };
   }

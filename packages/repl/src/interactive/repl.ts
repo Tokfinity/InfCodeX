@@ -63,7 +63,7 @@ import {
 } from '../permission/types.js';
 import { bootstrapAutoMode, type AutoModeBootstrapResult } from './auto-mode-bootstrap.js';
 import { createBashPrefixExtractor, type BashPrefixExtractor } from '@kodax-ai/coding';
-import { bootstrapTeamMode, type TeamModeHandle } from '@kodax-ai/agent';
+import { bootstrapTeamMode, type TeamModeHandle, type WorkflowProcessEvent } from '@kodax-ai/agent';
 import { isToolCallAllowed, isAlwaysConfirmPath, isBashReadCommand, getPlanModeBlockReason } from '../permission/permission.js';
 import { replBashPathSignalCollector } from '../permission/repl-bash-signals.js';
 import {
@@ -1945,6 +1945,29 @@ export async function processSpecialSyntax(input: string): Promise<string> {
 }
 
 // Run one round of Agent - 运行一轮 Agent
+// FEATURE_246 (P1 review): concise console progress for the model-launched
+// run_workflow path. The Ink UI renders a live work-strip; the plain console REPL
+// just prints start / finish (and any runtime-surfaced message) so an inline
+// workflow is not an opaque long tool call. Stateless — one line per event, and
+// only on the events worth surfacing (no per-agent spam).
+function renderInlineWorkflowProcessLine(event: WorkflowProcessEvent): string | undefined {
+  const s = event.snapshot;
+  if (event.type === 'workflow_started') {
+    return chalk.dim(`\n▶ workflow ${s.workflowName} started (${s.runId})`);
+  }
+  if (event.type === 'workflow_finished') {
+    const mark = s.status === 'completed' ? chalk.green('✓')
+      : s.status === 'failed' ? chalk.red('✗')
+      : chalk.yellow('•');
+    const summary = s.resultSummary ? ` — ${s.resultSummary.split('\n')[0]}` : '';
+    return `${mark} workflow ${s.workflowName} ${s.status}${summary}`;
+  }
+  if (event.type === 'workflow_updated' && event.message) {
+    return chalk.dim(`  ${event.message}`);
+  }
+  return undefined;
+}
+
 async function runAgentRound(
   options: KodaXOptions,
   context: InteractiveContext,
@@ -1956,6 +1979,11 @@ async function runAgentRound(
   const events = {
     ...(options.events ?? {}),
     getCostReport: costReportRef,
+    // FEATURE_246 (P1 review): surface inline run_workflow progress in the console.
+    onWorkflowProcessEvent: (event: WorkflowProcessEvent) => {
+      const line = renderInlineWorkflowProcessLine(event);
+      if (line) console.log(line);
+    },
   };
 
   // Pass existing conversation history for multi-turn dialogue - 传递已有的对话历史，实现多轮对话

@@ -190,33 +190,52 @@ function buildWorkflowToolHost(options: KodaXOptions): WorkflowToolHost | undefi
         import('../workflows/run-manager.js'),
         import('node:path'),
       ]);
-      const started = await startManagedWorkflow({
-        source: { kind: 'inline', manifest, source },
-        args,
-        options,
-        runsBaseDir,
-        manager: getDefaultWorkflowRunManager(),
-        // FEATURE_246 Part D: resume seeds the result cache from the prior run.
-        // Guard against path traversal — resumeFromRunId is model-supplied, so a
-        // value like '../../etc' must not escape runsBaseDir. Run ids are
-        // `run-<base36>`; require that safe charset (no slashes / dots / abs path).
-        ...(resumeFromRunId && /^[A-Za-z0-9][A-Za-z0-9._-]*$/.test(resumeFromRunId) && !resumeFromRunId.includes('..')
-          ? { resumeFromRunDir: join(runsBaseDir, resumeFromRunId) }
-          : {}),
-        ...(options.abortSignal ? { signal: options.abortSignal } : {}),
-      });
-      if (started.kind === 'declined') {
-        return { kind: 'declined', reason: started.reason };
+      const manager = getDefaultWorkflowRunManager();
+      // FEATURE_246 (P1 review): surface live workflow progress for the inline
+      // run_workflow path, mirroring the slash /workflow path. The run id is minted
+      // here so we can subscribe to this run's process events BEFORE it starts
+      // emitting, then forward them to the host via options.events
+      // .onWorkflowProcessEvent — the REPL renders them with the same work-strip the
+      // slash path uses. No-op when no sink is wired (SDK / headless).
+      const runId = `run-${Date.now().toString(36)}`;
+      const onProcessEvent = options.events?.onWorkflowProcessEvent;
+      const unsubscribe = onProcessEvent
+        ? manager.subscribeWorkflowProcess((event) => {
+            if (event.snapshot.runId === runId) onProcessEvent(event);
+          })
+        : undefined;
+      try {
+        const started = await startManagedWorkflow({
+          source: { kind: 'inline', manifest, source },
+          args,
+          options,
+          runsBaseDir,
+          runId,
+          manager,
+          // FEATURE_246 Part D: resume seeds the result cache from the prior run.
+          // Guard against path traversal — resumeFromRunId is model-supplied, so a
+          // value like '../../etc' must not escape runsBaseDir. Run ids are
+          // `run-<base36>`; require that safe charset (no slashes / dots / abs path).
+          ...(resumeFromRunId && /^[A-Za-z0-9][A-Za-z0-9._-]*$/.test(resumeFromRunId) && !resumeFromRunId.includes('..')
+            ? { resumeFromRunDir: join(runsBaseDir, resumeFromRunId) }
+            : {}),
+          ...(options.abortSignal ? { signal: options.abortSignal } : {}),
+        });
+        if (started.kind === 'declined') {
+          return { kind: 'declined', reason: started.reason };
+        }
+        await started.managed.done;
+        const snap = started.managed.getSnapshot?.();
+        return {
+          kind: 'started',
+          runId: started.runId,
+          ...(snap?.status !== undefined ? { status: snap.status } : {}),
+          ...(snap?.resultText !== undefined ? { resultText: snap.resultText } : {}),
+          ...(snap?.error !== undefined ? { error: snap.error } : {}),
+        };
+      } finally {
+        unsubscribe?.();
       }
-      await started.managed.done;
-      const snap = started.managed.getSnapshot?.();
-      return {
-        kind: 'started',
-        runId: started.runId,
-        ...(snap?.status !== undefined ? { status: snap.status } : {}),
-        ...(snap?.resultText !== undefined ? { resultText: snap.resultText } : {}),
-        ...(snap?.error !== undefined ? { error: snap.error } : {}),
-      };
     },
   };
 }

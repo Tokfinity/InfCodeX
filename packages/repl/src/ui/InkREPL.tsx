@@ -64,6 +64,7 @@ import {
 import {
   buildWorkflowLiveViewModel,
   formatWorkflowLiveViewModelForTranscript,
+  workflowLiveSnapshotFromProcess,
   type WorkflowLiveSnapshot,
 } from "./view-models/workflow-live.js";
 import { buildFooterHeaderViewModel } from "./view-models/footer-header.js";
@@ -141,7 +142,7 @@ import type {
   TodoItem,
   TodoList,
 } from "@kodax-ai/coding";
-import { estimateTokens, bootstrapTeamMode, setActiveUserInteraction, getAgentConfigPath, type TeamModeHandle } from "@kodax-ai/agent";
+import { estimateTokens, bootstrapTeamMode, setActiveUserInteraction, getAgentConfigPath, type TeamModeHandle, type WorkflowProcessEvent } from "@kodax-ai/agent";
 import { deriveProjectKeyFromRoot } from "../interactive/project-key.js";
 import {
   PermissionMode,
@@ -1547,6 +1548,51 @@ const InkREPLInner: React.FC<InkREPLProps> = ({
     replaceWorkflowLiveStatus({ ...current, message });
     return true;
   }, [replaceWorkflowLiveStatus]);
+  // FEATURE_246 (P1 review): single source of truth for applying a workflow run
+  // UI event to the live status. Shared by the slash /workflow path AND the
+  // model-launched run_workflow path (which arrives via options.events
+  // .onWorkflowProcessEvent — see handleInlineWorkflowProcessEvent below).
+  const applyWorkflowRunUiEvent = useCallback((
+    event: Parameters<NonNullable<CommandCallbacks['onWorkflowRunUpdate']>>[0],
+  ): void => {
+    if (event.status === "running") {
+      replaceWorkflowLiveStatus({
+        runId: event.runId,
+        workflow: event.workflow,
+        status: event.status,
+        ...(event.phase !== undefined ? { phase: event.phase } : {}),
+        ...(event.phaseIndex !== undefined ? { phaseIndex: event.phaseIndex } : {}),
+        ...(event.phaseTotal !== undefined ? { phaseTotal: event.phaseTotal } : {}),
+        ...(event.startedAt !== undefined ? { startedAt: event.startedAt } : {}),
+        ...(event.elapsedMs !== undefined ? { elapsedMs: event.elapsedMs } : {}),
+        activeAgents: event.activeAgents,
+        totalSpawned: event.totalSpawned,
+        ...(event.plannedAgents !== undefined ? { plannedAgents: event.plannedAgents } : {}),
+        ...(event.agentCap !== undefined ? { agentCap: event.agentCap } : {}),
+        ...(event.tokenBudgetSpent !== undefined ? { tokenBudgetSpent: event.tokenBudgetSpent } : {}),
+        ...(event.tokenBudgetTotal !== undefined ? { tokenBudgetTotal: event.tokenBudgetTotal } : {}),
+        completedAgents: event.completedAgents,
+        failedAgents: event.failedAgents,
+        stoppedAgents: event.stoppedAgents,
+        ...(event.message !== undefined ? { message: event.message } : {}),
+        ...(event.locale !== undefined ? { locale: event.locale } : {}),
+      });
+      return;
+    }
+    updateWorkflowLiveStatus((current) => (
+      current?.runId === event.runId ? null : current
+    ));
+  }, [replaceWorkflowLiveStatus, updateWorkflowLiveStatus]);
+  // FEATURE_246 (P1 review): render live progress for the inline run_workflow
+  // path the same way the slash path does. The coding host forwards this run's
+  // process events here; convert each to the run-update UI shape and apply it.
+  const handleInlineWorkflowProcessEvent = useCallback((event: WorkflowProcessEvent): void => {
+    const message = event.type === "workflow_updated" ? event.message : undefined;
+    applyWorkflowRunUiEvent(workflowLiveSnapshotFromProcess(
+      event.snapshot,
+      message === undefined ? { locale: "en" } : { locale: "en", message },
+    ));
+  }, [applyWorkflowRunUiEvent]);
   // FEATURE_097 (v0.7.34) — todo plan surface state. Single source of
   // truth for the rendered list; the runner-side `onTodoUpdate` handler
   // does `setTodoItems(items)` directly (no managedForegroundLedger
@@ -6946,6 +6992,9 @@ const InkREPLInner: React.FC<InkREPLProps> = ({
     const events = {
       ...createStreamingEvents(),
       getCostReport: inkCostReportRef,
+      // FEATURE_246 (P1 review): live progress for the model-launched run_workflow
+      // path — the coding host forwards this turn's workflow process events here.
+      onWorkflowProcessEvent: handleInlineWorkflowProcessEvent,
     };
 
     // Get skills system prompt snippet for progressive disclosure (Issue 056)
@@ -7918,7 +7967,6 @@ const InkREPLInner: React.FC<InkREPLProps> = ({
       // contain paste placeholders resolve to the real content (Issue 121).
       type WorkflowBuilderUiEvent = Parameters<NonNullable<CommandCallbacks['onWorkflowBuilderEvent']>>[0];
       type WorkflowRunMessageUiEvent = Parameters<NonNullable<CommandCallbacks['onWorkflowRunMessage']>>[0];
-      type WorkflowRunUiEvent = Parameters<NonNullable<CommandCallbacks['onWorkflowRunUpdate']>>[0];
       const handleWorkflowBuilderEvent = (event: WorkflowBuilderUiEvent): void => {
         if (
           event.stage === "started"
@@ -7931,35 +7979,9 @@ const InkREPLInner: React.FC<InkREPLProps> = ({
         }
         setWorkflowBuilderMessage(null);
       };
-      const handleWorkflowRunUpdate = (event: WorkflowRunUiEvent): void => {
-        if (event.status === "running") {
-          replaceWorkflowLiveStatus({
-            runId: event.runId,
-            workflow: event.workflow,
-            status: event.status,
-            ...(event.phase !== undefined ? { phase: event.phase } : {}),
-            ...(event.phaseIndex !== undefined ? { phaseIndex: event.phaseIndex } : {}),
-            ...(event.phaseTotal !== undefined ? { phaseTotal: event.phaseTotal } : {}),
-            ...(event.startedAt !== undefined ? { startedAt: event.startedAt } : {}),
-            ...(event.elapsedMs !== undefined ? { elapsedMs: event.elapsedMs } : {}),
-            activeAgents: event.activeAgents,
-            totalSpawned: event.totalSpawned,
-            ...(event.plannedAgents !== undefined ? { plannedAgents: event.plannedAgents } : {}),
-            ...(event.agentCap !== undefined ? { agentCap: event.agentCap } : {}),
-            ...(event.tokenBudgetSpent !== undefined ? { tokenBudgetSpent: event.tokenBudgetSpent } : {}),
-            ...(event.tokenBudgetTotal !== undefined ? { tokenBudgetTotal: event.tokenBudgetTotal } : {}),
-            completedAgents: event.completedAgents,
-            failedAgents: event.failedAgents,
-            stoppedAgents: event.stoppedAgents,
-            ...(event.message !== undefined ? { message: event.message } : {}),
-            ...(event.locale !== undefined ? { locale: event.locale } : {}),
-          });
-          return;
-        }
-        updateWorkflowLiveStatus((current) => (
-          current?.runId === event.runId ? null : current
-        ));
-      };
+      // FEATURE_246 (P1 review): delegate to the component-scoped handler so the
+      // slash path and the inline run_workflow path apply run updates identically.
+      const handleWorkflowRunUpdate = applyWorkflowRunUiEvent;
       const handleWorkflowRunMessage = (event: WorkflowRunMessageUiEvent): void => {
         if (event.type === "event") {
           return;

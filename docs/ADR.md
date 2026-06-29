@@ -3362,6 +3362,24 @@ modes differ only in who may pull the trigger.**
   plus KodaX's postcondition verification + repair (which the harness lacks) is the
   anti-laziness story — KodaX verifies child *side-effects*, not just shape.
 
+**Review hardening (external review of the activation-semantics work, v0.7.58):**
+- **Inline `run_workflow` now surfaces live progress (P1).** Previously only the
+  slash `/workflow` path subscribed to the run's process events, so a
+  Worker-launched workflow showed as one opaque long tool call. `buildWorkflowToolHost`
+  now mints the run id, subscribes to `manager.subscribeWorkflowProcess` filtered to
+  that run, and forwards events to `options.events.onWorkflowProcessEvent`. The Ink UI
+  renders them through the same work-strip as the slash path (shared
+  `applyWorkflowRunUiEvent`); the plain console prints concise start/finish lines.
+  No-op when no sink is wired (SDK/headless).
+- **The inline path now shares the generator's static source checks (P2).** The
+  primary path must not be less-protected than the blind fallback: the inline branch
+  runs `validateGeneratedWorkflowSource` (literal task targets, legacy `.output`,
+  forbidden host/IO tokens, non-displayable return) so a malformed Worker-authored
+  script fails fast with an actionable tool error instead of a late runtime crash.
+  The heavier multi-scenario *smoke* run stays generator-only — it would add latency
+  to every `run_workflow` call, and the inline author is a Worker with a
+  runtime-error retry loop, unlike the one-shot generator.
+
 ## ADR-048: Same-Session Workflow Resume — Structural Effect Scopes + Injected Result Cache (FEATURE_246 Part D)
 
 **Status**: Accepted — implemented in v0.7.58 (FEATURE_246 Part D): sandbox
