@@ -1474,7 +1474,6 @@ Keyboard Shortcuts:
       agentMode: currentConfig.agentMode,
       source: workflow.source,
       input: rawInput || workflow.request,
-      hostPolicy: currentOptions.workflowHostPolicy,
     });
 
     // FEATURE_246 A5 (ADR-047): this launcher is reached only from a parsed

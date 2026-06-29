@@ -5,8 +5,13 @@ export type WorkflowInvocationAction = 'none' | 'suggest';
 export type WorkflowInvocationTrigger = 'explicit' | 'none';
 export type WorkflowStartOutcome = 'started' | 'declined' | 'cancelled' | 'failed';
 
+/**
+ * Host-owned execution ceilings for a workflow run (FEATURE_229). These clamp
+ * the run-manager / runner (maxAgents, concurrency, token budget); they do not
+ * affect whether a workflow launches — that is decided by the source alone
+ * (ADR-047).
+ */
 export interface WorkflowHostPolicy {
-  readonly autoStart?: 'off' | 'confirm' | 'on';
   readonly maxAgents?: number;
   readonly maxConcurrency?: number;
   readonly tokenBudget?: number;
@@ -16,7 +21,6 @@ export interface WorkflowInvocationPolicyInput {
   readonly agentMode: KodaXAgentMode;
   readonly source: WorkflowInvocationSource;
   readonly input: string;
-  readonly hostPolicy?: WorkflowHostPolicy;
 }
 
 export interface WorkflowInvocationPolicyDecision {

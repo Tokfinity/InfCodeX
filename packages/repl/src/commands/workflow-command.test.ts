@@ -1671,7 +1671,7 @@ describe('startGeneratedWorkflowFromRequest launch policy', () => {
     expect(runUpdates.at(-1)?.status).toBe('completed');
     expect(runMessages.some((event) => event.type === 'info' && event.text.includes('Generated workflow'))).toBe(false);
     expect(runMessages.some((event) => event.type === 'info' && event.text.includes('Run workflow'))).toBe(false);
-    expect(runMessages.some((event) => event.type === 'info' && event.text.includes('AMAW auto-start'))).toBe(false);
+    expect(runMessages.some((event) => event.type === 'info' && event.text.includes('Auto-started generated workflow'))).toBe(false);
     expect(runMessages.some((event) => (
       event.type === 'assistant'
       && event.final !== true
@@ -1778,7 +1778,7 @@ describe('startGeneratedWorkflowFromRequest launch policy', () => {
     }, { timeout: 5000 });
     expect(runMessages.some((event) => event.type === 'assistant')).toBe(false);
     expect(runMessages.some((event) => event.type === 'info' && event.text.includes('Generated workflow'))).toBe(true);
-    expect(runMessages.some((event) => event.type === 'info' && event.text.includes('AMAW auto-start'))).toBe(true);
+    expect(runMessages.some((event) => event.type === 'info' && event.text.includes('Auto-started generated workflow'))).toBe(true);
     expect(runMessages.some((event) => (
       event.type === 'info'
       && event.text.includes('Workflow result:')

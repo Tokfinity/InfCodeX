@@ -176,7 +176,7 @@ export async function startGeneratedWorkflowFromRequest(
       });
       emitWorkflowRunMessage(input.callbacks, {
         type: 'info',
-        text: 'AMAW auto-start: capability-isolated generated workflow; normal permission gates still apply.',
+        text: 'Auto-started generated workflow (capability-isolated); normal permission gates still apply.',
       });
     }
   }

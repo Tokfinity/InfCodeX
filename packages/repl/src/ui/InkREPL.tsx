@@ -7996,7 +7996,6 @@ const InkREPLInner: React.FC<InkREPLProps> = ({
           agentMode: currentConfig.agentMode,
           source: workflow.source,
           input: rawInput || workflow.request,
-          hostPolicy: currentOptionsRef.current.workflowHostPolicy,
         });
 
         // FEATURE_246 A5 (ADR-047): reached only from a parsed `/workflow`
