@@ -42,26 +42,29 @@ const THINKING_REASONING_CAPABILITIES = new Set([
 
 /**
  * F2 — non-fatal config guidance for a genuinely-contradictory reasoning config:
- * `supportsThinking: false` short-circuits to the "no thinking" preset and silently
- * ignores any `reasoningCapability`, so a config that sets a thinking capability AND
- * disables thinking is almost certainly a mistake. We deliberately do NOT warn on a
- * bare `supportsThinking: true` with no explicit reasoning mapping — that resolves to
- * a sensible default (passive on openai-compat, enable-toggle on anthropic-compat) and
- * is a valid, common config; warning on it would be noise. An explicit reasoningProfile
- * / reasoning / reasoningPreset overrides the legacy path, so it is not contradicted.
+ * `supportsThinking: false` is the master off-switch — it forces the resolved profile,
+ * the capability, and the runtime to no-thinking, overriding ANY reasoning config
+ * (reasoningCapability / reasoningProfile / reasoning / reasoningPreset). So a config
+ * that supplies a thinking config AND disables thinking is almost certainly a mistake;
+ * warn that the reasoning config is ignored. We deliberately do NOT warn on a bare
+ * `supportsThinking: true` with no explicit reasoning mapping — that resolves to a
+ * sensible default (passive on openai-compat, enable-toggle on anthropic-compat) and is
+ * a valid, common config; warning on it would be noise. An explicit `none` reasoning
+ * config agrees with supportsThinking:false, so it is not flagged.
  */
 function warnOnIgnoredReasoningCapability(config: KodaXCustomProviderConfig): void {
-  const hasExplicitProfile = Boolean(
-    config.reasoningProfile || config.reasoning || config.reasoningPreset,
-  );
-  if (
-    config.supportsThinking === false &&
+  if (config.supportsThinking !== false) return;
+  const hasThinkingCapability =
     config.reasoningCapability !== undefined &&
-    THINKING_REASONING_CAPABILITIES.has(config.reasoningCapability) &&
-    !hasExplicitProfile
-  ) {
+    THINKING_REASONING_CAPABILITIES.has(config.reasoningCapability);
+  const hasThinkingProfile = config.reasoningProfile !== undefined;
+  const hasThinkingPreset =
+    config.reasoningPreset !== undefined && config.reasoningPreset !== 'none';
+  const hasThinkingReasoning =
+    config.reasoning !== undefined && config.reasoning !== 'none';
+  if (hasThinkingCapability || hasThinkingProfile || hasThinkingPreset || hasThinkingReasoning) {
     console.warn(
-      `[kodax] Custom provider "${config.name}": reasoningCapability "${config.reasoningCapability}" is ignored because supportsThinking is false (thinking stays off). Set supportsThinking: true to enable thinking, or remove reasoningCapability.`,
+      `[kodax] Custom provider "${config.name}": its reasoning config (reasoningCapability / reasoningProfile / reasoning / reasoningPreset) is ignored because supportsThinking is false (thinking stays off). Set supportsThinking: true to enable thinking, or remove the reasoning config.`,
     );
   }
 }
@@ -249,8 +252,13 @@ export function getCustomModelCapabilities(
         .map((entry) => customDescriptorToFull(entry, config.protocol))
         .find((m) => m.id === modelId);
   if (!descriptor) return undefined;
+  // supportsThinking:false forces the provider-level 'none' profile (resolved above), so
+  // the exposed profile, capability, and runtime all agree on no-thinking — even for a
+  // per-model descriptor that carries its own (now-ignored) reasoningProfile.
   const effectiveReasoningProfile =
-    descriptor.reasoningProfile ?? providerReasoningProfile;
+    config.supportsThinking === false
+      ? providerReasoningProfile
+      : (descriptor.reasoningProfile ?? providerReasoningProfile);
   const effectiveReasoningCapability =
     config.supportsThinking === false
       ? 'none'

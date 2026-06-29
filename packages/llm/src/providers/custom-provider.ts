@@ -175,6 +175,16 @@ function resolveCustomReasoningProfile(
   const partialOverride: Partial<KodaXReasoningProfile> | undefined =
     reasoning !== undefined && !isSimpleReasoning(reasoning) ? reasoning : undefined;
 
+  // 0. supportsThinking:false is the master off-switch — it overrides any explicit
+  // reasoningProfile / reasoning / preset so the resolved profile, the reported
+  // capability, and the runtime all agree on no-thinking (single-track). A thinking
+  // config under supportsThinking:false is contradictory; supportsThinking wins, and
+  // warnOnIgnoredReasoningCapability surfaces it. Without this, an explicit profile here
+  // would still drive the runtime to send thinking while the capability reads 'none'.
+  if (legacy?.supportsThinking === false) {
+    return createReasoningProfileFromPreset('none');
+  }
+
   // 1. Explicit full profile wins; an advanced partial override merges on top.
   if (reasoningProfile) {
     return { ...reasoningProfile, ...(partialOverride ?? {}) };

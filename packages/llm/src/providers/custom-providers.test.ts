@@ -696,6 +696,48 @@ describe('custom providers', () => {
     });
   });
 
+  it('supportsThinking:false overrides an explicit reasoningProfile (no metadata contradiction)', () => {
+    vi.stubEnv('CUSTOM_OVERRIDE_API_KEY', 'test-key');
+    const warnSpy = vi.spyOn(console, 'warn').mockImplementation(() => {});
+    const config: KodaXCustomProviderConfig = {
+      name: 'override-think',
+      protocol: 'openai',
+      baseUrl: 'https://override.example/v1',
+      apiKeyEnv: 'CUSTOM_OVERRIDE_API_KEY',
+      model: 'ot-model',
+      supportsThinking: false,
+      reasoningProfile: {
+        reasoningPreset: 'deepseek-v4-openai',
+        effortStrategy: 'openai-chat-effort',
+        thinkingStrategy: 'provider-toggle',
+        supportedEfforts: [{ value: 'high', isDefault: true }],
+        supportsReasoningEffort: true,
+      },
+    };
+    registerCustomProviders([cloneConfig(config)]);
+
+    // supportsThinking:false is the master off-switch: the explicit thinking profile is
+    // overridden to 'none' across EVERY surface, so nothing contradicts the runtime
+    // (previously the capability read 'none' while the profile still drove thinking).
+    expect(getCustomProviderList().find((p) => p.name === 'override-think')?.reasoningCapability).toBe('none');
+    const caps = getCustomModelCapabilities('override-think', 'ot-model');
+    expect(caps?.reasoningCapability).toBe('none');
+    expect(caps?.reasoningProfile).toMatchObject({ reasoningPreset: 'none', effortStrategy: 'none' });
+    expect(caps?.supportsThinking).toBe(false);
+
+    const provider = createCustomProvider(cloneConfig(config));
+    expect(provider.getConfiguredReasoningCapability()).toBe('none');
+    expect(provider.getReasoningProfile()).toMatchObject({
+      reasoningPreset: 'none',
+      effortStrategy: 'none',
+    });
+
+    // The user is warned their (now-ignored) reasoning config conflicts with the switch.
+    expect(warnSpy).toHaveBeenCalledWith(
+      expect.stringContaining('is ignored because supportsThinking is false'),
+    );
+  });
+
   it('resolves custom providers after checking the built-in registry first', () => {
     vi.stubEnv('CUSTOM_OPENAI_API_KEY', 'configured-key');
     registerCustomProviders([cloneConfig(OPENAI_CUSTOM)]);
