@@ -112,6 +112,17 @@ function hiddenCompleteTool(id: string): KodaXToolUseBlock {
   } as unknown as KodaXToolUseBlock;
 }
 
+function hiddenTruncatedTool(id: string): KodaXToolUseBlock {
+  // An invisible tool whose input was salvaged from a truncated stream.
+  return {
+    id,
+    name: 'todo_update',
+    type: 'tool_use',
+    input: { id: 't1', status: 'completed' },
+    _truncated: true,
+  } as unknown as KodaXToolUseBlock;
+}
+
 describe('CAP-072: checkAndRetryIncompleteTools — no incomplete', () => {
   it('CAP-INCOMPLETE-TOOL-NOOP: zero incomplete tools → outcome no_incomplete, counter reset to 0', async () => {
     const messages: KodaXMessage[] = [];
@@ -251,6 +262,27 @@ describe('CAP-072: checkAndRetryIncompleteTools — truncated-input guard', () =
     expect(resultIds).toEqual(['w-trunc']); // only the visible write; hidden todo gets none
     const pushed = messages[messages.length - 1]!.content as Array<{ tool_use_id?: string }>;
     expect(pushed.map((b) => b.tool_use_id)).toEqual(['w-trunc']);
+  });
+
+  it('CAP-INCOMPLETE-TOOL-TRUNC-006: at cap → hidden-only incomplete turn pushes a synthetic text recovery, not an empty user', async () => {
+    const messages: KodaXMessage[] = [{ role: 'assistant', content: [] }];
+    const onToolResult = vi.fn();
+    const result = await checkAndRetryIncompleteTools({
+      toolBlocks: [hiddenTruncatedTool('todo-1')],
+      events: { onRetry: vi.fn(), onToolResult } as unknown as KodaXEvents,
+      emitActiveExtensionEvent: fakeEmitter(),
+      messages,
+      incompleteRetryCount: KODAX_MAX_INCOMPLETE_RETRIES,
+      preAssistantTokenSnapshot: makeSnapshot('pre'),
+      completedTurnTokenSnapshot: makeSnapshot('completed'),
+    });
+    expect(result.outcome).toBe('maxed_out');
+    expect(onToolResult).not.toHaveBeenCalled(); // hidden tool gets no synthesized result
+    const pushed = messages[messages.length - 1]!;
+    expect(pushed.role).toBe('user');
+    expect(typeof pushed.content).toBe('string'); // text recovery, NOT an empty tool_result array
+    expect(pushed._synthetic).toBe(true);
+    expect(pushed.content as string).toMatch(/incomplete|truncat/i);
   });
 
   it('CAP-INCOMPLETE-TOOL-TRUNC-003: at cap → complete sibling of a truncated block ALSO gets a result (no orphan tool_use)', async () => {

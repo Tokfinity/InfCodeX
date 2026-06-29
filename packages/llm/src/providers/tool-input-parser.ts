@@ -39,10 +39,13 @@ export interface ToolInputParseResult {
    * `salvaged: true` means the buffer was malformed at the byte level,
    * which for an accumulated streaming tool_use buffer almost always
    * means a `max_tokens` / `length` truncation cut the JSON mid-value.
-   * Callers combine this with a truncating stop reason to decide whether
-   * the recovered input is trustworthy enough to execute — see
-   * `KodaXToolUseBlock._truncated`. A salvaged value on a CLEAN stop is
-   * non-strict-but-complete JSON (e.g. a trailing comma) and is safe.
+   * Callers decide whether the recovered input is trustworthy enough to
+   * execute by combining this with the stop reason AND the tool's side-effect
+   * class (see `KodaXToolUseBlock._truncated` / `isUntrustedSalvage`): a
+   * truncating/ambiguous stop is never trusted; a salvage on a clean stop is
+   * trusted only for read-only tools — a MUTATING tool (write/edit/bash) is
+   * rejected even on a clean stop, since malformed-but-"complete" JSON can be
+   * silently cut mid-value.
    */
   readonly salvaged: boolean;
 }

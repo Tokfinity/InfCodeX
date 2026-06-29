@@ -176,7 +176,21 @@ export async function checkAndRetryIncompleteTools(
     );
     errorResults.push(createToolResultBlock(tc.id, errorMsg));
   }
-  input.messages.push({ role: 'user', content: errorResults });
+  if (errorResults.length === 0) {
+    // Hidden-only turn (e.g. the incomplete tool was an invisible todo_update /
+    // managed-protocol call): there is no visible tool_use to pair a result
+    // with, so an empty user message would be dropped by the OpenAI serializer
+    // or become a meaningless wire '...' on Anthropic — neither gives the model
+    // a recovery signal. Push a synthetic text nudge instead (neutral wording:
+    // the cap reset means a re-issue would get fresh retries, so don't force it).
+    input.messages.push({
+      role: 'user',
+      content: `Your previous tool call was incomplete or truncated and was skipped after ${KODAX_MAX_INCOMPLETE_RETRIES} retries. Continue without it, or re-issue it with complete, valid arguments.`,
+      _synthetic: true,
+    });
+  } else {
+    input.messages.push({ role: 'user', content: errorResults });
+  }
   const rebased = rebaseContextTokenSnapshot(
     input.messages,
     input.completedTurnTokenSnapshot,

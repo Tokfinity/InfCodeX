@@ -33,10 +33,12 @@ export function classifyStopReason(raw: string | undefined | null): KodaXStopCla
  * `length`) or when the stop reason is ambiguous (`unknown` — e.g. a custom
  * compat provider that omits or nulls the field) or a refusal.
  *
- * Used as a fail-safe gate when deciding whether a salvaged tool input is safe
- * to execute: salvaged input is only trustworthy on a clean stop; on a
- * truncating OR ambiguous stop the input may be cut mid-value, so the caller
- * retains the `_truncated` mark and re-asks rather than executing.
+ * Used as one input to the salvaged-tool-input trust decision (see
+ * `checkIncompleteToolCalls` / `isUntrustedSalvage`): a truncating OR ambiguous
+ * stop marks the input `_truncated` (unsafe for ANY tool). A clean stop does
+ * NOT by itself make a salvaged input safe — a clean-stop salvage on a MUTATING
+ * tool (write/edit/bash) is still rejected, because malformed-but-"complete"
+ * JSON can be silently cut mid-value; only read-only tools execute it.
  */
 export function isCleanStop(raw: string | undefined | null): boolean {
   const c = classifyStopReason(raw);
