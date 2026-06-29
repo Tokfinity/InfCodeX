@@ -3379,6 +3379,25 @@ modes differ only in who may pull the trigger.**
   The heavier multi-scenario *smoke* run stays generator-only — it would add latency
   to every `run_workflow` call, and the inline author is a Worker with a
   runtime-error retry loop, unlike the one-shot generator.
+- **Why not run the generator smoke on the inline path.** The smoke stub
+  (`createSmokeWorkflowApi`) never sets `result.structured` and its `synthesize`
+  returns only `{ text }` — but the inline textbook teaches `outputSchema →
+  result.structured`. So running full smoke on inline would FALSE-REJECT valid
+  structured-output Worker scripts. The right pattern is therefore *targeted runtime
+  validation*, not a smoke dry-run: enforce the same contracts the smoke checks
+  directly in the real runtime, where they are loud on every path (generator +
+  inline) and the Worker's retry loop can act on them.
+- **Inline runtime now matches the smoke's task-id contract (adversarial self-review).**
+  The smoke was loud on unknown task ids where the real runtime was silent — a
+  silent quality-degradation gap on the inline path. Closed: (a) `evidenceRefs`
+  validation at spawn (`assertValidWorkflowEvidenceRefs`) now also takes the run's
+  known task ids and rejects a `task_id:<never-spawned>` ref (an agent name or typo)
+  loudly, matching the smoke's `assertKnownTaskId`; (b) `wf.snapshot/output`,
+  `wf.send`, and `wf.stop` now throw `unknown workflow task` on a never-spawned id
+  (previously they returned a fabricated `running` snapshot / silently no-op'd),
+  matching `wf.wait`. A known in-flight task still polls `running`. This makes the
+  inline path's dynamic-coordination contract as strict as the generator's without
+  the smoke's false-reject risk.
 
 ## ADR-048: Same-Session Workflow Resume — Structural Effect Scopes + Injected Result Cache (FEATURE_246 Part D)
 
