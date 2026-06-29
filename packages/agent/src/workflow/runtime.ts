@@ -9,6 +9,8 @@
  * log. It has zero `@kodax-ai/coding` dependency.
  */
 
+import { createHash } from 'node:crypto';
+
 import type { WorkflowEvent, WorkflowEventType } from './events.js';
 import { WorkflowEventRecorder } from './events.js';
 import type {
@@ -39,6 +41,38 @@ import type {
 export type WorkflowModuleResolver = (
   name: string,
 ) => Promise<WorkflowModule | undefined> | WorkflowModule | undefined;
+
+/**
+ * Content-addressed result cache for same-session resume (FEATURE_246 Part D,
+ * ADR-048). Keyed by `<inputHash>#<occurrence>`; the value is the full
+ * `WorkflowTaskResult`. Injected by the host (fs-backed, rooted at the run dir);
+ * the agent layer stays fs-free. A seeded cache (prior run's results) makes a
+ * re-run replay unchanged effects and run only what changed live.
+ */
+export interface WorkflowResultCache {
+  get(key: string): WorkflowTaskResult | undefined;
+  set(key: string, result: WorkflowTaskResult): void;
+}
+
+/** Stable key for a spawn input: SHA-256 over the canonicalized (sorted-key)
+ *  input. Dependencies are captured because a dependent effect bakes the
+ *  upstream result into its prompt. */
+function canonicalizeForHash(value: unknown): unknown {
+  if (Array.isArray(value)) return value.map(canonicalizeForHash);
+  if (value !== null && typeof value === 'object') {
+    const sorted: Record<string, unknown> = {};
+    for (const key of Object.keys(value as Record<string, unknown>).sort()) {
+      sorted[key] = canonicalizeForHash((value as Record<string, unknown>)[key]);
+    }
+    return sorted;
+  }
+  return value;
+}
+
+function hashSpawnInput(input: WorkflowSpawnAgentInput): string {
+  const json = JSON.stringify(canonicalizeForHash(input));
+  return createHash('sha256').update(json).digest('hex').slice(0, 24);
+}
 
 /** Thrown when the workflow's abort signal fires mid-run. */
 export class WorkflowAbortError extends Error {
@@ -280,6 +314,11 @@ export interface CreateWorkflowRuntimeOptions {
   /** Resolver for one-level nested `wf.workflow(name, args)` (FEATURE_246 Part
    *  E). When omitted, `api.workflow` is not exposed. */
   readonly resolveWorkflowModule?: WorkflowModuleResolver;
+  /** Content-addressed result cache for same-session resume (FEATURE_246 Part D,
+   *  ADR-048). When provided, a successful `runAgent` whose input matches a
+   *  cached entry returns the cached result instead of spawning. Seed it from a
+   *  prior run's `results/` to resume. */
+  readonly resultCache?: WorkflowResultCache;
 }
 
 export interface WorkflowRuntimeHandle {
@@ -304,6 +343,9 @@ function buildRuntime(opts: CreateWorkflowRuntimeOptions): InternalRuntime {
   let totalSpawned = 0;
   let spentOutputTokens = 0;
   let status: WorkflowRunStatus = 'running';
+  // FEATURE_246 Part D: per-inputHash call counter so two runAgent calls with
+  // identical input map to distinct cache keys (<hash>#0, <hash>#1, ...).
+  const occurrenceByHash = new Map<string, number>();
   const artifacts: WorkflowArtifactRef[] = [];
   const releaseByTask = new Map<string, () => void>();
   const taskNames = new Map<string, string>();
@@ -615,8 +657,26 @@ function buildRuntime(opts: CreateWorkflowRuntimeOptions): InternalRuntime {
     spawnAgent: (input) => doSpawn(input),
 
     runAgent: async (input) => {
+      // FEATURE_246 Part D (ADR-048): content-addressed resume cache. A cache
+      // hit returns the prior run's result verbatim and skips the spawn (so it
+      // emits no events — "instant" like the harness). The occurrence counter
+      // disambiguates identical inputs; it advances even on a miss so keys stay
+      // stable across runs.
+      const cache = opts.resultCache;
+      let cacheKey: string | undefined;
+      if (cache) {
+        const hash = hashSpawnInput(input);
+        const occurrence = occurrenceByHash.get(hash) ?? 0;
+        occurrenceByHash.set(hash, occurrence + 1);
+        cacheKey = `${hash}#${occurrence}`;
+        const cached = cache.get(cacheKey);
+        if (cached !== undefined) return cached;
+      }
       try {
-        return await runAgentImpl(input);
+        const result = await runAgentImpl(input);
+        // Cache only successful results — a failed/stopped child must re-run live.
+        if (cache && cacheKey !== undefined) cache.set(cacheKey, result);
+        return result;
       } catch (error) {
         // Lenient failure (FEATURE_246 Part E, harness parity): a child that
         // ends failed/stopped resolves to null so scripts can `.filter(Boolean)`

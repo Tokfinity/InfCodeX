@@ -1237,3 +1237,86 @@ describe('nested workflow() (FEATURE_246 Part E)', () => {
     if (outcome.ok) expect(outcome.result).toBe('undefined');
   });
 });
+
+describe('content-addressed resume cache (FEATURE_246 Part D)', () => {
+  const memCache = () => {
+    const mem = new Map<string, WorkflowTaskResult>();
+    return {
+      mem,
+      cache: { get: (k: string) => mem.get(k), set: (k: string, v: WorkflowTaskResult) => void mem.set(k, v) },
+    };
+  };
+  const countingBackend = (status: WorkflowTaskResult['status'] = 'completed') => {
+    let spawns = 0;
+    const backend: WorkflowAgentBackend = {
+      spawn: async (input) => {
+        spawns += 1;
+        return { taskId: `t${spawns}`, name: input.name };
+      },
+      wait: async (taskId) => ({ taskId, name: 'w', status, finalText: `result:${taskId}` }),
+      output: async (taskId) => ({ taskId, name: 'w', status: 'running' }),
+      send: async () => {},
+      stop: async () => {},
+    };
+    return { backend, spawns: () => spawns };
+  };
+
+  it('replays unchanged effects from a seeded cache on re-run (0 new spawns, same results)', async () => {
+    const { cache } = memCache();
+    const script = async (wf: import('./index.js').WorkflowApi) => {
+      const a = await wf.runAgent({ name: 'a', prompt: 'PA' });
+      const b = await wf.runAgent({ name: 'b', prompt: 'PB' });
+      return [a?.finalText, b?.finalText];
+    };
+    const first = countingBackend();
+    const o1 = await runWorkflow(baseOpts(first.backend, { resultCache: cache }), script);
+    expect(o1.ok).toBe(true);
+    expect(first.spawns()).toBe(2);
+
+    // Re-run the SAME script with the SAME (now-seeded) cache: no new spawns.
+    const second = countingBackend();
+    const o2 = await runWorkflow(baseOpts(second.backend, { resultCache: cache }), script);
+    expect(second.spawns()).toBe(0);
+    if (o1.ok && o2.ok) expect(o2.result).toEqual(o1.result);
+  });
+
+  it('re-runs only the effect whose input changed (content-addressed, not prefix)', async () => {
+    const { cache } = memCache();
+    const first = countingBackend();
+    await runWorkflow(baseOpts(first.backend, { resultCache: cache }), async (wf) => {
+      await wf.runAgent({ name: 'a', prompt: 'PA' });
+      await wf.runAgent({ name: 'b', prompt: 'PB' });
+      return null;
+    });
+    // Edit only the FIRST effect's prompt; the second is unchanged → cached.
+    const second = countingBackend();
+    await runWorkflow(baseOpts(second.backend, { resultCache: cache }), async (wf) => {
+      await wf.runAgent({ name: 'a', prompt: 'PA-edited' });
+      await wf.runAgent({ name: 'b', prompt: 'PB' });
+      return null;
+    });
+    expect(second.spawns()).toBe(1); // only the edited effect re-ran
+  });
+
+  it('disambiguates identical inputs by occurrence (two distinct cached results)', async () => {
+    const { mem, cache } = memCache();
+    const { backend } = countingBackend();
+    const outcome = await runWorkflow(baseOpts(backend, { resultCache: cache }), async (wf) => {
+      const a = await wf.runAgent({ name: 'x', prompt: 'SAME' });
+      const b = await wf.runAgent({ name: 'x', prompt: 'SAME' });
+      return [a?.finalText, b?.finalText];
+    });
+    expect(mem.size).toBe(2);
+    if (outcome.ok) expect(outcome.result[0]).not.toEqual(outcome.result[1]);
+  });
+
+  it('does not cache a failed child (it re-runs live next time)', async () => {
+    const { mem, cache } = memCache();
+    const { backend } = countingBackend('failed');
+    await runWorkflow(baseOpts(backend, { resultCache: cache }), async (wf) => {
+      const r = await wf.runAgent({ name: 'a', prompt: 'P' });
+      return r; // null (failed)
+    });
+    expect(mem.size).toBe(0);
+  });
+});
