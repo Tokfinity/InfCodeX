@@ -131,6 +131,37 @@ describe('runRestrictedWorkflowScript', () => {
     expect(prompts).toEqual(['where is the bug?']);
   });
 
+  it('routes wf.workflow(name, args) through the host api (FEATURE_246 Part E)', async () => {
+    const { wf } = fakeWorkflowApi();
+    const calls: Array<{ name: string; args: unknown }> = [];
+    const result = await runRestrictedWorkflowScript({
+      wf: {
+        ...wf,
+        workflow: async (name: string, args: unknown) => {
+          calls.push({ name, args });
+          return { ran: name, got: args };
+        },
+      },
+      source: `
+        async function run(wf) {
+          return wf.workflow('sub', { k: 'v' });
+        }
+      `,
+    });
+    expect(result).toEqual({ ran: 'sub', got: { k: 'v' } });
+    expect(calls).toEqual([{ name: 'sub', args: { k: 'v' } }]);
+  });
+
+  it('errors when wf.workflow is called but no resolver is wired', async () => {
+    const { wf } = fakeWorkflowApi(); // no `workflow` method on the host api
+    await expect(
+      runRestrictedWorkflowScript({
+        wf,
+        source: `async function run(wf) { return wf.workflow('sub', {}); }`,
+      }),
+    ).rejects.toThrow(/not available/);
+  });
+
   it('exposes snapshot as the preferred task snapshot alias', async () => {
     const { wf } = fakeWorkflowApi();
     const result = await runRestrictedWorkflowScript({

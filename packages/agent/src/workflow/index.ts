@@ -109,6 +109,7 @@ export {
 } from './runtime.js';
 export type {
   CreateWorkflowRuntimeOptions,
+  WorkflowModuleResolver,
   WorkflowRuntimeHandle,
   WorkflowRunOutcome,
 } from './runtime.js';

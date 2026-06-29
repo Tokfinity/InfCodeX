@@ -27,6 +27,7 @@ import type {
 import { dirname } from 'node:path';
 
 import { createCodingWorkflowBackend, type WorkflowChildOptions } from './agent-adapter.js';
+import { createNestedWorkflowResolver } from './nested-resolver.js';
 import type { WorkflowHostPolicy } from './invocation-policy.js';
 import {
   createRunGraphWriter,
@@ -251,6 +252,10 @@ export async function runWorkflowModule(
         limits,
         ...(opts.signal ? { signal: opts.signal } : {}),
         summarizeResult: workflowResultSummary,
+        // FEATURE_246 Part E: one-level nested wf.workflow(name, args) resolves
+        // built-in + saved workflows for this run's project (cwd derived the
+        // same way as the worktree gitRoot above).
+        resolveWorkflowModule: createNestedWorkflowResolver(gitRoot ?? process.cwd()),
         onEvent: (event) => {
           writer.onEvent(event);
           if (processTracker) {

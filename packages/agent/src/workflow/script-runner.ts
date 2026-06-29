@@ -85,7 +85,8 @@ type WorkflowRpcMethod =
   | 'spawnAgent'
   | 'stop'
   | 'synthesize'
-  | 'wait';
+  | 'wait'
+  | 'workflow';
 
 interface WorkflowRpcCommand {
   readonly id: string;
@@ -602,6 +603,7 @@ const wf = Object.freeze({
   parallel: __kodaxParallel,
   pipeline: __kodaxPipeline,
   synthesize: (input) => __kodaxEnqueue("synthesize", __kodaxRecord(input, "synthesize input")),
+  workflow: (name, args) => __kodaxEnqueue("workflow", { name: __kodaxNonEmptyString(name, "name"), args }),
   artifact: (name, value) => __kodaxEnqueue("artifact", { name: __kodaxNonEmptyString(name, "name"), value }),
   log: (event) => { void __kodaxEnqueue("log", __kodaxRecord(event, "log input")); },
 });
@@ -723,6 +725,13 @@ async function handleCommand(
     }
     case 'synthesize':
       return wf.synthesize(readSynthesizeInput(input, 'workflow synthesize input'));
+    case 'workflow': {
+      const record = readRecord(input, 'workflow input');
+      if (!wf.workflow) {
+        throw new Error('wf.workflow(name, args) is not available in this run');
+      }
+      return wf.workflow(readString(record, 'name'), record.args);
+    }
     case 'wait': {
       const record = readRecord(input, 'workflow wait input');
       const waitOpts = record.opts === undefined

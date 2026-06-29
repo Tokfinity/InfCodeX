@@ -18,6 +18,7 @@ import type {
   WorkflowAgentBackend,
   WorkflowLimits,
   WorkflowLogEvent,
+  WorkflowModule,
   WorkflowParallelOptions,
   WorkflowRunState,
   WorkflowRunStatus,
@@ -30,6 +31,14 @@ import type {
   WorkflowTaskSnapshot,
   WorkflowWaitOptions,
 } from './types.js';
+
+/** Resolve a saved/built-in workflow module by name for inline nested
+ *  `wf.workflow(name, args)` (FEATURE_246 Part E). Injected by the host so the
+ *  agent layer needs no coding/registry dependency. May be async (saved
+ *  capsules load from disk). Returns undefined when no workflow has that name. */
+export type WorkflowModuleResolver = (
+  name: string,
+) => Promise<WorkflowModule | undefined> | WorkflowModule | undefined;
 
 /** Thrown when the workflow's abort signal fires mid-run. */
 export class WorkflowAbortError extends Error {
@@ -268,6 +277,9 @@ export interface CreateWorkflowRuntimeOptions {
   readonly onEvent?: (event: WorkflowEvent) => void;
   /** Sink for free-text `wf.log(...)` progress lines. */
   readonly onLog?: (event: WorkflowLogEvent) => void;
+  /** Resolver for one-level nested `wf.workflow(name, args)` (FEATURE_246 Part
+   *  E). When omitted, `api.workflow` is not exposed. */
+  readonly resolveWorkflowModule?: WorkflowModuleResolver;
 }
 
 export interface WorkflowRuntimeHandle {
@@ -693,6 +705,35 @@ function buildRuntime(opts: CreateWorkflowRuntimeOptions): InternalRuntime {
       recorder.emit('synthesis_completed');
       return { text: result.finalText };
     },
+
+    // FEATURE_246 Part E: one-level nested workflow. Only exposed when the host
+    // injected a resolver. The sub-workflow runs under THIS runtime (shared
+    // concurrency / budget / abort / agent counter, via the spread api), so it
+    // is bounded exactly like the parent. One level only: the sub-api's own
+    // `workflow` throws, so a nested workflow calling workflow() fails loud.
+    ...(opts.resolveWorkflowModule
+      ? {
+          workflow: async (name: string, subArgs?: unknown): Promise<unknown> => {
+            checkAbort();
+            const module = await opts.resolveWorkflowModule!(name);
+            if (!module) {
+              throw new Error(
+                `workflow("${name}") not found — no saved or built-in workflow by that name`,
+              );
+            }
+            const subApi: WorkflowApi = {
+              ...api,
+              args: subArgs,
+              workflow: () => {
+                throw new Error(
+                  `nested workflow("${name}") cannot call workflow() — nesting is one level only`,
+                );
+              },
+            };
+            return module.run(subApi, subArgs);
+          },
+        }
+      : {}),
 
     artifact: async (name, value): Promise<WorkflowArtifactRef> => {
       const ref = opts.backend.writeArtifact

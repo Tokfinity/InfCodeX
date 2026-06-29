@@ -16,6 +16,7 @@ import {
   WorkflowLimitError,
   type WorkflowAgentBackend,
   type WorkflowEvent,
+  type WorkflowModule,
   type WorkflowSpawnAgentInput,
   type WorkflowTaskResult,
 } from './index.js';
@@ -1176,5 +1177,63 @@ describe('createWorkflowRuntime — lower-level handle', () => {
     expect(seenPrompts[0]).toContain('## Input 1');
     expect(seenPrompts[0]).toContain('## control-sense-reviewer');
     expect(seenPrompts[0]).toContain('The live surface needs clearer progress.');
+  });
+});
+
+describe('nested workflow() (FEATURE_246 Part E)', () => {
+  const sub = (run: WorkflowModule['run']): WorkflowModule => ({
+    meta: { name: 'sub', description: 'a sub-workflow' },
+    run,
+  });
+
+  it('runs a resolved sub-workflow under the SAME runtime (shared agent counter + args)', async () => {
+    const { backend } = fakeBackend();
+    const subModule = sub(async (wf, args) => {
+      const r = await wf.runAgent({ name: 'sub-agent', prompt: 'x' });
+      return { fromSub: true, arg: (args as { k?: string } | undefined)?.k, agent: r?.finalText };
+    });
+    const outcome = await runWorkflow(
+      baseOpts(backend, { resolveWorkflowModule: (name: string) => (name === 'sub' ? subModule : undefined) }),
+      async (wf) => {
+        await wf.runAgent({ name: 'parent', prompt: 'p' });
+        const subResult = await wf.workflow!('sub', { k: 'v' });
+        return subResult;
+      },
+    );
+    expect(outcome.ok).toBe(true);
+    if (outcome.ok) expect(outcome.result).toMatchObject({ fromSub: true, arg: 'v' });
+    // The sub-workflow's agent shares the parent run's counter (1 parent + 1 sub).
+    expect(outcome.state.totalSpawned).toBe(2);
+  });
+
+  it('is one level only — a sub-workflow calling workflow() throws', async () => {
+    const { backend } = fakeBackend();
+    const subModule = sub(async (wf) => {
+      await wf.workflow!('sub', {});
+      return 'unreached';
+    });
+    const outcome = await runWorkflow(
+      baseOpts(backend, { resolveWorkflowModule: (name: string) => (name === 'sub' ? subModule : undefined) }),
+      async (wf) => wf.workflow!('sub', {}),
+    );
+    expect(outcome.ok).toBe(false);
+    if (!outcome.ok) expect(outcome.error.message).toContain('one level only');
+  });
+
+  it('throws a clear error for an unknown workflow name', async () => {
+    const { backend } = fakeBackend();
+    const outcome = await runWorkflow(
+      baseOpts(backend, { resolveWorkflowModule: () => undefined }),
+      async (wf) => wf.workflow!('does-not-exist', {}),
+    );
+    expect(outcome.ok).toBe(false);
+    if (!outcome.ok) expect(outcome.error.message).toContain('not found');
+  });
+
+  it('does not expose wf.workflow when no resolver is wired', async () => {
+    const { backend } = fakeBackend();
+    const outcome = await runWorkflow(baseOpts(backend), async (wf) => typeof wf.workflow);
+    expect(outcome.ok).toBe(true);
+    if (outcome.ok) expect(outcome.result).toBe('undefined');
   });
 });
