@@ -3270,9 +3270,26 @@ against HEAD before deleting; preserve genuine fallback coverage.
 - Net REPL surface shrinks (one start path + the fallback command), improving
   maintainability.
 
-**Scope boundaries**: `/workflow create`, `/workflow <name>`, saved capsules,
-run-graph, and the run manager are unchanged except for routing. The sideQuery
-generator's internals (validation/repair/smoke) stay as the fallback's safety.
+**Scope boundaries**: `/workflow <name>` (start a known workflow), saved capsules,
+run-graph, and the run manager are unchanged. The sideQuery generator's internals
+(validation/repair/smoke) stay as the fallback's safety.
+
+**`/workflow` command intelligence (FEATURE_246 follow-up).** Applying the same
+"the Worker authors, the host doesn't blind-generate" principle to the commands:
+- `/workflow create <request>` in **ama/amaw** no longer blind-generates — it
+  returns a prompt-source invocation that hands the request to the Worker
+  (scout-then-author via `run_workflow`) through the existing command→agent-turn
+  seam. Blind `sideQuery` generation stays only as the **SA / headless** fallback
+  (no Worker to author). Same for the new shorthand below.
+- `/workflow <request>` (first word is neither a subcommand nor a known workflow
+  name) is shorthand for `create`; bare `/workflow` still lists; `/workflow
+  <known-name> [args]` still starts that workflow. One shared `createWorkflowFromText`.
+- `/workflow revise` is intentionally **left as the capsule-management op** (load
+  → generate revised → save): it is a save-as-capsule operation, and it already
+  has the original script as context, so it is far less "blind" than `create` was.
+  Pure management/lifecycle subcommands (list/runs/show/pause/resume/stop/delete/
+  prune/save/rename/rerun) stay mechanical by design — deterministic ops on known
+  artifacts, where LLM mediation would be over-engineering.
 
 **Hardening + non-goals (FEATURE_246 Part D/E round)**:
 - **Recursion guard is an invariant, not a runtime check.** A workflow child runs
