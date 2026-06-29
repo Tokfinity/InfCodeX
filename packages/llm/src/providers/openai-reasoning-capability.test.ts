@@ -204,6 +204,37 @@ describe('openai reasoning capability', () => {
     expect(create.mock.calls[1]?.[0]).not.toHaveProperty('reasoning_effort');
   });
 
+  it('Part 2: degrades to a param-free retry when a relay rejects the thinking field (DeepSeek dual shape)', async () => {
+    const create = vi
+      .fn()
+      .mockRejectedValueOnce(new Error('unknown parameter: thinking'))
+      .mockResolvedValueOnce(createCompletedOpenAIStream());
+    // DeepSeek's openai-compat reasoning shape sends BOTH thinking and reasoning_effort,
+    // so a relay may reject the thinking field rather than reasoning_effort. The fallback
+    // must still degrade — the generic "unknown/invalid/unsupported parameter" keywords
+    // carry it even though getFallbackTerms('native-effort') only lists reasoning_effort.
+    const provider = new TestOpenAIProvider('my-relay', 'native-effort', {
+      chat: { completions: { create } },
+    }, {
+      reasoningProfile: {
+        reasoningPreset: 'deepseek-v4-openai',
+        effortStrategy: 'openai-chat-effort',
+        thinkingStrategy: 'provider-toggle',
+        supportedEfforts: [{ value: 'medium', isDefault: true }],
+        supportsReasoningEffort: true,
+      },
+    });
+
+    await provider.stream(MESSAGES, TOOLS, 'system', reasoning);
+
+    expect(create).toHaveBeenCalledTimes(2);
+    expect(create.mock.calls[0]?.[0].thinking).toEqual({ type: 'enabled' });
+    expect(create.mock.calls[0]?.[0].reasoning_effort).toBe('medium');
+    // A relay rejecting the thinking field still degrades to a param-free retry.
+    expect(create.mock.calls[1]?.[0]).not.toHaveProperty('thinking');
+    expect(create.mock.calls[1]?.[0]).not.toHaveProperty('reasoning_effort');
+  });
+
   it('passes explicit provider effort values through for native-effort providers', async () => {
     const create = vi.fn().mockResolvedValue(createCompletedOpenAIStream());
     const provider = new TestOpenAIProvider('openai', 'native-effort', {
