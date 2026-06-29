@@ -290,10 +290,17 @@ function buildProviderConfig(custom: KodaXCustomProviderConfig): KodaXProviderCo
     ? custom.models.map((entry) => customModelDescriptorToFull(entry, custom.protocol))
     : undefined;
   const reasoningProfile = resolveCustomProviderReasoningProfile(custom);
+  // supportsThinking:false forces the no-thinking preset at runtime
+  // (legacyReasoningPresetForProtocol short-circuits to 'none'), so report the
+  // capability as 'none' too — otherwise the capability surface advertises a tunable
+  // effort the request never actually sends, misleading SDK / workflow consumers that
+  // can't see the startup warning (see warnOnIgnoredReasoningCapability).
   const reasoningCapability =
-    custom.reasoningCapability ??
-    legacyCapabilityFromReasoningProfile(reasoningProfile) ??
-    (custom.supportsThinking ? 'native-toggle' : 'none');
+    custom.supportsThinking === false
+      ? 'none'
+      : (custom.reasoningCapability ??
+         legacyCapabilityFromReasoningProfile(reasoningProfile) ??
+         (custom.supportsThinking ? 'native-toggle' : 'none'));
   const supportsThinking = custom.supportsThinking ??
     (reasoningCapability !== 'none' && reasoningCapability !== 'prompt-only');
 

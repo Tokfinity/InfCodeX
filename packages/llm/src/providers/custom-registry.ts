@@ -158,9 +158,14 @@ export function getCustomProviderList(): Array<{
       model: config.model,
       models,
       configured,
-      reasoningCapability: config.reasoningCapability
-        ?? legacyCapabilityFromReasoningProfile(reasoningProfile)
-        ?? 'none',
+      // supportsThinking:false ignores any configured capability at runtime (reasoning
+      // resolves to 'none'); report 'none' so the list matches getCustomModelCapabilities
+      // and the runtime instead of advertising a phantom tunable capability.
+      reasoningCapability: config.supportsThinking === false
+        ? 'none'
+        : (config.reasoningCapability
+            ?? legacyCapabilityFromReasoningProfile(reasoningProfile)
+            ?? 'none'),
       capabilityProfile: cloneCapabilityProfile(
         config.capabilityProfile ?? NATIVE_PROVIDER_CAPABILITY_PROFILE,
       ),
@@ -247,10 +252,12 @@ export function getCustomModelCapabilities(
   const effectiveReasoningProfile =
     descriptor.reasoningProfile ?? providerReasoningProfile;
   const effectiveReasoningCapability =
-    descriptor.reasoningCapability ??
-    legacyCapabilityFromReasoningProfile(effectiveReasoningProfile) ??
-    config.reasoningCapability ??
-    'none';
+    config.supportsThinking === false
+      ? 'none'
+      : (descriptor.reasoningCapability ??
+         legacyCapabilityFromReasoningProfile(effectiveReasoningProfile) ??
+         config.reasoningCapability ??
+         'none');
   return {
     provider: providerName,
     model: descriptor.id,

@@ -669,6 +669,33 @@ describe('custom providers', () => {
     );
   });
 
+  it('reports reasoningCapability as none when supportsThinking is false (surface matches runtime)', () => {
+    vi.stubEnv('CUSTOM_NOTHINK_API_KEY', 'test-key');
+    vi.spyOn(console, 'warn').mockImplementation(() => {});
+    const config: KodaXCustomProviderConfig = {
+      name: 'no-think',
+      protocol: 'openai',
+      baseUrl: 'https://no-think.example/v1',
+      apiKeyEnv: 'CUSTOM_NOTHINK_API_KEY',
+      model: 'nt-model',
+      supportsThinking: false,
+      reasoningCapability: 'native-toggle',
+    };
+    registerCustomProviders([cloneConfig(config)]);
+
+    // supportsThinking:false makes runtime resolve to 'none'; every capability surface
+    // must agree, not advertise the configured (but ignored) 'native-toggle'.
+    expect(getCustomProviderList().find((p) => p.name === 'no-think')?.reasoningCapability).toBe('none');
+    expect(getCustomModelCapabilities('no-think', 'nt-model')?.reasoningCapability).toBe('none');
+
+    const provider = createCustomProvider(cloneConfig(config));
+    expect(provider.getConfiguredReasoningCapability()).toBe('none');
+    expect(provider.getReasoningProfile()).toMatchObject({
+      reasoningPreset: 'none',
+      effortStrategy: 'none',
+    });
+  });
+
   it('resolves custom providers after checking the built-in registry first', () => {
     vi.stubEnv('CUSTOM_OPENAI_API_KEY', 'configured-key');
     registerCustomProviders([cloneConfig(OPENAI_CUSTOM)]);
