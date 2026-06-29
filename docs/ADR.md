@@ -2815,3 +2815,282 @@ both now fixed:
   the `reasoning-feature-112` derivation matrix deleted), plus one invariant test
   that the ceiling is always `H0_DIRECT`. This completes the harness-tier
   retirement: every routing field is now either gone or an accurate H0 constant.
+
+---
+
+## ADR-044: Workflow Authoring Parity with the Claude Code Harness
+
+**Status**: Proposed (2026-06-29)
+
+**Context**: KodaX's Dynamic Workflow (FEATURE_217 + 231/232/234/235/236/238/245)
+is a *productised, safety-first* capability: a workflow script is produced by a
+separate context-blind `sideQuery` generator
+([generator.ts](../packages/coding/src/workflows/generator.ts)), hard-validated
+(manifest + forbidden-token + 4-scenario smoke + 2-attempt repair), executed in a
+`node:vm` sandbox
+([script-runner.ts](../packages/agent/src/workflow/script-runner.ts)), and its
+write children get machine-checkable postcondition verification with auto-repair
+([agent-adapter.ts](../packages/coding/src/workflows/agent-adapter.ts)). A
+completed run can be promoted to a shareable `WorkflowCapsule`.
+
+A 2026-06-29 investigation compared this against the Claude Code harness Workflow
+tool (the orchestrating model writes a self-contained script **inline**;
+free-function API `agent()/parallel()/pipeline()`; per-child `schema`/`effort`;
+`resumeFromRunId` journal). 26/27 cross-checked claims confirmed against source.
+Finding: KodaX is at parity-or-ahead on **safety** (sandbox, postcondition
+verification, approval gate, capsule), but the **authoring-experience** gap is
+real and concentrated on four axes — (1) the script is authored by a separate
+generator that cannot see the main conversation ("隔一层"); (2) child results are
+untyped `finalText` strings the script must `JSON.parse`; (3) no streaming
+`pipeline` primitive (barrier-only `wf.parallel`); (4) no result-cache resume.
+Axes (3) and (4) are **already owned** by
+[FEATURE_232](features/v0.7.72.md#feature_232-replay-aware-workflow-pipeline-primitive)
+(v0.7.72) and
+[FEATURE_231](features/v0.7.63.md#feature_231-durable-workflow-replay-resume)
+(v0.7.63). Axes (1) and (2) have no home — this ADR opens it (FEATURE_246).
+
+**Decision**:
+
+1. **Add a model-inline authoring path** (FEATURE_246). Register a model-callable
+   workflow tool whose `script` is written directly by the orchestrating Worker
+   (which carries full conversation context), and run it through the **unchanged**
+   existing pipeline: `validateGeneratedWorkflowSource` →
+   `createRestrictedWorkflowModule` → `runRestrictedWorkflowScript` → coding
+   backend + verification. Principle: **change the author, not the safety layer.**
+   The `sideQuery` generator is retained as a *fallback* for `/workflow create
+   "<NL>"` and non-interactive / low-capability hosts; it is not removed.
+
+2. **Add `outputSchema` to child spawn** (FEATURE_246). When present, the child is
+   given a forced structured-output tool and its result is schema-validated at the
+   tool-call layer (retry on mismatch); `WorkflowTaskResult` carries the validated
+   `structured` object alongside `finalText`. This is **orthogonal** to existing
+   `WorkflowTaskVerification` (which checks *side-effects* — did it write the
+   files), so both can apply to one child. KodaX ends up a superset:
+   shape-validation **and** side-effect-validation, where Claude Code has only the
+   former.
+
+3. **Small expressiveness adds** (FEATURE_246): per-child `effort` (wired to the
+   existing effort-first reasoning resolver, FEATURE_233) and one-level nested
+   `workflow(name, args)`.
+
+4. **Pipeline and same-session resume are absorbed into FEATURE_246, re-derived
+   against the harness.** FEATURE_232 (pipeline) and FEATURE_231 (resume) pre-dated
+   any benchmark against the Claude Code harness and got the coupling backwards.
+   Corrected:
+   - **Pipeline ships standalone and resume-ready, NOT behind resume.** It must be
+     a runtime-scheduled primitive with deterministic `pipeline/item:N/stage:M`
+     scopes (a naive in-sandbox `Promise.all` cannot supply stable identities
+     because the runtime sees calls in non-deterministic completion order) — but
+     assigning those scopes is cheap and independent of whether resume exists.
+     The dependency inverts: **resume consumes pipeline's scopes; pipeline does not
+     depend on resume.** API is positional `pipeline(items, ...stages)` (drop
+     232's object-config + manual ids); a throwing stage drops that item to `null`.
+   - **Only the same-session parity subset of resume is kept** (deterministic
+     scopes, input-hash prefix divergence, complete result cache,
+     `Date.now`/`Math.random` determinism enforcement). The harness resume is
+     *same-session only*; KodaX's heavier cross-process crash-recovery half of
+     FEATURE_231 (write-ahead journal as execution authority, lost-write safety
+     policy, attempt/corruption ceremony) is **not** parity and is split out as
+     optional **231b**, not folded into 246.
+   - Result: full Claude-Code authoring parity is delivered by **FEATURE_246
+     alone**. FEATURE_232 is absorbed; FEATURE_231 is split (parity subset →
+     246, 231b deferred).
+
+5. **Defer the capsule metadata layer (YAGNI).** The `WorkflowCapsule` provenance
+   / requirements / intent triplet is infra ahead of a real consumer (cross-user
+   sharing / a marketplace), which a single-user CLI does not have — it conflicts
+   with CLAUDE.md "never add for hypothetical futures / abstract after 3+ cases".
+   Keep the *lightweight* saved-workflow surface (`.kodax/workflows/*` + `args` +
+   discovery + `/workflow save|list|rerun`), which has a real recurring/team
+   consumer. No existing capsule code is deleted; it is simply not expanded, and
+   FEATURE_246 does not depend on it.
+
+**Scope boundaries (deliberately NOT changed)**:
+
+- Sandbox, forbidden-token policy, smoke validation, manifest validation,
+  approval gate, run-graph events, postcondition verification + repair — all
+  reused as-is.
+- The generator and the AMAW natural-language intercept stay; model-inline is an
+  *additional* entry, gated to AMAW/AMA modes like every other workflow entry
+  (SA never exposes it), per
+  [invocation-policy.ts](../packages/coding/src/workflows/invocation-policy.ts).
+- No change to `wf.parallel` semantics; no `pipeline`; no resume (those are
+  231/232).
+
+**Consequences**:
+
+- The Worker can decide mid-turn to fan out and write the exact topology + data
+  shapes it wants, eliminating the generator round-trip and the context-blind
+  translation gap for the common case.
+- Scripts needing typed cross-agent data stop hand-parsing strings.
+- KodaX keeps every safety property; the new tool is a thin authoring front-end
+  over proven infra.
+- **Eval (FEATURE_104 / ADR-033)**: the new tool's `description` field and any
+  model-facing "when to author a workflow inline" guidance are LLM-facing prompt
+  content → a prompt-eval is required (per `benchmark/EVAL_GUIDELINES.md`). The
+  `outputSchema` enforcement is deterministic → Layer-1 unit tests. The tool
+  description must follow ADR-033's 5 principles (qualitative triggers,
+  single-concept sentences, why-bearing ✗-patterns, no enumerated taxonomy, no
+  version metadata in the prompt body).
+
+---
+
+## ADR-045: LLM-Layer Robustness Batch — truncation-execution guard, alternation-preserving history repair, and the decisions deliberately NOT taken
+
+**Status**: Accepted (2026-06-29) — implemented and tested; not yet released.
+
+**Context**: A source-level comparison of KodaX's provider-integration layer
+against opencode and pi (two other multi-provider CLI agents) surfaced a set of
+robustness gaps and one genuine correctness bug. opencode prevents malformed
+history structurally (typed parts model + a Lifecycle stream state machine) and
+leans on the Vercel AI SDK; pi centralises wire repair in a single pre-send
+`transformMessages`. KodaX hand-rolls each provider to support a broader, more
+adversarial provider set (Kimi / Qwen / Zhipu / Ark / MiniMax / MiMo / GLM /
+DeepSeek-V4) whose wire behaviour is frequently non-conformant. KodaX's defensive
+*quantity* is justified by that target set (pi independently converged on a
+similarly aggressive posture); the issues were in *correctness* and
+*organisation*, not in *whether* to defend.
+
+This ADR records both what was changed and — equally important for
+maintainability — what was deliberately NOT changed and why, so the trade-offs
+are discoverable from the repo rather than re-derived later.
+
+**Decision — changes made**:
+
+1. **Truncation-execution guard (correctness, highest priority).** A provider
+   that truncates a tool_use turn (`stop_reason: max_tokens` /
+   `finish_reason: length`) leaves the tool-input JSON salvaged from a mid-value
+   cut (e.g. half a `write` payload). Previously `checkIncompleteToolCalls` only
+   flagged `undefined`/`null`/empty params, so a truncated-but-present string
+   PASSED and the tool executed with corrupt input — silently, worse than failing
+   cleanly. Fix: `parseToolInputWithSalvageTracked`
+   ([tool-input-parser.ts](../packages/llm/src/providers/tool-input-parser.ts))
+   reports whether strict `JSON.parse` threw. The provider tags two markers on
+   `KodaXToolUseBlock` ([types.ts](../packages/llm/src/types.ts)): `_salvaged`
+   (raw — strict parse failed, set regardless of stop) and `_truncated`
+   (`_salvaged && !isCleanStop(stopReason)`). `checkIncompleteToolCalls`
+   ([messages.ts](../packages/coding/src/messages.ts)) treats a block as
+   untrusted — routing it into CAP-072 instead of executing — when
+   `_truncated || (_salvaged && isToolMutation(name))`. Rationale (post-review,
+   addressing the stop-reason-vs-integrity gap): a protocol clean stop
+   (`tool_use`/`tool_calls`) does NOT guarantee argument integrity — a model can
+   emit malformed-but-"complete" JSON (e.g. unescaped quotes) that partial-json
+   silently truncates mid-value. So for a MUTATING tool (write/edit/bash —
+   `isToolMutation`) ANY salvage is untrusted, even on a clean stop (a corrupt
+   write is worse than a retry); a salvaged read-only input on a clean stop is
+   allowed through (low risk, avoids a needless retry loop). `isCleanStop`
+   ([stop-reason.ts](../packages/llm/src/stop-reason.ts)) is **fail-safe**: a
+   truncating OR ambiguous/`unknown` stop marks `_truncated` (unsafe for any
+   tool).
+
+2. **maxed_out synthesizes a result for every VISIBLE tool_use in the turn**
+   ([incomplete-tool-retry.ts](../packages/coding/src/agent-runtime/incomplete-tool-retry.ts)).
+   At the retry cap, a complete tool call sharing a turn with an untrusted
+   sibling was left as an orphan `tool_use` that the next serialize silently
+   dropped (losing a valid call). The cap path now synthesizes a tool_result for
+   every **visible** block — error for the untrusted ones, a
+   "skipped — re-issue if still needed" result for complete siblings — so the
+   loss is visible and recoverable and the wire stays valid. Only VISIBLE tools
+   (post-review): invisible/managed tools (`emit_managed_protocol`, `todo_*`) are
+   never in the assistant wire history (run-substrate uses `visibleToolBlocks`),
+   so synthesizing a result for them would create an orphan tool_result — the
+   normal path (`applyPostToolProcessing`) already gates on `isVisibleToolName`.
+
+3. **Alternation-preserving history repair (real bug fix).**
+   `validateAndFixToolHistory` ([history-cleanup.ts](../packages/agent/src/runtime-middleware/history-cleanup.ts))
+   previously **dropped** a turn that orphan-stripping fully emptied. A
+   mid-conversation drop produces `user,user`, which Anthropic rejects with a
+   400. It now holds the slot with an empty-text marker (both roles) — matching
+   the wire-level `repairToolCallHistory`, which already replaced an emptied turn
+   with a wire-only `'...'` for exactly this reason. This aligns the two layers
+   on the alternation invariant.
+
+4. **Partial-on-known-stop** ([anthropic.ts](../packages/llm/src/providers/anthropic.ts)).
+   Anthropic sends `stop_reason` in `message_delta`, before the `message_stop`
+   envelope. If the stream cuts in that window, the content is already complete,
+   so the provider now returns the partial instead of throwing
+   `StreamIncompleteError` and re-billing the whole turn. It still throws (and
+   retries) when `stop_reason` is also absent — a true mid-stream cut. OpenAI
+   already gated on a missing `finish_reason`, so it was unchanged.
+
+5. **Conservative tool-name repair, single-point**
+   ([tool-name-repair.ts](../packages/coding/src/agent-runtime/tool-name-repair.ts)).
+   A name differing from an active tool only by case/separators (`Write` →
+   `write`) is rewritten via `repairToolBlockNames`. **Unique normalized match
+   only — never edit-distance** (no `red` → `read`). The repair runs ONCE in
+   [run-substrate.ts](../packages/coding/src/agent-runtime/run-substrate.ts) on
+   the stream result, before any consumer (history, dispatch bash
+   sequential-vs-parallel routing, tool events, the incomplete-tool param scan),
+   so the canonical name is used uniformly and `tool:start`/`tool:result` never
+   disagree.
+
+6. **No silent malformed-block drop** ([openai.ts](../packages/llm/src/providers/openai.ts)).
+   A tool_call missing id/name is dropped (cannot be paired with a tool_result)
+   but now logged, at parity with the Anthropic path.
+
+**Decision — deliberately NOT taken (recorded so they are not re-investigated)**:
+
+- **Single pre-send normalizer (pi-style) — REVERTED.** Lowering
+  `validateAndFixToolHistory` into the LLM layer and calling it at the top of
+  every `convertMessages` was attempted and reverted: the wire-level
+  `repairToolCallHistory` ALREADY runs unconditionally in both adapters and
+  preserves alternation, so bypass paths were never unprotected. Running validate
+  (whose pre-fix semantics *drop* an emptied turn) at the `convertMessages` entry
+  *regressed* alternation — locked by
+  [anthropic-message-serialization.test.ts](../packages/llm/src/providers/anthropic-message-serialization.test.ts).
+  The real latent bug it would have addressed (validate's drop) is fixed directly
+  by change #3 above. A future unification would need a single
+  alternation-preserving strategy across all three orphan sites and is ADR-scoped
+  on its own; it is not required for correctness now.
+
+- **De-duplicating the two `repairToolCallHistory` implementations — WON'T DO.**
+  The Anthropic version operates on a content-block array with a role-alternation
+  constraint; the OpenAI version operates on separate `role:'tool'` messages with
+  no such constraint. They are format-specific by necessity; merging would add an
+  abstraction layer for no correctness gain. The resulting three-site orphan logic
+  (one canonical `validateAndFixToolHistory` + two wire-format nets) is
+  intentional defense-in-depth, consistent with KodaX's broader provider target.
+
+- **Switching compaction-summary injection from `role:'system'` to `role:'user'`
+  (retiring `normalizeSystemForWire`) — WON'T DO (for now).**
+  `normalizeSystemForWire` ([openai.ts](../packages/llm/src/providers/openai.ts))
+  is working, tested code; the mid-transcript `system` injection is not a defect,
+  only a stylistic difference from pi. Changing the summary's wire role is
+  LLM-facing and would require a prompt-eval (per `benchmark/EVAL_GUIDELINES.md`)
+  for a cleanliness-only gain. If pursued later it is an eval-gated FEATURE, not a
+  refactor.
+
+- **Non-streaming mid-value truncation — DOCUMENTED LIMITATION.** Anthropic's
+  non-streaming `complete()` returns a parsed `input` object with no raw buffer,
+  so there is no salvage signal; a truncation that lands mid-value in the last
+  field while leaving all required keys present is not detectable, and flagging
+  every tool_use on a `max_tokens` non-streaming stop would over-trigger on
+  complete small calls. The omission is documented in-code at the construction
+  site. Residual risk is bounded: non-streaming is a fallback path (e.g. GLM 308),
+  and the common empty-field truncation is still caught by
+  `checkIncompleteToolCalls`.
+
+- **`cleanupIncompleteToolCalls` still drops a fully-emptied LAST message —
+  NOT A BUG / INTENTIONAL.** Unlike change #3, this guard touches only the tail
+  message; dropping it cannot create a mid-sequence `user,user` (nothing follows)
+  and is *more* correct than holding a marker — a trailing `'...'` assistant turn
+  would become a nonsensical Anthropic assistant-prefill. The divergence from
+  `validateAndFixToolHistory` is position-based and deliberate.
+
+**Consequences**:
+
+- The truncation guard converts a silent data-corruption path (executing a
+  half-written tool payload) into a visible, recoverable retry — the
+  highest-value item in the batch.
+- The alternation fix removes a latent Anthropic 400 that could fire whenever
+  compaction/microcompaction emptied a mid-conversation turn.
+- Net new public surface in `@kodax-ai/llm`: `isCleanStop`,
+  `KodaXToolUseBlock._truncated`, `parseToolInputWithSalvageTracked` — all
+  additive.
+- Verification is deterministic (Layer-1): no LLM-facing prompt content changed,
+  so no prompt-eval is required for this batch. The only eval-gated item (the
+  compaction-summary role switch) was explicitly deferred above.
+- The three-site orphan-repair architecture (validate + two wire nets) is
+  retained as deliberate defense-in-depth; a future single-strategy unification,
+  if undertaken, supersedes the REVERTED decision above and must preserve the
+  alternation invariant established here.

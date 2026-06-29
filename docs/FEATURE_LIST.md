@@ -71,12 +71,11 @@ No active feature is currently in implementation after the `v0.7.57` release syn
 
 | ID | Title | Category | Priority | Planned | Design |
 |---|---|---|---|---|---|
+| `246` | Claude-Code-Parity Workflow (inline authoring + structured output + streaming pipeline + same-session resume; absorbs `232`, parity subset of `231`) | Core / Workflow Authoring | High | `v0.7.58` | [v0.7.58](features/v0.7.58.md#feature_246-claude-code-parity-workflow--inline-authoring--structured-output--streaming-pipeline--same-session-resume) |
 | `228` | Unified Memory Control Plane + Memory Governance | Core / Memory + Governance | High | `v0.7.60` | [v0.7.60](features/v0.7.60.md#feature_228-unified-memory-control-plane--memory-governance) |
 | `244` | Repo Intelligence Graph-Only Index for Cold Module Queries | Core / Repo Intelligence + Performance | Medium | `v0.7.60` | [v0.7.60](features/v0.7.60.md#feature_244-repo-intelligence-graph-only-index-for-cold-module-queries) |
-| `231` | Durable Workflow Replay Resume | Core / Workflow Persistence | High | `v0.7.63` | [v0.7.63](features/v0.7.63.md#feature_231-durable-workflow-replay-resume) |
 | `235` | Draft Workflow — Generate-without-Run / Review-before-Start | Core / Workflow Lifecycle | Medium | `v0.7.66` | [v0.7.66](features/v0.7.66.md#feature_235-draft-workflow--generate-without-run--review-before-start) |
 | `238` | Workflow Learning Carrier + Workflow Handoff Inbox | Core / Workflow + Self-Improvement | Medium | `v0.7.69` | [v0.7.69](features/v0.7.69.md#feature_238-workflow-learning-carrier--workflow-handoff-inbox) |
-| `232` | Replay-Aware Workflow Pipeline Primitive | Core / Workflow Scheduling | Medium | `v0.7.72` | [v0.7.72](features/v0.7.72.md#feature_232-replay-aware-workflow-pipeline-primitive) |
 | `105` | Verifiable Advisor Consult Primitive | Internal / Core | High | `v0.7.75` | [v0.7.75](features/v0.7.75.md#feature_105-verifiable-advisor-consult-primitive) |
 | `108` | Session-Driven Reflective Prompt Patcher | Internal / Test Infrastructure | Medium | `v0.7.78` | [v0.7.78](features/v0.7.78.md#feature_108-session-driven-reflective-prompt-patcher) |
 | `225` | REPL Dead / Legacy Code Cleanup | Internal / Refactor + Tech Debt | Medium | `v0.7.81` | [v0.7.81](features/v0.7.81.md#feature_225-repl-dead--legacy-code-cleanup) |
