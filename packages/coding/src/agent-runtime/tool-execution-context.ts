@@ -174,13 +174,14 @@ function buildWorkflowToolHost(options: KodaXOptions): WorkflowToolHost | undefi
   if (runsBaseDir === undefined) return undefined;
   if (options.agentMode !== 'ama' && options.agentMode !== 'amaw') return undefined;
   return {
-    runInline: async ({ manifest, source, args }) => {
+    runInline: async ({ manifest, source, args, resumeFromRunId }) => {
       // Lazy literal imports break the static cycle: workflow-runner imports
       // buildToolExecutionContext, so agent-runtime must not statically import
       // the workflows host/run-manager.
-      const [{ startManagedWorkflow }, { getDefaultWorkflowRunManager }] = await Promise.all([
+      const [{ startManagedWorkflow }, { getDefaultWorkflowRunManager }, { join }] = await Promise.all([
         import('../workflows/host.js'),
         import('../workflows/run-manager.js'),
+        import('node:path'),
       ]);
       const started = await startManagedWorkflow({
         source: { kind: 'inline', manifest, source },
@@ -188,6 +189,8 @@ function buildWorkflowToolHost(options: KodaXOptions): WorkflowToolHost | undefi
         options,
         runsBaseDir,
         manager: getDefaultWorkflowRunManager(),
+        // FEATURE_246 Part D: resume seeds the result cache from the prior run.
+        ...(resumeFromRunId ? { resumeFromRunDir: join(runsBaseDir, resumeFromRunId) } : {}),
         ...(options.abortSignal ? { signal: options.abortSignal } : {}),
       });
       if (started.kind === 'declined') {

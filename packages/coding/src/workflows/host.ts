@@ -49,6 +49,9 @@ export interface StartManagedWorkflowInput {
   readonly runsBaseDir: string;
   /** Override the minted run id (tests / explicit rerun ids). */
   readonly runId?: string;
+  /** FEATURE_246 Part D (ADR-048): a prior run dir to seed the result cache from
+   *  (same-session resume). Unchanged effects replay; only changed ones re-run. */
+  readonly resumeFromRunDir?: string;
   /** Defaults to the shared coding singleton (which wraps the agent default). */
   readonly manager?: WorkflowRunManager;
   /** Pre-run approval gate; when omitted the run auto-proceeds (headless). */
@@ -123,6 +126,7 @@ export async function startManagedWorkflow(
     runId,
     runDir,
     ...(scriptSnapshot ? { scriptSnapshot } : {}),
+    ...(input.resumeFromRunDir ? { resumeFromRunDir: input.resumeFromRunDir } : {}),
     ...(input.processMetadata ? { processMetadata: input.processMetadata } : {}),
     ...(input.approval ? { approval: input.approval } : {}),
     ...(input.onEvent ? { onEvent: input.onEvent } : {}),

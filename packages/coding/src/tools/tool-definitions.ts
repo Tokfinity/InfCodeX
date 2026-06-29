@@ -494,6 +494,11 @@ export const BUILTIN_TOOL_DEFINITIONS: LocalToolDefinition[] = [
           type: 'object',
           description: 'Optional initial arguments passed to run(wf, args).',
         },
+        resumeFromRunId: {
+          type: 'string',
+          description:
+            'Optional run id of a prior run of THIS workflow to resume from (FEATURE_246 Part D). Re-submit the same script (edited or not) with the prior run id: unchanged agent calls return their cached results instantly and only the changed/new calls re-run. Scripts must be deterministic for this — Date.now()/Math.random() are disabled.',
+        },
       },
       required: ['manifest', 'source'],
     },

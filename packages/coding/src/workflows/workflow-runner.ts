@@ -28,6 +28,7 @@ import { dirname } from 'node:path';
 
 import { createCodingWorkflowBackend, type WorkflowChildOptions } from './agent-adapter.js';
 import { createNestedWorkflowResolver } from './nested-resolver.js';
+import { createFsResultCache } from './result-cache.js';
 import type { WorkflowHostPolicy } from './invocation-policy.js';
 import {
   createRunGraphWriter,
@@ -75,6 +76,10 @@ export interface RunWorkflowModuleOptions {
   readonly onWorkflowProcessEvent?: (event: WorkflowProcessEvent) => void;
   readonly now?: () => number;
   readonly scriptSnapshot?: WorkflowScriptSnapshotInput;
+  /** FEATURE_246 Part D (ADR-048): a prior run dir to seed the result cache from
+   *  for same-session resume. Unchanged effects replay from it; only changed
+   *  effects re-run live. */
+  readonly resumeFromRunDir?: string;
   readonly processMetadata?: WorkflowRunProcessMetadata;
   /** Optional lifecycle gate, used by WorkflowRunManager pause/resume. */
   readonly beforeSpawn?: () => Promise<void>;
@@ -256,6 +261,13 @@ export async function runWorkflowModule(
         // built-in + saved workflows for this run's project (cwd derived the
         // same way as the worktree gitRoot above).
         resolveWorkflowModule: createNestedWorkflowResolver(gitRoot ?? process.cwd()),
+        // FEATURE_246 Part D (ADR-048): every run writes its content-addressed
+        // result cache (so a later resume can replay it); on resume the cache is
+        // seeded from the prior run dir.
+        resultCache: createFsResultCache(
+          opts.runDir,
+          opts.resumeFromRunDir ? { readFrom: opts.resumeFromRunDir } : {},
+        ),
         onEvent: (event) => {
           writer.onEvent(event);
           if (processTracker) {
@@ -326,6 +338,8 @@ export interface RunWorkflowFromOptionsInput {
   readonly onWorkflowProcessEvent?: (event: WorkflowProcessEvent) => void;
   readonly now?: () => number;
   readonly scriptSnapshot?: WorkflowScriptSnapshotInput;
+  /** FEATURE_246 Part D (ADR-048): prior run dir to seed the resume cache. */
+  readonly resumeFromRunDir?: string;
   readonly processMetadata?: WorkflowRunProcessMetadata;
   readonly beforeSpawn?: () => Promise<void>;
 }
@@ -394,6 +408,7 @@ export async function runWorkflowFromOptions(
     ...(input.options.workflowHostPolicy ? { hostPolicy: input.options.workflowHostPolicy } : {}),
     ...(input.now ? { now: input.now } : {}),
     ...(input.scriptSnapshot ? { scriptSnapshot: input.scriptSnapshot } : {}),
+    ...(input.resumeFromRunDir ? { resumeFromRunDir: input.resumeFromRunDir } : {}),
     ...(input.processMetadata ? { processMetadata: input.processMetadata } : {}),
     ...(input.beforeSpawn ? { beforeSpawn: input.beforeSpawn } : {}),
   });

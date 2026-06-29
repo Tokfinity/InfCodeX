@@ -35,6 +35,9 @@ export async function toolRunWorkflow(
       manifest,
       source,
       ...(input.args !== undefined ? { args: input.args } : {}),
+      ...(typeof input.resumeFromRunId === 'string' && input.resumeFromRunId.length > 0
+        ? { resumeFromRunId: input.resumeFromRunId }
+        : {}),
     });
 
     if (result.kind === 'declined') {

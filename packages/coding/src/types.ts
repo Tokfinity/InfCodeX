@@ -1856,11 +1856,14 @@ export interface WorkflowToolHostResult {
  * concrete implementation lives behind a lazy import in tool-execution-context.
  */
 export interface WorkflowToolHost {
-  /** Start an inline-authored workflow ({manifest, source}) and await its result. */
+  /** Start an inline-authored workflow ({manifest, source}) and await its result.
+   *  `resumeFromRunId` (FEATURE_246 Part D) seeds the result cache from a prior
+   *  run so unchanged effects replay and only changed ones re-run live. */
   runInline(input: {
     readonly manifest: unknown;
     readonly source: string;
     readonly args?: unknown;
+    readonly resumeFromRunId?: string;
   }): Promise<WorkflowToolHostResult>;
 }
 
