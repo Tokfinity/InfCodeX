@@ -3273,3 +3273,76 @@ against HEAD before deleting; preserve genuine fallback coverage.
 **Scope boundaries**: `/workflow create`, `/workflow <name>`, saved capsules,
 run-graph, and the run manager are unchanged except for routing. The sideQuery
 generator's internals (validation/repair/smoke) stay as the fallback's safety.
+
+## ADR-048: Same-Session Workflow Resume — Structural Effect Scopes + Injected Result Cache (FEATURE_246 Part D)
+
+**Status**: Accepted (2026-06-29) — design of record; implementation landing in
+FEATURE_246 Part D this round (determinism guards → structural scopes + cache →
+resume entry).
+
+> Extends [ADR-044](#adr-044-workflow-authoring-parity-with-the-claude-code-harness)
+> + [ADR-046](#adr-046-workflow-run-management--neutral-lifecycle-manager-in-kodax-aiagent-via-dependency-inversion).
+> The parity subset of the (dropped) FEATURE_231; cross-process crash recovery is
+> explicitly out of scope (→ 231b).
+
+**Context**: The harness's *same-session resume* — relaunch after a pause/kill or a
+**script edit**, and "the longest unchanged prefix of `agent()` calls returns
+cached results instantly; the first edited/new call and everything after runs
+live." It is an **iteration accelerator** for expensive, tweaked-and-re-run
+workflows, not crash recovery. KodaX had only from-scratch `rerun` (no result
+cache). Real-harness usage showed resume at 0/3, so it trails B/C/E — but it is
+part of *completeness + reliability* parity with the harness the Worker now
+authors against (user decision).
+
+**Two findings that shape the design**:
+1. **The run-graph cannot be the cache.** `events.jsonl` stores only a *bounded
+   summary* of each agent result (for UI/audit), not the full `finalText` /
+   `structured`. Resume must return results **verbatim**, so it needs a dedicated
+   full-result cache (`results/<scope>.json` in the run dir), not a re-read of the
+   run graph.
+2. **Call-order scopes are NOT deterministic under a concurrency cap.** A counter
+   assigned at `runAgent` launch is stable for sequential code, but inside
+   `parallel`/`pipeline` with `maxConcurrency < items`, *which* later item launches
+   next depends on real completion timing — non-deterministic across runs. The
+   identity must therefore be **structural**: the item/stage *index*, which is
+   deterministic regardless of timing. This is why scopes are assigned in the
+   sandbox (where the structure is known), not by a runtime arrival counter.
+
+**Decision**:
+
+1. **Structural effect scopes, assigned in the restricted script-runner.** A
+   root `runAgent`/`spawnAgent` gets `fx-<n>` by program order; inside
+   `wf.parallel` an item pushes `parallel:<fxOfTheCall>/item:<i>`; inside
+   `wf.pipeline`, `…/item:<i>/stage:<s>`. The scope rides on the `runAgent` RPC.
+   Built-in modules that consume the runtime api directly reuse the same scoping
+   via the runtime's `parallel`/`pipeline`.
+2. **Each cached effect carries an `inputHash`** of its normalized spawn input
+   (name/prompt/readOnly/outputSchema/…). On completion the full result
+   (including Part-B `structured`) is written to `results/<scope>.json`.
+3. **Injected cache port (dependency inversion).** The agent runtime is fs-free,
+   so it takes an optional `resultCache` port (`get(scope)` / `set(scope, entry)`).
+   The coding layer provides the fs-backed impl rooted at the run dir; the agent
+   layer never touches disk (ADR-021).
+4. **Prefix-divergence latch.** On resume the runtime replays a cached effect only
+   while `diverged === false` AND `cache[scope].inputHash === inputHash`. The first
+   miss (changed input or new effect) sets `diverged = true`, and every effect
+   from there runs live — matching "first edited/new call and everything after
+   runs live." A live effect overwrites its cache entry.
+5. **Determinism enforced in the sandbox bootstrap.** `Date.now`, `Math.random`,
+   and argless `new Date()` throw inside workflow scripts — a script that read
+   them would make replay diverge. (Pass timestamps via `args`; vary by index.)
+6. **Resume entry points.** `run_workflow` accepts `resumeFromRunId`; `/workflow
+   resume <runId>` re-runs a prior run's persisted `script.js` with its
+   `results/` seeded as the cache. A fresh run id/dir is minted; the prior dir is
+   read-only input.
+
+**Consequences**:
+- Editing a late stage and re-running re-pays only the edited tail; an unchanged
+  re-run is a 100% cache hit. Inline authoring (Part A) makes scopes stable by
+  construction — the same script is re-submitted, so the regeneration
+  non-determinism that blocked a content-hash cache no longer applies.
+- New behavior: the determinism guards can break a script that (mis)used
+  `Date.now`/`Math.random`; the error names the banned API and how to fix it.
+- DROPPED (→ 231b): write-ahead journal as execution authority, cross-process /
+  Ctrl+C / process-restart recovery, lost-write safety policy, attempt counters.
+  Same-session resume just re-runs the non-cached tail live.
