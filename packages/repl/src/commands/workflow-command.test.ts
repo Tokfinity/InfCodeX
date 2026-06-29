@@ -2666,4 +2666,31 @@ describe('workflowCommand create redirect (FEATURE_246 / ADR-047)', () => {
       }
     });
   }
+
+  it('bare /workflow <free-text> (unknown workflow name) is treated as create', async () => {
+    const result = await workflowCommand.handler(
+      ['compare', 'streaming', 'recovery', 'across', 'repos'],
+      {} as Parameters<typeof workflowCommand.handler>[1],
+      // The start path resolves a confirm channel before falling through.
+      { confirm: async () => true } as Parameters<typeof workflowCommand.handler>[2],
+      { agentMode: 'amaw' } as Parameters<typeof workflowCommand.handler>[3],
+    );
+    expect(result && typeof result === 'object' && 'invocation' in result).toBe(true);
+    if (result && typeof result === 'object' && result.invocation) {
+      expect(result.invocation.prompt).toContain('compare streaming recovery across repos');
+      expect(result.invocation.prompt).toContain('run_workflow');
+    }
+  });
+
+  it('bare /workflow (no args) lists workflows — it does NOT create', async () => {
+    const result = await workflowCommand.handler(
+      [],
+      {} as Parameters<typeof workflowCommand.handler>[1],
+      {} as Parameters<typeof workflowCommand.handler>[2],
+      { agentMode: 'amaw' } as Parameters<typeof workflowCommand.handler>[3],
+    );
+    expect(result === undefined || (typeof result === 'object' && !('invocation' in result))).toBe(true);
+    const output = logSpy.mock.calls.map((c) => c.join(' ')).join('\n');
+    expect(output).toContain('Built-in workflows:');
+  });
 });

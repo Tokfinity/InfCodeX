@@ -39,7 +39,7 @@ import {
   printLearningPendingForFilter,
   resolveLearningCommandCwd,
 } from './learning-inbox.js';
-import type { Command } from './types.js';
+import type { Command, CommandResultData } from './types.js';
 import {
   buildWorkflowProcessMetadata,
   startGeneratedWorkflowFromRequest,
@@ -205,7 +205,7 @@ function buildSavedWorkflowProcessMetadata(input: {
 export const workflowCommand: Command = {
   name: 'workflow',
   description: 'Run a dynamic multi-agent workflow (FEATURE_217)',
-  usage: '/workflow [help | list | pending | runs | show | pause | resume | stop | delete | prune | rerun | save | rename | revise | create | <name> [args]]',
+  usage: '/workflow [help | list | pending | runs | show | pause | resume | stop | delete | prune | rerun | save | rename | revise | create | <name> [args] | <request>]',
   argumentHint: 'help | list | pending | runs [--all|--limit N] | show [runId] | pause <runId> | resume <runId> | stop [runId] | delete [--force] [--run|--saved] <runId|savedName> | prune --dry-run|--keep N|--older-than Nd | rerun <runId|savedName> [args] | save <runId> <name> | rename <runId|alias|savedName> <newName> | revise [--replace] <runId|alias|savedName> <change> | create <request> | <name> [args]',
   detailedHelp: printWorkflowHelp,
   handler: async (args, context, callbacks, currentConfig) => {
@@ -225,6 +225,39 @@ export const workflowCommand: Command = {
       runBaseDir: baseDir,
       savedWorkflowDirs: dirs,
     });
+
+    // FEATURE_246 (ADR-047): turn a free-text request into a workflow. In
+    // multi-agent modes the Worker authors it itself (scout-then-author via
+    // run_workflow) — returned as an agent-turn invocation; the blind sideQuery
+    // generator stays only as the single-agent / headless fallback. Shared by
+    // the explicit `create` subcommand and the bare `/workflow <prompt>` form.
+    const createWorkflowFromText = async (request: string): Promise<CommandResultData | undefined> => {
+      if (currentConfig.agentMode === 'ama' || currentConfig.agentMode === 'amaw') {
+        return {
+          invocation: {
+            source: 'prompt',
+            displayName: 'workflow create',
+            disableModelInvocation: false,
+            prompt: [
+              'Set up and run a multi-agent workflow for this task.',
+              'First investigate the relevant files and sub-problems with your own tools, then author and run it with run_workflow — bake the concrete findings (exact paths, the specific dimensions to compare, a real outputSchema) into the child prompts rather than re-delegating the scouting.',
+              '',
+              request,
+            ].join('\n'),
+          },
+        };
+      }
+      await startGeneratedWorkflowFromRequest({
+        request,
+        callbacks,
+        approval: currentConfig.permissionMode === 'plan' ? 'required' : 'silent',
+        presentation: 'agentic',
+        sourceLabel: 'generated',
+        processSource: 'command',
+        onBuilderEvent: callbacks.onWorkflowBuilderEvent,
+      });
+      return undefined;
+    };
 
     if (invocation.kind === 'help') {
       printWorkflowHelp();
@@ -802,37 +835,7 @@ export const workflowCommand: Command = {
         console.log(chalk.yellow('\nUsage: /workflow create <request>\n'));
         return;
       }
-      // FEATURE_246 (ADR-047): in multi-agent modes the Worker authors the
-      // workflow itself — it investigates first, then runs run_workflow with the
-      // real findings baked into the child prompts. That scout-then-author path
-      // is far better than blind one-shot sideQuery generation, so redirect the
-      // explicit request into an agent turn. The blind generator stays ONLY as
-      // the single-agent / headless fallback (no Worker available to author).
-      if (currentConfig.agentMode === 'ama' || currentConfig.agentMode === 'amaw') {
-        return {
-          invocation: {
-            source: 'prompt',
-            displayName: 'workflow create',
-            disableModelInvocation: false,
-            prompt: [
-              'Set up and run a multi-agent workflow for this task.',
-              'First investigate the relevant files and sub-problems with your own tools, then author and run it with run_workflow — bake the concrete findings (exact paths, the specific dimensions to compare, a real outputSchema) into the child prompts rather than re-delegating the scouting.',
-              '',
-              invocation.request,
-            ].join('\n'),
-          },
-        };
-      }
-      await startGeneratedWorkflowFromRequest({
-        request: invocation.request,
-        callbacks,
-        approval: currentConfig.permissionMode === 'plan' ? 'required' : 'silent',
-        presentation: 'agentic',
-        sourceLabel: 'generated',
-        processSource: 'command',
-        onBuilderEvent: callbacks.onWorkflowBuilderEvent,
-      });
-      return;
+      return await createWorkflowFromText(invocation.request);
     }
 
     const confirm = resolveConfirm(callbacks);
@@ -857,10 +860,11 @@ export const workflowCommand: Command = {
       // with no interactive channel we refuse rather than run unconfirmed.
       const ref = (await discoverSavedWorkflows(dirs)).find((r) => r.name === invocation.name);
       if (!ref) {
-        console.log(chalk.yellow(`\nUnknown workflow: ${invocation.name}`));
-        console.log(formatWorkflowList(listBuiltinWorkflows()));
-        console.log();
-        return;
+        // FEATURE_246 (ADR-047): `/workflow <text>` where <text> is not a known
+        // saved/built-in workflow is treated as a create request — the user
+        // described a task, not a workflow name. `/workflow` alone still lists.
+        const request = [invocation.name, invocation.rawArgs].filter((s) => s && s.length > 0).join(' ').trim();
+        return await createWorkflowFromText(request);
       }
       savedWorkflowRef = ref;
       if (ref.execution === 'trusted-local') {
