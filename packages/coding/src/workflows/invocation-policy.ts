@@ -1,8 +1,5 @@
-import type { KodaXAgentMode } from '../types.js';
-
 export type WorkflowInvocationSource = 'natural-language' | 'command';
 export type WorkflowInvocationAction = 'none' | 'suggest';
-export type WorkflowInvocationTrigger = 'explicit' | 'none';
 export type WorkflowStartOutcome = 'started' | 'declined' | 'cancelled' | 'failed';
 
 /**
@@ -18,52 +15,33 @@ export interface WorkflowHostPolicy {
 }
 
 export interface WorkflowInvocationPolicyInput {
-  readonly agentMode: KodaXAgentMode;
   readonly source: WorkflowInvocationSource;
-  readonly input: string;
 }
 
 export interface WorkflowInvocationPolicyDecision {
   readonly action: WorkflowInvocationAction;
-  readonly trigger: WorkflowInvocationTrigger;
-  readonly reason: string;
-}
-
-function decision(
-  action: WorkflowInvocationAction,
-  trigger: WorkflowInvocationTrigger,
-  reason: string,
-): WorkflowInvocationPolicyDecision {
-  return { action, trigger, reason };
 }
 
 /**
  * Decide whether the REPL host should launch a workflow before the agent runs.
  *
  * FEATURE_246 A5 (ADR-047): the host only launches workflows for an explicit
- * `/workflow` command. Natural language is never intercepted — in AMA/AMAW the
- * Worker owns the decision through the `run_workflow` tool, which scouts the
- * codebase first and authors a script from real findings (file paths, the
- * actual sub-problems, a concrete outputSchema). A blind host-side generator
- * cannot investigate, so pre-empting NL here produced shallow, disjointed
- * workflows. SA has no workflow host, so NL there also defers to the agent.
+ * `/workflow` command (`'suggest'`). Natural language is never intercepted in
+ * any mode (`'none'`) — in AMA/AMAW the Worker owns the decision through the
+ * `run_workflow` tool, which scouts the codebase first and authors a script
+ * from real findings (file paths, the actual sub-problems, a concrete
+ * outputSchema). A blind host-side generator cannot investigate, so pre-empting
+ * NL here produced shallow, disjointed workflows. SA has no workflow host.
  *
- * The earlier NL detection (explicit/complexity/negation regexes) existed only
- * to gate that removed auto-start path and was dropped with it: the regex
- * heuristic is exactly the kind of judgment the Worker now makes with full
- * context instead of a keyword match.
+ * The decision is the source alone, so this takes no agent mode or input text:
+ * the earlier NL detection (explicit/complexity/negation regexes) existed only
+ * to gate the removed auto-start path — that judgment now belongs to the Worker
+ * with full context, not a keyword match.
  */
 export function decideWorkflowInvocation(
   input: WorkflowInvocationPolicyInput,
 ): WorkflowInvocationPolicyDecision {
-  if (input.source === 'command') {
-    return decision('suggest', 'explicit', 'command requested workflow execution');
-  }
-  return decision(
-    'none',
-    'none',
-    'natural-language workflow authoring is delegated to the agent (run_workflow tool)',
-  );
+  return { action: input.source === 'command' ? 'suggest' : 'none' };
 }
 
 export function workflowStartOutcomeConsumesTurn(input: {

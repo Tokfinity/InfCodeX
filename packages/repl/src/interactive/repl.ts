@@ -724,6 +724,15 @@ Keyboard Shortcuts:
     agentMode: initialAgentMode,
     reasoningMode: initialReasoningMode,
     thinking: initialThinking,
+    // FEATURE_246 A5 (ADR-047): the session options that flow to runAgentRound
+    // must carry the workflow runs dir so the Worker's tool-execution context
+    // wires ctx.workflowHost and the run_workflow tool is live on NL turns (not
+    // just the /workflow command path). The createKodaXOptions closure inherits
+    // this via its `...currentOptions` spread.
+    workflowRunsBaseDir: getAgentConfigPath(
+      'workflow-runs',
+      deriveProjectKeyFromRoot(process.cwd()).key,
+    ),
     context: {
       ...options.context,
       gitRoot,
@@ -1261,15 +1270,8 @@ Keyboard Shortcuts:
         thinking: currentConfig.thinking,
         reasoningMode: currentConfig.reasoningMode,
         guardrails,
-        // FEATURE_246 A5: enable the model-callable run_workflow tool in AMA/AMAW.
-        // Resolving the runs dir here (same derivation as /workflow command,
-        // workflow-command.ts) makes buildToolExecutionContext wire ctx.workflowHost,
-        // so the Worker can scout the codebase and author a workflow itself rather
-        // than the host blind-generating one (ADR-047).
-        workflowRunsBaseDir: getAgentConfigPath(
-          'workflow-runs',
-          deriveProjectKeyFromRoot(process.cwd()).key,
-        ),
+        // workflowRunsBaseDir is inherited from `...currentOptions` (set at
+        // session init for FEATURE_246 A5) — no need to re-derive here.
         context: {
           ...currentOptions.context,
           planModeBlockCheck,
@@ -1470,11 +1472,7 @@ Keyboard Shortcuts:
     workflow: CommandWorkflowInvocationRequest,
     rawInput: string,
   ): Promise<boolean> => {
-    const decision = decideWorkflowInvocation({
-      agentMode: currentConfig.agentMode,
-      source: workflow.source,
-      input: rawInput || workflow.request,
-    });
+    const decision = decideWorkflowInvocation({ source: workflow.source });
 
     // FEATURE_246 A5 (ADR-047): this launcher is reached only from a parsed
     // `/workflow` command (the natural-language intercept was removed), so the

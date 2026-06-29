@@ -4658,6 +4658,15 @@ const InkREPLInner: React.FC<InkREPLProps> = ({
     reasoningMode: currentConfig.reasoningMode,
     effort: runtimeEffort,
     agentMode: currentConfig.agentMode,
+    // FEATURE_246 A5 (ADR-047): carry the workflow runs dir on the live session
+    // options that flow to runAgentRound so the Worker's run_workflow tool is
+    // active on NL turns (not just the /workflow command path). The mid-session
+    // update at the auto-mode switch spreads `...currentOptionsRef.current`, so
+    // this value persists; the slash-command closure inherits it the same way.
+    workflowRunsBaseDir: getAgentConfigPath(
+      "workflow-runs",
+      deriveProjectKeyFromRoot(process.cwd()).key,
+    ),
     context: {
       ...options.context,
       repoIntelligenceMode: currentConfig.repoIntelligenceMode,
@@ -7992,11 +8001,7 @@ const InkREPLInner: React.FC<InkREPLProps> = ({
           | 'onWorkflowRunUpdate'
         >,
       ): Promise<boolean> => {
-        const decision = decideWorkflowInvocation({
-          agentMode: currentConfig.agentMode,
-          source: workflow.source,
-          input: rawInput || workflow.request,
-        });
+        const decision = decideWorkflowInvocation({ source: workflow.source });
 
         // FEATURE_246 A5 (ADR-047): reached only from a parsed `/workflow`
         // command (the natural-language intercept was removed), so the policy
@@ -8505,11 +8510,8 @@ const InkREPLInner: React.FC<InkREPLProps> = ({
             // or deprecated 'auto-in-project'). The lazy bootstrap factory
             // means non-auto sessions pay zero classifier construction cost.
             guardrails: buildAutoModeGuardrails(permissionModeRef.current, autoModeBootstrap),
-            // FEATURE_246 A5: enable the model-callable run_workflow tool (ADR-047).
-            workflowRunsBaseDir: getAgentConfigPath(
-              "workflow-runs",
-              deriveProjectKeyFromRoot(process.cwd()).key,
-            ),
+            // workflowRunsBaseDir is inherited from `...currentOptionsRef.current`
+            // (set at session init for FEATURE_246 A5).
             events: createStreamingEvents(), // Include streaming events for /project commands
           }),
           reloadAgentsFiles: async (): Promise<AgentsFile[]> => {
