@@ -708,7 +708,7 @@ async function handleCommand(
       return undefined;
     }
     case 'runAgent':
-      return wf.runAgent(readSpawnAgentInput(input, 'workflow runAgent input')) satisfies Promise<WorkflowTaskResult>;
+      return wf.runAgent(readSpawnAgentInput(input, 'workflow runAgent input')) satisfies Promise<WorkflowTaskResult | null>;
     case 'send': {
       const record = readRecord(input, 'workflow send input');
       await wf.send(readString(record, 'taskId'), readString(record, 'content'));

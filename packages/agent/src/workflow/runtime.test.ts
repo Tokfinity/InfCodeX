@@ -14,7 +14,6 @@ import {
   WorkflowAbortError,
   WorkflowBudgetError,
   WorkflowLimitError,
-  WorkflowTaskFailedError,
   type WorkflowAgentBackend,
   type WorkflowEvent,
   type WorkflowSpawnAgentInput,
@@ -457,7 +456,7 @@ describe('runWorkflow — event envelope + ordering', () => {
     expect(outcome.state.events.at(-1)?.type).toBe('workflow_failed');
   });
 
-  it('makes wf.runAgent fail loud when the child returns failed status', async () => {
+  it('returns null from wf.runAgent on a failed child (FEATURE_246 Part E lenient; script decides), still records agent_failed', async () => {
     const backend: WorkflowAgentBackend = {
       spawn: async (input) => ({ taskId: 'task-failed', name: input.name }),
       wait: async (taskId) => ({
@@ -475,19 +474,23 @@ describe('runWorkflow — event envelope + ordering', () => {
       stop: async () => {},
     };
 
+    let captured: unknown = 'sentinel';
     const outcome = await runWorkflow(baseOpts(backend), async (wf) => {
-      await wf.runAgent({ name: 'writer', prompt: 'write files', readOnly: false });
-      return 'unreached';
+      // Lenient failure: runAgent resolves to null instead of throwing, so the
+      // SCRIPT (not the runtime) decides what a failed child means.
+      captured = await wf.runAgent({ name: 'writer', prompt: 'write files', readOnly: false });
+      return 'continued';
     });
 
-    expect(outcome.ok).toBe(false);
-    if (!outcome.ok) expect(outcome.error).toBeInstanceOf(WorkflowTaskFailedError);
-    expect(outcome.state.status).toBe('failed');
+    expect(captured).toBeNull();
+    expect(outcome.ok).toBe(true);
+    if (outcome.ok) expect(outcome.result).toBe('continued');
+    // The failure is still surfaced as a run-graph event (KodaX records it).
     expect(outcome.state.events.map((event) => event.type)).toEqual([
       'workflow_started',
       'agent_spawned',
       'agent_failed',
-      'workflow_failed',
+      'workflow_completed',
     ]);
     expect(outcome.state.events.find((event) => event.type === 'agent_failed')).toMatchObject({
       data: {
@@ -499,6 +502,23 @@ describe('runWorkflow — event envelope + ordering', () => {
         },
       },
     });
+  });
+
+  it('a script that wants fail-loud can rethrow on a null runAgent result', async () => {
+    const backend: WorkflowAgentBackend = {
+      spawn: async (input) => ({ taskId: 'task-failed', name: input.name }),
+      wait: async (taskId) => ({ taskId, name: 'writer', status: 'failed', finalText: 'boom' }),
+      output: async (taskId) => ({ taskId, name: 'writer', status: 'running' }),
+      send: async () => {},
+      stop: async () => {},
+    };
+    const outcome = await runWorkflow(baseOpts(backend), async (wf) => {
+      const r = await wf.runAgent({ name: 'writer', prompt: 'x', readOnly: false });
+      if (r === null) throw new Error('writer failed');
+      return 'unreached';
+    });
+    expect(outcome.ok).toBe(false);
+    expect(outcome.state.status).toBe('failed');
   });
 
   it('allows wf.runAgent to return completed_unverified without failing the workflow', async () => {
@@ -815,6 +835,23 @@ describe('maxConcurrency / parallel in-flight gate', () => {
     });
     expect(outcome.ok).toBe(true);
     if (outcome.ok) expect(outcome.result).toEqual(['a', 'b', 'c']);
+  });
+
+  it('parallel drops an ordinary throwing thunk to null and keeps siblings (FEATURE_246 Part E)', async () => {
+    const { backend } = fakeBackend();
+    const outcome = await runWorkflow(baseOpts(backend), async (wf) => {
+      const results = await wf.parallel([
+        () => Promise.resolve('a'),
+        () => Promise.reject(new Error('boom')),
+        () => Promise.resolve('c'),
+      ]);
+      return results; // null in the middle slot; the call itself never rejects
+    });
+    expect(outcome.ok).toBe(true);
+    if (outcome.ok) {
+      expect(outcome.result).toEqual(['a', null, 'c']);
+      expect((outcome.result as unknown[]).filter(Boolean)).toEqual(['a', 'c']);
+    }
   });
 
   it('gates bare spawnAgent until the matching wait releases capacity', async () => {

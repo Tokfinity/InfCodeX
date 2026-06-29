@@ -465,9 +465,22 @@ export function createWorkflowProcessTracker(
     if (!taskId) return;
     const title = readString(data, 'name') ?? taskId;
     const id = agentItemId(taskId);
+    // FEATURE_246 Part E: an explicit per-agent `phase` tag groups this agent
+    // under that named phase (created on demand), independent of the
+    // `wf.phase(...)` wrapper's active phase. No tag → the active phase, if any.
+    const explicitPhase = readString(data, 'phase');
+    const phaseId = explicitPhase !== undefined ? phaseIdForName(explicitPhase) : activePhaseId;
+    if (explicitPhase !== undefined) {
+      const phaseItem = findItem(phaseId!);
+      if (phaseItem && phaseItem.status === 'pending') {
+        phaseItem.status = 'running';
+        phaseItem.startedAt ??= updatedAt;
+      }
+    }
     const existing = findItem(id);
     if (existing) {
       existing.status = 'running';
+      if (phaseId !== undefined && existing.phaseId === undefined) existing.phaseId = phaseId;
       return;
     }
     items.push({
@@ -475,7 +488,7 @@ export function createWorkflowProcessTracker(
       title,
       kind: 'agent',
       status: 'running',
-      ...(activePhaseId !== undefined ? { phaseId: activePhaseId } : {}),
+      ...(phaseId !== undefined ? { phaseId } : {}),
       childAgentId: taskId,
       startedAt: updatedAt,
       ...(readString(data, 'provider') !== undefined ? { provider: readString(data, 'provider') } : {}),

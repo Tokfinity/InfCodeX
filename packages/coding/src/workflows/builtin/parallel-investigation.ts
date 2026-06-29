@@ -82,6 +82,11 @@ async function investigate(
 ): Promise<InvestigationFinding> {
   try {
     const result = await wf.runAgent({ name: angle.name, prompt: angle.prompt, readOnly: true });
+    // FEATURE_246 Part E: runAgent now resolves to null on a failed/stopped child
+    // (instead of throwing), so treat null as a failed angle.
+    if (result === null) {
+      return { angle: angle.name, status: 'failed', text: '[investigation failed] agent did not complete' };
+    }
     return {
       angle: angle.name,
       status: result.status === 'completed' ? 'completed' : 'failed',
@@ -98,12 +103,15 @@ async function runParallelInvestigation(
   args: ParallelInvestigationArgs,
 ): Promise<ParallelInvestigationResult> {
   const angles = resolveAngles(args);
-  const findings = await wf.phase('investigate', () =>
+  // `investigate` always resolves to a finding (its own try/catch), so parallel
+  // never yields null here — but parallel's type is `(T | null)[]` (Part E
+  // lenient failure), so filter to satisfy the type and stay null-safe.
+  const findings = (await wf.phase('investigate', () =>
     wf.parallel(
       angles.map((angle) => () => investigate(wf, angle)),
       args.maxConcurrency !== undefined ? { concurrency: args.maxConcurrency } : undefined,
     ),
-  );
+  )).filter((f): f is InvestigationFinding => f !== null);
 
   const degraded = findings.some((f) => f.status !== 'completed');
   const synthesis = await wf.phase('synthesize', () =>

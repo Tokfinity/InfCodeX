@@ -50,6 +50,14 @@ export interface WorkflowTaskVerificationResult {
 export interface WorkflowSpawnAgentInput {
   /** Human-readable label for the agent — surfaces in events / UI. */
   readonly name: string;
+  /**
+   * Optional progress-group tag (FEATURE_246 Part E). When set, this agent is
+   * grouped under a phase of that name in the progress display — the per-agent
+   * equivalent of wrapping a block in `wf.phase(name, fn)`, matching the harness
+   * `agent(..., { phase })`. The phase group is created on first use. Agents
+   * with no `phase` fall under the currently-active `wf.phase(...)` block (if any).
+   */
+  readonly phase?: string;
   /** The task prompt handed to the child agent. */
   readonly prompt: string;
   /** When true, the child runs with a read-only tool whitelist. */
@@ -198,8 +206,12 @@ export interface WorkflowApi {
   phase<T>(name: string, fn: () => Promise<T>): Promise<T>;
   /** Start a child agent; returns immediately with a handle. */
   spawnAgent(input: WorkflowSpawnAgentInput): Promise<WorkflowTaskHandle>;
-  /** spawnAgent + wait convenience; returns the terminal result. */
-  runAgent(input: WorkflowSpawnAgentInput): Promise<WorkflowTaskResult>;
+  /** spawnAgent + wait convenience; returns the terminal result, or `null` if
+   *  the child ended failed/stopped (FEATURE_246 Part E lenient failure — the
+   *  harness `agent()` semantics, so scripts can `.filter(Boolean)` instead of
+   *  wrapping every call in try/catch). Abort and budget/agent-cap limits still
+   *  throw. */
+  runAgent(input: WorkflowSpawnAgentInput): Promise<WorkflowTaskResult | null>;
   /** Await a spawned agent's terminal result. */
   wait(taskId: string, opts?: WorkflowWaitOptions): Promise<WorkflowTaskResult>;
   /** Snapshot a (possibly running) agent. */
@@ -213,11 +225,14 @@ export interface WorkflowApi {
   stop(taskId: string, reason: string): Promise<void>;
   /** Run lazy thunks concurrently under the concurrency gate. Thunks
    *  MUST be `() => Promise<T>` (not already-started promises) so the
-   *  runtime can bound concurrency. */
+   *  runtime can bound concurrency. A thunk that throws (or whose agent fails)
+   *  resolves to `null` in the result array — the call itself never rejects, so
+   *  `.filter(Boolean)` before use (FEATURE_246 Part E, harness parity). Abort
+   *  still tears down the whole run. */
   parallel<T>(
     items: readonly (() => Promise<T>)[],
     opts?: WorkflowParallelOptions,
-  ): Promise<T[]>;
+  ): Promise<(T | null)[]>;
   /**
    * Stream items through ordered stages with NO barrier between stages: an
    * item advances to stage N+1 as soon as its own stage N resolves,
@@ -237,6 +252,15 @@ export interface WorkflowApi {
    *  (spawn → wait), so it counts toward maxAgents / concurrency / budget
    *  and emits run-graph events — it is NOT a backend side-channel. */
   synthesize(input: WorkflowSynthesizeInput): Promise<WorkflowSynthesis>;
+  /**
+   * Run another saved/built-in workflow inline as a sub-step (FEATURE_246 Part E,
+   * harness parity). Resolves the module by name via the host-injected resolver
+   * and runs it under THIS run's runtime — sharing the same concurrency cap,
+   * agent counter, token budget, and abort signal. **One level only**: calling
+   * `workflow(...)` from inside a nested workflow throws. Returns whatever the
+   * sub-workflow's `run` returns. Optional: present when a resolver is wired
+   * (the restricted-script bootstrap provides it; SDK consumers may omit). */
+  workflow?(name: string, args?: unknown): Promise<unknown>;
   /** Persist a named artifact. */
   artifact(name: string, value: unknown): Promise<WorkflowArtifactRef>;
   /** Emit a free-text progress log event. */

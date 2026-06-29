@@ -74,6 +74,20 @@ export class WorkflowTaskFailedError extends Error {
   }
 }
 
+/**
+ * Run-control errors that the lenient `parallel`/`pipeline` fault-isolation must
+ * NOT swallow into a null item: they halt or tear down the whole run (abort) or
+ * signal a structural cap/misconfiguration (agent/concurrency limit, token
+ * budget). Only ordinary task failures become null (FEATURE_246 Part E).
+ */
+function isWorkflowRunControlError(error: unknown): boolean {
+  return (
+    error instanceof WorkflowAbortError ||
+    error instanceof WorkflowLimitError ||
+    error instanceof WorkflowBudgetError
+  );
+}
+
 const STOP_ACTIVE_TASK_TIMEOUT_MS = 250;
 const CONCURRENCY_DEADLOCK_CHECK_MS = 50;
 const MAX_TASK_EVENT_SUMMARY_CHARS = 4096;
@@ -183,8 +197,8 @@ async function runPool<T>(
   thunks: readonly (() => Promise<T>)[],
   concurrency: number,
   signal: AbortSignal | undefined,
-): Promise<T[]> {
-  const results: T[] = new Array(thunks.length);
+): Promise<(T | null)[]> {
+  const results: (T | null)[] = new Array(thunks.length);
   let cursor = 0;
   const worker = async (): Promise<void> => {
     for (;;) {
@@ -192,7 +206,16 @@ async function runPool<T>(
       const index = cursor;
       cursor += 1;
       if (index >= thunks.length) return;
-      results[index] = await thunks[index]!();
+      try {
+        results[index] = await thunks[index]!();
+      } catch (error) {
+        // Fault isolation (FEATURE_246 Part E, harness parity): an ordinary
+        // failed thunk becomes null so siblings continue and parallel() never
+        // rejects. Run-control errors (abort / agent-cap / budget) still
+        // propagate — they halt the whole run and must not be swallowed.
+        if (isWorkflowRunControlError(error)) throw error;
+        results[index] = null;
+      }
     }
   };
   const lanes = Math.max(1, Math.min(concurrency, thunks.length));
@@ -363,7 +386,13 @@ function buildRuntime(opts: CreateWorkflowRuntimeOptions): InternalRuntime {
         acquired = false;
         concurrency.release();
       });
-      recorder.emit('agent_spawned', { taskId: handle.taskId, name: handle.name });
+      recorder.emit('agent_spawned', {
+        taskId: handle.taskId,
+        name: handle.name,
+        // FEATURE_246 Part E: per-agent phase tag groups this agent under a
+        // named phase in the progress display (harness `agent(..., {phase})`).
+        ...(input.phase !== undefined ? { phase: input.phase } : {}),
+      });
       return handle;
     } catch (error) {
       const spawnedHandle = handle;
@@ -573,7 +602,18 @@ function buildRuntime(opts: CreateWorkflowRuntimeOptions): InternalRuntime {
 
     spawnAgent: (input) => doSpawn(input),
 
-    runAgent: (input) => runAgentImpl(input),
+    runAgent: async (input) => {
+      try {
+        return await runAgentImpl(input);
+      } catch (error) {
+        // Lenient failure (FEATURE_246 Part E, harness parity): a child that
+        // ends failed/stopped resolves to null so scripts can `.filter(Boolean)`
+        // instead of wrapping every call in try/catch. Abort and budget/agent-cap
+        // limits still throw — they must tear down or halt the whole run.
+        if (error instanceof WorkflowTaskFailedError) return null;
+        throw error;
+      }
+    },
 
     wait: (taskId, waitOpts) => doWait(taskId, waitOpts),
 
@@ -631,9 +671,10 @@ function buildRuntime(opts: CreateWorkflowRuntimeOptions): InternalRuntime {
             return value;
           } catch (error) {
             // Stage-level fault isolation: a throwing stage drops THIS item to
-            // null and lets siblings continue. Abort tears down the whole run,
-            // so it must propagate rather than be swallowed into a null item.
-            if (error instanceof WorkflowAbortError) throw error;
+            // null and lets siblings continue. Run-control errors (abort /
+            // agent-cap / budget) tear down the whole run, so they propagate
+            // rather than be swallowed into a null item.
+            if (isWorkflowRunControlError(error)) throw error;
             return null;
           }
         }),

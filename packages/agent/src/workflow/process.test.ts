@@ -128,6 +128,32 @@ describe('workflow process tracker', () => {
     expect(isFinalWorkflowProcessStatus('paused')).toBe(false);
   });
 
+  it('groups agents by an explicit per-agent phase tag (FEATURE_246 Part E)', () => {
+    const tracker = createWorkflowProcessTracker({
+      runId: 'run-phase',
+      workflowName: 'phase-test',
+      now: () => '2026-06-15T00:00:00.000Z',
+    });
+
+    tracker.applyEvent({ seq: 0, type: 'workflow_started' });
+    // No wf.phase() wrapper active; the tag itself creates + joins the group.
+    tracker.applyEvent({ seq: 1, type: 'agent_spawned', data: { taskId: 'c1', name: 'find-a', phase: 'Find' } });
+    tracker.applyEvent({ seq: 2, type: 'agent_spawned', data: { taskId: 'c2', name: 'find-b', phase: 'Find' } });
+    tracker.applyEvent({ seq: 3, type: 'agent_spawned', data: { taskId: 'c3', name: 'verify-a', phase: 'Verify' } });
+
+    const snapshot = tracker.getSnapshot();
+    const phases = snapshot.items.filter((item) => item.kind === 'phase');
+    expect(phases.map((p) => p.title)).toEqual(['Find', 'Verify']);
+    // Both Find agents share the Find phase id; verify agent is under Verify.
+    const findPhaseId = phases.find((p) => p.title === 'Find')!.id;
+    const verifyPhaseId = phases.find((p) => p.title === 'Verify')!.id;
+    expect(snapshot.items.find((i) => i.id === 'agent:c1')?.phaseId).toBe(findPhaseId);
+    expect(snapshot.items.find((i) => i.id === 'agent:c2')?.phaseId).toBe(findPhaseId);
+    expect(snapshot.items.find((i) => i.id === 'agent:c3')?.phaseId).toBe(verifyPhaseId);
+    // The on-demand phase group is shown active once it has a running agent.
+    expect(phases.find((p) => p.title === 'Find')?.status).toBe('running');
+  });
+
   it('maps agent_failed events to failed agent items', () => {
     const tracker = createWorkflowProcessTracker({
       runId: 'run-agent-failed',
