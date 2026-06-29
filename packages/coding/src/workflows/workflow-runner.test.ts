@@ -93,6 +93,29 @@ function fakeBackend(): WorkflowAgentBackend {
   };
 }
 
+function countingBackend(onSpawn: () => void): WorkflowAgentBackend {
+  let n = 0;
+  const names = new Map<string, string>();
+  return {
+    spawn: async (input) => {
+      onSpawn();
+      n += 1;
+      const taskId = `t${n}`;
+      names.set(taskId, input.name);
+      return { taskId, name: input.name };
+    },
+    wait: async (taskId) => ({
+      taskId,
+      name: names.get(taskId) ?? taskId,
+      status: 'completed',
+      finalText: `result for ${names.get(taskId)}`,
+    }),
+    output: async (taskId) => ({ taskId, name: names.get(taskId) ?? taskId, status: 'completed' }),
+    send: async () => {},
+    stop: async () => {},
+  };
+}
+
 describe('buildApprovalSummary', () => {
   it('reflects read-only + phases from meta', () => {
     const summary = buildApprovalSummary(parallelInvestigation);
@@ -124,6 +147,70 @@ describe('runWorkflowModule', () => {
     });
     expect(outcome.kind).toBe('denied');
     expect(existsSync(join(dir, 'run.json'))).toBe(false);
+  });
+
+  it('resumes from a prior run dir end-to-end: unchanged agents hit the cache (0 new spawns, same result) — FEATURE_246 Part D', async () => {
+    const twoAgent: WorkflowModule<unknown, unknown> = {
+      meta: { name: 'two-agent', description: 'two sequential agents', readOnly: true, maxAgents: 4, maxConcurrency: 2, phases: [] },
+      run: async (wf) => {
+        const a = await wf.runAgent({ name: 'a', prompt: 'PA', readOnly: true });
+        const b = await wf.runAgent({ name: 'b', prompt: 'PB', readOnly: true });
+        return [a?.finalText ?? null, b?.finalText ?? null];
+      },
+    };
+    const dir1 = mkdtempSync(join(tmpdir(), 'wf-resume-1-'));
+    const dir2 = mkdtempSync(join(tmpdir(), 'wf-resume-2-'));
+    try {
+      // First run spawns both agents and writes its result cache under dir1.
+      let spawns1 = 0;
+      const o1 = await runWorkflowModule({
+        module: twoAgent, args: {}, runId: 'run-1', runDir: dir1, backend: countingBackend(() => { spawns1 += 1; }),
+      });
+      expect(o1.kind).toBe('completed');
+      expect(spawns1).toBe(2);
+      expect(existsSync(join(dir1, 'results'))).toBe(true);
+
+      // Second run resumes from dir1: both agents are content-addressed hits → 0 spawns.
+      let spawns2 = 0;
+      const o2 = await runWorkflowModule({
+        module: twoAgent, args: {}, runId: 'run-2', runDir: dir2, backend: countingBackend(() => { spawns2 += 1; }),
+        resumeFromRunDir: dir1,
+      });
+      expect(o2.kind).toBe('completed');
+      expect(spawns2).toBe(0);
+      if (o1.kind === 'completed' && o2.kind === 'completed') {
+        expect(o2.result).toEqual(o1.result);
+      }
+    } finally {
+      rmSync(dir1, { recursive: true, force: true });
+      rmSync(dir2, { recursive: true, force: true });
+    }
+  });
+
+  it('resume re-runs only the agent whose input changed (content-addressed) — FEATURE_246 Part D', async () => {
+    const mod = (promptB: string): WorkflowModule<unknown, unknown> => ({
+      meta: { name: 'two-agent', description: 'two agents', readOnly: true, maxAgents: 4, maxConcurrency: 2, phases: [] },
+      run: async (wf) => {
+        await wf.runAgent({ name: 'a', prompt: 'PA', readOnly: true });
+        await wf.runAgent({ name: 'b', prompt: promptB, readOnly: true });
+        return null;
+      },
+    });
+    const dir1 = mkdtempSync(join(tmpdir(), 'wf-resume-c1-'));
+    const dir2 = mkdtempSync(join(tmpdir(), 'wf-resume-c2-'));
+    try {
+      await runWorkflowModule({ module: mod('PB'), args: {}, runId: 'r1', runDir: dir1, backend: countingBackend(() => {}) });
+      // Edit only agent b's prompt; a is unchanged → cache hit, b → live.
+      let spawns2 = 0;
+      await runWorkflowModule({
+        module: mod('PB-edited'), args: {}, runId: 'r2', runDir: dir2, backend: countingBackend(() => { spawns2 += 1; }),
+        resumeFromRunDir: dir1,
+      });
+      expect(spawns2).toBe(1);
+    } finally {
+      rmSync(dir1, { recursive: true, force: true });
+      rmSync(dir2, { recursive: true, force: true });
+    }
   });
 
   it('runs end-to-end and writes the durable run graph when approved', async () => {
