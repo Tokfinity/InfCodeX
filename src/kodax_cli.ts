@@ -107,6 +107,7 @@ import {
   FileSessionStorage,
   dedupeSessions,
   KODAX_CONFIG_FILE,
+  ensureExampleConfigFile,
   resolveInteractiveSurfacePreference,
   runInteractiveMode,
   runInkInteractiveMode,
@@ -1541,6 +1542,16 @@ complete -c kodax -l version -d 'Show version'`);
         storage: new FileSessionStorage(),
         hardExitOnClose: false,
       };
+
+      // F1 — first launch with no config.json: drop a commented config.example.jsonc
+      // reference next to it and point the user at it (one time only).
+      const exampleConfigPath = ensureExampleConfigFile();
+      if (exampleConfigPath) {
+        console.error(chalk.dim(
+          `\n[First launch] No config found. Wrote an annotated example to ${exampleConfigPath}\n` +
+          `Copy the fields you need into config.json (custom providers, models, thinking config).\n`,
+        ));
+      }
 
       if (useClassicInteractiveMode) {
         await runInteractiveMode(interactiveOptions);

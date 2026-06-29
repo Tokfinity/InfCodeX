@@ -185,6 +185,25 @@ describe('openai reasoning capability', () => {
     expect(create.mock.calls[0]?.[0].reasoning_effort).toBe('medium');
   });
 
+  it('Part 2: a rejected profile shape degrades to a param-free retry (openai-compat)', async () => {
+    const create = vi
+      .fn()
+      .mockRejectedValueOnce(new Error('unsupported parameter: reasoning_effort'))
+      .mockResolvedValueOnce(createCompletedOpenAIStream());
+    const provider = new TestOpenAIProvider('my-relay', 'native-effort', {
+      chat: { completions: { create } },
+    });
+
+    await provider.stream(MESSAGES, TOOLS, 'system', reasoning);
+
+    expect(create).toHaveBeenCalledTimes(2);
+    // Primary attempt applies the profile (reasoning_effort).
+    expect(create.mock.calls[0]?.[0].reasoning_effort).toBe('medium');
+    // 'none' degradation rung drops the reasoning param — the turn completes instead of
+    // re-applying the rejected shape and hard-failing.
+    expect(create.mock.calls[1]?.[0]).not.toHaveProperty('reasoning_effort');
+  });
+
   it('passes explicit provider effort values through for native-effort providers', async () => {
     const create = vi.fn().mockResolvedValue(createCompletedOpenAIStream());
     const provider = new TestOpenAIProvider('openai', 'native-effort', {

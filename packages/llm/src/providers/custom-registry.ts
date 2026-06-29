@@ -33,6 +33,39 @@ type CustomProviderFactory = () => KodaXBaseProvider;
 const customProviders = new Map<string, KodaXCustomProviderConfig>();
 const customFactories = new Map<string, CustomProviderFactory>();
 
+const THINKING_REASONING_CAPABILITIES = new Set([
+  'native-toggle',
+  'native-budget',
+  'native-effort',
+  'native-adaptive',
+]);
+
+/**
+ * F2 — non-fatal config guidance for a genuinely-contradictory reasoning config:
+ * `supportsThinking: false` short-circuits to the "no thinking" preset and silently
+ * ignores any `reasoningCapability`, so a config that sets a thinking capability AND
+ * disables thinking is almost certainly a mistake. We deliberately do NOT warn on a
+ * bare `supportsThinking: true` with no explicit reasoning mapping — that resolves to
+ * a sensible default (passive on openai-compat, enable-toggle on anthropic-compat) and
+ * is a valid, common config; warning on it would be noise. An explicit reasoningProfile
+ * / reasoning / reasoningPreset overrides the legacy path, so it is not contradicted.
+ */
+function warnOnIgnoredReasoningCapability(config: KodaXCustomProviderConfig): void {
+  const hasExplicitProfile = Boolean(
+    config.reasoningProfile || config.reasoning || config.reasoningPreset,
+  );
+  if (
+    config.supportsThinking === false &&
+    config.reasoningCapability !== undefined &&
+    THINKING_REASONING_CAPABILITIES.has(config.reasoningCapability) &&
+    !hasExplicitProfile
+  ) {
+    console.warn(
+      `[kodax] Custom provider "${config.name}": reasoningCapability "${config.reasoningCapability}" is ignored because supportsThinking is false (thinking stays off). Set supportsThinking: true to enable thinking, or remove reasoningCapability.`,
+    );
+  }
+}
+
 /**
  * Register custom providers from config. Replaces all existing custom providers.
  */
@@ -48,6 +81,7 @@ export function registerCustomProviders(configs: KodaXCustomProviderConfig[]): v
     if (config.name in KODAX_PROVIDERS) {
       console.warn(`[kodax] Custom provider "${config.name}" shadows a built-in provider. The built-in provider will be used. Choose a different name to use your custom provider.`);
     }
+    warnOnIgnoredReasoningCapability(config);
     seen.add(config.name);
     nextProviders.set(config.name, config);
     nextFactories.set(config.name, () => createCustomProvider(config));

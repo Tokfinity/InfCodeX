@@ -237,7 +237,13 @@ export type KodaXReasoningEffortWireStrategy =
   | 'openai-responses-effort'
   | 'openai-chat-effort'
   | 'codex-cli-config'
+  // Real Claude: thinking:{type:'adaptive'} + output_config.effort.
   | 'anthropic-output-effort'
+  // Non-Claude anthropic-compat endpoints (zhipu/deepseek style): thinking:
+  // {type:'enabled'} + a top-level reasoning_effort. The friendly reasoning:
+  // {efforts} form maps here on anthropic-compat (B1) so non-Claude models get
+  // thinking-on + a tunable effort, instead of Claude's adaptive shape.
+  | 'anthropic-reasoning-effort'
   | 'provider-budget'
   | 'provider-toggle'
   | 'prompt-only'

@@ -97,13 +97,77 @@ describe('custom providers', () => {
     expect(provider.getBaseUrl()).toBe('https://example.test/v1');
     expect(provider.getAvailableModels()).toEqual(['custom-main', 'custom-alt']);
     expect(provider.getConfiguredReasoningCapability()).toBe('native-toggle');
-    expect(provider.getReasoningProfile()).toMatchObject({
-      reasoningPreset: 'generic-thinking-toggle',
-      effortStrategy: 'provider-toggle',
-      thinkingStrategy: 'provider-toggle',
-    });
+    // F3: openai-compat native-toggle stays PASSIVE — KodaX must NOT synthesize a
+    // generic-thinking-toggle profile, because that injects the Anthropic-shaped
+    // thinking:{type:'enabled'} object that OpenAI-style relays reject/ignore (the
+    // v0.7.57 relay-deepseek regression). With no profile the name-gated capability
+    // switch sends nothing for a custom provider; reasoning_content is parsed
+    // unconditionally so thinking still surfaces if the endpoint emits it.
+    expect(provider.getReasoningProfile()).toBeUndefined();
     expect(provider.getCapabilityProfile()).toEqual(EXPECTED_NATIVE_CUSTOM_PROFILE);
     expect(provider.getContextWindow()).toBe(123456);
+  });
+
+  it('F3: native-toggle is protocol-aware — passive on openai, enable-toggle on anthropic', () => {
+    vi.stubEnv('CUSTOM_TOGGLE_OPENAI_API_KEY', 'test-key');
+    vi.stubEnv('CUSTOM_TOGGLE_ANTHROPIC_API_KEY', 'test-key');
+
+    // openai-compat: no profile synthesized → no Anthropic-shaped thinking object
+    // reaches the wire (relays reject it). reasoning_content is parsed regardless.
+    const openai = createCustomProvider({
+      name: 'toggle-openai',
+      protocol: 'openai',
+      baseUrl: 'https://toggle.example/v1',
+      apiKeyEnv: 'CUSTOM_TOGGLE_OPENAI_API_KEY',
+      model: 'toggle-model',
+      supportsThinking: true,
+      reasoningCapability: 'native-toggle',
+    });
+    expect(openai.getReasoningProfile()).toBeUndefined();
+
+    // anthropic-compat: bare thinking:{type:'enabled'} is the correct non-Claude
+    // shape (matches built-in zhipu/kimi/minimax), so the toggle profile stays.
+    const anthropic = createCustomProvider({
+      name: 'toggle-anthropic',
+      protocol: 'anthropic',
+      baseUrl: 'https://toggle.example/anthropic',
+      apiKeyEnv: 'CUSTOM_TOGGLE_ANTHROPIC_API_KEY',
+      model: 'toggle-model',
+      supportsThinking: true,
+      reasoningCapability: 'native-toggle',
+    });
+    expect(anthropic.getReasoningProfile()).toMatchObject({
+      reasoningPreset: 'generic-thinking-toggle',
+      thinkingStrategy: 'provider-toggle',
+    });
+  });
+
+  it('F3: bare supportsThinking is passive on openai, enable-toggle on anthropic', () => {
+    vi.stubEnv('CUSTOM_BARE_OPENAI_API_KEY', 'test-key');
+    vi.stubEnv('CUSTOM_BARE_ANTHROPIC_API_KEY', 'test-key');
+
+    const openai = createCustomProvider({
+      name: 'bare-openai',
+      protocol: 'openai',
+      baseUrl: 'https://bare.example/v1',
+      apiKeyEnv: 'CUSTOM_BARE_OPENAI_API_KEY',
+      model: 'bare-model',
+      supportsThinking: true,
+    });
+    expect(openai.getReasoningProfile()).toBeUndefined();
+
+    const anthropic = createCustomProvider({
+      name: 'bare-anthropic',
+      protocol: 'anthropic',
+      baseUrl: 'https://bare.example/anthropic',
+      apiKeyEnv: 'CUSTOM_BARE_ANTHROPIC_API_KEY',
+      model: 'bare-model',
+      supportsThinking: true,
+    });
+    expect(anthropic.getReasoningProfile()).toMatchObject({
+      reasoningPreset: 'generic-thinking-toggle',
+      thinkingStrategy: 'provider-toggle',
+    });
   });
 
   it('creates custom provider reasoning profiles from reasoningPreset templates', () => {
@@ -214,17 +278,21 @@ describe('custom providers', () => {
     expect(profile?.supportsReasoningEffort).toBe(true);
   });
 
-  it('derives the anthropic wire strategy from protocol for the friendly form', () => {
+  it('B1: friendly form on anthropic-compat maps to enabled+reasoning_effort (non-Claude), not adaptive', () => {
     vi.stubEnv('CUSTOM_SIMPLE_ANT_API_KEY', 'test-key');
     const provider = createCustomProvider({
       name: 'custom-simple-ant',
       protocol: 'anthropic',
       baseUrl: 'https://simple-ant.example',
       apiKeyEnv: 'CUSTOM_SIMPLE_ANT_API_KEY',
-      model: 'claude-simple',
+      model: 'glm-simple',
       reasoning: { efforts: ['low', 'high'], default: 'high' },
     });
-    expect(provider.getReasoningProfile()?.effortStrategy).toBe('anthropic-output-effort');
+    // Non-Claude anthropic-compat endpoints (zhipu/deepseek) take {type:'enabled'} +
+    // reasoning_effort, not Claude's adaptive shape. Disable still works via the
+    // provider-toggle thinkingStrategy.
+    expect(provider.getReasoningProfile()?.effortStrategy).toBe('anthropic-reasoning-effort');
+    expect(provider.getReasoningProfile()?.thinkingStrategy).toBe('provider-toggle');
   });
 
   it('maps reasoning: "none" to a disabled profile', () => {
@@ -317,12 +385,12 @@ describe('custom providers', () => {
     providers[0]!.capabilityProfile.mcpSupport = 'none';
     expect(getCustomProviderList()[0]!.capabilityProfile.mcpSupport).toBe('native');
 
+    // F3: openai-compat native-toggle is passive — no profile synthesized (KodaX
+    // must not inject the Anthropic-shaped thinking object that OpenAI relays reject).
+    // The capability label is still surfaced; the wire stays clean.
     expect(getCustomModelCapabilities('custom-openai', 'custom-main')).toMatchObject({
       reasoningCapability: 'native-toggle',
-      reasoningProfile: {
-        reasoningPreset: 'generic-thinking-toggle',
-        effortStrategy: 'provider-toggle',
-      },
+      reasoningProfile: undefined,
       thinkingBudgetCap: 2048,
     });
     expect(getCustomModelCapabilities('custom-anthropic', 'claude-custom')).toMatchObject({
@@ -561,6 +629,43 @@ describe('custom providers', () => {
     expect(provider.getModel()).toBe('gpt-5.3-codex');
     expect(warnSpy).toHaveBeenCalledWith(
       expect.stringContaining('shadows a built-in provider'),
+    );
+  });
+
+  it('F2: warns when reasoningCapability is set but supportsThinking is false (ignored)', () => {
+    vi.stubEnv('CUSTOM_F2_API_KEY', 'test-key');
+    const warnSpy = vi.spyOn(console, 'warn').mockImplementation(() => {});
+
+    registerCustomProviders([{
+      name: 'f2-contradiction',
+      protocol: 'openai',
+      baseUrl: 'https://f2.example/v1',
+      apiKeyEnv: 'CUSTOM_F2_API_KEY',
+      model: 'f2-model',
+      supportsThinking: false,
+      reasoningCapability: 'native-toggle',
+    }]);
+
+    expect(warnSpy).toHaveBeenCalledWith(
+      expect.stringContaining('is ignored because supportsThinking is false'),
+    );
+  });
+
+  it('F2: does NOT warn on a bare supportsThinking:true config (valid default)', () => {
+    vi.stubEnv('CUSTOM_F2OK_API_KEY', 'test-key');
+    const warnSpy = vi.spyOn(console, 'warn').mockImplementation(() => {});
+
+    registerCustomProviders([{
+      name: 'f2-ok',
+      protocol: 'openai',
+      baseUrl: 'https://f2ok.example/v1',
+      apiKeyEnv: 'CUSTOM_F2OK_API_KEY',
+      model: 'f2ok-model',
+      supportsThinking: true,
+    }]);
+
+    expect(warnSpy).not.toHaveBeenCalledWith(
+      expect.stringContaining('is ignored because supportsThinking is false'),
     );
   });
 

@@ -491,6 +491,16 @@ export abstract class KodaXOpenAICompatProvider extends KodaXBaseProvider {
     if (this.suppressReasoningEffort) {
       return;
     }
+    // Part 2 degradation rung (mirrors the anthropic ladder): the terminal 'none'
+    // attempt emits NO reasoning param, even when a reasoningProfile exists. An
+    // OpenAI-compat relay that rejected the profile's shape (thinking / reasoning_effort)
+    // then completes the turn param-free instead of re-applying the same rejected shape
+    // and hard-failing. reasoning_content is parsed unconditionally regardless. (native-
+    // effort/budget/toggle stay in the attempt ladder as the primary, so the profile is
+    // still applied first; only the post-rejection 'none' rung is param-free.)
+    if (capability === 'none') {
+      return;
+    }
     // The OpenAI SDK types do not expose provider-specific extensions like
     // Qwen's extra_body or Zhipu's thinking block, so we intentionally attach
     // those fields on the raw request object here.

@@ -973,6 +973,89 @@ export function loadConfig(): {
   return {};
 }
 
+/**
+ * F1 — first-launch onboarding. config.json must be STRICT JSON (no comments), so we
+ * cannot ship a self-documenting config.json. Instead, on first launch (no config.json
+ * yet) we write a heavily-commented `config.example.jsonc` REFERENCE file next to it.
+ * It is never loaded by KodaX — it exists purely so a new user can see the minimal
+ * fields and the inline guidance (especially custom-provider thinking/reasoning) and
+ * copy what they need into config.json.
+ *
+ * Returns the example path only when it was just created (so the caller can print a
+ * one-time pointer); returns undefined if config.json already exists, the example
+ * already exists, or the write failed. Never throws — a template-write failure must
+ * not block startup.
+ */
+export const KODAX_EXAMPLE_CONFIG_FILE = path.join(KODAX_DIR, 'config.example.jsonc');
+
+const EXAMPLE_CONFIG_JSONC = `// KodaX example configuration — copy what you need into config.json (in this same
+// folder). config.json must be STRICT JSON: no comments, no trailing commas. Most
+// settings also have a KODAX_* env var that overrides the file. Delete anything you
+// don't use; everything here is optional.
+{
+  // Default provider + model. Override live with /provider and /model.
+  // "provider": "deepseek",
+  // "model": "deepseek-v4",
+
+  // Reasoning effort for normal turns: off | auto | low | medium | high | xhigh | max.
+  // "effort": "high",
+
+  // Permission mode: "accept-edits" | "plan" | "auto".
+  // "permissionMode": "accept-edits",
+
+  // Custom providers — point KodaX at an OpenAI/Anthropic-compatible endpoint.
+  // "customProviders": [
+  //   {
+  //     "name": "my-relay",              // unique; do NOT reuse a built-in provider name
+  //     "protocol": "openai",            // "openai" or "anthropic" = the wire format the endpoint speaks
+  //     "baseUrl": "https://api.example.com/v1",
+  //     "apiKeyEnv": "MY_RELAY_API_KEY", // env var that holds the key (never put the key here)
+  //     "model": "deepseek/deepseek-v4",
+  //     "models": ["deepseek/deepseek-v4"],
+  //
+  //     // --- Thinking / reasoning (optional) ---
+  //     // For most NON-Claude models this single line is all you need:
+  //     "supportsThinking": true
+  //     //   openai-compat  : KodaX sends no thinking toggle and just shows whatever
+  //     //                    reasoning the model emits (deepseek/qwen/etc. via relays).
+  //     //   anthropic-compat: KodaX sends thinking:{type:"enabled"} — what the Anthropic
+  //     //                    endpoints of zhipu / kimi / minimax / deepseek expect.
+  //     //
+  //     // openai-compat MULTI-TURN: some models (notably DeepSeek V4) reject later turns
+  //     // whose history drops the previous reasoning_content. If thinking shows on turn 1
+  //     // but turn 2 errors, also set: "replayReasoningContent": true
+  //     //
+  //     // To expose a TUNABLE effort level, use "reasoning" instead. Include "off" to
+  //     // allow disabling thinking:
+  //     // "reasoning": { "efforts": ["off", "low", "high"], "default": "high" }
+  //     //
+  //     // Pointing anthropic-compat at REAL Claude (4.6+)? Claude needs ADAPTIVE
+  //     // thinking, not the enable toggle — set instead:
+  //     // "reasoningCapability": "native-adaptive"
+  //   }
+  // ],
+
+  // MCP servers (stdio or remote). See the /mcp command and manual topic "mcp".
+  // "mcpServers": {}
+}
+`;
+
+export function ensureExampleConfigFile(): string | undefined {
+  try {
+    if (fsSync.existsSync(KODAX_CONFIG_FILE)) {
+      return undefined;
+    }
+    if (fsSync.existsSync(KODAX_EXAMPLE_CONFIG_FILE)) {
+      return undefined;
+    }
+    fsSync.mkdirSync(KODAX_DIR, { recursive: true });
+    fsSync.writeFileSync(KODAX_EXAMPLE_CONFIG_FILE, EXAMPLE_CONFIG_JSONC, 'utf-8');
+    return KODAX_EXAMPLE_CONFIG_FILE;
+  } catch {
+    return undefined;
+  }
+}
+
 function applyResilienceRuntimeEnv(config: ReturnType<typeof loadConfig>): void {
   // streamIdleTimeoutMs: config.json → env var → read by resilience/config.ts
   // Env var takes precedence over config.json (set first, check before overwrite).

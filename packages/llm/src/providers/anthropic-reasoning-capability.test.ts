@@ -205,6 +205,85 @@ describe('anthropic reasoning capability', () => {
     });
   });
 
+  it('Part 2: a rejected profile wire shape degrades to a param-free retry (no hard fail)', async () => {
+    const create = vi
+      .fn()
+      .mockRejectedValueOnce(new Error('unsupported parameter: thinking'))
+      .mockResolvedValueOnce(createCompletedAnthropicStream());
+    const provider = new TestAnthropicProvider('native-toggle', {
+      messages: { create },
+    }, {
+      reasoningProfile: {
+        effortStrategy: 'anthropic-reasoning-effort',
+        thinkingStrategy: 'provider-toggle',
+        defaultEffort: 'high',
+        supportedEfforts: [{ value: 'high', isDefault: true }],
+        supportsReasoningEffort: true,
+      },
+    });
+
+    await provider.stream(MESSAGES, TOOLS, 'system', reasoning);
+
+    expect(create).toHaveBeenCalledTimes(2);
+    // Primary attempt applies the profile shape (enabled + reasoning_effort).
+    expect(create.mock.calls[0]?.[0].thinking).toEqual({ type: 'enabled' });
+    expect(create.mock.calls[0]?.[0].reasoning_effort).toBe('high');
+    // Degradation rung drops ALL reasoning params — the turn completes instead of 400.
+    expect(create.mock.calls[1]?.[0]).not.toHaveProperty('thinking');
+    expect(create.mock.calls[1]?.[0]).not.toHaveProperty('reasoning_effort');
+  });
+
+  it('B1: anthropic-reasoning-effort sends {type:enabled} + reasoning_effort, not adaptive', async () => {
+    const create = vi.fn().mockResolvedValue(createCompletedAnthropicStream());
+    const provider = new TestAnthropicProvider('native-effort', {
+      messages: { create },
+    }, {
+      reasoningProfile: {
+        effortStrategy: 'anthropic-reasoning-effort',
+        thinkingStrategy: 'provider-toggle',
+        defaultEffort: 'high',
+        supportedEfforts: [{ value: 'low' }, { value: 'high', isDefault: true }],
+        supportsReasoningEffort: true,
+      },
+    });
+
+    await provider.stream(MESSAGES, TOOLS, 'system', reasoning);
+
+    const kwargs = create.mock.calls[0]?.[0];
+    // Non-Claude shape: enabled + reasoning_effort, never adaptive / budget_tokens.
+    expect(kwargs.thinking).toEqual({ type: 'enabled' });
+    expect(kwargs.thinking).not.toHaveProperty('budget_tokens');
+    expect(kwargs).not.toHaveProperty('output_config');
+    expect(kwargs.reasoning_effort).toBe('high');
+  });
+
+  it('B1: anthropic-reasoning-effort disables via {type:disabled} for the off rung', async () => {
+    const create = vi.fn().mockResolvedValue(createCompletedAnthropicStream());
+    const provider = new TestAnthropicProvider('native-effort', {
+      messages: { create },
+    }, {
+      reasoningProfile: {
+        effortStrategy: 'anthropic-reasoning-effort',
+        thinkingStrategy: 'provider-toggle',
+        supportedEfforts: [{ value: 'none' }, { value: 'high', isDefault: true }],
+        disabledEfforts: ['none'],
+        supportsDisabledThinking: true,
+        supportsReasoningEffort: true,
+      },
+    });
+
+    await provider.stream(MESSAGES, TOOLS, 'system', {
+      enabled: true,
+      effort: 'none',
+      taskType: 'plan',
+      executionMode: 'planning',
+    });
+
+    const kwargs = create.mock.calls[0]?.[0];
+    expect(kwargs.thinking).toEqual({ type: 'disabled' });
+    expect(kwargs).not.toHaveProperty('reasoning_effort');
+  });
+
   it('caps reasoning profile budgetByEffort values with thinkingBudgetCap for native-budget providers', async () => {
     const create = vi.fn().mockResolvedValue(createCompletedAnthropicStream());
     const provider = new TestAnthropicProvider('native-budget', {

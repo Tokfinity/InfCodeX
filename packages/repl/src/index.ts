@@ -67,6 +67,7 @@ export {
   isProviderConfigured,
   hydrateProcessEnvFromShell,
   loadConfig,
+  ensureExampleConfigFile,
   prepareRuntimeConfig,
   registerConfiguredCustomProviders,
   saveConfig,
@@ -75,6 +76,7 @@ export {
   KODAX_DIR,
   KODAX_SESSIONS_DIR,
   KODAX_CONFIG_FILE,
+  KODAX_EXAMPLE_CONFIG_FILE,
   PREVIEW_MAX_LENGTH,
 } from "./common/utils.js";
 

@@ -313,6 +313,20 @@ export abstract class KodaXAnthropicCompatProvider extends KodaXBaseProvider {
       return;
     }
 
+    if (capability.effortStrategy === 'anthropic-reasoning-effort') {
+      // Non-Claude anthropic-compat endpoints (zhipu/deepseek style) enable thinking
+      // via {type:'enabled'} + a top-level reasoning_effort — NOT Claude's adaptive +
+      // output_config.effort. This is the friendly `reasoning:{efforts}` wire shape on
+      // anthropic-compat (B1), mirroring the built-in zai-glm-5.2 preset. Disable is
+      // handled by the provider-toggle intent.disabled block above (thinkingStrategy
+      // stays 'provider-toggle').
+      params.thinking = { type: 'enabled' } as Anthropic.Messages.ThinkingConfigParam;
+      if (intent.effort) {
+        rawParams.reasoning_effort = intent.effort;
+      }
+      return;
+    }
+
     if (
       capability.effortStrategy === 'anthropic-output-effort' ||
       capability.thinkingStrategy === 'anthropic-adaptive'
@@ -493,19 +507,35 @@ export abstract class KodaXAnthropicCompatProvider extends KodaXBaseProvider {
       const initialCapability = normalizedReasoning.enabled
         ? this.getReasoningCapability(model)
         : 'none';
-      const attempts: Array<'native-budget' | 'native-toggle' | 'native-adaptive' | 'none'> = normalizedReasoning.enabled
-        ? this.getReasoningFallbackChain(initialCapability)
-            .filter((capability): capability is 'native-budget' | 'native-toggle' | 'native-adaptive' | 'none' =>
-              capability === 'native-budget' ||
-              capability === 'native-toggle' ||
-              capability === 'native-adaptive' ||
-              capability === 'none',
-            )
-        : ['none'];
+      const reasoningProfile = this.getReasoningProfile(model);
+      // Reasoning attempt ladder. A reasoningProfile (custom providers, the friendly
+      // reasoning:{efforts} form, built-in presets) owns the wire shape, so it is tried
+      // as the 'profile' primary attempt. Every ladder ends in a 'none' rung that emits
+      // NO reasoning param, so a relay/endpoint that rejects the chosen shape still
+      // completes the turn (degraded: no active thinking request) instead of hard-
+      // failing — reasoning_content is parsed regardless if the model reasons by default
+      // (Part 2 degradation safety net). Previously a profile was re-applied on every
+      // rung (capability ignored), so the ladder never actually degraded.
+      const attempts: Array<'profile' | 'native-budget' | 'native-toggle' | 'native-adaptive' | 'none'> =
+        reasoningProfile
+          // A profile owns the wire shape for BOTH enabled and disabled reasoning
+          // (applyReasoningProfile emits the {type:'disabled'} off-shape itself for
+          // provider-toggle profiles), so it is always the primary attempt; 'none' is
+          // purely the degradation rung that drops params after a rejection.
+          ? ['profile', 'none']
+          : !normalizedReasoning.enabled
+            ? ['none']
+            : this.getReasoningFallbackChain(initialCapability)
+                .filter((capability): capability is 'native-budget' | 'native-toggle' | 'native-adaptive' | 'none' =>
+                  capability === 'native-budget' ||
+                  capability === 'native-toggle' ||
+                  capability === 'native-adaptive' ||
+                  capability === 'none',
+                );
       let shouldForceToolChoice = Boolean(streamOptions?.forcedToolName);
 
       const buildRequest = (
-        capability: 'native-budget' | 'native-toggle' | 'native-adaptive' | 'none',
+        capability: 'profile' | 'native-budget' | 'native-toggle' | 'native-adaptive' | 'none',
       ): Anthropic.Messages.MessageCreateParams => {
         const kwargs: Anthropic.Messages.MessageCreateParams = {
           model,
@@ -522,8 +552,12 @@ export abstract class KodaXAnthropicCompatProvider extends KodaXBaseProvider {
           };
         }
 
-        const reasoningProfile = this.getReasoningProfile(model);
-        if (reasoningProfile) {
+        if (capability === 'none') {
+          // Part 2 degradation rung: emit NO reasoning param, even when a profile
+          // exists. Lets a relay/endpoint that rejected the profile's wire shape
+          // complete the turn; reasoning_content is still parsed if it reasons by
+          // default.
+        } else if (capability === 'profile' && reasoningProfile) {
           this.applyReasoningProfile(
             kwargs,
             reasoningProfile,
@@ -605,13 +639,15 @@ export abstract class KodaXAnthropicCompatProvider extends KodaXBaseProvider {
               continue;
             }
             const fallbackTerms =
-              capability === 'native-budget'
-                ? ['budget_tokens', 'thinking']
-                : capability === 'native-toggle'
-                  ? ['thinking']
-                  : capability === 'native-adaptive'
-                    ? ['adaptive', 'thinking']
-                    : [];
+              capability === 'profile'
+                ? ['thinking', 'reasoning_effort', 'budget_tokens', 'adaptive']
+                : capability === 'native-budget'
+                  ? ['budget_tokens', 'thinking']
+                  : capability === 'native-toggle'
+                    ? ['thinking']
+                    : capability === 'native-adaptive'
+                      ? ['adaptive', 'thinking']
+                      : [];
 
             if (!this.shouldFallbackForReasoningError(error, ...fallbackTerms)) {
               throw error;
@@ -906,19 +942,35 @@ export abstract class KodaXAnthropicCompatProvider extends KodaXBaseProvider {
       const initialCapability = normalizedReasoning.enabled
         ? this.getReasoningCapability(model)
         : 'none';
-      const attempts: Array<'native-budget' | 'native-toggle' | 'native-adaptive' | 'none'> = normalizedReasoning.enabled
-        ? this.getReasoningFallbackChain(initialCapability)
-            .filter((capability): capability is 'native-budget' | 'native-toggle' | 'native-adaptive' | 'none' =>
-              capability === 'native-budget' ||
-              capability === 'native-toggle' ||
-              capability === 'native-adaptive' ||
-              capability === 'none',
-            )
-        : ['none'];
+      const reasoningProfile = this.getReasoningProfile(model);
+      // Reasoning attempt ladder. A reasoningProfile (custom providers, the friendly
+      // reasoning:{efforts} form, built-in presets) owns the wire shape, so it is tried
+      // as the 'profile' primary attempt. Every ladder ends in a 'none' rung that emits
+      // NO reasoning param, so a relay/endpoint that rejects the chosen shape still
+      // completes the turn (degraded: no active thinking request) instead of hard-
+      // failing — reasoning_content is parsed regardless if the model reasons by default
+      // (Part 2 degradation safety net). Previously a profile was re-applied on every
+      // rung (capability ignored), so the ladder never actually degraded.
+      const attempts: Array<'profile' | 'native-budget' | 'native-toggle' | 'native-adaptive' | 'none'> =
+        reasoningProfile
+          // A profile owns the wire shape for BOTH enabled and disabled reasoning
+          // (applyReasoningProfile emits the {type:'disabled'} off-shape itself for
+          // provider-toggle profiles), so it is always the primary attempt; 'none' is
+          // purely the degradation rung that drops params after a rejection.
+          ? ['profile', 'none']
+          : !normalizedReasoning.enabled
+            ? ['none']
+            : this.getReasoningFallbackChain(initialCapability)
+                .filter((capability): capability is 'native-budget' | 'native-toggle' | 'native-adaptive' | 'none' =>
+                  capability === 'native-budget' ||
+                  capability === 'native-toggle' ||
+                  capability === 'native-adaptive' ||
+                  capability === 'none',
+                );
       let shouldForceToolChoice = Boolean(streamOptions?.forcedToolName);
 
       const buildRequest = (
-        capability: 'native-budget' | 'native-toggle' | 'native-adaptive' | 'none',
+        capability: 'profile' | 'native-budget' | 'native-toggle' | 'native-adaptive' | 'none',
       ): Anthropic.Messages.MessageCreateParams => {
         const kwargs: Anthropic.Messages.MessageCreateParams = {
           model,
@@ -934,8 +986,12 @@ export abstract class KodaXAnthropicCompatProvider extends KodaXBaseProvider {
           };
         }
 
-        const reasoningProfile = this.getReasoningProfile(model);
-        if (reasoningProfile) {
+        if (capability === 'none') {
+          // Part 2 degradation rung: emit NO reasoning param, even when a profile
+          // exists. Lets a relay/endpoint that rejected the profile's wire shape
+          // complete the turn; reasoning_content is still parsed if it reasons by
+          // default.
+        } else if (capability === 'profile' && reasoningProfile) {
           this.applyReasoningProfile(
             kwargs,
             reasoningProfile,
@@ -990,13 +1046,15 @@ export abstract class KodaXAnthropicCompatProvider extends KodaXBaseProvider {
               continue;
             }
             const fallbackTerms =
-              capability === 'native-budget'
-                ? ['budget_tokens', 'thinking']
-                : capability === 'native-toggle'
-                  ? ['thinking']
-                  : capability === 'native-adaptive'
-                    ? ['adaptive', 'thinking']
-                    : [];
+              capability === 'profile'
+                ? ['thinking', 'reasoning_effort', 'budget_tokens', 'adaptive']
+                : capability === 'native-budget'
+                  ? ['budget_tokens', 'thinking']
+                  : capability === 'native-toggle'
+                    ? ['thinking']
+                    : capability === 'native-adaptive'
+                      ? ['adaptive', 'thinking']
+                      : [];
 
             if (!this.shouldFallbackForReasoningError(error, ...fallbackTerms)) {
               throw error;

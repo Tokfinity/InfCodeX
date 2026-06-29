@@ -90,15 +90,27 @@ function legacyReasoningPresetForProtocol(
     case 'prompt-only':
       return 'none';
     case 'native-toggle':
-      return 'generic-thinking-toggle';
+      // anthropic-compat: bare thinking:{type:'enabled'} is the correct non-Claude
+      // shape (matches the built-in zhipu/kimi/minimax presets). openai-compat: there
+      // is no portable thinking-toggle wire param — the Anthropic-shaped
+      // thinking:{type:'enabled'} that generic-thinking-toggle would emit is
+      // rejected/ignored by OpenAI-style relays (the v0.7.57 relay-deepseek
+      // regression). Stay passive there: no profile → the name-gated capability
+      // switch sends nothing for a custom (non-qwen/zhipu) provider, and
+      // reasoning_content is parsed unconditionally regardless.
+      return protocol === 'anthropic' ? 'generic-thinking-toggle' : undefined;
     case 'native-budget':
       return protocol === 'anthropic' ? 'anthropic-budget' : 'qwen-hybrid-thinking';
     case 'native-effort':
       return protocol === 'anthropic' ? 'claude-adaptive-max' : 'openai-chat-reasoning';
     case 'native-adaptive':
-      return protocol === 'anthropic' ? 'claude-adaptive-max' : 'generic-thinking-toggle';
+      // openai-compat has no portable adaptive wire param; stay passive there too.
+      return protocol === 'anthropic' ? 'claude-adaptive-max' : undefined;
     default:
-      return supportsThinking === true ? 'generic-thinking-toggle' : undefined;
+      // Bare supportsThinking with no explicit capability: anthropic-compat keeps the
+      // non-Claude enable toggle; openai-compat stays passive (see native-toggle).
+      if (supportsThinking !== true) return undefined;
+      return protocol === 'anthropic' ? 'generic-thinking-toggle' : undefined;
   }
 }
 
@@ -134,7 +146,13 @@ function buildReasoningProfileFromSimple(
     value === defaultWire ? { value, isDefault: true } : { value },
   );
   return {
-    effortStrategy: protocol === 'anthropic' ? 'anthropic-output-effort' : 'openai-chat-effort',
+    // anthropic-compat: most anthropic-compatible endpoints front NON-Claude models
+    // (zhipu/kimi/minimax/deepseek), whose thinking dialect is {type:'enabled'} +
+    // reasoning_effort — NOT Claude's adaptive + output_config.effort. Map the friendly
+    // form there so those models get thinking-on + a tunable effort (B1). A real-Claude
+    // anthropic-compat endpoint instead wants adaptive: configure an explicit
+    // reasoningProfile (effortStrategy:'anthropic-output-effort') for that case.
+    effortStrategy: protocol === 'anthropic' ? 'anthropic-reasoning-effort' : 'openai-chat-effort',
     thinkingStrategy: 'provider-toggle',
     ...(defaultWire !== undefined ? { defaultEffort: defaultWire } : {}),
     supportedEfforts,
