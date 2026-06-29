@@ -480,6 +480,7 @@ function buildBundle(childId: string, input: WorkflowSpawnAgentInput): KodaXChil
     ...(input.modelHint ? { modelHint: input.modelHint } : {}),
     ...(input.isolation ? { isolation: input.isolation } : {}),
     ...(input.subagentType ? { specialistName: input.subagentType } : {}),
+    ...(input.outputSchema !== undefined ? { outputSchema: input.outputSchema } : {}),
   };
 }
 
@@ -498,6 +499,7 @@ function deriveTerminal(
   limitReached?: boolean;
   provider?: string;
   model?: string;
+  structured?: unknown;
 } {
   if (result.cancelledChildren.includes(taskId)) {
     return { status: 'stopped', snapStatus: 'aborted', finalText: '' };
@@ -515,6 +517,7 @@ function deriveTerminal(
       ...(child.limitReached ? { limitReached: true } : {}),
       ...(child.provider ? { provider: child.provider } : {}),
       ...(child.model ? { model: child.model } : {}),
+      ...(child.structured !== undefined ? { structured: child.structured } : {}),
     };
   }
   return {
@@ -794,6 +797,7 @@ export function createCodingWorkflowBackend(deps: CodingWorkflowBackendDeps): Wo
       ...(term.limitReached ? { limitReached: true } : {}),
       ...(term.provider ? { provider: term.provider } : {}),
       ...(term.model ? { model: term.model } : {}),
+      ...(term.structured !== undefined ? { structured: term.structured } : {}),
       usage: { totalTokens: totalTokensUsed },
     };
   };

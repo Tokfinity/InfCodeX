@@ -99,6 +99,46 @@ describe('createCodingWorkflowBackend — spawn + wait', () => {
     expect(result.name).toBe('security');
   });
 
+  it('surfaces a child structured output on the workflow result (FEATURE_246 Part B)', async () => {
+    const backend = createCodingWorkflowBackend({
+      ctx: fakeCtx(),
+      childOptions,
+      runChild: async () => execResult({
+        status: 'completed',
+        summary: 'report',
+        structured: { lens: 'correctness', findings: [{ severity: 'high', title: 'x' }] },
+      }),
+      generateId: () => 'task-s',
+    });
+    const handle = await backend.spawn({
+      name: 'review',
+      prompt: 'review',
+      readOnly: true,
+      outputSchema: { type: 'object', required: ['lens'], properties: { lens: { type: 'string' } } },
+    });
+    const result = await backend.wait(handle.taskId);
+    expect(result.structured).toEqual({
+      lens: 'correctness',
+      findings: [{ severity: 'high', title: 'x' }],
+    });
+  });
+
+  it('passes outputSchema into the child bundle (FEATURE_246 Part B)', async () => {
+    let seenSchema: unknown;
+    const backend = createCodingWorkflowBackend({
+      ctx: fakeCtx(),
+      childOptions,
+      runChild: async (bundles) => {
+        seenSchema = bundles[0]?.outputSchema;
+        return execResult({ status: 'completed', summary: 'ok' });
+      },
+    });
+    const schema = { type: 'object', required: ['x'], properties: { x: { type: 'string' } } };
+    const handle = await backend.spawn({ name: 'r', prompt: 'p', readOnly: true, outputSchema: schema });
+    await backend.wait(handle.taskId);
+    expect(seenSchema).toEqual(schema);
+  });
+
   it('maps a failed child to status=failed', async () => {
     const backend = createCodingWorkflowBackend({
       ctx: fakeCtx(),

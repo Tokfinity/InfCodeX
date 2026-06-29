@@ -230,6 +230,7 @@ function readSpawnAgentInput(value: unknown, label: string): WorkflowSpawnAgentI
     isolation?: WorkflowSpawnAgentInput['isolation'];
     evidenceRefs?: readonly string[];
     verification?: WorkflowTaskVerification;
+    outputSchema?: unknown;
   } = {
     name: readNonEmptyField(record, 'name', label),
     prompt: readNonEmptyField(record, 'prompt', label),
@@ -260,6 +261,10 @@ function readSpawnAgentInput(value: unknown, label: string): WorkflowSpawnAgentI
   }
   if (record.verification !== undefined) {
     input.verification = readTaskVerification(record.verification, `${label} verification`);
+  }
+  if (record.outputSchema !== undefined) {
+    // Opaque JSON Schema — validated downstream by the coding backend, not here.
+    input.outputSchema = record.outputSchema;
   }
   return input;
 }

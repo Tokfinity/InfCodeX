@@ -727,6 +727,13 @@ export interface KodaXChildContextBundle {
   model?: string;
   /** Optional per-dispatch reasoning effort. Omit to inherit the parent effort. */
   effort?: KodaXWireReasoningEffort;
+  /**
+   * FEATURE_246 Part B — optional JSON Schema (opaque) for the child's
+   * structured output. When set, the child briefing asks for a fenced JSON
+   * block matching it; the child executor parses + validates the result (with
+   * one bounded repair turn) and surfaces it on `KodaXChildAgentResult.structured`.
+   */
+  outputSchema?: unknown;
 }
 
 /**
@@ -775,6 +782,13 @@ export interface KodaXChildAgentResult {
    * and consumed by dispatch-child-tasks' empty-summary fallback.
    */
   interrupted?: boolean;
+  /**
+   * FEATURE_246 Part B — schema-validated structured output parsed from the
+   * child's final text (present only when the bundle carried `outputSchema`
+   * and a JSON value was parseable). Surfaced to the workflow runtime as
+   * `WorkflowTaskResult.structured`.
+   */
+  structured?: unknown;
 }
 
 export interface KodaXParentReductionContract {

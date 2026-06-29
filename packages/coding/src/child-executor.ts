@@ -32,6 +32,11 @@ import { invokeChildWithFallback } from './child-fallback.js';
 import { toolWorktreeCreate, toolWorktreeRemove } from './tools/worktree.js';
 import { loadAgentsFiles, formatAgentsForPrompt } from './context/agents-loader.js';
 import { uniqueBareInlineSlashNames, uniqueInlineSkillNames } from './skill-references.js';
+import {
+  buildStructuredOutputInstruction,
+  buildStructuredOutputRepairPrompt,
+  evaluateStructuredOutput,
+} from './workflows/structured-output.js';
 // FEATURE_120 v0.7.39 Step 0d (Option D) — generic fan-out lifted to
 // @kodax-ai/agent (ADR-021). All coding-side concerns (read vs write,
 // worktree isolation, briefing, role policy) stay below; the wrapper
@@ -710,6 +715,88 @@ function scheduleWorkflowChildDigest(
   });
 }
 
+const STRUCTURED_OUTPUT_REPAIR_SYSTEM_PROMPT = [
+  'You are re-formatting your own just-completed report into the JSON a parent workflow requires.',
+  'Do not use tools. Do not continue investigation. Output only the JSON block.',
+].join('\n');
+
+const STRUCTURED_OUTPUT_REPAIR_TIMEOUT_MS = 15_000;
+
+/**
+ * FEATURE_246 Part B — resolve a child's structured output against its declared
+ * `outputSchema`. Parses + validates the child's final text; on a hard miss
+ * (no JSON / parse error / schema violation) runs ONE bounded repair turn that
+ * re-asks for the JSON only (seeded with the child's transcript, no tools —
+ * the same one-turn self-distill shape as the workflow digest). Best-effort:
+ * returns the parsed object when available, else `undefined`. Never throws and
+ * never changes the child's terminal status.
+ */
+async function resolveChildStructuredOutput(input: {
+  readonly runFn: RunKodaXFn;
+  readonly result: KodaXResult;
+  readonly provider: string;
+  readonly model?: string;
+  readonly effort?: KodaXWireReasoningEffort;
+  readonly scopeCtx: KodaXToolExecutionContext;
+  readonly bundle: KodaXChildContextBundle;
+  readonly options: ChildExecutorOptions;
+}): Promise<unknown> {
+  const schema = input.bundle.outputSchema;
+  if (schema === undefined) return undefined;
+
+  const first = evaluateStructuredOutput(input.result.lastText, schema);
+  if (first.ok) return first.value;
+
+  // Only attempt repair for a child that genuinely completed; an aborted or
+  // interrupted child must not trigger another LLM turn.
+  if (
+    input.options.abortSignal?.aborted === true ||
+    input.result.success !== true ||
+    input.result.interrupted === true
+  ) {
+    return first.value;
+  }
+
+  const controller = new AbortController();
+  const onParentAbort = (): void => controller.abort();
+  input.options.abortSignal?.addEventListener('abort', onParentAbort);
+  const timer = setTimeout(() => controller.abort(), STRUCTURED_OUTPUT_REPAIR_TIMEOUT_MS);
+  try {
+    const repairRun = await input.runFn(
+      {
+        provider: input.provider,
+        ...(input.model ? { model: input.model } : {}),
+        effort: input.effort ?? input.options.parentOptions.effort,
+        reasoningMode: input.options.parentOptions.reasoningMode,
+        agentMode: 'sa',
+        maxIter: 1,
+        abortSignal: controller.signal,
+        extensionRuntime: input.options.parentOptions.extensionRuntime,
+        guardrails: input.options.guardrails,
+        session: { initialMessages: input.result.messages },
+        context: {
+          gitRoot: input.scopeCtx.gitRoot,
+          executionCwd: input.scopeCtx.executionCwd ?? input.scopeCtx.gitRoot,
+          ...inheritRepoIntelligenceContext(input.options),
+          systemPromptOverride: STRUCTURED_OUTPUT_REPAIR_SYSTEM_PROMPT,
+          excludeTools: getAllRegisteredTools().map((tool) => tool.name),
+          currentAgentId: input.bundle.id,
+          parentAgentId: input.scopeCtx.currentAgentId,
+          inheritedChildTaskRegistry: input.scopeCtx.childTaskRegistry,
+        },
+      },
+      buildStructuredOutputRepairPrompt(first.errors, schema),
+    );
+    const repaired = evaluateStructuredOutput(repairRun.lastText, schema);
+    return repaired.value ?? first.value;
+  } catch {
+    return first.value;
+  } finally {
+    clearTimeout(timer);
+    input.options.abortSignal?.removeEventListener('abort', onParentAbort);
+  }
+}
+
 function resolveSpecialistOverride(
   bundle: KodaXChildContextBundle,
   defaultSystemPrompt: string,
@@ -912,6 +999,7 @@ async function runReadChildBody(
           timeoutMs: WORKFLOW_CHILD_DIGEST_BLOCKING_TIMEOUT_MS,
         });
     if (runDigestAsync) scheduleWorkflowChildDigest(digestInput);
+    const structured = await resolveChildStructuredOutput(digestInput);
     childResult = extractChildResult(
       bundle,
       annotateWorktreeSummary(result.lastText, scope),
@@ -928,6 +1016,7 @@ async function runReadChildBody(
         digestPending: runDigestAsync,
         provider,
         model,
+        structured,
       },
     );
   } catch (error) {
@@ -1096,6 +1185,7 @@ async function runWriteChildBody(
         });
     if (runDigestAsync) scheduleWorkflowChildDigest(digestInput);
 
+    const structured = await resolveChildStructuredOutput(digestInput);
     childResult = extractChildResult(
       bundle,
       annotateWorktreeSummary(result.lastText, scope),
@@ -1112,6 +1202,7 @@ async function runWriteChildBody(
         digestPending: runDigestAsync,
         provider,
         model,
+        structured,
       },
     );
   } catch (error) {
@@ -1222,6 +1313,12 @@ async function buildChildBriefing(
     `- Specific recommendations`,
     `Do NOT call any more tools in your final response.`,
   );
+
+  // FEATURE_246 Part B — when the workflow requested a structured result, the
+  // schema instruction comes LAST so it is the final framing the child reads.
+  if (bundle.outputSchema !== undefined) {
+    parts.push(``, buildStructuredOutputInstruction(bundle.outputSchema));
+  }
 
   return parts.join('\n');
 }
@@ -1715,6 +1812,7 @@ interface ExtractChildResultMeta {
   readonly digestPending?: boolean;
   readonly provider?: string;
   readonly model?: string;
+  readonly structured?: unknown;
 }
 
 function extractMutationArtifactPaths(result: KodaXResult): readonly string[] {
@@ -1756,6 +1854,7 @@ function extractChildResult(
     ...(meta.digestPending ? { digestPending: true } : {}),
     ...(meta.provider ? { provider: meta.provider } : {}),
     ...(meta.model ? { model: meta.model } : {}),
+    ...(meta.structured !== undefined ? { structured: meta.structured } : {}),
     interrupted: meta.interrupted,
     ...(meta.limitReached ? { limitReached: true } : {}),
   };

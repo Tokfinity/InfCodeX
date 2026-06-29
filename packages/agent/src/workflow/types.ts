@@ -64,6 +64,15 @@ export interface WorkflowSpawnAgentInput {
   readonly evidenceRefs?: readonly string[];
   /** Optional machine-checkable postconditions for this child task. */
   readonly verification?: WorkflowTaskVerification;
+  /**
+   * Optional JSON Schema (FEATURE_246 Part B). When set, the child is asked to
+   * end with a fenced JSON block matching the schema; the backend parses and
+   * validates it (with one bounded repair turn on a hard miss) and returns the
+   * parsed object on `WorkflowTaskResult.structured`. Orthogonal to
+   * `verification` (which checks side-effects, not return shape). Carried as an
+   * opaque value so the agent layer needs no JSON-Schema dependency.
+   */
+  readonly outputSchema?: unknown;
 }
 
 /** Returned by `spawnAgent` — the child is in-flight, not yet complete. */
@@ -92,6 +101,10 @@ export interface WorkflowTaskResult {
   readonly name: string;
   readonly status: WorkflowTaskStatus;
   readonly finalText: string;
+  /** Schema-validated structured result (FEATURE_246 Part B), present when the
+   *  spawn carried `outputSchema` and a JSON value was parsed from the child's
+   *  output. The workflow script consumes it directly (e.g. `result.structured`). */
+  readonly structured?: unknown;
   /** Short user-facing digest, separate from the full finalText used for synthesis/audit. */
   readonly digest?: string;
   /** True when a digest was attempted but failed (error/timeout/empty); the UI then labels the excerpt fallback. */
