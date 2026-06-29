@@ -3094,3 +3094,95 @@ are discoverable from the repo rather than re-derived later.
   retained as deliberate defense-in-depth; a future single-strategy unification,
   if undertaken, supersedes the REVERTED decision above and must preserve the
   alternation invariant established here.
+
+---
+
+## ADR-046: Workflow Run Management — Neutral Lifecycle Manager in `@kodax-ai/agent` via Dependency Inversion
+
+**Status**: Proposed (2026-06-29)
+
+> Extends [ADR-044](#adr-044-workflow-authoring-parity-with-the-claude-code-harness).
+> (ADR-045 was concurrently taken by the LLM-layer robustness batch; this is 046.)
+
+**Context**: "Start / manage a workflow run" (mint a run id, register the run,
+pause / resume / stop, track process events, settle terminal status) is a
+capability a *generic* agent should have — KodaX SDK customers explicitly need
+to host and manage workflow runs without the coding agent. Today the lifecycle
+core lives in `@kodax-ai/coding`
+([run-manager.ts](../packages/coding/src/workflows/run-manager.ts)) and the
+start-glue (mint run id + run dir, wire the manager) was hand-rolled in the REPL
+([workflow-command-builder.ts](../packages/repl/src/commands/workflow-command-builder.ts)
+`startGeneratedWorkflowFromRequest`). Two problems: (1) a coding-layer
+model-callable `run_workflow` tool (FEATURE_246 Part A) cannot reach a
+REPL-owned start path without a layer violation; (2) the lifecycle core is
+domain-neutral but trapped under coding, so non-coding SDK hosts can't use it.
+
+The natural worry is that lifting it to `@kodax-ai/agent` creates a cycle,
+because a run *executes* coding-specific things (the child-executor backend,
+run-graph fs persistence, git worktrees, `KodaXOptions`→backend). Investigation
+shows that coupling is **already inverted or trivially invertible**: the backend
+is the existing `WorkflowAgentBackend` *interface* (agent), persistence is just
+an `onEvent` subscriber, worktrees are caller finally-hooks, and the manager's
+own work (registry / pause-resume / process tracker / settle) touches none of
+them.
+
+**Decision**: Lift the **neutral lifecycle core** into
+`@kodax-ai/agent/workflow` as `createWorkflowRunManager`, keep every
+coding-specific concern in `@kodax-ai/coding` injected through ports. Arrows
+stay **coding → agent** only; agent never imports coding → no cycle.
+
+1. **Agent (neutral) — `createWorkflowRunManager` + `getDefaultWorkflowRunManager`.**
+   Owns the run registry, process tracker, abort controller, pause/resume/stop,
+   `subscribeWorkflowProcess`, `settle`. `start` is **generic over the run
+   outcome** and takes execution as an injected thunk — it never knows *how* a
+   run executes:
+   ```ts
+   start<TOutcome>(input: {
+     runId: string; workflow: string;
+     phases?; maxAgents?; plannedAgents?; tokenBudget?;
+     processMetadata?: WorkflowProcessMetadata;   // moved to agent (with the tracker)
+     signal?: AbortSignal;
+     runFn: (hooks: { onEvent; signal; beforeSpawn }) => Promise<TOutcome>;
+     classify: (outcome: TOutcome) => { status: 'completed'|'failed'|'denied'; error?; resultText? };
+     onError: (error: unknown) => TOutcome;
+   }): ManagedWorkflowRun<TOutcome>
+   ```
+   Depends only on agent-internal `runWorkflow`, `WorkflowEvent`,
+   `WorkflowAgentBackend` (interface), and the process tracker.
+
+2. **Coding (specific) — stays, injected via ports.** `createCodingWorkflowBackend`,
+   run-graph persistence (an `onEvent` subscriber + terminal `run.json`),
+   worktree sweep (caller finally-hooks), generator, discovery, invocation-policy,
+   runs-root, and the `KodaXOptions`→backend factory remain in coding. The coding
+   `WorkflowRunManager` becomes a **thin adapter** preserving its current API
+   (`start` / `startFromOptions` / list / pause / …) by building a `runFn` from
+   `runWorkflowModule` / `runWorkflowFromOptions` and delegating lifecycle to the
+   agent manager. **No coding caller signature changes.**
+
+3. **REPL (UI).** `/workflow` + the AMAW intercept call a coding host entrypoint
+   (`startManagedWorkflow`, FEATURE_246 Part A1) instead of hand-rolling
+   run-id / run-dir / manager wiring; the REPL keeps only approval rendering +
+   progress.
+
+**Why no cycle (checked):** the agent manager imports only `./runtime`,
+`./events`, `./process`, `./types` (all agent-internal). The coding adapter
+imports `@kodax-ai/agent` + the coding backend/run-graph. Every edge points
+coding → agent; `madge` stays clean.
+
+**Scope boundaries (deliberately NOT moved):** `clampWorkflowLimits`,
+`SYSTEM_WORKFLOW_LIMITS`, `buildApprovalSummary`, and `WorkflowHostPolicy.autoStart`
+stay in coding — the neutral manager does not clamp limits or build approval
+summaries (its caller's `runFn` does). Only the run-process metadata *type*
+(`WorkflowProcessMetadata`) moves to agent, where the process tracker that
+consumes it already lives.
+
+**Consequences**:
+- A non-coding SDK host gets full run management from `@kodax-ai/agent` by
+  supplying its own `WorkflowAgentBackend` + an `onEvent` persistence subscriber.
+- The coding `run_workflow` tool (FEATURE_246 Part A) reaches the SAME lifecycle
+  via the coding host + `ctx.workflowHost`, no layer violation.
+- One-shot replacement, not a dual path (`no_parallel_refactor_paths`): coding's
+  `run-manager.ts` becomes an adapter in one move; existing `run-manager.test.ts`
+  / `workflow-command` tests stay green (parity), plus new agent-side manager
+  tests with a fake `runFn` (zero coding).
+- **No eval**: pure structural refactor, no LLM-facing prompt content changed.
