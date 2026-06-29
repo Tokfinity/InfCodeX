@@ -168,6 +168,13 @@ describe("tool-display", () => {
     )).toBe("mcp_call - mcp:local-fs:tool:read_file - args=2");
   });
 
+  it("formats skill summaries with the resolved skill name (FEATURE_246 review)", () => {
+    expect(formatToolSummary(
+      "skill",
+      { skill: "code-review", args: "--focus security" },
+    )).toBe("skill - code-review");
+  });
+
   it("collapses repeated tool calls into a single summary", () => {
     const groups = collapseToolCalls([
       {

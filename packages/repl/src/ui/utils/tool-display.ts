@@ -478,6 +478,18 @@ function summarizeToolDetails(toolName: string, input: ToolInputValue): string[]
     return parts;
   }
 
+  if (baseToolName === "skill") {
+    // FEATURE_246 (review): show WHICH skill the model invoked. Without this the
+    // model-launched `skill` tool renders a bare `skill` badge, while the /skill
+    // command shows a named card — surface the resolved skill name here too.
+    const skillName = readFirstString(record, "skill", "name")
+      ?? extractFieldFromPreview(preview, "skill");
+    if (skillName) {
+      parts.push(truncateValue(skillName, 64));
+    }
+    return parts;
+  }
+
   if (baseToolName === "mcp_search") {
     const query = readFirstString(record, "query")
       ?? extractFieldFromPreview(preview, "query");

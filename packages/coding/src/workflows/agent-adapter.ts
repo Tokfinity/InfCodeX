@@ -36,7 +36,7 @@ import type {
   WorkflowWaitOptions,
 } from '@kodax-ai/agent';
 
-import { executeChildAgents } from '../child-executor.js';
+import { executeChildAgents, assertValidWorkflowEvidenceRefs } from '../child-executor.js';
 import type { ChildExecutorOptions } from '../child-executor.js';
 import { assertSupportedOutputSchema } from './structured-output.js';
 import {
@@ -478,6 +478,11 @@ function buildBundle(childId: string, input: WorkflowSpawnAgentInput): KodaXChil
   if (input.outputSchema !== undefined) {
     assertSupportedOutputSchema(input.outputSchema);
   }
+  // FEATURE_246 (review): same fail-fast for evidenceRefs — a ref with no valid
+  // prefix (an agent name instead of task_id:<id>) would otherwise resolve to an
+  // "(unknown)" briefing fragment and silently degrade the child. Enforced on
+  // every spawn (generator + inline), not just the generator smoke dry-run.
+  assertValidWorkflowEvidenceRefs(input.name, input.evidenceRefs);
   return {
     id: childId,
     fanoutClass: 'evidence-scan',

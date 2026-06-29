@@ -1324,6 +1324,41 @@ async function buildChildBriefing(
 }
 
 /**
+ * Valid `evidenceRefs[]` prefixes. Source of truth is `resolveEvidenceRef` below
+ * (each branch handles one prefix); keep this list in sync with it.
+ */
+export const WORKFLOW_EVIDENCE_REF_PREFIXES = ['file:', 'diff:', 'finding:', 'task_id:'] as const;
+
+/**
+ * FEATURE_246 (review): validate an agent's `evidenceRefs` at SPAWN time, in the
+ * real runtime — not only in the generator's smoke dry-run. A ref with no valid
+ * prefix (the classic mistake `evidenceRefs: ["baseline"]`, where an agent NAME is
+ * used instead of `task_id:<that agent's result.taskId>`) otherwise passes static
+ * + runtime type checks and then resolves to a "(unknown)" briefing fragment — the
+ * child silently loses the intended context and the workflow author never finds
+ * out. Throwing here turns that silent quality loss into a loud spawn-time error
+ * the Worker sees as a tool error and can correct. Enforced on every path
+ * (generator + inline run_workflow).
+ */
+export function assertValidWorkflowEvidenceRefs(
+  agentName: string,
+  evidenceRefs: readonly string[] | undefined,
+): void {
+  for (const ref of evidenceRefs ?? []) {
+    if (!WORKFLOW_EVIDENCE_REF_PREFIXES.some((prefix) => ref.startsWith(prefix))) {
+      throw new Error(
+        `wf.runAgent("${agentName}") evidenceRefs entry "${ref}" is not a valid evidence reference. ` +
+          'Use one of: file:<path>, diff:<path>, finding:<text>, task_id:<id>. ' +
+          "To pass another agent's output, use \"task_id:\" + that agent's result.taskId — not its name.",
+      );
+    }
+    if (ref.startsWith('task_id:') && ref.slice('task_id:'.length).trim().length === 0) {
+      throw new Error(`wf.runAgent("${agentName}") evidenceRefs contains an empty "task_id:" reference.`);
+    }
+  }
+}
+
+/**
  * Exported for unit testing of the `evidence_refs[]` resolution contract
  * (FEATURE_199 + pre-existing `file:` / `diff:` / `finding:` regression
  * coverage). Not part of the SDK public surface — callers in production

@@ -39,6 +39,9 @@ const childExecutorMock = vi.hoisted(() => ({
 }));
 
 vi.mock('../child-executor.js', () => ({
+  // agent-adapter buildBundle calls this at spawn (FEATURE_246 review); the mock
+  // must export it or the call resolves to undefined and every spawn throws.
+  assertValidWorkflowEvidenceRefs: () => {},
   executeChildAgents: vi.fn(async (
     _bundles: unknown,
     _ctx: unknown,

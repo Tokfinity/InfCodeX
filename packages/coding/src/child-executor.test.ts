@@ -28,6 +28,7 @@ import {
   buildChildEvents,
   CHILD_AGENT_SYSTEM_PROMPT,
   CHILD_EXCLUDE_TOOLS_BASE,
+  assertValidWorkflowEvidenceRefs,
 } from './child-executor.js';
 import { clearAgentsLoaderCacheForTesting } from './context/agents-loader.js';
 import type { ChildExecutorOptions, WorkflowChildDigestUpdate } from './child-executor.js';
@@ -84,6 +85,29 @@ function deferred<T>(): {
   });
   return { promise, resolve };
 }
+
+describe('assertValidWorkflowEvidenceRefs (FEATURE_246 review — spawn-time evidenceRefs contract)', () => {
+  it('accepts the valid prefixes and an empty/undefined list', () => {
+    expect(() => assertValidWorkflowEvidenceRefs('a', undefined)).not.toThrow();
+    expect(() => assertValidWorkflowEvidenceRefs('a', [])).not.toThrow();
+    expect(() => assertValidWorkflowEvidenceRefs('a', [
+      'file:src/x.ts',
+      'diff:src/x.ts',
+      'finding:the cache is unbounded',
+      'task_id:wf-child-1',
+    ])).not.toThrow();
+  });
+
+  it('rejects a bare agent name used as an evidence ref (the silent-degradation case)', () => {
+    expect(() => assertValidWorkflowEvidenceRefs('verifier', ['baseline']))
+      .toThrow(/not a valid evidence reference|task_id:/);
+  });
+
+  it('rejects an empty task_id: reference', () => {
+    expect(() => assertValidWorkflowEvidenceRefs('v', ['task_id:   ']))
+      .toThrow(/empty "task_id:" reference/);
+  });
+});
 
 describe('executeChildAgents — guardrails propagation (FEATURE_092 phase 2b.7b slice D)', () => {
   beforeEach(() => {
