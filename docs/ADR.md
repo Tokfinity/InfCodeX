@@ -2861,11 +2861,17 @@ Axes (3) and (4) are **already owned** by
    "<NL>"` and non-interactive / low-capability hosts; it is not removed.
 
 2. **Add `outputSchema` to child spawn** (FEATURE_246). When present, the child is
-   given a forced structured-output tool and its result is schema-validated at the
-   tool-call layer (retry on mismatch); `WorkflowTaskResult` carries the validated
-   `structured` object alongside `finalText`. This is **orthogonal** to existing
-   `WorkflowTaskVerification` (which checks *side-effects* — did it write the
-   files), so both can apply to one child. KodaX ends up a superset:
+   asked to end with a fenced JSON block; after it completes the workflow layer
+   extracts, parses, and validates that block against a focused JSON-Schema subset
+   (`type` / `enum` / `required` / `properties` / `items` / `additionalProperties`)
+   and, on a hard miss, runs **one bounded repair turn** — this is the
+   **validate-and-repair** path (NOT a forced structured-output tool: coupling
+   validation to the actively-evolving provider tool-call parser was deliberately
+   rejected — see the "validate-and-repair vs forced-tool" note in
+   [FEATURE_246](features/v0.7.58.md)). `WorkflowTaskResult` carries the parsed
+   `structured` object alongside `finalText`. This is **orthogonal** to
+   existing `WorkflowTaskVerification` (which checks *side-effects* — did it write
+   the files), so both can apply to one child. KodaX ends up a superset:
    shape-validation **and** side-effect-validation, where Claude Code has only the
    former.
 
