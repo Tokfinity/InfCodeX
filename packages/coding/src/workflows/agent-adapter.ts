@@ -38,6 +38,7 @@ import type {
 
 import { executeChildAgents } from '../child-executor.js';
 import type { ChildExecutorOptions } from '../child-executor.js';
+import { assertSupportedOutputSchema } from './structured-output.js';
 import {
   initChildSnapshot,
   applyChildSnapshotEvent,
@@ -471,6 +472,12 @@ async function waitForChildPromise(
 }
 
 function buildBundle(childId: string, input: WorkflowSpawnAgentInput): KodaXChildContextBundle {
+  // FEATURE_246 Phase 2: fail fast at spawn if the declared outputSchema uses a
+  // keyword the subset validator can't honor — otherwise validation would be a
+  // silent no-op and the author would never know.
+  if (input.outputSchema !== undefined) {
+    assertSupportedOutputSchema(input.outputSchema);
+  }
   return {
     id: childId,
     fanoutClass: 'evidence-scan',

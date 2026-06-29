@@ -1,6 +1,7 @@
 import { describe, expect, it } from 'vitest';
 
 import {
+  assertSupportedOutputSchema,
   buildStructuredOutputInstruction,
   buildStructuredOutputRepairPrompt,
   evaluateStructuredOutput,
@@ -138,5 +139,54 @@ describe('prompt builders', () => {
     expect(prompt).toContain('lens: required field is missing');
     expect(prompt).toContain('Re-emit ONLY');
     expect(prompt).toContain('"findings"');
+  });
+});
+
+describe('assertSupportedOutputSchema', () => {
+  it('accepts the supported subset (incl. nested object arrays)', () => {
+    expect(() => assertSupportedOutputSchema(FINDING_SCHEMA)).not.toThrow();
+  });
+
+  it('accepts annotation-only keywords (description/title/default/format)', () => {
+    expect(() =>
+      assertSupportedOutputSchema({
+        type: 'object',
+        title: 'Finding',
+        description: 'a finding',
+        properties: { name: { type: 'string', description: 'x', default: '', format: 'email' } },
+      }),
+    ).not.toThrow();
+  });
+
+  it('rejects $ref / $defs and names the keyword + location', () => {
+    let message = '';
+    try {
+      assertSupportedOutputSchema({
+        $defs: { Sev: { enum: ['high', 'low'] } },
+        type: 'object',
+        properties: { severity: { $ref: '#/$defs/Sev' } },
+      });
+    } catch (error) {
+      message = error instanceof Error ? error.message : String(error);
+    }
+    expect(message).toContain('unsupported');
+    expect(message).toContain('$defs');
+    expect(message).toContain('$ref');
+    // path uses the validator's joinPath convention (root property = bare key)
+    expect(message).toContain('at severity');
+  });
+
+  it('rejects composition keywords nested under items', () => {
+    expect(() =>
+      assertSupportedOutputSchema({
+        type: 'array',
+        items: { oneOf: [{ type: 'string' }, { type: 'number' }] },
+      }),
+    ).toThrow(/oneOf/);
+  });
+
+  it('is a no-op for a non-object schema', () => {
+    expect(() => assertSupportedOutputSchema(undefined)).not.toThrow();
+    expect(() => assertSupportedOutputSchema('nope')).not.toThrow();
   });
 });

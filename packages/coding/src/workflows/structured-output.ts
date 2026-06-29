@@ -131,6 +131,83 @@ export function validateAgainstSchema(value: unknown, schema: unknown, path = ''
   return errors;
 }
 
+/**
+ * JSON-Schema keywords whose presence changes whether/how validation happens
+ * but which the subset validator does NOT implement. Silently ignoring them
+ * would mean a schema "validates" while real constraints go unchecked — and the
+ * model, seeing idiomatic JSON Schema accepted, has no signal it was a no-op.
+ * So we reject them at declaration time with a clear error instead.
+ *
+ * Annotation-only keywords (`description`, `title`, `default`, `examples`,
+ * `$comment`, `$schema`, `format`) do not change validation and are allowed.
+ */
+const UNSUPPORTED_SCHEMA_KEYWORDS: readonly string[] = [
+  '$ref',
+  '$defs',
+  'definitions',
+  'oneOf',
+  'allOf',
+  'anyOf',
+  'not',
+  'if',
+  'then',
+  'else',
+  'const',
+  'patternProperties',
+  'propertyNames',
+  'dependencies',
+  'dependentSchemas',
+  'dependentRequired',
+  'contains',
+  'unevaluatedProperties',
+  'unevaluatedItems',
+];
+
+function collectUnsupportedKeywords(schema: unknown, path: string, found: Map<string, string>): void {
+  if (!isRecord(schema)) return;
+  for (const keyword of UNSUPPORTED_SCHEMA_KEYWORDS) {
+    if (keyword in schema && !found.has(keyword)) {
+      found.set(keyword, path || '(root)');
+    }
+  }
+  // Recurse only into the subschema positions the subset validator honors, so
+  // the error points at where an author can actually fix it.
+  if (isRecord(schema.properties)) {
+    for (const [key, child] of Object.entries(schema.properties)) {
+      collectUnsupportedKeywords(child, joinPath(path, key), found);
+    }
+  }
+  if (isRecord(schema.items)) {
+    collectUnsupportedKeywords(schema.items, `${path || '(root)'}[]`, found);
+  }
+  if (isRecord(schema.additionalProperties)) {
+    collectUnsupportedKeywords(schema.additionalProperties, `${path || '(root)'}.*`, found);
+  }
+}
+
+/**
+ * Throw if `schema` uses a JSON-Schema keyword the subset validator can't honor.
+ * Called when a workflow child declares `outputSchema`, so the author/model gets
+ * immediate feedback rather than a silently-unvalidated result. No-op for the
+ * supported subset (`type`/`enum`/`required`/`properties`/`items`/
+ * `additionalProperties`) and for non-object schemas.
+ */
+export function assertSupportedOutputSchema(schema: unknown): void {
+  if (!isRecord(schema)) return;
+  const found = new Map<string, string>();
+  collectUnsupportedKeywords(schema, '', found);
+  if (found.size === 0) return;
+  const detail = [...found.entries()]
+    .map(([keyword, at]) => `\`${keyword}\` (at ${at})`)
+    .join(', ');
+  throw new Error(
+    `outputSchema uses unsupported JSON-Schema keyword(s): ${detail}. ` +
+      'The workflow validator supports only type, enum, required, properties, ' +
+      'items, and additionalProperties (nested object arrays included). ' +
+      'Inline the referenced shapes and use that subset.',
+  );
+}
+
 function firstStructureStart(text: string): number {
   const brace = text.indexOf('{');
   const bracket = text.indexOf('[');
