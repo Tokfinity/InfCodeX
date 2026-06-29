@@ -224,6 +224,11 @@ export function resolveCustomProviderReasoningProfile(
 export function resolveCustomModelReasoningProfile(
   descriptor: KodaXModelDescriptor,
   protocol: KodaXProtocolFamily,
+  // Provider-level master off-switch. When the provider declares supportsThinking:false,
+  // it overrides a per-model reasoning profile too (single-track), so the per-model
+  // descriptor resolves to the 'none' profile at the SOURCE — keeping the runtime
+  // (getReasoningProfile(modelId)) consistent with the capability query surfaces.
+  supportsThinking?: boolean,
 ): KodaXReasoningProfile | undefined {
   return resolveCustomReasoningProfile(
     getConfiguredReasoningProfile(descriptor),
@@ -232,6 +237,7 @@ export function resolveCustomModelReasoningProfile(
     {
       protocol,
       reasoningCapability: descriptor.reasoningCapability,
+      supportsThinking,
     },
   );
 }
@@ -239,11 +245,12 @@ export function resolveCustomModelReasoningProfile(
 function customModelDescriptorToFull(
   entry: string | KodaXModelDescriptor,
   protocol: KodaXProtocolFamily,
+  supportsThinking?: boolean,
 ): KodaXModelDescriptor {
   if (typeof entry === 'string') {
     return { id: entry };
   }
-  const reasoningProfile = resolveCustomModelReasoningProfile(entry, protocol);
+  const reasoningProfile = resolveCustomModelReasoningProfile(entry, protocol, supportsThinking);
   return reasoningProfile
     ? { ...entry, reasoningProfile }
     : entry;
@@ -297,7 +304,7 @@ function buildProviderConfig(custom: KodaXCustomProviderConfig): KodaXProviderCo
   // can express real differences instead of a single provider-wide
   // value.
   const models = custom.models?.length
-    ? custom.models.map((entry) => customModelDescriptorToFull(entry, custom.protocol))
+    ? custom.models.map((entry) => customModelDescriptorToFull(entry, custom.protocol, custom.supportsThinking))
     : undefined;
   const reasoningProfile = resolveCustomProviderReasoningProfile(custom);
   // supportsThinking:false forces the no-thinking preset at runtime

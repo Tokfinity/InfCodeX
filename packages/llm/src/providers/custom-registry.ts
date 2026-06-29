@@ -52,19 +52,31 @@ const THINKING_REASONING_CAPABILITIES = new Set([
  * a valid, common config; warning on it would be noise. An explicit `none` reasoning
  * config agrees with supportsThinking:false, so it is not flagged.
  */
+/** True when a config/descriptor carries a reasoning config that intends thinking. */
+function hasThinkingReasoningConfig(fields: {
+  readonly reasoningCapability?: string;
+  readonly reasoningProfile?: unknown;
+  readonly reasoningPreset?: string;
+  readonly reasoning?: unknown;
+}): boolean {
+  return (
+    (fields.reasoningCapability !== undefined &&
+      THINKING_REASONING_CAPABILITIES.has(fields.reasoningCapability)) ||
+    fields.reasoningProfile !== undefined ||
+    (fields.reasoningPreset !== undefined && fields.reasoningPreset !== 'none') ||
+    (fields.reasoning !== undefined && fields.reasoning !== 'none')
+  );
+}
+
 function warnOnIgnoredReasoningCapability(config: KodaXCustomProviderConfig): void {
   if (config.supportsThinking !== false) return;
-  const hasThinkingCapability =
-    config.reasoningCapability !== undefined &&
-    THINKING_REASONING_CAPABILITIES.has(config.reasoningCapability);
-  const hasThinkingProfile = config.reasoningProfile !== undefined;
-  const hasThinkingPreset =
-    config.reasoningPreset !== undefined && config.reasoningPreset !== 'none';
-  const hasThinkingReasoning =
-    config.reasoning !== undefined && config.reasoning !== 'none';
-  if (hasThinkingCapability || hasThinkingProfile || hasThinkingPreset || hasThinkingReasoning) {
+  const providerHasThinking = hasThinkingReasoningConfig(config);
+  const modelHasThinking = (config.models ?? []).some(
+    (entry) => typeof entry !== 'string' && hasThinkingReasoningConfig(entry),
+  );
+  if (providerHasThinking || modelHasThinking) {
     console.warn(
-      `[kodax] Custom provider "${config.name}": its reasoning config (reasoningCapability / reasoningProfile / reasoning / reasoningPreset) is ignored because supportsThinking is false (thinking stays off). Set supportsThinking: true to enable thinking, or remove the reasoning config.`,
+      `[kodax] Custom provider "${config.name}": its reasoning config (provider- or per-model reasoningCapability / reasoningProfile / reasoning / reasoningPreset) is ignored because supportsThinking is false (thinking stays off). Set supportsThinking: true to enable thinking, or remove the reasoning config.`,
     );
   }
 }
@@ -204,11 +216,12 @@ export function getCustomProviderModels(name: string): string[] | undefined {
 function customDescriptorToFull(
   entry: string | KodaXModelDescriptor,
   protocol: KodaXCustomProviderConfig['protocol'],
+  supportsThinking?: boolean,
 ): KodaXModelDescriptor {
   if (typeof entry === 'string') {
     return { id: entry };
   }
-  const reasoningProfile = resolveCustomModelReasoningProfile(entry, protocol);
+  const reasoningProfile = resolveCustomModelReasoningProfile(entry, protocol, supportsThinking);
   return reasoningProfile
     ? { ...entry, reasoningProfile }
     : entry;
@@ -227,7 +240,7 @@ export function getCustomProviderModelDescriptors(
   if (!config) return undefined;
   const defaultEntry: KodaXModelDescriptor = { id: config.model };
   const alternatives = (config.models ?? [])
-    .map((entry) => customDescriptorToFull(entry, config.protocol))
+    .map((entry) => customDescriptorToFull(entry, config.protocol, config.supportsThinking))
     .filter((m) => m.id !== config.model);
   return [defaultEntry, ...alternatives];
 }
@@ -249,7 +262,7 @@ export function getCustomModelCapabilities(
   const descriptor = isDefault
     ? ({ id: config.model } as KodaXModelDescriptor)
     : (config.models ?? [])
-        .map((entry) => customDescriptorToFull(entry, config.protocol))
+        .map((entry) => customDescriptorToFull(entry, config.protocol, config.supportsThinking))
         .find((m) => m.id === modelId);
   if (!descriptor) return undefined;
   // supportsThinking:false forces the provider-level 'none' profile (resolved above), so

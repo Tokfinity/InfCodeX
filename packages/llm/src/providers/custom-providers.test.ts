@@ -5,6 +5,7 @@ import {
   getCustomProvider,
   getCustomProviderList,
   getCustomModelCapabilities,
+  getCustomProviderModelDescriptors,
   getCustomProviderModels,
   getCustomProviderNames,
   isCustomProviderName,
@@ -733,6 +734,55 @@ describe('custom providers', () => {
     });
 
     // The user is warned their (now-ignored) reasoning config conflicts with the switch.
+    expect(warnSpy).toHaveBeenCalledWith(
+      expect.stringContaining('is ignored because supportsThinking is false'),
+    );
+  });
+
+  it('supportsThinking:false overrides a PER-MODEL reasoningProfile at runtime AND every surface', () => {
+    vi.stubEnv('CUSTOM_PERMODEL_API_KEY', 'test-key');
+    const warnSpy = vi.spyOn(console, 'warn').mockImplementation(() => {});
+    const config: KodaXCustomProviderConfig = {
+      name: 'permodel-nothink',
+      protocol: 'openai',
+      baseUrl: 'https://permodel.example/v1',
+      apiKeyEnv: 'CUSTOM_PERMODEL_API_KEY',
+      model: 'main',
+      supportsThinking: false,
+      models: [
+        'main',
+        {
+          id: 'alt',
+          reasoningProfile: {
+            reasoningPreset: 'deepseek-v4-openai',
+            effortStrategy: 'openai-chat-effort',
+            thinkingStrategy: 'provider-toggle',
+            supportedEfforts: [{ value: 'high', isDefault: true }],
+            supportsReasoningEffort: true,
+          },
+        },
+      ],
+    };
+    registerCustomProviders([cloneConfig(config)]);
+
+    // RUNTIME: the per-model thinking profile must be overridden to 'none' at the SOURCE,
+    // otherwise the request would send thinking despite supportsThinking:false while the
+    // query surfaces report 'none' — the exact surface/runtime split this guards against.
+    const provider = createCustomProvider(cloneConfig(config));
+    expect(provider.getReasoningProfile('alt')).toMatchObject({
+      reasoningPreset: 'none',
+      effortStrategy: 'none',
+    });
+
+    // QUERY SURFACES: per-model capabilities + descriptor list both agree with runtime.
+    expect(getCustomModelCapabilities('permodel-nothink', 'alt')).toMatchObject({
+      reasoningCapability: 'none',
+      reasoningProfile: { reasoningPreset: 'none', effortStrategy: 'none' },
+    });
+    const alt = getCustomProviderModelDescriptors('permodel-nothink')?.find((d) => d.id === 'alt');
+    expect(alt?.reasoningProfile).toMatchObject({ reasoningPreset: 'none', effortStrategy: 'none' });
+
+    // The per-model thinking config is flagged at startup (warning inspects models[]).
     expect(warnSpy).toHaveBeenCalledWith(
       expect.stringContaining('is ignored because supportsThinking is false'),
     );
