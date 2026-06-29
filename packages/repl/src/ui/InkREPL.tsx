@@ -7979,42 +7979,6 @@ const InkREPLInner: React.FC<InkREPLProps> = ({
         }, "workflow-message");
       };
 
-      const createWorkflowCallbacks = (): Pick<
-        CommandCallbacks,
-        | 'createKodaXOptions'
-        | 'confirm'
-        | 'onWorkflowBuilderEvent'
-        | 'onWorkflowRunMessage'
-        | 'onWorkflowRunUpdate'
-      > => ({
-        createKodaXOptions: () => ({
-          ...currentOptionsRef.current,
-          provider: currentConfig.provider,
-          model: currentConfig.model,
-          effort: runtimeEffort,
-          thinking: currentConfig.thinking,
-          reasoningMode: currentConfig.reasoningMode,
-          agentMode: currentConfig.agentMode,
-          guardrails: buildAutoModeGuardrails(permissionModeRef.current, autoModeBootstrap),
-          // FEATURE_246 A5: enable the model-callable run_workflow tool (ADR-047).
-          workflowRunsBaseDir: getAgentConfigPath(
-            "workflow-runs",
-            deriveProjectKeyFromRoot(process.cwd()).key,
-          ),
-          events: createStreamingEvents(),
-        }),
-        confirm: async (message: string): Promise<boolean> => {
-          const result = await showConfirmDialog("confirm", {
-            _alwaysConfirm: true,
-            _message: message,
-          });
-          return result.confirmed;
-        },
-        onWorkflowBuilderEvent: handleWorkflowBuilderEvent,
-        onWorkflowRunMessage: handleWorkflowRunMessage,
-        onWorkflowRunUpdate: handleWorkflowRunUpdate,
-      });
-
       const runWorkflowInvocation = async (
         workflow: CommandWorkflowInvocationRequest,
         rawInput: string,
@@ -8035,25 +7999,11 @@ const InkREPLInner: React.FC<InkREPLProps> = ({
           hostPolicy: currentOptionsRef.current.workflowHostPolicy,
         });
 
+        // FEATURE_246 A5 (ADR-047): reached only from a parsed `/workflow`
+        // command (the natural-language intercept was removed), so the policy
+        // returns 'suggest'. 'none' stays as a defensive guard.
         if (decision.action === 'none') {
           return false;
-        }
-
-        if (decision.action === 'suggest' && workflow.source === 'natural-language') {
-          const cancelsTurn = decision.trigger === 'explicit';
-          const approved = await callbacks.confirm?.(
-            cancelsTurn
-              ? 'This request explicitly asks for workflow. Generate and run it? Choose No to cancel this turn.'
-              : 'This task looks suitable for workflow. Use workflow? Choose No to continue with normal AMA.',
-          );
-          if (!approved) {
-            if (!cancelsTurn) return false;
-            addHistoryItem({
-              type: "info",
-              text: "Workflow request cancelled. No normal AMA fallback was started.",
-            });
-            return true;
-          }
         }
 
         const workflowOutput: string[] = [];
@@ -8106,29 +8056,13 @@ const InkREPLInner: React.FC<InkREPLProps> = ({
             approval: currentConfig.permissionMode === 'plan' ? 'required' : 'silent',
             presentation: 'agentic',
             sourceLabel: workflow.displayName,
-            processSource: workflow.processSource
-              ?? (workflow.source === 'natural-language' ? 'amaw' : 'command'),
+            processSource: workflow.processSource ?? 'command',
             onBuilderEvent: workflowCallbacks.onWorkflowBuilderEvent,
           });
           if (outcome === 'started' && streamingStateRef.current.pendingInputs.length > 0) {
             workflowIntentBoundaryQueueLockedRef.current = true;
           }
-          const consumesTurn = workflowStartOutcomeConsumesTurn({
-            outcome,
-          });
-          if (
-            !consumesTurn
-            && workflow.source === 'natural-language'
-            && (outcome === 'failed' || outcome === 'declined')
-          ) {
-            addHistoryItem({
-              type: "info",
-              text: outcome === 'failed'
-                ? "Workflow builder failed after repair attempts. Falling back to normal Agent for this turn."
-                : "Workflow builder declined to create a workflow. Continuing with normal Agent for this turn.",
-            });
-          }
-          return consumesTurn;
+          return workflowStartOutcomeConsumesTurn({ outcome });
         } finally {
           setWorkflowBuilderMessage(null);
           console.log = originalWorkflowLog;
@@ -8762,23 +8696,9 @@ const InkREPLInner: React.FC<InkREPLProps> = ({
       // runKodaX (agent.ts:76) will add the prompt to messages automatically.
       // If we push here, the message gets duplicated (Issue 046).
 
-      if (await runWorkflowInvocation(
-        {
-          request: processed,
-          source: 'natural-language',
-          displayName: currentConfig.agentMode.toUpperCase(),
-        },
-        fullText.trim(),
-        createWorkflowCallbacks(),
-      )) {
-        if (streamingStateRef.current.pendingInputs.length > 0) {
-          workflowIntentBoundaryQueueLockedRef.current = true;
-        }
-        setIsLoading(false);
-        stopStreaming();
-        clearThinkingContent();
-        return;
-      }
+      // FEATURE_246 A5 (ADR-047): natural language is never intercepted into a
+      // host-generated workflow; it flows to the agent, which authors workflows
+      // itself via the run_workflow tool. Only `/workflow` commands launch above.
 
       const inputArtifactCwd =
         currentOptionsRef.current.context?.executionCwd ?? process.cwd();

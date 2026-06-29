@@ -1477,27 +1477,11 @@ Keyboard Shortcuts:
       hostPolicy: currentOptions.workflowHostPolicy,
     });
 
+    // FEATURE_246 A5 (ADR-047): this launcher is reached only from a parsed
+    // `/workflow` command (the natural-language intercept was removed), so the
+    // policy returns 'suggest'. 'none' stays as a defensive guard.
     if (decision.action === 'none') {
       return false;
-    }
-
-    if (decision.action === 'suggest' && workflow.source === 'natural-language') {
-      const confirm = resolveConfirm(callbacks);
-      if (!confirm) {
-        console.log(chalk.dim('\n[workflow] This task looks suitable for workflow. Use /workflow create <request> to run it.\n'));
-        return false;
-      }
-      const cancelsTurn = decision.trigger === 'explicit';
-      const approved = await confirm(
-        cancelsTurn
-          ? 'This request explicitly asks for workflow. Generate and run it? Choose No to cancel this turn.'
-          : 'This task looks suitable for workflow. Use workflow? Choose No to continue with normal AMA.',
-      );
-      if (!approved) {
-        if (!cancelsTurn) return false;
-        console.log(chalk.dim('\nWorkflow request cancelled. No normal AMA fallback was started.\n'));
-        return true;
-      }
     }
 
     let workflowUserCommitted = false;
@@ -1556,25 +1540,10 @@ Keyboard Shortcuts:
       approval: currentConfig.permissionMode === 'plan' ? 'required' : 'silent',
       presentation: 'agentic',
       sourceLabel: workflow.displayName,
-      processSource: workflow.processSource
-        ?? (workflow.source === 'natural-language' ? 'amaw' : 'command'),
+      processSource: workflow.processSource ?? 'command',
     });
 
-    const consumesTurn = workflowStartOutcomeConsumesTurn({
-      outcome,
-    });
-    if (
-      !consumesTurn
-      && workflow.source === 'natural-language'
-      && (outcome === 'failed' || outcome === 'declined')
-    ) {
-      console.log(chalk.dim(
-        outcome === 'failed'
-          ? '\nWorkflow builder failed after repair attempts. Falling back to normal Agent for this turn.\n'
-          : '\nWorkflow builder declined to create a workflow. Continuing with normal Agent for this turn.\n',
-      ));
-    }
-    return consumesTurn;
+    return workflowStartOutcomeConsumesTurn({ outcome });
   };
 
   const handleCommandResult = async (
@@ -1689,14 +1658,9 @@ Keyboard Shortcuts:
         if (trimmed.startsWith('!') && isShellCommandHandled(processed)) {
           continue;
         }
-        if (await startWorkflowInvocation({
-          request: processed,
-          source: 'natural-language',
-          displayName: currentConfig.agentMode.toUpperCase(),
-        }, trimmed)) {
-          lastUserMessage = trimmed;
-          continue;
-        }
+        // FEATURE_246 A5 (ADR-047): natural language is never intercepted into a
+        // host-generated workflow; it flows to the agent, which authors workflows
+        // itself via the run_workflow tool. Only `/workflow` commands launch here.
         const preparedArtifacts = preparePromptInputArtifacts(
           processed,
           currentOptions.context?.executionCwd ?? process.cwd(),
@@ -1873,15 +1837,8 @@ Keyboard Shortcuts:
     }
 
     // Add user message to context - 添加用户消息到上下文
-    if (await startWorkflowInvocation({
-      request: processed,
-      source: 'natural-language',
-      displayName: currentConfig.agentMode.toUpperCase(),
-    }, trimmed)) {
-      lastUserMessage = trimmed;
-      continue;
-    }
-
+    // FEATURE_246 A5 (ADR-047): no natural-language workflow intercept — NL flows
+    // to the agent (which owns run_workflow); only `/workflow` commands launch.
     const preparedArtifacts = preparePromptInputArtifacts(
       processed,
       currentOptions.context?.executionCwd ?? process.cwd(),
