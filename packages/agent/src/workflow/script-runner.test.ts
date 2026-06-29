@@ -152,6 +152,50 @@ describe('runRestrictedWorkflowScript', () => {
     expect(calls).toEqual([{ name: 'sub', args: { k: 'v' } }]);
   });
 
+  it('sandbox wf.parallel drops a failed thunk to null and keeps siblings (FEATURE_246 Part E)', async () => {
+    const { wf } = fakeWorkflowApi();
+    const result = await runRestrictedWorkflowScript({
+      wf: {
+        ...wf,
+        runAgent: async (input): Promise<WorkflowTaskResult> => {
+          if (input.name === 'bad') throw new Error('boom');
+          return { taskId: 't', name: input.name, status: 'completed', finalText: `ok:${input.name}` };
+        },
+      },
+      source: `
+        async function run(wf) {
+          const results = await wf.parallel([
+            () => wf.runAgent({ name: 'a', prompt: 'x' }),
+            () => wf.runAgent({ name: 'bad', prompt: 'x' }),
+            () => wf.runAgent({ name: 'c', prompt: 'x' }),
+          ]);
+          return results.map((r) => (r === null ? null : r.finalText));
+        }
+      `,
+    });
+    expect(result).toEqual(['ok:a', null, 'ok:c']);
+  });
+
+  it('sandbox wf.parallel re-throws a run-control (limit) error instead of nulling it', async () => {
+    const { wf } = fakeWorkflowApi();
+    const limit = Object.assign(new Error('maxConcurrency cap occupied'), { name: 'WorkflowLimitError' });
+    await expect(
+      runRestrictedWorkflowScript({
+        wf: {
+          ...wf,
+          runAgent: async (): Promise<WorkflowTaskResult> => {
+            throw limit;
+          },
+        },
+        source: `
+          async function run(wf) {
+            return wf.parallel([() => wf.runAgent({ name: 'x', prompt: 'p' })]);
+          }
+        `,
+      }),
+    ).rejects.toThrow(/maxConcurrency/);
+  });
+
   it('errors when wf.workflow is called but no resolver is wired', async () => {
     const { wf } = fakeWorkflowApi(); // no `workflow` method on the host api
     await expect(

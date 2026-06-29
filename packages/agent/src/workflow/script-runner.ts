@@ -321,12 +321,21 @@ function workflowBudget(wf: WorkflowApi): WorkflowBudget {
 
 function errorEnvelope(error: unknown): WorkflowRpcEnvelope {
   const message = error instanceof Error ? error.message : String(error);
-  // Tag aborts so the sandbox can distinguish a torn-down run from an ordinary
-  // stage failure. `wf.pipeline` swallows ordinary stage errors into a null
-  // item but MUST re-throw an abort. Detect by name to avoid a runtime import.
-  const aborted = error instanceof Error && error.name === 'WorkflowAbortError';
+  // Tag run-control errors so the sandbox can distinguish a torn-down/halted run
+  // from an ordinary task failure. `wf.parallel`/`wf.pipeline` swallow ordinary
+  // failures into a null item but MUST re-throw run-control errors (abort /
+  // agent-cap limit / token budget) — they halt the whole run. Detect by name to
+  // avoid a runtime import (mirrors runtime isWorkflowRunControlError).
+  const name = error instanceof Error ? error.name : '';
+  const aborted = name === 'WorkflowAbortError';
+  const runControl =
+    aborted || name === 'WorkflowLimitError' || name === 'WorkflowBudgetError';
   return {
-    value: aborted ? { message, aborted: true } : { message },
+    value: {
+      message,
+      ...(aborted ? { aborted: true } : {}),
+      ...(runControl ? { runControl: true } : {}),
+    },
     budget: { spent: 0, remaining: null },
   };
 }
@@ -513,6 +522,9 @@ function __kodaxSettle(id, ok, envelopeJson) {
   if (envelope && envelope.value && envelope.value.aborted === true) {
     error.aborted = true;
   }
+  if (envelope && envelope.value && envelope.value.runControl === true) {
+    error.runControl = true;
+  }
   pending.reject(error);
 }
 
@@ -535,7 +547,15 @@ async function __kodaxParallel(items, options) {
       if (typeof item !== "function") {
         throw new Error("wf.parallel items must be functions");
       }
-      results[index] = await item();
+      // Fault isolation (FEATURE_246 Part E): an ordinary failed thunk becomes
+      // null so siblings continue and parallel never rejects; run-control errors
+      // (abort / agent-cap / budget) re-throw to tear down the whole run.
+      try {
+        results[index] = await item();
+      } catch (error) {
+        if (error && error.runControl === true) throw error;
+        results[index] = null;
+      }
     }
   }
   await Promise.all(Array.from({ length: lanes }, () => worker()));
@@ -558,7 +578,7 @@ async function __kodaxPipeline(items, ...stages) {
       }
       return value;
     } catch (error) {
-      if (error && error.aborted === true) throw error;
+      if (error && error.runControl === true) throw error;
       return null;
     }
   }));
