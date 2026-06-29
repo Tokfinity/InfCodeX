@@ -3191,7 +3191,10 @@ consumes it already lives.
 
 ## ADR-047: Workflow Invocation — Worker-Authored "Scout-then-Author" Primary; Blind `sideQuery` Generation Demoted to Fallback; AMAW Defers to the Worker
 
-**Status**: Proposed (2026-06-29)
+**Status**: Accepted — shipped in v0.7.58 (2026-06-29). Implementation: A3.1
+`f53a7325`; A5 `690f4f50` (wire) / `61489da9` (policy) / `b4054a43` (REPL
+dead-branch removal) / `48dc508e` (cleanup). See
+[FEATURE_246 A3.1/A5 status](features/v0.7.58.md).
 
 > Extends [ADR-044](#adr-044-workflow-authoring-parity-with-the-claude-code-harness)
 > + [ADR-046](#adr-046-workflow-run-management--neutral-lifecycle-manager-in-kodax-aiagent-via-dependency-inversion).
