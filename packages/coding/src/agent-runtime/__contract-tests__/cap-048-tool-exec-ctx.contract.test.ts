@@ -193,4 +193,46 @@ describe('CAP-048: tool execution context construction contract', () => {
       path.join(gitRoot, '.agent', 'tmp', 'sessions', 'session_A'),
     );
   });
+
+  // FEATURE_246 A5 (ADR-047): the model-callable run_workflow tool is only
+  // usable when the host wires a runs dir AND the agent hosts workflows
+  // (ama/amaw). This is the single gate the REPL satisfies by setting
+  // options.workflowRunsBaseDir in its createKodaXOptions closures.
+  const baseDir = path.resolve('cap-048-workflow-runs');
+
+  it('CAP-TOOL-CTX-009: workflowHost is wired when workflowRunsBaseDir is set AND agentMode hosts workflows', () => {
+    for (const agentMode of ['ama', 'amaw'] as const) {
+      const ctx = buildToolExecutionContext({
+        options: { workflowRunsBaseDir: baseDir, agentMode } as KodaXOptions,
+        runtime: undefined,
+        managedProtocolPayloadRef: makeRef(),
+      });
+      expect(ctx.workflowHost, `agentMode=${agentMode}`).toBeDefined();
+      expect(typeof ctx.workflowHost?.runInline, `agentMode=${agentMode}`).toBe('function');
+    }
+  });
+
+  it('CAP-TOOL-CTX-010: workflowHost is undefined without a runs dir, or in non-hosting modes', () => {
+    // No runs dir → no host even in amaw.
+    expect(
+      buildToolExecutionContext({
+        options: { agentMode: 'amaw' } as KodaXOptions,
+        runtime: undefined,
+        managedProtocolPayloadRef: makeRef(),
+      }).workflowHost,
+    ).toBeUndefined();
+
+    // Runs dir set but single-agent / unset mode → no host (SA must not
+    // host workflows; children inherit a fresh options without the dir).
+    for (const agentMode of ['sa', undefined] as const) {
+      expect(
+        buildToolExecutionContext({
+          options: { workflowRunsBaseDir: baseDir, agentMode } as unknown as KodaXOptions,
+          runtime: undefined,
+          managedProtocolPayloadRef: makeRef(),
+        }).workflowHost,
+        `agentMode=${String(agentMode)}`,
+      ).toBeUndefined();
+    }
+  });
 });

@@ -141,7 +141,8 @@ import type {
   TodoItem,
   TodoList,
 } from "@kodax-ai/coding";
-import { estimateTokens, bootstrapTeamMode, setActiveUserInteraction, type TeamModeHandle } from "@kodax-ai/agent";
+import { estimateTokens, bootstrapTeamMode, setActiveUserInteraction, getAgentConfigPath, type TeamModeHandle } from "@kodax-ai/agent";
+import { deriveProjectKeyFromRoot } from "../interactive/project-key.js";
 import {
   PermissionMode,
   ConfirmResult,
@@ -7995,6 +7996,11 @@ const InkREPLInner: React.FC<InkREPLProps> = ({
           reasoningMode: currentConfig.reasoningMode,
           agentMode: currentConfig.agentMode,
           guardrails: buildAutoModeGuardrails(permissionModeRef.current, autoModeBootstrap),
+          // FEATURE_246 A5: enable the model-callable run_workflow tool (ADR-047).
+          workflowRunsBaseDir: getAgentConfigPath(
+            "workflow-runs",
+            deriveProjectKeyFromRoot(process.cwd()).key,
+          ),
           events: createStreamingEvents(),
         }),
         confirm: async (message: string): Promise<boolean> => {
@@ -8566,6 +8572,11 @@ const InkREPLInner: React.FC<InkREPLProps> = ({
             // or deprecated 'auto-in-project'). The lazy bootstrap factory
             // means non-auto sessions pay zero classifier construction cost.
             guardrails: buildAutoModeGuardrails(permissionModeRef.current, autoModeBootstrap),
+            // FEATURE_246 A5: enable the model-callable run_workflow tool (ADR-047).
+            workflowRunsBaseDir: getAgentConfigPath(
+              "workflow-runs",
+              deriveProjectKeyFromRoot(process.cwd()).key,
+            ),
             events: createStreamingEvents(), // Include streaming events for /project commands
           }),
           reloadAgentsFiles: async (): Promise<AgentsFile[]> => {

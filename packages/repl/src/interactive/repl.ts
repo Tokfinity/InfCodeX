@@ -40,6 +40,7 @@ import {
   forkSessionLineage,
   generateSessionId as generateCoreSessionId,
   findPreviousUserEntryId,
+  getAgentConfigPath,
   getMessageQueue,
   getSessionMessagesFromLineage,
   rewindSessionLineage,
@@ -83,6 +84,7 @@ import {
   generateSessionId as generateInteractiveSessionId,
   touchContext,
 } from './context.js';
+import { deriveProjectKeyFromRoot } from './project-key.js';
 import {
   parseCommand,
   executeCommand,
@@ -1259,6 +1261,15 @@ Keyboard Shortcuts:
         thinking: currentConfig.thinking,
         reasoningMode: currentConfig.reasoningMode,
         guardrails,
+        // FEATURE_246 A5: enable the model-callable run_workflow tool in AMA/AMAW.
+        // Resolving the runs dir here (same derivation as /workflow command,
+        // workflow-command.ts) makes buildToolExecutionContext wire ctx.workflowHost,
+        // so the Worker can scout the codebase and author a workflow itself rather
+        // than the host blind-generating one (ADR-047).
+        workflowRunsBaseDir: getAgentConfigPath(
+          'workflow-runs',
+          deriveProjectKeyFromRoot(process.cwd()).key,
+        ),
         context: {
           ...currentOptions.context,
           planModeBlockCheck,
