@@ -921,20 +921,24 @@ export abstract class KodaXOpenAICompatProvider extends KodaXBaseProvider {
         thinkingBlocks.push({ type: 'thinking', thinking: thinkingContent });
         streamOptions?.onThinkingEnd?.(thinkingContent);
       }
-      // A salvaged input is safe to execute only when the stream ended on a
-      // recognized CLEAN stop (sloppy-but-complete JSON). On a truncating
-      // (`length`) OR ambiguous/unknown finish_reason, retain the mark so the
-      // agent loop re-asks instead of executing a possibly mid-cut payload.
+      // `_salvaged` = strict parse failed (kept on a clean stop so a mutating
+      // tool's malformed payload is still gated downstream). `_truncated` adds
+      // "and the stop was NOT clean" (`length`/ambiguous), which is unsafe for
+      // any tool. The execute-vs-retry decision (incl. the read-only clean-stop
+      // allowance) is made by checkIncompleteToolCalls.
       const cleanStop = isCleanStop(finishReason ?? undefined);
       for (const [, tc] of toolCallsMap) {
         if (tc.id && tc.name) {
           const parsed = parseToolInputWithSalvageTracked(tc.arguments);
+          const salvageFlags = parsed.salvaged
+            ? (cleanStop ? { _salvaged: true } : { _salvaged: true, _truncated: true })
+            : {};
           toolBlocks.push({
             type: 'tool_use',
             id: tc.id,
             name: tc.name,
             input: parsed.value,
-            ...(parsed.salvaged && !cleanStop ? { _truncated: true } : {}),
+            ...salvageFlags,
           });
         } else {
           // Drop a tool_call missing id/name (cannot be paired with a
@@ -1083,12 +1087,15 @@ export abstract class KodaXOpenAICompatProvider extends KodaXBaseProvider {
         .filter(isOpenAIFunctionToolCall)
         .map((toolCall) => {
           const parsed = parseToolInputWithSalvageTracked(toolCall.function.arguments);
+          const salvageFlags = parsed.salvaged
+            ? (cleanStop ? { _salvaged: true } : { _salvaged: true, _truncated: true })
+            : {};
           return {
             type: 'tool_use' as const,
             id: toolCall.id,
             name: toolCall.function.name,
             input: parsed.value,
-            ...(parsed.salvaged && !cleanStop ? { _truncated: true } : {}),
+            ...salvageFlags,
           };
         });
 

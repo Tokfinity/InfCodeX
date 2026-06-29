@@ -124,30 +124,34 @@ describe('anthropic partial tool_use salvage', () => {
     expect(result.toolBlocks[0].input).toEqual({});
   });
 
-  describe('_truncated tagging (salvage + truncating stop_reason)', () => {
-    it('sets _truncated when salvaged AND stop_reason=max_tokens', async () => {
+  describe('salvage tagging (_salvaged raw signal + _truncated on non-clean stop)', () => {
+    it('sets both _salvaged and _truncated when salvaged AND stop_reason=max_tokens', async () => {
       const partialJson = '{"path":"/tmp/slides.html","content":"<html><body><h1>hello';
       const create = vi.fn().mockResolvedValue(streamFromEvents(buildToolUseEvents(partialJson, true, 'max_tokens')));
       const provider = new TestAnthropicProvider({ messages: { create } });
       const result = await provider.stream([{ role: 'user', content: 'write' }], TOOLS, 'sys');
+      expect(result.toolBlocks[0]._salvaged).toBe(true);
       expect(result.toolBlocks[0]._truncated).toBe(true);
     });
 
-    it('does NOT set _truncated when input is complete (not salvaged) even on max_tokens', async () => {
+    it('sets neither when input is complete (not salvaged) even on max_tokens', async () => {
       const fullJson = '{"path":"/tmp/x.html","content":"<html></html>"}';
       const create = vi.fn().mockResolvedValue(streamFromEvents(buildToolUseEvents(fullJson, true, 'max_tokens')));
       const provider = new TestAnthropicProvider({ messages: { create } });
       const result = await provider.stream([{ role: 'user', content: 'write' }], TOOLS, 'sys');
+      expect(result.toolBlocks[0]._salvaged).toBeUndefined();
       expect(result.toolBlocks[0]._truncated).toBeUndefined();
     });
 
-    it('does NOT set _truncated when salvaged but stop_reason is a clean stop (sloppy-complete JSON is safe)', async () => {
-      // strict parse fails (unterminated) but the turn ended cleanly with tool_use —
-      // treat as non-strict-but-complete, safe to execute, no forced retry.
+    it('keeps _salvaged but NOT _truncated on a clean stop (tool_use); the coding layer gates by tool side-effect', async () => {
+      // strict parse fails (unterminated) but the turn ended cleanly. The raw
+      // _salvaged signal is retained so a mutating tool is still gated downstream;
+      // _truncated is cleared because the stop was clean (not a truncation).
       const partialJson = '{"path":"/tmp/x.html","content":"<html><h1>done';
       const create = vi.fn().mockResolvedValue(streamFromEvents(buildToolUseEvents(partialJson, true, 'tool_use')));
       const provider = new TestAnthropicProvider({ messages: { create } });
       const result = await provider.stream([{ role: 'user', content: 'write' }], TOOLS, 'sys');
+      expect(result.toolBlocks[0]._salvaged).toBe(true);
       expect(result.toolBlocks[0]._truncated).toBeUndefined();
     });
   });

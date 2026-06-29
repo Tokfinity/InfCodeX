@@ -17,18 +17,28 @@ export interface KodaXToolUseBlock {
   name: string;
   input: Record<string, unknown>;
   /**
-   * Set true when `input` was salvaged from malformed JSON AND the stream did
-   * NOT end on a recognized clean stop (i.e. it was truncated — `max_tokens`/
-   * `length` — or the stop reason was ambiguous). Such input may be silently
-   * cut mid-value (e.g. half a `write` payload), so it is NOT safe to execute:
-   * the agent loop routes these into the incomplete-tool retry (CAP-072)
-   * instead of running the tool.
+   * Set true when `input` was salvaged from malformed JSON (strict `JSON.parse`
+   * threw). RAW signal — set regardless of stop reason. On its own it means the
+   * payload is syntactically suspect: even a "complete" turn can carry malformed
+   * JSON (e.g. unescaped quotes) that the partial-json salvage silently truncates
+   * mid-value. `checkIncompleteToolCalls` therefore treats a salvaged input on a
+   * MUTATING tool (write/edit/bash — `isToolMutation`) as incomplete even on a
+   * clean stop, because executing a silently-cut payload corrupts files; a
+   * salvaged input on a read-only tool is allowed through on a clean stop.
+   */
+  _salvaged?: boolean;
+  /**
+   * Set true when `input` was salvaged AND the stream did NOT end on a
+   * recognized clean stop (`max_tokens`/`length`, or an ambiguous/`unknown`
+   * stop). A truncating stop means the payload may be cut mid-value, so this is
+   * unsafe to execute for ANY tool (not just mutating ones) — the agent loop
+   * routes it into the incomplete-tool retry (CAP-072). Subset of `_salvaged`.
    *
-   * Internal marker, consumed within the turn by the retry gate. Provider
-   * serializers never write it to the provider wire (they read only
-   * type/id/name/input). It may transiently remain on an assistant tool_use
-   * block in session history on the retry-cap path; that is harmless and never
-   * reaches the model. Mirrors the `KodaXMessage._synthetic` convention.
+   * Both markers are internal: provider serializers never write them to the wire
+   * (they read only type/id/name/input). They may transiently remain on an
+   * assistant tool_use block in session history on the retry-cap path; harmless
+   * and never reaches the model. Mirrors the `KodaXMessage._synthetic`
+   * convention.
    */
   _truncated?: boolean;
 }

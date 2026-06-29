@@ -184,34 +184,37 @@ describe('openai partial tool_use salvage (streaming path)', () => {
     errSpy.mockRestore();
   });
 
-  describe('_truncated tagging', () => {
-    it('sets _truncated when salvaged AND finish_reason=length', async () => {
+  describe('salvage tagging (_salvaged raw signal + _truncated on non-clean stop)', () => {
+    it('sets both _salvaged and _truncated when salvaged AND finish_reason=length', async () => {
       const truncated = '{"path":"/tmp/x.html","content":"<html><h1>partial';
       const create = vi
         .fn()
         .mockResolvedValue(streamFromChunks(buildToolUseChunks('call_1', 'write', truncated, 'length')));
       const provider = new TestOpenAIProvider({ chat: { completions: { create } } });
       const result = await provider.stream([{ role: 'user', content: 'x' }], TOOLS, 'sys');
+      expect(result.toolBlocks[0]._salvaged).toBe(true);
       expect(result.toolBlocks[0]._truncated).toBe(true);
     });
 
-    it('does NOT set _truncated when salvaged but finish_reason=tool_calls (sloppy-complete is safe)', async () => {
+    it('keeps _salvaged but NOT _truncated on a clean stop (tool_calls); coding layer gates by tool side-effect', async () => {
       const truncated = '{"path":"/tmp/x.html","content":"<html><h1>partial';
       const create = vi
         .fn()
         .mockResolvedValue(streamFromChunks(buildToolUseChunks('call_1', 'write', truncated, 'tool_calls')));
       const provider = new TestOpenAIProvider({ chat: { completions: { create } } });
       const result = await provider.stream([{ role: 'user', content: 'x' }], TOOLS, 'sys');
+      expect(result.toolBlocks[0]._salvaged).toBe(true);
       expect(result.toolBlocks[0]._truncated).toBeUndefined();
     });
 
-    it('does NOT set _truncated for complete JSON on length', async () => {
+    it('sets neither for complete JSON on length', async () => {
       const fullJson = '{"path":"/tmp/x.html","content":"<html></html>"}';
       const create = vi
         .fn()
         .mockResolvedValue(streamFromChunks(buildToolUseChunks('call_1', 'write', fullJson, 'length')));
       const provider = new TestOpenAIProvider({ chat: { completions: { create } } });
       const result = await provider.stream([{ role: 'user', content: 'x' }], TOOLS, 'sys');
+      expect(result.toolBlocks[0]._salvaged).toBeUndefined();
       expect(result.toolBlocks[0]._truncated).toBeUndefined();
     });
   });

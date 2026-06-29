@@ -742,17 +742,18 @@ export abstract class KodaXAnthropicCompatProvider extends KodaXBaseProvider {
               // Skip this invalid tool_use block - do not add to toolBlocks
             } else {
               const parsed = parseToolInputWithSalvageTracked(currentToolInput);
-              // Provisional truncation mark: set when the input was salvaged
-              // from malformed JSON. Stripped after the stream ends if the
-              // final stop_reason is a recognized CLEAN stop (a salvaged but
-              // non-truncated call is safe to execute). See the post-loop
-              // `finalizeToolBlocks` pass before `return`.
+              // `_salvaged` is the raw "strict parse failed" signal (kept on a
+              // clean stop so a mutating tool's malformed payload is still
+              // gated). `_truncated` is the provisional "salvaged + likely
+              // truncated" mark — stripped after the stream ends if the final
+              // stop_reason is a recognized CLEAN stop (the post-loop pass
+              // before `return` removes only `_truncated`, never `_salvaged`).
               toolBlocks.push({
                 type: 'tool_use',
                 id: currentToolId,
                 name: currentToolName,
                 input: parsed.value,
-                ...(parsed.salvaged ? { _truncated: true } : {}),
+                ...(parsed.salvaged ? { _salvaged: true, _truncated: true } : {}),
               });
             }
           }

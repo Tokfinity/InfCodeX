@@ -74,14 +74,41 @@ function incompleteWriteTool(id: string): KodaXToolUseBlock {
 function truncatedFullWriteTool(id: string): KodaXToolUseBlock {
   // All required params LOOK present, but the input was salvaged from a
   // truncated stream (`_truncated`) so the trailing value may be cut
-  // mid-string. The truncation guard must treat it as incomplete and
-  // retry rather than execute the half-written payload.
+  // mid-string. The guard must treat it as incomplete and retry rather
+  // than execute the half-written payload.
   return {
     id,
     name: 'write',
     type: 'tool_use',
     input: { file_path: '/tmp/file.txt', content: 'half a file…' },
+    _salvaged: true,
     _truncated: true,
+  } as unknown as KodaXToolUseBlock;
+}
+
+function salvagedCleanWriteTool(id: string): KodaXToolUseBlock {
+  // Salvaged from malformed JSON but the stream ended on a CLEAN stop, so
+  // `_truncated` is NOT set — only `_salvaged`. For a MUTATING tool (write)
+  // this must still be treated as incomplete: malformed JSON (e.g. unescaped
+  // quotes) can be silently cut mid-value by salvage, corrupting the file.
+  return {
+    id,
+    name: 'write',
+    type: 'tool_use',
+    input: { file_path: '/tmp/file.txt', content: 'looks complete but salvaged' },
+    _salvaged: true,
+  } as unknown as KodaXToolUseBlock;
+}
+
+function hiddenCompleteTool(id: string): KodaXToolUseBlock {
+  // todo_update is an invisible/managed tool — never written to the assistant
+  // wire history, so the maxed_out path must NOT synthesize a tool_result for
+  // it (that would be an orphan with no matching tool_use).
+  return {
+    id,
+    name: 'todo_update',
+    type: 'tool_use',
+    input: { id: 't1', status: 'completed' },
   } as unknown as KodaXToolUseBlock;
 }
 
@@ -186,6 +213,44 @@ describe('CAP-072: checkAndRetryIncompleteTools — truncated-input guard', () =
     expect(result.outcome).toBe('maxed_out');
     expect(onToolResult).toHaveBeenCalledOnce();
     expect((onToolResult.mock.calls[0]![0] as { id: string }).id).toBe('trunc-1');
+  });
+
+  it('CAP-INCOMPLETE-TOOL-TRUNC-004: a _salvaged (clean-stop) MUTATING tool is treated incomplete → retry', async () => {
+    // P1: protocol stop reason != argument integrity. A salvaged write on a
+    // clean stop must NOT execute (could be silently cut mid-value).
+    const messages: KodaXMessage[] = [{ role: 'assistant', content: [] }];
+    const result = await checkAndRetryIncompleteTools({
+      toolBlocks: [salvagedCleanWriteTool('w1')],
+      events: { onRetry: vi.fn() } as unknown as KodaXEvents,
+      emitActiveExtensionEvent: fakeEmitter(),
+      messages,
+      incompleteRetryCount: 0,
+      preAssistantTokenSnapshot: makeSnapshot('pre'),
+      completedTurnTokenSnapshot: makeSnapshot('completed'),
+    });
+    expect(result.outcome).toBe('retry');
+  });
+
+  it('CAP-INCOMPLETE-TOOL-TRUNC-005: at cap → hidden sibling gets NO synthesized tool_result (no orphan)', async () => {
+    // P2: invisible/managed tools are not in the assistant wire history, so a
+    // synthesized tool_result for them would be an orphan. Only visible tools
+    // get a result.
+    const messages: KodaXMessage[] = [{ role: 'assistant', content: [] }];
+    const onToolResult = vi.fn();
+    const result = await checkAndRetryIncompleteTools({
+      toolBlocks: [truncatedFullWriteTool('w-trunc'), hiddenCompleteTool('todo-1')],
+      events: { onRetry: vi.fn(), onToolResult } as unknown as KodaXEvents,
+      emitActiveExtensionEvent: fakeEmitter(),
+      messages,
+      incompleteRetryCount: KODAX_MAX_INCOMPLETE_RETRIES,
+      preAssistantTokenSnapshot: makeSnapshot('pre'),
+      completedTurnTokenSnapshot: makeSnapshot('completed'),
+    });
+    expect(result.outcome).toBe('maxed_out');
+    const resultIds = (onToolResult.mock.calls as Array<[{ id: string }, unknown]>).map((c) => c[0].id);
+    expect(resultIds).toEqual(['w-trunc']); // only the visible write; hidden todo gets none
+    const pushed = messages[messages.length - 1]!.content as Array<{ tool_use_id?: string }>;
+    expect(pushed.map((b) => b.tool_use_id)).toEqual(['w-trunc']);
   });
 
   it('CAP-INCOMPLETE-TOOL-TRUNC-003: at cap → complete sibling of a truncated block ALSO gets a result (no orphan tool_use)', async () => {

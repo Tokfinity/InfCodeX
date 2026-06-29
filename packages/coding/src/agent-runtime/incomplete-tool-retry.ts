@@ -42,10 +42,11 @@
 
 import type { KodaXEvents, KodaXContextTokenSnapshot } from '../types.js';
 import type { KodaXMessage, KodaXToolUseBlock, KodaXToolResultBlock } from '@kodax-ai/llm';
-import { checkIncompleteToolCalls } from '../messages.js';
+import { checkIncompleteToolCalls, isUntrustedSalvage } from '../messages.js';
 import { getRequiredToolParams } from '../tools/index.js';
 import { rebaseContextTokenSnapshot } from '../token-accounting.js';
 import { createToolEventMeta, createToolResultBlock } from './tool-dispatch.js';
+import { isVisibleToolName } from './event-emitter.js';
 import { KODAX_MAX_INCOMPLETE_RETRIES } from '../constants.js';
 import type { ExtensionEventEmitter } from './stream-handler-wiring.js';
 
@@ -124,16 +125,14 @@ export async function checkAndRetryIncompleteTools(
     KODAX_MAX_INCOMPLETE_RETRIES,
   );
   const incompleteIds = new Set<string>();
-  // Track the cause so the synthesized error result tells the model the
-  // truth: a truncated payload needs a SHORTER response, not more params.
-  const truncatedIds = new Set<string>();
+  // Track the cause so the synthesized error result tells the model the truth:
+  // a salvaged/truncated payload needs a SHORTER, complete, valid response —
+  // not more params. Reuses the same untrusted-salvage rule as the gate.
+  const salvageIds = new Set<string>();
   for (const tc of input.toolBlocks) {
-    // Truncated-input blocks are incomplete regardless of which params look
-    // present (mirrors checkIncompleteToolCalls) — synthesize an error result
-    // rather than executing the salvaged half-payload.
-    if (tc._truncated) {
+    if (isUntrustedSalvage(tc)) {
       incompleteIds.add(tc.id);
-      truncatedIds.add(tc.id);
+      salvageIds.add(tc.id);
       continue;
     }
     const required = getRequiredToolParams(tc.name);
@@ -146,17 +145,24 @@ export async function checkAndRetryIncompleteTools(
     }
   }
 
-  // Synthesize a tool_result for EVERY tool_use in this turn — not only the
-  // incomplete ones. A complete sibling sharing a turn with an incomplete/
-  // truncated block would otherwise be left unanswered: the next serialize
-  // drops it as an orphan tool_use (repairToolCallHistory), silently losing a
-  // valid call the model intended to make. Giving it an explicit "skipped —
-  // re-issue" result keeps the wire valid AND tells the model to re-send it.
+  // Synthesize a tool_result for every VISIBLE tool_use in this turn — not only
+  // the incomplete ones. A complete sibling sharing a turn with an incomplete/
+  // salvaged block would otherwise be left unanswered: the next serialize drops
+  // it as an orphan tool_use (repairToolCallHistory), silently losing a valid
+  // call the model intended to make. Giving it an explicit "skipped — re-issue"
+  // result keeps the wire valid AND tells the model to re-send it.
+  //
+  // ONLY visible tools: invisible/managed tools (e.g. emit_managed_protocol,
+  // todo_*) are never written to the assistant wire history (run-substrate uses
+  // `visibleToolBlocks`), so synthesizing a tool_result for them would create an
+  // orphan tool_result with no matching tool_use — exactly what the normal path
+  // (`applyPostToolProcessing`) avoids by gating on `isVisibleToolName`.
   const errorResults: KodaXToolResultBlock[] = [];
   for (const tc of input.toolBlocks) {
+    if (!isVisibleToolName(tc.name)) continue;
     const errorMsg = incompleteIds.has(tc.id)
-      ? (truncatedIds.has(tc.id)
-        ? `[Tool Error] ${tc.name}: Skipped — response was truncated mid-stream (output token limit) after ${KODAX_MAX_INCOMPLETE_RETRIES} retries. Produce a shorter payload (e.g. write structure first, fill in with smaller edits).`
+      ? (salvageIds.has(tc.id)
+        ? `[Tool Error] ${tc.name}: Skipped — input was truncated or could not be parsed as valid JSON after ${KODAX_MAX_INCOMPLETE_RETRIES} retries. Re-send a shorter, complete tool call with valid arguments (e.g. write structure first, fill in with smaller edits).`
         : `[Tool Error] ${tc.name}: Skipped due to missing required parameters after ${KODAX_MAX_INCOMPLETE_RETRIES} retries`)
       : `[Tool Error] ${tc.name}: Skipped — a sibling tool call in the same turn was incomplete/truncated, so this turn was abandoned. Re-issue this call if it is still needed.`;
     await input.emitActiveExtensionEvent('tool:result', {
