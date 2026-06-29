@@ -6,7 +6,8 @@
 
 import Anthropic from '@anthropic-ai/sdk';
 import { KodaXBaseProvider } from './base.js';
-import { parseToolInputWithSalvage } from './tool-input-parser.js';
+import { parseToolInputWithSalvageTracked } from './tool-input-parser.js';
+import { isCleanStop } from '../stop-reason.js';
 import { KodaXProviderError } from '../errors.js';
 import {
   KodaXContentBlock,
@@ -740,11 +741,18 @@ export abstract class KodaXAnthropicCompatProvider extends KodaXBaseProvider {
               });
               // Skip this invalid tool_use block - do not add to toolBlocks
             } else {
+              const parsed = parseToolInputWithSalvageTracked(currentToolInput);
+              // Provisional truncation mark: set when the input was salvaged
+              // from malformed JSON. Stripped after the stream ends if the
+              // final stop_reason is a recognized CLEAN stop (a salvaged but
+              // non-truncated call is safe to execute). See the post-loop
+              // `finalizeToolBlocks` pass before `return`.
               toolBlocks.push({
                 type: 'tool_use',
                 id: currentToolId,
                 name: currentToolName,
-                input: parseToolInputWithSalvage(currentToolInput),
+                input: parsed.value,
+                ...(parsed.salvaged ? { _truncated: true } : {}),
               });
             }
           }
@@ -810,23 +818,54 @@ export abstract class KodaXAnthropicCompatProvider extends KodaXBaseProvider {
           throw new DOMException(reason, 'AbortError');
         }
 
-        const error = new Error(
-          `Stream incomplete: message_stop event not received. ` +
-          `Duration: ${duration}ms, Last event: ${lastEventAge}ms ago. ` +
-          `This may indicate a network disconnection or API timeout.`
-        );
-        error.name = 'StreamIncompleteError';
-        this.logStreamDiagnostic('[Stream] Incomplete stream detected:', {
+        // If `stop_reason` already arrived (Anthropic sends it in `message_delta`,
+        // which precedes `message_stop`), the model finished generating — only
+        // the closing envelope event is missing. The accumulated content is
+        // complete, so return it instead of throwing + retrying the whole
+        // request (which would re-bill the entire turn). We only treat the
+        // stream as genuinely incomplete when NO stop_reason was seen — a true
+        // mid-stream cut (network/timeout), where a retry is the right move.
+        if (!stopReason) {
+          const error = new Error(
+            `Stream incomplete: message_stop event not received. ` +
+            `Duration: ${duration}ms, Last event: ${lastEventAge}ms ago. ` +
+            `This may indicate a network disconnection or API timeout.`
+          );
+          error.name = 'StreamIncompleteError';
+          this.logStreamDiagnostic('[Stream] Incomplete stream detected:', {
+            duration,
+            lastEventAge,
+            textBlocks: textBlocks.length,
+            toolBlocks: toolBlocks.length,
+            thinkingBlocks: thinkingBlocks.length
+          });
+          throw error;
+        }
+
+        this.logStreamDiagnostic('[Stream] message_stop missing but stop_reason known — treating as complete:', {
           duration,
           lastEventAge,
+          stopReason,
           textBlocks: textBlocks.length,
           toolBlocks: toolBlocks.length,
-          thinkingBlocks: thinkingBlocks.length
+          thinkingBlocks: thinkingBlocks.length,
         });
-        throw error;
       }
 
-      return { textBlocks, toolBlocks, thinkingBlocks, usage, stopReason };
+      // Finalize provisional truncation marks (immutably — never mutate the
+      // streamed blocks). A salvaged input is only SAFE to execute when the
+      // stream ended on a recognized CLEAN stop (`end_turn` / `tool_use` /
+      // `pause_turn`), where the salvage was non-strict-but-complete JSON;
+      // there we strip `_truncated` to avoid a spurious retry. On a truncating
+      // stop (`max_tokens`) OR an ambiguous/unknown stop (e.g. a custom compat
+      // provider that omits or nulls `stop_reason`) we RETAIN the mark —
+      // fail-safe: prefer one spurious retry over executing a payload that may
+      // be cut mid-value.
+      const finalToolBlocks = isCleanStop(stopReason)
+        ? toolBlocks.map(({ _truncated: _drop, ...rest }) => rest)
+        : toolBlocks;
+
+      return { textBlocks, toolBlocks: finalToolBlocks, thinkingBlocks, usage, stopReason };
     }, signal, 3, streamOptions?.onRateLimit, streamOptions?.onRetryAfter, {
       model: streamOptions?.modelOverride ?? this.config.model,
       onRejected: streamOptions?.onReasoningEffortRejected,
@@ -980,6 +1019,17 @@ export abstract class KodaXAnthropicCompatProvider extends KodaXBaseProvider {
         } else if (block.type === 'redacted_thinking') {
           thinkingBlocks.push({ type: 'redacted_thinking', data: block.data });
         } else if (block.type === 'tool_use') {
+          // Non-streaming: the Messages API returns `input` as a fully parsed
+          // object, not a raw string buffer — there is nothing to salvage and
+          // no per-block truncation signal, so `_truncated` is not set here.
+          // A `max_tokens` truncation that empties a required field is still
+          // caught downstream by `checkIncompleteToolCalls` (missing-param
+          // scan). The narrow residual case — truncation that lands mid-value
+          // in the last field yet leaves all required keys present — is not
+          // detectable without the raw buffer; flagging every tool_use on a
+          // `max_tokens` stop would over-trigger on complete small calls, so
+          // we intentionally do not. (Streaming, the common path, detects it
+          // precisely via the salvage signal.)
           toolBlocks.push({
             type: 'tool_use',
             id: block.id,

@@ -48,7 +48,7 @@ function streamFromEvents(events: unknown[]): AsyncIterable<unknown> {
   };
 }
 
-function buildToolUseEvents(partialJson: string, sendStop: boolean) {
+function buildToolUseEvents(partialJson: string, sendStop: boolean, stopReason = 'max_tokens') {
   const events: any[] = [
     { type: 'message_start', message: { usage: { input_tokens: 100 } } },
     {
@@ -64,7 +64,7 @@ function buildToolUseEvents(partialJson: string, sendStop: boolean) {
   ];
   if (sendStop) events.push({ type: 'content_block_stop', index: 0 });
   events.push(
-    { type: 'message_delta', delta: { stop_reason: 'max_tokens' }, usage: { output_tokens: 16000 } },
+    { type: 'message_delta', delta: { stop_reason: stopReason }, usage: { output_tokens: 16000 } },
     { type: 'message_stop' },
   );
   return events;
@@ -122,5 +122,33 @@ describe('anthropic partial tool_use salvage', () => {
     const result = await provider.stream(messages, TOOLS, 'sys');
     expect(result.toolBlocks).toHaveLength(1);
     expect(result.toolBlocks[0].input).toEqual({});
+  });
+
+  describe('_truncated tagging (salvage + truncating stop_reason)', () => {
+    it('sets _truncated when salvaged AND stop_reason=max_tokens', async () => {
+      const partialJson = '{"path":"/tmp/slides.html","content":"<html><body><h1>hello';
+      const create = vi.fn().mockResolvedValue(streamFromEvents(buildToolUseEvents(partialJson, true, 'max_tokens')));
+      const provider = new TestAnthropicProvider({ messages: { create } });
+      const result = await provider.stream([{ role: 'user', content: 'write' }], TOOLS, 'sys');
+      expect(result.toolBlocks[0]._truncated).toBe(true);
+    });
+
+    it('does NOT set _truncated when input is complete (not salvaged) even on max_tokens', async () => {
+      const fullJson = '{"path":"/tmp/x.html","content":"<html></html>"}';
+      const create = vi.fn().mockResolvedValue(streamFromEvents(buildToolUseEvents(fullJson, true, 'max_tokens')));
+      const provider = new TestAnthropicProvider({ messages: { create } });
+      const result = await provider.stream([{ role: 'user', content: 'write' }], TOOLS, 'sys');
+      expect(result.toolBlocks[0]._truncated).toBeUndefined();
+    });
+
+    it('does NOT set _truncated when salvaged but stop_reason is a clean stop (sloppy-complete JSON is safe)', async () => {
+      // strict parse fails (unterminated) but the turn ended cleanly with tool_use —
+      // treat as non-strict-but-complete, safe to execute, no forced retry.
+      const partialJson = '{"path":"/tmp/x.html","content":"<html><h1>done';
+      const create = vi.fn().mockResolvedValue(streamFromEvents(buildToolUseEvents(partialJson, true, 'tool_use')));
+      const provider = new TestAnthropicProvider({ messages: { create } });
+      const result = await provider.stream([{ role: 'user', content: 'write' }], TOOLS, 'sys');
+      expect(result.toolBlocks[0]._truncated).toBeUndefined();
+    });
   });
 });

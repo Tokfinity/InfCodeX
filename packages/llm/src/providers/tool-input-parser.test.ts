@@ -12,7 +12,7 @@
  */
 
 import { describe, expect, it, vi, afterEach } from 'vitest';
-import { parseToolInputWithSalvage } from './tool-input-parser.js';
+import { parseToolInputWithSalvage, parseToolInputWithSalvageTracked } from './tool-input-parser.js';
 
 describe('parseToolInputWithSalvage', () => {
   afterEach(() => {
@@ -121,6 +121,39 @@ describe('parseToolInputWithSalvage', () => {
       expect(parseToolInputWithSalvage('"just a string"')).toEqual({});
       expect(parseToolInputWithSalvage('true')).toEqual({});
       expect(parseToolInputWithSalvage('null')).toEqual({});
+    });
+  });
+
+  describe('tracked variant: salvaged flag', () => {
+    it('strict complete JSON → salvaged:false', () => {
+      expect(parseToolInputWithSalvageTracked('{"a":1}')).toEqual({ value: { a: 1 }, salvaged: false });
+    });
+
+    it('empty / undefined / null → salvaged:false (not a truncation)', () => {
+      expect(parseToolInputWithSalvageTracked('')).toEqual({ value: {}, salvaged: false });
+      expect(parseToolInputWithSalvageTracked(undefined)).toEqual({ value: {}, salvaged: false });
+      expect(parseToolInputWithSalvageTracked(null)).toEqual({ value: {}, salvaged: false });
+    });
+
+    it('strict-parse success coerced to {} (array/primitive) → salvaged:false', () => {
+      // strict JSON.parse succeeded; the {} is a shape coercion, NOT salvage.
+      expect(parseToolInputWithSalvageTracked('[1,2,3]')).toEqual({ value: {}, salvaged: false });
+      expect(parseToolInputWithSalvageTracked('42')).toEqual({ value: {}, salvaged: false });
+    });
+
+    it('truncated mid-string → salvaged:true with recovered prefix', () => {
+      const out = parseToolInputWithSalvageTracked('{"path":"/tmp/x","content":"<html><h1>partial');
+      expect(out.salvaged).toBe(true);
+      expect(out.value.path).toBe('/tmp/x');
+      expect((out.value.content as string)).toContain('<html><h1>partial');
+    });
+
+    it('total garbage → salvaged:true with {} value', () => {
+      expect(parseToolInputWithSalvageTracked('not even json at all }}}')).toEqual({ value: {}, salvaged: true });
+    });
+
+    it('parseToolInputWithSalvage delegates to tracked .value (back-compat)', () => {
+      expect(parseToolInputWithSalvage('{"a":1}')).toEqual(parseToolInputWithSalvageTracked('{"a":1}').value);
     });
   });
 

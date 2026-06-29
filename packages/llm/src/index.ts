@@ -207,7 +207,7 @@ export {
 export { parseToolInputWithSalvage } from './providers/tool-input-parser.js';
 
 // FEATURE_240 (v0.7.56): provider-neutral consumer-side stopReason classifier.
-export { classifyStopReason } from './stop-reason.js';
+export { classifyStopReason, isCleanStop } from './stop-reason.js';
 export type { KodaXStopClass } from './stop-reason.js';
 
 // ============== Cost Tracking ==============

@@ -7,7 +7,8 @@
 import OpenAI from 'openai';
 import { KodaXBaseProvider } from './base.js';
 import { KodaXProviderError } from '../errors.js';
-import { parseToolInputWithSalvage } from './tool-input-parser.js';
+import { parseToolInputWithSalvageTracked } from './tool-input-parser.js';
+import { isCleanStop } from '../stop-reason.js';
 import {
   KodaXContentBlock,
   KodaXNormalizedReasoningRequest,
@@ -920,13 +921,30 @@ export abstract class KodaXOpenAICompatProvider extends KodaXBaseProvider {
         thinkingBlocks.push({ type: 'thinking', thinking: thinkingContent });
         streamOptions?.onThinkingEnd?.(thinkingContent);
       }
+      // A salvaged input is safe to execute only when the stream ended on a
+      // recognized CLEAN stop (sloppy-but-complete JSON). On a truncating
+      // (`length`) OR ambiguous/unknown finish_reason, retain the mark so the
+      // agent loop re-asks instead of executing a possibly mid-cut payload.
+      const cleanStop = isCleanStop(finishReason ?? undefined);
       for (const [, tc] of toolCallsMap) {
         if (tc.id && tc.name) {
+          const parsed = parseToolInputWithSalvageTracked(tc.arguments);
           toolBlocks.push({
             type: 'tool_use',
             id: tc.id,
             name: tc.name,
-            input: parseToolInputWithSalvage(tc.arguments),
+            input: parsed.value,
+            ...(parsed.salvaged && !cleanStop ? { _truncated: true } : {}),
+          });
+        } else {
+          // Drop a tool_call missing id/name (cannot be paired with a
+          // tool_result → would 400). Never drop silently: log it as an
+          // anomaly (mirrors the Anthropic-side `[Tool Block Invalid]` log) so
+          // a provider emitting malformed blocks is diagnosable.
+          console.error('[Tool Block Invalid] Dropped tool_call missing id or name:', {
+            id: JSON.stringify(tc.id),
+            name: JSON.stringify(tc.name),
+            argsLength: tc.arguments?.length ?? 0,
           });
         }
       }
@@ -1060,14 +1078,19 @@ export abstract class KodaXOpenAICompatProvider extends KodaXBaseProvider {
       const message = choice?.message;
       const textContent = extractOpenAIMessageText(message?.content);
       const reasoningContent = extractOpenAIMessageReasoning(message);
+      const cleanStop = isCleanStop(choice?.finish_reason ?? undefined);
       const toolBlocks: KodaXToolUseBlock[] = (message?.tool_calls ?? [])
         .filter(isOpenAIFunctionToolCall)
-        .map((toolCall) => ({
-          type: 'tool_use' as const,
-          id: toolCall.id,
-          name: toolCall.function.name,
-          input: parseToolInputWithSalvage(toolCall.function.arguments),
-        }));
+        .map((toolCall) => {
+          const parsed = parseToolInputWithSalvageTracked(toolCall.function.arguments);
+          return {
+            type: 'tool_use' as const,
+            id: toolCall.id,
+            name: toolCall.function.name,
+            input: parsed.value,
+            ...(parsed.salvaged && !cleanStop ? { _truncated: true } : {}),
+          };
+        });
 
       if (textContent) {
         streamOptions?.onTextDelta?.(textContent);

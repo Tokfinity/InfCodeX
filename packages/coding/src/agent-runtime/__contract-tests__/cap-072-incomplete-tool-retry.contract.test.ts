@@ -71,6 +71,20 @@ function incompleteWriteTool(id: string): KodaXToolUseBlock {
   } as unknown as KodaXToolUseBlock;
 }
 
+function truncatedFullWriteTool(id: string): KodaXToolUseBlock {
+  // All required params LOOK present, but the input was salvaged from a
+  // truncated stream (`_truncated`) so the trailing value may be cut
+  // mid-string. The truncation guard must treat it as incomplete and
+  // retry rather than execute the half-written payload.
+  return {
+    id,
+    name: 'write',
+    type: 'tool_use',
+    input: { file_path: '/tmp/file.txt', content: 'half a file…' },
+    _truncated: true,
+  } as unknown as KodaXToolUseBlock;
+}
+
 describe('CAP-072: checkAndRetryIncompleteTools — no incomplete', () => {
   it('CAP-INCOMPLETE-TOOL-NOOP: zero incomplete tools → outcome no_incomplete, counter reset to 0', async () => {
     const messages: KodaXMessage[] = [];
@@ -131,6 +145,73 @@ describe('CAP-072: checkAndRetryIncompleteTools — under cap (retry path)', () 
     const content = messages[0]!.content as string;
     expect(content).toMatch(/CRITICAL/);
     expect(content).toMatch(/task will FAIL/);
+  });
+});
+
+describe('CAP-072: checkAndRetryIncompleteTools — truncated-input guard', () => {
+  // Note: "not executed" is enforced by the run-substrate gate
+  // (run-substrate.ts: `if (outcome !== 'no_incomplete') continue;` skips tool
+  // dispatch). This unit asserts the gate's INPUT — outcome==='retry' — which
+  // is the contract that triggers that skip.
+  it('CAP-INCOMPLETE-TOOL-TRUNC-001: _truncated block with all params present → outcome retry (gates dispatch)', async () => {
+    const messages: KodaXMessage[] = [{ role: 'assistant', content: [] }];
+    const onRetry = vi.fn();
+    const result = await checkAndRetryIncompleteTools({
+      toolBlocks: [truncatedFullWriteTool('id-1')],
+      events: { onRetry } as unknown as KodaXEvents,
+      emitActiveExtensionEvent: fakeEmitter(),
+      messages,
+      incompleteRetryCount: 0,
+      preAssistantTokenSnapshot: makeSnapshot('pre'),
+      completedTurnTokenSnapshot: makeSnapshot('completed'),
+    });
+    expect(result.outcome).toBe('retry');
+    expect(messages[0]!.role).toBe('user');
+    expect(messages[0]!._synthetic).toBe(true);
+    expect(onRetry).toHaveBeenCalledOnce();
+  });
+
+  it('CAP-INCOMPLETE-TOOL-TRUNC-002: at cap → maxed_out pushes error tool_result for _truncated block', async () => {
+    const messages: KodaXMessage[] = [{ role: 'assistant', content: [] }];
+    const onToolResult = vi.fn();
+    const result = await checkAndRetryIncompleteTools({
+      toolBlocks: [truncatedFullWriteTool('trunc-1')],
+      events: { onRetry: vi.fn(), onToolResult } as unknown as KodaXEvents,
+      emitActiveExtensionEvent: fakeEmitter(),
+      messages,
+      incompleteRetryCount: KODAX_MAX_INCOMPLETE_RETRIES,
+      preAssistantTokenSnapshot: makeSnapshot('pre'),
+      completedTurnTokenSnapshot: makeSnapshot('completed'),
+    });
+    expect(result.outcome).toBe('maxed_out');
+    expect(onToolResult).toHaveBeenCalledOnce();
+    expect((onToolResult.mock.calls[0]![0] as { id: string }).id).toBe('trunc-1');
+  });
+
+  it('CAP-INCOMPLETE-TOOL-TRUNC-003: at cap → complete sibling of a truncated block ALSO gets a result (no orphan tool_use)', async () => {
+    // [truncated write, complete read] at the cap: both must get a tool_result
+    // so the complete read is not left as an orphan tool_use that the next
+    // serialize silently drops. The complete sibling gets a "re-issue" result.
+    const messages: KodaXMessage[] = [{ role: 'assistant', content: [] }];
+    const onToolResult = vi.fn();
+    const result = await checkAndRetryIncompleteTools({
+      toolBlocks: [truncatedFullWriteTool('w-trunc'), completeTool('r-complete')],
+      events: { onRetry: vi.fn(), onToolResult } as unknown as KodaXEvents,
+      emitActiveExtensionEvent: fakeEmitter(),
+      messages,
+      incompleteRetryCount: KODAX_MAX_INCOMPLETE_RETRIES,
+      preAssistantTokenSnapshot: makeSnapshot('pre'),
+      completedTurnTokenSnapshot: makeSnapshot('completed'),
+    });
+    expect(result.outcome).toBe('maxed_out');
+    // Both tool_use ids get a synthesized result → no orphan.
+    const resultIds = (onToolResult.mock.calls as Array<[{ id: string }, unknown]>).map((c) => c[0].id);
+    expect(new Set(resultIds)).toEqual(new Set(['w-trunc', 'r-complete']));
+    const pushed = messages[messages.length - 1]!.content as Array<{ tool_use_id?: string; content?: unknown }>;
+    expect(pushed.map((b) => b.tool_use_id).sort()).toEqual(['r-complete', 'w-trunc']);
+    // The complete sibling is told to re-issue.
+    const sibling = onToolResult.mock.calls.find((c) => (c[0] as { id: string }).id === 'r-complete');
+    expect((sibling?.[0] as { content: string }).content).toMatch(/re-issue|sibling/i);
   });
 });
 

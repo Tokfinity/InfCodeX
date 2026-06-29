@@ -16,6 +16,21 @@ export interface KodaXToolUseBlock {
   id: string;
   name: string;
   input: Record<string, unknown>;
+  /**
+   * Set true when `input` was salvaged from malformed JSON AND the stream did
+   * NOT end on a recognized clean stop (i.e. it was truncated — `max_tokens`/
+   * `length` — or the stop reason was ambiguous). Such input may be silently
+   * cut mid-value (e.g. half a `write` payload), so it is NOT safe to execute:
+   * the agent loop routes these into the incomplete-tool retry (CAP-072)
+   * instead of running the tool.
+   *
+   * Internal marker, consumed within the turn by the retry gate. Provider
+   * serializers never write it to the provider wire (they read only
+   * type/id/name/input). It may transiently remain on an assistant tool_use
+   * block in session history on the retry-cap path; that is harmless and never
+   * reaches the model. Mirrors the `KodaXMessage._synthetic` convention.
+   */
+  _truncated?: boolean;
 }
 
 /**

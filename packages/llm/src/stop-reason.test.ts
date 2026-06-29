@@ -1,6 +1,6 @@
 import { describe, expect, it } from 'vitest';
 
-import { classifyStopReason } from './stop-reason.js';
+import { classifyStopReason, isCleanStop } from './stop-reason.js';
 
 describe('classifyStopReason', () => {
   it.each([
@@ -26,5 +26,30 @@ describe('classifyStopReason', () => {
   it('normalizes provider casing and whitespace before classification', () => {
     expect(classifyStopReason(' LENGTH ')).toBe('truncated');
     expect(classifyStopReason(' Stop ')).toBe('end');
+  });
+});
+
+describe('isCleanStop', () => {
+  it.each([
+    ['end_turn', true],
+    ['stop', true],
+    ['tool_use', true],
+    ['tool_calls', true],
+    ['pause_turn', true],
+  ] as const)('treats clean stop %s as true', (raw) => {
+    expect(isCleanStop(raw)).toBe(true);
+  });
+
+  it.each([
+    ['max_tokens', false],
+    ['length', false],
+    ['refusal', false],
+    ['unexpected-provider-value', false],
+    [undefined, false],
+    [null, false],
+  ] as const)('treats truncating/ambiguous %s as NOT clean (fail-safe)', (raw) => {
+    // The fail-safe property: unknown/undefined must be NOT-clean so a salvaged
+    // tool input is retained (retry) rather than executed.
+    expect(isCleanStop(raw)).toBe(false);
   });
 });

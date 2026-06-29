@@ -166,4 +166,34 @@ describe('CAP-002: history cleanup contract', () => {
     expect(assistantBlock.role).toBe('assistant');
     expect(assistantBlock.content).toEqual([{ type: 'text', text: '' }]);
   });
+
+  it('CAP-HISTORY-CLEANUP-006: an all-orphan assistant turn is held with an empty marker, not dropped (preserves alternation)', () => {
+    // An assistant turn that is ONLY an orphan tool_use (no text/thinking),
+    // sitting between two user messages. Dropping it would yield user,user —
+    // which Anthropic rejects (400, role alternation). It must be replaced
+    // with an empty-text marker so the role sequence stays user,assistant,user.
+    const messages: KodaXMessage[] = [
+      { role: 'user', content: 'go' },
+      { role: 'assistant', content: [{ type: 'tool_use', id: 'orphan_1', name: 'read', input: {} }] },
+      { role: 'user', content: 'never mind' },
+    ];
+
+    const fixed = validateAndFixToolHistory(messages);
+
+    expect(fixed.map((m) => m.role)).toEqual(['user', 'assistant', 'user']);
+    expect(fixed[1]!.content).toEqual([{ type: 'text', text: '' }]);
+  });
+
+  it('CAP-HISTORY-CLEANUP-007: a user turn emptied of its only (orphan) tool_result is held with a marker, not dropped', () => {
+    const messages: KodaXMessage[] = [
+      { role: 'user', content: 'go' },
+      { role: 'assistant', content: 'sure' },
+      { role: 'user', content: [{ type: 'tool_result', tool_use_id: 'ghost', content: 'x' }] },
+    ];
+
+    const fixed = validateAndFixToolHistory(messages);
+
+    expect(fixed.map((m) => m.role)).toEqual(['user', 'assistant', 'user']);
+    expect(fixed[2]!.content).toEqual([{ type: 'text', text: '' }]);
+  });
 });

@@ -173,39 +173,51 @@ export function validateAndFixToolHistory(messages: KodaXMessage[]): KodaXMessag
       fixedContent.push(...content);
     }
 
-    if (fixedContent.length > 0) {
-      // Guard: after tool_use removal + microcompaction clearing thinking text,
-      // an assistant message might only contain cleared thinking blocks (thinking: '')
-      // and/or empty text blocks (text: ''). Providers like Kimi reject these as
-      // "empty" (400 error). Inject minimal placeholder to preserve message alternation
-      // — dropping the message would orphan adjacent tool_result blocks.
-      if (msg.role === 'assistant') {
-        const hasSubstantiveContent = fixedContent.some((block) => {
-          if (!block || typeof block !== 'object' || !('type' in block)) return false;
-          const b = block as { type: string; text?: string; thinking?: string };
-          if (b.type === 'tool_use') return true;
-          if (b.type === 'text') return !!b.text;
-          if (b.type === 'thinking') return !!b.thinking;
-          return true; // preserve unknown block types
-        });
-        if (!hasSubstantiveContent) {
-          // Inject an EMPTY text block, not a persisted '...'. The empty
-          // marker preserves message alternation (dropping would orphan
-          // adjacent tool_result blocks) while keeping history honest — a
-          // persisted '...' leaks to SDK/REPL as a fabricated reply. The
-          // provider serializer synthesizes a wire-only '...' if the
-          // gateway (e.g. Kimi) rejects empty content.
-          fixedMessages.push({ ...msg, content: [{ type: 'text', text: '' }] });
-          continue;
-        }
-      }
-      fixedMessages.push({ ...msg, content: fixedContent });
+    // A message fully emptied by orphan stripping must NOT be dropped: removing
+    // a mid-conversation turn breaks user/assistant alternation (e.g.
+    // user, [dropped all-orphan assistant], user → user,user → Anthropic 400).
+    // Hold the slot with an EMPTY text marker instead — this mirrors the
+    // provider-side `repairToolCallHistory`, which already replaces an emptied
+    // turn with a wire-only '...' for exactly this reason. The empty marker is
+    // honest in history (a persisted '...' would leak to SDK/REPL as a
+    // fabricated reply); the serializer synthesizes the wire-only '...' when a
+    // gateway (e.g. Kimi) rejects empty content.
+    if (fixedContent.length === 0) {
+      fixedMessages.push({ ...msg, content: [{ type: 'text', text: '' }] });
+      continue;
     }
+
+    // Guard: after tool_use removal + microcompaction clearing thinking text,
+    // an assistant message might only contain cleared thinking blocks (thinking: '')
+    // and/or empty text blocks (text: ''). Providers like Kimi reject these as
+    // "empty" (400 error). Inject minimal placeholder to preserve message alternation
+    // — dropping the message would orphan adjacent tool_result blocks.
+    if (msg.role === 'assistant') {
+      const hasSubstantiveContent = fixedContent.some((block) => {
+        if (!block || typeof block !== 'object' || !('type' in block)) return false;
+        const b = block as { type: string; text?: string; thinking?: string };
+        if (b.type === 'tool_use') return true;
+        if (b.type === 'text') return !!b.text;
+        if (b.type === 'thinking') return !!b.thinking;
+        return true; // preserve unknown block types
+      });
+      if (!hasSubstantiveContent) {
+        // Inject an EMPTY text block, not a persisted '...'. The empty
+        // marker preserves message alternation (dropping would orphan
+        // adjacent tool_result blocks) while keeping history honest — a
+        // persisted '...' leaks to SDK/REPL as a fabricated reply. The
+        // provider serializer synthesizes a wire-only '...' if the
+        // gateway (e.g. Kimi) rejects empty content.
+        fixedMessages.push({ ...msg, content: [{ type: 'text', text: '' }] });
+        continue;
+      }
+    }
+    fixedMessages.push({ ...msg, content: fixedContent });
   }
 
-  if (process.env.KODAX_DEBUG_TOOL_HISTORY && fixedMessages.length !== messages.length) {
-    console.error('[ToolHistory] Fixed: removed', messages.length - fixedMessages.length, 'invalid messages');
-  }
+  // Note: message count is preserved — a fully-emptied turn is held with an
+  // empty-text marker (to keep role alternation), not dropped — so we no longer
+  // log a removed-message count here. Per-block removals are logged inline above.
 
   return fixedMessages;
 }

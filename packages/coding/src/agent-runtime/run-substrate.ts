@@ -165,6 +165,7 @@ import {
   runToolDispatch,
   applyPostToolProcessing,
 } from './tool-dispatch.js';
+import { repairToolBlockNames } from './tool-name-repair.js';
 import { buildReasoningExecutionState } from './reasoning-plan-entry.js';
 import { resolveContextWindow } from '@kodax-ai/agent';
 import {
@@ -967,6 +968,21 @@ export async function runSubstrate(
 
       turnState.lastText = result.textBlocks.map(b => b.text).join(' ');
       const preAssistantTokenSnapshot = createContextTokenSnapshot(messages, result.usage);
+
+      // Conservative tool-name repair ONCE per turn (`Write` → `write`), before
+      // ANY consumer reads `result.toolBlocks` — history (assistant message),
+      // dispatch (bash sequential-vs-parallel routing keys on `name==='bash'`),
+      // tool events, and the incomplete-tool param scan — so the canonical name
+      // is used uniformly and `tool:start`/`tool:result` cannot disagree.
+      // Unique case/separator match only; never edit-distance. See tool-name-repair.ts.
+      const activeToolNamesForTurn = getRuntimeActiveToolNames(
+        runtimeSessionState.activeTools,
+        options.context?.repoIntelligenceMode,
+        !!runtime,
+        options.context?.toolConstructionMode,
+      );
+      result = { ...result, toolBlocks: repairToolBlockNames(result.toolBlocks, activeToolNamesForTurn) };
+
       const visibleToolBlocks = result.toolBlocks.filter((block) => isVisibleToolName(block.name));
 
       // Promise 信号检测
@@ -1236,12 +1252,7 @@ export async function runSubstrate(
           events,
           ctx,
           runtimeSessionState,
-          activeToolNames: getRuntimeActiveToolNames(
-            runtimeSessionState.activeTools,
-            options.context?.repoIntelligenceMode,
-            !!runtime,
-            options.context?.toolConstructionMode,
-          ),
+          activeToolNames: activeToolNamesForTurn,
           abortSignal: options.abortSignal,
         });
         // CAP-078: per-result post-processing chain (mutation reflection,

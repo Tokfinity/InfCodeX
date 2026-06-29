@@ -165,6 +165,56 @@ describe('openai partial tool_use salvage (streaming path)', () => {
     expect(result.toolBlocks).toHaveLength(1);
     expect(result.toolBlocks[0].input).toEqual({});
   });
+
+  it('drops a tool_call missing a name and logs it (no silent drop)', async () => {
+    const errSpy = vi.spyOn(console, 'error').mockImplementation(() => {});
+    const chunks = [
+      { choices: [{ index: 0, delta: { tool_calls: [{ index: 0, id: 'call_x', type: 'function', function: { name: '', arguments: '{}' } }] } }] },
+      { choices: [{ index: 0, delta: {}, finish_reason: 'tool_calls' }] },
+    ];
+    const create = vi.fn().mockResolvedValue(streamFromChunks(chunks));
+    const provider = new TestOpenAIProvider({ chat: { completions: { create } } });
+
+    const result = await provider.stream([{ role: 'user', content: 'x' }], TOOLS, 'sys');
+    expect(result.toolBlocks).toHaveLength(0); // malformed block dropped
+    expect(errSpy).toHaveBeenCalledWith(
+      '[Tool Block Invalid] Dropped tool_call missing id or name:',
+      expect.objectContaining({ name: JSON.stringify('') }),
+    );
+    errSpy.mockRestore();
+  });
+
+  describe('_truncated tagging', () => {
+    it('sets _truncated when salvaged AND finish_reason=length', async () => {
+      const truncated = '{"path":"/tmp/x.html","content":"<html><h1>partial';
+      const create = vi
+        .fn()
+        .mockResolvedValue(streamFromChunks(buildToolUseChunks('call_1', 'write', truncated, 'length')));
+      const provider = new TestOpenAIProvider({ chat: { completions: { create } } });
+      const result = await provider.stream([{ role: 'user', content: 'x' }], TOOLS, 'sys');
+      expect(result.toolBlocks[0]._truncated).toBe(true);
+    });
+
+    it('does NOT set _truncated when salvaged but finish_reason=tool_calls (sloppy-complete is safe)', async () => {
+      const truncated = '{"path":"/tmp/x.html","content":"<html><h1>partial';
+      const create = vi
+        .fn()
+        .mockResolvedValue(streamFromChunks(buildToolUseChunks('call_1', 'write', truncated, 'tool_calls')));
+      const provider = new TestOpenAIProvider({ chat: { completions: { create } } });
+      const result = await provider.stream([{ role: 'user', content: 'x' }], TOOLS, 'sys');
+      expect(result.toolBlocks[0]._truncated).toBeUndefined();
+    });
+
+    it('does NOT set _truncated for complete JSON on length', async () => {
+      const fullJson = '{"path":"/tmp/x.html","content":"<html></html>"}';
+      const create = vi
+        .fn()
+        .mockResolvedValue(streamFromChunks(buildToolUseChunks('call_1', 'write', fullJson, 'length')));
+      const provider = new TestOpenAIProvider({ chat: { completions: { create } } });
+      const result = await provider.stream([{ role: 'user', content: 'x' }], TOOLS, 'sys');
+      expect(result.toolBlocks[0]._truncated).toBeUndefined();
+    });
+  });
 });
 
 describe('openai partial tool_use salvage (non-streaming complete path)', () => {

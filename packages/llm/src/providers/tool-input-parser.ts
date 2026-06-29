@@ -23,7 +23,33 @@
 import { parse as parsePartialJson } from 'partial-json';
 
 /**
- * Parse a tool_use input buffer with three-stage recovery.
+ * Result of {@link parseToolInputWithSalvageTracked}.
+ */
+export interface ToolInputParseResult {
+  /** Parsed input object (always a plain Record; `{}` on total failure). */
+  readonly value: Record<string, unknown>;
+  /**
+   * True when strict `JSON.parse` threw and the value came from the
+   * partial-json salvage path (or the `{}` last-resort fallback).
+   *
+   * Strict-parse SUCCESS — including the array/primitive coercion to
+   * `{}` — is NOT salvage (`salvaged: false`), because the buffer was
+   * well-formed JSON; only the shape was wrong.
+   *
+   * `salvaged: true` means the buffer was malformed at the byte level,
+   * which for an accumulated streaming tool_use buffer almost always
+   * means a `max_tokens` / `length` truncation cut the JSON mid-value.
+   * Callers combine this with a truncating stop reason to decide whether
+   * the recovered input is trustworthy enough to execute — see
+   * `KodaXToolUseBlock._truncated`. A salvaged value on a CLEAN stop is
+   * non-strict-but-complete JSON (e.g. a trailing comma) and is safe.
+   */
+  readonly salvaged: boolean;
+}
+
+/**
+ * Parse a tool_use input buffer with three-stage recovery, reporting
+ * whether the value had to be salvaged.
  *
  * Stages:
  *   1. strict `JSON.parse` — fast path for the 99% complete case.
@@ -37,16 +63,20 @@ import { parse as parsePartialJson } from 'partial-json';
  * Always returns a plain object so the caller can construct a valid
  * `KodaXToolUseBlock` without further type guards.
  */
-export function parseToolInputWithSalvage(raw: string | undefined | null): Record<string, unknown> {
-  if (!raw) return {};
+export function parseToolInputWithSalvageTracked(
+  raw: string | undefined | null,
+): ToolInputParseResult {
+  if (!raw) return { value: {}, salvaged: false };
 
   try {
     const v = JSON.parse(raw);
-    return v && typeof v === 'object' && !Array.isArray(v)
-      ? (v as Record<string, unknown>)
-      : {};
+    return {
+      value: v && typeof v === 'object' && !Array.isArray(v) ? (v as Record<string, unknown>) : {},
+      salvaged: false,
+    };
   } catch {
-    // fall through
+    // strict parse failed — the buffer is malformed (almost always a
+    // max_tokens/length truncation mid-JSON). Fall through to salvage.
   }
 
   try {
@@ -54,10 +84,20 @@ export function parseToolInputWithSalvage(raw: string | undefined | null): Recor
     if (process.env.KODAX_DEBUG_TOOL_STREAM) {
       console.warn('[Tool Block Salvaged] partial JSON recovered, rawLength=', raw.length);
     }
-    return v && typeof v === 'object' && !Array.isArray(v)
-      ? (v as Record<string, unknown>)
-      : {};
+    return {
+      value: v && typeof v === 'object' && !Array.isArray(v) ? (v as Record<string, unknown>) : {},
+      salvaged: true,
+    };
   } catch {
-    return {};
+    return { value: {}, salvaged: true };
   }
+}
+
+/**
+ * Back-compat wrapper returning only the parsed object. Prefer
+ * {@link parseToolInputWithSalvageTracked} inside provider transports so
+ * the truncation signal is not lost.
+ */
+export function parseToolInputWithSalvage(raw: string | undefined | null): Record<string, unknown> {
+  return parseToolInputWithSalvageTracked(raw).value;
 }

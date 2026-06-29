@@ -154,6 +154,13 @@ export async function executeToolCall(
     return CANCELLED_TOOL_RESULT_MESSAGE;
   }
 
+  // NOTE: conservative tool-name repair (`Write` → `write`) happens ONCE
+  // upstream in run-substrate via `repairToolBlockNames`, before history,
+  // dispatch (bash routing), events, and the incomplete-tool scan read the
+  // blocks — so the canonical name is used uniformly and `tool:start` /
+  // `tool:result` cannot disagree. By the time a block reaches here its name
+  // is already canonical.
+
   const visibleTool = isVisibleToolName(toolCall.name);
   const toolMeta = createToolEventMeta(events, toolCall.id);
   if (visibleTool) {

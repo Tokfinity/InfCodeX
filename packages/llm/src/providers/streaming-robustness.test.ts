@@ -113,6 +113,29 @@ describe('streaming robustness', () => {
     expect(console.error).not.toHaveBeenCalled();
   });
 
+  it('returns the partial response when stop_reason arrived but message_stop did not (no wasteful retry)', async () => {
+    // Anthropic sends stop_reason in message_delta, which precedes message_stop.
+    // If the stream cuts in that narrow window, the content is already complete —
+    // we must return it (not throw StreamIncompleteError and re-bill the turn).
+    const provider = new TestAnthropicProvider({
+      messages: {
+        create: vi.fn().mockResolvedValue(
+          createAsyncIterable([
+            { type: 'content_block_start', content_block: { type: 'text' } },
+            { type: 'content_block_delta', delta: { type: 'text_delta', text: 'Hello world' } },
+            { type: 'content_block_stop' },
+            { type: 'message_delta', delta: { stop_reason: 'end_turn' }, usage: { output_tokens: 5 } },
+            // NOTE: no message_stop event
+          ]),
+        ),
+      },
+    });
+
+    const result = await provider.stream(MESSAGES, TOOLS, 'system');
+    expect(result.stopReason).toBe('end_turn');
+    expect(result.textBlocks.map((b) => b.text).join('')).toContain('Hello world');
+  });
+
   it('treats an Anthropic abort as AbortError instead of Stream incomplete', async () => {
     const controller = new AbortController();
     const provider = new TestAnthropicProvider({
