@@ -213,6 +213,24 @@ describe('openai reasoning capability', () => {
     expect(create.mock.calls[0]?.[0]).not.toHaveProperty('reasoning_effort');
   });
 
+  it('enables thinking for the always-on Kimi K2.7 Code preset (v0.7.57 regression fix)', async () => {
+    const create = vi.fn().mockResolvedValue(createCompletedOpenAIStream());
+    const provider = new TestOpenAIProvider('kimi', 'native-toggle', {
+      chat: { completions: { create } },
+    }, {
+      reasoningProfile: {
+        reasoningPreset: 'kimi-k2.7-code',
+        effortStrategy: 'prompt-only',
+        defaultEffort: 'high',
+        localRejectEfforts: ['none', 'minimal'],
+      },
+    });
+
+    await provider.stream(MESSAGES, TOOLS, 'system', { ...reasoning, effort: 'high' });
+
+    expect(create.mock.calls[0]?.[0].thinking).toEqual({ type: 'enabled' });
+  });
+
   it('sends DeepSeek V4 thinking plus aliased reasoning_effort through reasoning metadata', async () => {
     const create = vi.fn().mockResolvedValue(createCompletedOpenAIStream());
     const provider = new TestOpenAIProvider('deepseek', 'native-effort', {

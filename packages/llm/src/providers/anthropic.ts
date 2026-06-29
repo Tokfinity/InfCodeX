@@ -236,12 +236,23 @@ export abstract class KodaXAnthropicCompatProvider extends KodaXBaseProvider {
     const preset = capability.reasoningPreset;
     const rawParams = params as unknown as Record<string, unknown>;
 
+    // "Always-thinks" coding models (kimi-for-coding / kimi-k2.7-code,
+    // MiniMax-M2.7): the effort LEVEL is prompt-only, but the server only emits
+    // reasoning when thinking is explicitly enabled on the wire. Send the enable
+    // param — without it the model returns no reasoning_content and the user
+    // sees no thinking. v0.7.57 regression: these were `native-budget` and DID
+    // send `thinking:{type:'enabled'}` before the reasoning single-track
+    // migration (ADR-042); the new prompt-only profile dropped it. none/minimal
+    // are localRejected, so these presets never disable.
+    if (preset === 'kimi-k2.7-code' || preset === 'minimax-m2-always') {
+      params.thinking = { type: 'enabled' } as Anthropic.Messages.ThinkingConfigParam;
+      return;
+    }
+
     if (
       preset === 'none' ||
       capability.effortStrategy === 'none' ||
-      capability.effortStrategy === 'prompt-only' ||
-      preset === 'kimi-k2.7-code' ||
-      preset === 'minimax-m2-always'
+      capability.effortStrategy === 'prompt-only'
     ) {
       return;
     }

@@ -343,6 +343,43 @@ describe('anthropic reasoning capability', () => {
     expect(kwargs.reasoning_effort).toBe('max');
   });
 
+  it('enables thinking for the always-on Kimi K2.7 Code preset (v0.7.57 regression fix)', async () => {
+    const create = vi.fn().mockResolvedValue(createCompletedAnthropicStream());
+    const provider = new TestAnthropicProvider('native-toggle', {
+      messages: { create },
+    }, {
+      reasoningProfile: {
+        reasoningPreset: 'kimi-k2.7-code',
+        effortStrategy: 'prompt-only',
+        defaultEffort: 'high',
+        localRejectEfforts: ['none', 'minimal'],
+      },
+    });
+
+    await provider.stream(MESSAGES, TOOLS, 'system', { ...reasoning, effort: 'high' });
+
+    // Must send the enable param — without it kimi-for-coding emits no reasoning_content.
+    expect(create.mock.calls[0]?.[0].thinking).toEqual({ type: 'enabled' });
+  });
+
+  it('enables thinking for the always-on MiniMax M2.7 preset (v0.7.57 regression fix)', async () => {
+    const create = vi.fn().mockResolvedValue(createCompletedAnthropicStream());
+    const provider = new TestAnthropicProvider('native-toggle', {
+      messages: { create },
+    }, {
+      reasoningProfile: {
+        reasoningPreset: 'minimax-m2-always',
+        effortStrategy: 'prompt-only',
+        defaultEffort: 'high',
+        localRejectEfforts: ['none', 'minimal'],
+      },
+    });
+
+    await provider.stream(MESSAGES, TOOLS, 'system', { ...reasoning, effort: 'high' });
+
+    expect(create.mock.calls[0]?.[0].thinking).toEqual({ type: 'enabled' });
+  });
+
   it('rejects impossible Kimi K2.7 Code disabling efforts locally', async () => {
     const create = vi.fn().mockResolvedValue(createCompletedAnthropicStream());
     const provider = new TestAnthropicProvider('native-toggle', {

@@ -567,11 +567,19 @@ export abstract class KodaXOpenAICompatProvider extends KodaXBaseProvider {
     const intent = this.resolveReasoningProfileIntent(reasoning, capability, model);
     const preset = capability.reasoningPreset;
 
+    // "Always-thinks" coding models (kimi-k2.7-code, minimax-m2-always): enable
+    // thinking explicitly even though the effort LEVEL is prompt-only (mirrors
+    // anthropic.ts — see the v0.7.57 regression note there). Matches what the
+    // provider-toggle branch already sends for kimi on this path.
+    if (preset === 'kimi-k2.7-code' || preset === 'minimax-m2-always') {
+      params.thinking = { type: 'enabled' };
+      return;
+    }
+
     if (
       preset === 'none' ||
       capability.effortStrategy === 'none' ||
-      capability.effortStrategy === 'prompt-only' ||
-      preset === 'kimi-k2.7-code'
+      capability.effortStrategy === 'prompt-only'
     ) {
       return;
     }
