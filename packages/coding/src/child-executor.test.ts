@@ -107,6 +107,19 @@ describe('assertValidWorkflowEvidenceRefs (FEATURE_246 review — spawn-time evi
     expect(() => assertValidWorkflowEvidenceRefs('v', ['task_id:   ']))
       .toThrow(/empty "task_id:" reference/);
   });
+
+  it('when knownTaskIds is provided, rejects a task_id: ref that was never spawned (review A1)', () => {
+    const known = new Set(['wf-child-1', 'wf-child-2']);
+    expect(() => assertValidWorkflowEvidenceRefs('v', ['task_id:wf-child-1'], known)).not.toThrow();
+    expect(() => assertValidWorkflowEvidenceRefs('v', ['task_id:wf-child-99'], known))
+      .toThrow(/unknown workflow task id "wf-child-99"/);
+    // non-task_id refs are unaffected by knownTaskIds
+    expect(() => assertValidWorkflowEvidenceRefs('v', ['file:x.ts'], known)).not.toThrow();
+  });
+
+  it('without knownTaskIds, any non-empty task_id: ref still passes (repair / unit-test path)', () => {
+    expect(() => assertValidWorkflowEvidenceRefs('v', ['task_id:anything'])).not.toThrow();
+  });
 });
 
 describe('executeChildAgents — guardrails propagation (FEATURE_092 phase 2b.7b slice D)', () => {

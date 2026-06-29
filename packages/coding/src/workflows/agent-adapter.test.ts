@@ -99,6 +99,24 @@ describe('createCodingWorkflowBackend — spawn + wait', () => {
     expect(result.name).toBe('security');
   });
 
+  it('throws loudly on wait/output/send/stop for an unknown task id (review A2)', async () => {
+    const backend = createCodingWorkflowBackend({
+      ctx: fakeCtx(),
+      childOptions,
+      runChild: async () => execResult({ status: 'completed', summary: 'ok' }),
+      generateId: () => 'task-known',
+    });
+    await backend.spawn({ name: 'a', prompt: 'p', readOnly: true });
+    // Known id: no throw (in-flight output returns a running snapshot).
+    await expect(backend.output('task-known')).resolves.toBeDefined();
+    // Unknown id: every task-targeted method fails loudly instead of silently
+    // fabricating a snapshot / dropping the message / no-op'ing the abort.
+    await expect(backend.wait('task-bogus')).rejects.toThrow(/unknown workflow task: task-bogus/);
+    await expect(backend.output('task-bogus')).rejects.toThrow(/unknown workflow task: task-bogus/);
+    await expect(backend.send('task-bogus', 'hi')).rejects.toThrow(/unknown workflow task: task-bogus/);
+    await expect(backend.stop('task-bogus')).rejects.toThrow(/unknown workflow task: task-bogus/);
+  });
+
   it('surfaces a child structured output on the workflow result (FEATURE_246 Part B)', async () => {
     const backend = createCodingWorkflowBackend({
       ctx: fakeCtx(),

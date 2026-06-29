@@ -184,6 +184,7 @@ import type {
 import {
   startGeneratedWorkflowFromRequest,
 } from "../commands/workflow-command.js";
+import { inferWorkflowLocaleFromParts } from "../commands/workflow-command-results.js";
 import {
   formatReasoningEffortStatusLabel,
   getProviderModel,
@@ -1588,9 +1589,19 @@ const InkREPLInner: React.FC<InkREPLProps> = ({
   // process events here; convert each to the run-update UI shape and apply it.
   const handleInlineWorkflowProcessEvent = useCallback((event: WorkflowProcessEvent): void => {
     const message = event.type === "workflow_updated" ? event.message : undefined;
+    // FEATURE_246 (review B5): detect locale from the run's own text (goal / name /
+    // latest message) so a model-launched workflow gets the same zh/en labels the
+    // slash path does — instead of a hardcoded 'en' that mislabels CJK workflows.
+    const locale = inferWorkflowLocaleFromParts(
+      event.snapshot.goal,
+      event.snapshot.workflowName,
+      event.snapshot.displayName,
+      event.snapshot.latestMessage,
+      message,
+    );
     applyWorkflowRunUiEvent(workflowLiveSnapshotFromProcess(
       event.snapshot,
-      message === undefined ? { locale: "en" } : { locale: "en", message },
+      message === undefined ? { locale } : { locale, message },
     ));
   }, [applyWorkflowRunUiEvent]);
   // FEATURE_097 (v0.7.34) — todo plan surface state. Single source of

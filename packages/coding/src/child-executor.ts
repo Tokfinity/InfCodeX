@@ -1343,6 +1343,13 @@ export const WORKFLOW_EVIDENCE_REF_PREFIXES = ['file:', 'diff:', 'finding:', 'ta
 export function assertValidWorkflowEvidenceRefs(
   agentName: string,
   evidenceRefs: readonly string[] | undefined,
+  // FEATURE_246 (review A1): the set of task ids already spawned in this run. When
+  // provided, a `task_id:<id>` ref whose id was never spawned is rejected loudly at
+  // spawn — matching the generator smoke's assertKnownTaskId. Without it (repair
+  // bundles / unit tests) only the prefix/empty checks run. Otherwise a bogus id
+  // (e.g. an agent NAME, or a typo) passes and resolves to a "(not found)" briefing
+  // fragment — the child silently loses the intended sibling context.
+  knownTaskIds?: ReadonlySet<string>,
 ): void {
   for (const ref of evidenceRefs ?? []) {
     if (!WORKFLOW_EVIDENCE_REF_PREFIXES.some((prefix) => ref.startsWith(prefix))) {
@@ -1352,8 +1359,18 @@ export function assertValidWorkflowEvidenceRefs(
           "To pass another agent's output, use \"task_id:\" + that agent's result.taskId — not its name.",
       );
     }
-    if (ref.startsWith('task_id:') && ref.slice('task_id:'.length).trim().length === 0) {
-      throw new Error(`wf.runAgent("${agentName}") evidenceRefs contains an empty "task_id:" reference.`);
+    if (ref.startsWith('task_id:')) {
+      const taskId = ref.slice('task_id:'.length).trim();
+      if (taskId.length === 0) {
+        throw new Error(`wf.runAgent("${agentName}") evidenceRefs contains an empty "task_id:" reference.`);
+      }
+      if (knownTaskIds !== undefined && !knownTaskIds.has(taskId)) {
+        throw new Error(
+          `wf.runAgent("${agentName}") evidenceRefs references unknown workflow task id "${taskId}". ` +
+            'Pass the taskId from a prior result/handle (result.taskId from wf.runAgent, or handle.taskId ' +
+            'from wf.spawnAgent) of an agent spawned earlier in this run — not an agent name or a guessed id.',
+        );
+      }
     }
   }
 }

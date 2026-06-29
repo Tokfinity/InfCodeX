@@ -471,7 +471,11 @@ async function waitForChildPromise(
   }
 }
 
-function buildBundle(childId: string, input: WorkflowSpawnAgentInput): KodaXChildContextBundle {
+function buildBundle(
+  childId: string,
+  input: WorkflowSpawnAgentInput,
+  knownTaskIds?: ReadonlySet<string>,
+): KodaXChildContextBundle {
   // FEATURE_246 Phase 2: fail fast at spawn if the declared outputSchema uses a
   // keyword the subset validator can't honor — otherwise validation would be a
   // silent no-op and the author would never know.
@@ -479,10 +483,11 @@ function buildBundle(childId: string, input: WorkflowSpawnAgentInput): KodaXChil
     assertSupportedOutputSchema(input.outputSchema);
   }
   // FEATURE_246 (review): same fail-fast for evidenceRefs — a ref with no valid
-  // prefix (an agent name instead of task_id:<id>) would otherwise resolve to an
-  // "(unknown)" briefing fragment and silently degrade the child. Enforced on
-  // every spawn (generator + inline), not just the generator smoke dry-run.
-  assertValidWorkflowEvidenceRefs(input.name, input.evidenceRefs);
+  // prefix (an agent name instead of task_id:<id>), or a task_id:<id> that was
+  // never spawned, would otherwise resolve to an "(unknown)" / "(not found)"
+  // briefing fragment and silently degrade the child. Enforced on every spawn
+  // (generator + inline), not just the generator smoke dry-run.
+  assertValidWorkflowEvidenceRefs(input.name, input.evidenceRefs, knownTaskIds);
   return {
     id: childId,
     fanoutClass: 'evidence-scan',
@@ -590,7 +595,10 @@ export function createCodingWorkflowBackend(deps: CodingWorkflowBackendDeps): Wo
 
   const spawn = async (input: WorkflowSpawnAgentInput): Promise<WorkflowTaskHandle> => {
     const childId = genId();
-    const bundle = buildBundle(childId, input);
+    // `tasks` holds every agent spawned earlier in this run (the current one is
+    // added at the end of spawn, line ~682) — so this is exactly the set a
+    // `task_id:` evidence ref may legitimately point back to.
+    const bundle = buildBundle(childId, input, new Set(tasks.keys()));
     const resolvedVerification = resolveVerificationForInput(input);
     const verification = resolvedVerification.verification;
     const mutationRecorder = createMutationRecorder();
@@ -819,6 +827,11 @@ export function createCodingWorkflowBackend(deps: CodingWorkflowBackendDeps): Wo
   };
 
   const output = async (taskId: string): Promise<WorkflowTaskSnapshot> => {
+    // FEATURE_246 (review A2): mirror wait()'s guard — an unknown (never-spawned)
+    // id must fail loudly, not return a fabricated { status: 'running' } snapshot
+    // that downstream logic would branch on. A KNOWN task that is merely in-flight
+    // (in `tasks`, not yet in childProgressSnapshots) still returns 'running'.
+    if (!tasks.has(taskId)) throw new Error(`unknown workflow task: ${taskId}`);
     const name = tasks.get(taskId)?.name ?? taskId;
     const snap = ctx.childProgressSnapshots?.get(taskId);
     if (!snap) return { taskId, name, status: 'running' };
@@ -829,10 +842,16 @@ export function createCodingWorkflowBackend(deps: CodingWorkflowBackendDeps): Wo
   };
 
   const send = async (taskId: string, content: string): Promise<void> => {
+    // FEATURE_246 (review A2): fail loudly on an unknown target rather than
+    // silently dropping the message (the smoke api's send asserts the same).
+    if (!tasks.has(taskId)) throw new Error(`unknown workflow task: ${taskId}`);
     routeMessage({ to: taskId, priority: 'user', mode: 'prompt', content, registry, queue });
   };
 
   const stop = async (taskId: string): Promise<void> => {
+    // FEATURE_246 (review A2): fail loudly on an unknown target rather than a
+    // silent no-op (optional chaining would otherwise swallow it).
+    if (!tasks.has(taskId)) throw new Error(`unknown workflow task: ${taskId}`);
     ctx.childAbortControllers?.get(taskId)?.abort();
   };
 
