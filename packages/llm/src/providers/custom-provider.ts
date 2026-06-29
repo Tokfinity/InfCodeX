@@ -317,7 +317,14 @@ function buildProviderConfig(custom: KodaXCustomProviderConfig): KodaXProviderCo
       ? 'none'
       : (custom.reasoningCapability ??
          legacyCapabilityFromReasoningProfile(reasoningProfile) ??
-         (custom.supportsThinking ? 'native-toggle' : 'none'));
+         // Final arm is reached ONLY for openai-passive: anthropic-compat always resolves a
+         // profile above (so legacyCapabilityFromReasoningProfile returns a value), while
+         // openai-compat bare-supportsThinking has no profile (F3). openai-passive sends NO
+         // wire reasoning param, so report 'none' — matching the runtime AND the other
+         // surfaces (getCustomProviderList / getCustomModelCapabilities), rather than a
+         // 'native-toggle' label KodaX never acts on. (The model still thinks; that is
+         // reflected by supportsThinking and reasoning_content parsing, not by this label.)
+         'none');
   const supportsThinking = custom.supportsThinking ??
     (reasoningCapability !== 'none' && reasoningCapability !== 'prompt-only');
 

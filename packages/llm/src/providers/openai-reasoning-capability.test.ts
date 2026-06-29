@@ -235,6 +235,24 @@ describe('openai reasoning capability', () => {
     expect(create.mock.calls[1]?.[0]).not.toHaveProperty('reasoning_effort');
   });
 
+  it('F3: a passive openai-compat provider (native-toggle, no profile, non-qwen/zhipu) sends NO thinking param on the wire', async () => {
+    const create = vi.fn().mockResolvedValue(createCompletedOpenAIStream());
+    // Mirrors a custom openai-compat provider after F3: native-toggle but no reasoningProfile.
+    // The name-gated switch only fires for this.name === 'qwen'/'zhipu', so a relay-named
+    // provider must send NOTHING — no Anthropic-shaped thinking field, no reasoning_effort,
+    // no enable_thinking. reasoning_content is still parsed (covered elsewhere).
+    const provider = new TestOpenAIProvider('my-relay', 'native-toggle', {
+      chat: { completions: { create } },
+    });
+
+    await provider.stream(MESSAGES, TOOLS, 'system', reasoning);
+
+    const params = create.mock.calls[0]?.[0];
+    expect(params).not.toHaveProperty('thinking');
+    expect(params).not.toHaveProperty('reasoning_effort');
+    expect((params.extra_body ?? {}).enable_thinking).toBeUndefined();
+  });
+
   it('passes explicit provider effort values through for native-effort providers', async () => {
     const create = vi.fn().mockResolvedValue(createCompletedOpenAIStream());
     const provider = new TestOpenAIProvider('openai', 'native-effort', {

@@ -788,6 +788,65 @@ describe('custom providers', () => {
     );
   });
 
+  it('supportsThinking:false overrides a per-model reasoningProfile on ANTHROPIC-compat too', () => {
+    vi.stubEnv('CUSTOM_PMANT_API_KEY', 'test-key');
+    vi.spyOn(console, 'warn').mockImplementation(() => {});
+    const config: KodaXCustomProviderConfig = {
+      name: 'permodel-ant',
+      protocol: 'anthropic',
+      baseUrl: 'https://pmant.example',
+      apiKeyEnv: 'CUSTOM_PMANT_API_KEY',
+      model: 'main',
+      supportsThinking: false,
+      models: [
+        'main',
+        {
+          id: 'alt',
+          reasoningProfile: {
+            reasoningPreset: 'anthropic-budget',
+            effortStrategy: 'provider-budget',
+            thinkingStrategy: 'anthropic-budget',
+            supportedEfforts: [{ value: 'high', isDefault: true }],
+          },
+        },
+      ],
+    };
+    registerCustomProviders([cloneConfig(config)]);
+
+    const provider = createCustomProvider(cloneConfig(config));
+    expect(provider.getReasoningProfile('alt')).toMatchObject({
+      reasoningPreset: 'none',
+      effortStrategy: 'none',
+    });
+    expect(getCustomModelCapabilities('permodel-ant', 'alt')).toMatchObject({
+      reasoningCapability: 'none',
+      reasoningProfile: { reasoningPreset: 'none', effortStrategy: 'none' },
+    });
+  });
+
+  it('openai-passive (bare supportsThinking:true) reports none across EVERY surface (consistent with passive runtime)', () => {
+    vi.stubEnv('CUSTOM_PASSIVE_API_KEY', 'test-key');
+    const config: KodaXCustomProviderConfig = {
+      name: 'passive-openai',
+      protocol: 'openai',
+      baseUrl: 'https://passive.example/v1',
+      apiKeyEnv: 'CUSTOM_PASSIVE_API_KEY',
+      model: 'p-model',
+      supportsThinking: true,
+    };
+    registerCustomProviders([cloneConfig(config)]);
+
+    const provider = createCustomProvider(cloneConfig(config));
+    // openai-passive sends no wire reasoning param → all three label surfaces agree on 'none'
+    // (not 'native-toggle'), and the resolved profile is undefined.
+    expect(provider.getConfiguredReasoningCapability()).toBe('none');
+    expect(provider.getReasoningProfile()).toBeUndefined();
+    expect(getCustomProviderList().find((p) => p.name === 'passive-openai')?.reasoningCapability).toBe('none');
+    expect(getCustomModelCapabilities('passive-openai', 'p-model')?.reasoningCapability).toBe('none');
+    // The model is still thinking-capable — reflected by supportsThinking, not the label.
+    expect(getCustomModelCapabilities('passive-openai', 'p-model')?.supportsThinking).toBe(true);
+  });
+
   it('resolves custom providers after checking the built-in registry first', () => {
     vi.stubEnv('CUSTOM_OPENAI_API_KEY', 'configured-key');
     registerCustomProviders([cloneConfig(OPENAI_CUSTOM)]);

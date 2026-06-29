@@ -3,6 +3,7 @@ import fs from 'fs';
 import {
   ensureExampleConfigFile,
   KODAX_CONFIG_FILE,
+  KODAX_DIR,
   KODAX_EXAMPLE_CONFIG_FILE,
 } from './utils.js';
 
@@ -19,7 +20,8 @@ describe('ensureExampleConfigFile (F1 first-launch template)', () => {
     const result = ensureExampleConfigFile();
 
     expect(result).toBe(KODAX_EXAMPLE_CONFIG_FILE);
-    expect(mkdir).toHaveBeenCalled();
+    // Dir is created recursively BEFORE the write (first-launch on a fresh machine).
+    expect(mkdir).toHaveBeenCalledWith(KODAX_DIR, { recursive: true });
     expect(write).toHaveBeenCalledTimes(1);
     const [writtenPath, content] = write.mock.calls[0]!;
     expect(writtenPath).toBe(KODAX_EXAMPLE_CONFIG_FILE);
