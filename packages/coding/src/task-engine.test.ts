@@ -385,4 +385,28 @@ describe('runManagedTask', () => {
     );
   });
 
+  it('strips the multi-agent / workflow tool cluster from the SA tool surface (no sub-agents, no workflows)', async () => {
+    mockRunDirectKodaX.mockClear();
+    mockRunDirectKodaX.mockResolvedValue(buildAssistantResult('ok'));
+
+    await runManagedTask(
+      {
+        provider: 'anthropic',
+        agentMode: 'sa',
+        context: { excludeTools: ['some_preexisting_tool'] },
+      },
+      'a solo question',
+    );
+
+    const passedExclude = mockRunDirectKodaX.mock.calls.at(-1)?.[0].context?.excludeTools ?? [];
+    // Solo agent: no sub-agents, no workflow.
+    expect(passedExclude).toContain('dispatch_child_task');
+    expect(passedExclude).toContain('run_workflow');
+    expect(passedExclude).toContain('task_output');
+    expect(passedExclude).toContain('task_stop');
+    expect(passedExclude).toContain('send_message');
+    // Pre-existing excludeTools are preserved, not clobbered.
+    expect(passedExclude).toContain('some_preexisting_tool');
+  });
+
 });

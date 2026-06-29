@@ -111,6 +111,14 @@ function buildAgentToolsFromRegistry(
   for (const def of listToolDefinitions()) {
     if (exclude.has(def.name)) continue;
     if (!ctx.extensionRuntime && isMcpToolName(def.name)) continue;
+    // FEATURE_246: visibility follows capability. run_workflow is only usable
+    // when a workflow host is wired — amaw turns, or an AMA `/workflow` command
+    // turn elevated to amaw. In plain AMA there is no host, so we hide the tool
+    // rather than offer one that would only error. This is what keeps AMA
+    // command-gated: the Worker cannot self-activate a workflow from natural
+    // language because the tool is not on its surface unless a command elevated
+    // the turn.
+    if (def.name === 'run_workflow' && !ctx.workflowHost) continue;
 
     const override = overrides.get(def.name);
     if (override) {

@@ -42,7 +42,6 @@ import {
 import type { Command, CommandResultData } from './types.js';
 import {
   buildWorkflowProcessMetadata,
-  startGeneratedWorkflowFromRequest,
 } from './workflow-command-builder.js';
 export { startGeneratedWorkflowFromRequest } from './workflow-command-builder.js';
 import {
@@ -215,6 +214,26 @@ export const workflowCommand: Command = {
     }
 
     const invocation = parseWorkflowInvocation(args);
+
+    // FEATURE_246: Solo (SA) mode is a single agent — it runs no workflows and
+    // spawns no sub-agents. Reject the execution-class subcommands (create / run
+    // a workflow by name / rerun); read-only and management subcommands (list,
+    // runs, show, save, rename, revise, delete, prune, pause/resume/stop) stay so
+    // a user can still inspect and tidy runs left by an earlier AMA/AMAW session.
+    if (
+      currentConfig.agentMode === 'sa'
+      && (invocation.kind === 'create' || invocation.kind === 'rerun' || invocation.kind === 'start')
+    ) {
+      console.log(
+        chalk.yellow(
+          '\n[workflow] Workflows run multiple agents, which Solo (SA) mode does not support.\n'
+          + 'Switch with /agent-mode ama to author and run one via /workflow, or /agent-mode amaw to\n'
+          + 'also let the agent start one from natural language.\n',
+        ),
+      );
+      return;
+    }
+
     const projectKey = deriveProjectKeyFromRoot(process.cwd()).key;
     const baseDir = getAgentConfigPath('workflow-runs', projectKey);
     const manager = getDefaultWorkflowRunManager();
@@ -226,37 +245,30 @@ export const workflowCommand: Command = {
       savedWorkflowDirs: dirs,
     });
 
-    // FEATURE_246 (ADR-047): turn a free-text request into a workflow. In
-    // multi-agent modes the Worker authors it itself (scout-then-author via
-    // run_workflow) — returned as an agent-turn invocation; the blind sideQuery
-    // generator stays only as the single-agent / headless fallback. Shared by
-    // the explicit `create` subcommand and the bare `/workflow <prompt>` form.
+    // FEATURE_246 (ADR-047): turn a free-text request into a workflow. The Worker
+    // authors it itself (scout-then-author via run_workflow), returned as an
+    // agent-turn invocation. Shared by the explicit `create` subcommand and the
+    // bare `/workflow <prompt>` form. Only reached in ama/amaw — Solo (SA) mode
+    // rejects execution-class workflow commands upstream (see the guard below).
+    // In plain AMA the Worker has no standing run_workflow, so this authoring turn
+    // is elevated to amaw for its duration (agentModeOverride); the session mode
+    // is unchanged. This gives the command path AMAW's full authoring capability
+    // while keeping AMA from self-activating workflows from natural language.
     const createWorkflowFromText = async (request: string): Promise<CommandResultData | undefined> => {
-      if (currentConfig.agentMode === 'ama' || currentConfig.agentMode === 'amaw') {
-        return {
-          invocation: {
-            source: 'prompt',
-            displayName: 'workflow create',
-            disableModelInvocation: false,
-            prompt: [
-              'Set up and run a multi-agent workflow for this task.',
-              'First investigate the relevant files and sub-problems with your own tools, then author and run it with run_workflow — bake the concrete findings (exact paths, the specific dimensions to compare, a real outputSchema) into the child prompts rather than re-delegating the scouting.',
-              '',
-              request,
-            ].join('\n'),
-          },
-        };
-      }
-      await startGeneratedWorkflowFromRequest({
-        request,
-        callbacks,
-        approval: currentConfig.permissionMode === 'plan' ? 'required' : 'silent',
-        presentation: 'agentic',
-        sourceLabel: 'generated',
-        processSource: 'command',
-        onBuilderEvent: callbacks.onWorkflowBuilderEvent,
-      });
-      return undefined;
+      return {
+        invocation: {
+          source: 'prompt',
+          displayName: 'workflow create',
+          disableModelInvocation: false,
+          ...(currentConfig.agentMode === 'ama' ? { agentModeOverride: 'amaw' as const } : {}),
+          prompt: [
+            'Set up and run a multi-agent workflow for this task.',
+            'First investigate the relevant files and sub-problems with your own tools, then author and run it with run_workflow — bake the concrete findings (exact paths, the specific dimensions to compare, a real outputSchema) into the child prompts rather than re-delegating the scouting.',
+            '',
+            request,
+          ].join('\n'),
+        },
+      };
     };
 
     if (invocation.kind === 'help') {

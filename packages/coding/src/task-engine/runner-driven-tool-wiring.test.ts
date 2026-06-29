@@ -29,13 +29,20 @@ import {
 import { listToolDefinitions, MCP_TOOL_NAMES } from '../tools/registry.js';
 import type { KodaXToolExecutionContext } from '../types.js';
 
-function makeCtx(hasCapabilityRuntime = true): KodaXToolExecutionContext {
+// FEATURE_246: the standard workflow-capable Worker is the AMAW (or AMA
+// /workflow-command-elevated) Worker, whose ctx carries a workflowHost. run_workflow
+// is host-conditional now — visible only when the host is wired — so the default
+// test ctx includes one. A separate test pins the no-host (plain AMA) surface.
+function makeCtx(hasCapabilityRuntime = true, hasWorkflowHost = true): KodaXToolExecutionContext {
   return {
     backups: new Map<string, string>(),
     gitRoot: process.cwd(),
     executionCwd: process.cwd(),
     ...(hasCapabilityRuntime
       ? { extensionRuntime: {} as KodaXToolExecutionContext['extensionRuntime'] }
+      : {}),
+    ...(hasWorkflowHost
+      ? { workflowHost: {} as KodaXToolExecutionContext['workflowHost'] }
       : {}),
   };
 }
@@ -44,8 +51,12 @@ function makeRecorder() {
   return {} as Parameters<typeof buildRunnerAgentChain>[1];
 }
 
-function getAgentToolNames(role: AmaRole, hasCapabilityRuntime = true): readonly string[] {
-  const chain = buildRunnerAgentChain(makeCtx(hasCapabilityRuntime), makeRecorder());
+function getAgentToolNames(
+  role: AmaRole,
+  hasCapabilityRuntime = true,
+  hasWorkflowHost = true,
+): readonly string[] {
+  const chain = buildRunnerAgentChain(makeCtx(hasCapabilityRuntime, hasWorkflowHost), makeRecorder());
   if (role !== 'worker') {
     throw new Error(`FEATURE_193: role '${role}' retired with V1 chain`);
   }
@@ -76,6 +87,11 @@ describe('FEATURE_168 — AMA agent tool wiring (per-role full set)', () => {
     for (const mcpTool of MCP_TOOL_NAMES) {
       expect(actual, `worker should expose ${mcpTool} with extension runtime`).toContain(mcpTool);
     }
+  });
+
+  it('FEATURE_246: run_workflow is host-conditional — present with a workflow host (amaw / elevated AMA command turn), absent without one (plain AMA)', () => {
+    expect(getAgentToolNames('worker', true, true)).toContain('run_workflow');
+    expect(getAgentToolNames('worker', true, false)).not.toContain('run_workflow');
   });
 
   it('worker has no V1 emit tools (F193 V1 chain retired) and no emit_handoff (F190)', () => {

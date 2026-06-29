@@ -162,9 +162,14 @@ export function buildToolExecutionContext(
     // workspace/system-prompt context, not the parent's registries.
     childProgressSnapshots: new Map(),
     // FEATURE_246 Part A2 (ADR-046) — model-launched workflow capability. Wired
-    // only when the host configured a runs dir AND the agent mode hosts
-    // workflows (ama/amaw). The lazy import keeps the static graph acyclic
-    // (workflows -> agent-runtime; never the reverse).
+    // only when the host configured a runs dir AND the turn runs as `amaw`.
+    // AMAW Worker turns carry run_workflow standing (the Worker can self-activate
+    // a workflow from natural language). Plain AMA turns do not — there the
+    // capability is command-gated: the `/workflow` command elevates its authoring
+    // turn to `amaw` (see workflow-command.ts agentModeOverride), so the Worker
+    // gets the same scout-then-author tool without AMA self-activating from NL.
+    // SA (solo) never hosts a workflow. The lazy import keeps the static graph
+    // acyclic (workflows -> agent-runtime; never the reverse).
     workflowHost: buildWorkflowToolHost(options),
   };
 }
@@ -172,7 +177,9 @@ export function buildToolExecutionContext(
 function buildWorkflowToolHost(options: KodaXOptions): WorkflowToolHost | undefined {
   const runsBaseDir = options.workflowRunsBaseDir;
   if (runsBaseDir === undefined) return undefined;
-  if (options.agentMode !== 'ama' && options.agentMode !== 'amaw') return undefined;
+  // amaw-only standing gate. AMA `/workflow` command turns reach here already
+  // elevated to amaw (per-turn agentModeOverride); plain AMA and SA turns do not.
+  if (options.agentMode !== 'amaw') return undefined;
   return {
     runInline: async ({ manifest, source, args, resumeFromRunId }) => {
       // Lazy literal imports break the static cycle: workflow-runner imports

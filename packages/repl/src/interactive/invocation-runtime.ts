@@ -522,6 +522,10 @@ export async function prepareInvocationExecution(
     prompt: promptParts.join('\n\n'),
     options: {
       ...baseOptions,
+      // FEATURE_246: per-turn agent-mode elevation (e.g. AMA `/workflow` runs its
+      // authoring turn as amaw so the Worker gets run_workflow). Overrides only
+      // this turn's options; the session config is untouched.
+      ...(request.agentModeOverride ? { agentMode: request.agentModeOverride } : {}),
       modelOverride,
       context: {
         ...baseOptions.context,

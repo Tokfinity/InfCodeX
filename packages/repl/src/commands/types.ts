@@ -175,6 +175,14 @@ export interface CommandInvocationRequest extends CommandExecutionMetadata {
   displayName: string;
   path?: string;
   skillInvocation?: KodaXSkillInvocationContext;
+  /**
+   * FEATURE_246: per-turn agent-mode elevation for this invocation only.
+   * The `/workflow` command in AMA sets this to `'amaw'` so its authoring turn
+   * gets `run_workflow` (scout-then-author) — matching AMAW's capability without
+   * making plain AMA self-activate workflows from natural language. The session
+   * mode is unchanged; only this one turn runs elevated.
+   */
+  agentModeOverride?: KodaXAgentMode;
 }
 
 export interface CommandWorkflowInvocationRequest {

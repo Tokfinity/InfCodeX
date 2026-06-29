@@ -3279,8 +3279,10 @@ run-graph, and the run manager are unchanged. The sideQuery generator's internal
 - `/workflow create <request>` in **ama/amaw** no longer blind-generates — it
   returns a prompt-source invocation that hands the request to the Worker
   (scout-then-author via `run_workflow`) through the existing command→agent-turn
-  seam. Blind `sideQuery` generation stays only as the **SA / headless** fallback
-  (no Worker to author). Same for the new shorthand below.
+  seam. Blind `sideQuery` generation stays only as the **headless / CI** fallback
+  (no Worker to author). Same for the new shorthand below. (Superseded for SA by
+  the activation-semantics amendment below: SA rejects execution-class workflow
+  commands outright rather than blind-generating.)
 - `/workflow <request>` (first word is neither a subcommand nor a known workflow
   name) is shorthand for `create`; bare `/workflow` still lists; `/workflow
   <known-name> [args]` still starts that workflow. One shared `createWorkflowFromText`.
@@ -3291,14 +3293,48 @@ run-graph, and the run manager are unchanged. The sideQuery generator's internal
   prune/save/rename/rerun) stay mechanical by design — deterministic ops on known
   artifacts, where LLM mediation would be over-engineering.
 
+**AMA vs AMAW vs SA — workflow activation semantics (FEATURE_246 follow-up, v0.7.58).**
+A5 removed the AMAW pre-LLM auto-intercept, which had been the *only* behavioral
+difference between AMA and AMAW — leaving them functionally identical (both gave
+the Worker a standing `run_workflow`). That collapsed the user's intended
+three-mode model. Re-established here, with one principle: **there is a single
+workflow path — a Worker turn with `run_workflow` (scout-then-author) — and the
+modes differ only in who may pull the trigger.**
+- **SA (Solo)** runs a single agent: no workflows, no sub-agents. The sub-agent +
+  workflow tool cluster (`dispatch_child_task`, `run_workflow`, `task_output`,
+  `task_stop`, `send_message`, `emit_managed_protocol`) is stripped from its
+  surface (`SA_SOLO_EXCLUDE_TOOLS` in `task-engine.ts`), and the execution-class
+  `/workflow` subcommands (`create` / run-by-name / `rerun`) are refused with a
+  hint to switch modes. Read-only / management subcommands still work.
+- **AMA** is command-gated: the Worker has **no standing `run_workflow`**, so it
+  never self-activates a workflow from natural language. The `/workflow` command
+  still gives full capability — its authoring turn is **elevated to amaw for that
+  turn only** (`CommandInvocationRequest.agentModeOverride`), so the Worker gets
+  `run_workflow` and runs the same scout-then-author flow as AMAW. The session
+  mode is unchanged.
+- **AMAW** is AMA plus self-activation: the Worker has a standing `run_workflow`
+  and may decide from natural language to author and run a workflow. `/workflow`
+  behaves identically to AMA.
+- **Mechanism.** `buildWorkflowToolHost` gates the host to `agentMode === 'amaw'`
+  only; the AMA command turn reaches it already elevated. Tool **visibility follows
+  capability** — `run_workflow` is shown to the managed Worker only when
+  `ctx.workflowHost` is wired (`agent-chain.ts`), so plain AMA is never offered a
+  tool that would just error. Pinned by CAP-TOOL-CTX-009/010 and the FEATURE_168
+  worker-surface tests (run_workflow is host-conditional).
+- **Why structural, not prompt.** Activation is now a tool-availability fact
+  (present/absent), not a prompt nudge — so it is verified by contract/unit tests,
+  not an LLM eval. The prior A3 bridge-rate eval (does the *amaw* Worker bridge NL
+  → `run_workflow`) is unchanged and still applies to AMAW.
+
 **Hardening + non-goals (FEATURE_246 Part D/E round)**:
 - **Recursion guard is an invariant, not a runtime check.** A workflow child runs
   with `agentMode: 'sa'`, and `buildWorkflowToolHost` only wires `ctx.workflowHost`
-  for `ama`/`amaw` — so a child can never call `run_workflow` (it is a no-op /
-  unavailable). This is guaranteed *by construction*; do NOT let a child inherit
-  `amaw` or the guard breaks. Pinned by CAP-TOOL-CTX-010 (SA mode → no
-  `workflowHost`). One-level nesting for `wf.workflow(...)` is likewise enforced in
-  the runtime (the sub-api's `workflow` throws).
+  for `amaw` (see the activation-semantics amendment below — plain AMA and SA get
+  none) — so a child can never call `run_workflow` (it is a no-op / unavailable).
+  This is guaranteed *by construction*; do NOT let a child inherit `amaw` or the
+  guard breaks. Pinned by CAP-TOOL-CTX-010 (ama / sa / unset → no `workflowHost`).
+  One-level nesting for `wf.workflow(...)` is likewise enforced in the runtime (the
+  sub-api's `workflow` throws).
 - **Untrusted-input quarantine is a known non-goal.** KodaX is a single-user CLI;
   the workflow sandbox protects against an errant *script*, not a malicious
   *operator*. We deliberately do not add a capability-quarantine tier for

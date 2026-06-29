@@ -132,6 +132,21 @@ export const defaultManagedDispatchDeps: ManagedDispatchDeps = {
   buildPlan: buildManagedReasoningPlan,
 };
 
+// FEATURE_246: Solo (SA) is a single agent — no workflows, no sub-agents. We strip
+// the multi-agent cluster from its tool surface so the model never sees tools it
+// cannot use. This mirrors CHILD_EXCLUDE_TOOLS_BASE (children themselves run as SA)
+// minus the parent-UI tools a top-level solo agent keeps (ask_user_question,
+// worktree_*, exit_plan_mode), plus run_workflow. send_message is excluded too —
+// a solo agent has no peers or Worker to address.
+const SA_SOLO_EXCLUDE_TOOLS: readonly string[] = [
+  'dispatch_child_task',
+  'run_workflow',
+  'task_output',
+  'task_stop',
+  'send_message',
+  'emit_managed_protocol',
+];
+
 export async function dispatchManagedTask(
   options: KodaXOptions,
   prompt: string,
@@ -149,6 +164,10 @@ export async function dispatchManagedTask(
             intentGate.taskFamily,
             [options.context?.promptOverlay],
           ),
+          excludeTools: [
+            ...(options.context?.excludeTools ?? []),
+            ...SA_SOLO_EXCLUDE_TOOLS,
+          ],
         },
       },
       prompt,

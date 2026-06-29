@@ -182,6 +182,38 @@ describe('prepareInvocationExecution', () => {
     expect(prepared.options?.modelOverride).toBe('claude-sonnet-4-6');
   });
 
+  it('applies agentModeOverride to the prepared turn options without touching the session mode (FEATURE_246)', async () => {
+    const prepared = await prepareInvocationExecution(
+      { provider: 'anthropic', agentMode: 'ama' },
+      {
+        prompt: 'Author and run a workflow',
+        source: 'prompt',
+        displayName: 'workflow create',
+        agentModeOverride: 'amaw',
+      },
+      '/workflow create compare repos',
+      vi.fn()
+    );
+
+    // The /workflow command turn runs elevated to amaw so the Worker gets run_workflow.
+    expect(prepared.options?.agentMode).toBe('amaw');
+  });
+
+  it('leaves agentMode untouched when no agentModeOverride is set', async () => {
+    const prepared = await prepareInvocationExecution(
+      { provider: 'anthropic', agentMode: 'ama' },
+      {
+        prompt: 'do a thing',
+        source: 'prompt',
+        displayName: 'plain',
+      },
+      'do a thing',
+      vi.fn()
+    );
+
+    expect(prepared.options?.agentMode).toBe('ama');
+  });
+
   it('passes raw user input and skill invocation metadata into the prepared context', async () => {
     const prepared = await prepareInvocationExecution(
       { provider: 'anthropic', context: { promptOverlay: '[base]' } },

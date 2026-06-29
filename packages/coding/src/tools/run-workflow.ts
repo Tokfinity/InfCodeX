@@ -18,7 +18,7 @@ export async function toolRunWorkflow(
 ): Promise<ToolResult> {
   const host = ctx.workflowHost;
   if (!host) {
-    return '[Tool Error] run_workflow is unavailable here — workflows run only in multi-agent mode with a configured run directory. Use dispatch_child_task for a single sub-task.';
+    return '[Tool Error] run_workflow is unavailable on this turn. Workflow authoring is enabled in AMAW mode, or in AMA via the /workflow command (which runs this turn with workflow authoring on). Use dispatch_child_task for a single sub-task.';
   }
 
   const source = input.source;

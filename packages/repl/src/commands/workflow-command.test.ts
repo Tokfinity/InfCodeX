@@ -2663,7 +2663,36 @@ describe('workflowCommand create redirect (FEATURE_246 / ADR-047)', () => {
         expect(result.invocation.prompt).toContain('compare three repos');
         // It hands an agent turn to the Worker — it does NOT blind-generate here.
         expect(result.invocation.prompt).toContain('investigate');
+        // FEATURE_246: plain AMA has no standing run_workflow, so the command
+        // turn is elevated to amaw for its duration; AMAW already has it.
+        if (mode === 'ama') {
+          expect(result.invocation.agentModeOverride).toBe('amaw');
+        } else {
+          expect(result.invocation.agentModeOverride).toBeUndefined();
+        }
       }
+    });
+  }
+
+  for (const [kind, args] of [
+    ['create', ['create', 'compare', 'three', 'repos']],
+    ['run-by-name', ['some-builtin-workflow']],
+    ['rerun', ['rerun', 'run-xyz']],
+  ] as const) {
+    it(`refuses the execution-class ${kind} subcommand in Solo (SA) mode`, async () => {
+      const result = await workflowCommand.handler(
+        [...args],
+        {} as Parameters<typeof workflowCommand.handler>[1],
+        // A confirm channel is offered so a failure to reject can't be masked
+        // by the start path's "no approval channel" early return.
+        { confirm: async () => true } as Parameters<typeof workflowCommand.handler>[2],
+        { agentMode: 'sa' } as Parameters<typeof workflowCommand.handler>[3],
+      );
+      // No agent-turn invocation is handed back — SA runs no workflows.
+      expect(result === undefined || (typeof result === 'object' && !('invocation' in result))).toBe(true);
+      const output = logSpy.mock.calls.map((c) => c.join(' ')).join('\n');
+      expect(output).toContain('Solo (SA) mode does not support');
+      expect(output).toContain('/agent-mode ama');
     });
   }
 

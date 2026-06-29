@@ -1717,17 +1717,20 @@ export const BUILTIN_COMMANDS: Command[] = [
       console.log(chalk.cyan('\n/agent-mode - Adaptive Multi-Agent Mode Control\n'));
       console.log(chalk.bold('Usage:'));
       console.log(chalk.dim('  /agent-mode            ') + 'Show current agent mode');
-      console.log(chalk.dim('  /agent-mode ama        ') + 'Enable adaptive multi-agent mode');
-      console.log(chalk.dim('  /agent-mode amaw       ') + 'Enable AMA Workflow mode; generated workflows may start automatically');
+      console.log(chalk.dim('  /agent-mode ama        ') + 'Adaptive multi-agent mode; workflows run only via the /workflow command');
+      console.log(chalk.dim('  /agent-mode amaw       ') + 'AMA + the agent may start a workflow itself from natural language');
       console.log(chalk.dim('  /agent-mode ama-workflow') + 'Alias for /agent-mode amaw');
       console.log(chalk.dim('  /agent-mode sa         ') + 'Force single-agent execution');
       console.log(chalk.dim('  /agent-mode toggle     ') + 'Cycle AMA -> AMAW -> SA');
       console.log(chalk.dim('  /am                    ') + 'Alias for /agent-mode');
       console.log();
       console.log(chalk.bold('Description:'));
-      console.log(chalk.dim('  AMA keeps adaptive multi-agent harness selection enabled and supports explicit /workflow.'));
-      console.log(chalk.dim('  AMAW keeps AMA behavior and may silently start restricted generated workflows.'));
-      console.log(chalk.dim('  SA keeps routing and task artifacts, but forces single-agent execution to save tokens.'));
+      console.log(chalk.dim('  AMA runs the adaptive multi-agent harness. Workflows are command-gated: the /workflow'));
+      console.log(chalk.dim('      command runs as a full scout-then-author Worker turn, but the agent never starts'));
+      console.log(chalk.dim('      one on its own from natural language.'));
+      console.log(chalk.dim('  AMAW is AMA plus self-activation: the agent may decide from natural language to author'));
+      console.log(chalk.dim('      and run a workflow (run_workflow). /workflow behaves identically to AMA.'));
+      console.log(chalk.dim('  SA forces a single solo agent — no sub-agents and no workflows — to save tokens.'));
       console.log();
     },
   },

@@ -194,25 +194,27 @@ describe('CAP-048: tool execution context construction contract', () => {
     );
   });
 
-  // FEATURE_246 A5 (ADR-047): the model-callable run_workflow tool is only
-  // usable when the host wires a runs dir AND the agent hosts workflows
-  // (ama/amaw). This is the single gate the REPL satisfies by setting
-  // options.workflowRunsBaseDir in its createKodaXOptions closures.
+  // FEATURE_246 (ADR-047): the model-callable run_workflow tool has an
+  // amaw-only standing gate. AMAW Worker turns host it (the Worker may
+  // self-activate a workflow from natural language). Plain AMA turns do NOT —
+  // there the capability is command-gated: the `/workflow` command elevates its
+  // authoring turn to amaw (agentModeOverride), which reaches this builder as
+  // agentMode === 'amaw'. So at the buildToolExecutionContext seam, "AMA's
+  // command turn" is indistinguishable from amaw — covered by CAP-TOOL-CTX-009.
+  // SA (solo) never hosts a workflow. The runs dir is wired by the REPL.
   const baseDir = path.resolve('cap-048-workflow-runs');
 
-  it('CAP-TOOL-CTX-009: workflowHost is wired when workflowRunsBaseDir is set AND agentMode hosts workflows', () => {
-    for (const agentMode of ['ama', 'amaw'] as const) {
-      const ctx = buildToolExecutionContext({
-        options: { workflowRunsBaseDir: baseDir, agentMode } as KodaXOptions,
-        runtime: undefined,
-        managedProtocolPayloadRef: makeRef(),
-      });
-      expect(ctx.workflowHost, `agentMode=${agentMode}`).toBeDefined();
-      expect(typeof ctx.workflowHost?.runInline, `agentMode=${agentMode}`).toBe('function');
-    }
+  it('CAP-TOOL-CTX-009: workflowHost is wired when workflowRunsBaseDir is set AND the turn runs as amaw', () => {
+    const ctx = buildToolExecutionContext({
+      options: { workflowRunsBaseDir: baseDir, agentMode: 'amaw' } as KodaXOptions,
+      runtime: undefined,
+      managedProtocolPayloadRef: makeRef(),
+    });
+    expect(ctx.workflowHost).toBeDefined();
+    expect(typeof ctx.workflowHost?.runInline).toBe('function');
   });
 
-  it('CAP-TOOL-CTX-010: workflowHost is undefined without a runs dir, or in non-hosting modes', () => {
+  it('CAP-TOOL-CTX-010: workflowHost is undefined without a runs dir, or in any non-amaw mode (ama / sa / unset)', () => {
     // No runs dir → no host even in amaw.
     expect(
       buildToolExecutionContext({
@@ -222,9 +224,10 @@ describe('CAP-048: tool execution context construction contract', () => {
       }).workflowHost,
     ).toBeUndefined();
 
-    // Runs dir set but single-agent / unset mode → no host (SA must not
-    // host workflows; children inherit a fresh options without the dir).
-    for (const agentMode of ['sa', undefined] as const) {
+    // Runs dir set but the turn is not amaw → no standing host. Plain AMA has
+    // no run_workflow unless its /workflow command elevates the turn to amaw;
+    // SA never hosts; an unset mode never hosts.
+    for (const agentMode of ['ama', 'sa', undefined] as const) {
       expect(
         buildToolExecutionContext({
           options: { workflowRunsBaseDir: baseDir, agentMode } as unknown as KodaXOptions,
