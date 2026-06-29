@@ -139,11 +139,20 @@ function resolvePanel(): ModelAlias[] {
 const RUNS = Number(process.env.KODAX_EVAL_RUNS ?? '3');
 const DUMP_DIR = join(tmpdir(), 'kodax-eval-dumps', 'feature-246');
 
+// Scout-then-author INTENT: a model that scouts first (read/grep) but states it
+// will then author a workflow. The first-action `toolCalls` metric can't see the
+// next-turn authoring (anti-pattern 11), so this text signal (paired with the
+// structural toolCalls, per anti-pattern 7 — observational, not a positive hard
+// gate) reveals the taught behavior. On NEGATIVE cases intent must stay ~0.
+const INTENT_RE = /\b(run_workflow|workflow|fan[ -]?out|pipeline|adversarial)/i;
+
 interface RunRecord {
   readonly runIndex: number;
   readonly text: string;
   readonly toolCalls: readonly string[];
   readonly calledRunWorkflow: boolean;
+  /** Called run_workflow first-action OR stated scout-then-author intent in text. */
+  readonly intent: boolean;
   readonly passed: boolean;
   readonly durationMs: number;
 }
@@ -157,12 +166,14 @@ describe('FEATURE_246 run_workflow tool-description trigger', () => {
       mkdirSync(DUMP_DIR, { recursive: true });
       const TOOLS = productionToolSubset();
       expect(TOOLS.some((t) => t.name === 'run_workflow'), 'run_workflow must be registered').toBe(true);
-      // case id -> alias -> trigger rate
+      // case id -> alias -> rate
       const triggerRate = new Map<string, Map<ModelAlias, number>>();
+      const intentRate = new Map<string, Map<ModelAlias, number>>();
 
       for (const c of CASES) {
         const perAlias = new Map<ModelAlias, number>();
-        const aliasDumps: Array<{ alias: string; triggerRate: number; runs: RunRecord[] }> = [];
+        const perAliasIntent = new Map<ModelAlias, number>();
+        const aliasDumps: Array<{ alias: string; triggerRate: number; intentRate: number; runs: RunRecord[] }> = [];
 
         for (const alias of panel) {
           const runs: RunRecord[] = [];
@@ -190,6 +201,7 @@ describe('FEATURE_246 run_workflow tool-description trigger', () => {
                 text: out.text,
                 toolCalls: names,
                 calledRunWorkflow: called,
+                intent: called || INTENT_RE.test(out.text ?? ''),
                 passed: called === c.expectWorkflow,
                 durationMs: out.durationMs,
               });
@@ -201,17 +213,22 @@ describe('FEATURE_246 run_workflow tool-description trigger', () => {
                 text: `[ERROR] ${error instanceof Error ? error.message : String(error)}`,
                 toolCalls: [],
                 calledRunWorkflow: false,
+                intent: false,
                 passed: false,
                 durationMs: 0,
               });
             }
           }
-          const rate = runs.filter((r) => r.calledRunWorkflow).length / Math.max(1, runs.length);
+          const denom = Math.max(1, runs.length);
+          const rate = runs.filter((r) => r.calledRunWorkflow).length / denom;
+          const iRate = runs.filter((r) => r.intent).length / denom;
           perAlias.set(alias, rate);
-          aliasDumps.push({ alias, triggerRate: rate, runs });
+          perAliasIntent.set(alias, iRate);
+          aliasDumps.push({ alias, triggerRate: rate, intentRate: iRate, runs });
         }
 
         triggerRate.set(c.id, perAlias);
+        intentRate.set(c.id, perAliasIntent);
         writeFileSync(
           join(DUMP_DIR, `${c.id}.json`),
           JSON.stringify({ case: c.id, expectWorkflow: c.expectWorkflow, userMessage: c.userMessage, aliases: aliasDumps }, null, 2),
@@ -219,21 +236,25 @@ describe('FEATURE_246 run_workflow tool-description trigger', () => {
         );
       }
 
-      // ---- table ----
-      const header = ['case', ...panel].join(' | ');
+      // ---- table (cell = called% / intent%) ----
+      const header = ['case (called%/intent%)', ...panel].join(' | ');
+      const pct = (v: number): string => `${Math.round(v * 100)}`;
       const rows = CASES.map((c) => {
-        const perAlias = triggerRate.get(c.id)!;
-        const cells = panel.map((a) => `${(perAlias.get(a) ?? 0) * 100}%`);
+        const t = triggerRate.get(c.id)!;
+        const ix = intentRate.get(c.id)!;
+        const cells = panel.map((a) => `${pct(t.get(a) ?? 0)}/${pct(ix.get(a) ?? 0)}`);
         return [`${c.id}${c.expectWorkflow ? ' [+]' : ' [-]'}`, ...cells].join(' | ');
       });
       // eslint-disable-next-line no-console
       console.log(`\n[FEATURE_246 run_workflow trigger] panel=${panel.join(',')} runs=${RUNS}\n${header}\n${rows.join('\n')}\nDumps: ${DUMP_DIR}\n`);
 
-      const meanRate = (c: EvalCase): number => {
-        const perAlias = triggerRate.get(c.id)!;
+      const meanOf = (map: Map<string, Map<ModelAlias, number>>, c: EvalCase): number => {
+        const perAlias = map.get(c.id)!;
         const vals = panel.map((a) => perAlias.get(a) ?? 0);
         return vals.reduce((s, v) => s + v, 0) / Math.max(1, vals.length);
       };
+      const meanRate = (c: EvalCase): number => meanOf(triggerRate, c);
+      const meanIntent = (c: EvalCase): number => meanOf(intentRate, c);
 
       const triggeredByAnyAlias = (c: EvalCase): boolean =>
         panel.some((a) => (triggerRate.get(c.id)!.get(a) ?? 0) > 0);
@@ -252,12 +273,24 @@ describe('FEATURE_246 run_workflow tool-description trigger', () => {
       //   inspection; the floor guards only against the tool becoming totally
       //   undiscoverable. Observed: P1 reliably via kimi + mmx/m27; P2 via kimi
       //   (variable). No alias over-triggers.
+      const intendedByAnyAlias = (c: EvalCase): boolean =>
+        panel.some((a) => (intentRate.get(c.id)!.get(a) ?? 0) > 0);
+
       if (panel.length >= 3) {
+        // NEGATIVE (the real risk): must not over-trigger, and must not even
+        // *intend* a workflow for a single/trivial task. Both hard, both stable.
         for (const c of CASES.filter((x) => !x.expectWorkflow)) {
-          expect(meanRate(c), `${c.id} must NOT over-trigger run_workflow (mean <= 0.3)`).toBeLessThanOrEqual(0.3);
+          expect(meanRate(c), `${c.id} must NOT over-trigger run_workflow (called mean <= 0.3)`).toBeLessThanOrEqual(0.3);
+          expect(meanIntent(c), `${c.id} must NOT even intend a workflow (intent mean <= 0.3)`).toBeLessThanOrEqual(0.3);
         }
-        const discoverable = CASES.filter((x) => x.expectWorkflow).some((c) => triggeredByAnyAlias(c));
-        expect(discoverable, 'run_workflow must be discoverable on >=1 workflow-worthy case across the panel').toBe(true);
+        // POSITIVE: scout-then-author must be reachable on >=1 workflow-worthy
+        // case — counting either a first-action call OR a stated intent (the
+        // taught "read first, then author a workflow" that single-turn
+        // first-action under-counts, anti-pattern 11). Logged per-alias above.
+        const reachable = CASES.filter((x) => x.expectWorkflow).some(
+          (c) => triggeredByAnyAlias(c) || intendedByAnyAlias(c),
+        );
+        expect(reachable, 'scout-then-author must be reachable on >=1 workflow-worthy case (called or intent)').toBe(true);
       }
     },
     600_000,
