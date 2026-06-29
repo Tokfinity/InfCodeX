@@ -152,6 +152,33 @@ describe('runRestrictedWorkflowScript', () => {
     expect(calls).toEqual([{ name: 'sub', args: { k: 'v' } }]);
   });
 
+  it('disables Math.random / Date.now / argless new Date (FEATURE_246 Part D determinism)', async () => {
+    const { wf } = fakeWorkflowApi();
+    await expect(
+      runRestrictedWorkflowScript({ wf, source: `async function run() { return Math.random(); }` }),
+    ).rejects.toThrow(/Math\.random\(\) is disabled/);
+    await expect(
+      runRestrictedWorkflowScript({ wf, source: `async function run() { return Date.now(); }` }),
+    ).rejects.toThrow(/Date\.now\(\) is disabled/);
+    await expect(
+      runRestrictedWorkflowScript({ wf, source: `async function run() { return new Date().toISOString(); }` }),
+    ).rejects.toThrow(/argless new Date\(\) is disabled/);
+  });
+
+  it('still allows deterministic Math and new Date(ms) with an explicit value', async () => {
+    const { wf } = fakeWorkflowApi();
+    const result = await runRestrictedWorkflowScript({
+      wf,
+      args: { now: 1700000000000 },
+      source: `
+        async function run(wf, args) {
+          return { max: Math.max(1, 9, 4), iso: new Date(args.now).toISOString() };
+        }
+      `,
+    });
+    expect(result).toEqual({ max: 9, iso: new Date(1700000000000).toISOString() });
+  });
+
   it('sandbox wf.parallel drops a failed thunk to null and keeps siblings (FEATURE_246 Part E)', async () => {
     const { wf } = fakeWorkflowApi();
     const result = await runRestrictedWorkflowScript({

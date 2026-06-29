@@ -454,6 +454,49 @@ globalThis.eval = undefined;
 globalThis.Function = undefined;
 globalThis.constructor = undefined;
 
+// FEATURE_246 Part D (ADR-048): determinism guards. A workflow script that reads
+// wall-clock or randomness would make same-session resume replay diverge, so
+// Math.random / Date.now / argless new Date throw inside scripts. Built from the
+// real globals (no TDZ on the local shadow). Derive variation from args or the
+// item index; pass timestamps via args.
+const Math = new Proxy(globalThis.Math, {
+  get(target, prop, receiver) {
+    if (prop === "random") {
+      return () => {
+        throw new Error(
+          "Math.random() is disabled in workflow scripts (it breaks resume replay determinism); derive variation from args or the item index.",
+        );
+      };
+    }
+    return Reflect.get(target, prop, receiver);
+  },
+});
+const Date = new Proxy(globalThis.Date, {
+  apply() {
+    throw new Error(
+      "Date() is disabled in workflow scripts (it breaks resume replay determinism); pass a timestamp via args.",
+    );
+  },
+  construct(target, argv) {
+    if (argv.length === 0) {
+      throw new Error(
+        "argless new Date() is disabled in workflow scripts (it breaks resume replay determinism); pass a timestamp via args, e.g. new Date(args.now).",
+      );
+    }
+    return Reflect.construct(target, argv);
+  },
+  get(target, prop, receiver) {
+    if (prop === "now") {
+      return () => {
+        throw new Error(
+          "Date.now() is disabled in workflow scripts (it breaks resume replay determinism); pass a timestamp via args.",
+        );
+      };
+    }
+    return Reflect.get(target, prop, receiver);
+  },
+});
+
 const args = ${argsJson} === undefined ? undefined : JSON.parse(${argsJson});
 const __kodaxQueue = [];
 const __kodaxPending = new Map();
