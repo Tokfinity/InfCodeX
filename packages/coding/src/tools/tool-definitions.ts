@@ -56,6 +56,7 @@ import { toolMcpReadResource } from './mcp-read-resource.js';
 import { toolMcpGetPrompt } from './mcp-get-prompt.js';
 import { toolWorktreeCreate, toolWorktreeRemove } from './worktree.js';
 import { toolDispatchChildTask } from './dispatch-child-tasks.js';
+import { toolRunWorkflow } from './run-workflow.js';
 import { toolSendMessage } from './send-message.js';
 import { toolTaskStop } from './task-stop.js';
 import { toolTaskOutput } from './task-output.js';
@@ -459,6 +460,49 @@ export const BUILTIN_TOOL_DEFINITIONS: LocalToolDefinition[] = [
       const obj = typeof i?.objective === 'string' ? i.objective.slice(0, 200) : '<no-objective>';
       const mutability = i?.readOnly === false ? 'mutating' : 'readonly';
       return `Dispatch(${mutability}): ${obj}`;
+    },
+  },
+  {
+    name: 'run_workflow',
+    description:
+      "Author and run a multi-agent workflow inline: you write a small JavaScript orchestration script that runs as child agents under the workflow runtime, and it returns the synthesized result. Reach for this when independent agents working in parallel and then cross-checking each other beat a single linear pass — for example comparing several codebases or options, reviewing a diff from multiple independent angles and adversarially verifying each finding, or fanning many files out and synthesizing what they return. The `run(wf, args)` body coordinates agents through `wf` only: `wf.runAgent({name, prompt, readOnly, outputSchema?})` (pass `outputSchema` to get a schema-validated object back instead of raw text), `wf.parallel([thunks])`, `wf.pipeline(items, stage1, stage2)` (streams each item through stages without waiting for the slowest), and `wf.synthesize({inputs, rubric})`. Prefer dispatch_child_task for a single focused sub-task — a whole workflow's coordination overhead is wasted on one agent — and just read files yourself for a quick lookup.",
+    input_schema: {
+      type: 'object',
+      properties: {
+        manifest: {
+          type: 'object',
+          description:
+            'Workflow metadata. Set readOnly false only if child agents must write files. patterns names the shapes the script uses (one or more of: classify-and-act, fan-out-and-synthesize, adversarial-verification, generate-and-filter, tournament, loop-until-done).',
+          properties: {
+            name: { type: 'string' },
+            description: { type: 'string' },
+            phases: { type: 'array', items: { type: 'string' }, description: 'Ordered phase names for progress display.' },
+            readOnly: { type: 'boolean' },
+            maxAgents: { type: 'number', description: 'Lifetime cap on total child agents across the run.' },
+            maxConcurrency: { type: 'number', description: 'Max simultaneously in-flight child agents.' },
+            patterns: { type: 'array', items: { type: 'string' } },
+            plannedAgents: { type: 'number' },
+          },
+          required: ['name', 'description', 'phases', 'readOnly', 'maxAgents', 'maxConcurrency', 'patterns'],
+        },
+        source: {
+          type: 'string',
+          description:
+            'JavaScript module body defining `async function run(wf, args) { ... }`. Coordinate child agents only through `wf`; the script gets no fs/network/shell and may not use import/require. Return displayable final text (for example `{ synthesis }`).',
+        },
+        args: {
+          type: 'object',
+          description: 'Optional initial arguments passed to run(wf, args).',
+        },
+      },
+      required: ['manifest', 'source'],
+    },
+    handler: toolRunWorkflow,
+    sideEffect: 'mutates-state',
+    toClassifierInput: (input) => {
+      const i = input as { manifest?: { name?: string; description?: string } };
+      const label = i?.manifest?.name ?? i?.manifest?.description ?? '<workflow>';
+      return `RunWorkflow: ${String(label).slice(0, 160)}`;
     },
   },
   // FEATURE_155 v0.7.39 Slice C1 — `await_child_task` registry entry

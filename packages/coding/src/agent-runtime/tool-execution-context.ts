@@ -35,6 +35,7 @@ import type {
   KodaXManagedProtocolPayload,
   KodaXOptions,
   KodaXToolExecutionContext,
+  WorkflowToolHost,
 } from '../types.js';
 import type { CapabilityRuntimeContract } from '../extensions/runtime-contract.js';
 import { mergeManagedProtocolPayload } from '../managed-protocol.js';
@@ -160,5 +161,47 @@ export function buildToolExecutionContext(
     // pass a fresh `KodaXOptions` to `runKodaX` and only forward
     // workspace/system-prompt context, not the parent's registries.
     childProgressSnapshots: new Map(),
+    // FEATURE_246 Part A2 (ADR-046) — model-launched workflow capability. Wired
+    // only when the host configured a runs dir AND the agent mode hosts
+    // workflows (ama/amaw). The lazy import keeps the static graph acyclic
+    // (workflows -> agent-runtime; never the reverse).
+    workflowHost: buildWorkflowToolHost(options),
+  };
+}
+
+function buildWorkflowToolHost(options: KodaXOptions): WorkflowToolHost | undefined {
+  const runsBaseDir = options.workflowRunsBaseDir;
+  if (runsBaseDir === undefined) return undefined;
+  if (options.agentMode !== 'ama' && options.agentMode !== 'amaw') return undefined;
+  return {
+    runInline: async ({ manifest, source, args }) => {
+      // Lazy literal imports break the static cycle: workflow-runner imports
+      // buildToolExecutionContext, so agent-runtime must not statically import
+      // the workflows host/run-manager.
+      const [{ startManagedWorkflow }, { getDefaultWorkflowRunManager }] = await Promise.all([
+        import('../workflows/host.js'),
+        import('../workflows/run-manager.js'),
+      ]);
+      const started = await startManagedWorkflow({
+        source: { kind: 'inline', manifest, source },
+        args,
+        options,
+        runsBaseDir,
+        manager: getDefaultWorkflowRunManager(),
+        ...(options.abortSignal ? { signal: options.abortSignal } : {}),
+      });
+      if (started.kind === 'declined') {
+        return { kind: 'declined', reason: started.reason };
+      }
+      await started.managed.done;
+      const snap = started.managed.getSnapshot?.();
+      return {
+        kind: 'started',
+        runId: started.runId,
+        ...(snap?.status !== undefined ? { status: snap.status } : {}),
+        ...(snap?.resultText !== undefined ? { resultText: snap.resultText } : {}),
+        ...(snap?.error !== undefined ? { error: snap.error } : {}),
+      };
+    },
   };
 }

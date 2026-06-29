@@ -1180,6 +1180,13 @@ export interface KodaXOptions {
   extensionRuntime?: ExtensionRuntimeContract;
   /** FEATURE_229: host-owned policy for workflow auto-start and ceilings. */
   workflowHostPolicy?: import('./workflows/invocation-policy.js').WorkflowHostPolicy;
+  /**
+   * FEATURE_246 Part A2 (ADR-046): durable run-graph base dir for workflow runs
+   * the model launches via `run_workflow`. The host (REPL / SDK) resolves it
+   * (e.g. `getAgentConfigPath('workflow-runs', projectKey)`); when set + the
+   * agent mode is ama/amaw, the tool-execution context wires `ctx.workflowHost`.
+   */
+  workflowRunsBaseDir?: string;
   /** FEATURE_221: SDK-consumer self-manual injection (product name + topics). */
   selfManual?: KodaXSelfManualConfig;
   /**
@@ -1819,6 +1826,42 @@ export interface KodaXToolExecutionContext {
    * See `packages/coding/src/goal/tools-context.ts`.
    */
   goalContext?: import('./goal/tools-context.js').GoalToolsContext;
+  /**
+   * FEATURE_246 Part A2 (ADR-046): narrow capability the `run_workflow` tool
+   * uses to start a managed workflow run. Wired by tool-execution-context (via
+   * a lazy import of the coding WorkflowHost) only when the session enables it;
+   * absent in SA / when no runs dir is configured, so the tool fails closed.
+   */
+  workflowHost?: WorkflowToolHost;
+}
+
+/** Result of a model-launched workflow run (FEATURE_246 Part A2). */
+export interface WorkflowToolHostResult {
+  readonly kind: 'declined' | 'started';
+  /** declined: why the host/generator declined to run. */
+  readonly reason?: string;
+  /** started: the minted run id. */
+  readonly runId?: string;
+  /** started: terminal status once the run settled. */
+  readonly status?: string;
+  /** started: the run's displayable result text, when completed. */
+  readonly resultText?: string;
+  /** started: terminal error message, when failed. */
+  readonly error?: string;
+}
+
+/**
+ * Narrow ctx capability for launching workflows from a tool. Intentionally free
+ * of any workflow-layer type import (keeps `types.ts` dependency-light); the
+ * concrete implementation lives behind a lazy import in tool-execution-context.
+ */
+export interface WorkflowToolHost {
+  /** Start an inline-authored workflow ({manifest, source}) and await its result. */
+  runInline(input: {
+    readonly manifest: unknown;
+    readonly source: string;
+    readonly args?: unknown;
+  }): Promise<WorkflowToolHostResult>;
 }
 
 // FEATURE_200 Phase F: repo-intelligence domain extracted to ./types/repo-intelligence.ts.
