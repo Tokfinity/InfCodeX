@@ -610,6 +610,36 @@ function buildRuntime(opts: CreateWorkflowRuntimeOptions): InternalRuntime {
       return runPool(items, cap, opts.signal);
     },
 
+    pipeline: (items, ...stages) => {
+      checkAbort();
+      const runnable = stages.filter(
+        (stage): stage is (prev: unknown, item: unknown, index: number) => unknown =>
+          typeof stage === 'function',
+      );
+      // No barrier between stages: every item advances its own chain as soon
+      // as its previous stage resolves. Actual agent spawns inside stages stay
+      // bounded by the shared concurrency Semaphore (acquired in doSpawn), so
+      // launching all item-chains at once does not exceed maxConcurrency.
+      return Promise.all(
+        items.map(async (item, index) => {
+          try {
+            let value: unknown = item;
+            for (const stage of runnable) {
+              checkAbort();
+              value = await stage(value, item, index);
+            }
+            return value;
+          } catch (error) {
+            // Stage-level fault isolation: a throwing stage drops THIS item to
+            // null and lets siblings continue. Abort tears down the whole run,
+            // so it must propagate rather than be swallowed into a null item.
+            if (error instanceof WorkflowAbortError) throw error;
+            return null;
+          }
+        }),
+      );
+    },
+
     synthesize: async (input: WorkflowSynthesizeInput): Promise<WorkflowSynthesis> => {
       // Synthesis runs as a gated agent (counts toward maxAgents /
       // concurrency / budget and emits agent_spawned/completed events)

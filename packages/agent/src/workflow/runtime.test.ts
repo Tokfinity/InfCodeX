@@ -686,6 +686,70 @@ describe('maxAgents total cap', () => {
   });
 });
 
+describe('wf.pipeline — no-barrier staged scheduling', () => {
+  it('runs each item through ordered stages and preserves input order', async () => {
+    const { backend } = fakeBackend();
+    const outcome = await runWorkflow(baseOpts(backend), async (wf) =>
+      wf.pipeline!(
+        ['a', 'b', 'c'],
+        (_prev, item, index) => `${item as string}#${index}`,
+        (prev, item) => `${prev as string}->v(${item as string})`,
+      ),
+    );
+    expect(outcome.ok).toBe(true);
+    if (outcome.ok) {
+      expect(outcome.result).toEqual(['a#0->v(a)', 'b#1->v(b)', 'c#2->v(c)']);
+    }
+  });
+
+  it('drops a throwing item to null and keeps siblings (input order preserved)', async () => {
+    const { backend } = fakeBackend();
+    const outcome = await runWorkflow(baseOpts(backend), async (wf) =>
+      wf.pipeline!(
+        ['ok', 'boom', 'ok2'],
+        (_prev, item) => {
+          if (item === 'boom') throw new Error('stage blew up');
+          return item;
+        },
+        (prev) => `${prev as string}!`,
+      ),
+    );
+    expect(outcome.ok).toBe(true);
+    if (outcome.ok) expect(outcome.result).toEqual(['ok!', null, 'ok2!']);
+  });
+
+  it('advances a fast item into stage 2 while a slow item is still in stage 1 (no barrier)', async () => {
+    const { backend } = fakeBackend();
+    let releaseSlow: () => void = () => {};
+    const slowGate = new Promise<void>((resolve) => {
+      releaseSlow = resolve;
+    });
+    const order: string[] = [];
+    const runPromise = runWorkflow(baseOpts(backend), async (wf) =>
+      wf.pipeline!(
+        ['slow', 'fast'],
+        async (_prev, item) => {
+          if (item === 'slow') await slowGate;
+          order.push(`s1:${item as string}`);
+          return item;
+        },
+        async (prev, item) => {
+          order.push(`s2:${item as string}`);
+          return prev;
+        },
+      ),
+    );
+    await new Promise((resolve) => setTimeout(resolve, 15));
+    // The fast item cleared BOTH stages while the slow item is still gated in
+    // stage 1 — proof there is no inter-stage barrier.
+    expect(order).toEqual(['s1:fast', 's2:fast']);
+    releaseSlow();
+    const outcome = await runPromise;
+    expect(outcome.ok).toBe(true);
+    if (outcome.ok) expect(outcome.result).toEqual(['slow', 'fast']);
+  });
+});
+
 describe('maxConcurrency / parallel in-flight gate', () => {
   it('fails fast on invalid maxConcurrency instead of hanging spawned agents', async () => {
     const { backend, spawnCount } = fakeBackend();

@@ -246,6 +246,53 @@ describe('runRestrictedWorkflowScript', () => {
     expect(prompts).toEqual(['check a', 'check b', 'check c']);
   });
 
+  it('streams items through wf.pipeline find->verify stages', async () => {
+    const { wf, prompts } = fakeWorkflowApi();
+    const result = await runRestrictedWorkflowScript({
+      wf,
+      args: { items: ['a', 'b'] },
+      source: `
+        async function run(wf, args) {
+          const out = await wf.pipeline(
+            args.items,
+            (item) => wf.runAgent({ name: 'find-' + item, prompt: 'find ' + item, readOnly: true }),
+            (rev, item) => wf.runAgent({ name: 'verify-' + item, prompt: 'verify ' + rev.finalText, readOnly: true })
+              .then((v) => ({ item: item, find: rev.finalText, verify: v.finalText }))
+          );
+          return { out: out };
+        }
+      `,
+    });
+
+    expect(result).toEqual({
+      out: [
+        { item: 'a', find: 'done:find a', verify: 'done:verify done:find a' },
+        { item: 'b', find: 'done:find b', verify: 'done:verify done:find b' },
+      ],
+    });
+    expect([...prompts].sort()).toEqual(
+      ['find a', 'find b', 'verify done:find a', 'verify done:find b'].sort(),
+    );
+  });
+
+  it('drops a pipeline item to null when a stage throws, keeping siblings', async () => {
+    const { wf } = fakeWorkflowApi();
+    const result = await runRestrictedWorkflowScript({
+      wf,
+      source: `
+        async function run(wf) {
+          const out = await wf.pipeline(
+            ['keep', 'boom'],
+            (item) => { if (item === 'boom') throw new Error('stage failed'); return item; },
+            (prev) => 'ok:' + prev
+          );
+          return { kept: out.filter(Boolean) };
+        }
+      `,
+    });
+    expect(result).toEqual({ kept: ['ok:keep'] });
+  });
+
   it('bridges generated phase scopes to the host runtime', async () => {
     const { wf, phases } = fakeWorkflowApi();
     const result = await runRestrictedWorkflowScript({

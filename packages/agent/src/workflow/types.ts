@@ -200,6 +200,21 @@ export interface WorkflowApi {
     items: readonly (() => Promise<T>)[],
     opts?: WorkflowParallelOptions,
   ): Promise<T[]>;
+  /**
+   * Stream items through ordered stages with NO barrier between stages: an
+   * item advances to stage N+1 as soon as its own stage N resolves,
+   * independent of other items (wall-clock = slowest single chain, not
+   * sum-of-slowest-per-stage). Each stage receives `(prev, item, index)`
+   * where `prev` is the previous stage's result (the original item at
+   * stage 1). A stage that throws drops that item to `null` and skips its
+   * remaining stages; results preserve input order. Agent spawns inside
+   * stages stay bounded by the workflow `maxConcurrency` gate. Optional:
+   * the restricted-script bootstrap always provides it; SDK consumers get
+   * it from the runtime. */
+  pipeline?(
+    items: readonly unknown[],
+    ...stages: readonly ((prev: unknown, item: unknown, index: number) => unknown)[]
+  ): Promise<unknown[]>;
   /** Synthesize across inputs. Runs as a gated agent through the runtime
    *  (spawn → wait), so it counts toward maxAgents / concurrency / budget
    *  and emits run-graph events — it is NOT a backend side-channel. */

@@ -311,8 +311,12 @@ function workflowBudget(wf: WorkflowApi): WorkflowBudget {
 
 function errorEnvelope(error: unknown): WorkflowRpcEnvelope {
   const message = error instanceof Error ? error.message : String(error);
+  // Tag aborts so the sandbox can distinguish a torn-down run from an ordinary
+  // stage failure. `wf.pipeline` swallows ordinary stage errors into a null
+  // item but MUST re-throw an abort. Detect by name to avoid a runtime import.
+  const aborted = error instanceof Error && error.name === 'WorkflowAbortError';
   return {
-    value: { message },
+    value: aborted ? { message, aborted: true } : { message },
     budget: { spent: 0, remaining: null },
   };
 }
@@ -495,7 +499,11 @@ function __kodaxSettle(id, ok, envelopeJson) {
     envelope && envelope.value && typeof envelope.value.message === "string"
       ? envelope.value.message
       : "workflow command failed";
-  pending.reject(new Error(message));
+  const error = new Error(message);
+  if (envelope && envelope.value && envelope.value.aborted === true) {
+    error.aborted = true;
+  }
+  pending.reject(error);
 }
 
 async function __kodaxParallel(items, options) {
@@ -522,6 +530,28 @@ async function __kodaxParallel(items, options) {
   }
   await Promise.all(Array.from({ length: lanes }, () => worker()));
   return results;
+}
+
+async function __kodaxPipeline(items, ...stages) {
+  if (!Array.isArray(items)) {
+    throw new Error("wf.pipeline expects an array as its first argument");
+  }
+  const runnable = stages.filter((stage) => typeof stage === "function");
+  // No barrier between stages: each item advances its own chain independently.
+  // A throwing stage drops THIS item to null (siblings continue); an aborted
+  // run propagates instead of being swallowed.
+  return Promise.all(items.map(async (item, index) => {
+    try {
+      let value = item;
+      for (const stage of runnable) {
+        value = await stage(value, item, index);
+      }
+      return value;
+    } catch (error) {
+      if (error && error.aborted === true) throw error;
+      return null;
+    }
+  }));
 }
 
 const console = Object.freeze({
@@ -561,6 +591,7 @@ const wf = Object.freeze({
     reason: __kodaxNonEmptyString(reason, "reason"),
   }),
   parallel: __kodaxParallel,
+  pipeline: __kodaxPipeline,
   synthesize: (input) => __kodaxEnqueue("synthesize", __kodaxRecord(input, "synthesize input")),
   artifact: (name, value) => __kodaxEnqueue("artifact", { name: __kodaxNonEmptyString(name, "name"), value }),
   log: (event) => { void __kodaxEnqueue("log", __kodaxRecord(event, "log input")); },
