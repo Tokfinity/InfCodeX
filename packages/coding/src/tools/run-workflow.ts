@@ -104,6 +104,15 @@ export async function toolRunWorkflow(
     }
     const taskId = started.runId;
     const done = started.done;
+    // Guard a run-id collision with an in-flight task BEFORE starting the settle
+    // pump. If we created the settle IIFE first and registerChildTask then threw,
+    // the orphaned settle would still fire enqueueChildTaskNotification for the
+    // colliding taskId — injecting a spurious <task-completed> for the OTHER run.
+    // `has` + `registerChildTask` run synchronously (no await between), so this is
+    // race-free within a call; fall back to blocking so the result is never lost.
+    if (registry.has(taskId)) {
+      return formatWorkflowOutcome(await done);
+    }
     // The settle promise enqueues the `<task-completed>` notification (which carries
     // the synthesis the Worker reads) when the run finishes, then resolves so the
     // idle-yield loop wakes the Worker. Its resolved value is a settle signal only.
@@ -117,13 +126,7 @@ export async function toolRunWorkflow(
       enqueueChildTaskNotification({ taskId, summary });
       return EMPTY_CHILD_RESULT;
     })();
-    try {
-      registerChildTask(registry, taskId, settle);
-    } catch {
-      // Extremely unlikely run-id collision with an in-flight task — fall back to
-      // awaiting inline so the result is never lost.
-      return formatWorkflowOutcome(await done);
-    }
+    registerChildTask(registry, taskId, settle);
     return (
       `task_id:${taskId}\n` +
       `Workflow "${readManifestName(manifest)}" started (run ${taskId}) and is now running in the background. ` +

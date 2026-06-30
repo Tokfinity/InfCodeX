@@ -12,10 +12,22 @@ function recordingHost(
   result: WorkflowToolHostResult | (() => Promise<WorkflowToolHostResult>),
 ): { host: WorkflowToolHost; calls: Array<{ manifest: unknown; source: string; args?: unknown }> } {
   const calls: Array<{ manifest: unknown; source: string; args?: unknown }> = [];
+  const resolve = async (): Promise<WorkflowToolHostResult> =>
+    typeof result === 'function' ? result() : result;
   const host: WorkflowToolHost = {
+    // Interface-complete startInline (mirrors runInline) so the mock satisfies
+    // WorkflowToolHost and stays usable if a test ever wires a childTaskRegistry.
+    startInline: async (input) => {
+      calls.push(input);
+      const r = await resolve();
+      if (r.kind === 'declined') {
+        return r.reason !== undefined ? { kind: 'declined', reason: r.reason } : { kind: 'declined' };
+      }
+      return { kind: 'started', runId: r.runId, done: Promise.resolve(r) };
+    },
     runInline: async (input) => {
       calls.push(input);
-      return typeof result === 'function' ? result() : result;
+      return resolve();
     },
   };
   return { host, calls };
@@ -135,5 +147,22 @@ describe('toolRunWorkflow — async / idle-yield path (ADR-049)', () => {
     const { host } = recordingHost({ kind: 'started', runId: 'r', status: 'completed', resultText: 'BLOCKING SYNTH' });
     const out = await toolRunWorkflow({ manifest: MANIFEST, source: SOURCE }, ctxWith(host));
     expect(out).toBe('BLOCKING SYNTH');
+  });
+
+  it('falls back to blocking on a run-id collision and does NOT register/notify a second time', async () => {
+    const done = Promise.resolve<WorkflowToolHostResult>({
+      kind: 'started', runId: 'run-async-1', status: 'completed', resultText: 'COLLISION SYNTH',
+    });
+    const { ctx, registry } = asyncCtx(done, 'run-async-1');
+    // An in-flight task already holds this run id (simulated same-ms collision).
+    const inflight = new Promise<unknown>(() => {});
+    registry.set('run-async-1', inflight);
+
+    const out = await toolRunWorkflow({ manifest: MANIFEST, source: SOURCE }, ctx);
+    // Blocking fallback: returns the synthesis text, NOT an idle-yield task_id message,
+    // and leaves the pre-existing registry entry untouched (no orphaned settle pump).
+    expect(out).toBe('COLLISION SYNTH');
+    expect(String(out)).not.toContain('task_id:');
+    expect(registry.get('run-async-1')).toBe(inflight);
   });
 });
