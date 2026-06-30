@@ -158,28 +158,41 @@ export async function tryIntelligentCompact(
       const triggerTokens = input.contextWindow * (input.compactionConfig.triggerPercent / 100);
       const postCompactTokens = estimateTokens(compacted);
 
-      // Emit one stderr line per successful compaction so users (and eval
-      // harnesses) can see when compaction fires + how much it saved. Zero
-      // perf cost (one line per compaction event, never per turn).
-      // eslint-disable-next-line no-console
-      console.error(
-        `[Compaction] triggered ${JSON.stringify({
-          contextWindow: input.contextWindow,
-          triggerPercent: input.compactionConfig.triggerPercent,
-          triggerTokens: Math.floor(triggerTokens),
-          tokensBefore: result.tokensBefore,
-          tokensAfter: postCompactTokens,
-          reduction: result.tokensBefore - postCompactTokens,
-        })}`,
-      );
+      // Compaction observability reaches every output mode through the
+      // lifecycle events emitted below (`onCompactStats` / `onCompact`): the
+      // Ink TUI renders an inline "Context auto-compacted" notice, the plain
+      // CLI prints a dim line, and `--json` emits a `compact.finish` record.
+      // This raw stderr trace is debug-only, gated behind
+      // `KODAX_DEBUG_COMPACTION` (same gate as the sibling summary-chunk
+      // diagnostic in @kodax-ai/agent compaction.ts). Rationale: the REPL
+      // renderer runs with `patchConsole: false`, so a bare `console.*` write
+      // bypasses the render engine, lands below the live region, and desyncs
+      // the cell frame — corrupting the interactive screen.
+      if (process.env.KODAX_DEBUG_COMPACTION) {
+        // eslint-disable-next-line no-console
+        console.error(
+          `[Compaction] triggered ${JSON.stringify({
+            contextWindow: input.contextWindow,
+            triggerPercent: input.compactionConfig.triggerPercent,
+            triggerTokens: Math.floor(triggerTokens),
+            tokensBefore: result.tokensBefore,
+            tokensAfter: postCompactTokens,
+            reduction: result.tokensBefore - postCompactTokens,
+          })}`,
+        );
+      }
       if (postCompactTokens < triggerTokens) {
         nextFailures = 0;
       } else {
+        // Counter increment is load-bearing (drives the circuit breaker) and
+        // stays unconditional; only the diagnostic line is debug-gated.
         nextFailures = input.compactConsecutiveFailures + 1;
-        // eslint-disable-next-line no-console
-        console.warn(
-          `[Compaction] Partial success: still above trigger (${postCompactTokens} > ${Math.floor(triggerTokens)}) — attempt ${nextFailures}/${limit}`,
-        );
+        if (process.env.KODAX_DEBUG_COMPACTION) {
+          // eslint-disable-next-line no-console
+          console.warn(
+            `[Compaction] Partial success: still above trigger (${postCompactTokens} > ${Math.floor(triggerTokens)}) — attempt ${nextFailures}/${limit}`,
+          );
+        }
       }
 
       compactionUpdate = {
@@ -200,12 +213,18 @@ export async function tryIntelligentCompact(
       compacted = result.messages;
     }
   } catch (error) {
+    // Error is handled, not swallowed: the counter increment drives the
+    // circuit breaker and we fall through to deterministic graceful
+    // degradation below. The stderr detail is debug-only for the same
+    // TUI-safety reason as the success trace above.
     nextFailures = input.compactConsecutiveFailures + 1;
-    // eslint-disable-next-line no-console
-    console.error(
-      `[Compaction Error] LLM summary failed (attempt ${nextFailures}/${limit}):`,
-      error,
-    );
+    if (process.env.KODAX_DEBUG_COMPACTION) {
+      // eslint-disable-next-line no-console
+      console.error(
+        `[Compaction Error] LLM summary failed (attempt ${nextFailures}/${limit}):`,
+        error,
+      );
+    }
     // Fall through to graceful degradation: return messages identity.
     compacted = input.messages;
   } finally {
