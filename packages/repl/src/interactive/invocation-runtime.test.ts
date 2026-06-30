@@ -199,6 +199,29 @@ describe('prepareInvocationExecution', () => {
     expect(prepared.options?.agentMode).toBe('amaw');
   });
 
+  it('AMA /workflow elevated turn carries BOTH gate inputs (agentMode=amaw AND workflowRunsBaseDir) so buildWorkflowToolHost wires run_workflow (FEATURE_246 end-to-end)', async () => {
+    // The host gate (buildWorkflowToolHost, pinned by CAP-TOOL-CTX-009) needs
+    // agentMode==='amaw' AND a workflowRunsBaseDir. The session options carry the
+    // runs dir; the /workflow command invocation supplies the amaw elevation. This
+    // pins that the elevation does NOT drop the runs dir — so the elevated Worker
+    // turn satisfies the gate end-to-end. (Regression guard: a stale build that
+    // lacks this elevation makes the AMA Worker fall back to dispatch_child_task.)
+    const prepared = await prepareInvocationExecution(
+      { provider: 'anthropic', agentMode: 'ama', workflowRunsBaseDir: '/tmp/wf-runs' },
+      {
+        prompt: 'Author and run a workflow',
+        source: 'prompt',
+        displayName: 'workflow create',
+        agentModeOverride: 'amaw',
+      },
+      '/workflow review since v0.7.57',
+      vi.fn()
+    );
+
+    expect(prepared.options?.agentMode).toBe('amaw');
+    expect(prepared.options?.workflowRunsBaseDir).toBe('/tmp/wf-runs');
+  });
+
   it('leaves agentMode untouched when no agentModeOverride is set', async () => {
     const prepared = await prepareInvocationExecution(
       { provider: 'anthropic', agentMode: 'ama' },
