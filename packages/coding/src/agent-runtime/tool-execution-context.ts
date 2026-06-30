@@ -36,6 +36,7 @@ import type {
   KodaXOptions,
   KodaXToolExecutionContext,
   WorkflowToolHost,
+  WorkflowToolHostResult,
 } from '../types.js';
 import type { CapabilityRuntimeContract } from '../extensions/runtime-contract.js';
 import { mergeManagedProtocolPayload } from '../managed-protocol.js';
@@ -194,41 +195,44 @@ function buildWorkflowToolHost(options: KodaXOptions): WorkflowToolHost | undefi
   // amaw-only standing gate. AMA `/workflow` command turns reach here already
   // elevated to amaw (per-turn agentModeOverride); plain AMA and SA turns do not.
   if (options.agentMode !== 'amaw') return undefined;
-  return {
-    runInline: async ({ manifest, source, args, resumeFromRunId }) => {
-      // Lazy literal imports break the static cycle: workflow-runner imports
-      // buildToolExecutionContext, so agent-runtime must not statically import
-      // the workflows host/run-manager.
-      const [{ startManagedWorkflow }, { getDefaultWorkflowRunManager }, { join }] = await Promise.all([
-        import('../workflows/host.js'),
-        import('../workflows/run-manager.js'),
-        import('node:path'),
-      ]);
-      // FEATURE_246 (P1 review): live workflow progress reaches the REPL through
-      // options.events.onWorkflowProcessEvent — already forwarded by the runner
-      // (runWorkflowFromOptions). We do NOT subscribe the run manager here as well:
-      // that would deliver every process event twice (the gap was the REPL not
-      // *consuming* the hook, not the host not *emitting* it). The REPL renders it
-      // with the same work-strip the slash path uses.
-      const started = await startManagedWorkflow({
-        source: { kind: 'inline', manifest, source },
-        args,
-        options,
-        runsBaseDir,
-        manager: getDefaultWorkflowRunManager(),
-        // FEATURE_246 Part D: resume seeds the result cache from the prior run.
-        // Guard against path traversal — resumeFromRunId is model-supplied, so a
-        // value like '../../etc' must not escape runsBaseDir. Run ids are
-        // `run-<base36>`; require that safe charset (no slashes / dots / abs path).
-        ...(resumeFromRunId && /^[A-Za-z0-9][A-Za-z0-9._-]*$/.test(resumeFromRunId) && !resumeFromRunId.includes('..')
-          ? { resumeFromRunDir: join(runsBaseDir, resumeFromRunId) }
-          : {}),
-        ...(options.abortSignal ? { signal: options.abortSignal } : {}),
-      });
-      if (started.kind === 'declined') {
-        return { kind: 'declined', reason: started.reason };
-      }
-      await started.managed.done;
+  // ADR-049: `startInline` starts the run and returns a `done` promise WITHOUT
+  // awaiting it, so the async run_workflow path can register `done` in the Worker's
+  // childTaskRegistry and idle-yield. `runInline` (the blocking path, kept for
+  // SDK/headless and as a fallback) is just `startInline` + `await done`.
+  const startInline: WorkflowToolHost['startInline'] = async ({ manifest, source, args, resumeFromRunId }) => {
+    // Lazy literal imports break the static cycle: workflow-runner imports
+    // buildToolExecutionContext, so agent-runtime must not statically import
+    // the workflows host/run-manager.
+    const [{ startManagedWorkflow }, { getDefaultWorkflowRunManager }, { join }] = await Promise.all([
+      import('../workflows/host.js'),
+      import('../workflows/run-manager.js'),
+      import('node:path'),
+    ]);
+    // FEATURE_246 (P1 review): live workflow progress reaches the REPL through
+    // options.events.onWorkflowProcessEvent — already forwarded by the runner
+    // (runWorkflowFromOptions). We do NOT subscribe the run manager here as well:
+    // that would deliver every process event twice (the gap was the REPL not
+    // *consuming* the hook, not the host not *emitting* it). The REPL renders it
+    // with the same work-strip the slash path uses.
+    const started = await startManagedWorkflow({
+      source: { kind: 'inline', manifest, source },
+      args,
+      options,
+      runsBaseDir,
+      manager: getDefaultWorkflowRunManager(),
+      // FEATURE_246 Part D: resume seeds the result cache from the prior run.
+      // Guard against path traversal — resumeFromRunId is model-supplied, so a
+      // value like '../../etc' must not escape runsBaseDir. Run ids are
+      // `run-<base36>`; require that safe charset (no slashes / dots / abs path).
+      ...(resumeFromRunId && /^[A-Za-z0-9][A-Za-z0-9._-]*$/.test(resumeFromRunId) && !resumeFromRunId.includes('..')
+        ? { resumeFromRunDir: join(runsBaseDir, resumeFromRunId) }
+        : {}),
+      ...(options.abortSignal ? { signal: options.abortSignal } : {}),
+    });
+    if (started.kind === 'declined') {
+      return { kind: 'declined', reason: started.reason };
+    }
+    const done = started.managed.done.then((): WorkflowToolHostResult => {
       const snap = started.managed.getSnapshot?.();
       return {
         kind: 'started',
@@ -237,6 +241,15 @@ function buildWorkflowToolHost(options: KodaXOptions): WorkflowToolHost | undefi
         ...(snap?.resultText !== undefined ? { resultText: snap.resultText } : {}),
         ...(snap?.error !== undefined ? { error: snap.error } : {}),
       };
+    });
+    return { kind: 'started', runId: started.runId, done };
+  };
+  return {
+    startInline,
+    runInline: async (input) => {
+      const s = await startInline(input);
+      if (s.kind === 'declined') return { kind: 'declined', reason: s.reason };
+      return await s.done;
     },
   };
 }

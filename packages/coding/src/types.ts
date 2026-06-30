@@ -1855,16 +1855,30 @@ export interface WorkflowToolHostResult {
  * of any workflow-layer type import (keeps `types.ts` dependency-light); the
  * concrete implementation lives behind a lazy import in tool-execution-context.
  */
+export interface WorkflowToolHostInlineInput {
+  readonly manifest: unknown;
+  readonly source: string;
+  readonly args?: unknown;
+  readonly resumeFromRunId?: string;
+}
+
+/** ADR-049: a started-but-not-awaited workflow handle. `done` resolves with the
+ *  terminal result when the run settles — the async run_workflow path registers it
+ *  in the Worker's childTaskRegistry so the idle-yield loop resumes the Worker with
+ *  the synthesis instead of blocking the turn. */
+export type WorkflowToolHostStartResult =
+  | { readonly kind: 'declined'; readonly reason?: string }
+  | { readonly kind: 'started'; readonly runId: string; readonly done: Promise<WorkflowToolHostResult> };
+
 export interface WorkflowToolHost {
   /** Start an inline-authored workflow ({manifest, source}) and await its result.
    *  `resumeFromRunId` (FEATURE_246 Part D) seeds the result cache from a prior
    *  run so unchanged effects replay and only changed ones re-run live. */
-  runInline(input: {
-    readonly manifest: unknown;
-    readonly source: string;
-    readonly args?: unknown;
-    readonly resumeFromRunId?: string;
-  }): Promise<WorkflowToolHostResult>;
+  runInline(input: WorkflowToolHostInlineInput): Promise<WorkflowToolHostResult>;
+  /** ADR-049: start the workflow and return immediately with a `done` promise,
+   *  without blocking the calling turn. The async/idle-yield run_workflow path uses
+   *  this; `runInline` is just `startInline` + `await done`. */
+  startInline(input: WorkflowToolHostInlineInput): Promise<WorkflowToolHostStartResult>;
 }
 
 // FEATURE_200 Phase F: repo-intelligence domain extracted to ./types/repo-intelligence.ts.
