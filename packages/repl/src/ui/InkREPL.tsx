@@ -186,6 +186,7 @@ import {
   startGeneratedWorkflowFromRequest,
 } from "../commands/workflow-command.js";
 import { formatWorkflowAgentDigest, inferWorkflowLocaleFromParts } from "../commands/workflow-command-results.js";
+import { isDuplicateLegacyRateLimit, type RateLimitDedupKey } from "./rate-limit-dedup.js";
 import {
   formatReasoningEffortStatusLabel,
   getProviderModel,
@@ -4829,6 +4830,11 @@ const InkREPLInner: React.FC<InkREPLProps> = ({
   const pendingInputsRef = useRef<string[]>(streamingState.pendingInputs);
   const userInterruptedRef = useRef(false);
   const lastInterruptEscapeAtRef = useRef(0);
+  // Rate-limit double-render dedup: base.ts fires the structured onRetryAfter
+  // immediately before the legacy onRateLimit for the SAME retry. We record the
+  // structured line's key here so the legacy onProviderRateLimit handler can
+  // suppress its duplicate line. See ./rate-limit-dedup.ts.
+  const rateLimitDedupRef = useRef<RateLimitDedupKey | null>(null);
 
   // Issue 116: generation counter to discard results from stale (interrupted) rounds.
   // Incremented on each prompt submission; checked after await to detect supersession.
@@ -6282,6 +6288,15 @@ const InkREPLInner: React.FC<InkREPLProps> = ({
       if (userInterruptedRef.current) {
         return;
       }
+      // The structured onRetryAfter callback fires immediately before this
+      // legacy one for the same retry (base.ts) and renders a richer line; drop
+      // this duplicate so the user sees one rate-limit notice, not two. The
+      // legacy callback stays wired for SDK / extension rate-limit events.
+      const pendingStructured = rateLimitDedupRef.current;
+      rateLimitDedupRef.current = null;
+      if (isDuplicateLegacyRateLimit(pendingStructured, { attempt, maxAttempts, delayMs })) {
+        return;
+      }
       const text = `[Rate Limit] Retrying in ${delayMs / 1000}s (${attempt}/${maxAttempts})...`;
       if (routeWorkflowLiveOnlyNotice(meta, text)) {
         return;
@@ -6308,6 +6323,15 @@ const InkREPLInner: React.FC<InkREPLProps> = ({
       if (userInterruptedRef.current) {
         return;
       }
+      // Record this structured retry so the legacy onProviderRateLimit line
+      // (which base.ts fires next for the same retry) can be suppressed as a
+      // duplicate. Set before any early routing return so the legacy line is
+      // suppressed regardless of which layer this structured line renders into.
+      rateLimitDedupRef.current = {
+        attempt: event.attempt,
+        maxAttempts: event.maxAttempts,
+        waitMs: event.waitMs,
+      };
       const seconds = Math.round(event.waitMs / 1000);
       const sourceLabel =
         event.source === 'exponential-backoff'
