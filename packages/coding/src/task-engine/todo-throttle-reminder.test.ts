@@ -11,6 +11,7 @@ import { describe, expect, it } from 'vitest';
 import { createTodoStore } from './todo-store.js';
 import {
   TURNS_SINCE_TODO_UPDATE_REMINDER,
+  TURNS_BETWEEN_REMINDERS,
   buildTodoReminderText,
   createTodoReminderState,
   detectAgentTransition,
@@ -70,13 +71,31 @@ describe('throttle reminder threshold (TURNS_SINCE_TODO_UPDATE_REMINDER = 8)', (
     expect(state.lastFiredAtRound.current).toBe(TURNS_SINCE_TODO_UPDATE_REMINDER);
   });
 
-  it('does not re-fire after the first fire (within the same un-reset run)', () => {
+  it('does not re-fire within the dedup gap after the first fire', () => {
     const state = createTodoReminderState();
     const store = makeSeededStore();
     state.roundsSinceUpdate.current = TURNS_SINCE_TODO_UPDATE_REMINDER;
     expect(shouldFireTodoReminder(state, store)).toBe(true);
-    state.roundsSinceUpdate.current = TURNS_SINCE_TODO_UPDATE_REMINDER + 5;
+    // Still inside the TURNS_BETWEEN_REMINDERS window → suppressed.
+    state.roundsSinceUpdate.current =
+      TURNS_SINCE_TODO_UPDATE_REMINDER + TURNS_BETWEEN_REMINDERS - 1;
     expect(shouldFireTodoReminder(state, store)).toBe(false);
+  });
+
+  it('RE-FIRES after the dedup gap without a reset (recurring, not one-shot)', () => {
+    const state = createTodoReminderState();
+    const store = makeSeededStore();
+    state.roundsSinceUpdate.current = TURNS_SINCE_TODO_UPDATE_REMINDER;
+    expect(shouldFireTodoReminder(state, store)).toBe(true);
+    expect(state.lastFiredAtRound.current).toBe(TURNS_SINCE_TODO_UPDATE_REMINDER);
+    // TURNS_BETWEEN_REMINDERS more rounds of continued no-update elapse → fires
+    // again with NO intervening reset. This is the core of the recurring fix.
+    state.roundsSinceUpdate.current =
+      TURNS_SINCE_TODO_UPDATE_REMINDER + TURNS_BETWEEN_REMINDERS;
+    expect(shouldFireTodoReminder(state, store)).toBe(true);
+    expect(state.lastFiredAtRound.current).toBe(
+      TURNS_SINCE_TODO_UPDATE_REMINDER + TURNS_BETWEEN_REMINDERS,
+    );
   });
 
   it('re-arms after a reset (new run-of-no-updates)', () => {
@@ -150,6 +169,21 @@ describe('throttle reminder text format', () => {
     // Wrapped in <system-reminder> tags for Anthropic-style recognition.
     expect(text.startsWith('<system-reminder>')).toBe(true);
     expect(text.endsWith('</system-reminder>')).toBe(true);
+  });
+
+  it('uses the live round count on recurring re-fires (not a hardcoded threshold)', () => {
+    const store = makeSeededStore();
+    // Default (no count arg) reads as the threshold so the first fire AND the
+    // pinned benchmark fixture stay byte-stable ("in 8 iterations").
+    expect(buildTodoReminderText(store)).toContain(
+      `You have not called todo_update in ${TURNS_SINCE_TODO_UPDATE_REMINDER} iterations`,
+    );
+    // A later recurring fire passes the real elapsed count (e.g. 16 at the
+    // second fire), so the message is factually accurate, not stuck at 8.
+    const secondFire = TURNS_SINCE_TODO_UPDATE_REMINDER + TURNS_BETWEEN_REMINDERS;
+    expect(buildTodoReminderText(store, secondFire)).toContain(
+      `You have not called todo_update in ${secondFire} iterations`,
+    );
   });
 
   it('only lists non-terminal items (pending / in_progress / failed)', () => {
@@ -241,7 +275,7 @@ describe('end-to-end throttle scenario', () => {
     expect(firedCount).toBe(2);
   });
 
-  it('FEATURE_151: fires once at 1 item (front-gate removed; UI MIN=1 renders)', () => {
+  it('FEATURE_151 + recurring: fires at threshold then every TURNS_BETWEEN_REMINDERS while drifting', () => {
     const state = createTodoReminderState();
     const store = createTodoStore();
     store.init([{ id: 'todo_1', subject: 'sole task' }]);
@@ -250,8 +284,9 @@ describe('end-to-end throttle scenario', () => {
       if (shouldFireTodoReminder(state, store)) firedCount++;
       tickTodoReminder(state);
     }
-    // Always fired once at threshold; populated-store branch text formats
-    // the bullet line for the single item.
-    expect(firedCount).toBe(1);
+    // Front gate removed (fires even at 1 item). Over 20 rounds of continued
+    // no-update with threshold 8 + gap 8, the reminder fires at round 8 and
+    // again at round 16 — recurring pressure, not a single one-shot nudge.
+    expect(firedCount).toBe(2);
   });
 });

@@ -268,7 +268,7 @@ export function buildRunnerLlmAdapter(
         resetTodoReminderState(todoReminderState);
       }
       if (shouldFireTodoReminder(todoReminderState, todoStore)) {
-        const reminder = buildTodoReminderText(todoStore);
+        const reminder = buildTodoReminderText(todoStore, todoReminderState.roundsSinceUpdate.current);
         system = system.length > 0 ? `${system}\n\n${reminder}` : reminder;
       }
       tickTodoReminder(todoReminderState);

@@ -242,6 +242,7 @@ export function buildWorkerInstructions(
 
   const handoffRules = [
     'TERMINATION:',
+    '- Before writing that final summary, mark every finished item `completed` as your closing tool calls — this is the only way the plan reflects your progress in real time. The runner force-completes any still-open items on an accept verdict, but that correction is invisible to you and lands only after the user has already watched the list sit stale.',
     '- When all non-cancelled plan items are `completed` AND every dispatched child has produced its matching `<task-completed>` block, end your turn with a brief text-only summary covering what you did, what changed (files / behavior), and any caveats. No tool call needed to terminate — the absence of a `tool_use` block on your final assistant message IS the terminal signal.',
     '- If you cannot proceed (e.g. user-input blocker, irrecoverable failure), end your turn with a text-only summary of the blocker. Mark the affected plan items `failed` with a note BEFORE the final summary turn so the dashboard reflects the blocked state.',
     '- After your terminal turn, an independent Sidecar Verifier reads your work in a fresh read-only session and decides accept (success) / revise (your turn again, fix the called-out issues) / blocked (terminal failure). You do not call the verifier — it runs automatically.',

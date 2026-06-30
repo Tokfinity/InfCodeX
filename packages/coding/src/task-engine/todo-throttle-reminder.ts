@@ -31,8 +31,13 @@
  *       2. role/agent transition.
  *   - **Increment** by 1 on every adapter call (each call = one round).
  *
- * Re-fire policy: fire ONCE per "run-of-no-updates". Once fired,
- * suppress until the counter is reset.
+ * Re-fire policy: RECURRING with a dedup gap (mirrors Claude Code's
+ * `TURNS_BETWEEN_REMINDERS`, attachments.ts:254-257). After the first fire
+ * at the threshold, stay quiet for `TURNS_BETWEEN_REMINDERS` rounds, then
+ * fire again while the model keeps drifting. A model that ignores a single
+ * nudge (e.g. kimi's documented narrate-without-tool floor) still gets
+ * periodic pressure instead of permanent silence. The counter still resets
+ * fully on any todo_update or role transition.
  *
  * FEATURE_104: this module produces LLM-facing prompt text and therefore
  * must have a paired eval at `tests/feature-097-throttle-reminder.eval.ts`.
@@ -48,13 +53,25 @@ import type { TodoStore } from './todo-store.js';
 export const TURNS_SINCE_TODO_UPDATE_REMINDER = 8;
 
 /**
+ * Rounds of continued no-update silence between successive re-fires once the
+ * reminder has fired at least once (mirrors Claude Code's
+ * `TURNS_BETWEEN_REMINDERS`, attachments.ts:254-257). Symmetric with the
+ * initial threshold so the cadence reads "first nudge at 8 rounds, then again
+ * every 8 rounds of continued no-update". File-level constant (not user
+ * config) per CLAUDE.md "NEVER add configuration for hypothetical needs":
+ * tune via telemetry once we have it, not via user knob.
+ */
+export const TURNS_BETWEEN_REMINDERS = 8;
+
+/**
  * Per-managed-task ref state for the throttle reminder.
  *
  *   - `roundsSinceUpdate`: monotonically increasing counter; reset on
  *     todo_update call or role transition.
  *   - `lastFiredAtRound`: -1 means "armed; reminder has not fired since
- *     last reset". A non-negative value means the reminder has fired
- *     and is suppressed until the counter is reset.
+ *     last reset". A non-negative value records the round at which the
+ *     reminder last fired; it re-fires again once `TURNS_BETWEEN_REMINDERS`
+ *     more rounds of no-update elapse (recurring, NOT one-shot).
  *   - `lastSeenAgentName`: the previous adapter call's `agent.name`;
  *     used to detect agent transitions so the counter can reset.
  */
@@ -81,8 +98,9 @@ export function resetTodoReminderState(state: TodoReminderState): void {
 /**
  * Decide whether the reminder should fire for the upcoming adapter call.
  * Side effects when returning `true`:
- *   - flips `lastFiredAtRound` to `roundsSinceUpdate` (suppresses re-fire
- *     until the next reset).
+ *   - records `lastFiredAtRound = roundsSinceUpdate`, which suppresses
+ *     re-fire until `TURNS_BETWEEN_REMINDERS` more rounds of no-update pass
+ *     (recurring, NOT one-shot — see file header "Re-fire policy").
  *
  * Caller must call this exactly once per adapter call, BEFORE incrementing
  * the counter for the upcoming round.
@@ -100,7 +118,16 @@ export function shouldFireTodoReminder(
 ): boolean {
   void todoStore;
   if (state.roundsSinceUpdate.current < TURNS_SINCE_TODO_UPDATE_REMINDER) return false;
-  if (state.lastFiredAtRound.current >= 0) return false; // already fired this run
+  // Recurring with a dedup gap: after the first fire, stay quiet until
+  // TURNS_BETWEEN_REMINDERS more rounds of continued no-update have elapsed,
+  // then fire again. The gap prevents per-round spam while ensuring a model
+  // that ignores one nudge keeps getting periodic pressure.
+  if (
+    state.lastFiredAtRound.current >= 0
+    && state.roundsSinceUpdate.current - state.lastFiredAtRound.current < TURNS_BETWEEN_REMINDERS
+  ) {
+    return false;
+  }
   state.lastFiredAtRound.current = state.roundsSinceUpdate.current;
   return true;
 }
@@ -129,12 +156,15 @@ export function tickTodoReminder(state: TodoReminderState): void {
  * Format mirrors the design-doc literal so the eval harness can pin
  * character-for-character.
  */
-export function buildTodoReminderText(todoStore: TodoStore): string {
+export function buildTodoReminderText(
+  todoStore: TodoStore,
+  roundsSinceUpdate: number = TURNS_SINCE_TODO_UPDATE_REMINDER,
+): string {
   // FEATURE_151 (v0.7.38) — empty store branch.
   if (!todoStore.hasItems()) {
     return [
       '<system-reminder>',
-      `You have not committed a plan in ${TURNS_SINCE_TODO_UPDATE_REMINDER} iterations.`,
+      `You have not committed a plan in ${roundsSinceUpdate} iterations.`,
       'If this task has ≥2 distinct execution steps, commit a plan now by calling',
       'todo_create({subject:"...", activeForm:"..."}) once per step',
       '(one call per planned item — store auto-mints the id).',
@@ -155,7 +185,7 @@ export function buildTodoReminderText(todoStore: TodoStore): string {
     // "done" via accept. Nudge to close out / add a follow-up substep.
     return [
       '<system-reminder>',
-      `You have not called todo_update in ${TURNS_SINCE_TODO_UPDATE_REMINDER} iterations. `
+      `You have not called todo_update in ${roundsSinceUpdate} iterations. `
         + `All listed items are already in a terminal state. If a new substep emerged, `
         + `call todo_create({subject:"...", activeForm:"..."}) to insert it (FEATURE_170 v0.7.41); `
         + `do NOT re-seed via todo_update({op:"init"}) — that wipes the completed items.`,
@@ -167,7 +197,7 @@ export function buildTodoReminderText(todoStore: TodoStore): string {
   }
   const lines: string[] = [
     '<system-reminder>',
-    `You have not called todo_update in ${TURNS_SINCE_TODO_UPDATE_REMINDER} iterations. Pending items:`,
+    `You have not called todo_update in ${roundsSinceUpdate} iterations. Pending items:`,
   ];
   for (const it of open) {
     // v0.7.42 — show `subject` (the row label) in the reminder. The

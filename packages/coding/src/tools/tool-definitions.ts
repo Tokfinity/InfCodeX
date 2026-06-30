@@ -1027,7 +1027,7 @@ export const BUILTIN_TOOL_DEFINITIONS: LocalToolDefinition[] = [
       'Drive the visible plan checklist so the user sees real-time progress — single-item PATCH plus status transition for ONE existing todo item. `op="update"` is the default (omit `op` for back-compat); target one item by `id` and change its status, patch its fields, or both in one call.\n\n'
       + '## When to Use This Tool\n\n'
       + '- BEFORE starting work on an item — flip it to `in_progress` and supply `activeForm` (present-continuous form of the subject; e.g. subject "Run failing tests" → activeForm "Running failing tests") so the spinner reflects what you are doing right now.\n'
-      + '- AFTER finishing work on an item — flip it to `completed`. If the item carries an `evaluator` hint, the runner runs the deterministic check on transition and surfaces stderr on failure.\n'
+      + '- AFTER finishing work on an item — flip it to `completed` before moving on, so the plan list stays current. If the item carries an `evaluator` hint, the runner runs the deterministic check on transition and surfaces stderr on failure.\n'
       + '- WHEN requirements clarify mid-task — patch `subject` and/or `description` to refine the row in place (e.g. "Run failing tests" → "Run failing tests AND clean up tmp").\n'
       + '- WHEN an attempt clearly failed and needs retry — set status to `failed`.\n'
       + '- WHEN the item turned out to be unnecessary (e.g. two obligations merged into one) — set status to `skipped`.\n'
