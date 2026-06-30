@@ -187,7 +187,7 @@ function buildWorkflowToolHost(options: KodaXOptions): WorkflowToolHost | undefi
         ? `no-host: agentMode=${String(options.agentMode)} (need amaw)`
         : 'host wired';
     process.stderr.write(
-      `[workflow-gate] agentMode=${String(options.agentMode)} runsBaseDir=${runsBaseDir ?? '<undef>'} → ${decision}\n`,
+      `[workflow-gate] agentMode=${String(options.agentMode)} runsBaseDir=${runsBaseDir ?? '<undef>'} -> ${decision}\n`,
     );
   }
   if (runsBaseDir === undefined) return undefined;
