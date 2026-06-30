@@ -2820,7 +2820,7 @@ both now fixed:
 
 ## ADR-044: Workflow Authoring Parity with the Claude Code Harness
 
-**Status**: Proposed (2026-06-29)
+**Status**: Accepted — shipped in v0.7.58 (FEATURE_246; concrete decisions ratified as ADR-046/047/048).
 
 **Context**: KodaX's Dynamic Workflow (FEATURE_217 + 231/232/234/235/236/238/245)
 is a *productised, safety-first* capability: a workflow script is produced by a
@@ -3105,7 +3105,7 @@ are discoverable from the repo rather than re-derived later.
 
 ## ADR-046: Workflow Run Management — Neutral Lifecycle Manager in `@kodax-ai/agent` via Dependency Inversion
 
-**Status**: Proposed (2026-06-29)
+**Status**: Accepted — shipped in v0.7.58 (FEATURE_246 A0/A1: `createWorkflowRunManager` lifted to `@kodax-ai/agent`).
 
 > Extends [ADR-044](#adr-044-workflow-authoring-parity-with-the-claude-code-harness).
 > (ADR-045 was concurrently taken by the LLM-layer robustness batch; this is 046.)
@@ -3495,3 +3495,70 @@ re-architecture):
 - DROPPED (→ 231b): write-ahead journal as execution authority, cross-process /
   Ctrl+C / process-restart recovery, lost-write safety policy, attempt counters.
   Same-session resume just re-runs the non-cached effects live.
+
+## ADR-049: Async `run_workflow` — Idle-Yield (FEATURE_155 reuse) + Per-Agent Digests to History
+
+**Status**: Accepted — targeted at v0.7.58 (FEATURE_246 parity completion). Extends
+[ADR-046](#adr-046-workflow-run-management--neutral-lifecycle-manager-in-kodax-aiagent-via-dependency-inversion)
++ [ADR-047](#adr-047-workflow-invocation--worker-authored-scout-then-author-primary-blind-sidequery-generation-demoted-to-fallback-amaw-defers-to-the-worker).
+
+**Context**: FEATURE_246 Part A made `run_workflow` a **blocking** tool — the Worker
+calls it and `await`s the entire workflow (`host.runInline` → `await managed.done`,
+tool-execution-context.ts). The P1 review round added a live progress *strip* but
+left two gaps vs the slash `/workflow` path, `dispatch_child_task`, and the Claude
+Code harness — both surfaced by real usage (v0.7.58 dogfood, a multi-agent self-review
+that ran 18+ minutes):
+1. **No idle-yield.** Because the tool blocks, the Worker turn is mid-tool for the
+   whole run; the REPL is locked — slash commands are refused (`slash-mid-task-guard`),
+   follow-ups only process after the workflow finishes. `dispatch_child_task` is
+   async (FEATURE_155 idle-yield): the Worker ends its turn, the runner resumes it on
+   completion, so the user can keep chatting.
+2. **Per-agent completions don't reach history.** The slash path's `workflowEventSink`
+   formats `agent_completed` / `agent_summary_updated` events via
+   `formatWorkflowAgentDigest` → `onWorkflowRunMessage` → transcript. The inline path
+   only wired the aggregate `onWorkflowProcessEvent` strip, so completed workflow
+   agents vanish from the live surface with no summary preserved in scrollback (unlike
+   `dispatch_child_task` children, whose digests land in history).
+
+**Decision**:
+
+1. **`run_workflow` becomes async / idle-yield, reusing FEATURE_155.** Instead of
+   awaiting `managed.done`, the tool: (a) starts the workflow (a non-blocking host
+   start that returns the `managed` handle), (b) registers `managed.done` — resolving
+   with the synthesis text (or a failure summary) — in the **Worker's**
+   `ctx.childTaskRegistry` via `registerChildTask` (the same registry/loop dispatch
+   uses), (c) returns immediately: *"Workflow `<name>` started (run-X); its synthesized
+   result will arrive as a completion block for task X — idle-yield or do other work."*
+   The Worker ends its turn text-only; the runner's **existing** idle-yield outer loop
+   (runner-driven.ts, FEATURE_155) awaits the registry and resumes the Worker with the
+   synthesis when `managed.done` resolves.
+   - **Resume banner**: reuse the existing `<task-completed task_id="X">…synthesis…
+     </task-completed>` (drain.ts) — the tool's return told the Worker that task X *is*
+     the workflow, so it reads the block as the workflow result. A distinct
+     `<workflow-completed>` tag is a clarity nice-to-have that needs a banner-kind tweak
+     in `drain.ts` / `idle-yield.ts`; **deferred** unless it proves cheap (YAGNI — the
+     task_id already disambiguates).
+
+2. **Per-agent digests to history.** Add a `KodaXEvents.onWorkflowAgentDigest` hook.
+   The inline path forwards the workflow's per-agent `agent_completed` /
+   `agent_summary_updated` events through it (reusing `formatWorkflowAgentDigest`); the
+   REPL writes each completed agent's summary to the transcript — matching the slash
+   path and `dispatch_child_task`. Independent of (1): it should hold whether the
+   workflow blocks or yields.
+
+3. **Worker prompt + `run_workflow` description** teach the async contract (mirror the
+   `dispatch_child_task` idle-yield wording): after `run_workflow` returns, the result
+   is not inline — idle-yield; it arrives as a completion block later.
+
+**Consequences**: the REPL stays responsive during a workflow (chat-while-waiting);
+the Worker can interleave other work; completed agents' findings persist in scrollback;
+`run_workflow` matches `dispatch_child_task`'s async model and the Claude Code
+background-workflow experience. The blocking "waiting for tool output" lock is removed.
+
+**Non-goals / risks**: cross-process resume stays out of scope (same-session per
+ADR-048). The synthesis is delivered once (the registry entry settles once). The main
+risk is the execution-model change — mitigated by reusing the proven FEATURE_155
+registry + idle-yield loop (no parallel machinery) and pinning register/resume +
+digest-to-history with contract/unit tests; structural change, no eval. Verified by
+dogfood: the same self-review should run without locking the REPL and leave each
+agent's digest in history.
