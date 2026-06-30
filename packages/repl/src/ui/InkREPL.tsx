@@ -9019,9 +9019,14 @@ const InkREPLInner: React.FC<InkREPLProps> = ({
     </Box>
   ) : undefined;
   const promptEmbeddedStatusSurface = workflowFooterSurface || todoFooterSurface || childActivityFooterSurface ? (
+    // Order reads as a hierarchy, general -> specific / stable -> transient, top
+    // to bottom: the todo PLAN first; the workflow that one of its steps launched
+    // under it; the most granular, fastest-moving per-agent activity last (closest
+    // to the prompt, where the eye sits). A workflow is a sub-activity of the
+    // "run workflow" plan step, so it nests below the plan, not above it.
     <Box flexDirection="column">
-      {workflowFooterSurface}
       {todoFooterSurface}
+      {workflowFooterSurface}
       {childActivityFooterSurface}
     </Box>
   ) : undefined;
