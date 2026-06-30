@@ -52,7 +52,7 @@ import type {
   KodaXSessionStorage,
   KodaXSessionUiHistoryItem,
 } from '@kodax-ai/agent';
-import type { AgentsFile } from '@kodax-ai/coding';
+import type { AgentsFile, KodaXWorkflowAgentDigestEvent } from '@kodax-ai/coding';
 import type { PermissionMode, ConfirmResult } from '../permission/types.js';
 import {
   computeConfirmTools,
@@ -119,6 +119,7 @@ import {
   resolveConfirm,
   startGeneratedWorkflowFromRequest,
 } from '../commands/workflow-command.js';
+import { formatWorkflowAgentDigest, inferWorkflowLocaleFromParts } from '../commands/workflow-command-results.js';
 import {
   enforceSessionTransitionGuard,
 } from './session-guardrails.js';
@@ -1983,6 +1984,16 @@ async function runAgentRound(
     onWorkflowProcessEvent: (event: WorkflowProcessEvent) => {
       const line = renderInlineWorkflowProcessLine(event);
       if (line) console.log(line);
+    },
+    // ADR-049: print each workflow child agent's completion digest so the
+    // console REPL keeps the same scrollback record the Ink UI + slash path do.
+    onWorkflowAgentDigest: ({ runId, event }: KodaXWorkflowAgentDigestEvent) => {
+      const data = event.data ?? {};
+      const summary = typeof data.summary === 'string' ? data.summary : undefined;
+      const name = typeof data.name === 'string' ? data.name : undefined;
+      const locale = inferWorkflowLocaleFromParts(summary, name);
+      const digest = formatWorkflowAgentDigest(event, locale, runId);
+      if (digest) console.log(`\n${digest}\n`);
     },
   };
 

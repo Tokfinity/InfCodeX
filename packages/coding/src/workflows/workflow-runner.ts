@@ -42,7 +42,7 @@ import {
   type WorktreeSweepDeps,
 } from './worktree-sweep.js';
 import { buildToolExecutionContext } from '../agent-runtime/tool-execution-context.js';
-import type { KodaXOptions, KodaXToolExecutionContext } from '../types.js';
+import type { KodaXEvents, KodaXOptions, KodaXToolExecutionContext } from '../types.js';
 
 /** Mirrors the private `dispatch-child-tasks.ts` constant. */
 const DEFAULT_MAX_ITERATIONS_PER_CHILD = 200;
@@ -345,6 +345,29 @@ export interface RunWorkflowFromOptionsInput {
 }
 
 /**
+ * ADR-049: forward a single workflow child-agent terminal/summary event to the
+ * REPL's per-agent digest hook. Coarse gate here (the four summary event types);
+ * the REPL's `formatWorkflowAgentDigest` does the fine filtering (status, pending
+ * summaries) so inline and slash `/workflow` digests stay identical.
+ */
+export function emitWorkflowAgentDigest(
+  events: KodaXEvents | undefined,
+  runId: string,
+  event: WorkflowEvent,
+): void {
+  const hook = events?.onWorkflowAgentDigest;
+  if (!hook) return;
+  if (
+    event.type === 'agent_completed' ||
+    event.type === 'agent_unverified' ||
+    event.type === 'agent_failed' ||
+    event.type === 'agent_summary_updated'
+  ) {
+    hook({ runId, event });
+  }
+}
+
+/**
  * High-level entry: build a tool-execution context + child options from
  * `KodaXOptions` (provider / model / extensionRuntime) and run the
  * workflow module. ctx construction stays inside `@kodax-ai/coding` — the
@@ -394,6 +417,17 @@ export async function runWorkflowFromOptions(
           input.options.events?.onWorkflowProcessEvent?.(event);
         }
       : undefined;
+  // ADR-049: alongside the aggregate process strip, forward each child agent's
+  // terminal/summary event to the REPL so its digest lands in the transcript
+  // (parity with the slash path + dispatch_child_task). Preserves any caller
+  // `input.onEvent` (the run-manager's snapshot tracking) by always calling it.
+  const onEvent =
+    input.onEvent || input.options.events?.onWorkflowAgentDigest
+      ? (event: WorkflowEvent): void => {
+          input.onEvent?.(event);
+          emitWorkflowAgentDigest(input.options.events, input.runId, event);
+        }
+      : undefined;
   return runWorkflowModule({
     module: input.module,
     args: input.args,
@@ -403,7 +437,7 @@ export async function runWorkflowFromOptions(
     childOptions,
     ...(input.approval ? { approval: input.approval } : {}),
     ...(input.signal ? { signal: input.signal } : {}),
-    ...(input.onEvent ? { onEvent: input.onEvent } : {}),
+    ...(onEvent ? { onEvent } : {}),
     ...(onWorkflowProcessEvent ? { onWorkflowProcessEvent } : {}),
     ...(input.options.workflowHostPolicy ? { hostPolicy: input.options.workflowHostPolicy } : {}),
     ...(input.now ? { now: input.now } : {}),

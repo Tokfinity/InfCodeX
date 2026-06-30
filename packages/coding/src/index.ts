@@ -106,6 +106,7 @@ export type {
   KodaXSessionWorkspaceKind,
   KodaXEvents,
   KodaXSidecarMessageEvent,
+  KodaXWorkflowAgentDigestEvent,
   WorkflowEventCorrelation,
   KodaXWorkflowEventMeta,
   KodaXActivityEventMeta,

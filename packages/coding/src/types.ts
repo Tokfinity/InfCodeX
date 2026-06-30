@@ -83,6 +83,7 @@ import type {
   ChildTaskRegistry,
   TaskAbortRegistry,
   WorkflowIsolation,
+  WorkflowEvent,
   WorkflowEventCorrelation,
   WorkflowProcessEvent,
 } from '@kodax-ai/agent';
@@ -215,6 +216,18 @@ export interface KodaXActivityEventMeta extends KodaXWorkflowEventMeta {
   readonly childAgentName?: string;
   readonly parentToolId?: string;
   readonly liveOnly?: boolean;
+}
+
+/**
+ * ADR-049: a single workflow child agent reached a terminal/summary state during
+ * an inline `run_workflow` run. The raw `WorkflowEvent` is forwarded (not a
+ * pre-formatted string) so the REPL renders it with its own
+ * `formatWorkflowAgentDigest` — keeping digest formatting in the UI layer and the
+ * coding layer free of presentation logic.
+ */
+export interface KodaXWorkflowAgentDigestEvent {
+  readonly runId: string;
+  readonly event: WorkflowEvent;
 }
 
 export interface KodaXToolEventMeta extends KodaXActivityEventMeta {
@@ -420,6 +433,15 @@ export interface KodaXEvents {
   onManagedTaskStatus?: (status: KodaXManagedTaskStatusEvent) => void;
   /** FEATURE_229: workflow process snapshot stream for SDK/host panels. */
   onWorkflowProcessEvent?: (event: WorkflowProcessEvent) => void;
+  /**
+   * ADR-049: per-agent digest stream for the inline `run_workflow` path. Fires
+   * once per workflow child agent reaching a terminal/summary state
+   * (`agent_completed` / `agent_unverified` / `agent_failed` /
+   * `agent_summary_updated`). The REPL formats each via `formatWorkflowAgentDigest`
+   * and writes it to the transcript — matching the slash `/workflow` path and
+   * `dispatch_child_task` children, whose summaries persist in scrollback.
+   */
+  onWorkflowAgentDigest?: (event: KodaXWorkflowAgentDigestEvent) => void;
   /**
    * Fired when Scout's managed-task completion is inferred but the harness
    * detected suspicious signals (mutation expected but none happened, budget

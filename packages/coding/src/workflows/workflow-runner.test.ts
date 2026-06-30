@@ -15,14 +15,15 @@ import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
 import type { InputGuardrail } from '@kodax-ai/agent';
 import type {
   WorkflowAgentBackend,
+  WorkflowEvent,
   WorkflowModule,
   WorkflowProcessEvent,
 } from '@kodax-ai/agent/workflow';
 import { WorkflowAbortError, WorkflowLimitError } from '@kodax-ai/agent/workflow';
 
-import type { KodaXOptions } from '../types.js';
+import type { KodaXEvents, KodaXOptions, KodaXWorkflowAgentDigestEvent } from '../types.js';
 import { parallelInvestigation } from './builtin/parallel-investigation.js';
-import { buildApprovalSummary, runWorkflowFromOptions, runWorkflowModule } from './workflow-runner.js';
+import { buildApprovalSummary, emitWorkflowAgentDigest, runWorkflowFromOptions, runWorkflowModule } from './workflow-runner.js';
 
 const childExecutorMock = vi.hoisted(() => ({
   calls: [] as Array<{
@@ -577,5 +578,56 @@ describe('runWorkflowModule', () => {
       expect(outcome.error).toBeInstanceOf(WorkflowLimitError);
     }
     expect(spawns).toBe(2);
+  });
+});
+
+describe('emitWorkflowAgentDigest (ADR-049 per-agent digest forward)', () => {
+  function captureDigests(): {
+    events: KodaXEvents;
+    digests: KodaXWorkflowAgentDigestEvent[];
+  } {
+    const digests: KodaXWorkflowAgentDigestEvent[] = [];
+    return { events: { onWorkflowAgentDigest: (e) => digests.push(e) }, digests };
+  }
+  const evt = (type: WorkflowEvent['type'], seq = 0): WorkflowEvent => ({
+    seq,
+    type,
+    data: { name: 'reviewer', summary: 'finding: a bug', status: 'completed' },
+  });
+
+  it('forwards each agent terminal/summary event with the run id + raw event', () => {
+    const { events, digests } = captureDigests();
+    for (const type of [
+      'agent_completed',
+      'agent_unverified',
+      'agent_failed',
+      'agent_summary_updated',
+    ] as const) {
+      emitWorkflowAgentDigest(events, 'run-digest-1', evt(type));
+    }
+    expect(digests).toHaveLength(4);
+    expect(digests.every((d) => d.runId === 'run-digest-1')).toBe(true);
+    expect(digests[0]?.event.type).toBe('agent_completed');
+    expect(digests[0]?.event.data?.summary).toBe('finding: a bug');
+  });
+
+  it('ignores non-summary workflow events (no per-agent spam)', () => {
+    const { events, digests } = captureDigests();
+    for (const type of [
+      'workflow_started',
+      'phase_started',
+      'agent_spawned',
+      'agent_message_sent',
+      'agent_stopped',
+      'workflow_completed',
+    ] as const) {
+      emitWorkflowAgentDigest(events, 'run-digest-2', evt(type));
+    }
+    expect(digests).toHaveLength(0);
+  });
+
+  it('is a no-op when no onWorkflowAgentDigest hook is wired', () => {
+    expect(() => emitWorkflowAgentDigest(undefined, 'run-x', evt('agent_completed'))).not.toThrow();
+    expect(() => emitWorkflowAgentDigest({}, 'run-x', evt('agent_completed'))).not.toThrow();
   });
 });

@@ -139,6 +139,7 @@ import type {
   KodaXActivityEventMeta,
   KodaXSidecarMessageEvent,
   KodaXToolEventMeta,
+  KodaXWorkflowAgentDigestEvent,
   TodoItem,
   TodoList,
 } from "@kodax-ai/coding";
@@ -184,7 +185,7 @@ import type {
 import {
   startGeneratedWorkflowFromRequest,
 } from "../commands/workflow-command.js";
-import { inferWorkflowLocaleFromParts } from "../commands/workflow-command-results.js";
+import { formatWorkflowAgentDigest, inferWorkflowLocaleFromParts } from "../commands/workflow-command-results.js";
 import {
   formatReasoningEffortStatusLabel,
   getProviderModel,
@@ -7006,6 +7007,18 @@ const InkREPLInner: React.FC<InkREPLProps> = ({
       // FEATURE_246 (P1 review): live progress for the model-launched run_workflow
       // path — the coding host forwards this turn's workflow process events here.
       onWorkflowProcessEvent: handleInlineWorkflowProcessEvent,
+      // ADR-049: each workflow child agent's completion digest lands in the
+      // transcript (parity with the slash /workflow path + dispatch children).
+      // Format with the run's own locale (tracked on the live status); the coding
+      // layer forwards the raw event so presentation stays in the UI layer.
+      onWorkflowAgentDigest: ({ runId, event }: KodaXWorkflowAgentDigestEvent): void => {
+        const live = workflowLiveStatusRef.current;
+        const locale = live?.runId === runId ? live.locale ?? "en" : "en";
+        const digest = formatWorkflowAgentDigest(event, locale, runId);
+        if (digest) {
+          appendHistoryItemsWithPersistence([{ type: "assistant", text: digest }]);
+        }
+      },
     };
 
     // Get skills system prompt snippet for progressive disclosure (Issue 056)
