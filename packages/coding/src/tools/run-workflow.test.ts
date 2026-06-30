@@ -1,4 +1,5 @@
 import { describe, expect, it } from 'vitest';
+import { getMessageQueue } from '@kodax-ai/agent';
 
 import { toolRunWorkflow } from './run-workflow.js';
 import type { KodaXToolExecutionContext, WorkflowToolHost, WorkflowToolHostResult } from '../types.js';
@@ -84,5 +85,55 @@ describe('toolRunWorkflow', () => {
     const out = await toolRunWorkflow({ manifest: { name: 'bad' }, source: SOURCE }, ctxWith(host));
     expect(String(out)).toContain('[Tool Error] run_workflow failed');
     expect(String(out)).toContain('maxAgents');
+  });
+});
+
+describe('toolRunWorkflow — async / idle-yield path (ADR-049)', () => {
+  function asyncCtx(done: Promise<WorkflowToolHostResult>, runId: string): {
+    ctx: KodaXToolExecutionContext;
+    registry: Map<string, Promise<unknown>>;
+  } {
+    const registry = new Map<string, Promise<unknown>>();
+    const host: WorkflowToolHost = {
+      runInline: async () => {
+        throw new Error('async path must not call the blocking runInline');
+      },
+      startInline: async () => ({ kind: 'started', runId, done }),
+    };
+    const ctx = { workflowHost: host, childTaskRegistry: registry } as unknown as KodaXToolExecutionContext;
+    return { ctx, registry };
+  }
+
+  it('returns immediately with a task_id + idle-yield instruction and registers in the registry (does NOT block on the run)', async () => {
+    let resolveDone!: (r: WorkflowToolHostResult) => void;
+    const done = new Promise<WorkflowToolHostResult>((res) => { resolveDone = res; });
+    const { ctx, registry } = asyncCtx(done, 'run-async-1');
+
+    // Returns while `done` is still pending → it did not block on the workflow.
+    const out = await toolRunWorkflow({ manifest: MANIFEST, source: SOURCE }, ctx);
+    expect(String(out)).toContain('task_id:run-async-1');
+    expect(String(out)).toContain('<task-completed task_id="run-async-1"');
+    expect(String(out).toLowerCase()).toContain('idle-yield');
+    expect(registry.has('run-async-1')).toBe(true);
+
+    // Settle the workflow → the registered promise resolves, the synthesis is enqueued
+    // as a <task-completed> notification, and registerChildTask cleans up the entry.
+    resolveDone({ kind: 'started', runId: 'run-async-1', status: 'completed', resultText: 'ASYNC SYNTH' });
+    await registry.get('run-async-1')?.catch(() => {});
+    await new Promise((r) => setTimeout(r, 0));
+    expect(registry.has('run-async-1')).toBe(false);
+
+    const banner = getMessageQueue()
+      .dequeue({ maxPriority: 'background' })
+      .map((m) => m.content)
+      .join('\n');
+    expect(banner).toContain('run-async-1');
+    expect(banner).toContain('ASYNC SYNTH');
+  });
+
+  it('falls back to blocking runInline when no childTaskRegistry is wired (SDK/headless)', async () => {
+    const { host } = recordingHost({ kind: 'started', runId: 'r', status: 'completed', resultText: 'BLOCKING SYNTH' });
+    const out = await toolRunWorkflow({ manifest: MANIFEST, source: SOURCE }, ctxWith(host));
+    expect(out).toBe('BLOCKING SYNTH');
   });
 });
