@@ -89,6 +89,7 @@ const WORKFLOW_PATTERN_GUIDANCE: readonly string[] = [
   '- generate-and-filter: ask several generators for distinct candidates, then filter/dedupe/rank before synthesis.',
   '- tournament: compare competing approaches or answers and use synthesis as the judge.',
   '- loop-until-done: run bounded follow-up rounds when findings should drive the next prompt.',
+  '- review or audit combines fan-out-and-synthesize with adversarial-verification: fan independent reviewers out across the dimensions, then pipe each finding straight into a verifier that tries to refute it before synthesis. A review with no verification stage ships findings a single reviewer\'s blind spot would have hidden.',
 ];
 
 export interface WorkflowGenerationTextRequest {
