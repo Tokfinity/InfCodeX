@@ -176,6 +176,20 @@ export function buildToolExecutionContext(
 
 function buildWorkflowToolHost(options: KodaXOptions): WorkflowToolHost | undefined {
   const runsBaseDir = options.workflowRunsBaseDir;
+  // Opt-in diagnostic for "the Worker has no run_workflow" reports: shows the
+  // exact gate inputs at every tool-context build so a live run pinpoints which
+  // condition failed (no runs dir vs not-amaw) without guessing. Set
+  // KODAX_DEBUG_WORKFLOW_GATE=1. Off by default (zero cost on the hot path).
+  if (process.env.KODAX_DEBUG_WORKFLOW_GATE) {
+    const decision = runsBaseDir === undefined
+      ? 'no-host: workflowRunsBaseDir undefined'
+      : options.agentMode !== 'amaw'
+        ? `no-host: agentMode=${String(options.agentMode)} (need amaw)`
+        : 'host wired';
+    process.stderr.write(
+      `[workflow-gate] agentMode=${String(options.agentMode)} runsBaseDir=${runsBaseDir ?? '<undef>'} → ${decision}\n`,
+    );
+  }
   if (runsBaseDir === undefined) return undefined;
   // amaw-only standing gate. AMA `/workflow` command turns reach here already
   // elevated to amaw (per-turn agentModeOverride); plain AMA and SA turns do not.
