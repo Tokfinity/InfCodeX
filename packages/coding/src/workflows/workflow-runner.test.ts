@@ -342,6 +342,49 @@ describe('runWorkflowModule', () => {
     expect(childExecutorMock.calls[0]?.options.parentOptions?.repoIntelligenceTrace).toBe(true);
   });
 
+  it('forwards each child agent completion to options.events.onWorkflowAgentDigest (ADR-049, end-to-end)', async () => {
+    const digests: KodaXWorkflowAgentDigestEvent[] = [];
+    const module: WorkflowModule<unknown, string> = {
+      meta: {
+        name: 'digest-workflow',
+        description: 'Spawns one child whose completion reaches the per-agent digest hook',
+        readOnly: true,
+        phases: ['spawn'],
+      },
+      run: async (wf) => {
+        const task = await wf.spawnAgent({ name: 'reviewer', prompt: 'review' });
+        const result = await wf.wait(task.taskId);
+        return result.finalText;
+      },
+    };
+
+    const outcome = await runWorkflowFromOptions({
+      module,
+      args: {},
+      options: {
+        provider: 'anthropic',
+        model: 'claude-sonnet-4-6',
+        events: { onWorkflowAgentDigest: (e) => digests.push(e) },
+      } as KodaXOptions,
+      runId: 'run-digest-e2e',
+      runDir: dir,
+    });
+
+    expect(outcome.kind).toBe('completed');
+    // The child's terminal event reached the per-agent digest hook, tagged with
+    // this run's id — so the REPL can write its digest to the transcript. Only the
+    // four terminal/summary types are forwarded (emitWorkflowAgentDigest's gate).
+    expect(digests.length).toBeGreaterThan(0);
+    expect(digests.every((d) => d.runId === 'run-digest-e2e')).toBe(true);
+    expect(
+      digests.every((d) =>
+        d.event.type === 'agent_completed' ||
+        d.event.type === 'agent_unverified' ||
+        d.event.type === 'agent_failed' ||
+        d.event.type === 'agent_summary_updated'),
+    ).toBe(true);
+  });
+
   it('writes stopped status for user-aborted workflow runs', async () => {
     const module: WorkflowModule = {
       meta: {
