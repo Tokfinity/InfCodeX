@@ -18,6 +18,9 @@ export interface ChildActivityRecord {
   readonly status: ChildActivityStatus;
   readonly kind: ChildActivityKind;
   readonly detail: string;
+  /** Wall-clock ms when this child's activity first appeared, so each row can
+   *  show its own elapsed. Set once by the feeder and preserved across updates. */
+  readonly startedAt?: number;
 }
 
 export type ChildActivityRowKind = "summary" | "activity";
@@ -126,6 +129,32 @@ export function toolActivityDetail(
   return truncateChildActivityDetail(`${toolName}${hintText}`);
 }
 
+/**
+ * Tool-action priority: a churny thinking/assistant/stream update must NOT
+ * overwrite a child's last concrete tool action (Grep …/Read …). Returns true
+ * when the incoming update should be dropped so the stable tool row stays until
+ * the next tool call. Only before the first tool (no existing tool) does thinking
+ * show. Zero extra cost — the tool detail already flowed through the stream.
+ */
+export function suppressesChurnOverToolAction(
+  existingKind: ChildActivityKind | undefined,
+  incomingKind: ChildActivityKind,
+): boolean {
+  const churny: readonly ChildActivityKind[] = ["thinking", "assistant", "stream"];
+  return existingKind === "tool" && churny.includes(incomingKind);
+}
+
+/** Compact per-agent elapsed (e.g. "51s", "1m20s", "1h05m"). */
+export function formatChildActivityElapsed(ms: number): string {
+  const totalSeconds = Math.max(0, Math.floor(ms / 1000));
+  const seconds = totalSeconds % 60;
+  const minutes = Math.floor(totalSeconds / 60) % 60;
+  const hours = Math.floor(totalSeconds / 3600);
+  if (hours > 0) return `${hours}h${String(minutes).padStart(2, "0")}m`;
+  if (minutes > 0) return `${minutes}m${String(seconds).padStart(2, "0")}s`;
+  return `${seconds}s`;
+}
+
 function kindLabel(kind: ChildActivityKind): string {
   switch (kind) {
     case "assistant":
@@ -144,16 +173,20 @@ function kindLabel(kind: ChildActivityKind): string {
   }
 }
 
-function rowText(record: ChildActivityRecord): string {
+function rowText(record: ChildActivityRecord, now: number): string {
   const label = record.label.trim() || "child";
+  const elapsed = record.startedAt !== undefined
+    ? ` · ${formatChildActivityElapsed(now - record.startedAt)}`
+    : "";
   const detail = record.detail.trim();
   const suffix = detail.length > 0 ? `: ${detail}` : "";
-  return `${label} - ${kindLabel(record.kind)}${suffix}`;
+  return `${label}${elapsed} - ${kindLabel(record.kind)}${suffix}`;
 }
 
 export function buildChildActivityViewModel(
   records: readonly ChildActivityRecord[],
   maxRows: number = MAX_CHILD_ACTIVITY_ROWS,
+  now: number = Date.now(),
 ): ChildActivityViewModel {
   const active = records.filter((record) => record.status === "running");
   if (active.length === 0) {
@@ -173,7 +206,7 @@ export function buildChildActivityViewModel(
       id: record.id,
       symbol: record.source === "workflow" ? "agent" : "child",
       symbolColor: "cyan",
-      text: rowText(record),
+      text: rowText(record, now),
       isActive: true,
     });
   }

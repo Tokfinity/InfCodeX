@@ -2,10 +2,12 @@ import { describe, expect, it } from "vitest";
 
 import {
   buildChildActivityViewModel,
+  formatChildActivityElapsed,
   padChildActivitySymbol,
   shouldRouteToChildActivity,
   shouldRouteWorkflowLiveOnlyNotice,
   shouldShowChildActivitySurface,
+  suppressesChurnOverToolAction,
   type ChildActivityRecord,
 } from "./child-activity.js";
 
@@ -92,6 +94,40 @@ describe("buildChildActivityViewModel", () => {
         isActive: true,
       },
     ]);
+  });
+
+  it("shows each child's own elapsed after the name when startedAt is set (①)", () => {
+    const vm = buildChildActivityViewModel(
+      [record({ kind: "tool", detail: "Grep _truncated", startedAt: 1_000 })],
+      3,
+      81_000,
+    );
+    expect(vm.rows[0]?.text).toBe("diff-explorer · 1m20s - Tool: Grep _truncated");
+  });
+
+  it("omits elapsed when a record has no startedAt (back-compat)", () => {
+    const vm = buildChildActivityViewModel([record({ kind: "thinking", detail: "x" })], 3, 99_000);
+    expect(vm.rows[0]?.text).toBe("diff-explorer - Thinking: x");
+  });
+
+  it("formats elapsed compactly", () => {
+    expect(formatChildActivityElapsed(0)).toBe("0s");
+    expect(formatChildActivityElapsed(51_000)).toBe("51s");
+    expect(formatChildActivityElapsed(80_000)).toBe("1m20s");
+    expect(formatChildActivityElapsed(3_661_000)).toBe("1h01m");
+  });
+
+  it("tool-action priority: churny updates do not overwrite a live tool action (②)", () => {
+    // A thinking/assistant/stream update on a child already showing a tool action
+    // is dropped (keeps the stable tool row); a new tool update replaces it.
+    expect(suppressesChurnOverToolAction("tool", "thinking")).toBe(true);
+    expect(suppressesChurnOverToolAction("tool", "assistant")).toBe(true);
+    expect(suppressesChurnOverToolAction("tool", "stream")).toBe(true);
+    expect(suppressesChurnOverToolAction("tool", "tool")).toBe(false); // next tool wins
+    expect(suppressesChurnOverToolAction("tool", "progress")).toBe(false); // progress is meaningful
+    // Before the first tool, thinking shows normally.
+    expect(suppressesChurnOverToolAction("thinking", "thinking")).toBe(false);
+    expect(suppressesChurnOverToolAction(undefined, "thinking")).toBe(false);
   });
 
   it("routes child-tagged telemetry to the child live surface only", () => {

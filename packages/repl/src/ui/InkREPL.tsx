@@ -56,6 +56,7 @@ import {
   shouldShowChildActivitySurface,
   shouldRouteToChildActivity,
   shouldRouteWorkflowLiveOnlyNotice,
+  suppressesChurnOverToolAction,
   toolActivityDetail,
   truncateChildActivityDetail,
   type ChildActivityKind,
@@ -1816,6 +1817,13 @@ const InkREPLInner: React.FC<InkREPLProps> = ({
     if (options?.skipIfExisting && existing?.kind === kind) {
       return true;
     }
+    // Tool-action priority: once a child shows a concrete tool action, keep that
+    // stable "Grep …/Read …" line until the next tool call rather than letting the
+    // churny thinking/assistant/stream token flow overwrite it. Zero extra cost —
+    // the tool detail already flowed through `toolActivityDetail`.
+    if (suppressesChurnOverToolAction(existing?.kind, kind)) {
+      return true;
+    }
     const nextDetail = options?.append && existing?.kind === kind
       ? `${existing.detail}${detail}`
       : detail || existing?.detail || "running";
@@ -1826,6 +1834,8 @@ const InkREPLInner: React.FC<InkREPLProps> = ({
       status: "running",
       kind,
       detail: truncateChildActivityDetail(nextDetail),
+      // Preserve the first-seen time so each row shows its own elapsed.
+      startedAt: existing?.startedAt ?? Date.now(),
     };
     const currentRecords = childActivityRecordsRef.current;
     const existingIndex = currentRecords.findIndex((record) => record.id === id);
@@ -3021,9 +3031,12 @@ const InkREPLInner: React.FC<InkREPLProps> = ({
     [todoItems],
   );
   const childActivityMaxRows = terminalRows <= 20 ? 1 : MAX_CHILD_ACTIVITY_ROWS;
+  // Re-render on the shared spinner cadence while children are active so each
+  // row's elapsed advances (same pattern as the workflow-live surface).
+  const childActivityTick = useSharedSpinnerTick(childActivityRecords.length > 0);
   const childActivityViewModel = useMemo(
-    () => buildChildActivityViewModel(childActivityRecords, childActivityMaxRows),
-    [childActivityMaxRows, childActivityRecords],
+    () => buildChildActivityViewModel(childActivityRecords, childActivityMaxRows, Date.now()),
+    [childActivityMaxRows, childActivityRecords, childActivityTick],
   );
   const shouldRenderChildActivitySurface = shouldShowChildActivitySurface({
     isTranscriptMode,
