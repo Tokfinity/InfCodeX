@@ -119,7 +119,15 @@ export interface SessionSummary {
   readonly msgCount: number;
   readonly tag?: string;
   readonly createdAt?: string;
-  readonly runtimeInfo?: { workspaceRoot?: string; gitRoot?: string };
+  // FEATURE_247 (R5): surface + profileId are projected onto the list summary
+  // so an embedder can filter a Partner session from a Coder session without a
+  // full loadSession(). provider/model/etc. stay on the full-load runtimeInfo.
+  readonly runtimeInfo?: {
+    workspaceRoot?: string;
+    gitRoot?: string;
+    surface?: string;
+    profileId?: string;
+  };
   /**
    * FEATURE_219 (v0.7.46) — the per-project directory key this session lives
    * under (ADR-038 §7). A backward-compatible hint: consumers may pass it back
@@ -380,12 +388,17 @@ async function listSessionsImpl(
 
 function extractRuntimeInfoSummary(
   ri: KodaXSessionRuntimeInfo,
-): { workspaceRoot?: string; gitRoot?: string } | undefined {
-  if (!ri.workspaceRoot && !ri.canonicalRepoRoot) return undefined;
-  return {
+): { workspaceRoot?: string; gitRoot?: string; surface?: string; profileId?: string } | undefined {
+  // FEATURE_247 (R5): include surface + profileId so a Partner session is
+  // identifiable from the list without a full load, even when it has no
+  // workspace root.
+  const out = {
     ...(ri.workspaceRoot ? { workspaceRoot: ri.workspaceRoot } : {}),
     ...(ri.canonicalRepoRoot ? { gitRoot: ri.canonicalRepoRoot } : {}),
+    ...(ri.surface ? { surface: ri.surface } : {}),
+    ...(ri.profileId ? { profileId: ri.profileId } : {}),
   };
+  return Object.keys(out).length > 0 ? out : undefined;
 }
 
 function toSessionSummary(raw: {

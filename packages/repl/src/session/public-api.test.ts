@@ -342,6 +342,54 @@ describe('Session Management Public SDK', () => {
     expect((loadedFork as { tag?: string } | null)?.tag).toBe('partner');
   });
 
+  // FEATURE_247 (R5): a forked session inherits runtimeInfo (previously dropped),
+  // so a forked Partner session stays a Partner (surface/profileId survive).
+  it('forkSession inherits runtimeInfo profile identity on the forked session', async () => {
+    vi.resetModules();
+    vi.doMock('../interactive/workspace-runtime.js', async () => {
+      const actual = await vi.importActual<typeof import('../interactive/workspace-runtime.js')>(
+        '../interactive/workspace-runtime.js',
+      );
+      return {
+        ...actual,
+        inspectWorkspaceRuntime: vi.fn(async () => ({
+          canonicalRepoRoot: '/tmp/test-repo',
+          workspaceRoot: '/tmp/test-repo',
+          executionCwd: '/tmp/test-repo',
+          branch: 'main',
+          workspaceKind: 'detected',
+        })),
+        isSameCanonicalRepo: vi.fn(() => true),
+      };
+    });
+    const storage = await import('../interactive/storage.js');
+    const pubApi = await import('./public-api.js') as unknown as SessionApiModule;
+
+    const st = new storage.FileSessionStorage();
+    await st.save('fork-ri-source', {
+      messages: [{ role: 'user' as const, content: 'hello' }],
+      title: 'Fork Runtime Source',
+      gitRoot: '/tmp/test-repo',
+      runtimeInfo: {
+        workspaceRoot: '/tmp/test-repo',
+        surface: 'partner',
+        profileId: 'partner/acme-v1',
+        profileVersion: '1.0.0',
+        provider: 'anthropic',
+      },
+    });
+
+    const forkResult = await pubApi.forkSession('fork-ri-source', {
+      sessionId: 'fork-ri-copy',
+      title: 'Forked Runtime',
+    });
+    const forkedRi = (forkResult?.data as { runtimeInfo?: Record<string, string> } | undefined)?.runtimeInfo;
+    expect(forkedRi?.surface).toBe('partner');
+    expect(forkedRi?.profileId).toBe('partner/acme-v1');
+    expect(forkedRi?.profileVersion).toBe('1.0.0');
+    expect(forkedRi?.provider).toBe('anthropic');
+  });
+
   // ── Test 7: rewindSession returns null for missing id ────────────────────
   it('rewindSession returns null for a non-existent session id', async () => {
     const result = await api.rewindSession('ghost-session-id');

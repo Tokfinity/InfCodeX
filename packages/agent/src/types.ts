@@ -319,6 +319,27 @@ export interface KodaXSessionRuntimeInfo {
   executionCwd?: string;
   branch?: string;
   workspaceKind?: KodaXSessionWorkspaceKind;
+  // FEATURE_247 (R5) — structured profile/runtime identity so an SDK embedder
+  // (e.g. KodaX-Space) can restore a historical Partner session and keep it a
+  // Partner after fork, without packing everything into the opaque `tag`. All
+  // optional and opaque to the agent layer (plain strings — no coding-layer
+  // enum imports, preserving layer independence). Absent on old session files.
+  /** SDK consumer surface/profile label, e.g. `'code'` | `'partner'`. */
+  surface?: string;
+  /** SDK consumer profile id (stable name or UUID). */
+  profileId?: string;
+  /** SDK consumer profile version. */
+  profileVersion?: string;
+  /** LLM provider alias active at session start, e.g. `'anthropic'`. */
+  provider?: string;
+  /** Model identifier active at session start. */
+  model?: string;
+  /** Reasoning mode active at session start. */
+  reasoningMode?: string;
+  /** Permission mode active at session start, e.g. `'auto'` | `'plan'`. */
+  permissionMode?: string;
+  /** Agent mode active at session start, e.g. `'sa'` | `'ama'` | `'amaw'`. */
+  agentMode?: string;
 }
 
 export interface KodaXSessionData {

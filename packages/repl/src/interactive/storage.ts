@@ -1241,6 +1241,12 @@ export class FileSessionStorage implements KodaXSessionStorage {
         title: options?.title ?? resolved.data.title,
         gitRoot: resolved.data.gitRoot,
         tag: resolved.data.tag,
+        // FEATURE_247 (R5) — inherit runtime identity (workspace + profile /
+        // provider / model / permission mode) so a forked Partner session stays
+        // a Partner. Previously runtimeInfo was dropped entirely on fork.
+        runtimeInfo: resolved.data.runtimeInfo
+          ? { ...resolved.data.runtimeInfo }
+          : undefined,
         uiHistory: resolved.data.uiHistory
           ? resolved.data.uiHistory.map((item) => ({ ...item }))
           : undefined,
