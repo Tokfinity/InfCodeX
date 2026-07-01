@@ -217,6 +217,7 @@ export function buildVerifierUserMessage(inputs: {
   readonly recentTranscript: readonly KodaXMessage[];
   readonly fileEditSummary: readonly { readonly path: string; readonly diffHint: string }[];
   readonly lastAssistantText: string;
+  readonly additionalCriteria?: string;
 }): string {
   const sections: string[] = [];
 
@@ -248,6 +249,16 @@ export function buildVerifierUserMessage(inputs: {
   sections.push('=== MAIN AGENT FINAL TEXT (the answer the agent is delivering) ===');
   sections.push(inputs.lastAssistantText || '(empty text response)');
   sections.push('');
+
+  // FEATURE_247 (R3): when the active profile (e.g. Partner) declares a
+  // verification standard, hold the answer to it in addition to the base
+  // checks. Present only when supplied ⇒ default coding verifier prompt is
+  // byte-identical.
+  if (inputs.additionalCriteria && inputs.additionalCriteria.trim()) {
+    sections.push('=== ADDITIONAL VERIFICATION CRITERIA (active profile standard) ===');
+    sections.push(inputs.additionalCriteria.trim());
+    sections.push('');
+  }
 
   sections.push(
     'Now call `emit_sidecar_verdict` exactly once with verdict ∈ {accept, revise, blocked} and a `reason`. Remember: when verdict=revise, the `reason` becomes a synthetic user follow-up the main agent will see — write it as the user would.',

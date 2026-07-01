@@ -97,6 +97,7 @@ import {
   emitSidecarMessageEvent,
 } from '../agent-runtime/middleware/sidecar-verifier/verifier-recorder-bridge.js';
 import { buildRunnerSidecarVerifierAdapter } from './runner-sidecar-verifier-adapter.js';
+import { resolveEffectiveVerification } from '../agent-runtime/effective-config.js';
 import { createTodoReminderState } from './todo-throttle-reminder.js';
 // FEATURE_193 (v0.7.43) deep V1 cleanup: the entire `scout-signals.ts`
 // module was deleted — `SUSPICIOUS_LAST_TEXT_PREVIEW_LIMIT` /
@@ -1490,8 +1491,14 @@ async function runManagedTaskViaRunnerInner(
     mainModel: options.modelOverride ?? options.model,
     mutationTracker,
     observer,
+    // FEATURE_247 (R3): profile default merged with per-task verification.
+    verification: resolveEffectiveVerification(options),
     onVerdict: (verdict, context) => {
-      emitSidecarMessageEvent(options.events, verdict, context);
+      // FEATURE_247 (R3/R8): attribute the verdict to its session + profile.
+      emitSidecarMessageEvent(options.events, verdict, context, {
+        sessionId: sessionIdRef.current,
+        agentProfile: options.context?.agentProfile,
+      });
       void applySidecarVerdictToRecorder({
         recorder,
         observer,

@@ -27,7 +27,7 @@ import type { KodaXBaseProvider } from '@kodax-ai/llm';
 import type { StopHookContext, StopHookFn } from '@kodax-ai/agent';
 import { getMessageQueue } from '@kodax-ai/agent';
 
-import type { KodaXTaskRole, ManagedMutationTracker } from '../types.js';
+import type { KodaXTaskRole, KodaXTaskVerificationContract, ManagedMutationTracker } from '../types.js';
 import type { ObserverBridge } from './_internal/managed-task/types.js';
 import {
   createSidecarVerifierStopHook,
@@ -53,6 +53,12 @@ export interface RunnerSidecarVerifierAdapterDeps {
   readonly mainModel: string | undefined;
   /** Mutation tracker fed to `buildVerifierContext` for fileEdit summary. */
   readonly mutationTracker: ManagedMutationTracker;
+  /**
+   * FEATURE_247 (R3) — effective verification standard (profile default merged
+   * with per-task). Rendered into the verifier user message when present.
+   * Absent ⇒ the default coding verifier prompt is byte-identical.
+   */
+  readonly verification?: KodaXTaskVerificationContract;
   /** Observer bridge — sidecar spinner (`sidecarStarted`) + opt-in log emit. */
   readonly observer: ObserverBridge;
   /**
@@ -128,6 +134,8 @@ export function buildRunnerSidecarVerifierAdapter(
             transcript: ctx.transcript,
             lastAssistantText: ctx.lastAssistantText,
             mutationTracker: deps.mutationTracker,
+            // FEATURE_247 (R3): thread the profile/task verification standard.
+            verification: deps.verification,
           }),
         onVerdict: (verdict) => {
           capturedSidecarVerdictRef.current = verdict;

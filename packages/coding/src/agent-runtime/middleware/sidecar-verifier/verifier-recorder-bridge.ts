@@ -38,12 +38,23 @@
 
 import type { ProtocolEmitterMetadata } from '../../../agents/protocol-emitters.js';
 import type {
+  KodaXAgentProfile,
   KodaXEvents,
   KodaXHarnessProfile,
   KodaXManagedVerdictPayload,
   KodaXSidecarMessageEvent,
   KodaXTaskRole,
 } from '../../../types.js';
+
+/**
+ * FEATURE_247 (R3/R8) — session + profile attribution stamped onto a sidecar
+ * message event so a host running concurrent Partner/Coder sessions can tell
+ * which session/profile a verdict belongs to.
+ */
+export interface SidecarEventAttribution {
+  readonly sessionId?: string;
+  readonly agentProfile?: KodaXAgentProfile;
+}
 import type {
   VerdictRecorder,
   ObserverBridge,
@@ -119,9 +130,15 @@ function isReanimateBudgetExhausted(
 export function buildSidecarMessageEvent(
   verdict: SidecarVerifierVerdict,
   context?: SidecarMessageDeliveryContext,
+  attribution?: SidecarEventAttribution,
 ): KodaXSidecarMessageEvent | undefined {
   const content = verdict.reason.trim();
   if (!content) return undefined;
+  // FEATURE_247 (R3/R8): session/profile attribution, spread when present.
+  const attr = {
+    ...(attribution?.sessionId ? { sessionId: attribution.sessionId } : {}),
+    ...(attribution?.agentProfile ? { agentProfile: attribution.agentProfile } : {}),
+  };
   if (verdict.verdict === 'revise') {
     const budgetExhausted = isReanimateBudgetExhausted(context);
     return {
@@ -132,6 +149,7 @@ export function buildSidecarMessageEvent(
       content,
       ...(verdict.suggestedFix ? { suggestedFix: verdict.suggestedFix } : {}),
       trace: verdict.trace,
+      ...attr,
     };
   }
   if (verdict.verdict === 'blocked') {
@@ -143,6 +161,7 @@ export function buildSidecarMessageEvent(
       content,
       ...(verdict.suggestedFix ? { suggestedFix: verdict.suggestedFix } : {}),
       trace: verdict.trace,
+      ...attr,
     };
   }
   return undefined;
@@ -160,8 +179,9 @@ export function emitSidecarMessageEvent(
   events: KodaXEvents | undefined,
   verdict: SidecarVerifierVerdict,
   context?: SidecarMessageDeliveryContext,
+  attribution?: SidecarEventAttribution,
 ): void {
-  const event = buildSidecarMessageEvent(verdict, context);
+  const event = buildSidecarMessageEvent(verdict, context, attribution);
   if (!event) return;
   try {
     events?.onSidecarMessage?.(event);

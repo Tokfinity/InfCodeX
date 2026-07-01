@@ -12,7 +12,7 @@
  */
 
 import type { KodaXMessage } from '@kodax-ai/llm';
-import type { ManagedMutationTracker } from '../../../types.js';
+import type { KodaXTaskVerificationContract, ManagedMutationTracker } from '../../../types.js';
 import type { SidecarVerifierContextInputs } from './verifier.js';
 
 const ROLLING_BUFFER_SIZE = 24;
@@ -116,20 +116,54 @@ export interface BuildVerifierContextOptions {
   readonly transcript: readonly KodaXMessage[];
   readonly lastAssistantText: string;
   readonly mutationTracker?: ManagedMutationTracker;
+  /**
+   * FEATURE_247 (R3) — effective verification standard (profile default merged
+   * with per-task). Rendered into `additionalCriteria` when present so the
+   * verifier holds the answer to the profile's standard (source faithfulness,
+   * citations, uncertainty disclosure, no-project-file-modification, …).
+   */
+  readonly verification?: KodaXTaskVerificationContract;
+}
+
+/**
+ * FEATURE_247 (R3) — render a verification contract into a compact criteria
+ * block for the verifier user message. Returns undefined when the contract
+ * carries no actionable content (so nothing is injected).
+ */
+export function renderVerificationCriteria(
+  contract: KodaXTaskVerificationContract | undefined,
+): string | undefined {
+  if (!contract) return undefined;
+  const lines: string[] = [];
+  if (contract.summary?.trim()) lines.push(contract.summary.trim());
+  if (contract.rubricFamily) lines.push(`Rubric family: ${contract.rubricFamily}`);
+  for (const instruction of contract.instructions ?? []) {
+    if (instruction.trim()) lines.push(`- ${instruction.trim()}`);
+  }
+  for (const criterion of contract.criteria ?? []) {
+    const label = criterion.label?.trim() || criterion.id;
+    const desc = criterion.description?.trim();
+    lines.push(desc ? `- ${label}: ${desc}` : `- ${label}`);
+  }
+  for (const evidence of contract.requiredEvidence ?? []) {
+    if (evidence.trim()) lines.push(`- Required evidence: ${evidence.trim()}`);
+  }
+  return lines.length > 0 ? lines.join('\n') : undefined;
 }
 
 /**
  * Build the full `SidecarVerifierContextInputs` from a StopHookContext
- * + side-channel state. Pure composition of the three extractors
- * above.
+ * + side-channel state. Pure composition of the extractors above.
  */
 export function buildVerifierContext(
   options: BuildVerifierContextOptions,
 ): SidecarVerifierContextInputs {
+  const additionalCriteria = renderVerificationCriteria(options.verification);
   return {
     currentTurnUserQueries: extractCurrentTurnUserQueries(options.transcript),
     recentTranscript: extractRollingBuffer(options.transcript),
     fileEditSummary: buildFileEditSummary(options.mutationTracker),
     lastAssistantText: options.lastAssistantText,
+    ...(additionalCriteria ? { additionalCriteria } : {}),
   };
 }

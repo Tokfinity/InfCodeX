@@ -103,6 +103,13 @@ export interface SidecarVerifierContextInputs {
   readonly fileEditSummary: readonly { readonly path: string; readonly diffHint: string }[];
   /** The exact text the Main Agent emitted as its final answer. */
   readonly lastAssistantText: string;
+  /**
+   * FEATURE_247 (R3) — rendered profile/task verification criteria appended to
+   * the verifier user message. Present only when a profile-default or per-task
+   * verification standard was supplied, so the default coding verifier prompt is
+   * byte-identical.
+   */
+  readonly additionalCriteria?: string;
 }
 
 export interface SidecarVerifierInvokeOptions {
