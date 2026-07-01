@@ -62,6 +62,7 @@ import type {
   KodaXTaskRole,
   KodaXTaskRoutingDecision,
   KodaXVideoMediaType,
+  KodaXAgentProfile,
   KodaXToolEventMeta,
   KodaXToolExecutionContext,
   ManagedMutationTracker,
@@ -353,10 +354,17 @@ export function isRunnerDrivenRuntimeEnabled(): boolean {
 function runnerToolEventMeta(
   events: KodaXOptions['events'] | undefined,
   toolId: string,
+  attribution?: { sessionId?: string; agentProfile?: KodaXAgentProfile },
 ): KodaXToolEventMeta {
   return {
     toolId,
     ...(events?.workflowCorrelation !== undefined ? { workflowCorrelation: events.workflowCorrelation } : {}),
+    // FEATURE_247 (R8): session + profile attribution so a host running
+    // concurrent Partner/Coder sessions can route tool events. The tool NAME
+    // (and thus its sideEffect) is already in the event payload, so it is not
+    // duplicated here.
+    ...(attribution?.sessionId ? { sessionId: attribution.sessionId } : {}),
+    ...(attribution?.agentProfile ? { agentProfile: attribution.agentProfile } : {}),
   };
 }
 
@@ -1435,7 +1443,10 @@ async function runManagedTaskViaRunnerInner(
         name: call.name,
         id: call.id,
         input: call.input,
-      }, runnerToolEventMeta(options.events, call.id));
+      }, runnerToolEventMeta(options.events, call.id, {
+        sessionId: sessionIdRef.current,
+        agentProfile: options.context?.agentProfile,
+      }));
     },
     onToolResult: (call, result) => {
       // F4 parity — track whether any tool result was truncated by the
@@ -1462,7 +1473,10 @@ async function runManagedTaskViaRunnerInner(
                 .filter((i) => i.type === 'text')
                 .map((i) => (i.type === 'text' ? i.text : ''))
                 .join(''),
-      }, runnerToolEventMeta(options.events, call.id));
+      }, runnerToolEventMeta(options.events, call.id, {
+        sessionId: sessionIdRef.current,
+        agentProfile: options.context?.agentProfile,
+      }));
     },
   };
   const todoDriftObserver = createTodoDriftObserver({
