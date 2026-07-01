@@ -349,22 +349,6 @@ describe('createCodingWorkflowBackend — spawn + wait', () => {
     });
   });
 
-  it('passes explicit per-agent provider/model into the bundle (M2)', async () => {
-    let seen: { provider?: string; model?: string } | undefined;
-    const backend = createCodingWorkflowBackend({
-      ctx: fakeCtx(),
-      childOptions,
-      runChild: async (bundles) => {
-        const b = bundles[0]!;
-        seen = { provider: b.provider, model: b.model };
-        return execResult();
-      },
-    });
-    const h = await backend.spawn({ name: 'r', prompt: 'synthesize', readOnly: true, provider: 'anthropic', model: 'claude-opus-4-8' });
-    await backend.wait(h.taskId);
-    expect(seen).toEqual({ provider: 'anthropic', model: 'claude-opus-4-8' });
-  });
-
   it('uses a digest instead of preparatory last text as the workflow finalText', async () => {
     const backend = createCodingWorkflowBackend({
       ctx: fakeCtx(),

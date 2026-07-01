@@ -206,6 +206,6 @@
   //   KODAX_FAST_MODEL=<model>        便宜档 model(如 deepseek-v4-flash)
   //   KODAX_DEEP_PROVIDER=<provider>  强档 provider
   //   KODAX_DEEP_MODEL=<model>        强档 model
-  //   注:workflow 脚本可用 wf.runAgent({ model, provider }) 直接给单个子 Agent
-  //       指定任意模型,无需配上面的档位(优先级高于档位/父 Agent)。
+  //   注:workflow 脚本用 wf.runAgent({ modelHint: 'fast'|'deep'|'balanced' }) 表达
+  //       档位意图(不写具体模型名),映射到上面配置的模型;未配则继承父 Agent。
 }
