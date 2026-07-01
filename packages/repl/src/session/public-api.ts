@@ -22,6 +22,9 @@ import type {
 } from '@kodax-ai/agent';
 
 import { FileSessionStorage } from '../interactive/storage.js';
+import { compactSession } from './compact-session.js';
+export { compactSession } from './compact-session.js';
+export type { CompactSessionOptions, CompactSessionResult } from './compact-session.js';
 import { deriveProjectKeyFromRoot } from '../interactive/project-key.js';
 import { ensureLayoutMigrated } from '../interactive/session-migration.js';
 import type { SessionData } from '../ui/utils/session-storage.js';
@@ -203,6 +206,8 @@ export interface SessionManager {
   unarchiveSession: typeof unarchiveSession;
   listRunningSessions: typeof listRunningSessions;
   watchSessions: typeof watchSessions;
+  /** FEATURE_247 (R6) — imperatively compact a session by id (writes lineage + emits nothing; returns stats). */
+  compactSession: typeof compactSession;
   /**
    * v0.7.43 — the raw write-side storage instance. SDK embedders pass
    * this into `runKodaX({ session: { id, scope, storage } })` so the
@@ -1138,6 +1143,7 @@ export function createSessionManager(opts?: { sessionsDir?: string }): SessionMa
       unarchiveSession,
       listRunningSessions,
       watchSessions,
+      compactSession,
       storage,
     };
   }
@@ -1153,6 +1159,7 @@ export function createSessionManager(opts?: { sessionsDir?: string }): SessionMa
     unarchiveSession: (id) => unarchiveSessionImpl(id, sessionsDir),
     listRunningSessions,
     watchSessions: (cb) => watchSessionsImpl(cb, sessionsDir),
+    compactSession: (id, o) => compactSession(id, { ...o, sessionsDir }),
     storage,
   };
 }
