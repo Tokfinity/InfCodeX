@@ -240,7 +240,7 @@ function buildWorkflowToolHost(
   // awaiting it, so the async run_workflow path can register `done` in the Worker's
   // childTaskRegistry and idle-yield. `runInline` (the blocking path, kept for
   // SDK/headless and as a fallback) is just `startInline` + `await done`.
-  const startInline: WorkflowToolHost['startInline'] = async ({ manifest, source, args, resumeFromRunId }) => {
+  const startInline: WorkflowToolHost['startInline'] = async ({ manifest, source, args, resumeFromRunId, signal }) => {
     // Lazy literal imports break the static cycle: workflow-runner imports
     // buildToolExecutionContext, so agent-runtime must not statically import
     // the workflows host/run-manager.
@@ -249,6 +249,16 @@ function buildWorkflowToolHost(
       import('../workflows/run-manager.js'),
       import('node:path'),
     ]);
+    // Stop signal = the session signal AND the per-run signal (from task_stop),
+    // whichever fires first. AbortSignal.any needs Node >= 20 (KodaX baseline).
+    const abortSignals = [options.abortSignal, signal].filter(
+      (s): s is AbortSignal => s !== undefined,
+    );
+    const combinedSignal = abortSignals.length === 0
+      ? undefined
+      : abortSignals.length === 1
+        ? abortSignals[0]
+        : AbortSignal.any(abortSignals);
     // FEATURE_246 (P1 review): live workflow progress reaches the REPL through
     // options.events.onWorkflowProcessEvent — already forwarded by the runner
     // (runWorkflowFromOptions). We do NOT subscribe the run manager here as well:
@@ -268,7 +278,7 @@ function buildWorkflowToolHost(
       ...(resumeFromRunId && /^[A-Za-z0-9][A-Za-z0-9._-]*$/.test(resumeFromRunId) && !resumeFromRunId.includes('..')
         ? { resumeFromRunDir: join(runsBaseDir, resumeFromRunId) }
         : {}),
-      ...(options.abortSignal ? { signal: options.abortSignal } : {}),
+      ...(combinedSignal ? { signal: combinedSignal } : {}),
       // FEATURE_247 (R7/R8): host attribution on workflow process events. The
       // hostMetadata map flows through the tracker onto every emitted
       // WorkflowProcessSnapshot, so a consumer (KodaX-Space) subscribed to

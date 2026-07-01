@@ -2096,6 +2096,12 @@ export interface WorkflowToolHostInlineInput {
   readonly source: string;
   readonly args?: unknown;
   readonly resumeFromRunId?: string;
+  /**
+   * Per-run abort signal, combined with the session signal. Lets the Worker stop
+   * THIS running workflow (via task_stop on its task_id) without aborting the
+   * whole session — so it can change the goal, stop, and re-run an improved script.
+   */
+  readonly signal?: AbortSignal;
 }
 
 /** ADR-049: a started-but-not-awaited workflow handle. `done` resolves with the

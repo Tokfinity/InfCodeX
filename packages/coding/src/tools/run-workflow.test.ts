@@ -175,4 +175,40 @@ describe('toolRunWorkflow — async / idle-yield path (ADR-049)', () => {
     expect(String(out)).not.toContain('task_id:');
     expect(registry.get('run-async-1')).toBe(inflight);
   });
+
+  it('registers a stop handle under the task id so task_stop can abort the running workflow', async () => {
+    let capturedSignal: AbortSignal | undefined;
+    let resolveDone!: (r: WorkflowToolHostResult) => void;
+    const done = new Promise<WorkflowToolHostResult>((res) => { resolveDone = res; });
+    const host: WorkflowToolHost = {
+      runInline: async () => { throw new Error('async path must not call runInline'); },
+      startInline: async (input) => {
+        capturedSignal = input.signal;
+        return { kind: 'started', runId: 'run-stop-1', done };
+      },
+    };
+    const childAbortControllers = new Map<string, AbortController>();
+    const ctx = {
+      workflowHost: host,
+      childTaskRegistry: new Map(),
+      childAbortControllers,
+    } as unknown as KodaXToolExecutionContext;
+
+    const out = await toolRunWorkflow({ manifest: MANIFEST, source: SOURCE }, ctx);
+    expect(String(out)).toContain('task_id:run-stop-1');
+    expect(String(out)).toContain('task_stop');
+    // the workflow got a per-run signal, and a stop handle is registered under the id
+    expect(capturedSignal).toBeInstanceOf(AbortSignal);
+    expect(childAbortControllers.has('run-stop-1')).toBe(true);
+
+    // task_stop aborting the registered controller fires the workflow's signal
+    expect(capturedSignal!.aborted).toBe(false);
+    childAbortControllers.get('run-stop-1')!.abort('goal changed');
+    expect(capturedSignal!.aborted).toBe(true);
+
+    // the stop handle is cleaned up when the run settles
+    resolveDone({ kind: 'started', runId: 'run-stop-1', status: 'stopped' });
+    await new Promise((r) => setTimeout(r, 0));
+    expect(childAbortControllers.has('run-stop-1')).toBe(false);
+  });
 });

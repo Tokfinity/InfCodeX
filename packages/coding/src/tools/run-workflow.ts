@@ -97,9 +97,14 @@ export async function toolRunWorkflow(
   // the turn yields instead of blocking. Mirrors dispatch_child_task's async path.
   const registry = ctx.childTaskRegistry;
   if (registry !== undefined && process.env.KODAX_ASYNC_WORKFLOW !== '0') {
+    // Per-run stop handle: registered under the task_id in the same abort
+    // registry task_stop uses, so the Worker can task_stop THIS running workflow
+    // (goal changed → stop → re-run an improved script) without aborting the
+    // whole session. Aborting it stops the run; `done` then settles as 'stopped'.
+    const wfAbort = new AbortController();
     let started: Awaited<ReturnType<typeof host.startInline>>;
     try {
-      started = await host.startInline(inlineInput);
+      started = await host.startInline({ ...inlineInput, signal: wfAbort.signal });
     } catch (error) {
       return `[Tool Error] run_workflow failed: ${error instanceof Error ? error.message : String(error)}`;
     }
@@ -117,6 +122,8 @@ export async function toolRunWorkflow(
     if (registry.has(taskId)) {
       return formatWorkflowOutcome(await done);
     }
+    // Register the stop handle so task_stop(taskId) can abort this workflow.
+    ctx.childAbortControllers?.set(taskId, wfAbort);
     // The settle promise enqueues the `<task-completed>` notification (which carries
     // the synthesis the Worker reads) when the run finishes, then resolves so the
     // idle-yield loop wakes the Worker. Its resolved value is a settle signal only.
@@ -126,6 +133,8 @@ export async function toolRunWorkflow(
         summary = formatWorkflowOutcome(await done);
       } catch (error) {
         summary = `[Tool Error] Workflow ${taskId} failed: ${error instanceof Error ? error.message : String(error)}`;
+      } finally {
+        ctx.childAbortControllers?.delete(taskId);
       }
       enqueueChildTaskNotification({ taskId, summary });
       return EMPTY_CHILD_RESULT;
@@ -137,7 +146,10 @@ export async function toolRunWorkflow(
       `Do NOT wait for it inline — its synthesized result will arrive on its own as a ` +
       `<task-completed task_id="${taskId}"> block in a later message. ` +
       `Idle-yield now (end your turn with no tool calls) if you have nothing else to do, ` +
-      `or continue with other useful work; you will be resumed automatically when it finishes.`
+      `or continue with other useful work; you will be resumed automatically when it finishes. ` +
+      `If the goal changes before it finishes, call task_stop("${taskId}") to stop this run, then ` +
+      `run_workflow again with the improved script — pass resumeFromRunId:"${taskId}" so the agents ` +
+      `that already finished replay from cache and only the changed work re-runs.`
     );
   }
 
