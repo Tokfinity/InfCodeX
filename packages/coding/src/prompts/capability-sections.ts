@@ -277,6 +277,11 @@ export async function buildCapabilityContextSections(
   // LLM reads "what to save / how to save / when to access" BEFORE it
   // sees the current index content. Always emitted — the teaching text
   // is path-stable so prompt cache remains valid across sessions.
+  //
+  // NOTE: a condensed-stub gate (emit full text only after MEMORY.md exists)
+  // was trialed to save ~3.1K tokens/turn but eval-driven DEFERRED — kimi went
+  // 3/3 write → 0/3 write (read instead) and ds/v4flash regressed on first-save
+  // correctness. The claudecode-derived wording is load-bearing; keep full text.
   sections.push(
     createPromptSection(
       'memory-rules',

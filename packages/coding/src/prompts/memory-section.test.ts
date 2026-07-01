@@ -20,7 +20,7 @@ import { afterEach, beforeEach, describe, expect, it } from 'vitest';
 
 import { setAgentConfigHome, resolveMemoryRoot } from '@kodax-ai/agent';
 
-import { buildMemorySection } from './memory-section.js';
+import { buildMemorySection, clearMemorySectionCacheForTesting } from './memory-section.js';
 
 describe('buildMemorySection', () => {
   let tempHome: string;
@@ -36,6 +36,7 @@ describe('buildMemorySection', () => {
   });
 
   afterEach(() => {
+    clearMemorySectionCacheForTesting();
     setAgentConfigHome(undefined);
     fs.rmSync(tempHome, { recursive: true, force: true });
     fs.rmSync(cwd, { recursive: true, force: true });
@@ -139,5 +140,53 @@ describe('buildMemorySection', () => {
     const result = buildMemorySection(cwd);
     expect(result.memoryDir).toBe(memoryDir);
     expect(result.content).toContain(memoryDir);
+  });
+
+  // ── mtime read cache ───────────────────────────────────────────────────────
+  it('serves cached content while mtime is unchanged', () => {
+    fs.mkdirSync(memoryDir, { recursive: true });
+    const p = path.join(memoryDir, 'MEMORY.md');
+    // Whole-second mtime — precise on every filesystem (no ns rounding drift).
+    const pinned = new Date(1_700_000_000_000);
+    fs.writeFileSync(p, '- [A](a.md) — first', 'utf-8');
+    fs.utimesSync(p, pinned, pinned);
+    expect(buildMemorySection(cwd).content).toContain('first');
+
+    // Replace content but keep the exact same mtime → cache must win.
+    fs.writeFileSync(p, '- [B](b.md) — second', 'utf-8');
+    fs.utimesSync(p, pinned, pinned);
+
+    const cached = buildMemorySection(cwd);
+    expect(cached.content).toContain('first');
+    expect(cached.content).not.toContain('second');
+  });
+
+  it('re-reads when mtime advances', () => {
+    fs.mkdirSync(memoryDir, { recursive: true });
+    const p = path.join(memoryDir, 'MEMORY.md');
+    fs.writeFileSync(p, '- [A](a.md) — first', 'utf-8');
+    const st = fs.statSync(p);
+    buildMemorySection(cwd);
+
+    fs.writeFileSync(p, '- [B](b.md) — second', 'utf-8');
+    const later = new Date(st.mtimeMs + 2000);
+    fs.utimesSync(p, later, later);
+
+    expect(buildMemorySection(cwd).content).toContain('second');
+  });
+
+  it('clearMemorySectionCacheForTesting forces a re-read even with unchanged mtime', () => {
+    fs.mkdirSync(memoryDir, { recursive: true });
+    const p = path.join(memoryDir, 'MEMORY.md');
+    const pinned = new Date(1_700_000_000_000);
+    fs.writeFileSync(p, '- [A](a.md) — first', 'utf-8');
+    fs.utimesSync(p, pinned, pinned);
+    buildMemorySection(cwd);
+
+    fs.writeFileSync(p, '- [B](b.md) — second', 'utf-8');
+    fs.utimesSync(p, pinned, pinned); // identical mtime → only a cache clear can force re-read
+    clearMemorySectionCacheForTesting();
+
+    expect(buildMemorySection(cwd).content).toContain('second');
   });
 });

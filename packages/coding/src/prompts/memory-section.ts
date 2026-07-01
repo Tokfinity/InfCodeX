@@ -55,6 +55,48 @@ export interface MemorySectionResult {
 }
 
 /**
+ * mtime-keyed read cache for MEMORY.md — mirrors the FEATURE_149 pattern in
+ * `context/agents-loader.ts` (`readFileWithMtimeCache`). `buildMemorySection`
+ * runs on EVERY SP rebuild (once per SA/AMA turn); MEMORY.md is up to 25KB, so
+ * re-reading it every turn is wasted sync IO. Keyed by absolute entrypoint path;
+ * a `todo_save` write bumps the file mtime and invalidates the entry automatically.
+ */
+const entrypointCache = new Map<string, { mtimeMs: number; content: string }>();
+
+/** Test-only — reset the MEMORY.md read cache between unit tests. */
+export function clearMemorySectionCacheForTesting(): void {
+  entrypointCache.clear();
+}
+
+/**
+ * Read MEMORY.md via the mtime cache. Returns the raw content when the file
+ * exists and is readable, or `undefined` for any stat/read failure (missing
+ * file, EISDIR, permission denied) — the caller degrades to the empty fallback.
+ * Never throws.
+ */
+function readEntrypointWithCache(entrypoint: string): string | undefined {
+  let mtimeMs: number;
+  try {
+    mtimeMs = fs.statSync(entrypoint).mtimeMs;
+  } catch {
+    entrypointCache.delete(entrypoint);
+    return undefined;
+  }
+  const cached = entrypointCache.get(entrypoint);
+  if (cached && cached.mtimeMs === mtimeMs) {
+    return cached.content;
+  }
+  try {
+    const content = fs.readFileSync(entrypoint, 'utf-8');
+    entrypointCache.set(entrypoint, { mtimeMs, content });
+    return content;
+  } catch {
+    entrypointCache.delete(entrypoint);
+    return undefined;
+  }
+}
+
+/**
  * Build the `project-memory` SP section content for the given cwd.
  *
  * Synchronous + side-effect-free + NEVER throws — any fs read failure
@@ -66,14 +108,8 @@ export function buildMemorySection(cwd: string): MemorySectionResult {
   const memoryDir = resolveMemoryRoot(cwd);
   const entrypoint = resolveMemoryEntrypoint(cwd);
 
-  let entrypointExists = false;
-  let raw = '';
-  try {
-    raw = fs.readFileSync(entrypoint, 'utf-8');
-    entrypointExists = true;
-  } catch {
-    entrypointExists = false;
-  }
+  const raw = readEntrypointWithCache(entrypoint);
+  const entrypointExists = raw !== undefined;
 
   const content = entrypointExists
     ? buildBodyWithEntrypoint(memoryDir, raw)
