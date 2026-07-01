@@ -14,6 +14,7 @@
 
 import {
   applySessionCompaction,
+  buildPostCompactAttachments,
   compact,
   estimateTokens,
   type KodaXMessage,
@@ -131,10 +132,24 @@ export async function compactSession(
       summary: result.summary ?? '',
       tokensBefore: result.tokensBefore,
       tokensAfter: result.tokensAfter,
-      entriesRemoved: result.entriesRemoved,
       reason: 'manual',
     };
-    const newLineage = applySessionCompaction(data.lineage, result.messages, anchor);
+    // Attach a "recent operations" ledger summary so the resumed session keeps
+    // the post-compact context the /compact middleware path injects. Without it,
+    // an SDK-initiated compaction drops that context and the next turn may
+    // re-read files it had already touched. File-content messages stay out of
+    // this lightweight path (they need async reads); the ledger summary is
+    // synchronous and covers the common case.
+    const ledger = result.artifactLedger ?? data.artifactLedger ?? [];
+    const freedTokens = Math.max(0, (result.tokensBefore ?? 0) - (result.tokensAfter ?? 0));
+    const { ledgerMessage } = buildPostCompactAttachments(ledger, freedTokens);
+    const postCompactAttachments = ledgerMessage ? [ledgerMessage] : [];
+    const newLineage = applySessionCompaction(
+      data.lineage,
+      result.messages,
+      anchor,
+      postCompactAttachments,
+    );
 
     const updated: SessionData = {
       ...data,

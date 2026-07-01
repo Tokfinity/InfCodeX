@@ -172,6 +172,9 @@ describe('FEATURE_247 R4: onEffectiveConfig snapshot', () => {
     // per-task wins over the profile default; profile default fills the gap.
     expect(c.verification?.summary).toBe('per-task-wins');
     expect(c.verification?.rubricFamily).toBe('partner-research');
+    // R4: the snapshot reports the verifier that will actually enforce
+    // (inherit-main resolves to the caller's provider), not always undefined.
+    expect(c.verifier?.provider).toBe('anthropic');
   });
 
   it('AMA path emits agentMode=ama and keeps multi-agent tools visible', async () => {

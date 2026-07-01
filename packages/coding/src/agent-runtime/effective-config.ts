@@ -9,12 +9,15 @@
  * event fires once per top-level managed task.
  */
 
+import { getProvider, isProviderName } from '@kodax-ai/llm';
+
 import type {
   KodaXAgentMode,
   KodaXEffectiveTaskConfig,
   KodaXOptions,
   KodaXTaskVerificationContract,
 } from '../types.js';
+import { resolveVerifierProvider } from './middleware/sidecar-verifier/verifier-provider-resolver.js';
 
 /**
  * Resolve the verification standard that reaches the Sidecar Verifier.
@@ -40,7 +43,48 @@ export function resolveEffectiveVerification(
   const profileDefault = profile.verification;
   const perTask = options.context?.taskVerification;
   if (!profileDefault && !perTask) return undefined;
-  return { ...profileDefault, ...perTask };
+  const merged = { ...profileDefault, ...perTask };
+  // Guard the documented shallow-merge footgun: an explicitly-empty per-task
+  // `criteria: []` would REPLACE (not element-merge) the profile's criteria,
+  // silently disabling every profile-level verification criterion. Treat an
+  // empty per-task array as "unset" so the profile default survives.
+  if (
+    Array.isArray(perTask?.criteria) &&
+    perTask.criteria.length === 0 &&
+    Array.isArray(profileDefault?.criteria) &&
+    profileDefault.criteria.length > 0
+  ) {
+    return { ...merged, criteria: profileDefault.criteria };
+  }
+  return merged;
+}
+
+/**
+ * Resolve the (provider, model) the Sidecar Verifier will actually run on, for
+ * the R4 effective-config snapshot. Reuses the SAME `resolveVerifierProvider`
+ * the runner uses (deterministic: env override or inherit-main) so the reported
+ * verifier cannot drift from the enforced one. Defensive — any resolution
+ * failure (unknown provider name, registry miss) returns undefined rather than
+ * breaking the snapshot.
+ */
+function resolveVerifierAttribution(
+  options: KodaXOptions,
+): { readonly provider: string; readonly model?: string } | undefined {
+  const mainProviderName = options.provider ?? 'anthropic';
+  if (!isProviderName(mainProviderName)) return undefined;
+  try {
+    const resolved = resolveVerifierProvider({
+      mainProvider: getProvider(mainProviderName),
+      mainProviderName,
+      mainModel: options.modelOverride ?? options.model,
+    });
+    return {
+      provider: resolved.providerName,
+      ...(resolved.model !== undefined ? { model: resolved.model } : {}),
+    };
+  } catch {
+    return undefined;
+  }
 }
 
 /**
@@ -58,12 +102,16 @@ export function emitEffectiveTaskConfig(
 ): void {
   const cb = options.events?.onEffectiveConfig;
   if (!cb) return;
+  // Report the verifier the run will use: an explicit caller-supplied value
+  // wins; otherwise resolve it the same way the runner does so the R4 snapshot
+  // is truthful instead of always `undefined`.
+  const verifier = args.verifier ?? resolveVerifierAttribution(options);
   const config: KodaXEffectiveTaskConfig = {
     agentMode: args.agentMode,
     agentProfile: options.context?.agentProfile,
     toolScope: args.toolScope,
     verification: resolveEffectiveVerification(options),
-    ...(args.verifier ? { verifier: args.verifier } : {}),
+    ...(verifier ? { verifier } : {}),
   };
   try {
     cb(config);
