@@ -952,6 +952,10 @@ async function runReadChildBody(
         // child tool calls go through the SAME auto-mode classifier instance
         // (shared engine + denialTracker + circuitBreaker state).
         guardrails: options.guardrails,
+        // FEATURE_221: a child of a white-labeled product inherits the parent's
+        // selfManual so its own kodax_manual tool description is re-branded too
+        // (children carry kodax_manual — it is not in CHILD_EXCLUDE_TOOLS).
+        selfManual: scope.ctx.selfManual,
         context: {
           gitRoot: scope.ctx.gitRoot,
           executionCwd: scope.ctx.executionCwd ?? scope.ctx.gitRoot,
@@ -1138,6 +1142,9 @@ async function runWriteChildBody(
         // child tool calls go through the SAME auto-mode classifier instance
         // (shared engine + denialTracker + circuitBreaker state).
         guardrails: options.guardrails,
+        // FEATURE_221: write children inherit the parent's white-label product
+        // so their own kodax_manual description is re-branded too.
+        selfManual: childCtx.selfManual,
         context: {
           gitRoot: childCtx.gitRoot,
           executionCwd: childCtx.executionCwd ?? childCtx.gitRoot,

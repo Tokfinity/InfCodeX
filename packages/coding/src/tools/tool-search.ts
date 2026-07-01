@@ -29,6 +29,7 @@ import {
   isDeferredTool,
   unlockDeferredToolForContext,
 } from './deferred-tools.js';
+import { withManualToolBranding } from '../self-knowledge/tool-description.js';
 
 interface ToolSearchInput {
   query?: string;
@@ -111,7 +112,11 @@ function formatToolAsFunctionBlock(def: KodaXToolDefinition): string {
   return `<function>${JSON.stringify(schema)}</function>`;
 }
 
-function buildResult(resolved: readonly string[], context: object): string {
+function buildResult(
+  resolved: readonly string[],
+  context: object,
+  selfManualProductName?: string,
+): string {
   if (resolved.length === 0) {
     return 'No tools matched the query. Available deferred tools: '
       + Object.keys(DEFERRED_TOOL_HINTS).join(', ')
@@ -125,7 +130,10 @@ function buildResult(resolved: readonly string[], context: object): string {
       continue;
     }
     unlockDeferredToolForContext(context, name);
-    lines.push(formatToolAsFunctionBlock(def));
+    // FEATURE_221: white-label the kodax_manual description here too, so a
+    // re-branded consumer's `select:kodax_manual` lookup cannot pull the raw
+    // KodaX description. No-op for every other tool / the default product name.
+    lines.push(formatToolAsFunctionBlock(withManualToolBranding(def, selfManualProductName)));
   }
   return lines.join('\n');
 }
@@ -143,7 +151,7 @@ export const toolSearchHandler: ToolHandlerSync = async (input, context) => {
   const resolved = parsed.mode === 'select'
     ? resolveSelectNames(parsed.names).slice(0, MAX_RESULTS_CAP)
     : searchKeywords(parsed.required, parsed.loose, requestedMax);
-  return buildResult(resolved, context);
+  return buildResult(resolved, context, context.selfManual?.productName);
 };
 
 /**

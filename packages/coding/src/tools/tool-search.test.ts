@@ -111,6 +111,21 @@ describe('FEATURE_189 B.2 — tool_search handler', () => {
     expect(getUnlockedDeferredTools(ctx).has('module_context')).toBe(true);
   });
 
+  it('FEATURE_221: white-labels the kodax_manual description on a select: lookup', async () => {
+    // Default: the raw KodaX description (with config paths) is returned.
+    const plain = await toolSearchHandler({ query: 'select:kodax_manual' }, makeContext());
+    expect(plain).toContain('~/.kodax/config.json');
+    expect(plain).toContain('KodaX');
+    // Re-branded: no KodaX name / config-path leak via tool_search either.
+    const branded = await toolSearchHandler(
+      { query: 'select:kodax_manual' },
+      { ...makeContext(), selfManual: { productName: 'KodaX-Space' } },
+    );
+    expect(branded).toContain('KodaX-Space');
+    expect(branded).not.toContain('~/.kodax');
+    expect(branded).not.toContain('KODAX_');
+  });
+
   it('supports multi-name select with comma separation', async () => {
     const out = await toolSearchHandler({ query: 'select:web_fetch,web_search' }, ctx);
     const blocks = (out.match(/<function>/g) ?? []).length;

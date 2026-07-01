@@ -157,6 +157,25 @@ describe('executeChildAgents — guardrails propagation (FEATURE_092 phase 2b.7b
     expect(childOptions.guardrails).toBeUndefined();
   });
 
+  it('FEATURE_221: a child inherits the parent selfManual (white-label) from the parent ctx', async () => {
+    mockRunKodaX.mockResolvedValue(okResult('inspected'));
+    const bundles = [createBundle({ id: 'cb-sm', readOnly: true, objective: 'inspect' })];
+    const ctx = { ...createCtx(), selfManual: { productName: 'KodaX-Space' } };
+    // eslint-disable-next-line @typescript-eslint/no-explicit-any
+    await executeChildAgents(bundles, ctx as any, createOptions());
+    expect(mockRunKodaX).toHaveBeenCalled();
+    const childOptions = mockRunKodaX.mock.calls[0]![0] as { selfManual?: { productName?: string } };
+    expect(childOptions.selfManual?.productName).toBe('KodaX-Space');
+  });
+
+  it('omits selfManual on the child when the parent has none (default unchanged)', async () => {
+    mockRunKodaX.mockResolvedValue(okResult('inspected'));
+    const bundles = [createBundle({ id: 'cb-sm2', readOnly: true, objective: 'inspect' })];
+    await executeChildAgents(bundles, createCtx(), createOptions());
+    const childOptions = mockRunKodaX.mock.calls[0]![0] as { selfManual?: unknown };
+    expect(childOptions.selfManual).toBeUndefined();
+  });
+
   it('forwards the SAME guardrail instance by reference (state-sharing contract)', async () => {
     // The auto-mode guardrail relies on a single shared mutable instance —
     // pass-by-reference is the contract that makes engine/tracker state
