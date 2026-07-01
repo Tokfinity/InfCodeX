@@ -107,6 +107,11 @@ export type {
   KodaXEvents,
   KodaXSidecarMessageEvent,
   KodaXWorkflowAgentDigestEvent,
+  // SDK: workflow host contract so an embedder can implement KodaXOptions.workflowHost.
+  WorkflowToolHost,
+  WorkflowToolHostResult,
+  WorkflowToolHostInlineInput,
+  WorkflowToolHostStartResult,
   WorkflowEventCorrelation,
   KodaXWorkflowEventMeta,
   KodaXActivityEventMeta,
