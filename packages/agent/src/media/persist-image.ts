@@ -55,7 +55,12 @@ export async function prunePasteTmpDir(now: number = Date.now()): Promise<number
   let deleted = 0;
   await Promise.all(
     entries
-      .filter((name) => name.startsWith('paste-'))
+      // Match any KodaX-written paste file — `<sanitized-prefix>-<16-hex>.png/jpg`
+      // — not just the default `paste-` prefix. Callers can supply a custom
+      // fileNamePrefix (e.g. a Partner surface uses 'partner-clip'), and those
+      // files would otherwise never be pruned. The `-<16 hex>.<ext>` shape keeps
+      // this from touching unrelated files that may share the tmp directory.
+      .filter((name) => /-[0-9a-f]{16}\.(?:png|jpg)$/.test(name))
       .map(async (name) => {
         const fullPath = path.join(dir, name);
         try {

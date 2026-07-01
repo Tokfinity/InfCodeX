@@ -1189,7 +1189,7 @@ const CONFIG_ENV_BRIDGES: ReadonlyArray<{
 }> = [
   { env: 'KODAX_MAX_OUTPUT_TOKENS', value: (c) => (typeof c.maxOutputTokens === 'number' ? String(c.maxOutputTokens) : undefined) },
   { env: 'KODAX_DISABLE_PROMPT_CACHE', value: (c) => (c.disablePromptCache === true ? '1' : undefined) },
-  { env: 'KODAX_LSP', value: (c) => (c.lsp === false ? '0' : undefined) },
+  { env: 'KODAX_LSP', value: (c) => (c.lsp === false ? '0' : c.lsp === true ? '1' : undefined) },
   { env: 'KODAX_LSP_DOWNLOAD', value: (c) => (c.lspAutoDownload === true ? '1' : undefined) },
   { env: 'KODAX_ACP_LOG', value: (c) => (c.acpLogLevel && c.acpLogLevel.trim().length > 0 ? c.acpLogLevel.trim() : undefined) },
   { env: 'KODAX_REPO_INTELLIGENCE_TOOL_WAIT_MS', value: (c) => (typeof c.repoIntelligence?.toolWaitMs === 'number' ? String(c.repoIntelligence.toolWaitMs) : undefined) },
