@@ -70,10 +70,20 @@ describe('toolRunWorkflow', () => {
     expect(out).toBe('the synthesized answer');
   });
 
-  it('prefixes a completed_unverified result with a warning', async () => {
-    const { host } = recordingHost({ kind: 'started', runId: 'r1', status: 'completed_unverified', resultText: 'answer' });
+  it('prefixes a completed run that has verification warnings', async () => {
+    // The overall run settles `completed` even when a child agent fails its
+    // sidecar verifier in warn-only mode; the host reports those via
+    // `verificationWarnings` and the tool reply must flag them.
+    const { host } = recordingHost({
+      kind: 'started',
+      runId: 'r1',
+      status: 'completed',
+      resultText: 'answer',
+      verificationWarnings: ['reviewer', 'auditor'],
+    });
     const out = await toolRunWorkflow({ manifest: MANIFEST, source: SOURCE }, ctxWith(host));
-    expect(String(out)).toContain('verification warnings');
+    expect(String(out)).toContain('failed verification');
+    expect(String(out)).toContain('reviewer');
     expect(String(out)).toContain('answer');
   });
 

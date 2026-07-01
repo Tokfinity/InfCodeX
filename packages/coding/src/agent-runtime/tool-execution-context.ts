@@ -279,14 +279,29 @@ function buildWorkflowToolHost(
     if (started.kind === 'declined') {
       return { kind: 'declined', reason: started.reason };
     }
-    const done = started.managed.done.then((): WorkflowToolHostResult => {
+    const done = started.managed.done.then((outcome): WorkflowToolHostResult => {
       const snap = started.managed.getSnapshot?.();
+      // A child agent that completes but fails its sidecar verifier in warn-only
+      // mode settles as `completed_unverified` and emits an `agent_unverified`
+      // event — but the overall run status is still `completed`. Surface those
+      // child names so the Worker's tool reply flags the partial verification
+      // failure instead of silently swallowing it.
+      const verificationWarnings = outcome.kind === 'completed'
+        ? outcome.state.events.reduce<string[]>((names, event) => {
+            if (event.type === 'agent_unverified') {
+              const name = event.data?.name ?? event.data?.taskId;
+              names.push(typeof name === 'string' && name.length > 0 ? name : 'agent');
+            }
+            return names;
+          }, [])
+        : [];
       return {
         kind: 'started',
         runId: started.runId,
         ...(snap?.status !== undefined ? { status: snap.status } : {}),
         ...(snap?.resultText !== undefined ? { resultText: snap.resultText } : {}),
         ...(snap?.error !== undefined ? { error: snap.error } : {}),
+        ...(verificationWarnings.length > 0 ? { verificationWarnings } : {}),
       };
     });
     return { kind: 'started', runId: started.runId, done };

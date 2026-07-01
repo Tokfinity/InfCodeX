@@ -40,14 +40,18 @@ const EMPTY_CHILD_RESULT: KodaXChildExecutionResult = {
 /** Turn a settled host result into the text the Worker sees (shared by the async
  *  notification summary and the blocking-fallback return). */
 function formatWorkflowOutcome(result: WorkflowToolHostResult): string {
-  if (result.status === 'completed' || result.status === 'completed_unverified') {
+  if (result.status === 'completed') {
     const text = result.resultText?.trim();
-    const prefix = result.status === 'completed_unverified'
-      ? `Workflow ${result.runId} completed with verification warnings.\n\n`
+    // A run settles as `completed` even when some child agents failed their
+    // sidecar verifier in warn-only mode; surface those so the Worker does not
+    // act on the result unaware that verification failed for part of the run.
+    const warnings = result.verificationWarnings ?? [];
+    const prefix = warnings.length > 0
+      ? `Workflow ${result.runId} completed, but ${warnings.length} agent(s) failed verification (warn-only): ${warnings.join(', ')}. Review before relying on the result.\n\n`
       : '';
     return text && text.length > 0
       ? `${prefix}${text}`
-      : `Workflow ${result.runId} completed (no displayable result text was returned).`;
+      : `${prefix}Workflow ${result.runId} completed (no displayable result text was returned).`;
   }
   const detail = result.error ?? result.resultText ?? '';
   return `[Tool Error] Workflow ${result.runId ?? ''} ${result.status ?? 'did not complete'}${detail ? `: ${detail}` : ''}`.trim();

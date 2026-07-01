@@ -506,8 +506,10 @@ export const BUILTIN_TOOL_DEFINITIONS: LocalToolDefinition[] = [
         resumeFromRunId: {
           type: 'string',
           pattern: '^[A-Za-z0-9][A-Za-z0-9._-]*$',
+          // ADR-033 §5: no FEATURE_xxx version metadata in the prompt body — it
+          // is noise for the LLM and churns the tool-schema prompt cache.
           description:
-            'Optional run id of a prior run of THIS workflow to resume from (FEATURE_246 Part D). Re-submit the same script (edited or not) with the prior run id: unchanged agent calls return their cached results instantly and only the changed/new calls re-run. Scripts must be deterministic for this — Date.now()/Math.random() are disabled.',
+            'Optional run id of a prior run of THIS workflow to resume from. Re-submit the same script (edited or not) with the prior run id: unchanged agent calls return their cached results instantly and only the changed/new calls re-run. Scripts must be deterministic for this — Date.now()/Math.random() are disabled.',
         },
       },
       required: ['manifest', 'source'],

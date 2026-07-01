@@ -161,6 +161,24 @@ const UNSUPPORTED_SCHEMA_KEYWORDS: readonly string[] = [
   'contains',
   'unevaluatedProperties',
   'unevaluatedItems',
+  // Value-constraint keywords: `validateAgainstSchema` honors only
+  // type/enum/required/properties/items/additionalProperties, so these would
+  // "validate" while the constraint goes unchecked (a schema that looks like it
+  // bounds `age >= 0` would accept `-5`). Reject at declaration so the author
+  // gets a signal instead of a silent no-op.
+  'minimum',
+  'maximum',
+  'exclusiveMinimum',
+  'exclusiveMaximum',
+  'multipleOf',
+  'minLength',
+  'maxLength',
+  'pattern',
+  'minItems',
+  'maxItems',
+  'uniqueItems',
+  'minProperties',
+  'maxProperties',
 ];
 
 function collectUnsupportedKeywords(schema: unknown, path: string, found: Map<string, string>): void {
@@ -180,8 +198,13 @@ function collectUnsupportedKeywords(schema: unknown, path: string, found: Map<st
   if (isRecord(schema.items)) {
     collectUnsupportedKeywords(schema.items, `${path || '(root)'}[]`, found);
   }
-  if (isRecord(schema.additionalProperties)) {
-    collectUnsupportedKeywords(schema.additionalProperties, `${path || '(root)'}.*`, found);
+  // `validateAgainstSchema` only honors `additionalProperties === false` (the
+  // "no extra keys" case). A schema-object form (`additionalProperties: {type:
+  // 'string'}`) means "extra keys must match this schema" — which the validator
+  // silently ignores, so a type-violating extra property would pass. Reject the
+  // object form at declaration; `false` (or omitted) stays supported.
+  if (isRecord(schema.additionalProperties) && !found.has('additionalProperties (schema form)')) {
+    found.set('additionalProperties (schema form)', path || '(root)');
   }
 }
 
@@ -203,8 +226,8 @@ export function assertSupportedOutputSchema(schema: unknown): void {
   throw new Error(
     `outputSchema uses unsupported JSON-Schema keyword(s): ${detail}. ` +
       'The workflow validator supports only type, enum, required, properties, ' +
-      'items, and additionalProperties (nested object arrays included). ' +
-      'Inline the referenced shapes and use that subset.',
+      'items, and additionalProperties: false (nested object arrays included). ' +
+      'Inline the referenced shapes, drop value-constraint keywords, and use that subset.',
   );
 }
 

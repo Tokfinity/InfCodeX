@@ -189,4 +189,28 @@ describe('assertSupportedOutputSchema', () => {
     expect(() => assertSupportedOutputSchema(undefined)).not.toThrow();
     expect(() => assertSupportedOutputSchema('nope')).not.toThrow();
   });
+
+  it('rejects value-constraint keywords the validator would silently ignore', () => {
+    // These would otherwise "validate" while the constraint goes unchecked
+    // (e.g. `{ age: -5 }` passing a `minimum: 0` schema).
+    expect(() =>
+      assertSupportedOutputSchema({ type: 'object', properties: { age: { type: 'number', minimum: 0 } } }),
+    ).toThrow(/minimum/);
+    expect(() =>
+      assertSupportedOutputSchema({ type: 'object', properties: { name: { type: 'string', pattern: '^a' } } }),
+    ).toThrow(/pattern/);
+    expect(() =>
+      assertSupportedOutputSchema({ type: 'array', items: { type: 'string' }, minItems: 1 }),
+    ).toThrow(/minItems/);
+  });
+
+  it('rejects additionalProperties in schema-object form (only false is honored)', () => {
+    expect(() =>
+      assertSupportedOutputSchema({ type: 'object', additionalProperties: { type: 'string' } }),
+    ).toThrow(/additionalProperties/);
+    // `false` and omitted stay supported.
+    expect(() =>
+      assertSupportedOutputSchema({ type: 'object', properties: { a: { type: 'string' } }, additionalProperties: false }),
+    ).not.toThrow();
+  });
 });

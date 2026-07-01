@@ -2078,6 +2078,12 @@ export interface WorkflowToolHostResult {
   readonly resultText?: string;
   /** started: terminal error message, when failed. */
   readonly error?: string;
+  /** started: names of child agents that completed but FAILED their sidecar
+   *  verification in warn-only mode (`agent_unverified`). The overall run still
+   *  settles as `completed`, so without surfacing these the Worker would act on
+   *  the result unaware that some verification failed. Empty/omitted = all
+   *  completed children verified (or none were verified). */
+  readonly verificationWarnings?: readonly string[];
 }
 
 /**
