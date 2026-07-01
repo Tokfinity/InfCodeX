@@ -177,4 +177,16 @@ describe('CAP-021: getActiveToolDefinitions — top-level resolver', () => {
     );
     expect(withGateOff.find((t) => t.name === 'emit_managed_protocol')).toBeUndefined();
   });
+
+  it('FEATURE_221: white-labels the kodax_manual description via selfManualProductName', () => {
+    const [manual] = getActiveToolDefinitions(
+      ['kodax_manual'], 'off', false, false, undefined, undefined, 'KodaX-Space',
+    );
+    expect(manual?.name).toBe('kodax_manual');
+    expect(manual?.description).toContain('KodaX-Space');
+    expect(manual?.description).not.toContain('~/.kodax');
+    // No productName ⇒ the default KodaX description is unchanged.
+    const [def] = getActiveToolDefinitions(['kodax_manual'], 'off', false, false);
+    expect(def?.description).toContain('~/.kodax/config.json');
+  });
 });

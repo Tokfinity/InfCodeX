@@ -1206,6 +1206,12 @@ export {
   SELF_KNOWLEDGE_ROUTING_RULE,
   buildSelfKnowledgeRoutingRule,
 } from './self-knowledge/routing-rule.js';
+// FEATURE_221: the productName-parameterized kodax_manual tool description
+// (white-label). Sibling to buildSelfKnowledgeRoutingRule.
+export {
+  buildManualToolDescription,
+  withManualToolBranding,
+} from './self-knowledge/tool-description.js';
 export type {
   KodaXManualTopicId,
   KodaXManualTopicInput,

@@ -771,6 +771,8 @@ export async function runSubstrate(
         !!runtime,
         options.context?.toolConstructionMode,
         getUnlockedDeferredTools(ctx),
+        // FEATURE_221: white-label the kodax_manual description for this product.
+        options.selfManual?.productName,
       );
 
       while (true) {

@@ -7,6 +7,20 @@
  */
 
 export function buildSelfKnowledgeRoutingRule(productName = 'KodaX'): string {
+  // FEATURE_221: the ~/.kodax / KODAX_* config-path specifics only belong on
+  // KodaX's own rule; a re-branded product keeps the anti-Claude-Code/Codex
+  // framing without leaking KodaX paths into the system prompt. Matches
+  // `scopeAnchor` + the kodax_manual tool description. Default byte-identical.
+  const configLines = productName === 'KodaX'
+    ? [
+        `Claude Code and Codex CLI knowledge that does not match ${productName} — ${productName} uses`,
+        '~/.kodax/config.json and KODAX_* env vars, not .claude/settings.json or',
+        'config.toml. Only bring up Claude Code or Codex when the user explicitly asks',
+      ]
+    : [
+        `Claude Code and Codex CLI knowledge that does not match ${productName}.`,
+        'Only bring up Claude Code or Codex when the user explicitly asks',
+      ];
   return [
     `${productName} self-knowledge: when the user asks how to use, install, configure,`,
     `troubleshoot, or extend ${productName} itself — providers, custom providers, config,`,
@@ -16,9 +30,7 @@ export function buildSelfKnowledgeRoutingRule(productName = 'KodaX'): string {
     '',
     `Treat kodax_manual as the version-bound source of truth for ${productName} product`,
     'behavior. Do not answer these from pretraining, because pretraining mixes in',
-    `Claude Code and Codex CLI knowledge that does not match ${productName} — ${productName} uses`,
-    '~/.kodax/config.json and KODAX_* env vars, not .claude/settings.json or',
-    'config.toml. Only bring up Claude Code or Codex when the user explicitly asks',
+    ...configLines,
     'to compare. Project AGENTS.md still governs work in the current repo; the',
     `manual governs questions about ${productName} as a product.`,
   ].join('\n');

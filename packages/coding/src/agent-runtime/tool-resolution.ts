@@ -58,6 +58,7 @@ import {
 import { isManagedProtocolToolName } from '../managed-protocol.js';
 import { resolveKodaXAutoRepoMode } from '../repo-intelligence/runtime.js';
 import { DEFERRED_TOOL_HINTS, isDeferredTool } from '../tools/deferred-tools.js';
+import { withManualToolBranding } from '../self-knowledge/tool-description.js';
 
 /** FEATURE_067 v3: Filter tools excluded for child agents at API level. */
 export function filterExcludedTools(
@@ -118,6 +119,8 @@ export function getActiveToolDefinitions(
   hasCapabilityRuntime = false,
   toolConstructionMode?: boolean,
   unlockedDeferredTools?: ReadonlySet<string>,
+  // FEATURE_221: white-label — re-brand the kodax_manual description per product.
+  selfManualProductName?: string,
 ): ReturnType<typeof listToolDefinitions> {
   const allTools = listToolDefinitions();
   if (activeToolNames.length === 0) {
@@ -138,15 +141,18 @@ export function getActiveToolDefinitions(
       && (allowManagedProtocolTool || !isManagedProtocolToolName(tool.name))
     ))
     .map((tool) => {
+      // FEATURE_221: white-label the kodax_manual description (no-op unless a
+      // non-default productName is set, so the default surface is unchanged).
+      const branded = withManualToolBranding(tool, selfManualProductName);
       // FEATURE_189 Batch 3 B.2 — progressive disclosure: deferred tools
       // emit a one-line searchHint instead of the full description until
       // the per-context unlock set marks them. The schema parameters are
       // unchanged so the tool stays callable with just the hint, but the
       // model only sees the rich teaching content after `tool_search`.
-      if (!isDeferredTool(tool.name)) return tool;
-      if (unlockedDeferredTools && unlockedDeferredTools.has(tool.name)) return tool;
-      const hint = DEFERRED_TOOL_HINTS[tool.name];
-      if (!hint) return tool;
-      return { ...tool, description: hint };
+      if (!isDeferredTool(branded.name)) return branded;
+      if (unlockedDeferredTools && unlockedDeferredTools.has(branded.name)) return branded;
+      const hint = DEFERRED_TOOL_HINTS[branded.name];
+      if (!hint) return branded;
+      return { ...branded, description: hint };
     });
 }

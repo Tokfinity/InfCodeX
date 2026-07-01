@@ -89,11 +89,18 @@ describe('FEATURE_221 injectable self-manual', () => {
     expect(buildSelfKnowledgeRoutingRule()).toContain('KodaX self-knowledge');
   });
 
-  it('re-brands the config-path clause too (no leftover "KodaX uses" for a consumer)', () => {
-    const rule = buildSelfKnowledgeRoutingRule('KodaX-Space');
-    expect(rule).toContain('does not match KodaX-Space — KodaX-Space uses');
-    // Default stays byte-identical at the clause.
-    expect(buildSelfKnowledgeRoutingRule()).toContain('does not match KodaX — KodaX uses');
+  it('drops the KodaX config-path clause for a re-branded product (keeps it for KodaX)', () => {
+    const consumer = buildSelfKnowledgeRoutingRule('KodaX-Space');
+    // No KodaX config-path leak in a white-labeled routing rule.
+    expect(consumer).not.toContain('~/.kodax');
+    expect(consumer).not.toContain('KODAX_');
+    expect(consumer).toContain('does not match KodaX-Space.');
+    // Anti-Claude-Code/Codex framing is still present.
+    expect(consumer).toContain('Only bring up Claude Code or Codex');
+    // KodaX's own rule keeps the config-path clause (default byte-identical).
+    const kodax = buildSelfKnowledgeRoutingRule();
+    expect(kodax).toContain('does not match KodaX — KodaX uses');
+    expect(kodax).toContain('~/.kodax/config.json and KODAX_* env vars');
   });
 
   it('tolerates an injected topic with a missing (null) body — no raw TypeError', () => {

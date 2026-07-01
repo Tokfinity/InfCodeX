@@ -26,6 +26,7 @@ import {
   listToolDefinitions,
 } from '../../../tools/registry.js';
 import { DISPATCH_RUN_WORKFLOW_NUDGE } from '../../../tools/tool-definitions.js';
+import { withManualToolBranding } from '../../../self-knowledge/tool-description.js';
 import type {
   KodaXEvents,
   KodaXToolExecutionContext,
@@ -143,7 +144,9 @@ function buildAgentToolsFromRegistry(
 
     tools.push(
       wrapCodingToolAsRunnable(
-        def,
+        // FEATURE_221: white-label the kodax_manual description per product
+        // (no-op for every other tool / the default product name).
+        withManualToolBranding(def, ctx.selfManual?.productName),
         handler as (
           input: Record<string, unknown>,
           execCtx: KodaXToolExecutionContext,
