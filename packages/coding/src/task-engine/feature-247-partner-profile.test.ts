@@ -246,4 +246,27 @@ describe('FEATURE_247 R4: onEffectiveConfig snapshot', () => {
     expect(merged?.summary).toBe('t');
     expect(merged?.rubricFamily).toBe('partner-research');
   });
+
+  // FEATURE_247 self-review fix: a plain (non-profile) run that sets
+  // context.taskVerification must NOT reach the sidecar verifier — pre-247,
+  // taskVerification shaped only the Worker role prompt. This keeps the default
+  // Coding Agent's verifier behavior unchanged for existing taskVerification callers.
+  it('resolveEffectiveVerification: taskVerification WITHOUT a profile does not reach the sidecar (returns undefined)', () => {
+    expect(
+      resolveEffectiveVerification({
+        provider: 'x',
+        context: { taskVerification: { summary: 'coder-only standard' } },
+      } as KodaXOptions),
+    ).toBeUndefined();
+    // But WITH a profile (even if the profile itself declares no verification),
+    // the per-task standard reaches the sidecar.
+    const partnerPerTask = resolveEffectiveVerification({
+      provider: 'x',
+      context: {
+        agentProfile: { surface: 'partner' },
+        taskVerification: { summary: 'partner per-task standard' },
+      },
+    } as KodaXOptions);
+    expect(partnerPerTask?.summary).toBe('partner per-task standard');
+  });
 });

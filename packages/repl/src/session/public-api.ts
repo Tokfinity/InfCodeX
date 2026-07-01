@@ -1143,7 +1143,10 @@ export function createSessionManager(opts?: { sessionsDir?: string }): SessionMa
       unarchiveSession,
       listRunningSessions,
       watchSessions,
-      compactSession,
+      // FEATURE_247 (R6): bind the manager's own storage so a manager-scoped
+      // compact always uses the manager's directory (a caller-supplied
+      // `storage`/`sessionsDir` cannot silently bypass the manager's isolation).
+      compactSession: (id, o) => compactSession(id, { ...o, storage }),
       storage,
     };
   }
@@ -1159,7 +1162,9 @@ export function createSessionManager(opts?: { sessionsDir?: string }): SessionMa
     unarchiveSession: (id) => unarchiveSessionImpl(id, sessionsDir),
     listRunningSessions,
     watchSessions: (cb) => watchSessionsImpl(cb, sessionsDir),
-    compactSession: (id, o) => compactSession(id, { ...o, sessionsDir }),
+    // FEATURE_247 (R6): bind the manager's sessionsDir-scoped storage so a
+    // caller-supplied `storage` cannot bypass the manager's dir isolation.
+    compactSession: (id, o) => compactSession(id, { ...o, storage }),
     storage,
   };
 }

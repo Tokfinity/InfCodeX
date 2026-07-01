@@ -24,7 +24,10 @@ import { mapLegacyReasoningModeToEffortIntent } from '@kodax-ai/llm';
 import { runKodaX } from './agent.js';
 import { listToolDefinitions } from './tools/index.js';
 import { emitEffectiveTaskConfig } from './agent-runtime/effective-config.js';
-import { applyToolVisibilityPolicy } from './agent-runtime/tool-resolution.js';
+import {
+  applyToolVisibilityPolicy,
+  getRuntimeActiveToolNames,
+} from './agent-runtime/tool-resolution.js';
 import {
   buildFallbackRoutingDecision,
   createReasoningPlan,
@@ -56,7 +59,6 @@ import type {
   KodaXOptions,
   KodaXResult,
   KodaXTaskRoutingDecision,
-  KodaXToolVisibilityPolicy,
 } from './types.js';
 
 export function resolveManagedAgentMode(options: KodaXOptions): KodaXAgentMode {
@@ -190,7 +192,7 @@ export async function dispatchManagedTask(
     // once at run start. Fires only when a subscriber is set ⇒ inert by default.
     emitEffectiveTaskConfig(saOptions, {
       agentMode: 'sa',
-      toolScope: computeVisibleToolScope(excludeTools, saOptions.context?.toolVisibilityPolicy),
+      toolScope: computeVisibleToolScope(saOptions, excludeTools),
     });
     return deps.runSA(saOptions, prompt);
   }
@@ -211,29 +213,41 @@ export async function dispatchManagedTask(
   // FEATURE_247 (R4): report the effective config for the AMA/AMAW path too.
   emitEffectiveTaskConfig(options, {
     agentMode,
-    toolScope: computeVisibleToolScope(
-      options.context?.excludeTools ?? [],
-      options.context?.toolVisibilityPolicy,
-    ),
+    toolScope: computeVisibleToolScope(options, options.context?.excludeTools ?? []),
   });
   const plan = await deps.buildPlan(options, prompt);
   return deps.runAMA(options, prompt, undefined, plan);
 }
 
 /**
- * FEATURE_247 (R4) — the model-visible tool scope for a run: every registered
- * tool name minus the excluded set. Mirrors `filterExcludedTools` so the
- * reported scope matches what the runner actually presents to the model.
+ * FEATURE_247 (R4) — the model-visible tool scope reported at run start.
+ *
+ * Mirrors the runner's real pipeline so the report matches what the model
+ * actually sees: registered tools, minus `excludeTools` (way IN), minus tools
+ * hidden by the profile `toolVisibilityPolicy` (way IN), minus the per-turn
+ * runtime OUT filters (`getRuntimeActiveToolNames`: MCP tools stripped without a
+ * capability runtime, repo-intelligence tools stripped when auto-repo is off,
+ * construction/self-modify tools stripped unless `toolConstructionMode`). This
+ * is a start-of-run snapshot; later per-turn repo-intel mode changes aren't
+ * tracked.
  */
 function computeVisibleToolScope(
+  options: KodaXOptions,
   excludeTools: readonly string[],
-  policy: KodaXToolVisibilityPolicy | undefined,
 ): string[] {
   const excluded = new Set(excludeTools);
-  const afterExclude = listToolDefinitions()
-    .map((tool) => tool.name)
-    .filter((name) => !excluded.has(name));
-  return applyToolVisibilityPolicy(afterExclude, policy);
+  const afterExcludeAndPolicy = applyToolVisibilityPolicy(
+    listToolDefinitions()
+      .map((tool) => tool.name)
+      .filter((name) => !excluded.has(name)),
+    options.context?.toolVisibilityPolicy,
+  );
+  return getRuntimeActiveToolNames(
+    afterExcludeAndPolicy,
+    options.context?.repoIntelligenceMode,
+    Boolean(options.extensionRuntime),
+    options.context?.toolConstructionMode,
+  );
 }
 
 async function executeRunManagedTask(

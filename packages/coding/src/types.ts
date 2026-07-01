@@ -120,8 +120,10 @@ import type {
   RecoveryLadderStep,
 } from './resilience/types.js';
 // FEATURE_247 (R2): the tool-visibility policy predicates on the stable
-// `sideEffect` contract. Type-only import (erased at runtime, no cycle).
-import type { ToolSideEffect } from './tools/types.js';
+// `sideEffect` contract. Imported from the leaf `./tools/side-effect.js` (not
+// `./tools/types.js`) so there is no import cycle — `tools/types.ts` imports
+// `KodaXToolExecutionContext` back from here.
+import type { ToolSideEffect } from './tools/side-effect.js';
 
 // Re-export all types from @kodax-ai/agent
 export type {

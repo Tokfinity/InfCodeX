@@ -17,15 +17,27 @@ import type {
 } from '../types.js';
 
 /**
- * Merge the profile-default verification standard with per-task
- * `context.taskVerification` (per-task fields win). Returns undefined when
- * neither is present. Shared with R3's sidecar wiring so the reported and the
- * enforced standard cannot drift.
+ * Resolve the verification standard that reaches the Sidecar Verifier.
+ *
+ * ONLY a profile (Partner) run contributes a verifier standard: the profile
+ * default (`agentProfile.verification`) merged with per-task
+ * `context.taskVerification` (per-task fields win — a shallow merge, so an
+ * array field like `criteria` on the per-task contract REPLACES the profile's
+ * rather than element-merging). Returns undefined when neither is present.
+ *
+ * A plain (non-profile) run that sets `context.taskVerification` returns
+ * `undefined` here: pre-FEATURE_247, `taskVerification` shaped only the Worker
+ * role prompt, never the sidecar verifier. Keeping that path unchanged
+ * preserves the default Coding Agent's verifier behavior (regression fix from
+ * the FEATURE_247 self-review). Shared with R3's sidecar wiring so the reported
+ * (R4) and enforced (R3) standard cannot drift.
  */
 export function resolveEffectiveVerification(
   options: KodaXOptions,
 ): KodaXTaskVerificationContract | undefined {
-  const profileDefault = options.context?.agentProfile?.verification;
+  const profile = options.context?.agentProfile;
+  if (!profile) return undefined;
+  const profileDefault = profile.verification;
   const perTask = options.context?.taskVerification;
   if (!profileDefault && !perTask) return undefined;
   return { ...profileDefault, ...perTask };
