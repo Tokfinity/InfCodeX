@@ -114,6 +114,11 @@ interface StartManagedParams {
   readonly signal: AbortSignal | undefined;
 }
 
+/** Prune the runDir map once it grows past this — the agent manager evicts the
+ *  oldest terminal runs at its own (lower) cap, so this only removes stragglers
+ *  it no longer tracks. Keeps the coding-side map from leaking run-dir strings. */
+const MAX_RETAINED_RUN_DIRS = 1000;
+
 export function createWorkflowRunManager(
   deps: { readonly now?: () => number } = {},
   agent: AgentWorkflowRunManager = createAgentWorkflowRunManager(deps),
@@ -130,6 +135,12 @@ export function createWorkflowRunManager(
     exec: (hooks: ManagedRunHooks) => Promise<RunWorkflowModuleOutcome>,
   ): ManagedWorkflowRun => {
     runDirs.set(params.runId, params.runDir);
+    if (runDirs.size > MAX_RETAINED_RUN_DIRS) {
+      const live = new Set(agent.list().map((snap) => snap.runId));
+      for (const id of runDirs.keys()) {
+        if (id !== params.runId && !live.has(id)) runDirs.delete(id);
+      }
+    }
     const limits = clampWorkflowLimits(params.meta, params.hostPolicy);
     const agentRun = agent.start<RunWorkflowModuleOutcome>({
       runId: params.runId,

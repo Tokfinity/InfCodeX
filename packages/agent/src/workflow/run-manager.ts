@@ -19,6 +19,7 @@ import {
   createWorkflowProcessTracker,
   isFinalWorkflowProcessStatus,
 } from './process.js';
+import { WorkflowAbortError } from './runtime.js';
 import type {
   WorkflowProcessEvent,
   WorkflowProcessSnapshot,
@@ -153,6 +154,15 @@ function terminalStatus(
   return status;
 }
 
+const isTerminalRunStatus = (status: ManagedWorkflowStatus): boolean =>
+  status === 'completed' || status === 'failed' || status === 'denied' || status === 'stopped';
+
+/** Cap on retained TERMINAL runs. Running / paused runs are never evicted. This
+ *  bounds heap for a long-lived host (e.g. a benchmark harness) that starts many
+ *  workflows in one process; recent runs stay queryable via get()/list(), and
+ *  same-session resume reads the durable run dir on disk, not this in-memory Map. */
+const MAX_RETAINED_TERMINAL_RUNS = 500;
+
 export function createWorkflowRunManager(
   deps: { readonly now?: () => number } = {},
 ): WorkflowRunManager {
@@ -176,13 +186,30 @@ export function createWorkflowRunManager(
       await new Promise<void>((resolve) => run.pauseWaiters.push(resolve));
     }
     if (run.controller.signal.aborted) {
-      throw new Error('workflow stopped');
+      // Throw the abort-typed error, not a bare Error: the runtime classifies a
+      // terminal error as a stop only via `instanceof WorkflowAbortError`
+      // (runtime.ts) — a plain Error would be recorded as `workflow_failed`
+      // instead of `workflow_stopped` when a run is stopped while paused.
+      throw new WorkflowAbortError('workflow stopped');
     }
   };
 
   const releasePauseWaiters = (run: MutableRun): void => {
     const waiters = run.pauseWaiters.splice(0);
     for (const resolve of waiters) resolve();
+  };
+
+  // Evict the oldest terminal runs once retention exceeds the cap, so a
+  // long-lived process that starts many workflows does not accumulate their
+  // MutableRun state indefinitely.
+  const pruneTerminalRuns = (): void => {
+    const terminal = [...runs.values()].filter((r) => isTerminalRunStatus(r.status));
+    const excess = terminal.length - MAX_RETAINED_TERMINAL_RUNS;
+    if (excess <= 0) return;
+    terminal
+      .sort((a, b) => (a.endedAt ?? 0) - (b.endedAt ?? 0))
+      .slice(0, excess)
+      .forEach((r) => runs.delete(r.runId));
   };
 
   const createRun = <TOutcome>(
@@ -252,6 +279,7 @@ export function createWorkflowRunManager(
       notifyProcess(run.process.setStatus('cancelled', 'workflow stopped'));
     }
     releasePauseWaiters(run);
+    pruneTerminalRuns();
   };
 
   return {
