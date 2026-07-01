@@ -65,6 +65,10 @@ function buildEntries(
   // white-label replace); a subset ⇒ exactly those (keep inherited mechanisms).
   const seedIds = baseTopics ?? MANUAL_TOPIC_IDS;
   for (const id of seedIds) {
+    // Dedup a caller-supplied baseTopics with a repeated id (else the index +
+    // ranked results would list it twice). MANUAL_TOPIC_IDS is already unique,
+    // so the default path is unaffected. Mirrors the extraTopics loop's guard.
+    if (byId.has(id)) continue;
     // A caller-supplied baseTopics could name an unknown id defensively; skip it.
     const base = MANUAL_REGISTRY[id];
     if (!base) continue;

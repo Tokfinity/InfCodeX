@@ -162,6 +162,15 @@ describe('FEATURE_221 baseTopics seed control (curate / replace)', () => {
     }
   });
 
+  it('dedups a repeated id in baseTopics (no duplicate index entry)', () => {
+    const index = resolveKodaXManual({}, { baseTopics: ['providers', 'providers', 'config'] }).content;
+    const providersLines = index.split('\n').filter((l) => l.startsWith('- providers:')).length;
+    expect(providersLines).toBe(1);
+    // both distinct ids still present
+    expect(index).toContain('- providers:');
+    expect(index).toContain('- config:');
+  });
+
   it('MANUAL_REGISTRY exposes every base topic body for build-time consumer docs', () => {
     for (const id of MANUAL_TOPIC_IDS) {
       const topic = MANUAL_REGISTRY[id];
