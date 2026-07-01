@@ -1374,6 +1374,16 @@ export interface KodaXOptions {
     readonly fast?: { readonly provider?: string; readonly model?: string };
     readonly deep?: { readonly provider?: string; readonly model?: string };
   };
+  /**
+   * Config-surface SDK peers for settings the llm layer reads via env (config
+   * surface expansion). Bridged to their KODAX_* env vars in runManagedTask (SDK
+   * outranks shell env). `maxOutputTokens` caps every provider call;
+   * `disablePromptCache` turns off Anthropic prompt caching; `lsp: false`
+   * disables LSP-assisted diagnostics.
+   */
+  maxOutputTokens?: number;
+  disablePromptCache?: boolean;
+  lsp?: boolean;
   /** FEATURE_221: SDK-consumer self-manual injection (product name + topics). */
   selfManual?: KodaXSelfManualConfig;
   /**

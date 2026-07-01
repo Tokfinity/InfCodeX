@@ -939,6 +939,23 @@ export function loadConfig(): {
   fastModel?: string;
   deepProvider?: string;
   deepModel?: string;
+  /**
+   * Config surface for settings the coding/llm layer reads only via env (it has
+   * no config access). Bridged to their KODAX_* env vars in prepareRuntimeConfig
+   * (env-wins). See CONFIG_ENV_BRIDGES for the mapping.
+   */
+  maxOutputTokens?: number;
+  disablePromptCache?: boolean;
+  lsp?: boolean;
+  lspAutoDownload?: boolean;
+  acpLogLevel?: string;
+  sessionRetentionDays?: number;
+  repoIntelligence?: {
+    toolWaitMs?: number;
+    workerTimeoutMs?: number;
+    workerOldSpaceMb?: number;
+    storageDir?: string;
+  };
 } {
   try {
     if (fsSync.existsSync(KODAX_CONFIG_FILE)) {
@@ -967,6 +984,18 @@ export function loadConfig(): {
         fastModel?: string;
         deepProvider?: string;
         deepModel?: string;
+        maxOutputTokens?: number;
+        disablePromptCache?: boolean;
+        lsp?: boolean;
+        lspAutoDownload?: boolean;
+        acpLogLevel?: string;
+        sessionRetentionDays?: number;
+        repoIntelligence?: {
+          toolWaitMs?: number;
+          workerTimeoutMs?: number;
+          workerOldSpaceMb?: number;
+          storageDir?: string;
+        };
       };
       // FEATURE_078: collapse `reasoningCeiling` (preferred) onto
       // `reasoningMode` so existing call sites that read
@@ -1145,6 +1174,39 @@ function applyModelTierRuntimeEnv(config: ReturnType<typeof loadConfig>): void {
   bridge(config.deepModel, 'KODAX_DEEP_MODEL');
 }
 
+/**
+ * Config surface — the single table of config.json fields bridged to the KODAX_*
+ * env vars the coding / llm / repo-intelligence layers read (they have no config
+ * access). `value` returns the env string to install, or undefined to skip.
+ * Env-wins: a shell-set var is never overwritten (a CI/script override beats the
+ * file). ADD A NEW BRIDGED SETTING HERE — one row, plus the config-type field.
+ * (Bootstrap-timing vars like KODAX_HEAP_LIMIT / KODAX_PROVIDER are read before
+ * this runs, so they stay env-only — see config.example.jsonc.)
+ */
+const CONFIG_ENV_BRIDGES: ReadonlyArray<{
+  readonly env: string;
+  readonly value: (config: ReturnType<typeof loadConfig>) => string | undefined;
+}> = [
+  { env: 'KODAX_MAX_OUTPUT_TOKENS', value: (c) => (typeof c.maxOutputTokens === 'number' ? String(c.maxOutputTokens) : undefined) },
+  { env: 'KODAX_DISABLE_PROMPT_CACHE', value: (c) => (c.disablePromptCache === true ? '1' : undefined) },
+  { env: 'KODAX_LSP', value: (c) => (c.lsp === false ? '0' : undefined) },
+  { env: 'KODAX_LSP_DOWNLOAD', value: (c) => (c.lspAutoDownload === true ? '1' : undefined) },
+  { env: 'KODAX_ACP_LOG', value: (c) => (c.acpLogLevel && c.acpLogLevel.trim().length > 0 ? c.acpLogLevel.trim() : undefined) },
+  { env: 'KODAX_REPO_INTELLIGENCE_TOOL_WAIT_MS', value: (c) => (typeof c.repoIntelligence?.toolWaitMs === 'number' ? String(c.repoIntelligence.toolWaitMs) : undefined) },
+  { env: 'KODAX_REPO_INTELLIGENCE_WORKER_TIMEOUT_MS', value: (c) => (typeof c.repoIntelligence?.workerTimeoutMs === 'number' ? String(c.repoIntelligence.workerTimeoutMs) : undefined) },
+  { env: 'KODAX_REPO_INTELLIGENCE_WORKER_OLD_SPACE_MB', value: (c) => (typeof c.repoIntelligence?.workerOldSpaceMb === 'number' ? String(c.repoIntelligence.workerOldSpaceMb) : undefined) },
+  { env: 'KODAX_REPO_INTELLIGENCE_STORAGE_DIR', value: (c) => (c.repoIntelligence?.storageDir?.trim() || undefined) },
+];
+
+function applyConfigSurfaceBridges(config: ReturnType<typeof loadConfig>): void {
+  for (const b of CONFIG_ENV_BRIDGES) {
+    const v = b.value(config);
+    if (v !== undefined && !process.env[b.env]) {
+      process.env[b.env] = v;
+    }
+  }
+}
+
 export function prepareRuntimeConfig(): ReturnType<typeof loadConfig> {
   ensureShellEnvironmentHydrated();
   const config = loadConfig();
@@ -1154,6 +1216,7 @@ export function prepareRuntimeConfig(): ReturnType<typeof loadConfig> {
   applyStallSidecarRuntimeEnv(config);
   applyFallbackRuntimeEnv(config);
   applyModelTierRuntimeEnv(config);
+  applyConfigSurfaceBridges(config);
   registerConfiguredCustomProviders(config);
   // Initialize i18n locale from config (falls back to system LANG)
   setLocale(config.locale);
@@ -1188,6 +1251,19 @@ export function saveConfig(config: {
   fastModel?: string;
   deepProvider?: string;
   deepModel?: string;
+  /** Config surface bridged to KODAX_* env for the coding/llm layer. */
+  maxOutputTokens?: number;
+  disablePromptCache?: boolean;
+  lsp?: boolean;
+  lspAutoDownload?: boolean;
+  acpLogLevel?: string;
+  sessionRetentionDays?: number;
+  repoIntelligence?: {
+    toolWaitMs?: number;
+    workerTimeoutMs?: number;
+    workerOldSpaceMb?: number;
+    storageDir?: string;
+  };
 }): void {
   const current = loadConfig();
   const merged = { ...current, ...config };

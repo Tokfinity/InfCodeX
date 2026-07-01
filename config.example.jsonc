@@ -204,16 +204,33 @@
 
   // ─── 11. Sidecar Verifier 日志(可选) ──────────────────────────────
   // 开启后持久化 verifier gate + verdict 摘要,等价于 KODAX_VERIFIER_LOG=1。
-  // "verifierLog": true
+  // "verifierLog": true,
 
-  // 相关环境变量(不写进 JSON,在 shell 里设置):
+  // ─── 12. 运行时设置(会桥接到对应环境变量,shell 覆盖本文件)──────────
+  // "maxOutputTokens": 8192,        // 每次 provider 调用的最大输出 token(成本闸)
+  // "disablePromptCache": false,    // true = 关闭 Anthropic prompt 缓存
+  // "lsp": true,                    // false = 关闭 LSP 辅助诊断
+  // "lspAutoDownload": false,       // true = 允许自动下载 LSP server 二进制
+  // "acpLogLevel": "info",          // ACP serve 日志级别
+  // "sessionRetentionDays": 0,      // >0 = 后台清理这么多天前的会话文件(默认不清)
+
+  // ─── 13. 仓库智能 worker 调优(可选,一般不用改)────────────────────
+  // "repoIntelligence": {
+  //   "toolWaitMs": 8000,           // 工具等待仓库智能结果的超时
+  //   "workerTimeoutMs": 60000,     // 语义 worker 超时
+  //   "workerOldSpaceMb": 2048,     // 语义 worker 的 V8 堆上限
+  //   "storageDir": "…"             // 仓库智能索引的存储目录
+  // },
+
+  // 相关环境变量(不写进 JSON,在 shell 里设置。优先级:shell env > 本文件):
   //   KODAX_VERIFIER_LOG=1            打开 verifier 诊断日志
   //   KODAX_EFFORT=<value>           启动时覆盖 effort(auto/off/low/…/max)
+  //   上面 §1/§12/§13 的字段各自对应一个 KODAX_* 环境变量(如 maxOutputTokens ↔
+  //   KODAX_MAX_OUTPUT_TOKENS、fastProvider ↔ KODAX_FAST_PROVIDER),在 shell 里设了
+  //   就临时覆盖本文件。子 Agent 档位覆盖:KODAX_FAST/DEEP_PROVIDER / _MODEL。
   //
-  // ─── 子 Agent 模型档位的环境变量覆盖(可选)───────────────────────────
-  //   优先用上面的 config 字段 fastProvider/fastModel/deepProvider/deepModel;
-  //   下面这些环境变量是 shell 里的临时覆盖(设了就赢过 config 文件)。语义相同:
-  //   'fast' 只对只读子 Agent、'deep' 对任意子 Agent、未配则继承父 Agent 模型。
-  //   KODAX_FAST_PROVIDER / KODAX_FAST_MODEL   便宜档(如 deepseek / deepseek-v4-flash)
-  //   KODAX_DEEP_PROVIDER / KODAX_DEEP_MODEL   强档(如 zhipu-coding / glm-5.2)
+  // 仅环境变量(启动早期/模块加载时读取,配置文件那时还没加载,故无法用 config 字段):
+  //   KODAX_HEAP_LIMIT=<MB>          子进程 V8 堆上限(默认 4096;主进程用启动脚本设)
+  //   KODAX_PROVIDER=<name>          缺省 provider 的兜底默认;日常请直接用上面的
+  //                                  "provider" 字段(它是 provider 的配置来源)
 }

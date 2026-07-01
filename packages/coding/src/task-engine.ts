@@ -125,11 +125,29 @@ export function applyModelTiersFromOptions(modelTiers: KodaXOptions['modelTiers'
   set(modelTiers.deep?.model, 'KODAX_DEEP_MODEL');
 }
 
+/**
+ * M2 / config-surface — bridge the SDK peers of env-read settings to their
+ * KODAX_* env vars (unconditional: SDK outranks shell env). Only fires for
+ * fields the embedder actually set, so the CLI/config.json path is untouched.
+ */
+export function applyConfigOptionsToEnv(options: KodaXOptions): void {
+  if (typeof options.maxOutputTokens === 'number') {
+    process.env.KODAX_MAX_OUTPUT_TOKENS = String(options.maxOutputTokens);
+  }
+  if (options.disablePromptCache === true) {
+    process.env.KODAX_DISABLE_PROMPT_CACHE = '1';
+  }
+  if (options.lsp === false) {
+    process.env.KODAX_LSP = '0';
+  }
+}
+
 export async function runManagedTask(
   options: KodaXOptions,
   prompt: string,
 ): Promise<KodaXResult> {
   applyModelTiersFromOptions(options.modelTiers);
+  applyConfigOptionsToEnv(options);
   const result = await executeRunManagedTask(options, prompt);
   const reshaped = reshapeToUserConversation(result, options, prompt);
   // FEATURE_247 (R1): echo the SDK-consumer profile back so the embedder can

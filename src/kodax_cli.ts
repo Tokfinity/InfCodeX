@@ -103,6 +103,7 @@ import {
 } from '@kodax-ai/agent';
 import {
   getGitRoot,
+  loadConfig,
   prepareRuntimeConfig,
   FileSessionStorage,
   dedupeSessions,
@@ -650,7 +651,11 @@ async function main() {
   // file count, so retention is a housekeeping convenience, not a perf
   // requirement. Fire-and-forget — never blocks startup; errors are swallowed
   // inside cleanupOldSessions, and a non-positive value is a no-op.
-  const sessionRetentionDays = Number(process.env.KODAX_SESSION_RETENTION_DAYS ?? 0);
+  // Read from env (shell override) then config.json (persistent). This runs at
+  // startup before prepareRuntimeConfig's bridge, so it reads config directly.
+  const sessionRetentionDays = Number(
+    process.env.KODAX_SESSION_RETENTION_DAYS ?? loadConfig().sessionRetentionDays ?? 0,
+  );
   void new FileSessionStorage().cleanupOldSessions(sessionRetentionDays);
 
   const program = configureKodaXRootCommand(new Command()
