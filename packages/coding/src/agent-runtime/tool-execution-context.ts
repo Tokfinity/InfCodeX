@@ -184,11 +184,39 @@ export function buildToolExecutionContext(
     // gets the same scout-then-author tool without AMA self-activating from NL.
     // SA (solo) never hosts a workflow. The lazy import keeps the static graph
     // acyclic (workflows -> agent-runtime; never the reverse).
-    workflowHost: buildWorkflowToolHost(options),
+    workflowHost: buildWorkflowToolHost(options, sessionId),
   };
 }
 
-function buildWorkflowToolHost(options: KodaXOptions): WorkflowToolHost | undefined {
+/**
+ * FEATURE_247 (R7/R8) — build the `hostMetadata` attribution map stamped onto
+ * every workflow process event/snapshot for an inline-started `run_workflow`
+ * run, so a host (KodaX-Space) can recover the originating session / surface /
+ * project. Each field is included only when known (all values are strings, as
+ * `WorkflowProcessSnapshot.hostMetadata` is `Record<string,string>`):
+ *   - `sessionId`   — runtime-resolved session id
+ *   - `surface`     — SDK-consumer profile surface (e.g. `code` | `partner`)
+ *   - `taskSurface` — task surface (`cli` | `repl` | `plan`)
+ *   - `projectRoot` — workspace/git root
+ */
+export function buildWorkflowHostMetadata(
+  options: KodaXOptions,
+  sessionId: string | undefined,
+): Record<string, string> {
+  return {
+    ...(sessionId ? { sessionId } : {}),
+    ...(options.context?.agentProfile?.surface
+      ? { surface: options.context.agentProfile.surface }
+      : {}),
+    ...(options.context?.taskSurface ? { taskSurface: options.context.taskSurface } : {}),
+    ...(options.context?.gitRoot ? { projectRoot: options.context.gitRoot } : {}),
+  };
+}
+
+function buildWorkflowToolHost(
+  options: KodaXOptions,
+  sessionId?: string,
+): WorkflowToolHost | undefined {
   const runsBaseDir = options.workflowRunsBaseDir;
   // Opt-in diagnostic for "the Worker has no run_workflow" reports: shows the
   // exact gate inputs at every tool-context build so a live run pinpoints which
@@ -241,6 +269,12 @@ function buildWorkflowToolHost(options: KodaXOptions): WorkflowToolHost | undefi
         ? { resumeFromRunDir: join(runsBaseDir, resumeFromRunId) }
         : {}),
       ...(options.abortSignal ? { signal: options.abortSignal } : {}),
+      // FEATURE_247 (R7/R8): host attribution on workflow process events. The
+      // hostMetadata map flows through the tracker onto every emitted
+      // WorkflowProcessSnapshot, so a consumer (KodaX-Space) subscribed to
+      // onWorkflowProcessEvent can recover which session / surface / project an
+      // inline-started run belongs to.
+      processMetadata: { hostMetadata: buildWorkflowHostMetadata(options, sessionId) },
     });
     if (started.kind === 'declined') {
       return { kind: 'declined', reason: started.reason };

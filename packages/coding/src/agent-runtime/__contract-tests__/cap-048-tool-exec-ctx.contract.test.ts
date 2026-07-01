@@ -35,7 +35,10 @@ import path from 'node:path';
 import { describe, expect, it } from 'vitest';
 
 import type { KodaXEvents, KodaXManagedProtocolPayload, KodaXOptions } from '../../types.js';
-import { buildToolExecutionContext } from '../tool-execution-context.js';
+import {
+  buildToolExecutionContext,
+  buildWorkflowHostMetadata,
+} from '../tool-execution-context.js';
 
 function makeRef(): { current: KodaXManagedProtocolPayload | undefined } {
   return { current: undefined };
@@ -239,6 +242,36 @@ describe('CAP-048: tool execution context construction contract', () => {
     });
     expect(ctx.workflowHost).toBeDefined();
     expect(typeof ctx.workflowHost?.runInline).toBe('function');
+  });
+
+  it('FEATURE_247 (R7/R8): buildWorkflowHostMetadata carries sessionId / surface / taskSurface / projectRoot for host attribution', () => {
+    const meta = buildWorkflowHostMetadata(
+      {
+        provider: 'anthropic',
+        context: {
+          gitRoot: '/repo',
+          taskSurface: 'repl',
+          agentProfile: { surface: 'partner' },
+        },
+      } as unknown as KodaXOptions,
+      'sess-42',
+    );
+    expect(meta).toEqual({
+      sessionId: 'sess-42',
+      surface: 'partner',
+      taskSurface: 'repl',
+      projectRoot: '/repo',
+    });
+  });
+
+  it('FEATURE_247 (R7/R8): buildWorkflowHostMetadata omits unknown fields (empty map when nothing is known)', () => {
+    expect(
+      buildWorkflowHostMetadata({ provider: 'anthropic', context: {} } as KodaXOptions, undefined),
+    ).toEqual({});
+    // sessionId-only is valid (a headless run with no workspace/profile).
+    expect(
+      buildWorkflowHostMetadata({ provider: 'anthropic', context: {} } as KodaXOptions, 'sess-1'),
+    ).toEqual({ sessionId: 'sess-1' });
   });
 
   it('CAP-TOOL-CTX-010: workflowHost is undefined without a runs dir, or in any non-amaw mode (ama / sa / unset)', () => {
