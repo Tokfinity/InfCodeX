@@ -20,7 +20,7 @@
  * underlying helpers live in `./task-engine/_internal/managed-task/checkpoint.ts`
  * and are still used at runtime by the Runner path.
  */
-import { mapLegacyReasoningModeToEffortIntent } from '@kodax-ai/llm';
+import { mapLegacyReasoningModeToEffortIntent, runWithScopedConfig } from '@kodax-ai/llm';
 import { runKodaX } from './agent.js';
 import { listToolDefinitions } from './tools/index.js';
 import { emitEffectiveTaskConfig } from './agent-runtime/effective-config.js';
@@ -107,55 +107,35 @@ export const __checkpointTestables = {
   CHECKPOINT_FILE,
 };
 
-/**
- * M2 — bridge an SDK embedder's `KodaXOptions.modelTiers` to the
- * KODAX_FAST/DEEP_PROVIDER/MODEL env vars the coding layer's model-hint router
- * reads. Unconditional (SDK outranks shell env per the precedence rule) and only
- * fires when the embedder actually set modelTiers, so the CLI/config.json path
- * (which bridges config -> env in prepareRuntimeConfig, env-wins) is untouched.
- */
-export function applyModelTiersFromOptions(modelTiers: KodaXOptions['modelTiers']): void {
-  if (!modelTiers) return;
-  const set = (value: string | undefined, envVar: string): void => {
-    if (value && value.trim().length > 0) process.env[envVar] = value.trim();
-  };
-  set(modelTiers.fast?.provider, 'KODAX_FAST_PROVIDER');
-  set(modelTiers.fast?.model, 'KODAX_FAST_MODEL');
-  set(modelTiers.deep?.provider, 'KODAX_DEEP_PROVIDER');
-  set(modelTiers.deep?.model, 'KODAX_DEEP_MODEL');
-}
-
-/**
- * M2 / config-surface — bridge the SDK peers of env-read settings to their
- * KODAX_* env vars (unconditional: SDK outranks shell env). Only fires for
- * fields the embedder actually set, so the CLI/config.json path is untouched.
- */
-export function applyConfigOptionsToEnv(options: KodaXOptions): void {
-  if (typeof options.maxOutputTokens === 'number') {
-    process.env.KODAX_MAX_OUTPUT_TOKENS = String(options.maxOutputTokens);
-  }
-  if (options.disablePromptCache === true) {
-    process.env.KODAX_DISABLE_PROMPT_CACHE = '1';
-  }
-  if (options.lsp === false) {
-    process.env.KODAX_LSP = '0';
-  }
-}
-
 export async function runManagedTask(
   options: KodaXOptions,
   prompt: string,
 ): Promise<KodaXResult> {
-  applyModelTiersFromOptions(options.modelTiers);
-  applyConfigOptionsToEnv(options);
-  const result = await executeRunManagedTask(options, prompt);
-  const reshaped = reshapeToUserConversation(result, options, prompt);
-  // FEATURE_247 (R1): echo the SDK-consumer profile back so the embedder can
-  // confirm which profile actually ran (Partner vs default Coding Agent).
-  // Pure passthrough — omitted entirely for the default path.
-  return options.context?.agentProfile
-    ? { ...reshaped, agentProfile: options.context.agentProfile }
-    : reshaped;
+  // Run-scoped config via AsyncLocalStorage (concurrency-safe): each concurrent
+  // SDK session carries its own tier / token / prompt-cache / lsp overrides in
+  // its own async context, so they never clobber one another through the global
+  // process.env. Readers (model-hint-routing, provider max-output-tokens +
+  // prompt-cache, lsp service) check this store first, then fall back to env for
+  // the CLI / config.json path (env-bridged, single-session). Only the fields
+  // the caller actually set enter the store, so the CLI path stays on env.
+  return runWithScopedConfig(
+    {
+      ...(options.modelTiers !== undefined ? { modelTiers: options.modelTiers } : {}),
+      ...(options.maxOutputTokens !== undefined ? { maxOutputTokens: options.maxOutputTokens } : {}),
+      ...(options.disablePromptCache !== undefined ? { disablePromptCache: options.disablePromptCache } : {}),
+      ...(options.lsp !== undefined ? { lsp: options.lsp } : {}),
+    },
+    async () => {
+      const result = await executeRunManagedTask(options, prompt);
+      const reshaped = reshapeToUserConversation(result, options, prompt);
+      // FEATURE_247 (R1): echo the SDK-consumer profile back so the embedder can
+      // confirm which profile actually ran (Partner vs default Coding Agent).
+      // Pure passthrough — omitted entirely for the default path.
+      return options.context?.agentProfile
+        ? { ...reshaped, agentProfile: options.context.agentProfile }
+        : reshaped;
+    },
+  );
 }
 
 /**

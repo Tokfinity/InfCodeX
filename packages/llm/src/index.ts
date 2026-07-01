@@ -208,6 +208,10 @@ export { parseToolInputWithSalvage } from './providers/tool-input-parser.js';
 
 // FEATURE_240 (v0.7.56): provider-neutral consumer-side stopReason classifier.
 export { classifyStopReason, isCleanStop } from './stop-reason.js';
+
+// Run-scoped config (concurrency-safe per-run overrides via AsyncLocalStorage).
+export { runWithScopedConfig, getRunScopedConfig } from './run-scoped-config.js';
+export type { KodaXRunScopedConfig } from './run-scoped-config.js';
 export type { KodaXStopClass } from './stop-reason.js';
 
 // ============== Cost Tracking ==============

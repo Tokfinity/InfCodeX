@@ -36,6 +36,7 @@ export interface ReasoningRejectionGuard {
 import { parseRetryAfter, extractHeadersFromError } from '../retry/retry-after.js';
 import type { RetryAfterSource } from '../retry/retry-after.js';
 import { KODAX_MAX_TOKENS } from '../constants.js';
+import { getRunScopedConfig } from '../run-scoped-config.js';
 import {
   cloneCapabilityProfile,
   NATIVE_PROVIDER_CAPABILITY_PROFILE,
@@ -214,7 +215,9 @@ export abstract class KodaXBaseProvider {
     if (this.maxOutputTokensOverride !== undefined) {
       return this.maxOutputTokensOverride;
     }
-    const envOverride = parseEnvInt(process.env.KODAX_MAX_OUTPUT_TOKENS);
+    // Run-scoped (concurrency-safe) first, then the global env fallback.
+    const envOverride = getRunScopedConfig()?.maxOutputTokens
+      ?? parseEnvInt(process.env.KODAX_MAX_OUTPUT_TOKENS);
     if (envOverride !== undefined) {
       return envOverride;
     }

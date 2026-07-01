@@ -15,6 +15,7 @@
  */
 
 import path from 'path';
+import { getRunScopedConfig } from '@kodax-ai/llm';
 import type { Diagnostic, Position } from 'vscode-languageserver-protocol';
 import { languageIdForPath } from './language.js';
 import { report } from './diagnostic.js';
@@ -370,7 +371,11 @@ let exitCleanupRegistered = false;
  * so tools no-op). `KODAX_DEBUG_LSP` routes internal logs to stderr.
  */
 export function getDefaultLspService(): LspService | undefined {
-  if (process.env.KODAX_LSP === '0') return undefined;
+  // Run-scoped (concurrency-safe) first, then the global env fallback.
+  const scopedLsp = getRunScopedConfig()?.lsp;
+  if (scopedLsp === false || (scopedLsp === undefined && process.env.KODAX_LSP === '0')) {
+    return undefined;
+  }
   if (!defaultService) {
     defaultService = new LspService({
       moduleUrl: import.meta.url,

@@ -1367,19 +1367,21 @@ export interface KodaXOptions {
    * concrete model name — the authoring model has no cognition of the
    * embedder's configured providers). 'fast' routes read-only children only
    * (write/codegen stays on the parent — a quality guard); 'deep' routes any
-   * child; an unset tier inherits the parent provider/model. The host bridges
-   * these to KODAX_FAST/DEEP_PROVIDER/MODEL, which the coding layer reads.
+   * child; an unset tier inherits the parent provider/model. Carried run-scoped
+   * (AsyncLocalStorage) by runManagedTask so concurrent SDK sessions never
+   * clobber each other; KODAX_FAST/DEEP_PROVIDER/MODEL is the env fallback used
+   * by the CLI / config.json path.
    */
   modelTiers?: {
     readonly fast?: { readonly provider?: string; readonly model?: string };
     readonly deep?: { readonly provider?: string; readonly model?: string };
   };
   /**
-   * Config-surface SDK peers for settings the llm layer reads via env (config
-   * surface expansion). Bridged to their KODAX_* env vars in runManagedTask (SDK
-   * outranks shell env). `maxOutputTokens` caps every provider call;
-   * `disablePromptCache` turns off Anthropic prompt caching; `lsp: false`
-   * disables LSP-assisted diagnostics.
+   * Config-surface SDK peers for settings the llm layer otherwise reads via env.
+   * Carried run-scoped (AsyncLocalStorage) by runManagedTask so concurrent SDK
+   * sessions are isolated; the KODAX_* env vars are the CLI/config.json fallback.
+   * `maxOutputTokens` caps every provider call; `disablePromptCache` turns off
+   * Anthropic prompt caching; `lsp: false` disables LSP-assisted diagnostics.
    */
   maxOutputTokens?: number;
   disablePromptCache?: boolean;

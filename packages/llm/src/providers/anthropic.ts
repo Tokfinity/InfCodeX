@@ -38,6 +38,7 @@ import {
   lowerCacheBoundaries,
 } from '../cache-control.js';
 import { readImageFileAsBase64, resolveImageMediaType } from './image-serialization.js';
+import { getRunScopedConfig } from '../run-scoped-config.js';
 
 const KODAX_ANTHROPIC_COMPAT_USER_AGENT = 'KodaX';
 const KODAX_ANTHROPIC_EFFORT_BETA_HEADER = 'effort-2025-11-24';
@@ -450,11 +451,17 @@ export abstract class KodaXAnthropicCompatProvider extends KodaXBaseProvider {
    * original string unchanged so prompt caching can be disabled at
    * runtime without redeploying.
    */
+  /** Run-scoped (concurrency-safe) first, then the global env fallback. */
+  private isPromptCacheDisabled(): boolean {
+    return getRunScopedConfig()?.disablePromptCache === true
+      || process.env.KODAX_DISABLE_PROMPT_CACHE === '1';
+  }
+
   protected applyCacheControlToSystem(
     systemText: string,
   ): string | Anthropic.Messages.TextBlockParam[] {
     if (!systemText.trim()) return systemText;
-    if (process.env.KODAX_DISABLE_PROMPT_CACHE === '1') return systemText;
+    if (this.isPromptCacheDisabled()) return systemText;
     const blocks = insertCacheBoundary(
       [{ type: 'text', text: systemText }],
       'system',
@@ -477,7 +484,7 @@ export abstract class KodaXAnthropicCompatProvider extends KodaXBaseProvider {
     tools: KodaXToolDefinition[],
   ): Anthropic.Messages.Tool[] {
     if (tools.length === 0) return tools as Anthropic.Messages.Tool[];
-    if (process.env.KODAX_DISABLE_PROMPT_CACHE === '1') {
+    if (this.isPromptCacheDisabled()) {
       return tools as Anthropic.Messages.Tool[];
     }
     const out = tools.slice() as Anthropic.Messages.Tool[];

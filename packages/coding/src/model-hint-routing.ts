@@ -22,6 +22,8 @@
  * Priority in `child-executor` is: explicit bundle.provider/model (FEATURE_102
  * P2) > specialist's declared model (FEATURE_191) > this hint tier > parent.
  */
+import { getRunScopedConfig } from '@kodax-ai/llm';
+
 import type { KodaXChildModelHint } from './types.js';
 
 export interface ResolvedHintTier {
@@ -29,9 +31,17 @@ export interface ResolvedHintTier {
   readonly model?: string;
 }
 
-function readTier(providerEnv: string, modelEnv: string): ResolvedHintTier | undefined {
-  const provider = process.env[providerEnv]?.trim() || undefined;
-  const model = process.env[modelEnv]?.trim() || undefined;
+/**
+ * Resolve one tier: run-scoped config (concurrency-safe, from KodaXOptions.
+ * modelTiers) first, then the global env fallback (CLI / config.json bridge).
+ */
+function resolveTier(
+  scoped: { readonly provider?: string; readonly model?: string } | undefined,
+  providerEnv: string,
+  modelEnv: string,
+): ResolvedHintTier | undefined {
+  const provider = scoped?.provider?.trim() || process.env[providerEnv]?.trim() || undefined;
+  const model = scoped?.model?.trim() || process.env[modelEnv]?.trim() || undefined;
   if (!provider && !model) return undefined;
   return { provider, model };
 }
@@ -45,12 +55,13 @@ export function resolveModelHintTier(
   hint: KodaXChildModelHint | undefined,
   readOnly: boolean,
 ): ResolvedHintTier | undefined {
+  const tiers = getRunScopedConfig()?.modelTiers;
   if (hint === 'fast') {
     // Cheap tier is read-only-gated per the F102 gating eval caveat.
-    return readOnly ? readTier('KODAX_FAST_PROVIDER', 'KODAX_FAST_MODEL') : undefined;
+    return readOnly ? resolveTier(tiers?.fast, 'KODAX_FAST_PROVIDER', 'KODAX_FAST_MODEL') : undefined;
   }
   if (hint === 'deep') {
-    return readTier('KODAX_DEEP_PROVIDER', 'KODAX_DEEP_MODEL');
+    return resolveTier(tiers?.deep, 'KODAX_DEEP_PROVIDER', 'KODAX_DEEP_MODEL');
   }
   return undefined;
 }
