@@ -216,6 +216,17 @@ export interface KodaXActivityEventMeta extends KodaXWorkflowEventMeta {
   readonly childAgentName?: string;
   readonly parentToolId?: string;
   readonly liveOnly?: boolean;
+  /**
+   * FEATURE_247 (R8) — session id this event belongs to. Lets a host that runs
+   * concurrent Partner/Coder sessions attribute a streamed event to the right
+   * session. Absent on paths that do not yet thread the resolved session id.
+   */
+  readonly sessionId?: string;
+  /**
+   * FEATURE_247 (R8) — SDK-consumer agent profile that produced this event.
+   * Absent ⇒ default Coding Agent (or an event emitted before a profile is known).
+   */
+  readonly agentProfile?: KodaXAgentProfile;
 }
 
 /**
@@ -243,6 +254,17 @@ export interface KodaXSidecarMessageEvent {
   readonly content: string;
   readonly suggestedFix?: string;
   readonly trace?: string;
+  /**
+   * FEATURE_247 (R3/R8) — session id the verdict belongs to, so a host running
+   * concurrent Partner/Coder sessions can correlate a sidecar verdict to the
+   * right session. Absent when the resolved session id is not available.
+   */
+  readonly sessionId?: string;
+  /**
+   * FEATURE_247 (R3/R8) — SDK-consumer agent profile whose output was verified.
+   * Absent ⇒ default Coding Agent.
+   */
+  readonly agentProfile?: KodaXAgentProfile;
 }
 
 export interface KodaXTodoDriftWarningEvent {
@@ -660,9 +682,61 @@ export interface KodaXTaskVerificationContract {
   requiredEvidence?: string[];
   requiredChecks?: string[];
   capabilityHints?: KodaXTaskCapabilityHint[];
-  rubricFamily?: 'code-review' | 'frontend' | 'product-completeness' | 'functionality' | 'code-quality';
+  rubricFamily?:
+    | 'code-review'
+    | 'frontend'
+    | 'product-completeness'
+    | 'functionality'
+    | 'code-quality'
+    // FEATURE_247: profile-scoped families for non-coding SDK surfaces (e.g.
+    // KodaX-Space Partner research). Additive — never selected unless a caller
+    // sets it, so default coding verification is unchanged.
+    | 'partner-research';
   criteria?: KodaXTaskVerificationCriterion[];
   runtime?: KodaXRuntimeVerificationContract;
+}
+
+/**
+ * FEATURE_247 — SDK-consumer agent profile identity (e.g. KodaX-Space Partner).
+ *
+ * The SDK core treats this as OPAQUE attribution: it is echoed onto results,
+ * events, the effective-config snapshot, session runtimeInfo, and tool context
+ * so an embedder can confirm which profile actually ran and can attribute
+ * concurrent Partner/Coder sessions. Absent ⇒ the default Coding Agent, with no
+ * behavioral change anywhere.
+ *
+ * Only two fields carry behavior, both additive and gated on their own presence:
+ *   - `instructions` — on the SA path the embedder sets
+ *     `context.systemPromptOverride`; the AMA/AMAW path builds role prompts
+ *     internally, so when this is set the Worker role prompt PREPENDS this block
+ *     (absent ⇒ byte-identical default coding role prompt).
+ *   - `verification` — a profile-default verifier standard the Sidecar Verifier
+ *     applies; per-task `context.taskVerification` still overrides/augments it.
+ *
+ * Everything else (`surface`/`id`/`version`/`name`) is pure identity passthrough.
+ */
+export interface KodaXAgentProfile {
+  /** Surface/profile label, e.g. `'code'` | `'partner'`. Opaque to the core. */
+  readonly surface?: string;
+  /** Stable profile id (UUID or stable name). Opaque to the core. */
+  readonly id?: string;
+  /** Profile version. Opaque to the core. */
+  readonly version?: string;
+  /** Human-facing display name. Opaque to the core. */
+  readonly name?: string;
+  /**
+   * Partner behavior instructions injected into the AMA/AMAW Worker role prompt
+   * (prepended). The SA path uses `context.systemPromptOverride` instead — this
+   * field is the AMA-path equivalent so a Partner profile behaves consistently
+   * across both execution modes.
+   */
+  readonly instructions?: string;
+  /**
+   * Profile-default verification standard. Merged with per-task
+   * `context.taskVerification` (per-task fields win) before reaching the Sidecar
+   * Verifier.
+   */
+  readonly verification?: KodaXTaskVerificationContract;
 }
 
 export type KodaXSkillProjectionConfidence = 'high' | 'medium' | 'low';
@@ -880,6 +954,11 @@ export interface KodaXManagedLiveEvent {
 export interface KodaXManagedTaskStatusEvent {
   agentMode: KodaXAgentMode;
   harnessProfile: KodaXHarnessProfile;
+  /**
+   * FEATURE_247 — SDK-consumer agent profile driving this managed task, echoed
+   * from `options.context.agentProfile`. Absent ⇒ default Coding Agent.
+   */
+  agentProfile?: KodaXAgentProfile;
   activeWorkerId?: string;
   activeWorkerTitle?: string;
   childFanoutClass?: KodaXChildFanoutClass;
@@ -1094,6 +1173,13 @@ export interface KodaXContextOptions {
   taskMetadata?: Record<string, KodaXJsonValue>;
   /** Optional structured verification contract carried into managed tasks. */
   taskVerification?: KodaXTaskVerificationContract;
+  /**
+   * FEATURE_247 — SDK-consumer agent profile (KodaX-Space Partner et al).
+   * Opaque identity + optional AMA-path instructions + optional default verifier
+   * standard. Absent ⇒ the default Coding Agent (no behavioral change). See
+   * {@link KodaXAgentProfile}.
+   */
+  agentProfile?: KodaXAgentProfile;
   /**
    * FEATURE_074: Plan-mode block predicate provided by the parent REPL. The predicate
    * closes over live parent state so mid-run mode toggles propagate to in-flight
@@ -1493,6 +1579,12 @@ export interface KodaXResult {
   signalDebugReason?: string;
   messages: KodaXMessage[];
   sessionId: string;
+  /**
+   * FEATURE_247 — the agent profile this run executed under, echoed verbatim from
+   * `options.context.agentProfile`. Lets an embedder confirm the running profile
+   * was Partner (not the default Coding Agent). Absent ⇒ default Coding Agent.
+   */
+  agentProfile?: KodaXAgentProfile;
   /** Internal raw protocol output retained for artifact persistence after compacting visible failure text. */
   protocolRawText?: string;
   /** Structured managed-task protocol payload separated from visible text. */
@@ -1542,6 +1634,31 @@ export interface KodaXToolExecutionContext {
   backups: Map<string, string>;
   /** Git root directory - Git 鏍圭洰褰?*/
   gitRoot?: string;
+  /**
+   * FEATURE_247 (R7) — runtime-resolved session id for the run that owns this
+   * tool call. Lets host-registered tools (Space artifact/source/KB) attribute a
+   * call to the right session when multiple Partner/Coder sessions run
+   * concurrently, without AsyncLocalStorage. Absent on paths that do not resolve
+   * a session id (e.g. isolated tool tests).
+   */
+  sessionId?: string;
+  /**
+   * FEATURE_247 (R7) — id of the LLM `tool_use` block this execution backs
+   * (same value surfaced as `KodaXToolEventMeta.toolId`). Lets a host correlate a
+   * tool handler invocation to its event stream and de-duplicate retries.
+   */
+  toolCallId?: string;
+  /**
+   * FEATURE_247 (R7) — task surface/profile label forwarded from
+   * `options.context.taskSurface`, so a tool handler can tell a Partner call from
+   * a Coder call. Absent ⇒ not set by the caller.
+   */
+  taskSurface?: KodaXTaskSurface;
+  /**
+   * FEATURE_247 (R7) — SDK-consumer agent profile owning this tool call, echoed
+   * from `options.context.agentProfile`. Absent ⇒ default Coding Agent.
+   */
+  agentProfile?: KodaXAgentProfile;
   /** FEATURE_221: SDK-consumer self-manual injection, forwarded from KodaXOptions. */
   selfManual?: KodaXSelfManualConfig;
   /** Working directory used to resolve relative paths and execute shell commands. */

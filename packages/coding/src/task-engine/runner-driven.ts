@@ -1194,6 +1194,10 @@ async function runManagedTaskViaRunnerInner(
       decision: () => planRef.current?.decision ?? plan.decision,
       metadata: options.context?.taskMetadata,
       repoIntelligenceContext: prebuiltRepoIntelligenceContext,
+      // FEATURE_247 (R1): thread the SDK-consumer profile's instructions into
+      // the Worker role prompt (prepended). Undefined for the default Coding
+      // Agent, so the produced prompt is byte-identical to today.
+      partnerInstructions: options.context?.agentProfile?.instructions,
       // FEATURE_193 (v0.7.43): V1 Scout-driven mutation-intent + harness
       // branching retired. `buildManagedWorkerToolPolicy` now takes only
       // `role` and returns undefined for V2 Worker (prompt-enforced

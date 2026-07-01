@@ -109,6 +109,14 @@ export interface RunnerChainPromptContext {
    * role's system prompt so the Worker sees repo context from turn 1.
    */
   readonly repoIntelligenceContext?: string;
+  /**
+   * FEATURE_247 (R1) — SDK-consumer agent-profile instructions (e.g. KodaX-Space
+   * Partner). When set, prepended to the Worker role prompt as the governing
+   * directive so a Partner profile behaves consistently on the AMA/AMAW path
+   * (the SA path uses `context.systemPromptOverride`). Absent ⇒ byte-identical
+   * default coding worker prompt.
+   */
+  readonly partnerInstructions?: string;
 }
 
 /**

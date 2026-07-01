@@ -106,7 +106,13 @@ export async function runManagedTask(
   prompt: string,
 ): Promise<KodaXResult> {
   const result = await executeRunManagedTask(options, prompt);
-  return reshapeToUserConversation(result, options, prompt);
+  const reshaped = reshapeToUserConversation(result, options, prompt);
+  // FEATURE_247 (R1): echo the SDK-consumer profile back so the embedder can
+  // confirm which profile actually ran (Partner vs default Coding Agent).
+  // Pure passthrough — omitted entirely for the default path.
+  return options.context?.agentProfile
+    ? { ...reshaped, agentProfile: options.context.agentProfile }
+    : reshaped;
 }
 
 /**
@@ -164,6 +170,12 @@ export async function dispatchManagedTask(
             intentGate.taskFamily,
             [options.context?.promptOverlay],
           ),
+          // FEATURE_247 (R1): on the SA path a profile's instructions map to the
+          // already-honored `systemPromptOverride` (consumed in
+          // reasoning-plan-entry.ts). An explicit caller-set override still wins;
+          // when neither is set this stays undefined ⇒ byte-identical default.
+          systemPromptOverride: options.context?.systemPromptOverride
+            ?? options.context?.agentProfile?.instructions,
           excludeTools: [
             ...(options.context?.excludeTools ?? []),
             ...SA_SOLO_EXCLUDE_TOOLS,

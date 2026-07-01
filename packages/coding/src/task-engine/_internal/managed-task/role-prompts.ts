@@ -102,9 +102,22 @@ export function resolveRoleInstructions(
   // `buildReasoningExecutionState`; the Runner-driven path (FEATURE_084
   // Shard 6d-L) routed around `runKodaX` and lost the injection.
   const repoBlock = promptContext.repoIntelligenceContext?.trim();
-  return repoBlock
+  const composed = repoBlock
     ? `${repoBlock}\n\n${basePrompt}`
     : basePrompt;
+  // FEATURE_247 (R1): a Partner profile (or any SDK-consumer profile) can carry
+  // its own behavior instructions. On the SA path the embedder uses
+  // `context.systemPromptOverride`; the AMA/AMAW Worker builds its role prompt
+  // internally, so we PREPEND the profile instructions here as the governing
+  // directive while keeping the managed-task scaffolding (todo / dispatch /
+  // verdict) intact. Gated on the primary `worker` role AND presence, so the
+  // default Coding Agent role prompt is byte-identical.
+  const partnerBlock = role === 'worker'
+    ? promptContext.partnerInstructions?.trim()
+    : undefined;
+  return partnerBlock
+    ? `${partnerBlock}\n\n${composed}`
+    : composed;
 }
 
 /**
