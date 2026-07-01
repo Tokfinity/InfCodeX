@@ -6,7 +6,9 @@
   // 提示:
   //   - 真正的 config.json 必须是合法 JSON(不支持注释/尾逗号)——复制后请去掉注释。
   //   - 所有字段均为可选,只写你关心的即可。
-  //   - 字段优先级:CLI 参数 > config.json > 环境变量 > 默认值。
+  //   - 字段优先级:SDK 选项 > CLI 参数 > shell 环境变量 > 本配置文件 > 默认值。
+  //     对会桥接到环境变量的设置(如模型档位/fallback/repo-intel),启动前在 shell
+  //     里设的环境变量会覆盖本文件;本文件是持久偏好的来源,环境变量是临时覆盖。
   //   - 权威定义见 packages/repl/src/common/utils.ts :: loadConfig()。
   // ════════════════════════════════════════════════════════════════════
 
@@ -19,6 +21,16 @@
 
   // 当前 provider 使用的模型 ID(可选,缺省用 provider 默认模型)。
   // "model": "glm-5.2",
+
+  // 子 Agent 模型档位 fast/deep(可选)。workflow 脚本 / dispatch 用
+  //   modelHint:'fast'|'deep' 表达档位意图(不写具体模型名),这里把档位映射到
+  //   真实 provider+model。fast 只对只读子 Agent 生效(写/改代码的子 Agent 不降级);
+  //   未配的档位继承父 Agent 模型。也可用环境变量 KODAX_FAST/DEEP_PROVIDER/MODEL
+  //   覆盖本配置(shell 里设的会赢,见文件末尾)。
+  // "fastProvider": "deepseek",
+  // "fastModel": "deepseek-v4-flash",
+  // "deepProvider": "zhipu-coding",
+  // "deepModel": "glm-5.2",
 
   // 推理投入 Reasoning effort(当前模型能力派生;运行时按模型能力自动适配)。
   //   "auto"   清除显式设置 → 用模型默认(很多模型会落到 max/high)
@@ -198,14 +210,10 @@
   //   KODAX_VERIFIER_LOG=1            打开 verifier 诊断日志
   //   KODAX_EFFORT=<value>           启动时覆盖 effort(auto/off/low/…/max)
   //
-  // ─── 子 Agent 模型档位(仅环境变量,用于 dispatch_child_task / workflow 的 model_hint)───
-  //   modelHint:'fast' 的只读子 Agent → 便宜档;modelHint:'deep' 的子 Agent → 强档。
-  //   不设则子 Agent 继承父 Agent 的模型(路由默认关闭)。'fast' 只对只读子 Agent 生效
-  //   (写文件/改代码的子 Agent 不会被降级,保证质量)。
-  //   KODAX_FAST_PROVIDER=<provider>  便宜档 provider(如 ark-coding / deepseek)
-  //   KODAX_FAST_MODEL=<model>        便宜档 model(如 deepseek-v4-flash)
-  //   KODAX_DEEP_PROVIDER=<provider>  强档 provider
-  //   KODAX_DEEP_MODEL=<model>        强档 model
-  //   注:workflow 脚本用 wf.runAgent({ modelHint: 'fast'|'deep'|'balanced' }) 表达
-  //       档位意图(不写具体模型名),映射到上面配置的模型;未配则继承父 Agent。
+  // ─── 子 Agent 模型档位的环境变量覆盖(可选)───────────────────────────
+  //   优先用上面的 config 字段 fastProvider/fastModel/deepProvider/deepModel;
+  //   下面这些环境变量是 shell 里的临时覆盖(设了就赢过 config 文件)。语义相同:
+  //   'fast' 只对只读子 Agent、'deep' 对任意子 Agent、未配则继承父 Agent 模型。
+  //   KODAX_FAST_PROVIDER / KODAX_FAST_MODEL   便宜档(如 deepseek / deepseek-v4-flash)
+  //   KODAX_DEEP_PROVIDER / KODAX_DEEP_MODEL   强档(如 zhipu-coding / glm-5.2)
 }

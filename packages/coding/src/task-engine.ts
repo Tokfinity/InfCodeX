@@ -107,10 +107,29 @@ export const __checkpointTestables = {
   CHECKPOINT_FILE,
 };
 
+/**
+ * M2 — bridge an SDK embedder's `KodaXOptions.modelTiers` to the
+ * KODAX_FAST/DEEP_PROVIDER/MODEL env vars the coding layer's model-hint router
+ * reads. Unconditional (SDK outranks shell env per the precedence rule) and only
+ * fires when the embedder actually set modelTiers, so the CLI/config.json path
+ * (which bridges config -> env in prepareRuntimeConfig, env-wins) is untouched.
+ */
+export function applyModelTiersFromOptions(modelTiers: KodaXOptions['modelTiers']): void {
+  if (!modelTiers) return;
+  const set = (value: string | undefined, envVar: string): void => {
+    if (value && value.trim().length > 0) process.env[envVar] = value.trim();
+  };
+  set(modelTiers.fast?.provider, 'KODAX_FAST_PROVIDER');
+  set(modelTiers.fast?.model, 'KODAX_FAST_MODEL');
+  set(modelTiers.deep?.provider, 'KODAX_DEEP_PROVIDER');
+  set(modelTiers.deep?.model, 'KODAX_DEEP_MODEL');
+}
+
 export async function runManagedTask(
   options: KodaXOptions,
   prompt: string,
 ): Promise<KodaXResult> {
+  applyModelTiersFromOptions(options.modelTiers);
   const result = await executeRunManagedTask(options, prompt);
   const reshaped = reshapeToUserConversation(result, options, prompt);
   // FEATURE_247 (R1): echo the SDK-consumer profile back so the embedder can

@@ -1360,6 +1360,20 @@ export interface KodaXOptions {
    * agent mode is ama/amaw, the tool-execution context wires `ctx.workflowHost`.
    */
   workflowRunsBaseDir?: string;
+  /**
+   * M2 — per-agent model TIERS for the workflow / dispatch `model_hint`. An
+   * embedder maps the semantic tiers to concrete models; a workflow script /
+   * dispatch then expresses intent via `modelHint: 'fast' | 'deep'` (NOT a
+   * concrete model name — the authoring model has no cognition of the
+   * embedder's configured providers). 'fast' routes read-only children only
+   * (write/codegen stays on the parent — a quality guard); 'deep' routes any
+   * child; an unset tier inherits the parent provider/model. The host bridges
+   * these to KODAX_FAST/DEEP_PROVIDER/MODEL, which the coding layer reads.
+   */
+  modelTiers?: {
+    readonly fast?: { readonly provider?: string; readonly model?: string };
+    readonly deep?: { readonly provider?: string; readonly model?: string };
+  };
   /** FEATURE_221: SDK-consumer self-manual injection (product name + topics). */
   selfManual?: KodaXSelfManualConfig;
   /**

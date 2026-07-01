@@ -926,6 +926,19 @@ export function loadConfig(): {
    * layer, which has no config access. Set via the `/fallback` command.
    */
   fallbackProviders?: string[];
+  /**
+   * Per-agent model TIERS for the workflow / dispatch `model_hint` (M2 config
+   * surface). Operators point a tier at a concrete provider+model; a workflow
+   * script / dispatch then expresses intent via `modelHint: 'fast' | 'deep'`.
+   * 'fast' routes read-only children only (write/codegen stays on the parent —
+   * a quality guard); 'deep' routes any child. Mirrored to
+   * KODAX_FAST/DEEP_PROVIDER/MODEL for the coding layer (which has no config
+   * access); env wins if pre-set. An unset tier inherits the parent model.
+   */
+  fastProvider?: string;
+  fastModel?: string;
+  deepProvider?: string;
+  deepModel?: string;
 } {
   try {
     if (fsSync.existsSync(KODAX_CONFIG_FILE)) {
@@ -950,6 +963,10 @@ export function loadConfig(): {
         verifierLog?: boolean;
         stallLog?: boolean;
         fallbackProviders?: string[];
+        fastProvider?: string;
+        fastModel?: string;
+        deepProvider?: string;
+        deepModel?: string;
       };
       // FEATURE_078: collapse `reasoningCeiling` (preferred) onto
       // `reasoningMode` so existing call sites that read
@@ -1110,6 +1127,24 @@ function applyFallbackRuntimeEnv(config: ReturnType<typeof loadConfig>): void {
   }
 }
 
+/**
+ * M2 — propagate the user-config model tiers to the KODAX_FAST/DEEP_PROVIDER/MODEL
+ * env vars the coding layer (`model-hint-routing.ts`) reads. Same env-wins
+ * precedence as the fallback/resilience counterparts (a shell-set var is left
+ * untouched so a CI/script override beats config.json).
+ */
+function applyModelTierRuntimeEnv(config: ReturnType<typeof loadConfig>): void {
+  const bridge = (value: string | undefined, envVar: string): void => {
+    if (value && value.trim().length > 0 && !process.env[envVar]) {
+      process.env[envVar] = value.trim();
+    }
+  };
+  bridge(config.fastProvider, 'KODAX_FAST_PROVIDER');
+  bridge(config.fastModel, 'KODAX_FAST_MODEL');
+  bridge(config.deepProvider, 'KODAX_DEEP_PROVIDER');
+  bridge(config.deepModel, 'KODAX_DEEP_MODEL');
+}
+
 export function prepareRuntimeConfig(): ReturnType<typeof loadConfig> {
   ensureShellEnvironmentHydrated();
   const config = loadConfig();
@@ -1118,6 +1153,7 @@ export function prepareRuntimeConfig(): ReturnType<typeof loadConfig> {
   applyVerifierRuntimeEnv(config);
   applyStallSidecarRuntimeEnv(config);
   applyFallbackRuntimeEnv(config);
+  applyModelTierRuntimeEnv(config);
   registerConfiguredCustomProviders(config);
   // Initialize i18n locale from config (falls back to system LANG)
   setLocale(config.locale);
@@ -1147,6 +1183,11 @@ export function saveConfig(config: {
   stallLog?: boolean;
   /** FEATURE_102 Phase 3 — cross-provider child fallback chain. */
   fallbackProviders?: string[];
+  /** M2 — per-agent model tiers (workflow / dispatch model_hint). */
+  fastProvider?: string;
+  fastModel?: string;
+  deepProvider?: string;
+  deepModel?: string;
 }): void {
   const current = loadConfig();
   const merged = { ...current, ...config };
