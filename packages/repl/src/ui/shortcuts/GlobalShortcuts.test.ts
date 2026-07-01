@@ -438,6 +438,41 @@ describe('GlobalShortcuts', () => {
         reasoningMode: 'auto',
       });
     });
+
+    it('clamps a stale higher effort onto the active ladder instead of jumping to off', () => {
+      // Opus-4.7 pinned `xhigh`, then switched to a model whose ladder skips it
+      // (e.g. glm/sonnet: … high → max). The V1 indexOf('xhigh') === -1 wrapped
+      // to cycle[0] === 'off', silently disabling thinking on a model switch.
+      effortCycleMock.mockReturnValue(['off', 'low', 'medium', 'high', 'max', 'auto']);
+      const h = mount({ effort: 'xhigh', effortOverride: true, thinking: true });
+      expect(h.step()).toBe(true);
+      // Clamp xhigh down to the nearest rung at-or-below it (high), then advance → max.
+      expect(h.config.effort).toBe('max');
+      expect(h.config.effort).not.toBe('none');
+      expect(h.config.effortOverride).toBe(true);
+      expect(h.config.thinking).toBe(true);
+      expect(h.config.reasoningMode).toBe('auto');
+    });
+
+    it('advances from the plan-mode effort rather than wrapping auto → off in plan mode', () => {
+      // In plan mode with no session override the status bar shows `planModeEffort`.
+      // The V1 toggle ignored it (read effortOverride/effort → 'auto') and stepped
+      // auto → cycle[0] === 'off', disabling thinking on the first keypress.
+      const h = mount({
+        permissionMode: 'plan',
+        planModeEffort: 'high',
+        effort: undefined,
+        effortOverride: false,
+        thinking: true,
+      });
+      expect(h.step()).toBe(true);
+      // high → xhigh on the full ladder, persisted as an explicit session override.
+      expect(h.config.effort).toBe('xhigh');
+      expect(h.config.effort).not.toBe('none');
+      expect(h.config.effortOverride).toBe(true);
+      expect(h.config.thinking).toBe(true);
+      expect(h.config.reasoningMode).toBe('auto');
+    });
   });
 
   it('interrupts an active run with Ctrl+C and clears live state', () => {

@@ -2112,41 +2112,29 @@ function applyReasoningMode(
   return persistence;
 }
 
+// V2: `reasoningMode` is a derived compatibility field that is only ever 'off'
+// (thinking disabled via the `none` effort) or 'auto' (any thinking-on effort,
+// including a cleared `auto`). Normalize it on every `/effort` so a stale legacy
+// value (quick/balanced/deep) never lingers to mislead the status label or the
+// legacy display, and so the persisted state matches the Ctrl+T toggle's full
+// `{ effort, reasoningMode, thinking }` write (round-trip parity).
 function resolveReasoningModeAfterEffort(
   effort: string | undefined,
-  currentConfig: CurrentConfig,
-): KodaXReasoningMode | undefined {
-  if (effort === 'none') {
-    return 'off';
-  }
-  if (
-    effort === undefined
-    && currentConfig.effort === 'none'
-    && currentConfig.reasoningMode === 'off'
-  ) {
-    return 'auto';
-  }
-  if (effort && currentConfig.reasoningMode === 'off') {
-    return 'auto';
-  }
-  return undefined;
+): KodaXReasoningMode {
+  return effort === 'none' ? 'off' : 'auto';
 }
 
 function resolveConfigAfterReasoningEffort(
   effort: string | undefined,
   currentConfig: CurrentConfig,
 ): CurrentConfig {
-  const nextReasoningMode = resolveReasoningModeAfterEffort(effort, currentConfig);
+  const nextReasoningMode = resolveReasoningModeAfterEffort(effort);
   return {
     ...currentConfig,
     effort,
     effortOverride: effort !== undefined,
-    ...(nextReasoningMode
-      ? {
-          reasoningMode: nextReasoningMode,
-          thinking: reasoningModeToLegacyThinking(nextReasoningMode),
-        }
-      : {}),
+    reasoningMode: nextReasoningMode,
+    thinking: reasoningModeToLegacyThinking(nextReasoningMode),
   };
 }
 
@@ -2155,18 +2143,12 @@ function applyReasoningEffort(
   callbacks: CommandCallbacks,
   currentConfig: CurrentConfig,
 ): ConfigPersistenceResult {
-  const nextReasoningMode = resolveReasoningModeAfterEffort(
-    effort,
-    currentConfig,
-  );
+  const nextReasoningMode = resolveReasoningModeAfterEffort(effort);
+  const thinking = reasoningModeToLegacyThinking(nextReasoningMode);
   const persistence = persistUserConfig({
     effort,
-    ...(nextReasoningMode
-      ? {
-          reasoningMode: nextReasoningMode,
-          thinking: reasoningModeToLegacyThinking(nextReasoningMode),
-        }
-      : {}),
+    reasoningMode: nextReasoningMode,
+    thinking,
   });
 
   if (callbacks.setEffort) {
@@ -2176,13 +2158,11 @@ function applyReasoningEffort(
     currentConfig.effortOverride = effort !== undefined;
   }
 
-  if (nextReasoningMode) {
-    if (callbacks.setReasoningMode) {
-      callbacks.setReasoningMode(nextReasoningMode);
-    } else {
-      currentConfig.reasoningMode = nextReasoningMode;
-      currentConfig.thinking = reasoningModeToLegacyThinking(nextReasoningMode);
-    }
+  if (callbacks.setReasoningMode) {
+    callbacks.setReasoningMode(nextReasoningMode);
+  } else {
+    currentConfig.reasoningMode = nextReasoningMode;
+    currentConfig.thinking = thinking;
   }
 
   return persistence;

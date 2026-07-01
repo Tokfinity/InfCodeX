@@ -59,7 +59,7 @@ describe('/effort command', () => {
     expect(setReasoningMode).toHaveBeenCalledWith('auto');
   });
 
-  it('clears explicit effort with auto without changing reasoning mode', async () => {
+  it('clears explicit effort with auto and normalizes the legacy reasoning mode', async () => {
     const setEffort = vi.fn();
     const setReasoningMode = vi.fn();
     const callbacks = { setEffort, setReasoningMode } as unknown as CommandCallbacks;
@@ -67,9 +67,17 @@ describe('/effort command', () => {
 
     await effortCmd.handler(['auto'], ctx, callbacks, config);
 
-    expect(saveConfig).toHaveBeenCalledWith({ effort: undefined });
+    // V2: reasoningMode is a derived compat field that is only ever 'auto'/'off'.
+    // Clearing to auto must lift a stale legacy 'deep' to 'auto' (and keep
+    // thinking on) so the status label and legacy display don't keep reading
+    // 'high' from the dead value. Mirrors the Ctrl+T toggle's full triple write.
+    expect(saveConfig).toHaveBeenCalledWith({
+      effort: undefined,
+      reasoningMode: 'auto',
+      thinking: true,
+    });
     expect(setEffort).toHaveBeenCalledWith(undefined);
-    expect(setReasoningMode).not.toHaveBeenCalled();
+    expect(setReasoningMode).toHaveBeenCalledWith('auto');
   });
 
   it('restores auto reasoning when clearing a previous none effort', async () => {
@@ -118,7 +126,13 @@ describe('/effort command', () => {
 
     await effortCmd.handler(['max'], ctx, callbacks, config);
 
-    expect(saveConfig).toHaveBeenCalledWith({ effort: 'max' });
+    // Persist the full coherent triple (parity with the Ctrl+T toggle), not just
+    // the bare effort — a reloaded config must replay identical thinking state.
+    expect(saveConfig).toHaveBeenCalledWith({
+      effort: 'max',
+      reasoningMode: 'auto',
+      thinking: true,
+    });
     expect(setEffort).toHaveBeenCalledWith('max');
     expect(getLoggedOutput()).toContain('Reasoning effort: max->medium');
   });

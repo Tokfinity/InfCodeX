@@ -44,6 +44,57 @@ export interface GlobalShortcutsProps {
   onSavePermissionMode?: (mode: PermissionMode) => void;
 }
 
+// Effort ladder ordering used to clamp an off-cycle label (e.g. a stale `xhigh`
+// pinned on Opus 4.7, then switched to a model whose ladder skips it) onto the
+// active model's cycle. off < minimal < low < medium < high < xhigh < max, with
+// `auto` last (it is always a cycle member, so it is matched exactly, never
+// clamped). Every concrete rung any cycle can contain has an entry so the clamp
+// floor is computed consistently — `minimal` is a real user-visible rung on
+// some models (e.g. OpenAI: off → minimal → low …).
+const EFFORT_ORDINAL: Record<string, number> = {
+  off: 0,
+  minimal: 1,
+  low: 2,
+  medium: 3,
+  high: 4,
+  xhigh: 5,
+  max: 6,
+  auto: 7,
+};
+
+/**
+ * Index in `cycle` to treat as the current rung before the `+1` advance.
+ * When `label` is a member it is matched exactly. When it is not (a stale pin
+ * the active model's ladder skips), return the highest rung whose ordinal is
+ * <= the label's, so the advance lands on the next real rung ABOVE that floor
+ * rather than wrapping to index 0 (`off`) — the V1 `indexOf(...) === -1` bug
+ * that silently disabled thinking on a model switch. Falls back to -1 (advance
+ * → first rung) when the label sits below every cycle member.
+ */
+function nearestCycleIndex(cycle: readonly string[], label: string): number {
+  const exact = cycle.indexOf(label);
+  if (exact !== -1) {
+    return exact;
+  }
+  const target = EFFORT_ORDINAL[label];
+  if (target === undefined) {
+    return -1;
+  }
+  let best = -1;
+  let bestOrdinal = -1;
+  for (let i = 0; i < cycle.length; i++) {
+    const ordinal = EFFORT_ORDINAL[cycle[i]!];
+    if (ordinal === undefined || ordinal > target) {
+      continue;
+    }
+    if (ordinal > bestOrdinal) {
+      bestOrdinal = ordinal;
+      best = i;
+    }
+  }
+  return best;
+}
+
 export function GlobalShortcuts({
   currentConfig,
   setCurrentConfig,
@@ -119,15 +170,28 @@ export function GlobalShortcuts({
     if (cycle.length === 0) {
       return false;
     }
+    // Advance from the effort the user currently *sees*, not from the raw
+    // session field. In plan mode with no session override the status bar shows
+    // `planModeEffort`, so the toggle must step from there (else it reads 'auto'
+    // and wraps straight to 'off'). Otherwise an explicit override shows its
+    // effort; everything else is the model default ('auto').
+    const shownEffort =
+      currentConfig.permissionMode === 'plan'
+      && !currentConfig.effortOverride
+      && currentConfig.planModeEffort !== undefined
+        ? currentConfig.planModeEffort
+        : currentConfig.effortOverride
+          ? currentConfig.effort
+          : undefined;
     const currentLabel =
-      !currentConfig.effortOverride
-      || currentConfig.effort === undefined
-      || currentConfig.effort === 'auto'
+      shownEffort === undefined || shownEffort === 'auto'
         ? 'auto'
-        : currentConfig.effort === 'none'
+        : shownEffort === 'none'
           ? 'off'
-          : currentConfig.effort;
-    const currentIndex = cycle.indexOf(currentLabel);
+          : shownEffort;
+    // `nearestCycleIndex` clamps an off-cycle stale label onto the active ladder
+    // so the advance never wraps to 'off' on a model switch (M1/M2).
+    const currentIndex = nearestCycleIndex(cycle, currentLabel);
     const next = cycle[(currentIndex + 1) % cycle.length] ?? cycle[0]!;
 
     // `auto` clears the explicit override (model default); `off` disables

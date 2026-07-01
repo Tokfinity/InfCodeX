@@ -69,6 +69,20 @@ describe("status-bar (Ink view-model) reasoning effort display", () => {
     expect(viewModel.segments.find((segment) => segment.id === "reasoning-mode")?.text)
       .toBe("off");
   });
+
+  it("dims the reasoning segment when a configured effort folds to off", () => {
+    const viewModel = buildStatusBarViewModel(baseProps({
+      reasoningMode: "auto",
+      effort: "minimal",
+      reasoningEffortLabel: "minimal->off",
+    }));
+
+    const segment = viewModel.segments.find((s) => s.id === "reasoning-mode");
+    expect(segment?.text).toBe("minimal->off");
+    // Effective tier is 'off' → the segment must read as disabled (dim), not the
+    // cyan/magenta that would imply thinking is still active.
+    expect(segment?.color).toBe("dim");
+  });
 });
 
 describe("status-bar (Ink view-model) — auto-mode engine indicator (FEATURE_092 phase 2b.8)", () => {

@@ -45,7 +45,16 @@ function formatEffortShort(effort?: string): string | undefined {
 }
 
 function getReasoningColor(label: string): string {
-  const configured = label.split("->", 1)[0] ?? label;
+  const parts = label.split("->");
+  const configured = parts[0] ?? label;
+  const effective = parts.length > 1 ? parts[parts.length - 1]! : configured;
+  // The effective tier is the wire truth. When a configured tier folds to 'off'
+  // (e.g. `minimal->off` on a toggle/budget model that can't honor it), colour
+  // by that truth — a dimmed segment signals thinking is actually off, not the
+  // cyan/magenta that would imply it is still active.
+  if (effective === "off") {
+    return "dim";
+  }
   switch (configured) {
     case "off":
       return "dim";
