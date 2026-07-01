@@ -1,6 +1,7 @@
 import { describe, expect, it, vi } from 'vitest';
 import { KodaXBaseProvider } from './base.js';
 import type { KodaXOnRetryAfterCallback } from './base.js';
+import { runWithScopedConfig } from '../run-scoped-config.js';
 import type {
   KodaXMessage,
   KodaXNormalizedReasoningRequest,
@@ -315,6 +316,26 @@ describe('KodaXBaseProvider', () => {
       expect(provider.getEffectiveMaxOutputTokens('small-window-model')).toBe(12_345);
     } finally {
       vi.unstubAllEnvs();
+    }
+  });
+
+  it('uses a valid run-scoped maxOutputTokens above descriptor data', () => {
+    const provider = new TestProvider();
+    const value = runWithScopedConfig({ maxOutputTokens: 5_000 }, () =>
+      provider.getEffectiveMaxOutputTokens('small-window-model'),
+    );
+    expect(value).toBe(5_000);
+  });
+
+  it('ignores a non-positive/NaN run-scoped maxOutputTokens (never emits a bad max_tokens)', () => {
+    const provider = new TestProvider();
+    // 0 / -1 / NaN would produce a provider 400 if passed through verbatim;
+    // they must be treated as "unset" so the descriptor value (8_000) resolves.
+    for (const bad of [0, -1, Number.NaN]) {
+      const value = runWithScopedConfig({ maxOutputTokens: bad }, () =>
+        provider.getEffectiveMaxOutputTokens('small-window-model'),
+      );
+      expect(value).toBe(8_000);
     }
   });
 

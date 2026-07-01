@@ -166,7 +166,10 @@ describe('openai partial tool_use salvage (streaming path)', () => {
     expect(result.toolBlocks[0].input).toEqual({});
   });
 
-  it('drops a tool_call missing a name and logs it (no silent drop)', async () => {
+  it('drops a tool_call missing a name and does NOT log to stderr by default (TUI-safe)', async () => {
+    // The drop must stay silent on stderr in production: a bare console.error
+    // mid-stream corrupts the Ink TUI (same class as 123fba0f). It is still
+    // diagnosable via KODAX_DEBUG_TOOL_STREAM (asserted below).
     const errSpy = vi.spyOn(console, 'error').mockImplementation(() => {});
     const chunks = [
       { choices: [{ index: 0, delta: { tool_calls: [{ index: 0, id: 'call_x', type: 'function', function: { name: '', arguments: '{}' } }] } }] },
@@ -177,11 +180,31 @@ describe('openai partial tool_use salvage (streaming path)', () => {
 
     const result = await provider.stream([{ role: 'user', content: 'x' }], TOOLS, 'sys');
     expect(result.toolBlocks).toHaveLength(0); // malformed block dropped
-    expect(errSpy).toHaveBeenCalledWith(
-      '[Tool Block Invalid] Dropped tool_call missing id or name:',
-      expect.objectContaining({ name: JSON.stringify('') }),
-    );
+    expect(errSpy).not.toHaveBeenCalled();
     errSpy.mockRestore();
+  });
+
+  it('logs a dropped malformed tool_call under KODAX_DEBUG_TOOL_STREAM (diagnosable)', async () => {
+    const errSpy = vi.spyOn(console, 'error').mockImplementation(() => {});
+    vi.stubEnv('KODAX_DEBUG_TOOL_STREAM', '1');
+    try {
+      const chunks = [
+        { choices: [{ index: 0, delta: { tool_calls: [{ index: 0, id: 'call_x', type: 'function', function: { name: '', arguments: '{}' } }] } }] },
+        { choices: [{ index: 0, delta: {}, finish_reason: 'tool_calls' }] },
+      ];
+      const create = vi.fn().mockResolvedValue(streamFromChunks(chunks));
+      const provider = new TestOpenAIProvider({ chat: { completions: { create } } });
+
+      const result = await provider.stream([{ role: 'user', content: 'x' }], TOOLS, 'sys');
+      expect(result.toolBlocks).toHaveLength(0);
+      expect(errSpy).toHaveBeenCalledWith(
+        '[Tool Block Invalid] Dropped tool_call missing id or name:',
+        expect.objectContaining({ name: JSON.stringify('') }),
+      );
+    } finally {
+      vi.unstubAllEnvs();
+      errSpy.mockRestore();
+    }
   });
 
   describe('salvage tagging (_salvaged raw signal + _truncated on non-clean stop)', () => {

@@ -13,6 +13,7 @@
 import { afterEach, beforeEach, describe, expect, it } from 'vitest';
 import type Anthropic from '@anthropic-ai/sdk';
 import { KodaXAnthropicCompatProvider } from './anthropic.js';
+import { runWithScopedConfig } from '../run-scoped-config.js';
 import type { KodaXProviderConfig, KodaXToolDefinition } from '../types.js';
 
 class TestAnthropicProvider extends KodaXAnthropicCompatProvider {
@@ -281,6 +282,27 @@ describe('KodaXAnthropicCompatProvider.applyCacheControlToMessages', () => {
     const msgs = [userMsg('u1'), asstMsg('a1'), userMsg('u2'), asstMsg('a2'), userMsg('u3')];
     const result = provider.exposedApplyCacheControlToMessages(msgs);
     expect(cc(result[2]!)).toBeUndefined();
+  });
+
+  it('honours run-scoped disablePromptCache:true at the message level (concurrency-safe)', () => {
+    // Regression: applyCacheControlToMessages formerly read process.env directly
+    // and ignored the run-scoped store, so a concurrent SDK session that
+    // disabled caching still got a message-level cache marker.
+    const msgs = [userMsg('u1'), asstMsg('a1'), userMsg('u2'), asstMsg('a2'), userMsg('u3')];
+    const result = runWithScopedConfig({ disablePromptCache: true }, () =>
+      provider.exposedApplyCacheControlToMessages(msgs),
+    );
+    expect(cc(result[2]!)).toBeUndefined();
+  });
+
+  it('run-scoped disablePromptCache:false re-enables caching over KODAX_DISABLE_PROMPT_CACHE=1 (SDK > env)', () => {
+    process.env.KODAX_DISABLE_PROMPT_CACHE = '1';
+    const msgs = [userMsg('u1'), asstMsg('a1'), userMsg('u2'), asstMsg('a2'), userMsg('u3')];
+    const result = runWithScopedConfig({ disablePromptCache: false }, () =>
+      provider.exposedApplyCacheControlToMessages(msgs),
+    );
+    // An explicit SDK opt-in must beat the startup env var.
+    expect(cc(result[2]!)).toEqual({ type: 'ephemeral' });
   });
 
   it('does not mutate the input array or its messages', () => {

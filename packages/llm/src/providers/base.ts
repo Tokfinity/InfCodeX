@@ -215,8 +215,15 @@ export abstract class KodaXBaseProvider {
     if (this.maxOutputTokensOverride !== undefined) {
       return this.maxOutputTokensOverride;
     }
-    // Run-scoped (concurrency-safe) first, then the global env fallback.
-    const envOverride = getRunScopedConfig()?.maxOutputTokens
+    // Run-scoped (concurrency-safe) first, then the global env fallback. Apply
+    // the same positive-integer guard `parseEnvInt` uses to the ALS value: an
+    // SDK caller passing 0/-1/NaN must NOT reach `max_tokens` verbatim (the
+    // provider API rejects it with a 400) — treat a bad value as "unset" so the
+    // env / descriptor / default chain still resolves.
+    const scopedMax = getRunScopedConfig()?.maxOutputTokens;
+    const envOverride = (typeof scopedMax === 'number' && Number.isFinite(scopedMax) && scopedMax > 0
+      ? scopedMax
+      : undefined)
       ?? parseEnvInt(process.env.KODAX_MAX_OUTPUT_TOKENS);
     if (envOverride !== undefined) {
       return envOverride;

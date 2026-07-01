@@ -962,12 +962,17 @@ export abstract class KodaXOpenAICompatProvider extends KodaXBaseProvider {
           // Drop a tool_call missing id/name (cannot be paired with a
           // tool_result → would 400). Never drop silently: log it as an
           // anomaly (mirrors the Anthropic-side `[Tool Block Invalid]` log) so
-          // a provider emitting malformed blocks is diagnosable.
-          console.error('[Tool Block Invalid] Dropped tool_call missing id or name:', {
-            id: JSON.stringify(tc.id),
-            name: JSON.stringify(tc.name),
-            argsLength: tc.arguments?.length ?? 0,
-          });
+          // a provider emitting malformed blocks is diagnosable. Gate behind
+          // KODAX_DEBUG_TOOL_STREAM: a bare console.error mid-stream writes
+          // below Ink's live region and corrupts the TUI (same class as the
+          // compaction-stderr bug fixed in 123fba0f).
+          if (process.env.KODAX_DEBUG_TOOL_STREAM) {
+            console.error('[Tool Block Invalid] Dropped tool_call missing id or name:', {
+              id: JSON.stringify(tc.id),
+              name: JSON.stringify(tc.name),
+              argsLength: tc.arguments?.length ?? 0,
+            });
+          }
         }
       }
       return { textBlocks, toolBlocks, thinkingBlocks, usage, stopReason: finishReason ?? undefined };

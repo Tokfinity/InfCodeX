@@ -451,10 +451,18 @@ export abstract class KodaXAnthropicCompatProvider extends KodaXBaseProvider {
    * original string unchanged so prompt caching can be disabled at
    * runtime without redeploying.
    */
-  /** Run-scoped (concurrency-safe) first, then the global env fallback. */
+  /**
+   * Run-scoped (concurrency-safe) config wins over the global env, in BOTH
+   * directions: an SDK caller that explicitly sets `disablePromptCache: false`
+   * re-enables caching even when `KODAX_DISABLE_PROMPT_CACHE=1` is set at
+   * startup (e.g. bridged from `config.json`). A plain `||` would let the env
+   * win in that re-enable case, breaking the documented SDK > env precedence.
+   */
   private isPromptCacheDisabled(): boolean {
-    return getRunScopedConfig()?.disablePromptCache === true
-      || process.env.KODAX_DISABLE_PROMPT_CACHE === '1';
+    const scoped = getRunScopedConfig()?.disablePromptCache;
+    if (scoped === true) return true;
+    if (scoped === false) return false;
+    return process.env.KODAX_DISABLE_PROMPT_CACHE === '1';
   }
 
   protected applyCacheControlToSystem(
@@ -520,7 +528,7 @@ export abstract class KodaXAnthropicCompatProvider extends KodaXBaseProvider {
     messages: Anthropic.Messages.MessageParam[],
   ): Anthropic.Messages.MessageParam[] {
     if (messages.length === 0) return messages;
-    if (process.env.KODAX_DISABLE_PROMPT_CACHE === '1') return messages;
+    if (this.isPromptCacheDisabled()) return messages;
 
     // Find the second-to-last `user` turn (skip the most recent user turn,
     // which is the current unstable input).
@@ -852,11 +860,17 @@ export abstract class KodaXAnthropicCompatProvider extends KodaXBaseProvider {
             // CRITICAL FIX: Validate tool_use has non-empty id and name
             // Prevents "tool_call_id is not found" errors with empty id
             if (!currentToolId || !currentToolName) {
-              console.error('[Tool Block Invalid] Missing tool id or name:', {
-                id: JSON.stringify(currentToolId),
-                name: JSON.stringify(currentToolName),
-                input: currentToolInput.slice(0, 100)
-              });
+              // Gate the diagnostic behind KODAX_DEBUG_TOOL_STREAM: a bare
+              // console.error mid-stream writes below Ink's live region and
+              // corrupts the TUI (same class as the compaction-stderr bug fixed
+              // in 123fba0f). The block is still dropped either way.
+              if (process.env.KODAX_DEBUG_TOOL_STREAM) {
+                console.error('[Tool Block Invalid] Missing tool id or name:', {
+                  id: JSON.stringify(currentToolId),
+                  name: JSON.stringify(currentToolName),
+                  input: currentToolInput.slice(0, 100)
+                });
+              }
               // Skip this invalid tool_use block - do not add to toolBlocks
             } else {
               const parsed = parseToolInputWithSalvageTracked(currentToolInput);
