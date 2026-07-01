@@ -207,6 +207,31 @@ describe('FEATURE_247 R4: onEffectiveConfig snapshot', () => {
     ).resolves.toBeDefined();
   });
 
+  it('R2: a toolVisibilityPolicy narrows the reported toolScope (readonly-only Partner)', async () => {
+    const configs: KodaXEffectiveTaskConfig[] = [];
+    const deps = saDeps();
+    await dispatchManagedTask(
+      {
+        agentMode: 'sa',
+        provider: 'anthropic',
+        context: {
+          agentProfile: { surface: 'partner' },
+          // Partner sees only read-only + read-network tools.
+          toolVisibilityPolicy: (t) =>
+            t.sideEffect === 'readonly' || t.sideEffect === 'reads-network',
+        },
+        events: { onEffectiveConfig: (c) => configs.push(c) },
+      } as KodaXOptions,
+      'answer a question',
+      deps,
+    );
+    const scope = configs[0]!.toolScope;
+    expect(scope).toContain('read');
+    expect(scope).toContain('web_search');
+    expect(scope).not.toContain('write'); // mutates-fs hidden by the policy
+    expect(scope).not.toContain('bash'); // mutates-shell hidden by the policy
+  });
+
   it('resolveEffectiveVerification: per-task wins, profile fills gaps, undefined when neither', () => {
     expect(
       resolveEffectiveVerification({ provider: 'x', context: {} } as KodaXOptions),

@@ -46,12 +46,13 @@
  * fields (function body + trailing blank).
  */
 
-import type { KodaXRepoIntelligenceMode } from '../types.js';
+import type { KodaXRepoIntelligenceMode, KodaXToolVisibilityPolicy } from '../types.js';
 import {
   filterConstructionToolNames,
   filterAgentConstructionToolNames,
   filterMcpToolNames,
   filterRepoIntelligenceWorkingToolNames,
+  getRegisteredToolDefinition,
   listToolDefinitions,
 } from '../tools/index.js';
 import { isManagedProtocolToolName } from '../managed-protocol.js';
@@ -66,6 +67,31 @@ export function filterExcludedTools(
   if (!excludeTools || excludeTools.length === 0) return tools;
   const excluded = new Set(excludeTools);
   return tools.filter((name) => !excluded.has(name));
+}
+
+/**
+ * FEATURE_247 (R2) — apply an SDK-consumer tool-visibility policy to a candidate
+ * name list. Each name's stable declarative metadata (`sideEffect`,
+ * `planModeAllowed`) is resolved from the registry and passed to the predicate;
+ * names the predicate rejects are dropped. A name with no resolvable
+ * registration is dropped too (fail-closed) so unknown-metadata tools can be
+ * default-denied. Returns the input reference unchanged when no policy is set —
+ * callers may rely on the identity short-circuit (matches `filterExcludedTools`).
+ */
+export function applyToolVisibilityPolicy(
+  tools: string[],
+  policy: KodaXToolVisibilityPolicy | undefined,
+): string[] {
+  if (!policy) return tools;
+  return tools.filter((name) => {
+    const def = getRegisteredToolDefinition(name);
+    if (!def) return false;
+    return policy({
+      name: def.name,
+      sideEffect: def.sideEffect,
+      planModeAllowed: def.planModeAllowed === true,
+    });
+  });
 }
 
 export function getRuntimeActiveToolNames(

@@ -136,6 +136,8 @@ export type {
   KodaXAgentMode,
   KodaXAgentProfile,
   KodaXEffectiveTaskConfig,
+  KodaXToolVisibilityMeta,
+  KodaXToolVisibilityPolicy,
   KodaXManagedTaskStatusEvent,
   KodaXOptions,
   KodaXCompactionOverride,

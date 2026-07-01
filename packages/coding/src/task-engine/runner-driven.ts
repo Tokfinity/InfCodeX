@@ -180,7 +180,7 @@ import {
 // `tool:before` hook fires on AMA path (pre-FEATURE_100 only SA hit
 // it).
 import { getToolExecutionOverride } from '../agent-runtime/permission-gate.js';
-import { filterExcludedTools } from '../agent-runtime/tool-resolution.js';
+import { applyToolVisibilityPolicy, filterExcludedTools } from '../agent-runtime/tool-resolution.js';
 import { listToolDefinitions } from '../tools/index.js';
 import {
   CANCELLED_TOOL_RESULT_MESSAGE,
@@ -1293,9 +1293,13 @@ async function runManagedTaskViaRunnerInner(
   const runtimeSessionState = buildRuntimeSessionState({
     loadedExtensionState: resolvedInitial.loadedExtensionState,
     loadedExtensionRecords: resolvedInitial.loadedExtensionRecords,
-    activeTools: filterExcludedTools(
-      listToolDefinitions().map((tool) => tool.name),
-      options.context?.excludeTools,
+    // FEATURE_247 (R2): profile tool-visibility policy after excludeTools.
+    activeTools: applyToolVisibilityPolicy(
+      filterExcludedTools(
+        listToolDefinitions().map((tool) => tool.name),
+        options.context?.excludeTools,
+      ),
+      options.context?.toolVisibilityPolicy,
     ),
     modelSelection: {
       provider: options.provider,

@@ -44,10 +44,46 @@
 import { describe, expect, it } from 'vitest';
 
 import {
+  applyToolVisibilityPolicy,
   filterExcludedTools,
   getActiveToolDefinitions,
   getRuntimeActiveToolNames,
 } from '../tool-resolution.js';
+
+describe('FEATURE_247 (R2): applyToolVisibilityPolicy', () => {
+  it('returns the input reference unchanged when no policy is set (identity short-circuit)', () => {
+    const input = ['read', 'edit'];
+    expect(applyToolVisibilityPolicy(input, undefined)).toBe(input);
+  });
+
+  it('keeps only tools the policy accepts, predicating on sideEffect', () => {
+    const readOnlyish = applyToolVisibilityPolicy(
+      ['read', 'glob', 'write', 'bash', 'web_search', 'web_fetch', 'dispatch_child_task'],
+      (t) => t.sideEffect === 'readonly' || t.sideEffect === 'reads-network',
+    );
+    // readonly + reads-network survive; mutating tools are hidden.
+    expect(readOnlyish).toContain('read');
+    expect(readOnlyish).toContain('glob');
+    expect(readOnlyish).toContain('web_search'); // reads-network (R9)
+    expect(readOnlyish).not.toContain('write'); // mutates-fs
+    expect(readOnlyish).not.toContain('bash'); // mutates-shell
+    expect(readOnlyish).not.toContain('web_fetch'); // mutates-network
+    expect(readOnlyish).not.toContain('dispatch_child_task'); // mutates-state
+  });
+
+  it('can distinguish MCP reads from mcp_call via sideEffect', () => {
+    const kept = applyToolVisibilityPolicy(
+      ['mcp_search', 'mcp_read_resource', 'mcp_get_prompt', 'mcp_call'],
+      (t) => t.sideEffect !== 'mutates-network',
+    );
+    expect(kept).toEqual(['mcp_search', 'mcp_read_resource', 'mcp_get_prompt']);
+    expect(kept).not.toContain('mcp_call'); // the only mutating MCP entry point
+  });
+
+  it('fail-closed: a name with no resolvable registration is dropped even if the policy would accept it', () => {
+    expect(applyToolVisibilityPolicy(['totally_unknown_tool_xyz'], () => true)).toEqual([]);
+  });
+});
 
 describe('CAP-040: filterExcludedTools — pure filter contract', () => {
   it('CAP-TOOL-EXCLUDE-001a: empty / undefined excludeTools → input array reference returned unchanged (identity short-circuit)', () => {

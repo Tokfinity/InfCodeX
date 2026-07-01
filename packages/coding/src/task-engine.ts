@@ -24,6 +24,7 @@ import { mapLegacyReasoningModeToEffortIntent } from '@kodax-ai/llm';
 import { runKodaX } from './agent.js';
 import { listToolDefinitions } from './tools/index.js';
 import { emitEffectiveTaskConfig } from './agent-runtime/effective-config.js';
+import { applyToolVisibilityPolicy } from './agent-runtime/tool-resolution.js';
 import {
   buildFallbackRoutingDecision,
   createReasoningPlan,
@@ -55,6 +56,7 @@ import type {
   KodaXOptions,
   KodaXResult,
   KodaXTaskRoutingDecision,
+  KodaXToolVisibilityPolicy,
 } from './types.js';
 
 export function resolveManagedAgentMode(options: KodaXOptions): KodaXAgentMode {
@@ -188,7 +190,7 @@ export async function dispatchManagedTask(
     // once at run start. Fires only when a subscriber is set ⇒ inert by default.
     emitEffectiveTaskConfig(saOptions, {
       agentMode: 'sa',
-      toolScope: computeVisibleToolScope(excludeTools),
+      toolScope: computeVisibleToolScope(excludeTools, saOptions.context?.toolVisibilityPolicy),
     });
     return deps.runSA(saOptions, prompt);
   }
@@ -209,7 +211,10 @@ export async function dispatchManagedTask(
   // FEATURE_247 (R4): report the effective config for the AMA/AMAW path too.
   emitEffectiveTaskConfig(options, {
     agentMode,
-    toolScope: computeVisibleToolScope(options.context?.excludeTools ?? []),
+    toolScope: computeVisibleToolScope(
+      options.context?.excludeTools ?? [],
+      options.context?.toolVisibilityPolicy,
+    ),
   });
   const plan = await deps.buildPlan(options, prompt);
   return deps.runAMA(options, prompt, undefined, plan);
@@ -220,11 +225,15 @@ export async function dispatchManagedTask(
  * tool name minus the excluded set. Mirrors `filterExcludedTools` so the
  * reported scope matches what the runner actually presents to the model.
  */
-function computeVisibleToolScope(excludeTools: readonly string[]): string[] {
+function computeVisibleToolScope(
+  excludeTools: readonly string[],
+  policy: KodaXToolVisibilityPolicy | undefined,
+): string[] {
   const excluded = new Set(excludeTools);
-  return listToolDefinitions()
+  const afterExclude = listToolDefinitions()
     .map((tool) => tool.name)
     .filter((name) => !excluded.has(name));
+  return applyToolVisibilityPolicy(afterExclude, policy);
 }
 
 async function executeRunManagedTask(

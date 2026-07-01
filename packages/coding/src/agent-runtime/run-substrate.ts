@@ -133,6 +133,7 @@ import { describeTransientProviderRetry } from './provider-retry-policy.js';
 // CAP-037 predicates (`isToolResultErrorContent`) consumed inside the
 // dispatch substrate (CAP-024 / CAP-078) since FEATURE_100 P3.3d.
 import {
+  applyToolVisibilityPolicy,
   filterExcludedTools,
   getActiveToolDefinitions,
   getRuntimeActiveToolNames,
@@ -477,9 +478,14 @@ export async function runSubstrate(
   const runtimeSessionState = buildRuntimeSessionState({
     loadedExtensionState,
     loadedExtensionRecords,
-    activeTools: filterExcludedTools(
-      runtimeDefaults?.activeTools ?? listToolDefinitions().map((tool) => tool.name),
-      options.context?.excludeTools,
+    // FEATURE_247 (R2): apply the profile tool-visibility policy after the
+    // static excludeTools filter, before the model-visible list is built.
+    activeTools: applyToolVisibilityPolicy(
+      filterExcludedTools(
+        runtimeDefaults?.activeTools ?? listToolDefinitions().map((tool) => tool.name),
+        options.context?.excludeTools,
+      ),
+      options.context?.toolVisibilityPolicy,
     ),
     modelSelection: {
       provider: turnState.currentProviderName,

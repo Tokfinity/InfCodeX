@@ -119,6 +119,9 @@ import type {
   RecoveryAction,
   RecoveryLadderStep,
 } from './resilience/types.js';
+// FEATURE_247 (R2): the tool-visibility policy predicates on the stable
+// `sideEffect` contract. Type-only import (erased at runtime, no cycle).
+import type { ToolSideEffect } from './tools/types.js';
 
 // Re-export all types from @kodax-ai/agent
 export type {
@@ -1129,6 +1132,31 @@ export interface ManagedMutationTracker {
   reflectionInjected?: boolean;
 }
 
+/**
+ * FEATURE_247 (R2) — a minimal, stable per-tool view handed to a
+ * {@link KodaXToolVisibilityPolicy}. Only the load-bearing declarative metadata
+ * is exposed (never the handler / full schema) so the contract stays stable as
+ * tools evolve. `sideEffect` distinguishes readonly / reads-network /
+ * mutates-* classes; `planModeAllowed` marks query-shaped tools.
+ */
+export interface KodaXToolVisibilityMeta {
+  readonly name: string;
+  readonly sideEffect: ToolSideEffect;
+  readonly planModeAllowed: boolean;
+}
+
+/**
+ * FEATURE_247 (R2) — an SDK-consumer predicate evaluated for every candidate
+ * tool BEFORE the model-visible tool list is built. Return `false` to hide a
+ * tool from the model. Space uses this to express profile-scoped rules such as
+ * "only readonly + reads-network visible" and to default-deny anything it does
+ * not explicitly recognize, without enumerating a name list that drifts as the
+ * SDK adds tools. Covers SDK builtin + host-registered + extension + MCP tools
+ * uniformly (each carries a required `sideEffect`). A tool with no resolvable
+ * metadata is hidden (fail-closed).
+ */
+export type KodaXToolVisibilityPolicy = (tool: KodaXToolVisibilityMeta) => boolean;
+
 export interface KodaXContextOptions {
   /** Project root used for project-scoped prompts, permissions, and path policy. */
   gitRoot?: string | null;
@@ -1191,6 +1219,13 @@ export interface KodaXContextOptions {
   mutationTracker?: ManagedMutationTracker;
   /** FEATURE_067 v3: Tool names to exclude from API-level tool list (child agents). */
   excludeTools?: readonly string[];
+  /**
+   * FEATURE_247 (R2) — profile-scoped tool visibility predicate applied when the
+   * model-visible tool list is built (in addition to `excludeTools`). Tools for
+   * which it returns `false` are hidden from the model. Absent ⇒ no policy (only
+   * `excludeTools` applies) — the default Coding Agent path is unchanged.
+   */
+  toolVisibilityPolicy?: KodaXToolVisibilityPolicy;
   /**
    * FEATURE_067 v3: Override the entire system prompt for this run.
    * When set, buildSystemPromptSnapshot is skipped — only this string is used.
