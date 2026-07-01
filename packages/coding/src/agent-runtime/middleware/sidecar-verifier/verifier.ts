@@ -225,11 +225,23 @@ export async function invokeSidecarVerifier(
 }
 
 /**
+ * Retry guidance appended to a revise verdict's reanimate message. Moved here
+ * from the Worker system prompt (FEATURE_116 follow-up): keeping it in the
+ * system prompt busted the Anthropic system cache block on every reanimate.
+ * Riding the synthetic user message instead keeps the system prompt byte-stable
+ * across revise cycles while the Worker still sees the same retry instruction.
+ */
+export const REVISE_RETROSPECTIVE =
+  'A previous attempt at this task failed Sidecar Verifier review. Treat the prior `todo_update` items marked `failed` as ground truth — the same approach will not pass twice. Read the failure note before retrying. If the retry requires a fundamentally different step (not a fix of the failed one), use `todo_create` to add the new step rather than overloading the failed item with a different objective.';
+
+/**
  * Map a `SidecarVerifierVerdict` to the agent-layer `StopHookResult`
  * three-state surface:
- *   - 'accept'  → undefined        (defer to terminal path)
- *   - 'revise'  → string (reason)  (reanimate via synthetic user msg)
- *   - 'blocked' → {abort, reason}  (halt + surface to caller)
+ *   - 'accept'  → undefined                        (defer to terminal path)
+ *   - 'revise'  → {reanimate, source}              (reanimate via synthetic
+ *                 user msg, attributed to the sidecar so the REPL/SDK render
+ *                 it distinctly; carries the reason + retry retrospective)
+ *   - 'blocked' → {abort, reason}                  (halt + surface to caller)
  *
  * Pure function — no I/O. Exported for tests and for D.2 wiring.
  */
@@ -240,7 +252,10 @@ export function mapVerifierVerdictToStopHookResult(
     case 'accept':
       return undefined;
     case 'revise':
-      return verdict.reason;
+      return {
+        reanimate: `${verdict.reason}\n\n${REVISE_RETROSPECTIVE}`,
+        source: 'sidecar-verifier',
+      };
     case 'blocked':
       return { abort: true, reason: verdict.reason };
   }

@@ -773,6 +773,27 @@ export function buildTranscriptRows(options: TranscriptBuildOptions): Transcript
         });
         rows.push({ key: `${item.id}-blank`, text: " ", itemId: item.id });
         break;
+      case "sidecar": {
+        const sidecarLabel = item.delivery === "budget-exhausted"
+          ? "⚡ Sidecar Verifier — budget exhausted"
+          : item.verdict === "blocked"
+          ? "⚡ Sidecar Verifier — blocked"
+          : "⚡ Sidecar Verifier — revise";
+        pushWrappedRows(
+          rows,
+          `${item.id}-header`,
+          `${sidecarLabel} [${formatTimestamp(item.timestamp)}]`,
+          viewportWidth,
+          { color: "warning", bold: true, itemId: item.id },
+        );
+        pushWrappedRows(rows, `${item.id}-body`, item.text, getBodyWidth(viewportWidth, 2), {
+          color: "dim",
+          indent: 2,
+          itemId: item.id,
+        });
+        rows.push({ key: `${item.id}-blank`, text: " ", itemId: item.id });
+        break;
+      }
       default:
         break;
     }

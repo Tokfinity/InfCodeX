@@ -351,6 +351,7 @@ export interface StopHookContext {
 export type StopHookResult =
   | undefined
   | string
+  | { readonly reanimate: string; readonly source?: string }
   | { readonly abort: true; readonly reason: string };
 
 /**
@@ -535,8 +536,31 @@ async function appendMessageEntry(session: Session, message: AgentMessage): Prom
       // round-trips that need UI hiding preserve the KodaXMessage object
       // directly through lineage/session payload storage.
       ...(message._synthetic === true ? { synthetic: true } : {}),
+      ...(message._source !== undefined ? { source: message._source } : {}),
     },
   });
+}
+
+/**
+ * Normalize the stop-hook reanimate surface into `{ content, source }`.
+ * Accepts a bare `string` (source-less reanimate, back-compat) or the
+ * structured `{ reanimate, source }` form that lets a hook attribute the
+ * injected message. Returns undefined for any other shape (accept / abort /
+ * malformed), so the caller falls through to the abort + malformed handling.
+ */
+function normalizeReanimate(
+  result: StopHookResult,
+): { content: string; source?: string } | undefined {
+  if (typeof result === 'string') return { content: result };
+  if (
+    result !== undefined
+    && typeof result === 'object'
+    && 'reanimate' in result
+    && typeof result.reanimate === 'string'
+  ) {
+    return { content: result.reanimate, source: result.source };
+  }
+  return undefined;
 }
 
 interface GenerationTurnOutcome {
@@ -798,7 +822,9 @@ async function genericRun<TData>(
           }).end();
         }
 
-        if (typeof stopResult === 'string') {
+        // A bare string OR `{ reanimate, source }` both mean "reanimate".
+        const reanimate = normalizeReanimate(stopResult);
+        if (reanimate !== undefined) {
           // Reanimate path: convert to forced abort if budget exhausted.
           if (reanimateCount >= reanimateBudget) {
             agentSpan?.addChild('stop-hook', {
@@ -806,14 +832,14 @@ async function genericRun<TData>(
               outcome: 'budget-exhausted',
               reanimateCount,
               reanimateBudget,
-              reason: stopResult,
+              reason: reanimate.content,
             }).end();
             if (invariantSession) {
               const dispatch = invariantSession.assertTerminal();
               enforceInvariant(dispatch.results);
             }
             return {
-              output: `reanimate budget exhausted: ${stopResult}`,
+              output: `reanimate budget exhausted: ${reanimate.content}`,
               messages: transcript,
               sessionId: opts.session?.id,
               stoppedByHook: true,
@@ -822,10 +848,13 @@ async function genericRun<TData>(
           // Inject synthetic user message + continue loop. Emit the
           // span with the PRE-increment count to align with
           // `StopHookContext.reanimateCount` semantics (0-indexed).
+          // `_source` (when provided) attributes the injected message so the
+          // REPL/SDK render it as its originating subsystem, not a user query.
           const syntheticUserMessage: AgentMessage = {
             role: 'user',
-            content: stopResult,
+            content: reanimate.content,
             _synthetic: true,
+            ...(reanimate.source ? { _source: reanimate.source } : {}),
           };
           transcript.push(syntheticUserMessage);
           if (opts.session) {
@@ -836,7 +865,7 @@ async function genericRun<TData>(
             outcome: 'reanimate',
             reanimateCount,
             reanimateBudget,
-            reason: stopResult,
+            reason: reanimate.content,
           }).end();
           reanimateCount += 1;
           continue;
@@ -845,6 +874,7 @@ async function genericRun<TData>(
         if (
           stopResult !== undefined
           && typeof stopResult === 'object'
+          && 'abort' in stopResult
           && stopResult.abort === true
         ) {
           agentSpan?.addChild('stop-hook', {

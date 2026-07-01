@@ -94,6 +94,15 @@ function toCreatableTextHistoryItem(
       return { type: "error", text: item.text };
     case "hint":
       return { type: "hint", text: item.text };
+    case "sidecar": {
+      // The icon slot carries the encoded verdict/delivery (see toPersistedUiHistoryItem).
+      const encoded = item.icon;
+      if (encoded === "budget-exhausted") {
+        return { type: "sidecar", text: item.text, delivery: "budget-exhausted" };
+      }
+      const verdict = encoded === "blocked" ? "blocked" : "revise";
+      return { type: "sidecar", text: item.text, verdict };
+    }
   }
 }
 

@@ -382,7 +382,8 @@ export type HistoryItemType =
   | "error"
   | "event"
   | "info"
-  | "hint";
+  | "hint"
+  | "sidecar";
 
 /**
  * History item base class - 历史项基类
@@ -478,6 +479,22 @@ export interface HistoryItemHint extends HistoryItemBase {
 }
 
 /**
+ * Sidecar Verifier message - Sidecar 验证器消息
+ * Displayed as an independent "role" with its own header so the user can
+ * clearly see that the Sidecar Verifier is actively reviewing the output.
+ * verdict: 'revise' | 'blocked' | undefined; delivery 'budget-exhausted' means
+ * the verifier ran out of budget before returning a verdict.
+ */
+export interface HistoryItemSidecar extends HistoryItemBase {
+  type: "sidecar";
+  text: string;
+  /** 'revise' or 'blocked'; absent when delivery === 'budget-exhausted' */
+  verdict?: "revise" | "blocked";
+  /** Set when the verifier exhausted its token budget before reaching a verdict */
+  delivery?: "budget-exhausted";
+}
+
+/**
  * Union type of all history items - 所有历史项的联合类型
  */
 export type HistoryItem =
@@ -489,7 +506,8 @@ export type HistoryItem =
   | HistoryItemError
   | HistoryItemEvent
   | HistoryItemInfo
-  | HistoryItemHint;
+  | HistoryItemHint
+  | HistoryItemSidecar;
 
 /**
  * Creatable history item types (with text property) - 可创建的历史项类型（带 text 属性）
@@ -504,6 +522,7 @@ export type CreatableHistoryItem =
   | Omit<HistoryItemEvent, "id" | "timestamp">
   | Omit<HistoryItemInfo, "id" | "timestamp">
   | Omit<HistoryItemHint, "id" | "timestamp">
+  | Omit<HistoryItemSidecar, "id" | "timestamp">
   | Omit<HistoryItemToolGroup, "id" | "timestamp">;
 
 // === UI State - UI 状态 ===

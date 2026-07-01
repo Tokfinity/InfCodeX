@@ -105,7 +105,8 @@ describe('buildRunnerSidecarVerifierAdapter', () => {
         reanimateCount: 2,
         reanimateBudget: 2,
       });
-      expect(result).toBe('Run the missing regression test.');
+      expect((result as { source?: string }).source).toBe('sidecar-verifier');
+      expect((result as { reanimate: string }).reanimate).toContain('Run the missing regression test.');
     } finally {
       if (priorAlways === undefined) {
         delete process.env.KODAX_VERIFIER_ALWAYS;

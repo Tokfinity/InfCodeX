@@ -747,6 +747,13 @@ function toCreatableHistoryItem(item: HistoryItem): CreatableHistoryItem {
       return { type: "system", text: item.text };
     case "hint":
       return { type: "hint", text: item.text };
+    case "sidecar":
+      return {
+        type: "sidecar",
+        text: item.text,
+        ...(item.verdict ? { verdict: item.verdict } : {}),
+        ...(item.delivery ? { delivery: item.delivery } : {}),
+      };
     case "tool_group":
       return { type: "tool_group", tools: item.tools };
     case "user":
@@ -1060,6 +1067,15 @@ function toPersistedUiHistoryItem(
   const text = "text" in item && typeof item.text === "string" ? item.text.trimEnd() : "";
   if (!text) {
     return undefined;
+  }
+
+  // Sidecar items encode verdict/delivery into the icon slot so the existing
+  // KodaXSessionUiTextHistoryItem shape requires no extra fields.
+  if (item.type === "sidecar") {
+    const verdictIcon = item.delivery === "budget-exhausted"
+      ? "budget-exhausted"
+      : item.verdict ?? "revise";
+    return { type: "sidecar", text, icon: verdictIcon };
   }
 
   const icon = "icon" in item && typeof item.icon === "string" && item.icon.length > 0
@@ -1975,6 +1991,31 @@ const InkREPLInner: React.FC<InkREPLProps> = ({
         ...(item.icon ? { icon: item.icon } : {}),
         ...(item.tightSpacing ? { tightSpacing: true } : {}),
         timestamp: Date.now(),
+      } as HistoryItem);
+    } else {
+      addHistoryItem(item);
+    }
+  }, [addHistoryItem, appendManagedForegroundLedgerItem]);
+
+  /**
+   * Emit a sidecar verifier history item to the correct transcript layer.
+   * Follows the same foreground-layering rule as emitInfoItemToCorrectLayer:
+   * if a managed worker currently owns the foreground, append to that ledger
+   * so the sidecar message renders inline with the worker output.
+   */
+  const emitSidecarItemToCorrectLayer = useCallback((
+    item: { type: "sidecar"; text: string; verdict?: "revise" | "blocked"; delivery?: "budget-exhausted" },
+    tag: string,
+  ): void => {
+    const ts = Date.now();
+    if (managedForegroundOwnerRef.current.workerId) {
+      appendManagedForegroundLedgerItem({
+        id: `${tag}-${ts}-${Math.random().toString(36).slice(2, 7)}`,
+        type: "sidecar",
+        text: item.text,
+        ...(item.verdict ? { verdict: item.verdict } : {}),
+        ...(item.delivery ? { delivery: item.delivery } : {}),
+        timestamp: ts,
       } as HistoryItem);
     } else {
       addHistoryItem(item);
@@ -6056,19 +6097,21 @@ const InkREPLInner: React.FC<InkREPLProps> = ({
       if (userInterruptedRef.current) {
         return;
       }
-      const label = event.delivery === "budget-exhausted"
-        ? "[Sidecar budget exhausted]"
-        : event.verdict === "revise"
-        ? "[Sidecar -> Agent]"
-        : "[Sidecar blocked]";
-      const suggestedFix = event.suggestedFix
-        ? `\nSuggested fix: ${event.suggestedFix}`
-        : "";
-      emitInfoItemToCorrectLayer({
-        type: "info",
-        icon: ">",
-        text: `${label}\n${event.content}${suggestedFix}`,
-      }, "sidecar-message");
+      const bodyText = event.suggestedFix
+        ? `${event.content}\nSuggested fix: ${event.suggestedFix}`
+        : event.content;
+      if (event.delivery === "budget-exhausted") {
+        emitSidecarItemToCorrectLayer(
+          { type: "sidecar", text: bodyText, delivery: "budget-exhausted" },
+          "sidecar-message",
+        );
+      } else {
+        const verdict = event.verdict === "blocked" ? "blocked" : "revise";
+        emitSidecarItemToCorrectLayer(
+          { type: "sidecar", text: bodyText, verdict },
+          "sidecar-message",
+        );
+      }
     },
     onError: (error: Error) => {
       const latestExecutingTool = findLatestExecutingTool();

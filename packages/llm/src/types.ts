@@ -143,6 +143,14 @@ export interface KodaXMessage {
   content: string | KodaXContentBlock[];
   /** Marks messages injected by the system (auto-continue, retry prompts). Hidden in REPL display. */
   _synthetic?: boolean;
+  /**
+   * Identifies which subsystem injected a synthetic message so consumers can
+   * render/attribute it distinctly instead of treating it like a user query.
+   * Absent on genuine user/assistant/system messages. Known values include
+   * `'sidecar-verifier'` (Sidecar Verifier revise feedback). Exposed verbatim
+   * through `KodaXResult.messages` and session-load APIs for SDK consumers.
+   */
+  _source?: string;
 }
 
 // ============== 流式结果类型 ==============

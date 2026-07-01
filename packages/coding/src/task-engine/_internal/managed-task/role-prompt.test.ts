@@ -305,15 +305,14 @@ describe('FEATURE_114 Slice 2 — worker role prompt entry wire', () => {
     expect(rendered).toContain('You are the Worker — KodaX\'s single primary agent');
   });
 
-  it('threads isResumeAfterReviseFailure into the Worker retrospective fragment (Sidecar Verifier wording post-F190)', () => {
+  it('no longer threads isResumeAfterReviseFailure into the Worker prompt (retrospective moved to the sidecar reanimate message post-F116)', () => {
     const fresh = renderWorker();
     const resume = renderWorker({ isResumeAfterReviseFailure: true });
-    // Fresh-run prompt should NOT carry the retrospective sentence.
+    // Neither prompt carries the retrospective now — it rides the Sidecar
+    // Verifier's synthetic user message (mapVerifierVerdictToStopHookResult),
+    // so the system prompt stays byte-stable across revise cycles for cache reuse.
     expect(fresh).not.toContain('Sidecar Verifier review');
-    // Resume prompt MUST carry it (drives the LLM to read failed-item
-    // notes before retrying with the same approach). FEATURE_190 swapped
-    // the wording from "Evaluator review" to "Sidecar Verifier review".
-    expect(resume).toContain('A previous attempt at this task failed Sidecar Verifier review');
+    expect(resume).not.toContain('A previous attempt at this task failed Sidecar Verifier review');
     expect(resume).not.toContain('Evaluator review');
   });
 

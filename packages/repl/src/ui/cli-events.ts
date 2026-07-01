@@ -179,13 +179,15 @@ export function createCliEvents(showSessionId = true): KodaXEvents {
 
     onSidecarMessage: (event) => {
       if (spinner) { spinner.stop(); spinner = null; }
-      const label = event.delivery === 'budget-exhausted'
-        ? '[Sidecar budget exhausted]'
-        : event.verdict === 'revise'
-        ? '[Sidecar -> Agent]'
-        : '[Sidecar blocked]';
-      const suggestedFix = event.suggestedFix ? `\nSuggested fix: ${event.suggestedFix}` : '';
-      process.stdout.write(chalk.dim(`\n${label}\n${event.content}${suggestedFix}\n`));
+      const header = event.delivery === 'budget-exhausted'
+        ? '⚡ Sidecar Verifier — budget exhausted'
+        : event.verdict === 'blocked'
+        ? '⚡ Sidecar Verifier — blocked'
+        : '⚡ Sidecar Verifier — revise';
+      const bodyText = event.suggestedFix
+        ? `${event.content}\nSuggested fix: ${event.suggestedFix}`
+        : event.content;
+      process.stdout.write(chalk.yellow(`\n${header}\n`) + chalk.dim(`${bodyText}\n`));
     },
 
     onStreamEnd: () => {

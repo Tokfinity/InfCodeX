@@ -66,6 +66,8 @@ function serializeOne(item: HistoryItem): string | null {
       return `event: ${stripAnsi(item.text)}`;
     case "hint":
       return `hint: ${stripAnsi(item.text)}`;
+    case "sidecar":
+      return `sidecar: ${stripAnsi(item.text)}`;
     case "tool_group":
       return serializeToolGroup(item);
     default: {

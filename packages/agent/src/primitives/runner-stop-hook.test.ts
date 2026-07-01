@@ -414,6 +414,53 @@ describe('Runner stopHook — FEATURE_184 Phase A primitive', () => {
     ).rejects.toThrow(/stop-hook reanimate loop/);
   });
 
+  it('attributes a {reanimate, source} result onto the injected synthetic message', async () => {
+    let calls = 0;
+    const llm = async (): Promise<RunnerLlmResult> => {
+      calls += 1;
+      return { text: `reply-${calls}`, toolCalls: [] };
+    };
+    // Reanimate once with a structured, attributed result; accept on the retry.
+    const hook = async (): Promise<StopHookResult> =>
+      calls === 1 ? { reanimate: 'fix the tests', source: 'sidecar-verifier' } : undefined;
+
+    const result = await Runner.run(agentNoTools, 'hi', {
+      llm,
+      stopHook: hook,
+      stopHookReanimateBudget: 2,
+      tracer: null,
+    });
+
+    const injected = result.messages.find(
+      (m) => m.role === 'user' && (m as { _source?: string })._source === 'sidecar-verifier',
+    );
+    expect(injected).toBeDefined();
+    expect(injected?.content).toBe('fix the tests');
+    expect((injected as { _synthetic?: boolean })._synthetic).toBe(true);
+  });
+
+  it('leaves a bare string reanimate without a _source (back-compat)', async () => {
+    let calls = 0;
+    const llm = async (): Promise<RunnerLlmResult> => {
+      calls += 1;
+      return { text: `reply-${calls}`, toolCalls: [] };
+    };
+    const hook = async (): Promise<StopHookResult> => (calls === 1 ? 'keep going' : undefined);
+
+    const result = await Runner.run(agentNoTools, 'hi', {
+      llm,
+      stopHook: hook,
+      stopHookReanimateBudget: 2,
+      tracer: null,
+    });
+
+    const injected = result.messages.find(
+      (m) => m.role === 'user' && (m as { _synthetic?: boolean })._synthetic === true,
+    );
+    expect(injected?.content).toBe('keep going');
+    expect((injected as { _source?: string })._source).toBeUndefined();
+  });
+
   it('hook sees the post-guardrail assistant text in lastAssistantText', async () => {
     // OutputGuardrail rewrites the assistant message. stopHook must see
     // the rewritten text, not the original.

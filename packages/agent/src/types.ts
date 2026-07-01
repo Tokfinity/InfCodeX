@@ -271,7 +271,8 @@ export type KodaXSessionUiTextHistoryItemType =
   | 'error'
   | 'event'
   | 'info'
-  | 'hint';
+  | 'hint'
+  | 'sidecar';
 
 export type KodaXSessionUiHistoryItemType =
   | KodaXSessionUiTextHistoryItemType

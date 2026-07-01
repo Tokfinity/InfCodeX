@@ -205,13 +205,18 @@ describe('mapVerifierVerdictToStopHookResult — three-state mapping', () => {
     expect(result).toBeUndefined();
   });
 
-  it('revise → string (reason)', () => {
+  it('revise → {reanimate: reason + retrospective, source: sidecar-verifier}', () => {
     const result = mapVerifierVerdictToStopHookResult({
       verdict: 'revise',
       reason: 'add tests',
       trace: 'verifier_ok',
     });
-    expect(result).toBe('add tests');
+    expect((result as { source?: string }).source).toBe('sidecar-verifier');
+    const reanimate = (result as { reanimate: string }).reanimate;
+    expect(reanimate).toContain('add tests');
+    // Retry retrospective is folded into the reanimate message (moved out of the
+    // Worker system prompt so the system cache block stays byte-stable).
+    expect(reanimate).toContain('previous attempt at this task failed');
   });
 
   it('blocked → {abort, reason}', () => {
@@ -250,7 +255,7 @@ describe('createSidecarVerifierStopHook — end-to-end stub', () => {
     expect(observedVerdict).toEqual({ v: 'accept', trace: 'verifier_ok' });
   });
 
-  it('surfaces revise verdict as a reanimate string', async () => {
+  it('surfaces revise verdict as a {reanimate, source} object', async () => {
     const provider = fakeProvider(async () => ({
       textBlocks: [],
       toolBlocks: [toolBlock('emit_sidecar_verdict', {
@@ -270,7 +275,8 @@ describe('createSidecarVerifierStopHook — end-to-end stub', () => {
       reanimateCount: 0,
       reanimateBudget: 2,
     });
-    expect(result).toBe('please add a test');
+    expect((result as { source?: string }).source).toBe('sidecar-verifier');
+    expect((result as { reanimate: string }).reanimate).toContain('please add a test');
   });
 
   it('surfaces blocked verdict as {abort, reason}', async () => {

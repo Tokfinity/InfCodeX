@@ -2296,3 +2296,95 @@ describe("FEATURE_220 — inline scrollback stability (keystone regression)", ()
     expect(flatten(round(1))).toEqual(flatten(round(1)));
   });
 });
+
+describe("sidecar verifier rendering", () => {
+  function sidecarItem(
+    opts: { verdict?: "revise" | "blocked"; delivery?: "budget-exhausted"; text?: string } = {},
+  ): HistoryItem {
+    return {
+      id: "sc-1",
+      type: "sidecar",
+      text: opts.text ?? "The output is incomplete.",
+      timestamp: 0,
+      ...(opts.verdict ? { verdict: opts.verdict } : {}),
+      ...(opts.delivery ? { delivery: opts.delivery } : {}),
+    };
+  }
+
+  it("renders a distinct header containing 'Sidecar Verifier' for verdict=revise", () => {
+    const rows = buildTranscriptRows({
+      items: [sidecarItem({ verdict: "revise" })],
+      viewportWidth: 120,
+    });
+    const headerRows = rows.filter((r) => r.key.startsWith("sc-1-header"));
+    expect(headerRows.length).toBeGreaterThan(0);
+    const headerText = headerRows.map((r) => r.text).join(" ");
+    expect(headerText).toContain("Sidecar Verifier");
+    expect(headerText).toContain("revise");
+  });
+
+  it("renders 'blocked' label for verdict=blocked", () => {
+    const rows = buildTranscriptRows({
+      items: [sidecarItem({ verdict: "blocked" })],
+      viewportWidth: 120,
+    });
+    const headerText = rows
+      .filter((r) => r.key.startsWith("sc-1-header"))
+      .map((r) => r.text)
+      .join(" ");
+    expect(headerText).toContain("blocked");
+  });
+
+  it("renders 'budget exhausted' label for delivery=budget-exhausted", () => {
+    const rows = buildTranscriptRows({
+      items: [sidecarItem({ delivery: "budget-exhausted" })],
+      viewportWidth: 120,
+    });
+    const headerText = rows
+      .filter((r) => r.key.startsWith("sc-1-header"))
+      .map((r) => r.text)
+      .join(" ");
+    expect(headerText).toContain("budget exhausted");
+  });
+
+  it("renders body text indented under the header", () => {
+    const bodyText = "Please add error handling for the edge case.";
+    const rows = buildTranscriptRows({
+      items: [sidecarItem({ verdict: "revise", text: bodyText })],
+      viewportWidth: 120,
+    });
+    const bodyRows = rows.filter((r) => r.key.startsWith("sc-1-body"));
+    expect(bodyRows.length).toBeGreaterThan(0);
+    expect(bodyRows.map((r) => r.text).join(" ")).toContain(bodyText);
+  });
+
+  it("emits a trailing blank spacer row", () => {
+    const rows = buildTranscriptRows({
+      items: [sidecarItem({ verdict: "revise" })],
+      viewportWidth: 120,
+    });
+    expect(rows.some((r) => r.key === "sc-1-blank")).toBe(true);
+  });
+
+  it("uses warning color for the header (not info color)", () => {
+    const rows = buildTranscriptRows({
+      items: [sidecarItem({ verdict: "revise" })],
+      viewportWidth: 120,
+    });
+    const header = rows.find((r) => r.key.startsWith("sc-1-header"));
+    expect(header?.color).toBe("warning");
+  });
+
+  it("header color is distinct from info-type items", () => {
+    const rows = buildTranscriptRows({
+      items: [
+        sidecarItem({ verdict: "revise" }),
+        info("inf-1", "just an info message"),
+      ],
+      viewportWidth: 120,
+    });
+    const sidecarHeader = rows.find((r) => r.key.startsWith("sc-1-header"));
+    const infoBody = rows.find((r) => r.key.startsWith("inf-1-body"));
+    expect(sidecarHeader?.color).not.toBe(infoBody?.color);
+  });
+});

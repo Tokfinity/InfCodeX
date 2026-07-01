@@ -99,6 +99,23 @@ describe("transcript-scrollback-dump/serializeTranscriptForScrollback", () => {
     expect(out).toContain("event msg");
     expect(out).toContain("hint msg");
   });
+
+  it("emits sidecar items with 'sidecar:' role tag", () => {
+    const items: HistoryItem[] = [
+      { id: "sc1", type: "sidecar", timestamp: 0, text: "please revise the output", verdict: "revise" },
+    ];
+    const out = serializeTranscriptForScrollback(items);
+    expect(out).toContain("sidecar:");
+    expect(out).toContain("please revise the output");
+  });
+
+  it("emits sidecar budget-exhausted item with text preserved", () => {
+    const items: HistoryItem[] = [
+      { id: "sc2", type: "sidecar", timestamp: 0, text: "verifier budget ran out", delivery: "budget-exhausted" },
+    ];
+    const out = serializeTranscriptForScrollback(items);
+    expect(out).toContain("verifier budget ran out");
+  });
 });
 
 describe("transcript-scrollback-dump/dumpTranscriptToNativeScrollback", () => {

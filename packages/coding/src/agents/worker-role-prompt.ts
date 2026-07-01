@@ -52,9 +52,13 @@ export function buildWorkerInstructions(
   isResumeAfterReviseFailure: boolean,
 ): string {
   void verification; // kept on the signature for parity with legacy roles
-  const reviseFailureRetrospective = isResumeAfterReviseFailure
-    ? 'A previous attempt at this task failed Sidecar Verifier review. Treat the prior `todo_update` items marked `failed` as ground truth — the same approach will not pass twice. Read the failure note before retrying. If the retry requires a fundamentally different step (not a fix of the failed one), use `todo_create` to add the new step rather than overloading the failed item with a different objective.'
-    : '';
+  // FEATURE_116 follow-up — the revise-failure retrospective moved OUT of the
+  // Worker system prompt. Injecting it here flipped the system-prompt bytes on
+  // every reanimate, busting the Anthropic system cache block (~4.7K tokens per
+  // reanimate). It now rides the Sidecar Verifier's synthetic user message
+  // (see `mapVerifierVerdictToStopHookResult`), so the system prompt stays
+  // byte-stable across revise cycles. Parameter kept for signature parity.
+  void isResumeAfterReviseFailure;
 
   const planFirstContract = [
     'PLAN-FIRST CONTRACT (FEATURE_114 v0.7.36 + FEATURE_170 v0.7.41 + v0.7.42 schema split):',
@@ -260,7 +264,6 @@ export function buildWorkerInstructions(
 
   return [
     roleAck,
-    reviseFailureRetrospective,
     planFirstContract,
     planListHygiene,
     scopeCommitment,

@@ -235,14 +235,15 @@ describe('buildWorkerInstructions', () => {
     expect(dispatchIdx).toBeGreaterThan(repoIntelIdx);
   });
 
-  it('includes a revise-failure retrospective when flagged', () => {
-    const out = buildWorkerInstructions(baseDecision, undefined, true);
-    expect(out).toContain('previous attempt at this task failed');
-  });
-
-  it('omits the retrospective when not a resume after revise', () => {
-    const out = buildWorkerInstructions(baseDecision, undefined, false);
-    expect(out).not.toContain('previous attempt at this task failed');
+  it('keeps the system prompt byte-identical regardless of the resume-after-revise flag (retrospective moved to the sidecar reanimate message)', () => {
+    // FEATURE_116 follow-up: the revise-failure retrospective now rides the
+    // Sidecar Verifier's synthetic user message (mapVerifierVerdictToStopHookResult),
+    // so the Worker system prompt stays byte-stable across revise cycles and the
+    // Anthropic system cache block is reused instead of busted every reanimate.
+    const resumed = buildWorkerInstructions(baseDecision, undefined, true);
+    const fresh = buildWorkerInstructions(baseDecision, undefined, false);
+    expect(resumed).toBe(fresh);
+    expect(resumed).not.toContain('previous attempt at this task failed');
   });
 
   it('echoes the routing decision summary', () => {
@@ -413,10 +414,12 @@ describe('buildWorkerInstructions — FEATURE_170 Todo V2 API (v0.7.41)', () => 
     expect(out).toMatch(/mid fan-out you decide to dispatch another child.*add the matching todo before the new dispatch/);
   });
 
-  it('revise-failure retrospective points new fundamentally-different steps at todo_create', () => {
+  it('no longer carries the revise-failure retrospective in the system prompt (moved to the sidecar reanimate message)', () => {
+    // The retrospective's todo_create guidance now lives in REVISE_RETROSPECTIVE
+    // on the sidecar reanimate message (verifier.ts) — verified there instead.
     const out = buildWorkerInstructions(baseDecision, undefined, true);
-    expect(out).toContain('previous attempt at this task failed');
-    expect(out).toMatch(/use `todo_create` to add the new step/);
+    expect(out).not.toContain('previous attempt at this task failed');
+    expect(out).not.toMatch(/use `todo_create` to add the new step/);
   });
 });
 
