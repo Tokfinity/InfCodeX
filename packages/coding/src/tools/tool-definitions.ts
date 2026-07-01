@@ -640,7 +640,10 @@ export const BUILTIN_TOOL_DEFINITIONS: LocalToolDefinition[] = [
       required: ['query'],
     },
     handler: toolWebSearch,
-    sideEffect: 'mutates-network',
+    // FEATURE_247: read-only network research — distinct from web_fetch
+    // (mutates-network) so a Partner/permission policy can allow research while
+    // blocking mutating network calls. planModeAllowed is unchanged.
+    sideEffect: 'reads-network',
     // Plan mode permits web_search: it's functionally a query (no remote
     // mutation), common in planning workflows ("research the API before
     // I propose the change"). web_fetch is NOT planModeAllowed because
@@ -783,7 +786,8 @@ export const BUILTIN_TOOL_DEFINITIONS: LocalToolDefinition[] = [
       required: ['id'],
     },
     handler: toolMcpReadResource,
-    sideEffect: 'mutates-network',
+    // FEATURE_247: read against the remote MCP server, no remote mutation.
+    sideEffect: 'reads-network',
     // Plan mode permits MCP read-resource: it's a read against the
     // remote server, functionally a query. mcp_call is NOT
     // planModeAllowed because it can invoke arbitrary MCP tools that
@@ -806,7 +810,8 @@ export const BUILTIN_TOOL_DEFINITIONS: LocalToolDefinition[] = [
       required: ['id'],
     },
     handler: toolMcpGetPrompt,
-    sideEffect: 'mutates-network',
+    // FEATURE_247: read of a server-side prompt definition, no remote mutation.
+    sideEffect: 'reads-network',
     // Plan mode permits MCP get-prompt: it's a read of a server-side
     // prompt definition, functionally a query.
     planModeAllowed: true,

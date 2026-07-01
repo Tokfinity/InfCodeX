@@ -35,6 +35,7 @@ export {
   getAllRegisteredTools,
   isToolPlanModeAllowed,
   isToolFileMutation,
+  isToolNetworkRead,
   isToolMutation,
   getRequiredToolParams,
   listTools,

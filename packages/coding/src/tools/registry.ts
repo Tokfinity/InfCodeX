@@ -277,6 +277,27 @@ export function isToolFileMutation(name: string): boolean {
 }
 
 /**
+ * FEATURE_247 — does this tool perform a read-only network request
+ * (`sideEffect === 'reads-network'`)?
+ *
+ * Lets an SDK embedder's permission broker (e.g. KodaX-Space Partner) allow
+ * web research / MCP reads (`web_search`, `mcp_read_resource`, `mcp_get_prompt`)
+ * while still blocking mutating network calls (`web_fetch`, `mcp_call` →
+ * `mutates-network`). Fail-closed: unknown names return `false`.
+ *
+ * Note: `isToolMutation` intentionally still returns `true` for a
+ * `reads-network` tool (only `readonly` is treated as non-mutating there), so
+ * existing mutation-gate behavior is unchanged — use THIS predicate, or the
+ * `sideEffect` value directly, to select the read-network class.
+ */
+export function isToolNetworkRead(name: string): boolean {
+  const def =
+    getActiveToolRegistration(name)
+    ?? BUILTIN_TOOL_DEFINITIONS.find((entry) => entry.name === name);
+  return def?.sideEffect === 'reads-network';
+}
+
+/**
  * v0.7.42 — does this tool mutate anything (FS, shell, network, state)?
  *
  * True for every `sideEffect` except `'readonly'`. Fail-closed (unknown

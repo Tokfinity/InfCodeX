@@ -68,9 +68,16 @@ export type ToolHandler = ToolHandlerSync | ToolHandlerStreaming;
  *                            artifacts). Bash is NOT in this bucket; it has
  *                            its own.
  *   - `'mutates-shell'`   — invokes an arbitrary shell command (bash).
- *   - `'mutates-network'` — performs a network request that may have side
- *                            effects on the remote (web_fetch with any
- *                            method, web_search, MCP server calls).
+ *   - `'reads-network'`   — FEATURE_247: performs a network request whose
+ *                            LLM-facing semantics are read-only, i.e. no remote
+ *                            mutation (web_search, mcp_read_resource,
+ *                            mcp_get_prompt). Distinct from `'mutates-network'`
+ *                            so a permission broker can allow web research while
+ *                            still blocking mutating network calls. Plan-mode
+ *                            eligibility is still driven by `planModeAllowed`,
+ *                            unchanged.
+ *   - `'mutates-network'` — performs a network request that may mutate remote
+ *                            state (web_fetch with a mutating method, mcp_call).
  *   - `'mutates-state'`   — changes internal session/agent state without
  *                            FS or shell side effects (todo_update,
  *                            send_message, dispatch_child_task,
@@ -82,6 +89,7 @@ export type ToolHandler = ToolHandlerSync | ToolHandlerStreaming;
  */
 export type ToolSideEffect =
   | 'readonly'
+  | 'reads-network'
   | 'mutates-fs'
   | 'mutates-shell'
   | 'mutates-network'

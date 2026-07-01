@@ -7,6 +7,7 @@ import {
   getToolDefinition,
   isToolFileMutation,
   isToolMutation,
+  isToolNetworkRead,
   isToolPlanModeAllowed,
   listBuiltinToolDefinitions,
   registerTool,
@@ -177,7 +178,7 @@ describe('v0.7.42 — tool sideEffect metadata', () => {
         `built-in tool "${tool.name}" is missing sideEffect`,
       ).toBeDefined();
       expect(
-        ['readonly', 'mutates-fs', 'mutates-shell', 'mutates-network', 'mutates-state'],
+        ['readonly', 'reads-network', 'mutates-fs', 'mutates-shell', 'mutates-network', 'mutates-state'],
       ).toContain(tool.sideEffect);
     }
   });
@@ -206,6 +207,36 @@ describe('v0.7.42 — tool sideEffect metadata', () => {
     const mcpCall = listBuiltinToolDefinitions().find((t) => t.name === 'mcp_call');
     expect(webFetch?.sideEffect).toBe('mutates-network');
     expect(mcpCall?.sideEffect).toBe('mutates-network');
+  });
+
+  // FEATURE_247 (R9): read-only network research is a distinct side-effect
+  // class so a Partner/permission policy can allow research while blocking
+  // mutating network calls.
+  it('classifies web_search + mcp_read_resource + mcp_get_prompt as reads-network', () => {
+    for (const name of ['web_search', 'mcp_read_resource', 'mcp_get_prompt']) {
+      const tool = listBuiltinToolDefinitions().find((t) => t.name === name);
+      expect(tool?.sideEffect, `${name} sideEffect`).toBe('reads-network');
+    }
+  });
+
+  it('isToolNetworkRead: true only for reads-network tools, false for mutating network tools', () => {
+    expect(isToolNetworkRead('web_search')).toBe(true);
+    expect(isToolNetworkRead('mcp_read_resource')).toBe(true);
+    expect(isToolNetworkRead('mcp_get_prompt')).toBe(true);
+    expect(isToolNetworkRead('web_fetch')).toBe(false);
+    expect(isToolNetworkRead('mcp_call')).toBe(false);
+    expect(isToolNetworkRead('read')).toBe(false);
+    expect(isToolNetworkRead('totally_unknown_tool')).toBe(false); // fail-closed
+  });
+
+  it('reclassification preserves existing semantics: reads-network stays plan-allowed + mutation-true + not-fs', () => {
+    // planModeAllowed unchanged (research-during-plan still permitted)
+    expect(isToolPlanModeAllowed('web_search')).toBe(true);
+    expect(isToolPlanModeAllowed('mcp_read_resource')).toBe(true);
+    // isToolMutation still treats non-readonly as mutating (no gate regression)
+    expect(isToolMutation('web_search')).toBe(true);
+    // not a filesystem mutation
+    expect(isToolFileMutation('web_search')).toBe(false);
   });
 
   it('marks plan-loop tools planModeAllowed: true', () => {
