@@ -7,7 +7,7 @@ import { existsSync } from 'node:fs';
 import { join } from 'node:path';
 
 import chalk from 'chalk';
-import { getAgentConfigPath, isFinalWorkflowProcessStatus } from '@kodax-ai/agent';
+import { buildWorkflowCapsuleIntent, getAgentConfigPath, isFinalWorkflowProcessStatus } from '@kodax-ai/agent';
 import type {
   WorkflowModule,
   WorkflowCapsule,
@@ -657,12 +657,7 @@ export const workflowCommand: Command = {
         name: savedName,
         manifest,
         source: generated.source,
-        intent: {
-          taskClass: manifest.patterns[0] ?? manifest.name,
-          ...(manifest.patterns.length > 0 ? { patterns: manifest.patterns } : {}),
-          originalRequest: invocation.request,
-          reusableFor: [manifest.description],
-        },
+        intent: buildWorkflowCapsuleIntent(manifest, { originalRequest: invocation.request }),
         ...(capsule.inputs !== undefined ? { inputs: capsule.inputs } : {}),
         ...(capsule.requires !== undefined ? { requires: capsule.requires } : {}),
         provenance: buildWorkflowRevisionProvenance({

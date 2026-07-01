@@ -52,7 +52,7 @@ describe('run_workflow pattern-combination teaching (review find->verify)', () =
     expect(d, 'T1 pipeline-by-default / barrier discipline').toMatch(/as a barrier only when/);
     expect(d, 'T2 majority-refute threshold').toContain('majority cannot refute');
     expect(d, 'T3 distinct failure-mode angle per verifier').toContain('distinct failure-mode angle');
-    expect(d, 'T9 scale fan-out to the request').toContain('thoroughly audit');
+    expect(d, 'T9 scale fan-out to the request').toContain('match the effort to the request');
     expect(d, 'T8 no silent caps (with WHY)').toMatch(/silent cap/);
     expect(d, 'T13 named single-phase shapes').toContain('single-phase shapes');
   });

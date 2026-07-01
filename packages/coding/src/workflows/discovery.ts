@@ -19,6 +19,7 @@ import { pathToFileURL } from 'node:url';
 
 import {
   createWorkflowCapsule,
+  buildWorkflowCapsuleIntent,
   createWorkflowModuleFromCapsule,
   validateRestrictedWorkflowSource,
   validateWorkflowCapsule,
@@ -510,12 +511,10 @@ async function readCapsuleFromRun(input: LoadGeneratedWorkflowFromRunInput): Pro
     : basename(input.runDir);
   const originalRequest = readOptionalOriginalRequest(runRaw.args);
   const requirements = deriveRequirements(manifest);
-  const intent: WorkflowCapsuleIntent = {
-    taskClass: manifest.patterns[0] ?? manifest.name,
-    ...(manifest.patterns.length > 0 ? { patterns: manifest.patterns } : {}),
-    ...(originalRequest !== undefined ? { originalRequest } : {}),
-    reusableFor: [manifest.description],
-  };
+  const intent: WorkflowCapsuleIntent = buildWorkflowCapsuleIntent(
+    manifest,
+    originalRequest !== undefined ? { originalRequest } : {},
+  );
   const inputs: WorkflowCapsuleInputs = {
     description: 'Provide new workflow args matching the generated request shape.',
     ...('args' in runRaw ? { examples: [runRaw.args] } : {}),

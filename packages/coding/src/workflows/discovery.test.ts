@@ -269,6 +269,33 @@ describe('saveGeneratedWorkflow', () => {
     expect(await loaded.module.run({} as never, {})).toBe('rerun-ok');
   });
 
+  it('records the full declared patterns[] in the capsule intent loaded from a run (M15, end-to-end)', async () => {
+    const runDir = join(dir, 'run-m15');
+    mkdirSync(runDir, { recursive: true });
+    const scriptPath = join(runDir, 'script.js');
+    const manifestPath = join(runDir, 'manifest.json');
+    const multiPattern = { ...manifest, patterns: ['fan-out-and-synthesize', 'adversarial-verification'] as const };
+    writeFileSync(scriptPath, 'async function run() { return "ok"; }', 'utf8');
+    writeFileSync(manifestPath, JSON.stringify(multiPattern), 'utf8');
+    writeFileSync(
+      join(runDir, 'run.json'),
+      JSON.stringify({
+        runId: 'run-m15',
+        workflow: 'generated',
+        args: { request: 'review the changes' },
+        scriptSnapshotPath: scriptPath,
+        manifestSnapshotPath: manifestPath,
+      }),
+      'utf8',
+    );
+
+    const loaded = await loadGeneratedWorkflowFromRun({ runDir });
+    // taskClass keeps the primary pattern; intent.patterns records the whole set
+    // (guards the readCapsuleFromRun constructor, not just the capsule parser).
+    expect(loaded.capsule.intent?.taskClass).toBe('fan-out-and-synthesize');
+    expect(loaded.capsule.intent?.patterns).toEqual(['fan-out-and-synthesize', 'adversarial-verification']);
+  });
+
   it('rejects invalid restricted source when saving generated capsules', async () => {
     await expect(
       saveGeneratedWorkflow({

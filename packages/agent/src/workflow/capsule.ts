@@ -270,3 +270,22 @@ export function createWorkflowModuleFromCapsule(capsule: WorkflowCapsule): Workf
     source: validated.source,
   });
 }
+
+/**
+ * Single source of truth for deriving a capsule intent from a workflow manifest.
+ * `taskClass` keeps the primary pattern; the full declared set is recorded on
+ * `patterns` so a combination like ['fan-out-and-synthesize',
+ * 'adversarial-verification'] is preserved rather than collapsed to its first id
+ * (M15). Used by every capsule-save path so the propagation logic is tested once.
+ */
+export function buildWorkflowCapsuleIntent(
+  manifest: { readonly patterns: readonly string[]; readonly name: string; readonly description: string },
+  opts: { readonly originalRequest?: string } = {},
+): WorkflowCapsuleIntent {
+  return {
+    taskClass: manifest.patterns[0] ?? manifest.name,
+    ...(manifest.patterns.length > 0 ? { patterns: [...manifest.patterns] } : {}),
+    ...(opts.originalRequest !== undefined ? { originalRequest: opts.originalRequest } : {}),
+    reusableFor: [manifest.description],
+  };
+}

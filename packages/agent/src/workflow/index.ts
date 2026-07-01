@@ -84,6 +84,7 @@ export {
   WORKFLOW_CAPSULE_API_VERSION,
   WORKFLOW_CAPSULE_FORMAT,
   WORKFLOW_CAPSULE_VERSION,
+  buildWorkflowCapsuleIntent,
   createWorkflowCapsule,
   createWorkflowModuleFromCapsule,
   validateWorkflowCapsule,

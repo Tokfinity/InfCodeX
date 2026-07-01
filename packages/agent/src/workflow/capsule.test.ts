@@ -6,6 +6,7 @@ import { describe, expect, it } from 'vitest';
 
 import type { WorkflowApi, WorkflowScriptManifest } from './index.js';
 import {
+  buildWorkflowCapsuleIntent,
   createWorkflowCapsule,
   createWorkflowModuleFromCapsule,
   validateWorkflowCapsule,
@@ -92,6 +93,22 @@ describe('WorkflowCapsule', () => {
     expect(capsule.workflowApiVersion).toBe(1);
     expect(capsule.source).toBe(source);
     expect(validateWorkflowCapsule(capsule)).toEqual(capsule);
+  });
+
+  it('buildWorkflowCapsuleIntent records the full declared patterns[] (M15 — the shared save-path logic)', () => {
+    const multi = buildWorkflowCapsuleIntent(
+      { patterns: ['fan-out-and-synthesize', 'adversarial-verification'], name: 'wf', description: 'd' },
+      { originalRequest: 'review the changes' },
+    );
+    // taskClass keeps the primary pattern; patterns records the whole combination.
+    expect(multi.taskClass).toBe('fan-out-and-synthesize');
+    expect(multi.patterns).toEqual(['fan-out-and-synthesize', 'adversarial-verification']);
+    expect(multi.originalRequest).toBe('review the changes');
+    // single pattern -> patterns has one; empty -> no patterns field, taskClass falls back to name.
+    expect(buildWorkflowCapsuleIntent({ patterns: ['tournament'], name: 'wf', description: 'd' }).patterns).toEqual(['tournament']);
+    const empty = buildWorkflowCapsuleIntent({ patterns: [], name: 'wf-empty', description: 'd' });
+    expect(empty.patterns).toBeUndefined();
+    expect(empty.taskClass).toBe('wf-empty');
   });
 
   it('preserves the full declared patterns[] in the intent, not only patterns[0] (M15)', () => {
