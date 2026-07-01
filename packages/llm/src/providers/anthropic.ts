@@ -489,6 +489,68 @@ export abstract class KodaXAnthropicCompatProvider extends KodaXBaseProvider {
     return out;
   }
 
+  /**
+   * FEATURE_116 follow-up — Place an incremental cache breakpoint on the
+   * conversation history (Anthropic breakpoint 3). The system prompt and
+   * tools already carry breakpoints 1 & 2 (applyCacheControlToSystem /
+   * applyCacheControlToTools); without a message-level breakpoint the whole
+   * growing transcript is re-billed as uncached input every turn.
+   *
+   * Strategy: mark the LAST content block of the second-to-last `user` turn.
+   * The most recent user turn is skipped — it is the current, still-changing
+   * input. The prior user turn's content is settled, so its prefix is a stable
+   * cache write-point that later turns read back incrementally (Anthropic caches
+   * the whole prefix up to and including the marked block: tools + system + all
+   * earlier messages). Total breakpoints stay at 3 (≤ Anthropic's limit of 4).
+   *
+   * Only anthropic-compat providers reach this path; OpenAI/ACP strip cache
+   * markers and rely on upstream automatic prefix caching. Escape hatch:
+   * `KODAX_DISABLE_PROMPT_CACHE=1` returns the array untouched.
+   *
+   * Returns a new array; never mutates input.
+   */
+  protected applyCacheControlToMessages(
+    messages: Anthropic.Messages.MessageParam[],
+  ): Anthropic.Messages.MessageParam[] {
+    if (messages.length === 0) return messages;
+    if (process.env.KODAX_DISABLE_PROMPT_CACHE === '1') return messages;
+
+    // Find the second-to-last `user` turn (skip the most recent user turn,
+    // which is the current unstable input).
+    let userTurnsSeen = 0;
+    let targetIdx = -1;
+    for (let i = messages.length - 1; i >= 0; i--) {
+      if (messages[i]!.role === 'user') {
+        userTurnsSeen += 1;
+        if (userTurnsSeen === 2) {
+          targetIdx = i;
+          break;
+        }
+      }
+    }
+    if (targetIdx === -1) return messages;
+
+    const target = messages[targetIdx]!;
+    // A string content block cannot carry a cache_control attribute; only
+    // block arrays can. Settled history user turns normally hold tool_result
+    // block arrays (the common path); string / empty content is skipped safely.
+    if (typeof target.content === 'string' || target.content.length === 0) {
+      return messages;
+    }
+
+    const blocks = target.content;
+    const last = blocks[blocks.length - 1]!;
+    const markedLast = {
+      ...last,
+      cache_control: { type: 'ephemeral' as const },
+    } as Anthropic.Messages.ContentBlockParam;
+    const newContent = [...blocks.slice(0, -1), markedLast];
+
+    const out = messages.slice();
+    out[targetIdx] = { ...target, content: newContent };
+    return out;
+  }
+
   async stream(
     messages: KodaXMessage[],
     tools: KodaXToolDefinition[],
@@ -503,7 +565,9 @@ export abstract class KodaXAnthropicCompatProvider extends KodaXBaseProvider {
       this.validateExplicitReasoningEffort(normalizedReasoning, model);
       const maxOutputTokens =
         streamOptions?.maxOutputTokensOverride ?? this.getEffectiveMaxOutputTokens(model);
-      const convertedMessages = await this.convertMessages(messages, model);
+      const convertedMessages = this.applyCacheControlToMessages(
+        await this.convertMessages(messages, model),
+      );
       const initialCapability = normalizedReasoning.enabled
         ? this.getReasoningCapability(model)
         : 'none';
@@ -938,7 +1002,9 @@ export abstract class KodaXAnthropicCompatProvider extends KodaXBaseProvider {
       this.validateExplicitReasoningEffort(normalizedReasoning, model);
       const maxOutputTokens =
         streamOptions?.maxOutputTokensOverride ?? this.getEffectiveMaxOutputTokens(model);
-      const convertedMessages = await this.convertMessages(messages, model);
+      const convertedMessages = this.applyCacheControlToMessages(
+        await this.convertMessages(messages, model),
+      );
       const initialCapability = normalizedReasoning.enabled
         ? this.getReasoningCapability(model)
         : 'none';

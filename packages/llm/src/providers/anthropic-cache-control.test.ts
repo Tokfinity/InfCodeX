@@ -33,6 +33,9 @@ class TestAnthropicProvider extends KodaXAnthropicCompatProvider {
   public exposedApplyCacheControlToTools(tools: KodaXToolDefinition[]) {
     return this.applyCacheControlToTools(tools);
   }
+  public exposedApplyCacheControlToMessages(messages: Anthropic.Messages.MessageParam[]) {
+    return this.applyCacheControlToMessages(messages);
+  }
 }
 
 const tool = (name: string, description = 'desc'): KodaXToolDefinition => ({
@@ -178,5 +181,111 @@ describe('KodaXAnthropicCompatProvider — boundary leak guard', () => {
     expect(serialize('hello')).toBe('hello');
     const textBlocks: Array<{ type: string; text?: string }> = [{ type: 'text', text: 'hi' }];
     expect(serialize(textBlocks)).toBe('hi');
+  });
+});
+
+describe('KodaXAnthropicCompatProvider.applyCacheControlToMessages', () => {
+  let provider: TestAnthropicProvider;
+
+  beforeEach(() => {
+    process.env.TEST_KEY = 'sk-test';
+    delete process.env.KODAX_DISABLE_PROMPT_CACHE;
+    provider = new TestAnthropicProvider();
+  });
+
+  afterEach(() => {
+    delete process.env.TEST_KEY;
+    delete process.env.KODAX_DISABLE_PROMPT_CACHE;
+  });
+
+  const userMsg = (
+    text: string,
+    blocks?: Anthropic.Messages.ContentBlockParam[],
+  ): Anthropic.Messages.MessageParam => ({
+    role: 'user',
+    content: blocks ?? [{ type: 'text', text }],
+  });
+  const asstMsg = (text: string): Anthropic.Messages.MessageParam => ({
+    role: 'assistant',
+    content: [{ type: 'text', text }],
+  });
+  const cc = (m: Anthropic.Messages.MessageParam): unknown => {
+    const content = m.content;
+    if (typeof content === 'string' || content.length === 0) return undefined;
+    return (content[content.length - 1] as { cache_control?: unknown }).cache_control;
+  };
+
+  it('marks the last block of the second-to-last user turn', () => {
+    const msgs = [userMsg('u1'), asstMsg('a1'), userMsg('u2'), asstMsg('a2'), userMsg('u3')];
+    const result = provider.exposedApplyCacheControlToMessages(msgs);
+    // second-to-last user turn is index 2
+    expect(cc(result[2]!)).toEqual({ type: 'ephemeral' });
+    // last user turn (index 4) is left untouched
+    expect(cc(result[4]!)).toBeUndefined();
+  });
+
+  it('marks only the LAST block when the user turn has multiple blocks', () => {
+    const multi = userMsg('', [
+      { type: 'tool_result', tool_use_id: 't1', content: 'r1' },
+      { type: 'text', text: 'follow-up' },
+    ]);
+    const msgs = [multi, asstMsg('a1'), userMsg('u2')];
+    // second-to-last user turn here is `multi` (index 0)
+    const result = provider.exposedApplyCacheControlToMessages(msgs);
+    const content = result[0]!.content as Anthropic.Messages.ContentBlockParam[];
+    expect((content[0] as { cache_control?: unknown }).cache_control).toBeUndefined();
+    expect((content[1] as { cache_control?: unknown }).cache_control).toEqual({ type: 'ephemeral' });
+  });
+
+  it('returns unchanged when fewer than 2 user turns', () => {
+    const msgs = [userMsg('u1'), asstMsg('a1')];
+    const result = provider.exposedApplyCacheControlToMessages(msgs);
+    expect(cc(result[0]!)).toBeUndefined();
+  });
+
+  it('returns empty array unchanged', () => {
+    expect(provider.exposedApplyCacheControlToMessages([])).toEqual([]);
+  });
+
+  it('returns unchanged when the target user turn content is a string', () => {
+    const msgs: Anthropic.Messages.MessageParam[] = [
+      { role: 'user', content: 'u1-string' },
+      asstMsg('a1'),
+      userMsg('u2'),
+    ];
+    const result = provider.exposedApplyCacheControlToMessages(msgs);
+    expect(result[0]!.content).toBe('u1-string');
+    expect(cc(result[2]!)).toBeUndefined();
+  });
+
+  it('returns unchanged when the target user turn content is an empty array', () => {
+    const msgs: Anthropic.Messages.MessageParam[] = [
+      { role: 'user', content: [] },
+      asstMsg('a1'),
+      userMsg('u2'),
+    ];
+    const result = provider.exposedApplyCacheControlToMessages(msgs);
+    expect((result[0]!.content as unknown[]).length).toBe(0);
+  });
+
+  it('does not touch assistant turns', () => {
+    const msgs = [userMsg('u1'), asstMsg('a1'), userMsg('u2')];
+    const result = provider.exposedApplyCacheControlToMessages(msgs);
+    // assistant at index 1 must stay clean
+    const asst = result[1]!.content as Anthropic.Messages.ContentBlockParam[];
+    expect((asst[0] as { cache_control?: unknown }).cache_control).toBeUndefined();
+  });
+
+  it('honours KODAX_DISABLE_PROMPT_CACHE=1 escape hatch', () => {
+    process.env.KODAX_DISABLE_PROMPT_CACHE = '1';
+    const msgs = [userMsg('u1'), asstMsg('a1'), userMsg('u2'), asstMsg('a2'), userMsg('u3')];
+    const result = provider.exposedApplyCacheControlToMessages(msgs);
+    expect(cc(result[2]!)).toBeUndefined();
+  });
+
+  it('does not mutate the input array or its messages', () => {
+    const msgs = [userMsg('u1'), asstMsg('a1'), userMsg('u2'), asstMsg('a2'), userMsg('u3')];
+    provider.exposedApplyCacheControlToMessages(msgs);
+    expect(cc(msgs[2]!)).toBeUndefined();
   });
 });
