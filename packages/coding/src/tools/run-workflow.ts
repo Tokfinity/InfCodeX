@@ -124,6 +124,11 @@ export async function toolRunWorkflow(
     }
     // Register the stop handle so task_stop(taskId) can abort this workflow.
     ctx.childAbortControllers?.set(taskId, wfAbort);
+    // Gap A: register the live progress getter so task_output(taskId) can peek at
+    // this workflow's phase + active/finished agents while it runs (removed on settle).
+    if (started.getProgress) {
+      ctx.workflowRunProgress?.set(taskId, started.getProgress);
+    }
     // The settle promise enqueues the `<task-completed>` notification (which carries
     // the synthesis the Worker reads) when the run finishes, then resolves so the
     // idle-yield loop wakes the Worker. Its resolved value is a settle signal only.
@@ -135,6 +140,7 @@ export async function toolRunWorkflow(
         summary = `[Tool Error] Workflow ${taskId} failed: ${error instanceof Error ? error.message : String(error)}`;
       } finally {
         ctx.childAbortControllers?.delete(taskId);
+        ctx.workflowRunProgress?.delete(taskId);
       }
       enqueueChildTaskNotification({ taskId, summary });
       return EMPTY_CHILD_RESULT;
@@ -147,6 +153,8 @@ export async function toolRunWorkflow(
       `<task-completed task_id="${taskId}"> block in a later message. ` +
       `Idle-yield now (end your turn with no tool calls) if you have nothing else to do, ` +
       `or continue with other useful work; you will be resumed automatically when it finishes. ` +
+      `To check how far it has gotten while it runs, call task_output("${taskId}") — it reports the ` +
+      `current phase and which agents are running. ` +
       `If the goal changes before it finishes, call task_stop("${taskId}") to stop this run, then ` +
       `run_workflow again with the improved script — pass resumeFromRunId:"${taskId}" so the agents ` +
       `that already finished replay from cache and only the changed work re-runs.`

@@ -12,6 +12,7 @@ import {
   createWorkflowProcessTracker,
   runWorkflow,
 } from '@kodax-ai/agent';
+import { resolveWorkflowMaxConcurrency } from '@kodax-ai/llm';
 import type {
   WorkflowAgentBackend,
   WorkflowApproval,
@@ -47,9 +48,12 @@ import type { KodaXEvents, KodaXOptions, KodaXToolExecutionContext } from '../ty
 /** Mirrors the private `dispatch-child-tasks.ts` constant. */
 const DEFAULT_MAX_ITERATIONS_PER_CHILD = 200;
 
+// maxAgents (lifetime spawn cap) and tokenBudget are fixed system ceilings.
+// The concurrency ceiling is resolved per-run via `resolveWorkflowMaxConcurrency`
+// (SDK run-scoped → KODAX_WORKFLOW_MAX_CONCURRENCY env bridge → default 8) so an
+// operator can tune how many child agents run at once without an env-only knob.
 export const SYSTEM_WORKFLOW_LIMITS = {
   maxAgents: 64,
-  maxConcurrency: 16,
   tokenBudget: 200_000,
 } as const;
 
@@ -138,11 +142,19 @@ export function clampWorkflowLimits(
     hostPolicy?.maxAgents,
     SYSTEM_WORKFLOW_LIMITS.maxAgents,
   );
-  const maxConcurrency = clampEffectiveLimit(
-    meta.maxConcurrency,
-    hostPolicy?.maxConcurrency,
-    SYSTEM_WORKFLOW_LIMITS.maxConcurrency,
-  );
+  // Concurrency always resolves to a concrete value: the configured cap (default
+  // 8) is both the hard ceiling AND the default when neither the manifest nor the
+  // host declares one — so an authored script that omits maxConcurrency can never
+  // fan out unbounded (previously it fell through to Infinity, bounded only by the
+  // 64-agent lifetime cap).
+  const concurrencyCap = resolveWorkflowMaxConcurrency();
+  const declaredConcurrency = [meta.maxConcurrency, hostPolicy?.maxConcurrency]
+    .map((value) => clampLimit(value, concurrencyCap))
+    .filter((value): value is number => value !== undefined);
+  const maxConcurrency =
+    declaredConcurrency.length === 0
+      ? concurrencyCap
+      : Math.min(concurrencyCap, ...declaredConcurrency);
   const tokenBudget = clampEffectiveLimit(
     meta.tokenBudget,
     hostPolicy?.tokenBudget,

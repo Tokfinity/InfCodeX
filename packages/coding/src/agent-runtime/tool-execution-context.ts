@@ -31,10 +31,13 @@
  * and still observe accumulating mutations.
  */
 
+import type { WorkflowProcessSnapshot } from '@kodax-ai/agent';
+
 import type {
   KodaXManagedProtocolPayload,
   KodaXOptions,
   KodaXToolExecutionContext,
+  WorkflowRunProgressView,
   WorkflowToolHost,
   WorkflowToolHostResult,
 } from '../types.js';
@@ -175,6 +178,10 @@ export function buildToolExecutionContext(
     // pass a fresh `KodaXOptions` to `runKodaX` and only forward
     // workspace/system-prompt context, not the parent's registries.
     childProgressSnapshots: new Map(),
+    // Gap A — run-level workflow progress getters keyed by runId. The async
+    // run_workflow path registers one on start so task_output(runId) can render
+    // live workflow progress while it runs (removed on settle).
+    workflowRunProgress: new Map(),
     // FEATURE_246 Part A2 (ADR-046) — model-launched workflow capability. Wired
     // only when the host configured a runs dir AND the turn runs as `amaw`.
     // AMAW Worker turns carry run_workflow standing (the Worker can self-activate
@@ -210,6 +217,41 @@ export function buildWorkflowHostMetadata(
       : {}),
     ...(options.context?.taskSurface ? { taskSurface: options.context.taskSurface } : {}),
     ...(options.context?.gitRoot ? { projectRoot: options.context.gitRoot } : {}),
+  };
+}
+
+/** Gap A: distil a workflow's process snapshot into the compact live view a
+ *  task_output(runId) peek renders. Mirrors the REPL's workflowLiveSnapshotFromProcess
+ *  (per-agent items collapsed to running-names + terminal counts) so the Worker-facing
+ *  peek and the human-facing strip stay consistent. Exported for direct unit testing. */
+export function toWorkflowRunProgressView(s: WorkflowProcessSnapshot): WorkflowRunProgressView {
+  const agents = s.items.filter((item) => item.kind === 'agent');
+  const activeAgents = agents.filter((item) => item.status === 'running').map((item) => item.title);
+  const activePhaseTitle =
+    s.activePhaseId === undefined
+      ? undefined
+      : s.items.find((item) => item.id === s.activePhaseId)?.title;
+  const status: WorkflowRunProgressView['status'] =
+    s.status === 'completed'
+      ? 'completed'
+      : s.status === 'failed'
+        ? 'failed'
+        : s.status === 'cancelled'
+          ? 'stopped'
+          : 'running';
+  return {
+    status,
+    workflowName: s.displayName ?? s.workflowName,
+    ...(activePhaseTitle !== undefined ? { phase: activePhaseTitle } : {}),
+    ...(s.activePhaseIndex !== undefined ? { phaseIndex: s.activePhaseIndex } : {}),
+    ...(s.phaseCount !== undefined ? { phaseTotal: s.phaseCount } : {}),
+    activeAgents,
+    completedAgents: agents.filter((item) => item.status === 'completed').length,
+    failedAgents: agents.filter((item) => item.status === 'failed').length,
+    stoppedAgents: agents.filter((item) => item.status === 'cancelled').length,
+    totalSpawned: s.progress.spawnedAgents,
+    ...(s.progress.plannedItems !== undefined ? { plannedAgents: s.progress.plannedItems } : {}),
+    ...(s.elapsedMs !== undefined ? { elapsedMs: s.elapsedMs } : {}),
   };
 }
 
@@ -314,7 +356,13 @@ function buildWorkflowToolHost(
         ...(verificationWarnings.length > 0 ? { verificationWarnings } : {}),
       };
     });
-    return { kind: 'started', runId: started.runId, done };
+    // Gap A: expose the run's live process snapshot as a compact progress view so
+    // the async run_workflow path can register it for task_output(runId) peeks.
+    const getProgress = (): WorkflowRunProgressView | undefined => {
+      const process = started.managed.getProcessSnapshot?.();
+      return process ? toWorkflowRunProgressView(process) : undefined;
+    };
+    return { kind: 'started', runId: started.runId, done, getProgress };
   };
   return {
     startInline,

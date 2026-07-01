@@ -104,6 +104,48 @@ describe('toolTaskOutput — not_found path', () => {
   });
 });
 
+describe('toolTaskOutput — workflow run-level progress (gap A)', () => {
+  const progressView = {
+    status: 'running' as const,
+    workflowName: 'parity-audit',
+    phase: 'Audit',
+    phaseIndex: 1,
+    phaseTotal: 2,
+    activeAgents: ['structured-channel', 'concurrency-caps'],
+    completedAgents: 5,
+    failedAgents: 1,
+    stoppedAgents: 0,
+    totalSpawned: 8,
+    plannedAgents: 8,
+    elapsedMs: 80_000,
+  };
+
+  it('renders a running background workflow as workflow-shaped progress, not not_found', async () => {
+    const ctx = makeCtx({
+      workflowRunProgress: new Map([['run-1', () => progressView]]),
+    });
+    const out = await toolTaskOutput({ task_id: 'run-1' }, ctx);
+    expect(out).toContain('<retrieval_status>success</retrieval_status>');
+    expect(out).toContain('<kind>workflow</kind>');
+    expect(out).toContain('<workflow>parity-audit</workflow>');
+    expect(out).toContain('<status>running</status>');
+    expect(out).toContain('<phase>1/2 Audit</phase>');
+    expect(out).toContain('2 running, 5 completed, 1 failed (6/8 finished)');
+    expect(out).toContain('<running_agents>structured-channel, concurrency-caps</running_agents>');
+    expect(out).toContain('<task-completed task_id="run-1">');
+    expect(out).not.toContain('not_found');
+  });
+
+  it('falls back to not_found once the run has settled (getter removed)', async () => {
+    // After settle, run-workflow deletes the entry; a per-child snapshot was never
+    // written under the runId, so a late peek is not_found (the synthesis already
+    // arrived via <task-completed>).
+    const ctx = makeCtx({ workflowRunProgress: new Map() });
+    const out = await toolTaskOutput({ task_id: 'run-1' }, ctx);
+    expect(out).toContain('<retrieval_status>not_found</retrieval_status>');
+  });
+});
+
 describe('toolTaskOutput — running snapshot', () => {
   it('returns success envelope with iterations + recent_tool_calls', async () => {
     const snapshots = new Map<string, ChildProgressSnapshot>();

@@ -176,6 +176,40 @@ describe('toolRunWorkflow — async / idle-yield path (ADR-049)', () => {
     expect(registry.get('run-async-1')).toBe(inflight);
   });
 
+  it('registers a run-level progress getter so task_output(runId) can peek while running (gap A)', async () => {
+    let resolveDone!: (r: WorkflowToolHostResult) => void;
+    const done = new Promise<WorkflowToolHostResult>((res) => { resolveDone = res; });
+    const progress = {
+      status: 'running' as const,
+      workflowName: 'wf',
+      activeAgents: ['a1'],
+      completedAgents: 0,
+      failedAgents: 0,
+      stoppedAgents: 0,
+      totalSpawned: 1,
+    };
+    const host: WorkflowToolHost = {
+      runInline: async () => { throw new Error('async path must not call runInline'); },
+      startInline: async () => ({ kind: 'started', runId: 'run-peek-1', done, getProgress: () => progress }),
+    };
+    const workflowRunProgress = new Map<string, () => unknown>();
+    const ctx = {
+      workflowHost: host,
+      childTaskRegistry: new Map(),
+      workflowRunProgress,
+    } as unknown as KodaXToolExecutionContext;
+
+    await toolRunWorkflow({ manifest: MANIFEST, source: SOURCE }, ctx);
+    // While running, the getter is registered and returns the live view.
+    expect(workflowRunProgress.has('run-peek-1')).toBe(true);
+    expect(workflowRunProgress.get('run-peek-1')?.()).toEqual(progress);
+
+    // On settle the getter is removed (a late peek is then not_found).
+    resolveDone({ kind: 'started', runId: 'run-peek-1', status: 'completed', resultText: 'x' });
+    await new Promise((r) => setTimeout(r, 0));
+    expect(workflowRunProgress.has('run-peek-1')).toBe(false);
+  });
+
   it('registers a stop handle under the task id so task_stop can abort the running workflow', async () => {
     let capturedSignal: AbortSignal | undefined;
     let resolveDone!: (r: WorkflowToolHostResult) => void;

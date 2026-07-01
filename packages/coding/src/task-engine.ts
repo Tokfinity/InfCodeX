@@ -124,6 +124,7 @@ export async function runManagedTask(
       ...(options.maxOutputTokens !== undefined ? { maxOutputTokens: options.maxOutputTokens } : {}),
       ...(options.disablePromptCache !== undefined ? { disablePromptCache: options.disablePromptCache } : {}),
       ...(options.lsp !== undefined ? { lsp: options.lsp } : {}),
+      ...(options.workflow !== undefined ? { workflow: options.workflow } : {}),
     },
     async () => {
       const result = await executeRunManagedTask(options, prompt);

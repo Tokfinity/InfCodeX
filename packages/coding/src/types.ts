@@ -1399,6 +1399,15 @@ export interface KodaXOptions {
   maxOutputTokens?: number;
   disablePromptCache?: boolean;
   lsp?: boolean;
+  /**
+   * Workflow engine run-scoped overrides. `maxConcurrency` caps how many child
+   * agents a `run_workflow` fans out at once (default 8, clamped to [1, 32]); the
+   * `KODAX_WORKFLOW_MAX_CONCURRENCY` env var (bridged from config.json) is the
+   * CLI fallback. Carried run-scoped so concurrent SDK sessions stay isolated.
+   */
+  workflow?: {
+    readonly maxConcurrency?: number;
+  };
   /** FEATURE_221: SDK-consumer self-manual injection (product name + topics). */
   selfManual?: KodaXSelfManualConfig;
   /**
@@ -2076,6 +2085,16 @@ export interface KodaXToolExecutionContext {
    * absent in SA / when no runs dir is configured, so the tool fails closed.
    */
   workflowHost?: WorkflowToolHost;
+
+  /**
+   * Gap A — run-level progress getters keyed by a background workflow's runId.
+   * The async `run_workflow` path registers a getter here on start and removes
+   * it when the run settles, so `task_output(runId)` can render live workflow
+   * progress (phase + active/finished agents) while it is in flight, instead of
+   * `not_found`. Same lifetime as `childAbortControllers` (per ctx). Undefined
+   * outside the async/idle-yield path.
+   */
+  workflowRunProgress?: Map<string, () => WorkflowRunProgressView | undefined>;
 }
 
 /** Result of a model-launched workflow run (FEATURE_246 Part A2). */
@@ -2117,13 +2136,44 @@ export interface WorkflowToolHostInlineInput {
   readonly signal?: AbortSignal;
 }
 
+/**
+ * Compact live view of a running workflow. Surfaced so the Worker can peek at a
+ * background `run_workflow`'s progress via `task_output(runId)` while it is still
+ * in flight (gap A) — otherwise it only ever sees the final `<task-completed>`.
+ * Derived on demand from the run's process snapshot; deliberately free of any
+ * workflow-layer type import so this module stays dependency-light.
+ */
+export interface WorkflowRunProgressView {
+  readonly status: 'running' | 'completed' | 'failed' | 'stopped';
+  readonly workflowName: string;
+  /** Active phase title (e.g. "Verify"), when the script uses phases. */
+  readonly phase?: string;
+  readonly phaseIndex?: number;
+  readonly phaseTotal?: number;
+  /** Names of the agents currently running. */
+  readonly activeAgents: readonly string[];
+  readonly completedAgents: number;
+  readonly failedAgents: number;
+  readonly stoppedAgents: number;
+  readonly totalSpawned: number;
+  readonly plannedAgents?: number;
+  readonly elapsedMs?: number;
+}
+
 /** ADR-049: a started-but-not-awaited workflow handle. `done` resolves with the
  *  terminal result when the run settles — the async run_workflow path registers it
  *  in the Worker's childTaskRegistry so the idle-yield loop resumes the Worker with
  *  the synthesis instead of blocking the turn. */
 export type WorkflowToolHostStartResult =
   | { readonly kind: 'declined'; readonly reason?: string }
-  | { readonly kind: 'started'; readonly runId: string; readonly done: Promise<WorkflowToolHostResult> };
+  | {
+      readonly kind: 'started';
+      readonly runId: string;
+      readonly done: Promise<WorkflowToolHostResult>;
+      /** Gap A: on-demand live progress for a `task_output(runId)` peek while the
+       *  run is in flight. Absent when the host cannot snapshot the run. */
+      readonly getProgress?: () => WorkflowRunProgressView | undefined;
+    };
 
 export interface WorkflowToolHost {
   /** Start an inline-authored workflow ({manifest, source}) and await its result.

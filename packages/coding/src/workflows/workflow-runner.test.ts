@@ -542,6 +542,27 @@ describe('runWorkflowModule', () => {
     expect(spawns).toBeLessThanOrEqual(64);
   });
 
+  it('defaults an unset concurrency to the configured cap (8), never Infinity', () => {
+    // A manifest that omits maxConcurrency previously fell through to Infinity in
+    // the runtime (bounded only by the 64-agent lifetime cap). It must now resolve
+    // to the concurrency ceiling (default 8) so an authored script cannot fan out
+    // unbounded.
+    const module: WorkflowModule = {
+      meta: { name: 'no-concurrency', description: 'omits maxConcurrency', maxAgents: 40 },
+      run: async () => undefined,
+    };
+    expect(buildApprovalSummary(module).maxConcurrency).toBe(8);
+  });
+
+  it('clamps a manifest concurrency above the cap down to the cap', () => {
+    const module: WorkflowModule = {
+      meta: { name: 'greedy', description: 'asks for 32', maxAgents: 64, maxConcurrency: 32 },
+      run: async () => undefined,
+    };
+    // Default cap is 8; a manifest asking for 32 is clamped down, never up.
+    expect(buildApprovalSummary(module).maxConcurrency).toBe(8);
+  });
+
   it('normalizes invalid meta caps in approval summaries', () => {
     const module: WorkflowModule = {
       meta: {

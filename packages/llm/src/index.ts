@@ -210,7 +210,13 @@ export { parseToolInputWithSalvage } from './providers/tool-input-parser.js';
 export { classifyStopReason, isCleanStop } from './stop-reason.js';
 
 // Run-scoped config (concurrency-safe per-run overrides via AsyncLocalStorage).
-export { runWithScopedConfig, getRunScopedConfig } from './run-scoped-config.js';
+export {
+  runWithScopedConfig,
+  getRunScopedConfig,
+  resolveWorkflowMaxConcurrency,
+  WORKFLOW_MAX_CONCURRENCY_DEFAULT,
+  WORKFLOW_MAX_CONCURRENCY_ABSOLUTE,
+} from './run-scoped-config.js';
 export type { KodaXRunScopedConfig } from './run-scoped-config.js';
 export type { KodaXStopClass } from './stop-reason.js';
 

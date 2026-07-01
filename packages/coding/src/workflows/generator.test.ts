@@ -274,6 +274,16 @@ describe('validateGeneratedWorkflowSource', () => {
     expect(() => validateGeneratedWorkflowSource(source)).toThrow(/invalid JavaScript syntax/);
   });
 
+  it('appends an escape-the-quote hint when an unescaped apostrophe breaks a prompt string', () => {
+    // The exact author mistake seen in dogfooding: a single-quoted prompt string
+    // with an apostrophe inside ("...the refactor's impact") closes early and V8
+    // reports a bare "Unexpected identifier". The retry hint must name the cause.
+    const source =
+      "async function run(wf) { await wf.runAgent({ name: 'a', prompt: 'review the refactor's impact' }); return { synthesis: 'x' }; }";
+    expect(() => validateGeneratedWorkflowSource(source)).toThrow(/invalid JavaScript syntax/);
+    expect(() => validateGeneratedWorkflowSource(source)).toThrow(/unescaped quote or apostrophe/);
+  });
+
   it('rejects workflow API result misuse that would hide final output', () => {
     expect(() =>
       validateGeneratedWorkflowSource('async function run(wf) { const r = await wf.runAgent({ name: "a", prompt: "x" }); return { synthesis: r.output }; }'),

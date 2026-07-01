@@ -112,6 +112,7 @@ export type {
   WorkflowToolHostResult,
   WorkflowToolHostInlineInput,
   WorkflowToolHostStartResult,
+  WorkflowRunProgressView,
   WorkflowEventCorrelation,
   KodaXWorkflowEventMeta,
   KodaXActivityEventMeta,

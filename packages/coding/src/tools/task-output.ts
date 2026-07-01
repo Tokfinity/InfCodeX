@@ -40,7 +40,7 @@
 
 import { getMessageQueue } from '@kodax-ai/agent';
 
-import type { KodaXToolExecutionContext } from '../types.js';
+import type { KodaXToolExecutionContext, WorkflowRunProgressView } from '../types.js';
 import type {
   ChildProgressSnapshot,
   ChildToolCallBreadcrumb,
@@ -115,6 +115,13 @@ export async function toolTaskOutput(
 
   const snap = snapshots.get(taskId);
   if (!snap) {
+    // Gap A: a background run_workflow registers a run-level progress getter (not
+    // a per-child snapshot) under its runId. If the peeked id is a running
+    // workflow, render its live progress instead of not_found.
+    const workflowProgress = ctx.workflowRunProgress?.get(taskId)?.();
+    if (workflowProgress) {
+      return renderWorkflowRunProgress(taskId, workflowProgress);
+    }
     return renderNotFound(taskId);
   }
 
@@ -135,6 +142,46 @@ function drainConsumedTaskNotification(taskId: string): void {
     mode: 'task-notification',
     predicate: (message) => message.content.startsWith(prefix),
   });
+}
+
+/**
+ * Gap A — render a background workflow's live progress for a task_output(runId)
+ * peek. Workflow-shaped (phase + active/finished agents), distinct from the
+ * per-child snapshot render so the Worker sees the run's shape, not a child's.
+ */
+function renderWorkflowRunProgress(taskId: string, view: WorkflowRunProgressView): string {
+  const lines: string[] = [
+    `<retrieval_status>success</retrieval_status>`,
+    `<task_id>${escapeXmlContent(taskId)}</task_id>`,
+    `<kind>workflow</kind>`,
+    `<workflow>${escapeXmlContent(view.workflowName)}</workflow>`,
+    `<status>${view.status}</status>`,
+  ];
+  if (view.phase !== undefined) {
+    const phase =
+      view.phaseIndex !== undefined && view.phaseTotal !== undefined
+        ? `${view.phaseIndex}/${view.phaseTotal} ${view.phase}`
+        : view.phase;
+    lines.push(`<phase>${escapeXmlContent(phase)}</phase>`);
+  }
+  const finished = view.completedAgents + view.failedAgents + view.stoppedAgents;
+  const denominator = Math.max(view.plannedAgents ?? 0, view.totalSpawned, finished);
+  const agentSummary =
+    `${view.activeAgents.length} running, ${view.completedAgents} completed` +
+    (view.failedAgents > 0 ? `, ${view.failedAgents} failed` : '') +
+    (view.stoppedAgents > 0 ? `, ${view.stoppedAgents} stopped` : '') +
+    (denominator > 0 ? ` (${finished}/${denominator} finished)` : '');
+  lines.push(`<agents>${agentSummary}</agents>`);
+  if (view.activeAgents.length > 0) {
+    lines.push(`<running_agents>${escapeXmlContent(view.activeAgents.join(', '))}</running_agents>`);
+  }
+  if (view.elapsedMs !== undefined) {
+    lines.push(`<duration_ms>${Math.max(0, Math.floor(view.elapsedMs))}</duration_ms>`);
+  }
+  lines.push(
+    `<note>Workflow still running — do NOT wait on it inline; its synthesized result will arrive on its own as a <task-completed task_id="${escapeXmlContent(taskId)}"> block when it finishes.</note>`,
+  );
+  return lines.join('\n');
 }
 
 function renderNotFound(taskId: string): string {

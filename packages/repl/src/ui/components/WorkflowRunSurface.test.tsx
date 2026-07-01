@@ -37,8 +37,9 @@ describe("WorkflowRunSurface", () => {
     expect(frame.trimStart().startsWith("workflow")).toBe(true);
     expect(frame).toContain("workflow feature-217-ui-regression-audit");
     expect(frame).toContain("phase    2/4 fan-out-ui-audit");
-    expect(frame).not.toContain("agent    layout-auditor");
-    expect(frame).toContain("progress 1/2 finished (1 active agent)");
+    // The running agent is now its own bullet row in the bounded tree.
+    expect(frame).toContain("layout-auditor");
+    expect(frame).toContain("progress 1/2 finished");
     expect(frame).toContain("/workflow show run-mqc7av6y");
   });
 

@@ -222,6 +222,13 @@
   //   "storageDir": "…"             // 仓库智能索引的存储目录
   // },
 
+  // ─── 14. 工作流(run_workflow)引擎(可选)──────────────────────────
+  // "workflow": {
+  //   "maxConcurrency": 8            // 同时运行的 workflow 子 Agent 上限
+  //                                  // (默认 8;加上主 Agent + Sidecar ≈ 10 同时在跑)
+  //                                  // 范围 [1, 32];脚本 manifest 只能往下压不能抬高
+  // },
+
   // 相关环境变量(不写进 JSON,在 shell 里设置。优先级:shell env > 本文件):
   //   KODAX_VERIFIER_LOG=1            打开 verifier 诊断日志
   //   KODAX_EFFORT=<value>           启动时覆盖 effort(auto/off/low/…/max)

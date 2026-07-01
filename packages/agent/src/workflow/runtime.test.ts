@@ -814,6 +814,21 @@ describe('maxConcurrency / parallel in-flight gate', () => {
     expect(peakInFlight()).toBeLessThanOrEqual(2);
   });
 
+  it('defaults an unset maxConcurrency to the resolved ceiling (8), not Infinity', async () => {
+    // Defence in depth: a runtime built with no maxConcurrency (bypassing the
+    // coding-layer clamp) must fall back to resolveWorkflowMaxConcurrency() (8),
+    // not Infinity. Without the fallback, all 12 items would run at once.
+    const { backend, peakInFlight } = fakeBackend({ waitDelayMs: 5 });
+    await runWorkflow(baseOpts(backend, { limits: {} }), async (wf) => {
+      await wf.parallel(
+        Array.from({ length: 12 }, (_unused, i) => () => wf.runAgent({ name: `a${i}`, prompt: 'x' })),
+      );
+      return 'ok';
+    });
+    expect(peakInFlight()).toBeLessThanOrEqual(8);
+    expect(peakInFlight()).toBeGreaterThan(4); // proves real concurrency, capped — not serialized
+  });
+
   it('rejects invalid parallel concurrency', async () => {
     const { backend } = fakeBackend();
     const outcome = await runWorkflow(baseOpts(backend), async (wf) => {
@@ -836,6 +851,36 @@ describe('maxConcurrency / parallel in-flight gate', () => {
     });
     expect(outcome.ok).toBe(true);
     if (outcome.ok) expect(outcome.result).toEqual(['a', 'b', 'c']);
+  });
+
+  it('rejects an oversized parallel array up front with a clear WorkflowLimitError', async () => {
+    const { backend } = fakeBackend();
+    const outcome = await runWorkflow(baseOpts(backend), async (wf) => {
+      // 4097 > WORKFLOW_MAX_FANOUT_ITEMS (4096) — the thunks never run.
+      await wf.parallel(Array.from({ length: 4097 }, () => () => Promise.resolve('x')));
+      return 'unreached';
+    });
+    expect(outcome.ok).toBe(false);
+    if (!outcome.ok) {
+      expect(outcome.error).toBeInstanceOf(WorkflowLimitError);
+      expect(String((outcome.error as Error).message)).toContain('4096-item limit');
+    }
+  });
+
+  it('rejects an oversized pipeline array up front with a clear WorkflowLimitError', async () => {
+    const { backend } = fakeBackend();
+    const outcome = await runWorkflow(baseOpts(backend), async (wf) => {
+      await wf.pipeline!(
+        Array.from({ length: 4097 }, (_unused, i) => i),
+        (n: unknown) => n,
+      );
+      return 'unreached';
+    });
+    expect(outcome.ok).toBe(false);
+    if (!outcome.ok) {
+      expect(outcome.error).toBeInstanceOf(WorkflowLimitError);
+      expect(String((outcome.error as Error).message)).toContain('4096-item limit');
+    }
   });
 
   it('parallel drops an ordinary throwing thunk to null and keeps siblings (FEATURE_246 Part E)', async () => {

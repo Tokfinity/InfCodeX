@@ -12,9 +12,9 @@ import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 
 import { describe, expect, it } from 'vitest';
-import type { WorkflowProcessEvent } from '@kodax-ai/agent';
+import type { WorkflowProcessEvent, WorkflowProcessSnapshot } from '@kodax-ai/agent';
 
-import { buildToolExecutionContext } from './tool-execution-context.js';
+import { buildToolExecutionContext, toWorkflowRunProgressView } from './tool-execution-context.js';
 import type { KodaXOptions } from '../types.js';
 
 describe('FEATURE_246 P1: run_workflow forwards live process events to options.events', () => {
@@ -88,5 +88,63 @@ describe('FEATURE_246 P1: run_workflow forwards live process events to options.e
       args: {},
     });
     expect(out.kind).toBe('started');
+  });
+});
+
+describe('toWorkflowRunProgressView (gap A snapshot→view mapping)', () => {
+  function snapshot(overrides: Partial<WorkflowProcessSnapshot> = {}): WorkflowProcessSnapshot {
+    return {
+      runId: 'run-1',
+      workflowName: 'wf',
+      displayName: 'Parity Audit',
+      status: 'running',
+      startedAt: '2026-06-15T00:00:00.000Z',
+      updatedAt: '2026-06-15T00:01:00.000Z',
+      elapsedMs: 60_000,
+      activePhaseId: 'phase:verify',
+      activePhaseIndex: 2,
+      phaseCount: 2,
+      items: [
+        { id: 'phase:verify', title: 'Verify', kind: 'phase', status: 'running' },
+        { id: 'agent:a', title: 'reader', kind: 'agent', status: 'running', childAgentId: 'a' },
+        { id: 'agent:b', title: 'auditor', kind: 'agent', status: 'running', childAgentId: 'b' },
+        { id: 'agent:c', title: 'critic', kind: 'agent', status: 'completed', childAgentId: 'c' },
+        { id: 'agent:d', title: 'skeptic', kind: 'agent', status: 'failed', childAgentId: 'd' },
+        { id: 'agent:e', title: 'stopped-one', kind: 'agent', status: 'cancelled', childAgentId: 'e' },
+      ],
+      counts: { pending: 0, running: 2, completed: 1, failed: 1, cancelled: 1, skipped: 0 },
+      progress: { spawnedAgents: 5, finishedAgents: 3, activeAgents: 2, failedAgents: 1, stoppedAgents: 1, plannedItems: 6 },
+      ...overrides,
+    };
+  }
+
+  it('derives status, active-phase title, running names, and per-status counts', () => {
+    const view = toWorkflowRunProgressView(snapshot());
+    expect(view).toEqual({
+      status: 'running',
+      workflowName: 'Parity Audit',
+      phase: 'Verify',
+      phaseIndex: 2,
+      phaseTotal: 2,
+      activeAgents: ['reader', 'auditor'],
+      completedAgents: 1,
+      failedAgents: 1,
+      stoppedAgents: 1,
+      totalSpawned: 5,
+      plannedAgents: 6,
+      elapsedMs: 60_000,
+    });
+  });
+
+  it('maps process status completed/failed/cancelled to running-view status', () => {
+    expect(toWorkflowRunProgressView(snapshot({ status: 'completed' })).status).toBe('completed');
+    expect(toWorkflowRunProgressView(snapshot({ status: 'failed' })).status).toBe('failed');
+    expect(toWorkflowRunProgressView(snapshot({ status: 'cancelled' })).status).toBe('stopped');
+  });
+
+  it('omits phase when there is no active phase id', () => {
+    const view = toWorkflowRunProgressView(snapshot({ activePhaseId: undefined, activePhaseIndex: undefined, phaseCount: undefined }));
+    expect(view.phase).toBeUndefined();
+    expect(view.phaseIndex).toBeUndefined();
   });
 });

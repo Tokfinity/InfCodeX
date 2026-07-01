@@ -956,6 +956,9 @@ export function loadConfig(): {
     workerOldSpaceMb?: number;
     storageDir?: string;
   };
+  workflow?: {
+    maxConcurrency?: number;
+  };
 } {
   try {
     if (fsSync.existsSync(KODAX_CONFIG_FILE)) {
@@ -995,6 +998,9 @@ export function loadConfig(): {
           workerTimeoutMs?: number;
           workerOldSpaceMb?: number;
           storageDir?: string;
+        };
+        workflow?: {
+          maxConcurrency?: number;
         };
       };
       // FEATURE_078: collapse `reasoningCeiling` (preferred) onto
@@ -1196,6 +1202,7 @@ const CONFIG_ENV_BRIDGES: ReadonlyArray<{
   { env: 'KODAX_REPO_INTELLIGENCE_WORKER_TIMEOUT_MS', value: (c) => (typeof c.repoIntelligence?.workerTimeoutMs === 'number' ? String(c.repoIntelligence.workerTimeoutMs) : undefined) },
   { env: 'KODAX_REPO_INTELLIGENCE_WORKER_OLD_SPACE_MB', value: (c) => (typeof c.repoIntelligence?.workerOldSpaceMb === 'number' ? String(c.repoIntelligence.workerOldSpaceMb) : undefined) },
   { env: 'KODAX_REPO_INTELLIGENCE_STORAGE_DIR', value: (c) => (c.repoIntelligence?.storageDir?.trim() || undefined) },
+  { env: 'KODAX_WORKFLOW_MAX_CONCURRENCY', value: (c) => (typeof c.workflow?.maxConcurrency === 'number' ? String(c.workflow.maxConcurrency) : undefined) },
 ];
 
 function applyConfigSurfaceBridges(config: ReturnType<typeof loadConfig>): void {
@@ -1263,6 +1270,9 @@ export function saveConfig(config: {
     workerTimeoutMs?: number;
     workerOldSpaceMb?: number;
     storageDir?: string;
+  };
+  workflow?: {
+    maxConcurrency?: number;
   };
 }): void {
   const current = loadConfig();

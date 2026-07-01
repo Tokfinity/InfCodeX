@@ -566,7 +566,16 @@ function assertGeneratedWorkflowSyntax(source: string): void {
     });
   } catch (error) {
     const message = error instanceof Error ? error.message : String(error);
-    throw new Error(`workflow generation source has invalid JavaScript syntax: ${message}`);
+    // The most common author mistake is an unescaped quote/apostrophe inside a
+    // child-prompt string (e.g. 'review the refactor's impact' closes the string
+    // early → "Unexpected identifier"). Point the retry at the likely cause so it
+    // fixes it in one pass instead of guessing.
+    const looksLikeQuoteError =
+      /Unexpected (identifier|string|token|end of input)|Invalid or unexpected token/i.test(message);
+    const hint = looksLikeQuoteError
+      ? " — a prompt string likely has an unescaped quote or apostrophe; wrap that string in double quotes or backticks, or escape the quote, then retry"
+      : "";
+    throw new Error(`workflow generation source has invalid JavaScript syntax: ${message}${hint}`);
   }
 }
 

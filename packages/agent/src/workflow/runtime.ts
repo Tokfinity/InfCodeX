@@ -11,6 +11,8 @@
 
 import { createHash } from 'node:crypto';
 
+import { resolveWorkflowMaxConcurrency } from '@kodax-ai/llm';
+
 import type { WorkflowEvent, WorkflowEventType } from './events.js';
 import { WorkflowEventRecorder } from './events.js';
 import type {
@@ -87,6 +89,22 @@ export class WorkflowLimitError extends Error {
   constructor(message: string) {
     super(message);
     this.name = 'WorkflowLimitError';
+  }
+}
+
+/**
+ * Upper bound on the number of items a single `wf.parallel` / `wf.pipeline` call
+ * may take. Live concurrency is separately bounded by the Semaphore and the
+ * maxAgents lifetime cap; this guard only rejects an obviously-oversized array
+ * up front with a clear message instead of letting it fail deep in the run.
+ */
+export const WORKFLOW_MAX_FANOUT_ITEMS = 4096;
+
+function assertFanoutSize(method: string, count: number): void {
+  if (count > WORKFLOW_MAX_FANOUT_ITEMS) {
+    throw new WorkflowLimitError(
+      `wf.${method} received ${count} items, exceeding the ${WORKFLOW_MAX_FANOUT_ITEMS}-item limit for a single call; split the work into smaller batches`,
+    );
   }
 }
 
@@ -336,7 +354,11 @@ function buildRuntime(opts: CreateWorkflowRuntimeOptions): InternalRuntime {
   const recorder = new WorkflowEventRecorder(opts.onEvent);
   const limits = normalizeWorkflowLimits(opts.limits);
   const maxAgents = limits.maxAgents ?? Infinity;
-  const maxConcurrency = limits.maxConcurrency ?? Infinity;
+  // Defence in depth: `clampWorkflowLimits` (coding layer) already resolves a
+  // concrete cap, but any caller building a runtime with unset concurrency falls
+  // back to the same resolved ceiling (default 8) rather than Infinity, so a
+  // workflow can never fan out unbounded.
+  const maxConcurrency = limits.maxConcurrency ?? resolveWorkflowMaxConcurrency();
   const tokenBudget = limits.tokenBudget ?? null;
   const concurrency = new Semaphore(maxConcurrency);
 
@@ -712,6 +734,7 @@ function buildRuntime(opts: CreateWorkflowRuntimeOptions): InternalRuntime {
 
     parallel: <T>(items: readonly (() => Promise<T>)[], parallelOpts?: WorkflowParallelOptions) => {
       checkAbort();
+      assertFanoutSize('parallel', items.length);
       if (
         parallelOpts?.concurrency !== undefined &&
         (!Number.isInteger(parallelOpts.concurrency) || parallelOpts.concurrency <= 0)
@@ -724,6 +747,7 @@ function buildRuntime(opts: CreateWorkflowRuntimeOptions): InternalRuntime {
 
     pipeline: (items, ...stages) => {
       checkAbort();
+      assertFanoutSize('pipeline', items.length);
       const runnable = stages.filter(
         (stage): stage is (prev: unknown, item: unknown, index: number) => unknown =>
           typeof stage === 'function',

@@ -1,5 +1,10 @@
 import { describe, expect, it } from 'vitest';
-import { getRunScopedConfig, runWithScopedConfig } from '@kodax-ai/llm';
+import {
+  getRunScopedConfig,
+  runWithScopedConfig,
+  resolveWorkflowMaxConcurrency,
+  WORKFLOW_MAX_CONCURRENCY_DEFAULT,
+} from '@kodax-ai/llm';
 
 import { resolveModelHintTier } from './model-hint-routing.js';
 
@@ -50,5 +55,50 @@ describe('run-scoped model tiers (ALS, concurrency-safe)', () => {
       if (saved.p === undefined) delete process.env.KODAX_DEEP_PROVIDER; else process.env.KODAX_DEEP_PROVIDER = saved.p;
       if (saved.m === undefined) delete process.env.KODAX_DEEP_MODEL; else process.env.KODAX_DEEP_MODEL = saved.m;
     }
+  });
+});
+
+describe('resolveWorkflowMaxConcurrency (default 8, configurable, clamped)', () => {
+  function withEnv(value: string | undefined, fn: () => void): void {
+    const saved = process.env.KODAX_WORKFLOW_MAX_CONCURRENCY;
+    try {
+      if (value === undefined) delete process.env.KODAX_WORKFLOW_MAX_CONCURRENCY;
+      else process.env.KODAX_WORKFLOW_MAX_CONCURRENCY = value;
+      fn();
+    } finally {
+      if (saved === undefined) delete process.env.KODAX_WORKFLOW_MAX_CONCURRENCY;
+      else process.env.KODAX_WORKFLOW_MAX_CONCURRENCY = saved;
+    }
+  }
+
+  it('defaults to 8 with no override', () => {
+    withEnv(undefined, () => {
+      expect(resolveWorkflowMaxConcurrency()).toBe(WORKFLOW_MAX_CONCURRENCY_DEFAULT);
+      expect(WORKFLOW_MAX_CONCURRENCY_DEFAULT).toBe(8);
+    });
+  });
+
+  it('reads the KODAX_WORKFLOW_MAX_CONCURRENCY env bridge', () => {
+    withEnv('4', () => expect(resolveWorkflowMaxConcurrency()).toBe(4));
+  });
+
+  it('run-scoped SDK config wins over the env bridge', () => {
+    withEnv('4', () => {
+      const resolved = runWithScopedConfig(
+        { workflow: { maxConcurrency: 12 } },
+        () => resolveWorkflowMaxConcurrency(),
+      );
+      expect(resolved).toBe(12);
+    });
+  });
+
+  it('clamps to [1, 32] and ignores non-positive/garbage values', () => {
+    withEnv('999', () => expect(resolveWorkflowMaxConcurrency()).toBe(32));
+    withEnv('0', () => expect(resolveWorkflowMaxConcurrency()).toBe(WORKFLOW_MAX_CONCURRENCY_DEFAULT));
+    withEnv('-5', () => expect(resolveWorkflowMaxConcurrency()).toBe(WORKFLOW_MAX_CONCURRENCY_DEFAULT));
+    withEnv('abc', () => expect(resolveWorkflowMaxConcurrency()).toBe(WORKFLOW_MAX_CONCURRENCY_DEFAULT));
+    expect(
+      runWithScopedConfig({ workflow: { maxConcurrency: 100 } }, () => resolveWorkflowMaxConcurrency()),
+    ).toBe(32);
   });
 });
