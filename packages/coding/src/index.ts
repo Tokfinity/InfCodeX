@@ -1193,7 +1193,15 @@ export type { BootstrapTracingOptions } from './runtime/tracing-bootstrap.js';
 // FEATURE_218 (v0.7.47): self-knowledge manual — resolver reused by the
 // kodax_manual tool and the REPL `/help <topic>` path.
 export { resolveKodaXManual } from './self-knowledge/resolver.js';
-export { MANUAL_TOPIC_IDS } from './self-knowledge/registry.js';
+// FEATURE_221: MANUAL_REGISTRY lets an SDK consumer read the base topic bodies
+// at build time (to write accurate product docs / decide what to keep);
+// KODAX_UNDERLYING_CAPABILITY_TOPICS is the recommended subset a white-label
+// consumer keeps when replacing the manual (selfManual.baseTopics).
+export {
+  MANUAL_TOPIC_IDS,
+  MANUAL_REGISTRY,
+  KODAX_UNDERLYING_CAPABILITY_TOPICS,
+} from './self-knowledge/registry.js';
 export {
   SELF_KNOWLEDGE_ROUTING_RULE,
   buildSelfKnowledgeRoutingRule,
@@ -1201,6 +1209,10 @@ export {
 export type {
   KodaXManualTopicId,
   KodaXManualTopicInput,
+  // FEATURE_221: KodaXManualTopic / KodaXManualSource are the value types of the
+  // newly-exported MANUAL_REGISTRY, so a consumer reading base topics can name them.
+  KodaXManualTopic,
+  KodaXManualSource,
   ResolveKodaXManualInput,
   ResolveKodaXManualOptions,
   ResolveKodaXManualResult,

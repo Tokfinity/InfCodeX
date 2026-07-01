@@ -11,6 +11,7 @@
 import { MANUAL_REGISTRY, MANUAL_TOPIC_IDS } from './registry.js';
 import type {
   KodaXManualSource,
+  KodaXManualTopicId,
   KodaXManualTopicInput,
   ResolveKodaXManualInput,
   ResolveKodaXManualOptions,
@@ -50,14 +51,24 @@ function normalizeInjected(t: KodaXManualTopicInput): ManualEntry {
 }
 
 /** Ordered base + injected entries; injected override base by id, then append. */
-function buildEntries(extraTopics?: readonly KodaXManualTopicInput[]): {
+function buildEntries(
+  extraTopics?: readonly KodaXManualTopicInput[],
+  baseTopics?: readonly KodaXManualTopicId[],
+): {
   ids: string[];
   byId: Map<string, ManualEntry>;
 } {
   const byId = new Map<string, ManualEntry>();
   const ids: string[] = [];
-  for (const id of MANUAL_TOPIC_IDS) {
-    byId.set(id, MANUAL_REGISTRY[id]);
+  // FEATURE_221: `baseTopics` parameterizes which base topics are seeded.
+  // `undefined` ⇒ all base topics (byte-identical default); `[]` ⇒ none (full
+  // white-label replace); a subset ⇒ exactly those (keep inherited mechanisms).
+  const seedIds = baseTopics ?? MANUAL_TOPIC_IDS;
+  for (const id of seedIds) {
+    // A caller-supplied baseTopics could name an unknown id defensively; skip it.
+    const base = MANUAL_REGISTRY[id];
+    if (!base) continue;
+    byId.set(id, base);
     ids.push(id);
   }
   for (const t of extraTopics ?? []) {
@@ -171,7 +182,7 @@ export function resolveKodaXManual(
   options?: ResolveKodaXManualOptions,
 ): ResolveKodaXManualResult {
   const productName = options?.productName?.trim() || DEFAULT_PRODUCT_NAME;
-  const { ids, byId } = buildEntries(options?.extraTopics);
+  const { ids, byId } = buildEntries(options?.extraTopics, options?.baseTopics);
 
   const topicHint = input.topic?.trim();
   if (topicHint) {

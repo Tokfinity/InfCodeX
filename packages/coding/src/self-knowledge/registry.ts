@@ -37,6 +37,33 @@ export const MANUAL_TOPIC_IDS: readonly KodaXManualTopicId[] = [
   'troubleshooting',
 ];
 
+/**
+ * FEATURE_221 — the base topics that describe UNDERLYING KodaX MECHANISMS a
+ * product built on the SDK inherits (provider/config/permission/tool/MCP/
+ * skill/extension/session/repo-intel/SDK behavior). A white-label consumer who
+ * fully replaces the manual (`selfManual.baseTopics = []`) can pass THIS list
+ * instead to keep the agent able to accurately explain the mechanisms it stands
+ * on — e.g. `selfManual.baseTopics = [...KODAX_UNDERLYING_CAPABILITY_TOPICS]`.
+ *
+ * Excluded from this set (KodaX-CLI-specific UX, not mechanisms a product
+ * inherits): overview / install / quickstart / commands / agents / doctor /
+ * troubleshooting. It is a recommended STARTING POINT — a consumer is free to
+ * pass any explicit subset of `MANUAL_TOPIC_IDS`.
+ */
+export const KODAX_UNDERLYING_CAPABILITY_TOPICS: readonly KodaXManualTopicId[] = [
+  'providers',
+  'custom-providers',
+  'config',
+  'permissions',
+  'tools',
+  'skills',
+  'extensions',
+  'mcp',
+  'repo-intelligence',
+  'sessions',
+  'sdk',
+];
+
 const TOPICS: readonly KodaXManualTopic[] = [
   {
     id: 'overview',

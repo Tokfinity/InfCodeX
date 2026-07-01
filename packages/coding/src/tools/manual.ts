@@ -17,10 +17,15 @@ export async function toolKodaxManual(
   const topic = typeof input.topic === 'string' ? input.topic : undefined;
   const query = typeof input.query === 'string' ? input.query : undefined;
 
-  // FEATURE_221: merge any SDK-consumer-injected topics + product re-brand.
+  // FEATURE_221: merge any SDK-consumer-injected topics + product re-brand +
+  // base-topic seed control (curate / full-replace).
   const result = resolveKodaXManual(
     { topic, query },
-    { extraTopics: ctx.selfManual?.topics, productName: ctx.selfManual?.productName },
+    {
+      extraTopics: ctx.selfManual?.topics,
+      productName: ctx.selfManual?.productName,
+      baseTopics: ctx.selfManual?.baseTopics,
+    },
   );
 
   const parts: string[] = [`# ${result.title}`, '', result.content];

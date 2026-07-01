@@ -2,6 +2,11 @@ import { describe, expect, it } from 'vitest';
 
 import { MANUAL_TOPIC_MAX_BYTES, resolveKodaXManual } from './resolver.js';
 import { buildSelfKnowledgeRoutingRule } from './routing-rule.js';
+import {
+  KODAX_UNDERLYING_CAPABILITY_TOPICS,
+  MANUAL_REGISTRY,
+  MANUAL_TOPIC_IDS,
+} from './registry.js';
 import type { KodaXManualTopicInput } from './types.js';
 
 const SPACE_TOPICS: readonly KodaXManualTopicInput[] = [
@@ -99,5 +104,62 @@ describe('FEATURE_221 injectable self-manual', () => {
     );
     expect(r.matchedTopic).toBe('broken');
     expect(typeof r.content).toBe('string');
+  });
+});
+
+describe('FEATURE_221 baseTopics seed control (curate / replace)', () => {
+  it('undefined baseTopics seeds the full base (byte-identical default)', () => {
+    const withUndefined = resolveKodaXManual({}, { extraTopics: SPACE_TOPICS });
+    const index = withUndefined.content;
+    for (const id of MANUAL_TOPIC_IDS) expect(index).toContain(id);
+    expect(index).toContain('space-settings'); // extras still appended
+  });
+
+  it('baseTopics: [] is a full white-label replace — zero base topics seeded', () => {
+    const opts = { extraTopics: SPACE_TOPICS, productName: 'KodaX-Space', baseTopics: [] as const };
+    // A base-only id no longer resolves (not seeded).
+    expect(resolveKodaXManual({ topic: 'providers' }, opts).matchedTopic).not.toBe('providers');
+    // The index carries only the injected topics.
+    const index = resolveKodaXManual({}, opts).content;
+    expect(index).toContain('space-settings');
+    expect(index).toContain('overview'); // injected override id
+    expect(index).not.toContain('troubleshooting'); // base id, dropped
+    expect(index).not.toContain('- install:'); // base id, dropped
+  });
+
+  it('baseTopics: subset seeds exactly those base ids + injected', () => {
+    const opts = { extraTopics: SPACE_TOPICS, baseTopics: ['providers', 'config'] as const };
+    expect(resolveKodaXManual({ topic: 'providers' }, opts).matchedTopic).toBe('providers');
+    expect(resolveKodaXManual({ topic: 'config' }, opts).matchedTopic).toBe('config');
+    // A base id NOT in the subset is no longer reachable.
+    expect(resolveKodaXManual({ topic: 'install' }, opts).matchedTopic).not.toBe('install');
+    expect(resolveKodaXManual({ topic: 'space-settings' }, opts).matchedTopic).toBe('space-settings');
+  });
+
+  it('KODAX_UNDERLYING_CAPABILITY_TOPICS keeps the mechanism topics, drops CLI/UX ones', () => {
+    const r = resolveKodaXManual({}, {
+      extraTopics: SPACE_TOPICS,
+      baseTopics: KODAX_UNDERLYING_CAPABILITY_TOPICS,
+    });
+    // Mechanism topics a product inherits are retained…
+    expect(resolveKodaXManual({ topic: 'mcp' }, { baseTopics: KODAX_UNDERLYING_CAPABILITY_TOPICS }).matchedTopic).toBe('mcp');
+    expect(r.content).toContain('providers');
+    expect(r.content).toContain('config');
+    // …while KodaX-CLI-specific UX topics are excluded.
+    expect(KODAX_UNDERLYING_CAPABILITY_TOPICS).not.toContain('install');
+    expect(KODAX_UNDERLYING_CAPABILITY_TOPICS).not.toContain('doctor');
+    expect(KODAX_UNDERLYING_CAPABILITY_TOPICS).not.toContain('commands');
+    // Every id in the constant is a real base topic id.
+    for (const id of KODAX_UNDERLYING_CAPABILITY_TOPICS) {
+      expect(MANUAL_TOPIC_IDS).toContain(id);
+    }
+  });
+
+  it('MANUAL_REGISTRY exposes every base topic body for build-time consumer docs', () => {
+    for (const id of MANUAL_TOPIC_IDS) {
+      const topic = MANUAL_REGISTRY[id];
+      expect(topic, `MANUAL_REGISTRY missing ${id}`).toBeDefined();
+      expect(topic.body.length, `${id} body empty`).toBeGreaterThan(0);
+    }
   });
 });

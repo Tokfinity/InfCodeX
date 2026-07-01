@@ -75,10 +75,24 @@ export interface KodaXManualTopicInput {
 
 /** Per-call resolver options — consumer topic injection + product re-branding. */
 export interface ResolveKodaXManualOptions {
-  /** Injected consumer topics, merged over the KodaX base (override by id). */
+  /** Injected consumer topics, merged over the seeded base (override by id, then append). */
   readonly extraTopics?: readonly KodaXManualTopicInput[];
   /** Product name used in the scope anchor (default "KodaX"). */
   readonly productName?: string;
+  /**
+   * FEATURE_221 — which KodaX base topics to SEED before `extraTopics` is
+   * layered on top. Orthogonal to `extraTopics` (whose override-by-id/append
+   * semantics are unchanged).
+   *
+   *   - `undefined` → seed all base topics (`MANUAL_TOPIC_IDS`). Today's exact
+   *     behavior (byte-identical default).
+   *   - `[]` → seed ZERO base topics; only `extraTopics` populate the manual
+   *     (full white-label replace).
+   *   - `KodaXManualTopicId[]` → seed exactly this curated subset (e.g.
+   *     `KODAX_UNDERLYING_CAPABILITY_TOPICS`), so a replacing consumer can still
+   *     keep the mechanism topics its product inherits from KodaX.
+   */
+  readonly baseTopics?: readonly KodaXManualTopicId[];
 }
 
 export interface ResolveKodaXManualResult {

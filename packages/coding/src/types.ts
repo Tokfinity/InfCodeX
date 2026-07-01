@@ -8,7 +8,7 @@
 // 通用 Agent 类型从 @kodax-ai/agent 导入
 
 // FEATURE_221: SDK consumers inject their own product manual topics.
-import type { KodaXManualTopicInput } from './self-knowledge/types.js';
+import type { KodaXManualTopicId, KodaXManualTopicInput } from './self-knowledge/types.js';
 import type { KodaXTimeoutConfig } from './timeouts.js';
 
 import type {
@@ -1312,12 +1312,25 @@ export interface KodaXContextOptions {
  * FEATURE_221 — an SDK consumer (a product built on KodaX, e.g. KodaX-Space)
  * injects its own product manual so that when ITS users ask "how do I use /
  * configure <product>?", the kodax_manual tool answers with the consumer's
- * topics. `topics` extend the KodaX base (override by id); `productName`
- * re-brands the routing rule + scope anchor. Topics are still byte-capped.
+ * topics. `topics` extend the seeded base (override by id, then append);
+ * `productName` re-brands the routing rule + scope anchor. Topics are still
+ * byte-capped.
+ *
+ * `baseTopics` controls how much of KodaX's own manual is present underneath:
+ * omit it for the default full base, `[]` for a full white-label replace, or a
+ * curated subset (e.g. `KODAX_UNDERLYING_CAPABILITY_TOPICS`) to keep only the
+ * mechanism topics a product built on KodaX inherits. For build-time docs, a
+ * consumer can import `MANUAL_REGISTRY` to read the base topic bodies directly.
  */
 export interface KodaXSelfManualConfig {
   readonly productName?: string;
   readonly topics?: readonly KodaXManualTopicInput[];
+  /**
+   * Which KodaX base topics to seed before `topics` is layered on. `undefined`
+   * ⇒ all base topics (default). `[]` ⇒ none (full replace). A subset ⇒ exactly
+   * those ids. See {@link ResolveKodaXManualOptions.baseTopics}.
+   */
+  readonly baseTopics?: readonly KodaXManualTopicId[];
 }
 
 /**

@@ -65,4 +65,22 @@ describe('FEATURE_218 kodax_manual tool', () => {
     const base = await toolKodaxManual({ topic: 'providers' }, spaceCtx);
     expect(base).toContain('about KodaX-Space itself');
   });
+
+  it('FEATURE_221: ctx.selfManual.baseTopics [] fully replaces the base (white-label)', async () => {
+    const replaceCtx = {
+      selfManual: {
+        productName: 'KodaX-Space',
+        baseTopics: [],
+        topics: [
+          { id: 'space-settings', title: 'KodaX-Space Settings', summary: 'config', body: 'Open Settings' },
+        ],
+      },
+    } as KodaXToolExecutionContext;
+
+    // Injected topic works…
+    expect(await toolKodaxManual({ topic: 'space-settings' }, replaceCtx)).toContain('# KodaX-Space Settings');
+    // …but a KodaX base topic is no longer seeded, so it is not served.
+    const providers = await toolKodaxManual({ topic: 'providers' }, replaceCtx);
+    expect(providers).not.toContain('# Providers & models');
+  });
 });
