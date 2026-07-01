@@ -14,13 +14,6 @@ export interface WorkflowLiveSnapshot {
   readonly startedAt?: number;
   readonly elapsedMs?: number;
   readonly activeAgents: readonly string[];
-  /** Per-running-agent detail for the bounded live tree (name + when it started,
-   *  so each agent shows its own elapsed). `id` is the unique per-spawn item id,
-   *  used to key the row so a fan-out of same-named agents (e.g. five parallel
-   *  'reviewer' agents) does not collide on React keys. When absent (e.g. the
-   *  event-driven path) the tree falls back to `activeAgents` names without a
-   *  per-agent duration. */
-  readonly activeAgentRows?: readonly { readonly name: string; readonly startedAt?: number; readonly id?: string }[];
   readonly totalSpawned: number;
   readonly plannedAgents?: number;
   readonly agentCap?: number;
@@ -84,14 +77,9 @@ export function workflowLiveSnapshotFromProcess(
   } = {},
 ): WorkflowLiveSnapshot {
   const agentItems = snapshot.items.filter((item) => item.kind === "agent");
-  const runningItems = agentItems.filter((item) => item.status === "running");
-  const activeAgents = runningItems.map((item) => item.title);
-  const activeAgentRows = runningItems.map((item) => {
-    const startedAt = item.startedAt === undefined ? undefined : Date.parse(item.startedAt);
-    return startedAt !== undefined && Number.isFinite(startedAt)
-      ? { id: item.id, name: item.title, startedAt }
-      : { id: item.id, name: item.title };
-  });
+  const activeAgents = agentItems
+    .filter((item) => item.status === "running")
+    .map((item) => item.title);
   const completedAgents = agentItems.filter((item) => item.status === "completed").length;
   const failedAgents = agentItems.filter((item) => item.status === "failed").length;
   const stoppedAgents = agentItems.filter((item) => item.status === "cancelled").length;
@@ -118,7 +106,6 @@ export function workflowLiveSnapshotFromProcess(
     ...(Number.isFinite(startedAt) ? { startedAt } : {}),
     elapsedMs: snapshot.elapsedMs,
     activeAgents,
-    activeAgentRows,
     totalSpawned: snapshot.progress.spawnedAgents,
     ...(snapshot.progress.plannedItems !== undefined
       ? { plannedAgents: snapshot.progress.plannedItems }
@@ -144,11 +131,7 @@ export function formatWorkflowLiveViewModelForTranscript(
   return viewModel.rows.map((row) => `${padWorkflowLiveSymbol(row.symbol)}${row.text}`);
 }
 
-/** Max running-agent rows shown in the live tree before collapsing the rest into
- *  a "+N more running" row. Keeps the surface height bounded even if a future
- *  config raises workflow concurrency (default 8) — the tree can never dominate
- *  the screen. */
-const MAX_AGENT_ROWS = 5;
+const MAX_VISIBLE_ROWS = 6;
 
 const labels = {
   en: {
@@ -169,7 +152,6 @@ const labels = {
     waitingForFirstAgent: "waiting for first agent",
     showStopHint: (runId: string): string => `show: /workflow show ${runId} | stop: /workflow stop ${runId}`,
     activeAgents: (count: number): string => `${count} active agent${count === 1 ? "" : "s"}`,
-    moreRunning: (count: number): string => `+${count} more running`,
   },
   zh: {
     workflow: "工作流",
@@ -189,7 +171,6 @@ const labels = {
     waitingForFirstAgent: "等待第一个智能体启动",
     showStopHint: (runId: string): string => `查看: /workflow show ${runId} | 停止: /workflow stop ${runId}`,
     activeAgents: (count: number): string => `${count} 个智能体运行中`,
-    moreRunning: (count: number): string => `另有 ${count} 个运行中`,
   },
 } as const;
 
@@ -285,8 +266,7 @@ function formatWorkflowProgress(snapshot: WorkflowLiveSnapshot): string | undefi
   const denominator = workflowProgressDenominator(snapshot, finished);
 
   const details: string[] = [];
-  // Active agents are listed as their own rows in the live tree, so the progress
-  // summary no longer repeats the count here — it stays focused on finished work.
+  if (snapshot.activeAgents.length > 0) details.push(label.activeAgents(snapshot.activeAgents.length));
   if (snapshot.plannedAgents !== undefined) details.push(`${label.started} ${snapshot.totalSpawned}`);
   if (snapshot.failedAgents > 0) details.push(`${snapshot.failedAgents} ${label.failed}`);
   if (snapshot.stoppedAgents > 0) details.push(`${snapshot.stoppedAgents} ${label.stopped}`);
@@ -335,53 +315,6 @@ function formatWorkflowPhase(snapshot: WorkflowLiveSnapshot): string | undefined
   return snapshot.phase;
 }
 
-/**
- * Bounded live tree of the running agents. One row per running agent (name +
- * its own elapsed when known), capped at MAX_AGENT_ROWS with a "+N more running"
- * overflow row so a large fan-out never dominates the surface. Finished agents
- * are not listed — their counts stay in the progress summary row. Falls back to
- * `activeAgents` names when the richer `activeAgentRows` is absent.
- */
-function appendActiveAgentRows(
-  rows: WorkflowLiveRow[],
-  snapshot: WorkflowLiveSnapshot,
-  label: WorkflowLiveLabels,
-  now: number,
-): void {
-  const agents: readonly { readonly name: string; readonly startedAt?: number; readonly id?: string }[] =
-    snapshot.activeAgentRows ?? snapshot.activeAgents.map((name) => ({ name }));
-  if (agents.length === 0) return;
-  const shown = agents.slice(0, MAX_AGENT_ROWS);
-  shown.forEach((agent, index) => {
-    const { startedAt } = agent;
-    const elapsed =
-      startedAt !== undefined ? ` · ${formatElapsedMs(Math.max(0, now - startedAt), snapshot.locale)}` : "";
-    // Key by the unique per-spawn id when available so a fan-out of same-named
-    // agents does not collide on React keys; fall back to name+index (unique
-    // within a render) on the event-driven path that has no id.
-    const rowId = agent.id !== undefined ? `agent:${agent.id}` : `agent:${agent.name}:${index}`;
-    rows.push({
-      kind: "agent",
-      id: rowId,
-      symbol: "•",
-      symbolColor: "cyan",
-      text: `${agent.name}${elapsed}`,
-      isActive: true,
-    });
-  });
-  const overflow = agents.length - shown.length;
-  if (overflow > 0) {
-    rows.push({
-      kind: "agent",
-      id: "agent:more",
-      symbol: "",
-      symbolColor: "dim",
-      text: label.moreRunning(overflow),
-      isActive: false,
-    });
-  }
-}
-
 export function buildWorkflowLiveViewModel(
   snapshot: WorkflowLiveSnapshot | null | undefined,
   now: number = Date.now(),
@@ -399,9 +332,7 @@ export function buildWorkflowLiveViewModel(
     id: "header",
     symbol: label.workflow,
     symbolColor: snapshot.failedAgents > 0 ? "red" : "cyan",
-    // The running agents are listed as their own rows below, so the header no
-    // longer carries the "N active agents" count — it stays a clean title line.
-    text: `${snapshot.workflow} (${shortRunId(snapshot.runId)})${headerMetricText}`,
+    text: `${snapshot.workflow} (${shortRunId(snapshot.runId)}) - ${label.activeAgents(snapshot.activeAgents.length)}${headerMetricText}`,
     isActive: true,
   });
 
@@ -416,8 +347,6 @@ export function buildWorkflowLiveViewModel(
       isActive: true,
     });
   }
-
-  appendActiveAgentRows(rows, snapshot, label, now);
 
   const progress = formatWorkflowProgress(snapshot);
   if (progress) {
@@ -451,11 +380,7 @@ export function buildWorkflowLiveViewModel(
     isActive: false,
   });
 
-  // No blanket row cap: the only unbounded row group is the running-agent list,
-  // and appendActiveAgentRows already caps that at MAX_AGENT_ROWS + one overflow
-  // row. Every other group contributes at most one row, so the surface height
-  // stays bounded (header + phase + ≤6 agent rows + progress + waiting + hint).
-  const visibleRows = rows;
+  const visibleRows = rows.slice(0, MAX_VISIBLE_ROWS);
 
   return {
     shouldRender: true,

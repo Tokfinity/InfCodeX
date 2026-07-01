@@ -38,33 +38,28 @@ describe("buildWorkflowLiveViewModel", () => {
     expect(buildWorkflowLiveViewModel(runningSnapshot({ status: "completed" })).shouldRender).toBe(false);
   });
 
-  it("renders phase, one row per running agent, a finished summary, and the hint", () => {
+  it("renders phase, active agents, counters, and control hint", () => {
     const vm = buildWorkflowLiveViewModel(runningSnapshot());
 
     expect(vm.shouldRender).toBe(true);
     expect(vm.workflow).toBe("feature-217-ui-regression-audit");
     expect(vm.activeCount).toBe(2);
     expect(vm.completedAgents).toBe(1);
-    // Header no longer carries the "N active agents" count — the tree lists them.
     expect(vm.rows.map((row) => row.symbol)).toEqual([
       "workflow",
       "phase",
-      "•",
-      "•",
       "progress",
       "hint",
     ]);
     expect(vm.rows.map((row) => row.text)).toEqual([
-      "feature-217-ui-regression-audit (run-mqc7av6y)",
+      "feature-217-ui-regression-audit (run-mqc7av6y) - 2 active agents",
       "2/4 fan-out-ui-audit",
-      "layout-and-positioning-auditor",
-      "styling-and-visual-auditor",
-      "1/3 finished (cap 8)",
+      "1/3 finished (2 active agents, cap 8)",
       "Use /workflow show run-mqc7av6y for status or /workflow stop run-mqc7av6y to stop.",
     ]);
   });
 
-  it("surfaces failed agents in the summary and still lists the running agent", () => {
+  it("surfaces failed agents without hiding active work", () => {
     const vm = buildWorkflowLiveViewModel(runningSnapshot({
       failedAgents: 1,
       activeAgents: ["remaining-auditor"],
@@ -72,54 +67,8 @@ describe("buildWorkflowLiveViewModel", () => {
       completedAgents: 2,
     }));
 
-    expect(vm.rows.map((row) => row.text)).toContain("3/4 finished (1 failed, cap 8)");
-    // The running agent is now a named row, not folded into a count.
-    expect(vm.rows.map((row) => row.text)).toContain("remaining-auditor");
-  });
-
-  it("caps running-agent rows at 5 and collapses the rest into a +N more row", () => {
-    const vm = buildWorkflowLiveViewModel(runningSnapshot({
-      activeAgents: ["a1", "a2", "a3", "a4", "a5", "a6", "a7"],
-      completedAgents: 0,
-      totalSpawned: 7,
-      message: undefined,
-    }));
-    const agentRows = vm.rows.filter((row) => row.kind === "agent");
-    expect(agentRows).toHaveLength(6); // 5 named + 1 overflow
-    expect(agentRows.slice(0, 5).map((row) => row.text)).toEqual(["a1", "a2", "a3", "a4", "a5"]);
-    expect(agentRows.at(-1)?.text).toBe("+2 more running");
-  });
-
-  it("shows each running agent's own elapsed when activeAgentRows carries startedAt", () => {
-    const vm = buildWorkflowLiveViewModel(runningSnapshot({
-      activeAgents: ["slow-auditor"],
-      activeAgentRows: [{ name: "slow-auditor", startedAt: 1_000 }],
-    }), 96_000);
-    const agentRow = vm.rows.find((row) => row.kind === "agent");
-    expect(agentRow?.text).toBe("slow-auditor · 1m35s");
-  });
-
-  it("keys same-named fan-out agents by their unique id so React rows do not collide", () => {
-    const vm = buildWorkflowLiveViewModel(runningSnapshot({
-      activeAgents: ["reviewer", "reviewer"],
-      activeAgentRows: [
-        { id: "agent:t1", name: "reviewer", startedAt: 1_000 },
-        { id: "agent:t2", name: "reviewer", startedAt: 2_000 },
-      ],
-    }), 5_000);
-    const agentRows = vm.rows.filter((row) => row.kind === "agent");
-    expect(agentRows.map((row) => row.id)).toEqual(["agent:agent:t1", "agent:agent:t2"]);
-    expect(new Set(agentRows.map((row) => row.id)).size).toBe(2); // distinct keys
-    expect(agentRows.map((row) => row.text)).toEqual(["reviewer · 4s", "reviewer · 3s"]);
-  });
-
-  it("falls back to name+index keys for duplicate names on the id-less event path", () => {
-    const vm = buildWorkflowLiveViewModel(runningSnapshot({
-      activeAgents: ["reviewer", "reviewer"], // no activeAgentRows → fallback path
-    }));
-    const agentRows = vm.rows.filter((row) => row.kind === "agent");
-    expect(agentRows.map((row) => row.id)).toEqual(["agent:reviewer:0", "agent:reviewer:1"]);
-    expect(new Set(agentRows.map((row) => row.id)).size).toBe(2);
+    expect(vm.rows.map((row) => row.text)).toContain("3/4 finished (1 active agent, 1 failed, cap 8)");
+    expect(vm.rows.map((row) => row.text)).not.toContain("remaining-auditor");
   });
 
   it("renders elapsed time and token usage when available", () => {
@@ -131,7 +80,7 @@ describe("buildWorkflowLiveViewModel", () => {
     }), 66_000);
 
     expect(vm.rows[0]?.text).toBe(
-      "feature-217-ui-regression-audit (run-mqc7av6y) · 1m5s · spent 12.3k/50k tokens",
+      "feature-217-ui-regression-audit (run-mqc7av6y) - 2 active agents · 1m5s · spent 12.3k/50k tokens",
     );
   });
 
@@ -143,7 +92,7 @@ describe("buildWorkflowLiveViewModel", () => {
     }), 3_000);
 
     expect(vm.rows[0]?.text).toBe(
-      "feature-217-ui-regression-audit (run-mqc7av6y) · 2s · budget 200k tokens",
+      "feature-217-ui-regression-audit (run-mqc7av6y) - 2 active agents · 2s · budget 200k tokens",
     );
   });
 
@@ -155,9 +104,8 @@ describe("buildWorkflowLiveViewModel", () => {
       message: undefined,
     }));
 
-    // header + phase + 5 agent rows + progress + hint = 9 (no overflow at exactly 5)
-    expect(vm.rows).toHaveLength(9);
-    expect(vm.rows.map((row) => row.text)).toContain("0/3 finished (cap 8)");
+    expect(vm.rows).toHaveLength(4);
+    expect(vm.rows.map((row) => row.text)).toContain("0/3 finished (5 active agents, cap 8)");
     expect(vm.rows.at(-1)?.text).toBe("show: /workflow show run-mqc7av6y | stop: /workflow stop run-mqc7av6y");
   });
 
@@ -165,11 +113,9 @@ describe("buildWorkflowLiveViewModel", () => {
     const vm = buildWorkflowLiveViewModel(runningSnapshot());
 
     expect(formatWorkflowLiveViewModelForTranscript(vm)).toEqual([
-      "workflow feature-217-ui-regression-audit (run-mqc7av6y)",
+      "workflow feature-217-ui-regression-audit (run-mqc7av6y) - 2 active agents",
       "phase    2/4 fan-out-ui-audit",
-      "•        layout-and-positioning-auditor",
-      "•        styling-and-visual-auditor",
-      "progress 1/3 finished (cap 8)",
+      "progress 1/3 finished (2 active agents, cap 8)",
       "hint     Use /workflow show run-mqc7av6y for status or /workflow stop run-mqc7av6y to stop.",
     ]);
   });
@@ -211,13 +157,11 @@ describe("buildWorkflowLiveViewModel", () => {
     expect(vm.rows.map((row) => row.symbol)).toEqual([
       "工作流",
       "阶段",
-      "•",
       "进度",
       "提示",
     ]);
     expect(vm.rows.map((row) => row.text)).toContain("1/3 验证");
-    expect(vm.rows.map((row) => row.text)).toContain("布局审计");
-    expect(vm.rows.map((row) => row.text)).toContain("1/2 完成（上限 8）");
+    expect(vm.rows.map((row) => row.text)).toContain("1/2 完成（1 个智能体运行中，上限 8）");
     expect(vm.rows.at(-1)?.text).toBe("查看: /workflow show run-mqc7av6y | 停止: /workflow stop run-mqc7av6y");
     expect(vm.counterText).toBe("1/2 个智能体运行中");
   });
@@ -234,7 +178,7 @@ describe("buildWorkflowLiveViewModel", () => {
     }));
 
     expect(vm.rows.map((row) => row.text)).toContain(
-      "0/7 完成（已启动 1，上限 14）",
+      "0/7 完成（1 个智能体运行中，已启动 1，上限 14）",
     );
     expect(vm.counterText).toBe("1/7 个智能体运行中");
   });
@@ -252,7 +196,7 @@ describe("buildWorkflowLiveViewModel", () => {
     }));
 
     expect(vm.rows.map((row) => row.text)).toContain(
-      "8/9 finished (started 9, cap 14)",
+      "8/9 finished (1 active agent, started 9, cap 14)",
     );
     expect(vm.counterText).toBe("1/9 active agent");
   });
@@ -338,50 +282,6 @@ describe("buildWorkflowLiveViewModel", () => {
       message: "agent failed: critic",
       locale: "en",
     });
-  });
-
-  it("derives activeAgentRows (id + parsed startedAt, invalid falls back to name only) from process items", () => {
-    const process: WorkflowProcessSnapshot = {
-      runId: "run-rows",
-      workflowName: "rows-workflow",
-      status: "running",
-      startedAt: "2026-06-15T00:00:00.000Z",
-      updatedAt: "2026-06-15T00:01:00.000Z",
-      items: [
-        {
-          id: "agent:a",
-          title: "reader",
-          kind: "agent",
-          status: "running",
-          startedAt: "2026-06-15T00:00:30.000Z",
-          childAgentId: "a",
-        },
-        {
-          // Running agent with a missing startedAt → row carries id + name, no startedAt.
-          id: "agent:b",
-          title: "no-clock",
-          kind: "agent",
-          status: "running",
-          childAgentId: "b",
-        },
-        {
-          // Completed agents are not active rows.
-          id: "agent:c",
-          title: "done",
-          kind: "agent",
-          status: "completed",
-          childAgentId: "c",
-        },
-      ],
-      counts: { pending: 0, running: 2, completed: 1, failed: 0, cancelled: 0, skipped: 0 },
-      progress: { spawnedAgents: 3, finishedAgents: 1, activeAgents: 2, failedAgents: 0, stoppedAgents: 0 },
-    };
-
-    const snap = workflowLiveSnapshotFromProcess(process);
-    expect(snap.activeAgentRows).toEqual([
-      { id: "agent:a", name: "reader", startedAt: Date.parse("2026-06-15T00:00:30.000Z") },
-      { id: "agent:b", name: "no-clock" },
-    ]);
   });
 
   it("maps process cancellation to the user-facing stopped live status", () => {
