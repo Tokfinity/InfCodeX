@@ -18,6 +18,13 @@ export type WorkflowCapsuleEnvironmentRequirement = 'git-repo' | 'worktree-capab
 
 export interface WorkflowCapsuleIntent {
   readonly taskClass: string;
+  /**
+   * The full set of workflow patterns the script declares (manifest.patterns).
+   * `taskClass` keeps only the primary pattern; this records the whole
+   * combination so a declared ['fan-out-and-synthesize', 'adversarial-verification']
+   * is preserved rather than collapsed to its first id.
+   */
+  readonly patterns?: readonly string[];
   readonly originalRequest?: string;
   readonly reusableFor?: readonly string[];
   readonly notFor?: readonly string[];
@@ -119,11 +126,13 @@ function readOptionalStringArray(
 function validateIntent(value: unknown): WorkflowCapsuleIntent | undefined {
   if (value === undefined) return undefined;
   if (!isRecord(value)) throw new Error('workflow capsule intent must be an object');
+  const patterns = readOptionalStringArray(value, 'patterns');
   const originalRequest = readOptionalString(value, 'originalRequest');
   const reusableFor = readOptionalStringArray(value, 'reusableFor');
   const notFor = readOptionalStringArray(value, 'notFor');
   return {
     taskClass: readString(value, 'taskClass'),
+    ...(patterns !== undefined ? { patterns } : {}),
     ...(originalRequest !== undefined ? { originalRequest } : {}),
     ...(reusableFor !== undefined ? { reusableFor } : {}),
     ...(notFor !== undefined ? { notFor } : {}),

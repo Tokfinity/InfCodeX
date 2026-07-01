@@ -94,6 +94,22 @@ describe('WorkflowCapsule', () => {
     expect(validateWorkflowCapsule(capsule)).toEqual(capsule);
   });
 
+  it('preserves the full declared patterns[] in the intent, not only patterns[0] (M15)', () => {
+    const capsule = createWorkflowCapsule({
+      minKodaxVersion: '0.7.49',
+      manifest,
+      source,
+      intent: {
+        taskClass: 'fan-out-and-synthesize',
+        patterns: ['fan-out-and-synthesize', 'adversarial-verification'],
+      },
+    });
+    expect(capsule.intent?.patterns).toEqual(['fan-out-and-synthesize', 'adversarial-verification']);
+    // survives a JSON serialize -> parse -> validate round-trip
+    const parsed = validateWorkflowCapsule(JSON.parse(JSON.stringify(capsule)));
+    expect(parsed.intent?.patterns).toEqual(['fan-out-and-synthesize', 'adversarial-verification']);
+  });
+
   it('rejects malformed capsule identity, source, manifest, and requirements', () => {
     expect(() =>
       validateWorkflowCapsule({

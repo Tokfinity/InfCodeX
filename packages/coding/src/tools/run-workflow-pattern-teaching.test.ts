@@ -46,4 +46,14 @@ describe('run_workflow pattern-combination teaching (review find->verify)', () =
     // ADR-033 §3: the anti-pattern bullet must carry its failure-mode WHY.
     expect(prompt.toLowerCase()).toMatch(/blind spot|refute it before synthesis/);
   });
+
+  it('teaches the judgment clauses matched from Claude Code Workflow (T1/T2/T3/T8/T9/T13)', () => {
+    const d = getToolDefinition('run_workflow')!.description.toLowerCase();
+    expect(d, 'T1 pipeline-by-default / barrier discipline').toMatch(/as a barrier only when/);
+    expect(d, 'T2 majority-refute threshold').toContain('majority cannot refute');
+    expect(d, 'T3 distinct failure-mode angle per verifier').toContain('distinct failure-mode angle');
+    expect(d, 'T9 scale fan-out to the request').toContain('thoroughly audit');
+    expect(d, 'T8 no silent caps (with WHY)').toMatch(/silent cap/);
+    expect(d, 'T13 named single-phase shapes').toContain('single-phase shapes');
+  });
 });

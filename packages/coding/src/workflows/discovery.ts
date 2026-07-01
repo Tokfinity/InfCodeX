@@ -512,6 +512,7 @@ async function readCapsuleFromRun(input: LoadGeneratedWorkflowFromRunInput): Pro
   const requirements = deriveRequirements(manifest);
   const intent: WorkflowCapsuleIntent = {
     taskClass: manifest.patterns[0] ?? manifest.name,
+    ...(manifest.patterns.length > 0 ? { patterns: manifest.patterns } : {}),
     ...(originalRequest !== undefined ? { originalRequest } : {}),
     reusableFor: [manifest.description],
   };

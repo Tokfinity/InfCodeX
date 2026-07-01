@@ -659,6 +659,7 @@ export const workflowCommand: Command = {
         source: generated.source,
         intent: {
           taskClass: manifest.patterns[0] ?? manifest.name,
+          ...(manifest.patterns.length > 0 ? { patterns: manifest.patterns } : {}),
           originalRequest: invocation.request,
           reusableFor: [manifest.description],
         },
