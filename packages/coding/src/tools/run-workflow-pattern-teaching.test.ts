@@ -36,6 +36,8 @@ describe('run_workflow pattern-combination teaching (review find->verify)', () =
     expect(description.toLowerCase()).toMatch(/verifier|verify|refute/);
     // Teaches declaring BOTH patterns together (multi-value patterns[]).
     expect(description).toMatch(/\['fan-out-and-synthesize',\s*'adversarial-verification'\]/);
+    // Teaches the GENERAL composition principle, not only the review instance.
+    expect(description.toLowerCase()).toMatch(/more than one|chain/);
   });
 
   it('Edit 2: generator pattern guidance includes the review/audit combination bullet with a WHY', () => {
