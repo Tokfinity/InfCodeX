@@ -58,6 +58,33 @@ describe('CAP-048: tool execution context construction contract', () => {
     expect('set_permission_mode' in ctx).toBe(false);
   });
 
+  it('FEATURE_247 (R7): sessionId, taskSurface, and agentProfile are threaded onto the ctx for host-tool attribution', () => {
+    const profile = { surface: 'partner', id: 'p1', version: '1.0.0', name: 'Acme Partner' };
+    const ctx = buildToolExecutionContext({
+      options: {
+        provider: 'anthropic',
+        context: { taskSurface: 'repl', agentProfile: profile },
+      } as unknown as KodaXOptions,
+      sessionId: 'sess-abc',
+      runtime: undefined,
+      managedProtocolPayloadRef: makeRef(),
+    });
+    expect(ctx.sessionId).toBe('sess-abc');
+    expect(ctx.taskSurface).toBe('repl');
+    expect(ctx.agentProfile).toEqual(profile);
+  });
+
+  it('FEATURE_247 (R7): sessionId/taskSurface/agentProfile are undefined by default (default Coding Agent path unchanged)', () => {
+    const ctx = buildToolExecutionContext({
+      options: { provider: 'anthropic', context: {} } as KodaXOptions,
+      runtime: undefined,
+      managedProtocolPayloadRef: makeRef(),
+    });
+    expect(ctx.sessionId).toBeUndefined();
+    expect(ctx.taskSurface).toBeUndefined();
+    expect(ctx.agentProfile).toBeUndefined();
+  });
+
   it('CAP-TOOL-CTX-002: FEATURE_067 — onChildProgress is exactly undefined', () => {
     const ctx = buildToolExecutionContext({
       options: {} as KodaXOptions,

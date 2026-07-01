@@ -463,6 +463,9 @@ export async function runSubstrate(
 
   const ctx = buildToolExecutionContext({
     options,
+    // FEATURE_247 (R7) — thread the resolved session id so tool handlers can
+    // self-attribute concurrent runs without AsyncLocalStorage.
+    sessionId,
     runtime: runtime ?? undefined,
     managedProtocolPayloadRef,
   });

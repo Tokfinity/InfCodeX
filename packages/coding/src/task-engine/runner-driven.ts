@@ -706,6 +706,9 @@ async function runManagedTaskViaRunnerInner(
   };
   const substrateBaseCtx = buildToolExecutionContext({
     options,
+    // FEATURE_247 (R7) — same session id `sessionIdRef` uses below, so tool
+    // handlers can attribute an AMA call to the right concurrent session.
+    sessionId: options.session?.id ?? resolvedSessionId,
     runtime: extensionRuntime,
     managedProtocolPayloadRef,
   });

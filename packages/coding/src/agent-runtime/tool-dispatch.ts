@@ -198,10 +198,15 @@ export async function executeToolCall(
   }
 
   // FEATURE_067/229: inject per-call host hooks with stable tool/workflow meta.
+  // FEATURE_247 (R7): always stamp `toolCallId` (the LLM tool_use block id) onto
+  // the per-call ctx so host-registered tools can correlate a handler invocation
+  // to its event stream / de-duplicate retries — both the hooks and no-hooks
+  // branch carry it.
   const ctxWithToolHooks: KodaXToolExecutionContext =
     events.onToolProgress || events.askUser || events.askUserMulti || events.askUserInput
     ? {
         ...ctx,
+        toolCallId: toolCall.id,
         ...(events.onToolProgress
           ? {
               reportToolProgress: (message: string) => {
@@ -219,7 +224,7 @@ export async function executeToolCall(
           ? { askUserInput: (options) => events.askUserInput!(options, toolMeta) }
           : {}),
       }
-    : ctx;
+    : { ...ctx, toolCallId: toolCall.id };
 
   const result = await executeTool(toolCall.name, toolCall.input ?? {}, ctxWithToolHooks);
 

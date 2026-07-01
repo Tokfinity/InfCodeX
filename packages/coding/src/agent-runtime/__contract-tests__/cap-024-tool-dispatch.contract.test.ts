@@ -46,6 +46,7 @@ import {
   createToolResultBlock,
   executeToolCall,
 } from '../tool-dispatch.js';
+import { registerTool } from '../../tools/index.js';
 import {
   buildRuntimeSessionState,
   type RuntimeSessionState,
@@ -121,6 +122,36 @@ describe('CAP-024: executeToolCall — abort gate (Issue 088)', () => {
     // Abort gate fires BEFORE the start event, so the host never sees
     // the tool fire — important for cancel-during-await UX.
     expect(toolStarted).toBe(false);
+  });
+});
+
+describe('FEATURE_247 (R7): executeToolCall stamps toolCallId onto the handler ctx', () => {
+  it('the tool handler receives ctx.toolCallId equal to the LLM tool_use block id', async () => {
+    let seen: string | undefined = 'UNSET';
+    registerTool({
+      name: 'feature_247_capture_ctx',
+      description: 'test-only tool that records ctx.toolCallId',
+      input_schema: { type: 'object', properties: {} },
+      sideEffect: 'readonly',
+      handler: (_input, ctx) => {
+        seen = ctx.toolCallId;
+        return 'ok';
+      },
+    });
+
+    const state = buildRuntimeSessionState({
+      activeTools: ['feature_247_capture_ctx'],
+      modelSelection: {},
+    });
+
+    await executeToolCall(
+      {} as KodaXEvents,
+      { id: 'tc-42', name: 'feature_247_capture_ctx', input: {} } as RunnableToolCall,
+      makeCtx(),
+      state,
+    );
+
+    expect(seen).toBe('tc-42');
   });
 });
 

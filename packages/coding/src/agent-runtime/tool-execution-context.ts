@@ -47,6 +47,13 @@ import { getDefaultLspService } from '../lsp/service.js';
 export interface ToolExecutionContextInput {
   readonly options: KodaXOptions;
   /**
+   * FEATURE_247 (R7) — runtime-resolved session id, threaded onto the tool
+   * ctx so host-registered tools can attribute a call to the right session
+   * under concurrent Partner/Coder runs. Callers that have not resolved a
+   * session id (isolated tool tests) omit it.
+   */
+  readonly sessionId?: string;
+  /**
    * Capability runtime to bind onto the tool ctx. Tool execution only needs
    * capability lookup methods, not the extension lifecycle surface.
    */
@@ -64,7 +71,7 @@ export interface ToolExecutionContextInput {
 export function buildToolExecutionContext(
   input: ToolExecutionContextInput,
 ): KodaXToolExecutionContext {
-  const { options, runtime, managedProtocolPayloadRef } = input;
+  const { options, runtime, managedProtocolPayloadRef, sessionId } = input;
   const events = options.events ?? {};
   const executionCwd = resolveExecutionCwd(options.context);
   const sessionScratchDir = getSessionScratchDir(options);
@@ -72,6 +79,12 @@ export function buildToolExecutionContext(
   return {
     backups: new Map(),
     gitRoot: options.context?.gitRoot ?? undefined,
+    // FEATURE_247 (R7) — session/profile attribution for host-registered tools
+    // (Space artifact/source/KB) so concurrent Partner/Coder sessions don't
+    // cross. All optional passthrough; absent ⇒ same as before.
+    sessionId,
+    taskSurface: options.context?.taskSurface,
+    agentProfile: options.context?.agentProfile,
     selfManual: options.selfManual,
     // FEATURE_132 v0.7.47 — LSP service for edit-time diagnostics reflux.
     // Host-injected when present, else the process-wide default (which is
