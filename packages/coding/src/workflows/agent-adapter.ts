@@ -496,6 +496,11 @@ function buildBundle(
     evidenceRefs: input.evidenceRefs ? [...input.evidenceRefs] : [],
     constraints: [],
     ...(input.modelHint ? { modelHint: input.modelHint } : {}),
+    // M2: explicit per-agent provider/model (FEATURE_102 P2 fields on the bundle).
+    // child-executor reads bundle.provider/model FIRST in its priority chain, so
+    // these override the hint tier / specialist / parent — script picks the model.
+    ...(input.provider ? { provider: input.provider } : {}),
+    ...(input.model ? { model: input.model } : {}),
     ...(input.isolation ? { isolation: input.isolation } : {}),
     ...(input.subagentType ? { specialistName: input.subagentType } : {}),
     ...(input.outputSchema !== undefined ? { outputSchema: input.outputSchema } : {}),

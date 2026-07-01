@@ -66,6 +66,19 @@ export interface WorkflowSpawnAgentInput {
   readonly subagentType?: string;
   /** Provider/model tier hint (FEATURE_120 model_hint → env tier). */
   readonly modelHint?: WorkflowModelHint;
+  /**
+   * Explicit per-agent provider / model (FEATURE_102 P2 override, exposed to the
+   * script). Takes precedence over `modelHint`, the specialist model, and the
+   * parent — so a script can run one stage on a strong model and another on a
+   * cheap one without any operator env setup. Omit both to inherit the parent.
+   *
+   * Quality note: unlike `modelHint: 'fast'` (which the runtime blocks on
+   * write/codegen children), an explicit `model` has NO quality gate — the
+   * script author owns the choice. Do not point a write/codegen child at a weak
+   * model unless you have verified it holds up on that kind of work.
+   */
+  readonly provider?: string;
+  readonly model?: string;
   /** Isolation policy; defaults to `shared-cwd`. */
   readonly isolation?: WorkflowIsolation;
   /** Per-child reasoning effort hint (e.g. 'low' | 'medium' | 'high' | 'max').

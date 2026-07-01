@@ -197,4 +197,15 @@
   // 相关环境变量(不写进 JSON,在 shell 里设置):
   //   KODAX_VERIFIER_LOG=1            打开 verifier 诊断日志
   //   KODAX_EFFORT=<value>           启动时覆盖 effort(auto/off/low/…/max)
+  //
+  // ─── 子 Agent 模型档位(仅环境变量,用于 dispatch_child_task / workflow 的 model_hint)───
+  //   modelHint:'fast' 的只读子 Agent → 便宜档;modelHint:'deep' 的子 Agent → 强档。
+  //   不设则子 Agent 继承父 Agent 的模型(路由默认关闭)。'fast' 只对只读子 Agent 生效
+  //   (写文件/改代码的子 Agent 不会被降级,保证质量)。
+  //   KODAX_FAST_PROVIDER=<provider>  便宜档 provider(如 ark-coding / deepseek)
+  //   KODAX_FAST_MODEL=<model>        便宜档 model(如 deepseek-v4-flash)
+  //   KODAX_DEEP_PROVIDER=<provider>  强档 provider
+  //   KODAX_DEEP_MODEL=<model>        强档 model
+  //   注:workflow 脚本可用 wf.runAgent({ model, provider }) 直接给单个子 Agent
+  //       指定任意模型,无需配上面的档位(优先级高于档位/父 Agent)。
 }
