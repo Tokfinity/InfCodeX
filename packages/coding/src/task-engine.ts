@@ -22,6 +22,8 @@
  */
 import { mapLegacyReasoningModeToEffortIntent } from '@kodax-ai/llm';
 import { runKodaX } from './agent.js';
+import { listToolDefinitions } from './tools/index.js';
+import { emitEffectiveTaskConfig } from './agent-runtime/effective-config.js';
 import {
   buildFallbackRoutingDecision,
   createReasoningPlan,
@@ -161,29 +163,34 @@ export async function dispatchManagedTask(
   const agentMode = resolveManagedAgentMode(options);
   if (agentMode === 'sa') {
     const intentGate = inferIntentGate(prompt);
-    return deps.runSA(
-      {
-        ...options,
-        context: {
-          ...options.context,
-          promptOverlay: buildDirectPathTaskFamilyPromptOverlay(
-            intentGate.taskFamily,
-            [options.context?.promptOverlay],
-          ),
-          // FEATURE_247 (R1): on the SA path a profile's instructions map to the
-          // already-honored `systemPromptOverride` (consumed in
-          // reasoning-plan-entry.ts). An explicit caller-set override still wins;
-          // when neither is set this stays undefined ⇒ byte-identical default.
-          systemPromptOverride: options.context?.systemPromptOverride
-            ?? options.context?.agentProfile?.instructions,
-          excludeTools: [
-            ...(options.context?.excludeTools ?? []),
-            ...SA_SOLO_EXCLUDE_TOOLS,
-          ],
-        },
+    const excludeTools = [
+      ...(options.context?.excludeTools ?? []),
+      ...SA_SOLO_EXCLUDE_TOOLS,
+    ];
+    const saOptions: KodaXOptions = {
+      ...options,
+      context: {
+        ...options.context,
+        promptOverlay: buildDirectPathTaskFamilyPromptOverlay(
+          intentGate.taskFamily,
+          [options.context?.promptOverlay],
+        ),
+        // FEATURE_247 (R1): on the SA path a profile's instructions map to the
+        // already-honored `systemPromptOverride` (consumed in
+        // reasoning-plan-entry.ts). An explicit caller-set override still wins;
+        // when neither is set this stays undefined ⇒ byte-identical default.
+        systemPromptOverride: options.context?.systemPromptOverride
+          ?? options.context?.agentProfile?.instructions,
+        excludeTools,
       },
-      prompt,
-    );
+    };
+    // FEATURE_247 (R4): report the effective profile / tool scope / verification
+    // once at run start. Fires only when a subscriber is set ⇒ inert by default.
+    emitEffectiveTaskConfig(saOptions, {
+      agentMode: 'sa',
+      toolScope: computeVisibleToolScope(excludeTools),
+    });
+    return deps.runSA(saOptions, prompt);
   }
 
   // Shard 6d-L: AMA entry must run the same `createReasoningPlan` the legacy
@@ -199,8 +206,25 @@ export async function dispatchManagedTask(
   // directives, provider policy notes) legacy injected into every managed
   // worker's prompt. We thread it into the Runner chain so Scout/Planner/
   // Generator/Evaluator see the same contextual overlay as legacy workers.
+  // FEATURE_247 (R4): report the effective config for the AMA/AMAW path too.
+  emitEffectiveTaskConfig(options, {
+    agentMode,
+    toolScope: computeVisibleToolScope(options.context?.excludeTools ?? []),
+  });
   const plan = await deps.buildPlan(options, prompt);
   return deps.runAMA(options, prompt, undefined, plan);
+}
+
+/**
+ * FEATURE_247 (R4) — the model-visible tool scope for a run: every registered
+ * tool name minus the excluded set. Mirrors `filterExcludedTools` so the
+ * reported scope matches what the runner actually presents to the model.
+ */
+function computeVisibleToolScope(excludeTools: readonly string[]): string[] {
+  const excluded = new Set(excludeTools);
+  return listToolDefinitions()
+    .map((tool) => tool.name)
+    .filter((name) => !excluded.has(name));
 }
 
 async function executeRunManagedTask(

@@ -453,6 +453,13 @@ export interface KodaXEvents {
   onComplete?: () => void;
   onError?: (error: Error) => void;
   onManagedTaskStatus?: (status: KodaXManagedTaskStatusEvent) => void;
+  /**
+   * FEATURE_247 (R4) — fired once at managed-task start with the effective
+   * profile / tool scope / verification snapshot. Lets an SDK embedder confirm
+   * the intended profile (e.g. Partner) actually entered the SDK managed task
+   * and diagnose the tools + verification constraints it was given.
+   */
+  onEffectiveConfig?: (config: KodaXEffectiveTaskConfig) => void;
   /** FEATURE_229: workflow process snapshot stream for SDK/host panels. */
   onWorkflowProcessEvent?: (event: WorkflowProcessEvent) => void;
   /**
@@ -1005,6 +1012,27 @@ export interface KodaXManagedTaskStatusEvent {
    * see FEATURE_155 hotfix follow-up #2) and renders as "idle —   * resuming".
    */
   idleWaitingPendingCount?: number;
+}
+
+/**
+ * FEATURE_247 (R4) — effective managed-task configuration snapshot, emitted once
+ * at run start via {@link KodaXEvents.onEffectiveConfig} so an SDK embedder can
+ * (a) assert the intended profile actually entered the SDK managed task and
+ * (b) diagnose which tools + verification standard are in force.
+ */
+export interface KodaXEffectiveTaskConfig {
+  readonly agentMode: KodaXAgentMode;
+  /** SDK-consumer profile driving the run; undefined ⇒ default Coding Agent. */
+  readonly agentProfile?: KodaXAgentProfile;
+  /** Tool names visible to the model for this run. */
+  readonly toolScope: readonly string[];
+  /**
+   * Effective verification standard reaching the Sidecar Verifier — the profile
+   * default merged with per-task `context.taskVerification` (per-task wins).
+   */
+  readonly verification?: KodaXTaskVerificationContract;
+  /** Resolved Sidecar Verifier provider/model, when the verifier is active. */
+  readonly verifier?: { readonly provider?: string; readonly model?: string };
 }
 
 export interface KodaXVerificationScorecardCriterion {

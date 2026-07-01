@@ -134,6 +134,8 @@ export type {
   KodaXMemoryStrategy,
   KodaXBudgetDisclosureZone,
   KodaXAgentMode,
+  KodaXAgentProfile,
+  KodaXEffectiveTaskConfig,
   KodaXManagedTaskStatusEvent,
   KodaXOptions,
   KodaXCompactionOverride,

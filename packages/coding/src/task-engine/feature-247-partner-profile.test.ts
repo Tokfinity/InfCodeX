@@ -15,7 +15,8 @@ import { describe, expect, it, vi } from 'vitest';
 
 import { dispatchManagedTask } from '../task-engine.js';
 import { buildFallbackRoutingDecision } from '../reasoning.js';
-import type { KodaXOptions, KodaXResult } from '../types.js';
+import { resolveEffectiveVerification } from '../agent-runtime/effective-config.js';
+import type { KodaXEffectiveTaskConfig, KodaXOptions, KodaXResult } from '../types.js';
 import {
   resolveRoleInstructions,
   WORKER_INSTRUCTIONS_FALLBACK,
@@ -137,5 +138,87 @@ describe('FEATURE_247 R1: AMA-path Worker prompt prepends profile instructions',
     );
     expect(withProfile).toBe(withoutField);
     expect(withProfile).not.toContain('PARTNER_DIRECTIVE_SENTINEL');
+  });
+});
+
+describe('FEATURE_247 R4: onEffectiveConfig snapshot', () => {
+  it('SA path emits agentMode=sa, echoes the profile, excludes SA-solo + caller tools, reports merged verification', async () => {
+    const configs: KodaXEffectiveTaskConfig[] = [];
+    const deps = saDeps();
+    await dispatchManagedTask(
+      {
+        agentMode: 'sa',
+        provider: 'anthropic',
+        context: {
+          agentProfile: {
+            surface: 'partner',
+            verification: { summary: 'profile-default', rubricFamily: 'partner-research' },
+          },
+          taskVerification: { summary: 'per-task-wins' },
+          excludeTools: ['read'],
+        },
+        events: { onEffectiveConfig: (c) => configs.push(c) },
+      } as KodaXOptions,
+      'answer a question',
+      deps,
+    );
+    expect(configs).toHaveLength(1);
+    const c = configs[0]!;
+    expect(c.agentMode).toBe('sa');
+    expect(c.agentProfile?.surface).toBe('partner');
+    expect(c.toolScope).not.toContain('read'); // caller-excluded
+    expect(c.toolScope).not.toContain('dispatch_child_task'); // SA-solo excluded
+    expect(c.toolScope).toContain('glob'); // a normal readonly tool stays visible
+    // per-task wins over the profile default; profile default fills the gap.
+    expect(c.verification?.summary).toBe('per-task-wins');
+    expect(c.verification?.rubricFamily).toBe('partner-research');
+  });
+
+  it('AMA path emits agentMode=ama and keeps multi-agent tools visible', async () => {
+    const configs: KodaXEffectiveTaskConfig[] = [];
+    const deps = {
+      runSA: vi.fn(),
+      runAMA: vi.fn().mockResolvedValue(OK_RESULT),
+      buildPlan: vi.fn().mockResolvedValue({ effort: 'none', decision: {}, promptOverlay: '' }),
+    };
+    await dispatchManagedTask(
+      {
+        agentMode: 'ama',
+        provider: 'anthropic',
+        context: {},
+        events: { onEffectiveConfig: (c) => configs.push(c) },
+      } as KodaXOptions,
+      'answer a question',
+      deps,
+    );
+    expect(configs).toHaveLength(1);
+    expect(configs[0]!.agentMode).toBe('ama');
+    expect(configs[0]!.toolScope).toContain('dispatch_child_task'); // AMA keeps the cluster
+  });
+
+  it('does not fire (and never throws) when no subscriber is set', async () => {
+    const deps = saDeps();
+    await expect(
+      dispatchManagedTask(
+        { agentMode: 'sa', provider: 'anthropic', context: {} } as KodaXOptions,
+        'answer a question',
+        deps,
+      ),
+    ).resolves.toBeDefined();
+  });
+
+  it('resolveEffectiveVerification: per-task wins, profile fills gaps, undefined when neither', () => {
+    expect(
+      resolveEffectiveVerification({ provider: 'x', context: {} } as KodaXOptions),
+    ).toBeUndefined();
+    const merged = resolveEffectiveVerification({
+      provider: 'x',
+      context: {
+        agentProfile: { verification: { summary: 'p', rubricFamily: 'partner-research' } },
+        taskVerification: { summary: 't' },
+      },
+    } as KodaXOptions);
+    expect(merged?.summary).toBe('t');
+    expect(merged?.rubricFamily).toBe('partner-research');
   });
 });
