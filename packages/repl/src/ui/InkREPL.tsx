@@ -5600,18 +5600,22 @@ const InkREPLInner: React.FC<InkREPLProps> = ({
   const askUserForConstructionPolicy = useCallback(
     async (options: import("@kodax-ai/coding").AskUserQuestionOptions): Promise<string> => {
       const selectOptions = options.options ? toSelectOptions(options.options) : [];
+      // The construction / self-modify policy is inherently single-select
+      // (approve vs reject) and its contract returns a single string, so force
+      // single-select rather than forwarding options.multiSelect. A multi-select
+      // here would let a `join(", ")` corrupt an option value containing ", "
+      // (the exact hazard FEATURE_222 R2 removed everywhere else).
       const selected = await showSelectDialogWithOptions(
         getAskUserDialogTitle(options),
         selectOptions,
-        options.multiSelect,
+        false,
       );
       // ESC → undefined → return the shared CANCELLED_TOOL_RESULT_MESSAGE
       // sentinel. The policy maps any non-'approve' answer to 'reject', so a
-      // cancelled dialog rejects. This path is single-select only; if a host
-      // ever returns an array, collapse it to a string so the policy contract
-      // (Promise<string>) holds.
+      // cancelled dialog rejects. `selected` is a string with single-select; the
+      // array guard is defensive only — take the first value, never join.
       if (selected === undefined) return CANCELLED_TOOL_RESULT_MESSAGE;
-      return Array.isArray(selected) ? selected.join(", ") : selected;
+      return Array.isArray(selected) ? (selected[0] ?? CANCELLED_TOOL_RESULT_MESSAGE) : selected;
     },
     [showSelectDialogWithOptions],
   );
@@ -5707,8 +5711,11 @@ const InkREPLInner: React.FC<InkREPLProps> = ({
             // hint. All three reuse the existing inline `error` field.
             const count = latest.selectedIndices.length;
             const { minSelections, maxSelections } = latest;
+            // An explicit `minSelections: 0` means the selection is optional, so
+            // an empty confirm is valid — only reject empty when the min is unset
+            // (default: at least one) or positive.
             const rangeError =
-              count === 0
+              count === 0 && minSelections !== 0
                 ? t("select.multiselect_empty")
                 : minSelections !== undefined && count < minSelections
                   ? t("select.multiselect_min", { min: String(minSelections) })

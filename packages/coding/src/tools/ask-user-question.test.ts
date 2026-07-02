@@ -99,6 +99,40 @@ describe('toolAskUserQuestion — multi select', () => {
     );
     expect(askUser.mock.calls[0]![0].minSelections).toBeUndefined();
   });
+
+  it('rejects an unsatisfiable range (min > max) up front instead of opening a dialog', async () => {
+    const askUser = vi.fn<[AskUserQuestionOptions], Promise<string | string[]>>(async () => ['a']);
+    const ctx = makeCtx({ askUser });
+    const result = await toolAskUserQuestion(
+      {
+        question: 'Pick',
+        multi_select: true,
+        min_selections: 3,
+        max_selections: 2,
+        options: [{ label: 'A', value: 'a' }, { label: 'B', value: 'b' }, { label: 'C', value: 'c' }],
+      },
+      ctx,
+    );
+    expect(result).toMatch(/\[Tool Error\]/);
+    expect(result).toMatch(/min_selections/);
+    expect(askUser).not.toHaveBeenCalled();
+  });
+
+  it('rejects min_selections greater than the option count', async () => {
+    const askUser = vi.fn<[AskUserQuestionOptions], Promise<string | string[]>>(async () => ['a']);
+    const ctx = makeCtx({ askUser });
+    const result = await toolAskUserQuestion(
+      {
+        question: 'Pick',
+        multi_select: true,
+        min_selections: 5,
+        options: [{ label: 'A', value: 'a' }, { label: 'B', value: 'b' }],
+      },
+      ctx,
+    );
+    expect(result).toMatch(/\[Tool Error\]/);
+    expect(askUser).not.toHaveBeenCalled();
+  });
 });
 
 describe('toolAskUserQuestion — multi question', () => {

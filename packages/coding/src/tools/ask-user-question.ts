@@ -59,6 +59,32 @@ function toSelectionBound(value: unknown): number | undefined {
 }
 
 /**
+ * Reject an internally-inconsistent multi-select range at the tool boundary
+ * (the model's numbers are not trusted): `min > max`, or `min` greater than the
+ * option count, would leave the REPL dialog unsatisfiable — every Enter re-prompts
+ * and only ESC escapes, which the tool then mis-reports as user cancellation.
+ * Returns an error message, or undefined when the range is satisfiable.
+ * `min_selections: 0` is allowed (the selection is optional).
+ */
+function validateSelectionBounds(
+  minSelections: number | undefined,
+  maxSelections: number | undefined,
+  optionCount: number,
+): string | undefined {
+  if (
+    minSelections !== undefined &&
+    maxSelections !== undefined &&
+    minSelections > maxSelections
+  ) {
+    return `min_selections (${minSelections}) cannot exceed max_selections (${maxSelections})`;
+  }
+  if (minSelections !== undefined && minSelections > optionCount) {
+    return `min_selections (${minSelections}) cannot exceed the number of options (${optionCount})`;
+  }
+  return undefined;
+}
+
+/**
  * Ask user a question with multiple interaction modes.
  *
  * This tool requires context.askUser (select) or context.askUserInput (input)
@@ -87,6 +113,16 @@ export async function toolAskUserQuestion(
         const resolvedValue = opt.value || opt.label || String(opt);
         if (resolvedValue === BACK_SENTINEL) {
           return `[Tool Error] ask_user_question: Option value "${BACK_SENTINEL}" is reserved and cannot be used`;
+        }
+      }
+      if (item.multi_select === true) {
+        const boundsError = validateSelectionBounds(
+          toSelectionBound(item.min_selections),
+          toSelectionBound(item.max_selections),
+          item.options.length,
+        );
+        if (boundsError) {
+          return `[Tool Error] ask_user_question: Question "${item.question}" ${boundsError}`;
         }
       }
     }
@@ -163,6 +199,15 @@ export async function toolAskUserQuestion(
   // Check if askUser callback is available
   if (!ctx.askUser) {
     return '[Tool Error] ask_user_question: Interactive mode not available (askUser callback not provided)';
+  }
+
+  if (input.multi_select === true) {
+    const boundsError = validateSelectionBounds(
+      toSelectionBound(input.min_selections),
+      toSelectionBound(input.max_selections),
+      input.options.length,
+    );
+    if (boundsError) return `[Tool Error] ask_user_question: ${boundsError}`;
   }
 
   try {

@@ -630,6 +630,18 @@ export abstract class KodaXOpenAICompatProvider extends KodaXBaseProvider {
       capability.thinkingStrategy === 'provider-toggle'
     ) {
       params.thinking = { type: intent.disabled ? 'disabled' : 'enabled' };
+      // A friendly-form provider that ALSO declares openai-chat-effort accepts a
+      // reasoning_effort alongside the thinking toggle — send it instead of
+      // dropping it by returning early (this block otherwise pre-empts the
+      // openai-chat-effort branch below). Mirrors the deepseek-v4-openai block
+      // above and the symmetric Anthropic-side handling.
+      if (
+        !intent.disabled &&
+        intent.effort &&
+        capability.effortStrategy === 'openai-chat-effort'
+      ) {
+        params.reasoning_effort = intent.effort;
+      }
       return;
     }
 

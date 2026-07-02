@@ -20,6 +20,15 @@ export interface WorkflowResultFormatOptions {
 }
 
 export function detectWorkflowLocale(text: string): WorkflowRunLocale {
+  // Presence, by design: this feeds SHORT user queries (`/workflow <request>`)
+  // and joined (rawArgs + name + description + source) rerun parts where the
+  // language-bearing piece (a Chinese request/description) is routinely diluted
+  // by ASCII code and workflow names. Any CJK presence marks the run Chinese so
+  // its launch/progress/result chrome localizes to the user. (A dominance check
+  // was tried and reverted \u2014 it flipped short Chinese queries and Chinese-authored
+  // rerun capsules to English; the only case it helped, a stray CJK char in an
+  // English agent digest, is a minor cosmetic edge that does not justify
+  // regressing the primary paths.)
   return /[\u3400-\u9fff]/u.test(text) ? 'zh' : 'en';
 }
 
