@@ -137,6 +137,7 @@ export function buildWorkerInstructions(
     // (vs A=9% baseline-low ceiling-flatten), pull-correct mention 41→76%
     // (+35pp lift), 5/6 alias C ≥ 70%.
     '- DISPATCH OBJECTIVE QUALITY: when writing a child\'s `objective`, prefer stating the goal abstractly. Avoid hand-feeding specific bash commands ("use `git diff X`", "run `git log`") — the child picks its own tools, and hand-feeding bash bypasses the child\'s pull-tool guidance. If you need to convey a specific git revision or scope (e.g., v0.7.39..HEAD), state it as data ("scope: v0.7.39..HEAD") rather than a command directive.',
+    '- DISPATCH OBJECTIVE LANGUAGE: write the `objective` (and any `run_workflow` child prompts) in the same natural language as the user\'s request, so the child\'s report comes back in that language. Code, file paths, and quoted scope stay in their source form.',
     '- DISPATCH OBJECTIVE GUIDANCE: WHEN RELEVANT (review / change-audit / module-exploration objectives only — not trivial probes), briefly note the recommended pull-tool family in the objective. Examples:',
     '    - Review tasks: "scope via `changed_scope`, then drill specific files with `changed_diff_bundle`"',
     '    - Module exploration: "use `module_context` to map the module surface before reading individual files"',

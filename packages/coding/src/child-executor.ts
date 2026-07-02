@@ -1515,6 +1515,7 @@ export const CHILD_AGENT_SYSTEM_PROMPT = [
   '',
   '## Execution Guidelines',
   '- Focus on the objective described in the user message. Do not deviate.',
+  '- Write your final report in the same natural language as the objective you were given, so it reaches the user in their language. Keep code, file paths, and quoted evidence in their source language.',
   '- When you have sufficient evidence, stop investigating and synthesize your findings.',
   '- Your final response MUST be text only — the parent reads your text directly as the dispatch result, and a final tool call would re-open the turn and force another LLM round without giving the parent new information.',
   '',
