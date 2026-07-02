@@ -1,4 +1,4 @@
-import { describe, expect, it } from 'vitest';
+import { describe, expect, it, vi } from 'vitest';
 
 import { createWorkflowRunManager } from './run-manager.js';
 import type { ManagedRunClassification } from './run-manager.js';
@@ -87,6 +87,30 @@ describe('createWorkflowRunManager (neutral)', () => {
     expect(outcome.kind).toBe('failed');
     expect(m.get('r4')?.status).toBe('failed');
     expect(m.get('r4')?.error).toBe('explode');
+  });
+
+  it('a SYNC-throwing runFn with a throwing onError invokes onError exactly once and still settles', async () => {
+    // Regression: the sync-throw path used to call onError in an async thunk AND
+    // again in the downstream `.catch`, double-invoking it when onError itself
+    // threw. It now rejects into the single `.catch(onError)`.
+    const m = createWorkflowRunManager();
+    const onErrorSpy = vi.fn((error: unknown): Outcome => {
+      // A throwing onError (a public-API injection point) must not be re-invoked.
+      throw error instanceof Error ? error : new Error(String(error));
+    });
+    const run = m.start<Outcome>({
+      runId: 'r-sync-throw',
+      workflow: 'wf',
+      runFn: () => {
+        throw new Error('sync-explode');
+      },
+      classify,
+      onError: onErrorSpy,
+    });
+    await expect(run.done).rejects.toThrow('sync-explode');
+    expect(onErrorSpy).toHaveBeenCalledTimes(1); // was 2 before the fix
+    // The run still reaches a terminal status (never wedged in 'running').
+    expect(m.get('r-sync-throw')?.status).toBe('failed');
   });
 
   it('pause() blocks the next beforeSpawn until resume()', async () => {
@@ -208,5 +232,83 @@ describe('createWorkflowRunManager (neutral)', () => {
     expect(received.length).toBeGreaterThan(0);
     expect(m.getWorkflowProcessSnapshot('r7')).toBeDefined();
     unsubscribe();
+  });
+});
+
+describe('createWorkflowRunManager — lifecycle robustness (long-lived hosts)', () => {
+  it('removes the external abort listener on normal completion (no per-run leak)', async () => {
+    // A long-lived host shares ONE session AbortSignal across many runs.
+    // `{ once: true }` self-removes the forwarder only if the signal fires; on a
+    // normal completion the run must detach it, else every completed run leaks a
+    // dead listener on the shared signal.
+    const ext = new AbortController();
+    const removeSpy = vi.spyOn(ext.signal, 'removeEventListener');
+    const m = createWorkflowRunManager();
+    const run = m.start<Outcome>({
+      runId: 'leak',
+      workflow: 'wf',
+      signal: ext.signal,
+      runFn: async () => ({ kind: 'completed' }),
+      classify,
+      onError,
+    });
+    await run.done;
+    expect(removeSpy).toHaveBeenCalledWith('abort', expect.any(Function));
+  });
+
+  it('a throwing classify still settles the run failed — never wedged in running', async () => {
+    const m = createWorkflowRunManager();
+    const run = m.start<Outcome>({
+      runId: 'badclassify',
+      workflow: 'wf',
+      runFn: async () => ({ kind: 'completed' }),
+      classify: () => {
+        throw new Error('classify boom');
+      },
+      onError,
+    });
+    await expect(run.done).rejects.toThrow('classify boom');
+    // Without the terminal-settle guard the status would stay 'running' forever
+    // and the run would never be eligible for pruneTerminalRuns eviction.
+    expect(m.get('badclassify')?.status).toBe('failed');
+  });
+
+  it('a throwing onError still settles the run failed — never wedged in running', async () => {
+    const m = createWorkflowRunManager();
+    const run = m.start<Outcome>({
+      runId: 'badonerror',
+      workflow: 'wf',
+      runFn: async () => {
+        throw new Error('run boom');
+      },
+      classify,
+      onError: () => {
+        throw new Error('onError boom');
+      },
+    });
+    await expect(run.done).rejects.toThrow('onError boom');
+    expect(m.get('badonerror')?.status).toBe('failed');
+  });
+
+  it('evicts the oldest terminal runs beyond the retention cap', async () => {
+    // MAX_RETAINED_TERMINAL_RUNS is 500 (internal). Complete one extra run so
+    // exactly the oldest is evicted; a monotonic clock gives each a distinct
+    // endedAt so the eviction order is deterministic.
+    const CAP = 500;
+    let counter = 0;
+    const m = createWorkflowRunManager({ now: () => (counter += 1) });
+    for (let i = 0; i <= CAP; i += 1) {
+      const run = m.start<Outcome>({
+        runId: `run-${i}`,
+        workflow: 'wf',
+        runFn: async () => ({ kind: 'completed' }),
+        classify,
+        onError,
+      });
+      await run.done;
+    }
+    expect(m.list().length).toBe(CAP);
+    expect(m.get('run-0')).toBeUndefined(); // oldest terminal run evicted
+    expect(m.get(`run-${CAP}`)).toBeDefined(); // newest retained
   });
 });

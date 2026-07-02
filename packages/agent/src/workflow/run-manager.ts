@@ -130,6 +130,10 @@ interface MutableRun {
   controller: AbortController;
   pauseWaiters: Array<() => void>;
   process: WorkflowProcessTracker;
+  /** Detach the abort forwarder from the caller-owned `input.signal`, if any.
+   *  Called on terminal settle so a long-lived host that shares one session
+   *  signal across many runs does not accumulate one dead listener per run. */
+  detachExternalAbort?: () => void;
 }
 
 function snapshot(run: MutableRun): ManagedWorkflowSnapshot {
@@ -216,8 +220,16 @@ export function createWorkflowRunManager(
     input: StartManagedRunInput<TOutcome>,
   ): MutableRun => {
     const controller = new AbortController();
+    // Forward an external abort onto our controller. `{ once: true }` auto-removes
+    // the listener only if the signal FIRES; on a normal completion the run must
+    // remove it itself (see settle → detachExternalAbort) so a shared session
+    // signal does not leak one listener per completed run.
+    let detachExternalAbort: (() => void) | undefined;
     if (input.signal) {
-      input.signal.addEventListener('abort', () => controller.abort(), { once: true });
+      const signal = input.signal;
+      const forwardAbort = (): void => controller.abort();
+      signal.addEventListener('abort', forwardAbort, { once: true });
+      detachExternalAbort = () => signal.removeEventListener('abort', forwardAbort);
     }
     const metadata = input.processMetadata;
     const run: MutableRun = {
@@ -229,6 +241,7 @@ export function createWorkflowRunManager(
       startedAt: now(),
       controller,
       pauseWaiters: [],
+      ...(detachExternalAbort ? { detachExternalAbort } : {}),
       process: createWorkflowProcessTracker({
         runId: input.runId,
         workflowName: input.workflow,
@@ -279,8 +292,22 @@ export function createWorkflowRunManager(
       notifyProcess(run.process.setStatus('cancelled', 'workflow stopped'));
     }
     releasePauseWaiters(run);
+    // Remove the abort forwarder from the caller-owned signal now the run is
+    // terminal — {once:true} only self-removes when the signal fires, so a run
+    // that completes normally would otherwise leak its listener forever.
+    run.detachExternalAbort?.();
+    run.detachExternalAbort = undefined;
     pruneTerminalRuns();
   };
+
+  // Settle to a terminal 'failed' status from a raw thrown value. Used to
+  // guarantee a run never wedges in 'running' when a caller-injected
+  // onError/classify callback throws (both are public-API injection points).
+  const settleFailedFrom = (run: MutableRun, error: unknown): void =>
+    settle(run, {
+      status: 'failed',
+      error: error instanceof Error ? error : new Error(String(error)),
+    });
 
   return {
     start: <TOutcome>(input: StartManagedRunInput<TOutcome>): ManagedWorkflowRun<TOutcome> => {
@@ -305,13 +332,27 @@ export function createWorkflowRunManager(
       try {
         started = Promise.resolve(input.runFn(hooks));
       } catch (error: unknown) {
-        started = Promise.resolve(input.onError(error));
+        // runFn threw synchronously — reject so it flows through the SAME single
+        // `.catch(onError)` below as an async rejection. (Calling onError here in
+        // an async thunk would invoke it twice when a throwing onError rejected
+        // into that `.catch` as well.) `started` is consumed synchronously on the
+        // next line, so no unhandled-rejection window opens.
+        started = Promise.reject(error);
       }
       const done = started
         .catch((error: unknown) => input.onError(error))
         .then((outcome) => {
           settle(run, input.classify(outcome));
           return outcome;
+        })
+        .catch((error: unknown) => {
+          // A caller-injected onError/classify threw (both are public-API
+          // injection points). Guarantee the run still reaches a terminal
+          // status instead of wedging in 'running' forever (which also keeps it
+          // out of pruneTerminalRuns → unbounded Map growth), then re-throw so
+          // `done` still rejects for the caller.
+          if (!isTerminalRunStatus(run.status)) settleFailedFrom(run, error);
+          throw error;
         });
       return {
         runId: run.runId,
