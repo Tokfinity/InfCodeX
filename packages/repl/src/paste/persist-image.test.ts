@@ -10,6 +10,11 @@ import {
 } from './persist-image.js';
 import type { NormalizedImage } from './image-normalize.js';
 
+/** A minimal normalized PNG whose bytes vary by `content` (→ distinct hash). */
+function pngImage(content: string): NormalizedImage {
+  return { buffer: Buffer.from(content), mediaType: 'image/png', width: 1, height: 1 };
+}
+
 describe('persistImageAsBlock', () => {
   let tempDir = '';
 
@@ -129,30 +134,30 @@ describe('prunePasteTmpDir', () => {
     expect(deleted).toBe(0);
   });
 
-  it('deletes paste-* files older than PASTE_TMP_TTL_MS', async () => {
-    const oldFile = path.join(tempDir, 'paste-oldhash.png');
-    const newFile = path.join(tempDir, 'paste-newhash.png');
-    await fs.writeFile(oldFile, 'old');
-    await fs.writeFile(newFile, 'new');
+  it('deletes paste files older than PASTE_TMP_TTL_MS', async () => {
+    // Use the real writer so the fixtures carry the actual `-<16 hex>.png`
+    // filename shape prunePasteTmpDir matches — hard-coded fake names (e.g.
+    // 'paste-oldhash.png') silently stop matching if the shape is tightened.
+    const oldBlock = await persistImageAsBlock(pngImage('old'));
+    const newBlock = await persistImageAsBlock(pngImage('new'));
     // Backdate the old file 48h
     const oldMtime = new Date(Date.now() - 48 * 60 * 60 * 1000);
-    await fs.utimes(oldFile, oldMtime, oldMtime);
+    await fs.utimes(oldBlock.path, oldMtime, oldMtime);
 
     const deleted = await prunePasteTmpDir();
     expect(deleted).toBe(1);
-    await expect(fs.stat(oldFile)).rejects.toThrow();
-    await expect(fs.stat(newFile)).resolves.toBeDefined();
+    await expect(fs.stat(oldBlock.path)).rejects.toThrow();
+    await expect(fs.stat(newBlock.path)).resolves.toBeDefined();
   });
 
   it('preserves non-paste files (e.g., user accidentally dropped a notes.txt)', async () => {
     const unrelated = path.join(tempDir, 'notes.txt');
-    const oldPaste = path.join(tempDir, 'paste-old.png');
     await fs.writeFile(unrelated, 'user notes');
-    await fs.writeFile(oldPaste, 'old');
+    const oldPaste = await persistImageAsBlock(pngImage('old'));
     // Backdate both
     const backdated = new Date(Date.now() - 48 * 60 * 60 * 1000);
     await fs.utimes(unrelated, backdated, backdated);
-    await fs.utimes(oldPaste, backdated, backdated);
+    await fs.utimes(oldPaste.path, backdated, backdated);
 
     const deleted = await prunePasteTmpDir();
     expect(deleted).toBe(1);
@@ -160,12 +165,11 @@ describe('prunePasteTmpDir', () => {
   });
 
   it('TTL boundary — files at exactly TTL_MS are deleted (older than cutoff)', async () => {
-    const borderlineFile = path.join(tempDir, 'paste-borderline.png');
-    await fs.writeFile(borderlineFile, 'borderline');
+    const borderline = await persistImageAsBlock(pngImage('borderline'));
     const now = Date.now();
     // Set mtime to just past the TTL boundary
     const justPast = new Date(now - PASTE_TMP_TTL_MS - 1000);
-    await fs.utimes(borderlineFile, justPast, justPast);
+    await fs.utimes(borderline.path, justPast, justPast);
 
     const deleted = await prunePasteTmpDir(now);
     expect(deleted).toBe(1);
