@@ -168,6 +168,71 @@ describe('CAP-072: checkAndRetryIncompleteTools — under cap (retry path)', () 
     expect(onRetry).toHaveBeenCalledOnce();
   });
 
+  it('CAP-INCOMPLETE-TOOL-ALTERNATION: a preceding user turn is merged, not followed by a second user (no user,user 400)', async () => {
+    // Realistic transcript: the incomplete assistant is preceded by the prior
+    // round's tool_results (a `user` turn). Popping the assistant and pushing a
+    // fresh `user` would emit user,user — an Anthropic 400 (and a strict-gateway
+    // 400). The retry nudge must merge into the preceding user turn instead.
+    const messages: KodaXMessage[] = [
+      {
+        role: 'user',
+        content: [{ type: 'tool_result', tool_use_id: 'prev', content: 'ok' }],
+      } as unknown as KodaXMessage,
+      { role: 'assistant', content: [] },
+    ];
+    const result = await checkAndRetryIncompleteTools({
+      toolBlocks: [incompleteWriteTool('id-1')],
+      events: {} as unknown as KodaXEvents,
+      emitActiveExtensionEvent: fakeEmitter(),
+      messages,
+      incompleteRetryCount: 0,
+      preAssistantTokenSnapshot: makeSnapshot('pre'),
+      completedTurnTokenSnapshot: makeSnapshot('completed'),
+    });
+    expect(result.outcome).toBe('retry');
+    // No two consecutive same-role `user` messages anywhere.
+    for (let i = 1; i < messages.length; i++) {
+      expect(messages[i]!.role === 'user' && messages[i - 1]!.role === 'user').toBe(false);
+    }
+    // Assistant popped, nudge merged → the transcript is the single user turn.
+    expect(messages).toHaveLength(1);
+    expect(messages[0]!.role).toBe('user');
+    const content = messages[0]!.content as Array<{ type: string; text?: string }>;
+    expect(content[0]!.type).toBe('tool_result'); // prior tool_result preserved
+    expect(content[content.length - 1]!.type).toBe('text');
+    expect(content[content.length - 1]!.text).toMatch(/truncated/i); // nudge appended
+    // The preceding turn was pure tool_results (no real user text), so the merged
+    // turn is marked _synthetic — keeps the nudge hidden on restore + skipped by
+    // the sidecar gate, matching the old discrete _synthetic nudge.
+    expect(messages[0]!._synthetic).toBe(true);
+  });
+
+  it('CAP-INCOMPLETE-TOOL-ALTERNATION-REAL: merging into the real initial-prompt turn keeps it visible (not _synthetic)', async () => {
+    // First-turn case: the incomplete assistant is preceded by the user's real
+    // initial prompt. The nudge merges in, but the turn must NOT be flagged
+    // _synthetic — hiding it would drop the user's real prompt from the restored
+    // transcript.
+    const messages: KodaXMessage[] = [
+      { role: 'user', content: 'Please write the config file.' },
+      { role: 'assistant', content: [] },
+    ];
+    const result = await checkAndRetryIncompleteTools({
+      toolBlocks: [incompleteWriteTool('id-1')],
+      events: {} as unknown as KodaXEvents,
+      emitActiveExtensionEvent: fakeEmitter(),
+      messages,
+      incompleteRetryCount: 0,
+      preAssistantTokenSnapshot: makeSnapshot('pre'),
+      completedTurnTokenSnapshot: makeSnapshot('completed'),
+    });
+    expect(result.outcome).toBe('retry');
+    expect(messages).toHaveLength(1);
+    expect(messages[0]!._synthetic).toBeUndefined(); // real prompt stays visible
+    const content = messages[0]!.content as string;
+    expect(content).toContain('Please write the config file.'); // prompt preserved
+    expect(content).toMatch(/truncated/i); // nudge appended
+  });
+
   it('CAP-INCOMPLETE-TOOL-002: retry count >= 2 → escalated CRITICAL prompt with size limits', async () => {
     const messages: KodaXMessage[] = [{ role: 'assistant', content: [] }];
     const result = await checkAndRetryIncompleteTools({

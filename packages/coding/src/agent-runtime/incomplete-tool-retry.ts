@@ -78,6 +78,37 @@ function buildRetryPrompt(missingParams: string[], retryCount: number): string {
   return `⚠️ CRITICAL: Your response was TRUNCATED again. This is retry ${retryCount}/${KODAX_MAX_INCOMPLETE_RETRIES}.\n\nMISSING PARAMETERS:\n${missingParams.map(i => `- ${i}`).join('\n')}\n\nYOU MUST:\n1. For 'write' tool: Keep content under 50 lines - write structure first, fill in later with 'edit'\n2. For 'edit' tool: Keep new_string under 30 lines - make smaller, focused changes\n3. Provide ALL required parameters in your tool call\n\nIf your response is truncated again, the task will FAIL.\nPROVIDE SHORT, COMPLETE PARAMETERS NOW.`;
 }
 
+/**
+ * Append the retry nudge to an existing `user` turn's content without breaking
+ * its shape: a string turn gets the nudge as a trailing paragraph; a block-array
+ * turn (e.g. tool_results) gets a trailing text block. Preserves alternation so
+ * the incomplete-tool retry never emits a `user,user` pair.
+ */
+function appendTextToUserContent(
+  content: KodaXMessage['content'],
+  nudge: string,
+): KodaXMessage['content'] {
+  if (typeof content === 'string') {
+    return content.trim().length > 0 ? `${content}\n\n${nudge}` : nudge;
+  }
+  return [...content, { type: 'text', text: nudge }];
+}
+
+/**
+ * Does a `user` turn carry real user text (vs. only tool_result blocks)? A
+ * tool_results-only turn renders no transcript bubble and is not a user
+ * REQUEST, so the merged retry nudge can be marked `_synthetic` (hidden on
+ * restore + skipped by the sidecar gate) exactly like the old discrete nudge.
+ * A turn with real text (e.g. the initial prompt) must stay visible.
+ */
+function userTurnHasText(content: KodaXMessage['content']): boolean {
+  if (typeof content === 'string') return content.trim().length > 0;
+  return content.some(
+    (block) => (block as { type?: string; text?: string }).type === 'text'
+      && ((block as { text?: string }).text ?? '').trim().length > 0,
+  );
+}
+
 export async function checkAndRetryIncompleteTools(
   input: IncompleteToolRetryInput,
 ): Promise<IncompleteToolRetryResult> {
@@ -102,11 +133,31 @@ export async function checkAndRetryIncompleteTools(
       KODAX_MAX_INCOMPLETE_RETRIES,
     );
     input.messages.pop();
-    input.messages.push({
-      role: 'user',
-      content: buildRetryPrompt(incomplete, nextCount),
-      _synthetic: true,
-    });
+    // Popping the incomplete assistant turn leaves a `user` turn last (the
+    // prior round's tool_results, or the initial prompt). Pushing a fresh `user`
+    // here would create a user->user pair that Anthropic (and strict gateways)
+    // 400 on — the same alternation hazard the ADR-045 maxed_out repair guards.
+    // The v0.7.58 salvage guard routes more turns here, so merge the retry nudge
+    // into the preceding user turn instead of appending a second one.
+    const retryPrompt = buildRetryPrompt(incomplete, nextCount);
+    const prevIndex = input.messages.length - 1;
+    const prev = prevIndex >= 0 ? input.messages[prevIndex] : undefined;
+    if (prev && prev.role === 'user') {
+      // Mark the merged turn `_synthetic` ONLY when the preceding turn carries no
+      // real user text (a pure tool_results turn) — that keeps the nudge hidden
+      // on session restore + skipped by the sidecar "last real user" gate, just
+      // like the old discrete `_synthetic` nudge. When the preceding turn is a
+      // real message (e.g. the initial prompt), it must stay visible, so its
+      // existing (non-synthetic) flag is preserved.
+      const hideNudge = !userTurnHasText(prev.content);
+      input.messages[prevIndex] = {
+        ...prev,
+        content: appendTextToUserContent(prev.content, retryPrompt),
+        ...(hideNudge ? { _synthetic: true } : {}),
+      };
+    } else {
+      input.messages.push({ role: 'user', content: retryPrompt, _synthetic: true });
+    }
     const rebased = rebaseContextTokenSnapshot(
       input.messages,
       input.preAssistantTokenSnapshot,

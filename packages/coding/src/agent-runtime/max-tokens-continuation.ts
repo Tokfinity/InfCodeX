@@ -9,11 +9,11 @@
  * cut mid-thought; we synthesize a "resume directly" user message and
  * loop back so the model can continue.
  *
- * Skipped when `result.toolBlocks.length > 0` because partial-JSON
- * salvage in the next turn handles tool-call truncation naturally —
- * the agent executes the partial tool, observes the resulting state
- * via the tool_result, and continues. No explicit meta nudge needed
- * for that path.
+ * Skipped when `result.toolBlocks.length > 0`: the tool-execution /
+ * incomplete-tool-retry path already handles those blocks — complete
+ * calls execute, while a truncated or salvaged-mutating call is routed
+ * into the bounded retry (ADR-045) rather than executed. Either way the
+ * max_tokens text nudge is not needed for that path.
  *
  * Capped at `KODAX_MAX_MAXTOKENS_RETRIES = 3` consecutive retries to
  * prevent runaway loops; on retry exhaustion fires `events.onRetry`

@@ -493,6 +493,16 @@ const Date = new Proxy(globalThis.Date, {
         );
       };
     }
+    // Close the prototype-chain escape: Date.prototype.constructor.now() (and
+    // Date.constructor) would otherwise reach the real, un-proxied Date and
+    // bypass the now/apply/construct guards. (Reflection through an instance own
+    // prototype is out of scope — this sandbox guards a script natural
+    // non-determinism, not an adversary deliberately evading it.)
+    if (prop === "prototype" || prop === "constructor") {
+      throw new Error(
+        "Date.prototype / Date.constructor are disabled in workflow scripts (they bypass the resume-replay determinism guard); pass a timestamp via args.",
+      );
+    }
     return Reflect.get(target, prop, receiver);
   },
 });

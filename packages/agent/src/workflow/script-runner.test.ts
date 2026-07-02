@@ -182,6 +182,24 @@ describe('runRestrictedWorkflowScript', () => {
     ).rejects.toThrow(/disabled/);
   });
 
+  it('closes the Date.prototype.constructor / Date.constructor determinism bypass', async () => {
+    const { wf } = fakeWorkflowApi();
+    // Date.prototype.constructor is the real, un-proxied Date; calling .now() on
+    // it used to sidestep the guard entirely.
+    await expect(
+      runRestrictedWorkflowScript({
+        wf,
+        source: `async function run() { return Date.prototype.constructor.now(); }`,
+      }),
+    ).rejects.toThrow(/disabled/);
+    await expect(
+      runRestrictedWorkflowScript({
+        wf,
+        source: `async function run() { return Date.constructor; }`,
+      }),
+    ).rejects.toThrow(/disabled/);
+  });
+
   it('still allows deterministic Math and new Date(ms) with an explicit value', async () => {
     const { wf } = fakeWorkflowApi();
     const result = await runRestrictedWorkflowScript({

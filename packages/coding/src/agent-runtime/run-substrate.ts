@@ -1080,11 +1080,11 @@ export async function runSubstrate(
       // (so a too-large Write becomes Write+Edit across turns). Capped at
       // KODAX_MAX_MAXTOKENS_RETRIES (3) to prevent infinite loops.
       //
-      // Skipped when there are completed tool_use blocks — even if those
-      // blocks were salvaged from truncated JSON, the agent can execute
-      // the partial tool, observe the resulting state via tool_result, and
-      // naturally continue with edit/append in the next turn. No explicit
-      // meta nudge needed.
+      // Skipped when tool_use blocks are present: the tool-execution /
+      // incomplete-tool-retry path already handles them — complete calls
+      // execute, while a truncated or salvaged-mutating call is routed into
+      // the bounded retry (ADR-045), not executed. The max_tokens text nudge
+      // is not needed for that path.
       // CAP-074: L5 max_tokens continuation. Synthetic "resume mid-thought"
       // user message capped at KODAX_MAX_MAXTOKENS_RETRIES; skipped when
       // tool_blocks are present (partial-JSON salvage handles those naturally).
