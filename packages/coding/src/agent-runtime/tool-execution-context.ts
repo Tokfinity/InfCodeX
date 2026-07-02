@@ -31,6 +31,8 @@
  * and still observe accumulating mutations.
  */
 
+import { join } from 'node:path';
+
 import type { WorkflowProcessSnapshot } from '@kodax-ai/agent';
 
 import type {
@@ -46,6 +48,26 @@ import { mergeManagedProtocolPayload } from '../managed-protocol.js';
 import { resolveExecutionCwd } from '../runtime-paths.js';
 import { getSessionScratchDir } from '../session-scratch.js';
 import { getDefaultLspService } from '../lsp/service.js';
+
+/**
+ * Resolve the on-disk run directory for a `resumeFromRunId`, or undefined when
+ * the id is absent or fails sanitization. This id is model-supplied, so this is
+ * the ONLY sanitization before it is joined onto `runsBaseDir`: reject anything
+ * outside the safe run-id charset (no slashes / absolute paths), and defensively
+ * reject any '..' segment — a bare '..' passes the charset yet would escape one
+ * level via `join`. Extracted + exported so the traversal guard is directly
+ * unit-testable (a future charset/loosening regression must fail CI, not
+ * silently reopen a path-escape).
+ */
+export function resolveResumeFromRunDir(
+  runsBaseDir: string,
+  resumeFromRunId: string | undefined,
+): string | undefined {
+  if (!resumeFromRunId) return undefined;
+  if (!/^[A-Za-z0-9][A-Za-z0-9._-]*$/.test(resumeFromRunId)) return undefined;
+  if (resumeFromRunId.includes('..')) return undefined;
+  return join(runsBaseDir, resumeFromRunId);
+}
 
 export interface ToolExecutionContextInput {
   readonly options: KodaXOptions;
@@ -286,10 +308,9 @@ function buildWorkflowToolHost(
     // Lazy literal imports break the static cycle: workflow-runner imports
     // buildToolExecutionContext, so agent-runtime must not statically import
     // the workflows host/run-manager.
-    const [{ startManagedWorkflow }, { getDefaultWorkflowRunManager }, { join }] = await Promise.all([
+    const [{ startManagedWorkflow }, { getDefaultWorkflowRunManager }] = await Promise.all([
       import('../workflows/host.js'),
       import('../workflows/run-manager.js'),
-      import('node:path'),
     ]);
     // Stop signal = the session signal AND the per-run signal (from task_stop),
     // whichever fires first. AbortSignal.any needs Node >= 20 (KodaX baseline).
@@ -314,12 +335,11 @@ function buildWorkflowToolHost(
       runsBaseDir,
       manager: getDefaultWorkflowRunManager(),
       // FEATURE_246 Part D: resume seeds the result cache from the prior run.
-      // Guard against path traversal — resumeFromRunId is model-supplied, so a
-      // value like '../../etc' must not escape runsBaseDir. Run ids are
-      // `run-<base36>`; require that safe charset (no slashes / dots / abs path).
-      ...(resumeFromRunId && /^[A-Za-z0-9][A-Za-z0-9._-]*$/.test(resumeFromRunId) && !resumeFromRunId.includes('..')
-        ? { resumeFromRunDir: join(runsBaseDir, resumeFromRunId) }
-        : {}),
+      // Path-traversal guard lives in resolveResumeFromRunDir (model-supplied id).
+      ...(() => {
+        const resumeFromRunDir = resolveResumeFromRunDir(runsBaseDir, resumeFromRunId);
+        return resumeFromRunDir ? { resumeFromRunDir } : {};
+      })(),
       ...(combinedSignal ? { signal: combinedSignal } : {}),
       // FEATURE_247 (R7/R8): host attribution on workflow process events. The
       // hostMetadata map flows through the tracker onto every emitted

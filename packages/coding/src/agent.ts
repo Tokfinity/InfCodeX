@@ -15,9 +15,11 @@
  */
 
 import { Runner } from '@kodax-ai/agent';
+import { runWithScopedConfig } from '@kodax-ai/llm';
 
 import { createDefaultCodingAgent } from './coding-preset.js';
 import { applyFollowupEscalationToOptions } from './reasoning.js';
+import { deriveRunScopedConfig } from './run-scoped-config.js';
 import type { KodaXOptions, KodaXResult } from './types.js';
 
 export async function runKodaX(
@@ -29,25 +31,52 @@ export async function runKodaX(
   // (and, for doubt, there is a prior assistant turn in the session),
   // bump the L1 ceiling one rank. Off remains off (kill switch). Pure
   // option transform — no escalation = same reference returned.
-  const { options: effectiveOptions } = applyFollowupEscalationToOptions(options, prompt);
-  const result = await Runner.run<KodaXResult>(createDefaultCodingAgent(), prompt, {
-    presetOptions: effectiveOptions,
-    abortSignal: effectiveOptions.abortSignal,
-    // FEATURE_092 (v0.7.33): forward caller-supplied run-scoped guardrails
-    // (e.g. AutoModeToolGuardrail injected by the REPL bootstrap when
-    // permissionMode === 'auto'). Runner merges with `agent.guardrails`.
-    guardrails: effectiveOptions.guardrails,
+  const { options: baseOptions } = applyFollowupEscalationToOptions(options, prompt);
+  // FEATURE_247 (R1, SA): a profile's instructions map to `systemPromptOverride`
+  // on the SA path (consumed in reasoning-plan-entry). `dispatchManagedTask`
+  // applies this for its SA route, but `runKodaX` is ALSO a direct SA entry
+  // (`startKodaX` wraps it), so a consumer that sets only
+  // `context.agentProfile.instructions` via `runKodaX`/`startKodaX` would have
+  // them silently dropped. Apply the same mapping here — an explicit caller-set
+  // override still wins, and it is byte-identical when neither is set (or when
+  // reached via dispatch, which already set the field: `??` no-op). AMA never
+  // reaches `runKodaX` (dispatch routes it to `runAMA`), so this cannot
+  // double-inject over the AMA role-prompt path.
+  const profileInstructions = baseOptions.context?.agentProfile?.instructions;
+  const effectiveOptions: KodaXOptions =
+    profileInstructions !== undefined && baseOptions.context?.systemPromptOverride === undefined
+      ? {
+          ...baseOptions,
+          context: { ...baseOptions.context, systemPromptOverride: profileInstructions },
+        }
+      : baseOptions;
+  // Establish the run-scoped config (AsyncLocalStorage) around the whole run.
+  // `runKodaX` is a public SDK entry (and the target `startKodaX` wraps), so
+  // without this the per-run overrides (modelTiers / maxOutputTokens /
+  // disablePromptCache / lsp / workflow) would be silently dropped whenever a
+  // consumer calls it directly rather than via `runManagedTask`. When reached
+  // through `runManagedTask` (SA dispatch) this simply re-establishes the same
+  // scope — nesting replaces with an identical config, so it is idempotent.
+  return runWithScopedConfig(deriveRunScopedConfig(effectiveOptions), async () => {
+    const result = await Runner.run<KodaXResult>(createDefaultCodingAgent(), prompt, {
+      presetOptions: effectiveOptions,
+      abortSignal: effectiveOptions.abortSignal,
+      // FEATURE_092 (v0.7.33): forward caller-supplied run-scoped guardrails
+      // (e.g. AutoModeToolGuardrail injected by the REPL bootstrap when
+      // permissionMode === 'auto'). Runner merges with `agent.guardrails`.
+      guardrails: effectiveOptions.guardrails,
+    });
+    // Substrate executor always lifts full `KodaXResult` onto `data` —
+    // missing means the Agent declaration is mis-wired (fail loud, never
+    // return a truncated `RunResult` typed as `KodaXResult`).
+    if (!result.data) {
+      throw new Error(
+        'runKodaX: substrate executor did not lift KodaXResult onto RunResult.data — '
+        + 'verify createDefaultCodingAgent().substrateExecutor in coding-preset.ts',
+      );
+    }
+    return result.data;
   });
-  // Substrate executor always lifts full `KodaXResult` onto `data` —
-  // missing means the Agent declaration is mis-wired (fail loud, never
-  // return a truncated `RunResult` typed as `KodaXResult`).
-  if (!result.data) {
-    throw new Error(
-      'runKodaX: substrate executor did not lift KodaXResult onto RunResult.data — '
-      + 'verify createDefaultCodingAgent().substrateExecutor in coding-preset.ts',
-    );
-  }
-  return result.data;
 }
 
 export { buildAutoRepoIntelligenceContext } from './agent-runtime/middleware/repo-intelligence.js';

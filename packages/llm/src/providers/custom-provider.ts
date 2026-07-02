@@ -251,9 +251,19 @@ function customModelDescriptorToFull(
     return { id: entry };
   }
   const reasoningProfile = resolveCustomModelReasoningProfile(entry, protocol, supportsThinking);
+  // Single-track invariant: a provider-level supportsThinking:false must make
+  // EVERY surface agree on 'none' — same override buildProviderConfig and
+  // getCustomModelCapabilities already apply. Otherwise the deprecated per-model
+  // reasoningCapability field survives the spread and getReasoningCapability(id)
+  // reports a stale label (e.g. 'native-effort') the runtime never acts on,
+  // masking the 'reasoning-control-limited' user warning (provider-policy).
+  const normalized =
+    supportsThinking === false && entry.reasoningCapability !== undefined
+      ? { ...entry, reasoningCapability: 'none' as const }
+      : entry;
   return reasoningProfile
-    ? { ...entry, reasoningProfile }
-    : entry;
+    ? { ...normalized, reasoningProfile }
+    : normalized;
 }
 
 export function validateCustomProviderConfig(

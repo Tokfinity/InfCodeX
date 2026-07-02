@@ -22,6 +22,7 @@
  */
 import { mapLegacyReasoningModeToEffortIntent, runWithScopedConfig } from '@kodax-ai/llm';
 import { runKodaX } from './agent.js';
+import { deriveRunScopedConfig } from './run-scoped-config.js';
 import { listToolDefinitions } from './tools/index.js';
 import { emitEffectiveTaskConfig } from './agent-runtime/effective-config.js';
 import {
@@ -118,14 +119,10 @@ export async function runManagedTask(
   // prompt-cache, lsp service) check this store first, then fall back to env for
   // the CLI / config.json path (env-bridged, single-session). Only the fields
   // the caller actually set enter the store, so the CLI path stays on env.
+  // Shared derivation (deriveRunScopedConfig) is the single source of truth so
+  // this and the `runKodaX` SA entry never diverge on which fields are scoped.
   return runWithScopedConfig(
-    {
-      ...(options.modelTiers !== undefined ? { modelTiers: options.modelTiers } : {}),
-      ...(options.maxOutputTokens !== undefined ? { maxOutputTokens: options.maxOutputTokens } : {}),
-      ...(options.disablePromptCache !== undefined ? { disablePromptCache: options.disablePromptCache } : {}),
-      ...(options.lsp !== undefined ? { lsp: options.lsp } : {}),
-      ...(options.workflow !== undefined ? { workflow: options.workflow } : {}),
-    },
+    deriveRunScopedConfig(options),
     async () => {
       const result = await executeRunManagedTask(options, prompt);
       const reshaped = reshapeToUserConversation(result, options, prompt);

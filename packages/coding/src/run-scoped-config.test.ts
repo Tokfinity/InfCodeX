@@ -7,6 +7,8 @@ import {
 } from '@kodax-ai/llm';
 
 import { resolveModelHintTier } from './model-hint-routing.js';
+import { deriveRunScopedConfig } from './run-scoped-config.js';
+import type { KodaXOptions } from './types.js';
 
 /**
  * Run-scoped config (AsyncLocalStorage) — the concurrency-safe replacement for
@@ -55,6 +57,31 @@ describe('run-scoped model tiers (ALS, concurrency-safe)', () => {
       if (saved.p === undefined) delete process.env.KODAX_DEEP_PROVIDER; else process.env.KODAX_DEEP_PROVIDER = saved.p;
       if (saved.m === undefined) delete process.env.KODAX_DEEP_MODEL; else process.env.KODAX_DEEP_MODEL = saved.m;
     }
+  });
+});
+
+describe('deriveRunScopedConfig (KodaXOptions → run-scoped config)', () => {
+  it('maps every run-scoped field the SDK exposes', () => {
+    const options = {
+      modelTiers: { deep: { provider: 'p', model: 'm' } },
+      maxOutputTokens: 4096,
+      disablePromptCache: true,
+      lsp: false,
+      workflow: { maxConcurrency: 12 },
+    } as KodaXOptions;
+    expect(deriveRunScopedConfig(options)).toEqual({
+      modelTiers: { deep: { provider: 'p', model: 'm' } },
+      maxOutputTokens: 4096,
+      disablePromptCache: true,
+      lsp: false,
+      workflow: { maxConcurrency: 12 },
+    });
+  });
+
+  it('omits unset fields so the CLI/env path stays on its fallbacks (empty object)', () => {
+    // Only fields the caller set may enter the ALS store; an empty object leaves
+    // every reader on process.env — the single-session CLI / config.json path.
+    expect(deriveRunScopedConfig({} as KodaXOptions)).toEqual({});
   });
 });
 

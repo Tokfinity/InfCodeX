@@ -222,9 +222,17 @@ function customDescriptorToFull(
     return { id: entry };
   }
   const reasoningProfile = resolveCustomModelReasoningProfile(entry, protocol, supportsThinking);
+  // Single-track invariant: supportsThinking:false forces every surface to 'none'
+  // (mirrors customModelDescriptorToFull + getCustomModelCapabilities). Without
+  // this the deprecated per-model reasoningCapability leaks through the spread and
+  // getReasoningCapability(id) reports a stale label the runtime never acts on.
+  const normalized =
+    supportsThinking === false && entry.reasoningCapability !== undefined
+      ? { ...entry, reasoningCapability: 'none' as const }
+      : entry;
   return reasoningProfile
-    ? { ...entry, reasoningProfile }
-    : entry;
+    ? { ...normalized, reasoningProfile }
+    : normalized;
 }
 
 /**

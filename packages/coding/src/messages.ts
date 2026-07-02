@@ -6,10 +6,12 @@ import { getRequiredToolParams, isToolMutation } from './tools/index.js';
  * A salvaged tool input is untrustworthy to execute when EITHER:
  *   - the stream did not end on a clean stop (`_truncated`) — may be cut
  *     mid-value, unsafe for any tool; OR
- *   - the tool MUTATES (write/edit/bash) — even a "complete" turn can carry
- *     malformed JSON (e.g. unescaped quotes) that salvage silently truncates
- *     mid-value, corrupting the file; the protocol stop reason does not
- *     guarantee argument integrity.
+ *   - the tool is non-readonly per `isToolMutation` — any `sideEffect` other
+ *     than `'readonly'` (filesystem/shell mutation, network reads/writes, state
+ *     changes). Even a "complete" turn can carry malformed JSON (e.g. unescaped
+ *     quotes) that salvage silently truncates mid-value — corrupting a file or
+ *     firing an unintended side-effecting call; the protocol stop reason does
+ *     not guarantee argument integrity.
  * A salvaged read-only input on a clean stop is allowed through (low risk,
  * avoids a needless retry loop for providers that emit non-strict-but-complete
  * JSON).

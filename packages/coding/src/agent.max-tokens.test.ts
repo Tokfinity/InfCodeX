@@ -190,6 +190,34 @@ describe('runKodaX max_tokens continuation (L5)', () => {
     expect(joined).toContain('output token limit hit');
   }, 15_000);
 
+  it('honors a run-scoped maxOutputTokens passed to runKodaX (SDK ALS wrap)', async () => {
+    // Regression guard for the SDK ALS gap: runKodaX is a public entry (startKodaX
+    // wraps it) and must establish the run-scoped config (AsyncLocalStorage) so
+    // per-run overrides reach the provider. Before runKodaX wrapped in
+    // runWithScopedConfig, options.maxOutputTokens was silently dropped and the
+    // provider fell back to its capped config default. getEffectiveMaxOutputTokens
+    // reads getRunScopedConfig()?.maxOutputTokens ahead of the config default, so a
+    // distinct scoped value must surface verbatim on the wire budget.
+    const SCOPED_BUDGET = 23_456;
+    expect(SCOPED_BUDGET).not.toBe(KODAX_CAPPED_MAX_OUTPUT_TOKENS);
+    MaxTokensScriptedProvider.responses = [
+      {
+        textBlocks: [{ type: 'text', text: 'done' }],
+        toolBlocks: [],
+        thinkingBlocks: [],
+        stopReason: 'end_turn',
+      },
+    ];
+
+    const result = await runKodaX(
+      { provider: TEST_PROVIDER_NAME, reasoningMode: 'off', maxOutputTokens: SCOPED_BUDGET },
+      'Do a small thing.',
+    );
+
+    expect(result.success).toBe(true);
+    expect(MaxTokensScriptedProvider.observedBudgets[0]).toBe(SCOPED_BUDGET);
+  }, 15_000);
+
   it('respects user KODAX_MAX_OUTPUT_TOKENS override on every turn', async () => {
     process.env.KODAX_MAX_OUTPUT_TOKENS = '48000';
     MaxTokensScriptedProvider.responses = [

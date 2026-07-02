@@ -788,6 +788,39 @@ describe('custom providers', () => {
     );
   });
 
+  it('supportsThinking:false normalizes a PER-MODEL deprecated reasoningCapability on every surface', () => {
+    // Regression: the deprecated per-model `reasoningCapability` field survived the
+    // descriptor spread, so provider.getConfiguredReasoningCapability('alt') reported
+    // the stale label ('native-effort') even though supportsThinking:false forces the
+    // runtime profile to 'none'. That surface/runtime split masks the
+    // 'reasoning-control-limited' user warning. Every surface must agree on 'none'.
+    vi.stubEnv('CUSTOM_PMCAP_API_KEY', 'test-key');
+    vi.spyOn(console, 'warn').mockImplementation(() => {});
+    const config: KodaXCustomProviderConfig = {
+      name: 'permodel-cap',
+      protocol: 'openai',
+      baseUrl: 'https://permodelcap.example/v1',
+      apiKeyEnv: 'CUSTOM_PMCAP_API_KEY',
+      model: 'main',
+      supportsThinking: false,
+      models: ['main', { id: 'alt', reasoningCapability: 'native-effort' }],
+    };
+    registerCustomProviders([cloneConfig(config)]);
+
+    const provider = createCustomProvider(cloneConfig(config));
+    // The stale label must be normalized to 'none' at the descriptor source.
+    expect(provider.getConfiguredReasoningCapability('alt')).toBe('none');
+    expect(provider.getReasoningProfile('alt')).toMatchObject({
+      reasoningPreset: 'none',
+      effortStrategy: 'none',
+    });
+
+    // Query surfaces already forced 'none' — assert they still agree (no regression).
+    expect(getCustomModelCapabilities('permodel-cap', 'alt')?.reasoningCapability).toBe('none');
+    const alt = getCustomProviderModelDescriptors('permodel-cap')?.find((d) => d.id === 'alt');
+    expect(alt?.reasoningCapability).toBe('none');
+  });
+
   it('supportsThinking:false overrides a per-model reasoningProfile on ANTHROPIC-compat too', () => {
     vi.stubEnv('CUSTOM_PMANT_API_KEY', 'test-key');
     vi.spyOn(console, 'warn').mockImplementation(() => {});
