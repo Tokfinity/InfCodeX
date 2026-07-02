@@ -11,7 +11,7 @@
 | Item | Value |
 |---|---|
 | Current released version | `v0.7.58` |
-| Current package version | `@kodax-ai/kodax@0.7.58` (pending npm publish, 2026-07-02) |
+| Current package version | `@kodax-ai/kodax@0.7.58` (published to npm, 2026-07-02) |
 | Workspace baseline | `llm / agent / coding / repl` 4 packages |
 | Total tracked features | `31` |
 | InProgress | `0` |
@@ -24,7 +24,7 @@
 
 | Status | Count | Feature IDs | Next checkpoint |
 |---|---:|---|---|
-| Completed | 16 | `246, 245, 243, 242, 241, 233, 240, 239, 224, 174, 211, 237, 229, 230, 234, 236` | `245, 246` v0.7.58 (pending release); `233, 241, 242, 243` released v0.7.57; `239, 240` released v0.7.56; `224` released v0.7.54; `174, 211, 237` v0.7.53; `229` v0.7.50; `230, 234, 236` v0.7.51 |
+| Completed | 16 | `246, 245, 243, 242, 241, 233, 240, 239, 224, 174, 211, 237, 229, 230, 234, 236` | `245, 246` released v0.7.58 (2026-07-02); `233, 241, 242, 243` released v0.7.57; `239, 240` released v0.7.56; `224` released v0.7.54; `174, 211, 237` v0.7.53; `229` v0.7.50; `230, 234, 236` v0.7.51 |
 | InProgress | 0 | `-` | No active implementation slot after v0.7.57 release sync |
 | Planned, near-term | 10 | `248, 228, 244, 231, 235, 238, 232, 105, 108, 225` | `v0.7.59` -> `v0.7.81` |
 | Planned, v0.8.x | 5 | `007, 030, 093, 113, 139` | `v0.8.5+` |
@@ -106,8 +106,8 @@ No active feature is currently in implementation after the `v0.7.57` release syn
 
 | ID | Title | Released | Design | Notes |
 |---|---|---|---|---|
-| `246` | Claude-Code-Parity Workflow (inline authoring + structured output + streaming pipeline + same-session resume; absorbs `232`, parity subset of `231`) | `v0.7.58` | [v0.7.58](features/v0.7.58.md#feature_246-claude-code-parity-workflow--inline-authoring--structured-output--streaming-pipeline--same-session-resume) | Landed 2026-06-29 (pending release in `v0.7.58`). Model-callable `run_workflow` inline authoring (scout-then-author; `sideQuery` generator demoted to headless/SA fallback), structured child output via `outputSchema`, no-barrier `wf.pipeline`, same-session resume via `resumeFromRunId` (content-addressed result cache; `Date.now`/`Math.random` now throw in-sandbox), nested `wf.workflow`, per-agent phase + per-child effort, `/workflow` command intelligence, and mode-distinct SA/AMA/AMAW activation. ADR-044/046/047/048. Neutral run-lifecycle manager lifted to `@kodax-ai/agent`. |
-| `245` | Workflow Generation Robustness + Runtime Partial-Result Salvage | `v0.7.58` | [v0.7.58](features/v0.7.58.md#feature_245-workflow-generation-robustness--runtime-partial-result-salvage) | Landed 2026-06-29 (pending release in `v0.7.58`). Generation-time: static literal-taskId rejection, smoke now asserts taskId/evidenceRefs identity, multi-scenario adversarial smoke, taskId randomization, prompt/repair hardening. Runtime: mid-run failures surface completed children's outputs instead of a bare failure. Eval per ADR-033 is deterministic Layer-1 unit tests (generator prompt is not a FEATURE_104 trigger). Runtime self-repair (replay completed agents) is explicitly deferred to `FEATURE_231`. |
+| `246` | Claude-Code-Parity Workflow (inline authoring + structured output + streaming pipeline + same-session resume; absorbs `232`, parity subset of `231`) | `v0.7.58` | [v0.7.58](features/v0.7.58.md#feature_246-claude-code-parity-workflow--inline-authoring--structured-output--streaming-pipeline--same-session-resume) | Released in `v0.7.58` (2026-07-02). Model-callable `run_workflow` inline authoring (scout-then-author; `sideQuery` generator demoted to headless/SA fallback), structured child output via `outputSchema`, no-barrier `wf.pipeline`, same-session resume via `resumeFromRunId` (content-addressed result cache; `Date.now`/`Math.random` now throw in-sandbox), nested `wf.workflow`, per-agent phase + per-child effort, `/workflow` command intelligence, and mode-distinct SA/AMA/AMAW activation. ADR-044/046/047/048. Neutral run-lifecycle manager lifted to `@kodax-ai/agent`. |
+| `245` | Workflow Generation Robustness + Runtime Partial-Result Salvage | `v0.7.58` | [v0.7.58](features/v0.7.58.md#feature_245-workflow-generation-robustness--runtime-partial-result-salvage) | Released in `v0.7.58` (2026-07-02). Generation-time: static literal-taskId rejection, smoke now asserts taskId/evidenceRefs identity, multi-scenario adversarial smoke, taskId randomization, prompt/repair hardening. Runtime: mid-run failures surface completed children's outputs instead of a bare failure. Eval per ADR-033 is deterministic Layer-1 unit tests (generator prompt is not a FEATURE_104 trigger). Runtime self-repair (replay completed agents) is explicitly deferred to `FEATURE_231`. |
 | `243` | Built-in Repository Intelligence + Codebase Mastery Parity | `v0.7.57` | [v0.7.57](features/v0.7.57.md#feature_243-built-in-repository-intelligence--codebase-mastery-parity) | Released v0.7.57 (2026-06-28). Replaces external Repointel runtime with built-in full/light repo-intelligence, semantic worker sidecar, `relationship_scan`, repo-explorer agent, and `/repo-intel` controls. |
 | `242` | Lean Review + Project Instructions Bootstrap | `v0.7.57` | [v0.7.57](features/v0.7.57.md#feature_242-lean-review--project-instructions-bootstrap) | Released v0.7.57 (2026-06-28). Adds lean review command path and project instruction bootstrap updates for the current Worker + Sidecar architecture. |
 | `241` | SDK Timeout Control Surface | `v0.7.57` | [v0.7.57](features/v0.7.57.md#feature_241-sdk-timeout-control-surface) | Released v0.7.57 (2026-06-28). Adds seconds-based SDK timeout config; LLM request timeout normalization lives in `@kodax-ai/llm`, with coding adapting it to provider resilience. |
