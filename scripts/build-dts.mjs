@@ -36,7 +36,7 @@
 
 import { rollup } from 'rollup';
 import dts from 'rollup-plugin-dts';
-import { readFileSync, readdirSync, rmSync, statSync, unlinkSync } from 'node:fs';
+import { existsSync, readFileSync, readdirSync, rmSync, statSync, unlinkSync } from 'node:fs';
 import { readFile } from 'node:fs/promises';
 import { isBuiltin } from 'node:module';
 import path from 'node:path';
@@ -109,6 +109,14 @@ const internalSubpathDtsResolver = {
 // remain after this script.
 function cleanStaleEmit() {
   log('Cleaning stale dist/*.d.ts (prior tsc emit)…');
+  // dist/ is created by build:bundle, which CI does not run (it runs
+  // build:packages → build:dts only, to catch missing SDK exports). rollup's
+  // bundle.write() below mkdir's dist/ itself, so a missing dist/ here just
+  // means there is no prior emit to clean — skip rather than ENOENT.
+  if (!existsSync(distDir)) {
+    log('  ✓ no existing dist/ — nothing to clean');
+    return;
+  }
   let removed = 0;
   for (const entry of readdirSync(distDir)) {
     const full = path.join(distDir, entry);
