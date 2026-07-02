@@ -902,7 +902,15 @@ export const BUILTIN_TOOL_DEFINITIONS: LocalToolDefinition[] = [
               },
               multi_select: {
                 type: 'boolean',
-                description: 'Allow multiple selections for this question.',
+                description: 'Allow multiple selections for this question. Returns an array of the selected values.',
+              },
+              min_selections: {
+                type: 'integer',
+                description: 'Minimum number of options the user must select. Only applies when multi_select is true.',
+              },
+              max_selections: {
+                type: 'integer',
+                description: 'Maximum number of options the user may select. Only applies when multi_select is true.',
               },
             },
             required: ['question', 'options'],
@@ -930,7 +938,15 @@ export const BUILTIN_TOOL_DEFINITIONS: LocalToolDefinition[] = [
         },
         multi_select: {
           type: 'boolean',
-          description: 'Allow the user to select multiple options (space to toggle, enter to confirm). Only applies to kind="select". Returns comma-separated values.',
+          description: 'Allow the user to select multiple options (space to toggle, enter to confirm). Only applies to kind="select". Returns an array of the selected values.',
+        },
+        min_selections: {
+          type: 'integer',
+          description: 'Minimum number of options the user must select. Only applies when multi_select is true.',
+        },
+        max_selections: {
+          type: 'integer',
+          description: 'Maximum number of options the user may select. Only applies when multi_select is true.',
         },
         default: { type: 'string', description: 'Optional default choice (for select) or default text (for input)' },
       },

@@ -385,6 +385,8 @@ export type {
 export {
   setActiveUserInteraction,
   getActiveUserInteraction,
+  ASK_USER_BACK_SIGNAL,
+  asSingleSelection,
 } from './runtime/user-interaction.js';
 
 // ============== Messaging (v0.7.36 FEATURE_115) ==============

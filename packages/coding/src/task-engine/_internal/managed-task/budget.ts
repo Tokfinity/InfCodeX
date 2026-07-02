@@ -12,6 +12,7 @@
  * and lets the controller be passed around as a record.
  */
 
+import { asSingleSelection } from '@kodax-ai/agent';
 import {
   GLOBAL_WORK_BUDGET_APPROVAL_THRESHOLD,
   GLOBAL_WORK_BUDGET_INCREMENT,
@@ -167,7 +168,7 @@ export async function maybeRequestAdditionalWorkBudget(
   const increment = context.additionalUnits ?? GLOBAL_WORK_BUDGET_INCREMENT;
   const usedPercent = Math.min(100, Math.round((controller.spentBudget / Math.max(1, controller.totalBudget)) * 100));
   const useChinese = /[\u4e00-\u9fff]/.test(context.originalTask ?? context.summary);
-  const choice = await events.askUser({
+  const choice = asSingleSelection(await events.askUser({
     question: useChinese
       ? `当前 AMA 运行已使用 ${controller.spentBudget}/${controller.totalBudget} 工作单元（${usedPercent}%），需要更多工作量。是否追加 ${increment} 单元？`
       : `This AMA run has used ${controller.spentBudget}/${controller.totalBudget} work units (${usedPercent}%) and needs more work. Add ${increment} more work units?`,
@@ -188,7 +189,7 @@ export async function maybeRequestAdditionalWorkBudget(
       },
     ],
     default: 'continue',
-  });
+  }));
 
   const promptedBudgetTotal = controller.totalBudget;
   if (choice === 'continue') {

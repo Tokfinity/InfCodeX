@@ -12,6 +12,7 @@ import path from 'node:path';
 import { pathToFileURL } from 'node:url';
 import {
   getActiveUserInteraction,
+  asSingleSelection,
   type McpElicitRequest,
   type McpElicitResult,
   type McpReverseCapabilities,
@@ -79,11 +80,11 @@ async function elicitForm(ui: UserInteraction, request: McpElicitRequest): Promi
   // Confirm-only form (no fields) -> a single approve/decline prompt.
   if (!properties || Object.keys(properties).length === 0) {
     if (!ui.askUser) return { action: 'decline' };
-    const answer = await ui.askUser({
+    const answer = asSingleSelection(await ui.askUser({
       question: `${banner}${detail}`,
       kind: 'select',
       options: [{ label: 'Approve', value: 'accept' }, { label: 'Decline', value: 'decline' }],
-    });
+    }));
     return answer === 'accept' ? { action: 'accept', content: {} } : { action: 'decline' };
   }
 
@@ -99,21 +100,21 @@ async function elicitForm(ui: UserInteraction, request: McpElicitRequest): Promi
         label: String(value),
         value: String(index),
       }));
-      const answer = await ui.askUser({
+      const answer = asSingleSelection(await ui.askUser({
         question,
         kind: 'select',
         options: choices,
-      });
+      }));
       const selectedIndex = Number(answer);
       content[key] = Number.isInteger(selectedIndex) && selectedIndex >= 0 && selectedIndex < enumValues.length
         ? enumValues[selectedIndex]
         : answer;
     } else if (prop.type === 'boolean' && ui.askUser) {
-      const answer = await ui.askUser({
+      const answer = asSingleSelection(await ui.askUser({
         question,
         kind: 'select',
         options: [{ label: 'Yes', value: 'true' }, { label: 'No', value: 'false' }],
-      });
+      }));
       content[key] = answer === 'true';
     } else if (ui.askUserInput) {
       const answer = await ui.askUserInput({ question });
@@ -128,11 +129,11 @@ async function elicitForm(ui: UserInteraction, request: McpElicitRequest): Promi
   // sent). Show exactly what the server will receive + who receives it.
   if (ui.askUser) {
     const summary = Object.entries(content).map(([key, value]) => `  ${key}: ${String(value)}`).join('\n');
-    const confirm = await ui.askUser({
+    const confirm = asSingleSelection(await ui.askUser({
       question: `${who} will receive:\n\n${summary}\n\nSend these values?`,
       kind: 'select',
       options: [{ label: 'Send', value: 'send' }, { label: 'Cancel', value: 'cancel' }],
-    });
+    }));
     if (confirm !== 'send') return { action: 'cancel' };
   }
   return { action: 'accept', content };
@@ -155,7 +156,7 @@ async function elicitUrl(ui: UserInteraction, request: McpElicitRequest): Promis
   }
   const banner = `${whoIsAsking(request)} is requesting browser authorization.`;
   const detail = request.message ? `\n\n${request.message}` : '';
-  const answer = await ui.askUser({
+  const answer = asSingleSelection(await ui.askUser({
     question:
       `${banner}${detail}\n\n`
       + `URL: ${url}\nDomain: ${domain}\n\nOnly continue if you trust this domain. KodaX will NOT open it automatically.`,
@@ -164,7 +165,7 @@ async function elicitUrl(ui: UserInteraction, request: McpElicitRequest): Promis
       { label: 'I trust this — open it myself and continue', value: 'accept' },
       { label: 'Decline', value: 'decline' },
     ],
-  });
+  }));
   return answer === 'accept' ? { action: 'accept', content: {} } : { action: 'decline' };
 }
 

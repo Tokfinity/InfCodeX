@@ -24,6 +24,19 @@ export interface AskUserQuestionItem {
     value: string;
   }>;
   multiSelect?: boolean;
+  /**
+   * FEATURE_222 — only meaningful when `multiSelect` is true. The host should
+   * reject (re-prompt / show an error, do NOT resolve) a selection with fewer
+   * than `minSelections` items. Absent ⇒ no lower bound.
+   */
+  minSelections?: number;
+  /**
+   * FEATURE_222 — only meaningful when `multiSelect` is true. The host should
+   * reject a selection with more than `maxSelections` items. Absent ⇒ no upper
+   * bound. Lets a host render + validate "pick at most N" structurally instead
+   * of parsing it out of natural-language question text.
+   */
+  maxSelections?: number;
 }
 
 /** Options for multi-question mode — multiple independent questions in one call. */
@@ -42,7 +55,34 @@ export interface AskUserQuestionOptions {
     value: string;
   }>;
   multiSelect?: boolean;
+  /** FEATURE_222 — see {@link AskUserQuestionItem.minSelections}. */
+  minSelections?: number;
+  /** FEATURE_222 — see {@link AskUserQuestionItem.maxSelections}. */
+  maxSelections?: number;
   default?: string;
+}
+
+/**
+ * FEATURE_222 — reserved option value a host may append as a synthetic option
+ * (e.g. a "← Back" entry) in `askUserMulti`'s per-question flow to mean "return
+ * to the previous question" instead of answering the current one. Only
+ * meaningful for `questions[]` index > 0 (there is no previous before the
+ * first). The coding `ask_user_question` tool rejects this as a normal
+ * `option.value` supplied by the model, so a host may safely reuse it for its
+ * own back-navigation UI. A host that ignores this constant simply never offers
+ * back-navigation — the default multi-question flow is unaffected either way.
+ */
+export const ASK_USER_BACK_SIGNAL = '__back__';
+
+/**
+ * FEATURE_222 — narrow an `askUser` result to a single string for the many
+ * callers that only ever ask single-select questions (they never set
+ * `multiSelect: true`, so the array branch is unreachable at runtime). Collapses
+ * an unexpected array to its first element so a mis-configured host degrades
+ * predictably instead of leaking `[object Array]` into a string comparison.
+ */
+export function asSingleSelection(answer: string | string[]): string {
+  return Array.isArray(answer) ? answer[0] ?? '' : answer;
 }
 
 /**
@@ -52,11 +92,19 @@ export interface AskUserQuestionOptions {
  * elicitation reverse capability.
  */
 export interface UserInteraction {
-  /** Ask one question (select mode by default). Resolves the chosen value. */
-  askUser?: (options: AskUserQuestionOptions) => Promise<string>;
-  /** Ask several independent questions sequentially. Resolves a value map, or
-   *  undefined when the user cancels. */
-  askUserMulti?: (options: AskUserMultiOptions) => Promise<Record<string, string> | undefined>;
+  /**
+   * Ask one question (select mode by default). Single-select (multiSelect
+   * falsy) resolves the chosen value as a string — unchanged. Multi-select
+   * (multiSelect: true) resolves the selected values as a `string[]`. The union
+   * is a backward-compatible superset: a host still returning a plain string
+   * satisfies this contract, but a multi-select host SHOULD return `string[]`
+   * so option values containing `, ` are not corrupted by a join.
+   */
+  askUser?: (options: AskUserQuestionOptions) => Promise<string | string[]>;
+  /** Ask several independent questions sequentially. Resolves a per-question
+   *  value map (each entry a string for single-select, `string[]` for
+   *  multi-select), or undefined when the user cancels. */
+  askUserMulti?: (options: AskUserMultiOptions) => Promise<Record<string, string | string[]> | undefined>;
   /** Ask for free-text input. Resolves the text, or undefined when cancelled. */
   askUserInput?: (options: { question: string; default?: string }) => Promise<string | undefined>;
 }

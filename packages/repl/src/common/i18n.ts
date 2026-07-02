@@ -117,6 +117,8 @@ const translations = {
     "select.navigate_hint": "Use \u2191\u2193 to navigate, Enter to confirm, Esc to cancel",
     "select.multiselect_hint": "Use \u2191\u2193 to navigate, Space to toggle, Enter to confirm, Esc to cancel",
     "select.multiselect_empty": "Select at least one option with Space before confirming.",
+    "select.multiselect_min": "Select at least {min} option(s) with Space before confirming.",
+    "select.multiselect_max": "Select at most {max} option(s) with Space before confirming.",
     "select.back_prev": "\u2190 Back to previous question",
 
     // Input dialog
@@ -197,6 +199,8 @@ const translations = {
     "select.navigate_hint": "使用 \u2191\u2193 导航，Enter 确认，Esc 取消",
     "select.multiselect_hint": "使用 \u2191\u2193 导航，空格 切换选中，Enter 确认，Esc 取消",
     "select.multiselect_empty": "请先使用空格选择至少一个选项。",
+    "select.multiselect_min": "请先使用空格至少选择 {min} 个选项。",
+    "select.multiselect_max": "最多只能选择 {max} 个选项。",
     "select.back_prev": "\u2190 返回上一题",
 
     "input.default": "默认值：",

@@ -144,7 +144,7 @@ import type {
   TodoItem,
   TodoList,
 } from "@kodax-ai/coding";
-import { estimateTokens, bootstrapTeamMode, setActiveUserInteraction, getAgentConfigPath, type TeamModeHandle, type WorkflowProcessEvent } from "@kodax-ai/agent";
+import { estimateTokens, bootstrapTeamMode, setActiveUserInteraction, ASK_USER_BACK_SIGNAL, getAgentConfigPath, type TeamModeHandle, type WorkflowProcessEvent } from "@kodax-ai/agent";
 import { deriveProjectKeyFromRoot } from "../interactive/project-key.js";
 import {
   PermissionMode,
@@ -2674,6 +2674,9 @@ const InkREPLInner: React.FC<InkREPLProps> = ({
       focusedIndex: number;
       selectedIndices: number[];
       multiSelect?: boolean;
+      // FEATURE_222 — multi-select count bounds (host-enforced on confirm).
+      minSelections?: number;
+      maxSelections?: number;
     }
     | {
       kind: "input";
@@ -2684,7 +2687,7 @@ const InkREPLInner: React.FC<InkREPLProps> = ({
     }
     | null
   >(null);
-  const uiResolveRef = useRef<((value: string | undefined) => void) | null>(null);
+  const uiResolveRef = useRef<((value: string | string[] | undefined) => void) | null>(null);
   // Fix: keep a synchronously-updated ref so the useKeypress handler always
   // reads the latest uiRequest (the registered handler captures a stale closure).
   const uiRequestRef = useRef(uiRequest);
@@ -5544,7 +5547,7 @@ const InkREPLInner: React.FC<InkREPLProps> = ({
     },
   );
 
-  const resolveUIRequest = useCallback((value: string | undefined) => {
+  const resolveUIRequest = useCallback((value: string | string[] | undefined) => {
     setUiRequest(null);
     uiResolveRef.current?.(value);
     uiResolveRef.current = null;
@@ -5554,7 +5557,10 @@ const InkREPLInner: React.FC<InkREPLProps> = ({
     title: string,
     options: SelectOption[],
     multiSelect?: boolean,
-  ): Promise<string | undefined> => {
+    // FEATURE_222 — optional multi-select count bounds. Only meaningful when
+    // multiSelect is true; a caller that omits them gets the prior behaviour.
+    constraints?: { minSelections?: number; maxSelections?: number },
+  ): Promise<string | string[] | undefined> => {
     if (options.length === 0) {
       return Promise.resolve(undefined);
     }
@@ -5569,15 +5575,20 @@ const InkREPLInner: React.FC<InkREPLProps> = ({
         focusedIndex: 0,
         selectedIndices: [],
         multiSelect,
+        minSelections: constraints?.minSelections,
+        maxSelections: constraints?.maxSelections,
       });
     });
   }, []);
 
   const showSelectDialog = useCallback((title: string, options: string[]): Promise<string | undefined> => {
+    // Single-select wrapper — never passes multiSelect, so the widened
+    // (FEATURE_222) union result is always a string|undefined here; collapse
+    // an array defensively to keep the string-only return contract.
     return showSelectDialogWithOptions(
       title,
       options.map((option) => ({ label: option, value: option })),
-    );
+    ).then((value) => (Array.isArray(value) ? value[0] : value));
   }, [showSelectDialogWithOptions]);
 
   // FEATURE_087/088 (v0.7.28): bind a stable askUser implementation to the
@@ -5596,8 +5607,11 @@ const InkREPLInner: React.FC<InkREPLProps> = ({
       );
       // ESC → undefined → return the shared CANCELLED_TOOL_RESULT_MESSAGE
       // sentinel. The policy maps any non-'approve' answer to 'reject', so a
-      // cancelled dialog rejects.
-      return selected ?? CANCELLED_TOOL_RESULT_MESSAGE;
+      // cancelled dialog rejects. This path is single-select only; if a host
+      // ever returns an array, collapse it to a string so the policy contract
+      // (Promise<string>) holds.
+      if (selected === undefined) return CANCELLED_TOOL_RESULT_MESSAGE;
+      return Array.isArray(selected) ? selected.join(", ") : selected;
     },
     [showSelectDialogWithOptions],
   );
@@ -5619,8 +5633,12 @@ const InkREPLInner: React.FC<InkREPLProps> = ({
   }, [askUserForConstructionPolicy]);
 
   const showInputDialog = useCallback((prompt: string, defaultValue?: string): Promise<string | undefined> => {
-    return new Promise((resolve) => {
-      uiResolveRef.current = resolve;
+    return new Promise<string | undefined>((resolve) => {
+      // uiResolveRef is shared with the (now array-capable, FEATURE_222) select
+      // dialog, so it accepts string[]. Input mode never resolves an array;
+      // narrow defensively so the string-only Promise contract holds.
+      uiResolveRef.current = (value) =>
+        resolve(Array.isArray(value) ? value[0] : value);
       setUiRequest({
         kind: "input",
         prompt,
@@ -5683,20 +5701,33 @@ const InkREPLInner: React.FC<InkREPLProps> = ({
           if (!latest || latest.kind !== "select") return false;
 
           if (latest.multiSelect) {
-            // MultiSelect: return comma-separated values of selected items
-            if (latest.selectedIndices.length === 0) {
+            // FEATURE_222 — validate the selection count against the optional
+            // min/max bounds before resolving. Empty selection keeps its own
+            // message; a below-min or above-max count re-prompts with a range
+            // hint. All three reuse the existing inline `error` field.
+            const count = latest.selectedIndices.length;
+            const { minSelections, maxSelections } = latest;
+            const rangeError =
+              count === 0
+                ? t("select.multiselect_empty")
+                : minSelections !== undefined && count < minSelections
+                  ? t("select.multiselect_min", { min: String(minSelections) })
+                  : maxSelections !== undefined && count > maxSelections
+                    ? t("select.multiselect_max", { max: String(maxSelections) })
+                    : undefined;
+            if (rangeError !== undefined) {
               setUiRequest((prev) =>
-                prev && prev.kind === "select"
-                  ? { ...prev, error: t("select.multiselect_empty") }
-                  : prev,
+                prev && prev.kind === "select" ? { ...prev, error: rangeError } : prev,
               );
               return true;
             }
+            // Resolve the selected values as an ARRAY — no longer joined, so
+            // values containing ", " survive intact (FEATURE_222 R2).
             const values = latest.selectedIndices
+              .slice()
               .sort((a, b) => a - b)
               .map((i) => latest.options[i]?.value)
-              .filter(Boolean)
-              .join(", ");
+              .filter((v): v is string => typeof v === "string" && v.length > 0);
             resolveUIRequest(values);
           } else {
             // Single select: return focused item's value
@@ -6778,12 +6809,14 @@ const InkREPLInner: React.FC<InkREPLProps> = ({
     },
     // Issue 069: Ask user a question interactively.
     // Issue 114: ESC returns undefined → must signal cancellation, not silently fallback.
-    askUser: async (options: import("@kodax-ai/coding").AskUserQuestionOptions): Promise<string> => {
+    askUser: async (options: import("@kodax-ai/coding").AskUserQuestionOptions): Promise<string | string[]> => {
       const selectOptions = options.options ? toSelectOptions(options.options) : [];
       const selectedValue = await showSelectDialogWithOptions(
         getAskUserDialogTitle(options),
         selectOptions,
         options.multiSelect,
+        // FEATURE_222 — forward multi-select count bounds for host enforcement.
+        { minSelections: options.minSelections, maxSelections: options.maxSelections },
       );
 
       // Issue 114: User pressed ESC → signal cancellation so the agent loop stops.
@@ -6791,6 +6824,7 @@ const InkREPLInner: React.FC<InkREPLProps> = ({
         return CANCELLED_TOOL_RESULT_MESSAGE;
       }
 
+      // Multi-select resolves an array (FEATURE_222); single-select a string.
       return selectedValue;
     },
     // FEATURE_074: exit_plan_mode tool callback. Tri-state return:
@@ -6809,32 +6843,39 @@ const InkREPLInner: React.FC<InkREPLProps> = ({
       return false;
     },
     // Multi-question mode: present each question sequentially with back navigation.
-    askUserMulti: async (options: import("@kodax-ai/coding").AskUserMultiOptions): Promise<Record<string, string> | undefined> => {
+    askUserMulti: async (options: import("@kodax-ai/coding").AskUserMultiOptions): Promise<Record<string, string | string[]> | undefined> => {
       const questions = options.questions;
-      const answers: Record<string, string> = {};
-      const BACK_VALUE = "__back__";
+      const answers: Record<string, string | string[]> = {};
       let i = 0;
 
       while (i < questions.length) {
         const q = questions[i]!;
         const selectOptions = toSelectOptions(q.options);
 
-        // Non-first question: append "← Back" option
+        // Non-first question: append "← Back" option (FEATURE_222 shared sentinel)
         if (i > 0) {
           selectOptions.push({
             label: t("select.back_prev"),
-            value: BACK_VALUE,
+            value: ASK_USER_BACK_SIGNAL,
           });
         }
 
         const title = `[${i + 1}/${questions.length}] ${q.question}`;
-        const selected = await showSelectDialogWithOptions(title, selectOptions, q.multiSelect);
+        const selected = await showSelectDialogWithOptions(
+          title,
+          selectOptions,
+          q.multiSelect,
+          // FEATURE_222 — per-question multi-select bounds inherited from the item.
+          { minSelections: q.minSelections, maxSelections: q.maxSelections },
+        );
 
         if (selected === undefined) {
           return undefined; // ESC → cancel all
         }
 
-        if (selected === BACK_VALUE) {
+        // Back navigation is only ever the string sentinel; an array (multi-select
+        // result) is never a back request, so guard the string case first.
+        if (!Array.isArray(selected) && selected === ASK_USER_BACK_SIGNAL) {
           i--;
           continue;
         }

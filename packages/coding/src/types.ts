@@ -517,13 +517,14 @@ export interface KodaXEvents {
     input: Record<string, unknown>,
     meta?: KodaXToolEventMeta
   ) => Promise<boolean | string>;
-  /** Ask user a question interactively - Issue 069 - 交互式向用户提问 */
-  askUser?: (options: AskUserQuestionOptions, meta?: KodaXToolEventMeta) => Promise<string>;
+  /** Ask user a question interactively - Issue 069 - 交互式向用户提问. Multi-select
+   *  (options.multiSelect) resolves string[]; single-select resolves string. */
+  askUser?: (options: AskUserQuestionOptions, meta?: KodaXToolEventMeta) => Promise<string | string[]>;
   /** Ask user multiple independent questions sequentially - 澶氶棶棰橀『搴忔彁闂?*/
   askUserMulti?: (
     options: AskUserMultiOptions,
     meta?: KodaXToolEventMeta,
-  ) => Promise<Record<string, string> | undefined>;
+  ) => Promise<Record<string, string | string[]> | undefined>;
   /** Ask user for free-text input - 自由文本输入 (Issue 112) */
   askUserInput?: (
     options: { question: string; default?: string },
@@ -1792,10 +1793,11 @@ export interface KodaXToolExecutionContext {
   workflowWorktreeBaseDir?: string;
   /** Shared extension capability runtime used by retrieval-family tools. */
   extensionRuntime?: CapabilityRuntimeContract;
-  /** Ask user a question interactively (select mode) - 交互式向用户提问 (Issue 069) */
-  askUser?: (options: AskUserQuestionOptions) => Promise<string>;
+  /** Ask user a question interactively (select mode) - 交互式向用户提问 (Issue 069).
+   *  Multi-select resolves string[]; single-select resolves string. */
+  askUser?: (options: AskUserQuestionOptions) => Promise<string | string[]>;
   /** Ask user multiple independent questions sequentially - 澶氶棶棰橀『搴忔彁闂?*/
-  askUserMulti?: (options: AskUserMultiOptions) => Promise<Record<string, string> | undefined>;
+  askUserMulti?: (options: AskUserMultiOptions) => Promise<Record<string, string | string[]> | undefined>;
   /** Ask user for free-text input - 自由文本输入 (Issue 112) */
   askUserInput?: (options: { question: string; default?: string }) => Promise<string | undefined>;
   /**

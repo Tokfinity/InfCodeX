@@ -6,10 +6,15 @@
  */
 
 import type { KodaXToolExecutionContext } from '../types.js';
+import { ASK_USER_BACK_SIGNAL } from '@kodax-ai/agent';
 import { CANCELLED_TOOL_RESULT_PREFIX, CANCELLED_TOOL_RESULT_MESSAGE } from '../constants.js';
 
-/** Reserved sentinel value used by the REPL for back-navigation in multi-question mode. */
-const BACK_SENTINEL = '__back__';
+/**
+ * Reserved sentinel value used by the REPL for back-navigation in multi-question
+ * mode. Single source of truth lives at the agent layer (FEATURE_222) so hosts
+ * and this tool agree on the exact string.
+ */
+const BACK_SENTINEL = ASK_USER_BACK_SIGNAL;
 
 export interface AskUserQuestionOption {
   label: string;
@@ -23,6 +28,9 @@ export interface AskUserQuestionItemInput {
   header?: string;
   options: AskUserQuestionOption[];
   multi_select?: boolean;
+  /** Only meaningful when multi_select is true — see tool schema. */
+  min_selections?: number;
+  max_selections?: number;
 }
 
 export interface AskUserQuestionInput {
@@ -30,9 +38,24 @@ export interface AskUserQuestionInput {
   kind?: "select" | "input";
   options?: AskUserQuestionOption[];
   multi_select?: boolean;
+  /** Only meaningful when multi_select is true — see tool schema. */
+  min_selections?: number;
+  max_selections?: number;
   default?: string;
   /** Multiple independent questions — takes precedence over question+options when provided. */
   questions?: AskUserQuestionItemInput[];
+}
+
+/**
+ * Coerce a model-supplied selection bound into a non-negative integer, or
+ * undefined when absent/invalid. The bound is a soft UI hint for the host, so
+ * we drop garbage silently rather than erroring the whole call.
+ */
+function toSelectionBound(value: unknown): number | undefined {
+  if (typeof value !== 'number' || !Number.isFinite(value) || value < 0) {
+    return undefined;
+  }
+  return Math.floor(value);
 }
 
 /**
@@ -79,6 +102,8 @@ export async function toolAskUserQuestion(
             value: opt.value || opt.label || String(opt),
           })),
           multiSelect: q.multi_select === true,
+          minSelections: toSelectionBound(q.min_selections),
+          maxSelections: toSelectionBound(q.max_selections),
         })),
       });
 
@@ -151,8 +176,20 @@ export async function toolAskUserQuestion(
         value: opt.value || opt.label || String(opt),
       })),
       multiSelect: input.multi_select === true,
+      minSelections: toSelectionBound(input.min_selections),
+      maxSelections: toSelectionBound(input.max_selections),
       default: input.default as string | undefined,
     });
+
+    // Multi-select (FEATURE_222) resolves the selected values as an array — an
+    // array is never a cancellation signal (cancellation is always the string
+    // sentinel), so guard the array case FIRST before any string method call.
+    if (Array.isArray(userChoice)) {
+      return JSON.stringify({
+        success: true,
+        choices: userChoice,
+      });
+    }
 
     // Issue 114: askUser returns '[Cancelled]' prefix when user presses ESC.
     // Pass through directly so the agent loop detects cancellation.
