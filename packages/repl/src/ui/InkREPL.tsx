@@ -7089,13 +7089,41 @@ const InkREPLInner: React.FC<InkREPLProps> = ({
       onWorkflowProcessEvent: handleInlineWorkflowProcessEvent,
       // ADR-049: each workflow child agent's completion digest lands in the
       // transcript (parity with the slash /workflow path + dispatch children).
-      // Format with the run's own locale (tracked on the live status); the coding
-      // layer forwards the raw event so presentation stays in the UI layer.
+      // Infer locale from the child agent's OWN summary/name (its actual output
+      // language) — mirroring the console path (repl.ts) — instead of the
+      // live-status ref, which is cleared on the workflow's terminal event and is
+      // often stale by the time a child (especially the last) digest fires,
+      // silently defaulting the digest chrome to English. Fall back to the
+      // live-status locale only when the event carries no text (e.g. a failure
+      // event with only an error string).
       onWorkflowAgentDigest: ({ runId, event }: KodaXWorkflowAgentDigestEvent): void => {
+        const data = event.data ?? {};
+        const summary = typeof data.summary === "string" ? data.summary : undefined;
+        const name = typeof data.name === "string" ? data.name : undefined;
         const live = workflowLiveStatusRef.current;
-        const locale = live?.runId === runId ? live.locale ?? "en" : "en";
+        const locale = summary !== undefined || name !== undefined
+          ? inferWorkflowLocaleFromParts(summary, name)
+          : (live?.runId === runId ? live.locale ?? "en" : "en");
         const digest = formatWorkflowAgentDigest(event, locale, runId);
-        if (digest) {
+        if (!digest) return;
+        // MED-6 layering: while the managed worker that spawned this workflow
+        // still owns the foreground turn, static history renders ABOVE the live
+        // foreground stack and is only committed at round-end — so a raw
+        // appendHistoryItemsWithPersistence here pins the digest ABOVE the whole
+        // worker turn (right under the spawning query, before the worker's own
+        // thinking/tools). Route through the foreground ledger so it commits
+        // inline in temporal order (same precedent as onMidTurnUserMessages /
+        // emitInfoItemToCorrectLayer). Fall back to the persisted append only for
+        // a true background arrival after the round ended (no foreground owner),
+        // where end-of-history is the correct position.
+        if (managedForegroundOwnerRef.current.workerId) {
+          appendManagedForegroundLedgerItem({
+            id: `wf-digest-${Date.now()}-${Math.random().toString(36).slice(2, 7)}`,
+            type: "assistant",
+            text: digest,
+            timestamp: Date.now(),
+          } as HistoryItem);
+        } else {
           appendHistoryItemsWithPersistence([{ type: "assistant", text: digest }]);
         }
       },
