@@ -281,6 +281,38 @@ end-user implicitly trusts their own machine's shell. Embedded
 hosts have a different trust boundary (user trusts the host UI,
 host UI mediates everything else).
 
+### The LLM-triggered `skill` tool path — `KodaXOptions.skillDynamicContext` (v0.7.58)
+
+The `SkillContext` hook above covers skills your host expands itself via
+`resolveSkillContent`. But a skill can also be **auto-triggered by the model**
+through the built-in `skill` tool — and that path builds its own `SkillContext`
+internally, so it does not see your `resolveSkillContent` hook. Without wiring,
+an auto-triggered `SKILL.md` (including a cloned project-level
+`.kodax/skills/*`) would run its `` !`cmd` `` blocks through the built-in
+`execSync` allowlist, bypassing your permission broker.
+
+Thread the same policy into the tool path via `runKodaX`/`startKodaX` options:
+
+```ts
+await runKodaX(
+  {
+    provider: 'anthropic',
+    skillDynamicContext: {
+      // Same shape as SkillContext.executeDynamicContext — route through your broker.
+      execute: async (command, cwd) => brokerExecute(command, cwd),
+      // …or refuse all dynamic-context commands outright:
+      // disable: true,
+    },
+  },
+  prompt,
+);
+```
+
+Absent this option the tool path keeps the trusted-CLI `execSync` fallback
+(unchanged), so setting `skillDynamicContext.execute` (or `disable: true`) is the
+supported way for an embedder to bring the auto-triggered path under the same
+policy as the manual one.
+
 ### `IVariableResolver` entry points
 
 | Symbol | Purpose | Source |
@@ -1183,6 +1215,49 @@ For picker/status UIs, use `reasoningProfile.supportedEfforts` and
 `defaultEffort`. The legacy `reasoningCapability` field describes the provider
 wire mechanism, not user-facing reasoning depth.
 
+> **v0.7.58 fix — per-model overrides on a provider's DEFAULT model.**
+> `resolveModelCapabilities(provider, model)` previously dropped a model's own
+> `contextWindow` / `maxOutputTokens` / `reasoningProfile` override when that
+> model happened to be the provider's default (e.g. `zhipu-coding` / `zai-coding`
+> default to `glm-5.2`, which declares a 1M window — the resolver returned the
+> 200K provider default). It now merges the `models[]` override regardless of
+> default-model status, so `resolveModelCapabilities` agrees with the runtime
+> `provider.getEffectiveContextWindow()` / `getEffectiveMaxOutputTokens()`.
+
+### Resolving a wire-legal reasoning effort — `resolveWireEffort` (v0.7.58)
+
+Mapping a user's desired reasoning strength to the actual wire `effort` value
+means composing the model's profile with its alias / disabled / ceiling / default
+rules AND any learned hard-rejections. `resolveWireEffort` (from
+`@kodax-ai/kodax/llm`) is the single host-facing entry so you don't re-assemble
+(and drift from) that logic:
+
+```ts
+import { resolveWireEffort } from '@kodax-ai/kodax/llm';
+
+const { effort, adjusted } = resolveWireEffort({
+  provider: 'zai-coding',
+  model: 'glm-5.2',
+  desiredEffort: 'low',   // GLM-5.2 aliases low → high
+});
+// effort === 'high', adjusted === true
+```
+
+`effort` is `undefined` when the model omits a wire effort (e.g. anthropic
+adaptive) — send no `reasoning_effort` in that case; do **not** substitute a
+value. Pass `rejectedEfforts` (e.g. from the agent layer's
+`getCachedRejectedEfforts`) to fold learned rejections into the resolution.
+
+### Reasoning-effort rejection is self-healing at the runtime layer (v0.7.58)
+
+When a provider hard-rejects a `reasoning_effort` (400/422), the coding runtime
+now **records** the rejection in the capability cache and **consults** it before
+building each subsequent turn's request — so the same rejected effort is not
+re-sent turn after turn. This happens whether or not a host wires
+`events.onReasoningEffortRejected` (that event is still delivered for hosts that
+want to surface it). Previously only the built-in REPL recorded rejections, so a
+headless SDK host silently re-issued a failing request every turn.
+
 ### Passive effort capability learning
 
 KodaX v0.7.57 treats `effort` as the primary reasoning-depth input. When a
@@ -1350,6 +1425,78 @@ host runs normal coding tasks that enter workflow mode. `WorkflowProcessSnapshot
 is intentionally ANSI-free and UI-neutral. It carries workflow status, phases,
 child item status, result-bearing child summaries, provider/model routing hints,
 and final `resultSummary`.
+
+### Two ways to author a workflow (v0.7.58)
+
+There are two host-facing ways to turn a natural-language request into a workflow
+run — pick by whether you want the SDK to *orchestrate generation for you* or the
+*Worker to investigate and author it itself*:
+
+| | `generateWorkflowFromOptions` (shown above) | `authorWorkflowViaWorker` |
+|---|---|---|
+| Who authors | A context-**blind** one-shot LLM call (`tools:[]`) | The **Worker agent** — scouts the repo with its own tools, then authors + runs `run_workflow` (ADR-047 scout-then-author) |
+| Host role | You call it, get a `module`, then `startFromOptions` | You submit one turn; the Worker does everything; you subscribe |
+| Quality | Generic (no repo investigation) | Grounded (real paths / sub-problems / `outputSchema` baked into child prompts) |
+| Use when | Non-interactive / CI / low-capability host, or you want to inspect the module before running | You want the same intelligence the REPL's `/workflow create` gets (recommended for interactive GUI hosts) |
+
+`authorWorkflowViaWorker` is exactly what the REPL's `/workflow create` does
+internally (elevate one turn to `agentMode:'amaw'` so the Worker has
+`run_workflow`), exposed as a single call so a GUI host doesn't reimplement the
+turn-submission glue:
+
+```ts
+import { authorWorkflowViaWorker } from '@kodax-ai/kodax/coding';
+
+const { session, workflowRunId } = authorWorkflowViaWorker({
+  request: 'Review the payment flow end-to-end and fix any bugs you find',
+  options: {
+    provider: 'anthropic',
+    workflowRunsBaseDir: '<your app data>/workflow-runs', // REQUIRED — else run_workflow can't wire (throws)
+    events: {
+      // Numeric, UI-neutral progress — same surface as everything else in §11.
+      onWorkflowProcessEvent: (event) => renderWorkflowPanel(event.snapshot),
+    },
+  },
+});
+
+// Resolves once the Worker actually launches a workflow (the run_workflow task),
+// or `undefined` if it judged a workflow unnecessary and answered inline.
+const runId = await workflowRunId;
+
+// `session` is a normal RunningSession — await session.result, or session.abort().
+await session.result;
+```
+
+Notes:
+- `agentMode` is forced to `'amaw'` for the turn; the base `options.agentMode`
+  is otherwise irrelevant here.
+- `workflowRunsBaseDir` is **mandatory** for this call (it gates `ctx.workflowHost`
+  → the `run_workflow` tool). Omitting it throws immediately rather than silently
+  producing a Worker that can't author.
+- The Worker retains judgment: for a request that doesn't warrant a multi-agent
+  workflow it may just answer inline, in which case `workflowRunId` resolves
+  `undefined`. There is no forced-tool guarantee (that would trade away the
+  scout-then-author intelligence).
+
+### Resume replay telemetry (v0.7.58)
+
+When a workflow run resumes a prior run (`run_workflow`'s `resumeFromRunId`),
+unchanged child agents replay instantly from the prior run's content-addressed
+cache. Three read-only fields let a host render "resumed, N/M replayed from
+cache" without changing any execution semantics:
+
+- `WorkflowProcessSnapshot.resumedFromRunId?` — the prior run id this run resumed
+  from (absent on a fresh run).
+- `WorkflowProcessItem.origin?` — `'ran'` (executed live this run) or
+  `'replayed-from-cache'` (returned from the prior run's cache). Populated only
+  on resumed runs; on a fresh run every item omits it (treat absent as `'ran'`).
+- `WorkflowProcessProgress.replayedAgents?` — count of replayed agents; present
+  only when `> 0`. `spawnedAgents`/`finishedAgents` continue to count only agents
+  that actually ran this turn.
+
+All three are additive and absent on non-resumed runs, so existing renderers are
+unaffected. A resumed agent item is emitted with `status:'completed'` (a replay
+is instantaneous) and `origin:'replayed-from-cache'`.
 
 ### Timeout configuration
 
