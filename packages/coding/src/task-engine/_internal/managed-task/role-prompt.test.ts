@@ -509,19 +509,27 @@ describe('FEATURE_248 — AMAW mode-level orchestration directive gating', () =>
     expect(rendered).toContain('`run_workflow` is the first thing to reach for');
     // Over-activation guard sentence.
     expect(rendered).toContain('Solo, single-threaded work stays the right call');
+    // FEATURE_248 flow-fix (v0.7.59): the plan-time commitment ships as part of the
+    // directive, read at task inception, right after ORCHESTRATION DEFAULT.
+    expect(rendered).toContain('PLAN-TIME COMMITMENT');
+    expect(rendered).toContain('let your plan items BE the agents or workflow stages you will dispatch');
+    expect(rendered.indexOf('ORCHESTRATION DEFAULT:'))
+      .toBeLessThan(rendered.indexOf('PLAN-TIME COMMITMENT'));
   });
 
-  it('omits ORCHESTRATION DEFAULT for plain AMA (field omitted) — leak-proof guarantee', () => {
+  it('omits ORCHESTRATION DEFAULT + PLAN-TIME COMMITMENT for plain AMA (field omitted) — leak-proof guarantee', () => {
     const rendered = renderWorker();
     expect(rendered).not.toContain('ORCHESTRATION DEFAULT');
+    expect(rendered).not.toContain('PLAN-TIME COMMITMENT');
     // Sanity: the rest of the Worker prompt still renders (clean undefined drop).
     expect(rendered).toContain('PLAN-FIRST CONTRACT (FEATURE_114 v0.7.36');
     expect(rendered).toContain('## Environment');
   });
 
-  it('omits ORCHESTRATION DEFAULT when explicitly false (AMA parity)', () => {
+  it('omits ORCHESTRATION DEFAULT + PLAN-TIME COMMITMENT when explicitly false (AMA parity)', () => {
     const rendered = renderWorker({ amawOrchestrationAvailable: false });
     expect(rendered).not.toContain('ORCHESTRATION DEFAULT');
+    expect(rendered).not.toContain('PLAN-TIME COMMITMENT');
   });
 
   it('places the directive before PLAN-FIRST CONTRACT so it is read while forming the plan', () => {

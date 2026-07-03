@@ -65,6 +65,13 @@ export const orchestrationDefault = [
   'ORCHESTRATION DEFAULT: for substantive work — a multi-file investigation, a design or architecture decision, a change that benefits from a second opinion, or anything where a wrong conclusion is costly to unwind — default to orchestrating multiple agents that cross-check each other rather than working it alone end to end.',
   "`run_workflow` is the first thing to reach for when the task's shape fits a bounded workflow: it gives you structured per-child output and same-session resume that ad-hoc fan-out does not. When the task is more exploratory or the fan-out is simple parallel investigation, a `dispatch_child_task` fan-out is an equally valid way to satisfy this default — what matters is that the work gets cross-checked by more than one agent, not which tool you dispatched it through.",
   'Solo, single-threaded work stays the right call for conversational turns, single-line or typo-scale edits, and tasks you have already verified are correct.',
+  // FEATURE_248 flow-fix (v0.7.59) — front-load the decision so it is made at task
+  // inception, before solo momentum accrues, and fold it into the plan itself. The
+  // turn-0 eval showed this adds a causally-confirmed increment over the ambient
+  // directive alone (models quote it: "orchestrate-vs-solo 的决策判断" / "我的计划项
+  // 本身就是这些研究阶段"); +8~+17% on 3/4 shapes, zero regression.
+  'PLAN-TIME COMMITMENT: make the orchestrate-vs-solo call at the very start — as the first thing you decide, before your opening `todo_create` batch — not after you have already begun working the task alone.',
+  'When you orchestrate, let your plan items BE the agents or workflow stages you will dispatch, so the plan you commit to is the orchestration itself, not a solo checklist you execute alone.',
 ].join('\n');
 
 /**

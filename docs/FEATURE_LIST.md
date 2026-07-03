@@ -80,10 +80,14 @@
 > defection, not the turn-0 decision ultracode actually applies). The turn-0 eval
 > (`workflow-activation-turn0.eval.ts`, 4 aliases) then showed a real lift on the same
 > a2aDesign task (mid-task 0% -> turn-0 baseline 8% -> proposed 33%, +25%) with models
-> causally citing the directive ("按照编排默认原则... 让多个 agent 交叉验证"). Shipped
-> with acceptance NARROWED to task-inception activation; mid-task re-architecture is a
-> documented non-goal. Code + prompt shipped as-is (narrowing was docs-only). See
-> docs/features/v0.7.59.md §6/§6.1.
+> causally citing the directive ("按照编排默认原则... 让多个 agent 交叉验证"). A follow-up
+> flow-fix (PLAN-TIME COMMITMENT: front-load the orchestrate-vs-solo call to turn-0 +
+> make plan items = the agents/stages) then added a causally-confirmed increment on top
+> of the ambient directive (turn-0 3-variant: +8~+17% on 3/4 shapes, zero regression;
+> pulls review off the floor) and was merged into `orchestrationDefault`. Shipped with
+> acceptance NARROWED to task-inception activation; mid-task re-architecture is a
+> documented non-goal. Absolute activation is model-ceiling-limited on current
+> coding-plan aliases. See docs/features/v0.7.59.md §6/§6.1.
 
 ---
 
