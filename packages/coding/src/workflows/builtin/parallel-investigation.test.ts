@@ -29,6 +29,7 @@ import {
 interface Behavior {
   readonly status?: WorkflowTaskStatus;
   readonly finalText?: string;
+  readonly structured?: unknown;
   readonly throw?: boolean;
 }
 
@@ -56,6 +57,7 @@ function fakeBackend(behaviors: Record<string, Behavior> = {}): {
         name: input.name,
         status: b.status ?? 'completed',
         finalText: b.finalText ?? `text-${input.name}`,
+        ...(b.structured !== undefined ? { structured: b.structured } : {}),
       };
     },
     output: async (taskId) => ({ taskId, name: byId.get(taskId)?.name ?? taskId, status: 'completed' }),
@@ -94,6 +96,37 @@ describe('parallel-investigation — fan-out + synthesis', () => {
     expect(spawned.every((s) => s.readOnly === true)).toBe(true);
     expect(outcome.result.degraded).toBe(false);
     expect(outcome.result.synthesis).toBe('text-synthesize');
+  });
+
+  it('declares an outputSchema on every investigator (structured is the reliable field)', async () => {
+    const { backend, spawned } = fakeBackend();
+    await drive(backend, { question: 'Q' });
+    expect(investigators(spawned).every((s) => s.outputSchema !== undefined)).toBe(true);
+  });
+
+  it('uses the structured finding when finalText is empty (FEATURE_246 digest-timing bug)', async () => {
+    // Reproduce the report: the child ended on a tool_use so finalText is empty
+    // and the digest is async — but the schema-validated structured finding is
+    // present synchronously. The finding text must come from structured, not "".
+    const { backend } = fakeBackend({
+      'investigate-1': { finalText: '', structured: { finding: 'AUTH BUG at auth.ts:42' } },
+    });
+    const outcome = await drive(backend, { question: 'Q' });
+    expect(outcome.ok).toBe(true);
+    if (!outcome.ok) return;
+    const first = outcome.result.findings.find((f) => f.angle === 'investigate-1');
+    expect(first?.text).toBe('AUTH BUG at auth.ts:42');
+    // Never surface a silent empty finding.
+    expect(first?.text.trim().length).toBeGreaterThan(0);
+  });
+
+  it('marks an empty investigator honestly when neither structured nor finalText has content', async () => {
+    const { backend } = fakeBackend({ 'investigate-1': { finalText: '   ' } });
+    const outcome = await drive(backend, { question: 'Q' });
+    expect(outcome.ok).toBe(true);
+    if (!outcome.ok) return;
+    const first = outcome.result.findings.find((f) => f.angle === 'investigate-1');
+    expect(first?.text).toContain('no finding text');
   });
 
   it('splits one investigator per target and embeds question + target in the prompt', async () => {

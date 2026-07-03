@@ -8,7 +8,7 @@
  * crashing the whole run. Writes nothing — purely investigative.
  */
 
-import type { WorkflowApi, WorkflowModule } from '@kodax-ai/agent';
+import type { WorkflowApi, WorkflowModule, WorkflowTaskResult } from '@kodax-ai/agent';
 
 export interface ParallelInvestigationArgs {
   /** What to investigate. */
@@ -54,6 +54,52 @@ interface InvestigationAngle {
   readonly prompt: string;
 }
 
+/**
+ * FEATURE_246 — the investigator declares an `outputSchema` so its finding
+ * arrives on `result.structured`, the ONE field synchronously awaited (with a
+ * bounded repair turn) by the time `runAgent` resolves. `result.finalText` is
+ * NOT reliable here: a child that ends its turn on a tool_use/handoff has an
+ * empty or preparatory finalText, and its smart digest is delivered
+ * asynchronously (agent_summary_updated) AFTER runAgent returns — so folding
+ * `finalText` straight into synthesis produced empty findings even though the
+ * per-agent digest was visible in the panel a moment later.
+ */
+const FINDING_SCHEMA = {
+  type: 'object',
+  additionalProperties: false,
+  required: ['finding'],
+  properties: {
+    finding: {
+      type: 'string',
+      description:
+        'Your concrete findings for this focus, with file:line evidence. ' +
+        'If nothing relevant was found, a brief note saying so.',
+    },
+  },
+} as const;
+
+/** Read the `{ finding }` string off a child's structured result, if present. */
+function readStructuredFinding(structured: unknown): string | undefined {
+  if (structured !== null && typeof structured === 'object' && 'finding' in structured) {
+    const finding = (structured as { finding?: unknown }).finding;
+    if (typeof finding === 'string' && finding.trim().length > 0) return finding;
+  }
+  return undefined;
+}
+
+/**
+ * Pick the most reliable finding text: the schema-validated `structured.finding`
+ * first, then a non-empty `finalText`. Never return an empty string silently —
+ * that is the exact failure the synthesis surfaced as "发现:无".
+ */
+function pickFindingText(result: WorkflowTaskResult): string {
+  const structured = readStructuredFinding(result.structured);
+  if (structured) return structured;
+  const finalText = result.finalText?.trim();
+  if (finalText && finalText.length > 0) return result.finalText;
+  return '[no finding text was returned — the investigator may have ended on a tool call without a closing summary]';
+}
+
 function buildInvestigatorPrompt(question: string, focus: string): string {
   return [
     `Investigate the following question (READ-ONLY — do not modify any files):`,
@@ -81,7 +127,12 @@ async function investigate(
   angle: InvestigationAngle,
 ): Promise<InvestigationFinding> {
   try {
-    const result = await wf.runAgent({ name: angle.name, prompt: angle.prompt, readOnly: true });
+    const result = await wf.runAgent({
+      name: angle.name,
+      prompt: angle.prompt,
+      readOnly: true,
+      outputSchema: FINDING_SCHEMA,
+    });
     // FEATURE_246 Part E: runAgent now resolves to null on a failed/stopped child
     // (instead of throwing), so treat null as a failed angle.
     if (result === null) {
@@ -90,7 +141,9 @@ async function investigate(
     return {
       angle: angle.name,
       status: result.status === 'completed' ? 'completed' : 'failed',
-      text: result.finalText,
+      // Prefer the schema-validated structured finding over the timing-fragile
+      // finalText (see FINDING_SCHEMA / pickFindingText).
+      text: pickFindingText(result),
     };
   } catch (error) {
     const message = error instanceof Error ? error.message : String(error);

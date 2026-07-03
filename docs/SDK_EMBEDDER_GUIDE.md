@@ -1596,6 +1596,42 @@ KodaX gives async digest a longer best-effort window than blocking digest, so
 late `agent_summary_updated` messages can arrive noticeably after the child
 terminal event without restarting the workflow.
 
+### Collecting a child's result inside a workflow script (declare `outputSchema`)
+
+When a workflow script aggregates child agents into a synthesis step, read the
+child's result from the **right field**. A `WorkflowTaskResult` (from
+`wf.runAgent` / `wf.wait`) carries several fields that are NOT all populated at
+the same instant:
+
+| field | reliability at the moment `runAgent`/`wait` resolves |
+|---|---|
+| `structured` | **The reliable field.** Present + schema-validated (with one bounded, *awaited* repair turn) whenever the spawn declared an `outputSchema`. Resolved before the call returns. |
+| `finalText` | Always a string, but **may be empty or a "Let me start…" preamble** if the child ended its turn on a `tool_use`/handoff rather than a closing text block. Do NOT treat it as guaranteed content. |
+| `digest` / `digestPending` | The smart digest is delivered **asynchronously** via `agent_summary_updated` *after* the call resolves; at resolve time `digest` is usually absent and `digestPending` is `true`. It powers the live panel — it is NOT available to the script's return value. |
+
+So a script that folds `finalText` straight into `wf.synthesize` can get **empty
+findings even though the per-agent digest is visible in the panel** (the digest
+arrived a moment later, asynchronously). The supported pattern:
+
+```ts
+const FINDING = {
+  type: 'object', additionalProperties: false, required: ['finding'],
+  properties: { finding: { type: 'string', description: 'Concrete findings with file:line evidence.' } },
+};
+
+const result = await wf.runAgent({ name: 'review:auth', prompt, readOnly: true, outputSchema: FINDING });
+// Prefer the schema-validated structured finding; fall back to finalText only when non-empty.
+const text =
+  (result?.structured as { finding?: string } | undefined)?.finding?.trim()
+  || (result?.finalText?.trim() ? result.finalText : '[no finding returned]');
+```
+
+Declare an `outputSchema` on every child whose result feeds a downstream step,
+and read `result.structured`. `finalText` is a best-effort fallback, and the
+async `digest` is for live UI only — never rely on it in the script's own control
+flow. (The built-in `parallel-investigation` workflow follows exactly this
+pattern as the reference.)
+
 For normal `dispatch_child_task` children, hosts should render child activity
 under the dispatch tool or a separate child-activity panel, while leaving the
 main TodoList/plan visible. A good default is:
