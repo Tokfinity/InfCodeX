@@ -146,7 +146,11 @@ function parseFeatureRows(markdown: string): FeatureIndexRow[] {
   const completedSection = getSection(markdown, '已完成 Feature');
 
   const inProgressRows = getMarkdownTableRows(inProgressSection).map((cells) => {
-    const [id, title, planned, design] = cells;
+    // InProgress uses the same 6-column layout as the Planned table
+    // (ID | Title | Category | Priority | Planned | Design). Destructuring it as
+    // 4 columns put the Priority cell ("High") into `design` and threw once the
+    // table became non-empty (v0.7.58 shipped with an empty InProgress table).
+    const [id, title, _category, _priority, planned, design] = cells;
 
     return {
       id: stripMarkdown(id),
