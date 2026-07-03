@@ -418,7 +418,7 @@ export async function runSubstrate(
   // loadCompactionConfig uses it to pick an adaptive triggerPercent
   // (short-window models compact earlier; user config can still override).
   // Pass the per-model value so providers with model-specific windows
-  // (ark-coding's kimi-k2.7-code 256K / MiniMax-M3 1M / deepseek-v4 1M,
+  // (ark-coding's deepseek-v3.2 128K / kimi-k2.6 256K / deepseek-v4 1M,
   // etc.) get the right adaptive bucket instead of the default-model
   // window.
   const initialProvider = resolveProvider(turnState.currentProviderName);

@@ -1,8 +1,8 @@
 # KodaX Product Requirements
 
-> Last updated: 2026-06-28
+> Last updated: 2026-07-03
 >
-> Current release baseline: `@kodax-ai/kodax@0.7.57`
+> Current release baseline: `@kodax-ai/kodax@0.7.59`
 >
 > This document describes the current product. Historical pre-v0.7.43
 > chain/harness designs have been removed from this current PRD because they no
@@ -134,6 +134,17 @@ budget checks, opt-in worktree routing, and richer workflow pattern templates.
 Generated workflows can be promoted into lightweight capsules that preserve the
 script plus manifest, intent, input examples, requirements, and provenance so
 they remain reusable across sessions and understandable to SDK consumers.
+
+FEATURE_246 (v0.7.58) is the Claude-Code-parity evolution of this surface: the
+Worker can now author and run a workflow inline via a model-callable
+`run_workflow` tool (scout-then-author, ADR-047) instead of only generating
+scripts through `/workflow create`. It adds structured child output
+(`outputSchema`), the no-barrier `wf.pipeline` staged primitive, same-session
+resume (`resumeFromRunId`), and nested `wf.workflow(...)`, and demotes the
+context-blind `sideQuery` generator to a fallback for the explicit `/workflow
+create` command and non-interactive / CI hosts. The neutral
+run-lifecycle manager moves to `@kodax-ai/agent` (ADR-046) and the inline run is
+async / idle-yield (ADR-049).
 
 ### Workflow Process Surface
 

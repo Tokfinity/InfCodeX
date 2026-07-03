@@ -1,8 +1,8 @@
 # KodaX Detailed Design
 
-> Last updated: 2026-06-28
+> Last updated: 2026-07-03
 >
-> Current release baseline: `@kodax-ai/kodax@0.7.57`
+> Current release baseline: `@kodax-ai/kodax@0.7.59`
 >
 > This DD describes current implementation structure. Retired V1 chain details
 > were deleted from this active document; use git history and historical feature
@@ -19,7 +19,7 @@ reference and does not duplicate every type. It should answer three questions:
 
 ## 2. Published Package And Build Entries
 
-The root package is `@kodax-ai/kodax@0.7.57`.
+The root package is `@kodax-ai/kodax@0.7.59`.
 
 `package.json` exposes:
 
@@ -303,6 +303,15 @@ of that process contract. TUI sessions persist sanitized terminal tool groups in
 array. Workflow process metadata accepts optional `hostMetadata`, normalizes it
 to a small string-only map, persists it in `run.json`, and echoes it through
 `WorkflowProcessSnapshot` / process events after restart.
+
+FEATURE_246 (`v0.7.58`, released) adds inline workflow authoring: a
+model-callable `run_workflow` tool lets the Worker scout the codebase and author
++ run a workflow script in-chat (`packages/coding/src/workflows/`
+author-via-worker / host / invocation-policy), routed through the unchanged
+sandbox + static-validation + postcondition pipeline. It carries structured
+child output (`outputSchema`), the no-barrier `wf.pipeline`, same-session resume
+(`resumeFromRunId`), and nested `wf.workflow(...)`; the neutral run-lifecycle
+manager moves to `@kodax-ai/agent` (ADR-046). ADR-044/046/047/048/049.
 
 ## 14. REPL Detail
 

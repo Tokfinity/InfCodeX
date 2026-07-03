@@ -23,6 +23,7 @@ are NOT obvious from inspecting the type definitions alone:
 13. [Inject your product's manual — `selfManual`](#13-inject-your-products-manual--selfmanual-feature_221-v0747)
 14. [Media input artifacts — `@kodax-ai/kodax/media`](#14-media-input-artifacts--kodax-aikodaxmedia-feature_239-v0756)
 15. [Space v0.7.57 follow-up ledger](#15-space-v0757-follow-up-ledger)
+16. [SDK agent-profile surface — `KodaXAgentProfile`](#16-sdk-agent-profile-surface--kodaxagentprofile-feature_247-v0758)
 
 §1–§3 (and the Phase-7/8 MCP-popout surface in §1) land in v0.7.42
 under FEATURE_186 (see [ADR-032](ADR.md#adr-032-sdk-embedder-surface-closure-feature_186-v0742)).
@@ -1737,9 +1738,6 @@ Layer boundary:
 - `@kodax-ai/kodax/repl` renders snapshots; it is not required for SDK workflow
   execution or progress UI.
 
-Release note: v0.7.50 implementation is complete; release validation is still
-required before publishing the package version.
-
 ---
 
 ## 12. Provider credential verification — `verifyProviderCredential` (FEATURE_216, v0.7.45)
@@ -1874,6 +1872,41 @@ runKodaX({
 - **Extend, not replace.** Your topics are merged on top of KodaX's base topics (same `id` overrides, new `id` adds). So a KodaX-Space user can ask about KodaX-Space *and* about the underlying provider/config (KodaX base topics).
 - **`productName` re-brands the prose**, not the tool. The routing rule and each answer's anti-confusion anchor say your product name; the tool stays `kodax_manual` (the model doesn't care about the tool name).
 - **Still tool-on-demand + bounded.** Nothing big is injected into the prompt — only the ≤250-token routing rule. Topics live in the registry and are returned one at a time when the model calls the tool, each capped at 4 KB. Drift-guarding your own topics (e.g. not referencing a removed setting) is your responsibility.
+
+### White-labeling further — `baseTopics` (v0.7.58, FEATURE_221)
+
+By default your `topics` **extend** the KodaX base manual. v0.7.58 adds
+`selfManual.baseTopics` to control which base topics are present underneath:
+
+- **omit** — all base topics (default; byte-identical to pre-v0.7.58).
+- **`[]`** — none: a full white-label replace where only your topics exist, so the
+  model never surfaces a KodaX-branded mechanism topic.
+- **explicit subset** — seed only the base topic ids you name.
+
+`KODAX_UNDERLYING_CAPABILITY_TOPICS` (exported) is the recommended mechanism-topic
+subset a product built on KodaX should keep even in a full replace — so your users
+still get correct answers about the underlying engine (providers / config /
+permissions / tools / skills / extensions / mcp / repo-intelligence / sessions /
+sdk / custom-providers) without the KodaX brand:
+
+```ts
+import {
+  runKodaX,
+  KODAX_UNDERLYING_CAPABILITY_TOPICS,
+  MANUAL_REGISTRY,
+} from '@kodax-ai/coding';
+
+runKodaX({
+  selfManual: {
+    productName: 'KodaX-Space',
+    topics: SPACE_TOPICS,
+    baseTopics: [...KODAX_UNDERLYING_CAPABILITY_TOPICS], // keep engine topics, drop KodaX-branded ones
+  },
+});
+```
+
+`MANUAL_REGISTRY` (exported, keyed by `KodaXManualTopicId`) lets you read the base
+topic bodies at build time — e.g. to re-word them under your own brand.
 
 ### Topic shape (`KodaXManualTopicInput`)
 
@@ -2076,6 +2109,69 @@ UI/API follow-ups that should consume the SDK contracts already exposed here.
   partial. Migrating Space Quick Ask still needs an application-level decision
   about transcript promotion and history semantics, because `sideQuery` is an
   isolated text-only one-shot call rather than a chat-session append.
+
+---
+
+## 16. SDK agent-profile surface — `KodaXAgentProfile` (FEATURE_247, v0.7.58)
+
+### Why
+
+An SDK embedder (e.g. **KodaX-Space Partner**) often needs to run KodaX under a
+named product persona — its own identity + instructions, a narrowed tool surface,
+and a default verification standard — without forking the agent. `KodaXAgentProfile`
+provides this as one **opaque, profile-gated** object on `options.context`. With no
+`agentProfile` set the default Coding Agent is **byte-identical**; every path below
+is a no-op.
+
+### Shape
+
+```ts
+runKodaX({
+  /* …your usual config… */
+  context: {
+    agentProfile: {
+      surface: 'partner',            // opaque label ('code' | 'partner' | …)
+      name: 'KodaX-Space Partner',   // opaque display name
+      instructions: '…house rules injected into the AMA/AMAW Worker role prompt…',
+      verification: { /* KodaXTaskVerificationContract — profile-default standard */ },
+    },
+    // R2 — narrow the model-visible tool list (applied on top of excludeTools):
+    toolVisibilityPolicy: (tool) => tool !== 'web_search',
+  },
+});
+```
+
+### What each field / companion gates
+
+- **R1 — identity + instructions.** `agentProfile.instructions` is prepended to the
+  AMA/AMAW Worker role prompt; the SA path uses `context.systemPromptOverride`
+  (mapped from `instructions` by `startKodaX`), so a profile behaves consistently
+  across both execution modes.
+- **R2 — `context.toolVisibilityPolicy`.** A predicate applied when the
+  model-visible tool list is built (in addition to `excludeTools`); tools it returns
+  `false` for are hidden from the model.
+- **R3 — `agentProfile.verification`.** A profile-default `KodaXTaskVerificationContract`
+  merged with per-task `context.taskVerification` (per-task fields win) before it
+  reaches the Sidecar Verifier; each verdict is attributed to the profile.
+- **R4 — `KodaXEvents.onEffectiveConfig`.** Reports the effective agentMode / tool
+  scope / verification / resolved verifier at run start, so a host can reflect what
+  the profile actually resolved to.
+- **R5 — metadata across `fork()`.** Structured `profile` + `runtimeInfo` metadata
+  ride on results and are inherited by forked sessions.
+- **R6 — `compactSession(id, options)`** from `@kodax-ai/kodax/session` — an
+  imperative session compaction the host can trigger directly.
+- **R7 / R8 — attribution.** Session / profile / toolCall attribution is threaded
+  into the tool execution context and onto inline-workflow process events + AMA tool
+  events.
+- **R9 — `reads-network` side-effect class** (`isToolNetworkRead`) tags read-only
+  network tools (`web_search`, MCP read / prompt) so a profile can allow network
+  reads without granting mutation.
+
+### Reference
+
+- Types: `KodaXAgentProfile`, `KodaXToolVisibilityPolicy`, `KodaXEffectiveTaskConfig`
+  from `@kodax-ai/coding`; `compactSession` from `@kodax-ai/kodax/session`.
+- Design: [docs/features/v0.7.58.md](features/v0.7.58.md) FEATURE_247.
 
 ---
 

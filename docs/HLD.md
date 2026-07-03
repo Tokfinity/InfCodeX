@@ -1,8 +1,8 @@
 # KodaX High-Level Design
 
-> Last updated: 2026-06-28
+> Last updated: 2026-07-03
 >
-> Current release baseline: `@kodax-ai/kodax@0.7.57`
+> Current release baseline: `@kodax-ai/kodax@0.7.59`
 >
 > This HLD is intentionally current-state only. The old pre-v0.7.43
 > chain/harness model has been removed from this active design document because
@@ -228,6 +228,15 @@ still reconstruct tool facts from canonical messages. Workflow process snapshots
 also carry optional `hostMetadata`, a small string-only map persisted in
 `run.json` and echoed after restart so hosts can attribute runs without a side
 table.
+
+FEATURE_246 (`v0.7.58`, released) is the largest workflow change since F229: the
+Worker authors and runs workflows inline through a model-callable `run_workflow`
+tool (scout-then-author), running generated scripts through the same sandbox +
+static-validation + postcondition pipeline. It adds structured child output
+(`outputSchema`), the no-barrier `wf.pipeline`, same-session resume
+(`resumeFromRunId`), and nested workflows; the neutral run-lifecycle manager is
+lifted to `@kodax-ai/agent` (ADR-046) and the inline run is async / idle-yield
+(ADR-049). See ADR-044/046/047/048/049.
 
 ## 11. REPL And CLI
 

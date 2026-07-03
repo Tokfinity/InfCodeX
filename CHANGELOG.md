@@ -6,6 +6,34 @@ All notable changes to this project will be documented in this file.
 
 ## [Unreleased]
 
+## [0.7.59] - 2026-07-03
+
+> Scope note: a rollup release on top of v0.7.58. **FEATURE_248** and **FEATURE_249** extend
+> workflow *activation*: the AMAW Worker now carries a mode-level standing directive that
+> defaults substantive work to orchestrating cross-checking agents, and AMA can activate
+> `run_workflow` from an explicit natural-language request. The release also lands the Space SDK
+> R1-R6 capability hardening, an ark-coding lineup refresh, and several workflow-runtime + SDK
+> parity fixes. All prompt-only / additive; no public runtime type is removed.
+
+### Added
+
+- **AMA natural-language workflow activation (FEATURE_249).** `buildWorkflowToolHost` is widened so AMA — not only AMAW — hosts the `run_workflow` tool. AMA activates it on an explicit natural-language request (the tool is available and LLM-native, with no standing directive); AMAW additionally self-activates on complexity via the FEATURE_248 directive. SA is unchanged (fails the gate + `SA_SOLO_EXCLUDE_TOOLS`). The F248 directive stays strictly AMAW-only through an independent `amawOrchestrationAvailable` gate that is structurally separate from the tool host.
+- **Host-facing Worker workflow-authoring entrypoint + resume replay telemetry (Space SDK R1/R2).** A non-coding SDK host can drive the scout-then-author Worker authoring path directly, and same-session resume now emits replay telemetry (an `agent_replayed` event) so a host can observe cache hits when a run resumes.
+
+### Changed
+
+- **AMAW mode-level `ORCHESTRATION DEFAULT` standing directive (FEATURE_248, prompt-only).** The Worker system prompt gains an AMAW-gated standing directive (mirroring the reference "ultracode" mechanism): substantive work — a multi-file investigation, a design/architecture decision, anything costly to get wrong — defaults to orchestrating multiple cross-checking agents rather than working it alone end to end, while trivial and conversational turns stay solo. A **PLAN-TIME COMMITMENT** flow-fix front-loads the orchestrate-vs-solo call to turn 0 and makes plan items the agents/stages to dispatch. Leak-closed via a new optional `ManagedRolePromptContext.amawOrchestrationAvailable` field, so AMA and SA prompts stay byte-identical. Narrowed-SHIP: acceptance is task-inception activation; mid-task re-architecture is a documented non-goal, and absolute activation is model-ceiling-limited on current coding-plan aliases.
+- **Space SDK capability hardening (R1-R6).** Per an adversarial review of the six Space SDK capabilities: model-level overrides are honored on the default model and a `resolveWireEffort` helper is added; LLM-triggered skill dynamic-context is routed through the host policy (R4); a rejected `reasoning_effort` self-heals across turns (R5); plus the host-facing authoring entrypoint and resume-replay telemetry (R1/R2) noted above.
+- **ark-coding lineup refreshed to Ark's official model catalog.**
+
+### Fixed
+
+- **Workflow `tokenBudget` of `0` / `null` / negative now means unbounded** instead of being clamped to a 1-token budget — expressing "no limit" as `0` from one of a host's launch paths previously wedged the whole run. `maxAgents` / `maxConcurrency` keep their count floor of 1.
+- **The built-in parallel-investigation workflow reads structured child findings instead of the timing-fragile `finalText`.** A child's smart digest is delivered asynchronously (after its terminal event), so a synthesis step could receive empty findings ("总评:(无) / 发现:无"); it now reads the structured result.
+- **Authored + generated workflows read `result.structured`, not the top-level result or `finalText` (KodaX-Space).** Both authoring surfaces — the `run_workflow` tool description and the blind generator prompt — are taught to read a child's validated object off `result.structured` (a review workflow that declared an `outputSchema` but read fields off the top-level result produced an empty report). The sandbox source policy also now preserves `${...}` interpolation inside template literals so a `${process.cwd()}` no longer evades the forbidden-pattern scan and crashes at runtime, bans computed `globalThis[...]` access, and `wf.log` tolerates a bare string.
+- **The Sidecar Verifier's feedback renders under its own identity, not `[Evaluator]`.** Three UI seams surfaced the legacy `evaluator` role name as a phantom `[Evaluator]` agent (status-line label-lag on a revise, the persisted transcript, and the restored synthetic sidecar message on `kodax -c`); all three now attribute to the `⚡ Sidecar Verifier` identity.
+- **`getCustomProviderModelDescriptors` honors a `models[]` override on the default model.** The custom-provider descriptor-listing SDK surface returned a bare `{id}` descriptor for a custom provider's default model even when it had a `models[]` entry (context window / max output / reasoning profile), disagreeing with `getCustomModelCapabilities`; both SDK surfaces now agree (R3 regression test added).
+
 ## [0.7.58] - 2026-07-02
 
 > Scope note: a feature + hardening release. **FEATURE_246** delivers Claude-Code-harness

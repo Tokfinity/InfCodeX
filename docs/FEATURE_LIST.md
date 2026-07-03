@@ -10,13 +10,13 @@
 
 | Item | Value |
 |---|---|
-| Current released version | `v0.7.58` |
-| Current package version | `@kodax-ai/kodax@0.7.58` (published to npm, 2026-07-02) |
+| Current released version | `v0.7.59` |
+| Current package version | `@kodax-ai/kodax@0.7.59` (published to npm, 2026-07-03) |
 | Workspace baseline | `llm / agent / coding / repl` 4 packages |
 | Total tracked features | `35` |
-| InProgress | `2` |
+| InProgress | `0` |
 | Planned | `15` |
-| Completed | `18` |
+| Completed | `20` |
 | Tracked feature IDs | `007, 030, 093, 105, 108, 113, 139, 174, 211, 221, 224, 225, 228, 229, 230, 231, 232, 233, 234, 235, 236, 237, 238, 239, 240, 241, 242, 243, 244, 245, 246, 247, 248, 249, 250` |
 | Archive cutoff | Shipped / canceled / absorbed / shelved items through `v0.7.49` are archived. |
 
@@ -24,8 +24,8 @@
 
 | Status | Count | Feature IDs | Next checkpoint |
 |---|---:|---|---|
-| Completed | 18 | `247, 246, 245, 243, 242, 241, 233, 240, 239, 224, 221, 174, 211, 237, 229, 230, 234, 236` | `245, 246, 247, 221` released v0.7.58 (2026-07-02); `233, 241, 242, 243` released v0.7.57; `239, 240` released v0.7.56; `224` released v0.7.54; `174, 211, 237` v0.7.53; `229` v0.7.50; `230, 234, 236` v0.7.51 |
-| InProgress | 2 | `248, 249` | `248` shipped v0.7.59 (narrowed); `249` shipped v0.7.60 (Option A gate-widen) |
+| Completed | 20 | `248, 249, 247, 246, 245, 243, 242, 241, 233, 240, 239, 224, 221, 174, 211, 237, 229, 230, 234, 236` | `248, 249` shipped v0.7.59 (2026-07-03); `245, 246, 247, 221` released v0.7.58 (2026-07-02); `233, 241, 242, 243` released v0.7.57; `239, 240` released v0.7.56; `224` released v0.7.54; `174, 211, 237` v0.7.53; `229` v0.7.50; `230, 234, 236` v0.7.51 |
+| InProgress | 0 | — | `248` + `249` shipped in v0.7.59 (2026-07-03) — see 已完成 Feature |
 | Planned, near-term | 10 | `228, 244, 250, 231, 235, 238, 232, 105, 108, 225` | `v0.7.60` -> `v0.7.81` |
 | Planned, v0.8.x | 5 | `007, 030, 093, 113, 139` | `v0.8.5+` |
 
@@ -39,7 +39,7 @@
 | `v0.7.55` | `0` |
 | `v0.7.56` | `0` |
 | `v0.7.57` | `0` |
-| `v0.7.59` | `1` |
+| `v0.7.59` | `0` |
 | `v0.7.60` | `4` |
 | `v0.7.63` | `1` |
 | `v0.7.66` | `1` |
@@ -57,10 +57,11 @@
 > left without a planned feature so it can be used for the temporary emergency
 > release. `FEATURE_239` and `FEATURE_240` both moved to `v0.7.56`.
 > `FEATURE_233`, `FEATURE_241`, `FEATURE_242`, and `FEATURE_243` shipped in
-> `v0.7.57`; `v0.7.58` is the current release. `v0.7.59` was originally reserved
-> as a patch/debug slot but now carries the prompt-only `FEATURE_248` (AMAW
-> workflow auto-activation); `v0.7.60` remains the next larger feature-bearing
-> slot. Move `FEATURE_248` to `v0.7.60` if `v0.7.59` must stay patch-only.
+> `v0.7.57`; `v0.7.58` shipped 2026-07-02. `v0.7.59` (2026-07-03) shipped
+> `FEATURE_248` (AMAW mode-level orchestration directive) + `FEATURE_249` (AMA
+> natural-language workflow activation) as a rollup on top of the Space SDK R1-R6
+> hardening and ark-coding lineup refresh; `v0.7.60` remains the next larger
+> feature-bearing slot (`FEATURE_228` / `244` / `250`).
 
 ---
 
@@ -68,8 +69,8 @@
 
 | ID | Title | Category | Priority | Planned | Design |
 |---|---|---|---|---|---|
-| `248` | AMAW Mode-Level Orchestration Directive | Enhancement / Workflow Activation | High | `v0.7.59` | [v0.7.59](features/v0.7.59.md#feature_248-amaw-mode-level-orchestration-directive) |
-| `249` | AMA Natural-Language Workflow Activation | Enhancement / Workflow Activation | Medium | `v0.7.60` | [v0.7.60](features/v0.7.60.md#feature_249-ama-natural-language-workflow-activation) |
+
+_None in progress._ `248` + `249` shipped in `v0.7.59` (2026-07-03) — see 已完成 Feature. Their shipped records (eval history) are retained below.
 
 > `249` shipped 2026-07-03 (Option A): widened `buildWorkflowToolHost`
 > (`tool-execution-context.ts`) from `!== 'amaw'` to `!== 'amaw' && !== 'ama'`, so AMA
@@ -140,6 +141,8 @@
 
 | ID | Title | Released | Design | Notes |
 |---|---|---|---|---|
+| `249` | AMA Natural-Language Workflow Activation | `v0.7.59` | [v0.7.60](features/v0.7.60.md#feature_249-ama-natural-language-workflow-activation) | Released in `v0.7.59` (2026-07-03). Widened `buildWorkflowToolHost` so AMA also hosts `run_workflow` on an explicit natural-language request; AMAW additionally self-activates on complexity via the FEATURE_248 directive (independent `amawOrchestrationAvailable` gate, verified structurally separate). SA unchanged. Design doc filed under v0.7.60; shipped early in the v0.7.59 rollup. |
+| `248` | AMAW Mode-Level Orchestration Directive | `v0.7.59` | [v0.7.59](features/v0.7.59.md#feature_248-amaw-mode-level-orchestration-directive) | Released in `v0.7.59` (2026-07-03). AMAW-gated mode-level `ORCHESTRATION DEFAULT` standing directive + PLAN-TIME COMMITMENT flow-fix (prompt-only, narrowed-SHIP: task-inception activation; mid-task re-architecture a documented non-goal). Leak-closed via optional `ManagedRolePromptContext.amawOrchestrationAvailable`. See v0.7.59.md §6/§6.1. |
 | `247` | SDK Agent-Profile Surface (KodaX-Space Partner) | `v0.7.58` | [v0.7.58](features/v0.7.58.md#feature_247-sdk-agent-profile-surface-kodax-space-partner) | Released in `v0.7.58` (2026-07-02). Profile-gated `KodaXAgentProfile` (R1–R9): identity/instruction injection, tool-visibility policy, Sidecar Verifier binding + verdict attribution, `onEffectiveConfig` snapshot, structured profile/runtime metadata across `fork()`, imperative `compactSession()`, session/profile/toolCall attribution, and a `reads-network` side-effect class. Default Coding Agent byte-identical when no profile is set. Built on the concurrent `feature/partner-sdk-support` branch. |
 | `246` | Claude-Code-Parity Workflow (inline authoring + structured output + streaming pipeline + same-session resume; absorbs `232`, parity subset of `231`) | `v0.7.58` | [v0.7.58](features/v0.7.58.md#feature_246-claude-code-parity-workflow--inline-authoring--structured-output--streaming-pipeline--same-session-resume) | Released in `v0.7.58` (2026-07-02). Model-callable `run_workflow` inline authoring (scout-then-author; `sideQuery` generator demoted to headless/SA fallback), structured child output via `outputSchema`, no-barrier `wf.pipeline`, same-session resume via `resumeFromRunId` (content-addressed result cache; `Date.now`/`Math.random` now throw in-sandbox), nested `wf.workflow`, per-agent phase + per-child effort, `/workflow` command intelligence, and mode-distinct SA/AMA/AMAW activation. ADR-044/046/047/048. Neutral run-lifecycle manager lifted to `@kodax-ai/agent`. |
 | `245` | Workflow Generation Robustness + Runtime Partial-Result Salvage | `v0.7.58` | [v0.7.58](features/v0.7.58.md#feature_245-workflow-generation-robustness--runtime-partial-result-salvage) | Released in `v0.7.58` (2026-07-02). Generation-time: static literal-taskId rejection, smoke now asserts taskId/evidenceRefs identity, multi-scenario adversarial smoke, taskId randomization, prompt/repair hardening. Runtime: mid-run failures surface completed children's outputs instead of a bare failure. Eval per ADR-033 is deterministic Layer-1 unit tests (generator prompt is not a FEATURE_104 trigger). Runtime self-repair (replay completed agents) is explicitly deferred to `FEATURE_231`. |
