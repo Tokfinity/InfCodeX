@@ -60,6 +60,12 @@ const FORBIDDEN_RESTRICTED_SOURCE_PATTERNS: readonly {
   { id: 'fetch', pattern: /\bfetch\s*\(/ },
   { id: 'Deno', pattern: /\bDeno\s*(?:\.|\[)/ },
   { id: 'Bun', pattern: /\bBun\s*(?:\.|\[)/ },
+  // Computed `globalThis[...]` access smuggles a stripped string key (e.g.
+  // `globalThis["process"]`) past the token checks above, then hits an
+  // undefined sandbox global at runtime and throws a cryptic
+  // `Cannot read properties of undefined`. Reject it at validation. Dot access
+  // (`globalThis.Math`) is intentionally still allowed for the determinism guard.
+  { id: 'globalThis-index', pattern: /\bglobalThis\s*\[/ },
 ];
 
 function wrapSource(source: string): string {
@@ -291,8 +297,11 @@ function readSynthesizeInput(value: unknown, label: string): WorkflowSynthesizeI
   return { inputs, rubric } as WorkflowSynthesizeInput;
 }
 
-/** Validate a `WorkflowLogEvent` payload at the host boundary. */
+/** Validate a `WorkflowLogEvent` payload at the host boundary. A bare string is
+ *  tolerated (coerced to `{ message }`): log is fire-and-forget narration, so a
+ *  `wf.log("…")` call must never abort the run. The sandbox coerces the same way. */
 function readLogEvent(value: unknown, label: string): WorkflowLogEvent {
+  if (typeof value === 'string' && value.trim().length > 0) return { message: value };
   const record = readRecord(value, label);
   const message = readNonEmptyField(record, 'message', label);
   return record.data !== undefined ? { message, data: record.data } : { message };
@@ -347,9 +356,41 @@ function errorMessage(error: unknown): string {
 function stripRestrictedSourceLiterals(source: string): string {
   let stripped = '';
   let i = 0;
+  // Context stack. 'code' preserves characters so the forbidden-token scan sees
+  // real code — INCLUDING template `${...}` interpolations, which are code, not
+  // prose. 'template' blanks a template literal's text but re-enters 'code' at
+  // each `${...}`. Blanking the whole template (the old behavior) let forbidden
+  // tokens such as `process.cwd()` hide inside an interpolation and evade the
+  // scan, crashing cryptically at runtime instead (Space run-mr4qvtbw).
+  const stack: Array<'code' | 'template'> = ['code'];
+  const braceDepth: number[] = [0];
   while (i < source.length) {
     const ch = source[i];
     const next = source[i + 1];
+    if (stack[stack.length - 1] === 'template') {
+      if (ch === '\\') {
+        stripped += '  ';
+        i += 2;
+        continue;
+      }
+      if (ch === '`') {
+        stripped += ' ';
+        i += 1;
+        stack.pop();
+        braceDepth.pop();
+        continue;
+      }
+      if (ch === '$' && next === '{') {
+        stripped += '  ';
+        i += 2;
+        stack.push('code');
+        braceDepth.push(0);
+        continue;
+      }
+      stripped += ch === '\n' ? '\n' : ' ';
+      i += 1;
+      continue;
+    }
     if (ch === '/' && next === '/') {
       stripped += '  ';
       i += 2;
@@ -373,7 +414,7 @@ function stripRestrictedSourceLiterals(source: string): string {
       }
       continue;
     }
-    if (ch === '"' || ch === "'" || ch === '`') {
+    if (ch === '"' || ch === "'") {
       const quote = ch;
       stripped += ' ';
       i += 1;
@@ -390,6 +431,38 @@ function stripRestrictedSourceLiterals(source: string): string {
         }
         if (current === quote) break;
       }
+      continue;
+    }
+    if (ch === '`') {
+      stripped += ' ';
+      i += 1;
+      stack.push('template');
+      braceDepth.push(0);
+      continue;
+    }
+    if (ch === '{') {
+      braceDepth[braceDepth.length - 1] += 1;
+      stripped += ch;
+      i += 1;
+      continue;
+    }
+    if (ch === '}') {
+      if (braceDepth[braceDepth.length - 1] > 0) {
+        braceDepth[braceDepth.length - 1] -= 1;
+        stripped += ch;
+        i += 1;
+        continue;
+      }
+      if (stack.length > 1) {
+        // Closes a `${...}` interpolation → return to the enclosing template.
+        stripped += ' ';
+        i += 1;
+        stack.pop();
+        braceDepth.pop();
+        continue;
+      }
+      stripped += ch;
+      i += 1;
       continue;
     }
     stripped += ch ?? '';
@@ -685,7 +758,7 @@ const wf = Object.freeze({
   synthesize: (input) => __kodaxEnqueue("synthesize", __kodaxRecord(input, "synthesize input")),
   workflow: (name, args) => __kodaxEnqueue("workflow", { name: __kodaxNonEmptyString(name, "name"), args }),
   artifact: (name, value) => __kodaxEnqueue("artifact", { name: __kodaxNonEmptyString(name, "name"), value }),
-  log: (event) => { void __kodaxEnqueue("log", __kodaxRecord(event, "log input")); },
+  log: (event) => { void __kodaxEnqueue("log", typeof event === "string" ? { message: event } : __kodaxRecord(event, "log input")); },
 });
 `;
 }

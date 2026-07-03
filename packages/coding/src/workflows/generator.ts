@@ -145,6 +145,12 @@ const FORBIDDEN_SOURCE_PATTERNS: readonly {
   { id: 'fetch', pattern: /\bfetch\s*\(/ },
   { id: 'Deno', pattern: /\bDeno\s*(?:\.|\[)/ },
   { id: 'Bun', pattern: /\bBun\s*(?:\.|\[)/ },
+  // Computed `globalThis[...]` access smuggles a stripped string key (e.g.
+  // `globalThis["process"]`) past the token checks above, then hits an
+  // undefined sandbox global at runtime and throws a cryptic
+  // `Cannot read properties of undefined`. Reject it at generation. Dot access
+  // (`globalThis.Math`) is intentionally still allowed for the determinism guard.
+  { id: 'globalThis-index', pattern: /\bglobalThis\s*\[/ },
 ];
 
 export function resolveWorkflowGenerationTimeoutMs(
@@ -279,9 +285,41 @@ function reserveGeneratedWorkflowAgentCapacity(
 function stripGeneratedSourceLiterals(source: string): string {
   let stripped = '';
   let i = 0;
+  // Context stack. 'code' preserves characters so the forbidden-token scan sees
+  // real code — INCLUDING template `${...}` interpolations, which are code, not
+  // prose. 'template' blanks a template literal's text but re-enters 'code' at
+  // each `${...}`. Blanking the whole template (the old behavior) let forbidden
+  // tokens such as `process.cwd()` hide inside an interpolation and evade the
+  // scan, crashing cryptically at runtime instead (Space run-mr4qvtbw).
+  const stack: Array<'code' | 'template'> = ['code'];
+  const braceDepth: number[] = [0];
   while (i < source.length) {
     const ch = source[i];
     const next = source[i + 1];
+    if (stack[stack.length - 1] === 'template') {
+      if (ch === '\\') {
+        stripped += '  ';
+        i += 2;
+        continue;
+      }
+      if (ch === '`') {
+        stripped += ' ';
+        i += 1;
+        stack.pop();
+        braceDepth.pop();
+        continue;
+      }
+      if (ch === '$' && next === '{') {
+        stripped += '  ';
+        i += 2;
+        stack.push('code');
+        braceDepth.push(0);
+        continue;
+      }
+      stripped += ch === '\n' ? '\n' : ' ';
+      i += 1;
+      continue;
+    }
     if (ch === '/' && next === '/') {
       stripped += '  ';
       i += 2;
@@ -305,7 +343,7 @@ function stripGeneratedSourceLiterals(source: string): string {
       }
       continue;
     }
-    if (ch === '"' || ch === "'" || ch === '`') {
+    if (ch === '"' || ch === "'") {
       const quote = ch;
       stripped += ' ';
       i += 1;
@@ -322,6 +360,38 @@ function stripGeneratedSourceLiterals(source: string): string {
         }
         if (current === quote) break;
       }
+      continue;
+    }
+    if (ch === '`') {
+      stripped += ' ';
+      i += 1;
+      stack.push('template');
+      braceDepth.push(0);
+      continue;
+    }
+    if (ch === '{') {
+      braceDepth[braceDepth.length - 1] += 1;
+      stripped += ch;
+      i += 1;
+      continue;
+    }
+    if (ch === '}') {
+      if (braceDepth[braceDepth.length - 1] > 0) {
+        braceDepth[braceDepth.length - 1] -= 1;
+        stripped += ch;
+        i += 1;
+        continue;
+      }
+      if (stack.length > 1) {
+        // Closes a `${...}` interpolation → return to the enclosing template.
+        stripped += ' ';
+        i += 1;
+        stack.pop();
+        braceDepth.pop();
+        continue;
+      }
+      stripped += ch;
+      i += 1;
       continue;
     }
     stripped += ch ?? '';
@@ -828,13 +898,15 @@ export function buildWorkflowGenerationUserPrompt(
     '',
     'Available WorkflowApi calls:',
     '- wf.phase(name, async () => ...)',
-    '- wf.spawnAgent({ name, prompt, readOnly, modelHint, isolation, evidenceRefs, verification })',
-    '- wf.runAgent({ name, prompt, readOnly, modelHint, isolation, evidenceRefs, verification })',
+    '- wf.spawnAgent({ name, prompt, readOnly, modelHint, isolation, evidenceRefs, verification, outputSchema })',
+    '- wf.runAgent({ name, prompt, readOnly, modelHint, isolation, evidenceRefs, verification, outputSchema })',
     '- wf.wait(taskId), wf.snapshot(taskId), wf.send(taskId, content), wf.stop(taskId, reason)',
     '- wf.parallel([() => promise], { concurrency })',
     '- wf.synthesize({ inputs, rubric }); inputs may be an array of materials, one already-formatted string, or a named object of materials',
     '- wf.artifact(name, value), wf.log({ message, data })',
-    '- Return shapes: wf.runAgent/wf.wait return { taskId, name, status, finalText, digest?, verification?, usage }; wf.snapshot returns { taskId, name, status, lastText? }; wf.synthesize returns { text }; wf.artifact returns { name, path? }.',
+    '- Return shapes: wf.runAgent/wf.wait return { taskId, name, status, finalText, structured?, digest?, verification?, usage }; wf.snapshot returns { taskId, name, status, lastText? }; wf.synthesize returns { text }; wf.artifact returns { name, path? }.',
+    '- When a spawn declared outputSchema (a JSON-Schema subset of type/enum/required/properties/items/additionalProperties), its parsed and validated object comes back on result.structured, not on the top-level result.',
+    '- Read your declared fields off result.structured, for example result.structured.findings. Reading them off the top-level result, or inventing top-level fields like result.findings or result.summary after declaring outputSchema, yields undefined and an empty report, because the validated object lives only on result.structured.',
     '- Task identity rule: taskId is the opaque result.taskId/handle.taskId value, never the agent name string. Do not hardcode task IDs or pass string literals to wf.wait/wf.snapshot/wf.send/wf.stop; pass handle.taskId or result.taskId variables.',
     '- Important naming trap: never use anyVariable.output in generated source. Agent results use finalText; synthesis results use text; task snapshots use lastText.',
     '- Always await asynchronous workflow calls, especially wf.artifact(...), before returning.',
@@ -859,6 +931,15 @@ export function buildWorkflowGenerationUserPrompt(
     '  const finalText = synthesis.text;',
     '  await wf.artifact("final-report", { report: finalText });',
     '  return { synthesis: finalText };',
+    '}',
+    '',
+    'Structured-output example; when a child must return machine-readable fields (e.g. a reviewer panel), declare outputSchema and read the fields off result.structured:',
+    'async function run(wf, args) {',
+    '  const schema = { type: "object", additionalProperties: false, required: ["findings"], properties: { findings: { type: "array", items: { type: "string" } } } };',
+    '  const reviewer = await wf.runAgent({ name: "reviewer", prompt: String(args.request || ""), readOnly: true, outputSchema: schema });',
+    '  const findings = reviewer && reviewer.structured ? reviewer.structured.findings : [];',
+    '  const synthesis = await wf.synthesize({ inputs: findings, rubric: "Rank and dedupe the findings." });',
+    '  return { synthesis: synthesis.text };',
     '}',
     '',
     'Canonical write-and-verify pattern for requests that must land project files:',

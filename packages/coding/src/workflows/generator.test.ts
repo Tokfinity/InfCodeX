@@ -55,6 +55,22 @@ describe('buildWorkflowGenerationUserPrompt', () => {
     expect(prompt).toContain('return { synthesis: finalText }');
   });
 
+  it('teaches that a declared outputSchema arrives on result.structured, not the top-level result', () => {
+    // Regression: an AMAW/embedder-generated reviewer panel declared outputSchema
+    // correctly but read the fields off the top-level result (result.summary/
+    // result.findings), which are undefined → an empty report. The prompt must
+    // teach reading them off result.structured, matching the run_workflow tool
+    // description (single source of truth for the wording).
+    const prompt = buildWorkflowGenerationUserPrompt('review the diff from multiple angles');
+    expect(prompt).toContain('outputSchema');
+    expect(prompt).toContain('result.structured');
+    expect(prompt).toContain('result.structured.findings');
+    expect(prompt).toContain('not on the top-level result');
+    // The structured worked example declares a schema and reads it back correctly.
+    expect(prompt).toContain('Structured-output example');
+    expect(prompt).toContain('reviewer.structured');
+  });
+
   it('includes a canonical write-and-verify workflow pattern', () => {
     const prompt = buildWorkflowGenerationUserPrompt('落地 feature 文件并实现代码');
     expect(prompt).toContain('Canonical write-and-verify pattern');
@@ -237,6 +253,31 @@ describe('validateGeneratedWorkflowSource', () => {
     ).toThrow(/forbidden generated workflow token: process/);
     expect(() =>
       validateGeneratedWorkflowSource('async function run() { return require("fs"); }'),
+    ).toThrow(/forbidden generated workflow token: require/);
+    // Space process.cwd report: `globalThis["process"]` smuggles a stripped
+    // string key past the `process` token check, then crashes cryptically at
+    // runtime. Reject computed globalThis[...] access at generation instead.
+    expect(() =>
+      validateGeneratedWorkflowSource('async function run() { return globalThis["process"].cwd(); }'),
+    ).toThrow(/forbidden generated workflow token: globalThis-index/);
+    // Dot access to a determinism-guarded global stays allowed (bracket-only ban).
+    expect(validateGeneratedWorkflowSource('async function run() { return globalThis.Math.max(1, 2); }')).toContain(
+      'globalThis.Math',
+    );
+    // Space run-mr4qvtbw: `process.cwd()` hidden inside a template ${...}
+    // interpolation. The stripper must scan interpolation code, not blank it.
+    expect(() =>
+      validateGeneratedWorkflowSource('async function run() { return `scope ${process.cwd()}`; }'),
+    ).toThrow(/forbidden generated workflow token: process/);
+  });
+
+  it('scans template ${...} interpolations but still ignores template prose', () => {
+    // Prose inside the template text (outside ${...}) is not code → allowed.
+    const proseOk = 'async function run(wf) { return `We process events and require review of ${wf.runId}`; }';
+    expect(validateGeneratedWorkflowSource(proseOk)).toBe(proseOk);
+    // A forbidden token inside the interpolation itself is real code → rejected.
+    expect(() =>
+      validateGeneratedWorkflowSource('async function run() { return `x ${require("fs")}`; }'),
     ).toThrow(/forbidden generated workflow token: require/);
   });
 

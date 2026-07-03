@@ -645,6 +645,14 @@ export function createCodingWorkflowBackend(deps: CodingWorkflowBackendDeps): Wo
           }
         : {}),
       childActivityName: input.name,
+      // NOTE: in a real run this is effectively always 'async' — the workflow
+      // runtime self-subscribes to task-summary updates for `agent_summary_updated`
+      // telemetry (runtime.ts), so `hasTaskSummaryObservers()` is true even with
+      // no host UI attached. The `'blocking'` fallback here is reached only by a
+      // test backend that omits a summary subscriber; worktree children take the
+      // synchronous digest path via a SEPARATE gate (shouldRunWorkflowDigestAsync's
+      // `isolation !== 'worktree'`), not this ternary. Do not read this line as
+      // "headless runs compute the digest synchronously" — they do not.
       workflowDigestMode: hasTaskSummaryObservers() ? 'async' : 'blocking',
       ...(hasTaskSummaryObservers()
         ? {

@@ -40,6 +40,19 @@ describe('run_workflow pattern-combination teaching (review find->verify)', () =
     expect(description.toLowerCase()).toMatch(/more than one|chain/);
   });
 
+  it('teaches reading a declared outputSchema off result.structured, never the top-level result', () => {
+    // Regression: an AMAW-authored reviewer panel declared outputSchema but read
+    // result.summary/result.findings off the top-level result (undefined → empty
+    // findings). The description must point declared fields at result.structured
+    // and name the failure of reading them off the top-level result (ADR-033 §3 WHY).
+    const def = getToolDefinition('run_workflow');
+    const description = def!.description;
+    expect(description).toContain('result.structured');
+    expect(description).toContain('read your declared fields off result.structured');
+    expect(description).toContain('never off the top-level result');
+    expect(description.toLowerCase()).toMatch(/empty report|undefined/);
+  });
+
   it('Edit 2: generator pattern guidance includes the review/audit combination bullet with a WHY', () => {
     const prompt = buildWorkflowGenerationUserPrompt('review the recent changes');
     expect(prompt).toContain('review or audit combines fan-out-and-synthesize with adversarial-verification');

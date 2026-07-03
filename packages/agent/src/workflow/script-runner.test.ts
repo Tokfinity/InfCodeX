@@ -5,6 +5,7 @@ import { Script } from 'node:vm';
 import type {
   WorkflowApi,
   WorkflowArtifactRef,
+  WorkflowLogEvent,
   WorkflowTaskHandle,
   WorkflowTaskResult,
   WorkflowTaskSnapshot,
@@ -315,6 +316,46 @@ describe('runRestrictedWorkflowScript', () => {
     ).rejects.toBeInstanceOf(WorkflowScriptExecutionError);
   });
 
+  it('denies process access smuggled through globalThis[...] computed member access', async () => {
+    // Regression (Space process.cwd report): the source policy strips string
+    // literals before scanning, so `globalThis["process"]` evaded the `process`
+    // token check and crashed at runtime with a cryptic
+    // `Cannot read properties of undefined (reading 'cwd')`. Ban computed
+    // globalThis[...] access so it fails LOUD at validation with a forbidden-token
+    // error instead of the cryptic runtime TypeError.
+    const { wf } = fakeWorkflowApi();
+    await expect(
+      runRestrictedWorkflowScript({
+        wf,
+        source: 'async function run() { return globalThis["process"].cwd(); }',
+      }),
+    ).rejects.toThrow(/forbidden.*token/);
+    // Dot access to determinism-guarded globals (globalThis.Math) is unaffected — bracket only.
+    expect(() =>
+      validateRestrictedWorkflowSource('async function run() { return globalThis.Math.max(1, 2); }'),
+    ).not.toThrow(/globalThis/);
+  });
+
+  it('denies process access inside a template-literal ${...} interpolation (Space run-mr4qvtbw)', async () => {
+    // Definitive Space repro: a verifier prompt template contained
+    // `${process.cwd ? process.cwd() : "…"}`. The literal-stripper blanked the
+    // WHOLE template — including the ${...} interpolation code — so the `process`
+    // token never reached the forbidden-pattern scan; it passed validation and
+    // crashed at runtime with `Cannot read properties of undefined (reading 'cwd')`.
+    // Interpolations are code and must be scanned → this fails LOUD at validation.
+    const { wf } = fakeWorkflowApi();
+    await expect(
+      runRestrictedWorkflowScript({
+        wf,
+        source: 'async function run() { const scope = `at ${process.cwd()}`; return scope; }',
+      }),
+    ).rejects.toThrow(/forbidden.*token/);
+    // A legit interpolation (plain variables) must still pass — no false positive.
+    expect(() =>
+      validateRestrictedWorkflowSource('async function run(wf) { const n = "m"; return `report for ${n}`; }'),
+    ).not.toThrow();
+  });
+
   it('wraps compile failures as workflow script execution errors', async () => {
     const { wf } = fakeWorkflowApi();
     await expect(
@@ -482,6 +523,34 @@ describe('runRestrictedWorkflowScript', () => {
         `,
       }),
     ).rejects.toThrow(/taskId must be a non-empty string/);
+  });
+
+  it('coerces a bare string wf.log(...) to { message } instead of aborting the run', async () => {
+    // Regression: an AMAW-authored script called `wf.log("Phase 1 …")` with a
+    // plain string; the sandbox rejected it as "log input must be an object"
+    // and the throw killed the whole run. log is fire-and-forget narration, so
+    // a bare string is coerced to { message } rather than aborting.
+    const logs: WorkflowLogEvent[] = [];
+    const { wf } = fakeWorkflowApi();
+    const wfWithLog: WorkflowApi = { ...wf, log: (event) => void logs.push(event) };
+    const result = await runRestrictedWorkflowScript({
+      wf: wfWithLog,
+      source: `async function run(wf) { wf.log('Phase 1: starting'); return 'ok'; }`,
+    });
+    expect(result).toBe('ok');
+    expect(logs).toEqual([{ message: 'Phase 1: starting' }]);
+  });
+
+  it('passes an object wf.log payload through unchanged (byte-identity for existing callers)', async () => {
+    const logs: WorkflowLogEvent[] = [];
+    const { wf } = fakeWorkflowApi();
+    const wfWithLog: WorkflowApi = { ...wf, log: (event) => void logs.push(event) };
+    const result = await runRestrictedWorkflowScript({
+      wf: wfWithLog,
+      source: `async function run(wf) { wf.log({ message: 'm', data: { n: 1 } }); return 'ok'; }`,
+    });
+    expect(result).toBe('ok');
+    expect(logs).toEqual([{ message: 'm', data: { n: 1 } }]);
   });
 
   it('times out synchronous runaway scripts', async () => {
