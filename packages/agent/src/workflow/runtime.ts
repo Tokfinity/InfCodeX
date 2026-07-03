@@ -190,11 +190,26 @@ function readPositiveLimit(
   return value;
 }
 
+/**
+ * tokenBudget accepts 0 / negative / non-finite as "unbounded" (undefined),
+ * unlike the count limits (maxAgents/maxConcurrency) which require a positive
+ * integer and throw otherwise. This lets an SDK host express "no token cap" with
+ * an explicit 0 instead of relying on the field being absent (fragile across
+ * launch paths). Matches the coding-layer clampTokenBudget.
+ */
+function readTokenBudgetLimit(limits: WorkflowLimits | undefined): number | undefined {
+  const value = limits?.tokenBudget;
+  if (value == null || typeof value !== 'number' || !Number.isFinite(value) || value <= 0) {
+    return undefined;
+  }
+  return Math.floor(value);
+}
+
 /** Validate user-provided runtime limits for SDK consumers. */
 export function normalizeWorkflowLimits(limits?: WorkflowLimits): WorkflowLimits {
   const maxAgents = readPositiveLimit(limits, 'maxAgents');
   const maxConcurrency = readPositiveLimit(limits, 'maxConcurrency');
-  const tokenBudget = readPositiveLimit(limits, 'tokenBudget');
+  const tokenBudget = readTokenBudgetLimit(limits);
   return {
     ...(maxAgents !== undefined ? { maxAgents } : {}),
     ...(maxConcurrency !== undefined ? { maxConcurrency } : {}),

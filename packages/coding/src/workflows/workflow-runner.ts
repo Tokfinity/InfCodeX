@@ -133,6 +133,31 @@ function clampEffectiveLimit(
   return Math.min(manifestLimit, hostLimit);
 }
 
+/**
+ * tokenBudget clamp — unlike the agent/concurrency count clamp (`clampLimit`,
+ * which floors at 1), a tokenBudget of 0 / null / negative means "NO token
+ * limit" (unbounded), the same as omitting the field. A host should be able to
+ * express "unlimited" with an explicit value instead of relying on the field
+ * being absent, which is fragile across multiple launch paths. Positive values
+ * are floored to an integer and capped at the system ceiling.
+ */
+function clampTokenBudget(value: number | undefined, hardCap: number): number | undefined {
+  if (value == null || !Number.isFinite(value) || value <= 0) return undefined;
+  return Math.min(Math.floor(value), hardCap);
+}
+
+function clampEffectiveTokenBudget(
+  manifestValue: number | undefined,
+  hostValue: number | undefined,
+  hardCap: number,
+): number | undefined {
+  const manifestLimit = clampTokenBudget(manifestValue, hardCap);
+  const hostLimit = clampTokenBudget(hostValue, hardCap);
+  if (manifestLimit === undefined) return hostLimit;
+  if (hostLimit === undefined) return manifestLimit;
+  return Math.min(manifestLimit, hostLimit);
+}
+
 export function clampWorkflowLimits(
   meta: WorkflowMeta,
   hostPolicy?: WorkflowHostPolicy,
@@ -155,7 +180,7 @@ export function clampWorkflowLimits(
     declaredConcurrency.length === 0
       ? concurrencyCap
       : Math.min(concurrencyCap, ...declaredConcurrency);
-  const tokenBudget = clampEffectiveLimit(
+  const tokenBudget = clampEffectiveTokenBudget(
     meta.tokenBudget,
     hostPolicy?.tokenBudget,
     SYSTEM_WORKFLOW_LIMITS.tokenBudget,

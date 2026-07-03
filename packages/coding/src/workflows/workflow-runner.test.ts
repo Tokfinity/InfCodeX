@@ -128,6 +128,24 @@ describe('buildApprovalSummary', () => {
     expect(summary.maxAgents).toBe(8);
     expect(summary.name).toBe('parallel-investigation');
   });
+
+  it('treats tokenBudget: 0 as unbounded (not clamped to 1)', () => {
+    const base = { name: 'tb', description: 'token budget', phases: [] };
+    // 0 / negative → unbounded (null in the summary), matching an omitted field.
+    expect(buildApprovalSummary({ meta: { ...base, tokenBudget: 0 }, run: async () => null }).tokenBudget).toBeNull();
+    expect(buildApprovalSummary({ meta: { ...base, tokenBudget: -5 }, run: async () => null }).tokenBudget).toBeNull();
+    // omitted → unbounded (unchanged).
+    expect(buildApprovalSummary({ meta: base, run: async () => null }).tokenBudget).toBeNull();
+    // a positive value is honored (and capped at the system ceiling).
+    expect(buildApprovalSummary({ meta: { ...base, tokenBudget: 50_000 }, run: async () => null }).tokenBudget).toBe(50_000);
+    expect(buildApprovalSummary({ meta: { ...base, tokenBudget: 999_999_999 }, run: async () => null }).tokenBudget).toBe(200_000);
+  });
+
+  it('host-policy tokenBudget: 0 does not clamp an authored budget to 1', () => {
+    const module = { meta: { name: 'tb2', description: 'x', phases: [], tokenBudget: 40_000 }, run: async () => null };
+    // Host passes 0 meaning "no host ceiling" → the authored 40k survives.
+    expect(buildApprovalSummary(module, { tokenBudget: 0 }).tokenBudget).toBe(40_000);
+  });
 });
 
 describe('runWorkflowModule', () => {
@@ -578,7 +596,9 @@ describe('runWorkflowModule', () => {
     expect(buildApprovalSummary(module)).toMatchObject({
       maxAgents: 1,
       maxConcurrency: 1,
-      tokenBudget: 1,
+      // tokenBudget: -1 (and 0) now means "unbounded" (null), not a 1-token cap —
+      // count limits still floor at 1, but a token budget of 0/negative = no cap.
+      tokenBudget: null,
     });
   });
 

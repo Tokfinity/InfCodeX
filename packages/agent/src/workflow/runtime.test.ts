@@ -20,6 +20,20 @@ import {
   type WorkflowSpawnAgentInput,
   type WorkflowTaskResult,
 } from './index.js';
+import { normalizeWorkflowLimits } from './runtime.js';
+
+describe('normalizeWorkflowLimits — tokenBudget 0 means unbounded', () => {
+  it('treats tokenBudget 0 / negative as unbounded (omitted), not an error', () => {
+    // Unlike the count limits, tokenBudget 0 is a valid "no cap" — it must NOT throw.
+    expect(normalizeWorkflowLimits({ tokenBudget: 0 }).tokenBudget).toBeUndefined();
+    expect(normalizeWorkflowLimits({ tokenBudget: -1 }).tokenBudget).toBeUndefined();
+    expect(normalizeWorkflowLimits({ tokenBudget: 50_000 }).tokenBudget).toBe(50_000);
+  });
+  it('still rejects a non-positive count limit (maxAgents/maxConcurrency)', () => {
+    expect(() => normalizeWorkflowLimits({ maxAgents: 0 })).toThrow(WorkflowLimitError);
+    expect(() => normalizeWorkflowLimits({ maxConcurrency: 0 })).toThrow(WorkflowLimitError);
+  });
+});
 
 /** Fake backend: each spawn resolves wait after a tick; tracks the max
  *  number of simultaneously in-flight agents so concurrency caps can be
