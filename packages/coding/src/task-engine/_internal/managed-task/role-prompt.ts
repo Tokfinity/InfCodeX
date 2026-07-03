@@ -29,7 +29,7 @@ import type {
 } from '../../../types.js';
 // FEATURE_193 (v0.7.43): MANAGED_TASK_CONTRACT_BLOCK, MANAGED_TASK_VERDICT_BLOCK,
 // and isRepoIntelligenceWorkingToolName removed — only used by deleted V1 cases.
-import { buildWorkerInstructions } from '../../../agents/worker-role-prompt.js';
+import { buildWorkerInstructions, orchestrationDefault } from '../../../agents/worker-role-prompt.js';
 import {
   formatFullSkillSection,
   formatRoleRoundSummarySection,
@@ -294,6 +294,13 @@ export function createRolePrompt(
         verification,
         isResumeAfterReviseFailure,
       );
+      // FEATURE_248 (v0.7.59) — AMAW mode-level orchestration directive. Spliced
+      // ONLY when `run_workflow` is on the tool surface (agentMode === 'amaw');
+      // omitted for plain AMA / SA so the directive never teaches a tool that
+      // isn't available. Kept out of `buildWorkerInstructions` (shared by both
+      // modes) precisely so it cannot leak. The array's `.filter(Boolean)` below
+      // drops the `undefined` when the gate is false.
+      const amawOrchestrationAvailable = rolePromptContext?.amawOrchestrationAvailable === true;
       return [
         // Worker is its own role announcement, but we still emit the
         // canonical decisionSummary + originalTask / agent / contract
@@ -313,6 +320,10 @@ export function createRolePrompt(
         parallelBatchGuidance,
         workerSkillSection,
         previousRoleSummarySection,
+        // FEATURE_248 (v0.7.59) — AMAW-only orchestration disposition, read
+        // immediately before PLAN-FIRST (the first block of workerInstructions)
+        // so the model weighs orchestrate-vs-solo while still forming its plan.
+        amawOrchestrationAvailable ? orchestrationDefault : undefined,
         // The standalone Worker fragment (plan-first contract + scope
         // commitment + mutation discipline + dispatch RULE A/B/C +
         // handoff rules) lives here between context blocks and the shared

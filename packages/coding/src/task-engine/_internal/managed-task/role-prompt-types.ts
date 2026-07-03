@@ -101,6 +101,18 @@ export interface ManagedRolePromptContext {
    * re-rendered per LLM call.
    */
   teamModeSection?: string;
+  /**
+   * FEATURE_248 (v0.7.59) — true when this turn's Worker has `run_workflow`
+   * on its tool surface (`agentMode === 'amaw'`, including AMA `/workflow`-
+   * elevated turns). Drives whether the `ORCHESTRATION DEFAULT` standing
+   * directive (`worker-role-prompt.ts`) is spliced into the Worker system
+   * prompt. Read only by the `case 'worker':` branch in `createRolePrompt`;
+   * omitted / false drops the directive — this is the mechanism that keeps it
+   * from leaking into plain AMA, where `run_workflow` is not available
+   * (same `options.agentMode` source as `tool-execution-context.ts`). Default
+   * omitted preserves today's AMA prompt byte-for-byte.
+   */
+  amawOrchestrationAvailable?: boolean;
 }
 
 // FEATURE_193 / ADR-043: isReviewEvidenceTask (a Scout-era review-evidence

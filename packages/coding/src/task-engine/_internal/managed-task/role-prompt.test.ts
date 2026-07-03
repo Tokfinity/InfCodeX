@@ -468,3 +468,74 @@ describe('FEATURE_125 — teamModeSection wiring across roles', () => {
     expect(rendered).not.toContain('Other active KodaX sessions');
   });
 });
+
+// FEATURE_248 (v0.7.59) — AMAW mode-level orchestration directive gating.
+// The `ORCHESTRATION DEFAULT` standing directive is spliced into the Worker
+// system prompt ONLY when `run_workflow` is on the tool surface
+// (`amawOrchestrationAvailable === true`, i.e. agentMode === 'amaw'). It must
+// NOT appear for plain AMA (field omitted / false) — that is the leak-proof
+// guarantee, since AMA has no `run_workflow` tool. It must also read BEFORE the
+// PLAN-FIRST CONTRACT so the model weighs orchestrate-vs-solo while forming its
+// plan, and must NOT downgrade the run_workflow/dispatch equivalence to a
+// run_workflow-only mandate.
+describe('FEATURE_248 — AMAW mode-level orchestration directive gating', () => {
+  function renderWorker(
+    overrides: Partial<ManagedRolePromptContext> = {},
+  ): string {
+    const decision = buildFallbackRoutingDecision(userQuestion);
+    const ctx: ManagedRolePromptContext = {
+      ...buildContext({ provider: 'p', model: 'm' }),
+      ...overrides,
+    };
+    return createRolePrompt(
+      'worker',
+      userQuestion,
+      decision,
+      undefined,
+      undefined,
+      'kodax/role/worker',
+      undefined,
+      ctx,
+      undefined,
+      false,
+    );
+  }
+
+  it('splices ORCHESTRATION DEFAULT when amawOrchestrationAvailable is true', () => {
+    const rendered = renderWorker({ amawOrchestrationAvailable: true });
+    expect(rendered).toContain('ORCHESTRATION DEFAULT:');
+    // tier-1 (orchestrate-vs-solo) + tier-2 (which primitive) both present.
+    expect(rendered).toContain('default to orchestrating multiple agents that cross-check each other');
+    expect(rendered).toContain('`run_workflow` is the first thing to reach for');
+    // Over-activation guard sentence.
+    expect(rendered).toContain('Solo, single-threaded work stays the right call');
+  });
+
+  it('omits ORCHESTRATION DEFAULT for plain AMA (field omitted) — leak-proof guarantee', () => {
+    const rendered = renderWorker();
+    expect(rendered).not.toContain('ORCHESTRATION DEFAULT');
+    // Sanity: the rest of the Worker prompt still renders (clean undefined drop).
+    expect(rendered).toContain('PLAN-FIRST CONTRACT (FEATURE_114 v0.7.36');
+    expect(rendered).toContain('## Environment');
+  });
+
+  it('omits ORCHESTRATION DEFAULT when explicitly false (AMA parity)', () => {
+    const rendered = renderWorker({ amawOrchestrationAvailable: false });
+    expect(rendered).not.toContain('ORCHESTRATION DEFAULT');
+  });
+
+  it('places the directive before PLAN-FIRST CONTRACT so it is read while forming the plan', () => {
+    const rendered = renderWorker({ amawOrchestrationAvailable: true });
+    const directiveIdx = rendered.indexOf('ORCHESTRATION DEFAULT:');
+    const planFirstIdx = rendered.indexOf('PLAN-FIRST CONTRACT (FEATURE_114 v0.7.36');
+    expect(directiveIdx).toBeGreaterThanOrEqual(0);
+    expect(planFirstIdx).toBeGreaterThanOrEqual(0);
+    expect(directiveIdx).toBeLessThan(planFirstIdx);
+  });
+
+  it('keeps dispatch_child_task as an equally-valid orchestration path (no run_workflow-only mandate)', () => {
+    const rendered = renderWorker({ amawOrchestrationAvailable: true });
+    expect(rendered).toContain('`dispatch_child_task` fan-out is an equally valid way to satisfy this default');
+    expect(rendered).toContain('not which tool you dispatched it through');
+  });
+});

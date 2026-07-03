@@ -1152,6 +1152,15 @@ async function runManagedTaskViaRunnerInner(
       isResumeAfterReviseFailure: role === 'worker'
         ? pendingFailedResetRef.current === true
         : undefined,
+      // FEATURE_248 (v0.7.59) — AMAW mode-level orchestration directive gate.
+      // Reads the SAME `options.agentMode` field that `buildWorkflowToolHost`
+      // (tool-execution-context.ts:302) uses to decide whether `run_workflow`
+      // is on the tool surface — the same `options` object is passed to
+      // `buildToolExecutionContext` at line 716 — so the ORCHESTRATION DEFAULT
+      // directive appears iff the tool is available, and cannot leak into plain
+      // AMA (`agentMode === 'ama'`) or SA. Read only by the `case 'worker':`
+      // branch in `createRolePrompt`.
+      amawOrchestrationAvailable: options.agentMode === 'amaw',
     };
     // v0.7.26 C4 parity — surface the caller's skill invocation + the
     // on-disk artefact paths so role prompts can quote a stable filesystem

@@ -41,6 +41,33 @@ import { EXECUTION_GUIDANCE } from '../prompts/execution-guidance.js';
 export const WORKER_AGENT_NAME = 'kodax-worker';
 
 /**
+ * AMAW mode-level orchestration directive.
+ *
+ * A standing, session-level disposition — the same mechanism the reference
+ * "ultracode" mode uses to activate orchestration readily — NOT a tool-description
+ * clause. The prior tool-level lever (run_workflow description reframe + amaw-gated
+ * dispatch nudge) was eval-falsified: models already fan out via `dispatch_child_task`
+ * and the tool-description guidance is only read once the model is already weighing
+ * the tool. This block is read every Worker turn, before the model commits to a solo
+ * plan, so it can shift the orchestrate-vs-solo default itself.
+ *
+ * Kept OUT of `buildWorkerInstructions` (shared by AMA + AMAW) and spliced by
+ * `role-prompt.ts`'s `case 'worker':` ONLY when `run_workflow` is on the tool surface
+ * (`ManagedRolePromptContext.amawOrchestrationAvailable`, i.e. `agentMode === 'amaw'`).
+ * That gate reads the same `options.agentMode` field as `buildWorkflowToolHost`
+ * (`tool-execution-context.ts`), so the directive can never appear on a turn where
+ * `run_workflow` is absent — it cannot leak into plain AMA. See docs/features/v0.7.59.md.
+ *
+ * The string body carries no version metadata (ADR-033 §5); tier-1 (orchestrate-vs-solo)
+ * and tier-2 (which primitive) are single-concept sentences, never fused (ADR-033 §2).
+ */
+export const orchestrationDefault = [
+  'ORCHESTRATION DEFAULT: for substantive work — a multi-file investigation, a design or architecture decision, a change that benefits from a second opinion, or anything where a wrong conclusion is costly to unwind — default to orchestrating multiple agents that cross-check each other rather than working it alone end to end.',
+  "`run_workflow` is the first thing to reach for when the task's shape fits a bounded workflow: it gives you structured per-child output and same-session resume that ad-hoc fan-out does not. When the task is more exploratory or the fan-out is simple parallel investigation, a `dispatch_child_task` fan-out is an equally valid way to satisfy this default — what matters is that the work gets cross-checked by more than one agent, not which tool you dispatched it through.",
+  'Solo, single-threaded work stays the right call for conversational turns, single-line or typo-scale edits, and tasks you have already verified are correct.',
+].join('\n');
+
+/**
  * Pure builder. Returns the system prompt the role-prompt entry point
  * splices in for the V2 Worker (the only active AMA role after
  * FEATURE_193). Intentionally context-light — the runner-driven path

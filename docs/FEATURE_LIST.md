@@ -14,10 +14,10 @@
 | Current package version | `@kodax-ai/kodax@0.7.58` (published to npm, 2026-07-02) |
 | Workspace baseline | `llm / agent / coding / repl` 4 packages |
 | Total tracked features | `33` |
-| InProgress | `0` |
+| InProgress | `1` |
 | Planned | `15` |
 | Completed | `18` |
-| Tracked feature IDs | `007, 030, 093, 105, 108, 113, 139, 174, 211, 221, 224, 225, 228, 229, 230, 231, 232, 233, 234, 235, 236, 237, 238, 239, 240, 241, 242, 243, 244, 245, 246, 247, 248` |
+| Tracked feature IDs | `007, 030, 093, 105, 108, 113, 139, 174, 211, 221, 224, 225, 228, 229, 230, 231, 232, 233, 234, 235, 236, 237, 238, 239, 240, 241, 242, 243, 244, 245, 246, 247, 248, 249` |
 | Archive cutoff | Shipped / canceled / absorbed / shelved items through `v0.7.49` are archived. |
 
 ### 一览表
@@ -25,8 +25,8 @@
 | Status | Count | Feature IDs | Next checkpoint |
 |---|---:|---|---|
 | Completed | 18 | `247, 246, 245, 243, 242, 241, 233, 240, 239, 224, 221, 174, 211, 237, 229, 230, 234, 236` | `245, 246, 247, 221` released v0.7.58 (2026-07-02); `233, 241, 242, 243` released v0.7.57; `239, 240` released v0.7.56; `224` released v0.7.54; `174, 211, 237` v0.7.53; `229` v0.7.50; `230, 234, 236` v0.7.51 |
-| InProgress | 0 | `-` | No active implementation slot after v0.7.57 release sync |
-| Planned, near-term | 10 | `248, 228, 244, 231, 235, 238, 232, 105, 108, 225` | `v0.7.59` -> `v0.7.81` |
+| InProgress | 1 | `248` | `248` re-scoped in `v0.7.59` (mode-level AMAW orchestration directive; A+B' reverted) |
+| Planned, near-term | 10 | `228, 244, 249, 231, 235, 238, 232, 105, 108, 225` | `v0.7.60` -> `v0.7.81` |
 | Planned, v0.8.x | 5 | `007, 030, 093, 113, 139` | `v0.8.5+` |
 
 > v0.7.49 / v0.7.50 workflow split：`FEATURE_217` remains the human-facing workflow mode. Manual testing reopened required UI/UX and reliability deltas inside [v0.7.49](features/v0.7.49.md#13-v0749-completion-delta): bounded live progress with phase index / running 智能体 wording / preserved progress row / elapsed time / completed-child token usage, localized assistant-style launch notes, result-bearing child-agent digests or folded long-report notices, non-`info` agentic transcript, clear separation between `finished/spawned` progress and lifetime `maxAgents` cap, final synthesis, generated final-result contract lint, implicit `tokenBudget` stripping, generated task-command crash hardening, tighter AMAW invocation policy, wait timeout propagation, no default total workflow wall-clock timeout, terminal cleanup for un-awaited children, accurate template read/write metadata, capsule min-version preflight, manual run cleanup controls, and the closed minimal saved-workflow named reuse delta (`/workflow <savedName>` plus `/workflow rerun <runId|savedName>` with help/completion). `FEATURE_229` in v0.7.50 is the platform layer: it standardizes the same process as agent-layer snapshot/events, SDK subscription/polling, Space-style host policy and lifecycle controls, terminal-state helpers, workflow identity/lifecycle controls beyond named reuse (`display name | revise | rename | revision provenance`), REPL-as-consumer rendering, conservative retention, and durable source/provenance/resultSummary persistence; it is not the first implementation of the user-visible UX.
@@ -40,7 +40,7 @@
 | `v0.7.56` | `0` |
 | `v0.7.57` | `0` |
 | `v0.7.59` | `1` |
-| `v0.7.60` | `2` |
+| `v0.7.60` | `3` |
 | `v0.7.63` | `1` |
 | `v0.7.66` | `1` |
 | `v0.7.69` | `1` |
@@ -66,7 +66,24 @@
 
 ## 进行中的 Feature
 
-No active feature is currently in implementation after the `v0.7.57` release sync.
+| ID | Title | Category | Priority | Planned | Design |
+|---|---|---|---|---|---|
+| `248` | AMAW Mode-Level Orchestration Directive | Enhancement / Workflow Activation | High | `v0.7.59` | [v0.7.59](features/v0.7.59.md#feature_248-amaw-mode-level-orchestration-directive) |
+
+> `248` narrowed-SHIP 2026-07-03: AMAW-gated, mode-level `ORCHESTRATION DEFAULT`
+> standing directive in the Worker system prompt (mirrors the ultracode mechanism),
+> leak-closed via a new optional `ManagedRolePromptContext.amawOrchestrationAvailable`
+> field. Layer-1 green (role-prompt.test.ts, 28 tests). Eval history: the old
+> tool-level lever (A run_workflow desc + B' dispatch nudge) was eval-falsified and
+> reverted; the mode-level directive floored 0% on a mid-task real-session replay, but
+> a deep multi-agent investigation found that fixture tested the WRONG moment (mid-task
+> defection, not the turn-0 decision ultracode actually applies). The turn-0 eval
+> (`workflow-activation-turn0.eval.ts`, 4 aliases) then showed a real lift on the same
+> a2aDesign task (mid-task 0% -> turn-0 baseline 8% -> proposed 33%, +25%) with models
+> causally citing the directive ("按照编排默认原则... 让多个 agent 交叉验证"). Shipped
+> with acceptance NARROWED to task-inception activation; mid-task re-architecture is a
+> documented non-goal. Code + prompt shipped as-is (narrowing was docs-only). See
+> docs/features/v0.7.59.md §6/§6.1.
 
 ---
 
@@ -74,9 +91,9 @@ No active feature is currently in implementation after the `v0.7.57` release syn
 
 | ID | Title | Category | Priority | Planned | Design |
 |---|---|---|---|---|---|
-| `248` | AMAW Complexity-Triggered run_workflow Auto-Activation | Enhancement / Workflow Activation | High | `v0.7.59` | [v0.7.59](features/v0.7.59.md#feature_248-amaw-complexity-triggered-run_workflow-auto-activation) |
 | `228` | Unified Memory Control Plane + Memory Governance | Core / Memory + Governance | High | `v0.7.60` | [v0.7.60](features/v0.7.60.md#feature_228-unified-memory-control-plane--memory-governance) |
 | `244` | Repo Intelligence Graph-Only Index for Cold Module Queries | Core / Repo Intelligence + Performance | Medium | `v0.7.60` | [v0.7.60](features/v0.7.60.md#feature_244-repo-intelligence-graph-only-index-for-cold-module-queries) |
+| `249` | AMA Natural-Language Workflow Activation | Enhancement / Workflow Activation | Medium | `v0.7.60` | [v0.7.60](features/v0.7.60.md#feature_249-ama-natural-language-workflow-activation) |
 | `235` | Draft Workflow — Generate-without-Run / Review-before-Start | Core / Workflow Lifecycle | Medium | `v0.7.66` | [v0.7.66](features/v0.7.66.md#feature_235-draft-workflow--generate-without-run--review-before-start) |
 | `238` | Workflow Learning Carrier + Workflow Handoff Inbox | Core / Workflow + Self-Improvement | Medium | `v0.7.69` | [v0.7.69](features/v0.7.69.md#feature_238-workflow-learning-carrier--workflow-handoff-inbox) |
 | `105` | Verifiable Advisor Consult Primitive | Internal / Core | High | `v0.7.75` | [v0.7.75](features/v0.7.75.md#feature_105-verifiable-advisor-consult-primitive) |
