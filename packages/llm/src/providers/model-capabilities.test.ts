@@ -64,20 +64,30 @@ describe('built-in provider model capabilities (no API key required)', () => {
   });
 
   it('honors a models[] override even when the model IS the provider default (R3 regression)', () => {
-    // zhipu-coding + zai-coding both DEFAULT to glm-5.2, which carries its own
-    // 1M/131K override in models[]. The pre-fix resolver used a bare default
-    // descriptor and returned the 200K/16K provider defaults (the "context window
-    // shows 200K" bug). getEffective* already returned the right values; these
-    // metadata resolvers must now agree.
-    for (const provider of ['zhipu-coding', 'zai-coding'] as const) {
+    // Invariant: ANY provider whose default model ALSO has a models[] entry must
+    // return that entry's override, not the bare provider defaults. zhipu-coding,
+    // zai-coding AND ark-coding all default to glm-5.2 (which declares a 1M window).
+    // The pre-fix resolver used a bare default descriptor and returned the 200K/16K
+    // provider defaults (the "context window shows 200K" bug); getEffective* already
+    // returned the right values, so these metadata resolvers must now agree.
+    for (const { provider, maxOut } of [
+      { provider: 'zhipu-coding', maxOut: 131_072 },
+      { provider: 'zai-coding', maxOut: 131_072 },
+      { provider: 'ark-coding', maxOut: 128_000 },
+    ] as const) {
       const caps = getModelCapabilities(provider, 'glm-5.2');
       expect(caps?.contextWindow, `${provider} ctx`).toBe(1_000_000);
-      expect(caps?.maxOutputTokens, `${provider} maxOut`).toBe(131_072);
+      expect(caps?.maxOutputTokens, `${provider} maxOut`).toBe(maxOut);
       expect(caps?.reasoningCapability, `${provider} reasoning`).toBe('native-effort');
       // The override does not disturb the default flag — glm-5.2 is still the default.
       expect(caps?.isDefault, `${provider} isDefault`).toBe(true);
       // resolveModelCapabilities (the unified dispatcher hosts call) agrees.
       expect(resolveModelCapabilities(provider, 'glm-5.2')?.contextWindow).toBe(1_000_000);
+      // C3: getProviderModelDescriptors must NOT double-list the self-colliding
+      // default — glm-5.2 appears exactly once, carrying its override.
+      const glm52Descriptors = getProviderModelDescriptors(provider).filter((d) => d.id === 'glm-5.2');
+      expect(glm52Descriptors, `${provider} glm-5.2 descriptor count`).toHaveLength(1);
+      expect(glm52Descriptors[0]?.contextWindow).toBe(1_000_000);
     }
   });
 
@@ -102,17 +112,22 @@ describe('built-in provider model capabilities (no API key required)', () => {
     });
   });
 
-  it('exposes Ark Coding per-model context windows (glm-5.2=1M, k2.7-code=256K, M3=1M, v4-pro=1M, v4-flash=1M)', () => {
-    // 2026-06 (late): Ark's official Coding Plan catalog trimmed to
-    // exactly these 5 models. Earlier lineup included legacy Kimi K2.6
-    // / MiniMax M2.7 / doubao × 3 that Ark still silently serves but
-    // has retired from the public catalog. glm-5.1 / glm-4.7 /
-    // deepseek-v3.2 return UnsupportedModel 404.
+  it('exposes Ark Coding per-model context windows (glm-5.2=1M, k2.7-code=256K, M3=1M, M2.7=204K, v4=1M, doubao=256K)', () => {
+    // 2026-07-03 catalog refresh: Ark retired glm-5.1 / glm-4.7 /
+    // deepseek-v3.2 (wire returns UnsupportedModel 404). GLM-5.2
+    // promoted to default (wire alias glm-latest). Doubao Seed Code
+    // (next-gen, no "2.0" suffix) added.
     expect(getModelCapabilities('ark-coding', 'glm-5.2')?.contextWindow).toBe(1_000_000);
     expect(getModelCapabilities('ark-coding', 'kimi-k2.7-code')?.contextWindow).toBe(256_000);
+    expect(getModelCapabilities('ark-coding', 'kimi-k2.6')?.contextWindow).toBe(256_000);
     expect(getModelCapabilities('ark-coding', 'MiniMax-M3')?.contextWindow).toBe(1_000_000);
+    expect(getModelCapabilities('ark-coding', 'MiniMax-M2.7')?.contextWindow).toBe(204_800);
     expect(getModelCapabilities('ark-coding', 'deepseek-v4-pro')?.contextWindow).toBe(1_000_000);
     expect(getModelCapabilities('ark-coding', 'deepseek-v4-flash')?.contextWindow).toBe(1_000_000);
+    expect(getModelCapabilities('ark-coding', 'doubao-seed-2.0-code')?.contextWindow).toBe(256_000);
+    expect(getModelCapabilities('ark-coding', 'doubao-seed-2.0-pro')?.contextWindow).toBe(256_000);
+    expect(getModelCapabilities('ark-coding', 'doubao-seed-2.0-lite')?.contextWindow).toBe(256_000);
+    expect(getModelCapabilities('ark-coding', 'doubao-seed-code')?.contextWindow).toBe(256_000);
   });
 
   it('returns undefined only for an unknown provider', () => {

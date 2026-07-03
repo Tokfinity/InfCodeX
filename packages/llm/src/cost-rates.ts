@@ -99,17 +99,22 @@ export const DEFAULT_COST_RATES: Readonly<Record<string, Readonly<Record<string,
     // accounting; real-world cost is the Lite/Pro membership fee plus
     // sliding-window quota. Listed at ~10% of the standard pay-per-token
     // Ark API rates per the Plan announcement.
-    // 2026-06 (late) catalog refresh — Ark's official Coding Plan
-    // list is exactly these 5 models. Older entries (glm-5.1 /
-    // glm-4.7 / deepseek-v3.2 / kimi-k2.6 / MiniMax-M2.7 / doubao
-    // ×3) either 404 with UnsupportedModel or are legacy-served but
-    // dropped from the official catalog; not included here so
-    // cost-tracker only accounts models Ark still lists.
+    // 2026-07-03 catalog refresh: Ark retired glm-5.1 / glm-4.7 /
+    // deepseek-v3.2 (wire returns UnsupportedModel 404). GLM-5.2
+    // promoted to default (with wire alias glm-latest). Doubao Seed Code
+    // (no "2.0" suffix) added as the next-gen coding variant on the
+    // Doubao route (probe-max-tokens.mjs green).
     'glm-5.2': { inputPer1M: 0.005, outputPer1M: 0.015 },
     'kimi-k2.7-code': { inputPer1M: 0.005, outputPer1M: 0.015 },
+    'kimi-k2.6': { inputPer1M: 0.005, outputPer1M: 0.015 },
     'MiniMax-M3': { inputPer1M: 0.005, outputPer1M: 0.015 },
+    'MiniMax-M2.7': { inputPer1M: 0.005, outputPer1M: 0.015 },
     'deepseek-v4-pro': { inputPer1M: 0.005, outputPer1M: 0.015 },
     'deepseek-v4-flash': { inputPer1M: 0.005, outputPer1M: 0.015 },
+    'doubao-seed-2.0-code': { inputPer1M: 0.005, outputPer1M: 0.015 },
+    'doubao-seed-2.0-pro': { inputPer1M: 0.005, outputPer1M: 0.015 },
+    'doubao-seed-2.0-lite': { inputPer1M: 0.005, outputPer1M: 0.015 },
+    'doubao-seed-code': { inputPer1M: 0.005, outputPer1M: 0.015 },
   },
   // CLI bridge providers - no direct cost (user pays their own CLI usage)
   'gemini-cli': {},

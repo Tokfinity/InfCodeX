@@ -63,9 +63,9 @@ describe('createRolePrompt — runtime identity in workspace section', () => {
   });
 
   it('omits Provider line when provider is absent', () => {
-    const rendered = callWorker(buildContext({ model: 'glm-5.1' }));
+    const rendered = callWorker(buildContext({ model: 'glm-5.2' }));
     expect(rendered).not.toMatch(/^Provider:/m);
-    expect(rendered).toContain('Model: glm-5.1');
+    expect(rendered).toContain('Model: glm-5.2');
   });
 
   it('omits Model line when model is absent', () => {

@@ -984,7 +984,7 @@ await runInkInteractiveMode({ provider: 'zhipu-coding', effort: 'auto' });
 | minimax-coding | `MINIMAX_CODING_API_KEY` | Native | MiniMax-M2.7 (`MiniMax-M3` Frontier Coding, native multimodal + 1M ctx, plus `MiniMax-M2.7-highspeed` via `/model`) |
 | mimo | `MIMO_API_KEY` | Native | mimo-v2.5-pro (Xiaomi MiMo pay-per-token, Anthropic-compat) |
 | mimo-coding | `MIMO_CODING_API_KEY` | Native | mimo-v2.5-pro (Xiaomi Token Plan, Anthropic-compat) |
-| ark-coding | `ARK_CODING_API_KEY` | Native | glm-5.2 (Volcengine Ark Coding Plan — 5 routes: GLM-5.2 · Kimi K2.7 Code · MiniMax M3 · DeepSeek V4 Pro / V4 Flash) |
+| ark-coding | `ARK_CODING_API_KEY` | Native | glm-5.2 (Volcengine Ark Coding Plan — GLM-5.2 (alias: `glm-latest`) · Kimi K2.7 Code / K2.6 · MiniMax M3 / M2.7 · DeepSeek V4 Pro / V4 Flash · Doubao Seed 2.0 Code / Pro / Lite · Doubao Seed Code) |
 | deepseek | `DEEPSEEK_API_KEY` | Native | deepseek-v4-flash (`deepseek-v4-pro` via `/model`) |
 | gemini-cli | `GEMINI_API_KEY` | Prompt-only / CLI bridge | (via gemini CLI) |
 | codex-cli | `OPENAI_API_KEY` | Prompt-only / CLI bridge | (via codex CLI) |

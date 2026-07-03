@@ -1,6 +1,6 @@
 {
   "version": 1,
-  "updatedAt": "2026-06-25",
+  "updatedAt": "2026-07-03",
   "providers": {
     "anthropic": {
       "apiKeyEnv": "ANTHROPIC_API_KEY",
@@ -718,7 +718,7 @@
       "models": [
         {
           "id": "glm-5.2",
-          "displayName": "GLM-5.2",
+          "displayName": "GLM-5.2 (alias: glm-latest)",
           "contextWindow": 1000000,
           "maxOutputTokens": 128000,
           "reasoningCapability": "native-effort",
@@ -765,6 +765,27 @@
           }
         },
         {
+          "id": "kimi-k2.6",
+          "displayName": "Kimi K2.6",
+          "contextWindow": 256000,
+          "reasoningProfile": {
+            "reasoningPreset": "kimi-hybrid-toggle",
+            "effortStrategy": "provider-toggle",
+            "thinkingStrategy": "provider-toggle",
+            "supportedEfforts": [
+              { "value": "none", "description": "Disable thinking" },
+              { "value": "minimal", "description": "Disable thinking", "isUserVisible": false },
+              { "value": "low", "description": "Enable thinking" },
+              { "value": "medium", "description": "Enable thinking", "isDefault": true },
+              { "value": "high", "description": "Enable thinking" },
+              { "value": "xhigh", "description": "Enable thinking" },
+              { "value": "max", "description": "Enable thinking" }
+            ],
+            "disabledEfforts": ["none", "minimal"],
+            "supportsDisabledThinking": true
+          }
+        },
+        {
           "id": "MiniMax-M3",
           "displayName": "MiniMax M3 (Frontier Coding, 1M ctx)",
           "contextWindow": 1000000,
@@ -784,6 +805,23 @@
             "disabledEfforts": ["none", "minimal"],
             "supportsAdaptiveThinking": true,
             "supportsDisabledThinking": true
+          }
+        },
+        {
+          "id": "MiniMax-M2.7",
+          "displayName": "MiniMax M2.7",
+          "contextWindow": 204800,
+          "reasoningProfile": {
+            "reasoningPreset": "minimax-m2-always",
+            "effortStrategy": "prompt-only",
+            "supportedEfforts": [
+              { "value": "low", "description": "Thinking is always on" },
+              { "value": "medium", "description": "Thinking is always on", "isDefault": true },
+              { "value": "high", "description": "Thinking is always on" },
+              { "value": "xhigh", "description": "Thinking is always on" },
+              { "value": "max", "description": "Thinking is always on" }
+            ],
+            "localRejectEfforts": ["none", "minimal"]
           }
         },
         {
@@ -841,6 +879,34 @@
             "supportsReasoningEffort": true,
             "supportsDisabledThinking": true
           }
+        },
+        {
+          "id": "doubao-seed-2.0-code",
+          "displayName": "Doubao Seed 2.0 Code",
+          "contextWindow": 256000,
+          "reasoningCapability": "prompt-only",
+          "reasoningProfile": { "reasoningPreset": "none", "effortStrategy": "prompt-only" }
+        },
+        {
+          "id": "doubao-seed-2.0-pro",
+          "displayName": "Doubao Seed 2.0 Pro",
+          "contextWindow": 256000,
+          "reasoningCapability": "prompt-only",
+          "reasoningProfile": { "reasoningPreset": "none", "effortStrategy": "prompt-only" }
+        },
+        {
+          "id": "doubao-seed-2.0-lite",
+          "displayName": "Doubao Seed 2.0 Lite",
+          "contextWindow": 256000,
+          "reasoningCapability": "prompt-only",
+          "reasoningProfile": { "reasoningPreset": "none", "effortStrategy": "prompt-only" }
+        },
+        {
+          "id": "doubao-seed-code",
+          "displayName": "Doubao Seed Code (next-gen)",
+          "contextWindow": 256000,
+          "reasoningCapability": "prompt-only",
+          "reasoningProfile": { "reasoningPreset": "none", "effortStrategy": "prompt-only" }
         }
       ],
       "reasoningCapability": "native-toggle",

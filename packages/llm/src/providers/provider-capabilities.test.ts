@@ -328,21 +328,21 @@ describe('FEATURE_198 — provider-capabilities loader', () => {
       const a = getProviderSnapshots()['ark-coding'];
       expect(a.contextWindow).toBe(200000);
       expect(a.maxOutputTokens).toBe(32000);
-      // 2026-06 (late): Ark's official Coding Plan catalog is exactly
-      // 5 models. Legacy IDs (glm-5.1 / glm-4.7 / deepseek-v3.2 /
-      // kimi-k2.6 / MiniMax-M2.7 / doubao × 3) removed from the
-      // catalog and this cross-check accordingly.
+      // 2026-07-03 catalog refresh: retired glm-5.1 / glm-4.7 /
+      // deepseek-v3.2 (wire returns UnsupportedModel 404); GLM-5.2
+      // promoted to default with 1M/128K override (wire alias
+      // glm-latest); Doubao Seed Code (next-gen, no "2.0") added.
       const glm52 = a.models?.find((m) => m.id === 'glm-5.2');
       const v4pro = a.models?.find((m) => m.id === 'deepseek-v4-pro');
-      const v4flash = a.models?.find((m) => m.id === 'deepseek-v4-flash');
       const m3 = a.models?.find((m) => m.id === 'MiniMax-M3');
-      const k27 = a.models?.find((m) => m.id === 'kimi-k2.7-code');
+      const m27 = a.models?.find((m) => m.id === 'MiniMax-M2.7');
+      const seedCode = a.models?.find((m) => m.id === 'doubao-seed-code');
       expect(glm52?.contextWindow).toBe(1_000_000);
       expect(glm52?.maxOutputTokens).toBe(128_000);
       expect(v4pro?.contextWindow).toBe(1_000_000);
-      expect(v4flash?.contextWindow).toBe(1_000_000);
       expect(m3?.contextWindow).toBe(1_000_000);
-      expect(k27?.contextWindow).toBe(256_000);
+      expect(m27?.contextWindow).toBe(204_800);
+      expect(seedCode?.contextWindow).toBe(256_000);
     });
   });
 
