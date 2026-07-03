@@ -145,7 +145,8 @@ import { getUnlockedDeferredTools } from '../tools/deferred-tools.js';
 // CAP-028 / CAP-062 (`gracefulCompactDegradation`) is wired inside
 // `agent-runtime/middleware/compaction-orchestration.ts` since
 // FEATURE_100 P3.4c.
-import { shouldCompact } from '@kodax-ai/agent';
+import { shouldCompact, getCachedRejectedEfforts } from '@kodax-ai/agent';
+import { resolveWireEffort, resolveProviderModelDescriptors } from '@kodax-ai/llm';
 import { runCompactionLifecycle } from './middleware/compaction-orchestration.js';
 import { maybeContinueAfterMaxTokens } from './max-tokens-continuation.js';
 import { maybeAutoContinueManagedProtocol } from './managed-protocol-continue.js';
@@ -710,7 +711,31 @@ export async function runSubstrate(
       runtimeSessionState.modelSelection.model = turnState.currentModelOverride;
       turnState.runtimeThinkingLevel = preparedProviderState.reasoningMode;
       runtimeSessionState.thinkingLevel = turnState.runtimeThinkingLevel;
-      const effectiveProviderEffort = turnState.runtimeThinkingLevel ?? effectiveReasoningPlan.effort;
+      let effectiveProviderEffort = turnState.runtimeThinkingLevel ?? effectiveReasoningPlan.effort;
+      // FEATURE_222 (R5) — self-heal across turns. If this effort was hard-rejected
+      // on a prior turn (recorded in the capability cache by stream-handler-wiring),
+      // narrow to a legal one via the canonical resolver instead of re-issuing a
+      // request the provider will 400 again (the per-instance suppression does not
+      // survive the per-turn provider rebuild). No cached rejection for this effort
+      // → the branch is skipped and behavior is byte-identical.
+      //
+      // The rejection is recorded under the concrete resolved model the provider
+      // used (`modelOverride ?? config.model` in base.ts), so resolve the same
+      // concrete model here — otherwise a no-override turn would key the lookup
+      // under `undefined` and miss its own recorded rejection.
+      const rejectionModel =
+        turnState.currentModelOverride
+        ?? resolveProviderModelDescriptors(turnState.currentProviderName)[0]?.id;
+      const rejectedEfforts = getCachedRejectedEfforts(turnState.currentProviderName, rejectionModel);
+      if (effectiveProviderEffort !== undefined && rejectedEfforts.includes(effectiveProviderEffort)) {
+        const wire = resolveWireEffort({
+          provider: turnState.currentProviderName,
+          model: rejectionModel,
+          desiredEffort: effectiveProviderEffort,
+          rejectedEfforts,
+        });
+        effectiveProviderEffort = wire.effort ?? 'none';
+      }
       const effectiveProviderReasoning = {
         ...currentExecution.providerReasoning,
         enabled: effectiveProviderEffort !== 'none',

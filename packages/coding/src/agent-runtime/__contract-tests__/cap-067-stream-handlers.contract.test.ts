@@ -34,7 +34,17 @@ import type { KodaXEvents } from '../../types.js';
 import type { StableBoundaryTracker } from '../../resilience/stable-boundary.js';
 import type { StreamTimers } from '../stream-timers.js';
 
-import { buildStreamHandlers, type ExtensionEventEmitter } from '../stream-handler-wiring.js';
+// FEATURE_222 (R5): the record-site must auto-record a reasoning-effort
+// rejection into the runtime capability cache. Mock just that one agent export
+// (importActual preserves everything else buildStreamHandlers needs).
+const recordRejectedEffortMock = vi.fn();
+vi.mock('@kodax-ai/agent', async (importActual) => ({
+  ...(await importActual<typeof import('@kodax-ai/agent')>()),
+  recordRejectedEffort: (...args: unknown[]) => recordRejectedEffortMock(...args),
+}));
+
+const { buildStreamHandlers } = await import('../stream-handler-wiring.js');
+type ExtensionEventEmitter = import('../stream-handler-wiring.js').ExtensionEventEmitter;
 
 function fakeBoundaryTracker(): {
   tracker: StableBoundaryTracker;
@@ -194,6 +204,51 @@ describe('CAP-067: buildStreamHandlers — heartbeat semantics', () => {
     handlers.onHeartbeat!(false);
     expect(resetIdleTimer).toHaveBeenCalledOnce();
     expect(clearIdleTimer).not.toHaveBeenCalled();
+  });
+});
+
+describe('CAP-067: buildStreamHandlers — FEATURE_222 R5 reasoning-effort self-heal', () => {
+  it('auto-records a reasoning-effort rejection into the capability cache before forwarding', () => {
+    recordRejectedEffortMock.mockClear();
+    const { tracker } = fakeBoundaryTracker();
+    const { timers } = fakeTimers();
+    const onReasoningEffortRejected = vi.fn();
+    const handlers = buildStreamHandlers({
+      events: { onReasoningEffortRejected } as unknown as KodaXEvents,
+      boundaryTracker: tracker,
+      streamTimers: timers,
+      emitActiveExtensionEvent: vi.fn().mockResolvedValue(undefined) as unknown as ExtensionEventEmitter,
+      providerName: 'kimi-code',
+    });
+
+    const event = { provider: 'kimi-code', model: 'kimi-k2.7-code', effort: 'none' };
+    handlers.onReasoningEffortRejected!(event as never);
+
+    // Recorded first (runtime self-heal), regardless of whether a host wired the event.
+    expect(recordRejectedEffortMock).toHaveBeenCalledTimes(1);
+    expect(recordRejectedEffortMock.mock.calls[0]!.slice(0, 4)).toEqual([
+      'kimi-code',
+      'kimi-k2.7-code',
+      'none',
+      'observed',
+    ]);
+    // Consumer hook still forwarded.
+    expect(onReasoningEffortRejected).toHaveBeenCalledExactlyOnceWith(event);
+  });
+
+  it('still records even when the host does NOT wire onReasoningEffortRejected', () => {
+    recordRejectedEffortMock.mockClear();
+    const { tracker } = fakeBoundaryTracker();
+    const { timers } = fakeTimers();
+    const handlers = buildStreamHandlers({
+      events: {} as KodaXEvents,
+      boundaryTracker: tracker,
+      streamTimers: timers,
+      emitActiveExtensionEvent: vi.fn().mockResolvedValue(undefined) as unknown as ExtensionEventEmitter,
+      providerName: 'kimi-code',
+    });
+    handlers.onReasoningEffortRejected!({ provider: 'kimi-code', model: 'm', effort: 'minimal' } as never);
+    expect(recordRejectedEffortMock).toHaveBeenCalledTimes(1);
   });
 });
 

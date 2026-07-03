@@ -44,6 +44,7 @@ import type { StableBoundaryTracker } from '../resilience/stable-boundary.js';
 import type { ExtensionEventMap } from '../extensions/types.js';
 import type { StreamTimers } from './stream-timers.js';
 import { emitProviderRateLimit } from './event-emitter.js';
+import { recordRejectedEffort } from '@kodax-ai/agent';
 
 /** Generic extension-event emitter signature shared with `runtime.emitEvent` etc. */
 export type ExtensionEventEmitter = <TEvent extends keyof ExtensionEventMap>(
@@ -130,6 +131,12 @@ export function buildStreamHandlers(input: StreamHandlerWiringInput): StreamHand
     // Passive capability learning — forward a reasoning-effort rejection so the
     // REPL records it in the capability cache and narrows the ladder.
     onReasoningEffortRejected: (event) => {
+      // FEATURE_222 (R5) — record the hard rejection in the runtime capability
+      // cache unconditionally, so it survives across turns even for a host that
+      // does NOT wire onReasoningEffortRejected. The provider instance is rebuilt
+      // each turn (its in-instance suppression is lost), so without this the same
+      // rejected effort is re-sent every turn. Idempotent (dedupes).
+      recordRejectedEffort(event.provider, event.model, event.effort, 'observed', new Date().toISOString());
       events.onReasoningEffortRejected?.(event);
     },
     onHeartbeat: (pause) => {
