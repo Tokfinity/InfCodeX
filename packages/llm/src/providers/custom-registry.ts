@@ -246,10 +246,17 @@ export function getCustomProviderModelDescriptors(
 ): KodaXModelDescriptor[] | undefined {
   const config = customProviders.get(name);
   if (!config) return undefined;
-  const defaultEntry: KodaXModelDescriptor = { id: config.model };
-  const alternatives = (config.models ?? [])
-    .map((entry) => customDescriptorToFull(entry, config.protocol, config.supportsThinking))
-    .filter((m) => m.id !== config.model);
+  // When the default model ALSO has an entry in models[], use that entry (with its
+  // contextWindow / maxOutputTokens / displayName / reasoningProfile override) as the
+  // default descriptor instead of a bare `{id}` — otherwise a picker UI built on this
+  // list shows the default model with missing/wrong metadata while getCustomModelCapabilities
+  // reports the override. Mirrors the built-in getProviderModelDescriptors fix and the
+  // getCustomModelCapabilities descriptor-first precedence.
+  const full = (config.models ?? []).map((entry) =>
+    customDescriptorToFull(entry, config.protocol, config.supportsThinking),
+  );
+  const defaultEntry: KodaXModelDescriptor = full.find((m) => m.id === config.model) ?? { id: config.model };
+  const alternatives = full.filter((m) => m.id !== config.model);
   return [defaultEntry, ...alternatives];
 }
 

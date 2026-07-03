@@ -326,6 +326,41 @@ describe('custom provider model capabilities', () => {
     ]);
   });
 
+  it('uses the models[] override as the default descriptor when the custom default model has its own entry (R3 regression)', () => {
+    // Parity with getCustomModelCapabilities' descriptor-first precedence: when the
+    // default model also declares a models[] entry with overrides, the DEFAULT
+    // descriptor must carry those overrides (contextWindow / maxOutputTokens /
+    // displayName), not a bare {id}. Pre-fix the descriptor list returned a bare
+    // default while getCustomModelCapabilities returned the override — the two SDK
+    // surfaces disagreed for the same provider/model, so a picker UI built on the
+    // descriptor list showed missing metadata for the default model.
+    registerCustomProviders([
+      {
+        name: 'corp-gateway',
+        baseUrl: 'https://gw.example.com/v1',
+        apiKeyEnv: 'CORP_GATEWAY_API_KEY',
+        protocol: 'openai',
+        model: 'corp-default',
+        models: [
+          { id: 'corp-default', displayName: 'Corp Default', contextWindow: 1_000_000, maxOutputTokens: 131_072 },
+          { id: 'corp-alt', contextWindow: 64_000 },
+        ],
+        contextWindow: 200_000,
+        maxOutputTokens: 16_000,
+      },
+    ]);
+    const descriptors = getCustomProviderModelDescriptors('corp-gateway');
+    // Default still first, listed exactly once (not duplicated), carrying its override.
+    expect(descriptors?.map((d) => d.id)).toEqual(['corp-default', 'corp-alt']);
+    expect(descriptors?.[0]?.contextWindow).toBe(1_000_000);
+    expect(descriptors?.[0]?.maxOutputTokens).toBe(131_072);
+    expect(descriptors?.[0]?.displayName).toBe('Corp Default');
+    // The two SDK surfaces now agree for the default model.
+    const caps = getCustomModelCapabilities('corp-gateway', 'corp-default');
+    expect(caps?.contextWindow).toBe(descriptors?.[0]?.contextWindow);
+    expect(caps?.maxOutputTokens).toBe(descriptors?.[0]?.maxOutputTokens);
+  });
+
   it('maps custom provider reasoningPreset into effective reasoning metadata', () => {
     registerCustomProviders([
       {
