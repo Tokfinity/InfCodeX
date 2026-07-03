@@ -136,6 +136,75 @@ describe('toolSkill (claudecode-parity skill invocation)', () => {
     expect(result).not.toContain('[Tool Error]');
   });
 
+  it('routes a skill !`cmd` dynamic-context token through the host hook, not execSync (FEATURE_222)', async () => {
+    await writeSkillMd(
+      tempDir,
+      'project',
+      'kodax-test-dynctx-hook',
+      'Dynamic context skill',
+      'Result: !`echo hello-from-shell`',
+    );
+    const { getSkillRegistry } = await import('@kodax-ai/agent');
+    await getSkillRegistry(tempDir, {
+      projectPaths: [path.join(tempDir, 'project')],
+      userPaths: [],
+      pluginPaths: [],
+      builtinPath: path.join(tempDir, 'builtin'),
+    }).discover();
+
+    const calls: Array<{ command: string; cwd: string }> = [];
+    const result = await toolSkill({ skill: 'kodax-test-dynctx-hook' }, {
+      backups: new Map(),
+      executionCwd: tempDir,
+      skillDynamicContext: {
+        execute: async (command, cwd) => {
+          calls.push({ command, cwd });
+          return 'MEDIATED-BY-HOST';
+        },
+      },
+    });
+
+    // The host hook ran with the raw command; its output replaced the token.
+    expect(calls).toEqual([{ command: 'echo hello-from-shell', cwd: tempDir }]);
+    expect(result).toContain('MEDIATED-BY-HOST');
+    expect(result).not.toContain('[Tool Error]');
+  });
+
+  it('refuses skill !`cmd` dynamic-context entirely when the host disables it (FEATURE_222)', async () => {
+    await writeSkillMd(
+      tempDir,
+      'project',
+      'kodax-test-dynctx-disabled',
+      'Dynamic context skill',
+      'Result: !`echo hello-from-shell`',
+    );
+    const { getSkillRegistry } = await import('@kodax-ai/agent');
+    await getSkillRegistry(tempDir, {
+      projectPaths: [path.join(tempDir, 'project')],
+      userPaths: [],
+      pluginPaths: [],
+      builtinPath: path.join(tempDir, 'builtin'),
+    }).discover();
+
+    const hook = { called: false };
+    const result = await toolSkill({ skill: 'kodax-test-dynctx-disabled' }, {
+      backups: new Map(),
+      executionCwd: tempDir,
+      skillDynamicContext: {
+        disable: true,
+        // Even with a hook present, disable (Tier 1) short-circuits before it.
+        execute: async () => {
+          hook.called = true;
+          return 'SHOULD-NOT-RUN';
+        },
+      },
+    });
+
+    expect(hook.called).toBe(false);
+    expect(result).toContain('[Error: Dynamic context disabled by host.');
+    expect(result).not.toContain('SHOULD-NOT-RUN');
+  });
+
   it('returns support file locations for user skills', async () => {
     const skillDir = await writeSkillMd(
       tempDir,

@@ -77,6 +77,12 @@ export async function toolSkill(
     const expanded = await expandSkillForLLM(fullSkill, args, {
       workingDirectory: cwd,
       projectRoot,
+      // FEATURE_222 skill security — an LLM-auto-triggered skill's `!`cmd``
+      // dynamic-context must go through the host's permission policy, not the
+      // built-in execSync fallback. Absent policy ⇒ resolver's Tier-3 default
+      // (unchanged for the trusted standalone CLI).
+      executeDynamicContext: ctx.skillDynamicContext?.execute,
+      disableDynamicContext: ctx.skillDynamicContext?.disable,
     });
 
     return expanded.content;

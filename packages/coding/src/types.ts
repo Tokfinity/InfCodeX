@@ -86,6 +86,7 @@ import type {
   WorkflowEvent,
   WorkflowEventCorrelation,
   WorkflowProcessEvent,
+  SkillDynamicContextExecutor,
 } from '@kodax-ai/agent';
 // v0.7.35.1 FEATURE_142 (A-R4): AMA / harness types live in @kodax-ai/llm
 // (coding-AMA vocabulary; see ADR-021). Imported directly here instead of
@@ -1352,6 +1353,22 @@ export interface KodaXCompactionOverride {
   enabled?: boolean;
 }
 
+/**
+ * FEATURE_222 skill security — host policy for a skill's `!`cmd`` dynamic-context
+ * tokens. By default (both fields unset) the LLM-triggered `skill` tool runs
+ * those commands via the built-in allowlist + `execSync` — fine for the trusted
+ * standalone CLI, but an embedder host (KodaX-Space) wants every shell touch to
+ * go through its own permission broker. Set `execute` to route each `!`cmd``
+ * through the host, or `disable: true` to refuse them outright.
+ */
+export interface KodaXSkillDynamicContextPolicy {
+  /** Host hook run for each `!`cmd`` token (command, cwd) → stdout. Mediate via
+   *  the host's permission broker; throw to refuse a command. */
+  execute?: SkillDynamicContextExecutor;
+  /** When true, every `!`cmd`` token is refused without executing anything. */
+  disable?: boolean;
+}
+
 export interface KodaXOptions {
   provider: string;
   model?: string;
@@ -1411,6 +1428,12 @@ export interface KodaXOptions {
   };
   /** FEATURE_221: SDK-consumer self-manual injection (product name + topics). */
   selfManual?: KodaXSelfManualConfig;
+  /**
+   * FEATURE_222 skill security: host policy for skill `!`cmd`` dynamic-context.
+   * Absent → built-in allowlist+execSync (trusted-CLI default). See
+   * {@link KodaXSkillDynamicContextPolicy}.
+   */
+  skillDynamicContext?: KodaXSkillDynamicContextPolicy;
   /**
    * FEATURE_092 (v0.7.33): caller-supplied run-scoped guardrails forwarded
    * to `Runner.run` via `RunOptions.guardrails`. Merged with the START
@@ -1775,6 +1798,9 @@ export interface KodaXToolExecutionContext {
   agentProfile?: KodaXAgentProfile;
   /** FEATURE_221: SDK-consumer self-manual injection, forwarded from KodaXOptions. */
   selfManual?: KodaXSelfManualConfig;
+  /** FEATURE_222 skill security — host policy for skill `!`cmd`` dynamic-context,
+   *  forwarded from `KodaXOptions.skillDynamicContext`. Consumed by the `skill` tool. */
+  skillDynamicContext?: KodaXSkillDynamicContextPolicy;
   /** Working directory used to resolve relative paths and execute shell commands. */
   executionCwd?: string;
   /** Session-scoped directory for helper scripts and scratch outputs. */

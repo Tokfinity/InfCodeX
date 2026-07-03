@@ -111,6 +111,10 @@ export function buildToolExecutionContext(
     taskSurface: options.context?.taskSurface,
     agentProfile: options.context?.agentProfile,
     selfManual: options.selfManual,
+    // FEATURE_222 skill security — forward the host's skill dynamic-context policy
+    // so the LLM-triggered `skill` tool routes `!`cmd`` through the host broker
+    // (or refuses) instead of the built-in execSync fallback.
+    skillDynamicContext: options.skillDynamicContext,
     // FEATURE_132 v0.7.47 — LSP service for edit-time diagnostics reflux.
     // Host-injected when present, else the process-wide default (which is
     // a no-op unless a language server is installed; `KODAX_LSP=0` disables).
