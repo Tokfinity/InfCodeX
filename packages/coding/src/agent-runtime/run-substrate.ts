@@ -146,7 +146,7 @@ import { getUnlockedDeferredTools } from '../tools/deferred-tools.js';
 // `agent-runtime/middleware/compaction-orchestration.ts` since
 // FEATURE_100 P3.4c.
 import { shouldCompact, getCachedRejectedEfforts } from '@kodax-ai/agent';
-import { resolveWireEffort, resolveProviderModelDescriptors } from '@kodax-ai/llm';
+import { resolveWireEffort } from '@kodax-ai/llm';
 import { runCompactionLifecycle } from './middleware/compaction-orchestration.js';
 import { maybeContinueAfterMaxTokens } from './max-tokens-continuation.js';
 import { maybeAutoContinueManagedProtocol } from './managed-protocol-continue.js';
@@ -711,38 +711,46 @@ export async function runSubstrate(
       runtimeSessionState.modelSelection.model = turnState.currentModelOverride;
       turnState.runtimeThinkingLevel = preparedProviderState.reasoningMode;
       runtimeSessionState.thinkingLevel = turnState.runtimeThinkingLevel;
+      const streamProvider = resolveProvider(turnState.currentProviderName);
+
       let effectiveProviderEffort = turnState.runtimeThinkingLevel ?? effectiveReasoningPlan.effort;
-      // FEATURE_222 (R5) — self-heal across turns. If this effort was hard-rejected
-      // on a prior turn (recorded in the capability cache by stream-handler-wiring),
-      // narrow to a legal one via the canonical resolver instead of re-issuing a
-      // request the provider will 400 again (the per-instance suppression does not
-      // survive the per-turn provider rebuild). No cached rejection for this effort
-      // → the branch is skipped and behavior is byte-identical.
+      // FEATURE_222 (R5) — self-heal a hard-rejected reasoning_effort across turns.
+      // base.ts fires onReasoningEffortRejected + suppresses within a turn, but the
+      // provider instance is rebuilt every turn so that suppression is lost;
+      // stream-handler-wiring records the rejection in the capability cache and here
+      // we consult it before building the request. No relevant rejection → the effort
+      // is left untouched and behavior is byte-identical.
       //
-      // The rejection is recorded under the concrete resolved model the provider
-      // used (`modelOverride ?? config.model` in base.ts), so resolve the same
-      // concrete model here — otherwise a no-override turn would key the lookup
-      // under `undefined` and miss its own recorded rejection.
-      const rejectionModel =
-        turnState.currentModelOverride
-        ?? resolveProviderModelDescriptors(turnState.currentProviderName)[0]?.id;
+      // Keyed by the SAME concrete model base.ts records under
+      // (`modelOverride ?? provider.getModel()`) — including runtime-registered
+      // providers, which resolveProvider (unlike a static descriptor lookup) resolves.
+      const rejectionModel = turnState.currentModelOverride ?? streamProvider.getModel();
       const rejectedEfforts = getCachedRejectedEfforts(turnState.currentProviderName, rejectionModel);
-      if (effectiveProviderEffort !== undefined && rejectedEfforts.includes(effectiveProviderEffort)) {
-        const wire = resolveWireEffort({
+      if (effectiveProviderEffort !== undefined && rejectedEfforts.length > 0) {
+        // Check the value that would actually reach the wire (the provider applies
+        // effortAliases / ceilings), not the pre-alias effort — a rejected rung can be
+        // reached via an alias (e.g. low → high). If that wire value is rejected,
+        // re-resolve with the rejected rungs narrowed out.
+        const wouldSend = resolveWireEffort({
           provider: turnState.currentProviderName,
           model: rejectionModel,
           desiredEffort: effectiveProviderEffort,
-          rejectedEfforts,
-        });
-        effectiveProviderEffort = wire.effort ?? 'none';
+        }).effort;
+        if (wouldSend !== undefined && rejectedEfforts.includes(wouldSend)) {
+          const healed = resolveWireEffort({
+            provider: turnState.currentProviderName,
+            model: rejectionModel,
+            desiredEffort: effectiveProviderEffort,
+            rejectedEfforts,
+          });
+          effectiveProviderEffort = healed.effort ?? 'none';
+        }
       }
       const effectiveProviderReasoning = {
         ...currentExecution.providerReasoning,
         enabled: effectiveProviderEffort !== 'none',
         effort: effectiveProviderEffort,
       };
-
-      const streamProvider = resolveProvider(turnState.currentProviderName);
       // CAP-064: provider-policy gate — throws on block status, produces
       // the effective system prompt with any policy issue notes appended.
       const { effectiveSystemPrompt } = applyProviderPolicyGate({

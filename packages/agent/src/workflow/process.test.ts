@@ -360,7 +360,7 @@ describe('workflow process tracker — FEATURE_246 resume replay telemetry', () 
     expect(snapshot.progress.spawnedAgents).toBe(1);
     expect(snapshot.progress.finishedAgents).toBe(1);
 
-    const c1 = snapshot.items.find((i) => i.id === 'agent:c1');
+    const c1 = snapshot.items.find((i) => i.id === 'agent:replayed:c1');
     expect(c1).toMatchObject({ kind: 'agent', status: 'completed', origin: 'replayed-from-cache' });
     const c3 = snapshot.items.find((i) => i.id === 'agent:c3');
     expect(c3).toMatchObject({ kind: 'agent', status: 'completed', origin: 'ran' });
@@ -378,9 +378,39 @@ describe('workflow process tracker — FEATURE_246 resume replay telemetry', () 
 
     const snapshot = tracker.getSnapshot();
     const phase = snapshot.items.find((i) => i.kind === 'phase' && i.title === 'Find');
-    const agent = snapshot.items.find((i) => i.id === 'agent:c1');
+    const agent = snapshot.items.find((i) => i.id === 'agent:replayed:c1');
     expect(phase).toBeDefined();
     expect(agent?.phaseId).toBe(phase?.id);
     expect(agent?.origin).toBe('replayed-from-cache');
+  });
+
+  it('keeps a replayed agent distinct from a live spawn that reuses the same taskId (C1 collision guard)', () => {
+    // The workflow backend mints taskIds from a per-run counter restarting at 1,
+    // so a resumed run's first live spawn and a replayed prior-run agent can both
+    // be "wf-child-1". They must remain TWO items, not merge into one.
+    const tracker = createWorkflowProcessTracker({
+      runId: 'run-collide',
+      workflowName: 'collide',
+      resumedFromRunId: 'run-prior',
+      now: () => '2026-06-15T00:00:00.000Z',
+    });
+    tracker.applyEvent({ seq: 0, type: 'workflow_started' });
+    // Replayed prior-run agent carries the prior run's taskId wf-child-1.
+    tracker.applyEvent({ seq: 1, type: 'agent_replayed', data: { taskId: 'wf-child-1', name: 'cached-reader' } });
+    // A live spawn in THIS run gets the same taskId from the reset counter.
+    tracker.applyEvent({ seq: 2, type: 'agent_spawned', data: { taskId: 'wf-child-1', name: 'live-writer' } });
+    tracker.applyEvent({ seq: 3, type: 'agent_completed', data: { taskId: 'wf-child-1', name: 'live-writer', status: 'completed' } });
+    tracker.applyEvent({ seq: 4, type: 'workflow_completed' });
+
+    const snapshot = tracker.getSnapshot();
+    const replayed = snapshot.items.find((i) => i.id === 'agent:replayed:wf-child-1');
+    const live = snapshot.items.find((i) => i.id === 'agent:wf-child-1');
+    // Both survive as distinct items with correct origins.
+    expect(replayed).toMatchObject({ origin: 'replayed-from-cache', status: 'completed', title: 'cached-reader' });
+    expect(live).toMatchObject({ origin: 'ran', status: 'completed', title: 'live-writer' });
+    // Counts are not corrupted: 1 replayed, 1 ran.
+    expect(snapshot.progress.replayedAgents).toBe(1);
+    expect(snapshot.progress.spawnedAgents).toBe(1);
+    expect(snapshot.progress.finishedAgents).toBe(1);
   });
 });

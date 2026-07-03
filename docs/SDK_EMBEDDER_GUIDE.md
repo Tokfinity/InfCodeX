@@ -294,6 +294,8 @@ an auto-triggered `SKILL.md` (including a cloned project-level
 Thread the same policy into the tool path via `runKodaX`/`startKodaX` options:
 
 ```ts
+import { runKodaX } from '@kodax-ai/kodax/coding';
+
 await runKodaX(
   {
     provider: 'anthropic',

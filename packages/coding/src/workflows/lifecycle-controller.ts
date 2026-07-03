@@ -168,6 +168,7 @@ function readRunProcessMetadata(
   const sourceRunId = readString(data.sourceRunId);
   const sourceWorkflowName = readString(data.sourceWorkflowName);
   const revisionOf = readString(data.revisionOf);
+  const resumedFromRunId = readString(data.resumedFromRunId);
   const hostMetadata = normalizeHostMetadata(data.hostMetadata);
   const metadata: WorkflowRunProcessMetadata = {
     ...(displayName !== undefined ? { displayName } : {}),
@@ -177,6 +178,11 @@ function readRunProcessMetadata(
     ...(sourceRunId !== undefined ? { sourceRunId } : {}),
     ...(sourceWorkflowName !== undefined ? { sourceWorkflowName } : {}),
     ...(revisionOf !== undefined ? { revisionOf } : {}),
+    // FEATURE_246 — restore resume lineage so a reconstructed snapshot reports
+    // resumedFromRunId AND replays per-agent origin (the tracker treats a run with
+    // resumedFromRunId set as a resume, so agent_replayed/agent_spawned events from
+    // events.jsonl get their origin).
+    ...(resumedFromRunId !== undefined ? { resumedFromRunId } : {}),
     ...(hostMetadata !== undefined ? { hostMetadata } : {}),
   };
   return Object.keys(metadata).length > 0 ? metadata : undefined;
@@ -288,6 +294,12 @@ function snapshotFromPersistedRun(
       : {}),
     ...(run.processMetadata?.revisionOf !== undefined
       ? { revisionOf: run.processMetadata.revisionOf }
+      : {}),
+    // FEATURE_246 — carry resume lineage into the reconstructed tracker so a
+    // restored snapshot reports resumedFromRunId AND stamps per-agent origin
+    // (the tracker treats resumedFromRunId-present as a resume run).
+    ...(run.processMetadata?.resumedFromRunId !== undefined
+      ? { resumedFromRunId: run.processMetadata.resumedFromRunId }
       : {}),
     ...(run.processMetadata?.hostMetadata !== undefined
       ? { hostMetadata: { ...run.processMetadata.hostMetadata } }

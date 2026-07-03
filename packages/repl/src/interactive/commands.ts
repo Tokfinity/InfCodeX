@@ -2977,6 +2977,10 @@ async function executeSkillCommand(
       projectRoot: context.gitRoot ?? undefined,
       sessionId: context.sessionId,
       environment: {},
+      // FEATURE_222 (R4): honor the host dynamic-context policy on the user-typed
+      // /skill path too, so a sandbox host's disable/broker applies everywhere.
+      executeDynamicContext: context.skillDynamicContext?.execute,
+      disableDynamicContext: context.skillDynamicContext?.disable,
     };
 
     // Expand the skill content for LLM injection.

@@ -4,6 +4,7 @@
 
 import type {
   KodaXContextTokenSnapshot,
+  KodaXSkillDynamicContextPolicy,
 } from '@kodax-ai/coding';
 import type {
   KodaXExtensionSessionRecord,
@@ -35,6 +36,10 @@ export interface InteractiveContext {
   runtimeInfo?: KodaXSessionRuntimeInfo;
   createdAt: string;
   lastAccessed: string;
+  // FEATURE_222 (R4): host skill dynamic-context policy, forwarded from
+  // RepLOptions so the user-typed `/skill` slash path honors the same
+  // executeDynamicContext / disable policy as the model-triggered skill tool.
+  skillDynamicContext?: KodaXSkillDynamicContextPolicy;
   // Note: mode moved to CurrentConfig to avoid scattered state - 注意：mode 已移至 CurrentConfig 管理，避免状态分散
 }
 

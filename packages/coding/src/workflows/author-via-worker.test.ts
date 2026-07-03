@@ -87,4 +87,18 @@ describe('authorWorkflowViaWorker', () => {
     await handle.session.result;
     await expect(handle.workflowRunId).resolves.toBeUndefined();
   });
+
+  it('once the turn ends undefined, a late workflow_started event does not flip or throw (settle race)', async () => {
+    const handle = authorWorkflowViaWorker({
+      request: 'x',
+      options: { provider: 'anthropic', workflowRunsBaseDir: '/tmp/runs' } as KodaXOptions,
+    });
+    const wrapped = runKodaXMock.mock.calls[0]![0].events!.onWorkflowProcessEvent!;
+    // Turn ends WITHOUT a workflow → workflowRunId settles undefined.
+    await handle.session.result;
+    await expect(handle.workflowRunId).resolves.toBeUndefined();
+    // A stray/late event afterwards must not throw or change the settled value.
+    expect(() => wrapped(startedEvent('run-late'))).not.toThrow();
+    await expect(handle.workflowRunId).resolves.toBeUndefined();
+  });
 });

@@ -268,6 +268,19 @@ function agentItemId(taskId: string): string {
   return `agent:${taskId}`;
 }
 
+/**
+ * FEATURE_246 — item id for a cache-replayed agent. Deliberately DISTINCT from
+ * `agentItemId` so a replayed item (keyed by the PRIOR run's taskId, carried in
+ * the cached result) can never collide with a live spawn in THIS run that reuses
+ * the same taskId. The workflow backend mints taskIds from a per-run counter that
+ * restarts at 1, so a resumed run's first live spawn and a replayed prior-run
+ * agent can both be `wf-child-1`; without this namespace they would merge into
+ * one item and corrupt origin + the ran/replayed counts.
+ */
+function replayedAgentItemId(taskId: string): string {
+  return `agent:replayed:${taskId}`;
+}
+
 function artifactItemId(name: string, ordinal: number): string {
   return `artifact:${ordinal + 1}:${name}`;
 }
@@ -614,7 +627,9 @@ export function createWorkflowProcessTracker(
     const taskId = readString(data, 'taskId') ?? readString(data, 'agentId');
     if (!taskId) return;
     const title = readString(data, 'name') ?? taskId;
-    const id = agentItemId(taskId);
+    // Distinct id namespace — a replayed prior-run taskId must never collide with
+    // a live spawn's item in this (resumed) run (see replayedAgentItemId).
+    const id = replayedAgentItemId(taskId);
     const explicitPhase = readString(data, 'phase');
     const phaseId = explicitPhase !== undefined ? phaseIdForName(explicitPhase) : activePhaseId;
     // A cache replay is instantaneous — the item goes straight to completed and

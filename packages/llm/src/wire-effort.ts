@@ -41,8 +41,14 @@ export interface ResolvedWireEffort {
   /** What the input resolved to before profile-driven adjustment (alias/
    *  ceiling/disable). Useful for a "requested X → sending Y" status label. */
   readonly configuredEffort: string | undefined;
-  /** True when the wire effort differs from the configured one (aliased,
-   *  ceiled, disabled-folded, auto-resolved, or narrowed by a rejection). */
+  /**
+   * True when the wire effort differs from the configured one — aliased, ceiled,
+   * disabled-folded, or narrowed by a rejection. NOTE: this is also true for a
+   * plain `desiredEffort: 'auto'` (configuredEffort `'auto'` resolves to a
+   * concrete rung), so do NOT read `adjusted` as "the user's explicit choice was
+   * overridden"; compare `configuredEffort` vs `effort` yourself if you need to
+   * exclude the auto→concrete case in a status label.
+   */
   readonly adjusted: boolean;
 }
 
@@ -74,9 +80,18 @@ export function resolveWireEffort(input: ResolveWireEffortInput): ResolvedWireEf
 
   // CRITICAL: preserve effectiveEffort === undefined (a deliberate "no wire
   // effort" signal, e.g. anthropic-adaptive). Never substitute configuredEffort.
+  let effort = resolved.effectiveEffort;
+  // Backstop: resolveReasoningEffort's non-explicit fallback chain is not itself
+  // re-checked against rejected rungs, so in the pathological "every rung rejected"
+  // case it can hand back a value that is still rejected. Never emit a known-rejected
+  // effort — omit it entirely (the caller then sends no reasoning_effort) so a
+  // self-heal loop can't re-send the same 400-ing value each turn.
+  if (effort !== undefined && input.rejectedEfforts?.includes(effort)) {
+    effort = undefined;
+  }
   return {
-    effort: resolved.effectiveEffort,
+    effort,
     configuredEffort: resolved.configuredEffort,
-    adjusted: resolved.effectiveEffort !== resolved.configuredEffort,
+    adjusted: effort !== resolved.configuredEffort,
   };
 }

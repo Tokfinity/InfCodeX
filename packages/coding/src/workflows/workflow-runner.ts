@@ -214,6 +214,12 @@ export async function runWorkflowModule(
   );
 
   const writer = createRunGraphWriter(opts.runDir, { now });
+  // FEATURE_246 resume telemetry — the resumed run id, derived from the prior run
+  // dir (runDir === <baseDir>/<runId>). Threaded into BOTH the live tracker AND
+  // run.json (below), so a snapshot reconstructed from persisted history also
+  // reports the resume + per-agent origin. Absent on a fresh run.
+  const resumedFromRunId =
+    opts.resumeFromRunDir !== undefined ? basename(opts.resumeFromRunDir) : undefined;
   const processTracker = opts.onWorkflowProcessEvent
     ? createWorkflowProcessTracker({
         runId: opts.runId,
@@ -233,12 +239,7 @@ export async function runWorkflowModule(
         ...(opts.processMetadata?.revisionOf !== undefined
           ? { revisionOf: opts.processMetadata.revisionOf }
           : {}),
-        // FEATURE_246 resume telemetry — derive the resumed run id from the prior
-        // run dir (runDir === <baseDir>/<runId>), the one place resume intent is
-        // known. Absent on a fresh run → snapshot stays byte-identical.
-        ...(opts.resumeFromRunDir !== undefined
-          ? { resumedFromRunId: basename(opts.resumeFromRunDir) }
-          : {}),
+        ...(resumedFromRunId !== undefined ? { resumedFromRunId } : {}),
         ...(opts.processMetadata?.hostMetadata !== undefined
           ? { hostMetadata: { ...opts.processMetadata.hostMetadata } }
           : {}),
@@ -316,7 +317,16 @@ export async function runWorkflowModule(
     endedAt: now(),
     ...(scriptSnapshot ? { scriptSnapshot } : {}),
     ...(resultSummary !== undefined ? { resultSummary } : {}),
-    ...(opts.processMetadata !== undefined ? { processMetadata: opts.processMetadata } : {}),
+    // Persist resumedFromRunId into run.json alongside any host processMetadata so a
+    // snapshot reconstructed from disk (lifecycle-controller) reports the resume too.
+    ...(opts.processMetadata !== undefined || resumedFromRunId !== undefined
+      ? {
+          processMetadata: {
+            ...opts.processMetadata,
+            ...(resumedFromRunId !== undefined ? { resumedFromRunId } : {}),
+          },
+        }
+      : {}),
   });
 
   return outcome.ok

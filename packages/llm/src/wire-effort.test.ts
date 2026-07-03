@@ -31,6 +31,17 @@ describe('resolveWireEffort', () => {
     expect(resolved.adjusted).toBe(true);
   });
 
+  it('omits the effort (undefined) rather than returning a rejected rung when every rung is rejected (C8)', () => {
+    const resolved = resolveWireEffort({
+      provider: 'zai-coding',
+      model: 'glm-5.2',
+      desiredEffort: 'high',
+      rejectedEfforts: ['none', 'minimal', 'low', 'medium', 'high', 'xhigh', 'max'],
+    });
+    // Never hand back a value the provider already 400'd — omit reasoning_effort.
+    expect(resolved.effort).toBeUndefined();
+  });
+
   it('returns undefined effort for a provider/model with no reasoning profile', () => {
     const resolved = resolveWireEffort({ provider: 'does-not-exist', model: 'whatever', desiredEffort: 'high' });
     expect(resolved.effort).toBeUndefined();

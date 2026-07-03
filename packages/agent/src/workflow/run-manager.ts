@@ -45,6 +45,7 @@ export type WorkflowProcessMetadata = Pick<
   | 'sourceRunId'
   | 'sourceWorkflowName'
   | 'revisionOf'
+  | 'resumedFromRunId'
   | 'hostMetadata'
 >;
 

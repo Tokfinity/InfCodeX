@@ -53,6 +53,7 @@ export type {
   WorkflowProcessEvent,
   WorkflowProcessItem,
   WorkflowProcessItemKind,
+  WorkflowProcessItemOrigin,
   WorkflowProcessItemStatus,
   WorkflowProcessProgress,
   WorkflowProcessSnapshot,

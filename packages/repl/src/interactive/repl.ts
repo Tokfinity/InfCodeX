@@ -532,6 +532,9 @@ export async function runInteractiveMode(options: RepLOptions): Promise<void> {
     gitRoot,
     runtimeInfo: startupRuntime,
   });
+  // FEATURE_222 (R4): forward the host skill dynamic-context policy so the
+  // user-typed `/skill` slash path is gated the same as the model-triggered tool.
+  context.skillDynamicContext = options.skillDynamicContext;
 
   // v0.7.43 (FEATURE_173 Part B follow-up) — publish the resolved
   // sessionId to the FEATURE_125 heartbeat so `listRunningSessions()`

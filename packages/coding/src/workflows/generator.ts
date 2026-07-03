@@ -912,7 +912,7 @@ export function buildWorkflowGenerationUserPrompt(
 
 export async function buildWorkflowGenerationSkillContext(
   request: string,
-  options: Pick<KodaXOptions, 'context'>,
+  options: Pick<KodaXOptions, 'context' | 'skillDynamicContext'>,
 ): Promise<string | undefined> {
   const explicitSkillNames = uniqueInlineSkillNames(request);
   const bareSlashNames = uniqueBareInlineSlashNames(request);
@@ -931,6 +931,11 @@ export async function buildWorkflowGenerationSkillContext(
     workingDirectory,
     projectRoot,
     environment: {},
+    // FEATURE_222 (R4): a workflow-generation request may reference a project
+    // skill whose SKILL.md has `!`cmd`` dynamic-context — honor the host policy
+    // here too, not just the interactive `skill` tool path.
+    executeDynamicContext: options.skillDynamicContext?.execute,
+    disableDynamicContext: options.skillDynamicContext?.disable,
   };
   const skillNames = [
     ...explicitSkillNames,

@@ -58,8 +58,13 @@ export interface AuthorWorkflowViaWorkerHandle {
   /**
    * Resolves with the workflow run id once the Worker launches a workflow
    * during this turn, or `undefined` if the turn ends without starting one.
-   * Backed by the first `workflow_started` process event — the same runId a
+   * Backed by the FIRST `workflow_started` process event — the same runId a
    * host sees on `events.onWorkflowProcessEvent`.
+   *
+   * NOTE: reflects only the first workflow the Worker starts this turn. If the
+   * Worker starts several (e.g. stops one and reruns another), `workflowRunId`
+   * still resolves to the first; subscribe to `events.onWorkflowProcessEvent`
+   * for the full set of runs.
    */
   readonly workflowRunId: Promise<string | undefined>;
 }

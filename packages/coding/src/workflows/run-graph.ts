@@ -34,6 +34,7 @@ export type WorkflowRunProcessMetadata = Pick<
   | 'sourceRunId'
   | 'sourceWorkflowName'
   | 'revisionOf'
+  | 'resumedFromRunId'
   | 'hostMetadata'
 >;
 
@@ -133,6 +134,9 @@ export function createRunGraphWriter(runDir: string, deps: RunGraphWriterDeps = 
           : {}),
         ...(input.processMetadata?.revisionOf !== undefined
           ? { revisionOf: input.processMetadata.revisionOf }
+          : {}),
+        ...(input.processMetadata?.resumedFromRunId !== undefined
+          ? { resumedFromRunId: input.processMetadata.resumedFromRunId }
           : {}),
         ...(hostMetadata !== undefined ? { hostMetadata } : {}),
         ...(input.scriptSnapshot

@@ -956,6 +956,10 @@ async function runReadChildBody(
         // selfManual so its own kodax_manual tool description is re-branded too
         // (children carry kodax_manual — it is not in CHILD_EXCLUDE_TOOLS).
         selfManual: scope.ctx.selfManual,
+        // FEATURE_222 (R4): a child's skill tool must honor the SAME host
+        // dynamic-context policy as the parent — otherwise a `disable:true` /
+        // broker-mediated host is silently bypassed for every dispatched child.
+        skillDynamicContext: scope.ctx.skillDynamicContext,
         context: {
           gitRoot: scope.ctx.gitRoot,
           executionCwd: scope.ctx.executionCwd ?? scope.ctx.gitRoot,
@@ -1145,6 +1149,9 @@ async function runWriteChildBody(
         // FEATURE_221: write children inherit the parent's white-label product
         // so their own kodax_manual description is re-branded too.
         selfManual: childCtx.selfManual,
+        // FEATURE_222 (R4): write children inherit the parent's skill
+        // dynamic-context policy so their skill tool is equally gated.
+        skillDynamicContext: childCtx.skillDynamicContext,
         context: {
           gitRoot: childCtx.gitRoot,
           executionCwd: childCtx.executionCwd ?? childCtx.gitRoot,

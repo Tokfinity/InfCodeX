@@ -148,6 +148,7 @@ export type {
   KodaXOptions,
   KodaXCompactionOverride,
   KodaXSelfManualConfig,
+  KodaXSkillDynamicContextPolicy,
   KodaXResult,
   KodaXSessionControl,
   KodaXSessionMutators,
@@ -656,7 +657,12 @@ export {
   parseReasoningEffortEnv,
   resolveReasoningEffort,
   resolveReasoningEffortForModelSwitch,
+  // FEATURE_222 (R6): canonical host-facing wire-effort resolver — re-exported
+  // so it reaches the root '@kodax-ai/kodax' barrel (which re-exports coding),
+  // not only the '@kodax-ai/kodax/llm' subpath.
+  resolveWireEffort,
 } from '@kodax-ai/llm';
+export type { ResolveWireEffortInput, ResolvedWireEffort } from '@kodax-ai/llm';
 
 export {
   KODAX_REASONING_MODE_SEQUENCE,
