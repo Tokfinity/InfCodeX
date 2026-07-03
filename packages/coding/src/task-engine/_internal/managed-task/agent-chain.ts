@@ -113,13 +113,12 @@ function buildAgentToolsFromRegistry(
   for (const def of listToolDefinitions()) {
     if (exclude.has(def.name)) continue;
     if (!ctx.extensionRuntime && isMcpToolName(def.name)) continue;
-    // FEATURE_246: visibility follows capability. run_workflow is only usable
-    // when a workflow host is wired — amaw turns, or an AMA `/workflow` command
-    // turn elevated to amaw. In plain AMA there is no host, so we hide the tool
-    // rather than offer one that would only error. This is what keeps AMA
-    // command-gated: the Worker cannot self-activate a workflow from natural
-    // language because the tool is not on its surface unless a command elevated
-    // the turn.
+    // FEATURE_246 + FEATURE_249: visibility follows capability. run_workflow is
+    // shown when a workflow host is wired. Post-FEATURE_249 the host is wired for
+    // both AMA and AMAW (buildWorkflowToolHost widened), so AMA now carries the tool
+    // standing and can activate a workflow from natural language on request. Only SA
+    // has no host (and additionally excludes run_workflow), so the tool is hidden
+    // there rather than offered as one that would only error.
     if (def.name === 'run_workflow' && !ctx.workflowHost) continue;
 
     const override = overrides.get(def.name);
@@ -351,11 +350,12 @@ export function buildRunnerAgentChain(
   if (!dispatchDefinition) {
     throw new Error('dispatch_child_task tool not registered — tools/registry.ts bootstrap failure');
   }
-  // FEATURE_246: surface the run_workflow nudge only when run_workflow is usable
-  // this turn (host wired = amaw, or an AMA /workflow command turn elevated to
-  // amaw). Plain AMA has no run_workflow on its surface, so omit the nudge rather
-  // than point the Worker at a tool it does not have. When present, the nudge is
-  // appended verbatim — AMAW's dispatch description stays byte-identical to before.
+  // FEATURE_246 + FEATURE_249: surface the run_workflow nudge whenever run_workflow
+  // is usable this turn (host wired). Post-FEATURE_249 that is AMA and AMAW alike, so
+  // AMA's dispatch description also carries the nudge — a soft "prefer run_workflow
+  // when you fan out" tool-choice hint that only matters once the model is already
+  // orchestrating; it does NOT push AMA to orchestrate (that is the amaw-only
+  // ORCHESTRATION DEFAULT directive). SA has no host, so the nudge is omitted there.
   const dispatchDefForTurn = ctx.workflowHost
     ? {
         ...dispatchDefinition,

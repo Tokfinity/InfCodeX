@@ -1153,13 +1153,15 @@ async function runManagedTaskViaRunnerInner(
         ? pendingFailedResetRef.current === true
         : undefined,
       // FEATURE_248 (v0.7.59) — AMAW mode-level orchestration directive gate.
-      // Reads the SAME `options.agentMode` field that `buildWorkflowToolHost`
-      // (tool-execution-context.ts:302) uses to decide whether `run_workflow`
-      // is on the tool surface — the same `options` object is passed to
-      // `buildToolExecutionContext` at line 716 — so the ORCHESTRATION DEFAULT
-      // directive appears iff the tool is available, and cannot leak into plain
-      // AMA (`agentMode === 'ama'`) or SA. Read only by the `case 'worker':`
-      // branch in `createRolePrompt`.
+      // FEATURE_248 complexity directive gate — STRICTLY amaw-only. This is
+      // INDEPENDENT of run_workflow tool-availability: since FEATURE_249 widened
+      // buildWorkflowToolHost to also host in AMA, run_workflow is on the tool
+      // surface for both AMA and AMAW, but the ORCHESTRATION DEFAULT directive stays
+      // amaw-exclusive via this separate `=== 'amaw'` read (evaluated in a different
+      // file/function than the host gate, so widening the host does NOT flip this).
+      // Result: AMA has the tool but no standing complexity directive (request-driven),
+      // AMAW has both (complexity-driven). Read only by the `case 'worker':` branch in
+      // `createRolePrompt`.
       amawOrchestrationAvailable: options.agentMode === 'amaw',
     };
     // v0.7.26 C4 parity — surface the caller's skill invocation + the

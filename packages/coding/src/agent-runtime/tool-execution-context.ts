@@ -209,14 +209,13 @@ export function buildToolExecutionContext(
     // live workflow progress while it runs (removed on settle).
     workflowRunProgress: new Map(),
     // FEATURE_246 Part A2 (ADR-046) — model-launched workflow capability. Wired
-    // only when the host configured a runs dir AND the turn runs as `amaw`.
-    // AMAW Worker turns carry run_workflow standing (the Worker can self-activate
-    // a workflow from natural language). Plain AMA turns do not — there the
-    // capability is command-gated: the `/workflow` command elevates its authoring
-    // turn to `amaw` (see workflow-command.ts agentModeOverride), so the Worker
-    // gets the same scout-then-author tool without AMA self-activating from NL.
-    // SA (solo) never hosts a workflow. The lazy import keeps the static graph
-    // acyclic (workflows -> agent-runtime; never the reverse).
+    // when the host configured a runs dir AND the turn runs as `ama` or `amaw`
+    // (widened by FEATURE_249). AMA and AMAW both carry run_workflow standing;
+    // the difference is disposition, not availability: AMAW additionally gets the
+    // ORCHESTRATION DEFAULT complexity directive (amawOrchestrationAvailable), while
+    // AMA activates the tool only on an explicit natural-language request. SA (solo)
+    // never hosts a workflow (fails the agentMode gate + SA_SOLO_EXCLUDE_TOOLS). The
+    // lazy import keeps the static graph acyclic (workflows -> agent-runtime).
     workflowHost: buildWorkflowToolHost(options, sessionId),
   };
 }
@@ -293,17 +292,24 @@ function buildWorkflowToolHost(
   if (process.env.KODAX_DEBUG_WORKFLOW_GATE) {
     const decision = runsBaseDir === undefined
       ? 'no-host: workflowRunsBaseDir undefined'
-      : options.agentMode !== 'amaw'
-        ? `no-host: agentMode=${String(options.agentMode)} (need amaw)`
+      : (options.agentMode !== 'amaw' && options.agentMode !== 'ama')
+        ? `no-host: agentMode=${String(options.agentMode)} (need ama|amaw)`
         : 'host wired';
     process.stderr.write(
       `[workflow-gate] agentMode=${String(options.agentMode)} runsBaseDir=${runsBaseDir ?? '<undef>'} -> ${decision}\n`,
     );
   }
   if (runsBaseDir === undefined) return undefined;
-  // amaw-only standing gate. AMA `/workflow` command turns reach here already
-  // elevated to amaw (per-turn agentModeOverride); plain AMA and SA turns do not.
-  if (options.agentMode !== 'amaw') return undefined;
+  // FEATURE_249: run_workflow host is available to AMA and AMAW (widened from the
+  // former amaw-only gate). AMA can now activate a workflow directly from natural
+  // language — the Worker calls run_workflow when the user asks — matching the
+  // reference non-ultracode posture (tool available, LLM decides on request). The
+  // FEATURE_248 complexity directive (ORCHESTRATION DEFAULT) stays STRICTLY
+  // amaw-only via the independent amawOrchestrationAvailable gate (runner-driven.ts),
+  // so AMA is request-driven, not complexity-driven. SA never reaches here with a
+  // run_workflow surface: agentMode 'sa' fails this gate, and SA_SOLO_EXCLUDE_TOOLS
+  // (task-engine.ts) excludes run_workflow regardless.
+  if (options.agentMode !== 'amaw' && options.agentMode !== 'ama') return undefined;
   // ADR-049: `startInline` starts the run and returns a `done` promise WITHOUT
   // awaiting it, so the async run_workflow path can register `done` in the Worker's
   // childTaskRegistry and idle-yield. `runInline` (the blocking path, kept for
