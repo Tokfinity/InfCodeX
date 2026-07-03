@@ -267,11 +267,14 @@ export function getCustomModelCapabilities(
   if (!config) return undefined;
   const isDefault = modelId === config.model;
   const providerReasoningProfile = resolveCustomProviderReasoningProfile(config);
-  const descriptor = isDefault
-    ? ({ id: config.model } as KodaXModelDescriptor)
-    : (config.models ?? [])
-        .map((entry) => customDescriptorToFull(entry, config.protocol, config.supportsThinking))
-        .find((m) => m.id === modelId);
+  // Prefer an explicit models[] entry FIRST, even when modelId is the default:
+  // a custom provider's default model can declare its own contextWindow /
+  // maxOutputTokens / reasoningProfile override, which the bare `{id}` default
+  // descriptor silently dropped. Mirrors base.ts + the built-in registry fix.
+  const fromList = (config.models ?? [])
+    .map((entry) => customDescriptorToFull(entry, config.protocol, config.supportsThinking))
+    .find((m) => m.id === modelId);
+  const descriptor = fromList ?? (isDefault ? ({ id: config.model } as KodaXModelDescriptor) : undefined);
   if (!descriptor) return undefined;
   // supportsThinking:false forces the provider-level 'none' profile (resolved above), so
   // the exposed profile, capability, and runtime all agree on no-thinking — even for a

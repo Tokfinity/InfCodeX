@@ -135,6 +135,10 @@ export {
   mapDepthToOpenAIReasoningEffort,
 } from './reasoning.js';
 
+// FEATURE_222 (R6) — canonical host-facing wire-effort resolver.
+export { resolveWireEffort } from './wire-effort.js';
+export type { ResolveWireEffortInput, ResolvedWireEffort } from './wire-effort.js';
+
 // ============== Providers ==============
 export {
   KodaXBaseProvider,

@@ -63,6 +63,24 @@ describe('built-in provider model capabilities (no API key required)', () => {
     expect(glm52?.maxOutputTokens).toBe(131_072);
   });
 
+  it('honors a models[] override even when the model IS the provider default (R3 regression)', () => {
+    // zhipu-coding + zai-coding both DEFAULT to glm-5.2, which carries its own
+    // 1M/131K override in models[]. The pre-fix resolver used a bare default
+    // descriptor and returned the 200K/16K provider defaults (the "context window
+    // shows 200K" bug). getEffective* already returned the right values; these
+    // metadata resolvers must now agree.
+    for (const provider of ['zhipu-coding', 'zai-coding'] as const) {
+      const caps = getModelCapabilities(provider, 'glm-5.2');
+      expect(caps?.contextWindow, `${provider} ctx`).toBe(1_000_000);
+      expect(caps?.maxOutputTokens, `${provider} maxOut`).toBe(131_072);
+      expect(caps?.reasoningCapability, `${provider} reasoning`).toBe('native-effort');
+      // The override does not disturb the default flag — glm-5.2 is still the default.
+      expect(caps?.isDefault, `${provider} isDefault`).toBe(true);
+      // resolveModelCapabilities (the unified dispatcher hosts call) agrees.
+      expect(resolveModelCapabilities(provider, 'glm-5.2')?.contextWindow).toBe(1_000_000);
+    }
+  });
+
   it('exposes deepseek-v4 series at 1M context', () => {
     expect(getModelCapabilities('deepseek', 'deepseek-v4-flash')?.contextWindow).toBe(1_000_000);
     expect(getModelCapabilities('deepseek', 'deepseek-v4-pro')?.contextWindow).toBe(1_000_000);
@@ -230,6 +248,29 @@ describe('custom provider model capabilities', () => {
     expect(defaultCaps?.supportsThinking).toBe(true);
     expect(defaultCaps?.thinkingBudgetCap).toBe(8_000);
     expect(defaultCaps?.reasoningCapability).toBe('native-effort');
+  });
+
+  it('honors a models[] override when the custom default model has its own entry (R3 regression)', () => {
+    registerCustomProviders([
+      {
+        name: 'corp-gateway',
+        baseUrl: 'https://gw.example.com/v1',
+        apiKeyEnv: 'CORP_GATEWAY_API_KEY',
+        protocol: 'openai',
+        model: 'corp-default',
+        models: [
+          // The DEFAULT model declares its own override — pre-fix this was dropped
+          // in favor of the bare {id} default descriptor + provider-level values.
+          { id: 'corp-default', displayName: 'Corp Default', contextWindow: 1_000_000, maxOutputTokens: 131_072 },
+        ],
+        contextWindow: 200_000,
+        maxOutputTokens: 16_000,
+      },
+    ]);
+    const caps = getCustomModelCapabilities('corp-gateway', 'corp-default');
+    expect(caps?.contextWindow).toBe(1_000_000);
+    expect(caps?.maxOutputTokens).toBe(131_072);
+    expect(caps?.isDefault).toBe(true);
   });
 
   it('returns undefined for unknown custom-provider / model', () => {

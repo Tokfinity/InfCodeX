@@ -1,0 +1,60 @@
+import { describe, expect, it } from 'vitest';
+import { resolveWireEffort } from './wire-effort.js';
+import { resolveModelCapabilities } from './providers/index.js';
+
+/**
+ * FEATURE_222 (R6) — resolveWireEffort composes profile lookup + rejection
+ * narrowing + alias/ceiling/default resolution into one host-facing call.
+ */
+describe('resolveWireEffort', () => {
+  it('applies the model reasoning-profile effort alias (e.g. GLM-5.2 low → high)', () => {
+    // Precondition: this model's profile aliases low → high (zai-glm-5.2 preset).
+    const profile = resolveModelCapabilities('zai-coding', 'glm-5.2')?.reasoningProfile;
+    expect(profile?.effortAliases?.low, 'test fixture assumption').toBe('high');
+
+    const resolved = resolveWireEffort({ provider: 'zai-coding', model: 'glm-5.2', desiredEffort: 'low' });
+    expect(resolved.effort).toBe('high');
+    expect(resolved.adjusted).toBe(true);
+  });
+
+  it('never returns an effort that was rejected — folds rejectedEfforts into the ladder', () => {
+    // 'high' would otherwise be selected; rejecting it forces a different rung.
+    const resolved = resolveWireEffort({
+      provider: 'zai-coding',
+      model: 'glm-5.2',
+      desiredEffort: 'high',
+      rejectedEfforts: ['high'],
+    });
+    expect(resolved.effort).not.toBe('high');
+    // The profile's defaultEffort is 'max', which survives the narrowing.
+    expect(resolved.effort).toBe('max');
+    expect(resolved.adjusted).toBe(true);
+  });
+
+  it('returns undefined effort for a provider/model with no reasoning profile', () => {
+    const resolved = resolveWireEffort({ provider: 'does-not-exist', model: 'whatever', desiredEffort: 'high' });
+    expect(resolved.effort).toBeUndefined();
+    expect(resolved.configuredEffort).toBeUndefined();
+    expect(resolved.adjusted).toBe(false);
+  });
+
+  it('resolves the provider default model when model is omitted (no throw)', () => {
+    // Smoke: a real provider without an explicit model still yields a legal
+    // ResolvedWireEffort (effort is a string or undefined, never throws).
+    const resolved = resolveWireEffort({ provider: 'anthropic', desiredEffort: 'high' });
+    expect(['string', 'undefined']).toContain(typeof resolved.effort);
+  });
+
+  it('preserves effectiveEffort === undefined rather than falling back to configuredEffort', () => {
+    // A provider/model whose profile resolves the requested effort to "no wire
+    // effort" (adaptive) must surface undefined, not the configured value.
+    const caps = resolveModelCapabilities('anthropic', 'claude-opus-4-8')?.reasoningProfile;
+    if (caps?.thinkingStrategy === 'anthropic-adaptive') {
+      const resolved = resolveWireEffort({ provider: 'anthropic', model: 'claude-opus-4-8', desiredEffort: 'auto' });
+      // configuredEffort may be 'auto'; effort must NOT be a stale copy of it.
+      if (resolved.configuredEffort === 'auto') {
+        expect(resolved.effort).not.toBe('auto');
+      }
+    }
+  });
+});

@@ -601,22 +601,29 @@ export function getModelCapabilities(
 ): KodaXModelCapabilities | undefined {
   const snapshot = KODAX_PROVIDER_SNAPSHOTS[providerName as ProviderName];
   if (!snapshot) return undefined;
+  // Prefer an explicit models[] entry FIRST, even when modelId is the provider's
+  // default model: a provider's default can declare its own per-model overrides
+  // (e.g. zhipu-coding/zai-coding default to glm-5.2, which carries a 1M context
+  // window + 131K max output in models[]). Selecting the bare default descriptor
+  // ahead of that entry silently dropped those overrides — the "context window
+  // shows 200K" bug. This mirrors base.ts getModelDescriptor precedence so
+  // resolveModelCapabilities agrees with getEffectiveContextWindow/MaxOutputTokens.
+  const entry = snapshot.models?.find((m) => m.id === modelId);
+  if (entry) {
+    return effectiveCapabilities(providerName, snapshot, entry);
+  }
   if (modelId === snapshot.model) {
     return effectiveCapabilities(providerName, snapshot, makeDefaultDescriptor(snapshot));
   }
-  const entry = snapshot.models?.find((m) => m.id === modelId);
-  if (!entry) {
-    // Unknown model under a KNOWN built-in provider: inherit the provider-level
-    // capability (reasoning strategy is overwhelmingly a provider/family trait,
-    // not per-model), tagged to the requested model id. This optimistic-wide
-    // default keeps every effort rung the family advertises reachable, so a
-    // freshly-released model id (e.g. a new GLM revision) still gets the right
-    // ladder instead of collapsing to the generic off/low/medium/high fallback.
-    // If a specific effort turns out unsupported, the real-response narrowing
-    // path corrects it. Returns a non-default descriptor so `isDefault` is false.
-    return effectiveCapabilities(providerName, snapshot, { id: modelId });
-  }
-  return effectiveCapabilities(providerName, snapshot, entry);
+  // Unknown model under a KNOWN built-in provider: inherit the provider-level
+  // capability (reasoning strategy is overwhelmingly a provider/family trait,
+  // not per-model), tagged to the requested model id. This optimistic-wide
+  // default keeps every effort rung the family advertises reachable, so a
+  // freshly-released model id (e.g. a new GLM revision) still gets the right
+  // ladder instead of collapsing to the generic off/low/medium/high fallback.
+  // If a specific effort turns out unsupported, the real-response narrowing
+  // path corrects it. Returns a non-default descriptor so `isDefault` is false.
+  return effectiveCapabilities(providerName, snapshot, { id: modelId });
 }
 
 /**
