@@ -82,6 +82,37 @@ describe("message-utils", () => {
     ]);
   });
 
+  it("restores a sidecar-verifier synthetic user message as a sidecar item", () => {
+    // The Sidecar Verifier injects its `revise` feedback as a synthetic user
+    // message (_source: 'sidecar-verifier') so the Worker reanimates on it. On
+    // restore it must render under the Sidecar identity, not as a user bubble,
+    // and must NOT be swallowed by the generic _synthetic skip.
+    const message: HistorySeedSourceMessage = {
+      role: "user",
+      _synthetic: true,
+      _source: "sidecar-verifier",
+      content: "Your report is not actionable — give the concrete diff.",
+    };
+
+    expect(extractHistorySeedsFromMessage(message)).toEqual([
+      {
+        type: "sidecar",
+        text: "Your report is not actionable — give the concrete diff.",
+        verdict: "revise",
+      },
+    ]);
+  });
+
+  it("still skips a plain synthetic user message (auto-continue / retry prompt)", () => {
+    const message: HistorySeedSourceMessage = {
+      role: "user",
+      _synthetic: true,
+      content: "Please continue.",
+    };
+
+    expect(extractHistorySeedsFromMessage(message)).toEqual([]);
+  });
+
   it("ignores empty legacy thinking blocks", () => {
     const message: HistorySeedSourceMessage = {
       role: "assistant",

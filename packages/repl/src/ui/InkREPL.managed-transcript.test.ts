@@ -366,7 +366,9 @@ describe("buildManagedTaskTranscriptItems", () => {
         { verifierLog: true },
       );
       const transcript = items.join("\n\n");
-      expect(transcript).toContain("[Evaluator]");
+      // verifierLog surfaces the accept entry too — under the Sidecar identity.
+      expect(transcript).toContain("⚡ Sidecar Verifier");
+      expect(transcript).not.toContain("[Evaluator]");
       expect(transcript).toContain("用户用中文说");
     });
 
@@ -406,7 +408,11 @@ describe("buildManagedTaskTranscriptItems", () => {
       };
       const items = buildManagedTaskTranscriptItems(result as any, { verifierLog: false });
       const transcript = items.join("\n\n");
-      expect(transcript).toContain("[Evaluator]");
+      // The verdict surfaces under the Sidecar identity, NOT the legacy
+      // [Evaluator] role label (FEATURE_184 follow-up — the in-chain Evaluator
+      // was retired; this feedback is the Sidecar Verifier's).
+      expect(transcript).toContain("⚡ Sidecar Verifier");
+      expect(transcript).not.toContain("[Evaluator]");
       expect(transcript).toContain("revise needed");
     });
 
@@ -445,7 +451,9 @@ describe("buildManagedTaskTranscriptItems", () => {
       };
       const items = buildManagedTaskTranscriptItems(result as any, { verifierLog: false });
       const transcript = items.join("\n\n");
-      expect(transcript).toContain("[Evaluator]");
+      // Blocked verdict surfaces under the Sidecar identity, not [Evaluator].
+      expect(transcript).toContain("⚡ Sidecar Verifier");
+      expect(transcript).not.toContain("[Evaluator]");
       expect(transcript).toContain("missing dependency");
     });
 
@@ -495,7 +503,8 @@ describe("buildManagedTaskTranscriptItems", () => {
       try {
         const items = buildManagedTaskTranscriptItems(baseSidecarAcceptResult() as any);
         const transcript = items.join("\n\n");
-        expect(transcript).toContain("[Evaluator]");
+        expect(transcript).toContain("⚡ Sidecar Verifier");
+        expect(transcript).not.toContain("[Evaluator]");
         expect(transcript).toContain("用户用中文说");
       } finally {
         if (prev === undefined) delete process.env.KODAX_VERIFIER_LOG;

@@ -126,4 +126,99 @@ describe('buildRunnerSidecarVerifierAdapter', () => {
       reanimateBudget: 2,
     });
   });
+
+  it('flips the REPL status-line label back to Worker on a revise reanimation (label-lag fix)', async () => {
+    // The sidecar verdict emits onRoleEmit('evaluator') via onVerdict, flipping
+    // the status-line label to [Evaluator]. A `revise` reanimates the SAME
+    // Worker (no agent switch → onAgentSwitched never fires), so the label must
+    // be flipped back here or the Worker's reanimated output renders under the
+    // stale [Evaluator] label.
+    const provider = fakeProvider(async () => ({
+      textBlocks: [],
+      thinkingBlocks: [],
+      toolBlocks: [toolBlock({ verdict: 'revise', reason: 'Add the missing diff.' })],
+    }));
+    const observer = makeObserver();
+    const adapter = buildRunnerSidecarVerifierAdapter({
+      mainProvider: provider,
+      mainProviderName: 'fake-verifier',
+      mainModel: undefined,
+      mutationTracker: makeMutationTracker(),
+      observer,
+      onVerdict: () => {},
+      getSessionId: () => undefined,
+      getChildTaskRegistrySize: () => 0,
+      getRoundCount: () => 1,
+      getHasPlan: () => false,
+    });
+
+    const priorAlways = process.env.KODAX_VERIFIER_ALWAYS;
+    process.env.KODAX_VERIFIER_ALWAYS = '1';
+    try {
+      const result = await adapter.composedStopHook({
+        transcript: [
+          { role: 'user', content: 'review the change' },
+          { role: 'assistant', content: 'report' },
+        ],
+        lastAssistantText: 'report',
+        signal: 'natural-end',
+        reanimateCount: 0,
+        reanimateBudget: 2,
+      });
+      expect((result as { reanimate?: string }).reanimate).toContain('Add the missing diff.');
+    } finally {
+      if (priorAlways === undefined) {
+        delete process.env.KODAX_VERIFIER_ALWAYS;
+      } else {
+        process.env.KODAX_VERIFIER_ALWAYS = priorAlways;
+      }
+    }
+
+    expect(observer.agentSwitched).toHaveBeenCalledWith('worker');
+  });
+
+  it('does NOT flip the label on a blocked verdict (terminal, no reanimation)', async () => {
+    const provider = fakeProvider(async () => ({
+      textBlocks: [],
+      thinkingBlocks: [],
+      toolBlocks: [toolBlock({ verdict: 'blocked', reason: 'Unsafe change; stopping.' })],
+    }));
+    const observer = makeObserver();
+    const adapter = buildRunnerSidecarVerifierAdapter({
+      mainProvider: provider,
+      mainProviderName: 'fake-verifier',
+      mainModel: undefined,
+      mutationTracker: makeMutationTracker(),
+      observer,
+      onVerdict: () => {},
+      getSessionId: () => undefined,
+      getChildTaskRegistrySize: () => 0,
+      getRoundCount: () => 1,
+      getHasPlan: () => false,
+    });
+
+    const priorAlways = process.env.KODAX_VERIFIER_ALWAYS;
+    process.env.KODAX_VERIFIER_ALWAYS = '1';
+    try {
+      const result = await adapter.composedStopHook({
+        transcript: [
+          { role: 'user', content: 'review the change' },
+          { role: 'assistant', content: 'report' },
+        ],
+        lastAssistantText: 'report',
+        signal: 'natural-end',
+        reanimateCount: 0,
+        reanimateBudget: 2,
+      });
+      expect((result as { abort?: boolean }).abort).toBe(true);
+    } finally {
+      if (priorAlways === undefined) {
+        delete process.env.KODAX_VERIFIER_ALWAYS;
+      } else {
+        process.env.KODAX_VERIFIER_ALWAYS = priorAlways;
+      }
+    }
+
+    expect(observer.agentSwitched).not.toHaveBeenCalled();
+  });
 });

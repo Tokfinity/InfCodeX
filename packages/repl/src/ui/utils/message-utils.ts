@@ -20,6 +20,7 @@ export type RestoredHistorySeed =
   | { type: "assistant"; text: string }
   | { type: "system"; text: string }
   | { type: "thinking"; text: string }
+  | { type: "sidecar"; text: string; verdict?: "revise" | "blocked" }
   | { type: "tool_summary"; text: string }
   | { type: "tool_group"; tools: KodaXSessionUiToolCall[] };
 
@@ -402,6 +403,13 @@ export interface HistorySeedSourceMessage {
   role: KodaXMessage["role"];
   content: string | KodaXContentBlock[];
   _synthetic?: boolean;
+  /**
+   * Provenance marker persisted on host-injected messages. `'sidecar-verifier'`
+   * tags the synthetic user message the Sidecar Verifier injects on a `revise`
+   * verdict, so restore can render it under the Sidecar identity instead of
+   * swallowing it with the generic `_synthetic` skip.
+   */
+  _source?: string;
 }
 
 /**
@@ -444,6 +452,19 @@ export function extractHistorySeedsFromMessage(message: HistorySeedSourceMessage
       });
     }
     case "user": {
+      // Sidecar Verifier `revise` feedback is persisted as a synthetic user
+      // message (_source: 'sidecar-verifier') so the Worker reanimates on it.
+      // On restore it must render under the Sidecar identity — not as a user
+      // bubble, and not dropped by the generic _synthetic skip below. Only
+      // `revise` is ever persisted this way (accept injects no message;
+      // blocked / budget-exhausted target the user, not the main agent), so the
+      // restored verdict is always `revise`.
+      if (message._source === "sidecar-verifier") {
+        const sidecarText = extractTextContent(message.content).trim();
+        return sidecarText
+          ? [{ type: "sidecar", text: sidecarText, verdict: "revise" }]
+          : [];
+      }
       // Skip synthetic messages (auto-continue, retry prompts injected by the system).
       if (message._synthetic) {
         return [];

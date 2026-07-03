@@ -109,7 +109,17 @@ export function buildManagedTaskTranscriptItems(
           : (entry.round ?? 1) > 1
             ? ` Round ${entry.round}`
             : '';
-      return `[${entry.title ?? entry.assignmentId}${labelSuffix}]\n${text}`;
+      // FEATURE_184 follow-up: the Sidecar Verifier's verdicts carry the legacy
+      // 'evaluator' role name (verifier-recorder-bridge writes role:'evaluator'
+      // for downstream-slot compat). Attribute the surfaced revise / blocked
+      // feedback to the Sidecar identity instead of a phantom [Evaluator] agent
+      // — the in-chain Evaluator was retired in v0.7.45, and the same verdict is
+      // rendered live as a first-class sidecar item via onSidecarMessage.
+      const label =
+        entry.role === 'evaluator'
+          ? `⚡ Sidecar Verifier${labelSuffix}`
+          : `${entry.title ?? entry.assignmentId}${labelSuffix}`;
+      return `[${label}]\n${text}`;
     });
   const completionLabel =
     task.verdict.disposition === 'complete'

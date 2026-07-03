@@ -225,7 +225,19 @@ export function buildRunnerSidecarVerifierAdapter(
               trace: captured.trace,
             });
           }
-          if (sidecarResult !== undefined) return sidecarResult;
+          if (sidecarResult !== undefined) {
+            // Label-lag fix: `onVerdict` above emitted `onRoleEmit('evaluator')`,
+            // flipping the REPL status-line label to [Evaluator]. A `revise`
+            // reanimates the SAME Worker (no agent switch, so the runner's
+            // `onAgentSwitched` never fires) — without flipping the label back
+            // here the Worker's reanimated output would render under the stale
+            // [Evaluator] label. `blocked` is terminal (`{abort}`), so it must
+            // NOT flip.
+            if (captured?.verdict === 'revise') {
+              deps.observer.agentSwitched('worker');
+            }
+            return sidecarResult;
+          }
         }
       }
     }
