@@ -18,6 +18,14 @@ export type WorkflowProcessItemStatus =
 
 export type WorkflowProcessItemKind = 'phase' | 'agent' | 'step' | 'artifact';
 
+/**
+ * FEATURE_246 resume telemetry — how an agent item came to be in a resumed run.
+ * `ran` = executed live this run; `replayed-from-cache` = returned instantly from
+ * a prior run's content-addressed result cache (resumeFromRunId). Only populated
+ * on resumed runs; absent on a fresh run (treat absent as `ran`).
+ */
+export type WorkflowProcessItemOrigin = 'ran' | 'replayed-from-cache';
+
 export type WorkflowProcessSummaryStatus =
   | 'pending'
   | 'result'
@@ -49,6 +57,8 @@ export interface WorkflowProcessItem {
   readonly summary?: string;
   readonly summaryStatus?: WorkflowProcessSummaryStatus;
   readonly error?: string;
+  /** FEATURE_246 resume telemetry — see {@link WorkflowProcessItemOrigin}. */
+  readonly origin?: WorkflowProcessItemOrigin;
 }
 
 export interface WorkflowEventCorrelation {
@@ -75,6 +85,10 @@ export interface WorkflowProcessProgress {
   readonly stoppedAgents: number;
   readonly agentCap?: number;
   readonly plannedItems?: number;
+  /** FEATURE_246 resume telemetry — count of agents that replayed from a prior
+   *  run's cache (origin `replayed-from-cache`). Present only when > 0, so a
+   *  fresh run's progress is unchanged. */
+  readonly replayedAgents?: number;
 }
 
 export interface WorkflowProcessTokenUsage {
@@ -102,6 +116,9 @@ export interface WorkflowProcessSnapshot {
   readonly sourceRunId?: string;
   readonly sourceWorkflowName?: string;
   readonly revisionOf?: string;
+  /** FEATURE_246 resume telemetry — the prior run this run resumed from
+   *  (content-addressed replay). Absent on a fresh (non-resumed) run. */
+  readonly resumedFromRunId?: string;
   readonly hostMetadata?: Record<string, string>;
   readonly activePhaseId?: string;
   readonly activePhaseIndex?: number;
@@ -135,6 +152,8 @@ export interface WorkflowProcessTrackerOptions {
   readonly sourceRunId?: string;
   readonly sourceWorkflowName?: string;
   readonly revisionOf?: string;
+  /** FEATURE_246 resume telemetry — the prior run this run resumed from. */
+  readonly resumedFromRunId?: string;
   readonly hostMetadata?: Record<string, string>;
   readonly phases?: readonly string[];
   readonly maxAgents?: number;
@@ -174,6 +193,7 @@ interface MutableWorkflowProcessItem {
   summary?: string;
   summaryStatus?: WorkflowProcessSummaryStatus;
   error?: string;
+  origin?: WorkflowProcessItemOrigin;
 }
 
 export function isFinalWorkflowProcessStatus(status: WorkflowProcessStatus): boolean {
@@ -282,6 +302,7 @@ function immutableItem(item: MutableWorkflowProcessItem): WorkflowProcessItem {
     ...(item.summary !== undefined ? { summary: item.summary } : {}),
     ...(item.summaryStatus !== undefined ? { summaryStatus: item.summaryStatus } : {}),
     ...(item.error !== undefined ? { error: item.error } : {}),
+    ...(item.origin !== undefined ? { origin: item.origin } : {}),
   };
 }
 
@@ -299,6 +320,11 @@ export function createWorkflowProcessTracker(
   const now = options.now ?? defaultNow;
   const startedAt = now();
   const hostMetadata = normalizeHostMetadata(options.hostMetadata);
+  // FEATURE_246 resume telemetry — only a resumed run stamps `origin` on its
+  // agent items (so a fresh run's snapshot stays byte-identical). On a resumed
+  // run, live agents are `ran` and cache hits are `replayed-from-cache`.
+  const isResumeRun = options.resumedFromRunId !== undefined;
+  const ranOrigin: WorkflowProcessItemOrigin | undefined = isResumeRun ? 'ran' : undefined;
   let updatedAt = startedAt;
   let status: WorkflowProcessStatus = 'running';
   let activePhaseId: string | undefined;
@@ -362,7 +388,14 @@ export function createWorkflowProcessTracker(
   }
 
   function progress(): WorkflowProcessProgress {
-    const agents = items.filter((item) => item.kind === 'agent');
+    const allAgents = items.filter((item) => item.kind === 'agent');
+    // FEATURE_246 — replayed agents are counted separately; the spawn/finish/
+    // active counts stay about agents that actually ran this run (so a fresh run,
+    // which never has replayed items, is unchanged).
+    const replayedAgents = allAgents.filter((item) => item.origin === 'replayed-from-cache').length;
+    const agents = replayedAgents > 0
+      ? allAgents.filter((item) => item.origin !== 'replayed-from-cache')
+      : allAgents;
     const finishedAgents = agents.filter((item) =>
       item.status === 'completed' || item.status === 'failed' || item.status === 'cancelled'
     ).length;
@@ -377,6 +410,7 @@ export function createWorkflowProcessTracker(
       stoppedAgents,
       ...(options.maxAgents !== undefined ? { agentCap: options.maxAgents } : {}),
       ...(options.plannedAgents !== undefined ? { plannedItems: options.plannedAgents } : {}),
+      ...(replayedAgents > 0 ? { replayedAgents } : {}),
     };
   }
 
@@ -407,6 +441,7 @@ export function createWorkflowProcessTracker(
         ? { sourceWorkflowName: options.sourceWorkflowName }
         : {}),
       ...(options.revisionOf !== undefined ? { revisionOf: options.revisionOf } : {}),
+      ...(options.resumedFromRunId !== undefined ? { resumedFromRunId: options.resumedFromRunId } : {}),
       ...(hostMetadata !== undefined ? { hostMetadata: { ...hostMetadata } } : {}),
       ...(activePhaseId !== undefined ? { activePhaseId } : {}),
       ...(activeIndex >= 0 ? { activePhaseIndex: activeIndex + 1 } : {}),
@@ -493,6 +528,7 @@ export function createWorkflowProcessTracker(
       startedAt: updatedAt,
       ...(readString(data, 'provider') !== undefined ? { provider: readString(data, 'provider') } : {}),
       ...(readString(data, 'model') !== undefined ? { model: readString(data, 'model') } : {}),
+      ...(ranOrigin !== undefined ? { origin: ranOrigin } : {}),
     });
     latestMessage = `agent spawned: ${title}`;
   }
@@ -515,6 +551,7 @@ export function createWorkflowProcessTracker(
       ...(activePhaseId !== undefined ? { phaseId: activePhaseId } : {}),
       childAgentId: taskId,
       startedAt: updatedAt,
+      ...(ranOrigin !== undefined ? { origin: ranOrigin } : {}),
     };
     target.title = title;
     target.status = itemStatus;
@@ -563,6 +600,7 @@ export function createWorkflowProcessTracker(
       ...(activePhaseId !== undefined ? { phaseId: activePhaseId } : {}),
       childAgentId: taskId,
       startedAt: updatedAt,
+      ...(ranOrigin !== undefined ? { origin: ranOrigin } : {}),
     };
     target.status = 'cancelled';
     target.endedAt = updatedAt;
@@ -570,6 +608,38 @@ export function createWorkflowProcessTracker(
     if (stopError !== undefined) target.error = stopError;
     if (!item) items.push(target);
     latestMessage = `agent stopped: ${title}`;
+  }
+
+  function applyAgentReplayed(data: Record<string, unknown> | undefined): void {
+    const taskId = readString(data, 'taskId') ?? readString(data, 'agentId');
+    if (!taskId) return;
+    const title = readString(data, 'name') ?? taskId;
+    const id = agentItemId(taskId);
+    const explicitPhase = readString(data, 'phase');
+    const phaseId = explicitPhase !== undefined ? phaseIdForName(explicitPhase) : activePhaseId;
+    // A cache replay is instantaneous — the item goes straight to completed and
+    // never passes through `running`. `origin` marks it so a host can render
+    // "N/M replayed from cache" and badge the row.
+    const existing = findItem(id);
+    if (existing) {
+      existing.status = 'completed';
+      existing.origin = 'replayed-from-cache';
+      existing.endedAt = updatedAt;
+      if (phaseId !== undefined && existing.phaseId === undefined) existing.phaseId = phaseId;
+    } else {
+      items.push({
+        id,
+        title,
+        kind: 'agent',
+        status: 'completed',
+        ...(phaseId !== undefined ? { phaseId } : {}),
+        childAgentId: taskId,
+        startedAt: updatedAt,
+        endedAt: updatedAt,
+        origin: 'replayed-from-cache',
+      });
+    }
+    latestMessage = `agent replayed from cache: ${title}`;
   }
 
   function finishOpenItems(finalStatus: WorkflowProcessItemStatus): void {
@@ -623,6 +693,9 @@ export function createWorkflowProcessTracker(
           return processEvent('workflow_updated', latestMessage);
         case 'agent_stopped':
           applyAgentStopped(event.data);
+          return processEvent('workflow_updated', latestMessage);
+        case 'agent_replayed':
+          applyAgentReplayed(event.data);
           return processEvent('workflow_updated', latestMessage);
         case 'agent_message_sent':
           latestMessage = 'agent message sent';

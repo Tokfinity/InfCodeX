@@ -19,6 +19,10 @@ export type WorkflowEventType =
   | 'agent_failed'
   | 'agent_summary_updated'
   | 'agent_stopped'
+  // FEATURE_246 resume telemetry — a runAgent whose input matched a prior run's
+  // content-addressed cache returned instantly (no spawn/complete). This event
+  // makes that replay visible to the process snapshot ({taskId, name, phase?}).
+  | 'agent_replayed'
   | 'workflow_log'
   | 'artifact_written'
   | 'synthesis_completed'

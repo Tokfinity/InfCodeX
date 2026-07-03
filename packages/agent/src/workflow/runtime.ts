@@ -680,10 +680,11 @@ function buildRuntime(opts: CreateWorkflowRuntimeOptions): InternalRuntime {
 
     runAgent: async (input) => {
       // FEATURE_246 Part D (ADR-048): content-addressed resume cache. A cache
-      // hit returns the prior run's result verbatim and skips the spawn (so it
-      // emits no events — "instant" like the harness). The occurrence counter
-      // disambiguates identical inputs; it advances even on a miss so keys stay
-      // stable across runs.
+      // hit returns the prior run's result verbatim and skips the spawn. It emits
+      // a single lightweight `agent_replayed` telemetry event (so a host can
+      // render "N/M replayed from cache") but no spawn/progress events — the
+      // result is still returned instantly. The occurrence counter disambiguates
+      // identical inputs; it advances even on a miss so keys stay stable across runs.
       const cache = opts.resultCache;
       let cacheKey: string | undefined;
       if (cache) {
@@ -692,7 +693,14 @@ function buildRuntime(opts: CreateWorkflowRuntimeOptions): InternalRuntime {
         occurrenceByHash.set(hash, occurrence + 1);
         cacheKey = `${hash}#${occurrence}`;
         const cached = cache.get(cacheKey);
-        if (cached !== undefined) return cached;
+        if (cached !== undefined) {
+          recorder.emit('agent_replayed', {
+            taskId: cached.taskId,
+            name: input.name,
+            ...(input.phase !== undefined ? { phase: input.phase } : {}),
+          });
+          return cached;
+        }
       }
       try {
         const result = await runAgentImpl(input);

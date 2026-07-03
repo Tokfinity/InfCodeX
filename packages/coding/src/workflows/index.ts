@@ -22,3 +22,4 @@ export * from './pattern-templates.js';
 export * from './invocation-policy.js';
 export * from './identity.js';
 export * from './host.js';
+export * from './author-via-worker.js';

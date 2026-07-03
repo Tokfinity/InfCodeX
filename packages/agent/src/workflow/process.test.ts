@@ -317,3 +317,70 @@ describe('workflow process tracker', () => {
     expect(snapshot.items.map((item) => item.status)).toEqual(['cancelled', 'cancelled']);
   });
 });
+
+describe('workflow process tracker — FEATURE_246 resume replay telemetry', () => {
+  it('a fresh (non-resumed) run stamps no origin / replayedAgents / resumedFromRunId', () => {
+    const tracker = createWorkflowProcessTracker({
+      runId: 'run-fresh',
+      workflowName: 'fresh',
+      now: () => '2026-06-15T00:00:00.000Z',
+    });
+    tracker.applyEvent({ seq: 0, type: 'workflow_started' });
+    tracker.applyEvent({ seq: 1, type: 'agent_spawned', data: { taskId: 'c1', name: 'worker' } });
+    tracker.applyEvent({ seq: 2, type: 'agent_completed', data: { taskId: 'c1', name: 'worker', status: 'completed' } });
+
+    const snapshot = tracker.getSnapshot();
+    // Byte-identity guard: no resume fields appear on a fresh run.
+    expect(snapshot.resumedFromRunId).toBeUndefined();
+    expect(snapshot.progress.replayedAgents).toBeUndefined();
+    expect(snapshot.items.find((i) => i.id === 'agent:c1')?.origin).toBeUndefined();
+    expect(snapshot.progress.spawnedAgents).toBe(1);
+  });
+
+  it('a resumed run marks ran agents `ran`, replayed agents `replayed-from-cache`, and counts each side', () => {
+    const tracker = createWorkflowProcessTracker({
+      runId: 'run-resumed',
+      workflowName: 'resumed',
+      resumedFromRunId: 'run-prior',
+      now: () => '2026-06-15T00:00:00.000Z',
+    });
+    tracker.applyEvent({ seq: 0, type: 'workflow_started' });
+    // Two agents replay from the prior run's cache (no spawn/complete, just the replay event).
+    tracker.applyEvent({ seq: 1, type: 'agent_replayed', data: { taskId: 'c1', name: 'reader-a' } });
+    tracker.applyEvent({ seq: 2, type: 'agent_replayed', data: { taskId: 'c2', name: 'reader-b' } });
+    // One agent actually re-runs live this turn.
+    tracker.applyEvent({ seq: 3, type: 'agent_spawned', data: { taskId: 'c3', name: 'writer' } });
+    tracker.applyEvent({ seq: 4, type: 'agent_completed', data: { taskId: 'c3', name: 'writer', status: 'completed' } });
+    tracker.applyEvent({ seq: 5, type: 'workflow_completed' });
+
+    const snapshot = tracker.getSnapshot();
+    expect(snapshot.resumedFromRunId).toBe('run-prior');
+    expect(snapshot.progress.replayedAgents).toBe(2);
+    // spawnedAgents counts only the live-run agent, not the replayed ones.
+    expect(snapshot.progress.spawnedAgents).toBe(1);
+    expect(snapshot.progress.finishedAgents).toBe(1);
+
+    const c1 = snapshot.items.find((i) => i.id === 'agent:c1');
+    expect(c1).toMatchObject({ kind: 'agent', status: 'completed', origin: 'replayed-from-cache' });
+    const c3 = snapshot.items.find((i) => i.id === 'agent:c3');
+    expect(c3).toMatchObject({ kind: 'agent', status: 'completed', origin: 'ran' });
+  });
+
+  it('preserves a replayed agent phase grouping when the replay carries a phase tag', () => {
+    const tracker = createWorkflowProcessTracker({
+      runId: 'run-resumed-phase',
+      workflowName: 'resumed-phase',
+      resumedFromRunId: 'run-prior',
+      now: () => '2026-06-15T00:00:00.000Z',
+    });
+    tracker.applyEvent({ seq: 0, type: 'workflow_started' });
+    tracker.applyEvent({ seq: 1, type: 'agent_replayed', data: { taskId: 'c1', name: 'find-a', phase: 'Find' } });
+
+    const snapshot = tracker.getSnapshot();
+    const phase = snapshot.items.find((i) => i.kind === 'phase' && i.title === 'Find');
+    const agent = snapshot.items.find((i) => i.id === 'agent:c1');
+    expect(phase).toBeDefined();
+    expect(agent?.phaseId).toBe(phase?.id);
+    expect(agent?.origin).toBe('replayed-from-cache');
+  });
+});

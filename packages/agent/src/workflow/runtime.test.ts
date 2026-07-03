@@ -1323,6 +1323,13 @@ describe('content-addressed resume cache (FEATURE_246 Part D)', () => {
     const o2 = await runWorkflow(baseOpts(second.backend, { resultCache: cache }), script);
     expect(second.spawns()).toBe(0);
     if (o1.ok && o2.ok) expect(o2.result).toEqual(o1.result);
+    // FEATURE_246 resume telemetry: each cache hit emits one agent_replayed event
+    // (so the process snapshot can render "N/M replayed from cache").
+    const replayed = o2.state.events.filter((e) => e.type === 'agent_replayed');
+    expect(replayed).toHaveLength(2);
+    expect(replayed.map((e) => e.data?.name).sort()).toEqual(['a', 'b']);
+    // A fresh run (o1, empty cache) never replays.
+    expect(o1.state.events.some((e) => e.type === 'agent_replayed')).toBe(false);
   });
 
   it('re-runs only the effect whose input changed (content-addressed, not prefix)', async () => {

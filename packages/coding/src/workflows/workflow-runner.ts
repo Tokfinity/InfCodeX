@@ -25,7 +25,7 @@ import type {
   WorkflowRunState,
 } from '@kodax-ai/agent';
 
-import { dirname } from 'node:path';
+import { basename, dirname } from 'node:path';
 
 import { createCodingWorkflowBackend, type WorkflowChildOptions } from './agent-adapter.js';
 import { createNestedWorkflowResolver } from './nested-resolver.js';
@@ -232,6 +232,12 @@ export async function runWorkflowModule(
           : {}),
         ...(opts.processMetadata?.revisionOf !== undefined
           ? { revisionOf: opts.processMetadata.revisionOf }
+          : {}),
+        // FEATURE_246 resume telemetry — derive the resumed run id from the prior
+        // run dir (runDir === <baseDir>/<runId>), the one place resume intent is
+        // known. Absent on a fresh run → snapshot stays byte-identical.
+        ...(opts.resumeFromRunDir !== undefined
+          ? { resumedFromRunId: basename(opts.resumeFromRunDir) }
           : {}),
         ...(opts.processMetadata?.hostMetadata !== undefined
           ? { hostMetadata: { ...opts.processMetadata.hostMetadata } }

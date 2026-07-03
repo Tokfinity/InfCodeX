@@ -31,6 +31,7 @@ import {
   replaceSavedWorkflow,
   saveGeneratedWorkflow,
   saveGeneratedWorkflowFromRun,
+  buildScoutThenAuthorPrompt,
   type SavedWorkflowRef,
 } from '@kodax-ai/coding';
 
@@ -261,12 +262,9 @@ export const workflowCommand: Command = {
           displayName: 'workflow create',
           disableModelInvocation: false,
           ...(currentConfig.agentMode === 'ama' ? { agentModeOverride: 'amaw' as const } : {}),
-          prompt: [
-            'Set up and run a multi-agent workflow for this task.',
-            'First investigate the relevant files and sub-problems with your own tools, then author and run it with run_workflow — bake the concrete findings (exact paths, the specific dimensions to compare, a real outputSchema) into the child prompts rather than re-delegating the scouting.',
-            '',
-            request,
-          ].join('\n'),
+          // FEATURE_246 — shared with the SDK `authorWorkflowViaWorker` entrypoint
+          // so both produce a byte-identical scout-then-author turn.
+          prompt: buildScoutThenAuthorPrompt(request),
         },
       };
     };
