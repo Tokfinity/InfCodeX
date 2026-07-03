@@ -30,23 +30,20 @@ describe('cost-rates', () => {
       });
     });
 
-    it('should have ark-coding subscription placeholder rates for all 13 routed models', () => {
+    it('should have ark-coding subscription placeholder rates for all 5 routed models', () => {
       const ark = DEFAULT_COST_RATES['ark-coding'];
       expect(ark).toBeDefined();
+      // 2026-06 (late): Ark's official Coding Plan catalog is exactly
+      // these 5 models. Legacy IDs (glm-5.1 / glm-4.7 / deepseek-v3.2
+      // → UnsupportedModel 404; kimi-k2.6 / MiniMax-M2.7 / doubao × 3
+      // → dropped from the public catalog even though still served)
+      // are not in the cost table.
       const expectedModels = [
-        'glm-5.1',
         'glm-5.2',
-        'glm-4.7',
         'kimi-k2.7-code',
-        'kimi-k2.6',
         'MiniMax-M3',
-        'MiniMax-M2.7',
-        'deepseek-v3.2',
         'deepseek-v4-pro',
         'deepseek-v4-flash',
-        'doubao-seed-2.0-code',
-        'doubao-seed-2.0-pro',
-        'doubao-seed-2.0-lite',
       ];
       expectedModels.forEach((model) => {
         expect(ark[model]).toBeDefined();

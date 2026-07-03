@@ -92,46 +92,31 @@ describe('provider registry', () => {
     const ark = getProvider('ark-coding');
     expect(ark.name).toBe('ark-coding');
 
-    // Default + alts together must cover all 13 models the gateway routes
-    // to (V4 Pro / V4 Flash added 2026-05; kimi-k2.5 + minimax-latest
-    // retired and MiniMax-M3 + MiniMax-M2.7 added 2026-06; GLM-5.2 +
-    // Kimi K2.7 Code added late-2026-06 per user confirmation against
-    // the Ark console).
+    // Default + alts must cover exactly the 5 models Ark's official
+    // Coding Plan catalog lists (late-2026-06). Earlier lineup included
+    // legacy Kimi K2.6 / MiniMax M2.7 / doubao × 3 that Ark still
+    // silently serves but has retired from the public catalog —
+    // dropped here so the SDK surface only advertises officially
+    // supported models. glm-5.1 / glm-4.7 / deepseek-v3.2 return
+    // UnsupportedModel 404 and are also removed.
     const models = ark.getAvailableModels();
     expect(models).toEqual([
-      'glm-5.1',
       'glm-5.2',
-      'glm-4.7',
       'kimi-k2.7-code',
-      'kimi-k2.6',
       'MiniMax-M3',
-      'MiniMax-M2.7',
-      'deepseek-v3.2',
       'deepseek-v4-pro',
       'deepseek-v4-flash',
-      'doubao-seed-2.0-code',
-      'doubao-seed-2.0-pro',
-      'doubao-seed-2.0-lite',
     ]);
 
     // Per-model context window pins (user-confirmed against Volcengine
-    // console catalog). Default GLM family at 200K, GLM-5.2 at 1M
-    // (matches zhipu-coding/glm-5.2), Kimi at 256K, MiniMax-M2.7 at
-    // 204_800, MiniMax-M3 at 1M (Frontier Coding), DeepSeek V3.2 at
-    // 128K, DeepSeek V4 at 1M.
-    expect(ark.getEffectiveContextWindow('glm-5.1')).toBe(200_000);
+    // console catalog). GLM-5.2 at 1M (matches zhipu-coding/glm-5.2),
+    // Kimi K2.7 Code at 256K, MiniMax-M3 at 1M (Frontier Coding),
+    // DeepSeek V4 at 1M.
     expect(ark.getEffectiveContextWindow('glm-5.2')).toBe(1_000_000);
-    expect(ark.getEffectiveContextWindow('glm-4.7')).toBe(200_000);
     expect(ark.getEffectiveContextWindow('kimi-k2.7-code')).toBe(256_000);
-    expect(ark.getEffectiveContextWindow('kimi-k2.6')).toBe(256_000);
     expect(ark.getEffectiveContextWindow('MiniMax-M3')).toBe(1_000_000);
-    expect(ark.getEffectiveContextWindow('MiniMax-M2.7')).toBe(204_800);
-    expect(ark.getEffectiveContextWindow('deepseek-v3.2')).toBe(128_000);
     expect(ark.getEffectiveContextWindow('deepseek-v4-pro')).toBe(1_000_000);
     expect(ark.getEffectiveContextWindow('deepseek-v4-flash')).toBe(1_000_000);
-    expect(ark.getEffectiveContextWindow('doubao-seed-2.0-code')).toBe(256_000);
-    expect(ark.getEffectiveContextWindow('doubao-seed-2.0-pro')).toBe(256_000);
-    expect(ark.getEffectiveContextWindow('doubao-seed-2.0-lite')).toBe(256_000);
 
     // GLM-5.2 carries an explicit maxOutputTokens override. The Ark
     // gateway caps at 128_000 even though Zhipu's direct endpoint
@@ -142,13 +127,12 @@ describe('provider registry', () => {
     // or the Zhipu-direct 131_072 value.
     expect(ark.getEffectiveMaxOutputTokens('glm-5.2')).toBe(128_000);
 
-    expect(getProviderConfiguredReasoningCapability('ark-coding', 'glm-5.1')).toBe('native-toggle');
-    expectReasoningPreset('ark-coding', 'glm-5.1', 'zai-glm-toggle');
+    expect(getProviderConfiguredReasoningCapability('ark-coding', 'glm-5.2')).toBe('native-effort');
     expectReasoningPreset('ark-coding', 'glm-5.2', 'zai-glm-5.2');
     expectReasoningPreset('ark-coding', 'kimi-k2.7-code', 'kimi-k2.7-code');
     expectReasoningPreset('ark-coding', 'MiniMax-M3', 'minimax-m3');
     expectReasoningPreset('ark-coding', 'deepseek-v4-pro', 'deepseek-v4-anthropic');
-    expectReasoningPreset('ark-coding', 'doubao-seed-2.0-code', 'none');
+    expectReasoningPreset('ark-coding', 'deepseek-v4-flash', 'deepseek-v4-anthropic');
   });
 
   it('exposes a stable default provider snapshot', () => {

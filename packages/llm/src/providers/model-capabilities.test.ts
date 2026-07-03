@@ -102,20 +102,17 @@ describe('built-in provider model capabilities (no API key required)', () => {
     });
   });
 
-  it('exposes Ark Coding per-model context windows (k2.6=256K, M3=1M, M2.7=204K, v4-pro=1M, doubao=256K, glm-5.1=200K)', () => {
-    expect(getModelCapabilities('ark-coding', 'kimi-k2.6')?.contextWindow).toBe(256_000);
+  it('exposes Ark Coding per-model context windows (glm-5.2=1M, k2.7-code=256K, M3=1M, v4-pro=1M, v4-flash=1M)', () => {
+    // 2026-06 (late): Ark's official Coding Plan catalog trimmed to
+    // exactly these 5 models. Earlier lineup included legacy Kimi K2.6
+    // / MiniMax M2.7 / doubao × 3 that Ark still silently serves but
+    // has retired from the public catalog. glm-5.1 / glm-4.7 /
+    // deepseek-v3.2 return UnsupportedModel 404.
+    expect(getModelCapabilities('ark-coding', 'glm-5.2')?.contextWindow).toBe(1_000_000);
+    expect(getModelCapabilities('ark-coding', 'kimi-k2.7-code')?.contextWindow).toBe(256_000);
+    expect(getModelCapabilities('ark-coding', 'MiniMax-M3')?.contextWindow).toBe(1_000_000);
     expect(getModelCapabilities('ark-coding', 'deepseek-v4-pro')?.contextWindow).toBe(1_000_000);
     expect(getModelCapabilities('ark-coding', 'deepseek-v4-flash')?.contextWindow).toBe(1_000_000);
-    expect(getModelCapabilities('ark-coding', 'deepseek-v3.2')?.contextWindow).toBe(128_000);
-    // 2026-06: kimi-k2.5 retired + minimax-latest replaced by MiniMax-M3
-    // (1M Frontier Coding) + MiniMax-M2.7 (204K). User-confirmed against
-    // the Ark console.
-    expect(getModelCapabilities('ark-coding', 'MiniMax-M3')?.contextWindow).toBe(1_000_000);
-    expect(getModelCapabilities('ark-coding', 'MiniMax-M2.7')?.contextWindow).toBe(204_800);
-    expect(getModelCapabilities('ark-coding', 'doubao-seed-2.0-pro')?.contextWindow).toBe(256_000);
-    // Default model + alternatives with no override inherit the 200K provider-level value.
-    expect(getModelCapabilities('ark-coding', 'glm-5.1')?.contextWindow).toBe(200_000);
-    expect(getModelCapabilities('ark-coding', 'glm-4.7')?.contextWindow).toBe(200_000);
   });
 
   it('returns undefined only for an unknown provider', () => {

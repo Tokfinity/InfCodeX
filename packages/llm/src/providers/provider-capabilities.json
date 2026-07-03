@@ -714,7 +714,7 @@
     },
     "ark-coding": {
       "apiKeyEnv": "ARK_CODING_API_KEY",
-      "model": "glm-5.1",
+      "model": "glm-5.2",
       "models": [
         {
           "id": "glm-5.2",
@@ -746,7 +746,6 @@
             "supportsDisabledThinking": true
           }
         },
-        { "id": "glm-4.7", "displayName": "GLM-4.7" },
         {
           "id": "kimi-k2.7-code",
           "displayName": "Kimi K2.7 Code",
@@ -763,27 +762,6 @@
               { "value": "max", "description": "Thinking is always on" }
             ],
             "localRejectEfforts": ["none", "minimal"]
-          }
-        },
-        {
-          "id": "kimi-k2.6",
-          "displayName": "Kimi K2.6",
-          "contextWindow": 256000,
-          "reasoningProfile": {
-            "reasoningPreset": "kimi-hybrid-toggle",
-            "effortStrategy": "provider-toggle",
-            "thinkingStrategy": "provider-toggle",
-            "supportedEfforts": [
-              { "value": "none", "description": "Disable thinking" },
-              { "value": "minimal", "description": "Disable thinking", "isUserVisible": false },
-              { "value": "low", "description": "Enable thinking" },
-              { "value": "medium", "description": "Enable thinking", "isDefault": true },
-              { "value": "high", "description": "Enable thinking" },
-              { "value": "xhigh", "description": "Enable thinking" },
-              { "value": "max", "description": "Enable thinking" }
-            ],
-            "disabledEfforts": ["none", "minimal"],
-            "supportsDisabledThinking": true
           }
         },
         {
@@ -805,44 +783,6 @@
             ],
             "disabledEfforts": ["none", "minimal"],
             "supportsAdaptiveThinking": true,
-            "supportsDisabledThinking": true
-          }
-        },
-        {
-          "id": "MiniMax-M2.7",
-          "displayName": "MiniMax M2.7",
-          "contextWindow": 204800,
-          "reasoningProfile": {
-            "reasoningPreset": "minimax-m2-always",
-            "effortStrategy": "prompt-only",
-            "supportedEfforts": [
-              { "value": "low", "description": "Thinking is always on" },
-              { "value": "medium", "description": "Thinking is always on", "isDefault": true },
-              { "value": "high", "description": "Thinking is always on" },
-              { "value": "xhigh", "description": "Thinking is always on" },
-              { "value": "max", "description": "Thinking is always on" }
-            ],
-            "localRejectEfforts": ["none", "minimal"]
-          }
-        },
-        {
-          "id": "deepseek-v3.2",
-          "displayName": "DeepSeek V3.2",
-          "contextWindow": 128000,
-          "reasoningProfile": {
-            "reasoningPreset": "deepseek-toggle",
-            "effortStrategy": "provider-toggle",
-            "thinkingStrategy": "provider-toggle",
-            "supportedEfforts": [
-              { "value": "none", "description": "Disable thinking" },
-              { "value": "minimal", "description": "Disable thinking", "isUserVisible": false },
-              { "value": "low", "description": "Enable thinking" },
-              { "value": "medium", "description": "Enable thinking", "isDefault": true },
-              { "value": "high", "description": "Enable thinking" },
-              { "value": "xhigh", "description": "Enable thinking" },
-              { "value": "max", "description": "Enable thinking" }
-            ],
-            "disabledEfforts": ["none", "minimal"],
             "supportsDisabledThinking": true
           }
         },
@@ -901,27 +841,6 @@
             "supportsReasoningEffort": true,
             "supportsDisabledThinking": true
           }
-        },
-        {
-          "id": "doubao-seed-2.0-code",
-          "displayName": "Doubao Seed 2.0 Code",
-          "contextWindow": 256000,
-          "reasoningCapability": "prompt-only",
-          "reasoningProfile": { "reasoningPreset": "none", "effortStrategy": "prompt-only" }
-        },
-        {
-          "id": "doubao-seed-2.0-pro",
-          "displayName": "Doubao Seed 2.0 Pro",
-          "contextWindow": 256000,
-          "reasoningCapability": "prompt-only",
-          "reasoningProfile": { "reasoningPreset": "none", "effortStrategy": "prompt-only" }
-        },
-        {
-          "id": "doubao-seed-2.0-lite",
-          "displayName": "Doubao Seed 2.0 Lite",
-          "contextWindow": 256000,
-          "reasoningCapability": "prompt-only",
-          "reasoningProfile": { "reasoningPreset": "none", "effortStrategy": "prompt-only" }
         }
       ],
       "reasoningCapability": "native-toggle",

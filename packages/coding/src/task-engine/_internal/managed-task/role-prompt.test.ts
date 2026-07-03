@@ -39,10 +39,10 @@ function callWorker(ctx: ManagedRolePromptContext): string {
 describe('createRolePrompt — runtime identity in workspace section', () => {
   it('emits Provider and Model lines when both are supplied', () => {
     const rendered = callWorker(
-      buildContext({ provider: 'ark-coding', model: 'glm-5.1' }),
+      buildContext({ provider: 'ark-coding', model: 'glm-5.2' }),
     );
     expect(rendered).toContain('Provider: ark-coding');
-    expect(rendered).toContain('Model: glm-5.1');
+    expect(rendered).toContain('Model: glm-5.2');
   });
 
   it('places Provider/Model inside the ## Environment block (not elsewhere)', () => {
