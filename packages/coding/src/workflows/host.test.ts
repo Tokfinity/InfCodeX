@@ -105,6 +105,75 @@ describe('startManagedWorkflow', () => {
     ).rejects.toThrow();
   });
 
+  it('inline: rejects wf.parallel items that are already-started promises before starting a run', async () => {
+    const { manager, calls } = fakeManager();
+    const source = [
+      'async function run(wf) {',
+      '  const first = wf.runAgent({ name: "reader", prompt: "Read the target.", readOnly: true });',
+      '  const results = await wf.parallel([first], { concurrency: 2 });',
+      '  return { synthesis: String(results.length) };',
+      '}',
+    ].join('\n');
+
+    await expect(
+      startManagedWorkflow({
+        source: { kind: 'inline', manifest: MANIFEST, source },
+        args: { request: 'x' },
+        options: OPTIONS,
+        runsBaseDir: RUNS_DIR,
+        runId: 'run-bad-parallel',
+        manager,
+      }),
+    ).rejects.toThrow(/wf\.parallel items must be functions/);
+    expect(calls).toHaveLength(0);
+  });
+
+  it('inline: rejects dynamic waits that use an agent name instead of a taskId before starting a run', async () => {
+    const { manager, calls } = fakeManager();
+    const source = [
+      'async function run(wf) {',
+      '  const result = await wf.runAgent({ name: "reader", prompt: "Read the target.", readOnly: true });',
+      '  const followup = await wf.wait(result.name);',
+      '  return { synthesis: followup.finalText };',
+      '}',
+    ].join('\n');
+
+    await expect(
+      startManagedWorkflow({
+        source: { kind: 'inline', manifest: MANIFEST, source },
+        args: { request: 'x' },
+        options: OPTIONS,
+        runsBaseDir: RUNS_DIR,
+        runId: 'run-bad-wait',
+        manager,
+      }),
+    ).rejects.toThrow(/used an agent name/);
+    expect(calls).toHaveLength(0);
+  });
+
+  it('inline: treats ordinary smoke-only script branches as non-blocking', async () => {
+    const { manager, calls } = fakeManager();
+    const source = [
+      'async function run(wf) {',
+      '  const result = await wf.runAgent({ name: "reader", prompt: "Read the target.", readOnly: true });',
+      '  if (result.finalText.includes("Smoke result")) throw new Error("stub-only branch");',
+      '  return { synthesis: result.finalText };',
+      '}',
+    ].join('\n');
+
+    const result = await startManagedWorkflow({
+      source: { kind: 'inline', manifest: MANIFEST, source },
+      args: { request: 'x' },
+      options: OPTIONS,
+      runsBaseDir: RUNS_DIR,
+      runId: 'run-smoke-soft',
+      manager,
+    });
+
+    expect(result.kind).toBe('started');
+    expect(calls).toHaveLength(1);
+  });
+
   it('request: returns declined when the generator declines (no run started)', async () => {
     const { manager, calls } = fakeManager();
     const result = await startManagedWorkflow({

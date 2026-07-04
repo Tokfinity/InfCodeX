@@ -1,13 +1,21 @@
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
 import type { NewSessionRequest, PromptRequest, SetSessionModeRequest } from '@agentclientprotocol/sdk';
 
+type RuntimeConfigMock = {
+  provider: string;
+  model?: string;
+  thinking?: boolean;
+  effort?: string;
+  reasoningMode: string;
+};
+
 const acpServerState = vi.hoisted(() => ({
   capturedOptions: [] as unknown[],
   runKodaX: vi.fn(async (options: unknown) => {
     acpServerState.capturedOptions.push(options);
     return { interrupted: false };
   }),
-  prepareRuntimeConfig: vi.fn(() => ({
+  prepareRuntimeConfig: vi.fn<() => RuntimeConfigMock>(() => ({
     provider: 'openai',
     reasoningMode: 'auto',
   })),

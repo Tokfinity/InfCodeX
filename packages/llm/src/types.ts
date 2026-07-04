@@ -138,6 +138,19 @@ export type KodaXContentBlock =
 
 // ============== 消息类型 ==============
 
+export type KodaXTaskResultSource = 'workflow' | 'child_task';
+
+export interface KodaXTaskResultMetadata {
+  type: 'task_result';
+  source: KodaXTaskResultSource;
+  taskId: string;
+  runId?: string;
+  status: 'completed' | 'failed' | 'cancelled';
+  title?: string;
+  summary?: string;
+  artifactRefs?: string[];
+}
+
 export interface KodaXMessage {
   role: 'user' | 'assistant' | 'system';
   content: string | KodaXContentBlock[];
@@ -154,6 +167,15 @@ export interface KodaXMessage {
    * and session-load APIs for SDK consumers.
    */
   _source?: string;
+  /** Structured task/workflow result metadata for synthetic task-completed messages. */
+  _taskResult?: KodaXTaskResultMetadata;
+  /** Multiple task results when one synthetic wake message contains several banners. */
+  _taskResults?: KodaXTaskResultMetadata[];
+  /**
+   * Stable SDK turn id that owns this transcript message. Optional for older
+   * sessions and provider-internal synthetic messages.
+   */
+  turnId?: string;
   /**
    * ISO-8601 timestamp of when this message was finalized (assistant: when the
    * LLM stream completed; user: when submitted/injected). Optional and

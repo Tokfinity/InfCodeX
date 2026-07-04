@@ -53,7 +53,7 @@
  *     by `registerChildTask` in `task-registry.ts`.
  */
 
-import type { KodaXMessage, KodaXContentBlock } from '@kodax-ai/llm';
+import type { KodaXMessage, KodaXContentBlock, KodaXTaskResultMetadata } from '@kodax-ai/llm';
 
 import type {
   MessageQueue,
@@ -507,6 +507,7 @@ export async function composeIdleYieldUserMessage<TChildResult = unknown>(
   // path splices the prompt into the agent transcript directly; this is the
   // only signal the UI gets about a follow-up typed during idle-yield.
   onUserPrompts?: (prompts: readonly string[]) => void,
+  resolveTurnId?: () => string | undefined,
 ): Promise<readonly KodaXMessage[]> {
   const promptFragments: PromptFragment[] = [];
   const syntheticFragments: string[] = [];
@@ -518,6 +519,7 @@ export async function composeIdleYieldUserMessage<TChildResult = unknown>(
   // concatenated into one message and the whole message is tagged — content is
   // preserved, only the single `_source` label is shared.
   let hadTaskNotification = false;
+  const taskResults: KodaXTaskResultMetadata[] = [];
 
   const intake = (msg: QueuedMessage): void => {
     if (typeof msg.content !== 'string' || msg.content.length === 0) return;
@@ -528,7 +530,10 @@ export async function composeIdleYieldUserMessage<TChildResult = unknown>(
       });
     } else {
       // 'task-notification' / 'system-reminder' / future synthetic modes.
-      if (msg.mode === 'task-notification') hadTaskNotification = true;
+      if (msg.mode === 'task-notification') {
+        hadTaskNotification = true;
+        if (msg.taskResult) taskResults.push(msg.taskResult);
+      }
       syntheticFragments.push(msg.content);
     }
   };
@@ -550,11 +555,25 @@ export async function composeIdleYieldUserMessage<TChildResult = unknown>(
   if (promptFragments.length === 0 && syntheticFragments.length === 0) {
     if (wakeEvent.kind === 'child-completed') {
       hadTaskNotification = true;
+      taskResults.push({
+        type: 'task_result',
+        source: 'child_task',
+        taskId: wakeEvent.taskId,
+        status: 'completed',
+        summary: '(child task completed; no summary available)',
+      });
       syntheticFragments.push(
         `<task-completed task_id="${wakeEvent.taskId}">\n(child task completed; no summary available)\n</task-completed>`,
       );
     } else if (wakeEvent.kind === 'child-failed') {
       hadTaskNotification = true;
+      taskResults.push({
+        type: 'task_result',
+        source: 'child_task',
+        taskId: wakeEvent.taskId,
+        status: 'failed',
+        summary: `failed: ${wakeEvent.error.message}`,
+      });
       syntheticFragments.push(
         `<task-completed task_id="${wakeEvent.taskId}">\nfailed: ${wakeEvent.error.message}\n</task-completed>`,
       );
@@ -579,6 +598,8 @@ export async function composeIdleYieldUserMessage<TChildResult = unknown>(
         // transcript position (message-utils.ts exemption). Only when an actual
         // task-notification drained — a pure system-reminder stays untagged.
         ...(hadTaskNotification ? { _source: 'task-completed' } : {}),
+        ...(taskResults.length === 1 ? { _taskResult: taskResults[0] } : {}),
+        ...(taskResults.length > 1 ? { _taskResults: taskResults } : {}),
         // GOAL 2: stamp finalize-time (when the parent observed the wake) so the
         // session entry carries a real per-message time, not the save-batch time.
         timestamp: new Date().toISOString(),
@@ -591,6 +612,7 @@ export async function composeIdleYieldUserMessage<TChildResult = unknown>(
     // records them. The message below only reaches the AGENT transcript; the UI
     // renders from its own history/ledger and would otherwise never see this.
     const content = buildQueuedPromptContent(promptFragments);
+    const promptTurnId = resolveTurnId?.();
     onUserPrompts?.(promptFragments.map((fragment) => fragment.content));
     messages.push({
       role: 'user',
@@ -600,6 +622,7 @@ export async function composeIdleYieldUserMessage<TChildResult = unknown>(
       // same `\n\n---\n\n` separator the REPL's `popAllEditable` uses,
       // so the agent sees a structured boundary between them.
       content,
+      ...(promptTurnId !== undefined ? { turnId: promptTurnId } : {}),
       // GOAL 2: real finalize-time for the chat-while-waiting user turn.
       timestamp: new Date().toISOString(),
     });

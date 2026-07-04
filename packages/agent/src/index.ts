@@ -20,6 +20,8 @@ export type {
   KodaXRedactedThinkingBlock,
   KodaXContentBlock,
   KodaXMessage,
+  KodaXTaskResultMetadata,
+  KodaXTaskResultSource,
   KodaXTokenUsage,
   KodaXStreamResult,
   KodaXToolDefinition,

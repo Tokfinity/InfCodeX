@@ -14,6 +14,7 @@
  */
 
 import type { KodaXInputArtifact } from '../media/types.js';
+import type { KodaXTaskResultMetadata } from '@kodax-ai/llm';
 
 export type MessagePriority = 'user' | 'background';
 
@@ -37,6 +38,7 @@ export interface QueuedMessage {
   readonly mode: MessageMode;
   readonly content: string;
   readonly inputArtifacts?: readonly QueuedInputArtifact[];
+  readonly taskResult?: KodaXTaskResultMetadata;
   /** Wall-clock timestamp (`Date.now()`) for tracing only — not used for ordering. */
   readonly enqueuedAt: number;
 }
@@ -121,4 +123,5 @@ export interface EnqueueInput {
   readonly content: string;
   readonly agentId?: string;
   readonly inputArtifacts?: readonly QueuedInputArtifact[];
+  readonly taskResult?: KodaXTaskResultMetadata;
 }

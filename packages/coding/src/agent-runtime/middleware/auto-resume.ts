@@ -143,9 +143,16 @@ export function appendPromptIfNotDuplicate(
   messages: KodaXMessage[],
   prompt: string,
   inputArtifacts: readonly KodaXInputArtifact[] | undefined,
+  turnId?: string,
 ): KodaXMessage[] {
   const lastMsg = messages[messages.length - 1];
   if (extractComparableUserMessageText(lastMsg) === prompt) {
+    if (turnId !== undefined && lastMsg !== undefined && lastMsg.turnId === undefined) {
+      return [
+        ...messages.slice(0, -1),
+        { ...lastMsg, turnId },
+      ];
+    }
     return messages;
   }
   return [
@@ -153,6 +160,7 @@ export function appendPromptIfNotDuplicate(
     {
       role: 'user',
       content: buildPromptMessageContent(prompt, inputArtifacts),
+      ...(turnId !== undefined ? { turnId } : {}),
       // GOAL 2: real submit-time for the user turn (SA/CLI submission path).
       timestamp: new Date().toISOString(),
     },

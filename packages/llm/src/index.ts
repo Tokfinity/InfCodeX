@@ -19,6 +19,8 @@ export type {
   KodaXCacheBoundary,
   KodaXContentBlock,
   KodaXMessage,
+  KodaXTaskResultMetadata,
+  KodaXTaskResultSource,
   KodaXTokenUsage,
   KodaXStreamResult,
   KodaXToolDefinition,

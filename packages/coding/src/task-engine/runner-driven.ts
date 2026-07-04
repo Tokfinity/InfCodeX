@@ -35,7 +35,7 @@ import type {
   RunnerToolObserver,
   StopHookFn,
 } from '@kodax-ai/agent';
-import { Runner, getMessageQueue } from '@kodax-ai/agent';
+import { Runner, buildSystemPrompt, getMessageQueue } from '@kodax-ai/agent';
 // FEATURE_193 (v0.7.43): SCOUT_AGENT_NAME / PLANNER_AGENT_NAME /
 // GENERATOR_AGENT_NAME imports removed alongside the V1 chain agents —
 // the only remaining V2 chain agent is the Worker.
@@ -65,6 +65,7 @@ import type {
   KodaXAgentProfile,
   KodaXToolEventMeta,
   KodaXToolExecutionContext,
+  KodaXTurnDeliveryKind,
   ManagedMutationTracker,
 } from '../types.js';
 import type { ReasoningPlan } from '../reasoning.js';
@@ -163,10 +164,15 @@ import { validateInputArtifactsForModel } from '../media/index.js';
 // frame) and AMA (this runner-driven path) fire through the same
 // surface so the contract for each event lives in exactly one place.
 import {
+  createLiveTurnScope,
   emitComplete,
   emitError,
   emitSessionStart,
+  emitTurnCompleted,
+  emitTurnFailed,
+  emitTurnStarted,
   isVisibleToolName,
+  withLiveTurnAttribution,
 } from '../agent-runtime/event-emitter.js';
 // CAP-008: shared initial-messages resolver. Three-tier fallback
 // (inline → storage.load → empty) for AMA frame entry; SA already
@@ -490,6 +496,65 @@ export const __runnerDrivenTestables = {
   resolveInitialRuntimeThinkingLevel,
 } as const;
 
+interface ManagedLiveTurnController {
+  currentTurnId(): string;
+  startTurn(input: {
+    readonly deliveryKind: KodaXTurnDeliveryKind;
+    readonly promptId?: string;
+  }): string;
+}
+
+function resolveAgentSystemPrompt(agent: Agent): string {
+  const rawInstructions = typeof agent.instructions === 'function'
+    ? agent.instructions(undefined)
+    : agent.instructions;
+  return buildSystemPrompt(agent, rawInstructions);
+}
+
+function dropRunnerInjectedSystemMessage(
+  messages: readonly KodaXMessage[],
+  agent: Agent,
+): readonly KodaXMessage[] {
+  const runnerSystemPrompt = resolveAgentSystemPrompt(agent);
+  let firstTranscriptIndex = 0;
+  while (firstTranscriptIndex < messages.length) {
+    const message = messages[firstTranscriptIndex];
+    if (
+      !message
+      || message.role !== 'system'
+      || typeof message.content !== 'string'
+      || message.content !== runnerSystemPrompt
+    ) {
+      break;
+    }
+    firstTranscriptIndex += 1;
+  }
+  return firstTranscriptIndex > 0 ? messages.slice(firstTranscriptIndex) : messages;
+}
+
+function attachTurnIdsFromUserBoundaries(
+  messages: readonly KodaXMessage[],
+): KodaXMessage[] {
+  let activeTurnId: string | undefined;
+  return messages.map((message) => {
+    if (message.role === 'system') {
+      return message;
+    }
+
+    if (message.role === 'user') {
+      const userTurnId = message.turnId ?? activeTurnId;
+      if (userTurnId === undefined) return message;
+      activeTurnId = userTurnId;
+      return message.turnId === undefined ? { ...message, turnId: userTurnId } : message;
+    }
+
+    if (message.turnId !== undefined || activeTurnId === undefined) {
+      return message;
+    }
+    return { ...message, turnId: activeTurnId };
+  });
+}
+
 export async function runManagedTaskViaRunner(
   options: KodaXOptions,
   prompt: string,
@@ -515,7 +580,7 @@ export async function runManagedTaskViaRunner(
   const shouldAttachInitialSessionId = Boolean(effectiveOptions.session?.id)
     || Boolean(effectiveOptions.session?.storage)
     || Boolean(effectiveOptions.events?.askUser);
-  const optionsWithSessionId: KodaXOptions = shouldAttachInitialSessionId
+  const baseOptionsWithSessionId: KodaXOptions = shouldAttachInitialSessionId
     ? {
       ...effectiveOptions,
       session: {
@@ -524,16 +589,71 @@ export async function runManagedTaskViaRunner(
       },
     }
     : effectiveOptions;
-  if (optionsWithSessionId.events) {
-    emitSessionStart(optionsWithSessionId.events, { provider: providerName, sessionId: initialSessionId });
-  }
+  const requestedLiveTurn = effectiveOptions.context?.liveTurn;
+  const liveTurnScope = createLiveTurnScope({
+    sessionId: initialSessionId,
+    deliveryKind: requestedLiveTurn?.deliveryKind ?? 'initial',
+    turnId: requestedLiveTurn?.turnId,
+    deliveryId: requestedLiveTurn?.deliveryId,
+    promptId: requestedLiveTurn?.promptId,
+  });
+  const liveTurnScopeRef = { current: liveTurnScope };
+  const terminalTurnIds = new Set<string>();
+  const liveEvents = withLiveTurnAttribution(baseOptionsWithSessionId.events ?? {}, liveTurnScopeRef);
+  const optionsWithSessionId: KodaXOptions = {
+    ...baseOptionsWithSessionId,
+    events: liveEvents,
+  };
+  emitSessionStart(liveEvents, { provider: providerName, sessionId: initialSessionId });
+  emitTurnStarted(liveEvents, liveTurnScopeRef.current);
+  const emitLiveTurnCompleted = (
+    status: 'completed' | 'cancelled' | 'interrupted',
+  ): void => {
+    const scope = liveTurnScopeRef.current;
+    if (terminalTurnIds.has(scope.turnId)) return;
+    terminalTurnIds.add(scope.turnId);
+    emitTurnCompleted(liveEvents, scope, status);
+  };
+  const emitLiveTurnFailed = (error: Error): void => {
+    const scope = liveTurnScopeRef.current;
+    if (terminalTurnIds.has(scope.turnId)) return;
+    terminalTurnIds.add(scope.turnId);
+    emitTurnFailed(liveEvents, scope, error);
+  };
+  const liveTurnController: ManagedLiveTurnController = {
+    currentTurnId: () => liveTurnScopeRef.current.turnId,
+    startTurn: (input) => {
+      emitLiveTurnCompleted('completed');
+      liveTurnScopeRef.current = createLiveTurnScope({
+        sessionId: initialSessionId,
+        deliveryKind: input.deliveryKind,
+        promptId: input.promptId,
+      });
+      emitTurnStarted(liveEvents, liveTurnScopeRef.current);
+      return liveTurnScopeRef.current.turnId;
+    },
+  };
   try {
-    return await runManagedTaskViaRunnerInner(optionsWithSessionId, prompt, adapterOverride, plan, initialSessionId);
+    const result = await runManagedTaskViaRunnerInner(
+      optionsWithSessionId,
+      prompt,
+      adapterOverride,
+      plan,
+      initialSessionId,
+      liveTurnController,
+    );
+    if (result.success) {
+      emitLiveTurnCompleted(result.interrupted ? 'interrupted' : 'completed');
+    } else {
+      emitLiveTurnFailed(new Error(result.errorMetadata?.lastError ?? 'KodaX managed task failed'));
+    }
+    return result;
   } catch (err) {
     // Surface onError so top-level consumers can flush telemetry /
     // show UI toast before the rejection propagates.
     const error = err instanceof Error ? err : new Error(String(err));
-    if (optionsWithSessionId.events) emitError(optionsWithSessionId.events, error);
+    emitLiveTurnFailed(error);
+    emitError(liveEvents, error);
     // v0.7.26 parity (C3): persist an error snapshot so /resume can
     // pick up the last turn even after a crash. Legacy does the same at
     // agent.ts:2824. Best-effort.
@@ -575,7 +695,7 @@ export async function runManagedTaskViaRunner(
     // divergence preserved deliberately — REPL listeners on the AMA
     // path rely on the universal-cleanup semantics. Future work to
     // unify would touch REPL contract.
-    if (optionsWithSessionId.events) emitComplete(optionsWithSessionId.events);
+    emitComplete(liveEvents);
   }
 }
 
@@ -585,6 +705,7 @@ async function runManagedTaskViaRunnerInner(
   adapterOverride: Parameters<typeof buildRunnerLlmAdapter>[1] | undefined,
   plan: ReasoningPlan | undefined,
   resolvedSessionId: string,
+  liveTurnController: ManagedLiveTurnController,
 ): Promise<KodaXResult> {
   // F3 parity (v0.7.26) — apply the diff-driven review routing floor so
   // `decision.reviewTarget` / `reviewScale` / diff-driven `primaryTask`
@@ -1331,9 +1452,15 @@ async function runManagedTaskViaRunnerInner(
     promptWithOverlay,
     options.context?.inputArtifacts,
   );
+  const currentUserMessage: KodaXMessage = {
+    role: 'user',
+    content: userMessageContent,
+    turnId: liveTurnController.currentTurnId(),
+    timestamp: new Date().toISOString(),
+  };
   const runnerInput = resolvedInitial.messages.length > 0
-    ? [...resolvedInitial.messages, { role: 'user' as const, content: userMessageContent }]
-    : [{ role: 'user' as const, content: userMessageContent }];
+    ? [...resolvedInitial.messages, currentUserMessage]
+    : [currentUserMessage];
 
   // Load the compaction hook once per run. `intelligentCompact` runs
   // before every provider.stream call; the Runner-driven path routes
@@ -1559,7 +1686,7 @@ async function runManagedTaskViaRunnerInner(
       mode: 'prompt',
     });
     if (drained.length === 0) return [];
-    const validatedMessages = drained.map((m) => {
+    const validatedMessagesWithoutTurn = drained.map((m) => {
       const inputArtifacts = toKodaXInputArtifacts(m.inputArtifacts);
       validateInputArtifactsForModel(inputArtifacts ?? [], {
         provider: options.provider,
@@ -1570,6 +1697,16 @@ async function runManagedTaskViaRunnerInner(
         content: buildPromptMessageContent(m.content, inputArtifacts),
       };
     });
+    const queuedTurnId = liveTurnController.startTurn({
+      deliveryKind: 'queued',
+      promptId: drained[0]?.id,
+    });
+    const timestamp = new Date().toISOString();
+    const validatedMessages = validatedMessagesWithoutTurn.map((message) => ({
+      ...message,
+      turnId: queuedTurnId,
+      timestamp,
+    }));
     options.events?.onMidTurnUserMessages?.(drained.map((m) => m.content));
     return validatedMessages;
   };
@@ -1829,6 +1966,7 @@ async function runManagedTaskViaRunnerInner(
     onResumedUserPrompts: (contents) => {
       options.events?.onMidTurnUserMessages?.(contents);
     },
+    resolveResumeTurnId: () => liveTurnController.startTurn({ deliveryKind: 'queued' }),
     // `maxIterations` omitted — wrapper defaults to 64, matching the
     // legacy `IDLE_YIELD_MAX_ITERATIONS` constant. The cap fires on
     // the (max+1)th iteration AFTER runOnce returns but BEFORE the
@@ -1926,6 +2064,11 @@ async function runManagedTaskViaRunnerInner(
           usage: tokenState.lastUsage,
         }
       : undefined;
+  const persistedTranscriptMessages = dropRunnerInjectedSystemMessage(
+    effectiveRunResult.messages,
+    entryAgent,
+  );
+  const resultMessages = attachTurnIdsFromUserBoundaries(persistedTranscriptMessages);
 
   const result: KodaXResult = {
     // FEATURE_184 (v0.7.45) Phase C.1: success=false when the run is
@@ -1935,7 +2078,7 @@ async function runManagedTaskViaRunnerInner(
     lastText: resolvedText,
     signal,
     signalReason: reason,
-    messages: [...effectiveRunResult.messages],
+    messages: resultMessages,
     // FEATURE_173 (v0.7.42) Part A — kill `runner-${epoch}` ghost-session
     // double-write. Caller-supplied `options.session.id` (the REPL session
     // file, format `YYYYMMDD_HHMMSS`) always wins. `runOnce` does NOT

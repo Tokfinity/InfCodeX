@@ -1186,7 +1186,18 @@ describe('runManagedTaskViaRunner — end-to-end', () => {
     expect(todoSnapshots.some((snapshot) => snapshot[0]?.status === 'pending')).toBe(true);
     expect(systems[1]).toContain('no item marked in_progress');
     expect(systems[1]).toContain('call todo_update now');
-    expect(result.managedTask?.runtime?.todoDriftWarnings).toEqual(warnings);
+    expect(warnings[0]).toEqual(expect.objectContaining({
+      sessionId: expect.any(String),
+      seq: expect.any(Number),
+      turnId: expect.any(String),
+    }));
+    expect(result.managedTask?.runtime?.todoDriftWarnings).toEqual([
+      expect.objectContaining({
+        kind: 'work_started_without_claimed_todo',
+        toolName: 'read',
+        firstPendingTodoSubject: 'Inspect implementation',
+      }),
+    ]);
   });
 
   it('FEATURE_211: returns and persists extension runtime session snapshots', async () => {
@@ -2240,7 +2251,7 @@ describe('Shard 6d-d — session continuity', () => {
         ],
       },
     } as unknown as Parameters<typeof runManagedTaskViaRunner>[0];
-    await runManagedTaskViaRunner(opts, 'follow-up question', async (transcript) => {
+    const result = await runManagedTaskViaRunner(opts, 'follow-up question', async (transcript) => {
       capturedTranscripts.push([...transcript]);
       return { textBlocks: [{ text: 'got it' }], toolBlocks: [] };
     });
@@ -2253,6 +2264,23 @@ describe('Shard 6d-d — session continuity', () => {
     expect(firstTurn[1]!.role).toBe('assistant');
     expect(firstTurn[2]!.role).toBe('user');
     expect(firstTurn[2]!.content).toBe('follow-up question');
+
+    const textOf = (message: KodaXMessage): string =>
+      typeof message.content === 'string'
+        ? message.content
+        : message.content
+          .filter((block): block is { type: 'text'; text: string } => block.type === 'text')
+          .map((block) => block.text)
+          .join('');
+    const systemMessage = result.messages.find((message) => message.role === 'system');
+    const priorUser = result.messages.find((message) => textOf(message) === 'prior question');
+    const currentUser = result.messages.find((message) => textOf(message) === 'follow-up question');
+    const assistant = result.messages.find((message) => textOf(message) === 'got it');
+    expect(result.messages[0]?.role).not.toBe('system');
+    expect(systemMessage?.turnId).toBeUndefined();
+    expect(priorUser?.turnId).toBeUndefined();
+    expect(currentUser?.turnId).toMatch(/^turn_/);
+    expect(assistant?.turnId).toBe(currentUser?.turnId);
   });
 
   it('falls back to raw string prompt when session.initialMessages is empty', async () => {
@@ -2862,6 +2890,9 @@ describe('FEATURE_155 v0.7.39 Slice A2 — idle-yield outer loop', () => {
     let userMessageDeliveredAt: number | undefined;
     let userMessageEnqueuedAt: number | undefined;
     let workerSawUserText = false;
+    const turnStartedEvents: Array<{ turnId: string; deliveryKind: string; seq: number }> = [];
+    const turnCompletedEvents: Array<{ turnId: string; seq: number }> = [];
+    const midTurnPromptMeta: Array<{ turnId?: string; seq?: number }> = [];
 
     const mock = makeChainMockLlm({
       worker: (turn, transcript) => {
@@ -2931,7 +2962,25 @@ describe('FEATURE_155 v0.7.39 Slice A2 — idle-yield outer loop', () => {
       // evaluator handler deleted.
     });
 
-    const result = await runManagedTaskViaRunner(makeOptions(), 'long task', mock);
+    const opts = {
+      ...makeOptions(),
+      events: {
+        onTurnStarted: (event) => {
+          turnStartedEvents.push({
+            turnId: event.turnId,
+            deliveryKind: event.deliveryKind,
+            seq: event.seq,
+          });
+        },
+        onTurnCompleted: (event) => {
+          turnCompletedEvents.push({ turnId: event.turnId, seq: event.seq });
+        },
+        onMidTurnUserMessages: (_contents, meta) => {
+          midTurnPromptMeta.push({ turnId: meta?.turnId, seq: meta?.seq });
+        },
+      },
+    } satisfies KodaXOptions;
+    const result = await runManagedTaskViaRunner(opts, 'long task', mock);
 
     expect(result.success).toBe(true);
     expect(workerSawUserText).toBe(true);
@@ -2948,6 +2997,36 @@ describe('FEATURE_155 v0.7.39 Slice A2 — idle-yield outer loop', () => {
     // Runner.run re-entry on a mocked LLM.
     expect(latencyMs).toBeGreaterThanOrEqual(0);
     expect(latencyMs).toBeLessThan(500);
+
+    const queuedTurn = turnStartedEvents.find((event) => event.deliveryKind === 'queued');
+    expect(turnStartedEvents[0]?.deliveryKind).toBe('initial');
+    expect(queuedTurn).toBeDefined();
+    expect(turnCompletedEvents.some((event) => event.turnId === turnStartedEvents[0]?.turnId)).toBe(true);
+    expect(midTurnPromptMeta[0]).toEqual(expect.objectContaining({
+      turnId: queuedTurn?.turnId,
+      seq: expect.any(Number),
+    }));
+    expect(turnStartedEvents.map((event) => event.seq)).toEqual(
+      [...turnStartedEvents.map((event) => event.seq)].sort((a, b) => a - b),
+    );
+
+    const messageText = (message: KodaXMessage): string =>
+      typeof message.content === 'string'
+        ? message.content
+        : message.content
+          .filter((block): block is { type: 'text'; text: string } => block.type === 'text')
+          .map((block) => block.text)
+          .join('');
+    const sideQuestion = result.messages.find(
+      (message) => message.role === 'user'
+        && messageText(message).includes('side-question while you wait'),
+    );
+    const finalAssistant = result.messages.find(
+      (message) => message.role === 'assistant'
+        && messageText(message).includes('side answered'),
+    );
+    expect(sideQuestion?.turnId).toBe(queuedTurn?.turnId);
+    expect(finalAssistant?.turnId).toBe(queuedTurn?.turnId);
   }, 30_000);
 
   // FEATURE_190 Phase 3: FEATURE_165 pending-children gate no longer exists

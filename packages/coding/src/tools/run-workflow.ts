@@ -20,6 +20,7 @@ import { enqueueChildTaskNotification, registerChildTask } from '@kodax-ai/agent
 import type { ToolResult } from './types.js';
 import type {
   KodaXChildExecutionResult,
+  KodaXTaskResultMetadata,
   KodaXToolExecutionContext,
   WorkflowToolHostInlineInput,
   WorkflowToolHostResult,
@@ -63,6 +64,12 @@ function readManifestName(manifest: unknown): string {
     if (typeof name === 'string' && name.trim().length > 0) return name;
   }
   return 'workflow';
+}
+
+function workflowTaskResultStatus(result: WorkflowToolHostResult): KodaXTaskResultMetadata['status'] {
+  if (result.status === 'completed') return 'completed';
+  if (result.status === 'cancelled' || result.status === 'stopped') return 'cancelled';
+  return 'failed';
 }
 
 export async function toolRunWorkflow(
@@ -134,15 +141,26 @@ export async function toolRunWorkflow(
     // idle-yield loop wakes the Worker. Its resolved value is a settle signal only.
     const settle = (async (): Promise<KodaXChildExecutionResult> => {
       let summary: string;
+      let status: KodaXTaskResultMetadata['status'] = 'completed';
       try {
-        summary = formatWorkflowOutcome(await done);
+        const outcome = await done;
+        status = workflowTaskResultStatus(outcome);
+        summary = formatWorkflowOutcome(outcome);
       } catch (error) {
+        status = 'failed';
         summary = `[Tool Error] Workflow ${taskId} failed: ${error instanceof Error ? error.message : String(error)}`;
       } finally {
         ctx.childAbortControllers?.delete(taskId);
         ctx.workflowRunProgress?.delete(taskId);
       }
-      enqueueChildTaskNotification({ taskId, summary });
+      enqueueChildTaskNotification({
+        taskId,
+        summary,
+        source: 'workflow',
+        runId: taskId,
+        status,
+        title: readManifestName(manifest),
+      });
       return EMPTY_CHILD_RESULT;
     })();
     registerChildTask(registry, taskId, settle);

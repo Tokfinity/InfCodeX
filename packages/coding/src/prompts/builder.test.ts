@@ -16,7 +16,7 @@ function isRetryableTempDirRemoveError(error: unknown): boolean {
 }
 
 async function removeTempDir(dir: string): Promise<void> {
-  const maxAttempts = 5;
+  const maxAttempts = 10;
   for (let attempt = 1; attempt <= maxAttempts; attempt++) {
     try {
       await fs.rm(dir, { recursive: true, force: true });
@@ -25,7 +25,7 @@ async function removeTempDir(dir: string): Promise<void> {
       if (attempt === maxAttempts || !isRetryableTempDirRemoveError(error)) {
         throw error;
       }
-      await new Promise((resolve) => setTimeout(resolve, 50 * attempt));
+      await new Promise((resolve) => setTimeout(resolve, 100 * attempt));
     }
   }
 }
@@ -34,11 +34,9 @@ describe('buildSystemPrompt', () => {
   const cleanupDirs: string[] = [];
 
   afterEach(async () => {
-    await Promise.all(
-      cleanupDirs.splice(0).map((dir) =>
-        removeTempDir(dir),
-      ),
-    );
+    for (const dir of cleanupDirs.splice(0)) {
+      await removeTempDir(dir);
+    }
   });
 
   it('uses executionCwd instead of process cwd for prompt context', async () => {

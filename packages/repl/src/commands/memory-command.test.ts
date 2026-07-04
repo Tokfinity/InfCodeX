@@ -81,8 +81,8 @@ describe('FEATURE_124 Phase D — /memory command', () => {
 
   afterEach(() => {
     setAgentConfigHome(undefined);
-    fs.rmSync(tempHome, { recursive: true, force: true });
-    fs.rmSync(cwd, { recursive: true, force: true });
+    fs.rmSync(tempHome, { recursive: true, force: true, maxRetries: 10, retryDelay: 100 });
+    fs.rmSync(cwd, { recursive: true, force: true, maxRetries: 10, retryDelay: 100 });
   });
 
   it('list with no MEMORY.md prints a setup hint', async () => {

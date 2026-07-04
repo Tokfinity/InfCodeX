@@ -67,8 +67,8 @@ class ThrowingProvider extends KodaXBaseProvider {
 }
 
 // Issue 128: contract tests drive runKodaX end-to-end and flake at 5000ms
-// default under heavy parallel vitest load. Bump per-suite to 15s.
-describe('CAP-006: onError event contract', { timeout: 15_000 }, () => {
+// default under heavy parallel vitest load. Match the 30s contract-test budget.
+describe('CAP-006: onError event contract', { timeout: 30_000 }, () => {
   beforeEach(() => {
     process.env[API_KEY_ENV] = 'test-key';
     registerModelProvider(PROVIDER_NAME, () => new ThrowingProvider());
@@ -93,7 +93,12 @@ describe('CAP-006: onError event contract', { timeout: 15_000 }, () => {
     expect(result.success).toBe(false);
     // onError must fire exactly once with the *same* Error instance (===).
     expect(onError).toHaveBeenCalledTimes(1);
-    expect(onError).toHaveBeenCalledWith(SENTINEL_ERROR);
+    expect(onError).toHaveBeenCalledWith(SENTINEL_ERROR, expect.objectContaining({
+      sessionId: expect.any(String),
+      seq: expect.any(Number),
+      turnId: expect.any(String),
+      timestamp: expect.any(String),
+    }));
     expect(onError.mock.calls[0]![0]).toBe(SENTINEL_ERROR);
   });
 });

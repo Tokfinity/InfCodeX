@@ -20,6 +20,8 @@ import type {
   KodaXRedactedThinkingBlock,
   KodaXContentBlock,
   KodaXMessage,
+  KodaXTaskResultMetadata,
+  KodaXTaskResultSource,
   KodaXTokenUsage,
   KodaXStreamResult,
   KodaXToolDefinition,
@@ -136,6 +138,8 @@ export type {
   KodaXRedactedThinkingBlock,
   KodaXContentBlock,
   KodaXMessage,
+  KodaXTaskResultMetadata,
+  KodaXTaskResultSource,
   KodaXTokenUsage,
   KodaXStreamResult,
   KodaXToolDefinition,
@@ -217,7 +221,34 @@ export interface KodaXWorkflowEventMeta {
   readonly workflowCorrelation?: WorkflowEventCorrelation;
 }
 
-export interface KodaXActivityEventMeta extends KodaXWorkflowEventMeta {
+export type KodaXTurnDeliveryKind = 'initial' | 'queued' | 'interrupt' | 'resume';
+
+export interface KodaXLiveEventMeta {
+  readonly sessionId: string;
+  readonly seq: number;
+  readonly turnId: string;
+  readonly deliveryId?: string;
+  readonly timestamp?: string;
+}
+
+export interface KodaXTurnStartedEvent extends KodaXLiveEventMeta {
+  readonly promptId?: string;
+  readonly deliveryKind: KodaXTurnDeliveryKind;
+}
+
+export interface KodaXTurnCompletedEvent extends KodaXLiveEventMeta {
+  readonly status: 'completed' | 'cancelled' | 'interrupted';
+}
+
+export interface KodaXTurnFailedEvent extends KodaXLiveEventMeta {
+  readonly error: {
+    readonly name: string;
+    readonly message: string;
+    readonly stack?: string;
+  };
+}
+
+export interface KodaXActivityEventMeta extends KodaXWorkflowEventMeta, Partial<KodaXLiveEventMeta> {
   readonly childAgentId?: string;
   readonly childAgentName?: string;
   readonly parentToolId?: string;
@@ -314,8 +345,11 @@ export interface KodaXEvents {
   onChildActivityEnd?: (meta?: KodaXActivityEventMeta) => void;
 
   // 状态通知
-  onSessionStart?: (info: { provider: string; sessionId: string }) => void;
-  onIterationStart?: (iter: number, maxIter: number) => void;
+  onSessionStart?: (info: { provider: string; sessionId: string } & Partial<KodaXLiveEventMeta>) => void;
+  onTurnStarted?: (event: KodaXTurnStartedEvent) => void;
+  onTurnCompleted?: (event: KodaXTurnCompletedEvent) => void;
+  onTurnFailed?: (event: KodaXTurnFailedEvent) => void;
+  onIterationStart?: (iter: number, maxIter: number, meta?: KodaXActivityEventMeta) => void;
   /** Called after each iteration with current token count for UI updates */
   onIterationEnd?: (info: {
     iter: number;
@@ -334,16 +368,20 @@ export interface KodaXEvents {
      * for backward compatibility.
      */
     scope?: 'parent' | 'worker';
-  }) => void;
-  onCompactStart?: () => void;
+  } & Partial<KodaXLiveEventMeta>) => void;
+  onCompactStart?: (meta?: KodaXActivityEventMeta) => void;
   /** Emitted when compaction finishes and actually changed the context */
-  onCompact?: (estimatedTokens: number) => void;
+  onCompact?: (estimatedTokens: number, meta?: KodaXActivityEventMeta) => void;
   /** Emitted when compaction changes the context so UI can refresh token usage immediately */
-  onCompactStats?: (info: { tokensBefore: number; tokensAfter: number }) => void;
+  onCompactStats?: (info: { tokensBefore: number; tokensAfter: number } & Partial<KodaXLiveEventMeta>) => void;
   /** Emitted with the rewritten message history when automatic compaction changes the context. */
-  onCompactedMessages?: (messages: KodaXMessage[], update?: CompactionUpdate) => void;
+  onCompactedMessages?: (
+    messages: KodaXMessage[],
+    update?: CompactionUpdate,
+    meta?: KodaXActivityEventMeta,
+  ) => void;
   /** Emitted to silently dismiss the compaction UI if compaction aborted or completed without changes */
-  onCompactEnd?: () => void;
+  onCompactEnd?: (meta?: KodaXActivityEventMeta) => void;
   /** Whether the caller has queued follow-up input waiting for the next round */
   hasPendingInputs?: () => boolean;
   /**
@@ -368,7 +406,7 @@ export interface KodaXEvents {
    * Fires once per Runner iteration boundary, with the array of
    * prompt contents in queue order. Empty arrays are not surfaced.
    */
-  onMidTurnUserMessages?: (contents: readonly string[]) => void;
+  onMidTurnUserMessages?: (contents: readonly string[], meta?: KodaXActivityEventMeta) => void;
   onRetry?: (
     reason: string,
     attempt: number,
@@ -422,8 +460,8 @@ export interface KodaXEvents {
     provider: string;
     model: string;
     effort: string;
-  }) => void;
-  onRepoIntelligenceTrace?: (event: KodaXRepoIntelligenceTraceEvent) => void;
+  } & Partial<KodaXLiveEventMeta>) => void;
+  onRepoIntelligenceTrace?: (event: KodaXRepoIntelligenceTraceEvent & Partial<KodaXLiveEventMeta>) => void;
   /**
    * Fired when the Sidecar Verifier produces an actionable message.
    *
@@ -433,7 +471,7 @@ export interface KodaXEvents {
    * `blocked` is surfaced terminally to the user. Accept remains silent here
    * because there is no sidecar-to-agent reply to show.
    */
-  onSidecarMessage?: (event: KodaXSidecarMessageEvent) => void;
+  onSidecarMessage?: (event: KodaXSidecarMessageEvent & Partial<KodaXLiveEventMeta>) => void;
   /**
    * FEATURE_097 (v0.7.34): emitted whenever the Scout-seeded todo list
    * changes — initial seed at `emit_scout_verdict`, per-item updates from
@@ -443,31 +481,31 @@ export interface KodaXEvents {
    * in one event loop, so subscriber lag is not a real failure mode
    * (FEATURE_086 onRepoIntelligenceTrace single-rail precedent).
    */
-  onTodoUpdate?: (items: TodoList) => void;
+  onTodoUpdate?: (items: TodoList, meta?: KodaXActivityEventMeta) => void;
   /**
    * Warn-only telemetry: a successful real work tool completed while the
    * visible todo list had pending items but no item marked in_progress.
    * The runner does not mutate the todo list for this signal; it only
    * nudges the next model turn to call todo_update explicitly.
    */
-  onTodoDriftWarning?: (event: KodaXTodoDriftWarningEvent) => void;
+  onTodoDriftWarning?: (event: KodaXTodoDriftWarningEvent & Partial<KodaXLiveEventMeta>) => void;
   /** Structured provider recovery event (Feature 045) */
   onProviderRecovery?: (
     event: ProviderRecoveryEvent,
     meta?: KodaXActivityEventMeta,
   ) => void;
-  onComplete?: () => void;
-  onError?: (error: Error) => void;
-  onManagedTaskStatus?: (status: KodaXManagedTaskStatusEvent) => void;
+  onComplete?: (meta?: KodaXActivityEventMeta) => void;
+  onError?: (error: Error, meta?: KodaXActivityEventMeta) => void;
+  onManagedTaskStatus?: (status: KodaXManagedTaskStatusEvent & Partial<KodaXLiveEventMeta>) => void;
   /**
    * FEATURE_247 (R4) — fired once at managed-task start with the effective
    * profile / tool scope / verification snapshot. Lets an SDK embedder confirm
    * the intended profile (e.g. Partner) actually entered the SDK managed task
    * and diagnose the tools + verification constraints it was given.
    */
-  onEffectiveConfig?: (config: KodaXEffectiveTaskConfig) => void;
+  onEffectiveConfig?: (config: KodaXEffectiveTaskConfig & Partial<KodaXLiveEventMeta>) => void;
   /** FEATURE_229: workflow process snapshot stream for SDK/host panels. */
-  onWorkflowProcessEvent?: (event: WorkflowProcessEvent) => void;
+  onWorkflowProcessEvent?: (event: WorkflowProcessEvent & Partial<KodaXLiveEventMeta>) => void;
   /**
    * ADR-049: per-agent digest stream for the inline `run_workflow` path. Fires
    * once per workflow child agent reaching a terminal/summary state
@@ -476,7 +514,7 @@ export interface KodaXEvents {
    * and writes it to the transcript — matching the slash `/workflow` path and
    * `dispatch_child_task` children, whose summaries persist in scrollback.
    */
-  onWorkflowAgentDigest?: (event: KodaXWorkflowAgentDigestEvent) => void;
+  onWorkflowAgentDigest?: (event: KodaXWorkflowAgentDigestEvent & Partial<KodaXLiveEventMeta>) => void;
   /**
    * Fired when Scout's managed-task completion is inferred but the harness
    * detected suspicious signals (mutation expected but none happened, budget
@@ -490,7 +528,7 @@ export interface KodaXEvents {
     signals: KodaXScoutSuspiciousSignal[];
     sessionId?: string;
     lastTextPreview: string;
-  }) => void;
+  } & Partial<KodaXLiveEventMeta>) => void;
   /**
    * FEATURE_167 (v0.7.41) — Evaluator terminal-verdict fallback.
    *
@@ -1210,6 +1248,17 @@ export interface KodaXContextOptions {
   promptOverlay?: string;
   /** Optional task-engine surface label used to track managed tasks across UX entry points. */
   taskSurface?: KodaXTaskSurface;
+  /**
+   * Host-provided live-turn attribution for this invocation. Embedders that
+   * resume, interrupt, or deliver queued prompts outside KodaX's own queue can
+   * preserve the real delivery kind without the SDK guessing from event order.
+   */
+  liveTurn?: {
+    deliveryKind?: KodaXTurnDeliveryKind;
+    turnId?: string;
+    deliveryId?: string;
+    promptId?: string;
+  };
   /** Optional directory where managed task artifacts should be written. */
   managedTaskWorkspaceDir?: string;
   /** Internal managed-worker protocol emission configuration. */

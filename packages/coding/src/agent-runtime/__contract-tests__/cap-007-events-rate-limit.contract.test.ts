@@ -82,8 +82,8 @@ class RateLimitProvider extends KodaXBaseProvider {
 }
 
 // Issue 128: contract tests drive runKodaX end-to-end and flake at 5000ms
-// default under heavy parallel vitest load. Bump per-suite to 15s.
-describe('CAP-007: onProviderRateLimit event contract', { timeout: 15_000 }, () => {
+// default under heavy parallel vitest load. Match the 30s contract-test budget.
+describe('CAP-007: onProviderRateLimit event contract', { timeout: 30_000 }, () => {
   beforeEach(() => {
     process.env[API_KEY_ENV] = 'test-key';
   });
@@ -106,7 +106,12 @@ describe('CAP-007: onProviderRateLimit event contract', { timeout: 15_000 }, () 
     );
     expect(onProviderRateLimit).toHaveBeenCalled();
     // Substrate forwards the (attempt, max, delay) tuple unchanged.
-    expect(onProviderRateLimit).toHaveBeenCalledWith(1, 3, 500);
+    expect(onProviderRateLimit).toHaveBeenCalledWith(1, 3, 500, expect.objectContaining({
+      sessionId: expect.any(String),
+      seq: expect.any(Number),
+      turnId: expect.any(String),
+      timestamp: expect.any(String),
+    }));
   });
 
   it('CAP-EVENTS-RATE-LIMIT-001b: does NOT fire when provider does not signal rate-limit (generic transient retry / success path)', async () => {

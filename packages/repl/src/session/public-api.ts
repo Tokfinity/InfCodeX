@@ -19,6 +19,7 @@ import type {
   KodaXSessionEntry,
   KodaXSessionLineage,
   KodaXSessionRuntimeInfo,
+  KodaXTaskResultMetadata,
 } from '@kodax-ai/agent';
 
 import { FileSessionStorage } from '../interactive/storage.js';
@@ -142,16 +143,38 @@ export interface SessionSummary {
   readonly archived?: boolean;
 }
 
-export type SessionTranscriptEntryType = 'message' | 'compaction' | 'branch_summary';
+export type SessionTranscriptEntryType =
+  | 'message'
+  | 'compaction'
+  | 'branch_summary'
+  | 'client_notice'
+  /**
+   * Synthetic task/workflow completion entry derived from `_taskResult`,
+   * `_taskResults`, or legacy `<task-completed>` banners. The original
+   * `KodaXMessage` is still exposed on `message`, but consumers that want a
+   * complete transcript should not filter only `type === 'message'`.
+   */
+  | 'task_result';
+
+export type SessionTranscriptEntrySource =
+  | 'user'
+  | 'assistant'
+  | 'workflow'
+  | 'child_task'
+  | 'system'
+  | 'client';
 
 export interface SessionTranscriptEntry {
   readonly entryId: string;
   readonly parentId: string | null;
   readonly timestamp: string;
   readonly type: SessionTranscriptEntryType;
+  readonly source?: SessionTranscriptEntrySource;
+  readonly turnId?: string;
   readonly message: KodaXMessage;
   readonly active: boolean;
   readonly summary?: string;
+  readonly payload?: unknown;
 }
 
 export interface FullTranscriptSessionData extends Omit<SessionData, 'messages'> {
@@ -619,29 +642,147 @@ function summaryMessage(summary: string, kind: SessionTranscriptEntryType): Koda
   };
 }
 
+function messageStringField(message: KodaXMessage, key: string): string | undefined {
+  const value = (message as unknown as Record<string, unknown>)[key];
+  return typeof value === 'string' ? value : undefined;
+}
+
+function messageSource(message: KodaXMessage): SessionTranscriptEntrySource | undefined {
+  if (message.role === 'user') return 'user';
+  if (message.role === 'assistant') return 'assistant';
+  if (message.role === 'system') return 'system';
+  return undefined;
+}
+
+function isTaskResultMetadata(value: unknown): value is KodaXTaskResultMetadata {
+  if (!isRecord(value)) return false;
+  return value.type === 'task_result'
+    && (value.source === 'workflow' || value.source === 'child_task')
+    && typeof value.taskId === 'string'
+    && (
+      value.status === 'completed'
+      || value.status === 'failed'
+      || value.status === 'cancelled'
+    )
+    && (value.runId === undefined || typeof value.runId === 'string')
+    && (value.title === undefined || typeof value.title === 'string')
+    && (value.summary === undefined || typeof value.summary === 'string')
+    && (
+      value.artifactRefs === undefined
+      || (Array.isArray(value.artifactRefs) && value.artifactRefs.every((item) => typeof item === 'string'))
+    );
+}
+
+function taskResultsFromMessage(message: KodaXMessage): KodaXTaskResultMetadata[] {
+  if (isTaskResultMetadata(message._taskResult)) {
+    return [message._taskResult];
+  }
+  if (Array.isArray(message._taskResults)) {
+    return message._taskResults.filter(isTaskResultMetadata);
+  }
+  if (message._source !== 'task-completed' || typeof message.content !== 'string') {
+    return [];
+  }
+  const results: KodaXTaskResultMetadata[] = [];
+  const pattern = /<task-completed\s+task_id="([^"]+)">([\s\S]*?)<\/task-completed>/g;
+  for (const match of message.content.matchAll(pattern)) {
+    const taskId = match[1];
+    if (!taskId) continue;
+    const summary = match[2]?.trim() ?? '';
+    results.push({
+      type: 'task_result',
+      source: 'child_task',
+      taskId,
+      status: summary.startsWith('failed:') || summary.startsWith('[Tool Error]')
+        ? 'failed'
+        : 'completed',
+      ...(summary.length > 0 ? { summary } : {}),
+    });
+  }
+  return results;
+}
+
+function taskResultPayload(results: readonly KodaXTaskResultMetadata[]): unknown {
+  if (results.length === 1) {
+    return results[0];
+  }
+  const first = results[0];
+  return first
+    ? {
+        type: 'task_result',
+        source: first.source,
+        taskId: first.taskId,
+        status: first.status,
+        results,
+      }
+    : undefined;
+}
+
 function toTranscriptEntry(
   entry: KodaXSessionEntry,
   activeIds: ReadonlySet<string>,
 ): SessionTranscriptEntry | null {
   switch (entry.type) {
-    case 'message':
+    case 'message': {
+      const taskResults = taskResultsFromMessage(entry.message);
+      if (taskResults.length > 0) {
+        const first = taskResults[0]!;
+        return {
+          entryId: entry.id,
+          parentId: entry.parentId,
+          timestamp: entry.timestamp,
+          type: 'task_result',
+          source: first.source,
+          turnId: messageStringField(entry.message, 'turnId'),
+          message: entry.message,
+          active: activeIds.has(entry.id),
+          payload: taskResultPayload(taskResults),
+        };
+      }
+      if (entry.message._source === 'client_notice') {
+        return {
+          entryId: entry.id,
+          parentId: entry.parentId,
+          timestamp: entry.timestamp,
+          type: 'client_notice',
+          source: 'client',
+          turnId: messageStringField(entry.message, 'turnId'),
+          message: entry.message,
+          active: activeIds.has(entry.id),
+          payload: {
+            content: entry.message.content,
+            entersModelContext: false,
+          },
+        };
+      }
       return {
         entryId: entry.id,
         parentId: entry.parentId,
         timestamp: entry.timestamp,
         type: 'message',
+        source: messageSource(entry.message),
+        turnId: messageStringField(entry.message, 'turnId'),
         message: entry.message,
         active: activeIds.has(entry.id),
       };
+    }
     case 'compaction':
       return {
         entryId: entry.id,
         parentId: entry.parentId,
         timestamp: entry.timestamp,
         type: 'compaction',
+        source: 'system',
         message: summaryMessage(entry.summary, 'compaction'),
         active: activeIds.has(entry.id),
         summary: entry.summary,
+        payload: {
+          summary: entry.summary,
+          tokensBefore: entry.tokensBefore,
+          tokensAfter: entry.tokensAfter,
+          reason: entry.reason,
+          details: entry.details,
+        },
       };
     case 'branch_summary':
       return {
@@ -649,9 +790,15 @@ function toTranscriptEntry(
         parentId: entry.parentId,
         timestamp: entry.timestamp,
         type: 'branch_summary',
+        source: 'system',
         message: summaryMessage(entry.summary, 'branch_summary'),
         active: activeIds.has(entry.id),
         summary: entry.summary,
+        payload: {
+          summary: entry.summary,
+          fromId: entry.fromId,
+          details: entry.details,
+        },
       };
     case 'archive_marker':
     case 'label':

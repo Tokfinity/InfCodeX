@@ -652,6 +652,124 @@ describe('Session Management Public SDK', () => {
     ]);
   });
 
+  it('loadFullTranscript surfaces typed task_result entries from persisted metadata', async () => {
+    const overrideDir = path.join(tempHome, 'typed-transcript-test');
+    await mkdir(overrideDir, { recursive: true });
+
+    const mgr = api.createSessionManager({ sessionsDir: overrideDir }) as {
+      storage: { save: (id: string, data: unknown) => Promise<void> };
+      loadFullTranscript: (id: string) => Promise<{
+        transcriptEntries: Array<{
+          type: string;
+          source?: string;
+          timestamp: string;
+          payload?: unknown;
+          active: boolean;
+        }>;
+      } | null>;
+    };
+
+    await mgr.storage.save('typed-transcript-001', {
+      messages: [
+        {
+          role: 'user',
+          content: '<task-completed task_id="run-1">\nWorkflow finished.\n</task-completed>',
+          _synthetic: true,
+          _source: 'task-completed',
+          _taskResult: {
+            type: 'task_result',
+            source: 'workflow',
+            taskId: 'run-1',
+            runId: 'run-1',
+            status: 'completed',
+            title: 'Review workflow',
+            summary: 'Workflow finished.',
+          },
+          turnId: 'turn-1',
+          timestamp: '2026-07-04T01:00:00.000Z',
+        },
+      ],
+      title: 'Typed transcript',
+      gitRoot: tempHome,
+      scope: 'user',
+    });
+
+    const full = await mgr.loadFullTranscript('typed-transcript-001');
+
+    expect(full?.transcriptEntries).toEqual([
+      expect.objectContaining({
+        type: 'task_result',
+        source: 'workflow',
+        turnId: 'turn-1',
+        timestamp: '2026-07-04T01:00:00.000Z',
+        active: true,
+        payload: {
+          type: 'task_result',
+          source: 'workflow',
+          taskId: 'run-1',
+          runId: 'run-1',
+          status: 'completed',
+          title: 'Review workflow',
+          summary: 'Workflow finished.',
+        },
+      }),
+    ]);
+  });
+
+  it('loadFullTranscript recovers multiple legacy task_completed banners from one synthetic message', async () => {
+    const overrideDir = path.join(tempHome, 'multi-banner-transcript-test');
+    await mkdir(overrideDir, { recursive: true });
+
+    const mgr = api.createSessionManager({ sessionsDir: overrideDir }) as {
+      storage: { save: (id: string, data: unknown) => Promise<void> };
+      loadFullTranscript: (id: string) => Promise<{
+        transcriptEntries: Array<{
+          type: string;
+          source?: string;
+          payload?: {
+            results?: Array<{ taskId: string; status: string; summary?: string }>;
+          };
+        }>;
+      } | null>;
+    };
+
+    await mgr.storage.save('multi-banner-transcript-001', {
+      messages: [
+        {
+          role: 'user',
+          content: [
+            '<task-completed task_id="child-a">',
+            'alpha done',
+            '</task-completed>',
+            '',
+            '<task-completed task_id="child-b">',
+            'failed: beta exploded',
+            '</task-completed>',
+          ].join('\n'),
+          _synthetic: true,
+          _source: 'task-completed',
+          timestamp: '2026-07-04T02:00:00.000Z',
+        },
+      ],
+      title: 'Multi banner transcript',
+      gitRoot: tempHome,
+      scope: 'user',
+    });
+
+    const full = await mgr.loadFullTranscript('multi-banner-transcript-001');
+
+    expect(full?.transcriptEntries[0]).toEqual(expect.objectContaining({
+      type: 'task_result',
+      source: 'child_task',
+      payload: expect.objectContaining({
+        results: [
+          expect.objectContaining({ taskId: 'child-a', status: 'completed', summary: 'alpha done' }),
+          expect.objectContaining({ taskId: 'child-b', status: 'failed', summary: 'failed: beta exploded' }),
+        ],
+      }),
+    }));
+  });
+
   it('loadFullTranscript includes entries archived into the islands sidecar', async () => {
     const overrideDir = path.join(tempHome, 'full-transcript-sidecar-test');
     const projectDir = path.join(overrideDir, 'project-a');

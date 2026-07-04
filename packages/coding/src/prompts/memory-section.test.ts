@@ -38,8 +38,8 @@ describe('buildMemorySection', () => {
   afterEach(() => {
     clearMemorySectionCacheForTesting();
     setAgentConfigHome(undefined);
-    fs.rmSync(tempHome, { recursive: true, force: true });
-    fs.rmSync(cwd, { recursive: true, force: true });
+    fs.rmSync(tempHome, { recursive: true, force: true, maxRetries: 10, retryDelay: 100 });
+    fs.rmSync(cwd, { recursive: true, force: true, maxRetries: 10, retryDelay: 100 });
   });
 
   // ── Case 1: missing MEMORY.md ──────────────────────────────────────────────

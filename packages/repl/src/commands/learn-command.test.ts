@@ -88,8 +88,8 @@ describe('FEATURE_224 /learn command', () => {
 
   afterEach(() => {
     setAgentConfigHome(undefined);
-    fs.rmSync(tempHome, { recursive: true, force: true, maxRetries: 3, retryDelay: 100 });
-    fs.rmSync(cwd, { recursive: true, force: true, maxRetries: 3, retryDelay: 100 });
+    fs.rmSync(tempHome, { recursive: true, force: true, maxRetries: 10, retryDelay: 100 });
+    fs.rmSync(cwd, { recursive: true, force: true, maxRetries: 10, retryDelay: 100 });
   });
 
   it('lists pending learning suggestions', async () => {

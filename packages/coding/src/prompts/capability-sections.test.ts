@@ -22,6 +22,27 @@ async function createTempDir(prefix: string): Promise<string> {
   return fs.mkdtemp(path.join(os.tmpdir(), prefix));
 }
 
+function isRetryableTempDirRemoveError(error: unknown): boolean {
+  if (!(error instanceof Error) || !('code' in error)) return false;
+  const code = (error as { readonly code?: unknown }).code;
+  return code === 'EBUSY' || code === 'ENOTEMPTY' || code === 'EPERM';
+}
+
+async function removeTempDir(dir: string): Promise<void> {
+  const maxAttempts = 10;
+  for (let attempt = 1; attempt <= maxAttempts; attempt++) {
+    try {
+      await fs.rm(dir, { recursive: true, force: true });
+      return;
+    } catch (error) {
+      if (attempt === maxAttempts || !isRetryableTempDirRemoveError(error)) {
+        throw error;
+      }
+      await new Promise((resolve) => setTimeout(resolve, 100 * attempt));
+    }
+  }
+}
+
 interface FakeExtensionRuntime {
   readonly mcpContext: string | undefined;
 }
@@ -77,11 +98,9 @@ describe('buildCapabilityContextSections', () => {
   const cleanupDirs: string[] = [];
 
   afterEach(async () => {
-    await Promise.all(
-      cleanupDirs.splice(0).map((dir) =>
-        fs.rm(dir, { recursive: true, force: true }),
-      ),
-    );
+    for (const dir of cleanupDirs.splice(0)) {
+      await removeTempDir(dir);
+    }
   });
 
   it('always emits base-system, environment-context, working-directory in canonical order (minimal options)', async () => {
@@ -262,7 +281,7 @@ describe('FEATURE_191 — specialist-agents section (A.3)', () => {
     const { _resetAgentResolverForTesting } = await import('../construction/agent-resolver.js');
     _resetAgentResolverForTesting();
     for (const dir of cleanupDirs) {
-      await fs.rm(dir, { recursive: true, force: true });
+      await removeTempDir(dir);
     }
     cleanupDirs.length = 0;
   });

@@ -753,6 +753,8 @@ export async function* toolDispatchChildTask(
         enqueueChildTaskNotification({
           taskId: childId,
           summary: bannerContent,
+          source: 'child_task',
+          status: status === 'completed' ? 'completed' : 'failed',
         });
         await writeDispatchTraceIfEnabled({
           childId,
@@ -793,6 +795,8 @@ export async function* toolDispatchChildTask(
         enqueueChildTaskNotification({
           taskId: childId,
           summary: bannerContent,
+          source: 'child_task',
+          status: 'failed',
         });
         await writeDispatchTraceIfEnabled({
           childId,

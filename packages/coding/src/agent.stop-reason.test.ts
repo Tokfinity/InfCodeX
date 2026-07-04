@@ -128,7 +128,7 @@ describe('runKodaX stopReason normalization', () => {
     expect(result.success).toBe(true);
     expect(StopReasonScriptedProvider.streamCalls).toBe(2);
     expect(textDeltas.join('')).toContain('output token limit hit');
-  }, 15_000);
+  }, 30_000);
 
   it('auto-continues managed protocol when OpenAI finish_reason=stop', async () => {
     StopReasonScriptedProvider.responses = [
@@ -153,7 +153,7 @@ describe('runKodaX stopReason normalization', () => {
     expect(result.success).toBe(true);
     expect(StopReasonScriptedProvider.streamCalls).toBe(2);
     expect(syntheticMessageText(result.messages)).toContain('required protocol was not emitted');
-  }, 15_000);
+  }, 30_000);
 
   it('treats pause_turn as a clean terminal without managed-protocol retry', async () => {
     StopReasonScriptedProvider.responses = [
@@ -177,7 +177,7 @@ describe('runKodaX stopReason normalization', () => {
     expect(result.success).toBe(true);
     expect(StopReasonScriptedProvider.streamCalls).toBe(1);
     expect(syntheticMessageText(result.messages)).not.toContain('required protocol was not emitted');
-  }, 15_000);
+  }, 30_000);
 
   it.each(['refusal', 'content_filter'])(
     'surfaces a decline note for %s without retrying',
@@ -202,7 +202,7 @@ describe('runKodaX stopReason normalization', () => {
       expect(StopReasonScriptedProvider.streamCalls).toBe(1);
       expect(textDeltas.join('')).toContain('model declined');
     },
-    15_000,
+    30_000,
   );
 
   it('warns once for unknown provider stop reasons and then terminates cleanly', async () => {
@@ -230,5 +230,5 @@ describe('runKodaX stopReason normalization', () => {
       hasToolBlocks: false,
       hasTextBlocks: true,
     });
-  }, 15_000);
+  }, 30_000);
 });

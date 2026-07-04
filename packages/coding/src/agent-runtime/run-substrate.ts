@@ -105,6 +105,11 @@ import {
   emitSessionStart,
   emitStreamEnd,
   emitComplete,
+  createLiveTurnScope,
+  emitTurnCompleted,
+  emitTurnFailed,
+  emitTurnStarted,
+  withLiveTurnAttribution,
 } from './event-emitter.js';
 import { resolvePerTurnProvider } from './per-turn-provider-resolution.js';
 import { assertProviderConfigured } from './provider-config-check.js';
@@ -384,7 +389,7 @@ export async function runSubstrate(
   let releaseRuntimeBinding: (() => void) | undefined;
   try {
   const maxIter = options.maxIter ?? 200;
-  const events = options.events ?? {};
+  let events = options.events ?? {};
   const runtimeDefaults = runtime?.getDefaults?.();
 
   // FEATURE_100 P3.6b/d/e — ten per-loop counters/latches/accumulators
@@ -436,6 +441,16 @@ export async function runSubstrate(
   // `discoverAutoResumeSessionId` during P3.6n.
   const resolvedSessionId = await discoverAutoResumeSessionId(options);
   const sessionId = resolvedSessionId ?? await generateSessionId();
+  const requestedLiveTurn = options.context?.liveTurn;
+  const liveTurnScope = createLiveTurnScope({
+    sessionId,
+    deliveryKind: requestedLiveTurn?.deliveryKind ?? 'initial',
+    turnId: requestedLiveTurn?.turnId,
+    deliveryId: requestedLiveTurn?.deliveryId,
+    promptId: requestedLiveTurn?.promptId,
+  });
+  events = withLiveTurnAttribution(events, liveTurnScope);
+  options = { ...options, events };
 
   // CAP-008: resolve transcript from initialMessages → storage.load → empty;
   // CAP-046: append current prompt unless transcript tail is already the
@@ -446,6 +461,7 @@ export async function runSubstrate(
     resumed.messages,
     prompt,
     options.context?.inputArtifacts,
+    liveTurnScope.turnId,
   );
   let title = resumed.title || (prompt.slice(0, 50) + (prompt.length > 50 ? '...' : ''));
   const errorMetadata: SessionErrorMetadata | undefined = resumed.errorMetadata;
@@ -494,7 +510,27 @@ export async function runSubstrate(
     },
     thinkingLevel: turnState.runtimeThinkingLevel,
   });
+  let liveTurnTerminalEmitted = false;
+  const emitLiveTurnCompletedOnce = (
+    status: 'completed' | 'interrupted',
+  ): void => {
+    if (!liveTurnTerminalEmitted) {
+      liveTurnTerminalEmitted = true;
+      emitTurnCompleted(events, liveTurnScope, status);
+    }
+  };
+  const emitLiveTurnFailedOnce = (error: Error): void => {
+    if (!liveTurnTerminalEmitted) {
+      liveTurnTerminalEmitted = true;
+      emitTurnFailed(events, liveTurnScope, error);
+    }
+  };
   const finalizeManagedProtocolResult = (result: KodaXResult): KodaXResult => {
+    if (result.success) {
+      emitLiveTurnCompletedOnce(result.interrupted ? 'interrupted' : 'completed');
+    } else {
+      emitLiveTurnFailedOnce(new Error(result.errorMetadata?.lastError ?? 'KodaX run failed'));
+    }
     const payload = mergeManagedProtocolPayload(
       result.managedProtocolPayload,
       managedProtocolPayloadRef.current,
@@ -618,6 +654,7 @@ export async function runSubstrate(
   const currentRoutingDecision = () => reasoningPlan.decision;
     emitSessionStart(events, { provider: initialProvider.name, sessionId });
     await emitActiveExtensionEvent('session:start', { provider: initialProvider.name, sessionId });
+    emitTurnStarted(events, liveTurnScope);
 
     // Cost tracking — lightweight session-scoped tracker. The closure
     // captures the stable `turnState` reference; reads see the latest
@@ -1058,6 +1095,7 @@ export async function runSubstrate(
             hadToolCalls: false,
             signal: 'COMPLETE',
           });
+          emitLiveTurnCompletedOnce('completed');
           emitComplete(events);
           await emitActiveExtensionEvent('complete', { success: true, signal: 'COMPLETE' });
           return finalizeManagedProtocolResult({
@@ -1104,7 +1142,12 @@ export async function runSubstrate(
       ]);
       // GOAL 2: stamp when the LLM stream completed so the session entry carries
       // a real per-message time (SA path; parallel to runner.ts). Additive.
-      messages.push({ role: 'assistant', content: assistantContent, timestamp: new Date().toISOString() });
+      messages.push({
+        role: 'assistant',
+        content: assistantContent,
+        turnId: liveTurnScope.turnId,
+        timestamp: new Date().toISOString(),
+      });
       const completedTurnTokenSnapshot = createCompletedTurnTokenSnapshot(messages, result.usage);
       contextTokenSnapshot = completedTurnTokenSnapshot;
 
@@ -1215,6 +1258,7 @@ export async function runSubstrate(
           hadToolCalls: false,
           signal: undefined,
         });
+        emitLiveTurnCompletedOnce('completed');
         emitComplete(events);
         await emitActiveExtensionEvent('complete', { success: true, signal: undefined });
         // CAP-085 (clean-exit variant): natural completion path. We still
@@ -1364,6 +1408,7 @@ export async function runSubstrate(
           hadToolCalls: false,
           signal: undefined,
         });
+        emitLiveTurnCompletedOnce('completed');
         emitComplete(events);
         await emitActiveExtensionEvent('complete', { success: true, signal: undefined });
         // CAP-085 (clean-exit variant): natural completion path after a
@@ -1527,6 +1572,7 @@ export async function runSubstrate(
       // CAP-084: generic error terminal. Emits `error` event +
       // events.onError; returns success:false with the cleaned
       // messages so a follow-up resume doesn't reload corrupt history.
+      emitLiveTurnFailedOnce(error);
       await applyGenericErrorTerminal({ error, events, emitActiveExtensionEvent });
       return finalizeManagedProtocolResult({
         success: false,

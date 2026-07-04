@@ -126,6 +126,12 @@ export interface RunWithIdleYieldOptions<
    */
   readonly onResumedUserPrompts?: (contents: readonly string[]) => void;
   /**
+   * Optional attribution hook for real user prompts spliced during an
+   * idle-yield resume. The agent layer stays transport-agnostic; callers that
+   * expose live turn IDs can stamp the generated prompt message here.
+   */
+  readonly resolveResumeTurnId?: () => string | undefined;
+  /**
    * Optional hook fired when the iteration cap is hit. Coding does not
    * currently log here (matches v0.7.38 behavior — silent break) but
    * the hook exists so SDK consumers can record the prompt-bug signal.
@@ -241,6 +247,7 @@ export async function runWithIdleYield<
       // the UI, so a follow-up typed while waiting for a sub-agent appears in
       // the transcript (it otherwise only reaches the agent input below).
       opts.onResumedUserPrompts,
+      opts.resolveResumeTurnId,
     );
     if (resumeMessages.length === 0) break;
 

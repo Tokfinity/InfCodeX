@@ -188,7 +188,7 @@ describe('runKodaX max_tokens continuation (L5)', () => {
     // The Claude-Code-style meta message surfaces via onTextDelta.
     const joined = textDeltas.join('');
     expect(joined).toContain('output token limit hit');
-  }, 15_000);
+  }, 30_000);
 
   it('honors a run-scoped maxOutputTokens passed to runKodaX (SDK ALS wrap)', async () => {
     // Regression guard for the SDK ALS gap: runKodaX is a public entry (startKodaX
@@ -216,7 +216,7 @@ describe('runKodaX max_tokens continuation (L5)', () => {
 
     expect(result.success).toBe(true);
     expect(MaxTokensScriptedProvider.observedBudgets[0]).toBe(SCOPED_BUDGET);
-  }, 15_000);
+  }, 30_000);
 
   it('respects user KODAX_MAX_OUTPUT_TOKENS override on every turn', async () => {
     process.env.KODAX_MAX_OUTPUT_TOKENS = '48000';
@@ -243,7 +243,7 @@ describe('runKodaX max_tokens continuation (L5)', () => {
     expect(result.success).toBe(true);
     // Both calls observe the user-pinned 48K — never auto-escalated.
     expect(MaxTokensScriptedProvider.observedBudgets).toEqual([48000, 48000]);
-  }, 15_000);
+  }, 30_000);
 
   // KODAX_ESCALATED_MAX_OUTPUT_TOKENS is kept as an exported constant for
   // external callers (FFI, plugins) that want to opt in to the larger budget

@@ -9,10 +9,14 @@ import type {
   KodaXActivityEventMeta,
   KodaXContextTokenSnapshot,
   KodaXEvents,
+  KodaXLiveEventMeta,
   KodaXManagedTaskStatusEvent,
   KodaXRepoIntelligenceTraceEvent,
   KodaXSidecarMessageEvent,
   KodaXTokenUsage,
+  KodaXTurnCompletedEvent,
+  KodaXTurnFailedEvent,
+  KodaXTurnStartedEvent,
   WorkflowEventCorrelation,
 } from '@kodax-ai/coding';
 
@@ -24,9 +28,12 @@ export interface JsonEventOutputOptions {
 }
 
 type JsonEvent =
-  | { type: 'session.start'; provider: string; sessionId: string }
-  | { type: 'iteration.start'; iter: number; maxIter: number }
-  | {
+  | ({ type: 'session.start'; provider: string; sessionId: string } & JsonLiveMeta)
+  | ({ type: 'turn.started' } & KodaXTurnStartedEvent)
+  | ({ type: 'turn.completed' } & KodaXTurnCompletedEvent)
+  | ({ type: 'turn.failed' } & KodaXTurnFailedEvent)
+  | ({ type: 'iteration.start'; iter: number; maxIter: number } & JsonActivityMeta)
+  | ({
       type: 'iteration.end';
       iter: number;
       maxIter: number;
@@ -35,7 +42,7 @@ type JsonEvent =
       usage?: KodaXTokenUsage;
       contextTokenSnapshot?: KodaXContextTokenSnapshot;
       scope?: 'parent' | 'worker';
-    }
+    } & JsonLiveMeta)
   | ({ type: 'text.delta'; text: string } & JsonActivityMeta)
   | ({ type: 'thinking.delta'; text: string } & JsonActivityMeta)
   | ({ type: 'thinking.end'; thinking: string } & JsonActivityMeta)
@@ -58,12 +65,12 @@ type JsonEvent =
       content: string;
     } & JsonActivityMeta)
   | ({ type: 'stream.end' } & JsonActivityMeta)
-  | { type: 'compact.start' }
-  | { type: 'compact.finish'; estimatedTokens: number }
-  | { type: 'compact.stats'; tokensBefore: number; tokensAfter: number }
-  | { type: 'compact.end' }
-  | { type: 'retry'; reason: string; attempt: number; maxAttempts: number }
-  | {
+  | ({ type: 'compact.start' } & JsonActivityMeta)
+  | ({ type: 'compact.finish'; estimatedTokens: number } & JsonActivityMeta)
+  | ({ type: 'compact.stats'; tokensBefore: number; tokensAfter: number } & JsonLiveMeta)
+  | ({ type: 'compact.end' } & JsonActivityMeta)
+  | ({ type: 'retry'; reason: string; attempt: number; maxAttempts: number } & JsonActivityMeta)
+  | ({
       type: 'provider.recovery';
       stage: string;
       reasonCode: string;
@@ -73,16 +80,16 @@ type JsonEvent =
       nextAt: number;
       recoveryAction: string;
       fallbackUsed: boolean;
-    }
-  | { type: 'provider.rate_limit'; attempt: number; maxRetries: number; delayMs: number }
-  | {
+    } & JsonActivityMeta)
+  | ({ type: 'provider.rate_limit'; attempt: number; maxRetries: number; delayMs: number } & JsonActivityMeta)
+  | ({
       type: 'repo_intelligence.trace';
       stage: KodaXRepoIntelligenceTraceEvent['stage'];
       summary: string;
       capability?: KodaXRepoIntelligenceTraceEvent['capability'];
       trace?: KodaXRepoIntelligenceTraceEvent['trace'];
-    }
-  | {
+    } & JsonLiveMeta)
+  | ({
       type: 'sidecar.message';
       source: KodaXSidecarMessageEvent['source'];
       verdict: KodaXSidecarMessageEvent['verdict'];
@@ -91,13 +98,13 @@ type JsonEvent =
       content: string;
       suggestedFix?: string;
       trace?: string;
-    }
+    } & JsonLiveMeta)
   | ({
       type: 'tool.progress';
       id: string;
       message: string;
     } & JsonActivityMeta)
-  | {
+  | ({
       type: 'managed_task.status';
       agentMode: KodaXManagedTaskStatusEvent['agentMode'];
       harnessProfile: KodaXManagedTaskStatusEvent['harnessProfile'];
@@ -113,24 +120,29 @@ type JsonEvent =
       globalWorkBudget?: number;
       budgetUsage?: number;
       budgetApprovalRequired?: boolean;
-    }
-  | {
+    } & JsonLiveMeta)
+  | ({
       type: 'scout.suspicious_completion';
       confidence: 'uncertain';
       signals: readonly string[];
       sessionId?: string;
       lastTextPreview?: string;
-    }
-  | { type: 'complete' };
+    } & JsonLiveMeta)
+  | ({ type: 'complete' } & JsonActivityMeta);
 
 type JsonErrorEvent = {
   type: 'error';
   name: string;
   message: string;
   stack?: string;
-};
+} & JsonActivityMeta;
 
 type JsonActivityMeta = {
+  sessionId?: string;
+  seq?: number;
+  turnId?: string;
+  deliveryId?: string;
+  timestamp?: string;
   workflowCorrelation?: WorkflowEventCorrelation;
   childAgentId?: string;
   childAgentName?: string;
@@ -138,8 +150,15 @@ type JsonActivityMeta = {
   liveOnly?: boolean;
 };
 
+type JsonLiveMeta = Partial<KodaXLiveEventMeta>;
+
 function activityMetaFields(meta?: KodaXActivityEventMeta): JsonActivityMeta {
   return {
+    ...(meta?.sessionId !== undefined ? { sessionId: meta.sessionId } : {}),
+    ...(meta?.seq !== undefined ? { seq: meta.seq } : {}),
+    ...(meta?.turnId !== undefined ? { turnId: meta.turnId } : {}),
+    ...(meta?.deliveryId !== undefined ? { deliveryId: meta.deliveryId } : {}),
+    ...(meta?.timestamp !== undefined ? { timestamp: meta.timestamp } : {}),
     ...(meta?.workflowCorrelation !== undefined ? { workflowCorrelation: meta.workflowCorrelation } : {}),
     ...(meta?.childAgentId !== undefined ? { childAgentId: meta.childAgentId } : {}),
     ...(meta?.childAgentName !== undefined ? { childAgentName: meta.childAgentName } : {}),
@@ -148,16 +167,27 @@ function activityMetaFields(meta?: KodaXActivityEventMeta): JsonActivityMeta {
   };
 }
 
+function liveMetaFields(meta: Partial<KodaXLiveEventMeta>): JsonLiveMeta {
+  return {
+    ...(meta.sessionId !== undefined ? { sessionId: meta.sessionId } : {}),
+    ...(meta.seq !== undefined ? { seq: meta.seq } : {}),
+    ...(meta.turnId !== undefined ? { turnId: meta.turnId } : {}),
+    ...(meta.deliveryId !== undefined ? { deliveryId: meta.deliveryId } : {}),
+    ...(meta.timestamp !== undefined ? { timestamp: meta.timestamp } : {}),
+  };
+}
+
 function writeJsonLine(stream: JsonWritable, value: JsonEvent | JsonErrorEvent): void {
   stream.write(`${JSON.stringify(value)}\n`);
 }
 
-function serializeError(error: Error): JsonErrorEvent {
+function serializeError(error: Error, meta?: KodaXActivityEventMeta): JsonErrorEvent {
   return {
     type: 'error',
     name: error.name,
     message: error.message,
     stack: error.stack,
+    ...activityMetaFields(meta),
   };
 }
 
@@ -171,11 +201,29 @@ export function createJsonEvents(options: JsonEventOutputOptions = {}): KodaXEve
         type: 'session.start',
         provider: info.provider,
         sessionId: info.sessionId,
+        ...liveMetaFields(info),
       });
     },
 
-    onIterationStart: (iter, maxIter) => {
-      writeJsonLine(stdout, { type: 'iteration.start', iter, maxIter });
+    onTurnStarted: (event) => {
+      writeJsonLine(stdout, { type: 'turn.started', ...event });
+    },
+
+    onTurnCompleted: (event) => {
+      writeJsonLine(stdout, { type: 'turn.completed', ...event });
+    },
+
+    onTurnFailed: (event) => {
+      writeJsonLine(stdout, { type: 'turn.failed', ...event });
+    },
+
+    onIterationStart: (iter, maxIter, meta) => {
+      writeJsonLine(stdout, {
+        type: 'iteration.start',
+        iter,
+        maxIter,
+        ...activityMetaFields(meta),
+      });
     },
 
     onIterationEnd: (info) => {
@@ -188,6 +236,7 @@ export function createJsonEvents(options: JsonEventOutputOptions = {}): KodaXEve
         usage: info.usage,
         contextTokenSnapshot: info.contextTokenSnapshot,
         ...(info.scope !== undefined ? { scope: info.scope } : {}),
+        ...liveMetaFields(info),
       });
     },
 
@@ -237,14 +286,15 @@ export function createJsonEvents(options: JsonEventOutputOptions = {}): KodaXEve
       writeJsonLine(stdout, { type: 'stream.end', ...activityMetaFields(meta) });
     },
 
-    onCompactStart: () => {
-      writeJsonLine(stdout, { type: 'compact.start' });
+    onCompactStart: (meta) => {
+      writeJsonLine(stdout, { type: 'compact.start', ...activityMetaFields(meta) });
     },
 
-    onCompact: (estimatedTokens) => {
+    onCompact: (estimatedTokens, meta) => {
       writeJsonLine(stdout, {
         type: 'compact.finish',
         estimatedTokens,
+        ...activityMetaFields(meta),
       });
     },
 
@@ -253,23 +303,25 @@ export function createJsonEvents(options: JsonEventOutputOptions = {}): KodaXEve
         type: 'compact.stats',
         tokensBefore: info.tokensBefore,
         tokensAfter: info.tokensAfter,
+        ...liveMetaFields(info),
       });
     },
 
-    onCompactEnd: () => {
-      writeJsonLine(stdout, { type: 'compact.end' });
+    onCompactEnd: (meta) => {
+      writeJsonLine(stdout, { type: 'compact.end', ...activityMetaFields(meta) });
     },
 
-    onRetry: (reason, attempt, maxAttempts) => {
+    onRetry: (reason, attempt, maxAttempts, meta) => {
       writeJsonLine(stdout, {
         type: 'retry',
         reason,
         attempt,
         maxAttempts,
+        ...activityMetaFields(meta),
       });
     },
 
-    onProviderRecovery: (event) => {
+    onProviderRecovery: (event, meta) => {
       writeJsonLine(stdout, {
         type: 'provider.recovery',
         stage: event.stage,
@@ -280,15 +332,17 @@ export function createJsonEvents(options: JsonEventOutputOptions = {}): KodaXEve
         nextAt: Date.now() + event.delayMs,
         recoveryAction: event.recoveryAction,
         fallbackUsed: event.fallbackUsed,
+        ...activityMetaFields(meta),
       });
     },
 
-    onProviderRateLimit: (attempt, maxRetries, delayMs) => {
+    onProviderRateLimit: (attempt, maxRetries, delayMs, meta) => {
       writeJsonLine(stdout, {
         type: 'provider.rate_limit',
         attempt,
         maxRetries,
         delayMs,
+        ...activityMetaFields(meta),
       });
     },
 
@@ -299,6 +353,7 @@ export function createJsonEvents(options: JsonEventOutputOptions = {}): KodaXEve
         summary: event.summary,
         capability: event.capability,
         trace: event.trace,
+        ...liveMetaFields(event),
       });
     },
 
@@ -312,6 +367,7 @@ export function createJsonEvents(options: JsonEventOutputOptions = {}): KodaXEve
         content: event.content,
         ...(event.suggestedFix !== undefined ? { suggestedFix: event.suggestedFix } : {}),
         ...(event.trace !== undefined ? { trace: event.trace } : {}),
+        ...liveMetaFields(event),
       });
     },
 
@@ -341,6 +397,7 @@ export function createJsonEvents(options: JsonEventOutputOptions = {}): KodaXEve
         globalWorkBudget: status.globalWorkBudget,
         budgetUsage: status.budgetUsage,
         budgetApprovalRequired: status.budgetApprovalRequired,
+        ...liveMetaFields(status),
       });
     },
 
@@ -351,15 +408,16 @@ export function createJsonEvents(options: JsonEventOutputOptions = {}): KodaXEve
         signals: payload.signals,
         sessionId: payload.sessionId,
         lastTextPreview: payload.lastTextPreview,
+        ...liveMetaFields(payload),
       });
     },
 
-    onComplete: () => {
-      writeJsonLine(stdout, { type: 'complete' });
+    onComplete: (meta) => {
+      writeJsonLine(stdout, { type: 'complete', ...activityMetaFields(meta) });
     },
 
-    onError: (error) => {
-      writeJsonLine(stderr, serializeError(error));
+    onError: (error, meta) => {
+      writeJsonLine(stderr, serializeError(error, meta));
     },
   };
 }

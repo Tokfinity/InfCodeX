@@ -245,4 +245,26 @@ describe('toolRunWorkflow — async / idle-yield path (ADR-049)', () => {
     await new Promise((r) => setTimeout(r, 0));
     expect(childAbortControllers.has('run-stop-1')).toBe(false);
   });
+
+  it('classifies a stopped workflow notification as a cancelled task result', async () => {
+    let resolveDone!: (r: WorkflowToolHostResult) => void;
+    const done = new Promise<WorkflowToolHostResult>((res) => { resolveDone = res; });
+    const { ctx, registry } = asyncCtx(done, 'run-stopped-1');
+
+    await toolRunWorkflow({ manifest: MANIFEST, source: SOURCE }, ctx);
+
+    resolveDone({ kind: 'started', runId: 'run-stopped-1', status: 'stopped' });
+    await registry.get('run-stopped-1')?.catch(() => {});
+    await new Promise((r) => setTimeout(r, 0));
+
+    const message = getMessageQueue()
+      .dequeue({ maxPriority: 'background' })
+      .find((item) => item.taskResult?.taskId === 'run-stopped-1');
+    expect(message?.taskResult).toEqual(expect.objectContaining({
+      source: 'workflow',
+      taskId: 'run-stopped-1',
+      runId: 'run-stopped-1',
+      status: 'cancelled',
+    }));
+  });
 });

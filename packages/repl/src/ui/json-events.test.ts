@@ -243,6 +243,84 @@ describe('createJsonEvents', () => {
     expect(stderr.readLines()).toEqual([]);
   });
 
+  it('serializes live turn attribution and explicit turn boundaries', () => {
+    const stdout = createWritable();
+    const stderr = createWritable();
+    const events = createJsonEvents({ stdout: stdout.stream, stderr: stderr.stream });
+
+    events.onSessionStart?.({
+      provider: 'openai',
+      sessionId: 'session-123',
+      seq: 1,
+      turnId: 'turn-1',
+      deliveryId: 'delivery-1',
+      timestamp: '2026-07-04T00:00:00.000Z',
+    });
+    events.onTurnStarted?.({
+      sessionId: 'session-123',
+      seq: 2,
+      turnId: 'turn-1',
+      deliveryId: 'delivery-1',
+      timestamp: '2026-07-04T00:00:00.000Z',
+      deliveryKind: 'initial',
+    });
+    events.onTextDelta?.('hello', {
+      sessionId: 'session-123',
+      seq: 3,
+      turnId: 'turn-1',
+      deliveryId: 'delivery-1',
+      timestamp: '2026-07-04T00:00:01.000Z',
+    });
+    events.onTurnCompleted?.({
+      sessionId: 'session-123',
+      seq: 4,
+      turnId: 'turn-1',
+      deliveryId: 'delivery-1',
+      timestamp: '2026-07-04T00:00:02.000Z',
+      status: 'completed',
+    });
+
+    expect(stdout.readLines()).toEqual([
+      {
+        type: 'session.start',
+        provider: 'openai',
+        sessionId: 'session-123',
+        seq: 1,
+        turnId: 'turn-1',
+        deliveryId: 'delivery-1',
+        timestamp: '2026-07-04T00:00:00.000Z',
+      },
+      {
+        type: 'turn.started',
+        sessionId: 'session-123',
+        seq: 2,
+        turnId: 'turn-1',
+        deliveryId: 'delivery-1',
+        timestamp: '2026-07-04T00:00:00.000Z',
+        deliveryKind: 'initial',
+      },
+      {
+        type: 'text.delta',
+        text: 'hello',
+        sessionId: 'session-123',
+        seq: 3,
+        turnId: 'turn-1',
+        deliveryId: 'delivery-1',
+        timestamp: '2026-07-04T00:00:01.000Z',
+      },
+      {
+        type: 'turn.completed',
+        sessionId: 'session-123',
+        seq: 4,
+        turnId: 'turn-1',
+        deliveryId: 'delivery-1',
+        timestamp: '2026-07-04T00:00:02.000Z',
+        status: 'completed',
+      },
+    ]);
+    expect(stderr.readLines()).toEqual([]);
+  });
+
   it('writes structured errors to stderr', () => {
     const stdout = createWritable();
     const stderr = createWritable();

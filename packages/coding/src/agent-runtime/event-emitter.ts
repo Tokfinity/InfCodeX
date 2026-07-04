@@ -45,15 +45,259 @@
  *     `agent.ts:511-528` and `agent.ts:577` during FEATURE_100 P3.1.
  */
 
+import { randomUUID } from 'node:crypto';
+
 import type {
   KodaXActivityEventMeta,
   KodaXEvents,
   KodaXContextTokenSnapshot,
+  KodaXLiveEventMeta,
+  KodaXTurnCompletedEvent,
+  KodaXTurnDeliveryKind,
+  KodaXTurnFailedEvent,
+  KodaXTurnStartedEvent,
 } from '../types.js';
 import type { KodaXMessage } from '@kodax-ai/llm';
 import { getMessageQueue } from '@kodax-ai/agent';
 import { isManagedProtocolToolName } from '../managed-protocol.js';
 import { rebaseContextTokenSnapshot } from '../token-accounting.js';
+
+const LIVE_TURN_ATTRIBUTED = Symbol('KodaXLiveTurnAttributed');
+const LIVE_TURN_BASE_EVENTS = Symbol('KodaXLiveTurnBaseEvents');
+const LIVE_TURN_ID_HEX_LENGTH = 16;
+const liveSessionSeq = new Map<string, number>();
+
+type AttributedEvents = KodaXEvents & {
+  readonly [LIVE_TURN_ATTRIBUTED]: true;
+  readonly [LIVE_TURN_BASE_EVENTS]: KodaXEvents;
+};
+
+export interface LiveTurnScope {
+  readonly sessionId: string;
+  readonly turnId: string;
+  readonly deliveryId?: string;
+  readonly deliveryKind: KodaXTurnDeliveryKind;
+  readonly promptId?: string;
+  nextMeta(): KodaXLiveEventMeta;
+}
+
+export interface LiveTurnScopeRef {
+  current: LiveTurnScope;
+}
+
+export function createLiveTurnScope(input: {
+  readonly sessionId: string;
+  readonly deliveryKind?: KodaXTurnDeliveryKind;
+  readonly turnId?: string;
+  readonly deliveryId?: string;
+  readonly promptId?: string;
+}): LiveTurnScope {
+  const turnId = input.turnId ?? `turn_${randomUUID().replace(/-/g, '').slice(0, LIVE_TURN_ID_HEX_LENGTH)}`;
+  const deliveryId = input.deliveryId ?? `delivery_${randomUUID().replace(/-/g, '').slice(0, LIVE_TURN_ID_HEX_LENGTH)}`;
+  return {
+    sessionId: input.sessionId,
+    turnId,
+    deliveryId,
+    deliveryKind: input.deliveryKind ?? 'initial',
+    promptId: input.promptId,
+    nextMeta() {
+      const seq = (liveSessionSeq.get(input.sessionId) ?? 0) + 1;
+      liveSessionSeq.set(input.sessionId, seq);
+      return {
+        sessionId: input.sessionId,
+        seq,
+        turnId,
+        deliveryId,
+        timestamp: new Date().toISOString(),
+      };
+    },
+  };
+}
+
+function isAttributedEvents(events: KodaXEvents): events is AttributedEvents {
+  return (events as Partial<AttributedEvents>)[LIVE_TURN_ATTRIBUTED] === true;
+}
+
+function resolveLiveTurnScope(scope: LiveTurnScope | LiveTurnScopeRef): LiveTurnScope {
+  return 'current' in scope ? scope.current : scope;
+}
+
+function withActivityMeta<TMeta extends KodaXActivityEventMeta>(
+  scope: LiveTurnScope | LiveTurnScopeRef,
+  meta: TMeta | undefined,
+): TMeta & KodaXLiveEventMeta {
+  return {
+    ...(meta ?? ({} as TMeta)),
+    ...resolveLiveTurnScope(scope).nextMeta(),
+  } as TMeta & KodaXLiveEventMeta;
+}
+
+function withLiveMeta<TEvent extends object>(
+  scope: LiveTurnScope | LiveTurnScopeRef,
+  event: TEvent,
+): TEvent & KodaXLiveEventMeta {
+  return {
+    ...event,
+    ...resolveLiveTurnScope(scope).nextMeta(),
+  };
+}
+
+export function withLiveTurnAttribution(
+  events: KodaXEvents,
+  scope: LiveTurnScope | LiveTurnScopeRef,
+): KodaXEvents {
+  const baseEvents = isAttributedEvents(events) ? events[LIVE_TURN_BASE_EVENTS] : events;
+  const wrapped: KodaXEvents = {
+    ...baseEvents,
+    onSessionStart: (info) => {
+      baseEvents.onSessionStart?.(withLiveMeta(scope, info));
+    },
+    onTextDelta: (text, meta) => {
+      baseEvents.onTextDelta?.(text, withActivityMeta(scope, meta));
+    },
+    onThinkingDelta: (text, meta) => {
+      baseEvents.onThinkingDelta?.(text, withActivityMeta(scope, meta));
+    },
+    onThinkingEnd: (thinking, meta) => {
+      baseEvents.onThinkingEnd?.(thinking, withActivityMeta(scope, meta));
+    },
+    onToolUseStart: (tool, meta) => {
+      baseEvents.onToolUseStart?.(tool, withActivityMeta(scope, meta));
+    },
+    onToolInputDelta: (toolName, partialJson, meta) => {
+      baseEvents.onToolInputDelta?.(toolName, partialJson, withActivityMeta(scope, meta));
+    },
+    onToolProgress: (update, meta) => {
+      baseEvents.onToolProgress?.(update, withActivityMeta(scope, meta));
+    },
+    onToolResult: (result, meta) => {
+      baseEvents.onToolResult?.(result, withActivityMeta(scope, meta));
+    },
+    onChildActivityEnd: (meta) => {
+      baseEvents.onChildActivityEnd?.(withActivityMeta(scope, meta));
+    },
+    onStreamEnd: (meta) => {
+      baseEvents.onStreamEnd?.(withActivityMeta(scope, meta));
+    },
+    onIterationStart: (iter, maxIter, meta) => {
+      baseEvents.onIterationStart?.(iter, maxIter, withActivityMeta(scope, meta));
+    },
+    onIterationEnd: (info) => {
+      baseEvents.onIterationEnd?.(withLiveMeta(scope, info));
+    },
+    onCompactStart: (meta) => {
+      baseEvents.onCompactStart?.(withActivityMeta(scope, meta));
+    },
+    onCompact: (estimatedTokens, meta) => {
+      baseEvents.onCompact?.(estimatedTokens, withActivityMeta(scope, meta));
+    },
+    onCompactStats: (info) => {
+      baseEvents.onCompactStats?.(withLiveMeta(scope, info));
+    },
+    onCompactedMessages: (messages, update, meta) => {
+      baseEvents.onCompactedMessages?.(messages, update, withActivityMeta(scope, meta));
+    },
+    onCompactEnd: (meta) => {
+      baseEvents.onCompactEnd?.(withActivityMeta(scope, meta));
+    },
+    onMidTurnUserMessages: (contents, meta) => {
+      baseEvents.onMidTurnUserMessages?.(contents, withActivityMeta(scope, meta));
+    },
+    onRetry: (reason, attempt, maxAttempts, meta) => {
+      baseEvents.onRetry?.(reason, attempt, maxAttempts, withActivityMeta(scope, meta));
+    },
+    onProviderRateLimit: (attempt, maxRetries, delayMs, meta) => {
+      baseEvents.onProviderRateLimit?.(attempt, maxRetries, delayMs, withActivityMeta(scope, meta));
+    },
+    onRetryAfter: (payload, meta) => {
+      baseEvents.onRetryAfter?.(payload, withActivityMeta(scope, meta));
+    },
+    onProviderRecovery: (event, meta) => {
+      baseEvents.onProviderRecovery?.(event, withActivityMeta(scope, meta));
+    },
+    onReasoningEffortRejected: (event) => {
+      baseEvents.onReasoningEffortRejected?.(withLiveMeta(scope, event));
+    },
+    onRepoIntelligenceTrace: (event) => {
+      baseEvents.onRepoIntelligenceTrace?.(withLiveMeta(scope, event));
+    },
+    onSidecarMessage: (event) => {
+      baseEvents.onSidecarMessage?.(withLiveMeta(scope, event));
+    },
+    onTodoUpdate: (items, meta) => {
+      baseEvents.onTodoUpdate?.(items, withActivityMeta(scope, meta));
+    },
+    onTodoDriftWarning: (event) => {
+      baseEvents.onTodoDriftWarning?.(withLiveMeta(scope, event));
+    },
+    onManagedTaskStatus: (status) => {
+      baseEvents.onManagedTaskStatus?.(withLiveMeta(scope, status));
+    },
+    onEffectiveConfig: (config) => {
+      baseEvents.onEffectiveConfig?.(withLiveMeta(scope, config));
+    },
+    onWorkflowProcessEvent: (event) => {
+      baseEvents.onWorkflowProcessEvent?.(withLiveMeta(scope, event));
+    },
+    onWorkflowAgentDigest: (event) => {
+      baseEvents.onWorkflowAgentDigest?.(withLiveMeta(scope, event));
+    },
+    onScoutSuspiciousCompletion: (payload) => {
+      baseEvents.onScoutSuspiciousCompletion?.(withLiveMeta(scope, payload));
+    },
+    onComplete: (meta) => {
+      baseEvents.onComplete?.(withActivityMeta(scope, meta));
+    },
+    onError: (error, meta) => {
+      baseEvents.onError?.(error, withActivityMeta(scope, meta));
+    },
+  };
+  Object.defineProperty(wrapped, LIVE_TURN_ATTRIBUTED, {
+    value: true,
+    enumerable: false,
+  });
+  Object.defineProperty(wrapped, LIVE_TURN_BASE_EVENTS, {
+    value: baseEvents,
+    enumerable: false,
+  });
+  return wrapped;
+}
+
+export function emitTurnStarted(events: KodaXEvents, scope: LiveTurnScope): void {
+  const event: KodaXTurnStartedEvent = {
+    ...scope.nextMeta(),
+    deliveryKind: scope.deliveryKind,
+    ...(scope.promptId !== undefined ? { promptId: scope.promptId } : {}),
+  };
+  events.onTurnStarted?.(event);
+}
+
+export function emitTurnCompleted(
+  events: KodaXEvents,
+  scope: LiveTurnScope,
+  status: KodaXTurnCompletedEvent['status'],
+): void {
+  events.onTurnCompleted?.({
+    ...scope.nextMeta(),
+    status,
+  });
+}
+
+export function emitTurnFailed(
+  events: KodaXEvents,
+  scope: LiveTurnScope,
+  error: Error,
+): void {
+  const payload: KodaXTurnFailedEvent = {
+    ...scope.nextMeta(),
+    error: {
+      name: error.name,
+      message: error.message,
+      ...(error.stack !== undefined ? { stack: error.stack } : {}),
+    },
+  };
+  events.onTurnFailed?.(payload);
+}
 
 /**
  * FEATURE_151 (v0.7.38) Slice E — `todo_update` and `todo_list` are

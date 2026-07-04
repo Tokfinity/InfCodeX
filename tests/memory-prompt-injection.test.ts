@@ -33,8 +33,8 @@ describe('FEATURE_124 Phase B — system prompt memory injection', () => {
 
   afterEach(() => {
     setAgentConfigHome(undefined);
-    fs.rmSync(tempHome, { recursive: true, force: true });
-    fs.rmSync(cwd, { recursive: true, force: true });
+    fs.rmSync(tempHome, { recursive: true, force: true, maxRetries: 10, retryDelay: 100 });
+    fs.rmSync(cwd, { recursive: true, force: true, maxRetries: 10, retryDelay: 100 });
   });
 
   it('emits a project-memory section when MEMORY.md is missing (fallback text)', async () => {
@@ -182,8 +182,8 @@ describe('FEATURE_124 Phase B — system prompt memory injection', () => {
       expect(snapshotB.rendered).not.toContain('A-MARKER');
       expect(snapshotB.rendered).toContain('currently empty');
     } finally {
-      fs.rmSync(cwdA, { recursive: true, force: true });
-      fs.rmSync(cwdB, { recursive: true, force: true });
+      fs.rmSync(cwdA, { recursive: true, force: true, maxRetries: 10, retryDelay: 100 });
+      fs.rmSync(cwdB, { recursive: true, force: true, maxRetries: 10, retryDelay: 100 });
     }
   });
 

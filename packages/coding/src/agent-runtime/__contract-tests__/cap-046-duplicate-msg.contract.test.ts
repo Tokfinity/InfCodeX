@@ -67,6 +67,15 @@ describe('CAP-046: duplicate user message detection contract', () => {
     expect(typeof result[0]?.timestamp).toBe('string');
   });
 
+  it('CAP-DUPLICATE-MSG-002: appended prompt carries the supplied live turn id', () => {
+    const result = appendPromptIfNotDuplicate([], 'first prompt', undefined, 'turn_abc123');
+    expect(result[0]).toMatchObject({
+      role: 'user',
+      content: 'first prompt',
+      turnId: 'turn_abc123',
+    });
+  });
+
   it('CAP-DUPLICATE-MSG-CANON-001: extractPromptComparableText extracts joined text from content blocks (multimodal-safe canonicalisation)', () => {
     const blockContent: KodaXMessage['content'] = [
       { type: 'text', text: 'first line' },

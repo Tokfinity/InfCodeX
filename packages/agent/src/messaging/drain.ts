@@ -23,6 +23,7 @@
 
 import { getMessageQueue } from './queue.js';
 import type { MessagePriority, QueuedMessage } from './types.js';
+import type { KodaXTaskResultMetadata, KodaXTaskResultSource } from '@kodax-ai/llm';
 
 /**
  * Tools that gate background-priority drain. Empty under FEATURE_155
@@ -85,6 +86,11 @@ export interface EnqueueChildTaskNotificationInput {
   readonly taskId: string;
   /** Human-readable summary appended after the task id banner. */
   readonly summary: string;
+  readonly source?: KodaXTaskResultSource;
+  readonly runId?: string;
+  readonly status?: KodaXTaskResultMetadata['status'];
+  readonly title?: string;
+  readonly artifactRefs?: readonly string[];
 }
 
 /**
@@ -106,10 +112,21 @@ export function enqueueChildTaskNotification(
   input: EnqueueChildTaskNotificationInput,
 ): string {
   const banner = `<task-completed task_id="${input.taskId}">\n${input.summary}\n</task-completed>`;
+  const taskResult: KodaXTaskResultMetadata = {
+    type: 'task_result',
+    source: input.source ?? 'child_task',
+    taskId: input.taskId,
+    status: input.status ?? 'completed',
+    summary: input.summary,
+    ...(input.runId !== undefined ? { runId: input.runId } : {}),
+    ...(input.title !== undefined ? { title: input.title } : {}),
+    ...(input.artifactRefs !== undefined ? { artifactRefs: [...input.artifactRefs] } : {}),
+  };
   return getMessageQueue().enqueue({
     priority: 'background',
     mode: 'task-notification',
     agentId: input.parentAgentId,
     content: banner,
+    taskResult,
   });
 }
