@@ -21,6 +21,10 @@ interface SessionApiModule {
   listSessions: (opts?: import('./public-api.js').ListSessionsOptions) => Promise<import('./public-api.js').SessionSummary[]>;
   loadSession: (id: string) => Promise<import('./public-api.js').SessionSummary | null>;
   loadFullTranscript: (id: string) => Promise<import('./public-api.js').FullTranscriptSessionData | null>;
+  appendClientNotice: (
+    id: string,
+    opts: import('./public-api.js').AppendClientNoticeOptions,
+  ) => Promise<import('./public-api.js').SessionTranscriptEntry | null>;
   forkSession: (id: string, opts?: { selector?: string; sessionId?: string; title?: string }) => Promise<{ sessionId: string; data: unknown } | null>;
   rewindSession: (id: string, opts?: { selector?: string }) => Promise<unknown | null>;
   setActiveEntry: (id: string, selector: string) => Promise<unknown | null>;
@@ -511,6 +515,7 @@ describe('Session Management Public SDK', () => {
       'listSessions',
       'loadSession',
       'loadFullTranscript',
+      'appendClientNotice',
       'forkSession',
       'rewindSession',
       'setActiveEntry',
@@ -652,6 +657,102 @@ describe('Session Management Public SDK', () => {
     ]);
   });
 
+  it('appendClientNotice persists a client-only transcript entry without entering model context', async () => {
+    const overrideDir = path.join(tempHome, 'client-notice-transcript-test');
+    await mkdir(overrideDir, { recursive: true });
+
+    const mgr = api.createSessionManager({ sessionsDir: overrideDir }) as {
+      storage: {
+        save: (id: string, data: unknown) => Promise<void>;
+        appendSessionDelta: (id: string, data: unknown) => Promise<void>;
+      };
+      appendClientNotice: (
+        id: string,
+        options: import('./public-api.js').AppendClientNoticeOptions,
+      ) => Promise<import('./public-api.js').SessionTranscriptEntry | null>;
+      loadSession: (id: string) => Promise<{ messages: Array<{ content: unknown }> } | null>;
+      loadFullTranscript: (id: string) => Promise<{
+        messages: Array<{ content: unknown }>;
+        activeMessages: Array<{ content: unknown }>;
+        transcriptEntries: Array<{
+          type: string;
+          source?: string;
+          active: boolean;
+          turnId?: string;
+          payload?: unknown;
+        }>;
+      } | null>;
+    };
+
+    await mgr.storage.save('client-notice-001', {
+      messages: [
+        { role: 'user', content: 'real prompt' },
+        { role: 'assistant', content: 'real answer' },
+      ],
+      title: 'Client notice transcript',
+      gitRoot: tempHome,
+      scope: 'user',
+    });
+
+    const appendSessionDelta = mgr.storage.appendSessionDelta.bind(mgr.storage);
+    let appendDeltaCalls = 0;
+    mgr.storage.appendSessionDelta = async (id, data) => {
+      appendDeltaCalls += 1;
+      await appendSessionDelta(id, data);
+    };
+
+    const notice = await mgr.appendClientNotice('client-notice-001', {
+      source: 'space',
+      content: '/doctor ok',
+      timestamp: '2026-07-05T00:00:00.000Z',
+      turnId: 'turn-local',
+      payload: { command: '/doctor' },
+    });
+    const active = await mgr.loadSession('client-notice-001');
+    const full = await mgr.loadFullTranscript('client-notice-001');
+
+    expect(appendDeltaCalls).toBe(1);
+    expect(notice).toEqual(expect.objectContaining({
+      type: 'client_notice',
+      source: 'client',
+      turnId: 'turn-local',
+      active: true,
+      payload: {
+        source: 'space',
+        content: '/doctor ok',
+        entersModelContext: false,
+        payload: { command: '/doctor' },
+      },
+    }));
+    expect(active?.messages.map((message) => message.content)).toEqual([
+      'real prompt',
+      'real answer',
+    ]);
+    expect(full?.activeMessages.map((message) => message.content)).toEqual([
+      'real prompt',
+      'real answer',
+    ]);
+    expect(full?.messages.map((message) => message.content)).toEqual([
+      'real prompt',
+      'real answer',
+      '/doctor ok',
+    ]);
+    expect(full?.transcriptEntries.map((entry) => entry.type)).toEqual([
+      'message',
+      'message',
+      'client_notice',
+    ]);
+    expect(full?.transcriptEntries[2]).toEqual(expect.objectContaining({
+      active: true,
+      payload: {
+        source: 'space',
+        content: '/doctor ok',
+        entersModelContext: false,
+        payload: { command: '/doctor' },
+      },
+    }));
+  });
+
   it('loadFullTranscript surfaces typed task_result entries from persisted metadata', async () => {
     const overrideDir = path.join(tempHome, 'typed-transcript-test');
     await mkdir(overrideDir, { recursive: true });
@@ -664,6 +765,7 @@ describe('Session Management Public SDK', () => {
           source?: string;
           timestamp: string;
           payload?: unknown;
+          taskResults?: readonly import('@kodax-ai/agent').KodaXTaskResultMetadata[];
           active: boolean;
         }>;
       } | null>;
@@ -712,6 +814,17 @@ describe('Session Management Public SDK', () => {
           title: 'Review workflow',
           summary: 'Workflow finished.',
         },
+        taskResults: [
+          {
+            type: 'task_result',
+            source: 'workflow',
+            taskId: 'run-1',
+            runId: 'run-1',
+            status: 'completed',
+            title: 'Review workflow',
+            summary: 'Workflow finished.',
+          },
+        ],
       }),
     ]);
   });
@@ -729,6 +842,7 @@ describe('Session Management Public SDK', () => {
           payload?: {
             results?: Array<{ taskId: string; status: string; summary?: string }>;
           };
+          taskResults?: Array<{ taskId: string; status: string; summary?: string }>;
         }>;
       } | null>;
     };
@@ -767,6 +881,10 @@ describe('Session Management Public SDK', () => {
           expect.objectContaining({ taskId: 'child-b', status: 'failed', summary: 'failed: beta exploded' }),
         ],
       }),
+      taskResults: [
+        expect.objectContaining({ taskId: 'child-a', status: 'completed', summary: 'alpha done' }),
+        expect.objectContaining({ taskId: 'child-b', status: 'failed', summary: 'failed: beta exploded' }),
+      ],
     }));
   });
 

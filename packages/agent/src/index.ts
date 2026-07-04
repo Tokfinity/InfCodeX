@@ -62,6 +62,7 @@ export type {
   KodaXGoalStatus,
   KodaXSessionArchiveMarkerEntry,
   KodaXSessionBranchSummaryEntry,
+  KodaXSessionClientNoticeEntry,
   KodaXSessionCompactionEntry,
   KodaXSessionData,
   KodaXSessionEntry,

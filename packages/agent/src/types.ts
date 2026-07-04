@@ -137,6 +137,14 @@ export interface KodaXSessionArchiveMarkerEntry extends KodaXSessionEntryBase {
   summary: string;
 }
 
+export interface KodaXSessionClientNoticeEntry extends KodaXSessionEntryBase {
+  type: 'client_notice';
+  source: string;
+  content: string;
+  turnId?: string;
+  payload?: KodaXJsonValue;
+}
+
 // ============== Goal (FEATURE_192 v0.7.44) ==============
 
 export type KodaXGoalStatus =
@@ -200,6 +208,7 @@ export type KodaXSessionEntry =
   | KodaXSessionBranchSummaryEntry
   | KodaXSessionLabelEntry
   | KodaXSessionArchiveMarkerEntry
+  | KodaXSessionClientNoticeEntry
   | KodaXSessionGoalEntry;
 
 export interface KodaXSessionArtifactLedgerEntry {
@@ -256,7 +265,7 @@ export interface KodaXSessionNavigationOptions {
 export interface KodaXSessionTreeNode {
   entry: Exclude<
     KodaXSessionEntry,
-    KodaXSessionLabelEntry | KodaXSessionGoalEntry
+    KodaXSessionLabelEntry | KodaXSessionGoalEntry | KodaXSessionClientNoticeEntry
   >;
   children: KodaXSessionTreeNode[];
   label?: string;

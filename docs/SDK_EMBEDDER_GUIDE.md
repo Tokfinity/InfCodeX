@@ -661,7 +661,13 @@ import { createSessionManager } from '@kodax-ai/kodax/session';
 
 // One manager per host process; reuse across runs so the
 // per-session write queue + append-watermark caches stay coherent.
-const { storage, listSessions, loadSession } = createSessionManager();
+const {
+  storage,
+  listSessions,
+  loadSession,
+  loadFullTranscript,
+  appendClientNotice,
+} = createSessionManager();
 
 await runKodaX(
   {
@@ -680,6 +686,11 @@ await runKodaX(
 const recent = await listSessions({ scope: 'user', limit: 50 });
 const replay = await loadSession('s_my_chat');
 const scrollback = await loadFullTranscript('s_my_chat');
+
+await appendClientNotice('s_my_chat', {
+  source: 'space',
+  content: '/doctor ok',
+});
 ```
 
 ### What `createSessionManager()` returns (v0.7.43+)
@@ -690,6 +701,7 @@ interface SessionManager {
   listSessions(...): Promise<SessionSummary[]>;
   loadSession(id): Promise<...>;
   loadFullTranscript(id): Promise<...>;
+  appendClientNotice(id, opts): Promise<SessionTranscriptEntry | null>;
   forkSession(id, opts?): Promise<...>;
   rewindSession(id, opts?): Promise<...>;
   setActiveEntry(id, selector): Promise<void>;
@@ -715,6 +727,60 @@ For product UI, prefer `loadFullTranscript(id)` for conversation history and
 treat `loadSession(id)` as the model-context API. Do not assume `uiHistory`
 exists. It is intentionally a small, lossy replay cache; canonical facts remain
 in `messages` / `lineage`.
+
+`loadFullTranscript(id).transcriptEntries` is the structured host-facing
+scrollback. Each entry has stable ownership and ordering fields:
+
+```ts
+interface SessionTranscriptEntry {
+  entryId: string;
+  parentId: string | null;
+  timestamp: string;
+  type: 'message' | 'compaction' | 'branch_summary' | 'client_notice' | 'task_result';
+  source?: 'user' | 'assistant' | 'workflow' | 'child_task' | 'system' | 'client';
+  turnId?: string;
+  active: boolean;
+  message: KodaXMessage;
+  payload?: unknown;
+  taskResults?: readonly KodaXTaskResultMetadata[];
+}
+```
+
+Use `type` / `source` / `timestamp` / `active` instead of parsing
+`message.role`, synthetic wrapper text, or filesystem side stores. In
+particular, workflow and child-task completions surface as
+`type: 'task_result'` with `taskResults[]`:
+
+```ts
+const full = await loadFullTranscript(sessionId);
+for (const entry of full?.transcriptEntries ?? []) {
+  if (entry.type === 'task_result') {
+    for (const result of entry.taskResults ?? []) {
+      // result.source is 'workflow' or 'child_task'
+      // result.taskId / runId / status / title / summary are structured.
+    }
+  }
+}
+```
+
+For host-local output that should be visible in the transcript but must not
+enter model context, call `appendClientNotice()`:
+
+```ts
+await appendClientNotice(sessionId, {
+  source: 'space',
+  content: '/mcp status: 3 servers connected',
+  timestamp: new Date().toISOString(),
+  payload: { command: '/mcp status' },
+});
+
+const active = await loadSession(sessionId);         // no client notice
+const full = await loadFullTranscript(sessionId);    // includes client_notice
+```
+
+Client notices are persisted as lineage entries, not model messages. They are
+returned from `loadFullTranscript()` with `type: 'client_notice'`,
+`source: 'client'`, and `payload.entersModelContext === false`.
 
 v0.7.51 extends the `uiHistory` schema so interactive sessions can persist
 sanitized terminal tool cards. Headless SDK sessions can still reconstruct

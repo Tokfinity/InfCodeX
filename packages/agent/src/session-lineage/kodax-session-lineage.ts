@@ -8,6 +8,7 @@ import type {
   KodaXSessionArchiveMarkerEntry,
   KodaXSessionArtifactLedgerEntry,
   KodaXSessionBranchSummaryEntry,
+  KodaXSessionClientNoticeEntry,
   KodaXSessionCompactionEntry,
   KodaXSessionEntry,
   KodaXSessionGoalEntry,
@@ -20,7 +21,7 @@ import type {
 
 type NavigableSessionEntry = Exclude<
   KodaXSessionEntry,
-  KodaXSessionLabelEntry | KodaXSessionGoalEntry
+  KodaXSessionLabelEntry | KodaXSessionGoalEntry | KodaXSessionClientNoticeEntry
 >;
 
 const ENTRY_ID_LENGTH = 12;
@@ -114,6 +115,11 @@ function cloneEntry(entry: KodaXSessionEntry): KodaXSessionEntry {
       return { ...entry };
     case 'archive_marker':
       return { ...entry };
+    case 'client_notice':
+      return {
+        ...entry,
+        payload: cloneJsonValue(entry.payload),
+      };
     case 'goal':
       // KodaXSessionGoalEntry: shallow clone; the inner goal object is
       // already immutable (readonly fields + frozen by goal/state.ts).
@@ -134,11 +140,11 @@ function isLabelEntry(entry: KodaXSessionEntry): entry is KodaXSessionLabelEntry
 }
 
 function isNavigableEntry(entry: KodaXSessionEntry): entry is NavigableSessionEntry {
-  // Labels and goals are session-level side-state, not part of the
+  // Labels, goals, and client notices are session-level side-state, not part of the
   // navigable message thread. They live in `lineage.entries` so they
   // are persisted + cleaned up alongside their parent branch, but
   // they MUST be excluded from path/tree/context computations.
-  return entry.type !== 'label' && entry.type !== 'goal';
+  return entry.type !== 'label' && entry.type !== 'goal' && entry.type !== 'client_notice';
 }
 
 function serializeMessageContent(content: KodaXMessage['content']): string {

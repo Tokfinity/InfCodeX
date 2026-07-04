@@ -12,10 +12,13 @@
 import fs from 'node:fs';
 import fsPromises from 'node:fs/promises';
 import path from 'node:path';
+import { randomUUID } from 'node:crypto';
 
-import { discoverInstances } from '@kodax-ai/agent';
+import { createSessionLineage, discoverInstances } from '@kodax-ai/agent';
 import type {
+  KodaXJsonValue,
   KodaXMessage,
+  KodaXSessionClientNoticeEntry,
   KodaXSessionEntry,
   KodaXSessionLineage,
   KodaXSessionRuntimeInfo,
@@ -28,6 +31,7 @@ export { compactSession } from './compact-session.js';
 export type { CompactSessionOptions, CompactSessionResult } from './compact-session.js';
 import { deriveProjectKeyFromRoot } from '../interactive/project-key.js';
 import { ensureLayoutMigrated } from '../interactive/session-migration.js';
+import { isKodaXJsonValue } from '../interactive/json-guards.js';
 import type { SessionData } from '../ui/utils/session-storage.js';
 import { KODAX_SESSIONS_DIR } from '../common/utils.js';
 
@@ -175,12 +179,21 @@ export interface SessionTranscriptEntry {
   readonly active: boolean;
   readonly summary?: string;
   readonly payload?: unknown;
+  readonly taskResults?: readonly KodaXTaskResultMetadata[];
 }
 
 export interface FullTranscriptSessionData extends Omit<SessionData, 'messages'> {
   readonly messages: KodaXMessage[];
   readonly activeMessages: KodaXMessage[];
   readonly transcriptEntries: SessionTranscriptEntry[];
+}
+
+export interface AppendClientNoticeOptions {
+  readonly source?: string;
+  readonly content: string;
+  readonly timestamp?: string;
+  readonly turnId?: string;
+  readonly payload?: KodaXJsonValue;
 }
 
 export interface ListSessionsOptions {
@@ -221,6 +234,7 @@ export interface SessionManager {
   listSessions: typeof listSessions;
   loadSession: typeof loadSession;
   loadFullTranscript: typeof loadFullTranscript;
+  appendClientNotice: typeof appendClientNotice;
   forkSession: typeof forkSession;
   rewindSession: typeof rewindSession;
   setActiveEntry: typeof setActiveEntry;
@@ -516,6 +530,11 @@ function isTranscriptSidecarEntry(value: unknown): value is KodaXSessionEntry {
     case 'label':
       return typeof entry.targetId === 'string'
         && (entry.label === undefined || typeof entry.label === 'string');
+    case 'client_notice':
+      return typeof entry.source === 'string'
+        && typeof entry.content === 'string'
+        && (entry.turnId === undefined || typeof entry.turnId === 'string')
+        && (entry.payload === undefined || isKodaXJsonValue(entry.payload));
     case 'goal':
       return typeof entry.event === 'string';
     default:
@@ -642,6 +661,16 @@ function summaryMessage(summary: string, kind: SessionTranscriptEntryType): Koda
   };
 }
 
+function clientNoticeMessage(entry: KodaXSessionClientNoticeEntry): KodaXMessage {
+  return {
+    role: 'system',
+    content: entry.content,
+    _source: 'client_notice',
+    timestamp: entry.timestamp,
+    ...(entry.turnId !== undefined ? { turnId: entry.turnId } : {}),
+  };
+}
+
 function messageStringField(message: KodaXMessage, key: string): string | undefined {
   const value = (message as unknown as Record<string, unknown>)[key];
   return typeof value === 'string' ? value : undefined;
@@ -718,10 +747,28 @@ function taskResultPayload(results: readonly KodaXTaskResultMetadata[]): unknown
     : undefined;
 }
 
+function transcriptEntryActive(
+  entry: KodaXSessionEntry,
+  activeIds: ReadonlySet<string>,
+  activeEntryId: string | null,
+): boolean {
+  if (activeIds.has(entry.id)) {
+    return true;
+  }
+  if (entry.type !== 'client_notice') {
+    return false;
+  }
+  return entry.parentId === null
+    ? activeEntryId === null
+    : activeIds.has(entry.parentId);
+}
+
 function toTranscriptEntry(
   entry: KodaXSessionEntry,
   activeIds: ReadonlySet<string>,
+  activeEntryId: string | null,
 ): SessionTranscriptEntry | null {
+  const active = transcriptEntryActive(entry, activeIds, activeEntryId);
   switch (entry.type) {
     case 'message': {
       const taskResults = taskResultsFromMessage(entry.message);
@@ -735,8 +782,9 @@ function toTranscriptEntry(
           source: first.source,
           turnId: messageStringField(entry.message, 'turnId'),
           message: entry.message,
-          active: activeIds.has(entry.id),
+          active,
           payload: taskResultPayload(taskResults),
+          taskResults,
         };
       }
       if (entry.message._source === 'client_notice') {
@@ -748,7 +796,7 @@ function toTranscriptEntry(
           source: 'client',
           turnId: messageStringField(entry.message, 'turnId'),
           message: entry.message,
-          active: activeIds.has(entry.id),
+          active,
           payload: {
             content: entry.message.content,
             entersModelContext: false,
@@ -763,7 +811,7 @@ function toTranscriptEntry(
         source: messageSource(entry.message),
         turnId: messageStringField(entry.message, 'turnId'),
         message: entry.message,
-        active: activeIds.has(entry.id),
+        active,
       };
     }
     case 'compaction':
@@ -774,7 +822,7 @@ function toTranscriptEntry(
         type: 'compaction',
         source: 'system',
         message: summaryMessage(entry.summary, 'compaction'),
-        active: activeIds.has(entry.id),
+        active,
         summary: entry.summary,
         payload: {
           summary: entry.summary,
@@ -792,12 +840,29 @@ function toTranscriptEntry(
         type: 'branch_summary',
         source: 'system',
         message: summaryMessage(entry.summary, 'branch_summary'),
-        active: activeIds.has(entry.id),
+        active,
         summary: entry.summary,
         payload: {
           summary: entry.summary,
           fromId: entry.fromId,
           details: entry.details,
+        },
+      };
+    case 'client_notice':
+      return {
+        entryId: entry.id,
+        parentId: entry.parentId,
+        timestamp: entry.timestamp,
+        type: 'client_notice',
+        source: 'client',
+        turnId: entry.turnId,
+        message: clientNoticeMessage(entry),
+        active,
+        payload: {
+          source: entry.source,
+          content: entry.content,
+          entersModelContext: false,
+          ...(entry.payload !== undefined ? { payload: entry.payload } : {}),
         },
       };
     case 'archive_marker':
@@ -814,7 +879,7 @@ function toTranscriptEntry(
 function buildTranscriptEntries(lineage: KodaXSessionLineage): SessionTranscriptEntry[] {
   const activeIds = collectActiveIds(lineage);
   return lineage.entries
-    .map((entry) => toTranscriptEntry(entry, activeIds))
+    .map((entry) => toTranscriptEntry(entry, activeIds, lineage.activeEntryId))
     .filter((entry): entry is SessionTranscriptEntry => entry !== null);
 }
 
@@ -880,6 +945,80 @@ async function loadFullTranscriptImpl(
       transcriptEntries,
       lineage: fullLineage,
     };
+  } catch {
+    return null;
+  }
+}
+
+function normalizeClientNoticeSource(source: string | undefined): string {
+  const trimmed = source?.trim();
+  return trimmed && trimmed.length > 0 ? trimmed : 'client';
+}
+
+function createClientNoticeEntry(
+  lineage: KodaXSessionLineage,
+  options: AppendClientNoticeOptions,
+): KodaXSessionClientNoticeEntry {
+  return {
+    type: 'client_notice',
+    id: `notice_${randomUUID().replace(/-/g, '').slice(0, 12)}`,
+    parentId: lineage.activeEntryId,
+    timestamp: options.timestamp ?? new Date().toISOString(),
+    source: normalizeClientNoticeSource(options.source),
+    content: options.content,
+    ...(options.turnId !== undefined ? { turnId: options.turnId } : {}),
+    ...(options.payload !== undefined ? { payload: options.payload } : {}),
+  };
+}
+
+/**
+ * Append a host-owned transcript notice that never enters model context.
+ *
+ * Use this for local slash-command output such as `/doctor`, `/mcp status`,
+ * or host-side status panes. It is visible through `loadFullTranscript()` but
+ * `loadSession()` keeps returning only the active model messages.
+ */
+export async function appendClientNotice(
+  id: string,
+  options: AppendClientNoticeOptions,
+): Promise<SessionTranscriptEntry | null> {
+  return appendClientNoticeImpl(id, options, undefined);
+}
+
+async function appendClientNoticeImpl(
+  id: string,
+  options: AppendClientNoticeOptions,
+  sessionsDirOverride: string | undefined,
+): Promise<SessionTranscriptEntry | null> {
+  return appendClientNoticeWithStorage(id, options, getStorage(sessionsDirOverride));
+}
+
+async function appendClientNoticeWithStorage(
+  id: string,
+  options: AppendClientNoticeOptions,
+  storage: FileSessionStorage,
+): Promise<SessionTranscriptEntry | null> {
+  try {
+    const loaded = await storage.load(id);
+    if (!loaded) {
+      return null;
+    }
+
+    const lineage = loaded.lineage ?? createSessionLineage(loaded.messages);
+    const notice = createClientNoticeEntry(lineage, options);
+    const nextLineage: KodaXSessionLineage = {
+      ...lineage,
+      entries: [...lineage.entries, notice],
+    };
+    const nextData: SessionData = {
+      ...loaded,
+      lineage: nextLineage,
+      messages: loaded.messages,
+    };
+
+    await storage.appendSessionDelta(id, nextData);
+    const activeIds = collectActiveIds(nextLineage);
+    return toTranscriptEntry(notice, activeIds, nextLineage.activeEntryId);
   } catch {
     return null;
   }
@@ -1282,6 +1421,7 @@ export function createSessionManager(opts?: { sessionsDir?: string }): SessionMa
       listSessions,
       loadSession,
       loadFullTranscript,
+      appendClientNotice: (id, options) => appendClientNoticeWithStorage(id, options, storage),
       forkSession,
       rewindSession,
       setActiveEntry,
@@ -1301,6 +1441,7 @@ export function createSessionManager(opts?: { sessionsDir?: string }): SessionMa
     listSessions: (o) => listSessionsImpl(o, sessionsDir),
     loadSession: (id) => loadSessionImpl(id, sessionsDir),
     loadFullTranscript: (id) => loadFullTranscriptImpl(id, sessionsDir),
+    appendClientNotice: (id, options) => appendClientNoticeWithStorage(id, options, storage),
     forkSession: (id, o) => forkSessionImpl(id, o, sessionsDir),
     rewindSession: (id, o) => rewindSessionImpl(id, o, sessionsDir),
     setActiveEntry: (id, selector) => setActiveEntryImpl(id, selector, sessionsDir),

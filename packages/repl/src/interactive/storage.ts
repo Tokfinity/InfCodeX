@@ -203,6 +203,13 @@ function isKodaXSessionEntry(value: unknown): value is KodaXSessionEntry {
       return typeof entry.archiveBatchId === 'string'
         && typeof entry.archivedEntryCount === 'number'
         && typeof entry.summary === 'string';
+    case 'client_notice':
+      return typeof entry.source === 'string'
+        && typeof entry.content === 'string'
+        && (entry.turnId === undefined || typeof entry.turnId === 'string')
+        && (entry.payload === undefined || isKodaXJsonValue(entry.payload));
+    case 'goal':
+      return typeof entry.event === 'string';
     default:
       return false;
   }
@@ -286,7 +293,7 @@ function pathsEqual(a: string, b: string): boolean {
 function getLastNavigableEntryId(entries: KodaXSessionEntry[]): string | null {
   for (let index = entries.length - 1; index >= 0; index -= 1) {
     const entry = entries[index];
-    if (entry && entry.type !== 'label') {
+    if (entry && entry.type !== 'label' && entry.type !== 'goal' && entry.type !== 'client_notice') {
       return entry.id;
     }
   }

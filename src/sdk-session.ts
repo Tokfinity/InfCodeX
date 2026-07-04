@@ -12,6 +12,7 @@
  *   listSessions,
  *   loadSession,
  *   loadFullTranscript,
+ *   appendClientNotice,
  *   forkSession,
  *   rewindSession,
  *   setActiveEntry,
@@ -20,6 +21,7 @@
  *   watchSessions,
  *   createSessionManager,
  *   type SessionSummary,
+ *   type AppendClientNoticeOptions,
  *   type ListSessionsOptions,
  *   type SessionManager,
  * } from '@kodax-ai/kodax/session';
@@ -40,6 +42,7 @@
 export type {
   SessionSummary,
   FullTranscriptSessionData,
+  AppendClientNoticeOptions,
   ListSessionsOptions,
   SessionTranscriptEntry,
   SessionTranscriptEntryType,
@@ -60,11 +63,14 @@ export type {
   KodaXSessionUiToolCall,
   KodaXSessionUiToolCallStatus,
   KodaXSessionUiToolGroupHistoryItem,
+  KodaXTaskResultMetadata,
+  KodaXTaskResultSource,
 } from '@kodax-ai/agent';
 export {
   listSessions,
   loadSession,
   loadFullTranscript,
+  appendClientNotice,
   forkSession,
   rewindSession,
   setActiveEntry,
