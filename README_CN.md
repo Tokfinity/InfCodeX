@@ -510,6 +510,10 @@ KodaX 有两层结构，SDK 用户需要分开理解：
 
 **Inline workflow authoring（FEATURE_246，v0.7.58）**：AMA/AMAW 下 Worker 现在可通过 model-callable 的 `run_workflow` 工具在会话内直接编写并运行工作流——先用自己的工具 scout 代码库，再把具体发现烤进每个 child prompt，然后走**不变的** sandbox + 静态校验 + postcondition 验证流水线。它取代 context-blind 的 `sideQuery` generator 成为主交互路径（generator 仅作为显式 `/workflow create` 命令与无 investigating Worker 的 non-interactive/CI 主机的 fallback 保留）；新增结构化 child 输出（`outputSchema`）、无 barrier 的 `wf.pipeline` 分阶段原语、同会话 resume（`resumeFromRunId`）、嵌套 `wf.workflow(...)`，`/workflow create` 重定向到 Worker 的 scout-then-author；`run_workflow` 为 async / idle-yield，不阻塞当前轮。中立的 run-lifecycle manager（`createWorkflowRunManager`）已移入 `@kodax-ai/kodax/agent` 供非 coding SDK 宿主使用。详见 [docs/features/v0.7.58.md](docs/features/v0.7.58.md) 与 [docs/ADR.md](docs/ADR.md) ADR-044/046/047/048/049。
 
+**工作流激活分层（FEATURE_248 + FEATURE_249，v0.7.59）**：三种 agent 模式现在有一致的工作流姿态。**AMAW** 携带 mode-level 的 `ORCHESTRATION DEFAULT` 常驻指令（对齐参考实现的 "ultracode" 姿态）：实质性工作——多文件调查、设计决策、任何做错代价高的任务——默认编排多个交叉验证的 agent，并有 PLAN-TIME COMMITMENT 流程修正把 orchestrate-vs-solo 决策前置到第 0 轮。**AMA** 同样 host `run_workflow` 工具但没有常驻指令——当你用自然语言请求编排时才激活，绝不因复杂度独自触发。**SA** 保持单独作业。该指令通过 `amawOrchestrationAvailable` 关闭泄漏，因此 AMA 与 SA 的 prompt 保持逐字节一致。详见 [docs/features/v0.7.59.md](docs/features/v0.7.59.md)。
+
+**managed 工具路径的渐进披露（FEATURE_250，v0.7.60）**：deferred-tool 渐进披露机制——此前仅 SA path 拥有——现在也应用于 AMA/AMAW 的 **managed** path。缓存冷启的 managed 轮次对 13 个 non-mcp 延迟工具（repo-intelligence + web/code + goal）携带一行 search hint 而非完整描述；每个工具的 `input_schema` 不变，因此仍可直接调用，完整描述按需通过 `tool_search` 拉取。`mcp_*` 保持常驻，`run_workflow` 不动。对用户透明；由两个 5-alias eval panel 验证（DEFER_SAFE 5/5，0% read/grep 回退）。详见 [docs/features/v0.7.60.md](docs/features/v0.7.60.md)。
+
 ```
 KodaX/                       # 4 workspace packages(FEATURE_194 v0.7.43)
 ├── packages/

@@ -10,13 +10,13 @@
 
 | Item | Value |
 |---|---|
-| Current released version | `v0.7.59` |
-| Current package version | `@kodax-ai/kodax@0.7.59` (published to npm, 2026-07-03) |
+| Current released version | `v0.7.60` |
+| Current package version | `@kodax-ai/kodax@0.7.60` (release prepared 2026-07-04; tag + npm publish pending) |
 | Workspace baseline | `llm / agent / coding / repl` 4 packages |
 | Total tracked features | `36` |
-| InProgress | `1` |
+| InProgress | `0` |
 | Planned | `15` |
-| Completed | `20` |
+| Completed | `21` |
 | Tracked feature IDs | `007, 030, 093, 105, 108, 113, 139, 174, 211, 221, 224, 225, 228, 229, 230, 231, 232, 233, 234, 235, 236, 237, 238, 239, 240, 241, 242, 243, 244, 245, 246, 247, 248, 249, 250, 251` |
 | Archive cutoff | Shipped / canceled / absorbed / shelved items through `v0.7.49` are archived. |
 
@@ -24,8 +24,8 @@
 
 | Status | Count | Feature IDs | Next checkpoint |
 |---|---:|---|---|
-| Completed | 20 | `248, 249, 247, 246, 245, 243, 242, 241, 233, 240, 239, 224, 221, 174, 211, 237, 229, 230, 234, 236` | `248, 249` shipped v0.7.59 (2026-07-03); `245, 246, 247, 221` released v0.7.58 (2026-07-02); `233, 241, 242, 243` released v0.7.57; `239, 240` released v0.7.56; `224` released v0.7.54; `174, 211, 237` v0.7.53; `229` v0.7.50; `230, 234, 236` v0.7.51 |
-| InProgress | 1 | `250` | F250 implementation + 2 eval panels + tests done, pending `v0.7.60` release |
+| Completed | 21 | `250, 248, 249, 247, 246, 245, 243, 242, 241, 233, 240, 239, 224, 221, 174, 211, 237, 229, 230, 234, 236` | `250` shipped v0.7.60 (2026-07-04); `248, 249` shipped v0.7.59 (2026-07-03); `245, 246, 247, 221` released v0.7.58 (2026-07-02); `233, 241, 242, 243` released v0.7.57; `239, 240` released v0.7.56; `224` released v0.7.54; `174, 211, 237` v0.7.53; `229` v0.7.50; `230, 234, 236` v0.7.51 |
+| InProgress | 0 | — | none (F250 shipped v0.7.60) |
 | Planned, near-term | 10 | `251, 228, 244, 231, 235, 238, 232, 105, 108, 225` | `v0.7.61` -> `v0.7.84` |
 | Planned, v0.8.x | 5 | `007, 030, 093, 113, 139` | `v0.8.5+` |
 
@@ -77,9 +77,8 @@
 
 | ID | Title | Category | Priority | Planned | Design |
 |---|---|---|---|---|---|
-| `250` | Progressive Disclosure for the AMA/AMAW Managed Tool Path | Refactor / Performance | Medium | `v0.7.60` | [v0.7.60](features/v0.7.60.md#feature_250-progressive-disclosure-for-the-amaamaw-managed-tool-path) |
 
-`250` implementation + 2 eval panels + tests complete (2026-07-04); pending `v0.7.60` release — see docs/features/v0.7.60.md §FEATURE_250. `248` + `249` shipped in `v0.7.59` (2026-07-03) — see 已完成 Feature. Their shipped records (eval history) are retained below.
+_None._ `250` shipped in `v0.7.60` (2026-07-04) — see 已完成 Feature. `248` + `249` shipped in `v0.7.59` (2026-07-03). Their shipped records (eval history) are retained below.
 
 > `249` shipped 2026-07-03 (Option A): widened `buildWorkflowToolHost`
 > (`tool-execution-context.ts`) from `!== 'amaw'` to `!== 'amaw' && !== 'ama'`, so AMA
@@ -152,6 +151,7 @@
 
 | ID | Title | Released | Design | Notes |
 |---|---|---|---|---|
+| `250` | Progressive Disclosure for the AMA/AMAW Managed Tool Path | `v0.7.60` | [v0.7.60](features/v0.7.60.md#feature_250-progressive-disclosure-for-the-amaamaw-managed-tool-path) | Released in `v0.7.60` (2026-07-04). Brings deferred-tool progressive disclosure (previously SA-path-only) to the AMA/AMAW managed path: `buildAgentToolsFromRegistry` hint-swaps the 13 non-mcp deferred tools (repo-intel + web/code + goal) to their `DEFERRED_TOOL_HINTS` one-liner with `input_schema` unchanged (stay directly callable; full description via `tool_search`). `mcp_*` stay resident (mutation risk + un-eval'd); `run_workflow` untouched. `tool_search` added to `PRUNE_PROTECTED_TOOLS`. Two eval panels (5-alias): DEFER_SAFE 5/5, 0% read/grep fallback; V_teach 100% adoption after a 2-line `code_search`/`semantic_lookup` teaching block (strictly non-negative, +25pp on the floor alias). |
 | `249` | AMA Natural-Language Workflow Activation | `v0.7.59` | [v0.7.60](features/v0.7.60.md#feature_249-ama-natural-language-workflow-activation) | Released in `v0.7.59` (2026-07-03). Widened `buildWorkflowToolHost` so AMA also hosts `run_workflow` on an explicit natural-language request; AMAW additionally self-activates on complexity via the FEATURE_248 directive (independent `amawOrchestrationAvailable` gate, verified structurally separate). SA unchanged. Design doc filed under v0.7.60; shipped early in the v0.7.59 rollup. |
 | `248` | AMAW Mode-Level Orchestration Directive | `v0.7.59` | [v0.7.59](features/v0.7.59.md#feature_248-amaw-mode-level-orchestration-directive) | Released in `v0.7.59` (2026-07-03). AMAW-gated mode-level `ORCHESTRATION DEFAULT` standing directive + PLAN-TIME COMMITMENT flow-fix (prompt-only, narrowed-SHIP: task-inception activation; mid-task re-architecture a documented non-goal). Leak-closed via optional `ManagedRolePromptContext.amawOrchestrationAvailable`. See v0.7.59.md §6/§6.1. |
 | `247` | SDK Agent-Profile Surface (KodaX-Space Partner) | `v0.7.58` | [v0.7.58](features/v0.7.58.md#feature_247-sdk-agent-profile-surface-kodax-space-partner) | Released in `v0.7.58` (2026-07-02). Profile-gated `KodaXAgentProfile` (R1–R9): identity/instruction injection, tool-visibility policy, Sidecar Verifier binding + verdict attribution, `onEffectiveConfig` snapshot, structured profile/runtime metadata across `fork()`, imperative `compactSession()`, session/profile/toolCall attribution, and a `reads-network` side-effect class. Default Coding Agent byte-identical when no profile is set. Built on the concurrent `feature/partner-sdk-support` branch. |

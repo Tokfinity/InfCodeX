@@ -6,6 +6,28 @@ All notable changes to this project will be documented in this file.
 
 ## [Unreleased]
 
+## [0.7.60] - 2026-07-04
+
+> Scope note: a focused refactor/performance release. **FEATURE_250** brings the deferred-tool
+> progressive-disclosure mechanism — previously SA-path-only — to the AMA/AMAW **managed** tool
+> path, so cache-cold managed turns carry one-line search hints instead of full descriptions for
+> the repo-intelligence + web/code/goal tools. Tool `input_schema` is unchanged, so every deferred
+> tool stays directly callable; the full description is fetched on demand via `tool_search`.
+> Transparent (no user-facing behavior change) and prompt-additive only (a two-line
+> `code_search`/`semantic_lookup` teaching block). No public runtime type is removed.
+
+### Added
+
+- **`code_search` / `semantic_lookup` teaching in the Worker REPO INTELLIGENCE prompt (FEATURE_250).** A two-line, eval-justified teaching block: the floor-tier alias under-adopted the hint-only tools on ambiguous tasks (75%), and the teaching recovered adoption to 100% while being strictly non-negative on every other alias.
+
+### Changed
+
+- **Progressive disclosure on the AMA/AMAW managed tool path (FEATURE_250).** `buildAgentToolsFromRegistry` (`agent-chain.ts`) now hint-swaps the 13 non-mcp deferred tools — repo-intel (`repo_overview`, `changed_scope`, `module_context`, `symbol_context`, `process_context`, `impact_estimate`), web/code (`web_search`, `web_fetch`, `code_search`, `semantic_lookup`), and goal (`get_goal`, `create_goal`, `update_goal`) — to their `DEFERRED_TOOL_HINTS` one-liner. The swap is a one-time build-time change (the managed `Agent.tools` is a static array), so the tools[] prefix is cache-stable turn-to-turn. `mcp_*` (5) stay resident (remote-mutation risk + not covered by the reachability eval; conservative hold gated on a future MCP-runtime eval); `run_workflow` is untouched (host-conditional per FEATURE_246/249). Two eval panels (5-alias coding-plan) confirm no reachability harm: DEFER_SAFE 5/5, 0% read/grep fallback, and V_teach 100% adoption on ambiguous tasks. KodaX's hint-swap keeps the tool in `tools[]` with `input_schema` intact — safer than the reference agents (Claude Code / Codex) which remove deferred tools from the wire and therefore gate deferral off for weak models.
+
+### Fixed
+
+- **`tool_search` result protected from microcompaction pruning (FEATURE_250).** `tool_search` is added to `PRUNE_PROTECTED_TOOLS` (`compaction.ts`). On the managed path a deferred tool's full description lives only in the `tool_search` result message (the static `Agent.tools` array cannot make a description resident mid-session), so the unconditional 20-turn prune would otherwise silently stub the only teaching surface for any non-prompt-taught deferral.
+
 ## [0.7.59] - 2026-07-03
 
 > Scope note: a rollup release on top of v0.7.58. **FEATURE_248** and **FEATURE_249** extend

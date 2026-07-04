@@ -51,13 +51,14 @@ import os from 'os';
 // ---------------------------------------------------------------------------
 
 describe('FEATURE_104 aliases', () => {
-  it('exposes all 11 user-supplied aliases (9 coding-plan + 2 deepseek-official)', () => {
+  it('exposes all registered user-supplied aliases', () => {
     // 2026-05-21: ark/v4{flash,pro} added on coding-plan provider (ark-coding
     // gateway routes deepseek-v4-{flash,pro}); ds/v4* kept for legacy + cross-
     // panel comparison. See benchmark/EVAL_GUIDELINES.md §"Canonical alias panel".
     expect([...ALL_MODEL_ALIASES].sort()).toEqual(
       [
         'ark/glm51',
+        'ark/k27',
         'ark/v4flash',
         'ark/v4pro',
         'ds/v4flash',
@@ -116,6 +117,7 @@ describe('FEATURE_104 aliases', () => {
     expect(resolveAlias('mimo/v25pro')).toMatchObject({ provider: 'mimo-coding', model: 'mimo-v2.5-pro' });
     expect(resolveAlias('mmx/m27')).toMatchObject({ provider: 'minimax-coding', model: 'MiniMax-M2.7' });
     expect(resolveAlias('ark/glm51')).toMatchObject({ provider: 'ark-coding', model: 'glm-5.1' });
+    expect(resolveAlias('ark/k27')).toMatchObject({ provider: 'ark-coding', model: 'kimi-k2.7-code' });
     expect(resolveAlias('ark/v4pro')).toMatchObject({ provider: 'ark-coding', model: 'deepseek-v4-pro' });
     expect(resolveAlias('ark/v4flash')).toMatchObject({ provider: 'ark-coding', model: 'deepseek-v4-flash' });
     expect(resolveAlias('ds/v4pro')).toMatchObject({ provider: 'deepseek', model: 'deepseek-v4-pro' });
