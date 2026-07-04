@@ -45,7 +45,10 @@ describe('CAP-046: duplicate user message detection contract', () => {
     expect(result).not.toBe(messages); // new array
     expect(messages).toHaveLength(1); // input untouched
     expect(result).toHaveLength(2);
-    expect(result[1]).toEqual({ role: 'user', content: 'next turn' });
+    // GOAL 2: the appended user turn now carries a real submit-time timestamp
+    // (additive); the dedup contract still only concerns role + content.
+    expect(result[1]).toMatchObject({ role: 'user', content: 'next turn' });
+    expect(Number.isNaN(Date.parse(result[1]!.timestamp!))).toBe(false);
   });
 
   it('CAP-DUPLICATE-MSG-001c: when transcript tail is an assistant message, even with text equal to prompt, the prompt IS appended (compare ignores non-user messages)', () => {
@@ -59,7 +62,9 @@ describe('CAP-046: duplicate user message detection contract', () => {
 
   it('CAP-DUPLICATE-MSG-001d: empty transcript → prompt is appended unconditionally', () => {
     const result = appendPromptIfNotDuplicate([], 'first prompt', undefined);
-    expect(result).toEqual([{ role: 'user', content: 'first prompt' }]);
+    expect(result).toHaveLength(1);
+    expect(result[0]).toMatchObject({ role: 'user', content: 'first prompt' });
+    expect(typeof result[0]?.timestamp).toBe('string');
   });
 
   it('CAP-DUPLICATE-MSG-CANON-001: extractPromptComparableText extracts joined text from content blocks (multimodal-safe canonicalisation)', () => {

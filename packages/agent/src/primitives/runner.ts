@@ -767,6 +767,10 @@ async function genericRun<TData>(
       wasPlainString && toolCalls.length === 0
         ? { role: 'assistant', content: turn.text }
         : buildAssistantMessageFromLlmResult(turn);
+    // GOAL 2: stamp finalize-time (when the LLM stream completed) so the session
+    // entry carries a real per-message time instead of the save-batch time.
+    // Additive; the lineage fingerprint (role:synthetic:content) ignores it.
+    assistantMessage = { ...assistantMessage, timestamp: new Date().toISOString() };
 
     if (toolCalls.length === 0) {
       // Final turn — apply output guardrails before returning.
@@ -778,6 +782,13 @@ async function genericRun<TData>(
           agentSpan,
         );
       }
+      // GOAL 2: a rewriting output guardrail replaces the message wholesale and
+      // would drop the build-time stamp — re-stamp if absent so this path still
+      // carries a real per-message time.
+      assistantMessage = {
+        ...assistantMessage,
+        timestamp: assistantMessage.timestamp ?? new Date().toISOString(),
+      };
       transcript.push(assistantMessage);
       if (opts.session) {
         await appendMessageEntry(opts.session, assistantMessage);
@@ -855,6 +866,8 @@ async function genericRun<TData>(
             content: reanimate.content,
             _synthetic: true,
             ...(reanimate.source ? { _source: reanimate.source } : {}),
+            // GOAL 2: real inject-time so the reanimate turn gets a per-message time.
+            timestamp: new Date().toISOString(),
           };
           transcript.push(syntheticUserMessage);
           if (opts.session) {

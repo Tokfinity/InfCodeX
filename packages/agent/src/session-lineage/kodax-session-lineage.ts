@@ -428,7 +428,12 @@ export function createSessionLineage(
       type: 'message',
       id: generateEntryId(),
       parentId,
-      timestamp: new Date().toISOString(),
+      // Prefer the message's own finalize-time timestamp so a whole managed task
+      // (accounted in one synchronous batch here) no longer collapses to a single
+      // save-time millisecond. Falls back to accounting-time when absent (old
+      // sessions / not-yet-stamped paths) — the fingerprint (role:synthetic:
+      // content) ignores timestamp, so this never affects resume dedup.
+      timestamp: message.timestamp ?? new Date().toISOString(),
       message: cloneMessage(message),
     };
     lineage.entries.push(entry);

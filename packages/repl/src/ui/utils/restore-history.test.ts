@@ -80,6 +80,59 @@ describe("restore-history / sidecar items", () => {
   });
 });
 
+describe("restore-history / task-completed recovery (GOAL 1)", () => {
+  const taskCompletedMsg = {
+    role: "user" as const,
+    _synthetic: true,
+    _source: "task-completed",
+    content: '<task-completed task_id="run-x">report body</task-completed>',
+  };
+  const hasReportBody = (i: { type: string; text?: string }): boolean =>
+    i.type === "event" && typeof i.text === "string" && i.text.includes("report body");
+
+  it("headless (no uiHistory): recovers the task-completed banner as one event item at its transcript position", () => {
+    const result = restoreHistoryItemsFromSession({
+      messages: [
+        { role: "user", content: "please review" },
+        { role: "assistant", content: "running workflow…" },
+        taskCompletedMsg,
+      ],
+    });
+    // Recovered exactly once, as an event (NOT a user bubble — that would corrupt
+    // splitCreatableHistoryRounds round boundaries), at its transcript position.
+    expect(result.map((i) => i.type)).toEqual(["user", "assistant", "event"]);
+    expect(result.filter((i) => hasReportBody(i))).toHaveLength(1);
+  });
+
+  it("CLI (uiHistory present): does NOT double-render — enrichTextOnlyUiHistory drops the derived task-completed seed", () => {
+    const result = restoreHistoryItemsFromSession({
+      messages: [
+        { role: "user", content: "please review" },
+        taskCompletedMsg,
+      ],
+      uiHistory: [
+        { type: "user", text: "please review" },
+        { type: "assistant", text: "workflow result already shown via uiHistory" },
+      ],
+    });
+    // uiHistory is authoritative; the derived task-completed seed is discarded
+    // (only tool_group derived items are merged in). No duplicate render — the
+    // CLI transcript is exactly the persisted uiHistory (zero TUI regression).
+    expect(result.filter((i) => hasReportBody(i))).toHaveLength(0);
+    expect(result.map((i) => i.type)).toEqual(["user", "assistant"]);
+  });
+
+  it("other synthetic messages stay dropped on the headless path (only _source:'task-completed' is recovered)", () => {
+    const result = restoreHistoryItemsFromSession({
+      messages: [
+        { role: "user", content: "hi" },
+        { role: "user", _synthetic: true, content: "please continue" },
+      ],
+    });
+    expect(result.map((i) => i.type)).toEqual(["user"]);
+  });
+});
+
 describe("trimPersistedUiHistorySnapshot / sidecar items are retained in trim window", () => {
   it("retains sidecar items within the normal item count window", () => {
     const items: KodaXSessionUiHistoryItem[] = [

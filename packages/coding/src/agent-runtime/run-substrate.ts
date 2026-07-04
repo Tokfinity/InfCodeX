@@ -1102,7 +1102,9 @@ export async function runSubstrate(
         ...result.textBlocks,
         ...visibleToolBlocks,
       ]);
-      messages.push({ role: 'assistant', content: assistantContent });
+      // GOAL 2: stamp when the LLM stream completed so the session entry carries
+      // a real per-message time (SA path; parallel to runner.ts). Additive.
+      messages.push({ role: 'assistant', content: assistantContent, timestamp: new Date().toISOString() });
       const completedTurnTokenSnapshot = createCompletedTurnTokenSnapshot(messages, result.usage);
       contextTokenSnapshot = completedTurnTokenSnapshot;
 

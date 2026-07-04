@@ -644,6 +644,48 @@ describe('composeIdleYieldUserMessage', () => {
     expect(drainCalls.length).toBe(1);
   });
 
+  // GOAL 1 (Space resume recoverability): the synthetic banner message carrying
+  // a <task-completed> result must be tagged `_source: 'task-completed'` so a
+  // headless SDK host can recover it at its transcript position (restore renders
+  // it instead of dropping it via the generic _synthetic skip).
+  it('tags the synthetic banner message with _source: "task-completed" when a task-notification drained', async () => {
+    const result = await composeIdleYieldUserMessage(
+      {
+        kind: 'messages-arrived',
+        messages: [queuedMessage('<task-completed task_id="x">done</task-completed>', 'background', 'task-notification')],
+      },
+      () => [],
+    );
+    expect(result).toHaveLength(1);
+    expect(result[0]!._synthetic).toBe(true);
+    expect(result[0]!._source).toBe('task-completed');
+  });
+
+  it('does NOT tag _source when only a user prompt (chat-while-waiting) drained', async () => {
+    const result = await composeIdleYieldUserMessage(
+      {
+        kind: 'messages-arrived',
+        messages: [queuedMessage('any update?', 'user', 'prompt')],
+      },
+      () => [],
+    );
+    const promptMsg = result.find((m) => !m._synthetic);
+    expect(promptMsg?._source).toBeUndefined();
+  });
+
+  it('does NOT tag _source on a pure system-reminder synthetic message (no task-notification)', async () => {
+    const result = await composeIdleYieldUserMessage(
+      {
+        kind: 'messages-arrived',
+        messages: [queuedMessage('[system reminder] stay on task', 'background', 'system-reminder')],
+      },
+      () => [],
+    );
+    // A synthetic message may exist, but must NOT be mislabeled task-completed.
+    const synthetic = result.find((m) => m._synthetic);
+    expect(synthetic?._source).toBeUndefined();
+  });
+
   // FEATURE_213 (v0.7.45) — the user-typed prompt drained on a wake must be
   // reported to the UI sink, else a follow-up typed while waiting for a
   // sub-agent reaches the agent (non-synthetic user message) but never the

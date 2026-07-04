@@ -21,14 +21,15 @@ export type RestoredHistorySeed =
   | { type: "system"; text: string }
   | { type: "thinking"; text: string }
   | { type: "sidecar"; text: string; verdict?: "revise" | "blocked" }
+  | { type: "task_completed"; text: string }
   | { type: "tool_summary"; text: string }
   | { type: "tool_group"; tools: KodaXSessionUiToolCall[] };
 
-/** Convert a RestoredHistorySeed to a CreatableHistoryItem. tool_summary → event with icon. */
+/** Convert a RestoredHistorySeed to a CreatableHistoryItem. tool_summary / task_completed → event with icon. */
 export function seedToHistoryItem(
   seed: RestoredHistorySeed,
 ): CreatableHistoryItem {
-  if (seed.type === "tool_summary") {
+  if (seed.type === "tool_summary" || seed.type === "task_completed") {
     return { type: "event" as const, text: seed.text, icon: "tool" };
   }
   if (seed.type === "tool_group") {
@@ -406,8 +407,10 @@ export interface HistorySeedSourceMessage {
   /**
    * Provenance marker persisted on host-injected messages. `'sidecar-verifier'`
    * tags the synthetic user message the Sidecar Verifier injects on a `revise`
-   * verdict, so restore can render it under the Sidecar identity instead of
-   * swallowing it with the generic `_synthetic` skip.
+   * verdict; `'task-completed'` tags the synthetic user message carrying a
+   * dispatch_child_task / run_workflow `<task-completed>` result banner. Both are
+   * rendered under their own identity on restore instead of being swallowed by
+   * the generic `_synthetic` skip.
    */
   _source?: string;
 }
@@ -464,6 +467,16 @@ export function extractHistorySeedsFromMessage(message: HistorySeedSourceMessage
         return sidecarText
           ? [{ type: "sidecar", text: sidecarText, verdict: "revise" }]
           : [];
+      }
+      // dispatch_child_task / run_workflow results are spliced into the transcript
+      // as synthetic user messages (_source: 'task-completed', content = a
+      // <task-completed task_id=…>…</task-completed> banner). A headless SDK host
+      // (no uiHistory) must recover them at their transcript position instead of
+      // losing them to the generic _synthetic skip below. Distinct seed type so
+      // splitCreatableHistoryRounds does not treat it as a user round boundary.
+      if (message._source === "task-completed") {
+        const completedText = extractTextContent(message.content).trim();
+        return completedText ? [{ type: "task_completed", text: completedText }] : [];
       }
       // Skip synthetic messages (auto-continue, retry prompts injected by the system).
       if (message._synthetic) {

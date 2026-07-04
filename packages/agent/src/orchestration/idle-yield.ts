@@ -510,6 +510,14 @@ export async function composeIdleYieldUserMessage<TChildResult = unknown>(
 ): Promise<readonly KodaXMessage[]> {
   const promptFragments: PromptFragment[] = [];
   const syntheticFragments: string[] = [];
+  // GOAL 1 (Space resume recoverability): tag the composed synthetic message
+  // `_source: 'task-completed'` when a task-notification banner was drained
+  // (dispatch_child_task / run_workflow result), so restore can recover it. A
+  // pure system-reminder drain stays untagged. In the rare mixed drain (a
+  // task-notification AND a system-reminder settle on the same wake), both are
+  // concatenated into one message and the whole message is tagged — content is
+  // preserved, only the single `_source` label is shared.
+  let hadTaskNotification = false;
 
   const intake = (msg: QueuedMessage): void => {
     if (typeof msg.content !== 'string' || msg.content.length === 0) return;
@@ -520,6 +528,7 @@ export async function composeIdleYieldUserMessage<TChildResult = unknown>(
       });
     } else {
       // 'task-notification' / 'system-reminder' / future synthetic modes.
+      if (msg.mode === 'task-notification') hadTaskNotification = true;
       syntheticFragments.push(msg.content);
     }
   };
@@ -540,10 +549,12 @@ export async function composeIdleYieldUserMessage<TChildResult = unknown>(
   // resolution rather than silently looping again.
   if (promptFragments.length === 0 && syntheticFragments.length === 0) {
     if (wakeEvent.kind === 'child-completed') {
+      hadTaskNotification = true;
       syntheticFragments.push(
         `<task-completed task_id="${wakeEvent.taskId}">\n(child task completed; no summary available)\n</task-completed>`,
       );
     } else if (wakeEvent.kind === 'child-failed') {
+      hadTaskNotification = true;
       syntheticFragments.push(
         `<task-completed task_id="${wakeEvent.taskId}">\nfailed: ${wakeEvent.error.message}\n</task-completed>`,
       );
@@ -564,6 +575,13 @@ export async function composeIdleYieldUserMessage<TChildResult = unknown>(
         content: enforced.join('\n\n'),
         // Hidden in REPL display — agent-only context.
         _synthetic: true,
+        // GOAL 1: mark task-completion banners so restore recovers them at their
+        // transcript position (message-utils.ts exemption). Only when an actual
+        // task-notification drained — a pure system-reminder stays untagged.
+        ...(hadTaskNotification ? { _source: 'task-completed' } : {}),
+        // GOAL 2: stamp finalize-time (when the parent observed the wake) so the
+        // session entry carries a real per-message time, not the save-batch time.
+        timestamp: new Date().toISOString(),
       });
     }
   }
@@ -582,6 +600,8 @@ export async function composeIdleYieldUserMessage<TChildResult = unknown>(
       // same `\n\n---\n\n` separator the REPL's `popAllEditable` uses,
       // so the agent sees a structured boundary between them.
       content,
+      // GOAL 2: real finalize-time for the chat-while-waiting user turn.
+      timestamp: new Date().toISOString(),
     });
   }
 

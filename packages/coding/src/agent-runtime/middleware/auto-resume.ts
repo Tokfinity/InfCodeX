@@ -153,6 +153,8 @@ export function appendPromptIfNotDuplicate(
     {
       role: 'user',
       content: buildPromptMessageContent(prompt, inputArtifacts),
+      // GOAL 2: real submit-time for the user turn (SA/CLI submission path).
+      timestamp: new Date().toISOString(),
     },
   ];
 }

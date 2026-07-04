@@ -147,10 +147,24 @@ export interface KodaXMessage {
    * Identifies which subsystem injected a synthetic message so consumers can
    * render/attribute it distinctly instead of treating it like a user query.
    * Absent on genuine user/assistant/system messages. Known values include
-   * `'sidecar-verifier'` (Sidecar Verifier revise feedback). Exposed verbatim
-   * through `KodaXResult.messages` and session-load APIs for SDK consumers.
+   * `'sidecar-verifier'` (Sidecar Verifier revise feedback) and `'task-completed'`
+   * (a dispatch_child_task / run_workflow `<task-completed>` result banner spliced
+   * into the transcript; a rare same-wake mix with a system-reminder shares this
+   * one label, content preserved). Exposed verbatim through `KodaXResult.messages`
+   * and session-load APIs for SDK consumers.
    */
   _source?: string;
+  /**
+   * ISO-8601 timestamp of when this message was finalized (assistant: when the
+   * LLM stream completed; user: when submitted/injected). Optional and
+   * best-effort: messages persisted before this field existed, or produced by a
+   * path not yet updated to stamp it, will not carry it. `createSessionLineage`
+   * prefers this value for the session entry's timestamp and falls back to the
+   * accounting-time clock when absent, so a whole managed task no longer
+   * collapses to a single save-time millisecond. Not authoritative for ordering
+   * (array order is) — treat as display metadata (e.g. per-message "N ago").
+   */
+  timestamp?: string;
 }
 
 // ============== 流式结果类型 ==============

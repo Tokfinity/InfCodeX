@@ -33,6 +33,51 @@ describe('session lineage helpers', () => {
     expect(countActiveLineageMessages(lineage)).toBe(0);
   });
 
+  it('prefers message.timestamp for the entry timestamp (no batch collapse)', () => {
+    const lineage = createSessionLineage([
+      { role: 'user', content: 'hi', timestamp: '2020-01-02T03:04:05.000Z' },
+    ]);
+    const entry = lineage.entries.find((e) => e.type === 'message');
+    expect(entry?.timestamp).toBe('2020-01-02T03:04:05.000Z');
+  });
+
+  it('falls back to a valid accounting-time timestamp when the message has none (backward compat)', () => {
+    const lineage = createSessionLineage([{ role: 'user', content: 'hi' }]);
+    const entry = lineage.entries.find((e) => e.type === 'message');
+    expect(typeof entry?.timestamp).toBe('string');
+    expect(Number.isNaN(Date.parse(entry!.timestamp))).toBe(false);
+  });
+
+  it('does NOT collapse a multi-message batch to one time (GOAL 2 core): each entry keeps its own message.timestamp', () => {
+    // A whole managed task is accounted in ONE synchronous createSessionLineage
+    // call; before the fix every entry got the same `new Date()` millisecond.
+    const lineage = createSessionLineage([
+      { role: 'user', content: 'q', timestamp: '2020-01-01T10:00:00.000Z' },
+      { role: 'assistant', content: 'a', timestamp: '2020-01-01T10:05:00.000Z' },
+    ]);
+    const stamps = lineage.entries
+      .filter((e) => e.type === 'message')
+      .map((e) => e.timestamp);
+    expect(stamps).toEqual(['2020-01-01T10:00:00.000Z', '2020-01-01T10:05:00.000Z']);
+  });
+
+  it('resume dedup ignores timestamp: same content + different timestamp reuses the entry (no duplicate)', () => {
+    const first = createSessionLineage([
+      { role: 'user', content: 'q', timestamp: '2020-01-01T00:00:00.000Z' },
+    ]);
+    const before = first.entries.filter((e) => e.type === 'message').length;
+    // Re-account the SAME logical message with a DIFFERENT timestamp, as a fresh
+    // object (so the reference-equality fast path does not apply). The fingerprint
+    // is role:synthetic:content and must ignore timestamp — else resume would
+    // duplicate the whole conversation every reload.
+    const second = createSessionLineage(
+      [{ role: 'user', content: 'q', timestamp: '2099-12-31T23:59:59.000Z' }],
+      first,
+    );
+    const after = second.entries.filter((e) => e.type === 'message').length;
+    expect(after).toBe(before);
+  });
+
   it('reuses existing history and branches cleanly from an earlier node', () => {
     const initial = createSessionLineage([
       createTextMessage('user', 'root'),

@@ -113,6 +113,48 @@ describe("message-utils", () => {
     expect(extractHistorySeedsFromMessage(message)).toEqual([]);
   });
 
+  it("restores a task-completed synthetic user message as a task_completed seed (headless recovery)", () => {
+    // dispatch_child_task / run_workflow results are spliced into the transcript
+    // as synthetic user messages (_source: 'task-completed'). A headless SDK host
+    // with no uiHistory must recover them at their transcript position instead of
+    // losing them to the generic _synthetic skip. Distinct seed type — NOT 'user'
+    // (reusing 'user' would corrupt splitCreatableHistoryRounds round boundaries).
+    const message: HistorySeedSourceMessage = {
+      role: "user",
+      _synthetic: true,
+      _source: "task-completed",
+      content: '<task-completed task_id="run-abc">\n# Review report\nfindings…\n</task-completed>',
+    };
+
+    expect(extractHistorySeedsFromMessage(message)).toEqual([
+      {
+        type: "task_completed",
+        text: '<task-completed task_id="run-abc">\n# Review report\nfindings…\n</task-completed>',
+      },
+    ]);
+  });
+
+  it("still skips a synthetic user message tagged with an unrelated _source", () => {
+    // Only the two known value-discriminated sources (sidecar-verifier,
+    // task-completed) are exempted; any other _synthetic message is still dropped.
+    const message: HistorySeedSourceMessage = {
+      role: "user",
+      _synthetic: true,
+      _source: "some-future-internal-source",
+      content: "internal scaffolding",
+    };
+
+    expect(extractHistorySeedsFromMessage(message)).toEqual([]);
+  });
+
+  it("maps a task_completed seed to an event history item", () => {
+    expect(seedToHistoryItem({ type: "task_completed", text: "done" })).toEqual({
+      type: "event",
+      text: "done",
+      icon: "tool",
+    });
+  });
+
   it("ignores empty legacy thinking blocks", () => {
     const message: HistorySeedSourceMessage = {
       role: "assistant",

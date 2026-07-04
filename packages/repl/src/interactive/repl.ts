@@ -1504,9 +1504,11 @@ Keyboard Shortcuts:
         context.messages.push({
           role: 'user',
           content: rawInput || workflow.request,
+          // GOAL 2: real time for the workflow-commit echo (bypasses runner/substrate).
+          timestamp: new Date().toISOString(),
         });
       }
-      context.messages.push({ role: 'assistant', content: text });
+      context.messages.push({ role: 'assistant', content: text, timestamp: new Date().toISOString() });
       statusBar?.update({ messageCount: context.messages.length });
       const title = extractTitle(context.messages);
       context.title = title;
@@ -1614,7 +1616,8 @@ Keyboard Shortcuts:
         const assistantText = extractLastAssistantText(runResult.messages);
         if (assistantText.trim()) {
           console.log(`\n${assistantText}\n`);
-          context.messages.push({ role: 'assistant', content: assistantText });
+          // GOAL 2: real time for the fork-mode assistant echo (manual push).
+          context.messages.push({ role: 'assistant', content: assistantText, timestamp: new Date().toISOString() });
         }
       } else {
         context.messages = runResult.messages;
