@@ -26,7 +26,8 @@ import {
   getAmaRoleEffectiveExclude,
   getAmaRoleExpectedToolNames,
 } from './runner-driven.js';
-import { listToolDefinitions, MCP_TOOL_NAMES } from '../tools/registry.js';
+import { getToolDefinition, listToolDefinitions, MCP_TOOL_NAMES } from '../tools/registry.js';
+import { DEFERRED_TOOL_HINTS } from '../tools/deferred-tools.js';
 import type { KodaXToolExecutionContext } from '../types.js';
 
 // FEATURE_246: the standard workflow-capable Worker is the AMAW (or AMA
@@ -157,6 +158,68 @@ describe('FEATURE_168 — web/search tools (FEATURE_168 Tier D wiring fix)', () 
     const names = getAgentToolNames('worker');
     for (const webTool of WEB_TOOLS) {
       expect(names, `worker missing ${webTool}`).toContain(webTool);
+    }
+  });
+});
+
+describe('FEATURE_250 — managed-path progressive disclosure (deferred hint-swap)', () => {
+  const MCP_SET = new Set<string>([...MCP_TOOL_NAMES]);
+
+  function workerTools(): Array<{ name: string; description?: string }> {
+    const chain = buildRunnerAgentChain(makeCtx(true, true), makeRecorder());
+    return (chain.worker.tools ?? []) as Array<{ name: string; description?: string }>;
+  }
+  function workerTool(name: string): { name: string; description?: string } | undefined {
+    return workerTools().find((t) => t.name === name);
+  }
+
+  it('every deferred non-mcp tool on the worker shows its one-line searchHint (not the full description)', () => {
+    const deferredPresent = workerTools().filter(
+      (t) => DEFERRED_TOOL_HINTS[t.name] !== undefined && !MCP_SET.has(t.name),
+    );
+    // repo-intel (6) + web/code (4) are always wired to the worker, so the
+    // deferred-on-worker set is non-trivial.
+    expect(deferredPresent.length).toBeGreaterThanOrEqual(10);
+    for (const t of deferredPresent) {
+      expect(t.description, `${t.name} should be hint-swapped to its searchHint`).toBe(
+        DEFERRED_TOOL_HINTS[t.name],
+      );
+    }
+  });
+
+  it('the searchHint is a strict shrink of the full description (real token savings)', () => {
+    // Sanity that the swap actually reduces bytes — not a no-op.
+    for (const name of ['module_context', 'web_fetch', 'code_search']) {
+      const hint = DEFERRED_TOOL_HINTS[name]!;
+      const full = getToolDefinition(name)?.description ?? '';
+      expect(hint.length, `${name} hint should be shorter than full`).toBeLessThan(full.length);
+      expect(workerTool(name)?.description).toBe(hint);
+    }
+  });
+
+  it('mcp_* tools stay resident with their full description (NOT hint-swapped — mutation risk / uneval\'d)', () => {
+    for (const name of MCP_TOOL_NAMES) {
+      const tool = workerTool(name);
+      expect(tool, `worker missing mcp tool ${name}`).toBeTruthy();
+      expect(tool!.description, `${name} must NOT be hint-swapped`).not.toBe(DEFERRED_TOOL_HINTS[name]);
+      expect(tool!.description).toBe(getToolDefinition(name)?.description);
+    }
+  });
+
+  it('tool_search is wired (the fetch path for deferred schemas) with its own full description', () => {
+    const tool = workerTool('tool_search');
+    expect(tool, 'worker missing tool_search').toBeTruthy();
+    expect(tool!.description).toBe(getToolDefinition('tool_search')?.description);
+  });
+
+  it('non-deferred tools keep their full description (e.g. bash)', () => {
+    expect(workerTool('bash')?.description).toBe(getToolDefinition('bash')?.description);
+  });
+
+  it('input_schema is UNCHANGED by the hint-swap (tool stays directly callable off the hint)', () => {
+    for (const name of ['module_context', 'web_fetch']) {
+      const tool = workerTool(name) as { input_schema?: unknown } | undefined;
+      expect(tool?.input_schema).toEqual(getToolDefinition(name)?.input_schema);
     }
   });
 });

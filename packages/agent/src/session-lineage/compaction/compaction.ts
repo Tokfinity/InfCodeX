@@ -47,6 +47,12 @@ const STRUCTURED_PRUNE_PROTECT_TOKENS = 40000;
  *   - user-interaction (2)     — ask_user_question, exit_plan_mode
  *   - task delegation (3)      — dispatch_child_task, task_stop, send_message
  *   - control plane (1)        — emit_managed_protocol
+ *   - progressive disclosure (1) — tool_search — its result carries the full
+ *                                description a model fetched for a deferred
+ *                                tool; on the managed path that description is
+ *                                hint-only in tools[] and never resident, so
+ *                                the result is the only place the full teaching
+ *                                lives (FEATURE_250)
  *   - todo state (4)           — todo_create, todo_update, todo_list,
  *                                todo_get — the model's self-maintained
  *                                plan; results serialise the entire
@@ -73,6 +79,16 @@ const PRUNE_PROTECTED_TOOLS: ReadonlySet<string> = new Set([
   'send_message',
   // Control plane
   'emit_managed_protocol',
+  // FEATURE_250 — progressive disclosure. A `tool_search` result is the
+  // `<function>…</function>` block carrying the full schema/description a model
+  // fetched for a deferred tool. On the managed path deferred tools are
+  // hint-only in tools[] and the full description never becomes resident (the
+  // tool list is static), so the tool_search RESULT is the only surface the
+  // full teaching lives on. Protect it from microcompaction's unconditional
+  // 20-turn prune sweep so a model that paid a turn to fetch a deferred tool's
+  // schema doesn't silently lose it. Cheap: tool_search results are small and
+  // low-frequency.
+  'tool_search',
   // Todo state — the model's self-maintained plan list. todo_create /
   // todo_update / todo_list / todo_get results contain the full serialised
   // item set (or per-item full detail for todo_get):

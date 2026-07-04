@@ -25,6 +25,7 @@ import {
   isMcpToolName,
   listToolDefinitions,
 } from '../../../tools/registry.js';
+import { DEFERRED_TOOL_HINTS, isDeferredTool } from '../../../tools/deferred-tools.js';
 import { DISPATCH_RUN_WORKFLOW_NUDGE } from '../../../tools/tool-definitions.js';
 import { withManualToolBranding } from '../../../self-knowledge/tool-description.js';
 import type {
@@ -89,6 +90,19 @@ function buildTodoToolBundle(
 }
 
 /**
+ * FEATURE_250 — is this tool deferred (hint-swapped) on the managed path?
+ *
+ * The managed path defers the SAME tools the SA path defers, EXCEPT mcp_*.
+ * mcp_call can mutate remote state and the mcp_* family was not covered by the
+ * two-hop reachability eval, so they stay resident with full descriptions here.
+ * Everything else in the deferred set (repo-intel + web/code/goal) is
+ * hint-swapped — eval-verified DEFER_SAFE across the coding-plan panel.
+ */
+function shouldDeferOnManagedPath(name: string): boolean {
+  return isDeferredTool(name) && !isMcpToolName(name) && DEFERRED_TOOL_HINTS[name] !== undefined;
+}
+
+/**
  * FEATURE_168 (v0.7.40 hotfix) — build an AMA role's runtime tool list from the
  * registry, applying role-specific wraps and the role's effective exclude set.
  *
@@ -141,11 +155,26 @@ function buildAgentToolsFromRegistry(
       );
     }
 
+    // FEATURE_221: white-label the kodax_manual description per product
+    // (no-op for every other tool / the default product name).
+    const brandedDef = withManualToolBranding(def, ctx.selfManual?.productName);
+    // FEATURE_250: managed-path progressive disclosure. Swap deferred tool
+    // descriptions for their one-line searchHint to shrink the cache-cold
+    // tools[] payload. `input_schema` is unchanged so the tool stays directly
+    // callable off the hint; the full description is fetched on demand via
+    // `tool_search`. The managed tool list is built ONCE (static), so this is
+    // a one-time swap — cache-stable, no per-turn churn. mcp_* are EXCLUDED
+    // (kept resident): mcp_call can mutate remote state and mcp_* were not
+    // covered by the two-hop reachability eval, so they keep full descriptions
+    // here. Reachability of the deferred set is eval-verified DEFER_SAFE
+    // (5/5 coding-plan aliases, 100% first-tool reach) — see
+    // tests/deferred-tool-two-hop-adoption.eval.ts.
+    const managedDef = shouldDeferOnManagedPath(brandedDef.name)
+      ? { ...brandedDef, description: DEFERRED_TOOL_HINTS[brandedDef.name] }
+      : brandedDef;
     tools.push(
       wrapCodingToolAsRunnable(
-        // FEATURE_221: white-label the kodax_manual description per product
-        // (no-op for every other tool / the default product name).
-        withManualToolBranding(def, ctx.selfManual?.productName),
+        managedDef,
         handler as (
           input: Record<string, unknown>,
           execCtx: KodaXToolExecutionContext,

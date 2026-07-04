@@ -129,6 +129,9 @@ describe('FEATURE_183 (v0.7.42): PROTECTED_TOOL_NAMES ↔ registry parity', () =
       'worktree_create', 'worktree_remove', 'undo',
       'ask_user_question', 'exit_plan_mode',
       'todo_update', 'todo_create', 'todo_list', 'todo_get',
+      // FEATURE_250 — progressive-disclosure meta-tool; its result carries a
+      // deferred tool's full schema and is protected from microcompaction.
+      'tool_search',
     ]);
     for (const name of PROTECTED_TOOL_NAMES) {
       expect(

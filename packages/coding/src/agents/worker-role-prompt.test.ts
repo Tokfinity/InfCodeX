@@ -218,6 +218,14 @@ describe('buildWorkerInstructions', () => {
     expect(out).toContain('`changed_diff(');
     expect(out).toContain('`lsp_workspace_symbols');
     expect(out).toContain('`lsp_incoming_calls');
+    // FEATURE_250 — code_search / semantic_lookup teaching. These two are
+    // deferred (hint-swapped) on the managed path; naming them here (with the
+    // "ranked vs grep" / "concept vs exact-string" distinction) restored floor
+    // aliases (mmx/m27 75%→100%) on ambiguous search tasks — see
+    // tests/deferred-tool-hard-case-teaching.eval.ts. Dropping either name
+    // must re-run that panel.
+    expect(out).toContain('`code_search(');
+    expect(out).toContain('`semantic_lookup(');
     // Decision-aid branches (the "when to use what" structure that
     // moved 4/6 panel aliases from <80% to ≥80% pull-tool first-tool
     // selection — F7 lift is wording-dependent).

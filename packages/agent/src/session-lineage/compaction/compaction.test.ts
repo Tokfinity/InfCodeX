@@ -689,7 +689,7 @@ describe('FEATURE_183 (v0.7.42): PROTECTED_TOOL_NAMES whitelist expansion', () =
   // pin the membership + sanity-check the actual prune semantics against
   // representative protected tools.
 
-  it('contains the 30 canonical members exactly (+ todo_get v0.7.42, + cyclic_dependencies v0.7.45, + relationship_scan/semantic_lookup v0.7.57)', () => {
+  it('contains the 31 canonical members exactly (+ todo_get v0.7.42, + cyclic_dependencies v0.7.45, + relationship_scan/semantic_lookup v0.7.57, + tool_search v0.7.60 F250)', () => {
     // Snapshot the full membership so any future drift (add / drop) is
     // caught immediately by this test rather than discovered in production.
     expect([...PROTECTED_TOOL_NAMES].sort()).toEqual(
@@ -705,6 +705,11 @@ describe('FEATURE_183 (v0.7.42): PROTECTED_TOOL_NAMES whitelist expansion', () =
         'send_message',
         // Control plane
         'emit_managed_protocol',
+        // v0.7.60 FEATURE_250 — progressive-disclosure meta-tool. Its result
+        // carries the full schema/description a model fetched for a deferred
+        // tool; on the managed path the description is hint-only and never
+        // resident, so the result is the only teaching surface.
+        'tool_search',
         // Todo state (model-maintained plan list)
         'todo_create',
         'todo_update',
@@ -737,7 +742,7 @@ describe('FEATURE_183 (v0.7.42): PROTECTED_TOOL_NAMES whitelist expansion', () =
         'semantic_lookup',
       ].sort(),
     );
-    expect(PROTECTED_TOOL_NAMES.size).toBe(30);
+    expect(PROTECTED_TOOL_NAMES.size).toBe(31);
   });
 
   it('exposes the set as a ReadonlySet (frozen API surface)', () => {

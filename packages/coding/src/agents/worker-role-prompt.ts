@@ -241,6 +241,8 @@ export function buildWorkerInstructions(
     '- `changed_diff_bundle(paths[])` — paged diff for multiple changed files in one call. Use for review tasks instead of multiple `bash git diff` calls.',
     '- `changed_diff(path)` — paged diff for one file. Use when one file dominates the review.',
     '- LSP precision tools (`lsp_workspace_symbols`, `lsp_implementation`, `lsp_incoming_calls`, `lsp_outgoing_calls`) - use when you have an exact file position or need compiler-backed symbol/call hierarchy edges.',
+    '- `code_search(query)` — ranked repo-wide text search with noise filtering. Prefer over `grep` when you want the strongest / most-likely matches (a shortlist), not every raw occurrence — e.g. "where is X most likely handled", "what are the main implementations of Y".',
+    '- `semantic_lookup(query)` — symbol/module/process-aware semantic query. Use when you are searching for a concept ("where do we validate auth") rather than an exact string; `grep` stays right for exact-string or all-occurrences needs.',
     '',
     'WHEN TO PREFER REPO-INTEL TOOLS:',
     '- About to answer upstream/downstream, caller/callee, dependency, or impact questions → call `relationship_scan` first.',

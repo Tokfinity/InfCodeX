@@ -18,6 +18,7 @@
  *   'minimax-coding/MiniMax-M2.7':  'mmx/m27'
  *   'minimax-coding/MiniMax-M3':    'mmx/m3'
  *   'ark-coding/glm-5.1':           'ark/glm51'
+ *   'ark-coding/kimi-k2.7-code':    'ark/k27'
  *   'ark-coding/deepseek-v4-pro':   'ark/v4pro'
  *   'ark-coding/deepseek-v4-flash': 'ark/v4flash'
  *   'deepseek/deepseek-v4-pro':     'ds/v4pro'
@@ -44,6 +45,7 @@ export type ModelAlias =
   | 'mmx/m27'
   | 'mmx/m3'
   | 'ark/glm51'
+  | 'ark/k27'
   | 'ark/v4pro'
   | 'ark/v4flash'
   | 'ds/v4pro'
@@ -67,6 +69,7 @@ export const MODEL_ALIASES: Readonly<Record<ModelAlias, ModelAliasTarget>> = Obj
   'mmx/m27':      { provider: 'minimax-coding', model: 'MiniMax-M2.7',      apiKeyEnv: 'MINIMAX_CODING_API_KEY' },
   'mmx/m3':       { provider: 'minimax-coding', model: 'MiniMax-M3',        apiKeyEnv: 'MINIMAX_CODING_API_KEY' },
   'ark/glm51':    { provider: 'ark-coding',     model: 'glm-5.1',           apiKeyEnv: 'ARK_CODING_API_KEY' },
+  'ark/k27':      { provider: 'ark-coding',     model: 'kimi-k2.7-code',    apiKeyEnv: 'ARK_CODING_API_KEY' },
   'ark/v4pro':    { provider: 'ark-coding',     model: 'deepseek-v4-pro',   apiKeyEnv: 'ARK_CODING_API_KEY' },
   'ark/v4flash':  { provider: 'ark-coding',     model: 'deepseek-v4-flash', apiKeyEnv: 'ARK_CODING_API_KEY' },
   'ds/v4pro':     { provider: 'deepseek',       model: 'deepseek-v4-pro',   apiKeyEnv: 'DEEPSEEK_API_KEY' },

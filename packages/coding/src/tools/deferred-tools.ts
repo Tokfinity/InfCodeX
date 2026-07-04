@@ -78,8 +78,15 @@ export function getDeferredToolHint(name: string): string | undefined {
 }
 
 /**
- * Snapshot of all currently deferred tool names. Used by the capability
- * section that surfaces them to the LLM in the system prompt.
+ * Snapshot of all currently deferred tool names.
+ *
+ * NOTE: there is deliberately NO resident "deferred tools" system-prompt
+ * section — the mechanism is self-taught via (a) each tool's `searchHint`
+ * (which is shown in place of its description in the LLM-visible tool list and
+ * names `tool_search` explicitly) and (b) `tool_search`'s own description.
+ * The two-hop reachability eval (FEATURE_250) confirms this is sufficient
+ * across the coding-plan panel, so this helper is a utility for callers that
+ * want the list (e.g. tests / diagnostics), not a prompt-surface feed.
  */
 export function listDeferredToolNames(): readonly string[] {
   return Object.freeze(Object.keys(DEFERRED_TOOL_HINTS));
