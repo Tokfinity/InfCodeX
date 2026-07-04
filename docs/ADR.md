@@ -3562,3 +3562,27 @@ registry + idle-yield loop (no parallel machinery) and pinning register/resume +
 digest-to-history with contract/unit tests; structural change, no eval. Verified by
 dogfood: the same self-review should run without locking the REPL and leave each
 agent's digest in history.
+
+## ADR-050: Tool-Output 语义压缩层 —— 命令感知的 in-tool 压缩（rtk-style Token Killer 移植, FEATURE_251, v0.7.61）
+
+**背景**。参考项目 `rtk (Rust Token Killer)` 是一个外部 CLI 代理：别的 agent（Claude Code 等）通过 `PreToolUse` hook 把 `git status` 重写成 `rtk git status`，由 rtk 执行真实命令并**在输出进入 LLM context 前压缩 60-90%**——四类策略：智能过滤 / 分组聚合 / 截断 / 去重，覆盖 100+ 命令（git/cargo/npm/pytest/go/docker/kubectl/aws…）。KodaX 当前的对应能力是**空白**：[bash.ts](../packages/coding/src/tools/bash.ts) 的 `toolBash` 对命令输出只做**尾部截断**（`truncateTail` 600 行/32KB，bash.ts:395）+ 采集期字节封顶（512KB），没有任何命令感知的语义压缩——一次完整的 `git status`/`cargo test`/`npm install` 原样进 context。两条派发路径（SA `runToolDispatch`→`applyToolResultGuardrail`，tool-dispatch.ts:334/362；AMA `runnerGuardrails`，runner-driven.ts:1389）也只做 per-tool 字节/行截断（[tool-result-policy.ts](../packages/coding/src/tools/tool-result-policy.ts) `TOOL_RESULT_POLICIES`），是纯语法层。
+
+**核心决策**。把 rtk 的**语义压缩能力**移植进 KodaX，但**抛弃 rtk 一半的架构**：rtk 的命令重写子系统（`discover/` 词法器 + 复合命令拆分 + `classify_command` + hook 协议）与 SQLite `tracking`/`gain`/`discover` 分析，**只是因为 rtk 是外部 hook 二进制、必须从一个 bash 字符串反推意图**。KodaX 自己就是 agent、拥有 tool 层——在 `toolBash` 内 `command`/`stdout`/`stderr`/`exitCode` 全部原生在手，因此**不重写命令、不装 hook、不建分析 DB**，直接在 tool 内对输出做事后压缩。压缩后的字符串**就是**进 context 计数的内容，context accounting（token-accounting.ts）自动正确（注意：这不等于能测出"节省了多少"，反事实收益只在测试里量）。
+
+**四条硬约束（对抗评审逼出，均已核实 file:line）**，直接界定实现边界：
+
+1. **Body-only：`Command:`/`Exit:` 头部逐字保留**。[result-extractors.ts:264](../packages/agent/src/session-lineage/compaction/result-extractors.ts#L264) 的 `extractBashResult` 用锚定正则解析 `Command:\nExit:\n` 头部，为 FEATURE_185 hits-ledger（ADR-031）恢复 exitCode/tail/cancelled——**跨 microcompact 存活**。压缩若动头部会静默破坏"别让模型重跑已跑过的命令"这一整个机制。故压缩只作用于 stdout/stderr 正文，头部拼装（bash.ts:364）保持不变。同时新过滤器是 rtk tee 之外的**第三层**（现有 `applyToolResultGuardrail` bash tail-truncation 保留为语法兜底，语义压缩后多为 no-op）。
+
+2. **构造即无损 + `never_worse` 尺寸兜底**。评审证明 `never_worse`（rtk `core/guard.rs` 的 `estimate(filtered) > estimate(raw) ? raw : filtered`）**只比大小，测不出"更短但语义错了"**——rtk 自己也踩过（`Language::Data` 在 issue #464 后被硬排除）。故通用层必须**构造即无损**：ANSI-strip（SGR 码不携带正文没有的信息，安全广泛开启）；去重改为 `[repeated ×N]` 标注而非删除（省 token 且零信息损失）；spinner 帧折叠须严格证明（CR 后紧跟 CR + spinner glyph）且默认关、经 fixture 语料验证后才开。`never_worse` 保留为最后一道尺寸兜底，不是安全性主保证。命令去噪加 denylist（`git log --graph`/`diff --color`/彩色测试输出跳过去重/CR）。
+
+3. **内容签名检测优先于命令名；绝不整条跳过复合命令**。评审证明"任何复合命令就跳过语义过滤"太保守——coding agent 高频跑 `fmt && clippy && test`/`lint && test`，恰是输出最大的命令。KodaX 拥有输出，可按**内容形状签名**选过滤器（`diff --git`→diff、pytest `=== FAILURES ===`→failure-focus、cargo `test result:`→…），天然吃复合/管道，比 rtk 的命令名匹配更稳。**只事后解析、绝不重跑/重写命令**（规避复合、权限、显示的所有交互）。命令头提取器是 `coding` 内自包含小工具（**不能 import `packages/repl` 的 `bash-ast.ts`——破坏层独立性**，CLAUDE.md 禁止项）。
+
+4. **Phase-1 即混合式：声明式行过滤表 + 编译式状态机**。评审证明 compiled-only 是错的成本曲线——rtk 的 63 个 TOML 声明式过滤器均 ~38 行覆盖长尾（terraform/ansible/df/du…），而有状态 parser（cargo_cmd 2216 行、diff_cmd 516 行）只写了 ~15-20 个。KodaX 已有 config cascade（[compaction-config.ts:53-90](../packages/coding/src/compaction-config.ts#L53) `getAgentConfigPath` + `~/.kodax/config.json`）可复用。故 Phase 1 就上**内置声明式行过滤表**（strip_ansi/strip_lines/keep_lines/max_lines/on_empty 子集，纯数据）覆盖长尾，**编译式只留给真正有状态的**（diff/测试 failure-focus/tsc·eslint 结构化）。只把**用户可编辑文件 + 信任门控**（真 YAGNI + 攻击面）推迟到有需求时。
+
+**架构**。新增单一子模块 `packages/coding/src/tools/output-filters/`：`never-worse.ts`（尺寸兜底）、`generic.ts`（构造即无损：ansi/dedup→标注/spinner）、`detect.ts`（内容签名 + 命令头提取，自包含）、`registry.ts`（声明式表 + 编译式分发）、`filters.data.ts`（长尾内置表）、`compiled/`（git-diff/git-log/git-status/test-runner/lint + 复用抽出的单一 `block-stream.ts` 状态机，4+ 处达 3+ 复用门槛）。**唯一集成改动在 bash.ts**：close-handler 内、拼装 `out` 之前压缩 body，头部不动；两条派发路径都消费 `toolBash` 返回值→一处覆盖全部；background（bash.ts:217 提前 return）/timeout/abort 路径天然不走 395，自动排除。守卫链：内容签名选过滤器 → 无损通用层 → 命令特定过滤器（lossy 时复用现成 `persistToolOutput` 落盘+hint，对应 rtk tee 1:1）→ `never_worse` → 拼装头部 → 现有 truncateTail+guardrail 语法兜底。
+
+**分阶段**。Phase 0 地基（never_worse + 无损通用层 + body-only 集成 + fixture 语料库 + 测试）；Phase 1 top 生态编译式（git status/diff/log 事后解析、测试 failure-focus、lint grouping）+ 内置声明式长尾表；Phase 2 广度（docker/kubectl/aws、包管理器进度、JSON schema；read/grep 语义先测量）；Phase 3（demand-gated）完整 8-stage DSL + 用户过滤文件 + 信任门控。
+
+**非目标**。命令重写 / lexer / 复合命令段级重写 / 14-agent hook 安装器 / SQLite gain·discover 分析——KodaX 拥有 tool 层，全部无意义；用户可编辑过滤文件与信任门控推迟。**无 prompt 改动**（透明压缩），不触发 ADR-033；recovery hint 复用 `buildToolResultHint` 现有措辞。
+
+**后果 / 测试**。确定性代码，不触发 FEATURE_104 prompt-eval。每过滤器：真实 fixture 快照 + savings 阈值断言 + `never_worse` 不变式；**头部保真回归**（断言压缩后 `Command:`/`Exit:` 逐字存在，守 FEATURE_185）+ **ledger 解析回归**（喂压缩输出给 `extractBashResult` 断言 exitCode/tail 可恢复）。风险=通用层无损性未证的 spinner/dedup 分支——由 fixture 语料库 + denylist + never_worse 分层兜底，默认关直到语料验证。预期收益与 rtk README「30 分钟会话 -80%」同量级，且因压缩即计数，有效 context 窗口直接变大。
