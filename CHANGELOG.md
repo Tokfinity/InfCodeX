@@ -8,17 +8,24 @@ All notable changes to this project will be documented in this file.
 
 ## [0.7.60] - 2026-07-04
 
-> Scope note: a focused refactor/performance release. **FEATURE_250** brings the deferred-tool
+> Scope note: an F250 refactor + Space SDK rollup. **FEATURE_250** brings the deferred-tool
 > progressive-disclosure mechanism — previously SA-path-only — to the AMA/AMAW **managed** tool
 > path, so cache-cold managed turns carry one-line search hints instead of full descriptions for
 > the repo-intelligence + web/code/goal tools. Tool `input_schema` is unchanged, so every deferred
 > tool stays directly callable; the full description is fetched on demand via `tool_search`.
 > Transparent (no user-facing behavior change) and prompt-additive only (a two-line
-> `code_search`/`semantic_lookup` teaching block). No public runtime type is removed.
+> `code_search`/`semantic_lookup` teaching block). The release also lands **CAP-096 (Space SDK):
+> live turn attribution + structured transcript** — streamed activity events carry session/turn
+> identity, explicit turn-boundary events share one per-session sequence, and client-only
+> transcript notices are persisted without ever entering the model context. All additive and
+> profile/host-gated; the default path stays unchanged when a host does not read the new metadata.
+> No public runtime type is removed.
 
 ### Added
 
 - **`code_search` / `semantic_lookup` teaching in the Worker REPO INTELLIGENCE prompt (FEATURE_250).** A two-line, eval-justified teaching block: the floor-tier alias under-adopted the hint-only tools on ambiguous tasks (75%), and the teaching recovered adoption to 100% while being strictly non-negative on every other alias.
+- **CAP-096 live turn attribution — session/turn identity on streamed events (Space SDK).** A shared live-turn scope (`createLiveTurnScope` / `withLiveTurnAttribution`, `event-emitter.ts`) stamps `KodaXActivityEventMeta` (`sessionId` / `seq` / `turnId` / `deliveryId` / `timestamp`) onto every streamed activity callback, and explicit turn-boundary events (`emitTurnStarted` / `emitTurnCompleted` / `emitTurnFailed`) share one monotonic per-session sequence — so an SDK host can route streamed assistant events to the owning turn's UI bubble by turn ownership instead of fragile ordering-by-observation. Threaded through messaging (queue/drain), orchestration (idle-yield), run-substrate, runner-driven, run-workflow, and dispatch-child-tasks; a host that ignores the metadata sees unchanged behavior. New `cap-096-live-turn-attribution` contract test; existing `cap-005/006/007/041/046/054/086` event-contract tests updated for the added meta parameter.
+- **Client-only transcript notices + structured transcript entries (CAP-096, Space SDK).** The persisted transcript gains structured entry types (`message` / `compaction` / `branch_summary` / `client_notice` / `task_result`) with `source` + `turnId`. A `client_notice` is persisted as a lineage entry, NOT a model message: `loadSession()` (active model context) omits it while `loadFullTranscript()` returns it with `type: 'client_notice'`, `source: 'client'`, and `payload.entersModelContext === false` — so a host can render client-side scrollback notices without polluting the model's context. SDK embedder guide updated (`docs/SDK_EMBEDDER_GUIDE.md`).
 
 ### Changed
 
