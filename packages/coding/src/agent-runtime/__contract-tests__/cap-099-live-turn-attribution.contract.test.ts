@@ -1,5 +1,5 @@
 /**
- * Contract test for CAP-096: live turn attribution.
+ * Contract test for CAP-099: live turn attribution.
  *
  * Test obligations:
  * - CAP-LIVE-TURN-001: shared wrapper stamps sessionId / seq / turnId /
@@ -20,7 +20,7 @@ import {
 } from '../event-emitter.js';
 import type { KodaXActivityEventMeta, KodaXEvents } from '../../types.js';
 
-describe('CAP-096: live turn attribution', () => {
+describe('CAP-099: live turn attribution', () => {
   it('mints 64-bit random turn and delivery ids by default', () => {
     const scope = createLiveTurnScope({
       sessionId: 'session-generated',

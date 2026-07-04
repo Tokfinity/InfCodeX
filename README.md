@@ -17,7 +17,7 @@
   <a href="LICENSE"><img alt="license" src="https://img.shields.io/badge/license-Apache--2.0-blue?style=flat-square"></a>
   <a href="https://github.com/icetomoyo/KodaX/stargazers"><img alt="GitHub stars" src="https://img.shields.io/github/stars/icetomoyo/KodaX?style=flat-square&logo=github&color=f1c40f"></a>
   <a href="https://github.com/icetomoyo/KodaX/actions"><img alt="CI" src="https://img.shields.io/github/actions/workflow/status/icetomoyo/KodaX/release.yml?style=flat-square&label=release"></a>
-  <img alt="providers" src="https://img.shields.io/badge/LLMs-14_aliases_+_custom-2ecc71?style=flat-square">
+  <img alt="providers" src="https://img.shields.io/badge/LLMs-15_aliases_+_custom-2ecc71?style=flat-square">
 </p>
 
 <p align="center">
