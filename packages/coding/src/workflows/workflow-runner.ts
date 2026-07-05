@@ -363,7 +363,12 @@ function buildBackend(opts: RunWorkflowModuleOptions): WorkflowAgentBackend {
   if (!opts.ctx || !opts.childOptions) {
     throw new Error('runWorkflowModule requires either a backend or ctx + childOptions');
   }
-  return createCodingWorkflowBackend({ ctx: opts.ctx, childOptions: opts.childOptions, runId: opts.runId });
+  return createCodingWorkflowBackend({
+    ctx: opts.ctx,
+    childOptions: opts.childOptions,
+    runId: opts.runId,
+    defaultChildReadOnly: opts.module.meta.readOnly === true,
+  });
 }
 
 function withBeforeSpawn(

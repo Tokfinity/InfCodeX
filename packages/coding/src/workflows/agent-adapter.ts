@@ -94,6 +94,8 @@ export interface CodingWorkflowBackendDeps {
   readonly now?: () => number;
   /** Workflow run id for correlating child-agent SDK callbacks. */
   readonly runId?: string;
+  /** Default child write policy from the workflow manifest. */
+  readonly defaultChildReadOnly?: boolean;
   /** Seam: workspace changed path reader. Defaults to git status/diff. */
   readonly listChangedFiles?: (ctx: KodaXToolExecutionContext) => Promise<readonly string[]>;
   readonly onTaskSummary?: (taskId: string, update: WorkflowTaskSummaryEventUpdate) => void;
@@ -182,6 +184,20 @@ function resolveVerificationForInput(
     };
   }
   return { verification: writeDefault };
+}
+
+function resolveSpawnAgentInput(
+  input: WorkflowSpawnAgentInput,
+  defaultChildReadOnly: boolean | undefined,
+): WorkflowSpawnAgentInput {
+  if (defaultChildReadOnly === true && input.readOnly === false) {
+    throw new Error(
+      `workflow manifest readOnly=true cannot spawn write-capable child "${input.name}"; ` +
+        'set the workflow manifest readOnly=false or use child readOnly:true',
+    );
+  }
+  const readOnly = input.readOnly ?? defaultChildReadOnly ?? false;
+  return input.readOnly === readOnly ? input : { ...input, readOnly };
 }
 
 function isPreparatoryOnlyText(text: string): boolean {
@@ -594,15 +610,16 @@ export function createCodingWorkflowBackend(deps: CodingWorkflowBackendDeps): Wo
   };
 
   const spawn = async (input: WorkflowSpawnAgentInput): Promise<WorkflowTaskHandle> => {
+    const effectiveInput = resolveSpawnAgentInput(input, deps.defaultChildReadOnly);
     const childId = genId();
     // `tasks` holds every agent spawned earlier in this run (the current one is
     // added at the end of spawn, line ~682) — so this is exactly the set a
     // `task_id:` evidence ref may legitimately point back to.
-    const bundle = buildBundle(childId, input, new Set(tasks.keys()));
-    const resolvedVerification = resolveVerificationForInput(input);
+    const bundle = buildBundle(childId, effectiveInput, new Set(tasks.keys()));
+    const resolvedVerification = resolveVerificationForInput(effectiveInput);
     const verification = resolvedVerification.verification;
     const mutationRecorder = createMutationRecorder();
-    const acceptToolMutationEvidence = input.isolation !== 'worktree';
+    const acceptToolMutationEvidence = effectiveInput.isolation !== 'worktree';
     const changedPathBaseline = hasVerificationWork(verification)
       ? captureChangedPaths(ctx, listChangedFiles)
       : Promise.resolve({ paths: [] });
@@ -644,7 +661,7 @@ export function createCodingWorkflowBackend(deps: CodingWorkflowBackendDeps): Wo
             },
           }
         : {}),
-      childActivityName: input.name,
+      childActivityName: effectiveInput.name,
       // NOTE: in a real run this is effectively always 'async' — the workflow
       // runtime self-subscribes to task-summary updates for `agent_summary_updated`
       // telemetry (runtime.ts), so `hasTaskSummaryObservers()` is true even with
@@ -696,8 +713,8 @@ export function createCodingWorkflowBackend(deps: CodingWorkflowBackendDeps): Wo
     const promise = runBundle(bundle);
 
     tasks.set(childId, {
-      name: input.name,
-      input,
+      name: effectiveInput.name,
+      input: effectiveInput,
       bundle,
       promise,
       runBundle,
@@ -708,7 +725,7 @@ export function createCodingWorkflowBackend(deps: CodingWorkflowBackendDeps): Wo
       repairAttempts: 0,
     });
     registerChildTask(registry, childId, promise);
-    return { taskId: childId, name: input.name };
+    return { taskId: childId, name: effectiveInput.name };
   };
 
   const wait = async (

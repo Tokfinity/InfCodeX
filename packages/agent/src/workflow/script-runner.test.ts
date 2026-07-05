@@ -132,6 +132,53 @@ describe('runRestrictedWorkflowScript', () => {
     expect(prompts).toEqual(['where is the bug?']);
   });
 
+  it('rejects reading a workflow command result before awaiting it', async () => {
+    const { wf } = fakeWorkflowApi();
+    await expect(
+      runRestrictedWorkflowScript({
+        wf,
+        source: `
+          async function run(wf) {
+            const result = wf.runAgent({ name: 'reader', prompt: 'inspect', readOnly: true });
+            return result.structured;
+          }
+        `,
+      }),
+    ).rejects.toThrow(/wf\.runAgent result must be awaited before reading \.structured/);
+  });
+
+  it('rejects returning an unawaited workflow command result through JSON serialization', async () => {
+    const { wf } = fakeWorkflowApi();
+    await expect(
+      runRestrictedWorkflowScript({
+        wf,
+        source: `
+          async function run(wf) {
+            return { synthesis: wf.synthesize({ inputs: 'notes', rubric: 'merge' }) };
+          }
+        `,
+      }),
+    ).rejects.toThrow(/wf\.synthesize result must be awaited before JSON serialization/);
+  });
+
+  it('keeps standard Promise combinators working for workflow command results', async () => {
+    const { wf } = fakeWorkflowApi();
+    const result = await runRestrictedWorkflowScript({
+      wf,
+      source: `
+        async function run(wf) {
+          const [first, second] = await Promise.all([
+            wf.runAgent({ name: 'a', prompt: 'first', readOnly: true }),
+            wf.runAgent({ name: 'b', prompt: 'second', readOnly: true })
+          ]);
+          return [first.finalText, second.finalText];
+        }
+      `,
+    });
+
+    expect(result).toEqual(['done:first', 'done:second']);
+  });
+
   it('routes wf.workflow(name, args) through the host api (FEATURE_246 Part E)', async () => {
     const { wf } = fakeWorkflowApi();
     const calls: Array<{ name: string; args: unknown }> = [];

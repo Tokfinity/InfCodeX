@@ -151,6 +151,71 @@ describe('startManagedWorkflow', () => {
     expect(calls).toHaveLength(0);
   });
 
+  it('inline: rejects reading an unawaited agent result before starting a run', async () => {
+    const { manager, calls } = fakeManager();
+    const source = [
+      'async function run(wf) {',
+      '  const result = wf.runAgent({ name: "reader", prompt: "Read the target.", readOnly: true });',
+      '  return { synthesis: String(result.structured) };',
+      '}',
+    ].join('\n');
+
+    await expect(
+      startManagedWorkflow({
+        source: { kind: 'inline', manifest: MANIFEST, source },
+        args: { request: 'x' },
+        options: OPTIONS,
+        runsBaseDir: RUNS_DIR,
+        runId: 'run-unawaited-agent',
+        manager,
+      }),
+    ).rejects.toThrow(/must be awaited/);
+    expect(calls).toHaveLength(0);
+  });
+
+  it('inline: rejects returning an unawaited synthesis result before starting a run', async () => {
+    const { manager, calls } = fakeManager();
+    const source = [
+      'async function run(wf) {',
+      '  return { synthesis: wf.synthesize({ inputs: "notes", rubric: "merge" }) };',
+      '}',
+    ].join('\n');
+
+    await expect(
+      startManagedWorkflow({
+        source: { kind: 'inline', manifest: MANIFEST, source },
+        args: { request: 'x' },
+        options: OPTIONS,
+        runsBaseDir: RUNS_DIR,
+        runId: 'run-unawaited-synthesis',
+        manager,
+      }),
+    ).rejects.toThrow(/must be awaited/);
+    expect(calls).toHaveLength(0);
+  });
+
+  it('inline: rejects write-capable children in a read-only manifest before starting a run', async () => {
+    const { manager, calls } = fakeManager();
+    const source = [
+      'async function run(wf) {',
+      '  const result = await wf.runAgent({ name: "writer", prompt: "Write files.", readOnly: false });',
+      '  return { synthesis: result.finalText };',
+      '}',
+    ].join('\n');
+
+    await expect(
+      startManagedWorkflow({
+        source: { kind: 'inline', manifest: MANIFEST, source },
+        args: { request: 'x' },
+        options: OPTIONS,
+        runsBaseDir: RUNS_DIR,
+        runId: 'run-readonly-conflict',
+        manager,
+      }),
+    ).rejects.toThrow(/readOnly=true cannot spawn write-capable child/);
+    expect(calls).toHaveLength(0);
+  });
+
   it('inline: treats ordinary smoke-only script branches as non-blocking', async () => {
     const { manager, calls } = fakeManager();
     const source = [

@@ -27,6 +27,7 @@ import { buildApprovalSummary, emitWorkflowAgentDigest, runWorkflowFromOptions, 
 
 const childExecutorMock = vi.hoisted(() => ({
   calls: [] as Array<{
+    readonly bundles: readonly { readonly readOnly?: boolean }[];
     readonly options: {
       readonly guardrails?: readonly unknown[];
       readonly planModeBlockCheck?: unknown;
@@ -44,7 +45,7 @@ vi.mock('../child-executor.js', () => ({
   // must export it or the call resolves to undefined and every spawn throws.
   assertValidWorkflowEvidenceRefs: () => {},
   executeChildAgents: vi.fn(async (
-    _bundles: unknown,
+    bundles: readonly { readonly readOnly?: boolean }[],
     _ctx: unknown,
     options: {
       readonly guardrails?: readonly unknown[];
@@ -56,7 +57,7 @@ vi.mock('../child-executor.js', () => ({
       };
     },
   ) => {
-    childExecutorMock.calls.push({ options });
+    childExecutorMock.calls.push({ bundles, options });
     return {
       results: [{
         childId: 'wf-child-1',
@@ -358,6 +359,36 @@ describe('runWorkflowModule', () => {
     expect(childExecutorMock.calls[0]?.options.parentOptions?.effort).toBe('high');
     expect(childExecutorMock.calls[0]?.options.parentOptions?.repoIntelligenceMode).toBe('off');
     expect(childExecutorMock.calls[0]?.options.parentOptions?.repoIntelligenceTrace).toBe(true);
+  });
+
+  it('uses a read-only workflow manifest as the default for child agents', async () => {
+    const module: WorkflowModule<unknown, string> = {
+      meta: {
+        name: 'readonly-default',
+        description: 'Spawns one read-only child by default',
+        readOnly: true,
+        phases: ['review'],
+      },
+      run: async (wf) => {
+        const result = await wf.runAgent({ name: 'reader', prompt: 'review' });
+        return result?.finalText ?? '';
+      },
+    };
+
+    const outcome = await runWorkflowFromOptions({
+      module,
+      args: {},
+      options: {
+        provider: 'anthropic',
+        model: 'claude-sonnet-4-6',
+      } as KodaXOptions,
+      runId: 'run-readonly-default',
+      runDir: dir,
+    });
+
+    expect(outcome.kind).toBe('completed');
+    expect(childExecutorMock.calls).toHaveLength(1);
+    expect(childExecutorMock.calls[0]?.bundles[0]?.readOnly).toBe(true);
   });
 
   it('forwards each child agent completion to options.events.onWorkflowAgentDigest (ADR-049, end-to-end)', async () => {

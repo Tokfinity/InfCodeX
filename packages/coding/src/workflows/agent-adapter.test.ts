@@ -349,6 +349,46 @@ describe('createCodingWorkflowBackend — spawn + wait', () => {
     });
   });
 
+  it('defaults child readOnly from a read-only workflow manifest', async () => {
+    const snapshots: readonly string[][] = [[], []];
+    let index = 0;
+    let seenReadOnly: boolean | undefined;
+    const backend = createCodingWorkflowBackend({
+      ctx: fakeCtx(),
+      childOptions,
+      defaultChildReadOnly: true,
+      listChangedFiles: async () => snapshots[Math.min(index++, snapshots.length - 1)]!,
+      runChild: async (bundles) => {
+        seenReadOnly = bundles[0]?.readOnly;
+        return execResult({
+          status: 'completed',
+          summary: 'Read-only review completed with a sufficiently detailed terminal report.',
+        });
+      },
+    });
+
+    const handle = await backend.spawn({ name: 'reader', prompt: 'review only' });
+    const result = await backend.wait(handle.taskId);
+
+    expect(seenReadOnly).toBe(true);
+    expect(index).toBe(0);
+    expect(result.status).toBe('completed');
+    expect(result.verification).toBeUndefined();
+  });
+
+  it('rejects write-capable children inside a read-only workflow manifest', async () => {
+    const backend = createCodingWorkflowBackend({
+      ctx: fakeCtx(),
+      childOptions,
+      defaultChildReadOnly: true,
+      runChild: async () => execResult(),
+    });
+
+    await expect(
+      backend.spawn({ name: 'writer', prompt: 'write files', readOnly: false }),
+    ).rejects.toThrow(/readOnly=true/);
+  });
+
   it('uses a digest instead of preparatory last text as the workflow finalText', async () => {
     const backend = createCodingWorkflowBackend({
       ctx: fakeCtx(),

@@ -220,7 +220,19 @@ function inlineSmokeSnapshotFor(
   return { taskId, name, status: 'completed', lastText: `Smoke snapshot for ${name}` };
 }
 
-function createInlineSmokeWorkflowApi(args: unknown): WorkflowApi {
+function assertInlineSmokeReadOnly(
+  workflowReadOnly: boolean,
+  input: WorkflowSpawnAgentInput,
+): void {
+  if (workflowReadOnly && input.readOnly === false) {
+    throw new Error(
+      `workflow manifest readOnly=true cannot spawn write-capable child "${input.name}"; ` +
+        'set the workflow manifest readOnly=false or use child readOnly:true',
+    );
+  }
+}
+
+function createInlineSmokeWorkflowApi(args: unknown, workflowReadOnly: boolean): WorkflowApi {
   const store = createInlineSmokeTaskStore();
   return {
     runId: 'run-inline-smoke',
@@ -228,10 +240,12 @@ function createInlineSmokeWorkflowApi(args: unknown): WorkflowApi {
     budget: { total: null, spent: () => 0, remaining: () => Infinity },
     phase: async (_name, fn) => fn(),
     spawnAgent: async (input) => {
+      assertInlineSmokeReadOnly(workflowReadOnly, input);
       assertInlineSmokeEvidenceRefs(store, input);
       return nextInlineSmokeHandle(store, input);
     },
     runAgent: async (input) => {
+      assertInlineSmokeReadOnly(workflowReadOnly, input);
       assertInlineSmokeEvidenceRefs(store, input);
       const handle = nextInlineSmokeHandle(store, input);
       return inlineSmokeResultFor(store, handle.taskId);
@@ -263,15 +277,26 @@ function isInlineSmokeHardFailure(message: string): boolean {
     'evidenceRefs contains empty task_id:',
     'evidenceRefs contains agent name',
     'evidenceRefs contains unsupported ref',
+    'result must be awaited before reading',
+    'result must be awaited before JSON serialization',
+    'result must be awaited before enumerating properties',
+    'result must be awaited before assigning properties',
+    'result must be awaited before defining properties',
+    'result must be awaited before deleting properties',
+    'workflow manifest readOnly=true cannot spawn write-capable child',
   ].some((signature) => message.includes(signature));
 }
 
-async function assertInlineWorkflowSmoke(source: string, args: unknown): Promise<void> {
+async function assertInlineWorkflowSmoke(
+  source: string,
+  args: unknown,
+  workflowReadOnly: boolean,
+): Promise<void> {
   try {
     await runRestrictedWorkflowScript({
       source,
       args,
-      wf: createInlineSmokeWorkflowApi(args),
+      wf: createInlineSmokeWorkflowApi(args, workflowReadOnly),
       filename: 'inline-workflow-smoke.js',
       timeoutMs: INLINE_WORKFLOW_SMOKE_TIMEOUT_MS,
     });
@@ -303,7 +328,7 @@ async function resolveModule(
     // crash. Inline also gets a narrow, single-scenario smoke run for structural
     // WorkflowApi contract errors that static validation cannot see.
     validateGeneratedWorkflowSource(source.source);
-    await assertInlineWorkflowSmoke(source.source, input.args);
+    await assertInlineWorkflowSmoke(source.source, input.args, manifest.readOnly === true);
     const module = createRestrictedWorkflowModule({ manifest, source: source.source });
     return { module, scriptSnapshot: { manifest, source: source.source } };
   }

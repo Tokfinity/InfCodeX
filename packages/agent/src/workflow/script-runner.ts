@@ -599,6 +599,44 @@ function __kodaxJsonClone(value) {
   return JSON.parse(JSON.stringify(value));
 }
 
+function __kodaxCommandPropertyName(prop) {
+  if (typeof prop === "symbol") return prop.description ? "Symbol(" + prop.description + ")" : String(prop);
+  return String(prop);
+}
+
+function __kodaxUnawaitedCommandError(method, action) {
+  return new Error("wf." + method + " result must be awaited before " + action);
+}
+
+function __kodaxGuardCommandPromise(method, promise) {
+  return new Proxy(promise, {
+    get(target, prop, receiver) {
+      if (prop === "then" || prop === "catch" || prop === "finally") {
+        return target[prop].bind(target);
+      }
+      if (prop === Symbol.toStringTag) {
+        return Reflect.get(target, prop, receiver);
+      }
+      if (prop === "toJSON") {
+        throw __kodaxUnawaitedCommandError(method, "JSON serialization");
+      }
+      throw __kodaxUnawaitedCommandError(method, "reading ." + __kodaxCommandPropertyName(prop));
+    },
+    set() {
+      throw __kodaxUnawaitedCommandError(method, "assigning properties");
+    },
+    defineProperty() {
+      throw __kodaxUnawaitedCommandError(method, "defining properties");
+    },
+    deleteProperty() {
+      throw __kodaxUnawaitedCommandError(method, "deleting properties");
+    },
+    ownKeys() {
+      throw __kodaxUnawaitedCommandError(method, "enumerating properties");
+    },
+  });
+}
+
 function __kodaxEnqueue(method, input) {
   const id = String(++__kodaxNextId);
   const command = { id, method, input: __kodaxJsonClone(input) };
@@ -609,7 +647,7 @@ function __kodaxEnqueue(method, input) {
   // Awaiting the original promise still observes the rejection.
   promise.catch(() => undefined);
   __kodaxQueue.push(command);
-  return promise;
+  return __kodaxGuardCommandPromise(method, promise);
 }
 
 function __kodaxNonEmptyString(value, label) {
