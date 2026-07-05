@@ -1,6 +1,6 @@
 # KodaX High-Level Design
 
-> Last updated: 2026-07-04
+> Last updated: 2026-07-05
 >
 > Current release baseline: `@kodax-ai/kodax@0.7.60`
 >
