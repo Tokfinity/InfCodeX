@@ -161,8 +161,13 @@ export const toolSearchHandler: ToolHandlerSync = async (input, context) => {
  */
 export const TOOL_SEARCH_DEFINITION: LocalToolDefinition = {
   name: 'tool_search',
-  description:
-    'Fetch full schema definitions for deferred tools so they can be called effectively. Deferred tools (mcp_*, web_*, repo-intel — module_context / symbol_context / impact_estimate / process_context / changed_scope / repo_overview / semantic_lookup / code_search) appear in your tool list with a one-line `searchHint` instead of the full description. Use `tool_search` when the hint suggests a deferred tool fits the task and you need the full schema (parameter shape, when-to-prefer-X, behavioral contracts) before invoking. Query forms: `select:ToolName` (exact, recommended) or keyword search like `"+module exploration"` (require keyword) / `"refactor impact"` (loose match, ranked). After `tool_search` resolves a tool, the next API call sees its full description automatically.',
+  description: [
+    'Fetch full schema definitions for tools whose rich descriptions are deferred behind compact search hints.',
+    'The deferred catalog includes mcp_*, web_*, repo-intel (module_context / symbol_context / impact_estimate / process_context / changed_scope / repo_overview / semantic_lookup / code_search), and goal tools (get_goal / create_goal / update_goal).',
+    'Use `tool_search` when a hint suggests a tool fits the task and you need the full schema (parameter shape, when-to-prefer-X, behavioral contracts) before invoking.',
+    'Query forms: `select:ToolName` (exact, recommended) or keyword search like `"+module exploration"` (require keyword) / `"refactor impact"` (loose match, ranked).',
+    'On the SA path, resolving a deferred tool unlocks its full description for later tool lists in the same context. On AMA/AMAW managed paths, the tool list is static, so the `tool_search` result itself is the durable teaching surface.',
+  ].join(' '),
   input_schema: {
     type: 'object',
     properties: {

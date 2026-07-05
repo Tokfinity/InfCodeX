@@ -65,6 +65,8 @@ import { rebaseContextTokenSnapshot } from '../token-accounting.js';
 const LIVE_TURN_ATTRIBUTED = Symbol('KodaXLiveTurnAttributed');
 const LIVE_TURN_BASE_EVENTS = Symbol('KodaXLiveTurnBaseEvents');
 const LIVE_TURN_ID_HEX_LENGTH = 16;
+// Process-lifetime by design: without a session-close signal, evicting an entry
+// can make a later resume of the same sessionId reuse seq values.
 const liveSessionSeq = new Map<string, number>();
 
 type AttributedEvents = KodaXEvents & {

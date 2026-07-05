@@ -53,6 +53,9 @@ const STRUCTURED_PRUNE_PROTECT_TOKENS = 40000;
  *                                hint-only in tools[] and never resident, so
  *                                the result is the only place the full teaching
  *                                lives (FEATURE_250)
+ *   - goal state (3)          — get_goal, create_goal, update_goal — status
+ *                                snapshots and lifecycle transition receipts
+ *                                for the persistent /goal state
  *   - todo state (4)           — todo_create, todo_update, todo_list,
  *                                todo_get — the model's self-maintained
  *                                plan; results serialise the entire
@@ -89,6 +92,12 @@ const PRUNE_PROTECTED_TOOLS: ReadonlySet<string> = new Set([
   // schema doesn't silently lose it. Cheap: tool_search results are small and
   // low-frequency.
   'tool_search',
+  // Goal state — the canonical state persists as session-lineage goal entries,
+  // but these tool results are the model-visible status snapshots and lifecycle
+  // transition receipts. They are short, low-frequency, and control-plane-like.
+  'get_goal',
+  'create_goal',
+  'update_goal',
   // Todo state — the model's self-maintained plan list. todo_create /
   // todo_update / todo_list / todo_get results contain the full serialised
   // item set (or per-item full detail for todo_get):

@@ -34,7 +34,13 @@ describe('FEATURE_189 B.2 — deferred-tools registry', () => {
     expect(Object.keys(DEFERRED_TOOL_HINTS).length).toBeGreaterThanOrEqual(15);
   });
 
-  it('classifies all 15 expanded tools as deferred', () => {
+  it('classifies all deferred hint entries as deferred', () => {
+    for (const name of Object.keys(DEFERRED_TOOL_HINTS)) {
+      expect(isDeferredTool(name)).toBe(true);
+    }
+  });
+
+  it('classifies the original expanded tool set as deferred', () => {
     const expected = [
       'web_search', 'web_fetch', 'code_search', 'semantic_lookup',
       'mcp_search', 'mcp_describe', 'mcp_call', 'mcp_read_resource', 'mcp_get_prompt',
@@ -162,6 +168,8 @@ describe('FEATURE_189 B.2 — tool_search handler', () => {
     expect(TOOL_SEARCH_DEFINITION.name).toBe('tool_search');
     expect(TOOL_SEARCH_DEFINITION.sideEffect).toBe('readonly');
     expect(TOOL_SEARCH_DEFINITION.planModeAllowed).toBe(true);
+    expect(TOOL_SEARCH_DEFINITION.description).toContain('get_goal / create_goal / update_goal');
+    expect(TOOL_SEARCH_DEFINITION.description).toContain('AMA/AMAW managed paths');
   });
 });
 

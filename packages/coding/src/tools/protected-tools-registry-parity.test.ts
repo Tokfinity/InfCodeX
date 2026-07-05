@@ -48,7 +48,7 @@ describe('FEATURE_183 (v0.7.42): PROTECTED_TOOL_NAMES ↔ registry parity', () =
     }
   });
 
-  it('all expected control-plane / delegation / user-interaction / todo tools are protected', () => {
+  it('all expected control-plane / delegation / user-interaction / goal / todo tools are protected', () => {
     // Spot-pin the rest of the PROTECTED set with the registry's tool
     // names so a registry rename is caught immediately. Lists kept literal
     // (not pulled from a constant) so this test fails loudly on rename.
@@ -60,6 +60,10 @@ describe('FEATURE_183 (v0.7.42): PROTECTED_TOOL_NAMES ↔ registry parity', () =
       'task_stop',
       'send_message',
       'emit_managed_protocol',
+      // Goal state / lifecycle receipts.
+      'get_goal',
+      'create_goal',
+      'update_goal',
       // Todo state — the model's self-maintained plan list. Results
       // serialise the full items[] array; clearing them erases task memory.
       'todo_create',
@@ -128,6 +132,7 @@ describe('FEATURE_183 (v0.7.42): PROTECTED_TOOL_NAMES ↔ registry parity', () =
       'code_search', 'semantic_lookup',
       'worktree_create', 'worktree_remove', 'undo',
       'ask_user_question', 'exit_plan_mode',
+      'get_goal', 'create_goal', 'update_goal',
       'todo_update', 'todo_create', 'todo_list', 'todo_get',
       // FEATURE_250 — progressive-disclosure meta-tool; its result carries a
       // deferred tool's full schema and is protected from microcompaction.

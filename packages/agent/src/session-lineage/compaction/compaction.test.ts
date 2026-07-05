@@ -685,11 +685,11 @@ describe('FEATURE_183 (v0.7.42): PROTECTED_TOOL_NAMES whitelist expansion', () =
   // payloads (child-task verdicts, MCP outputs, repo-intelligence capsules,
   // ask_user_question Q&A, etc.).
   //
-  // F183 expands the set to 22 tool names across 7 categories. These tests
+  // F183+ expands the set across durable state / control categories. These tests
   // pin the membership + sanity-check the actual prune semantics against
   // representative protected tools.
 
-  it('contains the 31 canonical members exactly (+ todo_get v0.7.42, + cyclic_dependencies v0.7.45, + relationship_scan/semantic_lookup v0.7.57, + tool_search v0.7.60 F250)', () => {
+  it('contains the 34 canonical members exactly (+ todo_get v0.7.42, + cyclic_dependencies v0.7.45, + relationship_scan/semantic_lookup v0.7.57, + tool_search/goal tools v0.7.60 F250)', () => {
     // Snapshot the full membership so any future drift (add / drop) is
     // caught immediately by this test rather than discovered in production.
     expect([...PROTECTED_TOOL_NAMES].sort()).toEqual(
@@ -710,6 +710,10 @@ describe('FEATURE_183 (v0.7.42): PROTECTED_TOOL_NAMES whitelist expansion', () =
         // tool; on the managed path the description is hint-only and never
         // resident, so the result is the only teaching surface.
         'tool_search',
+        // Goal state snapshots / lifecycle transition receipts.
+        'get_goal',
+        'create_goal',
+        'update_goal',
         // Todo state (model-maintained plan list)
         'todo_create',
         'todo_update',
@@ -742,7 +746,7 @@ describe('FEATURE_183 (v0.7.42): PROTECTED_TOOL_NAMES whitelist expansion', () =
         'semantic_lookup',
       ].sort(),
     );
-    expect(PROTECTED_TOOL_NAMES.size).toBe(31);
+    expect(PROTECTED_TOOL_NAMES.size).toBe(34);
   });
 
   it('exposes the set as a ReadonlySet (frozen API surface)', () => {

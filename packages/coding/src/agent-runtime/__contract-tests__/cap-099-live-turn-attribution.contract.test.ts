@@ -15,6 +15,7 @@ import { describe, expect, it, vi } from 'vitest';
 import {
   createLiveTurnScope,
   emitTurnCompleted,
+  emitTurnFailed,
   emitTurnStarted,
   withLiveTurnAttribution,
 } from '../event-emitter.js';
@@ -152,5 +153,89 @@ describe('CAP-099: live turn attribution', () => {
         deliveryId: 'delivery-second',
       }),
     ]);
+  });
+
+  it('keeps independent sequence counters per session', () => {
+    const sessionA = createLiveTurnScope({
+      sessionId: 'session-a',
+      turnId: 'turn-a',
+      deliveryId: 'delivery-a',
+    });
+    const sessionB = createLiveTurnScope({
+      sessionId: 'session-b',
+      turnId: 'turn-b',
+      deliveryId: 'delivery-b',
+    });
+
+    expect(sessionA.nextMeta()).toEqual(expect.objectContaining({
+      sessionId: 'session-a',
+      seq: 1,
+    }));
+    expect(sessionB.nextMeta()).toEqual(expect.objectContaining({
+      sessionId: 'session-b',
+      seq: 1,
+    }));
+    expect(sessionA.nextMeta()).toEqual(expect.objectContaining({
+      sessionId: 'session-a',
+      seq: 2,
+    }));
+  });
+
+  it('continues the same session sequence after a long idle gap', () => {
+    vi.useFakeTimers();
+    try {
+      vi.setSystemTime(new Date('2026-07-05T00:00:00.000Z'));
+      const first = createLiveTurnScope({
+        sessionId: 'session-idle-resume',
+        turnId: 'turn-before-idle',
+        deliveryId: 'delivery-before-idle',
+      });
+
+      expect(first.nextMeta()).toEqual(expect.objectContaining({
+        sessionId: 'session-idle-resume',
+        seq: 1,
+      }));
+
+      vi.setSystemTime(new Date('2026-07-08T00:00:00.000Z'));
+      const resumed = createLiveTurnScope({
+        sessionId: 'session-idle-resume',
+        turnId: 'turn-after-idle',
+        deliveryId: 'delivery-after-idle',
+      });
+
+      expect(resumed.nextMeta()).toEqual(expect.objectContaining({
+        sessionId: 'session-idle-resume',
+        seq: 2,
+      }));
+    } finally {
+      vi.useRealTimers();
+    }
+  });
+
+  it('emits failed turn events with live metadata and serialized error details', () => {
+    const onTurnFailed = vi.fn();
+    const events: KodaXEvents = { onTurnFailed };
+    const scope = createLiveTurnScope({
+      sessionId: 'session-failed',
+      deliveryKind: 'interrupt',
+      turnId: 'turn-failed',
+      deliveryId: 'delivery-failed',
+    });
+    const error = new Error('boom');
+    error.name = 'CustomError';
+
+    emitTurnFailed(events, scope, error);
+
+    expect(onTurnFailed).toHaveBeenCalledExactlyOnceWith(expect.objectContaining({
+      sessionId: 'session-failed',
+      seq: 1,
+      turnId: 'turn-failed',
+      deliveryId: 'delivery-failed',
+      error: expect.objectContaining({
+        name: 'CustomError',
+        message: 'boom',
+        stack: expect.any(String),
+      }),
+    }));
   });
 });
