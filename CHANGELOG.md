@@ -6,7 +6,7 @@ All notable changes to this project will be documented in this file.
 
 ## [Unreleased]
 
-## [0.7.60] - 2026-07-04
+## [0.7.60] - 2026-07-05
 
 > Scope note: an F250 refactor + Space SDK rollup. **FEATURE_250** brings the deferred-tool
 > progressive-disclosure mechanism — previously SA-path-only — to the AMA/AMAW **managed** tool
