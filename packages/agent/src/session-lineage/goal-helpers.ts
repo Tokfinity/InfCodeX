@@ -110,11 +110,13 @@ export function appendGoalEntry(
       `appendGoalEntry: event='cleared' requires goal=null, got goal with id='${goal.id}'`,
     );
   }
+  const entryId = options.id ?? makeGoalEntryId();
   const entry: KodaXSessionGoalEntry = {
     type: 'goal',
-    id: options.id ?? makeGoalEntryId(),
+    id: entryId,
     parentId: lineage.activeEntryId,
     timestamp: options.timestamp ?? new Date().toISOString(),
+    logicalId: entryId,
     goal,
     event,
   };

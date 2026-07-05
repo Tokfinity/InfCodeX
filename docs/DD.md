@@ -202,6 +202,12 @@ records whenever practical. Host code should treat `loadSession()` as active
 model context, `loadFullTranscript()` as append-order scrollback, and
 `uiHistory` as an optional replay hint.
 
+Transcript entries expose both physical and logical identity. `entryId`
+identifies the persisted lineage node; `logicalId` is stable across cloned or
+forked copies; `sourceEntryId` points at the root physical source when an entry
+is a clone. Hosts may fold display history by `logicalId`, while
+`loadFullTranscript()` continues to return raw append-order scrollback.
+
 ## 11. Skills
 
 Skills live under `packages/agent/src/capabilities/skills`.

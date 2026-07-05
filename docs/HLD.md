@@ -229,6 +229,12 @@ also carry optional `hostMetadata`, a small string-only map persisted in
 `run.json` and echoed after restart so hosts can attribute runs without a side
 table.
 
+CAP-099 extends the host transcript contract with clone provenance. Public
+transcript entries include stable `logicalId` and optional `sourceEntryId` so
+Space-style hosts can fold cloned or forked history precisely, without parsing
+message text or relying on timestamp heuristics. The transcript API still
+returns raw append-order scrollback.
+
 FEATURE_246 (`v0.7.58`, released) is the largest workflow change since F229: the
 Worker authors and runs workflows inline through a model-callable `run_workflow`
 tool (scout-then-author), running generated scripts through the same sandbox +

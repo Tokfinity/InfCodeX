@@ -177,6 +177,14 @@ function generateEntryId(prefix: 'entry' | 'label' | 'goal' = 'entry'): string {
   return `${prefix}_${randomUUID().replace(/-/g, '').slice(0, ENTRY_ID_LENGTH)}`;
 }
 
+function logicalIdForEntry(entry: KodaXSessionEntry): string {
+  return entry.logicalId ?? entry.id;
+}
+
+function sourceEntryIdForClone(entry: KodaXSessionEntry): string {
+  return entry.sourceEntryId ?? entry.id;
+}
+
 function cloneLineage(lineage?: KodaXSessionLineage): KodaXSessionLineage {
   // Shallow-copy the entries array so mutations (push) don't affect
   // the original, but share entry objects by reference. This avoids
@@ -430,10 +438,12 @@ export function createSessionLineage(
       continue;
     }
 
+    const entryId = generateEntryId();
     const entry: KodaXSessionMessageEntry = {
       type: 'message',
-      id: generateEntryId(),
+      id: entryId,
       parentId,
+      logicalId: entryId,
       // Prefer the message's own finalize-time timestamp so a whole managed task
       // (accounted in one synchronous batch here) no longer collapses to a single
       // save-time millisecond. Falls back to accounting-time when absent (old
@@ -496,20 +506,23 @@ export function getSessionMessagesFromLineage(
   lineage: KodaXSessionLineage,
   targetId: string | null = lineage.activeEntryId,
 ): KodaXMessage[] {
-  return getSessionLineagePath(lineage, targetId)
-    .flatMap((entry) => {
-      const base = getContextMessagesForEntry(entry);
-      if (
-        entry.type === 'compaction'
-        && entry.reason !== 'rewind'
-        && entry.postCompactAttachments
-        && entry.postCompactAttachments.length > 0
-      ) {
-        return [...base, ...entry.postCompactAttachments.map(cloneMessage)];
+  const messages: KodaXMessage[] = [];
+  for (const entry of getSessionLineagePath(lineage, targetId)) {
+    for (const message of getContextMessagesForEntry(entry)) {
+      messages.push(cloneMessage(message));
+    }
+    if (
+      entry.type === 'compaction'
+      && entry.reason !== 'rewind'
+      && entry.postCompactAttachments
+      && entry.postCompactAttachments.length > 0
+    ) {
+      for (const message of entry.postCompactAttachments) {
+        messages.push(cloneMessage(message));
       }
-      return base;
-    })
-    .map(cloneMessage);
+    }
+  }
+  return messages;
 }
 
 /**
@@ -572,11 +585,13 @@ export function setSessionLineageActiveEntry(
     );
 
     if (abandonedEntries.length > 0) {
+      const summaryEntryId = generateEntryId();
       const summaryEntry: KodaXSessionBranchSummaryEntry = {
         type: 'branch_summary',
-        id: generateEntryId(),
+        id: summaryEntryId,
         parentId: target.id,
         timestamp: new Date().toISOString(),
+        logicalId: summaryEntryId,
         fromId: lineage.activeEntryId,
         summary: summarizeBranchEntries(abandonedEntries),
         details: {
@@ -612,11 +627,13 @@ export function appendSessionLineageLabel(
 
   const normalizedLabel = label?.trim();
   const entries = lineage.entries.map(cloneEntry);
+  const entryId = generateEntryId('label');
   entries.push({
     type: 'label',
-    id: generateEntryId('label'),
+    id: entryId,
     parentId: lineage.activeEntryId,
     timestamp: new Date().toISOString(),
+    logicalId: entryId,
     targetId: target.id,
     label: normalizedLabel || undefined,
   });
@@ -660,6 +677,7 @@ export function applySessionCompaction(
     type: 'compaction',
     id: compactionEntryId,
     parentId: null,
+    logicalId: compactionEntryId,
     timestamp: new Date().toISOString(),
     summary: anchor.summary,
     tokensBefore: anchor.tokensBefore,
@@ -867,10 +885,13 @@ function cloneForkableEntry(
   entry: NavigableSessionEntry,
   parentId: string | null,
 ): NavigableSessionEntry {
+  const entryId = generateEntryId();
   const base = {
-    id: generateEntryId(),
+    id: entryId,
     parentId,
     timestamp: entry.timestamp,
+    logicalId: logicalIdForEntry(entry),
+    sourceEntryId: sourceEntryIdForClone(entry),
   };
   switch (entry.type) {
     case 'message':
@@ -968,11 +989,13 @@ export function rewindSessionLineage(
   const truncatedCount = entries.length - targetIndex - 1;
 
   // Create a rewind event entry to record this action
+  const rewindEntryId = generateEntryId();
   const rewindEntry: KodaXSessionCompactionEntry = {
     type: 'compaction',
-    id: generateEntryId(),
+    id: rewindEntryId,
     parentId: targetEntryId,
     timestamp: new Date().toISOString(),
+    logicalId: rewindEntryId,
     summary: `[Rewind] Rewound to entry ${targetEntryId} (truncated ${truncatedCount} entries)`,
     reason: 'rewind',
     details: {
@@ -1020,11 +1043,13 @@ export function forkSessionLineage(
     if (!label || !targetId) {
       continue;
     }
+    const labelEntryId = generateEntryId('label');
     const labelEntry: KodaXSessionLabelEntry = {
       type: 'label',
-      id: generateEntryId('label'),
+      id: labelEntryId,
       parentId,
       timestamp: new Date().toISOString(),
+      logicalId: labelEntryId,
       targetId,
       label,
     };
@@ -1042,11 +1067,14 @@ export function forkSessionLineage(
   // fork.
   const sourceLatestGoal = findLatestGoalOnPath(lineage, path);
   if (sourceLatestGoal && sourceLatestGoal.goal) {
+    const goalEntryId = generateEntryId('goal');
     const carriedGoalEntry: KodaXSessionGoalEntry = {
       type: 'goal',
-      id: generateEntryId('goal'),
+      id: goalEntryId,
       parentId,
       timestamp: new Date().toISOString(),
+      logicalId: logicalIdForEntry(sourceLatestGoal),
+      sourceEntryId: sourceEntryIdForClone(sourceLatestGoal),
       goal: sourceLatestGoal.goal,
       // Reuse the source event ('created' / 'updated' / 'paused' / etc.)
       // so the fork's transcript honestly reflects the goal's last state
@@ -1269,11 +1297,13 @@ export function archiveOldIslands(lineage: KodaXSessionLineage): {
       ? groupRoot.parentId
       : null;
 
+    const markerEntryId = generateEntryId();
     markers.push({
       type: 'archive_marker',
-      id: generateEntryId(),
+      id: markerEntryId,
       parentId: nearestPreservedParent,
       timestamp: firstEntry.timestamp,
+      logicalId: markerEntryId,
       archiveBatchId,
       archivedEntryCount: entries.length,
       summary: `Archived: ${entries.length} entries. ${preview}`.slice(0, 600),

@@ -1,7 +1,9 @@
 # KodaX Architecture Decision Records
 
-> Last updated: 2026-07-04
+> Last updated: 2026-07-05
 >
+> **v0.7.60 CAP-099 addendum:** SDK transcript entries now expose clone provenance (`logicalId` / `sourceEntryId`) so hosts can fold cloned or forked history without guessing from role, content, timestamp, or `[compacted]` placeholders. `loadFullTranscript()` remains raw append-order scrollback; it does not silently merge branches or hide compaction notices.
+
 > **⚠️ Architecture state notice (2026-05-25)**: 早期 ADR (ADR-005/006/007/008 等) 描述 `FEATURE_061/062` Scout-first + Planner/Generator/Evaluator H2 chain 模型，已被 [**ADR-030 claudecode-shape Main Agent + Sidecar Verifier**](#adr-030-claudecode-shape-main-agent--sidecar-verifier-substrate-feature_184-v0745) (FEATURE_184 v0.7.42) 取代。
 > 当前运行时架构：**V2 Worker 单循环 + Sidecar Verifier**。V1 chain (Scout/Planner/Generator/Evaluator) 已于 [ADR-030 §F193 cross-ref](#adr-030-claudecode-shape-main-agent--sidecar-verifier-substrate-feature_184-v0745) FEATURE_193 v0.7.43 全量退役；`emit_handoff` 工具已于 FEATURE_190 v0.7.43 删除。
 > 早期 Scout-first ADR 保留以便 archive 查阅，不反映当前实现。

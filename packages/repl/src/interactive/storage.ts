@@ -170,12 +170,21 @@ function isPersistedExtensionRecordLine(
     && isKodaXExtensionSessionRecord(value);
 }
 
-function hasEntryBase(value: unknown): value is { id: string; parentId: string | null; timestamp: string; type: string } {
+function hasEntryBase(value: unknown): value is {
+  id: string;
+  parentId: string | null;
+  timestamp: string;
+  type: string;
+  logicalId?: string;
+  sourceEntryId?: string;
+} {
   return isRecord(value)
     && typeof value.id === 'string'
     && (value.parentId === null || typeof value.parentId === 'string')
     && typeof value.timestamp === 'string'
-    && typeof value.type === 'string';
+    && typeof value.type === 'string'
+    && (value.logicalId === undefined || typeof value.logicalId === 'string')
+    && (value.sourceEntryId === undefined || typeof value.sourceEntryId === 'string');
 }
 
 function isKodaXSessionEntry(value: unknown): value is KodaXSessionEntry {

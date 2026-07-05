@@ -84,6 +84,14 @@ export interface KodaXSessionEntryBase {
   id: string;
   parentId: string | null;
   timestamp: string;
+  /**
+   * Stable logical identity for this transcript item. Cloned/forked entries get
+   * a fresh physical `id` but keep their source entry's `logicalId`, allowing
+   * SDK hosts to group or fold cloned history without comparing content.
+   */
+  logicalId?: string;
+  /** Root physical entry id this item was cloned from, when it is a clone. */
+  sourceEntryId?: string;
 }
 
 export interface KodaXSessionMessageEntry extends KodaXSessionEntryBase {

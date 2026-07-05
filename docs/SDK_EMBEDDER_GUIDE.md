@@ -735,6 +735,8 @@ scrollback. Each entry has stable ownership and ordering fields:
 interface SessionTranscriptEntry {
   entryId: string;
   parentId: string | null;
+  logicalId: string;
+  sourceEntryId?: string;
   timestamp: string;
   type: 'message' | 'compaction' | 'branch_summary' | 'client_notice' | 'task_result';
   source?: 'user' | 'assistant' | 'workflow' | 'child_task' | 'system' | 'client';
@@ -745,6 +747,17 @@ interface SessionTranscriptEntry {
   taskResults?: readonly KodaXTaskResultMetadata[];
 }
 ```
+
+`entryId` is the physical lineage node id. `logicalId` is stable across
+forked/cloned copies of the same transcript item, and `sourceEntryId` is present
+on cloned entries to point back to the root physical source entry. Hosts that
+want to fold cloned history should group by `logicalId`, not by
+`message.role`, content, timestamp, or `[compacted]` placeholders.
+Legacy entries without persisted provenance use `logicalId === entryId` and omit
+`sourceEntryId`; treat that as "unknown/not cloned", not as content-based proof
+that no older clone exists.
+`loadFullTranscript()` still returns raw append-order scrollback; it does not
+hide compaction notices or silently merge branches.
 
 Use `type` / `source` / `timestamp` / `active` instead of parsing
 `message.role`, synthetic wrapper text, or filesystem side stores. In

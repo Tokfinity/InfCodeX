@@ -657,6 +657,67 @@ describe('Session Management Public SDK', () => {
     ]);
   });
 
+  it('loadFullTranscript exposes logical provenance for forked transcript entries', async () => {
+    const overrideDir = path.join(tempHome, 'full-transcript-provenance-test');
+    await mkdir(overrideDir, { recursive: true });
+
+    const mgr = api.createSessionManager({ sessionsDir: overrideDir }) as {
+      storage: { save: (id: string, data: unknown) => Promise<void> };
+      forkSession: (
+        id: string,
+        opts?: { selector?: string; sessionId?: string; title?: string },
+      ) => Promise<{ sessionId: string; data: unknown } | null>;
+      loadFullTranscript: (id: string) => Promise<{
+        transcriptEntries: Array<{
+          entryId: string;
+          logicalId: string;
+          sourceEntryId?: string;
+          message: { content: unknown };
+        }>;
+      } | null>;
+    };
+
+    await mgr.storage.save('provenance-source-001', {
+      messages: [
+        { role: 'user', content: 'original prompt' },
+        { role: 'assistant', content: 'original answer' },
+      ],
+      title: 'Provenance source',
+      gitRoot: tempHome,
+      scope: 'user',
+    });
+
+    const source = await mgr.loadFullTranscript('provenance-source-001');
+    const forkResult = await mgr.forkSession('provenance-source-001', {
+      sessionId: 'provenance-fork-001',
+      title: 'Provenance fork',
+    });
+    const fork = await mgr.loadFullTranscript('provenance-fork-001');
+
+    expect(forkResult?.sessionId).toBe('provenance-fork-001');
+    expect(source).not.toBeNull();
+    expect(fork).not.toBeNull();
+    expect(source?.transcriptEntries.map((entry) => entry.message.content)).toEqual([
+      'original prompt',
+      'original answer',
+    ]);
+    expect(fork?.transcriptEntries.map((entry) => entry.message.content)).toEqual([
+      'original prompt',
+      'original answer',
+    ]);
+    expect(fork?.transcriptEntries).toHaveLength(source?.transcriptEntries.length ?? -1);
+
+    for (let i = 0; i < (source?.transcriptEntries.length ?? 0); i++) {
+      const sourceEntry = source!.transcriptEntries[i]!;
+      const forkEntry = fork!.transcriptEntries[i]!;
+      expect(sourceEntry.logicalId).toBe(sourceEntry.entryId);
+      expect(sourceEntry.sourceEntryId).toBeUndefined();
+      expect(forkEntry.entryId).not.toBe(sourceEntry.entryId);
+      expect(forkEntry.logicalId).toBe(sourceEntry.logicalId);
+      expect(forkEntry.sourceEntryId).toBe(sourceEntry.entryId);
+    }
+  });
+
   it('appendClientNotice persists a client-only transcript entry without entering model context', async () => {
     const overrideDir = path.join(tempHome, 'client-notice-transcript-test');
     await mkdir(overrideDir, { recursive: true });
@@ -1005,7 +1066,12 @@ describe('Session Management Public SDK', () => {
       loadFullTranscript: (sessionId: string) => Promise<{
         messages: Array<{ content: unknown }>;
         activeMessages: Array<{ content: unknown }>;
-        transcriptEntries: Array<{ active: boolean }>;
+        transcriptEntries: Array<{
+          active: boolean;
+          entryId: string;
+          logicalId: string;
+          sourceEntryId?: string;
+        }>;
       } | null>;
     };
 
@@ -1027,6 +1093,15 @@ describe('Session Management Public SDK', () => {
       false,
       false,
       true,
+    ]);
+    expect(full?.transcriptEntries.map((entry) => ({
+      entryId: entry.entryId,
+      logicalId: entry.logicalId,
+      sourceEntryId: entry.sourceEntryId,
+    }))).toEqual([
+      { entryId: 'entry_old_user', logicalId: 'entry_old_user', sourceEntryId: undefined },
+      { entryId: 'entry_old_assistant', logicalId: 'entry_old_assistant', sourceEntryId: undefined },
+      { entryId: 'entry_current', logicalId: 'entry_current', sourceEntryId: undefined },
     ]);
   });
 

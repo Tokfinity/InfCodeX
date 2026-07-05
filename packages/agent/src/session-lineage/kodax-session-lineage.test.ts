@@ -1,6 +1,6 @@
 import { describe, expect, it } from 'vitest';
 import type { KodaXMessage } from '@kodax-ai/llm';
-import type { KodaXSessionLineage } from '../index.js';
+import type { KodaXSessionLineage, KodaXSessionMessageEntry } from '../index.js';
 import {
   appendSessionLineageLabel,
   applyLineageTruncation,
@@ -20,6 +20,10 @@ import {
 
 function createTextMessage(role: KodaXMessage['role'], content: string): KodaXMessage {
   return { role, content };
+}
+
+function messageEntries(lineage: KodaXSessionLineage): KodaXSessionMessageEntry[] {
+  return lineage.entries.filter((entry): entry is KodaXSessionMessageEntry => entry.type === 'message');
 }
 
 describe('session lineage helpers', () => {
@@ -151,6 +155,43 @@ describe('session lineage helpers', () => {
       createTextMessage('assistant', 'active branch answer'),
     ]);
     expect(resolveSessionLineageTarget(forked!, 'active-leaf')?.id).toBe(forked!.activeEntryId);
+  });
+
+  it('preserves logical provenance when forking cloned transcript entries', () => {
+    const lineage = createSessionLineage([
+      createTextMessage('user', 'start from root'),
+      createTextMessage('assistant', 'active branch answer'),
+    ]);
+    const sourceEntries = messageEntries(lineage);
+
+    expect(sourceEntries.map((entry) => entry.logicalId)).toEqual(
+      sourceEntries.map((entry) => entry.id),
+    );
+    expect(sourceEntries.map((entry) => entry.sourceEntryId)).toEqual([undefined, undefined]);
+
+    const forked = forkSessionLineage(lineage);
+    expect(forked).not.toBeNull();
+    const forkEntries = messageEntries(forked!);
+
+    expect(forkEntries).toHaveLength(sourceEntries.length);
+    for (let i = 0; i < sourceEntries.length; i++) {
+      const source = sourceEntries[i]!;
+      const fork = forkEntries[i]!;
+      expect(fork.id).not.toBe(source.id);
+      expect(fork.logicalId).toBe(source.logicalId);
+      expect(fork.sourceEntryId).toBe(source.id);
+    }
+
+    const secondFork = forkSessionLineage(forked!);
+    expect(secondFork).not.toBeNull();
+    const secondForkEntries = messageEntries(secondFork!);
+    for (let i = 0; i < sourceEntries.length; i++) {
+      const source = sourceEntries[i]!;
+      const secondForkEntry = secondForkEntries[i]!;
+      expect(secondForkEntry.id).not.toBe(source.id);
+      expect(secondForkEntry.logicalId).toBe(source.logicalId);
+      expect(secondForkEntry.sourceEntryId).toBe(source.id);
+    }
   });
 
   it('adds a branch summary when switching branches and preserves it for future turns', () => {

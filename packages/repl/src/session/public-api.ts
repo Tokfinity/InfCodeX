@@ -171,6 +171,10 @@ export type SessionTranscriptEntrySource =
 export interface SessionTranscriptEntry {
   readonly entryId: string;
   readonly parentId: string | null;
+  /** Stable logical identity shared by cloned/forked copies of the same entry. */
+  readonly logicalId: string;
+  /** Root source physical entry id when this transcript entry was cloned/forked. */
+  readonly sourceEntryId?: string;
   readonly timestamp: string;
   readonly type: SessionTranscriptEntryType;
   readonly source?: SessionTranscriptEntrySource;
@@ -498,12 +502,16 @@ function hasEntryBase(value: unknown): value is {
   parentId: string | null;
   timestamp: string;
   type: string;
+  logicalId?: string;
+  sourceEntryId?: string;
 } {
   return isRecord(value)
     && typeof value.id === 'string'
     && (value.parentId === null || typeof value.parentId === 'string')
     && typeof value.timestamp === 'string'
-    && typeof value.type === 'string';
+    && typeof value.type === 'string'
+    && (value.logicalId === undefined || typeof value.logicalId === 'string')
+    && (value.sourceEntryId === undefined || typeof value.sourceEntryId === 'string');
 }
 
 function isTranscriptSidecarEntry(value: unknown): value is KodaXSessionEntry {
@@ -763,6 +771,20 @@ function transcriptEntryActive(
     : activeIds.has(entry.parentId);
 }
 
+function transcriptEntryIdentity(entry: KodaXSessionEntry): {
+  readonly entryId: string;
+  readonly parentId: string | null;
+  readonly logicalId: string;
+  readonly sourceEntryId?: string;
+} {
+  return {
+    entryId: entry.id,
+    parentId: entry.parentId,
+    logicalId: entry.logicalId ?? entry.id,
+    ...(entry.sourceEntryId !== undefined ? { sourceEntryId: entry.sourceEntryId } : {}),
+  };
+}
+
 function toTranscriptEntry(
   entry: KodaXSessionEntry,
   activeIds: ReadonlySet<string>,
@@ -775,8 +797,7 @@ function toTranscriptEntry(
       if (taskResults.length > 0) {
         const first = taskResults[0]!;
         return {
-          entryId: entry.id,
-          parentId: entry.parentId,
+          ...transcriptEntryIdentity(entry),
           timestamp: entry.timestamp,
           type: 'task_result',
           source: first.source,
@@ -789,8 +810,7 @@ function toTranscriptEntry(
       }
       if (entry.message._source === 'client_notice') {
         return {
-          entryId: entry.id,
-          parentId: entry.parentId,
+          ...transcriptEntryIdentity(entry),
           timestamp: entry.timestamp,
           type: 'client_notice',
           source: 'client',
@@ -804,8 +824,7 @@ function toTranscriptEntry(
         };
       }
       return {
-        entryId: entry.id,
-        parentId: entry.parentId,
+        ...transcriptEntryIdentity(entry),
         timestamp: entry.timestamp,
         type: 'message',
         source: messageSource(entry.message),
@@ -816,8 +835,7 @@ function toTranscriptEntry(
     }
     case 'compaction':
       return {
-        entryId: entry.id,
-        parentId: entry.parentId,
+        ...transcriptEntryIdentity(entry),
         timestamp: entry.timestamp,
         type: 'compaction',
         source: 'system',
@@ -834,8 +852,7 @@ function toTranscriptEntry(
       };
     case 'branch_summary':
       return {
-        entryId: entry.id,
-        parentId: entry.parentId,
+        ...transcriptEntryIdentity(entry),
         timestamp: entry.timestamp,
         type: 'branch_summary',
         source: 'system',
@@ -850,8 +867,7 @@ function toTranscriptEntry(
       };
     case 'client_notice':
       return {
-        entryId: entry.id,
-        parentId: entry.parentId,
+        ...transcriptEntryIdentity(entry),
         timestamp: entry.timestamp,
         type: 'client_notice',
         source: 'client',
@@ -959,11 +975,13 @@ function createClientNoticeEntry(
   lineage: KodaXSessionLineage,
   options: AppendClientNoticeOptions,
 ): KodaXSessionClientNoticeEntry {
+  const entryId = `notice_${randomUUID().replace(/-/g, '').slice(0, 12)}`;
   return {
     type: 'client_notice',
-    id: `notice_${randomUUID().replace(/-/g, '').slice(0, 12)}`,
+    id: entryId,
     parentId: lineage.activeEntryId,
     timestamp: options.timestamp ?? new Date().toISOString(),
+    logicalId: entryId,
     source: normalizeClientNoticeSource(options.source),
     content: options.content,
     ...(options.turnId !== undefined ? { turnId: options.turnId } : {}),
