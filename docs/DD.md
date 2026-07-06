@@ -1,8 +1,8 @@
 # KodaX Detailed Design
 
-> Last updated: 2026-07-05
+> Last updated: 2026-07-06
 >
-> Current release baseline: `@kodax-ai/kodax@0.7.60`
+> Current release baseline: `@kodax-ai/kodax@0.7.62`
 >
 > This DD describes current implementation structure. Retired V1 chain details
 > were deleted from this active document; use git history and historical feature
@@ -19,7 +19,7 @@ reference and does not duplicate every type. It should answer three questions:
 
 ## 2. Published Package And Build Entries
 
-The root package is `@kodax-ai/kodax@0.7.60`.
+The root package is `@kodax-ai/kodax@0.7.62`.
 
 `package.json` exposes:
 

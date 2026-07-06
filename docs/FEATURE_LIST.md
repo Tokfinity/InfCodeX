@@ -84,8 +84,8 @@
 
 ## 进行中的 Feature
 
-| ID | Title | Category | Priority | Planned | Design |
-|---|---|---|---|---|---|
+| ID | Title | Target | Notes |
+|---|---|---|---|
 
 Recent completion notes:
 
