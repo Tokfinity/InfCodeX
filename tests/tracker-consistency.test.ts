@@ -46,7 +46,8 @@ const rootDir = process.cwd();
 const docsDir = path.join(rootDir, 'docs');
 
 function parseVersion(version: string): number[] {
-  return version
+  const normalizedVersion = version.match(/v?\d+(?:\.\d+)*/)?.[0] ?? version;
+  return normalizedVersion
     .replace(/^v/, '')
     .split('.')
     .map((part) => Number(part));
@@ -138,6 +139,24 @@ function extractLinkPathOrSentinel(markdownLink: string): string {
     return '__pending__';
   }
   return extractLinkPath(markdownLink);
+}
+
+async function hasFeatureDesignDocs(): Promise<boolean> {
+  try {
+    const entries = await fs.readdir(path.join(docsDir, 'features'), { withFileTypes: true });
+    return entries.some((entry) => entry.isFile() && entry.name.endsWith('.md'));
+  } catch (error) {
+    const code =
+      typeof error === 'object' && error !== null && 'code' in error
+        ? String((error as { code?: unknown }).code)
+        : '';
+
+    if (code === 'ENOENT') {
+      return false;
+    }
+
+    throw error;
+  }
 }
 
 function parseFeatureRows(markdown: string): FeatureIndexRow[] {
@@ -404,6 +423,15 @@ describe('tracker consistency', () => {
 
     expect(completedWithoutRelease).toEqual([]);
     expect(unreleasedWithFixedVersion).toEqual([]);
+
+    const designDocsAvailable = await hasFeatureDesignDocs();
+    if (!designDocsAvailable) {
+      expect(
+        process.env.GITHUB_ACTIONS,
+        'docs/features is a private submodule. Run `git submodule update --init --recursive` before local tracker checks.'
+      ).toBe('true');
+      return;
+    }
 
     await Promise.all(
       featureRows.map(async (row) => {
