@@ -1,4 +1,4 @@
-import { mkdtempSync, rmSync } from 'node:fs';
+import { existsSync, mkdtempSync, rmSync } from 'node:fs';
 import { mkdir, readFile, writeFile } from 'node:fs/promises';
 import { join } from 'node:path';
 import { tmpdir } from 'node:os';
@@ -363,6 +363,85 @@ describe('MemoryControlPlane', () => {
     );
     expect(cleanReport.findings).toHaveLength(1);
     expect(cleanReport.findings[0]?.kind).toBe('no_op');
+  });
+
+  it('auto-runs curator for managed memory refs and persists an audit report', async () => {
+    const events: string[] = [];
+    const controller = createMemoryControlPlane({
+      cwd,
+      learningStorePath,
+      memoryRoot,
+      extraRefs: [
+        {
+          ...extraRef('memdir:duplicate-a.md', 'memdir', 'active'),
+          bodyFingerprint: 'sha256:duplicate',
+        },
+        {
+          ...extraRef('memdir:duplicate-b.md', 'memdir', 'active'),
+          bodyFingerprint: 'sha256:duplicate',
+        },
+      ],
+      discoverSkills: false,
+      now: () => '2026-07-06T00:00:00.000Z',
+      onEvent: (event) => events.push(event.type),
+    });
+
+    const result = await controller.maybeRunAutoCurator();
+
+    expect(result.ran).toBe(true);
+    expect(result.report?.findings.map((finding) => finding.kind)).toContain('duplicate');
+    expect(result.reportPath).toContain('.governance');
+    await expect(readFile(result.reportPath ?? '', 'utf8')).resolves.toContain('duplicate-a');
+    await expect(readFile(join(memoryRoot, '.governance', 'auto-curate-state.json'), 'utf8'))
+      .resolves.toContain('lastRunAt');
+    expect(events).toContain('curator.completed');
+  });
+
+  it('auto-curator skips when not due or when there are not enough managed refs', async () => {
+    const controller = createMemoryControlPlane({
+      cwd,
+      learningStorePath,
+      memoryRoot,
+      extraRefs: [
+        {
+          ...extraRef('memdir:duplicate-a.md', 'memdir', 'active'),
+          bodyFingerprint: 'sha256:duplicate',
+        },
+        {
+          ...extraRef('memdir:duplicate-b.md', 'memdir', 'active'),
+          bodyFingerprint: 'sha256:duplicate',
+        },
+      ],
+      discoverSkills: false,
+      now: () => '2026-07-06T00:00:00.000Z',
+    });
+    expect((await controller.maybeRunAutoCurator()).ran).toBe(true);
+
+    const skipped = await controller.maybeRunAutoCurator();
+
+    expect(skipped).toMatchObject({
+      ran: false,
+      skippedReason: 'not_due',
+      nextEligibleAt: '2026-07-07T00:00:00.000Z',
+    });
+
+    const sparseMemoryRoot = join(tempRoot, 'sparse-memory');
+    const sparseController = createMemoryControlPlane({
+      cwd,
+      learningStorePath,
+      memoryRoot: sparseMemoryRoot,
+      extraRefs: [extraRef('memdir:single.md', 'memdir', 'active')],
+      discoverSkills: false,
+      now: () => '2026-07-06T00:00:00.000Z',
+    });
+
+    const sparse = await sparseController.maybeRunAutoCurator();
+
+    expect(sparse).toMatchObject({
+      ran: false,
+      skippedReason: 'insufficient_refs',
+    });
+    expect(existsSync(join(sparseMemoryRoot, '.governance'))).toBe(false);
   });
 });
 

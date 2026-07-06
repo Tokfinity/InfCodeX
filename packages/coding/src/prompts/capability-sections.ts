@@ -50,6 +50,8 @@ import path from 'node:path';
 import { exec } from 'node:child_process';
 import { promisify } from 'node:util';
 
+import { createMemoryControlPlane } from '@kodax-ai/agent';
+
 import { loadAgentsFiles, formatAgentsForPrompt } from '../context/agents-loader.js';
 import { listConstructedAgents } from '../construction/agent-resolver.js';
 import { resolveExecutionCwd } from '../runtime-paths.js';
@@ -295,6 +297,7 @@ export async function buildCapabilityContextSections(
   // the rules in hand when it reads the current entries. Section is
   // ALWAYS emitted — fallback "currently empty" text tells the LLM the
   // subsystem is active even when no entries exist yet.
+  await maybeRunMemoryAutoCurator(executionCwd);
   const memory = buildMemorySection(executionCwd);
   sections.push(
     createPromptSection(
@@ -325,6 +328,18 @@ export async function buildCapabilityContextSections(
   }
 
   return sections;
+}
+
+async function maybeRunMemoryAutoCurator(cwd: string): Promise<void> {
+  try {
+    await createMemoryControlPlane({
+      cwd,
+      projectDocs: [],
+      discoverSkills: false,
+    }).maybeRunAutoCurator();
+  } catch {
+    // Memory maintenance must never prevent prompt construction.
+  }
 }
 
 /**

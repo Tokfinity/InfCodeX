@@ -135,6 +135,25 @@ export interface MemoryCuratorInput {
   readonly includeSensitive?: boolean;
 }
 
+export interface MemoryAutoCuratorInput extends MemoryCuratorInput {
+  readonly enabled?: boolean;
+  readonly intervalMs?: number;
+  readonly minRefs?: number;
+}
+
+export type MemoryAutoCuratorSkipReason =
+  | 'disabled'
+  | 'not_due'
+  | 'insufficient_refs';
+
+export interface MemoryAutoCuratorResult {
+  readonly ran: boolean;
+  readonly skippedReason?: MemoryAutoCuratorSkipReason;
+  readonly report?: MemoryGovernanceReport;
+  readonly reportPath?: string;
+  readonly nextEligibleAt?: string;
+}
+
 export type MemoryGovernanceFindingKind =
   | 'duplicate'
   | 'conflict'
@@ -201,6 +220,7 @@ export interface MemoryController {
   listRefs(filter?: MemoryRefFilter): Promise<readonly MemoryItemRef[]>;
   readRef(ref: MemoryItemRef): Promise<MemoryBodySnapshot>;
   runCurator(input?: MemoryCuratorInput): Promise<MemoryGovernanceReport>;
+  maybeRunAutoCurator(input?: MemoryAutoCuratorInput): Promise<MemoryAutoCuratorResult>;
   buildMemoryPack(input: MemoryPackInput): Promise<MemoryPack>;
 }
 

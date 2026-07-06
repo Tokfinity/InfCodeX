@@ -86,7 +86,7 @@
 
 | ID | Title | Target | Notes |
 |---|---|---|---|
-| `228` | Unified Memory Control Plane + Memory Governance | `v0.7.62` | Implementation in progress: agent-layer controller, F224-store memory projection, memdir approval path, session/artifact inventory refs, governance reports, thin REPL memory commands, deterministic prompt hints, and memory-pack trace metadata are implemented and covered by automated/manual-style acceptance tests. Remaining release work: human QA and release packaging. |
+| `228` | Unified Memory Control Plane + Memory Governance | `v0.7.62` | Implementation in progress: agent-layer controller, F224-store memory projection, memdir approval path, session/artifact inventory refs, governance reports, thin REPL memory commands, deterministic prompt hints, bounded memory-index prompt injection, automatic curator reports, and memory-pack trace metadata are implemented and covered by automated/manual-style acceptance tests. Remaining release work: human QA and release packaging. |
 
 Recent completion notes:
 

@@ -31,6 +31,8 @@ import type {
   MemoryApplyPreview,
   MemoryApplyResult,
   MemoryApproval,
+  MemoryAutoCuratorInput,
+  MemoryAutoCuratorResult,
   MemoryBodySnapshot,
   MemoryController,
   MemoryCuratorInput,
@@ -47,6 +49,9 @@ import type {
 } from './types.js';
 
 const MISSING_FINGERPRINT = 'missing';
+const AUTO_CURATOR_STATE_VERSION = 1;
+const DEFAULT_AUTO_CURATOR_INTERVAL_MS = 24 * 60 * 60 * 1000;
+const DEFAULT_AUTO_CURATOR_MIN_REFS = 2;
 
 export interface CreateMemoryControlPlaneOptions {
   readonly cwd: string;
@@ -72,6 +77,14 @@ interface MemdirWritePlan {
   readonly entrypointPath: string;
   readonly content: string;
   readonly indexLine: string;
+}
+
+interface AutoCuratorState {
+  readonly version: 1;
+  readonly lastCheckedAt?: string;
+  readonly lastRunAt?: string;
+  readonly lastInventoryFingerprint?: string;
+  readonly lastReportPath?: string;
 }
 
 export function createMemoryControlPlane(options: CreateMemoryControlPlaneOptions): MemoryController {
@@ -191,24 +204,51 @@ export class MemoryControlPlane implements MemoryController {
       includePrivate: input.includePrivate,
       includeSensitive: input.includeSensitive,
     });
-    const findings = buildGovernanceFindings(refs);
-    const reportId = `memory-governance:${fingerprint(`${this.now()}:${findings.length}`).slice(0, 12)}`;
-    const report: MemoryGovernanceReport = {
-      reportId,
-      generatedAt: this.now(),
-      findings: findings.length > 0
-        ? findings
-        : [{
-            kind: 'no_op',
-            severity: 'info',
-            refIds: [],
-            summary: 'No memory governance findings.',
-            suggestedAction: 'no_op',
-          }],
-      warnings: [],
-    };
-    this.emit({ type: 'curator.completed', reportId });
+    const report = this.buildGovernanceReport(refs);
+    this.emit({ type: 'curator.completed', reportId: report.reportId });
     return report;
+  }
+
+  async maybeRunAutoCurator(input: MemoryAutoCuratorInput = {}): Promise<MemoryAutoCuratorResult> {
+    if (input.enabled === false) {
+      return { ran: false, skippedReason: 'disabled' };
+    }
+    const now = this.now();
+    const intervalMs = Math.max(0, input.intervalMs ?? DEFAULT_AUTO_CURATOR_INTERVAL_MS);
+    const minRefs = Math.max(1, input.minRefs ?? DEFAULT_AUTO_CURATOR_MIN_REFS);
+    const statePath = autoCuratorStatePath(this.memoryRoot);
+    const state = await readAutoCuratorState(statePath);
+    const lastCheckedAt = state?.lastCheckedAt ?? state?.lastRunAt;
+    const nextEligibleAt = lastCheckedAt === undefined ? undefined : addMs(lastCheckedAt, intervalMs);
+    if (nextEligibleAt !== undefined && compareIso(nextEligibleAt, now) > 0) {
+      return { ran: false, skippedReason: 'not_due', nextEligibleAt };
+    }
+
+    const refs = (await this.listRefs({
+      includePrivate: input.includePrivate,
+      includeSensitive: input.includeSensitive,
+    })).filter(isAutoCuratorCandidate);
+    if (refs.length < minRefs) {
+      return { ran: false, skippedReason: 'insufficient_refs' };
+    }
+
+    const report = this.buildGovernanceReport(refs);
+    const reportPath = autoCuratorReportPath(this.memoryRoot, report);
+    await writeFileAtomic(reportPath, `${JSON.stringify(report, null, 2)}\n`);
+    await writeAutoCuratorState(statePath, {
+      version: AUTO_CURATOR_STATE_VERSION,
+      lastCheckedAt: now,
+      lastRunAt: now,
+      lastInventoryFingerprint: fingerprint(memoryInventoryPayload(refs)),
+      lastReportPath: reportPath,
+    });
+    this.emit({ type: 'curator.completed', reportId: report.reportId });
+    return {
+      ran: true,
+      report,
+      reportPath,
+      nextEligibleAt: addMs(now, intervalMs),
+    };
   }
 
   async buildMemoryPack(input: MemoryPackInput): Promise<MemoryPack> {
@@ -484,6 +524,26 @@ export class MemoryControlPlane implements MemoryController {
 
   private emit(event: MemoryEvent): void {
     this.onEvent?.(event);
+  }
+
+  private buildGovernanceReport(refs: readonly MemoryItemRef[]): MemoryGovernanceReport {
+    const generatedAt = this.now();
+    const findings = buildGovernanceFindings(refs);
+    const reportId = `memory-governance:${fingerprint(`${generatedAt}:${findings.length}`).slice(0, 12)}`;
+    return {
+      reportId,
+      generatedAt,
+      findings: findings.length > 0
+        ? findings
+        : [{
+            kind: 'no_op',
+            severity: 'info',
+            refIds: [],
+            summary: 'No memory governance findings.',
+            suggestedAction: 'no_op',
+          }],
+      warnings: [],
+    };
   }
 }
 
@@ -923,6 +983,90 @@ async function writeFileAtomic(filePath: string, content: string): Promise<void>
     await rm(tempPath, { force: true });
     throw error;
   }
+}
+
+function autoCuratorStatePath(memoryRoot: string): string {
+  return join(memoryRoot, '.governance', 'auto-curate-state.json');
+}
+
+function autoCuratorReportPath(memoryRoot: string, report: MemoryGovernanceReport): string {
+  const stamp = sanitizePathSegment(report.generatedAt);
+  const reportId = sanitizePathSegment(report.reportId);
+  return join(memoryRoot, '.governance', 'reports', `${stamp}-${reportId}.json`);
+}
+
+async function readAutoCuratorState(filePath: string): Promise<AutoCuratorState | undefined> {
+  const read = await readTextIfExists(filePath);
+  if (!read.exists) return undefined;
+  try {
+    const parsed: unknown = JSON.parse(read.content);
+    return isAutoCuratorState(parsed) ? parsed : undefined;
+  } catch {
+    return undefined;
+  }
+}
+
+async function writeAutoCuratorState(filePath: string, state: AutoCuratorState): Promise<void> {
+  await writeFileAtomic(filePath, `${JSON.stringify(state, null, 2)}\n`);
+}
+
+function isAutoCuratorState(value: unknown): value is AutoCuratorState {
+  if (!isReadonlyRecord(value)) return false;
+  return value.version === AUTO_CURATOR_STATE_VERSION
+    && optionalStringField(value.lastCheckedAt)
+    && optionalStringField(value.lastRunAt)
+    && optionalStringField(value.lastInventoryFingerprint)
+    && optionalStringField(value.lastReportPath);
+}
+
+function isReadonlyRecord(value: unknown): value is Readonly<Record<string, unknown>> {
+  return typeof value === 'object' && value !== null && !Array.isArray(value);
+}
+
+function optionalStringField(value: unknown): boolean {
+  return value === undefined || typeof value === 'string';
+}
+
+function addMs(isoTime: string, ms: number): string {
+  const parsed = Date.parse(isoTime);
+  const base = Number.isFinite(parsed) ? parsed : Date.now();
+  return new Date(base + ms).toISOString();
+}
+
+function compareIso(left: string, right: string): number {
+  const leftTime = Date.parse(left);
+  const rightTime = Date.parse(right);
+  if (!Number.isFinite(leftTime) || !Number.isFinite(rightTime)) return 0;
+  return leftTime - rightTime;
+}
+
+function isAutoCuratorCandidate(ref: MemoryItemRef): boolean {
+  return ref.kind === 'memdir'
+    || ref.kind === 'learning_proposal'
+    || ref.kind === 'reasoning_report';
+}
+
+function memoryInventoryPayload(refs: readonly MemoryItemRef[]): string {
+  return refs
+    .map((ref) => [
+      ref.id,
+      ref.kind,
+      ref.scope,
+      ref.lifecycle,
+      ref.authority,
+      ref.visibility,
+      ref.bodyFingerprint ?? '',
+      ref.storageUri ?? '',
+      ref.updatedAt ?? '',
+      ref.title ?? '',
+    ].join('\t'))
+    .sort()
+    .join('\n');
+}
+
+function sanitizePathSegment(value: string): string {
+  const sanitized = value.replace(/[^a-zA-Z0-9._-]+/g, '-').replace(/^-+|-+$/g, '');
+  return sanitized.length > 0 ? sanitized : 'report';
 }
 
 async function readStorageBackedRef(

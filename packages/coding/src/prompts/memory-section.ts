@@ -44,7 +44,6 @@ import {
   parseMemoryFile,
   resolveMemoryEntrypoint,
   resolveMemoryRoot,
-  truncateEntrypointContent,
 } from '@kodax-ai/agent';
 
 export interface MemorySectionResult {
@@ -62,6 +61,14 @@ interface MemoryHintEntry {
   readonly hook: string;
   readonly mtimeMs: number;
 }
+
+interface PromptMemoryIndexPreview {
+  readonly content: string;
+  readonly warning?: string;
+}
+
+const MAX_PROMPT_INDEX_LINES = 60;
+const MAX_PROMPT_INDEX_BYTES = 8_000;
 
 /**
  * mtime-keyed read cache for MEMORY.md — mirrors the FEATURE_149 pattern in
@@ -132,17 +139,64 @@ export function buildMemorySection(cwd: string): MemorySectionResult {
  * then wraps with the section header + footer hint about topic files.
  */
 function buildBodyWithEntrypoint(memoryDir: string, raw: string): string {
-  const truncated = truncateEntrypointContent(raw);
+  const preview = truncatePromptMemoryIndex(raw);
   const hintLines = buildMemoryHintLines(memoryDir);
   return [
     '=== Persistent memory (cross-session) ===',
     `Memory directory: ${memoryDir}`,
     '',
-    truncated.content,
+    preview.content,
+    ...(preview.warning === undefined ? [] : ['', preview.warning]),
     ...hintLines,
     '',
-    '[Index only — read individual files via the read tool when you need details. See memory rules section above.]',
+    '[Bounded index only - read individual files via the read tool when you need details. See memory rules section above.]',
   ].join('\n');
+}
+
+function truncatePromptMemoryIndex(raw: string): PromptMemoryIndexPreview {
+  const normalized = raw.trimEnd();
+  const lines = normalized.length === 0 ? [] : normalized.split(/\r?\n/);
+  const totalLines = lines.length;
+  const totalBytes = Buffer.byteLength(normalized, 'utf8');
+
+  let content = normalized;
+  let truncated = false;
+  if (totalLines > MAX_PROMPT_INDEX_LINES) {
+    content = lines.slice(0, MAX_PROMPT_INDEX_LINES).join('\n');
+    truncated = true;
+  }
+  if (Buffer.byteLength(content, 'utf8') > MAX_PROMPT_INDEX_BYTES) {
+    content = sliceUtf8ToByteCap(content, MAX_PROMPT_INDEX_BYTES);
+    truncated = true;
+  }
+  if (!truncated) return { content };
+  return {
+    content,
+    warning: [
+      `> NOTE: MEMORY.md has ${totalLines} lines / ${formatBytes(totalBytes)}.`,
+      `Only a bounded ${MAX_PROMPT_INDEX_LINES}-line / ${formatBytes(MAX_PROMPT_INDEX_BYTES)} index preview is loaded here.`,
+      'Read relevant topic files on demand instead of relying on the prompt to carry every memory.',
+    ].join(' '),
+  };
+}
+
+function sliceUtf8ToByteCap(value: string, byteCap: number): string {
+  let bytes = 0;
+  const chars: string[] = [];
+  for (const char of value) {
+    const charBytes = Buffer.byteLength(char, 'utf8');
+    if (bytes + charBytes > byteCap) break;
+    chars.push(char);
+    bytes += charBytes;
+  }
+  const sliced = chars.join('');
+  const lastNewline = sliced.lastIndexOf('\n');
+  return (lastNewline > 0 ? sliced.slice(0, lastNewline) : sliced).trimEnd();
+}
+
+function formatBytes(bytes: number): string {
+  if (bytes < 1024) return `${bytes}B`;
+  return `${(bytes / 1024).toFixed(1)}KB`;
 }
 
 /**

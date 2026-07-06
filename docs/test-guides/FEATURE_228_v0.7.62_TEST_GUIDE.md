@@ -30,7 +30,7 @@ $env:KODAX_HOME = Join-Path $PWD ".agent/tmp/manual-f228"
 Run these commands first:
 
 ```powershell
-npx vitest run packages/agent/src/memory-control/memory-control.test.ts packages/agent/src/learning/learning.test.ts packages/repl/src/commands/memory-command.test.ts packages/repl/src/commands/learn-command.test.ts packages/repl/src/interactive/completers/argument-completer.test.ts packages/coding/src/prompts/memory-section.test.ts packages/coding/src/prompts/memory-rules.test.ts
+npx vitest run packages/agent/src/memory-control/memory-control.test.ts packages/agent/src/learning/learning.test.ts packages/repl/src/commands/memory-command.test.ts packages/repl/src/commands/learn-command.test.ts packages/repl/src/interactive/completers/argument-completer.test.ts packages/coding/src/prompts/memory-section.test.ts packages/coding/src/prompts/memory-rules.test.ts packages/coding/src/prompts/capability-sections.test.ts
 npm run build -w @kodax-ai/agent
 npm run build -w @kodax-ai/coding
 npm run build -w @kodax-ai/repl
@@ -46,7 +46,7 @@ Expected result:
 
 ### TC-001: Memory Inbox Reuses F224 Store
 
-**Priority**: High  
+**Priority**: High
 **Type**: Positive
 
 Steps:
@@ -65,7 +65,7 @@ Expected result:
 
 ### TC-002: Show Preview Includes Read/Write Contract
 
-**Priority**: High  
+**Priority**: High
 **Type**: Positive
 
 Steps:
@@ -82,7 +82,7 @@ Expected result:
 
 ### TC-003: Approval Writes Topic And Index Atomically
 
-**Priority**: High  
+**Priority**: High
 **Type**: Positive
 
 Steps:
@@ -100,7 +100,7 @@ Expected result:
 
 ### TC-004: Stale Fingerprints Fail Closed
 
-**Priority**: High  
+**Priority**: High
 **Type**: Negative
 
 Steps:
@@ -170,8 +170,46 @@ Expected result:
 - [ ] Hints are sorted deterministically.
 - [ ] Stale, pending, quarantined, private, and sensitive refs are not injected by default.
 - [ ] Repeating the same input produces the same hint order.
+- [ ] Topic file bodies are not injected unless the agent reads them on demand.
 
-### TC-008: Ignore Memory Suppresses Retrieval
+### TC-008: Large Memory Index Stays Bounded In Prompt
+
+**Priority**: High
+**Type**: Boundary
+
+Steps:
+
+1. Create a `MEMORY.md` with more than 60 index lines or more than 8KB of index text.
+2. Trigger a coding prompt build.
+3. Inspect the `project-memory` section.
+
+Expected result:
+
+- [ ] The section contains only a bounded index preview.
+- [ ] The section includes a note explaining that topic files should be read on demand.
+- [ ] Entries beyond the preview budget are not injected directly.
+- [ ] Governed frontmatter hints may still appear as a small deterministic list.
+
+### TC-009: Automatic Curator Writes Audit Report Without Mutation
+
+**Priority**: High
+**Type**: Positive
+
+Steps:
+
+1. Prepare at least two managed memory refs, preferably duplicate or conflicting refs.
+2. Trigger a coding prompt build or call `maybeRunAutoCurator()` from a host harness.
+3. Inspect the memory root `.governance/` directory.
+4. Trigger the same path again immediately.
+
+Expected result:
+
+- [ ] The first eligible run writes `.governance/reports/*.json`.
+- [ ] `.governance/auto-curate-state.json` records the last run.
+- [ ] No memory topic file or `MEMORY.md` content is modified.
+- [ ] The second immediate run skips as `not_due`.
+
+### TC-010: Ignore Memory Suppresses Retrieval
 
 **Priority**: High  
 **Type**: Negative
@@ -187,7 +225,7 @@ Expected result:
 - [ ] Trace metadata marks memory as suppressed.
 - [ ] The selected ref id list is empty.
 
-### TC-009: Session And Artifact Refs Are Inventory Only By Default
+### TC-011: Session And Artifact Refs Are Inventory Only By Default
 
 **Priority**: Medium  
 **Type**: Boundary
@@ -205,7 +243,7 @@ Expected result:
 - [ ] They are snapshot-readable.
 - [ ] Their provisional lifecycle keeps them out of normal prompt injection.
 
-### TC-010: Read-Only And Protected Refs Are Not Mutated
+### TC-012: Read-Only And Protected Refs Are Not Mutated
 
 **Priority**: High  
 **Type**: Negative
@@ -233,7 +271,7 @@ Expected result:
 
 | Cases | Passed | Failed | Blocked |
 |---:|---:|---:|---:|
-| 10 | TBD | TBD | TBD |
+| 12 | TBD | TBD | TBD |
 
 **Conclusion**: TBD
 

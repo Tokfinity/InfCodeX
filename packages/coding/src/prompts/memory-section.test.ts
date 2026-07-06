@@ -68,14 +68,14 @@ describe('buildMemorySection', () => {
     expect(result.entrypointExists).toBe(true);
     expect(result.content).toContain('User role');
     expect(result.content).toContain('No mock DB');
-    expect(result.content).not.toContain('WARNING');
+    expect(result.content).not.toContain('NOTE');
     expect(result.content).toContain(
-      '[Index only — read individual files via the read tool when you need details.',
+      '[Bounded index only - read individual files via the read tool when you need details.',
     );
   });
 
   // ── Case 3: line-cap truncation ────────────────────────────────────────────
-  it('truncates + appends WARNING when MEMORY.md exceeds 200 lines', () => {
+  it('truncates + appends NOTE when MEMORY.md exceeds the prompt line budget', () => {
     const lines: string[] = [];
     for (let i = 0; i < 250; i++) {
       lines.push(`- [Entry ${i}](e${i}.md) — hook`);
@@ -86,15 +86,17 @@ describe('buildMemorySection', () => {
     const result = buildMemorySection(cwd);
 
     expect(result.entrypointExists).toBe(true);
-    expect(result.content).toContain('WARNING');
+    expect(result.content).toContain('NOTE');
     expect(result.content).toContain('250 lines');
-    // First entry present, line-201+ entries dropped.
+    expect(result.content).toContain('bounded 60-line');
+    // First entry present, line-61+ entries dropped.
     expect(result.content).toContain('- [Entry 0](e0.md)');
+    expect(result.content).not.toContain('- [Entry 60](e60.md)');
     expect(result.content).not.toContain('- [Entry 249](e249.md)');
   });
 
   // ── Case 4: byte-cap truncation ────────────────────────────────────────────
-  it('truncates + appends WARNING when MEMORY.md exceeds 25KB', () => {
+  it('truncates + appends NOTE when MEMORY.md exceeds the prompt byte budget', () => {
     // 30 lines × ~1000 bytes/line = 30KB → byte-cap, line-cap not triggered.
     const longLine = '- [E](e.md) — ' + 'X'.repeat(980);
     const memoryMd = Array.from({ length: 30 }, () => longLine).join('\n');
@@ -103,8 +105,9 @@ describe('buildMemorySection', () => {
 
     const result = buildMemorySection(cwd);
 
-    expect(result.content).toContain('WARNING');
-    expect(result.content).toContain('index entries are too long');
+    expect(result.content).toContain('NOTE');
+    expect(result.content).toContain('bounded 60-line');
+    expect(result.content).toContain('7.8KB');
   });
 
   // ── Case 5: multibyte content ──────────────────────────────────────────────
@@ -118,7 +121,7 @@ describe('buildMemorySection', () => {
 
     const result = buildMemorySection(cwd);
 
-    expect(result.content).not.toContain('WARNING');
+    expect(result.content).not.toContain('NOTE');
     expect(result.content).toContain('记忆条目');
   });
 
