@@ -1,6 +1,6 @@
 # Known Issues
 
-_Last Updated: 2026-06-26_
+_Last Updated: 2026-07-06_
 
 ---
 
@@ -56,7 +56,7 @@ _Last Updated: 2026-06-26_
 | 109 | Low | Resolved | 缺少 mcp_get_prompt 工具 — MCP prompt 能力未暴露给模型 | v0.7.16 | v0.7.35 | 2026-04-11 | 2026-06-11 |
 | 110 | Low | Open | 缺少 /mcp status 和 /mcp refresh REPL 命令 | v0.7.16 | - | 2026-04-11 | - |
 | 111 | Low | Resolved | SSE / Streamable HTTP MCP 传输缺少专项测试 | v0.7.16 | v0.7.48 | 2026-04-11 | 2026-06-11 |
-| 112 | High | Open | ask_user_question 交互机制不完备 — 数字编号歧义 + 缺少 input/multiSelect 模式 | v0.7.18 | - | 2026-04-12 | - |
+| 112 | High | Resolved | ask_user_question 交互机制不完备 — 数字编号歧义 + 缺少 input/multiSelect 模式 | v0.7.18 | v0.7.62 | 2026-04-12 | 2026-07-06 |
 | 113 | High | Resolved | Ctrl+C 中断后工具调用仍继续执行 — abort signal 未传播到工具执行阶段 | v0.7.17 | v0.7.18 | 2026-04-12 | 2026-04-12 |
 | 114 | High | Resolved | ask_user_question ESC 取消被静默吞掉 — 用户取消后模型继续执行 | v0.7.17 | v0.7.18 | 2026-04-12 | 2026-04-12 |
 | 115 | Medium | Resolved | Managed foreground ledger 切换 kind 时丢失 tool_group 引用 — 工具历史条目重复 | v0.7.17 | v0.7.18 | 2026-04-13 | 2026-04-13 |
@@ -86,9 +86,9 @@ _Last Updated: 2026-06-26_
 | 138 | High | Resolved | Workflow host RPC 边界对对象载荷零校验 — `synthesize` 传非数组 inputs 崩裸 TypeError + `runAgent`/`spawnAgent` 缺 name/prompt 静默烧 token | v0.7.49 | v0.7.49 | 2026-06-15 | 2026-06-15 |
 | 140 | High | Resolved | Published bundle leaves computed `./agent.js` child-executor import, breaking workflow child agents | v0.7.37 bundle distribution; confirmed v0.7.48-v0.7.50 | v0.7.52 | 2026-06-17 | 2026-06-18 |
 | 141 | Medium | Open | CI workflow long-red on Linux: cross-platform test bugs (storage list() runtime-inspection, bash background-process, h2 spawn env, skill-creator API-key-at-load) | long-standing (pre-v0.7.49) | - | 2026-06-18 | - |
-| 142 | High | Resolved | kimi-code thinking-only completion can terminate Worker with only `[Worker]` visible | v0.7.56 | v0.7.56 (pending patch) | 2026-06-25 | 2026-06-25 |
-| 144 | High | Resolved | Worker misreads task_output block wait expiry as child-agent timeout and writes final report before children complete | v0.7.45 | v0.7.57 (pending release) | 2026-06-26 | 2026-06-26 |
-| 143 | High | Resolved | Auto[llm] speculative classify 窗口默认 500ms + late verdict 被丢弃 → 远程/慢 provider 下 near-100% 误弹确认框，auto 模式形同虚设 | v0.7.39 | v0.7.57 (pending release) | 2026-06-25 | 2026-06-25 |
+| 142 | High | Resolved | kimi-code thinking-only completion can terminate Worker with only `[Worker]` visible | v0.7.56 | v0.7.56 | 2026-06-25 | 2026-06-25 |
+| 144 | High | Resolved | Worker misreads task_output block wait expiry as child-agent timeout and writes final report before children complete | v0.7.45 | v0.7.57 | 2026-06-26 | 2026-06-26 |
+| 143 | High | Resolved | Auto[llm] speculative classify 窗口默认 500ms + late verdict 被丢弃 → 远程/慢 provider 下 near-100% 误弹确认框，auto 模式形同虚设 | v0.7.39 | v0.7.57 | 2026-06-25 | 2026-06-25 |
 
 ---
 
@@ -98,11 +98,11 @@ _Last Updated: 2026-06-26_
 ### 144: Worker misreads task_output block wait expiry as child-agent timeout and writes final report before children complete
 
 - **Priority**: High
-- **Status**: **Resolved** (v0.7.57 pending release)
+- **Status**: **Resolved** (v0.7.57)
 - **Introduced**: v0.7.45 (FEATURE_177 `task_output`)
 - **Created**: 2026-06-26
 - **Resolved**: 2026-06-26
-- **Fixed**: v0.7.57 (pending release)
+- **Fixed**: v0.7.57
 
 #### Original Problem
 
@@ -162,11 +162,11 @@ The child agent itself was still healthy, but the `timeout` label made the Worke
 ### 143: Auto[llm] speculative classify 窗口默认 500ms + late verdict 被丢弃 → 远程/慢 provider 下 near-100% 误弹确认框，auto 模式形同虚设
 
 - **Priority**: High
-- **Status**: **Resolved** (v0.7.57 pending release)
+- **Status**: **Resolved** (v0.7.57)
 - **Introduced**: v0.7.39（FEATURE_158 / ADR-025，commit `97e99d7d`；0.7.39 之前完整 await classify，只在真 block/escalate 才弹）
 - **Created**: 2026-06-25
 - **Resolved**: 2026-06-25
-- **Fixed**: v0.7.57 (pending release)
+- **Fixed**: v0.7.57
 
 #### Original Problem
 
@@ -320,11 +320,11 @@ readline/Ink UI（现有 agent spinner 覆盖等待期），无弹框闪烁，�
 ### 142: kimi-code thinking-only completion can terminate Worker with only `[Worker]` visible
 
 - **Priority**: High
-- **Status**: **Resolved** (v0.7.56 pending patch)
+- **Status**: **Resolved** (v0.7.56)
 - **Introduced**: v0.7.56
 - **Created**: 2026-06-25
 - **Resolved**: 2026-06-25
-- **Fixed**: v0.7.56 (pending patch)
+- **Fixed**: v0.7.56
 
 #### Original Problem
 
@@ -2490,13 +2490,14 @@ Commit `ef085fc` 把 V1 精简到 V2 时没区分"信息载体"和"脚手架"，
   - ❌ 只做最小补丁（Scout 覆盖时同步清 `mutationSurface`）：治标不治本，下次再有"Scout 前 vs Scout 后"冲突字段还会复发
 
 ---
-### 112: ask_user_question 交互机制不完备 — 数字编号歧义 + 缺少 input/multiSelect 模式
+### 112: ask_user_question 交互机制不完备 — 数字编号歧义 + 缺少 input/multiSelect 模式 (RESOLVED)
 
 - **Priority**: High
-- **Status**: Open
+- **Status**: Resolved
 - **Introduced**: v0.7.18
-- **Fixed**: -
+- **Fixed**: v0.7.62
 - **Created**: 2026-04-12
+- **Resolved**: 2026-07-06
 
 - **Original Problem**:
 
@@ -2602,6 +2603,38 @@ Commit `ef085fc` 把 V1 精简到 V2 时没区分"信息载体"和"脚手架"，
   - ❌ 只加 input 模式不改 Select：不解决数字歧义根因，单选场景仍有问题
   - ❌ 只改 skill prompt：无法解决工具能力缺失，LLM 仍被迫打包组合
   - ❌ 全量复刻 Claude Code CustomSelect 组件：过度工程化，KodaX 的 Ink 版本和组件体系不同
+
+#### Resolution (v0.7.62)
+
+- `ask_user_question` now supports `kind: "input"` for free-text answers, with
+  cancellation surfaced through the standard cancelled-tool result.
+- Select questions now support `multi_select`, `min_selections`, and
+  `max_selections`; unsatisfiable bounds are rejected before opening a dialog.
+- Choice dialogs now allow a host-provided custom input option by default
+  (`allow_custom_input: false` opts out), with custom answers normalized into
+  `choice` / `choices` plus `custom_inputs` metadata.
+- The agent-layer interaction contract models custom input answers with a typed
+  sentinel (`ASK_USER_CUSTOM_INPUT_SIGNAL`) instead of overloading normal option
+  values.
+- The REPL routes custom choice answers through the existing input dialog and
+  supports focused single-select / multi-select submission, preserving
+  backward-compatible string and string-array host returns.
+
+#### Files Changed
+
+- `packages/agent/src/runtime/user-interaction.ts`
+- `packages/coding/src/tools/ask-user-question.ts`
+- `packages/coding/src/tools/tool-definitions.ts`
+- `packages/coding/src/types.ts`
+- `packages/repl/src/ui/InkREPL.tsx`
+- `packages/repl/src/ui/utils/ask-user.ts`
+- `tests/ui/ask-user.test.ts`
+- `packages/coding/src/tools/ask-user-question.test.ts`
+
+#### Tests Added / Run
+
+- `npm test -- packages/coding/src/tools/ask-user-question.test.ts tests/ui/ask-user.test.ts`
+- `npm test -- tests/tracker-consistency.test.ts tests/memory-prompt-injection.test.ts`
 
 ---
 ### 113: Ctrl+C 中断后工具调用仍继续执行 — abort signal 未传播到工具执行阶段 (RESOLVED)
@@ -4788,13 +4821,20 @@ Commit `ef085fc` 把 V1 精简到 V2 时没区分"信息载体"和"脚手架"，
 ---
 
 ## Summary
-- Total: 71 (25 Open, 46 Resolved, 0 Partially Resolved, 0 Won't Fix)
+- Total: 71 (24 Open, 47 Resolved, 0 Partially Resolved, 0 Won't Fix)
 - Highest Priority Open: 091 - 缺少一等公民 MCP / Web Search / Code Search 工具体系 (High)
 - Historical archived issues are maintained in ISSUES_ARCHIVED.md
 
 ## Changelog
 
-### 2026-06-25: Issue 143 resolved (v0.7.57 pending release)
+### 2026-07-06: Issue 112 resolved (v0.7.62)
+- Resolved 112: `ask_user_question` now supports free-text input,
+  multi-select with selection bounds, and default-on custom input answers. The
+  REPL routes custom choice answers through the existing input dialog, while the
+  tool returns normalized `choice` / `choices` and `custom_inputs` fields for
+  the model.
+
+### 2026-06-25: Issue 143 resolved (v0.7.57)
 - Resolved 143: Auto[llm] speculative classify 窗口默认 500ms + late verdict 被丢弃 → 远程/慢 provider 下 near-100% 误弹确认框 (High).
 - Fix (5 workstream, all landed): WS1 late-verdict 采纳（窗口过期改为 `await` 同一 classifyPromise 并采纳裁决 — allow/block 不弹框，仅真 escalate 弹框；比原 peek-race 设计更简洁、无 UI 改动、无闪烁）+ WS2 无 askUser ⇒ 窗口强制 0（修对 SDK/非交互）+ WS3 `autoMode.speculativeWindowMs` config 面 + env 透传（REPL+Space）+ WS4 v0.7.39.md 对账（late-verdict 使 micro-bench 失去正确性意义，按 EVAL_GUIDELINES Layer 1 不补跑付费 bench）+ WS5 防 double-record/settle 验证。
 - Verification: coding 3570 passed（1 项 orchestration maxConcurrent 并发计时 flaky，隔离复跑绿，无关）、repl 2135 passed、coding+repl tsc clean；新增 17 个单测（guardrail 7 + permission-config 8 + bootstrap 2）。

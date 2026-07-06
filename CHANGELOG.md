@@ -6,6 +6,61 @@ All notable changes to this project will be documented in this file.
 
 ## [Unreleased]
 
+## [0.7.62] - 2026-07-06
+
+> Scope note: a memory-governance release plus interaction polish. **FEATURE_228**
+> upgrades FEATURE_224's memory handoff lane into a governed memory control plane:
+> one proposal store, typed memory refs, preview/fingerprint-guarded writes,
+> deterministic task-aware memory hints, curator reports, and thin `/memory`
+> commands. The release also completes the `ask_user_question` interaction gap
+> tracked as issue 112 by adding free-text input, multi-select bounds, and
+> host-side custom-input answers. No vector database, embeddings service, or
+> second memory store is introduced.
+
+### Added
+
+- **Unified Memory Control Plane + Memory Governance (FEATURE_228).** Added the
+  agent-layer `MemoryControlPlane` and typed memory contracts for refs,
+  snapshots, action proposals, approvals, apply results, governance findings,
+  memory packs, and review plans. F224 `memdir_handoff` / `reasoning_handoff`
+  proposals are projected through the memory controller instead of copied into a
+  second store, keeping `/learn` and `/memory` on one proposal lifecycle.
+- **Memory command surface and deterministic prompt hints.** `/memory inbox`,
+  `/memory pending`, `/memory show`, `/memory approve`, `/memory reject`, and
+  `/memory curate` are thin REPL adapters over the agent-layer controller.
+  Coding prompt assembly now injects only a bounded memory index preview plus
+  small governed memory hints; topic bodies remain on-demand reads, and selected
+  memory refs are surfaced as trace metadata instead of prompt body noise.
+- **Governance and feedback review hooks.** Memory governance can report duplicate,
+  conflict, stale, quarantined, orphaned, and no-op findings without mutating
+  memory. Automatic curator runs are maintenance-window based, write bounded JSON
+  audit reports, retain only the newest 200 reports, and never rewrite memory
+  files. Feedback-triggered review accepts bounded candidate refs and requires
+  the normal approval path before mutation.
+
+### Changed
+
+- **`ask_user_question` now supports open-ended answers.** The tool schema and
+  host contracts accept `kind: "input"`, `multi_select`, selection bounds, and
+  default-on custom input options (`allow_custom_input: false` opts out). REPL
+  select dialogs use focus navigation, space toggles multi-select entries, Enter
+  submits focused/selected values, and custom answers are returned as normalized
+  `choice` / `choices` plus `custom_inputs` metadata.
+- **Memory approval requires preview fingerprints.** `approveProposal` now
+  requires fingerprints from a shown preview and fails closed on stale target or
+  `MEMORY.md` changes. Already-applied target/index writes complete idempotently
+  with warnings instead of rewriting identical content.
+
+### Fixed
+
+- **Resolved issue 112: `ask_user_question` interaction incompleteness.** The
+  model can now request free-text input, multi-select choices, and custom "Other"
+  answers without forcing fragile pre-combined option sets.
+- **User-scroll residual-cell repaint guard.** Alt-screen scroll repaint now
+  erases and repaints the affected visible rows before the normal diff pass, so
+  stale wide-char or skipped-cell residue cannot remain after user-driven
+  transcript scrolling.
+
 ## [0.7.61] - 2026-07-06
 
 > Scope note: a token-efficiency + workflow-reliability release. **FEATURE_251** adds command-aware

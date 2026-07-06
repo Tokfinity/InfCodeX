@@ -10,13 +10,13 @@
 
 | Item | Value |
 |---|---|
-| Current released version | `v0.7.61` |
-| Current package version | `@kodax-ai/kodax@0.7.61` (published to npm 2026-07-06; tagged `v0.7.61`) |
+| Current released version | `v0.7.62` |
+| Current package version | `@kodax-ai/kodax@0.7.62` (release prepared 2026-07-06; npm publish pending) |
 | Workspace baseline | `llm / agent / coding / repl` 4 packages |
 | Total tracked features | `37` |
-| InProgress | `1` |
+| InProgress | `0` |
 | Planned | `13` |
-| Completed | `23` |
+| Completed | `24` |
 | Tracked feature IDs | `007, 030, 093, 105, 108, 113, 139, 174, 211, 221, 224, 225, 228, 229, 230, 231, 232, 233, 234, 235, 236, 237, 238, 239, 240, 241, 242, 243, 244, 245, 246, 247, 248, 249, 250, 251, 252` |
 | Archive cutoff | Shipped / canceled / absorbed / shelved items through `v0.7.49` are archived. |
 
@@ -24,8 +24,8 @@
 
 | Status | Count | Feature IDs | Next checkpoint |
 |---|---:|---|---|
-| Completed | 23 | `251, 252, 250, 248, 249, 247, 246, 245, 243, 242, 241, 233, 240, 239, 224, 221, 174, 211, 237, 229, 230, 234, 236` | `251, 252` shipped v0.7.61 (2026-07-06); `250` shipped v0.7.60 (2026-07-04); `248, 249` shipped v0.7.59 (2026-07-03); `245, 246, 247, 221` released v0.7.58 (2026-07-02); `233, 241, 242, 243` released v0.7.57; `239, 240` released v0.7.56; `224` released v0.7.54; `174, 211, 237` v0.7.53; `229` v0.7.50; `230, 234, 236` v0.7.51 |
-| InProgress | 1 | `228` | `v0.7.62` |
+| Completed | 24 | `228, 251, 252, 250, 248, 249, 247, 246, 245, 243, 242, 241, 233, 240, 239, 224, 221, 174, 211, 237, 229, 230, 234, 236` | `228` prepared v0.7.62 (2026-07-06; npm publish pending); `251, 252` shipped v0.7.61 (2026-07-06); `250` shipped v0.7.60 (2026-07-04); `248, 249` shipped v0.7.59 (2026-07-03); `245, 246, 247, 221` released v0.7.58 (2026-07-02); `233, 241, 242, 243` released v0.7.57; `239, 240` released v0.7.56; `224` released v0.7.54; `174, 211, 237` v0.7.53; `229` v0.7.50; `230, 234, 236` v0.7.51 |
+| InProgress | 0 | - | - |
 | Planned, near-term | 8 | `244, 231, 235, 238, 232, 105, 108, 225` | `v0.7.65` -> `v0.7.100` |
 | Planned, v0.8.x | 5 | `007, 030, 093, 113, 139` | `v0.8.5+` |
 
@@ -84,9 +84,8 @@
 
 ## 进行中的 Feature
 
-| ID | Title | Target | Notes |
-|---|---|---|---|
-| `228` | Unified Memory Control Plane + Memory Governance | `v0.7.62` | Implementation in progress: agent-layer controller, F224-store memory projection, memdir approval path, session/artifact inventory refs, governance reports, thin REPL memory commands, bounded memory-index prompt injection, task-aware memory packs, feedback-triggered review contract, maintenance-window curator reports, and memory-pack trace metadata are implemented and covered by automated/manual-style acceptance tests. Remaining release work: human QA and release packaging. |
+| ID | Title | Category | Priority | Planned | Design |
+|---|---|---|---|---|---|
 
 Recent completion notes:
 
@@ -161,6 +160,7 @@ Recent completion notes:
 
 | ID | Title | Released | Design | Notes |
 |---|---|---|---|---|
+| `228` | Unified Memory Control Plane + Memory Governance | `v0.7.62` | [v0.7.62](features/v0.7.62.md#feature_228-unified-memory-control-plane--memory-governance) | Prepared in `v0.7.62` (2026-07-06; npm publish pending). Reuses the F224 learning proposal store for memory handoffs, adds agent-layer typed memory refs/snapshots/previews, fingerprint-guarded approval writes, thin `/memory` REPL commands, deterministic task-aware memory packs, bounded prompt memory-index injection, governance/curator reports with a 200-report cap, feedback-triggered review contracts, and host trace metadata for selected memory refs. No vector DB, embeddings, or second memory database. |
 | `252` | Workflow Quality Preflight + Review/Audit Verification Lints | `v0.7.61` | [v0.7.61](features/v0.7.61.md#feature_252-workflow-quality-preflight--reviewaudit-verification-lints) | Released in `v0.7.61` (2026-07-06). Phase A (deterministic contract lint only): `quality-lint.ts` (`lintRestrictedWorkflowSource` / `assertRestrictedWorkflowQuality`) runs in restricted workflow module materialization + the coding host with host `maxAgents`, hard-failing three contract classes before a run starts — unawaited workflow-command variable in a boolean position (no Proxy trap for object truthiness), top-level structured-output field access that belongs under `result.structured`, and literal `[...]`/`.map()` agent fanout above manifest/host caps. Review/verifier/generic quality heuristics intentionally NOT emitted as model-visible warnings (false-positive review narrowed the feature). Layer 2 strengthens review/audit templates to make verifier stages explicit. Layer 3 (gated strong-tier LLM reviewer) deferred behind future policy/eval. Deterministic — no LLM eval. |
 | `251` | Tool-Output 语义压缩（rtk-Style Token Killer） | `v0.7.61` | [v0.7.61](features/v0.7.61.md#feature_251-tool-output-semantic-compression-rtk-style-token-killer) | Released in `v0.7.61` (2026-07-06). Command-aware in-tool output compression in KodaX's own `bash` layer (ADR-050). New `output-filters/` module compresses stdout/stderr **body** at the single `bash.ts` close-handler point (covers SA + AMA): lossless ANSI-strip generic layer, compiled `git-diff`/`git-log`/`git-status`/`test-runner`/`lint`/`json-output` filters, and a declarative long-tail table (package/docker/infra progress). `Command:`/`Exit:` header preserved verbatim (FEATURE_185 ledger); `never_worse` size backstop; content-signature detection over command-name; every lossy filter persists raw body + recovery hint (raw fallback on persist failure). Isolated Layer-1 measurements show ~66–99% body-token reduction. Deterministic — no prompt change, no FEATURE_104 eval. |
 | `250` | Progressive Disclosure for the AMA/AMAW Managed Tool Path | `v0.7.60` | [v0.7.60](features/v0.7.60.md#feature_250-progressive-disclosure-for-the-amaamaw-managed-tool-path) | Released in `v0.7.60` (2026-07-04). Brings deferred-tool progressive disclosure (previously SA-path-only) to the AMA/AMAW managed path: `buildAgentToolsFromRegistry` hint-swaps the 13 non-mcp deferred tools (repo-intel + web/code + goal) to their `DEFERRED_TOOL_HINTS` one-liner with `input_schema` unchanged (stay directly callable; full description via `tool_search`). `mcp_*` stay resident (mutation risk + un-eval'd); `run_workflow` untouched. `tool_search` plus the 3 goal tool receipts are protected in `PRUNE_PROTECTED_TOOLS`. Two eval panels (5-alias): DEFER_SAFE 5/5, 0% read/grep fallback; V_teach 100% adoption after a 2-line `code_search`/`semantic_lookup` teaching block (strictly non-negative, +25pp on the floor alias). |
