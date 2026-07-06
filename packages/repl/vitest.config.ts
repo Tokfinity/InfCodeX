@@ -23,6 +23,8 @@ export default defineConfig({
     // consolidation) — even tests that don't import those directly will
     // fail at module-graph resolution if they're missing.
     alias: {
+      '@kodax-ai/coding/media': path.resolve(__dirname, '..', 'coding', 'src', 'media', 'index.ts'),
+      '@kodax-ai/agent/media': path.resolve(__dirname, '..', 'agent', 'src', 'media', 'index.ts'),
       '@kodax-ai/agent/capabilities/skills/shared/yaml': path.resolve(__dirname, '..', 'agent', 'src', 'capabilities', 'skills', 'shared', 'yaml.ts'),
       '@kodax-ai/agent/messaging/queue': path.resolve(__dirname, '..', 'agent', 'src', 'messaging', 'queue.ts'),
       '@kodax-ai/agent': path.resolve(__dirname, '..', 'agent', 'src', 'index.ts'),

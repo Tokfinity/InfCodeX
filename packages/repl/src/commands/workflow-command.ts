@@ -52,6 +52,8 @@ import {
   subscribeWorkflowLiveProcess,
   workflowEventSink,
 } from './workflow-command-live.js';
+import { unsubscribeWorkflowLiveProcessOnDone } from './workflow-command-cleanup.js';
+export { unsubscribeWorkflowLiveProcessOnDone } from './workflow-command-cleanup.js';
 export {
   createWorkflowLiveUpdateEmitter,
   observeManagedWorkflowDone,
@@ -758,7 +760,7 @@ export const workflowCommand: Command = {
           }),
           onEvent: workflowEventSink(callbacks, undefined, { presentation, locale, runId: newRunId }),
         });
-        void managed.done.finally(unsubscribeProcess);
+        unsubscribeWorkflowLiveProcessOnDone(managed, unsubscribeProcess);
         observeManagedWorkflowDone(managed, callbacks, newRunId, live, {
           canRerun: prepared.scriptSnapshot !== undefined,
           presentation,
@@ -827,7 +829,7 @@ export const workflowCommand: Command = {
         }),
         onEvent: workflowEventSink(callbacks, undefined, { presentation, locale, runId: newRunId }),
       });
-      void managed.done.finally(unsubscribeProcess);
+      unsubscribeWorkflowLiveProcessOnDone(managed, unsubscribeProcess);
       observeManagedWorkflowDone(managed, callbacks, newRunId, live, {
         canRerun: true,
         presentation,
@@ -964,7 +966,7 @@ export const workflowCommand: Command = {
           }),
       onEvent: workflowEventSink(callbacks, undefined, { presentation, locale, runId }),
     });
-    void managed.done.finally(unsubscribeProcess);
+    unsubscribeWorkflowLiveProcessOnDone(managed, unsubscribeProcess);
 
     observeManagedWorkflowDone(managed, callbacks, runId, live, {
       canRerun: scriptSnapshot !== undefined,

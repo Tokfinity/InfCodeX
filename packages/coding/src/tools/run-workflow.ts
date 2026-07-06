@@ -47,12 +47,13 @@ function formatWorkflowOutcome(result: WorkflowToolHostResult): string {
     // sidecar verifier in warn-only mode; surface those so the Worker does not
     // act on the result unaware that verification failed for part of the run.
     const warnings = result.verificationWarnings ?? [];
-    const prefix = warnings.length > 0
-      ? `Workflow ${result.runId} completed, but ${warnings.length} agent(s) failed verification (warn-only): ${warnings.join(', ')}. Review before relying on the result.\n\n`
+    const verificationPrefix = warnings.length > 0
+      ? `Workflow ${result.runId} completed, but ${warnings.length} agent(s) failed verification (warn-only): ${warnings.join(', ')}. Review before relying on the result.`
       : '';
+    const paddedPrefix = verificationPrefix.length > 0 ? `${verificationPrefix}\n\n` : '';
     return text && text.length > 0
-      ? `${prefix}${text}`
-      : `${prefix}Workflow ${result.runId} completed (no displayable result text was returned).`;
+      ? `${paddedPrefix}${text}`
+      : `${paddedPrefix}Workflow ${result.runId} completed (no displayable result text was returned).`;
   }
   const detail = result.error ?? result.resultText ?? '';
   return `[Tool Error] Workflow ${result.runId ?? ''} ${result.status ?? 'did not complete'}${detail ? `: ${detail}` : ''}`.trim();
@@ -127,7 +128,11 @@ export async function toolRunWorkflow(
     // `has` + `registerChildTask` run synchronously (no await between), so this is
     // race-free within a call; fall back to blocking so the result is never lost.
     if (registry.has(taskId)) {
-      return formatWorkflowOutcome(await done);
+      try {
+        return formatWorkflowOutcome(await done);
+      } catch (error) {
+        return `[Tool Error] Workflow ${taskId} failed: ${error instanceof Error ? error.message : String(error)}`;
+      }
     }
     // Register the stop handle so task_stop(taskId) can abort this workflow.
     ctx.childAbortControllers?.set(taskId, wfAbort);
@@ -164,7 +169,7 @@ export async function toolRunWorkflow(
       return EMPTY_CHILD_RESULT;
     })();
     registerChildTask(registry, taskId, settle);
-    return (
+    const startedText = (
       `task_id:${taskId}\n` +
       `Workflow "${readManifestName(manifest)}" started (run ${taskId}) and is now running in the background. ` +
       `Do NOT wait for it inline — its synthesized result will arrive on its own as a ` +
@@ -177,6 +182,7 @@ export async function toolRunWorkflow(
       `run_workflow again with the improved script — pass resumeFromRunId:"${taskId}" so the agents ` +
       `that already finished replay from cache and only the changed work re-runs.`
     );
+    return startedText;
   }
 
   // Blocking fallback: no idle-yield registry (SDK / headless), or explicitly disabled.

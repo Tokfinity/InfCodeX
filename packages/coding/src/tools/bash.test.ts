@@ -129,6 +129,35 @@ describe('toolBash', () => {
     expect(result).toContain('Bash output truncated to the tail');
   });
 
+  it('strips ANSI escape codes from completed command output while preserving the bash header', async () => {
+    const command = 'node -e "const e=String.fromCharCode(27); process.stdout.write(e+\'[31mred\'+e+\'[0m\\n\'); process.stderr.write(e+\'[33mwarn\'+e+\'[0m\\n\')"';
+    const result = await toolBash({ command }, {
+      backups: new Map(),
+      executionCwd: tempDir,
+    });
+
+    expect(result).toContain(`Command: ${command}`);
+    expect(result).toContain('Exit: 0');
+    expect(result).toContain('red');
+    expect(result).toContain('[stderr]\nwarn');
+    expect(result).not.toContain('\u001B[');
+  });
+
+  it('does not fail a completed command when live progress rendering throws', async () => {
+    const command = 'node -e "console.log(\'progress-output\')"';
+    const result = await toolBash({ command }, {
+      backups: new Map(),
+      executionCwd: tempDir,
+      reportToolProgress: () => {
+        throw new Error('renderer unavailable');
+      },
+    });
+
+    expect(result).toContain(`Command: ${command}`);
+    expect(result).toContain('Exit: 0');
+    expect(result).toContain('progress-output');
+  });
+
   it('includes stderr in timeout previews', async () => {
     const command = 'node -e "process.stderr.write(\'timeout-error\\n\'); setTimeout(() => {}, 5000)"';
     const result = await toolBash({ command, timeout: 1 }, {

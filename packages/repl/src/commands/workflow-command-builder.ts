@@ -27,6 +27,7 @@ import {
   type StartGeneratedWorkflowFromRequestOptions,
   type WorkflowBuilderEvent,
 } from './workflow-command-live.js';
+import { unsubscribeWorkflowLiveProcessOnDone } from './workflow-command-cleanup.js';
 
 function emitWorkflowBuilderEvent(
   input: StartGeneratedWorkflowFromRequestOptions,
@@ -220,7 +221,7 @@ export async function startGeneratedWorkflowFromRequest(
       runId,
     }),
   });
-  void managed.done.finally(unsubscribeProcess);
+  unsubscribeWorkflowLiveProcessOnDone(managed, unsubscribeProcess);
   emitWorkflowBuilderEvent(input, {
     stage: 'launched',
     message: `Workflow ${generated.module.meta.name} started`,

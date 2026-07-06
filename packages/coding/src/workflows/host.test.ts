@@ -216,6 +216,99 @@ describe('startManagedWorkflow', () => {
     expect(calls).toHaveLength(0);
   });
 
+  it('inline: starts review fanout without verifier without heuristic warnings', async () => {
+    const { manager, calls } = fakeManager();
+    const reviewManifest: WorkflowScriptManifest = {
+      ...MANIFEST,
+      name: 'review-without-verifier',
+      description: 'Review the current diff for bugs.',
+      phases: ['review', 'synthesize'],
+      maxAgents: 4,
+      patterns: ['fan-out-and-synthesize'],
+    };
+    const source = [
+      'async function run(wf) {',
+      '  const reviewers = await wf.parallel([',
+      '    () => wf.runAgent({ name: "correctness-reviewer", prompt: "Review src/runtime.ts for correctness bugs.", readOnly: true }),',
+      '    () => wf.runAgent({ name: "security-reviewer", prompt: "Audit src/runtime.ts for security bugs.", readOnly: true })',
+      '  ]);',
+      '  const synthesis = await wf.synthesize({ inputs: reviewers.filter(Boolean).map((r) => r.finalText), rubric: "Merge the findings." });',
+      '  return synthesis.text;',
+      '}',
+    ].join('\n');
+
+    const result = await startManagedWorkflow({
+      source: { kind: 'inline', manifest: reviewManifest, source },
+      args: { request: 'x' },
+      options: OPTIONS,
+      runsBaseDir: RUNS_DIR,
+      runId: 'run-review-no-verifier',
+      manager,
+    });
+
+    expect(result.kind).toBe('started');
+    if (result.kind !== 'started') return;
+    expect(result.qualityWarnings).toBeUndefined();
+    expect(calls).toHaveLength(1);
+  });
+
+  it('inline: does not surface generic prompt heuristics as warning metadata', async () => {
+    const { manager, calls } = fakeManager();
+    const source = [
+      'async function run(wf) {',
+      '  const result = await wf.runAgent({ name: "reviewer", prompt: "review", readOnly: true });',
+      '  return result.finalText;',
+      '}',
+    ].join('\n');
+
+    const result = await startManagedWorkflow({
+      source: { kind: 'inline', manifest: MANIFEST, source },
+      args: { request: 'x' },
+      options: OPTIONS,
+      runsBaseDir: RUNS_DIR,
+      runId: 'run-warning-only',
+      manager,
+      processMetadata: { hostMetadata: { sessionId: 'session-1' } },
+    });
+
+    expect(result.kind).toBe('started');
+    if (result.kind !== 'started') return;
+    expect(result.qualityWarnings).toBeUndefined();
+    expect(calls).toHaveLength(1);
+    expect(calls[0]?.processMetadata?.hostMetadata?.sessionId).toBe('session-1');
+    expect(calls[0]?.processMetadata?.hostMetadata?.workflowQualityWarningCount).toBeUndefined();
+    expect(calls[0]?.processMetadata?.hostMetadata?.workflowQualityWarningCodes).toBeUndefined();
+    expect(calls[0]?.processMetadata?.hostMetadata?.workflowQualityWarnings).toBeUndefined();
+  });
+
+  it('inline: rejects literal fanout above host maxAgents policy before starting a run', async () => {
+    const { manager, calls } = fakeManager();
+    const source = [
+      'async function run(wf) {',
+      '  const results = await wf.parallel([1, 2, 3].map((n) => () =>',
+      '    wf.runAgent({ name: "reader-" + n, prompt: "Inspect src/runtime.ts", readOnly: true })',
+      '  ));',
+      '  return { synthesis: String(results.length) };',
+      '}',
+    ].join('\n');
+
+    await expect(
+      startManagedWorkflow({
+        source: {
+          kind: 'inline',
+          manifest: { ...MANIFEST, maxAgents: 5 },
+          source,
+        },
+        args: { request: 'x' },
+        options: { workflowHostPolicy: { maxAgents: 2 } } as KodaXOptions,
+        runsBaseDir: RUNS_DIR,
+        runId: 'run-host-cap-fanout',
+        manager,
+      }),
+    ).rejects.toThrow(/literal fanout.*2 maxAgents/is);
+    expect(calls).toHaveLength(0);
+  });
+
   it('inline: treats ordinary smoke-only script branches as non-blocking', async () => {
     const { manager, calls } = fakeManager();
     const source = [

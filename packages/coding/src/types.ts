@@ -2193,6 +2193,11 @@ export interface WorkflowToolHostResult {
    *  the result unaware that some verification failed. Empty/omitted = all
    *  completed children verified (or none were verified). */
   readonly verificationWarnings?: readonly string[];
+  /** Diagnostic workflow-quality warnings found before the run started.
+   *  These are non-blocking and are not rendered into model-visible
+   *  `run_workflow` text by default; uncertain quality heuristics must not
+   *  pressure the Worker into rewriting otherwise-valid workflows. */
+  readonly workflowQualityWarnings?: readonly string[];
 }
 
 /**
@@ -2247,6 +2252,8 @@ export type WorkflowToolHostStartResult =
       readonly kind: 'started';
       readonly runId: string;
       readonly done: Promise<WorkflowToolHostResult>;
+      /** Non-blocking diagnostic preflight warnings available immediately at start. */
+      readonly workflowQualityWarnings?: readonly string[];
       /** Gap A: on-demand live progress for a `task_output(runId)` peek while the
        *  run is in flight. Absent when the host cannot snapshot the run. */
       readonly getProgress?: () => WorkflowRunProgressView | undefined;

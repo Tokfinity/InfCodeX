@@ -12,6 +12,7 @@ import {
   expandSkillForLLM,
   getSkillRegistry,
   initializeSkillRegistry,
+  lintRestrictedWorkflowSource,
   runRestrictedWorkflowScript,
   validateRestrictedWorkflowSource,
   validateWorkflowScriptManifest,
@@ -19,6 +20,7 @@ import {
   type SkillContext,
   type WorkflowApi,
   type WorkflowModule,
+  type WorkflowQualityLintFinding,
   type WorkflowScriptManifest,
   type WorkflowTaskHandle,
   type WorkflowTaskResult,
@@ -125,6 +127,7 @@ export interface GeneratedWorkflow {
   readonly module: WorkflowModule;
   readonly scriptSnapshot: WorkflowScriptSnapshotInput;
   readonly approvalSummary: string;
+  readonly qualityWarnings?: readonly WorkflowQualityLintFinding[];
   readonly rawText: string;
 }
 
@@ -1147,14 +1150,18 @@ export function parseWorkflowGeneration(
     typeof data.approvalSummary === 'string' && data.approvalSummary.trim().length > 0
       ? data.approvalSummary
       : manifest.description;
+  const module = createRestrictedWorkflowModule({ manifest, source });
+  const qualityWarnings = lintRestrictedWorkflowSource(source, { manifest })
+    .filter((finding) => finding.severity === 'warning');
 
   return {
     kind: 'generated',
     manifest,
     source,
-    module: createRestrictedWorkflowModule({ manifest, source }),
+    module,
     scriptSnapshot: { manifest, source },
     approvalSummary,
+    ...(qualityWarnings.length > 0 ? { qualityWarnings } : {}),
     rawText,
   };
 }

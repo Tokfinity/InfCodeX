@@ -17,8 +17,31 @@ import {
   trimBufferStartToUtf8Boundary,
   truncateTail,
 } from './truncate.js';
+import { filterBashOutputBodies } from './output-filters/registry.js';
 
 const BACKGROUND_ABORT_KILL_MS = process.platform === 'win32' ? 5_000 : 2_000;
+
+type ManagedChildProcess = Parameters<typeof killChildProcessTree>[0];
+type KillChildProcessTreeOptions = NonNullable<Parameters<typeof killChildProcessTree>[1]>;
+
+function killChildProcessTreeBestEffort(
+  proc: ManagedChildProcess,
+  options?: KillChildProcessTreeOptions,
+  onSettled?: () => void,
+): void {
+  void killChildProcessTree(proc, options)
+    .catch(() => undefined)
+    .then(() => {
+      if (!onSettled) return;
+      try {
+        onSettled();
+      } catch {
+        // Kill cleanup is an observer path; it must never promote a cancelled
+        // shell command into a process-level unhandled rejection.
+      }
+    })
+    .catch(() => {});
+}
 
 type TailCollector = {
   chunks: Buffer[];
@@ -185,10 +208,10 @@ export async function toolBash(input: Record<string, unknown>, ctx: KodaXToolExe
       unregisterManagedChild();
     };
     const stopBackgroundProcess = (): void => {
-      void killChildProcessTree(proc, {
+      killChildProcessTreeBestEffort(proc, {
         forceMs: BACKGROUND_ABORT_KILL_MS,
         taskkillMs: BACKGROUND_ABORT_KILL_MS,
-      }).finally(cleanupProcessHooks);
+      }, cleanupProcessHooks);
     };
 
     proc.stdout?.pipe(logStream, { end: false });
@@ -247,7 +270,7 @@ export async function toolBash(input: Record<string, unknown>, ctx: KodaXToolExe
     };
 
     const timer = setTimeout(() => {
-      void killChildProcessTree(proc);
+      killChildProcessTreeBestEffort(proc);
       const partialStdout = decodeCollector(stdout).text;
       const partialStderr = decodeCollector(stderr).text;
       let partial = partialStdout;
@@ -279,12 +302,12 @@ export async function toolBash(input: Record<string, unknown>, ctx: KodaXToolExe
     const abortSignal = ctx.abortSignal;
     if (abortSignal) {
       if (abortSignal.aborted) {
-        void killChildProcessTree(proc);
+        killChildProcessTreeBestEffort(proc);
         clearTimeout(timer);
         settle(`[Cancelled] Operation cancelled by user`);
       } else {
         const onAbort = () => {
-          void killChildProcessTree(proc);
+          killChildProcessTreeBestEffort(proc);
           clearTimeout(timer);
           settle(`[Cancelled] Operation cancelled by user`);
         };
@@ -320,7 +343,12 @@ export async function toolBash(input: Record<string, unknown>, ctx: KodaXToolExe
       const tail = lines.slice(-3).join(' | ');
       // Cap the displayed tail so the spinner line stays readable.
       const display = tail.length > 120 ? '…' + tail.slice(-119) : tail;
-      ctx.reportToolProgress(display);
+      try {
+        ctx.reportToolProgress(display);
+      } catch {
+        // Progress hints are best-effort UI sugar; a renderer failure must not
+        // turn a completed shell command into a process-level crash.
+      }
     };
 
     proc.stdout?.on('data', (chunk: Buffer) => {
@@ -340,76 +368,106 @@ export async function toolBash(input: Record<string, unknown>, ctx: KodaXToolExe
       reportLiveProgress(false);
     });
     proc.on('close', code => {
-      clearTimeout(timer);
-      unregisterForegroundCommand();
-      // Skip trailing flush + entire close-handler processing once
-      // `settle` has fired (abort path: `onAbort` calls `settle('[Cancelled]…')`
-      // synchronously, then `proc.kill()` triggers `close` next tick).
-      // Without this, the trailing `reportLiveProgress(true)` would emit a
-      // post-cancel progress event to non-UI consumers (the React-layer UI
-      // is gated by `userInterruptedRef`, but SDK / test consumers are not).
-      if (settled) return;
-      // Trailing flush of live progress so the final tail (often the most
-      // informative — exit notice, "X tests passed", final commit hash)
-      // always lands before the tool result. Without this, fast commands
-      // (< throttle window) emit zero progress events, and on heavy load
-      // only the first throttled fire wins so the tail (e.g. last
-      // "epsilon"-style line) is silently dropped.
-      reportLiveProgress(true);
-      const stdoutDecoded = decodeCollector(stdout);
-      const stderrDecoded = decodeCollector(stderr);
-      const stdoutText = stdoutDecoded.text;
-      const stderrText = stderrDecoded.text;
+      void (async () => {
+        try {
+          clearTimeout(timer);
+          unregisterForegroundCommand();
+          // Skip trailing flush + entire close-handler processing once
+          // `settle` has fired (abort path: `onAbort` calls `settle('[Cancelled]…')`
+          // synchronously, then `proc.kill()` triggers `close` next tick).
+          // Without this, the trailing `reportLiveProgress(true)` would emit a
+          // post-cancel progress event to non-UI consumers (the React-layer UI
+          // is gated by `userInterruptedRef`, but SDK / test consumers are not).
+          if (settled) return;
+          // Trailing flush of live progress so the final tail (often the most
+          // informative — exit notice, "X tests passed", final commit hash)
+          // always lands before the tool result. Without this, fast commands
+          // (< throttle window) emit zero progress events, and on heavy load
+          // only the first throttled fire wins so the tail (e.g. last
+          // "epsilon"-style line) is silently dropped.
+          reportLiveProgress(true);
+          const stdoutDecoded = decodeCollector(stdout);
+          const stderrDecoded = decodeCollector(stderr);
+          const filteredBody = await filterBashOutputBodies({
+            command,
+            stdout: stdoutDecoded.text,
+            stderr: stderrDecoded.text,
+            ctx,
+          });
+          const stdoutText = filteredBody.stdout;
+          const stderrText = filteredBody.stderr;
 
-      let out = `Command: ${command}\nExit: ${code}\n${stdoutText}`;
-      if (stdout.droppedBytes > 0) {
-        out += `\n[stdout capture capped: earlier ${formatSize(stdout.droppedBytes)} omitted]`;
-      }
-      if (stderrText) {
-        out += `\n[stderr]\n${stderrText}`;
-      }
-      if (stderr.droppedBytes > 0) {
-        out += `\n[stderr capture capped: earlier ${formatSize(stderr.droppedBytes)} omitted]`;
-      }
-      if (capped) {
-        out += `\n[Note] Timeout capped at ${KODAX_HARD_TIMEOUT}s`;
-      }
+          let out = `Command: ${command}\nExit: ${code}\n${stdoutText}`;
+          if (stdout.droppedBytes > 0) {
+            out += `\n[stdout capture capped: earlier ${formatSize(stdout.droppedBytes)} omitted]`;
+          }
+          if (stderrText) {
+            out += `\n[stderr]\n${stderrText}`;
+          }
+          if (filteredBody.note) {
+            out += `\n${filteredBody.note}`;
+          }
+          if (stderr.droppedBytes > 0) {
+            out += `\n[stderr capture capped: earlier ${formatSize(stderr.droppedBytes)} omitted]`;
+          }
+          if (capped) {
+            out += `\n[Note] Timeout capped at ${KODAX_HARD_TIMEOUT}s`;
+          }
 
-      // Y-3: Surface the existing UTF-8 → GBK fallback so the LLM knows output
-      // may have been reinterpreted. This doesn't mean the text is garbled —
-      // GBK decode is usually correct for Chinese Windows — but mixed encodings
-      // (e.g. a Python script that prints UTF-8 while the shell is GBK) can
-      // produce confusing results that the LLM should double-check.
-      if (stdoutDecoded.encodingFallback || stderrDecoded.encodingFallback) {
-        out += `\n[warn] Output encoding fallback fired (UTF-8 → GBK). If text looks garbled, the command may mix encodings; re-run with an explicit encoding (e.g. PYTHONIOENCODING=utf-8).`;
-      }
+          // Y-3: Surface the existing UTF-8 → GBK fallback so the LLM knows output
+          // may have been reinterpreted. This doesn't mean the text is garbled —
+          // GBK decode is usually correct for Chinese Windows — but mixed encodings
+          // (e.g. a Python script that prints UTF-8 while the shell is GBK) can
+          // produce confusing results that the LLM should double-check.
+          if (stdoutDecoded.encodingFallback || stderrDecoded.encodingFallback) {
+            out += `\n[warn] Output encoding fallback fired (UTF-8 → GBK). If text looks garbled, the command may mix encodings; re-run with an explicit encoding (e.g. PYTHONIOENCODING=utf-8).`;
+          }
 
-      // Y-1/Y-2: Append Windows cmd gotcha hints if the command pattern suggests
-      // the shell may have silently mangled it. Added last so they're preserved
-      // even if the output is truncated (truncateTail keeps the tail).
-      const gotchaHints = detectWindowsCmdGotchas(command);
-      if (gotchaHints.length > 0) {
-        out += `\n${gotchaHints.join('\n')}`;
-      }
+          // Y-1/Y-2: Append Windows cmd gotcha hints if the command pattern suggests
+          // the shell may have silently mangled it. Added last so they're preserved
+          // even if the output is truncated (truncateTail keeps the tail).
+          const gotchaHints = detectWindowsCmdGotchas(command);
+          if (gotchaHints.length > 0) {
+            out += `\n${gotchaHints.join('\n')}`;
+          }
 
-      const preview = truncateTail(out, { maxLines: 600, maxBytes: 32 * 1024 });
-      if (!preview.truncated) {
-        settle(out);
-        return;
-      }
+          const preview = truncateTail(out, { maxLines: 600, maxBytes: 32 * 1024 });
+          if (!preview.truncated) {
+            settle(out);
+            return;
+          }
 
-      const captureNotes = [];
-      if (stdout.totalBytes > stdout.keptBytes) {
-        captureNotes.push(`stdout kept last ${formatSize(stdout.keptBytes)} of ${formatSize(stdout.totalBytes)}`);
-      }
-      if (stderr.totalBytes > stderr.keptBytes) {
-        captureNotes.push(`stderr kept last ${formatSize(stderr.keptBytes)} of ${formatSize(stderr.totalBytes)}`);
-      }
-      const hint = buildBashTruncationHint(command);
-      const note = captureNotes.length > 0
-        ? `\n\n${hint.replace(/\]$/, ` ${captureNotes.join('; ')}.]`)}`
-        : `\n\n${hint}`;
-      settle(`${preview.content}${note}`);
+          const captureNotes = [];
+          if (stdout.totalBytes > stdout.keptBytes) {
+            captureNotes.push(`stdout kept last ${formatSize(stdout.keptBytes)} of ${formatSize(stdout.totalBytes)}`);
+          }
+          if (stderr.totalBytes > stderr.keptBytes) {
+            captureNotes.push(`stderr kept last ${formatSize(stderr.keptBytes)} of ${formatSize(stderr.totalBytes)}`);
+          }
+          const hint = buildBashTruncationHint(command);
+          const note = captureNotes.length > 0
+            ? `\n\n${hint.replace(/\]$/, ` ${captureNotes.join('; ')}.]`)}`
+            : `\n\n${hint}`;
+          settle(`${preview.content}${note}`);
+        } catch (error) {
+          const message = error instanceof Error ? error.message : String(error);
+          const stdoutText = decodeCollector(stdout).text;
+          const stderrText = decodeCollector(stderr).text;
+          let out = `Command: ${command}\nExit: ${code}\n${stdoutText}`;
+          if (stderrText) {
+            out += `\n[stderr]\n${stderrText}`;
+          }
+          out += `\n[warn] Bash output post-processing failed; returned raw captured output instead: ${message}`;
+          const preview = truncateTail(out, { maxLines: 600, maxBytes: 32 * 1024 });
+          settle(preview.truncated ? preview.content : out);
+        }
+      })().catch((error: unknown) => {
+        const message = error instanceof Error ? error.message : String(error);
+        settle(
+          `Command: ${command}\nExit: ${code}\n` +
+            `[warn] Bash output post-processing failed before raw fallback could render: ${message}`,
+        );
+      });
     });
     proc.on('error', error => {
       clearTimeout(timer);

@@ -416,7 +416,7 @@ describe('generateWorkflow', () => {
               maxConcurrency: 3,
               tokenBudget: 10000,
               mayUseWorktree: false,
-              patterns: ['fan-out-and-synthesize', 'adversarial-verification'],
+              patterns: ['fan-out-and-synthesize'],
             },
             source: 'async function run(wf, args) { return { synthesis: String(args.request || "Compare three competing root-cause hypotheses and verify each one."), runId: wf.runId }; }',
           }),
@@ -429,10 +429,7 @@ describe('generateWorkflow', () => {
     expect(result.manifest.name).toBe('hypothesis-tournament');
     expect(result.manifest.plannedAgents).toBe(4);
     expect(result.module.meta.plannedAgents).toBe(4);
-    expect(result.scriptSnapshot.manifest.patterns).toEqual([
-      'fan-out-and-synthesize',
-      'adversarial-verification',
-    ]);
+    expect(result.scriptSnapshot.manifest.patterns).toEqual(['fan-out-and-synthesize']);
     expect(result.approvalSummary).toContain('read-only investigators');
     const output = await result.module.run({ runId: 'run-1' } as never, { request: 'Q' });
     expect(output).toEqual({ synthesis: 'Q', runId: 'run-1' });
@@ -498,14 +495,14 @@ describe('generateWorkflow', () => {
           readOnly: true,
           maxAgents: 8,
           maxConcurrency: 4,
-          patterns: ['fan-out-and-synthesize'],
+          patterns: ['fan-out-and-synthesize', 'adversarial-verification'],
         },
         source: [
           'async function run(wf, args) {',
           '  await wf.phase("inventory", async () => { await wf.runAgent({ name: "inventory", prompt: String(args.request), readOnly: true }); });',
-          '  await wf.phase("fan-out", async () => { await wf.parallel([1,2,3,4,5].map((n) => () => wf.runAgent({ name: "auditor-" + n, prompt: "audit", readOnly: true })), { concurrency: 4 }); });',
-          '  await wf.phase("cross-check", async () => { await wf.parallel([1,2,3].map((n) => () => wf.runAgent({ name: "cross-" + n, prompt: "check", readOnly: true })), { concurrency: 3 }); });',
-          '  const synthesis = await wf.phase("synthesize", async () => wf.synthesize({ inputs: "all", rubric: "summarize" }));',
+          '  const reviews = await wf.phase("fan-out", async () => wf.parallel([1,2,3,4,5].map((n) => () => wf.runAgent({ name: "auditor-" + n, prompt: "Audit feature area " + n + " for concrete bugs.", readOnly: true })), { concurrency: 4 }));',
+          '  const verified = await wf.phase("cross-check", async () => wf.parallel(reviews.filter(Boolean).slice(0, 3).map((review, n) => () => wf.runAgent({ name: "adversarial-verifier-" + n, prompt: "Try to refute this audit finding before synthesis:\\n" + review.finalText, readOnly: true, evidenceRefs: ["task_id:" + review.taskId] })), { concurrency: 3 }));',
+          '  const synthesis = await wf.phase("synthesize", async () => wf.synthesize({ inputs: verified.filter(Boolean).map((result) => result.finalText), rubric: "Summarize confirmed, refuted, and uncertain audit findings." }));',
           '  await wf.artifact("final-report", { summary: synthesis.text });',
           '  return { synthesis: synthesis.text };',
           '}',
@@ -865,8 +862,8 @@ describe('generateWorkflow', () => {
               'async function run(wf) {',
               '  const baseline = await wf.runAgent({ name: "baseline", prompt: "Write the baseline report.", readOnly: true });',
               '  const reviewer = await wf.runAgent({',
-              '    name: "reviewer",',
-              '    prompt: "Review the baseline report.",',
+              '    name: "adversarial-verifier",',
+              '    prompt: "Try to refute the baseline report before synthesis.",',
               '    readOnly: true,',
               '    evidenceRefs: ["baseline"]',
               '  });',
@@ -877,8 +874,8 @@ describe('generateWorkflow', () => {
               'async function run(wf) {',
               '  const baseline = await wf.runAgent({ name: "baseline", prompt: "Write the baseline report.", readOnly: true });',
               '  const reviewer = await wf.runAgent({',
-              '    name: "reviewer",',
-              '    prompt: "Review the baseline report.",',
+              '    name: "adversarial-verifier",',
+              '    prompt: "Try to refute the baseline report before synthesis:\\n" + baseline.finalText,',
               '    readOnly: true,',
               '    evidenceRefs: ["task_id:" + baseline.taskId]',
               '  });',
@@ -974,14 +971,16 @@ describe('generateWorkflow', () => {
               '    const retry = await wf.wait(retryId);',
               '    return { synthesis: retry.finalText };',
               '  }',
-              '  return { synthesis: report.finalText };',
+              '  const verifier = await wf.runAgent({ name: "adversarial-verifier", prompt: "Try to refute this report before synthesis:\\n" + report.finalText, readOnly: true, evidenceRefs: ["task_id:" + report.taskId] });',
+              '  return { synthesis: verifier.finalText };',
               '}',
             ].join('\n')
           : [
               'async function run(wf) {',
               '  const report = await wf.runAgent({ name: "reporter", prompt: "Write report.", readOnly: true });',
+              '  const verifier = await wf.runAgent({ name: "adversarial-verifier", prompt: "Try to refute this report before synthesis:\\n" + report.finalText, readOnly: true, evidenceRefs: ["task_id:" + report.taskId] });',
               '  const synthesis = await wf.synthesize({',
-              '    inputs: [report.finalText],',
+              '    inputs: [report.finalText, verifier.finalText],',
               '    rubric: "Summarize the report, preserving any verification warnings."',
               '  });',
               '  return { synthesis: synthesis.text };',

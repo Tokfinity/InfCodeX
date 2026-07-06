@@ -14,8 +14,8 @@
 | Current package version | `@kodax-ai/kodax@0.7.60` (published to npm 2026-07-05; tagged `v0.7.60`) |
 | Workspace baseline | `llm / agent / coding / repl` 4 packages |
 | Total tracked features | `37` |
-| InProgress | `0` |
-| Planned | `16` |
+| InProgress | `2` |
+| Planned | `14` |
 | Completed | `21` |
 | Tracked feature IDs | `007, 030, 093, 105, 108, 113, 139, 174, 211, 221, 224, 225, 228, 229, 230, 231, 232, 233, 234, 235, 236, 237, 238, 239, 240, 241, 242, 243, 244, 245, 246, 247, 248, 249, 250, 251, 252` |
 | Archive cutoff | Shipped / canceled / absorbed / shelved items through `v0.7.49` are archived. |
@@ -25,8 +25,8 @@
 | Status | Count | Feature IDs | Next checkpoint |
 |---|---:|---|---|
 | Completed | 21 | `250, 248, 249, 247, 246, 245, 243, 242, 241, 233, 240, 239, 224, 221, 174, 211, 237, 229, 230, 234, 236` | `250` shipped v0.7.60 (2026-07-04); `248, 249` shipped v0.7.59 (2026-07-03); `245, 246, 247, 221` released v0.7.58 (2026-07-02); `233, 241, 242, 243` released v0.7.57; `239, 240` released v0.7.56; `224` released v0.7.54; `174, 211, 237` v0.7.53; `229` v0.7.50; `230, 234, 236` v0.7.51 |
-| InProgress | 0 | — | none (F250 shipped v0.7.60) |
-| Planned, near-term | 11 | `251, 252, 228, 244, 231, 235, 238, 232, 105, 108, 225` | `v0.7.61` -> `v0.7.84` |
+| InProgress | 2 | `251, 252` | `251` implementation complete; `252` implementation in progress for `v0.7.61` |
+| Planned, near-term | 9 | `228, 244, 231, 235, 238, 232, 105, 108, 225` | `v0.7.63` -> `v0.7.84` |
 | Planned, v0.8.x | 5 | `007, 030, 093, 113, 139` | `v0.8.5+` |
 
 > v0.7.49 / v0.7.50 workflow split：`FEATURE_217` remains the human-facing workflow mode. Manual testing reopened required UI/UX and reliability deltas inside [v0.7.49](features/v0.7.49.md#13-v0749-completion-delta): bounded live progress with phase index / running 智能体 wording / preserved progress row / elapsed time / completed-child token usage, localized assistant-style launch notes, result-bearing child-agent digests or folded long-report notices, non-`info` agentic transcript, clear separation between `finished/spawned` progress and lifetime `maxAgents` cap, final synthesis, generated final-result contract lint, implicit `tokenBudget` stripping, generated task-command crash hardening, tighter AMAW invocation policy, wait timeout propagation, no default total workflow wall-clock timeout, terminal cleanup for un-awaited children, accurate template read/write metadata, capsule min-version preflight, manual run cleanup controls, and the closed minimal saved-workflow named reuse delta (`/workflow <savedName>` plus `/workflow rerun <runId|savedName>` with help/completion). `FEATURE_229` in v0.7.50 is the platform layer: it standardizes the same process as agent-layer snapshot/events, SDK subscription/polling, Space-style host policy and lifecycle controls, terminal-state helpers, workflow identity/lifecycle controls beyond named reuse (`display name | revise | rename | revision provenance`), REPL-as-consumer rendering, conservative retention, and durable source/provenance/resultSummary persistence; it is not the first implementation of the user-visible UX.
@@ -77,8 +77,12 @@
 
 | ID | Title | Category | Priority | Planned | Design |
 |---|---|---|---|---|---|
+| `251` | Tool-Output 语义压缩（rtk-Style Token Killer） | Core / Token 效率 + Tool 输出 | High | `v0.7.61` | [v0.7.61](features/v0.7.61.md#feature_251-tool-output-semantic-compression-rtk-style-token-killer) |
+| `252` | Workflow Quality Preflight + Review/Audit Verification Lints | Core / Workflow Reliability | High | `v0.7.61` | [v0.7.61](features/v0.7.61.md#feature_252-workflow-quality-preflight--reviewaudit-verification-lints) |
 
-_None._ `250` shipped in `v0.7.60` (2026-07-04) — see 已完成 Feature. `248` + `249` shipped in `v0.7.59` (2026-07-03). Their shipped records (eval history) are retained below.
+`251` 在 `v0.7.60` 发布后于 2026-07-05 进入实现，目前实现已完成，等待 `v0.7.61` 发布。它新增 body-only bash 输出过滤、`never_worse` 尺寸兜底、lossiness/recovery 契约、ANSI-only 通用压缩、git/test/lint/JSON 命令专用过滤器，以及内置声明式长尾过滤表。`250` 已随 `v0.7.60` 发布（2026-07-04）——见已完成 Feature。`248` + `249` 已随 `v0.7.59` 发布（2026-07-03），其已发布记录（含 eval 历史）保留在下方。
+
+`252` entered implementation on 2026-07-05 after review of weak-model workflow authoring failures. Current implementation is narrowed to deterministic workflow contract lint only: pre-start hard failures for unawaited workflow-command truthiness, schema top-level field misuse, and static agent fanout above manifest/host caps. Review/verifier/generic quality heuristics are intentionally not emitted as model-visible warnings.
 
 > `249` shipped 2026-07-03 (Option A): widened `buildWorkflowToolHost`
 > (`tool-execution-context.ts`) from `!== 'amaw'` to `!== 'amaw' && !== 'ama'`, so AMA
@@ -117,8 +121,6 @@ _None._ `250` shipped in `v0.7.60` (2026-07-04) — see 已完成 Feature. `248`
 
 | ID | Title | Category | Priority | Planned | Design |
 |---|---|---|---|---|---|
-| `251` | Tool-Output Semantic Compression (rtk-Style Token Killer) | Core / Token Efficiency + Tool Output | High | `v0.7.61` | [v0.7.61](features/v0.7.61.md#feature_251-tool-output-semantic-compression-rtk-style-token-killer) |
-| `252` | Workflow Quality Preflight + Review/Audit Verification Lints | Core / Workflow Reliability | High | `v0.7.61` | [v0.7.61](features/v0.7.61.md#feature_252-workflow-quality-preflight--reviewaudit-verification-lints) |
 | `228` | Unified Memory Control Plane + Memory Governance | Core / Memory + Governance | High | `v0.7.63` | [v0.7.63](features/v0.7.63.md#feature_228-unified-memory-control-plane--memory-governance) |
 | `244` | Repo Intelligence Graph-Only Index for Cold Module Queries | Core / Repo Intelligence + Performance | Medium | `v0.7.63` | [v0.7.63](features/v0.7.63.md#feature_244-repo-intelligence-graph-only-index-for-cold-module-queries) |
 | `231` | Durable Workflow Replay Resume (231b crash-recovery, optional) | Core / Workflow Persistence | Low | `v0.7.66` | [v0.7.66](features/v0.7.66.md#feature_231-durable-workflow-replay-resume) |

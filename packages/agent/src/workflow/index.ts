@@ -82,6 +82,16 @@ export type {
 } from './script-runner.js';
 
 export {
+  assertRestrictedWorkflowQuality,
+  lintRestrictedWorkflowSource,
+} from './quality-lint.js';
+export type {
+  WorkflowQualityLintFinding,
+  WorkflowQualityLintOptions,
+  WorkflowQualityLintSeverity,
+} from './quality-lint.js';
+
+export {
   WORKFLOW_CAPSULE_API_VERSION,
   WORKFLOW_CAPSULE_FORMAT,
   WORKFLOW_CAPSULE_VERSION,

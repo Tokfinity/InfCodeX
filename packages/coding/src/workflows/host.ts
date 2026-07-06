@@ -16,6 +16,7 @@ import { join } from 'node:path';
 
 import {
   createRestrictedWorkflowModule,
+  lintRestrictedWorkflowSource,
   runRestrictedWorkflowScript,
   validateWorkflowScriptManifest,
 } from '@kodax-ai/agent';
@@ -29,6 +30,8 @@ import type {
   WorkflowTaskSnapshot,
   WorkflowEvent,
   WorkflowModule,
+  WorkflowQualityLintFinding,
+  WorkflowScriptManifest,
 } from '@kodax-ai/agent';
 
 import { generateWorkflowFromOptions, validateGeneratedWorkflowSource } from './generator.js';
@@ -81,14 +84,38 @@ export type StartManagedWorkflowResult =
       readonly managed: ManagedWorkflowRun;
       readonly approvalSummary: WorkflowApprovalSummary;
       readonly scriptSnapshot?: WorkflowScriptSnapshotInput;
+      readonly qualityWarnings?: readonly WorkflowQualityLintFinding[];
     };
 
 interface ResolvedModule {
   readonly module: WorkflowModule;
   readonly scriptSnapshot?: WorkflowScriptSnapshotInput;
+  readonly qualityWarnings?: readonly WorkflowQualityLintFinding[];
 }
 
 const INLINE_WORKFLOW_SMOKE_TIMEOUT_MS = 2_000;
+const QUALITY_WARNING_METADATA_LIMIT = 3;
+
+function splitWorkflowQualityWarnings(input: {
+  readonly source: string;
+  readonly manifest: WorkflowScriptManifest;
+  readonly hostMaxAgents?: number;
+}): readonly WorkflowQualityLintFinding[] {
+  const findings = lintRestrictedWorkflowSource(input.source, {
+    manifest: input.manifest,
+    ...(input.hostMaxAgents !== undefined ? { hostMaxAgents: input.hostMaxAgents } : {}),
+  });
+  const errors = findings.filter((finding) => finding.severity === 'error');
+  if (errors.length > 0) {
+    throw new Error(
+      [
+        'inline workflow source failed pre-flight quality validation:',
+        ...errors.map((finding) => finding.message),
+      ].join('\n'),
+    );
+  }
+  return findings.filter((finding) => finding.severity === 'warning');
+}
 
 function readSchemaRecord(schema: unknown): Record<string, unknown> | undefined {
   return typeof schema === 'object' && schema !== null && !Array.isArray(schema)
@@ -329,15 +356,74 @@ async function resolveModule(
     // WorkflowApi contract errors that static validation cannot see.
     validateGeneratedWorkflowSource(source.source);
     await assertInlineWorkflowSmoke(source.source, input.args, manifest.readOnly === true);
+    const qualityWarnings = splitWorkflowQualityWarnings({
+      source: source.source,
+      manifest,
+      ...(input.options.workflowHostPolicy?.maxAgents !== undefined
+        ? { hostMaxAgents: input.options.workflowHostPolicy.maxAgents }
+        : {}),
+    });
     const module = createRestrictedWorkflowModule({ manifest, source: source.source });
-    return { module, scriptSnapshot: { manifest, source: source.source } };
+    return {
+      module,
+      scriptSnapshot: { manifest, source: source.source },
+      ...(qualityWarnings.length > 0 ? { qualityWarnings } : {}),
+    };
   }
   const generate = input.generateWorkflow ?? generateWorkflowFromOptions;
   const generated = await generate({ request: source.request, options: input.options });
   if (generated.kind === 'declined') {
     return { declined: generated.reason };
   }
-  return { module: generated.module, scriptSnapshot: generated.scriptSnapshot };
+  const hostQualityWarnings = splitWorkflowQualityWarnings({
+    source: generated.source,
+    manifest: generated.manifest,
+    ...(input.options.workflowHostPolicy?.maxAgents !== undefined
+      ? { hostMaxAgents: input.options.workflowHostPolicy.maxAgents }
+      : {}),
+  });
+  const warningKeys = new Set<string>();
+  const qualityWarnings = [...(generated.qualityWarnings ?? []), ...hostQualityWarnings]
+    .filter((warning) => {
+      const key = `${warning.code}\n${warning.message}`;
+      if (warningKeys.has(key)) return false;
+      warningKeys.add(key);
+      return true;
+    });
+  return {
+    module: generated.module,
+    scriptSnapshot: generated.scriptSnapshot,
+    ...(qualityWarnings.length > 0 ? { qualityWarnings } : {}),
+  };
+}
+
+function workflowQualityWarningMetadata(
+  warnings: readonly WorkflowQualityLintFinding[] | undefined,
+): Record<string, string> | undefined {
+  if (!warnings || warnings.length === 0) return undefined;
+  const shown = warnings.slice(0, QUALITY_WARNING_METADATA_LIMIT);
+  return {
+    workflowQualityWarningCount: String(warnings.length),
+    workflowQualityWarningCodes: [...new Set(warnings.map((warning) => warning.code))].join(','),
+    workflowQualityWarnings: shown
+      .map((warning) => `${warning.code}: ${warning.message}`)
+      .join(' | '),
+  };
+}
+
+function withWorkflowQualityWarningMetadata(
+  metadata: WorkflowRunProcessMetadata | undefined,
+  warnings: readonly WorkflowQualityLintFinding[] | undefined,
+): WorkflowRunProcessMetadata | undefined {
+  const warningMetadata = workflowQualityWarningMetadata(warnings);
+  if (!warningMetadata) return metadata;
+  return {
+    ...metadata,
+    hostMetadata: {
+      ...(metadata?.hostMetadata ?? {}),
+      ...warningMetadata,
+    },
+  };
 }
 
 export async function startManagedWorkflow(
@@ -347,7 +433,7 @@ export async function startManagedWorkflow(
   if ('declined' in resolved) {
     return { kind: 'declined', reason: resolved.declined };
   }
-  const { module, scriptSnapshot } = resolved;
+  const { module, scriptSnapshot, qualityWarnings } = resolved;
 
   const now = input.now ?? (() => Date.now());
   const runId = input.runId ?? `run-${now().toString(36)}`;
@@ -363,7 +449,10 @@ export async function startManagedWorkflow(
     runDir,
     ...(scriptSnapshot ? { scriptSnapshot } : {}),
     ...(input.resumeFromRunDir ? { resumeFromRunDir: input.resumeFromRunDir } : {}),
-    ...(input.processMetadata ? { processMetadata: input.processMetadata } : {}),
+    ...(() => {
+      const processMetadata = withWorkflowQualityWarningMetadata(input.processMetadata, qualityWarnings);
+      return processMetadata ? { processMetadata } : {};
+    })(),
     ...(input.approval ? { approval: input.approval } : {}),
     ...(input.onEvent ? { onEvent: input.onEvent } : {}),
     ...(input.signal ? { signal: input.signal } : {}),
@@ -377,5 +466,6 @@ export async function startManagedWorkflow(
     managed,
     approvalSummary,
     ...(scriptSnapshot ? { scriptSnapshot } : {}),
+    ...(qualityWarnings !== undefined ? { qualityWarnings } : {}),
   };
 }

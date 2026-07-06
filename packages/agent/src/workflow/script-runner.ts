@@ -16,6 +16,7 @@ import type {
 } from './types.js';
 import type { WorkflowScriptManifest } from './manifest.js';
 import { validateWorkflowScriptManifest } from './manifest.js';
+import { assertRestrictedWorkflowQuality } from './quality-lint.js';
 
 export class WorkflowScriptExecutionError extends Error {
   constructor(message: string) {
@@ -1058,6 +1059,10 @@ export function createRestrictedWorkflowModule(
   validateRestrictedWorkflowSource(input.source, {
     filename: `${manifest.name}.workflow.js`,
     requireAsyncRun: true,
+  });
+  assertRestrictedWorkflowQuality(input.source, {
+    filename: `${manifest.name}.workflow.js`,
+    manifest,
   });
   return {
     meta: {

@@ -23,7 +23,14 @@ function recordingHost(
       if (r.kind === 'declined') {
         return r.reason !== undefined ? { kind: 'declined', reason: r.reason } : { kind: 'declined' };
       }
-      return { kind: 'started', runId: r.runId, done: Promise.resolve(r) };
+      return {
+        kind: 'started',
+        runId: r.runId,
+        done: Promise.resolve(r),
+        ...(r.workflowQualityWarnings !== undefined
+          ? { workflowQualityWarnings: r.workflowQualityWarnings }
+          : {}),
+      };
     },
     runInline: async (input) => {
       calls.push(input);
@@ -85,6 +92,18 @@ describe('toolRunWorkflow', () => {
     expect(String(out)).toContain('failed verification');
     expect(String(out)).toContain('reviewer');
     expect(String(out)).toContain('answer');
+  });
+
+  it('does not prefix completed output with workflow quality warnings', async () => {
+    const { host } = recordingHost({
+      kind: 'started',
+      runId: 'r1',
+      status: 'completed',
+      resultText: 'answer',
+      workflowQualityWarnings: ['generic-child-prompt: child agent has a generic prompt'],
+    });
+    const out = await toolRunWorkflow({ manifest: MANIFEST, source: SOURCE }, ctxWith(host));
+    expect(out).toBe('answer');
   });
 
   it('surfaces a declined workflow without erroring', async () => {
@@ -153,6 +172,47 @@ describe('toolRunWorkflow — async / idle-yield path (ADR-049)', () => {
     expect(banner).toContain('ASYNC SYNTH');
   });
 
+  it('does not surface workflow quality warnings in the async start message', async () => {
+    const done = new Promise<WorkflowToolHostResult>(() => {});
+    const registry = new Map<string, Promise<unknown>>();
+    const host: WorkflowToolHost = {
+      runInline: async () => { throw new Error('async path must not call runInline'); },
+      startInline: async () => ({
+        kind: 'started',
+        runId: 'run-warning-1',
+        done,
+        workflowQualityWarnings: ['generic-child-prompt: child agent has a generic prompt'],
+      }),
+    };
+    const ctx = { workflowHost: host, childTaskRegistry: registry } as unknown as KodaXToolExecutionContext;
+
+    const out = await toolRunWorkflow({ manifest: MANIFEST, source: SOURCE }, ctx);
+    expect(String(out)).toContain('task_id:run-warning-1');
+    expect(String(out)).not.toContain('Workflow quality warning');
+    expect(String(out)).not.toContain('generic-child-prompt');
+    expect(registry.has('run-warning-1')).toBe(true);
+  });
+
+  it('surfaces pre-flight quality rejection as a tool error before registering a workflow', async () => {
+    const registry = new Map<string, Promise<unknown>>();
+    const host: WorkflowToolHost = {
+      runInline: async () => { throw new Error('async path must not call runInline'); },
+      startInline: async () => {
+        throw new Error(
+          'inline workflow source failed pre-flight quality validation:\n' +
+          'literal fanout wf.parallel has 3 item(s), exceeding the 2 maxAgents cap',
+        );
+      },
+    };
+    const ctx = { workflowHost: host, childTaskRegistry: registry } as unknown as KodaXToolExecutionContext;
+
+    const out = await toolRunWorkflow({ manifest: MANIFEST, source: SOURCE }, ctx);
+
+    expect(String(out)).toContain('[Tool Error] run_workflow failed');
+    expect(String(out)).toContain('pre-flight quality validation');
+    expect(registry.size).toBe(0);
+  });
+
   it('falls back to blocking runInline when no childTaskRegistry is wired (SDK/headless)', async () => {
     const { host } = recordingHost({ kind: 'started', runId: 'r', status: 'completed', resultText: 'BLOCKING SYNTH' });
     const out = await toolRunWorkflow({ manifest: MANIFEST, source: SOURCE }, ctxWith(host));
@@ -173,6 +233,19 @@ describe('toolRunWorkflow — async / idle-yield path (ADR-049)', () => {
     // and leaves the pre-existing registry entry untouched (no orphaned settle pump).
     expect(out).toBe('COLLISION SYNTH');
     expect(String(out)).not.toContain('task_id:');
+    expect(registry.get('run-async-1')).toBe(inflight);
+  });
+
+  it('surfaces a rejected collision fallback as a tool error instead of rejecting', async () => {
+    const done = Promise.reject<WorkflowToolHostResult>(new Error('collision run failed'));
+    const { ctx, registry } = asyncCtx(done, 'run-async-1');
+    const inflight = new Promise<unknown>(() => {});
+    registry.set('run-async-1', inflight);
+
+    const out = await toolRunWorkflow({ manifest: MANIFEST, source: SOURCE }, ctx);
+
+    expect(String(out)).toContain('[Tool Error] Workflow run-async-1 failed');
+    expect(String(out)).toContain('collision run failed');
     expect(registry.get('run-async-1')).toBe(inflight);
   });
 

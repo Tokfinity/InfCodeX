@@ -361,6 +361,9 @@ function buildWorkflowToolHost(
     if (started.kind === 'declined') {
       return { kind: 'declined', reason: started.reason };
     }
+    const workflowQualityWarnings = started.qualityWarnings?.map(
+      (warning) => `${warning.code}: ${warning.message}`,
+    );
     const done = started.managed.done.then((outcome): WorkflowToolHostResult => {
       const snap = started.managed.getSnapshot?.();
       // A child agent that completes but fails its sidecar verifier in warn-only
@@ -384,6 +387,7 @@ function buildWorkflowToolHost(
         ...(snap?.resultText !== undefined ? { resultText: snap.resultText } : {}),
         ...(snap?.error !== undefined ? { error: snap.error } : {}),
         ...(verificationWarnings.length > 0 ? { verificationWarnings } : {}),
+        ...(workflowQualityWarnings && workflowQualityWarnings.length > 0 ? { workflowQualityWarnings } : {}),
       };
     });
     // Gap A: expose the run's live process snapshot as a compact progress view so
@@ -392,7 +396,13 @@ function buildWorkflowToolHost(
       const process = started.managed.getProcessSnapshot?.();
       return process ? toWorkflowRunProgressView(process) : undefined;
     };
-    return { kind: 'started', runId: started.runId, done, getProgress };
+    return {
+      kind: 'started',
+      runId: started.runId,
+      done,
+      ...(workflowQualityWarnings && workflowQualityWarnings.length > 0 ? { workflowQualityWarnings } : {}),
+      getProgress,
+    };
   };
   return {
     startInline,
