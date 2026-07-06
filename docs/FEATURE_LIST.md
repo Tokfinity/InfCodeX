@@ -10,8 +10,8 @@
 
 | Item | Value |
 |---|---|
-| Current released version | `v0.7.61` (prepared 2026-07-06; pending npm publish + tag) |
-| Current package version | `@kodax-ai/kodax@0.7.61` (bumped; last published `0.7.60` on npm 2026-07-05, tagged `v0.7.60`) |
+| Current released version | `v0.7.61` |
+| Current package version | `@kodax-ai/kodax@0.7.61` (published to npm 2026-07-06; tagged `v0.7.61`) |
 | Workspace baseline | `llm / agent / coding / repl` 4 packages |
 | Total tracked features | `37` |
 | InProgress | `0` |
@@ -24,7 +24,7 @@
 
 | Status | Count | Feature IDs | Next checkpoint |
 |---|---:|---|---|
-| Completed | 23 | `251, 252, 250, 248, 249, 247, 246, 245, 243, 242, 241, 233, 240, 239, 224, 221, 174, 211, 237, 229, 230, 234, 236` | `251, 252` prepared v0.7.61 (2026-07-06, pending publish); `250` shipped v0.7.60 (2026-07-04); `248, 249` shipped v0.7.59 (2026-07-03); `245, 246, 247, 221` released v0.7.58 (2026-07-02); `233, 241, 242, 243` released v0.7.57; `239, 240` released v0.7.56; `224` released v0.7.54; `174, 211, 237` v0.7.53; `229` v0.7.50; `230, 234, 236` v0.7.51 |
+| Completed | 23 | `251, 252, 250, 248, 249, 247, 246, 245, 243, 242, 241, 233, 240, 239, 224, 221, 174, 211, 237, 229, 230, 234, 236` | `251, 252` shipped v0.7.61 (2026-07-06); `250` shipped v0.7.60 (2026-07-04); `248, 249` shipped v0.7.59 (2026-07-03); `245, 246, 247, 221` released v0.7.58 (2026-07-02); `233, 241, 242, 243` released v0.7.57; `239, 240` released v0.7.56; `224` released v0.7.54; `174, 211, 237` v0.7.53; `229` v0.7.50; `230, 234, 236` v0.7.51 |
 | InProgress | 0 | — | — |
 | Planned, near-term | 9 | `228, 244, 231, 235, 238, 232, 105, 108, 225` | `v0.7.63` -> `v0.7.84` |
 | Planned, v0.8.x | 5 | `007, 030, 093, 113, 139` | `v0.8.5+` |
@@ -75,7 +75,7 @@
 
 ## 进行中的 Feature
 
-无。`251` + `252` 已完成实现并进入 `v0.7.61` 发布准备（2026-07-06）——见下方已完成 Feature。
+无。`251` + `252` 已随 `v0.7.61` 发布（2026-07-06，npm publish + tag）——见下方已完成 Feature。
 
 `251`（Tool-Output 语义压缩）新增 body-only bash 输出过滤、`never_worse` 尺寸兜底、lossiness/recovery 契约、ANSI-only 通用压缩、git/test/lint/JSON 命令专用过滤器，以及内置声明式长尾过滤表；隔离 Layer-1 测量显示高噪声命令 body token 降幅约 66–99%。`252`（Workflow Quality Preflight）当前收窄为纯确定性合约 lint：启动前对未 await 的 workflow-command 真值判断、schema 顶层字段误用、静态 agent fanout 超 manifest/host 上限做硬失败；review/verifier/通用质量启发式刻意不作为模型可见告警发出。二者均为确定性代码，无 prompt 改动、无 LLM eval。`v0.7.61` 同时修复一处 workflow 启动崩溃：`typescript` 提升为 `@kodax-ai/agent` 运行时依赖（quality lint 在热路径使用 TS 编译器 API）。
 
