@@ -72,11 +72,16 @@ export const renderNodeToScreenReaderOutput = (node, options = {}) => {
 // This core mirror is the render path used by engine.js, so it must preserve
 // the same scroll-window metadata as the substrate renderer.
 let _scrollHint = null;
+let _scrollRepaint = null;
 export function resetScrollHint() {
     _scrollHint = null;
+    _scrollRepaint = null;
 }
 export function getScrollHint() {
     return _scrollHint;
+}
+export function getScrollRepaint() {
+    return _scrollRepaint;
 }
 // After nodes are laid out, render each to output object, which later gets rendered to terminal
 const renderNodeToOutput = (node, output, options) => {
@@ -159,6 +164,16 @@ const renderNodeToOutput = (node, output, options) => {
                 node.appliedScrollTop = scrollState.appliedScrollTop;
                 if (scrollState.scrollHint) {
                     _scrollHint = scrollState.scrollHint;
+                    const pendingScrollDelta = Math.trunc(Number(node.attributes?.pendingScrollDelta ?? 0));
+                    if (pendingScrollDelta !== 0) {
+                        _scrollRepaint = {
+                            top: scrollState.scrollHint.top,
+                            bottom: scrollState.scrollHint.bottom,
+                        };
+                    }
+                }
+                if (node.attributes && node.attributes.pendingScrollDelta) {
+                    node.attributes.pendingScrollDelta = 0;
                 }
                 node.scrollTop = scrollState.scrollTop;
                 scrollOffsetY = scrollState.scrollOffsetY;

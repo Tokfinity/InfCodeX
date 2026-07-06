@@ -11,6 +11,7 @@ import React, {
 import { Box } from "../renderer-runtime.js";
 import { computeOverscanWindow, staysWithinOverscanBlock } from "../../ui/utils/overscan-window.js";
 import { scheduleRenderFromNode } from "./scroll-render-trigger.js";
+import type { RenderableNode } from "./scroll-render-trigger.js";
 
 export interface ScrollBoxHandle {
   scrollTo: (y: number) => void;
@@ -79,6 +80,17 @@ interface ScrollSnapshot {
   sticky: boolean;
   /** FEATURE_214: rows of overscan margin (0/undefined = no overscan). */
   overscanRows?: number;
+}
+
+interface ScrollBoxDomNode extends RenderableNode {
+  scrollTop?: number;
+  scrollHeight?: number;
+  scrollViewportHeight?: number;
+  scrollViewportTop?: number;
+  attributes?: {
+    inWindowScrollTop?: number;
+    pendingScrollDelta?: number;
+  };
 }
 
 function normalizeScrollSnapshot(snapshot: ScrollSnapshot): ScrollSnapshot {
@@ -192,7 +204,7 @@ export const ScrollBox: React.FC<ScrollBoxProps> = ({
   renderWindow,
   overscanRows,
 }) => {
-  const domRef = useRef<any>(null);
+  const domRef = useRef<ScrollBoxDomNode | null>(null);
   const listenersRef = useRef(new Set<() => void>());
   const snapshotRef = useRef<ScrollSnapshot>(normalizeScrollSnapshot({
     scrollTop,
@@ -262,6 +274,7 @@ export const ScrollBox: React.FC<ScrollBoxProps> = ({
     const maxOffset = Math.max(0, snap.scrollHeight - snap.viewportHeight);
     const curOffset = bypassOffsetRef.current ?? clampScrollTop(snap, snap.scrollTop);
     const newOffset = Math.max(0, Math.min(Math.floor(curOffset + dy), maxOffset));
+    const appliedDelta = newOffset - curOffset;
     if (newOffset === curOffset) {
       return true; // clamped at an edge — swallow the tick, no re-render needed
     }
@@ -284,6 +297,7 @@ export const ScrollBox: React.FC<ScrollBoxProps> = ({
     node.scrollTop = newGlobalTop;
     if (node.attributes) {
       node.attributes.inWindowScrollTop = block.inBlockOffset;
+      node.attributes.pendingScrollDelta = appliedDelta;
     }
     if (!scheduleRenderFromNode(node)) {
       return false; // no engine root (tests/teardown) → fall back to a React commit
@@ -504,6 +518,12 @@ export const ScrollBox: React.FC<ScrollBoxProps> = ({
   useEffect(() => {
     onWindowChange?.(windowState);
   }, [onWindowChange, windowState]);
+
+  useEffect(() => {
+    if (snapshotRef.current.pendingDelta !== 0) {
+      snapshotRef.current = { ...snapshotRef.current, pendingDelta: 0 };
+    }
+  }, [windowState]);
 
   // FEATURE_214: during a React-bypass burst render from the LIVE offset, so a
   // stray React re-render reflects the bypassed scroll instead of reverting it.

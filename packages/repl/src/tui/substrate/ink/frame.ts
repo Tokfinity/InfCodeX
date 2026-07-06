@@ -64,6 +64,11 @@ export interface ScrollHint {
   readonly delta: number;
 }
 
+export interface ScrollRepaintRegion {
+  readonly top: number;
+  readonly bottom: number;
+}
+
 export interface Frame {
   readonly screen: Screen;
   readonly viewport: Size;
@@ -80,6 +85,8 @@ export interface Frame {
   readonly inputCursor?: Point;
   /** FEATURE_212 — present only when the transcript scrolled this render. */
   readonly scrollHint?: ScrollHint | null;
+  /** FEATURE_214 user-driven scroll repaint rows for residual-cell cleanup. */
+  readonly scrollRepaint?: ScrollRepaintRegion | null;
 }
 
 /**
@@ -116,6 +123,7 @@ export type Patch =
   | { readonly type: "cursorShow" }
   | { readonly type: "cursorMove"; readonly x: number; readonly y: number }
   | { readonly type: "cursorTo"; readonly col: number }
+  | { readonly type: "eraseLine" }
   | { readonly type: "clear"; readonly count: number }
   | {
       readonly type: "clearTerminal";

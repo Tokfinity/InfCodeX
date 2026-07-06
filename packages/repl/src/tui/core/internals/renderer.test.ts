@@ -143,6 +143,7 @@ describe("core/internals/renderer (FEATURE_057 Track F, Phase 6: cell renderer i
           scrollTop: 1,
           scrollHeight: 2,
           virtualScrollWindowed: false,
+          pendingScrollDelta: 1,
         },
         appliedScrollTop: 0,
       };
@@ -153,6 +154,45 @@ describe("core/internals/renderer (FEATURE_057 Track F, Phase 6: cell renderer i
       expect(result.output).toBe("NEW");
       expect(result.output).not.toContain("OLD");
       expect(result.frame!.scrollHint).toEqual({ top: 0, bottom: 0, delta: 1 });
+      expect(result.frame!.scrollRepaint).toEqual({ top: 0, bottom: 0 });
+      expect(scrollBox.attributes.pendingScrollDelta).toBe(0);
+    });
+
+    it("does not request row repaint for scrollHint-only frames", () => {
+      const content = {
+        yogaNode: fakeYogaNode({ width: 10, height: 2 }),
+        nodeName: "ink-box",
+        childNodes: [fakeTextNode("OLD", 0), fakeTextNode("NEW", 1)],
+        style: { flexDirection: "column" },
+        internal_static: false,
+        internal_accessibility: undefined,
+        internal_transform: undefined,
+        attributes: {},
+      };
+      const scrollBox = {
+        yogaNode: fakeYogaNode({ width: 10, height: 1 }),
+        nodeName: "ink-box",
+        childNodes: [content],
+        style: {
+          flexDirection: "column",
+          overflowY: "scroll",
+        },
+        internal_static: false,
+        internal_accessibility: undefined,
+        internal_transform: undefined,
+        attributes: {
+          scrollTop: 1,
+          scrollHeight: 2,
+          virtualScrollWindowed: false,
+        },
+        appliedScrollTop: 0,
+      };
+      const node = fakeRootNode(10, 1, [scrollBox]);
+
+      const result = renderer(node, false, { rows: 1, columns: 10 });
+
+      expect(result.frame!.scrollHint).toEqual({ top: 0, bottom: 0, delta: 1 });
+      expect(result.frame!.scrollRepaint).toBeNull();
     });
   });
 });

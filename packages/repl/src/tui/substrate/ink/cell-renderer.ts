@@ -28,6 +28,7 @@ import {
   VirtualScreen,
   fullResetSequence_CAUSES_FLICKER,
   moveCursorTo,
+  repaintFrameRows,
   readLine,
   renderFrameSlice,
   renderFullFrame,
@@ -53,6 +54,7 @@ export {
   fullResetSequence_CAUSES_FLICKER,
   moveCursorTo,
   needsWidthCompensation,
+  repaintFrameRows,
   readLine,
   renderFrameSlice,
   renderFullFrame,
@@ -145,6 +147,10 @@ export class LogUpdate {
     const decision = shouldFullReset(prev, next, readLine);
     if (decision.reset) {
       return fullResetSequence_CAUSES_FLICKER(next, decision.reason, inlineBottomAnchored);
+    }
+
+    if (next.scrollRepaint && opts.altScreen === true) {
+      return renderScrollRepaint(prev, next, next.scrollRepaint);
     }
 
     // FEATURE_212 (v0.7.45) — DECSTBM scroll fast path. When the transcript
@@ -240,6 +246,48 @@ function resetStyleAndHyperlink(
   return { style: "", hyperlink: undefined };
 }
 
+function renderScrollRepaint(
+  prev: Frame,
+  next: Frame,
+  region: NonNullable<Frame["scrollRepaint"]>,
+): Diff {
+  const state = computeViewportState(prev, next);
+  const screen = new VirtualScreen(prev.cursor, next.viewport.width);
+
+  if (state.shrinking) {
+    applyShrink(screen, prev, next);
+  }
+
+  const top = Math.max(0, Math.floor(region.top));
+  const bottom = Math.min(
+    next.screen.height - 1,
+    next.viewport.height - 1,
+    Math.floor(region.bottom),
+  );
+  const repaintRows = bottom >= top ? { top, bottom } : undefined;
+
+  if (repaintRows) {
+    repaintFrameRows(screen, next, repaintRows.top, repaintRows.bottom);
+  }
+
+  const passResult = diffPass(screen, prev, next, {
+    ...state,
+    skipRows: repaintRows,
+  });
+  if (passResult.needsFullReset) {
+    return fullResetSequence_CAUSES_FLICKER(next, "offscreen");
+  }
+
+  resetStyleAndHyperlink(screen, passResult.currentStyle, passResult.currentHyperlink);
+
+  if (state.growing) {
+    renderFrameSlice(screen, next, prev.screen.height, next.screen.height);
+  }
+
+  restoreCursor(screen, next);
+  return screen.diff;
+}
+
 /**
  * Apply the shrink-emission step of `renderIncremental`.
  *
@@ -265,6 +313,12 @@ interface DiffPassResult {
   readonly needsFullReset: boolean;
 }
 
+interface DiffPassState {
+  readonly growing: boolean;
+  readonly viewportY: number;
+  readonly skipRows?: { readonly top: number; readonly bottom: number };
+}
+
 /**
  * Walk `diffEach` over existing rows and emit per-cell paints / clears.
  *
@@ -276,7 +330,7 @@ function diffPass(
   screen: VirtualScreen,
   prev: Frame,
   next: Frame,
-  state: { readonly growing: boolean; readonly viewportY: number },
+  state: DiffPassState,
 ): DiffPassResult {
   let currentStyle = "";
   let currentHyperlink: string | undefined = undefined;
@@ -287,6 +341,9 @@ function diffPass(
 
     // Skip new rows — `renderFrameSlice` handles those after this pass.
     if (state.growing && y >= prev.screen.height) continue;
+    if (state.skipRows && y >= state.skipRows.top && y <= state.skipRows.bottom) {
+      continue;
+    }
 
     const isEmptyAdded = !!(
       added &&

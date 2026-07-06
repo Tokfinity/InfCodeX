@@ -50,6 +50,10 @@ function withScrollHint(frame: Frame, top: number, bottom: number, delta: number
   return { ...frame, scrollHint: { top, bottom, delta } };
 }
 
+function withScrollRepaint(frame: Frame, top: number, bottom: number): Frame {
+  return { ...frame, scrollRepaint: { top, bottom } };
+}
+
 describe("TerminalModel calibration vs trusted renderer (FEATURE_212 gate)", () => {
   const W = 5;
   const VH = 12;
@@ -299,5 +303,76 @@ describe("alt-screen first paint after renderer state reset", () => {
     const diff = new LogUpdate({ isTTY: true }).render(emptyFrame(VH, W), next);
 
     expect(diff.some((p) => p.type === "clearTerminal")).toBe(false);
+  });
+});
+
+describe("user-scroll row repaint (FEATURE_214 residual-cell guard)", () => {
+  const W = 12;
+  const VH = 5;
+
+  it("clears stale physical cells even when prev and next frames are logically equal", () => {
+    const logical = frameFromRows([
+      "A       B   ",
+      "C           ",
+      "footer      ",
+    ], W, VH);
+    const stalePhysical = frameFromRows([
+      "AXXXXXXXBZZ ",
+      "CYYYYYYYYYY ",
+      "footer      ",
+    ], W, VH);
+
+    const diff = new LogUpdate({ isTTY: true }).render(
+      logical,
+      withScrollRepaint(logical, 0, 1),
+      { altScreen: true },
+    );
+    const model = new TerminalModel(W, VH, stalePhysical.screen);
+    model.apply(`${ESC}[${logical.cursor.y + 1};1H`);
+    model.apply(diff.map((p) => patchToBytes(p)).join(""));
+
+    expect(diff.some((p) => p.type === "eraseLine")).toBe(true);
+    expect(model.rows(3)).toEqual(screenRows(logical.screen));
+  });
+
+  it("still diffs rows outside the repaint region", () => {
+    const prev = frameFromRows([
+      "A       B   ",
+      "C           ",
+      "status old  ",
+    ], W, VH);
+    const next = frameFromRows([
+      "A       B   ",
+      "C           ",
+      "status new  ",
+    ], W, VH);
+    const stalePhysical = frameFromRows([
+      "AXXXXXXXBZZ ",
+      "CYYYYYYYYYY ",
+      "status old  ",
+    ], W, VH);
+
+    const diff = new LogUpdate({ isTTY: true }).render(
+      prev,
+      withScrollRepaint(next, 0, 1),
+      { altScreen: true },
+    );
+    const model = new TerminalModel(W, VH, stalePhysical.screen);
+    model.apply(`${ESC}[${prev.cursor.y + 1};1H`);
+    model.apply(diff.map((p) => patchToBytes(p)).join(""));
+
+    expect(model.rows(3)).toEqual(screenRows(next.screen));
+  });
+
+  it("does not use row repaint for ordinary scrollHint-only frames", () => {
+    const prev = frameFromRows(["row-0", "row-1", "row-2"], W, VH);
+    const next = withScrollHint(frameFromRows(["row-1", "row-2", "row-3"], W, VH), 0, 2, 1);
+
+    const diff = new LogUpdate({ isTTY: true }).render(prev, next, {
+      altScreen: true,
+      decstbmSafe: false,
+    });
+
+    expect(diff.some((p) => p.type === "eraseLine")).toBe(false);
   });
 });

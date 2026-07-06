@@ -1,4 +1,4 @@
-import renderNodeToOutput, { renderNodeToScreenReaderOutput, resetScrollHint, getScrollHint, } from './render-node-to-output.js';
+import renderNodeToOutput, { renderNodeToScreenReaderOutput, resetScrollHint, getScrollHint, getScrollRepaint, } from './render-node-to-output.js';
 import Output from './output.js';
 import { outputToScreen } from '../../substrate/ink/output-to-screen.js';
 /**
@@ -82,6 +82,7 @@ const renderer = (node, isScreenReaderEnabled, terminalSize) => {
             // below the status bar once there is scrollback history.
             cursor: { x: 0, y: screen.height, visible: false },
             scrollHint: getScrollHint(),
+            scrollRepaint: getScrollRepaint(),
             ...(anchored ? { inputCursor: { x: anchored.x, y: anchored.y } } : {}),
         };
         return {

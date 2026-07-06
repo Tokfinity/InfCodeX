@@ -18,6 +18,7 @@
 
 import {
   CURSOR_HOME,
+  ERASE_LINE,
   RESET_SCROLL_REGION,
   RESTORE_CURSOR,
   SAVE_CURSOR,
@@ -85,6 +86,8 @@ export function patchToBytes(patch: Patch): string {
       return cursorMove(patch.x, patch.y);
     case "cursorTo":
       return cursorTo(patch.col);
+    case "eraseLine":
+      return ERASE_LINE;
     case "clear":
       return eraseLines(patch.count);
     case "clearTerminal":

@@ -1,7 +1,7 @@
 import { describe, it, expect } from "vitest";
 import { applyDiff, patchToBytes } from "./apply-diff.js";
 import type { Patch } from "./frame.js";
-import { CURSOR_HOME, eraseLines, cursorMove, cursorTo, SGR_RESET } from "./csi.js";
+import { CURSOR_HOME, ERASE_LINE, eraseLines, cursorMove, cursorTo, SGR_RESET } from "./csi.js";
 import { link } from "./osc.js";
 
 function mockStream(): { write: (chunk: string) => unknown; written: string[] } {
@@ -47,6 +47,10 @@ describe("substrate/ink/apply-diff (FEATURE_057 Track F, Phase 4a)", () => {
     it("cursorTo: emits CSI G with the 1-based column", () => {
       expect(patchToBytes({ type: "cursorTo", col: 5 })).toBe(cursorTo(5));
       expect(patchToBytes({ type: "cursorTo", col: 1 })).toBe(cursorTo(1));
+    });
+
+    it("eraseLine: emits CSI 2K", () => {
+      expect(patchToBytes({ type: "eraseLine" })).toBe(ERASE_LINE);
     });
 
     it("clear: emits eraseLines(count)", () => {

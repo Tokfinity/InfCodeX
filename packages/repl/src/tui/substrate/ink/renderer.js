@@ -1,4 +1,4 @@
-import renderNodeToOutput, { renderNodeToScreenReaderOutput, resetScrollHint, getScrollHint, } from './render-node-to-output.js';
+import renderNodeToOutput, { renderNodeToScreenReaderOutput, resetScrollHint, getScrollHint, getScrollRepaint, } from './render-node-to-output.js';
 import Output from './output.js';
 import { outputToScreen } from './output-to-screen.js';
 /**
@@ -75,6 +75,7 @@ const renderer = (node, isScreenReaderEnabled, terminalSize) => {
             // unless the transcript scrolled). Read-only metadata; does not
             // affect `screen`. Consumed by cell-renderer render() step 3.
             scrollHint: getScrollHint(),
+            scrollRepaint: getScrollRepaint(),
         };
         return {
             output: generatedOutput,

@@ -594,6 +594,72 @@ export function renderFrameSlice(
 }
 
 /**
+ * Repaint visible rows without using prev/next cell diff.
+ *
+ * Used for user-driven transcript scroll frames where the physical terminal can
+ * drift from `prevFrame` (wide chars / skipped empty cells / host quirks). Each
+ * row is erased first, then the current `next.screen` row is painted without a
+ * trailing newline, so chrome below the scroll viewport is never touched.
+ */
+export function repaintFrameRows(
+  screen: VirtualScreen,
+  frame: Frame,
+  top: number,
+  bottom: number,
+): void {
+  const startY = Math.max(0, Math.floor(top));
+  const endY = Math.min(
+    frame.screen.height - 1,
+    frame.viewport.height - 1,
+    Math.floor(bottom),
+  );
+
+  for (let y = startY; y <= endY; y++) {
+    repaintFrameRow(screen, frame, y);
+  }
+}
+
+function repaintFrameRow(
+  screen: VirtualScreen,
+  frame: Frame,
+  y: number,
+): void {
+  let currentStyle = "";
+  let currentHyperlink: string | undefined = undefined;
+
+  moveCursorTo(screen, 0, y);
+  screen.txn(() => [
+    [
+      { type: "stdout", content: LINK_END + SGR_RESET },
+      { type: "eraseLine" },
+    ],
+    { dx: 0, dy: 0 },
+  ]);
+
+  for (let x = 0; x < frame.screen.width; x++) {
+    const cell = cellAt(frame.screen, x, y);
+    if (!cell || cell.width === CellWidth.SpacerTail) continue;
+    if (cell.char === " " && cell.style === "" && cell.hyperlink === undefined) continue;
+
+    moveCursorTo(screen, x, y);
+
+    const linkResult = transitionHyperlink(currentHyperlink, cell.hyperlink);
+    for (const patch of linkResult.patches) screen.txn(() => [[patch], { dx: 0, dy: 0 }]);
+    currentHyperlink = linkResult.current;
+
+    const styleFlat = transitionStyleStr(currentStyle, cell.style);
+    if (writeCellWithStyleStr(screen, cell, styleFlat.str)) currentStyle = styleFlat.current;
+  }
+
+  for (const patch of transitionStyle(currentStyle, "").patches) {
+    screen.txn(() => [[patch], { dx: 0, dy: 0 }]);
+  }
+  for (const patch of transitionHyperlink(currentHyperlink, undefined).patches) {
+    screen.txn(() => [[patch], { dx: 0, dy: 0 }]);
+  }
+}
+
+/**
  * Read the visible content of row `y` from `screen` for diagnostic
  * messages (e.g., `triggerY` / `prevLine` / `nextLine` in the
  * `clearTerminal` patch). Skips SpacerTail cells via the empty-string
