@@ -10,13 +10,13 @@
 
 | Item | Value |
 |---|---|
-| Current released version | `v0.7.60` |
-| Current package version | `@kodax-ai/kodax@0.7.60` (published to npm 2026-07-05; tagged `v0.7.60`) |
+| Current released version | `v0.7.61` (prepared 2026-07-06; pending npm publish + tag) |
+| Current package version | `@kodax-ai/kodax@0.7.61` (bumped; last published `0.7.60` on npm 2026-07-05, tagged `v0.7.60`) |
 | Workspace baseline | `llm / agent / coding / repl` 4 packages |
 | Total tracked features | `37` |
-| InProgress | `2` |
+| InProgress | `0` |
 | Planned | `14` |
-| Completed | `21` |
+| Completed | `23` |
 | Tracked feature IDs | `007, 030, 093, 105, 108, 113, 139, 174, 211, 221, 224, 225, 228, 229, 230, 231, 232, 233, 234, 235, 236, 237, 238, 239, 240, 241, 242, 243, 244, 245, 246, 247, 248, 249, 250, 251, 252` |
 | Archive cutoff | Shipped / canceled / absorbed / shelved items through `v0.7.49` are archived. |
 
@@ -24,8 +24,8 @@
 
 | Status | Count | Feature IDs | Next checkpoint |
 |---|---:|---|---|
-| Completed | 21 | `250, 248, 249, 247, 246, 245, 243, 242, 241, 233, 240, 239, 224, 221, 174, 211, 237, 229, 230, 234, 236` | `250` shipped v0.7.60 (2026-07-04); `248, 249` shipped v0.7.59 (2026-07-03); `245, 246, 247, 221` released v0.7.58 (2026-07-02); `233, 241, 242, 243` released v0.7.57; `239, 240` released v0.7.56; `224` released v0.7.54; `174, 211, 237` v0.7.53; `229` v0.7.50; `230, 234, 236` v0.7.51 |
-| InProgress | 2 | `251, 252` | `251` implementation complete; `252` implementation in progress for `v0.7.61` |
+| Completed | 23 | `251, 252, 250, 248, 249, 247, 246, 245, 243, 242, 241, 233, 240, 239, 224, 221, 174, 211, 237, 229, 230, 234, 236` | `251, 252` prepared v0.7.61 (2026-07-06, pending publish); `250` shipped v0.7.60 (2026-07-04); `248, 249` shipped v0.7.59 (2026-07-03); `245, 246, 247, 221` released v0.7.58 (2026-07-02); `233, 241, 242, 243` released v0.7.57; `239, 240` released v0.7.56; `224` released v0.7.54; `174, 211, 237` v0.7.53; `229` v0.7.50; `230, 234, 236` v0.7.51 |
+| InProgress | 0 | — | — |
 | Planned, near-term | 9 | `228, 244, 231, 235, 238, 232, 105, 108, 225` | `v0.7.63` -> `v0.7.84` |
 | Planned, v0.8.x | 5 | `007, 030, 093, 113, 139` | `v0.8.5+` |
 
@@ -40,7 +40,7 @@
 | `v0.7.56` | `0` |
 | `v0.7.57` | `0` |
 | `v0.7.59` | `0` |
-| `v0.7.61` | `2` |
+| `v0.7.61` | `0` |
 | `v0.7.63` | `2` |
 | `v0.7.66` | `1` |
 | `v0.7.69` | `1` |
@@ -75,14 +75,9 @@
 
 ## 进行中的 Feature
 
-| ID | Title | Category | Priority | Planned | Design |
-|---|---|---|---|---|---|
-| `251` | Tool-Output 语义压缩（rtk-Style Token Killer） | Core / Token 效率 + Tool 输出 | High | `v0.7.61` | [v0.7.61](features/v0.7.61.md#feature_251-tool-output-semantic-compression-rtk-style-token-killer) |
-| `252` | Workflow Quality Preflight + Review/Audit Verification Lints | Core / Workflow Reliability | High | `v0.7.61` | [v0.7.61](features/v0.7.61.md#feature_252-workflow-quality-preflight--reviewaudit-verification-lints) |
+无。`251` + `252` 已完成实现并进入 `v0.7.61` 发布准备（2026-07-06）——见下方已完成 Feature。
 
-`251` 在 `v0.7.60` 发布后于 2026-07-05 进入实现，目前实现已完成，等待 `v0.7.61` 发布。它新增 body-only bash 输出过滤、`never_worse` 尺寸兜底、lossiness/recovery 契约、ANSI-only 通用压缩、git/test/lint/JSON 命令专用过滤器，以及内置声明式长尾过滤表。`250` 已随 `v0.7.60` 发布（2026-07-04）——见已完成 Feature。`248` + `249` 已随 `v0.7.59` 发布（2026-07-03），其已发布记录（含 eval 历史）保留在下方。
-
-`252` entered implementation on 2026-07-05 after review of weak-model workflow authoring failures. Current implementation is narrowed to deterministic workflow contract lint only: pre-start hard failures for unawaited workflow-command truthiness, schema top-level field misuse, and static agent fanout above manifest/host caps. Review/verifier/generic quality heuristics are intentionally not emitted as model-visible warnings.
+`251`（Tool-Output 语义压缩）新增 body-only bash 输出过滤、`never_worse` 尺寸兜底、lossiness/recovery 契约、ANSI-only 通用压缩、git/test/lint/JSON 命令专用过滤器，以及内置声明式长尾过滤表；隔离 Layer-1 测量显示高噪声命令 body token 降幅约 66–99%。`252`（Workflow Quality Preflight）当前收窄为纯确定性合约 lint：启动前对未 await 的 workflow-command 真值判断、schema 顶层字段误用、静态 agent fanout 超 manifest/host 上限做硬失败；review/verifier/通用质量启发式刻意不作为模型可见告警发出。二者均为确定性代码，无 prompt 改动、无 LLM eval。`v0.7.61` 同时修复一处 workflow 启动崩溃：`typescript` 提升为 `@kodax-ai/agent` 运行时依赖（quality lint 在热路径使用 TS 编译器 API）。
 
 > `249` shipped 2026-07-03 (Option A): widened `buildWorkflowToolHost`
 > (`tool-execution-context.ts`) from `!== 'amaw'` to `!== 'amaw' && !== 'ama'`, so AMA
@@ -154,6 +149,8 @@
 
 | ID | Title | Released | Design | Notes |
 |---|---|---|---|---|
+| `252` | Workflow Quality Preflight + Review/Audit Verification Lints | `v0.7.61` | [v0.7.61](features/v0.7.61.md#feature_252-workflow-quality-preflight--reviewaudit-verification-lints) | Released in `v0.7.61` (2026-07-06). Phase A (deterministic contract lint only): `quality-lint.ts` (`lintRestrictedWorkflowSource` / `assertRestrictedWorkflowQuality`) runs in restricted workflow module materialization + the coding host with host `maxAgents`, hard-failing three contract classes before a run starts — unawaited workflow-command variable in a boolean position (no Proxy trap for object truthiness), top-level structured-output field access that belongs under `result.structured`, and literal `[...]`/`.map()` agent fanout above manifest/host caps. Review/verifier/generic quality heuristics intentionally NOT emitted as model-visible warnings (false-positive review narrowed the feature). Layer 2 strengthens review/audit templates to make verifier stages explicit. Layer 3 (gated strong-tier LLM reviewer) deferred behind future policy/eval. Deterministic — no LLM eval. |
+| `251` | Tool-Output 语义压缩（rtk-Style Token Killer） | `v0.7.61` | [v0.7.61](features/v0.7.61.md#feature_251-tool-output-semantic-compression-rtk-style-token-killer) | Released in `v0.7.61` (2026-07-06). Command-aware in-tool output compression in KodaX's own `bash` layer (ADR-050). New `output-filters/` module compresses stdout/stderr **body** at the single `bash.ts` close-handler point (covers SA + AMA): lossless ANSI-strip generic layer, compiled `git-diff`/`git-log`/`git-status`/`test-runner`/`lint`/`json-output` filters, and a declarative long-tail table (package/docker/infra progress). `Command:`/`Exit:` header preserved verbatim (FEATURE_185 ledger); `never_worse` size backstop; content-signature detection over command-name; every lossy filter persists raw body + recovery hint (raw fallback on persist failure). Isolated Layer-1 measurements show ~66–99% body-token reduction. Deterministic — no prompt change, no FEATURE_104 eval. |
 | `250` | Progressive Disclosure for the AMA/AMAW Managed Tool Path | `v0.7.60` | [v0.7.60](features/v0.7.60.md#feature_250-progressive-disclosure-for-the-amaamaw-managed-tool-path) | Released in `v0.7.60` (2026-07-04). Brings deferred-tool progressive disclosure (previously SA-path-only) to the AMA/AMAW managed path: `buildAgentToolsFromRegistry` hint-swaps the 13 non-mcp deferred tools (repo-intel + web/code + goal) to their `DEFERRED_TOOL_HINTS` one-liner with `input_schema` unchanged (stay directly callable; full description via `tool_search`). `mcp_*` stay resident (mutation risk + un-eval'd); `run_workflow` untouched. `tool_search` plus the 3 goal tool receipts are protected in `PRUNE_PROTECTED_TOOLS`. Two eval panels (5-alias): DEFER_SAFE 5/5, 0% read/grep fallback; V_teach 100% adoption after a 2-line `code_search`/`semantic_lookup` teaching block (strictly non-negative, +25pp on the floor alias). |
 | `249` | AMA Natural-Language Workflow Activation | `v0.7.59` | [v0.7.60](features/v0.7.60.md#feature_249-ama-natural-language-workflow-activation) | Released in `v0.7.59` (2026-07-03). Widened `buildWorkflowToolHost` so AMA also hosts `run_workflow` on an explicit natural-language request; AMAW additionally self-activates on complexity via the FEATURE_248 directive (independent `amawOrchestrationAvailable` gate, verified structurally separate). SA unchanged. Design doc filed under v0.7.60; shipped early in the v0.7.59 rollup. |
 | `248` | AMAW Mode-Level Orchestration Directive | `v0.7.59` | [v0.7.59](features/v0.7.59.md#feature_248-amaw-mode-level-orchestration-directive) | Released in `v0.7.59` (2026-07-03). AMAW-gated mode-level `ORCHESTRATION DEFAULT` standing directive + PLAN-TIME COMMITMENT flow-fix (prompt-only, narrowed-SHIP: task-inception activation; mid-task re-architecture a documented non-goal). Leak-closed via optional `ManagedRolePromptContext.amawOrchestrationAvailable`. See v0.7.59.md §6/§6.1. |

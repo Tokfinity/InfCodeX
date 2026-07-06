@@ -6,6 +6,31 @@ All notable changes to this project will be documented in this file.
 
 ## [Unreleased]
 
+## [0.7.61] - 2026-07-06
+
+> Scope note: a token-efficiency + workflow-reliability release. **FEATURE_251** adds command-aware
+> in-tool output compression (an rtk-style Token Killer port) inside KodaX's own `bash` tool layer,
+> so a noisy `git diff` / test run / package-install / docker-build no longer spends thousands of
+> context tokens — the compressed body is what context accounting actually counts, and every lossy
+> summary keeps a raw-recovery path. **FEATURE_252** lands the deterministic half of workflow-quality
+> preflight: a pre-start AST/dataflow lint that hard-fails weak-model authoring contract bugs before
+> a workflow can run. Both are deterministic (no prompt change, no LLM eval). The release also fixes a
+> workflow-start crash: `typescript` is now a runtime dependency of `@kodax-ai/agent` because the
+> quality lint uses the TypeScript compiler API on the workflow hot path. No public runtime type is removed.
+
+### Added
+
+- **Tool-output semantic compression — command-aware in-tool Token Killer (FEATURE_251, ADR-050).** A new `packages/coding/src/tools/output-filters/` module compresses bash `stdout`/`stderr` **body** after decode, before the `Command:` / `Exit:` header is assembled, at the single `bash.ts` close-handler integration point (so both the SA and AMA dispatch paths are covered by one change). It ships a lossless generic layer (ANSI strip), compiled stateful filters (`git-diff`, `git-log`, `git-status`, `test-runner` failure-focus, `lint` diagnostic grouping, `json-output` / NDJSON structural summary), and a built-in declarative long-tail table (package-manager / docker / infra CLI progress). Hard constraints: the `Command:` / `Exit:` header is preserved verbatim (FEATURE_185 hits-ledger depends on it); the generic layer is lossless-by-construction with `never_worse` as a size-only backstop; content-signature detection is preferred over command-name matching (robust to compound commands and pipes); and every lossy filter (`lossiness: tail | whole`) first persists the raw decoded body via `persistToolOutput` and appends a recovery hint, falling back to the raw body + existing tail-truncation if the persist fails. `background` / `timeout` / `abort` paths do not reach the completion assembly and are naturally excluded. Isolated Layer-1 measurements (`context-savings.test.ts`) show ~66–99% body-token reduction on high-noise commands (e.g. a 120-file `git diff` 9,960 → 1,344 tokens; a `terraform apply` progress stream 10,617 → 59). Deterministic code — no prompt change, no FEATURE_104 eval. Human test guide: `docs/test-guides/FEATURE_251_v0.7.61_TEST_GUIDE.md`.
+- **Deterministic workflow-quality preflight lint (FEATURE_252).** A new `packages/agent/src/workflow/quality-lint.ts` (`lintRestrictedWorkflowSource` / `assertRestrictedWorkflowQuality`, exported from the workflow package) runs inside restricted workflow module materialization (`script-runner.ts` `createRestrictedWorkflowModule`) and in the coding workflow host with host-policy `maxAgents`, so structural contract violations fail before a run can start — matching the existing inline-smoke hard-fail feedback loop. It hard-fails three deterministic contract classes only: (1) an unawaited workflow-command variable (`wf.runAgent` / `wf.spawnAgent` / `wf.wait` / `wf.synthesize` / `wf.workflow` / `wf.artifact`) used in a boolean position (`if (x)`, `!x`, ternary test, `x && …`, `x || …`, loop test) — a case a runtime Proxy cannot catch because object truthiness has no Proxy trap; (2) top-level structured-output field access (`result.findings`, `result.summary`, …) when the fields belong under `result.structured`; and (3) a literal `[...]`/`[...].map(...)` agent fanout whose static upper bound exceeds `manifest.maxAgents` or a known host cap. Review/verifier/generic quality heuristics are intentionally **not** emitted as model-visible warnings (a lightweight AST pass cannot distinguish a weak workflow from a valid optimized one, and surfacing them causes needless rewrite churn). Human test guide: `docs/test-guides/FEATURE_252_v0.7.61_TEST_GUIDE.md`.
+
+### Changed
+
+- **Review/audit workflow templates make adversarial verification explicit (FEATURE_252 Layer 2).** The default generator/authoring fixtures for `adversarial-verification` shapes now use explicit verifier stages and `task_id:` evidence refs, so the desired shape — finders → adversarial verifiers → synthesis of confirmed findings — is stated in the template rather than left to a weak authoring model to infer. This reduces reliance on lint and is robust to capability-limited authors.
+
+### Fixed
+
+- **Workflow-start crash: `typescript` promoted to a runtime dependency of `@kodax-ai/agent`.** The FEATURE_252 quality lint imports the TypeScript compiler API (`ts.createSourceFile`, …) and runs on every workflow start via `assertRestrictedWorkflowQuality`. With `typescript` only in `devDependencies`, a bundled/published build resolved no `typescript` module at that call site, throwing an uncaught error that crashed the process before the workflow ran (leaving the terminal in a corrupted mouse/alt-screen state). Moving `typescript` to `dependencies` fixes the workflow-front crash.
+
 ## [0.7.60] - 2026-07-05
 
 > Scope note: an F250 refactor + Space SDK rollup. **FEATURE_250** brings the deferred-tool

@@ -514,6 +514,8 @@ KodaX 有两层结构，SDK 用户需要分开理解：
 
 **managed 工具路径的渐进披露（FEATURE_250，v0.7.60）**：deferred-tool 渐进披露机制——此前仅 SA path 拥有——现在也应用于 AMA/AMAW 的 **managed** path。缓存冷启的 managed 轮次对 13 个 non-mcp 延迟工具（repo-intelligence + web/code + goal）携带一行 search hint 而非完整描述；每个工具的 `input_schema` 不变，因此仍可直接调用，完整描述按需通过 `tool_search` 拉取。`mcp_*` 保持常驻，`run_workflow` 不动。对用户透明；由两个 5-alias eval panel 验证（DEFER_SAFE 5/5，0% read/grep 回退）。详见 [docs/features/v0.7.60.md](docs/features/v0.7.60.md)。
 
+**工具输出压缩 + Workflow 质量预检（FEATURE_251 + FEATURE_252，v0.7.61）**：KodaX 自有的 `bash` 工具现在**在工具内**压缩高噪声命令输出，一次大 `git diff`、测试、包安装或 `docker build` 不再吞掉数千 context token——命令感知过滤器（git/test/lint/JSON + 声明式 package/docker/infra 长尾）摘要 stdout/stderr 正文，`Command:`/`Exit:` 头部逐字保留，所有有损摘要都保留 raw 恢复路径；隔离测量显示正文 token 降幅约 66–99%。同时，inline `run_workflow` 新增确定性启动前质量 lint，在运行前硬失败弱模型的编写合约 bug（未 await 的 workflow-command 用作布尔、顶层访问本应位于 `result.structured` 的字段、字面 agent fanout 超 manifest/host 上限）。二者均为确定性（无 prompt 改动）。详见 [docs/features/v0.7.61.md](docs/features/v0.7.61.md) 与 [docs/ADR.md ADR-050](docs/ADR.md)。
+
 ```
 KodaX/                       # 4 workspace packages(FEATURE_194 v0.7.43)
 ├── packages/
