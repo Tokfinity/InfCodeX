@@ -1206,8 +1206,8 @@ describe("transcript-layout", () => {
               id: "tool-2",
               name: "[Planner] changed_diff_bundle",
               status: ToolCallStatus.Success,
-              startTime: Date.now(),
-              endTime: Date.now() + 10,
+              startTime: 1_000,
+              endTime: 1_010,
               input: {
                 preview: "{\"paths\":[\"packages/coding/src/task-engine.ts\"],\"limit_per_path\":120}",
               },
@@ -1230,8 +1230,8 @@ describe("transcript-layout", () => {
       id: "tool-3",
       name: "[Lead] changed_diff",
       status: ToolCallStatus.Success,
-      startTime: Date.now(),
-      endTime: Date.now() + 10,
+      startTime: 1_000,
+      endTime: 1_010,
       input: {
         preview: "{\"path\":\"packages/coding/src/task-engine.ts\",\"offset\":1171,\"limit\":120}",
       },
@@ -1282,8 +1282,8 @@ describe("transcript-layout", () => {
               id: "tool-bundle-1",
               name: "[Planner] changed_diff_bundle",
               status: ToolCallStatus.Success,
-              startTime: Date.now(),
-              endTime: Date.now() + 10,
+              startTime: 1_000,
+              endTime: 1_010,
               input: {
                 preview: "{\"paths\":[\"packages/a.ts\",\"packages/b.ts\"],\"limit_per_path\":120}",
               },
@@ -1316,8 +1316,8 @@ describe("transcript-layout", () => {
               id: "tool-input-1",
               name: "changed_diff",
               status: ToolCallStatus.Success,
-              startTime: Date.now(),
-              endTime: Date.now() + 10,
+              startTime: 1_000,
+              endTime: 1_010,
               input: {
                 path: "packages/repl/src/ui/InkREPL.tsx",
                 offset: 42,
