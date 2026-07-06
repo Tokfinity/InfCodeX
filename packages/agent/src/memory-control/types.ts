@@ -209,6 +209,62 @@ export interface MemoryPackTraceMetadata {
   readonly suppressed: boolean;
 }
 
+export type MemoryReviewTrigger =
+  | 'user_correction'
+  | 'explicit_remember'
+  | 'explicit_forget'
+  | 'proposal_rejected'
+  | 'conflict_detected';
+
+export interface MemoryReviewCandidateRef {
+  readonly ref: MemoryItemRef;
+  readonly bodySnippet?: string;
+  readonly bodyFingerprint?: string;
+  readonly warnings: readonly string[];
+}
+
+export interface MemoryReviewInput {
+  readonly trigger: MemoryReviewTrigger;
+  readonly userFeedback: string;
+  readonly task?: string;
+  readonly sourceRefs?: readonly string[];
+  readonly candidateRefIds?: readonly string[];
+  readonly includePrivate?: boolean;
+  readonly includeSensitive?: boolean;
+  readonly maxRefs?: number;
+}
+
+export interface MemoryReviewModelInput {
+  readonly trigger: MemoryReviewTrigger;
+  readonly userFeedback: string;
+  readonly task?: string;
+  readonly sourceRefs: readonly string[];
+  readonly candidateRefs: readonly MemoryReviewCandidateRef[];
+  readonly warnings: readonly string[];
+}
+
+export interface MemoryReviewDraftAction {
+  readonly action: MemoryProposalAction;
+  readonly targetRefIds: readonly string[];
+  readonly summary: string;
+  readonly rationale: string;
+  readonly confidence: 'low' | 'medium' | 'high';
+  readonly risk: 'low' | 'medium' | 'high';
+  readonly requiresApproval: true;
+  readonly proposedBody?: string;
+}
+
+export interface MemoryReviewPlan {
+  readonly trigger: MemoryReviewTrigger;
+  readonly createdAt: string;
+  readonly sourceRefs: readonly string[];
+  readonly candidateRefs: readonly MemoryReviewCandidateRef[];
+  readonly actions: readonly MemoryReviewDraftAction[];
+  readonly warnings: readonly string[];
+}
+
+export type MemoryReviewRunner = (input: MemoryReviewModelInput) => Promise<MemoryReviewPlan>;
+
 export interface MemoryController {
   listInbox(): Promise<readonly MemoryActionProposal[]>;
   showProposal(id: string): Promise<MemoryActionProposal | undefined>;
@@ -222,6 +278,7 @@ export interface MemoryController {
   runCurator(input?: MemoryCuratorInput): Promise<MemoryGovernanceReport>;
   maybeRunAutoCurator(input?: MemoryAutoCuratorInput): Promise<MemoryAutoCuratorResult>;
   buildMemoryPack(input: MemoryPackInput): Promise<MemoryPack>;
+  reviewMemoryFeedback(input: MemoryReviewInput): Promise<MemoryReviewPlan>;
 }
 
 export type MemoryEvent =
@@ -229,4 +286,5 @@ export type MemoryEvent =
   | { readonly type: 'proposal.approved'; readonly proposalId: string }
   | { readonly type: 'proposal.rejected'; readonly proposalId: string }
   | { readonly type: 'curator.completed'; readonly reportId: string }
-  | { readonly type: 'pack.selected'; readonly refIds: readonly string[] };
+  | { readonly type: 'pack.selected'; readonly refIds: readonly string[] }
+  | { readonly type: 'review.completed'; readonly trigger: MemoryReviewTrigger; readonly actionCount: number };

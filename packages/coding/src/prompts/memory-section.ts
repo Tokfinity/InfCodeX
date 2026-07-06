@@ -2,7 +2,7 @@
  * FEATURE_124 (v0.7.43) Phase B — `project-memory` SP section builder.
  *
  * Reads MEMORY.md from the resolved per-project memory directory,
- * applies claudecode-shape line/byte truncation, and emits the SP
+ * applies KodaX's bounded line/byte preview, and emits the SP
  * section content. Designed for SYNC fs reads (mirrors
  * `loadAgentsFiles` / `formatAgentsForPrompt` pattern in
  * `context/agents-loader.ts` — SP build is synchronous).
@@ -17,9 +17,8 @@
  *   skills-addendum
  *
  * Why index only, no topic-file pre-injection:
- *   - MEMORY.md is capped at 25KB / 200 lines (claudecode-aligned, see
- *     `@kodax-ai/agent` `memory/truncate.ts`). Index provides
- *     deterministic SP overhead budget.
+ *   - This prompt preview is capped at 8KB / 60 lines. MEMORY.md remains
+ *     the navigational index, not a bulk context carrier.
  *   - Topic files (`feedback_*.md`, `user_*.md`, etc.) are unbounded —
  *     pre-injecting all of them would make context occupancy unpredictable.
  *   - The LLM reads topic files on demand via the existing `read` tool

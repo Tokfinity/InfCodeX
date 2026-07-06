@@ -24,6 +24,7 @@ import {
 } from './index.js';
 import type {
   MemoryItemRef,
+  MemoryReviewModelInput,
 } from './types.js';
 
 describe('MemoryControlPlane', () => {
@@ -365,7 +366,104 @@ describe('MemoryControlPlane', () => {
     expect(cleanReport.findings[0]?.kind).toBe('no_op');
   });
 
-  it('auto-runs curator for managed memory refs and persists an audit report', async () => {
+  it('prepares bounded candidate refs for feedback review without a built-in LLM dependency', async () => {
+    await mkdir(memoryRoot, { recursive: true });
+    const topicPath = join(memoryRoot, 'project_stack.md');
+    await writeFile(
+      topicPath,
+      [
+        '---',
+        'name: Project stack',
+        'description: Repo package manager preference',
+        'type: project',
+        '---',
+        '',
+        'Repo uses npm workspaces.',
+        '',
+      ].join('\n'),
+      'utf8',
+    );
+    const controller = createMemoryControlPlane({
+      cwd,
+      learningStorePath,
+      memoryRoot,
+      discoverSkills: false,
+      now: () => '2026-07-06T00:00:00.000Z',
+    });
+
+    const plan = await controller.reviewMemoryFeedback({
+      trigger: 'user_correction',
+      userFeedback: 'The repo now uses pnpm, not npm.',
+      task: 'Update project stack memory',
+    });
+
+    expect(plan.actions).toEqual([]);
+    expect(plan.candidateRefs.map((candidate) => candidate.ref.id)).toContain('memdir:project_stack.md');
+    expect(plan.candidateRefs[0]?.bodySnippet).toContain('Repo uses npm workspaces.');
+    expect(plan.warnings).toContain('memory reviewer unavailable; semantic memory review was not run');
+    await expect(readFile(topicPath, 'utf8')).resolves.toContain('Repo uses npm workspaces.');
+  });
+
+  it('delegates feedback review to an injected reviewer and returns proposal-shaped actions', async () => {
+    await mkdir(memoryRoot, { recursive: true });
+    await writeFile(
+      join(memoryRoot, 'project_stack.md'),
+      [
+        '---',
+        'name: Project stack',
+        'description: Repo package manager preference',
+        'type: project',
+        '---',
+        '',
+        'Repo uses npm workspaces.',
+        '',
+      ].join('\n'),
+      'utf8',
+    );
+    let received: MemoryReviewModelInput | undefined;
+    const controller = createMemoryControlPlane({
+      cwd,
+      learningStorePath,
+      memoryRoot,
+      discoverSkills: false,
+      now: () => '2026-07-06T00:00:00.000Z',
+      memoryReviewer: async (input) => {
+        received = input;
+        return {
+          trigger: input.trigger,
+          createdAt: '2026-07-06T00:00:00.000Z',
+          sourceRefs: input.sourceRefs,
+          candidateRefs: input.candidateRefs,
+          actions: [{
+            action: 'patch_memdir',
+            targetRefIds: ['memdir:project_stack.md'],
+            summary: 'Replace package manager memory with pnpm.',
+            rationale: 'User corrected the stored package manager fact.',
+            confidence: 'high',
+            risk: 'medium',
+            requiresApproval: true,
+            proposedBody: 'Repo uses pnpm workspaces.',
+          }],
+          warnings: input.warnings,
+        };
+      },
+    });
+
+    const plan = await controller.reviewMemoryFeedback({
+      trigger: 'user_correction',
+      userFeedback: 'The repo now uses pnpm, not npm.',
+      candidateRefIds: ['memdir:project_stack.md'],
+    });
+
+    expect(received?.candidateRefs[0]?.bodySnippet).toContain('Repo uses npm workspaces.');
+    expect(plan.actions[0]).toMatchObject({
+      action: 'patch_memdir',
+      targetRefIds: ['memdir:project_stack.md'],
+      requiresApproval: true,
+    });
+  });
+
+  it('runs maintenance curator for managed memory refs and persists an audit report', async () => {
     const events: string[] = [];
     const controller = createMemoryControlPlane({
       cwd,
@@ -397,7 +495,7 @@ describe('MemoryControlPlane', () => {
     expect(events).toContain('curator.completed');
   });
 
-  it('auto-curator skips when not due or when there are not enough managed refs', async () => {
+  it('maintenance curator skips when not due or when there are not enough managed refs', async () => {
     const controller = createMemoryControlPlane({
       cwd,
       learningStorePath,

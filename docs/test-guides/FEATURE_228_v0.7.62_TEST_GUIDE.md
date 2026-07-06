@@ -10,7 +10,8 @@
 FEATURE_228 turns FEATURE_224 memory handoffs into a governed memory control
 plane. It must reuse the existing learning proposal store, expose typed memory
 refs, require approval before mutation, fail closed on stale fingerprints, and
-provide deterministic retrieval hints.
+provide deterministic task-aware retrieval hints plus feedback-triggered
+semantic review hooks.
 
 ## Environment
 
@@ -167,6 +168,7 @@ Steps:
 Expected result:
 
 - [ ] A small governed memory hints block is included.
+- [ ] The task-relevant memory pack is based on the current raw user request.
 - [ ] Hints are sorted deterministically.
 - [ ] Stale, pending, quarantined, private, and sensitive refs are not injected by default.
 - [ ] Repeating the same input produces the same hint order.
@@ -190,7 +192,25 @@ Expected result:
 - [ ] Entries beyond the preview budget are not injected directly.
 - [ ] Governed frontmatter hints may still appear as a small deterministic list.
 
-### TC-009: Automatic Curator Writes Audit Report Without Mutation
+### TC-009: Prompt Build Does Not Run Curator
+
+**Priority**: High
+**Type**: Negative
+
+Steps:
+
+1. Prepare at least two managed memory refs that would be curator candidates.
+2. Trigger a coding prompt build with a task that can use memory.
+3. Inspect the memory root `.governance/` directory.
+
+Expected result:
+
+- [ ] The prompt includes only bounded memory index/hints.
+- [ ] No `.governance/reports/*.json` file is created by prompt build.
+- [ ] No `.governance/auto-curate-state.json` file is created by prompt build.
+- [ ] No memory topic file or `MEMORY.md` content is modified.
+
+### TC-010: Maintenance Curator Writes Audit Report Without Mutation
 
 **Priority**: High
 **Type**: Positive
@@ -198,7 +218,7 @@ Expected result:
 Steps:
 
 1. Prepare at least two managed memory refs, preferably duplicate or conflicting refs.
-2. Trigger a coding prompt build or call `maybeRunAutoCurator()` from a host harness.
+2. Call `maybeRunAutoCurator()` from a host maintenance harness.
 3. Inspect the memory root `.governance/` directory.
 4. Trigger the same path again immediately.
 
@@ -209,7 +229,27 @@ Expected result:
 - [ ] No memory topic file or `MEMORY.md` content is modified.
 - [ ] The second immediate run skips as `not_due`.
 
-### TC-010: Ignore Memory Suppresses Retrieval
+### TC-011: Feedback Review Uses Injected LLM Reviewer Without Direct Writes
+
+**Priority**: High
+**Type**: Positive
+
+Steps:
+
+1. Prepare an approved memory topic that says "Repo uses npm workspaces."
+2. Provide user feedback such as "Actually this repo now uses pnpm, not npm."
+3. Call `reviewMemoryFeedback()` from a host harness with an injected reviewer.
+4. Inspect returned actions and memory files.
+
+Expected result:
+
+- [ ] The reviewer receives only bounded candidate refs/snippets, not the whole memory store.
+- [ ] The returned action is proposal-shaped, for example `patch_memdir`.
+- [ ] The returned action requires approval.
+- [ ] No memory file is modified by the review call itself.
+- [ ] Actual mutation still goes through the normal approval/fingerprint path.
+
+### TC-012: Ignore Memory Suppresses Retrieval
 
 **Priority**: High  
 **Type**: Negative
@@ -225,7 +265,7 @@ Expected result:
 - [ ] Trace metadata marks memory as suppressed.
 - [ ] The selected ref id list is empty.
 
-### TC-011: Session And Artifact Refs Are Inventory Only By Default
+### TC-013: Session And Artifact Refs Are Inventory Only By Default
 
 **Priority**: Medium  
 **Type**: Boundary
@@ -243,7 +283,7 @@ Expected result:
 - [ ] They are snapshot-readable.
 - [ ] Their provisional lifecycle keeps them out of normal prompt injection.
 
-### TC-012: Read-Only And Protected Refs Are Not Mutated
+### TC-014: Read-Only And Protected Refs Are Not Mutated
 
 **Priority**: High  
 **Type**: Negative
@@ -266,12 +306,13 @@ Expected result:
 - [ ] Root package independence is preserved: `@kodax-ai/agent` builds without coding or REPL imports.
 - [ ] No `any` is introduced in F228 TypeScript surfaces.
 - [ ] No vector DB, SQLite, embeddings, or second memory database is introduced.
+- [ ] Coding prompt construction remains side-effect-free for memory governance.
 
 ## Summary
 
 | Cases | Passed | Failed | Blocked |
 |---:|---:|---:|---:|
-| 12 | TBD | TBD | TBD |
+| 14 | TBD | TBD | TBD |
 
 **Conclusion**: TBD
 

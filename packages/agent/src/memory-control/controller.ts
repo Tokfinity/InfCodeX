@@ -44,6 +44,10 @@ import type {
   MemoryPackHint,
   MemoryPackInput,
   MemoryRefFilter,
+  MemoryReviewCandidateRef,
+  MemoryReviewInput,
+  MemoryReviewPlan,
+  MemoryReviewRunner,
   MemorySourceAdapter,
   MemoryVisibility,
 } from './types.js';
@@ -65,6 +69,7 @@ export interface CreateMemoryControlPlaneOptions {
   readonly now?: () => string;
   readonly onEvent?: (event: MemoryEvent) => void;
   readonly discoverSkills?: boolean;
+  readonly memoryReviewer?: MemoryReviewRunner;
 }
 
 interface ReadTextResult {
@@ -87,6 +92,11 @@ interface AutoCuratorState {
   readonly lastReportPath?: string;
 }
 
+interface ReviewCandidateSelection {
+  readonly candidateRefs: readonly MemoryReviewCandidateRef[];
+  readonly warnings: readonly string[];
+}
+
 export function createMemoryControlPlane(options: CreateMemoryControlPlaneOptions): MemoryController {
   return new MemoryControlPlane(options);
 }
@@ -103,6 +113,7 @@ export class MemoryControlPlane implements MemoryController {
   private readonly sessionLineage?: KodaXSessionLineage;
   private readonly artifactLedger: readonly KodaXSessionArtifactLedgerEntry[];
   private readonly discoverSkills: boolean;
+  private readonly memoryReviewer?: MemoryReviewRunner;
 
   constructor(options: CreateMemoryControlPlaneOptions) {
     this.cwd = options.cwd;
@@ -116,6 +127,7 @@ export class MemoryControlPlane implements MemoryController {
     this.sessionLineage = options.sessionLineage;
     this.artifactLedger = options.artifactLedger ?? [];
     this.discoverSkills = options.discoverSkills ?? true;
+    this.memoryReviewer = options.memoryReviewer;
   }
 
   async listInbox(): Promise<readonly MemoryActionProposal[]> {
@@ -291,6 +303,40 @@ export class MemoryControlPlane implements MemoryController {
         suppressed: false,
       },
     };
+  }
+
+  async reviewMemoryFeedback(input: MemoryReviewInput): Promise<MemoryReviewPlan> {
+    const createdAt = this.now();
+    const sourceRefs = input.sourceRefs ?? [];
+    const selection = await this.selectReviewCandidateRefs(input);
+    const modelInput = {
+      trigger: input.trigger,
+      userFeedback: input.userFeedback,
+      ...(input.task !== undefined ? { task: input.task } : {}),
+      sourceRefs,
+      candidateRefs: selection.candidateRefs,
+      warnings: selection.warnings,
+    };
+
+    if (this.memoryReviewer === undefined) {
+      const plan: MemoryReviewPlan = {
+        trigger: input.trigger,
+        createdAt,
+        sourceRefs,
+        candidateRefs: selection.candidateRefs,
+        actions: [],
+        warnings: [
+          ...selection.warnings,
+          'memory reviewer unavailable; semantic memory review was not run',
+        ],
+      };
+      this.emit({ type: 'review.completed', trigger: input.trigger, actionCount: 0 });
+      return plan;
+    }
+
+    const plan = await this.memoryReviewer(modelInput);
+    this.emit({ type: 'review.completed', trigger: input.trigger, actionCount: plan.actions.length });
+    return plan;
   }
 
   private async projectLearningProposal(entry: StoredLearningProposal): Promise<MemoryActionProposal | undefined> {
@@ -509,6 +555,47 @@ export class MemoryControlPlane implements MemoryController {
       });
     }
     return hints;
+  }
+
+  private async selectReviewCandidateRefs(input: MemoryReviewInput): Promise<ReviewCandidateSelection> {
+    const maxRefs = Math.max(0, input.maxRefs ?? 6);
+    if (maxRefs === 0) return { candidateRefs: [], warnings: [] };
+
+    const refs = await this.listRefs({
+      includePrivate: input.includePrivate,
+      includeSensitive: input.includeSensitive,
+    });
+    const warnings: string[] = [];
+    const selected = input.candidateRefIds !== undefined && input.candidateRefIds.length > 0
+      ? selectRefsById(refs, input.candidateRefIds, maxRefs, warnings)
+      : refs
+          .filter(isReviewCandidateEligible)
+          .sort((left, right) => scoreRef(right, reviewTask(input)) - scoreRef(left, reviewTask(input)))
+          .slice(0, maxRefs);
+
+    const candidateRefs: MemoryReviewCandidateRef[] = [];
+    for (const ref of selected) {
+      candidateRefs.push(await this.readReviewCandidateRef(ref));
+    }
+    return { candidateRefs, warnings };
+  }
+
+  private async readReviewCandidateRef(ref: MemoryItemRef): Promise<MemoryReviewCandidateRef> {
+    try {
+      const snapshot = await this.readRef(ref);
+      return {
+        ref: snapshot.ref,
+        ...(snapshot.body.trim().length > 0 ? { bodySnippet: firstSnippet(snapshot.body) } : {}),
+        bodyFingerprint: snapshot.bodyFingerprint,
+        warnings: snapshot.warnings,
+      };
+    } catch (error) {
+      return {
+        ref,
+        ...(ref.bodyFingerprint !== undefined ? { bodyFingerprint: ref.bodyFingerprint } : {}),
+        warnings: [`failed to read memory ref: ${errorMessage(error)}`],
+      };
+    }
   }
 
   private adapterForProposal(proposal: MemoryActionProposal): MemorySourceAdapter {
@@ -1244,6 +1331,38 @@ function isPackEligible(ref: MemoryItemRef, input: MemoryPackInput): boolean {
   return ref.lifecycle === 'trusted' || ref.lifecycle === 'active' || ref.lifecycle === 'readonly';
 }
 
+function isReviewCandidateEligible(ref: MemoryItemRef): boolean {
+  if (ref.kind !== 'memdir' && ref.kind !== 'learning_proposal' && ref.kind !== 'reasoning_report') {
+    return false;
+  }
+  return ref.lifecycle !== 'archived' && ref.lifecycle !== 'quarantined';
+}
+
+function selectRefsById(
+  refs: readonly MemoryItemRef[],
+  refIds: readonly string[],
+  maxRefs: number,
+  warnings: string[],
+): readonly MemoryItemRef[] {
+  const byId = new Map(refs.map((ref) => [ref.id, ref]));
+  const selected: MemoryItemRef[] = [];
+  for (const refId of refIds.slice(0, maxRefs)) {
+    const ref = byId.get(refId);
+    if (ref === undefined) {
+      warnings.push(`memory review candidate not found: ${refId}`);
+    } else {
+      selected.push(ref);
+    }
+  }
+  return selected;
+}
+
+function reviewTask(input: MemoryReviewInput): string {
+  return [input.task, input.userFeedback]
+    .filter((value): value is string => value !== undefined && value.trim().length > 0)
+    .join('\n');
+}
+
 function shouldIgnoreMemory(task: string): boolean {
   return /\b(ignore|do not use|don't use|without)\s+(project\s+)?memory\b/i.test(task);
 }
@@ -1273,6 +1392,10 @@ function packReason(ref: MemoryItemRef, task: string): string {
 function firstSnippet(body: string): string {
   const compact = body.replace(/\s+/g, ' ').trim();
   return compact.slice(0, 240);
+}
+
+function errorMessage(error: unknown): string {
+  return error instanceof Error ? error.message : String(error);
 }
 
 function stringifyJson(value: KodaXSessionEntry | KodaXSessionArtifactLedgerEntry): string {

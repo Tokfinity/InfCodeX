@@ -14,6 +14,8 @@ import path from 'node:path';
 
 import { afterEach, describe, expect, it } from 'vitest';
 
+import { resolveMemoryRoot, setAgentConfigHome } from '@kodax-ai/agent';
+
 import type { KodaXOptions } from '../types.js';
 
 import { buildCapabilityContextSections } from './capability-sections.js';
@@ -43,6 +45,15 @@ async function removeTempDir(dir: string): Promise<void> {
   }
 }
 
+async function pathExists(filePath: string): Promise<boolean> {
+  try {
+    await fs.stat(filePath);
+    return true;
+  } catch {
+    return false;
+  }
+}
+
 interface FakeExtensionRuntime {
   readonly mcpContext: string | undefined;
 }
@@ -66,6 +77,7 @@ interface PartialContextOptions {
   repoIntelligenceContext?: string;
   promptOverlay?: string;
   skillsPrompt?: string;
+  rawUserInput?: string;
 }
 
 interface MakeOptionsExtras {
@@ -98,6 +110,7 @@ describe('buildCapabilityContextSections', () => {
   const cleanupDirs: string[] = [];
 
   afterEach(async () => {
+    setAgentConfigHome(undefined);
     for (const dir of cleanupDirs.splice(0)) {
       await removeTempDir(dir);
     }
@@ -268,6 +281,99 @@ describe('buildCapabilityContextSections', () => {
       `Session Scratch Directory: ${path.join(cwd, '.agent', 'tmp', 'sessions', 'session_A')}`,
     );
   });
+
+  it('appends bounded task-relevant memory hints without injecting topic bodies', async () => {
+    const cwd = await createTempDir('kodax-capsec-memory-pack-');
+    const home = await createTempDir('kodax-capsec-memory-home-');
+    cleanupDirs.push(cwd, home);
+    setAgentConfigHome(home);
+    const memoryDir = resolveMemoryRoot(cwd);
+    await fs.mkdir(memoryDir, { recursive: true });
+    await fs.writeFile(
+      path.join(memoryDir, 'MEMORY.md'),
+      '- [Project stack](project_stack.md) - Repo uses npm workspaces\n',
+      'utf8',
+    );
+    await fs.writeFile(
+      path.join(memoryDir, 'project_stack.md'),
+      [
+        '---',
+        'name: Project stack',
+        'description: Repo uses npm workspaces',
+        'type: project',
+        '---',
+        '',
+        'Full topic body detail should stay out of the prompt until read on demand.',
+        '',
+      ].join('\n'),
+      'utf8',
+    );
+
+    const sections = await buildCapabilityContextSections(
+      makeOptions({
+        executionCwd: cwd,
+        gitRoot: cwd,
+        rawUserInput: 'Inspect the project stack and npm workspace setup',
+      }),
+      false,
+      cwd,
+    );
+
+    const projectMemory = sections.find((section) => section.id === 'project-memory');
+    expect(projectMemory?.content).toContain('Task-relevant memory hints (bounded):');
+    expect(projectMemory?.content).toContain('memdir:project_stack.md');
+    expect(projectMemory?.content).toContain('read the referenced memory file');
+    expect(projectMemory?.content).not.toContain('Full topic body detail should stay out');
+  });
+
+  it('does not run memory curator as a prompt-build side effect', async () => {
+    const cwd = await createTempDir('kodax-capsec-no-curator-');
+    const home = await createTempDir('kodax-capsec-no-curator-home-');
+    cleanupDirs.push(cwd, home);
+    setAgentConfigHome(home);
+    const memoryDir = resolveMemoryRoot(cwd);
+    await fs.mkdir(memoryDir, { recursive: true });
+    await fs.writeFile(
+      path.join(memoryDir, 'alpha.md'),
+      [
+        '---',
+        'name: Shared Memory',
+        'description: alpha duplicate',
+        'type: project',
+        '---',
+        '',
+        'duplicate body',
+        '',
+      ].join('\n'),
+      'utf8',
+    );
+    await fs.writeFile(
+      path.join(memoryDir, 'beta.md'),
+      [
+        '---',
+        'name: Shared Memory',
+        'description: beta duplicate',
+        'type: project',
+        '---',
+        '',
+        'duplicate body',
+        '',
+      ].join('\n'),
+      'utf8',
+    );
+
+    await buildCapabilityContextSections(
+      makeOptions({
+        executionCwd: cwd,
+        gitRoot: cwd,
+        rawUserInput: 'Use project memory if relevant',
+      }),
+      false,
+      cwd,
+    );
+
+    await expect(pathExists(path.join(memoryDir, '.governance'))).resolves.toBe(false);
+  });
 });
 
 describe('FEATURE_191 — specialist-agents section (A.3)', () => {
@@ -278,6 +384,7 @@ describe('FEATURE_191 — specialist-agents section (A.3)', () => {
   const cleanupDirs: string[] = [];
 
   afterEach(async () => {
+    setAgentConfigHome(undefined);
     const { _resetAgentResolverForTesting } = await import('../construction/agent-resolver.js');
     _resetAgentResolverForTesting();
     for (const dir of cleanupDirs) {

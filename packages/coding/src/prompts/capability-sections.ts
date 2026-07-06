@@ -50,7 +50,7 @@ import path from 'node:path';
 import { exec } from 'node:child_process';
 import { promisify } from 'node:util';
 
-import { createMemoryControlPlane } from '@kodax-ai/agent';
+import { createMemoryControlPlane, type MemoryPack } from '@kodax-ai/agent';
 
 import { loadAgentsFiles, formatAgentsForPrompt } from '../context/agents-loader.js';
 import { listConstructedAgents } from '../construction/agent-resolver.js';
@@ -297,12 +297,12 @@ export async function buildCapabilityContextSections(
   // the rules in hand when it reads the current entries. Section is
   // ALWAYS emitted — fallback "currently empty" text tells the LLM the
   // subsystem is active even when no entries exist yet.
-  await maybeRunMemoryAutoCurator(executionCwd);
   const memory = buildMemorySection(executionCwd);
+  const memoryPack = await buildTaskMemoryPack(executionCwd, options.context?.rawUserInput);
   sections.push(
     createPromptSection(
       'project-memory',
-      memory.content,
+      appendTaskMemoryPack(memory.content, memoryPack),
       'Inject the per-project MEMORY.md index so the agent has cross-session recall without re-asking the user for previously-given context.',
     ),
   );
@@ -330,35 +330,67 @@ export async function buildCapabilityContextSections(
   return sections;
 }
 
-async function maybeRunMemoryAutoCurator(cwd: string): Promise<void> {
+async function buildTaskMemoryPack(cwd: string, rawUserInput: string | undefined): Promise<MemoryPack | undefined> {
+  const task = rawUserInput?.trim();
+  if (task === undefined || task.length === 0) return undefined;
   try {
-    await createMemoryControlPlane({
+    return await createMemoryControlPlane({
       cwd,
       projectDocs: [],
       discoverSkills: false,
-    }).maybeRunAutoCurator();
+    }).buildMemoryPack({
+      task,
+      maxHints: 5,
+      includeSnippets: false,
+    });
   } catch {
-    // Memory maintenance must never prevent prompt construction.
+    return undefined;
   }
+}
+
+/**
+ * Task-relevant MemoryPack renderer.
+ * Appends task-relevant MemoryPack hints to the bounded project-memory section.
+ *
+ * Emits ref ids and short hooks only; topic bodies stay on disk and are
+ * read on demand when the task actually needs details.
+ *
+ * This is a read-only recall path; memory maintenance and semantic review run elsewhere.
+ */
+function appendTaskMemoryPack(content: string, pack: MemoryPack | undefined): string {
+  if (pack === undefined) return content;
+  if (pack.traceMetadata.suppressed) {
+    return [
+      content,
+      '',
+      'Task-relevant memory hints: suppressed by user request.',
+      `Trace: taskFingerprint=${pack.taskFingerprint}`,
+    ].join('\n');
+  }
+  if (pack.hints.length === 0) return content;
+
+  return [
+    content,
+    '',
+    'Task-relevant memory hints (bounded):',
+    ...pack.hints.map(formatTaskMemoryHint),
+    '',
+    'Use these as pointers, not authority. If a hint matters, read the referenced memory file before relying on details. Current repository files override memory.',
+    `Trace: selected memory refs=${pack.traceMetadata.selectedRefIds.join(', ')}; taskFingerprint=${pack.taskFingerprint}`,
+  ].join('\n');
+}
+
+function formatTaskMemoryHint(hint: MemoryPack['hints'][number]): string {
+  return `- ${compactPromptLine(hint.hook)} [${hint.ref.id}]: ${compactPromptLine(hint.reason)}`;
+}
+
+function compactPromptLine(value: string): string {
+  return value.replace(/\s+/g, ' ').trim().slice(0, 180);
 }
 
 /**
  * FEATURE_191 A.3 — render the `specialist-agents` section content from
  * the constructed-agent registry, or null when the registry is empty.
- *
- * Format mirrors the claudecode `loadAgentsDir` pattern: one line per
- * specialist with `name: description`, followed by a single dispatch
- * hint. Specialists without a `description` field render with a
- * `(no description)` placeholder so the line shape stays consistent —
- * AgentContent.description is optional for FEATURE_089 backward
- * compatibility (the LLM-driven minimal-agent shape only requires
- * `instructions`).
- *
- * Returning null when empty signals to the caller that the section
- * should not be pushed at all — saves ~80 tokens per turn for the
- * common single-user case that never registered a specialist, and
- * keeps the prompt cache key stable across sessions that don't touch
- * the registry.
  */
 function buildSpecialistAgentsBlock(): string | null {
   const agents = listConstructedAgents();
