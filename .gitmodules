@@ -1,0 +1,3 @@
+[submodule "docs/features"]
+	path = docs/features
+	url = https://github.com/icetomoyo/KodaX-Feature-Design.git
