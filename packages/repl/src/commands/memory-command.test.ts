@@ -34,7 +34,9 @@ import {
   readLearningProposalStore,
   upsertLearningProposal,
   type MemoryLearningHandoff,
+  type MemoryReviewModelInput,
 } from '@kodax-ai/agent';
+import type { KodaXOptions } from '@kodax-ai/coding';
 
 import { memoryCommand } from './memory-command.js';
 
@@ -64,7 +66,13 @@ function buildContext(cwd: string) {
   };
 }
 
-async function invoke(args: string[], cwd: string) {
+type MemoryCommandCallbacks = Parameters<typeof memoryCommand.handler>[2];
+
+async function invoke(
+  args: string[],
+  cwd: string,
+  callbacks: Partial<MemoryCommandCallbacks> = {},
+) {
   // The command type signature requires 4 args but the handler only
   // reads `args` and `context.runtimeInfo`. Pass empty objects for the
   // unused callbacks + currentConfig — cast through `never` mirrors
@@ -72,7 +80,7 @@ async function invoke(args: string[], cwd: string) {
   await memoryCommand.handler(
     args,
     buildContext(cwd) as never,
-    {} as never,
+    callbacks as MemoryCommandCallbacks,
     {} as never,
   );
 }
@@ -259,6 +267,97 @@ describe('FEATURE_124 Phase D — /memory command', () => {
     const store = await readLearningProposalStore(resolveLearningProposalStore(cwd));
     expect(store.proposals[0]?.status).toBe('approved');
     expect(fs.readFileSync(resolveMemoryEntrypoint(cwd), 'utf8')).toContain('Memory command stores project facts.');
+  });
+
+  it('requires a shown preview before approving a memory proposal', async () => {
+    await upsertLearningProposal(resolveLearningProposalStore(cwd), memoryProposal('p-direct-approve'));
+
+    const { log, restore } = captureConsole();
+    try {
+      await invoke(['approve', 'memory:p-direct-approve'], cwd);
+    } finally {
+      restore();
+    }
+
+    expect(log.contains('preview required before approve')).toBe(true);
+    const store = await readLearningProposalStore(resolveLearningProposalStore(cwd));
+    expect(store.proposals[0]?.status).toBe('pending');
+  });
+
+  it('expires shown preview fingerprints before approving a memory proposal', async () => {
+    await upsertLearningProposal(resolveLearningProposalStore(cwd), memoryProposal('p-expired-preview'));
+    const nowSpy = vi.spyOn(Date, 'now').mockReturnValue(1_000);
+
+    const { log, restore } = captureConsole();
+    try {
+      await invoke(['show', 'memory:p-expired-preview'], cwd);
+      nowSpy.mockReturnValue(1_000 + 16 * 60 * 1000);
+      await invoke(['approve', 'memory:p-expired-preview'], cwd);
+    } finally {
+      restore();
+      nowSpy.mockRestore();
+    }
+
+    expect(log.contains('preview required before approve')).toBe(true);
+    const store = await readLearningProposalStore(resolveLearningProposalStore(cwd));
+    expect(store.proposals[0]?.status).toBe('pending');
+  });
+
+  it('fails closed when MEMORY.md changes after the shown preview', async () => {
+    await upsertLearningProposal(resolveLearningProposalStore(cwd), memoryProposal('p-stale-preview'));
+
+    const { log, restore } = captureConsole();
+    try {
+      await invoke(['show', 'memory:p-stale-preview'], cwd);
+      const memoryDir = resolveMemoryRoot(cwd);
+      fs.mkdirSync(memoryDir, { recursive: true });
+      fs.writeFileSync(
+        resolveMemoryEntrypoint(cwd),
+        '- [Changed](changed.md) - changed after preview\n',
+        'utf8',
+      );
+      await invoke(['approve', 'memory:p-stale-preview'], cwd);
+    } finally {
+      restore();
+    }
+
+    expect(log.contains('was not applied')).toBe(true);
+    expect(log.contains('MEMORY.md changed after preview')).toBe(true);
+    const store = await readLearningProposalStore(resolveLearningProposalStore(cwd));
+    expect(store.proposals[0]?.status).toBe('pending');
+  });
+
+  it('passes rejection feedback to the injected memory reviewer', async () => {
+    await upsertLearningProposal(resolveLearningProposalStore(cwd), memoryProposal('p-review-reject'));
+    let received: MemoryReviewModelInput | undefined;
+    const callbacks: Partial<MemoryCommandCallbacks> = {
+      createKodaXOptions: () => ({
+        provider: 'anthropic',
+        memoryReviewer: async (input) => {
+          received = input;
+          return {
+            trigger: input.trigger,
+            createdAt: '2026-07-06T00:00:00.000Z',
+            sourceRefs: input.sourceRefs,
+            candidateRefs: input.candidateRefs,
+            actions: [],
+            warnings: input.warnings,
+          };
+        },
+      } as KodaXOptions),
+    };
+
+    const { log, restore } = captureConsole();
+    try {
+      await invoke(['reject', 'memory:p-review-reject', 'wrong', 'memory'], cwd, callbacks);
+    } finally {
+      restore();
+    }
+
+    expect(log.contains('rejected memory:p-review-reject')).toBe(true);
+    expect(log.contains('review actions: 0')).toBe(true);
+    expect(received?.trigger).toBe('proposal_rejected');
+    expect(received?.userFeedback).toBe('wrong memory');
   });
 
   it('manual acceptance path covers pending, show, reject, approve, and curate', async () => {

@@ -78,7 +78,7 @@ describe('FEATURE_124 Phase B — system prompt memory injection', () => {
     expect(snapshot.rendered).not.toContain('currently empty');
   });
 
-  it('emits WARNING text when MEMORY.md exceeds 200 lines', async () => {
+  it('emits bounded-index NOTE text when MEMORY.md exceeds the prompt line budget', async () => {
     const memoryDir = resolveMemoryRoot(cwd);
     fs.mkdirSync(memoryDir, { recursive: true });
     const lines: string[] = [];
@@ -95,9 +95,10 @@ describe('FEATURE_124 Phase B — system prompt memory injection', () => {
       false,
     );
 
-    expect(snapshot.rendered).toContain('WARNING');
+    expect(snapshot.rendered).toContain('NOTE');
     expect(snapshot.rendered).toContain('250 lines');
-    expect(snapshot.rendered).toContain('move detail into topic files');
+    expect(snapshot.rendered).toContain('bounded 60-line');
+    expect(snapshot.rendered).toContain('Read relevant topic files on demand');
   });
 
   it('orders project-agents → memory-rules → project-memory → skills-addendum', async () => {

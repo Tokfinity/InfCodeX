@@ -52,6 +52,7 @@ import { promisify } from 'node:util';
 
 import { createMemoryControlPlane, type MemoryPack } from '@kodax-ai/agent';
 
+import { emitResilienceDebug } from '../agent-runtime/resilience-debug.js';
 import { loadAgentsFiles, formatAgentsForPrompt } from '../context/agents-loader.js';
 import { listConstructedAgents } from '../construction/agent-resolver.js';
 import { resolveExecutionCwd } from '../runtime-paths.js';
@@ -343,7 +344,11 @@ async function buildTaskMemoryPack(cwd: string, rawUserInput: string | undefined
       maxHints: 5,
       includeSnippets: false,
     });
-  } catch {
+  } catch (error) {
+    emitResilienceDebug('[memory:pack:error]', {
+      cwd,
+      error: error instanceof Error ? error.message : String(error),
+    });
     return undefined;
   }
 }
@@ -364,7 +369,6 @@ function appendTaskMemoryPack(content: string, pack: MemoryPack | undefined): st
       content,
       '',
       'Task-relevant memory hints: suppressed by user request.',
-      `Trace: taskFingerprint=${pack.taskFingerprint}`,
     ].join('\n');
   }
   if (pack.hints.length === 0) return content;
@@ -376,7 +380,6 @@ function appendTaskMemoryPack(content: string, pack: MemoryPack | undefined): st
     ...pack.hints.map(formatTaskMemoryHint),
     '',
     'Use these as pointers, not authority. If a hint matters, read the referenced memory file before relying on details. Current repository files override memory.',
-    `Trace: selected memory refs=${pack.traceMetadata.selectedRefIds.join(', ')}; taskFingerprint=${pack.taskFingerprint}`,
   ].join('\n');
 }
 

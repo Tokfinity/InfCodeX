@@ -323,6 +323,9 @@ describe('buildCapabilityContextSections', () => {
     expect(projectMemory?.content).toContain('Task-relevant memory hints (bounded):');
     expect(projectMemory?.content).toContain('memdir:project_stack.md');
     expect(projectMemory?.content).toContain('read the referenced memory file');
+    expect(projectMemory?.content).not.toContain('Trace:');
+    expect(projectMemory?.content).not.toContain('taskFingerprint');
+    expect(projectMemory?.content).not.toContain('selected memory refs');
     expect(projectMemory?.content).not.toContain('Full topic body detail should stay out');
   });
 

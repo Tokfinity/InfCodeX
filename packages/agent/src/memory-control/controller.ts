@@ -44,6 +44,7 @@ import type {
   MemoryPackHint,
   MemoryPackInput,
   MemoryRefFilter,
+  MemoryRejectResult,
   MemoryReviewCandidateRef,
   MemoryReviewInput,
   MemoryReviewPlan,
@@ -56,6 +57,7 @@ const MISSING_FINGERPRINT = 'missing';
 const AUTO_CURATOR_STATE_VERSION = 1;
 const DEFAULT_AUTO_CURATOR_INTERVAL_MS = 24 * 60 * 60 * 1000;
 const DEFAULT_AUTO_CURATOR_MIN_REFS = 2;
+const AUTO_CURATOR_REPORT_CAP = 200;
 
 export interface CreateMemoryControlPlaneOptions {
   readonly cwd: string;
@@ -151,17 +153,20 @@ export class MemoryControlPlane implements MemoryController {
 
   async approveProposal(
     id: string,
-    expectedFingerprints?: Readonly<Record<string, string>>,
+    expectedFingerprints: Readonly<Record<string, string>>,
   ): Promise<MemoryApplyResult> {
     const proposal = await this.showProposal(id);
     if (proposal === undefined) {
       return skippedApply(id, 'memory proposal not found');
     }
+    if (expectedFingerprints === undefined) {
+      return skippedApply(id, 'approval requires fingerprints from a shown proposal preview');
+    }
     const approval: MemoryApproval = {
       proposalId: proposal.id,
       approvedBy: 'user',
       approvedAt: this.now(),
-      expectedFingerprints: expectedFingerprints ?? proposal.expectedFingerprints,
+      expectedFingerprints,
     };
     const adapter = this.adapterForProposal(proposal);
     const result = await adapter.applyProposal(proposal, approval);
@@ -169,10 +174,24 @@ export class MemoryControlPlane implements MemoryController {
     return result;
   }
 
-  async rejectProposal(id: string, reason?: string): Promise<void> {
+  async rejectProposal(id: string, reason?: string): Promise<MemoryRejectResult> {
     const proposalId = parseMemoryProposalId(id);
     if (proposalId === undefined) {
-      throw new Error(`invalid memory proposal id: ${id}`);
+      return {
+        proposalId: id,
+        rejected: false,
+        skippedReason: `invalid memory proposal id: ${id}`,
+        warnings: [],
+      };
+    }
+    const proposal = await this.showProposal(id);
+    if (proposal === undefined) {
+      return {
+        proposalId: id,
+        rejected: false,
+        skippedReason: 'memory proposal not found',
+        warnings: [],
+      };
     }
     await updateLearningProposalStatus(
       this.learningStorePath,
@@ -181,6 +200,31 @@ export class MemoryControlPlane implements MemoryController {
       reason !== undefined && reason.trim().length > 0 ? { rejectedReason: reason } : {},
     );
     this.emit({ type: 'proposal.rejected', proposalId: id });
+    const trimmedReason = reason?.trim();
+    let review: MemoryReviewPlan | undefined;
+    let warnings: readonly string[] = [];
+    if (trimmedReason !== undefined && trimmedReason.length > 0) {
+      try {
+        review = await this.reviewMemoryFeedback({
+          trigger: 'proposal_rejected',
+          userFeedback: trimmedReason,
+          sourceRefs: proposal.sourceRefs.map((ref) => ref.id),
+          candidateRefIds: [
+            ...proposal.targetRefs.map((ref) => ref.id),
+            ...proposal.sourceRefs.map((ref) => ref.id),
+          ],
+        });
+        warnings = review.warnings;
+      } catch (error) {
+        warnings = [`memory feedback review failed: ${errorMessage(error)}`];
+      }
+    }
+    return {
+      proposalId: id,
+      rejected: true,
+      ...(review !== undefined ? { review } : {}),
+      warnings,
+    };
   }
 
   async listRefs(filter: MemoryRefFilter = {}): Promise<readonly MemoryItemRef[]> {
@@ -247,6 +291,7 @@ export class MemoryControlPlane implements MemoryController {
     const report = this.buildGovernanceReport(refs);
     const reportPath = autoCuratorReportPath(this.memoryRoot, report);
     await writeFileAtomic(reportPath, `${JSON.stringify(report, null, 2)}\n`);
+    await pruneAutoCuratorReports(this.memoryRoot, AUTO_CURATOR_REPORT_CAP);
     await writeAutoCuratorState(statePath, {
       version: AUTO_CURATOR_STATE_VERSION,
       lastCheckedAt: now,
@@ -703,7 +748,7 @@ class MemdirMemoryAdapter implements MemorySourceAdapter {
       throw error;
     }
     for (const entry of entries) {
-      if (!entry.isFile() || !entry.name.endsWith('.md')) continue;
+      if (!entry.isFile() || !entry.name.endsWith('.md') || entry.name === 'MEMORY.md') continue;
       const filePath = join(this.memoryRoot, entry.name);
       const read = await readTextIfExists(filePath);
       if (!read.exists) continue;
@@ -726,13 +771,15 @@ class MemdirMemoryAdapter implements MemorySourceAdapter {
   ): Promise<MemoryApplyResult> {
     const proposalId = parseMemoryProposalId(proposal.id);
     if (proposalId === undefined) return skippedApply(proposal.id, 'invalid memory proposal id');
-    if (!fingerprintsMatch(proposal.expectedFingerprints, approval.expectedFingerprints)) {
-      return skippedApply(proposal.id, 'approval fingerprints do not match proposal preview');
-    }
     const target = proposal.targetRefs.find((ref) => ref.kind === 'memdir' && ref.storageUri !== undefined);
     const indexRef = proposal.targetRefs.find((ref) => ref.id === 'memdir:MEMORY.md' && ref.storageUri !== undefined);
     if (target?.storageUri === undefined || indexRef?.storageUri === undefined) {
       return skippedApply(proposal.id, 'memory proposal has no memdir target');
+    }
+    const expectedTargetFingerprint = approval.expectedFingerprints[target.id];
+    const expectedIndexFingerprint = approval.expectedFingerprints[indexRef.id];
+    if (expectedTargetFingerprint === undefined || expectedIndexFingerprint === undefined) {
+      return skippedApply(proposal.id, 'approval fingerprints do not cover proposal preview');
     }
     const mutableRefs = [target, indexRef];
     const protectedRef = mutableRefs.find((ref) => isProtectedFromMutation(ref));
@@ -741,16 +788,34 @@ class MemdirMemoryAdapter implements MemorySourceAdapter {
     }
     const currentTarget = await readTextIfExists(target.storageUri);
     const currentIndex = await readTextIfExists(indexRef.storageUri);
-    if (fingerprintOrMissing(currentTarget) !== proposal.expectedFingerprints[target.id]) {
-      return skippedApply(proposal.id, 'target memory changed after preview');
-    }
-    if (fingerprintOrMissing(currentIndex) !== proposal.expectedFingerprints[indexRef.id]) {
-      return skippedApply(proposal.id, 'MEMORY.md changed after preview');
-    }
     const content = proposal.preview.diff ?? '';
     const indexLine = indexLineFromContent(target.storageUri, content);
-    await writeFileAtomic(target.storageUri, content);
-    await writeFileAtomic(indexRef.storageUri, prependIndexLine(currentIndex.content, indexLine));
+    const targetAlreadyApplied = currentTarget.exists && currentTarget.content === content;
+    const indexAlreadyApplied = currentIndex.exists && indexContainsLine(currentIndex.content, indexLine);
+    if (fingerprintOrMissing(currentTarget) !== expectedTargetFingerprint && !targetAlreadyApplied) {
+      return skippedApply(proposal.id, 'target memory changed after preview');
+    }
+    if (
+      fingerprintOrMissing(currentIndex) !== expectedIndexFingerprint
+      && !targetAlreadyApplied
+      && !indexAlreadyApplied
+    ) {
+      return skippedApply(proposal.id, 'MEMORY.md changed after preview');
+    }
+    const changedPaths: string[] = [];
+    const warnings: string[] = [];
+    if (!targetAlreadyApplied) {
+      await writeFileAtomic(target.storageUri, content);
+      changedPaths.push(target.storageUri);
+    } else {
+      warnings.push('target memory already matched proposal content; completing approval');
+    }
+    if (!indexAlreadyApplied) {
+      await writeFileAtomic(indexRef.storageUri, prependIndexLine(currentIndex.content, indexLine));
+      changedPaths.push(indexRef.storageUri);
+    } else {
+      warnings.push('MEMORY.md already contained the proposal index line; completing approval');
+    }
     await updateLearningProposalStatus(
       this.learningStorePath,
       proposalId,
@@ -765,8 +830,8 @@ class MemdirMemoryAdapter implements MemorySourceAdapter {
       proposalId: proposal.id,
       applied: true,
       changedRefs: proposal.targetRefs,
-      changedPaths: [target.storageUri, indexRef.storageUri],
-      warnings: [],
+      changedPaths,
+      warnings,
     };
   }
 }
@@ -1047,8 +1112,12 @@ function indexLineFromContent(filePath: string, content: string): string {
 
 function prependIndexLine(current: string, line: string): string {
   const trimmed = current.trimEnd();
-  if (trimmed.split(/\r?\n/).includes(line)) return `${trimmed}\n`;
+  if (indexContainsLine(trimmed, line)) return `${trimmed}\n`;
   return trimmed.length > 0 ? `${line}\n${trimmed}\n` : `${line}\n`;
+}
+
+function indexContainsLine(content: string, line: string): boolean {
+  return content.trimEnd().split(/\r?\n/).includes(line);
 }
 
 async function readTextIfExists(filePath: string): Promise<ReadTextResult> {
@@ -1080,6 +1149,25 @@ function autoCuratorReportPath(memoryRoot: string, report: MemoryGovernanceRepor
   const stamp = sanitizePathSegment(report.generatedAt);
   const reportId = sanitizePathSegment(report.reportId);
   return join(memoryRoot, '.governance', 'reports', `${stamp}-${reportId}.json`);
+}
+
+async function pruneAutoCuratorReports(memoryRoot: string, cap: number): Promise<void> {
+  if (cap <= 0) return;
+  const reportDir = join(memoryRoot, '.governance', 'reports');
+  let entries: readonly { readonly name: string; readonly isFile: () => boolean }[];
+  try {
+    entries = await readdir(reportDir, { withFileTypes: true });
+  } catch (error) {
+    if (isMissingFile(error)) return;
+    throw error;
+  }
+  const reports = entries
+    .filter((entry) => entry.isFile() && entry.name.endsWith('.json'))
+    .map((entry) => entry.name)
+    .sort((left, right) => right.localeCompare(left));
+  for (const staleName of reports.slice(cap)) {
+    await rm(join(reportDir, staleName), { force: true });
+  }
 }
 
 async function readAutoCuratorState(filePath: string): Promise<AutoCuratorState | undefined> {

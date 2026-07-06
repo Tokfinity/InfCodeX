@@ -38,10 +38,20 @@ import {
   type MemoryActionProposal,
   type MemoryApplyResult,
   type MemoryGovernanceReport,
+  type MemoryRejectResult,
   type MemoryType,
 } from '@kodax-ai/agent';
 
 import type { Command } from './types.js';
+
+const PREVIEW_FINGERPRINT_TTL_MS = 15 * 60 * 1000;
+
+interface ProposalPreviewCacheEntry {
+  readonly fingerprints: Readonly<Record<string, string>>;
+  readonly createdAtMs: number;
+}
+
+const proposalPreviewFingerprints = new Map<string, ProposalPreviewCacheEntry>();
 
 function resolveCwd(context: { runtimeInfo?: { workspaceRoot?: string; executionCwd?: string } }): string {
   return (
@@ -277,6 +287,22 @@ function printApplyResult(result: MemoryApplyResult): void {
   console.log();
 }
 
+function printRejectResult(result: MemoryRejectResult): void {
+  if (!result.rejected) {
+    console.log(chalk.yellow(`\n[memory] ${result.proposalId} was not rejected.`));
+    console.log(chalk.dim(`  ${result.skippedReason ?? 'no reason provided'}\n`));
+    return;
+  }
+  console.log(chalk.dim(`\n[memory] rejected ${result.proposalId}.`));
+  if (result.review !== undefined) {
+    console.log(chalk.dim(`  review actions: ${result.review.actions.length}`));
+  }
+  for (const warning of result.warnings) {
+    console.log(chalk.dim(`  review warning: ${warning}`));
+  }
+  console.log();
+}
+
 function printGovernanceReport(report: MemoryGovernanceReport): void {
   console.log(chalk.cyan(`\n[memory] governance report ${report.reportId}`));
   for (const warning of report.warnings) {
@@ -345,12 +371,16 @@ export const memoryCommand: Command = {
   description: 'Inspect, govern, or rebuild per-project memory',
   usage: '/memory [list|pending|show|approve|reject|curate|rebuild|open|help]',
   argumentHint: 'list | pending | show <id> | approve <id> | reject <id> [reason] | curate | rebuild | open | help',
-  handler: async (args, context) => {
+  handler: async (args, context, callbacks) => {
     const cwd = resolveCwd(context);
     const memoryDir = resolveMemoryRoot(cwd);
     const entrypointPath = resolveMemoryEntrypoint(cwd);
     const sub = (args[0] ?? 'list').toLowerCase();
-    const controller = createMemoryControlPlane({ cwd });
+    const memoryReviewer = callbacks.createKodaXOptions?.().memoryReviewer;
+    const controller = createMemoryControlPlane({
+      cwd,
+      ...(memoryReviewer !== undefined ? { memoryReviewer } : {}),
+    });
 
     if (sub === 'help' || sub === '--help' || sub === '-h') {
       printHelp();
@@ -376,6 +406,7 @@ export const memoryCommand: Command = {
         return;
       }
       printMemoryProposal(proposal);
+      cachePreviewFingerprints(cwd, proposal.id, proposal.expectedFingerprints);
       return;
     }
     if (sub === 'approve') {
@@ -384,7 +415,14 @@ export const memoryCommand: Command = {
         console.log(chalk.yellow('\n[memory] missing proposal id for approve.\n'));
         return;
       }
-      printApplyResult(await controller.approveProposal(proposalId));
+      const cachedFingerprints = readCachedPreviewFingerprints(cwd, proposalId);
+      if (cachedFingerprints === undefined) {
+        console.log(chalk.yellow(`\n[memory] preview required before approve: /memory show ${proposalId}\n`));
+        return;
+      }
+      const result = await controller.approveProposal(proposalId, cachedFingerprints);
+      proposalPreviewFingerprints.delete(previewCacheKey(cwd, proposalId));
+      printApplyResult(result);
       return;
     }
     if (sub === 'reject') {
@@ -393,8 +431,9 @@ export const memoryCommand: Command = {
         console.log(chalk.yellow('\n[memory] missing proposal id for reject.\n'));
         return;
       }
-      await controller.rejectProposal(proposalId, args.slice(2).join(' ').trim());
-      console.log(chalk.dim(`\n[memory] rejected ${proposalId}.\n`));
+      const result = await controller.rejectProposal(proposalId, args.slice(2).join(' ').trim());
+      proposalPreviewFingerprints.delete(previewCacheKey(cwd, proposalId));
+      printRejectResult(result);
       return;
     }
     if (sub === 'curate') {
@@ -414,3 +453,41 @@ export const memoryCommand: Command = {
   },
   detailedHelp: printDetailedHelp,
 };
+
+function previewCacheKey(cwd: string, proposalId: string): string {
+  return `${cwd}\0${proposalId}`;
+}
+
+function cachePreviewFingerprints(
+  cwd: string,
+  proposalId: string,
+  fingerprints: Readonly<Record<string, string>>,
+): void {
+  pruneExpiredPreviewFingerprints(Date.now());
+  proposalPreviewFingerprints.set(previewCacheKey(cwd, proposalId), {
+    fingerprints,
+    createdAtMs: Date.now(),
+  });
+}
+
+function readCachedPreviewFingerprints(
+  cwd: string,
+  proposalId: string,
+): Readonly<Record<string, string>> | undefined {
+  const key = previewCacheKey(cwd, proposalId);
+  const cached = proposalPreviewFingerprints.get(key);
+  if (cached === undefined) return undefined;
+  if (Date.now() - cached.createdAtMs > PREVIEW_FINGERPRINT_TTL_MS) {
+    proposalPreviewFingerprints.delete(key);
+    return undefined;
+  }
+  return cached.fingerprints;
+}
+
+function pruneExpiredPreviewFingerprints(nowMs: number): void {
+  for (const [key, cached] of proposalPreviewFingerprints) {
+    if (nowMs - cached.createdAtMs > PREVIEW_FINGERPRINT_TTL_MS) {
+      proposalPreviewFingerprints.delete(key);
+    }
+  }
+}

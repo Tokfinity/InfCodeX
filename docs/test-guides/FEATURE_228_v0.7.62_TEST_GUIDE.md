@@ -98,6 +98,7 @@ Expected result:
 - [ ] `MEMORY.md` receives an index line for that topic.
 - [ ] The F224 learning proposal status becomes `approved`.
 - [ ] The command reports changed paths.
+- [ ] Approval fails with a preview-required message if `/memory show` was not run first or the cached preview has expired.
 
 ### TC-004: Stale Fingerprints Fail Closed
 
@@ -173,6 +174,7 @@ Expected result:
 - [ ] Stale, pending, quarantined, private, and sensitive refs are not injected by default.
 - [ ] Repeating the same input produces the same hint order.
 - [ ] Topic file bodies are not injected unless the agent reads them on demand.
+- [ ] Internal trace strings such as `Trace:`, `taskFingerprint`, and selected-ref lists are not present in the prompt body.
 
 ### TC-008: Large Memory Index Stays Bounded In Prompt
 
@@ -228,6 +230,7 @@ Expected result:
 - [ ] `.governance/auto-curate-state.json` records the last run.
 - [ ] No memory topic file or `MEMORY.md` content is modified.
 - [ ] The second immediate run skips as `not_due`.
+- [ ] Report files are bounded; only the newest 200 JSON reports are retained.
 
 ### TC-011: Feedback Review Uses Injected LLM Reviewer Without Direct Writes
 
@@ -264,6 +267,22 @@ Expected result:
 - [ ] No memory hints are injected.
 - [ ] Trace metadata marks memory as suppressed.
 - [ ] The selected ref id list is empty.
+
+### TC-012A: Prompt Eval Covers Memory Hint Wording
+
+**Priority**: High
+**Type**: Eval
+
+Steps:
+
+1. Run `KODAX_F228_MEMORY_HINTS_PROBE=pilot npm run test:eval -- feature-228-memory-hints`.
+2. Inspect the raw dump under the OS temp directory.
+
+Expected result:
+
+- [ ] The pointer-not-authority case reads the referenced memory file before relying on details.
+- [ ] Current repo evidence overrides stale memory.
+- [ ] Suppressed memory stays suppressed.
 
 ### TC-013: Session And Artifact Refs Are Inventory Only By Default
 

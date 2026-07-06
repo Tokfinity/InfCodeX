@@ -20,6 +20,7 @@ export type {
   MemoryProposalAction,
   MemoryRefFilter,
   MemoryRefKind,
+  MemoryRejectResult,
   MemoryReviewCandidateRef,
   MemoryReviewDraftAction,
   MemoryReviewInput,

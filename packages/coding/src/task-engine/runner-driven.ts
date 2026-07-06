@@ -48,6 +48,10 @@ import {
   emitResilienceDebug,
   saveSessionSnapshot,
 } from '../agent.js';
+import {
+  maybeReviewMemoryFeedbackFromPrompt,
+  maybeRunMemoryMaintenanceWindow,
+} from '../memory-runtime.js';
 import type {
   KodaXHarnessProfile,
   KodaXImageMediaType,
@@ -570,6 +574,8 @@ export async function runManagedTaskViaRunner(
   // and the per-iteration L1-L4 resolver inside the Runner loop. When no
   // signal fires, the helper returns the input options reference unchanged.
   const { options: effectiveOptions } = applyFollowupEscalationToOptions(options, prompt);
+  await maybeRunMemoryMaintenanceWindow(effectiveOptions);
+  await maybeReviewMemoryFeedbackFromPrompt(effectiveOptions, prompt);
   // Fire onSessionStart early so REPL / CLI listeners bound to session
   // init trigger for AMA runs the same way they trigger for SA runs.
   const providerName = effectiveOptions.provider ?? 'anthropic';

@@ -119,6 +119,14 @@ export interface MemoryApplyResult {
   readonly warnings: readonly string[];
 }
 
+export interface MemoryRejectResult {
+  readonly proposalId: string;
+  readonly rejected: boolean;
+  readonly skippedReason?: string;
+  readonly review?: MemoryReviewPlan;
+  readonly warnings: readonly string[];
+}
+
 export interface MemorySourceAdapter {
   readonly kind: MemoryRefKind;
   listRefs(filter?: MemoryRefFilter): Promise<readonly MemoryItemRef[]>;
@@ -270,9 +278,9 @@ export interface MemoryController {
   showProposal(id: string): Promise<MemoryActionProposal | undefined>;
   approveProposal(
     id: string,
-    expectedFingerprints?: Readonly<Record<string, string>>,
+    expectedFingerprints: Readonly<Record<string, string>>,
   ): Promise<MemoryApplyResult>;
-  rejectProposal(id: string, reason?: string): Promise<void>;
+  rejectProposal(id: string, reason?: string): Promise<MemoryRejectResult>;
   listRefs(filter?: MemoryRefFilter): Promise<readonly MemoryItemRef[]>;
   readRef(ref: MemoryItemRef): Promise<MemoryBodySnapshot>;
   runCurator(input?: MemoryCuratorInput): Promise<MemoryGovernanceReport>;

@@ -1,5 +1,5 @@
 import { existsSync, mkdtempSync, rmSync } from 'node:fs';
-import { mkdir, readFile, writeFile } from 'node:fs/promises';
+import { mkdir, readdir, readFile, writeFile } from 'node:fs/promises';
 import { join } from 'node:path';
 import { tmpdir } from 'node:os';
 
@@ -81,9 +81,9 @@ describe('MemoryControlPlane', () => {
       onEvent: (event) => events.push(event.type),
     });
     const proposal = await controller.showProposal('memory:p-apply');
-    expect(proposal).toBeDefined();
+    if (proposal === undefined) throw new Error('expected memory proposal');
 
-    const result = await controller.approveProposal('memory:p-apply', proposal?.expectedFingerprints);
+    const result = await controller.approveProposal('memory:p-apply', proposal.expectedFingerprints);
 
     expect(result.applied).toBe(true);
     expect(result.changedPaths).toHaveLength(2);
@@ -107,19 +107,75 @@ describe('MemoryControlPlane', () => {
       now: () => '2026-07-06T00:00:00.000Z',
     });
     const firstPreview = await controller.showProposal('memory:p-stale');
+    if (firstPreview === undefined) throw new Error('expected memory proposal');
     await writeFile(join(memoryRoot, 'MEMORY.md'), '- [changed](changed.md) - changed\n', 'utf8');
 
-    const result = await controller.approveProposal('memory:p-stale', firstPreview?.expectedFingerprints);
+    const result = await controller.approveProposal('memory:p-stale', firstPreview.expectedFingerprints);
 
     expect(result.applied).toBe(false);
-    expect(result.skippedReason).toContain('fingerprints');
+    expect(result.skippedReason).toContain('MEMORY.md changed after preview');
     const store = await readLearningProposalStore(learningStorePath);
     expect(store.proposals[0]?.status).toBe('pending');
+  });
+
+  it('fails closed when approval is missing preview fingerprints', async () => {
+    await upsertLearningProposal(learningStorePath, memoryProposal('p-no-preview'));
+    const controller = createMemoryControlPlane({
+      cwd,
+      learningStorePath,
+      memoryRoot,
+      discoverSkills: false,
+      now: () => '2026-07-06T00:00:00.000Z',
+    });
+
+    const result = await controller.approveProposal(
+      'memory:p-no-preview',
+      undefined as unknown as Readonly<Record<string, string>>,
+    );
+
+    expect(result.applied).toBe(false);
+    expect(result.skippedReason).toContain('requires fingerprints');
+    const store = await readLearningProposalStore(learningStorePath);
+    expect(store.proposals[0]?.status).toBe('pending');
+  });
+
+  it('recovers a partially applied memdir proposal when the topic already matches', async () => {
+    await upsertLearningProposal(learningStorePath, memoryProposal('p-partial'));
+    const controller = createMemoryControlPlane({
+      cwd,
+      learningStorePath,
+      memoryRoot,
+      discoverSkills: false,
+      now: () => '2026-07-06T00:00:00.000Z',
+    });
+    const preview = await controller.showProposal('memory:p-partial');
+    if (preview === undefined) throw new Error('expected memory proposal');
+    const topicPath = preview.preview.changedPaths.find((path) => path.endsWith('.md') && !path.endsWith('MEMORY.md'));
+    if (topicPath === undefined || preview.preview.diff === undefined) {
+      throw new Error('expected topic write preview');
+    }
+    await mkdir(memoryRoot, { recursive: true });
+    await writeFile(topicPath, preview.preview.diff, 'utf8');
+
+    const result = await controller.approveProposal('memory:p-partial', preview.expectedFingerprints);
+
+    expect(result.applied).toBe(true);
+    expect(result.changedPaths).toEqual([join(memoryRoot, 'MEMORY.md')]);
+    expect(result.warnings).toContain('target memory already matched proposal content; completing approval');
+    await expect(readFile(join(memoryRoot, 'MEMORY.md'), 'utf8')).resolves.toContain('Repo uses npm workspaces.');
+    const store = await readLearningProposalStore(learningStorePath);
+    expect(store.proposals[0]?.status).toBe('approved');
+    expect(store.proposals[0]?.appliedChangedPaths).toContain(topicPath);
   });
 
   it('builds deterministic packs and excludes pending private stale proposal-only refs', async () => {
     await upsertLearningProposal(learningStorePath, memoryProposal('p-pending'));
     await mkdir(memoryRoot, { recursive: true });
+    await writeFile(
+      join(memoryRoot, 'MEMORY.md'),
+      '- [Project stack](project_stack.md) - Repo uses npm workspaces\n',
+      'utf8',
+    );
     await writeFile(
       join(memoryRoot, 'project_stack.md'),
       [
@@ -156,6 +212,7 @@ describe('MemoryControlPlane', () => {
     });
 
     expect(pack.hints.map((hint) => hint.ref.id)).toContain('memdir:project_stack.md');
+    expect(pack.hints.map((hint) => hint.ref.id)).not.toContain('memdir:MEMORY.md');
     expect(pack.hints.map((hint) => hint.ref.id)).not.toContain('learning_proposal:p-pending');
     expect(pack.hints.map((hint) => hint.ref.id)).not.toContain('session:stale');
     expect(pack.hints.map((hint) => hint.ref.id)).not.toContain('artifact:private');
@@ -463,6 +520,41 @@ describe('MemoryControlPlane', () => {
     });
   });
 
+  it('runs feedback review when rejecting a proposal with a reason', async () => {
+    await upsertLearningProposal(learningStorePath, memoryProposal('p-reject-review'));
+    let received: MemoryReviewModelInput | undefined;
+    const controller = createMemoryControlPlane({
+      cwd,
+      learningStorePath,
+      memoryRoot,
+      discoverSkills: false,
+      now: () => '2026-07-06T00:00:00.000Z',
+      memoryReviewer: async (input) => {
+        received = input;
+        return {
+          trigger: input.trigger,
+          createdAt: '2026-07-06T00:00:00.000Z',
+          sourceRefs: input.sourceRefs,
+          candidateRefs: input.candidateRefs,
+          actions: [],
+          warnings: input.warnings,
+        };
+      },
+    });
+
+    const result = await controller.rejectProposal('memory:p-reject-review', 'wrong durable fact');
+
+    expect(result).toMatchObject({
+      proposalId: 'memory:p-reject-review',
+      rejected: true,
+    });
+    expect(result.review?.trigger).toBe('proposal_rejected');
+    expect(received?.userFeedback).toBe('wrong durable fact');
+    expect(received?.sourceRefs).toContain('learning_proposal:p-reject-review');
+    const store = await readLearningProposalStore(learningStorePath);
+    expect(store.proposals[0]?.status).toBe('rejected');
+  });
+
   it('runs maintenance curator for managed memory refs and persists an audit report', async () => {
     const events: string[] = [];
     const controller = createMemoryControlPlane({
@@ -493,6 +585,39 @@ describe('MemoryControlPlane', () => {
     await expect(readFile(join(memoryRoot, '.governance', 'auto-curate-state.json'), 'utf8'))
       .resolves.toContain('lastRunAt');
     expect(events).toContain('curator.completed');
+  });
+
+  it('caps automatic curator audit reports to the newest 200 files', async () => {
+    const reportDir = join(memoryRoot, '.governance', 'reports');
+    await mkdir(reportDir, { recursive: true });
+    for (let index = 0; index < 205; index++) {
+      const day = String(index + 1).padStart(3, '0');
+      await writeFile(join(reportDir, `2026-01-${day}-old-report.json`), '{}\n', 'utf8');
+    }
+    const controller = createMemoryControlPlane({
+      cwd,
+      learningStorePath,
+      memoryRoot,
+      extraRefs: [
+        {
+          ...extraRef('memdir:duplicate-a.md', 'memdir', 'active'),
+          bodyFingerprint: 'sha256:duplicate',
+        },
+        {
+          ...extraRef('memdir:duplicate-b.md', 'memdir', 'active'),
+          bodyFingerprint: 'sha256:duplicate',
+        },
+      ],
+      discoverSkills: false,
+      now: () => '2026-07-06T00:00:00.000Z',
+    });
+
+    const result = await controller.maybeRunAutoCurator();
+    const reports = (await readdir(reportDir)).filter((name) => name.endsWith('.json'));
+
+    expect(result.ran).toBe(true);
+    expect(reports).toHaveLength(200);
+    expect(reports).toContain(result.reportPath?.split(/[\\/]/).pop());
   });
 
   it('maintenance curator skips when not due or when there are not enough managed refs', async () => {
