@@ -26,7 +26,7 @@
 |---|---:|---|---|
 | Completed | 23 | `251, 252, 250, 248, 249, 247, 246, 245, 243, 242, 241, 233, 240, 239, 224, 221, 174, 211, 237, 229, 230, 234, 236` | `251, 252` shipped v0.7.61 (2026-07-06); `250` shipped v0.7.60 (2026-07-04); `248, 249` shipped v0.7.59 (2026-07-03); `245, 246, 247, 221` released v0.7.58 (2026-07-02); `233, 241, 242, 243` released v0.7.57; `239, 240` released v0.7.56; `224` released v0.7.54; `174, 211, 237` v0.7.53; `229` v0.7.50; `230, 234, 236` v0.7.51 |
 | InProgress | 0 | — | — |
-| Planned, near-term | 9 | `228, 244, 231, 235, 238, 232, 105, 108, 225` | `v0.7.63` -> `v0.7.84` |
+| Planned, near-term | 9 | `228, 244, 231, 235, 238, 232, 105, 108, 225` | `v0.7.62` -> `v0.7.100` |
 | Planned, v0.8.x | 5 | `007, 030, 093, 113, 139` | `v0.8.5+` |
 
 > v0.7.49 / v0.7.50 workflow split：`FEATURE_217` remains the human-facing workflow mode. Manual testing reopened required UI/UX and reliability deltas inside [v0.7.49](features/v0.7.49.md#13-v0749-completion-delta): bounded live progress with phase index / running 智能体 wording / preserved progress row / elapsed time / completed-child token usage, localized assistant-style launch notes, result-bearing child-agent digests or folded long-report notices, non-`info` agentic transcript, clear separation between `finished/spawned` progress and lifetime `maxAgents` cap, final synthesis, generated final-result contract lint, implicit `tokenBudget` stripping, generated task-command crash hardening, tighter AMAW invocation policy, wait timeout propagation, no default total workflow wall-clock timeout, terminal cleanup for un-awaited children, accurate template read/write metadata, capsule min-version preflight, manual run cleanup controls, and the closed minimal saved-workflow named reuse delta (`/workflow <savedName>` plus `/workflow rerun <runId|savedName>` with help/completion). `FEATURE_229` in v0.7.50 is the platform layer: it standardizes the same process as agent-layer snapshot/events, SDK subscription/polling, Space-style host policy and lifecycle controls, terminal-state helpers, workflow identity/lifecycle controls beyond named reuse (`display name | revise | rename | revision provenance`), REPL-as-consumer rendering, conservative retention, and durable source/provenance/resultSummary persistence; it is not the first implementation of the user-visible UX.
@@ -41,14 +41,15 @@
 | `v0.7.57` | `0` |
 | `v0.7.59` | `0` |
 | `v0.7.61` | `0` |
-| `v0.7.63` | `2` |
-| `v0.7.66` | `1` |
-| `v0.7.69` | `1` |
-| `v0.7.72` | `1` |
+| `v0.7.62` | `1` |
+| `v0.7.65` | `1` |
+| `v0.7.70` | `1` |
 | `v0.7.75` | `1` |
-| `v0.7.78` | `1` |
-| `v0.7.81` | `1` |
-| `v0.7.84` | `1` |
+| `v0.7.80` | `1` |
+| `v0.7.85` | `1` |
+| `v0.7.90` | `1` |
+| `v0.7.95` | `1` |
+| `v0.7.100` | `1` |
 | `v0.8.5` | `3` |
 | `v0.8.7` | `1` |
 | `v0.8.25` | `1` |
@@ -63,13 +64,21 @@
 > natural-language workflow activation) as a rollup on top of the Space SDK R1-R6
 > hardening and ark-coding lineup refresh.
 >
-> **2026-07-04 reschedule**: at user request, every planned `v0.7.x` feature at
+> **Historical 2026-07-04 reschedule, superseded for active targets by the
+> 2026-07-06 cadence update below**: at user request, every planned `v0.7.x` feature at
 > `v0.7.60` and later was pushed back 3 minor versions, EXCEPT `FEATURE_250`
 > (stays `v0.7.60`) and `FEATURE_251` (stays `v0.7.61`). Net: `v0.7.60` now carries
 > only `250`; `228` / `244` → `v0.7.63`; `231` → `v0.7.66`; `235` → `v0.7.69`;
 > `238` → `v0.7.72`; `232` → `v0.7.75`; `105` → `v0.7.78`; `108` → `v0.7.81`;
 > `225` → `v0.7.84`. All v0.8.x features unchanged. Design blocks were relocated to
 > the matching per-version files.
+>
+> **2026-07-06 cadence update**: `FEATURE_228` moved forward to `v0.7.62` as a
+> complete single-version memory-control-plane release. `FEATURE_244` moved to
+> `v0.7.65`. After `v0.7.65`, planned `v0.7.x` feature-bearing releases use a
+> five-slot cadence: `231` -> `v0.7.70`, `235` -> `v0.7.75`, `238` ->
+> `v0.7.80`, `232` -> `v0.7.85`, `105` -> `v0.7.90`, `108` -> `v0.7.95`,
+> and `225` -> `v0.7.100`. All v0.8.x features remain unchanged.
 
 ---
 
@@ -116,15 +125,15 @@
 
 | ID | Title | Category | Priority | Planned | Design |
 |---|---|---|---|---|---|
-| `228` | Unified Memory Control Plane + Memory Governance | Core / Memory + Governance | High | `v0.7.63` | [v0.7.63](features/v0.7.63.md#feature_228-unified-memory-control-plane--memory-governance) |
-| `244` | Repo Intelligence Graph-Only Index for Cold Module Queries | Core / Repo Intelligence + Performance | Medium | `v0.7.63` | [v0.7.63](features/v0.7.63.md#feature_244-repo-intelligence-graph-only-index-for-cold-module-queries) |
-| `231` | Durable Workflow Replay Resume (231b crash-recovery, optional) | Core / Workflow Persistence | Low | `v0.7.66` | [v0.7.66](features/v0.7.66.md#feature_231-durable-workflow-replay-resume) |
-| `235` | Draft Workflow — Generate-without-Run / Review-before-Start | Core / Workflow Lifecycle | Medium | `v0.7.69` | [v0.7.69](features/v0.7.69.md#feature_235-draft-workflow--generate-without-run--review-before-start) |
-| `238` | Workflow Learning Carrier + Workflow Handoff Inbox | Core / Workflow + Self-Improvement | Medium | `v0.7.72` | [v0.7.72](features/v0.7.72.md#feature_238-workflow-learning-carrier--workflow-handoff-inbox) |
-| `232` | Replay-Aware Workflow Pipeline Primitive | Core / Workflow Scheduling | Medium | `v0.7.75` | [v0.7.75](features/v0.7.75.md#feature_232-replay-aware-workflow-pipeline-primitive) |
-| `105` | Verifiable Advisor Consult Primitive | Internal / Core | High | `v0.7.78` | [v0.7.78](features/v0.7.78.md#feature_105-verifiable-advisor-consult-primitive) |
-| `108` | Session-Driven Reflective Prompt Patcher | Internal / Test Infrastructure | Medium | `v0.7.81` | [v0.7.81](features/v0.7.81.md#feature_108-session-driven-reflective-prompt-patcher) |
-| `225` | REPL Dead / Legacy Code Cleanup | Internal / Refactor + Tech Debt | Medium | `v0.7.84` | [v0.7.84](features/v0.7.84.md#feature_225-repl-dead--legacy-code-cleanup) |
+| `228` | Unified Memory Control Plane + Memory Governance | Core / Memory + Governance | High | `v0.7.62` | [v0.7.62](features/v0.7.62.md#feature_228-unified-memory-control-plane--memory-governance) |
+| `244` | Repo Intelligence Graph-Only Index for Cold Module Queries | Core / Repo Intelligence + Performance | Medium | `v0.7.65` | [v0.7.65](features/v0.7.65.md#feature_244-repo-intelligence-graph-only-index-for-cold-module-queries) |
+| `231` | Durable Workflow Replay Resume (231b crash-recovery, optional) | Core / Workflow Persistence | Low | `v0.7.70` | [v0.7.70](features/v0.7.70.md#feature_231-durable-workflow-replay-resume) |
+| `235` | Draft Workflow — Generate-without-Run / Review-before-Start | Core / Workflow Lifecycle | Medium | `v0.7.75` | [v0.7.75](features/v0.7.75.md#feature_235-draft-workflow--generate-without-run--review-before-start) |
+| `238` | Workflow Learning Carrier + Workflow Handoff Inbox | Core / Workflow + Self-Improvement | Medium | `v0.7.80` | [v0.7.80](features/v0.7.80.md#feature_238-workflow-learning-carrier--workflow-handoff-inbox) |
+| `232` | Replay-Aware Workflow Pipeline Primitive | Core / Workflow Scheduling | Medium | `v0.7.85` | [v0.7.85](features/v0.7.85.md#feature_232-replay-aware-workflow-pipeline-primitive) |
+| `105` | Verifiable Advisor Consult Primitive | Internal / Core | High | `v0.7.90` | [v0.7.90](features/v0.7.90.md#feature_105-verifiable-advisor-consult-primitive) |
+| `108` | Session-Driven Reflective Prompt Patcher | Internal / Test Infrastructure | Medium | `v0.7.95` | [v0.7.95](features/v0.7.95.md#feature_108-session-driven-reflective-prompt-patcher) |
+| `225` | REPL Dead / Legacy Code Cleanup | Internal / Refactor + Tech Debt | Medium | `v0.7.100` | [v0.7.100](features/v0.7.100.md#feature_225-repl-dead--legacy-code-cleanup) |
 | `007` | Theme System Consolidation | Enhancement | Medium | `v0.8.5` | [v0.8.5](features/v0.8.5.md#feature_007-theme-system-consolidation) |
 | `030` | Multi-Surface Delivery | Enhancement | High | `v0.8.5` | [v0.8.5](features/v0.8.5.md#feature_030-multi-surface-delivery) |
 | `093` | Coding and REPL Internal Circular Dependency Decoupling | Internal | Medium | `v0.8.5` | [v0.8.5](features/v0.8.5.md#feature_093-coding-and-repl-internal-circular-dependency-decoupling) |
