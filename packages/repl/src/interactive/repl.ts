@@ -110,7 +110,7 @@ import {
   type Completion,
 } from './autocomplete.js';
 import { getCurrentTheme, setTheme, type Theme } from './themes.js';
-import { initializeSkillRegistry } from '@kodax-ai/agent';
+import { getSkillRegistry, initializeSkillRegistry } from '@kodax-ai/agent';
 import { ReadlineUIContext } from '../ui/readline-ui.js';
 import { extractLastAssistantText, extractTitle as extractSessionTitle } from '../ui/utils/message-utils.js';
 import { executeShellCommand, isShellCommandHandled } from '../ui/utils/shell-executor.js';
@@ -153,6 +153,17 @@ interface SessionStorage extends KodaXSessionStorage {
 export async function buildClassicCliSkillsPrompt(gitRoot?: string): Promise<string> {
   const registry = await initializeSkillRegistry(gitRoot);
   return registry.getSystemPromptSnippet();
+}
+
+function syncClassicCliSkillsPrompt(
+  gitRoot: string | undefined,
+  options: KodaXOptions,
+): void {
+  const registry = getSkillRegistry(gitRoot);
+  options.context = {
+    ...options.context,
+    skillsPrompt: registry.getSystemPromptSnippet(),
+  };
 }
 
 // Simple in-memory session storage (replaceable with persistent storage) - 简单的内存会话存储（可替换为持久化存储）
@@ -2014,6 +2025,8 @@ async function runAgentRound(
       if (digest) console.log(`\n${digest}\n`);
     },
   };
+
+  syncClassicCliSkillsPrompt(context.gitRoot, options);
 
   // Pass existing conversation history for multi-turn dialogue - 传递已有的对话历史，实现多轮对话
   return runManagedTask(

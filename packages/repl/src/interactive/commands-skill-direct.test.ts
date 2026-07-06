@@ -2,7 +2,7 @@ import os from 'os';
 import path from 'path';
 import { mkdir, mkdtemp, rm, writeFile } from 'fs/promises';
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
-import { resetSkillRegistry } from '@kodax-ai/agent';
+import { getSkillRegistry, resetSkillRegistry } from '@kodax-ai/agent';
 import { executeCommand, getCommandRegistry, parseCommand, type CommandCallbacks } from './commands.js';
 
 const tempDirs: string[] = [];
@@ -121,6 +121,55 @@ describe('direct skill slash invocation', () => {
         skillInvocation: {
           name: 'github:yeet',
           arguments: '--draft',
+        },
+      },
+    });
+  });
+
+  it('requires /skill reload before newly added skills enter an initialized registry', async () => {
+    const root = await mkdtemp(path.join(os.tmpdir(), 'kodax-skill-reload-command-'));
+    tempDirs.push(root);
+    await writeProjectSkill(root, 'existing-skill', 'Existing skill.');
+
+    const registry = getSkillRegistry(root);
+    await registry.discover();
+    expect(registry.has('new-skill')).toBe(false);
+
+    await writeProjectSkill(root, 'new-skill', 'New skill added after startup.');
+
+    const logSpy = vi.spyOn(console, 'log').mockImplementation(() => {});
+
+    const beforeReload = await executeCommand(
+      { command: 'new-skill', args: [] },
+      buildContext(root) as never,
+      {} as CommandCallbacks,
+      {} as never,
+    );
+    expect(beforeReload).toBe(false);
+    expect(logSpy.mock.calls.flat().join('\n')).toContain('Unknown command');
+
+    logSpy.mockClear();
+    await executeCommand(
+      { command: 'skill', args: ['reload'] },
+      buildContext(root) as never,
+      {} as CommandCallbacks,
+      {} as never,
+    );
+    expect(logSpy.mock.calls.flat().join('\n')).toContain('Skills reloaded');
+
+    const afterReload = await executeCommand(
+      { command: 'new-skill', args: [] },
+      buildContext(root) as never,
+      {} as CommandCallbacks,
+      {} as never,
+    );
+
+    expect(afterReload).toMatchObject({
+      invocation: {
+        source: 'skill',
+        displayName: 'new-skill',
+        skillInvocation: {
+          name: 'new-skill',
         },
       },
     });

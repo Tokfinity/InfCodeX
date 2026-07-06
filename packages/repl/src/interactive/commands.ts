@@ -113,6 +113,12 @@ function summarizeAgentsFiles(files: AgentsFile[]): { global: number; directory:
   };
 }
 
+async function reloadSkillRegistry(gitRoot: string | undefined): Promise<number> {
+  const registry = getSkillRegistry(gitRoot);
+  await registry.reload();
+  return registry.size;
+}
+
 function createManualCompactionConfig(
   config: CompactionConfig,
   currentTokens: number,
@@ -463,13 +469,14 @@ export const BUILTIN_COMMANDS: Command[] = [
   },
   {
     name: 'reload',
-    description: 'Reload project rules and active extensions',
-    handler: async (_args, _context, callbacks, _currentConfig) => {
-      console.log(chalk.cyan('\nReloading project rule files and runtime extensions...\n'));
+    description: 'Reload project rules, skills, and active extensions',
+    handler: async (_args, context, callbacks, _currentConfig) => {
+      console.log(chalk.cyan('\nReloading project rule files, skills, and runtime extensions...\n'));
 
       try {
         const files = await callbacks.reloadAgentsFiles?.() ?? [];
         const result = summarizeAgentsFiles(files);
+        const skillCount = await reloadSkillRegistry(context.gitRoot);
         const extensionRuntime = getActiveExtensionRuntime();
         const extensionCount = extensionRuntime
           ? getExtensionRuntimeDiagnostics(extensionRuntime).loadedExtensions.length
@@ -487,14 +494,14 @@ export const BUILTIN_COMMANDS: Command[] = [
           reloadFailures = Math.max(0, diagnostics.failures.length - previousFailureCount);
         }
 
-        if (files.length === 0 && reloadedExtensions === 0) {
-          console.log(chalk.yellow('No project rule files or active extensions found.\n'));
-          console.log(chalk.dim('  Create AGENTS.md or CLAUDE.md in your project, or load extensions with --extension.'));
+        if (files.length === 0 && skillCount === 0 && reloadedExtensions === 0) {
+          console.log(chalk.yellow('No project rule files, skills, or active extensions found.\n'));
+          console.log(chalk.dim('  Create AGENTS.md or CLAUDE.md in your project, add skills, or load extensions with --extension.'));
           console.log();
           return;
         }
 
-        console.log(chalk.green('Rules reloaded successfully:\n'));
+        console.log(chalk.green('Reloaded successfully:\n'));
         if (result.global > 0) {
           console.log(chalk.dim(`  - Global: ${result.global} file(s)`));
         }
@@ -507,25 +514,29 @@ export const BUILTIN_COMMANDS: Command[] = [
         if (reloadedExtensions > 0) {
           console.log(chalk.dim(`  - Extensions: ${reloadedExtensions} module(s)`));
         }
+        if (skillCount > 0) {
+          console.log(chalk.dim(`  - Skills: ${skillCount} skill(s)`));
+        }
         if (reloadFailures > 0) {
           console.log(chalk.yellow(`  - Failures: ${reloadFailures} recorded (run /extensions for details)`));
         }
-        console.log(chalk.dim('  Updated rules will apply to subsequent requests in this session.'));
+        console.log(chalk.dim('  Updated rules and skills will apply to subsequent requests in this session.'));
         console.log();
         return;
       } catch (error) {
-        console.log(chalk.red('Failed to reload rules.\n'));
+        console.log(chalk.red('Failed to reload.\n'));
         console.log(chalk.dim(`  Error: ${error instanceof Error ? error.message : String(error)}`));
         console.log();
       }
     },
     detailedHelp: () => {
-      console.log(chalk.cyan('\n/reload - Reload Project Rules\n'));
+      console.log(chalk.cyan('\n/reload - Reload Project Context\n'));
       console.log(chalk.bold('Usage:'));
-      console.log(chalk.dim('  /reload            ') + 'Reload project rule files and active extensions');
+      console.log(chalk.dim('  /reload            ') + 'Reload project rule files, skills, and active extensions');
       console.log();
       console.log(chalk.bold('Description:'));
       console.log('  Reloads project-level context rules from AGENTS.md, CLAUDE.md, and .kodax/AGENTS.md files.');
+      console.log('  Reloads skills from .kodax/skills/, ~/.kodax/skills/, ~/.agents/skills/, plugins, and builtins.');
       console.log('  If a runtime extension host is active, it also hot-reloads loaded extensions.');
       console.log();
       console.log(chalk.bold('Rule Priority:'));
@@ -1778,6 +1789,7 @@ export const BUILTIN_COMMANDS: Command[] = [
       console.log(chalk.dim('  /skill               ') + 'List all available skills');
       console.log(chalk.dim('  /<skill-name> [args] ') + 'Invoke a skill when no command uses that name');
       console.log(chalk.dim('  /skill:<name> [args] ') + 'Invoke a skill with the compatibility form');
+      console.log(chalk.dim('  /skill reload        ') + 'Reload skills from disk');
       console.log(chalk.dim('  /skill pending       ') + 'List pending method-guide learning suggestions');
       console.log();
       console.log(chalk.bold('Description:'));
@@ -1788,6 +1800,7 @@ export const BUILTIN_COMMANDS: Command[] = [
       console.log();
       console.log(chalk.bold('Examples:'));
       console.log(chalk.dim('  /skill                    ') + '# List all skills');
+      console.log(chalk.dim('  /skill reload             ') + '# Reload skills after editing ~/.kodax/skills');
       console.log(chalk.dim('  /code-review src/         ') + '# Invoke code-review skill');
       console.log(chalk.dim('  /skill:code-review src/   ') + '# Compatibility form');
       console.log(chalk.dim('  /skill:tdd auth           ') + '# Invoke TDD skill');
@@ -2480,8 +2493,16 @@ async function printStatus(
 // Handle the /skill namespace command.
 async function handleSkillNamespaceCommand(args: string[], context: InteractiveContext): Promise<void> {
   const registry = getSkillRegistry(context.gitRoot);
+  const subcommand = args[0]?.toLowerCase();
 
-  // Ensure skills are discovered.
+  if (subcommand === 'reload') {
+    const count = await reloadSkillRegistry(context.gitRoot);
+    console.log(chalk.green(`\nSkills reloaded: ${count} skill(s)`));
+    console.log(chalk.dim('Updated skills will apply to subsequent requests in this session.'));
+    console.log();
+    return;
+  }
+
   if (registry.size === 0) {
     await initializeSkillRegistry(context.gitRoot);
   }
@@ -2928,7 +2949,6 @@ async function resolveDirectSkillCommand(
   context: InteractiveContext
 ): Promise<SkillMetadata | undefined> {
   const registry = getSkillRegistry(context.gitRoot);
-
   if (registry.size === 0) {
     await initializeSkillRegistry(context.gitRoot);
   }
@@ -2946,7 +2966,6 @@ async function executeSkillCommand(
   const skillName = parsed.command;
   const skillArgs = parsed.args.join(' ');
 
-  // Ensure skills are discovered.
   if (registry.size === 0) {
     await initializeSkillRegistry(context.gitRoot);
   }

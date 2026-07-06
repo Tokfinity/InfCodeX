@@ -22,9 +22,6 @@ interface SkillCompletionTrigger {
 
 export class SkillCompleter implements Completer {
   private gitRoot?: string;
-  private skillsCache: SkillMetadata[] | null = null;
-  private cacheTimestamp = 0;
-  private readonly cacheTtlMs = 5000;
 
   constructor(gitRoot?: string) {
     this.gitRoot = gitRoot;
@@ -66,7 +63,6 @@ export class SkillCompleter implements Completer {
   setGitRoot(gitRoot: string | undefined): void {
     if (this.gitRoot !== gitRoot) {
       this.gitRoot = gitRoot;
-      this.skillsCache = null;
     }
   }
 
@@ -91,23 +87,13 @@ export class SkillCompleter implements Completer {
   }
 
   private async getSkills(): Promise<SkillMetadata[]> {
-    const now = Date.now();
-
-    if (this.skillsCache && now - this.cacheTimestamp < this.cacheTtlMs) {
-      return this.skillsCache;
-    }
-
     try {
       const registry = getSkillRegistry(this.gitRoot);
-
       if (registry.size === 0) {
         await initializeSkillRegistry(this.gitRoot);
       }
 
-      this.skillsCache = registry.listUserInvocable();
-      this.cacheTimestamp = now;
-
-      return this.skillsCache;
+      return registry.listUserInvocable();
     } catch {
       return [];
     }

@@ -82,11 +82,45 @@ Updated project skill
     expect(secondLoad.description).toBe("Project skill");
   });
 
-  // 2026-05-20 — claudecode-parity snippet. The system-prompt snippet
-  // injected into every worker must point the model at the dedicated
-  // `skill` tool (not at `read SKILL.md`) and must NOT leak the
-  // SKILL.md filesystem path (that was a hint the model would
-  // legitimately follow back to `read`, defeating the rename).
+  it("reload refreshes changed skills and clears the full skill cache", async () => {
+    const rootDir = await createTempDir("kodax-skill-reload-");
+    tempDirs.push(rootDir);
+
+    await writeSkill(rootDir, "project", "reload-skill", "Original project skill");
+
+    const registry = new SkillRegistry(rootDir, {
+      projectPaths: [join(rootDir, "project")],
+      userPaths: [],
+      pluginPaths: [],
+      builtinPath: join(rootDir, "builtin"),
+    });
+
+    await registry.discover();
+    const firstLoad = await registry.loadFull("reload-skill");
+
+    await writeSkill(
+      rootDir,
+      "project",
+      "reload-skill",
+      "Updated project skill with longer text"
+    );
+
+    const staleLoad = await registry.loadFull("reload-skill");
+    expect(staleLoad).toBe(firstLoad);
+    expect(staleLoad.description).toBe("Original project skill");
+
+    await registry.reload();
+
+    expect(registry.get("reload-skill")?.description).toBe(
+      "Updated project skill with longer text"
+    );
+
+    const secondLoad = await registry.loadFull("reload-skill");
+    expect(secondLoad).not.toBe(firstLoad);
+    expect(secondLoad.description).toBe("Updated project skill with longer text");
+    expect(secondLoad.content).toContain("Updated project skill with longer text");
+  });
+
   it("getSystemPromptSnippet routes skill invocation through the `skill` tool", async () => {
     const rootDir = await createTempDir("kodax-skill-snippet-");
     tempDirs.push(rootDir);

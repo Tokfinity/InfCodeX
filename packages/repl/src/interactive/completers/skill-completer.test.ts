@@ -169,18 +169,14 @@ describe('SkillCompleter', () => {
     });
   });
 
-  describe('caching', () => {
-    it('should cache skill list', async () => {
-      // First call
+  describe('registry reads', () => {
+    it('should read the current registry list each time', async () => {
       await completer.getCompletions('/skill:', 7);
-
-      // Second call should use cache (mock should be called only once total from beforeEach + first call)
       const callCountAfterFirst = mockListUserInvocable.mock.calls.length;
 
       await completer.getCompletions('/skill:f', 8);
 
-      // Mock should not have been called again (cache hit)
-      expect(mockListUserInvocable.mock.calls.length).toBe(callCountAfterFirst);
+      expect(mockListUserInvocable.mock.calls.length).toBeGreaterThan(callCountAfterFirst);
     });
   });
 });
