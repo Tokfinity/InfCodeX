@@ -42,6 +42,24 @@ function restoreEnv(name: string, value: string | undefined): void {
   process.env[name] = value;
 }
 
+async function removeTempDirWithRetries(dir: string): Promise<void> {
+  const delaysMs = [0, 100, 250, 500, 1_000] as const;
+  let lastError: unknown;
+  for (const delayMs of delaysMs) {
+    if (delayMs > 0) {
+      await new Promise((resolve) => setTimeout(resolve, delayMs));
+    }
+    try {
+      rmSync(dir, { recursive: true, force: true, maxRetries: 5, retryDelay: 100 });
+      return;
+    } catch (error) {
+      lastError = error;
+    }
+  }
+  if (lastError instanceof Error) throw lastError;
+  throw new Error(String(lastError));
+}
+
 describe('repo-intelligence runtime facade', () => {
   let tempDir = '';
   const originalEnv = {
@@ -76,7 +94,7 @@ describe('repo-intelligence runtime facade', () => {
     restoreEnv('KODAX_PREWARM_REPO_INTELLIGENCE', originalEnv.prewarm);
     await shutdownRepoIntelligenceWorkerForTest();
     if (tempDir) {
-      rmSync(tempDir, { recursive: true, force: true, maxRetries: 3, retryDelay: 100 });
+      await removeTempDirWithRetries(tempDir);
       tempDir = '';
     }
   });
