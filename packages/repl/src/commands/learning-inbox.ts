@@ -27,13 +27,14 @@ function matchesFilter(entry: StoredLearningProposal, filter: LearningInboxFilte
   if (filter === 'workflow') {
     return entry.proposal.destination === 'workflow_handoff';
   }
-  return entry.proposal.destination === 'memdir_handoff';
+  return entry.proposal.destination === 'memdir_handoff'
+    || entry.proposal.destination === 'reasoning_handoff';
 }
 
 function headingForFilter(filter: LearningInboxFilter): string {
   if (filter === 'skill') return 'pending method guides';
   if (filter === 'workflow') return 'pending runnable workflows';
-  return 'pending context notes';
+  return 'pending memory handoffs';
 }
 
 function proposalLabel(entry: StoredLearningProposal): string {

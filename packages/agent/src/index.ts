@@ -536,6 +536,11 @@ export type {
 // `@kodax-ai/repl` `/memory` slash + transcript badge (Phase D).
 export * from './memory/index.js';
 
+// FEATURE_228 (v0.7.62) - Unified memory control plane + governance.
+// Iterates on FEATURE_224 by projecting memory handoffs from the existing
+// learning proposal store into typed refs, guarded approvals, and memory packs.
+export * from './memory-control/index.js';
+
 // FEATURE_224 (v0.7.54) - Procedural learning triage + SkillCurator v1
 // substrate. Owns learning intake, skill governance, and safe skill proposal
 // apply primitives; workflow and memory mutation remain destination-specific.

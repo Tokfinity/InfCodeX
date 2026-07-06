@@ -302,7 +302,7 @@ describe('ArgumentCompleter', () => {
           ['/agent-mode ', ['ama', 'amaw', 'ama-workflow', 'sa', 'toggle']],
           ['/verifier-log ', ['on', 'off']],
           ['/stall-log ', ['on', 'off']],
-          ['/memory ', ['list', 'rebuild', 'open', 'help']],
+          ['/memory ', ['list', 'pending', 'show', 'approve', 'reject', 'curate', 'rebuild', 'open', 'help']],
           ['/goal ', ['status', 'pause', 'resume', 'clear', 'help']],
           ['/paste ', ['show', 'list']],
           ['/review ', ['--lean', '--workflow', 'base', 'sha', 'help']],

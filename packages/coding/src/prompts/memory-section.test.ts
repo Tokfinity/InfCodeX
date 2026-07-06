@@ -189,4 +189,32 @@ describe('buildMemorySection', () => {
 
     expect(buildMemorySection(cwd).content).toContain('second');
   });
+
+  it('adds deterministic governed memory hints from topic frontmatter', () => {
+    fs.mkdirSync(memoryDir, { recursive: true });
+    fs.writeFileSync(
+      path.join(memoryDir, 'MEMORY.md'),
+      '- [Project stack](project_stack.md) - Repo uses npm workspaces',
+      'utf-8',
+    );
+    fs.writeFileSync(
+      path.join(memoryDir, 'project_stack.md'),
+      [
+        '---',
+        'name: Project stack',
+        'description: Repo uses npm workspaces',
+        'type: project',
+        '---',
+        '',
+        'Full body remains in the topic file.',
+      ].join('\n'),
+      'utf-8',
+    );
+
+    const result = buildMemorySection(cwd);
+
+    expect(result.content).toContain('Governed memory hints (deterministic):');
+    expect(result.content).toContain('- Project stack: Repo uses npm workspaces (project_stack.md)');
+    expect(result.content).not.toContain('Full body remains in the topic file.');
+  });
 });

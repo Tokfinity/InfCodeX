@@ -38,8 +38,10 @@
  */
 
 import * as fs from 'node:fs';
+import * as path from 'node:path';
 
 import {
+  parseMemoryFile,
   resolveMemoryEntrypoint,
   resolveMemoryRoot,
   truncateEntrypointContent,
@@ -52,6 +54,13 @@ export interface MemorySectionResult {
   readonly memoryDir: string;
   /** True when the MEMORY.md file exists and was read. */
   readonly entrypointExists: boolean;
+}
+
+interface MemoryHintEntry {
+  readonly filename: string;
+  readonly title: string;
+  readonly hook: string;
+  readonly mtimeMs: number;
 }
 
 /**
@@ -124,11 +133,13 @@ export function buildMemorySection(cwd: string): MemorySectionResult {
  */
 function buildBodyWithEntrypoint(memoryDir: string, raw: string): string {
   const truncated = truncateEntrypointContent(raw);
+  const hintLines = buildMemoryHintLines(memoryDir);
   return [
     '=== Persistent memory (cross-session) ===',
     `Memory directory: ${memoryDir}`,
     '',
     truncated.content,
+    ...hintLines,
     '',
     '[Index only — read individual files via the read tool when you need details. See memory rules section above.]',
   ].join('\n');
@@ -145,4 +156,52 @@ function buildEmptyFallback(memoryDir: string): string {
     '',
     'Your MEMORY.md is currently empty. When you save new memories, they will appear here.',
   ].join('\n');
+}
+
+function buildMemoryHintLines(memoryDir: string): readonly string[] {
+  const entries = [...readMemoryHintEntries(memoryDir)]
+    .sort((left: MemoryHintEntry, right: MemoryHintEntry) => right.mtimeMs - left.mtimeMs)
+    .slice(0, 8);
+  if (entries.length === 0) return [];
+  return [
+    '',
+    'Governed memory hints (deterministic):',
+    ...entries.map((entry) => `- ${entry.title}: ${entry.hook} (${entry.filename})`),
+  ];
+}
+
+function readMemoryHintEntries(memoryDir: string): readonly MemoryHintEntry[] {
+  let files: fs.Dirent[];
+  try {
+    files = fs.readdirSync(memoryDir, { withFileTypes: true });
+  } catch {
+    return [];
+  }
+  const entries: MemoryHintEntry[] = [];
+  for (const file of files) {
+    if (!file.isFile() || file.name === 'MEMORY.md' || !file.name.endsWith('.md')) continue;
+    const entry = readMemoryHintEntry(path.join(memoryDir, file.name), file.name);
+    if (entry !== undefined) entries.push(entry);
+  }
+  return entries;
+}
+
+function readMemoryHintEntry(absolutePath: string, filename: string): MemoryHintEntry | undefined {
+  let raw: string;
+  let mtimeMs: number;
+  try {
+    raw = fs.readFileSync(absolutePath, 'utf-8');
+    mtimeMs = fs.statSync(absolutePath).mtimeMs;
+  } catch {
+    return undefined;
+  }
+  const parsed = parseMemoryFile(raw);
+  const title = parsed.frontmatter.name ?? path.basename(filename, '.md');
+  const hook = parsed.frontmatter.description ?? firstBodyLine(parsed.body) ?? title;
+  return { filename, title, hook, mtimeMs };
+}
+
+function firstBodyLine(body: string): string | undefined {
+  const line = body.split(/\r?\n/).map((entry) => entry.trim()).find((entry) => entry.length > 0);
+  return line === undefined ? undefined : line.slice(0, 160);
 }

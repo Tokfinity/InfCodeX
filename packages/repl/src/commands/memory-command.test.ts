@@ -26,7 +26,15 @@ import * as path from 'node:path';
 
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
 
-import { setAgentConfigHome, resolveMemoryRoot, resolveMemoryEntrypoint } from '@kodax-ai/agent';
+import {
+  setAgentConfigHome,
+  resolveLearningProposalStore,
+  resolveMemoryRoot,
+  resolveMemoryEntrypoint,
+  readLearningProposalStore,
+  upsertLearningProposal,
+  type MemoryLearningHandoff,
+} from '@kodax-ai/agent';
 
 import { memoryCommand } from './memory-command.js';
 
@@ -232,4 +240,74 @@ describe('FEATURE_124 Phase D — /memory command', () => {
     expect(log.contains('/memory rebuild')).toBe(true);
     expect(log.contains('/memory open')).toBe(true);
   });
+
+  it('pending/show/approve use the memory control plane over the F224 store', async () => {
+    await upsertLearningProposal(resolveLearningProposalStore(cwd), memoryProposal('p-memory-command'));
+
+    const { log, restore } = captureConsole();
+    try {
+      await invoke(['pending'], cwd);
+      await invoke(['show', 'memory:p-memory-command'], cwd);
+      await invoke(['approve', 'memory:p-memory-command'], cwd);
+    } finally {
+      restore();
+    }
+
+    expect(log.contains('pending memory proposals')).toBe(true);
+    expect(log.contains('memory:p-memory-command')).toBe(true);
+    expect(log.contains('approved and applied memory:p-memory-command')).toBe(true);
+    const store = await readLearningProposalStore(resolveLearningProposalStore(cwd));
+    expect(store.proposals[0]?.status).toBe('approved');
+    expect(fs.readFileSync(resolveMemoryEntrypoint(cwd), 'utf8')).toContain('Memory command stores project facts.');
+  });
+
+  it('manual acceptance path covers pending, show, reject, approve, and curate', async () => {
+    await upsertLearningProposal(resolveLearningProposalStore(cwd), memoryProposal('p-accept-apply'));
+    await upsertLearningProposal(resolveLearningProposalStore(cwd), memoryProposal('p-accept-reject'));
+    const memoryDir = resolveMemoryRoot(cwd);
+    fs.mkdirSync(memoryDir, { recursive: true });
+    const duplicateBody = '---\nname: Duplicate note\ndescription: Same content\ntype: project\n---\n\nSame body.\n';
+    fs.writeFileSync(path.join(memoryDir, 'duplicate_a.md'), duplicateBody, 'utf8');
+    fs.writeFileSync(path.join(memoryDir, 'duplicate_b.md'), duplicateBody, 'utf8');
+
+    const { log, restore } = captureConsole();
+    try {
+      await invoke(['pending'], cwd);
+      await invoke(['show', 'memory:p-accept-apply'], cwd);
+      await invoke(['reject', 'memory:p-accept-reject', 'not', 'useful'], cwd);
+      await invoke(['approve', 'memory:p-accept-apply'], cwd);
+      await invoke(['curate'], cwd);
+    } finally {
+      restore();
+    }
+
+    expect(log.contains('pending memory proposals')).toBe(true);
+    expect(log.contains('memory:p-accept-apply')).toBe(true);
+    expect(log.contains('rejected memory:p-accept-reject')).toBe(true);
+    expect(log.contains('approved and applied memory:p-accept-apply')).toBe(true);
+    expect(log.contains('governance report')).toBe(true);
+    expect(log.contains('duplicate')).toBe(true);
+    const store = await readLearningProposalStore(resolveLearningProposalStore(cwd));
+    const statuses = new Map(store.proposals.map((proposal) => [proposal.proposalId, proposal.status]));
+    expect(statuses.get('p-accept-apply')).toBe('approved');
+    expect(statuses.get('p-accept-reject')).toBe('rejected');
+  });
 });
+
+function memoryProposal(proposalId: string): MemoryLearningHandoff {
+  return {
+    destination: 'memdir_handoff',
+    proposalId,
+    origin: 'background_learning',
+    userLabel: 'context_note',
+    memoryKind: 'project',
+    body: 'Memory command stores project facts.',
+    metadata: {
+      writeOrigin: 'background_learning',
+      executionContext: 'primary',
+      sessionId: 'session-memory-command',
+      sourceRefs: ['turn:memory-command'],
+      completedTurn: true,
+    },
+  };
+}

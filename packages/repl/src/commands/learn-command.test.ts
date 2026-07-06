@@ -26,7 +26,7 @@ interface CapturedLog {
 
 function captureOutput(): { readonly log: CapturedLog; readonly restore: () => void } {
   const lines: string[] = [];
-  const spy = vi.spyOn(process.stdout, 'write').mockImplementation(((
+  const stdoutSpy = vi.spyOn(process.stdout, 'write').mockImplementation(((
     chunk: string | Uint8Array,
     encodingOrCallback?: BufferEncoding | ((err?: Error | null) => void),
     callback?: (err?: Error | null) => void,
@@ -36,12 +36,18 @@ function captureOutput(): { readonly log: CapturedLog; readonly restore: () => v
     done?.();
     return true;
   }) as typeof process.stdout.write);
+  const consoleSpy = vi.spyOn(console, 'log').mockImplementation((...args: unknown[]) => {
+    lines.push(args.map((entry) => String(entry)).join(' '));
+  });
   return {
     log: {
       lines,
       contains: (needle: string) => lines.some((line) => line.includes(needle)),
     },
-    restore: () => spy.mockRestore(),
+    restore: () => {
+      stdoutSpy.mockRestore();
+      consoleSpy.mockRestore();
+    },
   };
 }
 
@@ -558,7 +564,7 @@ describe('FEATURE_224 /learn command', () => {
       restore();
     }
 
-    expect(log.contains('pending context notes')).toBe(true);
+    expect(log.contains('pending memory proposals')).toBe(true);
     expect(log.contains('p-memory-filter')).toBe(true);
   });
 });

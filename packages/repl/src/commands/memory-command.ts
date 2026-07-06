@@ -31,13 +31,16 @@ import * as path from 'node:path';
 import chalk from 'chalk';
 
 import {
+  createMemoryControlPlane,
   parseMemoryFile,
   resolveMemoryEntrypoint,
   resolveMemoryRoot,
+  type MemoryActionProposal,
+  type MemoryApplyResult,
+  type MemoryGovernanceReport,
   type MemoryType,
 } from '@kodax-ai/agent';
 
-import { printLearningPendingForFilter } from './learning-inbox.js';
 import type { Command } from './types.js';
 
 function resolveCwd(context: { runtimeInfo?: { workspaceRoot?: string; executionCwd?: string } }): string {
@@ -218,11 +221,85 @@ function openMemory(memoryDir: string, entrypointPath: string): void {
   );
 }
 
+function proposalLabel(proposal: MemoryActionProposal): string {
+  const targets = proposal.targetRefs.map((ref) => ref.title ?? ref.id).join(', ');
+  return `${proposal.action} ${targets || '(report only)'}`;
+}
+
+function printMemoryInbox(proposals: readonly MemoryActionProposal[]): void {
+  console.log(chalk.cyan('\n[memory] pending memory proposals'));
+  if (proposals.length === 0) {
+    console.log(chalk.dim('  (none)\n'));
+    return;
+  }
+  for (const proposal of proposals) {
+    console.log(`  ${chalk.cyan(proposal.id)} ${chalk.dim(`[${proposal.action}]`)} ${proposalLabel(proposal)}`);
+  }
+  console.log(chalk.dim('\n  Use /memory show <id>, /memory approve <id>, or /memory reject <id>.\n'));
+}
+
+function printMemoryProposal(proposal: MemoryActionProposal): void {
+  console.log(chalk.cyan(`\n[memory] ${proposal.id}`));
+  console.log(chalk.dim(`  action : ${proposal.action}`));
+  console.log(chalk.dim(`  risk   : ${proposal.risk}`));
+  console.log(chalk.dim(`  reason : ${proposal.rationale}`));
+  console.log(chalk.dim(`  summary: ${proposal.preview.summary}`));
+  if (proposal.preview.changedPaths.length > 0) {
+    console.log(chalk.dim('  changed paths:'));
+    for (const changedPath of proposal.preview.changedPaths) {
+      console.log(chalk.dim(`    - ${changedPath}`));
+    }
+  }
+  if (proposal.preview.warnings.length > 0) {
+    console.log(chalk.yellow('  warnings:'));
+    for (const warning of proposal.preview.warnings) {
+      console.log(chalk.yellow(`    - ${warning}`));
+    }
+  }
+  if (proposal.preview.diff !== undefined && proposal.preview.diff.trim().length > 0) {
+    console.log(chalk.cyan('\n--- preview ---'));
+    console.log(proposal.preview.diff.trimEnd());
+    console.log(chalk.cyan('--- end ---'));
+  }
+  console.log();
+}
+
+function printApplyResult(result: MemoryApplyResult): void {
+  if (!result.applied) {
+    console.log(chalk.yellow(`\n[memory] ${result.proposalId} was not applied.`));
+    console.log(chalk.dim(`  ${result.skippedReason ?? 'no reason provided'}\n`));
+    return;
+  }
+  console.log(chalk.green(`\n[memory] approved and applied ${result.proposalId}.`));
+  if (result.changedPaths.length > 0) {
+    console.log(chalk.dim(`  changed: ${result.changedPaths.join(', ')}`));
+  }
+  console.log();
+}
+
+function printGovernanceReport(report: MemoryGovernanceReport): void {
+  console.log(chalk.cyan(`\n[memory] governance report ${report.reportId}`));
+  for (const warning of report.warnings) {
+    console.log(chalk.yellow(`  warning: ${warning}`));
+  }
+  for (const finding of report.findings) {
+    console.log(`  ${chalk.dim(`[${finding.severity}]`)} ${finding.kind}: ${finding.summary}`);
+    if (finding.refIds.length > 0) {
+      console.log(chalk.dim(`    refs: ${finding.refIds.join(', ')}`));
+    }
+  }
+  console.log();
+}
+
 function printHelp(): void {
   console.log(chalk.cyan('\n/memory - Inspect or rebuild per-project memory'));
   console.log(chalk.dim('  /memory                 List MEMORY.md + memory directory'));
   console.log(chalk.dim('  /memory list            Same as `/memory`'));
-  console.log(chalk.dim('  /memory pending         List pending context-note learning suggestions'));
+  console.log(chalk.dim('  /memory pending         List pending memory learning proposals'));
+  console.log(chalk.dim('  /memory show <id>       Preview a memory proposal'));
+  console.log(chalk.dim('  /memory approve <id>    Approve and apply a memory proposal'));
+  console.log(chalk.dim('  /memory reject <id>     Reject a memory proposal'));
+  console.log(chalk.dim('  /memory curate          Report duplicate/stale/quarantined refs'));
   console.log(chalk.dim('  /memory rebuild         Regenerate MEMORY.md from topic frontmatter'));
   console.log(chalk.dim('  /memory open            Print paths so you can open them in your editor'));
   console.log(chalk.dim('  /memory help            Show this help'));
@@ -234,7 +311,11 @@ function printDetailedHelp(): void {
   console.log('Usage:');
   console.log(chalk.cyan('  /memory                 ') + chalk.dim('Show MEMORY.md + topic file count'));
   console.log(chalk.cyan('  /memory list            ') + chalk.dim('Alias for `/memory`'));
-  console.log(chalk.cyan('  /memory pending         ') + chalk.dim('List pending context-note learning suggestions'));
+  console.log(chalk.cyan('  /memory pending         ') + chalk.dim('List pending memory learning proposals'));
+  console.log(chalk.cyan('  /memory show <id>       ') + chalk.dim('Preview a memory proposal'));
+  console.log(chalk.cyan('  /memory approve <id>    ') + chalk.dim('Approve and apply a memory proposal'));
+  console.log(chalk.cyan('  /memory reject <id>     ') + chalk.dim('Reject a memory proposal'));
+  console.log(chalk.cyan('  /memory curate          ') + chalk.dim('Report duplicate/stale/quarantined refs'));
   console.log(chalk.cyan('  /memory rebuild         ') + chalk.dim('Regenerate MEMORY.md (newest first by mtime)'));
   console.log(chalk.cyan('  /memory open            ') + chalk.dim('Print the index + dir paths for editor use'));
   console.log(chalk.cyan('  /memory help            ') + chalk.dim('Show this help\n'));
@@ -261,14 +342,15 @@ function printDetailedHelp(): void {
  */
 export const memoryCommand: Command = {
   name: 'memory',
-  description: 'Inspect or rebuild per-project memory (FEATURE_124)',
-  usage: '/memory [list|pending|rebuild|open|help]',
-  argumentHint: 'list | pending | rebuild | open | help',
+  description: 'Inspect, govern, or rebuild per-project memory',
+  usage: '/memory [list|pending|show|approve|reject|curate|rebuild|open|help]',
+  argumentHint: 'list | pending | show <id> | approve <id> | reject <id> [reason] | curate | rebuild | open | help',
   handler: async (args, context) => {
     const cwd = resolveCwd(context);
     const memoryDir = resolveMemoryRoot(cwd);
     const entrypointPath = resolveMemoryEntrypoint(cwd);
     const sub = (args[0] ?? 'list').toLowerCase();
+    const controller = createMemoryControlPlane({ cwd });
 
     if (sub === 'help' || sub === '--help' || sub === '-h') {
       printHelp();
@@ -278,8 +360,45 @@ export const memoryCommand: Command = {
       await listMemory(memoryDir, entrypointPath);
       return;
     }
-    if (sub === 'pending') {
-      await printLearningPendingForFilter(cwd, 'memory');
+    if (sub === 'pending' || sub === 'inbox') {
+      printMemoryInbox(await controller.listInbox());
+      return;
+    }
+    if (sub === 'show') {
+      const proposalId = args[1];
+      if (proposalId === undefined) {
+        console.log(chalk.yellow('\n[memory] missing proposal id for show.\n'));
+        return;
+      }
+      const proposal = await controller.showProposal(proposalId);
+      if (proposal === undefined) {
+        console.log(chalk.yellow(`\n[memory] proposal not found: ${proposalId}\n`));
+        return;
+      }
+      printMemoryProposal(proposal);
+      return;
+    }
+    if (sub === 'approve') {
+      const proposalId = args[1];
+      if (proposalId === undefined) {
+        console.log(chalk.yellow('\n[memory] missing proposal id for approve.\n'));
+        return;
+      }
+      printApplyResult(await controller.approveProposal(proposalId));
+      return;
+    }
+    if (sub === 'reject') {
+      const proposalId = args[1];
+      if (proposalId === undefined) {
+        console.log(chalk.yellow('\n[memory] missing proposal id for reject.\n'));
+        return;
+      }
+      await controller.rejectProposal(proposalId, args.slice(2).join(' ').trim());
+      console.log(chalk.dim(`\n[memory] rejected ${proposalId}.\n`));
+      return;
+    }
+    if (sub === 'curate') {
+      printGovernanceReport(await controller.runCurator());
       return;
     }
     if (sub === 'rebuild') {

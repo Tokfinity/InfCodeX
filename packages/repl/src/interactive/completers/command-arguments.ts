@@ -184,6 +184,11 @@ const TOGGLE_ARGS: ArgumentDefinition[] = [
 
 const MEMORY_ARGS: ArgumentDefinition[] = [
   { name: 'list', description: 'List project memory files', type: 'enum' },
+  { name: 'pending', description: 'List pending memory proposals', type: 'enum' },
+  { name: 'show', description: 'Preview a memory proposal', type: 'enum' },
+  { name: 'approve', description: 'Approve a memory proposal', type: 'enum' },
+  { name: 'reject', description: 'Reject a memory proposal', type: 'enum' },
+  { name: 'curate', description: 'Report memory governance findings', type: 'enum' },
   { name: 'rebuild', description: 'Rebuild MEMORY.md index', type: 'enum' },
   { name: 'open', description: 'Print the memory entrypoint path', type: 'enum' },
   { name: 'help', description: 'Show memory help', type: 'enum' },
