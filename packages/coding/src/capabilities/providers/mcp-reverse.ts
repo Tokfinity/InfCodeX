@@ -83,6 +83,7 @@ async function elicitForm(ui: UserInteraction, request: McpElicitRequest): Promi
     const answer = asSingleSelection(await ui.askUser({
       question: `${banner}${detail}`,
       kind: 'select',
+      allowCustomInput: false,
       options: [{ label: 'Approve', value: 'accept' }, { label: 'Decline', value: 'decline' }],
     }));
     return answer === 'accept' ? { action: 'accept', content: {} } : { action: 'decline' };
@@ -103,6 +104,7 @@ async function elicitForm(ui: UserInteraction, request: McpElicitRequest): Promi
       const answer = asSingleSelection(await ui.askUser({
         question,
         kind: 'select',
+        allowCustomInput: false,
         options: choices,
       }));
       const selectedIndex = Number(answer);
@@ -113,6 +115,7 @@ async function elicitForm(ui: UserInteraction, request: McpElicitRequest): Promi
       const answer = asSingleSelection(await ui.askUser({
         question,
         kind: 'select',
+        allowCustomInput: false,
         options: [{ label: 'Yes', value: 'true' }, { label: 'No', value: 'false' }],
       }));
       content[key] = answer === 'true';
@@ -132,6 +135,7 @@ async function elicitForm(ui: UserInteraction, request: McpElicitRequest): Promi
     const confirm = asSingleSelection(await ui.askUser({
       question: `${who} will receive:\n\n${summary}\n\nSend these values?`,
       kind: 'select',
+      allowCustomInput: false,
       options: [{ label: 'Send', value: 'send' }, { label: 'Cancel', value: 'cancel' }],
     }));
     if (confirm !== 'send') return { action: 'cancel' };
@@ -161,6 +165,7 @@ async function elicitUrl(ui: UserInteraction, request: McpElicitRequest): Promis
       `${banner}${detail}\n\n`
       + `URL: ${url}\nDomain: ${domain}\n\nOnly continue if you trust this domain. KodaX will NOT open it automatically.`,
     kind: 'select',
+    allowCustomInput: false,
     options: [
       { label: 'I trust this — open it myself and continue', value: 'accept' },
       { label: 'Decline', value: 'decline' },

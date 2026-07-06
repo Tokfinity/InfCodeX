@@ -1,10 +1,13 @@
 import type { AskUserQuestionOptions } from "@kodax-ai/coding";
+import { ASK_USER_CUSTOM_INPUT_SIGNAL } from "@kodax-ai/agent";
 
 export interface SelectOption {
   label: string;
   value: string;
   description?: string;
 }
+
+export const DEFAULT_CUSTOM_INPUT_LABEL = "Other...";
 
 export function toSelectOptions(
   options: AskUserQuestionOptions["options"],
@@ -15,6 +18,25 @@ export function toSelectOptions(
     value: option.value,
     description: option.description,
   }));
+}
+
+export function appendCustomInputOption(
+  selectOptions: SelectOption[],
+  options: Pick<AskUserQuestionOptions, "kind" | "allowCustomInput" | "customInputLabel">,
+): SelectOption[] {
+  if (options.kind === "input" || options.allowCustomInput === false) {
+    return selectOptions;
+  }
+  if (selectOptions.some((option) => option.value === ASK_USER_CUSTOM_INPUT_SIGNAL)) {
+    return selectOptions;
+  }
+  return [
+    ...selectOptions,
+    {
+      label: options.customInputLabel ?? DEFAULT_CUSTOM_INPUT_LABEL,
+      value: ASK_USER_CUSTOM_INPUT_SIGNAL,
+    },
+  ];
 }
 
 export function getAskUserDialogTitle(

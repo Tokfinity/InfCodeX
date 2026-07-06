@@ -92,6 +92,7 @@ export async function handlePreRunCheckpoint(
   const useChinese = /[一-鿿]/.test(validated.managedTask.contract.objective ?? '');
   const answer = asSingleSelection(await options.events.askUser({
     question: useChinese ? '发现未完成的任务' : 'Found incomplete task',
+    allowCustomInput: false,
     options: [
       {
         // H1 parity (v0.7.26) — text-level resume. The next run's prompt

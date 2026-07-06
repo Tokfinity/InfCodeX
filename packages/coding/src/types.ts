@@ -81,6 +81,8 @@ import type {
   KodaXSessionUiToolCallStatus,
   KodaXSessionUiToolGroupHistoryItem,
   KodaXSessionWorkspaceKind,
+  MemoryReviewPlan,
+  MemoryReviewRunner,
   SessionErrorMetadata,
   ChildTaskRegistry,
   TaskAbortRegistry,
@@ -556,14 +558,14 @@ export interface KodaXEvents {
     input: Record<string, unknown>,
     meta?: KodaXToolEventMeta
   ) => Promise<boolean | string>;
-  /** Ask user a question interactively - Issue 069 - 交互式向用户提问. Multi-select
-   *  (options.multiSelect) resolves string[]; single-select resolves string. */
-  askUser?: (options: AskUserQuestionOptions, meta?: KodaXToolEventMeta) => Promise<string | string[]>;
+  /** Ask user a question interactively - Issue 069. Select answers may be
+   *  strings, arrays, or structured custom-input answers. */
+  askUser?: (options: AskUserQuestionOptions, meta?: KodaXToolEventMeta) => Promise<AskUserAnswer>;
   /** Ask user multiple independent questions sequentially - 澶氶棶棰橀『搴忔彁闂?*/
   askUserMulti?: (
     options: AskUserMultiOptions,
     meta?: KodaXToolEventMeta,
-  ) => Promise<Record<string, string | string[]> | undefined>;
+  ) => Promise<Record<string, AskUserAnswer> | undefined>;
   /** Ask user for free-text input - 自由文本输入 (Issue 112) */
   askUserInput?: (
     options: { question: string; default?: string },
@@ -579,7 +581,8 @@ export interface KodaXEvents {
    *     explicit error instead of a silent no-op.
    */
   exitPlanMode?: (plan: string) => Promise<boolean | 'not-in-plan-mode'>;
-  /** Managed-worker role currently allowed to emit structured protocol payload. */
+  /** Semantic memory review plan produced from explicit user feedback. */
+  onMemoryReview?: (plan: MemoryReviewPlan) => void;
 }
 
 
@@ -1430,6 +1433,7 @@ export interface KodaXOptions {
   session?: KodaXSessionOptions;
   context?: KodaXContextOptions;
   events?: KodaXEvents;
+  memoryReviewer?: MemoryReviewRunner;
   extensionRuntime?: ExtensionRuntimeContract;
   /** FEATURE_229: host-owned policy for workflow auto-start and ceilings. */
   workflowHostPolicy?: import('./workflows/invocation-policy.js').WorkflowHostPolicy;
@@ -1809,11 +1813,21 @@ export interface KodaXResult {
 // MCP elicitation reverse capability can share the same primitive. Re-exported
 // here for backward compatibility (existing `../types.js` imports keep working).
 import type {
+  AskUserAnswer,
+  AskUserCustomInputAnswer,
   AskUserQuestionItem,
   AskUserMultiOptions,
   AskUserQuestionOptions,
+  AskUserSelectionAnswer,
 } from '@kodax-ai/agent';
-export type { AskUserQuestionItem, AskUserMultiOptions, AskUserQuestionOptions };
+export type {
+  AskUserAnswer,
+  AskUserCustomInputAnswer,
+  AskUserQuestionItem,
+  AskUserMultiOptions,
+  AskUserQuestionOptions,
+  AskUserSelectionAnswer,
+};
 
 export interface KodaXToolExecutionContext {
   /** File backups for undo functionality - 文件备份用于撤销功能 */
@@ -1868,11 +1882,11 @@ export interface KodaXToolExecutionContext {
   workflowWorktreeBaseDir?: string;
   /** Shared extension capability runtime used by retrieval-family tools. */
   extensionRuntime?: CapabilityRuntimeContract;
-  /** Ask user a question interactively (select mode) - 交互式向用户提问 (Issue 069).
-   *  Multi-select resolves string[]; single-select resolves string. */
-  askUser?: (options: AskUserQuestionOptions) => Promise<string | string[]>;
+  /** Ask user a question interactively (select mode) - Issue 069. Select
+   *  answers may be strings, arrays, or structured custom-input answers. */
+  askUser?: (options: AskUserQuestionOptions) => Promise<AskUserAnswer>;
   /** Ask user multiple independent questions sequentially - 澶氶棶棰橀『搴忔彁闂?*/
-  askUserMulti?: (options: AskUserMultiOptions) => Promise<Record<string, string | string[]> | undefined>;
+  askUserMulti?: (options: AskUserMultiOptions) => Promise<Record<string, AskUserAnswer> | undefined>;
   /** Ask user for free-text input - 自由文本输入 (Issue 112) */
   askUserInput?: (options: { question: string; default?: string }) => Promise<string | undefined>;
   /**

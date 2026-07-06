@@ -238,7 +238,7 @@ describe('CAP-024: executeToolCall — permission gate (CAP-010) override', () =
         kind: 'select',
         options: [{ label: 'Yes', value: 'yes' }],
         multiSelect: false,
-        default: undefined,
+        allowCustomInput: true,
       },
       {
         toolId: 't1',

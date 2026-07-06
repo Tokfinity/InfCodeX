@@ -144,7 +144,18 @@ import type {
   TodoItem,
   TodoList,
 } from "@kodax-ai/coding";
-import { estimateTokens, bootstrapTeamMode, setActiveUserInteraction, ASK_USER_BACK_SIGNAL, getAgentConfigPath, type TeamModeHandle, type WorkflowProcessEvent } from "@kodax-ai/agent";
+import {
+  estimateTokens,
+  bootstrapTeamMode,
+  setActiveUserInteraction,
+  ASK_USER_BACK_SIGNAL,
+  ASK_USER_CUSTOM_INPUT_SIGNAL,
+  getAgentConfigPath,
+  type AskUserAnswer,
+  type AskUserSelectionAnswer,
+  type TeamModeHandle,
+  type WorkflowProcessEvent,
+} from "@kodax-ai/agent";
 import { deriveProjectKeyFromRoot } from "../interactive/project-key.js";
 import {
   PermissionMode,
@@ -400,6 +411,7 @@ import {
 import { resolveTranscriptDragEdgeScrollDirection } from "../tui/core/scroll.js";
 import { getRendererInstance } from "../tui/core/root.js";
 import {
+  appendCustomInputOption,
   getAskUserDialogTitle,
   toSelectOptions,
   type SelectOption,
@@ -6816,8 +6828,11 @@ const InkREPLInner: React.FC<InkREPLProps> = ({
     },
     // Issue 069: Ask user a question interactively.
     // Issue 114: ESC returns undefined → must signal cancellation, not silently fallback.
-    askUser: async (options: import("@kodax-ai/coding").AskUserQuestionOptions): Promise<string | string[]> => {
-      const selectOptions = options.options ? toSelectOptions(options.options) : [];
+    askUser: async (options: import("@kodax-ai/coding").AskUserQuestionOptions): Promise<AskUserAnswer> => {
+      const selectOptions = appendCustomInputOption(
+        options.options ? toSelectOptions(options.options) : [],
+        options,
+      );
       const selectedValue = await showSelectDialogWithOptions(
         getAskUserDialogTitle(options),
         selectOptions,
@@ -6829,6 +6844,28 @@ const InkREPLInner: React.FC<InkREPLProps> = ({
       // Issue 114: User pressed ESC → signal cancellation so the agent loop stops.
       if (selectedValue === undefined) {
         return CANCELLED_TOOL_RESULT_MESSAGE;
+      }
+
+      if (selectedValue === ASK_USER_CUSTOM_INPUT_SIGNAL) {
+        const customValue = await showInputDialog(
+          options.customInputPrompt ?? options.question,
+          options.customInputDefault,
+        );
+        if (customValue === undefined) return CANCELLED_TOOL_RESULT_MESSAGE;
+        return { kind: "customInput", value: customValue };
+      }
+
+      if (Array.isArray(selectedValue) && selectedValue.includes(ASK_USER_CUSTOM_INPUT_SIGNAL)) {
+        const customValue = await showInputDialog(
+          options.customInputPrompt ?? options.question,
+          options.customInputDefault,
+        );
+        if (customValue === undefined) return CANCELLED_TOOL_RESULT_MESSAGE;
+        return selectedValue.map((value): AskUserSelectionAnswer =>
+          value === ASK_USER_CUSTOM_INPUT_SIGNAL
+            ? { kind: "customInput", value: customValue }
+            : value,
+        );
       }
 
       // Multi-select resolves an array (FEATURE_222); single-select a string.
@@ -6850,14 +6887,14 @@ const InkREPLInner: React.FC<InkREPLProps> = ({
       return false;
     },
     // Multi-question mode: present each question sequentially with back navigation.
-    askUserMulti: async (options: import("@kodax-ai/coding").AskUserMultiOptions): Promise<Record<string, string | string[]> | undefined> => {
+    askUserMulti: async (options: import("@kodax-ai/coding").AskUserMultiOptions): Promise<Record<string, AskUserAnswer> | undefined> => {
       const questions = options.questions;
-      const answers: Record<string, string | string[]> = {};
+      const answers: Record<string, AskUserAnswer> = {};
       let i = 0;
 
       while (i < questions.length) {
         const q = questions[i]!;
-        const selectOptions = toSelectOptions(q.options);
+        const selectOptions = appendCustomInputOption(toSelectOptions(q.options), q);
 
         // Non-first question: append "← Back" option (FEATURE_222 shared sentinel)
         if (i > 0) {
@@ -6884,6 +6921,32 @@ const InkREPLInner: React.FC<InkREPLProps> = ({
         // result) is never a back request, so guard the string case first.
         if (!Array.isArray(selected) && selected === ASK_USER_BACK_SIGNAL) {
           i--;
+          continue;
+        }
+
+        if (!Array.isArray(selected) && selected === ASK_USER_CUSTOM_INPUT_SIGNAL) {
+          const customValue = await showInputDialog(
+            q.customInputPrompt ?? q.question,
+            q.customInputDefault,
+          );
+          if (customValue === undefined) return undefined;
+          answers[q.question] = { kind: "customInput", value: customValue };
+          i++;
+          continue;
+        }
+
+        if (Array.isArray(selected) && selected.includes(ASK_USER_CUSTOM_INPUT_SIGNAL)) {
+          const customValue = await showInputDialog(
+            q.customInputPrompt ?? q.question,
+            q.customInputDefault,
+          );
+          if (customValue === undefined) return undefined;
+          answers[q.question] = selected.map((value): AskUserSelectionAnswer =>
+            value === ASK_USER_CUSTOM_INPUT_SIGNAL
+              ? { kind: "customInput", value: customValue }
+              : value,
+          );
+          i++;
           continue;
         }
 

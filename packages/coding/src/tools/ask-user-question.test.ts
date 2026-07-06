@@ -2,20 +2,14 @@ import { describe, expect, it, vi } from 'vitest';
 import { toolAskUserQuestion } from './ask-user-question.js';
 import { CANCELLED_TOOL_RESULT_MESSAGE, CANCELLED_TOOL_RESULT_PREFIX } from '../constants.js';
 import type { KodaXToolExecutionContext } from '../types.js';
-import type { AskUserQuestionOptions, AskUserMultiOptions } from '@kodax-ai/agent';
+import type { AskUserMultiOptions, AskUserQuestionOptions } from '@kodax-ai/agent';
 
-/**
- * FEATURE_222 — multi-select protocol: single-select resolves a string and the
- * tool emits `{choice}`; multi-select resolves a `string[]` and the tool emits
- * `{choices}`. min/max selection bounds are threaded through to the host.
- */
-
-/** Minimal execution context — the tool only reads the ask-user callbacks. */
+/** Minimal execution context; the tool only reads the ask-user callbacks. */
 function makeCtx(overrides: Partial<KodaXToolExecutionContext>): KodaXToolExecutionContext {
   return overrides as unknown as KodaXToolExecutionContext;
 }
 
-describe('toolAskUserQuestion — single select', () => {
+describe('toolAskUserQuestion - single select', () => {
   it('emits {choice} for a string answer', async () => {
     const ctx = makeCtx({ askUser: async () => 'blue' });
     const result = await toolAskUserQuestion(
@@ -25,7 +19,7 @@ describe('toolAskUserQuestion — single select', () => {
     expect(JSON.parse(result)).toEqual({ success: true, choice: 'blue' });
   });
 
-  it('passes a cancellation sentinel through verbatim (guarded before .startsWith)', async () => {
+  it('passes a cancellation sentinel through verbatim', async () => {
     const cancelled = `${CANCELLED_TOOL_RESULT_PREFIX} Operation cancelled by user`;
     const ctx = makeCtx({ askUser: async () => cancelled });
     const result = await toolAskUserQuestion(
@@ -34,9 +28,60 @@ describe('toolAskUserQuestion — single select', () => {
     );
     expect(result).toBe(cancelled);
   });
+
+  it('enables custom input by default and emits compatible custom metadata', async () => {
+    const askUser = vi.fn<[AskUserQuestionOptions], Promise<string | string[]>>(
+      async () => ({ kind: 'customInput', value: 'teal' }) as unknown as string,
+    );
+    const ctx = makeCtx({ askUser });
+    const result = await toolAskUserQuestion(
+      { question: 'Color?', options: [{ label: 'Blue', value: 'blue' }] },
+      ctx,
+    );
+
+    expect(askUser).toHaveBeenCalledTimes(1);
+    expect(askUser.mock.calls[0]![0].allowCustomInput).toBe(true);
+    expect(JSON.parse(result)).toEqual({
+      success: true,
+      choice: 'teal',
+      custom_input: true,
+    });
+  });
+
+  it('can disable custom input for closed choices', async () => {
+    const askUser = vi.fn<[AskUserQuestionOptions], Promise<string | string[]>>(async () => 'reject');
+    const ctx = makeCtx({ askUser });
+    const result = await toolAskUserQuestion(
+      {
+        question: 'Approve?',
+        allow_custom_input: false,
+        options: [
+          { label: 'Approve', value: 'approve' },
+          { label: 'Reject', value: 'reject' },
+        ],
+      },
+      ctx,
+    );
+
+    expect(askUser.mock.calls[0]![0].allowCustomInput).toBe(false);
+    expect(JSON.parse(result)).toEqual({ success: true, choice: 'reject' });
+  });
+
+  it('rejects the reserved custom-input sentinel supplied as an option value', async () => {
+    const ctx = makeCtx({ askUser: async () => 'ignored' });
+    const result = await toolAskUserQuestion(
+      {
+        question: 'Pick',
+        options: [{ label: 'Other', value: '__custom_input__' }],
+      },
+      ctx,
+    );
+
+    expect(result).toContain('reserved');
+  });
 });
 
-describe('toolAskUserQuestion — multi select', () => {
+describe('toolAskUserQuestion - multi select', () => {
   it('emits {choices} (array) for an array answer, never a joined string', async () => {
     const ctx = makeCtx({ askUser: async () => ['red', 'green, with comma'] });
     const result = await toolAskUserQuestion(
@@ -50,7 +95,6 @@ describe('toolAskUserQuestion — multi select', () => {
       },
       ctx,
     );
-    // The comma-containing value survives intact — the whole point of R2.
     expect(JSON.parse(result)).toEqual({
       success: true,
       choices: ['red', 'green, with comma'],
@@ -109,7 +153,11 @@ describe('toolAskUserQuestion — multi select', () => {
         multi_select: true,
         min_selections: 3,
         max_selections: 2,
-        options: [{ label: 'A', value: 'a' }, { label: 'B', value: 'b' }, { label: 'C', value: 'c' }],
+        options: [
+          { label: 'A', value: 'a' },
+          { label: 'B', value: 'b' },
+          { label: 'C', value: 'c' },
+        ],
       },
       ctx,
     );
@@ -118,7 +166,7 @@ describe('toolAskUserQuestion — multi select', () => {
     expect(askUser).not.toHaveBeenCalled();
   });
 
-  it('rejects min_selections greater than the option count', async () => {
+  it('rejects min_selections greater than the selectable count', async () => {
     const askUser = vi.fn<[AskUserQuestionOptions], Promise<string | string[]>>(async () => ['a']);
     const ctx = makeCtx({ askUser });
     const result = await toolAskUserQuestion(
@@ -126,16 +174,62 @@ describe('toolAskUserQuestion — multi select', () => {
         question: 'Pick',
         multi_select: true,
         min_selections: 5,
-        options: [{ label: 'A', value: 'a' }, { label: 'B', value: 'b' }],
+        options: [
+          { label: 'A', value: 'a' },
+          { label: 'B', value: 'b' },
+        ],
       },
       ctx,
     );
     expect(result).toMatch(/\[Tool Error\]/);
     expect(askUser).not.toHaveBeenCalled();
   });
+
+  it('normalizes custom input inside multi-select answers', async () => {
+    const ctx = makeCtx({
+      askUser: async () => [
+        'red',
+        { kind: 'customInput', value: 'infra docs' } as unknown as string,
+      ],
+    });
+    const result = await toolAskUserQuestion(
+      {
+        question: 'Scopes?',
+        multi_select: true,
+        options: [{ label: 'Red', value: 'red' }],
+      },
+      ctx,
+    );
+
+    expect(JSON.parse(result)).toEqual({
+      success: true,
+      choices: ['red', 'infra docs'],
+      custom_inputs: ['infra docs'],
+    });
+  });
 });
 
-describe('toolAskUserQuestion — multi question', () => {
+describe('toolAskUserQuestion - free-text input', () => {
+  it('emits {choice} for free-text input', async () => {
+    const ctx = makeCtx({ askUserInput: async () => 'typed answer' });
+    const result = await toolAskUserQuestion(
+      { question: 'What else?', kind: 'input' },
+      ctx,
+    );
+    expect(JSON.parse(result)).toEqual({ success: true, choice: 'typed answer' });
+  });
+
+  it('cancels free-text input when the host returns undefined', async () => {
+    const ctx = makeCtx({ askUserInput: async () => undefined });
+    const result = await toolAskUserQuestion(
+      { question: 'What else?', kind: 'input' },
+      ctx,
+    );
+    expect(result).toBe(CANCELLED_TOOL_RESULT_MESSAGE);
+  });
+});
+
+describe('toolAskUserQuestion - multi question', () => {
   it('returns the per-question answers map (string or string[])', async () => {
     const askUserMulti = vi.fn<[AskUserMultiOptions], Promise<Record<string, string | string[]> | undefined>>(
       async () => ({ env: 'prod', regions: ['us', 'eu'] }),
@@ -162,7 +256,6 @@ describe('toolAskUserQuestion — multi question', () => {
       success: true,
       answers: { env: 'prod', regions: ['us', 'eu'] },
     });
-    // Per-question min bound is threaded into the second question.
     const passed = askUserMulti.mock.calls[0]![0];
     expect(passed.questions[1]!.minSelections).toBe(1);
   });
@@ -187,5 +280,51 @@ describe('toolAskUserQuestion — multi question', () => {
       ctx,
     );
     expect(result).toBe(CANCELLED_TOOL_RESULT_MESSAGE);
+  });
+
+  it('threads custom input config and normalizes per-question custom answers', async () => {
+    const askUserMulti = vi.fn<[AskUserMultiOptions], Promise<Record<string, string | string[]> | undefined>>(
+      async () => ({
+        target: { kind: 'customInput', value: 'examples' } as unknown as string,
+        scopes: [
+          'docs',
+          { kind: 'customInput', value: 'migration notes' } as unknown as string,
+        ],
+      }),
+    );
+    const ctx = makeCtx({ askUserMulti });
+    const result = await toolAskUserQuestion(
+      {
+        questions: [
+          {
+            question: 'target',
+            custom_input_label: 'Something else',
+            options: [{ label: 'Source', value: 'src' }],
+          },
+          {
+            question: 'scopes',
+            multi_select: true,
+            options: [{ label: 'Docs', value: 'docs' }],
+          },
+        ],
+      },
+      ctx,
+    );
+
+    const passed = askUserMulti.mock.calls[0]![0];
+    expect(passed.questions[0]!.allowCustomInput).toBe(true);
+    expect(passed.questions[0]!.customInputLabel).toBe('Something else');
+    expect(passed.questions[1]!.allowCustomInput).toBe(true);
+    expect(JSON.parse(result)).toEqual({
+      success: true,
+      answers: {
+        target: 'examples',
+        scopes: ['docs', 'migration notes'],
+      },
+      custom_inputs: {
+        target: ['examples'],
+        scopes: ['migration notes'],
+      },
+    });
   });
 });

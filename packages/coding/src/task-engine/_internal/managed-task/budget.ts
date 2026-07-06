@@ -172,6 +172,7 @@ export async function maybeRequestAdditionalWorkBudget(
     question: useChinese
       ? `当前 AMA 运行已使用 ${controller.spentBudget}/${controller.totalBudget} 工作单元（${usedPercent}%），需要更多工作量。是否追加 ${increment} 单元？`
       : `This AMA run has used ${controller.spentBudget}/${controller.totalBudget} work units (${usedPercent}%) and needs more work. Add ${increment} more work units?`,
+    allowCustomInput: false,
     options: [
       {
         label: useChinese ? `继续 (+${increment})` : `Continue (+${increment})`,

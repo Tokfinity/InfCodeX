@@ -381,6 +381,9 @@ export {
 // and the agent MCP elicitation reverse capability) + the live-surface registry.
 export type {
   UserInteraction,
+  AskUserAnswer,
+  AskUserSelectionAnswer,
+  AskUserCustomInputAnswer,
   AskUserQuestionItem,
   AskUserMultiOptions,
   AskUserQuestionOptions,
@@ -389,7 +392,9 @@ export {
   setActiveUserInteraction,
   getActiveUserInteraction,
   ASK_USER_BACK_SIGNAL,
+  ASK_USER_CUSTOM_INPUT_SIGNAL,
   asSingleSelection,
+  isAskUserCustomInputAnswer,
 } from './runtime/user-interaction.js';
 
 // ============== Messaging (v0.7.36 FEATURE_115) ==============

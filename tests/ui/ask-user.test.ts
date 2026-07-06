@@ -1,6 +1,7 @@
 import { describe, expect, it } from "vitest";
 import type { AskUserQuestionOptions } from "../../packages/coding/src/types.js";
 import {
+  appendCustomInputOption,
   getAskUserDialogTitle,
   resolveAskUserDefaultChoice,
   toSelectOptions,
@@ -71,5 +72,46 @@ describe("ask-user helpers", () => {
         value: "stay-plan",
       },
     ]);
+  });
+
+  it("appends a custom input option to choice dialogs by default", () => {
+    const options: AskUserQuestionOptions = {
+      question: "Choose",
+      options: [{ label: "Docs", value: "docs" }],
+    };
+
+    expect(appendCustomInputOption(toSelectOptions(options.options), options)).toEqual([
+      { label: "Docs", value: "docs", description: undefined },
+      { label: "Other...", value: "__custom_input__" },
+    ]);
+  });
+
+  it("does not append custom input when explicitly disabled", () => {
+    const options: AskUserQuestionOptions = {
+      question: "Approve?",
+      allowCustomInput: false,
+      options: [
+        { label: "Approve", value: "approve" },
+        { label: "Reject", value: "reject" },
+      ],
+    };
+
+    expect(appendCustomInputOption(toSelectOptions(options.options), options)).toEqual([
+      { label: "Approve", value: "approve", description: undefined },
+      { label: "Reject", value: "reject", description: undefined },
+    ]);
+  });
+
+  it("uses a custom input label when provided", () => {
+    const options: AskUserQuestionOptions = {
+      question: "Choose",
+      customInputLabel: "Something else",
+      options: [{ label: "Docs", value: "docs" }],
+    };
+
+    expect(appendCustomInputOption(toSelectOptions(options.options), options).at(-1)).toEqual({
+      label: "Something else",
+      value: "__custom_input__",
+    });
   });
 });

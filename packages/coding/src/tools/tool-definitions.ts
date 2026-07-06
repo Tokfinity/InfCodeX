@@ -875,7 +875,7 @@ export const BUILTIN_TOOL_DEFINITIONS: LocalToolDefinition[] = [
   },
   {
     name: 'ask_user_question',
-    description: 'Ask the user a question. Supports single-select (default), multi-select, or free-text input. When you have multiple independent questions, use the "questions" array — each question is presented separately with its own options. Do NOT combine multiple questions into a single question string, because combining forces the user to mentally disambiguate option combinations themselves, which usually breaks the option-button UI.',
+    description: 'Ask the user a question. Supports single-select (default), multi-select, free-text input, and custom input from select dialogs. Select questions are open-ended by default: KodaX adds an "Other..." custom input option automatically, so do NOT add your own Other/Custom option. Set allow_custom_input=false only for closed safety/protocol decisions. When you have multiple independent questions, use the "questions" array; each question is presented separately with its own options. Do NOT combine multiple questions into one string.',
     input_schema: {
       type: 'object',
       properties: {
@@ -913,6 +913,22 @@ export const BUILTIN_TOOL_DEFINITIONS: LocalToolDefinition[] = [
                 type: 'integer',
                 description: 'Maximum number of options the user may select. Only applies when multi_select is true.',
               },
+              allow_custom_input: {
+                type: 'boolean',
+                description: 'Whether to add an automatic custom input option for this select question. Defaults to true. Set false only for closed safety/protocol choices.',
+              },
+              custom_input_label: {
+                type: 'string',
+                description: 'Optional display label for the automatic custom input option. Defaults to "Other...".',
+              },
+              custom_input_prompt: {
+                type: 'string',
+                description: 'Optional prompt shown when the user chooses the automatic custom input option.',
+              },
+              custom_input_default: {
+                type: 'string',
+                description: 'Optional default text for the custom input prompt.',
+              },
             },
             required: ['question', 'options'],
           },
@@ -948,6 +964,22 @@ export const BUILTIN_TOOL_DEFINITIONS: LocalToolDefinition[] = [
         max_selections: {
           type: 'integer',
           description: 'Maximum number of options the user may select. Only applies when multi_select is true.',
+        },
+        allow_custom_input: {
+          type: 'boolean',
+          description: 'Whether to add an automatic custom input option for select mode. Defaults to true. Set false only for closed safety/protocol choices.',
+        },
+        custom_input_label: {
+          type: 'string',
+          description: 'Optional display label for the automatic custom input option. Defaults to "Other...".',
+        },
+        custom_input_prompt: {
+          type: 'string',
+          description: 'Optional prompt shown when the user chooses the automatic custom input option.',
+        },
+        custom_input_default: {
+          type: 'string',
+          description: 'Optional default text for the custom input prompt.',
         },
         default: { type: 'string', description: 'Optional default choice (for select) or default text (for input)' },
       },

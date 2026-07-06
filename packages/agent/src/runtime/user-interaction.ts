@@ -37,6 +37,14 @@ export interface AskUserQuestionItem {
    * of parsing it out of natural-language question text.
    */
   maxSelections?: number;
+  /**
+   * Choice surfaces are open-ended by default: hosts SHOULD offer a synthetic
+   * custom-input option unless this is explicitly false.
+   */
+  allowCustomInput?: boolean;
+  customInputLabel?: string;
+  customInputPrompt?: string;
+  customInputDefault?: string;
 }
 
 /** Options for multi-question mode — multiple independent questions in one call. */
@@ -60,7 +68,25 @@ export interface AskUserQuestionOptions {
   /** FEATURE_222 — see {@link AskUserQuestionItem.maxSelections}. */
   maxSelections?: number;
   default?: string;
+  /**
+   * Choice surfaces are open-ended by default: hosts SHOULD offer a synthetic
+   * custom-input option unless this is explicitly false.
+   */
+  allowCustomInput?: boolean;
+  customInputLabel?: string;
+  customInputPrompt?: string;
+  customInputDefault?: string;
 }
+
+/** Host return value for a user-entered answer chosen through a select dialog's
+ *  synthetic "Other..." option. */
+export interface AskUserCustomInputAnswer {
+  kind: 'customInput';
+  value: string;
+}
+
+export type AskUserSelectionAnswer = string | AskUserCustomInputAnswer;
+export type AskUserAnswer = AskUserSelectionAnswer | AskUserSelectionAnswer[];
 
 /**
  * FEATURE_222 — reserved option value a host may append as a synthetic option
@@ -74,6 +100,15 @@ export interface AskUserQuestionOptions {
  */
 export const ASK_USER_BACK_SIGNAL = '__back__';
 
+/** Reserved synthetic option value for a host-provided custom input entry. */
+export const ASK_USER_CUSTOM_INPUT_SIGNAL = '__custom_input__';
+
+export function isAskUserCustomInputAnswer(value: unknown): value is AskUserCustomInputAnswer {
+  if (!value || typeof value !== 'object' || Array.isArray(value)) return false;
+  const record = value as Record<string, unknown>;
+  return record.kind === 'customInput' && typeof record.value === 'string';
+}
+
 /**
  * FEATURE_222 — narrow an `askUser` result to a single string for the many
  * callers that only ever ask single-select questions (they never set
@@ -81,8 +116,9 @@ export const ASK_USER_BACK_SIGNAL = '__back__';
  * an unexpected array to its first element so a mis-configured host degrades
  * predictably instead of leaking `[object Array]` into a string comparison.
  */
-export function asSingleSelection(answer: string | string[]): string {
-  return Array.isArray(answer) ? answer[0] ?? '' : answer;
+export function asSingleSelection(answer: AskUserAnswer): string {
+  const first = Array.isArray(answer) ? answer[0] : answer;
+  return isAskUserCustomInputAnswer(first) ? first.value : first ?? '';
 }
 
 /**
@@ -93,18 +129,17 @@ export function asSingleSelection(answer: string | string[]): string {
  */
 export interface UserInteraction {
   /**
-   * Ask one question (select mode by default). Single-select (multiSelect
-   * falsy) resolves the chosen value as a string — unchanged. Multi-select
-   * (multiSelect: true) resolves the selected values as a `string[]`. The union
-   * is a backward-compatible superset: a host still returning a plain string
-   * satisfies this contract, but a multi-select host SHOULD return `string[]`
-   * so option values containing `, ` are not corrupted by a join.
+   * Ask one question (select mode by default). Single-select resolves the
+   * chosen option value as a string. Multi-select resolves the selected values
+   * as an array. If the user chooses the host-provided custom-input option,
+   * return `{ kind: 'customInput', value }` in the single or array position.
+   * Plain string/string[] hosts remain valid for backward compatibility.
    */
-  askUser?: (options: AskUserQuestionOptions) => Promise<string | string[]>;
+  askUser?: (options: AskUserQuestionOptions) => Promise<AskUserAnswer>;
   /** Ask several independent questions sequentially. Resolves a per-question
-   *  value map (each entry a string for single-select, `string[]` for
-   *  multi-select), or undefined when the user cancels. */
-  askUserMulti?: (options: AskUserMultiOptions) => Promise<Record<string, string | string[]> | undefined>;
+   *  value map using the same `AskUserAnswer` shape as `askUser`, or undefined
+   *  when the user cancels. */
+  askUserMulti?: (options: AskUserMultiOptions) => Promise<Record<string, AskUserAnswer> | undefined>;
   /** Ask for free-text input. Resolves the text, or undefined when cancelled. */
   askUserInput?: (options: { question: string; default?: string }) => Promise<string | undefined>;
 }

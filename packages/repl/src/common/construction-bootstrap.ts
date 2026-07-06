@@ -78,6 +78,7 @@ const replConstructionPolicy: ConstructionPolicy = async (artifact) => {
   const toolsLabel = declaredTools.length > 0 ? declaredTools.join(', ') : '<none>';
   const answer = await activeAskUser({
     question: `Activate constructed tool ${artifact.name}@${artifact.version}?\nIt declares capabilities.tools = [${toolsLabel}].`,
+    allowCustomInput: false,
     options: [
       {
         label: 'Approve — register and make callable',
@@ -136,6 +137,7 @@ const replSelfModifyAskUser: SelfModifyAskUser = async (input) => {
   ].join('\n');
   const answer = await activeAskUser({
     question,
+    allowCustomInput: false,
     options: [
       {
         label: 'Approve — activate the new version on the next run',
