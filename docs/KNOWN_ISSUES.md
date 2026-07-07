@@ -1,6 +1,6 @@
 # Known Issues
 
-_Last Updated: 2026-07-06_
+_Last Updated: 2026-07-07_
 
 ---
 
@@ -564,6 +564,21 @@ The same session ended with an error snapshot whose first message was an assista
 - Error snapshot guard tests for valid user-starting transcripts and invalid assistant-tool fragments.
 - Public API tests proving `loadFullTranscript` returns append-order entries across disconnected lineage roots, including `.islands.jsonl` sidecar entries, while `loadSession` stays active-only.
 - Compaction hook test proving anchor propagation without artifact ledger.
+
+#### Follow-up hardening (v0.7.63)
+
+- Rewind audit entries now use a dedicated `rewind_marker` lineage type instead
+  of overloading compaction entries. Host scrollback sees the marker through
+  `loadFullTranscript().transcriptEntries`; model context and
+  `loadFullTranscript().messages` do not include it.
+- `/rewind` previous-turn selection skips synthetic user entries and
+  tool-result-only user messages, so the target is the previous real user
+  prompt rather than protocol plumbing.
+- `startKodaX()` generated handle IDs are threaded into run options only when
+  they will not override auto-resume/resume discovery, and they no longer
+  trigger the caller-provided `session.id` without storage warning.
+- `@kodax-ai/kodax/session` now re-exports `compactSession` and its public
+  types, with an SDK subpath regression test.
 
 #### Verification
 

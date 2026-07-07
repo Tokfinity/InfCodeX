@@ -653,6 +653,12 @@ typically hit this once before learning the rule.
 **v0.7.43 added a one-shot `console.warn` when `session.id` is set
 but `session.storage` is missing** — it points at this section.
 
+**v0.7.63 narrows that warning to caller-provided session IDs.** The
+`startKodaX()` convenience wrapper may generate a handle ID for the returned
+running-session object; that generated ID is threaded into the run only when it
+will not override auto-resume/resume discovery, and it no longer triggers the
+missing-storage warning by itself.
+
 ### The canonical fix
 
 ```ts
@@ -667,6 +673,7 @@ const {
   loadSession,
   loadFullTranscript,
   appendClientNotice,
+  compactSession,
 } = createSessionManager();
 
 await runKodaX(
@@ -686,6 +693,7 @@ await runKodaX(
 const recent = await listSessions({ scope: 'user', limit: 50 });
 const replay = await loadSession('s_my_chat');
 const scrollback = await loadFullTranscript('s_my_chat');
+const compacted = await compactSession('s_my_chat', { dryRun: true });
 
 await appendClientNotice('s_my_chat', {
   source: 'space',
@@ -702,6 +710,7 @@ interface SessionManager {
   loadSession(id): Promise<...>;
   loadFullTranscript(id): Promise<...>;
   appendClientNotice(id, opts): Promise<SessionTranscriptEntry | null>;
+  compactSession(id, opts?): Promise<CompactSessionResult>;
   forkSession(id, opts?): Promise<...>;
   rewindSession(id, opts?): Promise<...>;
   setActiveEntry(id, selector): Promise<void>;
@@ -738,7 +747,7 @@ interface SessionTranscriptEntry {
   logicalId: string;
   sourceEntryId?: string;
   timestamp: string;
-  type: 'message' | 'compaction' | 'branch_summary' | 'client_notice' | 'task_result';
+  type: 'message' | 'compaction' | 'branch_summary' | 'rewind_marker' | 'client_notice' | 'task_result';
   source?: 'user' | 'assistant' | 'workflow' | 'child_task' | 'system' | 'client';
   turnId?: string;
   active: boolean;
@@ -758,6 +767,12 @@ Legacy entries without persisted provenance use `logicalId === entryId` and omit
 that no older clone exists.
 `loadFullTranscript()` still returns raw append-order scrollback; it does not
 hide compaction notices or silently merge branches.
+
+Since v0.7.63, rewind audit markers are represented as
+`type: 'rewind_marker'`. They are useful for host scrollback and audit UI, but
+they do not enter model context: `loadSession()` omits them, and
+`loadFullTranscript().messages` filters them out while
+`loadFullTranscript().transcriptEntries` keeps the structured marker.
 
 Use `type` / `source` / `timestamp` / `active` instead of parsing
 `message.role`, synthetic wrapper text, or filesystem side stores. In

@@ -1,6 +1,14 @@
 # KodaX Architecture Decision Records
 
-> Last updated: 2026-07-06
+> Last updated: 2026-07-07
+>
+> **v0.7.63 session-boundary addendum:** rewind audit entries are now typed as
+> `rewind_marker` lineage entries. They remain visible in
+> `loadFullTranscript().transcriptEntries` for host scrollback/audit, but they
+> do not enter model-context message arrays. The public `/session` SDK subpath
+> also exposes `compactSession`, and `startKodaX()` wrapper-generated handle IDs
+> no longer override auto-resume/resume discovery or trigger the caller-ID
+> missing-storage warning.
 >
 > **v0.7.60 CAP-099 addendum:** SDK transcript entries now expose clone provenance (`logicalId` / `sourceEntryId`) so hosts can fold cloned or forked history without guessing from role, content, timestamp, or `[compacted]` placeholders. `loadFullTranscript()` remains raw append-order scrollback; it does not silently merge branches or hide compaction notices.
 

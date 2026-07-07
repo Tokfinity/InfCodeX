@@ -6,6 +6,50 @@ All notable changes to this project will be documented in this file.
 
 ## [Unreleased]
 
+## [0.7.63] - 2026-07-07
+
+> Scope note: a patch/stability release for SDK session boundaries and release
+> hygiene. No planned feature slot is consumed: `FEATURE_244` remains targeted
+> at `v0.7.65`. This release hardens the public `/session` subpath, keeps
+> rewind audit markers out of model context, makes `startKodaX()` wrapper
+> session IDs safe around auto-resume, and prunes superseded feature-design
+> parking notes from the private feature-doc index.
+
+### Added
+
+- **`@kodax-ai/kodax/session` now exports imperative compaction.**
+  `compactSession` and its public option/result types are re-exported from the
+  root session SDK subpath, with a package-level regression test proving the
+  bundled subpath exposes the same session facade hosts use in Space-style
+  integrations.
+- **Typed rewind transcript entries.** Session lineage now has a dedicated
+  `rewind_marker` entry type. `loadFullTranscript()` surfaces it as a structured
+  system transcript entry for host scrollback, while `loadSession()` and the
+  returned transcript `messages` keep rewind audit markers out of model context.
+
+### Changed
+
+- **SDK session boundary hardening.** `startKodaX()` now threads wrapper-generated
+  session IDs into forwarded run options only when the caller did not provide an
+  explicit ID and did not request auto-resume/resume discovery. Generated handle
+  IDs are marked internally so the "session.id without storage" warning remains
+  useful for caller-provided IDs without warning on the wrapper's own handle ID.
+- **Feature-design index cleanup.** Superseded/parked planning-only docs for old
+  `v0.7.67`, `v0.7.68`, `v0.7.71`, `v0.7.73`, and `v0.7.74` slots were pruned.
+  Active targets remain in the indexed docs: `FEATURE_228` is in `v0.7.62`,
+  `FEATURE_231` in `v0.7.70`, `FEATURE_235` in `v0.7.75`, `FEATURE_108` in
+  `v0.7.95`, and `FEATURE_225` in `v0.7.100`.
+
+### Fixed
+
+- **Rewind selection skips synthetic/tool-result user entries.** `/rewind`
+  previous-turn selection now walks the active lineage path and ignores
+  tool-result-only user messages plus synthetic user notices, avoiding accidental
+  rewinds to tool protocol plumbing instead of the previous real user prompt.
+- **Transcript layout fixtures are deterministic.** Duration-sensitive transcript
+  layout tests now use fixed timestamps instead of `Date.now()`, removing a
+  release-gate flake without changing runtime behavior.
+
 ## [0.7.62] - 2026-07-06
 
 > Scope note: a memory-governance release plus interaction polish. **FEATURE_228**

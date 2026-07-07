@@ -10,8 +10,8 @@
 
 | Item | Value |
 |---|---|
-| Current released version | `v0.7.62` |
-| Current package version | `@kodax-ai/kodax@0.7.62` (published to npm 2026-07-06; tagged `v0.7.62`) |
+| Current released version | `v0.7.63` |
+| Current package version | `@kodax-ai/kodax@0.7.63` (release prepared 2026-07-07; npm publish pending) |
 | Workspace baseline | `llm / agent / coding / repl` 4 packages |
 | Total tracked features | `37` |
 | InProgress | `0` |
@@ -42,6 +42,7 @@
 | `v0.7.59` | `0` |
 | `v0.7.61` | `0` |
 | `v0.7.62` | `0` |
+| `v0.7.63` | `0` |
 | `v0.7.65` | `1` |
 | `v0.7.70` | `1` |
 | `v0.7.75` | `1` |
@@ -79,6 +80,11 @@
 > five-slot cadence: `231` -> `v0.7.70`, `235` -> `v0.7.75`, `238` ->
 > `v0.7.80`, `232` -> `v0.7.85`, `105` -> `v0.7.90`, `108` -> `v0.7.95`,
 > and `225` -> `v0.7.100`. All v0.8.x features remain unchanged.
+>
+> **2026-07-07 patch release**: `v0.7.63` is a no-feature patch/stability
+> release for SDK session boundary hardening, deterministic transcript fixtures,
+> and feature-design index cleanup. `FEATURE_244` remains the next feature slot
+> at `v0.7.65`; `v0.7.64` remains available as the debug/patch buffer before it.
 
 ---
 

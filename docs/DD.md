@@ -1,8 +1,8 @@
 # KodaX Detailed Design
 
-> Last updated: 2026-07-06
+> Last updated: 2026-07-07
 >
-> Current release baseline: `@kodax-ai/kodax@0.7.62`
+> Current release baseline: `@kodax-ai/kodax@0.7.63`
 >
 > This DD describes current implementation structure. Retired V1 chain details
 > were deleted from this active document; use git history and historical feature
@@ -19,7 +19,7 @@ reference and does not duplicate every type. It should answer three questions:
 
 ## 2. Published Package And Build Entries
 
-The root package is `@kodax-ai/kodax@0.7.62`.
+The root package is `@kodax-ai/kodax@0.7.63`.
 
 `package.json` exposes:
 
@@ -207,6 +207,12 @@ identifies the persisted lineage node; `logicalId` is stable across cloned or
 forked copies; `sourceEntryId` points at the root physical source when an entry
 is a clone. Hosts may fold display history by `logicalId`, while
 `loadFullTranscript()` continues to return raw append-order scrollback.
+
+Rewind audit markers are stored as `rewind_marker` lineage entries. They are
+visible through `loadFullTranscript().transcriptEntries` for host UI/audit, but
+they are context-silent: `loadSession()` and `loadFullTranscript().messages`
+exclude them. The public `/session` subpath also exposes `compactSession` for
+host-triggered imperative compaction.
 
 ## 11. Skills
 
