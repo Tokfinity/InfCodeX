@@ -54,7 +54,7 @@ import { createMemoryControlPlane, type MemoryPack } from '@kodax-ai/agent';
 
 import { emitResilienceDebug } from '../agent-runtime/resilience-debug.js';
 import { loadAgentsFiles, formatAgentsForPrompt } from '../context/agents-loader.js';
-import { listConstructedAgents } from '../construction/agent-resolver.js';
+import { listConstructedAgents, type KodaXAgentScope } from '../construction/agent-resolver.js';
 import { resolveExecutionCwd } from '../runtime-paths.js';
 import { getSessionScratchDir } from '../session-scratch.js';
 import type { KodaXOptions } from '../types.js';
@@ -204,7 +204,7 @@ export async function buildCapabilityContextSections(
   // surfaces each agent's name + description so the Worker LLM can
   // choose a specialist whose curated instructions / tool whitelist
   // fits the task.
-  const specialistBlock = buildSpecialistAgentsBlock();
+  const specialistBlock = buildSpecialistAgentsBlock(options.context?.agentScope);
   if (specialistBlock) {
     sections.push(
       createPromptSection(
@@ -395,8 +395,8 @@ function compactPromptLine(value: string): string {
  * FEATURE_191 A.3 — render the `specialist-agents` section content from
  * the constructed-agent registry, or null when the registry is empty.
  */
-function buildSpecialistAgentsBlock(): string | null {
-  const agents = listConstructedAgents();
+function buildSpecialistAgentsBlock(agentScope: KodaXAgentScope | undefined): string | null {
+  const agents = listConstructedAgents(agentScope);
   if (agents.length === 0) {
     return null;
   }

@@ -1192,6 +1192,66 @@ describe('FEATURE_191 — dispatch_child_task subagent_type guards (A.2 + A.2c)'
     expect(bundles[0]?.specialistName).toBe('db-reviewer');
   });
 
+  it('A.2: scoped subagent_type lookup ignores global agents outside the current scope', async () => {
+    const {
+      createConstructedAgentEntry,
+      createConstructedAgentScope,
+      registerConstructedAgent,
+    } = await import('../construction/agent-resolver.js');
+    registerConstructedAgent({
+      kind: 'agent',
+      name: 'global-reviewer',
+      version: '1.0.0',
+      content: {
+        instructions: 'GLOBAL REVIEWER',
+        tools: [{ ref: 'builtin:read' }],
+      },
+      status: 'active',
+      createdAt: Date.now(),
+      testedAt: Date.now(),
+      activatedAt: Date.now(),
+    });
+    const scopedEntry = createConstructedAgentEntry({
+      kind: 'agent',
+      name: 'scoped-reviewer',
+      version: '1.0.0',
+      content: {
+        instructions: 'SCOPED REVIEWER',
+        tools: [{ ref: 'builtin:read' }],
+      },
+      status: 'active',
+      createdAt: Date.now(),
+      testedAt: Date.now(),
+      activatedAt: Date.now(),
+    });
+    const scope = createConstructedAgentScope({
+      id: 'dispatch-scope',
+      entries: [scopedEntry],
+      ownedEntries: [scopedEntry],
+    });
+    try {
+      const registry = new Map<string, Promise<KodaXChildExecutionResult>>();
+      const ctx: KodaXToolExecutionContext = {
+        ...buildBaseCtx(registry),
+        agentScope: scope,
+      };
+
+      const result = await drainGeneratorReturn(
+        toolDispatchChildTask(
+          { id: 'sp-global-hidden', objective: 'probe', subagent_type: 'global-reviewer' },
+          ctx,
+        ),
+      );
+
+      expect(result).toMatch(/^\[Tool Error\]/);
+      expect(result).toContain('global-reviewer');
+      expect(result).toContain('Available: scoped-reviewer');
+      expect(mockExec).not.toHaveBeenCalled();
+    } finally {
+      scope.dispose();
+    }
+  });
+
   it('A.2: specialist-declared effort is applied to the dispatch bundle', async () => {
     const { registerConstructedAgent } = await import('../construction/agent-resolver.js');
     registerConstructedAgent({

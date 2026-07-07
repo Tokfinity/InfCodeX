@@ -450,9 +450,9 @@ export async function* toolDispatchChildTask(
   const specialistName = subagentTypeRaw || undefined;
   let specialistEffort: KodaXChildContextBundle['effort'];
   if (specialistName) {
-    const specialist = resolveConstructedAgent(specialistName);
+    const specialist = resolveConstructedAgent(specialistName, ctx.agentScope);
     if (!specialist) {
-      const available = listConstructedAgents().map(a => a.name);
+      const available = listConstructedAgents(ctx.agentScope).map(a => a.name);
       const availableStr = available.length === 0 ? '(none)' : available.join(', ');
       yield { stage: 'error', message: `Child "${childId}": specialist "${specialistName}" not registered` };
       return `[Tool Error] ${TOOL_NAME}: specialist "${specialistName}" not registered. Available: ${availableStr}`;

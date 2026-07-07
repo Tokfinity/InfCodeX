@@ -36,17 +36,24 @@
 import { readdir, readFile, stat } from 'node:fs/promises';
 import { join } from 'node:path';
 
-import { Runner, getAgentConfigHome } from '@kodax-ai/agent';
+import { Runner, getAgentConfigHome, type Agent, type AgentManifest } from '@kodax-ai/agent';
 import { normalizeReasoningEffortValue } from '@kodax-ai/llm';
 import { parseYamlFrontmatter } from '@kodax-ai/agent/capabilities/skills/shared/yaml';
 
-import { buildAdmissionManifest } from './admission-bridge.js';
+import { buildAdmissionManifest, parseToolNameFromRef } from './admission-bridge.js';
 import {
+  createConstructedAgentEntry,
+  createConstructedAgentScope,
   listConstructedAgents,
+  listConstructedAgentsWithSource,
+  releaseConstructedAgentEntry,
   registerConstructedAgent,
-  type ConstructedAgentSource,
+  type ConstructedAgentEntry,
+  type ConstructedAgentRegistration,
+  type KodaXAgentScope,
 } from './agent-resolver.js';
 import type { AgentArtifact, AgentContent, ToolRef } from './types.js';
+import { getRegisteredToolDefinition } from '../tools/registry.js';
 
 /**
  * Per-file failure record returned to the boot caller. Mirrors
@@ -78,6 +85,41 @@ export interface LoadAgentsFromMarkdownOptions {
    * are loaded before project agents.
    */
   readonly configHome?: string;
+}
+
+export interface LoadMarkdownAgentScopeOptions extends LoadAgentsFromMarkdownOptions {
+  /** Stable host-chosen id for diagnostics. Defaults to the resolved project cwd. */
+  readonly id?: string;
+}
+
+export interface MarkdownAgentToolFilter {
+  readonly name: string;
+  readonly reason: 'not-registered' | 'admission-clamped';
+}
+
+export interface MarkdownAgentLoadWarning {
+  readonly path: string;
+  readonly agentName?: string;
+  readonly reason: string;
+}
+
+export interface LoadedMarkdownAgent {
+  readonly name: string;
+  readonly description: string;
+  readonly source: 'markdown:user' | 'markdown:project';
+  readonly path: string;
+  readonly requestedTools?: readonly string[];
+  readonly effectiveTools?: readonly string[];
+  readonly filteredTools: readonly MarkdownAgentToolFilter[];
+  readonly admissionWarnings: readonly string[];
+}
+
+export interface LoadMarkdownAgentScopeResult {
+  readonly scope: KodaXAgentScope;
+  readonly loaded: readonly LoadedMarkdownAgent[];
+  readonly failed: readonly MarkdownLoadFailure[];
+  readonly warnings: readonly MarkdownAgentLoadWarning[];
+  dispose(): Promise<void>;
 }
 
 /**
@@ -148,7 +190,7 @@ export async function loadAgentsFromMarkdown(
   for (const [dir, source] of [
     [userDir, 'markdown:user' as const],
     [projectDir, 'markdown:project' as const],
-  ] satisfies ReadonlyArray<readonly [string, ConstructedAgentSource]>) {
+  ] satisfies ReadonlyArray<readonly [string, 'markdown:user' | 'markdown:project']>) {
     const files = await listMarkdownFiles(dir);
     for (const filePath of files) {
       const outcome = await loadOneAgentFile(filePath, source);
@@ -191,51 +233,284 @@ type LoadOutcome =
 
 async function loadOneAgentFile(
   filePath: string,
-  source: ConstructedAgentSource,
+  source: 'markdown:user' | 'markdown:project',
 ): Promise<LoadOutcome> {
+  const admitted = await admitOneMarkdownAgentFile(
+    filePath,
+    source,
+    () => new Map(listConstructedAgents().map((a) => [a.name, a])),
+  );
+  if (admitted.kind === 'silent-skip') return { ok: false, reason: null };
+  if (admitted.kind === 'fail') return { ok: false, reason: admitted.reason };
+  registerConstructedAgent(
+    admitted.artifact,
+    admitted.registration,
+  );
+  return { ok: true };
+}
+
+export async function loadMarkdownAgentScope(
+  opts: LoadMarkdownAgentScopeOptions = {},
+): Promise<LoadMarkdownAgentScopeResult> {
+  const cwd = opts.cwd ?? process.cwd();
+  const userDir = join(opts.configHome ?? getAgentConfigHome(), USER_AGENTS_DIRNAME);
+  const projectDir = join(cwd, PROJECT_AGENTS_DIRNAME);
+
+  const failures: MarkdownLoadFailure[] = [];
+  const warnings: MarkdownAgentLoadWarning[] = [];
+  const entriesByName = new Map<string, ConstructedAgentEntry>();
+  const ownedEntriesByName = new Map<string, ConstructedAgentEntry>();
+  const loadedByName = new Map<string, LoadedMarkdownAgent>();
+
+  for (const entry of listConstructedAgentsWithSource()) {
+    if (entry.source === 'markdown:user' || entry.source === 'markdown:project') {
+      continue;
+    }
+    entriesByName.set(entry.agent.name, entry);
+  }
+
+  const activatedAgents = () =>
+    new Map(Array.from(entriesByName.values()).map((entry) => [entry.agent.name, entry.agent]));
+
+  for (const [dir, source] of [
+    [userDir, 'markdown:user' as const],
+    [projectDir, 'markdown:project' as const],
+  ] satisfies ReadonlyArray<readonly [string, 'markdown:user' | 'markdown:project']>) {
+    const files = await listMarkdownFiles(dir);
+    for (const filePath of files) {
+      const admitted = await admitOneMarkdownAgentFile(filePath, source, activatedAgents);
+      if (admitted.kind === 'silent-skip') continue;
+      if (admitted.kind === 'fail') {
+        failures.push({ path: filePath, reason: admitted.reason });
+        warnings.push(...admitted.warnings);
+        continue;
+      }
+      const entry = createConstructedAgentEntry(admitted.artifact, admitted.registration);
+      const shadowedOwnedEntry = ownedEntriesByName.get(entry.agent.name);
+      if (shadowedOwnedEntry) {
+        releaseConstructedAgentEntry(shadowedOwnedEntry);
+      }
+      entriesByName.set(entry.agent.name, entry);
+      ownedEntriesByName.set(entry.agent.name, entry);
+      loadedByName.set(entry.agent.name, admitted.loaded);
+      warnings.push(...admitted.warnings);
+    }
+  }
+
+  const ownedEntries = Array.from(ownedEntriesByName.values());
+  const scope = createConstructedAgentScope({
+    id: opts.id ?? cwd,
+    entries: Array.from(entriesByName.values()),
+    ownedEntries,
+  });
+
+  return {
+    scope,
+    loaded: Array.from(loadedByName.values()),
+    failed: failures,
+    warnings,
+    dispose: async () => {
+      scope.dispose();
+    },
+  };
+}
+
+type ActivatedAgentsProvider = () => Map<string, Agent>;
+
+type AdmitMarkdownOutcome =
+  | { readonly kind: 'ok'; readonly artifact: AgentArtifact; readonly registration: ConstructedAgentRegistration; readonly loaded: LoadedMarkdownAgent; readonly warnings: readonly MarkdownAgentLoadWarning[] }
+  | { readonly kind: 'silent-skip' }
+  | { readonly kind: 'fail'; readonly reason: string; readonly warnings: readonly MarkdownAgentLoadWarning[] };
+
+async function admitOneMarkdownAgentFile(
+  filePath: string,
+  source: 'markdown:user' | 'markdown:project',
+  activatedAgents: ActivatedAgentsProvider,
+): Promise<AdmitMarkdownOutcome> {
   const parseOutcome = await parseMarkdownAgentFile(filePath);
-  if (parseOutcome.kind === 'silent-skip') return { ok: false, reason: null };
-  if (parseOutcome.kind === 'fail') return { ok: false, reason: parseOutcome.reason };
+  if (parseOutcome.kind === 'silent-skip') return { kind: 'silent-skip' };
+  if (parseOutcome.kind === 'fail') {
+    return { kind: 'fail', reason: parseOutcome.reason, warnings: [] };
+  }
 
   const { name, description, instructions, toolNames, model, effort } = parseOutcome.parsed;
-  const tools: readonly ToolRef[] | undefined = toolNames?.map((n) => ({
-    ref: n.includes(':') ? n : `builtin:${n}`,
-  }));
+  const filteredTools: MarkdownAgentToolFilter[] = [];
+  const warnings: MarkdownAgentLoadWarning[] = [];
+  const toolResolution = resolveMarkdownToolRefs(filePath, name, toolNames);
+  filteredTools.push(...toolResolution.filteredTools);
+  warnings.push(...toolResolution.warnings);
+  if (toolResolution.kind === 'fail') {
+    return {
+      kind: 'fail',
+      reason: toolResolution.reason,
+      warnings,
+    };
+  }
 
   const content: AgentContent = {
     instructions,
     description,
-    ...(tools !== undefined ? { tools } : {}),
+    ...(toolResolution.tools !== undefined ? { tools: toolResolution.tools } : {}),
     ...(model !== undefined ? { model } : {}),
     ...(effort !== undefined ? { effort } : {}),
   };
 
   const manifest = buildAdmissionManifest({ name, content });
-  const activatedAgents = new Map(listConstructedAgents().map((a) => [a.name, a]));
-  const verdict = await Runner.admit(manifest, { activatedAgents });
+  const verdict = await Runner.admit(manifest, { activatedAgents: activatedAgents() });
   if (!verdict.ok) {
-    return { ok: false, reason: `admission rejected: ${verdict.reason}` };
+    return { kind: 'fail', reason: `admission rejected: ${verdict.reason}`, warnings };
   }
 
+  const effectiveToolNames = effectiveManifestToolNames(verdict.handle.manifest, toolNames);
+  const admissionClampedTools = findAdmissionClampedTools(
+    toolResolution.resolvedToolNames,
+    effectiveToolNames,
+  );
+  filteredTools.push(...admissionClampedTools);
+  for (const tool of admissionClampedTools) {
+    warnings.push({
+      path: filePath,
+      agentName: name,
+      reason: `tool "${tool.name}" was removed by admission`,
+    });
+  }
+
+  const effectiveContent = withEffectiveTools(content, effectiveToolNames);
+  const now = Date.now();
   const artifact: AgentArtifact = {
     kind: 'agent',
     name,
     version: '0.0.0-markdown',
-    content,
+    content: effectiveContent,
     status: 'active',
-    createdAt: Date.now(),
-    testedAt: Date.now(),
-    activatedAt: Date.now(),
+    createdAt: now,
+    testedAt: now,
+    activatedAt: now,
   };
-  registerConstructedAgent(
+
+  return {
+    kind: 'ok',
     artifact,
-    {
+    registration: {
       bindings: verdict.handle.invariantBindings,
       manifest: verdict.handle.manifest,
       source,
     },
-  );
-  return { ok: true };
+    loaded: {
+      name,
+      description,
+      source,
+      path: filePath,
+      ...(toolNames !== undefined ? { requestedTools: toolNames } : {}),
+      ...(effectiveToolNames !== undefined ? { effectiveTools: effectiveToolNames } : {}),
+      filteredTools,
+      admissionWarnings: verdict.clampNotes,
+    },
+    warnings,
+  };
+}
+
+type ToolResolutionOutcome =
+  | {
+      readonly kind: 'ok';
+      readonly tools?: readonly ToolRef[];
+      readonly resolvedToolNames: readonly string[];
+      readonly filteredTools: readonly MarkdownAgentToolFilter[];
+      readonly warnings: readonly MarkdownAgentLoadWarning[];
+    }
+  | {
+      readonly kind: 'fail';
+      readonly reason: string;
+      readonly resolvedToolNames: readonly string[];
+      readonly filteredTools: readonly MarkdownAgentToolFilter[];
+      readonly warnings: readonly MarkdownAgentLoadWarning[];
+    };
+
+function resolveMarkdownToolRefs(
+  filePath: string,
+  agentName: string,
+  toolNames: readonly string[] | undefined,
+): ToolResolutionOutcome {
+  if (toolNames === undefined) {
+    return {
+      kind: 'ok',
+      resolvedToolNames: [],
+      filteredTools: [],
+      warnings: [],
+    };
+  }
+
+  const tools: ToolRef[] = [];
+  const resolvedToolNames: string[] = [];
+  const filteredTools: MarkdownAgentToolFilter[] = [];
+  const warnings: MarkdownAgentLoadWarning[] = [];
+
+  for (const rawName of toolNames) {
+    const ref = rawName.includes(':') ? rawName : `builtin:${rawName}`;
+    const toolName = parseToolNameFromRef(ref);
+    if (!getRegisteredToolDefinition(toolName)) {
+      filteredTools.push({ name: rawName, reason: 'not-registered' });
+      warnings.push({
+        path: filePath,
+        agentName,
+        reason: `unknown tool ref "${rawName}" was ignored`,
+      });
+      continue;
+    }
+    tools.push({ ref });
+    resolvedToolNames.push(toolName);
+  }
+
+  if (tools.length === 0) {
+    return {
+      kind: 'fail',
+      reason: `frontmatter "tools" did not resolve any registered tools: ${toolNames.join(', ')}`,
+      resolvedToolNames,
+      filteredTools,
+      warnings,
+    };
+  }
+
+  return {
+    kind: 'ok',
+    tools,
+    resolvedToolNames,
+    filteredTools,
+    warnings,
+  };
+}
+
+function effectiveManifestToolNames(
+  manifest: AgentManifest,
+  requestedTools: readonly string[] | undefined,
+): readonly string[] | undefined {
+  if (requestedTools === undefined) return undefined;
+  return (manifest.tools ?? [])
+    .map((tool) => ('name' in tool && typeof tool.name === 'string' ? tool.name : undefined))
+    .filter((name): name is string => name !== undefined);
+}
+
+function findAdmissionClampedTools(
+  resolvedToolNames: readonly string[],
+  effectiveToolNames: readonly string[] | undefined,
+): readonly MarkdownAgentToolFilter[] {
+  if (effectiveToolNames === undefined) return [];
+  const effective = new Set(effectiveToolNames);
+  return resolvedToolNames
+    .filter((name) => !effective.has(name))
+    .map((name) => ({ name, reason: 'admission-clamped' as const }));
+}
+
+function withEffectiveTools(
+  content: AgentContent,
+  effectiveToolNames: readonly string[] | undefined,
+): AgentContent {
+  if (effectiveToolNames === undefined || content.tools === undefined) return content;
+  const effective = new Set(effectiveToolNames);
+  return {
+    ...content,
+    tools: content.tools.filter((tool) => effective.has(parseToolNameFromRef(tool.ref))),
+  };
 }
 
 /**

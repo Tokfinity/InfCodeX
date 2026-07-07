@@ -974,6 +974,7 @@ export type {
   // package-private — it's a manifest internal, not a CLI/REPL-facing
   // shape; if a downstream consumer ever needs it we add it back then.
   AgentArtifact,
+  KodaXAgentScope,
   AuditEntry,
   AuditEventKind,
   BudgetState,
@@ -1035,6 +1036,7 @@ export {
   // (e.g. agent-picker UIs) that need to list markdown agents without
   // triggering admission/registration side effects.
   discoverMarkdownAgents,
+  loadMarkdownAgentScope,
   // Test-only — reset module-singleton state between hermetic test runs.
   _resetRuntimeForTesting,
 } from './construction/index.js';
@@ -1044,7 +1046,12 @@ export {
 export type {
   LoadAgentsFromMarkdownOptions,
   LoadAgentsFromMarkdownResult,
+  LoadMarkdownAgentScopeOptions,
+  LoadMarkdownAgentScopeResult,
   MarkdownLoadFailure,
+  MarkdownAgentLoadWarning,
+  MarkdownAgentToolFilter,
+  LoadedMarkdownAgent,
   DiscoveredMarkdownAgent,
   DiscoverMarkdownAgentsResult,
 } from './construction/index.js';

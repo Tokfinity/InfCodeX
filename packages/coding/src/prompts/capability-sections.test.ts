@@ -17,8 +17,10 @@ import { afterEach, describe, expect, it } from 'vitest';
 import { resolveMemoryRoot, setAgentConfigHome } from '@kodax-ai/agent';
 
 import type { KodaXOptions } from '../types.js';
+import type { KodaXAgentScope } from '../construction/agent-resolver.js';
 
 import { buildCapabilityContextSections } from './capability-sections.js';
+import { loadMarkdownAgentScope } from '../construction/markdown-loader.js';
 
 async function createTempDir(prefix: string): Promise<string> {
   return fs.mkdtemp(path.join(os.tmpdir(), prefix));
@@ -78,6 +80,7 @@ interface PartialContextOptions {
   promptOverlay?: string;
   skillsPrompt?: string;
   rawUserInput?: string;
+  agentScope?: KodaXAgentScope;
 }
 
 interface MakeOptionsExtras {
@@ -454,6 +457,47 @@ describe('FEATURE_191 — specialist-agents section (A.3)', () => {
     expect(sp?.content).toContain('- db-reviewer: Reviews DB migrations for safety');
     expect(sp?.content).toContain('- e2e-runner: End-to-end testing specialist using Playwright');
     expect(sp?.content).toContain('Dispatch via dispatch_child_task(subagent_type="<name>").');
+  });
+
+  it('uses scoped markdown agents for prompt rendering without leaking into another project scope', async () => {
+    const configHome = await createTempDir('kodax-capsec-md-home-');
+    const projectA = await createTempDir('kodax-capsec-md-a-');
+    const projectB = await createTempDir('kodax-capsec-md-b-');
+    cleanupDirs.push(configHome, projectA, projectB);
+    await fs.mkdir(path.join(projectA, '.kodax', 'agents'), { recursive: true });
+    await fs.writeFile(
+      path.join(projectA, '.kodax', 'agents', 'agent-a.md'),
+      [
+        '---',
+        'name: agent-a',
+        'description: Project A specialist',
+        '---',
+        'project A instructions',
+      ].join('\n'),
+      'utf8',
+    );
+
+    const scopeA = await loadMarkdownAgentScope({ cwd: projectA, configHome });
+    const scopeB = await loadMarkdownAgentScope({ cwd: projectB, configHome });
+
+    const sectionsA = await buildCapabilityContextSections(
+      makeOptions({ executionCwd: projectA, gitRoot: projectA, agentScope: scopeA.scope }),
+      false,
+      projectA,
+    );
+    const sectionsB = await buildCapabilityContextSections(
+      makeOptions({ executionCwd: projectB, gitRoot: projectB, agentScope: scopeB.scope }),
+      false,
+      projectB,
+    );
+
+    const specialistA = sectionsA.find((section) => section.id === 'specialist-agents');
+    const specialistB = sectionsB.find((section) => section.id === 'specialist-agents');
+    expect(specialistA?.content).toContain('- agent-a: Project A specialist');
+    expect(specialistB?.content ?? '').not.toContain('agent-a');
+
+    await scopeA.dispose();
+    await scopeB.dispose();
   });
 
   it('renders "(no description)" placeholder for agents missing the description field (FEATURE_089 backward compat)', async () => {

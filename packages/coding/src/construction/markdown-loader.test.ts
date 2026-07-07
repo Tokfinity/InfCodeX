@@ -24,7 +24,11 @@ import {
   resolveConstructedAgent,
   resolveConstructedAgentSource,
 } from './agent-resolver.js';
-import { discoverMarkdownAgents, loadAgentsFromMarkdown } from './markdown-loader.js';
+import {
+  discoverMarkdownAgents,
+  loadAgentsFromMarkdown,
+  loadMarkdownAgentScope,
+} from './markdown-loader.js';
 
 let userHome: string;
 let projectCwd: string;
@@ -332,6 +336,170 @@ describe('loadAgentsFromMarkdown', () => {
     const result = await load();
     expect(result.loaded).toBe(0);
     expect(result.failed[0]?.reason).toContain('frontmatter "effort" is invalid');
+  });
+});
+
+describe('loadMarkdownAgentScope', () => {
+  it('loads project markdown agents into a scope without mutating the global registry', async () => {
+    await writeProjectAgent(
+      'agent-a.md',
+      [
+        '---',
+        'name: agent-a',
+        'description: Project A specialist',
+        '---',
+        'project A instructions',
+      ].join('\n'),
+    );
+
+    const result = await loadMarkdownAgentScope({ cwd: projectCwd, configHome: userHome });
+
+    expect(result.failed).toEqual([]);
+    expect(result.loaded.map((agent) => agent.name)).toEqual(['agent-a']);
+    expect(resolveConstructedAgent('agent-a')).toBeUndefined();
+    expect(result.scope.resolve('agent-a')?.agent.instructions).toBe('project A instructions');
+
+    await result.dispose();
+  });
+
+  it('keeps project scopes isolated when another project has not loaded that agent', async () => {
+    const projectB = await mkdtemp(join(tmpdir(), 'kodax-md-loader-proj-b-'));
+    try {
+      await writeProjectAgent(
+        'agent-a.md',
+        [
+          '---',
+          'name: agent-a',
+          'description: Project A specialist',
+          '---',
+          'project A instructions',
+        ].join('\n'),
+      );
+
+      const scopeA = await loadMarkdownAgentScope({ cwd: projectCwd, configHome: userHome });
+      const scopeB = await loadMarkdownAgentScope({ cwd: projectB, configHome: userHome });
+
+      expect(scopeA.scope.resolve('agent-a')).toBeDefined();
+      expect(scopeB.scope.resolve('agent-a')).toBeUndefined();
+
+      await scopeA.dispose();
+      await scopeB.dispose();
+    } finally {
+      await rm(projectB, { recursive: true, force: true });
+    }
+  });
+
+  it('does not inherit legacy global markdown registrations into a scoped project', async () => {
+    const projectB = await mkdtemp(join(tmpdir(), 'kodax-md-loader-proj-b-'));
+    try {
+      await writeProjectAgent(
+        'agent-a.md',
+        [
+          '---',
+          'name: agent-a',
+          'description: Project A specialist',
+          '---',
+          'project A instructions',
+        ].join('\n'),
+      );
+      const legacy = await load();
+      expect(legacy.loaded).toBe(1);
+      expect(resolveConstructedAgent('agent-a')).toBeDefined();
+
+      const scopedB = await loadMarkdownAgentScope({ cwd: projectB, configHome: userHome });
+
+      expect(scopedB.scope.resolve('agent-a')).toBeUndefined();
+
+      await scopedB.dispose();
+    } finally {
+      await rm(projectB, { recursive: true, force: true });
+    }
+  });
+
+  it('project-level scoped agent shadows user-level same name only inside that scope', async () => {
+    await writeUserAgent(
+      'shared.md',
+      [
+        '---',
+        'name: shared',
+        'description: user shared',
+        '---',
+        'user instructions',
+      ].join('\n'),
+    );
+    await writeProjectAgent(
+      'shared.md',
+      [
+        '---',
+        'name: shared',
+        'description: project shared',
+        '---',
+        'project instructions',
+      ].join('\n'),
+    );
+
+    const result = await loadMarkdownAgentScope({ cwd: projectCwd, configHome: userHome });
+
+    expect(result.loaded).toHaveLength(1);
+    expect(result.loaded[0]).toMatchObject({
+      name: 'shared',
+      description: 'project shared',
+      source: 'markdown:project',
+    });
+    expect(result.scope.resolve('shared')?.agent.instructions).toBe('project instructions');
+
+    await result.dispose();
+  });
+
+  it('returns warnings and effective tools for partially unknown tool refs', async () => {
+    await writeProjectAgent(
+      'tooly.md',
+      [
+        '---',
+        'name: tooly',
+        'description: tool filter demo',
+        'tools: [read, definitely-not-a-real-tool]',
+        '---',
+        'use only available tools',
+      ].join('\n'),
+    );
+
+    const result = await loadMarkdownAgentScope({ cwd: projectCwd, configHome: userHome });
+
+    expect(result.failed).toEqual([]);
+    expect(result.warnings[0]?.reason).toContain('definitely-not-a-real-tool');
+    expect(result.loaded[0]?.requestedTools).toEqual(['read', 'definitely-not-a-real-tool']);
+    expect(result.loaded[0]?.effectiveTools).toEqual(['read']);
+    expect(result.loaded[0]?.filteredTools).toEqual([
+      { name: 'definitely-not-a-real-tool', reason: 'not-registered' },
+    ]);
+    expect(result.scope.resolve('tooly')?.agent.tools?.map((tool) => tool.name)).toEqual(['read']);
+
+    await result.dispose();
+  });
+
+  it('fails closed when every declared tool ref is unknown', async () => {
+    await writeProjectAgent(
+      'bad-tools.md',
+      [
+        '---',
+        'name: bad-tools',
+        'description: all tools are unknown',
+        'tools: [definitely-not-a-real-tool]',
+        '---',
+        'body',
+      ].join('\n'),
+    );
+
+    const result = await loadMarkdownAgentScope({ cwd: projectCwd, configHome: userHome });
+
+    expect(result.loaded).toEqual([]);
+    expect(result.failed).toHaveLength(1);
+    expect(result.failed[0]?.reason).toContain('did not resolve any registered tools');
+    expect(result.warnings[0]?.reason).toContain('definitely-not-a-real-tool');
+    expect(result.scope.resolve('bad-tools')).toBeUndefined();
+
+    await result.dispose();
   });
 });
 

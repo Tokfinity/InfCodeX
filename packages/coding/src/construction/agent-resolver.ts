@@ -110,6 +110,21 @@ interface RegisteredConstructedAgent {
    * test path); production loaders pass an explicit tag.
    */
   readonly source?: ConstructedAgentSource;
+  readonly toolPolicy?: ConstructedAgentToolPolicy;
+}
+
+export interface ConstructedAgentToolPolicy {
+  readonly declaredTools: boolean;
+  readonly effectiveToolNames: readonly string[];
+}
+
+export interface KodaXAgentScope {
+  readonly kind: 'constructed-agent-scope';
+  readonly id: string;
+  readonly disposed: boolean;
+  resolve(name: string): ConstructedAgentEntry | undefined;
+  list(): readonly ConstructedAgentEntry[];
+  dispose(): void;
 }
 
 /**
@@ -137,7 +152,13 @@ export type ConstructedAgentSource =
  * resolved `Agent` (with tools / handoffs lifted from refs). Returns
  * `undefined` when no agent at that name has been activated.
  */
-export function resolveConstructedAgent(name: string): Agent | undefined {
+export function resolveConstructedAgent(
+  name: string,
+  scope?: KodaXAgentScope,
+): Agent | undefined {
+  if (scope) {
+    return scope.resolve(name)?.agent;
+  }
   return AGENT_REGISTRY.get(name)?.agent;
 }
 
@@ -145,7 +166,10 @@ export function resolveConstructedAgent(name: string): Agent | undefined {
  * Snapshot of all currently-active constructed agents. Returned array
  * is freshly constructed; mutations to it do NOT affect the registry.
  */
-export function listConstructedAgents(): readonly Agent[] {
+export function listConstructedAgents(scope?: KodaXAgentScope): readonly Agent[] {
+  if (scope) {
+    return scope.list().map((e) => e.agent);
+  }
   return Array.from(AGENT_REGISTRY.values()).map((e) => e.agent);
 }
 
@@ -166,13 +190,20 @@ export function listConstructedAgents(): readonly Agent[] {
 export interface ConstructedAgentEntry {
   readonly agent: Agent;
   readonly source: ConstructedAgentSource | undefined;
+  readonly toolPolicy?: ConstructedAgentToolPolicy;
 }
 
 /** @internal — see {@link ConstructedAgentEntry} */
-export function listConstructedAgentsWithSource(): readonly ConstructedAgentEntry[] {
+export function listConstructedAgentsWithSource(
+  scope?: KodaXAgentScope,
+): readonly ConstructedAgentEntry[] {
+  if (scope) {
+    return scope.list();
+  }
   return Array.from(AGENT_REGISTRY.values()).map((e) => ({
     agent: e.agent,
     source: e.source,
+    ...(e.toolPolicy ? { toolPolicy: e.toolPolicy } : {}),
   }));
 }
 
@@ -187,8 +218,28 @@ export function listConstructedAgentsWithSource(): readonly ConstructedAgentEntr
  */
 export function resolveConstructedAgentSource(
   name: string,
+  scope?: KodaXAgentScope,
 ): ConstructedAgentSource | undefined {
+  if (scope) {
+    return scope.resolve(name)?.source;
+  }
   return AGENT_REGISTRY.get(name)?.source;
+}
+
+export function resolveConstructedAgentEntry(
+  name: string,
+  scope?: KodaXAgentScope,
+): ConstructedAgentEntry | undefined {
+  if (scope) {
+    return scope.resolve(name);
+  }
+  const entry = AGENT_REGISTRY.get(name);
+  if (!entry) return undefined;
+  return {
+    agent: entry.agent,
+    source: entry.source,
+    ...(entry.toolPolicy ? { toolPolicy: entry.toolPolicy } : {}),
+  };
 }
 
 /**
@@ -391,6 +442,73 @@ export interface ConstructedAgentRegisterOptions {
   readonly deferred?: boolean;
 }
 
+function buildToolPolicy(
+  content: AgentContent,
+  agent: Agent,
+): ConstructedAgentToolPolicy | undefined {
+  if (content.tools === undefined) {
+    return undefined;
+  }
+  return {
+    declaredTools: true,
+    effectiveToolNames: agent.tools?.map((tool) => tool.name) ?? [],
+  };
+}
+
+export function createConstructedAgentEntry(
+  artifact: AgentArtifact,
+  registration: ConstructedAgentRegistration = {},
+): ConstructedAgentEntry {
+  const agent = buildAgentFromContent(artifact.name, artifact.content);
+  if (registration.bindings && registration.manifest) {
+    setAdmittedAgentBindings(agent, registration.manifest, registration.bindings);
+  }
+  const toolPolicy = buildToolPolicy(artifact.content, agent);
+  return {
+    agent,
+    source: registration.source,
+    ...(toolPolicy ? { toolPolicy } : {}),
+  };
+}
+
+export function releaseConstructedAgentEntry(entry: ConstructedAgentEntry): void {
+  _resetAdmittedAgentBindings(entry.agent);
+}
+
+export function createConstructedAgentScope(input: {
+  readonly id: string;
+  readonly entries: readonly ConstructedAgentEntry[];
+  readonly ownedEntries?: readonly ConstructedAgentEntry[];
+}): KodaXAgentScope {
+  const byName = new Map(input.entries.map((entry) => [entry.agent.name, entry]));
+  const ownedEntries = new Set(input.ownedEntries ?? input.entries);
+  let disposed = false;
+  return {
+    kind: 'constructed-agent-scope',
+    id: input.id,
+    get disposed() {
+      return disposed;
+    },
+    resolve(name) {
+      if (disposed) return undefined;
+      return byName.get(name);
+    },
+    list() {
+      if (disposed) return [];
+      return Array.from(byName.values());
+    },
+    dispose() {
+      if (disposed) return;
+      disposed = true;
+      for (const entry of ownedEntries) {
+        releaseConstructedAgentEntry(entry);
+      }
+      byName.clear();
+      ownedEntries.clear();
+    },
+  };
+}
+
 /**
  * Register a constructed agent. Replaces any existing entry at the
  * same name (idempotent — re-activate of the same name+version is a
@@ -437,10 +555,7 @@ export function registerConstructedAgent(
   registration: ConstructedAgentRegistration = {},
   options: ConstructedAgentRegisterOptions = {},
 ): () => void {
-  const agent = buildAgentFromContent(artifact.name, artifact.content);
-  if (registration.bindings && registration.manifest) {
-    setAdmittedAgentBindings(agent, registration.manifest, registration.bindings);
-  }
+  const entry = createConstructedAgentEntry(artifact, registration);
 
   // FEATURE_090 — deferred path stages into `_pendingSwap` instead of
   // touching the active registry. Lookups (resolveConstructedAgent,
@@ -449,11 +564,12 @@ export function registerConstructedAgent(
   const target = options.deferred ? _pendingSwap : AGENT_REGISTRY;
   target.set(artifact.name, {
     artifact,
-    agent,
+    agent: entry.agent,
     // FEATURE_191 — persist source tag from registration arg (may be
     // undefined for legacy callers; absent source surfaces as
     // undefined through listConstructedAgentsWithSource).
-    source: registration.source,
+    source: entry.source,
+    ...(entry.toolPolicy ? { toolPolicy: entry.toolPolicy } : {}),
   });
 
   return () => {

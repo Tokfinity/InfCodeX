@@ -76,6 +76,8 @@ export {
 export type {
   ConstructedAgentSource,
   ConstructedAgentEntry,
+  ConstructedAgentToolPolicy,
+  KodaXAgentScope,
 } from './agent-resolver.js';
 
 // FEATURE_089 admission bridge — exposed so SDK consumers can
@@ -95,12 +97,18 @@ export {
 // agents without triggering admission/registration side effects.
 export {
   loadAgentsFromMarkdown,
+  loadMarkdownAgentScope,
   discoverMarkdownAgents,
 } from './markdown-loader.js';
 export type {
   LoadAgentsFromMarkdownOptions,
   LoadAgentsFromMarkdownResult,
+  LoadMarkdownAgentScopeOptions,
+  LoadMarkdownAgentScopeResult,
   MarkdownLoadFailure,
+  MarkdownAgentLoadWarning,
+  MarkdownAgentToolFilter,
+  LoadedMarkdownAgent,
   DiscoveredMarkdownAgent,
   DiscoverMarkdownAgentsResult,
 } from './markdown-loader.js';

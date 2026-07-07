@@ -110,6 +110,7 @@ export function buildToolExecutionContext(
     sessionId,
     taskSurface: options.context?.taskSurface,
     agentProfile: options.context?.agentProfile,
+    agentScope: options.context?.agentScope,
     selfManual: options.selfManual,
     // FEATURE_222 skill security — forward the host's skill dynamic-context policy
     // so the LLM-triggered `skill` tool routes `!`cmd`` through the host broker

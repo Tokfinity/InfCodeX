@@ -129,6 +129,7 @@ import type {
 // `./tools/types.js`) so there is no import cycle — `tools/types.ts` imports
 // `KodaXToolExecutionContext` back from here.
 import type { ToolSideEffect } from './tools/side-effect.js';
+import type { KodaXAgentScope } from './construction/agent-resolver.js';
 
 // Re-export all types from @kodax-ai/agent
 export type {
@@ -1249,6 +1250,12 @@ export interface KodaXContextOptions {
   inputArtifacts?: KodaXInputArtifact[];
   /** Internal execution-mode overlay appended to the system prompt */
   promptOverlay?: string;
+  /**
+   * Scoped specialist-agent resolver for embedders that run multiple
+   * projects/sessions in one process. When absent, constructed-agent
+   * lookups use the legacy process-global registry.
+   */
+  agentScope?: KodaXAgentScope;
   /** Optional task-engine surface label used to track managed tasks across UX entry points. */
   taskSurface?: KodaXTaskSurface;
   /**
@@ -1859,6 +1866,8 @@ export interface KodaXToolExecutionContext {
    * from `options.context.agentProfile`. Absent ⇒ default Coding Agent.
    */
   agentProfile?: KodaXAgentProfile;
+  /** Scoped specialist-agent resolver inherited from KodaXOptions.context. */
+  agentScope?: KodaXAgentScope;
   /** FEATURE_221: SDK-consumer self-manual injection, forwarded from KodaXOptions. */
   selfManual?: KodaXSelfManualConfig;
   /** FEATURE_222 skill security — host policy for skill `!`cmd`` dynamic-context,

@@ -50,7 +50,7 @@ import { normalizeReasoningEffortValue } from '@kodax-ai/llm';
 // `getAllRegisteredTools` powers the complementary excludeTools computation
 // (`KodaXOptions.context` has no `includeOnlyTools` API; the inverse subset
 // is the YAGNI-compliant substitute per ADR-035 R11).
-import { resolveConstructedAgent } from './construction/agent-resolver.js';
+import { resolveConstructedAgentEntry } from './construction/agent-resolver.js';
 import { getAllRegisteredTools } from './tools/registry.js';
 import type { Agent, WorkflowEventCorrelation } from '@kodax-ai/agent';
 // FEATURE_093 (v0.7.24): lazy-load `runKodaX` to break the cycle
@@ -780,6 +780,7 @@ async function resolveChildStructuredOutput(input: {
           ...inheritRepoIntelligenceContext(input.options),
           systemPromptOverride: STRUCTURED_OUTPUT_REPAIR_SYSTEM_PROMPT,
           excludeTools: getAllRegisteredTools().map((tool) => tool.name),
+          agentScope: input.scopeCtx.agentScope,
           currentAgentId: input.bundle.id,
           parentAgentId: input.scopeCtx.currentAgentId,
           inheritedChildTaskRegistry: input.scopeCtx.childTaskRegistry,
@@ -801,18 +802,20 @@ function resolveSpecialistOverride(
   bundle: KodaXChildContextBundle,
   defaultSystemPrompt: string,
   defaultExcludeTools: readonly string[],
+  parentCtx: KodaXToolExecutionContext,
 ): SpecialistOverride {
   if (!bundle.specialistName) {
     return { systemPromptOverride: defaultSystemPrompt, excludeTools: defaultExcludeTools };
   }
-  const specialist: Agent | undefined = resolveConstructedAgent(bundle.specialistName);
-  if (!specialist) {
+  const specialistEntry = resolveConstructedAgentEntry(bundle.specialistName, parentCtx.agentScope);
+  if (!specialistEntry) {
     // Defensive fail-safe — should not happen because the dispatch layer
     // already rejected unknown names. If it does (e.g. registry mutated
     // mid-flight), fall through to defaults rather than blocking the
     // child run.
     return { systemPromptOverride: defaultSystemPrompt, excludeTools: defaultExcludeTools };
   }
+  const specialist: Agent = specialistEntry.agent;
   // FEATURE_102 Phase 1: surface the specialist's explicit model/provider.
   const modelProviderEffort: Pick<SpecialistOverride, 'modelOverride' | 'providerOverride' | 'effortOverride'> = {
     ...(specialist.model ? { modelOverride: specialist.model } : {}),
@@ -832,13 +835,17 @@ function resolveSpecialistOverride(
   // API. Computing `allTools - (specialist.tools - defaultExcludeTools)`
   // is semantically equivalent to an allowlist intersected with the
   // caller's child-safety guard, without requiring a new option schema.
-  if (!specialist.tools || specialist.tools.length === 0) {
+  const declaredToolPolicy = specialistEntry.toolPolicy?.declaredTools === true;
+  const effectiveToolNames = declaredToolPolicy
+    ? specialistEntry.toolPolicy?.effectiveToolNames ?? []
+    : specialist.tools?.map((tool) => tool.name);
+  if (!declaredToolPolicy && (!effectiveToolNames || effectiveToolNames.length === 0)) {
     // Specialist declared no tools — fall back to defaults so the child
     // still has the standard CHILD_EXCLUDE_TOOLS_BASE/READONLY guard
     // rather than an unrestricted toolset.
     return { systemPromptOverride, excludeTools: defaultExcludeTools, ...modelProviderEffort };
   }
-  const specialistToolNames = new Set(specialist.tools.map(t => t.name));
+  const specialistToolNames = new Set(effectiveToolNames ?? []);
   const alwaysExcluded = new Set(defaultExcludeTools);
   const allToolNames = getAllRegisteredTools().map(t => t.name);
   const excludeTools = allToolNames.filter(n => alwaysExcluded.has(n) || !specialistToolNames.has(n));
@@ -918,6 +925,7 @@ async function runReadChildBody(
       bundle,
       CHILD_AGENT_SYSTEM_PROMPT,
       CHILD_EXCLUDE_TOOLS_READONLY,
+      scope.ctx,
     );
 
   // FEATURE_102 P1-auto — model_hint routing applies only when the dispatcher
@@ -966,6 +974,7 @@ async function runReadChildBody(
           ...inheritRepoIntelligenceContext(options),
           systemPromptOverride,
           excludeTools,
+          agentScope: scope.ctx.agentScope,
           // FEATURE_123 v0.7.44 — propagate agentId + registry so the
           // child runtime can answer peer `send_message` calls. The
           // child stays unable to mutate the registry (no
@@ -1111,6 +1120,7 @@ async function runWriteChildBody(
       bundle,
       writeSystemPrompt,
       CHILD_EXCLUDE_TOOLS_BASE,
+      childCtx,
     );
 
   // FEATURE_102 P1-auto — write children are NOT eligible for `fast`→cheap
@@ -1158,6 +1168,7 @@ async function runWriteChildBody(
           ...inheritRepoIntelligenceContext(options),
           systemPromptOverride,
           excludeTools,
+          agentScope: childCtx.agentScope,
           // FEATURE_123 v0.7.44 — write children share the same peer-
           // routing surface as read children (same agentId + registry
           // propagation rules).

@@ -1829,6 +1829,30 @@ describe('executeChildAgents — FEATURE_191 specialist routing (A.2b)', () => {
     expect(childOptions.context?.excludeTools).toContain('dispatch_child_task');
   });
 
+  it('fails closed when specialist declares tools but none resolve', async () => {
+    registerConstructedAgent(buildSpecialistArtifact({
+      name: 'typo-tools',
+      content: {
+        instructions: 'TYPO TOOLS PROMPT',
+        tools: [{ ref: 'builtin:definitely-not-a-real-tool' }],
+      },
+    }));
+    mockRunKodaX.mockResolvedValue(okResult());
+
+    const bundles = [createBundle({
+      id: 'cb-sp-empty-tools',
+      readOnly: true,
+      specialistName: 'typo-tools',
+    })];
+    await executeChildAgents(bundles, createCtx(), createOptions());
+
+    const childOptions = mockRunKodaX.mock.calls[0]![0] as {
+      context?: { systemPromptOverride?: string; excludeTools?: readonly string[] };
+    };
+    expect(childOptions.context?.systemPromptOverride).toBe('TYPO TOOLS PROMPT');
+    expect(childOptions.context?.excludeTools).toContain('read');
+  });
+
   it('write child path also honors specialist override (executeWriteChild)', async () => {
     registerConstructedAgent(buildSpecialistArtifact({
       name: 'refactor-helper',
@@ -2228,4 +2252,3 @@ describe('resolveEvidenceRef — FEATURE_199 task_id prefix + regression', () =>
     expect(result).not.toBe('- path:packages/x.ts');
   });
 });
-
