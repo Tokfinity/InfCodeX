@@ -353,6 +353,7 @@ describe('extension command host adapters', () => {
 
     const output = logSpy.mock.calls.flat().join('\n');
     expect(output).toContain('Failures:');
+    expect(output).not.toContain('Extensions reloaded:');
     expect(output).toContain('reload exploded');
     expect(output).toContain('stable-cmd');
   });

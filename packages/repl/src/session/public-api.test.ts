@@ -903,6 +903,7 @@ describe('Session Management Public SDK', () => {
       storage: { save: (id: string, data: unknown) => Promise<void> };
       loadFullTranscript: (id: string) => Promise<{
         messages: Array<{ content: unknown }>;
+        activeMessages: Array<{ content: unknown }>;
         transcriptEntries: Array<{
           entryId: string;
           type: string;
@@ -930,6 +931,7 @@ describe('Session Management Public SDK', () => {
       timestamp,
       message: { role: 'assistant', content: 'legacy answer' },
     };
+    const legacyRewindId = 'entry_legacy_rewind';
 
     await mgr.storage.save('legacy-rewind-001', {
       messages: [firstPrompt.message],
@@ -938,15 +940,15 @@ describe('Session Management Public SDK', () => {
       scope: 'user',
       lineage: {
         version: 2,
-        activeEntryId: firstPrompt.id,
+        activeEntryId: legacyRewindId,
         entries: [
           firstPrompt,
           firstAnswer,
           {
             type: 'compaction',
-            id: 'entry_legacy_rewind',
+            id: legacyRewindId,
             parentId: firstPrompt.id,
-            logicalId: 'entry_legacy_rewind',
+            logicalId: legacyRewindId,
             timestamp,
             summary: '[Rewind] Rewound to entry entry_legacy_user (truncated 1 entries)',
             firstKeptEntryId: firstPrompt.id,
@@ -968,6 +970,7 @@ describe('Session Management Public SDK', () => {
       'legacy prompt',
       'legacy answer',
     ]);
+    expect(full?.activeMessages.map((message) => message.content)).toEqual(['legacy prompt']);
     expect(full?.transcriptEntries.map((entry) => entry.type)).toEqual([
       'message',
       'message',

@@ -390,8 +390,25 @@ describe('session lineage helpers', () => {
     if (rewindEvent?.type === 'rewind_marker') {
       expect(rewindEvent).toEqual(expect.objectContaining({
         targetId,
+        fromId: lineage.activeEntryId,
         truncatedCount: 3,
       }));
+    }
+  });
+
+  it('does not write fromId when the source lineage has no active entry', () => {
+    const lineage = createSessionLineage([
+      createTextMessage('user', 'message 1'),
+      createTextMessage('assistant', 'message 2'),
+    ]);
+
+    const targetId = lineage.entries[0]!.id;
+    const rewound = rewindSessionLineage({ ...lineage, activeEntryId: null }, targetId);
+    const rewindEvent = rewound!.entries[1];
+
+    expect(rewindEvent?.type).toBe('rewind_marker');
+    if (rewindEvent?.type === 'rewind_marker') {
+      expect(rewindEvent.fromId).toBeUndefined();
     }
   });
 
@@ -403,6 +420,40 @@ describe('session lineage helpers', () => {
 
     const rewound = rewindSessionLineage(lineage, 'entry_nonexistent');
     expect(rewound).toBeNull();
+  });
+
+  it('returns null when target entry is session side-state instead of a navigable entry', () => {
+    const lineage = createSessionLineage([
+      createTextMessage('user', 'message 1'),
+      createTextMessage('assistant', 'message 2'),
+    ]);
+    const labeled = appendSessionLineageLabel(lineage, lineage.entries[0]!.id, 'first');
+    const labelEntry = labeled.entries.find((entry) => entry.type === 'label');
+    expect(labelEntry).toBeDefined();
+    expect(rewindSessionLineage(labeled, labelEntry!.id)).toBeNull();
+
+    const rewound = rewindSessionLineage(lineage, lineage.entries[0]!.id);
+    const rewindEntry = rewound!.entries.find((entry) => entry.type === 'rewind_marker');
+    expect(rewindEntry).toBeDefined();
+    expect(rewindSessionLineage(rewound!, rewindEntry!.id)).toBeNull();
+
+    const legacyRewindLineage: KodaXSessionLineage = {
+      version: 2,
+      activeEntryId: 'entry_legacy_rewind',
+      entries: [
+        lineage.entries[0]!,
+        {
+          type: 'compaction',
+          id: 'entry_legacy_rewind',
+          parentId: lineage.entries[0]!.id,
+          timestamp: '2026-07-07T01:00:00.000Z',
+          logicalId: 'entry_legacy_rewind',
+          summary: '[Rewind] Rewound to entry',
+          reason: 'rewind',
+        },
+      ],
+    };
+    expect(rewindSessionLineage(legacyRewindLineage, 'entry_legacy_rewind')).toBeNull();
   });
 
   it('does not mutate the original lineage', () => {
@@ -836,6 +887,35 @@ describe('FEATURE_072: postCompactAttachments and slicer-layer emission', () => 
 
     const derived = getSessionMessagesFromLineage(rewoundLineage!);
     expect(derived).toEqual([userMsg]);
+  });
+
+  it('slicer skips legacy rewind compaction entries', () => {
+    const base = createSessionLineage([userMsg, asstMsg]);
+    const targetId = base.entries[0]!.id;
+    const legacyRewindId = 'entry_legacy_rewind';
+    const legacyRewindLineage: KodaXSessionLineage = {
+      version: 2,
+      activeEntryId: legacyRewindId,
+      entries: [
+        base.entries[0]!,
+        {
+          type: 'compaction',
+          id: legacyRewindId,
+          parentId: targetId,
+          timestamp: '2026-07-07T01:00:00.000Z',
+          logicalId: legacyRewindId,
+          summary: '[Rewind] Rewound to entry entry_user (truncated 1 entries)',
+          firstKeptEntryId: targetId,
+          tokensBefore: 20,
+          tokensAfter: 5,
+          reason: 'rewind',
+          details: { rewindTargetId: targetId, truncatedCount: 1 },
+          postCompactAttachments: [att('system', 'should stay out of context')],
+        },
+      ],
+    };
+
+    expect(getSessionMessagesFromLineage(legacyRewindLineage)).toEqual([userMsg]);
   });
 
   it('applySessionCompaction with no attachments leaves field undefined (zero overhead for existing callers)', () => {

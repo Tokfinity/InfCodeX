@@ -869,9 +869,9 @@ function toTranscriptEntry(
     case 'compaction':
       if (entry.reason === 'rewind') {
         const details = legacyRewindDetails(entry.details);
-        const markerActive = entry.parentId === null
+        const markerActive = active || (entry.parentId === null
           ? activeEntryId === null
-          : activeIds.has(entry.parentId);
+          : activeIds.has(entry.parentId));
         return {
           ...transcriptEntryIdentity(entry),
           timestamp: entry.timestamp,

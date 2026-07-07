@@ -85,7 +85,9 @@
 > patch/stability release for SDK session boundary hardening, deterministic
 > transcript fixtures, `/reload` extension rediscovery, and feature-design index
 > cleanup. `FEATURE_244` remains the next feature slot at `v0.7.65`; `v0.7.64`
-> remains available as the debug/patch buffer before it.
+> remains available as the debug/patch buffer before it. The deferred `/reload`
+> deleted-extension unload semantics are tracked as a companion maintenance item
+> in the `v0.7.65` version design note.
 
 ---
 

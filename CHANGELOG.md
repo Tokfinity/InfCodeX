@@ -54,6 +54,13 @@ All notable changes to this project will be documented in this file.
   previous-turn selection now walks the active lineage path and ignores
   tool-result-only user messages plus synthetic user notices, avoiding accidental
   rewinds to tool protocol plumbing instead of the previous real user prompt.
+- **Rewind helpers reject sidecar targets.** Direct lineage rewinds now reject
+  label/client/goal/archive/rewind-marker side-state entries and legacy rewind
+  compactions remain context-silent even if a damaged old session points
+  `activeEntryId` at one.
+- **`/reload` reports successful extension reloads.** Failed hot-reload attempts
+  are reported only in the failure count instead of also inflating the
+  "Extensions reloaded" success count.
 - **Transcript layout fixtures are deterministic.** Duration-sensitive transcript
   layout tests now use fixed timestamps instead of `Date.now()`, removing a
   release-gate flake without changing runtime behavior.

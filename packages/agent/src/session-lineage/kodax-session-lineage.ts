@@ -218,6 +218,9 @@ function getContextMessagesForEntry(entry: NavigableSessionEntry): KodaXMessage[
     case 'message':
       return [cloneMessage(entry.message)];
     case 'compaction':
+      if (entry.reason === 'rewind') {
+        return [];
+      }
       return [
         createSummaryContextMessage(
           entry.summary,
@@ -1000,9 +1003,18 @@ export function rewindSessionLineage(
   lineage: KodaXSessionLineage,
   targetEntryId: string,
 ): KodaXSessionLineage | null {
+  const target = getNavigableEntryMap(lineage).get(targetEntryId);
+  if (
+    !target
+    || target.type === 'archive_marker'
+    || (target.type === 'compaction' && target.reason === 'rewind')
+  ) {
+    return null;
+  }
+
   // Find the target entry index in the lineage
   const entries = lineage.entries;
-  const targetIndex = entries.findIndex(e => e.id === targetEntryId);
+  const targetIndex = entries.findIndex(e => e.id === target.id);
   if (targetIndex < 0) {
     return null;
   }
@@ -1016,18 +1028,18 @@ export function rewindSessionLineage(
   const rewindEntry: KodaXSessionRewindMarkerEntry = {
     type: 'rewind_marker',
     id: rewindEntryId,
-    parentId: targetEntryId,
+    parentId: target.id,
     timestamp: new Date().toISOString(),
     logicalId: rewindEntryId,
-    targetId: targetEntryId,
+    targetId: target.id,
     ...(lineage.activeEntryId ? { fromId: lineage.activeEntryId } : {}),
     truncatedCount,
-    summary: `Rewound to entry ${targetEntryId} (truncated ${truncatedCount} entries)`,
+    summary: `Rewound to entry ${target.id} (truncated ${truncatedCount} entries)`,
   };
 
   return {
     version: 2,
-    activeEntryId: targetEntryId,
+    activeEntryId: target.id,
     entries: [...keptEntries, rewindEntry],
   };
 }

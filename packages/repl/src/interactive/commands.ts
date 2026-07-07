@@ -217,6 +217,7 @@ async function reloadExtensionRuntimeFromDisk(): Promise<ReloadExtensionRuntimeS
   await extensionRuntime.reloadExtensions({ continueOnError: true });
 
   const afterReload = getExtensionRuntimeDiagnostics(extensionRuntime);
+  const reloadFailures = Math.max(0, afterReload.failures.length - beforeFailureCount);
   const loadedPaths = afterReload.loadedExtensions.map((extension) => extension.path);
   const newDiscovered = await excludeExtensionPathsByEntrypoint(
     discoveredOnlyExtensions,
@@ -240,7 +241,7 @@ async function reloadExtensionRuntimeFromDisk(): Promise<ReloadExtensionRuntimeS
 
   const afterLoad = getExtensionRuntimeDiagnostics(extensionRuntime);
   return {
-    reloaded: before.loadedExtensions.length,
+    reloaded: Math.max(0, before.loadedExtensions.length - reloadFailures),
     loaded: Math.max(0, afterLoad.loadedExtensions.length - afterReload.loadedExtensions.length),
     failures: Math.max(0, afterLoad.failures.length - beforeFailureCount),
   };
