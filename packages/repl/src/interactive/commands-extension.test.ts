@@ -1,6 +1,7 @@
 import os from 'os';
 import path from 'path';
-import { mkdtemp, rm, writeFile } from 'fs/promises';
+import { mkdir, mkdtemp, rm, writeFile } from 'fs/promises';
+import { setAgentConfigHome } from '@kodax-ai/agent';
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
 import {
   createExtensionRuntime,
@@ -14,6 +15,7 @@ describe('extension command host adapters', () => {
 
   beforeEach(async () => {
     tempDir = await mkdtemp(path.join(os.tmpdir(), 'kodax-ext-cmd-'));
+    setAgentConfigHome(tempDir);
     const registry = getCommandRegistry();
     registry.clear();
     getCommandRegistry();
@@ -29,6 +31,7 @@ describe('extension command host adapters', () => {
     if (runtime) {
       await runtime.dispose();
     }
+    setAgentConfigHome(undefined);
     await rm(tempDir, { recursive: true, force: true });
   });
 
@@ -168,6 +171,79 @@ describe('extension command host adapters', () => {
     expect(output).toContain('diag-cmd-v2');
     expect(output).toContain('diag-provider-v2');
     expect(output).not.toContain('diag-cmd  Diagnostic command');
+  });
+
+  it('discovers newly added default extensions through manual /reload', async () => {
+    const extensionDir = path.join(tempDir, 'extensions', 'fresh-extension');
+    await mkdir(extensionDir, { recursive: true });
+    await writeFile(
+      path.join(extensionDir, 'extension.mjs'),
+      `export default function(api) {
+        api.registerCommand({
+          name: 'fresh-cmd',
+          description: 'Freshly discovered command',
+          handler: async () => ({ message: 'fresh' }),
+        });
+      }`,
+      'utf8',
+    );
+
+    expect(getActiveExtensionRuntime()).toBeNull();
+    const logSpy = vi.spyOn(console, 'log').mockImplementation(() => {});
+
+    const reloadCommand = BUILTIN_COMMANDS.find((cmd) => cmd.name === 'reload');
+    expect(reloadCommand).toBeDefined();
+    await reloadCommand!.handler(
+      [],
+      { gitRoot: tempDir } as never,
+      { reloadAgentsFiles: async () => [] } as never,
+      {} as never,
+    );
+
+    const runtime = getActiveExtensionRuntime();
+    expect(runtime).not.toBeNull();
+    expect(runtime!.getDiagnostics().commands.map((command) => command.name)).toContain('fresh-cmd');
+
+    const output = logSpy.mock.calls.flat().join('\n');
+    expect(output).toContain('Extensions loaded: 1 module(s)');
+  });
+
+  it('loads newly configured extensions through manual /reload', async () => {
+    const extensionDir = path.join(tempDir, 'configured-extension');
+    const entrypoint = path.join(extensionDir, 'extension.mjs');
+    await mkdir(extensionDir, { recursive: true });
+    await writeFile(path.join(tempDir, 'config.json'), JSON.stringify({
+      extensions: ['./configured-extension'],
+    }), 'utf8');
+    await writeFile(
+      entrypoint,
+      `export default function(api) {
+        api.registerCommand({
+          name: 'config-cmd',
+          description: 'Configured command',
+          handler: async () => ({ message: 'configured' }),
+        });
+      }`,
+      'utf8',
+    );
+
+    const logSpy = vi.spyOn(console, 'log').mockImplementation(() => {});
+    const reloadCommand = BUILTIN_COMMANDS.find((cmd) => cmd.name === 'reload');
+    expect(reloadCommand).toBeDefined();
+    await reloadCommand!.handler(
+      [],
+      { gitRoot: tempDir } as never,
+      { reloadAgentsFiles: async () => [] } as never,
+      {} as never,
+    );
+
+    const diagnostics = getActiveExtensionRuntime()!.getDiagnostics();
+    expect(diagnostics.commands.map((command) => command.name)).toContain('config-cmd');
+    expect(diagnostics.loadedExtensions).toContainEqual(expect.objectContaining({
+      path: entrypoint,
+      loadSource: 'config',
+    }));
+    expect(logSpy.mock.calls.flat().join('\n')).toContain('Extensions loaded: 1 module(s)');
   });
 
   it('surfaces recorded reload failures in extension diagnostics output', async () => {

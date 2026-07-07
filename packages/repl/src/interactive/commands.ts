@@ -3,9 +3,15 @@
  */
 
 import type * as readline from 'readline';
+import * as fsSync from 'fs';
+import path from 'path';
 import chalk from 'chalk';
 import { InteractiveContext, InteractiveMode } from './context.js';
 import {
+  createExtensionRuntime,
+  dedupeExtensionPathsByEntrypoint,
+  discoverDefaultExtensions,
+  excludeExtensionPathsByEntrypoint,
   estimateTokens,
   type ExtensionRuntimeDiagnostics,
   type KodaXAgentMode,
@@ -58,6 +64,7 @@ import { nextAgentMode } from '../common/agent-mode.js';
 import {
   clearCapabilityCache,
   compact,
+  getAgentConfigHome,
   getCachedRejectedEfforts,
 } from '@kodax-ai/agent';
 import type { CompactionConfig } from '@kodax-ai/agent';
@@ -117,6 +124,126 @@ async function reloadSkillRegistry(gitRoot: string | undefined): Promise<number>
   const registry = getSkillRegistry(gitRoot);
   await registry.reload();
   return registry.size;
+}
+
+interface ReloadExtensionRuntimeSummary {
+  reloaded: number;
+  loaded: number;
+  failures: number;
+}
+
+interface ExtensionReloadConfig extends Readonly<Record<string, unknown>> {
+  extensions?: string[];
+}
+
+function normalizeConfiguredExtensionPaths(configFile: string, configured: unknown): string[] {
+  if (!Array.isArray(configured)) {
+    return [];
+  }
+
+  const result: string[] = [];
+  for (const value of configured) {
+    if (typeof value !== 'string') {
+      continue;
+    }
+    const trimmed = value.trim();
+    if (!trimmed) {
+      continue;
+    }
+    result.push(path.isAbsolute(trimmed)
+      ? trimmed
+      : path.resolve(path.dirname(configFile), trimmed));
+  }
+  return result;
+}
+
+function loadExtensionReloadConfig(): ExtensionReloadConfig {
+  const configFile = path.join(getAgentConfigHome(), 'config.json');
+  try {
+    if (!fsSync.existsSync(configFile)) {
+      return {};
+    }
+    const parsed = JSON.parse(fsSync.readFileSync(configFile, 'utf-8')) as unknown;
+    if (!parsed || typeof parsed !== 'object' || Array.isArray(parsed)) {
+      return {};
+    }
+    const config = parsed as Record<string, unknown>;
+    return {
+      ...config,
+      extensions: normalizeConfiguredExtensionPaths(configFile, config.extensions),
+    };
+  } catch (error) {
+    const message = error instanceof Error ? error.message : String(error);
+    console.log(chalk.yellow(`[extensions] Failed to read configured extensions: ${message}`));
+    return {};
+  }
+}
+
+async function discoverDefaultExtensionsForReload(): Promise<string[]> {
+  try {
+    return await discoverDefaultExtensions();
+  } catch (error) {
+    const message = error instanceof Error ? error.message : String(error);
+    console.log(chalk.yellow(`[extensions] Failed to discover default extensions: ${message}`));
+    return [];
+  }
+}
+
+async function reloadExtensionRuntimeFromDisk(): Promise<ReloadExtensionRuntimeSummary> {
+  const config = loadExtensionReloadConfig();
+  const configuredExtensions = await dedupeExtensionPathsByEntrypoint(config.extensions ?? []);
+  const discoveredExtensions = await dedupeExtensionPathsByEntrypoint(
+    await discoverDefaultExtensionsForReload(),
+  );
+  const discoveredOnlyExtensions = await excludeExtensionPathsByEntrypoint(
+    discoveredExtensions,
+    configuredExtensions,
+  );
+  const candidateExtensions = [
+    ...discoveredOnlyExtensions,
+    ...configuredExtensions,
+  ];
+
+  let extensionRuntime = getActiveExtensionRuntime();
+  if (!extensionRuntime && candidateExtensions.length > 0) {
+    extensionRuntime = createExtensionRuntime({ config }).activate();
+  }
+  if (!extensionRuntime) {
+    return { reloaded: 0, loaded: 0, failures: 0 };
+  }
+
+  const before = getExtensionRuntimeDiagnostics(extensionRuntime);
+  const beforeFailureCount = before.failures.length;
+  await extensionRuntime.reloadExtensions({ continueOnError: true });
+
+  const afterReload = getExtensionRuntimeDiagnostics(extensionRuntime);
+  const loadedPaths = afterReload.loadedExtensions.map((extension) => extension.path);
+  const newDiscovered = await excludeExtensionPathsByEntrypoint(
+    discoveredOnlyExtensions,
+    loadedPaths,
+  );
+  const newConfigured = await excludeExtensionPathsByEntrypoint(
+    configuredExtensions,
+    [...loadedPaths, ...newDiscovered],
+  );
+
+  await extensionRuntime.loadExtensions(newDiscovered, {
+    continueOnError: true,
+    loadSource: 'discovery',
+    stage: 'reload',
+  });
+  await extensionRuntime.loadExtensions(newConfigured, {
+    continueOnError: true,
+    loadSource: 'config',
+    stage: 'reload',
+  });
+
+  const afterLoad = getExtensionRuntimeDiagnostics(extensionRuntime);
+  return {
+    reloaded: before.loadedExtensions.length,
+    loaded: Math.max(0, afterLoad.loadedExtensions.length - afterReload.loadedExtensions.length),
+    failures: Math.max(0, afterLoad.failures.length - beforeFailureCount),
+  };
 }
 
 function createManualCompactionConfig(
@@ -477,24 +604,11 @@ export const BUILTIN_COMMANDS: Command[] = [
         const files = await callbacks.reloadAgentsFiles?.() ?? [];
         const result = summarizeAgentsFiles(files);
         const skillCount = await reloadSkillRegistry(context.gitRoot);
-        const extensionRuntime = getActiveExtensionRuntime();
-        const extensionCount = extensionRuntime
-          ? getExtensionRuntimeDiagnostics(extensionRuntime).loadedExtensions.length
-          : 0;
-        const previousFailureCount = extensionRuntime
-          ? getExtensionRuntimeDiagnostics(extensionRuntime).failures.length
-          : 0;
-        let reloadedExtensions = 0;
-        let reloadFailures = 0;
+        const extensionSummary = await reloadExtensionRuntimeFromDisk();
+        const extensionCount = extensionSummary.reloaded + extensionSummary.loaded;
+        const reloadFailures = extensionSummary.failures;
 
-        if (extensionRuntime) {
-          await extensionRuntime.reloadExtensions({ continueOnError: true });
-          const diagnostics = getExtensionRuntimeDiagnostics(extensionRuntime);
-          reloadedExtensions = extensionCount || diagnostics.loadedExtensions.length;
-          reloadFailures = Math.max(0, diagnostics.failures.length - previousFailureCount);
-        }
-
-        if (files.length === 0 && skillCount === 0 && reloadedExtensions === 0) {
+        if (files.length === 0 && skillCount === 0 && extensionCount === 0 && reloadFailures === 0) {
           console.log(chalk.yellow('No project rule files, skills, or active extensions found.\n'));
           console.log(chalk.dim('  Create AGENTS.md or CLAUDE.md in your project, add skills, or load extensions with --extension.'));
           console.log();
@@ -511,8 +625,11 @@ export const BUILTIN_COMMANDS: Command[] = [
         if (result.project > 0) {
           console.log(chalk.dim(`  - Project: ${result.project} file(s)`));
         }
-        if (reloadedExtensions > 0) {
-          console.log(chalk.dim(`  - Extensions: ${reloadedExtensions} module(s)`));
+        if (extensionSummary.reloaded > 0) {
+          console.log(chalk.dim(`  - Extensions reloaded: ${extensionSummary.reloaded} module(s)`));
+        }
+        if (extensionSummary.loaded > 0) {
+          console.log(chalk.dim(`  - Extensions loaded: ${extensionSummary.loaded} module(s)`));
         }
         if (skillCount > 0) {
           console.log(chalk.dim(`  - Skills: ${skillCount} skill(s)`));
@@ -520,7 +637,7 @@ export const BUILTIN_COMMANDS: Command[] = [
         if (reloadFailures > 0) {
           console.log(chalk.yellow(`  - Failures: ${reloadFailures} recorded (run /extensions for details)`));
         }
-        console.log(chalk.dim('  Updated rules and skills will apply to subsequent requests in this session.'));
+        console.log(chalk.dim('  Updated rules, skills, and extensions will apply to subsequent requests in this session.'));
         console.log();
         return;
       } catch (error) {
@@ -537,7 +654,7 @@ export const BUILTIN_COMMANDS: Command[] = [
       console.log(chalk.bold('Description:'));
       console.log('  Reloads project-level context rules from AGENTS.md, CLAUDE.md, and .kodax/AGENTS.md files.');
       console.log('  Reloads skills from .kodax/skills/, ~/.kodax/skills/, ~/.agents/skills/, plugins, and builtins.');
-      console.log('  If a runtime extension host is active, it also hot-reloads loaded extensions.');
+      console.log('  Rediscovers default/configured extensions, creates a runtime if needed, and hot-reloads loaded extensions.');
       console.log();
       console.log(chalk.bold('Rule Priority:'));
       console.log(chalk.dim('  1. Global:   ') + '~/.kodax/AGENTS.md');
