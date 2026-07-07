@@ -10,8 +10,9 @@
 
 | Item | Value |
 |---|---|
-| Current released version | `v0.7.63` |
-| Current package version | `@kodax-ai/kodax@0.7.63` (release prepared 2026-07-07; npm publish pending) |
+| Current released version | `v0.7.62` |
+| Release candidate | `v0.7.63` (prepared 2026-07-07; npm publish/tag pending) |
+| Current package version | `@kodax-ai/kodax@0.7.63` (release candidate; npm publish pending) |
 | Workspace baseline | `llm / agent / coding / repl` 4 packages |
 | Total tracked features | `37` |
 | InProgress | `0` |
@@ -66,13 +67,11 @@
 > hardening and ark-coding lineup refresh.
 >
 > **Historical 2026-07-04 reschedule, superseded for active targets by the
-> 2026-07-06 cadence update below**: at user request, every planned `v0.7.x` feature at
-> `v0.7.60` and later was pushed back 3 minor versions, EXCEPT `FEATURE_250`
-> (stays `v0.7.60`) and `FEATURE_251` (stays `v0.7.61`). Net: `v0.7.60` now carries
-> only `250`; `228` / `244` → `v0.7.63`; `231` → `v0.7.66`; `235` → `v0.7.69`;
-> `238` → `v0.7.72`; `232` → `v0.7.75`; `105` → `v0.7.78`; `108` → `v0.7.81`;
-> `225` → `v0.7.84`. All v0.8.x features unchanged. Design blocks were relocated to
-> the matching per-version files.
+> 2026-07-06 cadence update below**: at user request, every planned `v0.7.x`
+> feature at `v0.7.60` and later was temporarily pushed back 3 minor versions,
+> except `FEATURE_250` (stays `v0.7.60`) and `FEATURE_251` (stays `v0.7.61`).
+> That temporary mapping is retained only as release-cadence history; use the
+> 2026-07-06 cadence update below for every active target.
 >
 > **2026-07-06 cadence update**: `FEATURE_228` moved forward to `v0.7.62` as a
 > complete single-version memory-control-plane release. `FEATURE_244` moved to
