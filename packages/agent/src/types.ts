@@ -145,6 +145,14 @@ export interface KodaXSessionArchiveMarkerEntry extends KodaXSessionEntryBase {
   summary: string;
 }
 
+export interface KodaXSessionRewindMarkerEntry extends KodaXSessionEntryBase {
+  type: 'rewind_marker';
+  targetId: string;
+  fromId?: string;
+  truncatedCount: number;
+  summary: string;
+}
+
 export interface KodaXSessionClientNoticeEntry extends KodaXSessionEntryBase {
   type: 'client_notice';
   source: string;
@@ -216,6 +224,7 @@ export type KodaXSessionEntry =
   | KodaXSessionBranchSummaryEntry
   | KodaXSessionLabelEntry
   | KodaXSessionArchiveMarkerEntry
+  | KodaXSessionRewindMarkerEntry
   | KodaXSessionClientNoticeEntry
   | KodaXSessionGoalEntry;
 
@@ -273,7 +282,7 @@ export interface KodaXSessionNavigationOptions {
 export interface KodaXSessionTreeNode {
   entry: Exclude<
     KodaXSessionEntry,
-    KodaXSessionLabelEntry | KodaXSessionGoalEntry | KodaXSessionClientNoticeEntry
+    KodaXSessionLabelEntry | KodaXSessionGoalEntry | KodaXSessionClientNoticeEntry | KodaXSessionRewindMarkerEntry
   >;
   children: KodaXSessionTreeNode[];
   label?: string;

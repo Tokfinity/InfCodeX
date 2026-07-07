@@ -154,7 +154,7 @@ function estimateMessageBytes(message: KodaXMessage): number {
 
 /**
  * Estimate payload bytes of a non-message lineage entry (compaction,
- * branch_summary, label, archive_marker).  Message entries are tracked
+ * branch_summary, label, archive_marker, rewind_marker).  Message entries are tracked
  * separately via the messages array (they share references after the
  * lineage cloning fix).
  */
@@ -186,6 +186,12 @@ function estimateEntryBytes(entry: KodaXSessionEntry): number {
       total += strBytes(entry.summary);
       total += 8; // archivedEntryCount
       return total;
+    case 'rewind_marker':
+      total += strBytes(entry.targetId);
+      total += strBytes(entry.fromId);
+      total += strBytes(entry.summary);
+      total += 8; // truncatedCount
+      return total;
     default:
       return total;
   }
@@ -205,7 +211,8 @@ export interface MemDiagBreakdown {
   lineageBranchSummaryCount: number;
   lineageLabelCount: number;
   lineageArchiveMarkerCount: number;
-  /** Bytes of non-message entries (compaction/branch/label/archive). */
+  lineageRewindMarkerCount: number;
+  /** Bytes of non-message entries (compaction/branch/label/archive/rewind). */
   lineageNonMessageBytes: number;
   /** Bytes of lineage message entries whose message reference is NOT in
    *  context.messages (orphaned or branched). Measures duplication that
@@ -281,9 +288,10 @@ export function memDiagSnapshot(
       + `, compact=${breakdown.lineageCompactionCount}`
       + `, branch=${breakdown.lineageBranchSummaryCount}`
       + `, label=${breakdown.lineageLabelCount}`
-      + `, archive=${breakdown.lineageArchiveMarkerCount})`,
+      + `, archive=${breakdown.lineageArchiveMarkerCount}`
+      + `, rewind=${breakdown.lineageRewindMarkerCount})`,
     `  lineage non-message:     ${formatMB(breakdown.lineageNonMessageBytes)}`
-      + ` (compaction.details/memorySeed + branch_summary payloads)`,
+      + ` (sidecar payloads)`,
     `  lineage orphan messages: ${breakdown.lineageOrphanMessageCount} msgs, ${formatMB(breakdown.lineageOrphanMessageBytes)}`
       + ` (in lineage but not in context.messages — branches/pruned)`,
     `  UI history:              ${breakdown.historyItemCount} items, ${formatMB(breakdown.historyTextBytes)}`,
@@ -378,6 +386,7 @@ export function buildMemDiagBreakdown(
   let lineageBranchSummaryCount = 0;
   let lineageLabelCount = 0;
   let lineageArchiveMarkerCount = 0;
+  let lineageRewindMarkerCount = 0;
   let lineageMessageEntryCount = 0;
 
   const entries = lineage?.entries ?? [];
@@ -404,6 +413,10 @@ export function buildMemDiagBreakdown(
         break;
       case 'archive_marker':
         lineageArchiveMarkerCount++;
+        lineageNonMessageBytes += estimateEntryBytes(entry);
+        break;
+      case 'rewind_marker':
+        lineageRewindMarkerCount++;
         lineageNonMessageBytes += estimateEntryBytes(entry);
         break;
     }
@@ -434,6 +447,7 @@ export function buildMemDiagBreakdown(
     lineageBranchSummaryCount,
     lineageLabelCount,
     lineageArchiveMarkerCount,
+    lineageRewindMarkerCount,
     lineageNonMessageBytes,
     lineageOrphanMessageBytes,
     lineageOrphanMessageCount,

@@ -151,6 +151,8 @@ export type SessionTranscriptEntryType =
   | 'message'
   | 'compaction'
   | 'branch_summary'
+  /** Rewind audit marker; not included in `FullTranscriptSessionData.messages`. */
+  | 'rewind_marker'
   | 'client_notice'
   /**
    * Synthetic task/workflow completion entry derived from `_taskResult`,
@@ -535,6 +537,11 @@ function isTranscriptSidecarEntry(value: unknown): value is KodaXSessionEntry {
       return typeof entry.archiveBatchId === 'string'
         && typeof entry.archivedEntryCount === 'number'
         && typeof entry.summary === 'string';
+    case 'rewind_marker':
+      return typeof entry.targetId === 'string'
+        && (entry.fromId === undefined || typeof entry.fromId === 'string')
+        && typeof entry.truncatedCount === 'number'
+        && typeof entry.summary === 'string';
     case 'label':
       return typeof entry.targetId === 'string'
         && (entry.label === undefined || typeof entry.label === 'string');
@@ -669,6 +676,13 @@ function summaryMessage(summary: string, kind: SessionTranscriptEntryType): Koda
   };
 }
 
+function rewindMarkerMessage(summary: string): KodaXMessage {
+  return {
+    role: 'system',
+    content: `[Rewind] ${summary}`,
+  };
+}
+
 function clientNoticeMessage(entry: KodaXSessionClientNoticeEntry): KodaXMessage {
   return {
     role: 'system',
@@ -755,6 +769,25 @@ function taskResultPayload(results: readonly KodaXTaskResultMetadata[]): unknown
     : undefined;
 }
 
+function legacyRewindDetails(details: KodaXJsonValue | undefined): {
+  readonly rewindTargetId?: string;
+  readonly truncatedCount?: number;
+} {
+  if (!isRecord(details)) {
+    return {};
+  }
+  const rewindTargetId = typeof details.rewindTargetId === 'string'
+    ? details.rewindTargetId
+    : undefined;
+  const truncatedCount = typeof details.truncatedCount === 'number'
+    ? details.truncatedCount
+    : undefined;
+  return {
+    ...(rewindTargetId !== undefined ? { rewindTargetId } : {}),
+    ...(truncatedCount !== undefined ? { truncatedCount } : {}),
+  };
+}
+
 function transcriptEntryActive(
   entry: KodaXSessionEntry,
   activeIds: ReadonlySet<string>,
@@ -763,7 +796,7 @@ function transcriptEntryActive(
   if (activeIds.has(entry.id)) {
     return true;
   }
-  if (entry.type !== 'client_notice') {
+  if (entry.type !== 'client_notice' && entry.type !== 'rewind_marker') {
     return false;
   }
   return entry.parentId === null
@@ -834,6 +867,28 @@ function toTranscriptEntry(
       };
     }
     case 'compaction':
+      if (entry.reason === 'rewind') {
+        const details = legacyRewindDetails(entry.details);
+        const markerActive = entry.parentId === null
+          ? activeEntryId === null
+          : activeIds.has(entry.parentId);
+        return {
+          ...transcriptEntryIdentity(entry),
+          timestamp: entry.timestamp,
+          type: 'rewind_marker',
+          source: 'system',
+          message: rewindMarkerMessage(entry.summary),
+          active: markerActive,
+          summary: entry.summary,
+          payload: {
+            summary: entry.summary,
+            reason: 'rewind',
+            ...(details.rewindTargetId !== undefined ? { rewindTargetId: details.rewindTargetId } : {}),
+            ...(details.truncatedCount !== undefined ? { truncatedCount: details.truncatedCount } : {}),
+            ...(entry.details !== undefined ? { details: entry.details } : {}),
+          },
+        };
+      }
       return {
         ...transcriptEntryIdentity(entry),
         timestamp: entry.timestamp,
@@ -848,6 +903,22 @@ function toTranscriptEntry(
           tokensAfter: entry.tokensAfter,
           reason: entry.reason,
           details: entry.details,
+        },
+      };
+    case 'rewind_marker':
+      return {
+        ...transcriptEntryIdentity(entry),
+        timestamp: entry.timestamp,
+        type: 'rewind_marker',
+        source: 'system',
+        message: rewindMarkerMessage(entry.summary),
+        active,
+        summary: entry.summary,
+        payload: {
+          summary: entry.summary,
+          rewindTargetId: entry.targetId,
+          ...(entry.fromId !== undefined ? { fromId: entry.fromId } : {}),
+          truncatedCount: entry.truncatedCount,
         },
       };
     case 'branch_summary':
@@ -956,7 +1027,9 @@ async function loadFullTranscriptImpl(
     const transcriptEntries = buildTranscriptEntries(fullLineage);
     return {
       ...activeData,
-      messages: transcriptEntries.map((entry) => entry.message),
+      messages: transcriptEntries
+        .filter((entry) => entry.type !== 'rewind_marker')
+        .map((entry) => entry.message),
       activeMessages: activeData.messages,
       transcriptEntries,
       lineage: fullLineage,

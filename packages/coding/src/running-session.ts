@@ -30,6 +30,7 @@
  */
 
 import { runKodaX } from './agent.js';
+import { markStartKodaXGeneratedSessionId } from './agent-runtime/middleware/session-snapshot.js';
 import type {
   KodaXOptions,
   KodaXReasoningMode,
@@ -107,8 +108,22 @@ export function startKodaX(
     reasoning: options.reasoningMode,
   });
 
+  const rawSessionId = options.session?.id;
+  const callerSuppliedSessionId = rawSessionId !== undefined && rawSessionId !== null;
+  const sessionId = rawSessionId ?? generateSessionId();
+  const shouldThreadGeneratedSessionId =
+    !callerSuppliedSessionId
+    && options.session?.autoResume !== true
+    && options.session?.resume !== true;
+  const sessionOptions = shouldThreadGeneratedSessionId
+    ? markStartKodaXGeneratedSessionId({
+        ...(options.session ?? {}),
+        id: sessionId,
+      })
+    : options.session;
   const effectiveOptions: KodaXOptions = {
     ...options,
+    ...(sessionOptions !== undefined ? { session: sessionOptions } : {}),
     abortSignal: internalAbort.signal,
     sessionControl: control,
   };
@@ -118,8 +133,6 @@ export function startKodaX(
   // `_attach` has not yet fired, so any sync setter calls land in
   // the pre-attach queue and replay on attach.
   const result = runKodaX(effectiveOptions, prompt);
-
-  const sessionId = options.session?.id ?? generateSessionId();
 
   return {
     id: sessionId,

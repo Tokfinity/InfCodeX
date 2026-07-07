@@ -14,7 +14,10 @@ import { describe, it, expect, vi, beforeEach, afterEach } from 'vitest';
 import type { KodaXSessionData, KodaXSessionStorage } from '@kodax-ai/agent';
 import type { KodaXOptions } from '../../types.js';
 import { buildRuntimeSessionState } from '../runtime-session-state.js';
-import { saveSessionSnapshot } from './session-snapshot.js';
+import {
+  markStartKodaXGeneratedSessionId,
+  saveSessionSnapshot,
+} from './session-snapshot.js';
 
 let warnSpy: ReturnType<typeof vi.spyOn>;
 
@@ -42,6 +45,15 @@ describe('saveSessionSnapshot — silent no-op when no storage', () => {
   it('does NOT warn when only id is missing — no embedder mistake to signal', async () => {
     const opts = { provider: 'anthropic', session: {} } as unknown as KodaXOptions;
     await saveSessionSnapshot(opts, 'sess-2', minimalData);
+    expect(warnSpy).not.toHaveBeenCalled();
+  });
+
+  it('does NOT warn for a startKodaX-generated handle id without storage', async () => {
+    const session = markStartKodaXGeneratedSessionId({
+      id: `sdk-start-generated-${Date.now()}`,
+    });
+    const opts = { provider: 'anthropic', session } as KodaXOptions;
+    await saveSessionSnapshot(opts, session.id!, minimalData);
     expect(warnSpy).not.toHaveBeenCalled();
   });
 });

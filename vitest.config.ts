@@ -26,6 +26,7 @@ export default defineConfig({
     // aliases (Vite prefix-match order).
     alias: {
       '@kodax-ai/kodax/media': resolveFromRoot('src', 'sdk-media.ts'),
+      '@kodax-ai/kodax/session': resolveFromRoot('src', 'sdk-session.ts'),
       '@kodax-ai/agent/media': resolveFromRoot('packages', 'agent', 'src', 'media', 'index.ts'),
       '@kodax-ai/coding/media': resolveFromRoot('packages', 'coding', 'src', 'media', 'index.ts'),
       '@kodax-ai/agent/capabilities/skills/shared/yaml': resolveFromRoot('packages', 'agent', 'src', 'capabilities', 'skills', 'shared', 'yaml.ts'),

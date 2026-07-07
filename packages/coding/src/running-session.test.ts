@@ -160,6 +160,37 @@ describe('startKodaX — sessionControl wiring', () => {
     expect(captured.current?.abortSignal).toBeDefined();
     expect(captured.current?.abortSignal).not.toBe(externalAbort.signal);
   });
+
+  it('threads the generated handle id into the forwarded run options', async () => {
+    const captured = captureControl();
+    const session = startKodaX(baseOptions(), 'hi');
+    await session.result;
+    expect(captured.current?.session?.id).toBe(session.id);
+  });
+
+  it('treats a null session id from plain JS callers like an omitted id', async () => {
+    const captured = captureControl();
+    const options = {
+      ...baseOptions(),
+      session: { id: null },
+    } as unknown as KodaXOptions;
+    const session = startKodaX(options, 'hi');
+    await session.result;
+    expect(session.id).toMatch(/^sess_\d+_[a-z0-9]{1,8}$/);
+    expect(captured.current?.session?.id).toBe(session.id);
+  });
+
+  it('does not override auto-resume discovery with a wrapper-generated id', async () => {
+    const captured = captureControl();
+    const session = startKodaX(
+      { ...baseOptions(), session: { autoResume: true } },
+      'hi',
+    );
+    await session.result;
+    expect(session.id).toMatch(/^sess_\d+_[a-z0-9]{1,8}$/);
+    expect(captured.current?.session?.id).toBeUndefined();
+    expect(captured.current?.session?.autoResume).toBe(true);
+  });
 });
 
 describe('startKodaX — setters before attach (queue + replay)', () => {

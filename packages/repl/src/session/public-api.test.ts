@@ -814,6 +814,87 @@ describe('Session Management Public SDK', () => {
     }));
   });
 
+  it('rewindSession skips tool_result users and exposes a rewind_marker transcript entry', async () => {
+    const overrideDir = path.join(tempHome, 'rewind-marker-transcript-test');
+    await mkdir(overrideDir, { recursive: true });
+
+    const mgr = api.createSessionManager({ sessionsDir: overrideDir }) as {
+      storage: { save: (id: string, data: unknown) => Promise<void> };
+      rewindSession: (id: string, opts?: { selector?: string }) => Promise<unknown | null>;
+      loadSession: (id: string) => Promise<{
+        messages: Array<{ content: unknown }>;
+        lineage?: { activeEntryId: string | null };
+      } | null>;
+      loadFullTranscript: (id: string) => Promise<{
+        messages: Array<{ content: unknown }>;
+        transcriptEntries: Array<{
+          entryId: string;
+          type: string;
+          source?: string;
+          active: boolean;
+          payload?: unknown;
+          message: { content: unknown };
+        }>;
+      } | null>;
+    };
+
+    await mgr.storage.save('rewind-marker-001', {
+      messages: [
+        { role: 'user', content: 'first prompt' },
+        { role: 'assistant', content: 'first answer' },
+        { role: 'user', content: 'second prompt' },
+        {
+          role: 'assistant',
+          content: [{ type: 'tool_use', id: 'tool_1', name: 'read', input: {} }],
+        },
+        {
+          role: 'user',
+          content: [{ type: 'tool_result', tool_use_id: 'tool_1', content: 'ok' }],
+        },
+        {
+          role: 'assistant',
+          content: [{ type: 'tool_use', id: 'tool_2', name: 'read', input: {} }],
+        },
+        {
+          role: 'user',
+          content: [{ type: 'tool_result', tool_use_id: 'tool_2', content: 'ok' }],
+        },
+        { role: 'assistant', content: 'second answer' },
+      ],
+      title: 'Rewind marker transcript',
+      gitRoot: tempHome,
+      scope: 'user',
+    });
+
+    const before = await mgr.loadFullTranscript('rewind-marker-001');
+    const firstEntryId = before?.transcriptEntries[0]?.entryId;
+    if (!firstEntryId) {
+      throw new Error('expected first transcript entry id');
+    }
+
+    const rewound = await mgr.rewindSession('rewind-marker-001');
+    const active = await mgr.loadSession('rewind-marker-001');
+    const full = await mgr.loadFullTranscript('rewind-marker-001');
+
+    expect(rewound).not.toBeNull();
+    expect(active?.lineage?.activeEntryId).toBe(firstEntryId);
+    expect(active?.messages.map((message) => message.content)).toEqual(['first prompt']);
+    expect(full?.messages.map((message) => message.content)).toEqual(['first prompt']);
+    expect(full?.transcriptEntries.map((entry) => entry.type)).toEqual([
+      'message',
+      'rewind_marker',
+    ]);
+    expect(full?.transcriptEntries[1]).toEqual(expect.objectContaining({
+      type: 'rewind_marker',
+      source: 'system',
+      active: true,
+      payload: expect.objectContaining({
+        rewindTargetId: firstEntryId,
+        truncatedCount: 7,
+      }),
+    }));
+  });
+
   it('loadFullTranscript surfaces typed task_result entries from persisted metadata', async () => {
     const overrideDir = path.join(tempHome, 'typed-transcript-test');
     await mkdir(overrideDir, { recursive: true });

@@ -73,6 +73,7 @@ export type {
   KodaXSessionLineage,
   KodaXSessionMessageEntry,
   KodaXSessionNavigationOptions,
+  KodaXSessionRewindMarkerEntry,
   KodaXSessionMeta,
   KodaXSessionScope,
   KodaXSessionRuntimeInfo,

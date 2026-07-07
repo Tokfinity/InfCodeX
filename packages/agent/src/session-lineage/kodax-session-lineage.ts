@@ -16,12 +16,13 @@ import type {
   KodaXSessionLineage,
   KodaXSessionMessageEntry,
   KodaXSessionNavigationOptions,
+  KodaXSessionRewindMarkerEntry,
   KodaXSessionTreeNode,
 } from '../index.js';
 
 type NavigableSessionEntry = Exclude<
   KodaXSessionEntry,
-  KodaXSessionLabelEntry | KodaXSessionGoalEntry | KodaXSessionClientNoticeEntry
+  KodaXSessionLabelEntry | KodaXSessionGoalEntry | KodaXSessionClientNoticeEntry | KodaXSessionRewindMarkerEntry
 >;
 
 const ENTRY_ID_LENGTH = 12;
@@ -115,6 +116,8 @@ function cloneEntry(entry: KodaXSessionEntry): KodaXSessionEntry {
       return { ...entry };
     case 'archive_marker':
       return { ...entry };
+    case 'rewind_marker':
+      return { ...entry };
     case 'client_notice':
       return {
         ...entry,
@@ -140,11 +143,14 @@ function isLabelEntry(entry: KodaXSessionEntry): entry is KodaXSessionLabelEntry
 }
 
 function isNavigableEntry(entry: KodaXSessionEntry): entry is NavigableSessionEntry {
-  // Labels, goals, and client notices are session-level side-state, not part of the
+  // Labels, goals, client notices, and rewind markers are session-level side-state, not part of the
   // navigable message thread. They live in `lineage.entries` so they
   // are persisted + cleaned up alongside their parent branch, but
   // they MUST be excluded from path/tree/context computations.
-  return entry.type !== 'label' && entry.type !== 'goal' && entry.type !== 'client_notice';
+  return entry.type !== 'label'
+    && entry.type !== 'goal'
+    && entry.type !== 'client_notice'
+    && entry.type !== 'rewind_marker';
 }
 
 function serializeMessageContent(content: KodaXMessage['content']): string {
@@ -958,12 +964,26 @@ function cloneForkableEntry(
  * Used by `/rewind` (no argument) to go back one conversational turn.
  * Returns null if fewer than 2 user messages exist.
  */
+function isToolResultOnlyUserMessage(message: KodaXMessage): boolean {
+  return message.role === 'user'
+    && Array.isArray(message.content)
+    && message.content.length > 0
+    && message.content.every((block) => block.type === 'tool_result');
+}
+
+function isRealUserPromptEntry(entry: KodaXSessionEntry): entry is KodaXSessionMessageEntry {
+  return entry.type === 'message'
+    && entry.message.role === 'user'
+    && entry.message._synthetic !== true
+    && !isToolResultOnlyUserMessage(entry.message);
+}
+
 export function findPreviousUserEntryId(lineage: KodaXSessionLineage): string | null {
-  const entries = lineage.entries;
+  const entries = getSessionLineagePath(lineage);
   let found = 0;
   for (let i = entries.length - 1; i >= 0; i--) {
     const entry = entries[i];
-    if (entry && entry.type === 'message' && entry.message.role === 'user') {
+    if (entry && isRealUserPromptEntry(entry)) {
       found++;
       if (found === 2) {
         return entry.id;
@@ -990,18 +1010,16 @@ export function rewindSessionLineage(
 
   // Create a rewind event entry to record this action
   const rewindEntryId = generateEntryId();
-  const rewindEntry: KodaXSessionCompactionEntry = {
-    type: 'compaction',
+  const rewindEntry: KodaXSessionRewindMarkerEntry = {
+    type: 'rewind_marker',
     id: rewindEntryId,
     parentId: targetEntryId,
     timestamp: new Date().toISOString(),
     logicalId: rewindEntryId,
-    summary: `[Rewind] Rewound to entry ${targetEntryId} (truncated ${truncatedCount} entries)`,
-    reason: 'rewind',
-    details: {
-      rewindTargetId: targetEntryId,
-      truncatedCount,
-    },
+    targetId: targetEntryId,
+    ...(lineage.activeEntryId ? { fromId: lineage.activeEntryId } : {}),
+    truncatedCount,
+    summary: `Rewound to entry ${targetEntryId} (truncated ${truncatedCount} entries)`,
   };
 
   return {

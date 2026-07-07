@@ -212,6 +212,11 @@ function isKodaXSessionEntry(value: unknown): value is KodaXSessionEntry {
       return typeof entry.archiveBatchId === 'string'
         && typeof entry.archivedEntryCount === 'number'
         && typeof entry.summary === 'string';
+    case 'rewind_marker':
+      return typeof entry.targetId === 'string'
+        && (entry.fromId === undefined || typeof entry.fromId === 'string')
+        && typeof entry.truncatedCount === 'number'
+        && typeof entry.summary === 'string';
     case 'client_notice':
       return typeof entry.source === 'string'
         && typeof entry.content === 'string'
@@ -302,7 +307,13 @@ function pathsEqual(a: string, b: string): boolean {
 function getLastNavigableEntryId(entries: KodaXSessionEntry[]): string | null {
   for (let index = entries.length - 1; index >= 0; index -= 1) {
     const entry = entries[index];
-    if (entry && entry.type !== 'label' && entry.type !== 'goal' && entry.type !== 'client_notice') {
+    if (
+      entry
+      && entry.type !== 'label'
+      && entry.type !== 'goal'
+      && entry.type !== 'client_notice'
+      && entry.type !== 'rewind_marker'
+    ) {
       return entry.id;
     }
   }

@@ -162,6 +162,8 @@ export type {
   SessionManager,
   RunningSessionInfo,
   DeleteSessionResult,
+  CompactSessionOptions,
+  CompactSessionResult,
 } from "./session/public-api.js";
 export type {
   KodaXSessionUiHistoryItem,
@@ -188,4 +190,5 @@ export {
   listRunningSessions,
   watchSessions,
   createSessionManager,
+  compactSession,
 } from "./session/public-api.js";

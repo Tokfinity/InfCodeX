@@ -366,9 +366,9 @@ describe('session lineage helpers', () => {
     expect(rewound!.entries).toHaveLength(3);
     expect(rewound!.entries[0]?.id).toBe(lineage.entries[0]!.id);
     expect(rewound!.entries[1]?.id).toBe(lineage.entries[1]!.id);
-    expect(rewound!.entries[2]?.type).toBe('compaction');
+    expect(rewound!.entries[2]?.type).toBe('rewind_marker');
     expect(rewound!.entries[2]).toMatchObject({
-      reason: 'rewind',
+      targetId,
       summary: expect.stringContaining('Rewound to entry'),
     });
   });
@@ -386,12 +386,12 @@ describe('session lineage helpers', () => {
     const rewound = rewindSessionLineage(lineage, targetId);
 
     const rewindEvent = rewound!.entries[2];
-    expect(rewindEvent?.type).toBe('compaction');
-    if (rewindEvent?.type === 'compaction') {
-      expect(rewindEvent.details).toEqual({
-        rewindTargetId: targetId,
+    expect(rewindEvent?.type).toBe('rewind_marker');
+    if (rewindEvent?.type === 'rewind_marker') {
+      expect(rewindEvent).toEqual(expect.objectContaining({
+        targetId,
         truncatedCount: 3,
-      });
+      }));
     }
   });
 
@@ -454,12 +454,12 @@ describe('session lineage helpers', () => {
     expect(rewound).not.toBeNull();
     expect(rewound!.activeEntryId).toBe(targetId);
     expect(rewound!.entries).toHaveLength(3); // [0], [1] + rewind event
-    expect(rewound!.entries[2]?.type).toBe('compaction');
-    if (rewound!.entries[2]?.type === 'compaction') {
-      expect(rewound!.entries[2].details).toEqual({
-        rewindTargetId: targetId,
+    expect(rewound!.entries[2]?.type).toBe('rewind_marker');
+    if (rewound!.entries[2]?.type === 'rewind_marker') {
+      expect(rewound!.entries[2]).toEqual(expect.objectContaining({
+        targetId,
         truncatedCount: 0,
-      });
+      }));
     }
   });
 
@@ -521,6 +521,57 @@ describe('findPreviousUserEntryId', () => {
     );
     // Should return the second user entry (index 1), not the first (index 0)
     expect(result).toBe(userEntries[1]!.id);
+  });
+
+  it('skips tool_result-only user messages when selecting the previous prompt', () => {
+    const lineage = createSessionLineage([
+      createTextMessage('user', 'first prompt'),
+      createTextMessage('assistant', 'first answer'),
+      createTextMessage('user', 'second prompt'),
+      {
+        role: 'assistant',
+        content: [{ type: 'tool_use', id: 'tool_1', name: 'read', input: {} }],
+      },
+      {
+        role: 'user',
+        content: [{ type: 'tool_result', tool_use_id: 'tool_1', content: 'ok' }],
+      },
+      {
+        role: 'assistant',
+        content: [{ type: 'tool_use', id: 'tool_2', name: 'read', input: {} }],
+      },
+      {
+        role: 'user',
+        content: [{ type: 'tool_result', tool_use_id: 'tool_2', content: 'ok' }],
+      },
+      createTextMessage('assistant', 'second answer'),
+    ]);
+
+    const result = findPreviousUserEntryId(lineage);
+    const userEntries = lineage.entries.filter(
+      (e) => e.type === 'message' && e.message.role === 'user',
+    );
+
+    expect(result).toBe(userEntries[0]!.id);
+    expect(result).not.toBe(userEntries[2]!.id);
+  });
+
+  it('skips synthetic user messages when selecting the previous prompt', () => {
+    const lineage = createSessionLineage([
+      createTextMessage('user', 'first prompt'),
+      createTextMessage('assistant', 'first answer'),
+      createTextMessage('user', 'second prompt'),
+      { role: 'user', content: 'system reminder', _synthetic: true },
+      { role: 'user', content: 'task completed', _synthetic: true, _source: 'task-completed' },
+      createTextMessage('assistant', 'second answer'),
+    ]);
+
+    const result = findPreviousUserEntryId(lineage);
+    const userEntries = lineage.entries.filter(
+      (e) => e.type === 'message' && e.message.role === 'user',
+    );
+
+    expect(result).toBe(userEntries[0]!.id);
   });
 
   it('returns null when only system and assistant messages exist', () => {
@@ -767,26 +818,14 @@ describe('FEATURE_072: postCompactAttachments and slicer-layer emission', () => 
     expect(derived[summaryIdx + 2]?.content).toBe('[Post-compact: file contents]');
   });
 
-  it('slicer skips attachments for rewind-marker compaction entries', () => {
-    // rewindSessionLineage creates a compaction entry with reason='rewind';
-    // even if someone stuffs attachments on such an entry, the slicer must skip them.
+  it('slicer skips rewind marker entries', () => {
     const base = createSessionLineage([userMsg, asstMsg]);
     const rewoundLineage = rewindSessionLineage(base, base.entries[0]!.id);
     expect(rewoundLineage).not.toBeNull();
+    expect(rewoundLineage!.entries.at(-1)?.type).toBe('rewind_marker');
 
-    // Manually stuff attachments onto the rewind marker to test the skip.
-    const mutated: KodaXSessionLineage = {
-      ...rewoundLineage!,
-      entries: rewoundLineage!.entries.map((e) =>
-        e.type === 'compaction' && e.reason === 'rewind'
-          ? { ...e, postCompactAttachments: [att('system', 'should-be-skipped')] }
-          : e,
-      ),
-    };
-
-    const derived = getSessionMessagesFromLineage(mutated);
-    const bad = derived.find((m) => m.content === 'should-be-skipped');
-    expect(bad).toBeUndefined();
+    const derived = getSessionMessagesFromLineage(rewoundLineage!);
+    expect(derived).toEqual([userMsg]);
   });
 
   it('applySessionCompaction with no attachments leaves field undefined (zero overhead for existing callers)', () => {
@@ -1002,8 +1041,7 @@ describe('FEATURE_072 Phase B: attachments routing + strip invariant + benchmark
   });
 
   it('acceptance #12: rewind landing on a compaction with attachments emits them in the derived view', () => {
-    // The rewind helper appends a compaction entry with reason: 'rewind' that
-    // the slicer deliberately skips attachments for. But if a user rewinds TO
+    // Rewind audit markers are context-silent. But if a user rewinds TO
     // (not past) an existing compaction entry that carries real attachments,
     // the derived view from the new leaf must still include those attachments
     // so the LLM retains the compressed state.

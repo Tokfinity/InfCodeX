@@ -80,6 +80,24 @@ async function getGitRoot(cwd?: string): Promise<string | null> {
  */
 const warnedSessionIds = new Set<string>();
 
+type StartKodaXGeneratedSession = NonNullable<KodaXOptions['session']> & {
+  readonly __startKodaXGeneratedId?: true;
+};
+
+export function markStartKodaXGeneratedSessionId<T extends NonNullable<KodaXOptions['session']>>(
+  session: T,
+): T {
+  Object.defineProperty(session, '__startKodaXGeneratedId', {
+    value: true,
+    enumerable: false,
+  });
+  return session;
+}
+
+function hasStartKodaXGeneratedSessionId(session: KodaXOptions['session']): boolean {
+  return (session as StartKodaXGeneratedSession | undefined)?.__startKodaXGeneratedId === true;
+}
+
 function contentBlocks(message: KodaXMessage): readonly KodaXContentBlock[] {
   return Array.isArray(message.content) ? message.content : [];
 }
@@ -163,12 +181,16 @@ export async function saveSessionSnapshot(
     //
     // The CLI is unaffected — it always wires FileSessionStorage, so
     // this branch is unreachable for the standalone `kodax` binary.
-    if (options.session?.id && !warnedSessionIds.has(options.session.id)) {
+    if (
+      options.session?.id
+      && !hasStartKodaXGeneratedSessionId(options.session)
+      && !warnedSessionIds.has(options.session.id)
+    ) {
       warnedSessionIds.add(options.session.id);
       console.warn(
         `[KodaX SDK] session.id="${options.session.id}" was provided but session.storage is undefined — ` +
         `session snapshots will NOT be persisted. To persist, pass a storage instance: ` +
-        `import { createSessionManager } from '@kodax-ai/kodax/repl'; ` +
+        `import { createSessionManager } from '@kodax-ai/kodax/session'; ` +
         `const { storage } = createSessionManager(); ` +
         `runKodaX({ session: { id, storage, ... }, ... }, prompt);  ` +
         `See docs/SDK_EMBEDDER_GUIDE.md §6.`,
