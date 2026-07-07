@@ -321,17 +321,18 @@ benchmark/datasets/h2-plan-execute-boundary/
   candidate-inventory.md      Methodology + verification trail
 ```
 
-**Variant-forcing env-var contract** (consumed by KodaX source-side, P2.1):
+**Historical variant-forcing env-var contract**:
+
+These env vars are retained in the historical FEATURE_107 benchmark harness and
+tests only. The production source-side B-path hooks were removed after the eval
+showed no quality win; do not set these in normal KodaX runs.
 
 | Env var | Values | Effect |
 |---|---|---|
-| `KODAX_FORCE_MAX_HARNESS` | `H1` / `H2` / unset | Override Scout verdict; eval-only path |
-| `KODAX_PLANNER_INPUTFILTER` | `strip-reasoning` / unset | Activate plannerHandoffs `inputFilter` to strip Planner reasoning, leaving only plan artifact (v0.7.16 design intent, B-path) |
+| `KODAX_FORCE_MAX_HARNESS` | `H1` / `H2` / unset | Historical harness override for the Scout verdict |
+| `KODAX_PLANNER_INPUTFILTER` | `strip-reasoning` / unset | Historical B-path replay flag for the plan-artifact-only handoff |
 
-Both are eval-only (read once each in source); never set in production.
-Removed at FEATURE_107 P6 cleanup unless 档 1 (B wins) triggers, in which
-case B-path becomes default and env-var is removed in favor of unconditional
-`inputFilter`.
+The eval-only source hooks have already been removed from production code.
 
 **Re-framed 2026-04-30**: original `KODAX_PLANNER_GENERATOR_MERGED` env was
 based on the (incorrect) assumption that current code is `new-session`. P2.1

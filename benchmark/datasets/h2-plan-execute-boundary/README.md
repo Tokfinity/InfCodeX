@@ -1,56 +1,59 @@
-# H2 Plan-Execute Boundary Eval — Dataset
+# H2 Plan-Execute Boundary Eval Dataset
 
-> **Owner**: FEATURE_107 (v0.7.32)
-> **Hosting**: TBD `tests/h2-plan-execute-boundary.eval.ts` (P3)
-> **Run**: TBD `npm run test:eval -- h2-plan-execute-boundary`
+> Owner: FEATURE_107 (v0.7.32)
+> Status: completed; retained as a historical eval corpus
 
 ## Status
 
-P1.0 + P1.5 complete (scan + dataset draft). P2 (B-path implementation) pending.
+FEATURE_107 is complete. The transient P1.0 scanner and raw scan outputs were
+pruned during v0.7.63 cleanup:
 
-## Dataset composition
+- `scripts/scan-h2-candidates.ts`
+- `candidates.jsonl`
+- `candidates-report.md`
+- `scan-summary.json`
 
-18 cases total (down from original 25–30 target — see "Dataset rebalance"):
+The retained source of truth is `cases.ts`. `candidate-inventory.md` keeps the
+methodology, verification trail, and demotion rationale.
 
-| Category | Count | Source |
-|---|---|---|
-| Real-replay | 1 | `~/.kodax/sessions/runner-1777024449767.jsonl` chain |
-| Multi-file feature impl | 5 | hand-curated |
-| Cross-package refactor | 4 | hand-curated |
-| Multi-file bug fix | 4 | hand-curated |
-| TDD multi-file | 4 | hand-curated |
+## Dataset Composition
 
-## Dataset rebalance (P1.0 finding)
+`cases.ts` locks the final corpus at 14 grounded H2-class cases:
 
-P1.0 scan revealed:
-- **0 real H2 sessions** in 533-session corpus (confirms FEATURE_107 telemetry pivot)
-- Of 73 H0_DIRECT KodaX sessions, only 4 had any file mutation; all 4 are the same task chain
-- Real telemetry candidate pool effectively yields ~1 viable case, not 60% of dataset
+| Source | Count |
+|---|---:|
+| Planned features | 6 |
+| Open issues | 3 |
+| Real replay | 5 |
 
-Decision: pivoted to **Path A** (hand-curated heavy) — 1 real + 17 hand-curated. Dataset bias acknowledged in P5.5 review.
+This corpus is above the 12-case exploratory fallback floor from the
+FEATURE_107 design, but it is not a confirmatory statistical sample.
 
-## Product question
+## Product Question
 
-When AMA escalates to H2 (Scout → Planner → Generator → Evaluator), is the
-`Planner → fresh Generator(+plan artifact)` handoff a lossy compression that
-would benefit from same-session continuation (variant B)? And as a reference
-point: does Planner role itself add value over H1 same-session execution?
+When AMA escalates to H2 (Scout -> Planner -> Generator -> Evaluator), does the
+Planner-to-Generator boundary benefit from a filtered plan-artifact handoff, or
+is the full-transcript continuation better for Generator quality?
+
+FEATURE_107 answered this empirically: the filtered B path did not produce a
+quality win, so the B-path source hooks were removed and the historical harness
+remains only for provenance.
 
 ## Files
 
 | File | Purpose |
 |---|---|
-| `candidates.jsonl` | P1.0 output — should-have-been-H2 candidates from `~/.kodax/sessions/` |
-| `candidates-report.md` | P1.0 human-readable summary |
-| `scan-summary.json` | P1.0 stats (harness distribution, score buckets) |
-| `cases.ts` | P1.5 final dataset (TBD) |
+| `cases.ts` | Final 14-case grounded dataset and variant list. |
+| `candidate-inventory.md` | Methodology, candidate review trail, and demotion rationale. |
 
-## Replay safety
+## Replay Safety
 
 Every case runs in an isolated git worktree at the historical SHA. Production
-repos are NEVER touched. See FEATURE_107 §Eval 执行隔离 for full safeguards.
+repos are never touched. The harness also isolates `KODAX_HOME` and cleans the
+temporary worktree after each run.
 
 ## Provenance
 
-Sessions sourced from `~/.kodax/sessions/` (single-user CLI telemetry, local
-only — KodaX is not SaaS). User authored all sessions. No external data.
+The original scan used local single-user KodaX session telemetry from
+`~/.kodax/sessions/`. Raw scan outputs were temporary P1.0 artifacts and are no
+longer retained in git.
