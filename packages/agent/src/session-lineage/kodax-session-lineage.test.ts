@@ -574,6 +574,16 @@ describe('findPreviousUserEntryId', () => {
     expect(result).toBe(userEntries[0]!.id);
   });
 
+  it('returns null when activeEntryId is null even if entries remain', () => {
+    const lineage = createSessionLineage([
+      createTextMessage('user', 'first prompt'),
+      createTextMessage('assistant', 'first answer'),
+      createTextMessage('user', 'second prompt'),
+    ]);
+
+    expect(findPreviousUserEntryId({ ...lineage, activeEntryId: null })).toBeNull();
+  });
+
   it('returns null when only system and assistant messages exist', () => {
     const lineage = createSessionLineage([
       createTextMessage('assistant', 'hello'),

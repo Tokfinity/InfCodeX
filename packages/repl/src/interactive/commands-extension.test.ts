@@ -208,6 +208,66 @@ describe('extension command host adapters', () => {
     expect(output).toContain('Extensions loaded: 1 module(s)');
   });
 
+  it('does not create an extension runtime when /reload discovers no extension entrypoints', async () => {
+    expect(getActiveExtensionRuntime()).toBeNull();
+    const logSpy = vi.spyOn(console, 'log').mockImplementation(() => {});
+
+    const reloadCommand = BUILTIN_COMMANDS.find((cmd) => cmd.name === 'reload');
+    expect(reloadCommand).toBeDefined();
+    await reloadCommand!.handler(
+      [],
+      { gitRoot: tempDir } as never,
+      { reloadAgentsFiles: async () => [] } as never,
+      {} as never,
+    );
+
+    expect(getActiveExtensionRuntime()).toBeNull();
+    const output = logSpy.mock.calls.flat().join('\n');
+    expect(output).not.toContain('Extensions loaded:');
+    expect(output).not.toContain('Extensions reloaded:');
+  });
+
+  it('keeps discovered extension registration idempotent across repeated /reload calls', async () => {
+    const extensionDir = path.join(tempDir, 'extensions', 'repeat-extension');
+    const entrypoint = path.join(extensionDir, 'extension.mjs');
+    await mkdir(extensionDir, { recursive: true });
+    await writeFile(
+      entrypoint,
+      `export default function(api) {
+        api.registerCommand({
+          name: 'repeat-cmd',
+          description: 'Repeated command',
+          handler: async () => ({ message: 'repeat' }),
+        });
+      }`,
+      'utf8',
+    );
+
+    const logSpy = vi.spyOn(console, 'log').mockImplementation(() => {});
+    const reloadCommand = BUILTIN_COMMANDS.find((cmd) => cmd.name === 'reload');
+    expect(reloadCommand).toBeDefined();
+    await reloadCommand!.handler(
+      [],
+      { gitRoot: tempDir } as never,
+      { reloadAgentsFiles: async () => [] } as never,
+      {} as never,
+    );
+    logSpy.mockClear();
+    await reloadCommand!.handler(
+      [],
+      { gitRoot: tempDir } as never,
+      { reloadAgentsFiles: async () => [] } as never,
+      {} as never,
+    );
+
+    const diagnostics = getActiveExtensionRuntime()!.getDiagnostics();
+    expect(diagnostics.loadedExtensions.filter((extension) => extension.path === entrypoint)).toHaveLength(1);
+    expect(diagnostics.commands.filter((command) => command.name === 'repeat-cmd')).toHaveLength(1);
+    const output = logSpy.mock.calls.flat().join('\n');
+    expect(output).toContain('Extensions reloaded: 1 module(s)');
+    expect(output).not.toContain('Extensions loaded:');
+  });
+
   it('loads newly configured extensions through manual /reload', async () => {
     const extensionDir = path.join(tempDir, 'configured-extension');
     const entrypoint = path.join(extensionDir, 'extension.mjs');

@@ -507,6 +507,9 @@ export function getSessionLineagePath(
  * slicer-layer concern, which preserves the contract
  * `entryMatchesContextMessage` and FEATURE_073's future firstKeptEntryId-based
  * slicing both depend on.
+ * Native rewind audits are `rewind_marker` entries and never reach this path;
+ * the `reason !== 'rewind'` guard keeps legacy persisted rewind compactions
+ * context-silent.
  */
 export function getSessionMessagesFromLineage(
   lineage: KodaXSessionLineage,

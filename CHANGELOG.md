@@ -12,8 +12,9 @@ All notable changes to this project will be documented in this file.
 > hygiene. No planned feature slot is consumed: `FEATURE_244` remains targeted
 > at `v0.7.65`. This release hardens the public `/session` subpath, keeps
 > rewind audit markers out of model context, makes `startKodaX()` wrapper
-> session IDs safe around auto-resume, and prunes superseded feature-design
-> parking notes from the private feature-doc index.
+> session IDs safe around auto-resume, improves `/reload` extension rediscovery,
+> and prunes superseded feature-design parking notes from the private feature-doc
+> index.
 
 ### Added
 
@@ -26,6 +27,13 @@ All notable changes to this project will be documented in this file.
   `rewind_marker` entry type. `loadFullTranscript()` surfaces it as a structured
   system transcript entry for host scrollback, while `loadSession()` and the
   returned transcript `messages` keep rewind audit markers out of model context.
+  Downstream consumers that exhaustively switch on `KodaXSessionEntry` or
+  `SessionTranscriptEntryType` should handle `rewind_marker`.
+- **`/reload` rediscovers extensions.** The REPL reload command now re-scans
+  default and configured extension entrypoints from disk, creates the extension
+  runtime on demand, hot-reloads already loaded modules, loads newly discovered
+  modules, and reports separate "Extensions reloaded" / "Extensions loaded"
+  counts.
 
 ### Changed
 

@@ -81,10 +81,11 @@
 > `v0.7.80`, `232` -> `v0.7.85`, `105` -> `v0.7.90`, `108` -> `v0.7.95`,
 > and `225` -> `v0.7.100`. All v0.8.x features remain unchanged.
 >
-> **2026-07-07 patch release**: `v0.7.63` is a no-feature patch/stability
-> release for SDK session boundary hardening, deterministic transcript fixtures,
-> and feature-design index cleanup. `FEATURE_244` remains the next feature slot
-> at `v0.7.65`; `v0.7.64` remains available as the debug/patch buffer before it.
+> **2026-07-07 patch release**: `v0.7.63` is a no-planned-feature-slot
+> patch/stability release for SDK session boundary hardening, deterministic
+> transcript fixtures, `/reload` extension rediscovery, and feature-design index
+> cleanup. `FEATURE_244` remains the next feature slot at `v0.7.65`; `v0.7.64`
+> remains available as the debug/patch buffer before it.
 
 ---
 

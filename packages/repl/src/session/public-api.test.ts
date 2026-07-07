@@ -895,6 +895,98 @@ describe('Session Management Public SDK', () => {
     }));
   });
 
+  it('loadFullTranscript projects legacy rewind compactions as rewind_marker entries', async () => {
+    const overrideDir = path.join(tempHome, 'legacy-rewind-marker-test');
+    await mkdir(overrideDir, { recursive: true });
+
+    const mgr = api.createSessionManager({ sessionsDir: overrideDir }) as {
+      storage: { save: (id: string, data: unknown) => Promise<void> };
+      loadFullTranscript: (id: string) => Promise<{
+        messages: Array<{ content: unknown }>;
+        transcriptEntries: Array<{
+          entryId: string;
+          type: string;
+          source?: string;
+          active: boolean;
+          payload?: unknown;
+          message: { content: unknown };
+        }>;
+      } | null>;
+    };
+    const timestamp = '2026-07-07T01:00:00.000Z';
+    const firstPrompt = {
+      type: 'message',
+      id: 'entry_legacy_user',
+      parentId: null,
+      logicalId: 'entry_legacy_user',
+      timestamp,
+      message: { role: 'user', content: 'legacy prompt' },
+    };
+    const firstAnswer = {
+      type: 'message',
+      id: 'entry_legacy_assistant',
+      parentId: firstPrompt.id,
+      logicalId: 'entry_legacy_assistant',
+      timestamp,
+      message: { role: 'assistant', content: 'legacy answer' },
+    };
+
+    await mgr.storage.save('legacy-rewind-001', {
+      messages: [firstPrompt.message],
+      title: 'Legacy rewind marker',
+      gitRoot: tempHome,
+      scope: 'user',
+      lineage: {
+        version: 2,
+        activeEntryId: firstPrompt.id,
+        entries: [
+          firstPrompt,
+          firstAnswer,
+          {
+            type: 'compaction',
+            id: 'entry_legacy_rewind',
+            parentId: firstPrompt.id,
+            logicalId: 'entry_legacy_rewind',
+            timestamp,
+            summary: '[Rewind] Rewound to entry entry_legacy_user (truncated 1 entries)',
+            firstKeptEntryId: firstPrompt.id,
+            tokensBefore: 100,
+            tokensAfter: 25,
+            reason: 'rewind',
+            details: {
+              rewindTargetId: firstPrompt.id,
+              truncatedCount: 1,
+            },
+          },
+        ],
+      },
+    });
+
+    const full = await mgr.loadFullTranscript('legacy-rewind-001');
+
+    expect(full?.messages.map((message) => message.content)).toEqual([
+      'legacy prompt',
+      'legacy answer',
+    ]);
+    expect(full?.transcriptEntries.map((entry) => entry.type)).toEqual([
+      'message',
+      'message',
+      'rewind_marker',
+    ]);
+    expect(full?.transcriptEntries[1]?.active).toBe(false);
+    expect(full?.transcriptEntries[2]).toEqual(expect.objectContaining({
+      entryId: 'entry_legacy_rewind',
+      type: 'rewind_marker',
+      source: 'system',
+      active: true,
+      payload: expect.objectContaining({
+        reason: 'rewind',
+        rewindTargetId: firstPrompt.id,
+        truncatedCount: 1,
+      }),
+    }));
+  });
+
   it('loadFullTranscript surfaces typed task_result entries from persisted metadata', async () => {
     const overrideDir = path.join(tempHome, 'typed-transcript-test');
     await mkdir(overrideDir, { recursive: true });
