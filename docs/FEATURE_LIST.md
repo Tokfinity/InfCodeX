@@ -13,11 +13,11 @@
 | Current released version | `v0.7.63` |
 | Current package version | `@kodax-ai/kodax@0.7.63` (published to npm 2026-07-07; tagged `v0.7.63`) |
 | Workspace baseline | `llm / agent / coding / repl` 4 packages |
-| Total tracked features | `37` |
-| InProgress | `0` |
-| Planned | `13` |
+| Total tracked features | `40` |
+| InProgress | `1` |
+| Planned | `15` |
 | Completed | `24` |
-| Tracked feature IDs | `007, 030, 093, 105, 108, 113, 139, 174, 211, 221, 224, 225, 228, 229, 230, 231, 232, 233, 234, 235, 236, 237, 238, 239, 240, 241, 242, 243, 244, 245, 246, 247, 248, 249, 250, 251, 252` |
+| Tracked feature IDs | `007, 030, 093, 105, 108, 113, 139, 174, 211, 221, 224, 225, 228, 229, 230, 231, 232, 233, 234, 235, 236, 237, 238, 239, 240, 241, 242, 243, 244, 245, 246, 247, 248, 249, 250, 251, 252, 253, 254, 255` |
 | Archive cutoff | Shipped / canceled / absorbed / shelved items through `v0.7.49` are archived. |
 
 ### 一览表
@@ -25,8 +25,8 @@
 | Status | Count | Feature IDs | Next checkpoint |
 |---|---:|---|---|
 | Completed | 24 | `228, 251, 252, 250, 248, 249, 247, 246, 245, 243, 242, 241, 233, 240, 239, 224, 221, 174, 211, 237, 229, 230, 234, 236` | `228` shipped v0.7.62 (2026-07-06); `251, 252` shipped v0.7.61 (2026-07-06); `250` shipped v0.7.60 (2026-07-04); `248, 249` shipped v0.7.59 (2026-07-03); `245, 246, 247, 221` released v0.7.58 (2026-07-02); `233, 241, 242, 243` released v0.7.57; `239, 240` released v0.7.56; `224` released v0.7.54; `174, 211, 237` v0.7.53; `229` v0.7.50; `230, 234, 236` v0.7.51 |
-| InProgress | 0 | - | - |
-| Planned, near-term | 8 | `244, 231, 235, 238, 232, 105, 108, 225` | `v0.7.65` -> `v0.7.100` |
+| InProgress | 1 | `253` | `v0.7.64` |
+| Planned, near-term | 10 | `254, 255, 244, 231, 235, 238, 232, 105, 108, 225` | `v0.7.65` -> `v0.7.100` |
 | Planned, v0.8.x | 5 | `007, 030, 093, 113, 139` | `v0.8.5+` |
 
 > v0.7.49 / v0.7.50 workflow split：`FEATURE_217` remains the human-facing workflow mode. Manual testing reopened required UI/UX and reliability deltas inside [v0.7.49](features/v0.7.49.md#13-v0749-completion-delta): bounded live progress with phase index / running 智能体 wording / preserved progress row / elapsed time / completed-child token usage, localized assistant-style launch notes, result-bearing child-agent digests or folded long-report notices, non-`info` agentic transcript, clear separation between `finished/spawned` progress and lifetime `maxAgents` cap, final synthesis, generated final-result contract lint, implicit `tokenBudget` stripping, generated task-command crash hardening, tighter AMAW invocation policy, wait timeout propagation, no default total workflow wall-clock timeout, terminal cleanup for un-awaited children, accurate template read/write metadata, capsule min-version preflight, manual run cleanup controls, and the closed minimal saved-workflow named reuse delta (`/workflow <savedName>` plus `/workflow rerun <runId|savedName>` with help/completion). `FEATURE_229` in v0.7.50 is the platform layer: it standardizes the same process as agent-layer snapshot/events, SDK subscription/polling, Space-style host policy and lifecycle controls, terminal-state helpers, workflow identity/lifecycle controls beyond named reuse (`display name | revise | rename | revision provenance`), REPL-as-consumer rendering, conservative retention, and durable source/provenance/resultSummary persistence; it is not the first implementation of the user-visible UX.
@@ -43,9 +43,14 @@
 | `v0.7.61` | `0` |
 | `v0.7.62` | `0` |
 | `v0.7.63` | `0` |
+| `v0.7.64` | `0` |
 | `v0.7.65` | `1` |
-| `v0.7.70` | `1` |
-| `v0.7.75` | `1` |
+| `v0.7.66` | `1` |
+| `v0.7.67` | `0` |
+| `v0.7.68` | `0` |
+| `v0.7.69` | `0` |
+| `v0.7.70` | `0` |
+| `v0.7.75` | `3` |
 | `v0.7.80` | `1` |
 | `v0.7.85` | `1` |
 | `v0.7.90` | `1` |
@@ -66,33 +71,35 @@
 > hardening and ark-coding lineup refresh.
 >
 > **Historical 2026-07-04 reschedule, superseded for active targets by the
-> 2026-07-06 cadence update below**: at user request, every planned `v0.7.x`
+> 2026-07-08 cadence update below**: at user request, every planned `v0.7.x`
 > feature at `v0.7.60` and later was temporarily pushed back 3 minor versions,
 > except `FEATURE_250` (stays `v0.7.60`) and `FEATURE_251` (stays `v0.7.61`).
 > That temporary mapping is retained only as release-cadence history; use the
-> 2026-07-06 cadence update below for every active target.
+> 2026-07-08 cadence update below for every active target.
 >
-> **2026-07-06 cadence update**: `FEATURE_228` moved forward to `v0.7.62` as a
-> complete single-version memory-control-plane release. `FEATURE_244` moved to
-> `v0.7.65`. After `v0.7.65`, planned `v0.7.x` feature-bearing releases use a
-> five-slot cadence: `231` -> `v0.7.70`, `235` -> `v0.7.75`, `238` ->
-> `v0.7.80`, `232` -> `v0.7.85`, `105` -> `v0.7.90`, `108` -> `v0.7.95`,
-> and `225` -> `v0.7.100`. All v0.8.x features remain unchanged.
+> **2026-07-08 runtime cadence update**: `FEATURE_253`, `FEATURE_254`, and
+> `FEATURE_255` reserve `v0.7.64`, `v0.7.65`, and `v0.7.66` for the KodaX
+> runtime migration sprint: embedded runtime contract, host migration/control
+> plane hardening, and local daemon. `v0.7.67`, `v0.7.68`, `v0.7.69`, and
+> `v0.7.70` are reserved as feature-free runtime stabilization / bugfix slots.
+> The previous `FEATURE_244` and `FEATURE_231` reschedule remains: `244` +
+> `231` + `235` -> `v0.7.75`, `238` -> `v0.7.80`, `232` -> `v0.7.85`,
+> `105` -> `v0.7.90`, `108` -> `v0.7.95`, and `225` -> `v0.7.100`. All
+> v0.8.x features remain unchanged.
 >
 > **2026-07-07 patch release**: `v0.7.63` is a no-planned-feature-slot
 > patch/stability release for SDK session boundary hardening, deterministic
 > transcript fixtures, `/reload` extension rediscovery, and feature-design index
-> cleanup. `FEATURE_244` remains the next feature slot at `v0.7.65`; `v0.7.64`
-> remains available as the debug/patch buffer before it. The deferred `/reload`
-> deleted-extension unload semantics are tracked as a companion maintenance item
-> in the `v0.7.65` version design note.
+> cleanup. After the 2026-07-08 cadence update, every slot before `v0.7.75`
+> remains available as debug/patch buffer.
 
 ---
 
 ## 进行中的 Feature
 
-| ID | Title | Target | Notes |
-|---|---|---|---|
+| ID | Title | Category | Priority | Planned | Design |
+|---|---|---|---|---|---|
+| `253` | KodaX Runtime Contract + Embedded Runtime API | Core / Runtime Architecture | Critical | `v0.7.64` | [v0.7.64](features/v0.7.64.md#feature_253-kodax-runtime-contract--embedded-runtime-api) |
 
 Recent completion notes:
 
@@ -135,8 +142,10 @@ Recent completion notes:
 
 | ID | Title | Category | Priority | Planned | Design |
 |---|---|---|---|---|---|
-| `244` | Repo Intelligence Graph-Only Index for Cold Module Queries | Core / Repo Intelligence + Performance | Medium | `v0.7.65` | [v0.7.65](features/v0.7.65.md#feature_244-repo-intelligence-graph-only-index-for-cold-module-queries) |
-| `231` | Durable Workflow Replay Resume (231b crash-recovery, optional) | Core / Workflow Persistence | Low | `v0.7.70` | [v0.7.70](features/v0.7.70.md#feature_231-durable-workflow-replay-resume) |
+| `254` | Runtime Host Migration + Control Plane Hardening | Core / Runtime Architecture | Critical | `v0.7.65` | [v0.7.65](features/v0.7.65.md#feature_254-runtime-host-migration--control-plane-hardening) |
+| `255` | KodaX Runtime Daemon + Local Transport | Core / Runtime Daemon | Critical | `v0.7.66` | [v0.7.66](features/v0.7.66.md#feature_255-kodax-runtime-daemon--local-transport) |
+| `244` | Repo Intelligence Graph-Only Index for Cold Module Queries | Core / Repo Intelligence + Performance | Medium | `v0.7.75` | [v0.7.75](features/v0.7.75.md#feature_244-repo-intelligence-graph-only-index-for-cold-module-queries) |
+| `231` | Durable Workflow Replay Resume (231b crash-recovery, optional) | Core / Workflow Persistence | Low | `v0.7.75` | [v0.7.75](features/v0.7.75.md#feature_231-durable-workflow-replay-resume) |
 | `235` | Draft Workflow — Generate-without-Run / Review-before-Start | Core / Workflow Lifecycle | Medium | `v0.7.75` | [v0.7.75](features/v0.7.75.md#feature_235-draft-workflow--generate-without-run--review-before-start) |
 | `238` | Workflow Learning Carrier + Workflow Handoff Inbox | Core / Workflow + Self-Improvement | Medium | `v0.7.80` | [v0.7.80](features/v0.7.80.md#feature_238-workflow-learning-carrier--workflow-handoff-inbox) |
 | `232` | Replay-Aware Workflow Pipeline Primitive | Core / Workflow Scheduling | Medium | `v0.7.85` | [v0.7.85](features/v0.7.85.md#feature_232-replay-aware-workflow-pipeline-primitive) |

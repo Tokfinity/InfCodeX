@@ -11,7 +11,7 @@
 // `tsc` reading those .d.ts files fails to resolve @kodax-ai/coding etc. with
 // "no exported member" — even though the runtime import works.
 //
-// Fix: bundle the 9 SDK entry .d.ts the same way esbuild bundles their .js,
+// Fix: bundle the SDK entry .d.ts the same way esbuild bundles their .js,
 // using rollup-plugin-dts with code-splitting. The output is self-contained:
 // no residual @kodax-ai/* imports, only third-party externals stay as imports
 // (consumers npm-install those anyway via root package.json#dependencies).
@@ -26,6 +26,7 @@
 //   dist/sdk-skills.d.ts
 //   dist/sdk-mcp.d.ts
 //   dist/sdk-session.d.ts
+//   dist/sdk-runtime.d.ts
 //   dist/types-chunks/*.d.ts     ← shared chunks (mirrors esbuild splitting)
 //
 // External list mirrors build-bundle.mjs: anything in root dependencies stays
@@ -89,6 +90,7 @@ const sdkEntries = {
   'sdk-skills': 'src/sdk-skills.ts',
   'sdk-mcp': 'src/sdk-mcp.ts',
   'sdk-session': 'src/sdk-session.ts',
+  'sdk-runtime': 'src/sdk-runtime.ts',
 };
 
 const internalSubpathDtsResolver = {
@@ -105,7 +107,7 @@ const internalSubpathDtsResolver = {
 };
 
 // Clean prior tsc emit so stale per-file .d.ts (acp_*.d.ts, cli_commands.d.ts,
-// kodax_cli.d.ts, *.test.d.ts) don't ship. Only the 9 SDK entries + chunks
+// kodax_cli.d.ts, *.test.d.ts) don't ship. Only SDK entries + chunks
 // remain after this script.
 function cleanStaleEmit() {
   log('Cleaning stale dist/*.d.ts (prior tsc emit)…');

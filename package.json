@@ -52,6 +52,10 @@
       "types": "./dist/sdk-session.d.ts",
       "import": "./dist/sdk-session.js"
     },
+    "./runtime": {
+      "types": "./dist/sdk-runtime.d.ts",
+      "import": "./dist/sdk-runtime.js"
+    },
     "./package.json": "./package.json"
   },
   "scripts": {
