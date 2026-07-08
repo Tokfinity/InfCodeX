@@ -176,6 +176,122 @@ describe('createKodaXRuntime', () => {
     await runtime.close();
   });
 
+  it('serializes runs within one session while allowing queued status to be observed', async () => {
+    const { createKodaXRuntime } = await import('@kodax-ai/kodax/runtime');
+    const runtime = await createKodaXRuntime({
+      homeDir: tempRoot,
+      sessionsDir: path.join(tempRoot, 'sessions'),
+      defaultProvider: 'mock-provider',
+    });
+    const session = await runtime.sessions.create({ title: 'Queue Test' });
+    const starts: string[] = [];
+    const queuedEvents: string[] = [];
+    let finishFirst: ((value: KodaXResult) => void) | undefined;
+    let finishSecond: ((value: KodaXResult) => void) | undefined;
+
+    runtime.events.subscribe({ type: 'run.queued' }, (event) => queuedEvents.push(event.runId));
+    codingMock.startKodaX.mockImplementation((options: KodaXOptions, prompt: string): RunningSession => {
+      const sessionId = options.session?.id ?? session.id;
+      starts.push(prompt);
+      if (prompt === 'first') {
+        return fakeRunningSession(options, new Promise<KodaXResult>((resolve) => {
+          finishFirst = resolve;
+        }));
+      }
+      return fakeRunningSession(options, new Promise<KodaXResult>((resolve) => {
+        finishSecond = resolve;
+      }));
+    });
+
+    const first = await runtime.runs.start({ sessionId: session.id, prompt: 'first' });
+    const second = await runtime.runs.start({ sessionId: session.id, prompt: 'second' });
+
+    expect(starts).toEqual(['first']);
+    expect((await runtime.runs.get(first.runId)).phase).toBe('running');
+    expect((await runtime.runs.get(second.runId)).phase).toBe('queued');
+    expect(queuedEvents).toEqual([second.runId]);
+
+    finishFirst?.({
+      success: true,
+      lastText: 'first done',
+      messages: [],
+      sessionId: session.id,
+    });
+    await first.result;
+    await flushMicrotasks();
+
+    expect(starts).toEqual(['first', 'second']);
+    expect((await runtime.runs.get(second.runId)).phase).toBe('running');
+
+    finishSecond?.({
+      success: true,
+      lastText: 'second done',
+      messages: [],
+      sessionId: session.id,
+    });
+    await expect(second.result).resolves.toMatchObject({ phase: 'completed' });
+
+    await runtime.close();
+  });
+
+  it('persists runtime replay and terminal run status across runtime recreation', async () => {
+    const { createKodaXRuntime } = await import('@kodax-ai/kodax/runtime');
+    const sessionsDir = path.join(tempRoot, 'sessions');
+    const runtime = await createKodaXRuntime({
+      homeDir: tempRoot,
+      sessionsDir,
+      defaultProvider: 'mock-provider',
+    });
+    const session = await runtime.sessions.create({ title: 'Persistence Test' });
+
+    codingMock.startKodaX.mockImplementation((options: KodaXOptions): RunningSession => {
+      const sessionId = options.session?.id ?? session.id;
+      queueMicrotask(() => {
+        options.events?.onTextDelta?.('persist me', {
+          sessionId,
+          seq: 1,
+          timestamp: new Date().toISOString(),
+        });
+      });
+      return fakeRunningSession(options, Promise.resolve({
+        success: true,
+        lastText: 'persisted',
+        messages: [],
+        sessionId,
+      }));
+    });
+
+    const handle = await runtime.runs.start({ sessionId: session.id, prompt: 'persist' });
+    await handle.result;
+    const snapshot = await runtime.status.snapshot();
+    expect(snapshot.runs).toContainEqual(expect.objectContaining({
+      runId: handle.runId,
+      phase: 'completed',
+    }));
+    await runtime.close();
+
+    const recreated = await createKodaXRuntime({
+      homeDir: tempRoot,
+      sessionsDir,
+      defaultProvider: 'mock-provider',
+    });
+    const replay = await recreated.events.replay({ runId: handle.runId });
+    const restoredStatus = await recreated.runs.get(handle.runId);
+
+    expect(replay.map((event) => event.type)).toEqual([
+      'run.started',
+      'assistant.delta',
+      'run.completed',
+    ]);
+    expect(restoredStatus).toMatchObject({
+      runId: handle.runId,
+      sessionId: session.id,
+      phase: 'completed',
+    });
+
+    await recreated.close();
+  });
+
   it('rejects runs for missing sessions before calling the coding layer', async () => {
     const { createKodaXRuntime } = await import('@kodax-ai/kodax/runtime');
     const runtime = await createKodaXRuntime({
@@ -368,6 +484,51 @@ describe('createKodaXRuntime', () => {
     expect(await runtime.permissions.listPending({ runId: handle.runId })).toEqual([]);
     expect(await runtime.permissions.respond(requestId, { type: 'allow_once' })).toBe(false);
     expect(await runtime.permissions.respond('missing-permission', { type: 'allow_once' })).toBe(false);
+
+    await runtime.runs.abort(handle.runId);
+    await runtime.close();
+  });
+
+  it('brokers permission requests even when the host did not provide an approval hook', async () => {
+    const { createKodaXRuntime } = await import('@kodax-ai/kodax/runtime');
+    const runtime = await createKodaXRuntime({
+      sessionsDir: tempRoot,
+      defaultProvider: 'mock-provider',
+    });
+    const session = await runtime.sessions.create({ title: 'Broker Test' });
+    let approvalDone: Promise<boolean | string> | undefined;
+
+    runtime.events.subscribe({ type: 'permission.requested' }, (event) => {
+      const payload = event.payload as { readonly id?: unknown };
+      if (typeof payload.id === 'string') {
+        void runtime.permissions.respond(payload.id, { type: 'allow_once' });
+      }
+    });
+    codingMock.startKodaX.mockImplementation((options: KodaXOptions): RunningSession => {
+      queueMicrotask(() => {
+        approvalDone = options.events?.beforeToolExecute?.(
+          'bash',
+          { command: 'npm test' },
+          {
+            sessionId: options.session?.id ?? session.id,
+            seq: 1,
+            turnId: 'turn-broker',
+            toolId: 'tool-broker',
+          },
+        );
+      });
+      return fakeRunningSession(options, new Promise<KodaXResult>(() => undefined));
+    });
+
+    const handle = await runtime.runs.start({
+      sessionId: session.id,
+      prompt: 'needs broker permission',
+    });
+
+    await flushMicrotasks();
+
+    await expect(approvalDone).resolves.toBe(true);
+    expect(await runtime.permissions.listPending({ runId: handle.runId })).toEqual([]);
 
     await runtime.runs.abort(handle.runId);
     await runtime.close();

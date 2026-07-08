@@ -11,9 +11,28 @@ type RuntimeConfigMock = {
 
 const acpServerState = vi.hoisted(() => ({
   capturedOptions: [] as unknown[],
-  runKodaX: vi.fn(async (options: unknown) => {
+  sessions: new Map<string, { title: string; messages: unknown[] }>(),
+  startKodaX: vi.fn((options: { session?: { id?: string } }) => {
     acpServerState.capturedOptions.push(options);
-    return { interrupted: false };
+    const sessionId = options.session?.id ?? 'missing-session';
+    return {
+      id: sessionId,
+      attached: true,
+      currentProvider: 'openai',
+      currentModel: undefined,
+      currentReasoning: undefined,
+      aborted: false,
+      setProvider: vi.fn(),
+      setModel: vi.fn(),
+      setReasoning: vi.fn(),
+      abort: vi.fn(),
+      result: Promise.resolve({
+        interrupted: false,
+        success: true,
+        messages: [],
+        sessionId,
+      }),
+    };
   }),
   prepareRuntimeConfig: vi.fn<() => RuntimeConfigMock>(() => ({
     provider: 'openai',
@@ -43,7 +62,9 @@ vi.mock('@kodax-ai/coding', () => ({
   },
   registerConfiguredMcpCapabilityProvider: vi.fn(async () => undefined),
   resolveProvider: vi.fn(() => ({})),
-  runKodaX: acpServerState.runKodaX,
+  generateSessionId: vi.fn(async () => 'generated-session'),
+  runManagedTask: vi.fn(),
+  startKodaX: acpServerState.startKodaX,
   shutdownDefaultLspService: vi.fn(async () => undefined),
 }));
 
@@ -60,6 +81,23 @@ vi.mock('@kodax-ai/repl', () => ({
   isPathInsideProject: vi.fn(() => true),
   isToolCallAllowed: vi.fn(() => ({ allowed: true })),
   prepareRuntimeConfig: acpServerState.prepareRuntimeConfig,
+  createSessionManager: vi.fn(() => ({
+    storage: {
+      save: vi.fn(async (sessionId: string, data: { title?: string; messages?: unknown[] }) => {
+        acpServerState.sessions.set(sessionId, {
+          title: data.title ?? '',
+          messages: data.messages ?? [],
+        });
+      }),
+    },
+    loadSession: vi.fn(async (sessionId: string) => acpServerState.sessions.get(sessionId) ?? null),
+    listSessions: vi.fn(async () => []),
+    loadFullTranscript: vi.fn(async () => ({ transcriptEntries: [] })),
+    forkSession: vi.fn(async () => null),
+    archiveSession: vi.fn(async () => true),
+    unarchiveSession: vi.fn(async () => true),
+    deleteSession: vi.fn(async () => ({ ok: true })),
+  })),
 }));
 
 import { KodaXAcpServer } from './acp_server.js';
@@ -85,7 +123,8 @@ function lastRunOptions(): Record<string, unknown> {
 describe('KodaXAcpServer reasoning effort forwarding', () => {
   beforeEach(() => {
     acpServerState.capturedOptions = [];
-    acpServerState.runKodaX.mockClear();
+    acpServerState.sessions.clear();
+    acpServerState.startKodaX.mockClear();
     acpServerState.prepareRuntimeConfig.mockClear();
     acpServerState.prepareRuntimeConfig.mockReturnValue({
       provider: 'openai',
@@ -233,7 +272,7 @@ describe('KodaXAcpServer reasoning effort forwarding', () => {
     const sessionId = await createSession(server);
 
     await expect(server.prompt(makePrompt(sessionId, '   '))).rejects.toThrow(/Reasoning effort cannot be empty/);
-    expect(acpServerState.runKodaX).not.toHaveBeenCalled();
+    expect(acpServerState.startKodaX).not.toHaveBeenCalled();
     await server.dispose();
   });
 });

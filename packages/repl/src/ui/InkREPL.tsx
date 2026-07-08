@@ -490,9 +490,18 @@ function applyRuntimeSessionSnapshot(context: InteractiveContext, result: KodaXR
 }
 
 // REPL options
+export interface InkRuntimeRunnerInput {
+  readonly options: KodaXOptions;
+  readonly prompt: string;
+  readonly sessionId: string;
+}
+
+export type InkRuntimeRunner = (input: InkRuntimeRunnerInput) => Promise<KodaXResult>;
+
 export interface InkREPLOptions extends KodaXOptions {
   storage?: SessionStorage;
   hardExitOnClose?: boolean;
+  runtimeRunner?: InkRuntimeRunner;
 }
 
 // Ink REPL Props
@@ -7262,22 +7271,28 @@ const InkREPLInner: React.FC<InkREPLProps> = ({
       return getPlanModeBlockReason(tool, input, context.gitRoot ?? process.cwd());
     };
 
+    const runOptions: KodaXOptions = {
+      ...opts,
+      session: {
+        ...opts.session,
+        initialMessages,
+        initialExtensionState: context.extensionState ?? {},
+        initialExtensionRecords: context.extensionRecords ?? [],
+      },
+      context: managedRunContext,
+      events,
+      abortSignal: getSignal(),
+    };
+
     try {
-      return await runManagedTask(
-        {
-          ...opts,
-          session: {
-            ...opts.session,
-            initialMessages,
-            initialExtensionState: context.extensionState ?? {},
-            initialExtensionRecords: context.extensionRecords ?? [],
-          },
-          context: managedRunContext,
-          events,
-          abortSignal: getSignal(),
-        },
-        prompt
-      );
+      if (options.runtimeRunner) {
+        return await options.runtimeRunner({
+          options: runOptions,
+          prompt,
+          sessionId: context.sessionId,
+        });
+      }
+      return await runManagedTask(runOptions, prompt);
     } finally {
       // FEATURE_090 (v0.7.32) — drain self-modify pending resolver swaps
       // at the conversation-turn boundary. The G1 deferred-swap guarantee

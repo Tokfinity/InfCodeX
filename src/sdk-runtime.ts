@@ -7,10 +7,12 @@
  */
 
 import { randomUUID } from 'node:crypto';
+import * as fs from 'node:fs';
 import path from 'node:path';
 
 import {
   generateSessionId,
+  runManagedTask,
   startKodaX,
 } from '@kodax-ai/coding';
 import type {
@@ -67,6 +69,7 @@ export interface CreateKodaXRuntimeOptions {
   readonly sessionsDir?: string;
   readonly defaultProvider?: string;
   readonly defaultModel?: string;
+  readonly permissionTimeoutMs?: number;
 }
 
 export interface KodaXRuntime {
@@ -76,6 +79,7 @@ export interface KodaXRuntime {
   readonly events: RuntimeEventService;
   readonly permissions: RuntimePermissionService;
   readonly workflows: RuntimeWorkflowService;
+  readonly status: RuntimeStatusService;
   close(): Promise<void>;
 }
 
@@ -136,10 +140,16 @@ export interface RuntimeSessionService {
 }
 
 export type RuntimeRunPhase =
+  | 'queued'
   | 'running'
+  | 'waiting_permission'
+  | 'waiting_user_input'
   | 'completed'
   | 'failed'
-  | 'cancelled';
+  | 'cancelled'
+  | 'interrupted';
+
+export type RuntimeRunMode = 'coding' | 'managed_task';
 
 export interface RuntimeTextInput {
   readonly type: 'text';
@@ -150,6 +160,7 @@ export interface RuntimeStartRunInput {
   readonly sessionId: string;
   readonly prompt?: string;
   readonly input?: RuntimeTextInput;
+  readonly mode?: RuntimeRunMode;
   readonly options?: RuntimeKodaXOptions;
 }
 
@@ -207,6 +218,7 @@ export interface RuntimeRunService {
 export type RuntimeEventType =
   | 'session.created'
   | 'session.loaded'
+  | 'run.queued'
   | 'run.started'
   | 'turn.started'
   | 'assistant.delta'
@@ -222,8 +234,10 @@ export type RuntimeEventType =
   | 'run.completed'
   | 'run.failed'
   | 'run.cancelled'
+  | 'run.interrupted'
   | 'artifact.created'
-  | 'config.effective';
+  | 'config.effective'
+  | 'runtime.warning';
 
 export interface RuntimeEventEnvelope<TPayload = unknown> {
   readonly id: string;
@@ -281,6 +295,19 @@ export interface RuntimePermissionRequest {
   readonly expiresAt?: string;
 }
 
+export interface RuntimePermissionRequestInput {
+  readonly sessionId: string;
+  readonly runId: string;
+  readonly turnId?: string;
+  readonly toolCallId?: string;
+  readonly toolName: string;
+  readonly reason?: string;
+  readonly risk?: RuntimePermissionRisk;
+  readonly inputPreview?: string;
+  readonly expiresAt?: string;
+  readonly timeoutMs?: number;
+}
+
 export type RuntimePermissionDecision =
   | { readonly type: 'allow_once' }
   | { readonly type: 'allow_always'; readonly scope: RuntimePermissionScope }
@@ -293,6 +320,7 @@ export interface RuntimePermissionFilter {
 }
 
 export interface RuntimePermissionService {
+  request(input: RuntimePermissionRequestInput): Promise<RuntimePermissionDecision>;
   listPending(filter?: RuntimePermissionFilter): Promise<readonly RuntimePermissionRequest[]>;
   respond(requestId: string, decision: RuntimePermissionDecision): Promise<boolean>;
 }
@@ -321,28 +349,64 @@ export interface RuntimeWorkflowService {
   stop(runId: string): Promise<boolean>;
 }
 
+export interface RuntimeStatusSnapshot {
+  readonly runtimeId: string;
+  readonly mode: KodaXRuntimeMode;
+  readonly profile: string;
+  readonly startedAt: string;
+  readonly sessions: readonly RuntimeSessionSummary[];
+  readonly runs: readonly RuntimeRunStatus[];
+  readonly pendingPermissions: readonly RuntimePermissionRequest[];
+  readonly workflows: readonly RuntimeWorkflowSummary[];
+}
+
+export interface RuntimeStatusService {
+  snapshot(): Promise<RuntimeStatusSnapshot>;
+}
+
 interface RuntimeRunRecord {
   readonly runId: string;
   readonly sessionId: string;
   turnId?: string;
   phase: RuntimeRunPhase;
   readonly startedAt: string;
+  queuedAt?: string;
   endedAt?: string;
   provider: string;
   model?: string;
   reasoning?: KodaXReasoningMode;
   error?: string;
   running?: RunningSession;
+  abortController?: AbortController;
+  mode: RuntimeRunMode;
+  start?: PendingRunStart;
   terminalEmitted: boolean;
 }
 
 interface PendingPermission {
   readonly request: RuntimePermissionRequest;
   readonly waiters: Array<(decision: RuntimePermissionDecision) => void>;
+  readonly timer?: ReturnType<typeof setTimeout>;
 }
 
 type RuntimeEventBus = ReturnType<typeof createRuntimeEventBus>;
 type RuntimePermissionRegistry = ReturnType<typeof createRuntimePermissionRegistry>;
+
+interface PendingRunStart {
+  readonly prompt: string;
+  readonly options: RuntimeKodaXOptions;
+  readonly resolve: (result: RuntimeRunResult) => void;
+}
+
+interface RuntimePersistence {
+  readonly runtimeDir: string;
+  appendEvent(event: RuntimeEvent): void;
+  replay(filter?: RuntimeEventReplayFilter): readonly RuntimeEvent[];
+  saveRunStatus(status: RuntimeRunStatus): void;
+  loadRunStatuses(): readonly RuntimeRunStatus[];
+}
+
+const DEFAULT_PERMISSION_TIMEOUT_MS = 5 * 60_000;
 
 export async function createKodaXRuntime(
   options: CreateKodaXRuntimeOptions = {},
@@ -361,9 +425,16 @@ export async function createKodaXRuntime(
   const sessionManager = createSessionManager(
     options.sessionsDir ? { sessionsDir: options.sessionsDir } : undefined,
   );
-  const bus = createRuntimeEventBus();
-  const permissions = createRuntimePermissionRegistry(bus);
+  const persistence = createRuntimePersistence(options);
+  const bus = createRuntimeEventBus(persistence);
+  const permissions = createRuntimePermissionRegistry(
+    bus,
+    options.permissionTimeoutMs ?? DEFAULT_PERMISSION_TIMEOUT_MS,
+  );
   const runs = new Map<string, RuntimeRunRecord>();
+  for (const status of persistence.loadRunStatuses()) {
+    runs.set(status.runId, recordFromPersistedStatus(status));
+  }
   let closed = false;
 
   const ensureOpen = (): void => {
@@ -380,20 +451,30 @@ export async function createKodaXRuntime(
       defaultModel: options.defaultModel,
       defaultProvider: options.defaultProvider,
       ensureOpen,
+      isClosed: () => closed,
       permissions,
+      persistence,
       runs,
       sessionManager,
     }),
     events: bus.service,
     permissions: permissions.service,
     workflows: createRuntimeWorkflowService(),
+    status: createRuntimeStatusService({
+      identity,
+      permissions,
+      runs,
+      sessionManager,
+      workflows: createRuntimeWorkflowService(),
+    }),
     async close() {
       if (closed) return;
       closed = true;
       for (const run of runs.values()) {
-        if (run.phase === 'running') {
+        if (run.phase === 'queued' || run.phase === 'running' || run.phase === 'waiting_permission') {
           run.running?.abort(new Error('runtime closed'));
-          markRunTerminal(bus, run, 'cancelled');
+          run.abortController?.abort(new Error('runtime closed'));
+          markRunTerminal(bus, persistence, run, 'cancelled');
         }
       }
       bus.close();
@@ -516,16 +597,142 @@ function createRuntimeRunService(deps: {
   readonly defaultModel?: string;
   readonly defaultProvider?: string;
   readonly ensureOpen: () => void;
+  readonly isClosed: () => boolean;
   readonly permissions: RuntimePermissionRegistry;
+  readonly persistence: RuntimePersistence;
   readonly runs: Map<string, RuntimeRunRecord>;
   readonly sessionManager: SessionManager;
 }): RuntimeRunService {
+  const activeRunBySession = new Map<string, string>();
+  const queueBySession = new Map<string, string[]>();
+
   const getRecord = (runId: string): RuntimeRunRecord => {
     const run = deps.runs.get(runId);
     if (!run) {
       throw new Error(`Runtime run not found: ${runId}`);
     }
     return run;
+  };
+
+  const startRecord = (record: RuntimeRunRecord): void => {
+    if (!record.start || deps.isClosed()) {
+      markRunTerminal(deps.bus, deps.persistence, record, 'cancelled');
+      record.start?.resolve({
+        runId: record.runId,
+        sessionId: record.sessionId,
+        phase: record.phase,
+      });
+      return;
+    }
+    record.phase = 'running';
+    record.queuedAt = undefined;
+    activeRunBySession.set(record.sessionId, record.runId);
+    deps.bus.emit('run.started', statusFromRecord(record), {
+      sessionId: record.sessionId,
+      runId: record.runId,
+    });
+
+    const events = wrapKodaXEvents({
+      bus: deps.bus,
+      original: record.start.options.events,
+      permissions: deps.permissions,
+      record,
+    });
+    const runOptions = buildRunOptions({
+      events,
+      model: record.model,
+      options: record.start.options,
+      provider: record.provider,
+      record,
+      sessionManager: deps.sessionManager,
+    });
+    const finish = (result: RuntimeRunResult): RuntimeRunResult => {
+      record.start?.resolve(result);
+      record.start = undefined;
+      activeRunBySession.delete(record.sessionId);
+      drainNext(record.sessionId);
+      return result;
+    };
+
+    if (record.mode === 'managed_task') {
+      const abortController = new AbortController();
+      record.abortController = abortController;
+      const upstreamSignal = runOptions.abortSignal;
+      if (upstreamSignal?.aborted) {
+        abortController.abort(upstreamSignal.reason);
+      } else {
+        upstreamSignal?.addEventListener('abort', () => {
+          abortController.abort(upstreamSignal.reason);
+        }, { once: true });
+      }
+      void runManagedTask({
+        ...runOptions,
+        abortSignal: abortController.signal,
+      }, record.start.prompt)
+        .then((value): RuntimeRunResult => {
+          const phase = record.terminalEmitted
+            ? record.phase
+            : value.interrupted ? 'interrupted' : value.success ? 'completed' : 'failed';
+          markRunTerminal(deps.bus, deps.persistence, record, phase);
+          return { runId: record.runId, sessionId: record.sessionId, phase: record.phase, result: value };
+        })
+        .catch((error: unknown): RuntimeRunResult => {
+          const normalized = normalizeError(error);
+          const phase = record.terminalEmitted ? record.phase : 'failed';
+          if (phase === 'failed') {
+            record.error = normalized.message;
+          }
+          markRunTerminal(deps.bus, deps.persistence, record, phase);
+          return { runId: record.runId, sessionId: record.sessionId, phase: record.phase, error: normalized };
+        })
+        .then(finish);
+      return;
+    }
+
+    const running = startKodaX(runOptions, record.start.prompt);
+    record.running = running;
+    void running.result
+      .then((value): RuntimeRunResult => {
+        const phase = record.terminalEmitted
+          ? record.phase
+          : value.interrupted ? 'interrupted' : value.success ? 'completed' : 'failed';
+        markRunTerminal(deps.bus, deps.persistence, record, phase);
+        return { runId: record.runId, sessionId: record.sessionId, phase: record.phase, result: value };
+      })
+      .catch((error: unknown): RuntimeRunResult => {
+        const normalized = normalizeError(error);
+        const phase = record.terminalEmitted ? record.phase : 'failed';
+        if (phase === 'failed') {
+          record.error = normalized.message;
+        }
+        markRunTerminal(deps.bus, deps.persistence, record, phase);
+        return { runId: record.runId, sessionId: record.sessionId, phase: record.phase, error: normalized };
+      })
+      .then(finish);
+  };
+
+  const drainNext = (sessionId: string): void => {
+    const queue = queueBySession.get(sessionId);
+    if (!queue || queue.length === 0 || activeRunBySession.has(sessionId)) return;
+    const nextRunId = queue.shift();
+    if (queue.length === 0) queueBySession.delete(sessionId);
+    if (!nextRunId) return;
+    const next = deps.runs.get(nextRunId);
+    if (!next || next.phase !== 'queued') {
+      drainNext(sessionId);
+      return;
+    }
+    startRecord(next);
+  };
+
+  const enqueue = (record: RuntimeRunRecord): void => {
+    const queue = queueBySession.get(record.sessionId) ?? [];
+    queue.push(record.runId);
+    queueBySession.set(record.sessionId, queue);
+    deps.bus.emit('run.queued', statusFromRecord(record), {
+      sessionId: record.sessionId,
+      runId: record.runId,
+    });
   };
 
   return {
@@ -544,59 +751,34 @@ function createRuntimeRunService(deps: {
       const model = options.modelOverride ?? options.model ?? deps.defaultModel;
       const runId = createRunId();
       const startedAt = new Date().toISOString();
+      let resolveResult: (result: RuntimeRunResult) => void = () => undefined;
+      const result = new Promise<RuntimeRunResult>((resolve) => {
+        resolveResult = resolve;
+      });
+      const isQueued = activeRunBySession.has(input.sessionId);
       const record: RuntimeRunRecord = {
         runId,
         sessionId: input.sessionId,
-        phase: 'running',
+        phase: isQueued ? 'queued' : 'running',
         startedAt,
+        ...(isQueued ? { queuedAt: startedAt } : {}),
         provider,
         ...(model !== undefined ? { model } : {}),
         ...(options.reasoningMode !== undefined ? { reasoning: options.reasoningMode } : {}),
+        mode: input.mode ?? 'coding',
+        start: {
+          prompt,
+          options,
+          resolve: resolveResult,
+        },
         terminalEmitted: false,
       };
       deps.runs.set(runId, record);
-      deps.bus.emit('run.started', statusFromRecord(record), {
-        sessionId: input.sessionId,
-        runId,
-      });
-
-      const events = wrapKodaXEvents({
-        bus: deps.bus,
-        original: options.events,
-        permissions: deps.permissions,
-        record,
-      });
-      const runOptions: KodaXOptions = {
-        ...options,
-        provider,
-        ...(model !== undefined ? { modelOverride: model } : {}),
-        session: {
-          ...(options.session ?? {}),
-          id: input.sessionId,
-          storage: deps.sessionManager.storage,
-        },
-        events,
-      };
-      const running = startKodaX(runOptions, prompt);
-      record.running = running;
-
-      const result = running.result
-        .then((value): RuntimeRunResult => {
-          const phase = record.terminalEmitted
-            ? record.phase
-            : value.interrupted ? 'cancelled' : value.success ? 'completed' : 'failed';
-          markRunTerminal(deps.bus, record, phase);
-          return { runId, sessionId: input.sessionId, phase: record.phase, result: value };
-        })
-        .catch((error: unknown): RuntimeRunResult => {
-          const normalized = normalizeError(error);
-          const phase = record.terminalEmitted ? record.phase : 'failed';
-          if (phase === 'failed') {
-            record.error = normalized.message;
-          }
-          markRunTerminal(deps.bus, record, phase);
-          return { runId, sessionId: input.sessionId, phase: record.phase, error: normalized };
-        });
+      if (isQueued) {
+        enqueue(record);
+      } else {
+        startRecord(record);
+      }
 
       return {
         runId,
@@ -623,9 +805,17 @@ function createRuntimeRunService(deps: {
     async abort(runId) {
       deps.ensureOpen();
       const run = getRecord(runId);
-      if (run.phase !== 'running') return;
+      if (run.phase === 'queued') {
+        removeQueuedRun(queueBySession, run);
+        markRunTerminal(deps.bus, deps.persistence, run, 'cancelled');
+        run.start?.resolve({ runId, sessionId: run.sessionId, phase: run.phase });
+        run.start = undefined;
+        return;
+      }
+      if (!isActiveRunPhase(run.phase)) return;
       run.running?.abort(new Error('runtime run aborted'));
-      markRunTerminal(deps.bus, run, 'cancelled');
+      run.abortController?.abort(new Error('runtime run aborted'));
+      markRunTerminal(deps.bus, deps.persistence, run, 'cancelled');
     },
 
     async setModel(runId, model) {
@@ -689,7 +879,70 @@ function createRuntimeWorkflowService(): RuntimeWorkflowService {
   };
 }
 
-function createRuntimeEventBus() {
+function buildRunOptions(input: {
+  readonly events: KodaXEvents;
+  readonly model?: string;
+  readonly options: RuntimeKodaXOptions;
+  readonly provider: string;
+  readonly record: RuntimeRunRecord;
+  readonly sessionManager: SessionManager;
+}): KodaXOptions {
+  const { events, model, options, provider, record, sessionManager } = input;
+  return {
+    ...options,
+    provider,
+    ...(model !== undefined ? { modelOverride: model } : {}),
+    session: {
+      ...(options.session ?? {}),
+      id: record.sessionId,
+      storage: sessionManager.storage,
+    },
+    events,
+  };
+}
+
+function createRuntimeStatusService(deps: {
+  readonly identity: RuntimeIdentity;
+  readonly permissions: RuntimePermissionRegistry;
+  readonly runs: Map<string, RuntimeRunRecord>;
+  readonly sessionManager: SessionManager;
+  readonly workflows: RuntimeWorkflowService;
+}): RuntimeStatusService {
+  return {
+    async snapshot() {
+      return {
+        runtimeId: deps.identity.runtimeId,
+        mode: deps.identity.mode,
+        profile: deps.identity.profile,
+        startedAt: deps.identity.startedAt,
+        sessions: (await deps.sessionManager.listSessions({ includeArchived: true }))
+          .map(toRuntimeSessionSummary),
+        runs: [...deps.runs.values()].map(statusFromRecord),
+        pendingPermissions: await deps.permissions.service.listPending(),
+        workflows: await deps.workflows.list({}),
+      };
+    },
+  };
+}
+
+function isActiveRunPhase(phase: RuntimeRunPhase): boolean {
+  return phase === 'running'
+    || phase === 'waiting_permission'
+    || phase === 'waiting_user_input';
+}
+
+function removeQueuedRun(queueBySession: Map<string, string[]>, run: RuntimeRunRecord): void {
+  const queue = queueBySession.get(run.sessionId);
+  if (!queue) return;
+  const next = queue.filter((runId) => runId !== run.runId);
+  if (next.length === 0) {
+    queueBySession.delete(run.sessionId);
+  } else {
+    queueBySession.set(run.sessionId, next);
+  }
+}
+
+function createRuntimeEventBus(persistence: RuntimePersistence) {
   let nextSeq = 1;
   let closed = false;
   const events: RuntimeEvent[] = [];
@@ -724,7 +977,9 @@ function createRuntimeEventBus() {
     },
 
     async replay(filter) {
-      const matched = events.filter((event) => (
+      const source = persistence.replay(filter);
+      const replayEvents = source.length > 0 ? source : events;
+      const matched = replayEvents.filter((event) => (
         matches(event, filter)
         && (filter?.sinceSeq === undefined || event.seq > filter.sinceSeq)
       ));
@@ -751,6 +1006,25 @@ function createRuntimeEventBus() {
       };
       nextSeq += 1;
       events.push(event);
+      try {
+        persistence.appendEvent(event);
+      } catch (error: unknown) {
+        const warning: RuntimeEvent = {
+          id: `evt_${nextSeq}_${randomUUID().replace(/-/g, '').slice(0, 8)}`,
+          seq: nextSeq,
+          time: new Date().toISOString(),
+          sessionId: scope.sessionId,
+          runId: scope.runId,
+          ...(scope.turnId !== undefined ? { turnId: scope.turnId } : {}),
+          type: 'runtime.warning',
+          payload: {
+            message: normalizeError(error).message,
+            sourceEventId: event.id,
+          },
+        };
+        nextSeq += 1;
+        events.push(warning);
+      }
       for (const subscriber of subscribers) {
         if (matches(event, subscriber.filter)) {
           subscriber.listener(event);
@@ -765,10 +1039,152 @@ function createRuntimeEventBus() {
   };
 }
 
-function createRuntimePermissionRegistry(bus: RuntimeEventBus) {
+function createRuntimePersistence(options: CreateKodaXRuntimeOptions): RuntimePersistence {
+  const baseDir = options.homeDir
+    ? path.resolve(options.homeDir)
+    : options.sessionsDir
+      ? path.resolve(options.sessionsDir, '..')
+      : process.cwd();
+  const runtimeDir = path.join(baseDir, '.kodax', 'runtime');
+  const runsDir = path.join(runtimeDir, 'runs');
+
+  const runDir = (runId: string): string => path.join(runsDir, encodeURIComponent(runId));
+  const eventFile = (runId: string): string => path.join(runDir(runId), 'events.jsonl');
+  const statusFile = (runId: string): string => path.join(runDir(runId), 'status.json');
+
+  const readEventsFromFile = (file: string): RuntimeEvent[] => {
+    if (!fs.existsSync(file)) return [];
+    const content = fs.readFileSync(file, 'utf-8');
+    const events: RuntimeEvent[] = [];
+    for (const line of content.split(/\r?\n/)) {
+      if (!line.trim()) continue;
+      const parsed = JSON.parse(line) as RuntimeEvent;
+      events.push(parsed);
+    }
+    return events;
+  };
+
+  return {
+    runtimeDir,
+    appendEvent(event) {
+      const dir = runDir(event.runId);
+      fs.mkdirSync(dir, { recursive: true });
+      fs.appendFileSync(eventFile(event.runId), `${JSON.stringify(event)}\n`, 'utf-8');
+    },
+    replay(filter) {
+      if (filter?.runId) {
+        return readEventsFromFile(eventFile(filter.runId)).filter((event) => eventMatchesReplayFilter(event, filter));
+      }
+      if (!fs.existsSync(runsDir)) return [];
+      const result: RuntimeEvent[] = [];
+      for (const entry of fs.readdirSync(runsDir, { withFileTypes: true })) {
+        if (!entry.isDirectory()) continue;
+        result.push(...readEventsFromFile(path.join(runsDir, entry.name, 'events.jsonl')));
+      }
+      return result
+        .filter((event) => eventMatchesReplayFilter(event, filter))
+        .sort((a, b) => a.time.localeCompare(b.time) || a.seq - b.seq);
+    },
+    saveRunStatus(status) {
+      const dir = runDir(status.runId);
+      fs.mkdirSync(dir, { recursive: true });
+      fs.writeFileSync(statusFile(status.runId), JSON.stringify(status, null, 2), 'utf-8');
+    },
+    loadRunStatuses() {
+      if (!fs.existsSync(runsDir)) return [];
+      const statuses: RuntimeRunStatus[] = [];
+      for (const entry of fs.readdirSync(runsDir, { withFileTypes: true })) {
+        if (!entry.isDirectory()) continue;
+        const file = path.join(runsDir, entry.name, 'status.json');
+        if (!fs.existsSync(file)) continue;
+        const parsed = JSON.parse(fs.readFileSync(file, 'utf-8')) as RuntimeRunStatus;
+        statuses.push(parsed);
+      }
+      return statuses;
+    },
+  };
+}
+
+function eventMatchesReplayFilter(
+  event: RuntimeEvent,
+  filter: RuntimeEventReplayFilter | undefined,
+): boolean {
+  if (!filter) return true;
+  if (filter.sessionId !== undefined && event.sessionId !== filter.sessionId) return false;
+  if (filter.runId !== undefined && event.runId !== filter.runId) return false;
+  if (filter.type !== undefined) {
+    const types = Array.isArray(filter.type) ? filter.type : [filter.type];
+    if (!types.includes(event.type)) return false;
+  }
+  if (filter.sinceSeq !== undefined && event.seq <= filter.sinceSeq) return false;
+  return true;
+}
+
+function recordFromPersistedStatus(status: RuntimeRunStatus): RuntimeRunRecord {
+  return {
+    runId: status.runId,
+    sessionId: status.sessionId,
+    ...(status.turnId !== undefined ? { turnId: status.turnId } : {}),
+    phase: status.phase,
+    startedAt: status.startedAt,
+    ...(status.endedAt !== undefined ? { endedAt: status.endedAt } : {}),
+    provider: status.provider,
+    ...(status.model !== undefined ? { model: status.model } : {}),
+    ...(status.reasoning !== undefined ? { reasoning: status.reasoning } : {}),
+    ...(status.error !== undefined ? { error: status.error } : {}),
+    mode: 'coding',
+    terminalEmitted: isTerminalRunPhase(status.phase),
+  };
+}
+
+function createRuntimePermissionRegistry(bus: RuntimeEventBus, defaultTimeoutMs: number) {
   const pending = new Map<string, PendingPermission>();
 
+  const trackAndWait = (
+    request: Omit<RuntimePermissionRequest, 'id' | 'createdAt'>,
+    timeoutMs = defaultTimeoutMs,
+  ): {
+    readonly request: RuntimePermissionRequest;
+    readonly response: Promise<RuntimePermissionDecision>;
+  } => {
+    let resolveResponse: (decision: RuntimePermissionDecision) => void = () => {};
+    const response = new Promise<RuntimePermissionDecision>((resolve) => {
+      resolveResponse = resolve;
+    });
+    const created = createPendingPermission(request, [resolveResponse], timeoutMs);
+    return { request: created, response };
+  };
+
+  const resolvePending = (requestId: string, decision: RuntimePermissionDecision): boolean => {
+    const item = pending.get(requestId);
+    if (!item) return false;
+    pending.delete(requestId);
+    if (item.timer) clearTimeout(item.timer);
+    for (const resolve of item.waiters) resolve(decision);
+    bus.emit('permission.resolved', { requestId, decision }, {
+      sessionId: item.request.sessionId,
+      runId: item.request.runId,
+      ...(item.request.turnId !== undefined ? { turnId: item.request.turnId } : {}),
+    });
+    return true;
+  };
+
   const service: RuntimePermissionService = {
+    request(input) {
+      const pendingPermission = trackAndWait({
+        sessionId: input.sessionId,
+        runId: input.runId,
+        ...(input.turnId !== undefined ? { turnId: input.turnId } : {}),
+        ...(input.toolCallId !== undefined ? { toolCallId: input.toolCallId } : {}),
+        toolName: input.toolName,
+        ...(input.reason !== undefined ? { reason: input.reason } : {}),
+        ...(input.risk !== undefined ? { risk: input.risk } : {}),
+        ...(input.inputPreview !== undefined ? { inputPreview: input.inputPreview } : {}),
+        ...(input.expiresAt !== undefined ? { expiresAt: input.expiresAt } : {}),
+      }, input.timeoutMs ?? defaultTimeoutMs);
+      return pendingPermission.response;
+    },
+
     async listPending(filter) {
       return [...pending.values()]
         .map((item) => item.request)
@@ -776,16 +1192,7 @@ function createRuntimePermissionRegistry(bus: RuntimeEventBus) {
     },
 
     async respond(requestId, decision) {
-      const item = pending.get(requestId);
-      if (!item) return false;
-      pending.delete(requestId);
-      for (const resolve of item.waiters) resolve(decision);
-      bus.emit('permission.resolved', { requestId, decision }, {
-        sessionId: item.request.sessionId,
-        runId: item.request.runId,
-        ...(item.request.turnId !== undefined ? { turnId: item.request.turnId } : {}),
-      });
-      return true;
+      return resolvePending(requestId, decision);
     },
   };
 
@@ -797,40 +1204,47 @@ function createRuntimePermissionRegistry(bus: RuntimeEventBus) {
     },
     trackAndWait(
       request: Omit<RuntimePermissionRequest, 'id' | 'createdAt'>,
-    ): {
-      readonly request: RuntimePermissionRequest;
-      readonly response: Promise<RuntimePermissionDecision>;
-    } {
-      let resolveResponse: (decision: RuntimePermissionDecision) => void = () => {};
-      const response = new Promise<RuntimePermissionDecision>((resolve) => {
-        resolveResponse = resolve;
-      });
-      const created = createPendingPermission(request, [resolveResponse]);
-      return { request: created, response };
+      timeoutMs = defaultTimeoutMs,
+    ) {
+      return trackAndWait(request, timeoutMs);
     },
     resolve(requestId: string, decision: RuntimePermissionDecision): void {
-      const item = pending.get(requestId);
-      if (!item) return;
-      pending.delete(requestId);
-      for (const resolve of item.waiters) resolve(decision);
-      bus.emit('permission.resolved', { requestId, decision }, {
-        sessionId: item.request.sessionId,
-        runId: item.request.runId,
-        ...(item.request.turnId !== undefined ? { turnId: item.request.turnId } : {}),
-      });
+      resolvePending(requestId, decision);
     },
   };
 
   function createPendingPermission(
     request: Omit<RuntimePermissionRequest, 'id' | 'createdAt'>,
     waiters: Array<(decision: RuntimePermissionDecision) => void>,
+    timeoutMs = defaultTimeoutMs,
   ): RuntimePermissionRequest {
     const created: RuntimePermissionRequest = {
       ...request,
       id: `perm_${randomUUID().replace(/-/g, '').slice(0, 12)}`,
       createdAt: new Date().toISOString(),
     };
-    pending.set(created.id, { request: created, waiters });
+    const timer = timeoutMs > 0
+      ? setTimeout(() => {
+          const item = pending.get(created.id);
+          if (!item) return;
+          pending.delete(created.id);
+          const decision: RuntimePermissionDecision = {
+            type: 'reject',
+            reason: 'permission request timed out',
+          };
+          for (const resolve of item.waiters) resolve(decision);
+          bus.emit('permission.resolved', { requestId: created.id, decision }, {
+            sessionId: created.sessionId,
+            runId: created.runId,
+            ...(created.turnId !== undefined ? { turnId: created.turnId } : {}),
+          });
+        }, timeoutMs)
+      : undefined;
+    pending.set(created.id, {
+      request: created,
+      waiters,
+      ...(timer !== undefined ? { timer } : {}),
+    });
     bus.emit('permission.requested', created, {
       sessionId: created.sessionId,
       runId: created.runId,
@@ -929,50 +1343,58 @@ function wrapKodaXEvents(input: {
     onError(error, meta) {
       original?.onError?.(error, meta);
     },
-    ...(original?.beforeToolExecute
-      ? {
-          beforeToolExecute: async (
-            tool: string,
-            toolInput: Record<string, unknown>,
-            meta?: KodaXToolEventMeta,
-          ): Promise<RuntimePermissionToolDecision> => {
-            const pendingPermission = permissions.trackAndWait({
-              sessionId: meta?.sessionId ?? record.sessionId,
-              runId: record.runId,
-              ...(meta?.turnId ?? record.turnId ? { turnId: meta?.turnId ?? record.turnId } : {}),
-              ...(meta?.toolId ? { toolCallId: meta.toolId } : {}),
-              toolName: tool,
-              inputPreview: previewInput(toolInput),
-            });
-            try {
-              const hookDecision = Promise.resolve(original.beforeToolExecute!(tool, toolInput, meta))
-                .then((decision): RuntimePermissionRaceResult => ({
-                  source: 'hook',
-                  decision,
-                }));
-              const runtimeDecision = pendingPermission.response
-                .then((decision): RuntimePermissionRaceResult => ({
-                  source: 'runtime',
-                  decision: decisionToToolDecision(decision),
-                }));
-              const result = await Promise.race([hookDecision, runtimeDecision]);
-              if (result.source === 'hook') {
-                permissions.resolve(
-                  pendingPermission.request.id,
-                  decisionToPermissionDecision(result.decision),
-                );
-              }
-              return result.decision;
-            } catch (error: unknown) {
-              permissions.resolve(pendingPermission.request.id, {
-                type: 'reject',
-                reason: normalizeError(error).message,
-              });
-              throw error;
-            }
-          },
+    beforeToolExecute: async (
+      tool: string,
+      toolInput: Record<string, unknown>,
+      meta?: KodaXToolEventMeta,
+    ): Promise<RuntimePermissionToolDecision> => {
+      const previousPhase = record.phase;
+      if (record.phase === 'running') {
+        record.phase = 'waiting_permission';
+      }
+      const pendingPermission = permissions.trackAndWait({
+        sessionId: meta?.sessionId ?? record.sessionId,
+        runId: record.runId,
+        ...(meta?.turnId ?? record.turnId ? { turnId: meta?.turnId ?? record.turnId } : {}),
+        ...(meta?.toolId ? { toolCallId: meta.toolId } : {}),
+        toolName: tool,
+        inputPreview: previewInput(toolInput),
+      });
+      try {
+        if (!original?.beforeToolExecute) {
+          const decision = await pendingPermission.response;
+          return decisionToToolDecision(decision);
         }
-      : {}),
+        const hookDecision = Promise.resolve(original.beforeToolExecute(tool, toolInput, meta))
+          .then((decision): RuntimePermissionRaceResult => ({
+            source: 'hook',
+            decision,
+          }));
+        const runtimeDecision = pendingPermission.response
+          .then((decision): RuntimePermissionRaceResult => ({
+            source: 'runtime',
+            decision: decisionToToolDecision(decision),
+          }));
+        const result = await Promise.race([hookDecision, runtimeDecision]);
+        if (result.source === 'hook') {
+          permissions.resolve(
+            pendingPermission.request.id,
+            decisionToPermissionDecision(result.decision),
+          );
+        }
+        return result.decision;
+      } catch (error: unknown) {
+        permissions.resolve(pendingPermission.request.id, {
+          type: 'reject',
+          reason: normalizeError(error).message,
+        });
+        throw error;
+      } finally {
+        if (record.phase === 'waiting_permission') {
+          record.phase = previousPhase === 'queued' ? 'running' : previousPhase;
+        }
+      }
+    },
     ...(original?.askUser
       ? {
           askUser: (
@@ -1072,6 +1494,7 @@ function runMatchesFilter(
 
 function markRunTerminal(
   bus: RuntimeEventBus,
+  persistence: RuntimePersistence,
   run: RuntimeRunRecord,
   phase: RuntimeRunPhase,
 ): void {
@@ -1080,12 +1503,26 @@ function markRunTerminal(
   run.endedAt = new Date().toISOString();
   run.terminalEmitted = true;
   const type: RuntimeEventType =
-    phase === 'completed' ? 'run.completed' : phase === 'cancelled' ? 'run.cancelled' : 'run.failed';
+    phase === 'completed'
+      ? 'run.completed'
+      : phase === 'cancelled'
+        ? 'run.cancelled'
+        : phase === 'interrupted'
+          ? 'run.interrupted'
+          : 'run.failed';
   bus.emit(type, statusFromRecord(run), {
     sessionId: run.sessionId,
     runId: run.runId,
     ...(run.turnId !== undefined ? { turnId: run.turnId } : {}),
   });
+  persistence.saveRunStatus(statusFromRecord(run));
+}
+
+function isTerminalRunPhase(phase: RuntimeRunPhase): boolean {
+  return phase === 'completed'
+    || phase === 'failed'
+    || phase === 'cancelled'
+    || phase === 'interrupted';
 }
 
 function workflowEventType(event: WorkflowProcessEvent): RuntimeEventType {

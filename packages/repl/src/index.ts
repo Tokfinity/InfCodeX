@@ -8,10 +8,16 @@
 
 // === 主入口：Ink UI ===
 export { runInkInteractiveMode } from "./ui/index.js";
-export type { InkREPLOptions } from "./ui/index.js";
+export type { InkREPLOptions, InkRuntimeRunner, InkRuntimeRunnerInput } from "./ui/index.js";
 
 // === 传统 REPL 入口 ===
-export { runInteractiveMode, processSpecialSyntax, type RepLOptions } from "./interactive/repl.js";
+export {
+  runInteractiveMode,
+  processSpecialSyntax,
+  type RepLOptions,
+  type ReplRuntimeRunner,
+  type ReplRuntimeRunnerInput,
+} from "./interactive/repl.js";
 
 // === UI 组件 ===
 export * from "./ui/index.js";

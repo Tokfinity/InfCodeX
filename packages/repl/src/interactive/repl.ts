@@ -386,8 +386,17 @@ function markExtensionSessionPersisted(context: InteractiveContext): void {
 }
 
 // REPL options - REPL 选项
+export interface ReplRuntimeRunnerInput {
+  readonly options: KodaXOptions;
+  readonly prompt: string;
+  readonly sessionId: string;
+}
+
+export type ReplRuntimeRunner = (input: ReplRuntimeRunnerInput) => Promise<KodaXResult>;
+
 export interface RepLOptions extends KodaXOptions {
   storage?: SessionStorage;
+  runtimeRunner?: ReplRuntimeRunner;
 }
 
 function resolveInitialReasoningMode(
@@ -871,6 +880,8 @@ Keyboard Shortcuts:
         context,
         normalizeRecoveryPrompt(prompt),
         context.messages,
+        undefined,
+        options.runtimeRunner,
       );
     } catch (error: unknown) {
       const message = error instanceof Error ? error.message : String(error);
@@ -1620,7 +1631,9 @@ Keyboard Shortcuts:
         prepared.options,
         context,
         prepared.prompt,
-        initialMessages
+        initialMessages,
+        undefined,
+        options.runtimeRunner,
       );
 
       if (prepared.mode === 'fork') {
@@ -1889,6 +1902,7 @@ Keyboard Shortcuts:
         processed,
         context.messages,
         preparedArtifacts.inputArtifacts,
+        options.runtimeRunner,
       );
 
       // Update context messages (runKodaX returns complete message list) - 更新上下文中的消息（runKodaX 返回完整的消息列表）
@@ -2004,6 +2018,7 @@ async function runAgentRound(
   prompt: string,
   initialMessages: KodaXMessage[] = context.messages,
   inputArtifacts?: readonly KodaXInputArtifact[],
+  runtimeRunner?: ReplRuntimeRunner,
 ): Promise<KodaXResult> {
   // Create event callbacks - 创建事件回调
   const events = {
@@ -2028,28 +2043,32 @@ async function runAgentRound(
 
   syncClassicCliSkillsPrompt(context.gitRoot, options);
 
-  // Pass existing conversation history for multi-turn dialogue - 传递已有的对话历史，实现多轮对话
-  return runManagedTask(
-    {
-      ...options,
-      events,
-      session: {
-        ...options.session,
-        initialExtensionState: context.extensionState ?? {},
-        initialExtensionRecords: context.extensionRecords ?? [],
-        initialMessages,  // Pass existing messages - 传递已有消息
-      },
-      context: {
-        ...options.context,
-        contextTokenSnapshot: context.contextTokenSnapshot,
-        taskSurface: 'repl',
-        ...(inputArtifacts && inputArtifacts.length > 0
-          ? { inputArtifacts: [...inputArtifacts] }
-          : {}),
-      },
+  const runOptions: KodaXOptions = {
+    ...options,
+    events,
+    session: {
+      ...options.session,
+      initialExtensionState: context.extensionState ?? {},
+      initialExtensionRecords: context.extensionRecords ?? [],
+      initialMessages,
     },
-    prompt
-  );
+    context: {
+      ...options.context,
+      contextTokenSnapshot: context.contextTokenSnapshot,
+      taskSurface: 'repl',
+      ...(inputArtifacts && inputArtifacts.length > 0
+        ? { inputArtifacts: [...inputArtifacts] }
+        : {}),
+    },
+  };
+  if (runtimeRunner) {
+    return runtimeRunner({
+      options: runOptions,
+      prompt,
+      sessionId: context.sessionId,
+    });
+  }
+  return runManagedTask(runOptions, prompt);
 }
 
 // Extract title from messages - 从消息中提取标题

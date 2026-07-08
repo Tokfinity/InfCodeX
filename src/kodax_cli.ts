@@ -38,6 +38,7 @@ import fsSync from 'fs';
 import path from 'path';
 import { fileURLToPath, pathToFileURL } from 'url';
 import { runAcpServer } from './acp_server.js';
+import { createKodaXRuntime } from './sdk-runtime.js';
 import { runDoctor } from './kodax_doctor.js';
 import {
   getDefaultCommandDir,
@@ -80,6 +81,7 @@ import {
   runManagedTask,
   KodaXClient,
   KodaXEvents,
+  type KodaXOptions,
   KodaXReasoningMode,
   createExtensionRuntime,
   dedupeExtensionPathsByEntrypoint,
@@ -1534,6 +1536,47 @@ complete -c kodax -l version -d 'Show version'`);
         ));
       }
 
+      const interactiveRuntime = await createKodaXRuntime({
+        homeDir: process.cwd(),
+        profile: 'repl',
+        ...(kodaXOptions.provider !== undefined ? { defaultProvider: kodaXOptions.provider } : {}),
+        ...(kodaXOptions.model !== undefined ? { defaultModel: kodaXOptions.model } : {}),
+      });
+      const runtimeRunner = async (input: {
+        readonly options: KodaXOptions;
+        readonly prompt: string;
+        readonly sessionId: string;
+      }): Promise<Awaited<ReturnType<typeof runManagedTask>>> => {
+        try {
+          await interactiveRuntime.sessions.load(input.sessionId);
+        } catch (error: unknown) {
+          if (!(error instanceof Error) || !error.message.startsWith('Session not found:')) {
+            throw error;
+          }
+          await interactiveRuntime.sessions.create({
+            sessionId: input.sessionId,
+            title: 'REPL Session',
+            projectPath: process.cwd(),
+            gitRoot: await getGitRoot() ?? process.cwd(),
+            surface: 'repl',
+          });
+        }
+        const handle = await interactiveRuntime.runs.start({
+          sessionId: input.sessionId,
+          prompt: input.prompt,
+          mode: 'managed_task',
+          options: input.options,
+        });
+        const result = await handle.result;
+        if (result.error) {
+          throw result.error;
+        }
+        if (!result.result) {
+          throw new Error(`Runtime run ${handle.runId} ended without a result.`);
+        }
+        return result.result;
+      };
+
       const interactiveOptions = {
         provider: kodaXOptions.provider,
         model: kodaXOptions.model,
@@ -1545,6 +1588,7 @@ complete -c kodax -l version -d 'Show version'`);
         extensionRuntime: kodaXOptions.extensionRuntime,
         session: kodaXOptions.session,
         storage: new FileSessionStorage(),
+        runtimeRunner,
         hardExitOnClose: false,
       };
 
@@ -1559,9 +1603,17 @@ complete -c kodax -l version -d 'Show version'`);
       }
 
       if (useClassicInteractiveMode) {
-        await runInteractiveMode(interactiveOptions);
+        try {
+          await runInteractiveMode(interactiveOptions);
+        } finally {
+          await interactiveRuntime.close();
+        }
       } else {
-        await runInkInteractiveMode(interactiveOptions);
+        try {
+          await runInkInteractiveMode(interactiveOptions);
+        } finally {
+          await interactiveRuntime.close();
+        }
       }
     } catch (error) {
       if (error instanceof KodaXTerminalError) {

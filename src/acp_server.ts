@@ -34,7 +34,6 @@ import {
   type KodaXWireReasoningEffort,
   isToolFileMutation,
   normalizeReasoningEffortValue,
-  runKodaX,
   combineExtensionRuntimes,
   createExtensionRuntime,
   dedupeExtensionPathsByEntrypoint,
@@ -74,6 +73,11 @@ import {
   AcpEventEmitter,
   type AcpEventSink,
 } from './acp_events.js';
+import {
+  createKodaXRuntime,
+  type KodaXRuntime,
+  type RuntimeRunHandle,
+} from './sdk-runtime.js';
 
 /**
  * Permission mode ids exposed to ACP clients. These are wire-protocol values
@@ -161,6 +165,7 @@ export interface KodaXAcpServerOptions {
   agentName?: string;
   agentVersion?: string;
   storage?: FileSessionStorage;
+  runtime?: KodaXRuntime;
 }
 
 type AcpPromptExtensionRuntime = KodaXExtensionRuntime | CombinedExtensionRuntime;
@@ -171,7 +176,7 @@ interface KodaXAcpSessionState {
   permissionMode: AcpPermissionMode;
   mcpServers: McpServer[];
   alwaysAllowTools: string[];
-  activeController: AbortController | null;
+  activeRunId: string | null;
   contextTokenSnapshot?: KodaXContextTokenSnapshot;
   /** Runtime view used for prompts when client provides per-session MCP servers. */
   extensionRuntime?: AcpPromptExtensionRuntime;
@@ -453,6 +458,8 @@ export class KodaXAcpServer implements Agent {
   private readonly agentName: string;
   private readonly agentVersion: string;
   private readonly storage: FileSessionStorage;
+  private readonly runtimeReady: Promise<KodaXRuntime>;
+  private readonly ownsRuntime: boolean;
   private readonly events: AcpEventEmitter;
   /**
    * FEATURE_153 (v0.7.38) — LLM-backed bash prefix extractor used by
@@ -467,7 +474,6 @@ export class KodaXAcpServer implements Agent {
 
   private connection: AgentSideConnection | null = null;
   private readonly sessions = new Map<string, KodaXAcpSessionState>();
-  private promptQueue: Promise<unknown> = Promise.resolve();
   private extensionRuntime?: KodaXExtensionRuntime;
   private extensionRuntimeReady?: Promise<void>;
   private disposePromise?: Promise<void>;
@@ -505,6 +511,15 @@ export class KodaXAcpServer implements Agent {
     this.agentName = options.agentName ?? 'kodax-acp-server';
     this.agentVersion = options.agentVersion ?? '0.0.0';
     this.storage = options.storage ?? new FileSessionStorage();
+    this.ownsRuntime = options.runtime === undefined;
+    this.runtimeReady = options.runtime
+      ? Promise.resolve(options.runtime)
+      : createKodaXRuntime({
+          homeDir: defaultCwd,
+          profile: 'acp',
+          defaultProvider: this.provider,
+          ...(this.model !== undefined ? { defaultModel: this.model } : {}),
+        });
     this.configuredExtensions = configuredExtensions;
     this.discoveredExtensions = discoveredExtensionsPromise;
     this.events = new AcpEventEmitter({
@@ -597,7 +612,9 @@ export class KodaXAcpServer implements Agent {
 
     this.disposePromise = (async () => {
       for (const session of this.sessions.values()) {
-        session.activeController?.abort();
+        if (session.activeRunId) {
+          await (await this.runtimeReady).runs.abort(session.activeRunId).catch(() => undefined);
+        }
       }
 
       const runtimes = new Set<KodaXExtensionRuntime>();
@@ -621,6 +638,9 @@ export class KodaXAcpServer implements Agent {
       }
 
       await Promise.all([...runtimes].map((runtime) => runtime.dispose()));
+      if (this.ownsRuntime) {
+        await (await this.runtimeReady).close().catch(() => undefined);
+      }
       await shutdownDefaultLspService();
     })();
 
@@ -665,7 +685,7 @@ export class KodaXAcpServer implements Agent {
       permissionMode: this.defaultPermissionMode,
       mcpServers: clientMcpServers,
       alwaysAllowTools: [],
-      activeController: null,
+      activeRunId: null,
     };
 
     // If the client provides per-session MCP servers, keep that MCP runtime
@@ -689,6 +709,14 @@ export class KodaXAcpServer implements Agent {
         : rt;
     }
 
+    const runtime = await this.runtimeReady;
+    await runtime.sessions.create({
+      sessionId,
+      title: 'ACP Session',
+      projectPath: session.cwd,
+      gitRoot: session.cwd,
+      surface: 'acp',
+    });
     this.sessions.set(sessionId, session);
     this.events.emit({
       type: 'session_created',
@@ -739,22 +767,9 @@ export class KodaXAcpServer implements Agent {
         'Prompt must include at least one text or resource block with content.',
       );
     }
-    const abortController = new AbortController();
-    session.activeController = abortController;
     const promptQueuedAt = Date.now();
 
     const task = async (): Promise<PromptResponse> => {
-      if (abortController.signal.aborted) {
-        this.events.emit({
-          type: 'prompt_skipped',
-          sessionId: session.sessionId,
-        });
-        return {
-          stopReason: 'cancelled',
-          userMessageId: params.messageId ?? undefined,
-        };
-      }
-
       const promptStartedAt = Date.now();
       this.events.emit({
         type: 'prompt_started',
@@ -775,13 +790,24 @@ export class KodaXAcpServer implements Agent {
         if (this.extensionRuntimeReady) {
           await this.extensionRuntimeReady;
         }
-        const result = await runKodaX(
-          this.buildKodaXOptions(session, abortController.signal, promptEffortOverride),
-          promptText,
-        );
+        const runtime = await this.runtimeReady;
+        const handle: RuntimeRunHandle = await runtime.runs.start({
+          sessionId: session.sessionId,
+          prompt: promptText,
+          options: this.buildKodaXOptions(session, promptEffortOverride),
+        });
+        session.activeRunId = handle.runId;
+        const runtimeResult = await handle.result;
+        if (runtimeResult.error) {
+          throw runtimeResult.error;
+        }
+        const result = runtimeResult.result;
+        if (!result) {
+          throw new Error(`Runtime run ${handle.runId} ended without a coding result.`);
+        }
         session.contextTokenSnapshot = result.contextTokenSnapshot;
-        const interrupted = !!result.interrupted;
-        const stopReason = abortController.signal.aborted || interrupted ? 'cancelled' : 'end_turn';
+        const interrupted = !!result.interrupted || runtimeResult.phase === 'cancelled' || runtimeResult.phase === 'interrupted';
+        const stopReason = interrupted ? 'cancelled' : 'end_turn';
         this.events.emit({
           type: 'prompt_finished',
           sessionId: session.sessionId,
@@ -796,7 +822,7 @@ export class KodaXAcpServer implements Agent {
           ...(toAcpUsage(result.contextTokenSnapshot) ? { usage: toAcpUsage(result.contextTokenSnapshot) } : {}),
         };
       } catch (error) {
-        if (abortController.signal.aborted || isAbortLikeError(error)) {
+        if (isAbortLikeError(error)) {
           this.events.emit({
             type: 'prompt_cancelled',
             sessionId: session.sessionId,
@@ -817,17 +843,15 @@ export class KodaXAcpServer implements Agent {
         });
         await this.sendTextChunk(session.sessionId, `\n[ACP Server Error] ${message}\n`);
         return {
-          stopReason: abortController.signal.aborted ? 'cancelled' : 'end_turn',
+          stopReason: 'end_turn',
           userMessageId: params.messageId ?? undefined,
         };
       } finally {
-        session.activeController = null;
+        session.activeRunId = null;
       }
     };
 
-    const queued = this.promptQueue.then(task, task);
-    this.promptQueue = queued.then(() => undefined, () => undefined);
-    return queued;
+    return task();
   }
 
   async cancel(params: { sessionId: string }): Promise<void> {
@@ -835,9 +859,12 @@ export class KodaXAcpServer implements Agent {
     this.events.emit({
       type: 'cancel_requested',
       sessionId: params.sessionId,
-      active: !!session?.activeController,
+      active: !!session?.activeRunId,
     });
-    session?.activeController?.abort();
+    if (session?.activeRunId) {
+      const runtime = await this.runtimeReady;
+      await runtime.runs.abort(session.activeRunId);
+    }
   }
 
   private requireSession(sessionId: string): KodaXAcpSessionState {
@@ -850,7 +877,6 @@ export class KodaXAcpServer implements Agent {
 
   private buildKodaXOptions(
     session: KodaXAcpSessionState,
-    abortSignal: AbortSignal,
     effortOverride: AcpPromptEffortOverride = { kind: 'absent' },
   ): KodaXOptions {
     const effort = effortOverride.kind === 'value'
@@ -864,7 +890,6 @@ export class KodaXAcpServer implements Agent {
       effort,
       thinking: effort === 'none' ? false : this.thinking,
       reasoningMode: effort === 'none' ? 'off' : this.reasoningMode,
-      abortSignal,
       // Per-session runtime (from client MCP servers) takes precedence over global.
       extensionRuntime: session.extensionRuntime ?? this.extensionRuntime,
       session: {
