@@ -1,7 +1,8 @@
 # Feature 总表
 
-> 这是活跃 roadmap 索引，只保留仍需要计划、实现或验证的 feature。
-> 已发布、取消、吸收、搁置的历史项见 [FEATURES_ARCHIVED.md](FEATURES_ARCHIVED.md)。
+> 这是活跃 roadmap 与近期完成项索引：保留仍需计划/实现/验证的 feature，
+> 并保留 archive cutoff 之后的近期发布项。更早的已发布、取消、吸收、搁置
+> 历史见 [FEATURES_ARCHIVED.md](FEATURES_ARCHIVED.md)。
 > 版本设计细节见 [docs/features/v{VERSION}.md](features/)；发布历史见 [CHANGELOG.md](../CHANGELOG.md)。
 
 ---
@@ -10,13 +11,13 @@
 
 | Item | Value |
 |---|---|
-| Current released version | `v0.7.63` |
-| Current package version | `@kodax-ai/kodax@0.7.66` release candidate (`v0.7.63` remains the latest published/tagged release) |
+| Current released version | `v0.7.66` |
+| Current package version | `@kodax-ai/kodax@0.7.66` release commit; GitHub source/binary release included, npm publication pending operator action |
 | Workspace baseline | `llm / agent / coding / repl` 4 packages |
 | Total tracked features | `42` |
-| InProgress | `5` |
+| InProgress | `0` |
 | Planned | `13` |
-| Completed | `24` |
+| Completed | `29` |
 | Tracked feature IDs | `007, 030, 093, 105, 108, 113, 139, 174, 211, 221, 224, 225, 228, 229, 230, 231, 232, 233, 234, 235, 236, 237, 238, 239, 240, 241, 242, 243, 244, 245, 246, 247, 248, 249, 250, 251, 252, 253, 254, 255, 256, 257` |
 | Archive cutoff | Shipped / canceled / absorbed / shelved items through `v0.7.49` are archived. |
 
@@ -24,8 +25,8 @@
 
 | Status | Count | Feature IDs | Next checkpoint |
 |---|---:|---|---|
-| Completed | 24 | `228, 251, 252, 250, 248, 249, 247, 246, 245, 243, 242, 241, 233, 240, 239, 224, 221, 174, 211, 237, 229, 230, 234, 236` | `228` shipped v0.7.62 (2026-07-06); `251, 252` shipped v0.7.61 (2026-07-06); `250` shipped v0.7.60 (2026-07-04); `248, 249` shipped v0.7.59 (2026-07-03); `245, 246, 247, 221` released v0.7.58 (2026-07-02); `233, 241, 242, 243` released v0.7.57; `239, 240` released v0.7.56; `224` released v0.7.54; `174, 211, 237` v0.7.53; `229` v0.7.50; `230, 234, 236` v0.7.51 |
-| InProgress | 5 | `253, 254, 255, 256, 257` | `v0.7.64` -> `v0.7.72` |
+| Completed | 29 | `253, 254, 255, 256, 257, 228, 251, 252, 250, 248, 249, 247, 246, 245, 243, 242, 241, 233, 240, 239, 224, 221, 174, 211, 237, 229, 230, 234, 236` | `253-257` shipped together in v0.7.66 (2026-07-10); `228` shipped v0.7.62 (2026-07-06); `251, 252` shipped v0.7.61 (2026-07-06); `250` shipped v0.7.60 (2026-07-04); `248, 249` shipped v0.7.59 (2026-07-03); `245, 246, 247, 221` released v0.7.58 (2026-07-02); `233, 241, 242, 243` released v0.7.57; `239, 240` released v0.7.56; `224` released v0.7.54; `174, 211, 237` v0.7.53; `229` v0.7.50; `230, 234, 236` v0.7.51 |
+| InProgress | 0 | `—` | No feature remains in implementation for the v0.7.66 release. |
 | Planned, near-term | 8 | `244, 231, 235, 238, 232, 105, 108, 225` | `v0.7.75` -> `v0.7.100` |
 | Planned, v0.8.x | 5 | `007, 030, 093, 113, 139` | `v0.8.5+` |
 
@@ -35,7 +36,7 @@
 
 | Version | Planned features |
 |---|---:|
-| `v0.7.54` | `1` |
+| `v0.7.54` | `0` |
 | `v0.7.55` | `0` |
 | `v0.7.56` | `0` |
 | `v0.7.57` | `0` |
@@ -44,14 +45,14 @@
 | `v0.7.62` | `0` |
 | `v0.7.63` | `0` |
 | `v0.7.64` | `0` |
-| `v0.7.65` | `1` |
-| `v0.7.66` | `1` |
+| `v0.7.65` | `0` |
+| `v0.7.66` | `0` |
 | `v0.7.67` | `0` |
 | `v0.7.68` | `0` |
 | `v0.7.69` | `0` |
 | `v0.7.70` | `0` |
-| `v0.7.71` | `1` |
-| `v0.7.72` | `1` |
+| `v0.7.71` | `0` |
+| `v0.7.72` | `0` |
 | `v0.7.73` | `0` |
 | `v0.7.74` | `0` |
 | `v0.7.75` | `3` |
@@ -91,6 +92,13 @@
 > `105` -> `v0.7.90`, `108` -> `v0.7.95`, and `225` -> `v0.7.100`. All
 > v0.8.x features remain unchanged.
 >
+> **2026-07-10 runtime release rollup**: the v0.7.64 and v0.7.65 development
+> slots were not cut as standalone tags. FEATURE_253, FEATURE_254, and
+> FEATURE_255 release together in v0.7.66 after the final context/tool exposure
+> eval and release audit. The already implemented FEATURE_256 and FEATURE_257
+> isolation follow-ups are also delivered early in v0.7.66; their former
+> v0.7.71/v0.7.72 slots return to stabilization capacity.
+>
 > **2026-07-07 patch release**: `v0.7.63` is a no-planned-feature-slot
 > patch/stability release for SDK session boundary hardening, deterministic
 > transcript fixtures, `/reload` extension rediscovery, and feature-design index
@@ -113,16 +121,13 @@
 > and daemon transport/diagnostics for the same context-budget/tool-exposure
 > plane. No new feature ID or release slot is added.
 >
-> **2026-07-10 isolation follow-up**: concrete SDK embedder demand adds two
-> bounded follow-ups after the four stabilization slots. `FEATURE_256` targets
-> `v0.7.71` with an optional Worker-hosted embedded Runtime and hard disposal;
-> `FEATURE_257` targets `v0.7.72` with Worker fault isolation for constructed
-> handlers. `v0.7.73` and `v0.7.74` remain feature-free patch slots before the
-> existing `v0.7.75` roadmap. Worker isolation is explicitly not an untrusted
-> code sandbox and does not add a generic arbitrary-code execution service.
-> Release review additionally requires capability/configuration fail-closed
-> behavior in all three Runtime forms and proves that constructed-handler
-> revoke drains active/queued calls without Worker resurrection.
+> **2026-07-10 isolation follow-up (delivered early in v0.7.66)**: concrete SDK
+> embedder demand added optional Worker-hosted embedded Runtime + hard disposal
+> (FEATURE_256) and constructed-handler Worker fault isolation (FEATURE_257).
+> Release review proved capability/configuration fail-closed behavior in all
+> three Runtime forms and that constructed-handler revoke drains active/queued
+> calls without Worker resurrection. Worker isolation remains explicitly not an
+> untrusted-code sandbox and adds no generic arbitrary-code execution service.
 
 ---
 
@@ -130,13 +135,14 @@
 
 | ID | Title | Category | Priority | Planned | Design |
 |---|---|---|---|---|---|
-| `253` | KodaX Runtime Contract + Embedded Runtime API | Core / Runtime Architecture | Critical | `v0.7.64` | [v0.7.64](features/v0.7.64.md#feature_253-kodax-runtime-contract--embedded-runtime-api) |
-| `254` | Runtime Host Migration + Control Plane Hardening | Core / Runtime Architecture | Critical | `v0.7.65` | [v0.7.65](features/v0.7.65.md#feature_254-runtime-host-migration--control-plane-hardening) |
-| `255` | KodaX Runtime Daemon + Local Transport | Core / Runtime Daemon | Critical | `v0.7.66` | [v0.7.66](features/v0.7.66.md#feature_255-kodax-runtime-daemon--local-transport) |
-| `256` | Worker-Hosted Embedded Runtime + Hard Disposal | Core / Runtime Isolation | High | `v0.7.71` | [v0.7.71](features/v0.7.71.md#feature_256-worker-hosted-embedded-runtime--hard-disposal) |
-| `257` | Constructed Handler Worker Fault Isolation | Coding / Tool Runtime | High | `v0.7.72` | [v0.7.72](features/v0.7.72.md#feature_257-constructed-handler-worker-fault-isolation) |
 
 Recent completion notes:
+
+`253-257` shipped together in `v0.7.66`: the embedded Runtime contract, host
+migration/control plane, local daemon transport, context-budget/tool-exposure
+planner + portable bridge, Worker-hosted Runtime, and constructed-handler Worker
+fault isolation. The release audit closed the bridge permission eval drift and
+fixed GitHub binary archive sidecar omission before tagging.
 
 `251`（Tool-Output 语义压缩）新增 body-only bash 输出过滤、`never_worse` 尺寸兜底、lossiness/recovery 契约、ANSI-only 通用压缩、git/test/lint/JSON 命令专用过滤器，以及内置声明式长尾过滤表；隔离 Layer-1 测量显示高噪声命令 body token 降幅约 66–99%。`252`（Workflow Quality Preflight）当前收窄为纯确定性合约 lint：启动前对未 await 的 workflow-command 真值判断、schema 顶层字段误用、静态 agent fanout 超 manifest/host 上限做硬失败；review/verifier/通用质量启发式刻意不作为模型可见告警发出。二者均为确定性代码，无 prompt 改动、无 LLM eval。`v0.7.61` 同时修复一处 workflow 启动崩溃：`typescript` 提升为 `@kodax-ai/agent` 运行时依赖（quality lint 在热路径使用 TS 编译器 API）。
 
@@ -198,9 +204,9 @@ Recent completion notes:
 - `FEATURE_LIST.md` 是活跃索引，不再承载长篇立项正文。
 - 每个活跃 feature 在本表只保留：ID、标题、类别、优先级、目标版本、设计入口。
 - 活跃项必须有明确版本和设计入口；`TBD` / parking-lot / 用户需求未成熟的项不进主表。
-- 已完成、取消、吸收、搁置的历史项归档到 [FEATURES_ARCHIVED.md](FEATURES_ARCHIVED.md)，避免它们继续污染待办统计。
+- archive cutoff 之前的已完成、取消、吸收、搁置项归档到 [FEATURES_ARCHIVED.md](FEATURES_ARCHIVED.md)；cutoff 之后的近期完成项暂留本表以便发布审计。
 - 新 feature 进入本表前，应先确认是否已有相同目标、是否可被现有 feature 吸收、是否需要单独设计文档。
-- 发布后把对应行移出本表，并把发布事实写入 [CHANGELOG.md](../CHANGELOG.md) 或归档。
+- 发布后把对应行移到“已完成 Feature”，同步 [CHANGELOG.md](../CHANGELOG.md)；越过 archive cutoff 后再归档。
 - Emergency patch absorption: Session Scratch Directory / `KODAX_SESSION_TMP` is tracked as a `FEATURE_071` workspace-discipline extension, not as a new active feature ID. The patch gives each session a repo-local `.agent/tmp/sessions/<session-id>/` scratch path and keeps temporary helper files out of shared roots.
 
 ---
@@ -209,6 +215,11 @@ Recent completion notes:
 
 | ID | Title | Released | Design | Notes |
 |---|---|---|---|---|
+| `257` | Constructed Handler Worker Fault Isolation | `v0.7.66` | [v0.7.72](features/v0.7.72.md#feature_257-constructed-handler-worker-fault-isolation) | Delivered ahead of the original v0.7.72 slot. Constructed JavaScript handlers run in persistent per-handler Workers, use reverse host tool RPC, hard-terminate CPU loops, and cannot resurrect active/queued work after revoke. |
+| `256` | Worker-Hosted Embedded Runtime + Hard Disposal | `v0.7.66` | [v0.7.71](features/v0.7.71.md#feature_256-worker-hosted-embedded-runtime--hard-disposal) | Delivered ahead of the original v0.7.71 slot. Adds optional embedded Worker ownership, MessagePort protocol reuse, hard-dispose capability negotiation, DTO-only transport, and release sidecar packaging. |
+| `255` | KodaX Runtime Daemon + Local Transport | `v0.7.66` | [v0.7.66](features/v0.7.66.md#feature_255-kodax-runtime-daemon--local-transport) | Local named-pipe/Unix-socket daemon, detached ownership, multi-client sessions/runs/events/permissions/config/catalog/artifact/diagnostic services, schema-validated protocol, and CLI/SDK host parity. |
+| `254` | Runtime Host Migration + Control Plane Hardening | `v0.7.66` | [v0.7.65](features/v0.7.65.md#feature_254-runtime-host-migration--control-plane-hardening) | Host/runtime consolidation plus context budgets, small-window tool exposure planning, `tool_search` / `tool_describe` / `tool_call` reachability, target-only permission checks, result budgets, compaction pressure, and deterministic 6/6 exposure evals. |
+| `253` | KodaX Runtime Contract + Embedded Runtime API | `v0.7.66` | [v0.7.64](features/v0.7.64.md#feature_253-kodax-runtime-contract--embedded-runtime-api) | Embedded Runtime sessions/runs/events/permissions/workflows facade and public `/runtime` subpath, developed in the v0.7.64 slot and released in the combined v0.7.66 cut. |
 | `228` | Unified Memory Control Plane + Memory Governance | `v0.7.62` | [v0.7.62](features/v0.7.62.md#feature_228-unified-memory-control-plane--memory-governance) | Released in `v0.7.62` (2026-07-06). Reuses the F224 learning proposal store for memory handoffs, adds agent-layer typed memory refs/snapshots/previews, fingerprint-guarded approval writes, thin `/memory` REPL commands, deterministic task-aware memory packs, bounded prompt memory-index injection, governance/curator reports with a 200-report cap, feedback-triggered review contracts, and host trace metadata for selected memory refs. No vector DB, embeddings, or second memory database. |
 | `252` | Workflow Quality Preflight + Review/Audit Verification Lints | `v0.7.61` | [v0.7.61](features/v0.7.61.md#feature_252-workflow-quality-preflight--reviewaudit-verification-lints) | Released in `v0.7.61` (2026-07-06). Phase A (deterministic contract lint only): `quality-lint.ts` (`lintRestrictedWorkflowSource` / `assertRestrictedWorkflowQuality`) runs in restricted workflow module materialization + the coding host with host `maxAgents`, hard-failing three contract classes before a run starts — unawaited workflow-command variable in a boolean position (no Proxy trap for object truthiness), top-level structured-output field access that belongs under `result.structured`, and literal `[...]`/`.map()` agent fanout above manifest/host caps. Review/verifier/generic quality heuristics intentionally NOT emitted as model-visible warnings (false-positive review narrowed the feature). Layer 2 strengthens review/audit templates to make verifier stages explicit. Layer 3 (gated strong-tier LLM reviewer) deferred behind future policy/eval. Deterministic — no LLM eval. |
 | `251` | Tool-Output 语义压缩（rtk-Style Token Killer） | `v0.7.61` | [v0.7.61](features/v0.7.61.md#feature_251-tool-output-semantic-compression-rtk-style-token-killer) | Released in `v0.7.61` (2026-07-06). Command-aware in-tool output compression in KodaX's own `bash` layer (ADR-050). New `output-filters/` module compresses stdout/stderr **body** at the single `bash.ts` close-handler point (covers SA + AMA): lossless ANSI-strip generic layer, compiled `git-diff`/`git-log`/`git-status`/`test-runner`/`lint`/`json-output` filters, and a declarative long-tail table (package/docker/infra progress). `Command:`/`Exit:` header preserved verbatim (FEATURE_185 ledger); `never_worse` size backstop; content-signature detection over command-name; every lossy filter persists raw body + recovery hint (raw fallback on persist failure). Isolated Layer-1 measurements show ~66–99% body-token reduction. Deterministic — no prompt change, no FEATURE_104 eval. |

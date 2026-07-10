@@ -3,7 +3,8 @@
 ## 功能概述
 
 **功能名称**: Constructed Handler Worker Fault Isolation
-**版本**: `v0.7.72`
+**原计划版本**: `v0.7.72`
+**实际发布版本**: `v0.7.66`（随 Runtime migration rollup 提前交付）
 **Feature ID**: `257`
 
 验证 generated constructed handler 不再在宿主 V8 isolate 中执行，CPU

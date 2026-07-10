@@ -1,6 +1,14 @@
 # KodaX Architecture Decision Records
 
-> Last updated: 2026-07-07
+> Last updated: 2026-07-10
+>
+> **v0.7.66 runtime addendum:** `@kodax-ai/kodax/runtime` is the ninth SDK
+> subpath and exposes one sessions/runs/events/permissions/config/catalog
+> contract in inline embedded, Worker-hosted embedded, and local-daemon forms.
+> FEATURE_253-FEATURE_255 ship as one runtime migration release; the already
+> implemented FEATURE_256 / FEATURE_257 Worker isolation work also ships in
+> v0.7.66. Worker termination is a fault-isolation boundary, not an untrusted
+> code sandbox (ADR-051).
 >
 > **v0.7.63 session-boundary addendum:** rewind audit entries are now typed as
 > `rewind_marker` lineage entries. They remain visible in
@@ -15,7 +23,7 @@
 > **⚠️ Architecture state notice (2026-05-25)**: 早期 ADR (ADR-005/006/007/008 等) 描述 `FEATURE_061/062` Scout-first + Planner/Generator/Evaluator H2 chain 模型，已被 [**ADR-030 claudecode-shape Main Agent + Sidecar Verifier**](#adr-030-claudecode-shape-main-agent--sidecar-verifier-substrate-feature_184-v0745) (FEATURE_184 v0.7.42) 取代。
 > 当前运行时架构：**V2 Worker 单循环 + Sidecar Verifier**。V1 chain (Scout/Planner/Generator/Evaluator) 已于 [ADR-030 §F193 cross-ref](#adr-030-claudecode-shape-main-agent--sidecar-verifier-substrate-feature_184-v0745) FEATURE_193 v0.7.43 全量退役；`emit_handoff` 工具已于 FEATURE_190 v0.7.43 删除。
 > 早期 Scout-first ADR 保留以便 archive 查阅，不反映当前实现。
-> **Current package / SDK state (2026-07-07 / v0.7.63)**: 源码 workspace 为 `llm / agent / coding / repl` 4 包；根 npm 包 `@kodax-ai/kodax` 暴露 8 个 SDK subpath（`/agent`、`/llm`、`/coding`、`/media`、`/repl`、`/skills`、`/mcp`、`/session`）；LLM registry 有 15 个内置 provider alias（含 `zai-coding`）。v0.7.58 的当前事实新增 inline workflow authoring（model-callable `run_workflow` 工具，ADR-044/046/047/048）、profile-gated SDK agent-profile 面（`KodaXAgentProfile`，FEATURE_247）、可白标的 self-knowledge manual（FEATURE_221）、config surface 扩展（model tiers + 原 env-only 设置进 `config.json` / `KodaXOptions`，per-run `AsyncLocalStorage` 隔离）；既有事实仍含 effort-first reasoning、`zai-coding` provider alias、内置 repo-intelligence semantic engine、`/media` SDK 入口，以及 workflow process / durable replay / `hostMetadata` / inline skill-reference propagation；v0.7.59 rollup 增加 AMAW mode-level orchestration directive（FEATURE_248）与 AMA natural-language workflow activation（FEATURE_249）；v0.7.60 把 deferred-tool 渐进披露从 SA path 带到 AMA/AMAW managed path（FEATURE_250：hint-swap 13 个 non-mcp 延迟工具、`input_schema` 不变、`tool_search` 与 3 个 goal tool receipts 加入 `PRUNE_PROTECTED_TOOLS`），并 rollup Space SDK **CAP-099**：live turn attribution（`KodaXActivityEventMeta` = sessionId/seq/turnId/deliveryId/timestamp + `emitTurnStarted/Completed/Failed` 共享 per-session 单调 seq）与结构化 transcript（`client_notice` 等 entry type，`loadFullTranscript()` 回读且 `entersModelContext === false`，不入 model context）。
+> **Current package / SDK state (2026-07-10 / v0.7.66)**: 源码 workspace 为 `llm / agent / coding / repl` 4 包；根 npm 包 `@kodax-ai/kodax` 暴露 9 个 SDK subpath（`/agent`、`/llm`、`/coding`、`/media`、`/repl`、`/skills`、`/mcp`、`/session`、`/runtime`）；LLM registry 有 15 个内置 provider alias（含 `zai-coding`）。当前 Runtime 事实包括 embedded inline、embedded Worker 与本机 daemon 三种 ownership/isolation 形态，共用 versioned protocol、session/run/event/permission/config/catalog surface；small-window 工具 schema 可通过 `tool_search` / `tool_describe` / `tool_call` 渐进披露，最终目标工具只经过一次权限校验。既有事实仍含 inline workflow authoring、profile-gated SDK agent profile、可白标 self-knowledge、effort-first reasoning、内置 repo intelligence、workflow process/durable replay/hostMetadata，以及 FEATURE_250/251/252 的渐进披露、工具输出压缩与 workflow quality lint。
 >
 > 之前的执行模型注脚（v0.7.42 前）：
 > 这组 ADR 反映 `FEATURE_061/062` 之后的执行模型：
@@ -3642,5 +3650,5 @@ MessagePort service round trip, hard-dispose negotiation, CPU-loop termination
 and respawn, reverse tool RPC capability denial, bundle and pack smoke. No model
 quality eval is required because Runtime isolation does not alter model context;
 the construction review prompt receives only a factual boundary correction.
-GitHub Actions run `29085817030` proves Node 20/22 builds and tests plus the
+GitHub Actions run `29088957312` proves Node 20/22 builds and tests plus the
 Node 22 Ubuntu Unix-domain-socket daemon gate.

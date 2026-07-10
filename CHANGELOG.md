@@ -6,6 +6,15 @@ All notable changes to this project will be documented in this file.
 
 ## [Unreleased]
 
+## [0.7.66] - 2026-07-10
+
+> Scope note: the runtime migration was developed across the v0.7.64-v0.7.66
+> planning slots and is released as one v0.7.66 cut; v0.7.64 and v0.7.65 were
+> not separately tagged. This release completes FEATURE_253, FEATURE_254, and
+> FEATURE_255, and pulls the already implemented FEATURE_256 / FEATURE_257
+> isolation work forward into the same release. GitHub source/binary release
+> work is included here; npm publication remains a separate operator step.
+
 ### Added
 
 - **KodaX Runtime daemon and SDK daemon transport.** Added the local-only
@@ -37,9 +46,12 @@ All notable changes to this project will be documented in this file.
   persisted in `config.json`; paired settings consistently resolve as explicit
   option > environment > config > default, with semantic camelCase ↔
   `KODAX_UPPER_SNAKE_CASE` mappings across CLI, ACP, and both REPL surfaces.
-- Roadmap planning: consolidated `FEATURE_244`, `FEATURE_231`, and
-  `FEATURE_235` into `v0.7.75`, leaving `v0.7.65` and `v0.7.70` as empty
-  debug/patch slots.
+- **Runtime migration release rollup.** FEATURE_253 (embedded Runtime),
+  FEATURE_254 (host/control-plane hardening and context/tool exposure), and
+  FEATURE_255 (local daemon transport) were implemented across the
+  v0.7.64-v0.7.66 development window and ship together in v0.7.66. The
+  implemented Worker-isolation follow-ups FEATURE_256 / FEATURE_257 also ship
+  early in this cut instead of waiting for their former v0.7.71/v0.7.72 slots.
 - **Release metadata synced to v0.7.66.** Root, lockfile, and workspace package
   versions now agree on `0.7.66`; the release pack-only path produces
   `kodax-ai-kodax-0.7.66.tgz`.
@@ -77,6 +89,17 @@ All notable changes to this project will be documented in this file.
 - **Constructed handler revoke drains queued work.** Disposing a handler marks
   its entry dead before Worker termination, so active, queued, and stale-closure
   calls cannot recreate an untracked Worker after revoke.
+- **Portable bridge permission eval follows production semantics.** The
+  deterministic FEATURE_254 reachability gate now asserts that `tool_describe`
+  and the `tool_call` wrapper stay permission-silent while the concrete target
+  is checked exactly once; all four exposure eval files pass (6/6 tests).
+- **Standalone release archives retain required sidecars.** GitHub Release
+  packaging now includes provider metadata plus semantic, Runtime, and
+  constructed-handler Worker files and fails before upload when any sidecar is
+  missing.
+- **Failed image-path paste remains visible.** If image decoding or loading
+  fails, the REPL restores the original path as plain text and shows a bounded
+  warning instead of silently consuming the paste.
 
 ## [0.7.63] - 2026-07-07
 

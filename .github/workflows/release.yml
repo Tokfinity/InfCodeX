@@ -134,13 +134,24 @@ jobs:
 
           cd "dist/binary/${target}"
 
+          sidecars=(
+            builtin
+            provider-capabilities.json
+            semantic-worker.js
+            runtime-worker.js
+            constructed-handler-worker.js
+          )
+          for sidecar in "${sidecars[@]}"; do
+            test -e "$sidecar" || { echo "Missing release sidecar: $sidecar" >&2; exit 1; }
+          done
+
           if [ "${{ matrix.archive }}" = "zip" ]; then
             archive_file="${archive_base}.zip"
             # Windows 10+ ships with bsdtar; powershell Compress-Archive also works.
-            powershell -Command "Compress-Archive -Path kodax.exe,builtin -DestinationPath '$archive_file' -Force"
+            powershell -Command "Compress-Archive -Path kodax.exe,builtin,provider-capabilities.json,semantic-worker.js,runtime-worker.js,constructed-handler-worker.js -DestinationPath '$archive_file' -Force"
           else
             archive_file="${archive_base}.tar.gz"
-            tar -czf "$archive_file" kodax builtin
+            tar -czf "$archive_file" kodax "${sidecars[@]}"
           fi
 
           mkdir -p "${GITHUB_WORKSPACE}/dist/release"
@@ -226,7 +237,7 @@ jobs:
             echo
             echo "## Downloads"
             echo
-            echo "Each archive contains the \`kodax\` executable and a sidecar \`builtin/\` directory."
+            echo "Each archive contains the \`kodax\` executable, \`builtin/\`, provider metadata, and all required Worker sidecars."
             echo "Extract anywhere and run \`./kodax\` (or \`kodax.exe\` on Windows). No Node.js required."
             echo
             echo "Verify integrity with the matching \`.sha256\` file or the aggregated \`SHA256SUMS\`."

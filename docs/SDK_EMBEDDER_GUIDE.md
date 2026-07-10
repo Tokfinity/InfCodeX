@@ -2704,7 +2704,9 @@ fields requires a protocol version bump.
 
 ### Current verification status
 
-The v0.7.66-v0.7.72 implementation validation covers:
+The v0.7.66 release validation covers the runtime migration and the Worker
+isolation follow-ups that were delivered ahead of their original
+v0.7.71/v0.7.72 planning slots:
 
 - complete repository test suite on Node 20 and Node 22;
 - package builds, Worker sidecar builds, and self-contained
@@ -2721,10 +2723,12 @@ The v0.7.66-v0.7.72 implementation validation covers:
 - Ubuntu Node 22 Unix-domain-socket daemon gate, including two clients sharing
   one runtime and cross-client permission resolution.
 
-GitHub Actions run `29085817030` passed on 2026-07-10. The portable manual gates
+GitHub Actions run `29088957312` passed on 2026-07-10. The portable manual gates
 remain in `docs/test-guides/FEATURE_255_v0.7.66_TEST_GUIDE.md`,
 `FEATURE_256_v0.7.71_TEST_GUIDE.md`, and
-`FEATURE_257_v0.7.72_TEST_GUIDE.md` for release-machine verification.
+`FEATURE_257_v0.7.72_TEST_GUIDE.md` for release-machine verification; the latter
+two filenames retain their original planning slots while their content records
+the v0.7.66 delivery.
 
 ---
 

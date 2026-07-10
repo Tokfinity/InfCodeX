@@ -91,11 +91,61 @@ _Last Updated: 2026-07-10_
 | 143 | High | Resolved | Auto[llm] speculative classify 窗口默认 500ms + late verdict 被丢弃 → 远程/慢 provider 下 near-100% 误弹确认框，auto 模式形同虚设 | v0.7.39 | v0.7.57 | 2026-06-25 | 2026-06-25 |
 | 145 | High | Resolved | Runtime daemon / SDK 边界存在生命周期、事件、权限与协议一致性缺口 | v0.7.64-v0.7.66 | v0.7.66 | 2026-07-10 | 2026-07-10 |
 | 146 | Medium | Resolved | 图片路径粘贴处理失败时吞掉原始输入且无可见反馈 | v0.7.40 | v0.7.66 | 2026-07-10 | 2026-07-10 |
+| 147 | High | Resolved | GitHub Release 二进制归档遗漏 Runtime 与工具 Worker sidecar | v0.7.66 RC | v0.7.66 | 2026-07-10 | 2026-07-10 |
 
 ---
 
 ## Issue Details
 <!-- Full details for each issue - REQUIRED for all issues -->
+
+### 147: GitHub Release 二进制归档遗漏 Runtime 与工具 Worker sidecar
+
+- **Priority**: High
+- **Status**: **Resolved** (v0.7.66)
+- **Introduced**: v0.7.66 release candidate
+- **Created**: 2026-07-10
+- **Resolved**: 2026-07-10
+- **Fixed**: v0.7.66
+
+#### Original Problem
+
+`scripts/build-binary.mjs` 已将 `provider-capabilities.json`、
+`semantic-worker.js`、`runtime-worker.js` 和
+`constructed-handler-worker.js` 复制到每个 standalone binary 目录，运行时也按
+`process.execPath` 从同目录加载这些文件；但 `.github/workflows/release.yml`
+仍只把 executable 与 `builtin/` 放入 GitHub Release 压缩包。打 tag 后生成的下载版
+会丢失 provider metadata、repo-intelligence Worker、Worker-hosted Runtime 和
+constructed-handler Worker。
+
+#### Context
+
+- Components: standalone binary GitHub Release pipeline.
+- Impact: npm 包不受影响，但 GitHub 下载的免 Node 版本会静默降级或无法启用
+  v0.7.66 的 Worker Runtime / constructed handler 隔离能力。
+- Reproduction: 对比 `dist/binary/<target>/` 的构建产物与 release workflow 的
+  `Compress-Archive` / `tar` 输入清单。
+
+#### Root Cause
+
+新增 Worker sidecar 时只更新了 build/copy guard 和发布文档，没有同步历史 release
+archive 白名单，也没有确定性测试锁定该白名单。
+
+#### Resolution
+
+- release workflow 在打包前逐项检查所有 sidecar，缺失时立即失败。
+- Windows zip 与 Unix tar 清单都包含 provider metadata 和三个 Worker sidecar。
+- GitHub Release notes 与 binary distribution 文档同步说明完整内容。
+
+#### Files Changed
+
+- `.github/workflows/release.yml`
+- `docs/release.md`
+- `tests/release-workflow.test.ts`
+
+#### Tests Added
+
+- `tests/release-workflow.test.ts` 解析真实 YAML，断言 `Package archive` 步骤包含
+  四个运行时 sidecar；测试在修复前失败、修复后通过。
 
 ### 146: 图片路径粘贴处理失败时吞掉原始输入且无可见反馈
 
@@ -4921,11 +4971,16 @@ Commit `ef085fc` 把 V1 精简到 V2 时没区分"信息载体"和"脚手架"，
 ---
 
 ## Summary
-- Total: 73 (24 Open, 49 Resolved, 0 Partially Resolved, 0 Won't Fix)
+- Total: 74 (24 Open, 50 Resolved, 0 Partially Resolved, 0 Won't Fix)
 - Highest Priority Open: 091 - 缺少一等公民 MCP / Web Search / Code Search 工具体系 (High)
 - Historical archived issues are maintained in ISSUES_ARCHIVED.md
 
 ## Changelog
+
+### 2026-07-10: Issue 147 added and resolved (v0.7.66)
+
+- GitHub Release archive 现在携带 provider metadata 与全部 Worker sidecar。
+- 新增 workflow YAML 回归测试，并在 sidecar 缺失时让发布任务 fail closed。
 
 ### 2026-07-10: Issue 146 added and resolved (v0.7.66)
 

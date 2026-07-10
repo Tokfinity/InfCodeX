@@ -249,11 +249,11 @@ describe('Eval: tool exposure bridge reachability', () => {
     expect(providerVisibleToolNames).not.toContain('bridge_eval_target');
     expect(results.get('describe-1')).toContain('"name":"bridge_eval_target"');
     expect(results.get('call-1')).toContain('bridge-eval-target:ok:call-1:bridge_eval_target');
-    expect(permissionNames).toEqual(expect.arrayContaining([
-      TOOL_DESCRIBE_NAME,
-      TOOL_CALL_NAME,
-      'bridge_eval_target',
-    ]));
+    // The bridge wrappers never prompt independently: tool_describe is
+    // read-only, and tool_call re-enters the permission gate as its concrete
+    // target. This must stay exact so one bridged operation cannot regress to
+    // duplicate wrapper + target prompts.
+    expect(permissionNames).toEqual(['bridge_eval_target']);
 
     writeEvalDump('coding-dispatch-hidden-active-target', {
       stage: 'coding-dispatch-hidden-active-target',

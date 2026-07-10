@@ -5,10 +5,11 @@ Target machines do **not** need Node.js or any runtime installed.
 
 ## Distribution layout
 
-Each archive (`tar.gz` for Linux/macOS, `zip` for Windows) extracts to:
+Each archive (`tar.gz` for Linux/macOS, `zip` for Windows) contains the
+following side-by-side files. Extract it into a dedicated directory:
 
 ```
-kodax-v<version>-linux-x64/
+./
 ├── kodax                          # Bun-compiled executable (~60 MB)
 ├── builtin/                       # Built-in skills
 │   ├── code-review/SKILL.md
@@ -20,9 +21,9 @@ kodax-v<version>-linux-x64/
 └── constructed-handler-worker.js  # Constructed-tool Worker
 ```
 
-Users extract anywhere and run `./kodax` (or `kodax.exe`). The binary locates
-all sidecars via `process.execPath`, so the directory must be moved or archived
-as one unit. It works regardless of working directory or install location.
+Run `./kodax` (or `kodax.exe`) from any working directory. The binary locates
+all sidecars relative to `process.execPath`, so the extracted files must be
+moved or archived as one unit.
 
 ## Supported targets
 
@@ -31,7 +32,7 @@ as one unit. It works regardless of working directory or install location.
 | `win-x64`       | Windows 10 1809+ / x64          | `windows-latest`   |
 | `linux-x64`     | Linux glibc 2.27+ / x64         | `ubuntu-latest`    |
 | `linux-arm64`   | Linux glibc 2.27+ / aarch64     | `ubuntu-latest` (cross) |
-| `darwin-x64`    | macOS 11+ / Intel               | `macos-13`         |
+| `darwin-x64`    | macOS 11+ / Intel               | `macos-14` (cross) |
 | `darwin-arm64`  | macOS 11+ / Apple Silicon       | `macos-14`         |
 
 Win7 and pre-glibc-2.27 distros (NeoKylin v7, CentOS 6/7) are **not supported**.

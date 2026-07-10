@@ -3,7 +3,8 @@
 ## 功能概述
 
 **功能名称**: Worker-Hosted Embedded Runtime + Hard Disposal
-**版本**: `v0.7.71`
+**原计划版本**: `v0.7.71`
+**实际发布版本**: `v0.7.66`（随 Runtime migration rollup 提前交付）
 **Feature ID**: `256`
 
 验证 SDK 在保持同一 `KodaXRuntime` 接口的同时，可将私有 embedded
