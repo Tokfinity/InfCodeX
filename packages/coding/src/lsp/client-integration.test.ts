@@ -8,6 +8,58 @@ import { LspService } from './service.js';
 import type { LspServerInfo } from './servers.js';
 
 const FIXTURE = fileURLToPath(new URL('./fake-lsp-server.fixture.mjs', import.meta.url));
+const STUBBORN_LSP_SOURCE = `
+let buffer = Buffer.alloc(0);
+const keepAlive = setInterval(() => {}, 1_000);
+
+process.stdin.on('data', (chunk) => {
+  buffer = Buffer.concat([buffer, chunk]);
+  for (;;) {
+    const headerEnd = buffer.indexOf('\\r\\n\\r\\n');
+    if (headerEnd < 0) break;
+    const header = buffer.slice(0, headerEnd).toString('ascii');
+    const match = /content-length:\\s*(\\d+)/i.exec(header);
+    if (!match) {
+      buffer = buffer.slice(headerEnd + 4);
+      continue;
+    }
+    const length = Number.parseInt(match[1], 10);
+    const start = headerEnd + 4;
+    if (buffer.length < start + length) break;
+    const body = buffer.slice(start, start + length).toString('utf8');
+    buffer = buffer.slice(start + length);
+    handle(JSON.parse(body));
+  }
+});
+
+function send(message) {
+  const payload = Buffer.from(JSON.stringify(message), 'utf8');
+  process.stdout.write('Content-Length: ' + payload.length + '\\r\\n\\r\\n');
+  process.stdout.write(payload);
+}
+
+function handle(message) {
+  switch (message.method) {
+    case 'initialize':
+      send({ jsonrpc: '2.0', id: message.id, result: { capabilities: { textDocumentSync: 1 } } });
+      return;
+    case 'shutdown':
+      send({ jsonrpc: '2.0', id: message.id, result: null });
+      return;
+    case 'exit':
+      return;
+    default:
+      if (typeof message.id !== 'undefined' && message.method) {
+        send({ jsonrpc: '2.0', id: message.id, result: null });
+      }
+  }
+}
+
+process.on('SIGTERM', () => {
+  clearInterval(keepAlive);
+  process.exit(0);
+});
+`;
 
 describe('LSP protocol integration (real stdio handshake)', () => {
   let tempDir = '';
@@ -99,4 +151,19 @@ describe('LSP protocol integration (real stdio handshake)', () => {
       await client.shutdown();
     }
   }, 15000);
+
+  it('bounds shutdown when a server ignores the exit notification', async () => {
+    const stubbornFixture = path.join(tempDir, 'stubborn-lsp-server.mjs');
+    await fs.writeFile(stubbornFixture, STUBBORN_LSP_SOURCE, 'utf8');
+    const client = await createLspClient({
+      serverId: 'stubborn',
+      root: tempDir,
+      launch: { command: process.execPath, args: [stubbornFixture] },
+    });
+
+    const startedAt = Date.now();
+    await client.shutdown();
+
+    expect(Date.now() - startedAt).toBeLessThan(5_000);
+  }, 10000);
 });

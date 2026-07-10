@@ -47,7 +47,12 @@
  */
 
 import type { KodaXBaseProvider, KodaXMessage } from '@kodax-ai/llm';
-import { compact as intelligentCompact, type CompactionConfig, type CompactionUpdate } from '@kodax-ai/agent';
+import {
+  compact as intelligentCompact,
+  emitKodaXDiagnostic,
+  type CompactionConfig,
+  type CompactionUpdate,
+} from '@kodax-ai/agent';
 import {
   CODING_SUMMARY_PROMPT,
   CODING_UPDATE_SUMMARY_PROMPT,
@@ -60,6 +65,14 @@ import {
 import { validateAndFixToolHistory } from '@kodax-ai/agent';
 import { gracefulCompactDegradation } from '@kodax-ai/agent';
 import { applyPostCompactAttachments } from './post-compact-attachments.js';
+import {
+  consumeCompactionCooldown,
+  createCompactionAntiThrashState,
+  recordCompactionSavings,
+  shouldSkipLlmCompaction,
+  type CompactionAntiThrashConfig,
+  type CompactionAntiThrashState,
+} from './compaction-pressure.js';
 
 export const COMPACT_CIRCUIT_BREAKER_LIMIT = 3;
 
@@ -78,6 +91,9 @@ export interface TryIntelligentCompactInput {
   readonly systemPrompt: string;
   readonly currentTokens: number;
   readonly events: KodaXEvents;
+  readonly compactionAntiThrash?: CompactionAntiThrashState;
+  readonly compactionAntiThrashConfig?: CompactionAntiThrashConfig;
+  readonly emitCompactionDiagnostics?: boolean;
   /** Defaults to {@link COMPACT_CIRCUIT_BREAKER_LIMIT}; tests may override. */
   readonly circuitBreakerLimit?: number;
 }
@@ -87,6 +103,7 @@ export interface TryIntelligentCompactOutput {
   readonly compactionUpdate: CompactionUpdate | undefined;
   readonly didCompactMessages: boolean;
   readonly nextCompactConsecutiveFailures: number;
+  readonly nextCompactionAntiThrash: CompactionAntiThrashState;
 }
 
 /**
@@ -101,6 +118,7 @@ export async function tryIntelligentCompact(
 ): Promise<TryIntelligentCompactOutput> {
   const limit = input.circuitBreakerLimit ?? COMPACT_CIRCUIT_BREAKER_LIMIT;
   const circuitBreakerTripped = input.compactConsecutiveFailures >= limit;
+  const antiThrash = input.compactionAntiThrash ?? createCompactionAntiThrashState();
 
   if (!input.needsCompact || circuitBreakerTripped) {
     return {
@@ -108,6 +126,28 @@ export async function tryIntelligentCompact(
       compactionUpdate: undefined,
       didCompactMessages: false,
       nextCompactConsecutiveFailures: input.compactConsecutiveFailures,
+      nextCompactionAntiThrash: antiThrash,
+    };
+  }
+
+  if (shouldSkipLlmCompaction(antiThrash)) {
+    const nextAntiThrash = consumeCompactionCooldown(antiThrash);
+    if (input.emitCompactionDiagnostics) {
+      input.events.onContextCompactionSkipped?.({
+        reason: 'low_savings_cooldown',
+        currentTokens: input.currentTokens,
+        contextWindow: input.contextWindow,
+        triggerPercent: input.compactionConfig.triggerPercent,
+        cooldownTurnsRemaining: nextAntiThrash.cooldownTurnsRemaining,
+        lowSavingsStreak: nextAntiThrash.lowSavingsStreak,
+      });
+    }
+    return {
+      compacted: input.messages,
+      compactionUpdate: undefined,
+      didCompactMessages: false,
+      nextCompactConsecutiveFailures: input.compactConsecutiveFailures,
+      nextCompactionAntiThrash: nextAntiThrash,
     };
   }
 
@@ -115,6 +155,7 @@ export async function tryIntelligentCompact(
   let compactionUpdate: CompactionUpdate | undefined;
   let didCompactMessages = false;
   let nextFailures = input.compactConsecutiveFailures;
+  let nextCompactionAntiThrash = antiThrash;
 
   input.events.onCompactStart?.();
   try {
@@ -157,29 +198,51 @@ export async function tryIntelligentCompact(
       // zero forever and prevent graceful degradation from ever running.
       const triggerTokens = input.contextWindow * (input.compactionConfig.triggerPercent / 100);
       const postCompactTokens = estimateTokens(compacted);
+      const savings = recordCompactionSavings(
+        antiThrash,
+        {
+          tokensBefore: result.tokensBefore,
+          tokensAfter: result.tokensAfter,
+        },
+        input.compactionAntiThrashConfig,
+      );
+      nextCompactionAntiThrash = savings.state;
 
       // Compaction observability reaches every output mode through the
       // lifecycle events emitted below (`onCompactStats` / `onCompact`): the
       // Ink TUI renders an inline "Context auto-compacted" notice, the plain
       // CLI prints a dim line, and `--json` emits a `compact.finish` record.
-      // This raw stderr trace is debug-only, gated behind
-      // `KODAX_DEBUG_COMPACTION` (same gate as the sibling summary-chunk
-      // diagnostic in @kodax-ai/agent compaction.ts). Rationale: the REPL
+      // This raw diagnostic trace is debug-only, gated behind
+      // `KODAX_DEBUG_COMPACTION`. Real compaction failures below are reported
+      // unconditionally through diagnostics. Rationale: the REPL
       // renderer runs with `patchConsole: false`, so a bare `console.*` write
       // bypasses the render engine, lands below the live region, and desyncs
       // the cell frame — corrupting the interactive screen.
       if (process.env.KODAX_DEBUG_COMPACTION) {
-        // eslint-disable-next-line no-console
-        console.error(
-          `[Compaction] triggered ${JSON.stringify({
+        emitKodaXDiagnostic({
+          source: 'coding:compaction',
+          level: 'debug',
+          message: 'Compaction triggered.',
+          detail: {
             contextWindow: input.contextWindow,
             triggerPercent: input.compactionConfig.triggerPercent,
             triggerTokens: Math.floor(triggerTokens),
             tokensBefore: result.tokensBefore,
             tokensAfter: postCompactTokens,
             reduction: result.tokensBefore - postCompactTokens,
-          })}`,
-        );
+          },
+        });
+      }
+      if (savings.enteredCooldown && process.env.KODAX_DEBUG_COMPACTION) {
+        emitKodaXDiagnostic({
+          source: 'coding:compaction',
+          level: 'debug',
+          message: 'Compaction low-savings cooldown entered.',
+          detail: {
+            savingsRatio: savings.savingsRatio,
+            cooldownTurnsRemaining: savings.state.cooldownTurnsRemaining,
+          },
+        });
       }
       if (postCompactTokens < triggerTokens) {
         nextFailures = 0;
@@ -188,10 +251,17 @@ export async function tryIntelligentCompact(
         // stays unconditional; only the diagnostic line is debug-gated.
         nextFailures = input.compactConsecutiveFailures + 1;
         if (process.env.KODAX_DEBUG_COMPACTION) {
-          // eslint-disable-next-line no-console
-          console.warn(
-            `[Compaction] Partial success: still above trigger (${postCompactTokens} > ${Math.floor(triggerTokens)}) — attempt ${nextFailures}/${limit}`,
-          );
+          emitKodaXDiagnostic({
+            source: 'coding:compaction',
+            level: 'debug',
+            message: 'Compaction partial success remained above trigger.',
+            detail: {
+              postCompactTokens,
+              triggerTokens: Math.floor(triggerTokens),
+              attempt: nextFailures,
+              limit,
+            },
+          });
         }
       }
 
@@ -215,16 +285,15 @@ export async function tryIntelligentCompact(
   } catch (error) {
     // Error is handled, not swallowed: the counter increment drives the
     // circuit breaker and we fall through to deterministic graceful
-    // degradation below. The stderr detail is debug-only for the same
-    // TUI-safety reason as the success trace above.
+    // degradation below. Report the real failure through diagnostics; raw
+    // console output remains forbidden because it can corrupt Ink rendering.
     nextFailures = input.compactConsecutiveFailures + 1;
-    if (process.env.KODAX_DEBUG_COMPACTION) {
-      // eslint-disable-next-line no-console
-      console.error(
-        `[Compaction Error] LLM summary failed (attempt ${nextFailures}/${limit}):`,
-        error,
-      );
-    }
+    emitKodaXDiagnostic({
+      source: 'coding:compaction',
+      level: 'error',
+      message: `Compaction LLM summary failed (attempt ${nextFailures}/${limit}).`,
+      detail: error,
+    });
     // Fall through to graceful degradation: return messages identity.
     compacted = input.messages;
   } finally {
@@ -236,6 +305,7 @@ export async function tryIntelligentCompact(
     compactionUpdate,
     didCompactMessages,
     nextCompactConsecutiveFailures: nextFailures,
+    nextCompactionAntiThrash,
   };
 }
 
@@ -353,6 +423,9 @@ export interface CompactionLifecycleInput {
   readonly systemPrompt: string;
   readonly currentTokens: number;
   readonly events: KodaXEvents;
+  readonly compactionAntiThrash?: CompactionAntiThrashState;
+  readonly compactionAntiThrashConfig?: CompactionAntiThrashConfig;
+  readonly emitCompactionDiagnostics?: boolean;
   readonly circuitBreakerLimit?: number;
 }
 
@@ -361,6 +434,7 @@ export interface CompactionLifecycleOutput {
   readonly compactionUpdate: CompactionUpdate | undefined;
   readonly didCompactMessages: boolean;
   readonly nextCompactConsecutiveFailures: number;
+  readonly nextCompactionAntiThrash: CompactionAntiThrashState;
   /**
    * Fresh snapshot when compaction fired; `undefined` otherwise so
    * the caller keeps its existing per-turn snapshot.
@@ -391,6 +465,9 @@ export async function runCompactionLifecycle(
     systemPrompt: input.systemPrompt,
     currentTokens: input.currentTokens,
     events: input.events,
+    compactionAntiThrash: input.compactionAntiThrash,
+    compactionAntiThrashConfig: input.compactionAntiThrashConfig,
+    emitCompactionDiagnostics: input.emitCompactionDiagnostics,
     circuitBreakerLimit: input.circuitBreakerLimit,
   });
   const degradationPhase = applyGracefulDegradationGate({
@@ -414,6 +491,7 @@ export async function runCompactionLifecycle(
     compactionUpdate: llmPhase.compactionUpdate,
     didCompactMessages,
     nextCompactConsecutiveFailures: llmPhase.nextCompactConsecutiveFailures,
+    nextCompactionAntiThrash: llmPhase.nextCompactionAntiThrash,
     contextTokenSnapshot: commitPhase.contextTokenSnapshot,
   };
 }

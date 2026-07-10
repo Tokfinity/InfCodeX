@@ -46,7 +46,11 @@ import {
   createToolResultBlock,
   executeToolCall,
 } from '../tool-dispatch.js';
-import { registerTool } from '../../tools/index.js';
+import {
+  registerTool,
+  TOOL_CALL_NAME,
+  TOOL_DESCRIBE_NAME,
+} from '../../tools/index.js';
 import {
   buildRuntimeSessionState,
   type RuntimeSessionState,

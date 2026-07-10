@@ -26,6 +26,7 @@ import {
   handleBracketedPaste,
   triggerExplicitClipboardImage,
 } from "../../paste/index.js";
+import { emitKodaXDiagnostic } from "@kodax-ai/agent";
 
 export interface PromptInputControllerOptions {
   /**
@@ -67,6 +68,15 @@ export interface PromptInputControllerResult {
   terminalFocused: boolean;
   editingMode: PromptEditingMode;
   handleKey: (key: KeyInfo) => boolean;
+}
+
+function reportPromptInputDiagnostic(message: string, detail?: unknown): void {
+  emitKodaXDiagnostic({
+    source: "repl:prompt-input",
+    level: "warn",
+    message,
+    ...(detail !== undefined ? { detail } : {}),
+  });
 }
 
 export type PromptEscapeBehavior =
@@ -364,8 +374,8 @@ export function usePromptInputController({
   // `KodaXInputArtifact[]` on submit — so no other change is needed.
   //
   // Fire-and-forget: returns immediately so the keypress contract stays
-  // sync. Errors are surfaced via `console.warn` (REPL captures stderr
-  // into the transcript noise; a richer toast UI is a future polish).
+  // sync. Errors are surfaced via diagnostics so background paste handling
+  // never writes below Ink's live region.
   const insertImageRefsFromPaste = useCallback(
     async (pasteContent: string): Promise<void> => {
       try {
@@ -377,17 +387,13 @@ export function usePromptInputController({
           // should see them verbatim in the input buffer.
           insert(`${refs} `, { paste: false });
         } else if (outcome.kind === "error") {
-          // eslint-disable-next-line no-console
-          console.warn(`[KodaX paste] ${outcome.message}`);
+          reportPromptInputDiagnostic(`Paste image handling failed: ${outcome.message}`);
         }
         // noop / text outcomes: nothing to do here. The fast-path gate
         // in handleKey only invokes this when extractImagePaths returned
         // a non-empty list, so an unexpected text fallthrough is rare.
       } catch (err) {
-        // eslint-disable-next-line no-console
-        console.warn(
-          `[KodaX paste] image handling failed: ${err instanceof Error ? err.message : String(err)}`,
-        );
+        reportPromptInputDiagnostic('Paste image handling failed.', err);
       }
     },
     [insert],
@@ -412,15 +418,11 @@ export function usePromptInputController({
         const refs = outcome.blocks.map((b) => `@${b.path}`).join(" ");
         insert(`${refs} `, { paste: false });
       } else if (outcome.kind === "error") {
-        // eslint-disable-next-line no-console
-        console.warn(`[KodaX clipboard] ${outcome.message}`);
+        reportPromptInputDiagnostic(`Clipboard image handling failed: ${outcome.message}`);
       }
       // noop: clipboard had no image — silent (matches FEATURE_134 design).
     } catch (err) {
-      // eslint-disable-next-line no-console
-      console.warn(
-        `[KodaX clipboard] image handling failed: ${err instanceof Error ? err.message : String(err)}`,
-      );
+      reportPromptInputDiagnostic('Clipboard image handling failed.', err);
     } finally {
       explicitImagePasteInflightRef.current = false;
     }

@@ -25,7 +25,7 @@
 
 import type { KodaXBaseProvider } from '@kodax-ai/llm';
 import type { StopHookContext, StopHookFn } from '@kodax-ai/agent';
-import { getMessageQueue } from '@kodax-ai/agent';
+import { emitKodaXDiagnostic, getMessageQueue } from '@kodax-ai/agent';
 
 import type { KodaXTaskRole, KodaXTaskVerificationContract, ManagedMutationTracker } from '../types.js';
 import type { ObserverBridge } from './_internal/managed-task/types.js';
@@ -189,9 +189,15 @@ export function buildRunnerSidecarVerifierAdapter(
           };
           const gateDecision = composeGateDecision(ctx, gateMetrics, process.env);
           if (process.env.KODAX_VERIFIER_LOG === '1') {
-            process.stderr.write(
-              `[sidecar-gate] ${gateDecision.fire ? 'fire' : 'skip'}: ${gateDecision.reason}\n`,
-            );
+            emitKodaXDiagnostic({
+              source: 'coding:sidecar-verifier',
+              level: 'debug',
+              message: 'Sidecar gate evaluated.',
+              detail: {
+                fire: gateDecision.fire,
+                reason: gateDecision.reason,
+              },
+            });
           }
           if (!gateDecision.fire) {
             return extensionTurnCompleteHook(ctx);

@@ -1,5 +1,9 @@
 import { describe, expect, it, vi } from 'vitest';
 import {
+  setKodaXDiagnosticSink,
+  type KodaXDiagnostic,
+} from '@kodax-ai/agent';
+import {
   AUTO_IN_PROJECT_DEPRECATION_MSG,
   PERMISSION_MODES,
   CANONICAL_PERMISSION_MODES,
@@ -92,15 +96,23 @@ describe('auto-in-project deprecation emitter (FEATURE_092 phase 2b.7b slice E)'
     expect(printer2).toHaveBeenCalledOnce();
   });
 
-  it('default printer routes through console.warn (stderr, not piped stdout)', () => {
-    const spy = vi.spyOn(console, 'warn').mockImplementation(() => undefined);
+  it('default printer emits a diagnostic without writing to stderr', () => {
+    const diagnostics: KodaXDiagnostic[] = [];
+    const restoreDiagnostics = setKodaXDiagnosticSink((diagnostic) => {
+      diagnostics.push(diagnostic);
+    });
     try {
       const emit = createAutoInProjectDeprecationEmitter();
       emit();
-      expect(spy).toHaveBeenCalledOnce();
-      expect(spy).toHaveBeenCalledWith(AUTO_IN_PROJECT_DEPRECATION_MSG);
+      expect(diagnostics).toEqual([
+        expect.objectContaining({
+          source: 'repl:permission',
+          level: 'warn',
+          message: AUTO_IN_PROJECT_DEPRECATION_MSG,
+        }),
+      ]);
     } finally {
-      spy.mockRestore();
+      restoreDiagnostics();
     }
   });
 });

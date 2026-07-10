@@ -486,6 +486,7 @@ export function createStreamableHttpTransport(config: {
   let lastEventId: string | undefined;
   const DEFAULT_RECONNECT_DELAY_MS = 1_000;
   const MAX_RECONNECT_ATTEMPTS = 5;
+  const CLOSE_SESSION_TIMEOUT_MS = 1_000;
 
   function delayBeforeReconnect(ms: number): Promise<void> {
     return new Promise<void>((resolve) => {
@@ -711,11 +712,19 @@ export function createStreamableHttpTransport(config: {
     async close() {
       const sessionIdToClose = sessionId;
       const protocolVersionToClose = protocolVersion;
+      const closeController = abortController;
       isConnected = false;
       sessionId = undefined;
       protocolVersion = undefined;
       notificationStreamStarted = false;
-      if (sessionIdToClose && abortController && !abortController.signal.aborted) {
+      abortController = undefined;
+      closeController?.abort();
+      if (sessionIdToClose) {
+        const deleteController = new AbortController();
+        const deleteTimer = setTimeout(() => {
+          deleteController.abort();
+        }, CLOSE_SESSION_TIMEOUT_MS);
+        deleteTimer.unref?.();
         await fetch(config.url, {
           method: 'DELETE',
           headers: {
@@ -723,11 +732,11 @@ export function createStreamableHttpTransport(config: {
             ...(protocolVersionToClose ? { 'MCP-Protocol-Version': protocolVersionToClose } : {}),
             'MCP-Session-Id': sessionIdToClose,
           },
-          signal: abortController.signal,
-        }).catch(() => {});
+          signal: deleteController.signal,
+        }).catch(() => {}).finally(() => {
+          clearTimeout(deleteTimer);
+        });
       }
-      abortController?.abort();
-      abortController = undefined;
     },
   };
 }

@@ -47,7 +47,12 @@
  * placeholders — see prose above).
  */
 
-import type { KodaXSessionData, KodaXSessionStorage } from '@kodax-ai/agent';
+import {
+  setKodaXDiagnosticSink,
+  type KodaXDiagnostic,
+  type KodaXSessionData,
+  type KodaXSessionStorage,
+} from '@kodax-ai/agent';
 import { describe, expect, it, vi } from 'vitest';
 
 import type { KodaXOptions, SessionErrorMetadata } from '../../types.js';
@@ -95,22 +100,29 @@ describe('CAP-013: error snapshot persistence contract', () => {
     // The original `error` (caller's) must NOT be replaced by the storage
     // rejection — `saveSessionSnapshot` returns normally and logs the
     // storage failure rather than propagating.
-    const consoleSpy = vi.spyOn(console, 'error').mockImplementation(() => {});
-    await expect(
-      saveSessionSnapshot(options, 'sid-err', {
-        messages: [{ role: 'user', content: 'hi' }],
-        title: 'Errored Session',
-        gitRoot: '/repo',
-        errorMetadata,
-      }),
-    ).resolves.toBeUndefined();
+    const diagnostics: KodaXDiagnostic[] = [];
+    const restore = setKodaXDiagnosticSink((diagnostic) => diagnostics.push(diagnostic));
+    try {
+      await expect(
+        saveSessionSnapshot(options, 'sid-err', {
+          messages: [{ role: 'user', content: 'hi' }],
+          title: 'Errored Session',
+          gitRoot: '/repo',
+          errorMetadata,
+        }),
+      ).resolves.toBeUndefined();
+    } finally {
+      restore();
+    }
 
     expect(save).toHaveBeenCalledTimes(1);
-    expect(consoleSpy).toHaveBeenCalledWith(
-      expect.stringContaining('[SessionSnapshot]'),
-      expect.any(Error),
-    );
-    consoleSpy.mockRestore();
+    expect(diagnostics).toEqual([
+      expect.objectContaining({
+        source: 'coding:session-snapshot',
+        level: 'error',
+        message: expect.stringContaining('storage.save failed'),
+      }),
+    ]);
   });
 
   it.todo('CAP-013-004: consecutiveErrors counter increments across runs (loaded from prior errorMetadata, +1 each crash) — integration test territory.');

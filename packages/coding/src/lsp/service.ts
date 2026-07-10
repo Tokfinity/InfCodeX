@@ -16,6 +16,7 @@
 
 import path from 'path';
 import { getRunScopedConfig } from '@kodax-ai/llm';
+import { emitKodaXDiagnostic } from '@kodax-ai/agent';
 import type { Diagnostic, Position } from 'vscode-languageserver-protocol';
 import { languageIdForPath } from './language.js';
 import { report } from './diagnostic.js';
@@ -380,7 +381,11 @@ export function getDefaultLspService(): LspService | undefined {
     defaultService = new LspService({
       moduleUrl: import.meta.url,
       debug: process.env.KODAX_DEBUG_LSP
-        ? (message) => process.stderr.write(`[kodax:lsp] ${message}\n`)
+        ? (message) => emitKodaXDiagnostic({
+          source: 'coding:lsp',
+          level: 'debug',
+          message,
+        })
         : undefined,
     });
     if (!exitCleanupRegistered) {

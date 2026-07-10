@@ -64,10 +64,11 @@ import { nextAgentMode } from '../common/agent-mode.js';
 import {
   clearCapabilityCache,
   compact,
+  emitKodaXDiagnostic,
   getAgentConfigHome,
   getCachedRejectedEfforts,
 } from '@kodax-ai/agent';
-import type { CompactionConfig } from '@kodax-ai/agent';
+import type { CompactionConfig, KodaXDiagnosticLevel } from '@kodax-ai/agent';
 import { loadCompactionConfig } from '../common/compaction-config.js';
 import {
   getSkillRegistry,
@@ -100,12 +101,18 @@ import {
   type CommandInvocationRequest,
   type CommandWorkflowInvocationRequest,
   type CurrentConfig,
+  type RuntimeSurfaceStatus,
 } from '../commands/types.js';
 import { registerAllCommands } from '../commands/index.js';
 import { formatWorkspaceTruth } from './workspace-runtime.js';
 
 // Re-export types needed by downstream modules.
-export type { CommandCallbacks, CurrentConfig } from '../commands/types.js';
+export type {
+  CommandCallbacks,
+  CurrentConfig,
+  RuntimeSurfaceMode,
+  RuntimeSurfaceStatus,
+} from '../commands/types.js';
 
 // Builtin commands use the shared command definition so registry metadata stays in one model.
 export type CommandHandler = RegisteredCommandHandler;
@@ -758,14 +765,15 @@ export const BUILTIN_COMMANDS: Command[] = [
     name: 'status',
     aliases: ['info', 'ctx'],
     description: 'Show current session status',
-    handler: async (args, context, _callbacks, currentConfig) => {
-      await printStatus(context, currentConfig, args);
+    handler: async (args, context, callbacks, currentConfig) => {
+      await printStatus(context, currentConfig, args, callbacks);
     },
     detailedHelp: () => {
       console.log(chalk.cyan('\n/status - Show Session Status\n'));
       console.log(chalk.bold('Usage:'));
       console.log(chalk.dim('  /status            ') + 'Display current session information');
       console.log(chalk.dim('  /status workspace  ') + 'Show deeper workspace/runtime details');
+      console.log(chalk.dim('  /status runtime    ') + 'Show SDK runtime mode, identity, and queue counters');
       console.log(chalk.dim('  /info, /ctx        ') + 'Aliases for /status');
       console.log();
       console.log(chalk.bold('Displays:'));
@@ -2549,6 +2557,7 @@ async function printStatus(
   context: InteractiveContext,
   currentConfig: CurrentConfig,
   args: string[] = [],
+  callbacks?: CommandCallbacks,
 ): Promise<void> {
   const detailMode = args[0]?.toLowerCase();
   const tokens = context.contextTokenSnapshot?.currentTokens ?? estimateTokens(context.messages);
@@ -2603,9 +2612,63 @@ async function printStatus(
       console.log(chalk.dim(`  Kind:        ${context.runtimeInfo.workspaceKind}`));
     }
   }
+  if (detailMode === 'runtime') {
+    await printRuntimeSurfaceStatus(callbacks);
+  }
   console.log(chalk.dim(`  Created:     ${context.createdAt}`));
   console.log(chalk.dim(`  Last Active: ${context.lastAccessed}`));
   console.log();
+}
+
+async function printRuntimeSurfaceStatus(callbacks: CommandCallbacks | undefined): Promise<void> {
+  if (!callbacks?.getRuntimeStatus) {
+    console.log(chalk.dim('  SDK Runtime: unavailable (host did not provide runtime status)'));
+    return;
+  }
+
+  let status: RuntimeSurfaceStatus | undefined;
+  try {
+    status = await callbacks.getRuntimeStatus();
+  } catch (error: unknown) {
+    console.log(chalk.dim(
+      `  SDK Runtime: unavailable (${error instanceof Error ? error.message : String(error)})`,
+    ));
+    return;
+  }
+
+  if (!status) {
+    console.log(chalk.dim('  SDK Runtime: unavailable'));
+    return;
+  }
+
+  console.log(chalk.dim(
+    `  SDK Runtime: ${chalk.cyan(status.mode)}  profile=${chalk.cyan(status.profile)}`,
+  ));
+  console.log(chalk.dim(`  Runtime ID:  ${status.runtimeId}`));
+  if (status.health) {
+    console.log(chalk.dim(`  Health:      ${status.health}`));
+  }
+  if (status.endpoint) {
+    console.log(chalk.dim(`  Endpoint:    ${status.endpoint}`));
+  }
+  if (status.startedAt) {
+    console.log(chalk.dim(`  Runtime Up:  ${status.startedAt}`));
+  }
+  const counters = [
+    formatRuntimeCount('sessions', status.sessions),
+    formatRuntimeCount('runs', status.runs),
+    formatRuntimeCount('active', status.activeRuns),
+    formatRuntimeCount('queued', status.queuedRuns),
+    formatRuntimeCount('pending permissions', status.pendingPermissions),
+    formatRuntimeCount('workflows', status.workflows),
+  ].filter((line): line is string => line !== undefined);
+  if (counters.length > 0) {
+    console.log(chalk.dim(`  Runtime Ctrs:${' '} ${counters.join('  ')}`));
+  }
+}
+
+function formatRuntimeCount(label: string, value: number | undefined): string | undefined {
+  return value === undefined ? undefined : `${label}=${value}`;
 }
 
 // Handle the /skill namespace command.
@@ -2821,6 +2884,30 @@ function toExtensionInvocationRequest(
   };
 }
 
+function formatDiagnosticParts(parts: readonly unknown[]): string {
+  return parts.map((part) => {
+    if (typeof part === 'string') {
+      return part;
+    }
+    if (part instanceof Error) {
+      return part.stack ?? part.message;
+    }
+    try {
+      return JSON.stringify(part);
+    } catch {
+      return String(part);
+    }
+  }).join(' ');
+}
+
+function emitCommandDiagnostic(source: string, level: KodaXDiagnosticLevel, parts: readonly unknown[]): void {
+  emitKodaXDiagnostic({
+    source,
+    level,
+    message: formatDiagnosticParts(parts),
+  });
+}
+
 async function executeExtensionCommand(
   command: ExtensionCommandDefinition,
   args: string[],
@@ -2839,10 +2926,10 @@ async function executeExtensionCommand(
     reloadExtensions: () => runtime.reloadExtensions(),
     getDiagnostics: () => getExtensionRuntimeDiagnostics(runtime),
     logger: {
-      debug: (...parts) => console.debug(`[kodax:extension-command:${command.name}]`, ...parts),
-      info: (...parts) => console.info(`[kodax:extension-command:${command.name}]`, ...parts),
-      warn: (...parts) => console.warn(`[kodax:extension-command:${command.name}]`, ...parts),
-      error: (...parts) => console.error(`[kodax:extension-command:${command.name}]`, ...parts),
+      debug: (...parts) => emitCommandDiagnostic(`repl:extension-command:${command.name}`, 'debug', parts),
+      info: (...parts) => emitCommandDiagnostic(`repl:extension-command:${command.name}`, 'info', parts),
+      warn: (...parts) => emitCommandDiagnostic(`repl:extension-command:${command.name}`, 'warn', parts),
+      error: (...parts) => emitCommandDiagnostic(`repl:extension-command:${command.name}`, 'error', parts),
     },
   });
 

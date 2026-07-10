@@ -25,6 +25,24 @@ describe('buildHostSessionPayload', () => {
     expect(payload).toHaveProperty('tag', '');
   });
 
+  it('carries runtime info so non-git cwd sessions keep a project identity', () => {
+    const payload = buildHostSessionPayload({
+      messages: [{ role: 'user', content: 'non-git request' }],
+      title: 'Non Git Session',
+      gitRoot: '',
+      runtimeInfo: {
+        executionCwd: '/mnt/c/Users/surui/tmp',
+        workspaceKind: 'detected',
+      },
+    });
+
+    expect(payload.gitRoot).toBe('');
+    expect(payload.runtimeInfo).toEqual({
+      executionCwd: '/mnt/c/Users/surui/tmp',
+      workspaceKind: 'detected',
+    });
+  });
+
   it('carries extension session state and records into host-owned persistence payloads', () => {
     const payload = buildHostSessionPayload({
       messages: [{ role: 'user', content: 'extension request' }],

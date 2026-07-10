@@ -223,6 +223,15 @@ export function withLiveTurnAttribution(
     onRepoIntelligenceTrace: (event) => {
       baseEvents.onRepoIntelligenceTrace?.(withLiveMeta(scope, event));
     },
+    onContextBudgetSnapshot: (event) => {
+      baseEvents.onContextBudgetSnapshot?.(withLiveMeta(scope, event));
+    },
+    onToolExposurePlanned: (event) => {
+      baseEvents.onToolExposurePlanned?.(withLiveMeta(scope, event));
+    },
+    onContextCompactionSkipped: (event) => {
+      baseEvents.onContextCompactionSkipped?.(withLiveMeta(scope, event));
+    },
     onSidecarMessage: (event) => {
       baseEvents.onSidecarMessage?.(withLiveMeta(scope, event));
     },

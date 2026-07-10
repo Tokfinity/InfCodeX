@@ -86,6 +86,7 @@ import {
 // `agent.ts` shim re-export — no duplicate re-export here.
 import {
   cleanupIncompleteToolCalls,
+  emitKodaXDiagnostic,
   validateAndFixToolHistory,
 } from '@kodax-ai/agent';
 // CAP-010 (`getToolExecutionOverride`) was used inline before CAP-024;
@@ -143,6 +144,13 @@ import {
   getActiveToolDefinitions,
   getRuntimeActiveToolNames,
 } from './tool-resolution.js';
+import { createRuntimeContextBudgetSnapshot } from './context-budget.js';
+import {
+  applyToolExposurePlan,
+  hasPortableToolBridge,
+  planToolExposure,
+  selectRuntimeContextOptimizationProfile,
+} from './tool-exposure-planner.js';
 // FEATURE_189 Batch 3 B.2 — progressive disclosure: read the per-context
 // unlock set on each turn so deferred tools' full descriptions surface
 // after `tool_search` runs.
@@ -153,6 +161,7 @@ import { getUnlockedDeferredTools } from '../tools/deferred-tools.js';
 import { shouldCompact, getCachedRejectedEfforts } from '@kodax-ai/agent';
 import { resolveWireEffort } from '@kodax-ai/llm';
 import { runCompactionLifecycle } from './middleware/compaction-orchestration.js';
+import { createCompactionAntiThrashState } from './middleware/compaction-pressure.js';
 import { maybeContinueAfterMaxTokens } from './max-tokens-continuation.js';
 import { maybeAutoContinueManagedProtocol } from './managed-protocol-continue.js';
 import { applyIterationLimitTerminal } from './iteration-limit-terminal.js';
@@ -172,6 +181,7 @@ import {
   runToolDispatch,
   applyPostToolProcessing,
 } from './tool-dispatch.js';
+import { buildToolResultBudgetFromUsage } from '../tools/tool-result-budget.js';
 import { repairToolBlockNames } from './tool-name-repair.js';
 import { buildReasoningExecutionState } from './reasoning-plan-entry.js';
 import { resolveContextWindow } from '@kodax-ai/agent';
@@ -413,6 +423,7 @@ export async function runSubstrate(
     costTracker: createCostTracker() as CostTracker,
     managedProtocolContinueAttempted: false,
     compactConsecutiveFailures: 0,
+    compactAntiThrash: createCompactionAntiThrashState(),
     lastText: '',
     currentProviderName: runtimeDefaults?.modelSelection.provider ?? options.provider,
     currentModelOverride: runtimeDefaults?.modelSelection.model ?? options.modelOverride ?? options.model,
@@ -726,9 +737,12 @@ export async function runSubstrate(
         systemPrompt: currentExecution.systemPrompt,
         currentTokens,
         events,
+        compactionAntiThrash: turnState.compactAntiThrash,
+        emitCompactionDiagnostics: options.context?.contextDiagnostics === true,
       });
       messages = compactionLifecycle.messages;
       turnState.compactConsecutiveFailures = compactionLifecycle.nextCompactConsecutiveFailures;
+      turnState.compactAntiThrash = compactionLifecycle.nextCompactionAntiThrash;
       if (compactionLifecycle.contextTokenSnapshot !== undefined) {
         contextTokenSnapshot = compactionLifecycle.contextTokenSnapshot;
       }
@@ -834,16 +848,53 @@ export async function runSubstrate(
       let providerMessages = messages;
       let result!: KodaXStreamResult;
       let attempt = 0;
-      const activeToolDefinitions = getActiveToolDefinitions(
+      const unlockedDeferredTools = getUnlockedDeferredTools(ctx);
+      const fullActiveToolDefinitions = getActiveToolDefinitions(
         runtimeSessionState.activeTools,
         options.context?.repoIntelligenceMode,
         options.context?.managedProtocolEmission?.enabled === true,
         !!runtime,
         options.context?.toolConstructionMode,
-        getUnlockedDeferredTools(ctx),
+        unlockedDeferredTools,
         // FEATURE_221: white-label the kodax_manual description for this product.
         options.selfManual?.productName,
       );
+      const budgetSnapshotBase = createRuntimeContextBudgetSnapshot({
+        sessionId,
+        turnId: liveTurnScope.turnId,
+        provider: turnState.currentProviderName,
+        model: turnState.currentModelOverride ?? streamProvider.getModel(),
+        profile: 'report_only',
+        contextWindow,
+        systemPrompt: effectiveSystemPrompt,
+        toolDefinitions: fullActiveToolDefinitions,
+        skillCatalogText: options.context?.skillsPrompt,
+        messages: providerMessages,
+      });
+      const contextOptimizationProfile = selectRuntimeContextOptimizationProfile(budgetSnapshotBase);
+      const budgetSnapshot = {
+        ...budgetSnapshotBase,
+        profile: contextOptimizationProfile,
+      };
+      const exposurePlan = planToolExposure({
+        tools: fullActiveToolDefinitions,
+        budget: budgetSnapshot,
+        profile: contextOptimizationProfile,
+        bridgeAvailable: hasPortableToolBridge(fullActiveToolDefinitions),
+        nativeDeferredAvailable: false,
+        unlockedDeferredTools,
+      });
+      const activeToolDefinitions = applyToolExposurePlan(
+        fullActiveToolDefinitions,
+        exposurePlan,
+      );
+      const shouldEmitContextDiagnostics =
+        options.context?.contextDiagnostics === true
+        && (events.onContextBudgetSnapshot !== undefined || events.onToolExposurePlanned !== undefined);
+      if (shouldEmitContextDiagnostics) {
+        events.onContextBudgetSnapshot?.(budgetSnapshot);
+        events.onToolExposurePlanned?.(exposurePlan);
+      }
 
       while (true) {
         attempt += 1;
@@ -1201,12 +1252,17 @@ export async function runSubstrate(
       if (stopClass === 'refused') {
         events.onTextDelta?.('\n\n[model declined to answer]\n\n');
       } else if (stopClass === 'unknown' && typeof result.stopReason === 'string') {
-        console.warn('[kodax:stop-reason]', {
-          rawStopReason: result.stopReason,
-          provider: turnState.currentProviderName,
-          model: turnState.currentModelOverride ?? streamProvider.getModel(),
-          hasToolBlocks: result.toolBlocks.length > 0,
-          hasTextBlocks: result.textBlocks.length > 0,
+        emitKodaXDiagnostic({
+          source: 'coding:stop-reason',
+          level: 'warn',
+          message: 'Provider returned an unknown stop reason.',
+          detail: {
+            rawStopReason: result.stopReason,
+            provider: turnState.currentProviderName,
+            model: turnState.currentModelOverride ?? streamProvider.getModel(),
+            hasToolBlocks: result.toolBlocks.length > 0,
+            hasTextBlocks: result.textBlocks.length > 0,
+          },
         });
       }
 
@@ -1335,6 +1391,10 @@ export async function runSubstrate(
         // the pre-FEATURE_100 inline branch).
         toolResults.push(...preToolCancelled);
       } else {
+        const toolResultBudget = buildToolResultBudgetFromUsage({
+          contextWindow,
+          currentTokens: resolveContextTokenCount(messages, contextTokenSnapshot),
+        });
         // CAP-077 + CAP-079: parallel non-bash / sequential bash dispatch
         // wrapped via the post-tool truncation guardrail.
         const resultMap = await runToolDispatch({
@@ -1344,6 +1404,7 @@ export async function runSubstrate(
           runtimeSessionState,
           activeToolNames: activeToolNamesForTurn,
           abortSignal: options.abortSignal,
+          toolResultBudget,
         });
         // CAP-078: per-result post-processing chain (mutation reflection,
         // outcome tracking, edit recovery, visibility events).

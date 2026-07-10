@@ -77,6 +77,7 @@ import {
   createKodaXRuntime,
   type KodaXRuntime,
   type RuntimeRunHandle,
+  type RuntimeRunPhase,
 } from './sdk-runtime.js';
 
 /**
@@ -176,7 +177,7 @@ interface KodaXAcpSessionState {
   permissionMode: AcpPermissionMode;
   mcpServers: McpServer[];
   alwaysAllowTools: string[];
-  activeRunId: string | null;
+  activeRunIds: Set<string>;
   contextTokenSnapshot?: KodaXContextTokenSnapshot;
   /** Runtime view used for prompts when client provides per-session MCP servers. */
   extensionRuntime?: AcpPromptExtensionRuntime;
@@ -301,13 +302,12 @@ function normalizeConfiguredExtensionPaths(value: unknown): string[] {
   );
 }
 
-async function discoverAcpDefaultExtensions(): Promise<string[]> {
+async function discoverAcpDefaultExtensions(logger: Pick<AcpLogger, 'error'>): Promise<string[]> {
   try {
     return await discoverDefaultExtensions();
   } catch (error) {
     const message = error instanceof Error ? error.message : String(error);
-    // eslint-disable-next-line no-console
-    console.warn('[kodax:acp] Extension discovery failed: ' + message);
+    logger.error('ACP extension discovery failed: ' + message);
     return [];
   }
 }
@@ -429,6 +429,12 @@ function isAbortLikeError(error: unknown): boolean {
   );
 }
 
+function acpAbortPhaseRank(phase: RuntimeRunPhase): number {
+  if (phase === 'queued') return 0;
+  if (phase === 'running' || phase === 'waiting_permission' || phase === 'waiting_user_input') return 1;
+  return 2;
+}
+
 function toAcpUsage(snapshot: KodaXContextTokenSnapshot | undefined): PromptResponse['usage'] | undefined {
   const usage = snapshot?.usage;
   if (!usage) {
@@ -460,6 +466,7 @@ export class KodaXAcpServer implements Agent {
   private readonly storage: FileSessionStorage;
   private readonly runtimeReady: Promise<KodaXRuntime>;
   private readonly ownsRuntime: boolean;
+  private readonly logger: AcpLogger;
   private readonly events: AcpEventEmitter;
   /**
    * FEATURE_153 (v0.7.38) — LLM-backed bash prefix extractor used by
@@ -504,13 +511,17 @@ export class KodaXAcpServer implements Agent {
     );
     const defaultCwd = path.resolve(options.cwd ?? process.cwd());
     const configuredExtensions = normalizeConfiguredExtensionPaths(configWithExtensions.extensions);
-    const discoveredExtensionsPromise = discoverAcpDefaultExtensions();
+    const logger = new AcpLogger({
+      level: resolveAcpLogLevel(options.logLevel ?? process.env.KODAX_ACP_LOG, 'info'),
+    });
+    const discoveredExtensionsPromise = discoverAcpDefaultExtensions(logger);
 
     this.defaultCwd = defaultCwd;
     this.hasFixedCwd = options.cwd !== undefined;
     this.agentName = options.agentName ?? 'kodax-acp-server';
     this.agentVersion = options.agentVersion ?? '0.0.0';
     this.storage = options.storage ?? new FileSessionStorage();
+    this.logger = logger;
     this.ownsRuntime = options.runtime === undefined;
     this.runtimeReady = options.runtime
       ? Promise.resolve(options.runtime)
@@ -525,9 +536,7 @@ export class KodaXAcpServer implements Agent {
     this.events = new AcpEventEmitter({
       sinks: [
         ...(options.eventSinks ?? []),
-        new AcpLogger({
-          level: resolveAcpLogLevel(options.logLevel ?? process.env.KODAX_ACP_LOG, 'info'),
-        }),
+        logger,
       ],
     });
 
@@ -564,8 +573,7 @@ export class KodaXAcpServer implements Agent {
       this.extensionRuntime = rt;
     })().catch((error) => {
       const message = error instanceof Error ? error.message : String(error);
-      // eslint-disable-next-line no-console
-      console.warn('[kodax:acp] Extension initialization failed: ' + message);
+      logger.error('ACP extension initialization failed: ' + message);
     });
   }
 
@@ -612,9 +620,7 @@ export class KodaXAcpServer implements Agent {
 
     this.disposePromise = (async () => {
       for (const session of this.sessions.values()) {
-        if (session.activeRunId) {
-          await (await this.runtimeReady).runs.abort(session.activeRunId).catch(() => undefined);
-        }
+        await this.abortSessionRuns(session);
       }
 
       const runtimes = new Set<KodaXExtensionRuntime>();
@@ -685,7 +691,7 @@ export class KodaXAcpServer implements Agent {
       permissionMode: this.defaultPermissionMode,
       mcpServers: clientMcpServers,
       alwaysAllowTools: [],
-      activeRunId: null,
+      activeRunIds: new Set(),
     };
 
     // If the client provides per-session MCP servers, keep that MCP runtime
@@ -699,8 +705,7 @@ export class KodaXAcpServer implements Agent {
         reverse: buildMcpReverseCapabilities({ cwd: session.cwd }),
       }).catch((error) => {
         const msg = error instanceof Error ? error.message : String(error);
-        // eslint-disable-next-line no-console
-        console.warn('[kodax:acp] Per-session MCP init failed for ' + sessionId + ': ' + msg);
+        this.logger.error('ACP per-session MCP init failed for ' + sessionId + ': ' + msg);
       });
       await this.extensionRuntimeReady;
       session.ownedExtensionRuntime = rt;
@@ -785,28 +790,41 @@ export class KodaXAcpServer implements Agent {
         prompt: promptText,
       });
 
+      let handle: RuntimeRunHandle | undefined;
       try {
         // Ensure MCP is initialized before the first prompt.
         if (this.extensionRuntimeReady) {
           await this.extensionRuntimeReady;
         }
         const runtime = await this.runtimeReady;
-        const handle: RuntimeRunHandle = await runtime.runs.start({
+        handle = await runtime.runs.start({
           sessionId: session.sessionId,
           prompt: promptText,
           options: this.buildKodaXOptions(session, promptEffortOverride),
         });
-        session.activeRunId = handle.runId;
+        session.activeRunIds.add(handle.runId);
         const runtimeResult = await handle.result;
         if (runtimeResult.error) {
           throw runtimeResult.error;
         }
+        const cancelled = runtimeResult.phase === 'cancelled' || runtimeResult.phase === 'interrupted';
         const result = runtimeResult.result;
         if (!result) {
+          if (cancelled) {
+            this.events.emit({
+              type: 'prompt_cancelled',
+              sessionId: session.sessionId,
+              durationMs: Date.now() - promptStartedAt,
+            });
+            return {
+              stopReason: 'cancelled',
+              userMessageId: params.messageId ?? undefined,
+            };
+          }
           throw new Error(`Runtime run ${handle.runId} ended without a coding result.`);
         }
         session.contextTokenSnapshot = result.contextTokenSnapshot;
-        const interrupted = !!result.interrupted || runtimeResult.phase === 'cancelled' || runtimeResult.phase === 'interrupted';
+        const interrupted = !!result.interrupted || cancelled;
         const stopReason = interrupted ? 'cancelled' : 'end_turn';
         this.events.emit({
           type: 'prompt_finished',
@@ -847,7 +865,9 @@ export class KodaXAcpServer implements Agent {
           userMessageId: params.messageId ?? undefined,
         };
       } finally {
-        session.activeRunId = null;
+        if (handle) {
+          session.activeRunIds.delete(handle.runId);
+        }
       }
     };
 
@@ -859,12 +879,38 @@ export class KodaXAcpServer implements Agent {
     this.events.emit({
       type: 'cancel_requested',
       sessionId: params.sessionId,
-      active: !!session?.activeRunId,
+      active: (session?.activeRunIds.size ?? 0) > 0,
     });
-    if (session?.activeRunId) {
-      const runtime = await this.runtimeReady;
-      await runtime.runs.abort(session.activeRunId);
+    if (session) {
+      await this.abortSessionRuns(session);
     }
+  }
+
+  private async abortSessionRuns(session: KodaXAcpSessionState): Promise<void> {
+    if (session.activeRunIds.size === 0) return;
+
+    const runtime = await this.runtimeReady;
+    const runIds = [...session.activeRunIds];
+    const abortTargets = await Promise.all(
+      runIds.map(async (runId) => {
+        try {
+          const status = await runtime.runs.get(runId);
+          return { runId, rank: acpAbortPhaseRank(status.phase) };
+        } catch (error) {
+          const message = error instanceof Error ? error.message : String(error);
+          this.logger.error(`ACP runtime run status lookup failed for ${runId}: ${message}`);
+          return { runId, rank: acpAbortPhaseRank('cancelled') };
+        }
+      }),
+    );
+
+    abortTargets.sort((left, right) => left.rank - right.rank);
+    await Promise.all(
+      abortTargets.map(({ runId }) => runtime.runs.abort(runId).catch((error: unknown) => {
+        const message = error instanceof Error ? error.message : String(error);
+        this.logger.error(`ACP runtime run abort failed for ${runId}: ${message}`);
+      })),
+    );
   }
 
   private requireSession(sessionId: string): KodaXAcpSessionState {

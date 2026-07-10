@@ -33,7 +33,7 @@
 
 import { join } from 'node:path';
 
-import type { WorkflowProcessSnapshot } from '@kodax-ai/agent';
+import { emitKodaXDiagnostic, type WorkflowProcessSnapshot } from '@kodax-ai/agent';
 
 import type {
   KodaXManagedProtocolPayload,
@@ -296,9 +296,16 @@ function buildWorkflowToolHost(
       : (options.agentMode !== 'amaw' && options.agentMode !== 'ama')
         ? `no-host: agentMode=${String(options.agentMode)} (need ama|amaw)`
         : 'host wired';
-    process.stderr.write(
-      `[workflow-gate] agentMode=${String(options.agentMode)} runsBaseDir=${runsBaseDir ?? '<undef>'} -> ${decision}\n`,
-    );
+    emitKodaXDiagnostic({
+      source: 'coding:workflow-gate',
+      level: 'debug',
+      message: 'Workflow host gate evaluated.',
+      detail: {
+        agentMode: options.agentMode,
+        runsBaseDir,
+        decision,
+      },
+    });
   }
   if (runsBaseDir === undefined) return undefined;
   // FEATURE_249: run_workflow host is available to AMA and AMAW (widened from the

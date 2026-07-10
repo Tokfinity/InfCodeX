@@ -4,6 +4,7 @@
 
 import type { BashPrefixExtractor } from '@kodax-ai/coding';
 import { listBuiltinToolDefinitions } from '@kodax-ai/coding';
+import { emitKodaXDiagnostic } from '@kodax-ai/agent';
 
 // ============== Permission Mode ==============
 
@@ -102,11 +103,17 @@ export const AUTO_IN_PROJECT_DEPRECATION_MSG =
  * makes the once-semantics testable without resetting module state and
  * lets the REPL own the lifecycle (one emitter per session).
  *
- * `printer` defaults to `console.warn` so the warning lands on stderr —
- * doesn't pollute piped stdout (e.g. `kodax | jq`).
+ * `printer` defaults to diagnostics so hosts can render or suppress it
+ * without writing below Ink's live region.
  */
 export function createAutoInProjectDeprecationEmitter(
-  printer: (msg: string) => void = console.warn,
+  printer: (msg: string) => void = (msg) => {
+    emitKodaXDiagnostic({
+      source: 'repl:permission',
+      level: 'warn',
+      message: msg,
+    });
+  },
 ): () => void {
   let emitted = false;
   return () => {

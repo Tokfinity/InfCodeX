@@ -8,19 +8,32 @@
 
 import { randomUUID } from 'node:crypto';
 import * as fs from 'node:fs';
+import os from 'node:os';
 import path from 'node:path';
 
 import {
+  getActiveExtensionRuntime,
   generateSessionId,
+  registerCustomProviders,
   runManagedTask,
   startKodaX,
+  validateCustomProviderConfig,
 } from '@kodax-ai/coding';
+import * as replApi from '@kodax-ai/repl';
 import type {
   AskUserAnswer,
   AskUserMultiOptions,
   AskUserQuestionOptions,
+  ExtensionCommandDefinition,
+  ExtensionRuntimeDiagnostics,
+  LoadedExtensionDiagnostic,
+  KodaXCustomProviderConfig,
   KodaXActivityEventMeta,
   KodaXEvents,
+  KodaXFileInputArtifact,
+  KodaXImageInputArtifact,
+  KodaXInputArtifact,
+  KodaXInputArtifactSource,
   KodaXMessage,
   KodaXOptions,
   KodaXReasoningMode,
@@ -31,12 +44,29 @@ import type {
   KodaXTurnCompletedEvent,
   KodaXTurnFailedEvent,
   KodaXTurnStartedEvent,
+  RuntimeContextBudgetSnapshot,
+  RuntimeToolExposurePlan,
+  KodaXVideoInputArtifact,
   RunningSession,
 } from '@kodax-ai/coding';
 import {
   createSessionManager,
+  listCustomProviders,
+  getProviderList,
+  getMcpServerConfig,
+  listMcpServers,
+  loadConfig,
+  prepareRuntimeConfig,
+  removeCustomProvider,
+  removeMcpServer,
+  saveConfig,
+  upsertCustomProvider,
+  upsertMcpServer,
+  validateMcpServerConfig,
 } from '@kodax-ai/repl';
 import type {
+  CommandInfo as ReplCommandInfo,
+  CompactSessionResult,
   DeleteSessionResult,
   FullTranscriptSessionData,
   SessionManager,
@@ -44,15 +74,103 @@ import type {
   SessionTranscriptEntry,
 } from '@kodax-ai/repl';
 import {
+  createMcpManager,
   getDefaultWorkflowRunManager,
+  initializeSkillRegistry,
 } from '@kodax-ai/agent';
 import type {
   ManagedWorkflowSnapshot,
+  McpServerConfig,
+  McpServerStatus,
+  McpServerToolList,
+  Skill,
+  SkillMetadata,
   WorkflowProcessEvent,
   WorkflowProcessSnapshot,
 } from '@kodax-ai/agent';
+import {
+  createRuntimeDaemonClient,
+  type RuntimeDaemonClientTransport,
+} from './runtime-daemon/client.js';
+import { acquireRuntimeDaemonLease } from './runtime-daemon/manager.js';
+import {
+  createRuntimeDaemonSocketClientTransport,
+  defaultRuntimeDaemonEndpoint,
+  type RuntimeDaemonEndpoint,
+} from './runtime-daemon/transport.js';
+import {
+  readRuntimeDaemonToken,
+  resolveRuntimeDaemonPaths,
+} from './runtime-daemon/state.js';
+export type { RuntimeDaemonClientTransport } from './runtime-daemon/client.js';
+export {
+  KODAX_DAEMON_PROTOCOL,
+  KODAX_DAEMON_PROTOCOL_VERSION,
+  RUNTIME_DAEMON_METHODS,
+} from './runtime-daemon/protocol.js';
+export type {
+  RuntimeDaemonError,
+  RuntimeDaemonErrorCode,
+  RuntimeDaemonFrame,
+  RuntimeDaemonMethod,
+  RuntimeDaemonNotification,
+  RuntimeDaemonNotificationMethod,
+  RuntimeDaemonRequest,
+} from './runtime-daemon/protocol.js';
+export {
+  RUNTIME_DAEMON_METHOD_SCHEMAS,
+  RUNTIME_DAEMON_NOTIFICATION_SCHEMAS,
+  RUNTIME_DAEMON_PROTOCOL_SCHEMA,
+  RUNTIME_DAEMON_PROTOCOL_SCHEMA_JSON,
+  listRuntimeDaemonSchemaMethods,
+} from './runtime-daemon/schema.js';
+export type {
+  RuntimeDaemonJsonSchema,
+  RuntimeDaemonMethodSchema,
+  RuntimeDaemonProtocolSchema,
+} from './runtime-daemon/schema.js';
+export type { RuntimeDaemonEndpoint } from './runtime-daemon/transport.js';
+export type {
+  RuntimeContextBudgetSnapshot,
+  RuntimeToolExposurePlan,
+} from '@kodax-ai/coding';
 
-export type KodaXRuntimeMode = 'embedded';
+export type KodaXRuntimeMode = 'embedded' | 'daemon';
+
+type ReplRuntimeConfigPatch = Parameters<typeof saveConfig>[0];
+
+const RUNTIME_CONFIG_PATCH_KEYS = [
+  'provider',
+  'model',
+  'effort',
+  'planModeEffort',
+  'thinking',
+  'reasoningMode',
+  'agentMode',
+  'permissionMode',
+  'locale',
+  'providerModels',
+  'extensions',
+  'repoIntelligenceMode',
+  'repoIntelligenceTrace',
+  'verifierLog',
+  'stallLog',
+  'fallbackProviders',
+  'fastProvider',
+  'fastModel',
+  'deepProvider',
+  'deepModel',
+  'maxOutputTokens',
+  'disablePromptCache',
+  'lsp',
+  'lspAutoDownload',
+  'acpLogLevel',
+  'sessionRetentionDays',
+  'repoIntelligence',
+  'workflow',
+] as const satisfies readonly (keyof ReplRuntimeConfigPatch)[];
+
+type RuntimeConfigPatchKey = typeof RUNTIME_CONFIG_PATCH_KEYS[number];
 
 export interface RuntimeIdentity {
   readonly runtimeId: string;
@@ -60,6 +178,22 @@ export interface RuntimeIdentity {
   readonly profile: string;
   readonly startedAt: string;
   readonly version: string;
+}
+
+export interface RuntimeClientInfo {
+  readonly name: string;
+  readonly title?: string;
+  readonly version?: string;
+}
+
+export interface RuntimeClientCapabilities {
+  readonly richEvents?: boolean;
+  readonly permissionPrompts?: boolean;
+  readonly configAdmin?: boolean;
+  readonly commandCatalog?: boolean;
+  readonly skillCatalog?: boolean;
+  readonly artifactUpload?: boolean;
+  readonly contextDiagnostics?: boolean;
 }
 
 export interface CreateKodaXRuntimeOptions {
@@ -70,6 +204,39 @@ export interface CreateKodaXRuntimeOptions {
   readonly defaultProvider?: string;
   readonly defaultModel?: string;
   readonly permissionTimeoutMs?: number;
+  readonly daemonTransport?: RuntimeDaemonClientTransport;
+  readonly daemonEndpoint?: string | RuntimeDaemonEndpoint;
+  /** Defaults to true for daemon mode unless a transport or endpoint is supplied. */
+  readonly autoStartDaemon?: boolean;
+  readonly daemonToken?: string;
+  readonly clientInfo?: RuntimeClientInfo;
+  readonly capabilities?: RuntimeClientCapabilities;
+}
+
+export interface ConnectKodaXRuntimeOptions {
+  readonly profile?: string;
+  /** Attach-only by default; set true to start or reuse the local profile daemon. */
+  readonly autoStart?: boolean;
+  readonly endpoint?: string | RuntimeDaemonEndpoint;
+  readonly transport?: RuntimeDaemonClientTransport;
+  readonly homeDir?: string;
+  readonly sessionsDir?: string;
+  readonly defaultProvider?: string;
+  readonly defaultModel?: string;
+  readonly permissionTimeoutMs?: number;
+  readonly daemonToken?: string;
+  readonly clientInfo?: RuntimeClientInfo;
+  readonly capabilities?: RuntimeClientCapabilities;
+}
+
+export interface RuntimeDiagnosticFilter {
+  readonly sessionId?: string;
+  readonly runId?: string;
+}
+
+export interface RuntimeDiagnosticsService {
+  latestContextBudget(filter?: RuntimeDiagnosticFilter): Promise<RuntimeContextBudgetSnapshot | null>;
+  latestToolExposure(filter?: RuntimeDiagnosticFilter): Promise<RuntimeToolExposurePlan | null>;
 }
 
 export interface KodaXRuntime {
@@ -79,8 +246,174 @@ export interface KodaXRuntime {
   readonly events: RuntimeEventService;
   readonly permissions: RuntimePermissionService;
   readonly workflows: RuntimeWorkflowService;
+  readonly config: RuntimeConfigService;
+  readonly catalog: RuntimeCatalogService;
+  readonly mcp: RuntimeMcpService;
+  readonly artifacts: RuntimeArtifactService;
   readonly status: RuntimeStatusService;
+  readonly diagnostics: RuntimeDiagnosticsService;
   close(): Promise<void>;
+}
+
+export type RuntimeConfigPatch = Partial<Pick<ReplRuntimeConfigPatch, RuntimeConfigPatchKey>>;
+
+export interface RuntimeConfigReloadResult {
+  readonly ok: true;
+  readonly config: unknown;
+}
+
+export interface RuntimeConfigService {
+  read(): Promise<unknown>;
+  patch(patch: RuntimeConfigPatch): Promise<unknown>;
+  reload(): Promise<RuntimeConfigReloadResult>;
+}
+
+export interface RuntimeModelListFilter {
+  readonly provider?: string;
+}
+
+export interface RuntimeCommandResolveInput {
+  readonly name: string;
+  readonly projectRoot?: string;
+}
+
+export interface RuntimeCommandInfo {
+  readonly name: string;
+  readonly aliases?: readonly string[];
+  readonly description: string;
+  readonly source: ReplCommandInfo['source'];
+  readonly usage?: string;
+  readonly argumentHint?: string;
+  readonly location?: ReplCommandInfo['location'];
+  readonly path?: string;
+  readonly userInvocable?: boolean;
+  readonly disableModelInvocation?: boolean;
+  readonly allowedTools?: string;
+  readonly context?: 'fork';
+  readonly agent?: string;
+  readonly model?: string;
+}
+
+export interface RuntimeSkillListFilter {
+  readonly projectRoot?: string;
+  readonly userInvocableOnly?: boolean;
+}
+
+export interface RuntimeSkillDescribeInput {
+  readonly name: string;
+  readonly projectRoot?: string;
+}
+
+export interface RuntimeSkillFileSummary {
+  readonly name: string;
+  readonly path: string;
+  readonly relativePath: string;
+}
+
+export interface RuntimeSkillSummary {
+  readonly name: string;
+  readonly description: string;
+  readonly userInvocable: boolean;
+  readonly argumentHint?: string;
+  readonly path: string;
+  readonly source: SkillMetadata['source'];
+  readonly disableModelInvocation: boolean;
+}
+
+export interface RuntimeSkillDescription extends RuntimeSkillSummary {
+  readonly content: string;
+  readonly skillFilePath: string;
+  readonly scripts?: readonly RuntimeSkillFileSummary[];
+  readonly references?: readonly RuntimeSkillFileSummary[];
+  readonly assets?: readonly RuntimeSkillFileSummary[];
+  readonly templates?: readonly RuntimeSkillFileSummary[];
+  readonly resources?: readonly RuntimeSkillFileSummary[];
+}
+
+export interface RuntimeExtensionReloadResult {
+  readonly ok: true;
+  readonly active: boolean;
+  readonly diagnostics?: ExtensionRuntimeDiagnostics;
+}
+
+export interface RuntimeExtensionListResult {
+  readonly active: boolean;
+  readonly extensions: readonly LoadedExtensionDiagnostic[];
+  readonly diagnostics?: ExtensionRuntimeDiagnostics;
+}
+
+export interface RuntimeCatalogService {
+  providers(): Promise<unknown>;
+  models(filter?: RuntimeModelListFilter): Promise<unknown>;
+  commands(projectRoot?: string): Promise<readonly RuntimeCommandInfo[]>;
+  resolveCommand(input: RuntimeCommandResolveInput): Promise<RuntimeCommandInfo | null>;
+  skills(filter?: RuntimeSkillListFilter): Promise<readonly RuntimeSkillSummary[]>;
+  describeSkill(input: RuntimeSkillDescribeInput): Promise<RuntimeSkillDescription | null>;
+  customProviders(): Promise<readonly KodaXCustomProviderConfig[]>;
+  upsertCustomProvider(config: KodaXCustomProviderConfig): Promise<KodaXCustomProviderConfig>;
+  deleteCustomProvider(name: string): Promise<boolean>;
+  extensions(): Promise<RuntimeExtensionListResult>;
+  reloadExtensions(): Promise<RuntimeExtensionReloadResult>;
+}
+
+export interface RuntimeMcpToolListFilter {
+  readonly server?: string;
+  readonly forceRefresh?: boolean;
+}
+
+export interface RuntimeMcpReloadResult {
+  readonly ok: true;
+  readonly servers: readonly McpServerStatus[];
+}
+
+export type RuntimeMcpValidateResult =
+  | {
+    readonly ok: true;
+    readonly config: McpServerConfig;
+  }
+  | {
+    readonly ok: false;
+    readonly error: string;
+  };
+
+export interface RuntimeMcpService {
+  listServers(): Promise<Record<string, McpServerConfig>>;
+  getServer(name: string): Promise<McpServerConfig | undefined>;
+  validateServer(name: string, config: unknown): Promise<RuntimeMcpValidateResult>;
+  upsertServer(name: string, config: McpServerConfig): Promise<McpServerConfig>;
+  deleteServer(name: string): Promise<boolean>;
+  reloadServers(): Promise<RuntimeMcpReloadResult>;
+  listTools(filter?: RuntimeMcpToolListFilter): Promise<readonly McpServerToolList[]>;
+}
+
+export type RuntimeArtifactKind = 'image' | 'file' | 'video';
+
+export interface RuntimeCreateArtifactInput {
+  readonly kind: RuntimeArtifactKind;
+  readonly path: string;
+  readonly mediaType?: string;
+  readonly mimeType?: string;
+  readonly name?: string;
+  readonly source?: KodaXInputArtifactSource;
+  readonly description?: string;
+}
+
+export interface RuntimeArtifact {
+  readonly id: string;
+  readonly kind: RuntimeArtifactKind;
+  readonly path: string;
+  readonly mediaType?: string;
+  readonly mimeType?: string;
+  readonly name?: string;
+  readonly source?: KodaXInputArtifactSource;
+  readonly description?: string;
+  readonly createdAt: string;
+}
+
+export interface RuntimeArtifactService {
+  create(input: RuntimeCreateArtifactInput): Promise<RuntimeArtifact>;
+  get(artifactId: string): Promise<RuntimeArtifact | undefined>;
+  delete(artifactId: string): Promise<boolean>;
 }
 
 export interface RuntimeCreateSessionInput {
@@ -128,12 +461,69 @@ export interface RuntimeForkSessionInput {
   readonly title?: string;
 }
 
+export interface RuntimeSessionSettings {
+  readonly provider?: string;
+  readonly model?: string;
+  readonly effort?: KodaXOptions['effort'];
+  readonly thinking?: boolean;
+  readonly reasoningMode?: KodaXReasoningMode;
+  readonly permissionMode?: string;
+  readonly executionCwd?: string;
+}
+
+export interface RuntimeSessionSettingsPatch {
+  readonly provider?: string | null;
+  readonly model?: string | null;
+  readonly effort?: KodaXOptions['effort'] | null;
+  readonly thinking?: boolean | null;
+  readonly reasoningMode?: KodaXReasoningMode | null;
+  readonly permissionMode?: string | null;
+  readonly executionCwd?: string | null;
+}
+
+export interface RuntimeAppendNoticeInput {
+  readonly sessionId: string;
+  readonly content: string;
+  readonly source?: string;
+}
+
+export interface RuntimeRewindSessionInput {
+  readonly sessionId: string;
+  readonly selector?: string;
+}
+
+export interface RuntimeSetActiveEntryInput {
+  readonly sessionId: string;
+  readonly entryId: string;
+}
+
+export interface RuntimeCompactSessionInput {
+  readonly sessionId: string;
+  readonly provider?: string;
+  readonly model?: string;
+  readonly customInstructions?: string;
+  readonly contextWindow?: number;
+}
+
+export interface RuntimeCompactSessionResult extends CompactSessionResult {
+  readonly session?: RuntimeSession;
+}
+
 export interface RuntimeSessionService {
   create(input?: RuntimeCreateSessionInput): Promise<RuntimeSession>;
   load(sessionId: string): Promise<RuntimeSession>;
   list(filter?: RuntimeSessionFilter): Promise<readonly RuntimeSessionSummary[]>;
   transcript(sessionId: string): Promise<RuntimeTranscript | null>;
   fork(input: RuntimeForkSessionInput): Promise<RuntimeSession | null>;
+  getSettings(sessionId: string): Promise<RuntimeSessionSettings>;
+  updateSettings(
+    sessionId: string,
+    patch: RuntimeSessionSettingsPatch,
+  ): Promise<RuntimeSessionSettings>;
+  appendNotice(input: RuntimeAppendNoticeInput): Promise<SessionTranscriptEntry | null>;
+  rewind(input: RuntimeRewindSessionInput): Promise<RuntimeSession | null>;
+  setActiveEntry(input: RuntimeSetActiveEntryInput): Promise<RuntimeSession | null>;
+  compact(input: RuntimeCompactSessionInput): Promise<RuntimeCompactSessionResult>;
   archive(sessionId: string): Promise<void>;
   unarchive(sessionId: string): Promise<void>;
   delete(sessionId: string): Promise<void>;
@@ -156,10 +546,50 @@ export interface RuntimeTextInput {
   readonly text: string;
 }
 
+export interface RuntimeImageInput {
+  readonly type: 'image';
+  readonly path: string;
+  readonly mediaType?: KodaXImageInputArtifact['mediaType'];
+  readonly source?: KodaXInputArtifactSource;
+  readonly description?: string;
+}
+
+export interface RuntimeFileInput {
+  readonly type: 'file';
+  readonly path: string;
+  readonly mediaType?: string;
+  readonly mimeType?: string;
+  readonly name?: string;
+  readonly source?: KodaXInputArtifactSource;
+  readonly description?: string;
+}
+
+export interface RuntimeVideoInput {
+  readonly type: 'video';
+  readonly path: string;
+  readonly mediaType: KodaXVideoInputArtifact['mediaType'];
+  readonly name?: string;
+  readonly source?: KodaXInputArtifactSource;
+  readonly description?: string;
+}
+
+export interface RuntimeArtifactRefInput {
+  readonly type: 'artifact_ref';
+  readonly artifactId: string;
+  readonly description?: string;
+}
+
+export type RuntimeInput =
+  | RuntimeTextInput
+  | RuntimeImageInput
+  | RuntimeFileInput
+  | RuntimeVideoInput
+  | RuntimeArtifactRefInput;
+
 export interface RuntimeStartRunInput {
   readonly sessionId: string;
   readonly prompt?: string;
-  readonly input?: RuntimeTextInput;
+  readonly input?: RuntimeInput | readonly RuntimeInput[];
   readonly mode?: RuntimeRunMode;
   readonly options?: RuntimeKodaXOptions;
 }
@@ -207,6 +637,7 @@ export interface RuntimeRunFilter {
 
 export interface RuntimeRunService {
   start(input: RuntimeStartRunInput): Promise<RuntimeRunHandle>;
+  await(runId: string): Promise<RuntimeRunResult>;
   get(runId: string): Promise<RuntimeRunStatus>;
   list(filter?: RuntimeRunFilter): Promise<readonly RuntimeRunStatus[]>;
   abort(runId: string): Promise<void>;
@@ -218,19 +649,45 @@ export interface RuntimeRunService {
 export type RuntimeEventType =
   | 'session.created'
   | 'session.loaded'
+  | 'session.settings.updated'
+  | 'session.notice.appended'
+  | 'session.rewound'
+  | 'session.active_entry.updated'
+  | 'session.compacted'
   | 'run.queued'
   | 'run.started'
+  | 'run.progress'
   | 'turn.started'
+  | 'turn.completed'
+  | 'turn.failed'
   | 'assistant.delta'
   | 'thinking.delta'
+  | 'thinking.finished'
   | 'tool.started'
   | 'tool.progress'
   | 'tool.finished'
+  | 'user_input.requested'
+  | 'user_input.resolved'
   | 'permission.requested'
   | 'permission.resolved'
   | 'workflow.started'
   | 'workflow.updated'
   | 'workflow.finished'
+  | 'context.compaction.started'
+  | 'context.compaction.stats'
+  | 'context.compaction.finished'
+  | 'context.compaction.messages'
+  | 'context.compaction.ended'
+  | 'context.compaction.skipped'
+  | 'context.budget.snapshot'
+  | 'tool.exposure.planned'
+  | 'child_activity.finished'
+  | 'provider.retry'
+  | 'provider.recovery'
+  | 'repo_intelligence.trace'
+  | 'todo.updated'
+  | 'todo.warning'
+  | 'sidecar.message'
   | 'run.completed'
   | 'run.failed'
   | 'run.cancelled'
@@ -319,10 +776,18 @@ export interface RuntimePermissionFilter {
   readonly toolName?: string;
 }
 
+export interface RuntimePermissionRespondOptions {
+  readonly runId?: string;
+}
+
 export interface RuntimePermissionService {
   request(input: RuntimePermissionRequestInput): Promise<RuntimePermissionDecision>;
   listPending(filter?: RuntimePermissionFilter): Promise<readonly RuntimePermissionRequest[]>;
-  respond(requestId: string, decision: RuntimePermissionDecision): Promise<boolean>;
+  respond(
+    requestId: string,
+    decision: RuntimePermissionDecision,
+    options?: RuntimePermissionRespondOptions,
+  ): Promise<boolean>;
 }
 
 type RuntimePermissionToolDecision = boolean | string;
@@ -374,8 +839,10 @@ interface RuntimeRunRecord {
   endedAt?: string;
   provider: string;
   model?: string;
+  permissionMode?: string;
   reasoning?: KodaXReasoningMode;
   error?: string;
+  readonly result: Promise<RuntimeRunResult>;
   running?: RunningSession;
   abortController?: AbortController;
   mode: RuntimeRunMode;
@@ -391,9 +858,15 @@ interface PendingPermission {
 
 type RuntimeEventBus = ReturnType<typeof createRuntimeEventBus>;
 type RuntimePermissionRegistry = ReturnType<typeof createRuntimePermissionRegistry>;
+type RuntimeArtifactStore = ReturnType<typeof createRuntimeArtifactStore>;
+
+interface RuntimeRunServiceInternal extends RuntimeRunService {
+  closeAll(reason: string): void;
+}
 
 interface PendingRunStart {
   readonly prompt: string;
+  readonly inputArtifacts: readonly KodaXInputArtifact[];
   readonly options: RuntimeKodaXOptions;
   readonly resolve: (result: RuntimeRunResult) => void;
 }
@@ -403,16 +876,41 @@ interface RuntimePersistence {
   appendEvent(event: RuntimeEvent): void;
   replay(filter?: RuntimeEventReplayFilter): readonly RuntimeEvent[];
   saveRunStatus(status: RuntimeRunStatus): void;
+  loadRunStatus(runId: string): RuntimeRunStatus | undefined;
   loadRunStatuses(): readonly RuntimeRunStatus[];
+  loadSessionSettings(sessionId: string): RuntimeSessionSettings;
+  saveSessionSettings(sessionId: string, settings: RuntimeSessionSettings): void;
 }
 
 const DEFAULT_PERMISSION_TIMEOUT_MS = 5 * 60_000;
+const MAX_RUNTIME_MEMORY_EVENTS = 10_000;
+const MAX_RUNTIME_MEMORY_RUNS = 1_000;
+const RUNTIME_ARTIFACT_KINDS: ReadonlySet<string> = new Set(['image', 'file', 'video']);
 
 export async function createKodaXRuntime(
   options: CreateKodaXRuntimeOptions = {},
 ): Promise<KodaXRuntime> {
+  if (options.mode === 'daemon') {
+    return connectKodaXRuntime({
+      profile: options.profile,
+      transport: options.daemonTransport,
+      endpoint: options.daemonEndpoint,
+      autoStart: options.autoStartDaemon ?? (
+        options.daemonTransport === undefined
+        && options.daemonEndpoint === undefined
+      ),
+      homeDir: options.homeDir,
+      sessionsDir: options.sessionsDir,
+      defaultProvider: options.defaultProvider,
+      defaultModel: options.defaultModel,
+      permissionTimeoutMs: options.permissionTimeoutMs,
+      daemonToken: options.daemonToken,
+      clientInfo: options.clientInfo,
+      capabilities: options.capabilities,
+    });
+  }
   if (options.mode !== undefined && options.mode !== 'embedded') {
-    throw new Error(`Unsupported KodaX runtime mode: ${options.mode}`);
+    throw new Error(`Unsupported KodaX runtime mode: ${String(options.mode)}`);
   }
 
   const identity: RuntimeIdentity = {
@@ -422,18 +920,24 @@ export async function createKodaXRuntime(
     startedAt: new Date().toISOString(),
     version: process.env.KODAX_VERSION ?? '0.0.0',
   };
+  const sessionsDir = resolveRuntimeSessionsDir(options);
   const sessionManager = createSessionManager(
-    options.sessionsDir ? { sessionsDir: options.sessionsDir } : undefined,
+    sessionsDir ? { sessionsDir } : undefined,
   );
+  const configFile = resolveRuntimeConfigFile(options);
+  registerRuntimeConfiguredCustomProviders(configFile);
   const persistence = createRuntimePersistence(options);
   const bus = createRuntimeEventBus(persistence);
   const permissions = createRuntimePermissionRegistry(
     bus,
     options.permissionTimeoutMs ?? DEFAULT_PERMISSION_TIMEOUT_MS,
   );
+  const artifacts = createRuntimeArtifactStore();
+  const workflows = createRuntimeWorkflowService();
   const runs = new Map<string, RuntimeRunRecord>();
-  for (const status of persistence.loadRunStatuses()) {
-    runs.set(status.runId, recordFromPersistedStatus(status));
+  for (const status of recentRunStatuses(persistence.loadRunStatuses())) {
+    const recovered = interruptPersistedNonTerminalRun(status, bus, persistence);
+    runs.set(recovered.runId, recordFromPersistedStatus(recovered));
   }
   let closed = false;
 
@@ -443,40 +947,43 @@ export async function createKodaXRuntime(
     }
   };
 
+  const runService = createRuntimeRunService({
+    bus,
+    defaultModel: options.defaultModel,
+    defaultProvider: options.defaultProvider,
+    ensureOpen,
+    isClosed: () => closed,
+    artifacts,
+    permissions,
+    persistence,
+    runs,
+    sessionManager,
+  });
+
   const runtime: KodaXRuntime = {
     identity,
-    sessions: createRuntimeSessionService(sessionManager, bus, ensureOpen),
-    runs: createRuntimeRunService({
-      bus,
-      defaultModel: options.defaultModel,
-      defaultProvider: options.defaultProvider,
-      ensureOpen,
-      isClosed: () => closed,
-      permissions,
-      persistence,
-      runs,
-      sessionManager,
-    }),
+    sessions: createRuntimeSessionService(sessionManager, bus, persistence, ensureOpen),
+    runs: runService,
     events: bus.service,
     permissions: permissions.service,
-    workflows: createRuntimeWorkflowService(),
+    workflows,
+    config: createRuntimeConfigService(ensureOpen, configFile),
+    catalog: createRuntimeCatalogService(ensureOpen, configFile),
+    mcp: createRuntimeMcpService(ensureOpen, configFile),
+    artifacts: artifacts.service,
     status: createRuntimeStatusService({
       identity,
       permissions,
       runs,
       sessionManager,
-      workflows: createRuntimeWorkflowService(),
+      workflows,
     }),
+    diagnostics: createRuntimeDiagnosticsService(bus.service),
     async close() {
       if (closed) return;
       closed = true;
-      for (const run of runs.values()) {
-        if (run.phase === 'queued' || run.phase === 'running' || run.phase === 'waiting_permission') {
-          run.running?.abort(new Error('runtime closed'));
-          run.abortController?.abort(new Error('runtime closed'));
-          markRunTerminal(bus, persistence, run, 'cancelled');
-        }
-      }
+      runService.closeAll('runtime closed');
+      permissions.rejectAll('runtime closed');
       bus.close();
     },
   };
@@ -484,9 +991,108 @@ export async function createKodaXRuntime(
   return runtime;
 }
 
+export async function connectKodaXRuntime(
+  options: ConnectKodaXRuntimeOptions = {},
+): Promise<KodaXRuntime> {
+  const explicitEndpoint = options.endpoint !== undefined
+    ? normalizeRuntimeDaemonEndpoint(options.endpoint)
+    : undefined;
+  const lease = options.transport === undefined && options.autoStart === true
+    ? await acquireRuntimeDaemonLease({
+        homeDir: options.homeDir,
+        profile: options.profile,
+        endpoint: explicitEndpoint,
+        createRuntime: () => createKodaXRuntime({
+          mode: 'embedded',
+          homeDir: options.homeDir,
+          profile: options.profile,
+          sessionsDir: options.sessionsDir,
+          defaultProvider: options.defaultProvider,
+          defaultModel: options.defaultModel,
+          permissionTimeoutMs: options.permissionTimeoutMs,
+        }),
+      })
+    : undefined;
+  const endpoint = explicitEndpoint
+    ?? lease?.endpoint
+    ?? (
+      options.transport === undefined
+        ? defaultRuntimeDaemonEndpoint(
+            options.profile ?? 'default',
+            path.resolve(options.homeDir ?? os.homedir()),
+          )
+        : undefined
+    );
+  const transport = options.transport
+    ?? lease?.transport
+    ?? (
+      endpoint !== undefined
+        ? await createRuntimeDaemonSocketClientTransport(endpoint)
+        : undefined
+    );
+  if (!transport) {
+    throw new Error(
+      'connectKodaXRuntime requires a daemon transport, endpoint, or autoStart: true.',
+    );
+  }
+  const token = resolveConnectDaemonToken(options);
+  const initialized = requireRuntimeRecord(
+    await transport.request('initialize', {
+      profile: options.profile ?? 'default',
+      autoStart: options.autoStart === true,
+      ...(token !== undefined ? { token } : {}),
+      ...(options.clientInfo !== undefined ? { clientInfo: options.clientInfo } : {}),
+      ...(options.capabilities !== undefined ? { capabilities: options.capabilities } : {}),
+      ...(endpoint !== undefined
+        ? { endpoint: endpoint.path }
+        : {}),
+    }),
+  );
+  const identity = parseRuntimeIdentity(initialized.identity);
+  const expectedProfile = options.profile ?? 'default';
+  if (identity.profile !== expectedProfile) {
+    await lease?.close();
+    throw new Error(
+      `Runtime daemon profile mismatch: expected ${expectedProfile}, got ${identity.profile}`,
+    );
+  }
+  const runtime = createRuntimeDaemonClient({
+    identity: { ...identity, mode: 'daemon' },
+    transport,
+  });
+  if (!lease) return runtime;
+  return {
+    ...runtime,
+    async close() {
+      await runtime.close();
+      await lease.close();
+    },
+  };
+}
+
+function resolveConnectDaemonToken(options: ConnectKodaXRuntimeOptions): string | undefined {
+  if (options.daemonToken !== undefined) return options.daemonToken;
+  if (options.transport !== undefined && options.autoStart !== true) return undefined;
+  const homeDir = path.resolve(options.homeDir ?? os.homedir());
+  return readRuntimeDaemonToken(resolveRuntimeDaemonPaths(homeDir, options.profile ?? 'default'));
+}
+
+function normalizeRuntimeDaemonEndpoint(
+  endpoint: string | RuntimeDaemonEndpoint,
+): RuntimeDaemonEndpoint {
+  if (typeof endpoint !== 'string') return endpoint;
+  return {
+    kind: process.platform === 'win32' || endpoint.startsWith('\\\\.\\pipe\\')
+      ? 'pipe'
+      : 'unix',
+    path: endpoint,
+  };
+}
+
 function createRuntimeSessionService(
   manager: SessionManager,
   bus: RuntimeEventBus,
+  persistence: RuntimePersistence,
   ensureOpen: () => void,
 ): RuntimeSessionService {
   const toRuntimeSession = (
@@ -572,6 +1178,104 @@ function createRuntimeSessionService(
       return session;
     },
 
+    async getSettings(sessionId) {
+      ensureOpen();
+      await loadRequiredSession(manager, sessionId);
+      return persistence.loadSessionSettings(sessionId);
+    },
+
+    async updateSettings(sessionId, patch) {
+      ensureOpen();
+      const sessionData = await loadRequiredSession(manager, sessionId);
+      const current = persistence.loadSessionSettings(sessionId);
+      const settings = applySessionSettingsPatch(current, patch);
+      assertSessionSettingsAllowed(sessionData, settings);
+      persistence.saveSessionSettings(sessionId, settings);
+      bus.emit('session.settings.updated', {
+        sessionId,
+        settings,
+        patch,
+      }, { sessionId, runId: sessionId });
+      return settings;
+    },
+
+    async appendNotice(input) {
+      ensureOpen();
+      const entry = await manager.appendClientNotice(input.sessionId, {
+        content: input.content,
+        ...(input.source !== undefined ? { source: input.source } : {}),
+      });
+      if (entry) {
+        bus.emit('session.notice.appended', {
+          sessionId: input.sessionId,
+          entry,
+        }, { sessionId: input.sessionId, runId: input.sessionId });
+      }
+      return entry;
+    },
+
+    async rewind(input) {
+      ensureOpen();
+      const data = await manager.rewindSession(input.sessionId, {
+        ...(input.selector !== undefined ? { selector: input.selector } : {}),
+      });
+      if (!data) return null;
+      const session = toRuntimeSession(input.sessionId, data);
+      bus.emit('session.rewound', {
+        sessionId: input.sessionId,
+        selector: input.selector,
+        session,
+      }, { sessionId: input.sessionId, runId: input.sessionId });
+      return session;
+    },
+
+    async setActiveEntry(input) {
+      ensureOpen();
+      const data = await manager.setActiveEntry(input.sessionId, input.entryId);
+      if (!data) return null;
+      const session = toRuntimeSession(input.sessionId, data);
+      bus.emit('session.active_entry.updated', {
+        sessionId: input.sessionId,
+        entryId: input.entryId,
+        session,
+      }, { sessionId: input.sessionId, runId: input.sessionId });
+      return session;
+    },
+
+    async compact(input) {
+      ensureOpen();
+      const result = await manager.compactSession(input.sessionId, {
+        ...(input.provider !== undefined ? { provider: input.provider } : {}),
+        ...(input.model !== undefined ? { model: input.model } : {}),
+        ...(input.customInstructions !== undefined ? { customInstructions: input.customInstructions } : {}),
+        ...(input.contextWindow !== undefined ? { contextWindow: input.contextWindow } : {}),
+      });
+      const loaded = await manager.loadSession(input.sessionId);
+      const session = loaded ? toRuntimeSession(input.sessionId, loaded) : undefined;
+      bus.emit('context.compaction.finished', {
+        sessionId: input.sessionId,
+        compacted: result.compacted,
+        tokensBefore: result.tokensBefore,
+        tokensAfter: result.tokensAfter,
+        ...(result.reason !== undefined ? { reason: result.reason } : {}),
+      }, { sessionId: input.sessionId, runId: input.sessionId });
+      if (result.compacted) {
+        bus.emit('session.compacted', {
+          sessionId: input.sessionId,
+          result: {
+            compacted: result.compacted,
+            tokensBefore: result.tokensBefore,
+            tokensAfter: result.tokensAfter,
+          },
+          ...(session !== undefined ? { session } : {}),
+        }, { sessionId: input.sessionId, runId: input.sessionId });
+      }
+      return {
+        ...result,
+        ...(session !== undefined ? { session } : {}),
+      };
+    },
+
     async archive(sessionId) {
       ensureOpen();
       const ok = await manager.archiveSession(sessionId);
@@ -593,6 +1297,7 @@ function createRuntimeSessionService(
 }
 
 function createRuntimeRunService(deps: {
+  readonly artifacts: RuntimeArtifactStore;
   readonly bus: RuntimeEventBus;
   readonly defaultModel?: string;
   readonly defaultProvider?: string;
@@ -602,7 +1307,7 @@ function createRuntimeRunService(deps: {
   readonly persistence: RuntimePersistence;
   readonly runs: Map<string, RuntimeRunRecord>;
   readonly sessionManager: SessionManager;
-}): RuntimeRunService {
+}): RuntimeRunServiceInternal {
   const activeRunBySession = new Map<string, string>();
   const queueBySession = new Map<string, string[]>();
 
@@ -614,14 +1319,54 @@ function createRuntimeRunService(deps: {
     return run;
   };
 
+  const releaseActiveRun = (record: RuntimeRunRecord): void => {
+    if (activeRunBySession.get(record.sessionId) === record.runId) {
+      activeRunBySession.delete(record.sessionId);
+    }
+  };
+
+  const resolveRunStart = (record: RuntimeRunRecord, result: RuntimeRunResult): void => {
+    record.start?.resolve(result);
+    record.start = undefined;
+  };
+
+  const finishRun = (record: RuntimeRunRecord, result: RuntimeRunResult): RuntimeRunResult => {
+    deps.permissions.rejectForRun(record.runId, 'runtime run ended');
+    resolveRunStart(record, result);
+    releaseActiveRun(record);
+    pruneTerminalRuns(deps.runs);
+    drainNext(record.sessionId);
+    return result;
+  };
+
+  const cancelRun = (
+    record: RuntimeRunRecord,
+    reason: string,
+    drain: boolean,
+  ): RuntimeRunResult => {
+    if (record.phase === 'queued') {
+      removeQueuedRun(queueBySession, record);
+    }
+    record.running?.abort(new Error(reason));
+    record.abortController?.abort(new Error(reason));
+    deps.permissions.rejectForRun(record.runId, reason);
+    markRunTerminal(deps.bus, deps.persistence, record, 'cancelled');
+    const result: RuntimeRunResult = {
+      runId: record.runId,
+      sessionId: record.sessionId,
+      phase: record.phase,
+    };
+    resolveRunStart(record, result);
+    releaseActiveRun(record);
+    if (drain && !deps.isClosed()) {
+      drainNext(record.sessionId);
+    }
+    return result;
+  };
+
   const startRecord = (record: RuntimeRunRecord): void => {
     if (!record.start || deps.isClosed()) {
-      markRunTerminal(deps.bus, deps.persistence, record, 'cancelled');
-      record.start?.resolve({
-        runId: record.runId,
-        sessionId: record.sessionId,
-        phase: record.phase,
-      });
+      cancelRun(record, 'runtime closed', false);
       return;
     }
     record.phase = 'running';
@@ -631,6 +1376,7 @@ function createRuntimeRunService(deps: {
       sessionId: record.sessionId,
       runId: record.runId,
     });
+    deps.persistence.saveRunStatus(statusFromRecord(record));
 
     const events = wrapKodaXEvents({
       bus: deps.bus,
@@ -646,14 +1392,21 @@ function createRuntimeRunService(deps: {
       record,
       sessionManager: deps.sessionManager,
     });
-    const finish = (result: RuntimeRunResult): RuntimeRunResult => {
-      record.start?.resolve(result);
-      record.start = undefined;
-      activeRunBySession.delete(record.sessionId);
-      drainNext(record.sessionId);
-      return result;
-    };
-
+    deps.bus.emit('config.effective', {
+      sessionId: record.sessionId,
+      runId: record.runId,
+      provider: record.provider,
+      ...(record.model !== undefined ? { model: record.model } : {}),
+      ...(runOptions.effort !== undefined ? { effort: runOptions.effort } : {}),
+      ...(runOptions.thinking !== undefined ? { thinking: runOptions.thinking } : {}),
+      ...(runOptions.reasoningMode !== undefined ? { reasoningMode: runOptions.reasoningMode } : {}),
+      ...(record.permissionMode !== undefined ? { permissionMode: record.permissionMode } : {}),
+      ...(runOptions.context?.executionCwd !== undefined ? { executionCwd: runOptions.context.executionCwd } : {}),
+    }, {
+      sessionId: record.sessionId,
+      runId: record.runId,
+      ...(record.turnId !== undefined ? { turnId: record.turnId } : {}),
+    });
     if (record.mode === 'managed_task') {
       const abortController = new AbortController();
       record.abortController = abortController;
@@ -685,7 +1438,7 @@ function createRuntimeRunService(deps: {
           markRunTerminal(deps.bus, deps.persistence, record, phase);
           return { runId: record.runId, sessionId: record.sessionId, phase: record.phase, error: normalized };
         })
-        .then(finish);
+        .then((result) => finishRun(record, result));
       return;
     }
 
@@ -708,7 +1461,7 @@ function createRuntimeRunService(deps: {
         markRunTerminal(deps.bus, deps.persistence, record, phase);
         return { runId: record.runId, sessionId: record.sessionId, phase: record.phase, error: normalized };
       })
-      .then(finish);
+      .then((result) => finishRun(record, result));
   };
 
   const drainNext = (sessionId: string): void => {
@@ -733,17 +1486,24 @@ function createRuntimeRunService(deps: {
       sessionId: record.sessionId,
       runId: record.runId,
     });
+    deps.persistence.saveRunStatus(statusFromRecord(record));
   };
 
   return {
     async start(input) {
       deps.ensureOpen();
-      const prompt = resolveRuntimePrompt(input);
+      const normalizedInput = normalizeRuntimeRunInput(input, deps.artifacts);
       const session = await deps.sessionManager.loadSession(input.sessionId);
       if (!session) {
         throw new Error(`Session not found: ${input.sessionId}`);
       }
-      const options = input.options ?? {};
+      const settings = deps.persistence.loadSessionSettings(input.sessionId);
+      assertSessionSettingsAllowed(session, settings);
+      const options = buildEffectiveRuntimeOptions(
+        input.options ?? {},
+        settings,
+        normalizedInput.inputArtifacts,
+      );
       const provider = options.provider ?? deps.defaultProvider;
       if (!provider) {
         throw new Error('runtime.runs.start requires input.options.provider or runtime defaultProvider');
@@ -764,10 +1524,13 @@ function createRuntimeRunService(deps: {
         ...(isQueued ? { queuedAt: startedAt } : {}),
         provider,
         ...(model !== undefined ? { model } : {}),
+        ...(settings.permissionMode !== undefined ? { permissionMode: settings.permissionMode } : {}),
         ...(options.reasoningMode !== undefined ? { reasoning: options.reasoningMode } : {}),
         mode: input.mode ?? 'coding',
+        result,
         start: {
-          prompt,
+          prompt: normalizedInput.prompt,
+          inputArtifacts: normalizedInput.inputArtifacts,
           options,
           resolve: resolveResult,
         },
@@ -790,9 +1553,22 @@ function createRuntimeRunService(deps: {
       };
     },
 
+    async await(runId) {
+      deps.ensureOpen();
+      const run = deps.runs.get(runId);
+      if (run) return run.result;
+      const persisted = deps.persistence.loadRunStatus(runId);
+      if (persisted) return resultFromStatus(persisted);
+      throw new Error(`Runtime run not found: ${runId}`);
+    },
+
     async get(runId) {
       deps.ensureOpen();
-      return statusFromRecord(getRecord(runId));
+      const run = deps.runs.get(runId);
+      if (run) return statusFromRecord(run);
+      const persisted = deps.persistence.loadRunStatus(runId);
+      if (persisted) return persisted;
+      throw new Error(`Runtime run not found: ${runId}`);
     },
 
     async list(filter) {
@@ -805,17 +1581,9 @@ function createRuntimeRunService(deps: {
     async abort(runId) {
       deps.ensureOpen();
       const run = getRecord(runId);
-      if (run.phase === 'queued') {
-        removeQueuedRun(queueBySession, run);
-        markRunTerminal(deps.bus, deps.persistence, run, 'cancelled');
-        run.start?.resolve({ runId, sessionId: run.sessionId, phase: run.phase });
-        run.start = undefined;
-        return;
+      if (run.phase === 'queued' || isActiveRunPhase(run.phase)) {
+        cancelRun(run, 'runtime run aborted', true);
       }
-      if (!isActiveRunPhase(run.phase)) return;
-      run.running?.abort(new Error('runtime run aborted'));
-      run.abortController?.abort(new Error('runtime run aborted'));
-      markRunTerminal(deps.bus, deps.persistence, run, 'cancelled');
     },
 
     async setModel(runId, model) {
@@ -837,6 +1605,16 @@ function createRuntimeRunService(deps: {
       const run = getRecord(runId);
       run.reasoning = reasoning;
       run.running?.setReasoning(reasoning);
+    },
+
+    closeAll(reason) {
+      for (const run of deps.runs.values()) {
+        if (run.phase === 'queued' || isActiveRunPhase(run.phase)) {
+          cancelRun(run, reason, false);
+        }
+      }
+      activeRunBySession.clear();
+      queueBySession.clear();
     },
   };
 }
@@ -876,6 +1654,251 @@ function createRuntimeWorkflowService(): RuntimeWorkflowService {
     async stop(runId) {
       return manager.stop(runId);
     },
+  };
+}
+
+function createRuntimeConfigService(
+  ensureOpen: () => void,
+  configFile: string | undefined,
+): RuntimeConfigService {
+  return {
+    async read() {
+      ensureOpen();
+      return redactRuntimeConfig(readRuntimeConfig(configFile));
+    },
+
+    async patch(patch) {
+      ensureOpen();
+      assertPlainObject(patch, 'runtime.config.patch');
+      patchRuntimeConfig(configFile, sanitizeRuntimeConfigPatch(patch));
+      return redactRuntimeConfig(readRuntimeConfig(configFile));
+    },
+
+    async reload() {
+      ensureOpen();
+      if (configFile !== undefined) {
+        registerRuntimeConfiguredCustomProviders(configFile);
+        return {
+          ok: true,
+          config: redactRuntimeConfig(readRuntimeConfig(configFile)),
+        };
+      }
+      return {
+        ok: true,
+        config: redactRuntimeConfig(prepareRuntimeConfig()),
+      };
+    },
+  };
+}
+
+function createRuntimeCatalogService(
+  ensureOpen: () => void,
+  configFile: string | undefined,
+): RuntimeCatalogService {
+  return {
+    async providers() {
+      ensureOpen();
+      return getProviderList();
+    },
+
+    async models(filter) {
+      ensureOpen();
+      return listRuntimeModels(getProviderList(), filter);
+    },
+
+    async commands(projectRoot) {
+      ensureOpen();
+      return listRuntimeCommands(projectRoot);
+    },
+
+    async resolveCommand(input) {
+      ensureOpen();
+      const normalized = input.name.trim().toLowerCase();
+      return listRuntimeCommands(input.projectRoot).find((command) => (
+        command.name.trim().toLowerCase() === normalized
+        || (command.aliases ?? []).some((alias) => alias.trim().toLowerCase() === normalized)
+      )) ?? null;
+    },
+
+    async skills(filter) {
+      ensureOpen();
+      const registry = await initializeSkillRegistry(filter?.projectRoot);
+      const skills = filter?.userInvocableOnly === true
+        ? registry.listUserInvocable()
+        : registry.list();
+      return skills.map(toRuntimeSkillSummary);
+    },
+
+    async describeSkill(input) {
+      ensureOpen();
+      const registry = await initializeSkillRegistry(input.projectRoot);
+      if (!registry.has(input.name)) return null;
+      return toRuntimeSkillDescription(await registry.loadFull(input.name));
+    },
+
+    async customProviders() {
+      ensureOpen();
+      return listRuntimeCustomProviders(configFile);
+    },
+
+    async upsertCustomProvider(config) {
+      ensureOpen();
+      return upsertRuntimeCustomProvider(configFile, config);
+    },
+
+    async deleteCustomProvider(name) {
+      ensureOpen();
+      return removeRuntimeCustomProvider(configFile, name);
+    },
+
+    async extensions() {
+      ensureOpen();
+      const runtime = getActiveExtensionRuntime();
+      if (!runtime) {
+        return { active: false, extensions: [] };
+      }
+      const diagnostics = runtime.getDiagnostics();
+      return {
+        active: true,
+        extensions: diagnostics.loadedExtensions,
+        diagnostics,
+      };
+    },
+
+    async reloadExtensions() {
+      ensureOpen();
+      const runtime = getActiveExtensionRuntime();
+      if (!runtime) {
+        return { ok: true, active: false };
+      }
+      await runtime.reloadExtensions({ continueOnError: true });
+      return {
+        ok: true,
+        active: true,
+        diagnostics: runtime.getDiagnostics(),
+      };
+    },
+  };
+}
+
+function createRuntimeMcpService(
+  ensureOpen: () => void,
+  configFile: string | undefined,
+): RuntimeMcpService {
+  return {
+    async listServers() {
+      ensureOpen();
+      return listRuntimeMcpServers(configFile);
+    },
+
+    async getServer(name) {
+      ensureOpen();
+      return getRuntimeMcpServer(configFile, name);
+    },
+
+    async validateServer(name, config) {
+      ensureOpen();
+      try {
+        validateMcpServerConfig(name, config as McpServerConfig);
+        return {
+          ok: true,
+          config: structuredClone(config as McpServerConfig),
+        };
+      } catch (error: unknown) {
+        return {
+          ok: false,
+          error: error instanceof Error ? error.message : String(error),
+        };
+      }
+    },
+
+    async upsertServer(name, config) {
+      ensureOpen();
+      return upsertRuntimeMcpServer(configFile, name, config);
+    },
+
+    async deleteServer(name) {
+      ensureOpen();
+      return removeRuntimeMcpServer(configFile, name);
+    },
+
+    async reloadServers() {
+      ensureOpen();
+      const manager = createMcpManager(listRuntimeMcpServers(configFile));
+      try {
+        return {
+          ok: true,
+          servers: manager.listServers(),
+        };
+      } finally {
+        await manager.dispose();
+      }
+    },
+
+    async listTools(filter) {
+      ensureOpen();
+      const servers = listRuntimeMcpServers(configFile);
+      const names = filter?.server !== undefined ? [filter.server] : Object.keys(servers);
+      const manager = createMcpManager(servers);
+      try {
+        const result: McpServerToolList[] = [];
+        for (const name of names) {
+          result.push(await manager.listTools(name, {
+            forceRefresh: filter?.forceRefresh === true,
+          }));
+        }
+        return result;
+      } finally {
+        await manager.dispose();
+      }
+    },
+  };
+}
+
+function createRuntimeArtifactStore() {
+  const artifacts = new Map<string, RuntimeArtifact>();
+
+  const resolve = (artifactId: string): RuntimeArtifact => {
+    const artifact = artifacts.get(artifactId);
+    if (!artifact) {
+      throw new Error(`Runtime artifact not found: ${artifactId}`);
+    }
+    return artifact;
+  };
+
+  const service: RuntimeArtifactService = {
+    async create(input) {
+      if (!isRuntimeArtifactKind(input.kind)) {
+        throw new Error(`Unsupported runtime artifact kind: ${String(input.kind)}`);
+      }
+      const id = `art_${randomUUID().replace(/-/g, '').slice(0, 12)}`;
+      const artifact: RuntimeArtifact = {
+        id,
+        kind: input.kind,
+        path: path.resolve(input.path),
+        ...(input.mediaType !== undefined ? { mediaType: input.mediaType } : {}),
+        ...(input.mimeType !== undefined ? { mimeType: input.mimeType } : {}),
+        ...(input.name !== undefined ? { name: input.name } : {}),
+        ...(input.source !== undefined ? { source: input.source } : {}),
+        ...(input.description !== undefined ? { description: input.description } : {}),
+        createdAt: new Date().toISOString(),
+      };
+      artifacts.set(id, artifact);
+      return artifact;
+    },
+
+    async get(artifactId) {
+      return artifacts.get(artifactId);
+    },
+
+    async delete(artifactId) {
+      return artifacts.delete(artifactId);
+    },
+  };
+
+  return {
+    service,
+    resolve,
   };
 }
 
@@ -925,6 +1948,42 @@ function createRuntimeStatusService(deps: {
   };
 }
 
+function createRuntimeDiagnosticsService(
+  events: RuntimeEventService,
+): RuntimeDiagnosticsService {
+  return {
+    latestContextBudget(filter) {
+      return latestRuntimeDiagnosticPayload<RuntimeContextBudgetSnapshot>(
+        events,
+        'context.budget.snapshot',
+        filter,
+      );
+    },
+    latestToolExposure(filter) {
+      return latestRuntimeDiagnosticPayload<RuntimeToolExposurePlan>(
+        events,
+        'tool.exposure.planned',
+        filter,
+      );
+    },
+  };
+}
+
+async function latestRuntimeDiagnosticPayload<T>(
+  events: RuntimeEventService,
+  type: RuntimeEventType,
+  filter: RuntimeDiagnosticFilter | undefined,
+): Promise<T | null> {
+  const replayFilter: RuntimeEventReplayFilter = {
+    type,
+    limit: 100,
+    ...(filter?.sessionId !== undefined ? { sessionId: filter.sessionId } : {}),
+    ...(filter?.runId !== undefined ? { runId: filter.runId } : {}),
+  };
+  const replay = await events.replay(replayFilter);
+  return (replay.at(-1)?.payload as T | undefined) ?? null;
+}
+
 function isActiveRunPhase(phase: RuntimeRunPhase): boolean {
   return phase === 'running'
     || phase === 'waiting_permission'
@@ -960,6 +2019,13 @@ function createRuntimeEventBus(persistence: RuntimePersistence) {
       if (!types.includes(event.type)) return false;
     }
     return true;
+  };
+
+  const remember = (event: RuntimeEvent): void => {
+    events.push(event);
+    if (events.length > MAX_RUNTIME_MEMORY_EVENTS) {
+      events.splice(0, events.length - MAX_RUNTIME_MEMORY_EVENTS);
+    }
   };
 
   const service: RuntimeEventService = {
@@ -1005,7 +2071,8 @@ function createRuntimeEventBus(persistence: RuntimePersistence) {
         payload,
       };
       nextSeq += 1;
-      events.push(event);
+      remember(event);
+      const notifyEvents: RuntimeEvent[] = [event];
       try {
         persistence.appendEvent(event);
       } catch (error: unknown) {
@@ -1023,11 +2090,14 @@ function createRuntimeEventBus(persistence: RuntimePersistence) {
           },
         };
         nextSeq += 1;
-        events.push(warning);
+        remember(warning);
+        notifyEvents.push(warning);
       }
       for (const subscriber of subscribers) {
-        if (matches(event, subscriber.filter)) {
-          subscriber.listener(event);
+        for (const emitted of notifyEvents) {
+          if (matches(emitted, subscriber.filter)) {
+            subscriber.listener(emitted);
+          }
         }
       }
       return event;
@@ -1047,19 +2117,79 @@ function createRuntimePersistence(options: CreateKodaXRuntimeOptions): RuntimePe
       : process.cwd();
   const runtimeDir = path.join(baseDir, '.kodax', 'runtime');
   const runsDir = path.join(runtimeDir, 'runs');
+  const sessionSettingsDir = path.join(runtimeDir, 'session-settings');
 
   const runDir = (runId: string): string => path.join(runsDir, encodeURIComponent(runId));
   const eventFile = (runId: string): string => path.join(runDir(runId), 'events.jsonl');
   const statusFile = (runId: string): string => path.join(runDir(runId), 'status.json');
+  const sessionSettingsFile = (sessionId: string): string =>
+    path.join(sessionSettingsDir, `${encodeURIComponent(sessionId)}.json`);
+  const persistenceWarnings: RuntimeEvent[] = [];
+  const persistenceWarningKeys = new Set<string>();
+  let nextPersistenceWarningSeq = 1;
 
-  const readEventsFromFile = (file: string): RuntimeEvent[] => {
+  const pushPersistenceWarning = (
+    key: string,
+    message: string,
+    scope: { readonly runId?: string; readonly sessionId?: string; readonly file?: string },
+  ): void => {
+    if (persistenceWarningKeys.has(key)) return;
+    persistenceWarningKeys.add(key);
+    const event: RuntimeEvent = {
+      id: `evt_persist_warn_${nextPersistenceWarningSeq}_${randomUUID().replace(/-/g, '').slice(0, 8)}`,
+      seq: nextPersistenceWarningSeq,
+      time: new Date().toISOString(),
+      sessionId: scope.sessionId ?? 'runtime',
+      runId: scope.runId ?? scope.sessionId ?? 'runtime',
+      type: 'runtime.warning',
+      payload: {
+        source: 'runtime.persistence',
+        message,
+        ...(scope.file !== undefined ? { file: scope.file } : {}),
+      },
+    };
+    nextPersistenceWarningSeq += 1;
+    persistenceWarnings.push(event);
+    if (persistenceWarnings.length > MAX_RUNTIME_MEMORY_EVENTS) {
+      persistenceWarnings.splice(0, persistenceWarnings.length - MAX_RUNTIME_MEMORY_EVENTS);
+    }
+  };
+
+  const withPersistenceWarnings = (
+    events: readonly RuntimeEvent[],
+    filter: RuntimeEventReplayFilter | undefined,
+  ): readonly RuntimeEvent[] => (
+    [...events, ...persistenceWarnings]
+      .filter((event) => eventMatchesReplayFilter(event, filter))
+      .sort((a, b) => a.time.localeCompare(b.time) || a.seq - b.seq)
+  );
+
+  const readEventsFromFile = (file: string, runId?: string): RuntimeEvent[] => {
     if (!fs.existsSync(file)) return [];
     const content = fs.readFileSync(file, 'utf-8');
     const events: RuntimeEvent[] = [];
-    for (const line of content.split(/\r?\n/)) {
+    const lines = content.split(/\r?\n/);
+    for (let i = 0; i < lines.length; i += 1) {
+      const line = lines[i] ?? '';
       if (!line.trim()) continue;
-      const parsed = JSON.parse(line) as RuntimeEvent;
-      events.push(parsed);
+      try {
+        const parsed: unknown = JSON.parse(line);
+        if (isRuntimeEvent(parsed)) {
+          events.push(parsed);
+        } else {
+          pushPersistenceWarning(
+            `${file}:${i + 1}:shape`,
+            `Skipped malformed runtime event record at ${path.basename(file)}:${i + 1}`,
+            { runId, file },
+          );
+        }
+      } catch (error: unknown) {
+        pushPersistenceWarning(
+          `${file}:${i + 1}:parse`,
+          `Skipped malformed runtime event record at ${path.basename(file)}:${i + 1}: ${normalizeError(error).message}`,
+          { runId, file },
+        );
+      }
     }
     return events;
   };
@@ -1073,22 +2203,41 @@ function createRuntimePersistence(options: CreateKodaXRuntimeOptions): RuntimePe
     },
     replay(filter) {
       if (filter?.runId) {
-        return readEventsFromFile(eventFile(filter.runId)).filter((event) => eventMatchesReplayFilter(event, filter));
+        return withPersistenceWarnings(readEventsFromFile(eventFile(filter.runId), filter.runId), filter);
       }
-      if (!fs.existsSync(runsDir)) return [];
+      if (!fs.existsSync(runsDir)) return withPersistenceWarnings([], filter);
       const result: RuntimeEvent[] = [];
       for (const entry of fs.readdirSync(runsDir, { withFileTypes: true })) {
         if (!entry.isDirectory()) continue;
-        result.push(...readEventsFromFile(path.join(runsDir, entry.name, 'events.jsonl')));
+        result.push(...readEventsFromFile(path.join(runsDir, entry.name, 'events.jsonl'), entry.name));
       }
-      return result
-        .filter((event) => eventMatchesReplayFilter(event, filter))
-        .sort((a, b) => a.time.localeCompare(b.time) || a.seq - b.seq);
+      return withPersistenceWarnings(result, filter);
     },
     saveRunStatus(status) {
       const dir = runDir(status.runId);
       fs.mkdirSync(dir, { recursive: true });
       fs.writeFileSync(statusFile(status.runId), JSON.stringify(status, null, 2), 'utf-8');
+    },
+    loadRunStatus(runId) {
+      const file = statusFile(runId);
+      if (!fs.existsSync(file)) return undefined;
+      try {
+        const status = parseRuntimeRunStatus(JSON.parse(fs.readFileSync(file, 'utf-8')));
+        if (status) return status;
+        pushPersistenceWarning(
+          `${file}:shape`,
+          `Skipped malformed runtime status record at ${path.basename(file)}`,
+          { runId, file },
+        );
+        return undefined;
+      } catch (error: unknown) {
+        pushPersistenceWarning(
+          `${file}:parse`,
+          `Skipped malformed runtime status record at ${path.basename(file)}: ${normalizeError(error).message}`,
+          { runId, file },
+        );
+        return undefined;
+      }
     },
     loadRunStatuses() {
       if (!fs.existsSync(runsDir)) return [];
@@ -1097,12 +2246,66 @@ function createRuntimePersistence(options: CreateKodaXRuntimeOptions): RuntimePe
         if (!entry.isDirectory()) continue;
         const file = path.join(runsDir, entry.name, 'status.json');
         if (!fs.existsSync(file)) continue;
-        const parsed = JSON.parse(fs.readFileSync(file, 'utf-8')) as RuntimeRunStatus;
-        statuses.push(parsed);
+        try {
+          const parsed: unknown = JSON.parse(fs.readFileSync(file, 'utf-8'));
+          const status = parseRuntimeRunStatus(parsed);
+          if (status) {
+            statuses.push(status);
+          } else {
+            pushPersistenceWarning(
+              `${file}:shape`,
+              `Skipped malformed runtime status record at ${path.basename(file)}`,
+              { runId: entry.name, file },
+            );
+          }
+        } catch (error: unknown) {
+          pushPersistenceWarning(
+            `${file}:parse`,
+            `Skipped malformed runtime status record at ${path.basename(file)}: ${normalizeError(error).message}`,
+            { runId: entry.name, file },
+          );
+        }
       }
       return statuses;
     },
+    loadSessionSettings(sessionId) {
+      const file = sessionSettingsFile(sessionId);
+      if (!fs.existsSync(file)) return {};
+      try {
+        const parsed: unknown = JSON.parse(fs.readFileSync(file, 'utf-8'));
+        return parseRuntimeSessionSettings(parsed);
+      } catch (error: unknown) {
+        pushPersistenceWarning(
+          `${file}:parse`,
+          `Skipped malformed runtime session settings at ${path.basename(file)}: ${normalizeError(error).message}`,
+          { sessionId, file },
+        );
+        return {};
+      }
+    },
+    saveSessionSettings(sessionId, settings) {
+      fs.mkdirSync(sessionSettingsDir, { recursive: true });
+      const serialized = serializeSessionSettings(settings);
+      const file = sessionSettingsFile(sessionId);
+      if (Object.keys(serialized).length === 0) {
+        if (fs.existsSync(file)) fs.unlinkSync(file);
+        return;
+      }
+      fs.writeFileSync(file, JSON.stringify(serialized, null, 2), 'utf-8');
+    },
   };
+}
+
+function resolveRuntimeSessionsDir(
+  options: Pick<CreateKodaXRuntimeOptions, 'homeDir' | 'sessionsDir'>,
+): string | undefined {
+  if (options.sessionsDir !== undefined) {
+    return path.resolve(options.sessionsDir);
+  }
+  if (options.homeDir !== undefined) {
+    return path.join(path.resolve(options.homeDir), '.kodax', 'sessions');
+  }
+  return undefined;
 }
 
 function eventMatchesReplayFilter(
@@ -1120,6 +2323,53 @@ function eventMatchesReplayFilter(
   return true;
 }
 
+function isRuntimeEvent(value: unknown): value is RuntimeEvent {
+  if (!isRecord(value)) return false;
+  return typeof value.id === 'string'
+    && typeof value.seq === 'number'
+    && typeof value.time === 'string'
+    && typeof value.sessionId === 'string'
+    && typeof value.runId === 'string'
+    && typeof value.type === 'string'
+    && 'payload' in value;
+}
+
+function parseRuntimeRunStatus(value: unknown): RuntimeRunStatus | undefined {
+  if (!isRecord(value)) return undefined;
+  if (
+    typeof value.runId !== 'string'
+    || typeof value.sessionId !== 'string'
+    || !isRuntimeRunPhase(value.phase)
+    || typeof value.startedAt !== 'string'
+    || typeof value.provider !== 'string'
+  ) {
+    return undefined;
+  }
+  return {
+    runId: value.runId,
+    sessionId: value.sessionId,
+    ...(typeof value.turnId === 'string' ? { turnId: value.turnId } : {}),
+    phase: value.phase,
+    startedAt: value.startedAt,
+    ...(typeof value.endedAt === 'string' ? { endedAt: value.endedAt } : {}),
+    provider: value.provider,
+    ...(typeof value.model === 'string' ? { model: value.model } : {}),
+    ...(typeof value.reasoning === 'string' ? { reasoning: value.reasoning as KodaXReasoningMode } : {}),
+    ...(typeof value.error === 'string' ? { error: value.error } : {}),
+  };
+}
+
+function isRuntimeRunPhase(value: unknown): value is RuntimeRunPhase {
+  return value === 'queued'
+    || value === 'running'
+    || value === 'waiting_permission'
+    || value === 'waiting_user_input'
+    || value === 'completed'
+    || value === 'failed'
+    || value === 'cancelled'
+    || value === 'interrupted';
+}
+
 function recordFromPersistedStatus(status: RuntimeRunStatus): RuntimeRunRecord {
   return {
     runId: status.runId,
@@ -1133,8 +2383,38 @@ function recordFromPersistedStatus(status: RuntimeRunStatus): RuntimeRunRecord {
     ...(status.reasoning !== undefined ? { reasoning: status.reasoning } : {}),
     ...(status.error !== undefined ? { error: status.error } : {}),
     mode: 'coding',
+    result: Promise.resolve(resultFromStatus(status)),
     terminalEmitted: isTerminalRunPhase(status.phase),
   };
+}
+
+function interruptPersistedNonTerminalRun(
+  status: RuntimeRunStatus,
+  bus: RuntimeEventBus,
+  persistence: RuntimePersistence,
+): RuntimeRunStatus {
+  if (isTerminalRunPhase(status.phase)) return status;
+  const reason = status.phase === 'queued' ? 'daemon_restarted' : 'daemon_crashed';
+  const recovered: RuntimeRunStatus = {
+    ...status,
+    phase: 'interrupted',
+    endedAt: new Date().toISOString(),
+    error: reason,
+  };
+  persistence.saveRunStatus(recovered);
+  bus.emit('run.interrupted', recovered, {
+    sessionId: recovered.sessionId,
+    runId: recovered.runId,
+    ...(recovered.turnId !== undefined ? { turnId: recovered.turnId } : {}),
+  });
+  return recovered;
+}
+
+function resolvePermissionTimeoutMs(expiresAt: string | undefined, fallbackMs: number): number {
+  if (expiresAt === undefined) return fallbackMs;
+  const expiresAtMs = Date.parse(expiresAt);
+  if (!Number.isFinite(expiresAtMs)) return 1;
+  return Math.max(1, expiresAtMs - Date.now());
 }
 
 function createRuntimePermissionRegistry(bus: RuntimeEventBus, defaultTimeoutMs: number) {
@@ -1151,13 +2431,22 @@ function createRuntimePermissionRegistry(bus: RuntimeEventBus, defaultTimeoutMs:
     const response = new Promise<RuntimePermissionDecision>((resolve) => {
       resolveResponse = resolve;
     });
-    const created = createPendingPermission(request, [resolveResponse], timeoutMs);
+    const created = createPendingPermission(
+      request,
+      [resolveResponse],
+      resolvePermissionTimeoutMs(request.expiresAt, timeoutMs),
+    );
     return { request: created, response };
   };
 
-  const resolvePending = (requestId: string, decision: RuntimePermissionDecision): boolean => {
+  const resolvePending = (
+    requestId: string,
+    decision: RuntimePermissionDecision,
+    expectedRunId?: string,
+  ): boolean => {
     const item = pending.get(requestId);
     if (!item) return false;
+    if (expectedRunId !== undefined && item.request.runId !== expectedRunId) return false;
     pending.delete(requestId);
     if (item.timer) clearTimeout(item.timer);
     for (const resolve of item.waiters) resolve(decision);
@@ -1167,6 +2456,18 @@ function createRuntimePermissionRegistry(bus: RuntimeEventBus, defaultTimeoutMs:
       ...(item.request.turnId !== undefined ? { turnId: item.request.turnId } : {}),
     });
     return true;
+  };
+
+  const resolveMatching = (
+    predicate: (request: RuntimePermissionRequest) => boolean,
+    decision: RuntimePermissionDecision,
+  ): void => {
+    const ids = [...pending.values()]
+      .filter((item) => predicate(item.request))
+      .map((item) => item.request.id);
+    for (const id of ids) {
+      resolvePending(id, decision);
+    }
   };
 
   const service: RuntimePermissionService = {
@@ -1191,15 +2492,19 @@ function createRuntimePermissionRegistry(bus: RuntimeEventBus, defaultTimeoutMs:
         .filter((request) => permissionMatchesFilter(request, filter));
     },
 
-    async respond(requestId, decision) {
-      return resolvePending(requestId, decision);
+    async respond(requestId, decision, options) {
+      return resolvePending(requestId, decision, options?.runId);
     },
   };
 
   return {
     service,
     track(request: Omit<RuntimePermissionRequest, 'id' | 'createdAt'>): RuntimePermissionRequest {
-      const created = createPendingPermission(request, []);
+      const created = createPendingPermission(
+        request,
+        [],
+        resolvePermissionTimeoutMs(request.expiresAt, defaultTimeoutMs),
+      );
       return created;
     },
     trackAndWait(
@@ -1210,6 +2515,18 @@ function createRuntimePermissionRegistry(bus: RuntimeEventBus, defaultTimeoutMs:
     },
     resolve(requestId: string, decision: RuntimePermissionDecision): void {
       resolvePending(requestId, decision);
+    },
+    rejectForRun(runId: string, reason: string): void {
+      resolveMatching(
+        (request) => request.runId === runId,
+        { type: 'reject', reason },
+      );
+    },
+    rejectAll(reason: string): void {
+      resolveMatching(
+        () => true,
+        { type: 'reject', reason },
+      );
     },
   };
 
@@ -1240,6 +2557,7 @@ function createRuntimePermissionRegistry(bus: RuntimeEventBus, defaultTimeoutMs:
           });
         }, timeoutMs)
       : undefined;
+    timer?.unref?.();
     pending.set(created.id, {
       request: created,
       waiters,
@@ -1273,6 +2591,40 @@ function wrapKodaXEvents(input: {
   ): void => {
     bus.emit(type, payload, scopeFromMeta(meta));
   };
+  const runWithUserInputPhase = async <T>(
+    kind: 'askUser' | 'askUserMulti' | 'askUserInput',
+    options: unknown,
+    meta: KodaXToolEventMeta | undefined,
+    execute: () => Promise<T>,
+  ): Promise<T> => {
+    const requestId = `input_${randomUUID().replace(/-/g, '').slice(0, 12)}`;
+    const previousPhase = record.phase;
+    if (record.phase === 'running') {
+      record.phase = 'waiting_user_input';
+    }
+    emit('user_input.requested', { requestId, kind, options }, meta);
+    try {
+      const answer = await execute();
+      emit('user_input.resolved', {
+        requestId,
+        kind,
+        status: answer === undefined ? 'dismissed' : 'answered',
+      }, meta);
+      return answer;
+    } catch (error: unknown) {
+      emit('user_input.resolved', {
+        requestId,
+        kind,
+        status: 'failed',
+        error: normalizeError(error).message,
+      }, meta);
+      throw error;
+    } finally {
+      if (record.phase === 'waiting_user_input') {
+        record.phase = previousPhase;
+      }
+    }
+  };
 
   return {
     ...original,
@@ -1283,6 +2635,10 @@ function wrapKodaXEvents(input: {
     onThinkingDelta(text, meta) {
       emit('thinking.delta', { text, meta }, meta);
       original?.onThinkingDelta?.(text, meta);
+    },
+    onThinkingEnd(thinking, meta) {
+      emit('thinking.finished', { thinking, meta }, meta);
+      original?.onThinkingEnd?.(thinking, meta);
     },
     onToolUseStart(tool, meta) {
       emit('tool.started', { tool, meta }, meta);
@@ -1299,6 +2655,14 @@ function wrapKodaXEvents(input: {
     onToolResult(result, meta) {
       emit('tool.finished', { result, meta }, meta);
       original?.onToolResult?.(result, meta);
+    },
+    onStreamEnd(meta) {
+      emit('run.progress', { kind: 'stream_end', meta }, meta);
+      original?.onStreamEnd?.(meta);
+    },
+    onChildActivityEnd(meta) {
+      emit('child_activity.finished', { meta }, meta);
+      original?.onChildActivityEnd?.(meta);
     },
     onSessionStart(info) {
       record.provider = info.provider;
@@ -1319,10 +2683,110 @@ function wrapKodaXEvents(input: {
       original?.onTurnStarted?.(event);
     },
     onTurnCompleted(event) {
+      bus.emit('turn.completed', event, {
+        sessionId: event.sessionId,
+        runId: record.runId,
+        turnId: event.turnId,
+      });
       original?.onTurnCompleted?.(event);
     },
     onTurnFailed(event) {
+      bus.emit('turn.failed', event, {
+        sessionId: event.sessionId,
+        runId: record.runId,
+        turnId: event.turnId,
+      });
       original?.onTurnFailed?.(event);
+    },
+    onIterationStart(iter, maxIter, meta) {
+      emit('run.progress', { kind: 'iteration_start', iter, maxIter, meta }, meta);
+      original?.onIterationStart?.(iter, maxIter, meta);
+    },
+    onIterationEnd(info) {
+      emit('run.progress', { kind: 'iteration_end', info }, info);
+      original?.onIterationEnd?.(info);
+    },
+    onCompactStart(meta) {
+      emit('context.compaction.started', { meta }, meta);
+      original?.onCompactStart?.(meta);
+    },
+    onCompact(estimatedTokens, meta) {
+      emit('context.compaction.finished', { estimatedTokens, meta }, meta);
+      original?.onCompact?.(estimatedTokens, meta);
+    },
+    onCompactStats(info) {
+      emit('context.compaction.stats', info, info);
+      original?.onCompactStats?.(info);
+    },
+    onCompactedMessages(messages, update, meta) {
+      emit('context.compaction.messages', {
+        messageCount: messages.length,
+        update,
+        meta,
+      }, meta);
+      original?.onCompactedMessages?.(messages, update, meta);
+    },
+    onCompactEnd(meta) {
+      emit('context.compaction.ended', { meta }, meta);
+      original?.onCompactEnd?.(meta);
+    },
+    onMidTurnUserMessages(contents, meta) {
+      emit('run.progress', { kind: 'mid_turn_user_messages', contents, meta }, meta);
+      original?.onMidTurnUserMessages?.(contents, meta);
+    },
+    onRetry(reason, attempt, maxAttempts, meta) {
+      emit('provider.retry', { reason, attempt, maxAttempts, meta }, meta);
+      original?.onRetry?.(reason, attempt, maxAttempts, meta);
+    },
+    onProviderRateLimit(attempt, maxRetries, delayMs, meta) {
+      emit('provider.retry', {
+        reason: 'rate_limit',
+        attempt,
+        maxAttempts: maxRetries,
+        delayMs,
+        meta,
+      }, meta);
+      original?.onProviderRateLimit?.(attempt, maxRetries, delayMs, meta);
+    },
+    onRetryAfter(payload, meta) {
+      emit('provider.retry', { retryAfter: payload, meta }, meta);
+      original?.onRetryAfter?.(payload, meta);
+    },
+    onReasoningEffortRejected(event) {
+      emit('provider.recovery', { kind: 'reasoning_effort_rejected', event }, event);
+      original?.onReasoningEffortRejected?.(event);
+    },
+    onRepoIntelligenceTrace(event) {
+      emit('repo_intelligence.trace', event, event);
+      original?.onRepoIntelligenceTrace?.(event);
+    },
+    onContextBudgetSnapshot(event) {
+      emit('context.budget.snapshot', event, event);
+      original?.onContextBudgetSnapshot?.(event);
+    },
+    onToolExposurePlanned(event) {
+      emit('tool.exposure.planned', event, event);
+      original?.onToolExposurePlanned?.(event);
+    },
+    onContextCompactionSkipped(event) {
+      emit('context.compaction.skipped', event, event);
+      original?.onContextCompactionSkipped?.(event);
+    },
+    onSidecarMessage(event) {
+      emit('sidecar.message', event, event);
+      original?.onSidecarMessage?.(event);
+    },
+    onTodoUpdate(items, meta) {
+      emit('todo.updated', { items, meta }, meta);
+      original?.onTodoUpdate?.(items, meta);
+    },
+    onTodoDriftWarning(event) {
+      emit('todo.warning', event, event);
+      original?.onTodoDriftWarning?.(event);
+    },
+    onProviderRecovery(event, meta) {
+      emit('provider.recovery', { event, meta }, meta);
+      original?.onProviderRecovery?.(event, meta);
     },
     onEffectiveConfig(config) {
       emit('config.effective', config, config);
@@ -1338,10 +2802,20 @@ function wrapKodaXEvents(input: {
       original?.onWorkflowProcessEvent?.(event);
     },
     onComplete(meta) {
+      emit('run.progress', { kind: 'complete', meta }, meta);
       original?.onComplete?.(meta);
     },
     onError(error, meta) {
+      emit('runtime.warning', {
+        source: 'coding',
+        severity: 'error',
+        message: error.message,
+      }, meta);
       original?.onError?.(error, meta);
+    },
+    onManagedTaskStatus(status) {
+      emit('run.progress', { kind: 'managed_task_status', status }, status);
+      original?.onManagedTaskStatus?.(status);
     },
     beforeToolExecute: async (
       tool: string,
@@ -1400,7 +2874,12 @@ function wrapKodaXEvents(input: {
           askUser: (
             options: AskUserQuestionOptions,
             meta?: KodaXToolEventMeta,
-          ): Promise<AskUserAnswer> => original.askUser!(options, meta),
+          ): Promise<AskUserAnswer> => runWithUserInputPhase(
+            'askUser',
+            options,
+            meta,
+            () => original.askUser!(options, meta),
+          ),
         }
       : {}),
     ...(original?.askUserMulti
@@ -1409,7 +2888,12 @@ function wrapKodaXEvents(input: {
             options: AskUserMultiOptions,
             meta?: KodaXToolEventMeta,
           ): Promise<Record<string, AskUserAnswer> | undefined> =>
-            original.askUserMulti!(options, meta),
+            runWithUserInputPhase(
+              'askUserMulti',
+              options,
+              meta,
+              () => original.askUserMulti!(options, meta),
+            ),
         }
       : {}),
     ...(original?.askUserInput
@@ -1417,7 +2901,12 @@ function wrapKodaXEvents(input: {
           askUserInput: (
             options: { question: string; default?: string },
             meta?: KodaXToolEventMeta,
-          ): Promise<string | undefined> => original.askUserInput!(options, meta),
+          ): Promise<string | undefined> => runWithUserInputPhase(
+            'askUserInput',
+            options,
+            meta,
+            () => original.askUserInput!(options, meta),
+          ),
         }
       : {}),
   };
@@ -1454,10 +2943,661 @@ function toRuntimeSessionSummary(summary: SessionSummary): RuntimeSessionSummary
   };
 }
 
-function resolveRuntimePrompt(input: RuntimeStartRunInput): string {
-  if (input.prompt !== undefined) return input.prompt;
-  if (input.input?.type === 'text') return input.input.text;
-  throw new Error('runtime.runs.start requires prompt or text input');
+interface NormalizedRuntimeRunInput {
+  readonly prompt: string;
+  readonly inputArtifacts: readonly KodaXInputArtifact[];
+}
+
+function normalizeRuntimeRunInput(
+  input: RuntimeStartRunInput,
+  artifacts: RuntimeArtifactStore,
+): NormalizedRuntimeRunInput {
+  const items = input.input === undefined
+    ? []
+    : Array.isArray(input.input)
+      ? [...input.input]
+      : [input.input];
+  const textItems = items.filter((item): item is RuntimeTextInput => item.type === 'text');
+  if (input.prompt !== undefined && textItems.length > 0) {
+    throw new Error('runtime.runs.start accepts either prompt or text input, not both');
+  }
+  if (textItems.length > 1) {
+    throw new Error('runtime.runs.start accepts at most one text input item');
+  }
+  const prompt = input.prompt ?? textItems[0]?.text;
+  if (prompt === undefined) {
+    throw new Error('runtime.runs.start requires prompt or text input');
+  }
+  return {
+    prompt,
+    inputArtifacts: items.flatMap((item) => runtimeInputToArtifacts(item, artifacts)),
+  };
+}
+
+function runtimeInputToArtifacts(
+  input: RuntimeInput,
+  artifacts: RuntimeArtifactStore,
+): KodaXInputArtifact[] {
+  if (input.type === 'text') return [];
+  if (input.type === 'artifact_ref') {
+    return runtimeArtifactToInputArtifacts(artifacts.resolve(input.artifactId), input.description);
+  }
+  if (input.type === 'image') {
+    const artifact: KodaXImageInputArtifact = {
+      kind: 'image',
+      path: input.path,
+      ...(input.mediaType !== undefined ? { mediaType: input.mediaType } : {}),
+      ...(input.source !== undefined ? { source: input.source } : {}),
+      ...(input.description !== undefined ? { description: input.description } : {}),
+    };
+    return [artifact];
+  }
+  if (input.type === 'file') {
+    const artifact: KodaXFileInputArtifact = {
+      kind: 'file',
+      path: input.path,
+      ...(input.mediaType !== undefined ? { mediaType: input.mediaType } : {}),
+      ...(input.mimeType !== undefined ? { mimeType: input.mimeType } : {}),
+      ...(input.name !== undefined ? { name: input.name } : {}),
+      ...(input.source !== undefined ? { source: input.source } : {}),
+      ...(input.description !== undefined ? { description: input.description } : {}),
+    };
+    return [artifact];
+  }
+  if (input.type === 'video') {
+    const artifact: KodaXVideoInputArtifact = {
+      kind: 'video',
+      path: input.path,
+      mediaType: input.mediaType,
+      ...(input.name !== undefined ? { name: input.name } : {}),
+      ...(input.source !== undefined ? { source: input.source } : {}),
+      ...(input.description !== undefined ? { description: input.description } : {}),
+    };
+    return [artifact];
+  }
+  const unsupported = input as { readonly type?: unknown };
+  throw new Error(`Unsupported runtime input type: ${String(unsupported.type)}`);
+}
+
+function runtimeArtifactToInputArtifacts(
+  artifact: RuntimeArtifact,
+  description: string | undefined,
+): KodaXInputArtifact[] {
+  const resolvedDescription = description ?? artifact.description;
+  if (artifact.kind === 'image') {
+    const inputArtifact: KodaXImageInputArtifact = {
+      kind: 'image',
+      path: artifact.path,
+      ...(artifact.mediaType !== undefined
+        ? { mediaType: artifact.mediaType as KodaXImageInputArtifact['mediaType'] }
+        : {}),
+      ...(artifact.source !== undefined ? { source: artifact.source } : {}),
+      ...(resolvedDescription !== undefined ? { description: resolvedDescription } : {}),
+    };
+    return [inputArtifact];
+  }
+  if (artifact.kind === 'file') {
+    const inputArtifact: KodaXFileInputArtifact = {
+      kind: 'file',
+      path: artifact.path,
+      ...(artifact.mediaType !== undefined ? { mediaType: artifact.mediaType } : {}),
+      ...(artifact.mimeType !== undefined ? { mimeType: artifact.mimeType } : {}),
+      ...(artifact.name !== undefined ? { name: artifact.name } : {}),
+      ...(artifact.source !== undefined ? { source: artifact.source } : {}),
+      ...(resolvedDescription !== undefined ? { description: resolvedDescription } : {}),
+    };
+    return [inputArtifact];
+  }
+  if (artifact.kind === 'video') {
+    const inputArtifact: KodaXVideoInputArtifact = {
+      kind: 'video',
+      path: artifact.path,
+      mediaType: (
+        artifact.mediaType ?? 'video/mp4'
+      ) as KodaXVideoInputArtifact['mediaType'],
+      ...(artifact.name !== undefined ? { name: artifact.name } : {}),
+      ...(artifact.source !== undefined ? { source: artifact.source } : {}),
+      ...(resolvedDescription !== undefined ? { description: resolvedDescription } : {}),
+    };
+    return [inputArtifact];
+  }
+  throw new Error(`Unsupported runtime artifact kind: ${String(artifact.kind)}`);
+}
+
+function isRuntimeArtifactKind(kind: unknown): kind is RuntimeArtifactKind {
+  return typeof kind === 'string' && RUNTIME_ARTIFACT_KINDS.has(kind);
+}
+
+function buildEffectiveRuntimeOptions(
+  options: RuntimeKodaXOptions,
+  settings: RuntimeSessionSettings,
+  inputArtifacts: readonly KodaXInputArtifact[],
+): RuntimeKodaXOptions {
+  const inheritedContext: KodaXOptions['context'] = {
+    ...(settings.executionCwd !== undefined ? { executionCwd: settings.executionCwd } : {}),
+  };
+  const optionContext = options.context;
+  const combinedArtifacts = [
+    ...(optionContext?.inputArtifacts ?? []),
+    ...inputArtifacts,
+  ];
+  const context: KodaXOptions['context'] = {
+    ...inheritedContext,
+    ...(optionContext ?? {}),
+    ...(combinedArtifacts.length > 0 ? { inputArtifacts: combinedArtifacts } : {}),
+  };
+  const provider = options.provider ?? settings.provider;
+  const model = options.model ?? settings.model;
+  const effort = options.effort ?? settings.effort;
+  const thinking = options.thinking ?? settings.thinking;
+  const reasoningMode = options.reasoningMode ?? settings.reasoningMode;
+  return {
+    ...options,
+    ...(provider !== undefined ? { provider } : {}),
+    ...(model !== undefined ? { model } : {}),
+    ...(effort !== undefined ? { effort } : {}),
+    ...(thinking !== undefined ? { thinking } : {}),
+    ...(reasoningMode !== undefined ? { reasoningMode } : {}),
+    ...(Object.keys(context).length > 0 ? { context } : {}),
+  };
+}
+
+async function loadRequiredSession(
+  manager: SessionManager,
+  sessionId: string,
+): Promise<KodaXSessionData> {
+  const data = await manager.loadSession(sessionId);
+  if (!data) {
+    throw new Error(`Session not found: ${sessionId}`);
+  }
+  return data;
+}
+
+function assertSessionSettingsAllowed(
+  session: KodaXSessionData,
+  settings: RuntimeSessionSettings,
+): void {
+  if (settings.executionCwd === undefined) return;
+  const root = session.runtimeInfo?.workspaceRoot ?? session.gitRoot;
+  if (!root) return;
+  assertPathWithinRoot(settings.executionCwd, root, 'executionCwd');
+}
+
+function assertPathWithinRoot(candidate: string, root: string, label: string): void {
+  const resolvedCandidate = normalizePathForContainment(path.resolve(candidate));
+  const resolvedRoot = normalizePathForContainment(path.resolve(root));
+  const relative = path.relative(resolvedRoot, resolvedCandidate);
+  if (relative === '') return;
+  if (relative.startsWith('..') || path.isAbsolute(relative)) {
+    throw new Error(`${label} must stay within the session workspace root`);
+  }
+}
+
+function normalizePathForContainment(value: string): string {
+  return process.platform === 'win32' ? value.toLowerCase() : value;
+}
+
+function applySessionSettingsPatch(
+  current: RuntimeSessionSettings,
+  patch: RuntimeSessionSettingsPatch,
+): RuntimeSessionSettings {
+  const next: RuntimeSessionSettings = { ...current };
+  applyNullableStringPatch(next, 'provider', patch.provider);
+  applyNullableStringPatch(next, 'model', patch.model);
+  applyNullableStringPatch(next, 'permissionMode', patch.permissionMode);
+  applyNullableStringPatch(next, 'executionCwd', patch.executionCwd, true);
+  applyNullablePatch(next, 'effort', patch.effort);
+  applyNullablePatch(next, 'thinking', patch.thinking);
+  applyNullablePatch(next, 'reasoningMode', patch.reasoningMode);
+  return next;
+}
+
+type RuntimeStringSettingKey =
+  | 'provider'
+  | 'model'
+  | 'permissionMode'
+  | 'executionCwd';
+
+function applyNullableStringPatch(
+  target: RuntimeSessionSettings,
+  key: RuntimeStringSettingKey,
+  value: string | null | undefined,
+  requireAbsolutePath = false,
+): void {
+  if (value === undefined) return;
+  if (value === null) {
+    deleteMutableSetting(target, key);
+    return;
+  }
+  if (requireAbsolutePath && !path.isAbsolute(value)) {
+    throw new Error(`${String(key)} must be an absolute path`);
+  }
+  setMutableSetting(target, key, value as RuntimeSessionSettings[typeof key]);
+}
+
+function applyNullablePatch<K extends keyof RuntimeSessionSettings>(
+  target: RuntimeSessionSettings,
+  key: K,
+  value: RuntimeSessionSettings[K] | null | undefined,
+): void {
+  if (value === undefined) return;
+  if (value === null) {
+    deleteMutableSetting(target, key);
+    return;
+  }
+  setMutableSetting(target, key, value);
+}
+
+function setMutableSetting<K extends keyof RuntimeSessionSettings>(
+  target: RuntimeSessionSettings,
+  key: K,
+  value: RuntimeSessionSettings[K],
+): void {
+  (target as { -readonly [P in keyof RuntimeSessionSettings]: RuntimeSessionSettings[P] })[key] = value;
+}
+
+function deleteMutableSetting<K extends keyof RuntimeSessionSettings>(
+  target: RuntimeSessionSettings,
+  key: K,
+): void {
+  delete (target as { -readonly [P in keyof RuntimeSessionSettings]?: RuntimeSessionSettings[P] })[key];
+}
+
+function parseRuntimeSessionSettings(value: unknown): RuntimeSessionSettings {
+  if (!isRecord(value)) return {};
+  const settings: RuntimeSessionSettings = {};
+  setStringIfPresent(settings, 'provider', value.provider);
+  setStringIfPresent(settings, 'model', value.model);
+  setStringIfPresent(settings, 'permissionMode', value.permissionMode);
+  setStringIfPresent(settings, 'executionCwd', value.executionCwd);
+  setStringIfPresent(settings, 'effort', value.effort);
+  if (typeof value.thinking === 'boolean') {
+    setMutableSetting(settings, 'thinking', value.thinking);
+  }
+  setStringIfPresent(settings, 'reasoningMode', value.reasoningMode);
+  return settings;
+}
+
+function setStringIfPresent<K extends keyof RuntimeSessionSettings>(
+  target: RuntimeSessionSettings,
+  key: K,
+  value: unknown,
+): void {
+  if (typeof value === 'string' && value.length > 0) {
+    setMutableSetting(target, key, value as RuntimeSessionSettings[K]);
+  }
+}
+
+function isRecord(value: unknown): value is Record<string, unknown> {
+  return value !== null && typeof value === 'object' && !Array.isArray(value);
+}
+
+function assertPlainObject(value: unknown, label: string): asserts value is Record<string, unknown> {
+  if (!isRecord(value)) {
+    throw new Error(`${label} requires a plain object`);
+  }
+}
+
+function sanitizeRuntimeConfigPatch(
+  patch: Record<string, unknown>,
+): RuntimeConfigPatch {
+  const allowedKeys: ReadonlySet<string> = new Set(RUNTIME_CONFIG_PATCH_KEYS);
+  for (const key of Object.keys(patch)) {
+    if (!allowedKeys.has(key)) {
+      throw new Error(`runtime.config.patch does not support config key: ${key}`);
+    }
+  }
+  return patch as RuntimeConfigPatch;
+}
+
+function resolveRuntimeConfigFile(options: CreateKodaXRuntimeOptions): string | undefined {
+  if (options.homeDir === undefined) return undefined;
+  return path.join(path.resolve(options.homeDir), '.kodax', 'config.json');
+}
+
+function readRuntimeConfig(configFile: string | undefined): Record<string, unknown> {
+  if (configFile === undefined) {
+    return loadConfig() as unknown as Record<string, unknown>;
+  }
+  if (!fs.existsSync(configFile)) return {};
+  try {
+    const parsed = JSON.parse(fs.readFileSync(configFile, 'utf8')) as unknown;
+    return isRecord(parsed) ? parsed : {};
+  } catch {
+    return {};
+  }
+}
+
+function patchRuntimeConfig(configFile: string | undefined, patch: RuntimeConfigPatch): void {
+  if (configFile === undefined) {
+    saveConfig(patch);
+    return;
+  }
+  const current = readRuntimeConfig(configFile);
+  const merged: Record<string, unknown> = { ...current, ...patch };
+  for (const key of Object.keys(patch) as Array<keyof RuntimeConfigPatch>) {
+    if (patch[key] === undefined) {
+      delete merged[key];
+    }
+  }
+  writeRuntimeConfig(configFile, merged);
+}
+
+function writeRuntimeConfig(configFile: string, config: Record<string, unknown>): void {
+  fs.mkdirSync(path.dirname(configFile), { recursive: true });
+  fs.writeFileSync(configFile, `${JSON.stringify(config, null, 2)}\n`, 'utf8');
+}
+
+function listRuntimeCustomProviders(
+  configFile: string | undefined,
+): readonly KodaXCustomProviderConfig[] {
+  if (configFile === undefined) return listCustomProviders();
+  return cloneCustomProviders(extractRuntimeCustomProviders(readRuntimeConfig(configFile)));
+}
+
+function upsertRuntimeCustomProvider(
+  configFile: string | undefined,
+  config: KodaXCustomProviderConfig,
+): KodaXCustomProviderConfig {
+  if (configFile === undefined) return upsertCustomProvider(config);
+  validateCustomProviderConfig(config);
+  const whole = readRuntimeConfig(configFile);
+  const existing = extractRuntimeCustomProviders(whole);
+  const next = upsertConfigEntry(existing, config, (item) => item.name === config.name);
+  writeRuntimeConfig(configFile, { ...whole, customProviders: next });
+  registerCustomProviders(next);
+  return structuredClone(config);
+}
+
+function removeRuntimeCustomProvider(
+  configFile: string | undefined,
+  name: string,
+): boolean {
+  if (configFile === undefined) return removeCustomProvider(name);
+  if (typeof name !== 'string' || name.length === 0) return false;
+  const whole = readRuntimeConfig(configFile);
+  const existing = extractRuntimeCustomProviders(whole);
+  const next = existing.filter((provider) => provider.name !== name);
+  if (next.length === existing.length) return false;
+  writeRuntimeConfig(configFile, { ...whole, customProviders: next });
+  registerCustomProviders(next);
+  return true;
+}
+
+function registerRuntimeConfiguredCustomProviders(configFile: string | undefined): void {
+  if (configFile === undefined) return;
+  registerCustomProviders(extractRuntimeCustomProviders(readRuntimeConfig(configFile)));
+}
+
+function extractRuntimeCustomProviders(
+  config: Record<string, unknown>,
+): KodaXCustomProviderConfig[] {
+  return Array.isArray(config.customProviders)
+    ? structuredClone(config.customProviders as KodaXCustomProviderConfig[])
+    : [];
+}
+
+function cloneCustomProviders(
+  providers: readonly KodaXCustomProviderConfig[],
+): readonly KodaXCustomProviderConfig[] {
+  return structuredClone(providers);
+}
+
+function listRuntimeMcpServers(configFile: string | undefined): Record<string, McpServerConfig> {
+  if (configFile === undefined) return listMcpServers();
+  return cloneMcpServers(extractRuntimeMcpServers(readRuntimeConfig(configFile)));
+}
+
+function getRuntimeMcpServer(
+  configFile: string | undefined,
+  name: string,
+): McpServerConfig | undefined {
+  if (configFile === undefined) return getMcpServerConfig(name);
+  const config = extractRuntimeMcpServers(readRuntimeConfig(configFile))[name];
+  return config === undefined ? undefined : structuredClone(config);
+}
+
+function upsertRuntimeMcpServer(
+  configFile: string | undefined,
+  name: string,
+  config: McpServerConfig,
+): McpServerConfig {
+  if (configFile === undefined) return upsertMcpServer(name, config);
+  validateMcpServerConfig(name, config);
+  const whole = readRuntimeConfig(configFile);
+  const servers = {
+    ...extractRuntimeMcpServers(whole),
+    [name]: structuredClone(config),
+  };
+  writeRuntimeConfig(configFile, { ...whole, mcpServers: servers });
+  return structuredClone(config);
+}
+
+function removeRuntimeMcpServer(
+  configFile: string | undefined,
+  name: string,
+): boolean {
+  if (configFile === undefined) return removeMcpServer(name);
+  const whole = readRuntimeConfig(configFile);
+  const servers = extractRuntimeMcpServers(whole);
+  if (!(name in servers)) return false;
+  const next = { ...servers };
+  delete next[name];
+  writeRuntimeConfig(configFile, { ...whole, mcpServers: next });
+  return true;
+}
+
+function extractRuntimeMcpServers(
+  config: Record<string, unknown>,
+): Record<string, McpServerConfig> {
+  return isRecord(config.mcpServers)
+    ? structuredClone(config.mcpServers as Record<string, McpServerConfig>)
+    : {};
+}
+
+function cloneMcpServers(
+  servers: Record<string, McpServerConfig>,
+): Record<string, McpServerConfig> {
+  return structuredClone(servers);
+}
+
+function upsertConfigEntry<T>(
+  entries: readonly T[],
+  next: T,
+  matches: (entry: T) => boolean,
+): T[] {
+  const existingIndex = entries.findIndex(matches);
+  if (existingIndex < 0) return [...entries, structuredClone(next)];
+  return entries.map((entry, index) => (
+    index === existingIndex ? structuredClone(next) : structuredClone(entry)
+  ));
+}
+
+function listRuntimeModels(
+  providerList: unknown,
+  filter: RuntimeModelListFilter | undefined,
+): unknown {
+  const providers = Array.isArray(providerList) ? providerList : [];
+  if (filter?.provider !== undefined) {
+    const provider = providers.find((item) => (
+      isRecord(item) && item.name === filter.provider
+    ));
+    if (!isRecord(provider)) {
+      return { provider: filter.provider, models: [] };
+    }
+    return {
+      provider: filter.provider,
+      models: Array.isArray(provider.models) ? provider.models : [],
+    };
+  }
+  return providers.flatMap((item) => {
+    if (!isRecord(item) || typeof item.name !== 'string') return [];
+    return [{
+      provider: item.name,
+      models: Array.isArray(item.models) ? item.models : [],
+    }];
+  });
+}
+
+function listRuntimeCommands(projectRoot?: string): readonly RuntimeCommandInfo[] {
+  const registeredCommands = listReplCommands(projectRoot).map(replCommandToRuntimeCommandInfo);
+  const extensionCommands = getActiveExtensionRuntime()
+    ?.listCommands()
+    .filter((command: ExtensionCommandDefinition) => command.metadata?.userInvocable !== false)
+    .map(extensionCommandToRuntimeCommandInfo) ?? [];
+  return [...registeredCommands, ...extensionCommands]
+    .sort((left, right) => left.name.localeCompare(right.name));
+}
+
+function listReplCommands(projectRoot?: string): readonly ReplCommandInfo[] {
+  const commandCatalogApi = replApi as typeof replApi & {
+    readonly listRegisteredCommands?: (projectRoot?: string) => readonly ReplCommandInfo[];
+  };
+  if (typeof commandCatalogApi.listRegisteredCommands === 'function') {
+    return commandCatalogApi.listRegisteredCommands(projectRoot);
+  }
+  return replApi.getCommandRegistry().getAll();
+}
+
+function replCommandToRuntimeCommandInfo(command: ReplCommandInfo): RuntimeCommandInfo {
+  return {
+    name: command.name,
+    ...(command.aliases !== undefined ? { aliases: command.aliases } : {}),
+    description: command.description,
+    source: command.source,
+    ...(command.usage !== undefined ? { usage: command.usage } : {}),
+    ...(command.argumentHint !== undefined ? { argumentHint: command.argumentHint } : {}),
+    ...(command.location !== undefined ? { location: command.location } : {}),
+    ...(command.path !== undefined ? { path: command.path } : {}),
+    ...(command.userInvocable !== undefined ? { userInvocable: command.userInvocable } : {}),
+    ...(command.disableModelInvocation !== undefined
+      ? { disableModelInvocation: command.disableModelInvocation }
+      : {}),
+    ...(command.allowedTools !== undefined ? { allowedTools: command.allowedTools } : {}),
+    ...(command.context !== undefined ? { context: command.context } : {}),
+    ...(command.agent !== undefined ? { agent: command.agent } : {}),
+    ...(command.model !== undefined ? { model: command.model } : {}),
+  };
+}
+
+function extensionCommandToRuntimeCommandInfo(
+  command: ExtensionCommandDefinition,
+): RuntimeCommandInfo {
+  return {
+    name: command.name,
+    ...(command.aliases !== undefined ? { aliases: command.aliases } : {}),
+    description: command.description,
+    source: 'extension',
+    ...(command.usage !== undefined ? { usage: command.usage } : {}),
+  };
+}
+
+function redactRuntimeConfig(value: unknown): unknown {
+  if (Array.isArray(value)) {
+    return value.map((item) => redactRuntimeConfig(item));
+  }
+  if (!isRecord(value)) {
+    return value;
+  }
+  return Object.fromEntries(
+    Object.entries(value).map(([key, item]) => [
+      key,
+      isSensitiveConfigKey(key) ? '[redacted]' : redactRuntimeConfig(item),
+    ]),
+  );
+}
+
+function isSensitiveConfigKey(key: string): boolean {
+  const lower = key.toLowerCase();
+  return lower.includes('apikey')
+    || lower.includes('api_key')
+    || lower === 'key'
+    || lower.endsWith('key')
+    || lower.includes('token')
+    || lower.includes('secret')
+    || lower.includes('password');
+}
+
+function toRuntimeSkillSummary(skill: SkillMetadata): RuntimeSkillSummary {
+  return {
+    name: skill.name,
+    description: skill.description,
+    userInvocable: skill.userInvocable,
+    ...(skill.argumentHint !== undefined ? { argumentHint: skill.argumentHint } : {}),
+    path: skill.path,
+    source: skill.source,
+    disableModelInvocation: skill.disableModelInvocation,
+  };
+}
+
+function toRuntimeSkillDescription(skill: Skill): RuntimeSkillDescription {
+  return {
+    name: skill.name,
+    description: skill.description,
+    userInvocable: skill.userInvocable ?? true,
+    ...(skill.argumentHint !== undefined ? { argumentHint: skill.argumentHint } : {}),
+    path: skill.path,
+    source: skill.source,
+    disableModelInvocation: skill.disableModelInvocation ?? false,
+    content: skill.content,
+    skillFilePath: skill.skillFilePath,
+    ...(skill.scripts !== undefined ? { scripts: skill.scripts.map(toRuntimeSkillFileSummary) } : {}),
+    ...(skill.references !== undefined ? { references: skill.references.map(toRuntimeSkillFileSummary) } : {}),
+    ...(skill.assets !== undefined ? { assets: skill.assets.map(toRuntimeSkillFileSummary) } : {}),
+    ...(skill.templates !== undefined ? { templates: skill.templates.map(toRuntimeSkillFileSummary) } : {}),
+    ...(skill.resources !== undefined ? { resources: skill.resources.map(toRuntimeSkillFileSummary) } : {}),
+  };
+}
+
+function toRuntimeSkillFileSummary(file: {
+  readonly name: string;
+  readonly path: string;
+  readonly relativePath: string;
+}): RuntimeSkillFileSummary {
+  return {
+    name: file.name,
+    path: file.path,
+    relativePath: file.relativePath,
+  };
+}
+
+function requireRuntimeRecord(value: unknown): Record<string, unknown> {
+  if (!isRecord(value)) {
+    throw new Error('Invalid runtime daemon response: expected object');
+  }
+  return value;
+}
+
+function parseRuntimeIdentity(value: unknown): RuntimeIdentity {
+  const record = requireRuntimeRecord(value);
+  if (
+    typeof record.runtimeId !== 'string'
+    || typeof record.mode !== 'string'
+    || typeof record.profile !== 'string'
+    || typeof record.startedAt !== 'string'
+    || typeof record.version !== 'string'
+  ) {
+    throw new Error('Invalid runtime daemon response: missing identity fields');
+  }
+  return {
+    runtimeId: record.runtimeId,
+    mode: record.mode === 'daemon' ? 'daemon' : 'embedded',
+    profile: record.profile,
+    startedAt: record.startedAt,
+    version: record.version,
+  };
+}
+
+function serializeSessionSettings(settings: RuntimeSessionSettings): RuntimeSessionSettings {
+  const result: RuntimeSessionSettings = {};
+  if (settings.provider !== undefined) setMutableSetting(result, 'provider', settings.provider);
+  if (settings.model !== undefined) setMutableSetting(result, 'model', settings.model);
+  if (settings.effort !== undefined) setMutableSetting(result, 'effort', settings.effort);
+  if (settings.thinking !== undefined) setMutableSetting(result, 'thinking', settings.thinking);
+  if (settings.reasoningMode !== undefined) setMutableSetting(result, 'reasoningMode', settings.reasoningMode);
+  if (settings.permissionMode !== undefined) setMutableSetting(result, 'permissionMode', settings.permissionMode);
+  if (settings.executionCwd !== undefined) setMutableSetting(result, 'executionCwd', settings.executionCwd);
+  return result;
 }
 
 function createRunId(): string {
@@ -1477,6 +3617,40 @@ function statusFromRecord(run: RuntimeRunRecord): RuntimeRunStatus {
     ...(run.reasoning !== undefined ? { reasoning: run.reasoning } : {}),
     ...(run.error !== undefined ? { error: run.error } : {}),
   };
+}
+
+function resultFromStatus(status: RuntimeRunStatus): RuntimeRunResult {
+  return {
+    runId: status.runId,
+    sessionId: status.sessionId,
+    phase: status.phase,
+    ...(status.error !== undefined ? { error: new Error(status.error) } : {}),
+  };
+}
+
+function recentRunStatuses(statuses: readonly RuntimeRunStatus[]): readonly RuntimeRunStatus[] {
+  if (statuses.length <= MAX_RUNTIME_MEMORY_RUNS) return statuses;
+  return [...statuses]
+    .sort(compareRunStatusRecency)
+    .slice(-MAX_RUNTIME_MEMORY_RUNS);
+}
+
+function pruneTerminalRuns(runs: Map<string, RuntimeRunRecord>): void {
+  if (runs.size <= MAX_RUNTIME_MEMORY_RUNS) return;
+  const terminal = [...runs.values()]
+    .filter((run) => isTerminalRunPhase(run.phase))
+    .sort((left, right) => compareRunStatusRecency(statusFromRecord(left), statusFromRecord(right)));
+  for (const run of terminal) {
+    if (runs.size <= MAX_RUNTIME_MEMORY_RUNS) return;
+    runs.delete(run.runId);
+  }
+}
+
+function compareRunStatusRecency(left: RuntimeRunStatus, right: RuntimeRunStatus): number {
+  const leftTime = left.endedAt ?? left.startedAt;
+  const rightTime = right.endedAt ?? right.startedAt;
+  const byTime = leftTime.localeCompare(rightTime);
+  return byTime !== 0 ? byTime : left.runId.localeCompare(right.runId);
 }
 
 function runMatchesFilter(

@@ -9,6 +9,7 @@ import {
   normalizeYamlHookMap,
   parseYamlFrontmatter,
 } from '@kodax-ai/agent/capabilities/skills/shared/yaml';
+import { emitKodaXDiagnostic } from '@kodax-ai/agent';
 import type { CommandRegistry } from './registry.js';
 import type { CommandExecutionMetadata, CommandHooks, CommandPriority } from './types.js';
 
@@ -110,7 +111,12 @@ export function parseCommandFile(
       execution: buildExecutionMetadata(frontmatter),
     };
   } catch (error) {
-    console.error(`Error parsing command file ${filePath}:`, error);
+    emitKodaXDiagnostic({
+      source: 'repl:commands',
+      level: 'error',
+      message: `Error parsing command file ${filePath}.`,
+      detail: error,
+    });
     return undefined;
   }
 }
@@ -160,7 +166,12 @@ export function discoverCommands(
         }
       }
     } catch (error) {
-      console.error(`Error scanning directory ${baseDir}:`, error);
+      emitKodaXDiagnostic({
+        source: 'repl:commands',
+        level: 'error',
+        message: `Error scanning directory ${baseDir}.`,
+        detail: error,
+      });
     }
   }
 
@@ -202,7 +213,12 @@ export function registerDiscoveredCommands(
         }),
       });
     } catch (error) {
-      console.error(`Error registering command ${cmd.name}:`, error);
+      emitKodaXDiagnostic({
+        source: 'repl:commands',
+        level: 'error',
+        message: `Error registering command ${cmd.name}.`,
+        detail: error,
+      });
     }
   }
 }

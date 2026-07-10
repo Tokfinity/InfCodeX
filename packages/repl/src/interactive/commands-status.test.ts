@@ -55,6 +55,45 @@ describe('status workspace output', () => {
     expect(output).toContain('managed');
   });
 
+  it('shows SDK runtime identity and daemon counters for runtime detail status', async () => {
+    const logSpy = vi.spyOn(console, 'log').mockImplementation(() => {});
+    const statusCommand = BUILTIN_COMMANDS.find((command) => command.name === 'status');
+    const getRuntimeStatus = vi.fn(async () => ({
+      mode: 'daemon' as const,
+      profile: 'space',
+      runtimeId: 'rt_status_test',
+      startedAt: '2026-07-09T00:00:00.000Z',
+      endpoint: '\\\\.\\pipe\\kodax-runtime-status-test',
+      health: 'healthy',
+      sessions: 2,
+      runs: 4,
+      activeRuns: 1,
+      queuedRuns: 2,
+      pendingPermissions: 1,
+      workflows: 3,
+    }));
+
+    expect(statusCommand).toBeDefined();
+    await statusCommand!.handler(
+      ['runtime'],
+      context,
+      { getRuntimeStatus } as unknown as CommandCallbacks,
+      currentConfig,
+    );
+
+    const output = logSpy.mock.calls.flat().join('\n');
+    expect(getRuntimeStatus).toHaveBeenCalledTimes(1);
+    expect(output).toContain('SDK Runtime:');
+    expect(output).toContain('daemon');
+    expect(output).toContain('space');
+    expect(output).toContain('rt_status_test');
+    expect(output).toContain('kodax-runtime-status-test');
+    expect(output).toContain('active=1');
+    expect(output).toContain('queued=2');
+    expect(output).toContain('pending permissions=1');
+    expect(output).toContain('workflows=3');
+  });
+
   it('shows built-in repo-intel status without external endpoint/bin controls', async () => {
     const logSpy = vi.spyOn(console, 'log').mockImplementation(() => {});
     const repoIntelCommand = BUILTIN_COMMANDS.find((command) => command.name === 'repo-intel');

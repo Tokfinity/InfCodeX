@@ -2855,9 +2855,9 @@ untyped `finalText` strings the script must `JSON.parse`; (3) no streaming
 `pipeline` primitive (barrier-only `wf.parallel`); (4) no result-cache resume.
 Axes (3) and (4) are **already owned** by
 [FEATURE_232](features/v0.7.85.md#feature_232-replay-aware-workflow-pipeline-primitive)
-(v0.7.72) and
-[FEATURE_231](features/v0.7.70.md#feature_231-durable-workflow-replay-resume)
-(v0.7.63). Axes (1) and (2) have no home — this ADR opens it (FEATURE_246).
+(v0.7.85) and
+[FEATURE_231](features/v0.7.75.md#feature_231-durable-workflow-replay-resume)
+(v0.7.75). Axes (1) and (2) have no home — this ADR opens it (FEATURE_246).
 
 **Decision**:
 

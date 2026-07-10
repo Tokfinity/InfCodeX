@@ -119,3 +119,19 @@ export {
   applyToolResultGuardrail,
   getToolResultPolicy,
 } from './tool-result-policy.js';
+export {
+  buildToolResultBudget,
+  buildToolResultBudgetFromUsage,
+  clampToolResultPolicyToBudget,
+} from './tool-result-budget.js';
+export type {
+  ToolResultBudget,
+  ToolResultBudgetReason,
+  ToolResultBudgetUsageInput,
+} from './tool-result-budget.js';
+export {
+  TOOL_CALL_DEFINITION,
+  TOOL_CALL_NAME,
+  TOOL_DESCRIBE_DEFINITION,
+  TOOL_DESCRIBE_NAME,
+} from './tool-bridge.js';

@@ -37,6 +37,7 @@
  */
 
 import type { ProtocolEmitterMetadata } from '../../../agents/protocol-emitters.js';
+import { emitKodaXDiagnostic } from '@kodax-ai/agent';
 import type {
   KodaXAgentProfile,
   KodaXEvents,
@@ -168,11 +169,12 @@ export function buildSidecarMessageEvent(
 }
 
 function writeSidecarMessageEventError(error: Error): void {
-  try {
-    process.stderr.write(`[KodaX] Sidecar message event sink failed: ${error.message}\n`);
-  } catch {
-    // No remaining diagnostic sink is available here; keep verifier behavior unchanged.
-  }
+  emitKodaXDiagnostic({
+    source: 'coding:sidecar-verifier',
+    level: 'error',
+    message: `Sidecar message event sink failed: ${error.message}`,
+    detail: error,
+  });
 }
 
 export function emitSidecarMessageEvent(

@@ -37,6 +37,7 @@
 import path from 'path';
 import fs from 'fs/promises';
 import crypto from 'crypto';
+import { emitKodaXDiagnostic } from '@kodax-ai/agent';
 
 import type { AgentContent } from './types.js';
 
@@ -168,7 +169,11 @@ export async function readAuditEntries(
     try {
       parsed = JSON.parse(trimmed) as AuditEntry;
     } catch {
-      console.warn(`[ConstructionRuntime] Skipping malformed audit line: ${trimmed.slice(0, 80)}…`);
+      emitKodaXDiagnostic({
+        source: 'coding:construction',
+        level: 'warn',
+        message: `Skipping malformed audit line: ${trimmed.slice(0, 80)}...`,
+      });
       continue;
     }
     if (wantedAgent !== undefined && parsed.agentName !== wantedAgent) continue;

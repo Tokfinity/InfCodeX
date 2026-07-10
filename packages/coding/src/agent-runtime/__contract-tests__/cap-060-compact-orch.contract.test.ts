@@ -36,7 +36,12 @@
 import { beforeEach, describe, expect, it, vi } from 'vitest';
 
 import type { KodaXBaseProvider, KodaXMessage } from '@kodax-ai/llm';
-import type { CompactionConfig, CompactionResult } from '@kodax-ai/agent';
+import {
+  setKodaXDiagnosticSink,
+  type CompactionConfig,
+  type CompactionResult,
+  type KodaXDiagnostic,
+} from '@kodax-ai/agent';
 // Mock @kodax-ai/agent's `compact` so we can deterministically control
 // the LLM compaction outcome (success / partial / throw / no-op)
 // without exercising the real provider/LLM stack.
@@ -169,41 +174,51 @@ describe('CAP-060: tryIntelligentCompact — LLM threw path', () => {
   it('CAP-COMPACT-ORCH-002: LLM throws → counter increments, compacted = messages identity, onCompactStart + onCompactEnd fire', async () => {
     compactMock.mockReset();
     compactMock.mockRejectedValueOnce(new Error('boom'));
+    const diagnostics: KodaXDiagnostic[] = [];
+    const restoreDiagnostics = setKodaXDiagnosticSink((diagnostic) => {
+      diagnostics.push(diagnostic);
+    });
     const events: KodaXEvents = {
       onCompactStart: vi.fn(),
       onCompactEnd: vi.fn(),
       onCompactStats: vi.fn(),
       onCompact: vi.fn(),
     };
-    const errorSpy = vi.spyOn(console, 'error').mockImplementation(() => undefined);
 
-    const out = await tryIntelligentCompact({
-      messages: baseMessages,
-      needsCompact: true,
-      compactConsecutiveFailures: 0,
-      compactionConfig: makeConfig(),
-      provider: rejectingProvider(),
-      contextWindow: 10000,
-      systemPrompt: 'sys',
-      currentTokens: 9000,
-      events,
-    });
+    try {
+      const out = await tryIntelligentCompact({
+        messages: baseMessages,
+        needsCompact: true,
+        compactConsecutiveFailures: 0,
+        compactionConfig: makeConfig(),
+        provider: rejectingProvider(),
+        contextWindow: 10000,
+        systemPrompt: 'sys',
+        currentTokens: 9000,
+        events,
+      });
 
-    expect(out.compacted).toBe(baseMessages); // identity (catch sets it)
-    expect(out.didCompactMessages).toBe(false);
-    expect(out.nextCompactConsecutiveFailures).toBe(1); // incremented
-    expect(events.onCompactStart).toHaveBeenCalledOnce();
-    expect(events.onCompactEnd).toHaveBeenCalledOnce();
-    // Stats / onCompact NOT fired on failure path.
-    expect(events.onCompactStats).not.toHaveBeenCalled();
-    expect(events.onCompact).not.toHaveBeenCalled();
-    errorSpy.mockRestore();
+      expect(out.compacted).toBe(baseMessages); // identity (catch sets it)
+      expect(out.didCompactMessages).toBe(false);
+      expect(out.nextCompactConsecutiveFailures).toBe(1); // incremented
+      expect(events.onCompactStart).toHaveBeenCalledOnce();
+      expect(events.onCompactEnd).toHaveBeenCalledOnce();
+      // Stats / onCompact NOT fired on failure path.
+      expect(events.onCompactStats).not.toHaveBeenCalled();
+      expect(events.onCompact).not.toHaveBeenCalled();
+      expect(diagnostics).toContainEqual(expect.objectContaining({
+        source: 'coding:compaction',
+        level: 'error',
+        message: 'Compaction LLM summary failed (attempt 1/3).',
+      }));
+    } finally {
+      restoreDiagnostics();
+    }
   });
 
   it('CAP-COMPACT-ORCH-002b: counter increment compounds across multiple failures, then circuit breaker trips', async () => {
     compactMock.mockReset();
     compactMock.mockRejectedValue(new Error('boom'));
-    const errorSpy = vi.spyOn(console, 'error').mockImplementation(() => undefined);
 
     let counter = 0;
     for (let i = 0; i < COMPACT_CIRCUIT_BREAKER_LIMIT; i++) {
@@ -238,7 +253,6 @@ describe('CAP-060: tryIntelligentCompact — LLM threw path', () => {
     });
     expect(guarded.nextCompactConsecutiveFailures).toBe(COMPACT_CIRCUIT_BREAKER_LIMIT);
     expect(compactMock).toHaveBeenCalledTimes(COMPACT_CIRCUIT_BREAKER_LIMIT); // no extra call
-    errorSpy.mockRestore();
   });
 });
 

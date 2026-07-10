@@ -53,6 +53,10 @@ interface ProposalPreviewCacheEntry {
 
 const proposalPreviewFingerprints = new Map<string, ProposalPreviewCacheEntry>();
 
+function formatMemoryError(error: unknown): string {
+  return error instanceof Error ? error.message : String(error);
+}
+
 function resolveCwd(context: { runtimeInfo?: { workspaceRoot?: string; executionCwd?: string } }): string {
   return (
     context.runtimeInfo?.workspaceRoot ??
@@ -82,7 +86,7 @@ function readTopicFiles(memoryDir: string): TopicFile[] {
     // of seeing a silent "0 topic files" — per project rule "NEVER
     // silently swallow errors" (CLAUDE.md).
     if ((err as NodeJS.ErrnoException).code !== 'ENOENT') {
-      console.error(`[memory] failed to read memory directory ${memoryDir}:`, err);
+      console.log(chalk.red(`[memory] failed to read memory directory ${memoryDir}: ${formatMemoryError(err)}`));
     }
     return [];
   }
@@ -103,7 +107,7 @@ function readTopicFiles(memoryDir: string): TopicFile[] {
       // permissions, etc.) skip the file but log so the user can spot
       // it. Do NOT abort the whole scan — a single unreadable file
       // shouldn't block rebuild of the rest of the index.
-      console.error(`[memory] failed to read ${absPath}:`, err);
+      console.log(chalk.red(`[memory] failed to read ${absPath}: ${formatMemoryError(err)}`));
       continue;
     }
     const parsed = parseMemoryFile(raw);

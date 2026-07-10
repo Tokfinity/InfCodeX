@@ -145,6 +145,7 @@ import type {
   TodoList,
 } from "@kodax-ai/coding";
 import {
+  emitKodaXDiagnostic,
   estimateTokens,
   bootstrapTeamMode,
   setActiveUserInteraction,
@@ -189,9 +190,15 @@ import {
   enforceSessionTransitionGuard,
 } from "../interactive/session-guardrails.js";
 import { formatSessionTree } from "../interactive/session-tree.js";
+import {
+  inspectWorkspaceRuntime,
+  resolveSessionRuntimeInfo,
+  workspaceExists,
+} from "../interactive/workspace-runtime.js";
 import type {
   CommandInvocationRequest,
   CommandWorkflowInvocationRequest,
+  RuntimeSurfaceStatus,
   SessionRecoverStatus,
 } from "../commands/types.js";
 import {
@@ -497,11 +504,13 @@ export interface InkRuntimeRunnerInput {
 }
 
 export type InkRuntimeRunner = (input: InkRuntimeRunnerInput) => Promise<KodaXResult>;
+export type InkRuntimeStatusProvider = () => Promise<RuntimeSurfaceStatus | undefined>;
 
 export interface InkREPLOptions extends KodaXOptions {
   storage?: SessionStorage;
   hardExitOnClose?: boolean;
   runtimeRunner?: InkRuntimeRunner;
+  getRuntimeStatus?: InkRuntimeStatusProvider;
 }
 
 // Ink REPL Props
@@ -509,6 +518,7 @@ interface InkREPLProps {
   options: InkREPLOptions;
   config: CurrentConfig;
   context: InteractiveContext;
+  startupRuntimeInfo: NonNullable<InteractiveContext["runtimeInfo"]>;
   storage: SessionStorage;
   compactionInfo?: {
     contextWindow: number;
@@ -1345,11 +1355,12 @@ function reportInlineLedgerFailure(reason: string, error?: unknown): void {
   if (process.env.KODAX_INLINE_LEDGER_DEBUG !== "1") {
     return;
   }
-  const detail =
-    error instanceof Error ? error.message : error !== undefined ? String(error) : "";
-  process.stderr.write(
-    `[inline-ledger] ${reason}${detail ? `: ${detail}` : ""} — rebuilding on next change\n`,
-  );
+  emitKodaXDiagnostic({
+    source: "repl:inline-ledger",
+    level: "debug",
+    message: `${reason}; rebuilding on next change.`,
+    ...(error !== undefined ? { detail: error } : {}),
+  });
 }
 
 /**
@@ -1359,6 +1370,7 @@ const InkREPLInner: React.FC<InkREPLProps> = ({
   options,
   config,
   context,
+  startupRuntimeInfo,
   storage,
   rendererMode,
   fullscreenPolicy,
@@ -3083,7 +3095,12 @@ const InkREPLInner: React.FC<InkREPLProps> = ({
   const bannerProps = useMemo<BannerProps>(() => ({
     config: displayedConfig,
     sessionId: context.sessionId,
-    workingDir: options.context?.gitRoot || process.cwd(),
+    workingDir:
+      options.context?.executionCwd
+      || options.context?.gitRoot
+      || context.runtimeInfo?.executionCwd
+      || context.gitRoot
+      || process.cwd(),
     terminalWidth,
     // Live banners (non-Static) get the per-model resolved value so
     // `/model` swaps update the displayed context window. The Static
@@ -3095,7 +3112,9 @@ const InkREPLInner: React.FC<InkREPLProps> = ({
     effectiveCompactionInfo,
     context.sessionId,
     displayedConfig,
+    context.runtimeInfo?.executionCwd,
     options.context?.gitRoot,
+    options.context?.executionCwd,
     terminalWidth,
   ]);
   const fullscreenBannerSection = useMemo(
@@ -4806,6 +4825,8 @@ const InkREPLInner: React.FC<InkREPLProps> = ({
     ),
     context: {
       ...options.context,
+      gitRoot: context.gitRoot ?? undefined,
+      executionCwd: context.runtimeInfo?.executionCwd ?? context.gitRoot ?? process.cwd(),
       repoIntelligenceMode: currentConfig.repoIntelligenceMode,
       repoIntelligenceTrace: currentConfig.repoIntelligenceTrace,
       // FEATURE_087/088 (v0.7.28): the Ink REPL is the authorized self-
@@ -4831,6 +4852,18 @@ const InkREPLInner: React.FC<InkREPLProps> = ({
   useEffect(() => {
     currentOptionsRef.current.effort = runtimeEffort;
   }, [runtimeEffort]);
+  const applyInteractiveRuntimeInfo = useCallback((
+    runtimeInfo: NonNullable<InteractiveContext["runtimeInfo"]>,
+  ) => {
+    const gitRoot = runtimeInfo.workspaceRoot ?? undefined;
+    context.runtimeInfo = runtimeInfo;
+    context.gitRoot = gitRoot;
+    currentOptionsRef.current.context = {
+      ...currentOptionsRef.current.context,
+      gitRoot,
+      executionCwd: runtimeInfo.executionCwd ?? gitRoot ?? process.cwd(),
+    };
+  }, [context]);
   // Permission-related refs (not part of KodaXOptions anymore)
   const permissionModeRef = useRef<PermissionMode>(currentConfig.permissionMode);
   useEffect(() => {
@@ -5872,13 +5905,13 @@ const InkREPLInner: React.FC<InkREPLProps> = ({
     if (process.env.KODAX_PREWARM_REPO_INTELLIGENCE === '0') return;
     prewarmRepoIntelligenceCaches(
       {
-        executionCwd: context.gitRoot ?? process.cwd(),
+        executionCwd: context.runtimeInfo?.executionCwd ?? context.gitRoot ?? process.cwd(),
         gitRoot: context.gitRoot ?? undefined,
       },
       { mode: currentConfig.repoIntelligenceMode },
     );
     // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, [context.gitRoot, currentConfig.repoIntelligenceMode]);
+  }, [context.gitRoot, context.runtimeInfo?.executionCwd, currentConfig.repoIntelligenceMode]);
 
   // Process special syntax (shell commands, file references)
   // Create KodaXEvents for streaming updates
@@ -7259,6 +7292,7 @@ const InkREPLInner: React.FC<InkREPLProps> = ({
       context.gitRoot,
       context.contextTokenSnapshot,
       skillsPrompt,
+      context.runtimeInfo?.executionCwd,
     );
     if (inputArtifacts && inputArtifacts.length > 0) {
       managedRunContext.inputArtifacts = [...inputArtifacts];
@@ -7268,7 +7302,7 @@ const InkREPLInner: React.FC<InkREPLProps> = ({
     // (plan ↔ accept-edits) propagate into in-flight children.
     managedRunContext.planModeBlockCheck = (tool, input) => {
       if (permissionModeRef.current !== 'plan') return null;
-      return getPlanModeBlockReason(tool, input, context.gitRoot ?? process.cwd());
+      return getPlanModeBlockReason(tool, input, context.gitRoot ?? context.runtimeInfo?.executionCwd ?? process.cwd());
     };
 
     const runOptions: KodaXOptions = {
@@ -7334,6 +7368,7 @@ const InkREPLInner: React.FC<InkREPLProps> = ({
       messages: context.messages,
       title,
       gitRoot: context.gitRoot ?? "",
+      runtimeInfo: context.runtimeInfo,
       tag: currentOptionsRef.current.session?.tag,
       uiHistory: persistedUiHistory,
       lineage,
@@ -7737,6 +7772,7 @@ const InkREPLInner: React.FC<InkREPLProps> = ({
       messages: context.messages,
       title: sourceTitle,
       gitRoot: context.gitRoot ?? "",
+      runtimeInfo: context.runtimeInfo,
       tag: currentOptionsRef.current.session?.tag,
       uiHistory: persistedUiHistoryRef.current,
       lineage: sourceLineage,
@@ -7751,6 +7787,7 @@ const InkREPLInner: React.FC<InkREPLProps> = ({
       messages: seed.messages,
       title: seed.title,
       gitRoot: context.gitRoot ?? "",
+      runtimeInfo: context.runtimeInfo,
       tag: currentOptionsRef.current.session?.tag,
       uiHistory: [],
       lineage: seedLineage,
@@ -7793,6 +7830,7 @@ const InkREPLInner: React.FC<InkREPLProps> = ({
       messages: context.messages,
       title: context.title,
       gitRoot: context.gitRoot ?? "",
+      runtimeInfo: context.runtimeInfo,
       tag: currentOptionsRef.current.session?.tag,
       uiHistory: persistedUiHistoryRef.current,
       lineage: context.lineage,
@@ -8385,6 +8423,7 @@ const InkREPLInner: React.FC<InkREPLProps> = ({
         };
         // Create command callbacks
         const callbacks: CommandCallbacks = {
+          getRuntimeStatus: options.getRuntimeStatus,
           exit: requestGracefulExit,
           saveSession: async () => {
             if (context.messages.length > 0) {
@@ -8396,6 +8435,7 @@ const InkREPLInner: React.FC<InkREPLProps> = ({
                 messages: context.messages,
                 title,
                 gitRoot: context.gitRoot ?? "",
+                runtimeInfo: context.runtimeInfo,
                 tag: currentOptionsRef.current.session?.tag,
                 uiHistory: persistedUiHistoryRef.current,
                 lineage,
@@ -8423,6 +8463,7 @@ const InkREPLInner: React.FC<InkREPLProps> = ({
             persistedUiHistoryRef.current = [];
             context.createdAt = now;
             context.lastAccessed = now;
+            applyInteractiveRuntimeInfo(startupRuntimeInfo);
             currentOptionsRef.current.session = {
               ...currentOptionsRef.current.session,
               id: nextSessionId,
@@ -8452,6 +8493,12 @@ const InkREPLInner: React.FC<InkREPLProps> = ({
               if (!allowed) {
                 return "blocked";
               }
+              const currentWorkspaceRuntime = await inspectWorkspaceRuntime({ cwd: process.cwd() });
+              const savedRuntime = resolveSessionRuntimeInfo(loaded);
+              let appliedRuntime = savedRuntime ?? currentWorkspaceRuntime;
+              if (savedRuntime?.workspaceRoot && !workspaceExists(savedRuntime)) {
+                appliedRuntime = currentWorkspaceRuntime;
+              }
               context.messages = loaded.messages;
               context.uiHistory = normalizePersistedUiHistory(loaded.uiHistory);
               context.lineage = loaded.lineage;
@@ -8465,6 +8512,7 @@ const InkREPLInner: React.FC<InkREPLProps> = ({
               context.title = loaded.title;
               context.sessionId = id;
               context.contextTokenSnapshot = undefined;
+              applyInteractiveRuntimeInfo(appliedRuntime);
               // FEATURE_226: back-propagate the loaded session's tag into the
               // live options so subsequent saves / forks reflect it (the save
               // side reads currentOptionsRef.current.session?.tag).
@@ -8661,6 +8709,7 @@ const InkREPLInner: React.FC<InkREPLProps> = ({
             context.extensionRecordsDirty = false;
             context.title = loaded.title;
             context.contextTokenSnapshot = undefined;
+            applyInteractiveRuntimeInfo(resolveSessionRuntimeInfo(loaded) ?? context.runtimeInfo ?? startupRuntimeInfo);
             persistedUiHistoryRef.current = context.uiHistory ?? [];
             setLiveTokenCount(null);
             clearUIHistory();
@@ -8708,6 +8757,7 @@ const InkREPLInner: React.FC<InkREPLProps> = ({
             context.extensionRecordsDirty = false;
             context.title = forked.data.title;
             context.contextTokenSnapshot = undefined;
+            applyInteractiveRuntimeInfo(resolveSessionRuntimeInfo(forked.data) ?? context.runtimeInfo ?? startupRuntimeInfo);
             persistedUiHistoryRef.current = context.uiHistory ?? [];
             const now = new Date().toISOString();
             context.createdAt = now;
@@ -8753,6 +8803,7 @@ const InkREPLInner: React.FC<InkREPLProps> = ({
             context.extensionRecordsDirty = false;
             context.title = rewound.title;
             context.contextTokenSnapshot = undefined;
+            applyInteractiveRuntimeInfo(resolveSessionRuntimeInfo(rewound) ?? context.runtimeInfo ?? startupRuntimeInfo);
             persistedUiHistoryRef.current = context.uiHistory ?? [];
             setLiveTokenCount(null);
             clearUIHistory();
@@ -9769,7 +9820,7 @@ export async function runInkInteractiveMode(options: InkREPLOptions): Promise<vo
   const fullscreenPolicy = resolveFullscreenPolicy(terminalHostProfile, rendererMode);
 
   // Load config
-  const { prepareRuntimeConfig, getGitRoot } = await import("../common/utils.js");
+  const { prepareRuntimeConfig } = await import("../common/utils.js");
   const { loadCompactionConfig } = await import("../common/compaction-config.js");
   const { resolveProvider } = await import("@kodax-ai/coding");
 
@@ -9819,7 +9870,10 @@ export async function runInkInteractiveMode(options: InkREPLOptions): Promise<vo
   let existingExtensionState: InteractiveContext['extensionState'];
   let existingExtensionRecords: InteractiveContext['extensionRecords'];
   let sessionTitle = "";
-  const gitRoot = (await getGitRoot().catch(() => null)) ?? undefined;
+  const startupRuntime = await inspectWorkspaceRuntime({ cwd: process.cwd() });
+  const gitRoot = startupRuntime.workspaceRoot ?? undefined;
+  let activeRuntimeInfo: NonNullable<InteractiveContext["runtimeInfo"]> = startupRuntime;
+  let activeGitRoot = gitRoot;
 
   // FEATURE_125 v0.7.41 — Bootstrap Team Mode (multi-instance auto
   // coordination). Mirrors the wiring in the legacy `runInteractiveMode`
@@ -9859,26 +9913,42 @@ export async function runInkInteractiveMode(options: InkREPLOptions): Promise<vo
     const { bootstrapConstructionRuntime } = await import('../common/construction-bootstrap.js');
     const construction = await bootstrapConstructionRuntime(gitRoot ?? process.cwd());
     if (construction.loaded > 0 || construction.failed > 0 || construction.tampered > 0) {
-      const failedSuffix = construction.failed > 0 ? `; ${construction.failed} failed (see warnings above)` : '';
+      const failedSuffix = construction.failed > 0 ? `; ${construction.failed} failed` : '';
       const tamperedSuffix = construction.tampered > 0
         ? `; ${construction.tampered} skipped due to manifest contentHash mismatch — re-stage and re-activate to re-approve`
         : '';
-      console.log(chalk.dim(`[Constructed] Rehydrated ${construction.loaded} active tool(s)${failedSuffix}${tamperedSuffix}.`));
+      emitKodaXDiagnostic({
+        source: 'repl:construction',
+        level: construction.failed > 0 || construction.tampered > 0 ? 'warn' : 'info',
+        message: `Rehydrated ${construction.loaded} active tool(s)${failedSuffix}${tamperedSuffix}.`,
+      });
     }
     // FEATURE_191 — surface markdown-defined agent count + per-file failures
     // so users with malformed `~/.kodax/agents/*.md` or `<repo>/.kodax/agents/*.md`
     // get actionable feedback at boot (otherwise admission rejection / missing
     // description is silently dropped).
     if (construction.markdownLoaded > 0 || construction.markdownFailures.length > 0) {
-      console.log(chalk.dim(`[Agents] Loaded ${construction.markdownLoaded} markdown agent(s).`));
+      emitKodaXDiagnostic({
+        source: 'repl:agents',
+        level: construction.markdownFailures.length > 0 ? 'warn' : 'info',
+        message: `Loaded ${construction.markdownLoaded} markdown agent(s).`,
+      });
       for (const failure of construction.markdownFailures) {
-        console.warn(chalk.yellow(`[Agents] Skipped ${failure.path}: ${failure.reason}`));
+        emitKodaXDiagnostic({
+          source: 'repl:agents',
+          level: 'warn',
+          message: `Skipped markdown agent ${failure.path}: ${failure.reason}`,
+        });
       }
     }
   } catch (err) {
     // Bootstrap failure must not break the REPL; log and proceed without
     // construction support for this session.
-    console.warn(chalk.yellow(`[Constructed] Bootstrap failed: ${(err as Error).message}. Self-construction disabled this session.`));
+    emitKodaXDiagnostic({
+      source: 'repl:construction',
+      level: 'warn',
+      message: `Bootstrap failed: ${(err as Error).message}. Self-construction disabled this session.`,
+    });
   }
 
   // Load compaction config before rendering so the <Static> banner has it immediately
@@ -9922,6 +9992,8 @@ export async function runInkInteractiveMode(options: InkREPLOptions): Promise<vo
       existingExtensionRecords = loaded.extensionRecords;
       sessionTitle = loaded.title;
       sessionId = options.session.id;
+      activeRuntimeInfo = resolveSessionRuntimeInfo(loaded) ?? startupRuntime;
+      activeGitRoot = activeRuntimeInfo.workspaceRoot ?? undefined;
       // FEATURE_226: carry the resumed session's tag into options so the
       // live currentOptionsRef reflects it (save side reads it back).
       options = { ...options, session: { ...(options.session ?? {}), id: sessionId, tag: loaded.tag } };
@@ -9944,6 +10016,8 @@ export async function runInkInteractiveMode(options: InkREPLOptions): Promise<vo
           existingExtensionRecords = loaded.extensionRecords;
           sessionTitle = loaded.title;
           sessionId = recentSession.id;
+          activeRuntimeInfo = resolveSessionRuntimeInfo(loaded) ?? startupRuntime;
+          activeGitRoot = activeRuntimeInfo.workspaceRoot ?? undefined;
           // FEATURE_226: carry the resumed session's tag into options.
           options = {
             ...options,
@@ -9958,7 +10032,8 @@ export async function runInkInteractiveMode(options: InkREPLOptions): Promise<vo
   // Create context with loaded session
   const context = await createInteractiveContext({
     sessionId,
-    gitRoot,
+    gitRoot: activeGitRoot,
+    runtimeInfo: activeRuntimeInfo,
     existingMessages,
     existingUiHistory,
     existingLineage,
@@ -9967,6 +10042,14 @@ export async function runInkInteractiveMode(options: InkREPLOptions): Promise<vo
     existingExtensionRecords,
   });
   context.title = sessionTitle;
+  options = {
+    ...options,
+    context: {
+      ...options.context,
+      gitRoot: context.gitRoot ?? undefined,
+      executionCwd: context.runtimeInfo?.executionCwd ?? context.gitRoot ?? process.cwd(),
+    },
+  };
 
   // v0.7.43 (FEATURE_173 Part B follow-up) — publish the resolved
   // sessionId to the FEATURE_125 heartbeat so `listRunningSessions()`
@@ -10031,8 +10114,11 @@ export async function runInkInteractiveMode(options: InkREPLOptions): Promise<vo
     getCurrentPermissionMode: () => inkCurrentConfigRef.current.permissionMode,
     autoModeSettings,
     log: (level, msg) => {
-      if (level === 'warn') console.warn(chalk.yellow(msg));
-      else console.log(chalk.dim(msg));
+      emitKodaXDiagnostic({
+        source: 'repl:auto-mode',
+        level: level === 'warn' ? 'warn' : 'info',
+        message: msg,
+      });
     },
     onEngineChange: (engine) => {
       inkAutoModeEngineChangeRef.current?.(engine);
@@ -10081,6 +10167,7 @@ export async function runInkInteractiveMode(options: InkREPLOptions): Promise<vo
         options={options}
         config={currentConfig}
         context={context}
+        startupRuntimeInfo={startupRuntime}
         storage={storage}
         compactionInfo={compactionInfo}
         rendererMode={rendererMode}

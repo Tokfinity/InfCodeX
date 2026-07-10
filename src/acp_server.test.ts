@@ -1,4 +1,7 @@
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
+import fs from 'node:fs/promises';
+import os from 'node:os';
+import path from 'node:path';
 import type { NewSessionRequest, PromptRequest, SetSessionModeRequest } from '@agentclientprotocol/sdk';
 
 type RuntimeConfigMock = {
@@ -61,6 +64,7 @@ vi.mock('@kodax-ai/coding', () => ({
     return normalized;
   },
   registerConfiguredMcpCapabilityProvider: vi.fn(async () => undefined),
+  registerCustomProviders: vi.fn(),
   resolveProvider: vi.fn(() => ({})),
   generateSessionId: vi.fn(async () => 'generated-session'),
   runManagedTask: vi.fn(),
@@ -101,6 +105,7 @@ vi.mock('@kodax-ai/repl', () => ({
 }));
 
 import { KodaXAcpServer } from './acp_server.js';
+import { createKodaXRuntime } from './sdk-runtime.js';
 
 type PromptRequestWithEffort = PromptRequest & {
   effort?: string;
@@ -275,4 +280,83 @@ describe('KodaXAcpServer reasoning effort forwarding', () => {
     expect(acpServerState.startKodaX).not.toHaveBeenCalled();
     await server.dispose();
   });
+
+  it('returns cancelled for queued prompts cancelled before coding starts', async () => {
+    const tempRoot = await fs.mkdtemp(path.join(os.tmpdir(), 'kodax-acp-runtime-'));
+    const runtime = await createKodaXRuntime({ sessionsDir: tempRoot, defaultProvider: 'openai' });
+    const abortSpies: Array<ReturnType<typeof vi.fn>> = [];
+    acpServerState.startKodaX.mockImplementation((options: { session?: { id?: string } }) => {
+      acpServerState.capturedOptions.push(options);
+      const sessionId = options.session?.id ?? 'missing-session';
+      const abort = vi.fn((_reason?: unknown) => undefined);
+      abortSpies.push(abort);
+      return {
+        id: sessionId,
+        attached: true,
+        currentProvider: 'openai',
+        currentModel: undefined,
+        currentReasoning: undefined,
+        aborted: false,
+        setProvider: vi.fn(),
+        setModel: vi.fn(),
+        setReasoning: vi.fn(),
+        abort,
+        result: new Promise<never>(() => undefined),
+      };
+    });
+    const server = new KodaXAcpServer({ runtime, provider: 'openai', logLevel: 'off' });
+
+    try {
+      const sessionId = await createSession(server);
+      const first = server.prompt(makePrompt(sessionId));
+      await waitForCondition('first ACP coding run', () => acpServerState.startKodaX.mock.calls.length === 1);
+
+      const second = server.prompt(makePrompt(sessionId));
+      await waitForCondition('queued ACP runtime run', async () => {
+        const runs = await runtime.runs.list({ sessionId });
+        return runs.length === 2 && runs.some((run) => run.phase === 'queued');
+      });
+
+      await server.cancel({ sessionId });
+
+      await expect(expectSettles(first, 'first cancelled prompt')).resolves.toMatchObject({
+        stopReason: 'cancelled',
+      });
+      await expect(expectSettles(second, 'queued cancelled prompt')).resolves.toMatchObject({
+        stopReason: 'cancelled',
+      });
+      expect(acpServerState.startKodaX).toHaveBeenCalledTimes(1);
+      expect(abortSpies[0]).toHaveBeenCalledOnce();
+      const cancelledRuns = await runtime.runs.list({ sessionId });
+      expect(cancelledRuns).toHaveLength(2);
+      expect(cancelledRuns.map((run) => run.phase)).toEqual(['cancelled', 'cancelled']);
+    } finally {
+      await server.dispose();
+      await runtime.close();
+      await fs.rm(tempRoot, { recursive: true, force: true });
+    }
+  });
 });
+
+async function waitForCondition(label: string, predicate: () => boolean | Promise<boolean>): Promise<void> {
+  const deadline = Date.now() + 1000;
+  while (Date.now() < deadline) {
+    if (await predicate()) return;
+    await new Promise<void>((resolve) => setTimeout(resolve, 10));
+  }
+  throw new Error(`${label} did not happen`);
+}
+
+async function expectSettles<T>(promise: Promise<T>, label: string): Promise<T> {
+  let timer: ReturnType<typeof setTimeout> | undefined;
+  try {
+    return await Promise.race([
+      promise,
+      new Promise<T>((_, reject) => {
+        timer = setTimeout(() => reject(new Error(`${label} did not settle`)), 250);
+      }),
+    ]);
+  } finally {
+    if (timer) clearTimeout(timer);
+  }
+}

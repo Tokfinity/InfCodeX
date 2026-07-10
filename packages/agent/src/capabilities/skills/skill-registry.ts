@@ -15,6 +15,7 @@ import type {
   ISkillRegistry,
   SkillPathsConfig,
 } from './types.js';
+import { emitKodaXDiagnostic } from '../../diagnostics.js';
 import { discoverSkills } from './discovery.js';
 import { loadFullSkill } from './skill-loader.js';
 import { resolveSkillContent } from './skill-resolver.js';
@@ -46,7 +47,12 @@ export class SkillRegistry implements ISkillRegistry {
     // Log any discovery errors
     if (result.errors.length > 0) {
       for (const { path, error } of result.errors) {
-        console.warn(`[Skills] Error scanning ${path}: ${error}`);
+        emitKodaXDiagnostic({
+          source: 'agent:skills',
+          level: 'warn',
+          message: `Error scanning ${path}.`,
+          detail: error,
+        });
       }
     }
   }

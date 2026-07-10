@@ -1,0 +1,53 @@
+import { describe, expect, it } from 'vitest';
+
+import {
+  RUNTIME_DAEMON_METHODS,
+} from './protocol.js';
+import {
+  RUNTIME_DAEMON_METHOD_SCHEMAS,
+  RUNTIME_DAEMON_NOTIFICATION_SCHEMAS,
+  RUNTIME_DAEMON_PROTOCOL_SCHEMA,
+  RUNTIME_DAEMON_PROTOCOL_SCHEMA_JSON,
+} from './schema.js';
+
+describe('runtime daemon protocol schema', () => {
+  it('covers every daemon protocol method with params and result schemas', () => {
+    expect(Object.keys(RUNTIME_DAEMON_METHOD_SCHEMAS).sort()).toEqual([...RUNTIME_DAEMON_METHODS].sort());
+
+    for (const method of RUNTIME_DAEMON_METHODS) {
+      const schema = RUNTIME_DAEMON_METHOD_SCHEMAS[method];
+      expect(schema.params).toBeDefined();
+      expect(schema.result).toBeDefined();
+    }
+  });
+
+  it('publishes one schema artifact with method and notification families', () => {
+    expect(RUNTIME_DAEMON_PROTOCOL_SCHEMA).toMatchObject({
+      protocol: 'kodax-runtime-daemon',
+      version: 1,
+      methods: RUNTIME_DAEMON_METHOD_SCHEMAS,
+      notifications: RUNTIME_DAEMON_NOTIFICATION_SCHEMAS,
+    });
+    expect(JSON.parse(RUNTIME_DAEMON_PROTOCOL_SCHEMA_JSON)).toMatchObject({
+      protocol: 'kodax-runtime-daemon',
+      version: 1,
+      methods: {
+        'provider.custom.list': expect.any(Object),
+        'mcp.server.validate': expect.any(Object),
+        'extension.list': expect.any(Object),
+      },
+    });
+  });
+
+  it('includes diagnostic daemon methods in the generated method schema map', () => {
+    expect(RUNTIME_DAEMON_METHOD_SCHEMAS['context.budget.get'].params).toMatchObject({
+      properties: {
+        sessionId: { type: 'string' },
+        runId: { type: 'string' },
+      },
+    });
+    expect(RUNTIME_DAEMON_METHOD_SCHEMAS['tool.exposure.preview'].result).toMatchObject({
+      oneOf: expect.arrayContaining([{ type: 'null' }]),
+    });
+  });
+});

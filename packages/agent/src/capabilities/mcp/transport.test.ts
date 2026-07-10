@@ -526,6 +526,73 @@ describe('Streamable HTTP transport', () => {
     expect(mock.deleteSessionHeaders).toEqual([mock.sessionId]);
     expect(mock.deleteProtocolHeaders).toEqual(['2025-11-25']);
   });
+
+  it('bounds session DELETE during close when the server never responds', async () => {
+    const sessionId = 'hanging-delete-session';
+    const deleteSessionHeaders: string[] = [];
+    const server = http.createServer((req, res) => {
+      if (req.method === 'POST') {
+        let body = '';
+        req.on('data', (chunk: Buffer) => { body += chunk.toString(); });
+        req.on('end', () => {
+          const parsed = JSON.parse(body) as { id?: number };
+          res.writeHead(200, {
+            'Content-Type': 'application/json',
+            'Mcp-Session-Id': sessionId,
+          });
+          res.end(JSON.stringify({
+            jsonrpc: '2.0',
+            id: parsed.id,
+            result: {
+              protocolVersion: '2025-11-25',
+              capabilities: {},
+              serverInfo: { name: 'hanging-delete', version: '1.0.0' },
+            },
+          }));
+        });
+        return;
+      }
+
+      if (req.method === 'DELETE') {
+        const requestSessionId = req.headers['mcp-session-id'];
+        deleteSessionHeaders.push(Array.isArray(requestSessionId)
+          ? requestSessionId[0] ?? ''
+          : requestSessionId ?? '');
+        return;
+      }
+
+      res.writeHead(405);
+      res.end();
+    });
+
+    servers.push({
+      stop: () => new Promise<void>((resolve) => {
+        server.closeAllConnections();
+        server.close(() => resolve());
+      }),
+    });
+    const url = await new Promise<string>((resolve) => {
+      server.listen(0, '127.0.0.1', () => {
+        const addr = server.address() as { port: number };
+        resolve(`http://127.0.0.1:${addr.port}`);
+      });
+    });
+
+    const transport = createStreamableHttpTransport({ url });
+    await transport.open({ onMessage: () => {}, onError: () => {}, onClose: () => {} });
+    await transport.send(JSON.stringify({
+      jsonrpc: '2.0',
+      id: 1,
+      method: 'initialize',
+      params: {},
+    }));
+
+    const startedAt = Date.now();
+    await transport.close();
+
+    expect(Date.now() - startedAt).toBeLessThan(2_500);
+    expect(deleteSessionHeaders).toEqual([sessionId]);
+  });
 });
 
 describe('Streamable HTTP notification stream resumption', () => {

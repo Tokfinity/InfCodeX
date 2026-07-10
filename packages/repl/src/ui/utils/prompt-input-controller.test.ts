@@ -1,6 +1,7 @@
 import React from "react";
 import { describe, expect, it, beforeEach, vi } from "vitest";
 import { render } from "ink-testing-library";
+import { setKodaXDiagnosticSink, type KodaXDiagnostic } from "@kodax-ai/agent";
 import type { KeyInfo } from "../types.js";
 import type { SelectedCompletion } from "../hooks/useAutocomplete.js";
 
@@ -590,7 +591,7 @@ describe("prompt-input-controller", () => {
       expect(mocks.insertMock).not.toHaveBeenCalled();
     });
 
-    it("paste handler error is logged via console.warn but does not throw", async () => {
+    it("paste handler error emits a diagnostic but does not throw", async () => {
       const imagePath = "/tmp/oops.png";
       mocks.state.extractImagePathsReturn = [imagePath];
       mocks.state.handleBracketedPasteReturn = {
@@ -598,7 +599,10 @@ describe("prompt-input-controller", () => {
         message: "Failed to decode pasted image",
       };
 
-      const warnSpy = vi.spyOn(console, "warn").mockImplementation(() => {});
+      const diagnostics: KodaXDiagnostic[] = [];
+      const restoreDiagnostics = setKodaXDiagnosticSink((diagnostic) => {
+        diagnostics.push(diagnostic);
+      });
 
       let controller: ReturnType<typeof usePromptInputController> | undefined;
       const Harness = () => {
@@ -611,11 +615,13 @@ describe("prompt-input-controller", () => {
       expect(handled).toBe(true);
       await Promise.resolve();
       await Promise.resolve();
-      expect(warnSpy).toHaveBeenCalledWith(
-        expect.stringContaining("Failed to decode pasted image"),
-      );
+      expect(diagnostics).toContainEqual(expect.objectContaining({
+        source: "repl:prompt-input",
+        level: "warn",
+        message: expect.stringContaining("Failed to decode pasted image"),
+      }));
       expect(mocks.insertMock).not.toHaveBeenCalled();
-      warnSpy.mockRestore();
+      restoreDiagnostics();
     });
   });
 });

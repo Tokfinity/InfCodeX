@@ -9,6 +9,10 @@ import type {
   KodaXToolResultBlock,
 } from '@kodax-ai/llm';
 import { KodaXBaseProvider } from '@kodax-ai/llm';
+import {
+  setKodaXDiagnosticSink,
+  type KodaXDiagnostic,
+} from '../../diagnostics.js';
 import { compact, isEmptyLikeSummary, needsCompaction, PROTECTED_TOOL_NAMES, truncateUserText } from './compaction.js';
 import { generateSummary } from './summary-generator.js';
 
@@ -196,6 +200,34 @@ describe('compaction', () => {
     );
 
     expect(provider.modelOverrides).toContain('active-model');
+  });
+
+  it('emits an error diagnostic when a summary chunk fails', async () => {
+    const diagnostics: KodaXDiagnostic[] = [];
+    const restoreDiagnostics = setKodaXDiagnosticSink((diagnostic) => {
+      diagnostics.push(diagnostic);
+    });
+    try {
+      const provider = new FakeSummaryProvider(undefined, 1);
+      const contextWindow = 4000;
+      const config = {
+        enabled: true,
+        triggerPercent: 60,
+        protectionPercent: 20,
+        rollingSummaryPercent: 10,
+        pruningThresholdTokens: 500,
+      };
+
+      await compact(buildLongConversation(10, 220), config, provider, contextWindow);
+
+      expect(diagnostics).toContainEqual(expect.objectContaining({
+        source: 'agent:compaction',
+        level: 'error',
+        message: 'Summary chunk failed, keeping partial summary progress.',
+      }));
+    } finally {
+      restoreDiagnostics();
+    }
   });
 
   it('prunes older tool results while keeping recent tool context and normal messages', async () => {

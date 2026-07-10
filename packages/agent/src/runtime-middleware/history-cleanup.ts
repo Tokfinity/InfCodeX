@@ -33,8 +33,18 @@
  */
 
 import type { KodaXMessage } from '@kodax-ai/llm';
+import { emitKodaXDiagnostic } from '../diagnostics.js';
 
 type MessageContentBlock = Exclude<KodaXMessage['content'], string>[number];
+
+function reportToolHistoryDiagnostic(message: string, detail?: unknown): void {
+  emitKodaXDiagnostic({
+    source: 'agent:tool-history',
+    level: 'debug',
+    message,
+    ...(detail !== undefined ? { detail } : {}),
+  });
+}
 
 function isTypedContentBlock(block: unknown): block is MessageContentBlock {
   return block !== null && typeof block === 'object' && 'type' in block;
@@ -70,7 +80,7 @@ function isToolResultContentBlock(
  */
 export function validateAndFixToolHistory(messages: KodaXMessage[]): KodaXMessage[] {
   if (process.env.KODAX_DEBUG_TOOL_HISTORY) {
-    console.error('[ToolHistory] Validating messages:', messages.length);
+    reportToolHistoryDiagnostic('Validating messages.', { count: messages.length });
     for (let i = 0; i < messages.length; i++) {
       const msg = messages[i];
       if (!msg || typeof msg.content === 'string' || !Array.isArray(msg.content)) continue;
@@ -79,7 +89,7 @@ export function validateAndFixToolHistory(messages: KodaXMessage[]): KodaXMessag
       const toolResults = msg.content.filter(isToolResultContentBlock);
 
       if (toolUses.length > 0 || toolResults.length > 0) {
-        console.error(`  [${i}] ${msg.role}:`, {
+        reportToolHistoryDiagnostic(`Message ${i} ${msg.role}.`, {
           toolUses: toolUses.map((toolUse) => ({ id: toolUse.id, name: toolUse.name })),
           toolResults: toolResults.map((toolResult) => ({ tool_use_id: toolResult.tool_use_id })),
         });
@@ -121,12 +131,12 @@ export function validateAndFixToolHistory(messages: KodaXMessage[]): KodaXMessag
 
         if (block.type === 'tool_use') {
           if (!block.id || typeof block.id !== 'string' || block.id.trim() === '') {
-            console.error('[ToolHistoryFix] Removed tool_use with empty id');
+            reportToolHistoryDiagnostic('Removed tool_use with empty id.');
             continue;
           }
 
           if (!resultIds.has(block.id)) {
-            console.error('[ToolHistoryFix] Removed orphaned tool_use:', block.id);
+            reportToolHistoryDiagnostic('Removed orphaned tool_use.', { id: block.id });
             continue;
           }
 
@@ -155,12 +165,12 @@ export function validateAndFixToolHistory(messages: KodaXMessage[]): KodaXMessag
 
         if (block.type === 'tool_result') {
           if (!block.tool_use_id || typeof block.tool_use_id !== 'string' || block.tool_use_id.trim() === '') {
-            console.error('[ToolHistoryFix] Removed tool_result with empty tool_use_id');
+            reportToolHistoryDiagnostic('Removed tool_result with empty tool_use_id.');
             continue;
           }
 
           if (!toolUseIds.has(block.tool_use_id)) {
-            console.error('[ToolHistoryFix] Removed orphaned tool_result:', block.tool_use_id);
+            reportToolHistoryDiagnostic('Removed orphaned tool_result.', { toolUseId: block.tool_use_id });
             continue;
           }
 

@@ -25,6 +25,7 @@ import {
   performOAuthLogin,
   type OAuthLoginConsent,
 } from './oauth-login.js';
+import { emitKodaXDiagnostic } from '../../diagnostics.js';
 import { extractInsufficientScope, extractResourceMetadataUrl } from './oauth-discovery.js';
 import {
   buildInitializeCapabilities,
@@ -720,15 +721,19 @@ export class McpServerRuntime {
       });
       if (token) {
         if (this.config.headers?.Authorization) {
-          process.stderr.write(
-            `[kodax:mcp] OAuth token will override user-provided Authorization header for "${this.serverId}"\n`,
-          );
+          emitKodaXDiagnostic({
+            source: 'agent:mcp',
+            level: 'warn',
+            message: `OAuth token will override user-provided Authorization header for "${this.serverId}".`,
+          });
         }
         return bearerHeader(token);
       }
-      process.stderr.write(
-        `[kodax:mcp] OAuth token required for "${this.serverId}" but not available. Connecting without auth.\n`,
-      );
+      emitKodaXDiagnostic({
+        source: 'agent:mcp',
+        level: 'warn',
+        message: `OAuth token required for "${this.serverId}" but not available. Connecting without auth.`,
+      });
       return undefined;
     }
     if (this.config.url) {

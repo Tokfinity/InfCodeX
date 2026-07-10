@@ -8,9 +8,10 @@ export function buildManagedRunContext(
   interactiveGitRoot: string | null | undefined,
   contextTokenSnapshot: KodaXContextTokenSnapshot | undefined,
   skillsPrompt: string,
+  interactiveExecutionCwd?: string,
 ): KodaXContextOptions {
   const gitRoot = baseContext?.gitRoot ?? interactiveGitRoot ?? undefined;
-  const executionCwd = baseContext?.executionCwd ?? gitRoot ?? process.cwd();
+  const executionCwd = baseContext?.executionCwd ?? interactiveExecutionCwd ?? gitRoot ?? process.cwd();
 
   return {
     ...baseContext,

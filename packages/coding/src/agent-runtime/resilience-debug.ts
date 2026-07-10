@@ -9,14 +9,14 @@
  * channel — `KODAX_DEBUG_STREAM=1` (broader streaming debug) or
  * `KODAX_DEBUG_RESILIENCE=1` (narrow) — either suffices.
  *
- * Output format is intentionally `console.error(label, payload)` so the
- * structured payload is preserved for log scrapers; do NOT swap to
- * `JSON.stringify` here — the call sites pass shape-matched objects that
- * a downstream pipeline parses field-by-field.
+ * Output is emitted through the diagnostic channel so interactive hosts can
+ * decide how to display it without corrupting the live terminal renderer.
  *
  * Migration history: extracted from `agent.ts:886-895` (pre-FEATURE_100 baseline)
  * during FEATURE_100 P2.
  */
+
+import { emitKodaXDiagnostic } from '@kodax-ai/agent';
 
 export function shouldDebugResilience(): boolean {
   return process.env.KODAX_DEBUG_STREAM === '1' || process.env.KODAX_DEBUG_RESILIENCE === '1';
@@ -26,5 +26,10 @@ export function emitResilienceDebug(label: string, payload: Record<string, unkno
   if (!shouldDebugResilience()) {
     return;
   }
-  console.error(label, payload);
+  emitKodaXDiagnostic({
+    source: 'coding:resilience',
+    level: 'debug',
+    message: label,
+    detail: payload,
+  });
 }

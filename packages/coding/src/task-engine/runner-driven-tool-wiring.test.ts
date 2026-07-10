@@ -18,7 +18,7 @@
  * deleted alongside the V1 chain agent declarations.
  */
 
-import { describe, expect, it } from 'vitest';
+import { afterEach, describe, expect, it } from 'vitest';
 
 import {
   type AmaRole,
@@ -26,9 +26,22 @@ import {
   getAmaRoleEffectiveExclude,
   getAmaRoleExpectedToolNames,
 } from './runner-driven.js';
-import { getToolDefinition, listToolDefinitions, MCP_TOOL_NAMES } from '../tools/registry.js';
+import {
+  getToolDefinition,
+  listToolDefinitions,
+  MCP_TOOL_NAMES,
+  registerTool,
+} from '../tools/registry.js';
 import { DEFERRED_TOOL_HINTS } from '../tools/deferred-tools.js';
 import type { KodaXToolExecutionContext } from '../types.js';
+
+const cleanupToolRegistrations: Array<() => void> = [];
+
+afterEach(() => {
+  while (cleanupToolRegistrations.length > 0) {
+    cleanupToolRegistrations.pop()?.();
+  }
+});
 
 // FEATURE_246: the standard workflow-capable Worker is the AMAW (or AMA
 // /workflow-command-elevated) Worker, whose ctx carries a workflowHost. run_workflow
@@ -210,6 +223,47 @@ describe('FEATURE_250 — managed-path progressive disclosure (deferred hint-swa
     const tool = workerTool('tool_search');
     expect(tool, 'worker missing tool_search').toBeTruthy();
     expect(tool!.description).toBe(getToolDefinition('tool_search')?.description);
+  });
+
+  it('portable bridge meta-tools are executable on the managed path', async () => {
+    cleanupToolRegistrations.push(registerTool({
+      name: 'managed_bridge_target',
+      description: 'Managed bridge test target.',
+      input_schema: {
+        type: 'object',
+        properties: {
+          value: { type: 'string' },
+        },
+        required: ['value'],
+      },
+      handler: async (input) => `managed-target:${String(input.value)}`,
+      sideEffect: 'readonly',
+      toClassifierInput: () => '',
+    }));
+
+    const chain = buildRunnerAgentChain(makeCtx(true, true), makeRecorder());
+    const tools = (chain.worker.tools ?? []) as Array<{
+      name: string;
+      execute?: (input: Record<string, unknown>, ctx: { agent: typeof chain.worker; toolCallId: string }) => Promise<{ content: string | readonly unknown[] }>;
+    }>;
+    const describeTool = tools.find((tool) => tool.name === 'tool_describe');
+    const callTool = tools.find((tool) => tool.name === 'tool_call');
+
+    expect(describeTool?.execute, 'worker missing executable tool_describe').toBeTypeOf('function');
+    expect(callTool?.execute, 'worker missing executable tool_call').toBeTypeOf('function');
+
+    const describeResult = await describeTool!.execute!(
+      { name: 'managed_bridge_target' },
+      { agent: chain.worker, toolCallId: 'describe-1' },
+    );
+    expect(String(describeResult.content)).toContain('"name":"managed_bridge_target"');
+    expect(String(describeResult.content)).toContain('Managed bridge test target.');
+
+    const callResult = await callTool!.execute!(
+      { name: 'managed_bridge_target', input: { value: 'ok' } },
+      { agent: chain.worker, toolCallId: 'call-1' },
+    );
+    expect(callResult.content).toBe('managed-target:ok');
   });
 
   it('non-deferred tools keep their full description (e.g. bash)', () => {

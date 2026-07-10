@@ -4,14 +4,20 @@
  * embedder hit this — silent no-op meant runs completed successfully
  * but ~/.kodax/sessions/<id>.jsonl never appeared.
  *
- * The middleware adds a one-shot console.warn keyed by session.id
+ * The middleware adds a one-shot diagnostic keyed by session.id
  * so the same id firing terminal save multiple times only warns
  * once, but legitimately new runs (different ids) each get their
  * own onboarding warning.
  */
 
+import path from 'path';
 import { describe, it, expect, vi, beforeEach, afterEach } from 'vitest';
-import type { KodaXSessionData, KodaXSessionStorage } from '@kodax-ai/agent';
+import {
+  setKodaXDiagnosticSink,
+  type KodaXDiagnostic,
+  type KodaXSessionData,
+  type KodaXSessionStorage,
+} from '@kodax-ai/agent';
 import type { KodaXOptions } from '../../types.js';
 import { buildRuntimeSessionState } from '../runtime-session-state.js';
 import {
@@ -20,13 +26,21 @@ import {
 } from './session-snapshot.js';
 
 let warnSpy: ReturnType<typeof vi.spyOn>;
+let diagnostics: KodaXDiagnostic[];
+let restoreDiagnosticSink: (() => void) | undefined;
 
 beforeEach(() => {
+  diagnostics = [];
+  restoreDiagnosticSink = setKodaXDiagnosticSink((diagnostic) => {
+    diagnostics.push(diagnostic);
+  });
   warnSpy = vi.spyOn(console, 'warn').mockImplementation(() => {});
 });
 
 afterEach(() => {
   warnSpy.mockRestore();
+  restoreDiagnosticSink?.();
+  restoreDiagnosticSink = undefined;
 });
 
 const minimalData = {
@@ -55,18 +69,20 @@ describe('saveSessionSnapshot — silent no-op when no storage', () => {
     const opts = { provider: 'anthropic', session } as KodaXOptions;
     await saveSessionSnapshot(opts, session.id!, minimalData);
     expect(warnSpy).not.toHaveBeenCalled();
+    expect(diagnostics).toEqual([]);
   });
 });
 
-describe('saveSessionSnapshot — v0.7.43 console.warn for id-without-storage trap', () => {
+describe('saveSessionSnapshot — v0.7.43 diagnostic for id-without-storage trap', () => {
   it('warns once when session.id is set but storage is undefined', async () => {
     const opts = {
       provider: 'anthropic',
       session: { id: `sdk-trap-warn-${Date.now()}-1` },
     } as KodaXOptions;
     await saveSessionSnapshot(opts, opts.session!.id!, minimalData);
-    expect(warnSpy).toHaveBeenCalledTimes(1);
-    const msg = warnSpy.mock.calls[0]?.[0] as string;
+    expect(warnSpy).not.toHaveBeenCalled();
+    expect(diagnostics.length).toBe(1);
+    const msg = diagnostics[0]?.message ?? '';
     expect(msg).toContain('[KodaX SDK]');
     expect(msg).toContain('session.storage is undefined');
     expect(msg).toContain('createSessionManager');
@@ -82,7 +98,8 @@ describe('saveSessionSnapshot — v0.7.43 console.warn for id-without-storage tr
     await saveSessionSnapshot(opts, id, minimalData);
     await saveSessionSnapshot(opts, id, minimalData);
     await saveSessionSnapshot(opts, id, minimalData);
-    expect(warnSpy).toHaveBeenCalledTimes(1);
+    expect(warnSpy).not.toHaveBeenCalled();
+    expect(diagnostics.length).toBe(1);
   });
 
   it('warns separately for distinct session ids', async () => {
@@ -98,7 +115,8 @@ describe('saveSessionSnapshot — v0.7.43 console.warn for id-without-storage tr
       id2,
       minimalData,
     );
-    expect(warnSpy).toHaveBeenCalledTimes(2);
+    expect(warnSpy).not.toHaveBeenCalled();
+    expect(diagnostics.length).toBe(2);
   });
 });
 
@@ -333,8 +351,7 @@ describe('saveSessionSnapshot — happy path with storage', () => {
     expect(persisted.errorMetadata?.lastError).toBe('zhipu 1214');
   });
 
-  it('absorbs storage.save errors via console.error (does NOT throw to caller)', async () => {
-    const errSpy = vi.spyOn(console, 'error').mockImplementation(() => {});
+  it('absorbs storage.save errors via diagnostics (does NOT throw to caller)', async () => {
     const saveMock = vi.fn().mockRejectedValue(new Error('disk full'));
     const opts = {
       provider: 'anthropic',
@@ -344,9 +361,10 @@ describe('saveSessionSnapshot — happy path with storage', () => {
       },
     } as unknown as KodaXOptions;
     await expect(saveSessionSnapshot(opts, opts.session!.id!, minimalData)).resolves.toBeUndefined();
-    expect(errSpy).toHaveBeenCalled();
-    expect(errSpy.mock.calls[0]?.[0]).toContain('[SessionSnapshot]');
-    errSpy.mockRestore();
+    expect(diagnostics.length).toBe(1);
+    expect(diagnostics[0]?.source).toBe('coding:session-snapshot');
+    expect(diagnostics[0]?.level).toBe('error');
+    expect(diagnostics[0]?.message).toContain('storage.save failed');
   });
 });
 
@@ -452,5 +470,32 @@ describe('saveSessionSnapshot — v0.7.45 gitRoot 3-tier resolution', () => {
     });
     expect(saveMock).toHaveBeenCalledTimes(1);
     expect(saveMock.mock.calls[0]?.[1]?.gitRoot).toBe(HOST_INDEPENDENT);
+  });
+
+  it('persists runtimeInfo.executionCwd when no git root is available', async () => {
+    const saveMock = vi.fn().mockResolvedValue(undefined);
+    const executionCwd = path.join('tmp', 'kodax-non-git-cwd');
+    const normalizedExecutionCwd = path.resolve(executionCwd).replace(/\\/g, '/');
+    const opts = {
+      provider: 'anthropic',
+      session: {
+        id: `sdk-gitroot-${Date.now()}-5`,
+        storage: { save: saveMock } as never,
+      },
+      context: { executionCwd },
+    } as KodaXOptions;
+
+    await saveSessionSnapshot(opts, opts.session!.id!, {
+      messages: [{ role: 'user', content: 'non-git cwd' }],
+      title: 'non-git',
+    });
+
+    expect(saveMock).toHaveBeenCalledTimes(1);
+    const persisted = saveMock.mock.calls[0]?.[1] as KodaXSessionData;
+    expect(persisted.gitRoot).toBe('');
+    expect(persisted.runtimeInfo).toEqual({
+      executionCwd: normalizedExecutionCwd,
+      workspaceKind: 'detected',
+    });
   });
 });

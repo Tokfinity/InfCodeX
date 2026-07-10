@@ -7,6 +7,7 @@
 
 import { readFile, readdir } from 'fs/promises';
 import { join, relative } from 'path';
+import { emitKodaXDiagnostic } from '../../diagnostics.js';
 import type {
   Skill,
   SkillHooks,
@@ -88,7 +89,12 @@ export async function loadSkillMetadata(
       disableModelInvocation: frontmatter.disableModelInvocation ?? false,
     };
   } catch (error) {
-    console.error(`Failed to load skill metadata from ${skillDir}:`, error);
+    emitKodaXDiagnostic({
+      source: 'agent:skills',
+      level: 'error',
+      message: `Failed to load skill metadata from ${skillDir}.`,
+      detail: error,
+    });
     return null;
   }
 }
@@ -133,7 +139,12 @@ export async function loadFullSkill(
 
     return skill;
   } catch (error) {
-    console.error(`Failed to load skill from ${skillDir}:`, error);
+    emitKodaXDiagnostic({
+      source: 'agent:skills',
+      level: 'error',
+      message: `Failed to load skill from ${skillDir}.`,
+      detail: error,
+    });
     return null;
   }
 }

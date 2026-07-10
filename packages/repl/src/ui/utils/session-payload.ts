@@ -5,6 +5,7 @@ import type {
   KodaXSessionArtifactLedgerEntry,
   KodaXSessionData,
   KodaXSessionLineage,
+  KodaXSessionRuntimeInfo,
   KodaXSessionUiHistoryItem,
 } from '@kodax-ai/agent';
 
@@ -12,6 +13,7 @@ interface HostSessionPayloadInput {
   messages: KodaXMessage[];
   title: string;
   gitRoot?: string;
+  runtimeInfo?: KodaXSessionRuntimeInfo;
   tag?: string;
   uiHistory?: KodaXSessionUiHistoryItem[];
   lineage?: KodaXSessionLineage;
@@ -25,6 +27,7 @@ export function buildHostSessionPayload(input: HostSessionPayloadInput): KodaXSe
     messages: input.messages,
     title: input.title,
     gitRoot: input.gitRoot ?? '',
+    ...(input.runtimeInfo !== undefined ? { runtimeInfo: input.runtimeInfo } : {}),
     ...(input.tag !== undefined ? { tag: input.tag } : {}),
     ...(input.uiHistory !== undefined ? { uiHistory: input.uiHistory } : {}),
     ...(input.lineage !== undefined ? { lineage: input.lineage } : {}),

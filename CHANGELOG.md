@@ -6,11 +6,47 @@ All notable changes to this project will be documented in this file.
 
 ## [Unreleased]
 
+### Added
+
+- **KodaX Runtime daemon and SDK daemon transport.** Added the local-only
+  runtime daemon, named-pipe/Unix-socket transport, `kodax daemon`
+  lifecycle commands, and the `@kodax-ai/kodax/runtime` daemon client surface
+  used by REPL, ACP, SDK hosts, Space, and IDE-style clients.
+- **Runtime host control plane.** The runtime API now exposes multi-session
+  session management, run queueing, permission subscriptions/responses,
+  artifact upload/reference, model/provider/config/catalog helpers, command and
+  skill discovery, diagnostics, and status snapshots across embedded and daemon
+  modes.
+- **Context/tool exposure optimization gates.** Added small-context tool schema
+  pruning and bridge reachability evals so deferred tools stay discoverable
+  while small-window providers avoid carrying avoidable schema cost.
+
+### Changed
+
+- Roadmap planning: consolidated `FEATURE_244`, `FEATURE_231`, and
+  `FEATURE_235` into `v0.7.75`, leaving `v0.7.65` and `v0.7.70` as empty
+  debug/patch slots.
+- **Release metadata synced to v0.7.66.** Root, lockfile, and workspace package
+  versions now agree on `0.7.66`; the release pack-only path produces
+  `kodax-ai-kodax-0.7.66.tgz`.
+
+### Fixed
+
+- **Runtime lifecycle cleanup.** Aborted/closed queued or running runs now settle
+  their result promises, pending permissions are rejected and timer-cleaned, and
+  daemon startup treats live transitional states as waitable ownership instead
+  of falsely unhealthy state.
+- **Daemon crash/startup recovery.** Unix socket startup refuses non-socket
+  endpoint paths and removes stale non-connectable socket files before binding;
+  Windows daemon smoke covers named-pipe start/status/logs/stop/restart and
+  verified stale-owner handling.
+
 ## [0.7.63] - 2026-07-07
 
 > Scope note: a patch/stability release for SDK session boundaries and release
-> hygiene. No planned feature slot is consumed: `FEATURE_244` remains targeted
-> at `v0.7.65`. This release hardens the public `/session` subpath, keeps
+> hygiene. No planned feature slot was consumed at release time; `FEATURE_244`
+> was still targeted at `v0.7.65` before the 2026-07-08 roadmap consolidation.
+> This release hardens the public `/session` subpath, keeps
 > rewind audit markers out of model context, makes `startKodaX()` wrapper
 > session IDs safe around auto-resume, improves `/reload` extension rediscovery,
 > and prunes superseded feature-design parking notes from the private feature-doc
@@ -44,9 +80,9 @@ All notable changes to this project will be documented in this file.
   useful for caller-provided IDs without warning on the wrapper's own handle ID.
 - **Feature-design index cleanup.** Superseded/parked planning-only docs for old
   `v0.7.67`, `v0.7.68`, `v0.7.71`, `v0.7.73`, and `v0.7.74` slots were pruned.
-  Active targets remain in the indexed docs: `FEATURE_228` is in `v0.7.62`,
-  `FEATURE_231` in `v0.7.70`, `FEATURE_235` in `v0.7.75`, `FEATURE_108` in
-  `v0.7.95`, and `FEATURE_225` in `v0.7.100`.
+  At release time, active targets remained in the indexed docs: `FEATURE_228`
+  in `v0.7.62`, `FEATURE_231` in `v0.7.70`, `FEATURE_235` in `v0.7.75`,
+  `FEATURE_108` in `v0.7.95`, and `FEATURE_225` in `v0.7.100`.
 
 ### Fixed
 

@@ -25,7 +25,7 @@ import path from 'path';
 import fs from 'fs/promises';
 import crypto from 'crypto';
 
-import { Runner } from '@kodax-ai/agent';
+import { Runner, emitKodaXDiagnostic } from '@kodax-ai/agent';
 import type { LocalToolDefinition } from '../tools/types.js';
 import { registerTool } from '../tools/registry.js';
 import { defaultToClassifierInput } from '../tools/classifier-projection.js';
@@ -1099,9 +1099,11 @@ export async function rehydrateActiveArtifacts(): Promise<{
       const recomputed = computeContentHash(artifact.content);
       if (recomputed !== artifact.contentHash) {
         tampered += 1;
-        console.warn(
-          `[ConstructionRuntime] Refusing to rehydrate ${artifact.name}@${artifact.version}: contentHash mismatch (manifest was edited after activation). Re-stage and re-activate to re-approve.`,
-        );
+        emitKodaXDiagnostic({
+          source: 'coding:construction',
+          level: 'warn',
+          message: `Refusing to rehydrate ${artifact.name}@${artifact.version}: contentHash mismatch (manifest was edited after activation). Re-stage and re-activate to re-approve.`,
+        });
         continue;
       }
     }
@@ -1110,9 +1112,12 @@ export async function rehydrateActiveArtifacts(): Promise<{
       loaded += 1;
     } catch (err) {
       failed += 1;
-      console.warn(
-        `[ConstructionRuntime] Failed to rehydrate ${artifact.name}@${artifact.version}: ${(err as Error).message}`,
-      );
+      emitKodaXDiagnostic({
+        source: 'coding:construction',
+        level: 'warn',
+        message: `Failed to rehydrate ${artifact.name}@${artifact.version}.`,
+        detail: err,
+      });
     }
   }
 
@@ -1282,14 +1287,19 @@ async function loadAllArtifacts(
           ) {
             out.push(parsed);
           } else {
-            console.warn(
-              `[ConstructionRuntime] Skipping malformed manifest at ${filePath} — missing required fields.`,
-            );
+            emitKodaXDiagnostic({
+              source: 'coding:construction',
+              level: 'warn',
+              message: `Skipping malformed manifest at ${filePath}: missing required fields.`,
+            });
           }
         } catch (err) {
-          console.warn(
-            `[ConstructionRuntime] Skipping unreadable manifest at ${filePath}: ${(err as Error).message}`,
-          );
+          emitKodaXDiagnostic({
+            source: 'coding:construction',
+            level: 'warn',
+            message: `Skipping unreadable manifest at ${filePath}.`,
+            detail: err,
+          });
         }
       }
     }

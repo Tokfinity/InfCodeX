@@ -65,6 +65,23 @@ export interface CurrentConfig {
   fallbackProviders?: string[];
 }
 
+export type RuntimeSurfaceMode = 'embedded' | 'daemon';
+
+export interface RuntimeSurfaceStatus {
+  readonly mode: RuntimeSurfaceMode;
+  readonly runtimeId: string;
+  readonly profile: string;
+  readonly startedAt?: string;
+  readonly endpoint?: string;
+  readonly health?: string;
+  readonly sessions?: number;
+  readonly runs?: number;
+  readonly activeRuns?: number;
+  readonly queuedRuns?: number;
+  readonly pendingPermissions?: number;
+  readonly workflows?: number;
+}
+
 export type SessionLoadStatus = 'loaded' | 'missing' | 'blocked';
 export type SessionBranchSwitchStatus = 'switched' | 'missing' | 'blocked';
 export type SessionForkStatus = 'forked' | 'failed' | 'blocked';
@@ -142,6 +159,7 @@ export interface CommandCallbacks {
   recoverSession?: (prompt?: string) => Promise<SessionRecoverStatus>;
   rewindSession?: (selector?: string) => Promise<SessionRewindStatus>;
   getCostReport?: () => string | null;
+  getRuntimeStatus?: () => Promise<RuntimeSurfaceStatus | undefined>;
   /**
    * FEATURE_092 phase 2b.8: read-only stats accessor for the auto-mode
    * classifier guardrail. Returns undefined when the guardrail hasn't been

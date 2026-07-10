@@ -10,6 +10,9 @@
 // FEATURE_221: SDK consumers inject their own product manual topics.
 import type { KodaXManualTopicId, KodaXManualTopicInput } from './self-knowledge/types.js';
 import type { KodaXTimeoutConfig } from './timeouts.js';
+import type { RuntimeContextBudgetSnapshot } from './agent-runtime/context-budget.js';
+import type { RuntimeToolExposurePlan } from './agent-runtime/tool-exposure-planner.js';
+import type { RuntimeCompactionSkippedEvent } from './agent-runtime/middleware/compaction-pressure.js';
 
 import type {
   KodaXImageBlock,
@@ -465,6 +468,18 @@ export interface KodaXEvents {
     effort: string;
   } & Partial<KodaXLiveEventMeta>) => void;
   onRepoIntelligenceTrace?: (event: KodaXRepoIntelligenceTraceEvent & Partial<KodaXLiveEventMeta>) => void;
+  /** Optional bounded context diagnostics. Emitted only when context.contextDiagnostics is true. */
+  onContextBudgetSnapshot?: (
+    event: RuntimeContextBudgetSnapshot & Partial<KodaXLiveEventMeta>,
+  ) => void;
+  /** Optional bounded tool-exposure diagnostics. Emitted only when context.contextDiagnostics is true. */
+  onToolExposurePlanned?: (
+    event: RuntimeToolExposurePlan & Partial<KodaXLiveEventMeta>,
+  ) => void;
+  /** Optional bounded compaction-pressure diagnostics. Emitted only when context.contextDiagnostics is true. */
+  onContextCompactionSkipped?: (
+    event: RuntimeCompactionSkippedEvent & Partial<KodaXLiveEventMeta>,
+  ) => void;
   /**
    * Fired when the Sidecar Verifier produces an actionable message.
    *
@@ -1230,6 +1245,11 @@ export interface KodaXContextOptions {
   repoIntelligenceMode?: KodaXRepoIntelligenceMode;
   /** Optional repo-intelligence trace toggle for this run. */
   repoIntelligenceTrace?: boolean;
+  /**
+   * Optional runtime-context diagnostics for SDK/daemon hosts. When false or
+   * omitted, no extra budget/exposure calculation is performed.
+   */
+  contextDiagnostics?: boolean;
   disableAutoTaskReroute?: boolean;
   /**
    * FEATURE_087/088 (v0.7.28): when true, the prompt builder injects a

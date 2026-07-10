@@ -42,12 +42,9 @@ async function writeMeta(id: string, meta: Record<string, unknown>): Promise<voi
 describe('v0.7.46 SDK-consumer footgun regression', () => {
   describe('F1 — fast path falls back to legacy top-level gitRoot', () => {
     it('legacy meta (no runtimeInfo, top-level gitRoot) → list() surfaces gitRoot via runtimeInfo.canonicalRepoRoot', async () => {
-      // cwd: tempRoot is not a git repo → getGitRoot returns null → the
-      // workspace-mismatch filter at storage.ts:1057 (`if (currentGitRoot)`)
-      // is skipped, so all sessions flow through. Without this, tests
-      // would have their sessions filtered out depending on which git
-      // root happens to be the host process's cwd.
-      const storage = new FileSessionStorage({ sessionsDir, cwd: tempRoot });
+      // No cwd is supplied here: this intentionally exercises the
+      // "no project intent" path, where list(undefined) scans all projects.
+      const storage = new FileSessionStorage({ sessionsDir });
       const legacyGitRoot = '/some/project/dir';
 
       // Legacy meta shape: top-level gitRoot, NO runtimeInfo field. Pre-v0.7.46
@@ -75,12 +72,9 @@ describe('v0.7.46 SDK-consumer footgun regression', () => {
     });
 
     it('modern meta (nested runtimeInfo) → list() uses it as-is, never overwrites with gitRoot', async () => {
-      // cwd: tempRoot is not a git repo → getGitRoot returns null → the
-      // workspace-mismatch filter at storage.ts:1057 (`if (currentGitRoot)`)
-      // is skipped, so all sessions flow through. Without this, tests
-      // would have their sessions filtered out depending on which git
-      // root happens to be the host process's cwd.
-      const storage = new FileSessionStorage({ sessionsDir, cwd: tempRoot });
+      // No cwd is supplied here: this intentionally exercises the
+      // "no project intent" path, where list(undefined) scans all projects.
+      const storage = new FileSessionStorage({ sessionsDir });
       const projectRoot = '/modern/project';
 
       await writeMeta('modern-session', {
@@ -104,12 +98,9 @@ describe('v0.7.46 SDK-consumer footgun regression', () => {
 
   describe('F2 — list() respects caller-supplied limit', () => {
     it('defaults to 10 when no limit supplied (legacy REPL picker behavior)', async () => {
-      // cwd: tempRoot is not a git repo → getGitRoot returns null → the
-      // workspace-mismatch filter at storage.ts:1057 (`if (currentGitRoot)`)
-      // is skipped, so all sessions flow through. Without this, tests
-      // would have their sessions filtered out depending on which git
-      // root happens to be the host process's cwd.
-      const storage = new FileSessionStorage({ sessionsDir, cwd: tempRoot });
+      // No cwd is supplied here: this intentionally exercises the
+      // "no project intent" path, where list(undefined) scans all projects.
+      const storage = new FileSessionStorage({ sessionsDir });
       const gitRoot = '/test/repo';
       for (let i = 0; i < 15; i++) {
         await writeMeta(`sess-${i.toString().padStart(2, '0')}`, {
@@ -124,12 +115,9 @@ describe('v0.7.46 SDK-consumer footgun regression', () => {
     });
 
     it('limit:50 returns all 15 sessions (caller override beats legacy cap)', async () => {
-      // cwd: tempRoot is not a git repo → getGitRoot returns null → the
-      // workspace-mismatch filter at storage.ts:1057 (`if (currentGitRoot)`)
-      // is skipped, so all sessions flow through. Without this, tests
-      // would have their sessions filtered out depending on which git
-      // root happens to be the host process's cwd.
-      const storage = new FileSessionStorage({ sessionsDir, cwd: tempRoot });
+      // No cwd is supplied here: this intentionally exercises the
+      // "no project intent" path, where list(undefined) scans all projects.
+      const storage = new FileSessionStorage({ sessionsDir });
       const gitRoot = '/test/repo';
       for (let i = 0; i < 15; i++) {
         await writeMeta(`sess-${i.toString().padStart(2, '0')}`, {
@@ -144,12 +132,9 @@ describe('v0.7.46 SDK-consumer footgun regression', () => {
     });
 
     it('limit:200 with 5 sessions → returns 5 (no synthetic padding)', async () => {
-      // cwd: tempRoot is not a git repo → getGitRoot returns null → the
-      // workspace-mismatch filter at storage.ts:1057 (`if (currentGitRoot)`)
-      // is skipped, so all sessions flow through. Without this, tests
-      // would have their sessions filtered out depending on which git
-      // root happens to be the host process's cwd.
-      const storage = new FileSessionStorage({ sessionsDir, cwd: tempRoot });
+      // No cwd is supplied here: this intentionally exercises the
+      // "no project intent" path, where list(undefined) scans all projects.
+      const storage = new FileSessionStorage({ sessionsDir });
       const gitRoot = '/test/repo';
       for (let i = 0; i < 5; i++) {
         await writeMeta(`sess-${i}`, {
@@ -163,12 +148,9 @@ describe('v0.7.46 SDK-consumer footgun regression', () => {
 
   describe('F3 — list() return carries createdAt', () => {
     it('preserves createdAt verbatim from meta record', async () => {
-      // cwd: tempRoot is not a git repo → getGitRoot returns null → the
-      // workspace-mismatch filter at storage.ts:1057 (`if (currentGitRoot)`)
-      // is skipped, so all sessions flow through. Without this, tests
-      // would have their sessions filtered out depending on which git
-      // root happens to be the host process's cwd.
-      const storage = new FileSessionStorage({ sessionsDir, cwd: tempRoot });
+      // No cwd is supplied here: this intentionally exercises the
+      // "no project intent" path, where list(undefined) scans all projects.
+      const storage = new FileSessionStorage({ sessionsDir });
       const gitRoot = '/test/repo';
       const ts = '2026-06-03T12:34:56.789Z';
       await writeMeta('with-created-at', {
@@ -179,12 +161,9 @@ describe('v0.7.46 SDK-consumer footgun regression', () => {
     });
 
     it('missing createdAt → undefined, not an empty string or thrown', async () => {
-      // cwd: tempRoot is not a git repo → getGitRoot returns null → the
-      // workspace-mismatch filter at storage.ts:1057 (`if (currentGitRoot)`)
-      // is skipped, so all sessions flow through. Without this, tests
-      // would have their sessions filtered out depending on which git
-      // root happens to be the host process's cwd.
-      const storage = new FileSessionStorage({ sessionsDir, cwd: tempRoot });
+      // No cwd is supplied here: this intentionally exercises the
+      // "no project intent" path, where list(undefined) scans all projects.
+      const storage = new FileSessionStorage({ sessionsDir });
       const gitRoot = '/test/repo';
       await writeMeta('no-created-at', {
         title: 'x', gitRoot, activeMessageCount: 1,
@@ -316,23 +295,30 @@ describe('v0.7.46 SDK-consumer footgun regression', () => {
       expect(ids).toEqual(['sess-a', 'sess-b']);
     });
 
-    it('storage WITH hostCwd → respects embedder filter (only matching project)', async () => {
-      // When the embedder explicitly tells the SDK which project they
-      // opened (via the constructor cwd option), the per-project
-      // filter is correct. Use tempRoot — a non-git directory — so
-      // `getGitRoot(tempRoot)` returns null and the test still
-      // exercises the "embedder set hostCwd but no git root resolves"
-      // branch: still falls into the "scan all" path, because hostCwd
-      // alone without a resolvable git root produces null currentGitRoot.
+    it('storage WITH non-git hostCwd filters by execution cwd project key', async () => {
       const storage = new FileSessionStorage({
         sessionsDir,
         cwd: tempRoot,
       });
-      await writeMeta('alone', { title: 'x', gitRoot: '/anywhere', activeMessageCount: 1 });
+      const writer = new FileSessionStorage({ sessionsDir });
+      const otherCwd = path.join(tempRoot, 'other-non-git');
+      await writer.save('current-cwd', {
+        messages: [{ role: 'user', content: 'current cwd session' }],
+        title: 'current cwd',
+        gitRoot: '',
+        runtimeInfo: { executionCwd: tempRoot, workspaceKind: 'detected' },
+        scope: 'user',
+      });
+      await writer.save('other-cwd', {
+        messages: [{ role: 'user', content: 'other cwd session' }],
+        title: 'other cwd',
+        gitRoot: '',
+        runtimeInfo: { executionCwd: otherCwd, workspaceKind: 'detected' },
+        scope: 'user',
+      });
 
       const result = await storage.list(undefined, { limit: 50 });
-      expect(result.length).toBe(1);
-      expect(result[0]?.id).toBe('alone');
+      expect(result.map((session) => session.id)).toEqual(['current-cwd']);
     });
   });
 
@@ -349,7 +335,9 @@ describe('v0.7.46 SDK-consumer footgun regression', () => {
       const chunks: string[] = [];
       const originalWrite = process.stderr.write.bind(process.stderr);
       const originalNodeEnv = process.env.NODE_ENV;
+      const originalDiagnosticsStderr = process.env.KODAX_DIAGNOSTICS_STDERR;
       process.env.NODE_ENV = 'development';
+      process.env.KODAX_DIAGNOSTICS_STDERR = '1';
       process.stderr.write = ((chunk: unknown): boolean => {
         if (typeof chunk === 'string') chunks.push(chunk);
         return true;
@@ -362,6 +350,11 @@ describe('v0.7.46 SDK-consumer footgun regression', () => {
           delete process.env.NODE_ENV;
         } else {
           process.env.NODE_ENV = originalNodeEnv;
+        }
+        if (originalDiagnosticsStderr === undefined) {
+          delete process.env.KODAX_DIAGNOSTICS_STDERR;
+        } else {
+          process.env.KODAX_DIAGNOSTICS_STDERR = originalDiagnosticsStderr;
         }
       }
       return chunks;
@@ -502,12 +495,9 @@ describe('v0.7.46 SDK-consumer footgun regression', () => {
 
   describe('F5 — deleteAll() removes ALL sessions (no silent cap)', () => {
     it('15 sessions for gitRoot → deleteAll deletes all 15', async () => {
-      // cwd: tempRoot is not a git repo → getGitRoot returns null → the
-      // workspace-mismatch filter at storage.ts:1057 (`if (currentGitRoot)`)
-      // is skipped, so all sessions flow through. Without this, tests
-      // would have their sessions filtered out depending on which git
-      // root happens to be the host process's cwd.
-      const storage = new FileSessionStorage({ sessionsDir, cwd: tempRoot });
+      // No cwd is supplied here, so deleteAll() intentionally targets all
+      // sessions returned by the unfiltered list path.
+      const storage = new FileSessionStorage({ sessionsDir });
       const gitRoot = '/cleanup/target';
 
       for (let i = 0; i < 15; i++) {
@@ -532,6 +522,78 @@ describe('v0.7.46 SDK-consumer footgun regression', () => {
 
       const after = await storage.list(undefined, { limit: 50 });
       expect(after.length).toBe(0);
+    });
+
+    it('non-git hostCwd deleteAll deletes only the current cwd project', async () => {
+      const storage = new FileSessionStorage({ sessionsDir, cwd: tempRoot });
+      const writer = new FileSessionStorage({ sessionsDir });
+      const otherCwd = path.join(tempRoot, 'other-delete-cwd');
+      await writer.save('delete-current-cwd', {
+        messages: [{ role: 'user', content: 'current cwd delete target' }],
+        title: 'current cwd',
+        gitRoot: '',
+        runtimeInfo: { executionCwd: tempRoot, workspaceKind: 'detected' },
+        scope: 'user',
+      });
+      await writer.save('keep-other-cwd', {
+        messages: [{ role: 'user', content: 'other cwd should survive' }],
+        title: 'other cwd',
+        gitRoot: '',
+        runtimeInfo: { executionCwd: otherCwd, workspaceKind: 'detected' },
+        scope: 'user',
+      });
+
+      await storage.deleteAll();
+
+      const remaining = await writer.list(undefined, { limit: 50 });
+      expect(remaining.map((session) => session.id)).toEqual(['keep-other-cwd']);
+    });
+  });
+
+  describe('UI-safe storage diagnostics', () => {
+    it('malformed session records do not write raw stderr by default', async () => {
+      const chunks: string[] = [];
+      const originalWrite = process.stderr.write.bind(process.stderr);
+      const originalNodeEnv = process.env.NODE_ENV;
+      const originalDiagnosticsStderr = process.env.KODAX_DIAGNOSTICS_STDERR;
+      process.env.NODE_ENV = 'development';
+      delete process.env.KODAX_DIAGNOSTICS_STDERR;
+      process.stderr.write = ((chunk: unknown): boolean => {
+        if (typeof chunk === 'string') chunks.push(chunk);
+        return true;
+      }) as typeof process.stderr.write;
+
+      try {
+        await writeFile(
+          path.join(sessionsDir, 'malformed-ui-safe.jsonl'),
+          JSON.stringify({
+            _type: 'meta',
+            title: 'malformed',
+            gitRoot: tempRoot,
+            createdAt: '2026-07-09T00:00:00.000Z',
+          }) + '\n' +
+          '{not-json}\n' +
+          JSON.stringify({ role: 'user', content: 'hi' }) + '\n',
+          'utf-8',
+        );
+
+        const storage = new FileSessionStorage({ sessionsDir, cwd: tempRoot });
+        await storage.load('malformed-ui-safe');
+
+        expect(chunks).toEqual([]);
+      } finally {
+        process.stderr.write = originalWrite;
+        if (originalNodeEnv === undefined) {
+          delete process.env.NODE_ENV;
+        } else {
+          process.env.NODE_ENV = originalNodeEnv;
+        }
+        if (originalDiagnosticsStderr === undefined) {
+          delete process.env.KODAX_DIAGNOSTICS_STDERR;
+        } else {
+          process.env.KODAX_DIAGNOSTICS_STDERR = originalDiagnosticsStderr;
+        }
+      }
     });
   });
 });

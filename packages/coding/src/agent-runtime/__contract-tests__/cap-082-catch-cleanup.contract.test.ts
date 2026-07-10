@@ -24,6 +24,10 @@
 
 import { describe, expect, it, vi } from 'vitest';
 
+import {
+  setKodaXDiagnosticSink,
+  type KodaXDiagnostic,
+} from '@kodax-ai/agent';
 import type { KodaXMessage } from '@kodax-ai/llm';
 import type { KodaXOptions, SessionErrorMetadata } from '../../types.js';
 
@@ -161,30 +165,40 @@ describe('CAP-082: runCatchCleanup — error metadata accounting', () => {
     const originalError = new Error('original — caller wants to surface this');
     const save = vi.fn().mockRejectedValue(new Error('storage transient failure'));
 
-    const consoleSpy = vi.spyOn(console, 'error').mockImplementation(() => {});
+    const diagnostics: KodaXDiagnostic[] = [];
+    const restore = setKodaXDiagnosticSink((diagnostic) => diagnostics.push(diagnostic));
 
     // The cleanup must resolve normally; if it rejected with the storage
     // error, the catch-flow in agent.ts would observe the wrong error.
-    const out = await runCatchCleanup({
-      error: originalError,
-      messages: [{ role: 'user', content: 'hi' }],
-      errorMetadata: undefined,
-      options: makeOptions(save),
-      sessionId: 'sess-storage-fail',
-      title: 't',
-      runtimeSessionState: freshState(),
-    });
+    let out: Awaited<ReturnType<typeof runCatchCleanup>> | undefined;
+    try {
+      out = await runCatchCleanup({
+        error: originalError,
+        messages: [{ role: 'user', content: 'hi' }],
+        errorMetadata: undefined,
+        options: makeOptions(save),
+        sessionId: 'sess-storage-fail',
+        title: 't',
+        runtimeSessionState: freshState(),
+      });
+    } finally {
+      restore();
+    }
 
+    expect(out).toBeDefined();
+    const cleanup = out!;
     // History cleanup + metadata increment happened despite storage failure.
-    expect(out.updatedErrorMetadata.lastError).toBe(originalError.message);
-    expect(out.updatedErrorMetadata.consecutiveErrors).toBe(1);
+    expect(cleanup.updatedErrorMetadata.lastError).toBe(originalError.message);
+    expect(cleanup.updatedErrorMetadata.consecutiveErrors).toBe(1);
     // Storage was attempted exactly once.
     expect(save).toHaveBeenCalledOnce();
     // Failure was logged, not thrown.
-    expect(consoleSpy).toHaveBeenCalledWith(
-      expect.stringContaining('[SessionSnapshot]'),
-      expect.any(Error),
-    );
-    consoleSpy.mockRestore();
+    expect(diagnostics).toEqual([
+      expect.objectContaining({
+        source: 'coding:session-snapshot',
+        level: 'error',
+        message: expect.stringContaining('storage.save failed'),
+      }),
+    ]);
   });
 });

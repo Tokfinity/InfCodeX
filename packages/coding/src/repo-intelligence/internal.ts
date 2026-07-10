@@ -1,6 +1,7 @@
 import { AsyncLocalStorage } from 'node:async_hooks';
 import fs from 'fs/promises';
 import path from 'path';
+import { emitKodaXDiagnostic } from '@kodax-ai/agent';
 
 const repoIntelligenceStorageDirContext = new AsyncLocalStorage<string | undefined>();
 
@@ -24,11 +25,12 @@ export function debugLogRepoIntelligence(message: string, error?: unknown): void
   if (!process.env.KODAX_DEBUG_REPO_INTELLIGENCE) {
     return;
   }
-  if (error === undefined) {
-    console.debug('[kodax:repo-intelligence]', message);
-    return;
-  }
-  console.debug('[kodax:repo-intelligence]', message, error);
+  emitKodaXDiagnostic({
+    source: 'coding:repo-intelligence',
+    level: 'debug',
+    message,
+    ...(error !== undefined ? { detail: error } : {}),
+  });
 }
 
 export function withRepoIntelligenceStorageDir<T>(

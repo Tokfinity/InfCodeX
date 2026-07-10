@@ -12,6 +12,7 @@ import { countTokens, estimateTokens } from '../../tokenizer.js';
 import { extractArtifactLedger, extractFileOps } from './file-tracker.js';
 import { extractCompactMemorySeed, generateSummary } from './summary-generator.js';
 import { extractBashIntent } from './bash-intent.js';
+import { emitKodaXDiagnostic } from '../../diagnostics.js';
 
 const DEFAULT_CONTEXT_WINDOW = 200000;
 const STRUCTURED_PRUNE_MINIMUM_TOKENS = 20000;
@@ -496,9 +497,12 @@ async function summarizeMessages(
       );
       summarizedMessages += chunk.length;
     } catch (error) {
-      if (process.env.KODAX_DEBUG_COMPACTION) {
-        console.warn('[Compaction] Summary chunk failed, keeping partial summary progress.', error);
-      }
+      emitKodaXDiagnostic({
+        source: 'agent:compaction',
+        level: 'error',
+        message: 'Summary chunk failed, keeping partial summary progress.',
+        detail: error,
+      });
       return { summary, summarizedMessages, failed: true };
     }
 

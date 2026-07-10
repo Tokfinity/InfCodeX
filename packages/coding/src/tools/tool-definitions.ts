@@ -64,6 +64,10 @@ import { toolTaskOutput } from './task-output.js';
 import { toolGetGoal, toolCreateGoal, toolUpdateGoal } from './goal-tools.js';
 // FEATURE_155 v0.7.39 Slice C1 — `await_child_task` removed. Idle-yield
 // (default ON since Slice B1.D) is the canonical wait mechanic.
+import {
+  TOOL_CALL_DEFINITION,
+  TOOL_DESCRIBE_DEFINITION,
+} from './tool-bridge.js';
 import { TOOL_SEARCH_DEFINITION } from './tool-search.js';
 import { toolTodoUpdate } from './todo-update.js';
 import { toolTodoList } from './todo-list.js';
@@ -1908,5 +1912,7 @@ export const BUILTIN_TOOL_DEFINITIONS: LocalToolDefinition[] = [
   // FEATURE_189 Batch 3 B.2 — progressive disclosure bootstrap. Always
   // loaded so the LLM can fetch full schemas for deferred tools (mcp_*,
   // web_*, repo-intel) on demand. See `tool-search.ts` + `deferred-tools.ts`.
+  TOOL_DESCRIBE_DEFINITION,
+  TOOL_CALL_DEFINITION,
   TOOL_SEARCH_DEFINITION,
 ];

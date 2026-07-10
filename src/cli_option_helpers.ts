@@ -18,6 +18,7 @@ import type { AcpPermissionMode } from './acp_server.js';
 
 export const ACP_PERMISSION_MODES: AcpPermissionMode[] = ['plan', 'accept-edits', 'auto-in-project'];
 export const CLI_OUTPUT_MODES = ['text', 'json'] as const;
+export const CLI_RUNTIME_MODES = ['embedded', 'daemon'] as const;
 export const KODAX_AGENT_MODES = ['ama', 'amaw', 'sa'] as const;
 export const KODAX_REPO_INTELLIGENCE_MODES: KodaXRepoIntelligenceMode[] = [
   'auto',
@@ -27,6 +28,7 @@ export const KODAX_REPO_INTELLIGENCE_MODES: KodaXRepoIntelligenceMode[] = [
 ];
 export const KODAX_REPO_INTELLIGENCE_PUBLIC_MODES = ['auto', 'full', 'light', 'off'] as const;
 export type CliOutputMode = typeof CLI_OUTPUT_MODES[number];
+export type CliRuntimeMode = typeof CLI_RUNTIME_MODES[number];
 
 export interface CliOptions {
   provider: string;
@@ -36,6 +38,7 @@ export interface CliOptions {
   reasoningMode: KodaXReasoningMode;
   agentMode: KodaXAgentMode;
   outputMode: CliOutputMode;
+  runtimeMode?: CliRuntimeMode;
   extensions?: string[];
   extensionRuntime?: KodaXExtensionRuntime;
   session?: string;
@@ -89,6 +92,16 @@ export function parseOutputModeOption(value: string): CliOutputMode {
 
   throw new InvalidArgumentError(
     `Expected "json". Text mode is the default and does not need --mode.`,
+  );
+}
+
+export function parseRuntimeModeOption(value: string): CliRuntimeMode {
+  const normalized = value.trim().toLowerCase();
+  if ((CLI_RUNTIME_MODES as readonly string[]).includes(normalized)) {
+    return normalized as CliRuntimeMode;
+  }
+  throw new InvalidArgumentError(
+    `Expected one of: ${CLI_RUNTIME_MODES.join(', ')}.`,
   );
 }
 
@@ -337,7 +350,7 @@ export function createKodaXOptions(cliOptions: CliOptions, isPrintMode = false):
 export function buildSessionOptions(
   cliOptions: CliOptions,
 ): { id?: string; resume?: boolean; storage: FileSessionStorage; autoResume?: boolean; scope: 'user' } | undefined {
-  const storage = new FileSessionStorage();
+  const storage = new FileSessionStorage({ cwd: process.cwd() });
 
   if ((cliOptions.print || cliOptions.outputMode === 'json') && cliOptions.noSession) {
     return undefined;

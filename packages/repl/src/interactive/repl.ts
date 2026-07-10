@@ -91,7 +91,11 @@ import {
   CommandCallbacks,
   CurrentConfig,
 } from './commands.js';
-import type { CommandWorkflowInvocationRequest, SessionRecoverStatus } from '../commands/types.js';
+import type {
+  CommandWorkflowInvocationRequest,
+  RuntimeSurfaceStatus,
+  SessionRecoverStatus,
+} from '../commands/types.js';
 import { loadCompactionConfig } from '../common/compaction-config.js';
 import { loadAlwaysAllowTools, loadAutoModeSettings, saveAlwaysAllowToolPattern } from '../common/permission-config.js';
 import {
@@ -393,10 +397,12 @@ export interface ReplRuntimeRunnerInput {
 }
 
 export type ReplRuntimeRunner = (input: ReplRuntimeRunnerInput) => Promise<KodaXResult>;
+export type ReplRuntimeStatusProvider = () => Promise<RuntimeSurfaceStatus | undefined>;
 
 export interface RepLOptions extends KodaXOptions {
   storage?: SessionStorage;
   runtimeRunner?: ReplRuntimeRunner;
+  getRuntimeStatus?: ReplRuntimeStatusProvider;
 }
 
 function resolveInitialReasoningMode(
@@ -649,7 +655,7 @@ export async function runInteractiveMode(options: RepLOptions): Promise<void> {
     getCurrentPermissionMode: () => currentPermissionMode,
     autoModeSettings,
     log: (level, msg) => {
-      if (level === 'warn') console.warn(chalk.yellow(msg));
+      if (level === 'warn') console.log(chalk.yellow(msg));
       else console.log(chalk.dim(msg));
     },
     // FEATURE_092 phase 2b.8: refresh the readline status bar engine
@@ -916,6 +922,7 @@ Keyboard Shortcuts:
 
   // Command callbacks - 命令回调
   const callbacks: CommandCallbacks = {
+    getRuntimeStatus: options.getRuntimeStatus,
     exit: () => {
       isRunning = false;
       // FEATURE_125 — release the instance directory + clear the

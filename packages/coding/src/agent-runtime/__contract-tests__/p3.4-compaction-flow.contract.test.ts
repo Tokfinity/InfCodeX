@@ -57,6 +57,7 @@ import {
   runCompactionLifecycle,
   COMPACT_CIRCUIT_BREAKER_LIMIT,
 } from '../middleware/compaction-orchestration.js';
+import { createCompactionAntiThrashState } from '../middleware/compaction-pressure.js';
 import type { KodaXEvents } from '../../types.js';
 
 const compactMock = mockedCompact as unknown as ReturnType<typeof vi.fn>;
@@ -123,7 +124,6 @@ describe('P3.4 integration: needsCompact=false short-circuits all phases', () =>
 describe('P3.4 integration: LLM threw → degradation still runs, counter increments', () => {
   it('P3.4-FLOW-002: LLM rejection → onCompactStart/End fire, counter++, degradation phase invoked on un-pruned messages, commit step validates', async () => {
     compactMock.mockRejectedValueOnce(new Error('boom'));
-    const errorSpy = vi.spyOn(console, 'error').mockImplementation(() => undefined);
     const events: KodaXEvents = {
       onCompactStart: vi.fn(),
       onCompactEnd: vi.fn(),
@@ -154,7 +154,6 @@ describe('P3.4 integration: LLM threw → degradation still runs, counter increm
     // → commit phase doesn't emit onCompactedMessages.
     expect(out.didCompactMessages).toBe(false);
     expect(events.onCompactedMessages).not.toHaveBeenCalled();
-    errorSpy.mockRestore();
   });
 });
 
@@ -221,5 +220,85 @@ describe('P3.4 integration: LLM success → commit fires onCompactedMessages wit
     expect(events.onCompactStart).not.toHaveBeenCalled();
     expect(degradeMock).toHaveBeenCalledOnce(); // degradation still runs
     expect(out.nextCompactConsecutiveFailures).toBe(COMPACT_CIRCUIT_BREAKER_LIMIT);
+  });
+});
+
+describe('P3.4 integration: compaction anti-thrashing cooldown', () => {
+  it('P3.4-FLOW-005: two low-savings compactions enter cooldown; next compact turn skips the LLM and emits a bounded skip event', async () => {
+    const compactedMessages: KodaXMessage[] = [
+      { role: 'system', content: 'low savings summary' },
+    ];
+    compactMock
+      .mockResolvedValueOnce({
+        compacted: true,
+        messages: compactedMessages,
+        tokensBefore: 1_000,
+        tokensAfter: 950,
+        entriesRemoved: 1,
+      } as CompactionResult)
+      .mockResolvedValueOnce({
+        compacted: true,
+        messages: compactedMessages,
+        tokensBefore: 1_000,
+        tokensAfter: 930,
+        entriesRemoved: 1,
+      } as CompactionResult);
+
+    const skipped = vi.fn();
+    const events: KodaXEvents = {
+      onContextCompactionSkipped: skipped,
+    };
+
+    const first = await runCompactionLifecycle({
+      messages: baseMessages,
+      needsCompact: true,
+      compactConsecutiveFailures: 0,
+      compactionConfig: makeConfig({ triggerPercent: 75 }),
+      provider: fakeProvider(),
+      contextWindow: 10_000,
+      systemPrompt: 'sys',
+      currentTokens: 9_000,
+      events,
+      compactionAntiThrash: createCompactionAntiThrashState(),
+      emitCompactionDiagnostics: true,
+    });
+    const second = await runCompactionLifecycle({
+      messages: baseMessages,
+      needsCompact: true,
+      compactConsecutiveFailures: 0,
+      compactionConfig: makeConfig({ triggerPercent: 75 }),
+      provider: fakeProvider(),
+      contextWindow: 10_000,
+      systemPrompt: 'sys',
+      currentTokens: 9_000,
+      events,
+      compactionAntiThrash: first.nextCompactionAntiThrash,
+      emitCompactionDiagnostics: true,
+    });
+    const third = await runCompactionLifecycle({
+      messages: baseMessages,
+      needsCompact: true,
+      compactConsecutiveFailures: 0,
+      compactionConfig: makeConfig({ triggerPercent: 75 }),
+      provider: fakeProvider(),
+      contextWindow: 10_000,
+      systemPrompt: 'sys',
+      currentTokens: 9_000,
+      events,
+      compactionAntiThrash: second.nextCompactionAntiThrash,
+      emitCompactionDiagnostics: true,
+    });
+
+    expect(compactMock).toHaveBeenCalledTimes(2);
+    expect(second.nextCompactionAntiThrash.cooldownTurnsRemaining).toBeGreaterThan(0);
+    expect(third.didCompactMessages).toBe(false);
+    expect(skipped).toHaveBeenCalledOnce();
+    expect(skipped).toHaveBeenCalledWith(expect.objectContaining({
+      reason: 'low_savings_cooldown',
+      currentTokens: 9_000,
+      contextWindow: 10_000,
+      triggerPercent: 75,
+      cooldownTurnsRemaining: second.nextCompactionAntiThrash.cooldownTurnsRemaining - 1,
+    }));
   });
 });

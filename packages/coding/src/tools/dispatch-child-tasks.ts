@@ -30,7 +30,7 @@
  * back-compat escape hatch.
  */
 
-import { enqueueChildTaskNotification, registerChildTask } from '@kodax-ai/agent';
+import { emitKodaXDiagnostic, enqueueChildTaskNotification, registerChildTask } from '@kodax-ai/agent';
 import type {
   KodaXChildAgentResult,
   KodaXChildContextBundle,
@@ -135,7 +135,7 @@ async function applyChildSummaryGuardrailWithSummarizer(
     ].join('\n');
   } catch (err) {
     // Summarizer failed too — fall back to the inline-full-content path.
-    // Match the same console.warn discipline as the upstream
+    // Match the same diagnostic discipline as the upstream
     // applyToolResultGuardrail spill-failure guard. Prepend an emergency
     // banner so the Worker can SEE that this oversized inline is a last-
     // resort dump (spill failed AND summarize failed) rather than mistaking
@@ -144,12 +144,14 @@ async function applyChildSummaryGuardrailWithSummarizer(
     // exactly the silent-data-loss-adjacent surface the FEATURE_121
     // contract is meant to close.
     const cause = err instanceof Error ? err.message : String(err);
-    // eslint-disable-next-line no-console
-    console.warn(
-      `[dispatch-child-tasks] LLM summarizer failed for ${toolName} ` +
-        `(${formatSize(rawContent.length)}); inlining full content. ` +
-        `Cause: ${cause}`,
-    );
+    emitKodaXDiagnostic({
+      source: 'coding:dispatch-child-tasks',
+      level: 'error',
+      message:
+        `LLM summarizer failed for ${toolName} ` +
+        `(${formatSize(rawContent.length)}); inlining full content.`,
+      detail: err,
+    });
     return [
       `[SPILL FAILED AND LLM SUMMARIZER FAILED — original ${formatSize(rawContent.length)} inlined as last-resort emergency dump.`,
       `Summarizer cause: ${cause}.`,

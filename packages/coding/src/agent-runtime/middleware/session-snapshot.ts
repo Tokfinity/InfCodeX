@@ -28,7 +28,7 @@
  *
  * **Storage failure isolation (CAP-013-003 / CAP-SESSION-SNAPSHOT-003)**:
  * `storage.save` rejections are absorbed locally and logged via
- * `console.error('[SessionSnapshot] ...')`. The function NEVER propagates
+ * diagnostics. The function NEVER propagates
  * a storage error to the caller. Rationale: snapshots are best-effort
  * session continuity, NOT load-bearing for the run's success/failure.
  * Particularly important inside the catch-block cleanup chain
@@ -42,10 +42,12 @@
  */
 
 import { exec } from 'child_process';
+import path from 'path';
 import { promisify } from 'util';
 
+import { emitKodaXDiagnostic } from '@kodax-ai/agent';
 import type { KodaXContentBlock, KodaXMessage } from '@kodax-ai/llm';
-import type { KodaXSessionData, KodaXSessionLineage } from '@kodax-ai/agent';
+import type { KodaXSessionData, KodaXSessionLineage, KodaXSessionRuntimeInfo } from '@kodax-ai/agent';
 
 import type { KodaXOptions, SessionErrorMetadata } from '../../types.js';
 import {
@@ -69,6 +71,21 @@ async function getGitRoot(cwd?: string): Promise<string | null> {
   } catch {
     return null;
   }
+}
+
+function normalizeSnapshotPath(value: string | null | undefined): string | undefined {
+  if (!value || !value.trim()) {
+    return undefined;
+  }
+  return path.resolve(value).replace(/\\/g, '/');
+}
+
+function buildSnapshotRuntimeInfo(gitRoot: string, executionCwd: string): KodaXSessionRuntimeInfo {
+  return {
+    ...(gitRoot ? { canonicalRepoRoot: gitRoot, workspaceRoot: gitRoot } : {}),
+    executionCwd,
+    workspaceKind: 'detected',
+  };
 }
 
 /**
@@ -187,14 +204,17 @@ export async function saveSessionSnapshot(
       && !warnedSessionIds.has(options.session.id)
     ) {
       warnedSessionIds.add(options.session.id);
-      console.warn(
-        `[KodaX SDK] session.id="${options.session.id}" was provided but session.storage is undefined — ` +
-        `session snapshots will NOT be persisted. To persist, pass a storage instance: ` +
-        `import { createSessionManager } from '@kodax-ai/kodax/session'; ` +
-        `const { storage } = createSessionManager(); ` +
-        `runKodaX({ session: { id, storage, ... }, ... }, prompt);  ` +
-        `See docs/SDK_EMBEDDER_GUIDE.md §6.`,
-      );
+      emitKodaXDiagnostic({
+        source: 'coding:session-snapshot',
+        level: 'warn',
+        message:
+          `[KodaX SDK] session.id="${options.session.id}" was provided but session.storage is undefined — ` +
+          `session snapshots will NOT be persisted. To persist, pass a storage instance: ` +
+          `import { createSessionManager } from '@kodax-ai/kodax/session'; ` +
+          `const { storage } = createSessionManager(); ` +
+          `runKodaX({ session: { id, storage, ... }, ... }, prompt);  ` +
+          `See docs/SDK_EMBEDDER_GUIDE.md §6.`,
+      });
     }
     return;
   }
@@ -248,11 +268,17 @@ export async function saveSessionSnapshot(
     }
   }
 
+  const executionCwd = normalizeSnapshotPath(
+    options.context?.executionCwd
+    ?? options.context?.gitRoot
+    ?? process.cwd(),
+  ) ?? process.cwd().replace(/\\/g, '/');
   const gitRoot =
     data.gitRoot
     ?? options.context?.gitRoot
-    ?? (await getGitRoot(options.context?.executionCwd))
+    ?? (await getGitRoot(executionCwd))
     ?? '';
+  const runtimeInfo = buildSnapshotRuntimeInfo(gitRoot, executionCwd);
   const runtimeSessionSnapshot = data.runtimeSessionState
     ? snapshotRuntimeSessionState(data.runtimeSessionState)
     : undefined;
@@ -269,6 +295,7 @@ export async function saveSessionSnapshot(
       messages: messagesToPersist,
       title: data.title,
       gitRoot,
+      runtimeInfo,
       tag: options.session.tag,
       scope: options.session.scope ?? 'user',
       errorMetadata: data.errorMetadata,
@@ -277,9 +304,11 @@ export async function saveSessionSnapshot(
       extensionRecords: extensionRecordsToPersist,
     });
   } catch (storageError) {
-    console.error(
-      '[SessionSnapshot] storage.save failed; continuing without snapshot persistence:',
-      storageError,
-    );
+    emitKodaXDiagnostic({
+      source: 'coding:session-snapshot',
+      level: 'error',
+      message: 'storage.save failed; continuing without snapshot persistence.',
+      detail: storageError,
+    });
   }
 }

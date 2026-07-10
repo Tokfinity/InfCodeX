@@ -2269,6 +2269,301 @@ runKodaX({
 
 ---
 
+## 17. Runtime SDK and local daemon (FEATURE_253/FEATURE_254/FEATURE_255, v0.7.64-v0.7.66)
+
+`@kodax-ai/kodax/runtime` is the stable host-facing runtime facade for
+applications that want KodaX as a substrate instead of only as a terminal CLI.
+It wraps the same coding/session engine used by the REPL and exposes it through
+one interface in two deployment shapes:
+
+- **embedded**: in-process runtime owned by the caller;
+- **daemon**: local-only runtime owner reached through a named pipe on Windows or
+  a Unix domain socket on Linux/macOS.
+
+The daemon is not a separate product engine. It hosts the embedded runtime behind
+a process boundary, so REPL, Space, IDE adapters, ACP, and custom SDK clients can
+share the same profile runtime without reimplementing sessions, permissions,
+events, config, MCP, catalogs, artifacts, or diagnostics.
+
+### Which shape to use
+
+| Host scenario | Recommended shape | Why |
+|---|---|---|
+| Unit tests, one-off scripts, short-lived SDK tools | `createKodaXRuntime()` | No daemon lifecycle; easiest cleanup. |
+| A single app owns all KodaX state in one process | `createKodaXRuntime({ mode: 'embedded' })` | Direct in-process calls and no IPC. |
+| REPL + Space + IDE should share sessions/status/permissions | `createKodaXRuntime({ mode: 'daemon' })` | Starts or reuses the local profile daemon. |
+| Attach to an already-started daemon only | `connectKodaXRuntime({ profile, homeDir })` | Attach-only by default; fails if no daemon is ready. |
+| Test/CI isolated daemon namespace | pass `homeDir` and `profile` | Keeps state/config/sessions out of the user's home daemon. |
+
+### Basic embedded usage
+
+```ts
+import { createKodaXRuntime } from '@kodax-ai/kodax/runtime';
+
+const runtime = await createKodaXRuntime({
+  mode: 'embedded',
+  homeDir: '/tmp/my-host-kodax',
+  defaultProvider: 'zai-coding',
+});
+
+try {
+  const session = await runtime.sessions.create({
+    title: 'SDK embedded session',
+    projectPath: process.cwd(),
+    surface: 'my-host',
+  });
+  const handle = await runtime.runs.start({
+    sessionId: session.id,
+    prompt: 'Read package.json and summarize this project.',
+  });
+  const result = await handle.result;
+  console.log(result.phase);
+} finally {
+  await runtime.close();
+}
+```
+
+### Basic daemon usage
+
+```ts
+import { createKodaXRuntime, connectKodaXRuntime } from '@kodax-ai/kodax/runtime';
+
+const replLikeClient = await createKodaXRuntime({
+  mode: 'daemon',
+  profile: 'default',
+  clientInfo: { name: 'my-repl', title: 'My REPL', version: '1.0.0' },
+  capabilities: {
+    richEvents: true,
+    permissionPrompts: true,
+    contextDiagnostics: true,
+  },
+});
+
+const spaceLikeClient = await connectKodaXRuntime({
+  profile: 'default',
+  clientInfo: { name: 'my-space', title: 'My Space', version: '1.0.0' },
+  capabilities: {
+    richEvents: true,
+    permissionPrompts: true,
+    contextDiagnostics: true,
+  },
+});
+
+try {
+  console.log(replLikeClient.identity.runtimeId === spaceLikeClient.identity.runtimeId);
+} finally {
+  await spaceLikeClient.close();
+  await replLikeClient.close();
+}
+```
+
+`createKodaXRuntime({ mode: 'daemon' })` is the high-level convenience API: when
+no explicit `daemonEndpoint` or `daemonTransport` is supplied it starts or reuses
+the local profile daemon. `connectKodaXRuntime()` is attach-only unless
+`autoStart: true` is passed.
+
+### Daemon ownership and state
+
+Daemon ownership is scoped by `homeDir + profile`.
+
+- Default `homeDir` is the OS user home directory.
+- Default `profile` is `default`.
+- State lives under `.kodax/runtime/daemon/{profile}/`.
+- Default runtime session storage is also scoped under `<homeDir>/.kodax/sessions`
+  when `sessionsDir` is omitted.
+- Windows uses a named pipe; Linux/macOS use a Unix domain socket.
+- The daemon opens no public TCP listener.
+
+For a given profile, one owner wins an atomic lock. Concurrent starters wait for
+the winner and connect once it is ready. Stale state is cleaned only after pid,
+endpoint, token, and runtime identity checks. If ownership cannot be verified,
+KodaX reports the daemon as unhealthy instead of killing an arbitrary process.
+
+The matching CLI surface is:
+
+```bash
+kodax daemon start --profile default
+kodax daemon status --profile default --json
+kodax daemon logs --profile default --lines 100
+kodax daemon stop --profile default --json
+kodax daemon restart --profile default
+kodax --runtime-mode daemon
+```
+
+Inside the REPL, `/status runtime` reports embedded/daemon mode, profile,
+runtime id, endpoint/health when applicable, and active/queued counters.
+
+### Runtime services
+
+Every `KodaXRuntime` exposes the same service set in embedded and daemon mode:
+
+| Service | Purpose |
+|---|---|
+| `identity` | Runtime id, mode, profile, started time, package version. |
+| `sessions` | Create/load/list/fork/transcript/settings/notice/rewind/compact/archive/delete. |
+| `runs` | Start/await/get/list/abort runs; update provider/model/reasoning for supported phases. |
+| `events` | Subscribe to live events and replay persisted bounded events. |
+| `permissions` | Request/list/respond to tool permissions across clients. |
+| `workflows` | Observe workflow process snapshots/events and lifecycle controls. |
+| `config` | Read/patch/reload daemon or embedded profile config. |
+| `catalog` | Providers, models, commands, skills, custom providers, extensions. |
+| `mcp` | MCP server CRUD, validation, reload, and tool catalog listing. |
+| `artifacts` | Create/get/delete runtime artifact references for file/image/video inputs. |
+| `status` | Runtime snapshot with sessions, runs, permissions, workflows, and daemon counters. |
+| `diagnostics` | Latest context-budget and tool-exposure decisions for GUI/debug surfaces. |
+
+### Sessions, runs, and queueing
+
+Runs are serialized per session and can run concurrently across different
+sessions. Same-session prompts are FIFO queued. `runs.start()` returns a handle
+with a `result` promise that always settles on completion, failure, abort, or
+runtime close.
+
+```ts
+const session = await runtime.sessions.create({ title: 'Shared session' });
+
+const sub = runtime.events.subscribe({ sessionId: session.id }, (event) => {
+  if (event.type === 'assistant.delta') {
+    // Render streaming text in the host UI.
+  }
+});
+
+const artifact = await runtime.artifacts.create({
+  kind: 'image',
+  path: '/tmp/screenshot.png',
+  mediaType: 'image/png',
+});
+
+const handle = await runtime.runs.start({
+  sessionId: session.id,
+  input: [
+    { type: 'text', text: 'Review this screenshot.' },
+    { type: 'artifact_ref', artifactId: artifact.id },
+  ],
+  options: {
+    provider: 'zai-coding',
+    effort: 'high',
+  },
+});
+
+const result = await handle.result;
+sub.close();
+```
+
+### Permissions across clients
+
+Pending permission requests live in the runtime/daemon, not in one UI client. A
+Space-style client can subscribe to permission events and answer a request
+created by a REPL-style client.
+
+```ts
+const sub = runtime.events.subscribe({ type: 'permission.requested' }, (event) => {
+  const payload = event.payload;
+  if (!payload || typeof payload !== 'object' || typeof payload.id !== 'string') {
+    return;
+  }
+  void runtime.permissions.respond(
+    payload.id,
+    { type: 'allow_once' },
+    { runId: payload.runId },
+  );
+});
+```
+
+Only the first valid response wins. Wrong-run or stale responses are rejected.
+Abort, runtime close, daemon stop, and timeout reject unresolved permission
+requests so tool approval promises do not hang forever.
+
+### Config, catalogs, MCP, and Space-style admin APIs
+
+Daemon-connected clients should not edit KodaX config files directly. Use the
+runtime services instead:
+
+```ts
+await runtime.config.patch({ provider: 'zai-coding', model: 'glm-5.2' });
+await runtime.config.reload();
+
+await runtime.catalog.upsertCustomProvider({
+  name: 'my-openai-compatible',
+  protocol: 'openai',
+  baseUrl: 'https://example.com/v1',
+  apiKeyEnv: 'MY_LLM_API_KEY',
+  model: 'my-model',
+});
+
+await runtime.mcp.upsertServer('filesystem', {
+  command: 'npx',
+  args: ['-y', '@modelcontextprotocol/server-filesystem', process.cwd()],
+});
+await runtime.mcp.reloadServers();
+
+const commands = await runtime.catalog.commands(process.cwd());
+const skills = await runtime.catalog.skills({ projectRoot: process.cwd() });
+```
+
+This is the intended path for KodaX Space, IDE adapters, and settings UIs:
+session defaults go through `sessions.updateSettings()`, one-turn overrides go
+through `runs.start({ options })`, and daemon/profile config goes through
+`config`, `catalog`, and `mcp`.
+
+### Context optimization and diagnostics
+
+The runtime carries the Hermes-inspired context-efficiency plane from the coding
+engine:
+
+- small-window schema pruning hides non-core deferred tool schemas while keeping
+  bridge discovery resident;
+- tool-search/describe/call-style bridge semantics keep tools reachable;
+- repo-intelligence schemas remain discoverable under pressure;
+- context-aware tool result budgets and compaction pressure events are surfaced
+  as bounded diagnostics.
+
+Hosts that set `capabilities.contextDiagnostics: true` can read:
+
+```ts
+const budget = await runtime.diagnostics.latestContextBudget({ sessionId });
+const exposure = await runtime.diagnostics.latestToolExposure({ sessionId });
+```
+
+These diagnostics are designed for status panels and debugging. They should not
+contain raw sensitive tool input/output.
+
+### Protocol schema and versioning
+
+The runtime subpath also exports daemon protocol metadata for clients that need
+schema-aware IPC validation:
+
+```ts
+import {
+  KODAX_DAEMON_PROTOCOL,
+  KODAX_DAEMON_PROTOCOL_VERSION,
+  RUNTIME_DAEMON_PROTOCOL_SCHEMA,
+  listRuntimeDaemonSchemaMethods,
+} from '@kodax-ai/kodax/runtime';
+```
+
+The schema is additive within this patch line. Removing or changing required
+fields requires a protocol version bump.
+
+### Current verification status
+
+The v0.7.66 release-candidate validation covers:
+
+- runtime/daemon/SDK/ACP/REPL gate: 15 files / 141 tests;
+- context/tool-exposure eval gate: 4 files / 6 tests;
+- `npm run build` including bundle and `dist/sdk-runtime.d.ts`;
+- `node scripts/release.mjs --pack-only --skip-build`;
+- external npm consumer install of `kodax-ai-kodax-0.7.66.tgz` and package-external
+  daemon SDK smoke;
+- KodaX Space dev-link and tarball consumer gates on Windows.
+
+The remaining environment-specific proof is the Ubuntu/Linux Unix-domain-socket
+gate. It is wired into `.github/workflows/ci.yml` as `Runtime daemon Unix socket
+gate`; if CI is unavailable, run the Unix-like host gate from
+`docs/test-guides/FEATURE_255_v0.7.66_TEST_GUIDE.md` on Linux or macOS.
+
+---
+
 ## See also
 
 - [README.md](../README.md) — end-user CLI quick start

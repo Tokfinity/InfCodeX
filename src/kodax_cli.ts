@@ -33,12 +33,29 @@ if (
  */
 import { Command } from 'commander';
 import chalk from 'chalk';
+import { spawn } from 'node:child_process';
 import fs from 'fs/promises';
 import fsSync from 'fs';
+import os from 'node:os';
 import path from 'path';
 import { fileURLToPath, pathToFileURL } from 'url';
 import { runAcpServer } from './acp_server.js';
-import { createKodaXRuntime } from './sdk-runtime.js';
+import { createKodaXRuntime, type KodaXRuntime } from './sdk-runtime.js';
+import {
+  isRuntimeDaemonPidAlive,
+  observeRuntimeDaemonHealth,
+  runtimeDaemonEndpointFromState,
+} from './runtime-daemon/lifecycle.js';
+import {
+  classifyRuntimeDaemonHealth,
+  readRuntimeDaemonLockOwner,
+  readRuntimeDaemonToken,
+  removeRuntimeDaemonOwnershipFiles,
+  resolveRuntimeDaemonPaths,
+  type RuntimeDaemonHealth,
+  type RuntimeDaemonState,
+} from './runtime-daemon/state.js';
+import { createRuntimeDaemonSocketClientTransport } from './runtime-daemon/transport.js';
 import { runDoctor } from './kodax_doctor.js';
 import {
   getDefaultCommandDir,
@@ -59,6 +76,7 @@ import {
   parsePermissionModeOption,
   parseReasoningModeOption,
   parseRepoIntelligenceModeOption,
+  parseRuntimeModeOption,
   normalizeCliSessionFlags,
   resolveCliAgentMode,
   resolveCliEffort,
@@ -66,6 +84,7 @@ import {
   resolveCliReasoningMode,
   type CliOutputMode,
   type CliOptions,
+  type CliRuntimeMode,
   validateCliModeSelection,
 } from './cli_option_helpers.js';
 import { runSkillCreatorTool } from './skill_cli.js';
@@ -127,6 +146,7 @@ export {
   parsePermissionModeOption,
   parseReasoningModeOption,
   parseRepoIntelligenceModeOption,
+  parseRuntimeModeOption,
   processCommandCall,
   resolveCliAgentMode,
 };
@@ -136,6 +156,17 @@ function hasConfiguredMcpServers(config: { mcpServers?: Record<string, { connect
   return Object.values(config.mcpServers ?? {}).some(
     (server) => (server.connect ?? 'lazy') !== 'disabled',
   );
+}
+
+function resolveCliRuntimeMode(value: CliRuntimeMode | undefined): CliRuntimeMode {
+  if (value !== undefined) return value;
+  const fromEnv = process.env.KODAX_RUNTIME_MODE?.trim();
+  if (!fromEnv) return 'embedded';
+  return parseRuntimeModeOption(fromEnv);
+}
+
+function resolveDefaultRuntimeDaemonHomeDir(): string {
+  return os.homedir();
 }
 
 async function discoverCliDefaultExtensions(): Promise<string[]> {
@@ -183,6 +214,630 @@ function printSessionDedupeReport(report: SessionDedupeReport, applied: boolean)
   if (!applied) {
     console.log(chalk.dim('\nRun `kodax sessions dedupe --apply` to move uniquely matched runner ghosts.'));
   }
+}
+
+interface DaemonStartResult {
+  readonly started: boolean;
+  readonly reason?: 'already_running';
+  readonly pid?: number | null;
+  readonly health?: RuntimeDaemonHealth;
+  readonly state: RuntimeDaemonState | null;
+}
+
+interface DaemonStopResult {
+  readonly stopped: boolean;
+  readonly reason?: RuntimeDaemonHealth | 'unverified_owner';
+  readonly forced?: boolean;
+  readonly health?: RuntimeDaemonHealth;
+  readonly state: RuntimeDaemonState | null;
+}
+
+interface DaemonRestartResult {
+  readonly restarted: boolean;
+  readonly stop: DaemonStopResult;
+  readonly start: DaemonStartResult;
+}
+
+interface DaemonLogsResult {
+  readonly profile: string;
+  readonly logFile: string;
+  readonly exists: boolean;
+  readonly lines: readonly string[];
+}
+
+interface DaemonRuntimeStatusSummary {
+  readonly sessions: number;
+  readonly runs: number;
+  readonly activeRuns: number;
+  readonly queuedRuns: number;
+  readonly pendingPermissions: number;
+  readonly workflows: number;
+}
+
+type DaemonRuntimeStatusProbe =
+  | { readonly ok: true; readonly summary: DaemonRuntimeStatusSummary }
+  | { readonly ok: false; readonly error: string };
+
+interface CliRuntimeSurfaceStatus {
+  readonly mode: 'embedded' | 'daemon';
+  readonly runtimeId: string;
+  readonly profile: string;
+  readonly startedAt?: string;
+  readonly endpoint?: string;
+  readonly health?: string;
+  readonly sessions?: number;
+  readonly runs?: number;
+  readonly activeRuns?: number;
+  readonly queuedRuns?: number;
+  readonly pendingPermissions?: number;
+  readonly workflows?: number;
+}
+
+async function printDaemonStatus(input: {
+  readonly profile: string;
+  readonly homeDir: string;
+  readonly json: boolean;
+}): Promise<void> {
+  const paths = resolveRuntimeDaemonPaths(input.homeDir, input.profile);
+  const observation = await observeRuntimeDaemonHealth(paths);
+  const health = classifyRuntimeDaemonHealth(observation);
+  const runtimeStatus = await readDaemonRuntimeStatusSummary(paths, observation.state, health);
+  const snapshot = {
+    profile: paths.profile,
+    health,
+    state: observation.state ?? null,
+    pidAlive: observation.pidAlive,
+    endpointReachable: observation.endpointReachable,
+    identityMatches: observation.identityMatches,
+    stateFile: paths.stateFile,
+    lockFile: paths.lockFile,
+    ...(runtimeStatus !== null ? { runtime: runtimeStatus } : {}),
+  };
+  if (input.json) {
+    console.log(JSON.stringify(snapshot, null, 2));
+    return;
+  }
+  console.log(chalk.cyan('\nKodaX Runtime Daemon\n'));
+  console.log(`Profile: ${snapshot.profile}`);
+  console.log(`Health: ${formatDaemonHealth(health)}`);
+  console.log(`State: ${snapshot.state ? snapshot.state.status : 'missing'}`);
+  if (snapshot.state) {
+    console.log(`Runtime: ${snapshot.state.runtimeId}`);
+    console.log(`PID: ${snapshot.state.pid} (${snapshot.pidAlive ? 'alive' : 'not alive'})`);
+    console.log(`Endpoint: ${snapshot.state.endpoint} (${snapshot.endpointReachable ? 'reachable' : 'unreachable'})`);
+  }
+  if (runtimeStatus?.ok === true) {
+    console.log(`Sessions: ${runtimeStatus.summary.sessions}`);
+    console.log(`Runs: ${runtimeStatus.summary.runs} (${runtimeStatus.summary.activeRuns} active, ${runtimeStatus.summary.queuedRuns} queued)`);
+    console.log(`Pending permissions: ${runtimeStatus.summary.pendingPermissions}`);
+    console.log(`Workflows: ${runtimeStatus.summary.workflows}`);
+  } else if (runtimeStatus?.ok === false) {
+    console.log(chalk.yellow(`Runtime status: unavailable (${runtimeStatus.error})`));
+  }
+  console.log(chalk.dim(`State file: ${snapshot.stateFile}`));
+}
+
+async function readDaemonRuntimeStatusSummary(
+  paths: ReturnType<typeof resolveRuntimeDaemonPaths>,
+  state: RuntimeDaemonState | undefined,
+  health: RuntimeDaemonHealth,
+): Promise<DaemonRuntimeStatusProbe | null> {
+  if (health !== 'healthy' || state === undefined) return null;
+  const transport = await createRuntimeDaemonSocketClientTransport(
+    runtimeDaemonEndpointFromState(state),
+    { connectTimeoutMs: 1_000 },
+  );
+  try {
+    const token = readRuntimeDaemonToken(paths);
+    await transport.request('initialize', {
+      profile: paths.profile,
+      ...(token !== undefined ? { token } : {}),
+      clientInfo: { name: 'kodax-cli', title: 'KodaX CLI' },
+      capabilities: { configAdmin: true },
+    });
+    return {
+      ok: true,
+      summary: summarizeDaemonRuntimeStatus(await transport.request('daemon.status')),
+    };
+  } catch (error: unknown) {
+    return {
+      ok: false,
+      error: normalizeCliError(error).message,
+    };
+  } finally {
+    await transport.close?.();
+  }
+}
+
+function summarizeDaemonRuntimeStatus(value: unknown): DaemonRuntimeStatusSummary {
+  const record = isRecord(value) ? value : {};
+  const runs = Array.isArray(record.runs) ? record.runs : [];
+  return {
+    sessions: arrayLength(record.sessions),
+    runs: runs.length,
+    activeRuns: runs.filter(isActiveDaemonRunStatus).length,
+    queuedRuns: runs.filter(isQueuedDaemonRunStatus).length,
+    pendingPermissions: arrayLength(record.pendingPermissions),
+    workflows: arrayLength(record.workflows),
+  };
+}
+
+async function getInteractiveRuntimeStatus(input: {
+  readonly runtime: KodaXRuntime;
+  readonly homeDir: string;
+  readonly profile: string;
+}): Promise<CliRuntimeSurfaceStatus> {
+  const snapshot = await input.runtime.status.snapshot();
+  let endpoint: string | undefined;
+  let health: string | undefined;
+  if (input.runtime.identity.mode === 'daemon') {
+    const paths = resolveRuntimeDaemonPaths(input.homeDir, input.profile);
+    const observation = await observeRuntimeDaemonHealth(paths);
+    health = classifyRuntimeDaemonHealth(observation);
+    endpoint = observation.state?.endpoint;
+  }
+  const runs = snapshot.runs as readonly unknown[];
+  return {
+    mode: input.runtime.identity.mode,
+    runtimeId: input.runtime.identity.runtimeId,
+    profile: input.runtime.identity.profile,
+    startedAt: input.runtime.identity.startedAt,
+    ...(endpoint !== undefined ? { endpoint } : {}),
+    ...(health !== undefined ? { health } : {}),
+    sessions: snapshot.sessions.length,
+    runs: snapshot.runs.length,
+    activeRuns: runs.filter(isActiveDaemonRunStatus).length,
+    queuedRuns: runs.filter(isQueuedDaemonRunStatus).length,
+    pendingPermissions: snapshot.pendingPermissions.length,
+    workflows: snapshot.workflows.length,
+  };
+}
+
+function isActiveDaemonRunStatus(value: unknown): boolean {
+  if (!isRecord(value)) return false;
+  return value.phase === 'running'
+    || value.phase === 'waiting_permission'
+    || value.phase === 'waiting_user_input';
+}
+
+function isQueuedDaemonRunStatus(value: unknown): boolean {
+  return isRecord(value) && value.phase === 'queued';
+}
+
+function arrayLength(value: unknown): number {
+  return Array.isArray(value) ? value.length : 0;
+}
+
+async function startDaemonCommand(input: {
+  readonly profile: string;
+  readonly homeDir: string;
+  readonly provider?: string;
+  readonly model?: string;
+  readonly timeoutMs: number;
+  readonly json: boolean;
+}): Promise<void> {
+  const paths = resolveRuntimeDaemonPaths(input.homeDir, input.profile);
+  const result = await getDaemonStartResult(input);
+  if (input.json) {
+    console.log(JSON.stringify(result, null, 2));
+    return;
+  }
+  if (result.reason === 'already_running') {
+    console.log(chalk.green(`KodaX runtime daemon already running for profile "${paths.profile}".`));
+    return;
+  }
+  if (result.health !== 'healthy') {
+    throw new Error(`KodaX runtime daemon did not become healthy within ${input.timeoutMs}ms.`);
+  }
+  console.log(chalk.green(`KodaX runtime daemon started for profile "${paths.profile}".`));
+  if (result.state) {
+    console.log(chalk.dim(`PID: ${result.state.pid}`));
+    console.log(chalk.dim(`Endpoint: ${result.state.endpoint}`));
+  }
+}
+
+async function getDaemonStartResult(input: {
+  readonly profile: string;
+  readonly homeDir: string;
+  readonly provider?: string;
+  readonly model?: string;
+  readonly timeoutMs: number;
+}): Promise<DaemonStartResult> {
+  const paths = resolveRuntimeDaemonPaths(input.homeDir, input.profile);
+  const before = await observeRuntimeDaemonHealth(paths);
+  const beforeHealth = classifyRuntimeDaemonHealth(before);
+  if (beforeHealth === 'healthy') {
+    return {
+      started: false,
+      reason: 'already_running',
+      state: before.state ?? null,
+    };
+  }
+
+  const child = spawnDaemonServeProcess({
+    profile: paths.profile,
+    homeDir: input.homeDir,
+    provider: input.provider,
+    model: input.model,
+  });
+  const observation = await waitForDaemonHealth(paths, input.timeoutMs);
+  const health = classifyRuntimeDaemonHealth(observation);
+  return {
+    started: health === 'healthy',
+    pid: child.pid ?? null,
+    health,
+    state: observation.state ?? null,
+  };
+}
+
+async function serveDaemonCommand(input: {
+  readonly profile: string;
+  readonly homeDir: string;
+  readonly provider?: string;
+  readonly model?: string;
+}): Promise<void> {
+  const runtime = await createKodaXRuntime({
+    mode: 'daemon',
+    profile: input.profile,
+    homeDir: input.homeDir,
+    sessionsDir: path.join(input.homeDir, '.kodax', 'sessions'),
+    autoStartDaemon: true,
+    defaultProvider: input.provider,
+    defaultModel: input.model,
+  });
+  const paths = resolveRuntimeDaemonPaths(input.homeDir, input.profile);
+  const observation = await observeRuntimeDaemonHealth(paths);
+  if (observation.state && observation.state.pid !== process.pid) {
+    await runtime.close();
+    console.log(chalk.yellow(`KodaX runtime daemon already owned by PID ${observation.state.pid}.`));
+    return;
+  }
+
+  await waitForShutdownSignal(async () => {
+    await runtime.close();
+  });
+}
+
+async function stopDaemonCommand(input: {
+  readonly profile: string;
+  readonly homeDir: string;
+  readonly timeoutMs: number;
+  readonly force: boolean;
+  readonly json: boolean;
+}): Promise<void> {
+  const paths = resolveRuntimeDaemonPaths(input.homeDir, input.profile);
+  const result = await getDaemonStopResult(input);
+  if (input.json) {
+    console.log(JSON.stringify(result, null, 2));
+    return;
+  }
+  if (result.reason === 'unverified_owner') {
+    throw new Error(
+      `Refusing to force stop daemon profile "${paths.profile}" because ownership could not be verified.`,
+    );
+  }
+  if (result.reason !== undefined) {
+    console.log(chalk.yellow(`No healthy KodaX runtime daemon for profile "${paths.profile}" (${result.reason}).`));
+    return;
+  }
+  if (!result.stopped) {
+    throw new Error(`KodaX runtime daemon did not stop within ${input.timeoutMs}ms.`);
+  }
+  console.log(chalk.green(`KodaX runtime daemon stopped for profile "${paths.profile}".`));
+}
+
+async function getDaemonStopResult(input: {
+  readonly profile: string;
+  readonly homeDir: string;
+  readonly timeoutMs: number;
+  readonly force?: boolean;
+}): Promise<DaemonStopResult> {
+  const paths = resolveRuntimeDaemonPaths(input.homeDir, input.profile);
+  const observation = await observeRuntimeDaemonHealth(paths);
+  const health = classifyRuntimeDaemonHealth(observation);
+  if (health !== 'healthy' || !observation.state) {
+    if (input.force === true) {
+      return forceStopDaemonOwnership(paths, health, observation.state ?? null);
+    }
+    return {
+      stopped: false,
+      reason: health,
+      state: observation.state ?? null,
+    };
+  }
+
+  const endpoint = runtimeDaemonEndpointFromState(observation.state);
+  const transport = await createRuntimeDaemonSocketClientTransport(endpoint, {
+    connectTimeoutMs: input.timeoutMs,
+  });
+  try {
+    const token = readRuntimeDaemonToken(paths);
+    await transport.request('initialize', {
+      profile: paths.profile,
+      ...(token !== undefined ? { token } : {}),
+      clientInfo: { name: 'kodax-cli', title: 'KodaX CLI' },
+      capabilities: { configAdmin: true },
+    });
+    await transport.request('daemon.stop');
+  } finally {
+    await transport.close?.();
+  }
+  const after = await waitForDaemonStopped(paths, input.timeoutMs);
+  const afterHealth = classifyRuntimeDaemonHealth(after);
+  return {
+    stopped: afterHealth !== 'healthy',
+    health: afterHealth,
+    state: after.state ?? null,
+  };
+}
+
+function forceStopDaemonOwnership(
+  paths: ReturnType<typeof resolveRuntimeDaemonPaths>,
+  health: RuntimeDaemonHealth,
+  state: RuntimeDaemonState | null,
+): DaemonStopResult {
+  if (health === 'missing') {
+    const lockOwner = readRuntimeDaemonLockOwner(paths.lockFile);
+    if (lockOwner && isRuntimeDaemonPidAlive(lockOwner.pid)) {
+      return {
+        stopped: false,
+        forced: true,
+        reason: 'unverified_owner',
+        health,
+        state,
+      };
+    }
+    removeRuntimeDaemonOwnershipFiles(paths);
+    return {
+      stopped: true,
+      forced: true,
+      health: 'missing',
+      state: null,
+    };
+  }
+  if (health === 'stale') {
+    removeRuntimeDaemonOwnershipFiles(paths);
+    return {
+      stopped: true,
+      forced: true,
+      health: 'missing',
+      state: null,
+    };
+  }
+  return {
+    stopped: false,
+    forced: true,
+    reason: 'unverified_owner',
+    health,
+    state,
+  };
+}
+
+async function restartDaemonCommand(input: {
+  readonly profile: string;
+  readonly homeDir: string;
+  readonly provider?: string;
+  readonly model?: string;
+  readonly timeoutMs: number;
+  readonly json: boolean;
+}): Promise<void> {
+  const result = await getDaemonRestartResult(input);
+  if (input.json) {
+    console.log(JSON.stringify(result, null, 2));
+    return;
+  }
+  const paths = resolveRuntimeDaemonPaths(input.homeDir, input.profile);
+  if (!result.restarted) {
+    throw new Error(`KodaX runtime daemon restart failed for profile "${paths.profile}".`);
+  }
+  console.log(chalk.green(`KodaX runtime daemon restarted for profile "${paths.profile}".`));
+  if (result.start.state) {
+    console.log(chalk.dim(`PID: ${result.start.state.pid}`));
+    console.log(chalk.dim(`Endpoint: ${result.start.state.endpoint}`));
+  }
+}
+
+async function getDaemonRestartResult(input: {
+  readonly profile: string;
+  readonly homeDir: string;
+  readonly provider?: string;
+  readonly model?: string;
+  readonly timeoutMs: number;
+}): Promise<DaemonRestartResult> {
+  const stop = await getDaemonStopResult(input);
+  if (stop.health === 'healthy') {
+    return {
+      restarted: false,
+      stop,
+      start: {
+        started: false,
+        reason: 'already_running',
+        state: stop.state,
+      },
+    };
+  }
+  if (stop.reason === 'unhealthy' || stop.reason === 'mismatch') {
+    return {
+      restarted: false,
+      stop,
+      start: {
+        started: false,
+        health: stop.reason,
+        state: stop.state,
+      },
+    };
+  }
+  const start = await getDaemonStartResult(input);
+  return {
+    restarted: start.started === true || start.reason === 'already_running',
+    stop,
+    start,
+  };
+}
+
+async function printDaemonLogs(input: {
+  readonly profile: string;
+  readonly homeDir: string;
+  readonly lines: number;
+  readonly json: boolean;
+}): Promise<void> {
+  const result = readDaemonLogs(input);
+  if (input.json) {
+    console.log(JSON.stringify(result, null, 2));
+    return;
+  }
+  console.log(chalk.cyan(`KodaX runtime daemon log (${result.profile})`));
+  console.log(chalk.dim(result.logFile));
+  if (!result.exists) {
+    console.log(chalk.yellow('No daemon log file exists yet.'));
+    return;
+  }
+  for (const line of result.lines) {
+    console.log(line);
+  }
+}
+
+function readDaemonLogs(input: {
+  readonly profile: string;
+  readonly homeDir: string;
+  readonly lines: number;
+}): DaemonLogsResult {
+  const paths = resolveRuntimeDaemonPaths(input.homeDir, input.profile);
+  if (!fsSync.existsSync(paths.logFile)) {
+    return {
+      profile: paths.profile,
+      logFile: paths.logFile,
+      exists: false,
+      lines: [],
+    };
+  }
+  return {
+    profile: paths.profile,
+    logFile: paths.logFile,
+    exists: true,
+    lines: tailTextFile(paths.logFile, input.lines),
+  };
+}
+
+function tailTextFile(file: string, lineCount: number): readonly string[] {
+  if (lineCount <= 0) return [];
+  const content = fsSync.readFileSync(file, 'utf8');
+  const lines = content.replace(/\r\n/g, '\n').replace(/\r/g, '\n').split('\n');
+  if (lines.at(-1) === '') lines.pop();
+  return lines.slice(-lineCount);
+}
+
+function spawnDaemonServeProcess(input: {
+  readonly profile: string;
+  readonly homeDir: string;
+  readonly provider?: string;
+  readonly model?: string;
+}): ReturnType<typeof spawn> {
+  const entry = process.argv[1];
+  if (!entry) {
+    throw new Error('Cannot resolve current KodaX CLI entrypoint for daemon start.');
+  }
+  const args = [
+    ...process.execArgv,
+    entry,
+    'daemon',
+    'serve',
+    '--profile',
+    input.profile,
+    '--home',
+    input.homeDir,
+  ];
+  if (input.provider !== undefined) {
+    args.push('--provider', input.provider);
+  }
+  if (input.model !== undefined) {
+    args.push('--model', input.model);
+  }
+  const child = spawn(process.execPath, args, {
+    detached: true,
+    stdio: 'ignore',
+    windowsHide: true,
+    env: {
+      ...process.env,
+      KODAX_DAEMON_SERVE: '1',
+      KODAX_HOME: path.join(input.homeDir, '.kodax'),
+    },
+  });
+  child.unref();
+  return child;
+}
+
+async function waitForDaemonHealth(
+  paths: ReturnType<typeof resolveRuntimeDaemonPaths>,
+  timeoutMs: number,
+) {
+  const deadline = Date.now() + timeoutMs;
+  let latest = await observeRuntimeDaemonHealth(paths);
+  while (Date.now() <= deadline) {
+    latest = await observeRuntimeDaemonHealth(paths);
+    if (classifyRuntimeDaemonHealth(latest) === 'healthy') {
+      if (latest.state?.status === 'ready') {
+        return latest;
+      }
+    }
+    await delay(100);
+  }
+  return latest;
+}
+
+async function waitForDaemonStopped(
+  paths: ReturnType<typeof resolveRuntimeDaemonPaths>,
+  timeoutMs: number,
+) {
+  const deadline = Date.now() + timeoutMs;
+  let latest = await observeRuntimeDaemonHealth(paths);
+  let latestStopped = latest;
+  while (Date.now() <= deadline) {
+    latest = await observeRuntimeDaemonHealth(paths);
+    const health = classifyRuntimeDaemonHealth(latest);
+    if (health === 'missing') {
+      return latest;
+    }
+    if (health !== 'healthy') {
+      latestStopped = latest;
+    }
+    await delay(100);
+  }
+  return latestStopped;
+}
+
+function waitForShutdownSignal(onShutdown: () => Promise<void>): Promise<void> {
+  return new Promise((resolve, reject) => {
+    let closing = false;
+    const close = (): void => {
+      if (closing) return;
+      closing = true;
+      void onShutdown().then(resolve, reject);
+    };
+    process.once('SIGINT', close);
+    process.once('SIGTERM', close);
+  });
+}
+
+function delay(ms: number): Promise<void> {
+  return new Promise((resolve) => {
+    setTimeout(resolve, ms);
+  });
+}
+
+function isRecord(value: unknown): value is Record<string, unknown> {
+  return value !== null && typeof value === 'object' && !Array.isArray(value);
+}
+
+function normalizeCliError(error: unknown): Error {
+  return error instanceof Error ? error : new Error(String(error));
+}
+
+function formatDaemonHealth(health: ReturnType<typeof classifyRuntimeDaemonHealth>): string {
+  if (health === 'healthy') return chalk.green(health);
+  if (health === 'missing') return chalk.dim(health);
+  if (health === 'stale') return chalk.yellow(health);
+  return chalk.red(health);
 }
 // ============== CLI Help Topics ==============
 
@@ -350,6 +1005,17 @@ const CLI_HELP_TOPICS: Record<string, () => void> = {
   },
 };
 
+const CLI_SUBCOMMAND_NAMES = new Set([
+  'acp',
+  'skill',
+  'tools',
+  'sessions',
+  'constructed',
+  'doctor',
+  'daemon',
+  'completion',
+]);
+
 function collectRepeatedOption(value: string, previous: string[] = []): string[] {
   return [...previous, value];
 }
@@ -362,6 +1028,7 @@ export function configureKodaXRootCommand(program: Command): Command {
     .option('-h, --help [topic]', 'Show help, or detailed help for a topic')
     .option('-p, --print <text>', 'Print mode: run single task and exit')
     .option('--mode <mode>', 'Output mode: json', parseOutputModeOption)
+    .option('--runtime-mode <mode>', 'Interactive runtime mode: embedded, daemon', parseRuntimeModeOption)
     .option('-c, --continue', 'Continue most recent conversation in current directory')
     .option('-n, --new', 'Legacy no-op; current CLI already starts a fresh session by default')
     .option('-r, --resume [id]', 'Resume session by ID (no ID = list recent sessions, then resume the latest)')
@@ -625,14 +1292,17 @@ function showBasicHelp(): void {
 }
 
 async function main() {
+  const argv = process.argv.slice(2);
+  const isDaemonManagementCommand = argv[0] === 'daemon' && argv[1] !== 'serve';
+
   // FEATURE_208 (v0.7.45): strip dynamic-linker preload env vars
   // (LD_PRELOAD / DYLD_*) before anything spawns children or loads native
   // addons. Opt-out: KODAX_DISABLE_HARDENING=1. Debug-preserving (no
   // PR_SET_DUMPABLE). No-op on Windows.
   applyProcessHardening();
-  await cleanupRegisteredManagedChildren();
-
-  const argv = process.argv.slice(2);
+  if (!isDaemonManagementCommand) {
+    await cleanupRegisteredManagedChildren();
+  }
 
   // FEATURE_209 (v0.7.45): activate tracing so Runner spans persist to
   // ~/.kodax/.traces/<traceId>.jsonl. FileTracingProcessor flushes per-trace
@@ -640,10 +1310,12 @@ async function main() {
   // handler; that handler only flushes a trace still in flight when the event
   // loop drains naturally (it does NOT fire on process.exit()). Opt-out via
   // KODAX_TRACING=0.
-  bootstrapTracing();
-  process.once('beforeExit', () => {
-    void shutdownTracing();
-  });
+  if (!isDaemonManagementCommand) {
+    bootstrapTracing();
+    process.once('beforeExit', () => {
+      void shutdownTracing();
+    });
+  }
 
   // Session retention: opt-in best-effort background prune of session files
   // older than KODAX_SESSION_RETENTION_DAYS. DEFAULT OFF (0) — auto-deleting a
@@ -655,10 +1327,12 @@ async function main() {
   // inside cleanupOldSessions, and a non-positive value is a no-op.
   // Read from env (shell override) then config.json (persistent). This runs at
   // startup before prepareRuntimeConfig's bridge, so it reads config directly.
-  const sessionRetentionDays = Number(
-    process.env.KODAX_SESSION_RETENTION_DAYS ?? loadConfig().sessionRetentionDays ?? 0,
-  );
-  void new FileSessionStorage().cleanupOldSessions(sessionRetentionDays);
+  if (!isDaemonManagementCommand) {
+    const sessionRetentionDays = Number(
+      process.env.KODAX_SESSION_RETENTION_DAYS ?? loadConfig().sessionRetentionDays ?? 0,
+    );
+    void new FileSessionStorage().cleanupOldSessions(sessionRetentionDays);
+  }
 
   const program = configureKodaXRootCommand(new Command()
     .name('kodax')
@@ -676,10 +1350,10 @@ async function main() {
       const effortModes = 'off auto low medium high xhigh max';
       const agentModes = 'ama amaw sa';
       const repoModes = 'auto full light off';
-      const rootSubcommands = 'acp skill tools sessions constructed doctor completion';
+      const rootSubcommands = 'acp skill tools sessions constructed doctor daemon completion';
       const allOptions = [
         '-p', '-c', '-r', '-n', '-m', '-t', '-s', '-y', '-h',
-        '--help', '--print', '--mode', '--continue', '--resume', '--new',
+        '--help', '--print', '--mode', '--runtime-mode', '--continue', '--resume', '--new',
         '--provider', '--model', '--thinking', '--effort', '--reasoning', '--agent-mode',
         '--repo-intelligence', '--repo-intelligence-trace',
         '--auto', '--session', '--extension', '--no-session',
@@ -707,6 +1381,7 @@ _kodax_complete() {
   case "\${prev}" in
     --provider|-m) COMPREPLY=( $(compgen -W "${providerNames}" -- "\${cur}") ); return 0 ;;
     --mode) COMPREPLY=( $(compgen -W "json" -- "\${cur}") ); return 0 ;;
+    --runtime-mode) COMPREPLY=( $(compgen -W "embedded daemon" -- "\${cur}") ); return 0 ;;
     --effort) COMPREPLY=( $(compgen -W "${effortModes}" -- "\${cur}") ); return 0 ;;
     --reasoning) COMPREPLY=( $(compgen -W "${reasoningModes}" -- "\${cur}") ); return 0 ;;
     --agent-mode) COMPREPLY=( $(compgen -W "${agentModes}" -- "\${cur}") ); return 0 ;;
@@ -714,6 +1389,7 @@ _kodax_complete() {
     --session|-s) COMPREPLY=( $(compgen -W "list resume delete delete-all" -- "\${cur}") ); return 0 ;;
     completion) COMPREPLY=( $(compgen -W "bash zsh fish" -- "\${cur}") ); return 0 ;;
     acp) COMPREPLY=( $(compgen -W "serve" -- "\${cur}") ); return 0 ;;
+    daemon) COMPREPLY=( $(compgen -W "start stop restart status logs serve" -- "\${cur}") ); return 0 ;;
     skill) COMPREPLY=( $(compgen -W "${skillSubcommands}" -- "\${cur}") ); return 0 ;;
     tools) COMPREPLY=( $(compgen -W "${toolsSubcommands}" -- "\${cur}") ); return 0 ;;
     sessions) COMPREPLY=( $(compgen -W "${sessionsSubcommands}" -- "\${cur}") ); return 0 ;;
@@ -743,6 +1419,7 @@ _kodax() {
     '-p[Print mode]+:text:' \\
     '--print+[Print mode]:text:' \\
     '--mode+[Output mode]:mode:(json)' \\
+    '--runtime-mode+[Interactive runtime mode]:mode:(embedded daemon)' \\
     '-c[Continue most recent conversation]' \\
     '--continue[Continue most recent conversation]' \\
     '-n[Start fresh session]' \\
@@ -777,6 +1454,7 @@ compdef _kodax kodax`);
 complete -c kodax -n '__fish_use_subcommand' -a '${rootSubcommands}' -d 'Subcommands'
 complete -c kodax -n '__fish_seen_subcommand_from completion' -a 'bash zsh fish' -d 'Shell'
 complete -c kodax -n '__fish_seen_subcommand_from acp' -a 'serve' -d 'ACP subcommand'
+complete -c kodax -n '__fish_seen_subcommand_from daemon' -a 'start stop restart status logs serve' -d 'Daemon subcommand'
 complete -c kodax -n '__fish_seen_subcommand_from skill' -a '${skillSubcommands}' -d 'Skill subcommand'
 complete -c kodax -n '__fish_seen_subcommand_from tools' -a '${toolsSubcommands}' -d 'Tools subcommand'
 complete -c kodax -n '__fish_seen_subcommand_from sessions' -a '${sessionsSubcommands}' -d 'Sessions subcommand'
@@ -784,6 +1462,7 @@ complete -c kodax -n '__fish_seen_subcommand_from constructed' -a '${constructed
 complete -c kodax -s h -l help -d 'Show help'
 complete -c kodax -s p -l print -d 'Print mode' -r
 complete -c kodax -l mode -d 'Output mode' -xa 'json'
+complete -c kodax -l runtime-mode -d 'Interactive runtime mode' -xa 'embedded daemon'
 complete -c kodax -s c -l continue -d 'Continue most recent conversation'
 complete -c kodax -s n -l new -d 'Start fresh session'
 complete -c kodax -s r -l resume -d 'Resume session by ID' -r
@@ -838,6 +1517,135 @@ complete -c kodax -l version -d 'Show version'`);
     .option('--ping', 'Live-probe each configured provider (network + small token cost)')
     .action(async (opts: { json?: boolean; ping?: boolean }) => {
       await runDoctor(version, Boolean(opts?.json), { ping: Boolean(opts?.ping) });
+    });
+
+  const daemonCommand = program
+    .command('daemon')
+    .description('Inspect and manage the local KodaX runtime daemon')
+    .helpOption('-h, --help', 'Show daemon help');
+
+  daemonCommand
+    .command('start')
+    .description('Start the runtime daemon in a detached background process')
+    .option('--profile <name>', 'Daemon profile', 'default')
+    .option('--home <dir>', 'Base directory that owns the .kodax runtime daemon state', resolveDefaultRuntimeDaemonHomeDir())
+    .option('-m, --provider <name>', 'Default provider for hosted runs')
+    .option('--model <name>', 'Default model for hosted runs')
+    .option('--timeout-ms <n>', 'Milliseconds to wait for daemon health', parseOptionalNonNegativeInt, 5_000)
+    .option('--json', 'Output machine-readable JSON')
+    .action(async (subOpts: {
+      profile?: string;
+      home?: string;
+      provider?: string;
+      model?: string;
+      timeoutMs?: number;
+      json?: boolean;
+    }) => {
+      await startDaemonCommand({
+        profile: subOpts.profile ?? 'default',
+        homeDir: subOpts.home ?? resolveDefaultRuntimeDaemonHomeDir(),
+        provider: subOpts.provider,
+        model: subOpts.model,
+        timeoutMs: subOpts.timeoutMs ?? 5_000,
+        json: subOpts.json === true,
+      });
+    });
+
+  daemonCommand
+    .command('stop')
+    .description('Stop a healthy runtime daemon')
+    .option('--profile <name>', 'Daemon profile', 'default')
+    .option('--home <dir>', 'Base directory that owns the .kodax runtime daemon state', resolveDefaultRuntimeDaemonHomeDir())
+    .option('--timeout-ms <n>', 'Milliseconds to wait for daemon shutdown', parseOptionalNonNegativeInt, 5_000)
+    .option('--force', 'Clean verified stale daemon ownership without killing unverified live processes')
+    .option('--json', 'Output machine-readable JSON')
+    .action(async (subOpts: {
+      profile?: string;
+      home?: string;
+      timeoutMs?: number;
+      force?: boolean;
+      json?: boolean;
+    }) => {
+      await stopDaemonCommand({
+        profile: subOpts.profile ?? 'default',
+        homeDir: subOpts.home ?? resolveDefaultRuntimeDaemonHomeDir(),
+        timeoutMs: subOpts.timeoutMs ?? 5_000,
+        force: subOpts.force === true,
+        json: subOpts.json === true,
+      });
+    });
+
+  daemonCommand
+    .command('restart')
+    .description('Restart the runtime daemon')
+    .option('--profile <name>', 'Daemon profile', 'default')
+    .option('--home <dir>', 'Base directory that owns the .kodax runtime daemon state', resolveDefaultRuntimeDaemonHomeDir())
+    .option('-m, --provider <name>', 'Default provider for hosted runs')
+    .option('--model <name>', 'Default model for hosted runs')
+    .option('--timeout-ms <n>', 'Milliseconds to wait for daemon shutdown/startup', parseOptionalNonNegativeInt, 5_000)
+    .option('--json', 'Output machine-readable JSON')
+    .action(async (subOpts: {
+      profile?: string;
+      home?: string;
+      provider?: string;
+      model?: string;
+      timeoutMs?: number;
+      json?: boolean;
+    }) => {
+      await restartDaemonCommand({
+        profile: subOpts.profile ?? 'default',
+        homeDir: subOpts.home ?? resolveDefaultRuntimeDaemonHomeDir(),
+        provider: subOpts.provider,
+        model: subOpts.model,
+        timeoutMs: subOpts.timeoutMs ?? 5_000,
+        json: subOpts.json === true,
+      });
+    });
+
+  daemonCommand
+    .command('logs')
+    .description('Print the daemon log path and recent lines')
+    .option('--profile <name>', 'Daemon profile', 'default')
+    .option('--home <dir>', 'Base directory that owns the .kodax runtime daemon state', resolveDefaultRuntimeDaemonHomeDir())
+    .option('--lines <n>', 'Number of log lines to print', parseOptionalNonNegativeInt, 80)
+    .option('--json', 'Output machine-readable JSON')
+    .action(async (subOpts: { profile?: string; home?: string; lines?: number; json?: boolean }) => {
+      await printDaemonLogs({
+        profile: subOpts.profile ?? 'default',
+        homeDir: subOpts.home ?? resolveDefaultRuntimeDaemonHomeDir(),
+        lines: subOpts.lines ?? 80,
+        json: subOpts.json === true,
+      });
+    });
+
+  daemonCommand
+    .command('serve')
+    .description('Run the runtime daemon host in the foreground')
+    .option('--profile <name>', 'Daemon profile', 'default')
+    .option('--home <dir>', 'Base directory that owns the .kodax runtime daemon state', resolveDefaultRuntimeDaemonHomeDir())
+    .option('-m, --provider <name>', 'Default provider for hosted runs')
+    .option('--model <name>', 'Default model for hosted runs')
+    .action(async (subOpts: { profile?: string; home?: string; provider?: string; model?: string }) => {
+      await serveDaemonCommand({
+        profile: subOpts.profile ?? 'default',
+        homeDir: subOpts.home ?? resolveDefaultRuntimeDaemonHomeDir(),
+        provider: subOpts.provider,
+        model: subOpts.model,
+      });
+    });
+
+  daemonCommand
+    .command('status')
+    .description('Inspect daemon state and endpoint health')
+    .option('--profile <name>', 'Daemon profile', 'default')
+    .option('--home <dir>', 'Base directory that owns the .kodax runtime daemon state', resolveDefaultRuntimeDaemonHomeDir())
+    .option('--json', 'Output machine-readable JSON')
+    .action(async (subOpts: { profile?: string; home?: string; json?: boolean }) => {
+      await printDaemonStatus({
+        profile: subOpts.profile ?? 'default',
+        homeDir: subOpts.home ?? resolveDefaultRuntimeDaemonHomeDir(),
+        json: subOpts.json === true,
+      });
     });
 
   const skillCommand = program
@@ -1276,7 +2084,7 @@ complete -c kodax -l version -d 'Show version'`);
   // name matches an activated constructed tool. On no match we fall
   // through to commander, which preserves existing behavior (skill/acp/
   // help topics/REPL).
-  if (argv.length > 0) {
+  if (argv.length > 0 && argv[0] && !argv[0].startsWith('-') && !CLI_SUBCOMMAND_NAMES.has(argv[0])) {
     const { detectConstructedToolDispatch, runConstructedToolDispatch } = await import('./constructed_cli.js');
     const dispatchTarget = await detectConstructedToolDispatch(argv, process.cwd());
     if (dispatchTarget) {
@@ -1287,13 +2095,8 @@ complete -c kodax -l version -d 'Show version'`);
 
   await program.parseAsync(process.argv);
   if (
-    argv[0] === 'skill'
-    || argv[0] === 'acp'
-    || argv[0] === 'tools'
-    || argv[0] === 'doctor'
-    || argv[0] === 'sessions'
-    || argv[0] === 'constructed'
-    || argv[0] === 'completion'
+    argv[0] !== undefined
+    && CLI_SUBCOMMAND_NAMES.has(argv[0])
   ) {
     return;
   }
@@ -1367,6 +2170,7 @@ complete -c kodax -l version -d 'Show version'`);
     print: opts.print ? true : false,
   };
   let extensionRuntime: ReturnType<typeof createExtensionRuntime> | undefined;
+  let shouldHardExitAfterInteractiveCleanup = false;
 
   try {
   const isLegacySessionManagement =
@@ -1467,7 +2271,7 @@ complete -c kodax -l version -d 'Show version'`);
   // -r / --resume without ID: list sessions, then resume the latest.
   if (opts.resume === true) {
     try {
-      const storage = new FileSessionStorage();
+      const storage = new FileSessionStorage({ cwd: process.cwd() });
       const sessions = await storage.list();
       if (sessions.length === 0) {
         console.log(chalk.yellow('No sessions found. Starting new session...'));
@@ -1536,9 +2340,14 @@ complete -c kodax -l version -d 'Show version'`);
         ));
       }
 
+      const runtimeMode = resolveCliRuntimeMode(options.runtimeMode);
+      const runtimeHomeDir = resolveDefaultRuntimeDaemonHomeDir();
+      const runtimeProfile = 'default';
       const interactiveRuntime = await createKodaXRuntime({
-        homeDir: process.cwd(),
-        profile: 'repl',
+        mode: runtimeMode,
+        homeDir: runtimeHomeDir,
+        profile: runtimeProfile,
+        autoStartDaemon: runtimeMode === 'daemon',
         ...(kodaXOptions.provider !== undefined ? { defaultProvider: kodaXOptions.provider } : {}),
         ...(kodaXOptions.model !== undefined ? { defaultModel: kodaXOptions.model } : {}),
       });
@@ -1587,8 +2396,13 @@ complete -c kodax -l version -d 'Show version'`);
         maxIter: kodaXOptions.maxIter,
         extensionRuntime: kodaXOptions.extensionRuntime,
         session: kodaXOptions.session,
-        storage: new FileSessionStorage(),
+        storage: new FileSessionStorage({ cwd: process.cwd() }),
         runtimeRunner,
+        getRuntimeStatus: () => getInteractiveRuntimeStatus({
+          runtime: interactiveRuntime,
+          homeDir: runtimeHomeDir,
+          profile: runtimeProfile,
+        }),
         hardExitOnClose: false,
       };
 
@@ -1615,6 +2429,7 @@ complete -c kodax -l version -d 'Show version'`);
           await interactiveRuntime.close();
         }
       }
+      shouldHardExitAfterInteractiveCleanup = true;
     } catch (error) {
       if (error instanceof KodaXTerminalError) {
         console.error(chalk.red(`\n[Error] ${error.message}`));
@@ -1654,6 +2469,9 @@ complete -c kodax -l version -d 'Show version'`);
     await shutdownDefaultLspService();
     await cleanupRegisteredManagedChildren({ includeCurrentOwner: true });
     await shutdownTracing();
+    if (shouldHardExitAfterInteractiveCleanup && process.env.VITEST !== 'true') {
+      process.exit(process.exitCode ?? 0);
+    }
   }
 }
 

@@ -29,6 +29,10 @@ import {
   isDeferredTool,
   unlockDeferredToolForContext,
 } from './deferred-tools.js';
+import {
+  buildToolSearchIndex,
+  searchToolIndex,
+} from './tool-search-index.js';
 import { withManualToolBranding } from '../self-knowledge/tool-description.js';
 
 interface ToolSearchInput {
@@ -60,23 +64,6 @@ function parseQuery(rawQuery: string): { mode: 'select' | 'keyword'; names: stri
   return { mode: 'keyword', names: [], required, loose };
 }
 
-function scoreToolForKeywords(
-  toolName: string,
-  hint: string,
-  required: readonly string[],
-  loose: readonly string[],
-): number | null {
-  const haystack = `${toolName.toLowerCase()} ${hint.toLowerCase()}`;
-  for (const r of required) {
-    if (!haystack.includes(r)) return null;
-  }
-  let score = 0;
-  for (const l of loose) {
-    if (haystack.includes(l)) score++;
-  }
-  return score;
-}
-
 function resolveSelectNames(names: readonly string[]): string[] {
   const resolved: string[] = [];
   const seen = new Set<string>();
@@ -92,15 +79,11 @@ function resolveSelectNames(names: readonly string[]): string[] {
 }
 
 function searchKeywords(required: readonly string[], loose: readonly string[], maxResults: number): string[] {
-  const scored: Array<{ name: string; score: number }> = [];
-  for (const [name, hint] of Object.entries(DEFERRED_TOOL_HINTS)) {
-    const s = scoreToolForKeywords(name, hint, required, loose);
-    if (s === null) continue;
-    if (s === 0 && loose.length > 0) continue;
-    scored.push({ name, score: s });
-  }
-  scored.sort((a, b) => b.score - a.score);
-  return scored.slice(0, maxResults).map((e) => e.name);
+  const deferredDefinitions = Object.keys(DEFERRED_TOOL_HINTS)
+    .map((name) => getToolDefinition(name))
+    .filter((definition): definition is KodaXToolDefinition => definition !== undefined);
+  const index = buildToolSearchIndex(deferredDefinitions, { hints: DEFERRED_TOOL_HINTS });
+  return searchToolIndex(index, { required, loose }, maxResults).map((result) => result.name);
 }
 
 function formatToolAsFunctionBlock(def: KodaXToolDefinition): string {

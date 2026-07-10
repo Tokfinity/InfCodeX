@@ -13,6 +13,10 @@ import {
 import {
   registerPluginSkillPath,
 } from '@kodax-ai/agent';
+import {
+  emitKodaXDiagnostic,
+  type KodaXDiagnosticLevel,
+} from '@kodax-ai/agent';
 import { tsImport } from 'tsx/esm/api';
 import {
   getBuiltinRegisteredToolDefinition,
@@ -76,6 +80,30 @@ interface LoadedExtensionRecord {
   label: string;
   loadSource: ExtensionLoadSource;
   disposeAll: () => Promise<void>;
+}
+
+function formatExtensionLogArgs(args: readonly unknown[]): string {
+  return args.map((arg) => {
+    if (typeof arg === 'string') {
+      return arg;
+    }
+    if (arg instanceof Error) {
+      return arg.stack ?? arg.message;
+    }
+    try {
+      return JSON.stringify(arg);
+    } catch {
+      return String(arg);
+    }
+  }).join(' ');
+}
+
+function emitExtensionDiagnostic(source: string, level: KodaXDiagnosticLevel, args: readonly unknown[]): void {
+  emitKodaXDiagnostic({
+    source,
+    level,
+    message: formatExtensionLogArgs(args),
+  });
 }
 
 function getExtensionLabel(entryPath: string): string {
@@ -197,10 +225,10 @@ export class KodaXExtensionRuntime implements ExtensionRuntimeContract {
   constructor(options: { config?: Readonly<Record<string, unknown>> } = {}) {
     this.config = options.config ?? {};
     this.runtimeLogger = {
-      debug: (...args) => console.debug('[kodax:extension]', ...args),
-      info: (...args) => console.info('[kodax:extension]', ...args),
-      warn: (...args) => console.warn('[kodax:extension]', ...args),
-      error: (...args) => console.error('[kodax:extension]', ...args),
+      debug: (...args) => emitExtensionDiagnostic('coding:extension', 'debug', args),
+      info: (...args) => emitExtensionDiagnostic('coding:extension', 'info', args),
+      warn: (...args) => emitExtensionDiagnostic('coding:extension', 'warn', args),
+      error: (...args) => emitExtensionDiagnostic('coding:extension', 'error', args),
     };
     this.runtimeController = this.createRuntimeControllerProxy();
   }
@@ -965,11 +993,12 @@ export class KodaXExtensionRuntime implements ExtensionRuntimeContract {
 
   private createLogger(extensionPath: string): ExtensionLogger {
     const label = path.basename(extensionPath);
+    const source = `coding:extension:${label}`;
     return {
-      debug: (...args) => console.debug(`[kodax:extension:${label}]`, ...args),
-      info: (...args) => console.info(`[kodax:extension:${label}]`, ...args),
-      warn: (...args) => console.warn(`[kodax:extension:${label}]`, ...args),
-      error: (...args) => console.error(`[kodax:extension:${label}]`, ...args),
+      debug: (...args) => emitExtensionDiagnostic(source, 'debug', args),
+      info: (...args) => emitExtensionDiagnostic(source, 'info', args),
+      warn: (...args) => emitExtensionDiagnostic(source, 'warn', args),
+      error: (...args) => emitExtensionDiagnostic(source, 'error', args),
     };
   }
 

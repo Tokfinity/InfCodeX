@@ -10,7 +10,7 @@
  *   (shared with CAP-013 — `/resume` can pick up failed run)
  * - CAP-SESSION-SNAPSHOT-003: storage failure does NOT fail run
  *   — ACTIVE since FEATURE_100 P3.6a. `saveSessionSnapshot` now wraps
- *   `storage.save` in try/catch and logs failures via `console.error`.
+ *   `storage.save` in try/catch and reports failures via diagnostics.
  *   Particularly important inside `runCatchCleanup` where a storage
  *   rejection would otherwise clobber the original caught error.
  * - CAP-SESSION-SNAPSHOT-004: limit-reached terminal also persists final state
@@ -28,7 +28,12 @@
  * STATUS: ACTIVE since FEATURE_100 P2.
  */
 
-import type { KodaXSessionData, KodaXSessionStorage } from '@kodax-ai/agent';
+import {
+  setKodaXDiagnosticSink,
+  type KodaXDiagnostic,
+  type KodaXSessionData,
+  type KodaXSessionStorage,
+} from '@kodax-ai/agent';
 import { describe, expect, it, vi } from 'vitest';
 
 import type { KodaXOptions, SessionErrorMetadata } from '../../types.js';
@@ -99,20 +104,27 @@ describe('CAP-011 + CAP-013: saveSessionSnapshot contract', () => {
       session: { storage: { save, load: vi.fn() } as KodaXSessionStorage },
     } as KodaXOptions;
 
-    const consoleSpy = vi.spyOn(console, 'error').mockImplementation(() => {});
-    await expect(
-      saveSessionSnapshot(options, 'sid-storage-fail', {
-        messages: [{ role: 'user', content: 'hi' }],
-        title: 'Test Session',
-        gitRoot: '/repo',
-      }),
-    ).resolves.toBeUndefined();
+    const diagnostics: KodaXDiagnostic[] = [];
+    const restore = setKodaXDiagnosticSink((diagnostic) => diagnostics.push(diagnostic));
+    try {
+      await expect(
+        saveSessionSnapshot(options, 'sid-storage-fail', {
+          messages: [{ role: 'user', content: 'hi' }],
+          title: 'Test Session',
+          gitRoot: '/repo',
+        }),
+      ).resolves.toBeUndefined();
+    } finally {
+      restore();
+    }
     expect(save).toHaveBeenCalledTimes(1);
-    expect(consoleSpy).toHaveBeenCalledWith(
-      expect.stringContaining('[SessionSnapshot]'),
-      expect.any(Error),
-    );
-    consoleSpy.mockRestore();
+    expect(diagnostics).toEqual([
+      expect.objectContaining({
+        source: 'coding:session-snapshot',
+        level: 'error',
+        message: expect.stringContaining('storage.save failed'),
+      }),
+    ]);
   });
 
   it('CAP-SESSION-SNAPSHOT-NO-STORAGE: when options.session.storage is undefined, returns silently without throwing', async () => {

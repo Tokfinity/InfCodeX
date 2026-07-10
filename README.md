@@ -296,6 +296,32 @@ const result = await runKodaX(
 > surface (`startKodaX` + `RunningSession`), MCP popout manager API (`McpManager`),
 > Skill `` !`cmd` `` host hook, and per-app data dir namespacing (`getAppDataDir`).
 
+## Runtime SDK and daemon
+
+SDK hosts can use `@kodax-ai/kodax/runtime` for embedded or daemon-backed
+sessions/runs. Embedded mode stays in-process; daemon mode connects to a
+local-only runtime owner that can be shared by REPL, Space, IDE adapters, and
+custom SDK clients.
+
+```bash
+kodax daemon start
+kodax --runtime-mode daemon
+```
+
+By default, daemon state, config, and runtime session storage are scoped under
+the OS user home directory, so `kodax --runtime-mode daemon` and SDK clients
+using `createKodaXRuntime({ mode: 'daemon' })` converge on the same local daemon
+profile. The high-level `createKodaXRuntime({ mode: 'daemon' })` API starts or
+reuses that daemon unless you pass an explicit endpoint/transport or
+`autoStartDaemon: false`. Pass `--home <dir>` or `homeDir` only when you
+intentionally want an isolated daemon namespace for tests, CI, or project-local
+experiments.
+
+For the full host-integration contract, including embedded vs daemon selection,
+multi-client permission handling, config/catalog/MCP admin APIs, artifacts,
+context diagnostics, and daemon protocol schemas, see
+[docs/SDK_EMBEDDER_GUIDE.md §17](docs/SDK_EMBEDDER_GUIDE.md#17-runtime-sdk-and-local-daemon-feature_253feature_254feature_255-v0764-v0766).
+
 ## Repo Intelligence
 
 KodaX ships with built-in repo intelligence (`repo_overview`, `module_context`, `symbol_context`, `process_context`, `impact_estimate`, and related tools) that helps the coding agent understand large codebases without ad-hoc grep/glob exploration.
@@ -309,7 +335,7 @@ kodax --repo-intelligence full --repo-intelligence-trace
 
 ## Architecture
 
-KodaX uses a **monorepo architecture** with npm workspaces. Source layout currently has 4 workspace packages; published as a single bundled npm package `@kodax-ai/kodax` with 8 SDK subpath exports (`/agent`, `/llm`, `/coding`, `/media`, `/repl`, `/skills`, `/mcp`, `/session`; ADR-024 + ADR-032 + ADR-038, with ADR-036 consolidation):
+KodaX uses a **monorepo architecture** with npm workspaces. Source layout currently has 4 workspace packages; published as a single bundled npm package `@kodax-ai/kodax` with 9 SDK subpath exports (`/agent`, `/llm`, `/coding`, `/media`, `/repl`, `/skills`, `/mcp`, `/session`, `/runtime`; ADR-024 + ADR-032 + ADR-038, with ADR-036 consolidation):
 
 ```
 KodaX/
@@ -335,7 +361,7 @@ KodaX/
 │
 ├── src/                     # CLI entry + SDK subpath entries
 │   ├── kodax_cli.ts         # Main CLI entry point (bin: `kodax`)
-│   └── sdk-*.ts             # SDK subpath re-exports → @kodax-ai/kodax/{agent,llm,coding,media,repl,skills,mcp,session}
+│   └── sdk-*.ts             # SDK subpath re-exports → @kodax-ai/kodax/{agent,llm,coding,media,repl,skills,mcp,session,runtime}
 │
 └── package.json             # Root workspace config; release.mjs rewrites name + injects subpath exports
 ```
@@ -384,7 +410,7 @@ Source-side workspace package names (`@kodax-ai/*`). npm consumers install the s
 KodaX has two layers that consumers should understand separately:
 
 - **Source-side**: 4 workspace packages above (what developers see when reading the repo).
-- **npm-published**: a single bundled package `@kodax-ai/kodax` with 8 SDK subpaths (what SDK consumers `import` from). The subpaths are split into two roles:
+- **npm-published**: a single bundled package `@kodax-ai/kodax` with 9 SDK subpaths (what SDK consumers `import` from). The subpaths are split into two roles:
   - **Full-package subpaths** (`/agent`, `/llm`, `/coding`, `/repl`) — each one maps 1:1 to a source workspace and exposes its complete public API.
   - **Narrow-subset subpaths** (`/media`, `/skills`, `/mcp`, `/session`) — each one exposes only a focused capability slice carved out of `/agent` or `/repl`. This lets consumers who only need (say) the Skills system import a much smaller surface without pulling in the full agent framework.
 
@@ -397,6 +423,7 @@ KodaX has two layers that consumers should understand separately:
 | `packages/coding` | `@kodax-ai/kodax/coding`  | Full package | Coding agent + 50+ tools + repo-intelligence (342 exports) | Build a Claude Code-shape product |
 | `packages/repl`   | `@kodax-ai/kodax/repl`    | Full package | Ink TUI + permission modes + commands (193 exports) | Terminal-UI consumers |
 | `packages/repl`   | `@kodax-ai/kodax/session` | **Narrow subset** | Session management only — `listSessions` / `loadFullTranscript` / `appendClientNotice` / `forkSession` / `compactSession` / `watchSessions` / ... | IDE plugins and desktop hosts reading session history |
+| `src`             | `@kodax-ai/kodax/runtime` | Host API | Embedded/daemon runtime facade, sessions/runs/events/permissions/catalog/MCP/artifacts/diagnostics, daemon protocol schema | SDK hosts, Space/IDE clients, daemon clients |
 
 **Rule of thumb**: if you need Runner / Agent / fan-out, import from `/agent`. If you only need skills or mcp APIs, import from `/skills` or `/mcp` to get a smaller bundle. The narrow subsets are subsets of the full packages — they do **not** expose extra symbols.
 
@@ -523,9 +550,10 @@ import { SkillRegistry } from '@kodax-ai/kodax/skills';         // zero-dep skil
 import { loadConfig } from '@kodax-ai/kodax/repl';              // REPL config / session helpers
 import { createMcpManager } from '@kodax-ai/kodax/mcp';         // MCP popout manager (v0.7.42)
 import { listSessions } from '@kodax-ai/kodax/session';         // session history helpers
+import { createKodaXRuntime } from '@kodax-ai/kodax/runtime';   // embedded/daemon runtime API
 ```
 
-All 9 SDK entries (root + 8 subpaths) share internal code via ESM chunk splitting — importing from `/agent` does not pull in `/repl`'s Ink + React surface.
+All 10 SDK entries (root + 9 subpaths) share internal code via ESM chunk splitting — importing from `/agent` does not pull in `/repl`'s Ink + React surface.
 
 > **ESM-only.** The SDK is published as ES Modules. In a CommonJS context (Electron main process, legacy Webpack CJS bundles, `require()`-based code) you must use `await import(...)` instead of `require()`. See [docs/SDK_EMBEDDER_GUIDE.md §5](docs/SDK_EMBEDDER_GUIDE.md#5-consuming-from-a-commonjs-context-electron-main-cjs-bundles) for the canonical recipe + the technical reason most subpaths cannot ship a dual ESM/CJS build.
 
@@ -812,7 +840,7 @@ await runKodaX({
 
 ## SDK Usage
 
-KodaX ships as a single npm package `@kodax-ai/kodax` with 8 SDK subpath exports (ADR-024 v0.7.39 + ADR-032 v0.7.42 + ADR-038 v0.7.49 + v0.7.56 `/media`). Each subpath is tree-shake-friendly so consumers pull only what they need:
+KodaX ships as a single npm package `@kodax-ai/kodax` with 9 SDK subpath exports (ADR-024 v0.7.39 + ADR-032 v0.7.42 + ADR-038 v0.7.49 + v0.7.56 `/media` + v0.7.64 `/runtime`). Each subpath is tree-shake-friendly so consumers pull only what they need:
 
 ```bash
 npm install @kodax-ai/kodax
@@ -828,6 +856,7 @@ import { runInkInteractiveMode } from '@kodax-ai/kodax/repl';     // Ink TUI ent
 import { SkillRegistry } from '@kodax-ai/kodax/skills';           // zero-dep skill loader
 import { createMcpManager } from '@kodax-ai/kodax/mcp';           // MCP popout manager (v0.7.42)
 import { listSessions } from '@kodax-ai/kodax/session';           // session history helpers
+import { createKodaXRuntime } from '@kodax-ai/kodax/runtime';     // embedded/daemon runtime API
 ```
 
 > The SDK is **ESM-only**. CommonJS consumers (Electron main / Webpack CJS / `require()` callers) must use `await import('@kodax-ai/kodax/...')` — see [docs/SDK_EMBEDDER_GUIDE.md §5](docs/SDK_EMBEDDER_GUIDE.md#5-consuming-from-a-commonjs-context-electron-main-cjs-bundles).
@@ -976,6 +1005,7 @@ await runInkInteractiveMode({ provider: 'zhipu-coding', effort: 'auto' });
 | Building custom agent | `@kodax-ai/kodax/agent` | Runner + fan-out + idle-yield + session-lineage + capabilities |
 | Coding tasks | `@kodax-ai/kodax/coding` | Complete coding agent + tools |
 | Terminal app | `@kodax-ai/kodax/repl` | Full interactive experience |
+| Runtime host / daemon client | `@kodax-ai/kodax/runtime` | Sessions, runs, events, permissions, catalog, MCP, artifacts, diagnostics |
 
 ---
 

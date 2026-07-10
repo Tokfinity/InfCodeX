@@ -110,6 +110,18 @@ export {
   countTokens,
 } from './tokenizer.js';
 
+// ============== Diagnostics ==============
+export {
+  emitKodaXDiagnostic,
+  formatKodaXDiagnostic,
+  setKodaXDiagnosticSink,
+} from './diagnostics.js';
+export type {
+  KodaXDiagnostic,
+  KodaXDiagnosticLevel,
+  KodaXDiagnosticSink,
+} from './diagnostics.js';
+
 // ============== Session entities + persistence + compaction implementations ==============
 // v0.7.35.1 FEATURE_142 Batch B: session.ts / session-lineage.ts / persistence.ts /
 // compaction/ moved from @kodax-ai/agent to ./session-lineage/index.js. Consumers should

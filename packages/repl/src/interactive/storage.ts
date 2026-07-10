@@ -25,6 +25,7 @@ import {
   cleanupIncompleteToolCalls,
   countActiveLineageMessages,
   createSessionLineage,
+  emitKodaXDiagnostic,
   findPreviousUserEntryId,
   forkSessionLineage,
   generateSessionId,
@@ -44,7 +45,7 @@ import type { SessionData, SessionErrorMetadata } from '../ui/utils/session-stor
 // `createSessionManager()` instead.
 import { getGitRoot, KODAX_SESSIONS_DIR } from '../common/utils.js';
 import { inspectWorkspaceRuntime, isSameCanonicalRepo, resolveSessionRuntimeInfo } from './workspace-runtime.js';
-import { deriveProjectKeyFromData, deriveProjectKeyFromRoot, type ProjectIdentity } from './project-key.js';
+import { deriveProjectKeyFromData, type ProjectIdentity } from './project-key.js';
 import { ensureLayoutMigrated } from './session-migration.js';
 import {
   isKodaXExtensionSessionRecord,
@@ -121,22 +122,28 @@ interface ResolvedSessionSnapshot {
   createdAt?: string;
 }
 
+function reportStorageDiagnostic(level: 'info' | 'warn' | 'error', message: string, detail?: unknown): void {
+  emitKodaXDiagnostic({
+    source: 'repl:session-storage',
+    level,
+    message,
+    ...(detail !== undefined ? { detail } : {}),
+  });
+}
+
 function warnMalformedSessionData(filePath: string, count: number): void {
-  if (count === 0 || process.env.NODE_ENV === 'test') {
+  if (count === 0) {
     return;
   }
 
-  process.stderr.write(
-    `[KodaX] Skipped ${count} malformed session record(s) from ${path.basename(filePath)}.\n`,
+  reportStorageDiagnostic(
+    'warn',
+    `Skipped ${count} malformed session record(s) from ${path.basename(filePath)}.`,
   );
 }
 
 function writeStorageNotice(message: string): void {
-  if (process.env.NODE_ENV === 'test') {
-    return;
-  }
-
-  process.stderr.write(`${message}\n`);
+  reportStorageDiagnostic('info', message);
 }
 
 function toExtensionRecordLine(
@@ -796,7 +803,12 @@ export class FileSessionStorage implements KodaXSessionStorage {
     // path; only legacy same-second cross-project duplicates do).
     // The diagnostic notice still fires so the caller can debug.
     if (this.hostCwd) {
-      const currentDir = this.projectDir(deriveProjectKeyFromRoot(this.hostCwd).key);
+      const currentRuntime = await inspectWorkspaceRuntime({ cwd: this.hostCwd });
+      const currentGitRoot = await getGitRoot(this.hostCwd);
+      const currentDir = this.projectDir(deriveProjectKeyFromData({
+        gitRoot: currentGitRoot ?? undefined,
+        runtimeInfo: currentRuntime,
+      }).key);
       const preferred = matches.find((m) => path.dirname(m) === currentDir);
       if (preferred) {
         return preferred;
@@ -1018,9 +1030,7 @@ export class FileSessionStorage implements KodaXSessionStorage {
     const state = this.appendState.get(id);
     if (state && this.shouldRunMaintenance(state)) {
       this.runMaintenance(id).catch((err) => {
-        if (process.env.NODE_ENV !== 'test') {
-          process.stderr.write(`[KodaX] Archive maintenance failed: ${String(err)}\n`);
-        }
+        reportStorageDiagnostic('error', 'Archive maintenance failed.', err);
       });
     }
   }
@@ -1334,8 +1344,10 @@ export class FileSessionStorage implements KodaXSessionStorage {
     // intent supplied, `currentGitRoot` stays null → the
     // per-project loop scans all project dirs (the "show me
     // everything" behavior the slow path provides).
+    const requestedGitRoot = gitRoot && gitRoot.trim() ? gitRoot : undefined;
+    const hasProjectIntent = requestedGitRoot !== undefined || this.hostCwd !== undefined;
     const currentGitRoot =
-      gitRoot ?? (this.hostCwd ? await getGitRoot(this.hostCwd) : null);
+      requestedGitRoot ?? (this.hostCwd ? await getGitRoot(this.hostCwd) : null);
     const currentRuntime = await inspectWorkspaceRuntime({
       cwd: currentGitRoot ?? this.hostCwd ?? process.cwd(),
     });
@@ -1356,7 +1368,7 @@ export class FileSessionStorage implements KodaXSessionStorage {
       runtimeInfo: currentRuntime,
     }).key;
     const isSidecar = (f: string): boolean => f.endsWith('.archive.jsonl') || f.endsWith('.islands.jsonl');
-    const projectDirNames = currentGitRoot
+    const projectDirNames = hasProjectIntent
       ? [currentProjectKey]
       : topEntries.filter((e) => e.isDirectory() && !e.name.startsWith('.')).map((e) => e.name);
     for (const key of projectDirNames) {
@@ -1368,7 +1380,7 @@ export class FileSessionStorage implements KodaXSessionStorage {
       }
       for (const f of dirFiles) {
         if (f.endsWith('.jsonl') && !isSidecar(f)) {
-          candidatePaths.push({ path: path.join(this.projectDir(key), f), trusted: Boolean(currentGitRoot), archived: false });
+          candidatePaths.push({ path: path.join(this.projectDir(key), f), trusted: hasProjectIntent, archived: false });
         }
       }
       // FEATURE_219 Phase 4 — whole-session archive lives in <key>/archived/.
@@ -1383,7 +1395,7 @@ export class FileSessionStorage implements KodaXSessionStorage {
           if (f.endsWith('.jsonl') && !isSidecar(f)) {
             candidatePaths.push({
               path: path.join(this.projectDir(key), 'archived', f),
-              trusted: Boolean(currentGitRoot),
+              trusted: hasProjectIntent,
               archived: true,
             });
           }
@@ -1429,7 +1441,7 @@ export class FileSessionStorage implements KodaXSessionStorage {
           const scope: KodaXSessionScope = first.scope === 'managed-task-worker'
             ? 'managed-task-worker'
             : 'user';
-          if (currentGitRoot && !trusted) {
+          if (hasProjectIntent && !trusted) {
             const sameCanonicalRepo = isSameCanonicalRepo(currentRuntime, sessionRuntime);
             // FEATURE_157: Windows-aware comparison (case-insensitive on
             // win32/darwin) — see `pathsEqual` JSDoc for the resume-loss
@@ -1439,8 +1451,15 @@ export class FileSessionStorage implements KodaXSessionStorage {
             // otherwise — only the equality operator changes.
             const sameWorkspace = sessionRuntime?.workspaceRoot
               ? pathsEqual(sessionRuntime.workspaceRoot, currentRuntime.workspaceRoot ?? '')
-              : pathsEqual(sessionGitRoot, currentGitRoot);
-            if (!sameCanonicalRepo && !sameWorkspace) {
+              : Boolean(currentGitRoot && sessionGitRoot && pathsEqual(sessionGitRoot, currentGitRoot));
+            const sameExecutionCwd = sessionRuntime?.executionCwd
+              ? pathsEqual(sessionRuntime.executionCwd, currentRuntime.executionCwd ?? '')
+              : false;
+            const sameProjectKey = deriveProjectKeyFromData({
+              gitRoot: sessionGitRoot || undefined,
+              runtimeInfo: sessionRuntime,
+            }).key === currentProjectKey;
+            if (!sameCanonicalRepo && !sameWorkspace && !sameExecutionCwd && !sameProjectKey) {
               return null;
             }
           }

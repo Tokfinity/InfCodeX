@@ -1,10 +1,15 @@
 import type { KodaXToolExecutionContext } from '../types.js';
+import { emitKodaXDiagnostic } from '@kodax-ai/agent';
 import {
   formatSize,
   persistToolOutput,
   truncateHead,
   truncateTail,
 } from './truncate.js';
+import {
+  clampToolResultPolicyToBudget,
+  type ToolResultBudget,
+} from './tool-result-budget.js';
 
 export interface ToolResultPolicy {
   maxLines: number;
@@ -112,6 +117,12 @@ const TOOL_RESULT_POLICIES: Record<string, ToolResultPolicy> = {
     direction: 'head',
     spillToFile: true,
   },
+  tool_call: {
+    maxLines: 2200,
+    maxBytes: 64 * 1024,
+    direction: 'head',
+    spillToFile: true,
+  },
 };
 
 export function getToolResultPolicy(toolName: string): ToolResultPolicy {
@@ -156,6 +167,8 @@ export interface ApplyToolResultGuardrailOptions {
    * but together exceed the envelope cap.
    */
   forceSpill?: boolean;
+  /** Optional context-aware cap; omitted keeps the legacy per-tool policy. */
+  toolResultBudget?: ToolResultBudget;
 }
 
 export async function applyToolResultGuardrail(
@@ -164,7 +177,10 @@ export async function applyToolResultGuardrail(
   ctx: KodaXToolExecutionContext,
   options?: ApplyToolResultGuardrailOptions,
 ): Promise<GuardedToolResult> {
-  const policy = getToolResultPolicy(toolName);
+  const policy = clampToolResultPolicyToBudget(
+    getToolResultPolicy(toolName),
+    options?.toolResultBudget,
+  );
   // Under forceSpill, we still want the same head/tail preview behaviour, but
   // we treat any content as "must spill" so we go through the spill path.
   const effectivePolicy: ToolResultPolicy = options?.forceSpill
@@ -218,15 +234,17 @@ export async function applyToolResultGuardrail(
   // treat this case the same as "small content fit in budget" (which
   // is exactly the externally-visible behaviour).
   //
-  // The console.warn is intentionally NOT gated on
-  // KODAX_DEBUG_TOOL_GUARDRAILS — disk failure is a severe operational
-  // event that an operator must see immediately.
+  // Disk failure is still reported, but through the diagnostic channel so
+  // interactive hosts can render or suppress it without corrupting the TUI.
   if (spillFailed) {
-    console.warn(
-      `[ToolGuardrail] persistToolOutput failed for ${toolName}; ` +
-        `inlining ${Buffer.byteLength(content, 'utf-8')} bytes to preserve data. ` +
-        `Cause: ${spillError instanceof Error ? spillError.message : String(spillError)}`,
-    );
+    emitKodaXDiagnostic({
+      source: 'coding:tool-result-policy',
+      level: 'error',
+      message:
+        `persistToolOutput failed for ${toolName}; ` +
+        `inlining ${Buffer.byteLength(content, 'utf-8')} bytes to preserve data.`,
+      detail: spillError,
+    });
     return {
       content,
       truncated: false,
@@ -255,12 +273,17 @@ export async function applyToolResultGuardrail(
   const guardedContent = `${preview}\n\n[${summary}${saved}${hint}]`;
 
   if (process.env.KODAX_DEBUG_TOOL_GUARDRAILS) {
-    console.error('[ToolGuardrail]', {
-      toolName,
-      outputPath,
-      totalBytes: truncation.totalBytes,
-      shownBytes: truncation.outputBytes,
-      truncatedBy: truncation.truncatedBy,
+    emitKodaXDiagnostic({
+      source: 'coding:tool-result-policy',
+      level: 'debug',
+      message: 'Tool result truncated by guardrail.',
+      detail: {
+        toolName,
+        outputPath,
+        totalBytes: truncation.totalBytes,
+        shownBytes: truncation.outputBytes,
+        truncatedBy: truncation.truncatedBy,
+      },
     });
   }
 

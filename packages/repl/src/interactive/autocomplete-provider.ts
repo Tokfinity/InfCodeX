@@ -15,6 +15,7 @@ import { FileCompleter, CommandCompleter, findCommandSlashIndex, type Completer,
 import { SkillCompleter } from './completers/skill-completer.js';
 import { ArgumentCompleter } from './completers/argument-completer.js';
 import { sortCandidatesCombined } from './fuzzy.js';
+import { emitKodaXDiagnostic } from '@kodax-ai/agent';
 
 /**
  * Autocomplete state for UI binding
@@ -378,7 +379,12 @@ export class AutocompleteProvider {
       } catch (error) {
         // Log error but continue with other completers
         // 记录错误但继续使用其他补全器
-        console.error('[Autocomplete] Completer error:', error);
+        emitKodaXDiagnostic({
+          source: 'repl:autocomplete',
+          level: 'error',
+          message: 'Completer failed; continuing with remaining completers.',
+          detail: error,
+        });
       }
     }
 
@@ -467,7 +473,12 @@ export class AutocompleteProvider {
       try {
         listener(this.state);
       } catch (error) {
-        console.error('[Autocomplete] Listener error:', error);
+        emitKodaXDiagnostic({
+          source: 'repl:autocomplete',
+          level: 'error',
+          message: 'Listener failed during autocomplete state update.',
+          detail: error,
+        });
       }
     }
   }

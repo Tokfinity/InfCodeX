@@ -2,7 +2,11 @@ import os from 'os';
 import path from 'path';
 import { mkdtemp, mkdir, rm, writeFile } from 'fs/promises';
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
-import { listPluginSkillPaths } from '@kodax-ai/agent';
+import {
+  listPluginSkillPaths,
+  setKodaXDiagnosticSink,
+  type KodaXDiagnostic,
+} from '@kodax-ai/agent';
 import { executeTool } from '../tools/index.js';
 import type { KodaXToolExecutionContext } from '../types.js';
 import {
@@ -280,7 +284,10 @@ describe('KodaXExtensionRuntime', () => {
 
   it('warns when continueOnError suppresses extension load and reload failures', async () => {
     const extensionPath = path.join(tempDir, 'warnable-extension.mjs');
-    const warnSpy = vi.spyOn(console, 'warn').mockImplementation(() => {});
+    const diagnostics: KodaXDiagnostic[] = [];
+    const restoreDiagnostics = setKodaXDiagnosticSink((diagnostic) => {
+      diagnostics.push(diagnostic);
+    });
 
     await writeFile(
       extensionPath,
@@ -296,11 +303,12 @@ describe('KodaXExtensionRuntime', () => {
       loadSource: 'config',
     });
 
-    expect(warnSpy).toHaveBeenCalledWith(
-      '[kodax:extension]',
-      `Failed to load extension "${extensionPath}" during load:`,
-      'initial load exploded',
-    );
+    expect(diagnostics).toContainEqual(expect.objectContaining({
+      source: 'coding:extension',
+      level: 'warn',
+      message: expect.stringContaining(`Failed to load extension "${extensionPath}" during load:`),
+    }));
+    expect(diagnostics.at(-1)?.message).toContain('initial load exploded');
 
     await writeFile(
       extensionPath,
@@ -330,13 +338,14 @@ describe('KodaXExtensionRuntime', () => {
 
     await runtime.reloadExtensions({ continueOnError: true });
 
-    expect(warnSpy).toHaveBeenCalledWith(
-      '[kodax:extension]',
-      `Failed to reload extension "${extensionPath}":`,
-      'reload exploded',
-    );
+    expect(diagnostics).toContainEqual(expect.objectContaining({
+      source: 'coding:extension',
+      level: 'warn',
+      message: expect.stringContaining(`Failed to reload extension "${extensionPath}":`),
+    }));
+    expect(diagnostics.at(-1)?.message).toContain('reload exploded');
 
-    warnSpy.mockRestore();
+    restoreDiagnostics();
     await runtime.dispose();
   });
 
@@ -642,7 +651,10 @@ describe('KodaXExtensionRuntime', () => {
 
   it('records persistence failures for non-JSON state and session records', async () => {
     const extensionPath = path.join(tempDir, 'persistence-guard-extension.mjs');
-    const warnSpy = vi.spyOn(console, 'warn').mockImplementation(() => {});
+    const diagnostics: KodaXDiagnostic[] = [];
+    const restoreDiagnostics = setKodaXDiagnosticSink((diagnostic) => {
+      diagnostics.push(diagnostic);
+    });
 
     await writeFile(
       extensionPath,
@@ -712,9 +724,22 @@ describe('KodaXExtensionRuntime', () => {
         }),
       ]),
     );
-    expect(warnSpy).toHaveBeenCalled();
+    expect(diagnostics).toEqual(
+      expect.arrayContaining([
+        expect.objectContaining({
+          source: 'coding:extension:persistence-guard-extension.mjs',
+          level: 'warn',
+          message: expect.stringContaining('Ignoring non-JSON session state'),
+        }),
+        expect.objectContaining({
+          source: 'coding:extension:persistence-guard-extension.mjs',
+          level: 'warn',
+          message: expect.stringContaining('Ignoring non-JSON session record'),
+        }),
+      ]),
+    );
 
-    warnSpy.mockRestore();
+    restoreDiagnostics();
     await runtime.dispose();
   });
 
@@ -865,7 +890,6 @@ describe('KodaXExtensionRuntime', () => {
 
   it('todo:before-* hook fault is isolated — throw becomes recorded failure, hook returns undefined (allow)', async () => {
     const extensionPath = path.join(tempDir, 'todo-hook-throw-ext.mjs');
-    const warnSpy = vi.spyOn(console, 'warn').mockImplementation(() => {});
     await writeFile(
       extensionPath,
       `export default function(api) {
@@ -903,7 +927,6 @@ describe('KodaXExtensionRuntime', () => {
       ]),
     );
 
-    warnSpy.mockRestore();
     await runtime.dispose();
   });
 });

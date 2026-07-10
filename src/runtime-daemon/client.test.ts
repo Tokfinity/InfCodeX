@@ -1,0 +1,527 @@
+import { describe, expect, it } from 'vitest';
+
+import type {
+  RuntimeEvent,
+  RuntimeSubscription,
+} from '../sdk-runtime.js';
+import {
+  createRuntimeDaemonNotification,
+  type RuntimeDaemonNotification,
+} from './protocol.js';
+import {
+  createRuntimeDaemonClient,
+  type RuntimeDaemonClientTransport,
+} from './client.js';
+
+describe('runtime daemon client proxy', () => {
+  it('maps sessions and run handles onto daemon requests', async () => {
+    const calls: Array<{ readonly method: string; readonly params: unknown }> = [];
+    const transport = fakeTransport(calls);
+    const client = createRuntimeDaemonClient({
+      identity: {
+        runtimeId: 'runtime-client',
+        mode: 'embedded',
+        profile: 'default',
+        startedAt: '2026-07-09T00:00:00.000Z',
+        version: '0.7.66',
+      },
+      transport,
+    });
+
+    const session = await client.sessions.create({ title: 'From Client' });
+    const handle = await client.runs.start({
+      sessionId: session.id,
+      prompt: 'hello daemon',
+    });
+    const result = await handle.result;
+    const awaited = await client.runs.await(handle.runId);
+
+    expect(session).toMatchObject({ id: 'session-1', title: 'From Client' });
+    expect(handle.runId).toBe('run-1');
+    expect(result).toMatchObject({ runId: 'run-1', sessionId: 'session-1', phase: 'completed' });
+    expect(awaited).toMatchObject({ runId: 'run-1', sessionId: 'session-1', phase: 'completed' });
+    expect(calls.map((call) => call.method)).toEqual([
+      'session.create',
+      'run.start',
+      'run.await',
+      'run.await',
+    ]);
+  });
+
+  it('routes daemon event notifications to matching local subscriptions', async () => {
+    const calls: Array<{ readonly method: string; readonly params: unknown }> = [];
+    const transport = fakeTransport(calls);
+    const client = createRuntimeDaemonClient({
+      identity: {
+        runtimeId: 'runtime-client',
+        mode: 'embedded',
+        profile: 'default',
+        startedAt: '2026-07-09T00:00:00.000Z',
+        version: '0.7.66',
+      },
+      transport,
+    });
+    const seen: RuntimeEvent[] = [];
+
+    const subscription = client.events.subscribe({ sessionId: 'session-1' }, (event) => {
+      seen.push(event);
+    });
+    await Promise.resolve();
+
+    const event: RuntimeEvent = {
+      id: 'evt-1',
+      seq: 1,
+      time: '2026-07-09T00:00:00.000Z',
+      sessionId: 'session-1',
+      runId: 'run-1',
+      type: 'run.completed',
+      payload: { ok: true },
+    };
+    transport.emit(createRuntimeDaemonNotification('event', {
+      subscriptionId: 'sub-1',
+      event,
+    }));
+    subscription.close();
+
+    expect(seen).toEqual([event]);
+    expect(calls.map((call) => call.method)).toContain('event.subscribe');
+    expect(calls.map((call) => call.method)).toContain('event.unsubscribe');
+  });
+
+  it('unsubscribes remote event subscriptions when closed before subscribe resolves', async () => {
+    const calls: Array<{ readonly method: string; readonly params: unknown }> = [];
+    let resolveSubscribe!: (value: unknown) => void;
+    const subscribeResult = new Promise<unknown>((resolve) => {
+      resolveSubscribe = resolve;
+    });
+    const transport = fakeTransport(calls, {
+      eventSubscribeResult: subscribeResult,
+    });
+    const client = createRuntimeDaemonClient({
+      identity: {
+        runtimeId: 'runtime-client',
+        mode: 'embedded',
+        profile: 'default',
+        startedAt: '2026-07-09T00:00:00.000Z',
+        version: '0.7.66',
+      },
+      transport,
+    });
+
+    const subscription = client.events.subscribe({}, () => undefined);
+    subscription.close();
+    resolveSubscribe({ subscriptionId: 'late-event-sub' });
+    await flushAsyncNotifications();
+
+    expect(calls.some((call) => (
+      call.method === 'event.unsubscribe'
+      && isRecord(call.params)
+      && call.params.subscriptionId === 'late-event-sub'
+    ))).toBe(true);
+  });
+
+  it('unsubscribes remote workflow subscriptions when closed before subscribe resolves', async () => {
+    const calls: Array<{ readonly method: string; readonly params: unknown }> = [];
+    let resolveSubscribe!: (value: unknown) => void;
+    const subscribeResult = new Promise<unknown>((resolve) => {
+      resolveSubscribe = resolve;
+    });
+    const transport = fakeTransport(calls, {
+      workflowSubscribeResult: subscribeResult,
+    });
+    const client = createRuntimeDaemonClient({
+      identity: {
+        runtimeId: 'runtime-client',
+        mode: 'embedded',
+        profile: 'default',
+        startedAt: '2026-07-09T00:00:00.000Z',
+        version: '0.7.66',
+      },
+      transport,
+    });
+
+    const subscription = client.workflows.subscribe({}, () => undefined);
+    subscription.close();
+    resolveSubscribe({ subscriptionId: 'late-workflow-sub' });
+    await flushAsyncNotifications();
+
+    expect(calls.some((call) => (
+      call.method === 'workflow.unsubscribe'
+      && isRecord(call.params)
+      && call.params.subscriptionId === 'late-workflow-sub'
+    ))).toBe(true);
+  });
+
+  it('drops local event listeners when remote subscribe rejects', async () => {
+    const calls: Array<{ readonly method: string; readonly params: unknown }> = [];
+    const transport = fakeTransport(calls, {
+      eventSubscribeResult: Promise.reject(new Error('subscribe failed')),
+    });
+    const client = createRuntimeDaemonClient({
+      identity: {
+        runtimeId: 'runtime-client',
+        mode: 'embedded',
+        profile: 'default',
+        startedAt: '2026-07-09T00:00:00.000Z',
+        version: '0.7.66',
+      },
+      transport,
+    });
+
+    client.events.subscribe({}, () => undefined);
+    await flushAsyncNotifications();
+
+    expect(transport.listenerCount()).toBe(0);
+  });
+
+  it('maps runtime admin/catalog/MCP/artifact services onto daemon requests', async () => {
+    const calls: Array<{ readonly method: string; readonly params: unknown }> = [];
+    const transport = fakeTransport(calls);
+    const client = createRuntimeDaemonClient({
+      identity: {
+        runtimeId: 'runtime-client',
+        mode: 'daemon',
+        profile: 'default',
+        startedAt: '2026-07-09T00:00:00.000Z',
+        version: '0.7.66',
+      },
+      transport,
+    });
+
+    await client.config.patch({ model: 'm1' });
+    await client.catalog.resolveCommand({ name: 'help' });
+    await client.catalog.describeSkill({ name: 'review' });
+    await client.catalog.customProviders();
+    await client.catalog.upsertCustomProvider({
+      name: 'custom-openai',
+      protocol: 'openai',
+      baseUrl: 'https://example.invalid/v1',
+      apiKeyEnv: 'CUSTOM_OPENAI_KEY',
+      model: 'custom-model',
+    });
+    await client.catalog.deleteCustomProvider('custom-openai');
+    await client.catalog.extensions();
+    await client.mcp.validateServer('local', { type: 'stdio', command: 'echo' });
+    await client.mcp.upsertServer('local', { type: 'stdio', command: 'echo' });
+    await client.mcp.listTools({ server: 'local' });
+    await client.artifacts.create({ kind: 'file', path: '/tmp/a.txt' });
+    await client.diagnostics.latestContextBudget({ sessionId: 'session-1' });
+    await client.diagnostics.latestToolExposure({ runId: 'run-1' });
+
+    expect(calls.map((call) => call.method)).toEqual([
+      'config.patch',
+      'command.resolve',
+      'skill.describe',
+      'provider.custom.list',
+      'provider.custom.upsert',
+      'provider.custom.remove',
+      'extension.list',
+      'mcp.server.validate',
+      'mcp.server.upsert',
+      'mcp.tool.list',
+      'artifact.create',
+      'context.budget.get',
+      'tool.exposure.preview',
+    ]);
+  });
+
+  it('maps the remaining SDK runtime service methods onto daemon requests', async () => {
+    const calls: Array<{ readonly method: string; readonly params: unknown }> = [];
+    const transport = fakeTransport(calls);
+    const client = createRuntimeDaemonClient({
+      identity: {
+        runtimeId: 'runtime-client',
+        mode: 'daemon',
+        profile: 'default',
+        startedAt: '2026-07-09T00:00:00.000Z',
+        version: '0.7.66',
+      },
+      transport,
+    });
+
+    await client.sessions.load('session-1');
+    await client.sessions.list({ limit: 5 });
+    await client.sessions.transcript('session-1');
+    await client.sessions.fork({ sessionId: 'session-1' });
+    await client.sessions.getSettings('session-1');
+    await client.sessions.updateSettings('session-1', { model: 'm1' });
+    await client.sessions.appendNotice({ sessionId: 'session-1', content: 'notice' });
+    await client.sessions.rewind({ sessionId: 'session-1', selector: 'entry-1' });
+    await client.sessions.setActiveEntry({ sessionId: 'session-1', entryId: 'entry-1' });
+    await client.sessions.compact({ sessionId: 'session-1' });
+    await client.sessions.archive('session-1');
+    await client.sessions.unarchive('session-1');
+    await client.sessions.delete('session-1');
+    await client.runs.get('run-1');
+    await client.runs.list({ sessionId: 'session-1' });
+    await client.runs.abort('run-1');
+    await client.runs.setModel('run-1', 'm2');
+    await client.runs.setProvider('run-1', 'openai');
+    await client.runs.setReasoning('run-1', 'balanced');
+    await client.events.replay({ sessionId: 'session-1' });
+    await client.permissions.request({
+      sessionId: 'session-1',
+      runId: 'run-1',
+      toolName: 'bash',
+      inputPreview: 'echo ok',
+    });
+    await client.permissions.listPending({ runId: 'run-1' });
+    await client.workflows.list({ activeOnly: true });
+    await client.workflows.pause('workflow-1');
+    await client.workflows.resume('workflow-1');
+    await client.workflows.stop('workflow-1');
+    await client.config.read();
+    await client.config.reload();
+    await client.catalog.providers();
+    await client.catalog.models({ provider: 'openai' });
+    await client.catalog.commands('C:/repo');
+    await client.catalog.skills({ userInvocableOnly: true });
+    await client.mcp.listServers();
+    await client.mcp.deleteServer('local');
+    await client.mcp.reloadServers();
+    await client.artifacts.delete('art-1');
+    await client.status.snapshot();
+
+    expect(calls.map((call) => call.method)).toEqual([
+      'session.load',
+      'session.list',
+      'session.transcript',
+      'session.fork',
+      'session.settings.get',
+      'session.settings.update',
+      'session.notice.append',
+      'session.rewind',
+      'session.active_entry.set',
+      'session.compact',
+      'session.archive',
+      'session.unarchive',
+      'session.delete',
+      'run.get',
+      'run.list',
+      'run.abort',
+      'run.model.set',
+      'run.provider.set',
+      'run.reasoning.set',
+      'event.replay',
+      'permission.request',
+      'permission.list',
+      'workflow.list',
+      'workflow.pause',
+      'workflow.resume',
+      'workflow.stop',
+      'config.read',
+      'config.reload',
+      'provider.list',
+      'model.list',
+      'command.list',
+      'skill.list',
+      'mcp.server.list',
+      'mcp.server.delete',
+      'mcp.server.reload',
+      'artifact.delete',
+      'daemon.status',
+    ]);
+  });
+
+  it('passes permission response run bindings through the transport', async () => {
+    const calls: Array<{ readonly method: string; readonly params: unknown }> = [];
+    const transport = fakeTransport(calls);
+    const client = createRuntimeDaemonClient({
+      identity: {
+        runtimeId: 'runtime-client',
+        mode: 'daemon',
+        profile: 'default',
+        startedAt: '2026-07-09T00:00:00.000Z',
+        version: '0.7.66',
+      },
+      transport,
+    });
+
+    const accepted = await client.permissions.respond(
+      'perm-1',
+      { type: 'allow_once' },
+      { runId: 'run-1' },
+    );
+
+    expect(accepted).toBe(true);
+    expect(calls).toEqual([{
+      method: 'permission.respond',
+      params: {
+        requestId: 'perm-1',
+        decision: { type: 'allow_once' },
+        runId: 'run-1',
+      },
+    }]);
+  });
+
+  it('maps daemon null lookup results back to SDK undefined semantics', async () => {
+    const calls: Array<{ readonly method: string; readonly params: unknown }> = [];
+    const transport = fakeTransport(calls);
+    const client = createRuntimeDaemonClient({
+      identity: {
+        runtimeId: 'runtime-client',
+        mode: 'daemon',
+        profile: 'default',
+        startedAt: '2026-07-09T00:00:00.000Z',
+        version: '0.7.66',
+      },
+      transport,
+    });
+
+    await expect(client.workflows.get('missing-run')).resolves.toBeUndefined();
+    await expect(client.mcp.getServer('missing-server')).resolves.toBeUndefined();
+    await expect(client.artifacts.get('missing-artifact')).resolves.toBeUndefined();
+
+    expect(calls.map((call) => call.method)).toEqual([
+      'workflow.get',
+      'mcp.server.get',
+      'artifact.get',
+    ]);
+  });
+});
+
+function fakeTransport(
+  calls: Array<{ readonly method: string; readonly params: unknown }>,
+  options: {
+    readonly eventSubscribeResult?: Promise<unknown>;
+    readonly workflowSubscribeResult?: Promise<unknown>;
+  } = {},
+): RuntimeDaemonClientTransport & {
+  emit(notification: RuntimeDaemonNotification): void;
+  listenerCount(): number;
+} {
+  const listeners: Array<Parameters<RuntimeDaemonClientTransport['subscribe']>[0]> = [];
+  const transport: RuntimeDaemonClientTransport & {
+    emit(notification: RuntimeDaemonNotification): void;
+    listenerCount(): number;
+  } = {
+    async request(method, params) {
+      calls.push({ method, params });
+      if (method === 'session.create') {
+        const title = params && typeof params === 'object' && 'title' in params
+          && typeof params.title === 'string'
+          ? params.title
+          : 'Session';
+        return { id: 'session-1', title };
+      }
+      if (method === 'run.start') {
+        return { runId: 'run-1', sessionId: 'session-1' };
+      }
+      if (method === 'run.await') {
+        return { runId: 'run-1', sessionId: 'session-1', phase: 'completed' };
+      }
+      if (method === 'event.subscribe') {
+        if (options.eventSubscribeResult) return options.eventSubscribeResult;
+        return { subscriptionId: 'sub-1' };
+      }
+      if (method === 'event.unsubscribe') {
+        return { ok: true };
+      }
+      if (method === 'workflow.subscribe') {
+        if (options.workflowSubscribeResult) return options.workflowSubscribeResult;
+        return { subscriptionId: 'workflow-sub-1' };
+      }
+      if (method === 'workflow.unsubscribe') {
+        return { ok: true };
+      }
+      if (method === 'workflow.get') {
+        return null;
+      }
+      if (method === 'permission.respond') {
+        return true;
+      }
+      if (method === 'command.resolve') {
+        return { name: 'help', description: 'Show help', source: 'builtin' };
+      }
+      if (method === 'skill.describe') {
+        return {
+          name: 'review',
+          description: 'Review code',
+          userInvocable: true,
+          path: '/skills/review',
+          source: 'project',
+          disableModelInvocation: false,
+          content: 'Review instructions',
+          skillFilePath: '/skills/review/SKILL.md',
+        };
+      }
+      if (method === 'provider.custom.list') {
+        return [];
+      }
+      if (method === 'provider.custom.upsert') {
+        return {
+          name: 'custom-openai',
+          protocol: 'openai',
+          baseUrl: 'https://example.invalid/v1',
+          apiKeyEnv: 'CUSTOM_OPENAI_KEY',
+          model: 'custom-model',
+        };
+      }
+      if (method === 'provider.custom.remove') {
+        return true;
+      }
+      if (method === 'extension.list') {
+        return { active: false, extensions: [] };
+      }
+      if (method === 'mcp.server.validate') {
+        return { ok: true, config: { type: 'stdio', command: 'echo' } };
+      }
+      if (method === 'mcp.server.upsert') {
+        return { type: 'stdio', command: 'echo' };
+      }
+      if (method === 'mcp.server.get') {
+        return null;
+      }
+      if (method === 'mcp.tool.list') {
+        return [];
+      }
+      if (method === 'artifact.create') {
+        return {
+          id: 'art-1',
+          kind: 'file',
+          path: '/tmp/a.txt',
+          createdAt: '2026-07-09T00:00:00.000Z',
+        };
+      }
+      if (method === 'artifact.get') {
+        return null;
+      }
+      if (method === 'context.budget.get') {
+        return { usedTokens: 42 };
+      }
+      if (method === 'tool.exposure.preview') {
+        return { reportOnly: true };
+      }
+      return {};
+    },
+    subscribe(listener) {
+      listeners.push(listener);
+      const subscription: RuntimeSubscription = {
+        close() {
+          const index = listeners.indexOf(listener);
+          if (index >= 0) listeners.splice(index, 1);
+        },
+      };
+      return subscription;
+    },
+    emit(notification) {
+      for (const listener of listeners) {
+        listener(notification);
+      }
+    },
+    listenerCount() {
+      return listeners.length;
+    },
+  };
+  return transport;
+}
+
+function isRecord(value: unknown): value is Record<string, unknown> {
+  return value !== null && typeof value === 'object' && !Array.isArray(value);
+}
+
+function flushAsyncNotifications(): Promise<void> {
+  return new Promise((resolve) => {
+    setImmediate(resolve);
+  });
+}

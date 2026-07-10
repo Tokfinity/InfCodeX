@@ -11,6 +11,7 @@ import type {
   Agent,
   Handoff,
   RunnableTool,
+  RunnerToolContext,
   RunnerToolResult,
 } from '@kodax-ai/agent';
 // FEATURE_193 (v0.7.43): SCOUT_AGENT_NAME / PLANNER_AGENT_NAME /
@@ -27,6 +28,7 @@ import {
 } from '../../../tools/registry.js';
 import { DEFERRED_TOOL_HINTS, isDeferredTool } from '../../../tools/deferred-tools.js';
 import { DISPATCH_RUN_WORKFLOW_NUDGE } from '../../../tools/tool-definitions.js';
+import { TOOL_CALL_NAME, TOOL_DESCRIBE_NAME } from '../../../tools/tool-bridge.js';
 import { withManualToolBranding } from '../../../self-knowledge/tool-description.js';
 import type {
   KodaXEvents,
@@ -34,7 +36,10 @@ import type {
   KodaXTaskVerificationContract,
 } from '../../../types.js';
 import type { ReasoningPlan } from '../../../reasoning.js';
-import type { ManagedTaskBudgetController } from './budget.js';
+import {
+  incrementManagedBudgetUsage,
+  type ManagedTaskBudgetController,
+} from './budget.js';
 import {
   resetTodoReminderState,
   type TodoReminderState,
@@ -55,6 +60,7 @@ import {
 } from './role-prompts.js';
 import { getAmaRoleEffectiveExclude } from './role-exclude.js';
 import { wrapCodingToolAsRunnable } from './tool-wrappers.js';
+import { getToolExecutionOverride } from '../../../agent-runtime/permission-gate.js';
 import { wrapDispatchChildTaskForRole } from './dispatch-child.js';
 import { NULL_OBSERVER } from './observer-bridge.js';
 import type { BudgetExtensionContext } from './verdict-recorder.js';
@@ -69,6 +75,8 @@ interface TodoToolBundle {
   readonly todoUpdate: RunnableTool;
   readonly todoCreate: RunnableTool;
 }
+
+type ManagedToolDefinition = ReturnType<typeof listToolDefinitions>[number];
 
 function buildTodoToolBundle(
   baseCtx: KodaXToolExecutionContext,
@@ -102,6 +110,215 @@ function shouldDeferOnManagedPath(name: string): boolean {
   return isDeferredTool(name) && !isMcpToolName(name) && DEFERRED_TOOL_HINTS[name] !== undefined;
 }
 
+function isManagedToolVisibleForContext(
+  name: string,
+  exclude: ReadonlySet<string>,
+  ctx: KodaXToolExecutionContext,
+): boolean {
+  if (exclude.has(name)) return false;
+  if (!ctx.extensionRuntime && isMcpToolName(name)) return false;
+  if (name === 'run_workflow' && !ctx.workflowHost) return false;
+  return true;
+}
+
+function readManagedBridgeToolNames(input: Record<string, unknown>): string[] {
+  const names: string[] = [];
+  const append = (value: unknown): void => {
+    if (typeof value === 'string' && value.trim().length > 0) {
+      names.push(value.trim());
+    }
+  };
+  append(input.name);
+  append(input.tool_name);
+  for (const key of ['names', 'tools']) {
+    const value = input[key];
+    if (Array.isArray(value)) {
+      for (const item of value) append(item);
+    }
+  }
+  return [...new Set(names)];
+}
+
+function describeManagedBridgeTools(
+  input: Record<string, unknown>,
+  activeDefinitions: readonly ManagedToolDefinition[],
+  ctx: KodaXToolExecutionContext,
+): string {
+  const names = readManagedBridgeToolNames(input);
+  if (names.length === 0) {
+    return '[Tool Error] tool_describe: `name` or `names` is required.';
+  }
+
+  const active = new Map(activeDefinitions.map((definition) => [definition.name, definition]));
+  const lines: string[] = [];
+  for (const name of names.slice(0, 8)) {
+    const definition = active.get(name);
+    if (!definition) {
+      lines.push(`<!-- ${name}: not active in the current runtime -->`);
+      continue;
+    }
+    const branded = withManualToolBranding(definition, ctx.selfManual?.productName);
+    lines.push(`<function>${JSON.stringify({
+      name: branded.name,
+      description: branded.description,
+      parameters: branded.input_schema,
+    })}</function>`);
+  }
+
+  const output = lines.join('\n');
+  return output.length <= 16_000
+    ? output
+    : `${output.slice(0, 16_000)}\n<!-- tool_describe output truncated -->`;
+}
+
+function parseManagedBridgeCallInput(input: Record<string, unknown>): (
+  | { readonly ok: true; readonly name: string; readonly input: Record<string, unknown> }
+  | { readonly ok: false; readonly error: string }
+) {
+  const name = typeof input.name === 'string'
+    ? input.name.trim()
+    : typeof input.tool_name === 'string'
+      ? input.tool_name.trim()
+      : '';
+  if (!name) {
+    return { ok: false, error: '`name` is required.' };
+  }
+  if (name === TOOL_CALL_NAME || name === TOOL_DESCRIBE_NAME) {
+    return { ok: false, error: `bridge meta-tools cannot be called through ${TOOL_CALL_NAME}.` };
+  }
+  const rawInput = input.input ?? input.arguments ?? {};
+  if (rawInput === null || typeof rawInput !== 'object' || Array.isArray(rawInput)) {
+    return { ok: false, error: '`input` must be a JSON object.' };
+  }
+  return {
+    ok: true,
+    name,
+    input: rawInput as Record<string, unknown>,
+  };
+}
+
+function resultContentToText(content: RunnerToolResult['content']): string {
+  if (typeof content === 'string') return content;
+  try {
+    return JSON.stringify(content);
+  } catch {
+    return '[Tool Error] tool_call: target returned unserializable content.';
+  }
+}
+
+function buildManagedToolDescribeBridge(
+  definition: ManagedToolDefinition,
+  activeDefinitions: readonly ManagedToolDefinition[],
+  ctx: KodaXToolExecutionContext,
+): RunnableTool {
+  return {
+    ...definition,
+    execute: async (input): Promise<RunnerToolResult> => ({
+      content: describeManagedBridgeTools(input, activeDefinitions, ctx),
+    }),
+  };
+}
+
+function buildManagedToolCallBridge(
+  definition: ManagedToolDefinition,
+  activeDefinitions: readonly ManagedToolDefinition[],
+  ctx: KodaXToolExecutionContext,
+  budget: ManagedTaskBudgetController | undefined,
+  events: KodaXEvents | undefined,
+  overrides: ReadonlyMap<string, RunnableTool>,
+): RunnableTool {
+  const active = new Map(activeDefinitions.map((entry) => [entry.name, entry]));
+  return {
+    ...definition,
+    execute: async (
+      input: Record<string, unknown>,
+      runnerCtx?: RunnerToolContext,
+    ): Promise<RunnerToolResult> => {
+      if (budget) incrementManagedBudgetUsage(budget, 1);
+      const parsed = parseManagedBridgeCallInput(input);
+      if (!parsed.ok) {
+        return { content: `[Tool Error] ${TOOL_CALL_NAME}: ${parsed.error}`, isError: true };
+      }
+      const targetDefinition = active.get(parsed.name);
+      if (!targetDefinition) {
+        return {
+          content: `[Tool Error] ${parsed.name}: Tool is not active in the current runtime.`,
+          isError: true,
+        };
+      }
+      if (!runnerCtx?.agent) {
+        return {
+          content: `[Tool Error] ${TOOL_CALL_NAME}: runner tool context is missing.`,
+          isError: true,
+        };
+      }
+      const targetToolId = `${runnerCtx?.toolCallId ?? TOOL_CALL_NAME}:${parsed.name}`;
+      const targetRunnerCtx: RunnerToolContext = {
+        ...runnerCtx,
+        toolCallId: targetToolId,
+      };
+      const permissionOverride = events
+        ? await getToolExecutionOverride(
+          events,
+          parsed.name,
+          parsed.input,
+          targetToolId,
+          ctx.executionCwd,
+          ctx.gitRoot,
+        )
+        : undefined;
+      if (permissionOverride !== undefined) {
+        return {
+          content: permissionOverride,
+          isError: permissionOverride.startsWith('[Tool Error]') || permissionOverride.includes('cancelled'),
+        };
+      }
+
+      const overrideRunnable = overrides.get(parsed.name);
+      if (overrideRunnable) {
+        const targetResult = await overrideRunnable.execute(parsed.input, targetRunnerCtx);
+        const content = resultContentToText(targetResult.content);
+        return {
+          content,
+          isError: targetResult.isError === true || content.startsWith('[Tool Error]'),
+          metadata: targetResult.metadata,
+        };
+      }
+
+      const registration = getRegisteredToolDefinition(parsed.name);
+      if (!registration) {
+        return {
+          content: `[Tool Error] ${parsed.name}: Tool is not registered.`,
+          isError: true,
+        };
+      }
+      if (registration.handler.constructor.name === 'AsyncGeneratorFunction') {
+        return {
+          content: `[Tool Error] ${parsed.name}: Tool requires a managed-path wrapper and cannot be called through ${TOOL_CALL_NAME}.`,
+          isError: true,
+        };
+      }
+      const runnable = wrapCodingToolAsRunnable(
+        targetDefinition,
+        registration.handler as (
+          targetInput: Record<string, unknown>,
+          execCtx: KodaXToolExecutionContext,
+        ) => Promise<string>,
+        ctx,
+        budget,
+        events,
+      );
+      const targetResult = await runnable.execute(parsed.input, targetRunnerCtx);
+      const content = resultContentToText(targetResult.content);
+      return {
+        content,
+        isError: targetResult.isError === true || content.startsWith('[Tool Error]'),
+        metadata: targetResult.metadata,
+      };
+    },
+  };
+}
+
 /**
  * FEATURE_168 (v0.7.40 hotfix) — build an AMA role's runtime tool list from the
  * registry, applying role-specific wraps and the role's effective exclude set.
@@ -122,18 +339,14 @@ function buildAgentToolsFromRegistry(
   overrides: ReadonlyMap<string, RunnableTool>,
 ): RunnableTool[] {
   const exclude = getAmaRoleEffectiveExclude(role);
+  const definitions = listToolDefinitions();
+  const bridgeTargetDefinitions = definitions.filter((definition) => (
+    isManagedToolVisibleForContext(definition.name, exclude, ctx)
+  ));
   const tools: RunnableTool[] = [];
 
-  for (const def of listToolDefinitions()) {
-    if (exclude.has(def.name)) continue;
-    if (!ctx.extensionRuntime && isMcpToolName(def.name)) continue;
-    // FEATURE_246 + FEATURE_249: visibility follows capability. run_workflow is
-    // shown when a workflow host is wired. Post-FEATURE_249 the host is wired for
-    // both AMA and AMAW (buildWorkflowToolHost widened), so AMA now carries the tool
-    // standing and can activate a workflow from natural language on request. Only SA
-    // has no host (and additionally excludes run_workflow), so the tool is hidden
-    // there rather than offered as one that would only error.
-    if (def.name === 'run_workflow' && !ctx.workflowHost) continue;
+  for (const def of definitions) {
+    if (!isManagedToolVisibleForContext(def.name, exclude, ctx)) continue;
 
     const override = overrides.get(def.name);
     if (override) {
@@ -147,6 +360,15 @@ function buildAgentToolsFromRegistry(
     // and the tool call hangs.
     const registration = getRegisteredToolDefinition(def.name);
     if (!registration) continue;
+
+    if (def.name === TOOL_DESCRIBE_NAME) {
+      tools.push(buildManagedToolDescribeBridge(def, bridgeTargetDefinitions, ctx));
+      continue;
+    }
+    if (def.name === TOOL_CALL_NAME) {
+      tools.push(buildManagedToolCallBridge(def, bridgeTargetDefinitions, ctx, budget, events, overrides));
+      continue;
+    }
 
     const handler = registration.handler;
     if (handler.constructor.name === 'AsyncGeneratorFunction') {

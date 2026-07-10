@@ -1,3 +1,5 @@
+import { emitKodaXDiagnostic } from '@kodax-ai/agent';
+
 /**
  * Conservative tool-name repair.
  *
@@ -54,7 +56,12 @@ export function repairToolBlockNames<T extends { name: string }>(
     const repaired = resolveToolNameAlias(block.name, candidates);
     if (!repaired) return block;
     if (process.env.KODAX_DEBUG_TOOL_STREAM) {
-      console.warn('[Tool Name Repaired]', JSON.stringify(block.name), '→', JSON.stringify(repaired));
+      emitKodaXDiagnostic({
+        source: 'coding:tool-name-repair',
+        level: 'debug',
+        message: 'Tool name repaired.',
+        detail: { from: block.name, to: repaired },
+      });
     }
     return { ...block, name: repaired };
   });

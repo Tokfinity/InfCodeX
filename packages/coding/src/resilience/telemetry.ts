@@ -12,6 +12,7 @@ import type {
   RecoveryDecision,
   ProviderExecutionState,
 } from './types.js';
+import { emitKodaXDiagnostic } from '@kodax-ai/agent';
 
 // ============== Debug Check ==============
 
@@ -30,12 +31,17 @@ export function telemetryClassify(
 ): void {
   if (!DEBUG_ENABLED) return;
 
-  console.error('[resilience:classify]', {
-    rawError: error.message,
-    errorClass: classified.errorClass,
-    failureStage: classified.failureStage,
-    retryable: classified.retryable,
-    maxRetries: classified.maxRetries,
+  emitKodaXDiagnostic({
+    source: 'coding:resilience',
+    level: 'debug',
+    message: 'classify',
+    detail: {
+      rawError: error.message,
+      errorClass: classified.errorClass,
+      failureStage: classified.failureStage,
+      retryable: classified.retryable,
+      maxRetries: classified.maxRetries,
+    },
   });
 }
 
@@ -48,16 +54,21 @@ export function telemetryDecision(
 ): void {
   if (!DEBUG_ENABLED) return;
 
-  console.error('[resilience:decision]', {
-    action: decision.action,
-    ladderStep: decision.ladderStep,
-    attempt,
-    delayMs: decision.delayMs,
-    maxDelayMs: decision.maxDelayMs,
-    reasonCode: decision.reasonCode,
-    failureStage: decision.failureStage,
-    shouldUseNonStreaming: decision.shouldUseNonStreaming,
-    serverRetryAfterMs: decision.serverRetryAfterMs,
+  emitKodaXDiagnostic({
+    source: 'coding:resilience',
+    level: 'debug',
+    message: 'decision',
+    detail: {
+      action: decision.action,
+      ladderStep: decision.ladderStep,
+      attempt,
+      delayMs: decision.delayMs,
+      maxDelayMs: decision.maxDelayMs,
+      reasonCode: decision.reasonCode,
+      failureStage: decision.failureStage,
+      shouldUseNonStreaming: decision.shouldUseNonStreaming,
+      serverRetryAfterMs: decision.serverRetryAfterMs,
+    },
   });
 }
 
@@ -69,17 +80,22 @@ export function telemetryBoundary(
 ): void {
   if (!DEBUG_ENABLED) return;
 
-  console.error('[resilience:boundary]', {
-    requestId: state.requestId,
-    provider: state.provider,
-    attempt: state.attempt,
-    lastStableMessageIndex: state.lastStableMessageIndex,
-    executedToolCallIds: state.executedToolCallIds,
-    pendingToolCallIds: state.pendingToolCallIds,
-    visibleLiveTextLength: state.visibleLiveTextLength,
-    visibleThinkingLength: state.visibleThinkingLength,
-    fallbackUsed: state.fallbackUsed,
-    failureStage: state.failureStage,
+  emitKodaXDiagnostic({
+    source: 'coding:resilience',
+    level: 'debug',
+    message: 'boundary',
+    detail: {
+      requestId: state.requestId,
+      provider: state.provider,
+      attempt: state.attempt,
+      lastStableMessageIndex: state.lastStableMessageIndex,
+      executedToolCallIds: state.executedToolCallIds,
+      pendingToolCallIds: state.pendingToolCallIds,
+      visibleLiveTextLength: state.visibleLiveTextLength,
+      visibleThinkingLength: state.visibleThinkingLength,
+      fallbackUsed: state.fallbackUsed,
+      failureStage: state.failureStage,
+    },
   });
 }
 
@@ -96,10 +112,15 @@ export function telemetryRecovery(
 ): void {
   if (!DEBUG_ENABLED) return;
 
-  console.error('[resilience:recovery]', {
-    action,
-    droppedToolCallIds: result.droppedToolCallIds,
-    executedToolCallIds: result.executedToolCallIds,
-    fallbackUsed: result.fallbackUsed,
+  emitKodaXDiagnostic({
+    source: 'coding:resilience',
+    level: 'debug',
+    message: 'recovery',
+    detail: {
+      action,
+      droppedToolCallIds: result.droppedToolCallIds,
+      executedToolCallIds: result.executedToolCallIds,
+      fallbackUsed: result.fallbackUsed,
+    },
   });
 }

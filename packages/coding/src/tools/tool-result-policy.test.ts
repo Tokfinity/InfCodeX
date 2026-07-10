@@ -1,8 +1,10 @@
 import fs from 'fs/promises';
 import os from 'os';
 import path from 'path';
-import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
+import { afterEach, beforeEach, describe, expect, it } from 'vitest';
+import { setKodaXDiagnosticSink, type KodaXDiagnostic } from '@kodax-ai/agent';
 import { applyToolResultGuardrail, getToolResultPolicy } from './tool-result-policy.js';
+import { buildToolResultBudgetFromUsage } from './tool-result-budget.js';
 import { TOOL_OUTPUT_DIR_ENV } from './truncate.js';
 
 describe('tool result guardrail', () => {
@@ -63,6 +65,25 @@ describe('tool result guardrail', () => {
     expect(getToolResultPolicy('semantic_lookup').spillToFile).toBe(true);
   });
 
+  it('clamps inline preview size when a small-window budget is provided', async () => {
+    const content = Array.from({ length: 3000 }, (_, index) => `line-${index + 1}`).join('\n');
+    const budget = buildToolResultBudgetFromUsage({
+      contextWindow: 16_000,
+      currentTokens: 15_000,
+    });
+
+    const result = await applyToolResultGuardrail(
+      'read',
+      content,
+      { backups: new Map(), executionCwd: process.cwd() },
+      { toolResultBudget: budget },
+    );
+
+    expect(result.truncated).toBe(true);
+    expect(result.policy.maxBytes).toBeLessThan(getToolResultPolicy('read').maxBytes);
+    expect(result.content).toContain('Full output saved to:');
+  });
+
   // FEATURE_121 v0.7.40 — spill-failure data-loss guard.
   // When `persistToolOutput` throws (disk full / EACCES / EROFS /
   // ENOSPC / etc.), the previous behaviour silently dropped the
@@ -82,30 +103,37 @@ describe('tool result guardrail', () => {
 
     const largeContent = Array.from({ length: 3000 }, (_, i) => `line-${i + 1}`).join('\n');
 
-    // Suppress the intentional console.warn so it doesn't pollute test output.
-    const warnSpy = vi.spyOn(console, 'warn').mockImplementation(() => {});
+    const diagnostics: KodaXDiagnostic[] = [];
+    const restoreDiagnostics = setKodaXDiagnosticSink((diagnostic) => diagnostics.push(diagnostic));
 
-    const result = await applyToolResultGuardrail('child_task_summary', largeContent, {
-      backups: new Map(),
-      executionCwd: process.cwd(),
-    });
+    let result: Awaited<ReturnType<typeof applyToolResultGuardrail>> | undefined;
+    try {
+      result = await applyToolResultGuardrail('child_task_summary', largeContent, {
+        backups: new Map(),
+        executionCwd: process.cwd(),
+      });
+    } finally {
+      restoreDiagnostics();
+    }
 
     // Full content preserved — no truncation, no spill path, no banner.
-    expect(result.content).toBe(largeContent);
-    expect(result.truncated).toBe(false);
-    expect(result.outputPath).toBeUndefined();
+    expect(result).toBeDefined();
+    const guarded = result!;
+    expect(guarded.content).toBe(largeContent);
+    expect(guarded.truncated).toBe(false);
+    expect(guarded.outputPath).toBeUndefined();
     // Flag set so `dispatch-child-tasks` LLM-summary fallback can branch.
-    expect(result.spillFailed).toBe(true);
+    expect(guarded.spillFailed).toBe(true);
     // The "truncated" banner text MUST NOT appear — its presence would
     // indicate silent data loss (the bug this guard was added for).
-    expect(result.content).not.toContain('Tool output truncated');
-    expect(result.content).not.toContain('Full output saved to');
+    expect(guarded.content).not.toContain('Tool output truncated');
+    expect(guarded.content).not.toContain('Full output saved to');
 
-    // Operator-facing warning must be emitted (NOT gated on debug env).
-    expect(warnSpy).toHaveBeenCalledWith(
-      expect.stringContaining('persistToolOutput failed for child_task_summary'),
-    );
-    warnSpy.mockRestore();
+    expect(diagnostics).toContainEqual(expect.objectContaining({
+      source: 'coding:tool-result-policy',
+      level: 'error',
+      message: expect.stringContaining('persistToolOutput failed for child_task_summary'),
+    }));
   });
 
   it('inlines full content when forceSpill=true but persistToolOutput fails', async () => {
@@ -117,21 +145,31 @@ describe('tool result guardrail', () => {
     await fs.writeFile(blocker, 'not-a-dir');
     process.env[TOOL_OUTPUT_DIR_ENV] = blocker;
 
-    const warnSpy = vi.spyOn(console, 'warn').mockImplementation(() => {});
+    const diagnostics: KodaXDiagnostic[] = [];
+    const restoreDiagnostics = setKodaXDiagnosticSink((diagnostic) => diagnostics.push(diagnostic));
 
     const content = 'short banner content that fits under the per-banner cap';
-    const result = await applyToolResultGuardrail(
-      'child_task_summary',
-      content,
-      { backups: new Map(), executionCwd: process.cwd() },
-      { forceSpill: true },
-    );
+    let result: Awaited<ReturnType<typeof applyToolResultGuardrail>> | undefined;
+    try {
+      result = await applyToolResultGuardrail(
+        'child_task_summary',
+        content,
+        { backups: new Map(), executionCwd: process.cwd() },
+        { forceSpill: true },
+      );
+    } finally {
+      restoreDiagnostics();
+    }
 
-    expect(result.content).toBe(content);
-    expect(result.truncated).toBe(false);
-    expect(result.outputPath).toBeUndefined();
-    expect(result.spillFailed).toBe(true);
-    expect(warnSpy).toHaveBeenCalled();
-    warnSpy.mockRestore();
+    expect(result).toBeDefined();
+    const guarded = result!;
+    expect(guarded.content).toBe(content);
+    expect(guarded.truncated).toBe(false);
+    expect(guarded.outputPath).toBeUndefined();
+    expect(guarded.spillFailed).toBe(true);
+    expect(diagnostics).toContainEqual(expect.objectContaining({
+      source: 'coding:tool-result-policy',
+      level: 'error',
+    }));
   });
 });

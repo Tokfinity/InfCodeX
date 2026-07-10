@@ -363,6 +363,9 @@ export {
   persistToolOutput,
   applyToolResultGuardrail,
   getToolResultPolicy,
+  buildToolResultBudget,
+  buildToolResultBudgetFromUsage,
+  clampToolResultPolicyToBudget,
   inspectEditFailure,
   parseEditToolError,
 } from './tools/index.js';
@@ -370,6 +373,9 @@ export {
 export type {
   EditRecoveryDiagnostic,
   EditToolErrorCode,
+  ToolResultBudget,
+  ToolResultBudgetReason,
+  ToolResultBudgetUsageInput,
 } from './tools/index.js';
 
 // ============== Repo Intelligence ==============
@@ -506,6 +512,59 @@ export {
   estimateTokens,
   countTokens,
 } from './tokenizer.js';
+
+export {
+  createRuntimeContextBudgetSnapshot,
+  estimateToolSchemaTokens,
+} from './agent-runtime/context-budget.js';
+export type {
+  RuntimeContextBudgetBreakdown,
+  RuntimeContextBudgetRecommendation,
+  RuntimeContextBudgetSnapshot,
+  RuntimeContextBudgetSnapshotInput,
+  RuntimeContextOptimizationProfile,
+  RuntimeContextPressure,
+} from './agent-runtime/context-budget.js';
+
+export {
+  ALWAYS_RESIDENT_TOOL_NAMES,
+  planToolExposure,
+} from './agent-runtime/tool-exposure-planner.js';
+export type {
+  RuntimeToolExposureDecision,
+  RuntimeToolExposureMode,
+  RuntimeToolExposurePlan,
+  RuntimeToolExposurePlanInput,
+  RuntimeToolExposureReason,
+} from './agent-runtime/tool-exposure-planner.js';
+
+export {
+  consumeCompactionCooldown,
+  createCompactionAntiThrashState,
+  recordCompactionSavings,
+  shouldSkipLlmCompaction,
+} from './agent-runtime/middleware/compaction-pressure.js';
+export type {
+  CompactionAntiThrashConfig,
+  CompactionAntiThrashState,
+  CompactionSavingsDecision,
+  CompactionSavingsSample,
+  CompactionSkipReason,
+  RuntimeCompactionSkippedEvent,
+} from './agent-runtime/middleware/compaction-pressure.js';
+
+export {
+  buildToolSearchIndex,
+  parseToolSearchQuery,
+  searchToolIndex,
+} from './tools/tool-search-index.js';
+export type {
+  ToolSearchIndex,
+  ToolSearchIndexEntry,
+  ToolSearchIndexOptions,
+  ToolSearchQueryParts,
+  ToolSearchResult,
+} from './tools/tool-search-index.js';
 
 // ============== Agent ==============
 

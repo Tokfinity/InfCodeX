@@ -39,6 +39,7 @@
 
 import path from 'path';
 import fs from 'fs/promises';
+import { emitKodaXDiagnostic } from '@kodax-ai/agent';
 
 const DISABLE_FILE = '_self_modify_disabled.json';
 
@@ -80,9 +81,11 @@ export async function readDisableState(
     try {
       parsed = JSON.parse(raw) as Partial<DisableState>;
     } catch {
-      console.warn(
-        `[ConstructionRuntime] Treating malformed disable marker at ${file} as disabled (fail-safe).`,
-      );
+      emitKodaXDiagnostic({
+        source: 'coding:construction',
+        level: 'warn',
+        message: `Treating malformed disable marker at ${file} as disabled (fail-safe).`,
+      });
       return { name, disabled: true };
     }
     return {

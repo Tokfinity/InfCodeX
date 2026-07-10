@@ -48,6 +48,10 @@ import { KodaXBaseProvider } from '@kodax-ai/llm';
 import type {
   CompactionConfig,
   CompactionResult,
+  KodaXDiagnostic,
+} from '@kodax-ai/agent';
+import {
+  setKodaXDiagnosticSink,
 } from '@kodax-ai/agent';
 
 import {
@@ -162,17 +166,17 @@ describe('B-R1 byte-equivalence — runtime routing', () => {
 });
 
 // ---------------------------------------------------------------------------
-// TUI-safety: the compaction stderr trace must be debug-gated.
+// TUI-safety: the compaction diagnostic trace must be debug-gated.
 //
 // Regression guard for the v0.7.57 report where `[Compaction] triggered {...}`
 // leaked below the live region of the Ink TUI (renderer runs with
 // `patchConsole: false`, so a bare `console.*` write bypasses the engine and
 // desyncs the cell frame). User-facing observability is delivered via the
-// `onCompactStats` / `onCompact` lifecycle events instead; the raw stderr
+// `onCompactStats` / `onCompact` lifecycle events instead; the raw diagnostic
 // trace is only for `KODAX_DEBUG_COMPACTION` debugging.
 // ---------------------------------------------------------------------------
 
-describe('compaction stderr trace is debug-gated (TUI safety)', () => {
+describe('compaction diagnostic trace is debug-gated (TUI safety)', () => {
   const successfulResult: CompactionResult = {
     compacted: true,
     messages: [],
@@ -182,18 +186,19 @@ describe('compaction stderr trace is debug-gated (TUI safety)', () => {
   };
 
   const priorEnv = process.env.KODAX_DEBUG_COMPACTION;
-  let errorSpy: ReturnType<typeof vi.spyOn>;
-  let warnSpy: ReturnType<typeof vi.spyOn>;
+  let diagnostics: KodaXDiagnostic[];
+  let restoreDiagnostics: () => void;
 
   beforeEach(() => {
     compactMock.mockResolvedValue(successfulResult);
-    errorSpy = vi.spyOn(console, 'error').mockImplementation(() => {});
-    warnSpy = vi.spyOn(console, 'warn').mockImplementation(() => {});
+    diagnostics = [];
+    restoreDiagnostics = setKodaXDiagnosticSink((diagnostic) => {
+      diagnostics.push(diagnostic);
+    });
   });
 
   afterEach(() => {
-    errorSpy.mockRestore();
-    warnSpy.mockRestore();
+    restoreDiagnostics();
     if (priorEnv === undefined) {
       delete process.env.KODAX_DEBUG_COMPACTION;
     } else {
@@ -218,9 +223,8 @@ describe('compaction stderr trace is debug-gated (TUI safety)', () => {
       events: { onCompactStats, onCompact },
     });
 
-    // No raw stderr write — the screen stays uncorrupted in the TUI.
-    expect(errorSpy).not.toHaveBeenCalled();
-    expect(warnSpy).not.toHaveBeenCalled();
+    // No debug diagnostic by default; the screen stays uncorrupted in the TUI.
+    expect(diagnostics).toEqual([]);
     // Observability is still delivered through the event channel.
     expect(onCompactStats).toHaveBeenCalledWith(
       expect.objectContaining({ tokensBefore: 1000 }),
@@ -228,7 +232,7 @@ describe('compaction stderr trace is debug-gated (TUI safety)', () => {
     expect(onCompact).toHaveBeenCalledTimes(1);
   });
 
-  it('writes the [Compaction] stderr trace only when KODAX_DEBUG_COMPACTION is set', async () => {
+  it('emits the compaction diagnostic trace only when KODAX_DEBUG_COMPACTION is set', async () => {
     process.env.KODAX_DEBUG_COMPACTION = '1';
 
     await tryIntelligentCompact({
@@ -243,8 +247,13 @@ describe('compaction stderr trace is debug-gated (TUI safety)', () => {
       events: {},
     });
 
-    expect(errorSpy).toHaveBeenCalledTimes(1);
-    expect(String(errorSpy.mock.calls[0]?.[0])).toContain('[Compaction] triggered');
+    expect(diagnostics).toEqual([
+      expect.objectContaining({
+        source: 'coding:compaction',
+        level: 'debug',
+        message: 'Compaction triggered.',
+      }),
+    ]);
   });
 });
 

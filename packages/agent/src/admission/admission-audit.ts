@@ -29,6 +29,7 @@
  */
 
 import type { Agent } from '../primitives/agent.js';
+import { emitKodaXDiagnostic } from '../diagnostics.js';
 import {
   applyManifestPatch,
   composePatches,
@@ -290,8 +291,11 @@ export function runAdmissionAudit(
   const debug = isAdmissionDebugEnabled();
   const debugLog = (line: string): void => {
     if (debug) {
-      // eslint-disable-next-line no-console
-      console.error(`[admission:debug] ${line}`);
+      emitKodaXDiagnostic({
+        source: 'agent:admission',
+        level: 'debug',
+        message: line,
+      });
     }
   };
   debugLog(`begin manifest='${manifest.name}'`);

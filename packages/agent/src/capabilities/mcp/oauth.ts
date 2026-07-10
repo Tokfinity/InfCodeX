@@ -9,6 +9,7 @@ import { randomBytes, createHash } from 'crypto';
 import fs from 'fs/promises';
 import path from 'path';
 
+import { emitKodaXDiagnostic } from '../../diagnostics.js';
 import { getAgentConfigPath } from '../../runtime/agent-home.js';
 
 /** Escape HTML special characters to prevent XSS in OAuth callback pages. */
@@ -321,7 +322,12 @@ export async function getValidToken(
       // Refresh failed — log for debugging, then fall through to re-authorization.
       // This could be a transient network error or a permanently revoked refresh token.
       const reason = err instanceof Error ? err.message : String(err);
-      process.stderr.write(`[kodax:mcp:oauth] Token refresh failed for ${serverId}: ${reason}\n`);
+      emitKodaXDiagnostic({
+        source: 'agent:mcp:oauth',
+        level: 'warn',
+        message: `Token refresh failed for ${serverId}: ${reason}`,
+        detail: err,
+      });
     }
   }
 

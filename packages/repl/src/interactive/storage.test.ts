@@ -190,6 +190,32 @@ describe('FileSessionStorage', () => {
     expect(typeof listed[0]?.createdAt).toBe('string');
   });
 
+  it('uses runtimeInfo.executionCwd as the project key for non-git sessions', async () => {
+    const { FileSessionStorage } = await import('./storage.js');
+    const { UNKNOWN_PROJECT_KEY, deriveProjectKeyFromData } = await import('./project-key.js');
+    const storage = new FileSessionStorage({ sessionsDir: testSessionsDir() });
+    const executionCwd = process.platform === 'win32'
+      ? 'C:/Users/surui/tmp'
+      : '/mnt/c/Users/surui/tmp';
+    const runtimeInfo = {
+      executionCwd,
+      workspaceKind: 'detected' as const,
+    };
+
+    await storage.save('non-git-session', {
+      messages: [{ role: 'user', content: 'hello from non-git cwd' }],
+      title: 'Non Git Session',
+      gitRoot: '',
+      runtimeInfo,
+      scope: 'user',
+    });
+
+    const expectedKey = deriveProjectKeyFromData({ gitRoot: '', runtimeInfo }).key;
+    expect(expectedKey).not.toBe(UNKNOWN_PROJECT_KEY);
+    expect(existsSync(path.join(testSessionsDir(), expectedKey, 'non-git-session.jsonl'))).toBe(true);
+    expect(existsSync(path.join(testSessionsDir(), UNKNOWN_PROJECT_KEY, 'non-git-session.jsonl'))).toBe(false);
+  });
+
   it('does not collapse synthetic and real same-content messages during snapshot merge', async () => {
     const { FileSessionStorage } = await import('./storage.js');
     const storage = new FileSessionStorage({ sessionsDir: testSessionsDir() });

@@ -5,11 +5,13 @@
 import * as path from 'path';
 import * as os from 'os';
 
-import { getAgentConfigPath } from '@kodax-ai/agent';
+import { emitKodaXDiagnostic, getAgentConfigPath } from '@kodax-ai/agent';
 
 import type { CommandRegistry } from './registry.js';
+import { CommandRegistry as ReplCommandRegistry } from './registry.js';
 import { registerBuiltinCommands } from './builtin.js';
 import { discoverCommands, registerDiscoveredCommands } from './discovery.js';
+import type { CommandInfo } from './types.js';
 
 export type {
   CommandSource,
@@ -67,6 +69,17 @@ export function registerAllCommands(registry: CommandRegistry, projectRoot?: str
     ]);
     registerDiscoveredCommands(discovered, registry);
   } catch (error) {
-    console.error('Failed to discover commands:', error);
+    emitKodaXDiagnostic({
+      source: 'repl:commands',
+      level: 'error',
+      message: 'Failed to discover commands.',
+      detail: error,
+    });
   }
+}
+
+export function listRegisteredCommands(projectRoot?: string): CommandInfo[] {
+  const registry = new ReplCommandRegistry();
+  registerAllCommands(registry, projectRoot);
+  return registry.getAll();
 }

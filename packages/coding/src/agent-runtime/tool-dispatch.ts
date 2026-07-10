@@ -108,8 +108,14 @@ import type {
   KodaXToolResultBlock,
 } from '../types.js';
 import type { KodaXToolUseBlock } from '@kodax-ai/llm';
+import { emitKodaXDiagnostic } from '@kodax-ai/agent';
 import { CANCELLED_TOOL_RESULT_MESSAGE } from '../constants.js';
-import { executeTool } from '../tools/index.js';
+import {
+  executeTool,
+  getToolDefinition,
+  TOOL_CALL_NAME,
+  TOOL_DESCRIBE_NAME,
+} from '../tools/index.js';
 import { emitActiveExtensionEvent } from '../extensions/runtime.js';
 import { isVisibleToolName } from './event-emitter.js';
 import { getToolExecutionOverride } from './permission-gate.js';
@@ -121,6 +127,7 @@ import {
 import { isToolResultErrorContent } from './tool-result-classify.js';
 import type { RuntimeSessionState } from './runtime-session-state.js';
 import { applyToolResultGuardrail } from '../tools/tool-result-policy.js';
+import type { ToolResultBudget } from '../tools/tool-result-budget.js';
 import {
   buildMutationScopeReflection,
   isMutationScopeSignificant,
@@ -148,6 +155,7 @@ export async function executeToolCall(
   runtimeSessionState: RuntimeSessionState,
   activeToolNames?: string[],
   abortSignal?: AbortSignal,
+  toolResultBudget?: ToolResultBudget,
 ): Promise<string> {
   // Issue 088: Check abort signal before executing each tool
   if (abortSignal?.aborted) {
@@ -192,6 +200,22 @@ export async function executeToolCall(
     return `[Tool Error] ${toolCall.name}: Tool is not active in the current runtime.`;
   }
 
+  if (toolCall.name === TOOL_DESCRIBE_NAME) {
+    return describeBridgeTools(toolCall.input ?? {}, activeToolNames);
+  }
+
+  if (toolCall.name === TOOL_CALL_NAME) {
+    return executeBridgeToolCall({
+      events,
+      bridgeCall: toolCall,
+      ctx,
+      runtimeSessionState,
+      activeToolNames,
+      abortSignal,
+      toolResultBudget,
+    });
+  }
+
   const blockedWrite = maybeBlockExistingFileWrite(toolCall, ctx, runtimeSessionState);
   if (blockedWrite) {
     return blockedWrite;
@@ -202,29 +226,7 @@ export async function executeToolCall(
   // the per-call ctx so host-registered tools can correlate a handler invocation
   // to its event stream / de-duplicate retries — both the hooks and no-hooks
   // branch carry it.
-  const ctxWithToolHooks: KodaXToolExecutionContext =
-    events.onToolProgress || events.askUser || events.askUserMulti || events.askUserInput
-    ? {
-        ...ctx,
-        toolCallId: toolCall.id,
-        ...(events.onToolProgress
-          ? {
-              reportToolProgress: (message: string) => {
-                events.onToolProgress?.({ id: toolCall.id, message }, toolMeta);
-              },
-            }
-          : {}),
-        ...(events.askUser
-          ? { askUser: (options) => events.askUser!(options, toolMeta) }
-          : {}),
-        ...(events.askUserMulti
-          ? { askUserMulti: (options) => events.askUserMulti!(options, toolMeta) }
-          : {}),
-        ...(events.askUserInput
-          ? { askUserInput: (options) => events.askUserInput!(options, toolMeta) }
-          : {}),
-      }
-    : { ...ctx, toolCallId: toolCall.id };
+  const ctxWithToolHooks = createContextForToolCall(events, toolCall, ctx);
 
   const result = await executeTool(toolCall.name, toolCall.input ?? {}, ctxWithToolHooks);
 
@@ -250,6 +252,174 @@ export function createToolEventMeta(
   return {
     toolId,
     ...(events.workflowCorrelation !== undefined ? { workflowCorrelation: events.workflowCorrelation } : {}),
+  };
+}
+
+function createContextForToolCall(
+  events: KodaXEvents,
+  toolCall: RunnableToolCall,
+  ctx: KodaXToolExecutionContext,
+): KodaXToolExecutionContext {
+  const toolMeta = createToolEventMeta(events, toolCall.id);
+  return events.onToolProgress || events.askUser || events.askUserMulti || events.askUserInput
+    ? {
+        ...ctx,
+        toolCallId: toolCall.id,
+        ...(events.onToolProgress
+          ? {
+              reportToolProgress: (message: string) => {
+                events.onToolProgress?.({ id: toolCall.id, message }, toolMeta);
+              },
+            }
+          : {}),
+        ...(events.askUser
+          ? { askUser: (options) => events.askUser!(options, toolMeta) }
+          : {}),
+        ...(events.askUserMulti
+          ? { askUserMulti: (options) => events.askUserMulti!(options, toolMeta) }
+          : {}),
+        ...(events.askUserInput
+          ? { askUserInput: (options) => events.askUserInput!(options, toolMeta) }
+          : {}),
+      }
+    : { ...ctx, toolCallId: toolCall.id };
+}
+
+function describeBridgeTools(
+  input: Record<string, unknown>,
+  activeToolNames: readonly string[] | undefined,
+): string {
+  const names = readBridgeToolNames(input);
+  if (names.length === 0) {
+    return '[Tool Error] tool_describe: `name` or `names` is required.';
+  }
+
+  const active = activeToolNames ? new Set(activeToolNames) : undefined;
+  const lines: string[] = [];
+  for (const name of names.slice(0, 8)) {
+    if (active && !active.has(name)) {
+      lines.push(`<!-- ${name}: not active in the current runtime -->`);
+      continue;
+    }
+    const definition = getToolDefinition(name);
+    if (!definition) {
+      lines.push(`<!-- ${name}: not registered -->`);
+      continue;
+    }
+    lines.push(`<function>${JSON.stringify({
+      name: definition.name,
+      description: definition.description,
+      parameters: definition.input_schema,
+    })}</function>`);
+  }
+
+  const output = lines.join('\n');
+  if (output.length <= 16_000) {
+    return output;
+  }
+  return `${output.slice(0, 16_000)}\n<!-- tool_describe output truncated -->`;
+}
+
+function readBridgeToolNames(input: Record<string, unknown>): string[] {
+  const names: string[] = [];
+  const append = (value: unknown): void => {
+    if (typeof value === 'string' && value.trim().length > 0) {
+      names.push(value.trim());
+    }
+  };
+  append(input.name);
+  append(input.tool_name);
+  for (const key of ['names', 'tools']) {
+    const value = input[key];
+    if (Array.isArray(value)) {
+      for (const item of value) append(item);
+    }
+  }
+  return [...new Set(names)];
+}
+
+async function executeBridgeToolCall(input: {
+  readonly events: KodaXEvents;
+  readonly bridgeCall: RunnableToolCall;
+  readonly ctx: KodaXToolExecutionContext;
+  readonly runtimeSessionState: RuntimeSessionState;
+  readonly activeToolNames: readonly string[] | undefined;
+  readonly abortSignal: AbortSignal | undefined;
+  readonly toolResultBudget: ToolResultBudget | undefined;
+}): Promise<string> {
+  const parsed = parseBridgeCallInput(input.bridgeCall.input ?? {});
+  if (!parsed.ok) {
+    return `[Tool Error] ${TOOL_CALL_NAME}: ${parsed.error}`;
+  }
+  const targetName = parsed.name;
+  const targetInput = parsed.input;
+  if (targetName === TOOL_CALL_NAME || targetName === TOOL_DESCRIBE_NAME) {
+    return `[Tool Error] ${TOOL_CALL_NAME}: bridge meta-tools cannot be called through ${TOOL_CALL_NAME}.`;
+  }
+  const targetCall: RunnableToolCall = {
+    id: `${input.bridgeCall.id}:${targetName}`,
+    name: targetName,
+    input: targetInput,
+  };
+
+  if (input.abortSignal?.aborted) {
+    return CANCELLED_TOOL_RESULT_MESSAGE;
+  }
+  const override = await getToolExecutionOverride(
+    input.events,
+    targetName,
+    targetInput,
+    targetCall.id,
+    input.ctx.executionCwd,
+    input.ctx.gitRoot,
+  );
+  if (override !== undefined) {
+    return override;
+  }
+  if (input.activeToolNames && !input.activeToolNames.includes(targetName)) {
+    return `[Tool Error] ${targetName}: Tool is not active in the current runtime.`;
+  }
+
+  const blockedWrite = maybeBlockExistingFileWrite(targetCall, input.ctx, input.runtimeSessionState);
+  if (blockedWrite) {
+    return blockedWrite;
+  }
+
+  const ctxWithToolHooks = createContextForToolCall(input.events, targetCall, input.ctx);
+  let result = await executeTool(targetName, targetInput, ctxWithToolHooks);
+  if (result.startsWith('[Tool Error]') && input.ctx.extensionRuntime) {
+    const fallbackResult = await tryMcpFallback(targetName, targetInput, input.ctx);
+    if (fallbackResult !== undefined) {
+      result = fallbackResult;
+    }
+  }
+  return (
+    await applyToolResultGuardrail(targetName, result, input.ctx, {
+      toolResultBudget: input.toolResultBudget,
+    })
+  ).content;
+}
+
+function parseBridgeCallInput(input: Record<string, unknown>): (
+  | { readonly ok: true; readonly name: string; readonly input: Record<string, unknown> }
+  | { readonly ok: false; readonly error: string }
+) {
+  const name = typeof input.name === 'string'
+    ? input.name.trim()
+    : typeof input.tool_name === 'string'
+      ? input.tool_name.trim()
+      : '';
+  if (name.length === 0) {
+    return { ok: false, error: '`name` is required.' };
+  }
+  const targetInput = input.input ?? input.arguments;
+  if (!targetInput || typeof targetInput !== 'object' || Array.isArray(targetInput)) {
+    return { ok: false, error: '`input` must be a JSON object.' };
+  }
+  return {
+    ok: true,
+    name,
+    input: targetInput as Record<string, unknown>,
   };
 }
 
@@ -294,8 +464,12 @@ export async function tryMcpFallback(
     return `[MCP Fallback via ${hit.id}]\n${content}`;
   } catch (error) {
     if (process.env.KODAX_DEBUG_TOOL_HISTORY) {
-      // eslint-disable-next-line no-console
-      console.debug(`[tryMcpFallback] ${toolName} failed:`, error instanceof Error ? error.message : error);
+      emitKodaXDiagnostic({
+        source: 'coding:tool-dispatch',
+        level: 'debug',
+        message: `MCP fallback failed for ${toolName}.`,
+        detail: error,
+      });
     }
     return undefined;
   }
@@ -308,6 +482,7 @@ export interface RunToolDispatchInput {
   readonly runtimeSessionState: RuntimeSessionState;
   readonly activeToolNames: string[] | undefined;
   readonly abortSignal: AbortSignal | undefined;
+  readonly toolResultBudget?: ToolResultBudget;
 }
 
 /**
@@ -344,8 +519,10 @@ export async function runToolDispatch(
             input.runtimeSessionState,
             input.activeToolNames,
             input.abortSignal,
+            input.toolResultBudget,
           ),
           input.ctx,
+          { toolResultBudget: input.toolResultBudget },
         )
       ).content,
     }));
@@ -373,8 +550,10 @@ export async function runToolDispatch(
           input.runtimeSessionState,
           input.activeToolNames,
           input.abortSignal,
+          input.toolResultBudget,
         ),
         input.ctx,
+        { toolResultBudget: input.toolResultBudget },
       )
     ).content;
     resultMap.set(tc.id, content);

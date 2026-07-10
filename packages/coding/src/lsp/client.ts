@@ -68,6 +68,9 @@ const DIAGNOSTICS_DEBOUNCE_MS = 150;
 const REQUEST_TIMEOUT_MS = 10_000;
 /** Cold monorepo TypeScript servers can take a while to answer `initialize`. */
 const DEFAULT_INITIALIZE_TIMEOUT_MS = 30_000;
+/** Graceful LSP shutdown may be ignored; bound process reaping during exit. */
+const SHUTDOWN_EXIT_GRACE_MS = 1_500;
+const SHUTDOWN_KILL_REAP_GRACE_MS = 500;
 
 export interface DiagnosticsWaitOptions {
   /** Only a publish with timestamp ≥ this counts as fresh (set before notify). */
@@ -203,6 +206,66 @@ export interface CreateLspClientParams {
   readonly debug?: (message: string) => void;
 }
 
+interface WaitForLspProcessExitParams {
+  readonly proc: Pick<ChildProcessWithoutNullStreams, 'exitCode' | 'signalCode' | 'once' | 'off'>;
+  readonly killSync: () => void;
+  readonly unregisterManagedChild: () => void;
+  readonly exitGraceMs?: number;
+  readonly killReapGraceMs?: number;
+}
+
+export async function waitForLspProcessExitOrGiveUp({
+  proc,
+  killSync,
+  unregisterManagedChild,
+  exitGraceMs = SHUTDOWN_EXIT_GRACE_MS,
+  killReapGraceMs = SHUTDOWN_KILL_REAP_GRACE_MS,
+}: WaitForLspProcessExitParams): Promise<boolean> {
+  return new Promise<boolean>((resolve) => {
+    let settled = false;
+    let killTimer: ReturnType<typeof setTimeout> | undefined;
+    let reapTimer: ReturnType<typeof setTimeout> | undefined;
+    const clearTimers = (): void => {
+      if (killTimer) {
+        clearTimeout(killTimer);
+      }
+      if (reapTimer) {
+        clearTimeout(reapTimer);
+      }
+    };
+    const finishExited = (): void => {
+      if (settled) {
+        return;
+      }
+      settled = true;
+      clearTimers();
+      proc.off('exit', finishExited);
+      unregisterManagedChild();
+      resolve(true);
+    };
+    const finishUnreaped = (): void => {
+      if (settled) {
+        return;
+      }
+      settled = true;
+      clearTimers();
+      proc.off('exit', finishExited);
+      resolve(false);
+    };
+    if (proc.exitCode !== null || proc.signalCode !== null) {
+      finishExited();
+      return;
+    }
+    killTimer = setTimeout(() => {
+      killSync();
+      reapTimer = setTimeout(finishUnreaped, killReapGraceMs);
+      reapTimer.unref?.();
+    }, exitGraceMs);
+    killTimer.unref?.();
+    proc.once('exit', finishExited);
+  });
+}
+
 /**
  * Spawn a server, run the LSP initialize handshake, and return a client.
  * Rejects (fast) if the process errors / exits early, or if initialize
@@ -224,6 +287,14 @@ export async function createLspClient(params: CreateLspClientParams): Promise<Ls
     args: launch.args,
     cwd: root,
   });
+  let managedChildRegistered = true;
+  const unregisterManagedChildOnce = (): void => {
+    if (!managedChildRegistered) {
+      return;
+    }
+    managedChildRegistered = false;
+    unregisterManagedChild();
+  };
 
   proc.stderr.on('data', (chunk: Buffer) => debug?.(`[${serverId}] stderr: ${chunk.toString().trim()}`));
 
@@ -285,7 +356,7 @@ export async function createLspClient(params: CreateLspClientParams): Promise<Ls
       // ignore
     }
     await killChildProcessTree(proc);
-    unregisterManagedChild();
+    unregisterManagedChildOnce();
     throw error;
   } finally {
     // Swallow the late rejection from earlyExit on normal lifetime (e.g.
@@ -462,19 +533,12 @@ export async function createLspClient(params: CreateLspClientParams): Promise<Ls
     // Await actual process exit so the OS releases its handles (on Windows the
     // server's cwd stays locked until the process is reaped — otherwise a
     // caller deleting that directory hits EBUSY).
-    await new Promise<void>((resolve) => {
-      if (proc.exitCode !== null || proc.signalCode !== null) {
-        resolve();
-        return;
-      }
-      const killTimer = setTimeout(() => {
+    await waitForLspProcessExitOrGiveUp({
+      proc,
+      killSync: () => {
         killChildProcessTreeSync(proc);
-      }, 1_500);
-      proc.once('exit', () => {
-        clearTimeout(killTimer);
-        unregisterManagedChild();
-        resolve();
-      });
+      },
+      unregisterManagedChild: unregisterManagedChildOnce,
     });
   }
 

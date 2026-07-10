@@ -8,7 +8,12 @@
 
 // === 主入口：Ink UI ===
 export { runInkInteractiveMode } from "./ui/index.js";
-export type { InkREPLOptions, InkRuntimeRunner, InkRuntimeRunnerInput } from "./ui/index.js";
+export type {
+  InkREPLOptions,
+  InkRuntimeRunner,
+  InkRuntimeRunnerInput,
+  InkRuntimeStatusProvider,
+} from "./ui/index.js";
 
 // === 传统 REPL 入口 ===
 export {
@@ -17,6 +22,7 @@ export {
   type RepLOptions,
   type ReplRuntimeRunner,
   type ReplRuntimeRunnerInput,
+  type ReplRuntimeStatusProvider,
 } from "./interactive/repl.js";
 
 // === UI 组件 ===
@@ -59,10 +65,17 @@ export {
   parseCommand,
   executeCommand,
   BUILTIN_COMMANDS,
+  getCommandRegistry,
   type Command,
   type CommandCallbacks,
   type CurrentConfig,
 } from "./interactive/commands.js";
+export type {
+  RuntimeSurfaceMode,
+  RuntimeSurfaceStatus,
+} from "./commands/types.js";
+export { listRegisteredCommands } from "./commands/index.js";
+export type { CommandInfo } from "./commands/index.js";
 
 // === 共享工具 ===
 export {
