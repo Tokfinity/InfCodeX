@@ -384,3 +384,30 @@ Expected:
 - Runtime warnings are emitted as events and written to daemon logs.
 - `homeDir` scopes daemon state, config, and default session storage.
 - No public TCP listener is opened.
+
+## Release-Candidate Process-Boundary Regression
+
+Run the daemon smoke after `npm run build`:
+
+```bash
+npx vitest run src/kodax_cli.daemon-smoke.test.ts
+```
+
+Expected:
+
+- SDK `autoStartDaemon` state PID differs from the Vitest/SDK caller PID.
+- Closing the creating client leaves daemon status healthy.
+- A later client can attach to the same runtime id.
+- Explicit stop removes state, token, and lock files.
+
+Verify fail-closed run options:
+
+```ts
+await runtime.runs.start({
+  sessionId,
+  options: { extensionRuntime: { activate() {} } } as never,
+});
+```
+
+Expected: the call rejects before transport with a `not transport-safe` error;
+the option is not silently omitted and no run is created.

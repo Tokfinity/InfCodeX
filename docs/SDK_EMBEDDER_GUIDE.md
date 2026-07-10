@@ -2269,14 +2269,15 @@ runKodaX({
 
 ---
 
-## 17. Runtime SDK and local daemon (FEATURE_253/FEATURE_254/FEATURE_255, v0.7.64-v0.7.66)
+## 17. Runtime SDK, Worker isolation, and local daemon (FEATURE_253-FEATURE_257)
 
 `@kodax-ai/kodax/runtime` is the stable host-facing runtime facade for
 applications that want KodaX as a substrate instead of only as a terminal CLI.
 It wraps the same coding/session engine used by the REPL and exposes it through
-one interface in two deployment shapes:
+one interface in three deployment shapes:
 
-- **embedded**: in-process runtime owned by the caller;
+- **embedded / inline**: in-process runtime owned by the caller;
+- **embedded / worker**: private caller-owned runtime in a disposable V8 Worker;
 - **daemon**: local-only runtime owner reached through a named pipe on Windows or
   a Unix domain socket on Linux/macOS.
 
@@ -2291,6 +2292,7 @@ events, config, MCP, catalogs, artifacts, or diagnostics.
 |---|---|---|
 | Unit tests, one-off scripts, short-lived SDK tools | `createKodaXRuntime()` | No daemon lifecycle; easiest cleanup. |
 | A single app owns all KodaX state in one process | `createKodaXRuntime({ mode: 'embedded' })` | Direct in-process calls and no IPC. |
+| A single app needs private state plus hard V8 disposal | `createKodaXRuntime({ mode: 'embedded', isolation: 'worker' })` | Same services over MessagePort; `close()` escalates to Worker termination. |
 | REPL + Space + IDE should share sessions/status/permissions | `createKodaXRuntime({ mode: 'daemon' })` | Starts or reuses the local profile daemon. |
 | Attach to an already-started daemon only | `connectKodaXRuntime({ profile, homeDir })` | Attach-only by default; fails if no daemon is ready. |
 | Test/CI isolated daemon namespace | pass `homeDir` and `profile` | Keeps state/config/sessions out of the user's home daemon. |
@@ -2362,6 +2364,56 @@ no explicit `daemonEndpoint` or `daemonTransport` is supplied it starts or reuse
 the local profile daemon. `connectKodaXRuntime()` is attach-only unless
 `autoStart: true` is passed.
 
+SDK auto-start allows `daemonStartupTimeoutMs` (default 60 seconds) and
+`daemonConnectTimeoutMs`. The longer startup budget covers cold machines and
+concurrent test/desktop startup without weakening PID, endpoint, token, or
+runtime-identity validation.
+
+### Worker-hosted embedded usage
+
+```ts
+import { createKodaXRuntime } from '@kodax-ai/kodax/runtime';
+
+const runtime = await createKodaXRuntime({
+  mode: 'embedded',
+  isolation: 'worker',
+  worker: {
+    resourceLimits: { maxOldGenerationSizeMb: 1024 },
+    shutdownTimeoutMs: 2000,
+  },
+});
+
+try {
+  console.log(runtime.identity.isolation);      // 'worker'
+  console.log(runtime.identity.workerThreadId); // Node Worker thread id
+  // runtime.sessions/runs/events/... are identical to inline and daemon.
+} finally {
+  await runtime.close();
+}
+```
+
+`mode` describes ownership and sharing; `isolation` describes where a private
+embedded owner executes. Inline is the lowest-latency default. Worker is useful
+for Electron/Space-style hosts that need private state and deterministic V8
+disposal. Daemon is for durable multi-client sharing and already uses an OS
+process, so daemon + worker is rejected.
+
+Worker `resourceLimits` bound parts of the V8 heap only. They do not cover every
+kind of native/external memory and do not make Node code safe to treat as
+untrusted. Worker isolation is a fault boundary, not a security sandbox.
+
+Callers that cannot accept a silent fallback can require the capability:
+
+```ts
+await createKodaXRuntime({
+  mode: 'embedded',
+  isolation: 'worker',
+  requirements: { hardDispose: true },
+});
+```
+
+Daemon hosts advertise `hardDispose: false`; Worker hosts advertise true.
+
 ### Daemon ownership and state
 
 Daemon ownership is scoped by `homeDir + profile`.
@@ -2378,6 +2430,10 @@ For a given profile, one owner wins an atomic lock. Concurrent starters wait for
 the winner and connect once it is ready. Stale state is cleaned only after pid,
 endpoint, token, and runtime identity checks. If ownership cannot be verified,
 KodaX reports the daemon as unhealthy instead of killing an arbitrary process.
+SDK auto-start launches a detached `kodax daemon serve` process; it never treats
+an in-process socket listener as daemon mode. Closing the SDK client detaches
+without stopping that shared process. Use `kodax daemon stop` or the explicit
+runtime shutdown protocol to stop the owner.
 
 The matching CLI surface is:
 
@@ -2395,11 +2451,11 @@ runtime id, endpoint/health when applicable, and active/queued counters.
 
 ### Runtime services
 
-Every `KodaXRuntime` exposes the same service set in embedded and daemon mode:
+Every `KodaXRuntime` exposes the same service set in inline, Worker, and daemon mode:
 
 | Service | Purpose |
 |---|---|
-| `identity` | Runtime id, mode, profile, started time, package version. |
+| `identity` | Runtime id, mode, isolation, profile, started time, package version, optional Worker thread id. |
 | `sessions` | Create/load/list/fork/transcript/settings/notice/rewind/compact/archive/delete. |
 | `runs` | Start/await/get/list/abort runs; update provider/model/reasoning for supported phases. |
 | `events` | Subscribe to live events and replay persisted bounded events. |
@@ -2449,6 +2505,25 @@ const handle = await runtime.runs.start({
 const result = await handle.result;
 sub.close();
 ```
+
+### Run options across Worker/daemon boundaries
+
+`runs.start({ options })` is a DTO boundary in Worker and daemon forms. Do not
+pass process-local objects such as `extensionRuntime`, callbacks, `AbortSignal`,
+LSP services, class instances, or cyclic structures. KodaX rejects them before
+transport instead of silently dropping fields.
+
+Use the runtime APIs for cross-boundary behavior:
+
+- cancellation: `runtime.runs.abort(runId)`;
+- output/progress: `runtime.events.subscribe(...)`;
+- approval: `runtime.permissions.respond(...)`;
+- session defaults: `runtime.sessions.updateSettings(...)`;
+- config/MCP/extensions: configure or reload them in the Runtime owner.
+
+Host-bound extensions or callbacks that cannot be represented as owner-loaded
+module/config descriptors require inline embedded mode. There is no fallback to
+executing those objects in the client process.
 
 ### Permissions across clients
 

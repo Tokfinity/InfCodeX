@@ -93,7 +93,9 @@ import {
   createRuntimeDaemonClient,
   type RuntimeDaemonClientTransport,
 } from './runtime-daemon/client.js';
-import { acquireRuntimeDaemonLease } from './runtime-daemon/manager.js';
+import { acquireRuntimeDaemonProcessLease } from './runtime-daemon/process.js';
+import { createRuntimeWorkerTransport } from './runtime-worker/transport.js';
+import type { RuntimeWorkerOptions } from './runtime-worker/protocol.js';
 import {
   createRuntimeDaemonSocketClientTransport,
   defaultRuntimeDaemonEndpoint,
@@ -137,6 +139,8 @@ export type {
 } from '@kodax-ai/coding';
 
 export type KodaXRuntimeMode = 'embedded' | 'daemon';
+export type KodaXRuntimeIsolation = 'inline' | 'worker' | 'process';
+export type { RuntimeWorkerOptions, RuntimeWorkerResourceLimits } from './runtime-worker/protocol.js';
 
 type ReplRuntimeConfigPatch = Parameters<typeof saveConfig>[0];
 
@@ -179,6 +183,8 @@ export interface RuntimeIdentity {
   readonly profile: string;
   readonly startedAt: string;
   readonly version: string;
+  readonly isolation?: KodaXRuntimeIsolation;
+  readonly workerThreadId?: number;
 }
 
 export interface RuntimeClientInfo {
@@ -199,12 +205,16 @@ export interface RuntimeClientCapabilities {
 
 export interface CreateKodaXRuntimeOptions {
   readonly mode?: KodaXRuntimeMode;
+  readonly isolation?: 'inline' | 'worker';
+  readonly worker?: RuntimeWorkerOptions;
   readonly homeDir?: string;
   readonly profile?: string;
   readonly sessionsDir?: string;
   readonly defaultProvider?: string;
   readonly defaultModel?: string;
   readonly permissionTimeoutMs?: number;
+  readonly daemonStartupTimeoutMs?: number;
+  readonly daemonConnectTimeoutMs?: number;
   readonly daemonTransport?: RuntimeDaemonClientTransport;
   readonly daemonEndpoint?: string | RuntimeDaemonEndpoint;
   /** Defaults to true for daemon mode unless a transport or endpoint is supplied. */
@@ -212,6 +222,7 @@ export interface CreateKodaXRuntimeOptions {
   readonly daemonToken?: string;
   readonly clientInfo?: RuntimeClientInfo;
   readonly capabilities?: RuntimeClientCapabilities;
+  readonly requirements?: RuntimeCapabilityRequirements;
 }
 
 export interface ConnectKodaXRuntimeOptions {
@@ -225,9 +236,16 @@ export interface ConnectKodaXRuntimeOptions {
   readonly defaultProvider?: string;
   readonly defaultModel?: string;
   readonly permissionTimeoutMs?: number;
+  readonly daemonStartupTimeoutMs?: number;
+  readonly daemonConnectTimeoutMs?: number;
   readonly daemonToken?: string;
   readonly clientInfo?: RuntimeClientInfo;
   readonly capabilities?: RuntimeClientCapabilities;
+  readonly requirements?: RuntimeCapabilityRequirements;
+}
+
+export interface RuntimeCapabilityRequirements {
+  readonly hardDispose?: boolean;
 }
 
 export interface RuntimeDiagnosticFilter {
@@ -915,6 +933,9 @@ export async function createKodaXRuntime(
   options: CreateKodaXRuntimeOptions = {},
 ): Promise<KodaXRuntime> {
   if (options.mode === 'daemon') {
+    if (options.isolation === 'worker') {
+      throw new Error("Daemon mode already uses process isolation and cannot use isolation: 'worker'.");
+    }
     return connectKodaXRuntime({
       profile: options.profile,
       transport: options.daemonTransport,
@@ -928,13 +949,19 @@ export async function createKodaXRuntime(
       defaultProvider: options.defaultProvider,
       defaultModel: options.defaultModel,
       permissionTimeoutMs: options.permissionTimeoutMs,
+      daemonStartupTimeoutMs: options.daemonStartupTimeoutMs,
+      daemonConnectTimeoutMs: options.daemonConnectTimeoutMs,
       daemonToken: options.daemonToken,
       clientInfo: options.clientInfo,
       capabilities: options.capabilities,
+      requirements: options.requirements,
     });
   }
   if (options.mode !== undefined && options.mode !== 'embedded') {
     throw new Error(`Unsupported KodaX runtime mode: ${String(options.mode)}`);
+  }
+  if (options.isolation === 'worker') {
+    return createWorkerHostedKodaXRuntime(options);
   }
 
   const identity: RuntimeIdentity = {
@@ -943,6 +970,7 @@ export async function createKodaXRuntime(
     profile: options.profile ?? 'default',
     startedAt: new Date().toISOString(),
     version: process.env.KODAX_VERSION ?? '0.0.0',
+    isolation: 'inline',
   };
   const sessionsDir = resolveRuntimeSessionsDir(options);
   const sessionManager = createSessionManager(
@@ -1030,26 +1058,110 @@ export async function createKodaXRuntime(
   return runtime;
 }
 
+async function createWorkerHostedKodaXRuntime(
+  options: CreateKodaXRuntimeOptions,
+): Promise<KodaXRuntime> {
+  const shutdownTimeoutMs = options.worker?.shutdownTimeoutMs ?? 2_000;
+  if (!Number.isFinite(shutdownTimeoutMs) || shutdownTimeoutMs <= 0) {
+    throw new Error('Runtime Worker shutdownTimeoutMs must be a positive finite number.');
+  }
+  const handle = createRuntimeWorkerTransport({
+    homeDir: options.homeDir,
+    profile: options.profile,
+    sessionsDir: options.sessionsDir,
+    defaultProvider: options.defaultProvider,
+    defaultModel: options.defaultModel,
+    permissionTimeoutMs: options.permissionTimeoutMs,
+  }, options.worker);
+  try {
+    const initialized = requireRuntimeRecord(await handle.transport.request('initialize', {
+      profile: options.profile ?? 'default',
+      ...(options.clientInfo !== undefined ? { clientInfo: options.clientInfo } : {}),
+      ...(options.capabilities !== undefined ? { capabilities: options.capabilities } : {}),
+    }));
+    const identity = parseRuntimeIdentity(initialized.identity);
+    assertRuntimeCapabilities(initialized.capabilities, {
+      ...options.requirements,
+      hardDispose: true,
+    });
+    const client = createRuntimeDaemonClient({
+      identity: {
+        ...identity,
+        mode: 'embedded',
+        isolation: 'worker',
+        workerThreadId: handle.threadId,
+      },
+      transport: handle.transport,
+    });
+    let closed = false;
+    return {
+      ...client,
+      async close() {
+        if (closed) return;
+        closed = true;
+        try {
+          await settleWithin(
+            handle.transport.request('runtime.shutdown'),
+            shutdownTimeoutMs,
+          );
+        } finally {
+          await handle.terminate();
+        }
+      },
+    };
+  } catch (error: unknown) {
+    await handle.terminate();
+    throw error;
+  }
+}
+
+function assertRuntimeCapabilities(
+  value: unknown,
+  requirements: RuntimeCapabilityRequirements | undefined,
+): void {
+  if (!requirements?.hardDispose) return;
+  const capabilities = requireRuntimeRecord(value);
+  if (capabilities.hardDispose === true) return;
+  throw new Error('Connected Runtime does not support the required hardDispose capability.');
+}
+
+async function settleWithin(promise: Promise<unknown>, timeoutMs: number): Promise<void> {
+  let timer: ReturnType<typeof setTimeout> | undefined;
+  try {
+    await Promise.race([
+      promise,
+      new Promise<never>((_, reject) => {
+        timer = setTimeout(
+          () => reject(new Error(`Runtime Worker shutdown timed out after ${timeoutMs}ms.`)),
+          timeoutMs,
+        );
+        timer.unref?.();
+      }),
+    ]);
+  } finally {
+    if (timer !== undefined) clearTimeout(timer);
+  }
+}
+
 export async function connectKodaXRuntime(
   options: ConnectKodaXRuntimeOptions = {},
 ): Promise<KodaXRuntime> {
+  assertPositiveRuntimeTimeout('daemonStartupTimeoutMs', options.daemonStartupTimeoutMs);
+  assertPositiveRuntimeTimeout('daemonConnectTimeoutMs', options.daemonConnectTimeoutMs);
   const explicitEndpoint = options.endpoint !== undefined
     ? normalizeRuntimeDaemonEndpoint(options.endpoint)
     : undefined;
   const lease = options.transport === undefined && options.autoStart === true
-    ? await acquireRuntimeDaemonLease({
+    ? await acquireRuntimeDaemonProcessLease({
         homeDir: options.homeDir,
         profile: options.profile,
         endpoint: explicitEndpoint,
-        createRuntime: () => createKodaXRuntime({
-          mode: 'embedded',
-          homeDir: options.homeDir,
-          profile: options.profile,
-          sessionsDir: options.sessionsDir,
-          defaultProvider: options.defaultProvider,
-          defaultModel: options.defaultModel,
-          permissionTimeoutMs: options.permissionTimeoutMs,
-        }),
+        defaultProvider: options.defaultProvider,
+        defaultModel: options.defaultModel,
+        sessionsDir: options.sessionsDir,
+        permissionTimeoutMs: options.permissionTimeoutMs,
+        startupTimeoutMs: options.daemonStartupTimeoutMs,
+        connectTimeoutMs: options.daemonConnectTimeoutMs,
       })
     : undefined;
   const endpoint = explicitEndpoint
@@ -1066,7 +1178,9 @@ export async function connectKodaXRuntime(
     ?? lease?.transport
     ?? (
       endpoint !== undefined
-        ? await createRuntimeDaemonSocketClientTransport(endpoint)
+        ? await createRuntimeDaemonSocketClientTransport(endpoint, {
+            connectTimeoutMs: options.daemonConnectTimeoutMs,
+          })
         : undefined
     );
   if (!transport) {
@@ -1075,28 +1189,33 @@ export async function connectKodaXRuntime(
     );
   }
   const token = resolveConnectDaemonToken(options);
-  const initialized = requireRuntimeRecord(
-    await transport.request('initialize', {
-      profile: options.profile ?? 'default',
-      autoStart: options.autoStart === true,
-      ...(token !== undefined ? { token } : {}),
-      ...(options.clientInfo !== undefined ? { clientInfo: options.clientInfo } : {}),
-      ...(options.capabilities !== undefined ? { capabilities: options.capabilities } : {}),
-      ...(endpoint !== undefined
-        ? { endpoint: endpoint.path }
-        : {}),
-    }),
-  );
-  const identity = parseRuntimeIdentity(initialized.identity);
-  const expectedProfile = options.profile ?? 'default';
-  if (identity.profile !== expectedProfile) {
-    await lease?.close();
-    throw new Error(
-      `Runtime daemon profile mismatch: expected ${expectedProfile}, got ${identity.profile}`,
+  let identity: RuntimeIdentity;
+  try {
+    const initialized = requireRuntimeRecord(
+      await transport.request('initialize', {
+        profile: options.profile ?? 'default',
+        autoStart: options.autoStart === true,
+        ...(token !== undefined ? { token } : {}),
+        ...(options.clientInfo !== undefined ? { clientInfo: options.clientInfo } : {}),
+        ...(options.capabilities !== undefined ? { capabilities: options.capabilities } : {}),
+        ...(endpoint !== undefined ? { endpoint: endpoint.path } : {}),
+      }),
     );
+    identity = parseRuntimeIdentity(initialized.identity);
+    assertRuntimeCapabilities(initialized.capabilities, options.requirements);
+    const expectedProfile = options.profile ?? 'default';
+    if (identity.profile !== expectedProfile) {
+      throw new Error(
+        `Runtime daemon profile mismatch: expected ${expectedProfile}, got ${identity.profile}`,
+      );
+    }
+  } catch (error: unknown) {
+    await transport.close?.();
+    await lease?.close();
+    throw error;
   }
   const runtime = createRuntimeDaemonClient({
-    identity: { ...identity, mode: 'daemon' },
+    identity: { ...identity, mode: 'daemon', isolation: 'process' },
     transport,
   });
   if (!lease) return runtime;
@@ -1107,6 +1226,11 @@ export async function connectKodaXRuntime(
       await lease.close();
     },
   };
+}
+
+function assertPositiveRuntimeTimeout(name: string, value: number | undefined): void {
+  if (value === undefined || (Number.isFinite(value) && value > 0)) return;
+  throw new Error(`${name} must be a positive finite number.`);
 }
 
 function resolveConnectDaemonToken(options: ConnectKodaXRuntimeOptions): string | undefined {
@@ -3841,6 +3965,10 @@ function parseRuntimeIdentity(value: unknown): RuntimeIdentity {
     profile: record.profile,
     startedAt: record.startedAt,
     version: record.version,
+    ...(record.isolation === 'inline' || record.isolation === 'worker' || record.isolation === 'process'
+      ? { isolation: record.isolation }
+      : {}),
+    ...(typeof record.workerThreadId === 'number' ? { workerThreadId: record.workerThreadId } : {}),
   };
 }
 

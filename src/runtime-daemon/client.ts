@@ -119,6 +119,7 @@ export function createRuntimeDaemonClient(
     },
     runs: {
       async start(input: RuntimeStartRunInput): Promise<RuntimeRunHandle> {
+        assertRuntimeTransportSafe(input.options, 'run.start.options');
         const started = requireRecord(await request('run.start', input));
         const runId = requireStringField(started, 'runId');
         const sessionId = requireStringField(started, 'sessionId');
@@ -449,4 +450,41 @@ function optionalStringField(record: Record<string, unknown>, key: string): stri
     throw new Error(`Expected daemon response optional string field: ${key}`);
   }
   return value;
+}
+
+function assertRuntimeTransportSafe(
+  value: unknown,
+  path: string,
+  ancestors: WeakSet<object> = new WeakSet(),
+): void {
+  if (value === undefined || value === null || typeof value === 'string' || typeof value === 'boolean') {
+    return;
+  }
+  if (typeof value === 'number') {
+    if (Number.isFinite(value)) return;
+    throw new Error(`${path} is not transport-safe: numbers must be finite.`);
+  }
+  if (typeof value === 'function' || typeof value === 'symbol' || typeof value === 'bigint') {
+    throw new Error(`${path} is not transport-safe: ${typeof value} values cannot cross a Runtime boundary.`);
+  }
+  if (typeof value !== 'object') return;
+  if (ancestors.has(value)) {
+    throw new Error(`${path} is not transport-safe: cyclic values cannot cross a Runtime boundary.`);
+  }
+
+  const prototype = Object.getPrototypeOf(value);
+  if (!Array.isArray(value) && prototype !== Object.prototype && prototype !== null) {
+    const name = prototype?.constructor?.name ?? 'object';
+    throw new Error(`${path} is not transport-safe: ${name} instances cannot cross a Runtime boundary.`);
+  }
+
+  ancestors.add(value);
+  if (Array.isArray(value)) {
+    value.forEach((entry, index) => assertRuntimeTransportSafe(entry, `${path}[${index}]`, ancestors));
+  } else {
+    for (const [key, entry] of Object.entries(value)) {
+      assertRuntimeTransportSafe(entry, `${path}.${key}`, ancestors);
+    }
+  }
+  ancestors.delete(value);
 }

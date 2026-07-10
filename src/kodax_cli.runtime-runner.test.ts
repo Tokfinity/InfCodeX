@@ -12,14 +12,12 @@ import {
 } from './kodax_cli.js';
 
 describe('interactive daemon runtime bridge', () => {
-  it('builds an explicit JSON-safe run-options DTO', () => {
+  it('builds an explicit JSON-safe run-options DTO for bridged callbacks', () => {
     const controller = new AbortController();
     const options = {
       provider: 'mock-provider',
       model: 'mock-model',
       abortSignal: controller.signal,
-      extensionRuntime: { activate: () => undefined },
-      sessionControl: { _attach: () => undefined },
       events: {
         workflowCorrelation: { runId: 'workflow-1' },
         onTextDelta: () => undefined,
@@ -30,14 +28,9 @@ describe('interactive daemon runtime bridge', () => {
         storage: { load: async () => null },
         initialMessages: [{ role: 'user', content: 'hello' }],
       },
-      context: {
-        executionCwd: 'C:/workspace',
-        planModeBlockCheck: () => null,
-        lspService: { shutdown: async () => undefined },
-      },
+      context: { executionCwd: 'C:/workspace' },
       skillDynamicContext: {
         disable: true,
-        execute: async () => 'unsafe-process-hook',
       },
     } as unknown as KodaXOptions;
 
@@ -56,10 +49,19 @@ describe('interactive daemon runtime bridge', () => {
       skillDynamicContext: { disable: true },
     });
     expect(encoded).not.toContain('abortSignal');
-    expect(encoded).not.toContain('extensionRuntime');
     expect(encoded).not.toContain('storage');
-    expect(encoded).not.toContain('planModeBlockCheck');
-    expect(encoded).not.toContain('unsafe-process-hook');
+  });
+
+  it('rejects host-only bindings that the daemon cannot reproduce', () => {
+    expect(() => toDaemonRuntimeRunOptions({
+      provider: 'mock-provider',
+      extensionRuntime: { activate: () => undefined },
+    } as unknown as KodaXOptions)).toThrow(/extensionRuntime.*cannot cross/i);
+
+    expect(() => toDaemonRuntimeRunOptions({
+      provider: 'mock-provider',
+      context: { planModeBlockCheck: () => null },
+    } as unknown as KodaXOptions)).toThrow(/context\.planModeBlockCheck.*cannot cross/i);
   });
 
   it('forwards daemon stream events and resolves permissions with the local REPL policy', async () => {
@@ -120,7 +122,6 @@ describe('interactive daemon runtime bridge', () => {
       options: {
         provider: 'mock-provider',
         abortSignal: new AbortController().signal,
-        extensionRuntime: { activate: () => undefined },
         events: { onTextDelta, beforeToolExecute },
       } as unknown as KodaXOptions,
       prompt: 'hello',
@@ -131,7 +132,6 @@ describe('interactive daemon runtime bridge', () => {
     expect(updateSettings).toHaveBeenCalledWith('session-1', { permissionMode: 'plan' });
     expect(capturedStart?.permissionBroker).toBe('client');
     expect(capturedStart?.options).not.toHaveProperty('abortSignal');
-    expect(capturedStart?.options).not.toHaveProperty('extensionRuntime');
     expect(onTextDelta).toHaveBeenCalledWith('streamed', undefined);
     expect(beforeToolExecute).toHaveBeenCalledWith(
       'write',

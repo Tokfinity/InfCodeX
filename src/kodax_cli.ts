@@ -62,6 +62,7 @@ import {
   type RuntimeDaemonState,
 } from './runtime-daemon/state.js';
 import { createRuntimeDaemonSocketClientTransport } from './runtime-daemon/transport.js';
+import { acquireRuntimeDaemonLease } from './runtime-daemon/manager.js';
 import { runDoctor } from './kodax_doctor.js';
 import {
   getDefaultCommandDir,
@@ -528,6 +529,7 @@ function interruptedRuntimeResult(sessionId: string): Awaited<ReturnType<typeof 
 }
 
 export function toDaemonRuntimeRunOptions(options: KodaXOptions): RuntimeKodaXOptions {
+  assertDaemonHostBindingsAbsent(options);
   const {
     events,
     session,
@@ -570,6 +572,29 @@ export function toDaemonRuntimeRunOptions(options: KodaXOptions): RuntimeKodaXOp
   } catch (error: unknown) {
     throw new Error(`Daemon runtime options are not JSON serializable: ${normalizeCliError(error).message}`);
   }
+}
+
+function assertDaemonHostBindingsAbsent(options: KodaXOptions): void {
+  const unsupported: Array<readonly [string, unknown]> = [
+    ['extensionRuntime', options.extensionRuntime],
+    ['sessionControl', options.sessionControl],
+    ['memoryReviewer', options.memoryReviewer],
+    ['guardrails', options.guardrails],
+    ['skillDynamicContext.execute', options.skillDynamicContext?.execute],
+    ['context.agentScope', options.context?.agentScope],
+    ['context.mutationTracker', options.context?.mutationTracker],
+    ['context.toolVisibilityPolicy', options.context?.toolVisibilityPolicy],
+    ['context.planModeBlockCheck', options.context?.planModeBlockCheck],
+    ['context.inheritedChildTaskRegistry', options.context?.inheritedChildTaskRegistry],
+    ['context.goalRuntime', options.context?.goalRuntime],
+    ['context.lspService', options.context?.lspService],
+  ];
+  const binding = unsupported.find(([, value]) => value !== undefined);
+  if (!binding) return;
+  throw new Error(
+    `KodaX daemon run option '${binding[0]}' cannot cross the process boundary. `
+    + 'Configure the capability in the daemon owner or use embedded mode.',
+  );
 }
 
 function createDaemonReplEventBridge(
@@ -960,27 +985,66 @@ async function serveDaemonCommand(input: {
   readonly homeDir: string;
   readonly provider?: string;
   readonly model?: string;
+  readonly sessionsDir?: string;
+  readonly permissionTimeoutMs?: number;
 }): Promise<void> {
-  const runtime = await createKodaXRuntime({
-    mode: 'daemon',
-    profile: input.profile,
-    homeDir: input.homeDir,
-    sessionsDir: path.join(input.homeDir, '.kodax', 'sessions'),
-    autoStartDaemon: true,
-    defaultProvider: input.provider,
-    defaultModel: input.model,
-  });
-  const paths = resolveRuntimeDaemonPaths(input.homeDir, input.profile);
-  const observation = await observeRuntimeDaemonHealth(paths);
-  if (observation.state && observation.state.pid !== process.pid) {
-    await runtime.close();
-    console.log(chalk.yellow(`KodaX runtime daemon already owned by PID ${observation.state.pid}.`));
-    return;
+  const extensionRuntime = await createDaemonOwnedExtensionRuntime();
+  try {
+    const lease = await acquireRuntimeDaemonLease({
+      profile: input.profile,
+      homeDir: input.homeDir,
+      createRuntime: () => createKodaXRuntime({
+        mode: 'embedded',
+        profile: input.profile,
+        homeDir: input.homeDir,
+        sessionsDir: input.sessionsDir ?? path.join(input.homeDir, '.kodax', 'sessions'),
+        defaultProvider: input.provider,
+        defaultModel: input.model,
+        permissionTimeoutMs: input.permissionTimeoutMs,
+      }),
+    });
+    if (!lease.ownsHost) {
+      await lease.close();
+      const observation = await observeRuntimeDaemonHealth(lease.paths);
+      console.log(chalk.yellow(`KodaX runtime daemon already owned by PID ${observation.state?.pid ?? 'unknown'}.`));
+      return;
+    }
+
+    await waitForShutdownSignal(() => lease.shutdown());
+  } finally {
+    await extensionRuntime?.dispose();
+  }
+}
+
+async function createDaemonOwnedExtensionRuntime(): Promise<ReturnType<typeof createExtensionRuntime> | undefined> {
+  const config = prepareRuntimeConfig();
+  const configWithExtensions = config as typeof config & { extensions?: string[] };
+  const configured = Array.isArray(configWithExtensions.extensions)
+    ? configWithExtensions.extensions
+      .filter((value): value is string => typeof value === 'string' && value.trim().length > 0)
+      .map((value) => path.isAbsolute(value) ? value : path.resolve(path.dirname(KODAX_CONFIG_FILE), value))
+    : [];
+  const discovered = await discoverDefaultExtensions();
+  const active = await excludeExtensionPathsByEntrypoint(
+    await dedupeExtensionPathsByEntrypoint(discovered),
+    await dedupeExtensionPathsByEntrypoint(configured),
+  );
+  const configuredOnly = await dedupeExtensionPathsByEntrypoint(configured);
+  if (active.length === 0 && configuredOnly.length === 0 && !hasConfiguredMcpServers(configWithExtensions)) {
+    return undefined;
   }
 
-  await waitForShutdownSignal(async () => {
-    await runtime.close();
+  const runtime = createExtensionRuntime({ config });
+  await registerConfiguredMcpCapabilityProvider(runtime, configWithExtensions.mcpServers, {
+    reverse: buildMcpReverseCapabilities({ cwd: process.cwd(), enableElicitation: false }),
   });
+  const loader = runtime as typeof runtime & {
+    loadExtensions(paths: string[], options?: { continueOnError?: boolean; loadSource?: 'discovery' | 'config' }): Promise<void>;
+  };
+  await loader.loadExtensions(active, { continueOnError: true, loadSource: 'discovery' });
+  await loader.loadExtensions(configuredOnly, { continueOnError: true, loadSource: 'config' });
+  runtime.activate();
+  return runtime;
 }
 
 async function stopDaemonCommand(input: {
@@ -2171,12 +2235,16 @@ complete -c kodax -l version -d 'Show version'`);
     .option('--home <dir>', 'Base directory that owns the .kodax runtime daemon state', resolveDefaultRuntimeDaemonHomeDir())
     .option('-m, --provider <name>', 'Default provider for hosted runs')
     .option('--model <name>', 'Default model for hosted runs')
-    .action(async (subOpts: { profile?: string; home?: string; provider?: string; model?: string }) => {
+    .option('--sessions-dir <dir>', 'Runtime session storage directory')
+    .option('--permission-timeout-ms <n>', 'Permission request timeout', parseOptionalNonNegativeInt)
+    .action(async (subOpts: { profile?: string; home?: string; provider?: string; model?: string; sessionsDir?: string; permissionTimeoutMs?: number }) => {
       await serveDaemonCommand({
         profile: subOpts.profile ?? 'default',
         homeDir: subOpts.home ?? resolveDefaultRuntimeDaemonHomeDir(),
         provider: subOpts.provider,
         model: subOpts.model,
+        sessionsDir: subOpts.sessionsDir,
+        permissionTimeoutMs: subOpts.permissionTimeoutMs,
       });
     });
 
@@ -2813,7 +2881,13 @@ complete -c kodax -l version -d 'Show version'`);
 
   validateCliModeSelection(options, { resumeWithoutId: opts.resume === true });
 
-  if ((options.extensions?.length ?? 0) > 0 || hasActiveMcp) {
+  if (selectedRuntimeMode === 'daemon' && dedupedCliExtensions.length > 0) {
+    throw new Error(
+      'CLI --extension paths cannot cross the daemon process boundary. '
+      + 'Add the extension to the daemon profile config or use --runtime-mode embedded.',
+    );
+  }
+  if (selectedRuntimeMode !== 'daemon' && ((options.extensions?.length ?? 0) > 0 || hasActiveMcp)) {
     extensionRuntime = createExtensionRuntime({ config });
     // FEATURE_222 — expose the workspace as MCP roots, and (interactive mode)
     // serve elicitation through the REPL's live ask-user dialogs. In print /

@@ -1,8 +1,8 @@
 /**
  * CtxProxy — runtime gate for constructed tool handlers.
  *
- * Constructed handlers run in the host process (no JS-level sandbox; see
- * DD §14.5 for why we deliberately avoid worker_threads / isolated-vm).
+ * Constructed handlers run in a disposable Worker. Capability and policy
+ * checks still execute in the host through reverse tool RPC.
  * Safety derives from a four-layer model — Guardrail static check,
  * `capabilities.tools` whitelist declaration, this CtxProxy at runtime,
  * and policy gate on activate.

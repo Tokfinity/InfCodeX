@@ -21,6 +21,74 @@ afterEach(() => {
 });
 
 describe('daemon CLI smoke', () => {
+  it('SDK auto-start owns a daemon process outside the embedding process', async () => {
+    const homeDir = fs.mkdtempSync(path.join(os.tmpdir(), 'kodax-daemon-sdk-smoke-'));
+    tempRoots.push(homeDir);
+    const profile = `sdk-${process.pid}-${Date.now()}`;
+    const extensionPath = path.join(homeDir, 'daemon-owner-extension.mjs');
+    fs.writeFileSync(extensionPath, `export default function(api) {
+      api.registerTool({
+        name: 'daemon_owner_echo',
+        description: 'Daemon owner extension smoke',
+        input_schema: { type: 'object', properties: {} },
+        handler: async () => 'ok',
+      });
+    }`, 'utf8');
+    fs.mkdirSync(path.join(homeDir, '.kodax'), { recursive: true });
+    fs.writeFileSync(
+      path.join(homeDir, '.kodax', 'config.json'),
+      JSON.stringify({ extensions: [extensionPath] }),
+      'utf8',
+    );
+    const probeScript = `
+      const { createKodaXRuntime } = await import('@kodax-ai/kodax/runtime');
+      const runtime = await createKodaXRuntime({
+        mode: 'daemon',
+        profile: process.argv[2],
+        homeDir: process.argv[1],
+        autoStartDaemon: true,
+        defaultProvider: 'mock-provider',
+      });
+      const extensions = await runtime.catalog.extensions();
+      const identity = runtime.identity;
+      await runtime.close();
+      console.log(JSON.stringify({ callerPid: process.pid, identity, extensions }));
+    `;
+    const probe = JSON.parse(execFileSync(process.execPath, [
+      '--input-type=module',
+      '--eval',
+      probeScript,
+      homeDir,
+      profile,
+    ], {
+      cwd: process.cwd(),
+      encoding: 'utf8',
+      timeout: 90_000,
+    })) as {
+      callerPid: number;
+      identity: { runtimeId: string };
+      extensions: { active: boolean; extensions: Array<{ path: string }> };
+    };
+    const paths = resolveRuntimeDaemonPaths(homeDir, profile);
+    const state = JSON.parse(fs.readFileSync(paths.stateFile, 'utf8')) as { pid: number };
+
+    expect(state.pid).not.toBe(probe.callerPid);
+    expect(probe.extensions).toMatchObject({
+      active: true,
+      extensions: [expect.objectContaining({ path: extensionPath })],
+    });
+
+    const status = runDaemonCommand([
+      'status',
+      '--home',
+      homeDir,
+      '--profile',
+      profile,
+      '--json',
+    ]);
+    expect(status).toMatchObject({ health: 'healthy' });
+  }, 90_000);
+
   it('prints JSON for real start/stop commands and releases daemon state', async () => {
     const homeDir = fs.mkdtempSync(path.join(os.tmpdir(), 'kodax-daemon-cli-smoke-'));
     tempRoots.push(homeDir);

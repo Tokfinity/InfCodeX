@@ -3598,3 +3598,42 @@ agent's digest in history.
 **非目标**。命令重写 / lexer / 复合命令段级重写 / 14-agent hook 安装器 / SQLite gain·discover 分析——KodaX 拥有 tool 层，全部无意义；用户可编辑过滤文件与信任门控推迟。**无 prompt 改动**（透明压缩），不触发 ADR-033；recovery hint 复用 `buildToolResultHint` 现有措辞。
 
 **后果 / 测试**。确定性代码，不触发 FEATURE_104 prompt-eval。已覆盖：每过滤器单测、`never_worse` 不变式、ANSI 去除、声明式 package/docker/infra 规则、git/test/lint/JSON compiled filters、registry raw recovery、lossy persist 失败 raw fallback、filter 失败 raw fallback、`toolBash` 头部保真、`extractBashResult` ledger 解析、tool-result guardrail 回归、`@kodax-ai/coding` build。风险=通用层无损性未证的 spinner/dedup 分支——继续默认关，直到语料验证。预期收益与 rtk README「30 分钟会话 -80%」同量级，且因压缩即计数，有效 context 窗口直接变大。
+
+## ADR-051: Runtime Isolation Is an Ownership Axis, Not a Generic Execution Service
+
+**Status**: Accepted (2026-07-10)
+
+**Context**: SDK embedders need a disposable private V8 isolate, daemon clients
+need durable multi-client sharing, and generated constructed handlers need CPU
+fault containment. A proposed generic `runtime.executions` service would mix
+three ownership, serialization, permission, and security models and imply an
+untrusted-code sandbox that Node Workers do not provide.
+
+**Decision**:
+
+1. Keep the public `KodaXRuntime` service facade unchanged.
+2. Express deployment as orthogonal identity: `mode` is ownership/sharing
+   (`embedded | daemon`); embedded `isolation` is execution placement
+   (`inline | worker`). Daemon identity reports process isolation.
+3. Reuse the versioned runtime protocol over MessagePort for Worker-hosted
+   embedded Runtime. Do not add arbitrary code execution methods.
+4. Isolate constructed handler code internally with reverse tool RPC; keep
+   capability, plan-mode, permission, depth, and tool execution checks in the
+   host.
+5. Make Worker/daemon inputs DTO-only and fail closed on process-local values.
+6. Advertise `hardDispose` during initialize so callers can require it without
+   accepting silent fallback.
+7. Treat Worker resource limits/termination as fault isolation, not a security
+   sandbox. Hostile code requires a future process/container/OS boundary.
+
+**Consequences**: Existing inline users pay no IPC or startup cost. Worker users
+pay one cold start per private Runtime and gain deterministic teardown. Daemon
+users get a real detached owner process and multi-client reuse. Constructed
+handlers pay Worker/RPC overhead only on their own path. Packaging includes
+explicit Runtime and handler Worker sidecars with build/package guards.
+
+**Verification**: full Runtime SDK regression, distinct daemon PID smoke,
+MessagePort service round trip, hard-dispose negotiation, CPU-loop termination
+and respawn, reverse tool RPC capability denial, bundle and pack smoke. No model
+quality eval is required because Runtime isolation does not alter model context;
+the construction review prompt receives only a factual boundary correction.

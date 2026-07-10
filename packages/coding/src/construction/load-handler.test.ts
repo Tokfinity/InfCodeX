@@ -3,7 +3,10 @@ import os from 'os';
 import path from 'path';
 import fs from 'fs/promises';
 
-import { loadHandler } from './load-handler.js';
+import {
+  loadHandler,
+  shutdownConstructedHandlerWorkersForTest,
+} from './load-handler.js';
 import { CapabilityDeniedError } from './types.js';
 import type { ScriptSource } from './types.js';
 import { registerTool } from '../tools/registry.js';
@@ -18,6 +21,7 @@ beforeEach(async () => {
 
 afterEach(async () => {
   for (const u of unregisters.splice(0)) u();
+  await shutdownConstructedHandlerWorkersForTest();
   await fs.rm(tmpRoot, { recursive: true, force: true });
 });
 
@@ -67,7 +71,7 @@ describe('loadHandler', () => {
       { tools: [] },
     );
 
-    const filePath = path.join(tmpRoot, '.kodax', 'constructed', 'tools', 'echo', '1.0.0.js');
+    const filePath = path.join(tmpRoot, '.kodax', 'constructed', 'tools', 'echo', '1.0.0.mjs');
     await expect(fs.readFile(filePath, 'utf8')).resolves.toBe(code);
   });
 
@@ -124,11 +128,11 @@ describe('loadHandler', () => {
     await expect(handler({}, { backups: new Map() })).rejects.toThrow(/boom/);
   });
 
-  it('enforces timeout via Promise.race', async () => {
+  it('hard-terminates a CPU loop on timeout and respawns for the next invocation', async () => {
     const code = `
-      export async function handler() {
-        await new Promise((r) => setTimeout(r, 5000));
-        return 'never';
+      export async function handler(input) {
+        if (input.spin) while (true) {}
+        return 'recovered';
       }
     `;
     const handler = await loadHandler(
@@ -138,7 +142,40 @@ describe('loadHandler', () => {
       { timeoutMs: 50 },
     );
 
-    await expect(handler({}, { backups: new Map() })).rejects.toThrow(/timed out after 50ms/);
+    await expect(handler({ spin: true }, { backups: new Map() })).rejects.toThrow(/timed out after 50ms/);
+    await expect(handler({}, { backups: new Map() })).resolves.toBe('recovered');
+  });
+
+  it('executes constructed code outside the host V8 isolate', async () => {
+    const code = `
+      import { isMainThread } from 'node:worker_threads';
+      export async function handler() { return String(isMainThread); }
+    `;
+    const handler = await loadHandler(
+      { name: 'worker-check', version: '1.0.0', cwd: tmpRoot },
+      jsSource(code),
+      { tools: [] },
+    );
+
+    await expect(handler({}, { backups: new Map() })).resolves.toBe('false');
+  });
+
+  it('bridges the host abort signal into the handler Worker', async () => {
+    const handler = await loadHandler(
+      { name: 'abort-aware', version: '1.0.0', cwd: tmpRoot },
+      jsSource(`export async function handler(_input, ctx) {
+        if (ctx.abortSignal.aborted) return 'aborted';
+        await new Promise((resolve) => ctx.abortSignal.addEventListener('abort', resolve, { once: true }));
+        return 'aborted';
+      }`),
+      { tools: [] },
+      { timeoutMs: 5_000 },
+    );
+    const controller = new AbortController();
+    const result = handler({}, { backups: new Map(), abortSignal: controller.signal });
+    controller.abort();
+
+    await expect(result).resolves.toBe('aborted');
   });
 
   it('integrates CtxProxy: handler can call whitelisted ctx.tools.<name> via executeTool', async () => {

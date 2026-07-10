@@ -64,7 +64,7 @@ export function buildLlmReviewPrompt(input: BuildPromptInput): string {
     ? `\nArtifact: ${input.artifactRef}\n`
     : '';
 
-  return `You are KodaX reviewing a tool handler that another KodaX agent just generated. The handler will run in the host process with no JS-level sandbox; the only safety net at runtime is the capability whitelist below.${refLine}
+  return `You are KodaX reviewing a tool handler that another KodaX agent just generated. The handler runs in a disposable Node Worker for fault isolation, but that Worker is NOT a security sandbox and can still import filesystem/network/process modules. The capability whitelist below only gates calls made through ctx.tools.${refLine}
 Declared capabilities (the only builtin tools the handler may invoke through ctx.tools.<name>):
   ${declaredTools}
 

@@ -14,6 +14,28 @@ import {
 } from './client.js';
 
 describe('runtime daemon client proxy', () => {
+  it('rejects host-only run options instead of silently dropping them on the wire', async () => {
+    const calls: Array<{ readonly method: string; readonly params: unknown }> = [];
+    const client = createRuntimeDaemonClient({
+      identity: {
+        runtimeId: 'runtime-client',
+        mode: 'daemon',
+        profile: 'default',
+        startedAt: '2026-07-10T00:00:00.000Z',
+        version: '0.7.66',
+      },
+      transport: fakeTransport(calls),
+    });
+
+    await expect(client.runs.start({
+      sessionId: 'session-1',
+      options: {
+        extensionRuntime: { activate: () => undefined },
+      } as never,
+    })).rejects.toThrow(/run\.start\.options\.extensionRuntime.*not transport-safe/i);
+    expect(calls).toHaveLength(0);
+  });
+
   it('maps sessions and run handles onto daemon requests', async () => {
     const calls: Array<{ readonly method: string; readonly params: unknown }> = [];
     const transport = fakeTransport(calls);

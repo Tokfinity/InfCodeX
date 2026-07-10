@@ -42,7 +42,11 @@ import {
   runSandboxAgentTest,
   type SandboxLlmCallback,
 } from './sandbox-runner.js';
-import { loadHandler } from './load-handler.js';
+import {
+  disposeLoadedHandler,
+  loadHandler,
+  shutdownConstructedHandlerWorkersForTest,
+} from './load-handler.js';
 import { runAstRules } from './ast-rules.js';
 import { validateToolSchemaForProvider, type SchemaProvider } from './provider-schema.js';
 import { runLlmReview, type LlmReviewClient, type LlmReviewResult } from './llm-review.js';
@@ -206,6 +210,7 @@ export function _resetRuntimeForTesting(): void {
     unregister();
   }
   _activated.clear();
+  void shutdownConstructedHandlerWorkersForTest();
   _resetAgentResolverForTesting();
   _options = {
     cwd: process.cwd(),
@@ -228,9 +233,9 @@ export function _resetRuntimeForTesting(): void {
  * refuses to overwrite. Bumping the semver is the supported update path.
  *
  * Why "any status", not just `'active'`:
- *   The handler's `.js` module is loaded via `await import(file://…)`
+ *   The handler's `.mjs` module is loaded via `await import(file://…)`
  *   which the ESM module cache keys by absolute file URL. Re-writing
- *   `<version>.js` in place leaves the cached module pointing at the
+ *   `<version>.mjs` in place leaves the cached module pointing at the
  *   OLD code; subsequent loadHandler() calls return the cached export.
  *   Even revoking first does not flush the cache (Node has no public
  *   ESM cache eviction API). The only safe-by-construction policy is
@@ -1143,6 +1148,7 @@ export async function revoke(name: string, version: string): Promise<void> {
     unregister();
     _activated.delete(key);
   }
+  await disposeLoadedHandler({ name, version, cwd: _options.cwd });
 
   const artifact = await readArtifactByVersion(name, version);
   if (artifact) {

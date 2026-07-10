@@ -343,6 +343,24 @@ const workerResult = await build({
 const workerBytes = statSync(path.join(distDir, 'semantic-worker.js')).size;
 log(`  OK dist/semantic-worker.js (${(workerBytes / 1024).toFixed(0)} kB)`);
 
+log('Building dist/runtime-worker.js (SDK Runtime worker sidecar)...');
+const runtimeWorkerResult = await build({
+  ...commonOptions,
+  entryPoints: [path.join(repoRoot, 'src/runtime-worker/entry.ts')],
+  outfile: path.join(distDir, 'runtime-worker.js'),
+});
+const runtimeWorkerBytes = statSync(path.join(distDir, 'runtime-worker.js')).size;
+log(`  OK dist/runtime-worker.js (${(runtimeWorkerBytes / 1024).toFixed(0)} kB)`);
+
+log('Building dist/constructed-handler-worker.js (constructed tool sidecar)...');
+const constructedHandlerWorkerResult = await build({
+  ...commonOptions,
+  entryPoints: [path.join(repoRoot, 'packages/coding/dist/construction/handler-worker.js')],
+  outfile: path.join(distDir, 'constructed-handler-worker.js'),
+});
+const constructedHandlerWorkerBytes = statSync(path.join(distDir, 'constructed-handler-worker.js')).size;
+log(`  OK dist/constructed-handler-worker.js (${(constructedHandlerWorkerBytes / 1024).toFixed(0)} kB)`);
+
 // ---- copy builtin skill resources ---------------------------------------
 
 // Layout contract (see HLD §12.4 risk 3):
@@ -429,6 +447,8 @@ if (writeMetafile) {
     cli: cliResult.metafile,
     sdk: sdkResult.metafile,
     worker: workerResult.metafile,
+    runtimeWorker: runtimeWorkerResult.metafile,
+    constructedHandlerWorker: constructedHandlerWorkerResult.metafile,
     generatedAt: new Date().toISOString(),
   };
   writeFileSync(
@@ -443,6 +463,14 @@ assertNoRawAgentDynamicImport(distDir);
 log(`  OK bundle import guard: no raw ./agent.js dynamic import`);
 assertSemanticWorkerSidecar(distDir);
 log(`  OK worker sidecar guard: dist/semantic-worker.js present`);
+if (!existsSync(path.join(distDir, 'runtime-worker.js'))) {
+  throw new Error('[build-bundle] runtime-worker.js sidecar is missing.');
+}
+log(`  OK worker sidecar guard: dist/runtime-worker.js present`);
+if (!existsSync(path.join(distDir, 'constructed-handler-worker.js'))) {
+  throw new Error('[build-bundle] constructed-handler-worker.js sidecar is missing.');
+}
+log(`  OK worker sidecar guard: dist/constructed-handler-worker.js present`);
 
 // ---- summary -------------------------------------------------------------
 
@@ -455,6 +483,8 @@ for (const name of sdkEntryNames) {
 }
 log(`  Builtin skills: dist/builtin/`);
 log(`  Worker:         dist/semantic-worker.js`);
+log(`  Runtime worker: dist/runtime-worker.js`);
+log(`  Handler worker: dist/constructed-handler-worker.js`);
 log(`  Shared chunks:  dist/chunks/`);
 log('');
 log('Next: `npm pack` to produce the publish-ready tarball.');

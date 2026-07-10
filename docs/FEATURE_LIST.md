@@ -13,11 +13,11 @@
 | Current released version | `v0.7.63` |
 | Current package version | `@kodax-ai/kodax@0.7.63` (published to npm 2026-07-07; tagged `v0.7.63`) |
 | Workspace baseline | `llm / agent / coding / repl` 4 packages |
-| Total tracked features | `40` |
-| InProgress | `3` |
+| Total tracked features | `42` |
+| InProgress | `5` |
 | Planned | `13` |
 | Completed | `24` |
-| Tracked feature IDs | `007, 030, 093, 105, 108, 113, 139, 174, 211, 221, 224, 225, 228, 229, 230, 231, 232, 233, 234, 235, 236, 237, 238, 239, 240, 241, 242, 243, 244, 245, 246, 247, 248, 249, 250, 251, 252, 253, 254, 255` |
+| Tracked feature IDs | `007, 030, 093, 105, 108, 113, 139, 174, 211, 221, 224, 225, 228, 229, 230, 231, 232, 233, 234, 235, 236, 237, 238, 239, 240, 241, 242, 243, 244, 245, 246, 247, 248, 249, 250, 251, 252, 253, 254, 255, 256, 257` |
 | Archive cutoff | Shipped / canceled / absorbed / shelved items through `v0.7.49` are archived. |
 
 ### 一览表
@@ -25,7 +25,7 @@
 | Status | Count | Feature IDs | Next checkpoint |
 |---|---:|---|---|
 | Completed | 24 | `228, 251, 252, 250, 248, 249, 247, 246, 245, 243, 242, 241, 233, 240, 239, 224, 221, 174, 211, 237, 229, 230, 234, 236` | `228` shipped v0.7.62 (2026-07-06); `251, 252` shipped v0.7.61 (2026-07-06); `250` shipped v0.7.60 (2026-07-04); `248, 249` shipped v0.7.59 (2026-07-03); `245, 246, 247, 221` released v0.7.58 (2026-07-02); `233, 241, 242, 243` released v0.7.57; `239, 240` released v0.7.56; `224` released v0.7.54; `174, 211, 237` v0.7.53; `229` v0.7.50; `230, 234, 236` v0.7.51 |
-| InProgress | 3 | `253, 254, 255` | `v0.7.64` -> `v0.7.66` |
+| InProgress | 5 | `253, 254, 255, 256, 257` | `v0.7.64` -> `v0.7.72` |
 | Planned, near-term | 8 | `244, 231, 235, 238, 232, 105, 108, 225` | `v0.7.75` -> `v0.7.100` |
 | Planned, v0.8.x | 5 | `007, 030, 093, 113, 139` | `v0.8.5+` |
 
@@ -50,6 +50,10 @@
 | `v0.7.68` | `0` |
 | `v0.7.69` | `0` |
 | `v0.7.70` | `0` |
+| `v0.7.71` | `1` |
+| `v0.7.72` | `1` |
+| `v0.7.73` | `0` |
+| `v0.7.74` | `0` |
 | `v0.7.75` | `3` |
 | `v0.7.80` | `1` |
 | `v0.7.85` | `1` |
@@ -108,6 +112,14 @@
 > operations over transport, deterministic multi-client permission semantics,
 > and daemon transport/diagnostics for the same context-budget/tool-exposure
 > plane. No new feature ID or release slot is added.
+>
+> **2026-07-10 isolation follow-up**: concrete SDK embedder demand adds two
+> bounded follow-ups after the four stabilization slots. `FEATURE_256` targets
+> `v0.7.71` with an optional Worker-hosted embedded Runtime and hard disposal;
+> `FEATURE_257` targets `v0.7.72` with Worker fault isolation for constructed
+> handlers. `v0.7.73` and `v0.7.74` remain feature-free patch slots before the
+> existing `v0.7.75` roadmap. Worker isolation is explicitly not an untrusted
+> code sandbox and does not add a generic arbitrary-code execution service.
 
 ---
 
@@ -118,6 +130,8 @@
 | `253` | KodaX Runtime Contract + Embedded Runtime API | Core / Runtime Architecture | Critical | `v0.7.64` | [v0.7.64](features/v0.7.64.md#feature_253-kodax-runtime-contract--embedded-runtime-api) |
 | `254` | Runtime Host Migration + Control Plane Hardening | Core / Runtime Architecture | Critical | `v0.7.65` | [v0.7.65](features/v0.7.65.md#feature_254-runtime-host-migration--control-plane-hardening) |
 | `255` | KodaX Runtime Daemon + Local Transport | Core / Runtime Daemon | Critical | `v0.7.66` | [v0.7.66](features/v0.7.66.md#feature_255-kodax-runtime-daemon--local-transport) |
+| `256` | Worker-Hosted Embedded Runtime + Hard Disposal | Core / Runtime Isolation | High | `v0.7.71` | [v0.7.71](features/v0.7.71.md#feature_256-worker-hosted-embedded-runtime--hard-disposal) |
+| `257` | Constructed Handler Worker Fault Isolation | Coding / Tool Runtime | High | `v0.7.72` | [v0.7.72](features/v0.7.72.md#feature_257-constructed-handler-worker-fault-isolation) |
 
 Recent completion notes:
 

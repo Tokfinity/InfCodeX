@@ -298,10 +298,17 @@ const result = await runKodaX(
 
 ## Runtime SDK and daemon
 
-SDK hosts can use `@kodax-ai/kodax/runtime` for embedded or daemon-backed
-sessions/runs. Embedded mode stays in-process; daemon mode connects to a
-local-only runtime owner that can be shared by REPL, Space, IDE adapters, and
-custom SDK clients.
+SDK hosts can use `@kodax-ai/kodax/runtime` in three forms: inline embedded for
+lowest latency, Worker-hosted embedded for private state plus hard V8 disposal,
+or a local daemon shared by REPL, Space, IDE adapters, and custom SDK clients.
+All three expose the same `KodaXRuntime` services.
+
+```ts
+const isolated = await createKodaXRuntime({
+  mode: 'embedded',
+  isolation: 'worker',
+});
+```
 
 ```bash
 kodax daemon start
@@ -339,10 +346,10 @@ within the same session are queued so that only one run is active for that
 session. Multiple `kodax` processes can attach to the same daemon and open or
 observe different sessions.
 
-For the full host-integration contract, including embedded vs daemon selection,
+For the full host-integration contract, including inline/Worker/daemon selection,
 multi-client permission handling, config/catalog/MCP admin APIs, artifacts,
 context diagnostics, and daemon protocol schemas, see
-[docs/SDK_EMBEDDER_GUIDE.md §17](docs/SDK_EMBEDDER_GUIDE.md#17-runtime-sdk-and-local-daemon-feature_253feature_254feature_255-v0764-v0766).
+[docs/SDK_EMBEDDER_GUIDE.md §17](docs/SDK_EMBEDDER_GUIDE.md#17-runtime-sdk-worker-isolation-and-local-daemon-feature_253-feature_257).
 
 ## Repo Intelligence
 

@@ -45,6 +45,57 @@ describe('createKodaXRuntime', () => {
     await fs.rm(tempRoot, { recursive: true, force: true });
   });
 
+  it('hosts an embedded Runtime in a disposable Worker without changing the service API', async () => {
+    const { createKodaXRuntime } = await import('./sdk-runtime.js');
+    const runtime = await createKodaXRuntime({
+      mode: 'embedded',
+      isolation: 'worker',
+      homeDir: tempRoot,
+      sessionsDir: path.join(tempRoot, 'worker-sessions'),
+    });
+
+    expect(runtime.identity).toMatchObject({
+      mode: 'embedded',
+      isolation: 'worker',
+      workerThreadId: expect.any(Number),
+    });
+    const session = await runtime.sessions.create({ title: 'Worker Session' });
+    await expect(runtime.sessions.list()).resolves.toEqual([
+      expect.objectContaining({ id: session.id, title: 'Worker Session' }),
+    ]);
+
+    await runtime.close();
+    await expect(runtime.status.snapshot()).rejects.toThrow(/Worker transport is closed/i);
+  }, 30_000);
+
+  it('fails closed when a connected Runtime lacks a required capability', async () => {
+    const { createKodaXRuntime } = await import('./sdk-runtime.js');
+    const transport: RuntimeDaemonClientTransport = {
+      async request(method) {
+        if (method !== 'initialize') return null;
+        return {
+          identity: {
+            runtimeId: 'daemon-no-hard-dispose',
+            mode: 'embedded',
+            profile: 'default',
+            startedAt: '2026-07-10T00:00:00.000Z',
+            version: '0.7.66',
+          },
+          capabilities: { hardDispose: false },
+        };
+      },
+      subscribe() {
+        return { close() {} };
+      },
+    };
+
+    await expect(createKodaXRuntime({
+      mode: 'daemon',
+      daemonTransport: transport,
+      requirements: { hardDispose: true },
+    })).rejects.toThrow(/does not support.*hardDispose/i);
+  });
+
   it('exports daemon protocol schema artifacts from the runtime SDK entrypoint', async () => {
     const runtimeSdk = await import('@kodax-ai/kodax/runtime');
 
@@ -434,6 +485,7 @@ describe('createKodaXRuntime', () => {
     } finally {
       await ide?.close();
       await space.close();
+      await shutdownRuntimeDaemon(tempRoot, profile);
     }
   });
 
@@ -479,55 +531,34 @@ describe('createKodaXRuntime', () => {
         void space?.permissions.respond(payload.id, { type: 'allow_once' }, { runId: payload.runId });
       });
 
-      codingMock.startKodaX.mockImplementation((options: KodaXOptions): RunningSession => {
-        const sessionId = options.session?.id ?? session.id;
-        const approval = options.events?.beforeToolExecute?.(
-          'bash',
-          { command: 'echo from space permission' },
-          {
-            sessionId,
-            turnId: 'turn-space-permission',
-            toolId: 'tool-space-permission',
-          },
-        );
-        if (approval === undefined) {
-          throw new Error('expected runtime approval hook');
-        }
-        approvalDone = approval;
-        return fakeRunningSession(options, approval.then(() => ({
-          success: true,
-          lastText: 'permission accepted',
-          messages: [],
-          sessionId,
-        })));
-      });
-
-      const handle = await worker.runs.start({
+      approvalDone = worker.permissions.request({
         sessionId: session.id,
-        prompt: 'needs space permission',
+        runId: 'run-space-permission',
+        turnId: 'turn-space-permission',
+        toolCallId: 'tool-space-permission',
+        toolName: 'bash',
+        inputPreview: '{"command":"echo from space permission"}',
       });
-      await expect(expectSettles(handle.result, 'space permission run')).resolves.toMatchObject({
-        phase: 'completed',
-        result: { lastText: 'permission accepted' },
+      await expect(expectSettles(approvalDone, 'space permission approval')).resolves.toEqual({
+        type: 'allow_once',
       });
-      await expect(expectSettles(approvalDone!, 'space permission approval')).resolves.toBe(true);
       await flushMicrotasks();
 
-      expect(await space.permissions.listPending({ runId: handle.runId })).toEqual([]);
+      expect(await space.permissions.listPending({ runId: 'run-space-permission' })).toEqual([]);
       expect(seen).toContain('permission.requested');
       expect(seen).toContain('permission.resolved');
       const replay = await space.events.replay({
-        runId: handle.runId,
-        type: ['permission.requested', 'permission.resolved', 'run.completed'],
+        runId: 'run-space-permission',
+        type: ['permission.requested', 'permission.resolved'],
       });
       expect(replay.map((event) => event.type)).toEqual([
         'permission.requested',
         'permission.resolved',
-        'run.completed',
       ]);
     } finally {
       await space?.close();
       await worker.close();
+      await shutdownRuntimeDaemon(tempRoot, profile);
     }
   });
 

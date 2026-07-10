@@ -347,8 +347,16 @@ await runKodaX({ provider: 'my-openai-compatible' }, '解释这个仓库');
 ### 6. Runtime 与本机 daemon
 
 交互 REPL、位置参数、slash-command 生成的任务和 `kodax -p` 现在都走统一的
-`KodaXRuntime` 入口。默认使用进程内 `embedded`；需要后台持续运行、断线后查询或
-多个本机客户端共享时，可切到 `daemon`：
+`KodaXRuntime` 入口。默认使用最低延迟的进程内 `embedded`；单一 SDK 宿主需要
+独立 V8 与硬销毁时，可选择 Worker-hosted embedded；需要后台持续运行、断线后
+查询或多个本机客户端共享时，可切到 `daemon`：
+
+```ts
+const isolated = await createKodaXRuntime({
+  mode: 'embedded',
+  isolation: 'worker',
+});
+```
 
 ```bash
 kodax daemon start

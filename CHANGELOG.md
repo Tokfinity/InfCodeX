@@ -20,6 +20,14 @@ All notable changes to this project will be documented in this file.
 - **Context/tool exposure optimization gates.** Added small-context tool schema
   pruning and bridge reachability evals so deferred tools stay discoverable
   while small-window providers avoid carrying avoidable schema cost.
+- **Optional Worker-hosted Runtime.** SDK embedders can select
+  `createKodaXRuntime({ mode: 'embedded', isolation: 'worker' })` for a private
+  Runtime in a disposable V8 Worker while keeping the same sessions/runs/events
+  service facade. Resource limits, hard-dispose capability negotiation, and
+  Worker sidecar packaging are included.
+- **Constructed handler Worker isolation.** Activated JavaScript constructed
+  handlers execute outside the host V8 isolate, call allowed tools through
+  reverse host RPC, hard-terminate CPU loops on timeout, and respawn lazily.
 
 ### Changed
 
@@ -56,6 +64,12 @@ All notable changes to this project will be documented in this file.
   endpoint paths and removes stale non-connectable socket files before binding;
   Windows daemon smoke covers named-pipe start/status/logs/stop/restart and
   verified stale-owner handling.
+- **True SDK daemon process ownership.** SDK daemon auto-start now launches a
+  detached `daemon serve` process instead of hosting the socket in the caller;
+  smoke tests assert a distinct PID and verify detach/reconnect behavior.
+- **Transport options fail closed.** Runtime run DTOs reject functions, cycles,
+  class instances, and other process-local values before Worker/daemon
+  transport instead of silently losing them during JSON serialization.
 
 ## [0.7.63] - 2026-07-07
 

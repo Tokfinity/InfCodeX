@@ -54,6 +54,7 @@ export interface RuntimeDaemonDispatcherOptions {
   readonly logs?: () => Promise<unknown> | unknown;
   readonly config?: () => Promise<unknown> | unknown;
   readonly providerList?: () => Promise<unknown> | unknown;
+  readonly capabilities?: Readonly<Record<string, boolean>>;
 }
 
 export interface RuntimeDaemonDispatcher {
@@ -241,7 +242,7 @@ async function dispatchRuntimeDaemonRequest(
     case 'runtime.initialize':
       return {
         identity: runtime.identity,
-        capabilities: runtimeDaemonCapabilities(),
+        capabilities: runtimeDaemonCapabilities(options.capabilities),
       };
     case 'ping':
       return { ok: true, runtimeId: runtime.identity.runtimeId };
@@ -256,7 +257,7 @@ async function dispatchRuntimeDaemonRequest(
     case 'daemon.logs':
       return options.logs ? options.logs() : { entries: [] };
     case 'runtime.capabilities':
-      return runtimeDaemonCapabilities();
+      return runtimeDaemonCapabilities(options.capabilities);
     case 'config.read':
       return options.config ? redactRuntimeConfig(await options.config()) : runtime.config.read();
     case 'config.patch': {
@@ -514,7 +515,9 @@ function parseRuntimeClientCapabilities(value: unknown): RuntimeClientCapabiliti
   };
 }
 
-function runtimeDaemonCapabilities(): Record<string, boolean> {
+function runtimeDaemonCapabilities(
+  overrides: Readonly<Record<string, boolean>> = {},
+): Record<string, boolean> {
   return {
     events: true,
     permissions: true,
@@ -524,6 +527,8 @@ function runtimeDaemonCapabilities(): Record<string, boolean> {
     skillCatalog: true,
     artifactUpload: true,
     contextDiagnostics: true,
+    hardDispose: false,
+    ...overrides,
   };
 }
 
