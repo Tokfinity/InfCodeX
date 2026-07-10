@@ -36,6 +36,7 @@ export interface RuntimeDaemonLease {
   readonly paths: RuntimeDaemonPaths;
   readonly ownsHost: boolean;
   close(): Promise<void>;
+  shutdown(): Promise<void>;
 }
 
 export async function acquireRuntimeDaemonLease(
@@ -143,6 +144,13 @@ async function createAttachedLease(
     async close() {
       await transport.close?.();
     },
+    async shutdown() {
+      try {
+        await transport.request('runtime.shutdown');
+      } finally {
+        await transport.close?.();
+      }
+    },
   };
 }
 
@@ -152,16 +160,22 @@ function createOwnedLease(
   transport: RuntimeDaemonClientTransport,
   host: RuntimeDaemonHost,
 ): RuntimeDaemonLease {
-  let closed = false;
+  host.unref();
+  let transportClosed = false;
+  let hostClosed = false;
   return {
     transport,
     endpoint,
     paths,
     ownsHost: true,
     async close() {
-      if (closed) return;
-      closed = true;
+      if (transportClosed) return;
+      transportClosed = true;
       await transport.close?.();
+    },
+    async shutdown() {
+      if (hostClosed) return;
+      hostClosed = true;
       await host.close();
     },
   };

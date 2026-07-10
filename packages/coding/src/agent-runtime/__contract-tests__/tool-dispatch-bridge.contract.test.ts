@@ -103,10 +103,29 @@ describe('FEATURE_254 portable bridge dispatch', () => {
       );
 
       expect(result).toContain('target:ok:t1:bridge_call_target');
-      expect(permissionNames).toEqual([TOOL_CALL_NAME, 'bridge_call_target']);
+      expect(permissionNames).toEqual(['bridge_call_target']);
     } finally {
       unregister();
     }
+  });
+
+  it('tool_describe stays read-only without opening a permission request', async () => {
+    const permissionNames: string[] = [];
+    const result = await executeToolCall(
+      {
+        beforeToolExecute: async (name) => {
+          permissionNames.push(name);
+          return undefined;
+        },
+      },
+      makeToolCall(TOOL_DESCRIBE_NAME, { name: TOOL_CALL_NAME }),
+      makeCtx(),
+      freshState(),
+      [TOOL_DESCRIBE_NAME, TOOL_CALL_NAME],
+    );
+
+    expect(result).toContain(TOOL_CALL_NAME);
+    expect(permissionNames).toEqual([]);
   });
 
   it('tool_call rejects inactive targets without invoking their handler', async () => {

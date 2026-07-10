@@ -1,5 +1,5 @@
 import { spawn, type ChildProcess } from 'node:child_process';
-import { mkdir, mkdtemp, rm, writeFile } from 'node:fs/promises';
+import { mkdir, mkdtemp, readFile, rm, writeFile } from 'node:fs/promises';
 import { tmpdir } from 'node:os';
 import path from 'node:path';
 import { afterEach, describe, expect, it } from 'vitest';
@@ -105,6 +105,29 @@ describe('managed child process registry', () => {
     expect(summary.killed).toBe(0);
     expect(summary.skipped).toBe(1);
     expect(child.exitCode).toBeNull();
+  });
+
+  it('supports caller-owned cleanup after process stdio closes', async () => {
+    tempHome = await mkdtemp(path.join(tmpdir(), 'kodax-managed-child-'));
+    setAgentConfigHome(tempHome);
+    child = spawn(process.execPath, ['-e', 'setTimeout(() => {}, 10)'], {
+      stdio: 'ignore',
+      windowsHide: true,
+    });
+    if (child.pid === undefined) throw new Error('child pid missing');
+    const pid = child.pid;
+    const unregister = registerManagedChildProcess(child, {
+      kind: 'manual-child',
+      command: process.execPath,
+    }, {
+      manualUnregister: true,
+    });
+
+    await waitForExit(child);
+    await expect(readFile(childRegistryPath(tempHome, pid), 'utf8')).resolves.toContain('manual-child');
+
+    unregister();
+    await expect(readFile(childRegistryPath(tempHome, pid), 'utf8')).rejects.toMatchObject({ code: 'ENOENT' });
   });
 
   it('prunes an unconfirmed live pid without killing it', async () => {

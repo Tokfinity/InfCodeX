@@ -642,9 +642,14 @@ export class FileSessionStorage implements KodaXSessionStorage {
     cwd?: string;
     emitMismatchWarnings?: boolean;
   }) {
-    this.sessionsDir = opts?.sessionsDir ?? KODAX_SESSIONS_DIR;
+    this.sessionsDir = path.resolve(opts?.sessionsDir ?? KODAX_SESSIONS_DIR);
     this.hostCwd = opts?.cwd;
     this.emitMismatchWarnings = opts?.emitMismatchWarnings ?? false;
+  }
+
+  /** Absolute session root used by this storage instance. */
+  getSessionsDir(): string {
+    return this.sessionsDir;
   }
 
   // ── Session-level write serialization ──

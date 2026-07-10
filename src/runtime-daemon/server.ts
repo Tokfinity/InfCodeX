@@ -35,6 +35,10 @@ import {
   type RuntimeDaemonRequest,
   type RuntimeDaemonSuccessResponse,
 } from './protocol.js';
+import {
+  RUNTIME_DAEMON_METHOD_SCHEMAS,
+  validateRuntimeDaemonJsonSchema,
+} from './schema.js';
 
 export type RuntimeDaemonNotificationSink = (
   notification: RuntimeDaemonNotification,
@@ -129,10 +133,11 @@ export function createRuntimeDaemonDispatcher(
     return true;
   };
 
-  const rememberSubscription = (subscription: RuntimeSubscription): string => {
-    const subscriptionId = `sub_${randomUUID().replace(/-/g, '').slice(0, 12)}`;
+  const rememberSubscription = (
+    subscriptionId: string,
+    subscription: RuntimeSubscription,
+  ): void => {
     subscriptions.set(subscriptionId, subscription);
-    return subscriptionId;
   };
 
   const notify = (subscriptionId: string, event: unknown): void => {
@@ -152,6 +157,12 @@ export function createRuntimeDaemonDispatcher(
     request: RuntimeDaemonRequest,
   ): Promise<RuntimeDaemonSuccessResponse | RuntimeDaemonErrorResponse> => {
     try {
+      validateDaemonMethodValue(
+        request.method,
+        'params',
+        request.params === undefined ? {} : request.params,
+        'invalid_params',
+      );
       let initializeParams: Record<string, unknown> | undefined;
       if (!initialized && !isInitializeMethod(request.method)) {
         throw daemonError(
@@ -183,7 +194,7 @@ export function createRuntimeDaemonDispatcher(
           );
         }
       }
-      const result = await dispatchRuntimeDaemonRequest(
+      const dispatched = await dispatchRuntimeDaemonRequest(
         request,
         options,
         runResults,
@@ -192,6 +203,8 @@ export function createRuntimeDaemonDispatcher(
         notify,
         () => clientCapabilities,
       );
+      const result = serializeRuntimeDaemonMethodResult(request.method, dispatched);
+      validateDaemonMethodValue(request.method, 'result', result, 'internal_error');
       if (isInitializeMethod(request.method)) {
         initialized = true;
         clientCapabilities = parseRuntimeClientCapabilities(initializeParams?.capabilities);
@@ -216,7 +229,7 @@ async function dispatchRuntimeDaemonRequest(
   request: RuntimeDaemonRequest,
   options: RuntimeDaemonDispatcherOptions,
   runResults: RuntimeDaemonRunResultStore,
-  rememberSubscription: (subscription: RuntimeSubscription) => string,
+  rememberSubscription: (subscriptionId: string, subscription: RuntimeSubscription) => void,
   closeSubscription: (subscriptionId: string) => boolean,
   notify: (subscriptionId: string, event: unknown) => void,
   getClientCapabilities: () => RuntimeClientCapabilities,
@@ -415,11 +428,11 @@ async function dispatchRuntimeDaemonRequest(
     case 'event.subscribe': {
       const params = optionalRecord(request.params) ?? {};
       const filter = optionalRecord(params.filter) as RuntimeEventFilter | undefined;
-      let subscriptionId = '';
+      const subscriptionId = createSubscriptionId();
       const subscription = runtime.events.subscribe(filter ?? {}, (event: RuntimeEvent) => {
         notify(subscriptionId, event);
       });
-      subscriptionId = rememberSubscription(subscription);
+      rememberSubscription(subscriptionId, subscription);
       return { subscriptionId };
     }
     case 'event.unsubscribe':
@@ -452,11 +465,11 @@ async function dispatchRuntimeDaemonRequest(
     case 'workflow.subscribe': {
       const params = optionalRecord(request.params) ?? {};
       const filter = optionalRecord(params.filter) as RuntimeWorkflowFilter | undefined;
-      let subscriptionId = '';
+      const subscriptionId = createSubscriptionId();
       const subscription = runtime.workflows.subscribe(filter ?? {}, (event) => {
         notify(subscriptionId, event);
       });
-      subscriptionId = rememberSubscription(subscription);
+      rememberSubscription(subscriptionId, subscription);
       return { subscriptionId };
     }
     case 'workflow.unsubscribe':
@@ -724,6 +737,49 @@ function daemonError(
   return error;
 }
 
+function createSubscriptionId(): string {
+  return `sub_${randomUUID().replace(/-/g, '').slice(0, 12)}`;
+}
+
+function validateDaemonMethodValue(
+  method: RuntimeDaemonMethod,
+  kind: 'params' | 'result',
+  value: unknown,
+  code: 'invalid_params' | 'internal_error',
+): void {
+  const issues = validateRuntimeDaemonJsonSchema(
+    RUNTIME_DAEMON_METHOD_SCHEMAS[method][kind],
+    value,
+    kind,
+  );
+  if (issues.length === 0) return;
+  throw daemonError(
+    code,
+    kind === 'params'
+      ? `Invalid params for ${method}.`
+      : `Runtime daemon produced an invalid result for ${method}.`,
+    { issues },
+  );
+}
+
+function serializeRuntimeDaemonMethodResult(
+  method: RuntimeDaemonMethod,
+  result: unknown,
+): unknown {
+  if (result === undefined) return null;
+  if (method !== 'run.await' || !isRecord(result) || !(result.error instanceof Error)) {
+    return result;
+  }
+  return {
+    ...result,
+    error: {
+      name: result.error.name,
+      message: result.error.message,
+      ...(result.error.stack !== undefined ? { stack: result.error.stack } : {}),
+    },
+  };
+}
+
 function normalizeRuntimeDaemonError(error: unknown): {
   readonly code: RuntimeDaemonErrorCode;
   readonly message: string;
@@ -752,11 +808,14 @@ function normalizeRuntimeDaemonError(error: unknown): {
 function isRuntimeDaemonErrorCode(value: string): value is RuntimeDaemonErrorCode {
   return value === 'invalid_frame'
     || value === 'invalid_request'
+    || value === 'invalid_params'
     || value === 'not_initialized'
     || value === 'method_not_found'
     || value === 'unauthorized'
+    || value === 'permission_denied'
     || value === 'conflict'
     || value === 'not_found'
     || value === 'cancelled'
+    || value === 'overloaded'
     || value === 'internal_error';
 }

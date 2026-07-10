@@ -394,6 +394,7 @@ export interface ReplRuntimeRunnerInput {
   readonly options: KodaXOptions;
   readonly prompt: string;
   readonly sessionId: string;
+  readonly permissionMode: PermissionMode;
 }
 
 export type ReplRuntimeRunner = (input: ReplRuntimeRunnerInput) => Promise<KodaXResult>;
@@ -888,6 +889,7 @@ Keyboard Shortcuts:
         context.messages,
         undefined,
         options.runtimeRunner,
+        currentPermissionMode,
       );
     } catch (error: unknown) {
       const message = error instanceof Error ? error.message : String(error);
@@ -1641,6 +1643,7 @@ Keyboard Shortcuts:
         initialMessages,
         undefined,
         options.runtimeRunner,
+        currentPermissionMode,
       );
 
       if (prepared.mode === 'fork') {
@@ -1910,6 +1913,7 @@ Keyboard Shortcuts:
         context.messages,
         preparedArtifacts.inputArtifacts,
         options.runtimeRunner,
+        currentPermissionMode,
       );
 
       // Update context messages (runKodaX returns complete message list) - 更新上下文中的消息（runKodaX 返回完整的消息列表）
@@ -2026,6 +2030,7 @@ async function runAgentRound(
   initialMessages: KodaXMessage[] = context.messages,
   inputArtifacts?: readonly KodaXInputArtifact[],
   runtimeRunner?: ReplRuntimeRunner,
+  permissionMode: PermissionMode = 'accept-edits',
 ): Promise<KodaXResult> {
   // Create event callbacks - 创建事件回调
   const events = {
@@ -2073,6 +2078,7 @@ async function runAgentRound(
       options: runOptions,
       prompt,
       sessionId: context.sessionId,
+      permissionMode,
     });
   }
   return runManagedTask(runOptions, prompt);

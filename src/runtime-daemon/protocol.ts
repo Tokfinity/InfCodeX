@@ -94,12 +94,15 @@ export interface RuntimeDaemonError {
 export type RuntimeDaemonErrorCode =
   | 'invalid_frame'
   | 'invalid_request'
+  | 'invalid_params'
   | 'not_initialized'
   | 'method_not_found'
   | 'unauthorized'
+  | 'permission_denied'
   | 'conflict'
   | 'not_found'
   | 'cancelled'
+  | 'overloaded'
   | 'internal_error';
 
 interface RuntimeDaemonFrameBase {
@@ -229,12 +232,15 @@ const NOTIFICATION_METHODS: ReadonlySet<string> = new Set<RuntimeDaemonNotificat
 const ERROR_CODES: ReadonlySet<string> = new Set<RuntimeDaemonErrorCode>([
   'invalid_frame',
   'invalid_request',
+  'invalid_params',
   'not_initialized',
   'method_not_found',
   'unauthorized',
+  'permission_denied',
   'conflict',
   'not_found',
   'cancelled',
+  'overloaded',
   'internal_error',
 ]);
 

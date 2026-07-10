@@ -1,6 +1,6 @@
 # Known Issues
 
-_Last Updated: 2026-07-07_
+_Last Updated: 2026-07-10_
 
 ---
 
@@ -89,11 +89,53 @@ _Last Updated: 2026-07-07_
 | 142 | High | Resolved | kimi-code thinking-only completion can terminate Worker with only `[Worker]` visible | v0.7.56 | v0.7.56 | 2026-06-25 | 2026-06-25 |
 | 144 | High | Resolved | Worker misreads task_output block wait expiry as child-agent timeout and writes final report before children complete | v0.7.45 | v0.7.57 | 2026-06-26 | 2026-06-26 |
 | 143 | High | Resolved | Auto[llm] speculative classify 窗口默认 500ms + late verdict 被丢弃 → 远程/慢 provider 下 near-100% 误弹确认框，auto 模式形同虚设 | v0.7.39 | v0.7.57 | 2026-06-25 | 2026-06-25 |
+| 145 | High | Resolved | Runtime daemon / SDK 边界存在生命周期、事件、权限与协议一致性缺口 | v0.7.64-v0.7.66 | v0.7.66 | 2026-07-10 | 2026-07-10 |
 
 ---
 
 ## Issue Details
 <!-- Full details for each issue - REQUIRED for all issues -->
+
+### 145: Runtime daemon / SDK 边界存在生命周期、事件、权限与协议一致性缺口
+
+- **Priority**: High
+- **Status**: **Resolved** (v0.7.66)
+- **Introduced**: v0.7.64-v0.7.66 (FEATURE_254 / FEATURE_255)
+- **Created**: 2026-07-10
+- **Resolved**: 2026-07-10
+- **Fixed**: v0.7.66
+
+#### Original Problem
+
+对 v0.7.63 之后的 embedded runtime 与 local daemon 进行跨提交审查时，发现若干在单实例 happy path 中不明显、但会破坏多客户端和长生命周期宿主的边界缺口：首个 auto-start client 关闭会连带终止共享 daemon；持久化事件序号在 runtime 重建后回退；事件消费者异常会逃逸到生产者；活动 run 与会话历史变更缺少冲突保护；`permissionMode` 未真正约束 runtime 工具执行；CLI daemon REPL 会把含函数、`AbortSignal` 和进程内对象的 options 直接跨 JSON 发送；wire error、frame 大小、订阅建连竞态、artifact 路径和核心 schema 参数也缺少完整的边界处理。
+
+#### Context
+
+- Components: `src/sdk-runtime.ts`, `src/runtime-daemon/*`, CLI/ACP host adapters, diagnostic sink, LSP shutdown cleanup.
+- Impact: daemon peer clients can unexpectedly断连；重连 replay 可漏事件；权限请求可能挂起或重复；失败结果在 socket client 侧退化为 `{}`；异常/畸形输入可跨越协议边界。
+- Scope: 修复现有 FEATURE_254 / FEATURE_255 contract，不引入第二套 runtime 或假想配置层。
+
+#### Resolution
+
+- auto-start daemon host 与首个 SDK client 解耦；`close()` 只断开 client，显式 shutdown 才释放 host，peer client 在 owner 断开后继续可用。
+- event sequence 从持久化 cursor / event log 恢复；listener 异常隔离；delta 继续全量 replay，但按 tick/阈值批量落盘并限制单 run 日志体积。
+- active run 阻止 rewind / active-entry / compact；runtime permission policy、client broker、bridge meta-tool 单次授权和 protected-path 规则统一。
+- `run.await` Error 增加 wire codec；frame/buffer 限制为 8 MiB；订阅早到事件缓冲；dispatcher 按方法 schema 校验 params/result。
+- artifact create 校验可读普通文件与 256 MiB 上限；CLI daemon REPL 使用显式 JSON-safe DTO，桥接流式事件、权限和 abort。
+- ACP 共用注入 session storage 根；diagnostic sink 支持非 LIFO restore；LSP managed-child 在 stdio close 后才注销。
+
+#### Files Changed
+
+- `src/sdk-runtime.ts`, `src/runtime-daemon/*`, `src/kodax_cli.ts`, `src/acp_server.ts`
+- `packages/agent/src/diagnostics.ts`, `packages/agent/src/runtime/managed-child-processes.ts`
+- `packages/coding/src/agent-runtime/tool-dispatch.ts`, `packages/coding/src/lsp/client.ts`
+- `packages/repl/src/index.ts`, `packages/repl/src/interactive/*`, `packages/repl/src/ui/InkREPL.tsx`
+
+#### Verification
+
+- Runtime/daemon/host/ACP/LSP/diagnostic/bridge targeted suites passed.
+- Root TypeScript check and package build passed.
+- Full local suite reached 9,420 passed; its only codebase-owned failure was this tracker summary before the resolved count was updated. The other failure scanned the developer machine's mutable real-session corpus and is re-run under a clean CI-style home.
 
 ### 144: Worker misreads task_output block wait expiry as child-agent timeout and writes final report before children complete
 
@@ -4836,11 +4878,19 @@ Commit `ef085fc` 把 V1 精简到 V2 时没区分"信息载体"和"脚手架"，
 ---
 
 ## Summary
-- Total: 71 (24 Open, 47 Resolved, 0 Partially Resolved, 0 Won't Fix)
+- Total: 72 (24 Open, 48 Resolved, 0 Partially Resolved, 0 Won't Fix)
 - Highest Priority Open: 091 - 缺少一等公民 MCP / Web Search / Code Search 工具体系 (High)
 - Historical archived issues are maintained in ISSUES_ARCHIVED.md
 
 ## Changelog
+
+### 2026-07-10: Issue 145 added and resolved (v0.7.66)
+- Resolved the runtime daemon / SDK lifecycle, event replay, permission,
+  serialization, protocol-validation, artifact, and host-cleanup gaps found in
+  the post-v0.7.63 architecture review.
+- Added multi-client socket, restart/replay, listener isolation, active-run
+  conflict, protected-path broker, frame-limit, wire-error, subscription-race,
+  JSON-safe REPL, ACP storage, diagnostic restore, and LSP close regressions.
 
 ### 2026-07-06: Issue 112 resolved (v0.7.62)
 - Resolved 112: `ask_user_question` now supports free-text input,

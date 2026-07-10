@@ -59,4 +59,41 @@ describe('waitForLspProcessExitOrGiveUp', () => {
     await vi.advanceTimersByTimeAsync(30);
     expect(killProcess).not.toHaveBeenCalled();
   });
+
+  it('does not treat an exit code as proof that stdio has closed', async () => {
+    vi.useFakeTimers();
+    const proc = new FakeLspProcess();
+    proc.exitCode = 0;
+    const killProcess = vi.fn(async () => undefined);
+    const unregisterManagedChild = vi.fn();
+
+    const result = waitForLspProcessExitOrGiveUp({
+      proc,
+      killProcess,
+      unregisterManagedChild,
+      exitGraceMs: 10,
+      killReapGraceMs: 20,
+    });
+
+    expect(unregisterManagedChild).not.toHaveBeenCalled();
+    proc.emit('close', 0, null);
+    await expect(result).resolves.toBe(true);
+    expect(unregisterManagedChild).toHaveBeenCalledOnce();
+  });
+
+  it('finishes immediately when the caller already observed close', async () => {
+    const proc = new FakeLspProcess();
+    const killProcess = vi.fn(async () => undefined);
+    const unregisterManagedChild = vi.fn();
+
+    await expect(waitForLspProcessExitOrGiveUp({
+      proc,
+      isClosed: () => true,
+      killProcess,
+      unregisterManagedChild,
+    })).resolves.toBe(true);
+
+    expect(killProcess).not.toHaveBeenCalled();
+    expect(unregisterManagedChild).toHaveBeenCalledOnce();
+  });
 });

@@ -501,6 +501,7 @@ export interface InkRuntimeRunnerInput {
   readonly options: KodaXOptions;
   readonly prompt: string;
   readonly sessionId: string;
+  readonly permissionMode: PermissionMode;
 }
 
 export type InkRuntimeRunner = (input: InkRuntimeRunnerInput) => Promise<KodaXResult>;
@@ -7324,6 +7325,7 @@ const InkREPLInner: React.FC<InkREPLProps> = ({
           options: runOptions,
           prompt,
           sessionId: context.sessionId,
+          permissionMode: permissionModeRef.current,
         });
       }
       return await runManagedTask(runOptions, prompt);

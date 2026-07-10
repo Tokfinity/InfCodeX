@@ -52,6 +52,14 @@ describe('runtime daemon protocol frames', () => {
     expect(parseRuntimeDaemonFrame(JSON.stringify(error))).toEqual(error);
   });
 
+  it('accepts the public daemon error code families', () => {
+    for (const code of ['invalid_params', 'permission_denied', 'overloaded'] as const) {
+      const response = createRuntimeDaemonErrorResponse({ code, message: code }, 'req-error');
+      expect(isRuntimeDaemonErrorResponse(response)).toBe(true);
+      expect(parseRuntimeDaemonFrame(JSON.stringify(response))).toEqual(response);
+    }
+  });
+
   it('encodes undefined success results as null so JSON transport keeps the result field', () => {
     const success = createRuntimeDaemonSuccessResponse('req-nullish', undefined);
     const encoded = JSON.stringify(success);

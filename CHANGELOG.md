@@ -32,6 +32,16 @@ All notable changes to this project will be documented in this file.
 
 ### Fixed
 
+- **Runtime daemon boundary hardening.** Client close now detaches without
+  terminating shared daemon peers; event replay keeps monotonic sequence IDs
+  across restart; listener failures are isolated; active-run session mutations,
+  permission policy, artifact validation, wire errors, frame limits, subscription
+  startup races, and method schema validation now fail predictably.
+- **Daemon host parity and cleanup.** Interactive daemon runs send an explicit
+  JSON-safe options DTO and bridge stream, permission, and abort signals back to
+  the REPL. ACP shares its injected session root with the runtime, diagnostic
+  sinks restore safely out of order, and LSP child records remain registered
+  until process stdio has actually closed.
 - **Runtime lifecycle cleanup.** Aborted/closed queued or running runs now settle
   their result promises, pending permissions are rejected and timer-cleaned, and
   daemon startup treats live transitional states as waitable ownership instead

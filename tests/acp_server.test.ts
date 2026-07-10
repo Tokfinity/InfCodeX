@@ -21,6 +21,7 @@ import type {
 } from '@kodax-ai/coding';
 import type { AcpLogLevel } from '../src/acp_logger.js';
 import type { AcpEventSink, AcpRuntimeEvent } from '../src/acp_events.js';
+import { FileSessionStorage } from '@kodax-ai/repl';
 
 const {
   runKodaXMock,
@@ -172,6 +173,7 @@ async function createHarness(options: {
   logLevel?: AcpLogLevel;
   eventSinks?: AcpEventSink[];
   mcpServers?: McpServer[];
+  storage?: FileSessionStorage;
 } = {}) {
   const requestStream = new TransformStream<Uint8Array, Uint8Array>();
   const responseStream = new TransformStream<Uint8Array, Uint8Array>();
@@ -191,6 +193,7 @@ async function createHarness(options: {
     agentVersion: 'test',
     logLevel: options.logLevel ?? 'off',
     eventSinks: [recordingSink, ...(options.eventSinks ?? [])],
+    ...(options.storage ? { storage: options.storage } : {}),
   });
   server.attach(requestStream.readable, responseStream.writable);
 
@@ -323,6 +326,22 @@ describe('KodaXAcpServer', () => {
     });
 
     expect(prepareRuntimeConfigMock).toHaveBeenCalledTimes(1);
+  });
+
+  it('uses the injected storage root for runtime-owned ACP sessions', async () => {
+    const sessionsDir = await mkdtemp(path.join(os.tmpdir(), 'kodax-acp-storage-'));
+    const storage = new FileSessionStorage({ sessionsDir });
+    const harness = await createHarness({ storage });
+
+    try {
+      expect(storage.getSessionsDir()).toBe(path.resolve(sessionsDir));
+      await expect(storage.load(harness.sessionId)).resolves.toMatchObject({
+        runtimeInfo: expect.objectContaining({ surface: 'acp' }),
+      });
+    } finally {
+      await harness.server.dispose();
+      await rm(sessionsDir, { recursive: true, force: true });
+    }
   });
 
   it('does not activate discovered extensions twice for sessions with client MCP servers', async () => {

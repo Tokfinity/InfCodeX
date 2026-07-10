@@ -11,9 +11,11 @@ import type {
   RuntimeRunResult,
   RuntimeStartRunInput,
 } from '../sdk-runtime.js';
+import { createRuntimeDaemonClient } from './client.js';
 import { acquireRuntimeDaemonLease } from './manager.js';
 import {
   readRuntimeDaemonLockOwner,
+  readRuntimeDaemonState,
   readRuntimeDaemonToken,
   resolveRuntimeDaemonPaths,
   tryAcquireRuntimeDaemonLock,
@@ -57,7 +59,12 @@ describe('runtime daemon lease manager', () => {
         createRuntime: async () => secondRuntime,
       }),
     ]);
-    cleanupTasks.push(() => firstLease.close(), () => secondLease.close());
+    const ownerLease = firstLease.ownsHost ? firstLease : secondLease;
+    cleanupTasks.push(async () => {
+      await firstLease.close();
+      await secondLease.close();
+      await ownerLease.shutdown();
+    });
 
     expect([firstLease.ownsHost, secondLease.ownsHost].filter(Boolean)).toHaveLength(1);
     const owner = readRuntimeDaemonLockOwner(paths.lockFile);
@@ -95,7 +102,12 @@ describe('runtime daemon lease manager', () => {
         createRuntime: async () => secondRuntime,
       }),
     ]);
-    cleanupTasks.push(() => firstLease.close(), () => secondLease.close());
+    cleanupTasks.push(async () => {
+      await firstLease.close();
+      await secondLease.close();
+      await firstLease.shutdown();
+      await secondLease.shutdown();
+    });
 
     expect(firstLease.ownsHost).toBe(true);
     expect(secondLease.ownsHost).toBe(true);
@@ -142,12 +154,101 @@ describe('runtime daemon lease manager', () => {
       },
       createRuntime: async () => runtime,
     });
-    cleanupTasks.push(() => lease.close());
+    cleanupTasks.push(async () => {
+      await lease.close();
+      await lease.shutdown();
+    });
 
     expect(lease.ownsHost).toBe(true);
     expect(readRuntimeDaemonLockOwner(paths.lockFile)).toMatchObject({
       runtimeId: runtime.identity.runtimeId,
     });
+  });
+
+  it('keeps the daemon alive when its original client detaches', async () => {
+    const homeDir = tempHome();
+    const endpoint = await makeTestEndpoint();
+    const firstLease = await acquireRuntimeDaemonLease({
+      homeDir,
+      endpoint,
+      createRuntime: async () => makeRuntime('runtime-owner'),
+    });
+    const token = readRuntimeDaemonToken(firstLease.paths);
+    await firstLease.transport.request('initialize', { profile: 'default', token });
+    const secondLease = await acquireRuntimeDaemonLease({
+      homeDir,
+      endpoint,
+      createRuntime: async () => makeRuntime('runtime-candidate'),
+    });
+    await secondLease.transport.request('initialize', { profile: 'default', token });
+    cleanupTasks.push(async () => {
+      await secondLease.close();
+      await firstLease.shutdown();
+    });
+
+    await firstLease.close();
+
+    await expect(secondLease.transport.request('ping')).resolves.toEqual({
+      ok: true,
+      runtimeId: 'runtime-owner',
+    });
+  });
+
+  it('round-trips failed run Errors through a real daemon socket', async () => {
+    const homeDir = tempHome();
+    const endpoint = await makeTestEndpoint();
+    const lease = await acquireRuntimeDaemonLease({
+      homeDir,
+      endpoint,
+      createRuntime: async () => makeRuntime(
+        'runtime-errors',
+        'default',
+        new TypeError('provider unavailable'),
+      ),
+    });
+    cleanupTasks.push(async () => {
+      await lease.close();
+      await lease.shutdown();
+    });
+    const token = readRuntimeDaemonToken(lease.paths);
+    await lease.transport.request('initialize', { profile: 'default', token });
+    const client = createRuntimeDaemonClient({
+      identity: {
+        ...makeRuntime('runtime-errors').identity,
+        mode: 'daemon',
+      },
+      transport: lease.transport,
+    });
+
+    const handle = await client.runs.start({
+      sessionId: 'session-1',
+      prompt: 'fail over the wire',
+    });
+    const result = await handle.result;
+
+    expect(result).toMatchObject({ phase: 'failed' });
+    expect(result.error).toBeInstanceOf(Error);
+    expect(result.error?.name).toBe('TypeError');
+    expect(result.error?.message).toBe('provider unavailable');
+  });
+
+  it('releases daemon ownership only through explicit shutdown', async () => {
+    const homeDir = tempHome();
+    const lease = await acquireRuntimeDaemonLease({
+      homeDir,
+      endpoint: await makeTestEndpoint(),
+      createRuntime: async () => makeRuntime('runtime-explicit-shutdown'),
+    });
+    cleanupTasks.push(() => lease.shutdown());
+    const token = readRuntimeDaemonToken(lease.paths);
+    await lease.transport.request('initialize', { profile: 'default', token });
+
+    await lease.close();
+    expect(readRuntimeDaemonState(lease.paths)).toMatchObject({ status: 'ready' });
+
+    await lease.shutdown();
+    expect(readRuntimeDaemonState(lease.paths)).toBeUndefined();
+    expect(readRuntimeDaemonLockOwner(lease.paths.lockFile)).toBeUndefined();
   });
 });
 
@@ -175,6 +276,7 @@ async function makeTestEndpoint(): Promise<RuntimeDaemonEndpoint> {
 function makeRuntime(
   runtimeId = 'runtime-manager-test',
   profile = 'default',
+  runError?: Error,
 ): KodaXRuntime & { closed: boolean } {
   const runtime: KodaXRuntime & { closed: boolean } = {
     closed: false,
@@ -234,7 +336,8 @@ function makeRuntime(
         const result: RuntimeRunResult = {
           runId: 'run-1',
           sessionId: input.sessionId,
-          phase: 'completed',
+          phase: runError === undefined ? 'completed' : 'failed',
+          ...(runError !== undefined ? { error: runError } : {}),
         };
         return {
           runId: result.runId,
@@ -243,7 +346,12 @@ function makeRuntime(
         };
       },
       async await(runId) {
-        return { runId, sessionId: 'session-1', phase: 'completed' };
+        return {
+          runId,
+          sessionId: 'session-1',
+          phase: runError === undefined ? 'completed' : 'failed',
+          ...(runError !== undefined ? { error: runError } : {}),
+        };
       },
       async get(runId) {
         return {
@@ -379,6 +487,7 @@ function makeRuntime(
           id: 'art-1',
           kind: input.kind,
           path: input.path,
+          sizeBytes: 0,
           createdAt: '2026-07-09T00:00:00.000Z',
         };
       },

@@ -40,7 +40,13 @@ import os from 'node:os';
 import path from 'path';
 import { fileURLToPath, pathToFileURL } from 'url';
 import { runAcpServer } from './acp_server.js';
-import { createKodaXRuntime, type KodaXRuntime } from './sdk-runtime.js';
+import {
+  createKodaXRuntime,
+  type KodaXRuntime,
+  type RuntimeEvent,
+  type RuntimeKodaXOptions,
+  type RuntimePermissionDecision,
+} from './sdk-runtime.js';
 import {
   isRuntimeDaemonPidAlive,
   observeRuntimeDaemonHealth,
@@ -391,6 +397,446 @@ async function getInteractiveRuntimeStatus(input: {
     pendingPermissions: snapshot.pendingPermissions.length,
     workflows: snapshot.workflows.length,
   };
+}
+
+interface InteractiveRuntimeRunnerInput {
+  readonly options: KodaXOptions;
+  readonly prompt: string;
+  readonly sessionId: string;
+  readonly permissionMode: string;
+}
+
+interface DaemonReplEventBridge {
+  setRunId(runId: string): void;
+  close(): Promise<void>;
+}
+
+export function createInteractiveRuntimeRunner(runtime: KodaXRuntime) {
+  return async (input: InteractiveRuntimeRunnerInput): Promise<Awaited<ReturnType<typeof runManagedTask>>> => {
+    await ensureInteractiveRuntimeSession(runtime, input.sessionId);
+    await runtime.sessions.updateSettings(input.sessionId, {
+      permissionMode: input.permissionMode,
+    });
+
+    const bridge = runtime.identity.mode === 'daemon'
+      ? createDaemonReplEventBridge(runtime, input)
+      : undefined;
+    const abortSignal = input.options.abortSignal;
+    let abortRun: (() => void) | undefined;
+    try {
+      const handle = await runtime.runs.start({
+        sessionId: input.sessionId,
+        prompt: input.prompt,
+        mode: 'managed_task',
+        ...(runtime.identity.mode === 'daemon' ? { permissionBroker: 'client' as const } : {}),
+        options: runtime.identity.mode === 'daemon'
+          ? toDaemonRuntimeRunOptions(input.options)
+          : input.options,
+      });
+      bridge?.setRunId(handle.runId);
+      abortRun = () => {
+        void runtime.runs.abort(handle.runId).catch(() => undefined);
+      };
+      if (abortSignal?.aborted) {
+        abortRun();
+      } else {
+        abortSignal?.addEventListener('abort', abortRun, { once: true });
+      }
+
+      const result = await handle.result;
+      if (result.error) throw normalizeCliError(result.error);
+      if (!result.result) {
+        if (result.phase === 'cancelled' || result.phase === 'interrupted') {
+          return interruptedRuntimeResult(input.sessionId);
+        }
+        throw new Error(`Runtime run ${handle.runId} ended without a result.`);
+      }
+      return result.result;
+    } finally {
+      if (abortRun) abortSignal?.removeEventListener('abort', abortRun);
+      await bridge?.close();
+    }
+  };
+}
+
+async function ensureInteractiveRuntimeSession(runtime: KodaXRuntime, sessionId: string): Promise<void> {
+  try {
+    await runtime.sessions.load(sessionId);
+  } catch (error: unknown) {
+    if (!(error instanceof Error) || !error.message.startsWith('Session not found:')) {
+      throw error;
+    }
+    await runtime.sessions.create({
+      sessionId,
+      title: 'REPL Session',
+      projectPath: process.cwd(),
+      gitRoot: await getGitRoot() ?? process.cwd(),
+      surface: 'repl',
+    });
+  }
+}
+
+function interruptedRuntimeResult(sessionId: string): Awaited<ReturnType<typeof runManagedTask>> {
+  return {
+    success: false,
+    lastText: '',
+    messages: [],
+    sessionId,
+    interrupted: true,
+    signal: 'BLOCKED',
+    signalReason: 'Runtime run cancelled.',
+  };
+}
+
+export function toDaemonRuntimeRunOptions(options: KodaXOptions): RuntimeKodaXOptions {
+  const {
+    events,
+    session,
+    context,
+    abortSignal: _abortSignal,
+    extensionRuntime: _extensionRuntime,
+    sessionControl: _sessionControl,
+    memoryReviewer: _memoryReviewer,
+    guardrails: _guardrails,
+    skillDynamicContext,
+    ...wireOptions
+  } = options;
+  const { storage: _storage, ...wireSession } = session ?? {};
+  const {
+    agentScope: _agentScope,
+    mutationTracker: _mutationTracker,
+    toolVisibilityPolicy: _toolVisibilityPolicy,
+    planModeBlockCheck: _planModeBlockCheck,
+    inheritedChildTaskRegistry: _inheritedChildTaskRegistry,
+    goalRuntime: _goalRuntime,
+    lspService: _lspService,
+    ...wireContext
+  } = context ?? {};
+  const candidate: RuntimeKodaXOptions = {
+    ...wireOptions,
+    ...(Object.keys(wireSession).length > 0 ? { session: wireSession } : {}),
+    ...(Object.keys(wireContext).length > 0 ? { context: wireContext } : {}),
+    ...(events?.workflowCorrelation !== undefined
+      ? { events: { workflowCorrelation: events.workflowCorrelation } }
+      : {}),
+    ...(skillDynamicContext?.disable !== undefined
+      ? { skillDynamicContext: { disable: skillDynamicContext.disable } }
+      : {}),
+  };
+  try {
+    const encoded = JSON.stringify(candidate);
+    const cloned: unknown = JSON.parse(encoded);
+    if (!isRecord(cloned)) throw new Error('expected an object');
+    return cloned as RuntimeKodaXOptions;
+  } catch (error: unknown) {
+    throw new Error(`Interactive daemon options are not JSON serializable: ${normalizeCliError(error).message}`);
+  }
+}
+
+function createDaemonReplEventBridge(
+  runtime: KodaXRuntime,
+  input: InteractiveRuntimeRunnerInput,
+): DaemonReplEventBridge {
+  const buffered: RuntimeEvent[] = [];
+  const toolInputs = new Map<string, Record<string, unknown>>();
+  let activeRunId: string | undefined;
+  let eventChain = Promise.resolve();
+  const enqueue = (event: RuntimeEvent): void => {
+    eventChain = eventChain
+      .then(() => forwardDaemonReplEvent(runtime, input.options.events, event, toolInputs))
+      .catch((error: unknown) => {
+        try {
+          input.options.events?.onError?.(normalizeCliError(error));
+        } catch {
+          // A UI observer cannot be allowed to break the daemon permission bridge.
+        }
+      });
+  };
+  const subscription = runtime.events.subscribe({ sessionId: input.sessionId }, (event) => {
+    if (activeRunId === undefined) {
+      buffered.push(event);
+    } else if (event.runId === activeRunId) {
+      enqueue(event);
+    }
+  });
+  return {
+    setRunId(runId) {
+      activeRunId = runId;
+      for (const event of buffered.splice(0)) {
+        if (event.runId === runId) enqueue(event);
+      }
+    },
+    async close() {
+      subscription.close();
+      await eventChain;
+    },
+  };
+}
+
+async function forwardDaemonReplEvent(
+  runtime: KodaXRuntime,
+  events: KodaXOptions['events'],
+  event: RuntimeEvent,
+  toolInputs: Map<string, Record<string, unknown>>,
+): Promise<void> {
+  const payload = isRecord(event.payload) ? event.payload : {};
+  if (event.type === 'permission.requested') {
+    await respondToDaemonPermission(runtime, events, event, payload, toolInputs);
+    return;
+  }
+  if (forwardDaemonStreamEvent(events, event, payload, toolInputs)) return;
+  if (forwardDaemonLifecycleEvent(events, event, payload)) return;
+  forwardDaemonDiagnosticEvent(events, event, payload);
+}
+
+function forwardDaemonStreamEvent(
+  events: KodaXOptions['events'],
+  event: RuntimeEvent,
+  payload: Record<string, unknown>,
+  toolInputs: Map<string, Record<string, unknown>>,
+): boolean {
+  const meta = payload.meta as Parameters<NonNullable<KodaXEvents['onTextDelta']>>[1];
+  if (event.type === 'assistant.delta' && typeof payload.text === 'string') {
+    events?.onTextDelta?.(payload.text, meta);
+  } else if (event.type === 'thinking.delta' && typeof payload.text === 'string') {
+    events?.onThinkingDelta?.(payload.text, meta);
+  } else if (event.type === 'thinking.finished' && typeof payload.thinking === 'string') {
+    events?.onThinkingEnd?.(payload.thinking, meta);
+  } else if (event.type === 'tool.started' && isRecord(payload.tool)) {
+    const tool = payload.tool as Parameters<NonNullable<KodaXEvents['onToolUseStart']>>[0];
+    if (typeof tool.id === 'string' && isRecord(tool.input)) toolInputs.set(tool.id, tool.input);
+    events?.onToolUseStart?.(tool, payload.meta as Parameters<NonNullable<KodaXEvents['onToolUseStart']>>[1]);
+  } else if (event.type === 'tool.progress') {
+    forwardDaemonToolProgress(events, payload);
+  } else if (event.type === 'tool.finished' && isRecord(payload.result)) {
+    const result = payload.result as Parameters<NonNullable<KodaXEvents['onToolResult']>>[0];
+    if (typeof result.id === 'string') toolInputs.delete(result.id);
+    events?.onToolResult?.(result, payload.meta as Parameters<NonNullable<KodaXEvents['onToolResult']>>[1]);
+  } else {
+    return false;
+  }
+  return true;
+}
+
+function forwardDaemonToolProgress(
+  events: KodaXOptions['events'],
+  payload: Record<string, unknown>,
+): void {
+  if (isRecord(payload.update)) {
+    events?.onToolProgress?.(
+      payload.update as Parameters<NonNullable<KodaXEvents['onToolProgress']>>[0],
+      payload.meta as Parameters<NonNullable<KodaXEvents['onToolProgress']>>[1],
+    );
+  } else if (typeof payload.toolName === 'string' && typeof payload.partialJson === 'string') {
+    events?.onToolInputDelta?.(
+      payload.toolName,
+      payload.partialJson,
+      payload.meta as Parameters<NonNullable<KodaXEvents['onToolInputDelta']>>[2],
+    );
+  }
+}
+
+function forwardDaemonLifecycleEvent(
+  events: KodaXOptions['events'],
+  event: RuntimeEvent,
+  payload: Record<string, unknown>,
+): boolean {
+  if (event.type === 'session.loaded') {
+    events?.onSessionStart?.(event.payload as Parameters<NonNullable<KodaXEvents['onSessionStart']>>[0]);
+  } else if (event.type === 'turn.started') {
+    events?.onTurnStarted?.(event.payload as Parameters<NonNullable<KodaXEvents['onTurnStarted']>>[0]);
+  } else if (event.type === 'turn.completed') {
+    events?.onTurnCompleted?.(event.payload as Parameters<NonNullable<KodaXEvents['onTurnCompleted']>>[0]);
+  } else if (event.type === 'turn.failed') {
+    events?.onTurnFailed?.(event.payload as Parameters<NonNullable<KodaXEvents['onTurnFailed']>>[0]);
+  } else if (event.type === 'run.progress') {
+    forwardDaemonRunProgress(events, payload);
+  } else if (event.type.startsWith('context.compaction.')) {
+    forwardDaemonCompactionEvent(events, event, payload);
+  } else if (event.type === 'child_activity.finished') {
+    events?.onChildActivityEnd?.(
+      payload.meta as Parameters<NonNullable<KodaXEvents['onChildActivityEnd']>>[0],
+    );
+  } else {
+    return false;
+  }
+  return true;
+}
+
+function forwardDaemonRunProgress(
+  events: KodaXOptions['events'],
+  payload: Record<string, unknown>,
+): void {
+  if (payload.kind === 'stream_end') {
+    events?.onStreamEnd?.(payload.meta as Parameters<NonNullable<KodaXEvents['onStreamEnd']>>[0]);
+  } else if (payload.kind === 'iteration_start' && typeof payload.iter === 'number' && typeof payload.maxIter === 'number') {
+    events?.onIterationStart?.(
+      payload.iter,
+      payload.maxIter,
+      payload.meta as Parameters<NonNullable<KodaXEvents['onIterationStart']>>[2],
+    );
+  } else if (payload.kind === 'iteration_end' && isRecord(payload.info)) {
+    events?.onIterationEnd?.(payload.info as Parameters<NonNullable<KodaXEvents['onIterationEnd']>>[0]);
+  } else if (payload.kind === 'mid_turn_user_messages' && Array.isArray(payload.contents)) {
+    events?.onMidTurnUserMessages?.(
+      payload.contents.filter((item): item is string => typeof item === 'string'),
+      payload.meta as Parameters<NonNullable<KodaXEvents['onMidTurnUserMessages']>>[1],
+    );
+  } else if (payload.kind === 'managed_task_status' && isRecord(payload.status)) {
+    events?.onManagedTaskStatus?.(
+      payload.status as unknown as Parameters<NonNullable<KodaXEvents['onManagedTaskStatus']>>[0],
+    );
+  } else if (payload.kind === 'complete') {
+    events?.onComplete?.(payload.meta as Parameters<NonNullable<KodaXEvents['onComplete']>>[0]);
+  }
+}
+
+function forwardDaemonCompactionEvent(
+  events: KodaXOptions['events'],
+  event: RuntimeEvent,
+  payload: Record<string, unknown>,
+): void {
+  const meta = payload.meta as Parameters<NonNullable<KodaXEvents['onCompactStart']>>[0];
+  if (event.type === 'context.compaction.started') {
+    events?.onCompactStart?.(meta);
+  } else if (event.type === 'context.compaction.finished' && typeof payload.estimatedTokens === 'number') {
+    events?.onCompact?.(payload.estimatedTokens, meta);
+  } else if (event.type === 'context.compaction.stats') {
+    events?.onCompactStats?.(event.payload as Parameters<NonNullable<KodaXEvents['onCompactStats']>>[0]);
+  } else if (event.type === 'context.compaction.ended') {
+    events?.onCompactEnd?.(meta);
+  } else if (event.type === 'context.compaction.skipped') {
+    events?.onContextCompactionSkipped?.(
+      event.payload as Parameters<NonNullable<KodaXEvents['onContextCompactionSkipped']>>[0],
+    );
+  }
+}
+
+function forwardDaemonDiagnosticEvent(
+  events: KodaXOptions['events'],
+  event: RuntimeEvent,
+  payload: Record<string, unknown>,
+): void {
+  if (event.type === 'provider.retry') {
+    forwardDaemonRetryEvent(events, payload);
+  } else if (event.type === 'provider.recovery') {
+    forwardDaemonRecoveryEvent(events, payload);
+  } else if (event.type === 'repo_intelligence.trace') {
+    events?.onRepoIntelligenceTrace?.(
+      event.payload as Parameters<NonNullable<KodaXEvents['onRepoIntelligenceTrace']>>[0],
+    );
+  } else if (event.type === 'context.budget.snapshot') {
+    events?.onContextBudgetSnapshot?.(
+      event.payload as Parameters<NonNullable<KodaXEvents['onContextBudgetSnapshot']>>[0],
+    );
+  } else if (event.type === 'tool.exposure.planned') {
+    events?.onToolExposurePlanned?.(
+      event.payload as Parameters<NonNullable<KodaXEvents['onToolExposurePlanned']>>[0],
+    );
+  } else if (event.type === 'sidecar.message') {
+    events?.onSidecarMessage?.(event.payload as Parameters<NonNullable<KodaXEvents['onSidecarMessage']>>[0]);
+  } else if (event.type === 'todo.updated' && Array.isArray(payload.items)) {
+    events?.onTodoUpdate?.(
+      payload.items as Parameters<NonNullable<KodaXEvents['onTodoUpdate']>>[0],
+      payload.meta as Parameters<NonNullable<KodaXEvents['onTodoUpdate']>>[1],
+    );
+  } else if (event.type === 'todo.warning') {
+    events?.onTodoDriftWarning?.(event.payload as Parameters<NonNullable<KodaXEvents['onTodoDriftWarning']>>[0]);
+  } else if (event.type === 'config.effective') {
+    events?.onEffectiveConfig?.(event.payload as Parameters<NonNullable<KodaXEvents['onEffectiveConfig']>>[0]);
+  } else if (event.type.startsWith('workflow.')) {
+    events?.onWorkflowProcessEvent?.(
+      event.payload as Parameters<NonNullable<KodaXEvents['onWorkflowProcessEvent']>>[0],
+    );
+  } else if (event.type === 'runtime.warning' && typeof payload.message === 'string') {
+    events?.onError?.(new Error(payload.message));
+  }
+}
+
+function forwardDaemonRetryEvent(
+  events: KodaXOptions['events'],
+  payload: Record<string, unknown>,
+): void {
+  if (isRecord(payload.retryAfter)) {
+    events?.onRetryAfter?.(
+      payload.retryAfter as Parameters<NonNullable<KodaXEvents['onRetryAfter']>>[0],
+      payload.meta as Parameters<NonNullable<KodaXEvents['onRetryAfter']>>[1],
+    );
+  } else if (
+    payload.reason === 'rate_limit'
+    && typeof payload.attempt === 'number'
+    && typeof payload.maxAttempts === 'number'
+    && typeof payload.delayMs === 'number'
+  ) {
+    events?.onProviderRateLimit?.(payload.attempt, payload.maxAttempts, payload.delayMs);
+  } else if (
+    typeof payload.reason === 'string'
+    && typeof payload.attempt === 'number'
+    && typeof payload.maxAttempts === 'number'
+  ) {
+    events?.onRetry?.(payload.reason, payload.attempt, payload.maxAttempts);
+  }
+}
+
+function forwardDaemonRecoveryEvent(
+  events: KodaXOptions['events'],
+  payload: Record<string, unknown>,
+): void {
+  if (payload.kind === 'reasoning_effort_rejected' && isRecord(payload.event)) {
+    events?.onReasoningEffortRejected?.(
+      payload.event as Parameters<NonNullable<KodaXEvents['onReasoningEffortRejected']>>[0],
+    );
+  } else if (isRecord(payload.event)) {
+    events?.onProviderRecovery?.(
+      payload.event as unknown as Parameters<NonNullable<KodaXEvents['onProviderRecovery']>>[0],
+      payload.meta as Parameters<NonNullable<KodaXEvents['onProviderRecovery']>>[1],
+    );
+  }
+}
+
+async function respondToDaemonPermission(
+  runtime: KodaXRuntime,
+  events: KodaXOptions['events'],
+  event: RuntimeEvent,
+  payload: Record<string, unknown>,
+  toolInputs: ReadonlyMap<string, Record<string, unknown>>,
+): Promise<void> {
+  if (typeof payload.id !== 'string' || typeof payload.toolName !== 'string') return;
+  const toolCallId = typeof payload.toolCallId === 'string' ? payload.toolCallId : undefined;
+  const input = toolCallId !== undefined
+    ? toolInputs.get(toolCallId) ?? parsePermissionInput(payload.inputPreview)
+    : parsePermissionInput(payload.inputPreview);
+  let decision: RuntimePermissionDecision;
+  try {
+    const hookDecision = events?.beforeToolExecute
+      ? await events.beforeToolExecute(payload.toolName, input, {
+          sessionId: event.sessionId,
+          ...(event.turnId !== undefined ? { turnId: event.turnId } : {}),
+          ...(toolCallId !== undefined ? { toolId: toolCallId } : {}),
+        })
+      : false;
+    decision = hookDecision === true
+      ? { type: 'allow_once' }
+      : {
+          type: 'reject',
+          reason: hookDecision === false
+            ? 'Interactive permission handler unavailable or rejected the tool.'
+            : hookDecision,
+        };
+  } catch (error: unknown) {
+    decision = { type: 'reject', reason: normalizeCliError(error).message };
+  }
+  await runtime.permissions.respond(payload.id, decision, { runId: event.runId });
+}
+
+function parsePermissionInput(value: unknown): Record<string, unknown> {
+  if (typeof value !== 'string' || value.length === 0) return {};
+  try {
+    const parsed: unknown = JSON.parse(value);
+    return isRecord(parsed) ? parsed : { _inputPreview: value };
+  } catch {
+    return { _inputPreview: value };
+  }
 }
 
 function isActiveDaemonRunStatus(value: unknown): boolean {
@@ -2412,51 +2858,7 @@ complete -c kodax -l version -d 'Show version'`);
         ...(kodaXOptions.provider !== undefined ? { defaultProvider: kodaXOptions.provider } : {}),
         ...(kodaXOptions.model !== undefined ? { defaultModel: kodaXOptions.model } : {}),
       });
-      const runtimeRunner = async (input: {
-        readonly options: KodaXOptions;
-        readonly prompt: string;
-        readonly sessionId: string;
-      }): Promise<Awaited<ReturnType<typeof runManagedTask>>> => {
-        try {
-          await interactiveRuntime.sessions.load(input.sessionId);
-        } catch (error: unknown) {
-          if (!(error instanceof Error) || !error.message.startsWith('Session not found:')) {
-            throw error;
-          }
-          await interactiveRuntime.sessions.create({
-            sessionId: input.sessionId,
-            title: 'REPL Session',
-            projectPath: process.cwd(),
-            gitRoot: await getGitRoot() ?? process.cwd(),
-            surface: 'repl',
-          });
-        }
-        const handle = await interactiveRuntime.runs.start({
-          sessionId: input.sessionId,
-          prompt: input.prompt,
-          mode: 'managed_task',
-          options: input.options,
-        });
-        const result = await handle.result;
-        if (result.error) {
-          throw result.error;
-        }
-        if (!result.result) {
-          if (result.phase === 'cancelled' || result.phase === 'interrupted') {
-            return {
-              success: false,
-              lastText: '',
-              messages: [],
-              sessionId: input.sessionId,
-              interrupted: true,
-              signal: 'BLOCKED',
-              signalReason: 'Runtime run cancelled.',
-            };
-          }
-          throw new Error(`Runtime run ${handle.runId} ended without a result.`);
-        }
-        return result.result;
-      };
+      const runtimeRunner = createInteractiveRuntimeRunner(interactiveRuntime);
 
       const interactiveOptions = {
         provider: kodaXOptions.provider,

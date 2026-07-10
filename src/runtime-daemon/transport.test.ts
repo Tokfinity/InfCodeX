@@ -21,6 +21,7 @@ import {
   createRuntimeDaemonSocketServer,
   createRuntimeDaemonSocketClientTransport,
   defaultRuntimeDaemonEndpoint,
+  isRuntimeDaemonTransportError,
   type RuntimeDaemonEndpoint,
 } from './transport.js';
 
@@ -65,6 +66,41 @@ describe('runtime daemon transport', () => {
     expect(frames).toHaveLength(2);
     expect(frames[0]).toMatchObject({ kind: 'request', id: 'req-1', method: 'ping' });
     expect(frames[1]).toMatchObject({ kind: 'notification', method: 'runtime.warning' });
+  });
+
+  it('preserves UTF-8 characters split across Buffer chunks', () => {
+    const frames: RuntimeDaemonFrame[] = [];
+    const parser = createRuntimeDaemonFrameParser((frame) => frames.push(frame));
+    const encoded = Buffer.from(JSON.stringify(createRuntimeDaemonRequest('req-utf8', 'session.create', {
+      title: '中文会话',
+    })) + '\n', 'utf8');
+    const splitAt = encoded.indexOf(Buffer.from('中', 'utf8')) + 1;
+
+    parser.push(encoded.subarray(0, splitAt));
+    parser.push(encoded.subarray(splitAt));
+
+    expect(frames[0]).toMatchObject({
+      kind: 'request',
+      params: { title: '中文会话' },
+    });
+  });
+
+  it('rejects frames whose UTF-8 payload exceeds the configured bound', () => {
+    const parser = createRuntimeDaemonFrameParser(() => undefined, {
+      maxFrameBytes: 32,
+    });
+
+    expect(() => parser.push('中'.repeat(11))).toThrow(
+      'Runtime daemon frame exceeds the 32-byte limit.',
+    );
+    try {
+      parser.push('x');
+    } catch (error: unknown) {
+      expect(isRuntimeDaemonTransportError(error)).toBe(true);
+      if (isRuntimeDaemonTransportError(error)) {
+        expect(error).toMatchObject({ code: 'invalid_frame' });
+      }
+    }
   });
 
   it('sends requests, resolves responses, and fans out notifications', async () => {
@@ -171,6 +207,77 @@ describe('runtime daemon transport', () => {
     expect(secondNotifications).toEqual([]);
   });
 
+  it('returns invalid_frame and disconnects oversized socket clients', async () => {
+    const endpoint = await makeTestEndpoint();
+    const server = await createRuntimeDaemonSocketServer({
+      endpoint,
+      maxFrameBytes: 64,
+      createDispatcher: () => ({
+        async handle(request) {
+          return createRuntimeDaemonSuccessResponse(request.id, { ok: true });
+        },
+        close() {},
+      }),
+    });
+    cleanupTasks.push(() => server.close());
+    const socket = await connectSocket(endpoint);
+    const response = collectSocketText(socket);
+
+    socket.write('x'.repeat(65));
+
+    await expect(response).resolves.toContain('invalid_frame');
+    expect(socket.destroyed).toBe(true);
+  });
+
+  it('rejects pending requests when a daemon sends an oversized frame', async () => {
+    const endpoint = await makeTestEndpoint();
+    const server = await listen(endpoint, (socket) => {
+      socket.once('data', () => {
+        socket.write('x'.repeat(65));
+      });
+    });
+    cleanupTasks.push(() => closeServer(server));
+    const transport = await createRuntimeDaemonSocketClientTransport(endpoint, {
+      maxFrameBytes: 64,
+    });
+    cleanupTasks.push(async () => {
+      await transport.close?.();
+    });
+
+    await expect(transport.request('ping')).rejects.toMatchObject({
+      code: 'invalid_frame',
+    });
+  });
+
+  it('fails non-serializable request and response payloads without leaking requests', async () => {
+    const endpoint = await makeTestEndpoint();
+    const cyclicResult: Record<string, unknown> = {};
+    cyclicResult.self = cyclicResult;
+    const server = await createRuntimeDaemonSocketServer({
+      endpoint,
+      createDispatcher: () => ({
+        async handle(request) {
+          return createRuntimeDaemonSuccessResponse(request.id, cyclicResult);
+        },
+        close() {},
+      }),
+    });
+    cleanupTasks.push(() => server.close());
+    const transport = await createRuntimeDaemonSocketClientTransport(endpoint);
+    cleanupTasks.push(async () => {
+      await transport.close?.();
+    });
+    const cyclicParams: Record<string, unknown> = {};
+    cyclicParams.self = cyclicParams;
+
+    await expect(transport.request('ping', cyclicParams)).rejects.toMatchObject({
+      code: 'invalid_params',
+    });
+    await expect(transport.request('ping')).rejects.toMatchObject({
+      code: 'internal_error',
+    });
+  });
+
   it('refuses to overwrite a non-socket Unix endpoint path', async () => {
     const directory = await fs.mkdtemp(path.join(os.tmpdir(), 'kodax-runtime-endpoint-'));
     cleanupTasks.push(() => fs.rm(directory, { recursive: true, force: true }));
@@ -230,6 +337,26 @@ function listen(
     server.once('error', onError);
     server.once('listening', onListening);
     server.listen(endpoint.path);
+  });
+}
+
+function connectSocket(endpoint: RuntimeDaemonEndpoint): Promise<net.Socket> {
+  const socket = net.createConnection(endpoint.path);
+  return new Promise((resolve, reject) => {
+    socket.once('connect', () => resolve(socket));
+    socket.once('error', reject);
+  });
+}
+
+function collectSocketText(socket: net.Socket): Promise<string> {
+  socket.setEncoding('utf8');
+  return new Promise((resolve, reject) => {
+    let text = '';
+    socket.on('data', (chunk) => {
+      text += chunk;
+    });
+    socket.once('close', () => resolve(text));
+    socket.once('error', reject);
   });
 }
 

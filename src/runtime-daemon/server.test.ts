@@ -46,6 +46,37 @@ describe('runtime daemon dispatcher', () => {
     }
   });
 
+  it('validates method params and dispatcher results against the protocol schema', async () => {
+    const dispatcher = createRuntimeDaemonDispatcher({
+      runtime: makeRuntime(),
+      providerList: () => ({ invalid: 'provider-list-result' }),
+    });
+    await initializeDispatcher(dispatcher);
+
+    const invalidParams = await dispatcher.handle(createRuntimeDaemonRequest(
+      'req-invalid-params',
+      'session.load',
+      { sessionId: 42 },
+    ));
+    const invalidResult = await dispatcher.handle(createRuntimeDaemonRequest(
+      'req-invalid-result',
+      'provider.list',
+    ));
+
+    expect(isRuntimeDaemonSuccessResponse(invalidParams)).toBe(false);
+    expect(isRuntimeDaemonSuccessResponse(invalidResult)).toBe(false);
+    if (!isRuntimeDaemonSuccessResponse(invalidParams)) {
+      expect(invalidParams.error).toMatchObject({ code: 'invalid_params' });
+      expect(invalidParams.error.data).toMatchObject({
+        issues: expect.arrayContaining(['params.sessionId must be string.']),
+      });
+    }
+    if (!isRuntimeDaemonSuccessResponse(invalidResult)) {
+      expect(invalidResult.error).toMatchObject({ code: 'internal_error' });
+      expect(invalidResult.error.message).toContain('invalid result');
+    }
+  });
+
   it('requires the configured daemon token during initialize', async () => {
     const dispatcher = createRuntimeDaemonDispatcher({
       runtime: makeRuntime(),
@@ -229,6 +260,41 @@ describe('runtime daemon dispatcher', () => {
     }
   });
 
+  it('serializes retained run errors into a stable JSON wire shape', async () => {
+    const runResults = createRuntimeDaemonRunResultStore();
+    runResults.remember('run-failed', Promise.resolve({
+      runId: 'run-failed',
+      sessionId: 'session-1',
+      phase: 'failed',
+      error: new TypeError('provider unavailable'),
+    }));
+    const dispatcher = createRuntimeDaemonDispatcher({
+      runtime: makeRuntime(),
+      runResults,
+    });
+    await initializeDispatcher(dispatcher);
+
+    const awaited = await dispatcher.handle(createRuntimeDaemonRequest(
+      'req-failed',
+      'run.await',
+      { runId: 'run-failed' },
+    ));
+
+    expect(isRuntimeDaemonSuccessResponse(awaited)).toBe(true);
+    if (isRuntimeDaemonSuccessResponse(awaited)) {
+      const wireResponse = JSON.parse(JSON.stringify(awaited)) as unknown;
+      expect(wireResponse).toMatchObject({
+        result: {
+          phase: 'failed',
+          error: {
+            name: 'TypeError',
+            message: 'provider unavailable',
+          },
+        },
+      });
+    }
+  });
+
   it('forwards runtime event subscriptions as daemon notifications', async () => {
     const runtime = makeRuntime();
     const notifications: RuntimeDaemonNotification[] = [];
@@ -257,6 +323,44 @@ describe('runtime daemon dispatcher', () => {
     expect(notifications).toHaveLength(1);
     expect(notifications[0]?.method).toBe('event');
     expect(notifications[0]?.params).toMatchObject({ event });
+  });
+
+  it('assigns a subscription id before synchronous runtime notifications', async () => {
+    const runtime = makeRuntime();
+    const event: RuntimeEvent = {
+      id: 'evt-sync',
+      seq: 1,
+      time: '2026-07-09T00:00:00.000Z',
+      sessionId: 'session-1',
+      runId: 'run-1',
+      type: 'run.started',
+      payload: {},
+    };
+    runtime.events.subscribe = (_filter, listener) => {
+      listener(event);
+      return { close() {} };
+    };
+    const notifications: RuntimeDaemonNotification[] = [];
+    const dispatcher = createRuntimeDaemonDispatcher({
+      runtime,
+      notify: (notification) => notifications.push(notification),
+    });
+    await initializeDispatcher(dispatcher);
+
+    const subscribed = await dispatcher.handle(createRuntimeDaemonRequest(
+      'req-sub-sync',
+      'event.subscribe',
+      { filter: {} },
+    ));
+
+    expect(isRuntimeDaemonSuccessResponse(subscribed)).toBe(true);
+    if (isRuntimeDaemonSuccessResponse(subscribed)) {
+      expect(notifications).toHaveLength(1);
+      expect(notifications[0]?.params).toMatchObject({
+        subscriptionId: (subscribed.result as { subscriptionId: string }).subscriptionId,
+        event,
+      });
+    }
   });
 
   it('returns latest context diagnostic payloads from runtime event replay', async () => {
@@ -601,8 +705,8 @@ const METHOD_SMOKE_PARAMS = {
   'session.list': { limit: 5 },
   'session.transcript': { sessionId: 'session-1' },
   'session.fork': { sessionId: 'session-1' },
-  'session.notice.append': { sessionId: 'session-1', notice: 'smoke' },
-  'session.rewind': { sessionId: 'session-1', entryId: 'entry-1' },
+  'session.notice.append': { sessionId: 'session-1', content: 'smoke' },
+  'session.rewind': { sessionId: 'session-1', selector: 'entry-1' },
   'session.active_entry.set': { sessionId: 'session-1', entryId: 'entry-1' },
   'session.activeEntry.set': { sessionId: 'session-1', entryId: 'entry-1' },
   'session.compact': { sessionId: 'session-1' },
@@ -627,11 +731,11 @@ const METHOD_SMOKE_PARAMS = {
   'event.replay': { sessionId: 'session-1', limit: 5 },
   'permission.list': { runId: 'run-1' },
   'permission.listPending': { runId: 'run-1' },
-  'permission.request': { runId: 'run-1', toolName: 'read', input: {} },
+  'permission.request': { sessionId: 'session-1', runId: 'run-1', toolName: 'read' },
   'permission.respond': { requestId: 'perm-1', runId: 'run-1', decision: { type: 'allow_once' } },
-  'workflow.list': { sessionId: 'session-1' },
+  'workflow.list': { runId: 'run-1' },
   'workflow.get': { runId: 'run-1' },
-  'workflow.subscribe': { filter: { sessionId: 'session-1' } },
+  'workflow.subscribe': { filter: { runId: 'run-1' } },
   'workflow.unsubscribe': { subscriptionId: 'workflow-sub-missing' },
   'workflow.pause': { runId: 'run-1' },
   'workflow.resume': { runId: 'run-1' },
@@ -967,6 +1071,7 @@ function makeRuntime(): KodaXRuntime & { emit(event: RuntimeEvent): void } {
           id: 'art-1',
           kind: input.kind,
           path: input.path,
+          sizeBytes: 0,
           createdAt: '2026-07-09T00:00:00.000Z',
         };
       },
@@ -976,6 +1081,7 @@ function makeRuntime(): KodaXRuntime & { emit(event: RuntimeEvent): void } {
               id: 'art-1',
               kind: 'file',
               path: '/tmp/file.txt',
+              sizeBytes: 0,
               createdAt: '2026-07-09T00:00:00.000Z',
             }
           : undefined;

@@ -74,7 +74,11 @@ vi.mock('@kodax-ai/coding', () => ({
 
 vi.mock('@kodax-ai/repl', () => ({
   KODAX_CONFIG_FILE: 'C:/Users/test/.kodax/config.json',
-  FileSessionStorage: class FileSessionStorage {},
+  FileSessionStorage: class FileSessionStorage {
+    getSessionsDir(): string {
+      return path.join(os.homedir(), '.kodax', 'sessions');
+    }
+  },
   collectBashWriteTargets: vi.fn(() => []),
   computeConfirmTools: vi.fn(() => []),
   generateSavePattern: vi.fn(() => ''),

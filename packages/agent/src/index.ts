@@ -386,6 +386,7 @@ export {
 export {
   registerManagedChildProcess,
   cleanupRegisteredManagedChildren,
+  type ManagedChildRegistrationOptions,
   type ManagedChildProcessMetadata,
   type ManagedChildCleanupSummary,
 } from './runtime/managed-child-processes.js';

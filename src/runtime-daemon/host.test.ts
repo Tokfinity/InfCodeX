@@ -670,6 +670,7 @@ function makeRuntime(): KodaXRuntime & { closed: boolean } {
           id: 'art-1',
           kind: input.kind,
           path: input.path,
+          sizeBytes: 0,
           createdAt: '2026-07-09T00:00:00.000Z',
         };
       },

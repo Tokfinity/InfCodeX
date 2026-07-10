@@ -184,6 +184,13 @@ describe('v0.7.46 SDK-consumer footgun regression', () => {
       expect(storage).toBeInstanceOf(FileSessionStorage);
     });
 
+    it('exposes the resolved session root for host/runtime composition', () => {
+      const relativeRoot = path.relative(process.cwd(), sessionsDir);
+      const storage = new FileSessionStorage({ sessionsDir: relativeRoot });
+
+      expect(storage.getSessionsDir()).toBe(path.resolve(relativeRoot));
+    });
+
     it('hostCwd present → load() does NOT write to stderr on mismatch (embedder noise suppression)', async () => {
       // Even when the session's gitRoot differs from cwd's git root,
       // the SDK consumer is authoritative and the warning is noise.

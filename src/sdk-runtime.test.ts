@@ -256,7 +256,7 @@ describe('createKodaXRuntime', () => {
   });
 
   it('auto-starts a local daemon host by default for daemon-mode SDK clients', async () => {
-    const { createKodaXRuntime } = await import('@kodax-ai/kodax/runtime');
+    const { connectKodaXRuntime, createKodaXRuntime } = await import('@kodax-ai/kodax/runtime');
     const {
       readRuntimeDaemonLockOwner,
       readRuntimeDaemonState,
@@ -271,28 +271,47 @@ describe('createKodaXRuntime', () => {
       defaultProvider: 'mock-provider',
     });
 
-    const session = await runtime.sessions.create({
-      title: 'Auto Daemon Session',
-      projectPath: tempRoot,
-      surface: 'sdk-test',
-    });
     const paths = resolveRuntimeDaemonPaths(tempRoot, 'sdk-auto');
+    let peer: Awaited<ReturnType<typeof connectKodaXRuntime>> | undefined;
+    try {
+      const session = await runtime.sessions.create({
+        title: 'Auto Daemon Session',
+        projectPath: tempRoot,
+        surface: 'sdk-test',
+      });
 
-    expect(runtime.identity).toMatchObject({
-      mode: 'daemon',
-      profile: 'sdk-auto',
-    });
-    expect(session.title).toBe('Auto Daemon Session');
-    expect(readRuntimeDaemonState(paths)).toMatchObject({
-      runtimeId: runtime.identity.runtimeId,
-      profile: 'sdk-auto',
-      status: 'ready',
-    });
-    expect(readRuntimeDaemonLockOwner(paths.lockFile)).toMatchObject({
-      runtimeId: runtime.identity.runtimeId,
-    });
+      expect(runtime.identity).toMatchObject({
+        mode: 'daemon',
+        profile: 'sdk-auto',
+      });
+      expect(session.title).toBe('Auto Daemon Session');
+      expect(readRuntimeDaemonState(paths)).toMatchObject({
+        runtimeId: runtime.identity.runtimeId,
+        profile: 'sdk-auto',
+        status: 'ready',
+      });
+      expect(readRuntimeDaemonLockOwner(paths.lockFile)).toMatchObject({
+        runtimeId: runtime.identity.runtimeId,
+      });
 
-    await runtime.close();
+      peer = await connectKodaXRuntime({
+        homeDir: tempRoot,
+        profile: 'sdk-auto',
+      });
+      await runtime.close();
+
+      expect(readRuntimeDaemonState(paths)).toMatchObject({
+        runtimeId: peer.identity.runtimeId,
+        status: 'ready',
+      });
+      await expect(peer.status.snapshot()).resolves.toMatchObject({
+        runtimeId: runtime.identity.runtimeId,
+      });
+    } finally {
+      await peer?.close();
+      await runtime.close();
+      await shutdownRuntimeDaemon(tempRoot, 'sdk-auto');
+    }
 
     expect(readRuntimeDaemonState(paths)).toBeUndefined();
     expect(readRuntimeDaemonLockOwner(paths.lockFile)).toBeUndefined();
@@ -316,10 +335,11 @@ describe('createKodaXRuntime', () => {
       await embedded.close();
     }
 
+    const daemonProfile = `home-sessions-${randomUUID()}`;
     const daemon = await createKodaXRuntime({
       mode: 'daemon',
       homeDir: daemonHome,
-      profile: `home-sessions-${randomUUID()}`,
+      profile: daemonProfile,
       defaultProvider: 'mock-provider',
     });
     try {
@@ -332,6 +352,7 @@ describe('createKodaXRuntime', () => {
       expect((await fs.stat(path.join(daemonHome, '.kodax', 'sessions'))).isDirectory()).toBe(true);
     } finally {
       await daemon.close();
+      await shutdownRuntimeDaemon(daemonHome, daemonProfile);
     }
   });
 
@@ -371,6 +392,7 @@ describe('createKodaXRuntime', () => {
         surface: 'space-desktop',
         profileId: 'space',
       });
+      await fs.writeFile(path.join(tempRoot, 'space-note.md'), '# shared note\n', 'utf-8');
       const visibleSessions = await ide.sessions.list({ limit: 20 });
       const updated = await ide.sessions.updateSettings(session.id, {
         provider: 'mock-provider',
@@ -558,6 +580,26 @@ describe('createKodaXRuntime', () => {
     expect(forked?.title).toBe('Runtime Fork');
     expect(seen.filter((type) => type === 'session.created')).toHaveLength(2);
 
+    await runtime.close();
+  });
+
+  it('isolates event listener failures from runtime operations and other subscribers', async () => {
+    const { createKodaXRuntime } = await import('@kodax-ai/kodax/runtime');
+    const runtime = await createKodaXRuntime({ homeDir: tempRoot });
+    const received: string[] = [];
+    runtime.events.subscribe({}, () => {
+      throw new Error('consumer boom');
+    });
+    runtime.events.subscribe({}, (event) => {
+      received.push(event.type);
+    });
+
+    const session = await runtime.sessions.create({ title: 'Listener Isolation' });
+
+    expect(session.title).toBe('Listener Isolation');
+    expect(received).toEqual(['session.created']);
+    await expect(runtime.events.replay({ sessionId: session.id }))
+      .resolves.toEqual([expect.objectContaining({ type: 'session.created' })]);
     await runtime.close();
   });
 
@@ -849,6 +891,11 @@ describe('createKodaXRuntime', () => {
       },
     ]);
 
+    await fs.writeFile(
+      path.join(tempRoot, 'from-artifact-ref.txt'),
+      'artifact contents',
+      'utf-8',
+    );
     const artifact = await runtime.artifacts.create({
       kind: 'file',
       path: path.join(tempRoot, 'from-artifact-ref.txt'),
@@ -856,6 +903,7 @@ describe('createKodaXRuntime', () => {
       name: 'from-artifact-ref.txt',
       description: 'created through runtime artifact service',
     });
+    expect(artifact.sizeBytes).toBe(Buffer.byteLength('artifact contents'));
     const refHandle = await runtime.runs.start({
       sessionId: session.id,
       input: [
@@ -890,6 +938,27 @@ describe('createKodaXRuntime', () => {
       path: path.join(tempRoot, 'clip.mp3'),
     } as unknown as Parameters<typeof runtime.artifacts.create>[0]))
       .rejects.toThrow('Unsupported runtime artifact kind: audio');
+
+    await expect(runtime.artifacts.create({
+      kind: 'file',
+      path: path.join(tempRoot, 'missing.txt'),
+    })).rejects.toThrow('Runtime artifact path is not readable');
+    await expect(runtime.artifacts.create({
+      kind: 'file',
+      path: tempRoot,
+    })).rejects.toThrow('Runtime artifact path must be a regular file');
+
+    const oversizedPath = path.join(tempRoot, 'oversized.bin');
+    const oversized = await fs.open(oversizedPath, 'w');
+    try {
+      await oversized.truncate(256 * 1024 * 1024 + 1);
+    } finally {
+      await oversized.close();
+    }
+    await expect(runtime.artifacts.create({
+      kind: 'file',
+      path: oversizedPath,
+    })).rejects.toThrow('Runtime artifact exceeds the 268435456-byte limit');
 
     await expect(runtime.runs.start({
       sessionId: session.id,
@@ -1172,10 +1241,37 @@ describe('createKodaXRuntime', () => {
     await runtime.close();
   });
 
+  it('rejects canonical session mutations while the session has an active run', async () => {
+    const { createKodaXRuntime } = await import('@kodax-ai/kodax/runtime');
+    const runtime = await createKodaXRuntime({
+      homeDir: tempRoot,
+      sessionsDir: path.join(tempRoot, 'sessions'),
+      defaultProvider: 'mock-provider',
+    });
+    const session = await runtime.sessions.create({ title: 'Active Mutation Conflict' });
+    codingMock.startKodaX.mockImplementation((options: KodaXOptions): RunningSession => (
+      fakeRunningSession(options, new Promise<KodaXResult>(() => undefined))
+    ));
+    const run = await runtime.runs.start({ sessionId: session.id, prompt: 'stay active' });
+
+    await expect(runtime.sessions.rewind({ sessionId: session.id }))
+      .rejects.toMatchObject({ code: 'conflict' });
+    await expect(runtime.sessions.setActiveEntry({
+      sessionId: session.id,
+      entryId: 'entry-during-run',
+    })).rejects.toMatchObject({ code: 'conflict' });
+    await expect(runtime.sessions.compact({ sessionId: session.id }))
+      .rejects.toMatchObject({ code: 'conflict' });
+
+    await runtime.runs.abort(run.runId);
+    await runtime.close();
+  });
+
   it('normalizes run callbacks into scoped runtime events and terminal status', async () => {
     const { createKodaXRuntime } = await import('@kodax-ai/kodax/runtime');
     const runtime = await createKodaXRuntime({
-      sessionsDir: tempRoot,
+      homeDir: tempRoot,
+      sessionsDir: path.join(tempRoot, 'sessions'),
       defaultProvider: 'mock-provider',
     });
     const session = await runtime.sessions.create({ title: 'Run Test' });
@@ -1279,6 +1375,47 @@ describe('createKodaXRuntime', () => {
     expect(replay.map((event) => event.seq)).toEqual([2, 3, 4, 5, 6, 7, 8]);
     expect(assistantReplay.map((event) => event.type)).toEqual(['assistant.delta']);
 
+    await runtime.close();
+  });
+
+  it('flushes buffered streaming events before replay without dropping deltas', async () => {
+    const { createKodaXRuntime } = await import('@kodax-ai/kodax/runtime');
+    const runtime = await createKodaXRuntime({
+      homeDir: tempRoot,
+      sessionsDir: path.join(tempRoot, 'sessions'),
+      defaultProvider: 'mock-provider',
+    });
+    const session = await runtime.sessions.create({ title: 'Buffered Replay Test' });
+    codingMock.startKodaX.mockImplementation((options: KodaXOptions): RunningSession => {
+      queueMicrotask(() => {
+        options.events?.onTextDelta?.('buffered delta', {
+          sessionId: session.id,
+          turnId: 'turn-buffered',
+        });
+      });
+      return fakeRunningSession(options, new Promise<KodaXResult>(() => undefined));
+    });
+
+    const run = await runtime.runs.start({ sessionId: session.id, prompt: 'stream' });
+    await flushMicrotasks();
+    const replay = await runtime.events.replay({
+      runId: run.runId,
+      type: 'assistant.delta',
+    });
+    const eventLog = await fs.readFile(path.join(
+      tempRoot,
+      '.kodax',
+      'runtime',
+      'runs',
+      encodeURIComponent(run.runId),
+      'events.jsonl',
+    ), 'utf-8');
+
+    expect(replay).toEqual([
+      expect.objectContaining({ type: 'assistant.delta' }),
+    ]);
+    expect(eventLog).toContain('buffered delta');
+    await runtime.runs.abort(run.runId);
     await runtime.close();
   });
 
@@ -1662,6 +1799,35 @@ describe('createKodaXRuntime', () => {
     await recreated.close();
   });
 
+  it('keeps event sequences monotonic across runtime recreation and honors sinceSeq', async () => {
+    const { createKodaXRuntime } = await import('@kodax-ai/kodax/runtime');
+    const sessionsDir = path.join(tempRoot, 'sessions');
+    const first = await createKodaXRuntime({ homeDir: tempRoot, sessionsDir });
+    const firstSession = await first.sessions.create({ sessionId: 'sequence-first' });
+    const firstEvents = await first.events.replay({ sessionId: firstSession.id });
+    const lastFirstSeq = firstEvents.at(-1)?.seq;
+    expect(lastFirstSeq).toBeDefined();
+    await first.close();
+
+    const second = await createKodaXRuntime({ homeDir: tempRoot, sessionsDir });
+    const secondSession = await second.sessions.create({ sessionId: 'sequence-second' });
+    const allEvents = await second.events.replay();
+    const afterFirst = await second.events.replay({ sinceSeq: lastFirstSeq });
+
+    expect(allEvents.map((event) => event.seq)).toEqual(
+      [...allEvents.map((event) => event.seq)].sort((a, b) => a - b),
+    );
+    expect(new Set(allEvents.map((event) => event.seq)).size).toBe(allEvents.length);
+    expect(afterFirst).toEqual([
+      expect.objectContaining({
+        sessionId: secondSession.id,
+        type: 'session.created',
+      }),
+    ]);
+    expect(afterFirst[0]?.seq).toBeGreaterThan(lastFirstSeq!);
+    await second.close();
+  });
+
   it('caps in-memory terminal run records while keeping persisted run lookup available', async () => {
     const { createKodaXRuntime } = await import('@kodax-ai/kodax/runtime');
     const runtime = await createKodaXRuntime({
@@ -1925,6 +2091,85 @@ describe('createKodaXRuntime', () => {
     expect(status).toMatchObject({ phase: 'failed', error: 'provider exploded' });
     expect(failedEvents).toHaveLength(1);
 
+    await runtime.close();
+  });
+
+  it('applies permissionMode policy and skips bridge meta-tool prompts', async () => {
+    const { createKodaXRuntime } = await import('@kodax-ai/kodax/runtime');
+    const runtime = await createKodaXRuntime({
+      homeDir: tempRoot,
+      sessionsDir: path.join(tempRoot, 'sessions'),
+      defaultProvider: 'mock-provider',
+    });
+    const session = await runtime.sessions.create({ title: 'Permission Policy Test' });
+    const decisions = new Map<string, boolean | string>();
+    const requestedTools: string[] = [];
+    const toolByPrompt: Readonly<Record<string, { readonly name: string; readonly input: Record<string, unknown> }>> = {
+      'accept-edit': { name: 'edit', input: { path: 'file.ts', old_string: 'a', new_string: 'b' } },
+      'runtime-write': { name: 'write', input: { path: 'runtime.txt', content: 'runtime' } },
+      'client-write': { name: 'write', input: { path: 'client.txt', content: 'client' } },
+      'protected-write': { name: 'write', input: { path: '.kodax/config.json', content: '{}' } },
+      'accept-bash': { name: 'bash', input: { command: 'npm test' } },
+      'plan-edit': { name: 'edit', input: { path: 'file.ts', old_string: 'a', new_string: 'b' } },
+      'auto-bash': { name: 'bash', input: { command: 'npm test' } },
+      bridge: { name: 'tool_call', input: { name: 'edit', arguments: { path: 'file.ts' } } },
+    };
+    runtime.events.subscribe({ type: 'permission.requested' }, (event) => {
+      const request = event.payload as { readonly id?: unknown; readonly toolName?: unknown };
+      if (typeof request.toolName === 'string') requestedTools.push(request.toolName);
+      if (typeof request.id === 'string') {
+        void runtime.permissions.respond(request.id, { type: 'allow_once' });
+      }
+    });
+    codingMock.startKodaX.mockImplementation((options: KodaXOptions, prompt: string): RunningSession => {
+      const tool = toolByPrompt[prompt];
+      if (!tool) throw new Error(`missing permission test tool for ${prompt}`);
+      const result = Promise.resolve(options.events?.beforeToolExecute?.(
+        tool.name,
+        tool.input,
+        { sessionId: session.id, toolId: `tool-${prompt}` },
+      )).then((decision) => {
+        if (decision === undefined) throw new Error('missing runtime permission hook');
+        decisions.set(prompt, decision);
+        return {
+          success: true,
+          lastText: String(decision),
+          messages: [],
+          sessionId: session.id,
+        } satisfies KodaXResult;
+      });
+      return fakeRunningSession(options, result);
+    });
+
+    await runtime.sessions.updateSettings(session.id, {
+      permissionMode: 'accept-edits',
+      executionCwd: path.join(process.cwd(), 'permission-policy-project'),
+    });
+    await (await runtime.runs.start({ sessionId: session.id, prompt: 'accept-edit' })).result;
+    await (await runtime.runs.start({ sessionId: session.id, prompt: 'runtime-write' })).result;
+    await (await runtime.runs.start({
+      sessionId: session.id,
+      prompt: 'client-write',
+      permissionBroker: 'client',
+    })).result;
+    await (await runtime.runs.start({ sessionId: session.id, prompt: 'protected-write' })).result;
+    await (await runtime.runs.start({ sessionId: session.id, prompt: 'accept-bash' })).result;
+    await (await runtime.runs.start({ sessionId: session.id, prompt: 'bridge' })).result;
+    await runtime.sessions.updateSettings(session.id, { permissionMode: 'plan' });
+    await (await runtime.runs.start({ sessionId: session.id, prompt: 'plan-edit' })).result;
+    await runtime.sessions.updateSettings(session.id, { permissionMode: 'auto' });
+    await (await runtime.runs.start({ sessionId: session.id, prompt: 'auto-bash' })).result;
+
+    expect(decisions.get('accept-edit')).toBe(true);
+    expect(decisions.get('runtime-write')).toBe(true);
+    expect(decisions.get('client-write')).toBe(true);
+    expect(decisions.get('protected-write')).toBe(true);
+    expect(decisions.get('accept-bash')).toBe(true);
+    expect(decisions.get('bridge')).toBe(true);
+    expect(decisions.get('plan-edit')).toContain('[Blocked]');
+    expect(decisions.get('auto-bash')).toBe(true);
+    expect(requestedTools).toEqual(['write', 'write', 'bash']);
+    expect(await runtime.permissions.listPending()).toEqual([]);
     await runtime.close();
   });
 
@@ -2333,6 +2578,40 @@ function isPermissionRequestPayload(value: unknown): value is { readonly id: str
 
 async function flushMicrotasks(): Promise<void> {
   await new Promise<void>((resolve) => setTimeout(resolve, 0));
+}
+
+async function waitForCondition(predicate: () => boolean, timeoutMs = 2_000): Promise<void> {
+  const deadline = Date.now() + timeoutMs;
+  while (!predicate()) {
+    if (Date.now() >= deadline) {
+      throw new Error(`Condition did not become true within ${timeoutMs}ms.`);
+    }
+    await new Promise<void>((resolve) => setTimeout(resolve, 10));
+  }
+}
+
+async function shutdownRuntimeDaemon(homeDir: string, profile: string): Promise<void> {
+  const {
+    readRuntimeDaemonState,
+    readRuntimeDaemonToken,
+    resolveRuntimeDaemonPaths,
+  } = await import('./runtime-daemon/state.js');
+  const state = readRuntimeDaemonState(resolveRuntimeDaemonPaths(homeDir, profile));
+  if (!state) return;
+  const { runtimeDaemonEndpointFromState } = await import('./runtime-daemon/lifecycle.js');
+  const { createRuntimeDaemonSocketClientTransport } = await import('./runtime-daemon/transport.js');
+  const paths = resolveRuntimeDaemonPaths(homeDir, profile);
+  const transport = await createRuntimeDaemonSocketClientTransport(runtimeDaemonEndpointFromState(state));
+  try {
+    await transport.request('initialize', {
+      profile,
+      token: readRuntimeDaemonToken(paths),
+    });
+    await transport.request('runtime.shutdown');
+  } finally {
+    await transport.close?.();
+  }
+  await waitForCondition(() => readRuntimeDaemonState(paths) === undefined);
 }
 
 async function expectSettles<T>(promise: Promise<T>, label: string): Promise<T> {

@@ -8,6 +8,7 @@ import {
   RUNTIME_DAEMON_NOTIFICATION_SCHEMAS,
   RUNTIME_DAEMON_PROTOCOL_SCHEMA,
   RUNTIME_DAEMON_PROTOCOL_SCHEMA_JSON,
+  validateRuntimeDaemonJsonSchema,
 } from './schema.js';
 
 describe('runtime daemon protocol schema', () => {
@@ -49,5 +50,34 @@ describe('runtime daemon protocol schema', () => {
     expect(RUNTIME_DAEMON_METHOD_SCHEMAS['tool.exposure.preview'].result).toMatchObject({
       oneOf: expect.arrayContaining([{ type: 'null' }]),
     });
+  });
+
+  it('validates required, typed, and additional properties', () => {
+    const schema = RUNTIME_DAEMON_METHOD_SCHEMAS['session.load'].params;
+
+    expect(validateRuntimeDaemonJsonSchema(schema, { sessionId: 'session-1' })).toEqual([]);
+    expect(validateRuntimeDaemonJsonSchema(schema, { sessionId: 42 })).toContain(
+      '$.sessionId must be string.',
+    );
+    expect(validateRuntimeDaemonJsonSchema(schema, {})).toContain(
+      '$.sessionId is required.',
+    );
+    expect(validateRuntimeDaemonJsonSchema(schema, {
+      sessionId: 'session-1',
+      unexpected: true,
+    })).toContain('$.unexpected is not allowed.');
+  });
+
+  it('publishes and validates the run permission broker wire field', () => {
+    const schema = RUNTIME_DAEMON_METHOD_SCHEMAS['run.start'].params;
+
+    expect(validateRuntimeDaemonJsonSchema(schema, {
+      sessionId: 'session-1',
+      permissionBroker: 'client',
+    })).toEqual([]);
+    expect(validateRuntimeDaemonJsonSchema(schema, {
+      sessionId: 'session-1',
+      permissionBroker: 'unknown',
+    })).toContain('$.permissionBroker must be one of: runtime, client.');
   });
 });

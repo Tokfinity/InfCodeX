@@ -141,12 +141,14 @@ export {
 export type { PermissionMode, ConfirmResult, PermissionContext } from "./permission/index.js";
 export {
   computeConfirmTools,
+  FILE_MODIFICATION_TOOLS,
   PERMISSION_MODES,
   isPermissionMode,
   normalizePermissionMode,
   permissionModeDisplayName,
   isToolCallAllowed,
   isAlwaysConfirmPath,
+  isCommandOnProtectedPath,
   isBashReadCommand,
   isBashWriteCommand,
   collectBashWriteTargets,

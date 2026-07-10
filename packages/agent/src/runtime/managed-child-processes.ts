@@ -22,6 +22,11 @@ export interface ManagedChildProcessMetadata {
   readonly cwd?: string;
 }
 
+export interface ManagedChildRegistrationOptions {
+  /** Keep the record until the returned cleanup callback is invoked. */
+  readonly manualUnregister?: boolean;
+}
+
 interface ManagedChildProcessRecord extends ManagedChildProcessMetadata {
   readonly version: typeof REGISTRY_VERSION;
   readonly pid: number;
@@ -340,6 +345,7 @@ function readRecord(filePath: string): ManagedChildProcessRecord | undefined {
 export function registerManagedChildProcess(
   child: ChildProcess,
   metadata: ManagedChildProcessMetadata,
+  options: ManagedChildRegistrationOptions = {},
 ): () => void {
   const pid = child.pid;
   if (pid === undefined) {
@@ -373,11 +379,15 @@ export function registerManagedChildProcess(
     return () => {};
   }
 
-  child.once('exit', unregister);
-  child.once('error', unregister);
+  if (!options.manualUnregister) {
+    child.once('exit', unregister);
+    child.once('error', unregister);
+  }
   return () => {
-    child.off('exit', unregister);
-    child.off('error', unregister);
+    if (!options.manualUnregister) {
+      child.off('exit', unregister);
+      child.off('error', unregister);
+    }
     unregister();
   };
 }

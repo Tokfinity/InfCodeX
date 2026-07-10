@@ -75,6 +75,7 @@ import type {
 } from '@kodax-ai/repl';
 import {
   createMcpManager,
+  emitKodaXDiagnostic,
   getDefaultWorkflowRunManager,
   initializeSkillRegistry,
 } from '@kodax-ai/agent';
@@ -402,6 +403,7 @@ export interface RuntimeArtifact {
   readonly id: string;
   readonly kind: RuntimeArtifactKind;
   readonly path: string;
+  readonly sizeBytes: number;
   readonly mediaType?: string;
   readonly mimeType?: string;
   readonly name?: string;
@@ -586,11 +588,14 @@ export type RuntimeInput =
   | RuntimeVideoInput
   | RuntimeArtifactRefInput;
 
+export type RuntimePermissionBroker = 'runtime' | 'client';
+
 export interface RuntimeStartRunInput {
   readonly sessionId: string;
   readonly prompt?: string;
   readonly input?: RuntimeInput | readonly RuntimeInput[];
   readonly mode?: RuntimeRunMode;
+  readonly permissionBroker?: RuntimePermissionBroker;
   readonly options?: RuntimeKodaXOptions;
 }
 
@@ -839,6 +844,7 @@ interface RuntimeRunRecord {
   endedAt?: string;
   provider: string;
   model?: string;
+  permissionBroker?: RuntimePermissionBroker;
   permissionMode?: string;
   reasoning?: KodaXReasoningMode;
   error?: string;
@@ -874,6 +880,8 @@ interface PendingRunStart {
 interface RuntimePersistence {
   readonly runtimeDir: string;
   appendEvent(event: RuntimeEvent): void;
+  close(): void;
+  nextEventSeq(): number;
   replay(filter?: RuntimeEventReplayFilter): readonly RuntimeEvent[];
   saveRunStatus(status: RuntimeRunStatus): void;
   loadRunStatus(runId: string): RuntimeRunStatus | undefined;
@@ -885,6 +893,22 @@ interface RuntimePersistence {
 const DEFAULT_PERMISSION_TIMEOUT_MS = 5 * 60_000;
 const MAX_RUNTIME_MEMORY_EVENTS = 10_000;
 const MAX_RUNTIME_MEMORY_RUNS = 1_000;
+const MAX_RUNTIME_ARTIFACT_BYTES = 256 * 1024 * 1024;
+const MAX_RUNTIME_BUFFERED_EVENT_BYTES = 64 * 1024;
+const RUNTIME_EVENT_FLUSH_INTERVAL_MS = 10;
+const MAX_RUNTIME_EVENT_FILE_BYTES = 16 * 1024 * 1024;
+const TARGET_RUNTIME_EVENT_FILE_BYTES = MAX_RUNTIME_EVENT_FILE_BYTES / 2;
+const MAX_RUNTIME_EVENT_SEQUENCE_TAIL_BYTES = 128 * 1024;
+const BUFFERED_RUNTIME_EVENT_TYPES: ReadonlySet<RuntimeEventType> = new Set([
+  'assistant.delta',
+  'thinking.delta',
+  'tool.progress',
+  'run.progress',
+]);
+const RUNTIME_PERMISSION_BRIDGE_TOOLS: ReadonlySet<string> = new Set([
+  'tool_call',
+  'tool_describe',
+]);
 const RUNTIME_ARTIFACT_KINDS: ReadonlySet<string> = new Set(['image', 'file', 'video']);
 
 export async function createKodaXRuntime(
@@ -962,7 +986,22 @@ export async function createKodaXRuntime(
 
   const runtime: KodaXRuntime = {
     identity,
-    sessions: createRuntimeSessionService(sessionManager, bus, persistence, ensureOpen),
+    sessions: createRuntimeSessionService(
+      sessionManager,
+      bus,
+      persistence,
+      ensureOpen,
+      (sessionId) => [...runs.values()].some((run) => (
+        run.sessionId === sessionId && isActiveRunPhase(run.phase)
+      )),
+      (sessionId, permissionMode) => {
+        for (const run of runs.values()) {
+          if (run.sessionId === sessionId && isActiveRunPhase(run.phase)) {
+            run.permissionMode = permissionMode;
+          }
+        }
+      },
+    ),
     runs: runService,
     events: bus.service,
     permissions: permissions.service,
@@ -1094,6 +1133,8 @@ function createRuntimeSessionService(
   bus: RuntimeEventBus,
   persistence: RuntimePersistence,
   ensureOpen: () => void,
+  hasActiveRun: (sessionId: string) => boolean,
+  updateActivePermissionMode: (sessionId: string, permissionMode: string | undefined) => void,
 ): RuntimeSessionService {
   const toRuntimeSession = (
     id: string,
@@ -1191,6 +1232,9 @@ function createRuntimeSessionService(
       const settings = applySessionSettingsPatch(current, patch);
       assertSessionSettingsAllowed(sessionData, settings);
       persistence.saveSessionSettings(sessionId, settings);
+      if (patch.permissionMode !== undefined) {
+        updateActivePermissionMode(sessionId, settings.permissionMode);
+      }
       bus.emit('session.settings.updated', {
         sessionId,
         settings,
@@ -1216,6 +1260,7 @@ function createRuntimeSessionService(
 
     async rewind(input) {
       ensureOpen();
+      assertSessionMutationAllowed(input.sessionId, hasActiveRun);
       const data = await manager.rewindSession(input.sessionId, {
         ...(input.selector !== undefined ? { selector: input.selector } : {}),
       });
@@ -1231,6 +1276,7 @@ function createRuntimeSessionService(
 
     async setActiveEntry(input) {
       ensureOpen();
+      assertSessionMutationAllowed(input.sessionId, hasActiveRun);
       const data = await manager.setActiveEntry(input.sessionId, input.entryId);
       if (!data) return null;
       const session = toRuntimeSession(input.sessionId, data);
@@ -1244,6 +1290,7 @@ function createRuntimeSessionService(
 
     async compact(input) {
       ensureOpen();
+      assertSessionMutationAllowed(input.sessionId, hasActiveRun);
       const result = await manager.compactSession(input.sessionId, {
         ...(input.provider !== undefined ? { provider: input.provider } : {}),
         ...(input.model !== undefined ? { model: input.model } : {}),
@@ -1524,6 +1571,9 @@ function createRuntimeRunService(deps: {
         ...(isQueued ? { queuedAt: startedAt } : {}),
         provider,
         ...(model !== undefined ? { model } : {}),
+        ...(input.permissionBroker !== undefined
+          ? { permissionBroker: input.permissionBroker }
+          : {}),
         ...(settings.permissionMode !== undefined ? { permissionMode: settings.permissionMode } : {}),
         ...(options.reasoningMode !== undefined ? { reasoning: options.reasoningMode } : {}),
         mode: input.mode ?? 'coding',
@@ -1871,11 +1921,30 @@ function createRuntimeArtifactStore() {
       if (!isRuntimeArtifactKind(input.kind)) {
         throw new Error(`Unsupported runtime artifact kind: ${String(input.kind)}`);
       }
+      const resolvedPath = path.resolve(input.path);
+      let stats: fs.Stats;
+      try {
+        stats = await fs.promises.stat(resolvedPath);
+      } catch (error: unknown) {
+        throw new Error(
+          `Runtime artifact path is not readable: ${resolvedPath}`,
+          { cause: error },
+        );
+      }
+      if (!stats.isFile()) {
+        throw new Error(`Runtime artifact path must be a regular file: ${resolvedPath}`);
+      }
+      if (stats.size > MAX_RUNTIME_ARTIFACT_BYTES) {
+        throw new Error(
+          `Runtime artifact exceeds the ${MAX_RUNTIME_ARTIFACT_BYTES}-byte limit: ${resolvedPath}`,
+        );
+      }
       const id = `art_${randomUUID().replace(/-/g, '').slice(0, 12)}`;
       const artifact: RuntimeArtifact = {
         id,
         kind: input.kind,
-        path: path.resolve(input.path),
+        path: resolvedPath,
+        sizeBytes: stats.size,
         ...(input.mediaType !== undefined ? { mediaType: input.mediaType } : {}),
         ...(input.mimeType !== undefined ? { mimeType: input.mimeType } : {}),
         ...(input.name !== undefined ? { name: input.name } : {}),
@@ -2002,7 +2071,6 @@ function removeQueuedRun(queueBySession: Map<string, string[]>, run: RuntimeRunR
 }
 
 function createRuntimeEventBus(persistence: RuntimePersistence) {
-  let nextSeq = 1;
   let closed = false;
   const events: RuntimeEvent[] = [];
   const subscribers = new Set<{
@@ -2028,6 +2096,43 @@ function createRuntimeEventBus(persistence: RuntimePersistence) {
     }
   };
 
+  const createEvent = (
+    type: RuntimeEventType,
+    payload: unknown,
+    scope: { readonly sessionId: string; readonly runId: string; readonly turnId?: string },
+  ): RuntimeEvent => {
+    const seq = persistence.nextEventSeq();
+    return {
+      id: `evt_${seq}_${randomUUID().replace(/-/g, '').slice(0, 8)}`,
+      seq,
+      time: new Date().toISOString(),
+      sessionId: scope.sessionId,
+      runId: scope.runId,
+      ...(scope.turnId !== undefined ? { turnId: scope.turnId } : {}),
+      type,
+      payload,
+    };
+  };
+
+  const notify = (event: RuntimeEvent): void => {
+    for (const subscriber of [...subscribers]) {
+      if (!matches(event, subscriber.filter)) continue;
+      try {
+        subscriber.listener(event);
+      } catch (error: unknown) {
+        emitKodaXDiagnostic({
+          source: 'runtime.events',
+          level: 'error',
+          message: `Runtime event listener failed for ${event.type}`,
+          detail: {
+            eventId: event.id,
+            error: normalizeError(error),
+          },
+        });
+      }
+    }
+  };
+
   const service: RuntimeEventService = {
     subscribe(filter, listener) {
       if (closed) {
@@ -2044,11 +2149,13 @@ function createRuntimeEventBus(persistence: RuntimePersistence) {
 
     async replay(filter) {
       const source = persistence.replay(filter);
-      const replayEvents = source.length > 0 ? source : events;
-      const matched = replayEvents.filter((event) => (
+      const replayEvents = new Map<string, RuntimeEvent>();
+      for (const event of source) replayEvents.set(event.id, event);
+      for (const event of events) replayEvents.set(event.id, event);
+      const matched = [...replayEvents.values()].filter((event) => (
         matches(event, filter)
         && (filter?.sinceSeq === undefined || event.seq > filter.sinceSeq)
-      ));
+      )).sort((a, b) => a.seq - b.seq || a.time.localeCompare(b.time));
       return filter?.limit === undefined ? matched : matched.slice(-filter.limit);
     },
   };
@@ -2060,50 +2167,34 @@ function createRuntimeEventBus(persistence: RuntimePersistence) {
       payload: unknown,
       scope: { readonly sessionId: string; readonly runId: string; readonly turnId?: string },
     ): RuntimeEvent {
-      const event: RuntimeEvent = {
-        id: `evt_${nextSeq}_${randomUUID().replace(/-/g, '').slice(0, 8)}`,
-        seq: nextSeq,
-        time: new Date().toISOString(),
-        sessionId: scope.sessionId,
-        runId: scope.runId,
-        ...(scope.turnId !== undefined ? { turnId: scope.turnId } : {}),
-        type,
-        payload,
-      };
-      nextSeq += 1;
+      const event = createEvent(type, payload, scope);
       remember(event);
       const notifyEvents: RuntimeEvent[] = [event];
       try {
         persistence.appendEvent(event);
       } catch (error: unknown) {
-        const warning: RuntimeEvent = {
-          id: `evt_${nextSeq}_${randomUUID().replace(/-/g, '').slice(0, 8)}`,
-          seq: nextSeq,
-          time: new Date().toISOString(),
-          sessionId: scope.sessionId,
-          runId: scope.runId,
-          ...(scope.turnId !== undefined ? { turnId: scope.turnId } : {}),
-          type: 'runtime.warning',
-          payload: {
-            message: normalizeError(error).message,
-            sourceEventId: event.id,
-          },
-        };
-        nextSeq += 1;
+        const warning = createEvent('runtime.warning', {
+          message: normalizeError(error).message,
+          sourceEventId: event.id,
+        }, scope);
         remember(warning);
         notifyEvents.push(warning);
       }
-      for (const subscriber of subscribers) {
-        for (const emitted of notifyEvents) {
-          if (matches(emitted, subscriber.filter)) {
-            subscriber.listener(emitted);
-          }
-        }
-      }
+      for (const emitted of notifyEvents) notify(emitted);
       return event;
     },
     close() {
       closed = true;
+      try {
+        persistence.close();
+      } catch (error: unknown) {
+        emitKodaXDiagnostic({
+          source: 'runtime.persistence',
+          level: 'error',
+          message: 'Failed to flush runtime events while closing',
+          detail: error,
+        });
+      }
       subscribers.clear();
     },
   };
@@ -2118,6 +2209,13 @@ function createRuntimePersistence(options: CreateKodaXRuntimeOptions): RuntimePe
   const runtimeDir = path.join(baseDir, '.kodax', 'runtime');
   const runsDir = path.join(runtimeDir, 'runs');
   const sessionSettingsDir = path.join(runtimeDir, 'session-settings');
+  const eventSequenceFile = path.join(runtimeDir, 'event-sequence');
+  const bufferedEventLines = new Map<string, string[]>();
+  let bufferedEventBytes = 0;
+  let scheduledEventFlush: ReturnType<typeof setTimeout> | undefined;
+  let deferredAppendError: Error | undefined;
+  let nextSequence: number | undefined;
+  let sequenceDirty = false;
 
   const runDir = (runId: string): string => path.join(runsDir, encodeURIComponent(runId));
   const eventFile = (runId: string): string => path.join(runDir(runId), 'events.jsonl');
@@ -2126,7 +2224,63 @@ function createRuntimePersistence(options: CreateKodaXRuntimeOptions): RuntimePe
     path.join(sessionSettingsDir, `${encodeURIComponent(sessionId)}.json`);
   const persistenceWarnings: RuntimeEvent[] = [];
   const persistenceWarningKeys = new Set<string>();
-  let nextPersistenceWarningSeq = 1;
+
+  const findMaxPersistedEventSeq = (): number => {
+    let maxSeq = 0;
+    if (fs.existsSync(eventSequenceFile)) {
+      try {
+        const persisted = Number.parseInt(fs.readFileSync(eventSequenceFile, 'utf-8').trim(), 10);
+        if (Number.isSafeInteger(persisted) && persisted > 0) maxSeq = persisted;
+      } catch (error: unknown) {
+        emitKodaXDiagnostic({
+          source: 'runtime.persistence',
+          level: 'warn',
+          message: 'Failed to read runtime event sequence cursor; recovering from event logs',
+          detail: error,
+        });
+      }
+    }
+    if (!fs.existsSync(runsDir)) return maxSeq;
+    for (const entry of fs.readdirSync(runsDir, { withFileTypes: true })) {
+      if (!entry.isDirectory()) continue;
+      const file = path.join(runsDir, entry.name, 'events.jsonl');
+      if (!fs.existsSync(file)) continue;
+      const size = fs.statSync(file).size;
+      const readBytes = Math.min(size, MAX_RUNTIME_EVENT_SEQUENCE_TAIL_BYTES);
+      const buffer = Buffer.allocUnsafe(readBytes);
+      const descriptor = fs.openSync(file, 'r');
+      try {
+        fs.readSync(descriptor, buffer, 0, readBytes, size - readBytes);
+      } finally {
+        fs.closeSync(descriptor);
+      }
+      const lines = buffer.toString('utf-8').split(/\r?\n/);
+      if (readBytes < size) lines.shift();
+      for (const line of lines) {
+        if (!line.trim()) continue;
+        try {
+          const parsed: unknown = JSON.parse(line);
+          if (isRuntimeEvent(parsed) && Number.isSafeInteger(parsed.seq)) {
+            maxSeq = Math.max(maxSeq, parsed.seq);
+          }
+        } catch {
+          // Malformed records are surfaced by replay; sequence recovery only
+          // considers complete runtime events.
+        }
+      }
+    }
+    return maxSeq;
+  };
+
+  const allocateEventSeq = (): number => {
+    if (nextSequence === undefined) {
+      nextSequence = findMaxPersistedEventSeq() + 1;
+    }
+    const allocated = nextSequence;
+    nextSequence += 1;
+    sequenceDirty = true;
+    return allocated;
+  };
 
   const pushPersistenceWarning = (
     key: string,
@@ -2135,9 +2289,10 @@ function createRuntimePersistence(options: CreateKodaXRuntimeOptions): RuntimePe
   ): void => {
     if (persistenceWarningKeys.has(key)) return;
     persistenceWarningKeys.add(key);
+    const seq = allocateEventSeq();
     const event: RuntimeEvent = {
-      id: `evt_persist_warn_${nextPersistenceWarningSeq}_${randomUUID().replace(/-/g, '').slice(0, 8)}`,
-      seq: nextPersistenceWarningSeq,
+      id: `evt_persist_warn_${seq}_${randomUUID().replace(/-/g, '').slice(0, 8)}`,
+      seq,
       time: new Date().toISOString(),
       sessionId: scope.sessionId ?? 'runtime',
       runId: scope.runId ?? scope.sessionId ?? 'runtime',
@@ -2148,7 +2303,6 @@ function createRuntimePersistence(options: CreateKodaXRuntimeOptions): RuntimePe
         ...(scope.file !== undefined ? { file: scope.file } : {}),
       },
     };
-    nextPersistenceWarningSeq += 1;
     persistenceWarnings.push(event);
     if (persistenceWarnings.length > MAX_RUNTIME_MEMORY_EVENTS) {
       persistenceWarnings.splice(0, persistenceWarnings.length - MAX_RUNTIME_MEMORY_EVENTS);
@@ -2161,7 +2315,7 @@ function createRuntimePersistence(options: CreateKodaXRuntimeOptions): RuntimePe
   ): readonly RuntimeEvent[] => (
     [...events, ...persistenceWarnings]
       .filter((event) => eventMatchesReplayFilter(event, filter))
-      .sort((a, b) => a.time.localeCompare(b.time) || a.seq - b.seq)
+      .sort((a, b) => a.seq - b.seq || a.time.localeCompare(b.time))
   );
 
   const readEventsFromFile = (file: string, runId?: string): RuntimeEvent[] => {
@@ -2194,14 +2348,109 @@ function createRuntimePersistence(options: CreateKodaXRuntimeOptions): RuntimePe
     return events;
   };
 
+  const trimEventFile = (file: string): void => {
+    if (fs.statSync(file).size <= MAX_RUNTIME_EVENT_FILE_BYTES) return;
+    const lines = fs.readFileSync(file, 'utf-8').trimEnd().split(/\r?\n/);
+    const kept: string[] = [];
+    let keptBytes = 0;
+    for (let i = lines.length - 1; i >= 0; i -= 1) {
+      const line = lines[i] ?? '';
+      if (!line) continue;
+      const lineBytes = Buffer.byteLength(line, 'utf-8') + 1;
+      if (kept.length > 0 && keptBytes + lineBytes > TARGET_RUNTIME_EVENT_FILE_BYTES) break;
+      kept.push(line);
+      keptBytes += lineBytes;
+    }
+    kept.reverse();
+    fs.writeFileSync(file, kept.length > 0 ? `${kept.join('\n')}\n` : '', 'utf-8');
+  };
+
+  const flushBufferedEvents = (): void => {
+    if (scheduledEventFlush !== undefined) {
+      clearTimeout(scheduledEventFlush);
+      scheduledEventFlush = undefined;
+    }
+    for (const [runId, lines] of bufferedEventLines) {
+      const content = lines.join('');
+      const contentBytes = Buffer.byteLength(content, 'utf-8');
+      const dir = runDir(runId);
+      const file = eventFile(runId);
+      fs.mkdirSync(dir, { recursive: true });
+      fs.appendFileSync(file, content, 'utf-8');
+      bufferedEventLines.delete(runId);
+      bufferedEventBytes = Math.max(0, bufferedEventBytes - contentBytes);
+      trimEventFile(file);
+    }
+    if (sequenceDirty && nextSequence !== undefined) {
+      fs.mkdirSync(runtimeDir, { recursive: true });
+      fs.writeFileSync(eventSequenceFile, String(nextSequence - 1), 'utf-8');
+      sequenceDirty = false;
+    }
+    deferredAppendError = undefined;
+  };
+
+  const scheduleEventFlush = (): void => {
+    if (scheduledEventFlush !== undefined) return;
+    scheduledEventFlush = setTimeout(() => {
+      scheduledEventFlush = undefined;
+      try {
+        flushBufferedEvents();
+      } catch (error: unknown) {
+        deferredAppendError = normalizeError(error);
+        emitKodaXDiagnostic({
+          source: 'runtime.persistence',
+          level: 'error',
+          message: 'Failed to flush buffered runtime events',
+          detail: error,
+        });
+      }
+    }, RUNTIME_EVENT_FLUSH_INTERVAL_MS);
+    scheduledEventFlush.unref?.();
+  };
+
   return {
     runtimeDir,
     appendEvent(event) {
-      const dir = runDir(event.runId);
-      fs.mkdirSync(dir, { recursive: true });
-      fs.appendFileSync(eventFile(event.runId), `${JSON.stringify(event)}\n`, 'utf-8');
+      const line = `${JSON.stringify(event)}\n`;
+      const lines = bufferedEventLines.get(event.runId) ?? [];
+      lines.push(line);
+      bufferedEventLines.set(event.runId, lines);
+      bufferedEventBytes += Buffer.byteLength(line, 'utf-8');
+
+      const previousError = deferredAppendError;
+      deferredAppendError = undefined;
+      try {
+        if (
+          previousError !== undefined
+          || !BUFFERED_RUNTIME_EVENT_TYPES.has(event.type)
+          || bufferedEventBytes >= MAX_RUNTIME_BUFFERED_EVENT_BYTES
+        ) {
+          flushBufferedEvents();
+        } else {
+          scheduleEventFlush();
+        }
+      } catch (error: unknown) {
+        scheduleEventFlush();
+        throw error;
+      }
+      if (previousError !== undefined) throw previousError;
+    },
+    close() {
+      flushBufferedEvents();
+    },
+    nextEventSeq() {
+      return allocateEventSeq();
     },
     replay(filter) {
+      try {
+        flushBufferedEvents();
+      } catch (error: unknown) {
+        pushPersistenceWarning(
+          `${runtimeDir}:event-flush`,
+          `Failed to flush buffered runtime events: ${normalizeError(error).message}`,
+          { runId: filter?.runId },
+        );
+      }
       if (filter?.runId) {
         return withPersistenceWarnings(readEventsFromFile(eventFile(filter.runId), filter.runId), filter);
       }
@@ -2822,6 +3071,13 @@ function wrapKodaXEvents(input: {
       toolInput: Record<string, unknown>,
       meta?: KodaXToolEventMeta,
     ): Promise<RuntimePermissionToolDecision> => {
+      // An in-process host hook is authoritative. The runtime policy is the
+      // fallback for headless/daemon execution where no executable callback can
+      // cross the wire.
+      const policyDecision = original?.beforeToolExecute === undefined
+        ? resolveRuntimePermissionPolicy(record, tool, toolInput)
+        : undefined;
+      if (policyDecision !== undefined) return policyDecision;
       const previousPhase = record.phase;
       if (record.phase === 'running') {
         record.phase = 'waiting_permission';
@@ -3754,6 +4010,40 @@ type RuntimePermissionRaceResult =
   | { readonly source: 'hook'; readonly decision: RuntimePermissionToolDecision }
   | { readonly source: 'runtime'; readonly decision: RuntimePermissionToolDecision };
 
+function resolveRuntimePermissionPolicy(
+  record: RuntimeRunRecord,
+  tool: string,
+  input: Record<string, unknown>,
+): RuntimePermissionToolDecision | undefined {
+  if (RUNTIME_PERMISSION_BRIDGE_TOOLS.has(tool)) return true;
+  if (record.permissionBroker === 'client') return undefined;
+  const mode = replApi.normalizePermissionMode(record.permissionMode);
+  if (mode === undefined) return undefined;
+  const projectRoot = record.start?.options.context?.gitRoot
+    ?? record.start?.options.context?.executionCwd;
+  if (mode === 'plan') {
+    const blockReason = replApi.getPlanModeBlockReason(tool, input, projectRoot);
+    return blockReason === null
+      ? true
+      : `${blockReason} Finish the plan before switching to a writable permission mode.`;
+  }
+  if (tool === 'bash') {
+    const command = typeof input.command === 'string' ? input.command : '';
+    if (replApi.isBashReadCommand(command)) return true;
+    if (projectRoot && replApi.isCommandOnProtectedPath(command, projectRoot)) return undefined;
+  }
+  if (projectRoot && replApi.FILE_MODIFICATION_TOOLS.has(tool)) {
+    const targetPath = typeof input.path === 'string' ? input.path : undefined;
+    if (targetPath && replApi.isAlwaysConfirmPath(
+      path.resolve(projectRoot, targetPath),
+      projectRoot,
+    )) {
+      return undefined;
+    }
+  }
+  return replApi.computeConfirmTools(mode).has(tool) ? undefined : true;
+}
+
 function decisionToToolDecision(
   decision: RuntimePermissionDecision | undefined,
 ): RuntimePermissionToolDecision {
@@ -3769,6 +4059,20 @@ function previewInput(input: Record<string, unknown>): string {
 
 function normalizeError(error: unknown): Error {
   return error instanceof Error ? error : new Error(String(error));
+}
+
+function assertSessionMutationAllowed(
+  sessionId: string,
+  hasActiveRun: (candidateSessionId: string) => boolean,
+): void {
+  if (!hasActiveRun(sessionId)) return;
+  const error = new Error(`Session has an active run and cannot be mutated: ${sessionId}`);
+  Object.defineProperty(error, 'code', {
+    configurable: true,
+    enumerable: true,
+    value: 'conflict',
+  });
+  throw error;
 }
 
 function assertDeleteSucceeded(sessionId: string, result: DeleteSessionResult): void {

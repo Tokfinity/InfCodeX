@@ -88,6 +88,75 @@ describe('runtime daemon client proxy', () => {
     expect(calls.map((call) => call.method)).toContain('event.unsubscribe');
   });
 
+  it('delivers notifications that arrive before subscribe resolves', async () => {
+    const calls: Array<{ readonly method: string; readonly params: unknown }> = [];
+    const event: RuntimeEvent = {
+      id: 'evt-early',
+      seq: 1,
+      time: '2026-07-09T00:00:00.000Z',
+      sessionId: 'session-1',
+      runId: 'run-1',
+      type: 'run.started',
+      payload: {},
+    };
+    const transport = fakeTransport(calls, {
+      notificationBeforeEventSubscribeResult: createRuntimeDaemonNotification('event', {
+        subscriptionId: 'sub-1',
+        event,
+      }),
+    });
+    const client = createRuntimeDaemonClient({
+      identity: {
+        runtimeId: 'runtime-client',
+        mode: 'daemon',
+        profile: 'default',
+        startedAt: '2026-07-09T00:00:00.000Z',
+        version: '0.7.66',
+      },
+      transport,
+    });
+    const seen: RuntimeEvent[] = [];
+
+    client.events.subscribe({}, (item) => seen.push(item));
+    await flushAsyncNotifications();
+
+    expect(seen).toEqual([event]);
+  });
+
+  it('hydrates serialized daemon run failures as Error instances', async () => {
+    const calls: Array<{ readonly method: string; readonly params: unknown }> = [];
+    const transport = fakeTransport(calls, {
+      runAwaitResult: {
+        runId: 'run-1',
+        sessionId: 'session-1',
+        phase: 'failed',
+        error: {
+          name: 'ProviderError',
+          message: 'provider unavailable',
+          stack: 'ProviderError: provider unavailable',
+        },
+      },
+    });
+    const client = createRuntimeDaemonClient({
+      identity: {
+        runtimeId: 'runtime-client',
+        mode: 'daemon',
+        profile: 'default',
+        startedAt: '2026-07-09T00:00:00.000Z',
+        version: '0.7.66',
+      },
+      transport,
+    });
+
+    const result = await client.runs.await('run-1');
+
+    expect(result.error).toBeInstanceOf(Error);
+    expect(result.error).toMatchObject({
+      name: 'ProviderError',
+      message: 'provider unavailable',
+    });
+  });
+
   it('unsubscribes remote event subscriptions when closed before subscribe resolves', async () => {
     const calls: Array<{ readonly method: string; readonly params: unknown }> = [];
     let resolveSubscribe!: (value: unknown) => void;
@@ -385,6 +454,8 @@ function fakeTransport(
   options: {
     readonly eventSubscribeResult?: Promise<unknown>;
     readonly workflowSubscribeResult?: Promise<unknown>;
+    readonly notificationBeforeEventSubscribeResult?: RuntimeDaemonNotification;
+    readonly runAwaitResult?: unknown;
   } = {},
 ): RuntimeDaemonClientTransport & {
   emit(notification: RuntimeDaemonNotification): void;
@@ -408,9 +479,13 @@ function fakeTransport(
         return { runId: 'run-1', sessionId: 'session-1' };
       }
       if (method === 'run.await') {
-        return { runId: 'run-1', sessionId: 'session-1', phase: 'completed' };
+        return options.runAwaitResult
+          ?? { runId: 'run-1', sessionId: 'session-1', phase: 'completed' };
       }
       if (method === 'event.subscribe') {
+        if (options.notificationBeforeEventSubscribeResult) {
+          transport.emit(options.notificationBeforeEventSubscribeResult);
+        }
         if (options.eventSubscribeResult) return options.eventSubscribeResult;
         return { subscriptionId: 'sub-1' };
       }

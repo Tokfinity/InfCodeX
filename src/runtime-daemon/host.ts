@@ -36,6 +36,7 @@ export interface RuntimeDaemonHostOptions {
 export interface RuntimeDaemonHost {
   readonly endpoint: RuntimeDaemonEndpoint;
   readonly state: RuntimeDaemonState;
+  unref(): void;
   close(): Promise<void>;
 }
 
@@ -122,6 +123,9 @@ export async function startRuntimeDaemonHost(
   return {
     endpoint: options.endpoint,
     state: ready,
+    unref() {
+      server?.unref();
+    },
     close: closeHost,
   };
 }

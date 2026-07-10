@@ -184,16 +184,23 @@ export async function executeToolCall(
     }, toolMeta);
   }
 
-  const override = await getToolExecutionOverride(
-    events,
-    toolCall.name,
-    toolCall.input ?? {},
-    toolCall.id,
-    ctx.executionCwd,
-    ctx.gitRoot,
-  );
-  if (override !== undefined) {
-    return override;
+  // Bridge meta-tools do not perform the requested operation themselves.
+  // `tool_call` re-enters the gate below with the concrete target, while
+  // `tool_describe` is read-only. Gating the wrapper as well would produce two
+  // indistinguishable permission prompts for one bridged operation.
+  const isBridgeMetaTool = toolCall.name === TOOL_CALL_NAME || toolCall.name === TOOL_DESCRIBE_NAME;
+  if (!isBridgeMetaTool) {
+    const override = await getToolExecutionOverride(
+      events,
+      toolCall.name,
+      toolCall.input ?? {},
+      toolCall.id,
+      ctx.executionCwd,
+      ctx.gitRoot,
+    );
+    if (override !== undefined) {
+      return override;
+    }
   }
 
   if (activeToolNames && !activeToolNames.includes(toolCall.name)) {

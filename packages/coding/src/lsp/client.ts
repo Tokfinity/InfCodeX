@@ -208,6 +208,7 @@ export interface CreateLspClientParams {
 
 interface WaitForLspProcessExitParams {
   readonly proc: Pick<ChildProcessWithoutNullStreams, 'exitCode' | 'signalCode' | 'once' | 'off'>;
+  readonly isClosed?: () => boolean;
   readonly killProcess: () => Promise<void>;
   readonly unregisterManagedChild: () => void;
   readonly exitGraceMs?: number;
@@ -216,6 +217,7 @@ interface WaitForLspProcessExitParams {
 
 export async function waitForLspProcessExitOrGiveUp({
   proc,
+  isClosed,
   killProcess,
   unregisterManagedChild,
   exitGraceMs = SHUTDOWN_EXIT_GRACE_MS,
@@ -252,7 +254,12 @@ export async function waitForLspProcessExitOrGiveUp({
       proc.off('close', finishClosed);
       resolve(false);
     };
-    if (proc.exitCode !== null || proc.signalCode !== null) {
+    // `exit` only means the process body ended. Node emits `close` later,
+    // after stdio is released; unregistering on exit leaves Windows callers
+    // racing locked handles. Register first, then inspect the host-owned close
+    // latch so a close that happened just before shutdown cannot be missed.
+    proc.once('close', finishClosed);
+    if (isClosed?.()) {
       finishClosed();
       return;
     }
@@ -268,7 +275,6 @@ export async function waitForLspProcessExitOrGiveUp({
         });
     }, exitGraceMs);
     killTimer.unref?.();
-    proc.once('close', finishClosed);
   });
 }
 
@@ -292,6 +298,8 @@ export async function createLspClient(params: CreateLspClientParams): Promise<Ls
     command: launch.command,
     args: launch.args,
     cwd: root,
+  }, {
+    manualUnregister: true,
   });
   let managedChildRegistered = true;
   const unregisterManagedChildOnce = (): void => {
@@ -301,6 +309,11 @@ export async function createLspClient(params: CreateLspClientParams): Promise<Ls
     managedChildRegistered = false;
     unregisterManagedChild();
   };
+  let processClosed = false;
+  proc.once('close', () => {
+    processClosed = true;
+    unregisterManagedChildOnce();
+  });
 
   proc.stderr.on('data', (chunk: Buffer) => debug?.(`[${serverId}] stderr: ${chunk.toString().trim()}`));
 
@@ -541,6 +554,7 @@ export async function createLspClient(params: CreateLspClientParams): Promise<Ls
     // caller deleting that directory hits EBUSY).
     await waitForLspProcessExitOrGiveUp({
       proc,
+      isClosed: () => processClosed,
       killProcess: () => killChildProcessTree(proc, {
         forceMs: SHUTDOWN_KILL_REAP_GRACE_MS,
         taskkillMs: 2_000,

@@ -53,6 +53,8 @@ import type {
   RuntimeDaemonNotification,
 } from './protocol.js';
 
+const MAX_PENDING_SUBSCRIPTION_NOTIFICATIONS = 256;
+
 export interface RuntimeDaemonClientTransport {
   request(method: RuntimeDaemonMethod, params?: unknown): Promise<unknown>;
   subscribe(listener: (notification: RuntimeDaemonNotification) => void): RuntimeSubscription;
@@ -125,11 +127,11 @@ export function createRuntimeDaemonClient(
           runId,
           sessionId,
           ...(turnId !== undefined ? { turnId } : {}),
-          result: request('run.await', { runId }) as Promise<RuntimeRunResult>,
+          result: requestRuntimeRunResult(request, runId),
         };
       },
       await(runId) {
-        return request('run.await', { runId }) as Promise<RuntimeRunResult>;
+        return requestRuntimeRunResult(request, runId);
       },
       get(runId) {
         return request('run.get', { runId }) as Promise<RuntimeRunStatus>;
@@ -330,9 +332,17 @@ function subscribeToDaemonNotification(
 ): RuntimeSubscription {
   let closed = false;
   let remoteSubscriptionId: string | undefined;
+  const pendingNotifications: Array<Record<string, unknown>> = [];
   const local = transport.subscribe((notification) => {
     if (closed || notification.method !== 'event') return;
     const payload = requireRecord(notification.params);
+    if (remoteSubscriptionId === undefined) {
+      if (pendingNotifications.length >= MAX_PENDING_SUBSCRIPTION_NOTIFICATIONS) {
+        pendingNotifications.shift();
+      }
+      pendingNotifications.push(payload);
+      return;
+    }
     if (payload.subscriptionId !== remoteSubscriptionId) return;
     listener(payload.event);
   });
@@ -340,8 +350,16 @@ function subscribeToDaemonNotification(
     remoteSubscriptionId = requireStringField(requireRecord(result), 'subscriptionId');
     if (closed) {
       unsubscribeRemote(request, method, remoteSubscriptionId);
+      pendingNotifications.length = 0;
+      return;
+    }
+    for (const payload of pendingNotifications.splice(0)) {
+      if (payload.subscriptionId === remoteSubscriptionId) {
+        listener(payload.event);
+      }
     }
   }).catch(() => {
+    pendingNotifications.length = 0;
     local.close();
   });
   return {
@@ -353,6 +371,45 @@ function subscribeToDaemonNotification(
       }
     },
   };
+}
+
+function requestRuntimeRunResult(
+  request: RuntimeDaemonClientTransport['request'],
+  runId: string,
+): Promise<RuntimeRunResult> {
+  return request('run.await', { runId }).then(deserializeRuntimeRunResult);
+}
+
+function deserializeRuntimeRunResult(value: unknown): RuntimeRunResult {
+  const record = requireRecord(value);
+  const error = Object.prototype.hasOwnProperty.call(record, 'error')
+    ? deserializeRuntimeError(record.error)
+    : undefined;
+  const normalized = { ...record };
+  delete normalized.error;
+  return {
+    ...normalized,
+    ...(error !== undefined ? { error } : {}),
+  } as unknown as RuntimeRunResult;
+}
+
+function deserializeRuntimeError(value: unknown): Error | undefined {
+  if (value === undefined || value === null) return undefined;
+  if (value instanceof Error) return value;
+  if (typeof value === 'string') return new Error(value);
+  const record = requireRecord(value);
+  const error = new Error(
+    typeof record.message === 'string' && record.message.length > 0
+      ? record.message
+      : 'Runtime run failed.',
+  );
+  if (typeof record.name === 'string' && record.name.length > 0) {
+    error.name = record.name;
+  }
+  if (typeof record.stack === 'string' && record.stack.length > 0) {
+    error.stack = record.stack;
+  }
+  return error;
 }
 
 function unsubscribeRemote(

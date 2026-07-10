@@ -1,4 +1,5 @@
 import { randomUUID } from 'node:crypto';
+import os from 'node:os';
 import path from 'node:path';
 import process from 'node:process';
 import { Readable, Writable } from 'node:stream';
@@ -526,7 +527,8 @@ export class KodaXAcpServer implements Agent {
     this.runtimeReady = options.runtime
       ? Promise.resolve(options.runtime)
       : createKodaXRuntime({
-          homeDir: defaultCwd,
+          homeDir: os.homedir(),
+          sessionsDir: this.storage.getSessionsDir(),
           profile: 'acp',
           defaultProvider: this.provider,
           ...(this.model !== undefined ? { defaultModel: this.model } : {}),

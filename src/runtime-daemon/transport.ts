@@ -3,6 +3,7 @@ import * as fs from 'node:fs/promises';
 import * as net from 'node:net';
 import os from 'node:os';
 import path from 'node:path';
+import { StringDecoder } from 'node:string_decoder';
 
 import type { RuntimeSubscription } from '../sdk-runtime.js';
 import type { RuntimeDaemonClientTransport } from './client.js';
@@ -31,8 +32,13 @@ export interface RuntimeDaemonFrameParser {
   flush(): void;
 }
 
+export interface RuntimeDaemonFrameParserOptions {
+  readonly maxFrameBytes?: number;
+}
+
 export interface RuntimeDaemonSocketServerOptions {
   readonly endpoint: RuntimeDaemonEndpoint;
+  readonly maxFrameBytes?: number;
   readonly createDispatcher: (
     notify: (notification: RuntimeDaemonNotification) => void,
   ) => RuntimeDaemonDispatcher;
@@ -40,12 +46,16 @@ export interface RuntimeDaemonSocketServerOptions {
 
 export interface RuntimeDaemonSocketServer {
   readonly endpoint: RuntimeDaemonEndpoint;
+  unref(): void;
   close(): Promise<void>;
 }
 
 export interface RuntimeDaemonSocketClientTransportOptions {
   readonly connectTimeoutMs?: number;
+  readonly maxFrameBytes?: number;
 }
+
+export const RUNTIME_DAEMON_MAX_FRAME_BYTES = 8 * 1024 * 1024;
 
 export class RuntimeDaemonTransportError extends Error {
   constructor(
@@ -93,26 +103,50 @@ function shortPathHash(value: string): string {
 
 export function createRuntimeDaemonFrameParser(
   onFrame: (frame: RuntimeDaemonFrame) => void,
+  options: RuntimeDaemonFrameParserOptions = {},
 ): RuntimeDaemonFrameParser {
   let buffer = '';
+  let bufferBytes = 0;
+  let decoder = new StringDecoder('utf8');
+  const maxFrameBytes = options.maxFrameBytes ?? RUNTIME_DAEMON_MAX_FRAME_BYTES;
+  if (!Number.isSafeInteger(maxFrameBytes) || maxFrameBytes <= 0) {
+    throw new Error('Runtime daemon maxFrameBytes must be a positive safe integer.');
+  }
   const consumeLine = (line: string): void => {
+    assertFrameSize(line, maxFrameBytes);
     if (!line.trim()) return;
     onFrame(parseRuntimeDaemonFrame(line));
   };
+  const append = (text: string): void => {
+    buffer += text;
+    bufferBytes += Buffer.byteLength(text, 'utf8');
+  };
   return {
     push(chunk) {
-      buffer += typeof chunk === 'string' ? chunk : chunk.toString('utf8');
+      if (typeof chunk === 'string') {
+        append(decoder.end());
+        decoder = new StringDecoder('utf8');
+        append(chunk);
+      } else {
+        append(decoder.write(chunk));
+      }
       while (true) {
         const newline = buffer.indexOf('\n');
         if (newline < 0) break;
         const line = buffer.slice(0, newline).replace(/\r$/, '');
+        const consumed = buffer.slice(0, newline + 1);
         buffer = buffer.slice(newline + 1);
+        bufferBytes -= Buffer.byteLength(consumed, 'utf8');
         consumeLine(line);
       }
+      assertFrameByteSize(bufferBytes, maxFrameBytes);
     },
     flush() {
+      append(decoder.end());
+      decoder = new StringDecoder('utf8');
       const tail = buffer.trim();
       buffer = '';
+      bufferBytes = 0;
       if (tail.length > 0) consumeLine(tail);
     },
   };
@@ -155,12 +189,25 @@ export async function createRuntimeDaemonSocketClientTransport(
     }
     if (isRuntimeDaemonNotification(frame)) {
       for (const listener of listeners) {
-        listener(frame);
+        try {
+          listener(frame);
+        } catch {
+          // A local notification consumer must not tear down the shared transport.
+        }
       }
     }
-  });
+  }, { maxFrameBytes: options.maxFrameBytes });
 
-  socket.on('data', (chunk) => parser.push(chunk));
+  socket.on('data', (chunk) => {
+    try {
+      parser.push(chunk);
+    } catch (error: unknown) {
+      closed = true;
+      const normalized = normalizeTransportError(error);
+      rejectPending(pending, normalized);
+      socket.destroy(normalized);
+    }
+  });
   socket.on('close', () => {
     closed = true;
     rejectPending(pending, new Error('Runtime daemon transport closed.'));
@@ -177,10 +224,19 @@ export async function createRuntimeDaemonSocketClientTransport(
       }
       const id = `req_${randomUUID().replace(/-/g, '').slice(0, 12)}`;
       const frame = createRuntimeDaemonRequest(id, method, params);
+      let encoded: string;
+      try {
+        encoded = JSON.stringify(frame);
+      } catch (error: unknown) {
+        return Promise.reject(new RuntimeDaemonTransportError(
+          `Runtime daemon request params are not JSON-serializable: ${normalizeTransportError(error).message}`,
+          'invalid_params',
+        ));
+      }
       const result = new Promise<unknown>((resolve, reject) => {
         pending.set(id, { resolve, reject });
       });
-      socket.write(`${JSON.stringify(frame)}\n`);
+      socket.write(`${encoded}\n`);
       return result;
     },
     subscribe(listener) {
@@ -219,10 +275,21 @@ export async function createRuntimeDaemonSocketServer(
       return;
     }
     sockets.add(socket);
+    let rejectedFrame = false;
 
     const send = (frame: RuntimeDaemonFrame): void => {
       if (socket.destroyed) return;
-      socket.write(`${JSON.stringify(frame)}\n`);
+      let encoded: string;
+      try {
+        encoded = JSON.stringify(frame);
+      } catch (error: unknown) {
+        const fallback = createRuntimeDaemonErrorResponse({
+          code: 'internal_error',
+          message: `Runtime daemon response is not JSON-serializable: ${normalizeTransportError(error).message}`,
+        }, frame.kind === 'response' || frame.kind === 'error' ? frame.id : undefined);
+        encoded = JSON.stringify(fallback);
+      }
+      socket.write(`${encoded}\n`);
     };
     const dispatcher = options.createDispatcher((notification) => send(notification));
     dispatchers.add(dispatcher);
@@ -244,14 +311,43 @@ export async function createRuntimeDaemonSocketServer(
         code: 'invalid_request',
         message: 'Runtime daemon server expects request frames from clients.',
       }));
-    });
+    }, { maxFrameBytes: options.maxFrameBytes });
 
-    socket.on('data', (chunk) => parser.push(chunk));
-    socket.on('end', () => parser.flush());
+    const rejectInvalidFrame = (error: unknown): void => {
+      if (rejectedFrame) return;
+      rejectedFrame = true;
+      const normalized = normalizeTransportError(error);
+      send(createRuntimeDaemonErrorResponse({
+        code: 'invalid_frame',
+        message: normalized.message,
+        ...(isRuntimeDaemonTransportError(normalized) && normalized.data !== undefined
+          ? { data: normalized.data }
+          : {}),
+      }));
+      socket.end();
+    };
+    socket.on('data', (chunk) => {
+      if (rejectedFrame) return;
+      try {
+        parser.push(chunk);
+      } catch (error: unknown) {
+        rejectInvalidFrame(error);
+      }
+    });
+    socket.on('end', () => {
+      try {
+        parser.flush();
+      } catch (error: unknown) {
+        rejectInvalidFrame(error);
+      }
+    });
     socket.on('close', () => {
       sockets.delete(socket);
       dispatchers.delete(dispatcher);
       dispatcher.close();
+    });
+    socket.on('error', () => {
+      socket.destroy();
     });
   });
 
@@ -259,6 +355,9 @@ export async function createRuntimeDaemonSocketServer(
 
   return {
     endpoint: options.endpoint,
+    unref() {
+      server.unref();
+    },
     async close() {
       if (closed) return;
       closed = true;
@@ -273,6 +372,19 @@ export async function createRuntimeDaemonSocketServer(
       await closeNetServer(server);
     },
   };
+}
+
+function assertFrameSize(frame: string, maxFrameBytes: number): void {
+  assertFrameByteSize(Buffer.byteLength(frame, 'utf8'), maxFrameBytes);
+}
+
+function assertFrameByteSize(actualBytes: number, maxFrameBytes: number): void {
+  if (actualBytes <= maxFrameBytes) return;
+  throw new RuntimeDaemonTransportError(
+    `Runtime daemon frame exceeds the ${maxFrameBytes}-byte limit.`,
+    'invalid_frame',
+    { actualBytes, maxFrameBytes },
+  );
 }
 
 function waitForConnect(socket: net.Socket, timeoutMs = 2_000): Promise<void> {

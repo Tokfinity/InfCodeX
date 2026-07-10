@@ -9,18 +9,32 @@ export interface KodaXDiagnostic {
 
 export type KodaXDiagnosticSink = (diagnostic: KodaXDiagnostic) => void;
 
-let diagnosticSink: KodaXDiagnosticSink | undefined;
+interface DiagnosticSinkRegistration {
+  readonly id: symbol;
+  readonly sink: KodaXDiagnosticSink | undefined;
+}
+
+const diagnosticSinks: DiagnosticSinkRegistration[] = [];
 
 export function setKodaXDiagnosticSink(sink: KodaXDiagnosticSink | undefined): () => void {
-  const previous = diagnosticSink;
-  diagnosticSink = sink;
+  const registration: DiagnosticSinkRegistration = {
+    id: Symbol('kodax-diagnostic-sink'),
+    sink,
+  };
+  diagnosticSinks.push(registration);
+  let restored = false;
   return () => {
-    diagnosticSink = previous;
+    if (restored) return;
+    restored = true;
+    const index = diagnosticSinks.findIndex((item) => item.id === registration.id);
+    if (index >= 0) {
+      diagnosticSinks.splice(index, 1);
+    }
   };
 }
 
 export function emitKodaXDiagnostic(diagnostic: KodaXDiagnostic): void {
-  const sink = diagnosticSink;
+  const sink = diagnosticSinks.at(-1)?.sink;
   if (sink) {
     try {
       sink(diagnostic);
