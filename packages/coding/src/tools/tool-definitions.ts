@@ -57,6 +57,7 @@ import { toolMcpReadResource } from './mcp-read-resource.js';
 import { toolMcpGetPrompt } from './mcp-get-prompt.js';
 import { toolWorktreeCreate, toolWorktreeRemove } from './worktree.js';
 import { toolDispatchChildTask } from './dispatch-child-tasks.js';
+import { toolListDispatchableAgents } from './list-dispatchable-agents.js';
 import { toolRunWorkflow } from './run-workflow.js';
 import { toolSendMessage } from './send-message.js';
 import { toolTaskStop } from './task-stop.js';
@@ -423,6 +424,38 @@ export const BUILTIN_TOOL_DEFINITIONS: LocalToolDefinition[] = [
     handler: toolGrep,
     sideEffect: 'readonly',
     toClassifierInput: () => '',
+  },
+  {
+    name: 'list_dispatchable_agents',
+    description: 'List the Native, Constructed, and External agents that the host policy currently allows this Worker to dispatch. Use the returned canonical agent_id with dispatch_child_task(agent_id).',
+    input_schema: {
+      type: 'object',
+      properties: {
+        required_skills: {
+          type: 'array',
+          items: { type: 'string' },
+          description: 'Optional skills every returned agent must declare.',
+        },
+        required_capabilities: {
+          type: 'object',
+          properties: {
+            streaming: { type: 'boolean' },
+            durableTasks: { type: 'boolean' },
+            inputRequired: { type: 'boolean' },
+            cancellation: { type: 'boolean' },
+            artifacts: { type: 'boolean' },
+          },
+          description: 'Optional lifecycle capabilities required for this dispatch.',
+        },
+        read_only: {
+          type: 'boolean',
+          description: 'When true, exclude external agents whose declared remote effect is write or unknown.',
+        },
+      },
+    },
+    handler: toolListDispatchableAgents,
+    sideEffect: 'readonly',
+    toClassifierInput: () => 'List dispatchable agents',
   },
   {
     name: 'dispatch_child_task',
@@ -968,6 +1001,10 @@ export const BUILTIN_TOOL_DEFINITIONS: LocalToolDefinition[] = [
         max_selections: {
           type: 'integer',
           description: 'Maximum number of options the user may select. Only applies when multi_select is true.',
+        },
+        agent_id: {
+          type: 'string',
+          description: 'Optional canonical selector returned by list_dispatchable_agents. Routes Native, Constructed, or External agents through the shared catalog. Do not combine with subagent_type.',
         },
         allow_custom_input: {
           type: 'boolean',

@@ -47,6 +47,11 @@ export interface WorkflowTaskVerificationResult {
   readonly mutationEvidence?: boolean;
 }
 
+export interface WorkflowAgentTarget {
+  readonly agentId: string;
+  readonly expectedConfigurationRevision?: string;
+}
+
 export interface WorkflowSpawnAgentInput {
   /** Human-readable label for the agent — surfaces in events / UI. */
   readonly name: string;
@@ -64,6 +69,8 @@ export interface WorkflowSpawnAgentInput {
   readonly readOnly?: boolean;
   /** Route to a registered specialist agent (FEATURE_191). */
   readonly subagentType?: string;
+  /** Route through the shared dispatchable-agent catalog (FEATURE_258). */
+  readonly target?: WorkflowAgentTarget;
   /**
    * Per-agent model TIER (FEATURE_120 model_hint). The script expresses semantic
    * intent — 'fast' (cheap), 'deep' (strong), 'balanced' (default) — NOT a

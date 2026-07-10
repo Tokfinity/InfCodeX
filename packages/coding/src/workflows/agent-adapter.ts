@@ -24,6 +24,7 @@ import { execFile } from 'node:child_process';
 import path from 'node:path';
 import { promisify } from 'node:util';
 import type {
+  AgentTaskSnapshot,
   WorkflowAgentBackend,
   WorkflowSpawnAgentInput,
   WorkflowTaskHandle,
@@ -184,6 +185,10 @@ function resolveVerificationForInput(
     };
   }
   return { verification: writeDefault };
+}
+
+interface ExternalTaskEntry {
+  readonly name: string;
 }
 
 function resolveSpawnAgentInput(
@@ -410,6 +415,42 @@ function appendVerificationFailure(
   return finalText.trim().length > 0 ? `${finalText}\n\n${suffix}` : suffix;
 }
 
+function externalWorkflowStatus(task: AgentTaskSnapshot): WorkflowTaskStatus {
+  if (task.state === 'completed') return 'completed';
+  if (task.state === 'canceled') return 'stopped';
+  if (task.state === 'failed' || task.state === 'rejected' || task.state === 'unknown') {
+    return 'failed';
+  }
+  return 'running';
+}
+
+function externalWorkflowResult(
+  task: AgentTaskSnapshot,
+  name: string,
+): WorkflowTaskResult {
+  return {
+    taskId: task.taskId,
+    name,
+    status: externalWorkflowStatus(task),
+    finalText: task.output ?? task.error ?? '',
+    ...(task.usage ? { usage: task.usage } : {}),
+  };
+}
+
+function externalWorkflowSnapshot(
+  task: AgentTaskSnapshot,
+  name: string,
+): WorkflowTaskSnapshot {
+  const status = externalWorkflowStatus(task);
+  return {
+    taskId: task.taskId,
+    name,
+    status,
+    ...(task.output !== undefined ? { lastText: task.output } : {}),
+    ...(task.output === undefined && task.error !== undefined ? { lastText: task.error } : {}),
+  };
+}
+
 function limitReachedWarningVerification(): WorkflowTaskVerificationResult {
   return {
     ok: false,
@@ -580,6 +621,7 @@ export function createCodingWorkflowBackend(deps: CodingWorkflowBackendDeps): Wo
   const genId = deps.generateId ?? (() => `wf-child-${(counter += 1)}`);
 
   const tasks = new Map<string, TaskEntry>();
+  const externalTasks = new Map<string, ExternalTaskEntry>();
   const summarySubscribers = new Set<(
     taskId: string,
     update: WorkflowTaskSummaryEventUpdate,
@@ -612,6 +654,31 @@ export function createCodingWorkflowBackend(deps: CodingWorkflowBackendDeps): Wo
   const spawn = async (input: WorkflowSpawnAgentInput): Promise<WorkflowTaskHandle> => {
     const effectiveInput = resolveSpawnAgentInput(input, deps.defaultChildReadOnly);
     const childId = genId();
+    if (effectiveInput.target && effectiveInput.subagentType) {
+      throw new Error('Workflow target and subagentType are mutually exclusive.');
+    }
+    if (effectiveInput.target) {
+      if (effectiveInput.verification?.requiresMutation === true) {
+        throw new Error('External Workflow targets cannot directly satisfy workspace mutation verification.');
+      }
+      const binding = ctx.agentExecutorPlane;
+      if (!binding) throw new Error('Workflow target requires a host-bound agent executor plane.');
+      await binding.plane.tasks.start({
+        taskId: childId,
+        agentId: effectiveInput.target.agentId,
+        objective: effectiveInput.prompt,
+        context: {
+          ...binding.context,
+          ...(deps.runId ? { workflowId: deps.runId } : {}),
+        },
+        readOnly: effectiveInput.readOnly,
+        ...(effectiveInput.target.expectedConfigurationRevision
+          ? { expectedConfigurationRevision: effectiveInput.target.expectedConfigurationRevision }
+          : {}),
+      });
+      externalTasks.set(childId, { name: effectiveInput.name });
+      return { taskId: childId, name: effectiveInput.name };
+    }
     // `tasks` holds every agent spawned earlier in this run (the current one is
     // added at the end of spawn, line ~682) — so this is exactly the set a
     // `task_id:` evidence ref may legitimately point back to.
@@ -732,6 +799,12 @@ export function createCodingWorkflowBackend(deps: CodingWorkflowBackendDeps): Wo
     taskId: string,
     opts?: WorkflowWaitOptions,
   ): Promise<WorkflowTaskResult> => {
+    const external = externalTasks.get(taskId);
+    if (external) {
+      const binding = ctx.agentExecutorPlane;
+      if (!binding) throw new Error('Workflow external-agent binding was removed.');
+      return externalWorkflowResult(await binding.plane.tasks.wait(taskId), external.name);
+    }
     const entry = tasks.get(taskId);
     if (!entry) throw new Error(`unknown workflow task: ${taskId}`);
     const totalWaitTimeoutMs = normalizeWaitTimeoutMs(opts);
@@ -852,6 +925,12 @@ export function createCodingWorkflowBackend(deps: CodingWorkflowBackendDeps): Wo
   };
 
   const output = async (taskId: string): Promise<WorkflowTaskSnapshot> => {
+    const external = externalTasks.get(taskId);
+    if (external) {
+      const binding = ctx.agentExecutorPlane;
+      if (!binding) throw new Error('Workflow external-agent binding was removed.');
+      return externalWorkflowSnapshot(await binding.plane.tasks.get(taskId), external.name);
+    }
     // FEATURE_246 (review A2): mirror wait()'s guard — an unknown (never-spawned)
     // id must fail loudly, not return a fabricated { status: 'running' } snapshot
     // that downstream logic would branch on. A KNOWN task that is merely in-flight
@@ -867,13 +946,25 @@ export function createCodingWorkflowBackend(deps: CodingWorkflowBackendDeps): Wo
   };
 
   const send = async (taskId: string, content: string): Promise<void> => {
+    if (externalTasks.has(taskId)) {
+      const binding = ctx.agentExecutorPlane;
+      if (!binding) throw new Error('Workflow external-agent binding was removed.');
+      await binding.plane.tasks.sendInput(taskId, { content });
+      return;
+    }
     // FEATURE_246 (review A2): fail loudly on an unknown target rather than
     // silently dropping the message (the smoke api's send asserts the same).
     if (!tasks.has(taskId)) throw new Error(`unknown workflow task: ${taskId}`);
     routeMessage({ to: taskId, priority: 'user', mode: 'prompt', content, registry, queue });
   };
 
-  const stop = async (taskId: string): Promise<void> => {
+  const stop = async (taskId: string, reason: string): Promise<void> => {
+    if (externalTasks.has(taskId)) {
+      const binding = ctx.agentExecutorPlane;
+      if (!binding) throw new Error('Workflow external-agent binding was removed.');
+      await binding.plane.tasks.cancel(taskId, reason);
+      return;
+    }
     // FEATURE_246 (review A2): fail loudly on an unknown target rather than a
     // silent no-op (optional chaining would otherwise swallow it).
     if (!tasks.has(taskId)) throw new Error(`unknown workflow task: ${taskId}`);

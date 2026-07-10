@@ -55,6 +55,22 @@ export async function toolTaskStop(
       ? input.reason.trim()
       : undefined;
 
+  const plane = ctx.agentExecutorPlane?.plane;
+  if (plane) {
+    try {
+      const task = await plane.tasks.get(taskId);
+      if (task.route === 'external') {
+        const canceled = await plane.tasks.cancel(taskId, reason);
+        return `task_stop external task ${taskId}: cancellation=${canceled.cancellation}, state=${canceled.state}.`;
+      }
+    } catch (error: unknown) {
+      if (!(error instanceof Error) || !error.message.startsWith('Agent task not found:')) {
+        const message = error instanceof Error ? error.message : String(error);
+        return `[Tool Error] ${TOOL_NAME}: ${message}`;
+      }
+    }
+  }
+
   // --- Reject when async dispatch is disabled (no abort registry) ---
   const abortRegistry = ctx.childAbortControllers;
   if (!abortRegistry) {

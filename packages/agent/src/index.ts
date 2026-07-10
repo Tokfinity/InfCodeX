@@ -674,3 +674,4 @@ export * from './session-lineage/index.js';
 // Domain-neutral workflow orchestration; also available at the
 // `@kodax-ai/agent/workflow` subpath. Coding provides the backend.
 export * from './workflow/index.js';
+export * from './external-agents/index.js';

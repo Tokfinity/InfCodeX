@@ -94,6 +94,7 @@ import type {
   WorkflowEventCorrelation,
   WorkflowProcessEvent,
   SkillDynamicContextExecutor,
+  AgentExecutorPlaneBinding,
 } from '@kodax-ai/agent';
 // v0.7.35.1 FEATURE_142 (A-R4): AMA / harness types live in @kodax-ai/llm
 // (coding-AMA vocabulary; see ADR-021). Imported directly here instead of
@@ -1276,6 +1277,8 @@ export interface KodaXContextOptions {
    * lookups use the legacy process-global registry.
    */
   agentScope?: KodaXAgentScope;
+  /** FEATURE_258: host-bound external-agent plane and non-model dispatch context. */
+  agentExecutorPlane?: AgentExecutorPlaneBinding;
   /** Optional task-engine surface label used to track managed tasks across UX entry points. */
   taskSurface?: KodaXTaskSurface;
   /**
@@ -1888,6 +1891,8 @@ export interface KodaXToolExecutionContext {
   agentProfile?: KodaXAgentProfile;
   /** Scoped specialist-agent resolver inherited from KodaXOptions.context. */
   agentScope?: KodaXAgentScope;
+  /** FEATURE_258: external dispatch capability; absent keeps the tool surface unchanged. */
+  agentExecutorPlane?: AgentExecutorPlaneBinding;
   /** FEATURE_221: SDK-consumer self-manual injection, forwarded from KodaXOptions. */
   selfManual?: KodaXSelfManualConfig;
   /** FEATURE_222 skill security — host policy for skill `!`cmd`` dynamic-context,

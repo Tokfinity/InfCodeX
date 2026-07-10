@@ -39,6 +39,7 @@
  */
 
 import { getMessageQueue } from '@kodax-ai/agent';
+import type { AgentTaskSnapshot } from '@kodax-ai/agent';
 
 import type { KodaXToolExecutionContext, WorkflowRunProgressView } from '../types.js';
 import type {
@@ -78,6 +79,23 @@ export async function toolTaskOutput(
   let timeoutMs = DEFAULT_TIMEOUT_MS;
   if (typeof timeoutRaw === 'number' && Number.isFinite(timeoutRaw)) {
     timeoutMs = Math.max(0, Math.min(MAX_TIMEOUT_MS, Math.floor(timeoutRaw)));
+  }
+
+  const ledgerTask = await findLedgerTask(ctx, taskId);
+  if (ledgerTask?.route === 'external') {
+    let task = ledgerTask;
+    let ledgerRetrievalStatus: TaskOutputRetrievalStatus = 'success';
+    if (block && !isLedgerTerminal(task)) {
+      try {
+        task = await ctx.agentExecutorPlane!.plane.tasks.wait(taskId, Math.max(1, timeoutMs));
+      } catch {
+        ledgerRetrievalStatus = 'wait_expired';
+        task = await ctx.agentExecutorPlane!.plane.tasks.get(taskId);
+      }
+    }
+    const rendered = renderLedgerTask(task, ledgerRetrievalStatus);
+    if (isLedgerTerminal(task)) drainConsumedTaskNotification(taskId);
+    return rendered;
   }
 
   // --- Reject when async dispatch is disabled (no snapshot map) ---
@@ -132,6 +150,61 @@ export async function toolTaskOutput(
     drainConsumedTaskNotification(taskId);
   }
   return output;
+}
+
+async function findLedgerTask(
+  ctx: KodaXToolExecutionContext,
+  taskId: string,
+): Promise<AgentTaskSnapshot | undefined> {
+  const plane = ctx.agentExecutorPlane?.plane;
+  if (!plane) return undefined;
+  try {
+    return await plane.tasks.get(taskId);
+  } catch (error: unknown) {
+    if (error instanceof Error && error.message.startsWith('Agent task not found:')) return undefined;
+    throw error;
+  }
+}
+
+function isLedgerTerminal(task: AgentTaskSnapshot): boolean {
+  return task.state === 'completed'
+    || task.state === 'failed'
+    || task.state === 'canceled'
+    || task.state === 'rejected';
+}
+
+function ledgerDisplayStatus(task: AgentTaskSnapshot): 'running' | 'completed' | 'failed' | 'aborted' {
+  if (task.state === 'completed') return 'completed';
+  if (task.state === 'canceled') return 'aborted';
+  if (task.state === 'failed' || task.state === 'rejected') return 'failed';
+  return 'running';
+}
+
+function renderLedgerTask(
+  task: AgentTaskSnapshot,
+  retrievalStatus: TaskOutputRetrievalStatus,
+): string {
+  const duration = Math.max(0, Date.parse(task.updatedAt) - Date.parse(task.createdAt));
+  const lines = [
+    `<retrieval_status>${retrievalStatus}</retrieval_status>`,
+    `<task_id>${escapeXmlContent(task.taskId)}</task_id>`,
+    `<kind>agent</kind>`,
+    `<agent_id>${escapeXmlContent(task.agentId)}</agent_id>`,
+    `<status>${ledgerDisplayStatus(task)}</status>`,
+    `<agent_state>${task.state}</agent_state>`,
+    `<cancellation>${task.cancellation}</cancellation>`,
+    `<duration_ms>${duration}</duration_ms>`,
+  ];
+  if (retrievalStatus === 'wait_expired') {
+    lines.push('<note>The bounded read window expired; the task remains active or uncertain.</note>');
+  }
+  const body = task.output ?? task.error;
+  if (body !== undefined) {
+    lines.push(task.output !== undefined ? '<output>' : '<error>');
+    lines.push(tailToBytes(body, OUTPUT_TAIL_BYTES));
+    lines.push(task.output !== undefined ? '</output>' : '</error>');
+  }
+  return lines.join('\n');
 }
 
 function drainConsumedTaskNotification(taskId: string): void {

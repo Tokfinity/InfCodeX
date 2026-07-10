@@ -1600,6 +1600,7 @@ function buildWriteSystemPrompt(gitRoot: string): string {
  * Exported for unit-testing the security contract. Treat as read-only at runtime.
  */
 export const CHILD_EXCLUDE_TOOLS_BASE: readonly string[] = [
+  'list_dispatchable_agents', // Discovery is coordinator-only with dispatch.
   'emit_managed_protocol',  // AMA protocol; children are SA mode
   'dispatch_child_task',    // Prevent recursive child spawning
   // FEATURE_155 v0.7.39 Slice C1 — `await_child_task` removed; the

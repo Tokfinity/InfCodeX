@@ -312,10 +312,6 @@ export async function toolSendMessage(
   }
 
   // --- Branch 3: address a specific task_id (peer or Worker→child) ---
-  const registry = ctx.childTaskRegistry;
-  if (!registry) {
-    return `[Tool Error] ${TOOL_NAME}: Async dispatch is disabled (no childTaskRegistry on context). Children run synchronously and complete inside their dispatch_child_task call — there is no in-flight target to steer.`;
-  }
   if (myId !== undefined && to === myId) {
     return `[Tool Error] ${TOOL_NAME}: Cannot send a message to yourself (to='${to}'). Use task tools to record your own notes; send_message routes between distinct agents.`;
   }
@@ -325,6 +321,29 @@ export async function toolSendMessage(
   const priorChain = nextSeenBy.slice(0, -1);
   if (priorChain.includes(to)) {
     return `[Tool Error] ${TOOL_NAME}: Cycle detected — target "${to}" is already in seen_by (${priorChain.join(' → ')}). Forwarding back to a prior sender would close a loop.`;
+  }
+
+  const plane = ctx.agentExecutorPlane?.plane;
+  if (plane) {
+    try {
+      const task = await plane.tasks.get(to);
+      if (task.route === 'external') {
+        const chargeError = chargeTurnCounter(ctx, 1);
+        if (chargeError) return chargeError;
+        await plane.tasks.sendInput(to, { content });
+        return `Message sent to external task ${to}. It keeps the same local task identity.`;
+      }
+    } catch (error: unknown) {
+      if (!(error instanceof Error) || !error.message.startsWith('Agent task not found:')) {
+        const message = error instanceof Error ? error.message : String(error);
+        return `[Tool Error] ${TOOL_NAME}: ${message}`;
+      }
+    }
+  }
+
+  const registry = ctx.childTaskRegistry;
+  if (!registry) {
+    return `[Tool Error] ${TOOL_NAME}: Async dispatch is disabled (no childTaskRegistry on context). Children run synchronously and complete inside their dispatch_child_task call — there is no in-flight target to steer.`;
   }
 
   // Priority + framing depends on who's sending:

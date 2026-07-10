@@ -100,6 +100,7 @@ export function getRuntimeActiveToolNames(
   repoIntelligenceMode?: KodaXRepoIntelligenceMode,
   hasCapabilityRuntime = false,
   toolConstructionMode?: boolean,
+  hasAgentExecutorPlane = false,
 ): string[] {
   let result = resolveKodaXAutoRepoMode(repoIntelligenceMode) === 'off'
     ? filterRepoIntelligenceWorkingToolNames(activeToolNames)
@@ -109,6 +110,9 @@ export function getRuntimeActiveToolNames(
   }
   result = filterConstructionToolNames(result, toolConstructionMode);
   result = filterAgentConstructionToolNames(result, toolConstructionMode);
+  if (!hasAgentExecutorPlane) {
+    result = result.filter((name) => name !== 'list_dispatchable_agents');
+  }
   return result;
 }
 
@@ -121,6 +125,7 @@ export function getActiveToolDefinitions(
   unlockedDeferredTools?: ReadonlySet<string>,
   // FEATURE_221: white-label — re-brand the kodax_manual description per product.
   selfManualProductName?: string,
+  hasAgentExecutorPlane = false,
 ): ReturnType<typeof listToolDefinitions> {
   const allTools = listToolDefinitions();
   if (activeToolNames.length === 0) {
@@ -133,6 +138,7 @@ export function getActiveToolDefinitions(
       repoIntelligenceMode,
       hasCapabilityRuntime,
       toolConstructionMode,
+      hasAgentExecutorPlane,
     ),
   );
   return allTools

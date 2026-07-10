@@ -262,6 +262,7 @@ function computeVisibleToolScope(
     options.context?.repoIntelligenceMode,
     Boolean(options.extensionRuntime),
     options.context?.toolConstructionMode,
+    options.context?.agentExecutorPlane !== undefined,
   );
 }
 

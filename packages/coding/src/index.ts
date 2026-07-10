@@ -1046,6 +1046,12 @@ export type {
 } from './construction/index.js';
 
 export {
+  listCodingDispatchableAgents,
+  resolveCodingDispatchableAgent,
+} from './external-agents/local-catalog.js';
+export type { CodingDispatchableAgentRoute } from './external-agents/local-catalog.js';
+
+export {
   CapabilityDeniedError,
   ConstructionManifestError,
   DEFAULT_HANDLER_TIMEOUT_MS,

@@ -31,6 +31,7 @@
  */
 
 import { emitKodaXDiagnostic, enqueueChildTaskNotification, registerChildTask } from '@kodax-ai/agent';
+import type { AgentTaskSnapshot, DispatchableAgentDescriptor } from '@kodax-ai/agent';
 import type {
   KodaXChildAgentResult,
   KodaXChildContextBundle,
@@ -54,6 +55,10 @@ import {
   listConstructedAgents,
   resolveConstructedAgent,
 } from '../construction/agent-resolver.js';
+import {
+  listCodingDispatchableAgents,
+  resolveCodingDispatchableAgent,
+} from '../external-agents/local-catalog.js';
 import { applyToolResultGuardrail } from './tool-result-policy.js';
 import {
   LARGE_CONTENT_THRESHOLD_BYTES,
@@ -166,6 +171,178 @@ async function applyChildSummaryGuardrailWithSummarizer(
 function shouldUseAsyncDispatch(ctx: KodaXToolExecutionContext): boolean {
   if (process.env.KODAX_ASYNC_DISPATCH === '0') return false;
   return ctx.childTaskRegistry !== undefined;
+}
+
+function externalTaskResult(task: AgentTaskSnapshot): KodaXChildExecutionResult {
+  const completed = task.state === 'completed';
+  const summary = task.output ?? task.error ?? `External task ended in state ${task.state}.`;
+  const artifactPaths = task.artifacts?.flatMap((artifact) => artifact.uri ? [artifact.uri] : []);
+  const childResult: KodaXChildAgentResult = {
+    childId: task.taskId,
+    fanoutClass: 'evidence-scan',
+    status: completed ? 'completed' : 'failed',
+    disposition: completed ? 'valid' : 'needs-more-evidence',
+    summary,
+    evidenceRefs: [],
+    contradictions: [],
+    ...(artifactPaths && artifactPaths.length > 0 ? { artifactPaths } : {}),
+    ...(task.usage?.totalTokens !== undefined ? { totalTokensUsed: task.usage.totalTokens } : {}),
+  };
+  return {
+    results: [childResult],
+    mergedFindings: completed
+      ? [{ childId: task.taskId, objective: task.objective, evidence: [summary], artifacts: artifactPaths ?? [] }]
+      : [],
+    mergedArtifacts: artifactPaths ?? [],
+    totalTokensUsed: task.usage?.totalTokens ?? 0,
+    cancelledChildren: task.state === 'canceled' ? [task.taskId] : [],
+  };
+}
+
+async function notifyExternalTask(
+  task: AgentTaskSnapshot,
+  ctx: KodaXToolExecutionContext,
+): Promise<KodaXChildExecutionResult> {
+  const result = externalTaskResult(task);
+  const raw = task.output ?? task.error ?? `External task state: ${task.state}`;
+  const content = await applyChildSummaryGuardrailWithSummarizer(
+    'child_task_summary',
+    raw,
+    ctx,
+  );
+  enqueueChildTaskNotification({
+    taskId: task.taskId,
+    summary: content,
+    source: 'child_task',
+    status: task.state === 'completed' ? 'completed' : 'failed',
+  });
+  return result;
+}
+
+async function dispatchExternalAgent(input: {
+  readonly agentId: string;
+  readonly childId: string;
+  readonly objective: string;
+  readonly readOnly: boolean;
+  readonly ctx: KodaXToolExecutionContext;
+}): Promise<string> {
+  const { agentId, childId, objective, readOnly, ctx } = input;
+  const binding = ctx.agentExecutorPlane;
+  if (!binding) return `[Tool Error] ${TOOL_NAME}: No external agent executor plane is bound to this run.`;
+  let started: AgentTaskSnapshot;
+  try {
+    started = await binding.plane.tasks.start({
+      taskId: childId,
+      agentId,
+      objective,
+      context: {
+        ...binding.context,
+        ...(ctx.currentAgentId
+          ? { parentTaskId: ctx.currentAgentId }
+          : binding.context.parentTaskId ? { parentTaskId: binding.context.parentTaskId } : {}),
+      },
+      readOnly,
+    });
+  } catch (error: unknown) {
+    const message = error instanceof Error ? error.message : String(error);
+    return `[Tool Error] ${TOOL_NAME}: External agent "${agentId}" rejected dispatch: ${message}`;
+  }
+  if (started.state === 'failed' || started.state === 'rejected') {
+    return `[Tool Error] ${TOOL_NAME}: External agent "${agentId}" failed before launch: ${started.error ?? started.state}`;
+  }
+  if (!shouldUseAsyncDispatch(ctx)) {
+    const terminal = started.state === 'unknown'
+      ? started
+      : await binding.plane.tasks.wait(started.taskId);
+    return terminal.output ?? terminal.error ?? `External task ${terminal.taskId}: ${terminal.state}`;
+  }
+  const registry = ctx.childTaskRegistry;
+  if (!registry) return `[Tool Error] ${TOOL_NAME}: childTaskRegistry not available`;
+  const terminal = started.state === 'unknown'
+    ? Promise.resolve(started)
+    : binding.plane.tasks.wait(started.taskId);
+  const promise = terminal.then((task) => notifyExternalTask(task, ctx));
+  registerChildTask(registry, childId, promise);
+  const stateHint = started.state === 'input-required' || started.state === 'auth-required'
+    ? ` Current state is ${started.state}; use send_message(to="${childId}") to continue it.`
+    : '';
+  return `task_id:${childId}\nExternal child task "${childId}" is running through ${agentId}.${stateHint}`;
+}
+
+function selectedLocalDescriptor(
+  agentId: string | undefined,
+  specialistName: string | undefined,
+  ctx: KodaXToolExecutionContext,
+): DispatchableAgentDescriptor | undefined {
+  const binding = ctx.agentExecutorPlane;
+  if (!binding) return undefined;
+  const descriptors = listCodingDispatchableAgents(binding.context, ctx.agentScope);
+  if (agentId) return descriptors.find((descriptor) => descriptor.agentId === agentId);
+  if (specialistName) {
+    return descriptors.find((descriptor) => (
+      resolveCodingDispatchableAgent(descriptor.agentId, binding.context, ctx.agentScope)?.subagentType
+      === specialistName
+    ));
+  }
+  return descriptors.find((descriptor) => descriptor.origin === 'native');
+}
+
+async function recordLocalTask(
+  descriptor: DispatchableAgentDescriptor | undefined,
+  childId: string,
+  objective: string,
+  ctx: KodaXToolExecutionContext,
+): Promise<void> {
+  const binding = ctx.agentExecutorPlane;
+  if (!binding || !descriptor) return;
+  await binding.plane.tasks.recordLocal({
+    taskId: childId,
+    agentId: descriptor.agentId,
+    objective,
+    configurationRevision: descriptor.configurationRevision,
+    origin: descriptor.origin === 'constructed' ? 'constructed' : 'native',
+    ...(ctx.currentAgentId
+      ? { parentTaskId: ctx.currentAgentId }
+      : binding.context.parentTaskId ? { parentTaskId: binding.context.parentTaskId } : {}),
+    ...(binding.context.workflowId ? { workflowId: binding.context.workflowId } : {}),
+    ...(binding.context.runId ? { runId: binding.context.runId } : {}),
+    ...(binding.context.nodeId ? { nodeId: binding.context.nodeId } : {}),
+  });
+}
+
+async function updateLocalTaskFromResult(
+  childId: string,
+  result: KodaXChildExecutionResult,
+  ctx: KodaXToolExecutionContext,
+): Promise<void> {
+  const plane = ctx.agentExecutorPlane?.plane;
+  if (!plane) return;
+  const child = result.results[0];
+  const completed = child?.status === 'completed';
+  const evidence = result.mergedFindings[0]?.evidence.join('\n').trim();
+  const output = evidence || child?.summary;
+  await plane.tasks.updateLocal(childId, {
+    state: completed ? 'completed' : 'failed',
+    ...(output ? { output } : {}),
+    ...(!completed && child?.summary ? { error: child.summary } : {}),
+    ...(result.totalTokensUsed > 0 ? { usage: { totalTokens: result.totalTokensUsed } } : {}),
+  });
+}
+
+async function updateLocalTaskFromError(
+  childId: string,
+  error: unknown,
+  ctx: KodaXToolExecutionContext,
+): Promise<void> {
+  const plane = ctx.agentExecutorPlane?.plane;
+  if (!plane) return;
+  const message = error instanceof Error ? error.message : String(error);
+  const aborted = error instanceof Error
+    && (error.name === 'AbortError' || error.message.toLowerCase().includes('aborted'));
+  await plane.tasks.updateLocal(childId, {
+    state: aborted ? 'canceled' : 'failed',
+    error: message,
+  });
 }
 
 /**
@@ -405,6 +582,13 @@ export async function* toolDispatchChildTask(
     return `[Tool Error] ${TOOL_NAME}: Missing required parameter: objective`;
   }
 
+  const agentIdRaw = typeof input.agent_id === 'string' ? input.agent_id.trim() : '';
+  const subagentTypeRaw = typeof input.subagent_type === 'string' ? input.subagent_type.trim() : '';
+  if (agentIdRaw && subagentTypeRaw) {
+    yield { stage: 'error', message: `Child "${childId}": conflicting agent selectors` };
+    return `[Tool Error] ${TOOL_NAME}: agent_id and subagent_type are mutually exclusive. Remove one selector and retry.`;
+  }
+
   const role = ctx.managedProtocolRole;
   // FEATURE_193 (v0.7.43): V1 chain retired. Worker (V2 AMA single-loop)
   // is the only role that dispatches children. Pre-F193 V1 role guards
@@ -448,8 +632,40 @@ export async function* toolDispatchChildTask(
   // the stock Worker bundle. Unknown names return a tool-result error
   // (not throw) so the calling Worker can self-correct or fallback to
   // anonymous dispatch.
-  const subagentTypeRaw = typeof input.subagent_type === 'string' ? input.subagent_type.trim() : '';
-  const specialistName = subagentTypeRaw || undefined;
+  let specialistName = subagentTypeRaw || undefined;
+  if (agentIdRaw) {
+    const binding = ctx.agentExecutorPlane;
+    if (!binding) {
+      return `[Tool Error] ${TOOL_NAME}: agent_id requires a host-bound external agent executor plane.`;
+    }
+    const localRoute = resolveCodingDispatchableAgent(
+      agentIdRaw,
+      binding.context,
+      ctx.agentScope,
+    );
+    if (localRoute?.kind === 'constructed') specialistName = localRoute.subagentType;
+    if (!localRoute) {
+      const local = listCodingDispatchableAgents(binding.context, ctx.agentScope);
+      const described = await binding.plane.describe(agentIdRaw, {
+        ...binding.context,
+        readOnly,
+      }, local);
+      if (!described || described.descriptor.origin !== 'external') {
+        return `[Tool Error] ${TOOL_NAME}: agent_id "${agentIdRaw}" is not known in the dispatchable catalog.`;
+      }
+      yield { stage: 'launching', message: `External child "${childId}" → ${agentIdRaw}` };
+      const result = await dispatchExternalAgent({
+        agentId: agentIdRaw,
+        childId,
+        objective,
+        readOnly,
+        ctx,
+      });
+      dispatchEndStatus = result.startsWith('[Tool Error]') ? 'error' : 'launched';
+      emitDispatchEnd();
+      return result;
+    }
+  }
   let specialistEffort: KodaXChildContextBundle['effort'];
   if (specialistName) {
     const specialist = resolveConstructedAgent(specialistName, ctx.agentScope);
@@ -564,6 +780,20 @@ export async function* toolDispatchChildTask(
     guardrails: ctx.guardrails,
   };
 
+  const localDescriptor = selectedLocalDescriptor(
+    agentIdRaw || undefined,
+    specialistName,
+    ctx,
+  );
+  try {
+    await recordLocalTask(localDescriptor, childId, objective, ctx);
+  } catch (error: unknown) {
+    const message = error instanceof Error ? error.message : String(error);
+    dispatchEndStatus = 'error';
+    emitDispatchEnd();
+    return `[Tool Error] ${TOOL_NAME}: Could not persist local task ledger entry: ${message}`;
+  }
+
   // FEATURE_119 v0.7.36 Pattern B branch: when a registry is provisioned
   // and KODAX_ASYNC_DISPATCH is not forced off, launch the executor
   // without awaiting and register the in-flight promise. The Worker
@@ -674,7 +904,7 @@ export async function* toolDispatchChildTask(
     // once per child lifecycle.
     let terminalStatus: ChildProgressStatus = 'failed';
     let terminalText: string | undefined;
-    const childPromise: Promise<KodaXChildExecutionResult> = (async () => {
+    const executionPromise: Promise<KodaXChildExecutionResult> = (async () => {
       try {
         const result = await executeChildAgents([bundle], ctx, childOptions);
         // Background drain: enqueue a task-completed notification so the
@@ -850,6 +1080,16 @@ export async function* toolDispatchChildTask(
         });
       }
     })();
+    const childPromise = executionPromise.then(
+      async (result) => {
+        await updateLocalTaskFromResult(childId, result, ctx);
+        return result;
+      },
+      async (error: unknown) => {
+        await updateLocalTaskFromError(childId, error, ctx);
+        throw error;
+      },
+    );
     // v0.7.38 FEATURE_155 Bug A hotfix + v0.7.39 FEATURE_120 Step 0
     // packaging: the `registerChildTask` helper bundles the
     // `.finally(() => registry.delete(childId)).catch(() => {})`
@@ -884,6 +1124,7 @@ export async function* toolDispatchChildTask(
   // --- Sync (legacy / forced via KODAX_ASYNC_DISPATCH=0) ---
   try {
     const result = await executeChildAgents([bundle], ctx, options);
+    await updateLocalTaskFromResult(childId, result, ctx);
 
     const childResult = result.results[0];
     const status = childResult?.status ?? 'failed';
@@ -987,6 +1228,9 @@ export async function* toolDispatchChildTask(
       branch: 'sync',
     });
     return bannerContent;
+  } catch (error: unknown) {
+    await updateLocalTaskFromError(childId, error, ctx);
+    throw error;
   } finally {
     emitDispatchEnd();
   }
