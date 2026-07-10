@@ -38,6 +38,7 @@ export const InputPrompt: React.FC<InputPromptAutocompleteProps> = ({
   gitRoot,
   autocompleteEnabled = true,
   onInputChange,
+  onPasteFallback,
 }) => {
   const { exit } = useApp();
   const {
@@ -56,6 +57,7 @@ export const InputPrompt: React.FC<InputPromptAutocompleteProps> = ({
     gitRoot,
     autocompleteEnabled,
     onInputChange,
+    onPasteFallback,
     onHistoryRecall,
     onPopPendingInputs,
   });
@@ -165,4 +167,3 @@ export const SimpleInputPrompt: React.FC<{
     </Box>
   );
 };
-

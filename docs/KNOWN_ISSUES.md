@@ -90,11 +90,54 @@ _Last Updated: 2026-07-10_
 | 144 | High | Resolved | Worker misreads task_output block wait expiry as child-agent timeout and writes final report before children complete | v0.7.45 | v0.7.57 | 2026-06-26 | 2026-06-26 |
 | 143 | High | Resolved | Auto[llm] speculative classify 窗口默认 500ms + late verdict 被丢弃 → 远程/慢 provider 下 near-100% 误弹确认框，auto 模式形同虚设 | v0.7.39 | v0.7.57 | 2026-06-25 | 2026-06-25 |
 | 145 | High | Resolved | Runtime daemon / SDK 边界存在生命周期、事件、权限与协议一致性缺口 | v0.7.64-v0.7.66 | v0.7.66 | 2026-07-10 | 2026-07-10 |
+| 146 | Medium | Resolved | 图片路径粘贴处理失败时吞掉原始输入且无可见反馈 | v0.7.40 | v0.7.66 | 2026-07-10 | 2026-07-10 |
 
 ---
 
 ## Issue Details
 <!-- Full details for each issue - REQUIRED for all issues -->
+
+### 146: 图片路径粘贴处理失败时吞掉原始输入且无可见反馈
+
+- **Priority**: Medium
+- **Status**: **Resolved** (v0.7.66)
+- **Introduced**: v0.7.40 (FEATURE_134)
+- **Created**: 2026-07-10
+- **Resolved**: 2026-07-10
+- **Fixed**: v0.7.66
+
+#### Original Problem
+
+在 REPL 输入框粘贴以 `.png` 等图片扩展名结尾的路径时，FEATURE_134 会先消费原始粘贴事件并异步读取、解码图片。若文件不存在、不可读或图片处理失败，错误分支只发出默认不可见的 diagnostic，既不恢复原始路径，也不给用户可见反馈；用户看到的结果是粘贴内容静默消失。去掉扩展名最后一个字符后不会触发图片分支，因此可以按普通文本粘贴。
+
+#### Context
+
+- Components: `packages/repl/src/ui/utils/prompt-input-controller.ts`, `packages/repl/src/ui/components/InputPrompt.tsx`, `packages/repl/src/ui/InkREPL.tsx`.
+- Impact: 图片路径粘贴失败会丢失当前输入，用户无法判断失败原因；有效图片粘贴不受影响。
+- Workaround before fix: 先粘贴不完整扩展名，再手动输入最后一个字符。
+
+#### Root Cause
+
+`handleKey` 在扩展名匹配后立即把 paste 标记为 handled；`insertImageRefsFromPaste` 的 `outcome.kind === "error"` 分支只调用 `emitKodaXDiagnostic`。交互式 REPL 默认没有 diagnostic UI sink，且 diagnostics 不写历史，所以该错误既不可见也没有文本 fallback。
+
+#### Resolution
+
+- 图片路径处理失败时，以 `paste: false` 将原始粘贴内容恢复到当前输入框，避免再次触发图片识别。
+- 通过局部 `onPasteFallback` 回调复用现有两秒 `ClipboardToastSurface`，显示 `Image paste failed; inserted as plain text.` 警告。
+- Toast 只存在于 React 临时状态，不追加 history、不持久化，也不进入 LLM 上下文；技术 diagnostic 继续保留供调试使用。
+- 有效图片仍转换为 `@<temporary-image-path>`，普通文本粘贴行为不变。
+
+#### Files Changed
+
+- `packages/repl/src/ui/utils/prompt-input-controller.ts`
+- `packages/repl/src/ui/components/InputPrompt.tsx`
+- `packages/repl/src/ui/types.ts`
+- `packages/repl/src/ui/InkREPL.tsx`
+
+#### Tests Added
+
+- `packages/repl/src/ui/utils/prompt-input-controller.test.ts`: 验证错误时恢复原路径、触发临时通知，且不提交、不写历史。
+- Existing paste/InputPrompt/ClipboardToast regression suites remain green.
 
 ### 145: Runtime daemon / SDK 边界存在生命周期、事件、权限与协议一致性缺口
 
@@ -4878,11 +4921,16 @@ Commit `ef085fc` 把 V1 精简到 V2 时没区分"信息载体"和"脚手架"，
 ---
 
 ## Summary
-- Total: 72 (24 Open, 48 Resolved, 0 Partially Resolved, 0 Won't Fix)
+- Total: 73 (24 Open, 49 Resolved, 0 Partially Resolved, 0 Won't Fix)
 - Highest Priority Open: 091 - 缺少一等公民 MCP / Web Search / Code Search 工具体系 (High)
 - Historical archived issues are maintained in ISSUES_ARCHIVED.md
 
 ## Changelog
+
+### 2026-07-10: Issue 146 added and resolved (v0.7.66)
+
+- 图片路径处理失败时恢复原始文本，并通过非持久化两秒 Toast 提示用户。
+- 保留有效图片附件行为；新增回归测试锁定不提交、不写历史的边界。
 
 ### 2026-07-10: Issue 145 added and resolved (v0.7.66)
 - Resolved the runtime daemon / SDK lifecycle, event replay, permission,

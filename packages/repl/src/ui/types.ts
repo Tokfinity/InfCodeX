@@ -186,6 +186,8 @@ export interface InputPromptProps {
   initialValue?: string;
   /** Callback when input text changes - 输入文本变化时的回调 */
   onInputChange?: (text: string) => void;
+  /** Called for a transient UI notice when image paste falls back to text. */
+  onPasteFallback?: (message: string) => void;
   /**
    * Called when the ↑ arrow history recall brings back an entry with stored
    * paste contents. Consumer can hydrate a disk-backed paste cache here.

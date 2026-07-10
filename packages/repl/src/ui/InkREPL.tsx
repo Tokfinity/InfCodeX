@@ -4307,6 +4307,9 @@ const InkREPLInner: React.FC<InkREPLProps> = ({
       tone,
     });
   }, []);
+  const showPasteFallbackNotice = useCallback((message: string): void => {
+    showClipboardNotice(message, "warning");
+  }, [showClipboardNotice]);
   const buildClipboardFailureNotice = useCallback((prefix: string, error: unknown) => {
     const message = error instanceof Error ? error.message : String(error);
     return `${prefix}: ${message}`;
@@ -9452,6 +9455,7 @@ const InkREPLInner: React.FC<InkREPLProps> = ({
           cwd={process.cwd()}
           gitRoot={options.context?.gitRoot || context.gitRoot}
           onInputChange={handleInputChange}
+          onPasteFallback={showPasteFallbackNotice}
         />
       )}
       inlineSuggestions={suggestionsSurface}

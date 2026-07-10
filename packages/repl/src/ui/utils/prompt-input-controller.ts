@@ -45,6 +45,8 @@ export interface PromptInputControllerOptions {
   gitRoot?: string;
   autocompleteEnabled?: boolean;
   onInputChange?: (text: string) => void;
+  /** Notify the UI when an image-path paste falls back to plain text. */
+  onPasteFallback?: (message: string) => void;
   /**
    * Called when the input history ↑ recalls an entry that carries stored
    * paste contents. Consumers may hydrate a disk-backed paste cache here
@@ -200,6 +202,7 @@ export function usePromptInputController({
   gitRoot,
   autocompleteEnabled = true,
   onInputChange,
+  onPasteFallback,
   onHistoryRecall,
   onPopPendingInputs,
 }: PromptInputControllerOptions): PromptInputControllerResult {
@@ -388,6 +391,8 @@ export function usePromptInputController({
           insert(`${refs} `, { paste: false });
         } else if (outcome.kind === "error") {
           reportPromptInputDiagnostic(`Paste image handling failed: ${outcome.message}`);
+          insert(pasteContent, { paste: false });
+          onPasteFallback?.("Image paste failed; inserted as plain text.");
         }
         // noop / text outcomes: nothing to do here. The fast-path gate
         // in handleKey only invokes this when extractImagePaths returned
@@ -396,7 +401,7 @@ export function usePromptInputController({
         reportPromptInputDiagnostic('Paste image handling failed.', err);
       }
     },
-    [insert],
+    [insert, onPasteFallback],
   );
 
   // FEATURE_134 v0.7.40 — single-flight guard. OS-level Alt+V autorepeat

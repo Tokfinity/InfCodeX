@@ -591,13 +591,15 @@ describe("prompt-input-controller", () => {
       expect(mocks.insertMock).not.toHaveBeenCalled();
     });
 
-    it("paste handler error emits a diagnostic but does not throw", async () => {
+    it("paste handler error restores the raw path and emits a transient notice", async () => {
       const imagePath = "/tmp/oops.png";
       mocks.state.extractImagePathsReturn = [imagePath];
       mocks.state.handleBracketedPasteReturn = {
         kind: "error",
         message: "Failed to decode pasted image",
       };
+      const onPasteFallback = vi.fn();
+      const onSubmit = vi.fn();
 
       const diagnostics: KodaXDiagnostic[] = [];
       const restoreDiagnostics = setKodaXDiagnosticSink((diagnostic) => {
@@ -606,7 +608,7 @@ describe("prompt-input-controller", () => {
 
       let controller: ReturnType<typeof usePromptInputController> | undefined;
       const Harness = () => {
-        controller = usePromptInputController({ onSubmit: vi.fn() });
+        controller = usePromptInputController({ onSubmit, onPasteFallback });
         return null;
       };
       render(React.createElement(Harness));
@@ -620,7 +622,12 @@ describe("prompt-input-controller", () => {
         level: "warn",
         message: expect.stringContaining("Failed to decode pasted image"),
       }));
-      expect(mocks.insertMock).not.toHaveBeenCalled();
+      expect(mocks.insertMock).toHaveBeenCalledWith(imagePath, { paste: false });
+      expect(onPasteFallback).toHaveBeenCalledWith(
+        "Image paste failed; inserted as plain text.",
+      );
+      expect(onSubmit).not.toHaveBeenCalled();
+      expect(mocks.addHistoryMock).not.toHaveBeenCalled();
       restoreDiagnostics();
     });
   });
