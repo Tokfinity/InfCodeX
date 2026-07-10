@@ -498,6 +498,29 @@ function makeRuntime(
         return false;
       },
     },
+    admin: {
+      agentRegistrations: {
+        async list() { return []; },
+        async upsert() { throw new Error('External agents are disabled in this test runtime.'); },
+        async remove() { throw new Error('External agents are disabled in this test runtime.'); },
+      },
+    },
+    agents: {
+      enabled: false,
+      async listDispatchable() { return []; },
+      async describe() { return undefined; },
+      async preflight() { throw new Error('External agents are disabled in this test runtime.'); },
+    },
+    agentTasks: {
+      async start() { throw new Error('External agents are disabled in this test runtime.'); },
+      async list() { return []; },
+      async get() { throw new Error('External agents are disabled in this test runtime.'); },
+      async events() { throw new Error('External agents are disabled in this test runtime.'); },
+      async wait() { throw new Error('External agents are disabled in this test runtime.'); },
+      async sendInput() { throw new Error('External agents are disabled in this test runtime.'); },
+      async cancel() { throw new Error('External agents are disabled in this test runtime.'); },
+      async reconcile() { throw new Error('External agents are disabled in this test runtime.'); },
+    },
     status: {
       async snapshot() {
         return {

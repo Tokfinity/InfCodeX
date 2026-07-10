@@ -78,6 +78,20 @@ export type RuntimeDaemonMethod =
   | 'artifact.create'
   | 'artifact.get'
   | 'artifact.delete'
+  | 'agentRegistrations.list'
+  | 'agentRegistrations.upsert'
+  | 'agentRegistrations.remove'
+  | 'agents.listDispatchable'
+  | 'agents.describe'
+  | 'agents.preflight'
+  | 'agentTasks.list'
+  | 'agentTasks.start'
+  | 'agentTasks.get'
+  | 'agentTasks.events'
+  | 'agentTasks.wait'
+  | 'agentTasks.sendInput'
+  | 'agentTasks.cancel'
+  | 'agentTasks.reconcile'
   | 'context.budget.get'
   | 'tool.exposure.preview';
 
@@ -218,6 +232,20 @@ export const RUNTIME_DAEMON_METHODS: readonly RuntimeDaemonMethod[] = [
   'artifact.create',
   'artifact.get',
   'artifact.delete',
+  'agentRegistrations.list',
+  'agentRegistrations.upsert',
+  'agentRegistrations.remove',
+  'agents.listDispatchable',
+  'agents.describe',
+  'agents.preflight',
+  'agentTasks.list',
+  'agentTasks.start',
+  'agentTasks.get',
+  'agentTasks.events',
+  'agentTasks.wait',
+  'agentTasks.sendInput',
+  'agentTasks.cancel',
+  'agentTasks.reconcile',
   'context.budget.get',
   'tool.exposure.preview',
 ];

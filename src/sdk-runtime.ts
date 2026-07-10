@@ -14,6 +14,7 @@ import path from 'node:path';
 import {
   getActiveExtensionRuntime,
   generateSessionId,
+  listCodingDispatchableAgents,
   registerCustomProviders,
   runManagedTask,
   startKodaX,
@@ -75,11 +76,27 @@ import type {
 } from '@kodax-ai/repl';
 import {
   createMcpManager,
+  createAgentExecutorPlane,
   emitKodaXDiagnostic,
   getDefaultWorkflowRunManager,
   initializeSkillRegistry,
 } from '@kodax-ai/agent';
 import type {
+  AgentArtifactPolicy,
+  AgentCredentialBroker,
+  AgentDispatchContext,
+  AgentDispatchPolicy,
+  AgentExecutorFactory,
+  AgentExecutorPlane,
+  AgentPreflightInput,
+  AgentPreflightResult,
+  AgentRegistrationService,
+  AgentTaskFilter,
+  AgentTaskService,
+  AgentTaskSnapshot,
+  AgentTaskStartInput,
+  DispatchableAgentListing,
+  DispatchableAgentQuery,
   ManagedWorkflowSnapshot,
   McpServerConfig,
   McpServerStatus,
@@ -89,6 +106,7 @@ import type {
   WorkflowProcessEvent,
   WorkflowProcessSnapshot,
 } from '@kodax-ai/agent';
+import { createRuntimeAgentExecutorPlaneStore } from './runtime-agent-store.js';
 import {
   createRuntimeDaemonClient,
   type RuntimeDaemonClientTransport,
@@ -203,6 +221,16 @@ export interface RuntimeClientCapabilities {
   readonly contextDiagnostics?: boolean;
 }
 
+export interface RuntimeExternalAgentsOptions {
+  readonly factories: readonly AgentExecutorFactory[];
+  readonly policy: AgentDispatchPolicy;
+  readonly credentialBroker?: AgentCredentialBroker;
+  /** Authorizes an executor before it materializes any remote artifact. Defaults to deny. */
+  readonly artifactPolicy?: AgentArtifactPolicy;
+  /** Default host-derived context for Worker tools; run.start may override it. */
+  readonly defaultContext?: AgentDispatchContext;
+}
+
 export interface CreateKodaXRuntimeOptions {
   /** Runtime ownership form. Defaults to a caller-owned embedded Runtime. */
   readonly mode?: KodaXRuntimeMode;
@@ -226,6 +254,8 @@ export interface CreateKodaXRuntimeOptions {
   readonly clientInfo?: RuntimeClientInfo;
   readonly capabilities?: RuntimeClientCapabilities;
   readonly requirements?: RuntimeCapabilityRequirements;
+  /** Inline host injection. Functions never cross daemon or Worker transport. */
+  readonly externalAgents?: RuntimeExternalAgentsOptions;
 }
 
 export interface ConnectKodaXRuntimeOptions {
@@ -250,6 +280,8 @@ export interface ConnectKodaXRuntimeOptions {
 export interface RuntimeCapabilityRequirements {
   /** Reject inline and shared daemon hosts; only a Worker-hosted Runtime satisfies this. */
   readonly hardDispose?: boolean;
+  /** Reject hosts that do not advertise an installed external Agent executor plane. */
+  readonly externalAgents?: boolean;
 }
 
 export interface RuntimeDiagnosticFilter {
@@ -275,12 +307,34 @@ export interface KodaXRuntime {
   readonly artifacts: RuntimeArtifactService;
   readonly status: RuntimeStatusService;
   readonly diagnostics: RuntimeDiagnosticsService;
+  readonly admin: RuntimeAdminService;
+  readonly agents: RuntimeAgentService;
+  readonly agentTasks: RuntimeAgentTaskService;
   /**
    * Release this facade. Inline closes its private Runtime, Worker mode shuts
    * down and terminates its Worker, and daemon mode only detaches this client.
    */
   close(): Promise<void>;
 }
+
+export interface RuntimeAdminService {
+  readonly agentRegistrations: AgentRegistrationService;
+}
+
+export interface RuntimeAgentService {
+  readonly enabled: boolean;
+  listDispatchable(query: DispatchableAgentQuery): Promise<readonly DispatchableAgentListing[]>;
+  describe(
+    agentId: string,
+    query: DispatchableAgentQuery,
+  ): Promise<DispatchableAgentListing | undefined>;
+  preflight(input: AgentPreflightInput): Promise<AgentPreflightResult>;
+}
+
+export type RuntimeAgentTaskService = Pick<
+  AgentTaskService,
+  'start' | 'list' | 'get' | 'events' | 'wait' | 'sendInput' | 'cancel' | 'reconcile'
+>;
 
 export type RuntimeConfigPatch = Partial<Pick<ReplRuntimeConfigPatch, RuntimeConfigPatchKey>>;
 
@@ -623,6 +677,8 @@ export interface RuntimeStartRunInput {
   readonly mode?: RuntimeRunMode;
   readonly permissionBroker?: RuntimePermissionBroker;
   readonly options?: RuntimeKodaXOptions;
+  /** Host-derived dispatch identity; never accepted from an LLM tool payload. */
+  readonly agentContext?: AgentDispatchContext;
 }
 
 export type RuntimeKodaXOptions =
@@ -878,6 +934,7 @@ interface RuntimeRunRecord {
   running?: RunningSession;
   abortController?: AbortController;
   mode: RuntimeRunMode;
+  readonly agentContext?: AgentDispatchContext;
   start?: PendingRunStart;
   terminalEmitted: boolean;
 }
@@ -948,6 +1005,9 @@ export async function createKodaXRuntime(
     throw new Error(`Unsupported KodaX Runtime isolation: ${String(options.isolation)}`);
   }
   if (options.mode === 'daemon') {
+    if (options.externalAgents !== undefined) {
+      throw new Error('External agent factories must be installed inside the daemon host; they cannot cross the daemon client boundary.');
+    }
     if (options.isolation !== undefined) {
       throw new Error('Daemon mode already uses process isolation and does not accept an isolation option.');
     }
@@ -981,10 +1041,16 @@ export async function createKodaXRuntime(
   if (options.worker !== undefined && options.isolation !== 'worker') {
     throw new Error("Runtime Worker options require isolation: 'worker'.");
   }
+  if (options.isolation === 'worker' && options.externalAgents !== undefined) {
+    throw new Error('External agent factories must be installed inside the Runtime Worker host; function injection cannot cross the Worker boundary.');
+  }
   if (options.isolation === 'worker') {
     return createWorkerHostedKodaXRuntime(options);
   }
-  assertRuntimeCapabilities({ hardDispose: false }, options.requirements);
+  assertRuntimeCapabilities({
+    hardDispose: false,
+    externalAgents: options.externalAgents !== undefined,
+  }, options.requirements);
 
   const identity: RuntimeIdentity = {
     runtimeId: `rt_${randomUUID().replace(/-/g, '').slice(0, 12)}`,
@@ -1001,6 +1067,15 @@ export async function createKodaXRuntime(
   const configFile = resolveRuntimeConfigFile(options);
   registerRuntimeConfiguredCustomProviders(configFile);
   const persistence = createRuntimePersistence(options);
+  const agentPlane = options.externalAgents
+    ? await createAgentExecutorPlane({
+        factories: options.externalAgents.factories,
+        policy: options.externalAgents.policy,
+        credentialBroker: options.externalAgents.credentialBroker,
+        artifactPolicy: options.externalAgents.artifactPolicy,
+        store: createRuntimeAgentExecutorPlaneStore(path.join(persistence.runtimeDir, 'agents')),
+      })
+    : undefined;
   const bus = createRuntimeEventBus(persistence);
   const permissions = createRuntimePermissionRegistry(
     bus,
@@ -1032,6 +1107,8 @@ export async function createKodaXRuntime(
     persistence,
     runs,
     sessionManager,
+    agentPlane,
+    defaultAgentContext: options.externalAgents?.defaultContext,
   });
 
   const runtime: KodaXRuntime = {
@@ -1068,11 +1145,15 @@ export async function createKodaXRuntime(
       workflows,
     }),
     diagnostics: createRuntimeDiagnosticsService(bus.service),
+    admin: createRuntimeAdminService(agentPlane),
+    agents: createRuntimeAgentService(agentPlane),
+    agentTasks: createRuntimeAgentTaskService(agentPlane),
     async close() {
       if (closed) return;
       closed = true;
       runService.closeAll('runtime closed');
       permissions.rejectAll('runtime closed');
+      await agentPlane?.close();
       bus.close();
     },
   };
@@ -1114,6 +1195,7 @@ async function createWorkerHostedKodaXRuntime(
         workerThreadId: handle.threadId,
       },
       transport: handle.transport,
+      capabilities: requireRuntimeRecord(initialized.capabilities),
     });
     let closed = false;
     return {
@@ -1141,10 +1223,14 @@ function assertRuntimeCapabilities(
   value: unknown,
   requirements: RuntimeCapabilityRequirements | undefined,
 ): void {
-  if (!requirements?.hardDispose) return;
+  if (!requirements?.hardDispose && !requirements?.externalAgents) return;
   const capabilities = requireRuntimeRecord(value);
-  if (capabilities.hardDispose === true) return;
-  throw new Error('Runtime does not support the required hardDispose capability.');
+  if (requirements.hardDispose && capabilities.hardDispose !== true) {
+    throw new Error('Runtime does not support the required hardDispose capability.');
+  }
+  if (requirements.externalAgents && capabilities.externalAgents !== true) {
+    throw new Error('Runtime does not support the required externalAgents capability.');
+  }
 }
 
 async function settleWithin(promise: Promise<unknown>, timeoutMs: number): Promise<void> {
@@ -1212,6 +1298,7 @@ export async function connectKodaXRuntime(
   }
   const token = resolveConnectDaemonToken(options);
   let identity: RuntimeIdentity;
+  let daemonCapabilities: Readonly<Record<string, unknown>> = {};
   try {
     const initialized = requireRuntimeRecord(
       await transport.request('initialize', {
@@ -1224,7 +1311,10 @@ export async function connectKodaXRuntime(
       }),
     );
     identity = parseRuntimeIdentity(initialized.identity);
-    assertRuntimeCapabilities(initialized.capabilities, options.requirements);
+    daemonCapabilities = initialized.capabilities === undefined
+      ? {}
+      : requireRuntimeRecord(initialized.capabilities);
+    assertRuntimeCapabilities(daemonCapabilities, options.requirements);
     const expectedProfile = options.profile ?? 'default';
     if (identity.profile !== expectedProfile) {
       throw new Error(
@@ -1239,6 +1329,7 @@ export async function connectKodaXRuntime(
   const runtime = createRuntimeDaemonClient({
     identity: { ...identity, mode: 'daemon', isolation: 'process' },
     transport,
+    capabilities: daemonCapabilities,
   });
   if (!lease) return runtime;
   return {
@@ -1490,10 +1581,12 @@ function createRuntimeSessionService(
 }
 
 function createRuntimeRunService(deps: {
+  readonly agentPlane?: AgentExecutorPlane;
   readonly artifacts: RuntimeArtifactStore;
   readonly bus: RuntimeEventBus;
   readonly defaultModel?: string;
   readonly defaultProvider?: string;
+  readonly defaultAgentContext?: AgentDispatchContext;
   readonly ensureOpen: () => void;
   readonly isClosed: () => boolean;
   readonly permissions: RuntimePermissionRegistry;
@@ -1578,6 +1671,7 @@ function createRuntimeRunService(deps: {
       record,
     });
     const runOptions = buildRunOptions({
+      agentPlane: deps.agentPlane,
       events,
       model: record.model,
       options: record.start.options,
@@ -1723,6 +1817,9 @@ function createRuntimeRunService(deps: {
         ...(settings.permissionMode !== undefined ? { permissionMode: settings.permissionMode } : {}),
         ...(options.reasoningMode !== undefined ? { reasoning: options.reasoningMode } : {}),
         mode: input.mode ?? 'coding',
+        ...(input.agentContext ?? deps.defaultAgentContext
+          ? { agentContext: input.agentContext ?? deps.defaultAgentContext }
+          : {}),
         result,
         start: {
           prompt: normalizedInput.prompt,
@@ -2118,6 +2215,7 @@ function createRuntimeArtifactStore() {
 }
 
 function buildRunOptions(input: {
+  readonly agentPlane?: AgentExecutorPlane;
   readonly events: KodaXEvents;
   readonly model?: string;
   readonly options: RuntimeKodaXOptions;
@@ -2125,7 +2223,7 @@ function buildRunOptions(input: {
   readonly record: RuntimeRunRecord;
   readonly sessionManager: SessionManager;
 }): KodaXOptions {
-  const { events, model, options, provider, record, sessionManager } = input;
+  const { agentPlane, events, model, options, provider, record, sessionManager } = input;
   return {
     ...options,
     provider,
@@ -2136,6 +2234,131 @@ function buildRunOptions(input: {
       storage: sessionManager.storage,
     },
     events,
+    ...(agentPlane && record.agentContext
+      ? {
+          context: {
+            ...(options.context ?? {}),
+            agentExecutorPlane: { plane: agentPlane, context: record.agentContext },
+          },
+        }
+      : {}),
+  };
+}
+
+function assertRuntimeAgentContext(context: AgentDispatchContext): void {
+  if (context.actorId.trim().length === 0) {
+    throw new Error('Runtime agent context actorId must not be empty.');
+  }
+}
+
+function localAgentReasons(
+  listing: ReturnType<typeof listCodingDispatchableAgents>[number],
+  query: DispatchableAgentQuery,
+): string[] {
+  const reasons: string[] = [];
+  const skills = new Set(listing.skills);
+  for (const skill of query.requiredSkills ?? []) {
+    if (!skills.has(skill)) reasons.push(`required skill is unavailable: ${skill}`);
+  }
+  const required = query.requiredCapabilities;
+  if (required) {
+    for (const key of ['streaming', 'durableTasks', 'inputRequired', 'cancellation', 'artifacts'] as const) {
+      if (required[key] === true && listing.capabilities[key] !== 'supported') {
+        reasons.push(`required capability ${key} is ${listing.capabilities[key]}`);
+      }
+    }
+  }
+  return reasons;
+}
+
+function runtimeLocalListings(query: DispatchableAgentQuery): readonly DispatchableAgentListing[] {
+  assertRuntimeAgentContext(query);
+  return listCodingDispatchableAgents(query)
+    .map((descriptor): DispatchableAgentListing => {
+      const reasons = localAgentReasons(descriptor, query);
+      return {
+        descriptor,
+        dispatchability: {
+          status: reasons.length === 0 ? 'dispatchable' : 'unavailable',
+          checkedAt: new Date().toISOString(),
+          reasons,
+        },
+      };
+    })
+    .filter((listing) => listing.dispatchability.status === 'dispatchable');
+}
+
+function createRuntimeAgentService(
+  plane: AgentExecutorPlane | undefined,
+): RuntimeAgentService {
+  return {
+    enabled: plane !== undefined,
+    async listDispatchable(query) {
+      assertRuntimeAgentContext(query);
+      const local = listCodingDispatchableAgents(query);
+      return plane ? plane.listDispatchable(query, local) : runtimeLocalListings(query);
+    },
+    async describe(agentId, query) {
+      assertRuntimeAgentContext(query);
+      const local = listCodingDispatchableAgents(query);
+      if (plane) return plane.describe(agentId, query, local);
+      return runtimeLocalListings(query).find((listing) => listing.descriptor.agentId === agentId);
+    },
+    async preflight(input) {
+      assertRuntimeAgentContext(input.query);
+      const local = listCodingDispatchableAgents(input.query);
+      if (plane) return plane.preflight(input, local);
+      const listing = runtimeLocalListings(input.query)
+        .find((candidate) => candidate.descriptor.agentId === input.agentId);
+      const reasons = listing ? [] : ['agent is not dispatchable'];
+      if (
+        listing
+        && input.expectedConfigurationRevision !== undefined
+        && listing.descriptor.configurationRevision !== input.expectedConfigurationRevision
+      ) reasons.push('configuration revision changed');
+      return {
+        ok: listing !== undefined && reasons.length === 0,
+        ...(listing ? { descriptor: listing.descriptor } : {}),
+        dispatchability: listing?.dispatchability ?? {
+          status: 'unavailable',
+          checkedAt: new Date().toISOString(),
+          reasons,
+        },
+        reasons,
+      };
+    },
+  };
+}
+
+function externalAgentsDisabled(): Error {
+  return new Error('Runtime external agent executor plane is not enabled.');
+}
+
+function createRuntimeAdminService(
+  plane: AgentExecutorPlane | undefined,
+): RuntimeAdminService {
+  return {
+    agentRegistrations: plane?.registrations ?? {
+      async list() { return []; },
+      async upsert() { throw externalAgentsDisabled(); },
+      async remove() { throw externalAgentsDisabled(); },
+    },
+  };
+}
+
+function createRuntimeAgentTaskService(
+  plane: AgentExecutorPlane | undefined,
+): RuntimeAgentTaskService {
+  if (plane) return plane.tasks;
+  return {
+    async start() { throw externalAgentsDisabled(); },
+    async list() { return []; },
+    async get() { throw externalAgentsDisabled(); },
+    async events() { throw externalAgentsDisabled(); },
+    async wait() { throw externalAgentsDisabled(); },
+    async sendInput() { throw externalAgentsDisabled(); },
+    async cancel() { throw externalAgentsDisabled(); },
+    async reconcile() { throw externalAgentsDisabled(); },
   };
 }
 

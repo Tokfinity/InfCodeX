@@ -675,7 +675,11 @@ describe('runtime daemon dispatcher', () => {
 
 async function initializeDispatcher(
   dispatcher: ReturnType<typeof createRuntimeDaemonDispatcher>,
-  capabilities: RuntimeClientCapabilities = { contextDiagnostics: true, permissionPrompts: true },
+  capabilities: RuntimeClientCapabilities = {
+    contextDiagnostics: true,
+    permissionPrompts: true,
+    configAdmin: true,
+  },
 ): Promise<void> {
   const initialized = await dispatcher.handle(createRuntimeDaemonRequest('req-init', 'initialize', {
     profile: 'default',
@@ -774,6 +778,48 @@ const METHOD_SMOKE_PARAMS = {
   'artifact.create': { kind: 'file', path: '/tmp/runtime-daemon-smoke.txt' },
   'artifact.get': { artifactId: 'art-1' },
   'artifact.delete': { artifactId: 'art-1' },
+  'agentRegistrations.list': undefined,
+  'agentRegistrations.upsert': {
+    registration: {
+      agentId: 'external:smoke',
+      displayName: 'Smoke Agent',
+      enabled: true,
+      executorId: 'smoke-executor',
+      protocol: 'http',
+      configurationRevision: 'rev-1',
+      endpointIdentityHash: 'sha256:smoke',
+      capabilities: {
+        streaming: 'supported',
+        durableTasks: 'supported',
+        inputRequired: 'supported',
+        cancellation: 'supported',
+        artifacts: 'supported',
+      },
+      effects: { remote: 'read', workspace: 'proposal' },
+    },
+  },
+  'agentRegistrations.remove': { agentId: 'external:smoke' },
+  'agents.listDispatchable': { actorId: 'actor-smoke' },
+  'agents.describe': { agentId: 'external:smoke', query: { actorId: 'actor-smoke' } },
+  'agents.preflight': {
+    agentId: 'external:smoke',
+    query: { actorId: 'actor-smoke' },
+  },
+  'agentTasks.list': {},
+  'agentTasks.start': {
+    agentId: 'external:smoke',
+    objective: 'Smoke test',
+    context: { actorId: 'actor-smoke' },
+  },
+  'agentTasks.get': { taskId: 'agent-task-smoke' },
+  'agentTasks.events': { taskId: 'agent-task-smoke', cursor: 0 },
+  'agentTasks.wait': { taskId: 'agent-task-smoke', timeoutMs: 10 },
+  'agentTasks.sendInput': {
+    taskId: 'agent-task-smoke',
+    input: { content: 'continue' },
+  },
+  'agentTasks.cancel': { taskId: 'agent-task-smoke', reason: 'stop' },
+  'agentTasks.reconcile': { taskId: 'agent-task-smoke' },
   'context.budget.get': { sessionId: 'session-1', runId: 'run-1' },
   'tool.exposure.preview': { sessionId: 'session-1', runId: 'run-1' },
 } satisfies Record<RuntimeDaemonMethod, unknown>;
@@ -785,6 +831,67 @@ function makeRuntime(): KodaXRuntime & { emit(event: RuntimeEvent): void } {
   }> = [];
   const runs = new Map<string, RuntimeRunResult>();
   const eventLog: RuntimeEvent[] = [];
+  const externalCapabilities = {
+    streaming: 'supported',
+    durableTasks: 'supported',
+    inputRequired: 'supported',
+    cancellation: 'supported',
+    artifacts: 'supported',
+  } as const;
+  const externalRegistration = {
+    agentId: 'external:smoke',
+    displayName: 'Smoke Agent',
+    enabled: true,
+    executorId: 'smoke-executor',
+    protocol: 'http',
+    configurationRevision: 'rev-1',
+    endpointIdentityHash: 'sha256:smoke',
+    credentialConfigured: false,
+    capabilities: externalCapabilities,
+    effects: { remote: 'read', workspace: 'proposal' },
+    diagnostics: [],
+  } as const;
+  const externalListing = {
+    descriptor: {
+      agentId: externalRegistration.agentId,
+      displayName: externalRegistration.displayName,
+      origin: 'external',
+      protocol: 'http',
+      configurationRevision: externalRegistration.configurationRevision,
+      skills: [],
+      inputModalities: ['text'],
+      outputModalities: ['text'],
+      capabilities: externalCapabilities,
+      effects: externalRegistration.effects,
+    },
+    dispatchability: {
+      status: 'dispatchable',
+      checkedAt: '2026-07-09T00:00:00.000Z',
+      reasons: [],
+    },
+  } as const;
+  const agentTask = {
+    taskId: 'agent-task-smoke',
+    route: 'external',
+    agentId: externalRegistration.agentId,
+    objective: 'Smoke test',
+    state: 'working',
+    cancellation: 'none',
+    registration: {
+      agentId: externalRegistration.agentId,
+      origin: 'external',
+      executorId: externalRegistration.executorId,
+      protocol: 'http',
+      configurationRevision: externalRegistration.configurationRevision,
+      endpointIdentityHash: externalRegistration.endpointIdentityHash,
+      capabilities: externalCapabilities,
+      effects: externalRegistration.effects,
+    },
+    idempotencyKey: 'agent-task-smoke-idempotency',
+    dispatchAttempt: 1,
+    createdAt: '2026-07-09T00:00:00.000Z',
+    updatedAt: '2026-07-09T00:00:00.000Z',
+  } as const;
 
   const runtime: KodaXRuntime & { emit(event: RuntimeEvent): void } = {
     identity: {
@@ -1089,6 +1196,46 @@ function makeRuntime(): KodaXRuntime & { emit(event: RuntimeEvent): void } {
       async delete() {
         return true;
       },
+    },
+    admin: {
+      agentRegistrations: {
+        async list() { return [externalRegistration]; },
+        async upsert() { return externalRegistration; },
+        async remove() { return true; },
+      },
+    },
+    agents: {
+      enabled: true,
+      async listDispatchable() { return [externalListing]; },
+      async describe() { return externalListing; },
+      async preflight() {
+        return {
+          ok: true,
+          descriptor: externalListing.descriptor,
+          dispatchability: externalListing.dispatchability,
+          reasons: [],
+        };
+      },
+    },
+    agentTasks: {
+      async start() { return agentTask; },
+      async list() { return [agentTask]; },
+      async get() { return agentTask; },
+      async events() {
+        return [{
+          taskId: agentTask.taskId,
+          seq: 1,
+          timestamp: agentTask.createdAt,
+          type: 'submitted',
+          state: 'submitted',
+        }];
+      },
+      async wait() { return agentTask; },
+      async sendInput() { return agentTask; },
+      async cancel() {
+        return { ...agentTask, state: 'canceled', cancellation: 'confirmed' };
+      },
+      async reconcile() { return agentTask; },
     },
     status: {
       async snapshot() {

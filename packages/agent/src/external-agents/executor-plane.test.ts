@@ -195,6 +195,35 @@ describe('FEATURE_258 AgentExecutorPlane', () => {
     expect(executor.starts).toHaveLength(0);
   });
 
+  it('rejects a registration revision changed during asynchronous preflight', async () => {
+    const executor = new FakeExecutor();
+    let enterPolicy: (() => void) | undefined;
+    let releasePolicy: (() => void) | undefined;
+    const policyEntered = new Promise<void>((resolve) => { enterPolicy = resolve; });
+    const policyReleased = new Promise<void>((resolve) => { releasePolicy = resolve; });
+    const plane = await createAgentExecutorPlane({
+      factories: [factory(executor)],
+      policy: async () => {
+        enterPolicy?.();
+        await policyReleased;
+        return { allowed: true };
+      },
+      store: createMemoryAgentExecutorPlaneStore(),
+    });
+    await plane.registrations.upsert(registration({ credentialRef: undefined }));
+
+    const starting = plane.tasks.start(taskInput());
+    await policyEntered;
+    await plane.registrations.upsert(registration({
+      credentialRef: undefined,
+      configurationRevision: 'rev-2',
+    }));
+    releasePolicy?.();
+
+    await expect(starting).rejects.toThrow(/changed during preflight/i);
+    expect(executor.starts).toHaveLength(0);
+  });
+
   it('keeps cancel requested separate from confirmed, unsupported and failed', async () => {
     const executor = new FakeExecutor();
     const plane = await createAgentExecutorPlane({
@@ -208,8 +237,16 @@ describe('FEATURE_258 AgentExecutorPlane', () => {
     executor.snapshot = { state: 'working' };
     expect((await plane.tasks.cancel(started.taskId, 'stop')).cancellation).toBe('requested');
 
-    executor.snapshot = { state: 'canceled' };
-    expect((await plane.tasks.cancel(started.taskId, 'stop')).cancellation).toBe('confirmed');
+    executor.snapshot = {
+      state: 'canceled',
+      artifacts: [{ name: 'report.pdf', uri: 'https://remote.example/report.pdf' }],
+    };
+    const confirmed = await plane.tasks.cancel(started.taskId, 'stop');
+    expect(confirmed.cancellation).toBe('confirmed');
+    expect(confirmed.artifacts).toEqual([expect.objectContaining({
+      producingAgentId: 'external:risk-reviewer',
+      remoteTaskId: 'remote-1',
+    })]);
 
     const unsupported = await plane.registrations.upsert(registration({
       agentId: 'external:no-cancel',

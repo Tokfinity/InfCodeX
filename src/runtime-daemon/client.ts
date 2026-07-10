@@ -64,6 +64,7 @@ export interface RuntimeDaemonClientTransport {
 export interface RuntimeDaemonClientOptions {
   readonly identity: RuntimeIdentity;
   readonly transport: RuntimeDaemonClientTransport;
+  readonly capabilities?: Readonly<Record<string, unknown>>;
 }
 
 export function createRuntimeDaemonClient(
@@ -277,6 +278,69 @@ export function createRuntimeDaemonClient(
       },
       delete(artifactId: string) {
         return request('artifact.delete', { artifactId }) as Promise<boolean>;
+      },
+    },
+    admin: {
+      agentRegistrations: {
+        list() {
+          return request('agentRegistrations.list') as ReturnType<KodaXRuntime['admin']['agentRegistrations']['list']>;
+        },
+        upsert(registration) {
+          assertRuntimeTransportSafe(registration, 'agentRegistrations.upsert.registration');
+          return request('agentRegistrations.upsert', { registration }) as ReturnType<KodaXRuntime['admin']['agentRegistrations']['upsert']>;
+        },
+        remove(agentId) {
+          return request('agentRegistrations.remove', { agentId }) as Promise<boolean>;
+        },
+      },
+    },
+    agents: {
+      enabled: options.capabilities?.externalAgents === true,
+      listDispatchable(query) {
+        return request('agents.listDispatchable', query) as ReturnType<KodaXRuntime['agents']['listDispatchable']>;
+      },
+      describe(agentId, query) {
+        return request('agents.describe', { agentId, query })
+          .then(nullToUndefined<Awaited<ReturnType<KodaXRuntime['agents']['describe']>>>);
+      },
+      preflight(input) {
+        return request('agents.preflight', input) as ReturnType<KodaXRuntime['agents']['preflight']>;
+      },
+    },
+    agentTasks: {
+      start(input) {
+        assertRuntimeTransportSafe(input, 'agentTasks.start');
+        return request('agentTasks.start', input) as ReturnType<KodaXRuntime['agentTasks']['start']>;
+      },
+      list(filter) {
+        return request('agentTasks.list', filter) as ReturnType<KodaXRuntime['agentTasks']['list']>;
+      },
+      get(taskId) {
+        return request('agentTasks.get', { taskId }) as ReturnType<KodaXRuntime['agentTasks']['get']>;
+      },
+      events(taskId, cursor) {
+        return request('agentTasks.events', {
+          taskId,
+          ...(cursor !== undefined ? { cursor } : {}),
+        }) as ReturnType<KodaXRuntime['agentTasks']['events']>;
+      },
+      wait(taskId, timeoutMs) {
+        return request('agentTasks.wait', {
+          taskId,
+          ...(timeoutMs !== undefined ? { timeoutMs } : {}),
+        }) as ReturnType<KodaXRuntime['agentTasks']['wait']>;
+      },
+      sendInput(taskId, input) {
+        return request('agentTasks.sendInput', { taskId, input }) as ReturnType<KodaXRuntime['agentTasks']['sendInput']>;
+      },
+      cancel(taskId, reason) {
+        return request('agentTasks.cancel', {
+          taskId,
+          ...(reason !== undefined ? { reason } : {}),
+        }) as ReturnType<KodaXRuntime['agentTasks']['cancel']>;
+      },
+      reconcile(taskId) {
+        return request('agentTasks.reconcile', { taskId }) as ReturnType<KodaXRuntime['agentTasks']['reconcile']>;
       },
     },
     status: {

@@ -242,7 +242,7 @@ async function dispatchRuntimeDaemonRequest(
     case 'runtime.initialize':
       return {
         identity: runtime.identity,
-        capabilities: runtimeDaemonCapabilities(options.capabilities),
+        capabilities: runtimeDaemonCapabilities(options.capabilities, runtime.agents.enabled),
       };
     case 'ping':
       return { ok: true, runtimeId: runtime.identity.runtimeId };
@@ -257,7 +257,7 @@ async function dispatchRuntimeDaemonRequest(
     case 'daemon.logs':
       return options.logs ? options.logs() : { entries: [] };
     case 'runtime.capabilities':
-      return runtimeDaemonCapabilities(options.capabilities);
+      return runtimeDaemonCapabilities(options.capabilities, runtime.agents.enabled);
     case 'config.read':
       return options.config ? redactRuntimeConfig(await options.config()) : runtime.config.read();
     case 'config.patch': {
@@ -342,6 +342,86 @@ async function dispatchRuntimeDaemonRequest(
       return runtime.artifacts.get(requireStringParam(request.params, 'artifactId'));
     case 'artifact.delete':
       return runtime.artifacts.delete(requireStringParam(request.params, 'artifactId'));
+
+    case 'agentRegistrations.list':
+      requireConfigAdminCapability(getClientCapabilities());
+      requireExternalAgentsEnabled(runtime);
+      return runtime.admin.agentRegistrations.list();
+    case 'agentRegistrations.upsert': {
+      requireConfigAdminCapability(getClientCapabilities());
+      requireExternalAgentsEnabled(runtime);
+      const params = requireRecord(request.params);
+      return runtime.admin.agentRegistrations.upsert(
+        requireRecord(params.registration) as unknown as Parameters<
+          KodaXRuntime['admin']['agentRegistrations']['upsert']
+        >[0],
+      );
+    }
+    case 'agentRegistrations.remove':
+      requireConfigAdminCapability(getClientCapabilities());
+      requireExternalAgentsEnabled(runtime);
+      return runtime.admin.agentRegistrations.remove(requireStringParam(request.params, 'agentId'));
+    case 'agents.listDispatchable':
+      return runtime.agents.listDispatchable(
+        requireRecord(request.params) as unknown as Parameters<KodaXRuntime['agents']['listDispatchable']>[0],
+      );
+    case 'agents.describe': {
+      const params = requireRecord(request.params);
+      return runtime.agents.describe(
+        requireStringField(params, 'agentId'),
+        requireRecord(params.query) as unknown as Parameters<KodaXRuntime['agents']['describe']>[1],
+      );
+    }
+    case 'agents.preflight':
+      return runtime.agents.preflight(
+        requireRecord(request.params) as unknown as Parameters<KodaXRuntime['agents']['preflight']>[0],
+      );
+    case 'agentTasks.list':
+      requireExternalAgentsEnabled(runtime);
+      return runtime.agentTasks.list(optionalRecord(request.params) as Parameters<KodaXRuntime['agentTasks']['list']>[0]);
+    case 'agentTasks.start':
+      requireExternalAgentsEnabled(runtime);
+      return runtime.agentTasks.start(
+        requireRecord(request.params) as unknown as Parameters<KodaXRuntime['agentTasks']['start']>[0],
+      );
+    case 'agentTasks.get':
+      requireExternalAgentsEnabled(runtime);
+      return runtime.agentTasks.get(requireStringParam(request.params, 'taskId'));
+    case 'agentTasks.events': {
+      requireExternalAgentsEnabled(runtime);
+      const params = requireRecord(request.params);
+      return runtime.agentTasks.events(
+        requireStringField(params, 'taskId'),
+        optionalIntegerField(params, 'cursor'),
+      );
+    }
+    case 'agentTasks.wait': {
+      requireExternalAgentsEnabled(runtime);
+      const params = requireRecord(request.params);
+      return runtime.agentTasks.wait(
+        requireStringField(params, 'taskId'),
+        optionalIntegerField(params, 'timeoutMs'),
+      );
+    }
+    case 'agentTasks.sendInput': {
+      requireExternalAgentsEnabled(runtime);
+      const params = requireRecord(request.params);
+      return runtime.agentTasks.sendInput(
+        requireStringField(params, 'taskId'),
+        requireRecord(params.input) as unknown as Parameters<KodaXRuntime['agentTasks']['sendInput']>[1],
+      );
+    }
+    case 'agentTasks.cancel': {
+      requireExternalAgentsEnabled(runtime);
+      const params = requireRecord(request.params);
+      return runtime.agentTasks.cancel(
+        requireStringField(params, 'taskId'),
+        optionalStringField(params, 'reason'),
+      );
+    }
+    case 'agentTasks.reconcile':
+      requireExternalAgentsEnabled(runtime);
+      return runtime.agentTasks.reconcile(requireStringParam(request.params, 'taskId'));
 
     case 'session.create':
       return runtime.sessions.create(optionalRecord(request.params) as RuntimeCreateSessionInput | undefined);
@@ -517,6 +597,7 @@ function parseRuntimeClientCapabilities(value: unknown): RuntimeClientCapabiliti
 
 function runtimeDaemonCapabilities(
   overrides: Readonly<Record<string, boolean>> = {},
+  externalAgents = false,
 ): Record<string, boolean> {
   return {
     events: true,
@@ -528,8 +609,19 @@ function runtimeDaemonCapabilities(
     artifactUpload: true,
     contextDiagnostics: true,
     hardDispose: false,
+    externalAgents,
     ...overrides,
   };
+}
+
+function requireExternalAgentsEnabled(runtime: KodaXRuntime): void {
+  if (runtime.agents.enabled) return;
+  throw daemonError('method_not_found', 'Runtime external agent executor plane is not enabled.');
+}
+
+function requireConfigAdminCapability(capabilities: RuntimeClientCapabilities): void {
+  if (capabilities.configAdmin === true) return;
+  throw daemonError('unauthorized', 'Runtime daemon client did not negotiate configAdmin capability.');
 }
 
 function filterReplayForClientCapabilities(
@@ -726,6 +818,15 @@ function optionalStringField(record: Record<string, unknown>, key: string): stri
     throw daemonError('invalid_request', `Expected optional string param: ${key}`);
   }
   return value;
+}
+
+function optionalIntegerField(record: Record<string, unknown>, key: string): number | undefined {
+  const value = record[key];
+  if (value === undefined || value === null) return undefined;
+  if (!Number.isSafeInteger(value) || (value as number) < 0) {
+    throw daemonError('invalid_request', `Expected optional non-negative integer param: ${key}`);
+  }
+  return value as number;
 }
 
 function daemonError(

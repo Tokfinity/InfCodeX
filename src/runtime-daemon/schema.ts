@@ -271,6 +271,48 @@ export const RUNTIME_DAEMON_METHOD_SCHEMAS = {
   },
   'artifact.delete': { params: objectSchema({ artifactId: stringSchema }, ['artifactId']), result: booleanSchema },
 
+  'agentRegistrations.list': { params: noParamsSchema, result: arrayAnySchema },
+  'agentRegistrations.upsert': {
+    params: objectSchema({ registration: objectAnySchema }, ['registration']),
+    result: objectAnySchema,
+  },
+  'agentRegistrations.remove': {
+    params: objectSchema({ agentId: stringSchema }, ['agentId']),
+    result: booleanSchema,
+  },
+  'agents.listDispatchable': { params: objectAnySchema, result: arrayAnySchema },
+  'agents.describe': {
+    params: objectSchema({ agentId: stringSchema, query: objectAnySchema }, ['agentId', 'query']),
+    result: nullableSchema(objectAnySchema),
+  },
+  'agents.preflight': { params: objectAnySchema, result: objectAnySchema },
+  'agentTasks.list': { params: objectAnySchema, result: arrayAnySchema },
+  'agentTasks.start': { params: objectAnySchema, result: objectAnySchema },
+  'agentTasks.get': {
+    params: objectSchema({ taskId: stringSchema }, ['taskId']),
+    result: objectAnySchema,
+  },
+  'agentTasks.events': {
+    params: objectSchema({ taskId: stringSchema, cursor: integerSchema }, ['taskId'], true),
+    result: arrayAnySchema,
+  },
+  'agentTasks.wait': {
+    params: objectSchema({ taskId: stringSchema, timeoutMs: integerSchema }, ['taskId'], true),
+    result: objectAnySchema,
+  },
+  'agentTasks.sendInput': {
+    params: objectSchema({ taskId: stringSchema, input: objectAnySchema }, ['taskId', 'input']),
+    result: objectAnySchema,
+  },
+  'agentTasks.cancel': {
+    params: objectSchema({ taskId: stringSchema, reason: stringSchema }, ['taskId'], true),
+    result: objectAnySchema,
+  },
+  'agentTasks.reconcile': {
+    params: objectSchema({ taskId: stringSchema }, ['taskId']),
+    result: objectAnySchema,
+  },
+
   'context.budget.get': { params: diagnosticParamsSchema(), result: { oneOf: [objectAnySchema, { type: 'null' }] } },
   'tool.exposure.preview': { params: diagnosticParamsSchema(), result: { oneOf: [objectAnySchema, { type: 'null' }] } },
 } satisfies Record<RuntimeDaemonMethod, RuntimeDaemonMethodSchema>;

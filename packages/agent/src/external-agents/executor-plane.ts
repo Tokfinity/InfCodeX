@@ -4,6 +4,7 @@ import { createMemoryAgentExecutorPlaneStore } from './memory-store.js';
 import type {
   AgentCapabilityDeclaration,
   AgentCapabilityRequirements,
+  AgentArtifactReference,
   AgentCredentialBroker,
   AgentDispatchabilitySnapshot,
   AgentExecutor,
@@ -470,6 +471,9 @@ class AgentExecutorPlaneRuntime {
     });
     if (!preflight.ok) throw new Error(`Agent preflight failed: ${preflight.reasons.join('; ')}`);
     const registration = this.requireRegistration(input.agentId);
+    if (preflight.descriptor?.configurationRevision !== registration.configurationRevision) {
+      throw new Error('Agent configuration revision changed during preflight.');
+    }
     const executor = await this.executorForRegistration(registration);
     const taskId = input.taskId ?? this.options.createTaskId();
     if (this.#tasks.has(taskId)) throw new Error(`Agent task already exists: ${taskId}`);
@@ -597,10 +601,23 @@ class AgentExecutorPlaneRuntime {
       ...(event.progress ? { progress: event.progress } : {}),
       ...(event.output !== undefined ? { output: event.output } : {}),
       ...(event.error !== undefined ? { error: sanitizeText(event.error) } : {}),
-      ...(event.artifacts ? { artifacts: event.artifacts } : {}),
+      ...(event.artifacts ? { artifacts: this.withArtifactProvenance(task, event.artifacts) } : {}),
       ...(event.usage ? { usage: event.usage } : {}),
       updatedAt: this.nowIso(),
     };
+  }
+
+  private withArtifactProvenance(
+    task: AgentTaskSnapshot,
+    artifacts: readonly AgentArtifactReference[],
+  ): readonly AgentArtifactReference[] {
+    return artifacts.map((artifact) => ({
+      ...artifact,
+      producingAgentId: artifact.producingAgentId ?? task.agentId,
+      ...(artifact.remoteTaskId ?? task.remoteTaskId
+        ? { remoteTaskId: artifact.remoteTaskId ?? task.remoteTaskId }
+        : {}),
+    }));
   }
 
   private async listTasks(filter?: AgentTaskFilter): Promise<readonly AgentTaskSnapshot[]> {
@@ -628,13 +645,18 @@ class AgentExecutorPlaneRuntime {
       throw new Error('Agent task wait timeoutMs must be positive.');
     }
     return new Promise<AgentTaskSnapshot>((resolve, reject) => {
-      const listener = (task: AgentTaskSnapshot): void => resolve(clone(task));
+      let timer: ReturnType<typeof setTimeout> | undefined;
+      const listener = (task: AgentTaskSnapshot): void => {
+        if (timer !== undefined) clearTimeout(timer);
+        resolve(clone(task));
+      };
       const listeners = this.#waiters.get(taskId) ?? new Set();
       listeners.add(listener);
       this.#waiters.set(taskId, listeners);
       if (timeoutMs === undefined) return;
-      const timer = setTimeout(() => {
+      timer = setTimeout(() => {
         listeners.delete(listener);
+        if (listeners.size === 0) this.#waiters.delete(taskId);
         reject(new Error(`Agent task ${taskId} did not finish within ${timeoutMs}ms.`));
       }, timeoutMs);
       timer.unref?.();
@@ -784,7 +806,7 @@ class AgentExecutorPlaneRuntime {
       ...(detail.progress ? { progress: detail.progress } : {}),
       ...(detail.output !== undefined ? { output: detail.output } : {}),
       ...(detail.error !== undefined ? { error: sanitizeText(detail.error) } : {}),
-      ...(detail.artifacts ? { artifacts: detail.artifacts } : {}),
+      ...(detail.artifacts ? { artifacts: this.withArtifactProvenance(task, detail.artifacts) } : {}),
       ...(detail.usage ? { usage: detail.usage } : {}),
     });
   }

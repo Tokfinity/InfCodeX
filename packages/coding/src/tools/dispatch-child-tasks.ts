@@ -176,7 +176,6 @@ function shouldUseAsyncDispatch(ctx: KodaXToolExecutionContext): boolean {
 function externalTaskResult(task: AgentTaskSnapshot): KodaXChildExecutionResult {
   const completed = task.state === 'completed';
   const summary = task.output ?? task.error ?? `External task ended in state ${task.state}.`;
-  const artifactPaths = task.artifacts?.flatMap((artifact) => artifact.uri ? [artifact.uri] : []);
   const childResult: KodaXChildAgentResult = {
     childId: task.taskId,
     fanoutClass: 'evidence-scan',
@@ -185,15 +184,14 @@ function externalTaskResult(task: AgentTaskSnapshot): KodaXChildExecutionResult 
     summary,
     evidenceRefs: [],
     contradictions: [],
-    ...(artifactPaths && artifactPaths.length > 0 ? { artifactPaths } : {}),
     ...(task.usage?.totalTokens !== undefined ? { totalTokensUsed: task.usage.totalTokens } : {}),
   };
   return {
     results: [childResult],
     mergedFindings: completed
-      ? [{ childId: task.taskId, objective: task.objective, evidence: [summary], artifacts: artifactPaths ?? [] }]
+      ? [{ childId: task.taskId, objective: task.objective, evidence: [summary], artifacts: [] }]
       : [],
-    mergedArtifacts: artifactPaths ?? [],
+    mergedArtifacts: [],
     totalTokensUsed: task.usage?.totalTokens ?? 0,
     cancelledChildren: task.state === 'canceled' ? [task.taskId] : [],
   };
