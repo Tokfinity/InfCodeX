@@ -532,6 +532,7 @@ async function getDaemonStopResult(input: {
   readonly timeoutMs: number;
   readonly force?: boolean;
 }): Promise<DaemonStopResult> {
+  const deadline = Date.now() + input.timeoutMs;
   const paths = resolveRuntimeDaemonPaths(input.homeDir, input.profile);
   const observation = await observeRuntimeDaemonHealth(paths);
   const health = classifyRuntimeDaemonHealth(observation);
@@ -564,10 +565,15 @@ async function getDaemonStopResult(input: {
   }
   const after = await waitForDaemonStopped(paths, input.timeoutMs);
   const afterHealth = classifyRuntimeDaemonHealth(after);
+  const processExited = afterHealth !== 'healthy'
+    && await waitForDaemonProcessExit(
+      observation.state.pid,
+      Math.max(0, deadline - Date.now()),
+    );
   return {
-    stopped: afterHealth !== 'healthy',
+    stopped: processExited,
     health: afterHealth,
-    state: after.state ?? null,
+    state: processExited ? (after.state ?? null) : observation.state,
   };
 }
 
@@ -656,6 +662,17 @@ async function getDaemonRestartResult(input: {
       },
     };
   }
+  if (!stop.stopped) {
+    return {
+      restarted: false,
+      stop,
+      start: {
+        started: false,
+        health: stop.health,
+        state: stop.state,
+      },
+    };
+  }
   if (stop.reason === 'unhealthy' || stop.reason === 'mismatch') {
     return {
       restarted: false,
@@ -733,12 +750,12 @@ function spawnDaemonServeProcess(input: {
   readonly provider?: string;
   readonly model?: string;
 }): ReturnType<typeof spawn> {
-  const entry = process.argv[1];
+  const entry = fileURLToPath(import.meta.url);
   if (!entry) {
     throw new Error('Cannot resolve current KodaX CLI entrypoint for daemon start.');
   }
   const args = [
-    ...process.execArgv,
+    ...daemonServeExecArgv(process.execArgv),
     entry,
     'daemon',
     'serve',
@@ -765,6 +782,40 @@ function spawnDaemonServeProcess(input: {
   });
   child.unref();
   return child;
+}
+
+function daemonServeExecArgv(execArgv: readonly string[]): string[] {
+  const keep: string[] = [];
+  for (let i = 0; i < execArgv.length; i += 1) {
+    const arg = execArgv[i] ?? '';
+    const normalized = arg.toLowerCase();
+    if (
+      normalized === '--import'
+      || normalized === '--loader'
+      || normalized === '--experimental-loader'
+      || normalized === '--require'
+      || normalized === '-r'
+    ) {
+      keep.push(arg);
+      const value = execArgv[i + 1];
+      if (value !== undefined) {
+        keep.push(value);
+        i += 1;
+      }
+      continue;
+    }
+    if (
+      normalized.startsWith('--import=')
+      || normalized.startsWith('--loader=')
+      || normalized.startsWith('--experimental-loader=')
+      || normalized.startsWith('--require=')
+      || normalized.startsWith('--max-old-space-size')
+      || normalized === '--enable-source-maps'
+    ) {
+      keep.push(arg);
+    }
+  }
+  return keep;
 }
 
 async function waitForDaemonHealth(
@@ -804,6 +855,16 @@ async function waitForDaemonStopped(
     await delay(100);
   }
   return latestStopped;
+}
+
+async function waitForDaemonProcessExit(pid: number, timeoutMs: number): Promise<boolean> {
+  const deadline = Date.now() + timeoutMs;
+  while (isRuntimeDaemonPidAlive(pid)) {
+    const remainingMs = deadline - Date.now();
+    if (remainingMs <= 0) return false;
+    await delay(Math.min(100, remainingMs));
+  }
+  return true;
 }
 
 function waitForShutdownSignal(onShutdown: () => Promise<void>): Promise<void> {
@@ -2381,6 +2442,17 @@ complete -c kodax -l version -d 'Show version'`);
           throw result.error;
         }
         if (!result.result) {
+          if (result.phase === 'cancelled' || result.phase === 'interrupted') {
+            return {
+              success: false,
+              lastText: '',
+              messages: [],
+              sessionId: input.sessionId,
+              interrupted: true,
+              signal: 'BLOCKED',
+              signalReason: 'Runtime run cancelled.',
+            };
+          }
           throw new Error(`Runtime run ${handle.runId} ended without a result.`);
         }
         return result.result;

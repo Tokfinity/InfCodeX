@@ -97,7 +97,7 @@ const _messageTokenCache = new WeakMap<KodaXMessage, number>();
  * - 内容文本
  * - 工具调用和结果
  */
-export function estimateTokens(messages: KodaXMessage[]): number {
+export function estimateTokens(messages: readonly KodaXMessage[]): number {
   let total = 0;
 
   for (const m of messages) {

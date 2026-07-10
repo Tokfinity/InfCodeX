@@ -12,17 +12,25 @@ import {
   type RequestPermissionResponse,
   type SessionNotification,
 } from '@agentclientprotocol/sdk';
-import type { KodaXExtensionRuntime } from '@kodax-ai/coding';
+import type {
+  KodaXExtensionRuntime,
+  KodaXOptions,
+  KodaXReasoningMode,
+  KodaXResult,
+  RunningSession,
+} from '@kodax-ai/coding';
 import type { AcpLogLevel } from '../src/acp_logger.js';
 import type { AcpEventSink, AcpRuntimeEvent } from '../src/acp_events.js';
 
 const {
   runKodaXMock,
+  startKodaXMock,
   buildMcpReverseCapabilitiesMock,
   discoverDefaultExtensionsMock,
   registerConfiguredMcpCapabilityProviderMock,
 } = vi.hoisted(() => ({
-  runKodaXMock: vi.fn(),
+  runKodaXMock: vi.fn<[KodaXOptions, string], Promise<KodaXResult>>(),
+  startKodaXMock: vi.fn<[KodaXOptions, string], RunningSession>(),
   buildMcpReverseCapabilitiesMock: vi.fn(),
   discoverDefaultExtensionsMock: vi.fn(async () => [] as string[]),
   registerConfiguredMcpCapabilityProviderMock: vi.fn(),
@@ -45,9 +53,63 @@ const { prepareRuntimeConfigMock } = vi.hoisted(() => ({
 // `matchesBashPatternByExtractedPrefix(extracted, 'echo test')`.
 vi.mock('@kodax-ai/coding', async (importOriginal) => {
   const actual = await importOriginal<typeof import('@kodax-ai/coding')>();
+  startKodaXMock.mockImplementation((options, prompt) => {
+    const abortController = new AbortController();
+    if (options.abortSignal?.aborted) {
+      abortController.abort(options.abortSignal.reason);
+    } else {
+      options.abortSignal?.addEventListener(
+        'abort',
+        () => abortController.abort(options.abortSignal?.reason),
+        { once: true },
+      );
+    }
+
+    let provider = options.provider ?? '';
+    let model = options.modelOverride ?? options.model;
+    let reasoning: KodaXReasoningMode | undefined = options.reasoningMode;
+    const result = Promise.resolve()
+      .then(() => runKodaXMock({
+        ...options,
+        abortSignal: abortController.signal,
+      }, prompt));
+
+    return {
+      id: options.session?.id ?? 'mock-session',
+      get currentProvider() {
+        return provider;
+      },
+      get currentModel() {
+        return model;
+      },
+      get currentReasoning() {
+        return reasoning;
+      },
+      get aborted() {
+        return abortController.signal.aborted;
+      },
+      get attached() {
+        return true;
+      },
+      setProvider(name) {
+        provider = name;
+      },
+      setModel(nextModel) {
+        model = nextModel;
+      },
+      setReasoning(nextReasoning) {
+        reasoning = nextReasoning;
+      },
+      abort(reasonArg) {
+        abortController.abort(reasonArg);
+      },
+      result,
+    };
+  });
   return {
     ...actual,
     runKodaX: runKodaXMock,
+    startKodaX: startKodaXMock,
     buildMcpReverseCapabilities: buildMcpReverseCapabilitiesMock,
     discoverDefaultExtensions: discoverDefaultExtensionsMock,
     registerConfiguredMcpCapabilityProvider: registerConfiguredMcpCapabilityProviderMock,
@@ -88,6 +150,18 @@ function createResult(overrides: Partial<Awaited<ReturnType<typeof runKodaXMock>
     interrupted: false,
     ...overrides,
   };
+}
+
+async function waitForCondition(
+  label: string,
+  predicate: () => boolean | Promise<boolean>,
+): Promise<void> {
+  const deadline = Date.now() + 1000;
+  while (Date.now() < deadline) {
+    if (await predicate()) return;
+    await new Promise<void>((resolve) => setTimeout(resolve, 10));
+  }
+  throw new Error(`${label} did not happen`);
 }
 
 async function createHarness(options: {
@@ -169,6 +243,7 @@ async function createHarness(options: {
 describe('KodaXAcpServer', () => {
   beforeEach(() => {
     vi.clearAllMocks();
+    runKodaXMock.mockResolvedValue(createResult());
     prepareRuntimeConfigMock.mockReturnValue({
       provider: 'openai',
       thinking: false,
@@ -452,7 +527,7 @@ describe('KodaXAcpServer', () => {
       prompt: [{ type: 'text', text: 'Cancel this run' }],
     });
 
-    await Promise.resolve();
+    await waitForCondition('active ACP coding run', () => runKodaXMock.mock.calls.length === 1);
     await harness.client.cancel({ sessionId: harness.sessionId });
 
     const response = await promptPromise;

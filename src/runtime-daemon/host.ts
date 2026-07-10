@@ -1,5 +1,9 @@
 import type { KodaXRuntime } from '../sdk-runtime.js';
 import {
+  setKodaXDiagnosticSink,
+  type KodaXDiagnostic,
+} from '@kodax-ai/agent';
+import {
   createRuntimeDaemonDispatcher,
   createRuntimeDaemonRunResultStore,
 } from './server.js';
@@ -47,6 +51,9 @@ export async function startRuntimeDaemonHost(
     runtimeId: options.runtime.identity.runtimeId,
     endpoint: options.endpoint.path,
   });
+  const restoreDiagnostics = setKodaXDiagnosticSink((diagnostic) => {
+    appendRuntimeDiagnostic(options.paths, diagnostic);
+  });
 
   let server: RuntimeDaemonSocketServer | undefined;
   let requestStop: (() => void) | undefined;
@@ -74,6 +81,7 @@ export async function startRuntimeDaemonHost(
     appendRuntimeDaemonLog(options.paths, 'error', 'Runtime daemon failed to start.', {
       error: normalizeHostError(error).message,
     });
+    restoreDiagnostics();
     releaseRuntimeDaemonLock(options.lock);
     writeRuntimeDaemonState(options.paths, {
       ...starting,
@@ -99,6 +107,7 @@ export async function startRuntimeDaemonHost(
     runResults.clear();
     await options.runtime.close();
     appendRuntimeDaemonLog(options.paths, 'info', 'Runtime daemon stopped.');
+    restoreDiagnostics();
     if (releaseRuntimeDaemonLock(options.lock)) {
       removeRuntimeDaemonStateFiles(options.paths);
     }
@@ -115,6 +124,23 @@ export async function startRuntimeDaemonHost(
     state: ready,
     close: closeHost,
   };
+}
+
+function appendRuntimeDiagnostic(paths: RuntimeDaemonPaths, diagnostic: KodaXDiagnostic): void {
+  try {
+    appendRuntimeDaemonLog(
+      paths,
+      diagnostic.level === 'error' ? 'error' : diagnostic.level === 'warn' ? 'warn' : 'info',
+      `[${diagnostic.source}] ${diagnostic.message}`,
+      {
+        level: diagnostic.level,
+        source: diagnostic.source,
+        ...(diagnostic.detail !== undefined ? { detail: diagnostic.detail } : {}),
+      },
+    );
+  } catch {
+    // Diagnostic sinks must never affect the daemon runtime path.
+  }
 }
 
 function createHostState(

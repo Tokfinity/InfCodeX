@@ -35,7 +35,7 @@ describe('daemon CLI smoke', () => {
       '--provider',
       'mock-provider',
       '--timeout-ms',
-      '12000',
+      '30000',
       '--json',
     ]);
     expect(start).toMatchObject({
@@ -121,7 +121,7 @@ describe('daemon CLI smoke', () => {
       '--provider',
       'mock-provider',
       '--timeout-ms',
-      '12000',
+      '30000',
       '--json',
     ]);
     expect(restart).toMatchObject({
@@ -142,7 +142,7 @@ describe('daemon CLI smoke', () => {
       '--profile',
       profile,
       '--timeout-ms',
-      '12000',
+      '30000',
       '--json',
     ]);
     expect(stop).toEqual({
@@ -155,7 +155,7 @@ describe('daemon CLI smoke', () => {
     const lockFile = path.join(homeDir, '.kodax', 'runtime', 'daemon', profile, 'daemon.lock');
     expect(fs.existsSync(stateFile)).toBe(false);
     expect(fs.existsSync(lockFile)).toBe(false);
-  }, 90_000);
+  }, 180_000);
 
   it('force-cleans stale daemon ownership without a live owner process', () => {
     const homeDir = fs.mkdtempSync(path.join(os.tmpdir(), 'kodax-daemon-cli-force-stale-'));
@@ -260,7 +260,7 @@ function runDaemonCommand(args: readonly string[]): Record<string, unknown> {
   ], {
     cwd: process.cwd(),
     encoding: 'utf8',
-    timeout: 30_000,
+    timeout: 90_000,
     env: {
       ...process.env,
       KODAX_TRACING: '0',

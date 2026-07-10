@@ -2,6 +2,10 @@ import { describe, expect, it, beforeEach, afterEach, vi } from 'vitest';
 import os from 'os';
 import path from 'path';
 import fs from 'fs/promises';
+import {
+  setKodaXDiagnosticSink,
+  type KodaXDiagnostic,
+} from '@kodax-ai/agent';
 
 import {
   configureRuntime,
@@ -571,14 +575,21 @@ describe('rehydrateActiveArtifacts()', () => {
     _resetRuntimeForTesting();
     configureRuntime({ cwd: tmpRoot });
 
-    // Silence expected console.warn so test output stays clean.
-    const warnSpy = vi.spyOn(console, 'warn').mockImplementation(() => undefined);
+    const diagnostics: KodaXDiagnostic[] = [];
+    const restoreDiagnostics = setKodaXDiagnosticSink((diagnostic) => diagnostics.push(diagnostic));
     try {
       const result = await rehydrateActiveArtifacts();
       expect(result.loaded).toBe(1);
       expect(getRegisteredToolDefinition('good')).toBeDefined();
+      expect(diagnostics).toEqual([
+        expect.objectContaining({
+          source: 'coding:construction',
+          level: 'warn',
+          message: expect.stringContaining('Skipping unreadable manifest'),
+        }),
+      ]);
     } finally {
-      warnSpy.mockRestore();
+      restoreDiagnostics();
     }
   });
 
@@ -608,15 +619,22 @@ describe('rehydrateActiveArtifacts()', () => {
     _resetRuntimeForTesting();
     configureRuntime({ cwd: tmpRoot });
 
-    const warnSpy = vi.spyOn(console, 'warn').mockImplementation(() => undefined);
+    const diagnostics: KodaXDiagnostic[] = [];
+    const restoreDiagnostics = setKodaXDiagnosticSink((diagnostic) => diagnostics.push(diagnostic));
     try {
       const result = await rehydrateActiveArtifacts();
       expect(result.loaded).toBe(0);
       expect(result.tampered).toBe(1);
       expect(getRegisteredToolDefinition('tampered')).toBeUndefined();
-      expect(warnSpy).toHaveBeenCalledWith(expect.stringMatching(/contentHash mismatch/));
+      expect(diagnostics).toEqual([
+        expect.objectContaining({
+          source: 'coding:construction',
+          level: 'warn',
+          message: expect.stringContaining('contentHash mismatch'),
+        }),
+      ]);
     } finally {
-      warnSpy.mockRestore();
+      restoreDiagnostics();
     }
   });
 

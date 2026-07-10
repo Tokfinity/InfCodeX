@@ -1079,8 +1079,9 @@ async function registerActiveAgentArtifact(
  * tools.
  *
  * Returns counts so callers can surface a loaded/failed/tampered banner.
- * Failures are logged (console.warn) and rehydration continues for the
- * remaining artifacts; a single bad manifest must not break boot.
+ * Failures are emitted through the diagnostic channel and rehydration
+ * continues for the remaining artifacts; a single bad manifest must not
+ * break boot.
  */
 export async function rehydrateActiveArtifacts(): Promise<{
   loaded: number;

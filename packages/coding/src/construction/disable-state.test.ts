@@ -3,10 +3,14 @@
  * `validateSelfModify`'s `self-modify-disabled` rule.
  */
 
-import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
+import { afterEach, beforeEach, describe, expect, it } from 'vitest';
 import os from 'os';
 import path from 'path';
 import fs from 'fs/promises';
+import {
+  setKodaXDiagnosticSink,
+  type KodaXDiagnostic,
+} from '@kodax-ai/agent';
 
 import { disableSelfModify, readDisableState } from './disable-state.js';
 import { validateSelfModify } from './self-modify.js';
@@ -67,13 +71,20 @@ describe('readDisableState', () => {
     await fs.mkdir(path.dirname(file), { recursive: true });
     await fs.writeFile(file, '{ not json', 'utf8');
 
-    const warn = vi.spyOn(console, 'warn').mockImplementation(() => undefined);
+    const diagnostics: KodaXDiagnostic[] = [];
+    const restoreDiagnostics = setKodaXDiagnosticSink((diagnostic) => diagnostics.push(diagnostic));
     try {
       const state = await readDisableState('alpha', { cwd: tmpRoot });
       expect(state.disabled).toBe(true);
-      expect(warn).toHaveBeenCalledOnce();
+      expect(diagnostics).toEqual([
+        expect.objectContaining({
+          source: 'coding:construction',
+          level: 'warn',
+          message: expect.stringContaining('Treating malformed disable marker'),
+        }),
+      ]);
     } finally {
-      warn.mockRestore();
+      restoreDiagnostics();
     }
   });
 });

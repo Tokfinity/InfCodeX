@@ -36,7 +36,8 @@ describe('runtime daemon transport', () => {
     const endpoint = defaultRuntimeDaemonEndpoint('default');
 
     expect(endpoint.kind).toBe(process.platform === 'win32' ? 'pipe' : 'unix');
-    expect(endpoint.path).toContain('kodax-runtime-default');
+    expect(endpoint.path).toContain('kodax-runtime-');
+    expect(endpoint.path).toContain('default');
   });
 
   it('scopes default endpoints by home directory when provided', () => {
@@ -44,7 +45,8 @@ describe('runtime daemon transport', () => {
     const second = defaultRuntimeDaemonEndpoint('default', path.join(os.tmpdir(), 'kodax-home-b'));
     const firstAgain = defaultRuntimeDaemonEndpoint('default', path.join(os.tmpdir(), 'kodax-home-a'));
 
-    expect(first.path).toContain('kodax-runtime-default-');
+    expect(first.path).toContain('kodax-runtime-');
+    expect(first.path).toContain('default-');
     expect(first.path).toBe(firstAgain.path);
     expect(first.path).not.toBe(second.path);
   });

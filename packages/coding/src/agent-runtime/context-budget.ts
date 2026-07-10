@@ -1,5 +1,5 @@
 import type { KodaXMessage, KodaXToolDefinition } from '@kodax-ai/llm';
-import { countTokens } from '../tokenizer.js';
+import { countTokens, estimateTokens } from '../tokenizer.js';
 
 export type RuntimeContextOptimizationProfile =
   | 'off'
@@ -86,7 +86,7 @@ export function createRuntimeContextBudgetSnapshot(
   const toolSchemas = sumTokens(input.toolDefinitions ?? [], estimateToolSchemaTokens);
   const skillCatalog = estimateStringTokens(input.skillCatalogText ?? '');
   const mcpCatalog = estimateStringTokens(input.mcpCatalogText ?? '');
-  const transcript = sumTokens(input.messages ?? [], estimateMessageTokens);
+  const transcript = estimateTokens(input.messages ?? []);
   const pendingInput = estimateStringTokens(input.pendingInput ?? '');
   const recentToolResults = sumTokens(input.recentToolResults ?? [], estimateStringTokens);
   const total = systemPrompt
@@ -143,22 +143,9 @@ export function createRuntimeContextBudgetSnapshot(
   };
 }
 
-function estimateMessageTokens(message: KodaXMessage): number {
-  return estimateStringTokens(message.role) + estimateStringTokens(stringifyUnknown(message.content));
-}
-
 function estimateStringTokens(value: string): number {
   if (value.length === 0) return 0;
   return Math.max(0, countTokens(value));
-}
-
-function stringifyUnknown(value: unknown): string {
-  if (typeof value === 'string') return value;
-  try {
-    return JSON.stringify(value) ?? '';
-  } catch {
-    return '[unserializable]';
-  }
 }
 
 function sumTokens<T>(

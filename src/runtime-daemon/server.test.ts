@@ -330,6 +330,15 @@ describe('runtime daemon dispatcher', () => {
       type: 'context.budget.snapshot',
       payload: { usedTokens: 42 },
     });
+    runtime.emit({
+      id: 'evt-compaction-skipped',
+      seq: 3,
+      time: '2026-07-09T00:00:02.000Z',
+      sessionId: 'session-1',
+      runId: 'run-1',
+      type: 'context.compaction.skipped',
+      payload: { reason: 'cooldown' },
+    });
 
     const basic = createRuntimeDaemonDispatcher({ runtime });
     await initializeDispatcher(basic, {});
@@ -367,6 +376,7 @@ describe('runtime daemon dispatcher', () => {
       expect(diagnosticReplay.result).toEqual([
         expect.objectContaining({ type: 'run.completed' }),
         expect.objectContaining({ type: 'context.budget.snapshot' }),
+        expect.objectContaining({ type: 'context.compaction.skipped' }),
       ]);
     }
     expect(isRuntimeDaemonSuccessResponse(diagnosticBudget)).toBe(true);

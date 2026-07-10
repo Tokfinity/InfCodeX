@@ -4,6 +4,7 @@ import os from 'node:os';
 import path from 'node:path';
 
 import { afterEach, describe, expect, it } from 'vitest';
+import { emitKodaXDiagnostic } from '@kodax-ai/agent';
 
 import type {
   KodaXRuntime,
@@ -134,6 +135,39 @@ describe('runtime daemon host', () => {
     expect(runtime.closed).toBe(true);
     expect(readRuntimeDaemonState(paths)).toBeUndefined();
     expect(readRuntimeDaemonLockOwner(paths.lockFile)).toBeUndefined();
+  });
+
+  it('routes runtime diagnostics to the daemon log without writing to the live terminal', async () => {
+    const paths = resolveRuntimeDaemonPaths(tempHome(), 'default');
+    const runtime = makeRuntime();
+    const lock = tryAcquireRuntimeDaemonLock(paths, {
+      runtimeId: runtime.identity.runtimeId,
+      pid: process.pid,
+      createdAt: runtime.identity.startedAt,
+    });
+    expect(lock).toBeDefined();
+    if (!lock) throw new Error('Expected daemon lock for diagnostic test.');
+
+    const host = await startRuntimeDaemonHost({
+      runtime,
+      paths,
+      endpoint: await makeTestEndpoint(),
+      lock,
+    });
+    cleanupTasks.push(() => host.close());
+
+    emitKodaXDiagnostic({
+      source: 'test:diagnostic',
+      level: 'warn',
+      message: 'bounded warning',
+      detail: { code: 'E_TEST' },
+    });
+
+    const logText = fs.readFileSync(paths.logFile, 'utf8');
+    expect(logText).toContain('[test:diagnostic] bounded warning');
+    expect(logText).toContain('"code":"E_TEST"');
+
+    await host.close();
   });
 
   it('retains run results across daemon client reconnects', async () => {

@@ -208,7 +208,7 @@ export interface CreateLspClientParams {
 
 interface WaitForLspProcessExitParams {
   readonly proc: Pick<ChildProcessWithoutNullStreams, 'exitCode' | 'signalCode' | 'once' | 'off'>;
-  readonly killSync: () => void;
+  readonly killProcess: () => Promise<void>;
   readonly unregisterManagedChild: () => void;
   readonly exitGraceMs?: number;
   readonly killReapGraceMs?: number;
@@ -216,7 +216,7 @@ interface WaitForLspProcessExitParams {
 
 export async function waitForLspProcessExitOrGiveUp({
   proc,
-  killSync,
+  killProcess,
   unregisterManagedChild,
   exitGraceMs = SHUTDOWN_EXIT_GRACE_MS,
   killReapGraceMs = SHUTDOWN_KILL_REAP_GRACE_MS,
@@ -233,13 +233,13 @@ export async function waitForLspProcessExitOrGiveUp({
         clearTimeout(reapTimer);
       }
     };
-    const finishExited = (): void => {
+    const finishClosed = (): void => {
       if (settled) {
         return;
       }
       settled = true;
       clearTimers();
-      proc.off('exit', finishExited);
+      proc.off('close', finishClosed);
       unregisterManagedChild();
       resolve(true);
     };
@@ -249,20 +249,26 @@ export async function waitForLspProcessExitOrGiveUp({
       }
       settled = true;
       clearTimers();
-      proc.off('exit', finishExited);
+      proc.off('close', finishClosed);
       resolve(false);
     };
     if (proc.exitCode !== null || proc.signalCode !== null) {
-      finishExited();
+      finishClosed();
       return;
     }
     killTimer = setTimeout(() => {
-      killSync();
-      reapTimer = setTimeout(finishUnreaped, killReapGraceMs);
-      reapTimer.unref?.();
+      void killProcess()
+        .catch(() => undefined)
+        .finally(() => {
+          if (settled) {
+            return;
+          }
+          reapTimer = setTimeout(finishUnreaped, killReapGraceMs);
+          reapTimer.unref?.();
+        });
     }, exitGraceMs);
     killTimer.unref?.();
-    proc.once('exit', finishExited);
+    proc.once('close', finishClosed);
   });
 }
 
@@ -535,9 +541,10 @@ export async function createLspClient(params: CreateLspClientParams): Promise<Ls
     // caller deleting that directory hits EBUSY).
     await waitForLspProcessExitOrGiveUp({
       proc,
-      killSync: () => {
-        killChildProcessTreeSync(proc);
-      },
+      killProcess: () => killChildProcessTree(proc, {
+        forceMs: SHUTDOWN_KILL_REAP_GRACE_MS,
+        taskkillMs: 2_000,
+      }),
       unregisterManagedChild: unregisterManagedChildOnce,
     });
   }

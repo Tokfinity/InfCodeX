@@ -1376,7 +1376,7 @@ function createRuntimeRunService(deps: {
       sessionId: record.sessionId,
       runId: record.runId,
     });
-    deps.persistence.saveRunStatus(statusFromRecord(record));
+    saveRunStatusSafely(deps.bus, deps.persistence, record, statusFromRecord(record));
 
     const events = wrapKodaXEvents({
       bus: deps.bus,
@@ -1486,7 +1486,7 @@ function createRuntimeRunService(deps: {
       sessionId: record.sessionId,
       runId: record.runId,
     });
-    deps.persistence.saveRunStatus(statusFromRecord(record));
+    saveRunStatusSafely(deps.bus, deps.persistence, record, statusFromRecord(record));
   };
 
   return {
@@ -2401,12 +2401,12 @@ function interruptPersistedNonTerminalRun(
     endedAt: new Date().toISOString(),
     error: reason,
   };
-  persistence.saveRunStatus(recovered);
   bus.emit('run.interrupted', recovered, {
     sessionId: recovered.sessionId,
     runId: recovered.runId,
     ...(recovered.turnId !== undefined ? { turnId: recovered.turnId } : {}),
   });
+  saveRunStatusSafely(bus, persistence, undefined, recovered);
   return recovered;
 }
 
@@ -3689,7 +3689,29 @@ function markRunTerminal(
     runId: run.runId,
     ...(run.turnId !== undefined ? { turnId: run.turnId } : {}),
   });
-  persistence.saveRunStatus(statusFromRecord(run));
+  saveRunStatusSafely(bus, persistence, run, statusFromRecord(run));
+}
+
+function saveRunStatusSafely(
+  bus: RuntimeEventBus,
+  persistence: RuntimePersistence,
+  run: RuntimeRunRecord | undefined,
+  status: RuntimeRunStatus,
+): void {
+  try {
+    persistence.saveRunStatus(status);
+  } catch (error: unknown) {
+    const turnId = run?.turnId ?? status.turnId;
+    bus.emit('runtime.warning', {
+      message: `Failed to save runtime run status for ${status.runId}: ${normalizeError(error).message}`,
+      runId: status.runId,
+      phase: status.phase,
+    }, {
+      sessionId: status.sessionId,
+      runId: status.runId,
+      ...(turnId !== undefined ? { turnId } : {}),
+    });
+  }
 }
 
 function isTerminalRunPhase(phase: RuntimeRunPhase): boolean {

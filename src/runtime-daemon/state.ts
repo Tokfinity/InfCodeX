@@ -322,9 +322,6 @@ export function claimRuntimeDaemonOwnership(
         health: claimHealth,
       };
     }
-    if (fs.existsSync(paths.lockFile)) {
-      fs.rmSync(paths.lockFile, { force: true });
-    }
   }
 
   const lock = tryAcquireRuntimeDaemonLock(paths, owner);

@@ -225,7 +225,7 @@ describe('runtime daemon ownership claims', () => {
     expect(readRuntimeDaemonLockOwner(paths.lockFile)).toMatchObject({ runtimeId: 'runtime-next' });
   });
 
-  it('clears malformed missing-state locks before claiming the profile', () => {
+  it('does not delete malformed missing-state locks on the normal claim path', () => {
     const paths = resolveRuntimeDaemonPaths(tempHome(), 'default');
     fs.mkdirSync(paths.rootDir, { recursive: true });
     fs.writeFileSync(paths.lockFile, '{not-json', 'utf8');
@@ -236,8 +236,8 @@ describe('runtime daemon ownership claims', () => {
       identityMatches: false,
     });
 
-    expect(decision.kind).toBe('claim');
-    expect(readRuntimeDaemonLockOwner(paths.lockFile)).toMatchObject({ runtimeId: 'runtime-next' });
+    expect(decision.kind).toBe('unhealthy');
+    expect(fs.readFileSync(paths.lockFile, 'utf8')).toBe('{not-json');
   });
 
   it('cleans verified stale ownership before claiming the profile', () => {

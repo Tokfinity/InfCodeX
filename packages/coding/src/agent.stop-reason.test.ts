@@ -13,6 +13,10 @@ import {
   KodaXBaseProvider,
   registerModelProvider,
 } from '@kodax-ai/llm';
+import {
+  setKodaXDiagnosticSink,
+  type KodaXDiagnostic,
+} from '@kodax-ai/agent';
 
 import { runKodaX } from './agent.js';
 
@@ -209,26 +213,34 @@ describe('runKodaX stopReason normalization', () => {
     StopReasonScriptedProvider.responses = [
       response('gateway_doneish', 'done'),
     ];
-    const warnSpy = vi.spyOn(console, 'warn').mockImplementation(() => {});
+    const diagnostics: KodaXDiagnostic[] = [];
+    const restoreDiagnostics = setKodaXDiagnosticSink((diagnostic) => diagnostics.push(diagnostic));
 
-    const result = await runKodaX(
-      {
-        provider: TEST_PROVIDER_NAME,
-        modelOverride: 'gateway-model',
-        reasoningMode: 'off',
-      },
-      'Answer.',
-    );
+    try {
+      const result = await runKodaX(
+        {
+          provider: TEST_PROVIDER_NAME,
+          modelOverride: 'gateway-model',
+          reasoningMode: 'off',
+        },
+        'Answer.',
+      );
 
-    expect(result.success).toBe(true);
-    expect(warnSpy).toHaveBeenCalledOnce();
-    expect(warnSpy.mock.calls[0]?.[0]).toBe('[kodax:stop-reason]');
-    expect(warnSpy.mock.calls[0]?.[1]).toMatchObject({
-      rawStopReason: 'gateway_doneish',
-      provider: TEST_PROVIDER_NAME,
-      model: 'gateway-model',
-      hasToolBlocks: false,
-      hasTextBlocks: true,
-    });
+      expect(result.success).toBe(true);
+      expect(diagnostics).toHaveLength(1);
+      expect(diagnostics[0]).toMatchObject({
+        source: 'coding:stop-reason',
+        level: 'warn',
+        detail: {
+          rawStopReason: 'gateway_doneish',
+          provider: TEST_PROVIDER_NAME,
+          model: 'gateway-model',
+          hasToolBlocks: false,
+          hasTextBlocks: true,
+        },
+      });
+    } finally {
+      restoreDiagnostics();
+    }
   }, 30_000);
 });

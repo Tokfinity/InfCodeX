@@ -1,4 +1,5 @@
 import path from 'path';
+import { availableParallelism } from 'node:os';
 import { defineConfig, type Plugin } from 'vitest/config';
 
 const resolveFromRoot = (...segments: string[]): string =>
@@ -58,20 +59,14 @@ export default defineConfig({
     // is 30s. Passing tests don't get slower; a real deadlock still fails.
     testTimeout: 30_000,
     hookTimeout: 30_000,
+    // The suite mixes worker RPC with filesystem-heavy tests and real child
+    // processes. On high-core Windows hosts, uncapped workers can starve both
+    // the workers and daemon shutdown long enough to create false failures.
+    maxWorkers: Math.min(isCoverageRun ? 4 : 8, availableParallelism()),
+    minWorkers: 1,
     // FEATURE_159 (v0.7.40) — global MessageQueue singleton reset before
     // each test. See `vitest.setup.queue.ts` for the rationale.
     setupFiles: [resolveFromRoot('vitest.setup.queue.ts')],
-    ...(isCoverageRun
-      ? {
-          // V8 coverage collection is substantially heavier on Windows; the
-          // default worker count can starve Vitest's worker RPC during final
-          // task updates even after all tests pass. Keep normal test runs fast,
-          // but cap coverage workers so `npm test -- --coverage` remains a
-          // stable release gate instead of a load-sensitive runner flake.
-          maxWorkers: 4,
-          minWorkers: 1,
-        }
-      : {}),
     include: [
       'packages/*/src/**/*.test.ts',
       'packages/*/src/**/*.test.tsx',

@@ -533,7 +533,8 @@ function requireContextDiagnosticsCapability(capabilities: RuntimeClientCapabili
 function isContextDiagnosticRuntimeEvent(value: unknown): value is RuntimeEvent {
   if (!isRecord(value)) return false;
   return value.type === 'context.budget.snapshot'
-    || value.type === 'tool.exposure.planned';
+    || value.type === 'tool.exposure.planned'
+    || value.type === 'context.compaction.skipped';
 }
 
 async function latestRuntimeDiagnosticPayload(

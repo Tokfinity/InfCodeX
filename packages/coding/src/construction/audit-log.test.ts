@@ -1,7 +1,11 @@
-import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
+import { afterEach, beforeEach, describe, expect, it } from 'vitest';
 import os from 'os';
 import path from 'path';
 import fs from 'fs/promises';
+import {
+  setKodaXDiagnosticSink,
+  type KodaXDiagnostic,
+} from '@kodax-ai/agent';
 
 import {
   appendAuditEntry,
@@ -110,7 +114,7 @@ describe('readAuditEntries', () => {
     ]);
   });
 
-  it('skips malformed lines with a stderr warning and continues', async () => {
+  it('skips malformed lines with a structured warning and continues', async () => {
     const filePath = path.join(tmpRoot, '.kodax', 'constructed', '_audit.jsonl');
     await fs.mkdir(path.dirname(filePath), { recursive: true });
     await fs.writeFile(
@@ -124,13 +128,20 @@ describe('readAuditEntries', () => {
       'utf8',
     );
 
-    const warn = vi.spyOn(console, 'warn').mockImplementation(() => undefined);
+    const diagnostics: KodaXDiagnostic[] = [];
+    const restoreDiagnostics = setKodaXDiagnosticSink((diagnostic) => diagnostics.push(diagnostic));
     try {
       const entries = await readAuditEntries({ cwd: tmpRoot });
       expect(entries).toHaveLength(2);
-      expect(warn).toHaveBeenCalledOnce();
+      expect(diagnostics).toEqual([
+        expect.objectContaining({
+          source: 'coding:construction',
+          level: 'warn',
+          message: expect.stringContaining('Skipping malformed audit line'),
+        }),
+      ]);
     } finally {
-      warn.mockRestore();
+      restoreDiagnostics();
     }
   });
 });

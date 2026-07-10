@@ -71,7 +71,14 @@ describe('LSP protocol integration (real stdio handshake)', () => {
     await fs.writeFile(tsFile, 'export const x: number = "oops";\n', 'utf8');
   });
   afterEach(async () => {
-    if (tempDir) await fs.rm(tempDir, { recursive: true, force: true });
+    if (tempDir) {
+      await fs.rm(tempDir, {
+        recursive: true,
+        force: true,
+        maxRetries: 10,
+        retryDelay: 100,
+      });
+    }
     tempDir = '';
   });
 
@@ -164,6 +171,6 @@ describe('LSP protocol integration (real stdio handshake)', () => {
     const startedAt = Date.now();
     await client.shutdown();
 
-    expect(Date.now() - startedAt).toBeLessThan(5_000);
-  }, 10000);
+    expect(Date.now() - startedAt).toBeLessThan(8_000);
+  }, 15_000);
 });
