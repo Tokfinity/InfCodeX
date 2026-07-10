@@ -41,7 +41,7 @@ describe('daemon CLI smoke', () => {
       'utf8',
     );
     const probeScript = `
-      const { createKodaXRuntime } = await import('@kodax-ai/kodax/runtime');
+      const { createKodaXRuntime } = await import('./src/sdk-runtime.ts');
       const runtime = await createKodaXRuntime({
         mode: 'daemon',
         profile: process.argv[2],
@@ -55,6 +55,8 @@ describe('daemon CLI smoke', () => {
       console.log(JSON.stringify({ callerPid: process.pid, identity, extensions }));
     `;
     const probe = JSON.parse(execFileSync(process.execPath, [
+      '--import',
+      'tsx',
       '--input-type=module',
       '--eval',
       probeScript,
