@@ -14,6 +14,9 @@ import {
   formatReasoningEffortStatusLabel,
   getProviderReasoningEffortCycle,
   getProviderReasoningEffortOptions,
+  resolveRuntimeEffortSelection,
+  resolveRuntimeModelSelection,
+  resolveRuntimeProviderSelection,
   resolveInitialEffortOverride,
   resolvePermissionModeEffort,
   resolveProviderReasoningRuntimeEffort,
@@ -47,6 +50,64 @@ describe('resolveInitialEffortOverride', () => {
 
   it('is not an override when neither CLI flag nor persisted effort exists (auto)', () => {
     expect(resolveInitialEffortOverride({}, {})).toBe(false);
+  });
+
+  it('treats a concrete environment effort as an override', () => {
+    expect(resolveInitialEffortOverride({}, {}, 'high')).toBe(true);
+  });
+
+  it('does not treat the environment auto sentinel as an override', () => {
+    expect(resolveInitialEffortOverride({}, {}, 'auto')).toBe(false);
+  });
+});
+
+describe('runtime config selection', () => {
+  it('uses explicit provider before environment, config, and default', () => {
+    expect(resolveRuntimeProviderSelection({
+      explicitProvider: 'cli',
+      environmentProvider: 'env',
+      configuredProvider: 'config',
+      defaultProvider: 'default',
+    })).toBe('cli');
+  });
+
+  it('uses environment provider before config', () => {
+    expect(resolveRuntimeProviderSelection({
+      environmentProvider: 'env',
+      configuredProvider: 'config',
+      defaultProvider: 'default',
+    })).toBe('env');
+  });
+
+  it('does not carry a configured model across an environment provider switch', () => {
+    expect(resolveRuntimeModelSelection({
+      environmentProvider: 'anthropic',
+      configuredProvider: 'openai',
+      configuredModel: 'gpt-configured',
+    })).toBeUndefined();
+  });
+
+  it('keeps a configured model when the environment provider matches', () => {
+    expect(resolveRuntimeModelSelection({
+      environmentProvider: 'openai',
+      configuredProvider: 'openai',
+      configuredModel: 'gpt-configured',
+    })).toBe('gpt-configured');
+  });
+
+  it('uses explicit effort before environment and config', () => {
+    expect(resolveRuntimeEffortSelection({
+      explicitEffort: 'low',
+      environmentEffort: 'high',
+      configuredEffort: 'medium',
+    })).toBe('low');
+  });
+
+  it('lets the environment auto sentinel fall back to config effort', () => {
+    expect(resolveRuntimeEffortSelection({
+      environmentEffort: 'auto',
+      configuredEffort: 'medium',
+    })).toBe('medium');
   });
 });
 

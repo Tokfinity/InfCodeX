@@ -35,6 +35,7 @@ import {
   type KodaXWireReasoningEffort,
   isToolFileMutation,
   normalizeReasoningEffortValue,
+  parseReasoningEffortEnv,
   combineExtensionRuntimes,
   createExtensionRuntime,
   dedupeExtensionPathsByEntrypoint,
@@ -58,6 +59,9 @@ import {
   isPathInsideProject,
   isToolCallAllowed,
   prepareRuntimeConfig,
+  resolveRuntimeEffortSelection,
+  resolveRuntimeModelSelection,
+  resolveRuntimeProviderSelection,
   KODAX_CONFIG_FILE,
 } from '@kodax-ai/repl';
 import {
@@ -193,19 +197,6 @@ type AcpPromptRequestWithEffort = PromptRequest & {
 type AcpPromptEffortOverride =
   | { readonly kind: 'absent' }
   | { readonly kind: 'value'; readonly value?: KodaXWireReasoningEffort };
-
-function resolveAcpModelSelection(
-  requestedProvider: string | undefined,
-  requestedModel: string | undefined,
-  configuredProvider: string | undefined,
-  configuredModel: string | undefined,
-): string | undefined {
-  if (requestedModel) return requestedModel;
-  if (!configuredModel) return undefined;
-  if (!requestedProvider) return configuredModel;
-  if (!configuredProvider) return undefined;
-  return requestedProvider === configuredProvider ? configuredModel : undefined;
-}
 
 function normalizeOptionalEffort(
   value: unknown,
@@ -487,17 +478,30 @@ export class KodaXAcpServer implements Agent {
   private disposePromise?: Promise<void>;
 
   constructor(options: KodaXAcpServerOptions = {}) {
+    const environmentProvider = process.env.KODAX_PROVIDER;
+    const environmentEffort = process.env.KODAX_EFFORT;
     const config = prepareRuntimeConfig();
     const configWithExtensions = config as typeof config & { extensions?: unknown };
-    this.provider = options.provider ?? config.provider ?? KODAX_DEFAULT_PROVIDER;
-    this.model = resolveAcpModelSelection(
-      options.provider,
-      options.model,
-      config.provider,
-      config.model,
-    );
-    const hasExplicitEffort = options.effort !== undefined;
-    this.effort = normalizeOptionalEffort(options.effort ?? config.effort, 'Configured effort');
+    this.provider = resolveRuntimeProviderSelection({
+      explicitProvider: options.provider,
+      environmentProvider,
+      configuredProvider: config.provider,
+      defaultProvider: KODAX_DEFAULT_PROVIDER,
+    });
+    this.model = resolveRuntimeModelSelection({
+      explicitProvider: options.provider,
+      environmentProvider,
+      explicitModel: options.model,
+      configuredProvider: config.provider,
+      configuredModel: config.model,
+    });
+    const hasExplicitEffort = options.effort !== undefined
+      || parseReasoningEffortEnv(environmentEffort).kind === 'value';
+    this.effort = normalizeOptionalEffort(resolveRuntimeEffortSelection({
+      explicitEffort: options.effort,
+      environmentEffort,
+      configuredEffort: config.effort,
+    }), 'Configured effort');
     this.planModeEffort = hasExplicitEffort
       ? undefined
       : normalizeOptionalEffort(

@@ -22,6 +22,10 @@
   // 当前 provider 使用的模型 ID(可选,缺省用 provider 默认模型)。
   // "model": "glm-5.2",
 
+  // 任务运行时:"embedded"(默认,进程内) | "daemon"(共享本机守护进程)。
+  // 交互 REPL、位置参数和 kodax -p 都走同一运行时入口。
+  "runtimeMode": "embedded",
+
   // 子 Agent 模型档位 fast/deep(可选)。workflow 脚本 / dispatch 用
   //   modelHint:'fast'|'deep' 表达档位意图(不写具体模型名),这里把档位映射到
   //   真实 provider+model。fast 只对只读子 Agent 生效(写/改代码的子 Agent 不降级);
@@ -232,12 +236,16 @@
   // 相关环境变量(不写进 JSON,在 shell 里设置。优先级:shell env > 本文件):
   //   KODAX_VERIFIER_LOG=1            打开 verifier 诊断日志
   //   KODAX_EFFORT=<value>           启动时覆盖 effort(auto/off/low/…/max)
+  //   KODAX_PROVIDER=<name>          临时覆盖 provider
+  //   KODAX_RUNTIME_MODE=<mode>      临时覆盖 runtimeMode(embedded|daemon)
   //   上面 §1/§12/§13 的字段各自对应一个 KODAX_* 环境变量(如 maxOutputTokens ↔
   //   KODAX_MAX_OUTPUT_TOKENS、fastProvider ↔ KODAX_FAST_PROVIDER),在 shell 里设了
-  //   就临时覆盖本文件。子 Agent 档位覆盖:KODAX_FAST/DEEP_PROVIDER / _MODEL。
+  //   就临时覆盖本文件。JSON 用 camelCase,环境变量用 KODAX_UPPER_SNAKE_CASE;
+  //   语义保持一一对应。历史兼容例外:repoIntelligenceMode ↔
+  //   KODAX_REPO_INTELLIGENCE、lspAutoDownload ↔ KODAX_LSP_DOWNLOAD、
+  //   acpLogLevel ↔ KODAX_ACP_LOG。子 Agent 档位覆盖:
+  //   KODAX_FAST/DEEP_PROVIDER / _MODEL。
   //
   // 仅环境变量(启动早期/模块加载时读取,配置文件那时还没加载,故无法用 config 字段):
   //   KODAX_HEAP_LIMIT=<MB>          子进程 V8 堆上限(默认 4096;主进程用启动脚本设)
-  //   KODAX_PROVIDER=<name>          缺省 provider 的兜底默认;日常请直接用上面的
-  //                                  "provider" 字段(它是 provider 的配置来源)
 }

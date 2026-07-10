@@ -105,6 +105,32 @@ export function parseRuntimeModeOption(value: string): CliRuntimeMode {
   );
 }
 
+export function resolveCliProviderSelection(
+  cliValue: string | undefined,
+  envValue: string | undefined,
+  configValue: string | undefined,
+  defaultValue: string,
+): string {
+  return firstNonEmpty(cliValue, envValue, configValue) ?? defaultValue;
+}
+
+export function resolveCliRuntimeMode(
+  cliValue: string | undefined,
+  envValue: string | undefined,
+  configValue: string | undefined,
+): CliRuntimeMode {
+  const value = firstNonEmpty(cliValue, envValue, configValue);
+  return value === undefined ? 'embedded' : parseRuntimeModeOption(value);
+}
+
+function firstNonEmpty(...values: ReadonlyArray<string | undefined>): string | undefined {
+  for (const value of values) {
+    const normalized = value?.trim();
+    if (normalized) return normalized;
+  }
+  return undefined;
+}
+
 export function validateCliModeSelection(
   cliOptions: CliOptions,
   extras: { resumeWithoutId?: boolean } = {},

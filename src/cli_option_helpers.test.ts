@@ -12,6 +12,8 @@ import {
   normalizeCliSessionFlags,
   resolveCliEffort,
   resolveCliModelSelection,
+  resolveCliProviderSelection,
+  resolveCliRuntimeMode,
   validateCliModeSelection,
   type CliOptions,
 } from './cli_option_helpers.js';
@@ -222,6 +224,53 @@ describe('resolveCliEffort', () => {
         process.env.KODAX_EFFORT = previous;
       }
     }
+  });
+});
+
+describe('resolveCliProviderSelection', () => {
+  it('uses CLI > env > config > default precedence', () => {
+    expect(resolveCliProviderSelection(
+      'cli-provider',
+      'env-provider',
+      'config-provider',
+      'default-provider',
+    )).toBe('cli-provider');
+    expect(resolveCliProviderSelection(
+      undefined,
+      'env-provider',
+      'config-provider',
+      'default-provider',
+    )).toBe('env-provider');
+    expect(resolveCliProviderSelection(
+      undefined,
+      undefined,
+      'config-provider',
+      'default-provider',
+    )).toBe('config-provider');
+    expect(resolveCliProviderSelection(
+      undefined,
+      undefined,
+      undefined,
+      'default-provider',
+    )).toBe('default-provider');
+  });
+});
+
+describe('resolveCliRuntimeMode', () => {
+  it('uses CLI > env > config > embedded precedence', () => {
+    expect(resolveCliRuntimeMode('daemon', 'embedded', 'embedded')).toBe('daemon');
+    expect(resolveCliRuntimeMode(undefined, 'daemon', 'embedded')).toBe('daemon');
+    expect(resolveCliRuntimeMode(undefined, undefined, 'daemon')).toBe('daemon');
+    expect(resolveCliRuntimeMode(undefined, undefined, undefined)).toBe('embedded');
+  });
+
+  it('validates environment and config values', () => {
+    expect(() => resolveCliRuntimeMode(undefined, 'remote', undefined)).toThrow(
+      'Expected one of: embedded, daemon.',
+    );
+    expect(() => resolveCliRuntimeMode(undefined, undefined, 'remote')).toThrow(
+      'Expected one of: embedded, daemon.',
+    );
   });
 });
 

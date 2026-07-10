@@ -12,6 +12,9 @@ type RuntimeConfigMock = {
   reasoningMode: string;
 };
 
+const originalProvider = process.env.KODAX_PROVIDER;
+const originalEffort = process.env.KODAX_EFFORT;
+
 const acpServerState = vi.hoisted(() => ({
   capturedOptions: [] as unknown[],
   sessions: new Map<string, { title: string; messages: unknown[] }>(),
@@ -63,6 +66,12 @@ vi.mock('@kodax-ai/coding', () => ({
     }
     return normalized;
   },
+  parseReasoningEffortEnv: (raw: string | undefined) => {
+    const normalized = raw?.trim().toLowerCase();
+    if (!normalized) return { kind: 'unset' };
+    if (normalized === 'auto' || normalized === 'unset') return { kind: 'clear' };
+    return { kind: 'value', value: normalized };
+  },
   registerConfiguredMcpCapabilityProvider: vi.fn(async () => undefined),
   registerCustomProviders: vi.fn(),
   resolveProvider: vi.fn(() => ({})),
@@ -89,6 +98,39 @@ vi.mock('@kodax-ai/repl', () => ({
   isPathInsideProject: vi.fn(() => true),
   isToolCallAllowed: vi.fn(() => ({ allowed: true })),
   prepareRuntimeConfig: acpServerState.prepareRuntimeConfig,
+  resolveRuntimeProviderSelection: (input: {
+    explicitProvider?: string;
+    environmentProvider?: string;
+    configuredProvider?: string;
+    defaultProvider: string;
+  }) => input.explicitProvider
+    ?? input.environmentProvider
+    ?? input.configuredProvider
+    ?? input.defaultProvider,
+  resolveRuntimeModelSelection: (input: {
+    explicitProvider?: string;
+    environmentProvider?: string;
+    explicitModel?: string;
+    configuredProvider?: string;
+    configuredModel?: string;
+  }) => {
+    if (input.explicitModel) return input.explicitModel;
+    const providerOverride = input.explicitProvider ?? input.environmentProvider;
+    if (!providerOverride) return input.configuredModel;
+    return providerOverride === input.configuredProvider ? input.configuredModel : undefined;
+  },
+  resolveRuntimeEffortSelection: (input: {
+    explicitEffort?: string;
+    environmentEffort?: string;
+    configuredEffort?: string;
+  }) => {
+    if (input.explicitEffort !== undefined) return input.explicitEffort;
+    const environmentEffort = input.environmentEffort?.trim().toLowerCase();
+    if (environmentEffort && environmentEffort !== 'auto' && environmentEffort !== 'unset') {
+      return environmentEffort;
+    }
+    return input.configuredEffort;
+  },
   createSessionManager: vi.fn(() => ({
     storage: {
       save: vi.fn(async (sessionId: string, data: { title?: string; messages?: unknown[] }) => {
@@ -131,6 +173,8 @@ function lastRunOptions(): Record<string, unknown> {
 
 describe('KodaXAcpServer reasoning effort forwarding', () => {
   beforeEach(() => {
+    delete process.env.KODAX_PROVIDER;
+    delete process.env.KODAX_EFFORT;
     acpServerState.capturedOptions = [];
     acpServerState.sessions.clear();
     acpServerState.startKodaX.mockClear();
@@ -143,6 +187,10 @@ describe('KodaXAcpServer reasoning effort forwarding', () => {
 
   afterEach(() => {
     vi.clearAllMocks();
+    if (originalProvider === undefined) delete process.env.KODAX_PROVIDER;
+    else process.env.KODAX_PROVIDER = originalProvider;
+    if (originalEffort === undefined) delete process.env.KODAX_EFFORT;
+    else process.env.KODAX_EFFORT = originalEffort;
   });
 
   async function createSession(server: KodaXAcpServer): Promise<string> {
@@ -201,6 +249,39 @@ describe('KodaXAcpServer reasoning effort forwarding', () => {
 
     expect(lastRunOptions()).toMatchObject({ provider: 'anthropic' });
     expect(lastRunOptions().model).toBeUndefined();
+    await server.dispose();
+  });
+
+  it('uses environment provider before config without carrying an incompatible model', async () => {
+    process.env.KODAX_PROVIDER = 'anthropic';
+    acpServerState.prepareRuntimeConfig.mockReturnValue({
+      provider: 'openai',
+      model: 'gpt-configured',
+      reasoningMode: 'auto',
+    });
+    const server = new KodaXAcpServer({ logLevel: 'off' });
+    const sessionId = await createSession(server);
+
+    await server.prompt(makePrompt(sessionId));
+
+    expect(lastRunOptions()).toMatchObject({ provider: 'anthropic' });
+    expect(lastRunOptions().model).toBeUndefined();
+    await server.dispose();
+  });
+
+  it('uses environment effort before config effort', async () => {
+    process.env.KODAX_EFFORT = 'high';
+    acpServerState.prepareRuntimeConfig.mockReturnValue({
+      provider: 'openai',
+      effort: 'low',
+      reasoningMode: 'auto',
+    });
+    const server = new KodaXAcpServer({ logLevel: 'off' });
+    const sessionId = await createSession(server);
+
+    await server.prompt(makePrompt(sessionId));
+
+    expect(lastRunOptions().effort).toBe('high');
     await server.dispose();
   });
 

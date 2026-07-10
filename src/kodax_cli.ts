@@ -87,10 +87,11 @@ import {
   resolveCliAgentMode,
   resolveCliEffort,
   resolveCliModelSelection,
+  resolveCliProviderSelection,
   resolveCliReasoningMode,
+  resolveCliRuntimeMode,
   type CliOutputMode,
   type CliOptions,
-  type CliRuntimeMode,
   validateCliModeSelection,
 } from './cli_option_helpers.js';
 import { runSkillCreatorTool } from './skill_cli.js';
@@ -122,6 +123,7 @@ import {
   KodaXTerminalError,
   bootstrapTracing,
   shutdownDefaultLspService,
+  generateSessionId,
 } from '@kodax-ai/coding';
 import {
   cleanupRegisteredManagedChildren,
@@ -162,13 +164,6 @@ function hasConfiguredMcpServers(config: { mcpServers?: Record<string, { connect
   return Object.values(config.mcpServers ?? {}).some(
     (server) => (server.connect ?? 'lazy') !== 'disabled',
   );
-}
-
-function resolveCliRuntimeMode(value: CliRuntimeMode | undefined): CliRuntimeMode {
-  if (value !== undefined) return value;
-  const fromEnv = process.env.KODAX_RUNTIME_MODE?.trim();
-  if (!fromEnv) return 'embedded';
-  return parseRuntimeModeOption(fromEnv);
 }
 
 function resolveDefaultRuntimeDaemonHomeDir(): string {
@@ -403,7 +398,8 @@ interface InteractiveRuntimeRunnerInput {
   readonly options: KodaXOptions;
   readonly prompt: string;
   readonly sessionId: string;
-  readonly permissionMode: string;
+  readonly permissionMode?: string;
+  readonly surface?: 'cli' | 'repl';
 }
 
 interface DaemonReplEventBridge {
@@ -413,10 +409,12 @@ interface DaemonReplEventBridge {
 
 export function createInteractiveRuntimeRunner(runtime: KodaXRuntime) {
   return async (input: InteractiveRuntimeRunnerInput): Promise<Awaited<ReturnType<typeof runManagedTask>>> => {
-    await ensureInteractiveRuntimeSession(runtime, input.sessionId);
-    await runtime.sessions.updateSettings(input.sessionId, {
-      permissionMode: input.permissionMode,
-    });
+    await ensureCliRuntimeSession(runtime, input.sessionId, input.surface ?? 'repl', input.prompt);
+    if (input.permissionMode !== undefined) {
+      await runtime.sessions.updateSettings(input.sessionId, {
+        permissionMode: input.permissionMode,
+      });
+    }
 
     const bridge = runtime.identity.mode === 'daemon'
       ? createDaemonReplEventBridge(runtime, input)
@@ -459,7 +457,12 @@ export function createInteractiveRuntimeRunner(runtime: KodaXRuntime) {
   };
 }
 
-async function ensureInteractiveRuntimeSession(runtime: KodaXRuntime, sessionId: string): Promise<void> {
+async function ensureCliRuntimeSession(
+  runtime: KodaXRuntime,
+  sessionId: string,
+  surface: 'cli' | 'repl',
+  prompt: string,
+): Promise<void> {
   try {
     await runtime.sessions.load(sessionId);
   } catch (error: unknown) {
@@ -468,12 +471,48 @@ async function ensureInteractiveRuntimeSession(runtime: KodaXRuntime, sessionId:
     }
     await runtime.sessions.create({
       sessionId,
-      title: 'REPL Session',
+      title: surface === 'repl' ? 'REPL Session' : prompt.slice(0, 50),
       projectPath: process.cwd(),
       gitRoot: await getGitRoot() ?? process.cwd(),
-      surface: 'repl',
+      surface,
     });
   }
+}
+
+async function runCliTaskWithRuntime(
+  runtime: KodaXRuntime,
+  options: KodaXOptions,
+  prompt: string,
+): Promise<Awaited<ReturnType<typeof runManagedTask>>> {
+  const sessionId = await resolveCliTaskSessionId(options);
+  const transientSession = options.session === undefined;
+  const runOptions: KodaXOptions = options.session === undefined
+    ? options
+    : {
+        ...options,
+        session: { ...options.session, id: sessionId },
+      };
+  try {
+    return await createInteractiveRuntimeRunner(runtime)({
+      options: runOptions,
+      prompt,
+      sessionId,
+      surface: 'cli',
+    });
+  } finally {
+    if (transientSession) {
+      await runtime.sessions.delete(sessionId);
+    }
+  }
+}
+
+async function resolveCliTaskSessionId(options: KodaXOptions): Promise<string> {
+  if (options.session?.id) return options.session.id;
+  if ((options.session?.resume || options.session?.autoResume) && options.session.storage?.list) {
+    const sessions = await options.session.storage.list(options.context?.gitRoot ?? undefined);
+    if (sessions[0]?.id) return sessions[0].id;
+  }
+  return generateSessionId();
 }
 
 function interruptedRuntimeResult(sessionId: string): Awaited<ReturnType<typeof runManagedTask>> {
@@ -529,7 +568,7 @@ export function toDaemonRuntimeRunOptions(options: KodaXOptions): RuntimeKodaXOp
     if (!isRecord(cloned)) throw new Error('expected an object');
     return cloned as RuntimeKodaXOptions;
   } catch (error: unknown) {
-    throw new Error(`Interactive daemon options are not JSON serializable: ${normalizeCliError(error).message}`);
+    throw new Error(`Daemon runtime options are not JSON serializable: ${normalizeCliError(error).message}`);
   }
 }
 
@@ -2611,7 +2650,10 @@ complete -c kodax -l version -d 'Show version'`);
   const opts = program.opts();
   // Parse CLI options and merge with config defaults.
   const config = prepareRuntimeConfig();
-  const configWithExtensions = config as typeof config & { extensions?: string[] };
+  const configWithExtensions = config as typeof config & {
+    extensions?: string[];
+    runtimeMode?: 'embedded' | 'daemon';
+  };
   if (typeof opts.repoIntelligence === 'string' && opts.repoIntelligence.trim()) {
     process.env.KODAX_REPO_INTELLIGENCE = opts.repoIntelligence.trim();
   }
@@ -2649,17 +2691,28 @@ complete -c kodax -l version -d 'Show version'`);
     ...dedupedCliExtensions,
   ];
   const hasActiveMcp = hasConfiguredMcpServers(configWithExtensions);
-  const selectedProvider = opts.provider ?? config.provider ?? KODAX_DEFAULT_PROVIDER;
-  const selectedModel = resolveCliModelSelection(
+  const providerOverride = opts.provider ?? process.env.KODAX_PROVIDER;
+  const selectedProvider = resolveCliProviderSelection(
     opts.provider,
+    process.env.KODAX_PROVIDER,
+    config.provider,
+    KODAX_DEFAULT_PROVIDER,
+  );
+  const selectedModel = resolveCliModelSelection(
+    providerOverride,
     opts.model,
     config.provider,
     config.model,
   );
+  const selectedRuntimeMode = resolveCliRuntimeMode(
+    opts.runtimeMode,
+    process.env.KODAX_RUNTIME_MODE,
+    configWithExtensions.runtimeMode,
+  );
   const sessionFlags = normalizeCliSessionFlags(opts);
   // -y/--auto is kept for backward compatibility but has no effect in CLI.
   const options: CliOptions = {
-    // Priority: CLI args > config file > defaults.
+    // Priority: CLI args > environment > config file > defaults.
     provider: selectedProvider,
     model: selectedModel,
     effort,
@@ -2667,6 +2720,7 @@ complete -c kodax -l version -d 'Show version'`);
     reasoningMode,
     agentMode,
     outputMode: (opts.mode as CliOutputMode | undefined) ?? 'text',
+    runtimeMode: selectedRuntimeMode,
     extensions: activeExtensions,
     session: sessionFlags.session,
     maxIter: parseOptionalNonNegativeInt(opts.maxIter),
@@ -2677,7 +2731,22 @@ complete -c kodax -l version -d 'Show version'`);
     print: opts.print ? true : false,
   };
   let extensionRuntime: ReturnType<typeof createExtensionRuntime> | undefined;
+  let cliRuntime: KodaXRuntime | undefined;
   let shouldHardExitAfterInteractiveCleanup = false;
+
+  const getCliRuntime = async (): Promise<KodaXRuntime> => {
+    if (cliRuntime !== undefined) return cliRuntime;
+    const mode = options.runtimeMode ?? 'embedded';
+    cliRuntime = await createKodaXRuntime({
+      mode,
+      homeDir: resolveDefaultRuntimeDaemonHomeDir(),
+      profile: 'default',
+      autoStartDaemon: mode === 'daemon',
+      defaultProvider: options.provider,
+      ...(options.model !== undefined ? { defaultModel: options.model } : {}),
+    });
+    return cliRuntime;
+  };
 
   try {
   const isLegacySessionManagement =
@@ -2809,22 +2878,30 @@ complete -c kodax -l version -d 'Show version'`);
           commandName,
           args,
           commands,
-          (prompt: string) => runManagedTask({
-            ...kodaXOptions,
-            context: {
-              ...kodaXOptions.context,
-              taskSurface: 'cli',
+          async (prompt: string) => runCliTaskWithRuntime(
+            await getCliRuntime(),
+            {
+              ...kodaXOptions,
+              context: {
+                ...kodaXOptions.context,
+                taskSurface: 'cli',
+              },
             },
-          }, prompt)
+            prompt,
+          ),
         );
         if (commandPrompt) {
-          const result = await runManagedTask({
-            ...kodaXOptions,
-            context: {
-              ...kodaXOptions.context,
-              taskSurface: 'cli',
+          const result = await runCliTaskWithRuntime(
+            await getCliRuntime(),
+            {
+              ...kodaXOptions,
+              context: {
+                ...kodaXOptions.context,
+                taskSurface: 'cli',
+              },
             },
-          }, commandPrompt);
+            commandPrompt,
+          );
           emitJsonRunResultIfNeeded(options.outputMode, result);
           return;
         }
@@ -2847,17 +2924,9 @@ complete -c kodax -l version -d 'Show version'`);
         ));
       }
 
-      const runtimeMode = resolveCliRuntimeMode(options.runtimeMode);
       const runtimeHomeDir = resolveDefaultRuntimeDaemonHomeDir();
       const runtimeProfile = 'default';
-      const interactiveRuntime = await createKodaXRuntime({
-        mode: runtimeMode,
-        homeDir: runtimeHomeDir,
-        profile: runtimeProfile,
-        autoStartDaemon: runtimeMode === 'daemon',
-        ...(kodaXOptions.provider !== undefined ? { defaultProvider: kodaXOptions.provider } : {}),
-        ...(kodaXOptions.model !== undefined ? { defaultModel: kodaXOptions.model } : {}),
-      });
+      const interactiveRuntime = await getCliRuntime();
       const runtimeRunner = createInteractiveRuntimeRunner(interactiveRuntime);
 
       const interactiveOptions = {
@@ -2891,17 +2960,9 @@ complete -c kodax -l version -d 'Show version'`);
       }
 
       if (useClassicInteractiveMode) {
-        try {
-          await runInteractiveMode(interactiveOptions);
-        } finally {
-          await interactiveRuntime.close();
-        }
+        await runInteractiveMode(interactiveOptions);
       } else {
-        try {
-          await runInkInteractiveMode(interactiveOptions);
-        } finally {
-          await interactiveRuntime.close();
-        }
+        await runInkInteractiveMode(interactiveOptions);
       }
       shouldHardExitAfterInteractiveCleanup = true;
     } catch (error) {
@@ -2927,22 +2988,38 @@ complete -c kodax -l version -d 'Show version'`);
     return;
   }
 
-  // Run a single managed task in print mode and exit.
+  // Run a single managed task through the selected Runtime and exit.
   const kodaXOptions = createKodaXOptions(options, options.print ?? false);
-  const result = await runManagedTask({
-    ...kodaXOptions,
-    context: {
-      ...kodaXOptions.context,
-      taskSurface: 'cli',
+  const result = await runCliTaskWithRuntime(
+    await getCliRuntime(),
+    {
+      ...kodaXOptions,
+      context: {
+        ...kodaXOptions.context,
+        taskSurface: 'cli',
+      },
     },
-  }, userPrompt);
+    userPrompt,
+  );
   emitJsonRunResultIfNeeded(options.outputMode, result);
   } finally {
+    let runtimeCloseFailed = false;
+    let runtimeCloseError: unknown;
+    try {
+      await cliRuntime?.close();
+    } catch (error: unknown) {
+      runtimeCloseFailed = true;
+      runtimeCloseError = error;
+    }
+    cliRuntime = undefined;
     await extensionRuntime?.dispose();
     extensionRuntime = undefined;
     await shutdownDefaultLspService();
     await cleanupRegisteredManagedChildren({ includeCurrentOwner: true });
     await shutdownTracing();
+    if (runtimeCloseFailed) {
+      throw runtimeCloseError;
+    }
     if (shouldHardExitAfterInteractiveCleanup && process.env.VITEST !== 'true') {
       process.exit(process.exitCode ?? 0);
     }

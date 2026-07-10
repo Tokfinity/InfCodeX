@@ -306,7 +306,24 @@ custom SDK clients.
 ```bash
 kodax daemon start
 kodax --runtime-mode daemon
+kodax -p "Review this repository" --runtime-mode daemon
 ```
+
+All CLI task forms now use the same Runtime path: interactive REPL, positional
+prompts, slash-command prompts, and `kodax -p`. Select the persistent default in
+`~/.kodax/config.json`:
+
+```json
+{
+  "runtimeMode": "daemon"
+}
+```
+
+Resolution order is explicit CLI/SDK option > environment variable >
+`config.json` > built-in default (`embedded`). `KODAX_RUNTIME_MODE=daemon` is a
+temporary environment override. The same rule applies to other paired settings,
+for example `provider` ↔ `KODAX_PROVIDER` and `effort` ↔ `KODAX_EFFORT`.
+JSON names stay camelCase while environment names use `KODAX_UPPER_SNAKE_CASE`.
 
 By default, daemon state, config, and runtime session storage are scoped under
 the OS user home directory, so `kodax --runtime-mode daemon` and SDK clients
@@ -316,6 +333,11 @@ reuses that daemon unless you pass an explicit endpoint/transport or
 `autoStartDaemon: false`. Pass `--home <dir>` or `homeDir` only when you
 intentionally want an isolated daemon namespace for tests, CI, or project-local
 experiments.
+
+One daemon owns many sessions. Different sessions may run concurrently; starts
+within the same session are queued so that only one run is active for that
+session. Multiple `kodax` processes can attach to the same daemon and open or
+observe different sessions.
 
 For the full host-integration contract, including embedded vs daemon selection,
 multi-client permission handling, config/catalog/MCP admin APIs, artifacts,

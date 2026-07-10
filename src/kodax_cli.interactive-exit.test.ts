@@ -9,6 +9,7 @@ type InteractiveSurface = 'ink' | 'classic';
 interface RuntimeConfig {
   readonly provider?: string;
   readonly model?: string;
+  readonly runtimeMode?: 'embedded' | 'daemon';
   readonly sessionRetentionDays?: number;
   readonly extensions?: readonly string[];
   readonly mcpServers?: Record<string, { readonly connect?: string }>;
@@ -24,16 +25,23 @@ interface InteractiveMainHarness {
   readonly runtimeDispose: ReturnType<typeof vi.fn>;
   readonly createKodaXRuntime: ReturnType<typeof vi.fn>;
   readonly runtimeOptions: unknown[];
+  readonly runtimeStarts: unknown[];
+  readonly runtimeDeletes: string[];
+  readonly runManagedTask: ReturnType<typeof vi.fn>;
 }
 
 const originalArgv = process.argv;
 const originalVitest = process.env.VITEST;
+const originalRuntimeMode = process.env.KODAX_RUNTIME_MODE;
+const originalProvider = process.env.KODAX_PROVIDER;
 const originalExitCode = process.exitCode;
 
 beforeEach(() => {
   vi.resetModules();
   process.argv = ['node', 'kodax'];
   process.env.VITEST = 'false';
+  delete process.env.KODAX_RUNTIME_MODE;
+  delete process.env.KODAX_PROVIDER;
   process.exitCode = undefined;
 });
 
@@ -51,6 +59,10 @@ afterEach(() => {
     process.env.VITEST = originalVitest;
   }
   process.exitCode = originalExitCode;
+  if (originalRuntimeMode === undefined) delete process.env.KODAX_RUNTIME_MODE;
+  else process.env.KODAX_RUNTIME_MODE = originalRuntimeMode;
+  if (originalProvider === undefined) delete process.env.KODAX_PROVIDER;
+  else process.env.KODAX_PROVIDER = originalProvider;
 });
 
 function createDeferred(): {
@@ -68,6 +80,7 @@ async function importMainWithMocks(options: {
   readonly surface?: InteractiveSurface;
   readonly config?: RuntimeConfig;
   readonly lspShutdown?: () => Promise<void>;
+  readonly runtimeClose?: () => Promise<void>;
   readonly mockSdkRuntime?: boolean;
 } = {}): Promise<{
   readonly main: () => Promise<void>;
@@ -75,6 +88,8 @@ async function importMainWithMocks(options: {
 }> {
   const calls: string[] = [];
   const runtimeOptions: unknown[] = [];
+  const runtimeStarts: unknown[] = [];
+  const runtimeDeletes: string[] = [];
   const surface = options.surface ?? 'ink';
   const config = options.config ?? {
     provider: 'mock-provider',
@@ -103,6 +118,12 @@ async function importMainWithMocks(options: {
   const runtimeDispose = vi.fn(async () => {
     calls.push('runtime-dispose');
   });
+  const runManagedTask = vi.fn(async () => ({
+    success: true,
+    lastText: 'legacy',
+    messages: [],
+    sessionId: 'legacy-session',
+  }));
   const createKodaXRuntime = vi.fn(async (runtimeOptionsInput: unknown) => {
     runtimeOptions.push(runtimeOptionsInput);
     const runtimeOptionsRecord = runtimeOptionsInput !== null && typeof runtimeOptionsInput === 'object'
@@ -127,17 +148,24 @@ async function importMainWithMocks(options: {
         async create() {
           return { id: 'session-1', title: 'Created' };
         },
+        async updateSettings() {
+          return {};
+        },
+        async delete(sessionId: string) {
+          runtimeDeletes.push(sessionId);
+        },
       },
       runs: {
-        async start() {
+        async start(input: unknown) {
+          runtimeStarts.push(input);
           return {
             runId: 'run-1',
-            sessionId: 'session-1',
+            sessionId: 'cli-session-1',
             result: Promise.resolve({
               runId: 'run-1',
-              sessionId: 'session-1',
+              sessionId: 'cli-session-1',
               phase: 'completed',
-              result: { success: true, lastText: 'ok', messages: [] },
+              result: { success: true, lastText: 'ok', messages: [], sessionId: 'cli-session-1' },
             }),
           };
         },
@@ -148,6 +176,16 @@ async function importMainWithMocks(options: {
             phase: 'completed',
             result: { success: true, lastText: 'ok', messages: [] },
           };
+        },
+      },
+      events: {
+        subscribe() {
+          return { close: vi.fn() };
+        },
+      },
+      permissions: {
+        async respond() {
+          return true;
         },
       },
       status: {
@@ -164,7 +202,10 @@ async function importMainWithMocks(options: {
           };
         },
       },
-      async close() {},
+      async close() {
+        calls.push('runtime-close');
+        await options.runtimeClose?.();
+      },
     };
   });
 
@@ -178,7 +219,7 @@ async function importMainWithMocks(options: {
 
   vi.doMock('@kodax-ai/coding', () => ({
     runKodaX: vi.fn(),
-    runManagedTask: vi.fn(),
+    runManagedTask,
     KodaXClient: class KodaXClient {},
     KodaXEvents: class KodaXEvents {},
     KodaXAgentMode: {},
@@ -212,6 +253,7 @@ async function importMainWithMocks(options: {
       calls.push('bootstrap-tracing');
     }),
     shutdownDefaultLspService,
+    generateSessionId: vi.fn(async () => 'cli-session-1'),
   }));
 
   vi.doMock('@kodax-ai/repl', () => {
@@ -257,6 +299,9 @@ async function importMainWithMocks(options: {
       runtimeDispose,
       createKodaXRuntime,
       runtimeOptions,
+      runtimeStarts,
+      runtimeDeletes,
+      runManagedTask,
     },
   };
 }
@@ -289,6 +334,7 @@ describe('CLI interactive exit lifecycle', () => {
       'register-mcp',
       'runtime-activate',
       'run-ink',
+      'runtime-close',
       'runtime-dispose',
       'shutdown-lsp',
       'cleanup-children-final',
@@ -315,6 +361,23 @@ describe('CLI interactive exit lifecycle', () => {
 
     expect(harness.calls).toContain('shutdown-tracing');
     expect(exitSpy).toHaveBeenCalledTimes(1);
+  });
+
+  it('continues host cleanup when runtime close fails', async () => {
+    const closeError = new Error('runtime close failed');
+    const { main, harness } = await importMainWithMocks({
+      runtimeClose: async () => { throw closeError; },
+    });
+
+    await expect(main()).rejects.toBe(closeError);
+
+    expect(harness.calls).toEqual(expect.arrayContaining([
+      'runtime-close',
+      'runtime-dispose',
+      'shutdown-lsp',
+      'cleanup-children-final',
+      'shutdown-tracing',
+    ]));
   });
 
   it('uses the same cleanup-before-exit policy for classic interactive mode', async () => {
@@ -373,6 +436,68 @@ describe('CLI interactive exit lifecycle', () => {
         process.env.KODAX_RUNTIME_MODE = previousRuntimeMode;
       }
     }
+  });
+
+  it('routes print mode through the configured daemon runtime', async () => {
+    process.argv = ['node', 'kodax', '-p', 'inspect the repo'];
+    const { main, harness } = await importMainWithMocks({
+      config: { provider: 'mock-provider', runtimeMode: 'daemon' },
+    });
+
+    await main();
+
+    expect(harness.createKodaXRuntime).toHaveBeenCalledOnce();
+    expect(harness.runtimeOptions[0]).toMatchObject({
+      mode: 'daemon',
+      profile: 'default',
+      autoStartDaemon: true,
+    });
+    expect(harness.runtimeStarts).toHaveLength(1);
+    expect(harness.runtimeStarts[0]).toMatchObject({
+      sessionId: 'cli-session-1',
+      prompt: 'inspect the repo',
+      mode: 'managed_task',
+      permissionBroker: 'client',
+    });
+    expect(harness.runManagedTask).not.toHaveBeenCalled();
+    expect(harness.calls).toContain('runtime-close');
+  });
+
+  it('removes the transient runtime session for --no-session runs', async () => {
+    process.argv = ['node', 'kodax', '-p', 'stateless task', '--no-session'];
+    const { main, harness } = await importMainWithMocks({
+      config: { provider: 'mock-provider', runtimeMode: 'embedded' },
+    });
+
+    await main();
+
+    expect(harness.runtimeStarts).toHaveLength(1);
+    expect(harness.runtimeDeletes).toEqual(['cli-session-1']);
+    expect(harness.runManagedTask).not.toHaveBeenCalled();
+  });
+
+  it('applies CLI > env > config precedence to runtime mode and provider', async () => {
+    process.env.KODAX_RUNTIME_MODE = 'daemon';
+    process.env.KODAX_PROVIDER = 'env-provider';
+    process.argv = [
+      'node',
+      'kodax',
+      '-p',
+      'precedence task',
+      '--runtime-mode',
+      'embedded',
+    ];
+    const { main, harness } = await importMainWithMocks({
+      config: { provider: 'config-provider', runtimeMode: 'daemon' },
+    });
+
+    await main();
+
+    expect(harness.runtimeOptions[0]).toMatchObject({
+      mode: 'embedded',
+      defaultProvider: 'env-provider',
+      autoStartDaemon: false,
+    });
   });
 
   it('does not fall through to interactive mode after daemon subcommands', async () => {

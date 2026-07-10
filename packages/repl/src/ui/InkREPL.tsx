@@ -209,6 +209,9 @@ import { isDuplicateLegacyRateLimit, type RateLimitDedupKey } from "./rate-limit
 import {
   formatReasoningEffortStatusLabel,
   getProviderModel,
+  resolveRuntimeEffortSelection,
+  resolveRuntimeModelSelection,
+  resolveRuntimeProviderSelection,
   resolveInitialEffortOverride,
   resolveProviderReasoningRuntimeEffort,
   saveConfig,
@@ -697,13 +700,6 @@ function resolveInitialReasoningMode(
     return 'auto';
   }
   return 'off';
-}
-
-function resolveInitialEffort(
-  options: Pick<KodaXOptions, 'effort'>,
-  config: { effort?: string },
-): string | undefined {
-  return options.effort ?? config.effort;
 }
 
 function formatCapturedConsoleOutput(args: readonly unknown[]): string {
@@ -9828,11 +9824,30 @@ export async function runInkInteractiveMode(options: InkREPLOptions): Promise<vo
 
   const config = prepareRuntimeConfig();
 
-  const initialProvider = options.provider ?? config.provider ?? KODAX_DEFAULT_PROVIDER;
-  const initialModel = options.model ?? config.model;
+  const initialProvider = resolveRuntimeProviderSelection({
+    explicitProvider: options.provider,
+    environmentProvider: process.env.KODAX_PROVIDER,
+    configuredProvider: config.provider,
+    defaultProvider: KODAX_DEFAULT_PROVIDER,
+  });
+  const initialModel = resolveRuntimeModelSelection({
+    explicitProvider: options.provider,
+    environmentProvider: process.env.KODAX_PROVIDER,
+    explicitModel: options.model,
+    configuredProvider: config.provider,
+    configuredModel: config.model,
+  });
   const initialReasoningMode = resolveInitialReasoningMode(options, config);
-  const initialEffort = resolveInitialEffort(options, config);
-  const initialEffortOverride = resolveInitialEffortOverride(options, config);
+  const initialEffort = resolveRuntimeEffortSelection({
+    explicitEffort: options.effort,
+    environmentEffort: process.env.KODAX_EFFORT,
+    configuredEffort: config.effort,
+  });
+  const initialEffortOverride = resolveInitialEffortOverride(
+    options,
+    config,
+    process.env.KODAX_EFFORT,
+  );
   const initialAgentMode = options.agentMode ?? config.agentMode ?? 'ama';
   const initialThinking = initialReasoningMode !== 'off';
   // Load permission mode from config file (not from CLI options)

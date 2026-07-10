@@ -23,6 +23,12 @@ All notable changes to this project will be documented in this file.
 
 ### Changed
 
+- **Unified CLI Runtime and configuration precedence.** Interactive, positional,
+  slash-command, and `kodax -p` tasks now all run through `KodaXRuntime`, so
+  embedded and daemon modes share one execution boundary. `runtimeMode` is
+  persisted in `config.json`; paired settings consistently resolve as explicit
+  option > environment > config > default, with semantic camelCase ↔
+  `KODAX_UPPER_SNAKE_CASE` mappings across CLI, ACP, and both REPL surfaces.
 - Roadmap planning: consolidated `FEATURE_244`, `FEATURE_231`, and
   `FEATURE_235` into `v0.7.75`, leaving `v0.7.65` and `v0.7.70` as empty
   debug/patch slots.

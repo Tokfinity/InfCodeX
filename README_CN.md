@@ -344,7 +344,36 @@ registerCustomProviders([
 await runKodaX({ provider: 'my-openai-compatible' }, '解释这个仓库');
 ```
 
-### 6. 打包成单文件二进制（无需 Node）
+### 6. Runtime 与本机 daemon
+
+交互 REPL、位置参数、slash-command 生成的任务和 `kodax -p` 现在都走统一的
+`KodaXRuntime` 入口。默认使用进程内 `embedded`；需要后台持续运行、断线后查询或
+多个本机客户端共享时，可切到 `daemon`：
+
+```bash
+kodax daemon start
+kodax --runtime-mode daemon
+kodax -p "检查这个仓库" --runtime-mode daemon
+```
+
+持久设置写入 `~/.kodax/config.json`：
+
+```json
+{
+  "runtimeMode": "daemon"
+}
+```
+
+统一优先级是：显式 CLI/SDK 参数 > 环境变量 > `config.json` > 内置默认值。
+`KODAX_RUNTIME_MODE=daemon` 适合临时覆盖。其他成对配置也遵循相同规则，例如
+`provider` ↔ `KODAX_PROVIDER`、`effort` ↔ `KODAX_EFFORT`。JSON 保持 camelCase，
+环境变量保持 `KODAX_UPPER_SNAKE_CASE`，两者按语义一一对应。
+
+一个 daemon 可以承载多个 session。不同 session 可以并发运行；同一个 session
+内部仍保持一次只运行一个任务，后续任务按队列执行。多个 `kodax` 进程可以连接
+同一个 daemon，并分别打开或观察不同 session。
+
+### 7. 打包成单文件二进制（无需 Node）
 
 KodaX 可以用 `bun --compile` 打包成单可执行文件 + 一个 `builtin/` sidecar 目录，目标机器**不需要安装 Node.js 或任何运行时**。
 

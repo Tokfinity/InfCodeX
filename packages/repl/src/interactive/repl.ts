@@ -73,6 +73,9 @@ import {
   getProviderAvailableModels,
   KODAX_VERSION,
   formatReasoningEffortStatusLabel,
+  resolveRuntimeEffortSelection,
+  resolveRuntimeModelSelection,
+  resolveRuntimeProviderSelection,
   resolveInitialEffortOverride,
   resolvePermissionModeEffort,
   resolveProviderReasoningRuntimeEffort,
@@ -422,13 +425,6 @@ function resolveInitialReasoningMode(
   return 'auto';
 }
 
-function resolveInitialEffort(
-  options: Pick<KodaXOptions, 'effort'>,
-  config: { effort?: string },
-): string | undefined {
-  return options.effort ?? config.effort;
-}
-
 // Module-level cost report ref — agent populates via events.getCostReport, /cost reads it
 const costReportRef: { current: (() => string) | null } = { current: null };
 
@@ -468,11 +464,30 @@ export async function runInteractiveMode(options: RepLOptions): Promise<void> {
   const config = prepareRuntimeConfig();
 
   // Initialize custom providers from config - 从配置初始化自定义 Provider
-  const initialProvider = options.provider ?? config.provider ?? KODAX_DEFAULT_PROVIDER;
-  const initialModel = options.model ?? config.model;
+  const initialProvider = resolveRuntimeProviderSelection({
+    explicitProvider: options.provider,
+    environmentProvider: process.env.KODAX_PROVIDER,
+    configuredProvider: config.provider,
+    defaultProvider: KODAX_DEFAULT_PROVIDER,
+  });
+  const initialModel = resolveRuntimeModelSelection({
+    explicitProvider: options.provider,
+    environmentProvider: process.env.KODAX_PROVIDER,
+    explicitModel: options.model,
+    configuredProvider: config.provider,
+    configuredModel: config.model,
+  });
   const initialReasoningMode = resolveInitialReasoningMode(options, config);
-  const initialEffort = resolveInitialEffort(options, config);
-  const initialEffortOverride = resolveInitialEffortOverride(options, config);
+  const initialEffort = resolveRuntimeEffortSelection({
+    explicitEffort: options.effort,
+    environmentEffort: process.env.KODAX_EFFORT,
+    configuredEffort: config.effort,
+  });
+  const initialEffortOverride = resolveInitialEffortOverride(
+    options,
+    config,
+    process.env.KODAX_EFFORT,
+  );
   const initialAgentMode = options.agentMode ?? (config as { agentMode?: KodaXAgentMode }).agentMode ?? 'ama';
   const initialThinking = initialReasoningMode !== 'off';
   const initialPermissionMode: PermissionMode =

@@ -27,6 +27,8 @@ import {
   isProviderConfigured as isBuiltInProviderConfigured,
   registerCustomProviders,
   resolveProvider,
+  normalizeReasoningEffortValue,
+  parseReasoningEffortEnv,
   type KodaXProviderCapabilityProfile,
   type KodaXProviderCapabilitySnapshot,
   type KodaXProviderPolicyDecision,
@@ -879,6 +881,7 @@ export function isProviderConfigured(name: string): boolean {
 export function loadConfig(): {
   provider?: string;
   model?: string;
+  runtimeMode?: 'embedded' | 'daemon';
   effort?: string;
   planModeEffort?: string;
   thinking?: boolean;
@@ -965,6 +968,7 @@ export function loadConfig(): {
       const parsed = JSON.parse(fsSync.readFileSync(KODAX_CONFIG_FILE, 'utf-8')) as {
         provider?: string;
         model?: string;
+        runtimeMode?: 'embedded' | 'daemon';
         effort?: string;
         planModeEffort?: string;
         thinking?: boolean;
@@ -1042,12 +1046,16 @@ export const KODAX_EXAMPLE_CONFIG_FILE = path.join(KODAX_DIR, 'config.example.js
 
 const EXAMPLE_CONFIG_JSONC = `// KodaX example configuration — copy what you need into config.json (in this same
 // folder). config.json must be STRICT JSON: no comments, no trailing commas. Most
-// settings also have a KODAX_* env var that overrides the file. Delete anything you
-// don't use; everything here is optional.
+// settings also have a semantic KODAX_* env counterpart that overrides the file.
+// Priority: explicit option > environment > config.json > default. Delete anything
+// you don't use; everything here is optional.
 {
   // Default provider + model. Override live with /provider and /model.
   // "provider": "deepseek",
   // "model": "deepseek-v4",
+
+  // Task runtime: "embedded" (default) or shared local "daemon".
+  // "runtimeMode": "embedded",
 
   // Reasoning effort for normal turns: off | auto | low | medium | high | xhigh | max.
   // "effort": "high",
@@ -1108,76 +1116,25 @@ export function ensureExampleConfigFile(): string | undefined {
   }
 }
 
-function applyResilienceRuntimeEnv(config: ReturnType<typeof loadConfig>): void {
-  // streamIdleTimeoutMs: config.json → env var → read by resilience/config.ts
-  // Env var takes precedence over config.json (set first, check before overwrite).
-  if (config.streamIdleTimeoutMs && !process.env.KODAX_STREAM_IDLE_TIMEOUT_MS) {
-    process.env.KODAX_STREAM_IDLE_TIMEOUT_MS = String(config.streamIdleTimeoutMs);
-  }
-}
+const projectedConfigEnvironment = new Map<string, string>();
 
-function applyRepoIntelligenceRuntimeEnv(config: ReturnType<typeof loadConfig>): void {
-  if (config.repoIntelligenceMode && !process.env.KODAX_REPO_INTELLIGENCE) {
-    process.env.KODAX_REPO_INTELLIGENCE = config.repoIntelligenceMode;
+function projectConfigEnvironment(env: string, value: string | undefined): void {
+  const current = process.env[env];
+  const previousProjection = projectedConfigEnvironment.get(env);
+  const ownedProjection = previousProjection !== undefined && current === previousProjection;
+  if (current !== undefined && !ownedProjection) {
+    projectedConfigEnvironment.delete(env);
+    return;
   }
-  if (config.repoIntelligenceTrace === true && !process.env.KODAX_REPO_INTELLIGENCE_TRACE) {
-    process.env.KODAX_REPO_INTELLIGENCE_TRACE = '1';
-  }
-}
 
-/**
- * FEATURE_184 Phase D.3 follow-up (v0.7.42) — propagate the user-config
- * `verifierLog` boolean to the runtime env var the coding layer reads.
- * Env wins when both are set (mirrors `applyResilienceRuntimeEnv` /
- * `applyRepoIntelligenceRuntimeEnv` precedence — env-set-first means
- * a developer can override via shell without editing config).
- */
-function applyVerifierRuntimeEnv(config: ReturnType<typeof loadConfig>): void {
-  if (config.verifierLog === true && !process.env.KODAX_VERIFIER_LOG) {
-    process.env.KODAX_VERIFIER_LOG = '1';
+  if (value === undefined) {
+    if (ownedProjection) delete process.env[env];
+    projectedConfigEnvironment.delete(env);
+    return;
   }
-}
 
-/**
- * FEATURE_187 Phase C (v0.7.43) — propagate the user-config
- * `stallLog` boolean to `KODAX_STALL_LOG=1` env. Same env-wins
- * precedence as the verifier counterpart.
- */
-function applyStallSidecarRuntimeEnv(config: ReturnType<typeof loadConfig>): void {
-  if (config.stallLog === true && !process.env.KODAX_STALL_LOG) {
-    process.env.KODAX_STALL_LOG = '1';
-  }
-}
-
-/**
- * FEATURE_102 Phase 3 (v0.7.45) — propagate the user-config
- * `fallbackProviders` chain to `KODAX_FALLBACK_PROVIDERS` (comma-separated)
- * for the coding layer's child-fallback resolver. Same env-wins precedence as
- * the verifier/stall counterparts.
- */
-function applyFallbackRuntimeEnv(config: ReturnType<typeof loadConfig>): void {
-  const chain = config.fallbackProviders?.filter((entry) => entry.trim().length > 0) ?? [];
-  if (chain.length > 0 && !process.env.KODAX_FALLBACK_PROVIDERS) {
-    process.env.KODAX_FALLBACK_PROVIDERS = chain.join(',');
-  }
-}
-
-/**
- * M2 — propagate the user-config model tiers to the KODAX_FAST/DEEP_PROVIDER/MODEL
- * env vars the coding layer (`model-hint-routing.ts`) reads. Same env-wins
- * precedence as the fallback/resilience counterparts (a shell-set var is left
- * untouched so a CI/script override beats config.json).
- */
-function applyModelTierRuntimeEnv(config: ReturnType<typeof loadConfig>): void {
-  const bridge = (value: string | undefined, envVar: string): void => {
-    if (value && value.trim().length > 0 && !process.env[envVar]) {
-      process.env[envVar] = value.trim();
-    }
-  };
-  bridge(config.fastProvider, 'KODAX_FAST_PROVIDER');
-  bridge(config.fastModel, 'KODAX_FAST_MODEL');
-  bridge(config.deepProvider, 'KODAX_DEEP_PROVIDER');
-  bridge(config.deepModel, 'KODAX_DEEP_MODEL');
+  process.env[env] = value;
+  projectedConfigEnvironment.set(env, value);
 }
 
 /**
@@ -1186,44 +1143,78 @@ function applyModelTierRuntimeEnv(config: ReturnType<typeof loadConfig>): void {
  * access). `value` returns the env string to install, or undefined to skip.
  * Env-wins: a shell-set var is never overwritten (a CI/script override beats the
  * file). ADD A NEW BRIDGED SETTING HERE — one row, plus the config-type field.
- * (Bootstrap-timing vars like KODAX_HEAP_LIMIT / KODAX_PROVIDER are read before
- * this runs, so they stay env-only — see config.example.jsonc.)
+ * Process-bootstrap-only vars such as KODAX_HEAP_LIMIT are read before this
+ * runs, so they stay env-only — see config.example.jsonc.
  */
 const CONFIG_ENV_BRIDGES: ReadonlyArray<{
+  readonly configPath: string;
   readonly env: string;
   readonly value: (config: ReturnType<typeof loadConfig>) => string | undefined;
 }> = [
-  { env: 'KODAX_MAX_OUTPUT_TOKENS', value: (c) => (typeof c.maxOutputTokens === 'number' ? String(c.maxOutputTokens) : undefined) },
-  { env: 'KODAX_DISABLE_PROMPT_CACHE', value: (c) => (c.disablePromptCache === true ? '1' : undefined) },
-  { env: 'KODAX_LSP', value: (c) => (c.lsp === false ? '0' : c.lsp === true ? '1' : undefined) },
-  { env: 'KODAX_LSP_DOWNLOAD', value: (c) => (c.lspAutoDownload === true ? '1' : undefined) },
-  { env: 'KODAX_ACP_LOG', value: (c) => (c.acpLogLevel && c.acpLogLevel.trim().length > 0 ? c.acpLogLevel.trim() : undefined) },
-  { env: 'KODAX_REPO_INTELLIGENCE_TOOL_WAIT_MS', value: (c) => (typeof c.repoIntelligence?.toolWaitMs === 'number' ? String(c.repoIntelligence.toolWaitMs) : undefined) },
-  { env: 'KODAX_REPO_INTELLIGENCE_WORKER_TIMEOUT_MS', value: (c) => (typeof c.repoIntelligence?.workerTimeoutMs === 'number' ? String(c.repoIntelligence.workerTimeoutMs) : undefined) },
-  { env: 'KODAX_REPO_INTELLIGENCE_WORKER_OLD_SPACE_MB', value: (c) => (typeof c.repoIntelligence?.workerOldSpaceMb === 'number' ? String(c.repoIntelligence.workerOldSpaceMb) : undefined) },
-  { env: 'KODAX_REPO_INTELLIGENCE_STORAGE_DIR', value: (c) => (c.repoIntelligence?.storageDir?.trim() || undefined) },
-  { env: 'KODAX_WORKFLOW_MAX_CONCURRENCY', value: (c) => (typeof c.workflow?.maxConcurrency === 'number' ? String(c.workflow.maxConcurrency) : undefined) },
+  { configPath: 'streamIdleTimeoutMs', env: 'KODAX_STREAM_IDLE_TIMEOUT_MS', value: (c) => configNumberString(c.streamIdleTimeoutMs) },
+  { configPath: 'repoIntelligenceMode', env: 'KODAX_REPO_INTELLIGENCE', value: (c) => c.repoIntelligenceMode },
+  { configPath: 'repoIntelligenceTrace', env: 'KODAX_REPO_INTELLIGENCE_TRACE', value: (c) => configBooleanString(c.repoIntelligenceTrace) },
+  { configPath: 'verifierLog', env: 'KODAX_VERIFIER_LOG', value: (c) => configBooleanString(c.verifierLog) },
+  { configPath: 'stallLog', env: 'KODAX_STALL_LOG', value: (c) => configBooleanString(c.stallLog) },
+  { configPath: 'fallbackProviders', env: 'KODAX_FALLBACK_PROVIDERS', value: (c) => configStringList(c.fallbackProviders) },
+  { configPath: 'fastProvider', env: 'KODAX_FAST_PROVIDER', value: (c) => normalizedConfigString(c.fastProvider) },
+  { configPath: 'fastModel', env: 'KODAX_FAST_MODEL', value: (c) => normalizedConfigString(c.fastModel) },
+  { configPath: 'deepProvider', env: 'KODAX_DEEP_PROVIDER', value: (c) => normalizedConfigString(c.deepProvider) },
+  { configPath: 'deepModel', env: 'KODAX_DEEP_MODEL', value: (c) => normalizedConfigString(c.deepModel) },
+  { configPath: 'provider', env: 'KODAX_PROVIDER', value: (c) => normalizedConfigString(c.provider) },
+  { configPath: 'effort', env: 'KODAX_EFFORT', value: (c) => normalizedConfigString(c.effort) },
+  { configPath: 'runtimeMode', env: 'KODAX_RUNTIME_MODE', value: (c) => c.runtimeMode },
+  { configPath: 'sessionRetentionDays', env: 'KODAX_SESSION_RETENTION_DAYS', value: (c) => configNumberString(c.sessionRetentionDays) },
+  { configPath: 'maxOutputTokens', env: 'KODAX_MAX_OUTPUT_TOKENS', value: (c) => configNumberString(c.maxOutputTokens) },
+  { configPath: 'disablePromptCache', env: 'KODAX_DISABLE_PROMPT_CACHE', value: (c) => configBooleanString(c.disablePromptCache) },
+  { configPath: 'lsp', env: 'KODAX_LSP', value: (c) => configBooleanString(c.lsp) },
+  { configPath: 'lspAutoDownload', env: 'KODAX_LSP_DOWNLOAD', value: (c) => configBooleanString(c.lspAutoDownload) },
+  { configPath: 'acpLogLevel', env: 'KODAX_ACP_LOG', value: (c) => normalizedConfigString(c.acpLogLevel) },
+  { configPath: 'repoIntelligence.toolWaitMs', env: 'KODAX_REPO_INTELLIGENCE_TOOL_WAIT_MS', value: (c) => configNumberString(c.repoIntelligence?.toolWaitMs) },
+  { configPath: 'repoIntelligence.workerTimeoutMs', env: 'KODAX_REPO_INTELLIGENCE_WORKER_TIMEOUT_MS', value: (c) => configNumberString(c.repoIntelligence?.workerTimeoutMs) },
+  { configPath: 'repoIntelligence.workerOldSpaceMb', env: 'KODAX_REPO_INTELLIGENCE_WORKER_OLD_SPACE_MB', value: (c) => configNumberString(c.repoIntelligence?.workerOldSpaceMb) },
+  { configPath: 'repoIntelligence.storageDir', env: 'KODAX_REPO_INTELLIGENCE_STORAGE_DIR', value: (c) => normalizedConfigString(c.repoIntelligence?.storageDir) },
+  { configPath: 'workflow.maxConcurrency', env: 'KODAX_WORKFLOW_MAX_CONCURRENCY', value: (c) => configNumberString(c.workflow?.maxConcurrency) },
 ];
 
 function applyConfigSurfaceBridges(config: ReturnType<typeof loadConfig>): void {
   for (const b of CONFIG_ENV_BRIDGES) {
-    const v = b.value(config);
-    if (v !== undefined && !process.env[b.env]) {
-      process.env[b.env] = v;
-    }
+    projectConfigEnvironment(b.env, b.value(config));
   }
+}
+
+function normalizedConfigString(value: string | undefined): string | undefined {
+  const normalized = value?.trim();
+  return normalized || undefined;
+}
+
+function configNumberString(value: number | undefined): string | undefined {
+  return typeof value === 'number' && Number.isFinite(value) ? String(value) : undefined;
+}
+
+function configBooleanString(value: boolean | undefined): string | undefined {
+  return value === undefined ? undefined : value ? '1' : '0';
+}
+
+function configStringList(value: string[] | undefined): string | undefined {
+  return value?.filter((entry) => entry.trim().length > 0).join(',');
+}
+
+export const KODAX_CONFIG_ENV_BINDINGS: ReadonlyArray<{
+  readonly configPath: string;
+  readonly env: string;
+}> = [
+  ...CONFIG_ENV_BRIDGES.map(({ configPath, env }) => ({ configPath, env })),
+];
+
+export function applyConfigEnvironment(config: ReturnType<typeof loadConfig>): void {
+  applyConfigSurfaceBridges(config);
 }
 
 export function prepareRuntimeConfig(): ReturnType<typeof loadConfig> {
   ensureShellEnvironmentHydrated();
   const config = loadConfig();
-  applyResilienceRuntimeEnv(config);
-  applyRepoIntelligenceRuntimeEnv(config);
-  applyVerifierRuntimeEnv(config);
-  applyStallSidecarRuntimeEnv(config);
-  applyFallbackRuntimeEnv(config);
-  applyModelTierRuntimeEnv(config);
-  applyConfigSurfaceBridges(config);
+  applyConfigEnvironment(config);
   registerConfiguredCustomProviders(config);
   // Initialize i18n locale from config (falls back to system LANG)
   setLocale(config.locale);
@@ -1234,6 +1225,7 @@ export function prepareRuntimeConfig(): ReturnType<typeof loadConfig> {
 export function saveConfig(config: {
   provider?: string;
   model?: string;
+  runtimeMode?: 'embedded' | 'daemon';
   effort?: string;
   planModeEffort?: string;
   thinking?: boolean;
@@ -1297,13 +1289,74 @@ export function saveConfig(config: {
  * auto deletes the field), so a present config effort must restore as an
  * override — otherwise the round-tripped value is mis-read as a session
  * default and the Ctrl+T position detector treats it as `auto`. The CLI
- * `--effort` flag also forces an override for the launched session.
+ * `--effort` flag or a concrete `KODAX_EFFORT` value also forces an override
+ * for the launched session. The environment `auto`/`unset` sentinel clears
+ * only that layer, so config can still supply the persisted preference.
  */
 export function resolveInitialEffortOverride(
   options: { effort?: string },
   config: { effort?: string },
+  environmentEffort?: string,
 ): boolean {
-  return options.effort !== undefined || config.effort !== undefined;
+  return options.effort !== undefined
+    || parseReasoningEffortEnv(environmentEffort).kind === 'value'
+    || config.effort !== undefined;
+}
+
+function nonEmptySelection(value: string | undefined): string | undefined {
+  return value?.trim() ? value : undefined;
+}
+
+export function resolveRuntimeProviderSelection(input: {
+  explicitProvider?: string;
+  environmentProvider?: string;
+  configuredProvider?: string;
+  defaultProvider: string;
+}): string {
+  return nonEmptySelection(input.explicitProvider)
+    ?? nonEmptySelection(input.environmentProvider)
+    ?? nonEmptySelection(input.configuredProvider)
+    ?? input.defaultProvider;
+}
+
+export function resolveRuntimeModelSelection(input: {
+  explicitProvider?: string;
+  environmentProvider?: string;
+  explicitModel?: string;
+  configuredProvider?: string;
+  configuredModel?: string;
+}): string | undefined {
+  const explicitModel = nonEmptySelection(input.explicitModel);
+  if (explicitModel) return explicitModel;
+
+  const configuredModel = nonEmptySelection(input.configuredModel);
+  if (!configuredModel) return undefined;
+
+  const providerOverride = nonEmptySelection(input.explicitProvider)
+    ?? nonEmptySelection(input.environmentProvider);
+  if (!providerOverride) return configuredModel;
+
+  const configuredProvider = nonEmptySelection(input.configuredProvider);
+  return configuredProvider === providerOverride ? configuredModel : undefined;
+}
+
+export function resolveRuntimeEffortSelection(input: {
+  explicitEffort?: string;
+  environmentEffort?: string;
+  configuredEffort?: string;
+}): string | undefined {
+  if (input.explicitEffort !== undefined) {
+    return normalizeReasoningEffortValue(input.explicitEffort);
+  }
+
+  const environmentEffort = parseReasoningEffortEnv(input.environmentEffort);
+  if (environmentEffort.kind === 'value') {
+    return environmentEffort.value;
+  }
+
+  return input.configuredEffort === undefined
+    ? undefined
+    : normalizeReasoningEffortValue(input.configuredEffort);
 }
 
 export function resolvePermissionModeEffort(config: {
