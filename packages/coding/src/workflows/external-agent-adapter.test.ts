@@ -99,6 +99,65 @@ describe('FEATURE_258 Workflow external target', () => {
     });
   });
 
+  it('routes a canonical Native target through the existing local workflow backend', async () => {
+    const ctx = await context();
+    const runChild = vi.fn(async (bundles: readonly { readonly id: string; readonly objective: string }[]) => ({
+      results: bundles.map((bundle) => ({
+        childId: bundle.id,
+        fanoutClass: 'evidence-scan' as const,
+        status: 'completed' as const,
+        disposition: 'valid' as const,
+        summary: 'native-ok',
+        evidenceRefs: [],
+        contradictions: [],
+      })),
+      mergedFindings: bundles.map((bundle) => ({
+        childId: bundle.id,
+        objective: bundle.objective,
+        evidence: ['native-ok'],
+        artifacts: [],
+      })),
+      mergedArtifacts: [],
+      totalTokensUsed: 1,
+      cancelledChildren: [],
+    }));
+    const backend = createCodingWorkflowBackend({
+      ctx,
+      childOptions: {
+        maxIterationsPerChild: 10,
+        parentRole: 'worker',
+        parentHarness: 'tool-dispatch',
+        parentOptions: {},
+      },
+      runChild,
+      generateId: () => 'workflow-native-1',
+    });
+
+    const handle = await backend.spawn({
+      name: 'native',
+      prompt: 'Inspect locally',
+      target: {
+        agentId: 'native:kodax-child',
+        expectedConfigurationRevision: 'kodax-child:v1',
+      },
+      readOnly: true,
+    });
+    expect(await backend.wait(handle.taskId)).toMatchObject({
+      status: 'completed',
+      finalText: 'native-ok',
+    });
+    expect(runChild).toHaveBeenCalledOnce();
+    await expect(backend.spawn({
+      name: 'stale-native',
+      prompt: 'Do not run',
+      target: {
+        agentId: 'native:kodax-child',
+        expectedConfigurationRevision: 'stale',
+      },
+      readOnly: true,
+    })).rejects.toThrow(/configuration revision changed/i);
+  });
+
   it('keeps identity across input and cancel and rejects conflicting local routing', async () => {
     const ctx = await context();
     let counter = 0;

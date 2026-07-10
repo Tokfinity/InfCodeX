@@ -39,6 +39,7 @@ import type {
 
 import { executeChildAgents, assertValidWorkflowEvidenceRefs } from '../child-executor.js';
 import type { ChildExecutorOptions } from '../child-executor.js';
+import { resolveCodingDispatchableAgent } from '../external-agents/local-catalog.js';
 import { assertSupportedOutputSchema } from './structured-output.js';
 import {
   initChildSnapshot,
@@ -652,33 +653,55 @@ export function createCodingWorkflowBackend(deps: CodingWorkflowBackendDeps): Wo
   };
 
   const spawn = async (input: WorkflowSpawnAgentInput): Promise<WorkflowTaskHandle> => {
-    const effectiveInput = resolveSpawnAgentInput(input, deps.defaultChildReadOnly);
-    const childId = genId();
+    let effectiveInput = resolveSpawnAgentInput(input, deps.defaultChildReadOnly);
     if (effectiveInput.target && effectiveInput.subagentType) {
       throw new Error('Workflow target and subagentType are mutually exclusive.');
     }
     if (effectiveInput.target) {
-      if (effectiveInput.verification?.requiresMutation === true) {
-        throw new Error('External Workflow targets cannot directly satisfy workspace mutation verification.');
-      }
       const binding = ctx.agentExecutorPlane;
       if (!binding) throw new Error('Workflow target requires a host-bound agent executor plane.');
-      await binding.plane.tasks.start({
-        taskId: childId,
-        agentId: effectiveInput.target.agentId,
-        objective: effectiveInput.prompt,
-        context: {
-          ...binding.context,
-          ...(deps.runId ? { workflowId: deps.runId } : {}),
-        },
-        readOnly: effectiveInput.readOnly,
-        ...(effectiveInput.target.expectedConfigurationRevision
-          ? { expectedConfigurationRevision: effectiveInput.target.expectedConfigurationRevision }
-          : {}),
-      });
-      externalTasks.set(childId, { name: effectiveInput.name });
-      return { taskId: childId, name: effectiveInput.name };
+      const localRoute = resolveCodingDispatchableAgent(
+        effectiveInput.target.agentId,
+        binding.context,
+        ctx.agentScope,
+      );
+      if (localRoute) {
+        if (
+          effectiveInput.target.expectedConfigurationRevision !== undefined
+          && effectiveInput.target.expectedConfigurationRevision
+            !== localRoute.descriptor.configurationRevision
+        ) {
+          throw new Error('Workflow target configuration revision changed.');
+        }
+        const { target: ignoredTarget, ...untargetedInput } = effectiveInput;
+        void ignoredTarget;
+        effectiveInput = {
+          ...untargetedInput,
+          ...(localRoute.subagentType ? { subagentType: localRoute.subagentType } : {}),
+        };
+      } else {
+        if (effectiveInput.verification?.requiresMutation === true) {
+          throw new Error('External Workflow targets cannot directly satisfy workspace mutation verification.');
+        }
+        const childId = genId();
+        await binding.plane.tasks.start({
+          taskId: childId,
+          agentId: effectiveInput.target.agentId,
+          objective: effectiveInput.prompt,
+          context: {
+            ...binding.context,
+            ...(deps.runId ? { workflowId: deps.runId } : {}),
+          },
+          readOnly: effectiveInput.readOnly,
+          ...(effectiveInput.target.expectedConfigurationRevision
+            ? { expectedConfigurationRevision: effectiveInput.target.expectedConfigurationRevision }
+            : {}),
+        });
+        externalTasks.set(childId, { name: effectiveInput.name });
+        return { taskId: childId, name: effectiveInput.name };
+      }
     }
+    const childId = genId();
     // `tasks` holds every agent spawned earlier in this run (the current one is
     // added at the end of spawn, line ~682) — so this is exactly the set a
     // `task_id:` evidence ref may legitimately point back to.

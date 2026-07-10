@@ -131,6 +131,7 @@ npx tsc -p tsconfig.json --noEmit
 **预期结果**：
 
 - [ ] External target 不调用本地 child executor。
+- [ ] canonical Native/Constructed target 继续调用既有本地 backend。
 - [ ] Workflow correlation 写入同一任务账本。
 - [ ] `target` 与 `subagentType` 冲突时明确失败。
 - [ ] 无 target 的既有 Workflow 行为保持不变。
