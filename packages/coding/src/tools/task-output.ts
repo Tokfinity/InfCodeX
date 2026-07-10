@@ -198,10 +198,22 @@ function renderLedgerTask(
   if (retrievalStatus === 'wait_expired') {
     lines.push('<note>The bounded read window expired; the task remains active or uncertain.</note>');
   }
+  if (task.progress) {
+    lines.push(`<progress>${escapeXmlContent(JSON.stringify(task.progress))}</progress>`);
+  }
+  if (task.artifacts && task.artifacts.length > 0) {
+    lines.push(`<artifacts>${escapeXmlContent(tailToBytes(
+      JSON.stringify(task.artifacts),
+      OUTPUT_TAIL_BYTES,
+    ))}</artifacts>`);
+  }
+  if (task.usage) {
+    lines.push(`<usage>${escapeXmlContent(JSON.stringify(task.usage))}</usage>`);
+  }
   const body = task.output ?? task.error;
   if (body !== undefined) {
     lines.push(task.output !== undefined ? '<output>' : '<error>');
-    lines.push(tailToBytes(body, OUTPUT_TAIL_BYTES));
+    lines.push(escapeXmlContent(tailToBytes(body, OUTPUT_TAIL_BYTES)));
     lines.push(task.output !== undefined ? '</output>' : '</error>');
   }
   return lines.join('\n');
@@ -342,8 +354,7 @@ function tailToBytes(content: string, maxBytes: number): string {
 }
 
 function escapeXmlContent(value: string): string {
-  // Minimal escape — task_id is the only field user-influenced, and
-  // `dispatch_child_task` already validates it as a simple string. The
-  // escape is defensive in case future callers pass arbitrary IDs.
+  // Remote task text and metadata are untrusted; escaping prevents them
+  // from closing the structured tool-result envelope.
   return value.replace(/&/g, '&amp;').replace(/</g, '&lt;').replace(/>/g, '&gt;');
 }

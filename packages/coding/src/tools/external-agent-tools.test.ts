@@ -85,7 +85,13 @@ async function createContext(): Promise<KodaXToolExecutionContext> {
     policy: async () => ({ allowed: true }),
     store: createMemoryAgentExecutorPlaneStore(),
   });
-  await plane.registrations.upsert(registration('external:risk', { output: 'risk-ok' }));
+  await plane.registrations.upsert(registration('external:risk', {
+    output: 'risk-ok',
+    artifactName: 'risk.json',
+    artifactUri: 'https://remote.example/risk.json',
+    artifactHash: 'sha256:risk',
+    totalTokens: 7,
+  }));
   await plane.registrations.upsert(registration('external:interactive', {
     inputRequired: true,
     inputPrefix: 'answer:',
@@ -141,6 +147,9 @@ describe('FEATURE_258 Worker external-agent bridge', () => {
     const output = await toolTaskOutput({ task_id: 'external-child-1', block: true }, ctx);
     expect(output).toContain('<status>completed</status>');
     expect(output).toContain('risk-ok');
+    expect(output).toContain('<artifacts>');
+    expect(output).toContain('external:risk');
+    expect(output).toContain('<usage>{"totalTokens":7}</usage>');
   });
 
   it('routes send_message and task_stop through the external task ledger', async () => {

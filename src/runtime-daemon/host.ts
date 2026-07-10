@@ -65,6 +65,7 @@ export async function startRuntimeDaemonHost(
       createDispatcher: (notify) => createRuntimeDaemonDispatcher({
         runtime: options.runtime,
         authToken: token,
+        allowAgentRegistrationAdmin: true,
         notify,
         runResults,
         logs: () => ({

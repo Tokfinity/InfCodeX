@@ -1,6 +1,7 @@
 import { randomUUID } from 'node:crypto';
 
 import type {
+  AgentArtifactReference,
   AgentContinuationInput,
   AgentExecutor,
   AgentExecutorEvent,
@@ -139,9 +140,32 @@ class ReferenceAgentExecutor implements AgentExecutor {
 
   private complete(record: ReferenceTaskRecord, output: string): void {
     if (isReferenceTerminal(record.snapshot)) return;
-    record.snapshot = { state: 'completed', output };
+    const artifact = this.configuredArtifact();
+    const totalTokens = this.registration.executorConfig?.totalTokens;
+    record.snapshot = {
+      state: 'completed',
+      output,
+      ...(artifact ? { artifacts: [artifact] } : {}),
+      ...(typeof totalTokens === 'number' && Number.isFinite(totalTokens)
+        ? { usage: { totalTokens } }
+        : {}),
+    };
     record.events.push(record.snapshot);
     record.events.close();
+  }
+
+  private configuredArtifact(): AgentArtifactReference | undefined {
+    const name = this.registration.executorConfig?.artifactName;
+    if (typeof name !== 'string' || name.length === 0) return undefined;
+    const uri = this.registration.executorConfig?.artifactUri;
+    const hash = this.registration.executorConfig?.artifactHash;
+    const mimeType = this.registration.executorConfig?.artifactMimeType;
+    return {
+      name,
+      ...(typeof uri === 'string' ? { uri } : {}),
+      ...(typeof hash === 'string' ? { hash } : {}),
+      ...(typeof mimeType === 'string' ? { mimeType } : {}),
+    };
   }
 
   private taskFromReference(reference: AgentExecutorTaskReference): ReferenceTaskRecord {

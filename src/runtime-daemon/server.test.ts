@@ -118,7 +118,10 @@ describe('runtime daemon dispatcher', () => {
 
   it('routes every declared daemon method to an implemented dispatcher branch', async () => {
     for (const method of RUNTIME_DAEMON_METHODS) {
-      const dispatcher = createRuntimeDaemonDispatcher({ runtime: makeRuntime() });
+      const dispatcher = createRuntimeDaemonDispatcher({
+        runtime: makeRuntime(),
+        allowAgentRegistrationAdmin: true,
+      });
       if (!isInitializeMethod(method)) {
         await initializeDispatcher(dispatcher);
       }
@@ -134,6 +137,33 @@ describe('runtime daemon dispatcher', () => {
         isRuntimeDaemonSuccessResponse(response),
         `${method} should be implemented by runtime daemon dispatcher`,
       ).toBe(true);
+    }
+  });
+
+  it('requires both host authorization and client negotiation for registration admin', async () => {
+    const hostDenied = createRuntimeDaemonDispatcher({ runtime: makeRuntime() });
+    await initializeDispatcher(hostDenied, { configAdmin: true });
+    const denied = await hostDenied.handle(createRuntimeDaemonRequest(
+      'req-agent-admin-host-denied',
+      'agentRegistrations.list',
+    ));
+    expect(isRuntimeDaemonSuccessResponse(denied)).toBe(false);
+    if (!isRuntimeDaemonSuccessResponse(denied)) {
+      expect(denied.error.code).toBe('permission_denied');
+    }
+
+    const clientDenied = createRuntimeDaemonDispatcher({
+      runtime: makeRuntime(),
+      allowAgentRegistrationAdmin: true,
+    });
+    await initializeDispatcher(clientDenied, {});
+    const unauthorized = await clientDenied.handle(createRuntimeDaemonRequest(
+      'req-agent-admin-client-denied',
+      'agentRegistrations.list',
+    ));
+    expect(isRuntimeDaemonSuccessResponse(unauthorized)).toBe(false);
+    if (!isRuntimeDaemonSuccessResponse(unauthorized)) {
+      expect(unauthorized.error.code).toBe('unauthorized');
     }
   });
 

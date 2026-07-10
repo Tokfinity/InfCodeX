@@ -60,6 +60,7 @@ export interface AgentDispatchContext {
   readonly runId?: string;
   readonly nodeId?: string;
   readonly dataClassifications?: readonly string[];
+  readonly budget?: number;
 }
 
 export interface AgentCapabilityRequirements {
@@ -74,7 +75,6 @@ export interface DispatchableAgentQuery extends AgentDispatchContext {
   readonly requiredSkills?: readonly string[];
   readonly requiredCapabilities?: AgentCapabilityRequirements;
   readonly readOnly?: boolean;
-  readonly budget?: number;
 }
 
 export interface ExternalAgentHealth {

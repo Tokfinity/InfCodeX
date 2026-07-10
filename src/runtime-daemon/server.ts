@@ -55,6 +55,8 @@ export interface RuntimeDaemonDispatcherOptions {
   readonly config?: () => Promise<unknown> | unknown;
   readonly providerList?: () => Promise<unknown> | unknown;
   readonly capabilities?: Readonly<Record<string, boolean>>;
+  /** Host authorization; client capability negotiation alone never grants registration admin. */
+  readonly allowAgentRegistrationAdmin?: boolean;
 }
 
 export interface RuntimeDaemonDispatcher {
@@ -344,11 +346,11 @@ async function dispatchRuntimeDaemonRequest(
       return runtime.artifacts.delete(requireStringParam(request.params, 'artifactId'));
 
     case 'agentRegistrations.list':
-      requireConfigAdminCapability(getClientCapabilities());
+      requireAgentRegistrationAdmin(options, getClientCapabilities());
       requireExternalAgentsEnabled(runtime);
       return runtime.admin.agentRegistrations.list();
     case 'agentRegistrations.upsert': {
-      requireConfigAdminCapability(getClientCapabilities());
+      requireAgentRegistrationAdmin(options, getClientCapabilities());
       requireExternalAgentsEnabled(runtime);
       const params = requireRecord(request.params);
       return runtime.admin.agentRegistrations.upsert(
@@ -358,7 +360,7 @@ async function dispatchRuntimeDaemonRequest(
       );
     }
     case 'agentRegistrations.remove':
-      requireConfigAdminCapability(getClientCapabilities());
+      requireAgentRegistrationAdmin(options, getClientCapabilities());
       requireExternalAgentsEnabled(runtime);
       return runtime.admin.agentRegistrations.remove(requireStringParam(request.params, 'agentId'));
     case 'agents.listDispatchable':
@@ -619,7 +621,13 @@ function requireExternalAgentsEnabled(runtime: KodaXRuntime): void {
   throw daemonError('method_not_found', 'Runtime external agent executor plane is not enabled.');
 }
 
-function requireConfigAdminCapability(capabilities: RuntimeClientCapabilities): void {
+function requireAgentRegistrationAdmin(
+  options: RuntimeDaemonDispatcherOptions,
+  capabilities: RuntimeClientCapabilities,
+): void {
+  if (options.allowAgentRegistrationAdmin !== true) {
+    throw daemonError('permission_denied', 'Runtime daemon host denied Agent registration administration.');
+  }
   if (capabilities.configAdmin === true) return;
   throw daemonError('unauthorized', 'Runtime daemon client did not negotiate configAdmin capability.');
 }

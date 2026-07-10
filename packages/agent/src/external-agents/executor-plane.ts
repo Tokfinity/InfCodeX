@@ -57,6 +57,13 @@ export class AgentStartUncertainError extends Error {
   }
 }
 
+export class AgentCancellationUncertainError extends Error {
+  constructor(message: string) {
+    super(message);
+    this.name = 'AgentCancellationUncertainError';
+  }
+}
+
 interface PlaneRuntimeOptions {
   readonly factories: ReadonlyMap<string, AgentExecutorFactory>;
   readonly policy: CreateAgentExecutorPlaneOptions['policy'];
@@ -120,9 +127,16 @@ function summaryFromRegistration(
   const diagnostics: string[] = [];
   if (!registration.enabled) diagnostics.push('disabled');
   if (registration.health?.status === 'unhealthy') diagnostics.push('unhealthy');
-  if (registration.health?.diagnostic) {
-    diagnostics.push(sanitizeText(registration.health.diagnostic));
-  }
+  if (registration.health?.diagnostic) diagnostics.push('health check reported a diagnostic');
+  const health = registration.health
+    ? {
+        status: registration.health.status,
+        checkedAt: registration.health.checkedAt,
+        ...(registration.health.retryAfterMs !== undefined
+          ? { retryAfterMs: registration.health.retryAfterMs }
+          : {}),
+      }
+    : undefined;
   return {
     agentId: registration.agentId,
     displayName: registration.displayName,
@@ -135,7 +149,7 @@ function summaryFromRegistration(
     credentialConfigured: registration.credentialRef !== undefined,
     capabilities: registration.capabilities,
     effects: registration.effects,
-    ...(registration.health ? { health: registration.health } : {}),
+    ...(health ? { health } : {}),
     diagnostics,
   };
 }
@@ -192,6 +206,10 @@ function descriptorMismatchReasons(
   query: DispatchableAgentQuery,
 ): string[] {
   const reasons = capabilityMismatchReasons(descriptor.capabilities, query.requiredCapabilities);
+  if (query.actorId.trim().length === 0) reasons.push('actor identity is required');
+  if (query.budget !== undefined && (!Number.isFinite(query.budget) || query.budget < 0)) {
+    reasons.push('dispatch budget is invalid');
+  }
   const skills = new Set(descriptor.skills);
   for (const skill of query.requiredSkills ?? []) {
     if (!skills.has(skill)) reasons.push(`required skill is unavailable: ${skill}`);
@@ -264,6 +282,7 @@ class AgentExecutorPlaneRuntime {
   readonly #eventSequences = new Map<string, number>();
   readonly #executors = new Map<string, AgentExecutor>();
   readonly #waiters = new Map<string, Set<(task: AgentTaskSnapshot) => void>>();
+  readonly #startTails = new Map<string, Promise<void>>();
 
   constructor(private readonly options: PlaneRuntimeOptions) {}
 
@@ -287,7 +306,7 @@ class AgentExecutorPlaneRuntime {
   };
 
   readonly tasks: AgentTaskService = {
-    start: async (input) => this.startTask(input),
+    start: async (input) => this.startTaskSerialized(input),
     list: async (filter) => this.listTasks(filter),
     get: async (taskId) => this.getTask(taskId),
     events: async (taskId, cursor) => this.listEvents(taskId, cursor),
@@ -310,6 +329,20 @@ class AgentExecutorPlaneRuntime {
     this.#registrations.set(input.agentId, clone(input));
     await this.persistRegistrations();
     return summaryFromRegistration(input);
+  }
+
+  private async startTaskSerialized(input: AgentTaskStartInput): Promise<AgentTaskSnapshot> {
+    const previous = this.#startTails.get(input.agentId) ?? Promise.resolve();
+    let release: (() => void) | undefined;
+    const tail = new Promise<void>((resolve) => { release = resolve; });
+    this.#startTails.set(input.agentId, tail);
+    await previous;
+    try {
+      return await this.startTask(input);
+    } finally {
+      release?.();
+      if (this.#startTails.get(input.agentId) === tail) this.#startTails.delete(input.agentId);
+    }
   }
 
   async removeRegistration(agentId: string): Promise<boolean> {
@@ -541,6 +574,7 @@ class AgentExecutorPlaneRuntime {
         ...(reference.remoteTaskId ? { remoteTaskId: reference.remoteTaskId } : {}),
         updatedAt: this.nowIso(),
       };
+      await this.saveTask(accepted, 'state');
       const remote = await executor.get(reference).catch(() => ({ state: 'working' as const }));
       const started = this.applyRemoteSnapshot(accepted, remote);
       await this.saveTask(started, 'state');
@@ -689,14 +723,18 @@ class AgentExecutorPlaneRuntime {
     try {
       const { executor, reference } = await this.executorRoute(requested);
       const remote = await executor.cancel(reference, reason);
-      const cancellation: AgentTaskCancellation = remote.state === 'canceled' ? 'confirmed' : 'requested';
+      const cancellation: AgentTaskCancellation = remote.state === 'canceled'
+        ? 'confirmed'
+        : remote.state === 'unknown' ? 'unknown' : 'requested';
       const next = { ...this.applyRemoteSnapshot(requested, remote), cancellation };
       await this.saveTask(next, 'cancellation');
       return clone(next);
     } catch (error: unknown) {
       const failed = {
         ...requested,
-        cancellation: 'failed' as const,
+        cancellation: error instanceof AgentCancellationUncertainError
+          ? 'unknown' as const
+          : 'failed' as const,
         cancellationError: errorMessage(error),
         updatedAt: this.nowIso(),
       };
@@ -707,8 +745,8 @@ class AgentExecutorPlaneRuntime {
 
   private async reconcileTask(taskId: string): Promise<AgentTaskSnapshot> {
     const task = this.requireExternalTask(taskId);
-    const { executor, reference } = await this.executorRoute(task);
     try {
+      const { executor, reference } = await this.executorRoute(task);
       const remote = await executor.reconcile(reference);
       const next = this.applyRemoteSnapshot(task, remote);
       await this.saveTask(next, 'state');

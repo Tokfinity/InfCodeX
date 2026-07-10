@@ -111,6 +111,7 @@ import {
   createRuntimeDaemonClient,
   type RuntimeDaemonClientTransport,
 } from './runtime-daemon/client.js';
+import { acquireRuntimeDaemonLease } from './runtime-daemon/manager.js';
 import { acquireRuntimeDaemonProcessLease } from './runtime-daemon/process.js';
 import { createRuntimeWorkerTransport } from './runtime-worker/transport.js';
 import type { RuntimeWorkerOptions } from './runtime-worker/protocol.js';
@@ -234,7 +235,7 @@ export interface RuntimeExternalAgentsOptions {
 export interface CreateKodaXRuntimeOptions {
   /** Runtime ownership form. Defaults to a caller-owned embedded Runtime. */
   readonly mode?: KodaXRuntimeMode;
-  /** Embedded-only execution location. Daemon mode already uses process isolation. */
+  /** Embedded-only execution location. Daemon mode selects host isolation internally. */
   readonly isolation?: 'inline' | 'worker';
   /** Requires `isolation: 'worker'`; rejected instead of being silently ignored. */
   readonly worker?: RuntimeWorkerOptions;
@@ -1005,14 +1006,14 @@ export async function createKodaXRuntime(
     throw new Error(`Unsupported KodaX Runtime isolation: ${String(options.isolation)}`);
   }
   if (options.mode === 'daemon') {
-    if (options.externalAgents !== undefined) {
-      throw new Error('External agent factories must be installed inside the daemon host; they cannot cross the daemon client boundary.');
-    }
     if (options.isolation !== undefined) {
-      throw new Error('Daemon mode already uses process isolation and does not accept an isolation option.');
+      throw new Error('Daemon mode selects its isolation internally and does not accept an isolation option.');
     }
     if (options.worker !== undefined) {
       throw new Error("Runtime Worker options require isolation: 'worker'.");
+    }
+    if (options.externalAgents !== undefined) {
+      return createInProcessExternalAgentDaemon(options);
     }
     return connectKodaXRuntime({
       profile: options.profile,
@@ -1159,6 +1160,74 @@ export async function createKodaXRuntime(
   };
 
   return runtime;
+}
+
+async function createInProcessExternalAgentDaemon(
+  options: CreateKodaXRuntimeOptions,
+): Promise<KodaXRuntime> {
+  const externalAgents = options.externalAgents;
+  if (!externalAgents) throw new Error('External agent options are required for the hosted daemon.');
+  if (options.daemonTransport !== undefined) {
+    throw new Error('External agent factories cannot be installed through an existing daemon transport.');
+  }
+  if (options.autoStartDaemon === false) {
+    throw new Error('External agent factories require an in-process daemon host with autoStartDaemon enabled.');
+  }
+  const endpoint = options.daemonEndpoint !== undefined
+    ? normalizeRuntimeDaemonEndpoint(options.daemonEndpoint)
+    : undefined;
+  const lease = await acquireRuntimeDaemonLease({
+    homeDir: options.homeDir,
+    profile: options.profile,
+    endpoint,
+    connectTimeoutMs: options.daemonConnectTimeoutMs,
+    startupTimeoutMs: options.daemonStartupTimeoutMs,
+    createRuntime: () => createKodaXRuntime({
+      mode: 'embedded',
+      homeDir: options.homeDir,
+      profile: options.profile,
+      sessionsDir: options.sessionsDir,
+      defaultProvider: options.defaultProvider,
+      defaultModel: options.defaultModel,
+      permissionTimeoutMs: options.permissionTimeoutMs,
+      clientInfo: options.clientInfo,
+      capabilities: options.capabilities,
+      requirements: options.requirements,
+      externalAgents,
+    }),
+  });
+  if (!lease.ownsHost) {
+    await lease.close();
+    throw new Error(
+      'External agent factories cannot be installed into an already-running daemon profile; configure its owner or use a unique profile.',
+    );
+  }
+  try {
+    const runtime = await connectKodaXRuntime({
+      profile: options.profile,
+      transport: lease.transport,
+      daemonToken: options.daemonToken ?? readRuntimeDaemonToken(lease.paths),
+      clientInfo: options.clientInfo,
+      capabilities: options.capabilities,
+      requirements: { ...options.requirements, externalAgents: true },
+    });
+    let closed = false;
+    return {
+      ...runtime,
+      identity: { ...runtime.identity, isolation: 'inline' },
+      async close() {
+        if (closed) return;
+        closed = true;
+        await runtime.close();
+        if (lease.ownsHost) await lease.shutdown();
+        else await lease.close();
+      },
+    };
+  } catch (error: unknown) {
+    await lease.close();
+    if (lease.ownsHost) await lease.shutdown();
+    throw error;
+  }
 }
 
 async function createWorkerHostedKodaXRuntime(

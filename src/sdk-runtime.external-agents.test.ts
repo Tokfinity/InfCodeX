@@ -5,7 +5,7 @@ import { afterEach, describe, expect, it } from 'vitest';
 
 import { createReferenceAgentExecutorFactory } from '@kodax-ai/agent';
 import type { ExternalAgentRegistration } from '@kodax-ai/agent';
-import { createKodaXRuntime } from './sdk-runtime.js';
+import { createKodaXRuntime, type KodaXRuntime } from './sdk-runtime.js';
 import { createRuntimeDaemonClient } from './runtime-daemon/client.js';
 import {
   createRuntimeDaemonRequest,
@@ -53,6 +53,37 @@ function externalAgentOptions() {
   };
 }
 
+async function assertRuntimeAgentServiceConformance(
+  runtime: KodaXRuntime,
+  actorId: string,
+  parentTaskId: string,
+): Promise<{ readonly taskId: string; readonly registrationJson: string }> {
+  const summary = await runtime.admin.agentRegistrations.upsert(registration());
+  expect(summary.credentialConfigured).toBe(false);
+  const listed = await runtime.agents.listDispatchable({ actorId });
+  expect(listed.map((entry) => entry.descriptor.agentId)).toEqual(expect.arrayContaining([
+    'external:runtime-reference',
+    'native:kodax-child',
+  ]));
+  expect((await runtime.agents.preflight({
+    agentId: 'external:runtime-reference',
+    query: { actorId, readOnly: true },
+  })).ok).toBe(true);
+
+  const started = await runtime.agentTasks.start({
+    agentId: 'external:runtime-reference',
+    objective: 'Run reference conformance',
+    context: { actorId, parentTaskId },
+  });
+  expect(await runtime.agentTasks.wait(started.taskId, 1_000)).toMatchObject({
+    state: 'completed',
+    output: 'runtime-ok',
+    parentTaskId,
+  });
+  expect(await runtime.agentTasks.events(started.taskId, 0)).not.toHaveLength(0);
+  return { taskId: started.taskId, registrationJson: JSON.stringify(summary) };
+}
+
 describe('FEATURE_258 Embedded Runtime agent services', () => {
   it('provides redacted registration, shared catalog and durable task services', async () => {
     homeDir = fs.mkdtempSync(path.join(os.tmpdir(), 'kodax-runtime-agents-'));
@@ -61,28 +92,8 @@ describe('FEATURE_258 Embedded Runtime agent services', () => {
       requirements: { externalAgents: true },
       externalAgents: externalAgentOptions(),
     });
-    const summary = await runtime.admin.agentRegistrations.upsert(registration());
-    expect(summary.credentialConfigured).toBe(false);
-    expect(JSON.stringify(summary)).not.toContain('private.invalid');
-
-    const listed = await runtime.agents.listDispatchable({ actorId: 'runtime-host' });
-    expect(listed.map((entry) => entry.descriptor.agentId)).toEqual([
-      'external:runtime-reference',
-      'native:kodax-child',
-    ]);
-    expect((await runtime.agents.preflight({
-      agentId: 'external:runtime-reference',
-      query: { actorId: 'runtime-host', readOnly: true },
-    })).ok).toBe(true);
-
-    const started = await runtime.agentTasks.start({
-      agentId: 'external:runtime-reference',
-      objective: 'Run reference',
-      context: { actorId: 'runtime-host', parentTaskId: 'parent-1' },
-    });
-    const completed = await runtime.agentTasks.wait(started.taskId, 1_000);
-    expect(completed).toMatchObject({ state: 'completed', output: 'runtime-ok' });
-    expect((await runtime.agentTasks.events(started.taskId, 0)).length).toBeGreaterThan(0);
+    const result = await assertRuntimeAgentServiceConformance(runtime, 'runtime-host', 'parent-1');
+    expect(result.registrationJson).not.toContain('private.invalid');
     await runtime.close();
 
     const reopened = await createKodaXRuntime({
@@ -90,11 +101,35 @@ describe('FEATURE_258 Embedded Runtime agent services', () => {
       externalAgents: externalAgentOptions(),
     });
     expect(await reopened.admin.agentRegistrations.list()).toHaveLength(1);
-    expect(await reopened.agentTasks.get(started.taskId)).toMatchObject({
+    expect(await reopened.agentTasks.get(result.taskId)).toMatchObject({
       state: 'completed',
       output: 'runtime-ok',
     });
     await reopened.close();
+  });
+
+  it('installs executor factories inside a public in-process daemon host', async () => {
+    homeDir = fs.mkdtempSync(path.join(os.tmpdir(), 'kodax-runtime-hosted-agents-'));
+    const profile = `external-agent-${process.pid}-${Date.now()}`;
+    const runtime = await createKodaXRuntime({
+      mode: 'daemon',
+      homeDir,
+      profile,
+      capabilities: { configAdmin: true },
+      requirements: { externalAgents: true },
+      externalAgents: externalAgentOptions(),
+    });
+    expect(runtime.identity).toMatchObject({ mode: 'daemon', isolation: 'inline' });
+    expect(runtime.agents.enabled).toBe(true);
+    await assertRuntimeAgentServiceConformance(runtime, 'daemon-sdk-host', 'daemon-sdk-parent');
+    await expect(createKodaXRuntime({
+      mode: 'daemon',
+      homeDir,
+      profile,
+      capabilities: { configAdmin: true },
+      externalAgents: externalAgentOptions(),
+    })).rejects.toThrow(/already-running daemon profile/i);
+    await runtime.close();
   });
 
   it('fails closed when the executor plane is not enabled', async () => {
@@ -139,7 +174,10 @@ describe('FEATURE_258 Embedded Runtime agent services', () => {
       homeDir,
       externalAgents: externalAgentOptions(),
     });
-    const dispatcher = createRuntimeDaemonDispatcher({ runtime: host });
+    const dispatcher = createRuntimeDaemonDispatcher({
+      runtime: host,
+      allowAgentRegistrationAdmin: true,
+    });
     let requestSequence = 0;
     const request = async (method: RuntimeDaemonMethod, params?: unknown): Promise<unknown> => {
       requestSequence += 1;
@@ -168,21 +206,8 @@ describe('FEATURE_258 Embedded Runtime agent services', () => {
       },
     });
 
-    await daemon.admin.agentRegistrations.upsert(registration());
     expect(daemon.agents.enabled).toBe(true);
-    expect((await daemon.agents.listDispatchable({ actorId: 'daemon-host' }))
-      .map((entry) => entry.descriptor.agentId)).toContain('external:runtime-reference');
-    const started = await daemon.agentTasks.start({
-      agentId: 'external:runtime-reference',
-      objective: 'Run through daemon',
-      context: { actorId: 'daemon-host', parentTaskId: 'daemon-parent' },
-    });
-    expect(await daemon.agentTasks.wait(started.taskId, 1_000)).toMatchObject({
-      state: 'completed',
-      output: 'runtime-ok',
-      parentTaskId: 'daemon-parent',
-    });
-    expect(await daemon.agentTasks.events(started.taskId)).not.toHaveLength(0);
+    await assertRuntimeAgentServiceConformance(daemon, 'daemon-host', 'daemon-parent');
 
     dispatcher.close();
     await daemon.close();
