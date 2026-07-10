@@ -9,16 +9,20 @@ Each archive (`tar.gz` for Linux/macOS, `zip` for Windows) extracts to:
 
 ```
 kodax-v<version>-linux-x64/
-├── kodax              # Bun-compiled standalone executable (~60 MB)
-└── builtin/           # Sidecar built-in skills (read at runtime)
-    ├── code-review/SKILL.md
-    ├── tdd/SKILL.md
-    └── ...
+├── kodax                          # Bun-compiled executable (~60 MB)
+├── builtin/                       # Built-in skills
+│   ├── code-review/SKILL.md
+│   ├── tdd/SKILL.md
+│   └── ...
+├── provider-capabilities.json     # Provider metadata
+├── semantic-worker.js             # Repo-intelligence Worker
+├── runtime-worker.js              # SDK Runtime Worker
+└── constructed-handler-worker.js  # Constructed-tool Worker
 ```
 
 Users extract anywhere and run `./kodax` (or `kodax.exe`). The binary locates
-its sidecar `builtin/` via `process.execPath`, so it works regardless of
-working directory or install location.
+all sidecars via `process.execPath`, so the directory must be moved or archived
+as one unit. It works regardless of working directory or install location.
 
 ## Supported targets
 
@@ -159,3 +163,9 @@ injected. Check `scripts/build-binary.mjs` was used, not raw `bun build`.
 **Skill discovery returns empty in compiled binary** — sidecar `builtin/`
 directory is missing next to the executable. Verify the archive was extracted
 intact; the binary alone is not enough.
+
+**Worker mode fails in a compiled binary** - verify `semantic-worker.js`,
+`runtime-worker.js`, and `constructed-handler-worker.js` are next to the
+executable. `scripts/build-binary.mjs` fails the build when any source sidecar
+is missing, but copying only the executable after extraction breaks Worker
+resolution at runtime.

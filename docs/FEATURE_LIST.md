@@ -11,7 +11,7 @@
 | Item | Value |
 |---|---|
 | Current released version | `v0.7.63` |
-| Current package version | `@kodax-ai/kodax@0.7.63` (published to npm 2026-07-07; tagged `v0.7.63`) |
+| Current package version | `@kodax-ai/kodax@0.7.66` release candidate (`v0.7.63` remains the latest published/tagged release) |
 | Workspace baseline | `llm / agent / coding / repl` 4 packages |
 | Total tracked features | `42` |
 | InProgress | `5` |
@@ -120,6 +120,9 @@
 > handlers. `v0.7.73` and `v0.7.74` remain feature-free patch slots before the
 > existing `v0.7.75` roadmap. Worker isolation is explicitly not an untrusted
 > code sandbox and does not add a generic arbitrary-code execution service.
+> Release review additionally requires capability/configuration fail-closed
+> behavior in all three Runtime forms and proves that constructed-handler
+> revoke drains active/queued calls without Worker resurrection.
 
 ---
 

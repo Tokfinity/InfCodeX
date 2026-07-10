@@ -352,11 +352,19 @@ await runKodaX({ provider: 'my-openai-compatible' }, '解释这个仓库');
 查询或多个本机客户端共享时，可切到 `daemon`：
 
 ```ts
+import { createKodaXRuntime } from '@kodax-ai/kodax/runtime';
+
 const isolated = await createKodaXRuntime({
   mode: 'embedded',
   isolation: 'worker',
+  requirements: { hardDispose: true },
 });
 ```
+
+inline 形态由调用方私有且开销最低；Worker 形态仍然私有，但可硬销毁；
+daemon 形态使用独立进程并允许多个客户端共享。`runtime.close()` 会关闭
+私有 inline/Worker Runtime，但对 daemon 只断开当前客户端。矛盾的隔离参数
+会直接报错，不会静默降级。Worker 是 V8 故障隔离边界，不是安全沙箱。
 
 ```bash
 kodax daemon start
@@ -402,8 +410,12 @@ node scripts/build-binary.mjs --target=linux-arm64   # 指定平台
 
 ```
 dist/binary/linux-x64/
-├── kodax              # ~60 MB Bun 编译的二进制
-└── builtin/           # 内置 skills sidecar
+├── kodax                          # ~60 MB Bun 编译的二进制
+├── builtin/                       # 内置 skills sidecar
+├── provider-capabilities.json
+├── semantic-worker.js             # Repo intelligence Worker
+├── runtime-worker.js              # SDK Runtime Worker
+└── constructed-handler-worker.js  # Constructed tool Worker
 ```
 
 冒烟验证：`dist/binary/<host>/kodax --version`。

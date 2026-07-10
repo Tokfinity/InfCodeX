@@ -2297,6 +2297,40 @@ events, config, MCP, catalogs, artifacts, or diagnostics.
 | Attach to an already-started daemon only | `connectKodaXRuntime({ profile, homeDir })` | Attach-only by default; fails if no daemon is ready. |
 | Test/CI isolated daemon namespace | pass `homeDir` and `profile` | Keeps state/config/sessions out of the user's home daemon. |
 
+### Public construction contract
+
+Import the Runtime facade from the dedicated subpath:
+
+```ts
+import {
+  createKodaXRuntime,
+  connectKodaXRuntime,
+  type CreateKodaXRuntimeOptions,
+  type KodaXRuntime,
+} from '@kodax-ai/kodax/runtime';
+```
+
+The important creation options are:
+
+| Option | Default | Contract |
+|---|---|---|
+| `mode` | `'embedded'` | Chooses private ownership or a shared daemon process. |
+| `isolation` | `'inline'` | Embedded-only. `'worker'` creates a private Runtime Worker; daemon rejects any explicit isolation because it is already process-isolated. |
+| `worker.resourceLimits` | unset | Optional V8 heap/stack limits; requires `isolation: 'worker'`. |
+| `worker.shutdownTimeoutMs` | `2000` | Grace before the parent terminates the Runtime Worker. |
+| `requirements.hardDispose` | `false` | Rejects inline and daemon forms; prevents an accidental weaker ownership form. |
+| `homeDir` | OS user home | Root for `.kodax` config/state and default sessions. Use a private value in tests. |
+| `profile` | `'default'` | Daemon uniqueness and runtime configuration namespace. |
+| `sessionsDir` | `<homeDir>/.kodax/sessions` | Explicit session storage override. |
+| `daemonStartupTimeoutMs` | `60000` | Total cold-start/concurrent-owner wait budget. |
+| `daemonConnectTimeoutMs` | `2000` | Per-socket connection timeout. |
+| `autoStartDaemon` | conditional | For `createKodaXRuntime({mode:'daemon'})`, true only when no explicit endpoint/transport is supplied. |
+
+KodaX rejects contradictory options. Worker settings without Worker isolation,
+`requirements.hardDispose` on inline/daemon forms, and any explicit isolation
+on daemon mode are errors. Options are never silently ignored to select a
+weaker isolation form.
+
 ### Basic embedded usage
 
 ```ts
@@ -2414,6 +2448,22 @@ await createKodaXRuntime({
 
 Daemon hosts advertise `hardDispose: false`; Worker hosts advertise true.
 
+### Close, abort, and ownership semantics
+
+The same method name deliberately has deployment-specific ownership effects:
+
+| Form | `runtime.close()` | Run abort | After owner crash/termination |
+|---|---|---|---|
+| embedded / inline | Cancels owned runs and permissions and closes private runtime state. It cannot recover a host event loop blocked by arbitrary inline code. | `runs.abort(runId)` settles the Runtime handle and forwards cancellation to coding. | The embedding process owns recovery. |
+| embedded / Worker | Requests shutdown, waits up to `shutdownTimeoutMs`, then always terminates the Worker. | Same Runtime abort API; closing the Runtime is the hard-disposal escalation for the whole isolate. | Pending transport requests reject; create a new Runtime explicitly. |
+| daemon client | Detaches only this client transport. Other REPL/Space/SDK clients and runs remain owned by the daemon. | Aborts only the addressed run. | The client connection rejects; reconnect explicitly after the daemon is healthy. |
+
+`close()` is idempotent. It is not a shared-daemon stop command. Use
+`kodax daemon stop`, `kodax daemon restart`, or an authenticated low-level
+`runtime.shutdown` request for administrative shutdown. KodaX does not
+automatically retry or replay an in-flight run after a Worker/daemon owner dies,
+because provider and tool side effects may already have happened.
+
 ### Daemon ownership and state
 
 Daemon ownership is scoped by `homeDir + profile`.
@@ -2434,6 +2484,30 @@ SDK auto-start launches a detached `kodax daemon serve` process; it never treats
 an in-process socket listener as daemon mode. Closing the SDK client detaches
 without stopping that shared process. Use `kodax daemon stop` or the explicit
 runtime shutdown protocol to stop the owner.
+
+### Daemon startup, conflict, and recovery behavior
+
+REPL, Space, and SDK callers using the same resolved `homeDir + profile` target
+the same daemon. Simultaneous startup is expected: candidates race only for the
+atomic owner lock, then non-owners wait for and attach to the verified winner.
+A client never owns a daemon merely because it caused auto-start.
+
+On abnormal exit, the next start validates the saved PID, endpoint, token, and
+runtime id before removing stale state. KodaX will not kill a process whose
+ownership cannot be proven. Persisted queued/running/waiting-permission runs are
+recovered as `interrupted` with a runtime event; they are not resumed
+automatically. Session and bounded event records remain available for explicit
+reconnect/retry decisions.
+
+Operational guidance:
+
+- use one stable profile for cooperating desktop clients;
+- use a separate `homeDir` or profile for tests, previews, and incompatible
+  configurations;
+- query `kodax daemon status --json` before deciding to restart;
+- inspect `kodax daemon logs --lines 100` when startup times out;
+- custom endpoints and injected transports are attach-only unless the caller
+  implements their owner lifecycle explicitly.
 
 The matching CLI surface is:
 
@@ -2524,6 +2598,14 @@ Use the runtime APIs for cross-boundary behavior:
 Host-bound extensions or callbacks that cannot be represented as owner-loaded
 module/config descriptors require inline embedded mode. There is no fallback to
 executing those objects in the client process.
+
+For daemon mode, extension and MCP ownership follows daemon configuration.
+Configure extensions in the daemon profile and call
+`runtime.catalog.reloadExtensions()` or the matching config service. A CLI
+`--extension <path>` is intentionally rejected in daemon mode because that
+process-local object cannot become part of a durable shared owner. Worker mode
+has the same DTO rule; use owner-readable config/module descriptors or inline
+mode for host-created extension objects.
 
 ### Permissions across clients
 
@@ -2622,20 +2704,27 @@ fields requires a protocol version bump.
 
 ### Current verification status
 
-The v0.7.66 release-candidate validation covers:
+The v0.7.66-v0.7.72 implementation validation covers:
 
-- runtime/daemon/SDK/ACP/REPL gate: 15 files / 141 tests;
-- context/tool-exposure eval gate: 4 files / 6 tests;
-- `npm run build` including bundle and `dist/sdk-runtime.d.ts`;
-- `node scripts/release.mjs --pack-only --skip-build`;
-- external npm consumer install of `kodax-ai-kodax-0.7.66.tgz` and package-external
-  daemon SDK smoke;
-- KodaX Space dev-link and tarball consumer gates on Windows.
+- complete repository test suite on Node 20 and Node 22;
+- package builds, Worker sidecar builds, and self-contained
+  `dist/sdk-runtime.d.ts` generation;
+- runtime/daemon/SDK/ACP/REPL integration tests, including process-distinct SDK
+  auto-start and multi-client sessions/permissions;
+- Worker Runtime identity, service parity, hard close, capability requirements,
+  and contradictory-option rejection;
+- constructed-handler reverse tool RPC, abort bridging, CPU-loop termination,
+  respawn, and revoke/dispose queue drainage;
+- context/tool-exposure eval gate;
+- external fresh npm consumer installation of the `0.7.66` tarball, proving
+  Worker isolation and a distinct daemon PID through the published subpath;
+- Ubuntu Node 22 Unix-domain-socket daemon gate, including two clients sharing
+  one runtime and cross-client permission resolution.
 
-The remaining environment-specific proof is the Ubuntu/Linux Unix-domain-socket
-gate. It is wired into `.github/workflows/ci.yml` as `Runtime daemon Unix socket
-gate`; if CI is unavailable, run the Unix-like host gate from
-`docs/test-guides/FEATURE_255_v0.7.66_TEST_GUIDE.md` on Linux or macOS.
+GitHub Actions run `29085817030` passed on 2026-07-10. The portable manual gates
+remain in `docs/test-guides/FEATURE_255_v0.7.66_TEST_GUIDE.md`,
+`FEATURE_256_v0.7.71_TEST_GUIDE.md`, and
+`FEATURE_257_v0.7.72_TEST_GUIDE.md` for release-machine verification.
 
 ---
 

@@ -73,6 +73,18 @@ Runtime 放入独立 Worker，并在关闭时确定性销毁。
 - [ ] 包含 `dist/runtime-worker.js` 与共享 chunks。
 - [ ] 安装后的 `/runtime` 子路径可启动 Worker Runtime。
 
+### TC-005: 配置契约不静默降级
+
+1. 只传 `requirements: { hardDispose: true }`，不选择 Worker。
+2. 只传 `worker.shutdownTimeoutMs`，不设置 `isolation: 'worker'`。
+3. 在 daemon 模式显式传 `isolation: 'inline'`。
+
+预期：
+
+- [ ] 三种调用都在创建阶段明确失败。
+- [ ] 不会返回 inline Runtime，也不会启动或连接 daemon。
+- [ ] 错误文本指出不满足 `hardDispose` 或 mode/isolation 参数冲突。
+
 ## 边界与风险
 
 - [ ] inline 默认路径没有额外 Worker 冷启动。
@@ -83,6 +95,6 @@ Runtime 放入独立 Worker，并在关闭时确定性销毁。
 
 | 用例数 | 通过 | 失败 | 阻塞 |
 |---:|---:|---:|---:|
-| 4 | - | - | - |
+| 5 | - | - | - |
 
 **测试结论**: [待填写]

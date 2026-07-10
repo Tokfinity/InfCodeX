@@ -1,8 +1,8 @@
 # KodaX High-Level Design
 
-> Last updated: 2026-07-07
+> Last updated: 2026-07-10
 >
-> Current release baseline: `@kodax-ai/kodax@0.7.63`
+> Current release baseline: `@kodax-ai/kodax@0.7.66`
 >
 > This HLD is intentionally current-state only. The old pre-v0.7.43
 > chain/harness model has been removed from this active design document because
@@ -24,14 +24,17 @@ clients/    optional external clients and protocol adapters
 benchmark/  eval harness, datasets, and prompt-change rules
 ```
 
-The published package is `@kodax-ai/kodax`. It exposes the root API plus eight
+The published package is `@kodax-ai/kodax`. It exposes the root API plus nine
 SDK subpaths: `/agent`, `/llm`, `/coding`, `/media`, `/repl`, `/skills`,
-`/mcp`, and `/session`.
+`/mcp`, `/session`, and `/runtime`.
 
 ## 2. Layering
 
 ```text
-CLI / REPL / SDK / binary
+CLI / REPL / Space / IDE / SDK / binary
+          |
+          v
+src/sdk-runtime  - optional stable host facade (inline / Worker / daemon)
           |
           v
 packages/coding  - KodaX coding preset and tool loop
@@ -49,10 +52,46 @@ Layer rules:
 - `agent` can be used without `coding`.
 - `coding` builds the coding agent on top of `agent` and `llm`.
 - `repl` depends on `coding` for the product runtime and owns terminal UX.
+- `src/sdk-runtime.ts` composes public host services over `coding`; it is a root
+  package facade, not a fifth workspace package and not a second agent engine.
 - Inline capabilities such as skills, MCP, tracing, session-lineage, memory,
   and workflow are subtrees, not separate workspace packages.
 
 ## 3. Runtime Shape
+
+KodaX separates the stable Runtime service contract from deployment ownership:
+
+```text
+                         same KodaXRuntime facade
+                                  |
+             +--------------------+--------------------+
+             |                    |                    |
+      embedded / inline    embedded / Worker      local daemon
+      caller JS process      MessagePort IPC      pipe / Unix socket
+      private ownership      private ownership    shared profile owner
+             |                    |                    |
+             +--------------------+--------------------+
+                                  |
+                          packages/coding engine
+```
+
+Inline is the compatibility and lowest-latency default. Worker isolation keeps
+one private Runtime in a disposable V8 Worker and reuses the daemon protocol
+dispatcher/client over `MessagePort`. Daemon mode owns the same embedded Runtime
+in a detached OS process and allows multiple REPL, Space, IDE, or SDK clients to
+share sessions, runs, permissions, events, config, MCP, and catalogs.
+
+Daemon uniqueness is scoped by `homeDir + profile`. An atomic owner lock,
+persisted PID/endpoint/token/runtime identity, and health handshake make
+concurrent starters converge. Client `close()` detaches; explicit daemon stop
+ends the shared owner. Restart marks persisted non-terminal runs interrupted;
+clients reconnect explicitly and KodaX does not pretend to resume an unknown
+in-flight provider/tool operation.
+
+Worker and daemon calls cross a typed DTO boundary. Process-local callbacks,
+class instances, `AbortSignal`, cyclic values, and extension runtime objects do
+not silently cross or execute in the client. Runtime methods bridge abort,
+events, permissions, artifacts, config, and owner-loaded extensions instead.
 
 The main coding path is:
 
@@ -107,6 +146,12 @@ family.
 
 The coding runtime is the only layer that knows about KodaX's coding-product
 tool bundle and user-facing task semantics.
+
+Generated constructed handlers are a narrower coding-layer isolation case.
+Each active handler runs in a persistent Worker, while `ctx.tools.*` calls
+return to the host through reverse RPC and still traverse capability,
+plan-mode, recursion-depth, permission, tool-registry, truncation, and OS
+sandbox checks. Handler Workers are fault boundaries, not security sandboxes.
 
 ## 6. Tool And Control Plane
 
@@ -269,6 +314,9 @@ APIs.
   `package.json`, bundle build, and dts generation all support them.
 - Do not make SDK consumers depend on REPL-only APIs for headless use cases.
 - Do not make provider-specific behavior leak into generic prompt prose.
+- Do not add a generic execution manager when a whole-Runtime ownership form or
+  an existing typed tool/workflow service is the real contract.
+- Do not describe Worker `resourceLimits` as hostile-code containment.
 
 ## 13. Related Documents
 

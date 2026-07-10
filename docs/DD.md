@@ -1,8 +1,8 @@
 # KodaX Detailed Design
 
-> Last updated: 2026-07-07
+> Last updated: 2026-07-10
 >
-> Current release baseline: `@kodax-ai/kodax@0.7.63`
+> Current release baseline: `@kodax-ai/kodax@0.7.66`
 >
 > This DD describes current implementation structure. Retired V1 chain details
 > were deleted from this active document; use git history and historical feature
@@ -19,7 +19,7 @@ reference and does not duplicate every type. It should answer three questions:
 
 ## 2. Published Package And Build Entries
 
-The root package is `@kodax-ai/kodax@0.7.63`.
+The root package is `@kodax-ai/kodax@0.7.66`.
 
 `package.json` exposes:
 
@@ -34,6 +34,7 @@ The root package is `@kodax-ai/kodax@0.7.63`.
 | `./skills` | `dist/sdk-skills.js` | Focused skills subset. |
 | `./mcp` | `dist/sdk-mcp.js` | Focused MCP subset. |
 | `./session` | `dist/sdk-session.js` | Public session-management subset. |
+| `./runtime` | `dist/sdk-runtime.js` | Stable host Runtime facade and daemon protocol/schema exports. |
 
 The build path is:
 
@@ -45,6 +46,11 @@ npm run build
   -> scripts/build-dts.mjs
 ```
 
+The bundle build also emits `dist/semantic-worker.js`,
+`dist/runtime-worker.js`, and `dist/constructed-handler-worker.js`. These are
+explicit npm/binary sidecars; CI builds them before tests so clean checkouts do
+not depend on source-only Worker fallback resolution.
+
 Only `llm`, `agent`, `coding`, and `repl` are workspace package build roots.
 
 ## 3. Main Entry Points
@@ -55,9 +61,49 @@ Only `llm`, `agent`, `coding`, and `repl` are workspace package build roots.
 | Coding SDK | `packages/coding/src/agent.ts` | `runKodaX(options, prompt)` delegates through `Runner.run`. |
 | Coding preset | `packages/coding/src/coding-preset.ts` | Declares the default coding agent and substrate executor. |
 | Continuous SDK | `packages/coding/src/client.ts`, `running-session.ts` | `KodaXClient` and non-blocking session handle. |
+| Runtime SDK | `src/sdk-runtime.ts` | One service facade for inline, Worker-hosted, and daemon ownership. |
+| Runtime daemon | `src/runtime-daemon/` | Versioned protocol/schema, socket transport, owner state/lock, host, client, and process launcher. |
+| Runtime Worker | `src/runtime-worker/` | MessagePort host that reuses the daemon dispatcher/client and supports hard termination. |
 | Generic agent | `packages/agent/src/primitives/runner.ts`, `agent.ts` | Layer-A Runner and Agent primitives. |
 | REPL | `packages/repl/src/index.ts` | `runInkInteractiveMode`, classic mode, config/session exports. |
 | LLM providers | `packages/llm/src/providers/registry.ts` | Built-in aliases and custom provider registration. |
+
+### 3.1 Runtime Host Facade
+
+`createKodaXRuntime()` defaults to `{ mode: 'embedded', isolation: 'inline' }`.
+`isolation: 'worker'` starts `dist/runtime-worker.js`, initializes the normal
+runtime protocol over `MessagePort`, and always calls `Worker.terminate()` after
+the shutdown grace period. `mode: 'daemon'` starts or attaches to a detached
+`kodax daemon serve` owner at the profile-default endpoint. Custom daemon
+endpoints are attach-only.
+
+All forms expose `identity`, `sessions`, `runs`, `events`, `permissions`,
+`workflows`, `config`, `catalog`, `mcp`, `artifacts`, `status`, and
+`diagnostics`. The deployment-specific close contract is intentional:
+
+| Form | `close()` | Sharing | `hardDispose` |
+|---|---|---|---|
+| inline embedded | closes private Runtime state cooperatively | no | false |
+| Worker embedded | requests shutdown, then terminates Worker | no | true |
+| daemon client | closes only that transport | yes | false |
+
+`requirements.hardDispose` is checked for all three forms. Worker-only options
+without `isolation: 'worker'`, or any explicit embedded isolation combined with
+daemon mode, are rejected rather than ignored.
+
+The Worker and daemon facades reuse `runtime-daemon/server.ts` and
+`runtime-daemon/client.ts`; there is no duplicate service implementation.
+Protocol methods are schema-validated, run results preserve serialized errors,
+and pending event notifications are bounded while a remote subscription id is
+being established. Non-terminal persisted runs become `interrupted` after an
+owner restart. Reconnection is explicit; automatic replay of an unknown
+in-flight operation is forbidden.
+
+`runs.start({ options })` is transport-safe data in Worker/daemon forms. The
+client rejects functions, symbols, bigint, cycles, non-finite numbers, and
+class instances. CLI integration additionally rejects known process-local host
+bindings rather than deleting them. Host-specific callbacks/extensions must be
+configured in the Runtime owner or use inline mode.
 
 ## 4. Coding Run Sequence
 
@@ -355,6 +401,19 @@ Design constraints:
 - user approval remains required for irreversible or high-risk changes;
 - generated capabilities should not bypass normal tool permissions.
 
+Activated JavaScript handlers are materialized as immutable `.mjs` files and
+loaded into a persistent per-handler Worker. Calls for one handler are FIFO.
+`ctx.tools.*` is reverse RPC: the parent creates `CtxProxy` from the live tool
+context and calls `executeTool`, preserving capability, live plan-mode,
+constructed-depth, permission, and tool sandbox behavior. The Worker receives
+only cloneable informational context plus a bridged `AbortSignal`; host
+callbacks and mutable services remain in the parent.
+
+Timeout awaits `Worker.terminate()` before rejecting. Revoke/dispose marks the
+handler entry dead before terminating it, so active, queued, and future calls
+cannot recreate an untracked Worker. Direct Node imports inside generated code
+remain possible at runtime, so admission checks and approval still matter.
+
 ## 16. Observability And Eval
 
 Behavior-affecting prompt changes must follow
@@ -375,6 +434,9 @@ Do not introduce:
 - SDK exports not backed by `package.json`, bundle entries, and dts output;
 - new workspace packages for code that is only used by one package;
 - REPL-only state as a dependency of headless SDK operation.
+- ignored Runtime isolation/capability options that silently select a weaker
+  ownership form;
+- Worker or daemon boundaries described as a security sandbox.
 
 ## 18. Related Documents
 

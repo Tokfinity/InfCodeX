@@ -204,8 +204,11 @@ export interface RuntimeClientCapabilities {
 }
 
 export interface CreateKodaXRuntimeOptions {
+  /** Runtime ownership form. Defaults to a caller-owned embedded Runtime. */
   readonly mode?: KodaXRuntimeMode;
+  /** Embedded-only execution location. Daemon mode already uses process isolation. */
   readonly isolation?: 'inline' | 'worker';
+  /** Requires `isolation: 'worker'`; rejected instead of being silently ignored. */
   readonly worker?: RuntimeWorkerOptions;
   readonly homeDir?: string;
   readonly profile?: string;
@@ -245,6 +248,7 @@ export interface ConnectKodaXRuntimeOptions {
 }
 
 export interface RuntimeCapabilityRequirements {
+  /** Reject inline and shared daemon hosts; only a Worker-hosted Runtime satisfies this. */
   readonly hardDispose?: boolean;
 }
 
@@ -271,6 +275,10 @@ export interface KodaXRuntime {
   readonly artifacts: RuntimeArtifactService;
   readonly status: RuntimeStatusService;
   readonly diagnostics: RuntimeDiagnosticsService;
+  /**
+   * Release this facade. Inline closes its private Runtime, Worker mode shuts
+   * down and terminates its Worker, and daemon mode only detaches this client.
+   */
   close(): Promise<void>;
 }
 
@@ -932,9 +940,19 @@ const RUNTIME_ARTIFACT_KINDS: ReadonlySet<string> = new Set(['image', 'file', 'v
 export async function createKodaXRuntime(
   options: CreateKodaXRuntimeOptions = {},
 ): Promise<KodaXRuntime> {
+  if (
+    options.isolation !== undefined
+    && options.isolation !== 'inline'
+    && options.isolation !== 'worker'
+  ) {
+    throw new Error(`Unsupported KodaX Runtime isolation: ${String(options.isolation)}`);
+  }
   if (options.mode === 'daemon') {
-    if (options.isolation === 'worker') {
-      throw new Error("Daemon mode already uses process isolation and cannot use isolation: 'worker'.");
+    if (options.isolation !== undefined) {
+      throw new Error('Daemon mode already uses process isolation and does not accept an isolation option.');
+    }
+    if (options.worker !== undefined) {
+      throw new Error("Runtime Worker options require isolation: 'worker'.");
     }
     return connectKodaXRuntime({
       profile: options.profile,
@@ -960,9 +978,13 @@ export async function createKodaXRuntime(
   if (options.mode !== undefined && options.mode !== 'embedded') {
     throw new Error(`Unsupported KodaX runtime mode: ${String(options.mode)}`);
   }
+  if (options.worker !== undefined && options.isolation !== 'worker') {
+    throw new Error("Runtime Worker options require isolation: 'worker'.");
+  }
   if (options.isolation === 'worker') {
     return createWorkerHostedKodaXRuntime(options);
   }
+  assertRuntimeCapabilities({ hardDispose: false }, options.requirements);
 
   const identity: RuntimeIdentity = {
     runtimeId: `rt_${randomUUID().replace(/-/g, '').slice(0, 12)}`,
@@ -1122,7 +1144,7 @@ function assertRuntimeCapabilities(
   if (!requirements?.hardDispose) return;
   const capabilities = requireRuntimeRecord(value);
   if (capabilities.hardDispose === true) return;
-  throw new Error('Connected Runtime does not support the required hardDispose capability.');
+  throw new Error('Runtime does not support the required hardDispose capability.');
 }
 
 async function settleWithin(promise: Promise<unknown>, timeoutMs: number): Promise<void> {

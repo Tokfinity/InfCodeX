@@ -304,11 +304,20 @@ or a local daemon shared by REPL, Space, IDE adapters, and custom SDK clients.
 All three expose the same `KodaXRuntime` services.
 
 ```ts
+import { createKodaXRuntime } from '@kodax-ai/kodax/runtime';
+
 const isolated = await createKodaXRuntime({
   mode: 'embedded',
   isolation: 'worker',
+  requirements: { hardDispose: true },
 });
 ```
+
+Inline is private and lowest-overhead; Worker is private and hard-disposable;
+daemon is process-isolated and shared. `runtime.close()` closes private
+inline/Worker ownership, but only detaches one daemon client. Contradictory
+isolation options fail instead of silently selecting a weaker mode. Worker
+isolation is a V8 fault boundary, not a security sandbox.
 
 ```bash
 kodax daemon start
@@ -534,8 +543,12 @@ Output lives under `dist/binary/<target>/`:
 
 ```
 dist/binary/linux-x64/
-├── kodax              # ~60 MB Bun-compiled executable
-└── builtin/           # Sidecar built-in skills
+├── kodax                          # ~60 MB Bun-compiled executable
+├── builtin/                       # Sidecar built-in skills
+├── provider-capabilities.json
+├── semantic-worker.js             # Repo-intelligence Worker
+├── runtime-worker.js              # SDK Runtime Worker
+└── constructed-handler-worker.js  # Constructed-tool Worker
 ```
 
 Smoke-test: `dist/binary/<host>/kodax --version`.

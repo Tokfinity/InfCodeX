@@ -96,6 +96,51 @@ describe('createKodaXRuntime', () => {
     })).rejects.toThrow(/does not support.*hardDispose/i);
   });
 
+  it('fails closed when inline embedded Runtime cannot satisfy hard disposal', async () => {
+    const { createKodaXRuntime } = await import('./sdk-runtime.js');
+
+    await expect(createKodaXRuntime({
+      mode: 'embedded',
+      requirements: { hardDispose: true },
+    })).rejects.toThrow(/does not support.*hardDispose/i);
+  });
+
+  it('rejects Worker-only options unless Worker isolation is selected', async () => {
+    const { createKodaXRuntime } = await import('./sdk-runtime.js');
+
+    await expect(createKodaXRuntime({
+      mode: 'embedded',
+      worker: { shutdownTimeoutMs: 100 },
+    })).rejects.toThrow(/worker options require.*isolation.*worker/i);
+  });
+
+  it('rejects an explicit embedded isolation mode for daemon ownership', async () => {
+    const { createKodaXRuntime } = await import('./sdk-runtime.js');
+    const transport: RuntimeDaemonClientTransport = {
+      async request() {
+        return {
+          identity: {
+            runtimeId: 'unused-daemon-runtime',
+            mode: 'daemon',
+            profile: 'default',
+            startedAt: '2026-07-10T00:00:00.000Z',
+            version: '0.7.66',
+          },
+          capabilities: { hardDispose: false },
+        };
+      },
+      subscribe() {
+        return { close() {} };
+      },
+    };
+
+    await expect(createKodaXRuntime({
+      mode: 'daemon',
+      isolation: 'inline',
+      daemonTransport: transport,
+    })).rejects.toThrow(/daemon mode.*isolation/i);
+  });
+
   it('exports daemon protocol schema artifacts from the runtime SDK entrypoint', async () => {
     const runtimeSdk = await import('@kodax-ai/kodax/runtime');
 

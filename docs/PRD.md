@@ -1,8 +1,8 @@
 # KodaX Product Requirements
 
-> Last updated: 2026-07-07
+> Last updated: 2026-07-10
 >
-> Current release baseline: `@kodax-ai/kodax@0.7.63`
+> Current release baseline: `@kodax-ai/kodax@0.7.66`
 >
 > This document describes the current product. Historical pre-v0.7.43
 > chain/harness designs have been removed from this current PRD because they no
@@ -53,7 +53,9 @@ server product around it.
 | REPL | `kodax` | Streaming terminal UI, sessions, slash commands, permissions, skills, MCP, child task visibility. |
 | One-shot CLI | `kodax "task"` | Non-interactive task execution with the same coding runtime and provider configuration. |
 | SDK root | `@kodax-ai/kodax` | `runKodaX`, `KodaXClient`, events, session storage helpers. |
-| SDK subpaths | `/agent`, `/llm`, `/coding`, `/media`, `/repl`, `/skills`, `/mcp`, `/session` | Smaller import surfaces for embedders. |
+| Runtime SDK | `@kodax-ai/kodax/runtime` | Stable sessions/runs/events/permissions/workflows/config/catalog/MCP/artifact/diagnostic facade in inline, Worker, or daemon form. |
+| Daemon operations | `kodax daemon start/status/logs/stop/restart` | One local owner per `homeDir + profile`, shared by REPL, Space, IDE, and SDK clients. |
+| SDK subpaths | `/agent`, `/llm`, `/coding`, `/media`, `/repl`, `/skills`, `/mcp`, `/session`, `/runtime` | Smaller import surfaces for embedders. |
 | Binary release | `bun --compile` output | Runs without Node.js on the target machine. |
 
 ## 5. Current Execution Model
@@ -77,6 +79,29 @@ Child work is handled by explicit tools and runtime registries:
 The main Worker remains responsible for final user-facing synthesis.
 
 ## 6. Required Capabilities
+
+### Runtime Host API
+
+SDK and product hosts must use one `KodaXRuntime` service contract without
+forking a second coding engine. The supported ownership forms are:
+
+- inline embedded for lowest overhead and process-local integrations;
+- Worker-hosted embedded for private state and deterministic V8 termination;
+- local daemon for durable multi-client sharing across REPL, Space, IDE, and
+  SDK processes.
+
+Runs must serialize within one session and may execute concurrently across
+sessions. Pending permissions and runtime events belong to the Runtime owner,
+not to one UI. Daemon ownership is unique per `homeDir + profile`; concurrent
+starters must converge on the verified owner rather than start competing
+servers. Process-local callbacks and service objects must fail closed at
+Worker/daemon DTO boundaries. `close()` must terminate private inline/Worker
+ownership but only detach a daemon client.
+
+Worker resource limits and termination are fault-isolation features, not an
+untrusted-code sandbox. A caller that requires deterministic V8 disposal must
+be able to request `hardDispose` and receive an error from inline or daemon
+forms rather than a silent downgrade.
 
 ### Providers
 
@@ -180,11 +205,17 @@ explicit user confirmation for trusted-local workflow scripts.
   process.
 - Treating generated workflow scripts as trusted local code; generated
   workflows must stay on the capability runner path.
+- Treating Worker threads as a security sandbox for malicious code.
+- Exposing arbitrary process-local execution objects through the daemon
+  protocol instead of typed Runtime services and DTOs.
 
 ## 8. Success Criteria
 
 - Current docs describe the code that exists today.
 - A new SDK consumer can choose the correct import path without reading source.
+- A Runtime SDK consumer can choose inline, Worker, or daemon ownership and
+  predict close, crash, restart, serialization, and permission behavior from
+  the public guide.
 - A CLI/REPL user can understand providers, sessions, permissions, skills, MCP,
   and child tasks without learning retired V1 terminology.
 - Product changes preserve workspace package independence:

@@ -25,8 +25,9 @@
  *     keeps the parent agent loop alive and reportable.
  *   - Direct `ctx.tools` enumeration / introspection is gated; the
  *     proxied `tools` object only exposes whitelisted names.
- *   - All other `ctx.<x>` properties (executionCwd, abortSignal, etc.)
- *     pass through unchanged — they are framework infra, not tool calls.
+ *   - The host proxy retains the live execution context for reverse tool RPC.
+ *     The handler Worker receives only cloneable informational fields plus a
+ *     bridged AbortSignal; host callbacks and mutable services stay here.
  *
  * Anti-tampering:
  *   - Returned proxy is `Object.freeze`d at the top level so handlers

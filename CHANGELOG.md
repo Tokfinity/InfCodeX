@@ -70,6 +70,13 @@ All notable changes to this project will be documented in this file.
 - **Transport options fail closed.** Runtime run DTOs reject functions, cycles,
   class instances, and other process-local values before Worker/daemon
   transport instead of silently losing them during JSON serialization.
+- **Runtime isolation requirements fail closed in every mode.** Inline Runtime
+  creation now rejects `requirements.hardDispose`; Worker-only options without
+  Worker isolation and explicit isolation options on daemon mode are rejected
+  instead of being ignored.
+- **Constructed handler revoke drains queued work.** Disposing a handler marks
+  its entry dead before Worker termination, so active, queued, and stale-closure
+  calls cannot recreate an untracked Worker after revoke.
 
 ## [0.7.63] - 2026-07-07
 

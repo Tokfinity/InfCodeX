@@ -66,6 +66,18 @@
 - [ ] 对应 Worker 被销毁或不再保持进程存活。
 - [ ] 包含 `dist/constructed-handler-worker.js`。
 
+### TC-005: revoke 时清空 active/queued 调用
+
+1. 同一 handler 发起一个长调用和一个排队调用。
+2. 在第一个调用尚未完成时 revoke 对应 name/version。
+3. 保留旧 handler 引用并再次调用。
+
+预期：
+
+- [ ] active、queued 和旧引用的新调用都以 disposed 错误结束。
+- [ ] revoke 后不会重新创建未被 registry 跟踪的 Worker。
+- [ ] Node 进程可以正常退出。
+
 ## 安全边界
 
 - [ ] 文档/UI 不把 Worker 称为安全 sandbox。
@@ -76,6 +88,6 @@
 
 | 用例数 | 通过 | 失败 | 阻塞 |
 |---:|---:|---:|---:|
-| 4 | - | - | - |
+| 5 | - | - | - |
 
 **测试结论**: [待填写]

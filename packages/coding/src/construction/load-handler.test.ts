@@ -4,6 +4,7 @@ import path from 'path';
 import fs from 'fs/promises';
 
 import {
+  disposeLoadedHandler,
   loadHandler,
   shutdownConstructedHandlerWorkersForTest,
 } from './load-handler.js';
@@ -176,6 +177,29 @@ describe('loadHandler', () => {
     controller.abort();
 
     await expect(result).resolves.toBe('aborted');
+  });
+
+  it('does not restart queued invocations after the handler is disposed', async () => {
+    const scope = { name: 'dispose-queued', version: '1.0.0', cwd: tmpRoot };
+    const handler = await loadHandler(
+      scope,
+      jsSource(`export async function handler(input) {
+        if (input.wait) await new Promise((resolve) => setTimeout(resolve, 5_000));
+        return 'should-not-run';
+      }`),
+      { tools: [] },
+    );
+    const first = handler({ wait: true }, { backups: new Map() });
+    const queued = handler({}, { backups: new Map() });
+    const firstExpectation = expect(first).rejects.toThrow(/disposed/i);
+    const queuedExpectation = expect(queued).rejects.toThrow(/disposed/i);
+
+    await new Promise<void>((resolve) => setTimeout(resolve, 20));
+    await disposeLoadedHandler(scope);
+
+    await firstExpectation;
+    await queuedExpectation;
+    await expect(handler({}, { backups: new Map() })).rejects.toThrow(/disposed/i);
   });
 
   it('integrates CtxProxy: handler can call whitelisted ctx.tools.<name> via executeTool', async () => {

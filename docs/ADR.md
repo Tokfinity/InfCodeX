@@ -3625,6 +3625,11 @@ untrusted-code sandbox that Node Workers do not provide.
    accepting silent fallback.
 7. Treat Worker resource limits/termination as fault isolation, not a security
    sandbox. Hostile code requires a future process/container/OS boundary.
+8. Validate isolation requirements in every creation path. Worker-only options,
+   inline `hardDispose` requirements, and explicit isolation on daemon mode are
+   errors rather than ignored hints.
+9. Mark constructed-handler ownership disposed before terminating its Worker so
+   queued calls and stale closures cannot resurrect an untracked isolate.
 
 **Consequences**: Existing inline users pay no IPC or startup cost. Worker users
 pay one cold start per private Runtime and gain deterministic teardown. Daemon
@@ -3637,3 +3642,5 @@ MessagePort service round trip, hard-dispose negotiation, CPU-loop termination
 and respawn, reverse tool RPC capability denial, bundle and pack smoke. No model
 quality eval is required because Runtime isolation does not alter model context;
 the construction review prompt receives only a factual boundary correction.
+GitHub Actions run `29085817030` proves Node 20/22 builds and tests plus the
+Node 22 Ubuntu Unix-domain-socket daemon gate.

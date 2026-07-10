@@ -36,6 +36,7 @@ interface HandlerWorkerEntry {
   readonly timeoutMs: number;
   readonly ctxProxyOptions?: CreateCtxProxyOptions;
   state?: HandlerWorkerState;
+  disposed: boolean;
   tail: Promise<void>;
 }
 
@@ -53,6 +54,7 @@ export async function prepareConstructedHandlerWorker(input: {
   await disposeConstructedHandlerWorker(input.key);
   const entry: HandlerWorkerEntry = {
     ...input,
+    disposed: false,
     tail: Promise.resolve(),
   };
   entries.set(input.key, entry);
@@ -69,6 +71,7 @@ export async function disposeConstructedHandlerWorker(key: string): Promise<void
   const entry = entries.get(key);
   if (!entry) return;
   entries.delete(key);
+  entry.disposed = true;
   const state = entry.state;
   entry.state = undefined;
   if (!state) return;
@@ -95,8 +98,10 @@ async function invoke(
   input: Record<string, unknown>,
   ctx: unknown,
 ): Promise<string> {
+  assertHandlerWorkerEntryActive(entry);
   const state = getWorkerState(entry);
   await state.ready;
+  assertHandlerWorkerEntryActive(entry);
   state.worker.ref();
   const proxy = createCtxProxy(ctx, entry.capabilities, entry.ctxProxyOptions) as {
     readonly tools: Record<string, (input?: unknown) => Promise<string>>;
@@ -142,6 +147,7 @@ async function invoke(
 }
 
 function getWorkerState(entry: HandlerWorkerEntry): HandlerWorkerState {
+  assertHandlerWorkerEntryActive(entry);
   if (entry.state) return entry.state;
   const workerUrl = resolveHandlerWorkerUrl();
   const worker = new Worker(workerUrl, {
@@ -183,6 +189,11 @@ function getWorkerState(entry: HandlerWorkerEntry): HandlerWorkerState {
     failWorker(entry, state, error);
   });
   return state;
+}
+
+function assertHandlerWorkerEntryActive(entry: HandlerWorkerEntry): void {
+  if (!entry.disposed) return;
+  throw new Error(`Constructed handler '${entry.label}' was disposed.`);
 }
 
 async function dispatchToolCall(
