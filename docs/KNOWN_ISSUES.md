@@ -14,6 +14,7 @@ _Last Updated: 2026-07-10_
 
 | ID | Priority | Status | Title | Introduced | Fixed | Created | Resolved |
 |----|----------|--------|-------|------------|-------|---------|----------|
+| 148 | High | Resolved | FEATURE_258 外部任务在持久化失败、配置热更新和并发回调下可能失联或状态回退 | v0.7.67 RC | v0.7.67 | 2026-07-10 | 2026-07-10 |
 | 088 | High | Resolved | 消息列表视口布局不稳定 - 底部区域跳动/最后一行被裁剪 | v0.5.29 | v0.5.39 | 2026-03-16 | 2026-03-16 |
 | 087 | Medium | Resolved | 自动补全触发冲突 - @文件路径中/错误触发命令补全 | v0.5.33 | v0.5.33 | 2026-03-13 | 2026-03-13 |
 | 086 | High | Resolved | 自动补全竞态条件导致快速输入时显示过期补全 | v0.5.32 | v0.5.32 | 2026-03-12 | 2026-03-12 |
@@ -97,6 +98,50 @@ _Last Updated: 2026-07-10_
 
 ## Issue Details
 <!-- Full details for each issue - REQUIRED for all issues -->
+
+### 148: FEATURE_258 外部任务在持久化失败、配置热更新和并发回调下可能失联或状态回退
+
+- **Priority**: High
+- **Status**: **Resolved** (v0.7.67)
+- **Introduced**: v0.7.67 release candidate
+- **Created**: 2026-07-10
+- **Resolved**: 2026-07-10
+- **Fixed**: v0.7.67
+
+#### Original Problem
+
+FEATURE_258 review 发现四个相互关联的生命周期缺陷：远端 Start 已成功后若本地事件账本写入失败，任务会丢失远端句柄并错误落为 `failed`；registration 从旧 revision 更新后，在途任务无法继续 input/cancel/reconcile；慢 continuation 与终态事件并发时，旧快照可把 `completed` 覆盖回 `working`；Workflow external 分支忽略 `wait(..., { timeoutMs })`。
+
+#### Context
+
+- Components: external Agent executor plane、统一 task ledger、Workflow external adapter。
+- Impact: 远端任务可能成为无法取消或恢复的孤儿任务，终态可能回退，Workflow 可能无限等待。
+- Reproduction: fault-injection event store、registration 热更新、受控 continuation/event 并发，以及 input-required external Workflow timeout。
+
+#### Root Cause
+
+远端 Start 与其后的本地持久化共用同一个失败分支；后续控制根据当前 registration 而非任务启动时绑定的 executor 路由；异步调用完成后直接写回调用前捕获的快照；Workflow external wait 提前返回，绕过了 timeout 归一化和透传。
+
+#### Resolution
+
+- 远端引用返回后进入独立 accepted 阶段，后续账本异常保留引用并记为 `unknown`。
+- 活动任务保存不可变 executor binding，registration 更新或删除不再重定向在途任务。
+- 所有事件和远端 continuation/cancel/reconcile 回写通过任务级 mutation queue 读取最新快照，终态不再回退。
+- Workflow external wait 校验并透传 `timeoutMs`。
+
+#### Files Changed
+
+- `packages/agent/src/external-agents/executor-plane.ts`
+- `packages/agent/src/external-agents/executor-plane.test.ts`
+- `packages/coding/src/workflows/agent-adapter.ts`
+- `packages/coding/src/workflows/external-agent-adapter.test.ts`
+
+#### Tests Added
+
+- accepted Start 后账本失败仍保留远端句柄。
+- registration revision 更新后旧任务仍可 continuation。
+- completion 与 continuation 并发时终态保持单调。
+- Workflow external wait 正确执行超时和参数校验。
 
 ### 147: GitHub Release 二进制归档遗漏 Runtime 与工具 Worker sidecar
 
@@ -4971,7 +5016,7 @@ Commit `ef085fc` 把 V1 精简到 V2 时没区分"信息载体"和"脚手架"，
 ---
 
 ## Summary
-- Total: 74 (24 Open, 50 Resolved, 0 Partially Resolved, 0 Won't Fix)
+- Total: 75 (24 Open, 51 Resolved, 0 Partially Resolved, 0 Won't Fix)
 - Highest Priority Open: 091 - 缺少一等公民 MCP / Web Search / Code Search 工具体系 (High)
 - Historical archived issues are maintained in ISSUES_ARCHIVED.md
 

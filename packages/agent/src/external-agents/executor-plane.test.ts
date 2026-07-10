@@ -11,6 +11,7 @@ import type {
   AgentExecutor,
   AgentExecutorFactory,
   AgentExecutorFactoryContext,
+  AgentExecutorPlaneStore,
   AgentExecutorTaskReference,
   AgentExecutorTaskSnapshot,
   AgentTaskStartInput,
@@ -164,8 +165,99 @@ describe('FEATURE_258 AgentExecutorPlane', () => {
 
     await plane.registrations.upsert(registration({ configurationRevision: 'rev-2' }));
     expect((await plane.tasks.get('agent-task-1')).registration.configurationRevision).toBe('rev-1');
+    await expect(plane.tasks.sendInput('agent-task-1', { content: 'continue' }))
+      .resolves.toMatchObject({ state: 'working' });
+    expect(executor.sent).toEqual(['continue']);
     expect(executor.starts).toHaveLength(1);
     expect(executor.starts[0]?.idempotencyKey).toBe('idem-1');
+  });
+
+  it('preserves the accepted remote handle when ledger persistence fails after start', async () => {
+    const executor = new FakeExecutor();
+    const memoryStore = createMemoryAgentExecutorPlaneStore();
+    let appendCalls = 0;
+    const store: AgentExecutorPlaneStore = {
+      ...memoryStore,
+      async appendEvent(event) {
+        appendCalls += 1;
+        if (appendCalls === 2) throw new Error('event store unavailable');
+        await memoryStore.appendEvent(event);
+      },
+    };
+    const plane = await createAgentExecutorPlane({
+      factories: [factory(executor)],
+      policy: allowAllPolicy(),
+      store,
+    });
+    await plane.registrations.upsert(registration({ credentialRef: undefined }));
+
+    const started = await plane.tasks.start(taskInput({ taskId: 'accepted-ledger-failure' }));
+
+    expect(started).toMatchObject({
+      state: 'unknown',
+      remoteTaskId: 'remote-1',
+      executorReference: { remoteTaskId: 'remote-1' },
+    });
+    expect(executor.starts).toHaveLength(1);
+    expect((await store.loadTasks()).find((task) => task.taskId === started.taskId))
+      .toMatchObject({
+        state: 'unknown',
+        remoteTaskId: 'remote-1',
+        executorReference: { remoteTaskId: 'remote-1' },
+      });
+  });
+
+  it('does not let a stale continuation overwrite a concurrently completed task', async () => {
+    let releaseEvent: (() => void) | undefined;
+    let enterSend: (() => void) | undefined;
+    let releaseSend: (() => void) | undefined;
+    const eventReleased = new Promise<void>((resolve) => { releaseEvent = resolve; });
+    const sendEntered = new Promise<void>((resolve) => { enterSend = resolve; });
+    const sendReleased = new Promise<void>((resolve) => { releaseSend = resolve; });
+    const executor: AgentExecutor = {
+      async start(input) {
+        return { idempotencyKey: input.idempotencyKey!, remoteTaskId: 'remote-race' };
+      },
+      async *events() {
+        await eventReleased;
+        yield { state: 'completed', output: 'done' };
+      },
+      async get() {
+        return { state: 'input-required' };
+      },
+      async sendInput() {
+        enterSend?.();
+        await sendReleased;
+      },
+      async cancel() {
+        return { state: 'canceled' };
+      },
+      async reconcile() {
+        return { state: 'working' };
+      },
+      async dispose() {},
+    };
+    const plane = await createAgentExecutorPlane({
+      factories: [{
+        executorId: 'fake-http',
+        protocol: 'http',
+        async create() { return executor; },
+      }],
+      policy: allowAllPolicy(),
+      store: createMemoryAgentExecutorPlaneStore(),
+    });
+    await plane.registrations.upsert(registration({ credentialRef: undefined }));
+    const started = await plane.tasks.start(taskInput({ taskId: 'continuation-race' }));
+
+    const sending = plane.tasks.sendInput(started.taskId, { content: 'continue' });
+    await sendEntered;
+    const completed = plane.tasks.wait(started.taskId, 1_000);
+    releaseEvent?.();
+    await expect(completed).resolves.toMatchObject({ state: 'completed', output: 'done' });
+    releaseSend?.();
+    await expect(sending).resolves.toMatchObject({ state: 'completed', output: 'done' });
+    await expect(plane.tasks.get(started.taskId))
+      .resolves.toMatchObject({ state: 'completed', output: 'done' });
   });
 
   it('persists the accepted remote handle before refreshing remote state', async () => {

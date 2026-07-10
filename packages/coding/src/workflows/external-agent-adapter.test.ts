@@ -196,4 +196,30 @@ describe('FEATURE_258 Workflow external target', () => {
       target: { agentId: 'external:workflow' },
     })).rejects.toThrow(/target.*subagentType/i);
   });
+
+  it('applies Workflow wait timeouts to external tasks', async () => {
+    const ctx = await context();
+    const backend = createCodingWorkflowBackend({
+      ctx,
+      childOptions: {
+        maxIterationsPerChild: 10,
+        parentRole: 'worker',
+        parentHarness: 'tool-dispatch',
+        parentOptions: {},
+      },
+      generateId: () => 'workflow-external-timeout',
+    });
+    const handle = await backend.spawn({
+      name: 'timeout',
+      prompt: 'Wait for input',
+      target: { agentId: 'external:workflow-input' },
+    });
+
+    await expect(backend.wait(handle.taskId, { timeoutMs: 10 }))
+      .rejects.toThrow(/did not finish within 10ms/i);
+    await expect(backend.wait(handle.taskId, { timeoutMs: 0 }))
+      .rejects.toThrow(/workflow wait timeoutMs must be a positive number/i);
+    await backend.stop(handle.taskId, 'test cleanup');
+  });
+
 });

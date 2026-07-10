@@ -826,7 +826,11 @@ export function createCodingWorkflowBackend(deps: CodingWorkflowBackendDeps): Wo
     if (external) {
       const binding = ctx.agentExecutorPlane;
       if (!binding) throw new Error('Workflow external-agent binding was removed.');
-      return externalWorkflowResult(await binding.plane.tasks.wait(taskId), external.name);
+      const timeoutMs = normalizeWaitTimeoutMs(opts);
+      return externalWorkflowResult(
+        await binding.plane.tasks.wait(taskId, timeoutMs),
+        external.name,
+      );
     }
     const entry = tasks.get(taskId);
     if (!entry) throw new Error(`unknown workflow task: ${taskId}`);

@@ -13,6 +13,7 @@ import type {
   AgentExecutorFactoryContext,
   AgentExecutorPlane,
   AgentExecutorPlaneStore,
+  AgentExecutorTaskReference,
   AgentExecutorTaskSnapshot,
   AgentPreflightInput,
   AgentPreflightResult,
@@ -281,8 +282,10 @@ class AgentExecutorPlaneRuntime {
   readonly #tasks = new Map<string, AgentTaskSnapshot>();
   readonly #eventSequences = new Map<string, number>();
   readonly #executors = new Map<string, AgentExecutor>();
+  readonly #taskExecutors = new Map<string, AgentExecutor>();
   readonly #waiters = new Map<string, Set<(task: AgentTaskSnapshot) => void>>();
   readonly #startTails = new Map<string, Promise<void>>();
+  readonly #taskMutationTails = new Map<string, Promise<void>>();
 
   constructor(private readonly options: PlaneRuntimeOptions) {}
 
@@ -405,6 +408,7 @@ class AgentExecutorPlaneRuntime {
   async close(): Promise<void> {
     const executors = [...this.#executors.values()];
     this.#executors.clear();
+    this.#taskExecutors.clear();
     await Promise.allSettled(executors.map((executor) => executor.dispose()));
   }
 
@@ -514,6 +518,7 @@ class AgentExecutorPlaneRuntime {
     await this.assertExecutorPreflight(executor, enriched);
     const task = this.createSubmittedTask(enriched, registration);
     await this.saveTask(task, 'submitted');
+    this.#taskExecutors.set(taskId, executor);
     return this.invokeExternalStart(task, enriched, executor);
   }
 
@@ -565,15 +570,32 @@ class AgentExecutorPlaneRuntime {
     input: AgentTaskStartInput,
     executor: AgentExecutor,
   ): Promise<AgentTaskSnapshot> {
+    let reference: AgentExecutorTaskReference;
     try {
-      const reference = await executor.start(input);
-      const accepted: AgentTaskSnapshot = {
+      reference = await executor.start(input);
+    } catch (error: unknown) {
+      const state: AgentTaskSnapshot['state'] = error instanceof AgentStartUncertainError
+        ? 'unknown'
+        : 'failed';
+      const message = errorMessage(error);
+      const failed: AgentTaskSnapshot = {
         ...task,
-        state: 'working',
-        executorReference: reference,
-        ...(reference.remoteTaskId ? { remoteTaskId: reference.remoteTaskId } : {}),
+        state,
+        error: message,
         updatedAt: this.nowIso(),
       };
+      await this.saveTask(failed, 'error', { error: message });
+      return clone(failed);
+    }
+
+    const accepted: AgentTaskSnapshot = {
+      ...task,
+      state: 'working',
+      executorReference: reference,
+      ...(reference.remoteTaskId ? { remoteTaskId: reference.remoteTaskId } : {}),
+      updatedAt: this.nowIso(),
+    };
+    try {
       await this.saveTask(accepted, 'state');
       const remote = await executor.get(reference).catch(() => ({ state: 'working' as const }));
       const started = this.applyRemoteSnapshot(accepted, remote);
@@ -581,17 +603,35 @@ class AgentExecutorPlaneRuntime {
       this.startEventPump(started.taskId, executor, reference);
       return clone(started);
     } catch (error: unknown) {
-      const state: AgentTaskSnapshot['state'] = error instanceof AgentStartUncertainError
-        ? 'unknown'
-        : 'failed';
-      const failed: AgentTaskSnapshot = {
-        ...task,
-        state,
-        error: errorMessage(error),
-        updatedAt: this.nowIso(),
+      return this.recoverAcceptedStart(accepted, reference, error);
+    }
+  }
+
+  private async recoverAcceptedStart(
+    accepted: AgentTaskSnapshot,
+    reference: AgentExecutorTaskReference,
+    error: unknown,
+  ): Promise<AgentTaskSnapshot> {
+    const message = errorMessage(error);
+    const latest = this.#tasks.get(accepted.taskId) ?? accepted;
+    const unknown: AgentTaskSnapshot = {
+      ...latest,
+      state: 'unknown',
+      executorReference: reference,
+      ...(reference.remoteTaskId ? { remoteTaskId: reference.remoteTaskId } : {}),
+      error: message,
+      updatedAt: this.nowIso(),
+    };
+    try {
+      await this.saveTask(unknown, 'error', { error: message });
+      return clone(unknown);
+    } catch (persistenceError: unknown) {
+      const volatile = {
+        ...unknown,
+        error: `${message}; unable to persist recovery state: ${errorMessage(persistenceError)}`,
       };
-      await this.saveTask(failed, 'error');
-      return clone(failed);
+      this.#tasks.set(accepted.taskId, clone(volatile));
+      return clone(volatile);
     }
   }
 
@@ -601,14 +641,17 @@ class AgentExecutorPlaneRuntime {
     reference: NonNullable<AgentTaskSnapshot['executorReference']>,
   ): void {
     void this.pumpEvents(taskId, executor, reference).catch(async (error: unknown) => {
-      const current = this.#tasks.get(taskId);
-      if (!current || isTerminal(current.state)) return;
-      await this.saveTask({
-        ...current,
-        state: 'unknown',
-        error: errorMessage(error),
-        updatedAt: this.nowIso(),
-      }, 'error');
+      const message = errorMessage(error);
+      await this.mutateTask(taskId, 'error', (current) => (
+        isTerminal(current.state)
+          ? undefined
+          : {
+              ...current,
+              state: 'unknown',
+              error: message,
+              updatedAt: this.nowIso(),
+            }
+      ), { error: message });
     });
   }
 
@@ -618,10 +661,10 @@ class AgentExecutorPlaneRuntime {
     reference: NonNullable<AgentTaskSnapshot['executorReference']>,
   ): Promise<void> {
     for await (const event of executor.events(reference)) {
-      const current = this.#tasks.get(taskId);
-      if (!current || isTerminal(current.state)) return;
-      const next = this.applyExecutorEvent(current, event);
-      await this.saveTask(next, eventType(event), event);
+      const next = await this.mutateTask(taskId, eventType(event), (current) => (
+        isTerminal(current.state) ? undefined : this.applyExecutorEvent(current, event)
+      ), event);
+      if (isTerminal(next.state)) return;
     }
   }
 
@@ -705,56 +748,73 @@ class AgentExecutorPlaneRuntime {
     if (isTerminal(task.state)) throw new Error(`Agent task is already terminal: ${taskId}`);
     const { executor, reference } = await this.executorRoute(task);
     await executor.sendInput(reference, input);
-    const next = { ...task, state: 'working' as const, updatedAt: this.nowIso() };
-    await this.saveTask(next, 'state');
-    return clone(next);
+    return this.mutateTask(taskId, 'state', (current) => (
+      isTerminal(current.state)
+        ? undefined
+        : { ...current, state: 'working' as const, updatedAt: this.nowIso() }
+    ));
   }
 
   private async cancelTask(taskId: string, reason?: string): Promise<AgentTaskSnapshot> {
     const task = this.requireExternalTask(taskId);
     if (isTerminal(task.state)) return clone(task);
     if (task.registration.capabilities.cancellation === 'unsupported') {
-      const unsupported = { ...task, cancellation: 'unsupported' as const, updatedAt: this.nowIso() };
-      await this.saveTask(unsupported, 'cancellation');
-      return clone(unsupported);
+      return this.mutateTask(taskId, 'cancellation', (current) => (
+        isTerminal(current.state)
+          ? undefined
+          : { ...current, cancellation: 'unsupported' as const, updatedAt: this.nowIso() }
+      ));
     }
-    const requested = { ...task, cancellation: 'requested' as const, updatedAt: this.nowIso() };
-    await this.saveTask(requested, 'cancellation');
+    const requested = await this.mutateTask(taskId, 'cancellation', (current) => (
+      isTerminal(current.state)
+        ? undefined
+        : { ...current, cancellation: 'requested' as const, updatedAt: this.nowIso() }
+    ));
+    if (isTerminal(requested.state)) return requested;
     try {
       const { executor, reference } = await this.executorRoute(requested);
       const remote = await executor.cancel(reference, reason);
       const cancellation: AgentTaskCancellation = remote.state === 'canceled'
         ? 'confirmed'
         : remote.state === 'unknown' ? 'unknown' : 'requested';
-      const next = { ...this.applyRemoteSnapshot(requested, remote), cancellation };
-      await this.saveTask(next, 'cancellation');
-      return clone(next);
+      return this.mutateTask(taskId, 'cancellation', (current) => (
+        isTerminal(current.state)
+          ? undefined
+          : { ...this.applyRemoteSnapshot(current, remote), cancellation }
+      ));
     } catch (error: unknown) {
-      const failed = {
-        ...requested,
-        cancellation: error instanceof AgentCancellationUncertainError
-          ? 'unknown' as const
-          : 'failed' as const,
-        cancellationError: errorMessage(error),
-        updatedAt: this.nowIso(),
-      };
-      await this.saveTask(failed, 'cancellation');
-      return clone(failed);
+      const message = errorMessage(error);
+      return this.mutateTask(taskId, 'cancellation', (current) => (
+        isTerminal(current.state)
+          ? undefined
+          : {
+              ...current,
+              cancellation: error instanceof AgentCancellationUncertainError
+                ? 'unknown' as const
+                : 'failed' as const,
+              cancellationError: message,
+              updatedAt: this.nowIso(),
+            }
+      ));
     }
   }
 
   private async reconcileTask(taskId: string): Promise<AgentTaskSnapshot> {
     const task = this.requireExternalTask(taskId);
+    if (isTerminal(task.state)) return clone(task);
     try {
       const { executor, reference } = await this.executorRoute(task);
       const remote = await executor.reconcile(reference);
-      const next = this.applyRemoteSnapshot(task, remote);
-      await this.saveTask(next, 'state');
-      return clone(next);
+      return this.mutateTask(taskId, 'state', (current) => (
+        isTerminal(current.state) ? undefined : this.applyRemoteSnapshot(current, remote)
+      ));
     } catch (error: unknown) {
-      const unknown = { ...task, state: 'unknown' as const, error: errorMessage(error), updatedAt: this.nowIso() };
-      await this.saveTask(unknown, 'error');
-      return clone(unknown);
+      const message = errorMessage(error);
+      return this.mutateTask(taskId, 'error', (current) => (
+        isTerminal(current.state)
+          ? undefined
+          : { ...current, state: 'unknown' as const, error: message, updatedAt: this.nowIso() }
+      ), { error: message });
     }
   }
 
@@ -804,15 +864,44 @@ class AgentExecutorPlaneRuntime {
   ): Promise<AgentTaskSnapshot> {
     const task = this.requireTask(taskId);
     if (task.route !== 'local') throw new Error(`Agent task is not local: ${taskId}`);
-    const next: AgentTaskSnapshot = {
-      ...task,
-      ...update,
-      ...(update.error !== undefined ? { error: sanitizeText(update.error) } : {}),
-      cancellation: update.state === 'canceled' ? 'confirmed' : task.cancellation,
-      updatedAt: this.nowIso(),
-    };
-    await this.saveTask(next, update.error ? 'error' : update.output ? 'output' : 'state');
-    return clone(next);
+    return this.mutateTask(
+      taskId,
+      update.error ? 'error' : update.output ? 'output' : 'state',
+      (current) => (
+        isTerminal(current.state)
+          ? undefined
+          : {
+              ...current,
+              ...update,
+              ...(update.error !== undefined ? { error: sanitizeText(update.error) } : {}),
+              cancellation: update.state === 'canceled' ? 'confirmed' : current.cancellation,
+              updatedAt: this.nowIso(),
+            }
+      ),
+    );
+  }
+
+  private async mutateTask(
+    taskId: string,
+    type: AgentTaskEvent['type'],
+    mutate: (current: AgentTaskSnapshot) => AgentTaskSnapshot | undefined,
+    detail: AgentExecutorEvent = {},
+  ): Promise<AgentTaskSnapshot> {
+    const previous = this.#taskMutationTails.get(taskId) ?? Promise.resolve();
+    let release: (() => void) | undefined;
+    const tail = new Promise<void>((resolve) => { release = resolve; });
+    this.#taskMutationTails.set(taskId, tail);
+    await previous;
+    try {
+      const current = this.requireTask(taskId);
+      const next = mutate(current);
+      if (!next) return clone(current);
+      await this.saveTask(next, type, detail);
+      return clone(next);
+    } finally {
+      release?.();
+      if (this.#taskMutationTails.get(taskId) === tail) this.#taskMutationTails.delete(taskId);
+    }
   }
 
   private async saveTask(
@@ -824,7 +913,10 @@ class AgentExecutorPlaneRuntime {
     this.#tasks.set(task.taskId, safeTask);
     await this.options.store.saveTask(safeTask);
     await this.appendEvent(safeTask, type, detail);
-    if (isTerminal(safeTask.state)) this.resolveWaiters(safeTask);
+    if (isTerminal(safeTask.state)) {
+      this.#taskExecutors.delete(task.taskId);
+      this.resolveWaiters(safeTask);
+    }
   }
 
   private async appendEvent(
@@ -861,11 +953,15 @@ class AgentExecutorPlaneRuntime {
     readonly reference: NonNullable<AgentTaskSnapshot['executorReference']>;
   }> {
     const reference = task.executorReference ?? { idempotencyKey: task.idempotencyKey };
+    const boundExecutor = this.#taskExecutors.get(task.taskId);
+    if (boundExecutor) return { executor: boundExecutor, reference };
     const registration = this.#registrations.get(task.agentId);
     if (!registration || registration.configurationRevision !== task.registration.configurationRevision) {
       throw new Error('Captured executor revision is unavailable for this task.');
     }
-    return { executor: await this.executorForRegistration(registration), reference };
+    const executor = await this.executorForRegistration(registration);
+    this.#taskExecutors.set(task.taskId, executor);
+    return { executor, reference };
   }
 
   private async executorForRegistration(
