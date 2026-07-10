@@ -42,6 +42,9 @@ jobs:
       - name: Build packages
         run: npm run build:packages
 
+      - name: Build bundled SDK and Worker sidecars
+        run: npm run build:bundle
+
       - name: Build type declarations (SDK .d.ts — catches missing exports)
         run: npm run build:dts
 
@@ -53,7 +56,6 @@ jobs:
         shell: bash
         run: |
           set -euo pipefail
-          npm run build
 
           home_dir="$(mktemp -d)"
           profile="ci-unix-${GITHUB_RUN_ID:-local}-${GITHUB_RUN_ATTEMPT:-0}"
