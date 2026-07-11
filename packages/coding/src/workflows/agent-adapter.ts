@@ -605,7 +605,11 @@ function deriveTerminal(
     return { status: 'stopped', snapStatus: 'aborted', finalText: '' };
   }
   const child = result.results[0];
-  const finalText = selectWorkflowFinalText(child?.summary ?? '', child?.digest, child?.structured);
+  const finalText = selectWorkflowFinalText(
+    child?.summary ?? '',
+    child?.digest,
+    child?.status === 'completed' ? child.structured : undefined,
+  );
   if (child?.status === 'completed') {
     return {
       status: 'completed',

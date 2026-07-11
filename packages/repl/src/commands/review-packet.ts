@@ -20,7 +20,7 @@ export interface ReviewPacketMetadata {
   readonly baseRef?: string;
   readonly headRef?: string;
   readonly scopePaths: readonly string[];
-  readonly riskFlags: readonly ['routing-high'] | readonly [];
+  readonly riskFlags: readonly ('routing-high')[];
   readonly budget: {
     readonly maxBytes: number;
     readonly maxLines: number;
@@ -55,7 +55,7 @@ function changedPaths(diff: string): readonly string[] {
     const candidate = match?.[2] ?? match?.[1];
     if (candidate) paths.add(candidate.replace(/\\/g, '/'));
   }
-  return [...paths].sort((left, right) => left.localeCompare(right));
+  return [...paths].sort((left, right) => (left < right ? -1 : left > right ? 1 : 0));
 }
 
 function splitChunkLines(diff: string): readonly string[] {
@@ -95,7 +95,7 @@ function splitChunkLines(diff: string): readonly string[] {
 
 export async function writeReviewPacket(input: ReviewPacketInput): Promise<ReviewPacketMetadata> {
   const captured = input.diff;
-  const rangeId = hash(`${input.label}\0${captured}`);
+  const rangeId = hash(`${input.label}\0${input.customPrompt ?? ''}\0${captured}`);
   const packetDir = path.resolve(
     input.cwd,
     '.agent',

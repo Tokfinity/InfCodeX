@@ -211,6 +211,24 @@ describe('createCodingWorkflowBackend — spawn + wait', () => {
     expect((await backend.wait(handle.taskId)).status).toBe('failed');
   });
 
+  it('does not replace a failed child diagnostic with a partial structured summary', async () => {
+    const backend = createCodingWorkflowBackend({
+      ctx: fakeCtx(),
+      childOptions,
+      runChild: async () => execResult({
+        status: 'failed',
+        summary: '[Crash] parser failed',
+        structured: { summary: 'looks healthy' },
+      }),
+      generateId: () => 'task-failed-structured',
+    });
+    const handle = await backend.spawn({ name: 'failed', prompt: 'run', readOnly: true });
+    const result = await backend.wait(handle.taskId);
+
+    expect(result.status).toBe('failed');
+    expect(result.finalText).toBe('[Crash] parser failed');
+  });
+
   it('maps a cancelled child to status=stopped', async () => {
     const backend = createCodingWorkflowBackend({
       ctx: fakeCtx(),
