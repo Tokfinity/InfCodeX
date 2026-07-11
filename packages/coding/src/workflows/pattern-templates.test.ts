@@ -27,6 +27,8 @@ describe('workflow pattern templates', () => {
       expect(validateWorkflowScriptManifest(template.manifest).name).toBe(template.manifest.name);
       expect(validateGeneratedWorkflowSource(template.source)).toBe(template.source);
       expect(template.manifest.patterns).toContain(template.pattern);
+      expect(template.source.match(/wf\.runAgent\s*\(\s*\{/g)?.length ?? 0)
+        .toBe(template.source.match(/modelHint\s*:/g)?.length ?? 0);
     }
   });
 

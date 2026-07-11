@@ -84,7 +84,9 @@ describe('runRestrictedWorkflowScript', () => {
             prompt: 'inspect the parser',
             scopeSummary: 'parser boundary',
             constraints: ['read-only', 'preserve public API'],
-            readOnly: true
+            readOnly: true,
+            terseResult: true,
+            verification: { requiredReadPaths: ['packet.md'] }
           });
         }
       `,
@@ -94,6 +96,8 @@ describe('runRestrictedWorkflowScript', () => {
       name: 'scoped-reader',
       scopeSummary: 'parser boundary',
       constraints: ['read-only', 'preserve public API'],
+      terseResult: true,
+      verification: { requiredReadPaths: ['packet.md'] },
     });
   });
 

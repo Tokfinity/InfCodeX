@@ -396,6 +396,7 @@ export {
   buildRepoIntelligenceContext,
   renderRepoOverview,
   analyzeChangedScope,
+  classifyFileCategory,
   renderChangedScope,
 } from './repo-intelligence/index.js';
 

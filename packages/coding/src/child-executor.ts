@@ -162,6 +162,12 @@ export interface WorkflowChildDigestUpdate {
   readonly digestFailed?: boolean;
   readonly totalTokensUsed: number;
   readonly digestTokensUsed?: number;
+  readonly usage?: {
+    readonly inputTokens?: number;
+    readonly outputTokens?: number;
+    readonly totalTokens?: number;
+    readonly cacheReadTokens?: number;
+  };
 }
 
 export interface ChildExecutorOptions {
@@ -466,6 +472,7 @@ interface WorkflowChildDigestResult {
   readonly digest?: string;
   readonly totalTokensUsed: number;
   readonly digestTokensUsed: number;
+  readonly usage?: WorkflowChildDigestUpdate['usage'];
   /**
    * True when a digest was attempted for a workflow child but produced nothing
    * usable (LLM error, timeout, parent abort, or empty distillation). Lets the
@@ -494,7 +501,9 @@ function hasTopLevelSummarySchema(schema: unknown): boolean {
   if (typeof schema !== 'object' || schema === null || Array.isArray(schema)) return false;
   if ((schema as { readonly type?: unknown }).type !== 'object') return false;
   const properties = (schema as { readonly properties?: unknown }).properties;
+  const required = (schema as { readonly required?: unknown }).required;
   if (typeof properties !== 'object' || properties === null || Array.isArray(properties)) return false;
+  if (!Array.isArray(required) || !required.includes('summary')) return false;
   const summary = (properties as { readonly summary?: unknown }).summary;
   return typeof summary === 'object' && summary !== null && !Array.isArray(summary) &&
     (summary as { readonly type?: unknown }).type === 'string';
@@ -516,13 +525,21 @@ function normalizeReusableWorkflowSummary(text: string): string | undefined {
 function reusableWorkflowSummary(
   bundle: KodaXChildContextBundle,
   structured: unknown,
+  finalText: string,
 ): string | undefined {
-  if (!hasTopLevelSummarySchema(bundle.outputSchema)) return undefined;
-  if (typeof structured !== 'object' || structured === null || Array.isArray(structured)) return undefined;
-  const summary = (structured as { readonly summary?: unknown }).summary;
-  return typeof summary === 'string' && summary.trim().length > 0
-    ? normalizeReusableWorkflowSummary(summary)
-    : undefined;
+  if (bundle.workflowOutputContract?.kodaxAuthored !== true) return undefined;
+  const candidates: string[] = [];
+  if (hasTopLevelSummarySchema(bundle.outputSchema) &&
+      typeof structured === 'object' && structured !== null && !Array.isArray(structured)) {
+    const summary = (structured as { readonly summary?: unknown }).summary;
+    if (typeof summary === 'string') candidates.push(summary);
+  }
+  if (bundle.workflowOutputContract.terseResult) candidates.push(finalText);
+  for (const candidate of candidates) {
+    const normalized = normalizeReusableWorkflowSummary(candidate);
+    if (normalized !== undefined) return normalized;
+  }
+  return undefined;
 }
 
 function shouldCreateWorkflowChildDigest(
@@ -536,7 +553,7 @@ function shouldCreateWorkflowChildDigest(
     result.success === true &&
     result.interrupted !== true &&
     result.lastText.trim().length > 0 &&
-    (bundle === undefined || reusableWorkflowSummary(bundle, structured) === undefined);
+    (bundle === undefined || reusableWorkflowSummary(bundle, structured, result.lastText) === undefined);
 }
 
 function deriveSkillRootFromSkillFile(skillFilePath: string): string {
@@ -683,6 +700,10 @@ async function createWorkflowChildDigest(
     readonly timeoutMs: number;
   },
 ): Promise<WorkflowChildDigestResult> {
+  const reusable = reusableWorkflowSummary(input.bundle, input.structured, input.result.lastText);
+  if (reusable !== undefined) {
+    return { digest: reusable, totalTokensUsed: 0, digestTokensUsed: 0 };
+  }
   if (!shouldCreateWorkflowChildDigest(input.options, input.result, input.bundle, input.structured)) {
     return { totalTokensUsed: 0, digestTokensUsed: 0 };
   }
@@ -720,11 +741,19 @@ async function createWorkflowChildDigest(
     );
     const digest = normalizeWorkflowChildDigest(digestRun.lastText);
     const totalTokensUsed = readChildTokenUsage(digestRun);
+    const usage = digestRun.usage ? {
+      inputTokens: digestRun.usage.inputTokens,
+      outputTokens: digestRun.usage.outputTokens,
+      totalTokens: digestRun.usage.totalTokens,
+      ...(digestRun.usage.cachedReadTokens !== undefined
+        ? { cacheReadTokens: digestRun.usage.cachedReadTokens }
+        : {}),
+    } : undefined;
     // An empty distillation counts as a failed attempt so the transcript is
     // honest about the smart summary being unavailable.
     return digest
-      ? { digest, totalTokensUsed, digestTokensUsed: totalTokensUsed }
-      : { totalTokensUsed, digestTokensUsed: totalTokensUsed, attemptFailed: true };
+      ? { digest, totalTokensUsed, digestTokensUsed: totalTokensUsed, ...(usage ? { usage } : {}) }
+      : { totalTokensUsed, digestTokensUsed: totalTokensUsed, attemptFailed: true, ...(usage ? { usage } : {}) };
   } catch {
     // Digest generation is presentation-only. Keep the completed child result
     // for synthesis/audit; flag the failed attempt so the formatter labels the
@@ -759,6 +788,7 @@ function scheduleWorkflowChildDigest(
         ...(digest.digest ? { digest: digest.digest } : {}),
         ...(digest.attemptFailed ? { digestFailed: true } : {}),
         ...(digest.digestTokensUsed > 0 ? { digestTokensUsed: digest.digestTokensUsed } : {}),
+        ...(digest.usage ? { usage: digest.usage } : {}),
         totalTokensUsed: digest.totalTokensUsed,
       });
     } catch {
@@ -1067,6 +1097,7 @@ async function runReadChildBody(
 
   let childResult: KodaXChildAgentResult;
   try {
+    const childStartedAt = Date.now();
     const runFn = await getRunKodaX();
     const childEffort = resolveChildEffort(bundle, effortOverride, options.parentOptions.effort);
     let actualProvider = provider;
@@ -1150,6 +1181,16 @@ async function runReadChildBody(
       finalProvider: actualProvider,
       ...(actualProvider === provider && model ? { finalModel: model } : {}),
       ...(fallbackReason ? { fallbackReason } : {}),
+      iterations,
+      ...(result.usage ? {
+        inputTokens: result.usage.inputTokens,
+        outputTokens: result.usage.outputTokens,
+        ...(result.usage.cachedReadTokens !== undefined
+          ? { cacheReadTokens: result.usage.cachedReadTokens }
+          : {}),
+      } : {}),
+      ...(digest.digestTokensUsed > 0 ? { digestTokens: digest.digestTokensUsed } : {}),
+      durationMs: Date.now() - childStartedAt,
     };
     childResult = extractChildResult(
       bundle,
@@ -1161,6 +1202,7 @@ async function runReadChildBody(
         limitReached: result.limitReached === true,
         totalTokensUsed: totalTokensUsed + digest.totalTokensUsed,
         digestTokensUsed: digest.digestTokensUsed,
+        ...(digest.usage ? { digestUsage: digest.usage } : {}),
         sessionId: result.sessionId,
         artifactPaths: extractMutationArtifactPaths(result),
         digest: digest.digest,
@@ -1282,6 +1324,7 @@ async function runWriteChildBody(
 
   let childResult: KodaXChildAgentResult;
   try {
+    const childStartedAt = Date.now();
     const runFn = await getRunKodaX();
     const childEffort = resolveChildEffort(bundle, effortOverride, options.parentOptions.effort);
     let actualProvider = provider;
@@ -1364,6 +1407,16 @@ async function runWriteChildBody(
       finalProvider: actualProvider,
       ...(actualProvider === provider && model ? { finalModel: model } : {}),
       ...(fallbackReason ? { fallbackReason } : {}),
+      iterations,
+      ...(result.usage ? {
+        inputTokens: result.usage.inputTokens,
+        outputTokens: result.usage.outputTokens,
+        ...(result.usage.cachedReadTokens !== undefined
+          ? { cacheReadTokens: result.usage.cachedReadTokens }
+          : {}),
+      } : {}),
+      ...(digest.digestTokensUsed > 0 ? { digestTokens: digest.digestTokensUsed } : {}),
+      durationMs: Date.now() - childStartedAt,
     };
     childResult = extractChildResult(
       bundle,
@@ -1375,6 +1428,7 @@ async function runWriteChildBody(
         limitReached: result.limitReached === true,
         totalTokensUsed: totalTokensUsed + digest.totalTokensUsed,
         digestTokensUsed: digest.digestTokensUsed,
+        ...(digest.usage ? { digestUsage: digest.usage } : {}),
         sessionId: result.sessionId,
         artifactPaths: extractMutationArtifactPaths(result),
         digest: digest.digest,
@@ -2044,6 +2098,7 @@ interface ExtractChildResultMeta {
   readonly limitReached?: boolean;
   readonly totalTokensUsed?: number;
   readonly digestTokensUsed?: number;
+  readonly digestUsage?: WorkflowChildDigestUpdate['usage'];
   readonly sessionId?: string;
   readonly artifactPaths?: readonly string[];
   readonly digest?: string;
@@ -2088,6 +2143,7 @@ function extractChildResult(
     ...(meta.digestTokensUsed !== undefined && meta.digestTokensUsed > 0
       ? { digestTokensUsed: meta.digestTokensUsed }
       : {}),
+    ...(meta.digestUsage ? { digestUsage: meta.digestUsage } : {}),
     ...(meta.sessionId ? { sessionId: meta.sessionId } : {}),
     ...(meta.artifactPaths !== undefined && meta.artifactPaths.length > 0
       ? { artifactPaths: [...meta.artifactPaths] }

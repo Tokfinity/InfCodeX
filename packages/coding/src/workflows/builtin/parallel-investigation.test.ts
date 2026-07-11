@@ -104,6 +104,12 @@ describe('parallel-investigation — fan-out + synthesis', () => {
     expect(investigators(spawned).every((s) => s.outputSchema !== undefined)).toBe(true);
   });
 
+  it('declares balanced tier intent on every ordinary investigator', async () => {
+    const { backend, spawned } = fakeBackend();
+    await drive(backend, { question: 'Q' });
+    expect(investigators(spawned).every((s) => s.modelHint === 'balanced')).toBe(true);
+  });
+
   it('uses the structured finding when finalText is empty (FEATURE_246 digest-timing bug)', async () => {
     // Reproduce the report: the child ended on a tool_use so finalText is empty
     // and the digest is async — but the schema-validated structured finding is

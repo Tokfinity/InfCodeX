@@ -368,6 +368,7 @@ function buildBackend(opts: RunWorkflowModuleOptions): WorkflowAgentBackend {
     childOptions: opts.childOptions,
     runId: opts.runId,
     defaultChildReadOnly: opts.module.meta.readOnly === true,
+    kodaxAuthored: opts.processMetadata?.hostMetadata?.workflowAuthorship === 'kodax-generated',
   });
 }
 

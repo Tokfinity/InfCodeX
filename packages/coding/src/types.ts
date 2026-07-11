@@ -897,6 +897,11 @@ export interface KodaXChildContextBundle {
    * one bounded repair turn) and surfaces it on `KodaXChildAgentResult.structured`.
    */
   outputSchema?: unknown;
+  /** Trusted host provenance plus the generated script's terse-result declaration. */
+  workflowOutputContract?: {
+    readonly kodaxAuthored: boolean;
+    readonly terseResult: boolean;
+  };
 }
 
 /**
@@ -932,6 +937,12 @@ export interface KodaXChildRouteFacts {
   readonly finalModel?: string;
   readonly resolvedEffort?: string;
   readonly fallbackReason?: string;
+  readonly iterations?: number;
+  readonly inputTokens?: number;
+  readonly cacheReadTokens?: number;
+  readonly outputTokens?: number;
+  readonly digestTokens?: number;
+  readonly durationMs?: number;
 }
 
 export interface KodaXChildAgentResult {
@@ -959,6 +970,13 @@ export interface KodaXChildAgentResult {
   totalTokensUsed?: number;
   /** Token usage attributable only to the optional presentation digest call. */
   digestTokensUsed?: number;
+  /** Provider-reported usage for the optional digest call (diagnostic subset of totalTokensUsed). */
+  digestUsage?: {
+    readonly inputTokens?: number;
+    readonly outputTokens?: number;
+    readonly totalTokens?: number;
+    readonly cacheReadTokens?: number;
+  };
   /** Correlated model-tier and fallback facts for cost/quality reporting. */
   routeFacts?: KodaXChildRouteFacts;
   /** True when the child exhausted its iteration budget before completing. */

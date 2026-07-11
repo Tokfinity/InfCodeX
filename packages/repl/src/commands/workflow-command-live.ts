@@ -481,6 +481,10 @@ type GenerateWorkflowForRequest = typeof generateWorkflowFromOptions;
 
 export interface StartGeneratedWorkflowFromRequestOptions {
   readonly request: string;
+  readonly builtin?: {
+    readonly name: string;
+    readonly args: unknown;
+  };
   readonly callbacks: Pick<
     CommandCallbacks,
     | 'createKodaXOptions'

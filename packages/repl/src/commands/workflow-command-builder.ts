@@ -1,11 +1,17 @@
 import { join } from 'node:path';
 
 import chalk from 'chalk';
-import { getAgentConfigPath, type WorkflowProcessSource } from '@kodax-ai/agent';
+import {
+  getAgentConfigPath,
+  type WorkflowModule,
+  type WorkflowProcessSource,
+} from '@kodax-ai/agent';
 import {
   buildApprovalSummary,
   generateWorkflowFromOptions,
+  getBuiltinWorkflow,
   getDefaultWorkflowRunManager,
+  type WorkflowScriptSnapshotInput,
   type WorkflowRunProcessMetadata,
 } from '@kodax-ai/coding';
 
@@ -73,41 +79,82 @@ export function buildWorkflowProcessMetadata(input: {
   };
 }
 
+interface PreparedWorkflowLaunch {
+  readonly module: WorkflowModule;
+  readonly args: unknown;
+  readonly approvalDescription: string;
+  readonly mayUseWorktree: boolean;
+  readonly sandbox: string;
+  readonly scriptSnapshot?: WorkflowScriptSnapshotInput;
+  readonly rawScript?: string;
+}
+
 export async function startGeneratedWorkflowFromRequest(
   input: StartGeneratedWorkflowFromRequestOptions,
 ): Promise<GeneratedWorkflowStartOutcome> {
   const confirm = input.approval === 'required' ? resolveConfirm(input.callbacks) : undefined;
   if (input.approval === 'required' && !confirm) {
     console.log(
-      chalk.red('\n[workflow] refusing to generate a workflow without an interactive approval channel.\n'),
+      chalk.red('\n[workflow] refusing to start a workflow without an interactive approval channel.\n'),
     );
     return 'failed';
   }
 
   const createOptions = input.callbacks.createKodaXOptions;
   if (!createOptions) {
-    console.log(chalk.red('\n[workflow] cannot generate - REPL options unavailable in this context.\n'));
+    console.log(chalk.red('\n[workflow] cannot start - REPL options unavailable in this context.\n'));
     return 'failed';
   }
 
   const locale = detectWorkflowLocale(input.request);
   let options: ReturnType<NonNullable<CommandCallbacks['createKodaXOptions']>>;
-  let generated: Awaited<ReturnType<typeof generateWorkflowFromOptions>>;
+  let prepared: PreparedWorkflowLaunch;
   try {
     emitWorkflowBuilderEvent(input, {
       stage: 'started',
       message: 'Workflow builder started',
     });
-    emitWorkflowBuilderEvent(input, {
-      stage: 'generating',
-      message: 'Workflow - generating harness',
-    });
     options = createOptions();
-    const generateWorkflow = input.generateWorkflow ?? generateWorkflowFromOptions;
-    generated = await generateWorkflow({
-      request: input.request,
-      options,
-    });
+    if (input.builtin) {
+      const module = getBuiltinWorkflow(input.builtin.name);
+      if (!module) {
+        throw new Error(`unknown built-in workflow: ${input.builtin.name}`);
+      }
+      prepared = {
+        module,
+        args: input.builtin.args,
+        approvalDescription: module.meta.description,
+        mayUseWorktree: false,
+        sandbox: 'built-in',
+      };
+    } else {
+      emitWorkflowBuilderEvent(input, {
+        stage: 'generating',
+        message: 'Workflow - generating harness',
+      });
+      const generateWorkflow = input.generateWorkflow ?? generateWorkflowFromOptions;
+      const generated = await generateWorkflow({
+        request: input.request,
+        options,
+      });
+      if (generated.kind === 'declined') {
+        emitWorkflowBuilderEvent(input, {
+          stage: 'declined',
+          message: generated.reason,
+        });
+        console.log(chalk.dim(`\nWorkflow not created: ${generated.reason}\n`));
+        return 'declined';
+      }
+      prepared = {
+        module: generated.module,
+        args: { request: input.request },
+        approvalDescription: generated.approvalSummary,
+        mayUseWorktree: generated.manifest.mayUseWorktree === true,
+        sandbox: 'capability-generated',
+        scriptSnapshot: generated.scriptSnapshot,
+        rawScript: generated.scriptSnapshot.source,
+      };
+    }
     emitWorkflowBuilderEvent(input, {
       stage: 'validating',
       message: 'Workflow - validating harness',
@@ -121,25 +168,16 @@ export async function startGeneratedWorkflowFromRequest(
     return 'failed';
   }
 
-  if (generated.kind === 'declined') {
-    emitWorkflowBuilderEvent(input, {
-      stage: 'declined',
-      message: generated.reason,
-    });
-    console.log(chalk.dim(`\nWorkflow not created: ${generated.reason}\n`));
-    return 'declined';
-  }
-
   emitWorkflowBuilderEvent(input, {
     stage: 'ready',
     message: 'Workflow - harness ready',
   });
   const presentation = input.presentation ?? 'command';
-  const approvalSummary = buildApprovalSummary(generated.module);
+  const approvalSummary = buildApprovalSummary(prepared.module);
   if (presentation !== 'agentic') {
     emitWorkflowRunMessage(input.callbacks, {
       type: 'info',
-      text: `Generated workflow: ${generated.approvalSummary}`,
+      text: `${input.builtin ? 'Built-in' : 'Generated'} workflow: ${prepared.approvalDescription}`,
     });
   }
   const projectKey = deriveProjectKeyFromRoot(process.cwd()).key;
@@ -152,9 +190,9 @@ export async function startGeneratedWorkflowFromRequest(
     const approved = await confirm(
       renderApprovalPrompt(approvalSummary, {
         source: input.sourceLabel ?? 'generated',
-        sandbox: 'capability-generated',
-        mayUseWorktree: generated.manifest.mayUseWorktree === true,
-        rawScript: generated.scriptSnapshot.source,
+        sandbox: prepared.sandbox,
+        mayUseWorktree: prepared.mayUseWorktree,
+        ...(prepared.rawScript !== undefined ? { rawScript: prepared.rawScript } : {}),
       }),
     );
     if (!approved) {
@@ -171,13 +209,13 @@ export async function startGeneratedWorkflowFromRequest(
         type: 'info',
         text: renderApprovalPrompt(approvalSummary, {
           source: input.sourceLabel ?? 'generated',
-          sandbox: 'capability-generated',
-          mayUseWorktree: generated.manifest.mayUseWorktree === true,
+          sandbox: prepared.sandbox,
+          mayUseWorktree: prepared.mayUseWorktree,
         }),
       });
       emitWorkflowRunMessage(input.callbacks, {
         type: 'info',
-        text: 'Auto-started generated workflow (capability-isolated); normal permission gates still apply.',
+        text: `Auto-started ${input.builtin ? 'built-in' : 'generated'} workflow (${prepared.sandbox}); normal permission gates still apply.`,
       });
     }
   }
@@ -188,7 +226,7 @@ export async function startGeneratedWorkflowFromRequest(
       text: formatWorkflowLaunchAnswer({
         runId,
         summary: approvalSummary,
-        approvalSummary: generated.approvalSummary,
+        approvalSummary: prepared.approvalDescription,
         locale,
       }),
       final: false,
@@ -196,24 +234,25 @@ export async function startGeneratedWorkflowFromRequest(
   } else {
     emitWorkflowRunMessage(input.callbacks, {
       type: 'info',
-      text: `Started workflow ${generated.module.meta.name} (${runId}). Use /workflow show ${runId} for status.`,
+      text: `Started workflow ${prepared.module.meta.name} (${runId}). Use /workflow show ${runId} for status.`,
     });
   }
-  const live = createWorkflowLiveUpdateEmitter(input.callbacks, runId, generated.module.meta, locale);
+  const live = createWorkflowLiveUpdateEmitter(input.callbacks, runId, prepared.module.meta, locale);
   live.running(`Use /workflow show ${runId} for status or /workflow stop ${runId} to stop.`);
   const unsubscribeProcess = subscribeWorkflowLiveProcess(manager, live, runId);
 
   const managed = manager.startFromOptions({
-    module: generated.module,
-    args: { request: input.request },
+    module: prepared.module,
+    args: prepared.args,
     options,
     runId,
     runDir,
-    scriptSnapshot: generated.scriptSnapshot,
+    ...(prepared.scriptSnapshot !== undefined ? { scriptSnapshot: prepared.scriptSnapshot } : {}),
     processMetadata: buildWorkflowProcessMetadata({
       source: input.processSource ?? 'command',
-      displayName: generated.module.meta.name,
+      displayName: prepared.module.meta.name,
       goal: input.request,
+      hostMetadata: { workflowAuthorship: 'kodax-generated' },
     }),
     onEvent: workflowEventSink(input.callbacks, undefined, {
       presentation: input.presentation ?? 'command',
@@ -224,7 +263,7 @@ export async function startGeneratedWorkflowFromRequest(
   unsubscribeWorkflowLiveProcessOnDone(managed, unsubscribeProcess);
   emitWorkflowBuilderEvent(input, {
     stage: 'launched',
-    message: `Workflow ${generated.module.meta.name} started`,
+    message: `Workflow ${prepared.module.meta.name} started`,
   });
 
   observeManagedWorkflowDone(managed, input.callbacks, runId, live, {

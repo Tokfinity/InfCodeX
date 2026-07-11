@@ -1602,6 +1602,7 @@ Keyboard Shortcuts:
       presentation: 'agentic',
       sourceLabel: workflow.displayName,
       processSource: workflow.processSource ?? 'command',
+      ...(workflow.builtin !== undefined ? { builtin: workflow.builtin } : {}),
     });
 
     return workflowStartOutcomeConsumesTurn({ outcome });

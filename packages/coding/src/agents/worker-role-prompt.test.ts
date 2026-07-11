@@ -205,7 +205,7 @@ describe('buildWorkerInstructions', () => {
   it('emits the REPO INTELLIGENCE TOOLS section (FEATURE_161)', () => {
     const out = buildWorkerInstructions(baseDecision, undefined, false);
     expect(out).toContain('REPO INTELLIGENCE TOOLS');
-    expect(out).toContain('FEATURE_161');
+    expect(out).not.toMatch(/REPO INTELLIGENCE TOOLS \(FEATURE_/);
     // Key pull-tool names must be advertised by name.
     expect(out).toContain('`relationship_scan');
     expect(out).toContain('`module_context');
@@ -321,7 +321,7 @@ describe('buildWorkerInstructions — FEATURE_120 child steering (v0.7.39 Phase 
   it('emits the ASYNC CHILD STEERING section with both tools', () => {
     const out = buildWorkerInstructions(baseDecision, undefined, false);
     expect(out).toContain('ASYNC CHILD STEERING');
-    expect(out).toContain('FEATURE_120');
+    expect(out).not.toMatch(/ASYNC CHILD STEERING \(FEATURE_/);
     expect(out).toContain('send_message(to=task_id');
     expect(out).toContain('task_stop(task_id');
   });
@@ -350,10 +350,10 @@ describe('buildWorkerInstructions — FEATURE_120 child steering (v0.7.39 Phase 
     expect(out).toContain('MODEL HINT');
     expect(out).toMatch(/"fast"/);
     expect(out).toMatch(/"deep"/);
-    expect(out).toMatch(/Configured `fast`\/`deep` tiers route through FEATURE_102/);
+    expect(out).toMatch(/Configured `fast`\/`deep` tiers select their operator-mapped route/);
     expect(out).not.toMatch(/no-op today/);
     expect(out).toMatch(/substantive children/);
-    expect(out).toMatch(/FEATURE_102/);
+    expect(out).not.toMatch(/MODEL HINT \(FEATURE_/);
   });
 
   it('orders child steering after dispatch rules and before fan-out plan granularity', () => {
@@ -383,10 +383,7 @@ describe('buildWorkerInstructions — FEATURE_170 Todo V2 API (v0.7.41)', () => 
   it('teaches todo_create for mid-task insertion (NOT op:init)', () => {
     const out = buildWorkerInstructions(baseDecision, undefined, false);
     expect(out).toContain('INSERT ONE NEW STEP mid-task: `todo_create');
-    expect(out).toContain('FEATURE_170 v0.7.41');
-    // v0.7.42 — the schema-split note + additive semantics is the
-    // structural pin; op:'init' as a fan-out re-seed path is gone.
-    expect(out).toMatch(/v0\.7\.42 schema split/);
+    expect(out).not.toMatch(/PLAN-FIRST CONTRACT \(FEATURE_/);
     // ADR-033 §4 — additive semantics now expressed via "existing items
     // must be preserved" (single concept) rather than "purely additive" label.
     expect(out).toMatch(/existing items must be preserved/);
@@ -468,9 +465,10 @@ describe('buildWorkerInstructions — v0.7.42 plan-list hygiene (Step 5)', () =>
 });
 
 describe('buildWorkerInstructions — FEATURE_121 envelope spillover (v0.7.40)', () => {
-  it('emits the LARGE CHILD OUTPUT dispatch-rules bullet tagged with the feature/version', () => {
+  it('emits the LARGE CHILD OUTPUT dispatch-rules bullet without implementation metadata', () => {
     const out = buildWorkerInstructions(baseDecision, undefined, false);
-    expect(out).toContain('LARGE CHILD OUTPUT (FEATURE_121 v0.7.40)');
+    expect(out).toContain('LARGE CHILD OUTPUT:');
+    expect(out).not.toMatch(/LARGE CHILD OUTPUT \(FEATURE_/);
   });
 
   it('teaches the spillover marker shape so Worker can recognize it in `<task-completed>` blocks', () => {

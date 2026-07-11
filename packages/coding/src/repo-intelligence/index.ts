@@ -458,7 +458,8 @@ function isTestFile(relativePath: string): boolean {
   return /\.(test|spec)\.[^.]+$/.test(normalized);
 }
 
-function classifyFileCategory(relativePath: string): 'source' | 'docs' | 'tests' | 'config' | 'other' {
+/** Pure path classifier shared by changed-scope and captured review packets. */
+export function classifyFileCategory(relativePath: string): 'source' | 'docs' | 'tests' | 'config' | 'other' {
   const normalized = normalizeRelativePath(relativePath);
   const ext = path.extname(normalized).toLowerCase();
   const base = path.posix.basename(normalized);

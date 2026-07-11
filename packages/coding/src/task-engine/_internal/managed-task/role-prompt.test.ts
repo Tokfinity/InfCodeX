@@ -290,11 +290,8 @@ describe('FEATURE_114 Slice 2 — worker role prompt entry wire', () => {
     // Pinned tokens from `buildWorkerInstructions` — if the entry
     // wire breaks, these disappear and the V2 path silently falls
     // back to a context-only prompt with no planning guidance.
-    // FEATURE_170 v0.7.41 — section headers gained a "+ FEATURE_170 v0.7.41"
-    // suffix to advertise the per-item API additions; pin the v0.7.36 base
-    // anchor so the upstream entry-wire pin still locates the section.
-    expect(rendered).toContain('PLAN-FIRST CONTRACT (FEATURE_114 v0.7.36');
-    expect(rendered).toContain('SCOPE COMMITMENT (FEATURE_106 hard rule');
+    expect(rendered).toContain('PLAN-FIRST CONTRACT:');
+    expect(rendered).toContain('SCOPE COMMITMENT:');
     expect(rendered).toContain('MUTATION DISCIPLINE');
     expect(rendered).toContain('DISPATCH RULES');
     // FEATURE_190 (v0.7.43): legacy `EVALUATOR HANDOFF` replaced by
@@ -522,7 +519,7 @@ describe('FEATURE_248 — AMAW mode-level orchestration directive gating', () =>
     expect(rendered).not.toContain('ORCHESTRATION DEFAULT');
     expect(rendered).not.toContain('PLAN-TIME COMMITMENT');
     // Sanity: the rest of the Worker prompt still renders (clean undefined drop).
-    expect(rendered).toContain('PLAN-FIRST CONTRACT (FEATURE_114 v0.7.36');
+    expect(rendered).toContain('PLAN-FIRST CONTRACT:');
     expect(rendered).toContain('## Environment');
   });
 
@@ -535,7 +532,7 @@ describe('FEATURE_248 — AMAW mode-level orchestration directive gating', () =>
   it('places the directive before PLAN-FIRST CONTRACT so it is read while forming the plan', () => {
     const rendered = renderWorker({ amawOrchestrationAvailable: true });
     const directiveIdx = rendered.indexOf('ORCHESTRATION DEFAULT:');
-    const planFirstIdx = rendered.indexOf('PLAN-FIRST CONTRACT (FEATURE_114 v0.7.36');
+    const planFirstIdx = rendered.indexOf('PLAN-FIRST CONTRACT:');
     expect(directiveIdx).toBeGreaterThanOrEqual(0);
     expect(planFirstIdx).toBeGreaterThanOrEqual(0);
     expect(directiveIdx).toBeLessThan(planFirstIdx);

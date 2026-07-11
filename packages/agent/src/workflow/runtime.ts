@@ -480,6 +480,9 @@ function buildRuntime(opts: CreateWorkflowRuntimeOptions): InternalRuntime {
       recorder.emit('agent_spawned', {
         taskId: handle.taskId,
         name: handle.name,
+        ...(input.modelHint !== undefined ? { requestedTier: input.modelHint } : { requestedTier: 'inherited' }),
+        ...(input.phase !== undefined ? { role: input.phase } : {}),
+        ...(input.target !== undefined ? { externalTarget: input.target.agentId } : {}),
         // FEATURE_246 Part E: per-agent phase tag groups this agent under a
         // named phase in the progress display (harness `agent(..., {phase})`).
         ...(input.phase !== undefined ? { phase: input.phase } : {}),
@@ -621,6 +624,18 @@ function buildRuntime(opts: CreateWorkflowRuntimeOptions): InternalRuntime {
         ...(result.usage !== undefined
           ? { usage: result.usage }
           : {}),
+        ...(result.digestUsage !== undefined ? { digestUsage: result.digestUsage } : {}),
+        ...(result.requestedTier !== undefined ? { requestedTier: result.requestedTier } : {}),
+        ...(result.tierOutcome !== undefined ? { tierOutcome: result.tierOutcome } : {}),
+        ...(result.providerSource !== undefined ? { providerSource: result.providerSource } : {}),
+        ...(result.modelSource !== undefined ? { modelSource: result.modelSource } : {}),
+        ...(result.initialProvider !== undefined ? { initialProvider: result.initialProvider } : {}),
+        ...(result.initialModel !== undefined ? { initialModel: result.initialModel } : {}),
+        ...(result.finalProvider !== undefined ? { finalProvider: result.finalProvider } : {}),
+        ...(result.finalModel !== undefined ? { finalModel: result.finalModel } : {}),
+        ...(result.fallbackReason !== undefined ? { fallbackReason: result.fallbackReason } : {}),
+        ...(result.iterations !== undefined ? { iterations: result.iterations } : {}),
+        ...(result.durationMs !== undefined ? { durationMs: result.durationMs } : {}),
         ...(result.verification !== undefined ? { verification: result.verification } : {}),
         ...(result.limitReached === true ? { limitReached: true } : {}),
         ...(summary !== undefined

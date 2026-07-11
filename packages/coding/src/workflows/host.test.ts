@@ -371,6 +371,7 @@ describe('startManagedWorkflow', () => {
     expect(result.kind).toBe('started');
     expect(calls[0]?.module).toBe(module);
     expect(calls[0]?.scriptSnapshot).toEqual({ manifest: MANIFEST, source: SOURCE });
+    expect(calls[0]?.processMetadata?.hostMetadata?.workflowAuthorship).toBe('kodax-generated');
   });
 
   it('saved: starts the provided module with no script snapshot', async () => {
@@ -385,6 +386,7 @@ describe('startManagedWorkflow', () => {
       manager,
     });
     expect(result.kind).toBe('started');
+    expect(calls[0]?.processMetadata?.hostMetadata?.workflowAuthorship).toBeUndefined();
     if (result.kind === 'started') expect(result.scriptSnapshot).toBeUndefined();
     expect(calls[0]?.scriptSnapshot).toBeUndefined();
   });

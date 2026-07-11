@@ -2,9 +2,9 @@ import { execFile } from 'node:child_process';
 import { promisify } from 'node:util';
 
 import chalk from 'chalk';
+import { writeReviewPackets, type ReviewPacketMetadata } from '@kodax-ai/coding';
 
 import type { Command } from './types.js';
-import { writeReviewPacket } from './review-packet.js';
 
 const execFileAsync = promisify(execFile);
 const MAX_DIFF_CHARS = 100_000;
@@ -29,19 +29,57 @@ async function detectBaseBranch(cwd: string): Promise<string> {
   return 'HEAD';
 }
 
-async function getDiff(args: readonly string[], cwd: string): Promise<{ diff: string; label: string }> {
+interface CapturedReviewDiff {
+  readonly diff: string;
+  readonly label: string;
+  readonly scope: 'all' | 'compare' | 'commit';
+  readonly baseRef?: string;
+  readonly headRef?: string;
+}
+
+async function resolveRef(ref: string, cwd: string): Promise<string> {
+  return (await git(['rev-parse', ref], cwd)).trim();
+}
+
+async function tryResolveRef(ref: string, cwd: string): Promise<string | undefined> {
+  try {
+    return await resolveRef(ref, cwd);
+  } catch {
+    return undefined;
+  }
+}
+
+async function getDiff(args: readonly string[], cwd: string): Promise<CapturedReviewDiff> {
   const sub = args[0];
   if (sub === 'base') {
     const base = await detectBaseBranch(cwd);
-    return { diff: await git(['diff', `${base}...HEAD`], cwd), label: `changes against ${base}` };
+    return {
+      diff: await git(['diff', `${base}...HEAD`], cwd),
+      label: `changes against ${base}`,
+      scope: 'compare',
+      baseRef: await resolveRef(base, cwd),
+      headRef: await resolveRef('HEAD', cwd),
+    };
   }
   if (sub === 'sha' && args[1]) {
-    return { diff: await git(['show', args[1]], cwd), label: `commit ${args[1]}` };
+    const baseRef = await tryResolveRef(`${args[1]}^`, cwd);
+    return {
+      diff: await git(['show', args[1]], cwd),
+      label: `commit ${args[1]}`,
+      scope: 'commit',
+      ...(baseRef ? { baseRef } : {}),
+      headRef: await resolveRef(args[1], cwd),
+    };
   }
   if (sub === 'sha') {
     throw new Error('missing commit hash for sha scope; use /review sha <hash>');
   }
-  return { diff: await git(['diff', 'HEAD'], cwd), label: 'uncommitted changes' };
+  return {
+    diff: await git(['diff', 'HEAD'], cwd),
+    label: 'uncommitted changes',
+    scope: 'all',
+    headRef: await resolveRef('HEAD', cwd),
+  };
 }
 
 export interface ReviewInvocation {
@@ -141,8 +179,7 @@ export function parseReviewInvocation(args: readonly string[]): ReviewInvocation
 export interface ReviewWorkflowRequestOptions {
   readonly lean?: boolean;
   readonly customPrompt?: string;
-  readonly packetPath?: string;
-  readonly packetHash?: string;
+  readonly packets?: readonly ReviewPacketMetadata[];
 }
 
 export function buildReviewWorkflowRequest(
@@ -150,10 +187,9 @@ export function buildReviewWorkflowRequest(
   options: ReviewWorkflowRequestOptions = {},
 ): string {
   const lines = [
-    `Review ${label} with a dynamic workflow.`,
-    'Use changed_scope once to partition the change into stable, non-overlapping review scopes.',
-    'For each scope, run one capable reviewer that returns both specVerdict and qualityVerdict, citing the same evidence packet instead of repeating the full diff.',
-    'Send only candidate findings to one fresh independent verifier per scope, then reconcile cross-scope interactions in a final synthesis.',
+    `Review ${label} with KodaX's built-in scoped-review workflow.`,
+    'Use the captured immutable review packets as the sole review input.',
+    'The built-in gives each ordinary packet one primary with both specVerdict and qualityVerdict, adds a second primary only for routing-high, sends only candidate findings to a fresh independent verifier, and performs capable final synthesis.',
     'Final output must lead with verified findings, cite files or diff hunks, and state when no issues are found.',
   ];
 
@@ -170,10 +206,10 @@ export function buildReviewWorkflowRequest(
     lines.push(`User review focus: ${options.customPrompt}`);
   }
 
-  if (options.packetPath) {
+  if (options.packets && options.packets.length > 0) {
     lines.push(
-      `Review packet: ${options.packetPath}${options.packetHash ? ` (sha256 ${options.packetHash})` : ''}.`,
-      'Treat the packet manifest and its evidence chunks as the sole captured review input; read every listed chunk before returning a verdict.',
+      `Captured packets: ${options.packets.length}.`,
+      'Do not call changed_scope or recapture Git: these packets are the sole immutable review input.',
     );
   }
 
@@ -244,7 +280,7 @@ function printReviewHelp(): void {
   console.log();
   console.log('Options:');
   console.log(chalk.dim('  --lean        ') + 'Add a minimal-diff/YAGNI review pass');
-  console.log(chalk.dim('  --workflow    ') + 'Generate a dynamic multi-reviewer workflow');
+  console.log(chalk.dim('  --workflow    ') + 'Run the deterministic scoped-review workflow');
   console.log();
   console.log('Examples:');
   console.log(chalk.dim('  /review --lean'));
@@ -264,27 +300,29 @@ export const reviewCommand: Command = {
     if (invocation.error) {
       return { success: false, message: `/review: ${invocation.error}` };
     }
-    let diff: string;
-    let label: string;
+    let captured: CapturedReviewDiff;
     try {
-      ({ diff, label } = await getDiff(invocation.diffArgs, cwd));
+      captured = await getDiff(invocation.diffArgs, cwd);
     } catch (error) {
       const message = error instanceof Error ? error.message : String(error);
       return { success: false, message: `/review: git failed - ${message}` };
     }
 
-    if (!diff.trim()) {
+    if (!captured.diff.trim()) {
       return { success: true, message: 'No changes to review.' };
     }
 
     if (invocation.workflow) {
-      let packet: Awaited<ReturnType<typeof writeReviewPacket>>;
+      let packets: Awaited<ReturnType<typeof writeReviewPackets>>;
       try {
-        packet = await writeReviewPacket({
+        packets = await writeReviewPackets({
           cwd,
           sessionId: context.sessionId,
-          label,
-          diff,
+          label: captured.label,
+          diff: captured.diff,
+          scope: captured.scope,
+          ...(captured.baseRef ? { baseRef: captured.baseRef } : {}),
+          ...(captured.headRef ? { headRef: captured.headRef } : {}),
           customPrompt: invocation.prompt,
         });
       } catch (error) {
@@ -294,15 +332,22 @@ export const reviewCommand: Command = {
       return {
         success: true,
         workflow: {
-          request: buildReviewWorkflowRequest(label, {
+          request: buildReviewWorkflowRequest(captured.label, {
             lean: invocation.lean,
             customPrompt: invocation.prompt,
-            packetPath: packet.packetPath,
-            packetHash: packet.contentHash,
+            packets,
           }),
           source: 'command',
           displayName: buildDisplayName(invocation),
           processSource: 'review',
+          builtin: {
+            name: 'scoped-review',
+            args: {
+              packets,
+              ...(invocation.lean ? { lean: true } : {}),
+              ...(invocation.prompt ? { reviewFocus: invocation.prompt } : {}),
+            },
+          },
         },
       };
     }
@@ -311,8 +356,8 @@ export const reviewCommand: Command = {
       success: true,
       invocation: {
         prompt: buildReviewPrompt({
-          label,
-          diff,
+          label: captured.label,
+          diff: captured.diff,
           lean: invocation.lean,
           customPrompt: invocation.prompt,
         }),

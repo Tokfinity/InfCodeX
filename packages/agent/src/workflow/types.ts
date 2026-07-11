@@ -34,6 +34,8 @@ export interface WorkflowTaskVerification {
   readonly enforcement?: 'hard' | 'warn';
   readonly requiresMutation?: boolean;
   readonly requiredChangedPaths?: readonly string[];
+  /** Read-tool paths that must be observed before accepting a review verdict. */
+  readonly requiredReadPaths?: readonly string[];
   readonly minFinalTextChars?: number;
   readonly rejectPreparatoryFinalText?: boolean;
 }
@@ -45,6 +47,7 @@ export interface WorkflowTaskVerificationResult {
   readonly changedPaths?: readonly string[];
   readonly mutationToolCalls?: readonly string[];
   readonly mutationEvidence?: boolean;
+  readonly readPaths?: readonly string[];
 }
 
 export interface WorkflowAgentTarget {
@@ -106,6 +109,8 @@ export interface WorkflowSpawnAgentInput {
    * opaque value so the agent layer needs no JSON-Schema dependency.
    */
   readonly outputSchema?: unknown;
+  /** Register concise finalText for digest reuse; trusted host provenance is checked separately. */
+  readonly terseResult?: boolean;
 }
 
 /** Returned by `spawnAgent` — the child is in-flight, not yet complete. */
@@ -118,6 +123,7 @@ export interface WorkflowTaskUsage {
   readonly inputTokens?: number;
   readonly outputTokens?: number;
   readonly totalTokens?: number;
+  readonly cacheReadTokens?: number;
 }
 
 export type WorkflowTaskSummaryKind = 'digest' | 'excerpt' | 'digest-failed' | 'pending';
@@ -162,7 +168,14 @@ export interface WorkflowTaskResult {
     | 'inherited';
   readonly providerSource?: 'explicit' | 'specialist' | 'tier' | 'parent' | 'default';
   readonly modelSource?: 'explicit' | 'specialist' | 'tier' | 'parent';
+  readonly initialProvider?: string;
+  readonly initialModel?: string;
+  readonly finalProvider?: string;
+  readonly finalModel?: string;
+  readonly fallbackReason?: string;
   readonly resolvedEffort?: string;
+  readonly iterations?: number;
+  readonly durationMs?: number;
   readonly digestUsage?: WorkflowTaskUsage;
   readonly usage?: WorkflowTaskUsage;
 }

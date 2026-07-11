@@ -9,6 +9,7 @@
 import type { WorkflowModule } from '@kodax-ai/agent';
 
 import { parallelInvestigation } from './parallel-investigation.js';
+import { scopedReview } from './scoped-review.js';
 
 /**
  * Erase a workflow's concrete arg/result types for storage in the registry.
@@ -20,7 +21,10 @@ function erase<A, R>(module: WorkflowModule<A, R>): WorkflowModule {
 }
 
 /** All built-in workflows shipped with KodaX. */
-export const BUILTIN_WORKFLOWS: readonly WorkflowModule[] = [erase(parallelInvestigation)];
+export const BUILTIN_WORKFLOWS: readonly WorkflowModule[] = [
+  erase(parallelInvestigation),
+  erase(scopedReview),
+];
 
 /** Resolve a built-in workflow by its declared `meta.name`. */
 export function getBuiltinWorkflow(name: string): WorkflowModule | undefined {

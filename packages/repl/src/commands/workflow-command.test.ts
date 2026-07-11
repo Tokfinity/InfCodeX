@@ -1634,6 +1634,46 @@ describe('startGeneratedWorkflowFromRequest launch policy', () => {
     return { runBaseDir, runManager };
   }
 
+  it('starts a trusted built-in directly without invoking workflow generation', async () => {
+    const generateWorkflow = vi.fn(async () => fakeGeneratedWorkflow());
+    const builderStages: string[] = [];
+    const runMessages: Array<{ readonly type: string; readonly text: string }> = [];
+    type WorkflowHandlerCallbacks = Parameters<typeof workflowCommand.handler>[2];
+
+    const outcome = await startGeneratedWorkflowFromRequest({
+      ...isolatedWorkflowRuntime(),
+      request: 'Review captured packets',
+      builtin: { name: 'scoped-review', args: { packets: [] } },
+      approval: 'silent',
+      presentation: 'agentic',
+      processSource: 'review',
+      callbacks: {
+        createKodaXOptions: () => ({}) as ReturnType<NonNullable<WorkflowHandlerCallbacks['createKodaXOptions']>>,
+        onWorkflowRunMessage: (event) => runMessages.push(event),
+      },
+      generateWorkflow,
+      onBuilderEvent: (event) => builderStages.push(event.stage),
+    });
+
+    expect(outcome).toBe('started');
+    expect(generateWorkflow).not.toHaveBeenCalled();
+    expect(builderStages).toEqual(['started', 'validating', 'ready', 'launched']);
+    await vi.waitFor(() => {
+      expect(runMessages.some((event) => event.type === 'error')).toBe(true);
+    }, { timeout: 5000 });
+    const [runId] = readdirSync(runBaseDir);
+    const runJson = JSON.parse(
+      readFileSync(join(runBaseDir, runId ?? '', 'run.json'), 'utf8'),
+    ) as Record<string, unknown>;
+    expect(runJson).toMatchObject({
+      workflow: 'scoped-review',
+      source: 'review',
+      args: { packets: [] },
+      hostMetadata: { workflowAuthorship: 'kodax-generated' },
+    });
+    expect(runJson).not.toHaveProperty('scriptSnapshotPath');
+  });
+
   it('auto-starts capability-generated workflows without confirmation when approval is silent', async () => {
     const confirm = vi.fn(async () => false);
     const generateWorkflow = vi.fn(async () => fakeGeneratedWorkflow());
@@ -1697,6 +1737,7 @@ describe('startGeneratedWorkflowFromRequest launch policy', () => {
       displayName: 'generated-fast-audit',
       source: 'amaw',
       goal: 'Generate a parallel audit workflow',
+      hostMetadata: { workflowAuthorship: 'kodax-generated' },
     });
   });
 

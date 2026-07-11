@@ -8380,6 +8380,7 @@ const InkREPLInner: React.FC<InkREPLProps> = ({
             presentation: 'agentic',
             sourceLabel: workflow.displayName,
             processSource: workflow.processSource ?? 'command',
+            ...(workflow.builtin !== undefined ? { builtin: workflow.builtin } : {}),
             onBuilderEvent: workflowCallbacks.onWorkflowBuilderEvent,
           });
           if (outcome === 'started' && streamingStateRef.current.pendingInputs.length > 0) {

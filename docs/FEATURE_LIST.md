@@ -26,7 +26,7 @@
 | Status | Count | Feature IDs | Next checkpoint |
 |---|---:|---|---|
 | Completed | 30 | `258, 253, 254, 255, 256, 257, 228, 251, 252, 250, 248, 249, 247, 246, 245, 243, 242, 241, 233, 240, 239, 224, 221, 174, 211, 237, 229, 230, 234, 236` | `258` implementation complete for v0.7.67; release pending. `253-257` shipped together in v0.7.66 (2026-07-10); `228` shipped v0.7.62 (2026-07-06); `251, 252` shipped v0.7.61 (2026-07-06); `250` shipped v0.7.60 (2026-07-04); `248, 249` shipped v0.7.59 (2026-07-03); `245, 246, 247, 221` released v0.7.58 (2026-07-02); `233, 241, 242, 243` released v0.7.57; `239, 240` released v0.7.56; `224` released v0.7.54; `174, 211, 237` v0.7.53; `229` v0.7.50; `230, 234, 236` v0.7.51 |
-| InProgress | 1 | `259` | `v0.7.67` remaining experiment manifest, deterministic review topology, and integrated cost/quality report gates |
+| InProgress | 1 | `259` | `v0.7.67` behavior implementation and Layer-1 gates complete; pre-registered paid Layer-2/Layer-3 decision run still requires authorization and passing evidence |
 | Planned, near-term | 8 | `244, 231, 235, 238, 232, 105, 108, 225` | `v0.7.75` -> `v0.7.100` |
 | Planned, v0.8.x | 5 | `007, 030, 093, 113, 139` | `v0.8.5+` |
 

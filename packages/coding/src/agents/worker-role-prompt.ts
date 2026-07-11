@@ -95,10 +95,10 @@ export function buildWorkerInstructions(
   void isResumeAfterReviseFailure;
 
   const planFirstContract = [
-    'PLAN-FIRST CONTRACT (FEATURE_114 v0.7.36 + FEATURE_170 v0.7.41 + v0.7.42 schema split):',
+    'PLAN-FIRST CONTRACT:',
     '- Trivial tasks (single typo / single-line edit / single-question lookup / pure conversational answer) → answer or execute directly. Do NOT call `todo_create` / `todo_update`.',
     '- Non-trivial tasks (multiple distinct execution steps, or touching several files / areas / feature threads) → your FIRST tool calls MUST be a batch of `todo_create` — one call per planned step — to commit the full plan up front.',
-    '- Plan item schema (v0.7.42, mirrors claudecode V2 `TaskCreate`):',
+    '- Plan item schema:',
     '    * `subject` — REQUIRED. Brief imperative title shown in the plan-list row (e.g. "Audit handleAuth callers").',
     '    * `description` — OPTIONAL. Fuller context / work instructions read when you pick up the item later. Multi-line OK; NOT rendered in the compact row. Skip when subject alone is enough.',
     '    * `activeForm` — OPTIONAL. Present-continuous form shown by the spinner while this item is `in_progress` (e.g. "Auditing handleAuth callers"). Supply alongside `subject` so the spinner reads natural while you work.',
@@ -129,7 +129,7 @@ export function buildWorkerInstructions(
   // discipline (see `c:/Works/claudecode/src/tools/TaskUpdateTool/`
   // and `TaskCreateTool/`).
   const planListHygiene = [
-    'PLAN-LIST HYGIENE (v0.7.42 — staleness + dedup):',
+    'PLAN-LIST HYGIENE (staleness + dedup):',
     '- BEFORE `todo_update` on an item you have NOT recently touched (e.g. just resumed from idle-yield, or mid-fan-out after children finished, or after a long thinking stretch), call `todo_get(id)` first to read the item\'s CURRENT state. Runner-side auto-handlers can flip statuses between your turns; mutating on a stale view produces silent no-op patches or surprising overwrites. `todo_get` is cheap — one tool call per uncertain item — and the JSON it returns is authoritative.',
     '- BEFORE `todo_create` mid-task, scan the existing plan list (it is visible at the top of every throttle reminder, OR call `todo_list` for an explicit snapshot) and confirm no item with the same subject is already present. Duplicate items split the user\'s progress dashboard into parallel branches of the same work — confusing and easy to over-count.',
     '- DEDUP HEURISTIC: two items are duplicates when their `subject` describes the same concrete artifact / file path / module. They are NOT duplicates when one is a parent-level summary ("Audit packages/auth") and the other a leaf ("Write test for handleLogin in packages/auth") — those are legitimately distinct rows.',
@@ -137,7 +137,7 @@ export function buildWorkerInstructions(
   ].join('\n');
 
   const scopeCommitment = [
-    'SCOPE COMMITMENT (FEATURE_106 hard rule + FEATURE_170 v0.7.41 + v0.7.42):',
+    'SCOPE COMMITMENT:',
     '- Whatever scope you commit to in your first batch of `todo_create` calls is your contract for the run. Surfacing belated obligations later forfeits the trust that drove your initial harness choice — call `todo_create({subject:"..."})` to add the new item explicitly, do not slip it into a later step\'s description.',
     '- If the user request is review/audit, your initial plan committed via `todo_create` IS the visible review report skeleton — emit it in the first 1-2 turns so the user sees structured progress, not a wall of bash + read calls followed by a single text dump.',
   ].join('\n');
@@ -156,7 +156,7 @@ export function buildWorkerInstructions(
   // teaches the only remaining wait mechanic (text-only turn end,
   // runner resumes on `<task-completed>`).
   const dispatchRules = [
-    'DISPATCH RULES (`dispatch_child_task` — idle-yield model, FEATURE_155 v0.7.39):',
+    'DISPATCH RULES (`dispatch_child_task` idle-yield model):',
     '- RULE A — read-only fan-out: when you need multiple independent investigations (e.g. probe several package boundaries in parallel), launch each as a child task with `readOnly: true`.',
     '- RULE B — long-running probes: when a single investigation will take a while (full test suite, deep grep, repo-intel rebuild), dispatch as a child and continue with other tools while it runs.',
     '- RULE C — write fan-out (Generator-equivalent only): NON-conflicting file-level edits across multiple modules can be dispatched as `readOnly: false` children. Do NOT use write fan-out for single-file edits — it adds coordination cost without speedup.',
@@ -164,8 +164,8 @@ export function buildWorkerInstructions(
     '- `run_workflow` USES THE SAME IDLE-YIELD MODEL: it returns a `task_id` immediately and the workflow runs in the background; its synthesized result arrives as a `<task-completed task_id="…">…</task-completed>` block, exactly like a dispatched child. After calling `run_workflow`, do NOT wait inline — idle-yield (or do other work) and you will be resumed when it finishes. The workflow is not done until its `<task-completed>` block arrives.',
     '- PENDING CHILDREN ARE NOT FINAL: a child that has not produced its matching `<task-completed task_id="…">…</task-completed>` block is still in flight. Do not write a final review/report/summary from partial child evidence. If no useful work remains, end with one short waiting status sentence and NO tool calls.',
     '- WAITING IS IDLE-YIELD, NOT A BLOCKING PEEK: when waiting on children is your only remaining purpose, do NOT call `task_output(block:true)` to wait — a blocking peek holds your whole turn open for the full read window and stops the user from chatting with you while children run. A `wait_expired` result means the child is still healthy, not that you should re-issue the wait with a longer `timeout_ms`; the right response is to end your turn text-only so the runner resumes you the instant a child completes. Reserve `task_output` for a quick `block:false` glance when you have a concrete decision to make right now (dispatch a sibling, or `task_stop` a stuck child).',
-    '- LARGE CHILD OUTPUT (FEATURE_121 v0.7.40): when a child\'s report is too large to include inline, the `<task-completed>` banner contains a preview + a marker like `[Tool output truncated. ... Full output saved to: <ABSOLUTE_PATH>. Use the Read tool to view full output.]`. The preview is usually enough — read it first, and only call `Read` on the saved path when you need details beyond what the preview shows (e.g., specific code snippets the child cited, or items below the cutoff). Do NOT blindly Read every spillover path; that wastes context.',
-    '- MODEL HINT (FEATURE_259): set `model_hint` intentionally — `"fast"` only for evaluated read-only mechanical lookups, `"balanced"` for ordinary implementation/investigation, and `"deep"` for architecture, adversarial verification, severity calibration, or final synthesis. Configured `fast`/`deep` tiers route through FEATURE_102; an unconfigured tier inherits the parent. Write-capable `fast` remains on the parent tier. For substantive children, also state the one-line scope, binding constraints, evidence refs, and required output shape instead of repeating the diff.',
+    '- LARGE CHILD OUTPUT: when a child\'s report is too large to include inline, the `<task-completed>` banner contains a preview + a marker like `[Tool output truncated. ... Full output saved to: <ABSOLUTE_PATH>. Use the Read tool to view full output.]`. The preview is usually enough — read it first, and only call `Read` on the saved path when you need details beyond what the preview shows (e.g., specific code snippets the child cited, or items below the cutoff). Do NOT blindly Read every spillover path; that wastes context.',
+    '- MODEL HINT: set `model_hint` intentionally — `"fast"` only for evaluated read-only mechanical lookups, `"balanced"` for ordinary implementation/investigation, and `"deep"` for architecture, adversarial verification, severity calibration, or final synthesis. Configured `fast`/`deep` tiers select their operator-mapped route; an unconfigured tier inherits the parent. Write-capable `fast` remains on the parent tier. For substantive children, also state the one-line scope, binding constraints, evidence refs, and required output shape instead of repeating the diff.',
     // FEATURE_169 v0.7.40 — dispatch objective quality (F0a + F0b). Suite 0
     // v2 audit VALID (bash disagreement 8.9%, pull-correct 3.3%): C bash=0%
     // (vs A=9% baseline-low ceiling-flatten), pull-correct mention 41→76%
@@ -190,7 +190,7 @@ export function buildWorkerInstructions(
   // Worker should reach for each tool and the anti-patterns that
   // prompt eval will guard against.
   const childSteeringRules = [
-    'ASYNC CHILD STEERING (FEATURE_120 + FEATURE_123 — `send_message` + `task_stop`):',
+    'ASYNC CHILD STEERING (`send_message` + `task_stop`):',
     'After `dispatch_child_task` launches a child, you may steer it while it runs:',
     '- `send_message(to=task_id, content="…")` — append an instruction to the child\'s queue. The child sees it as a `<coordinator-instruction>` block at its next LLM turn boundary. Use SPARINGLY: a child that needed more context is a planning failure — the typical pattern is 0-1 send_message calls per child.',
     '- `send_message(to="*", content="…")` — broadcast a system-level update to every in-flight child at once. Capped at 20 recipients per call. Use when the same context shift applies to all children (e.g. "the user just narrowed scope to packages/coding").',
@@ -230,7 +230,7 @@ export function buildWorkerInstructions(
   // rare, so the prompt-waste cost is acceptable vs. the threading cost
   // of plumbing mode into this context-light builder.
   const repoIntelligenceTools = [
-    'REPO INTELLIGENCE TOOLS (FEATURE_161 v0.7.41 — prefer these over read+grep for module-level exploration):',
+    'REPO INTELLIGENCE TOOLS (prefer these over read+grep for module-level exploration):',
     '- `relationship_scan(symbol|module|path|entry)` - single entrypoint for upstream/downstream, callers/callees, dependencies, process links, and impact. Use first for "what calls this", "what depends on this", "上下游", "调用链", and blast-radius questions.',
     '- `module_context(target_path|module)` — compact module capsule with deps, entry files, top symbols, tests, docs. Replaces 5-10 `read`/`grep` calls when you need to understand "what does this module do / what depends on what".',
     '- `symbol_context(symbol)` — definition + probable callers/callees + imports for one symbol. Replaces multiple `grep -n "symbolName"` + `read` rounds when tracing usage.',
@@ -263,7 +263,7 @@ export function buildWorkerInstructions(
     // bash-expected 94% healthy. Disambiguates "review" intent from generic
     // "git ops" intent — the former goes through repo-intel capsules, the
     // latter stays in bash.
-    'CHANGE-REVIEW POSITIVE REFRAME (FEATURE_169 v0.7.40 — review-specific):',
+    'CHANGE-REVIEW POSITIVE REFRAME:',
     '- For ANY task framed as "review", "audit", "compare changes", "check diff", or "what changed since X": your first scope-acquisition tool MUST be `changed_scope` (one call).',
     '- Follow with `changed_diff_bundle(paths[])` to read the specific files surfaced by `changed_scope`.',
     '- Do NOT use `bash git diff …` for change review — that pattern reads opaque text the repo-intel tools already structured for you.',

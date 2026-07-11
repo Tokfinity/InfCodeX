@@ -426,6 +426,32 @@ function withWorkflowQualityWarningMetadata(
   };
 }
 
+function withWorkflowAuthorshipMetadata(
+  metadata: WorkflowRunProcessMetadata | undefined,
+  generated: boolean,
+): WorkflowRunProcessMetadata | undefined {
+  const hostMetadata = metadata?.hostMetadata;
+  const sanitizedHostMetadata = hostMetadata
+    ? Object.fromEntries(Object.entries(hostMetadata).filter(([key]) => key !== 'workflowAuthorship'))
+    : undefined;
+  if (!generated) {
+    if (!metadata || hostMetadata === undefined) return metadata;
+    return {
+      ...metadata,
+      ...(Object.keys(sanitizedHostMetadata ?? {}).length > 0
+        ? { hostMetadata: sanitizedHostMetadata }
+        : { hostMetadata: undefined }),
+    };
+  }
+  return {
+    ...metadata,
+    hostMetadata: {
+      ...(sanitizedHostMetadata ?? {}),
+      workflowAuthorship: 'kodax-generated',
+    },
+  };
+}
+
 export async function startManagedWorkflow(
   input: StartManagedWorkflowInput,
 ): Promise<StartManagedWorkflowResult> {
@@ -450,7 +476,10 @@ export async function startManagedWorkflow(
     ...(scriptSnapshot ? { scriptSnapshot } : {}),
     ...(input.resumeFromRunDir ? { resumeFromRunDir: input.resumeFromRunDir } : {}),
     ...(() => {
-      const processMetadata = withWorkflowQualityWarningMetadata(input.processMetadata, qualityWarnings);
+      const processMetadata = withWorkflowAuthorshipMetadata(
+        withWorkflowQualityWarningMetadata(input.processMetadata, qualityWarnings),
+        input.source.kind === 'request',
+      );
       return processMetadata ? { processMetadata } : {};
     })(),
     ...(input.approval ? { approval: input.approval } : {}),

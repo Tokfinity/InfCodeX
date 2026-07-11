@@ -378,6 +378,7 @@ describe('executeChildAgents — workflow accounting and isolation cleanup', () 
       [createBundle({
         id: 'cb-structured-summary',
         readOnly: true,
+        workflowOutputContract: { kodaxAuthored: true, terseResult: false },
         outputSchema: {
           type: 'object',
           required: ['summary'],
@@ -390,9 +391,90 @@ describe('executeChildAgents — workflow accounting and isolation cleanup', () 
 
     expect(mockRunKodaX).toHaveBeenCalledTimes(1);
     expect(result.results[0]?.structured).toEqual({ summary: 'Parser boundary is covered; no regressions found.' });
-    expect(result.results[0]?.digest).toBeUndefined();
+    expect(result.results[0]?.digest).toBe('Parser boundary is covered; no regressions found.');
     expect(result.results[0]?.totalTokensUsed).toBe(30);
     expect(result.results[0]?.digestTokensUsed).toBeUndefined();
+  });
+
+  it('does not trust a third-party summary schema as a digest contract', async () => {
+    const structuredText = JSON.stringify({ summary: 'Third-party summary.' });
+    mockRunKodaX
+      .mockResolvedValueOnce({
+        success: true,
+        lastText: structuredText,
+        messages: [{ role: 'assistant' as const, content: structuredText }],
+        sessionId: 'third-party-main',
+        usage: { inputTokens: 10, outputTokens: 5, totalTokens: 15 },
+      })
+      .mockResolvedValueOnce({
+        success: true,
+        lastText: 'Distilled by the fallback.',
+        messages: [{ role: 'assistant' as const, content: 'Distilled by the fallback.' }],
+        sessionId: 'third-party-digest',
+        usage: { inputTokens: 4, outputTokens: 2, totalTokens: 6 },
+      });
+    const result = await executeChildAgents(
+      [createBundle({
+        id: 'third-party-summary',
+        readOnly: true,
+        outputSchema: {
+          type: 'object',
+          required: ['summary'],
+          properties: { summary: { type: 'string' } },
+        },
+      })],
+      createCtx(),
+      createOptions({ workflowChild: true }),
+    );
+    expect(mockRunKodaX).toHaveBeenCalledTimes(2);
+    expect(result.results[0]?.digest).toBe('Distilled by the fallback.');
+  });
+
+  it('reuses a registered terse finalText but rejects five-line output', async () => {
+    mockRunKodaX.mockResolvedValueOnce({
+      success: true,
+      lastText: 'Confirmed one boundary issue.\npackages/a.ts:10',
+      messages: [{ role: 'assistant' as const, content: 'Confirmed one boundary issue.\npackages/a.ts:10' }],
+      sessionId: 'terse-main',
+      usage: { inputTokens: 10, outputTokens: 5, totalTokens: 15 },
+    });
+    const terse = await executeChildAgents(
+      [createBundle({
+        id: 'terse-final',
+        readOnly: true,
+        workflowOutputContract: { kodaxAuthored: true, terseResult: true },
+      })],
+      createCtx(),
+      createOptions({ workflowChild: true }),
+    );
+    expect(mockRunKodaX).toHaveBeenCalledTimes(1);
+    expect(terse.results[0]?.digest).toBe('Confirmed one boundary issue.\npackages/a.ts:10');
+
+    mockRunKodaX.mockReset();
+    mockRunKodaX
+      .mockResolvedValueOnce({
+        success: true,
+        lastText: '1\n2\n3\n4\n5',
+        messages: [{ role: 'assistant' as const, content: '1\n2\n3\n4\n5' }],
+        sessionId: 'five-main',
+      })
+      .mockResolvedValueOnce({
+        success: true,
+        lastText: 'Fallback digest.',
+        messages: [{ role: 'assistant' as const, content: 'Fallback digest.' }],
+        sessionId: 'five-digest',
+      });
+    const five = await executeChildAgents(
+      [createBundle({
+        id: 'five-lines',
+        readOnly: true,
+        workflowOutputContract: { kodaxAuthored: true, terseResult: true },
+      })],
+      createCtx(),
+      createOptions({ workflowChild: true }),
+    );
+    expect(mockRunKodaX).toHaveBeenCalledTimes(2);
+    expect(five.results[0]?.digest).toBe('Fallback digest.');
   });
 
   it('does not add the digest turn for ordinary dispatch-child-tasks children', async () => {

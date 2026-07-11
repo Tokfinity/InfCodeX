@@ -208,6 +208,10 @@ export interface CommandWorkflowInvocationRequest {
   source: 'command' | 'natural-language';
   displayName: string;
   processSource?: WorkflowProcessSource;
+  builtin?: {
+    name: string;
+    args: unknown;
+  };
 }
 
 export type CommandResult = boolean | CommandResultData;

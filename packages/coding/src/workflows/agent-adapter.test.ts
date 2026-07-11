@@ -201,6 +201,46 @@ describe('createCodingWorkflowBackend — spawn + wait', () => {
     });
   });
 
+  it('stamps digest-reuse provenance only for KodaX-generated workflows', async () => {
+    const seen: unknown[] = [];
+    for (const kodaxAuthored of [false, true]) {
+      const backend = createCodingWorkflowBackend({
+        ctx: fakeCtx(),
+        childOptions,
+        kodaxAuthored,
+        runChild: async (bundles) => {
+          seen.push(bundles[0]?.workflowOutputContract);
+          return execResult({ status: 'completed', summary: 'full report' });
+        },
+      });
+      const handle = await backend.spawn({
+        name: 'terse',
+        prompt: 'report',
+        readOnly: true,
+        terseResult: true,
+      });
+      await backend.wait(handle.taskId);
+    }
+    expect(seen).toEqual([undefined, { kodaxAuthored: true, terseResult: true }]);
+  });
+
+  it('preserves full finalText when a zero-token reusable digest is present', async () => {
+    const backend = createCodingWorkflowBackend({
+      ctx: fakeCtx(),
+      childOptions,
+      runChild: async () => execResult({
+        status: 'completed',
+        summary: 'Full audit report with detailed evidence that remains recoverable.',
+        digest: 'No regression found.',
+        structured: { summary: 'No regression found.' },
+      }),
+    });
+    const handle = await backend.spawn({ name: 'review', prompt: 'review', readOnly: true });
+    const result = await backend.wait(handle.taskId);
+    expect(result.finalText).toContain('Full audit report');
+    expect(result.digest).toBe('No regression found.');
+  });
+
   it('maps a failed child to status=failed', async () => {
     const backend = createCodingWorkflowBackend({
       ctx: fakeCtx(),
@@ -528,12 +568,37 @@ describe('createCodingWorkflowBackend — spawn + wait', () => {
           return execResult({
             status: 'completed',
             summary: 'Updated docs/FEATURE_LIST.md with the requested feature entry.',
-          });
+            routeFacts: {
+              requestedTier: 'balanced',
+              tierOutcome: 'selected',
+              providerSource: 'tier',
+              initialProvider: 'repair-provider',
+              finalProvider: 'repair-provider',
+              fallbackReason: 'first route unavailable',
+              iterations: 3,
+              inputTokens: 15,
+              outputTokens: 7,
+              cacheReadTokens: 2,
+              durationMs: 150,
+            },
+          }, { totalTokensUsed: 30 });
         }
         return execResult({
           status: 'completed',
           summary: 'I now understand the docs. Let me set up a plan and execute.',
-        });
+          routeFacts: {
+            requestedTier: 'balanced',
+            tierOutcome: 'inherited',
+            providerSource: 'parent',
+            initialProvider: 'initial-provider',
+            finalProvider: 'initial-provider',
+            iterations: 2,
+            inputTokens: 10,
+            outputTokens: 5,
+            cacheReadTokens: 1,
+            durationMs: 100,
+          },
+        }, { totalTokensUsed: 20 });
       },
     });
 
@@ -551,6 +616,19 @@ describe('createCodingWorkflowBackend — spawn + wait', () => {
     expect(attempts).toBe(2);
     expect(objectives[1]).toContain('[Workflow verification repair]');
     expect(objectives[1]).toContain('expected file mutations');
+    expect(result).toMatchObject({
+      initialProvider: 'initial-provider',
+      finalProvider: 'repair-provider',
+      fallbackReason: 'first route unavailable',
+      iterations: 5,
+      durationMs: 250,
+      usage: {
+        totalTokens: 50,
+        inputTokens: 25,
+        outputTokens: 12,
+        cacheReadTokens: 3,
+      },
+    });
   });
 
   it('stops repairing after two hard verification repair attempts', async () => {
@@ -691,6 +769,59 @@ describe('createCodingWorkflowBackend — spawn + wait', () => {
 
     expect(result.status).toBe('completed');
     expect(result.verification?.mutationToolCalls).toEqual(['write']);
+  });
+
+  it('accepts a review verdict only after every required packet path was read', async () => {
+    const required = ['C:/tmp/packet.md', 'C:/tmp/packet.chunk.diff'];
+    const backend = createCodingWorkflowBackend({
+      ctx: fakeCtx(),
+      childOptions,
+      runChild: async (_bundles, _ctx, opts) => {
+        for (const [index, targetPath] of required.entries()) {
+          opts.parentOptions.events?.onToolUseStart?.({
+            id: `read-${index}`,
+            name: 'read',
+            input: { path: targetPath },
+          });
+          opts.parentOptions.events?.onToolResult?.({
+            id: `read-${index}`,
+            name: 'read',
+            content: 'packet evidence',
+          });
+        }
+        return execResult({ status: 'completed', summary: 'verified verdict' });
+      },
+    });
+    const handle = await backend.spawn({
+      name: 'reviewer',
+      prompt: 'review packet',
+      readOnly: true,
+      verification: { requiredReadPaths: required },
+    });
+    const result = await backend.wait(handle.taskId);
+    expect(result.status).toBe('completed');
+    expect(result.verification).toMatchObject({ ok: true, readPaths: required });
+  });
+
+  it('hard-fails a review verdict when a required packet chunk was not read', async () => {
+    const backend = createCodingWorkflowBackend({
+      ctx: fakeCtx(),
+      childOptions,
+      runChild: async (_bundles, _ctx, opts) => {
+        opts.parentOptions.events?.onToolUseStart?.({ id: 'read-1', name: 'read', input: { path: 'packet.md' } });
+        opts.parentOptions.events?.onToolResult?.({ id: 'read-1', name: 'read', content: 'manifest' });
+        return execResult({ status: 'completed', summary: 'premature approval' });
+      },
+    });
+    const handle = await backend.spawn({
+      name: 'reviewer',
+      prompt: 'review packet',
+      readOnly: true,
+      verification: { requiredReadPaths: ['packet.md', 'missing.diff'] },
+    });
+    const result = await backend.wait(handle.taskId);
+    expect(result.status).toBe('failed');
+    expect(result.verification?.reasons).toContain('required review evidence was not read: missing.diff');
   });
 
   it('does not treat isolated worktree write tools as delivered workspace changes', async () => {

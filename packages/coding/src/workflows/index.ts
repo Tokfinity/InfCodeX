@@ -8,6 +8,7 @@
 
 export * from './agent-adapter.js';
 export * from './builtin/parallel-investigation.js';
+export * from './builtin/scoped-review.js';
 // BUILTIN_WORKFLOWS / getBuiltinWorkflow / listBuiltinWorkflows live in the leaf
 // registry so the nested-workflow resolver (workflow-runner) can read them
 // without the index → workflow-runner re-export cycle.
@@ -23,3 +24,6 @@ export * from './invocation-policy.js';
 export * from './identity.js';
 export * from './host.js';
 export * from './author-via-worker.js';
+export * from './review-packet.js';
+export * from './scoped-review.js';
+export * from './cost-report.js';

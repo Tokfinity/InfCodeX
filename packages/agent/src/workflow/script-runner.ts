@@ -213,12 +213,14 @@ function readTaskVerification(value: unknown, label: string): WorkflowTaskVerifi
   }
   const requiresMutation = readOptionalBoolean(record, 'requiresMutation', label);
   const requiredChangedPaths = readOptionalStringArray(record, 'requiredChangedPaths', label);
+  const requiredReadPaths = readOptionalStringArray(record, 'requiredReadPaths', label);
   const minFinalTextChars = readOptionalPositiveInteger(record, 'minFinalTextChars', label);
   const rejectPreparatoryFinalText = readOptionalBoolean(record, 'rejectPreparatoryFinalText', label);
   return {
     ...(enforcement !== undefined ? { enforcement } : {}),
     ...(requiresMutation !== undefined ? { requiresMutation } : {}),
     ...(requiredChangedPaths !== undefined ? { requiredChangedPaths } : {}),
+    ...(requiredReadPaths !== undefined ? { requiredReadPaths } : {}),
     ...(minFinalTextChars !== undefined ? { minFinalTextChars } : {}),
     ...(rejectPreparatoryFinalText !== undefined ? { rejectPreparatoryFinalText } : {}),
   };
@@ -242,6 +244,7 @@ function readSpawnAgentInput(value: unknown, label: string): WorkflowSpawnAgentI
     verification?: WorkflowTaskVerification;
     outputSchema?: unknown;
     effort?: string;
+    terseResult?: boolean;
   } = {
     name: readNonEmptyField(record, 'name', label),
     prompt: readNonEmptyField(record, 'prompt', label),
@@ -285,6 +288,12 @@ function readSpawnAgentInput(value: unknown, label: string): WorkflowSpawnAgentI
   if (record.outputSchema !== undefined) {
     // Opaque JSON Schema — validated downstream by the coding backend, not here.
     input.outputSchema = record.outputSchema;
+  }
+  if (record.terseResult !== undefined) {
+    if (typeof record.terseResult !== 'boolean') {
+      throw new WorkflowScriptExecutionError(`${label} terseResult must be a boolean when provided`);
+    }
+    input.terseResult = record.terseResult;
   }
   return input;
 }

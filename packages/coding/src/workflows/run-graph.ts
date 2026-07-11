@@ -24,6 +24,7 @@ import type {
   WorkflowRunState,
   WorkflowScriptManifest,
 } from '@kodax-ai/agent';
+import { buildWorkflowCostReport } from './cost-report.js';
 
 export type WorkflowRunProcessMetadata = Pick<
   WorkflowProcessTrackerOptions,
@@ -114,6 +115,10 @@ export function createRunGraphWriter(runDir: string, deps: RunGraphWriterDeps = 
         totalSpawned: input.state.totalSpawned,
         artifacts: input.state.artifacts.map((a) => a.name),
         eventCount: input.state.events.length,
+        efficiencyReport: {
+          ...buildWorkflowCostReport(input.state.events),
+          wallClockDurationMs: Math.max(0, input.endedAt - input.startedAt),
+        },
         startedAt: input.startedAt,
         endedAt: input.endedAt,
         args: input.args,

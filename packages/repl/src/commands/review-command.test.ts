@@ -60,14 +60,16 @@ describe('parseReviewInvocation', () => {
 });
 
 describe('buildReviewWorkflowRequest', () => {
-  it('builds a generated workflow request with scope-level review and verification', () => {
+  it('builds a built-in workflow goal with scope-level review and verification', () => {
     const request = buildReviewWorkflowRequest('changes against main');
 
     expect(request).toContain('changes against main');
-    expect(request).toContain('changed_scope');
+    expect(request).toContain('scoped-review');
     expect(request).toContain('specVerdict');
     expect(request).toContain('independent verifier');
     expect(request).toContain('synthesis');
+    expect(request).not.toContain('wf.workflow(');
+    expect(request).not.toContain('dynamic workflow');
   });
 
   it('adds lean reviewer instructions only when requested', () => {

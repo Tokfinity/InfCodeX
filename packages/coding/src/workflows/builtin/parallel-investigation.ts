@@ -131,6 +131,7 @@ async function investigate(
       name: angle.name,
       prompt: angle.prompt,
       readOnly: true,
+      modelHint: 'balanced',
       outputSchema: FINDING_SCHEMA,
     });
     // FEATURE_246 Part E: runAgent now resolves to null on a failed/stopped child

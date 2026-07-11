@@ -97,6 +97,7 @@ async function run(wf, args) {
       name: "round-" + round,
       prompt: "Round " + round + ": continue the investigation. Stop with NO_NEW_FINDINGS if exhausted.\\n" + request,
       readOnly: true,
+      modelHint: "balanced",
       evidenceRefs: findings.map((item) => "task_id:" + item.taskId)
     });
     if (result === null) break;
@@ -155,6 +156,7 @@ async function run(wf, args) {
     name: "routed-worker",
     prompt: "Route: " + action + "\\nRequest:\\n" + request,
     readOnly: true,
+    modelHint: label.includes("verification") ? "deep" : "balanced",
     evidenceRefs: ["task_id:" + classification.taskId]
   });
   return await wf.synthesize({

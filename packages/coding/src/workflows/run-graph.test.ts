@@ -98,6 +98,11 @@ describe('createRunGraphWriter', () => {
       scriptSnapshotPath: join(dir, 'script.js'),
       manifestSnapshotPath: join(dir, 'manifest.json'),
       hostMetadata: { sessionId: 'session-1', tag: 'coder' },
+      efficiencyReport: {
+        wallClockDurationMs: 1,
+        totalModelTokens: 0,
+        tokenCoverage: { ok: true, missingTaskIds: [] },
+      },
     });
   });
 });
