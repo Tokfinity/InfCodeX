@@ -32,7 +32,7 @@ describe('FEATURE_259 frozen experiment contract', () => {
     expect(manifest.layer2Cases).toEqual(FEATURE_259_LAYER_2_CASES);
     expect(manifest.layer3Fixtures).toEqual(FEATURE_259_LAYER_3_FIXTURES);
     expect(manifest.hardExternalSpendCapUsd).toBe(75);
-    expect(manifest.concurrencyPerProvider).toBe(1);
+    expect(manifest.concurrencyPolicy).toMatch(/ark-coding up to three models/);
     expect(manifest.crossProviderConcurrency).toBe(true);
     expect(manifest.conclusionPolicy).toMatch(/owner decides/);
     expect(manifest.reviewPolicy).toMatch(/main session/);

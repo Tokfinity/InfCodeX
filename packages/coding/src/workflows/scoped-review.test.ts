@@ -132,4 +132,25 @@ describe('scoped review contracts', () => {
     expect(() => applyFindingVerification(merged, { findings: [verification.findings[0]!] }))
       .toThrow(/exactly once/);
   });
+
+  it('ignores an unreasoned severity override instead of failing the review', () => {
+    const primary = normalizeScopedReviewResult(packetHash, true, {
+      specVerdict: 'issues',
+      qualityVerdict: 'needs-fixes',
+      findings: [{ severity: 'high', location: 'a.ts:1', claim: 'A', evidence: 'EA' }],
+      unverifiedRequirements: [],
+    });
+    const merged = mergeScopedReviewResults([primary]);
+    const result = applyFindingVerification(merged, {
+      findings: [{
+        findingId: merged.findings[0]!.findingId,
+        disposition: 'confirmed',
+        evidence: 'confirmed without a severity rationale',
+        effectiveSeverity: 'low',
+      }],
+    });
+
+    expect(result.actionable[0]?.severity).toBe('high');
+    expect(result.actionable[0]?.severityReason).toBeUndefined();
+  });
 });

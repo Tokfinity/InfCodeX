@@ -31,6 +31,7 @@ import {
 import {
   MODEL_ALIASES,
   resolveAlias,
+  resolveEvalConcurrency,
   type ModelAlias,
   type ModelAliasTarget,
 } from './aliases.js';
@@ -43,18 +44,42 @@ import {
 } from './judges.js';
 
 const providerCallTails = new Map<string, Promise<void>>();
+const providerPermits = new Map<string, { active: number; readonly waiters: Array<() => void> }>();
 
-async function withProviderCallSlot<T>(provider: string, call: () => Promise<T>): Promise<T> {
-  const previous = providerCallTails.get(provider) ?? Promise.resolve();
-  let release = (): void => undefined;
-  const current = new Promise<void>((resolve) => { release = resolve; });
-  const tail = previous.then(() => current);
-  providerCallTails.set(provider, tail);
-  await previous;
+async function withProviderPermit<T>(
+  provider: string,
+  limit: number,
+  call: () => Promise<T>,
+): Promise<T> {
+  const state = providerPermits.get(provider) ?? { active: 0, waiters: [] };
+  providerPermits.set(provider, state);
+  if (state.active >= limit) {
+    await new Promise<void>((resolve) => state.waiters.push(resolve));
+  } else {
+    state.active++;
+  }
   try {
     return await call();
   } finally {
-    if (providerCallTails.get(provider) === tail) providerCallTails.delete(provider);
+    const next = state.waiters.shift();
+    if (next) next();
+    else state.active--;
+    if (state.active === 0 && state.waiters.length === 0) providerPermits.delete(provider);
+  }
+}
+
+async function withProviderCallSlot<T>(alias: ModelAlias, call: () => Promise<T>): Promise<T> {
+  const policy = resolveEvalConcurrency(alias);
+  const previous = providerCallTails.get(policy.lane) ?? Promise.resolve();
+  let release = (): void => undefined;
+  const current = new Promise<void>((resolve) => { release = resolve; });
+  const tail = previous.then(() => current);
+  providerCallTails.set(policy.lane, tail);
+  await previous;
+  try {
+    return await withProviderPermit(policy.provider, policy.providerLimit, call);
+  } finally {
+    if (providerCallTails.get(policy.lane) === tail) providerCallTails.delete(policy.lane);
     release();
   }
 }
@@ -109,7 +134,7 @@ export async function runOneShot(
   ];
   const tools = input.tools ?? [];
 
-  const { result, durationMs } = await withProviderCallSlot(target.provider, async () => {
+  const { result, durationMs } = await withProviderCallSlot(alias, async () => {
     const startedAt = Date.now();
     const controller = input.timeoutMs === undefined ? undefined : new AbortController();
     const timeout = controller === undefined ? undefined : setTimeout(
@@ -482,18 +507,30 @@ export interface ProviderJob<T> {
   readonly run: () => Promise<T>;
 }
 
-/** Run one queue per provider: queues are parallel, jobs within a queue are serial. */
+/** Run bounded queues per provider; configured model lanes may run in parallel. */
 export async function runWithProviderConcurrency<T>(jobs: readonly ProviderJob<T>[]): Promise<T[]> {
-  const queues = new Map<string, Array<{ readonly index: number; readonly job: ProviderJob<T> }>>();
+  type IndexedJob = { readonly index: number; readonly job: ProviderJob<T> };
+  type ProviderQueues = { readonly limit: number; readonly lanes: Map<string, IndexedJob[]> };
+  const providers = new Map<string, ProviderQueues>();
   jobs.forEach((job, index) => {
-    const provider = MODEL_ALIASES[job.alias].provider;
-    const queue = queues.get(provider) ?? [];
+    const policy = resolveEvalConcurrency(job.alias);
+    const group = providers.get(policy.provider) ?? { limit: policy.providerLimit, lanes: new Map() };
+    const queue = group.lanes.get(policy.lane) ?? [];
     queue.push({ index, job });
-    queues.set(provider, queue);
+    group.lanes.set(policy.lane, queue);
+    providers.set(policy.provider, group);
   });
   const results = new Map<number, T>();
-  await Promise.all([...queues.values()].map(async (queue) => {
-    for (const item of queue) results.set(item.index, await item.job.run());
+  await Promise.all([...providers.values()].map(async ({ limit, lanes }) => {
+    const queues = [...lanes.values()];
+    let nextQueue = 0;
+    const worker = async (): Promise<void> => {
+      while (nextQueue < queues.length) {
+        const queue = queues[nextQueue++]!;
+        for (const item of queue) results.set(item.index, await item.job.run());
+      }
+    };
+    await Promise.all(Array.from({ length: Math.min(limit, queues.length) }, worker));
   }));
   return jobs.map((_, index) => {
     const result = results.get(index);

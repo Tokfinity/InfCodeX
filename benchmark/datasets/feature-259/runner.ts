@@ -39,6 +39,7 @@ import {
 import type { ReviewPacketMetadata } from '../../../packages/coding/src/workflows/review-packet.js';
 import {
   buildStructuredOutputInstruction,
+  buildStructuredOutputRepairPrompt,
   evaluateStructuredOutput,
 } from '../../../packages/coding/src/workflows/structured-output.js';
 import {
@@ -53,7 +54,7 @@ const MIRROR_ROOT = path.join(os.tmpdir(), 'kodax-feature-259-eval-mirror');
 const HARD_CAP_USD = 75;
 const PILOT_ALIAS: ModelAlias = 'ark/v4flash';
 const DECISION_ALIASES: readonly ModelAlias[] = [
-  'zhipu/glm51', 'kimi', 'mmx/m27', 'ark/v4pro', 'ark/v4flash',
+  'zhipu/glm51', 'ark/k27', 'mmx/m27', 'ark/v4pro', 'ark/v4flash',
 ];
 const LAYER_3_DECISION_ALIASES: readonly ModelAlias[] = ['zhipu/glm51', 'ark/v4flash'];
 const SEVERITY_RANK: Readonly<Record<ReviewSeverity, number>> = {
@@ -118,6 +119,12 @@ interface ReviewArmResult {
   readonly calls: readonly OneShotOutput[];
   readonly primaryStarts: number;
   readonly duplicatePacketReads: number;
+}
+
+interface ProviderCallBudget {
+  readonly alias: ModelAlias;
+  readonly max: number;
+  used: number;
 }
 
 interface Layer3Cell {
@@ -205,6 +212,9 @@ function assertUnderCap(costUsd: number): void {
 
 function structuredPrompt(prompt: string, schema: unknown, evidence: string): string {
   return [
+    'This is a single-turn controlled evaluation. The packet below is complete.',
+    'Do not call tools or announce future analysis. Return the required JSON in this response.',
+    '',
     prompt,
     '',
     '## Controlled evaluation packet bytes',
@@ -477,29 +487,60 @@ async function callStructured<T>(
   schema: unknown,
   evidence: string,
   dumpId: string,
-): Promise<{ readonly value: T; readonly raw: OneShotOutput }> {
-  const inputHash = hash(JSON.stringify({
-    alias, systemPrompt: CHILD_AGENT_SYSTEM_PROMPT, prompt, schema, evidence,
-  }));
+  budget: ProviderCallBudget,
+): Promise<{ readonly value: T; readonly calls: readonly OneShotOutput[] }> {
+  const userMessage = structuredPrompt(prompt, schema, evidence);
+  const inputHash = hash(JSON.stringify({ alias, systemPrompt: CHILD_AGENT_SYSTEM_PROMPT, userMessage }));
   const relativePath = path.join('layer3-calls', `${dumpId}.json`);
   const cached = await readMirrorJson<{
     readonly inputHash: string;
-    readonly raw: OneShotOutput;
+    readonly calls?: readonly OneShotOutput[];
+    readonly raw?: OneShotOutput;
   }>(relativePath);
-  if (cached?.inputHash === inputHash && cached.raw.usage !== undefined) {
-    return { value: parsed<T>(cached.raw, schema), raw: cached.raw };
+  const cachedCalls = cached?.calls ?? (cached?.raw ? [cached.raw] : []);
+  const cachedFinal = cachedCalls.at(-1);
+  if (cached?.inputHash === inputHash && cachedFinal?.usage !== undefined) {
+    consumeProviderCalls(budget, cachedCalls.length);
+    return { value: parsed<T>(cachedFinal, schema), calls: cachedCalls };
   }
-  const raw = await runOneShot(alias, {
+  consumeProviderCalls(budget, 1);
+  const first = await runOneShot(alias, {
     systemPrompt: CHILD_AGENT_SYSTEM_PROMPT,
-    userMessage: structuredPrompt(prompt, schema, evidence),
+    userMessage,
     timeoutMs: 120_000,
     maxOutputTokens: 4_096,
   });
+  requireUsage(first);
+  const firstEvaluation = evaluateStructuredOutput(first.text, schema);
+  const calls: OneShotOutput[] = [first];
+  if (!firstEvaluation.ok) {
+    consumeProviderCalls(budget, 1);
+    const repair = await runOneShot(alias, {
+      systemPrompt: CHILD_AGENT_SYSTEM_PROMPT,
+      userMessage: buildStructuredOutputRepairPrompt(firstEvaluation.errors, schema),
+      priorMessages: [
+        { role: 'user', content: userMessage },
+        { role: 'assistant', content: first.text },
+      ],
+      timeoutMs: 120_000,
+      maxOutputTokens: 4_096,
+    });
+    requireUsage(repair);
+    calls.push(repair);
+  }
   await writeRawDump(relativePath, {
-    inputHash, alias, systemPrompt: CHILD_AGENT_SYSTEM_PROMPT, prompt, schema, evidence, raw,
+    inputHash, alias, systemPrompt: CHILD_AGENT_SYSTEM_PROMPT, userMessage, calls,
   });
-  requireUsage(raw);
-  return { value: parsed<T>(raw, schema), raw };
+  return { value: parsed<T>(calls.at(-1)!, schema), calls };
+}
+
+function consumeProviderCalls(budget: ProviderCallBudget, count: number): void {
+  if (budget.used + count > budget.max) {
+    throw new Error(
+      `feature-259 call cap would be exceeded for ${budget.alias}: ${budget.used + count} > ${budget.max}`,
+    );
+  }
+  budget.used += count;
 }
 
 function toVerified(raw: ReturnType<typeof mergeScopedReviewResults>): VerifiedScopedReviewResult {
@@ -527,17 +568,18 @@ async function runBaselineArm(
   alias: ModelAlias,
   fixture: Feature259Layer3Fixture,
   dumpPrefix: string,
+  budget: ProviderCallBudget,
 ): Promise<ReviewArmResult> {
   const lenses = ['specification compliance', 'implementation quality', 'adversarial edge cases', 'scope and test integrity'];
   const calls: OneShotOutput[] = [];
   const reviews: RawScopedReviewResult[] = [];
-  for (const lens of lenses) {
+  for (const [lensIndex, lens] of lenses.entries()) {
     const response = await callStructured<RawScopedReviewResult>(alias, [
       `Broadly review the complete frozen change for ${lens}.`,
       'Own both specification and implementation-quality verdicts. Cite exact locations.',
       'If a binding requirement cannot be proven from the evidence, use specVerdict not-verifiable and name it in unverifiedRequirements.',
-    ].join('\n'), SCOPED_REVIEW_OUTPUT_SCHEMA, allEvidence(fixture), `${dumpPrefix}__primary-${calls.length}`);
-    calls.push(response.raw);
+    ].join('\n'), SCOPED_REVIEW_OUTPUT_SCHEMA, allEvidence(fixture), `${dumpPrefix}__primary-${lensIndex}`, budget);
+    calls.push(...response.calls);
     reviews.push(response.value);
   }
   const normalized = reviews.map((review, index) => normalizeScopedReviewResult(
@@ -551,8 +593,9 @@ async function runBaselineArm(
     { type: 'object', additionalProperties: false, required: ['summary'], properties: { summary: { type: 'string' } } },
     'Synthesize only the structured results already present in the prompt.',
     `${dumpPrefix}__final`,
+    budget,
   );
-  calls.push(final.raw);
+  calls.push(...final.calls);
   const usage = calls.reduce((total, call) => addUsage(total, requireUsage(call)), emptyUsage());
   return {
     summary: final.value.summary,
@@ -568,6 +611,7 @@ async function runProposedArm(
   alias: ModelAlias,
   fixture: Feature259Layer3Fixture,
   dumpPrefix: string,
+  budget: ProviderCallBudget,
 ): Promise<ReviewArmResult> {
   const calls: OneShotOutput[] = [];
   const packetResults: ScopedReviewWorkflowResult['packetResults'][number][] = [];
@@ -584,8 +628,9 @@ async function runProposedArm(
         SCOPED_REVIEW_OUTPUT_SCHEMA,
         packetEvidence(fixture, areaIndex),
         `${dumpPrefix}__area-${areaIndex}-primary-${primaryIndex}`,
+        budget,
       );
-      calls.push(response.raw);
+      calls.push(...response.calls);
       primaries.push(response.value);
       primaryStarts += 1;
       if (primaryIndex > 0) duplicatePacketReads += 1;
@@ -612,8 +657,9 @@ async function runProposedArm(
         FINDING_VERIFICATION_OUTPUT_SCHEMA,
         packetEvidence(fixture, areaIndex),
         `${dumpPrefix}__area-${areaIndex}-verification`,
+        budget,
       );
-      calls.push(response.raw);
+      calls.push(...response.calls);
       verified = applyFindingVerification(merged, response.value);
       duplicatePacketReads += 1;
     }
@@ -625,8 +671,9 @@ async function runProposedArm(
     { type: 'object', additionalProperties: false, required: ['summary'], properties: { summary: { type: 'string' } } },
     'Synthesize only the structured results already present in the prompt.',
     `${dumpPrefix}__final`,
+    budget,
   );
-  calls.push(final.raw);
+  calls.push(...final.calls);
   return {
     summary: final.value.summary,
     packetResults,
@@ -693,20 +740,14 @@ export async function runFeature259Layer3(
     run: async () => {
       const aliasCells: Layer3Cell[] = [];
       let aliasCost = 0;
-      let providerCalls = 0;
+      const callBudget: ProviderCallBudget = { alias, max: perAliasCallCap, used: 0 };
       for (const fixture of fixtures) {
         for (let repetition = 0; repetition < repetitions; repetition++) {
           for (const arm of arms) {
             const dumpPrefix = `${stage}__${alias.replace('/', '-')}__${fixture.id}__${repetition}__${arm}`;
             const result = arm === 'baseline'
-              ? await runBaselineArm(alias, fixture, dumpPrefix)
-              : await runProposedArm(alias, fixture, dumpPrefix);
-            providerCalls += result.calls.length;
-            if (providerCalls > perAliasCallCap) {
-              throw new Error(
-                `feature-259 ${stage} call cap exceeded for ${alias}: ${providerCalls} > ${perAliasCallCap}`,
-              );
-            }
+              ? await runBaselineArm(alias, fixture, dumpPrefix, callBudget)
+              : await runProposedArm(alias, fixture, dumpPrefix, callBudget);
             const score = scoreReview(fixture, result);
             const cell = { alias, fixtureId: fixture.id, repetition, arm, ...score, result };
             aliasCells.push(cell);
@@ -715,11 +756,11 @@ export async function runFeature259Layer3(
             assertUnderCap(aliasCost);
             await writeRawDump(path.join(
               stage, 'partial', `${alias.replace('/', '__')}.json`,
-            ), { stage, alias, cells: aliasCells, providerCalls, estimatedCostUsd: aliasCost });
+            ), { stage, alias, cells: aliasCells, providerCalls: callBudget.used, estimatedCostUsd: aliasCost });
           }
         }
       }
-      return { cells: aliasCells, cost: aliasCost, providerCalls };
+      return { cells: aliasCells, cost: aliasCost, providerCalls: callBudget.used };
     },
   })));
   const cells = aliasResults.flatMap((result) => result.cells);

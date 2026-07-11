@@ -4,7 +4,7 @@ import type {
   WorkflowTaskResult,
 } from '@kodax-ai/agent';
 
-import { scopedReview } from './scoped-review.js';
+import { buildScopedReviewPrimaryPrompt, scopedReview } from './scoped-review.js';
 import type { ReviewPacketMetadata } from '../review-packet.js';
 
 function result(name: string, structured: unknown): WorkflowTaskResult {
@@ -20,6 +20,26 @@ function result(name: string, structured: unknown): WorkflowTaskResult {
 }
 
 describe('scopedReview built-in workflow', () => {
+  it('teaches primaries that findings contain defects, not approval evidence', () => {
+    const prompt = buildScopedReviewPrimaryPrompt({
+      packetPath: 'C:/tmp/packet.md',
+      contentHash: 'a'.repeat(64),
+      rangeId: 'b'.repeat(64),
+      partitionKey: 'packages/a/source',
+      label: 'test',
+      scopePaths: ['packages/a.ts'],
+      riskFlags: [],
+      budget: { maxBytes: 50_000, maxLines: 2_000, maxLineChars: 2_000 },
+      evidenceChunks: [{ path: 'C:/tmp/chunk.diff', contentHash: 'c'.repeat(64) }],
+      requirementsPresent: true,
+      testEvidencePresent: true,
+    }, false, { packets: [] });
+
+    expect(prompt).toContain('findings array contains only actionable defects');
+    expect(prompt).toContain('findings must be empty');
+    expect(prompt).toContain('absence of evidence is not proof of a defect');
+  });
+
   it('runs two primaries only for routing-high, then one batched verifier and capable synthesis', async () => {
     const calls: WorkflowSpawnAgentInput[] = [];
     const logs: unknown[] = [];

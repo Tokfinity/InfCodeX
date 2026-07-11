@@ -78,32 +78,37 @@ describe('runOneShot alias fidelity', () => {
     expect(result.cells[0]?.runsRaw[0]?.error).toContain('exceeded frozen timeout');
   });
 
-  it('runs different providers concurrently while serializing aliases on one provider', async () => {
+  it('runs three Ark models concurrently, serializes each model, and caps Ark at three', async () => {
     type ResolveStream = (value: {
       textBlocks: Array<{ type: 'text'; text: string }>;
       toolBlocks: never[];
       thinkingBlocks: never[];
       usage: { inputTokens: number; outputTokens: number; totalTokens: number };
     }) => void;
-    const pending = new Map<string, ResolveStream>();
+    const pending = new Map<string, ResolveStream[]>();
     stream.mockImplementation((
       _messages: unknown,
       _tools: unknown,
       _system: unknown,
       _reasoning: unknown,
       options: { modelOverride: string },
-    ) => new Promise((resolve) => pending.set(options.modelOverride, resolve)));
+    ) => new Promise((resolve) => {
+      const resolvers = pending.get(options.modelOverride) ?? [];
+      resolvers.push(resolve);
+      pending.set(options.modelOverride, resolvers);
+    }));
     const resultPromise = runBenchmark({
       variants: [{ id: 'candidate', systemPrompt: 'system', userMessage: 'user' }],
-      models: ['ark/v4pro', 'ark/v4flash', 'zhipu/glm51'],
+      models: ['ark/v4pro', 'ark/v4flash', 'ark/k27', 'ark/glm51'],
       judges: [{ name: 'ok', judge: () => ({ passed: true }) }],
       runs: 1,
     });
 
-    await vi.waitFor(() => expect(stream).toHaveBeenCalledTimes(2));
+    await vi.waitFor(() => expect(stream).toHaveBeenCalledTimes(3));
     expect(pending.has('deepseek-v4-pro')).toBe(true);
-    expect(pending.has('glm-5.1')).toBe(true);
-    expect(pending.has('deepseek-v4-flash')).toBe(false);
+    expect(pending.has('deepseek-v4-flash')).toBe(true);
+    expect(pending.has('kimi-k2.7-code')).toBe(true);
+    expect(pending.has('glm-5.1')).toBe(false);
 
     const output = {
       textBlocks: [{ type: 'text' as const, text: 'ok' }],
@@ -111,13 +116,35 @@ describe('runOneShot alias fidelity', () => {
       thinkingBlocks: [],
       usage: { inputTokens: 1, outputTokens: 1, totalTokens: 2 },
     };
-    pending.get('deepseek-v4-pro')!(output);
-    await vi.waitFor(() => expect(stream).toHaveBeenCalledTimes(3));
-    pending.get('deepseek-v4-flash')!(output);
-    pending.get('glm-5.1')!(output);
+    pending.get('deepseek-v4-pro')![0]!(output);
+    await vi.waitFor(() => expect(stream).toHaveBeenCalledTimes(4));
+    pending.get('deepseek-v4-flash')![0]!(output);
+    pending.get('kimi-k2.7-code')![0]!(output);
+    pending.get('glm-5.1')![0]!(output);
 
     const result = await resultPromise;
-    expect(result.cells).toHaveLength(3);
-    expect(result.models).toEqual(['ark/v4pro', 'ark/v4flash', 'zhipu/glm51']);
+    expect(result.cells).toHaveLength(4);
+    expect(result.models).toEqual(['ark/v4pro', 'ark/v4flash', 'ark/k27', 'ark/glm51']);
+  });
+
+  it('does not overlap repeated calls to the same Ark model', async () => {
+    let active = 0;
+    let maxActive = 0;
+    stream.mockImplementation(async () => {
+      active++;
+      maxActive = Math.max(maxActive, active);
+      await Promise.resolve();
+      active--;
+      return {
+        textBlocks: [{ type: 'text', text: 'ok' }],
+        toolBlocks: [],
+        thinkingBlocks: [],
+        usage: { inputTokens: 1, outputTokens: 1, totalTokens: 2 },
+      };
+    });
+    await Promise.all([1, 2, 3].map(() => runOneShot('ark/k27', {
+      systemPrompt: 'system', userMessage: 'user',
+    })));
+    expect(maxActive).toBe(1);
   });
 });

@@ -137,10 +137,10 @@ Timeout 只是最后一道保险，不能代替调用数和 token 预算。每�
 
 1. **Pilot 先验证实验，不先验证 prompt**：先用 1–2 个代表 case、1–2 个 provider、每 arm 1–2 次，确认任务可区分、主会话能据此判断有效性、预算估计可信。Pilot 设计无效就停，不扩 panel。
 2. **Layer 2 不执行模型提出的工具调用**：只捕获模型的下一响应 / tool call 作为观测，避免一个 probe 展开成 agent loop。
-3. **Layer 3 使用固定 call graph**：每轮输入、允许的工具结果、终止点都由 harness 注入。禁止模型自行 spawn 无界 child、重试或决定追加轮次。
+3. **Layer 3 使用固定 call graph**：每轮输入、允许的工具结果、终止点都由 harness 注入。禁止模型自行 spawn 无界 child、重试或决定追加轮次。结构化输出若是生产路径本来就支持 repair，可预注册最多 1 次 bounded repair；它必须计入 call/round/token 上限，不能循环修复。
 4. **Layer 3.5 只做 smoke**：最多 3 个 case；必须另设 turn、child、tool-call 和 token 硬上限；不得用于 baseline/candidate 优劣结论。
 5. **先评审已有 raw，再考虑重跑**：评分器、rubric 或 aggregate 逻辑变化时由主会话重读原始输出。仅当 case 输入改变、raw 损坏或样本确实不足时，才补跑最小受影响集合。
-6. **并发按 provider 限流**：同一 provider 最多 1 个在途请求，不同 provider 并行；任何 fallback 按实际 provider 排队。
+6. **并发按已验证 provider policy 限流**：默认同一 provider 最多 1 个在途请求，不同 provider 并行；`ark-coding` 例外为最多 3 个 model lane、每模型 1 个在途请求。任何 fallback 按实际 provider/model lane 排队。
 
 ---
 
@@ -154,7 +154,7 @@ Timeout 只是最后一道保险，不能代替调用数和 token 预算。每�
 [ ] sample size 多少？为什么是这个数（不能是"看心情"）？
 [ ] pre-registered 分析问题与主会话评审 rubric：怎样算“有实质价值、总体优于 baseline、存在可信回退”？
 [ ] A/B 证据是否盲化？主会话评审是否会结构化落盘并给出理由？
-[ ] provider 并发计划：同一 provider 是否保证最多 1 个在途请求？
+[ ] provider 并发计划：是否遵守默认每 provider 1 并发；若使用已验证例外，是否同时冻结 provider 总上限与每模型上限？
 [ ] maxProviderCalls / maxCallsPerCell / maxRoundsPerCell / maxOutputTokens / maxTotalTokens 是多少？
 [ ] 总成本 budget：估计 $X。能换什么决定？($X 不值就放弃)
 [ ] raw output dump 路径？(强制条款，见 §Raw output preservation)
@@ -191,9 +191,9 @@ OK = process exit 0 是个**极其弱的信号**：
 
 ### 反模式 3：同 provider 并发
 
-每个 coding plan provider（kimi / glm / mmx / mimo / ark）都有共享 quota。同一 provider 并发 >1 容易触发 429；例如 `ark/v4pro` 与 `ark/v4flash` 虽是两个 alias，仍共享 `ark-coding` quota。429 隐藏在 timeout 之后会看起来像模型失败，污染数据。
+每个 coding plan provider（kimi / glm / mmx / mimo / ark）都有 quota。同一 provider 超出已验证并发能力容易触发 429；429 隐藏在 timeout 之后会看起来像模型失败，污染数据。
 
-**强制 concurrency = 1 per provider**。不同 provider 的队列必须自然并行；禁止为了规避单 provider 限流而退化成整个 panel 全局串行。Fallback 按实际路由 provider 进入对应队列。
+**默认 concurrency = 1 per provider**。不同 provider 的队列必须自然并行；禁止为了规避单 provider 限流而退化成整个 panel 全局串行。已由 owner 明确确认的 provider 能力可以作为显式 harness policy 覆盖默认值：`ark-coding` 最多同时运行 3 个模型，但同一模型始终只有 1 个 in-flight call。Fallback 按实际路由 provider 和 model lane 进入对应队列。
 
 ### 反模式 4：探索期就开多 alias
 
@@ -310,6 +310,7 @@ Content-equivalent refactor（语义保留 byte 重排：例如 monolithic prose
 4. **数据缺口单列**：timeout、缺失 usage、格式失败必须进入证据包和报告。偶发缺口降低置信度，不自动否决；系统性只发生在 candidate、足以影响实际可用性的缺口可判为回退。缺失 usage 时不得宣称 token / 成本改善。
 5. **机械指标是诊断证据**：pass rate、regex、token、latency 帮助解释为什么更好或更差，并用于发现评分器错误；不能单独覆盖主会话的语义分析。
 6. **评审落盘**：保存证据包 hash、case 级 verdict、揭盲映射、最终建议、回退归因和理由。仅存在于聊天文本、无法复核的结论不算完成。
+7. **语义不变量不能只靠 schema**：若结构化 schema 子集不能表达条件约束（例如“改 severity 必须附理由”），生产合并层必须采取保守、不中断的处理，并有单测。Eval 发现 schema-valid 但运行时拒绝的输出时，这是产品契约缺口，应先修产品/实验契约，再只重跑输入真正变化的最小集合。
 
 只有在主会话判断证据仍然模糊，或用户明确要求独立复核时，才额外调用外部模型。外部复核必须单独预算和授权，不能默认把 executor panel 再跑一遍当“judge”。
 
@@ -399,15 +400,16 @@ Total: $Z
 | Alias short id | Provider · model | Family | 档位 |
 |---|---|---|---|
 | `zhipu/glm51` | zhipu-coding · glm-5.1 | Zhipu | high-end |
-| `kimi`        | kimi-code · kimi-for-coding | Moonshot | high-end |
+| `ark/k27`     | ark-coding · kimi-k2.7-code | Moonshot (via Ark) | high-end |
 | `mmx/m27`     | minimax-coding · MiniMax-M2.7 | MiniMax | high-end |
 | `ark/v4pro`   | ark-coding · deepseek-v4-pro | DeepSeek (via Ark) | high-end |
 | `ark/v4flash` | ark-coding · deepseek-v4-flash | DeepSeek (via Ark) | floor |
 
 **覆盖价值**：
-- 覆盖 4 个独立 provider family（Zhipu / Moonshot / MiniMax / DeepSeek），跨家族盲区互补
+- 覆盖 4 个模型 family（Zhipu / Moonshot / MiniMax / DeepSeek），跨家族盲区互补；其中 Moonshot 与 DeepSeek 共用 Ark gateway，但走独立 model lane
 - DeepSeek 双档（flash floor + pro high-end）能在同 family 内捕到"模型档位是否吃 prompt 改动"
 - **2026-05-21 升级**：DeepSeek 双档从官方 API `ds/v4{pro,flash}` 切到 `ark-coding` 路线 `ark/v4{pro,flash}`。理由：用户验证 ark-coding gateway routes DeepSeek-V4 正常，**走 coding-plan 订阅成本可控**，不再混入 token-bill 路径。`zhipu-coding/glm-5.1` 留在 panel；`ark-coding/glm-5.1`（`ark/glm51`）退出 default panel — 同 zhipu family 重复采样收益低于跨 family
+- **2026-07-11 升级**：官方 `kimi-code/kimi-for-coding` 暂停用于新 eval；Moonshot 覆盖改由 `ark/k27`（`ark-coding/kimi-k2.7-code`）承担。历史 raw 仍保留原 alias/route，不改写证据。
 - `mimo/v25(pro)` / `ark/glm51` / `ds/v4{pro,flash}` 可按任务显式 opt-in；不要为了“阵容完整”重复采样同 family / 同模型 gateway
 
 **选择原则**：

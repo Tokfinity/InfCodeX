@@ -5,7 +5,7 @@ import path from 'node:path';
 
 export const FEATURE_259_DECISION_ALIASES = [
   'zhipu/glm51',
-  'kimi',
+  'ark/k27',
   'mmx/m27',
   'ark/v4pro',
   'ark/v4flash',
@@ -74,11 +74,12 @@ export function buildFeature259ExperimentManifest(input: Feature259ExperimentInp
     resolvedAliases: input.resolvedAliases,
     effort: 'provider-default-frozen-per-cell',
     temperature: 'provider-default-frozen-per-cell',
-    concurrencyPerProvider: 1,
+    concurrencyPolicy: 'default one per provider; ark-coding up to three models, one call per model',
     crossProviderConcurrency: true,
     fallbackRule: 'rerun both arms of every affected pair on the same canonical fallback',
     timeoutMs: 120_000,
     maxOutputTokens: { layer2Generation: 8_192, layer3StructuredCall: 4_096 },
+    structuredRepair: 'at most one bounded repair call after schema-invalid output; included in call caps',
     repetitions: { pilot: 1, decision: 5 },
     externalCallBudget: {
       layer2Pilot: 12,

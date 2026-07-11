@@ -219,9 +219,6 @@ export function applyFindingVerification(
     if (!expected.has(item.findingId) || seen.has(item.findingId)) {
       throw new Error('verifier must return every input findingId exactly once');
     }
-    if (item.effectiveSeverity !== undefined && !item.severityReason?.trim()) {
-      throw new Error('effectiveSeverity requires severityReason');
-    }
     seen.add(item.findingId);
   }
   if (seen.size !== expected.size) throw new Error('verifier must return every input findingId exactly once');
@@ -230,12 +227,14 @@ export function applyFindingVerification(
   const actionable = review.findings.flatMap((finding) => {
     const verdict = verificationById.get(finding.findingId)!;
     if (verdict.disposition === 'refuted') return [];
+    const severityReason = verdict.severityReason?.trim();
+    const reasonedSeverity = verdict.effectiveSeverity !== undefined && !!severityReason;
     return [{
       ...finding,
       disposition: verdict.disposition,
-      severity: verdict.effectiveSeverity ?? finding.severity,
+      severity: reasonedSeverity ? verdict.effectiveSeverity! : finding.severity,
       verificationEvidence: normalizeText(verdict.evidence),
-      ...(verdict.severityReason ? { severityReason: normalizeText(verdict.severityReason) } : {}),
+      ...(severityReason ? { severityReason: normalizeText(severityReason) } : {}),
     }];
   });
   return {

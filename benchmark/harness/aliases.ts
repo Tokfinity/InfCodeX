@@ -28,8 +28,8 @@
  * that still inline their own PROVIDERS arrays continue to work — migration
  * is opportunistic, not forced.
  *
- * **Canonical panel rule (2026-05-21)**: new prompt-evals default to the 5
- * coding-plan aliases — `zhipu/glm51`, `kimi`, `mmx/m27`, `ark/v4pro`,
+ * **Canonical panel rule (2026-07-11)**: new prompt-evals default to the 5
+ * coding-plan aliases — `zhipu/glm51`, `ark/k27`, `mmx/m27`, `ark/v4pro`,
  * `ark/v4flash`. The `ds/*` (deepseek official API) aliases stay in the
  * registry for legacy compatibility but should not be picked for new
  * canonical panels — `ark/v4*` is the equivalent on a coding-plan provider
@@ -58,7 +58,14 @@ export interface ModelAliasTarget {
   readonly model: string;
   /** Environment variable that gates execution — eval skips when unset. */
   readonly apiKeyEnv: string;
+  /** Optional eval scheduler policy. Default is one concurrent call per provider. */
+  readonly evalConcurrency?: {
+    readonly scope: 'model';
+    readonly providerLimit: number;
+  };
 }
+
+const ARK_MODEL_CONCURRENCY = Object.freeze({ scope: 'model', providerLimit: 3 } as const);
 
 export const MODEL_ALIASES: Readonly<Record<ModelAlias, ModelAliasTarget>> = Object.freeze({
   'zhipu/glm51':  { provider: 'zhipu-coding',   model: 'glm-5.1',           apiKeyEnv: 'ZHIPU_CODING_API_KEY' },
@@ -68,10 +75,10 @@ export const MODEL_ALIASES: Readonly<Record<ModelAlias, ModelAliasTarget>> = Obj
   'mimo/v25pro':  { provider: 'mimo-coding',    model: 'mimo-v2.5-pro',     apiKeyEnv: 'MIMO_CODING_API_KEY' },
   'mmx/m27':      { provider: 'minimax-coding', model: 'MiniMax-M2.7',      apiKeyEnv: 'MINIMAX_CODING_API_KEY' },
   'mmx/m3':       { provider: 'minimax-coding', model: 'MiniMax-M3',        apiKeyEnv: 'MINIMAX_CODING_API_KEY' },
-  'ark/glm51':    { provider: 'ark-coding',     model: 'glm-5.1',           apiKeyEnv: 'ARK_CODING_API_KEY' },
-  'ark/k27':      { provider: 'ark-coding',     model: 'kimi-k2.7-code',    apiKeyEnv: 'ARK_CODING_API_KEY' },
-  'ark/v4pro':    { provider: 'ark-coding',     model: 'deepseek-v4-pro',   apiKeyEnv: 'ARK_CODING_API_KEY' },
-  'ark/v4flash':  { provider: 'ark-coding',     model: 'deepseek-v4-flash', apiKeyEnv: 'ARK_CODING_API_KEY' },
+  'ark/glm51':    { provider: 'ark-coding',     model: 'glm-5.1',           apiKeyEnv: 'ARK_CODING_API_KEY', evalConcurrency: ARK_MODEL_CONCURRENCY },
+  'ark/k27':      { provider: 'ark-coding',     model: 'kimi-k2.7-code',    apiKeyEnv: 'ARK_CODING_API_KEY', evalConcurrency: ARK_MODEL_CONCURRENCY },
+  'ark/v4pro':    { provider: 'ark-coding',     model: 'deepseek-v4-pro',   apiKeyEnv: 'ARK_CODING_API_KEY', evalConcurrency: ARK_MODEL_CONCURRENCY },
+  'ark/v4flash':  { provider: 'ark-coding',     model: 'deepseek-v4-flash', apiKeyEnv: 'ARK_CODING_API_KEY', evalConcurrency: ARK_MODEL_CONCURRENCY },
   'ds/v4pro':     { provider: 'deepseek',       model: 'deepseek-v4-pro',   apiKeyEnv: 'DEEPSEEK_API_KEY' },
   'ds/v4flash':   { provider: 'deepseek',       model: 'deepseek-v4-flash', apiKeyEnv: 'DEEPSEEK_API_KEY' },
 });
@@ -90,6 +97,24 @@ export function resolveAlias(alias: ModelAlias): ModelAliasTarget {
     throw new Error(`Unknown model alias: "${alias}". Known: ${ALL_MODEL_ALIASES.join(', ')}`);
   }
   return target;
+}
+
+export interface EvalConcurrencyPolicy {
+  readonly provider: string;
+  readonly lane: string;
+  readonly providerLimit: number;
+}
+
+/** Resolve the bounded eval lane without coupling the harness to provider names. */
+export function resolveEvalConcurrency(alias: ModelAlias): EvalConcurrencyPolicy {
+  const target = resolveAlias(alias);
+  return {
+    provider: target.provider,
+    lane: target.evalConcurrency?.scope === 'model'
+      ? `${target.provider}/${target.model}`
+      : target.provider,
+    providerLimit: target.evalConcurrency?.providerLimit ?? 1,
+  };
 }
 
 /**

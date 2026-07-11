@@ -80,6 +80,9 @@ export function buildScopedReviewPrimaryPrompt(
     args.reviewFocus ? `Additional user focus: ${args.reviewFocus}` : '',
     'Read the manifest and every listed chunk with the read tool before deciding.',
     'Begin with the required JSON result. No preamble or process narration.',
+    'The findings array contains only actionable defects, never approval evidence or positive observations.',
+    'When the scope is compliant and approved with no actionable defect, findings must be empty.',
+    'If a named requirement cannot be proven compliant or violated from surfaced evidence, use specVerdict not-verifiable, list it in unverifiedRequirements, and emit no finding for that uncertainty; absence of evidence is not proof of a defect.',
     'If requirements are absent, specVerdict must be not-verifiable.',
   ].filter(Boolean).join('\n');
 }
