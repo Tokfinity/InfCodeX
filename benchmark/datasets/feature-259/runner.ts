@@ -50,7 +50,7 @@ const MIRROR_ROOT = path.join(os.tmpdir(), 'kodax-feature-259-eval-mirror');
 const HARD_CAP_USD = 75;
 const PILOT_ALIAS: ModelAlias = 'ark/v4flash';
 const AUDIT_ALIAS: ModelAlias = 'ark/v4pro';
-const AUDIT_VERSION = 2;
+const AUDIT_VERSION = 3;
 const DECISION_ALIASES: readonly ModelAlias[] = [
   'zhipu/glm51', 'kimi', 'mmx/m27', 'ark/v4pro', 'ark/v4flash',
 ];
@@ -117,6 +117,7 @@ interface Layer3Summary {
 
 interface JudgeAudit {
   readonly auditVersion: number;
+  readonly auditInputHash: string;
   readonly alias: ModelAlias;
   readonly caseId: string;
   readonly mechanicalPassed: false;
@@ -207,6 +208,7 @@ async function auditFailure(
   rawOutput: string,
   mechanicalReason: string,
 ): Promise<JudgeAudit> {
+  const auditInputHash = hash(`${caseId}\0${contract}\0${rawOutput}\0${mechanicalReason}`);
   const schema = {
     type: 'object', additionalProperties: false, required: ['agrees', 'reason'],
     properties: { agrees: { type: 'boolean' }, reason: { type: 'string' } },
@@ -231,6 +233,7 @@ async function auditFailure(
   requireUsage(raw);
   return {
     auditVersion: AUDIT_VERSION,
+    auditInputHash,
     alias: AUDIT_ALIAS,
     caseId,
     mechanicalPassed: false,
@@ -313,13 +316,17 @@ export async function runFeature259Layer2(stage: 'pilot' | 'layer2'): Promise<La
         if (!run.error && failedJudge) {
           const auditId = `${evalCase.id}/${cell.variantId}/${cell.alias}/${run.runIndex}`;
           const auditPath = path.join(stage, 'audits', `${auditId.replaceAll('/', '__')}.json`);
+          const rawOutput = JSON.stringify({ text: run.text, toolCalls: run.toolCalls });
+          const mechanicalReason = failedJudge.reason ?? failedJudge.name;
+          const auditInputHash = hash(`${auditId}\0${evalCase.contract}\0${rawOutput}\0${mechanicalReason}`);
           const cached = await readMirrorJson<JudgeAudit>(auditPath);
-          const cachedAudit = cached?.auditVersion === AUDIT_VERSION ? cached : undefined;
+          const cachedAudit = cached?.auditVersion === AUDIT_VERSION
+            && cached.auditInputHash === auditInputHash ? cached : undefined;
           const audit = cachedAudit ?? await auditFailure(
             auditId,
             evalCase.contract,
-            JSON.stringify({ text: run.text, toolCalls: run.toolCalls }),
-            failedJudge.reason ?? failedJudge.name,
+            rawOutput,
+            mechanicalReason,
           );
           judgeAudits.push(audit);
           await writeRawDump(auditPath, audit);

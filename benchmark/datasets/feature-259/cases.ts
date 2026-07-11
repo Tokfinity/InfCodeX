@@ -34,7 +34,7 @@ const BASELINE_WORKER_REPLACEMENTS = [
     "`run_workflow` is the first thing to reach for when the task's shape fits a bounded workflow: it gives you structured per-child output and same-session resume that ad-hoc fan-out does not. When the task is more exploratory or the fan-out is simple parallel investigation, a `dispatch_child_task` fan-out is an equally valid way to satisfy this default — what matters is that the work gets cross-checked by more than one agent, not which tool you dispatched it through.",
   ],
   [
-    'Once a workflow-shaped plan is already recorded and current, start it with `run_workflow`; do not recreate/update its plan items or expand the same stages into ad-hoc dispatch calls.',
+    '\nOnce a workflow-shaped plan is already recorded and current, start it with `run_workflow`; do not recreate/update its plan items or expand the same stages into ad-hoc dispatch calls.',
     '',
   ],
   ['PLAN-FIRST CONTRACT:', 'PLAN-FIRST CONTRACT (FEATURE_114 v0.7.36 + FEATURE_170 v0.7.41 + v0.7.42 schema split):'],
@@ -77,6 +77,10 @@ export function buildBaselineGenerationPrompt(request: string): string {
     .replace('- wf.workflow(name, args) for one built-in or saved nested workflow; prefer wf.workflow("scoped-review", args) for immutable review packets.\n', '')
     .replace('- When the request requires structured findings from each child, every substantive wf.runAgent/wf.spawnAgent call must declare scopeSummary, constraints, and outputSchema; do not drop the contract on a verifier or later lane.\n', '')
     .replace('- Keep generated source minimal: omit prose comments and redundant helpers, and reuse wf.workflow("scoped-review", args) when immutable review packets already match that built-in topology.\n', '')
+    .replace(
+      '  const reviewer = await wf.runAgent({ name: "reviewer", prompt: String(args.request || ""), scopeSummary: "Review the assigned immutable evidence", constraints: ["return structured findings", "cite evidence"], readOnly: true, modelHint: "deep", outputSchema: schema: true });',
+      '  const reviewer = await wf.runAgent({ name: "reviewer", prompt: String(args.request || ""), readOnly: true, modelHint: "deep", outputSchema: schema: true });',
+    )
     .replace(/- Every generated wf\.runAgent[\s\S]+?judgment-critical review\.\n/, '')
     .replace(/- Set terseResult:true[\s\S]+?digest fallback remains\.\n/, '')
     .replace(', modelHint: "balanced"', '')
