@@ -319,12 +319,16 @@ async function updateLocalTaskFromResult(
   const completed = child?.status === 'completed';
   const evidence = result.mergedFindings[0]?.evidence.join('\n').trim();
   const output = evidence || child?.summary;
-  await plane.tasks.updateLocal(childId, {
-    state: completed ? 'completed' : 'failed',
-    ...(output ? { output } : {}),
-    ...(!completed && child?.summary ? { error: child.summary } : {}),
-    ...(result.totalTokensUsed > 0 ? { usage: { totalTokens: result.totalTokensUsed } } : {}),
-  });
+  try {
+    await plane.tasks.updateLocal(childId, {
+      state: completed ? 'completed' : 'failed',
+      ...(output ? { output } : {}),
+      ...(!completed && child?.summary ? { error: child.summary } : {}),
+      ...(result.totalTokensUsed > 0 ? { usage: { totalTokens: result.totalTokensUsed } } : {}),
+    });
+  } catch (error: unknown) {
+    reportLocalTaskMirrorFailure(childId, error);
+  }
 }
 
 async function updateLocalTaskFromError(
@@ -337,9 +341,22 @@ async function updateLocalTaskFromError(
   const message = error instanceof Error ? error.message : String(error);
   const aborted = error instanceof Error
     && (error.name === 'AbortError' || error.message.toLowerCase().includes('aborted'));
-  await plane.tasks.updateLocal(childId, {
-    state: aborted ? 'canceled' : 'failed',
-    error: message,
+  try {
+    await plane.tasks.updateLocal(childId, {
+      state: aborted ? 'canceled' : 'failed',
+      error: message,
+    });
+  } catch (mirrorError: unknown) {
+    reportLocalTaskMirrorFailure(childId, mirrorError);
+  }
+}
+
+function reportLocalTaskMirrorFailure(childId: string, error: unknown): void {
+  emitKodaXDiagnostic({
+    source: 'coding:external-agent-ledger',
+    level: 'warn',
+    message: `Local task ${childId} completed, but its non-authoritative agent ledger mirror could not be updated.`,
+    detail: error,
   });
 }
 

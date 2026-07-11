@@ -7,6 +7,7 @@ import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
 describe('runtime config patch validation', () => {
   let tempRoot: string;
   let previousKodaxHome: string | undefined;
+  const daemonOwners: Array<{ readonly homeDir: string; readonly profile: string }> = [];
 
   beforeEach(async () => {
     tempRoot = await fs.mkdtemp(path.join(os.tmpdir(), 'kodax-runtime-config-'));
@@ -16,13 +17,19 @@ describe('runtime config patch validation', () => {
   });
 
   afterEach(async () => {
-    if (previousKodaxHome === undefined) {
-      delete process.env.KODAX_HOME;
-    } else {
-      process.env.KODAX_HOME = previousKodaxHome;
+    try {
+      for (const owner of daemonOwners.splice(0)) {
+        await shutdownRuntimeDaemon(owner.homeDir, owner.profile);
+      }
+    } finally {
+      if (previousKodaxHome === undefined) {
+        delete process.env.KODAX_HOME;
+      } else {
+        process.env.KODAX_HOME = previousKodaxHome;
+      }
+      vi.resetModules();
+      await fs.rm(tempRoot, { recursive: true, force: true });
     }
-    vi.resetModules();
-    await fs.rm(tempRoot, { recursive: true, force: true });
   });
 
   it('allows explicit public keys and rejects admin-plane keys that have dedicated APIs', async () => {
@@ -132,9 +139,11 @@ describe('runtime config patch validation', () => {
     process.env.KODAX_HOME = envHome;
     vi.resetModules();
     const { createKodaXRuntime } = await import('@kodax-ai/kodax/runtime');
+    const profile = `config-${process.pid}-${Date.now()}`;
+    daemonOwners.push({ homeDir: runtimeHome, profile });
     const runtime = await createKodaXRuntime({
       mode: 'daemon',
-      profile: `config-${process.pid}-${Date.now()}`,
+      profile,
       homeDir: runtimeHome,
       sessionsDir: path.join(runtimeHome, '.kodax', 'sessions'),
       autoStartDaemon: true,
@@ -159,5 +168,38 @@ describe('runtime config patch validation', () => {
     } finally {
       await runtime.close();
     }
+    await shutdownRuntimeDaemon(runtimeHome, profile);
+    const { readRuntimeDaemonState, resolveRuntimeDaemonPaths } = await import('./runtime-daemon/state.js');
+    expect(readRuntimeDaemonState(resolveRuntimeDaemonPaths(runtimeHome, profile))).toBeUndefined();
   });
 });
+
+async function shutdownRuntimeDaemon(homeDir: string, profile: string): Promise<void> {
+  const {
+    readRuntimeDaemonState,
+    readRuntimeDaemonToken,
+    resolveRuntimeDaemonPaths,
+  } = await import('./runtime-daemon/state.js');
+  const paths = resolveRuntimeDaemonPaths(homeDir, profile);
+  const state = readRuntimeDaemonState(paths);
+  if (!state) return;
+  const { runtimeDaemonEndpointFromState } = await import('./runtime-daemon/lifecycle.js');
+  const { createRuntimeDaemonSocketClientTransport } = await import('./runtime-daemon/transport.js');
+  const transport = await createRuntimeDaemonSocketClientTransport(runtimeDaemonEndpointFromState(state));
+  try {
+    await transport.request('initialize', {
+      profile,
+      token: readRuntimeDaemonToken(paths),
+    });
+    await transport.request('runtime.shutdown');
+  } finally {
+    await transport.close?.();
+  }
+  const deadline = Date.now() + 5_000;
+  while (readRuntimeDaemonState(paths) !== undefined) {
+    if (Date.now() >= deadline) {
+      throw new Error(`Runtime daemon profile ${profile} did not shut down.`);
+    }
+    await new Promise<void>((resolve) => setTimeout(resolve, 25));
+  }
+}

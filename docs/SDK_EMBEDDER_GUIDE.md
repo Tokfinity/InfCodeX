@@ -2527,6 +2527,9 @@ Operational guidance:
 - use one stable profile for cooperating desktop clients;
 - use a separate `homeDir` or profile for tests, previews, and incompatible
   configurations;
+- test harnesses that auto-start a process daemon must send authenticated
+  `runtime.shutdown` (or run `kodax daemon stop --home <dir> --profile <name>`)
+  before deleting their temporary home; `runtime.close()` only detaches;
 - query `kodax daemon status --json` before deciding to restart;
 - inspect `kodax daemon logs --lines 100` when startup times out;
 - custom endpoints and injected transports are attach-only unless the caller
@@ -2890,6 +2893,19 @@ terminal task state and rejects on a positive `timeoutMs` expiry. `sendInput()`
 is valid only while the task reports `input-required` or `auth-required`.
 `reconcile()` asks the bound executor for authoritative remote state after an
 owner restart or uncertain failure.
+
+The owner plane has a terminal close contract. Closing it rejects every pending
+`wait()` (including a wait without `timeoutMs`), disposes its executor instances,
+and makes subsequent registration, catalog, preflight, and task calls reject
+with `Agent executor plane is closed.` Repeated `close()` calls are safe. SDK
+hosts should stop accepting work before closing the owner and must not retain a
+plane service as a reusable handle after Runtime shutdown.
+
+Restricted Workflow scripts use the same route as direct SDK calls. Both
+`wf.spawnAgent()` and `wf.runAgent()` validate and forward
+`target: { agentId, expectedConfigurationRevision? }`; `phase` is forwarded as
+well. A blank ID or revision is rejected at the script boundary instead of
+silently falling back to the native child backend.
 
 ### Credential, artifact, and failure boundaries
 

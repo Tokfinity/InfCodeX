@@ -233,11 +233,13 @@ function readSpawnAgentInput(value: unknown, label: string): WorkflowSpawnAgentI
   const record = readRecord(value, label);
   const input: {
     name: string;
+    phase?: string;
     prompt: string;
     scopeSummary?: string;
     constraints?: readonly string[];
     readOnly?: boolean;
     subagentType?: string;
+    target?: WorkflowSpawnAgentInput['target'];
     modelHint?: WorkflowSpawnAgentInput['modelHint'];
     isolation?: WorkflowSpawnAgentInput['isolation'];
     evidenceRefs?: readonly string[];
@@ -249,6 +251,9 @@ function readSpawnAgentInput(value: unknown, label: string): WorkflowSpawnAgentI
     name: readNonEmptyField(record, 'name', label),
     prompt: readNonEmptyField(record, 'prompt', label),
   };
+  if (record.phase !== undefined) {
+    input.phase = readNonEmptyField(record, 'phase', label);
+  }
   if (record.scopeSummary !== undefined) {
     input.scopeSummary = readNonEmptyField(record, 'scopeSummary', label);
   }
@@ -263,6 +268,21 @@ function readSpawnAgentInput(value: unknown, label: string): WorkflowSpawnAgentI
   }
   if (record.subagentType !== undefined) {
     input.subagentType = readNonEmptyField(record, 'subagentType', label);
+  }
+  if (record.target !== undefined) {
+    const target = readRecord(record.target, `${label} target`);
+    input.target = {
+      agentId: readNonEmptyField(target, 'agentId', `${label} target`),
+      ...(target.expectedConfigurationRevision !== undefined
+        ? {
+            expectedConfigurationRevision: readNonEmptyField(
+              target,
+              'expectedConfigurationRevision',
+              `${label} target`,
+            ),
+          }
+        : {}),
+    };
   }
   if (record.modelHint !== undefined) {
     input.modelHint = readNonEmptyField(record, 'modelHint', label) as WorkflowSpawnAgentInput['modelHint'];

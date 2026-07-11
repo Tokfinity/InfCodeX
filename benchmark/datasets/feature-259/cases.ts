@@ -59,6 +59,13 @@ function replaceRequired(source: string, current: string, baseline: string): str
   return source.replace(current, baseline);
 }
 
+function replaceAllRequired(source: string, current: string, baseline: string): string {
+  if (!source.includes(current)) {
+    throw new Error(`feature-259 baseline reconstruction missed: ${current.slice(0, 80)}`);
+  }
+  return source.replaceAll(current, baseline);
+}
+
 export function buildProposedWorkerPrompt(): string {
   return `${orchestrationDefault}\n\n${buildWorkerInstructions(ROUTING_DECISION, undefined, false)}`;
 }
@@ -72,20 +79,54 @@ export function buildBaselineWorkerPrompt(): string {
 
 export function buildBaselineGenerationPrompt(request: string): string {
   let prompt = buildWorkflowGenerationUserPrompt(request);
-  prompt = prompt
-    .replaceAll(', terseResult', '')
-    .replace('- wf.workflow(name, args) for one built-in or saved nested workflow; prefer wf.workflow("scoped-review", args) for immutable review packets.\n', '')
-    .replace('- When the request requires structured findings from each child, every substantive wf.runAgent/wf.spawnAgent call must declare scopeSummary, constraints, and outputSchema; do not drop the contract on a verifier or later lane.\n', '')
-    .replace('- Keep generated source minimal: omit prose comments and redundant helpers, and reuse wf.workflow("scoped-review", args) when immutable review packets already match that built-in topology.\n', '')
-    .replace(
-      '  const reviewer = await wf.runAgent({ name: "reviewer", prompt: String(args.request || ""), scopeSummary: "Review the assigned immutable evidence", constraints: ["return structured findings", "cite evidence"], readOnly: true, modelHint: "deep", outputSchema: schema: true });',
-      '  const reviewer = await wf.runAgent({ name: "reviewer", prompt: String(args.request || ""), readOnly: true, modelHint: "deep", outputSchema: schema: true });',
-    )
-    .replace(/- Every generated wf\.runAgent[\s\S]+?judgment-critical review\.\n/, '')
-    .replace(/- Set terseResult:true[\s\S]+?digest fallback remains\.\n/, '')
-    .replace(', modelHint: "balanced"', '')
-    .replace(', modelHint: "deep", outputSchema: schema, terseResult: true', ', outputSchema: schema')
-    .replace('    modelHint: "balanced",\n', '');
+  prompt = replaceRequired(
+    prompt,
+    '- wf.spawnAgent({ name, prompt, scopeSummary, constraints, readOnly, modelHint, effort, isolation, evidenceRefs, verification, outputSchema, terseResult })',
+    '- wf.spawnAgent({ name, prompt, readOnly, modelHint, effort, isolation, evidenceRefs, verification, outputSchema })',
+  );
+  prompt = replaceRequired(
+    prompt,
+    '- wf.runAgent({ name, prompt, scopeSummary, constraints, readOnly, modelHint, effort, isolation, evidenceRefs, verification, outputSchema, terseResult })',
+    '- wf.runAgent({ name, prompt, readOnly, modelHint, effort, isolation, evidenceRefs, verification, outputSchema })',
+  );
+  prompt = replaceRequired(
+    prompt,
+    '- wf.workflow(name, args) for one built-in or saved nested workflow; prefer wf.workflow("scoped-review", args) for immutable review packets.\n',
+    '',
+  );
+  prompt = replaceRequired(
+    prompt,
+    '- For substantive children, keep prompt context compact: state one-line scopeSummary, binding constraints, evidenceRefs, and the required output shape; do not repeat the full diff or packet in every child prompt.\n',
+    '',
+  );
+  prompt = replaceRequired(
+    prompt,
+    '- When the request requires structured findings from each child, every substantive wf.runAgent/wf.spawnAgent call must declare scopeSummary, constraints, and outputSchema; do not drop the contract on a verifier or later lane.\n',
+    '',
+  );
+  prompt = replaceRequired(
+    prompt,
+    '- Keep generated source minimal: omit prose comments and redundant helpers, and reuse wf.workflow("scoped-review", args) when immutable review packets already match that built-in topology.\n',
+    '',
+  );
+  prompt = replaceRequired(
+    prompt,
+    '  const reviewer = await wf.runAgent({ name: "reviewer", prompt: String(args.request || ""), scopeSummary: "Review the assigned immutable evidence", constraints: ["return structured findings", "cite evidence"], readOnly: true, modelHint: "deep", outputSchema: schema, terseResult: true });',
+    '  const reviewer = await wf.runAgent({ name: "reviewer", prompt: String(args.request || ""), readOnly: true, modelHint: "deep", outputSchema: schema });',
+  );
+  prompt = replaceRequired(
+    prompt,
+    '- Every generated wf.runAgent/wf.spawnAgent call must state modelHint: "fast" only for mechanical read-only lookup, "balanced" for normal implementation/investigation and ordinary scoped review, or "deep" for architecture, adversarial verification, severity calibration, and final synthesis. Never use "fast" for a write child or judgment-critical review.\n',
+    '',
+  );
+  prompt = replaceRequired(
+    prompt,
+    '- Set terseResult:true only when the child is explicitly told to begin with its result, omit process narration, cite evidence at the finding, and stop after a 1-4 line result or the declared output schema. Otherwise leave it false/absent so the normal digest fallback remains.\n',
+    '',
+  );
+  prompt = replaceAllRequired(prompt, ', modelHint: "balanced"', '');
+  prompt = replaceRequired(prompt, ', modelHint: "deep", outputSchema: schema', ', outputSchema: schema');
+  prompt = replaceAllRequired(prompt, '    modelHint: "balanced",\n', '');
   return prompt;
 }
 

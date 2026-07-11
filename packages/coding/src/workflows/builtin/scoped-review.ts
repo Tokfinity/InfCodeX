@@ -11,6 +11,7 @@ import {
   type VerifiedScopedReviewResult,
 } from '../scoped-review.js';
 import type { ReviewPacketMetadata } from '../review-packet.js';
+import { validateAgainstSchema } from '../structured-output.js';
 
 export interface ScopedReviewWorkflowArgs {
   readonly packets: readonly ReviewPacketMetadata[];
@@ -38,15 +39,17 @@ function evidencePaths(packet: ReviewPacketMetadata): readonly string[] {
 }
 
 function rawReview(value: unknown): RawScopedReviewResult {
-  if (typeof value !== 'object' || value === null || Array.isArray(value)) {
-    throw new Error('scope reviewer did not return a structured result');
+  const errors = validateAgainstSchema(value, SCOPED_REVIEW_OUTPUT_SCHEMA);
+  if (errors.length > 0) {
+    throw new Error(`primary reviewer structured result is invalid: ${errors.join('; ')}`);
   }
   return value as RawScopedReviewResult;
 }
 
 function rawVerification(value: unknown): FindingVerificationResult {
-  if (typeof value !== 'object' || value === null || Array.isArray(value)) {
-    throw new Error('finding verifier did not return a structured result');
+  const errors = validateAgainstSchema(value, FINDING_VERIFICATION_OUTPUT_SCHEMA);
+  if (errors.length > 0) {
+    throw new Error(`finding verifier structured result is invalid: ${errors.join('; ')}`);
   }
   return value as FindingVerificationResult;
 }

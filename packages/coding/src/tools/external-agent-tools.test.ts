@@ -152,6 +152,23 @@ describe('FEATURE_258 Worker external-agent bridge', () => {
     expect(output).toContain('<usage>{"totalTokens":7}</usage>');
   });
 
+  it('keeps the authoritative local child result when ledger mirroring fails', async () => {
+    const asyncContext = await createContext();
+    const ctx: KodaXToolExecutionContext = {
+      ...asyncContext,
+      childTaskRegistry: undefined,
+    };
+    ctx.agentExecutorPlane!.plane.tasks.updateLocal = vi.fn(async () => {
+      throw new Error('ledger unavailable');
+    });
+
+    await expect(consume(toolDispatchChildTask({
+      id: 'local-ledger-failure',
+      objective: 'Review locally',
+      agent_id: 'native:kodax-child',
+    }, ctx))).resolves.toContain('local-ok');
+  });
+
   it('routes send_message and task_stop through the external task ledger', async () => {
     const ctx = await createContext();
     await consume(toolDispatchChildTask({

@@ -14,6 +14,8 @@ _Last Updated: 2026-07-11_
 
 | ID | Priority | Status | Title | Introduced | Fixed | Created | Resolved |
 |----|----------|--------|-------|------------|-------|---------|----------|
+| 151 | High | Resolved | Runtime config tests leak detached daemon processes and interrupted background fixtures can survive | v0.7.67 RC | v0.7.67 | 2026-07-11 | 2026-07-11 |
+| 150 | High | Resolved | v0.7.67 外部 Agent 脚本路由与执行平面关闭契约存在发布阻断缺口 | v0.7.67 RC | v0.7.67 | 2026-07-11 | 2026-07-11 |
 | 149 | High | Resolved | ACP tests persist empty sessions into the real user store | v0.7.66 | v0.7.67 | 2026-07-11 | 2026-07-11 |
 | 148 | High | Resolved | FEATURE_258 外部任务在持久化失败、配置热更新和并发回调下可能失联或状态回退 | v0.7.67 RC | v0.7.67 | 2026-07-10 | 2026-07-10 |
 | 088 | High | Resolved | 消息列表视口布局不稳定 - 底部区域跳动/最后一行被裁剪 | v0.5.29 | v0.5.39 | 2026-03-16 | 2026-03-16 |
@@ -99,6 +101,160 @@ _Last Updated: 2026-07-11_
 
 ## Issue Details
 <!-- Full details for each issue - REQUIRED for all issues -->
+
+### 151: Runtime config tests leak detached daemon processes and interrupted background fixtures can survive
+
+- **Priority**: High
+- **Status**: **Resolved** (v0.7.67)
+- **Introduced**: v0.7.67 release candidate
+- **Created**: 2026-07-11
+- **Resolved**: 2026-07-11
+- **Fixed**: v0.7.67
+
+#### Original Problem
+
+Windows Task Manager showed many long-lived Node processes after KodaX test
+runs. Process ownership/command-line inspection separated 26 Codex-owned MCP
+servers from four real KodaX residues: three `config-*` daemon processes whose
+test parents were gone, and one background command fixture whose test parent
+had been forcibly terminated.
+
+The daemon behavior itself is intentional: a process daemon survives client
+detach and stops only through explicit shutdown. The defect is that
+`sdk-runtime.config.test.ts` creates that persistent owner but only closes the
+client before deleting its temporary home. Separately, infinite-loop child
+fixtures assume Vitest always reaches `afterEach`; a forced runner timeout can
+prevent cleanup.
+
+#### Root Cause
+
+- The config test treated client `close()` as daemon shutdown, contrary to the
+  explicit daemon ownership contract.
+- Long-running process fixtures had no parent-liveness watchdog for abnormal
+  test-runner termination.
+- Task Manager also groups Codex MCP servers under Node.js, which made the KodaX
+  residue appear much larger than it was.
+
+#### Proposed Solution
+
+- Track the config test's daemon profile, explicitly request
+  `runtime.shutdown`, and verify daemon state disappears before deleting the
+  temporary home; keep an `afterEach` fallback for failed assertions.
+- Make infinite background test fixtures exit when their original parent
+  process no longer exists, without changing production background jobs.
+- Document that daemon mode is persistent by design and provide the explicit
+  `kodax daemon stop` cleanup command; do not kill unrelated Node/Codex MCP
+  processes.
+
+#### Resolution
+
+The runtime config suite now records the exact daemon `homeDir + profile`, sends
+an authenticated `runtime.shutdown`, waits until owner state disappears, and
+keeps an `afterEach` fallback for assertion failures. Its regression run passed
+3/3 with a before/after process diff of `NEW_NODE_PIDS=none`. Infinite child
+fixtures in the Bash and managed-process suites now poll their original parent
+and self-exit if a forcibly terminated test runner cannot reach normal cleanup.
+
+Five already-orphaned, command-line-verified KodaX test processes were stopped.
+The 26 Node processes owned by the active `codex.exe` parent were identified as
+Codex MCP servers and intentionally left untouched.
+
+#### Files Changed
+
+- `src/sdk-runtime.config.test.ts`
+- `packages/coding/src/tools/bash.test.ts`
+- `packages/agent/src/runtime/managed-child-processes.test.ts`
+- `docs/SDK_EMBEDDER_GUIDE.md`
+
+#### Tests Added or Hardened
+
+- Auto-started config daemon state must disappear after explicit test shutdown.
+- The daemon test run must leave no new Node PID after completion.
+- Long-lived process fixtures have an abnormal-parent-exit fallback while
+  retaining normal managed cleanup assertions.
+
+### 150: v0.7.67 外部 Agent 脚本路由与执行平面关闭契约存在发布阻断缺口
+
+- **Priority**: High
+- **Status**: **Resolved** (v0.7.67)
+- **Introduced**: v0.7.67 release candidate
+- **Created**: 2026-07-11
+- **Resolved**: 2026-07-11
+- **Fixed**: v0.7.67
+
+#### Original Problem
+
+Post-release review found that `WorkflowSpawnAgentInput.target` was present in
+the public Agent type and consumed by the Workflow runtime, but the restricted
+script host boundary silently omitted it. The same whitelist also omitted the
+public `phase` field. Therefore a model-authored `run_workflow` script could not
+route a child through FEATURE_258's shared dispatchable-agent catalog even
+though direct/built-in Workflow calls could.
+
+The same review found deterministic lifecycle gaps in the executor plane:
+`close()` disposed executors without settling pending `tasks.wait()` promises,
+and every registration/catalog/task method remained callable after close.
+Adjacent trust-boundary hardening gaps affected scoped-review structured values,
+Feature 259 baseline reconstruction, and non-authoritative local-ledger updates.
+
+#### Context
+
+- Affected components: restricted Workflow script RPC, external Agent executor
+  plane lifecycle, built-in scoped review, Feature 259 eval contract, local task
+  ledger mirroring.
+- Reproduction: run a restricted script with
+  `target: {agentId:'external:...'}` and inspect the `WorkflowApi.runAgent`
+  input; start `tasks.wait(id)` without a timeout and close the plane.
+- Expected: every public spawn field crosses the script boundary with validation;
+  close is terminal and settles pending waits; ancillary validation/ledger
+  failures cannot silently corrupt authoritative results.
+
+#### Root Cause
+
+The restricted-script whitelist was updated for Feature 259 briefing fields but
+not Feature 258's target or the existing phase field. The executor plane had no
+closed state and modeled waiters as resolve-only callbacks. The remaining gaps
+were local trust-boundary assumptions that lacked fail-loud assertions.
+
+#### Proposed Solution
+
+- Parse and validate `phase` and `target` at the restricted-script boundary.
+- Make executor-plane close idempotent and terminal, reject all pending waiters,
+  and reject all service calls after close.
+- Validate built-in scoped-review structured values against their declared
+  schemas.
+- Make every Feature 259 baseline prompt rewrite required and byte-auditable.
+- Keep local-ledger mirroring best-effort without replacing child results/errors.
+
+#### Resolution
+
+The v0.7.67 GitHub release and tag were withdrawn before npm publication. The
+restricted script boundary now validates and forwards both `phase` and
+`target`; malformed external targets fail before dispatch. Executor-plane
+closure is idempotent and terminal, rejects every pending waiter, and rejects
+all subsequent registration/catalog/task service calls. Scoped-review values
+are checked against the declared schemas, Feature 259 baseline reconstruction
+uses fail-loud exact replacements and no longer leaks proposed-only fields, and
+local ledger mirror failures are diagnostic-only.
+
+#### Files Changed
+
+- `packages/agent/src/workflow/script-runner.ts`
+- `packages/agent/src/external-agents/executor-plane.ts`
+- `packages/coding/src/workflows/builtin/scoped-review.ts`
+- `packages/coding/src/tools/dispatch-child-tasks.ts`
+- `benchmark/datasets/feature-259/cases.ts`
+
+#### Tests Added
+
+- Restricted scripts preserve `phase`, `target.agentId`, and configuration
+  revision, while rejecting blank target IDs.
+- Closing an executor plane rejects an unbounded waiter, rejects every service
+  surface after close, and remains safe when called twice.
+- Malformed scoped-review output fails with a schema diagnostic.
+- Local ledger mirror failure cannot replace an authoritative child result.
+- Frozen Feature 259 baselines exclude candidate-only briefing fields and the
+  previously malformed schema fragment.
 
 ### 149: ACP tests persist empty sessions into the real user store
 
@@ -5086,11 +5242,27 @@ Commit `ef085fc` 把 V1 精简到 V2 时没区分"信息载体"和"脚手架"，
 ---
 
 ## Summary
-- Total: 76 (24 Open, 52 Resolved, 0 Partially Resolved, 0 Won't Fix)
+- Total: 78 (24 Open, 54 Resolved, 0 Partially Resolved, 0 Won't Fix)
 - Highest Priority Open: 091 - 缺少一等公民 MCP / Web Search / Code Search 工具体系 (High)
 - Historical archived issues are maintained in ISSUES_ARCHIVED.md
 
 ## Changelog
+
+### 2026-07-11: Issue 151 added and resolved (v0.7.67)
+- Distinguished Codex-owned MCP Node processes from KodaX test residues by
+  command line, parent PID, and start time.
+- Added explicit Runtime daemon shutdown to the config suite and parent-death
+  watchdogs to long-running process fixtures.
+- Verified the corrected suite leaves no new Node PID and removed five verified
+  orphaned KodaX test processes without touching Codex MCP servers.
+
+### 2026-07-11: Issue 150 added and resolved (v0.7.67)
+- Withdrew the initial GitHub release/tag before npm publication.
+- Restored restricted-script `phase` / external `target` forwarding.
+- Made executor-plane close terminal and waiter-safe.
+- Hardened scoped-review schemas, Feature 259 baseline reconstruction, and
+  best-effort local ledger mirroring.
+- Added focused regression tests and prepared a rebuilt v0.7.67 release.
 
 ### 2026-07-11: Issue 149 added and resolved (v0.7.67)
 

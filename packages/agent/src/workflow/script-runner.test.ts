@@ -81,10 +81,15 @@ describe('runRestrictedWorkflowScript', () => {
         async function run(wf) {
           return wf.runAgent({
             name: 'scoped-reader',
+            phase: 'review',
             prompt: 'inspect the parser',
             scopeSummary: 'parser boundary',
             constraints: ['read-only', 'preserve public API'],
             readOnly: true,
+            target: {
+              agentId: 'external:reviewer',
+              expectedConfigurationRevision: 'reviewer-v2'
+            },
             terseResult: true,
             verification: { requiredReadPaths: ['packet.md'] }
           });
@@ -94,8 +99,13 @@ describe('runRestrictedWorkflowScript', () => {
 
     expect(inputs[0]).toMatchObject({
       name: 'scoped-reader',
+      phase: 'review',
       scopeSummary: 'parser boundary',
       constraints: ['read-only', 'preserve public API'],
+      target: {
+        agentId: 'external:reviewer',
+        expectedConfigurationRevision: 'reviewer-v2',
+      },
       terseResult: true,
       verification: { requiredReadPaths: ['packet.md'] },
     });
@@ -778,6 +788,25 @@ describe('runRestrictedWorkflowScript', () => {
         `,
       }),
     ).rejects.toThrow(/readOnly must be a boolean/);
+    expect(prompts).toEqual([]);
+  });
+
+  it('rejects malformed external targets before dispatch', async () => {
+    const { wf, prompts } = fakeWorkflowApi();
+    await expect(
+      runRestrictedWorkflowScript({
+        wf,
+        source: `
+          async function run(wf) {
+            return await wf.runAgent({
+              name: 'reviewer',
+              prompt: 'review',
+              target: { agentId: '   ' }
+            });
+          }
+        `,
+      }),
+    ).rejects.toThrow(/target agentId must be a non-empty string/);
     expect(prompts).toEqual([]);
   });
 

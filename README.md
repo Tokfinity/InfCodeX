@@ -319,8 +319,14 @@ inline/Worker ownership, but only detaches one daemon client. Contradictory
 isolation options fail instead of silently selecting a weaker mode. Worker
 isolation is a V8 fault boundary, not a security sandbox.
 
+Because a daemon is intentionally persistent, tests that auto-start one must
+also run `kodax daemon stop --home <dir> --profile <name>` (or send authenticated
+`runtime.shutdown`) before deleting their temporary home. A remaining Node
+process is not safe to kill by name alone; verify its command line and owner.
+
 ```bash
 kodax daemon start
+kodax daemon stop --profile default
 kodax --runtime-mode daemon
 kodax -p "Review this repository" --runtime-mode daemon
 ```
@@ -480,7 +486,7 @@ KodaX has two layers that consumers should understand separately:
 
 **Tool-Output Compression + Workflow Quality Preflight (FEATURE_251 + FEATURE_252, v0.7.61)**: KodaX's own `bash` tool now compresses noisy command output **inside the tool**, so a big `git diff`, test run, package install, or `docker build` no longer spends thousands of context tokens — command-aware filters (git/test/lint/JSON + a declarative package/docker/infra long-tail) summarize the stdout/stderr body while the `Command:`/`Exit:` header stays verbatim and every lossy summary keeps a raw-recovery path; isolated measurements show ~66–99% body-token reduction. Alongside it, inline `run_workflow` gains a deterministic pre-start quality lint that hard-fails weak-model authoring contract bugs (unawaited workflow-command used as a boolean, top-level access of `result.structured` fields, literal agent fanout above manifest/host caps) before a run starts. Both are deterministic (no prompt change). See [docs/features/v0.7.61.md](docs/features/v0.7.61.md) and [docs/ADR.md ADR-050](docs/ADR.md).
 
-**External Agent SDK Plane (FEATURE_258, v0.7.67)**: `/agent` exports the protocol-neutral executor, registration, policy, credential-broker, artifact-policy, catalog, and durable task contracts. `/runtime` exposes the installed plane through `admin.agentRegistrations`, `agents`, and `agentTasks`, with the same DTO service methods over embedded and daemon clients. Executor factories are host functions: install them in an inline owner or while creating a new in-process daemon owner; they cannot be injected through an existing daemon connection or across a Runtime Worker boundary. See the [complete owner/consumer recipes and safety contract](docs/SDK_EMBEDDER_GUIDE.md#18-external-agent-executor-plane-feature_258-v0767).
+**External Agent SDK Plane (FEATURE_258, v0.7.67)**: `/agent` exports the protocol-neutral executor, registration, policy, credential-broker, artifact-policy, catalog, and durable task contracts. `/runtime` exposes the installed plane through `admin.agentRegistrations`, `agents`, and `agentTasks`, with the same DTO service methods over embedded and daemon clients. Executor factories are host functions: install them in an inline owner or while creating a new in-process daemon owner; they cannot be injected through an existing daemon connection or across a Runtime Worker boundary. Plane shutdown is terminal: pending waits and all later service calls reject. Restricted Workflow scripts preserve validated `phase` and external `target` routing. See the [complete owner/consumer recipes and safety contract](docs/SDK_EMBEDDER_GUIDE.md#18-external-agent-executor-plane-feature_258-v0767).
 
 **Cost-Disciplined Workflow SDK (FEATURE_259, v0.7.67)**: SDK callers configure run-scoped `modelTiers` and `workflow.maxConcurrency`, while workflow authors express semantic `fast` / `balanced` / `deep` intent. Terminal workflow events expose resolved tier/source/fallback/usage/duration facts, and each durable `run.json` contains an `efficiencyReport` with token coverage, role/tier starts, packet-read topology, review waves, and quality-gate outcomes. See the [routing and telemetry contract](docs/SDK_EMBEDDER_GUIDE.md#20-cost-disciplined-workflow-routing-and-telemetry-feature_259-v0767).
 

@@ -113,4 +113,30 @@ describe('scopedReview built-in workflow', () => {
     expect(logs).toHaveLength(4);
     expect(artifacts).toHaveLength(1);
   });
+
+  it('fails loudly when a backend violates the declared primary output schema', async () => {
+    const wf = {
+      runAgent: async (input: WorkflowSpawnAgentInput): Promise<WorkflowTaskResult> =>
+        result(input.name, { specVerdict: 'issues' }),
+      log: () => {},
+      parallel: async <T>(items: readonly (() => Promise<T>)[]): Promise<(T | null)[]> =>
+        Promise.all(items.map((item) => item())),
+    } as unknown as WorkflowApi;
+    const packet: ReviewPacketMetadata = {
+      packetPath: 'C:/tmp/packet.md',
+      contentHash: 'a'.repeat(64),
+      rangeId: 'b'.repeat(64),
+      partitionKey: 'packages/a/source',
+      label: 'test',
+      scopePaths: ['packages/a.ts'],
+      riskFlags: [],
+      budget: { maxBytes: 50_000, maxLines: 2_000, maxLineChars: 2_000 },
+      evidenceChunks: [{ path: 'C:/tmp/chunk.diff', contentHash: 'c'.repeat(64) }],
+      requirementsPresent: true,
+      testEvidencePresent: false,
+    };
+
+    await expect(scopedReview.run(wf, { packets: [packet] }))
+      .rejects.toThrow(/primary reviewer structured result is invalid.*qualityVerdict/i);
+  });
 });

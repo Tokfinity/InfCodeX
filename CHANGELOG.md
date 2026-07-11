@@ -68,6 +68,22 @@ All notable changes to this project will be documented in this file.
 
 ### Fixed
 
+- **Restricted Workflow scripts preserve the public Agent routing contract.**
+  `phase` and FEATURE_258 `target` values now cross the script host boundary
+  with fail-loud validation, so generated/saved workflows can route the same
+  canonical external Agent IDs as direct Workflow and Worker dispatch.
+- **Executor-plane shutdown is terminal and waiter-safe.** Closing the plane is
+  idempotent, rejects pending task waits, and prevents later registration,
+  catalog, or task operations from recreating executors after owner shutdown.
+- **Review/eval trust boundaries fail loudly without replacing real results.**
+  Built-in scoped-review outputs are validated against their declared schemas;
+  local ledger mirror failures retain the authoritative child result/error;
+  Feature 259 baseline reconstruction now requires every exact rewrite and no
+  longer leaks candidate-only briefing fields into the baseline.
+- **Runtime tests no longer leave detached Node processes behind.** The config
+  suite explicitly shuts down its auto-started daemon owner before deleting
+  temporary state, and long-running process fixtures self-exit if an abnormal
+  test-runner termination prevents normal managed cleanup.
 - **External tasks keep identity and terminal state across failures.** A remote
   start followed by ledger failure preserves its executor reference as
   `unknown`; in-flight tasks retain immutable executor bindings across catalog

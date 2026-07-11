@@ -283,9 +283,13 @@ class AgentExecutorPlaneRuntime {
   readonly #eventSequences = new Map<string, number>();
   readonly #executors = new Map<string, AgentExecutor>();
   readonly #taskExecutors = new Map<string, AgentExecutor>();
-  readonly #waiters = new Map<string, Set<(task: AgentTaskSnapshot) => void>>();
+  readonly #waiters = new Map<string, Set<{
+    readonly resolve: (task: AgentTaskSnapshot) => void;
+    readonly reject: (error: Error) => void;
+  }>>();
   readonly #startTails = new Map<string, Promise<void>>();
   readonly #taskMutationTails = new Map<string, Promise<void>>();
+  #closed = false;
 
   constructor(private readonly options: PlaneRuntimeOptions) {}
 
@@ -303,22 +307,31 @@ class AgentExecutorPlaneRuntime {
   }
 
   readonly registrations: AgentRegistrationService = {
-    list: async () => [...this.#registrations.values()].map(summaryFromRegistration),
-    upsert: async (input) => this.upsertRegistration(input),
-    remove: async (agentId) => this.removeRegistration(agentId),
+    list: async () => {
+      this.assertOpen();
+      return [...this.#registrations.values()].map(summaryFromRegistration);
+    },
+    upsert: async (input) => {
+      this.assertOpen();
+      return this.upsertRegistration(input);
+    },
+    remove: async (agentId) => {
+      this.assertOpen();
+      return this.removeRegistration(agentId);
+    },
   };
 
   readonly tasks: AgentTaskService = {
-    start: async (input) => this.startTaskSerialized(input),
-    list: async (filter) => this.listTasks(filter),
-    get: async (taskId) => this.getTask(taskId),
-    events: async (taskId, cursor) => this.listEvents(taskId, cursor),
-    wait: async (taskId, timeoutMs) => this.waitTask(taskId, timeoutMs),
-    sendInput: async (taskId, input) => this.sendTaskInput(taskId, input),
-    cancel: async (taskId, reason) => this.cancelTask(taskId, reason),
-    reconcile: async (taskId) => this.reconcileTask(taskId),
-    recordLocal: async (input) => this.recordLocalTask(input),
-    updateLocal: async (taskId, update) => this.updateLocalTask(taskId, update),
+    start: async (input) => { this.assertOpen(); return this.startTaskSerialized(input); },
+    list: async (filter) => { this.assertOpen(); return this.listTasks(filter); },
+    get: async (taskId) => { this.assertOpen(); return this.getTask(taskId); },
+    events: async (taskId, cursor) => { this.assertOpen(); return this.listEvents(taskId, cursor); },
+    wait: async (taskId, timeoutMs) => { this.assertOpen(); return this.waitTask(taskId, timeoutMs); },
+    sendInput: async (taskId, input) => { this.assertOpen(); return this.sendTaskInput(taskId, input); },
+    cancel: async (taskId, reason) => { this.assertOpen(); return this.cancelTask(taskId, reason); },
+    reconcile: async (taskId) => { this.assertOpen(); return this.reconcileTask(taskId); },
+    recordLocal: async (input) => { this.assertOpen(); return this.recordLocalTask(input); },
+    updateLocal: async (taskId, update) => { this.assertOpen(); return this.updateLocalTask(taskId, update); },
   };
 
   async upsertRegistration(
@@ -340,6 +353,7 @@ class AgentExecutorPlaneRuntime {
     const tail = new Promise<void>((resolve) => { release = resolve; });
     this.#startTails.set(input.agentId, tail);
     await previous;
+    this.assertOpen();
     try {
       return await this.startTask(input);
     } finally {
@@ -358,6 +372,7 @@ class AgentExecutorPlaneRuntime {
     query: DispatchableAgentQuery,
     localAgents: readonly DispatchableAgentDescriptor[] = [],
   ): Promise<readonly DispatchableAgentListing[]> {
+    this.assertOpen();
     const local = localAgents.map((descriptor) => localEvaluation(descriptor, query, this.nowIso()));
     const external = await Promise.all(
       [...this.#registrations.values()].map((registration) => this.evaluateRegistration(registration, query)),
@@ -373,6 +388,7 @@ class AgentExecutorPlaneRuntime {
     query: DispatchableAgentQuery,
     localAgents: readonly DispatchableAgentDescriptor[] = [],
   ): Promise<DispatchableAgentListing | undefined> {
+    this.assertOpen();
     const local = localAgents.find((descriptor) => descriptor.agentId === agentId);
     if (local) return clone(localEvaluation(local, query, this.nowIso()));
     const registration = this.#registrations.get(agentId);
@@ -384,6 +400,7 @@ class AgentExecutorPlaneRuntime {
     input: AgentPreflightInput,
     localAgents: readonly DispatchableAgentDescriptor[] = [],
   ): Promise<AgentPreflightResult> {
+    this.assertOpen();
     const listing = await this.describe(input.agentId, input.query, localAgents);
     const reasons = listing ? [...listing.dispatchability.reasons] : ['agent is not registered'];
     if (
@@ -406,6 +423,13 @@ class AgentExecutorPlaneRuntime {
   }
 
   async close(): Promise<void> {
+    if (this.#closed) return;
+    this.#closed = true;
+    const closeError = new Error('Agent executor plane is closed.');
+    for (const waiters of this.#waiters.values()) {
+      for (const waiter of waiters) waiter.reject(closeError);
+    }
+    this.#waiters.clear();
     const executors = [...this.#executors.values()];
     this.#executors.clear();
     this.#taskExecutors.clear();
@@ -641,6 +665,7 @@ class AgentExecutorPlaneRuntime {
     reference: NonNullable<AgentTaskSnapshot['executorReference']>,
   ): void {
     void this.pumpEvents(taskId, executor, reference).catch(async (error: unknown) => {
+      if (this.#closed) return;
       const message = errorMessage(error);
       await this.mutateTask(taskId, 'error', (current) => (
         isTerminal(current.state)
@@ -661,6 +686,7 @@ class AgentExecutorPlaneRuntime {
     reference: NonNullable<AgentTaskSnapshot['executorReference']>,
   ): Promise<void> {
     for await (const event of executor.events(reference)) {
+      if (this.#closed) return;
       const next = await this.mutateTask(taskId, eventType(event), (current) => (
         isTerminal(current.state) ? undefined : this.applyExecutorEvent(current, event)
       ), event);
@@ -723,16 +749,22 @@ class AgentExecutorPlaneRuntime {
     }
     return new Promise<AgentTaskSnapshot>((resolve, reject) => {
       let timer: ReturnType<typeof setTimeout> | undefined;
-      const listener = (task: AgentTaskSnapshot): void => {
-        if (timer !== undefined) clearTimeout(timer);
-        resolve(clone(task));
+      const waiter = {
+        resolve: (task: AgentTaskSnapshot): void => {
+          if (timer !== undefined) clearTimeout(timer);
+          resolve(clone(task));
+        },
+        reject: (error: Error): void => {
+          if (timer !== undefined) clearTimeout(timer);
+          reject(error);
+        },
       };
-      const listeners = this.#waiters.get(taskId) ?? new Set();
-      listeners.add(listener);
+      const listeners = this.#waiters.get(taskId) ?? new Set<typeof waiter>();
+      listeners.add(waiter);
       this.#waiters.set(taskId, listeners);
       if (timeoutMs === undefined) return;
       timer = setTimeout(() => {
-        listeners.delete(listener);
+        listeners.delete(waiter);
         if (listeners.size === 0) this.#waiters.delete(taskId);
         reject(new Error(`Agent task ${taskId} did not finish within ${timeoutMs}ms.`));
       }, timeoutMs);
@@ -945,7 +977,7 @@ class AgentExecutorPlaneRuntime {
     const waiters = this.#waiters.get(task.taskId);
     if (!waiters) return;
     this.#waiters.delete(task.taskId);
-    for (const resolve of waiters) resolve(task);
+    for (const waiter of waiters) waiter.resolve(task);
   }
 
   private async executorRoute(task: AgentTaskSnapshot): Promise<{
@@ -1026,6 +1058,10 @@ class AgentExecutorPlaneRuntime {
 
   private nowIso(): string {
     return this.options.now().toISOString();
+  }
+
+  private assertOpen(): void {
+    if (this.#closed) throw new Error('Agent executor plane is closed.');
   }
 
   private async recoverNonTerminalTasks(): Promise<void> {

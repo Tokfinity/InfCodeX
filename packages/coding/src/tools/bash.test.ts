@@ -10,6 +10,10 @@ const WINDOWS_PROCESS_TREE_EXIT_WAIT_MS = process.platform === 'win32' ? 30_000 
 const WINDOWS_PROCESS_TREE_TEST_TIMEOUT_MS = process.platform === 'win32' ? 60_000 : 30_000;
 const BACKGROUND_CHILD_MARKER = 'child-pid:';
 
+function parentWatchedBackgroundCommand(): string {
+  return 'node -e "const parent=process.ppid; console.log(\'child-pid:\' + process.pid); setInterval(() => { try { process.kill(parent, 0); } catch { process.exit(0); } }, 1000)"';
+}
+
 function parseBackgroundPid(result: string): number {
   const match = /PID:\s*(\d+)/.exec(result);
   if (!match?.[1]) {
@@ -214,7 +218,7 @@ describe('toolBash', () => {
   });
 
   it('registers background commands for managed cleanup', async () => {
-    const command = 'node -e "console.log(\'child-pid:\' + process.pid); setInterval(() => {}, 1000)"';
+    const command = parentWatchedBackgroundCommand();
     const result = await toolBash({ command, run_in_background: true }, {
       backups: new Map(),
       executionCwd: process.cwd(),
@@ -240,7 +244,7 @@ describe('toolBash', () => {
 
   it('stops background commands when the caller aborts', async () => {
     const controller = new AbortController();
-    const command = 'node -e "console.log(\'child-pid:\' + process.pid); setInterval(() => {}, 1000)"';
+    const command = parentWatchedBackgroundCommand();
     const result = await toolBash({ command, run_in_background: true }, {
       backups: new Map(),
       executionCwd: process.cwd(),

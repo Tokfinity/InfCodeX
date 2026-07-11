@@ -19,7 +19,12 @@ describe('ACP session cleanup', () => {
     expect(isAcpPollutionSession(session({ title: 'Real ACP task' }))).toBe(false);
     expect(isAcpPollutionSession(session({ messages: [{ role: 'user', content: 'hello' }] }))).toBe(false);
     expect(isAcpPollutionSession(session({ uiHistory: [{ type: 'assistant', text: 'hello' }] }))).toBe(false);
-    expect(isAcpPollutionSession(session({ artifactLedger: [{ id: 'artifact-1' }] }))).toBe(false);
+    expect(isAcpPollutionSession(session({ artifactLedger: [{
+      id: 'artifact-1',
+      kind: 'file_read',
+      target: 'C:/repo/README.md',
+      timestamp: '2026-07-11T00:00:00.000Z',
+    }] }))).toBe(false);
     expect(isAcpPollutionSession(session({ runtimeInfo: { surface: 'repl' } }))).toBe(false);
     expect(isAcpPollutionSession(session({ scope: 'managed-task-worker' }))).toBe(false);
   });
@@ -27,13 +32,25 @@ describe('ACP session cleanup', () => {
   it('rejects sessions with lineage or extension records even when messages are empty', () => {
     expect(isAcpPollutionSession(session({
       lineage: {
-        version: 1,
+        version: 2,
         activeEntryId: 'entry-1',
-        entries: [{ id: 'entry-1', parentId: null, type: 'message', messageIndex: 0 }],
+        entries: [{
+          id: 'entry-1',
+          parentId: null,
+          timestamp: '2026-07-11T00:00:00.000Z',
+          type: 'message',
+          message: { role: 'user', content: 'hello' },
+        }],
       },
     }))).toBe(false);
     expect(isAcpPollutionSession(session({
-      extensionRecords: [{ extensionId: 'extension-1', payload: {} }],
+      extensionRecords: [{
+        id: 'record-1',
+        extensionId: 'extension-1',
+        type: 'test',
+        ts: 1,
+        data: {},
+      }],
     }))).toBe(false);
     expect(isAcpPollutionSession(session({
       extensionState: { 'extension-1': { key: 'value' } },

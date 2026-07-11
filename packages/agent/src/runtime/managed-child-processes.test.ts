@@ -10,6 +10,8 @@ import {
 } from './managed-child-processes.js';
 import { killChildProcessTree } from './process-tree.js';
 
+const PARENT_WATCHED_CHILD_SCRIPT = 'const parent=process.ppid; setInterval(() => { try { process.kill(parent, 0); } catch { process.exit(0); } }, 1000)';
+
 function childRegistryPath(home: string, pid: number): string {
   return path.join(home, 'processes', 'children', `${pid}.json`);
 }
@@ -71,14 +73,14 @@ describe('managed child process registry', () => {
   it('cleans up a confirmed registered child process', async () => {
     tempHome = await mkdtemp(path.join(tmpdir(), 'kodax-managed-child-'));
     setAgentConfigHome(tempHome);
-    child = spawn(process.execPath, ['-e', 'setInterval(() => {}, 1000)'], {
+    child = spawn(process.execPath, ['-e', PARENT_WATCHED_CHILD_SCRIPT], {
       stdio: 'ignore',
       windowsHide: true,
     });
     registerManagedChildProcess(child, {
       kind: 'test-child',
       command: process.execPath,
-      args: ['-e', 'setInterval(() => {}, 1000)'],
+      args: ['-e', PARENT_WATCHED_CHILD_SCRIPT],
     });
 
     const summary = await cleanupRegisteredManagedChildren({ includeCurrentOwner: true });
@@ -90,14 +92,14 @@ describe('managed child process registry', () => {
   it('skips children owned by the current live process by default', async () => {
     tempHome = await mkdtemp(path.join(tmpdir(), 'kodax-managed-child-'));
     setAgentConfigHome(tempHome);
-    child = spawn(process.execPath, ['-e', 'setInterval(() => {}, 1000)'], {
+    child = spawn(process.execPath, ['-e', PARENT_WATCHED_CHILD_SCRIPT], {
       stdio: 'ignore',
       windowsHide: true,
     });
     registerManagedChildProcess(child, {
       kind: 'test-child',
       command: process.execPath,
-      args: ['-e', 'setInterval(() => {}, 1000)'],
+      args: ['-e', PARENT_WATCHED_CHILD_SCRIPT],
     });
 
     const summary = await cleanupRegisteredManagedChildren();
@@ -133,7 +135,7 @@ describe('managed child process registry', () => {
   it('prunes an unconfirmed live pid without killing it', async () => {
     tempHome = await mkdtemp(path.join(tmpdir(), 'kodax-managed-child-'));
     setAgentConfigHome(tempHome);
-    child = spawn(process.execPath, ['-e', 'setInterval(() => {}, 1000)'], {
+    child = spawn(process.execPath, ['-e', PARENT_WATCHED_CHILD_SCRIPT], {
       stdio: 'ignore',
       windowsHide: true,
     });
@@ -160,7 +162,7 @@ describe('managed child process registry', () => {
   it('does not trust a tampered current-owner registry record', async () => {
     tempHome = await mkdtemp(path.join(tmpdir(), 'kodax-managed-child-'));
     setAgentConfigHome(tempHome);
-    child = spawn(process.execPath, ['-e', 'setInterval(() => {}, 1000)'], {
+    child = spawn(process.execPath, ['-e', PARENT_WATCHED_CHILD_SCRIPT], {
       stdio: 'ignore',
       windowsHide: true,
     });
@@ -170,7 +172,7 @@ describe('managed child process registry', () => {
     registerManagedChildProcess(child, {
       kind: 'test-child',
       command: process.execPath,
-      args: ['-e', 'setInterval(() => {}, 1000)'],
+      args: ['-e', PARENT_WATCHED_CHILD_SCRIPT],
     });
     await writeRegistryRecord(tempHome, {
       version: 1,

@@ -207,6 +207,28 @@ describe('FEATURE_258 AgentExecutorPlane', () => {
       });
   });
 
+  it('rejects pending waiters and service calls after the plane closes', async () => {
+    const executor = new FakeExecutor();
+    const plane = await createAgentExecutorPlane({
+      factories: [factory(executor)],
+      policy: allowAllPolicy(),
+      store: createMemoryAgentExecutorPlaneStore(),
+    });
+    await plane.registrations.upsert(registration({ credentialRef: undefined }));
+    const started = await plane.tasks.start(taskInput({ taskId: 'close-pending' }));
+    const waiting = plane.tasks.wait(started.taskId);
+
+    await plane.close();
+
+    await expect(waiting).rejects.toThrow(/executor plane is closed/i);
+    await expect(plane.tasks.list()).rejects.toThrow(/executor plane is closed/i);
+    await expect(plane.tasks.start(taskInput())).rejects.toThrow(/executor plane is closed/i);
+    await expect(plane.registrations.list()).rejects.toThrow(/executor plane is closed/i);
+    await expect(plane.listDispatchable({ actorId: 'actor-1' }))
+      .rejects.toThrow(/executor plane is closed/i);
+    await expect(plane.close()).resolves.toBeUndefined();
+  });
+
   it('does not let a stale continuation overwrite a concurrently completed task', async () => {
     let releaseEvent: (() => void) | undefined;
     let enterSend: (() => void) | undefined;

@@ -13,11 +13,11 @@ import {
 describe('FEATURE_259 executable eval cases', () => {
   const frozenBaselineVariantHashes = [
     '70648230afc0955f995e1c8a18043c05b43c9ffade2e4658f39bc5ee0f4e25c3',
-    '05d2839251ca90075d37c834e935d2441de6468e7fca0d80345239871a725c24',
-    '4f6b6878ce7b700d6a493f3271d37b1a064af0b693f207477f9a1c8a8110fe37',
-    '859f2c9bdfaee4e45d99408680338815ee4480216f596161603295d62b432403',
-    '5fe853cd23b32632e701e734ee22c0503616a083721f0460705a02f9dfb3da45',
-    '294bd07b0b23fad69db456bd138d0309435fb43ce48281cd370963b54ca9a3ae',
+    '05672311509067d291c841bfeb83614c44334d0a4f58bbbf1db113eed536a856',
+    'f6f67322cff442efdb0d8be2e36ba09bd4007349b2c7ecc196553d470cd4bd02',
+    '67004382d89b94002a7af56a2d234956eb0058ff801c9d592512b2aab8f911e2',
+    '3a6da5a5e3b37d4b179f7ead99fddbfcb94393cc2b5ce66a3c849a9d7cb94480',
+    '332503788509e122d6521d4bda964b0a51a461a093ec9421f62d22863ee1eb73',
   ];
 
   it('reconstructs the frozen baseline without proposed-only authoring rules', () => {
@@ -25,6 +25,9 @@ describe('FEATURE_259 executable eval cases', () => {
     expect(baseline).not.toContain('Every generated wf.runAgent');
     expect(baseline).not.toContain('terseResult');
     expect(baseline).not.toContain('wf.workflow(name, args)');
+    expect(baseline).not.toContain('scopeSummary');
+    expect(baseline).not.toContain('constraints');
+    expect(baseline).not.toContain('schema: true');
     expect(buildBaselineWorkerPrompt()).toContain('MODEL HINT (FEATURE_259)');
     expect(buildProposedWorkerPrompt()).not.toContain('MODEL HINT (FEATURE_259)');
   });
