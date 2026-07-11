@@ -70,6 +70,7 @@ interface Layer2Summary {
   readonly runs: number;
   readonly complete: boolean;
   readonly usageCovered: boolean;
+  readonly timeoutCompliant: boolean;
   readonly decisionPassed: boolean;
   readonly judgeAudits: readonly JudgeAudit[];
   readonly results: readonly BenchmarkResult[];
@@ -155,6 +156,16 @@ async function writeRawDump(relativePath: string, value: unknown): Promise<void>
     writeJsonAtomic(path.join(DUMP_ROOT, relativePath), value),
     writeJsonAtomic(path.join(MIRROR_ROOT, relativePath), value),
   ]);
+}
+
+async function readMirrorJson<T>(relativePath: string): Promise<T | undefined> {
+  try {
+    return JSON.parse(await readFile(path.join(MIRROR_ROOT, relativePath), 'utf8')) as T;
+  } catch (error) {
+    const code = (error as NodeJS.ErrnoException).code;
+    if (code === 'ENOENT') return undefined;
+    throw error;
+  }
 }
 
 function estimatedCost(alias: ModelAlias, usage: UsageTotal): number {
@@ -246,12 +257,30 @@ export async function runFeature259Layer2(stage: 'pilot' | 'layer2'): Promise<La
   let cost = 0;
 
   for (const evalCase of buildFeature259Layer2Cases()) {
+    const resumeRun = async (
+      variantId: string,
+      alias: ModelAlias,
+      runIndex: number,
+    ) => {
+      const relativePath = path.join(stage, 'runs', evalCase.id, variantId, alias, `${runIndex}.json`);
+      const saved = await readMirrorJson<{
+        readonly caseId: string;
+        readonly contract: string;
+        readonly variant: unknown;
+        readonly rawRun: BenchmarkResult['cells'][number]['runsRaw'][number];
+      }>(relativePath);
+      const variant = evalCase.variants.find((item) => item.id === variantId);
+      if (!saved || saved.caseId !== evalCase.id || saved.contract !== evalCase.contract
+        || JSON.stringify(saved.variant) !== JSON.stringify(variant)) return undefined;
+      return saved.rawRun;
+    };
     const result = await runBenchmark({
       variants: evalCase.variants,
       models: aliases,
       judges: evalCase.judges,
       runs,
       timeoutMs: 120_000,
+      resumeRun,
       onRun: async (rawRun) => {
         const variant = evalCase.variants.find((item) => item.id === rawRun.variantId);
         await writeRawDump(path.join(
@@ -278,18 +307,17 @@ export async function runFeature259Layer2(stage: 'pilot' | 'layer2'): Promise<La
         });
         const failedJudge = run.judges.find((judge) => !judge.passed);
         if (!run.error && failedJudge) {
-          const audit = await auditFailure(
-            `${evalCase.id}/${cell.variantId}/${cell.alias}/${run.runIndex}`,
+          const auditId = `${evalCase.id}/${cell.variantId}/${cell.alias}/${run.runIndex}`;
+          const auditPath = path.join(stage, 'audits', `${auditId.replaceAll('/', '__')}.json`);
+          const cachedAudit = await readMirrorJson<JudgeAudit>(auditPath);
+          const audit = cachedAudit ?? await auditFailure(
+            auditId,
             evalCase.contract,
             run.text || JSON.stringify(run.toolCalls),
             failedJudge.reason ?? failedJudge.name,
           );
           judgeAudits.push(audit);
-          await writeRawDump(path.join(
-            stage,
-            'audits',
-            `${audit.caseId.replaceAll('/', '__')}.json`,
-          ), audit);
+          await writeRawDump(auditPath, audit);
           const auditUsage = requireUsage(audit.raw);
           usage = addUsage(usage, auditUsage);
           cost += estimatedCost(audit.alias, {
@@ -311,11 +339,14 @@ export async function runFeature259Layer2(stage: 'pilot' | 'layer2'): Promise<La
   const usageCovered = results.every((result) => result.cells.every(
     (cell) => cell.runsRaw.every((run) => run.usage !== undefined),
   ));
+  const timeoutCompliant = results.every((result) => result.cells.every(
+    (cell) => cell.runsRaw.every((run) => run.durationMs <= 120_000),
+  ));
   const disagreements = judgeAudits.filter((audit) => !audit.judgeAgrees).length;
   const auditValid = judgeAudits.length === 0 || disagreements / judgeAudits.length <= 0.1;
   const summary: Layer2Summary = {
-    stage, aliases, runs, complete, usageCovered,
-    decisionPassed: complete && usageCovered && auditValid && layer2Decision(results),
+    stage, aliases, runs, complete, usageCovered, timeoutCompliant,
+    decisionPassed: complete && usageCovered && timeoutCompliant && auditValid && layer2Decision(results),
     judgeAudits, results, usage, estimatedCostUsd: cost,
   };
   await writeRawDump(`${stage}.json`, summary);

@@ -406,6 +406,12 @@ export interface BenchmarkRunInput {
   readonly timeoutMs?: number;
   /** Persist each completed raw run before the next provider call starts. */
   readonly onRun?: (run: BenchmarkRunCell) => void | Promise<void>;
+  /** Reuse a byte-validated prior run after an interrupted long panel. */
+  readonly resumeRun?: (
+    variantId: string,
+    alias: ModelAlias,
+    runIndex: number,
+  ) => BenchmarkRunCell | undefined | Promise<BenchmarkRunCell | undefined>;
   /**
    * Optional fallback alias map. When a cell's primary alias call throws
    * a quota / rate-limit error, the harness retries ONCE against the
@@ -493,6 +499,11 @@ export async function runBenchmark(input: BenchmarkRunInput): Promise<BenchmarkR
       const runsRaw: BenchmarkRunCell[] = [];
 
       for (let runIndex = 0; runIndex < runs; runIndex++) {
+        const resumed = await input.resumeRun?.(variant.id, alias, runIndex);
+        if (resumed !== undefined) {
+          runsRaw.push(resumed);
+          continue;
+        }
         let text = '';
         let durationMs = 0;
         let toolCalls: BenchmarkRunCell['toolCalls'] = [];
@@ -513,6 +524,9 @@ export async function runBenchmark(input: BenchmarkRunInput): Promise<BenchmarkR
           toolCalls = out.toolCalls;
           durationMs = out.durationMs;
           usage = out.usage;
+          if (input.timeoutMs !== undefined && durationMs > input.timeoutMs) {
+            error = `one-shot exceeded frozen timeout: ${durationMs}ms > ${input.timeoutMs}ms`;
+          }
         } catch (err) {
           const primaryMsg = err instanceof Error ? err.message : String(err);
           // FEATURE_177 v0.7.45 lesson: ark-coding's shared coding-plan
