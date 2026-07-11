@@ -29,6 +29,10 @@ const ROUTING_DECISION: KodaXTaskRoutingDecision = {
 };
 
 const BASELINE_WORKER_REPLACEMENTS = [
+  [
+    "`run_workflow` is the first thing to reach for when the task is already partitioned into bounded areas and requires final synthesis or verification: it gives you structured per-child output and same-session resume that ad-hoc fan-out does not. Do not replace that fitting workflow with ad-hoc dispatch. For exploratory work or simple parallel lookup without a workflow-shaped barrier, a `dispatch_child_task` fan-out is an equally valid way to satisfy this default — there, what matters is cross-checking, not which tool you dispatched it through.",
+    "`run_workflow` is the first thing to reach for when the task's shape fits a bounded workflow: it gives you structured per-child output and same-session resume that ad-hoc fan-out does not. When the task is more exploratory or the fan-out is simple parallel investigation, a `dispatch_child_task` fan-out is an equally valid way to satisfy this default — what matters is that the work gets cross-checked by more than one agent, not which tool you dispatched it through.",
+  ],
   ['PLAN-FIRST CONTRACT:', 'PLAN-FIRST CONTRACT (FEATURE_114 v0.7.36 + FEATURE_170 v0.7.41 + v0.7.42 schema split):'],
   ['- Plan item schema:', '- Plan item schema (v0.7.42, mirrors claudecode V2 `TaskCreate`):'],
   ['PLAN-LIST HYGIENE (staleness + dedup):', 'PLAN-LIST HYGIENE (v0.7.42 — staleness + dedup):'],
@@ -67,6 +71,8 @@ export function buildBaselineGenerationPrompt(request: string): string {
   prompt = prompt
     .replaceAll(', terseResult', '')
     .replace('- wf.workflow(name, args) for one built-in or saved nested workflow; prefer wf.workflow("scoped-review", args) for immutable review packets.\n', '')
+    .replace('- When the request requires structured findings from each child, every substantive wf.runAgent/wf.spawnAgent call must declare scopeSummary, constraints, and outputSchema; do not drop the contract on a verifier or later lane.\n', '')
+    .replace('- Keep generated source minimal: omit prose comments and redundant helpers, and reuse wf.workflow("scoped-review", args) when immutable review packets already match that built-in topology.\n', '')
     .replace(/- Every generated wf\.runAgent[\s\S]+?judgment-critical review\.\n/, '')
     .replace(/- Set terseResult:true[\s\S]+?digest fallback remains\.\n/, '')
     .replace(', modelHint: "balanced"', '')
@@ -116,6 +122,22 @@ function agentCalls(source: string): readonly ts.CallExpression[] {
   };
   visit(file);
   return calls;
+}
+
+function usesScopedReviewWorkflow(source: string): boolean {
+  const file = ts.createSourceFile('generated-workflow.js', source, ts.ScriptTarget.ESNext, true);
+  let found = false;
+  const visit = (node: ts.Node): void => {
+    if (ts.isCallExpression(node) && ts.isPropertyAccessExpression(node.expression)
+      && node.expression.expression.getText(file) === 'wf'
+      && node.expression.name.text === 'workflow'
+      && node.arguments[0] !== undefined
+      && ts.isStringLiteral(node.arguments[0])
+      && node.arguments[0].text === 'scoped-review') found = true;
+    ts.forEachChild(node, visit);
+  };
+  visit(file);
+  return found;
 }
 
 function objectPropertyNames(call: ts.CallExpression): ReadonlySet<string> {
@@ -239,6 +261,7 @@ export function buildFeature259Layer2Cases(): readonly Feature259Layer2Case[] {
       contract: 'Generation JSON must contain source; every wf.runAgent/wf.spawnAgent call must declare scopeSummary, constraints, and outputSchema.',
       variants: generationVariants(GENERATION_REQUESTS['focused-briefing']),
       judges: [generatedSourceJudge('focused-child-contract', (source) => {
+        if (usesScopedReviewWorkflow(source)) return { passed: true };
         const calls = agentCalls(source);
         const passed = calls.length > 0 && calls.every((call) => {
           const names = objectPropertyNames(call);

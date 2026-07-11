@@ -49,6 +49,8 @@ const DUMP_ROOT = path.join(os.tmpdir(), 'kodax-eval-dumps', 'feature-259');
 const MIRROR_ROOT = path.join(os.tmpdir(), 'kodax-feature-259-eval-mirror');
 const HARD_CAP_USD = 75;
 const PILOT_ALIAS: ModelAlias = 'ark/v4flash';
+const AUDIT_ALIAS: ModelAlias = 'ark/v4pro';
+const AUDIT_VERSION = 2;
 const DECISION_ALIASES: readonly ModelAlias[] = [
   'zhipu/glm51', 'kimi', 'mmx/m27', 'ark/v4pro', 'ark/v4flash',
 ];
@@ -114,6 +116,7 @@ interface Layer3Summary {
 }
 
 interface JudgeAudit {
+  readonly auditVersion: number;
   readonly alias: ModelAlias;
   readonly caseId: string;
   readonly mechanicalPassed: false;
@@ -208,7 +211,7 @@ async function auditFailure(
     type: 'object', additionalProperties: false, required: ['agrees', 'reason'],
     properties: { agrees: { type: 'boolean' }, reason: { type: 'string' } },
   } as const;
-  const raw = await runOneShot(PILOT_ALIAS, {
+  const raw = await runOneShot(AUDIT_ALIAS, {
     systemPrompt: 'You are an independent benchmark-scoring auditor. Judge only the frozen contract and candidate output. Do not infer unstated requirements.',
     userMessage: structuredPrompt([
       `Case: ${caseId}`,
@@ -227,7 +230,8 @@ async function auditFailure(
   const verdict = parsed<{ readonly agrees: boolean; readonly reason: string }>(raw, schema);
   requireUsage(raw);
   return {
-    alias: PILOT_ALIAS,
+    auditVersion: AUDIT_VERSION,
+    alias: AUDIT_ALIAS,
     caseId,
     mechanicalPassed: false,
     judgeAgrees: verdict.agrees,
@@ -309,11 +313,12 @@ export async function runFeature259Layer2(stage: 'pilot' | 'layer2'): Promise<La
         if (!run.error && failedJudge) {
           const auditId = `${evalCase.id}/${cell.variantId}/${cell.alias}/${run.runIndex}`;
           const auditPath = path.join(stage, 'audits', `${auditId.replaceAll('/', '__')}.json`);
-          const cachedAudit = await readMirrorJson<JudgeAudit>(auditPath);
+          const cached = await readMirrorJson<JudgeAudit>(auditPath);
+          const cachedAudit = cached?.auditVersion === AUDIT_VERSION ? cached : undefined;
           const audit = cachedAudit ?? await auditFailure(
             auditId,
             evalCase.contract,
-            run.text || JSON.stringify(run.toolCalls),
+            JSON.stringify({ text: run.text, toolCalls: run.toolCalls }),
             failedJudge.reason ?? failedJudge.name,
           );
           judgeAudits.push(audit);

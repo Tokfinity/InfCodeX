@@ -501,7 +501,35 @@ export async function runBenchmark(input: BenchmarkRunInput): Promise<BenchmarkR
       for (let runIndex = 0; runIndex < runs; runIndex++) {
         const resumed = await input.resumeRun?.(variant.id, alias, runIndex);
         if (resumed !== undefined) {
-          runsRaw.push(resumed);
+          const timeoutError = input.timeoutMs !== undefined && resumed.durationMs > input.timeoutMs
+            ? `one-shot exceeded frozen timeout: ${resumed.durationMs}ms > ${input.timeoutMs}ms`
+            : resumed.error;
+          if (timeoutError) {
+            const aggregate: AggregatedJudgeRun = {
+              passed: false,
+              results: [{ name: 'provider-call', category: 'format', passed: false, reason: timeoutError }],
+              byCategory: { format: { passed: 0, total: 1 } } as Record<
+                JudgeCategory,
+                { passed: number; total: number }
+              >,
+              formatPassed: false,
+            };
+            runsRaw.push({
+              ...resumed,
+              error: timeoutError,
+              judges: aggregate.results,
+              judgeAggregate: aggregate,
+              passed: false,
+            });
+          } else {
+            const aggregate = runJudges(resumed.text, input.judges, { toolCalls: resumed.toolCalls });
+            runsRaw.push({
+              ...resumed,
+              judges: aggregate.results,
+              judgeAggregate: aggregate,
+              passed: aggregate.passed,
+            });
+          }
           continue;
         }
         let text = '';

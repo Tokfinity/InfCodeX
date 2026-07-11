@@ -31,4 +31,13 @@ describe('FEATURE_259 executable eval cases', () => {
     expect(FEATURE_259_LAYER_3_CASES.filter((item) => item.standardReview)).toHaveLength(5);
     expect(FEATURE_259_LAYER_3_CASES.find((item) => item.id === 'shared-state')?.areas).toHaveLength(3);
   });
+
+  it('accepts focused briefing through the production scoped-review workflow', () => {
+    const focused = buildFeature259Layer2Cases().find((item) => item.id === 'focused-briefing');
+    const output = JSON.stringify({
+      action: 'generate',
+      source: 'async function run(wf, args) { return wf.workflow("scoped-review", args); }',
+    });
+    expect(focused?.judges[0]?.judge(output).passed).toBe(true);
+  });
 });
