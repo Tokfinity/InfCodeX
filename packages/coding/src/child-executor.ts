@@ -492,6 +492,7 @@ const PRESENTATION_PREPARATORY_RE = /^(?:i will|i'll|i need to|next i|let me)\b/
 
 function hasTopLevelSummarySchema(schema: unknown): boolean {
   if (typeof schema !== 'object' || schema === null || Array.isArray(schema)) return false;
+  if ((schema as { readonly type?: unknown }).type !== 'object') return false;
   const properties = (schema as { readonly properties?: unknown }).properties;
   if (typeof properties !== 'object' || properties === null || Array.isArray(properties)) return false;
   const summary = (properties as { readonly summary?: unknown }).summary;
