@@ -13,7 +13,9 @@ import { MODEL_ALIASES } from '../../harness/aliases.js';
 import {
   runBenchmark,
   runOneShot,
+  runWithProviderConcurrency,
   type BenchmarkResult,
+  type BenchmarkRunCell,
   type OneShotOutput,
 } from '../../harness/harness.js';
 import { CHILD_AGENT_SYSTEM_PROMPT } from '../../../packages/coding/src/child-executor.js';
@@ -42,6 +44,7 @@ import {
 import {
   buildFeature259Layer2Cases,
   FEATURE_259_LAYER_3_CASES,
+  type Feature259Layer2Case,
   type Feature259Layer3Fixture,
 } from './cases.js';
 
@@ -49,8 +52,6 @@ const DUMP_ROOT = path.join(os.tmpdir(), 'kodax-eval-dumps', 'feature-259');
 const MIRROR_ROOT = path.join(os.tmpdir(), 'kodax-feature-259-eval-mirror');
 const HARD_CAP_USD = 75;
 const PILOT_ALIAS: ModelAlias = 'ark/v4flash';
-const AUDIT_ALIAS: ModelAlias = 'ark/v4pro';
-const AUDIT_VERSION = 3;
 const DECISION_ALIASES: readonly ModelAlias[] = [
   'zhipu/glm51', 'kimi', 'mmx/m27', 'ark/v4pro', 'ark/v4flash',
 ];
@@ -73,11 +74,41 @@ interface Layer2Summary {
   readonly complete: boolean;
   readonly usageCovered: boolean;
   readonly timeoutCompliant: boolean;
-  readonly decisionPassed: boolean;
-  readonly judgeAudits: readonly JudgeAudit[];
+  readonly reviewStatus: 'pending-main-session-review' | 'main-session-review-complete';
+  readonly evidencePacks: readonly MainSessionEvidenceDescriptor[];
+  readonly mainSessionReview?: MainSessionReview;
   readonly results: readonly BenchmarkResult[];
   readonly usage: UsageTotal;
   readonly estimatedCostUsd: number;
+}
+
+export type EvalRecommendation =
+  | 'recommend-ship'
+  | 'recommend-iterate'
+  | 'recommend-revert'
+  | 'eval-invalid';
+
+interface MainSessionReview {
+  readonly reviewVersion: number;
+  readonly reviewer: 'main-session';
+  readonly recommendation: EvalRecommendation;
+  readonly candidateBetter: boolean;
+  readonly materialValue: boolean;
+  readonly caseResults: readonly {
+    readonly caseId: string;
+    readonly inputHash: string;
+    readonly resolvedPreference: VariantId | 'tie';
+  }[];
+  readonly reason: string;
+}
+
+type VariantId = 'baseline' | 'proposed';
+
+interface MainSessionEvidenceDescriptor {
+  readonly caseId: string;
+  readonly inputHash: string;
+  readonly evidencePath: string;
+  readonly revealPath: string;
 }
 
 interface ReviewArmResult {
@@ -97,33 +128,20 @@ interface Layer3Cell {
   readonly passed: boolean;
   readonly reason: string;
   readonly result: ReviewArmResult;
-  readonly judgeAudit?: JudgeAudit;
 }
 
 interface Layer3Summary {
   readonly stage: 'layer3' | 'confirm';
   readonly complete: boolean;
   readonly usageCovered: boolean;
-  readonly decisionPassed: boolean;
+  readonly reviewStatus: 'pending-main-session-review';
   readonly qualityNonInferior: boolean;
   readonly medianStandardTokenReduction: number;
   readonly standardPrimaryReduction: number;
   readonly standardDuplicateReadReduction: number;
-  readonly judgeDisagreementRate: number;
   readonly cells: readonly Layer3Cell[];
   readonly usage: UsageTotal;
   readonly estimatedCostUsd: number;
-}
-
-interface JudgeAudit {
-  readonly auditVersion: number;
-  readonly auditInputHash: string;
-  readonly alias: ModelAlias;
-  readonly caseId: string;
-  readonly mechanicalPassed: false;
-  readonly judgeAgrees: boolean;
-  readonly reason: string;
-  readonly raw: OneShotOutput;
 }
 
 function emptyUsage(): UsageTotal {
@@ -202,68 +220,103 @@ function parsed<T>(output: OneShotOutput, schema: unknown): T {
   return evaluation.value as T;
 }
 
-async function auditFailure(
-  caseId: string,
-  contract: string,
-  rawOutput: string,
-  mechanicalReason: string,
-): Promise<JudgeAudit> {
-  const auditInputHash = hash(`${caseId}\0${contract}\0${rawOutput}\0${mechanicalReason}`);
-  const schema = {
-    type: 'object', additionalProperties: false, required: ['agrees', 'reason'],
-    properties: { agrees: { type: 'boolean' }, reason: { type: 'string' } },
-  } as const;
-  const raw = await runOneShot(AUDIT_ALIAS, {
-    systemPrompt: 'You are an independent benchmark-scoring auditor. Judge only the frozen contract and candidate output. Do not infer unstated requirements.',
-    userMessage: structuredPrompt([
-      `Case: ${caseId}`,
-      `Frozen contract: ${contract}`,
-      `Mechanical scorer reason: ${mechanicalReason}`,
-      'Candidate output follows:',
-      rawOutput,
-      'Does the mechanical failure accurately reflect the frozen contract?',
-    ].join('\n'), schema, 'No additional evidence.'),
-    timeoutMs: 120_000,
-  });
-  await writeRawDump(path.join(
-    'judge-audit-calls',
-    `${caseId.replaceAll('/', '__')}.json`,
-  ), { caseId, contract, rawOutput, mechanicalReason, raw });
-  const verdict = parsed<{ readonly agrees: boolean; readonly reason: string }>(raw, schema);
-  requireUsage(raw);
+function compactText(value: string, maxChars: number): string {
+  if (value.length <= maxChars) return value;
+  const half = Math.floor(maxChars / 2);
+  return `${value.slice(0, half)}\n...[${value.length - maxChars} chars omitted]...\n${value.slice(-half)}`;
+}
+
+function compactRun(run: BenchmarkResult['cells'][number]['runsRaw'][number]): unknown {
   return {
-    auditVersion: AUDIT_VERSION,
-    auditInputHash,
-    alias: AUDIT_ALIAS,
-    caseId,
-    mechanicalPassed: false,
-    judgeAgrees: verdict.agrees,
-    reason: verdict.reason,
-    raw,
+    text: compactText(run.text, 6_000),
+    toolCalls: run.toolCalls.map((call) => ({
+      name: call.name,
+      input: compactText(JSON.stringify(call.input), 4_000),
+    })),
+    error: run.error ?? null,
+    durationMs: run.durationMs,
   };
 }
 
-function layer2Decision(results: readonly BenchmarkResult[]): boolean {
-  const comparisons = results.flatMap((result) => result.models.map((alias) => {
-    const baseline = result.cells.find((cell) => cell.alias === alias && cell.variantId === 'baseline');
-    const proposed = result.cells.find((cell) => cell.alias === alias && cell.variantId === 'proposed');
-    const absoluteFloor = result.config.runs === 1 ? 100 : 80;
-    return baseline !== undefined && proposed !== undefined
-      && proposed.passRate >= baseline.passRate
-      && proposed.passRate >= absoluteFloor;
-  }));
-  return comparisons.every(Boolean);
+function compactComparison(result: BenchmarkResult, armA: VariantId, armB: VariantId): unknown {
+  return result.models.map((alias) => {
+    const cellA = result.cells.find((cell) => cell.alias === alias && cell.variantId === armA);
+    const cellB = result.cells.find((cell) => cell.alias === alias && cell.variantId === armB);
+    const paired = cellA?.runsRaw.flatMap((runA) => {
+      const runB = cellB?.runsRaw.find((candidate) => candidate.runIndex === runA.runIndex);
+      return runB ? [{ runA, runB, size: runA.text.length + runB.text.length }] : [];
+    }) ?? [];
+    const usable = paired.filter(({ runA, runB }) => !runA.error && !runB.error);
+    const candidates = usable.length > 0 ? usable : paired;
+    const representative = [...candidates].sort((left, right) => left.size - right.size)[
+      Math.floor(candidates.length / 2)
+    ];
+    const stats = (cell: typeof cellA) => ({
+      passRate: cell?.passRate ?? 0,
+      completed: cell?.completed ?? 0,
+      runs: cell?.runs ?? 0,
+      errors: cell?.runsRaw.filter((run) => run.error).map((run) => run.error) ?? [],
+    });
+    return {
+      alias,
+      armA: { stats: stats(cellA), sample: representative ? compactRun(representative.runA) : null },
+      armB: { stats: stats(cellB), sample: representative ? compactRun(representative.runB) : null },
+      sampleSelection: 'median combined text length among paired non-error runs; fallback to all paired runs',
+    };
+  });
 }
 
-export async function runFeature259Layer2(stage: 'pilot' | 'layer2'): Promise<Layer2Summary> {
+async function writeMainSessionEvidence(
+  evalCase: Feature259Layer2Case,
+  result: BenchmarkResult,
+  analysisId: string,
+): Promise<MainSessionEvidenceDescriptor> {
+  const armA: VariantId = Number.parseInt(hash(evalCase.id).slice(-2), 16) % 2 === 0
+    ? 'baseline' : 'proposed';
+  const armB: VariantId = armA === 'baseline' ? 'proposed' : 'baseline';
+  const evidence = {
+    reviewVersion: 1,
+    caseId: evalCase.id,
+    contract: evalCase.contract,
+    task: evalCase.variants[0]?.userMessage ?? '',
+    pairedEvidence: compactComparison(result, armA, armB),
+  };
+  const evidenceText = JSON.stringify(evidence);
+  const inputHash = hash(evidenceText);
+  const evidenceRelativePath = path.join(
+    'layer2', 'main-session-review', analysisId, 'cases', `${evalCase.id}.json`,
+  );
+  const revealRelativePath = path.join(
+    'layer2', 'main-session-review', analysisId, 'reveal', `${evalCase.id}.json`,
+  );
+  await writeRawDump(evidenceRelativePath, { inputHash, ...evidence });
+  await writeRawDump(revealRelativePath, { inputHash, caseId: evalCase.id, armA, armB });
+  return {
+    caseId: evalCase.id,
+    inputHash,
+    evidencePath: path.join(MIRROR_ROOT, evidenceRelativePath),
+    revealPath: path.join(MIRROR_ROOT, revealRelativePath),
+  };
+}
+
+export interface Layer2AnalysisOptions {
+  readonly analysisId?: string;
+  readonly caseIds?: readonly string[];
+  readonly allowGeneration?: boolean;
+}
+
+export async function runFeature259Layer2(
+  stage: 'pilot' | 'layer2',
+  options: Layer2AnalysisOptions = {},
+): Promise<Layer2Summary> {
   const aliases = stage === 'pilot' ? [PILOT_ALIAS] : [...DECISION_ALIASES];
   const runs = stage === 'pilot' ? 1 : 5;
   const results: BenchmarkResult[] = [];
-  const judgeAudits: JudgeAudit[] = [];
   let usage = emptyUsage();
   let cost = 0;
 
-  for (const evalCase of buildFeature259Layer2Cases()) {
+  const allCases = buildFeature259Layer2Cases();
+  for (const evalCase of allCases) {
     const resumeRun = async (
       variantId: string,
       alias: ModelAlias,
@@ -277,8 +330,11 @@ export async function runFeature259Layer2(stage: 'pilot' | 'layer2'): Promise<La
         readonly rawRun: BenchmarkResult['cells'][number]['runsRaw'][number];
       }>(relativePath);
       const variant = evalCase.variants.find((item) => item.id === variantId);
-      if (!saved || saved.caseId !== evalCase.id || saved.contract !== evalCase.contract
-        || JSON.stringify(saved.variant) !== JSON.stringify(variant)) {
+      const valid = saved !== undefined && saved.caseId === evalCase.id
+        && saved.contract === evalCase.contract
+        && JSON.stringify(saved.variant) === JSON.stringify(variant);
+      if (!valid) {
+        const reason = `frozen raw mismatch for ${evalCase.id}/${variantId}/${alias}/${runIndex}`;
         await writeRawDump(path.join(stage, 'resume-mismatches', evalCase.id, variantId, alias, `${runIndex}.json`), {
           found: saved !== undefined,
           savedCaseId: saved?.caseId,
@@ -286,8 +342,28 @@ export async function runFeature259Layer2(stage: 'pilot' | 'layer2'): Promise<La
           contractMatches: saved?.contract === evalCase.contract,
           savedVariantHash: saved ? hash(JSON.stringify(saved.variant)) : null,
           currentVariantHash: hash(JSON.stringify(variant)),
+          generationAllowed: options.allowGeneration === true,
         });
-        return undefined;
+        if (options.allowGeneration === true) return undefined;
+        const aggregate = {
+          passed: false,
+          results: [{ name: 'frozen-evidence', category: 'format' as const, passed: false, reason }],
+          byCategory: { format: { passed: 0, total: 1 } },
+          formatPassed: false,
+        };
+        const unavailable: BenchmarkRunCell = {
+          variantId,
+          alias,
+          runIndex,
+          text: '',
+          toolCalls: [],
+          durationMs: 0,
+          error: reason,
+          judges: aggregate.results,
+          judgeAggregate: aggregate,
+          passed: false,
+        };
+        return unavailable;
       }
       return saved.rawRun;
     };
@@ -297,6 +373,7 @@ export async function runFeature259Layer2(stage: 'pilot' | 'layer2'): Promise<La
       judges: evalCase.judges,
       runs,
       timeoutMs: 120_000,
+      maxOutputTokens: 8_192,
       resumeRun,
       onRun: async (rawRun) => {
         const variant = evalCase.variants.find((item) => item.id === rawRun.variantId);
@@ -322,56 +399,50 @@ export async function runFeature259Layer2(stage: 'pilot' | 'layer2'): Promise<La
           totalTokens: run.usage.totalTokens,
           cachedReadTokens: run.usage.cachedReadTokens ?? 0,
         });
-        const failedJudge = run.judges.find((judge) => !judge.passed);
-        if (!run.error && failedJudge) {
-          const auditId = `${evalCase.id}/${cell.variantId}/${cell.alias}/${run.runIndex}`;
-          const auditPath = path.join(stage, 'audits', `${auditId.replaceAll('/', '__')}.json`);
-          const rawOutput = JSON.stringify({ text: run.text, toolCalls: run.toolCalls });
-          const mechanicalReason = failedJudge.reason ?? failedJudge.name;
-          const auditInputHash = hash(`${auditId}\0${evalCase.contract}\0${rawOutput}\0${mechanicalReason}`);
-          const cached = await readMirrorJson<JudgeAudit>(auditPath);
-          const cachedAudit = cached?.auditVersion === AUDIT_VERSION
-            && cached.auditInputHash === auditInputHash ? cached : undefined;
-          const audit = cachedAudit ?? await auditFailure(
-            auditId,
-            evalCase.contract,
-            rawOutput,
-            mechanicalReason,
-          );
-          judgeAudits.push(audit);
-          await writeRawDump(auditPath, audit);
-          const auditUsage = requireUsage(audit.raw);
-          usage = addUsage(usage, auditUsage);
-          cost += estimatedCost(audit.alias, {
-            inputTokens: auditUsage.inputTokens,
-            outputTokens: auditUsage.outputTokens,
-            totalTokens: auditUsage.totalTokens,
-            cachedReadTokens: auditUsage.cachedReadTokens ?? 0,
-          });
-        }
       }
     }
     assertUnderCap(cost);
     await writeRawDump(`${stage}.partial.json`, {
-      stage, aliases, runs, results, judgeAudits, usage, estimatedCostUsd: cost,
+      stage, aliases, runs, results, usage, estimatedCostUsd: cost,
     });
   }
 
-  const complete = results.every((result) => result.cells.every((cell) => cell.completed === runs));
+  const selected = allCases.flatMap((evalCase, index) =>
+    options.caseIds === undefined || options.caseIds.includes(evalCase.id)
+      ? [{ evalCase, result: results[index]! }]
+      : []
+  );
+  if (selected.length === 0) throw new Error('feature-259 analysis selected no cases');
+  const analysisId = options.analysisId ?? (stage === 'pilot' ? 'generation-pilot' : 'full');
+  const evidencePacks = await Promise.all(selected.map(({ evalCase, result }) =>
+    writeMainSessionEvidence(evalCase, result, analysisId)
+  ));
+  const savedReview = await readMirrorJson<MainSessionReview>(path.join(
+    'layer2', 'main-session-review', analysisId, 'main-session-review.json',
+  ));
+  const mainSessionReview = savedReview?.reviewVersion === 1
+    && savedReview.reviewer === 'main-session'
+    && evidencePacks.every((pack) => savedReview.caseResults.some(
+      (result) => result.caseId === pack.caseId && result.inputHash === pack.inputHash,
+    )) ? savedReview : undefined;
+
+  const complete = results.every((result) => result.cells.every((cell) => cell.runsRaw.length === runs));
   const usageCovered = results.every((result) => result.cells.every(
     (cell) => cell.runsRaw.every((run) => run.usage !== undefined),
   ));
   const timeoutCompliant = results.every((result) => result.cells.every(
     (cell) => cell.runsRaw.every((run) => run.durationMs <= 120_000),
   ));
-  const disagreements = judgeAudits.filter((audit) => !audit.judgeAgrees).length;
-  const auditValid = judgeAudits.length === 0 || disagreements / judgeAudits.length <= 0.1;
   const summary: Layer2Summary = {
     stage, aliases, runs, complete, usageCovered, timeoutCompliant,
-    decisionPassed: complete && usageCovered && timeoutCompliant && auditValid && layer2Decision(results),
-    judgeAudits, results, usage, estimatedCostUsd: cost,
+    reviewStatus: mainSessionReview
+      ? 'main-session-review-complete'
+      : 'pending-main-session-review',
+    evidencePacks,
+    ...(mainSessionReview ? { mainSessionReview } : {}),
+    results, usage, estimatedCostUsd: cost,
   };
-  await writeRawDump(`${stage}.json`, summary);
+  await writeRawDump(`${stage}.${analysisId}.json`, summary);
   return summary;
 }
 
@@ -407,13 +478,25 @@ async function callStructured<T>(
   evidence: string,
   dumpId: string,
 ): Promise<{ readonly value: T; readonly raw: OneShotOutput }> {
+  const inputHash = hash(JSON.stringify({
+    alias, systemPrompt: CHILD_AGENT_SYSTEM_PROMPT, prompt, schema, evidence,
+  }));
+  const relativePath = path.join('layer3-calls', `${dumpId}.json`);
+  const cached = await readMirrorJson<{
+    readonly inputHash: string;
+    readonly raw: OneShotOutput;
+  }>(relativePath);
+  if (cached?.inputHash === inputHash && cached.raw.usage !== undefined) {
+    return { value: parsed<T>(cached.raw, schema), raw: cached.raw };
+  }
   const raw = await runOneShot(alias, {
     systemPrompt: CHILD_AGENT_SYSTEM_PROMPT,
     userMessage: structuredPrompt(prompt, schema, evidence),
     timeoutMs: 120_000,
+    maxOutputTokens: 4_096,
   });
-  await writeRawDump(path.join('layer3-calls', `${dumpId}.json`), {
-    alias, systemPrompt: CHILD_AGENT_SYSTEM_PROMPT, prompt, schema, evidence, raw,
+  await writeRawDump(relativePath, {
+    inputHash, alias, systemPrompt: CHILD_AGENT_SYSTEM_PROMPT, prompt, schema, evidence, raw,
   });
   requireUsage(raw);
   return { value: parsed<T>(raw, schema), raw };
@@ -587,49 +670,61 @@ function reduction(baseline: number, proposed: number): number {
   return baseline === 0 ? 0 : (baseline - proposed) / baseline;
 }
 
-export async function runFeature259Layer3(stage: 'layer3' | 'confirm'): Promise<Layer3Summary> {
+export async function runFeature259Layer3(
+  stage: 'layer3' | 'confirm',
+  options: { readonly allowGeneration?: boolean } = {},
+): Promise<Layer3Summary> {
+  if (options.allowGeneration !== true) {
+    throw new Error('feature-259 Layer-3 generation requires explicit allowGeneration=true');
+  }
   const confirmationIds = new Set(['trust-boundary', 'shared-state', 'plan-mandated-defect']);
+  const comparisonIds = new Set([
+    'edge-condition', 'shared-state', 'requirement-not-provable', 'clean-control',
+  ]);
   const aliases = stage === 'layer3' ? [...LAYER_3_DECISION_ALIASES] : [...DECISION_ALIASES];
   const fixtures = stage === 'layer3'
-    ? [...FEATURE_259_LAYER_3_CASES]
+    ? FEATURE_259_LAYER_3_CASES.filter((fixture) => comparisonIds.has(fixture.id))
     : FEATURE_259_LAYER_3_CASES.filter((fixture) => confirmationIds.has(fixture.id));
-  const repetitions = stage === 'layer3' ? 3 : 1;
+  const repetitions = 1;
   const arms: readonly ('baseline' | 'proposed')[] = stage === 'layer3' ? ['baseline', 'proposed'] : ['proposed'];
-  const cells: Layer3Cell[] = [];
-  let cost = 0;
-  for (const alias of aliases) {
-    for (const fixture of fixtures) {
-      for (let repetition = 0; repetition < repetitions; repetition++) {
-        for (const arm of arms) {
-          const dumpPrefix = `${stage}__${alias.replace('/', '-')}__${fixture.id}__${repetition}__${arm}`;
-          const result = arm === 'baseline'
-            ? await runBaselineArm(alias, fixture, dumpPrefix)
-            : await runProposedArm(alias, fixture, dumpPrefix);
-          const score = scoreReview(fixture, result);
-          const judgeAudit = score.passed ? undefined : await auditFailure(
-            `${stage}/${fixture.id}/${alias}/${repetition}/${arm}`,
-            `${fixture.expectedDisposition}; expected ${fixture.expectedSeverity ?? 'no severity'}; needle ${fixture.expectedNeedle}`,
-            `${result.summary}\n${JSON.stringify(result.packetResults)}`,
-            score.reason,
-          );
-          cells.push({ alias, fixtureId: fixture.id, repetition, arm, ...score, result, ...(judgeAudit ? { judgeAudit } : {}) });
-          await writeRawDump(path.join(stage, 'cells', `${dumpPrefix}.json`), cells[cells.length - 1]);
-          cost += estimatedCost(alias, result.usage);
-          if (judgeAudit) {
-            const auditUsage = requireUsage(judgeAudit.raw);
-            cost += estimatedCost(judgeAudit.alias, {
-              inputTokens: auditUsage.inputTokens,
-              outputTokens: auditUsage.outputTokens,
-              totalTokens: auditUsage.totalTokens,
-              cachedReadTokens: auditUsage.cachedReadTokens ?? 0,
-            });
+  const perAliasCallCap = stage === 'layer3' ? 40 : 20;
+  const aliasResults = await runWithProviderConcurrency(aliases.map((alias) => ({
+    alias,
+    run: async () => {
+      const aliasCells: Layer3Cell[] = [];
+      let aliasCost = 0;
+      let providerCalls = 0;
+      for (const fixture of fixtures) {
+        for (let repetition = 0; repetition < repetitions; repetition++) {
+          for (const arm of arms) {
+            const dumpPrefix = `${stage}__${alias.replace('/', '-')}__${fixture.id}__${repetition}__${arm}`;
+            const result = arm === 'baseline'
+              ? await runBaselineArm(alias, fixture, dumpPrefix)
+              : await runProposedArm(alias, fixture, dumpPrefix);
+            providerCalls += result.calls.length;
+            if (providerCalls > perAliasCallCap) {
+              throw new Error(
+                `feature-259 ${stage} call cap exceeded for ${alias}: ${providerCalls} > ${perAliasCallCap}`,
+              );
+            }
+            const score = scoreReview(fixture, result);
+            const cell = { alias, fixtureId: fixture.id, repetition, arm, ...score, result };
+            aliasCells.push(cell);
+            await writeRawDump(path.join(stage, 'cells', `${dumpPrefix}.json`), cell);
+            aliasCost += estimatedCost(alias, result.usage);
+            assertUnderCap(aliasCost);
+            await writeRawDump(path.join(
+              stage, 'partial', `${alias.replace('/', '__')}.json`,
+            ), { stage, alias, cells: aliasCells, providerCalls, estimatedCostUsd: aliasCost });
           }
-          assertUnderCap(cost);
-          await writeRawDump(`${stage}.partial.json`, { stage, cells, estimatedCostUsd: cost });
         }
       }
-    }
-  }
+      return { cells: aliasCells, cost: aliasCost, providerCalls };
+    },
+  })));
+  const cells = aliasResults.flatMap((result) => result.cells);
+  const cost = aliasResults.reduce((sum, result) => sum + result.cost, 0);
+  assertUnderCap(cost);
 
   const proposed = cells.filter((cell) => cell.arm === 'proposed');
   const baseline = cells.filter((cell) => cell.arm === 'baseline');
@@ -654,9 +749,6 @@ export async function runFeature259Layer3(stage: 'layer3' | 'confirm'): Promise<
   const proposedStarts = standardPairs.reduce((sum, pair) => sum + pair.proposed.result.primaryStarts, 0);
   const baselineReads = standardPairs.reduce((sum, pair) => sum + pair.baseline.result.duplicatePacketReads, 0);
   const proposedReads = standardPairs.reduce((sum, pair) => sum + pair.proposed.result.duplicatePacketReads, 0);
-  const audits = cells.flatMap((cell) => cell.judgeAudit ? [cell.judgeAudit] : []);
-  const judgeDisagreementRate = audits.length === 0 ? 0
-    : audits.filter((audit) => !audit.judgeAgrees).length / audits.length;
   const usage = cells.reduce((total, cell) => ({
     inputTokens: total.inputTokens + cell.result.usage.inputTokens,
     outputTokens: total.outputTokens + cell.result.usage.outputTokens,
@@ -667,16 +759,10 @@ export async function runFeature259Layer3(stage: 'layer3' | 'confirm'): Promise<
   const standardPrimaryReduction = reduction(baselineStarts, proposedStarts);
   const standardDuplicateReadReduction = reduction(baselineReads, proposedReads);
   const usageCovered = cells.every((cell) => cell.result.calls.every((call) => call.usage !== undefined));
-  const decisionPassed = stage === 'confirm'
-    ? qualityNonInferior && usageCovered && judgeDisagreementRate <= 0.1
-    : qualityNonInferior && usageCovered && judgeDisagreementRate <= 0.1
-      && medianStandardTokenReduction >= 0.2
-      && standardPrimaryReduction >= 0.3
-      && standardDuplicateReadReduction >= 0.3;
   const summary: Layer3Summary = {
-    stage, complete: true, usageCovered, decisionPassed, qualityNonInferior,
+    stage, complete: true, usageCovered, reviewStatus: 'pending-main-session-review', qualityNonInferior,
     medianStandardTokenReduction, standardPrimaryReduction, standardDuplicateReadReduction,
-    judgeDisagreementRate, cells, usage, estimatedCostUsd: cost,
+    cells, usage, estimatedCostUsd: cost,
   };
   await writeRawDump(`${stage}.json`, summary);
   return summary;

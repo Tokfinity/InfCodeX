@@ -51,7 +51,7 @@ function hash(value: string): string {
 
 export function buildFeature259ExperimentManifest(input: Feature259ExperimentInput): object {
   return {
-    schemaVersion: 2,
+    schemaVersion: 3,
     featureId: 259,
     gitCommit: input.gitCommit,
     dirtyPatchHash: hash(input.dirtyPatch),
@@ -74,16 +74,19 @@ export function buildFeature259ExperimentManifest(input: Feature259ExperimentInp
     resolvedAliases: input.resolvedAliases,
     effort: 'provider-default-frozen-per-cell',
     temperature: 'provider-default-frozen-per-cell',
-    concurrencyPerAlias: 1,
+    concurrencyPerProvider: 1,
+    crossProviderConcurrency: true,
     fallbackRule: 'rerun both arms of every affected pair on the same canonical fallback',
     timeoutMs: 120_000,
+    maxOutputTokens: { layer2Generation: 8_192, layer3StructuredCall: 4_096 },
     repetitions: { pilot: 1, decision: 5 },
     externalCallBudget: {
       layer2Pilot: 12,
       layer2Decision: 300,
-      layer3Decision: '96 paired arm cells; dependent primary/verifier/synthesis calls are recorded per cell',
-      layer3Confirmation: '15 proposed-arm cells',
+      layer3Comparison: '16 arm cells; at most 40 provider calls per alias / 80 total',
+      layer3Confirmation: '15 proposed-arm cells; at most 20 provider calls per alias / 100 total',
     },
+    generationSafety: 'resume-only by default; external calls require explicit allowGeneration=true',
     layer2Cases: FEATURE_259_LAYER_2_CASES,
     layer3Fixtures: FEATURE_259_LAYER_3_FIXTURES,
     callGraphs: {
@@ -92,7 +95,8 @@ export function buildFeature259ExperimentManifest(input: Feature259ExperimentInp
     },
     pairedTokenCells: 'every alias × case × repetition × arm pair',
     tokenCoveragePolicy: 'missing required usage invalidates the pair; never estimate',
-    judgePolicy: 'automated scoring requires manual audit; excessive disagreement invalidates the run',
+    reviewPolicy: 'main session reviews blinded paired raw evidence; no external judge aliases by default',
+    conclusionPolicy: 'recommend-ship | recommend-iterate | recommend-revert | eval-invalid; owner decides',
     rawOutputRoot: path.join(os.tmpdir(), 'kodax-eval-dumps', 'feature-259'),
     redundantRawOutputMirror: path.join(os.tmpdir(), 'kodax-feature-259-eval-mirror'),
     pricingSnapshot: input.pricingSnapshot ?? null,

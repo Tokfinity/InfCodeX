@@ -27,7 +27,21 @@
 - **明确的 expected output 形态**（关键工具调用名 / 字符串断言 / JSON shape / 不出现某个反模式 / etc.）
 - **单次 LLM call** 就能验证
 
+机械断言负责回答“发生了什么”，不是所有发布建议的最终裁判。对于 lift / harm / 产品价值比较，最终问题是 **candidate 是否比 baseline 更有价值**；这类语义问题由当前主会话读取盲化配对证据做语义评审，并将机械指标作为可解释的诊断证据，而不是设置“任一 alias × case 未达固定比例即否决”的僵硬门槛。
+
 **多轮场景**：每一轮是**独立设计**的 controlled test，**不是**让 LLM 自由展开后看最终态。
+
+## Eval 必须交付分析，不交付一个布尔验收值
+
+每次 prompt A/B eval 的产物必须回答：
+
+1. **任务是否有效**：case 是否真实代表 production 任务，输入是否对齐 production bytes，主会话评审是否在比较真正关心的能力。如果任务或评分器无效，结论标为 `eval-invalid`，先修实验，不评价 prompt。
+2. **哪里提升、哪里回退**：按任务维度、provider 和失败模式展示 candidate 相对 baseline 的差异，不能只给 aggregate pass rate。
+3. **回退原因是什么**：区分 `eval-design`（case / scorer / cutoff 失真）、`provider-noise`（限流 / timeout / 格式抖动）、`prompt-regression`（prompt 确实诱导了更差行为）和 `inconclusive`。
+4. **建议怎么处理**：输出 `recommend-ship`、`recommend-iterate`、`recommend-revert` 或 `eval-invalid`，并说明保留项、应撤回项、可优化方案和验证成本。
+5. **由谁决定**：eval 给出证据和工程建议；最终是否 ship 由用户 / owner 决定。Harness 不得用 `decisionPassed=false` 之类单一布尔值替代上述分析。
+
+发现任务设计不合理时允许修改，但必须创建新的 experiment revision，记录修改理由，并先做小样本 pilot。旧 raw output 保留为诊断证据；只有输入或任务实际变化的 cell 才需要重跑，不能因为 scorer / 评审方法改进而重烧所有 generation token。
 
 ---
 
@@ -55,7 +69,7 @@
 INPUT (固定): system prompt + canned history + user task
 EXPECTED: assistant 的下一个响应必须满足 X
                  (可选: 不满足 Y / 不调用 Z 工具)
-SAMPLE SIZE: 5-10 次重复（取多数）
+SAMPLE SIZE: pilot 每 arm 1-2 次；确认 case 有效后通常扩到 3-5 次，只有观察到高方差才增加
 ```
 
 **例**：
@@ -73,7 +87,8 @@ SAMPLE SIZE: 5-10 次重复（取多数）
 
 **强制要求**：
 - 必须能用一段 mock history 重现要测的场景
-- assertion 必须机械化（regex / JSON shape / tool name），**不能**靠人读"看起来对不对"
+- 每个 probe 必须保留机械化观测（regex / JSON shape / tool name），以便定位具体行为和评分器漂移
+- 用于发布建议的 A/B 比较必须由当前主会话完成盲化配对语义评审；不能只靠机械命中率替代产品价值判断，评审结论必须结构化落盘并给出理由
 - 报告必须给出 sample 比例（"8/10 通过"）而不是单次结论
 - **若 probe 涉及 tools**：tool descriptions 必须用 production `KodaXToolDefinition.description` 真实字节走 harness `tools` 通道，不是简化 stub（详见反模式 8）
 
@@ -107,25 +122,49 @@ ROUND 3: ...
 
 ---
 
+## 防跑飞预算（所有付费 eval 强制）
+
+Timeout 只是最后一道保险，不能代替调用数和 token 预算。每个 experiment revision 必须同时冻结：
+
+- `maxProviderCalls`：总调用数上限；pilot、generation、可选外部复核分项计数。主会话读取 raw 不计 provider call
+- `maxCallsPerCell`：Layer 2 固定为 1；Layer 3 按预定义 call graph，禁止运行时自行扩展
+- `maxRoundsPerCell`：Layer 2 为 1；Layer 3 默认不超过 3，超过必须在设计中逐轮解释必要性
+- `maxOutputTokensPerCall`：provider 支持时由 API 强制；不支持时禁止追加 follow-up，并把超额记录为效率问题
+- `maxTotalTokens` 与 `maxExternalSpendUsd`：每次调用后核算；达到任一上限立即停止，保留已完成数据
+- `timeoutMs`：按任务复杂度设置，只用于终止失控请求；timeout 样本保留，不盲目自动重试
+
+执行约束：
+
+1. **Pilot 先验证实验，不先验证 prompt**：先用 1–2 个代表 case、1–2 个 provider、每 arm 1–2 次，确认任务可区分、主会话能据此判断有效性、预算估计可信。Pilot 设计无效就停，不扩 panel。
+2. **Layer 2 不执行模型提出的工具调用**：只捕获模型的下一响应 / tool call 作为观测，避免一个 probe 展开成 agent loop。
+3. **Layer 3 使用固定 call graph**：每轮输入、允许的工具结果、终止点都由 harness 注入。禁止模型自行 spawn 无界 child、重试或决定追加轮次。
+4. **Layer 3.5 只做 smoke**：最多 3 个 case；必须另设 turn、child、tool-call 和 token 硬上限；不得用于 baseline/candidate 优劣结论。
+5. **先评审已有 raw，再考虑重跑**：评分器、rubric 或 aggregate 逻辑变化时由主会话重读原始输出。仅当 case 输入改变、raw 损坏或样本确实不足时，才补跑最小受影响集合。
+6. **并发按 provider 限流**：同一 provider 最多 1 个在途请求，不同 provider 并行；任何 fallback 按实际 provider 排队。
+
+---
+
 ## 实验前必填 checklist（写在 PR / 设计文档里）
 
 ```
 [ ] 这个问题能用 Layer 1 回答吗？为什么不能？
 [ ] 设计落在 Layer 2 还是 Layer 3？
 [ ] 固定 input 是什么？(贴上 system prompt + history 的精确字节)
-[ ] expected output 的机械化 assertion 是什么？
+[ ] expected output 的机械化观测是什么？它诊断哪种行为？
 [ ] sample size 多少？为什么是这个数（不能是"看心情"）？
-[ ] pre-registered 决策阈值：什么样的结果让我做什么决定？
+[ ] pre-registered 分析问题与主会话评审 rubric：怎样算“有实质价值、总体优于 baseline、存在可信回退”？
+[ ] A/B 证据是否盲化？主会话评审是否会结构化落盘并给出理由？
+[ ] provider 并发计划：同一 provider 是否保证最多 1 个在途请求？
+[ ] maxProviderCalls / maxCallsPerCell / maxRoundsPerCell / maxOutputTokens / maxTotalTokens 是多少？
 [ ] 总成本 budget：估计 $X。能换什么决定？($X 不值就放弃)
 [ ] raw output dump 路径？(强制条款，见 §Raw output preservation)
-[ ] LLM-judge 抽样审计计划？disagree 阈值多少触发 redo？(见反模式 7)
-[ ] 若 ship 决策依据包含历史 eval-driven DROP 数据：DROP-commit→HEAD 之间 substrate 是否有改动？需 re-pilot 吗？(见反模式 10)
-[ ] 若是 behavioral-neutral hygiene refactor：走 2-alias pilot 即可 SHIP，不进 5-alias panel？(见反模式 9)
+[ ] 主会话如何抽查机械 scorer？disagree 到什么程度会让 scorer 降级为“不可信”？(见反模式 7)
+[ ] 若建议依据包含历史 eval-driven DROP 数据：DROP-commit→HEAD 之间 substrate 是否有改动？需 re-pilot 吗？(见反模式 10)
+[ ] 若是 behavioral-neutral hygiene refactor：2-alias pilot 是否已经足以形成建议，不再扩 panel？(见反模式 9)
+[ ] 最终报告是否包含 task validity、提升、回退归因、建议与可选优化方案？
 ```
 
-**特别强调**：第 6 条（pre-registered 阈值）必须在跑实验前定下来。否则跑完只会陷入"再多跑 N 个看看"的无限增量。第 8、9 条是 2026-05-10 FEATURE_151 Slice I 验证教训新增 — 没有 raw dump + LLM-judge 抽查，regex 假阴假阳会让你基于错误数据做错误决策（详见反模式 7 真实案例）。第 10、11 条是 2026-05-24 FEATURE_189 release-window 教训新增 —— DROP 数据 substrate-drift 失效 + behavioral-neutral refactor 5-alias panel 过度投资（详见反模式 9、10 真实案例）。
-
-**Pre-register 阈值的唯一 override**：floor saturation 场景下 strict per-alias gate 可 evidence-driven override（见反模式 11），但**只 hygiene / behavioral-neutral refactor 可，lift / harm 类不可**。
+**特别强调**：分析问题、评审 rubric、样本量和停止条件必须在跑实验前定下来，避免跑完后无限追加样本或挑选对 candidate 有利的解释。Pre-register 的是**比较目标、价值标准与风险边界**，不是要求所有 alias 表现整齐划一的数字，也不是提前剥夺 owner 的最终判断。没有 raw dump + 主会话语义抽查，regex 假阴假阳会让你基于错误数据给出建议（详见反模式 7）。
 
 ---
 
@@ -138,11 +177,13 @@ OK = process exit 0 是个**极其弱的信号**：
 - 模型 timeout → FAIL，但可能做了 90% 的事
 - 模型乱改 12 个不相关文件 → OK 也 hit，但显然是 attention drift
 
-**取代方案**：每个 eval 必须定义具体的 acceptance criteria，且**机械化可验证**：
+**取代方案**：每个 eval 必须定义具体、可复核的行为观测：
 - 工具调用断言：assistant 的下一个 tool_use 的 name 是 X
 - 内容断言：assistant 文本包含 / 不包含某个 phrase（**negative-case "不包含" 方向有 regex 陷阱，详见反模式 7**）
 - JSON shape 断言：emit_handoff 的 payload 必须含 X 字段
 - 副作用断言：跑完 vitest 某个特定 test 必须 pass
+
+这些观测用于解释 lift、harm 和失败模式。涉及产品价值的最终建议由主会话基于盲化配对证据完成语义评审；不能把某个机械指标直接等同于“值得发布”。
 
 ### 反模式 2：让 LLM "自由跑然后我们解读"
 
@@ -150,25 +191,27 @@ OK = process exit 0 是个**极其弱的信号**：
 
 ### 反模式 3：同 provider 并发
 
-每个 coding plan provider（kimi / glm / mmx / mimo / ark）都有共享 quota。并发 >1 跑同一 alias 必触发 429。429 隐藏在 600s timeout 之后看起来像模型失败，污染数据。**强制 concurrency = 1 per alias**，跨 alias 自然并发。
+每个 coding plan provider（kimi / glm / mmx / mimo / ark）都有共享 quota。同一 provider 并发 >1 容易触发 429；例如 `ark/v4pro` 与 `ark/v4flash` 虽是两个 alias，仍共享 `ark-coding` quota。429 隐藏在 timeout 之后会看起来像模型失败，污染数据。
+
+**强制 concurrency = 1 per provider**。不同 provider 的队列必须自然并行；禁止为了规避单 provider 限流而退化成整个 panel 全局串行。Fallback 按实际路由 provider 进入对应队列。
 
 ### 反模式 4：探索期就开多 alias
 
-探索期（不知道实验设计是否可行）= 1 alias（用便宜的，如 `ark/v4flash`）。验证期（信号清楚要看泛化）= 多 alias。次序不可反。
+探索期（不知道实验设计是否可行）= 1–2 个代表 provider 的最小 pilot。验证期（case 有区分度、主会话能稳定解释，且确实需要看泛化）再扩 provider。次序不可反。
 
-**例外**：behavioral-neutral hygiene refactor 走 2-alias pilot（见反模式 9），不进 5-alias panel。
+**例外**：behavioral-neutral hygiene refactor 走 2-alias pilot（见反模式 9），通常不扩完整 provider pool。
 
 ### 反模式 5：prompt 迭代用大规模实验
 
-`prompt v1` → 跑 36 cells → "v1 不够好" → `prompt v2` → 跑 36 cells → … 每轮都是 36 个 cell 是错的。
+`prompt v1` → 跑大 panel → "v1 不够好" → `prompt v2` → 再跑大 panel → … 每轮都全量重跑是错的。
 
-**正确做法**：prompt 调试用 N=1 single-turn probe（成本 $0.01），收敛到候选 v3 → 再做一次 36 cell 验证。manual prompt review > 大规模 grid search。
+**正确做法**：prompt 调试用最小 single-turn probe，先确认回退原因和可优化方向；收敛到候选后，只对受影响 case 做代表性多 provider 比较。未改变的 baseline raw 可复用。manual prompt review > 大规模 grid search。
 
-### 反模式 6：跑完才想"什么算 signal"
+### 反模式 6：跑完才想"什么算有价值"
 
-如果跑完看着 17pp delta 在思考"是 signal 还是 noise"，说明决策阈值没事先定。**跑前必须 pre-register**：例如 "delta < 10pp 视为 0 差异，跨 alias 一致才算 real signal"。
+如果跑完才决定“17pp delta 代表什么”，说明价值标准没有事先定义。跑前必须 pre-register 主会话评审 rubric，例如：candidate 是否带来用户可感知的实质改善、总体是否优于 baseline、是否存在可信回退，以及哪些效率指标只是辅助证据。
 
-**唯一允许的 override**：pre-registered strict per-alias gate 在 floor saturation 场景下可 evidence-driven override（详见反模式 11 三项准则 + override rationale 必须显式落 commit / memory）。**只 hygiene refactor / behavioral-neutral refactor 可 override，lift / harm 类 metric 不可** —— 否则等于跑完才挑阈值。
+不要 pre-register “每个 alias × case 必须 4/5”一类跨模型全票门槛。模型差异、floor saturation 和偶发 provider timeout 会让它过度否决。正确分析单位是主会话对盲化 A/B 原始证据的整体价值比较。分 alias / case 数据必须报告，用于解释风险、分析回退原因和提出优化方案。
 
 ### 反模式 7：用 regex 实现 "不应出现" 类否定断言
 
@@ -176,15 +219,15 @@ OK = process exit 0 是个**极其弱的信号**：
 
 - **现象**：负面 case（如"trivial 任务上不应调用 todo_update"）的 regex 形如 `output 不出现 'todo_update'`。
 - **失败模式**：verbose / chain-of-thought 模型会写 `I should NOT call todo_update` 或在 `<antThinking>` 块里分析 `trivial 任务，不需要 todo_update`。模型的实际行为正确（确实没调用），但 regex 看不懂否定语义，把字面量出现判 fail。
-- **真实案例**（2026-05-10, FEATURE_151 Slice I 验证）：kimi 在 `single_lookup` / `single_grep` 4 个负面 case 里，5 次有 2-3 次 regex FAIL，干净 context 下 LLM-judge 全部 PASS。"kimi 上引入了过触发回归"是 regex 假阴性，根本不存在的 regression，差点让我们把没有 bug 的 v2 prompt 改回去。
+- **真实案例**（2026-05-10, FEATURE_151 Slice I 验证）：kimi 在 `single_lookup` / `single_grep` 4 个负面 case 里，5 次有 2-3 次 regex FAIL，主会话读取 raw 后全部判为行为正确。"kimi 上引入了过触发回归"是 regex 假阴性，根本不存在的 regression，差点让我们把没有 bug 的 v2 prompt 改回去。
 
 **强制规则**：
 
-1. **Negative-case judges 不能只用 regex**。要么改成"绝对结构断言"（例如：第一个 tool_call 的 name ≠ X — 需 harness 暴露 toolCalls），要么必须 pair LLM-judge 兜底。
+1. **Negative-case scorer 不能只用 regex**。要么改成"绝对结构断言"（例如：第一个 tool_call 的 name ≠ X — 需 harness 暴露 toolCalls），要么必须由主会话读取 raw output 做语义兜底。
 2. **所有 eval run 必须落盘 raw output**（见下节 §Raw output preservation）。每跑必 dump，不 dump 等于把数据丢了。
-3. **跑完后强制抽查**：每个 cell 至少抽 1 条 regex-fail 用 LLM-judge（干净 context）独立判一次，对比 regex；如果 disagreement >10%，整个 eval 数据作废重跑。Positive case 也建议抽 1 条 regex-pass 防止假阳性。
+3. **跑完后强制抽查**：每个 cell 至少抽 1 条 regex-fail，由主会话在干净证据包中独立判断并对比 regex。若 disagreement >10%，机械 scorer 降级为“不可信”：直接基于已落盘 raw output 扩大主会话复核或修 scorer 后重算，**不得因此重跑 generation calls**。Positive case 也建议抽 1 条 regex-pass 防止假阳性。
 4. **Positive-case 工具调用判定不能用 `tool_name\s*\(` 单一 syntax**。生产 panel 里 zhipu/glm51 等模型实测会用 `<tool_name>(args)` / `<tool_name>...</tool_name>` / `<tool_call>{"name":"tool_name", ...}</tool_call>` 等多种 syntax；要求 `name` 后紧跟 `(` 的 regex 会把 syntax 漂移误判成 FN。规则：tool-name detection 至少覆盖 4 种 syntax —— `tool_name(`、`"name":"tool_name"`、`<tool_name>`、`name=tool_name`/`name: tool_name`。参考实现见 `benchmark/datasets/feature-120-child-steering/cases.ts` `buildToolNamePatterns`。
-5. **真实案例 2026-05-12 (FEATURE_120 Phase 5b)**：第一版 `task_stop\s*\(` regex 让 zhipu/glm51 在 task_stop 触发 case 上误判 0/5；rejudge 后实际 5/5（regex 全部 false negative，zhipu 输出形式如 `<task_stop>(...)`、`<tool_call[]>{"name":"task_stop"...}</tool_call[]>`、XML 嵌套 + YAML 内嵌等）。整体 50 个 run disagreement 14%，超 §3 的 10% 阈值。是 FEATURE_151 Slice I 反模式 7 教训之后的第二次同类事故。
+5. **真实案例 2026-05-12 (FEATURE_120 Phase 5b)**：第一版 `task_stop\s*\(` regex 让 zhipu/glm51 在 task_stop 触发 case 上误判 0/5；主会话复核后实际 5/5（regex 全部 false negative，zhipu 输出形式如 `<task_stop>(...)`、`<tool_call[]>{"name":"task_stop"...}</tool_call[]>`、XML 嵌套 + YAML 内嵌等）。整体 50 个 run disagreement 14%，说明机械 scorer 不可信。是 FEATURE_151 Slice I 反模式 7 教训之后的第二次同类事故。
 
 ### 反模式 8：Synthetic eval 用简化版 tool descriptions（2026-05-24 补充）
 
@@ -202,17 +245,17 @@ OK = process exit 0 是个**极其弱的信号**：
 
 **参考实现**：`tests/feature-189-todo-desc-refactor-pilot.eval.ts`（4 个 todo_* desc 通过 tools param 下发 baseline vs proposed）。
 
-### 反模式 9：Behavioral-neutral hygiene refactor 直接跑 5-alias panel（2026-05-24 补充）
+### 反模式 9：Behavioral-neutral hygiene refactor 直接跑 full panel（2026-05-24 补充）
 
-Content-equivalent refactor（语义保留 byte 重排：例如 monolithic prose → layered "When to Use / When NOT to Use" sections / 同样信息换叙述形式）的 expected behavior 是**行为中性**（no regression no lift），不需要花 ~$4-6 跑 5-alias panel。
+Content-equivalent refactor（语义保留 byte 重排：例如 monolithic prose → layered "When to Use / When NOT to Use" sections / 同样信息换叙述形式）的 expected behavior 是**行为中性**（no regression no lift），通常不需要直接跑完整 provider pool。
 
 **正确成本曲线**：
 1. **Layer 1**（$0）：先做内容等价性 diff —— 是否 strictly preserves semantic content？如果是，behavioral neutrality is expected by construction
 2. **Layer 2 pilot 2-alias × 2 case × 3 runs**（~$1）：
    - 至少 1 case 在两个 variant 都达到 saturation（floor 或 ceiling）→ 该 dimension 无信号 → behaviorally identical
    - 至少 1 case 在两个 variant 都达 perfect parity（100/100% / 0/0%）→ regression 路径已封死
-3. **如果以上两条满足 → SHIP，不跑 panel**
-4. **如果 pilot 出现 cross-variant divergence**（即使 1-2 cell）→ 进 5-alias panel + 3-judge audit
+3. **如果以上两条满足 → `recommend-ship`，不跑 panel**
+4. **如果 pilot 出现 cross-variant divergence** → 主会话先分析 divergence 是 scorer、provider noise 还是行为差异，再按需要扩 provider；不是无条件跑满 5 alias
 
 **为什么这样**：
 - Behavioral-neutral refactor 的 null hypothesis 是 "v_baseline == v_proposed"
@@ -223,7 +266,7 @@ Content-equivalent refactor（语义保留 byte 重排：例如 monolithic prose
 **真实案例 2026-05-24**：F189 todo_* description claudecode-style layered refactor。Pilot 2 alias (ark/v4flash + zhipu/glm51) × 2 case × 3 runs = 24 cells：
 - C1 multi-step plan-first：4/4 cells (both alias × both variant) 0/3 PASS — saturation floor（model 选择 recon-then-plan，single-turn cutoff）
 - C2 trivial exemption：4/4 cells 3/3 PASS — perfect parity（"When NOT to Use" 没造成 false negative）
-- SHIP gate met 不跑 panel，省 ~$4-6 + 2 小时
+- 形成 `recommend-ship`，不跑 panel，省 ~$4-6 + 2 小时
 
 ### 反模式 10：Eval-driven DROP 不 re-check substrate 变化就 stale（2026-05-24 补充）
 
@@ -241,49 +284,44 @@ Content-equivalent refactor（语义保留 byte 重排：例如 monolithic prose
 3. DROP 数据 archival 时在 commit message / project memory 标注"基于 substrate state @ <commit-sha>"，方便后续判断
 4. v0.7.X 版本 release 时，本版内 eval-driven DROP 的引用窗口截止到下一个 minor release —— 跨版本必须 re-check
 
-### 反模式 11：Floor saturation × strict per-alias gate 误判 refactor harm（2026-05-24 补充）
+### 反模式 11：Floor saturation × strict per-alias gate 误判 refactor harm（2026-05-24 补充，2026-07-11 修订）
 
-Pre-registered strict gate (per `feedback_pre_registered_gate_saturation`) 用"任一 alias × case 退化 ≥1 cell = SHIP fail"类型时，floor-saturation 数据可被误判为 regression。
+“任一 alias × case 退化 ≥1 cell = SHIP fail”会把 floor-saturation、模型方差或 provider 抖动误判为产品回退。该类 strict per-alias gate 已不再作为 ship 决策规则。
 
 **Floor saturation 的辨识标准**：
 - v_baseline 在该 cell 已达 metric 自然 floor / ceiling（plan-first metric baseline 0/5 / 5/5；trivial exemption baseline 5/5）
 - v_proposed 与 v_baseline 在该 cell 同号同幅（baseline 0/5 → proposed 0/5；baseline 5/5 → proposed 5/5）
 - 同一 alias × 同一 case 在 cross-alias pilot 复现（i.e. 至少 2 alias 都 floor saturate）
 
-**Evidence-driven override 准则**：
-1. 满足以上 3 条 + refactor 是 content-equivalent → SHIP gate per-alias strict failure 可被 override
-2. Override rationale 必须在 commit message / project memory 显式记录：包括 "saturation reason" + "cross-alias 复现证据" + "metric 局限性"（例如 single-turn 测不到 multi-turn recon-then-plan）
-3. Override 不能滥用：行为 lift / harm 类 metric 不可 override，只 hygiene refactor / behavioral-neutral refactor 可
+**正确处理**：
+1. 满足以上 3 条时，将该机械 metric 标记为“无区分度”，不要计作 candidate 回退
+2. 把 saturation reason、cross-alias 复现证据和 metric 局限性显式写入主会话评审证据与最终报告
+3. 由主会话结合盲化配对原始输出来判断是否存在真实 harm；无需事后“override”，因为机械 metric 本来就只是诊断证据
 
-**真实案例 2026-05-24**：F189 todo desc refactor C1 multi_step ark/v4flash + zhipu/glm51 双 alias 4/4 cells 0/3 PASS。Per `feedback_eval_strict_criterion_under_counts_taught_behavior`：model 实际行为是 "I'll start by reading the existing files... then commit the plan"（healthy multi-turn recon-then-plan），single-turn metric 漏掉。Override 准则 1+2+3 全满足 → SHIP without panel。
+**真实案例 2026-05-24**：F189 todo desc refactor C1 multi_step ark/v4flash + zhipu/glm51 双 alias 4/4 cells 0/3 PASS。模型实际行为是 "I'll start by reading the existing files... then commit the plan"（healthy multi-turn recon-then-plan），single-turn metric 漏掉。这个结果说明 metric 无区分度，而不是 refactor 有害。
 
-### Judge 模型选择约束（2026-05-12 补充）
+### 比较结论与工程建议：主会话语义评审（2026-07-11 修订）
 
-**禁止用 anthropic claude / openai gpt 等"外来 strong model"做内部 eval 的 LLM-judge**：
+当 eval 比较 candidate 与 baseline 的产品价值时，由**当前主会话**读取 raw output、验证任务有效性、分析差异并给出工程建议。这里的“评审”不是再调用 alias；executor alias 只负责生成样本。
 
-- KodaX 的生产 panel 主体是中国 coding plan 模型（zhipu, kimi, deepseek, minimax, mimo, ark, qwen），eval 决策的实际生产分布对齐它们；用 claude-sonnet/opus 当 judge 会把外来 model 的 "强语义理解 + 严格 instruction following" 偏置带进判定，掩盖 panel-internal 同质化失败模式。
-- 实操是 anthropic 当 judge 会 **过于宽容**（看懂 zhipu 的怪 syntax 也判 PASS），反而和 enhanced regex 出现不必要的 disagreement；或者 **过于严格**（要求 syntax 标准）让 enhanced regex 看起来 over-permissive。两种偏置都让 ship 决策失真。
+1. **盲化配对**：先由 harness 生成 Arm A / Arm B 证据包，主会话在不知道标签的情况下判断任务有效性、首选 arm、差异大小和理由；完成 case 级判断后再揭盲综合。
+2. **价值 rubric**：判断差异是否达到 material（用户可感知且值得维护成本）、是否存在真实回退、回退更可能来自 case / scorer、provider noise 还是 prompt。只问“是否满足某个字符串”不算价值判断。
+3. **建议映射**：总体更好且有实质价值 → `recommend-ship`；有价值但存在可优化回退 → `recommend-iterate`；prompt 导致净回退且优化价值低 → `recommend-revert`；task / scorer 无法回答比较问题 → `eval-invalid`。不要求每个 alias / case 都获胜，最终决定由 owner 作出。
+4. **数据缺口单列**：timeout、缺失 usage、格式失败必须进入证据包和报告。偶发缺口降低置信度，不自动否决；系统性只发生在 candidate、足以影响实际可用性的缺口可判为回退。缺失 usage 时不得宣称 token / 成本改善。
+5. **机械指标是诊断证据**：pass rate、regex、token、latency 帮助解释为什么更好或更差，并用于发现评分器错误；不能单独覆盖主会话的语义分析。
+6. **评审落盘**：保存证据包 hash、case 级 verdict、揭盲映射、最终建议、回退归因和理由。仅存在于聊天文本、无法复核的结论不算完成。
 
-**允许的 judge 来源**（按优先级）：
-
-1. **Self-judge by the orchestrating Claude session**（主线程的 Claude 模型读 raw dump 直接判定）。零额外 API 调用、可解释、独立于 panel。**前提**：判定文本 + 理由必须落盘 audit JSON，不能只是 in-conversation 结论。适合 ≤50 cells / 一次性 sanity check。
-2. **Panel-internal multi-judge majority vote** —— 用 KodaX 生产 panel 的 3 家（推荐：`zhipu/glm51` + `ark/v4pro` + `kimi`，覆盖 3 个独立 family，全 coding-plan）独立判定，2/3 majority 算 PASS。适合 ship-gate 复核 / 跨版本可重复。
-3. 自定义同源模型（按 case 设计），但**永远不要用 anthropic/openai**。
-
-**反模式**：
-- ❌ "用 claude-sonnet 当 judge 因为它最强" —— 强不等于对齐 panel 分布。
-- ❌ 单一 judge model —— 单一 judge 自身可能有同类 bias（例如 zhipu 当 judge 时对其它 zhipu-family 输出过松）。majority vote 是必要的去 bias 步骤。
-- ❌ Judge 跑完不落盘 —— 和反模式 7 §2 一样，judge 输出本身也是 source of truth，必须 dump。
+只有在主会话判断证据仍然模糊，或用户明确要求独立复核时，才额外调用外部模型。外部复核必须单独预算和授权，不能默认把 executor panel 再跑一遍当“judge”。
 
 ---
 
 ## Raw output preservation（强制条款）
 
-每次 eval run 必须把 `runsRaw[].text` + `toolCalls` + 每个 judge 的 pass/reason 落到磁盘 JSON。
+每次 eval run 必须把 `runsRaw[].text` + `toolCalls` + 机械 scorer 结果落到磁盘 JSON；主会话语义评审完成后，再把 case verdict、揭盲映射与最终建议追加落盘。
 
 **理由**（同反模式 7）：
 - regex / 机械判子可能假阴假阳，**唯一的 ground truth 是模型的原始文本输出**。
-- 只有原始输出落盘，事后 LLM-judge 才能跑（不然每次跑 + judge = 重跑成本）。
+- 只有原始输出落盘，主会话才能在不重跑 generation 的前提下修正 scorer、调整 rubric 或重新评审。
 - pass-rate aggregate 是 derived，dump 是 source of truth — 没 dump 等于扔了源数据，留下的是 lossy summary。
 
 **落盘路径约定**：`os.tmpdir() / kodax-eval-dumps / <feature-id> / <case>.json`（即 Linux/macOS `/tmp/kodax-eval-dumps/...`，Windows `%LOCALAPPDATA%/Temp/kodax-eval-dumps/...`）。**必须用 OS tmpdir，不能放 repo 工作树内**（哪怕 gitignore 兜底也不行 — dump 是 transient runtime 产物，由 OS 回收，结构上和源代码必须分离）。
@@ -309,6 +347,17 @@ Schema：
           "regexJudges": [{ "name": "...", "passed": true, "reason": "..." }]
         }
       ]
+    }
+  ],
+  "mainSessionReview": [
+    {
+      "reviewer": "main-session",
+      "inputHash": "<sha256>",
+      "preferredArm": "A | B | tie",
+      "value": "none | minor | material",
+      "regressionSeverity": "none | low | high",
+      "confidence": "low | medium | high",
+      "reason": "<auditable rationale>"
     }
   ]
 }
@@ -343,9 +392,9 @@ Total: $Z
 
 ---
 
-## Canonical alias panel（2026-05-19 锁定 / 2026-05-21 升级为 coding-plan-only）
+## Alias pool 与 panel 选择（2026-07-11 修订）
 
-新 prompt-eval 的 Layer 2 / Layer 3 跑面默认就这 **5 个 coding-plan alias**：
+下面 5 个 coding-plan alias 是常用覆盖池，不是每次 eval 都必须跑满的固定验收阵容：
 
 | Alias short id | Provider · model | Family | 档位 |
 |---|---|---|---|
@@ -355,22 +404,23 @@ Total: $Z
 | `ark/v4pro`   | ark-coding · deepseek-v4-pro | DeepSeek (via Ark) | high-end |
 | `ark/v4flash` | ark-coding · deepseek-v4-flash | DeepSeek (via Ark) | floor |
 
-**为什么是这 5 个**：
+**覆盖价值**：
 - 覆盖 4 个独立 provider family（Zhipu / Moonshot / MiniMax / DeepSeek），跨家族盲区互补
 - DeepSeek 双档（flash floor + pro high-end）能在同 family 内捕到"模型档位是否吃 prompt 改动"
 - **2026-05-21 升级**：DeepSeek 双档从官方 API `ds/v4{pro,flash}` 切到 `ark-coding` 路线 `ark/v4{pro,flash}`。理由：用户验证 ark-coding gateway routes DeepSeek-V4 正常，**走 coding-plan 订阅成本可控**，不再混入 token-bill 路径。`zhipu-coding/glm-5.1` 留在 panel；`ark-coding/glm-5.1`（`ark/glm51`）退出 default panel — 同 zhipu family 重复采样收益低于跨 family
-- 排除 `mimo/v25(pro)` / `ark/glm51` / `ds/v4{pro,flash}` —— 不是禁止用，是不在 default panel；有跨 panel 验证或与历史 `ds/*` 数据对照时再显式 opt-in
+- `mimo/v25(pro)` / `ark/glm51` / `ds/v4{pro,flash}` 可按任务显式 opt-in；不要为了“阵容完整”重复采样同 family / 同模型 gateway
 
-**Pilot 阶段（探索 trigger 是否成立）**：仍按 anti-pattern 4 用 1 alias × 1 case × 1 run，**alias 选 `ark/v4flash`**（最便宜 floor model on coding-plan provider）。Pilot 触发后 Layer 2 才放量到 5 alias。
+**选择原则**：
 
-**所有 canonical alias 必须 coding-plan provider** —— 新增 alias 时先 verify provider 类型。Never add 一次性 token-bill alias 到 default panel，否则后续 eval 成本预算会失真。
+1. Pilot 用 1–2 个有代表性的 provider；便宜模型可用于验证 case，但不能因为便宜而忽略目标用户实际使用的模型。
+2. 需要跨 provider 泛化时通常选 3 个独立 family；只有出现明显 family / 档位分歧时才扩到完整 5-alias pool。
+3. 某 feature 只影响特定 provider 时只测该 provider，并在设计中说明。
+4. Executor panel 只负责生成样本；主会话负责语义评审。不要默认追加“judge panel”。
+5. coding-plan 与 token-bill 路线都可用；必须冻结真实 provider/model、计费方式和预算，不能把 gateway 变化误当 prompt 效果。
 
-**例外**：
-- 某 feature 只影响特定 provider（例如 zhipu-only quirk）时 panel 收窄到 `zhipu/glm51` 单 alias，需在 eval docstring 显式说明
-- 需要跨 panel 泛化验证（ship 决策已下、做 sanity check）时 panel 扩到 7-8 alias 含 mimo 全档位 + `ark/glm51`（cross-gateway 同模型对照）+ 历史 `ds/v4*` 数据保留时纳入对比。**注**：`ark/v4*`（coding-plan, default panel）与 `ds/v4*`（deepseek 官方 API, 已退出 default panel）跑同样 deepseek-v4 模型但走不同 gateway，扩展验证时**不**默认同时纳入两条路 — 选择性 opt-in 避免成本翻倍。
-- **behavioral-neutral hygiene refactor**（content-equivalent byte 重排）走 2-alias × 2 case × 3 runs pilot 即可 SHIP，**不进 5-alias panel**（详见反模式 9）。pilot 必须满足：≥1 case 双 variant 同时 floor / ceiling saturation + ≥1 case 双 variant perfect parity。
+Behavioral-neutral hygiene refactor 通常 2 alias × 2 case × 3 runs 已足以形成建议；出现 cross-variant divergence 再扩 panel（详见反模式 9）。
 
-**Alias 失败兜底**：当 ark hard rate-limit 整个 panel 时不重试，用 `aliasFallback: { 'ark/v4pro': 'ds/v4pro', 'ark/v4flash': 'ds/v4flash' }` 自动降级 deepseek 官方 API（per `feedback_harness_alias_fallback`）。Cell.alias 保留 primary 不变（panel structure consistency），`fallbackUsed` 字段记录降级。Canonical panel 不放 `ds/v4*`，只做 fallback。
+**Alias 失败兜底**：当某 gateway hard rate-limit 时，可降级到等价模型的备用 provider，但必须记录 `fallbackUsed`，并在分析中把 gateway 变化视为潜在 confounder。Fallback 请求进入实际 provider 的并发队列，禁止立即并发重试。
 
 ---
 
@@ -388,6 +438,6 @@ KodaX [benchmark/harness/](harness/) 已直接支持 Layer 2 single-turn probe +
 
 ## 总结：方法论核心
 
-> 每一次 LLM 请求都必须能用机械化 assertion 验证一个 pre-registered 假设。**raw output 必须落盘**（反模式 7），跑完每个 cell 至少抽 1 条 fail 让干净-context 的 LLM-judge 独立复核 — 不复核就不能信 regex 数据。如果做不到机械 assertion，先用代码 reading 或 unit test 替代；替代不了的实验本身就是设计错的。
+> 每一次 LLM 请求都必须产生一项可复核成果。机械 assertion 用于记录具体行为和发现评分器漂移；lift / harm 的工程建议由当前主会话读取盲化配对 raw evidence，回答“candidate 是否有实质价值且总体优于 baseline”。**raw output 与主会话评审必须落盘**（反模式 7）。如果问题能由代码 reading 或 unit test 回答，先用 Layer 1；语义判断直接复用已生成 raw，不默认再调用 alias。
 >
-> **配套约束**：production tool 真实字节（反模式 8）、behavioral-neutral 走 2-alias pilot 不进 panel（反模式 9）、引用历史 DROP 数据前 re-check substrate（反模式 10）、floor saturation 可 evidence-driven override 但必须落 rationale（反模式 11）。
+> **配套约束**：先 pilot 验证 case、固定 call graph 与多重预算防跑飞、production tool 真实字节（反模式 8）、引用历史 DROP 数据前 re-check substrate（反模式 10）、floor saturation 标记为 metric 无区分度（反模式 11）、同一 provider 并发 1 且不同 provider 并行（反模式 3）。Eval 给出 `recommend-ship / iterate / revert / eval-invalid` 与理由，最终决定归 owner。

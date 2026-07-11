@@ -26,6 +26,7 @@ import { getToolDefinition } from '../packages/coding/src/tools/registry.js';
 type Stage = 'manifest' | 'pilot' | 'layer2' | 'layer3' | 'confirm';
 
 const stage = (process.env.KODAX_F259_STAGE ?? 'manifest') as Stage;
+const allowGeneration = process.env.KODAX_F259_ALLOW_GENERATION === '1';
 const allowed: readonly Stage[] = ['manifest', 'pilot', 'layer2', 'layer3', 'confirm'];
 
 function git(...args: readonly string[]): string {
@@ -68,7 +69,7 @@ async function writeManifest(): Promise<string> {
   return primary;
 }
 
-describe('FEATURE 259 paid decision experiment', () => {
+describe('FEATURE 259 controlled comparative experiment', () => {
   it('uses a recognized explicitly selected stage', () => {
     expect(allowed).toContain(stage);
   });
@@ -79,23 +80,33 @@ describe('FEATURE 259 paid decision experiment', () => {
   });
 
   it.runIf(stage === 'pilot')('runs the Layer-2 pilot', async () => {
-    const result = await runFeature259Layer2('pilot');
+    const result = await runFeature259Layer2('pilot', { allowGeneration });
     expect(result.complete).toBe(true);
     expect(result.usageCovered).toBe(true);
+    expect([
+      'pending-main-session-review', 'main-session-review-complete',
+    ]).toContain(result.reviewStatus);
+    expect(result.evidencePacks).toHaveLength(6);
   }, 20 * 60_000);
 
-  it.runIf(stage === 'layer2')('runs the Layer-2 decision panel', async () => {
-    const result = await runFeature259Layer2('layer2');
-    expect(result.decisionPassed).toBe(true);
+  it.runIf(stage === 'layer2')('runs the Layer-2 comparative analysis', async () => {
+    const result = await runFeature259Layer2('layer2', { allowGeneration });
+    expect(result.complete).toBe(true);
+    expect([
+      'pending-main-session-review', 'main-session-review-complete',
+    ]).toContain(result.reviewStatus);
+    expect(result.evidencePacks).toHaveLength(6);
   }, 120 * 60_000);
 
-  it.runIf(stage === 'layer3')('runs the paired Layer-3 topology decision', async () => {
-    const result = await runFeature259Layer3('layer3');
-    expect(result.decisionPassed).toBe(true);
+  it.runIf(stage === 'layer3')('runs the paired Layer-3 topology comparison', async () => {
+    const result = await runFeature259Layer3('layer3', { allowGeneration });
+    expect(result.complete).toBe(true);
+    expect(result.reviewStatus).toBe('pending-main-session-review');
   }, 120 * 60_000);
 
   it.runIf(stage === 'confirm')('runs the Layer-3 cross-model confirmation', async () => {
-    const result = await runFeature259Layer3('confirm');
-    expect(result.decisionPassed).toBe(true);
+    const result = await runFeature259Layer3('confirm', { allowGeneration });
+    expect(result.complete).toBe(true);
+    expect(result.reviewStatus).toBe('pending-main-session-review');
   }, 60 * 60_000);
 });

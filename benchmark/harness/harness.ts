@@ -42,6 +42,23 @@ import {
   type PromptJudge,
 } from './judges.js';
 
+const providerCallTails = new Map<string, Promise<void>>();
+
+async function withProviderCallSlot<T>(provider: string, call: () => Promise<T>): Promise<T> {
+  const previous = providerCallTails.get(provider) ?? Promise.resolve();
+  let release = (): void => undefined;
+  const current = new Promise<void>((resolve) => { release = resolve; });
+  const tail = previous.then(() => current);
+  providerCallTails.set(provider, tail);
+  await previous;
+  try {
+    return await call();
+  } finally {
+    if (providerCallTails.get(provider) === tail) providerCallTails.delete(provider);
+    release();
+  }
+}
+
 export interface OneShotInput {
   readonly systemPrompt: string;
   readonly userMessage: string;
@@ -58,6 +75,8 @@ export interface OneShotInput {
   readonly reasoning?: KodaXReasoningRequest;
   /** Optional hard request timeout. Aborts the provider stream when reached. */
   readonly timeoutMs?: number;
+  /** Optional provider-enforced response cap for controlled eval calls. */
+  readonly maxOutputTokens?: number;
 }
 
 export interface OneShotOutput {
@@ -90,28 +109,33 @@ export async function runOneShot(
   ];
   const tools = input.tools ?? [];
 
-  const startedAt = Date.now();
-  const controller = input.timeoutMs === undefined ? undefined : new AbortController();
-  const timeout = controller === undefined ? undefined : setTimeout(
-    () => controller.abort(new Error(`one-shot timed out after ${input.timeoutMs}ms`)),
-    input.timeoutMs,
-  );
-  let result: KodaXStreamResult;
-  try {
-    result = await provider.stream(
-      messages,
-      tools,
-      input.systemPrompt,
-      input.reasoning,
-      {
-        modelOverride: target.model,
-        ...(controller ? { signal: controller.signal } : {}),
-      },
+  const { result, durationMs } = await withProviderCallSlot(target.provider, async () => {
+    const startedAt = Date.now();
+    const controller = input.timeoutMs === undefined ? undefined : new AbortController();
+    const timeout = controller === undefined ? undefined : setTimeout(
+      () => controller.abort(new Error(`one-shot timed out after ${input.timeoutMs}ms`)),
+      input.timeoutMs,
     );
-  } finally {
-    if (timeout !== undefined) clearTimeout(timeout);
-  }
-  const durationMs = Date.now() - startedAt;
+    let streamResult: KodaXStreamResult;
+    try {
+      streamResult = await provider.stream(
+        messages,
+        tools,
+        input.systemPrompt,
+        input.reasoning,
+        {
+          modelOverride: target.model,
+          ...(input.maxOutputTokens !== undefined
+            ? { maxOutputTokensOverride: input.maxOutputTokens }
+            : {}),
+          ...(controller ? { signal: controller.signal } : {}),
+        },
+      );
+    } finally {
+      if (timeout !== undefined) clearTimeout(timeout);
+    }
+    return { result: streamResult, durationMs: Date.now() - startedAt };
+  });
 
   const text = result.textBlocks.map((b) => b.text).join('').trim();
   const toolCalls = result.toolBlocks.map((b) => ({
@@ -404,6 +428,8 @@ export interface BenchmarkRunInput {
   readonly runs?: number;
   /** Optional provider-call timeout forwarded to every one-shot cell. */
   readonly timeoutMs?: number;
+  /** Optional response-token cap forwarded to every one-shot cell. */
+  readonly maxOutputTokens?: number;
   /** Persist each completed raw run before the next provider call starts. */
   readonly onRun?: (run: BenchmarkRunCell) => void | Promise<void>;
   /** Reuse a byte-validated prior run after an interrupted long panel. */
@@ -441,7 +467,7 @@ export interface BenchmarkResult {
   readonly byModel: Readonly<Record<string, readonly BenchmarkCellSummary[]>>;
   /** Variants whose `quality` >= every other variant on every model. */
   readonly variantsDominantOnEveryModel: readonly string[];
-  /** Total wall-clock seconds end-to-end (sequential). Diagnostic only. */
+  /** Total wall-clock seconds end-to-end (provider queues may run in parallel). */
   readonly totalSeconds: number;
   /** Run config snapshot (for reports + reproducibility). */
   readonly config: {
@@ -449,6 +475,31 @@ export interface BenchmarkResult {
   };
   /** ISO timestamp of run start, for persistence + reproduction. */
   readonly startedAt: string;
+}
+
+export interface ProviderJob<T> {
+  readonly alias: ModelAlias;
+  readonly run: () => Promise<T>;
+}
+
+/** Run one queue per provider: queues are parallel, jobs within a queue are serial. */
+export async function runWithProviderConcurrency<T>(jobs: readonly ProviderJob<T>[]): Promise<T[]> {
+  const queues = new Map<string, Array<{ readonly index: number; readonly job: ProviderJob<T> }>>();
+  jobs.forEach((job, index) => {
+    const provider = MODEL_ALIASES[job.alias].provider;
+    const queue = queues.get(provider) ?? [];
+    queue.push({ index, job });
+    queues.set(provider, queue);
+  });
+  const results = new Map<number, T>();
+  await Promise.all([...queues.values()].map(async (queue) => {
+    for (const item of queue) results.set(item.index, await item.job.run());
+  }));
+  return jobs.map((_, index) => {
+    const result = results.get(index);
+    if (result === undefined) throw new Error(`provider job ${index} produced no result`);
+    return result;
+  });
 }
 
 function median(sorted: readonly number[]): number {
@@ -491,6 +542,24 @@ export async function runBenchmark(input: BenchmarkRunInput): Promise<BenchmarkR
 
   const startedAt = new Date().toISOString();
   const startedAtMs = Date.now();
+
+  if (input.models.length > 1) {
+    const partials = await runWithProviderConcurrency(input.models.map((alias) => ({
+      alias,
+      run: () => runBenchmark({ ...input, models: [alias] }),
+    })));
+    const cells = input.models.flatMap((alias) => partials.flatMap(
+      (result) => result.byModel[alias] ?? [],
+    ));
+    return assembleBenchmarkResult(
+      input.variants,
+      input.models,
+      cells,
+      runs,
+      startedAt,
+      (Date.now() - startedAtMs) / 1000,
+    );
+  }
 
   const cells: BenchmarkCellSummary[] = [];
 
@@ -545,6 +614,7 @@ export async function runBenchmark(input: BenchmarkRunInput): Promise<BenchmarkR
           priorMessages: variant.priorMessages,
           reasoning: variant.reasoning,
           timeoutMs: input.timeoutMs,
+          maxOutputTokens: input.maxOutputTokens,
         };
         try {
           const out = await runOneShot(alias, oneShotInput);
@@ -685,36 +755,40 @@ export async function runBenchmark(input: BenchmarkRunInput): Promise<BenchmarkR
     }
   }
 
+  return assembleBenchmarkResult(
+    input.variants,
+    input.models,
+    cells,
+    runs,
+    startedAt,
+    (Date.now() - startedAtMs) / 1000,
+  );
+}
+
+function assembleBenchmarkResult(
+  variants: readonly PromptVariant[],
+  models: readonly ModelAlias[],
+  cells: readonly BenchmarkCellSummary[],
+  runs: number,
+  startedAt: string,
+  totalSeconds: number,
+): BenchmarkResult {
   const byVariant: Record<string, BenchmarkCellSummary[]> = {};
   const byModel: Record<string, BenchmarkCellSummary[]> = {};
-  for (const c of cells) {
-    (byVariant[c.variantId] ??= []).push(c);
-    (byModel[c.alias] ??= []).push(c);
+  for (const cell of cells) {
+    (byVariant[cell.variantId] ??= []).push(cell);
+    (byModel[cell.alias] ??= []).push(cell);
   }
-
-  // "Dominant on every model" = for every model, this variant has quality
-  // >= every other variant. Useful for "is v2 strictly ≥ v1 across the board?"
-  // Quality is the single ranking metric — speed is informational only.
-  const variantsDominantOnEveryModel: string[] = [];
-  for (const variant of input.variants) {
-    const dominantEverywhere = input.models.every((alias) => {
-      const myCell = cells.find((c) => c.variantId === variant.id && c.alias === alias);
-      if (!myCell) return false;
-      return input.variants.every((other) => {
-        if (other.id === variant.id) return true;
-        const otherCell = cells.find((c) => c.variantId === other.id && c.alias === alias);
-        if (!otherCell) return true;
-        return myCell.quality >= otherCell.quality;
-      });
-    });
-    if (dominantEverywhere) variantsDominantOnEveryModel.push(variant.id);
-  }
-
-  const totalSeconds = (Date.now() - startedAtMs) / 1000;
-
+  const variantsDominantOnEveryModel = variants.filter((variant) => models.every((alias) => {
+    const candidate = cells.find((cell) => cell.variantId === variant.id && cell.alias === alias);
+    return candidate !== undefined && variants.every((other) => other.id === variant.id
+      || candidate.quality >= (cells.find(
+        (cell) => cell.variantId === other.id && cell.alias === alias,
+      )?.quality ?? Number.NEGATIVE_INFINITY));
+  })).map((variant) => variant.id);
   return {
-    variants: input.variants,
-    models: input.models,
+    variants,
+    models,
     cells,
     byVariant,
     byModel,
