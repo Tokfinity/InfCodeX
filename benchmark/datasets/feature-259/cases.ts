@@ -146,7 +146,7 @@ function generatedSourceJudge(
 const GENERATION_REQUESTS = {
   'explicit-tier-intent': 'Create a workflow with a mechanical read-only inventory child, an ordinary implementation child, and a final architecture verifier. Use the appropriate portable model tier for every child.',
   'judgment-refuses-fast': 'Create a read-only workflow that reviews an authentication boundary, calibrates severity adversarially, and writes the final synthesis. This is judgment-critical review work.',
-  'focused-briefing': 'Create a workflow to review immutable packet C:/tmp/review-packet.md. Children must read that evidence, receive a one-line scope and binding constraints, and return structured findings without copying the packet body into each prompt.',
+  'focused-briefing': 'Create a workflow to review immutable packet .agent/tmp/sessions/feature-259/review-packet.md. Children must read that evidence, receive a one-line scope and binding constraints, and return structured findings without copying the packet body into each prompt.',
   'terse-structured-review': 'Create a reviewer workflow whose child returns JSON with a required top-level summary string. The reviewer must answer directly without process narration so its concise result can be reused.',
   'requirements-not-verifiable': 'Create a scoped review workflow for a packet that intentionally contains no binding requirements. The reviewer output must include specVerdict and report not-verifiable rather than approving specification compliance.',
 } as const;
@@ -173,6 +173,7 @@ const WORKFLOW_SELECTION_HISTORY: readonly KodaXMessage[] = [
 
 export interface Feature259Layer2Case {
   readonly id: string;
+  readonly contract: string;
   readonly variants: readonly PromptVariant[];
   readonly judges: readonly PromptJudge[];
 }
@@ -206,9 +207,15 @@ export function buildFeature259Layer2Cases(): readonly Feature259Layer2Case[] {
   ];
 
   return [
-    { id: 'workflow-selection', variants: selectionVariants, judges: [selectionJudge] },
+    {
+      id: 'workflow-selection',
+      contract: 'The first response must emit a run_workflow tool call; planning, discovery, or another tool is a failure.',
+      variants: selectionVariants,
+      judges: [selectionJudge],
+    },
     {
       id: 'explicit-tier-intent',
+      contract: 'Generation JSON must contain source, with at least one wf.runAgent/wf.spawnAgent call and modelHint on every such call.',
       variants: generationVariants(GENERATION_REQUESTS['explicit-tier-intent']),
       judges: [generatedSourceJudge('every-agent-has-tier', (source) => {
         const calls = agentCalls(source);
@@ -220,6 +227,7 @@ export function buildFeature259Layer2Cases(): readonly Feature259Layer2Case[] {
     },
     {
       id: 'judgment-refuses-fast',
+      contract: 'Generation JSON must contain source with at least one wf.runAgent/wf.spawnAgent call and no modelHint:"fast" on judgment-critical work.',
       variants: generationVariants(GENERATION_REQUESTS['judgment-refuses-fast']),
       judges: [generatedSourceJudge('judgment-never-fast', (source) => ({
         passed: agentCalls(source).length > 0 && !/modelHint\s*:\s*["']fast["']/.test(source),
@@ -228,6 +236,7 @@ export function buildFeature259Layer2Cases(): readonly Feature259Layer2Case[] {
     },
     {
       id: 'focused-briefing',
+      contract: 'Generation JSON must contain source; every wf.runAgent/wf.spawnAgent call must declare scopeSummary, constraints, and outputSchema.',
       variants: generationVariants(GENERATION_REQUESTS['focused-briefing']),
       judges: [generatedSourceJudge('focused-child-contract', (source) => {
         const calls = agentCalls(source);
@@ -240,6 +249,7 @@ export function buildFeature259Layer2Cases(): readonly Feature259Layer2Case[] {
     },
     {
       id: 'terse-structured-review',
+      contract: 'Generation JSON must contain source; at least one wf.runAgent/wf.spawnAgent call must declare both outputSchema and terseResult.',
       variants: generationVariants(GENERATION_REQUESTS['terse-structured-review']),
       judges: [generatedSourceJudge('terse-structured-contract', (source) => {
         const calls = agentCalls(source);
@@ -252,6 +262,7 @@ export function buildFeature259Layer2Cases(): readonly Feature259Layer2Case[] {
     },
     {
       id: 'requirements-not-verifiable',
+      contract: 'Generation JSON must contain source that explicitly requires a not-verifiable specVerdict when requirements are absent.',
       variants: generationVariants(GENERATION_REQUESTS['requirements-not-verifiable']),
       judges: [generatedSourceJudge('not-verifiable-contract', (source) => ({
         passed: /not-verifiable/i.test(source) && /specVerdict/.test(source),

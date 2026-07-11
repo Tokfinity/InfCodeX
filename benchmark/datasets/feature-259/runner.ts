@@ -216,18 +216,12 @@ function layer2Decision(results: readonly BenchmarkResult[]): boolean {
   const comparisons = results.flatMap((result) => result.models.map((alias) => {
     const baseline = result.cells.find((cell) => cell.alias === alias && cell.variantId === 'baseline');
     const proposed = result.cells.find((cell) => cell.alias === alias && cell.variantId === 'proposed');
-    return baseline !== undefined && proposed !== undefined && proposed.quality >= baseline.quality;
+    const absoluteFloor = result.config.runs === 1 ? 100 : 80;
+    return baseline !== undefined && proposed !== undefined
+      && proposed.passRate >= baseline.passRate
+      && proposed.passRate >= absoluteFloor;
   }));
-  const casesPassingFourModels = results.every((result) => {
-    const passes = result.models.filter((alias) => {
-      const baseline = result.cells.find((cell) => cell.alias === alias && cell.variantId === 'baseline');
-      const proposed = result.cells.find((cell) => cell.alias === alias && cell.variantId === 'proposed');
-      return baseline !== undefined && proposed !== undefined
-        && proposed.quality >= baseline.quality && proposed.passRate === 100;
-    }).length;
-    return passes >= Math.min(4, result.models.length);
-  });
-  return comparisons.every(Boolean) && casesPassingFourModels;
+  return comparisons.every(Boolean);
 }
 
 export async function runFeature259Layer2(stage: 'pilot' | 'layer2'): Promise<Layer2Summary> {
@@ -261,7 +255,7 @@ export async function runFeature259Layer2(stage: 'pilot' | 'layer2'): Promise<La
         if (!run.error && failedJudge) {
           const audit = await auditFailure(
             `${evalCase.id}/${cell.variantId}/${cell.alias}/${run.runIndex}`,
-            evalCase.judges.map((judge) => judge.name).join(', '),
+            evalCase.contract,
             run.text || JSON.stringify(run.toolCalls),
             failedJudge.reason ?? failedJudge.name,
           );
