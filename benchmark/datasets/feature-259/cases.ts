@@ -146,7 +146,7 @@ function generatedSourceJudge(
 const GENERATION_REQUESTS = {
   'explicit-tier-intent': 'Create a workflow with a mechanical read-only inventory child, an ordinary implementation child, and a final architecture verifier. Use the appropriate portable model tier for every child.',
   'judgment-refuses-fast': 'Create a read-only workflow that reviews an authentication boundary, calibrates severity adversarially, and writes the final synthesis. This is judgment-critical review work.',
-  'focused-briefing': 'Create a workflow to review immutable packet .agent/tmp/sessions/feature-259/review-packet.md. Children must read that evidence, receive a one-line scope and binding constraints, and return structured findings without copying the packet body into each prompt.',
+  'focused-briefing': 'Create a workflow to review three immutable packets independently, then synthesize: .agent/tmp/sessions/feature-259/auth.md, api.md, and tests.md. Each child must read its assigned evidence, receive a one-line scope and binding constraints, and return structured findings without copying packet bodies into prompts.',
   'terse-structured-review': 'Create a reviewer workflow whose child returns JSON with a required top-level summary string. The reviewer must answer directly without process narration so its concise result can be reused.',
   'requirements-not-verifiable': 'Create a scoped review workflow for a packet that intentionally contains no binding requirements. The reviewer output must include specVerdict and report not-verifiable rather than approving specification compliance.',
 } as const;
@@ -194,14 +194,14 @@ export function buildFeature259Layer2Cases(): readonly Feature259Layer2Case[] {
       id: 'baseline',
       systemPrompt: buildBaselineWorkerPrompt(),
       priorMessages: WORKFLOW_SELECTION_HISTORY,
-      userMessage: 'Continue the committed plan. Start the best bounded execution now.',
+      userMessage: 'The multi-area audit plan is already recorded and current. Do not create or update plan items. Start its best bounded execution now.',
       tools: [workflowTool(BASELINE_RUN_WORKFLOW_DESCRIPTION), ...SHARED_WORKER_TOOLS],
     },
     {
       id: 'proposed',
       systemPrompt: buildProposedWorkerPrompt(),
       priorMessages: WORKFLOW_SELECTION_HISTORY,
-      userMessage: 'Continue the committed plan. Start the best bounded execution now.',
+      userMessage: 'The multi-area audit plan is already recorded and current. Do not create or update plan items. Start its best bounded execution now.',
       tools: [workflowTool(PROPOSED_RUN_WORKFLOW_DESCRIPTION), ...SHARED_WORKER_TOOLS],
     },
   ];
