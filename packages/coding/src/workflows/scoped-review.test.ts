@@ -122,6 +122,11 @@ describe('scoped review contracts', () => {
     const result = applyFindingVerification(merged, verification);
     expect(result.actionable.map((item) => item.disposition)).toEqual(['confirmed', 'unresolved']);
     expect(result.actionable[0]?.severity).toBe('critical');
+    expect(result).toMatchObject({
+      specVerdict: 'issues',
+      qualityVerdict: 'needs-fixes',
+      unverifiedRequirements: [],
+    });
     expect(result.unqualifiedApprovalAllowed).toBe(false);
 
     expect(() => applyFindingVerification(merged, { findings: [verification.findings[0]!] }))

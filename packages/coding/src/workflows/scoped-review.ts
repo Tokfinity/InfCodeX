@@ -56,6 +56,9 @@ export interface FindingVerificationResult {
 }
 
 export interface VerifiedScopedReviewResult {
+  readonly specVerdict: SpecVerdict;
+  readonly qualityVerdict: QualityVerdict;
+  readonly unverifiedRequirements: readonly string[];
   readonly actionable: readonly {
     readonly findingId: string;
     readonly disposition: 'confirmed' | 'unresolved';
@@ -236,6 +239,9 @@ export function applyFindingVerification(
     }];
   });
   return {
+    specVerdict: review.specVerdict,
+    qualityVerdict: review.qualityVerdict,
+    unverifiedRequirements: review.unverifiedRequirements,
     actionable,
     audit: verification,
     unqualifiedApprovalAllowed:

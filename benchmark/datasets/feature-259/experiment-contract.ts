@@ -51,7 +51,7 @@ function hash(value: string): string {
 
 export function buildFeature259ExperimentManifest(input: Feature259ExperimentInput): object {
   return {
-    schemaVersion: 1,
+    schemaVersion: 2,
     featureId: 259,
     gitCommit: input.gitCommit,
     dirtyPatchHash: hash(input.dirtyPatch),
@@ -78,6 +78,12 @@ export function buildFeature259ExperimentManifest(input: Feature259ExperimentInp
     fallbackRule: 'rerun both arms of every affected pair on the same canonical fallback',
     timeoutMs: 120_000,
     repetitions: { pilot: 1, decision: 5 },
+    externalCallBudget: {
+      layer2Pilot: 12,
+      layer2Decision: 300,
+      layer3Decision: '96 paired arm cells; dependent primary/verifier/synthesis calls are recorded per cell',
+      layer3Confirmation: '15 proposed-arm cells',
+    },
     layer2Cases: FEATURE_259_LAYER_2_CASES,
     layer3Fixtures: FEATURE_259_LAYER_3_FIXTURES,
     callGraphs: {
@@ -89,7 +95,8 @@ export function buildFeature259ExperimentManifest(input: Feature259ExperimentInp
     judgePolicy: 'automated scoring requires manual audit; excessive disagreement invalidates the run',
     rawOutputRoot: path.join(os.tmpdir(), 'kodax-eval-dumps', 'feature-259'),
     pricingSnapshot: input.pricingSnapshot ?? null,
-    estimatedExternalSpendUsd: 75,
+    authorization: 'User explicitly authorized paid Layer-2/Layer-3 model calls on 2026-07-11.',
+    estimatedExternalSpendUsd: 'usage-based from frozen pricing snapshot; checked after every completed cell',
     hardExternalSpendCapUsd: 75,
     decisionsEnabled: [
       'resident workflow teaching non-inferiority',

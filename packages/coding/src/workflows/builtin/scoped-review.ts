@@ -61,7 +61,11 @@ function resultOrThrow(result: WorkflowTaskResult | null, role: string): Workflo
   return result;
 }
 
-function primaryPrompt(packet: ReviewPacketMetadata, extraPrimary: boolean, args: ScopedReviewWorkflowArgs): string {
+export function buildScopedReviewPrimaryPrompt(
+  packet: ReviewPacketMetadata,
+  extraPrimary: boolean,
+  args: ScopedReviewWorkflowArgs,
+): string {
   return [
     'Review one immutable KodaX packet as an independent third-party reviewer.',
     `Packet manifest: ${packet.packetPath}`,
@@ -80,6 +84,32 @@ function primaryPrompt(packet: ReviewPacketMetadata, extraPrimary: boolean, args
   ].filter(Boolean).join('\n');
 }
 
+export function buildScopedReviewVerificationPrompt(
+  packet: ReviewPacketMetadata,
+  merged: ReturnType<typeof mergeScopedReviewResults>,
+): string {
+  return [
+    'Independently attempt to refute every candidate finding in this batch.',
+    `Packet manifest: ${packet.packetPath}`,
+    ...packet.evidenceChunks.map((chunk) => `Evidence chunk: ${chunk.path}`),
+    `Canonical candidates: ${JSON.stringify(merged.findings)}`,
+    'Read the packet evidence. You may run one focused check after naming the concrete doubt.',
+    'Return every findingId exactly once. A severity change requires severityReason.',
+    'Begin with the required JSON result; no preamble.',
+  ].join('\n');
+}
+
+export function buildScopedReviewFinalPrompt(
+  packetResults: readonly ScopedReviewWorkflowResult['packetResults'][number][],
+): string {
+  return [
+    'Synthesize the structured review results below without rereading packet bodies.',
+    'Lead with confirmed findings, keep unresolved findings visibly unresolved, omit refuted findings from the actionable list, and never silently downgrade severity.',
+    'Cite locations and state explicitly when no actionable issue was confirmed.',
+    JSON.stringify(packetResults),
+  ].join('\n');
+}
+
 async function runPrimary(
   wf: WorkflowApi,
   packet: ReviewPacketMetadata,
@@ -89,7 +119,7 @@ async function runPrimary(
   const result = resultOrThrow(await wf.runAgent({
     name: `${extraPrimary ? 'high-risk-' : ''}primary-${packet.partitionKey}`,
     phase: 'primary-review',
-    prompt: primaryPrompt(packet, extraPrimary, args),
+    prompt: buildScopedReviewPrimaryPrompt(packet, extraPrimary, args),
     scopeSummary: `${packet.partitionKey}: ${packet.scopePaths.join(', ')}`,
     constraints: ['read every required packet path', 'return both verdicts', 'cite evidence at each finding'],
     readOnly: true,
@@ -112,6 +142,9 @@ async function verifyFindings(
 ): Promise<VerifiedScopedReviewResult> {
   if (merged.findings.length === 0) {
     return {
+      specVerdict: merged.specVerdict,
+      qualityVerdict: merged.qualityVerdict,
+      unverifiedRequirements: merged.unverifiedRequirements,
       actionable: [],
       audit: { findings: [] },
       unqualifiedApprovalAllowed:
@@ -123,15 +156,7 @@ async function verifyFindings(
   const result = resultOrThrow(await wf.runAgent({
     name: `verify-${packet.partitionKey}`,
     phase: 'verifier',
-    prompt: [
-      'Independently attempt to refute every candidate finding in this batch.',
-      `Packet manifest: ${packet.packetPath}`,
-      ...packet.evidenceChunks.map((chunk) => `Evidence chunk: ${chunk.path}`),
-      `Canonical candidates: ${JSON.stringify(merged.findings)}`,
-      'Read the packet evidence. You may run one focused check after naming the concrete doubt.',
-      'Return every findingId exactly once. A severity change requires severityReason.',
-      'Begin with the required JSON result; no preamble.',
-    ].join('\n'),
+    prompt: buildScopedReviewVerificationPrompt(packet, merged),
     scopeSummary: `verify ${merged.findings.length} candidate finding(s) in ${packet.partitionKey}`,
     constraints: ['fresh context', 'attempt refutation', 'one disposition per findingId'],
     readOnly: true,
@@ -201,12 +226,7 @@ async function runScopedReview(
   const final = resultOrThrow(await wf.runAgent({
     name: 'final-review-synthesis',
     phase: 'final-synthesis',
-    prompt: [
-      'Synthesize the structured review results below without rereading packet bodies.',
-      'Lead with confirmed findings, keep unresolved findings visibly unresolved, omit refuted findings from the actionable list, and never silently downgrade severity.',
-      'Cite locations and state explicitly when no actionable issue was confirmed.',
-      JSON.stringify(completedPacketResults),
-    ].join('\n'),
+    prompt: buildScopedReviewFinalPrompt(completedPacketResults),
     scopeSummary: `cross-scope synthesis for ${completedPacketResults.length} packet(s)`,
     constraints: ['preserve severity', 'preserve unresolved uncertainty', 'do not invent evidence'],
     readOnly: true,

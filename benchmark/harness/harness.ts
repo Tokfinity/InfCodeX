@@ -23,6 +23,7 @@ import {
   getProvider,
   type KodaXMessage,
   type KodaXReasoningRequest,
+  type KodaXTokenUsage,
   type KodaXToolDefinition,
 } from '@kodax-ai/llm';
 
@@ -62,6 +63,8 @@ export interface OneShotOutput {
   readonly text: string;
   /** Tool calls the provider emitted (if any). Useful when judging which tool was picked. */
   readonly toolCalls: ReadonlyArray<{ name: string; input: unknown }>;
+  /** Provider-reported usage; absent stays absent and fails strict coverage gates. */
+  readonly usage?: KodaXTokenUsage;
 }
 
 /**
@@ -90,6 +93,7 @@ export async function runOneShot(
     tools,
     input.systemPrompt,
     input.reasoning,
+    { modelOverride: target.model },
   );
   const durationMs = Date.now() - startedAt;
 
@@ -99,7 +103,14 @@ export async function runOneShot(
     input: b.input,
   }));
 
-  return { alias, target, text, toolCalls, durationMs };
+  return {
+    alias,
+    target,
+    text,
+    toolCalls,
+    durationMs,
+    ...(result.usage !== undefined ? { usage: result.usage } : {}),
+  };
 }
 
 export interface PromptVariant {
@@ -319,6 +330,7 @@ export interface BenchmarkRunCell {
   readonly text: string;
   readonly toolCalls: ReadonlyArray<{ name: string; input: unknown }>;
   readonly durationMs: number;
+  readonly usage?: KodaXTokenUsage;
   /** Set when the provider call itself errored (rate-limit, timeout, etc.). */
   readonly error?: string;
   /**
@@ -466,6 +478,7 @@ export async function runBenchmark(input: BenchmarkRunInput): Promise<BenchmarkR
         let toolCalls: BenchmarkRunCell['toolCalls'] = [];
         let error: string | undefined;
         let fallbackUsed: ModelAlias | undefined;
+        let usage: KodaXTokenUsage | undefined;
         const oneShotInput = {
           systemPrompt: variant.systemPrompt,
           userMessage: variant.userMessage,
@@ -478,6 +491,7 @@ export async function runBenchmark(input: BenchmarkRunInput): Promise<BenchmarkR
           text = out.text;
           toolCalls = out.toolCalls;
           durationMs = out.durationMs;
+          usage = out.usage;
         } catch (err) {
           const primaryMsg = err instanceof Error ? err.message : String(err);
           // FEATURE_177 v0.7.45 lesson: ark-coding's shared coding-plan
@@ -501,6 +515,7 @@ export async function runBenchmark(input: BenchmarkRunInput): Promise<BenchmarkR
                 toolCalls = out.toolCalls;
                 durationMs = out.durationMs;
                 fallbackUsed = fallbackAlias;
+                usage = out.usage;
               } catch (fbErr) {
                 const fbMsg = fbErr instanceof Error ? fbErr.message : String(fbErr);
                 error = `primary ${alias} quota-exhausted (${primaryMsg.slice(0, 80)}); fallback ${fallbackAlias} also failed: ${fbMsg.slice(0, 80)}`;
@@ -532,6 +547,7 @@ export async function runBenchmark(input: BenchmarkRunInput): Promise<BenchmarkR
           text,
           toolCalls,
           durationMs,
+          usage,
           error,
           fallbackUsed,
           judges: aggregate.results,

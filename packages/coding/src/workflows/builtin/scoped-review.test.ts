@@ -84,6 +84,11 @@ describe('scopedReview built-in workflow', () => {
     ]);
     expect(calls.map((call) => call.modelHint)).toEqual(['balanced', 'deep', 'deep', 'deep']);
     expect(output.packetResults[0]?.result.actionable[0]?.severity).toBe('high');
+    expect(output.packetResults[0]?.result).toMatchObject({
+      specVerdict: 'issues',
+      qualityVerdict: 'needs-fixes',
+      unverifiedRequirements: [],
+    });
     expect(output.summary).toContain('Confirmed one high-severity');
     expect(logs).toHaveLength(4);
     expect(artifacts).toHaveLength(1);
