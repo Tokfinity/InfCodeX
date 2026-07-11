@@ -48,8 +48,8 @@ function resolveTier(
 
 /**
  * Resolve the operator-configured tier for a child's `model_hint`. Returns
- * `undefined` when no routing applies (parent inherited) — the caller treats
- * that as a no-op via its `??` fallback chain.
+ * `undefined` when no concrete tier is configured; the caller records that
+ * outcome and safely inherits the parent provider/model.
  */
 export function resolveModelHintTier(
   hint: KodaXChildModelHint | undefined,

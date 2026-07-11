@@ -65,6 +65,10 @@ export interface WorkflowSpawnAgentInput {
   readonly phase?: string;
   /** The task prompt handed to the child agent. */
   readonly prompt: string;
+  /** Compact scope summary copied into the child briefing without retyping the diff. */
+  readonly scopeSummary?: string;
+  /** Binding constraints/interfaces the child cannot discover locally. */
+  readonly constraints?: readonly string[];
   /** When true, the child runs with a read-only tool whitelist. */
   readonly readOnly?: boolean;
   /** Route to a registered specialist agent (FEATURE_191). */
@@ -77,8 +81,8 @@ export interface WorkflowSpawnAgentInput {
    * concrete model name: the authoring model has no cognition of which
    * providers/models a given operator has configured. The operator maps the
    * tiers to concrete models via env (KODAX_FAST/DEEP_PROVIDER/MODEL); when a
-   * tier is unconfigured the child inherits the parent provider/model, so a
-   * hint is always a safe no-op at worst. 'fast' applies to read-only children
+   * tier is unconfigured the child inherits the parent provider/model. 'fast'
+   * applies to read-only children
    * only (write/codegen stays on the parent tier — a quality guard).
    */
   readonly modelHint?: WorkflowModelHint;
@@ -147,6 +151,19 @@ export interface WorkflowTaskResult {
   /** Best-known provider/model used by the child, for host correlation only. */
   readonly provider?: string;
   readonly model?: string;
+  /** Requested semantic tier and how the local runtime resolved it. */
+  readonly requestedTier?: WorkflowModelHint | 'inherited';
+  readonly tierOutcome?:
+    | 'applied'
+    | 'balanced-parent'
+    | 'fast-write-ineligible'
+    | 'unconfigured'
+    | 'shadowed-by-selector'
+    | 'inherited';
+  readonly providerSource?: 'explicit' | 'specialist' | 'tier' | 'parent' | 'default';
+  readonly modelSource?: 'explicit' | 'specialist' | 'tier' | 'parent';
+  readonly resolvedEffort?: string;
+  readonly digestUsage?: WorkflowTaskUsage;
   readonly usage?: WorkflowTaskUsage;
 }
 

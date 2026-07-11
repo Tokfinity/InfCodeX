@@ -172,6 +172,35 @@ describe('createCodingWorkflowBackend — spawn + wait', () => {
     expect(seenEffort).toBe('high');
   });
 
+  it('passes scope summaries and binding constraints into the child bundle (FEATURE_259)', async () => {
+    let seenBundle: { scopeSummary?: string; constraints?: readonly string[] } | undefined;
+    const backend = createCodingWorkflowBackend({
+      ctx: fakeCtx(),
+      childOptions,
+      runChild: async (bundles) => {
+        const bundle = bundles[0];
+        seenBundle = {
+          scopeSummary: bundle?.scopeSummary,
+          constraints: bundle?.constraints,
+        };
+        return execResult({ status: 'completed', summary: 'ok' });
+      },
+    });
+    const handle = await backend.spawn({
+      name: 'scoped-reader',
+      prompt: 'inspect parser',
+      readOnly: true,
+      scopeSummary: 'parser boundary',
+      constraints: ['do not mutate', 'preserve API'],
+    });
+    await backend.wait(handle.taskId);
+
+    expect(seenBundle).toEqual({
+      scopeSummary: 'parser boundary',
+      constraints: ['do not mutate', 'preserve API'],
+    });
+  });
+
   it('maps a failed child to status=failed', async () => {
     const backend = createCodingWorkflowBackend({
       ctx: fakeCtx(),

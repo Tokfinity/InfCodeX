@@ -16,8 +16,8 @@
 | Workspace baseline | `llm / agent / coding / repl` 4 packages |
 | Total tracked features | `44` |
 | InProgress | `0` |
-| Planned | `14` |
-| Completed | `30` |
+| Planned | `13` |
+| Completed | `31` |
 | Tracked feature IDs | `007, 030, 093, 105, 108, 113, 139, 174, 211, 221, 224, 225, 228, 229, 230, 231, 232, 233, 234, 235, 236, 237, 238, 239, 240, 241, 242, 243, 244, 245, 246, 247, 248, 249, 250, 251, 252, 253, 254, 255, 256, 257, 258, 259` |
 | Archive cutoff | Shipped / canceled / absorbed / shelved items through `v0.7.49` are archived. |
 
@@ -25,9 +25,9 @@
 
 | Status | Count | Feature IDs | Next checkpoint |
 |---|---:|---|---|
-| Completed | 30 | `258, 253, 254, 255, 256, 257, 228, 251, 252, 250, 248, 249, 247, 246, 245, 243, 242, 241, 233, 240, 239, 224, 221, 174, 211, 237, 229, 230, 234, 236` | `258` implementation complete for v0.7.67; release pending. `253-257` shipped together in v0.7.66 (2026-07-10); `228` shipped v0.7.62 (2026-07-06); `251, 252` shipped v0.7.61 (2026-07-06); `250` shipped v0.7.60 (2026-07-04); `248, 249` shipped v0.7.59 (2026-07-03); `245, 246, 247, 221` released v0.7.58 (2026-07-02); `233, 241, 242, 243` released v0.7.57; `239, 240` released v0.7.56; `224` released v0.7.54; `174, 211, 237` v0.7.53; `229` v0.7.50; `230, 234, 236` v0.7.51 |
+| Completed | 31 | `259, 258, 253, 254, 255, 256, 257, 228, 251, 252, 250, 248, 249, 247, 246, 245, 243, 242, 241, 233, 240, 239, 224, 221, 174, 211, 237, 229, 230, 234, 236` | `259` and `258` implementations complete for v0.7.67; release pending. `253-257` shipped together in v0.7.66 (2026-07-10); `228` shipped v0.7.62 (2026-07-06); `251, 252` shipped v0.7.61 (2026-07-06); `250` shipped v0.7.60 (2026-07-04); `248, 249` shipped v0.7.59 (2026-07-03); `245, 246, 247, 221` released v0.7.58 (2026-07-02); `233, 241, 242, 243` released v0.7.57; `239, 240` released v0.7.56; `224` released v0.7.54; `174, 211, 237` v0.7.53; `229` v0.7.50; `230, 234, 236` v0.7.51 |
 | InProgress | 0 | `—` | `—` |
-| Planned, near-term | 9 | `259, 244, 231, 235, 238, 232, 105, 108, 225` | `v0.7.67` -> `v0.7.100` |
+| Planned, near-term | 8 | `244, 231, 235, 238, 232, 105, 108, 225` | `v0.7.75` -> `v0.7.100` |
 | Planned, v0.8.x | 5 | `007, 030, 093, 113, 139` | `v0.8.5+` |
 
 > v0.7.49 / v0.7.50 workflow split：`FEATURE_217` remains the human-facing workflow mode. Manual testing reopened required UI/UX and reliability deltas inside [v0.7.49](features/v0.7.49.md#13-v0749-completion-delta): bounded live progress with phase index / running 智能体 wording / preserved progress row / elapsed time / completed-child token usage, localized assistant-style launch notes, result-bearing child-agent digests or folded long-report notices, non-`info` agentic transcript, clear separation between `finished/spawned` progress and lifetime `maxAgents` cap, final synthesis, generated final-result contract lint, implicit `tokenBudget` stripping, generated task-command crash hardening, tighter AMAW invocation policy, wait timeout propagation, no default total workflow wall-clock timeout, terminal cleanup for un-awaited children, accurate template read/write metadata, capsule min-version preflight, manual run cleanup controls, and the closed minimal saved-workflow named reuse delta (`/workflow <savedName>` plus `/workflow rerun <runId|savedName>` with help/completion). `FEATURE_229` in v0.7.50 is the platform layer: it standardizes the same process as agent-layer snapshot/events, SDK subscription/polling, Space-style host policy and lifecycle controls, terminal-state helpers, workflow identity/lifecycle controls beyond named reuse (`display name | revise | rename | revision provenance`), REPL-as-consumer rendering, conservative retention, and durable source/provenance/resultSummary persistence; it is not the first implementation of the user-visible UX.
@@ -146,7 +146,9 @@
 
 ## 进行中的 Feature
 
-No feature is currently in progress.
+| ID | Title | Category | Priority | Planned | Design |
+|---|---|---|---|---|---|
+| `—` | No feature currently in progress | — | — | — | — |
 
 Recent completion notes:
 
@@ -200,7 +202,6 @@ fixed GitHub binary archive sidecar omission before tagging.
 
 | ID | Title | Category | Priority | Planned | Design |
 |---|---|---|---|---|---|
-| `259` | Cost-Disciplined Agent Build Loop + Review Handoff Optimization | Core / Agent Performance + Workflow Quality | High | `v0.7.67` | [v0.7.67](features/v0.7.67.md#feature_259-cost-disciplined-agent-build-loop--review-handoff-optimization) |
 | `244` | Repo Intelligence Graph-Only Index for Cold Module Queries | Core / Repo Intelligence + Performance | Medium | `v0.7.75` | [v0.7.75](features/v0.7.75.md#feature_244-repo-intelligence-graph-only-index-for-cold-module-queries) |
 | `231` | Durable Workflow Replay Resume (231b crash-recovery, optional) | Core / Workflow Persistence | Low | `v0.7.75` | [v0.7.75](features/v0.7.75.md#feature_231-durable-workflow-replay-resume) |
 | `235` | Draft Workflow — Generate-without-Run / Review-before-Start | Core / Workflow Lifecycle | Medium | `v0.7.75` | [v0.7.75](features/v0.7.75.md#feature_235-draft-workflow--generate-without-run--review-before-start) |

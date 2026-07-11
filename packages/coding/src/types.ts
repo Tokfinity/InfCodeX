@@ -859,14 +859,9 @@ export interface KodaXChildContextBundle {
   constraints: string[];
   readOnly: boolean;
   /**
-   * FEATURE_120 v0.7.39 Phase 4 — optional model tier hint that the
-   * dispatching agent provides as a UX signal. Routing is a **no-op**
-   * for now: every child runs on the parent's model regardless of
-   * hint. FEATURE_102 (v0.7.45 capability profile) is the planned
-   * consumer that will translate `'fast' | 'balanced' | 'deep'` to a
-   * concrete provider/model selection. The field is surfaced + parsed
-   * now so prompt-eval data starts accumulating; the routing wire-up
-   * lands separately.
+   * FEATURE_102 / FEATURE_259 — semantic model tier intent. The runtime maps
+   * configured `fast`/`deep` tiers to concrete routes and safely inherits the
+   * parent when a tier is unavailable or ineligible.
    */
   modelHint?: KodaXChildModelHint;
   /**
@@ -916,6 +911,29 @@ export interface KodaXChildContextBundle {
  */
 export type KodaXChildModelHint = 'fast' | 'balanced' | 'deep';
 
+export type KodaXChildTierOutcome =
+  | 'applied'
+  | 'balanced-parent'
+  | 'fast-write-ineligible'
+  | 'unconfigured'
+  | 'shadowed-by-selector'
+  | 'inherited';
+
+export type KodaXChildRouteSource = 'explicit' | 'specialist' | 'tier' | 'parent' | 'default';
+
+export interface KodaXChildRouteFacts {
+  readonly requestedTier: KodaXChildModelHint | 'inherited';
+  readonly tierOutcome: KodaXChildTierOutcome;
+  readonly providerSource: KodaXChildRouteSource;
+  readonly modelSource?: Exclude<KodaXChildRouteSource, 'default'>;
+  readonly initialProvider?: string;
+  readonly initialModel?: string;
+  readonly finalProvider?: string;
+  readonly finalModel?: string;
+  readonly resolvedEffort?: string;
+  readonly fallbackReason?: string;
+}
+
 export interface KodaXChildAgentResult {
   childId: string;
   fanoutClass: KodaXChildFanoutClass;
@@ -939,6 +957,10 @@ export interface KodaXChildAgentResult {
   actualIterations?: number;
   /** Best-known token usage for this child run. Used by workflow budget accounting. */
   totalTokensUsed?: number;
+  /** Token usage attributable only to the optional presentation digest call. */
+  digestTokensUsed?: number;
+  /** Correlated model-tier and fallback facts for cost/quality reporting. */
+  routeFacts?: KodaXChildRouteFacts;
   /** True when the child exhausted its iteration budget before completing. */
   limitReached?: boolean;
   /**

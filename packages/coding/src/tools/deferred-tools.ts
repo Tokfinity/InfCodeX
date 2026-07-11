@@ -54,6 +54,10 @@ export const DEFERRED_TOOL_HINTS: Readonly<Record<string, string>> = Object.free
   process_context: 'Static execution/process trace from an entry — call `tool_search("process_context")` for full schema.',
   impact_estimate: 'Blast radius estimate BEFORE a rename or refactor — call `tool_search("impact_estimate")` for full schema (replaces guessing impact from grep).',
 
+  // FEATURE_259 — workflow authoring is a resident identity/activation hint;
+  // the full orchestration guide remains available through tool_search.
+  run_workflow: 'Author and run a bounded multi-agent workflow when parallel scoped work needs synthesis or verification — call `tool_search("run_workflow")` for the full authoring contract.',
+
   // FEATURE_192 v0.7.44 — /goal Persistent Goal tools.
   // Hint-only on turn-1 to keep no-goal sessions context-clean; full
   // schema unlocks via `tool_search("goal")` once the model needs them.

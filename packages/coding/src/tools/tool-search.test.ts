@@ -46,6 +46,7 @@ describe('FEATURE_189 B.2 — deferred-tools registry', () => {
       'mcp_search', 'mcp_describe', 'mcp_call', 'mcp_read_resource', 'mcp_get_prompt',
       'repo_overview', 'changed_scope',
       'module_context', 'symbol_context', 'process_context', 'impact_estimate',
+      'run_workflow',
     ];
     for (const name of expected) {
       expect(isDeferredTool(name)).toBe(true);

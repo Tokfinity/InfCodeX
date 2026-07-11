@@ -17,6 +17,9 @@ import type {
   KodaXChildAgentResult,
   KodaXChildExecutionResult,
   KodaXChildFinding,
+  KodaXChildRouteFacts,
+  KodaXChildTierOutcome,
+  KodaXChildRouteSource,
   KodaXActivityEventMeta,
   KodaXEvents,
   KodaXContextOptions,
@@ -158,6 +161,7 @@ export interface WorkflowChildDigestUpdate {
   readonly digest?: string;
   readonly digestFailed?: boolean;
   readonly totalTokensUsed: number;
+  readonly digestTokensUsed?: number;
 }
 
 export interface ChildExecutorOptions {
@@ -461,6 +465,7 @@ function readChildTokenUsage(result: KodaXResult): number {
 interface WorkflowChildDigestResult {
   readonly digest?: string;
   readonly totalTokensUsed: number;
+  readonly digestTokensUsed: number;
   /**
    * True when a digest was attempted for a workflow child but produced nothing
    * usable (LLM error, timeout, parent abort, or empty distillation). Lets the
@@ -481,15 +486,56 @@ function normalizeWorkflowChildDigest(text: string): string | undefined {
   return lines.slice(0, WORKFLOW_CHILD_DIGEST_MAX_LINES).join('\n');
 }
 
+const WORKFLOW_PRESENTATION_MAX_CHARS = 4_096;
+const PRESENTATION_DENIED_MARKER_RE = /(?:\[truncated|tool output truncated|full output saved to:|\[tool error\]|summary unavailable|digest failed)/i;
+const PRESENTATION_PREPARATORY_RE = /^(?:i will|i'll|i need to|next i|let me)\b/i;
+
+function hasTopLevelSummarySchema(schema: unknown): boolean {
+  if (typeof schema !== 'object' || schema === null || Array.isArray(schema)) return false;
+  const properties = (schema as { readonly properties?: unknown }).properties;
+  if (typeof properties !== 'object' || properties === null || Array.isArray(properties)) return false;
+  const summary = (properties as { readonly summary?: unknown }).summary;
+  return typeof summary === 'object' && summary !== null && !Array.isArray(summary) &&
+    (summary as { readonly type?: unknown }).type === 'string';
+}
+
+function normalizeReusableWorkflowSummary(text: string): string | undefined {
+  const lines = text
+    .split(/\r?\n/)
+    .map((line) => line.trim())
+    .filter((line) => line.length > 0 && !/^```[a-z0-9_-]*$/i.test(line));
+  const normalized = lines.join('\n');
+  if (lines.length < 1 || lines.length > WORKFLOW_CHILD_DIGEST_MAX_LINES) return undefined;
+  if (normalized.length > WORKFLOW_PRESENTATION_MAX_CHARS) return undefined;
+  if (PRESENTATION_DENIED_MARKER_RE.test(normalized)) return undefined;
+  if (PRESENTATION_PREPARATORY_RE.test(normalized)) return undefined;
+  return normalized;
+}
+
+function reusableWorkflowSummary(
+  bundle: KodaXChildContextBundle,
+  structured: unknown,
+): string | undefined {
+  if (!hasTopLevelSummarySchema(bundle.outputSchema)) return undefined;
+  if (typeof structured !== 'object' || structured === null || Array.isArray(structured)) return undefined;
+  const summary = (structured as { readonly summary?: unknown }).summary;
+  return typeof summary === 'string' && summary.trim().length > 0
+    ? normalizeReusableWorkflowSummary(summary)
+    : undefined;
+}
+
 function shouldCreateWorkflowChildDigest(
   options: ChildExecutorOptions,
   result: KodaXResult,
+  bundle?: KodaXChildContextBundle,
+  structured?: unknown,
 ): boolean {
   return options.workflowChild === true &&
     options.abortSignal?.aborted !== true &&
     result.success === true &&
     result.interrupted !== true &&
-    result.lastText.trim().length > 0;
+    result.lastText.trim().length > 0 &&
+    (bundle === undefined || reusableWorkflowSummary(bundle, structured) === undefined);
 }
 
 function deriveSkillRootFromSkillFile(skillFilePath: string): string {
@@ -614,11 +660,12 @@ function shouldRunWorkflowDigestAsync(
   bundle: KodaXChildContextBundle,
   options: ChildExecutorOptions,
   result: KodaXResult,
+  structured?: unknown,
 ): boolean {
   return options.workflowDigestMode === 'async' &&
     bundle.isolation !== 'worktree' &&
     options.onWorkflowChildDigest !== undefined &&
-    shouldCreateWorkflowChildDigest(options, result);
+    shouldCreateWorkflowChildDigest(options, result, bundle, structured);
 }
 
 async function createWorkflowChildDigest(
@@ -631,11 +678,12 @@ async function createWorkflowChildDigest(
     readonly scopeCtx: KodaXToolExecutionContext;
     readonly bundle: KodaXChildContextBundle;
     readonly options: ChildExecutorOptions;
+    readonly structured?: unknown;
     readonly timeoutMs: number;
   },
 ): Promise<WorkflowChildDigestResult> {
-  if (!shouldCreateWorkflowChildDigest(input.options, input.result)) {
-    return { totalTokensUsed: 0 };
+  if (!shouldCreateWorkflowChildDigest(input.options, input.result, input.bundle, input.structured)) {
+    return { totalTokensUsed: 0, digestTokensUsed: 0 };
   }
   // Abandon the digest on timeout or parent abort so the child's completion is
   // not blocked indefinitely by a slow self-distill turn.
@@ -673,12 +721,14 @@ async function createWorkflowChildDigest(
     const totalTokensUsed = readChildTokenUsage(digestRun);
     // An empty distillation counts as a failed attempt so the transcript is
     // honest about the smart summary being unavailable.
-    return digest ? { digest, totalTokensUsed } : { totalTokensUsed, attemptFailed: true };
+    return digest
+      ? { digest, totalTokensUsed, digestTokensUsed: totalTokensUsed }
+      : { totalTokensUsed, digestTokensUsed: totalTokensUsed, attemptFailed: true };
   } catch {
     // Digest generation is presentation-only. Keep the completed child result
     // for synthesis/audit; flag the failed attempt so the formatter labels the
     // deterministic excerpt fallback as "smart summary unavailable".
-    return { totalTokensUsed: 0, attemptFailed: true };
+    return { totalTokensUsed: 0, digestTokensUsed: 0, attemptFailed: true };
   } finally {
     clearTimeout(timer);
     input.options.abortSignal?.removeEventListener('abort', onParentAbort);
@@ -695,6 +745,7 @@ function scheduleWorkflowChildDigest(
     readonly scopeCtx: KodaXToolExecutionContext;
     readonly bundle: KodaXChildContextBundle;
     readonly options: ChildExecutorOptions;
+    readonly structured?: unknown;
   },
 ): void {
   void createWorkflowChildDigest({
@@ -706,6 +757,7 @@ function scheduleWorkflowChildDigest(
         childId: input.bundle.id,
         ...(digest.digest ? { digest: digest.digest } : {}),
         ...(digest.attemptFailed ? { digestFailed: true } : {}),
+        ...(digest.digestTokensUsed > 0 ? { digestTokensUsed: digest.digestTokensUsed } : {}),
         totalTokensUsed: digest.totalTokensUsed,
       });
     } catch {
@@ -876,6 +928,70 @@ function resolveChildEffort(
   return lockedEffort ?? dispatchEffort ?? parentEffort;
 }
 
+interface ResolvedChildRoute {
+  readonly provider: string;
+  readonly model?: string;
+  readonly facts: KodaXChildRouteFacts;
+}
+
+function resolveChildRoute(
+  bundle: KodaXChildContextBundle,
+  providerOverride: string | undefined,
+  modelOverride: string | undefined,
+  parentOptions: ChildExecutorOptions['parentOptions'],
+  readOnly: boolean,
+  hintTier: { readonly provider?: string; readonly model?: string } | undefined,
+  resolvedEffort?: KodaXWireReasoningEffort,
+): ResolvedChildRoute {
+  const hasSelector = bundle.provider !== undefined || bundle.model !== undefined ||
+    providerOverride !== undefined || modelOverride !== undefined;
+  const requestedTier = bundle.modelHint ?? 'inherited';
+  const tierOutcome: KodaXChildTierOutcome = bundle.modelHint === undefined
+    ? 'inherited'
+    : hasSelector
+      ? 'shadowed-by-selector'
+      : bundle.modelHint === 'balanced'
+        ? 'balanced-parent'
+        : bundle.modelHint === 'fast' && !readOnly
+          ? 'fast-write-ineligible'
+          : hintTier === undefined
+            ? 'unconfigured'
+            : 'applied';
+  const providerSource: KodaXChildRouteSource = bundle.provider !== undefined
+    ? 'explicit'
+    : providerOverride !== undefined
+      ? 'specialist'
+      : hintTier?.provider !== undefined
+        ? 'tier'
+        : parentOptions.provider !== undefined
+          ? 'parent'
+          : 'default';
+  const modelSource: Exclude<KodaXChildRouteSource, 'default'> | undefined = bundle.model !== undefined
+    ? 'explicit'
+    : modelOverride !== undefined
+      ? 'specialist'
+      : hintTier?.model !== undefined
+        ? 'tier'
+        : parentOptions.model !== undefined
+          ? 'parent'
+          : undefined;
+  const provider = bundle.provider ?? providerOverride ?? hintTier?.provider ?? parentOptions.provider ?? 'anthropic';
+  const model = bundle.model ?? modelOverride ?? hintTier?.model ?? parentOptions.model;
+  return {
+    provider,
+    ...(model !== undefined ? { model } : {}),
+    facts: {
+      requestedTier,
+      tierOutcome,
+      providerSource,
+      ...(modelSource ? { modelSource } : {}),
+      initialProvider: provider,
+      ...(model !== undefined ? { initialModel: model } : {}),
+      ...(resolvedEffort !== undefined ? { resolvedEffort } : {}),
+    },
+  };
+}
+
 /* ---------- Read-only child execution ---------- */
 
 async function executeReadChild(
@@ -938,14 +1054,22 @@ async function runReadChildBody(
       ? resolveModelHintTier(bundle.modelHint, /* readOnly */ true)
       : undefined;
 
-  const provider =
-    bundle.provider ?? providerOverride ?? hintTier?.provider ?? options.parentOptions.provider ?? 'anthropic';
-  const model = bundle.model ?? modelOverride ?? hintTier?.model ?? options.parentOptions.model;
+  const route = resolveChildRoute(
+    bundle,
+    providerOverride,
+    modelOverride,
+    options.parentOptions,
+    true,
+    hintTier,
+  );
+  const { provider, model } = route;
 
   let childResult: KodaXChildAgentResult;
   try {
     const runFn = await getRunKodaX();
     const childEffort = resolveChildEffort(bundle, effortOverride, options.parentOptions.effort);
+    let actualProvider = provider;
+    let fallbackReason: string | undefined;
     const result = await invokeChildWithFallback(
       {
         provider,
@@ -989,10 +1113,11 @@ async function runReadChildBody(
       briefing,
       runFn,
       {
-        onFallback: ({ fromProvider, toProvider, reason }) =>
-          options.onProgress?.(
-            `[fallback] ${bundle.id}: ${fromProvider} → ${toProvider} (${reason})`,
-          ),
+        onFallback: ({ fromProvider, toProvider, reason }) => {
+          actualProvider = toProvider;
+          fallbackReason = `${fromProvider} → ${toProvider}: ${reason}`;
+          options.onProgress?.(`[fallback] ${bundle.id}: ${fallbackReason}`);
+        },
       },
     );
 
@@ -1001,22 +1126,30 @@ async function runReadChildBody(
     const digestInput = {
       runFn,
       result,
-      provider,
-      ...(model ? { model } : {}),
+      provider: actualProvider,
+      ...(actualProvider === provider && model ? { model } : {}),
       ...(childEffort ? { effort: childEffort } : {}),
       scopeCtx: scope.ctx,
       bundle,
       options,
     };
-    const runDigestAsync = shouldRunWorkflowDigestAsync(bundle, options, result);
+    const structured = await resolveChildStructuredOutput(digestInput);
+    const digestInputWithStructured = { ...digestInput, structured };
+    const runDigestAsync = shouldRunWorkflowDigestAsync(bundle, options, result, structured);
     const digest = runDigestAsync
-      ? { totalTokensUsed: 0 }
+      ? { totalTokensUsed: 0, digestTokensUsed: 0 }
       : await createWorkflowChildDigest({
-          ...digestInput,
+          ...digestInputWithStructured,
           timeoutMs: WORKFLOW_CHILD_DIGEST_BLOCKING_TIMEOUT_MS,
         });
-    if (runDigestAsync) scheduleWorkflowChildDigest(digestInput);
-    const structured = await resolveChildStructuredOutput(digestInput);
+    if (runDigestAsync) scheduleWorkflowChildDigest(digestInputWithStructured);
+    const routeFacts: KodaXChildRouteFacts = {
+      ...route.facts,
+      ...(childEffort ? { resolvedEffort: childEffort } : {}),
+      finalProvider: actualProvider,
+      ...(actualProvider === provider && model ? { finalModel: model } : {}),
+      ...(fallbackReason ? { fallbackReason } : {}),
+    };
     childResult = extractChildResult(
       bundle,
       annotateWorktreeSummary(result.lastText, scope),
@@ -1026,13 +1159,15 @@ async function runReadChildBody(
         interrupted: result.interrupted === true,
         limitReached: result.limitReached === true,
         totalTokensUsed: totalTokensUsed + digest.totalTokensUsed,
+        digestTokensUsed: digest.digestTokensUsed,
         sessionId: result.sessionId,
         artifactPaths: extractMutationArtifactPaths(result),
         digest: digest.digest,
         digestFailed: digest.attemptFailed,
         digestPending: runDigestAsync,
-        provider,
-        model,
+        provider: actualProvider,
+        ...(actualProvider === provider && model ? { model } : {}),
+        routeFacts,
         structured,
       },
     );
@@ -1134,14 +1269,22 @@ async function runWriteChildBody(
       ? resolveModelHintTier(bundle.modelHint, /* readOnly */ false)
       : undefined;
 
-  const provider =
-    bundle.provider ?? providerOverride ?? hintTier?.provider ?? options.parentOptions.provider ?? 'anthropic';
-  const model = bundle.model ?? modelOverride ?? hintTier?.model ?? options.parentOptions.model;
+  const route = resolveChildRoute(
+    bundle,
+    providerOverride,
+    modelOverride,
+    options.parentOptions,
+    false,
+    hintTier,
+  );
+  const { provider, model } = route;
 
   let childResult: KodaXChildAgentResult;
   try {
     const runFn = await getRunKodaX();
     const childEffort = resolveChildEffort(bundle, effortOverride, options.parentOptions.effort);
+    let actualProvider = provider;
+    let fallbackReason: string | undefined;
     const result = await invokeChildWithFallback(
       {
         provider,
@@ -1182,10 +1325,13 @@ async function runWriteChildBody(
       briefing,
       runFn,
       {
-        onFallback: ({ fromProvider, toProvider, reason }) =>
+        onFallback: ({ fromProvider, toProvider, reason }) => {
+          actualProvider = toProvider;
+          fallbackReason = `${fromProvider} -> ${toProvider}: ${reason}`;
           options.onProgress?.(
             `[fallback] ${bundle.id}: ${fromProvider} → ${toProvider} (${reason})`,
-          ),
+          );
+        },
       },
     );
 
@@ -1194,23 +1340,30 @@ async function runWriteChildBody(
     const digestInput = {
       runFn,
       result,
-      provider,
-      ...(model ? { model } : {}),
+      provider: actualProvider,
+      ...(actualProvider === provider && model ? { model } : {}),
       ...(childEffort ? { effort: childEffort } : {}),
       scopeCtx: childCtx,
       bundle,
       options,
     };
-    const runDigestAsync = shouldRunWorkflowDigestAsync(bundle, options, result);
+    const structured = await resolveChildStructuredOutput(digestInput);
+    const digestInputWithStructured = { ...digestInput, structured };
+    const runDigestAsync = shouldRunWorkflowDigestAsync(bundle, options, result, structured);
     const digest = runDigestAsync
-      ? { totalTokensUsed: 0 }
+      ? { totalTokensUsed: 0, digestTokensUsed: 0 }
       : await createWorkflowChildDigest({
-          ...digestInput,
+          ...digestInputWithStructured,
           timeoutMs: WORKFLOW_CHILD_DIGEST_BLOCKING_TIMEOUT_MS,
         });
-    if (runDigestAsync) scheduleWorkflowChildDigest(digestInput);
-
-    const structured = await resolveChildStructuredOutput(digestInput);
+    if (runDigestAsync) scheduleWorkflowChildDigest(digestInputWithStructured);
+    const routeFacts: KodaXChildRouteFacts = {
+      ...route.facts,
+      ...(childEffort ? { resolvedEffort: childEffort } : {}),
+      finalProvider: actualProvider,
+      ...(actualProvider === provider && model ? { finalModel: model } : {}),
+      ...(fallbackReason ? { fallbackReason } : {}),
+    };
     childResult = extractChildResult(
       bundle,
       annotateWorktreeSummary(result.lastText, scope),
@@ -1220,13 +1373,15 @@ async function runWriteChildBody(
         interrupted: result.interrupted === true,
         limitReached: result.limitReached === true,
         totalTokensUsed: totalTokensUsed + digest.totalTokensUsed,
+        digestTokensUsed: digest.digestTokensUsed,
         sessionId: result.sessionId,
         artifactPaths: extractMutationArtifactPaths(result),
         digest: digest.digest,
         digestFailed: digest.attemptFailed,
         digestPending: runDigestAsync,
-        provider,
-        model,
+        provider: actualProvider,
+        ...(actualProvider === provider && model ? { model } : {}),
+        routeFacts,
         structured,
       },
     );
@@ -1296,10 +1451,13 @@ async function buildChildBriefing(
     ...(referencedSkillBriefing ? [``, referencedSkillBriefing] : []),
     ``,
     `## Scope`,
-    bundle.scopeSummary ?? (bundle.constraints.join(', ') || 'No specific scope constraints.'),
+    bundle.scopeSummary ?? 'No specific scope summary supplied.',
     ...(activeSkillResourceBriefing ? [``, activeSkillResourceBriefing] : []),
     ``,
     `## Constraints`,
+    ...(bundle.constraints.length > 0
+      ? bundle.constraints.map((constraint) => `- Binding constraint: ${constraint}`)
+      : []),
     bundle.readOnly
       ? '- This is a READ-ONLY task. Do NOT modify any files — the parent dispatched this child specifically for investigation, and a sibling write-child (or the parent itself) will handle any mutations the findings imply.'
       : '- You may modify files within the scope listed above.',
@@ -1884,6 +2042,7 @@ interface ExtractChildResultMeta {
   readonly interrupted?: boolean;
   readonly limitReached?: boolean;
   readonly totalTokensUsed?: number;
+  readonly digestTokensUsed?: number;
   readonly sessionId?: string;
   readonly artifactPaths?: readonly string[];
   readonly digest?: string;
@@ -1891,6 +2050,7 @@ interface ExtractChildResultMeta {
   readonly digestPending?: boolean;
   readonly provider?: string;
   readonly model?: string;
+  readonly routeFacts?: KodaXChildRouteFacts;
   readonly structured?: unknown;
 }
 
@@ -1924,6 +2084,9 @@ function extractChildResult(
     ...(meta.totalTokensUsed !== undefined && meta.totalTokensUsed > 0
       ? { totalTokensUsed: meta.totalTokensUsed }
       : {}),
+    ...(meta.digestTokensUsed !== undefined && meta.digestTokensUsed > 0
+      ? { digestTokensUsed: meta.digestTokensUsed }
+      : {}),
     ...(meta.sessionId ? { sessionId: meta.sessionId } : {}),
     ...(meta.artifactPaths !== undefined && meta.artifactPaths.length > 0
       ? { artifactPaths: [...meta.artifactPaths] }
@@ -1933,6 +2096,7 @@ function extractChildResult(
     ...(meta.digestPending ? { digestPending: true } : {}),
     ...(meta.provider ? { provider: meta.provider } : {}),
     ...(meta.model ? { model: meta.model } : {}),
+    ...(meta.routeFacts ? { routeFacts: meta.routeFacts } : {}),
     ...(meta.structured !== undefined ? { structured: meta.structured } : {}),
     interrupted: meta.interrupted,
     ...(meta.limitReached ? { limitReached: true } : {}),

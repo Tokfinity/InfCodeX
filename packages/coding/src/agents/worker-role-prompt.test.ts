@@ -345,12 +345,14 @@ describe('buildWorkerInstructions — FEATURE_120 child steering (v0.7.39 Phase 
     expect(out).toMatch(/KODAX_ASYNC_DISPATCH=0/);
   });
 
-  it('teaches the model_hint field (no-op routing) so prompt-eval data accumulates', () => {
+  it('teaches intentional FEATURE_259 model tier routing and compact child briefs', () => {
     const out = buildWorkerInstructions(baseDecision, undefined, false);
     expect(out).toContain('MODEL HINT');
     expect(out).toMatch(/"fast"/);
     expect(out).toMatch(/"deep"/);
-    expect(out).toMatch(/no-op today/);
+    expect(out).toMatch(/Configured `fast`\/`deep` tiers route through FEATURE_102/);
+    expect(out).not.toMatch(/no-op today/);
+    expect(out).toMatch(/substantive children/);
     expect(out).toMatch(/FEATURE_102/);
   });
 

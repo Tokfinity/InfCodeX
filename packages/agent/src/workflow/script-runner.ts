@@ -232,6 +232,8 @@ function readSpawnAgentInput(value: unknown, label: string): WorkflowSpawnAgentI
   const input: {
     name: string;
     prompt: string;
+    scopeSummary?: string;
+    constraints?: readonly string[];
     readOnly?: boolean;
     subagentType?: string;
     modelHint?: WorkflowSpawnAgentInput['modelHint'];
@@ -244,6 +246,12 @@ function readSpawnAgentInput(value: unknown, label: string): WorkflowSpawnAgentI
     name: readNonEmptyField(record, 'name', label),
     prompt: readNonEmptyField(record, 'prompt', label),
   };
+  if (record.scopeSummary !== undefined) {
+    input.scopeSummary = readNonEmptyField(record, 'scopeSummary', label);
+  }
+  if (record.constraints !== undefined) {
+    input.constraints = readOptionalStringArray(record, 'constraints', label);
+  }
   if (record.readOnly !== undefined) {
     if (typeof record.readOnly !== 'boolean') {
       throw new WorkflowScriptExecutionError(`${label} readOnly must be a boolean when provided`);

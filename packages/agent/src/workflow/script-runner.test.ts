@@ -9,6 +9,7 @@ import type {
   WorkflowTaskHandle,
   WorkflowTaskResult,
   WorkflowTaskSnapshot,
+  WorkflowSpawnAgentInput,
 } from './index.js';
 import {
   createRestrictedWorkflowModule,
@@ -22,9 +23,10 @@ function notImplemented(name: string): never {
   throw new Error(`${name} not implemented`);
 }
 
-function fakeWorkflowApi(): { wf: WorkflowApi; prompts: string[]; phases: string[] } {
+function fakeWorkflowApi(): { wf: WorkflowApi; prompts: string[]; phases: string[]; inputs: WorkflowSpawnAgentInput[] } {
   const prompts: string[] = [];
   const phases: string[] = [];
+  const inputs: WorkflowSpawnAgentInput[] = [];
   const wf: WorkflowApi = {
     runId: 'run-script',
     args: undefined,
@@ -42,10 +44,12 @@ function fakeWorkflowApi(): { wf: WorkflowApi; prompts: string[]; phases: string
       }
     },
     spawnAgent: async (input): Promise<WorkflowTaskHandle> => {
+      inputs.push(input);
       prompts.push(input.prompt);
       return { taskId: 'task-1', name: input.name };
     },
     runAgent: async (input): Promise<WorkflowTaskResult> => {
+      inputs.push(input);
       prompts.push(input.prompt);
       return {
         taskId: 'task-1',
@@ -65,10 +69,34 @@ function fakeWorkflowApi(): { wf: WorkflowApi; prompts: string[]; phases: string
     artifact: async (name): Promise<WorkflowArtifactRef> => ({ name }),
     log: () => {},
   };
-  return { wf, prompts, phases };
+  return { wf, prompts, phases, inputs };
 }
 
 describe('runRestrictedWorkflowScript', () => {
+  it('forwards compact briefing fields through the trusted host boundary', async () => {
+    const { wf, inputs } = fakeWorkflowApi();
+    await runRestrictedWorkflowScript({
+      wf,
+      source: `
+        async function run(wf) {
+          return wf.runAgent({
+            name: 'scoped-reader',
+            prompt: 'inspect the parser',
+            scopeSummary: 'parser boundary',
+            constraints: ['read-only', 'preserve public API'],
+            readOnly: true
+          });
+        }
+      `,
+    });
+
+    expect(inputs[0]).toMatchObject({
+      name: 'scoped-reader',
+      scopeSummary: 'parser boundary',
+      constraints: ['read-only', 'preserve public API'],
+    });
+  });
+
   it('does not arm node:vm watchdog timeouts for trusted host RPC polling', async () => {
     const { wf } = fakeWorkflowApi();
     const originalRunInContext = Script.prototype.runInContext;

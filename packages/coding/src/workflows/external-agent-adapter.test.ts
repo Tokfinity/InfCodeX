@@ -222,4 +222,24 @@ describe('FEATURE_258 Workflow external target', () => {
     await backend.stop(handle.taskId, 'test cleanup');
   });
 
+  it('rejects local tier selectors at the external target boundary', async () => {
+    const ctx = await context();
+    const backend = createCodingWorkflowBackend({
+      ctx,
+      childOptions: {
+        maxIterationsPerChild: 10,
+        parentRole: 'worker',
+        parentHarness: 'tool-dispatch',
+        parentOptions: {},
+      },
+      generateId: () => 'workflow-external-selector',
+    });
+
+    await expect(backend.spawn({
+      name: 'external-fast',
+      prompt: 'Inspect remotely',
+      target: { agentId: 'external:workflow' },
+      modelHint: 'fast',
+    })).rejects.toThrow(/local modelHint\/effort routing selectors/i);
+  });
 });

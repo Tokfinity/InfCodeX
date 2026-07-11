@@ -4,6 +4,7 @@ import { promisify } from 'node:util';
 import chalk from 'chalk';
 
 import type { Command } from './types.js';
+import { writeReviewPacket } from './review-packet.js';
 
 const execFileAsync = promisify(execFile);
 const MAX_DIFF_CHARS = 100_000;
@@ -140,6 +141,8 @@ export function parseReviewInvocation(args: readonly string[]): ReviewInvocation
 export interface ReviewWorkflowRequestOptions {
   readonly lean?: boolean;
   readonly customPrompt?: string;
+  readonly packetPath?: string;
+  readonly packetHash?: string;
 }
 
 export function buildReviewWorkflowRequest(
@@ -148,8 +151,9 @@ export function buildReviewWorkflowRequest(
 ): string {
   const lines = [
     `Review ${label} with a dynamic workflow.`,
-    'Create independent reviewers for correctness, security, performance, and design.',
-    'Have each reviewer inspect the relevant git diff evidence independently, then synthesize findings.',
+    'Use changed_scope once to partition the change into stable, non-overlapping review scopes.',
+    'For each scope, run one capable reviewer that returns both specVerdict and qualityVerdict, citing the same evidence packet instead of repeating the full diff.',
+    'Send only candidate findings to one fresh independent verifier per scope, then reconcile cross-scope interactions in a final synthesis.',
     'Final output must lead with verified findings, cite files or diff hunks, and state when no issues are found.',
   ];
 
@@ -164,6 +168,13 @@ export function buildReviewWorkflowRequest(
 
   if (options.customPrompt) {
     lines.push(`User review focus: ${options.customPrompt}`);
+  }
+
+  if (options.packetPath) {
+    lines.push(
+      `Review packet: ${options.packetPath}${options.packetHash ? ` (sha256 ${options.packetHash})` : ''}.`,
+      'Treat the packet manifest and its evidence chunks as the sole captured review input; read every listed chunk before returning a verdict.',
+    );
   }
 
   return lines.join('\n');
@@ -267,12 +278,27 @@ export const reviewCommand: Command = {
     }
 
     if (invocation.workflow) {
+      let packet: Awaited<ReturnType<typeof writeReviewPacket>>;
+      try {
+        packet = await writeReviewPacket({
+          cwd,
+          sessionId: context.sessionId,
+          label,
+          diff,
+          customPrompt: invocation.prompt,
+        });
+      } catch (error) {
+        const message = error instanceof Error ? error.message : String(error);
+        return { success: false, message: `/review: could not create review packet - ${message}` };
+      }
       return {
         success: true,
         workflow: {
           request: buildReviewWorkflowRequest(label, {
             lean: invocation.lean,
             customPrompt: invocation.prompt,
+            packetPath: packet.packetPath,
+            packetHash: packet.contentHash,
           }),
           source: 'command',
           displayName: buildDisplayName(invocation),

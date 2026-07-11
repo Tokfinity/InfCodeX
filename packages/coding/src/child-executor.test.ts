@@ -364,6 +364,37 @@ describe('executeChildAgents — workflow accounting and isolation cleanup', () 
     timeoutSpy.mockRestore();
   });
 
+  it('reuses a validated structured summary instead of spending a digest turn (FEATURE_259)', async () => {
+    const structuredText = JSON.stringify({ summary: 'Parser boundary is covered; no regressions found.' });
+    mockRunKodaX.mockResolvedValueOnce({
+      success: true,
+      lastText: structuredText,
+      messages: [{ role: 'assistant' as const, content: structuredText }],
+      sessionId: 's-structured-summary',
+      usage: { inputTokens: 20, outputTokens: 10, totalTokens: 30 },
+    });
+
+    const result = await executeChildAgents(
+      [createBundle({
+        id: 'cb-structured-summary',
+        readOnly: true,
+        outputSchema: {
+          type: 'object',
+          required: ['summary'],
+          properties: { summary: { type: 'string' } },
+        },
+      })],
+      createCtx(),
+      createOptions({ workflowChild: true }),
+    );
+
+    expect(mockRunKodaX).toHaveBeenCalledTimes(1);
+    expect(result.results[0]?.structured).toEqual({ summary: 'Parser boundary is covered; no regressions found.' });
+    expect(result.results[0]?.digest).toBeUndefined();
+    expect(result.results[0]?.totalTokensUsed).toBe(30);
+    expect(result.results[0]?.digestTokensUsed).toBeUndefined();
+  });
+
   it('does not add the digest turn for ordinary dispatch-child-tasks children', async () => {
     mockRunKodaX.mockResolvedValueOnce({
       success: true,
@@ -911,6 +942,31 @@ describe('executeChildAgents', () => {
     const prompt = callArgs[1] as string;
     expect(prompt).toContain('Token validation skips expiry check');
     expect(prompt).toContain('Known fact');
+  });
+
+  it('keeps scope summary and binding constraints explicit in the child briefing (FEATURE_259)', async () => {
+    mockRunKodaX.mockResolvedValueOnce({
+      success: true,
+      lastText: 'scoped result',
+      messages: [{ role: 'assistant' as const, content: 'scoped result' }],
+      sessionId: 's-scope-briefing',
+    });
+
+    await executeChildAgents(
+      [createBundle({
+        id: 'cb-scope-briefing',
+        readOnly: true,
+        scopeSummary: 'parser boundary',
+        constraints: ['do not mutate', 'preserve public API'],
+      })],
+      createCtx(),
+      createOptions(),
+    );
+
+    const briefing = mockRunKodaX.mock.calls[0]![1] as string;
+    expect(briefing).toContain('parser boundary');
+    expect(briefing).toContain('Binding constraint: do not mutate');
+    expect(briefing).toContain('Binding constraint: preserve public API');
   });
 
   /* ---------- FEATURE_188 v0.7.42: peer-coordination briefing ---------- */
@@ -1919,13 +1975,19 @@ describe('executeChildAgents — FEATURE_102 P1-auto model_hint routing', () => 
     mockRunKodaX.mockResolvedValue(okResult());
 
     const bundles = [createBundle({ id: 'cb-fast', readOnly: true, modelHint: 'fast' })];
-    await executeChildAgents(bundles, createCtx(), createOptions({
+    const result = await executeChildAgents(bundles, createCtx(), createOptions({
       parentOptions: { provider: 'anthropic', model: 'claude-opus-4-8' },
     }));
 
     const childOptions = mockRunKodaX.mock.calls[0]![0] as { provider?: string; model?: string };
     expect(childOptions.provider).toBe('ark-coding');
     expect(childOptions.model).toBe('deepseek-v4-flash');
+    expect(result.results[0]?.routeFacts).toMatchObject({
+      requestedTier: 'fast',
+      tierOutcome: 'applied',
+      providerSource: 'tier',
+      finalProvider: 'ark-coding',
+    });
   });
 
   it('keeps a WRITE `fast` child on the parent tier (cheap is read-only-gated)', async () => {
@@ -1934,7 +1996,7 @@ describe('executeChildAgents — FEATURE_102 P1-auto model_hint routing', () => 
     mockRunKodaX.mockResolvedValue(okResult());
 
     const bundles = [createBundle({ id: 'cb-fast-w', readOnly: false, modelHint: 'fast' })];
-    await executeChildAgents(bundles, createCtx(), createOptions({
+    const result = await executeChildAgents(bundles, createCtx(), createOptions({
       parentRole: 'worker',
       parentHarness: 'tool-dispatch',
       parentOptions: { provider: 'anthropic', model: 'claude-opus-4-8' },
@@ -1943,19 +2005,25 @@ describe('executeChildAgents — FEATURE_102 P1-auto model_hint routing', () => 
     const childOptions = mockRunKodaX.mock.calls[0]![0] as { provider?: string; model?: string };
     expect(childOptions.provider).toBe('anthropic');
     expect(childOptions.model).toBe('claude-opus-4-8');
+    expect(result.results[0]?.routeFacts?.tierOutcome).toBe('fast-write-ineligible');
   });
 
   it('falls back to parent when the tier is unconfigured (routing OFF by default)', async () => {
     mockRunKodaX.mockResolvedValue(okResult());
 
     const bundles = [createBundle({ id: 'cb-fast-off', readOnly: true, modelHint: 'fast' })];
-    await executeChildAgents(bundles, createCtx(), createOptions({
+    const result = await executeChildAgents(bundles, createCtx(), createOptions({
       parentOptions: { provider: 'anthropic', model: 'claude-opus-4-8' },
     }));
 
     const childOptions = mockRunKodaX.mock.calls[0]![0] as { provider?: string; model?: string };
     expect(childOptions.provider).toBe('anthropic');
     expect(childOptions.model).toBe('claude-opus-4-8');
+    expect(result.results[0]?.routeFacts).toMatchObject({
+      requestedTier: 'fast',
+      tierOutcome: 'unconfigured',
+      providerSource: 'parent',
+    });
   });
 
   it('specialist model takes priority over the `fast` hint (P1 > P1-auto)', async () => {

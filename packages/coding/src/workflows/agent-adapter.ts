@@ -50,6 +50,7 @@ import type { ChildProgressStatus } from '../child-progress-snapshot.js';
 import type {
   KodaXChildContextBundle,
   KodaXChildExecutionResult,
+  KodaXChildRouteFacts,
   KodaXEvents,
   KodaXToolExecutionContext,
   KodaXWireReasoningEffort,
@@ -211,13 +212,30 @@ function isPreparatoryOnlyText(text: string): boolean {
   return trimmed.length > 0 && PREPARATORY_FINAL_TEXT_RE.test(trimmed);
 }
 
-function selectWorkflowFinalText(childSummary: string, digest: string | undefined): string {
+function selectWorkflowFinalText(
+  childSummary: string,
+  digest: string | undefined,
+  structured: unknown,
+): string {
   const summary = childSummary.trim();
+  const structuredSummary = isReusableStructuredSummary(structured);
+  if (structuredSummary) return structuredSummary;
   const cleanDigest = digest?.trim();
   if (cleanDigest && (summary.length === 0 || isPreparatoryOnlyText(summary))) {
     return cleanDigest;
   }
   return childSummary;
+}
+
+function isReusableStructuredSummary(value: unknown): string | undefined {
+  if (!value || typeof value !== 'object' || Array.isArray(value)) return undefined;
+  const summary = (value as { summary?: unknown }).summary;
+  if (typeof summary !== 'string') return undefined;
+  const normalized = summary.trim();
+  if (normalized.length === 0 || normalized.length > 4096) return undefined;
+  if (/^(?:i will|i'll|i need to|next i|let me)\b/i.test(normalized)) return undefined;
+  if (/(?:\[truncated|tool output truncated|full output saved to:|\[tool error\]|summary unavailable|digest failed)/i.test(normalized)) return undefined;
+  return normalized;
 }
 
 async function runGit(args: readonly string[], cwd: string): Promise<string> {
@@ -550,9 +568,10 @@ function buildBundle(
     id: childId,
     fanoutClass: 'evidence-scan',
     objective: input.prompt,
+    ...(input.scopeSummary ? { scopeSummary: input.scopeSummary } : {}),
     readOnly: input.readOnly ?? false,
     evidenceRefs: input.evidenceRefs ? [...input.evidenceRefs] : [],
-    constraints: [],
+    constraints: input.constraints ? [...input.constraints] : [],
     ...(input.modelHint ? { modelHint: input.modelHint } : {}),
     ...(input.isolation ? { isolation: input.isolation } : {}),
     ...(input.subagentType ? { specialistName: input.subagentType } : {}),
@@ -579,12 +598,14 @@ function deriveTerminal(
   provider?: string;
   model?: string;
   structured?: unknown;
+  digestTokensUsed?: number;
+  routeFacts?: KodaXChildRouteFacts;
 } {
   if (result.cancelledChildren.includes(taskId)) {
     return { status: 'stopped', snapStatus: 'aborted', finalText: '' };
   }
   const child = result.results[0];
-  const finalText = selectWorkflowFinalText(child?.summary ?? '', child?.digest);
+  const finalText = selectWorkflowFinalText(child?.summary ?? '', child?.digest, child?.structured);
   if (child?.status === 'completed') {
     return {
       status: 'completed',
@@ -597,6 +618,8 @@ function deriveTerminal(
       ...(child.provider ? { provider: child.provider } : {}),
       ...(child.model ? { model: child.model } : {}),
       ...(child.structured !== undefined ? { structured: child.structured } : {}),
+      ...(child.digestTokensUsed !== undefined ? { digestTokensUsed: child.digestTokensUsed } : {}),
+      ...(child.routeFacts ? { routeFacts: child.routeFacts } : {}),
     };
   }
   return {
@@ -606,6 +629,8 @@ function deriveTerminal(
     ...(child?.limitReached ? { limitReached: true } : {}),
     ...(child?.provider ? { provider: child.provider } : {}),
     ...(child?.model ? { model: child.model } : {}),
+    ...(child?.digestTokensUsed !== undefined ? { digestTokensUsed: child.digestTokensUsed } : {}),
+    ...(child?.routeFacts ? { routeFacts: child.routeFacts } : {}),
   };
 }
 
@@ -680,6 +705,11 @@ export function createCodingWorkflowBackend(deps: CodingWorkflowBackendDeps): Wo
           ...(localRoute.subagentType ? { subagentType: localRoute.subagentType } : {}),
         };
       } else {
+        if (effectiveInput.modelHint !== undefined || effectiveInput.effort !== undefined) {
+          throw new Error(
+            'External Workflow targets cannot combine local modelHint/effort routing selectors.',
+          );
+        }
         if (effectiveInput.verification?.requiresMutation === true) {
           throw new Error('External Workflow targets cannot directly satisfy workspace mutation verification.');
         }
@@ -859,6 +889,7 @@ export function createCodingWorkflowBackend(deps: CodingWorkflowBackendDeps): Wo
     let result = await waitForAttempt(entry.promise);
     let totalTokensUsed = result.totalTokensUsed;
     let term = deriveTerminal(result, taskId);
+    let digestTokensUsed = term.digestTokensUsed ?? 0;
     let verification = entry.verification
       ? evaluateVerification({
           verification: entry.verification,
@@ -897,6 +928,7 @@ export function createCodingWorkflowBackend(deps: CodingWorkflowBackendDeps): Wo
       result = await waitForAttempt(entry.promise);
       totalTokensUsed += result.totalTokensUsed;
       term = deriveTerminal(result, taskId);
+      digestTokensUsed += term.digestTokensUsed ?? 0;
       verification = entry.verification
         ? evaluateVerification({
             verification: entry.verification,
@@ -947,6 +979,14 @@ export function createCodingWorkflowBackend(deps: CodingWorkflowBackendDeps): Wo
       ...(term.provider ? { provider: term.provider } : {}),
       ...(term.model ? { model: term.model } : {}),
       ...(term.structured !== undefined ? { structured: term.structured } : {}),
+      ...(digestTokensUsed > 0 ? { digestUsage: { totalTokens: digestTokensUsed } } : {}),
+      ...(term.routeFacts ? {
+        requestedTier: term.routeFacts.requestedTier,
+        tierOutcome: term.routeFacts.tierOutcome,
+        providerSource: term.routeFacts.providerSource,
+        ...(term.routeFacts.modelSource ? { modelSource: term.routeFacts.modelSource } : {}),
+        ...(term.routeFacts.resolvedEffort ? { resolvedEffort: term.routeFacts.resolvedEffort } : {}),
+      } : {}),
       usage: { totalTokens: totalTokensUsed },
     };
   };
