@@ -1,5 +1,7 @@
 import { execFileSync } from 'node:child_process';
 import { readFileSync } from 'node:fs';
+import os from 'node:os';
+import path from 'node:path';
 
 import { getCostRate } from '@kodax-ai/llm';
 import { describe, expect, it } from 'vitest';
@@ -45,7 +47,7 @@ async function writeManifest(): Promise<string> {
     readFileSync('benchmark/datasets/feature-259/cases.ts', 'utf8'),
     readFileSync('benchmark/datasets/feature-259/runner.ts', 'utf8'),
   ].join('\n');
-  return writeFeature259ExperimentManifest({
+  const input = {
     gitCommit: git('rev-parse', 'HEAD'),
     dirtyPatch: git('diff', '--binary', 'HEAD'),
     baselinePrompt: buildBaselineWorkerPrompt(),
@@ -57,7 +59,13 @@ async function writeManifest(): Promise<string> {
     contextWindow: 128_000,
     resolvedAliases,
     pricingSnapshot,
-  });
+  };
+  const primary = await writeFeature259ExperimentManifest(input);
+  await writeFeature259ExperimentManifest(
+    input,
+    path.join(os.tmpdir(), 'kodax-feature-259-eval-mirror', 'experiment.json'),
+  );
+  return primary;
 }
 
 describe('FEATURE 259 paid decision experiment', () => {

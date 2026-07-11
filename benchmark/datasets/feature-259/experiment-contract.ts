@@ -94,6 +94,7 @@ export function buildFeature259ExperimentManifest(input: Feature259ExperimentInp
     tokenCoveragePolicy: 'missing required usage invalidates the pair; never estimate',
     judgePolicy: 'automated scoring requires manual audit; excessive disagreement invalidates the run',
     rawOutputRoot: path.join(os.tmpdir(), 'kodax-eval-dumps', 'feature-259'),
+    redundantRawOutputMirror: path.join(os.tmpdir(), 'kodax-feature-259-eval-mirror'),
     pricingSnapshot: input.pricingSnapshot ?? null,
     authorization: 'User explicitly authorized paid Layer-2/Layer-3 model calls on 2026-07-11.',
     estimatedExternalSpendUsd: 'usage-based from frozen pricing snapshot; checked after every completed cell',

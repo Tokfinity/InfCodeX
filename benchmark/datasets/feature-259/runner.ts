@@ -46,6 +46,7 @@ import {
 } from './cases.js';
 
 const DUMP_ROOT = path.join(os.tmpdir(), 'kodax-eval-dumps', 'feature-259');
+const MIRROR_ROOT = path.join(os.tmpdir(), 'kodax-feature-259-eval-mirror');
 const HARD_CAP_USD = 75;
 const PILOT_ALIAS: ModelAlias = 'ark/v4flash';
 const DECISION_ALIASES: readonly ModelAlias[] = [
@@ -149,6 +150,13 @@ async function writeJsonAtomic(filePath: string, value: unknown): Promise<void> 
   await rename(temporary, filePath);
 }
 
+async function writeRawDump(relativePath: string, value: unknown): Promise<void> {
+  await Promise.all([
+    writeJsonAtomic(path.join(DUMP_ROOT, relativePath), value),
+    writeJsonAtomic(path.join(MIRROR_ROOT, relativePath), value),
+  ]);
+}
+
 function estimatedCost(alias: ModelAlias, usage: UsageTotal): number {
   const target = MODEL_ALIASES[alias];
   const rate = getCostRate(target.provider, target.model)
@@ -199,7 +207,12 @@ async function auditFailure(
       rawOutput,
       'Does the mechanical failure accurately reflect the frozen contract?',
     ].join('\n'), schema, 'No additional evidence.'),
+    timeoutMs: 120_000,
   });
+  await writeRawDump(path.join(
+    'judge-audit-calls',
+    `${caseId.replaceAll('/', '__')}.json`,
+  ), { caseId, contract, rawOutput, mechanicalReason, raw });
   const verdict = parsed<{ readonly agrees: boolean; readonly reason: string }>(raw, schema);
   requireUsage(raw);
   return {
@@ -238,6 +251,18 @@ export async function runFeature259Layer2(stage: 'pilot' | 'layer2'): Promise<La
       models: aliases,
       judges: evalCase.judges,
       runs,
+      timeoutMs: 120_000,
+      onRun: async (rawRun) => {
+        const variant = evalCase.variants.find((item) => item.id === rawRun.variantId);
+        await writeRawDump(path.join(
+          stage,
+          'runs',
+          evalCase.id,
+          rawRun.variantId,
+          rawRun.alias,
+          `${rawRun.runIndex}.json`,
+        ), { caseId: evalCase.id, contract: evalCase.contract, variant, rawRun });
+      },
     });
     results.push(result);
     for (const cell of result.cells) {
@@ -260,6 +285,11 @@ export async function runFeature259Layer2(stage: 'pilot' | 'layer2'): Promise<La
             failedJudge.reason ?? failedJudge.name,
           );
           judgeAudits.push(audit);
+          await writeRawDump(path.join(
+            stage,
+            'audits',
+            `${audit.caseId.replaceAll('/', '__')}.json`,
+          ), audit);
           const auditUsage = requireUsage(audit.raw);
           usage = addUsage(usage, auditUsage);
           cost += estimatedCost(audit.alias, {
@@ -272,7 +302,7 @@ export async function runFeature259Layer2(stage: 'pilot' | 'layer2'): Promise<La
       }
     }
     assertUnderCap(cost);
-    await writeJsonAtomic(path.join(DUMP_ROOT, `${stage}.partial.json`), {
+    await writeRawDump(`${stage}.partial.json`, {
       stage, aliases, runs, results, judgeAudits, usage, estimatedCostUsd: cost,
     });
   }
@@ -288,7 +318,7 @@ export async function runFeature259Layer2(stage: 'pilot' | 'layer2'): Promise<La
     decisionPassed: complete && usageCovered && auditValid && layer2Decision(results),
     judgeAudits, results, usage, estimatedCostUsd: cost,
   };
-  await writeJsonAtomic(path.join(DUMP_ROOT, `${stage}.json`), summary);
+  await writeRawDump(`${stage}.json`, summary);
   return summary;
 }
 
@@ -322,10 +352,15 @@ async function callStructured<T>(
   prompt: string,
   schema: unknown,
   evidence: string,
+  dumpId: string,
 ): Promise<{ readonly value: T; readonly raw: OneShotOutput }> {
   const raw = await runOneShot(alias, {
     systemPrompt: CHILD_AGENT_SYSTEM_PROMPT,
     userMessage: structuredPrompt(prompt, schema, evidence),
+    timeoutMs: 120_000,
+  });
+  await writeRawDump(path.join('layer3-calls', `${dumpId}.json`), {
+    alias, systemPrompt: CHILD_AGENT_SYSTEM_PROMPT, prompt, schema, evidence, raw,
   });
   requireUsage(raw);
   return { value: parsed<T>(raw, schema), raw };
@@ -352,7 +387,11 @@ function allEvidence(fixture: Feature259Layer3Fixture): string {
   return fixture.areas.map((_, index) => packetEvidence(fixture, index)).join('\n\n');
 }
 
-async function runBaselineArm(alias: ModelAlias, fixture: Feature259Layer3Fixture): Promise<ReviewArmResult> {
+async function runBaselineArm(
+  alias: ModelAlias,
+  fixture: Feature259Layer3Fixture,
+  dumpPrefix: string,
+): Promise<ReviewArmResult> {
   const lenses = ['specification compliance', 'implementation quality', 'adversarial edge cases', 'scope and test integrity'];
   const calls: OneShotOutput[] = [];
   const reviews: RawScopedReviewResult[] = [];
@@ -361,7 +400,7 @@ async function runBaselineArm(alias: ModelAlias, fixture: Feature259Layer3Fixtur
       `Broadly review the complete frozen change for ${lens}.`,
       'Own both specification and implementation-quality verdicts. Cite exact locations.',
       'If a binding requirement cannot be proven from the evidence, use specVerdict not-verifiable and name it in unverifiedRequirements.',
-    ].join('\n'), SCOPED_REVIEW_OUTPUT_SCHEMA, allEvidence(fixture));
+    ].join('\n'), SCOPED_REVIEW_OUTPUT_SCHEMA, allEvidence(fixture), `${dumpPrefix}__primary-${calls.length}`);
     calls.push(response.raw);
     reviews.push(response.value);
   }
@@ -375,6 +414,7 @@ async function runBaselineArm(alias: ModelAlias, fixture: Feature259Layer3Fixtur
     buildScopedReviewFinalPrompt(packetResults),
     { type: 'object', additionalProperties: false, required: ['summary'], properties: { summary: { type: 'string' } } },
     'Synthesize only the structured results already present in the prompt.',
+    `${dumpPrefix}__final`,
   );
   calls.push(final.raw);
   const usage = calls.reduce((total, call) => addUsage(total, requireUsage(call)), emptyUsage());
@@ -388,7 +428,11 @@ async function runBaselineArm(alias: ModelAlias, fixture: Feature259Layer3Fixtur
   };
 }
 
-async function runProposedArm(alias: ModelAlias, fixture: Feature259Layer3Fixture): Promise<ReviewArmResult> {
+async function runProposedArm(
+  alias: ModelAlias,
+  fixture: Feature259Layer3Fixture,
+  dumpPrefix: string,
+): Promise<ReviewArmResult> {
   const calls: OneShotOutput[] = [];
   const packetResults: ScopedReviewWorkflowResult['packetResults'][number][] = [];
   let primaryStarts = 0;
@@ -403,6 +447,7 @@ async function runProposedArm(alias: ModelAlias, fixture: Feature259Layer3Fixtur
         buildScopedReviewPrimaryPrompt(packet, primaryIndex === 1, { packets: [packet] }),
         SCOPED_REVIEW_OUTPUT_SCHEMA,
         packetEvidence(fixture, areaIndex),
+        `${dumpPrefix}__area-${areaIndex}-primary-${primaryIndex}`,
       );
       calls.push(response.raw);
       primaries.push(response.value);
@@ -430,6 +475,7 @@ async function runProposedArm(alias: ModelAlias, fixture: Feature259Layer3Fixtur
         buildScopedReviewVerificationPrompt(packet, merged),
         FINDING_VERIFICATION_OUTPUT_SCHEMA,
         packetEvidence(fixture, areaIndex),
+        `${dumpPrefix}__area-${areaIndex}-verification`,
       );
       calls.push(response.raw);
       verified = applyFindingVerification(merged, response.value);
@@ -442,6 +488,7 @@ async function runProposedArm(alias: ModelAlias, fixture: Feature259Layer3Fixtur
     buildScopedReviewFinalPrompt(packetResults),
     { type: 'object', additionalProperties: false, required: ['summary'], properties: { summary: { type: 'string' } } },
     'Synthesize only the structured results already present in the prompt.',
+    `${dumpPrefix}__final`,
   );
   calls.push(final.raw);
   return {
@@ -501,9 +548,10 @@ export async function runFeature259Layer3(stage: 'layer3' | 'confirm'): Promise<
     for (const fixture of fixtures) {
       for (let repetition = 0; repetition < repetitions; repetition++) {
         for (const arm of arms) {
+          const dumpPrefix = `${stage}__${alias.replace('/', '-')}__${fixture.id}__${repetition}__${arm}`;
           const result = arm === 'baseline'
-            ? await runBaselineArm(alias, fixture)
-            : await runProposedArm(alias, fixture);
+            ? await runBaselineArm(alias, fixture, dumpPrefix)
+            : await runProposedArm(alias, fixture, dumpPrefix);
           const score = scoreReview(fixture, result);
           const judgeAudit = score.passed ? undefined : await auditFailure(
             `${stage}/${fixture.id}/${alias}/${repetition}/${arm}`,
@@ -512,6 +560,7 @@ export async function runFeature259Layer3(stage: 'layer3' | 'confirm'): Promise<
             score.reason,
           );
           cells.push({ alias, fixtureId: fixture.id, repetition, arm, ...score, result, ...(judgeAudit ? { judgeAudit } : {}) });
+          await writeRawDump(path.join(stage, 'cells', `${dumpPrefix}.json`), cells[cells.length - 1]);
           cost += estimatedCost(alias, result.usage);
           if (judgeAudit) {
             const auditUsage = requireUsage(judgeAudit.raw);
@@ -523,7 +572,7 @@ export async function runFeature259Layer3(stage: 'layer3' | 'confirm'): Promise<
             });
           }
           assertUnderCap(cost);
-          await writeJsonAtomic(path.join(DUMP_ROOT, `${stage}.partial.json`), { stage, cells, estimatedCostUsd: cost });
+          await writeRawDump(`${stage}.partial.json`, { stage, cells, estimatedCostUsd: cost });
         }
       }
     }
@@ -576,7 +625,7 @@ export async function runFeature259Layer3(stage: 'layer3' | 'confirm'): Promise<
     medianStandardTokenReduction, standardPrimaryReduction, standardDuplicateReadReduction,
     judgeDisagreementRate, cells, usage, estimatedCostUsd: cost,
   };
-  await writeJsonAtomic(path.join(DUMP_ROOT, `${stage}.json`), summary);
+  await writeRawDump(`${stage}.json`, summary);
   return summary;
 }
 

@@ -23,6 +23,7 @@ import {
   getProvider,
   type KodaXMessage,
   type KodaXReasoningRequest,
+  type KodaXStreamResult,
   type KodaXTokenUsage,
   type KodaXToolDefinition,
 } from '@kodax-ai/llm';
@@ -55,6 +56,8 @@ export interface OneShotInput {
    * reasoning axis (quick / balanced / deep) per cell.
    */
   readonly reasoning?: KodaXReasoningRequest;
+  /** Optional hard request timeout. Aborts the provider stream when reached. */
+  readonly timeoutMs?: number;
 }
 
 export interface OneShotOutput {
@@ -88,13 +91,26 @@ export async function runOneShot(
   const tools = input.tools ?? [];
 
   const startedAt = Date.now();
-  const result = await provider.stream(
-    messages,
-    tools,
-    input.systemPrompt,
-    input.reasoning,
-    { modelOverride: target.model },
+  const controller = input.timeoutMs === undefined ? undefined : new AbortController();
+  const timeout = controller === undefined ? undefined : setTimeout(
+    () => controller.abort(new Error(`one-shot timed out after ${input.timeoutMs}ms`)),
+    input.timeoutMs,
   );
+  let result: KodaXStreamResult;
+  try {
+    result = await provider.stream(
+      messages,
+      tools,
+      input.systemPrompt,
+      input.reasoning,
+      {
+        modelOverride: target.model,
+        ...(controller ? { signal: controller.signal } : {}),
+      },
+    );
+  } finally {
+    if (timeout !== undefined) clearTimeout(timeout);
+  }
   const durationMs = Date.now() - startedAt;
 
   const text = result.textBlocks.map((b) => b.text).join('').trim();
@@ -386,6 +402,10 @@ export interface BenchmarkRunInput {
   readonly judges: readonly PromptJudge[];
   /** Number of runs per cell. Defaults to DEFAULT_BENCHMARK_RUNS (3). */
   readonly runs?: number;
+  /** Optional provider-call timeout forwarded to every one-shot cell. */
+  readonly timeoutMs?: number;
+  /** Persist each completed raw run before the next provider call starts. */
+  readonly onRun?: (run: BenchmarkRunCell) => void | Promise<void>;
   /**
    * Optional fallback alias map. When a cell's primary alias call throws
    * a quota / rate-limit error, the harness retries ONCE against the
@@ -485,6 +505,7 @@ export async function runBenchmark(input: BenchmarkRunInput): Promise<BenchmarkR
           tools: variant.tools,
           priorMessages: variant.priorMessages,
           reasoning: variant.reasoning,
+          timeoutMs: input.timeoutMs,
         };
         try {
           const out = await runOneShot(alias, oneShotInput);
@@ -540,7 +561,7 @@ export async function runBenchmark(input: BenchmarkRunInput): Promise<BenchmarkR
             }
           : runJudges(text, input.judges, { toolCalls });
 
-        runsRaw.push({
+        const rawRun: BenchmarkRunCell = {
           variantId: variant.id,
           alias,
           runIndex,
@@ -553,7 +574,9 @@ export async function runBenchmark(input: BenchmarkRunInput): Promise<BenchmarkR
           judges: aggregate.results,
           judgeAggregate: aggregate,
           passed: aggregate.passed,
-        });
+        };
+        runsRaw.push(rawRun);
+        await input.onRun?.(rawRun);
       }
 
       // Cell aggregation
