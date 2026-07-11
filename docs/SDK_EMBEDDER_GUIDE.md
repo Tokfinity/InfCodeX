@@ -24,6 +24,10 @@ are NOT obvious from inspecting the type definitions alone:
 14. [Media input artifacts — `@kodax-ai/kodax/media`](#14-media-input-artifacts--kodax-aikodaxmedia-feature_239-v0756)
 15. [Space v0.7.57 follow-up ledger](#15-space-v0757-follow-up-ledger)
 16. [SDK agent-profile surface — `KodaXAgentProfile`](#16-sdk-agent-profile-surface--kodaxagentprofile-feature_247-v0758)
+17. [Runtime SDK, Worker isolation, and local daemon](#17-runtime-sdk-worker-isolation-and-local-daemon-feature_253-feature_257)
+18. [External-agent executor plane](#18-external-agent-executor-plane-feature_258-v0767)
+19. [Session surface filtering and cursor pagination](#19-session-surface-filtering-and-cursor-pagination-feature_261-v0767)
+20. [Cost-disciplined workflow routing and telemetry](#20-cost-disciplined-workflow-routing-and-telemetry-feature_259-v0767)
 
 §1–§3 (and the Phase-7/8 MCP-popout surface in §1) land in v0.7.42
 under FEATURE_186 (see [ADR-032](ADR.md#adr-032-sdk-embedder-surface-closure-feature_186-v0742)).
@@ -2342,6 +2346,8 @@ The important creation options are:
 | `daemonStartupTimeoutMs` | `60000` | Total cold-start/concurrent-owner wait budget. |
 | `daemonConnectTimeoutMs` | `2000` | Per-socket connection timeout. |
 | `autoStartDaemon` | conditional | For `createKodaXRuntime({mode:'daemon'})`, true only when no explicit endpoint/transport is supplied. |
+| `externalAgents` | unset | Host-installed executor factories, dispatch policy, optional credential/artifact policies, and default dispatch context. Inline owner only; see §18. |
+| `requirements.externalAgents` | `false` | Reject a Runtime/daemon connection that does not advertise an installed external-agent plane. |
 
 KodaX rejects contradictory options. Worker settings without Worker isolation,
 `requirements.hardDispose` on inline/daemon forms, and any explicit isolation
@@ -2558,6 +2564,9 @@ Every `KodaXRuntime` exposes the same service set in inline, Worker, and daemon 
 | `artifacts` | Create/get/delete runtime artifact references for file/image/video inputs. |
 | `status` | Runtime snapshot with sessions, runs, permissions, workflows, and daemon counters. |
 | `diagnostics` | Latest context-budget and tool-exposure decisions for GUI/debug surfaces. |
+| `admin.agentRegistrations` | List/upsert/remove redacted external-agent registrations. With no plane, list is empty and mutations fail clearly. |
+| `agents` | Check `enabled`, list/describe policy-filtered dispatchable agents, and preflight a selected route. |
+| `agentTasks` | Start/list/get/wait/continue/cancel/reconcile durable external-agent tasks and read their ordered event stream. |
 
 ### Sessions, runs, and queueing
 
@@ -2721,9 +2730,9 @@ fields requires a protocol version bump.
 
 ### Current verification status
 
-The v0.7.66 release validation covers the runtime migration and the Worker
-isolation follow-ups that were delivered ahead of their original
-v0.7.71/v0.7.72 planning slots:
+The v0.7.67 release validation covers the runtime migration, the Worker
+isolation follow-ups delivered ahead of their original v0.7.71/v0.7.72
+planning slots, and the v0.7.67 external-agent/session additions:
 
 - complete repository test suite on Node 20 and Node 22;
 - package builds, Worker sidecar builds, and self-contained
@@ -2735,17 +2744,314 @@ v0.7.71/v0.7.72 planning slots:
 - constructed-handler reverse tool RPC, abort bridging, CPU-loop termination,
   respawn, and revoke/dispose queue drainage;
 - context/tool-exposure eval gate;
-- external fresh npm consumer installation of the `0.7.66` tarball, proving
+- embedded and hosted-daemon external-agent catalog/task parity, durable task
+  recovery, policy/credential/artifact gates, and disabled-plane failure;
+- exact session `surface` filtering plus opaque cursor continuation through the
+  narrow `/session` API, embedded Runtime, and daemon transport;
+- external fresh npm consumer installation of the `0.7.67` tarball, proving
   Worker isolation and a distinct daemon PID through the published subpath;
 - Ubuntu Node 22 Unix-domain-socket daemon gate, including two clients sharing
   one runtime and cross-client permission resolution.
 
-GitHub Actions run `29088957312` passed on 2026-07-10. The portable manual gates
-remain in `docs/test-guides/FEATURE_255_v0.7.66_TEST_GUIDE.md`,
+The portable manual gates remain in
+`docs/test-guides/FEATURE_255_v0.7.66_TEST_GUIDE.md`,
 `FEATURE_256_v0.7.71_TEST_GUIDE.md`, and
 `FEATURE_257_v0.7.72_TEST_GUIDE.md` for release-machine verification; the latter
 two filenames retain their original planning slots while their content records
-the v0.7.66 delivery.
+the v0.7.66 delivery. v0.7.67 adds
+`FEATURE_258_v0.7.67_TEST_GUIDE.md`, `FEATURE_259_v0.7.67_TEST_GUIDE.md`, and
+`FEATURE_261_v0.7.67_TEST_GUIDE.md`. The final GitHub Actions run is recorded in
+the v0.7.67 release after the release commit is pushed.
+
+---
+
+## 18. External-agent executor plane (FEATURE_258, v0.7.67)
+
+FEATURE_258 lets an SDK host register remote agents without teaching the coding
+runtime a specific A2A, MCP, or HTTP client. The public contracts live in
+`@kodax-ai/kodax/agent`; the host-facing catalog and task services live on
+`@kodax-ai/kodax/runtime`.
+
+### Ownership rule
+
+An `AgentExecutorFactory` contains functions, so it cannot cross a Worker or
+daemon DTO boundary. Install factories where the Runtime owner executes:
+
+| Desired owner | Supported construction |
+|---|---|
+| Private in-process owner | `createKodaXRuntime({ mode: 'embedded', isolation: 'inline', externalAgents })` |
+| New locally hosted daemon owner | `createKodaXRuntime({ mode: 'daemon', profile: '<unique>', externalAgents })` |
+| Existing daemon | Configure its owner, then attach with `connectKodaXRuntime({ requirements: { externalAgents: true } })`; a client cannot inject factories. |
+| Runtime Worker | The Worker owner must install factories itself; passing `externalAgents` from the parent is rejected. |
+
+When `mode: 'daemon'` and `externalAgents` are supplied, the caller must win a
+new in-process daemon lease. KodaX rejects an already-running profile instead of
+silently replacing its executor configuration. Closing that owner facade shuts
+down the host it created; closing an ordinary attached client only detaches.
+
+### Minimal owner and task flow
+
+The reference executor below is a contract/conformance adapter. Replace it with
+your own `AgentExecutorFactory` for a real remote protocol.
+
+```ts
+import {
+  createReferenceAgentExecutorFactory,
+  type ExternalAgentRegistration,
+} from '@kodax-ai/kodax/agent';
+import { createKodaXRuntime } from '@kodax-ai/kodax/runtime';
+
+const runtime = await createKodaXRuntime({
+  mode: 'embedded',
+  isolation: 'inline',
+  externalAgents: {
+    factories: [createReferenceAgentExecutorFactory({
+      executorId: 'example-http',
+      protocol: 'http',
+    })],
+    policy: ({ registration, query }) => ({
+      allowed: registration.enabled && query.readOnly === true,
+      reasons: query.readOnly === true ? [] : ['This host allows read-only dispatch only.'],
+    }),
+    defaultContext: { actorId: 'desktop-host' },
+  },
+});
+
+const registration: ExternalAgentRegistration = {
+  agentId: 'external:reviewer',
+  displayName: 'Remote Reviewer',
+  enabled: true,
+  executorId: 'example-http',
+  protocol: 'http',
+  configurationRevision: 'reviewer-config-v1',
+  endpointIdentityHash: 'sha256:replace-with-stable-endpoint-identity',
+  skills: ['code-review'],
+  inputModalities: ['text'],
+  outputModalities: ['text'],
+  capabilities: {
+    streaming: 'supported',
+    durableTasks: 'supported',
+    inputRequired: 'conditional',
+    cancellation: 'supported',
+    artifacts: 'unsupported',
+  },
+  effects: { remote: 'read', workspace: 'proposal' },
+  maxConcurrency: 1,
+};
+
+try {
+  await runtime.admin.agentRegistrations.upsert(registration);
+
+  const query = {
+    actorId: 'desktop-host',
+    requiredSkills: ['code-review'],
+    readOnly: true,
+  } as const;
+  const available = await runtime.agents.listDispatchable(query);
+  const preflight = await runtime.agents.preflight({
+    agentId: 'external:reviewer',
+    query,
+    expectedConfigurationRevision: registration.configurationRevision,
+  });
+  if (!preflight.ok) throw new Error(preflight.reasons.join('; '));
+
+  const started = await runtime.agentTasks.start({
+    agentId: 'external:reviewer',
+    objective: 'Review the supplied immutable patch and return cited findings.',
+    context: { actorId: 'desktop-host', runId: 'host-run-42' },
+    readOnly: true,
+    requiredSkills: ['code-review'],
+    expectedConfigurationRevision: registration.configurationRevision,
+  });
+  const terminal = await runtime.agentTasks.wait(started.taskId, 60_000);
+  console.log(available, terminal.state, terminal.output, terminal.usage);
+} finally {
+  await runtime.close();
+}
+```
+
+`runtime.agents.enabled` is the cheap external-plane feature check. If it is
+false, catalog queries can still return built-in local agents but no external
+agents; registration and task lists are empty, while point reads and mutations
+fail clearly. Set
+`requirements.externalAgents: true` when absence must abort connection.
+
+### Service reference
+
+| Surface | Methods | Contract |
+|---|---|---|
+| `runtime.admin.agentRegistrations` | `list`, `upsert`, `remove` | Durable owner configuration. List results expose `credentialConfigured`, never a credential value. With no plane, `list()` is empty and mutations fail clearly. |
+| `runtime.agents` | `enabled`, `listDispatchable`, `describe`, `preflight` | Applies health, capability, effect, concurrency, credential-presence, configuration-revision, and host-policy checks before dispatch. |
+| `runtime.agentTasks` | `start`, `list`, `get`, `events`, `wait`, `sendInput`, `cancel`, `reconcile` | Durable snapshots and append-only events for external tasks. The task keeps the immutable registration/executor binding captured at start. |
+
+`agentTasks.events(taskId, cursor)` uses the last seen numeric event `seq` as its
+cursor and returns events with a greater sequence. `wait()` resolves only at a
+terminal task state and rejects on a positive `timeoutMs` expiry. `sendInput()`
+is valid only while the task reports `input-required` or `auth-required`.
+`reconcile()` asks the bound executor for authoritative remote state after an
+owner restart or uncertain failure.
+
+### Credential, artifact, and failure boundaries
+
+- Put only a `credentialRef` in a registration. Resolve secret material through
+  `AgentCredentialBroker.withCredential()`; do not place tokens in
+  `executorConfig`, events, diagnostics, or task output.
+- Remote artifacts are denied by default. Supply `artifactPolicy` to authorize
+  each artifact before it materializes in the host boundary.
+- External agents may declare workspace effect `none` or `proposal`; direct
+  workspace mutation is intentionally not a valid external registration.
+- Use `expectedConfigurationRevision` to prevent dispatching against a stale
+  endpoint/configuration seen by an earlier catalog read.
+- A remote start followed by uncertain local persistence is recorded as
+  `unknown` with its executor reference preserved; reconcile it rather than
+  blindly starting a duplicate. Stable idempotency keys protect retries.
+- The durable plane records provider-reported usage when available. It never
+  invents missing token or cost fields.
+
+For a production adapter, implement `preflight?`, `start`, `events`, `get`,
+`sendInput`, `cancel`, `reconcile`, and `dispose` on `AgentExecutor`. The factory
+receives `withCredential()` and `authorizeArtifact()` callbacks so protocol code
+cannot bypass the host's secret/artifact policies.
+
+---
+
+## 19. Session surface filtering and cursor pagination (FEATURE_261, v0.7.67)
+
+The narrow session SDK and Runtime facade now share the same listing semantics:
+`surface` is an exact filter applied before `limit`, and `cursor` is an opaque
+continuation token carried by each returned summary.
+
+### Narrow `/session` API
+
+```ts
+import { listSessions, type SessionSummary } from '@kodax-ai/kodax/session';
+
+const all: SessionSummary[] = [];
+let cursor: string | undefined;
+do {
+  const page = await listSessions({
+    scope: 'user',
+    surface: 'partner',
+    limit: 50,
+    ...(cursor ? { cursor } : {}),
+  });
+  all.push(...page);
+  cursor = page.length === 50 ? page.at(-1)?.cursor : undefined;
+} while (cursor);
+```
+
+### Embedded/daemon Runtime API
+
+```ts
+const first = await runtime.sessions.list({ surface: 'acp', limit: 25 });
+const nextCursor = first.at(-1)?.cursor;
+const second = nextCursor
+  ? await runtime.sessions.list({ surface: 'acp', limit: 25, cursor: nextCursor })
+  : [];
+```
+
+The filter also composes with `projectRoot`, `scope`, `includeArchived`, `before`,
+and `tag`. Treat cursors as opaque: do not parse them, compare them to session
+IDs, or manufacture them. An invalid cursor produces an empty page on the narrow
+session API. A page shorter than the requested limit is terminal; a full page
+may continue with its last item's cursor.
+
+The interactive `kodax -r` picker is a consumer of these session semantics, not
+a separate SDK API. Headless hosts should build their own UI on `listSessions()`
+or `runtime.sessions.list()` and resume by the selected full session ID.
+
+---
+
+## 20. Cost-disciplined workflow routing and telemetry (FEATURE_259, v0.7.67)
+
+FEATURE_259 adds a public cost/quality contract without making the authoring LLM
+choose provider-specific model names. The SDK host maps semantic tiers to routes;
+workflow/child briefs request intent.
+
+### Configure tiers and bounded concurrency
+
+```ts
+import { join } from 'node:path';
+import { runKodaX } from '@kodax-ai/kodax/coding';
+
+const workflowRunsBaseDir = join(process.cwd(), '.kodax-host', 'workflow-runs');
+const result = await runKodaX({
+  provider: 'zai-coding',
+  model: 'glm-5.2',
+  agentMode: 'amaw',
+  workflowRunsBaseDir,
+  modelTiers: {
+    fast: { provider: 'deepseek', model: 'deepseek-v4-flash' },
+    deep: { provider: 'zai-coding', model: 'glm-5.2' },
+  },
+  workflow: { maxConcurrency: 3 },
+  events: {
+    onWorkflowAgentDigest: ({ runId, event }) => {
+      if (event.type === 'agent_completed' || event.type === 'agent_unverified'
+        || event.type === 'agent_failed') {
+        console.log(runId, event.data);
+      }
+    },
+  },
+}, 'Review this change using scoped evidence packets.');
+
+console.log(result.lastText);
+```
+
+Tier rules are deliberately small:
+
+- `fast`: mechanical read-only lookup. A write child is ineligible and safely
+  inherits the parent route.
+- `balanced`: ordinary implementation/investigation/review; uses the parent
+  route, so there is no separate `balanced` mapping.
+- `deep`: architecture, adversarial verification, severity calibration, and
+  final synthesis.
+- An unconfigured or selector-shadowed tier inherits the appropriate explicit,
+  specialist, or parent route and records why; it does not silently claim the
+  requested route was applied.
+
+The workflow authoring contract also supports `scopeSummary`, `constraints`,
+`evidenceRefs`, `verification`, `readOnly`, `outputSchema`, and `terseResult`.
+Use those fields to transfer a compact immutable packet instead of asking every
+child to rediscover the same repository context.
+
+### Live route facts
+
+Terminal `WorkflowEvent.data` may include `requestedTier`, `tierOutcome`,
+`providerSource`, `modelSource`, initial/final provider and model,
+`fallbackReason`, `iterations`, `durationMs`, `usage`, and `digestUsage`.
+Treat absent fields as unknown. In particular, KodaX does not fabricate usage
+for external executors that did not report it.
+
+Direct child-dispatch consumers receive the typed `KodaXChildAgentResult.routeFacts`
+surface, including resolved effort and input/cache-read/output/digest token
+breakdown when known. Inline workflow consumers can subscribe to the raw
+`onWorkflowAgentDigest` event as above; GUI progress remains available through
+`onWorkflowProcessEvent` / `runtime.workflows`.
+
+### Durable efficiency report
+
+When `workflowRunsBaseDir` is supplied, every terminal workflow writes:
+
+```text
+<workflowRunsBaseDir>/<runId>/run.json
+<workflowRunsBaseDir>/<runId>/events.jsonl
+<workflowRunsBaseDir>/<runId>/artifacts/*.json
+```
+
+`run.json.efficiencyReport` includes:
+
+- total/input/cache-read/output/digest tokens and wall-clock duration;
+- total starts, child turns, starts by `role/tier`, and primary-review starts;
+- duplicate primary packet reads plus verification/synthesis packet reads;
+- review/fix/re-review waves and structured review quality-gate outcomes;
+- `tokenCoverage.ok` plus missing local task IDs;
+- `excludedExternalTaskIds` for external tasks whose executor reported no usage.
+
+Do not interpret `totalModelTokens: 0` as free execution unless
+`tokenCoverage.ok` is true and the relevant external task IDs are not excluded.
+The report is an audit/optimization artifact; correctness still comes from the
+workflow's structured findings, verification results, and quality gates.
 
 ---
 

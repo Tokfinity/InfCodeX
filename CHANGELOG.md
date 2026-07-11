@@ -60,6 +60,11 @@ All notable changes to this project will be documented in this file.
   aliases are not reused as judge models. Raw reuse, per-call/round/token/cost
   caps, one bounded structured repair, and provider/model concurrency lanes
   prevent runaway panels.
+- **SDK embedder documentation matches the v0.7.67 public surface.** The guide
+  now covers external-agent owner/consumer setup and safety boundaries, Runtime
+  registration/catalog/task services, exact-surface session pagination,
+  run-scoped workflow tiers, live route facts, and durable efficiency reports;
+  the English/Chinese subpath tables reflect all 10 published SDK entries.
 
 ### Fixed
 

@@ -454,14 +454,15 @@ KodaX has two layers that consumers should understand separately:
 
 | Source package | npm subpath | Type | What you get | Example consumer |
 |---|---|---|---|---|
-| `packages/llm`    | `@kodax-ai/kodax/llm`     | Full package | 15-alias LLM abstraction (77 exports) | Standalone LLM clients |
-| `packages/agent`  | `@kodax-ai/kodax/agent`   | Full package | Runner / fan-out / session-lineage / capabilities / tracing (202 exports) | Custom agent frameworks |
+| `packages/llm`    | `@kodax-ai/kodax/llm`     | Full package | 15-alias LLM abstraction (108 exports) | Standalone LLM clients |
+| `packages/agent`  | `@kodax-ai/kodax/agent`   | Full package | Runner / fan-out / external-agent plane / session-lineage / capabilities / tracing (331 exports) | Custom agent frameworks |
 | `packages/agent`  | `@kodax-ai/kodax/skills`  | **Narrow subset** | Skills system only — `SkillRegistry` / `loadFullSkill` / `expandSkillForLLM` / ... (26 exports = pre-v0.7.43 `@kodax-ai/skills` complete API) | Skill loaders, IDE plugins |
-| `packages/agent`  | `@kodax-ai/kodax/mcp`     | **Narrow subset** | MCP only — `McpCapabilityProvider` / `createMcpTransport` / `searchMcpCatalog` / ... (11 exports = pre-v0.7.43 `@kodax-ai/mcp` complete API) | MCP server hosts |
-| `packages/coding` | `@kodax-ai/kodax/coding`  | Full package | Coding agent + 50+ tools + repo-intelligence (342 exports) | Build a Claude Code-shape product |
-| `packages/repl`   | `@kodax-ai/kodax/repl`    | Full package | Ink TUI + permission modes + commands (193 exports) | Terminal-UI consumers |
-| `packages/repl`   | `@kodax-ai/kodax/session` | **Narrow subset** | Session management only — `listSessions` / `loadFullTranscript` / `appendClientNotice` / `forkSession` / `compactSession` / `watchSessions` / ... | IDE plugins and desktop hosts reading session history |
-| `src`             | `@kodax-ai/kodax/runtime` | Host API | Embedded/daemon runtime facade, sessions/runs/events/permissions/catalog/MCP/artifacts/diagnostics, daemon protocol schema | SDK hosts, Space/IDE clients, daemon clients |
+| `packages/agent`  | `@kodax-ai/kodax/mcp`     | **Narrow subset** | MCP only — `McpCapabilityProvider` / `createMcpTransport` / `searchMcpCatalog` / ... (23 exports) | MCP server hosts |
+| `packages/agent`  | `@kodax-ai/kodax/media`   | **Narrow subset** | Structured image/file/video input-artifact helpers (22 exports) | Desktop hosts and multimodal clients |
+| `packages/coding` | `@kodax-ai/kodax/coding`  | Full package | Coding agent + 50+ tools + repo-intelligence (505 exports) | Build a Claude Code-shape product |
+| `packages/repl`   | `@kodax-ai/kodax/repl`    | Full package | Ink TUI + permission modes + commands (217 exports) | Terminal-UI consumers |
+| `packages/repl`   | `@kodax-ai/kodax/session` | **Narrow subset** | Session management only — `listSessions` / `loadFullTranscript` / `appendClientNotice` / `forkSession` / `compactSession` / `watchSessions` / ... (17 exports) | IDE plugins and desktop hosts reading session history |
+| `src`             | `@kodax-ai/kodax/runtime` | Host API | Embedded/Worker/daemon runtime facade, sessions/runs/events/permissions/catalog/MCP/artifacts/diagnostics/external agents, daemon protocol schema (10 exports) | SDK hosts, Space/IDE clients, daemon clients |
 
 **Rule of thumb**: if you need Runner / Agent / fan-out, import from `/agent`. If you only need skills or mcp APIs, import from `/skills` or `/mcp` to get a smaller bundle. The narrow subsets are subsets of the full packages — they do **not** expose extra symbols.
 
@@ -478,6 +479,12 @@ KodaX has two layers that consumers should understand separately:
 **Progressive Disclosure on the Managed Tool Path (FEATURE_250, v0.7.60)**: the deferred-tool progressive-disclosure mechanism — previously SA-path-only — now applies to the AMA/AMAW **managed** path too. Cache-cold managed turns carry one-line search hints instead of full descriptions for the 13 non-mcp deferred tools (repo-intelligence + web/code + goal); each tool's `input_schema` is unchanged, so it stays directly callable and the full description is fetched on demand via `tool_search`. `mcp_*` stay resident and `run_workflow` is untouched. Transparent to users; validated by two 5-alias eval panels (DEFER_SAFE 5/5, 0% read/grep fallback). See [docs/features/v0.7.60.md](docs/features/v0.7.60.md).
 
 **Tool-Output Compression + Workflow Quality Preflight (FEATURE_251 + FEATURE_252, v0.7.61)**: KodaX's own `bash` tool now compresses noisy command output **inside the tool**, so a big `git diff`, test run, package install, or `docker build` no longer spends thousands of context tokens — command-aware filters (git/test/lint/JSON + a declarative package/docker/infra long-tail) summarize the stdout/stderr body while the `Command:`/`Exit:` header stays verbatim and every lossy summary keeps a raw-recovery path; isolated measurements show ~66–99% body-token reduction. Alongside it, inline `run_workflow` gains a deterministic pre-start quality lint that hard-fails weak-model authoring contract bugs (unawaited workflow-command used as a boolean, top-level access of `result.structured` fields, literal agent fanout above manifest/host caps) before a run starts. Both are deterministic (no prompt change). See [docs/features/v0.7.61.md](docs/features/v0.7.61.md) and [docs/ADR.md ADR-050](docs/ADR.md).
+
+**External Agent SDK Plane (FEATURE_258, v0.7.67)**: `/agent` exports the protocol-neutral executor, registration, policy, credential-broker, artifact-policy, catalog, and durable task contracts. `/runtime` exposes the installed plane through `admin.agentRegistrations`, `agents`, and `agentTasks`, with the same DTO service methods over embedded and daemon clients. Executor factories are host functions: install them in an inline owner or while creating a new in-process daemon owner; they cannot be injected through an existing daemon connection or across a Runtime Worker boundary. See the [complete owner/consumer recipes and safety contract](docs/SDK_EMBEDDER_GUIDE.md#18-external-agent-executor-plane-feature_258-v0767).
+
+**Cost-Disciplined Workflow SDK (FEATURE_259, v0.7.67)**: SDK callers configure run-scoped `modelTiers` and `workflow.maxConcurrency`, while workflow authors express semantic `fast` / `balanced` / `deep` intent. Terminal workflow events expose resolved tier/source/fallback/usage/duration facts, and each durable `run.json` contains an `efficiencyReport` with token coverage, role/tier starts, packet-read topology, review waves, and quality-gate outcomes. See the [routing and telemetry contract](docs/SDK_EMBEDDER_GUIDE.md#20-cost-disciplined-workflow-routing-and-telemetry-feature_259-v0767).
+
+**Paged Session Listing (FEATURE_261, v0.7.67)**: both `/session` `listSessions()` and `runtime.sessions.list()` accept an exact `surface` filter and opaque continuation `cursor`; each returned summary carries the cursor for the next page. Filtering happens before the page limit, so a host does not need to over-fetch mixed surfaces. See the [pagination recipes](docs/SDK_EMBEDDER_GUIDE.md#19-session-surface-filtering-and-cursor-pagination-feature_261-v0767).
 
 ---
 
@@ -588,6 +595,7 @@ For smaller surface and tree-shake-friendly imports, the SDK is also exposed via
 import { Runner } from '@kodax-ai/kodax/agent';                // agent runtime
 import { getProvider } from '@kodax-ai/kodax/llm';              // LLM abstraction (15 aliases)
 import { runKodaX } from '@kodax-ai/kodax/coding';              // coding tools + prompts
+import { createImageArtifactFromPath } from '@kodax-ai/kodax/media'; // input artifacts
 import { SkillRegistry } from '@kodax-ai/kodax/skills';         // zero-dep skill loader
 import { loadConfig } from '@kodax-ai/kodax/repl';              // REPL config / session helpers
 import { createMcpManager } from '@kodax-ai/kodax/mcp';         // MCP popout manager (v0.7.42)
@@ -596,6 +604,11 @@ import { createKodaXRuntime } from '@kodax-ai/kodax/runtime';   // embedded/daem
 ```
 
 All 10 SDK entries (root + 9 subpaths) share internal code via ESM chunk splitting — importing from `/agent` does not pull in `/repl`'s Ink + React surface.
+
+For the complete host-facing contract — including embedded/Worker/daemon ownership,
+external-agent registration and task control, session cursor pagination, workflow
+model-tier routing, and efficiency telemetry — see the
+[SDK Embedder Integration Guide](docs/SDK_EMBEDDER_GUIDE.md).
 
 > **ESM-only.** The SDK is published as ES Modules. In a CommonJS context (Electron main process, legacy Webpack CJS bundles, `require()`-based code) you must use `await import(...)` instead of `require()`. See [docs/SDK_EMBEDDER_GUIDE.md §5](docs/SDK_EMBEDDER_GUIDE.md#5-consuming-from-a-commonjs-context-electron-main-cjs-bundles) for the canonical recipe + the technical reason most subpaths cannot ship a dual ESM/CJS build.
 

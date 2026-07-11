@@ -213,9 +213,12 @@ import { SkillRegistry } from '@kodax-ai/kodax/skills';         // 零依赖 ski
 import { loadConfig } from '@kodax-ai/kodax/repl';              // REPL 配置 / session 工具
 import { createMcpManager } from '@kodax-ai/kodax/mcp';         // MCP popout manager（v0.7.42 起）
 import { listSessions } from '@kodax-ai/kodax/session';         // session 历史工具
+import { createKodaXRuntime } from '@kodax-ai/kodax/runtime';   // embedded/Worker/daemon 宿主 API
 ```
 
-9 个 SDK 入口（root + 8 subpath）通过 ESM 共享 chunk 复用底层代码 —— 只 import `/agent` 不会把 `/repl` 的 Ink + React 一起拉进来。
+10 个 SDK 入口（root + 9 subpath）通过 ESM 共享 chunk 复用底层代码 —— 只 import `/agent` 不会把 `/repl` 的 Ink + React 一起拉进来。
+
+完整的宿主集成契约——包括 embedded/Worker/daemon 所有权、外部 Agent 注册与任务控制、session cursor 分页、workflow 模型分层和效率遥测——见 [SDK Embedder Integration Guide](docs/SDK_EMBEDDER_GUIDE.md)。
 
 > **SDK 是 ESM-only**。在 CommonJS 上下文（Electron main 进程、传统 Webpack CJS bundle、`require()` 调用方）必须用 `await import('@kodax-ai/kodax/...')` 代替 `require()`。详见 [docs/SDK_EMBEDDER_GUIDE.md §5](docs/SDK_EMBEDDER_GUIDE.md#5-consuming-from-a-commonjs-context-electron-main-cjs-bundles)，含 Electron main 完整 recipe + 为什么大多数 subpath 物理上无法做 dual ESM/CJS bundle。
 
@@ -543,13 +546,15 @@ KodaX 有两层结构，SDK 用户需要分开理解：
 
 | 源码包 | npm subpath | 类型 | 内容 | 典型消费者 |
 |---|---|---|---|---|
-| `packages/llm`    | `@kodax-ai/kodax/llm`     | 完整包 | 15-alias LLM 抽象 (77 exports) | 独立 LLM 客户端 |
-| `packages/agent`  | `@kodax-ai/kodax/agent`   | 完整包 | Runner / fan-out / session-lineage / capabilities / tracing (202 exports) | 自定义 agent 框架 |
+| `packages/llm`    | `@kodax-ai/kodax/llm`     | 完整包 | 15-alias LLM 抽象 (108 exports) | 独立 LLM 客户端 |
+| `packages/agent`  | `@kodax-ai/kodax/agent`   | 完整包 | Runner / fan-out / 外部 Agent plane / session-lineage / capabilities / tracing (331 exports) | 自定义 agent 框架 |
 | `packages/agent`  | `@kodax-ai/kodax/skills`  | **窄子集** | 仅 Skills 系统 —— `SkillRegistry` / `loadFullSkill` / `expandSkillForLLM` 等 (26 exports = v0.7.43 之前 `@kodax-ai/skills` 完整 API) | Skill 加载器、IDE 插件 |
-| `packages/agent`  | `@kodax-ai/kodax/mcp`     | **窄子集** | 仅 MCP —— `McpCapabilityProvider` / `createMcpTransport` / `searchMcpCatalog` 等 (11 exports = v0.7.43 之前 `@kodax-ai/mcp` 完整 API) | MCP server 宿主 |
-| `packages/coding` | `@kodax-ai/kodax/coding`  | 完整包 | Coding agent + 50+ 工具 + repo-intelligence (342 exports) | 构建 Claude Code 形态产品 |
-| `packages/repl`   | `@kodax-ai/kodax/repl`    | 完整包 | Ink TUI + 权限模式 + 命令系统 (193 exports) | 终端 UI 消费者 |
-| `packages/repl`   | `@kodax-ai/kodax/session` | **窄子集** | 仅会话管理 —— `listSessions` / `loadFullTranscript` / `appendClientNotice` / `forkSession` / `compactSession` / `watchSessions` 等 | 读取 session 历史的 IDE 插件和桌面宿主 |
+| `packages/agent`  | `@kodax-ai/kodax/mcp`     | **窄子集** | 仅 MCP —— `McpCapabilityProvider` / `createMcpTransport` / `searchMcpCatalog` 等 (23 exports) | MCP server 宿主 |
+| `packages/agent`  | `@kodax-ai/kodax/media`   | **窄子集** | 结构化图片/文件/视频输入 artifact helpers (22 exports) | 桌面宿主、多模态客户端 |
+| `packages/coding` | `@kodax-ai/kodax/coding`  | 完整包 | Coding agent + 50+ 工具 + repo-intelligence (505 exports) | 构建 Claude Code 形态产品 |
+| `packages/repl`   | `@kodax-ai/kodax/repl`    | 完整包 | Ink TUI + 权限模式 + 命令系统 (217 exports) | 终端 UI 消费者 |
+| `packages/repl`   | `@kodax-ai/kodax/session` | **窄子集** | 仅会话管理 —— `listSessions` / `loadFullTranscript` / `appendClientNotice` / `forkSession` / `compactSession` / `watchSessions` 等 (17 exports) | 读取 session 历史的 IDE 插件和桌面宿主 |
+| `src`             | `@kodax-ai/kodax/runtime` | 宿主 API | Embedded/Worker/daemon facade，含 sessions/runs/events/permissions/catalog/MCP/artifacts/diagnostics/外部 Agent 和 daemon schema (10 exports) | SDK 宿主、Space/IDE、daemon client |
 
 **经验法则**：需要 Runner / Agent / fan-out 时从 `/agent` 引入；只需要 skills 或 mcp API 时从 `/skills` 或 `/mcp` 引入，bundle 更小。窄子集是完整包的真子集 —— **不会**有额外符号。
 
@@ -558,6 +563,10 @@ KodaX 有两层结构，SDK 用户需要分开理解：
 **宿主读持久化历史（FEATURE_230 + FEATURE_234，v0.7.51；v0.7.63 hardening）**：面向「宿主读持久化状态」的 additive 闭环。**持久化工具记录回放**——resume 的会话现在会回放助手用过的工具卡片，而不是退化成纯文本。`messages` / `lineage` 仍是 canonical；`SessionData.uiHistory` 成为有界、脱敏、仅 terminal 状态的回放缓存。SDK transcript 契约明确化：`loadSession()` = 活动 model context，`loadFullTranscript()` = 带结构化条目的追加序 host scrollback（`message` / `compaction` / `branch_summary` / `rewind_marker` / `client_notice` / `task_result`）并带 clone provenance（`logicalId` / `sourceEntryId`），`uiHistory` = 可选回放缓存，工具卡片始终可从 canonical messages 重建。宿主可用 `appendClientNotice()` 持久化本地 slash 输出且不进入模型上下文；workflow/child 完成结果通过结构化 `taskResults[]` 暴露，不再要求解析 `<task-completed>` 文本。`rewind_marker` 只用于 host scrollback 审计，不进入 model-context messages。**Workflow run 宿主归属**——`WorkflowProcessTrackerOptions` / `WorkflowProcessSnapshot` 新增 host-owned 不透明 `hostMetadata?: Record<string, string>`，SDK 存储、持久化进 `run.json`、回读回显（含进程重启后）但不解释其含义，让宿主零侧表把 run 归回发起它的 session/surface。未 stamp 的旧 run 诚实回显 `hostMetadata === undefined`。详见 [docs/features/v0.7.51.md](docs/features/v0.7.51.md)。
 
 **会话恢复与 ACP 污染修复（FEATURE_261，v0.7.67）**：直接运行 `kodax -r` 会进入可搜索、上下选择、Tab 补全和翻页的交互式会话选择器，并显示当前选中项的完整 session ID；`kodax -r <值>` 优先按完整 ID 恢复，ID 不存在时再按忽略大小写的完整标题匹配。标题唯一则直接恢复，同名标题则进入只包含候选项的选择器，绝不静默选第一条。`listSessions()` / Runtime / daemon 会话列表新增 `surface` 精确过滤和不透明 `cursor` 分页。ACP session 改为收到首个有效 prompt 后才持久化，ACP 测试强制使用临时 runtime home，避免测试记录写入真实 `~/.kodax/sessions`。`kodax -s cleanup-acp` 只预览严格匹配的空 ACP 污染记录；仅显式追加 `--apply-session-cleanup` 时才归档，不做永久删除。
+
+**外部 Agent SDK plane（FEATURE_258，v0.7.67）**：`/agent` 导出协议中立的 executor、registration、policy、credential broker、artifact policy、catalog 和 durable task 契约；`/runtime` 通过 `admin.agentRegistrations`、`agents`、`agentTasks` 向 embedded 与 daemon client 提供同一组 DTO API。Executor factory 是宿主函数，只能装入 inline owner，或在创建新的 in-process daemon owner 时装入；不能通过既有 daemon 连接或 Runtime Worker 边界注入。完整所有权、注册、preflight、启动/等待/继续/取消/对账和安全边界见 [SDK Embedder Guide §18](docs/SDK_EMBEDDER_GUIDE.md#18-external-agent-executor-plane-feature_258-v0767)。
+
+**成本受控 Workflow SDK（FEATURE_259，v0.7.67）**：SDK 调用方用 run-scoped `modelTiers` 与 `workflow.maxConcurrency` 配置路由和并发，workflow 作者只表达 `fast` / `balanced` / `deep` 语义意图。terminal workflow event 回显 tier/source/fallback/usage/duration，持久化 `run.json.efficiencyReport` 给出 token coverage、role/tier 启动数、packet-read 拓扑、review wave 和 quality gate 结果。完整配置与遥测读取方式见 [SDK Embedder Guide §20](docs/SDK_EMBEDDER_GUIDE.md#20-cost-disciplined-workflow-routing-and-telemetry-feature_259-v0767)。
 
 **Inline workflow authoring（FEATURE_246，v0.7.58）**：AMA/AMAW 下 Worker 现在可通过 model-callable 的 `run_workflow` 工具在会话内直接编写并运行工作流——先用自己的工具 scout 代码库，再把具体发现烤进每个 child prompt，然后走**不变的** sandbox + 静态校验 + postcondition 验证流水线。它取代 context-blind 的 `sideQuery` generator 成为主交互路径（generator 仅作为显式 `/workflow create` 命令与无 investigating Worker 的 non-interactive/CI 主机的 fallback 保留）；新增结构化 child 输出（`outputSchema`）、无 barrier 的 `wf.pipeline` 分阶段原语、同会话 resume（`resumeFromRunId`）、嵌套 `wf.workflow(...)`，`/workflow create` 重定向到 Worker 的 scout-then-author；`run_workflow` 为 async / idle-yield，不阻塞当前轮。中立的 run-lifecycle manager（`createWorkflowRunManager`）已移入 `@kodax-ai/kodax/agent` 供非 coding SDK 宿主使用。详见 [docs/features/v0.7.58.md](docs/features/v0.7.58.md) 与 [docs/ADR.md](docs/ADR.md) ADR-044/046/047/048/049。
 
@@ -582,9 +591,9 @@ KodaX/                       # 4 workspace packages(FEATURE_194 v0.7.43)
 │   └── repl/                # @kodax-ai/repl —— Ink TUI
 ├── src/
 │   ├── kodax_cli.ts         # CLI 主入口（bin: `kodax`）
-│   └── sdk-*.ts             # SDK subpath 入口 → @kodax-ai/kodax/{agent,llm,coding,media,repl,skills,mcp,session}
+│   └── sdk-*.ts             # SDK subpath 入口 → @kodax-ai/kodax/{agent,llm,coding,media,repl,skills,mcp,session,runtime}
 ├── scripts/
-│   ├── build-bundle.mjs     # esbuild 单 bundle 多 entry 打包（CLI + root + 8 SDK subpath + chunks）
+│   ├── build-bundle.mjs     # esbuild 单 bundle 多 entry 打包（CLI + root + 9 SDK subpath + chunks）
 │   ├── build-binary.mjs     # Bun --compile 单文件二进制打包
 │   └── release.mjs          # ADR-024 release-time pkg name/exports 注入
 └── .github/workflows/
@@ -678,6 +687,7 @@ KodaX 现在会把 Repo Intelligence 的本地缓存分成内置引擎 profile�
 ## 文档
 
 - [README.md](README.md) - 英文版 README
+- [docs/SDK_EMBEDDER_GUIDE.md](docs/SDK_EMBEDDER_GUIDE.md) - SDK 宿主集成与 v0.7.67 公共 API 契约
 - [docs/release.md](docs/release.md) - 单文件二进制构建与发布流程
 - [docs/PRD.md](docs/PRD.md) - 产品需求
 - [docs/ADR.md](docs/ADR.md) - 架构决策
