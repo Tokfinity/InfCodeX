@@ -15,9 +15,9 @@
 | Current package version | `@kodax-ai/kodax@0.7.66` release commit; GitHub source/binary release included, npm publication pending operator action |
 | Workspace baseline | `llm / agent / coding / repl` 4 packages |
 | Total tracked features | `46` |
-| InProgress | `1` |
+| InProgress | `0` |
 | Planned | `14` |
-| Completed | `31` |
+| Completed | `32` |
 | Tracked feature IDs | `007, 030, 093, 105, 108, 113, 139, 174, 211, 221, 224, 225, 228, 229, 230, 231, 232, 233, 234, 235, 236, 237, 238, 239, 240, 241, 242, 243, 244, 245, 246, 247, 248, 249, 250, 251, 252, 253, 254, 255, 256, 257, 258, 259, 260, 261` |
 | Archive cutoff | Shipped / canceled / absorbed / shelved items through `v0.7.49` are archived. |
 
@@ -161,7 +161,6 @@
 
 | ID | Title | Category | Priority | Planned | Design |
 |---|---|---|---|---|---|
-| `259` | Cost-Disciplined Agent Build Loop + Review Handoff Optimization | Core / Agent Performance + Workflow Quality | High | `v0.7.67` | [v0.7.67](features/v0.7.67.md#feature_259-cost-disciplined-agent-build-loop--review-handoff-optimization) |
 
 Recent completion notes:
 
