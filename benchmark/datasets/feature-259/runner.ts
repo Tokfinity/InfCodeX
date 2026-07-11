@@ -278,7 +278,17 @@ export async function runFeature259Layer2(stage: 'pilot' | 'layer2'): Promise<La
       }>(relativePath);
       const variant = evalCase.variants.find((item) => item.id === variantId);
       if (!saved || saved.caseId !== evalCase.id || saved.contract !== evalCase.contract
-        || JSON.stringify(saved.variant) !== JSON.stringify(variant)) return undefined;
+        || JSON.stringify(saved.variant) !== JSON.stringify(variant)) {
+        await writeRawDump(path.join(stage, 'resume-mismatches', evalCase.id, variantId, alias, `${runIndex}.json`), {
+          found: saved !== undefined,
+          savedCaseId: saved?.caseId,
+          currentCaseId: evalCase.id,
+          contractMatches: saved?.contract === evalCase.contract,
+          savedVariantHash: saved ? hash(JSON.stringify(saved.variant)) : null,
+          currentVariantHash: hash(JSON.stringify(variant)),
+        });
+        return undefined;
+      }
       return saved.rawRun;
     };
     const result = await runBenchmark({
