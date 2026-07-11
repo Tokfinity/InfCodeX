@@ -150,7 +150,7 @@ vi.mock('@kodax-ai/repl', () => ({
   })),
 }));
 
-import { KodaXAcpServer } from './acp_server.js';
+import { KodaXAcpServer, type KodaXAcpServerOptions } from './acp_server.js';
 import { createKodaXRuntime } from './sdk-runtime.js';
 
 type PromptRequestWithEffort = PromptRequest & {
@@ -172,7 +172,17 @@ function lastRunOptions(): Record<string, unknown> {
 }
 
 describe('KodaXAcpServer reasoning effort forwarding', () => {
-  beforeEach(() => {
+  let testHome: string;
+  const testServers = new Set<KodaXAcpServer>();
+
+  function createTestServer(options: KodaXAcpServerOptions): KodaXAcpServer {
+    const server = new KodaXAcpServer({ homeDir: testHome, ...options });
+    testServers.add(server);
+    return server;
+  }
+
+  beforeEach(async () => {
+    testHome = await fs.mkdtemp(path.join(os.tmpdir(), 'kodax-acp-unit-'));
     delete process.env.KODAX_PROVIDER;
     delete process.env.KODAX_EFFORT;
     acpServerState.capturedOptions = [];
@@ -185,7 +195,10 @@ describe('KodaXAcpServer reasoning effort forwarding', () => {
     });
   });
 
-  afterEach(() => {
+  afterEach(async () => {
+    await Promise.all([...testServers].map((server) => server.dispose()));
+    testServers.clear();
+    await fs.rm(testHome, { recursive: true, force: true });
     vi.clearAllMocks();
     if (originalProvider === undefined) delete process.env.KODAX_PROVIDER;
     else process.env.KODAX_PROVIDER = originalProvider;
@@ -209,7 +222,7 @@ describe('KodaXAcpServer reasoning effort forwarding', () => {
   }
 
   it('forwards the configured server effort to runKodaX', async () => {
-    const server = new KodaXAcpServer({ provider: 'openai', effort: 'medium', logLevel: 'off' });
+    const server = createTestServer({ provider: 'openai', effort: 'medium', logLevel: 'off' });
     const sessionId = await createSession(server);
 
     await server.prompt(makePrompt(sessionId));
@@ -224,7 +237,7 @@ describe('KodaXAcpServer reasoning effort forwarding', () => {
       model: 'gpt-configured',
       reasoningMode: 'auto',
     });
-    const server = new KodaXAcpServer({ logLevel: 'off' });
+    const server = createTestServer({ logLevel: 'off' });
     const sessionId = await createSession(server);
 
     await server.prompt(makePrompt(sessionId));
@@ -242,7 +255,7 @@ describe('KodaXAcpServer reasoning effort forwarding', () => {
       model: 'gpt-configured',
       reasoningMode: 'auto',
     });
-    const server = new KodaXAcpServer({ provider: 'anthropic', logLevel: 'off' });
+    const server = createTestServer({ provider: 'anthropic', logLevel: 'off' });
     const sessionId = await createSession(server);
 
     await server.prompt(makePrompt(sessionId));
@@ -259,7 +272,7 @@ describe('KodaXAcpServer reasoning effort forwarding', () => {
       model: 'gpt-configured',
       reasoningMode: 'auto',
     });
-    const server = new KodaXAcpServer({ logLevel: 'off' });
+    const server = createTestServer({ logLevel: 'off' });
     const sessionId = await createSession(server);
 
     await server.prompt(makePrompt(sessionId));
@@ -276,7 +289,7 @@ describe('KodaXAcpServer reasoning effort forwarding', () => {
       effort: 'low',
       reasoningMode: 'auto',
     });
-    const server = new KodaXAcpServer({ logLevel: 'off' });
+    const server = createTestServer({ logLevel: 'off' });
     const sessionId = await createSession(server);
 
     await server.prompt(makePrompt(sessionId));
@@ -292,7 +305,7 @@ describe('KodaXAcpServer reasoning effort forwarding', () => {
       reasoningMode: 'deep',
       effort: 'none',
     });
-    const server = new KodaXAcpServer({ logLevel: 'off' });
+    const server = createTestServer({ logLevel: 'off' });
     const sessionId = await createSession(server);
 
     await server.prompt(makePrompt(sessionId));
@@ -306,7 +319,7 @@ describe('KodaXAcpServer reasoning effort forwarding', () => {
   });
 
   it('lets a prompt effort override the server default', async () => {
-    const server = new KodaXAcpServer({ provider: 'openai', effort: 'medium', logLevel: 'off' });
+    const server = createTestServer({ provider: 'openai', effort: 'medium', logLevel: 'off' });
     const sessionId = await createSession(server);
 
     await server.prompt(makePrompt(sessionId, 'high'));
@@ -316,7 +329,7 @@ describe('KodaXAcpServer reasoning effort forwarding', () => {
   });
 
   it('uses planModeEffort while the ACP session is in plan mode', async () => {
-    const server = new KodaXAcpServer({
+    const server = createTestServer({
       provider: 'openai',
       effort: undefined,
       planModeEffort: 'medium',
@@ -332,7 +345,7 @@ describe('KodaXAcpServer reasoning effort forwarding', () => {
   });
 
   it('keeps explicit server effort ahead of planModeEffort', async () => {
-    const server = new KodaXAcpServer({
+    const server = createTestServer({
       provider: 'openai',
       effort: 'high',
       planModeEffort: 'medium',
@@ -348,7 +361,7 @@ describe('KodaXAcpServer reasoning effort forwarding', () => {
   });
 
   it('lets prompt effort auto clear the server default for one turn', async () => {
-    const server = new KodaXAcpServer({ provider: 'openai', effort: 'medium', logLevel: 'off' });
+    const server = createTestServer({ provider: 'openai', effort: 'medium', logLevel: 'off' });
     const sessionId = await createSession(server);
 
     await server.prompt(makePrompt(sessionId, 'auto'));
@@ -358,7 +371,7 @@ describe('KodaXAcpServer reasoning effort forwarding', () => {
   });
 
   it('rejects invalid prompt effort before calling runKodaX', async () => {
-    const server = new KodaXAcpServer({ provider: 'openai', effort: 'medium', logLevel: 'off' });
+    const server = createTestServer({ provider: 'openai', effort: 'medium', logLevel: 'off' });
     const sessionId = await createSession(server);
 
     await expect(server.prompt(makePrompt(sessionId, '   '))).rejects.toThrow(/Reasoning effort cannot be empty/);
@@ -368,7 +381,11 @@ describe('KodaXAcpServer reasoning effort forwarding', () => {
 
   it('returns cancelled for queued prompts cancelled before coding starts', async () => {
     const tempRoot = await fs.mkdtemp(path.join(os.tmpdir(), 'kodax-acp-runtime-'));
-    const runtime = await createKodaXRuntime({ sessionsDir: tempRoot, defaultProvider: 'openai' });
+    const runtime = await createKodaXRuntime({
+      homeDir: tempRoot,
+      sessionsDir: path.join(tempRoot, 'sessions'),
+      defaultProvider: 'openai',
+    });
     const abortSpies: Array<ReturnType<typeof vi.fn>> = [];
     acpServerState.startKodaX.mockImplementation((options: { session?: { id?: string } }) => {
       acpServerState.capturedOptions.push(options);
@@ -389,7 +406,7 @@ describe('KodaXAcpServer reasoning effort forwarding', () => {
         result: new Promise<never>(() => undefined),
       };
     });
-    const server = new KodaXAcpServer({ runtime, provider: 'openai', logLevel: 'off' });
+    const server = createTestServer({ runtime, provider: 'openai', logLevel: 'off' });
 
     try {
       const sessionId = await createSession(server);

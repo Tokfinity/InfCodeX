@@ -485,6 +485,7 @@ function createSessionParamsSchema(): RuntimeDaemonJsonSchema {
 function sessionSchema(): RuntimeDaemonJsonSchema {
   return objectSchema({
     id: stringSchema,
+    cursor: stringSchema,
     title: stringSchema,
     gitRoot: stringSchema,
     workspaceRoot: stringSchema,
@@ -506,6 +507,8 @@ function sessionFilterSchema(): RuntimeDaemonJsonSchema {
     limit: integerSchema,
     before: stringSchema,
     tag: stringSchema,
+    surface: stringSchema,
+    cursor: stringSchema,
   });
 }
 

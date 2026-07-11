@@ -653,9 +653,20 @@ kodax --session my-project "Summarize it"
 kodax --session my-project "How should I fix the first issue?"
 
 # Session management
-kodax --session list
-kodax --session resume "continue"
+kodax -r                    # Search, page, and select a non-empty session
+kodax -r <session-id>       # Resume a known session directly
+kodax -r "Review runtime"   # Resume a unique exact title; duplicates open the picker
+kodax --session list        # List up to 50 non-empty sessions
+kodax --session cleanup-acp # Preview strictly matched empty ACP-test pollution
 ```
+
+Bare `-r` opens an interactive picker with incremental search, arrow/PageUp/PageDown
+navigation, Tab completion, full selected-session ID display, and Enter-to-resume.
+An explicit value checks the complete session ID first, then an exact
+case-insensitive title; duplicate titles open a narrowed picker instead of
+silently choosing one. Cleanup is preview-only unless
+`--apply-session-cleanup` is also provided; matching sessions are archived rather
+than permanently deleted.
 
 ### Session Patterns
 
@@ -691,7 +702,7 @@ kodax                    Start the interactive REPL
 -h, --help [topic]   Show help or topic help
 -p, --print <text>   Run a single task and exit
 -c, --continue       Continue the most recent conversation in this directory
--r, --resume [id]    Resume a session by ID, or the latest session
+-r, --resume [value] Resume by ID/exact title, or open the searchable picker
 -m, --provider       Provider to use
 --model <name>       Override the model
 --reasoning <mode>   off | auto | quick | balanced | deep

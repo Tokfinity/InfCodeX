@@ -452,6 +452,28 @@ describe('createKodaXRuntime', () => {
     }
   });
 
+  it('filters Runtime sessions by surface and continues with an opaque cursor', async () => {
+    const { createKodaXRuntime } = await import('@kodax-ai/kodax/runtime');
+    const runtime = await createKodaXRuntime({ homeDir: tempRoot });
+    try {
+      await runtime.sessions.create({ title: 'ACP One', surface: 'acp' });
+      await runtime.sessions.create({ title: 'REPL One', surface: 'repl' });
+      await runtime.sessions.create({ title: 'ACP Two', surface: 'acp' });
+      await runtime.sessions.create({ title: 'ACP Three', surface: 'acp' });
+
+      const firstPage = await runtime.sessions.list({ surface: 'acp', limit: 2 });
+      const cursor = firstPage.at(-1)?.cursor;
+      const secondPage = await runtime.sessions.list({ surface: 'acp', limit: 2, cursor });
+      const combined = [...firstPage, ...secondPage];
+
+      expect(cursor).toEqual(expect.any(String));
+      expect(new Set(combined.map((session) => session.id)).size).toBe(3);
+      expect(combined.every((session) => session.surface === 'acp')).toBe(true);
+    } finally {
+      await runtime.close();
+    }
+  });
+
   it('shares Space-style SDK control-plane access across daemon clients', async () => {
     const { connectKodaXRuntime, createKodaXRuntime } = await import('@kodax-ai/kodax/runtime');
     const profile = `space-${randomUUID()}`;

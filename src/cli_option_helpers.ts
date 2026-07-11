@@ -131,6 +131,19 @@ function firstNonEmpty(...values: ReadonlyArray<string | undefined>): string | u
   return undefined;
 }
 
+function normalizeSessionTitle(value: string): string {
+  return value.trim().replace(/\s+/g, ' ').toLocaleLowerCase();
+}
+
+export function findSessionTitleMatches<T extends { readonly title: string }>(
+  sessions: readonly T[],
+  title: string,
+): T[] {
+  const normalizedTitle = normalizeSessionTitle(title);
+  if (!normalizedTitle) return [];
+  return sessions.filter((session) => normalizeSessionTitle(session.title) === normalizedTitle);
+}
+
 export function validateCliModeSelection(
   cliOptions: CliOptions,
   extras: { resumeWithoutId?: boolean } = {},
@@ -147,13 +160,14 @@ export function validateCliModeSelection(
     cliOptions.session === 'list'
     || cliOptions.session === 'delete'
     || cliOptions.session === 'delete-all'
+    || cliOptions.session === 'cleanup-acp'
     || cliOptions.session?.startsWith('delete ')
   ) {
     throw new Error('`--mode json` does not support session management sub-modes.');
   }
 
   if (extras.resumeWithoutId) {
-    throw new Error('`--mode json` requires an explicit session id for `--resume`, or use `--continue`.');
+    throw new Error('`--mode json` requires an explicit session ID or exact title for `--resume`, or use `--continue`.');
   }
 
   if (!cliOptions.prompt?.length) {

@@ -251,6 +251,42 @@ describe('Session Management Public SDK', () => {
     expect(results[0]?.tag).toBe('partner');
   });
 
+  it('listSessions({ surface }) filters before applying the page limit', async () => {
+    await writeMinimalSession(sessionsDir, 'acp-newer', {
+      createdAt: '2026-07-11T03:00:00.000Z',
+      runtimeInfo: { surface: 'acp' },
+    });
+    await writeMinimalSession(sessionsDir, 'repl-middle', {
+      createdAt: '2026-07-11T02:00:00.000Z',
+      runtimeInfo: { surface: 'repl' },
+    });
+    await writeMinimalSession(sessionsDir, 'acp-older', {
+      createdAt: '2026-07-11T01:00:00.000Z',
+      runtimeInfo: { surface: 'acp' },
+    });
+
+    const results = await api.listSessions({ surface: 'acp', limit: 2 });
+
+    expect(results.map((session) => session.id)).toEqual(['acp-newer', 'acp-older']);
+  });
+
+  it('listSessions returns opaque cursors that continue from the last item', async () => {
+    for (let index = 4; index >= 1; index -= 1) {
+      await writeMinimalSession(sessionsDir, `cursor-${index}`, {
+        createdAt: `2026-07-11T0${index}:00:00.000Z`,
+      });
+    }
+
+    const firstPage = await api.listSessions({ scope: 'all', limit: 2 });
+    const cursor = firstPage.at(-1)?.cursor;
+    expect(cursor).toEqual(expect.any(String));
+
+    const secondPage = await api.listSessions({ scope: 'all', limit: 2, cursor });
+
+    expect(firstPage.map((session) => session.id)).toEqual(['cursor-4', 'cursor-3']);
+    expect(secondPage.map((session) => session.id)).toEqual(['cursor-2', 'cursor-1']);
+  });
+
   // ── Test 4: loadSession returns null for missing id ───────────────────────
   it('loadSession returns null for a non-existent session id', async () => {
     const result = await api.loadSession('does-not-exist-xyz');

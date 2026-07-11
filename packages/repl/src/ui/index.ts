@@ -10,12 +10,14 @@ export type { AppHandle } from "./App.js";
 
 // Ink REPL adapter - Ink REPL 适配器
 export { runInkInteractiveMode } from "./InkREPL.js";
+export { runSessionPicker } from "./SessionPicker.js";
 export type {
   InkREPLOptions,
   InkRuntimeRunner,
   InkRuntimeRunnerInput,
   InkRuntimeStatusProvider,
 } from "./InkREPL.js";
+export type { SessionPickerItem } from "./SessionPicker.js";
 
 // CLI event handler - CLI 事件处理器
 export { createCliEvents } from "./cli-events.js";

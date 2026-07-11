@@ -6,6 +6,28 @@ All notable changes to this project will be documented in this file.
 
 ## [Unreleased]
 
+### Added
+
+- **Searchable session resume picker.** Running `kodax -r` without an ID now
+  opens an interactive TUI with incremental search, keyboard selection, title
+  completion, pagination, and the full selected session ID. An explicit value
+  resolves a complete ID first, then a unique exact title; duplicate titles
+  open a narrowed picker rather than silently selecting one.
+- **Session listing filters and cursors.** SessionManager, Runtime SDK, and
+  daemon protocol listings now accept an exact `surface` filter and an opaque
+  continuation `cursor`, applied before the requested page limit.
+
+### Fixed
+
+- **ACP tests no longer pollute real user sessions.** ACP harnesses now use an
+  isolated temporary runtime home and session store, with a guard that rejects
+  paths under the real user home. ACP sessions remain provisional until the
+  first valid prompt instead of persisting an empty `ACP Session` during
+  protocol setup.
+- **Empty ACP pollution can be audited and recovered safely.**
+  `kodax -s cleanup-acp` previews only strict empty ACP matches; explicit
+  `--apply-session-cleanup` archives them reversibly instead of deleting data.
+
 ## [0.7.66] - 2026-07-10
 
 > Scope note: the runtime migration was developed across the v0.7.64-v0.7.66

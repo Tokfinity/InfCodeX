@@ -14,6 +14,7 @@ import {
   resolveCliModelSelection,
   resolveCliProviderSelection,
   resolveCliRuntimeMode,
+  findSessionTitleMatches,
   validateCliModeSelection,
   type CliOptions,
 } from './cli_option_helpers.js';
@@ -61,13 +62,38 @@ describe('validateCliModeSelection', () => {
     ).toThrow('`--mode json` requires a prompt as positional arguments.');
   });
 
+  it('rejects ACP cleanup as a json session-management mode', () => {
+    expect(() =>
+      validateCliModeSelection(
+        createCliOptions({ outputMode: 'json', session: 'cleanup-acp', prompt: [] }),
+      ),
+    ).toThrow('`--mode json` does not support session management sub-modes.');
+  });
+
   it('rejects bare resume in json mode', () => {
     expect(() =>
       validateCliModeSelection(
         createCliOptions({ outputMode: 'json' }),
         { resumeWithoutId: true },
       ),
-    ).toThrow('`--mode json` requires an explicit session id for `--resume`');
+    ).toThrow('`--mode json` requires an explicit session ID or exact title for `--resume`');
+  });
+});
+
+describe('findSessionTitleMatches', () => {
+  const sessions = [
+    { id: 'session-1', title: 'Review Runtime' },
+    { id: 'session-2', title: 'review runtime' },
+    { id: 'session-3', title: 'Fix ACP storage' },
+  ];
+
+  it('matches titles exactly while ignoring case and surrounding whitespace', () => {
+    expect(findSessionTitleMatches(sessions, '  REVIEW RUNTIME  ').map((session) => session.id))
+      .toEqual(['session-1', 'session-2']);
+  });
+
+  it('does not treat a partial title as a direct resume match', () => {
+    expect(findSessionTitleMatches(sessions, 'runtime')).toEqual([]);
   });
 });
 

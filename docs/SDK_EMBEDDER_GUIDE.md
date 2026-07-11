@@ -690,7 +690,19 @@ await runKodaX(
 // ✓ ~/.kodax/sessions/s_my_chat.jsonl now exists after the run.
 
 // Same `storage` instance reads back through SessionManager:
-const recent = await listSessions({ scope: 'user', limit: 50 });
+const recent = await listSessions({
+  scope: 'user',
+  surface: 'acp',
+  limit: 50,
+});
+const nextPage = recent.at(-1)?.cursor
+  ? await listSessions({
+      scope: 'user',
+      surface: 'acp',
+      limit: 50,
+      cursor: recent.at(-1)?.cursor,
+    })
+  : [];
 const replay = await loadSession('s_my_chat');
 const scrollback = await loadFullTranscript('s_my_chat');
 const compacted = await compactSession('s_my_chat', { dryRun: true });
@@ -721,6 +733,11 @@ interface SessionManager {
   storage: FileSessionStorage;     // ← NEW — pass into runKodaX
 }
 ```
+
+`surface` is an exact filter applied before `limit`. Each returned summary may
+include an opaque `cursor`; pass the last summary's cursor back unchanged to
+continue the stable newest-first listing. Callers must not parse or construct
+cursors themselves.
 
 ### Active context vs full transcript vs UI replay
 

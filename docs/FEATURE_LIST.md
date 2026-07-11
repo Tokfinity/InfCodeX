@@ -14,20 +14,20 @@
 | Current released version | `v0.7.66` |
 | Current package version | `@kodax-ai/kodax@0.7.66` release commit; GitHub source/binary release included, npm publication pending operator action |
 | Workspace baseline | `llm / agent / coding / repl` 4 packages |
-| Total tracked features | `44` |
+| Total tracked features | `46` |
 | InProgress | `1` |
-| Planned | `13` |
-| Completed | `30` |
-| Tracked feature IDs | `007, 030, 093, 105, 108, 113, 139, 174, 211, 221, 224, 225, 228, 229, 230, 231, 232, 233, 234, 235, 236, 237, 238, 239, 240, 241, 242, 243, 244, 245, 246, 247, 248, 249, 250, 251, 252, 253, 254, 255, 256, 257, 258, 259` |
+| Planned | `14` |
+| Completed | `31` |
+| Tracked feature IDs | `007, 030, 093, 105, 108, 113, 139, 174, 211, 221, 224, 225, 228, 229, 230, 231, 232, 233, 234, 235, 236, 237, 238, 239, 240, 241, 242, 243, 244, 245, 246, 247, 248, 249, 250, 251, 252, 253, 254, 255, 256, 257, 258, 259, 260, 261` |
 | Archive cutoff | Shipped / canceled / absorbed / shelved items through `v0.7.49` are archived. |
 
 ### 一览表
 
 | Status | Count | Feature IDs | Next checkpoint |
 |---|---:|---|---|
-| Completed | 30 | `258, 253, 254, 255, 256, 257, 228, 251, 252, 250, 248, 249, 247, 246, 245, 243, 242, 241, 233, 240, 239, 224, 221, 174, 211, 237, 229, 230, 234, 236` | `258` implementation complete for v0.7.67; release pending. `253-257` shipped together in v0.7.66 (2026-07-10); `228` shipped v0.7.62 (2026-07-06); `251, 252` shipped v0.7.61 (2026-07-06); `250` shipped v0.7.60 (2026-07-04); `248, 249` shipped v0.7.59 (2026-07-03); `245, 246, 247, 221` released v0.7.58 (2026-07-02); `233, 241, 242, 243` released v0.7.57; `239, 240` released v0.7.56; `224` released v0.7.54; `174, 211, 237` v0.7.53; `229` v0.7.50; `230, 234, 236` v0.7.51 |
+| Completed | 31 | `261, 258, 253, 254, 255, 256, 257, 228, 251, 252, 250, 248, 249, 247, 246, 245, 243, 242, 241, 233, 240, 239, 224, 221, 174, 211, 237, 229, 230, 234, 236` | `261` and `258` implementation complete for v0.7.67; release pending. `253-257` shipped together in v0.7.66 (2026-07-10); `228` shipped v0.7.62 (2026-07-06); `251, 252` shipped v0.7.61 (2026-07-06); `250` shipped v0.7.60 (2026-07-04); `248, 249` shipped v0.7.59 (2026-07-03); `245, 246, 247, 221` released v0.7.58 (2026-07-02); `233, 241, 242, 243` released v0.7.57; `239, 240` released v0.7.56; `224` released v0.7.54; `174, 211, 237` v0.7.53; `229` v0.7.50; `230, 234, 236` v0.7.51 |
 | InProgress | 1 | `259` | `v0.7.67` behavior implementation and Layer-1 gates complete; pre-registered paid Layer-2/Layer-3 decision run still requires authorization and passing evidence |
-| Planned, near-term | 8 | `244, 231, 235, 238, 232, 105, 108, 225` | `v0.7.75` -> `v0.7.100` |
+| Planned, near-term | 9 | `260, 244, 231, 235, 238, 232, 105, 108, 225` | `v0.7.68` -> `v0.7.100` |
 | Planned, v0.8.x | 5 | `007, 030, 093, 113, 139` | `v0.8.5+` |
 
 > v0.7.49 / v0.7.50 workflow split：`FEATURE_217` remains the human-facing workflow mode. Manual testing reopened required UI/UX and reliability deltas inside [v0.7.49](features/v0.7.49.md#13-v0749-completion-delta): bounded live progress with phase index / running 智能体 wording / preserved progress row / elapsed time / completed-child token usage, localized assistant-style launch notes, result-bearing child-agent digests or folded long-report notices, non-`info` agentic transcript, clear separation between `finished/spawned` progress and lifetime `maxAgents` cap, final synthesis, generated final-result contract lint, implicit `tokenBudget` stripping, generated task-command crash hardening, tighter AMAW invocation policy, wait timeout propagation, no default total workflow wall-clock timeout, terminal cleanup for un-awaited children, accurate template read/write metadata, capsule min-version preflight, manual run cleanup controls, and the closed minimal saved-workflow named reuse delta (`/workflow <savedName>` plus `/workflow rerun <runId|savedName>` with help/completion). `FEATURE_229` in v0.7.50 is the platform layer: it standardizes the same process as agent-layer snapshot/events, SDK subscription/polling, Space-style host policy and lifecycle controls, terminal-state helpers, workflow identity/lifecycle controls beyond named reuse (`display name | revise | rename | revision provenance`), REPL-as-consumer rendering, conservative retention, and durable source/provenance/resultSummary persistence; it is not the first implementation of the user-visible UX.
@@ -48,7 +48,7 @@
 | `v0.7.65` | `0` |
 | `v0.7.66` | `0` |
 | `v0.7.67` | `1` |
-| `v0.7.68` | `0` |
+| `v0.7.68` | `1` |
 | `v0.7.69` | `0` |
 | `v0.7.70` | `0` |
 | `v0.7.71` | `0` |
@@ -141,6 +141,19 @@
 > adapters remain separate follow-ups so core KodaX does not acquire protocol
 > SDK dependencies or overstate cancel/recovery semantics. `v0.7.68`-`v0.7.70`
 > remain stabilization slots, and no third feature is planned for `v0.7.67`.
+>
+> **2026-07-11 Memory Agent schedule exception**: at explicit user direction,
+> `FEATURE_260` consumes `v0.7.68`. It extends the released F228 Memory Control
+> Plane with zero-wait proactive recall, bounded Outcome Digests, staged
+> evidence-backed learning, exact cross-session applicability, cache-safe
+> ephemeral reminders, and a thin experimental agent-layer `MemoryAgent` SDK.
+> `v0.7.69`-`v0.7.70` remain stabilization slots.
+>
+> **2026-07-11 emergency session-recovery exception**: `FEATURE_261` is a
+> bounded v0.7.67 corrective enhancement prompted by Issue 149. It replaces
+> bare `-r` auto-resume with a searchable/paged TUI, adds SDK surface/cursor
+> session listing, hides non-resumable zero-message placeholders, and provides
+> preview-first reversible cleanup. It does not consume a new roadmap slot.
 
 ---
 
@@ -151,6 +164,13 @@
 | `259` | Cost-Disciplined Agent Build Loop + Review Handoff Optimization | Core / Agent Performance + Workflow Quality | High | `v0.7.67` | [v0.7.67](features/v0.7.67.md#feature_259-cost-disciplined-agent-build-loop--review-handoff-optimization) |
 
 Recent completion notes:
+
+`261` implementation is complete for `v0.7.67` (release pending): bare `-r`
+opens a searchable keyboard-driven picker with the full selected ID; explicit
+resume is ID-first, then exact-title with duplicate disambiguation; session listing supports exact
+surface filtering and opaque cursor continuation across Embedded/Daemon SDK
+forms; ACP handshake-only sessions remain provisional; and strict cleanup is
+preview-first plus reversible archive.
 
 `258` implementation is complete for `v0.7.67` (release pending): protocol-neutral
 host-injected executors, the policy-filtered catalog, durable task ledger,
@@ -202,6 +222,7 @@ fixed GitHub binary archive sidecar omission before tagging.
 
 | ID | Title | Category | Priority | Planned | Design |
 |---|---|---|---|---|---|
+| `260` | KodaX Memory Agent — Proactive Execution Recall + Scoped Memory Consolidation | Core / Agent Memory + Intelligence | High | `v0.7.68` | [v0.7.68](features/v0.7.68.md#feature_260-kodax-memory-agent--proactive-execution-recall--scoped-memory-consolidation) |
 | `244` | Repo Intelligence Graph-Only Index for Cold Module Queries | Core / Repo Intelligence + Performance | Medium | `v0.7.75` | [v0.7.75](features/v0.7.75.md#feature_244-repo-intelligence-graph-only-index-for-cold-module-queries) |
 | `231` | Durable Workflow Replay Resume (231b crash-recovery, optional) | Core / Workflow Persistence | Low | `v0.7.75` | [v0.7.75](features/v0.7.75.md#feature_231-durable-workflow-replay-resume) |
 | `235` | Draft Workflow — Generate-without-Run / Review-before-Start | Core / Workflow Lifecycle | Medium | `v0.7.75` | [v0.7.75](features/v0.7.75.md#feature_235-draft-workflow--generate-without-run--review-before-start) |
@@ -234,6 +255,7 @@ fixed GitHub binary archive sidecar omission before tagging.
 
 | ID | Title | Released | Design | Notes |
 |---|---|---|---|---|
+| `261` | Searchable Session Resume TUI + Session Listing Pagination | `v0.7.67` (pending release) | [v0.7.67](features/v0.7.67.md#feature_261-searchable-session-resume-tui--session-listing-pagination) | Bare `-r` searchable/paged keyboard picker with full selected ID, deterministic ID-first/exact-title resume and duplicate disambiguation, meaningful ACP titles, Embedded/Daemon `surface` + cursor listing, zero-message suppression, isolated ACP tests, and preview-first reversible ACP pollution cleanup. |
 | `258` | External Agent Executor Plane + Dispatchable Agent Catalog | `v0.7.67` (pending release) | [v0.7.67](features/v0.7.67.md#feature_258-external-agent-executor-plane--dispatchable-agent-catalog) | Protocol-neutral host-injected executor plane, redacted/policy-filtered catalog, durable task ledger, Worker and Workflow routing, Embedded/Daemon parity, public in-process Daemon factory bootstrap, Reference Executor, and security/recovery conformance. |
 | `257` | Constructed Handler Worker Fault Isolation | `v0.7.66` | [v0.7.72](features/v0.7.72.md#feature_257-constructed-handler-worker-fault-isolation) | Delivered ahead of the original v0.7.72 slot. Constructed JavaScript handlers run in persistent per-handler Workers, use reverse host tool RPC, hard-terminate CPU loops, and cannot resurrect active/queued work after revoke. |
 | `256` | Worker-Hosted Embedded Runtime + Hard Disposal | `v0.7.66` | [v0.7.71](features/v0.7.71.md#feature_256-worker-hosted-embedded-runtime--hard-disposal) | Delivered ahead of the original v0.7.71 slot. Adds optional embedded Worker ownership, MessagePort protocol reuse, hard-dispose capability negotiation, DTO-only transport, and release sidecar packaging. |

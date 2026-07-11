@@ -141,6 +141,17 @@ declare global {
 
 let stderrWriteSpy: ReturnType<typeof vi.spyOn>;
 const stderrLines: string[] = [];
+const harnessServers = new Set<KodaXAcpServer>();
+const harnessTempRoots = new Set<string>();
+
+function assertIsolatedAcpTestPath(candidate: string): void {
+  const userStateRoot = path.resolve(os.homedir(), '.kodax');
+  const resolved = path.resolve(candidate);
+  const relative = path.relative(userStateRoot, resolved);
+  if (relative === '' || (!relative.startsWith('..') && !path.isAbsolute(relative))) {
+    throw new Error(`ACP test storage must not use the real user state root: ${resolved}`);
+  }
+}
 
 function createResult(overrides: Partial<Awaited<ReturnType<typeof runKodaXMock>>> = {}) {
   return {
@@ -175,6 +186,13 @@ async function createHarness(options: {
   mcpServers?: McpServer[];
   storage?: FileSessionStorage;
 } = {}) {
+  const runtimeHome = await mkdtemp(path.join(os.tmpdir(), 'kodax-acp-harness-'));
+  harnessTempRoots.add(runtimeHome);
+  const storage = options.storage ?? new FileSessionStorage({
+    sessionsDir: path.join(runtimeHome, '.kodax', 'sessions'),
+  });
+  assertIsolatedAcpTestPath(runtimeHome);
+  assertIsolatedAcpTestPath(storage.getSessionsDir());
   const requestStream = new TransformStream<Uint8Array, Uint8Array>();
   const responseStream = new TransformStream<Uint8Array, Uint8Array>();
   const updates: SessionNotification[] = [];
@@ -191,10 +209,12 @@ async function createHarness(options: {
     provider: 'openai',
     permissionMode: 'accept-edits',
     agentVersion: 'test',
+    homeDir: runtimeHome,
     logLevel: options.logLevel ?? 'off',
     eventSinks: [recordingSink, ...(options.eventSinks ?? [])],
-    ...(options.storage ? { storage: options.storage } : {}),
+    storage,
   });
+  harnessServers.add(server);
   server.attach(requestStream.readable, responseStream.writable);
 
   const client = new ClientSideConnection(
@@ -240,6 +260,8 @@ async function createHarness(options: {
     events,
     permissionRequests,
     sessionId: session.sessionId,
+    storage,
+    runtimeHome,
   };
 }
 
@@ -265,9 +287,13 @@ describe('KodaXAcpServer', () => {
     });
   });
 
-  afterEach(() => {
+  afterEach(async () => {
     stderrWriteSpy.mockRestore();
     delete globalThis.__kodaxAcpExtensionActivations;
+    await Promise.all([...harnessServers].map((server) => server.dispose()));
+    harnessServers.clear();
+    await Promise.all([...harnessTempRoots].map((root) => rm(root, { recursive: true, force: true })));
+    harnessTempRoots.clear();
   });
 
   it('streams assistant and tool events over ACP notifications', async () => {
@@ -335,6 +361,10 @@ describe('KodaXAcpServer', () => {
 
     try {
       expect(storage.getSessionsDir()).toBe(path.resolve(sessionsDir));
+      await harness.client.prompt({
+        sessionId: harness.sessionId,
+        prompt: [{ type: 'text', text: 'Use isolated storage' }],
+      });
       await expect(storage.load(harness.sessionId)).resolves.toMatchObject({
         runtimeInfo: expect.objectContaining({ surface: 'acp' }),
       });
@@ -342,6 +372,22 @@ describe('KodaXAcpServer', () => {
       await harness.server.dispose();
       await rm(sessionsDir, { recursive: true, force: true });
     }
+  });
+
+  it('keeps a new ACP session provisional until the first valid prompt', async () => {
+    const harness = await createHarness();
+
+    await expect(harness.storage.load(harness.sessionId)).resolves.toBeNull();
+
+    await harness.client.prompt({
+      sessionId: harness.sessionId,
+      prompt: [{ type: 'text', text: 'Review session persistence' }],
+    });
+
+    await expect(harness.storage.load(harness.sessionId)).resolves.toMatchObject({
+      title: 'Review session persistence',
+      runtimeInfo: expect.objectContaining({ surface: 'acp' }),
+    });
   });
 
   it('does not activate discovered extensions twice for sessions with client MCP servers', async () => {

@@ -349,10 +349,13 @@ describe('CLI Entry Point', () => {
     expect(source).toContain('kodax -h project');
     expect(source).toContain('/project ...            Project workflow commands');
     expect(source).toContain('Legacy no-op; current CLI already starts a fresh session by default');
-    expect(source).toContain('Resume session by ID (no ID = list recent sessions, then resume the latest)');
+    expect(source).toContain('Resume session by ID or exact title (no value = open searchable session picker)');
+    expect(source).toContain('Multiple sessions have the title');
+    expect(source).not.toContain('list recent sessions, then resume the latest');
     expect(source).toContain('/mode [plan|accept-edits|auto]');
     expect(source).toContain('Backward-compat alias; no effect in non-REPL CLI');
-    expect(source).not.toContain('Pick session to resume');
+    expect(source).toContain('runSessionPicker');
+    expect(source).not.toContain('Auto-select the most recent session for resume');
     expect(source).not.toContain('echo "task" | kodax -p -');
     expect(source).not.toContain('/mode [code|ask]');
     expect(source).not.toContain('Enter interactive mode (auto-resume)');

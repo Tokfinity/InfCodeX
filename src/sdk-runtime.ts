@@ -520,6 +520,8 @@ export interface RuntimeSession {
 }
 
 export interface RuntimeSessionSummary extends RuntimeSession {
+  /** Opaque continuation token accepted by RuntimeSessionFilter.cursor. */
+  readonly cursor?: string;
   readonly msgCount: number;
   readonly tag?: string;
   readonly projectKey?: string;
@@ -535,6 +537,8 @@ export interface RuntimeSessionFilter {
   readonly limit?: number;
   readonly before?: string;
   readonly tag?: string;
+  readonly surface?: string;
+  readonly cursor?: string;
 }
 
 export interface RuntimeForkSessionInput {
@@ -3624,6 +3628,7 @@ function buildSessionRuntimeInfo(
 function toRuntimeSessionSummary(summary: SessionSummary): RuntimeSessionSummary {
   return {
     id: summary.id,
+    ...(summary.cursor !== undefined ? { cursor: summary.cursor } : {}),
     title: summary.title,
     msgCount: summary.msgCount,
     ...(summary.runtimeInfo?.gitRoot ? { gitRoot: summary.runtimeInfo.gitRoot } : {}),

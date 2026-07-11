@@ -170,6 +170,8 @@ export interface KodaXAcpServerOptions {
   eventSinks?: AcpEventSink[];
   agentName?: string;
   agentVersion?: string;
+  /** Base home used by the owned Runtime. Primarily useful for isolated hosts and tests. */
+  homeDir?: string;
   storage?: FileSessionStorage;
   runtime?: KodaXRuntime;
 }
@@ -183,6 +185,8 @@ interface KodaXAcpSessionState {
   mcpServers: McpServer[];
   alwaysAllowTools: string[];
   activeRunIds: Set<string>;
+  /** Created lazily on the first valid prompt so handshake-only sessions stay in memory. */
+  runtimeSessionReady?: Promise<void>;
   contextTokenSnapshot?: KodaXContextTokenSnapshot;
   /** Runtime view used for prompts when client provides per-session MCP servers. */
   extensionRuntime?: AcpPromptExtensionRuntime;
@@ -210,6 +214,11 @@ function normalizeOptionalEffort(
   }
   const normalized = normalizeReasoningEffortValue(value);
   return normalized === 'auto' ? undefined : normalized;
+}
+
+function buildAcpSessionTitle(prompt: string): string {
+  const singleLine = prompt.replace(/\s+/g, ' ').trim();
+  return singleLine.length <= 80 ? singleLine : `${singleLine.slice(0, 77)}...`;
 }
 
 function resolvePromptEffortOverride(params: PromptRequest): AcpPromptEffortOverride {
@@ -531,7 +540,7 @@ export class KodaXAcpServer implements Agent {
     this.runtimeReady = options.runtime
       ? Promise.resolve(options.runtime)
       : createKodaXRuntime({
-          homeDir: os.homedir(),
+          homeDir: options.homeDir ?? os.homedir(),
           sessionsDir: this.storage.getSessionsDir(),
           profile: 'acp',
           defaultProvider: this.provider,
@@ -720,14 +729,6 @@ export class KodaXAcpServer implements Agent {
         : rt;
     }
 
-    const runtime = await this.runtimeReady;
-    await runtime.sessions.create({
-      sessionId,
-      title: 'ACP Session',
-      projectPath: session.cwd,
-      gitRoot: session.cwd,
-      surface: 'acp',
-    });
     this.sessions.set(sessionId, session);
     this.events.emit({
       type: 'session_created',
@@ -803,6 +804,7 @@ export class KodaXAcpServer implements Agent {
           await this.extensionRuntimeReady;
         }
         const runtime = await this.runtimeReady;
+        await this.ensureRuntimeSession(runtime, session, promptText);
         handle = await runtime.runs.start({
           sessionId: session.sessionId,
           prompt: promptText,
@@ -878,6 +880,28 @@ export class KodaXAcpServer implements Agent {
     };
 
     return task();
+  }
+
+  private async ensureRuntimeSession(
+    runtime: KodaXRuntime,
+    session: KodaXAcpSessionState,
+    prompt: string,
+  ): Promise<void> {
+    if (!session.runtimeSessionReady) {
+      session.runtimeSessionReady = runtime.sessions.create({
+        sessionId: session.sessionId,
+        title: buildAcpSessionTitle(prompt),
+        projectPath: session.cwd,
+        gitRoot: session.cwd,
+        surface: 'acp',
+      }).then(() => undefined);
+    }
+    try {
+      await session.runtimeSessionReady;
+    } catch (error) {
+      session.runtimeSessionReady = undefined;
+      throw error;
+    }
   }
 
   async cancel(params: { sessionId: string }): Promise<void> {

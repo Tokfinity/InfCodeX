@@ -68,6 +68,15 @@ describe('runtime daemon protocol schema', () => {
     })).toContain('$.unexpected is not allowed.');
   });
 
+  it('accepts surface and cursor fields for session.list pagination', () => {
+    const schema = RUNTIME_DAEMON_METHOD_SCHEMAS['session.list'].params;
+    expect(validateRuntimeDaemonJsonSchema(schema, {
+      surface: 'acp',
+      cursor: 'opaque-cursor',
+      limit: 20,
+    })).toEqual([]);
+  });
+
   it('publishes and validates the run permission broker wire field', () => {
     const schema = RUNTIME_DAEMON_METHOD_SCHEMAS['run.start'].params;
 

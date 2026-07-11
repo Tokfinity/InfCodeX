@@ -1,6 +1,6 @@
 # Known Issues
 
-_Last Updated: 2026-07-10_
+_Last Updated: 2026-07-11_
 
 ---
 
@@ -14,6 +14,7 @@ _Last Updated: 2026-07-10_
 
 | ID | Priority | Status | Title | Introduced | Fixed | Created | Resolved |
 |----|----------|--------|-------|------------|-------|---------|----------|
+| 149 | High | Resolved | ACP tests persist empty sessions into the real user store | v0.7.66 | v0.7.67 | 2026-07-11 | 2026-07-11 |
 | 148 | High | Resolved | FEATURE_258 外部任务在持久化失败、配置热更新和并发回调下可能失联或状态回退 | v0.7.67 RC | v0.7.67 | 2026-07-10 | 2026-07-10 |
 | 088 | High | Resolved | 消息列表视口布局不稳定 - 底部区域跳动/最后一行被裁剪 | v0.5.29 | v0.5.39 | 2026-03-16 | 2026-03-16 |
 | 087 | Medium | Resolved | 自动补全触发冲突 - @文件路径中/错误触发命令补全 | v0.5.33 | v0.5.33 | 2026-03-13 | 2026-03-13 |
@@ -98,6 +99,75 @@ _Last Updated: 2026-07-10_
 
 ## Issue Details
 <!-- Full details for each issue - REQUIRED for all issues -->
+
+### 149: ACP tests persist empty sessions into the real user store
+
+- **Priority**: High
+- **Status**: **Resolved** (v0.7.67, release pending)
+- **Introduced**: v0.7.66 (`7dc5df52`, 2026-07-09)
+- **Created**: 2026-07-11
+- **Resolved**: 2026-07-11
+- **Fixed**: v0.7.67
+
+#### Original Problem
+
+Running the ACP test suites created batches of empty, user-scope `ACP Session`
+files in the real `~/.kodax/sessions` project bucket. These zero-message records
+polluted KodaX and SDK-consumer history, statistics, and recent-session windows.
+The affected machine accumulated 304 broad title/surface/message matches; 285
+also met the stricter no-lineage/no-artifact/no-extension cleanup predicate.
+
+#### Context
+
+- Affected components: ACP server lifecycle, both ACP test harnesses, Runtime
+  persistence home, session SDK list contract, CLI resume/list UX.
+- Reproduction: run `tests/acp_server.test.ts` from v0.7.66 and inspect the
+  current project's `~/.kodax/sessions` bucket.
+- Expected: protocol handshakes and tests that never submit a prompt leave no
+  durable user session or Runtime run evidence.
+
+#### Root Cause
+
+Commit `7dc5df52` added eager `runtime.sessions.create()` inside ACP
+`newSession()`. The main integration harness did not inject storage; a later
+optional injection covered only one test. The second ACP unit harness used an
+isolated `sessionsDir` in one case but left Runtime persistence on a shared
+home. `dispose()` correctly stopped runs but had no basis to delete already
+persisted empty sessions.
+
+#### Resolution
+
+- ACP sessions remain provisional until the first valid prompt, which creates
+  the Runtime session once and titles it from that prompt.
+- Both ACP suites now use temporary session and Runtime homes; the integration
+  harness fails immediately if a resolved path enters the real user state root.
+- SDK and Runtime listing gained exact `surface` filtering and opaque cursor
+  continuation, including Daemon schema parity.
+- Bare `-r` now opens a searchable/paged TUI; `-s list` omits non-resumable
+  zero-message entries.
+- `-s cleanup-acp` performs a strict preview. The separately confirmed
+  `--apply-session-cleanup` action archives matched records reversibly and is
+  never run automatically.
+
+#### Files Changed
+
+- `src/acp_server.ts`
+- `src/acp_server.test.ts`
+- `tests/acp_server.test.ts`
+- `packages/repl/src/session/public-api.ts`
+- `packages/repl/src/ui/SessionPicker.tsx`
+- `src/sdk-runtime.ts`
+- `src/runtime-daemon/schema.ts`
+- `src/kodax_cli.ts`
+- `src/acp_session_cleanup.ts`
+
+#### Tests Added
+
+- Provisional ACP session persistence and isolated storage/runtime-home guards.
+- Session surface filtering and cursor continuation at public SDK and Runtime layers.
+- Daemon protocol schema coverage for surface/cursor fields.
+- Session picker filtering/paging render contracts and strict cleanup predicate tests.
+- Full ACP integration regression: real-user pollution count remained unchanged.
 
 ### 148: FEATURE_258 外部任务在持久化失败、配置热更新和并发回调下可能失联或状态回退
 
@@ -5016,11 +5086,18 @@ Commit `ef085fc` 把 V1 精简到 V2 时没区分"信息载体"和"脚手架"，
 ---
 
 ## Summary
-- Total: 75 (24 Open, 51 Resolved, 0 Partially Resolved, 0 Won't Fix)
+- Total: 76 (24 Open, 52 Resolved, 0 Partially Resolved, 0 Won't Fix)
 - Highest Priority Open: 091 - 缺少一等公民 MCP / Web Search / Code Search 工具体系 (High)
 - Historical archived issues are maintained in ISSUES_ARCHIVED.md
 
 ## Changelog
+
+### 2026-07-11: Issue 149 added and resolved (v0.7.67 pending)
+
+- Isolated both ACP test harnesses from real user session and Runtime storage.
+- Delayed ACP persistence until the first valid prompt and added reversible,
+  preview-first cleanup for the narrow legacy placeholder shape.
+- Added searchable session resume plus SDK/Daemon surface and cursor pagination.
 
 ### 2026-07-10: Issue 147 added and resolved (v0.7.66)
 

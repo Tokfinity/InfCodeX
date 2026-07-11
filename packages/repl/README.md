@@ -105,8 +105,20 @@ if (!isPermissionMode('default')) {
 const confirmTools = computeConfirmTools('default');
 console.log(confirmTools);
 
-const sessions = await listSessions({ limit: 20, scope: 'user' });
-const first = sessions[0];
+const firstPage = await listSessions({
+  limit: 20,
+  scope: 'user',
+  surface: 'repl',
+});
+const first = firstPage[0];
+const nextPage = firstPage.at(-1)?.cursor
+  ? await listSessions({
+      limit: 20,
+      scope: 'user',
+      surface: 'repl',
+      cursor: firstPage.at(-1)?.cursor,
+    })
+  : [];
 
 if (first) {
   await forkSession(first.id, { title: `${first.title} copy` });

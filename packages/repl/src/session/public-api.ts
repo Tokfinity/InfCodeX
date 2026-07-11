@@ -123,6 +123,8 @@ function sessionMatchesProjectRoot(
 
 export interface SessionSummary {
   readonly id: string;
+  /** Opaque continuation token; pass the last item cursor back to listSessions(). */
+  readonly cursor?: string;
   readonly title: string;
   readonly msgCount: number;
   readonly tag?: string;
@@ -230,6 +232,10 @@ export interface ListSessionsOptions {
   readonly before?: string;
   /** Exact match. Omitted means no tag filter. */
   readonly tag?: string;
+  /** Exact runtime surface match, for example `repl`, `cli`, `acp`, or `partner`. */
+  readonly surface?: string;
+  /** Opaque cursor returned on a previous page's last SessionSummary. */
+  readonly cursor?: string;
 }
 
 export type WatchSessionsCallback = (
@@ -276,6 +282,20 @@ function resolveSessionsDir(override?: string): string {
   return override ?? KODAX_SESSIONS_DIR;
 }
 
+function encodeSessionCursor(sessionId: string): string {
+  return Buffer.from(sessionId, 'utf8').toString('base64url');
+}
+
+function decodeSessionCursor(cursor: string): string | undefined {
+  if (!cursor || cursor.length > 1024) return undefined;
+  try {
+    const sessionId = Buffer.from(cursor, 'base64url').toString('utf8');
+    return sessionId && encodeSessionCursor(sessionId) === cursor ? sessionId : undefined;
+  } catch {
+    return undefined;
+  }
+}
+
 // ── listSessions ─────────────────────────────────────────────────────────────
 
 /**
@@ -312,8 +332,19 @@ async function listSessionsImpl(
     const limit = opts?.limit ?? 50;
     const before = opts?.before ? Date.parse(opts.before) : undefined;
     const tag = opts?.tag;
+    const surface = opts?.surface;
+    const cursorId = opts?.cursor === undefined ? undefined : decodeSessionCursor(opts.cursor);
+    if (opts?.cursor !== undefined && cursorId === undefined) return [];
 
-    if (scope === 'user' && !gitRoot && before === undefined && !includeArchived && tag === undefined) {
+    if (
+      scope === 'user'
+      && !gitRoot
+      && before === undefined
+      && !includeArchived
+      && tag === undefined
+      && surface === undefined
+      && cursorId === undefined
+    ) {
       // Fast path: delegate to storage.list() which already handles the
       // common case (head-read every meta file, sorted newest-first,
       // archived/.archive.jsonl filtered, runtimeInfo + gitRoot
@@ -386,6 +417,7 @@ async function listSessionsImpl(
         const gitRootVal = typeof meta.gitRoot === 'string' ? meta.gitRoot : undefined;
         const ri = runtimeInfo ?? (gitRootVal ? { gitRoot: gitRootVal } : undefined);
         if (!sessionMatchesProjectRoot(ri, gitRootVal, gitRoot)) continue;
+        if (surface !== undefined && ri?.surface !== surface) continue;
 
         const projectKey = deriveProjectKeyFromRoot(ri?.gitRoot ?? ri?.workspaceRoot).key;
 
@@ -419,8 +451,15 @@ async function listSessionsImpl(
       return b.id.localeCompare(a.id);
     });
 
-    return sessions.slice(0, limit).map(({ id, title, msgCount, tag: sessionTag, createdAt, runtimeInfo, projectKey, archived }) => ({
+    const cursorIndex = cursorId === undefined
+      ? -1
+      : sessions.findIndex((session) => session.id === cursorId);
+    if (cursorId !== undefined && cursorIndex < 0) return [];
+    const pageStart = cursorIndex + 1;
+
+    return sessions.slice(pageStart, pageStart + limit).map(({ id, title, msgCount, tag: sessionTag, createdAt, runtimeInfo, projectKey, archived }) => ({
       id,
+      cursor: encodeSessionCursor(id),
       title,
       msgCount,
       ...(sessionTag !== undefined ? { tag: sessionTag } : {}),
@@ -472,6 +511,7 @@ function toSessionSummary(raw: {
   ).key;
   return {
     id: raw.id,
+    cursor: encodeSessionCursor(raw.id),
     title: raw.title,
     msgCount: raw.msgCount,
     ...(raw.tag !== undefined ? { tag: raw.tag } : {}),

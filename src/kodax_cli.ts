@@ -91,11 +91,16 @@ import {
   resolveCliProviderSelection,
   resolveCliReasoningMode,
   resolveCliRuntimeMode,
+  findSessionTitleMatches,
   type CliOutputMode,
   type CliOptions,
   validateCliModeSelection,
 } from './cli_option_helpers.js';
 import { runSkillCreatorTool } from './skill_cli.js';
+import {
+  archiveAcpPollutionCandidates,
+  findAcpPollutionCandidates,
+} from './acp_session_cleanup.js';
 
 // Read the CLI version from the binary build define first, then package.json.
 const packageJsonPath = path.join(path.dirname(fileURLToPath(import.meta.url)), '../package.json');
@@ -142,6 +147,10 @@ import {
   resolveInteractiveSurfacePreference,
   runInteractiveMode,
   runInkInteractiveMode,
+  runSessionPicker,
+  listSessions,
+  loadSession,
+  type SessionPickerItem,
   type SessionDedupeReport,
 } from '@kodax-ai/repl';
 import type { AcpPermissionMode } from './acp_server.js';
@@ -1506,15 +1515,16 @@ const CLI_HELP_TOPICS: Record<string, () => void> = {
     console.log(chalk.dim('  resume work later or switch between different conversations.\n'));
     console.log(chalk.bold('Options:'));
     console.log(chalk.dim('  -c, --continue       ') + 'Continue most recent conversation');
-    console.log(chalk.dim('  -r, --resume [id]    ') + 'Resume session by ID (no ID = list recent sessions, then resume the latest)');
+    console.log(chalk.dim('  -r, --resume [value] ') + 'Resume by ID or exact title (no value = searchable picker)');
     console.log(chalk.dim('  -n, --new            ') + 'Legacy no-op; current CLI already starts a fresh session by default');
     console.log(chalk.dim('  -s, --session <op>   ') + 'Legacy session operations: list, resume, delete <id>, delete-all, or raw session ID');
     console.log(chalk.dim('  --no-session         ') + 'Disable session persistence (print mode only)\n');
     console.log(chalk.bold('Examples:'));
     console.log(chalk.dim('  kodax                      ') + '# Start new session (interactive)');
     console.log(chalk.dim('  kodax -c                   ') + '# Continue recent conversation');
-    console.log(chalk.dim('  kodax -r                   ') + '# List recent sessions, then resume the latest');
+    console.log(chalk.dim('  kodax -r                   ') + '# Search and select a saved session');
     console.log(chalk.dim('  kodax -r 20260219_143052   ') + '# Resume specific session');
+    console.log(chalk.dim('  kodax -r "Review runtime"  ') + '# Resume a unique exact title; duplicates open the picker');
     console.log(chalk.dim('  kodax -s list              ') + '# List all sessions');
     console.log(chalk.dim('  kodax -s delete 20260219   ') + '# Delete a session');
     console.log(chalk.dim('  kodax -p "task" --no-session') + ' # Run without saving\n');
@@ -1641,7 +1651,7 @@ export function configureKodaXRootCommand(program: Command): Command {
     .option('--runtime-mode <mode>', 'Interactive runtime mode: embedded, daemon', parseRuntimeModeOption)
     .option('-c, --continue', 'Continue most recent conversation in current directory')
     .option('-n, --new', 'Legacy no-op; current CLI already starts a fresh session by default')
-    .option('-r, --resume [id]', 'Resume session by ID (no ID = list recent sessions, then resume the latest)')
+    .option('-r, --resume [id-or-title]', 'Resume session by ID or exact title (no value = open searchable session picker)')
     .option('-m, --provider <name>', 'LLM provider')
     .option('--model <name>', 'Model override')
     .option('-t, --thinking', 'Compatibility alias for --reasoning auto')
@@ -1652,6 +1662,7 @@ export function configureKodaXRootCommand(program: Command): Command {
     .option('--repo-intelligence-trace', 'Enable repo intelligence trace metadata/logging')
     .option('-y, --auto', 'Backward-compat alias; no effect in non-REPL CLI')
     .option('-s, --session <op>', 'Legacy session operations: list, resume, delete <id>, delete-all, or raw session ID')
+    .option('--apply-session-cleanup', 'Archive strictly matched empty ACP test sessions (with -s cleanup-acp)')
     .option('--extension <path>', 'Load local extension module (.js/.mjs/.cjs/.ts/.mts/.cts)', collectRepeatedOption, [])
     .option('--no-session', 'Disable session persistence (print mode only)')
     .option('--max-iter <n>', 'Max iterations (default: 200 from coding package)')
@@ -1863,7 +1874,7 @@ function showBasicHelp(): void {
   console.log('  -p, --print TEXT        Print mode: run single task and exit');
   console.log('  --mode json             Emit newline-delimited JSON events to stdout for scripts/CI');
   console.log('  -c, --continue          Continue most recent conversation');
-  console.log('  -r, --resume [id]       Resume session by ID (no ID = list recent sessions, then resume the latest)');
+  console.log('  -r, --resume [value]    Resume by ID or exact title (no value = searchable picker)');
   console.log('  -n, --new               Legacy no-op; current CLI already starts a fresh session by default');
   console.log(`  -m, --provider NAME     LLM provider (${providerNames})`);
   console.log('  --model NAME            Model override for the selected provider');
@@ -1895,10 +1906,42 @@ function showBasicHelp(): void {
   console.log('  kodax -p "quick fix" --reasoning balanced  # Quick task with reasoning');
   console.log('  kodax -c                          # Continue recent conversation');
   console.log('  kodax -c "finish this"            # Continue with new task');
-  console.log('  kodax -r                          # List recent sessions, then resume the latest');
+  console.log('  kodax -r                          # Search and select a saved session');
+  console.log('  kodax -r "Review runtime"         # Resume by unique exact title');
   console.log('  kodax -p "task" --model gpt-5.4   # Override model for a one-off run');
   console.log('  kodax -p "task" --no-session      # Run without saving session');
   console.log('  kodax -h sessions                 # Detailed help on sessions\n');
+}
+
+async function loadResumableSessions(maxSessions = 1000): Promise<SessionPickerItem[]> {
+  const resumable: SessionPickerItem[] = [];
+  let cursor: string | undefined;
+  let scanned = 0;
+  while (scanned < maxSessions) {
+    const limit = Math.min(100, maxSessions - scanned);
+    const page = await listSessions({
+      projectRoot: process.cwd(),
+      scope: 'user',
+      limit,
+      ...(cursor !== undefined ? { cursor } : {}),
+    });
+    if (page.length === 0) break;
+    scanned += page.length;
+    for (const session of page) {
+      if (session.msgCount === 0) continue;
+      resumable.push({
+        id: session.id,
+        title: session.title,
+        msgCount: session.msgCount,
+        ...(session.createdAt !== undefined ? { createdAt: session.createdAt } : {}),
+        ...(session.runtimeInfo?.surface !== undefined ? { surface: session.runtimeInfo.surface } : {}),
+      });
+    }
+    const nextCursor = page.at(-1)?.cursor;
+    if (page.length < limit || !nextCursor || nextCursor === cursor) break;
+    cursor = nextCursor;
+  }
+  return resumable;
 }
 
 async function main() {
@@ -2034,8 +2077,8 @@ _kodax() {
     '--continue[Continue most recent conversation]' \\
     '-n[Start fresh session]' \\
     '--new[Start fresh session]' \\
-    '-r[Resume session by ID]::id:' \\
-    '--resume[Resume session by ID]::id:' \\
+    '-r[Resume session by ID or exact title]::id-or-title:' \\
+    '--resume[Resume session by ID or exact title]::id-or-title:' \\
     '-m[LLM provider]+:provider:($providers)' \\
     '--provider+[LLM provider]:provider:($providers)' \\
     '--model+[Model override]:model:' \\
@@ -2075,7 +2118,7 @@ complete -c kodax -l mode -d 'Output mode' -xa 'json'
 complete -c kodax -l runtime-mode -d 'Interactive runtime mode' -xa 'embedded daemon'
 complete -c kodax -s c -l continue -d 'Continue most recent conversation'
 complete -c kodax -s n -l new -d 'Start fresh session'
-complete -c kodax -s r -l resume -d 'Resume session by ID' -r
+complete -c kodax -s r -l resume -d 'Resume session by ID or exact title' -r
 complete -c kodax -s m -l provider -d 'LLM provider' -xa '${providerNames}'
 complete -c kodax -l model -d 'Model override' -r
 complete -c kodax -s t -l thinking -d 'Enable thinking'
@@ -2821,17 +2864,42 @@ complete -c kodax -l version -d 'Show version'`);
     options.session === 'list'
     || options.session === 'delete'
     || options.session === 'delete-all'
+    || options.session === 'cleanup-acp'
     || options.session?.startsWith('delete ');
 
   if (options.outputMode === 'json' && isLegacySessionManagement) {
     validateCliModeSelection(options, { resumeWithoutId: opts.resume === true });
   }
 
-  // Session list: show all saved sessions.
+  // Session list: show a bounded preview; bare -r provides searchable navigation.
   if (options.session === 'list') {
-    const storage = new FileSessionStorage();
-    const sessions = await storage.list();
-    console.log(sessions.length ? 'Sessions:\n' + sessions.map(s => `  ${s.id} [${s.msgCount}] ${s.title}`).join('\n') : 'No sessions.');
+    const sessions = await loadResumableSessions();
+    const visible = sessions.slice(0, 50);
+    const lines = visible.map((session) => {
+      const surface = session.surface ? ` ${session.surface}` : '';
+      return `  ${session.id} [${session.msgCount}]${surface} ${session.title}`;
+    });
+    if (sessions.length > visible.length) {
+      lines.push(`  ... ${sessions.length - visible.length} more; use \`kodax -r\` to search and page.`);
+    }
+    console.log(lines.length > 0 ? `Sessions:\n${lines.join('\n')}` : 'No resumable sessions.');
+    return;
+  }
+
+  if (options.session === 'cleanup-acp') {
+    const storage = new FileSessionStorage({ cwd: process.cwd() });
+    const candidates = await findAcpPollutionCandidates(storage);
+    console.log(`Matched ${candidates.length} empty ACP placeholder sessions in the current project.`);
+    for (const candidate of candidates.slice(0, 10)) {
+      console.log(`  ${candidate.id}${candidate.createdAt ? ` ${candidate.createdAt}` : ''}`);
+    }
+    if (candidates.length > 10) console.log(`  ... ${candidates.length - 10} more`);
+    if (opts.applySessionCleanup !== true) {
+      console.log('Preview only. Re-run with --apply-session-cleanup to archive these sessions reversibly.');
+      return;
+    }
+    const archived = await archiveAcpPollutionCandidates(storage, candidates);
+    console.log(`Archived ${archived.length} sessions. Use the session SDK unarchive operation to restore one.`);
     return;
   }
 
@@ -2881,6 +2949,44 @@ complete -c kodax -l version -d 'Show version'`);
 
   validateCliModeSelection(options, { resumeWithoutId: opts.resume === true });
 
+  if (opts.resume === true) {
+    const sessions = await loadResumableSessions();
+    if (sessions.length === 0) {
+      console.log(chalk.yellow('No resumable sessions found. Starting a new session...'));
+      options.resume = undefined;
+    } else {
+      const selected = await runSessionPicker(sessions);
+      if (!selected) {
+        console.log(chalk.dim('Session resume cancelled.'));
+        return;
+      }
+      options.resume = selected.id;
+    }
+  } else if (typeof opts.resume === 'string') {
+    const exactIdSession = await loadSession(opts.resume);
+    if (!exactIdSession) {
+      const titleMatches = findSessionTitleMatches(await loadResumableSessions(), opts.resume);
+      if (titleMatches.length === 1) {
+        options.resume = titleMatches[0]!.id;
+      } else if (titleMatches.length > 1) {
+        if (options.outputMode === 'json') {
+          throw new Error(
+            `Multiple sessions have the title "${opts.resume}". Use an exact session ID with --mode json.`,
+          );
+        }
+        console.log(chalk.yellow(
+          `Multiple sessions have the title "${opts.resume}". Choose the intended session:`,
+        ));
+        const selected = await runSessionPicker(titleMatches);
+        if (!selected) {
+          console.log(chalk.dim('Session resume cancelled.'));
+          return;
+        }
+        options.resume = selected.id;
+      }
+    }
+  }
+
   if (selectedRuntimeMode === 'daemon' && dedupedCliExtensions.length > 0) {
     throw new Error(
       'CLI --extension paths cannot cross the daemon process boundary. '
@@ -2916,28 +3022,6 @@ complete -c kodax -l version -d 'Show version'`);
     });
     options.extensionRuntime = extensionRuntime;
     extensionRuntime.activate();
-  }
-
-  // -r / --resume without ID: list sessions, then resume the latest.
-  if (opts.resume === true) {
-    try {
-      const storage = new FileSessionStorage({ cwd: process.cwd() });
-      const sessions = await storage.list();
-      if (sessions.length === 0) {
-        console.log(chalk.yellow('No sessions found. Starting new session...'));
-      } else {
-        console.log(chalk.cyan('Recent sessions:'));
-        sessions.forEach((s, i) => {
-          console.log(`  ${i + 1}. ${s.id} [${s.msgCount} msgs] ${s.title}`);
-        });
-        // Auto-select the most recent session for resume.
-        const selected = sessions[0]!;
-        options.resume = selected.id;
-        console.log(chalk.cyan(`\nResuming session: ${selected.id}`));
-      }
-    } catch (error) {
-      console.log(chalk.yellow('Failed to list sessions. Starting new session...'));
-    }
   }
 
   // Command dispatch for /command-style invocations.
