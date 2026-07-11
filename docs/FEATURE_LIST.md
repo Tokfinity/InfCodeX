@@ -11,8 +11,8 @@
 
 | Item | Value |
 |---|---|
-| Current released version | `v0.7.66` |
-| Current package version | `@kodax-ai/kodax@0.7.66` release commit; GitHub source/binary release included, npm publication pending operator action |
+| Current released version | `v0.7.67` |
+| Current package version | `@kodax-ai/kodax@0.7.67` release commit; GitHub source/binary release included, npm publication pending operator action |
 | Workspace baseline | `llm / agent / coding / repl` 4 packages |
 | Total tracked features | `46` |
 | InProgress | `0` |
@@ -25,7 +25,7 @@
 
 | Status | Count | Feature IDs | Next checkpoint |
 |---|---:|---|---|
-| Completed | 32 | `261, 259, 258, 253, 254, 255, 256, 257, 228, 251, 252, 250, 248, 249, 247, 246, 245, 243, 242, 241, 233, 240, 239, 224, 221, 174, 211, 237, 229, 230, 234, 236` | `261`, `259`, and `258` implementation complete for v0.7.67; release pending. `253-257` shipped together in v0.7.66 (2026-07-10); `228` shipped v0.7.62 (2026-07-06); `251, 252` shipped v0.7.61 (2026-07-06); `250` shipped v0.7.60 (2026-07-04); `248, 249` shipped v0.7.59 (2026-07-03); `245, 246, 247, 221` released v0.7.58 (2026-07-02); `233, 241, 242, 243` released v0.7.57; `239, 240` released v0.7.56; `224` released v0.7.54; `174, 211, 237` v0.7.53; `229` v0.7.50; `230, 234, 236` v0.7.51 |
+| Completed | 32 | `261, 259, 258, 253, 254, 255, 256, 257, 228, 251, 252, 250, 248, 249, 247, 246, 245, 243, 242, 241, 233, 240, 239, 224, 221, 174, 211, 237, 229, 230, 234, 236` | `261`, `259`, and `258` shipped in v0.7.67 (2026-07-11). `253-257` shipped together in v0.7.66 (2026-07-10); `228` shipped v0.7.62 (2026-07-06); `251, 252` shipped v0.7.61 (2026-07-06); `250` shipped v0.7.60 (2026-07-04); `248, 249` shipped v0.7.59 (2026-07-03); `245, 246, 247, 221` released v0.7.58 (2026-07-02); `233, 241, 242, 243` released v0.7.57; `239, 240` released v0.7.56; `224` released v0.7.54; `174, 211, 237` v0.7.53; `229` v0.7.50; `230, 234, 236` v0.7.51 |
 | InProgress | 0 | — | — |
 | Planned, near-term | 9 | `260, 244, 231, 235, 238, 232, 105, 108, 225` | `v0.7.68` -> `v0.7.100` |
 | Planned, v0.8.x | 5 | `007, 030, 093, 113, 139` | `v0.8.5+` |
@@ -47,7 +47,7 @@
 | `v0.7.64` | `0` |
 | `v0.7.65` | `0` |
 | `v0.7.66` | `0` |
-| `v0.7.67` | `1` |
+| `v0.7.67` | `0` |
 | `v0.7.68` | `1` |
 | `v0.7.69` | `0` |
 | `v0.7.70` | `0` |
@@ -164,14 +164,14 @@
 
 Recent completion notes:
 
-`261` implementation is complete for `v0.7.67` (release pending): bare `-r`
+`261` shipped in `v0.7.67`: bare `-r`
 opens a searchable keyboard-driven picker with the full selected ID; explicit
 resume is ID-first, then exact-title with duplicate disambiguation; session listing supports exact
 surface filtering and opaque cursor continuation across Embedded/Daemon SDK
 forms; ACP handshake-only sessions remain provisional; and strict cleanup is
 preview-first plus reversible archive.
 
-`258` implementation is complete for `v0.7.67` (release pending): protocol-neutral
+`258` shipped in `v0.7.67`: protocol-neutral
 host-injected executors, the policy-filtered catalog, durable task ledger,
 Worker/Workflow routing, Embedded/Daemon parity, public in-process Daemon
 factory bootstrap, and Reference Executor conformance are all implemented.
@@ -254,9 +254,9 @@ fixed GitHub binary archive sidecar omission before tagging.
 
 | ID | Title | Released | Design | Notes |
 |---|---|---|---|---|
-| `261` | Searchable Session Resume TUI + Session Listing Pagination | `v0.7.67` (pending release) | [v0.7.67](features/v0.7.67.md#feature_261-searchable-session-resume-tui--session-listing-pagination) | Bare `-r` searchable/paged keyboard picker with full selected ID, deterministic ID-first/exact-title resume and duplicate disambiguation, meaningful ACP titles, Embedded/Daemon `surface` + cursor listing, zero-message suppression, isolated ACP tests, and preview-first reversible ACP pollution cleanup. |
-| `259` | Cost-Disciplined Agent Build Loop + Review Handoff Optimization | `v0.7.67` (pending release) | [v0.7.67](features/v0.7.67.md#feature_259-cost-disciplined-agent-build-loop--review-handoff-optimization) | Layer 1 complete; Layer 2 shows material semantic value with no regression after retiring official Kimi; bounded Layer 3 passes 8/8 proposed vs 6/8 baseline, reduces total tokens 16.9%, standard-review median tokens 57.2%, primary starts 75%, and duplicate packet reads 83.3%. Main-session recommendation: `recommend-ship`. |
-| `258` | External Agent Executor Plane + Dispatchable Agent Catalog | `v0.7.67` (pending release) | [v0.7.67](features/v0.7.67.md#feature_258-external-agent-executor-plane--dispatchable-agent-catalog) | Protocol-neutral host-injected executor plane, redacted/policy-filtered catalog, durable task ledger, Worker and Workflow routing, Embedded/Daemon parity, public in-process Daemon factory bootstrap, Reference Executor, and security/recovery conformance. |
+| `261` | Searchable Session Resume TUI + Session Listing Pagination | `v0.7.67` | [v0.7.67](features/v0.7.67.md#feature_261-searchable-session-resume-tui--session-listing-pagination) | Bare `-r` searchable/paged keyboard picker with full selected ID, deterministic ID-first/exact-title resume and duplicate disambiguation, meaningful ACP titles, Embedded/Daemon `surface` + cursor listing, zero-message suppression, isolated ACP tests, and preview-first reversible ACP pollution cleanup. |
+| `259` | Cost-Disciplined Agent Build Loop + Review Handoff Optimization | `v0.7.67` | [v0.7.67](features/v0.7.67.md#feature_259-cost-disciplined-agent-build-loop--review-handoff-optimization) | Layer 1 complete; Layer 2 shows material semantic value with no regression after retiring official Kimi; bounded Layer 3 passes 8/8 proposed vs 6/8 baseline, reduces total tokens 16.9%, standard-review median tokens 57.2%, primary starts 75%, and duplicate packet reads 83.3%. Main-session recommendation: `recommend-ship`. |
+| `258` | External Agent Executor Plane + Dispatchable Agent Catalog | `v0.7.67` | [v0.7.67](features/v0.7.67.md#feature_258-external-agent-executor-plane--dispatchable-agent-catalog) | Protocol-neutral host-injected executor plane, redacted/policy-filtered catalog, durable task ledger, Worker and Workflow routing, Embedded/Daemon parity, public in-process Daemon factory bootstrap, Reference Executor, and security/recovery conformance. |
 | `257` | Constructed Handler Worker Fault Isolation | `v0.7.66` | [v0.7.72](features/v0.7.72.md#feature_257-constructed-handler-worker-fault-isolation) | Delivered ahead of the original v0.7.72 slot. Constructed JavaScript handlers run in persistent per-handler Workers, use reverse host tool RPC, hard-terminate CPU loops, and cannot resurrect active/queued work after revoke. |
 | `256` | Worker-Hosted Embedded Runtime + Hard Disposal | `v0.7.66` | [v0.7.71](features/v0.7.71.md#feature_256-worker-hosted-embedded-runtime--hard-disposal) | Delivered ahead of the original v0.7.71 slot. Adds optional embedded Worker ownership, MessagePort protocol reuse, hard-dispose capability negotiation, DTO-only transport, and release sidecar packaging. |
 | `255` | KodaX Runtime Daemon + Local Transport | `v0.7.66` | [v0.7.66](features/v0.7.66.md#feature_255-kodax-runtime-daemon--local-transport) | Local named-pipe/Unix-socket daemon, detached ownership, multi-client sessions/runs/events/permissions/config/catalog/artifact/diagnostic services, schema-validated protocol, and CLI/SDK host parity. |

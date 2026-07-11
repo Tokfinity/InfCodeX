@@ -1,6 +1,14 @@
 # KodaX Architecture Decision Records
 
-> Last updated: 2026-07-10
+> Last updated: 2026-07-11
+>
+> **v0.7.67 agent/session addendum:** FEATURE_258 adds the host-injected,
+> protocol-neutral external-agent executor/catalog/task plane across Worker,
+> Workflow, Embedded Runtime, and daemon surfaces. FEATURE_259 keeps the same
+> orchestration layers while adding explicit tier intent, focused briefings,
+> packet-scoped review, fresh verification, and route/cost telemetry. FEATURE_261
+> adds searchable session resume, surface/cursor listing, provisional ACP
+> sessions, and preview-first reversible cleanup.
 >
 > **v0.7.66 runtime addendum:** `@kodax-ai/kodax/runtime` is the ninth SDK
 > subpath and exposes one sessions/runs/events/permissions/config/catalog
@@ -23,7 +31,7 @@
 > **⚠️ Architecture state notice (2026-05-25)**: 早期 ADR (ADR-005/006/007/008 等) 描述 `FEATURE_061/062` Scout-first + Planner/Generator/Evaluator H2 chain 模型，已被 [**ADR-030 claudecode-shape Main Agent + Sidecar Verifier**](#adr-030-claudecode-shape-main-agent--sidecar-verifier-substrate-feature_184-v0745) (FEATURE_184 v0.7.42) 取代。
 > 当前运行时架构：**V2 Worker 单循环 + Sidecar Verifier**。V1 chain (Scout/Planner/Generator/Evaluator) 已于 [ADR-030 §F193 cross-ref](#adr-030-claudecode-shape-main-agent--sidecar-verifier-substrate-feature_184-v0745) FEATURE_193 v0.7.43 全量退役；`emit_handoff` 工具已于 FEATURE_190 v0.7.43 删除。
 > 早期 Scout-first ADR 保留以便 archive 查阅，不反映当前实现。
-> **Current package / SDK state (2026-07-10 / v0.7.66)**: 源码 workspace 为 `llm / agent / coding / repl` 4 包；根 npm 包 `@kodax-ai/kodax` 暴露 9 个 SDK subpath（`/agent`、`/llm`、`/coding`、`/media`、`/repl`、`/skills`、`/mcp`、`/session`、`/runtime`）；LLM registry 有 15 个内置 provider alias（含 `zai-coding`）。当前 Runtime 事实包括 embedded inline、embedded Worker 与本机 daemon 三种 ownership/isolation 形态，共用 versioned protocol、session/run/event/permission/config/catalog surface；small-window 工具 schema 可通过 `tool_search` / `tool_describe` / `tool_call` 渐进披露，最终目标工具只经过一次权限校验。既有事实仍含 inline workflow authoring、profile-gated SDK agent profile、可白标 self-knowledge、effort-first reasoning、内置 repo intelligence、workflow process/durable replay/hostMetadata，以及 FEATURE_250/251/252 的渐进披露、工具输出压缩与 workflow quality lint。
+> **Current package / SDK state (2026-07-11 / v0.7.67)**: 源码 workspace 为 `llm / agent / coding / repl` 4 包；根 npm 包 `@kodax-ai/kodax` 暴露 9 个 SDK subpath（`/agent`、`/llm`、`/coding`、`/media`、`/repl`、`/skills`、`/mcp`、`/session`、`/runtime`）；LLM registry 有 15 个内置 provider alias（含 `zai-coding`）。当前 Runtime 事实包括 embedded inline、embedded Worker 与本机 daemon 三种 ownership/isolation 形态，共用 versioned protocol、session/run/event/permission/config/catalog surface；small-window 工具 schema 可通过 `tool_search` / `tool_describe` / `tool_call` 渐进披露，最终目标工具只经过一次权限校验。既有事实仍含 inline workflow authoring、profile-gated SDK agent profile、可白标 self-knowledge、effort-first reasoning、内置 repo intelligence、workflow process/durable replay/hostMetadata、external-agent executor plane，以及 FEATURE_250/251/252/259 的渐进披露、工具输出压缩、workflow quality lint 与 review handoff optimization。
 >
 > 之前的执行模型注脚（v0.7.42 前）：
 > 这组 ADR 反映 `FEATURE_061/062` 之后的执行模型：

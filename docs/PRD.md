@@ -1,8 +1,8 @@
 # KodaX Product Requirements
 
-> Last updated: 2026-07-10
+> Last updated: 2026-07-11
 >
-> Current release baseline: `@kodax-ai/kodax@0.7.66`
+> Current release baseline: `@kodax-ai/kodax@0.7.67`
 >
 > This document describes the current product. Historical pre-v0.7.43
 > chain/harness designs have been removed from this current PRD because they no

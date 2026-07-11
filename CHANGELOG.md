@@ -6,8 +6,35 @@ All notable changes to this project will be documented in this file.
 
 ## [Unreleased]
 
+## [0.7.67] - 2026-07-11
+
+> Scope note: a stabilization and agent-efficiency release. **FEATURE_258**
+> adds the protocol-neutral external-agent executor plane, **FEATURE_259**
+> makes workflow/review orchestration more focused and cost-disciplined, and
+> the bounded corrective **FEATURE_261** delivers searchable session resume
+> plus safe ACP-session cleanup. GitHub source/binary release work is included;
+> npm publication remains a separate operator step.
+
 ### Added
 
+- **External Agent Executor Plane and dispatchable catalog.** Host-injected
+  executors now share a protocol-neutral registration/catalog/task contract,
+  redacted policy-filtered discovery, durable task ledger, recovery, and a
+  reference executor. Worker tools, Workflow, Embedded Runtime, and daemon
+  clients discover and dispatch the same canonical agent IDs.
+- **External-agent SDK and daemon surfaces.** Runtime sessions expose catalog,
+  start/continue/cancel/reconcile, event, and task-result operations with
+  versioned schemas, configuration revisions, credential-presence checks, and
+  public in-process daemon-factory bootstrap support.
+- **Focused scoped-review workflow.** `/review --workflow` now uses immutable
+  review packets, one primary per scope, an additional authoritative primary
+  only for risk-flagged packets, batched fresh verification for candidate
+  findings, stable finding IDs, capable synthesis, and an audit artifact.
+- **Explicit model-tier intent and route telemetry.** Workflow and substantive
+  child briefs carry focused scope/constraints/evidence/output fields plus
+  explicit `fast` / `balanced` / `deep` intent. Runtime reports the resolved
+  source, fallback, effort, usage, duration, packet-read topology, and token
+  coverage without fabricating missing external usage.
 - **Searchable session resume picker.** Running `kodax -r` without an ID now
   opens an interactive TUI with incremental search, keyboard selection, title
   completion, pagination, and the full selected session ID. An explicit value
@@ -17,8 +44,34 @@ All notable changes to this project will be documented in this file.
   daemon protocol listings now accept an exact `surface` filter and an opaque
   continuation `cursor`, applied before the requested page limit.
 
+### Changed
+
+- **Resident workflow context is smaller and discoverable.** The turn-resident
+  `run_workflow` hint stays below the deferred-tool budget while the full
+  authoring contract remains available through `tool_search`. Recorded
+  workflow-shaped plans start directly instead of being expanded into duplicate
+  todo/dispatch scaffolding.
+- **Review handoffs are structured and conservative.** Positive observations
+  are not findings; missing evidence remains `not-verifiable` rather than being
+  promoted into a defect; unreasoned severity overrides retain the original
+  severity instead of failing the review.
+- **Eval execution is value-driven and bounded.** Main-session evidence review
+  determines whether a candidate has material value over baseline; executor
+  aliases are not reused as judge models. Raw reuse, per-call/round/token/cost
+  caps, one bounded structured repair, and provider/model concurrency lanes
+  prevent runaway panels.
+
 ### Fixed
 
+- **External tasks keep identity and terminal state across failures.** A remote
+  start followed by ledger failure preserves its executor reference as
+  `unknown`; in-flight tasks retain immutable executor bindings across catalog
+  updates; task-level mutation queues prevent late callbacks from overwriting a
+  terminal snapshot; Workflow external waits honor `timeoutMs`.
+- **External task safety and policy boundaries fail closed.** Executor
+  availability, health, capability, concurrency, credential presence,
+  configuration revision, target side effects, and read-only intent are checked
+  before start without exposing secret values.
 - **ACP tests no longer pollute real user sessions.** ACP harnesses now use an
   isolated temporary runtime home and session store, with a guard that rejects
   paths under the real user home. ACP sessions remain provisional until the
@@ -27,6 +80,15 @@ All notable changes to this project will be documented in this file.
 - **Empty ACP pollution can be audited and recovered safely.**
   `kodax -s cleanup-acp` previews only strict empty ACP matches; explicit
   `--apply-session-cleanup` archives them reversibly instead of deleting data.
+
+### Performance
+
+- **Feature 259 controlled comparison validates the review optimization.** The
+  proposed topology passed 8/8 Layer-3 oracle cells versus 6/8 baseline, reduced
+  total model tokens 16.9% and output tokens 49.1%, and on standard reviews
+  reduced median tokens 57.2%, primary starts 75%, and duplicate packet reads
+  83.3%. High-risk multi-area reviews intentionally spend more calls for fresh
+  verification and explicit packet coverage.
 
 ## [0.7.66] - 2026-07-10
 

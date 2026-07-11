@@ -103,7 +103,7 @@ _Last Updated: 2026-07-11_
 ### 149: ACP tests persist empty sessions into the real user store
 
 - **Priority**: High
-- **Status**: **Resolved** (v0.7.67, release pending)
+- **Status**: **Resolved** (v0.7.67)
 - **Introduced**: v0.7.66 (`7dc5df52`, 2026-07-09)
 - **Created**: 2026-07-11
 - **Resolved**: 2026-07-11
@@ -5092,7 +5092,7 @@ Commit `ef085fc` 把 V1 精简到 V2 时没区分"信息载体"和"脚手架"，
 
 ## Changelog
 
-### 2026-07-11: Issue 149 added and resolved (v0.7.67 pending)
+### 2026-07-11: Issue 149 added and resolved (v0.7.67)
 
 - Isolated both ACP test harnesses from real user session and Runtime storage.
 - Delayed ACP persistence until the first valid prompt and added reversible,
