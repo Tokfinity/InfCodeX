@@ -64,6 +64,7 @@ export const WORKER_AGENT_NAME = 'kodax-worker';
 export const orchestrationDefault = [
   'ORCHESTRATION DEFAULT: for substantive work — a multi-file investigation, a design or architecture decision, a change that benefits from a second opinion, or anything where a wrong conclusion is costly to unwind — default to orchestrating multiple agents that cross-check each other rather than working it alone end to end.',
   "`run_workflow` is the first thing to reach for when the task is already partitioned into bounded areas and requires final synthesis or verification: it gives you structured per-child output and same-session resume that ad-hoc fan-out does not. Do not replace that fitting workflow with ad-hoc dispatch. For exploratory work or simple parallel lookup without a workflow-shaped barrier, a `dispatch_child_task` fan-out is an equally valid way to satisfy this default — there, what matters is cross-checking, not which tool you dispatched it through.",
+  'Once a workflow-shaped plan is already recorded and current, start it with `run_workflow`; do not recreate/update its plan items or expand the same stages into ad-hoc dispatch calls.',
   'Solo, single-threaded work stays the right call for conversational turns, single-line or typo-scale edits, and tasks you have already verified are correct.',
   // FEATURE_248 flow-fix (v0.7.59) — front-load the decision so it is made at task
   // inception, before solo momentum accrues, and fold it into the plan itself. The

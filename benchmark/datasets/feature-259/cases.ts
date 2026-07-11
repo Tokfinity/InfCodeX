@@ -33,6 +33,10 @@ const BASELINE_WORKER_REPLACEMENTS = [
     "`run_workflow` is the first thing to reach for when the task is already partitioned into bounded areas and requires final synthesis or verification: it gives you structured per-child output and same-session resume that ad-hoc fan-out does not. Do not replace that fitting workflow with ad-hoc dispatch. For exploratory work or simple parallel lookup without a workflow-shaped barrier, a `dispatch_child_task` fan-out is an equally valid way to satisfy this default — there, what matters is cross-checking, not which tool you dispatched it through.",
     "`run_workflow` is the first thing to reach for when the task's shape fits a bounded workflow: it gives you structured per-child output and same-session resume that ad-hoc fan-out does not. When the task is more exploratory or the fan-out is simple parallel investigation, a `dispatch_child_task` fan-out is an equally valid way to satisfy this default — what matters is that the work gets cross-checked by more than one agent, not which tool you dispatched it through.",
   ],
+  [
+    'Once a workflow-shaped plan is already recorded and current, start it with `run_workflow`; do not recreate/update its plan items or expand the same stages into ad-hoc dispatch calls.',
+    '',
+  ],
   ['PLAN-FIRST CONTRACT:', 'PLAN-FIRST CONTRACT (FEATURE_114 v0.7.36 + FEATURE_170 v0.7.41 + v0.7.42 schema split):'],
   ['- Plan item schema:', '- Plan item schema (v0.7.42, mirrors claudecode V2 `TaskCreate`):'],
   ['PLAN-LIST HYGIENE (staleness + dedup):', 'PLAN-LIST HYGIENE (v0.7.42 — staleness + dedup):'],

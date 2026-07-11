@@ -945,7 +945,7 @@ export function buildWorkflowGenerationUserPrompt(
     'Structured-output example; when a child must return machine-readable fields (e.g. a reviewer panel), declare outputSchema and read the fields off result.structured:',
     'async function run(wf, args) {',
     '  const schema = { type: "object", additionalProperties: false, required: ["findings"], properties: { findings: { type: "array", items: { type: "string" } } } };',
-    '  const reviewer = await wf.runAgent({ name: "reviewer", prompt: String(args.request || ""), readOnly: true, modelHint: "deep", outputSchema: schema, terseResult: true });',
+    '  const reviewer = await wf.runAgent({ name: "reviewer", prompt: String(args.request || ""), scopeSummary: "Review the assigned immutable evidence", constraints: ["return structured findings", "cite evidence"], readOnly: true, modelHint: "deep", outputSchema: schema, terseResult: true });',
     '  const findings = reviewer && reviewer.structured ? reviewer.structured.findings : [];',
     '  const synthesis = await wf.synthesize({ inputs: findings, rubric: "Rank and dedupe the findings." });',
     '  return { synthesis: synthesis.text };',
