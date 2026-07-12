@@ -14,11 +14,12 @@
 | Current released version | `v0.7.67` |
 | Current package version | `@kodax-ai/kodax@0.7.67` release commit; GitHub source/binary release included, npm publication pending operator action |
 | Workspace baseline | `llm / agent / coding / repl` 4 packages |
-| Total tracked features | `47` |
-| InProgress | `0` |
-| Planned | `15` |
+| Total tracked features | `51` |
+| InProgress | `1` |
+| Planned | `11` |
 | Completed | `32` |
-| Tracked feature IDs | `007, 030, 093, 105, 108, 113, 139, 174, 211, 221, 224, 225, 228, 229, 230, 231, 232, 233, 234, 235, 236, 237, 238, 239, 240, 241, 242, 243, 244, 245, 246, 247, 248, 249, 250, 251, 252, 253, 254, 255, 256, 257, 258, 259, 260, 261, 262` |
+| Reviewed out of active roadmap | `7` (`105, 108, 231, 232, 235, 238, 244`) |
+| Tracked feature IDs | `007, 030, 093, 105, 108, 113, 139, 174, 211, 221, 224, 225, 228, 229, 230, 231, 232, 233, 234, 235, 236, 237, 238, 239, 240, 241, 242, 243, 244, 245, 246, 247, 248, 249, 250, 251, 252, 253, 254, 255, 256, 257, 258, 259, 260, 261, 262, 263, 264, 265, 266` |
 | Archive cutoff | Shipped / canceled / absorbed / shelved items through `v0.7.49` are archived. |
 
 ### 一览表
@@ -26,10 +27,11 @@
 | Status | Count | Feature IDs | Next checkpoint |
 |---|---:|---|---|
 | Completed | 32 | `261, 259, 258, 253, 254, 255, 256, 257, 228, 251, 252, 250, 248, 249, 247, 246, 245, 243, 242, 241, 233, 240, 239, 224, 221, 174, 211, 237, 229, 230, 234, 236` | `261`, `259`, and `258` shipped in v0.7.67 (2026-07-11). `253-257` shipped together in v0.7.66 (2026-07-10); `228` shipped v0.7.62 (2026-07-06); `251, 252` shipped v0.7.61 (2026-07-06); `250` shipped v0.7.60 (2026-07-04); `248, 249` shipped v0.7.59 (2026-07-03); `245, 246, 247, 221` released v0.7.58 (2026-07-02); `233, 241, 242, 243` released v0.7.57; `239, 240` released v0.7.56; `224` released v0.7.54; `174, 211, 237` v0.7.53; `229` v0.7.50; `230, 234, 236` v0.7.51 |
-| InProgress | 0 | — | — |
-| Planned, near-term | 9 | `260, 244, 231, 235, 238, 232, 105, 108, 225` | `v0.7.68` -> `v0.7.100` |
+| InProgress | 1 | `225` | Early Classic reverse-video StatusBar cleanup slice delivered; broader current-HEAD cleanup remains. |
+| Planned, near-term | 5 | `260, 266, 263, 264, 265` | `v0.7.68` -> `v0.7.85` |
 | Planned, v0.8.x | 5 | `007, 030, 093, 113, 139` | `v0.8.5+` |
 | Planned, v0.9.x | 1 | `262` | `v0.9.0` |
+| Reviewed out, 2026-07-12 | 7 | `244, 231, 235, 238, 232, 105, 108` | Shelved, deferred, absorbed, or cancelled after the post-v0.7.70 roadmap review. |
 
 > v0.7.49 / v0.7.50 workflow split：`FEATURE_217` remains the human-facing workflow mode. Manual testing reopened required UI/UX and reliability deltas inside [v0.7.49](features/v0.7.49.md#13-v0749-completion-delta): bounded live progress with phase index / running 智能体 wording / preserved progress row / elapsed time / completed-child token usage, localized assistant-style launch notes, result-bearing child-agent digests or folded long-report notices, non-`info` agentic transcript, clear separation between `finished/spawned` progress and lifetime `maxAgents` cap, final synthesis, generated final-result contract lint, implicit `tokenBudget` stripping, generated task-command crash hardening, tighter AMAW invocation policy, wait timeout propagation, no default total workflow wall-clock timeout, terminal cleanup for un-awaited children, accurate template read/write metadata, capsule min-version preflight, manual run cleanup controls, and the closed minimal saved-workflow named reuse delta (`/workflow <savedName>` plus `/workflow rerun <runId|savedName>` with help/completion). `FEATURE_229` in v0.7.50 is the platform layer: it standardizes the same process as agent-layer snapshot/events, SDK subscription/polling, Space-style host policy and lifecycle controls, terminal-state helpers, workflow identity/lifecycle controls beyond named reuse (`display name | revise | rename | revision provenance`), REPL-as-consumer rendering, conservative retention, and durable source/provenance/resultSummary persistence; it is not the first implementation of the user-visible UX.
 
@@ -51,16 +53,16 @@
 | `v0.7.67` | `0` |
 | `v0.7.68` | `1` |
 | `v0.7.69` | `0` |
-| `v0.7.70` | `0` |
+| `v0.7.70` | `1` |
 | `v0.7.71` | `0` |
 | `v0.7.72` | `0` |
 | `v0.7.73` | `0` |
 | `v0.7.74` | `0` |
-| `v0.7.75` | `3` |
+| `v0.7.75` | `1` |
 | `v0.7.80` | `1` |
 | `v0.7.85` | `1` |
-| `v0.7.90` | `1` |
-| `v0.7.95` | `1` |
+| `v0.7.90` | `0` |
+| `v0.7.95` | `0` |
 | `v0.7.100` | `1` |
 | `v0.8.5` | `3` |
 | `v0.8.7` | `1` |
@@ -84,12 +86,15 @@
 > That temporary mapping is retained only as release-cadence history; use the
 > 2026-07-08 cadence update below for every active target.
 >
-> **2026-07-08 runtime cadence update**: `FEATURE_253`, `FEATURE_254`, and
+> **Historical 2026-07-08 runtime cadence update, superseded for future
+> feature assignments by the 2026-07-12 roadmap review below**:
+> `FEATURE_253`, `FEATURE_254`, and
 > `FEATURE_255` reserve `v0.7.64`, `v0.7.65`, and `v0.7.66` for the KodaX
 > runtime migration sprint: embedded runtime contract, host migration/control
 > plane hardening, and local daemon. `v0.7.67`, `v0.7.68`, `v0.7.69`, and
 > `v0.7.70` are reserved as feature-free runtime stabilization / bugfix slots.
-> The previous `FEATURE_244` and `FEATURE_231` reschedule remains: `244` +
+> At that time, the previous `FEATURE_244` and `FEATURE_231` reschedule was:
+> `244` +
 > `231` + `235` -> `v0.7.75`, `238` -> `v0.7.80`, `232` -> `v0.7.85`,
 > `105` -> `v0.7.90`, `108` -> `v0.7.95`, and `225` -> `v0.7.100`. All
 > v0.8.x features remain unchanged.
@@ -141,15 +146,46 @@
 > conditional digest reuse. It adds no orchestration framework, model-price
 > router, or protocol adapter. Concrete A2A, MCP Tasks, and governed HTTP
 > adapters remain separate follow-ups so core KodaX does not acquire protocol
-> SDK dependencies or overstate cancel/recovery semantics. `v0.7.68`-`v0.7.70`
-> remain stabilization slots, and no third feature is planned for `v0.7.67`.
+> SDK dependencies or overstate cancel/recovery semantics. At that point,
+> `v0.7.68`-`v0.7.70` remained stabilization slots, and no third feature was
+> planned for `v0.7.67`.
 >
 > **2026-07-11 Memory Agent schedule exception**: at explicit user direction,
 > `FEATURE_260` consumes `v0.7.68`. It extends the released F228 Memory Control
 > Plane with zero-wait proactive recall, bounded Outcome Digests, staged
 > evidence-backed learning, exact cross-session applicability, cache-safe
 > ephemeral reminders, and a thin experimental agent-layer `MemoryAgent` SDK.
-> `v0.7.69`-`v0.7.70` remain stabilization slots.
+> `v0.7.69`-`v0.7.70` remained stabilization slots until the Learning Center
+> correction recorded below.
+>
+> **2026-07-12 post-v0.7.70 roadmap review**: the active `v0.7.x` roadmap now
+> follows ADR-052. Memory carries facts/preferences/constraints, Skills carry
+> reusable methods, Extensions carry repeated deterministic executable
+> capability, and Workflows remain on-demand execution primitives rather than a
+> learned carrier. `FEATURE_244`, `231`, `235`, `238`, `232`, `105`, and `108`
+> leave the active roadmap. `FEATURE_266` establishes the shared Learning
+> Center/control plane in `v0.7.70`; `FEATURE_263` closes the released F224
+> Skill Loop in `v0.7.75`; `FEATURE_264` adds a trust-gated Extension learning
+> loop in `v0.7.80`; `FEATURE_265` consolidates Hermes-parity work efficiency and
+> coding assurance in `v0.7.85`. `v0.7.90` and `v0.7.95` return to stabilization
+> capacity. `FEATURE_225` remains the bounded final cleanup in `v0.7.100`.
+>
+> **2026-07-12 Learning Center correction**: `FEATURE_266` now consumes
+> `v0.7.70`. It establishes the shared agent-layer Learning Center, Learned
+> Capability Area, durable lifecycle/events/client cursors, human-readable
+> names, Runtime SDK parity, and real Ink/classic notification placement before
+> F263/F264 author capabilities. It does not add a Workflow Loop, Skill
+> reviewer, or Extension generator. The learning sequence is now F260
+> (`v0.7.68`) -> F266 (`v0.7.70`) -> F263 (`v0.7.75`) -> F264 (`v0.7.80`) ->
+> F265 (`v0.7.85`).
+>
+> **2026-07-12 F225 early cleanup slice**: the Classic readline
+> reverse-video StatusBar was proven write-only (`update()` calls with no
+> production `show()`/`toggle()`), internal-only, and independent of the live
+> Ink StatusBar and Runtime SDK. Its module, dead-only tests, allocation,
+> updates, and cleanup calls were removed. The auto-mode guardrail returns to
+> its documented lazy first-use construction. F225 remains InProgress because
+> the broader current-HEAD cleanup is still planned for `v0.7.100`.
 >
 > **2026-07-11 emergency session-recovery exception**: `FEATURE_261` is a
 > bounded v0.7.67 corrective enhancement prompted by Issue 149. It replaces
@@ -171,6 +207,7 @@
 
 | ID | Title | Category | Priority | Planned | Design |
 |---|---|---|---|---|---|
+| `225` | REPL Dead / Legacy Code Cleanup | Internal / Refactor + Tech Debt | Medium | `v0.7.100` | [v0.7.100](features/v0.7.100.md#feature_225-repl-dead--legacy-code-cleanup) |
 
 Recent completion notes:
 
@@ -232,20 +269,30 @@ fixed GitHub binary archive sidecar omission before tagging.
 | ID | Title | Category | Priority | Planned | Design |
 |---|---|---|---|---|---|
 | `260` | KodaX Memory Agent — Proactive Execution Recall + Scoped Memory Consolidation | Core / Agent Memory + Intelligence | High | `v0.7.68` | [v0.7.68](features/v0.7.68.md#feature_260-kodax-memory-agent--proactive-execution-recall--scoped-memory-consolidation) |
-| `244` | Repo Intelligence Graph-Only Index for Cold Module Queries | Core / Repo Intelligence + Performance | Medium | `v0.7.75` | [v0.7.75](features/v0.7.75.md#feature_244-repo-intelligence-graph-only-index-for-cold-module-queries) |
-| `231` | Durable Workflow Replay Resume (231b crash-recovery, optional) | Core / Workflow Persistence | Low | `v0.7.75` | [v0.7.75](features/v0.7.75.md#feature_231-durable-workflow-replay-resume) |
-| `235` | Draft Workflow — Generate-without-Run / Review-before-Start | Core / Workflow Lifecycle | Medium | `v0.7.75` | [v0.7.75](features/v0.7.75.md#feature_235-draft-workflow--generate-without-run--review-before-start) |
-| `238` | Workflow Learning Carrier + Workflow Handoff Inbox | Core / Workflow + Self-Improvement | Medium | `v0.7.80` | [v0.7.80](features/v0.7.80.md#feature_238-workflow-learning-carrier--workflow-handoff-inbox) |
-| `232` | Replay-Aware Workflow Pipeline Primitive | Core / Workflow Scheduling | Medium | `v0.7.85` | [v0.7.85](features/v0.7.85.md#feature_232-replay-aware-workflow-pipeline-primitive) |
-| `105` | Verifiable Advisor Consult Primitive | Internal / Core | High | `v0.7.90` | [v0.7.90](features/v0.7.90.md#feature_105-verifiable-advisor-consult-primitive) |
-| `108` | Session-Driven Reflective Prompt Patcher | Internal / Test Infrastructure | Medium | `v0.7.95` | [v0.7.95](features/v0.7.95.md#feature_108-session-driven-reflective-prompt-patcher) |
-| `225` | REPL Dead / Legacy Code Cleanup | Internal / Refactor + Tech Debt | Medium | `v0.7.100` | [v0.7.100](features/v0.7.100.md#feature_225-repl-dead--legacy-code-cleanup) |
+| `266` | Learning Center + Learned Capability Runtime Control Plane | Core / Agent Learning + Runtime SDK | High | `v0.7.70` | [v0.7.70](features/v0.7.70.md#feature_266-learning-center--learned-capability-runtime-control-plane) |
+| `263` | Evidence-Gated Background Skill Learning Loop | Core / Skills + Self-Improvement | High | `v0.7.75` | [v0.7.75](features/v0.7.75.md#feature_263-evidence-gated-background-skill-learning-loop) |
+| `264` | Evidence-Gated Extension Learning Loop | Core / Extensions + Self-Improvement | High | `v0.7.80` | [v0.7.80](features/v0.7.80.md#feature_264-evidence-gated-extension-learning-loop) |
+| `265` | Work Fast Path + Coding Assurance Budget | Core / Performance + Agent Quality | High | `v0.7.85` | [v0.7.85](features/v0.7.85.md#feature_265-work-fast-path--coding-assurance-budget) |
 | `007` | Theme System Consolidation | Enhancement | Medium | `v0.8.5` | [v0.8.5](features/v0.8.5.md#feature_007-theme-system-consolidation) |
 | `030` | Multi-Surface Delivery | Enhancement | High | `v0.8.5` | [v0.8.5](features/v0.8.5.md#feature_030-multi-surface-delivery) |
 | `093` | Coding and REPL Internal Circular Dependency Decoupling | Internal | Medium | `v0.8.5` | [v0.8.5](features/v0.8.5.md#feature_093-coding-and-repl-internal-circular-dependency-decoupling) |
 | `113` | TodoList JSON / CLI Surface | Enhancement | Medium | `v0.8.7` | [v0.8.7](features/v0.8.7.md#feature_113-todolist-json--cli-surface) |
 | `139` | NotebookEdit Tool | Enhancement / Tool | Low | `v0.8.25` | [v0.8.25](features/v0.8.25.md#feature_139-notebookedit-tool--jupyter-cell-level-crud) |
 | `262` | npm 12 Install-Time Security + Trusted Publishing Migration | Internal / Supply Chain Security | High | `v0.9.0` | [v0.9.0](features/v0.9.0.md#feature_262-npm-12-install-time-security--trusted-publishing-migration) |
+
+---
+
+## 2026-07-12 Reviewed-Out Feature Records
+
+| ID | Previous target | Decision | Design record |
+|---|---|---|---|
+| `244` | `v0.7.75` | Shelved; reopen only through F265's measured cold-module hot-path gate. | [v0.7.75](features/v0.7.75.md#2026-07-12-roadmap-review) |
+| `231` | `v0.7.75` | Cross-process Workflow replay deferred out of active `v0.7.x`. | [v0.7.75](features/v0.7.75.md#2026-07-12-roadmap-review) |
+| `235` | `v0.7.75` | Removed; current approval/save/revise lifecycle is sufficient without a Workflow Loop. | [v0.7.75](features/v0.7.75.md#2026-07-12-roadmap-review) |
+| `238` | `v0.7.80` | Cancelled; Workflow remains execution-only, while Skills/Extensions are learned carriers. | [v0.7.80](features/v0.7.80.md#2026-07-12-roadmap-review) |
+| `232` | `v0.7.85` | Removed as already absorbed by F246 pipeline + same-session reuse. | [v0.7.85](features/v0.7.85.md#2026-07-12-roadmap-review) |
+| `105` | `v0.7.90` | Removed; specialist dispatch and existing judge/Sidecar paths cover concrete need. | [v0.7.90](features/v0.7.90.md#2026-07-12-roadmap-review) |
+| `108` | `v0.7.95` | Removed; local learning belongs in Skills/Extensions and global prompt work stays engineering-led. | [v0.7.95](features/v0.7.95.md#2026-07-12-roadmap-review) |
 
 ---
 
@@ -281,7 +328,7 @@ fixed GitHub binary archive sidecar omission before tagging.
 | `248` | AMAW Mode-Level Orchestration Directive | `v0.7.59` | [v0.7.59](features/v0.7.59.md#feature_248-amaw-mode-level-orchestration-directive) | Released in `v0.7.59` (2026-07-03). AMAW-gated mode-level `ORCHESTRATION DEFAULT` standing directive + PLAN-TIME COMMITMENT flow-fix (prompt-only, narrowed-SHIP: task-inception activation; mid-task re-architecture a documented non-goal). Leak-closed via optional `ManagedRolePromptContext.amawOrchestrationAvailable`. See v0.7.59.md §6/§6.1. |
 | `247` | SDK Agent-Profile Surface (KodaX-Space Partner) | `v0.7.58` | [v0.7.58](features/v0.7.58.md#feature_247-sdk-agent-profile-surface-kodax-space-partner) | Released in `v0.7.58` (2026-07-02). Profile-gated `KodaXAgentProfile` (R1–R9): identity/instruction injection, tool-visibility policy, Sidecar Verifier binding + verdict attribution, `onEffectiveConfig` snapshot, structured profile/runtime metadata across `fork()`, imperative `compactSession()`, session/profile/toolCall attribution, and a `reads-network` side-effect class. Default Coding Agent byte-identical when no profile is set. Built on the concurrent `feature/partner-sdk-support` branch. |
 | `246` | Claude-Code-Parity Workflow (inline authoring + structured output + streaming pipeline + same-session resume; absorbs `232`, parity subset of `231`) | `v0.7.58` | [v0.7.58](features/v0.7.58.md#feature_246-claude-code-parity-workflow--inline-authoring--structured-output--streaming-pipeline--same-session-resume) | Released in `v0.7.58` (2026-07-02). Model-callable `run_workflow` inline authoring (scout-then-author; `sideQuery` generator demoted to headless/SA fallback), structured child output via `outputSchema`, no-barrier `wf.pipeline`, same-session resume via `resumeFromRunId` (content-addressed result cache; `Date.now`/`Math.random` now throw in-sandbox), nested `wf.workflow`, per-agent phase + per-child effort, `/workflow` command intelligence, and mode-distinct SA/AMA/AMAW activation. ADR-044/046/047/048. Neutral run-lifecycle manager lifted to `@kodax-ai/agent`. |
-| `245` | Workflow Generation Robustness + Runtime Partial-Result Salvage | `v0.7.58` | [v0.7.58](features/v0.7.58.md#feature_245-workflow-generation-robustness--runtime-partial-result-salvage) | Released in `v0.7.58` (2026-07-02). Generation-time: static literal-taskId rejection, smoke now asserts taskId/evidenceRefs identity, multi-scenario adversarial smoke, taskId randomization, prompt/repair hardening. Runtime: mid-run failures surface completed children's outputs instead of a bare failure. Eval per ADR-033 is deterministic Layer-1 unit tests (generator prompt is not a FEATURE_104 trigger). Runtime self-repair (replay completed agents) is explicitly deferred to `FEATURE_231`. |
+| `245` | Workflow Generation Robustness + Runtime Partial-Result Salvage | `v0.7.58` | [v0.7.58](features/v0.7.58.md#feature_245-workflow-generation-robustness--runtime-partial-result-salvage) | Released in `v0.7.58` (2026-07-02). Generation-time: static literal-taskId rejection, smoke asserts taskId/evidenceRefs identity, adversarial smoke, taskId randomization, and repair hardening. Runtime: mid-run failures surface completed-child outputs instead of a bare failure. Cross-process replay was once deferred to F231 and was removed from active v0.7.x by the 2026-07-12 review. |
 | `221` | White-Labelable Self-Knowledge Manual | `v0.7.58` | [v0.7.58](features/v0.7.58.md#feature_221-white-labelable-self-knowledge-manual) | Released in `v0.7.58` (2026-07-02). `selfManual.baseTopics` (seed all/none/subset) + `KODAX_UNDERLYING_CAPABILITY_TOPICS` + `MANUAL_REGISTRY` export; `kodax_manual` tool description + self-knowledge routing rule re-branded from `selfManual.productName` (config-path clauses gated to the default product). Extends FEATURE_218; default output byte-identical. |
 | `243` | Built-in Repository Intelligence + Codebase Mastery Parity | `v0.7.57` | [v0.7.57](features/v0.7.57.md#feature_243-built-in-repository-intelligence--codebase-mastery-parity) | Released v0.7.57 (2026-06-28). Replaces external Repointel runtime with built-in full/light repo-intelligence, semantic worker sidecar, `relationship_scan`, repo-explorer agent, and `/repo-intel` controls. |
 | `242` | Lean Review + Project Instructions Bootstrap | `v0.7.57` | [v0.7.57](features/v0.7.57.md#feature_242-lean-review--project-instructions-bootstrap) | Released v0.7.57 (2026-06-28). Adds lean review command path and project instruction bootstrap updates for the current Worker + Sidecar architecture. |

@@ -1,10 +1,8 @@
 /**
  * View-model status-bar tests — FEATURE_092 phase 2b.8 engine-indicator format.
  *
- * Mirrors the readline-surface coverage in
- * `packages/repl/src/interactive/status-bar.test.ts` so both UIs are pinned
- * to the same `Auto[LLM]` / `Auto[RULES]` text format. Drift between the two
- * surfaces is the kind of bug status-bar tests exist to catch.
+ * Pins the live Ink `Auto[LLM]` / `Auto[RULES]` text format. Classic uses
+ * command/startup text surfaces rather than a second cursor-managed StatusBar.
  */
 
 import { describe, expect, it } from "vitest";

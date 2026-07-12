@@ -67,10 +67,9 @@ export function canonicalizePermissionMode(mode: PermissionMode): PermissionMode
  *                                   display name; the deprecation notice
  *                                   surfaces once per session at startup)
  *
- * Single source of truth — both the readline status-bar
- * (`packages/repl/src/interactive/status-bar.ts`) and the Ink view-model
- * (`packages/repl/src/ui/view-models/status-bar.ts`) consume this so the two
- * surfaces never drift on capitalization or short-form choice.
+ * Single source of truth for command output, startup summaries, and the live
+ * Ink status-bar view-model. The former write-only readline StatusBar was
+ * removed; Classic continues to use the same display helper in text surfaces.
  */
 export function permissionModeDisplayName(mode: PermissionMode): string {
   switch (mode) {

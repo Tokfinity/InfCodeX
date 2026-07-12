@@ -3660,3 +3660,148 @@ quality eval is required because Runtime isolation does not alter model context;
 the construction review prompt receives only a factual boundary correction.
 GitHub Actions run `29088957312` proves Node 20/22 builds and tests plus the
 Node 22 Ubuntu Unix-domain-socket daemon gate.
+
+## ADR-052: Learned Capability Carriers — Memory for Facts, Skills for Methods, Extensions for Deterministic Capability, Workflows for Execution
+
+**Status**: Accepted (2026-07-12)
+
+**Context**: F224 introduced one procedural-learning intake with Skill,
+Workflow, memory, reasoning, trace, and discard destinations. Later roadmap
+items proposed a Workflow handoff inbox, draft lifecycle, replay-aware pipeline,
+and crash-resume journal. Meanwhile F246 made Workflows cheap to author on
+demand, F228/F260 established governed memory, and the Extension runtime gained
+trusted tools, commands, Skill paths, agents, capability providers, hooks,
+disposal, discovery, and daemon ownership.
+
+Reviewing the local Hermes source reinforced two principles: keep the agent core
+and model tool surface narrow, and place reusable capability at the edges.
+Hermes uses Skills for learned methods and plugins/toolsets for executable
+capability; its Workflow-like delegation remains an execution mechanism rather
+than a learned artifact lifecycle.
+
+**Decision**:
+
+1. Keep one shared learning evidence/intake plane. Do not create independent
+   Skill, Workflow, Extension, and memory signal collectors.
+2. Route facts, preferences, constraints, and short conditional lessons to the
+   F228/F260 memory plane.
+3. Route reusable judgment, procedures, pitfalls, and verification methods to
+   governed Skill proposals. F263 closes the F224 production loop.
+4. Route repeated deterministic executable operations to governed Extension
+   candidates. F264 owns generation, validation, trust, learned installation,
+   activation, and later formal promotion.
+5. Keep Workflow as an on-demand execution primitive. Users may explicitly
+   save/revise capsules, but KodaX does not automatically learn, promote,
+   rewrite, or activate Workflows in `v0.7.x`.
+6. Preserve existing `workflow_handoff` data/types for compatibility, but add
+   no automatic mutation consumer.
+7. Apply authority follows carrier risk rather than one universal approval
+   rule. Memory uses governed apply. A new agent-owned, low-risk Skill may enter
+   the lower-precedence Learned Area after evidence review with a durable user
+   notice and rollback; protected/formal Skill sources still require explicit
+   review. Generated Extension code requires one explicit Review & Trust action
+   before deterministic testing and learned installation. Formal global
+   promotion always remains explicit.
+8. Learned Skill/Extension changes take effect on a later task/session by
+   default. Never silently change the current stable prompt/tool prefix.
+9. Reuse existing runtime, proposal store, Extension runtime, construction,
+   Worker isolation, trace, and verification surfaces. Add no new workspace
+   package or general self-modification framework.
+
+**Consequences**:
+
+- F231b, F235, F238, and F232 leave the active `v0.7.x` roadmap; the existing
+  Workflow runtime and explicit saved-capsule lifecycle remain supported.
+- F244 is shelved until F265 performance evidence proves a cold module-graph
+  hot path.
+- F105 is removed because specialist dispatch and the existing LLM-judge /
+  Sidecar paths already cover concrete second-opinion use cases.
+- F108 is removed because user/project learning belongs in Skill/Extension
+  carriers; global prompt evolution remains an engineering + eval process.
+- The active learning roadmap becomes F266 Learning Center/control plane, F263
+  Skill Loop, F264 Extension Loop, and F265 work/coding performance and
+  assurance consolidation.
+- KodaX uses tiered autonomy rather than blanket approval or blanket mutation:
+  low-risk learned instructions can become useful quietly and reversibly,
+  executable authority and formal ownership remain user-controlled.
+
+**Reconsideration gates**: A learned Workflow carrier or cross-process Workflow
+replay may return only after at least three real production cases demonstrate a
+gap that on-demand generation, explicit saved capsules, daemon ownership,
+Skills, and Extensions cannot address. A new carrier still requires a distinct
+validation, approval, rollback, and cache policy.
+
+---
+
+## ADR-053: One Learning Center, a Separate Learned Area, and Runtime-Owner Semantics
+
+**Status**: Accepted (2026-07-12)
+
+**Context**: F224 exposes a project Skill-proposal store and `/learn` commands;
+F260 adds Memory Agent evidence; F263 and F264 will close Skill and Extension
+loops. A direct implementation would make each carrier invent its own inbox,
+opaque proposal ID, notification recovery, install location, SDK surface, and
+daemon synchronization. The current terminal UI also has two distinct status
+surfaces: a composed Ink `PromptFooter` whose header right side currently has
+no view-model items, and a dense bottom `StatusBar` carrying agent mode,
+permission, reasoning, optional iteration, session, provider/model, and
+optional context usage. The main Ink path moves liveness to the activity bar
+and does not currently inject the segment builder's optional token usage.
+Classic previously had a separate one-line StatusBar implementation, but
+`runInteractiveMode` constructed and updated it without calling `show()`; the
+write-only path was removed as an early F225 cleanup slice.
+
+**Decision**:
+
+1. F266 establishes one generic Learning Center in `@kodax-ai/agent` before
+   F263/F264 add carrier-specific authoring loops.
+2. Capability lifecycle and notification read state are separate. Lifecycle is
+   shared by the Runtime owner; unread/seen/acknowledged/snoozed cursors are per
+   stable client identity.
+3. User operations use a stable display name and collision-safe slug. Opaque
+   capability/event IDs are internal correlation keys, not the normal UI.
+4. Active agent-created capabilities live under `~/.kodax/learned`. Learned
+   Skills have lower precedence and cannot shadow formal sources. Learned
+   Extension tools are visibly namespaced and deferred; learned Extensions may
+   not register slash commands.
+5. `/learn promote <name> --scope user` performs an explicit, collision-checked
+   ownership transfer into the formal user Skill or Extension catalog.
+6. `@kodax-ai/agent` owns the generic store, events, cursors, Learning Center,
+   Skill governance, learned Skill registry, and neutral action-driver seam.
+   `@kodax-ai/coding` owns coding evidence and Extension generation, checks,
+   testing, installation, and deferred tool exposure. REPL only renders and
+   invokes services.
+7. `src/sdk-runtime.ts` exposes one transport-safe `runtime.learning` facade.
+   Inline, Worker, and daemon modes share its DTOs and behavior. Only the
+   Runtime owner runs learning jobs or writes learned records.
+8. State transition is persisted before its durable event, and the event is
+   persisted before client emission. Reconnect/startup recomputes unread state;
+   session transcript notices are optional mirrors, not source of truth.
+9. Ink appends one compact non-zero Learning segment to the real bottom
+   StatusBar, renders state changes in `NotificationsSurface`, and opens the
+   center through the existing dialog/overlay path. It does not create a new
+   persistent footer-header row. Classic/headless uses `/status`, `/learn`,
+   startup recovery, and text/events; Learning does not recreate the removed
+   Classic StatusBar. Restoring it requires separate user evidence and
+   terminal-compatibility proof.
+10. No independent Workflow Loop, Workflow controller, second learning store,
+    new workspace package, or generic state-machine framework is introduced.
+
+**Consequences**:
+
+- F266 occupies v0.7.70 and becomes a dependency of F263/F264.
+- A daemon may continue background review/testing after all UI clients detach;
+  embedded modes recover persisted queued state on the next owner start.
+- Users can distinguish a learned capability from fresh LLM reasoning without
+  approving every low-risk Skill or being interrupted for mere opportunities.
+- Learned capabilities are immediately useful at bounded authority while
+  formal global directories remain an explicit statement of user ownership.
+- HLD/DD remain current-release documents and will describe this control plane
+  as current architecture only after F266 ships; the planned contract lives in
+  the version feature design meanwhile.
+
+**Reconsideration gates**: A second center/store or carrier-specific protocol is
+allowed only if at least three concrete host requirements cannot be expressed
+through the shared lifecycle and action-driver seam. Learned Extension slash
+commands or broader generated registration APIs require a separate security
+and discoverability review.

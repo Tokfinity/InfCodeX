@@ -26,7 +26,6 @@ import {
   KodaXRateLimitError,
   KodaXProviderError,
   KODAX_DEFAULT_PROVIDER,
-  getCustomProvider,
   buildGoalRuntimeBinding,
   decideWorkflowInvocation,
   workflowStartOutcomeConsumesTurn,
@@ -69,15 +68,12 @@ import { replBashPathSignalCollector } from '../permission/repl-bash-signals.js'
 import {
   getGitRoot,
   prepareRuntimeConfig,
-  getProviderModel,
   getProviderAvailableModels,
   KODAX_VERSION,
-  formatReasoningEffortStatusLabel,
   resolveRuntimeEffortSelection,
   resolveRuntimeModelSelection,
   resolveRuntimeProviderSelection,
   resolveInitialEffortOverride,
-  resolvePermissionModeEffort,
   resolveProviderReasoningRuntimeEffort,
 } from '../common/utils.js';
 import {
@@ -105,12 +101,6 @@ import {
   confirmToolExecution,
   getTerminalWidth,
 } from './prompts.js';
-import {
-  StatusBar,
-  createStatusBarState,
-  supportsStatusBar,
-  formatTokenCount,
-} from './status-bar.js';
 import {
   createCompleter,
   getCompletionSuggestions,
@@ -528,9 +518,6 @@ export async function runInteractiveMode(options: RepLOptions): Promise<void> {
   let currentPermissionMode: PermissionMode = initialPermissionMode;
   let alwaysAllowTools: string[] = loadAlwaysAllowTools();
 
-  const resolveCurrentEffort = (): string | undefined =>
-    resolvePermissionModeEffort(currentConfig);
-
   const resolveCurrentRuntimeEffort = (override?: {
     provider?: string;
     model?: string;
@@ -546,22 +533,6 @@ export async function runInteractiveMode(options: RepLOptions): Promise<void> {
       thinking: currentConfig.thinking,
       reasoningMode: currentConfig.reasoningMode,
     });
-
-  const formatCurrentReasoningEffortLabel = (override?: {
-    provider?: string;
-    model?: string;
-    permissionMode?: PermissionMode;
-  }): string => {
-    const effortResolution = resolveCurrentRuntimeEffort(override);
-    return formatReasoningEffortStatusLabel({
-      provider: override?.provider ?? currentConfig.provider,
-      model: override?.model ?? currentConfig.model,
-      effort: effortResolution.configuredEffort,
-      effortOverride: currentConfig.effortOverride,
-      thinking: currentConfig.thinking,
-      reasoningMode: currentConfig.reasoningMode,
-    });
-  };
 
   // Esc+Esc edit state - Esc+Esc 编辑状态
   let lastEscTime = 0;
@@ -674,15 +645,6 @@ export async function runInteractiveMode(options: RepLOptions): Promise<void> {
       if (level === 'warn') console.log(chalk.yellow(msg));
       else console.log(chalk.dim(msg));
     },
-    // FEATURE_092 phase 2b.8: refresh the readline status bar engine
-    // indicator on automatic downgrades (denial threshold / circuit breaker)
-    // so the user sees `auto[RULES]` immediately after the guardrail flips
-    // — without waiting for the next mode toggle.
-    onEngineChange: (engine) => {
-      if (isAutoMode(currentPermissionMode)) {
-        statusBar?.update({ autoModeEngine: engine });
-      }
-    },
     // FEATURE_158: inject the REPL-side path-aware bash signal collector.
     extraCollectors: [replBashPathSignalCollector],
   });
@@ -696,32 +658,6 @@ export async function runInteractiveMode(options: RepLOptions): Promise<void> {
     getProvider: () => resolveProvider(currentConfig.provider),
     getModel: () => currentConfig.model ?? '',
   });
-
-  // Initialize status bar (if terminal supports) - 初始化状态栏 (如果终端支持)
-  const effectiveModel = currentConfig.model ?? getProviderModel(currentConfig.provider) ?? currentConfig.provider;
-  let statusBar: StatusBar | null = null;
-  if (supportsStatusBar()) {
-    statusBar = new StatusBar(createStatusBarState(
-      context.sessionId,
-      currentConfig.permissionMode,
-      currentConfig.provider,
-      effectiveModel,
-      currentConfig.reasoningMode,
-      resolveCurrentEffort(),
-      formatCurrentReasoningEffortLabel({ model: effectiveModel }),
-    ));
-    // FEATURE_092 phase 2b.8: seed the engine indicator if the session
-    // started in auto mode. The guardrail factory is built but the
-    // guardrail itself only constructs lazily on first tool call —
-    // we trigger eager construction here so the bar can read engine
-    // immediately. The cost is one rules-load + one classifier-projection
-    // setup, paid only when the user is in auto mode.
-    if (isAutoMode(currentPermissionMode)) {
-      statusBar.update({
-        autoModeEngine: autoModeBootstrap.getGuardrail().getEngine(),
-      });
-    }
-  }
 
   // Keyboard shortcut state (Phase 2 will use) - 键盘快捷键状态 (Phase 2 将实际使用)
   // let showToolOutput = true;
@@ -813,10 +749,6 @@ Keyboard Shortcuts:
   const refreshCurrentEffort = (): void => {
     const effortResolution = resolveCurrentRuntimeEffort();
     currentOptions.effort = effortResolution.runtimeEffort;
-    statusBar?.update({
-      effort: effortResolution.configuredEffort,
-      reasoningEffortLabel: formatCurrentReasoningEffortLabel(),
-    });
   };
 
   costReportRef.current = null;
@@ -885,10 +817,6 @@ Keyboard Shortcuts:
       ...currentOptions.session,
       id: nextSessionId,
     };
-    statusBar?.update({
-      sessionId: nextSessionId,
-      messageCount: context.messages.length,
-    });
     teamModeHandle?.writer.update({ sessionId: nextSessionId });
 
     console.log(chalk.green(`\n[Recovered session: ${nextSessionId}]`));
@@ -922,7 +850,6 @@ Keyboard Shortcuts:
     context.lineage = createSessionLineage(context.messages, context.lineage);
     const title = extractTitle(context.messages);
     context.title = title;
-    statusBar?.update({ messageCount: context.messages.length });
     await storage.save(context.sessionId, {
       messages: context.messages,
       title,
@@ -982,10 +909,6 @@ Keyboard Shortcuts:
         ...currentOptions.session,
         id: context.sessionId,
       };
-      statusBar?.update({
-        sessionId: context.sessionId,
-        messageCount: 0,
-      });
       teamModeHandle?.writer.update({ sessionId: context.sessionId });
     },
     loadSession: async (id: string) => {
@@ -1032,10 +955,6 @@ Keyboard Shortcuts:
           // / forks carry it (storage merges `data.tag ?? existing` on save).
           tag: loaded.tag,
         };
-        statusBar?.update({
-          sessionId: id,
-          messageCount: loaded.messages.length,
-        });
         teamModeHandle?.writer.update({ sessionId: id });
         console.log(chalk.green(`\n[Loaded session: ${id}]`));
         console.log(chalk.dim(`  Messages: ${loaded.messages.length}`));
@@ -1095,25 +1014,6 @@ Keyboard Shortcuts:
       currentOptions.provider = provider;
       currentOptions.model = model;
       currentOptions.effort = effortResolution.runtimeEffort;
-      let newModel = model ?? getProviderModel(provider);
-      if (!newModel) {
-        // Fallback for custom providers - 自定义 Provider 的后备
-        try {
-          const custom = getCustomProvider(provider);
-          newModel = custom?.getModel() ?? provider;
-        } catch {
-          newModel = provider;
-        }
-      }
-      statusBar?.update({
-        provider,
-        model: newModel,
-        effort: effortResolution.configuredEffort,
-        reasoningEffortLabel: formatCurrentReasoningEffortLabel({
-          provider,
-          model: newModel,
-        }),
-      });
       if (effortResolution.diagnostic) {
         console.log(chalk.yellow(`\n[${effortResolution.diagnostic}]`));
       }
@@ -1123,10 +1023,6 @@ Keyboard Shortcuts:
       currentOptions.thinking = enabled;
       currentConfig.reasoningMode = enabled ? 'auto' : 'off';
       currentOptions.reasoningMode = currentConfig.reasoningMode;
-      statusBar?.update({
-        reasoningMode: currentConfig.reasoningMode,
-        reasoningEffortLabel: formatCurrentReasoningEffortLabel(),
-      });
     },
     setEffort: (effort?: string) => {
       currentConfig.effort = effort;
@@ -1139,10 +1035,6 @@ Keyboard Shortcuts:
       currentConfig.thinking = thinking;
       currentOptions.reasoningMode = mode;
       currentOptions.thinking = thinking;
-      statusBar?.update({
-        reasoningMode: mode,
-        reasoningEffortLabel: formatCurrentReasoningEffortLabel(),
-      });
     },
     setAgentMode: (mode: KodaXAgentMode) => {
       currentConfig.agentMode = mode;
@@ -1152,13 +1044,6 @@ Keyboard Shortcuts:
       currentConfig.permissionMode = mode;
       currentPermissionMode = mode; // Sync with local permission state
       refreshCurrentEffort();
-      // FEATURE_092 phase 2b.8: keep the status bar engine indicator in sync
-      // when the user toggles in/out of auto mode. Outside auto modes,
-      // setting `autoModeEngine: undefined` removes the [LLM]/[RULES] suffix.
-      const autoModeEngine = isAutoMode(mode)
-        ? autoModeBootstrap.getGuardrail().getEngine()
-        : undefined;
-      statusBar?.update({ permissionMode: mode, autoModeEngine });
       // FEATURE_092 phase 2b.7b slice E: surface the deprecation when the
       // user explicitly picks the alias via `/mode auto-in-project`.
       // Once-per-session semantics means picking it at startup THEN typing
@@ -1228,7 +1113,6 @@ Keyboard Shortcuts:
       context.messages = loaded.messages;
       context.title = loaded.title;
       context.contextTokenSnapshot = undefined;
-      statusBar?.update({ messageCount: context.messages.length });
       console.log(chalk.green(`\n[Switched to tree entry: ${selector}]`));
       console.log(chalk.dim(`  Messages: ${loaded.messages.length}`));
       return 'switched';
@@ -1266,10 +1150,6 @@ Keyboard Shortcuts:
         ...currentOptions.session,
         id: forked.sessionId,
       };
-      statusBar?.update({
-        sessionId: forked.sessionId,
-        messageCount: context.messages.length,
-      });
       console.log(chalk.green(`\n[Forked session: ${forked.sessionId}]`));
       console.log(chalk.dim(`  Messages: ${forked.data.messages.length}`));
       return 'forked';
@@ -1289,14 +1169,13 @@ Keyboard Shortcuts:
       context.title = rewound.title;
       context.contextTokenSnapshot = undefined;
       context.lastAccessed = new Date().toISOString();
-      statusBar?.update({ messageCount: context.messages.length });
       console.log(chalk.green(`\n[Rewound session${selector ? ` to ${selector}` : ' to previous turn'}]`));
       console.log(chalk.dim(`  Messages: ${rewound.messages.length}`));
       return 'rewound';
     },
     getCostReport: () => costReportRef.current?.() ?? null,
     // FEATURE_092 phase 2b.8: auto-mode read-only stats + manual engine setter
-    // for /auto-engine, /auto-denials, status bar indicator. The accessors
+    // for /auto-engine and /auto-denials. The accessors
     // delegate to the lazy guardrail factory — when REPL never enters auto
     // mode, the guardrail is never constructed and the stats are undefined.
     getAutoModeStats: () => {
@@ -1306,7 +1185,6 @@ Keyboard Shortcuts:
     setAutoModeEngine: (engine) => {
       if (!isAutoMode(currentPermissionMode)) return;
       autoModeBootstrap.getGuardrail().setEngine(engine);
-      statusBar?.update({ permissionMode: currentPermissionMode });
     },
     createKodaXOptions: () => {
       // FEATURE_074: live plan-mode check for child agents. The closure reads
@@ -1355,7 +1233,6 @@ Keyboard Shortcuts:
               currentConfig.permissionMode = 'accept-edits';
               currentPermissionMode = 'accept-edits';
               refreshCurrentEffort();
-              statusBar?.update({ permissionMode: 'accept-edits' });
               return true;
             }
             return false;
@@ -1514,9 +1391,8 @@ Keyboard Shortcuts:
     rl.prompt();
   });
 
-  // Handle cleanup on exit - 处理退出时清理状态栏
+  // Handle cleanup on exit
   const cleanup = () => {
-    statusBar?.hide();
     // FEATURE_125 — fire-and-forget Team Mode shutdown. The
     // state-writer's shutdown() does its work synchronously
     // (clearInterval + fs.rmSync) before the trailing
@@ -1555,7 +1431,6 @@ Keyboard Shortcuts:
         });
       }
       context.messages.push({ role: 'assistant', content: text, timestamp: new Date().toISOString() });
-      statusBar?.update({ messageCount: context.messages.length });
       const title = extractTitle(context.messages);
       context.title = title;
       void storage.save(context.sessionId, {
@@ -1675,7 +1550,6 @@ Keyboard Shortcuts:
       }
       applyRuntimeSessionSnapshot(context, runResult);
 
-      statusBar?.update({ messageCount: context.messages.length });
       if (context.messages.length > 0) {
         const title = extractTitle(context.messages);
         context.title = title;
@@ -1736,7 +1610,6 @@ Keyboard Shortcuts:
         }
         context.messages.push({ role: 'user', content: preparedArtifacts.messageContent });
         lastUserMessage = trimmed;
-        statusBar?.update({ messageCount: context.messages.length });
 
         // Run agent (copy main loop logic) - 运行 agent (复制主循环逻辑)
         // FEATURE_192 v0.7.44 — build the goal runtime binding so the
@@ -1917,9 +1790,6 @@ Keyboard Shortcuts:
     // Save last user message (for Esc+Esc editing) - 保存最后一条用户消息 (用于 Esc+Esc 编辑)
     lastUserMessage = trimmed;
 
-    // Update status bar message count - 更新状态栏消息数量
-    statusBar?.update({ messageCount: context.messages.length });
-
     // Run Agent - 运行 Agent
     try {
       const result = await runAgentRound(
@@ -1944,11 +1814,6 @@ Keyboard Shortcuts:
         (result.artifactLedger as typeof context.artifactLedger | undefined)
           ?? extractArtifactLedger(result.messages),
       );
-
-      // Update status bar - 更新状态栏
-      statusBar?.update({
-        messageCount: context.messages.length,
-      });
 
       // Auto save - 自动保存
       if (context.messages.length > 0) {
