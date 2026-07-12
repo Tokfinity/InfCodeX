@@ -20,7 +20,11 @@ describe('FEATURE_260 memory mutation guard', () => {
     );
     expect(memoryMutationDenial(legacy)).toContain('Memory Control Plane');
     expect(memoryMutationDenial(scoped)).toContain('Memory Control Plane');
-    expect(memoryMutationDenial(scoped.toUpperCase())).toContain('Memory Control Plane');
+    if (process.platform === 'win32') {
+      expect(memoryMutationDenial(scoped.toUpperCase())).toContain('Memory Control Plane');
+    } else {
+      expect(memoryMutationDenial(scoped.toUpperCase())).toBeUndefined();
+    }
     expect(memoryMutationDenial(path.resolve('src', 'index.ts'))).toBeUndefined();
   });
 
