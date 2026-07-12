@@ -12,7 +12,7 @@
 | Item | Value |
 |---|---|
 | Current released version | `v0.7.68` |
-| Current package version | `@kodax-ai/kodax@0.7.68`; local release metadata complete, Git tag/GitHub release/npm publication pending operator action |
+| Current package version | `@kodax-ai/kodax@0.7.68`; Git tag and GitHub binary release prepared, npm publication remains an explicit operator step |
 | Workspace baseline | `llm / agent / coding / repl` 4 packages |
 | Total tracked features | `52` |
 | InProgress | `1` |

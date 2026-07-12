@@ -1,8 +1,8 @@
 # KodaX High-Level Design
 
-> Last updated: 2026-07-11
+> Last updated: 2026-07-12
 >
-> Current release baseline: `@kodax-ai/kodax@0.7.67`
+> Current release baseline: `@kodax-ai/kodax@0.7.68`
 >
 > This HLD is intentionally current-state only. The old pre-v0.7.43
 > chain/harness model has been removed from this active design document because
@@ -24,9 +24,9 @@ clients/    optional external clients and protocol adapters
 benchmark/  eval harness, datasets, and prompt-change rules
 ```
 
-The published package is `@kodax-ai/kodax`. It exposes the root API plus nine
+The published package is `@kodax-ai/kodax`. It exposes the root API plus ten
 SDK subpaths: `/agent`, `/llm`, `/coding`, `/media`, `/repl`, `/skills`,
-`/mcp`, `/session`, and `/runtime`.
+`/mcp`, `/session`, `/runtime`, and `/experimental-memory`.
 
 ## 2. Layering
 
@@ -218,7 +218,28 @@ Published SDK subpaths expose focused subsets:
 - `@kodax-ai/kodax/skills`
 - `@kodax-ai/kodax/mcp`
 
-## 10. Workflow Runtime
+## 10. Governed Memory Runtime
+
+FEATURE_260 adds a thin experimental Memory Agent without creating a second
+long-term memory plane. `packages/agent/src/experimental-memory` owns the
+domain-neutral `MemoryAgent` / `MemorySession` contracts; the existing
+`packages/agent/src/memory-control` plane remains the sole governed persistence
+authority. `packages/coding` owns coding observations, prompt-safe rendering,
+the `memory_recall` tool, Action-LLM integration, and trace correlation.
+
+Passive recall is computed before the run and injected as a bounded dynamic
+suffix, so it adds no extra LLM wait. Deliberate `query()` / `memory_recall` is
+read-only and initiated by the Action LLM. Episode review may create a governed
+proposal or defer it to the scoped inbox; only the existing
+proposal/preview/fingerprint/apply path can mutate durable memory. Exact scope,
+secret filtering, poisoning checks, and managed-path guards remain
+deterministic. Decision receipts are trace-only references and never store
+hidden reasoning.
+
+The public opt-in entry is `@kodax-ai/kodax/experimental-memory`; it does not
+become an implicit dependency for consumers of the stable root or Runtime SDK.
+
+## 11. Workflow Runtime
 
 Workflow has two layers:
 
@@ -289,7 +310,7 @@ static-validation + postcondition pipeline. It adds structured child output
 lifted to `@kodax-ai/agent` (ADR-046) and the inline run is async / idle-yield
 (ADR-049). See ADR-044/046/047/048/049.
 
-## 11. REPL And CLI
+## 12. REPL And CLI
 
 `packages/repl` owns terminal UX:
 
@@ -306,7 +327,7 @@ lifted to `@kodax-ai/agent` (ADR-046) and the inline run is async / idle-yield
 bootstrap. The CLI should stay thin and delegate product behavior to package
 APIs.
 
-## 12. Design Constraints
+## 13. Design Constraints
 
 - Do not reintroduce retired V1 chain abstractions into current docs or prompts.
 - Do not add a new workspace package unless there is a real independence need.
@@ -318,7 +339,7 @@ APIs.
   an existing typed tool/workflow service is the real contract.
 - Do not describe Worker `resourceLimits` as hostile-code containment.
 
-## 13. Related Documents
+## 14. Related Documents
 
 - Product requirements: [PRD.md](PRD.md)
 - Detailed design: [DD.md](DD.md)

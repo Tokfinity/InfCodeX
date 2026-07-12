@@ -1,8 +1,8 @@
 # KodaX Detailed Design
 
-> Last updated: 2026-07-11
+> Last updated: 2026-07-12
 >
-> Current release baseline: `@kodax-ai/kodax@0.7.67`
+> Current release baseline: `@kodax-ai/kodax@0.7.68`
 >
 > This DD describes current implementation structure. Retired V1 chain details
 > were deleted from this active document; use git history and historical feature
@@ -19,7 +19,7 @@ reference and does not duplicate every type. It should answer three questions:
 
 ## 2. Published Package And Build Entries
 
-The root package is `@kodax-ai/kodax@0.7.67`.
+The root package is `@kodax-ai/kodax@0.7.68`.
 
 `package.json` exposes:
 
@@ -35,6 +35,7 @@ The root package is `@kodax-ai/kodax@0.7.67`.
 | `./mcp` | `dist/sdk-mcp.js` | Focused MCP subset. |
 | `./session` | `dist/sdk-session.js` | Public session-management subset. |
 | `./runtime` | `dist/sdk-runtime.js` | Stable host Runtime facade and daemon protocol/schema exports. |
+| `./experimental-memory` | `dist/sdk-experimental-memory.js` | Opt-in governed Memory Agent and scoped session contracts. |
 
 The build path is:
 
@@ -275,7 +276,7 @@ Core modules:
 The published `@kodax-ai/kodax/skills` subpath is a focused subset of agent
 capabilities. It should not require importing the full coding package.
 
-## 11. Media Input Artifacts
+## 12. Media Input Artifacts
 
 Media/input artifacts are agent-layer primitives under `packages/agent/src/media`.
 The public `@kodax-ai/kodax/media` SDK entry and the legacy
@@ -284,7 +285,7 @@ Coding consumes validation/enqueue helpers from this layer; file and video
 artifact contracts remain stable even when a provider route is not wired for
 send.
 
-## 12. MCP
+## 13. MCP
 
 MCP lives under `packages/agent/src/capabilities/mcp`.
 
@@ -301,7 +302,32 @@ The published `@kodax-ai/kodax/mcp` subpath exposes a focused MCP surface.
 Coding tools consume MCP through capability providers rather than duplicating
 connection logic.
 
-## 13. Workflow Runtime
+## 14. Governed Memory Runtime
+
+The sole durable memory authority remains `packages/agent/src/memory-control`.
+FEATURE_260 adds these focused layers:
+
+- `packages/agent/src/experimental-memory`: public `MemoryAgent`, scoped
+  `MemorySession`, policy, passive recall, deliberate query, observations,
+  outcomes, and bounded episode close/review.
+- `packages/agent/src/memory`: exact identity/applicability and managed memory
+  path policy.
+- `packages/coding/src/memory-runtime.ts`: coding integration, project identity,
+  passive recall preparation, episode lifecycle, and review scheduling.
+- `packages/coding/src/memory`: coding context/observation extraction,
+  prompt-safe rendering, policy artifact hashes, and trace-only decision links.
+- `packages/coding/src/tools/memory-recall.ts`: the session-bound read-only
+  `memory_recall` tool; mutation tools share the managed-path guard.
+
+Passive recall is prepared outside the Action-LLM turn and rendered only into
+the dynamic prompt suffix. Deliberate query appends a normal tool call/result
+tail. Neither path writes memory. Episode promotion first consults existing
+claims, then emits at most a governed proposal or a deferred inbox record; the
+existing preview/fingerprint/apply controller is the only durable write path.
+`MemoryDecisionReceipt` stores identifiers and policy facts in tracing, not
+hidden reasoning or a second event database.
+
+## 15. Workflow Runtime
 
 Workflow runtime has a strict boundary:
 
@@ -371,7 +397,7 @@ child output (`outputSchema`), the no-barrier `wf.pipeline`, same-session resume
 (`resumeFromRunId`), and nested `wf.workflow(...)`; the neutral run-lifecycle
 manager moves to `@kodax-ai/agent` (ADR-046). ADR-044/046/047/048/049.
 
-## 14. REPL Detail
+## 16. REPL Detail
 
 `packages/repl` owns:
 
@@ -388,7 +414,7 @@ The REPL should not become the owner of core agent semantics. Product behavior
 belongs in `coding`, reusable primitives in `agent`, and provider behavior in
 `llm`.
 
-## 15. Construction And Self-Modification
+## 17. Construction And Self-Modification
 
 Construction tools allow staged creation and admission of tools and agents.
 Self-modification tools stage proposed changes through explicit runtime paths.
@@ -414,7 +440,7 @@ handler entry dead before terminating it, so active, queued, and future calls
 cannot recreate an untracked Worker. Direct Node imports inside generated code
 remain possible at runtime, so admission checks and approval still matter.
 
-## 16. Observability And Eval
+## 18. Observability And Eval
 
 Behavior-affecting prompt changes must follow
 `benchmark/EVAL_GUIDELINES.md`. Runtime changes should add focused Vitest
@@ -424,7 +450,7 @@ locations, not in active docs.
 Tracing lives under `packages/agent/src/tracing` and is inline after package
 consolidation. It is reusable infrastructure, not a separate workspace package.
 
-## 17. Current Anti-Patterns
+## 19. Current Anti-Patterns
 
 Do not introduce:
 
@@ -438,7 +464,7 @@ Do not introduce:
   ownership form;
 - Worker or daemon boundaries described as a security sandbox.
 
-## 18. Related Documents
+## 20. Related Documents
 
 - Product requirements: [PRD.md](PRD.md)
 - High-level design: [HLD.md](HLD.md)

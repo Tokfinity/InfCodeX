@@ -1,8 +1,8 @@
 # KodaX Product Requirements
 
-> Last updated: 2026-07-11
+> Last updated: 2026-07-12
 >
-> Current release baseline: `@kodax-ai/kodax@0.7.67`
+> Current release baseline: `@kodax-ai/kodax@0.7.68`
 >
 > This document describes the current product. Historical pre-v0.7.43
 > chain/harness designs have been removed from this current PRD because they no
@@ -55,7 +55,7 @@ server product around it.
 | SDK root | `@kodax-ai/kodax` | `runKodaX`, `KodaXClient`, events, session storage helpers. |
 | Runtime SDK | `@kodax-ai/kodax/runtime` | Stable sessions/runs/events/permissions/workflows/config/catalog/MCP/artifact/diagnostic facade in inline, Worker, or daemon form. |
 | Daemon operations | `kodax daemon start/status/logs/stop/restart` | One local owner per `homeDir + profile`, shared by REPL, Space, IDE, and SDK clients. |
-| SDK subpaths | `/agent`, `/llm`, `/coding`, `/media`, `/repl`, `/skills`, `/mcp`, `/session`, `/runtime` | Smaller import surfaces for embedders. |
+| SDK subpaths | `/agent`, `/llm`, `/coding`, `/media`, `/repl`, `/skills`, `/mcp`, `/session`, `/runtime`, `/experimental-memory` | Smaller import surfaces for embedders; governed memory remains explicitly experimental. |
 | Binary release | `bun --compile` output | Runs without Node.js on the target machine. |
 
 ## 5. Current Execution Model
@@ -147,6 +147,22 @@ capabilities. They are source-code subtrees under `packages/agent`, not separate
 workspace packages. Public SDK access is through `@kodax-ai/kodax/skills` and
 `@kodax-ai/kodax/mcp`.
 
+### Governed Memory
+
+FEATURE_260 (`v0.7.68`) adds a thin experimental Memory Agent over the existing
+F228 Memory Control Plane. `@kodax-ai/kodax/experimental-memory` exposes scoped
+`MemorySession` lifecycle, zero-wait passive recall, deliberate read-only
+`query()`, bounded observations, and episode outcomes. The coding runtime may
+offer the same deliberate path through `memory_recall`, but the Action LLM
+retains final decision authority and recalled text remains low-authority.
+
+Durable changes must continue through proposal, preview, fingerprint, and apply.
+Identity and applicability checks, secret filtering, poisoning defenses, and
+managed-path mutation guards are deterministic code boundaries. KodaX must not
+add a second memory database, filesystem memory action space, resident Memory
+Specialist, hidden-reasoning storage, or runtime self-modification through this
+surface.
+
 ### Dynamic Workflow Harness
 
 FEATURE_217 is the v0.7.49 home for the complete Dynamic Workflow product loop.
@@ -218,6 +234,8 @@ explicit user confirmation for trusted-local workflow scripts.
   the public guide.
 - A CLI/REPL user can understand providers, sessions, permissions, skills, MCP,
   and child tasks without learning retired V1 terminology.
+- An experimental-memory consumer can predict scope, read/write authority,
+  recall behavior, and promotion boundaries without reading implementation code.
 - Product changes preserve workspace package independence:
   `llm -> agent -> coding -> repl`, with no reverse dependency from agent to
   coding.

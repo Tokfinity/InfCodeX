@@ -696,7 +696,7 @@ KodaX 现在会把 Repo Intelligence 的本地缓存分成内置引擎 profile�
 ## 文档
 
 - [README.md](README.md) - 英文版 README
-- [docs/SDK_EMBEDDER_GUIDE.md](docs/SDK_EMBEDDER_GUIDE.md) - SDK 宿主集成与 v0.7.67 公共 API 契约
+- [docs/SDK_EMBEDDER_GUIDE.md](docs/SDK_EMBEDDER_GUIDE.md) - SDK 宿主集成与 v0.7.68 公共 API 契约
 - [docs/release.md](docs/release.md) - 单文件二进制构建与发布流程
 - [docs/PRD.md](docs/PRD.md) - 产品需求
 - [docs/ADR.md](docs/ADR.md) - 架构决策
