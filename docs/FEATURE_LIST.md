@@ -26,7 +26,7 @@
 
 | Status | Count | Feature IDs | Next checkpoint |
 |---|---:|---|---|
-| Completed | 33 | `260, 261, 259, 258, 253, 254, 255, 256, 257, 228, 251, 252, 250, 248, 249, 247, 246, 245, 243, 242, 241, 233, 240, 239, 224, 221, 174, 211, 237, 229, 230, 234, 236` | `260` completed for v0.7.68 (2026-07-12) with 9612 tests, full build, 87.58% focused line coverage, and all preregistered v2 memory-routing gates passing. `261`, `259`, and `258` shipped in v0.7.67 (2026-07-11). Earlier completion history is unchanged. |
+| Completed | 33 | `260, 261, 259, 258, 253, 254, 255, 256, 257, 228, 251, 252, 250, 248, 249, 247, 246, 245, 243, 242, 241, 233, 240, 239, 224, 221, 174, 211, 237, 229, 230, 234, 236` | `260` completed for v0.7.68 (2026-07-12) with 9593/9593 passing tests on both Node 20 and Node 22 release CI, full build and artifact validation, 87.58% focused line coverage, and all preregistered v2 memory-routing gates passing. `261`, `259`, and `258` shipped in v0.7.67 (2026-07-11). Earlier completion history is unchanged. |
 | InProgress | 1 | `225` | `225` broader current-HEAD cleanup remains. |
 | Planned, near-term | 5 | `267, 266, 263, 264, 265` | `v0.7.69` -> `v0.7.85` |
 | Planned, v0.8.x | 5 | `007, 030, 093, 113, 139` | `v0.8.5+` |

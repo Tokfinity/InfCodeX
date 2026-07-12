@@ -4,7 +4,7 @@
 
 **功能**：KodaX Memory Agent — Proactive Execution Recall + Scoped Memory Consolidation
 **目标版本**：v0.7.68
-**开发状态**：聚焦回归、构建、覆盖率和预注册 eval 已完成；全量 runner 限制见验证记录
+**开发状态**：发布 CI、聚焦回归、构建、产物验证、覆盖率和预注册 eval 已完成
 **测试日期**：2026-07-12
 **人工测试人员**：待填写
 
@@ -29,11 +29,16 @@ npx vitest run --config vitest.eval.config.ts tests/feature-260-memory-agent.eva
 
 已验证结果：
 
-- 当前套件基线为 798 个测试文件、9612 条测试；39 条条件跳过、22 条 todo。
-- Post-review 集中回归 140/140、self-manual 47/47、tracker 4/4 通过；
-  全仓 Shard 1/2 为 5061/5061 通过。Shard 2/2 的业务测试持续通过，但本机
-  Vitest worker 在末段发生 heap OOM，因此不把这次运行记为 clean full sweep。
+- 最终 GitHub Actions 在 Node 20 和 Node 22 上分别完成 clean full sweep：
+  798/798 测试文件、9593/9593 测试通过；另有 2 个条件跳过文件、30 条条件
+  跳过测试和 22 条 todo，共 800 个文件、9673 条测试记录。Unix socket runtime
+  gate 随后通过。此前 Windows 本机 Shard 2 的 heap OOM 仅作为本地 runner
+  限制保留，不再构成发布证据缺口。
+- Post-review 集中回归 164/164、release/manual/tracker 集合 45/45 通过。
 - packages、CLI bundle、11 个 SDK 入口和 DTS 构建通过。
+- `npm pack` 产物可在全新临时项目安装，根入口和全部 10 个 SDK subpath 均可
+  导入；发布 metadata 为 `0.7.68` 且 `private=false`。Windows 独立二进制
+  `kodax.exe --version` 返回 `0.7.68`，5 个必需 sidecar 均存在。
 - F260 核心增量语句/行覆盖率 87.58%，函数覆盖率 92.15%。
 - `f260-v0.7.68.2` sealed panel：520/520 cells 完成，全部门禁通过。
 - schema-v2 manifest 位于系统临时目录
