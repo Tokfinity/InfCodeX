@@ -14,12 +14,12 @@
 | Current released version | `v0.7.68` |
 | Current package version | `@kodax-ai/kodax@0.7.68`; Git tag and GitHub binary release prepared, npm publication remains an explicit operator step |
 | Workspace baseline | `llm / agent / coding / repl` 4 packages |
-| Total tracked features | `52` |
+| Total tracked features | `53` |
 | InProgress | `2` |
-| Planned | `10` |
+| Planned | `11` |
 | Completed | `33` |
 | Reviewed out of active roadmap | `7` (`105, 108, 231, 232, 235, 238, 244`) |
-| Tracked feature IDs | `007, 030, 093, 105, 108, 113, 139, 174, 211, 221, 224, 225, 228, 229, 230, 231, 232, 233, 234, 235, 236, 237, 238, 239, 240, 241, 242, 243, 244, 245, 246, 247, 248, 249, 250, 251, 252, 253, 254, 255, 256, 257, 258, 259, 260, 261, 262, 263, 264, 265, 266, 267` |
+| Tracked feature IDs | `007, 030, 093, 105, 108, 113, 139, 174, 211, 221, 224, 225, 228, 229, 230, 231, 232, 233, 234, 235, 236, 237, 238, 239, 240, 241, 242, 243, 244, 245, 246, 247, 248, 249, 250, 251, 252, 253, 254, 255, 256, 257, 258, 259, 260, 261, 262, 263, 264, 265, 266, 267, 268` |
 | Archive cutoff | Shipped / canceled / absorbed / shelved items through `v0.7.49` are archived. |
 
 ### 一览表
@@ -27,8 +27,8 @@
 | Status | Count | Feature IDs | Next checkpoint |
 |---|---:|---|---|
 | Completed | 33 | `260, 261, 259, 258, 253, 254, 255, 256, 257, 228, 251, 252, 250, 248, 249, 247, 246, 245, 243, 242, 241, 233, 240, 239, 224, 221, 174, 211, 237, 229, 230, 234, 236` | `260` completed for v0.7.68 (2026-07-12) with 9593/9593 passing tests on both Node 20 and Node 22 release CI, full build and artifact validation, 87.58% focused line coverage, and all preregistered v2 memory-routing gates passing. `261`, `259`, and `258` shipped in v0.7.67 (2026-07-11). Earlier completion history is unchanged. |
-| InProgress | 2 | `267, 225` | `267` client/server implementation, focused coverage, build, and related regressions are complete locally; independent 1.0 client/server plus semantic TCK release evidence remains. `225` broader current-HEAD cleanup remains. |
-| Planned, near-term | 4 | `266, 263, 264, 265` | `v0.7.70` -> `v0.7.85` |
+| InProgress | 2 | `267, 225` | `267` protocol/SDK client-server slice is complete locally; declarative config, CLI/Runtime auto-wiring, explicit no-code serving, independent 1.0 interoperability, and semantic TCK evidence remain. `225` broader current-HEAD cleanup remains. |
+| Planned, near-term | 5 | `268, 266, 263, 264, 265` | `v0.7.69` -> `v0.7.85` |
 | Planned, v0.8.x | 5 | `007, 030, 093, 113, 139` | `v0.8.5+` |
 | Planned, v0.9.x | 1 | `262` | `v0.9.0` |
 | Reviewed out, 2026-07-12 | 7 | `244, 231, 235, 238, 232, 105, 108` | Shelved, deferred, absorbed, or cancelled after the post-v0.7.70 roadmap review. |
@@ -52,7 +52,7 @@
 | `v0.7.66` | `0` |
 | `v0.7.67` | `0` |
 | `v0.7.68` | `0` |
-| `v0.7.69` | `1` |
+| `v0.7.69` | `2` |
 | `v0.7.70` | `1` |
 | `v0.7.71` | `0` |
 | `v0.7.72` | `0` |
@@ -179,12 +179,15 @@
 > (`v0.7.68`) -> F266 (`v0.7.70`) -> F263 (`v0.7.75`) -> F264 (`v0.7.80`) ->
 > F265 (`v0.7.85`).
 >
-> **2026-07-12 bidirectional A2A schedule exception**: at explicit user
-> direction, `FEATURE_267` consumes `v0.7.69`. It completes the concrete F258
-> follow-up in both directions: an A2A 1.0 JSON-RPC/SSE executor for KodaX
-> orchestration and an authenticated Runtime-backed KodaX A2A Agent server.
-> The scope excludes A2A 0.3, gRPC, REST, push notifications, gateways, and
-> marketplaces; `FEATURE_266` remains planned for `v0.7.70`.
+> **2026-07-13 A2A product/config closure**: `FEATURE_267` remains the same
+> bidirectional A2A Feature, now explicitly including the missing no-TypeScript
+> CLI/config/Runtime product surface. New `FEATURE_268` shares `v0.7.69` as its
+> bounded substrate: one file each for MCP, A2A, and Extensions, two persistent
+> scopes (user/project), canonical core/MCP/A2A/Extension templates, project
+> trust, deterministic precedence, migration, actual live reconciliation, and
+> last-known-good reload. It adds neither
+> one-file-per-link storage nor a generic plugin/config framework;
+> `FEATURE_266` remains planned for `v0.7.70`.
 >
 > **2026-07-12 F225 early cleanup slice**: the Classic readline
 > reverse-video StatusBar was proven write-only (`update()` calls with no
@@ -294,6 +297,7 @@ fixed GitHub binary archive sidecar omission before tagging.
 
 | ID | Title | Category | Priority | Planned | Design |
 |---|---|---|---|---|---|
+| `268` | Hot-Reloadable Integration Configuration Split | Core / Configuration + Runtime | Critical | `v0.7.69` | [v0.7.69](features/v0.7.69.md#feature_268-hot-reloadable-integration-configuration-split) |
 | `266` | Learning Center + Learned Capability Runtime Control Plane | Core / Agent Learning + Runtime SDK | High | `v0.7.70` | [v0.7.70](features/v0.7.70.md#feature_266-learning-center--learned-capability-runtime-control-plane) |
 | `263` | Evidence-Gated Background Skill Learning Loop | Core / Skills + Self-Improvement | High | `v0.7.75` | [v0.7.75](features/v0.7.75.md#feature_263-evidence-gated-background-skill-learning-loop) |
 | `264` | Evidence-Gated Extension Learning Loop | Core / Extensions + Self-Improvement | High | `v0.7.80` | [v0.7.80](features/v0.7.80.md#feature_264-evidence-gated-extension-learning-loop) |
