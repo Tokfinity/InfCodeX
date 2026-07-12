@@ -15,6 +15,8 @@ import type {
   KodaXSessionLabelEntry,
   KodaXSessionLineage,
   KodaXSessionMessageEntry,
+  KodaXSessionMemoryOutcomeDigestEntry,
+  KodaXSessionMemoryReviewReceiptEntry,
   KodaXSessionNavigationOptions,
   KodaXSessionRewindMarkerEntry,
   KodaXSessionTreeNode,
@@ -22,7 +24,12 @@ import type {
 
 type NavigableSessionEntry = Exclude<
   KodaXSessionEntry,
-  KodaXSessionLabelEntry | KodaXSessionGoalEntry | KodaXSessionClientNoticeEntry | KodaXSessionRewindMarkerEntry
+  KodaXSessionLabelEntry
+    | KodaXSessionGoalEntry
+    | KodaXSessionClientNoticeEntry
+    | KodaXSessionRewindMarkerEntry
+    | KodaXSessionMemoryOutcomeDigestEntry
+    | KodaXSessionMemoryReviewReceiptEntry
 >;
 
 const ENTRY_ID_LENGTH = 12;
@@ -123,6 +130,10 @@ function cloneEntry(entry: KodaXSessionEntry): KodaXSessionEntry {
         ...entry,
         payload: cloneJsonValue(entry.payload),
       };
+    case 'memory_outcome_digest':
+      return { ...entry, digest: structuredClone(entry.digest) };
+    case 'memory_review_receipt':
+      return { ...entry, proposalIds: [...entry.proposalIds] };
     case 'goal':
       // KodaXSessionGoalEntry: shallow clone; the inner goal object is
       // already immutable (readonly fields + frozen by goal/state.ts).
@@ -150,6 +161,8 @@ function isNavigableEntry(entry: KodaXSessionEntry): entry is NavigableSessionEn
   return entry.type !== 'label'
     && entry.type !== 'goal'
     && entry.type !== 'client_notice'
+    && entry.type !== 'memory_outcome_digest'
+    && entry.type !== 'memory_review_receipt'
     && entry.type !== 'rewind_marker';
 }
 

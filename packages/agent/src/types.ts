@@ -161,6 +161,51 @@ export interface KodaXSessionClientNoticeEntry extends KodaXSessionEntryBase {
   payload?: KodaXJsonValue;
 }
 
+export interface KodaXMemoryOutcomeDigest {
+  readonly id: string;
+  readonly reviewKey: string;
+  readonly sessionId: string;
+  readonly branchId: string;
+  readonly sequence: number;
+  readonly objective: string;
+  readonly actionSignature?: string;
+  readonly approach: string;
+  readonly outcome: 'succeeded' | 'failed';
+  readonly summary: string;
+  readonly preconditions?: string;
+  readonly lesson?: string;
+  readonly evidenceRefs: readonly string[];
+  readonly evidence?: readonly KodaXMemoryOutcomeEvidence[];
+  readonly memoryInfluence?: readonly KodaXMemoryInfluenceRef[];
+  readonly visibility: 'prompt_safe' | 'private' | 'sensitive';
+  readonly createdAt: string;
+}
+
+export interface KodaXMemoryOutcomeEvidence {
+  readonly ref: string;
+  readonly grade: 'authoritative' | 'verified' | 'corroborated' | 'observed' | 'inferred';
+  readonly source: 'user' | 'host' | 'tool' | 'environment' | 'agent';
+  readonly observedAt: string;
+}
+
+export interface KodaXMemoryInfluenceRef {
+  readonly decisionReceiptRef: string;
+  readonly grade: 'direct' | 'supporting' | 'exposed' | 'unknown';
+}
+
+export interface KodaXSessionMemoryOutcomeDigestEntry extends KodaXSessionEntryBase {
+  readonly type: 'memory_outcome_digest';
+  readonly digest: KodaXMemoryOutcomeDigest;
+}
+
+export interface KodaXSessionMemoryReviewReceiptEntry extends KodaXSessionEntryBase {
+  readonly type: 'memory_review_receipt';
+  readonly reviewKey: string;
+  readonly proposalIds: readonly string[];
+  readonly status: 'completed' | 'no_action';
+  readonly completedAt: string;
+}
+
 // ============== Goal (FEATURE_192 v0.7.44) ==============
 
 export type KodaXGoalStatus =
@@ -226,6 +271,8 @@ export type KodaXSessionEntry =
   | KodaXSessionArchiveMarkerEntry
   | KodaXSessionRewindMarkerEntry
   | KodaXSessionClientNoticeEntry
+  | KodaXSessionMemoryOutcomeDigestEntry
+  | KodaXSessionMemoryReviewReceiptEntry
   | KodaXSessionGoalEntry;
 
 export interface KodaXSessionArtifactLedgerEntry {
@@ -282,7 +329,12 @@ export interface KodaXSessionNavigationOptions {
 export interface KodaXSessionTreeNode {
   entry: Exclude<
     KodaXSessionEntry,
-    KodaXSessionLabelEntry | KodaXSessionGoalEntry | KodaXSessionClientNoticeEntry | KodaXSessionRewindMarkerEntry
+    KodaXSessionLabelEntry
+      | KodaXSessionGoalEntry
+      | KodaXSessionClientNoticeEntry
+      | KodaXSessionRewindMarkerEntry
+      | KodaXSessionMemoryOutcomeDigestEntry
+      | KodaXSessionMemoryReviewReceiptEntry
   >;
   children: KodaXSessionTreeNode[];
   label?: string;

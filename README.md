@@ -379,7 +379,7 @@ kodax --repo-intelligence full --repo-intelligence-trace
 
 ## Architecture
 
-KodaX uses a **monorepo architecture** with npm workspaces. Source layout currently has 4 workspace packages; published as a single bundled npm package `@kodax-ai/kodax` with 9 SDK subpath exports (`/agent`, `/llm`, `/coding`, `/media`, `/repl`, `/skills`, `/mcp`, `/session`, `/runtime`; ADR-024 + ADR-032 + ADR-038, with ADR-036 consolidation):
+KodaX uses a **monorepo architecture** with npm workspaces. Source layout currently has 4 workspace packages; published as a single bundled npm package `@kodax-ai/kodax` with 10 SDK subpath exports (`/agent`, `/llm`, `/coding`, `/media`, `/repl`, `/skills`, `/mcp`, `/session`, `/runtime`, `/experimental-memory`; ADR-024 + ADR-032 + ADR-038, with ADR-036 consolidation):
 
 ```
 KodaX/
@@ -405,7 +405,7 @@ KodaX/
 │
 ├── src/                     # CLI entry + SDK subpath entries
 │   ├── kodax_cli.ts         # Main CLI entry point (bin: `kodax`)
-│   └── sdk-*.ts             # SDK subpath re-exports → @kodax-ai/kodax/{agent,llm,coding,media,repl,skills,mcp,session,runtime}
+│   └── sdk-*.ts             # SDK subpath re-exports → @kodax-ai/kodax/{agent,llm,coding,media,repl,skills,mcp,session,runtime,experimental-memory}
 │
 └── package.json             # Root workspace config; release.mjs rewrites name + injects subpath exports
 ```
@@ -454,9 +454,9 @@ Source-side workspace package names (`@kodax-ai/*`). npm consumers install the s
 KodaX has two layers that consumers should understand separately:
 
 - **Source-side**: 4 workspace packages above (what developers see when reading the repo).
-- **npm-published**: a single bundled package `@kodax-ai/kodax` with 9 SDK subpaths (what SDK consumers `import` from). The subpaths are split into two roles:
+- **npm-published**: a single bundled package `@kodax-ai/kodax` with 10 SDK subpaths (what SDK consumers `import` from). The subpaths are split into two roles:
   - **Full-package subpaths** (`/agent`, `/llm`, `/coding`, `/repl`) — each one maps 1:1 to a source workspace and exposes its complete public API.
-  - **Narrow-subset subpaths** (`/media`, `/skills`, `/mcp`, `/session`) — each one exposes only a focused capability slice carved out of `/agent` or `/repl`. This lets consumers who only need (say) the Skills system import a much smaller surface without pulling in the full agent framework.
+  - **Narrow-subset subpaths** (`/media`, `/skills`, `/mcp`, `/session`, `/experimental-memory`) — each one exposes only a focused capability slice carved out of `/agent` or `/repl`. `/experimental-memory` is intentionally unstable and opt-in; the others are stable focused surfaces.
 
 | Source package | npm subpath | Type | What you get | Example consumer |
 |---|---|---|---|---|
@@ -465,6 +465,7 @@ KodaX has two layers that consumers should understand separately:
 | `packages/agent`  | `@kodax-ai/kodax/skills`  | **Narrow subset** | Skills system only — `SkillRegistry` / `loadFullSkill` / `expandSkillForLLM` / ... (26 exports = pre-v0.7.43 `@kodax-ai/skills` complete API) | Skill loaders, IDE plugins |
 | `packages/agent`  | `@kodax-ai/kodax/mcp`     | **Narrow subset** | MCP only — `McpCapabilityProvider` / `createMcpTransport` / `searchMcpCatalog` / ... (23 exports) | MCP server hosts |
 | `packages/agent`  | `@kodax-ai/kodax/media`   | **Narrow subset** | Structured image/file/video input-artifact helpers (22 exports) | Desktop hosts and multimodal clients |
+| `packages/agent`  | `@kodax-ai/kodax/experimental-memory` | **Experimental subset** | Thin F228-backed `MemoryAgent` / `MemorySession` contracts for scoped recall, deliberate query, observations, and outcomes | SDK hosts explicitly evaluating FEATURE_260 |
 | `packages/coding` | `@kodax-ai/kodax/coding`  | Full package | Coding agent + 50+ tools + repo-intelligence (505 exports) | Build a Claude Code-shape product |
 | `packages/repl`   | `@kodax-ai/kodax/repl`    | Full package | Ink TUI + permission modes + commands (217 exports) | Terminal-UI consumers |
 | `packages/repl`   | `@kodax-ai/kodax/session` | **Narrow subset** | Session management only — `listSessions` / `loadFullTranscript` / `appendClientNotice` / `forkSession` / `compactSession` / `watchSessions` / ... (17 exports) | IDE plugins and desktop hosts reading session history |
@@ -491,6 +492,8 @@ KodaX has two layers that consumers should understand separately:
 **Cost-Disciplined Workflow SDK (FEATURE_259, v0.7.67)**: SDK callers configure run-scoped `modelTiers` and `workflow.maxConcurrency`, while workflow authors express semantic `fast` / `balanced` / `deep` intent. Terminal workflow events expose resolved tier/source/fallback/usage/duration facts, and each durable `run.json` contains an `efficiencyReport` with token coverage, role/tier starts, packet-read topology, review waves, and quality-gate outcomes. See the [routing and telemetry contract](docs/SDK_EMBEDDER_GUIDE.md#20-cost-disciplined-workflow-routing-and-telemetry-feature_259-v0767).
 
 **Paged Session Listing (FEATURE_261, v0.7.67)**: both `/session` `listSessions()` and `runtime.sessions.list()` accept an exact `surface` filter and opaque continuation `cursor`; each returned summary carries the cursor for the next page. Filtering happens before the page limit, so a host does not need to over-fetch mixed surfaces. See the [pagination recipes](docs/SDK_EMBEDDER_GUIDE.md#19-session-surface-filtering-and-cursor-pagination-feature_261-v0767).
+
+**Experimental Memory Agent SDK (FEATURE_260, v0.7.68)**: `/experimental-memory` exposes the thin agent-layer `MemoryAgent` and scoped `MemorySession` lifecycle over the existing governed F228 plane. Passive recall is zero-wait; `query()` is read-only and deliberate; durable changes still require the proposal/preview/fingerprint/apply path. The Action LLM remains the final decision maker, recalled content stays low-authority, and safety/scope gates remain deterministic. See the [direct session and boundary guide](docs/SDK_EMBEDDER_GUIDE.md#21-experimental-governed-memory--experimental-memory-feature_260-v0768).
 
 ---
 
@@ -609,7 +612,7 @@ import { listSessions } from '@kodax-ai/kodax/session';         // session histo
 import { createKodaXRuntime } from '@kodax-ai/kodax/runtime';   // embedded/daemon runtime API
 ```
 
-All 10 SDK entries (root + 9 subpaths) share internal code via ESM chunk splitting — importing from `/agent` does not pull in `/repl`'s Ink + React surface.
+All 11 SDK entries (root + 10 subpaths) share internal code via ESM chunk splitting — importing from `/agent` does not pull in `/repl`'s Ink + React surface.
 
 For the complete host-facing contract — including embedded/Worker/daemon ownership,
 external-agent registration and task control, session cursor pagination, workflow
@@ -912,7 +915,7 @@ await runKodaX({
 
 ## SDK Usage
 
-KodaX ships as a single npm package `@kodax-ai/kodax` with 9 SDK subpath exports (ADR-024 v0.7.39 + ADR-032 v0.7.42 + ADR-038 v0.7.49 + v0.7.56 `/media` + v0.7.64 `/runtime`). Each subpath is tree-shake-friendly so consumers pull only what they need:
+KodaX ships as a single npm package `@kodax-ai/kodax` with 10 SDK subpath exports (ADR-024 v0.7.39 + ADR-032 v0.7.42 + ADR-038 v0.7.49 + v0.7.56 `/media` + v0.7.64 `/runtime` + v0.7.68 `/experimental-memory`). Each subpath is tree-shake-friendly so consumers pull only what they need:
 
 ```bash
 npm install @kodax-ai/kodax
@@ -929,6 +932,7 @@ import { SkillRegistry } from '@kodax-ai/kodax/skills';           // zero-dep sk
 import { createMcpManager } from '@kodax-ai/kodax/mcp';           // MCP popout manager (v0.7.42)
 import { listSessions } from '@kodax-ai/kodax/session';           // session history helpers
 import { createKodaXRuntime } from '@kodax-ai/kodax/runtime';     // embedded/daemon runtime API
+import { createMemoryAgent } from '@kodax-ai/kodax/experimental-memory'; // opt-in experimental memory SDK
 ```
 
 > The SDK is **ESM-only**. CommonJS consumers (Electron main / Webpack CJS / `require()` callers) must use `await import('@kodax-ai/kodax/...')` — see [docs/SDK_EMBEDDER_GUIDE.md §5](docs/SDK_EMBEDDER_GUIDE.md#5-consuming-from-a-commonjs-context-electron-main-cjs-bundles).
@@ -1078,6 +1082,7 @@ await runInkInteractiveMode({ provider: 'zhipu-coding', effort: 'auto' });
 | Coding tasks | `@kodax-ai/kodax/coding` | Complete coding agent + tools |
 | Terminal app | `@kodax-ai/kodax/repl` | Full interactive experience |
 | Runtime host / daemon client | `@kodax-ai/kodax/runtime` | Sessions, runs, events, permissions, catalog, MCP, artifacts, diagnostics |
+| Experimental governed memory | `@kodax-ai/kodax/experimental-memory` | Scoped `MemoryAgent` / `MemorySession` recall and outcome contracts |
 
 ---
 

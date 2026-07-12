@@ -4,6 +4,7 @@ import path from 'path';
 import { KodaXToolExecutionContext } from '../types.js';
 import { generateDiff, countChanges } from './diff.js';
 import { resolveExecutionPath } from '../runtime-paths.js';
+import { memoryMutationDenial } from './memory-mutation-guard.js';
 import { formatDiffPreview } from './truncate.js';
 import { withFileMutation } from './_internal/file-mutation-queue.js';
 import { buildStaleWriteReason } from '../multi-instance/content-hash-cache.js';
@@ -18,6 +19,8 @@ export function getFileBackups(): Map<string, string> {
 
 export async function toolWrite(input: Record<string, unknown>, ctx: KodaXToolExecutionContext): Promise<string> {
   const filePath = resolveExecutionPath(input.path as string, ctx);
+  const memoryDenial = memoryMutationDenial(filePath);
+  if (memoryDenial !== undefined) return memoryDenial;
   const content = input.content as string;
 
   // FEATURE_131 Part A: serialize same-file mutations across the

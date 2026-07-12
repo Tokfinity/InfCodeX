@@ -617,6 +617,33 @@ describe('skill learning proposal apply plan', () => {
 });
 
 describe('learning proposal store', () => {
+  it('serializes concurrent proposal upserts without losing entries', async () => {
+    const dir = await createTempDir('kodax-learning-store-concurrent-');
+    const storePath = join(dir, 'proposals.json');
+    const proposals = ['p-concurrent-a', 'p-concurrent-b'].map((proposalId) =>
+      triageProceduralLearning({
+        proposalId,
+        origin: 'background_learning',
+        completedTurn: true,
+        sourceRefs: [`turn:${proposalId}`],
+        candidate: {
+          kind: 'skill_patch' as const,
+          skillName: `skill-${proposalId}`,
+          whyDurable: 'The procedure recurred across completed sessions.',
+          trigger: 'When the matching task recurs.',
+          changeSummary: `Store ${proposalId}.`,
+        },
+      }));
+    const reviewable = proposals.filter((proposal) =>
+      proposal.destination !== 'discard' && proposal.destination !== 'trace_only');
+    expect(reviewable).toHaveLength(2);
+
+    await Promise.all(reviewable.map((proposal) => upsertLearningProposal(storePath, proposal)));
+
+    expect((await readLearningProposalStore(storePath)).proposals.map((entry) => entry.proposalId).sort())
+      .toEqual(['p-concurrent-a', 'p-concurrent-b']);
+  });
+
   it('stores reviewable proposals and records rejection feedback', async () => {
     const dir = await createTempDir('kodax-learning-store-');
     const storePath = join(dir, 'proposals.json');

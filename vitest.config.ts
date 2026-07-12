@@ -37,6 +37,7 @@ export default defineConfig({
       // so the prefix-ordered matcher does not shadow it (unlike the
       // type-only subpaths below, which are erased at runtime).
       '@kodax-ai/agent/workflow': resolveFromRoot('packages', 'agent', 'src', 'workflow', 'index.ts'),
+      '@kodax-ai/agent/experimental-memory': resolveFromRoot('packages', 'agent', 'src', 'experimental-memory', 'index.ts'),
       '@kodax-ai/agent': resolveFromRoot('packages', 'agent', 'src', 'index.ts'),
       '@kodax-ai/llm': resolveFromRoot('packages', 'llm', 'src', 'index.ts'),
       '@kodax-ai/coding': resolveFromRoot('packages', 'coding', 'src', 'index.ts'),

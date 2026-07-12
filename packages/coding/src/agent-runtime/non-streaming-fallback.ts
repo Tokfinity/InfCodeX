@@ -53,6 +53,7 @@ import type {
   KodaXMessage,
   KodaXToolDefinition,
   KodaXReasoningRequest,
+  KodaXEphemeralSuffix,
 } from '@kodax-ai/llm';
 import type { BoundaryTrackerSession } from './boundary-tracker-session.js';
 import type { ExtensionEventEmitter } from './stream-handler-wiring.js';
@@ -66,6 +67,7 @@ export interface NonStreamingFallbackInput {
   readonly effectiveProviderReasoning: boolean | KodaXReasoningRequest;
   readonly callerAbortSignal: AbortSignal | undefined;
   readonly modelOverride: string | undefined;
+  readonly ephemeralSuffix?: KodaXEphemeralSuffix;
   readonly hardTimeoutMs: number;
   readonly boundarySession: BoundaryTrackerSession;
   readonly emitActiveExtensionEvent: ExtensionEventEmitter;
@@ -131,6 +133,7 @@ export async function executeNonStreamingFallback(
           input.events.onThinkingEnd?.(thinking);
         },
         modelOverride: input.modelOverride,
+        ephemeralSuffix: input.ephemeralSuffix,
         signal: fallbackSignal,
       },
       fallbackSignal,

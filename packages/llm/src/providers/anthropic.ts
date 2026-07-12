@@ -48,6 +48,22 @@ interface AnthropicRequestOptions {
   readonly headers?: Record<string, string>;
 }
 
+function appendAnthropicEphemeralSuffix(
+  messages: Anthropic.Messages.MessageParam[],
+  suffix: string | undefined,
+): Anthropic.Messages.MessageParam[] {
+  if (suffix === undefined || suffix.length === 0) return messages;
+  const block: Anthropic.Messages.TextBlockParam = { type: 'text', text: suffix };
+  const last = messages.at(-1);
+  if (last?.role !== 'user') {
+    return [...messages, { role: 'user', content: [block] }];
+  }
+  const content = typeof last.content === 'string'
+    ? [{ type: 'text' as const, text: last.content }, block]
+    : [...last.content, block];
+  return [...messages.slice(0, -1), { ...last, content }];
+}
+
 function getAnthropicCompatDefaultHeaders(
   config: KodaXProviderConfig,
 ): Record<string, string> | undefined {
@@ -580,9 +596,9 @@ export abstract class KodaXAnthropicCompatProvider extends KodaXBaseProvider {
       this.validateExplicitReasoningEffort(normalizedReasoning, model);
       const maxOutputTokens =
         streamOptions?.maxOutputTokensOverride ?? this.getEffectiveMaxOutputTokens(model);
-      const convertedMessages = this.applyCacheControlToMessages(
+      const convertedMessages = appendAnthropicEphemeralSuffix(this.applyCacheControlToMessages(
         await this.convertMessages(messages, model),
-      );
+      ), streamOptions?.ephemeralSuffix?.content);
       const initialCapability = normalizedReasoning.enabled
         ? this.getReasoningCapability(model)
         : 'none';
@@ -1023,9 +1039,9 @@ export abstract class KodaXAnthropicCompatProvider extends KodaXBaseProvider {
       this.validateExplicitReasoningEffort(normalizedReasoning, model);
       const maxOutputTokens =
         streamOptions?.maxOutputTokensOverride ?? this.getEffectiveMaxOutputTokens(model);
-      const convertedMessages = this.applyCacheControlToMessages(
+      const convertedMessages = appendAnthropicEphemeralSuffix(this.applyCacheControlToMessages(
         await this.convertMessages(messages, model),
-      );
+      ), streamOptions?.ephemeralSuffix?.content);
       const initialCapability = normalizedReasoning.enabled
         ? this.getReasoningCapability(model)
         : 'none';

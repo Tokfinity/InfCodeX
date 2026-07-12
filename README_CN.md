@@ -214,9 +214,10 @@ import { loadConfig } from '@kodax-ai/kodax/repl';              // REPL 配置 /
 import { createMcpManager } from '@kodax-ai/kodax/mcp';         // MCP popout manager（v0.7.42 起）
 import { listSessions } from '@kodax-ai/kodax/session';         // session 历史工具
 import { createKodaXRuntime } from '@kodax-ai/kodax/runtime';   // embedded/Worker/daemon 宿主 API
+import { createMemoryAgent } from '@kodax-ai/kodax/experimental-memory'; // opt-in 实验性记忆 SDK
 ```
 
-10 个 SDK 入口（root + 9 subpath）通过 ESM 共享 chunk 复用底层代码 —— 只 import `/agent` 不会把 `/repl` 的 Ink + React 一起拉进来。
+11 个 SDK 入口（root + 10 subpath）通过 ESM 共享 chunk 复用底层代码 —— 只 import `/agent` 不会把 `/repl` 的 Ink + React 一起拉进来。
 
 完整的宿主集成契约——包括 embedded/Worker/daemon 所有权、外部 Agent 注册与任务控制、session cursor 分页、workflow 模型分层和效率遥测——见 [SDK Embedder Integration Guide](docs/SDK_EMBEDDER_GUIDE.md)。
 
@@ -529,7 +530,7 @@ kodax --repo-intelligence full --repo-intelligence-trace
 
 ## 仓库结构
 
-KodaX 是基于 npm workspaces 的 TypeScript monorepo，**源码层 4 个 workspace 包**（FEATURE_194 v0.7.43 包合并 — 9 → 4，ADR-036），npm 上以单 bundle 包 `@kodax-ai/kodax` 发布 + 8 个 SDK subpath exports（`/agent`、`/llm`、`/coding`、`/media`、`/repl`、`/skills`、`/mcp`、`/session`；ADR-024 + ADR-032 + ADR-038）。核心包：
+KodaX 是基于 npm workspaces 的 TypeScript monorepo，**源码层 4 个 workspace 包**（FEATURE_194 v0.7.43 包合并 — 9 → 4，ADR-036），npm 上以单 bundle 包 `@kodax-ai/kodax` 发布 + 10 个 SDK subpath exports（`/agent`、`/llm`、`/coding`、`/media`、`/repl`、`/skills`、`/mcp`、`/session`、`/runtime`、`/experimental-memory`；ADR-024 + ADR-032 + ADR-038）。核心包：
 
 | Workspace 包 | 作用 | 主要依赖 |
 |----|------|---------|
@@ -538,16 +539,16 @@ KodaX 是基于 npm workspaces 的 TypeScript monorepo，**源码层 4 个 works
 | `@kodax-ai/coding` | Coding Agent:50+ 工具(含 `dispatch_child_task`/`send_message`/`task_stop`)、role prompts、agent loop、auto-continue + repo-intelligence protocol(v0.7.43 inline) | `@kodax-ai/llm`, `@kodax-ai/agent` |
 | `@kodax-ai/repl` | 完整交互式终端 UI（Ink / React、权限模式、命令系统、流式渲染） | `@kodax-ai/coding`, `ink`, `react` |
 
-根目录 `src/kodax_cli.ts` 是 CLI 入口；`src/sdk-{agent,llm,coding,media,repl,skills,mcp,session}.ts` 是 SDK subpath 入口；构建产物在 `dist/`，单文件二进制在 `dist/binary/<target>/`。
+根目录 `src/kodax_cli.ts` 是 CLI 入口；`src/sdk-{agent,llm,coding,media,repl,skills,mcp,session,runtime,experimental-memory}.ts` 是 SDK subpath 入口；构建产物在 `dist/`，单文件二进制在 `dist/binary/<target>/`。
 
 ### 源码层 vs npm 发布层
 
 KodaX 有两层结构，SDK 用户需要分开理解：
 
 - **源码层**：上面 4 个 workspace 包（开发者读代码时看到的物理结构）。
-- **npm 发布层**：单个 bundled 包 `@kodax-ai/kodax`，对外暴露 8 个 SDK subpath（SDK 消费者 `import` 时看到的接口）。subpath 分两种角色：
+- **npm 发布层**：单个 bundled 包 `@kodax-ai/kodax`，对外暴露 10 个 SDK subpath（SDK 消费者 `import` 时看到的接口）。subpath 分两种角色：
   - **完整包 subpath**（`/agent`、`/llm`、`/coding`、`/repl`）—— 每个 1:1 对应一个源码包，暴露完整公开 API。
-  - **窄子集 subpath**（`/media`、`/skills`、`/mcp`、`/session`）—— 从 `/agent` 或 `/repl` 切出聚焦的能力子集，让"只用 Skills/MCP/会话管理"的消费者引入更小的依赖。
+  - **窄子集 subpath**（`/media`、`/skills`、`/mcp`、`/session`、`/experimental-memory`）—— 从 `/agent` 或 `/repl` 切出聚焦能力；`/experimental-memory` 明确为 opt-in 不稳定接口。
 
 | 源码包 | npm subpath | 类型 | 内容 | 典型消费者 |
 |---|---|---|---|---|
@@ -556,6 +557,7 @@ KodaX 有两层结构，SDK 用户需要分开理解：
 | `packages/agent`  | `@kodax-ai/kodax/skills`  | **窄子集** | 仅 Skills 系统 —— `SkillRegistry` / `loadFullSkill` / `expandSkillForLLM` 等 (26 exports = v0.7.43 之前 `@kodax-ai/skills` 完整 API) | Skill 加载器、IDE 插件 |
 | `packages/agent`  | `@kodax-ai/kodax/mcp`     | **窄子集** | 仅 MCP —— `McpCapabilityProvider` / `createMcpTransport` / `searchMcpCatalog` 等 (23 exports) | MCP server 宿主 |
 | `packages/agent`  | `@kodax-ai/kodax/media`   | **窄子集** | 结构化图片/文件/视频输入 artifact helpers (22 exports) | 桌面宿主、多模态客户端 |
+| `packages/agent`  | `@kodax-ai/kodax/experimental-memory` | **实验性子集** | F228-backed `MemoryAgent` / `MemorySession` scope、recall、query、observation、outcome 契约 | 显式评估 FEATURE_260 的 SDK 宿主 |
 | `packages/coding` | `@kodax-ai/kodax/coding`  | 完整包 | Coding agent + 50+ 工具 + repo-intelligence (505 exports) | 构建 Claude Code 形态产品 |
 | `packages/repl`   | `@kodax-ai/kodax/repl`    | 完整包 | Ink TUI + 权限模式 + 命令系统 (217 exports) | 终端 UI 消费者 |
 | `packages/repl`   | `@kodax-ai/kodax/session` | **窄子集** | 仅会话管理 —— `listSessions` / `loadFullTranscript` / `appendClientNotice` / `forkSession` / `compactSession` / `watchSessions` 等 (17 exports) | 读取 session 历史的 IDE 插件和桌面宿主 |
@@ -568,6 +570,8 @@ KodaX 有两层结构，SDK 用户需要分开理解：
 **宿主读持久化历史（FEATURE_230 + FEATURE_234，v0.7.51；v0.7.63 hardening）**：面向「宿主读持久化状态」的 additive 闭环。**持久化工具记录回放**——resume 的会话现在会回放助手用过的工具卡片，而不是退化成纯文本。`messages` / `lineage` 仍是 canonical；`SessionData.uiHistory` 成为有界、脱敏、仅 terminal 状态的回放缓存。SDK transcript 契约明确化：`loadSession()` = 活动 model context，`loadFullTranscript()` = 带结构化条目的追加序 host scrollback（`message` / `compaction` / `branch_summary` / `rewind_marker` / `client_notice` / `task_result`）并带 clone provenance（`logicalId` / `sourceEntryId`），`uiHistory` = 可选回放缓存，工具卡片始终可从 canonical messages 重建。宿主可用 `appendClientNotice()` 持久化本地 slash 输出且不进入模型上下文；workflow/child 完成结果通过结构化 `taskResults[]` 暴露，不再要求解析 `<task-completed>` 文本。`rewind_marker` 只用于 host scrollback 审计，不进入 model-context messages。**Workflow run 宿主归属**——`WorkflowProcessTrackerOptions` / `WorkflowProcessSnapshot` 新增 host-owned 不透明 `hostMetadata?: Record<string, string>`，SDK 存储、持久化进 `run.json`、回读回显（含进程重启后）但不解释其含义，让宿主零侧表把 run 归回发起它的 session/surface。未 stamp 的旧 run 诚实回显 `hostMetadata === undefined`。详见 [docs/features/v0.7.51.md](docs/features/v0.7.51.md)。
 
 **会话恢复与 ACP 污染修复（FEATURE_261，v0.7.67）**：直接运行 `kodax -r` 会进入可搜索、上下选择、Tab 补全和翻页的交互式会话选择器，并显示当前选中项的完整 session ID；`kodax -r <值>` 优先按完整 ID 恢复，ID 不存在时再按忽略大小写的完整标题匹配。标题唯一则直接恢复，同名标题则进入只包含候选项的选择器，绝不静默选第一条。`listSessions()` / Runtime / daemon 会话列表新增 `surface` 精确过滤和不透明 `cursor` 分页。ACP session 改为收到首个有效 prompt 后才持久化，ACP 测试强制使用临时 runtime home，避免测试记录写入真实 `~/.kodax/sessions`。`kodax -s cleanup-acp` 只预览严格匹配的空 ACP 污染记录；仅显式追加 `--apply-session-cleanup` 时才归档，不做永久删除。
+
+**实验性 Memory Agent SDK（FEATURE_260，v0.7.68）**：`/experimental-memory` 暴露基于既有 F228 治理平面的薄 `MemoryAgent` 与 scoped `MemorySession`。被动 recall 零等待，`query()` 只读且由主 Action LLM 主动选择；持久化仍必须经过 proposal/preview/fingerprint/apply。召回内容保持低权限，安全与 scope 边界仍由确定性代码门禁承担。直接 session 示例与宿主边界见 [SDK Embedder Guide §21](docs/SDK_EMBEDDER_GUIDE.md#21-experimental-governed-memory--experimental-memory-feature_260-v0768)。
 
 **外部 Agent SDK plane（FEATURE_258，v0.7.67）**：`/agent` 导出协议中立的 executor、registration、policy、credential broker、artifact policy、catalog 和 durable task 契约；`/runtime` 通过 `admin.agentRegistrations`、`agents`、`agentTasks` 向 embedded 与 daemon client 提供同一组 DTO API。Executor factory 是宿主函数，只能装入 inline owner，或在创建新的 in-process daemon owner 时装入；不能通过既有 daemon 连接或 Runtime Worker 边界注入。Plane 关闭后是终态：未完成的 wait 和后续所有服务调用都会拒绝；受限 Workflow 脚本会完整校验并传递 `phase` 与外部 `target`。完整所有权、注册、preflight、启动/等待/继续/取消/对账和安全边界见 [SDK Embedder Guide §18](docs/SDK_EMBEDDER_GUIDE.md#18-external-agent-executor-plane-feature_258-v0767)。
 
@@ -596,9 +600,9 @@ KodaX/                       # 4 workspace packages(FEATURE_194 v0.7.43)
 │   └── repl/                # @kodax-ai/repl —— Ink TUI
 ├── src/
 │   ├── kodax_cli.ts         # CLI 主入口（bin: `kodax`）
-│   └── sdk-*.ts             # SDK subpath 入口 → @kodax-ai/kodax/{agent,llm,coding,media,repl,skills,mcp,session,runtime}
+│   └── sdk-*.ts             # SDK subpath 入口 → @kodax-ai/kodax/{agent,llm,coding,media,repl,skills,mcp,session,runtime,experimental-memory}
 ├── scripts/
-│   ├── build-bundle.mjs     # esbuild 单 bundle 多 entry 打包（CLI + root + 9 SDK subpath + chunks）
+│   ├── build-bundle.mjs     # esbuild 单 bundle 多 entry 打包（CLI + root + 10 SDK subpath + chunks）
 │   ├── build-binary.mjs     # Bun --compile 单文件二进制打包
 │   └── release.mjs          # ADR-024 release-time pkg name/exports 注入
 └── .github/workflows/

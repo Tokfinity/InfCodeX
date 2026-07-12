@@ -13,6 +13,12 @@ import {
   mcpToClassifierInput,
 } from './classifier-projection.js';
 import { toolRead } from './read.js';
+import {
+  MEMORY_RECALL_TOOL_DESCRIPTION,
+  MEMORY_RECALL_TOOL_NAME,
+  MEMORY_RECALL_TOOL_SCHEMA,
+  toolMemoryRecall,
+} from './memory-recall.js';
 import { toolKodaxManual } from './manual.js';
 import { buildManualToolDescription } from '../self-knowledge/tool-description.js';
 import { toolSkill } from './skill.js';
@@ -158,6 +164,14 @@ export const BUILTIN_TOOL_DEFINITIONS: LocalToolDefinition[] = [
       required: ['path'],
     },
     handler: toolRead,
+    sideEffect: 'readonly',
+    toClassifierInput: () => '',
+  },
+  {
+    name: MEMORY_RECALL_TOOL_NAME,
+    description: MEMORY_RECALL_TOOL_DESCRIPTION,
+    input_schema: MEMORY_RECALL_TOOL_SCHEMA,
+    handler: toolMemoryRecall,
     sideEffect: 'readonly',
     toClassifierInput: () => '',
   },

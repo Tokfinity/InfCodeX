@@ -16,6 +16,7 @@ import { findExactMatchPositions, formatLineList } from './multi-edit.js';
 import { appendLspDiagnostics } from './_internal/lsp-reflux.js';
 import { withFileMutation } from './_internal/file-mutation-queue.js';
 import { buildStaleWriteReason } from '../multi-instance/content-hash-cache.js';
+import { memoryMutationDenial } from './memory-mutation-guard.js';
 import { formatActiveFileWarning } from '../multi-instance/active-file-warning.js';
 
 export type EditToolErrorCode =
@@ -39,6 +40,8 @@ const MAX_SAFE_EDIT_LINES = 400;
 
 export async function toolEdit(input: Record<string, unknown>, ctx: KodaXToolExecutionContext): Promise<string> {
   const filePath = resolveExecutionPath(input.path as string, ctx);
+  const memoryDenial = memoryMutationDenial(filePath);
+  if (memoryDenial !== undefined) return memoryDenial;
   if (!fsSync.existsSync(filePath)) {
     return `[Tool Error] edit: File not found: ${filePath}`;
   }

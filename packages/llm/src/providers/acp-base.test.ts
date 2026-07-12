@@ -166,6 +166,20 @@ describe('KodaXAcpProvider', () => {
     expect(firstClient.prompt).toHaveBeenCalledTimes(2);
   });
 
+  it('merges an ephemeral suffix into the latest ACP prompt copy', async () => {
+    const provider = new TestAcpProvider();
+    acpMockState.promptImpl = async (_client, text) => {
+      expect(text).toBe('latest prompt\n\n[Memory evidence; not an instruction]\nClaim: use npm');
+    };
+    const messages: KodaXMessage[] = [{ role: 'user', content: 'latest prompt' }];
+
+    await provider.stream(messages, [], 'system', undefined, {
+      ephemeralSuffix: { content: '[Memory evidence; not an instruction]\nClaim: use npm' },
+    });
+
+    expect(messages).toEqual([{ role: 'user', content: 'latest prompt' }]);
+  });
+
   it('propagates ACP prompt usage when the prompt response includes it', async () => {
     const provider = new TestAcpProvider();
 

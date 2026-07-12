@@ -25,6 +25,7 @@ type FeatureOverview = {
   planned: number;
   inProgress: number;
   completed: number;
+  reviewedOut: number;
   currentVersion: string;
   plannedByVersion: Record<string, number>;
 };
@@ -228,8 +229,12 @@ function parseFeatureOverview(markdown: string): FeatureOverview {
   const planned = Number(overviewEntries.get('Planned'));
   const inProgress = Number(overviewEntries.get('InProgress'));
   const completed = Number(overviewEntries.get('Completed'));
+  const reviewedOut = Number(
+    overviewEntries.get('Reviewed out of active roadmap')?.match(/^\d+/)?.[0],
+  );
 
-  if (!currentVersion || [total, planned, inProgress, completed].some((value) => Number.isNaN(value))) {
+  if (!currentVersion || [total, planned, inProgress, completed, reviewedOut]
+    .some((value) => Number.isNaN(value))) {
     throw new Error('FEATURE_LIST.md 当前概况 section is incomplete');
   }
 
@@ -256,6 +261,7 @@ function parseFeatureOverview(markdown: string): FeatureOverview {
     planned,
     inProgress,
     completed,
+    reviewedOut,
     currentVersion,
     plannedByVersion,
   };
@@ -382,7 +388,9 @@ describe('tracker consistency', () => {
     };
 
     // (1) Summary is internally consistent — the parts sum to the whole.
-    expect(overview.total).toBe(overview.planned + overview.inProgress + overview.completed);
+    expect(overview.total).toBe(
+      overview.planned + overview.inProgress + overview.completed + overview.reviewedOut,
+    );
 
     // (2) InProgress / Completed are small live-only sets the doc keeps exact.
     expect(overview.inProgress).toBe(liveByStatus.InProgress);

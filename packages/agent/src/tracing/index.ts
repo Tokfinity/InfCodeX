@@ -14,6 +14,7 @@
 export type {
   AgentSpanData,
   GenerationSpanData,
+  MemoryDecisionTraceReceipt,
   ToolCallSpanData,
   HandoffSpanData,
   CompactionSpanData,

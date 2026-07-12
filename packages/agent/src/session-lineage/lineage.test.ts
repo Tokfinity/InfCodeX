@@ -37,6 +37,8 @@ describe('LineageExtension', () => {
       'archive_marker',
       'rewind_marker',
       'artifact_ledger',
+      'memory_outcome_digest',
+      'memory_review_receipt',
     ]);
     expect([...LINEAGE_ENTRY_TYPES]).toEqual([...LineageExtension.entryTypes]);
   });

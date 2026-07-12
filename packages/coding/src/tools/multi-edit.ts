@@ -30,6 +30,7 @@ import {
 } from './text-anchor.js';
 import { withFileMutation } from './_internal/file-mutation-queue.js';
 import { buildStaleWriteReason } from '../multi-instance/content-hash-cache.js';
+import { memoryMutationDenial } from './memory-mutation-guard.js';
 import { formatActiveFileWarning } from '../multi-instance/active-file-warning.js';
 import { appendLspDiagnostics } from './_internal/lsp-reflux.js';
 
@@ -47,6 +48,8 @@ export async function toolMultiEdit(
   ctx: KodaXToolExecutionContext,
 ): Promise<string> {
   const filePath = resolveExecutionPath(input.path as string, ctx);
+  const memoryDenial = memoryMutationDenial(filePath);
+  if (memoryDenial !== undefined) return memoryDenial;
   if (!fsSync.existsSync(filePath)) {
     return `[Tool Error] multi_edit: File not found: ${filePath}`;
   }

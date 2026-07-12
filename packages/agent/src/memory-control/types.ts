@@ -10,7 +10,24 @@ export type MemoryRefKind =
   | 'self_manual'
   | 'project_doc';
 
-export type MemoryScope = 'turn' | 'session' | 'project' | 'user' | 'builtin';
+import type {
+  MemoryApplicability,
+  MemoryContextIdentity,
+} from '../memory/identity.js';
+import type { KodaXMemoryOutcomeDigest } from '../types.js';
+
+export type { MemoryApplicability, MemoryContextIdentity } from '../memory/identity.js';
+
+export type MemoryScope =
+  | 'turn'
+  | 'session'
+  | 'project'
+  | 'workspace'
+  | 'agent'
+  | 'user'
+  | 'builtin';
+
+export type MemoryClaimKind = 'fact' | 'policy' | 'preference' | 'procedure' | 'episode';
 
 export type MemoryLifecycle =
   | 'pending'
@@ -36,6 +53,11 @@ export interface MemoryItemRef {
   readonly kind: MemoryRefKind;
   readonly id: string;
   readonly scope: MemoryScope;
+  readonly scopeId?: string;
+  readonly applicability?: MemoryApplicability;
+  readonly claimKind?: MemoryClaimKind;
+  readonly claimKey?: string;
+  readonly actionSignature?: string;
   readonly title?: string;
   readonly owner: 'user' | 'project' | 'kodax' | 'external';
   readonly lifecycle: MemoryLifecycle;
@@ -50,6 +72,9 @@ export interface MemoryItemRef {
   readonly updatedAt?: string;
   readonly lastUsedAt?: string;
   readonly pinned?: boolean;
+  readonly applyReceiptRef?: string;
+  readonly expectedFingerprint?: string;
+  readonly resultingFingerprint?: string;
 }
 
 export interface MemoryRefFilter {
@@ -108,6 +133,8 @@ export interface MemoryApproval {
   readonly approvedBy: 'user' | 'host';
   readonly approvedAt: string;
   readonly expectedFingerprints: Readonly<Record<string, string>>;
+  readonly policyId?: string;
+  readonly policyReason?: string;
 }
 
 export interface MemoryApplyResult {
@@ -124,6 +151,14 @@ export interface MemoryRejectResult {
   readonly rejected: boolean;
   readonly skippedReason?: string;
   readonly review?: MemoryReviewPlan;
+  readonly warnings: readonly string[];
+}
+
+export interface MemoryLifecycleOperationResult {
+  readonly refId: string;
+  readonly operation: 'archive' | 'forget' | 'purge';
+  readonly acknowledged: boolean;
+  readonly residualSourceRefs: readonly string[];
   readonly warnings: readonly string[];
 }
 
@@ -187,11 +222,16 @@ export interface MemoryGovernanceReport {
 
 export interface MemoryPackInput {
   readonly task: string;
+  readonly identity?: MemoryContextIdentity;
+  readonly decisionIntent?: string;
+  readonly actionSignature?: string;
+  readonly maxCandidates?: number;
   readonly maxHints?: number;
   readonly includePrivate?: boolean;
   readonly includeSensitive?: boolean;
   readonly includeSnippets?: boolean;
   readonly ignoreMemory?: boolean;
+  readonly purpose?: 'automatic' | 'deliberate_query';
 }
 
 export interface MemoryPackHint {
@@ -205,6 +245,10 @@ export interface MemoryPackHint {
 export interface MemoryPack {
   readonly generatedAt: string;
   readonly taskFingerprint: string;
+  readonly memoryRevision: string;
+  readonly candidates: readonly MemoryPackHint[];
+  readonly promptHints: readonly MemoryPackHint[];
+  /** @deprecated Use promptHints. Retained for F228 source compatibility. */
   readonly hints: readonly MemoryPackHint[];
   readonly omitted: readonly string[];
   readonly traceMetadata: MemoryPackTraceMetadata;
@@ -222,7 +266,8 @@ export type MemoryReviewTrigger =
   | 'explicit_remember'
   | 'explicit_forget'
   | 'proposal_rejected'
-  | 'conflict_detected';
+  | 'conflict_detected'
+  | 'episode_completed';
 
 export interface MemoryReviewCandidateRef {
   readonly ref: MemoryItemRef;
@@ -233,7 +278,8 @@ export interface MemoryReviewCandidateRef {
 
 export interface MemoryReviewInput {
   readonly trigger: MemoryReviewTrigger;
-  readonly userFeedback: string;
+  readonly userFeedback?: string;
+  readonly episodeDigest?: KodaXMemoryOutcomeDigest;
   readonly task?: string;
   readonly sourceRefs?: readonly string[];
   readonly candidateRefIds?: readonly string[];
@@ -260,6 +306,12 @@ export interface MemoryReviewDraftAction {
   readonly risk: 'low' | 'medium' | 'high';
   readonly requiresApproval: true;
   readonly proposedBody?: string;
+  readonly claimKind?: MemoryClaimKind;
+  readonly claimKey?: string;
+  readonly actionSignature?: string;
+  readonly preconditions?: string;
+  readonly counterexamples?: readonly string[];
+  readonly relationship?: 'same_claim' | 'condition_refinement' | 'conflict';
 }
 
 export interface MemoryReviewPlan {
@@ -269,6 +321,32 @@ export interface MemoryReviewPlan {
   readonly candidateRefs: readonly MemoryReviewCandidateRef[];
   readonly actions: readonly MemoryReviewDraftAction[];
   readonly warnings: readonly string[];
+  readonly episodeDigest?: KodaXMemoryOutcomeDigest;
+}
+
+export interface MemoryEpisodeReviewResult {
+  readonly plan: MemoryReviewPlan;
+  readonly proposalIds: readonly string[];
+  readonly appliedProposalIds: readonly string[];
+  readonly decisions: readonly MemoryReviewPersistenceDecision[];
+  readonly warnings: readonly string[];
+}
+
+export type MemoryReviewPersistenceKind =
+  | 'create'
+  | 'evidence_update'
+  | 'condition_refinement'
+  | 'conflict'
+  | 'no_action'
+  | 'reject'
+  | 'quarantine';
+
+export interface MemoryReviewPersistenceDecision {
+  readonly actionIndex: number;
+  readonly kind: MemoryReviewPersistenceKind;
+  readonly reason: string;
+  readonly existingRefId?: string;
+  readonly proposalId?: string;
 }
 
 export type MemoryReviewRunner = (input: MemoryReviewModelInput) => Promise<MemoryReviewPlan>;
@@ -287,6 +365,14 @@ export interface MemoryController {
   maybeRunAutoCurator(input?: MemoryAutoCuratorInput): Promise<MemoryAutoCuratorResult>;
   buildMemoryPack(input: MemoryPackInput): Promise<MemoryPack>;
   reviewMemoryFeedback(input: MemoryReviewInput): Promise<MemoryReviewPlan>;
+  persistReviewPlan(plan: MemoryReviewPlan): Promise<readonly string[]>;
+  reviewEpisode(
+    digest: KodaXMemoryOutcomeDigest,
+    signal?: AbortSignal,
+  ): Promise<MemoryEpisodeReviewResult>;
+  archiveRef(id: string): Promise<MemoryLifecycleOperationResult>;
+  forgetRef(id: string): Promise<MemoryLifecycleOperationResult>;
+  purgeRef(id: string): Promise<MemoryLifecycleOperationResult>;
 }
 
 export type MemoryEvent =

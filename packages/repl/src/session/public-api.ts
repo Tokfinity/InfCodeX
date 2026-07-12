@@ -995,6 +995,8 @@ function toTranscriptEntry(
     case 'archive_marker':
     case 'label':
     case 'goal':
+    case 'memory_outcome_digest':
+    case 'memory_review_receipt':
       return null;
     default: {
       const exhaustiveCheck: never = entry;

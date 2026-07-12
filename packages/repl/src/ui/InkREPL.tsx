@@ -94,6 +94,11 @@ import { getActivePasteStore, type PastedContent } from "./utils/paste-store.js"
 import { hashPastedText, storePastedText, retrievePastedText, cleanupOldPastes } from "./utils/paste-cache.js";
 import { stripAnsi } from "./utils/strip-ansi.js";
 import {
+  appendMemoryClientNotice,
+  appendMemoryOutcomeDigest,
+  appendMemoryReviewReceipt,
+} from "@kodax-ai/agent";
+import {
   applySessionCompaction,
   buildSessionTree,
   createSessionLineage,
@@ -5916,6 +5921,28 @@ const InkREPLInner: React.FC<InkREPLProps> = ({
   // Process special syntax (shell commands, file references)
   // Create KodaXEvents for streaming updates
   const createStreamingEvents = useCallback((): StreamingEvents => ({
+    onMemoryOutcomeDigest: (digest) => {
+      context.lineage = appendMemoryOutcomeDigest(
+        context.lineage ?? createSessionLineage(context.messages),
+        digest,
+      );
+    },
+    onMemoryReviewReceipt: (receipt) => {
+      context.lineage = appendMemoryReviewReceipt(
+        context.lineage ?? createSessionLineage(context.messages),
+        receipt,
+      );
+    },
+    onMemoryNotice: (notice) => {
+      context.lineage = appendMemoryClientNotice(
+        context.lineage ?? createSessionLineage(context.messages),
+        { ...notice, createdAt: new Date().toISOString() },
+      );
+      addHistoryItem({
+        type: "info",
+        text: `[memory] ${notice.summaries.slice(0, 3).join("; ")}`,
+      });
+    },
     onThinkingDelta: (text: string, meta?: KodaXActivityEventMeta) => {
       if (userInterruptedRef.current) {
         return;

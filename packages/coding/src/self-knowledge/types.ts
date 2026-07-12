@@ -22,6 +22,7 @@ export type KodaXManualTopicId =
   | 'mcp'
   | 'repo-intelligence'
   | 'sessions'
+  | 'memory'
   | 'doctor'
   | 'sdk'
   | 'troubleshooting';

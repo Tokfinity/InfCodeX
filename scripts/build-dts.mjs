@@ -91,11 +91,18 @@ const sdkEntries = {
   'sdk-mcp': 'src/sdk-mcp.ts',
   'sdk-session': 'src/sdk-session.ts',
   'sdk-runtime': 'src/sdk-runtime.ts',
+  'sdk-experimental-memory': 'src/sdk-experimental-memory.ts',
 };
 
 const internalSubpathDtsResolver = {
   name: 'internal-subpath-dts-resolver',
   resolveId(id) {
+    if (id === '@kodax-ai/agent/experimental-memory') {
+      return path.join(repoRoot, 'packages/agent/src/experimental-memory/index.ts');
+    }
+    if (id === '@kodax-ai/agent/memory-control') {
+      return path.join(repoRoot, 'packages/agent/src/memory-control/index.ts');
+    }
     if (id === '@kodax-ai/agent/media') {
       return path.join(repoRoot, 'packages/agent/src/media/index.ts');
     }

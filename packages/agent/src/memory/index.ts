@@ -18,13 +18,25 @@
  */
 
 export {
+  hashMemoryIdentityComponent,
+  matchesMemoryApplicability,
+  memoryApplicabilityFingerprint,
+  type MemoryApplicability,
+  type MemoryContextIdentity,
+} from './identity.js';
+
+export { MEMORY_POLICY_VERSION } from './policy.js';
+
+export {
   hashCwd,
   isAutoManagedMemoryFile,
   parseMemoryTypeFromFilename,
   resolveMemoryEntrypoint,
   resolveMemoryRoot,
+  resolveScopedMemoryRoot,
   sanitizeProjectKey,
   tryGitRemote,
+  type DurableMemoryScope,
 } from './paths.js';
 
 export type { MemoryFrontmatter, MemoryType, ParsedMemoryFile } from './frontmatter.js';

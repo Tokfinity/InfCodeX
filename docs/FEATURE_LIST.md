@@ -11,13 +11,13 @@
 
 | Item | Value |
 |---|---|
-| Current released version | `v0.7.67` |
-| Current package version | `@kodax-ai/kodax@0.7.67` release commit; GitHub source/binary release included, npm publication pending operator action |
+| Current released version | `v0.7.68` |
+| Current package version | `@kodax-ai/kodax@0.7.68`; local release metadata complete, Git tag/GitHub release/npm publication pending operator action |
 | Workspace baseline | `llm / agent / coding / repl` 4 packages |
 | Total tracked features | `52` |
 | InProgress | `1` |
-| Planned | `12` |
-| Completed | `32` |
+| Planned | `11` |
+| Completed | `33` |
 | Reviewed out of active roadmap | `7` (`105, 108, 231, 232, 235, 238, 244`) |
 | Tracked feature IDs | `007, 030, 093, 105, 108, 113, 139, 174, 211, 221, 224, 225, 228, 229, 230, 231, 232, 233, 234, 235, 236, 237, 238, 239, 240, 241, 242, 243, 244, 245, 246, 247, 248, 249, 250, 251, 252, 253, 254, 255, 256, 257, 258, 259, 260, 261, 262, 263, 264, 265, 266, 267` |
 | Archive cutoff | Shipped / canceled / absorbed / shelved items through `v0.7.49` are archived. |
@@ -26,9 +26,9 @@
 
 | Status | Count | Feature IDs | Next checkpoint |
 |---|---:|---|---|
-| Completed | 32 | `261, 259, 258, 253, 254, 255, 256, 257, 228, 251, 252, 250, 248, 249, 247, 246, 245, 243, 242, 241, 233, 240, 239, 224, 221, 174, 211, 237, 229, 230, 234, 236` | `261`, `259`, and `258` shipped in v0.7.67 (2026-07-11). `253-257` shipped together in v0.7.66 (2026-07-10); `228` shipped v0.7.62 (2026-07-06); `251, 252` shipped v0.7.61 (2026-07-06); `250` shipped v0.7.60 (2026-07-04); `248, 249` shipped v0.7.59 (2026-07-03); `245, 246, 247, 221` released v0.7.58 (2026-07-02); `233, 241, 242, 243` released v0.7.57; `239, 240` released v0.7.56; `224` released v0.7.54; `174, 211, 237` v0.7.53; `229` v0.7.50; `230, 234, 236` v0.7.51 |
-| InProgress | 1 | `225` | Early Classic reverse-video StatusBar cleanup slice delivered; broader current-HEAD cleanup remains. |
-| Planned, near-term | 6 | `260, 267, 266, 263, 264, 265` | `v0.7.68` -> `v0.7.85` |
+| Completed | 33 | `260, 261, 259, 258, 253, 254, 255, 256, 257, 228, 251, 252, 250, 248, 249, 247, 246, 245, 243, 242, 241, 233, 240, 239, 224, 221, 174, 211, 237, 229, 230, 234, 236` | `260` completed for v0.7.68 (2026-07-12) with 9612 tests, full build, 87.58% focused line coverage, and all preregistered v2 memory-routing gates passing. `261`, `259`, and `258` shipped in v0.7.67 (2026-07-11). Earlier completion history is unchanged. |
+| InProgress | 1 | `225` | `225` broader current-HEAD cleanup remains. |
+| Planned, near-term | 5 | `267, 266, 263, 264, 265` | `v0.7.69` -> `v0.7.85` |
 | Planned, v0.8.x | 5 | `007, 030, 093, 113, 139` | `v0.8.5+` |
 | Planned, v0.9.x | 1 | `262` | `v0.9.0` |
 | Reviewed out, 2026-07-12 | 7 | `244, 231, 235, 238, 232, 105, 108` | Shelved, deferred, absorbed, or cancelled after the post-v0.7.70 roadmap review. |
@@ -51,7 +51,7 @@
 | `v0.7.65` | `0` |
 | `v0.7.66` | `0` |
 | `v0.7.67` | `0` |
-| `v0.7.68` | `1` |
+| `v0.7.68` | `0` |
 | `v0.7.69` | `1` |
 | `v0.7.70` | `1` |
 | `v0.7.71` | `0` |
@@ -218,6 +218,24 @@
 
 Recent completion notes:
 
+`260` completed for `v0.7.68`: the thin experimental Memory Agent SDK,
+zero-wait scoped recall, deliberate read-only `memory_recall`, trace-only
+decision receipts, bounded Outcome Digests/review inbox, consult-before-write
+promotion, and cache-safe policy-versioned provider integration are complete.
+The fresh `f260-v0.7.68.2` 520-call panel passed every preregistered gate; the
+earlier v1 99%-for-all panel remains diagnostic only.
+Post-review hardening for Issue 152 additionally removes credential-bearing Git
+remote identity, closes Windows/interpreter mutation-guard gaps, serializes
+review/proposal/lifecycle persistence, and makes eval provenance/cache handling
+fail-loud without changing the frozen prompt, tool schema, or policy bytes.
+The bundled `kodax_manual` now routes memory-capability questions to a dedicated
+F228/F260 topic, covers every built-in slash command through a two-way drift
+test, and points SDK readers at the Runtime and experimental-memory contracts.
+The schema-v2 manifest remains available, but Windows temporary-directory
+cleanup reclaimed the earlier 520-cell raw/review artifacts during the final
+full-suite validation; a renewed raw-evidence audit therefore requires an
+explicitly authorized bounded rerun rather than reconstruction.
+
 `261` shipped in `v0.7.67`: bare `-r`
 opens a searchable keyboard-driven picker with the full selected ID; explicit
 resume is ID-first, then exact-title with duplicate disambiguation; session listing supports exact
@@ -275,7 +293,6 @@ fixed GitHub binary archive sidecar omission before tagging.
 
 | ID | Title | Category | Priority | Planned | Design |
 |---|---|---|---|---|---|
-| `260` | KodaX Memory Agent — Proactive Execution Recall + Scoped Memory Consolidation | Core / Agent Memory + Intelligence | High | `v0.7.68` | [v0.7.68](features/v0.7.68.md#feature_260-kodax-memory-agent--proactive-execution-recall--scoped-memory-consolidation) |
 | `267` | Bidirectional A2A Client Executor + KodaX Agent Server | Core / Agent Interoperability + Runtime SDK | Critical | `v0.7.69` | [v0.7.69](features/v0.7.69.md#feature_267-bidirectional-a2a-client-executor--kodax-agent-server) |
 | `266` | Learning Center + Learned Capability Runtime Control Plane | Core / Agent Learning + Runtime SDK | High | `v0.7.70` | [v0.7.70](features/v0.7.70.md#feature_266-learning-center--learned-capability-runtime-control-plane) |
 | `263` | Evidence-Gated Background Skill Learning Loop | Core / Skills + Self-Improvement | High | `v0.7.75` | [v0.7.75](features/v0.7.75.md#feature_263-evidence-gated-background-skill-learning-loop) |
@@ -320,6 +337,7 @@ fixed GitHub binary archive sidecar omission before tagging.
 
 | ID | Title | Released | Design | Notes |
 |---|---|---|---|---|
+| `260` | KodaX Memory Agent — Proactive Execution Recall + Scoped Memory Consolidation | `v0.7.68` | [v0.7.68](features/v0.7.68.md#feature_260-kodax-memory-agent--proactive-execution-recall--scoped-memory-consolidation) | Thin experimental agent-layer Memory Agent over F228; exact scoped zero-wait recall, deliberate read-only query, trace-only decision receipts, bounded outcome/review lifecycle, consult-before-write promotion, policy-versioned cache-safe integration, deterministic safety gates, and passing v2 routing eval. |
 | `261` | Searchable Session Resume TUI + Session Listing Pagination | `v0.7.67` | [v0.7.67](features/v0.7.67.md#feature_261-searchable-session-resume-tui--session-listing-pagination) | Bare `-r` searchable/paged keyboard picker with full selected ID, deterministic ID-first/exact-title resume and duplicate disambiguation, meaningful ACP titles, Embedded/Daemon `surface` + cursor listing, zero-message suppression, isolated ACP tests, and preview-first reversible ACP pollution cleanup. |
 | `259` | Cost-Disciplined Agent Build Loop + Review Handoff Optimization | `v0.7.67` | [v0.7.67](features/v0.7.67.md#feature_259-cost-disciplined-agent-build-loop--review-handoff-optimization) | Layer 1 complete; Layer 2 shows material semantic value with no regression after retiring official Kimi; bounded Layer 3 passes 8/8 proposed vs 6/8 baseline, reduces total tokens 16.9%, standard-review median tokens 57.2%, primary starts 75%, and duplicate packet reads 83.3%. Main-session recommendation: `recommend-ship`. |
 | `258` | External Agent Executor Plane + Dispatchable Agent Catalog | `v0.7.67` | [v0.7.67](features/v0.7.67.md#feature_258-external-agent-executor-plane--dispatchable-agent-catalog) | Protocol-neutral host-injected executor plane, redacted/policy-filtered catalog, durable task ledger, Worker and Workflow routing, Embedded/Daemon parity, public in-process Daemon factory bootstrap, Reference Executor, and security/recovery conformance. |

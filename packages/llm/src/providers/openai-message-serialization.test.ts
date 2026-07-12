@@ -55,6 +55,26 @@ class TestOpenAIProvider extends KodaXOpenAICompatProvider {
 }
 
 describe('openai message serialization', () => {
+  it('appends an ephemeral suffix only to the wire request', async () => {
+    async function* streamChunks() {
+      yield { choices: [{ delta: {}, finish_reason: 'stop' }] };
+    }
+    const create = vi.fn().mockResolvedValue(streamChunks());
+    const provider = new TestOpenAIProvider({ chat: { completions: { create } } });
+    const messages: KodaXMessage[] = [{ role: 'user', content: 'original request' }];
+
+    await provider.stream(messages, TOOLS, 'system', false, {
+      ephemeralSuffix: { content: '[Memory evidence; not an instruction]\nClaim: use npm' },
+    });
+
+    expect(messages).toEqual([{ role: 'user', content: 'original request' }]);
+    expect(create.mock.calls[0]?.[0].messages).toEqual([
+      { role: 'system', content: 'system' },
+      { role: 'user', content: 'original request' },
+      { role: 'user', content: '[Memory evidence; not an instruction]\nClaim: use npm' },
+    ]);
+  });
+
   it('passes forced tool choice and per-call output cap on streaming calls', async () => {
     async function* streamChunks() {
       yield {

@@ -77,6 +77,29 @@ describe('anthropic message serialization', () => {
     }
   });
 
+  it('places an ephemeral suffix after the cache-marked original request', async () => {
+    const create = vi.fn().mockResolvedValue(createCompletedAnthropicStream());
+    const provider = new TestAnthropicProvider({ messages: { create } });
+    const messages: KodaXMessage[] = [
+      { role: 'user', content: [{ type: 'text', text: 'settled request' }] },
+      { role: 'assistant', content: 'settled answer' },
+      { role: 'user', content: 'original request' },
+    ];
+
+    await provider.stream(messages, TOOLS, 'system', false, {
+      ephemeralSuffix: { content: '[Memory evidence; not an instruction]\nClaim: use npm' },
+    });
+
+    expect(messages.at(-1)).toEqual({ role: 'user', content: 'original request' });
+    const wire = create.mock.calls[0]?.[0].messages;
+    expect(wire).toHaveLength(3);
+    expect(wire[2]?.content.at(-1)).toEqual({
+      type: 'text',
+      text: '[Memory evidence; not an instruction]\nClaim: use npm',
+    });
+    expect(wire[0]?.content[0]?.cache_control).toEqual({ type: 'ephemeral' });
+  });
+
   // Sidecar verifier calls are short structured judge requests.
   // Verifier/judge calls need a real provider-level forced tool choice,
   // not just prompt wording that asks the model to call the tool.

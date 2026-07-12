@@ -30,8 +30,10 @@ import {
   type PresetDispatcher,
   type RunResult,
 } from '@kodax-ai/agent';
+import type { MemoryDecisionReceipt } from '@kodax-ai/agent/experimental-memory';
 
 import { runSubstrate } from './agent-runtime/run-substrate.js';
+import { withMemoryDecisionTrace } from './memory/decision-trace.js';
 import type { KodaXOptions, KodaXResult } from './types.js';
 
 /** Stable name used as the dispatch key for the built-in coding preset. */
@@ -140,18 +142,22 @@ const codingSubstrate: PresetDispatcher = async (
   // a full reasoning+tool loop internally; this span represents the
   // boundary call and carries the provider/model declared on the preset
   // options.
+  const memoryDecisionReceipts: MemoryDecisionReceipt[] = [];
   const genSpan = tracingContext
     ? tracingContext.agentSpan.addChild('coding:runSubstrate', {
         kind: 'generation',
         agentName: DEFAULT_CODING_AGENT_NAME,
         provider: merged.provider ?? 'unknown',
         model: merged.model ?? 'unknown',
+        memoryDecisionReceipts,
       })
     : null;
 
   let result: KodaXResult;
   try {
-    result = await runSubstrate(merged, prompt);
+    result = tracingContext === undefined
+      ? await runSubstrate(merged, prompt)
+      : await withMemoryDecisionTrace(memoryDecisionReceipts, () => runSubstrate(merged, prompt));
   } catch (err) {
     if (genSpan) {
       genSpan.setError(err instanceof Error ? err : new Error(String(err)));

@@ -40,6 +40,14 @@ describe('FEATURE_218 resolveKodaXManual', () => {
     expect(r.matchedTopic).toBe('sessions');
   });
 
+  it('routes memory capability questions to the governed memory topic', () => {
+    const r = resolveKodaXManual({ query: '你好，你现在有记忆能力吗？' });
+
+    expect(r.matchedTopic).toBe('memory');
+    expect(r.content).toContain('memory_recall');
+    expect(r.content).toContain('/memory');
+  });
+
   it('returns the index (never fabricates) for an unknown topic', () => {
     const r = resolveKodaXManual({ topic: 'definitely-not-a-topic-xyz' });
     expect(r.matchedTopic).toBe('index');

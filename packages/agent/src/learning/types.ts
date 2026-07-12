@@ -1,4 +1,5 @@
 import type { SkillSource } from '../capabilities/skills/types.js';
+import type { MemoryApplicability } from '../memory/identity.js';
 
 export type SkillWriteOrigin =
   | 'foreground_user'
@@ -44,6 +45,18 @@ export interface MemoryHandoffMetadata {
   readonly sourceTool?: string;
   readonly sourceRefs: readonly string[];
   readonly completedTurn: boolean;
+  readonly claimKind?: 'fact' | 'policy' | 'preference' | 'procedure' | 'episode';
+  readonly claimKey?: string;
+  readonly actionSignature?: string;
+  readonly persistenceKind?: 'create' | 'evidence_update' | 'condition_refinement';
+  readonly targetRefId?: string;
+  readonly targetStorageUri?: string;
+  readonly preconditions?: string;
+  readonly applicability?: MemoryApplicability;
+  readonly requestedLifecycle?: 'active' | 'provisional';
+  readonly episodeOutcome?: 'succeeded' | 'failed';
+  readonly verifiedEvidence?: boolean;
+  readonly evidenceProjectId?: string;
 }
 
 export interface SkillConsumerImpact {
@@ -204,6 +217,12 @@ export interface StoredLearningProposal {
   readonly appliedAt?: string;
   readonly appliedChangedPaths?: readonly string[];
   readonly appliedSnapshotPath?: string;
+  readonly approvedBy?: 'user' | 'host';
+  readonly approvedAt?: string;
+  readonly approvalPolicyId?: string;
+  readonly approvalPolicyReason?: string;
+  readonly approvalExpectedFingerprints?: Readonly<Record<string, string>>;
+  readonly approvalResultingFingerprints?: Readonly<Record<string, string>>;
   readonly rejectedReason?: string;
 }
 

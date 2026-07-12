@@ -18,6 +18,7 @@ import {
   truncateTail,
 } from './truncate.js';
 import { filterBashOutputBodies } from './output-filters/registry.js';
+import { shellMemoryMutationDenial } from './memory-mutation-guard.js';
 
 const BACKGROUND_ABORT_KILL_MS = process.platform === 'win32' ? 5_000 : 2_000;
 
@@ -159,6 +160,8 @@ function buildBashTruncationHint(command: string): string {
 
 export async function toolBash(input: Record<string, unknown>, ctx: KodaXToolExecutionContext): Promise<string> {
   const command = input.command as string;
+  const memoryDenial = shellMemoryMutationDenial(command);
+  if (memoryDenial !== undefined) return memoryDenial;
   const userTimeout = input.timeout as number | undefined;
   const timeout = userTimeout ? Math.min(KODAX_HARD_TIMEOUT, userTimeout) : KODAX_DEFAULT_TIMEOUT;
   const capped = userTimeout && userTimeout > KODAX_HARD_TIMEOUT;

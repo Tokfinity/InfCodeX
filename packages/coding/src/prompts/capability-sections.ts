@@ -60,7 +60,6 @@ import { getSessionScratchDir } from '../session-scratch.js';
 import type { KodaXOptions } from '../types.js';
 
 import { buildMemoryRulesSection } from './memory-rules.js';
-import { buildMemorySection } from './memory-section.js';
 import { createPromptSection, type KodaXPromptSection } from './sections.js';
 import { buildSelfKnowledgeRoutingRule } from '../self-knowledge/routing-rule.js';
 import { EXECUTION_GUIDANCE } from './execution-guidance.js';
@@ -298,13 +297,16 @@ export async function buildCapabilityContextSections(
   // the rules in hand when it reads the current entries. Section is
   // ALWAYS emitted — fallback "currently empty" text tells the LLM the
   // subsystem is active even when no entries exist yet.
-  const memory = buildMemorySection(executionCwd);
-  const memoryPack = await buildTaskMemoryPack(executionCwd, options.context?.rawUserInput);
+  const memoryPack = options.context?.memoryPack ?? await buildTaskMemoryPack(
+    executionCwd,
+    options.context?.rawUserInput,
+    options.context?.memoryIdentity,
+  );
   sections.push(
     createPromptSection(
       'project-memory',
-      appendTaskMemoryPack(memory.content, memoryPack),
-      'Inject the per-project MEMORY.md index so the agent has cross-session recall without re-asking the user for previously-given context.',
+      renderTaskMemoryPack(memoryPack),
+      'Inject applicability-filtered memory hints without exposing raw memory indexes.',
     ),
   );
 
@@ -331,16 +333,23 @@ export async function buildCapabilityContextSections(
   return sections;
 }
 
-async function buildTaskMemoryPack(cwd: string, rawUserInput: string | undefined): Promise<MemoryPack | undefined> {
+async function buildTaskMemoryPack(
+  cwd: string,
+  rawUserInput: string | undefined,
+  identity: NonNullable<KodaXOptions['context']>['memoryIdentity'],
+): Promise<MemoryPack | undefined> {
   const task = rawUserInput?.trim();
   if (task === undefined || task.length === 0) return undefined;
   try {
     return await createMemoryControlPlane({
       cwd,
+      ...(identity !== undefined ? { identity } : {}),
       projectDocs: [],
       discoverSkills: false,
     }).buildMemoryPack({
       task,
+      ...(identity !== undefined ? { identity } : {}),
+      maxCandidates: 12,
       maxHints: 5,
       includeSnippets: false,
     });
@@ -362,28 +371,23 @@ async function buildTaskMemoryPack(cwd: string, rawUserInput: string | undefined
  *
  * This is a read-only recall path; memory maintenance and semantic review run elsewhere.
  */
-function appendTaskMemoryPack(content: string, pack: MemoryPack | undefined): string {
-  if (pack === undefined) return content;
+function renderTaskMemoryPack(pack: MemoryPack | undefined): string {
+  const empty = 'Task-relevant memory hints: currently empty.';
+  if (pack === undefined) return empty;
   if (pack.traceMetadata.suppressed) {
-    return [
-      content,
-      '',
-      'Task-relevant memory hints: suppressed by user request.',
-    ].join('\n');
+    return 'Task-relevant memory hints: suppressed by user request.';
   }
-  if (pack.hints.length === 0) return content;
+  if (pack.promptHints.length === 0) return empty;
 
   return [
-    content,
-    '',
     'Task-relevant memory hints (bounded):',
-    ...pack.hints.map(formatTaskMemoryHint),
+    ...pack.promptHints.map(formatTaskMemoryHint),
     '',
     'Use these as pointers, not authority. If a hint matters, read the referenced memory file before relying on details. Current repository files override memory.',
   ].join('\n');
 }
 
-function formatTaskMemoryHint(hint: MemoryPack['hints'][number]): string {
+function formatTaskMemoryHint(hint: MemoryPack['promptHints'][number]): string {
   return `- ${compactPromptLine(hint.hook)} [${hint.ref.id}]: ${compactPromptLine(hint.reason)}`;
 }
 

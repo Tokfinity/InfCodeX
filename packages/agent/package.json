@@ -1,6 +1,6 @@
 {
   "name": "@kodax-ai/agent",
-  "version": "0.7.67",
+  "version": "0.7.68",
   "description": "KodaX Agent — 通用 Agent 框架（智能体底座）。Agent / Runner / Handoff / Guardrail / Admission / Messaging / Orchestration / Memory / Team / Scratchpad / Construction / Runtime middleware。不绑定 coding。",
   "private": true,
   "type": "module",
@@ -46,6 +46,10 @@
     "./memory-control": {
       "types": "./dist/memory-control/index.d.ts",
       "import": "./dist/memory-control/index.js"
+    },
+    "./experimental-memory": {
+      "types": "./dist/experimental-memory/index.d.ts",
+      "import": "./dist/experimental-memory/index.js"
     },
     "./media": {
       "types": "./dist/media/index.d.ts",

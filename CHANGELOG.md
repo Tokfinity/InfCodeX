@@ -6,6 +6,78 @@ All notable changes to this project will be documented in this file.
 
 ## [Unreleased]
 
+## [0.7.68] - 2026-07-12
+
+> Scope note: this release delivers **FEATURE_260**, the KodaX Memory Agent,
+> as a thin experimental SDK and governed runtime extension over the existing
+> F228 Memory Control Plane. It does not add a second memory database, a
+> resident specialist agent, filesystem memory actions, or online self-modification.
+
+### Added
+
+- **Thin experimental Memory Agent SDK.** Added
+  `@kodax-ai/agent/experimental-memory` and the root `/experimental-memory`
+  entry with scoped `MemorySession` lifecycle, zero-wait passive recall,
+  read-only deliberate `query()`, bounded observations, and episode outcomes.
+- **Deliberate governed recall for the Action LLM.** A session-bound
+  `memory_recall` tool exposes only one `need` field, returns prompt-safe
+  low-authority evidence from the same F228 plane, and keeps identity, scope,
+  revision, and sequence outside model input.
+- **Auditable memory decisions and outcomes.** Trace-only
+  `MemoryDecisionReceipt` records candidate/selected/injected refs and policy
+  version; accepted Outcome Digests can conservatively link influence without
+  storing hidden reasoning or creating a second event store.
+- **Bounded episode review and promotion.** Timed-out review work persists in a
+  scoped inbox for bounded next-session drain and revalidation. Promotion now
+  consults compatible claims before choosing create, evidence update,
+  condition refinement, conflict, no-action, reject, or quarantine.
+
+### Changed
+
+- **Memory applicability is exact and fail-closed.** Tenant, user, agent,
+  workspace, project, and branch identity participate in deterministic scope
+  checks; sibling/cross-user/cross-tenant fallback is prohibited.
+- **Memory policy is source-versioned and cache-safe.** `f260-v0.7.68.2`
+  binds production reminder rules, evidence rendering, and deliberate-recall
+  tool bytes. Passive reminders only affect the dynamic suffix; deliberate
+  queries add a normal tool-call/result tail while preserving earlier provider
+  cache bytes.
+- **Safety-critical boundaries remain deterministic.** Secret filtering,
+  memory-file mutation guards, poisoning/source-evidence checks, and governed
+  proposal/preview/fingerprint/apply remain zero-violation code gates rather
+  than probabilistic LLM recall thresholds.
+- **Self-knowledge follows the v0.7.68 capability surface.** `kodax_manual`
+  now has a dedicated governed-memory topic, names all 43 built-in slash
+  commands under a two-way drift guard, and documents the current 10 SDK
+  subpaths plus Runtime and `/experimental-memory` ownership boundaries.
+
+### Fixed
+
+- **Post-review Memory Agent release hardening.** Repository identity now strips
+  Git remote userinfo/query credentials before scoped or legacy persistence;
+  managed-path guards are Windows-case-safe, protect governance sidecars, and
+  fail closed for non-read-only shell access to addressed memory roots. Episode
+  reviews use atomic processing claims with stale recovery, while proposal and
+  lifecycle stores serialize concurrent read-modify-write updates. Eval manifest
+  schema v2 binds untracked file bytes in addition to the tracked patch, corrupt
+  raw JSON fails loudly, and summary review state points to the separate
+  main-session review artifact instead of remaining permanently pending.
+- **Runtime daemon state replacement is atomic.** Daemon lifecycle updates now
+  stage and rename `daemon.json` instead of truncating it in place, preventing
+  shutdown polling from mistaking a partial write for completed cleanup and
+  leaving an orphaned `stopping` process under full-suite load.
+
+### Performance
+
+- **The preregistered v2 memory-routing panel passes all release gates.** On
+  `ark/v4flash`, general immediate recall passed 59/60 (98.3%), high-value
+  recall 40/40, must-silent 200/200 (Wilson lower 98.1%), paired routing lift
+  was +73.3 percentage points with zero control regression, and bounded
+  two-decision recovery passed 20/20. The 520-cell panel represented 782,721
+  tokens and an estimated $0.004447 against the $0.02 cap. Main-session blinded
+  review recommends ship for routing value while documenting that the panel is
+  not an end-to-end task-completion claim.
+
 ## [0.7.67] - 2026-07-11
 
 > Scope note: a stabilization and agent-efficiency release. **FEATURE_258**

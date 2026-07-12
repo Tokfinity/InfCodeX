@@ -18,7 +18,7 @@ import {
   KodaXToolResultBlock,
   SessionErrorMetadata,
 } from '../types.js';
-import type { KodaXMessage, KodaXStreamResult } from '@kodax-ai/llm';
+import type { KodaXEphemeralSuffix, KodaXMessage, KodaXStreamResult } from '@kodax-ai/llm';
 import {
   classifyStopReason,
   createCostTracker,
@@ -44,7 +44,21 @@ import { mergeManagedProtocolPayload } from '../managed-protocol.js';
 import { generateSessionId, extractTitleFromMessages } from '../session.js';
 // FEATURE_076 Q4: load-time normalization for pre-v0.7.25 session messages.
 import { normalizeLoadedSessionMessages } from '../task-engine/_internal/round-boundary.js';
-import { microcompact, DEFAULT_MICROCOMPACTION_CONFIG, type CompactionConfig } from '@kodax-ai/agent';
+import {
+  createMemoryControlPlane,
+  completeEpisodeReview,
+  persistPendingEpisodeReview,
+  microcompact,
+  DEFAULT_MICROCOMPACTION_CONFIG,
+  type CompactionConfig,
+  type MemoryController,
+  type MemoryPack,
+} from '@kodax-ai/agent';
+import {
+  createMemoryAgent,
+  type MemoryObservation,
+  type MemorySession,
+} from '@kodax-ai/agent/experimental-memory';
 import { loadCompactionConfig } from '../compaction-config.js';
 // CAP-014/060/061/062 token estimation now happens inside the
 // substrate compaction modules; agent.ts no longer imports
@@ -113,6 +127,28 @@ import {
   withLiveTurnAttribution,
 } from './event-emitter.js';
 import { resolvePerTurnProvider } from './per-turn-provider-resolution.js';
+import {
+  deriveCodingMemoryIdentity,
+  detectMemoryReviewTrigger,
+  drainCodingMemoryReviewInbox,
+  persistMemoryOutcomeToSession,
+  persistMemoryReviewReceiptToSession,
+} from '../memory-runtime.js';
+import {
+  buildCodingMemoryContext,
+  type CodingMemoryContext,
+} from '../memory/coding-context.js';
+import { recordMemoryDecisionReceipt } from '../memory/decision-trace.js';
+import { renderMemoryEvidenceEnvelope } from '../memory/rendering.js';
+import {
+  buildToolMemoryObservations,
+  codingMemorySourcePolicy,
+} from '../memory/coding-observations.js';
+import {
+  activateMemoryRecallTool,
+  createMemoryRecallBinding,
+  MEMORY_RECALL_TOOL_NAME,
+} from '../tools/memory-recall.js';
 import { assertProviderConfigured } from './provider-config-check.js';
 import { buildToolExecutionContext } from './tool-execution-context.js';
 import { resolvePerTurnReasoning } from './per-turn-reasoning.js';
@@ -370,6 +406,37 @@ function legacyReasoningModeToRuntimeEffort(
   return mapped ?? mode;
 }
 
+function buildUserConstraintObservation(
+  prompt: string,
+  actionSignature: string,
+  sequence: number,
+): MemoryObservation | undefined {
+  if (!/(?:\b(?:must|must not|do not|don't|never|always|forbid)\b|必须|不要|不能|禁止|始终)/iu.test(prompt)) {
+    return undefined;
+  }
+  return {
+    id: `user-constraint:${sequence}`,
+    sequence,
+    kind: 'constraint',
+    summary: prompt.replace(/\s+/g, ' ').trim().slice(0, 1_600),
+    evidence: [{
+      ref: `user:prompt:${sequence}`,
+      requestedGrade: 'authoritative',
+      source: 'user',
+      observedAt: new Date().toISOString(),
+    }],
+    visibility: 'prompt_safe',
+    actionSignature,
+    occurredAt: new Date().toISOString(),
+  };
+}
+
+function renderMemoryReminderSuffix(content: string): KodaXEphemeralSuffix {
+  return {
+    content: renderMemoryEvidenceEnvelope(content) ?? '',
+  };
+}
+
 /**
  * Substrate executor body — the full SA execution pipeline (provider
  * resolution, tool loop, microcompact, edit recovery, extension queue,
@@ -461,7 +528,53 @@ export async function runSubstrate(
     promptId: requestedLiveTurn?.promptId,
   });
   events = withLiveTurnAttribution(events, liveTurnScope);
-  options = { ...options, events };
+  const memoryIdentity = options.context?.memoryIdentity
+    ?? deriveCodingMemoryIdentity(options, resolveExecutionCwd(options.context), sessionId);
+  let memoryController: MemoryController | undefined;
+  let memoryPack: MemoryPack | undefined;
+  if (options.context?.currentAgentId === undefined) {
+    try {
+      memoryController = createMemoryControlPlane({
+        cwd: resolveExecutionCwd(options.context),
+        identity: memoryIdentity,
+        projectDocs: [],
+        discoverSkills: false,
+        ...(options.memoryReviewer !== undefined ? { memoryReviewer: options.memoryReviewer } : {}),
+      });
+      memoryPack = await memoryController.buildMemoryPack({
+        task: prompt,
+        identity: memoryIdentity,
+        maxCandidates: 12,
+        maxHints: 5,
+        includeSnippets: false,
+      });
+      await memoryController.maybeRunAutoCurator();
+      const feedbackTrigger = options.memoryReviewer === undefined
+        ? undefined
+        : detectMemoryReviewTrigger(prompt);
+      if (feedbackTrigger !== undefined) {
+        const plan = await memoryController.reviewMemoryFeedback({
+          trigger: feedbackTrigger,
+          userFeedback: prompt,
+          task: prompt,
+        });
+        events.onMemoryReview?.(plan);
+      }
+    } catch (error) {
+      emitResilienceDebug('[memory:session-start:error]', {
+        error: error instanceof Error ? error.message : String(error),
+      });
+    }
+  }
+  options = {
+    ...options,
+    events,
+    context: {
+      ...options.context,
+      memoryIdentity,
+      ...(memoryPack !== undefined ? { memoryPack } : {}),
+    },
+  };
 
   // CAP-008: resolve transcript from initialMessages → storage.load → empty;
   // CAP-046: append current prompt unless transcript tail is already the
@@ -503,18 +616,20 @@ export async function runSubstrate(
     messages,
     options.context?.contextTokenSnapshot,
   );
+  const configuredActiveTools = applyToolVisibilityPolicy(
+    filterExcludedTools(
+      runtimeDefaults?.activeTools ?? listToolDefinitions().map((tool) => tool.name),
+      options.context?.excludeTools,
+    ),
+    options.context?.toolVisibilityPolicy,
+  );
+  const memoryRecallToolAllowed = configuredActiveTools.includes(MEMORY_RECALL_TOOL_NAME);
   const runtimeSessionState = buildRuntimeSessionState({
     loadedExtensionState,
     loadedExtensionRecords,
     // FEATURE_247 (R2): apply the profile tool-visibility policy after the
     // static excludeTools filter, before the model-visible list is built.
-    activeTools: applyToolVisibilityPolicy(
-      filterExcludedTools(
-        runtimeDefaults?.activeTools ?? listToolDefinitions().map((tool) => tool.name),
-        options.context?.excludeTools,
-      ),
-      options.context?.toolVisibilityPolicy,
-    ),
+    activeTools: activateMemoryRecallTool(configuredActiveTools, false),
     modelSelection: {
       provider: turnState.currentProviderName,
       model: turnState.currentModelOverride,
@@ -536,7 +651,9 @@ export async function runSubstrate(
       emitTurnFailed(events, liveTurnScope, error);
     }
   };
-  const finalizeManagedProtocolResult = (result: KodaXResult): KodaXResult => {
+  let memorySession: MemorySession | undefined;
+  let memoryDecisionBinding: CodingMemoryContext | undefined;
+  const finalizeManagedProtocolResult = async (result: KodaXResult): Promise<KodaXResult> => {
     if (result.success) {
       emitLiveTurnCompletedOnce(result.interrupted ? 'interrupted' : 'completed');
     } else {
@@ -550,13 +667,50 @@ export async function runSubstrate(
       runtimeSessionState,
       { includeUnchanged: false },
     );
-    return payload || runtimeSessionSnapshot
+    const finalized = payload || runtimeSessionSnapshot
       ? {
           ...result,
           ...(payload ? { managedProtocolPayload: payload } : {}),
           ...(runtimeSessionSnapshot ? { runtimeSessionSnapshot } : {}),
         }
       : result;
+    if (memorySession !== undefined) {
+      const checks = finalized.artifactLedger?.filter((entry) => entry.kind === 'check_result') ?? [];
+      try {
+        await memorySession.complete(checks.length === 0
+          ? { status: 'cancelled', summary: finalized.lastText, evidence: [] }
+          : {
+              status: finalized.success ? 'succeeded' : 'failed',
+              summary: finalized.lastText,
+              evidence: checks.map((entry) => ({
+                ref: `artifact:${entry.id}`,
+                requestedGrade: 'verified' as const,
+                source: 'environment' as const,
+                observedAt: entry.timestamp,
+              })),
+            });
+        await memorySession.close();
+      } catch (error) {
+        emitResilienceDebug('[memory:episode-finalize:error]', {
+          error: error instanceof Error ? error.message : String(error),
+        });
+      }
+    }
+    if (memoryController !== undefined) {
+      try {
+        await drainCodingMemoryReviewInbox(
+          options,
+          memoryIdentity,
+          memoryController,
+          sessionId,
+        );
+      } catch (error) {
+        emitResilienceDebug('[memory:review-inbox:drain-error]', {
+          error: error instanceof Error ? error.message : String(error),
+        });
+      }
+    }
+    return finalized;
   };
   // v0.7.42 — wire optional embedder-facing session control. CAP-055 reads
   // these fields at the start of every turn, so direct mutation here is
@@ -639,6 +793,79 @@ export async function runSubstrate(
       : reasoningPlan,
     messages.length === 1,
   );
+  let memoryObservationSequence = 0;
+  if (memoryController !== undefined && memoryPack !== undefined) {
+    memorySession = await createMemoryAgent({
+      controlPlane: memoryController,
+      initialMemoryPack: memoryPack,
+      sourcePolicy: codingMemorySourcePolicy,
+      persistOutcomeDigest: async (digest) => {
+        await persistPendingEpisodeReview(memoryIdentity, digest);
+        await persistMemoryOutcomeToSession(options, sessionId, digest);
+      },
+      reviewEpisode: async (digest, signal) => {
+        if (memoryController === undefined) return;
+        const review = await memoryController.reviewEpisode(digest, signal);
+        if (signal.aborted) return;
+        const completedAt = new Date().toISOString();
+        await completeEpisodeReview(memoryIdentity, digest.reviewKey, review.proposalIds);
+        await persistMemoryReviewReceiptToSession(options, sessionId, {
+          reviewKey: digest.reviewKey,
+          proposalIds: review.proposalIds,
+          completedAt,
+        });
+        if (review.appliedProposalIds.length > 0) {
+          events.onMemoryNotice?.({
+            episodeId: digest.id,
+            summaries: review.plan.actions
+              .filter((action) => review.appliedProposalIds.some((id) => id.includes('memory-review-')))
+              .map((action) => action.summary)
+              .slice(0, 3),
+            proposalIds: review.appliedProposalIds,
+          });
+        }
+      },
+      onTrace: (event) => {
+        if (event.type === 'memory.decision') {
+          recordMemoryDecisionReceipt(event.receipt);
+          emitResilienceDebug('[memory:decision]', {
+            receiptId: event.receipt.id,
+            policyVersion: event.receipt.policyVersion,
+            candidateRefs: event.receipt.candidateRefs,
+            selectedRefs: event.receipt.selectedRefs,
+            injectedRefs: event.receipt.injectedRefs,
+          });
+          return;
+        }
+        emitResilienceDebug(`[memory:${event.type}]`, {
+          key: event.key,
+          detail: event.detail ?? null,
+        });
+      },
+    }).startSession({ identity: memoryIdentity, objective: prompt });
+    if (memoryRecallToolAllowed) {
+      runtimeSessionState.activeTools = activateMemoryRecallTool(
+        runtimeSessionState.activeTools,
+        true,
+      );
+      ctx.memoryRecall = createMemoryRecallBinding(memorySession, () =>
+        memoryDecisionBinding === undefined
+          ? undefined
+          : {
+              decisionRevision: memoryDecisionBinding.revision,
+              ...(memoryDecisionBinding.actionSignature !== undefined
+                ? { actionSignature: memoryDecisionBinding.actionSignature }
+                : {}),
+              throughSequence: memoryDecisionBinding.throughSequence,
+            });
+    }
+    const constraint = buildUserConstraintObservation(
+      prompt,
+      `task:${reasoningPlan.decision.primaryTask}`,
+      ++memoryObservationSequence,
+    );
+    if (constraint !== undefined) memorySession.observe(constraint);
+  }
 
   let incompleteRetryCount = 0;
   // CAP-085: `limitReached` flag — was a `let` toggled `true` only at
@@ -689,6 +916,28 @@ export async function runSubstrate(
       turnState.runtimeThinkingLevel = turnProvider.thinkingLevel;
       const provider = turnProvider.provider;
       const contextWindow = turnProvider.contextWindow;
+      let memorySuffix: KodaXEphemeralSuffix | undefined;
+      if (memorySession !== undefined) {
+        const memoryContext = buildCodingMemoryContext({
+          objective: prompt,
+          decisionIntent: reasoningPlan.decision.primaryTask,
+          actionSignature: `task:${reasoningPlan.decision.primaryTask}`,
+          todoStore: ctx.todoStore,
+          observationSequence: memoryObservationSequence,
+        });
+        memoryDecisionBinding = memoryContext;
+        if (iter > 0) {
+          const reminder = memorySession.recall({
+            decisionRevision: memoryContext.revision,
+            objective: prompt,
+            decisionContext: memoryContext.text,
+            decisionIntent: memoryContext.decisionIntent,
+            actionSignature: memoryContext.actionSignature,
+            throughSequence: memoryContext.throughSequence,
+          });
+          if (reminder !== undefined) memorySuffix = renderMemoryReminderSuffix(reminder.content);
+        }
+      }
 
       // CAP-057: per-turn effectiveReasoningPlan + currentExecution rebuild.
       const turnReasoning = await resolvePerTurnReasoning({
@@ -967,6 +1216,7 @@ export async function runSubstrate(
               ...streamCallbacks,
               onRetryAfter: wrappedRetryAfter,
               modelOverride: turnState.currentModelOverride,
+              ephemeralSuffix: memorySuffix,
               signal: retrySignal,
             },
             retrySignal,
@@ -1014,6 +1264,7 @@ export async function runSubstrate(
               effectiveProviderReasoning,
               callerAbortSignal: options.abortSignal,
               modelOverride: turnState.currentModelOverride,
+              ephemeralSuffix: memorySuffix,
               hardTimeoutMs: API_HARD_TIMEOUT_MS,
               boundarySession,
               emitActiveExtensionEvent,
@@ -1420,6 +1671,16 @@ export async function runSubstrate(
         });
         toolResults = postProcessed.toolResults;
         editRecoveryMessages = postProcessed.editRecoveryMessages;
+        if (memorySession !== undefined) {
+          const observations = buildToolMemoryObservations({
+            toolBlocks: result.toolBlocks,
+            toolResults,
+            startSequence: memoryObservationSequence,
+            observedAt: new Date().toISOString(),
+          });
+          for (const observation of observations) memorySession.observe(observation);
+          memoryObservationSequence = observations.at(-1)?.sequence ?? memoryObservationSequence;
+        }
       }
 
       // CAP-080: any cancelled tool result triggers the cancellation

@@ -129,19 +129,30 @@ function findByAlias(ids: readonly string[], byId: Map<string, ManualEntry>, val
   return undefined;
 }
 
-function scoreTopic(topic: ManualEntry, queryTokens: readonly string[]): number {
+function scoreTopic(
+  topic: ManualEntry,
+  queryTokens: readonly string[],
+  normalizedQuery: string,
+): number {
   if (queryTokens.length === 0) return 0;
   const haystack = new Set(tokenize([topic.id, topic.title, topic.summary, ...topic.aliases].join(' ')));
   let hits = 0;
   for (const t of queryTokens) if (haystack.has(t)) hits += 1;
+  for (const alias of topic.aliases) {
+    const normalizedAlias = alias.trim().toLowerCase();
+    if (/[一-鿿]/u.test(normalizedAlias) && normalizedQuery.includes(normalizedAlias)) {
+      hits += 2;
+    }
+  }
   return hits;
 }
 
 function rankByQuery(ids: readonly string[], byId: Map<string, ManualEntry>, query: string): ManualEntry[] {
   const queryTokens = tokenize(query);
+  const normalizedQuery = query.toLowerCase();
   return ids
     .map((id) => byId.get(id)!)
-    .map((topic) => ({ topic, score: scoreTopic(topic, queryTokens) }))
+    .map((topic) => ({ topic, score: scoreTopic(topic, queryTokens, normalizedQuery) }))
     .filter((entry) => entry.score > 0)
     .sort((a, b) => b.score - a.score)
     .map((entry) => entry.topic);

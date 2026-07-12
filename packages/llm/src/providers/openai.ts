@@ -734,6 +734,9 @@ export abstract class KodaXOpenAICompatProvider extends KodaXBaseProvider {
       const fullMessages: OpenAI.Chat.ChatCompletionMessageParam[] = [
         { role: 'system', content: mergedSystem },
         ...await this.convertMessages(nonSystemMessages, model),
+        ...(streamOptions?.ephemeralSuffix?.content
+          ? [{ role: 'user' as const, content: streamOptions.ephemeralSuffix.content }]
+          : []),
       ];
       const openaiTools = tools.map(t => ({ type: 'function' as const, function: { name: t.name, description: t.description, parameters: t.input_schema } }));
       const forcedToolName = streamOptions?.forcedToolName;
@@ -1015,6 +1018,9 @@ export abstract class KodaXOpenAICompatProvider extends KodaXBaseProvider {
       const fullMessages: OpenAI.Chat.ChatCompletionMessageParam[] = [
         { role: 'system', content: mergedSystem },
         ...await this.convertMessages(nonSystemMessages, model),
+        ...(streamOptions?.ephemeralSuffix?.content
+          ? [{ role: 'user' as const, content: streamOptions.ephemeralSuffix.content }]
+          : []),
       ];
       const openaiTools = tools.map((tool) => ({
         type: 'function' as const,

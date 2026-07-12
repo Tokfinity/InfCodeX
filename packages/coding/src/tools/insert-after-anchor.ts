@@ -4,6 +4,7 @@ import type { KodaXToolExecutionContext } from '../types.js';
 import { getFileBackups } from './write.js';
 import { generateDiff, countChanges } from './diff.js';
 import { resolveExecutionPath } from '../runtime-paths.js';
+import { memoryMutationDenial } from './memory-mutation-guard.js';
 import { formatDiffPreview } from './truncate.js';
 import {
   detectPreferredLineEnding,
@@ -22,6 +23,8 @@ export async function toolInsertAfterAnchor(
   ctx: KodaXToolExecutionContext,
 ): Promise<string> {
   const filePath = resolveExecutionPath(input.path as string, ctx);
+  const memoryDenial = memoryMutationDenial(filePath);
+  if (memoryDenial !== undefined) return memoryDenial;
   if (!fsSync.existsSync(filePath)) {
     return `[Tool Error] insert_after_anchor: File not found: ${filePath}`;
   }

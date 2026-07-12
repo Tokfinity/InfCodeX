@@ -50,6 +50,26 @@ export interface GenerationSpanData {
   };
   readonly finishReason?: string;
   readonly error?: string;
+  readonly memoryDecisionReceipts?: readonly MemoryDecisionTraceReceipt[];
+}
+
+export interface MemoryDecisionTraceReceipt {
+  readonly id: string;
+  readonly decisionEpoch: string;
+  readonly decisionRevision: string;
+  readonly policyVersion: string;
+  readonly candidateSetFingerprint: string;
+  readonly candidateRefs: readonly string[];
+  readonly selectedRefs: readonly string[];
+  readonly injectedRefs: readonly string[];
+  readonly selectionModes: readonly (
+    | 'task_hint'
+    | 'exact'
+    | 'semantic_prefetch'
+    | 'deliberate_query'
+  )[];
+  readonly actionSignature?: string;
+  readonly throughSequence: number;
 }
 
 export interface ToolCallSpanData {

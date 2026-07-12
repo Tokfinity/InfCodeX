@@ -23,6 +23,7 @@ import type {
   KodaXRedactedThinkingBlock,
   KodaXContentBlock,
   KodaXMessage,
+  KodaXMemoryOutcomeDigest,
   KodaXTaskResultMetadata,
   KodaXTaskResultSource,
   KodaXTokenUsage,
@@ -86,6 +87,8 @@ import type {
   KodaXSessionWorkspaceKind,
   MemoryReviewPlan,
   MemoryReviewRunner,
+  MemoryContextIdentity,
+  MemoryPack,
   SessionErrorMetadata,
   ChildTaskRegistry,
   TaskAbortRegistry,
@@ -600,6 +603,17 @@ export interface KodaXEvents {
   exitPlanMode?: (plan: string) => Promise<boolean | 'not-in-plan-mode'>;
   /** Semantic memory review plan produced from explicit user feedback. */
   onMemoryReview?: (plan: MemoryReviewPlan) => void;
+  onMemoryNotice?: (notice: {
+    readonly episodeId: string;
+    readonly summaries: readonly string[];
+    readonly proposalIds: readonly string[];
+  }) => void;
+  onMemoryOutcomeDigest?: (digest: KodaXMemoryOutcomeDigest) => void;
+  onMemoryReviewReceipt?: (receipt: {
+    readonly reviewKey: string;
+    readonly proposalIds: readonly string[];
+    readonly completedAt: string;
+  }) => void;
 }
 
 
@@ -1260,6 +1274,10 @@ export interface KodaXToolVisibilityMeta {
 export type KodaXToolVisibilityPolicy = (tool: KodaXToolVisibilityMeta) => boolean;
 
 export interface KodaXContextOptions {
+  /** FEATURE_260 runtime-owned identity used for scoped memory reads. */
+  memoryIdentity?: MemoryContextIdentity;
+  /** Runtime-built F228 pack reused by prompt rendering and MemorySession. */
+  memoryPack?: MemoryPack;
   /** Project root used for project-scoped prompts, permissions, and path policy. */
   gitRoot?: string | null;
   /**
@@ -1902,6 +1920,11 @@ export type {
 export interface KodaXToolExecutionContext {
   /** File backups for undo functionality - 文件备份用于撤销功能 */
   backups: Map<string, string>;
+  /** FEATURE_260: current exactly-scoped read-only MemorySession query binding. */
+  memoryRecall?: (need: string) => Promise<{
+    readonly content: string;
+    readonly evidenceRefs: readonly string[];
+  } | undefined>;
   /** Git root directory - Git 鏍圭洰褰?*/
   gitRoot?: string;
   /**

@@ -18,10 +18,6 @@ import { Runner } from '@kodax-ai/agent';
 import { runWithScopedConfig } from '@kodax-ai/llm';
 
 import { createDefaultCodingAgent } from './coding-preset.js';
-import {
-  maybeReviewMemoryFeedbackFromPrompt,
-  maybeRunMemoryMaintenanceWindow,
-} from './memory-runtime.js';
 import { applyFollowupEscalationToOptions } from './reasoning.js';
 import { deriveRunScopedConfig } from './run-scoped-config.js';
 import type { KodaXOptions, KodaXResult } from './types.js';
@@ -62,8 +58,6 @@ export async function runKodaX(
   // through `runManagedTask` (SA dispatch) this simply re-establishes the same
   // scope — nesting replaces with an identical config, so it is idempotent.
   return runWithScopedConfig(deriveRunScopedConfig(effectiveOptions), async () => {
-    await maybeRunMemoryMaintenanceWindow(effectiveOptions);
-    await maybeReviewMemoryFeedbackFromPrompt(effectiveOptions, prompt);
     const result = await Runner.run<KodaXResult>(createDefaultCodingAgent(), prompt, {
       presetOptions: effectiveOptions,
       abortSignal: effectiveOptions.abortSignal,

@@ -189,6 +189,10 @@ export interface KodaXMessage {
   timestamp?: string;
 }
 
+export interface KodaXEphemeralSuffix {
+  readonly content: string;
+}
+
 // ============== 流式结果类型 ==============
 
 export interface KodaXTokenUsage {
@@ -793,6 +797,8 @@ export interface KodaXProviderConfig {
 }
 
 export interface KodaXProviderStreamOptions {
+  /** Request-only tail context. Providers must not mutate persisted messages. */
+  ephemeralSuffix?: KodaXEphemeralSuffix;
   onTextDelta?: (text: string) => void;
   onThinkingDelta?: (text: string) => void;
   onThinkingEnd?: (thinking: string) => void;

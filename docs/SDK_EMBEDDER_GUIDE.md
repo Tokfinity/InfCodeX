@@ -28,6 +28,7 @@ are NOT obvious from inspecting the type definitions alone:
 18. [External-agent executor plane](#18-external-agent-executor-plane-feature_258-v0767)
 19. [Session surface filtering and cursor pagination](#19-session-surface-filtering-and-cursor-pagination-feature_261-v0767)
 20. [Cost-disciplined workflow routing and telemetry](#20-cost-disciplined-workflow-routing-and-telemetry-feature_259-v0767)
+21. [Experimental governed memory — `/experimental-memory`](#21-experimental-governed-memory--experimental-memory-feature_260-v0768)
 
 §1–§3 (and the Phase-7/8 MCP-popout surface in §1) land in v0.7.42
 under FEATURE_186 (see [ADR-032](ADR.md#adr-032-sdk-embedder-surface-closure-feature_186-v0742)).
@@ -964,7 +965,7 @@ running your project's test suite against `main` — you can `npm link`
 the in-tree KodaX checkout instead of waiting for a published version.
 
 As of v0.7.43 the root `package.json` is in **already-published shape**:
-`"name": "@kodax-ai/kodax"` is baked in along with all 8 SDK subpath
+`"name": "@kodax-ai/kodax"` is baked in along with all 10 SDK subpath
 exports. `npm link` "just works" — no need to run `scripts/release.mjs`
 first.
 
@@ -2004,6 +2005,11 @@ still get correct answers about the underlying engine (providers / config /
 permissions / tools / skills / extensions / mcp / repo-intelligence / sessions /
 sdk / custom-providers) without the KodaX brand:
 
+The default full manual also includes the `memory` topic. It is intentionally
+not part of `KODAX_UNDERLYING_CAPABILITY_TOPICS` because `/experimental-memory`
+is opt-in; hosts that expose it should add `memory` explicitly or provide a
+product-specific override.
+
 ```ts
 import {
   runKodaX,
@@ -2733,9 +2739,10 @@ fields requires a protocol version bump.
 
 ### Current verification status
 
-The v0.7.67 release validation covers the runtime migration, the Worker
+The v0.7.68 release validation covers the runtime migration, the Worker
 isolation follow-ups delivered ahead of their original v0.7.71/v0.7.72
-planning slots, and the v0.7.67 external-agent/session additions:
+planning slots, the v0.7.67 external-agent/session additions, and the v0.7.68
+experimental Memory Agent surface:
 
 - complete repository test suite on Node 20 and Node 22;
 - package builds, Worker sidecar builds, and self-contained
@@ -2751,6 +2758,9 @@ planning slots, and the v0.7.67 external-agent/session additions:
   recovery, policy/credential/artifact gates, and disabled-plane failure;
 - exact session `surface` filtering plus opaque cursor continuation through the
   narrow `/session` API, embedded Runtime, and daemon transport;
+- scoped zero-wait memory recall, read-only deliberate query, trace-only
+  receipts, bounded episode review, governed consult-before-write promotion,
+  and the self-contained `/experimental-memory` bundle/DTS surface;
 - external fresh npm consumer installation of the `0.7.67` tarball, proving
   Worker isolation and a distinct daemon PID through the published subpath;
 - Ubuntu Node 22 Unix-domain-socket daemon gate, including two clients sharing
@@ -3068,6 +3078,96 @@ Do not interpret `totalModelTokens: 0` as free execution unless
 `tokenCoverage.ok` is true and the relevant external task IDs are not excluded.
 The report is an audit/optimization artifact; correctness still comes from the
 workflow's structured findings, verification results, and quality gates.
+
+---
+
+## 21. Experimental governed memory — `/experimental-memory` (FEATURE_260, v0.7.68)
+
+KodaX has one durable memory plane: the F228 Memory Control Plane. FEATURE_260
+adds a thin, opt-in agent/session API over that plane; it does not add a second
+database, filesystem memory actions, a resident memory specialist, or online
+self-modification.
+
+Top-level `runKodaX()` coding runs wire this lifecycle automatically. They build
+an exact-scoped memory pack at session start, keep passive recall off the
+blocking hot path, expose `memory_recall` only when the memory session starts,
+record bounded observations/outcomes, and close the session at the run boundary.
+Use the direct SDK below when a custom host needs to own those boundaries.
+
+### Minimal direct session
+
+```ts
+import { createMemoryControlPlane } from '@kodax-ai/kodax/agent';
+import { createMemoryAgent } from '@kodax-ai/kodax/experimental-memory';
+
+const identity = {
+  tenantId: 'tenant:acme',
+  workspaceId: 'workspace:desktop',
+  userId: 'user:42',
+  agentId: 'agent:reviewer',
+  projectId: 'project:kodax',
+  sessionId: 'session:20260712',
+};
+
+const controlPlane = createMemoryControlPlane({
+  cwd: process.cwd(),
+  identity,
+  projectDocs: [],
+  discoverSkills: false,
+});
+const memory = createMemoryAgent({ controlPlane });
+const session = await memory.startSession({
+  identity,
+  objective: 'Review the runtime shutdown change',
+});
+
+const immediate = session.recall({
+  decisionRevision: 'decision:1',
+  objective: 'Review the runtime shutdown change',
+  decisionContext: 'Choosing the first verification step',
+  decisionIntent: 'runtime shutdown regression',
+  throughSequence: 0,
+});
+const deliberate = await session.query({
+  decisionRevision: 'decision:2',
+  need: 'What uncommon daemon cleanup failure happened before?',
+  throughSequence: 0,
+});
+
+await session.complete({
+  status: 'succeeded',
+  summary: 'Shutdown state replacement verified',
+  evidence: [],
+});
+await session.close();
+```
+
+`recall()` is synchronous: exact observations/hints can be returned immediately,
+while an optional semantic prefetch finishes for a later matching decision.
+`query()` is deliberate and read-only; one distinct query is admitted per
+decision epoch, and the result is bounded to at most three prompt-safe hints and
+512 estimated tokens. `undefined` means there is no governed reminder to inject.
+
+### Evidence, tracing, and persistence boundaries
+
+- Recalled content is low-authority evidence. Current repository/config/runtime
+  facts must still come from current tools or host state.
+- `observe()` accepts monotonic, evidence-linked observations and rejects secret
+  material. `rewind()` removes observations after a sequence boundary.
+- `complete()` can emit an Outcome Digest through `persistOutcomeDigest` and run
+  bounded episode review through `reviewEpisode`; cancellation creates neither.
+- `onTrace` receives policy-versioned `MemoryDecisionReceipt` metadata that links
+  candidates, selection, injection, and later outcome influence. Receipts are
+  trace-only and contain no hidden reasoning.
+- Durable memory mutation remains owned by F228's
+  proposal/preview/fingerprint/apply flow. `/memory` is the CLI governance
+  surface; direct file/shell writes to managed memory roots are denied.
+- Identity/applicability matching is exact and fail-closed. Hosts should supply
+  stable tenant/workspace/user/agent/project/session identifiers and must not put
+  credentials into those identifiers.
+
+The subpath is experimental and ESM-only. Treat its exported types as opt-in
+v0.7.x contracts; keep persistence and product policy behind your own adapter.
 
 ---
 

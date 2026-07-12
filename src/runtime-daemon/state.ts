@@ -149,7 +149,13 @@ export function writeRuntimeDaemonState(
   state: RuntimeDaemonState,
 ): void {
   ensureRuntimeDaemonDirectories(paths);
-  fs.writeFileSync(paths.stateFile, `${JSON.stringify(state, null, 2)}\n`, 'utf8');
+  const temporary = `${paths.stateFile}.${process.pid}.${randomUUID()}.tmp`;
+  try {
+    fs.writeFileSync(temporary, `${JSON.stringify(state, null, 2)}\n`, 'utf8');
+    fs.renameSync(temporary, paths.stateFile);
+  } finally {
+    fs.rmSync(temporary, { force: true });
+  }
 }
 
 export function appendRuntimeDaemonLog(

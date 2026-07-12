@@ -19,10 +19,13 @@ import { afterEach, beforeEach, describe, expect, it } from 'vitest';
 import { setAgentConfigHome } from '../runtime/agent-home.js';
 import {
   hashCwd,
+  hashMemoryIdentityComponent,
   isAutoManagedMemoryFile,
+  matchesMemoryApplicability,
   parseMemoryTypeFromFilename,
   resolveMemoryEntrypoint,
   resolveMemoryRoot,
+  resolveScopedMemoryRoot,
   sanitizeProjectKey,
 } from './paths.js';
 
@@ -55,6 +58,12 @@ describe('sanitizeProjectKey', () => {
     expect(sanitizeProjectKey('https://github.com/user/repo')).toBe(
       'github.com-user-repo',
     );
+  });
+
+  it('removes HTTPS credentials and query secrets before creating a path key', () => {
+    expect(sanitizeProjectKey(
+      'https://oauth2:ghp_super_secret@github.com/user/repo.git?token=also-secret',
+    )).toBe('github.com-user-repo');
   });
 
   it('does not produce leading/trailing dashes', () => {
@@ -119,6 +128,79 @@ describe('resolveMemoryRoot / resolveMemoryEntrypoint', () => {
   });
 });
 
+describe('FEATURE_260 scoped memory identity', () => {
+  let tempHome: string;
+
+  beforeEach(() => {
+    tempHome = fs.mkdtempSync(path.join(os.tmpdir(), 'kodax-memory-scopes-'));
+    setAgentConfigHome(tempHome);
+  });
+
+  afterEach(() => {
+    setAgentConfigHome(undefined);
+    fs.rmSync(tempHome, { recursive: true, force: true });
+  });
+
+  const identity = {
+    tenantId: 'tenant-acme',
+    workspaceId: 'workspace-platform',
+    userId: 'user-123',
+    agentId: 'coding-agent',
+    projectId: 'project-kodax',
+    sessionId: 'session-1',
+  } as const;
+
+  it('requires every selector field to match exactly', () => {
+    expect(matchesMemoryApplicability(identity, {
+      tenantId: identity.tenantId,
+      projectId: identity.projectId,
+      userId: identity.userId,
+    })).toBe(true);
+
+    for (const [field, replacement] of [
+      ['tenantId', 'other-tenant'],
+      ['workspaceId', 'other-workspace'],
+      ['userId', 'other-user'],
+      ['agentId', 'other-agent'],
+      ['projectId', 'other-project'],
+      ['sessionId', 'other-session'],
+    ] as const) {
+      expect(matchesMemoryApplicability(identity, {
+        tenantId: identity.tenantId,
+        [field]: replacement,
+      })).toBe(false);
+    }
+  });
+
+  it('uses full lowercase SHA-256 components and never leaks raw identity', () => {
+    const hash = hashMemoryIdentityComponent('tenant', identity.tenantId);
+    expect(hash).toMatch(/^[0-9a-f]{64}$/);
+    expect(hash).toBe(hashMemoryIdentityComponent('tenant', identity.tenantId));
+    expect(hash).not.toBe(hashMemoryIdentityComponent('project', identity.tenantId));
+
+    const root = resolveScopedMemoryRoot(identity, 'project');
+    expect(root).toBe(path.join(
+      tempHome,
+      'memory-scopes',
+      hash,
+      'project',
+      hashMemoryIdentityComponent('project', identity.projectId),
+    ));
+    expect(root).not.toContain(identity.tenantId);
+    expect(root).not.toContain(identity.projectId);
+    expect(isAutoManagedMemoryFile(path.join(root, 'project_stack.md'))).toBe(true);
+  });
+
+  it('fails closed when a scoped root lacks the required identity field', () => {
+    expect(() => resolveScopedMemoryRoot(identity, 'workspace')).not.toThrow();
+    expect(() => resolveScopedMemoryRoot({
+      tenantId: identity.tenantId,
+      agentId: identity.agentId,
+      sessionId: identity.sessionId,
+    }, 'project')).toThrow(/projectId/);
+  });
+});
+
 describe('isAutoManagedMemoryFile', () => {
   let tempHome: string;
 
@@ -143,15 +225,16 @@ describe('isAutoManagedMemoryFile', () => {
     expect(isAutoManagedMemoryFile(memoryFile)).toBe(true);
   });
 
-  it('returns false for non-.md files', () => {
-    const non = path.join(
+  it('protects non-Markdown governance files inside managed memory roots', () => {
+    const governance = path.join(
       tempHome,
       'projects',
       'github.com-user-repo',
       'memory',
-      'README.txt',
+      '.governance',
+      'lifecycle.json',
     );
-    expect(isAutoManagedMemoryFile(non)).toBe(false);
+    expect(isAutoManagedMemoryFile(governance)).toBe(true);
   });
 
   it('returns false for files in projects/<key>/ but not under memory/', () => {

@@ -1,6 +1,6 @@
 # Known Issues
 
-_Last Updated: 2026-07-11_
+_Last Updated: 2026-07-12_
 
 ---
 
@@ -14,6 +14,7 @@ _Last Updated: 2026-07-11_
 
 | ID | Priority | Status | Title | Introduced | Fixed | Created | Resolved |
 |----|----------|--------|-------|------------|-------|---------|----------|
+| 152 | High | Resolved | FEATURE_260 review found credential, mutation-guard, concurrent persistence, and eval-integrity gaps | v0.7.68 RC | v0.7.68 | 2026-07-12 | 2026-07-12 |
 | 151 | High | Resolved | Runtime config tests leak detached daemon processes and interrupted background fixtures can survive | v0.7.67 RC | v0.7.67 | 2026-07-11 | 2026-07-11 |
 | 150 | High | Resolved | v0.7.67 外部 Agent 脚本路由与执行平面关闭契约存在发布阻断缺口 | v0.7.67 RC | v0.7.67 | 2026-07-11 | 2026-07-11 |
 | 149 | High | Resolved | ACP tests persist empty sessions into the real user store | v0.7.66 | v0.7.67 | 2026-07-11 | 2026-07-11 |
@@ -102,6 +103,75 @@ _Last Updated: 2026-07-11_
 ## Issue Details
 <!-- Full details for each issue - REQUIRED for all issues -->
 
+### 152: FEATURE_260 review found credential, mutation-guard, concurrent persistence, and eval-integrity gaps
+
+- **Priority**: High
+- **Status**: **Resolved** (v0.7.68)
+- **Introduced**: v0.7.68 release candidate
+- **Created**: 2026-07-12
+- **Resolved**: 2026-07-12
+- **Fixed**: v0.7.68
+
+#### Original Problem
+
+The post-implementation FEATURE_260 review found five release-integrity gaps:
+raw Git remotes could retain embedded HTTP credentials in project identity and
+legacy storage paths; structured and shell memory guards were case-sensitive or
+allowed interpreter-based mutation; concurrent inbox drains could review one
+episode twice while proposal/lifecycle read-modify-write operations lost sibling
+updates; the eval manifest omitted untracked candidate files; and malformed raw
+eval JSON was silently treated as a missing cache cell.
+
+The final routing result remained valid for policy behavior, but these gaps made
+the current working tree unsafe to publish as-is and weakened its audit trail.
+
+#### Root Cause
+
+- Repository identity reused `remote.origin.url` before canonical redaction.
+- Mutation protection relied on `.md` suffixes and a mutating-command allowlist.
+- Shared JSON stores and episode drains had atomic writes but no serialization or
+  atomic work claim.
+- Eval provenance hashed only `git diff HEAD`, which excludes untracked files.
+- Cache recovery grouped `SyntaxError` with `ENOENT`, allowing regeneration.
+
+#### Resolution
+
+Repository identities now canonicalize HTTPS/SSH remotes without userinfo,
+query strings, or raw fallback bytes. Managed-path checks are Windows-safe and
+protect governance sidecars; shell commands that address a managed root are
+fail-closed except for a narrow read-only inspection set. Pending reviews move
+atomically into a processing claim with stale-claim recovery, and proposal plus
+lifecycle stores serialize cross-process read-modify-write sections with bounded
+stale locks. The eval manifest schema now binds tracked submodule-aware diffs and
+untracked file path/content hashes. Malformed cache JSON fails loudly, and the
+summary declares the main-session review as a separate artifact rather than a
+permanently pending field.
+
+The post-review documentation pass also split governed memory out of the legacy
+sessions manual topic, added all-command drift coverage for `kodax_manual`, and
+documented direct `/experimental-memory` SDK ownership and safety boundaries.
+
+#### Files Changed
+
+- `packages/coding/src/memory-runtime.ts`
+- `packages/coding/src/tools/memory-mutation-guard.ts`
+- `packages/agent/src/memory/paths.ts`
+- `packages/agent/src/memory-control/review-inbox.ts`
+- `packages/agent/src/memory-control/lifecycle.ts`
+- `packages/agent/src/learning/store.ts`
+- `benchmark/datasets/feature-260/experiment-contract.ts`
+- `benchmark/datasets/feature-260/runner.ts`
+- `packages/coding/src/self-knowledge/registry.ts`
+- `docs/SDK_EMBEDDER_GUIDE.md`
+
+#### Tests Added
+
+- Credential-bearing HTTPS and equivalent SSH repository identity.
+- Windows path casing, interpreter shell mutation, and governance-sidecar guards.
+- Concurrent review claim, proposal upsert, and lifecycle tombstone persistence.
+- Untracked source-snapshot hashing and fail-loud malformed eval cache handling.
+- Memory/manual query routing and full built-in-command drift coverage.
+
 ### 151: Runtime config tests leak detached daemon processes and interrupted background fixtures can survive
 
 - **Priority**: High
@@ -155,6 +225,13 @@ keeps an `afterEach` fallback for assertion failures. Its regression run passed
 fixtures in the Bash and managed-process suites now poll their original parent
 and self-exit if a forcibly terminated test runner cannot reach normal cleanup.
 
+A v0.7.68 full-suite follow-up exposed one remaining race: daemon state was
+rewritten by truncating `daemon.json` in place, so a shutdown poll could observe
+an empty/partial file as transiently missing and return before the subsequent
+`stopping` state became readable. State updates now use a same-directory staging
+file plus atomic rename. The config shutdown case passed three repeated runs,
+and the final process/staging-file audit found no residue.
+
 Five already-orphaned, command-line-verified KodaX test processes were stopped.
 The 26 Node processes owned by the active `codex.exe` parent were identified as
 Codex MCP servers and intentionally left untouched.
@@ -162,6 +239,8 @@ Codex MCP servers and intentionally left untouched.
 #### Files Changed
 
 - `src/sdk-runtime.config.test.ts`
+- `src/runtime-daemon/state.ts`
+- `src/runtime-daemon/state.test.ts`
 - `packages/coding/src/tools/bash.test.ts`
 - `packages/agent/src/runtime/managed-child-processes.test.ts`
 - `docs/SDK_EMBEDDER_GUIDE.md`
@@ -170,6 +249,7 @@ Codex MCP servers and intentionally left untouched.
 
 - Auto-started config daemon state must disappear after explicit test shutdown.
 - The daemon test run must leave no new Node PID after completion.
+- State replacement is atomic and leaves no staging file behind.
 - Long-lived process fixtures have an abnormal-parent-exit fallback while
   retaining normal managed cleanup assertions.
 
@@ -5242,7 +5322,7 @@ Commit `ef085fc` 把 V1 精简到 V2 时没区分"信息载体"和"脚手架"，
 ---
 
 ## Summary
-- Total: 78 (24 Open, 54 Resolved, 0 Partially Resolved, 0 Won't Fix)
+- Total: 79 (24 Open, 55 Resolved, 0 Partially Resolved, 0 Won't Fix)
 - Highest Priority Open: 091 - 缺少一等公民 MCP / Web Search / Code Search 工具体系 (High)
 - Historical archived issues are maintained in ISSUES_ARCHIVED.md
 

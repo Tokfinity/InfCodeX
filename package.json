@@ -1,6 +1,6 @@
 {
   "name": "@kodax-ai/kodax",
-  "version": "0.7.67",
+  "version": "0.7.68",
   "description": "KodaX lightweight coding agent - TypeScript implementation with 15 built-in LLM provider aliases, published as a Node-free single-file CLI and SDK",
   "type": "module",
   "private": true,
@@ -55,6 +55,10 @@
     "./runtime": {
       "types": "./dist/sdk-runtime.d.ts",
       "import": "./dist/sdk-runtime.js"
+    },
+    "./experimental-memory": {
+      "types": "./dist/sdk-experimental-memory.d.ts",
+      "import": "./dist/sdk-experimental-memory.js"
     },
     "./package.json": "./package.json"
   },

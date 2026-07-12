@@ -70,6 +70,18 @@ describe('runtime daemon state paths', () => {
     expect(readRuntimeDaemonState(paths)).toEqual(expected);
   });
 
+  it('atomically replaces daemon state without leaving staging files', () => {
+    const paths = resolveRuntimeDaemonPaths(tempHome(), 'default');
+    writeRuntimeDaemonState(paths, state());
+
+    const stopping = state({ status: 'stopping' });
+    writeRuntimeDaemonState(paths, stopping);
+
+    expect(readRuntimeDaemonState(paths)).toEqual(stopping);
+    expect(fs.readdirSync(paths.rootDir)).toContain('daemon.json');
+    expect(fs.readdirSync(paths.rootDir).filter((name) => name.endsWith('.tmp'))).toEqual([]);
+  });
+
   it('treats malformed daemon state as missing instead of throwing', () => {
     const paths = resolveRuntimeDaemonPaths(tempHome(), 'default');
     fs.mkdirSync(paths.rootDir, { recursive: true });

@@ -208,6 +208,12 @@ export abstract class KodaXAcpProvider extends KodaXBaseProvider {
             }
             promptText = parts.join('\n');
         }
+        const ephemeralSuffix = streamOptions?.ephemeralSuffix?.content;
+        if (ephemeralSuffix) {
+            promptText = promptText.length > 0
+                ? `${promptText}\n\n${ephemeralSuffix}`
+                : ephemeralSuffix;
+        }
 
         // Build client event hooks once and route updates into the active stream.
         const options: AcpClientOptions = {

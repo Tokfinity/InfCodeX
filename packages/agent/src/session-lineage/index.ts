@@ -28,6 +28,12 @@ export { LineageCompaction } from './compaction.js';
 
 // ============== Session ID + title helpers (v0.7.35.1 FEATURE_142 Batch B) ==============
 export {
+  appendMemoryOutcomeDigest,
+  appendMemoryReviewReceipt,
+  appendMemoryClientNotice,
+} from './memory-outcomes.js';
+
+export {
   generateSessionId,
   extractTitleFromMessages,
 } from './session.js';

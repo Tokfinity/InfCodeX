@@ -32,6 +32,9 @@ import {
 } from '@kodax-ai/coding';
 import {
   appendSessionLineageLabel,
+  appendMemoryClientNotice,
+  appendMemoryOutcomeDigest,
+  appendMemoryReviewReceipt,
   buildSessionTree,
   countActiveLineageMessages,
   createSessionLineage,
@@ -1218,6 +1221,28 @@ Keyboard Shortcuts:
         },
         events: {
           ...currentOptions.events,
+          onMemoryOutcomeDigest: (digest) => {
+            context.lineage = appendMemoryOutcomeDigest(
+              context.lineage ?? createSessionLineage(context.messages),
+              digest,
+            );
+            currentOptions.events?.onMemoryOutcomeDigest?.(digest);
+          },
+          onMemoryReviewReceipt: (receipt) => {
+            context.lineage = appendMemoryReviewReceipt(
+              context.lineage ?? createSessionLineage(context.messages),
+              receipt,
+            );
+            currentOptions.events?.onMemoryReviewReceipt?.(receipt);
+          },
+          onMemoryNotice: (notice) => {
+            context.lineage = appendMemoryClientNotice(
+              context.lineage ?? createSessionLineage(context.messages),
+              { ...notice, createdAt: new Date().toISOString() },
+            );
+            console.log(chalk.dim(`\n[memory] ${notice.summaries.slice(0, 3).join('; ')}`));
+            currentOptions.events?.onMemoryNotice?.(notice);
+          },
           // FEATURE_074: exit_plan_mode tool callback. Three-state return:
           //   'not-in-plan-mode' when called outside plan mode (tool turns this
           //   into an explicit error); true on approval; false on rejection.

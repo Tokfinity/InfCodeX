@@ -39,6 +39,8 @@ export const LINEAGE_ENTRY_TYPES = Object.freeze([
   'archive_marker',
   'rewind_marker',
   'artifact_ledger',
+  'memory_outcome_digest',
+  'memory_review_receipt',
 ] as const);
 
 export type LineageEntryType = (typeof LINEAGE_ENTRY_TYPES)[number];

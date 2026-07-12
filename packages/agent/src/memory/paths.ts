@@ -24,6 +24,13 @@ import { execSync } from 'node:child_process';
 import * as path from 'node:path';
 
 import { getAgentConfigPath } from '../runtime/agent-home.js';
+import {
+  hashMemoryIdentityComponent,
+  matchesMemoryApplicability,
+  type MemoryContextIdentity,
+} from './identity.js';
+
+export { hashMemoryIdentityComponent, matchesMemoryApplicability } from './identity.js';
 
 /**
  * Sanitize a git remote URL to a filesystem-safe project key.
@@ -43,7 +50,7 @@ import { getAgentConfigPath } from '../runtime/agent-home.js';
  * just different access protocols.
  */
 export function sanitizeProjectKey(remoteUrl: string): string {
-  return remoteUrl
+  return remoteWithoutCredentials(remoteUrl)
     .trim()
     .replace(/^ssh:\/\//, '')
     .replace(/^https?:\/\//, '')
@@ -52,6 +59,19 @@ export function sanitizeProjectKey(remoteUrl: string): string {
     .replace(/[:@/\\]+/g, '-')
     .replace(/^-+|-+$/g, '')
     .toLowerCase();
+}
+
+function remoteWithoutCredentials(remoteUrl: string): string {
+  const value = remoteUrl.trim();
+  if (!/^[a-z][a-z0-9+.-]*:\/\//i.test(value)) return value;
+  try {
+    const parsed = new URL(value);
+    return `${parsed.hostname}${parsed.port.length > 0 ? `:${parsed.port}` : ''}${parsed.pathname}`;
+  } catch {
+    return value
+      .replace(/^([a-z][a-z0-9+.-]*:\/\/)[^/@]+@/i, '$1')
+      .replace(/[?#].*$/, '');
+  }
 }
 
 /**
@@ -111,24 +131,56 @@ export function resolveMemoryEntrypoint(cwd: string): string {
   return path.join(resolveMemoryRoot(cwd), 'MEMORY.md');
 }
 
+export type DurableMemoryScope = 'project' | 'workspace' | 'agent' | 'user';
+
+export function resolveScopedMemoryRoot(
+  identity: MemoryContextIdentity,
+  scope: DurableMemoryScope,
+): string {
+  const field = scope === 'project'
+    ? 'projectId'
+    : scope === 'workspace'
+      ? 'workspaceId'
+      : scope === 'user'
+        ? 'userId'
+        : 'agentId';
+  const canonicalId = identity[field];
+  if (canonicalId === undefined || canonicalId.length === 0) {
+    throw new Error(`${field} is required for ${scope} memory`);
+  }
+  return getAgentConfigPath(
+    'memory-scopes',
+    hashMemoryIdentityComponent('tenant', identity.tenantId),
+    scope,
+    hashMemoryIdentityComponent(scope, canonicalId),
+  );
+}
+
 /**
  * Check whether a given absolute path is inside ANY memory directory
  * (under `<agentConfigHome>/projects/*​/memory/`). Used by the REPL
  * transcript renderer to badge memory writes / reads, and by future
  * tool-permission carve-outs.
  *
- * Returns true only for `.md` files inside a `memory/` directory whose
- * parent is the agent config home's `projects/<key>/` tree. Path
- * traversal (`..`) is normalized before the check.
+ * Returns true for every file inside a governed scoped root or a legacy
+ * `projects/<key>/memory/` directory. This includes governance sidecars;
+ * path traversal (`..`) is normalized before the check.
  *
  * The check is path-prefix only — it does NOT verify the file exists
  * on disk. A planned write to `<memoryRoot>/feedback_X.md` returns true
  * even before the file is created.
  */
 export function isAutoManagedMemoryFile(filePath: string): boolean {
-  if (!filePath.endsWith('.md')) return false;
-  const normalized = path.resolve(filePath);
-  const projectsRoot = getAgentConfigPath('projects');
+  const normalized = comparablePath(filePath);
+  const scopedRoot = comparablePath(getAgentConfigPath('memory-scopes'));
+  if (normalized.startsWith(scopedRoot + path.sep)) {
+    const segments = normalized.slice(scopedRoot.length + 1).split(path.sep);
+    return segments.length >= 4
+      && /^[0-9a-f]{64}$/.test(segments[0] ?? '')
+      && ['project', 'workspace', 'agent', 'user'].includes(segments[1] ?? '')
+      && /^[0-9a-f]{64}$/.test(segments[2] ?? '');
+  }
+  const projectsRoot = comparablePath(getAgentConfigPath('projects'));
   if (!normalized.startsWith(projectsRoot + path.sep)) return false;
   // Path under projects/ must include a /memory/ segment, ruling out
   // sibling directories like projects/<key>/sessions/.
@@ -136,6 +188,11 @@ export function isAutoManagedMemoryFile(filePath: string): boolean {
   const segments = tail.split(path.sep);
   // Expect: <key>/memory/<file>.md  or  <key>/memory/<subdir>/<file>.md
   return segments.length >= 3 && segments[1] === 'memory';
+}
+
+function comparablePath(filePath: string): string {
+  const resolved = path.resolve(filePath);
+  return process.platform === 'win32' ? resolved.toLowerCase() : resolved;
 }
 
 /**

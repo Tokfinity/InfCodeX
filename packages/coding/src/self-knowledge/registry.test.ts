@@ -50,4 +50,22 @@ describe('FEATURE_218 manual registry', () => {
       expect(content, `providers topic missing "${name}"`).toContain(name);
     }
   });
+
+  it('documents the governed runtime and SDK memory surfaces', () => {
+    const content = resolveKodaXManual({ topic: 'memory' }).content;
+
+    expect(content).toContain('/memory');
+    expect(content).toContain('memory_recall');
+    expect(content).toContain('query()');
+    expect(content).toContain('low-authority');
+    expect(content).toContain('proposal/preview/fingerprint/apply');
+  });
+
+  it('keeps the SDK topic aligned with current published subpaths', () => {
+    const content = resolveKodaXManual({ topic: 'sdk' }).content;
+
+    expect(content).toContain('10 SDK subpaths');
+    expect(content).toContain('@kodax-ai/kodax/runtime');
+    expect(content).toContain('@kodax-ai/kodax/experimental-memory');
+  });
 });

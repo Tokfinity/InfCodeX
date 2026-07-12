@@ -6,7 +6,10 @@ const agentMocks = vi.hoisted(() => ({
   registerManagedChildProcess: vi.fn(() => () => undefined),
 }));
 
-vi.mock('@kodax-ai/agent', () => agentMocks);
+vi.mock('@kodax-ai/agent', async (importOriginal) => ({
+  ...(await importOriginal<typeof import('@kodax-ai/agent')>()),
+  ...agentMocks,
+}));
 
 import { toolBash } from './bash.js';
 

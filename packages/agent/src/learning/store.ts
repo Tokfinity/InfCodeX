@@ -1,4 +1,4 @@
-import { mkdir, readFile, rename, rm, writeFile } from 'fs/promises';
+import { mkdir, open, readFile, rename, rm, stat, writeFile, type FileHandle } from 'fs/promises';
 import { basename, dirname, join } from 'path';
 
 import {
@@ -42,6 +42,10 @@ function isSkillWriteOrigin(value: unknown): value is SkillWriteOrigin {
 
 function isStringArray(value: unknown): value is readonly string[] {
   return Array.isArray(value) && value.every((entry) => typeof entry === 'string');
+}
+
+function isStringRecord(value: unknown): value is Readonly<Record<string, string>> {
+  return isRecord(value) && Object.values(value).every((entry) => typeof entry === 'string');
 }
 
 function isSkillGovernanceAction(value: unknown): value is SkillGovernanceAction {
@@ -112,7 +116,40 @@ function isMemoryMetadata(value: unknown): boolean {
     && (value.platform === undefined || typeof value.platform === 'string')
     && (value.sourceTool === undefined || typeof value.sourceTool === 'string')
     && isStringArray(value.sourceRefs)
-    && typeof value.completedTurn === 'boolean';
+    && typeof value.completedTurn === 'boolean'
+    && (value.claimKind === undefined || isMemoryClaimKind(value.claimKind))
+    && (value.claimKey === undefined || typeof value.claimKey === 'string')
+    && (value.actionSignature === undefined || typeof value.actionSignature === 'string')
+    && (value.persistenceKind === undefined
+      || value.persistenceKind === 'create'
+      || value.persistenceKind === 'evidence_update'
+      || value.persistenceKind === 'condition_refinement')
+    && (value.targetRefId === undefined || typeof value.targetRefId === 'string')
+    && (value.targetStorageUri === undefined || typeof value.targetStorageUri === 'string')
+    && (value.preconditions === undefined || typeof value.preconditions === 'string')
+    && (value.applicability === undefined || isMemoryApplicability(value.applicability))
+    && (value.requestedLifecycle === undefined
+      || value.requestedLifecycle === 'active'
+      || value.requestedLifecycle === 'provisional')
+    && (value.episodeOutcome === undefined
+      || value.episodeOutcome === 'succeeded'
+      || value.episodeOutcome === 'failed')
+    && (value.verifiedEvidence === undefined || typeof value.verifiedEvidence === 'boolean')
+    && (value.evidenceProjectId === undefined || typeof value.evidenceProjectId === 'string');
+}
+
+function isMemoryClaimKind(value: unknown): boolean {
+  return value === 'fact'
+    || value === 'policy'
+    || value === 'preference'
+    || value === 'procedure'
+    || value === 'episode';
+}
+
+function isMemoryApplicability(value: unknown): boolean {
+  if (!isRecord(value) || typeof value.tenantId !== 'string') return false;
+  return ['workspaceId', 'userId', 'agentId', 'projectId', 'sessionId']
+    .every((field) => value[field] === undefined || typeof value[field] === 'string');
 }
 
 function isReviewableProposal(value: unknown): value is ReviewableLearningProposal {
@@ -203,6 +240,12 @@ function parseStoredProposal(value: unknown, index: number, warnings: string[]):
   const appliedAt = value.appliedAt;
   const appliedChangedPaths = value.appliedChangedPaths;
   const appliedSnapshotPath = value.appliedSnapshotPath;
+  const approvedBy = value.approvedBy;
+  const approvedAt = value.approvedAt;
+  const approvalPolicyId = value.approvalPolicyId;
+  const approvalPolicyReason = value.approvalPolicyReason;
+  const approvalExpectedFingerprints = value.approvalExpectedFingerprints;
+  const approvalResultingFingerprints = value.approvalResultingFingerprints;
   const rejectedReason = value.rejectedReason;
 
   if (typeof proposalId !== 'string' || proposalId.length === 0) {
@@ -237,6 +280,15 @@ function parseStoredProposal(value: unknown, index: number, warnings: string[]):
     warnings.push(`proposal entry ${proposalId} has invalid applied changed paths`);
     return undefined;
   }
+  if (approvedBy !== undefined && approvedBy !== 'user' && approvedBy !== 'host') {
+    warnings.push(`proposal entry ${proposalId} has invalid approvedBy`);
+    return undefined;
+  }
+  if (approvedAt !== undefined && typeof approvedAt !== 'string') return undefined;
+  if (approvalPolicyId !== undefined && typeof approvalPolicyId !== 'string') return undefined;
+  if (approvalPolicyReason !== undefined && typeof approvalPolicyReason !== 'string') return undefined;
+  if (approvalExpectedFingerprints !== undefined && !isStringRecord(approvalExpectedFingerprints)) return undefined;
+  if (approvalResultingFingerprints !== undefined && !isStringRecord(approvalResultingFingerprints)) return undefined;
   if (appliedSnapshotPath !== undefined && typeof appliedSnapshotPath !== 'string') {
     warnings.push(`proposal entry ${proposalId} has invalid applied snapshot path`);
     return undefined;
@@ -251,6 +303,12 @@ function parseStoredProposal(value: unknown, index: number, warnings: string[]):
     updatedAt,
     ...(typeof appliedAt === 'string' ? { appliedAt } : {}),
     ...(isStringArray(appliedChangedPaths) ? { appliedChangedPaths } : {}),
+    ...(approvedBy === 'user' || approvedBy === 'host' ? { approvedBy } : {}),
+    ...(typeof approvedAt === 'string' ? { approvedAt } : {}),
+    ...(typeof approvalPolicyId === 'string' ? { approvalPolicyId } : {}),
+    ...(typeof approvalPolicyReason === 'string' ? { approvalPolicyReason } : {}),
+    ...(isStringRecord(approvalExpectedFingerprints) ? { approvalExpectedFingerprints } : {}),
+    ...(isStringRecord(approvalResultingFingerprints) ? { approvalResultingFingerprints } : {}),
     ...(typeof appliedSnapshotPath === 'string' ? { appliedSnapshotPath } : {}),
     ...(typeof rejectedReason === 'string' ? { rejectedReason } : {}),
   };
@@ -341,36 +399,38 @@ export async function upsertLearningProposal(
     readonly applyPlan?: StoredLearningApplyPlan;
   } = {},
 ): Promise<StoredLearningProposal> {
-  const read = await readLearningProposalStore(filePath);
-  if (read.warnings.length > 0) {
-    throw new Error(`refusing to write corrupt learning proposal store: ${read.warnings.join('; ')}`);
-  }
+  return withStoreWriteLock(filePath, async () => {
+    const read = await readLearningProposalStore(filePath);
+    if (read.warnings.length > 0) {
+      throw new Error(`refusing to write corrupt learning proposal store: ${read.warnings.join('; ')}`);
+    }
 
-  const now = options.now ?? (() => new Date().toISOString());
-  const timestamp = now();
-  const existing = read.proposals.find((entry) => entry.proposalId === proposal.proposalId);
-  const next: StoredLearningProposal = existing
-    ? {
-        ...existing,
-        proposal,
-        ...(options.applyPlan !== undefined ? { applyPlan: options.applyPlan } : {}),
-        updatedAt: timestamp,
-      }
-    : {
-        proposalId: proposal.proposalId,
-        status: 'pending',
-        proposal,
-        ...(options.applyPlan !== undefined ? { applyPlan: options.applyPlan } : {}),
-        createdAt: timestamp,
-        updatedAt: timestamp,
-      };
+    const now = options.now ?? (() => new Date().toISOString());
+    const timestamp = now();
+    const existing = read.proposals.find((entry) => entry.proposalId === proposal.proposalId);
+    const next: StoredLearningProposal = existing
+      ? {
+          ...existing,
+          proposal,
+          ...(options.applyPlan !== undefined ? { applyPlan: options.applyPlan } : {}),
+          updatedAt: timestamp,
+        }
+      : {
+          proposalId: proposal.proposalId,
+          status: 'pending',
+          proposal,
+          ...(options.applyPlan !== undefined ? { applyPlan: options.applyPlan } : {}),
+          createdAt: timestamp,
+          updatedAt: timestamp,
+        };
 
-  const proposals = existing
-    ? read.proposals.map((entry) => entry.proposalId === proposal.proposalId ? next : entry)
-    : [...read.proposals, next];
+    const proposals = existing
+      ? read.proposals.map((entry) => entry.proposalId === proposal.proposalId ? next : entry)
+      : [...read.proposals, next];
 
-  await writeStoreDocument(filePath, proposals);
-  return next;
+    await writeStoreDocument(filePath, proposals);
+    return next;
+  });
 }
 
 export function resolveLearningProposalStore(cwd: string): string {
@@ -388,42 +448,114 @@ export async function updateLearningProposalStatus(
     readonly appliedAt?: string;
     readonly appliedChangedPaths?: readonly string[];
     readonly appliedSnapshotPath?: string;
+    readonly approvedBy?: 'user' | 'host';
+    readonly approvedAt?: string;
+    readonly approvalPolicyId?: string;
+    readonly approvalPolicyReason?: string;
+    readonly approvalExpectedFingerprints?: Readonly<Record<string, string>>;
+    readonly approvalResultingFingerprints?: Readonly<Record<string, string>>;
     readonly now?: () => string;
   } = {},
 ): Promise<StoredLearningProposal> {
-  const read = await readLearningProposalStore(filePath);
-  if (read.warnings.length > 0) {
-    throw new Error(`refusing to write corrupt learning proposal store: ${read.warnings.join('; ')}`);
+  return withStoreWriteLock(filePath, async () => {
+    const read = await readLearningProposalStore(filePath);
+    if (read.warnings.length > 0) {
+      throw new Error(`refusing to write corrupt learning proposal store: ${read.warnings.join('; ')}`);
+    }
+
+    const existing = read.proposals.find((entry) => entry.proposalId === proposalId);
+    if (!existing) throw new Error(`learning proposal not found: ${proposalId}`);
+
+    const now = options.now ?? (() => new Date().toISOString());
+    const next: StoredLearningProposal = {
+      ...existing,
+      status,
+      updatedAt: now(),
+      ...(status === 'approved' && options.appliedAt !== undefined
+        ? { appliedAt: options.appliedAt }
+        : {}),
+      ...(status === 'approved' && options.appliedChangedPaths !== undefined
+        ? { appliedChangedPaths: options.appliedChangedPaths }
+        : {}),
+      ...(status === 'approved' && options.appliedSnapshotPath !== undefined
+        ? { appliedSnapshotPath: options.appliedSnapshotPath }
+        : {}),
+      ...(status === 'approved' && options.approvedBy !== undefined ? { approvedBy: options.approvedBy } : {}),
+      ...(status === 'approved' && options.approvedAt !== undefined ? { approvedAt: options.approvedAt } : {}),
+      ...(status === 'approved' && options.approvalPolicyId !== undefined
+        ? { approvalPolicyId: options.approvalPolicyId }
+        : {}),
+      ...(status === 'approved' && options.approvalPolicyReason !== undefined
+        ? { approvalPolicyReason: options.approvalPolicyReason }
+        : {}),
+      ...(status === 'approved' && options.approvalExpectedFingerprints !== undefined
+        ? { approvalExpectedFingerprints: options.approvalExpectedFingerprints }
+        : {}),
+      ...(status === 'approved' && options.approvalResultingFingerprints !== undefined
+        ? { approvalResultingFingerprints: options.approvalResultingFingerprints }
+        : {}),
+      ...(status === 'rejected' && options.rejectedReason !== undefined
+        ? { rejectedReason: options.rejectedReason }
+        : { rejectedReason: undefined }),
+    };
+
+    await writeStoreDocument(
+      filePath,
+      read.proposals.map((entry) => entry.proposalId === proposalId ? next : entry),
+    );
+    return next;
+  });
+}
+
+async function withStoreWriteLock<T>(filePath: string, operation: () => Promise<T>): Promise<T> {
+  const lockPath = `${filePath}.lock`;
+  await mkdir(dirname(filePath), { recursive: true });
+  const handle = await acquireStoreWriteLock(lockPath);
+  try {
+    return await operation();
+  } finally {
+    try {
+      await handle.close();
+    } finally {
+      await rm(lockPath, { force: true });
+    }
   }
+}
 
-  const existing = read.proposals.find((entry) => entry.proposalId === proposalId);
-  if (!existing) {
-    throw new Error(`learning proposal not found: ${proposalId}`);
+async function acquireStoreWriteLock(lockPath: string): Promise<FileHandle> {
+  const deadline = Date.now() + 5_000;
+  while (true) {
+    try {
+      const handle = await open(lockPath, 'wx');
+      try {
+        await handle.writeFile(`${process.pid}\n`, 'utf8');
+        return handle;
+      } catch (error) {
+        await handle.close();
+        await rm(lockPath, { force: true });
+        throw error;
+      }
+    } catch (error) {
+      if (!isFileError(error, 'EEXIST')) throw error;
+      if (await isStaleStoreLock(lockPath)) {
+        await rm(lockPath, { force: true });
+        continue;
+      }
+      if (Date.now() >= deadline) throw new Error(`learning proposal store lock timed out: ${lockPath}`);
+      await new Promise<void>((resolve) => setTimeout(resolve, 10));
+    }
   }
+}
 
-  const now = options.now ?? (() => new Date().toISOString());
-  const next: StoredLearningProposal = {
-    ...existing,
-    status,
-    updatedAt: now(),
-    ...(status === 'approved' && options.appliedAt !== undefined
-      ? { appliedAt: options.appliedAt }
-      : {}),
-    ...(status === 'approved' && options.appliedChangedPaths !== undefined
-      ? { appliedChangedPaths: options.appliedChangedPaths }
-      : {}),
-    ...(status === 'approved' && options.appliedSnapshotPath !== undefined
-      ? { appliedSnapshotPath: options.appliedSnapshotPath }
-      : {}),
-    ...(status === 'rejected' && options.rejectedReason !== undefined
-      ? { rejectedReason: options.rejectedReason }
-      : { rejectedReason: undefined }),
-  };
+async function isStaleStoreLock(lockPath: string): Promise<boolean> {
+  try {
+    return Date.now() - (await stat(lockPath)).mtimeMs > 30_000;
+  } catch (error) {
+    if (isFileError(error, 'ENOENT')) return false;
+    throw error;
+  }
+}
 
-  await writeStoreDocument(
-    filePath,
-    read.proposals.map((entry) => entry.proposalId === proposalId ? next : entry),
-  );
-
-  return next;
+function isFileError(error: unknown, code: string): boolean {
+  return isRecord(error) && error.code === code;
 }
