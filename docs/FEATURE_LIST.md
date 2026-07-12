@@ -14,11 +14,11 @@
 | Current released version | `v0.7.67` |
 | Current package version | `@kodax-ai/kodax@0.7.67` release commit; GitHub source/binary release included, npm publication pending operator action |
 | Workspace baseline | `llm / agent / coding / repl` 4 packages |
-| Total tracked features | `46` |
+| Total tracked features | `47` |
 | InProgress | `0` |
-| Planned | `14` |
+| Planned | `15` |
 | Completed | `32` |
-| Tracked feature IDs | `007, 030, 093, 105, 108, 113, 139, 174, 211, 221, 224, 225, 228, 229, 230, 231, 232, 233, 234, 235, 236, 237, 238, 239, 240, 241, 242, 243, 244, 245, 246, 247, 248, 249, 250, 251, 252, 253, 254, 255, 256, 257, 258, 259, 260, 261` |
+| Tracked feature IDs | `007, 030, 093, 105, 108, 113, 139, 174, 211, 221, 224, 225, 228, 229, 230, 231, 232, 233, 234, 235, 236, 237, 238, 239, 240, 241, 242, 243, 244, 245, 246, 247, 248, 249, 250, 251, 252, 253, 254, 255, 256, 257, 258, 259, 260, 261, 262` |
 | Archive cutoff | Shipped / canceled / absorbed / shelved items through `v0.7.49` are archived. |
 
 ### 一览表
@@ -29,6 +29,7 @@
 | InProgress | 0 | — | — |
 | Planned, near-term | 9 | `260, 244, 231, 235, 238, 232, 105, 108, 225` | `v0.7.68` -> `v0.7.100` |
 | Planned, v0.8.x | 5 | `007, 030, 093, 113, 139` | `v0.8.5+` |
+| Planned, v0.9.x | 1 | `262` | `v0.9.0` |
 
 > v0.7.49 / v0.7.50 workflow split：`FEATURE_217` remains the human-facing workflow mode. Manual testing reopened required UI/UX and reliability deltas inside [v0.7.49](features/v0.7.49.md#13-v0749-completion-delta): bounded live progress with phase index / running 智能体 wording / preserved progress row / elapsed time / completed-child token usage, localized assistant-style launch notes, result-bearing child-agent digests or folded long-report notices, non-`info` agentic transcript, clear separation between `finished/spawned` progress and lifetime `maxAgents` cap, final synthesis, generated final-result contract lint, implicit `tokenBudget` stripping, generated task-command crash hardening, tighter AMAW invocation policy, wait timeout propagation, no default total workflow wall-clock timeout, terminal cleanup for un-awaited children, accurate template read/write metadata, capsule min-version preflight, manual run cleanup controls, and the closed minimal saved-workflow named reuse delta (`/workflow <savedName>` plus `/workflow rerun <runId|savedName>` with help/completion). `FEATURE_229` in v0.7.50 is the platform layer: it standardizes the same process as agent-layer snapshot/events, SDK subscription/polling, Space-style host policy and lifecycle controls, terminal-state helpers, workflow identity/lifecycle controls beyond named reuse (`display name | revise | rename | revision provenance`), REPL-as-consumer rendering, conservative retention, and durable source/provenance/resultSummary persistence; it is not the first implementation of the user-visible UX.
 
@@ -64,6 +65,7 @@
 | `v0.8.5` | `3` |
 | `v0.8.7` | `1` |
 | `v0.8.25` | `1` |
+| `v0.9.0` | `1` |
 
 > Release cadence rule: every `v0.7.x` feature-bearing release normally leaves
 > the next two patch versions for debug/patch releases. `v0.7.55` is intentionally
@@ -154,6 +156,14 @@
 > bare `-r` auto-resume with a searchable/paged TUI, adds SDK surface/cursor
 > session listing, hides non-resumable zero-message placeholders, and provides
 > preview-first reversible cleanup. It does not consume a new roadmap slot.
+>
+> **2026-07-12 v0.9.0 supply-chain security reactivation**: `FEATURE_262`
+> reuses the otherwise empty `v0.9.0` milestone for npm 12 install-time
+> security and npm trusted publishing. This does not move any feature out of
+> the archived `v0.9.5` staging history. The feature keeps Node 20 runtime
+> support, proves that KodaX builds without dependency lifecycle scripts, and
+> migrates npm publication from long-lived/bypass-2FA credentials to GitHub
+> Actions OIDC before the January 2027 publishing cutoff.
 
 ---
 
@@ -235,6 +245,7 @@ fixed GitHub binary archive sidecar omission before tagging.
 | `093` | Coding and REPL Internal Circular Dependency Decoupling | Internal | Medium | `v0.8.5` | [v0.8.5](features/v0.8.5.md#feature_093-coding-and-repl-internal-circular-dependency-decoupling) |
 | `113` | TodoList JSON / CLI Surface | Enhancement | Medium | `v0.8.7` | [v0.8.7](features/v0.8.7.md#feature_113-todolist-json--cli-surface) |
 | `139` | NotebookEdit Tool | Enhancement / Tool | Low | `v0.8.25` | [v0.8.25](features/v0.8.25.md#feature_139-notebookedit-tool--jupyter-cell-level-crud) |
+| `262` | npm 12 Install-Time Security + Trusted Publishing Migration | Internal / Supply Chain Security | High | `v0.9.0` | [v0.9.0](features/v0.9.0.md#feature_262-npm-12-install-time-security--trusted-publishing-migration) |
 
 ---
 
