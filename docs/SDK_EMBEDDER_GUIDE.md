@@ -29,6 +29,7 @@ are NOT obvious from inspecting the type definitions alone:
 19. [Session surface filtering and cursor pagination](#19-session-surface-filtering-and-cursor-pagination-feature_261-v0767)
 20. [Cost-disciplined workflow routing and telemetry](#20-cost-disciplined-workflow-routing-and-telemetry-feature_259-v0767)
 21. [Experimental governed memory — `/experimental-memory`](#21-experimental-governed-memory--experimental-memory-feature_260-v0768)
+22. [Bidirectional A2A 1.0 — `/a2a`](#22-bidirectional-a2a-10--a2a-feature_267-v0769)
 
 §1–§3 (and the Phase-7/8 MCP-popout surface in §1) land in v0.7.42
 under FEATURE_186 (see [ADR-032](ADR.md#adr-032-sdk-embedder-surface-closure-feature_186-v0742)).
@@ -3168,6 +3169,141 @@ decision epoch, and the result is bounded to at most three prompt-safe hints and
 
 The subpath is experimental and ESM-only. Treat its exported types as opt-in
 v0.7.x contracts; keep persistence and product policy behind your own adapter.
+
+---
+
+## 22. Bidirectional A2A 1.0 — `/a2a` (FEATURE_267, v0.7.69)
+
+`@kodax-ai/kodax/a2a` is the protocol edge for the A2A 1.0 JSON-RPC/SSE
+profile. It composes the protocol-neutral F258 executor plane with the Runtime
+facade; `/agent` and `/coding` remain free of A2A wire types and dependencies.
+
+### Call an A2A Agent through F258
+
+Discovery is an explicit host action. The URL must match `allowedOrigins`, and
+the safe fetch path revalidates DNS and redirects, rejects public plain HTTP,
+bounds time/body/redirects, and strips authorization on a cross-origin redirect.
+
+```ts
+import {
+  createA2AAgentExecutorFactory,
+  discoverA2ARegistration,
+} from '@kodax-ai/kodax/a2a';
+import { createKodaXRuntime } from '@kodax-ai/kodax/runtime';
+
+const client = {
+  networkPolicy: {
+    allowedOrigins: ['https://reviewer.example'],
+    allowPrivateAddresses: false,
+    requestTimeoutMs: 10_000,
+    maxResponseBytes: 1_048_576,
+    maxRedirects: 2,
+  },
+  pollIntervalMs: 500,
+} as const;
+
+const discovered = await discoverA2ARegistration({
+  agentId: 'external:a2a-reviewer',
+  agentCardUrl: 'https://reviewer.example/.well-known/agent-card.json',
+  credentialRef: 'a2a/reviewer',
+  effects: { remote: 'read' },
+}, client);
+
+const runtime = await createKodaXRuntime({
+  mode: 'embedded',
+  isolation: 'inline',
+  externalAgents: {
+    factories: [createA2AAgentExecutorFactory(client)],
+    credentialBroker: {
+      async withCredential(ref, use) {
+        if (ref !== 'a2a/reviewer') throw new Error('Unknown credential reference.');
+        return use(process.env.A2A_REVIEWER_TOKEN ?? '');
+      },
+    },
+    policy: ({ registration }) => ({ allowed: registration.effects.remote === 'read' }),
+    defaultContext: { actorId: 'a2a-host' },
+  },
+});
+
+await runtime.admin.agentRegistrations.upsert(discovered.registration);
+const started = await runtime.agentTasks.start({
+  agentId: discovered.registration.agentId,
+  objective: 'Review this change and return cited findings.',
+  context: { actorId: 'a2a-host' },
+  readOnly: true,
+  expectedConfigurationRevision: discovered.registration.configurationRevision,
+});
+const terminal = await runtime.agentTasks.wait(started.taskId, 60_000);
+```
+
+The executor supports durable task start/get, input continuation, cancel,
+reconcile, SSE events, and polling fallback. An ambiguous start is not retried
+automatically. A `credentialRef` is resolved just in time by the F258 broker;
+the registration, task store, and diagnostics never contain the credential.
+
+### Publish one KodaX Agent
+
+Publication is host-owned and opt-in. The public card describes only the
+configured Agent, media types, and skills. Authentication runs before task
+lookup; authorization runs per operation; task visibility is principal-scoped.
+
+```ts
+import { createKodaXA2AServer } from '@kodax-ai/kodax/a2a';
+import { createKodaXRuntime } from '@kodax-ai/kodax/runtime';
+
+const runtime = await createKodaXRuntime({ mode: 'embedded', isolation: 'inline' });
+const server = createKodaXA2AServer({
+  runtime,
+  dataDir: '/var/lib/kodax/a2a',
+  agent: {
+    name: 'KodaX Reviewer',
+    description: 'Reviews bounded code changes.',
+    version: '1.0.0',
+    publicBaseUrl: 'https://kodax.example',
+    skills: [{ id: 'review', name: 'Review', description: 'Review code.', tags: ['code'] }],
+    inputModes: ['text/plain'],
+    outputModes: ['text/plain'],
+  },
+  authentication: {
+    securitySchemes: { bearer: { httpAuthSecurityScheme: { scheme: 'Bearer' } } },
+    securityRequirements: [{ schemes: { bearer: { list: [] } } }],
+    async authenticate(request) {
+      return request.headers.get('authorization') === `Bearer ${process.env.KODAX_A2A_TOKEN}`
+        ? { subject: 'trusted-orchestrator', scopes: ['a2a'] }
+        : null;
+    },
+  },
+  async authorize({ principal }) { return principal.scopes.includes('a2a'); },
+  limits: {
+    maxRequestBytes: 1_048_576,
+    maxPartBytes: 524_288,
+    maxConcurrentTasks: 8,
+    maxTasksPerPrincipal: 64,
+  },
+});
+
+// Development only: the built-in listener refuses non-loopback hosts.
+const localBaseUrl = await server.listen({ hostname: '127.0.0.1', port: 0 });
+```
+
+Production hosts route `GET /.well-known/agent-card.json` and JSON-RPC `POST /`
+to `server.handle(request)` behind their own TLS terminator. `POST /a2a` remains
+an accepted compatibility alias. The durable edge store supports get/list,
+continuation, cancellation, ordered SSE subscription, and surviving Runtime-run
+reattachment after an edge restart. Push notifications, A2A 0.3, gRPC, and
+HTTP+JSON are not advertised; unsupported push methods return the standard
+`PushNotificationNotSupportedError`.
+
+Remote messages are ordinary user inputs. They cannot select provider, model,
+profile, tools, working directory, permission mode, or Runtime configuration.
+URL parts are rejected; inline raw/data parts are bounded and materialized under
+the server-owned data directory. Responses expose final approved output only,
+not system prompts, reasoning deltas, tool payloads, credentials, or local paths.
+
+The normative baseline is A2A repository commit
+`2183794bfb9b67af4aee1be0a0ef726050642873`, protocol `1.0`, with
+`specification/a2a.proto` SHA-256
+`e195bf96ab630c69797851970203e1b2b6b19528f2e9803b7d904b91a5104016`.
 
 ---
 

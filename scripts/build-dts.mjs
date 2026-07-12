@@ -91,6 +91,7 @@ const sdkEntries = {
   'sdk-mcp': 'src/sdk-mcp.ts',
   'sdk-session': 'src/sdk-session.ts',
   'sdk-runtime': 'src/sdk-runtime.ts',
+  'sdk-a2a': 'src/sdk-a2a.ts',
   'sdk-experimental-memory': 'src/sdk-experimental-memory.ts',
 };
 

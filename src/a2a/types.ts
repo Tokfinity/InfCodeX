@@ -1,0 +1,232 @@
+import type {
+  AgentEffectDeclaration,
+  AgentExecutorFactory,
+  ExternalAgentRegistration,
+} from '@kodax-ai/agent';
+
+import type { KodaXRuntime, RuntimeKodaXOptions } from '../sdk-runtime.js';
+
+export const A2A_PROTOCOL_VERSION = '1.0';
+export const A2A_EXECUTOR_ID = 'kodax-a2a-v1-jsonrpc';
+
+export type A2ATaskState =
+  | 'TASK_STATE_UNSPECIFIED'
+  | 'TASK_STATE_SUBMITTED'
+  | 'TASK_STATE_WORKING'
+  | 'TASK_STATE_COMPLETED'
+  | 'TASK_STATE_FAILED'
+  | 'TASK_STATE_CANCELED'
+  | 'TASK_STATE_INPUT_REQUIRED'
+  | 'TASK_STATE_REJECTED'
+  | 'TASK_STATE_AUTH_REQUIRED';
+
+export interface A2APart {
+  readonly text?: string;
+  readonly raw?: string;
+  readonly url?: string;
+  readonly data?: unknown;
+  readonly metadata?: Readonly<Record<string, unknown>>;
+  readonly filename?: string;
+  readonly mediaType?: string;
+}
+
+export interface A2AMessage {
+  readonly messageId: string;
+  readonly contextId?: string;
+  readonly taskId?: string;
+  readonly role: 'ROLE_USER' | 'ROLE_AGENT';
+  readonly parts: readonly A2APart[];
+  readonly metadata?: Readonly<Record<string, unknown>>;
+  readonly extensions?: readonly string[];
+  readonly referenceTaskIds?: readonly string[];
+}
+
+export interface A2ATaskStatus {
+  readonly state: A2ATaskState;
+  readonly message?: A2AMessage;
+  readonly timestamp?: string;
+}
+
+export interface A2AArtifact {
+  readonly artifactId: string;
+  readonly name?: string;
+  readonly description?: string;
+  readonly parts: readonly A2APart[];
+  readonly metadata?: Readonly<Record<string, unknown>>;
+  readonly extensions?: readonly string[];
+}
+
+export interface A2ATask {
+  readonly id: string;
+  readonly contextId: string;
+  readonly status: A2ATaskStatus;
+  readonly artifacts?: readonly A2AArtifact[];
+  readonly history?: readonly A2AMessage[];
+  readonly metadata?: Readonly<Record<string, unknown>>;
+}
+
+export interface A2AAgentInterface {
+  readonly url: string;
+  readonly protocolBinding: string;
+  readonly tenant?: string;
+  readonly protocolVersion: string;
+}
+
+export interface A2AAgentSkill {
+  readonly id: string;
+  readonly name: string;
+  readonly description: string;
+  readonly tags: readonly string[];
+  readonly examples?: readonly string[];
+  readonly inputModes?: readonly string[];
+  readonly outputModes?: readonly string[];
+}
+
+export interface A2AAgentCard {
+  readonly name: string;
+  readonly description: string;
+  readonly supportedInterfaces: readonly A2AAgentInterface[];
+  readonly version: string;
+  readonly capabilities: {
+    readonly streaming?: boolean;
+    readonly pushNotifications?: boolean;
+    readonly extendedAgentCard?: boolean;
+    readonly extensions?: readonly Readonly<Record<string, unknown>>[];
+  };
+  readonly securitySchemes?: Readonly<Record<string, unknown>>;
+  readonly securityRequirements?: readonly Readonly<Record<string, unknown>>[];
+  readonly defaultInputModes: readonly string[];
+  readonly defaultOutputModes: readonly string[];
+  readonly skills: readonly A2AAgentSkill[];
+}
+
+export interface A2AJsonRpcRequest {
+  readonly jsonrpc: '2.0';
+  readonly id: string | number;
+  readonly method: string;
+  readonly params?: Readonly<Record<string, unknown>>;
+}
+
+export interface A2AJsonRpcError {
+  readonly code: number;
+  readonly message: string;
+  readonly data?: unknown;
+}
+
+export interface A2AJsonRpcResponse {
+  readonly jsonrpc: '2.0';
+  readonly id: string | number | null;
+  readonly result?: unknown;
+  readonly error?: A2AJsonRpcError;
+}
+
+export interface A2ANetworkPolicy {
+  readonly allowedOrigins: readonly string[];
+  readonly allowPrivateAddresses: boolean;
+  readonly requestTimeoutMs: number;
+  readonly maxResponseBytes: number;
+  readonly maxRedirects: number;
+}
+
+export interface A2AClientOptions {
+  readonly networkPolicy: A2ANetworkPolicy;
+  readonly pollIntervalMs: number;
+  readonly authorization?: string;
+  readonly fetch?: typeof globalThis.fetch;
+}
+
+export interface A2ARegistrationInput {
+  readonly agentId: string;
+  readonly agentCardUrl: string;
+  readonly credentialRef?: string;
+  readonly effects: Pick<AgentEffectDeclaration, 'remote'>;
+}
+
+export interface A2ADiscoveredRegistration {
+  readonly registration: ExternalAgentRegistration;
+  readonly agentCard: A2AAgentCard;
+}
+
+export interface A2APrincipal {
+  readonly subject: string;
+  readonly tenant?: string;
+  readonly scopes: readonly string[];
+}
+
+export interface A2AAuthentication {
+  readonly securitySchemes: Readonly<Record<string, unknown>>;
+  readonly securityRequirements: readonly Readonly<Record<string, unknown>>[];
+  authenticate(request: Request): Promise<A2APrincipal | null>;
+}
+
+export type A2AOperation =
+  | 'send-message'
+  | 'send-streaming-message'
+  | 'get-task'
+  | 'list-tasks'
+  | 'cancel-task'
+  | 'subscribe-to-task'
+  | 'get-extended-agent-card';
+
+export interface A2AAuthorizationInput {
+  readonly principal: A2APrincipal;
+  readonly operation: A2AOperation;
+  readonly taskId?: string;
+  readonly contextId?: string;
+  readonly inputModes?: readonly string[];
+}
+
+export interface A2AServerLimits {
+  readonly maxRequestBytes: number;
+  readonly maxPartBytes: number;
+  readonly maxConcurrentTasks: number;
+  readonly maxTasksPerPrincipal: number;
+}
+
+export interface A2APublishedSkill extends A2AAgentSkill {}
+
+export interface A2APublishedAgent {
+  readonly name: string;
+  readonly description: string;
+  readonly version: string;
+  readonly publicBaseUrl: string;
+  readonly skills: readonly A2APublishedSkill[];
+  readonly inputModes: readonly string[];
+  readonly outputModes: readonly string[];
+  readonly profileId?: string;
+  readonly projectPath?: string;
+  readonly runOptions?: RuntimeKodaXOptions;
+}
+
+export interface A2AServerEvent {
+  readonly type: string;
+  readonly time: string;
+  readonly taskId?: string;
+  readonly contextId?: string;
+  readonly runId?: string;
+  readonly outcome?: 'accepted' | 'rejected' | 'completed' | 'failed';
+  readonly diagnosticId?: string;
+}
+
+export interface A2AServerOptions {
+  readonly runtime: KodaXRuntime;
+  readonly agent: A2APublishedAgent;
+  readonly dataDir: string;
+  readonly limits: A2AServerLimits;
+  readonly authentication: A2AAuthentication;
+  authorize(input: A2AAuthorizationInput): Promise<boolean>;
+  readonly extendedAgentCard?: A2AAgentCard;
+  readonly onEvent?: (event: A2AServerEvent) => void;
+  readonly now?: () => Date;
+}
+
+export interface KodaXA2AServer {
+  readonly agentCard: A2AAgentCard;
+  handle(request: Request): Promise<Response>;
+  listen(input: { readonly hostname: string; readonly port: number }): Promise<string>;
+  close(): Promise<void>;
+}
+
+export type CreateA2AAgentExecutorFactory = (
+  options: A2AClientOptions,
+) => AgentExecutorFactory;

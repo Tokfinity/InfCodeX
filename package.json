@@ -56,6 +56,10 @@
       "types": "./dist/sdk-runtime.d.ts",
       "import": "./dist/sdk-runtime.js"
     },
+    "./a2a": {
+      "types": "./dist/sdk-a2a.d.ts",
+      "import": "./dist/sdk-a2a.js"
+    },
     "./experimental-memory": {
       "types": "./dist/sdk-experimental-memory.d.ts",
       "import": "./dist/sdk-experimental-memory.js"

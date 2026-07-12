@@ -15,8 +15,8 @@
 | Current package version | `@kodax-ai/kodax@0.7.68`; Git tag and GitHub binary release prepared, npm publication remains an explicit operator step |
 | Workspace baseline | `llm / agent / coding / repl` 4 packages |
 | Total tracked features | `52` |
-| InProgress | `1` |
-| Planned | `11` |
+| InProgress | `2` |
+| Planned | `10` |
 | Completed | `33` |
 | Reviewed out of active roadmap | `7` (`105, 108, 231, 232, 235, 238, 244`) |
 | Tracked feature IDs | `007, 030, 093, 105, 108, 113, 139, 174, 211, 221, 224, 225, 228, 229, 230, 231, 232, 233, 234, 235, 236, 237, 238, 239, 240, 241, 242, 243, 244, 245, 246, 247, 248, 249, 250, 251, 252, 253, 254, 255, 256, 257, 258, 259, 260, 261, 262, 263, 264, 265, 266, 267` |
@@ -27,8 +27,8 @@
 | Status | Count | Feature IDs | Next checkpoint |
 |---|---:|---|---|
 | Completed | 33 | `260, 261, 259, 258, 253, 254, 255, 256, 257, 228, 251, 252, 250, 248, 249, 247, 246, 245, 243, 242, 241, 233, 240, 239, 224, 221, 174, 211, 237, 229, 230, 234, 236` | `260` completed for v0.7.68 (2026-07-12) with 9593/9593 passing tests on both Node 20 and Node 22 release CI, full build and artifact validation, 87.58% focused line coverage, and all preregistered v2 memory-routing gates passing. `261`, `259`, and `258` shipped in v0.7.67 (2026-07-11). Earlier completion history is unchanged. |
-| InProgress | 1 | `225` | `225` broader current-HEAD cleanup remains. |
-| Planned, near-term | 5 | `267, 266, 263, 264, 265` | `v0.7.69` -> `v0.7.85` |
+| InProgress | 2 | `267, 225` | `267` client/server implementation, focused coverage, build, and related regressions are complete locally; independent 1.0 client/server plus semantic TCK release evidence remains. `225` broader current-HEAD cleanup remains. |
+| Planned, near-term | 4 | `266, 263, 264, 265` | `v0.7.70` -> `v0.7.85` |
 | Planned, v0.8.x | 5 | `007, 030, 093, 113, 139` | `v0.8.5+` |
 | Planned, v0.9.x | 1 | `262` | `v0.9.0` |
 | Reviewed out, 2026-07-12 | 7 | `244, 231, 235, 238, 232, 105, 108` | Shelved, deferred, absorbed, or cancelled after the post-v0.7.70 roadmap review. |
@@ -214,6 +214,7 @@
 
 | ID | Title | Category | Priority | Planned | Design |
 |---|---|---|---|---|---|
+| `267` | Bidirectional A2A Client Executor + KodaX Agent Server | Core / Agent Interoperability + Runtime SDK | Critical | `v0.7.69` | [v0.7.69](features/v0.7.69.md#feature_267-bidirectional-a2a-client-executor--kodax-agent-server) |
 | `225` | REPL Dead / Legacy Code Cleanup | Internal / Refactor + Tech Debt | Medium | `v0.7.100` | [v0.7.100](features/v0.7.100.md#feature_225-repl-dead--legacy-code-cleanup) |
 
 Recent completion notes:
@@ -293,7 +294,6 @@ fixed GitHub binary archive sidecar omission before tagging.
 
 | ID | Title | Category | Priority | Planned | Design |
 |---|---|---|---|---|---|
-| `267` | Bidirectional A2A Client Executor + KodaX Agent Server | Core / Agent Interoperability + Runtime SDK | Critical | `v0.7.69` | [v0.7.69](features/v0.7.69.md#feature_267-bidirectional-a2a-client-executor--kodax-agent-server) |
 | `266` | Learning Center + Learned Capability Runtime Control Plane | Core / Agent Learning + Runtime SDK | High | `v0.7.70` | [v0.7.70](features/v0.7.70.md#feature_266-learning-center--learned-capability-runtime-control-plane) |
 | `263` | Evidence-Gated Background Skill Learning Loop | Core / Skills + Self-Improvement | High | `v0.7.75` | [v0.7.75](features/v0.7.75.md#feature_263-evidence-gated-background-skill-learning-loop) |
 | `264` | Evidence-Gated Extension Learning Loop | Core / Extensions + Self-Improvement | High | `v0.7.80` | [v0.7.80](features/v0.7.80.md#feature_264-evidence-gated-extension-learning-loop) |

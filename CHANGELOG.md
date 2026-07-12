@@ -6,6 +6,19 @@ All notable changes to this project will be documented in this file.
 
 ## [Unreleased]
 
+### Added
+
+- **Bidirectional A2A 1.0 interoperability (FEATURE_267).** Added the
+  `@kodax-ai/kodax/a2a` integration edge: allowlisted Agent Card discovery and
+  a JSON-RPC/SSE executor over the existing F258 plane, plus an authenticated,
+  caller-scoped, durable Runtime-backed KodaX Agent server with continuation,
+  cancellation, ordered replay/subscription, and restart reattachment.
+- **A2A network and publication boundaries.** Outbound fetches enforce origin,
+  DNS/private-address, TLS, redirect, credential, timeout, content-type, and
+  size policy. The built-in server listener is loopback-only; public hosts use
+  `handle()` behind TLS. A2A 0.3, gRPC, HTTP+JSON, push notifications, automatic
+  public Agent exposure, and remote Runtime configuration are not advertised.
+
 ## [0.7.68] - 2026-07-12
 
 > Scope note: this release delivers **FEATURE_260**, the KodaX Memory Agent,
