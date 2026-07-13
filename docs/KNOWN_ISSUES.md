@@ -1,6 +1,6 @@
-# Known Issues
+﻿# Known Issues
 
-_Last Updated: 2026-07-12_
+_Last Updated: 2026-07-13_
 
 ---
 
@@ -14,6 +14,7 @@ _Last Updated: 2026-07-12_
 
 | ID | Priority | Status | Title | Introduced | Fixed | Created | Resolved |
 |----|----------|--------|-------|------------|-------|---------|----------|
+| 154 | High | Resolved | FEATURE_267/268 review found remote execution and hot-reload reliability gaps | v0.7.69 RC | v0.7.69 | 2026-07-13 | 2026-07-13 |
 | 152 | High | Resolved | FEATURE_260 review found credential, mutation-guard, concurrent persistence, and eval-integrity gaps | v0.7.68 RC | v0.7.68 | 2026-07-12 | 2026-07-12 |
 | 151 | High | Resolved | Runtime config tests leak detached daemon processes and interrupted background fixtures can survive | v0.7.67 RC | v0.7.67 | 2026-07-11 | 2026-07-11 |
 | 150 | High | Resolved | v0.7.67 外部 Agent 脚本路由与执行平面关闭契约存在发布阻断缺口 | v0.7.67 RC | v0.7.67 | 2026-07-11 | 2026-07-11 |
@@ -102,6 +103,80 @@ _Last Updated: 2026-07-12_
 
 ## Issue Details
 <!-- Full details for each issue - REQUIRED for all issues -->
+
+### 154: FEATURE_267/268 review found remote execution and hot-reload reliability gaps
+
+- **Priority**: High
+- **Status**: **Resolved** (v0.7.69)
+- **Introduced**: v0.7.69 RC
+- **Created**: 2026-07-13
+- **Resolved**: 2026-07-13
+- **Fixed**: v0.7.69
+
+#### Original Problem
+
+Joint review found that inbound A2A tool execution could wait for an interactive
+permission response after its deployment guardrail had already authorized the
+call; lexical workspace checks allowed a symlink/Junction to escape; and the
+no-code CLI returned the initial submitted A2A task instead of following it to a
+stable state. F268 replacement also treated a failed MCP prewarm as usable,
+could reject after a successful provider swap when old cleanup failed, and
+copied subscriber/watch exceptions into user-visible diagnostics.
+
+#### Root Cause
+
+- The remote Runtime binding supplied neither a headless permission decision nor
+  a permission-mode default.
+- Workspace containment used `path.resolve` without resolving the existing
+  target or nearest existing parent.
+- `a2a call` sent one JSON-RPC request outside the F258 task lifecycle.
+- MCP prewarm deliberately used fail-soft startup semantics for replacement too.
+- Provider swap and old-instance disposal shared one rejection result, while the
+  config controller classified validation and activation in one catch block.
+
+#### Proposed Solution
+
+Add failing regression tests first, then keep the pinned guardrail as the remote
+authority while supplying deterministic headless approval, add real-path
+containment, route CLI calls through F258, make replacement prewarm strict, and
+separate swap success from cleanup diagnostics. Never expose raw activation or
+watcher exceptions.
+
+#### Resolution
+
+The Runtime binding now checks lexical plus real containment for existing and
+future targets and proceeds without interactive approval only after its pinned
+guardrail. The CLI discovers an `external:<name>` registration, starts it on the
+F258 plane, and waits through submitted/working states. MCP replacement rejects
+and disposes a broken candidate while retaining the previous provider. Failed
+old-provider cleanup records a generic `dispose` diagnostic without rolling back
+the new instance or poisoning later shutdown. Integration validation,
+activation, and watcher degradation now have distinct generic diagnostics.
+
+#### Files Changed
+
+- `src/runtime-agent-binding.ts`
+- `src/integration-cli.ts`
+- `packages/agent/src/capabilities/mcp/provider.ts`
+- `packages/coding/src/capabilities/providers/mcp-adapter.ts`
+- `packages/coding/src/extensions/runtime.ts`
+- `packages/repl/src/common/integration-config.ts`
+
+#### Tests Added
+
+- Existing and future targets below a symlink/Junction are denied.
+- Headless remote calls do not enter the interactive permission wait.
+- CLI polling observes submitted, working, and completed A2A states.
+- Broken MCP candidates retain the active provider.
+- Cleanup failures retain the replacement and redact secret/path canaries.
+- Activation diagnostics retain the prior snapshot and redact exception data.
+
+#### Remaining Risk
+
+Real-path validation is defense in depth against stable links; ASRT or an outer
+container/VM remains the process-isolation boundary for admitted scripts and
+hostile tenants. Independent A2A TCK/client evidence, POSIX release validation,
+and a provisioned Windows ASRT run remain release gates rather than code gaps.
 
 ### 152: FEATURE_260 review found credential, mutation-guard, concurrent persistence, and eval-integrity gaps
 
@@ -5322,7 +5397,7 @@ Commit `ef085fc` 把 V1 精简到 V2 时没区分"信息载体"和"脚手架"，
 ---
 
 ## Summary
-- Total: 79 (24 Open, 55 Resolved, 0 Partially Resolved, 0 Won't Fix)
+- Total: 80 (24 Open, 56 Resolved, 0 Partially Resolved, 0 Won't Fix)
 - Highest Priority Open: 091 - 缺少一等公民 MCP / Web Search / Code Search 工具体系 (High)
 - Historical archived issues are maintained in ISSUES_ARCHIVED.md
 

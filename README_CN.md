@@ -575,7 +575,33 @@ KodaX 有两层结构，SDK 用户需要分开理解：
 
 **实验性 Memory Agent SDK（FEATURE_260，v0.7.68）**：`/experimental-memory` 暴露基于既有 F228 治理平面的薄 `MemoryAgent` 与 scoped `MemorySession`。被动 recall 零等待，`query()` 只读且由主 Action LLM 主动选择；持久化仍必须经过 proposal/preview/fingerprint/apply。召回内容保持低权限，安全与 scope 边界仍由确定性代码门禁承担。直接 session 示例与宿主边界见 [SDK Embedder Guide §21](docs/SDK_EMBEDDER_GUIDE.md#21-experimental-governed-memory--experimental-memory-feature_260-v0768)。
 
-**双向 A2A 1.0（FEATURE_267，v0.7.69）**：`/a2a` 可发现 allowlist 内的 Agent Card，并通过既有 F258 plane 安装 JSON-RPC/SSE executor；同一模块也能把一个显式配置、强制鉴权的 KodaX Agent 发布为 Runtime-backed A2A server。内置 listener 仅允许 loopback；公网部署必须由宿主用 TLS、鉴权和授权包住 `handle()`。不宣称支持 A2A 0.3、gRPC、HTTP+JSON、push notification，也不会自动把本地 Agent 暴露到网络。详见 [SDK Embedder Guide §22](docs/SDK_EMBEDDER_GUIDE.md#22-bidirectional-a2a-10--a2a-feature_267-v0769)。
+**双向 A2A 1.0（FEATURE_267，v0.7.69）**：`/a2a` 可发现 allowlist 内的 Agent Card，并通过既有 F258 plane 安装 JSON-RPC/SSE executor。配置中的出站 Agent 还会作为 `external:<name>` 自动注册到 embedded CLI 与用户 daemon Runtime，因此主 Agent 无需宿主代码即可编排。入站方向可以发布 Runtime 默认 Agent，或发布一个经过验证的 `~/.kodax/agents/*.md` Agent。内置 listener 仅允许 loopback；公网部署必须由宿主用 TLS、鉴权和授权包住 `handle()`。不宣称支持 A2A 0.3、gRPC、HTTP+JSON、push notification，也不会自动把本地 Agent 暴露到网络。详见 [SDK Embedder Guide §22](docs/SDK_EMBEDDER_GUIDE.md#22-bidirectional-a2a-10--a2a-feature_267-v0769)。
+
+完整的内置调用路径不需要再写 TypeScript：
+
+```bash
+# 调用外部 A2A Agent
+kodax a2a add research https://agent.example/.well-known/agent-card.json --effect read
+kodax a2a test research
+kodax a2a call research "总结这个主题"
+
+# 暴露 Runtime 默认 Agent，或指定 ~/.kodax/agents/*.md 中的 Agent 名称
+export KODAX_A2A_TOKEN='请替换为足够长的随机令牌'
+kodax a2a expose                 # 或：kodax a2a expose document-agent
+kodax a2a serve                  # 仅监听 http://127.0.0.1:8765
+```
+
+MCP、A2A、Extension 分别使用 `~/.kodax/integrations/` 下的一个用户级文件。
+可以通过 `kodax config template <mcp|a2a|extensions>` 查看模板，通过
+`kodax integrations migrate --apply` 迁移旧配置，并用 `kodax mcp`、
+`kodax a2a`、`kodax extensions` 管理。运行中的 CLI/daemon 保留最后一个
+有效版本，完整替换 MCP provider、逐条协调 Extension，并热注册出站 A2A Agent。
+`a2a serve` 会在监听前装载已配置的 MCP/Extension 能力并固定执行权威，同时热加载
+公开信息、鉴权和限额。Agent、Skill、Extension 工具权威、工作区、tool policy
+或任务存储变更必须显式重启服务。
+托管 A2A 上下文默认位于 `~/kodax_a2a_server_workspace/<profile>/contexts/`。
+精确授权的 Skill 脚本必须使用隔离策略，并通过 `kodax sandbox doctor`；
+Windows 的一次性显式初始化由 `kodax sandbox setup` 完成。
 
 **外部 Agent SDK plane（FEATURE_258，v0.7.67）**：`/agent` 导出协议中立的 executor、registration、policy、credential broker、artifact policy、catalog 和 durable task 契约；`/runtime` 通过 `admin.agentRegistrations`、`agents`、`agentTasks` 向 embedded 与 daemon client 提供同一组 DTO API。Executor factory 是宿主函数，只能装入 inline owner，或在创建新的 in-process daemon owner 时装入；不能通过既有 daemon 连接或 Runtime Worker 边界注入。Plane 关闭后是终态：未完成的 wait 和后续所有服务调用都会拒绝；受限 Workflow 脚本会完整校验并传递 `phase` 与外部 `target`。完整所有权、注册、preflight、启动/等待/继续/取消/对账和安全边界见 [SDK Embedder Guide §18](docs/SDK_EMBEDDER_GUIDE.md#18-external-agent-executor-plane-feature_258-v0767)。
 

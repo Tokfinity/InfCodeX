@@ -3241,6 +3241,50 @@ reconcile, SSE events, and polling fallback. An ambiguous start is not retried
 automatically. A `credentialRef` is resolved just in time by the F258 broker;
 the registration, task store, and diagnostics never contain the credential.
 
+### Built-in configured path (no host code)
+
+The CLI product path stores one user document at
+`~/.kodax/integrations/a2a.json` and uses the same F258 plane:
+
+```bash
+kodax a2a add reviewer https://reviewer.example/.well-known/agent-card.json \
+  --credential-env A2A_REVIEWER_TOKEN --effect read
+kodax a2a test reviewer
+kodax a2a call reviewer "Review this document"
+```
+
+Embedded CLI Runtimes and the user-owned daemon automatically reconcile these
+entries as `external:<name>`. Discovery/update failure retains that entry's
+last-known-good registration; another entry can still update. The environment
+broker resolves `credentialEnv` only at call time. Automatic Runtime
+registration accepts public HTTPS and exact loopback targets; explicit private
+network access remains an operator action on the direct CLI/SDK path.
+
+Inbound publication is also no-code:
+
+```bash
+export KODAX_A2A_TOKEN='replace-with-a-long-random-token'
+kodax a2a expose                    # Runtime default Agent
+kodax a2a expose document-agent     # ~/.kodax/agents/document-agent.md
+kodax a2a serve --port 8765
+```
+
+`expose` validates a named user Markdown Agent before writing its reference.
+`serve` loads configured MCP and Extensions before it resolves the execution
+binding or opens a socket. Native workspace read tools are admitted by
+workspace access; writes, narrow Extension Tools, MCP capabilities, subagents,
+and isolated Skill scripts require their corresponding exact `toolPolicy`
+authority. Internal Skills come from `~/.kodax/skills`, `~/.agents/skills`,
+plugins, and built-ins; public Agent Card skills are a separate explicit
+projection and never reveal the private Skill inventory.
+
+The running server pins Agent, Skill, workspace, tool registration, process and
+store revisions. Card/auth/limits can hot reload; execution-authority changes
+require an explicit restart. Managed contexts live below
+`~/kodax_a2a_server_workspace/<profile>/contexts/`. Exact Skill scripts require
+`process: isolated`, an admitted `scripts/...` path, and a passing
+`kodax sandbox doctor`; KodaX never falls back to an unsandboxed shell.
+
 ### Publish one KodaX Agent
 
 Publication is host-owned and opt-in. The public card describes only the

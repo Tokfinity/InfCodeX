@@ -1,4 +1,4 @@
-# Changelog
+﻿# Changelog
 
 All notable changes to this project will be documented in this file.
 
@@ -13,6 +13,19 @@ All notable changes to this project will be documented in this file.
   a JSON-RPC/SSE executor over the existing F258 plane, plus an authenticated,
   caller-scoped, durable Runtime-backed KodaX Agent server with continuation,
   cancellation, ordered replay/subscription, and restart reattachment.
+- **No-code A2A product path and Runtime binding.** Added declarative
+  `a2a add/list/test/call/remove`, automatic `external:<name>` registration for
+  built-in Runtime owners, and explicit `a2a expose` / loopback-only `a2a
+  serve`. The inbound server can publish the Runtime default or one validated
+  user Markdown Agent with pinned Agent/Skill/tool/workspace revisions,
+  structured `toolPolicy`, `~/.agents/skills` discovery, and exact Skill-script
+  execution through the fail-closed ASRT adapter.
+- **Split integration configuration and hot reload (FEATURE_268).** MCP, A2A,
+  and Extensions now use one user-level versioned file per domain, backed by
+  four canonical templates, explicit lossless migration, locked atomic writes,
+  last-known-good watchers with metadata fallback, whole-provider MCP draining,
+  entry-transactional Extension/outbound-A2A reconciliation, and explicit
+  restart-required handling for inbound execution/store authority changes.
 - **A2A network and publication boundaries.** Outbound fetches enforce origin,
   DNS/private-address, TLS, redirect, credential, timeout, content-type, and
   size policy. The built-in server listener is loopback-only; public hosts use

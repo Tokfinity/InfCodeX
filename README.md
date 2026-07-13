@@ -496,7 +496,36 @@ KodaX has two layers that consumers should understand separately:
 
 **Experimental Memory Agent SDK (FEATURE_260, v0.7.68)**: `/experimental-memory` exposes the thin agent-layer `MemoryAgent` and scoped `MemorySession` lifecycle over the existing governed F228 plane. Passive recall is zero-wait; `query()` is read-only and deliberate; durable changes still require the proposal/preview/fingerprint/apply path. The Action LLM remains the final decision maker, recalled content stays low-authority, and safety/scope gates remain deterministic. See the [direct session and boundary guide](docs/SDK_EMBEDDER_GUIDE.md#21-experimental-governed-memory--experimental-memory-feature_260-v0768).
 
-**Bidirectional A2A 1.0 (FEATURE_267, v0.7.69)**: `/a2a` discovers allowed Agent Cards and installs a JSON-RPC/SSE executor through the existing F258 plane; the same module can publish one explicitly configured, authenticated KodaX Agent backed by the Runtime facade. The built-in listener is loopback-only; public deployment uses `handle()` behind host-owned TLS and authorization. A2A 0.3, gRPC, HTTP+JSON, push notifications, and automatic public exposure are not advertised. See the [client/server recipes and security boundaries](docs/SDK_EMBEDDER_GUIDE.md#22-bidirectional-a2a-10--a2a-feature_267-v0769).
+**Bidirectional A2A 1.0 (FEATURE_267, v0.7.69)**: `/a2a` discovers allowed Agent Cards and installs a JSON-RPC/SSE executor through the existing F258 plane. Configured outbound Agents are also registered automatically as `external:<name>` in embedded CLI and user-daemon Runtimes, so the main Agent can orchestrate them without host code. The same module can publish the Runtime default or one validated `~/.kodax/agents/*.md` Agent behind an authenticated Runtime facade. The built-in listener is loopback-only; public deployment uses `handle()` behind host-owned TLS and authorization. A2A 0.3, gRPC, HTTP+JSON, push notifications, and automatic public exposure are not advertised. See the [client/server recipes and security boundaries](docs/SDK_EMBEDDER_GUIDE.md#22-bidirectional-a2a-10--a2a-feature_267-v0769).
+
+The complete built-in path is available without writing TypeScript:
+
+```bash
+# Call another A2A Agent
+kodax a2a add research https://agent.example/.well-known/agent-card.json --effect read
+kodax a2a test research
+kodax a2a call research "Summarize this topic"
+
+# Expose the Runtime default Agent, or pass a name from ~/.kodax/agents/*.md
+export KODAX_A2A_TOKEN='replace-with-a-long-random-token'
+kodax a2a expose                 # or: kodax a2a expose document-agent
+kodax a2a serve                  # loopback http://127.0.0.1:8765
+```
+
+MCP, A2A, and Extension declarations live in one user file per domain under
+`~/.kodax/integrations/`. Use `kodax config template <mcp|a2a|extensions>`,
+`kodax integrations migrate --apply`, and the `kodax mcp`, `kodax a2a`, or
+`kodax extensions` commands to manage them. Running CLI/daemon hosts retain the
+last valid revision, atomically replace the complete MCP provider, reconcile
+Extensions per entry, and hot-register outbound A2A Agents. `a2a serve` loads
+its configured MCP/Extension capability surface before listening and pins that
+execution authority; it hot-reloads publication, authentication, and limits.
+Agent, Skill, Extension-tool authority, workspace, tool-policy, or task-store
+changes require an explicit server restart. Managed
+A2A contexts default to `~/kodax_a2a_server_workspace/<profile>/contexts/`.
+Exact Skill scripts require the opt-in isolated policy and a passing
+`kodax sandbox doctor` (`kodax sandbox setup` performs the explicit Windows
+one-time provisioning).
 
 ---
 
