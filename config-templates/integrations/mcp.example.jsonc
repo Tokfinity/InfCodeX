@@ -1,0 +1,16 @@
+// User MCP declarations: ~/.kodax/integrations/mcp.json (strict JSON).
+// The whole file hot-reloads; healthy entries remain active if one new entry
+// fails to prepare. Keep credentials in ${env:NAME} references.
+{
+  "version": 1,
+  "servers": {}
+  // Example:
+  // "servers": {
+  //   "reporting": {
+  //     "type": "streamable-http",
+  //     "url": "https://mcp.example.com",
+  //     "headers": { "Authorization": "Bearer ${env:REPORTING_MCP_TOKEN}" },
+  //     "connect": "lazy"
+  //   }
+  // }
+}

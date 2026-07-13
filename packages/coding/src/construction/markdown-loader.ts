@@ -85,6 +85,8 @@ export interface LoadAgentsFromMarkdownOptions {
    * are loaded before project agents.
    */
   readonly configHome?: string;
+  /** Bind only user-owned definitions. Used by remote serving trust boundaries. */
+  readonly userOnly?: boolean;
 }
 
 export interface LoadMarkdownAgentScopeOptions extends LoadAgentsFromMarkdownOptions {
@@ -110,6 +112,8 @@ export interface LoadedMarkdownAgent {
   readonly path: string;
   readonly requestedTools?: readonly string[];
   readonly effectiveTools?: readonly string[];
+  /** Omitted means all trusted effective Skills; [] means none; ['*'] means all. */
+  readonly requestedSkills?: readonly string[];
   readonly filteredTools: readonly MarkdownAgentToolFilter[];
   readonly admissionWarnings: readonly string[];
 }
@@ -148,6 +152,7 @@ export interface DiscoveredMarkdownAgent {
    * names the user wrote.
    */
   readonly tools?: readonly string[];
+  readonly skills?: readonly string[];
   /** Optional model alias from frontmatter `model` field. */
   readonly model?: string;
   /** Optional reasoning effort from frontmatter `effort` field. */
@@ -170,6 +175,15 @@ export interface DiscoverMarkdownAgentsResult {
 const USER_AGENTS_DIRNAME = 'agents';
 const PROJECT_AGENTS_DIRNAME = '.kodax/agents';
 
+function markdownAgentDirectories(
+  opts: LoadAgentsFromMarkdownOptions,
+): ReadonlyArray<readonly [string, 'markdown:user' | 'markdown:project']> {
+  const userDir = join(opts.configHome ?? getAgentConfigHome(), USER_AGENTS_DIRNAME);
+  if (opts.userOnly) return [[userDir, 'markdown:user']];
+  const projectDir = join(opts.cwd ?? process.cwd(), PROJECT_AGENTS_DIRNAME);
+  return [[userDir, 'markdown:user'], [projectDir, 'markdown:project']];
+}
+
 /**
  * Entry point. Scans user then project dirs; registers every
  * well-formed agent that passes admission. Failures are accumulated
@@ -179,18 +193,12 @@ const PROJECT_AGENTS_DIRNAME = '.kodax/agents';
 export async function loadAgentsFromMarkdown(
   opts: LoadAgentsFromMarkdownOptions = {},
 ): Promise<LoadAgentsFromMarkdownResult> {
-  const userDir = join(opts.configHome ?? getAgentConfigHome(), USER_AGENTS_DIRNAME);
-  const projectDir = join(opts.cwd ?? process.cwd(), PROJECT_AGENTS_DIRNAME);
-
   const failures: MarkdownLoadFailure[] = [];
   let loaded = 0;
 
   // User dir first, then project — last-write-wins implements
   // precedence (project shadows user when names collide).
-  for (const [dir, source] of [
-    [userDir, 'markdown:user' as const],
-    [projectDir, 'markdown:project' as const],
-  ] satisfies ReadonlyArray<readonly [string, 'markdown:user' | 'markdown:project']>) {
+  for (const [dir, source] of markdownAgentDirectories(opts)) {
     const files = await listMarkdownFiles(dir);
     for (const filePath of files) {
       const outcome = await loadOneAgentFile(filePath, source);
@@ -253,8 +261,6 @@ export async function loadMarkdownAgentScope(
   opts: LoadMarkdownAgentScopeOptions = {},
 ): Promise<LoadMarkdownAgentScopeResult> {
   const cwd = opts.cwd ?? process.cwd();
-  const userDir = join(opts.configHome ?? getAgentConfigHome(), USER_AGENTS_DIRNAME);
-  const projectDir = join(cwd, PROJECT_AGENTS_DIRNAME);
 
   const failures: MarkdownLoadFailure[] = [];
   const warnings: MarkdownAgentLoadWarning[] = [];
@@ -272,10 +278,7 @@ export async function loadMarkdownAgentScope(
   const activatedAgents = () =>
     new Map(Array.from(entriesByName.values()).map((entry) => [entry.agent.name, entry.agent]));
 
-  for (const [dir, source] of [
-    [userDir, 'markdown:user' as const],
-    [projectDir, 'markdown:project' as const],
-  ] satisfies ReadonlyArray<readonly [string, 'markdown:user' | 'markdown:project']>) {
+  for (const [dir, source] of markdownAgentDirectories({ ...opts, cwd })) {
     const files = await listMarkdownFiles(dir);
     for (const filePath of files) {
       const admitted = await admitOneMarkdownAgentFile(filePath, source, activatedAgents);
@@ -333,7 +336,7 @@ async function admitOneMarkdownAgentFile(
     return { kind: 'fail', reason: parseOutcome.reason, warnings: [] };
   }
 
-  const { name, description, instructions, toolNames, model, effort } = parseOutcome.parsed;
+  const { name, description, instructions, toolNames, skillNames, model, effort } = parseOutcome.parsed;
   const filteredTools: MarkdownAgentToolFilter[] = [];
   const warnings: MarkdownAgentLoadWarning[] = [];
   const toolResolution = resolveMarkdownToolRefs(filePath, name, toolNames);
@@ -403,6 +406,7 @@ async function admitOneMarkdownAgentFile(
       path: filePath,
       ...(toolNames !== undefined ? { requestedTools: toolNames } : {}),
       ...(effectiveToolNames !== undefined ? { effectiveTools: effectiveToolNames } : {}),
+      ...(skillNames !== undefined ? { requestedSkills: skillNames } : {}),
       filteredTools,
       admissionWarnings: verdict.clampNotes,
     },
@@ -434,6 +438,16 @@ function resolveMarkdownToolRefs(
   if (toolNames === undefined) {
     return {
       kind: 'ok',
+      resolvedToolNames: [],
+      filteredTools: [],
+      warnings: [],
+    };
+  }
+
+  if (toolNames.length === 0) {
+    return {
+      kind: 'ok',
+      tools: [],
       resolvedToolNames: [],
       filteredTools: [],
       warnings: [],
@@ -547,17 +561,11 @@ function withEffectiveTools(
 export async function discoverMarkdownAgents(
   opts: LoadAgentsFromMarkdownOptions = {},
 ): Promise<DiscoverMarkdownAgentsResult> {
-  const userDir = join(opts.configHome ?? getAgentConfigHome(), USER_AGENTS_DIRNAME);
-  const projectDir = join(opts.cwd ?? process.cwd(), PROJECT_AGENTS_DIRNAME);
-
   const failed: MarkdownLoadFailure[] = [];
   // Map keyed by name → last-write-wins (project shadows user).
   const byName = new Map<string, DiscoveredMarkdownAgent>();
 
-  for (const [dir, source] of [
-    [userDir, 'markdown:user' as const],
-    [projectDir, 'markdown:project' as const],
-  ] satisfies ReadonlyArray<readonly [string, 'markdown:user' | 'markdown:project']>) {
+  for (const [dir, source] of markdownAgentDirectories(opts)) {
     const files = await listMarkdownFiles(dir);
     for (const filePath of files) {
       const outcome = await parseMarkdownAgentFile(filePath);
@@ -569,6 +577,9 @@ export async function discoverMarkdownAgents(
           path: filePath,
           ...(outcome.parsed.toolNames !== undefined
             ? { tools: outcome.parsed.toolNames }
+            : {}),
+          ...(outcome.parsed.skillNames !== undefined
+            ? { skills: outcome.parsed.skillNames }
             : {}),
           ...(outcome.parsed.model !== undefined ? { model: outcome.parsed.model } : {}),
           ...(outcome.parsed.effort !== undefined ? { effort: outcome.parsed.effort } : {}),
@@ -589,6 +600,7 @@ interface ParsedAgent {
   readonly instructions: string;
   /** Raw tool names without `builtin:` prefix. */
   readonly toolNames?: readonly string[];
+  readonly skillNames?: readonly string[];
   readonly model?: string;
   readonly effort?: string;
 }
@@ -638,7 +650,17 @@ async function parseMarkdownAgentFile(filePath: string): Promise<ParseOutcome> {
     return { kind: 'fail', reason: 'markdown body (instructions) is empty' };
   }
 
-  const toolNames = parseToolNamesField(frontmatter.tools);
+  const toolNames = parseNameListField(frontmatter.tools);
+  const skillNames = parseNameListField(frontmatter.skills);
+  if (skillNames?.includes('*') && skillNames.length !== 1) {
+    return {
+      kind: 'fail',
+      reason: 'frontmatter "skills" wildcard cannot be mixed with exact names',
+    };
+  }
+  if (skillNames && new Set(skillNames).size !== skillNames.length) {
+    return { kind: 'fail', reason: 'frontmatter "skills" contains duplicate names' };
+  }
 
   const modelField = frontmatter.model;
   const model =
@@ -662,6 +684,7 @@ async function parseMarkdownAgentFile(filePath: string): Promise<ParseOutcome> {
       description,
       instructions,
       ...(toolNames !== undefined ? { toolNames } : {}),
+      ...(skillNames !== undefined ? { skillNames } : {}),
       ...(model !== undefined ? { model } : {}),
       ...(effort !== undefined ? { effort } : {}),
     },
@@ -675,7 +698,7 @@ async function parseMarkdownAgentFile(filePath: string): Promise<ParseOutcome> {
  * `builtin:` prefix — the loader applies the prefix when building
  * `ToolRef`s for admission; discovery exposes the raw names.
  */
-function parseToolNamesField(value: unknown): readonly string[] | undefined {
+function parseNameListField(value: unknown): readonly string[] | undefined {
   if (value == null) return undefined;
   let names: string[] = [];
   if (Array.isArray(value)) {
@@ -685,7 +708,6 @@ function parseToolNamesField(value: unknown): readonly string[] | undefined {
   } else {
     return undefined;
   }
-  if (names.length === 0) return undefined;
   return names;
 }
 

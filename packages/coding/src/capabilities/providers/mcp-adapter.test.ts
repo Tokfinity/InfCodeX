@@ -4,7 +4,10 @@ import { mkdtemp, rm } from 'node:fs/promises';
 import { afterEach, describe, expect, it } from 'vitest';
 import { createMcpTestServerFixture, getMcpCachePaths } from '@kodax-ai/agent';
 import { createExtensionRuntime } from '../../extensions/runtime.js';
-import { registerConfiguredMcpCapabilityProvider } from './mcp-adapter.js';
+import {
+  registerConfiguredMcpCapabilityProvider,
+  replaceConfiguredMcpCapabilityProvider,
+} from './mcp-adapter.js';
 
 describe('registerConfiguredMcpCapabilityProvider', () => {
   const tempDirs: string[] = [];
@@ -135,6 +138,29 @@ describe('registerConfiguredMcpCapabilityProvider', () => {
       ]),
     );
 
+    await runtime.dispose();
+  });
+
+  it('rejects a broken replacement candidate and retains the active provider', async () => {
+    const tempDir = await mkdtemp(path.join(os.tmpdir(), 'kodax-mcp-provider-replace-'));
+    tempDirs.push(tempDir);
+    const fixture = await createMcpTestServerFixture(tempDir);
+    const runtime = createExtensionRuntime().activate();
+    await registerConfiguredMcpCapabilityProvider(runtime, fixture.servers, { cacheDir: fixture.cacheDir });
+
+    await expect(replaceConfiguredMcpCapabilityProvider(runtime, {
+      broken: {
+        type: 'stdio',
+        command: path.join(tempDir, 'missing-mcp-server.exe'),
+        connect: 'prewarm',
+        startupTimeoutMs: 1_000,
+        requestTimeoutMs: 1_000,
+      },
+    }, { cacheDir: fixture.cacheDir })).rejects.toThrow(/prewarm/i);
+
+    await expect(runtime.searchCapabilities('mcp', 'echo')).resolves.toEqual(
+      expect.arrayContaining([expect.objectContaining({ id: fixture.toolId })]),
+    );
     await runtime.dispose();
   });
 });

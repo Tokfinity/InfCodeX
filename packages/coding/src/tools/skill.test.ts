@@ -85,6 +85,33 @@ describe('toolSkill (claudecode-parity skill invocation)', () => {
     expect(result).not.toContain('[Tool Error]');
   });
 
+  it('uses a run-scoped Skill registry without mutating the global singleton', async () => {
+    await writeSkillMd(
+      tempDir,
+      'selected',
+      'kodax-selected-only',
+      'Selected remote skill',
+      'RUN-SCOPED-CONTENT',
+    );
+    const { SkillRegistry, getSkillRegistry } = await import('@kodax-ai/agent');
+    const selected = new SkillRegistry(tempDir, {
+      projectPaths: [path.join(tempDir, 'selected')],
+      userPaths: [],
+      pluginPaths: [],
+      builtinPath: path.join(tempDir, 'builtin'),
+    });
+    await selected.discover();
+
+    const result = await toolSkill({ skill: 'kodax-selected-only' }, {
+      backups: new Map(),
+      executionCwd: tempDir,
+      skillRegistry: selected,
+    });
+
+    expect(result).toContain('RUN-SCOPED-CONTENT');
+    expect(getSkillRegistry().has('kodax-selected-only')).toBe(false);
+  });
+
   it('errors when called with an empty skill name', async () => {
     const result = await toolSkill({ skill: '   ' }, {
       backups: new Map(),

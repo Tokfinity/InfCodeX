@@ -38,6 +38,10 @@ export interface McpProviderOptions {
   reverse?: McpReverseCapabilities;
 }
 
+export interface McpPrewarmOptions {
+  readonly failOnError?: boolean;
+}
+
 function enabledServerEntries(
   servers: McpServersConfig | undefined,
 ): Array<[string, McpServerConfig]> {
@@ -102,14 +106,18 @@ export class McpCapabilityProvider implements CapabilityProvider {
     return this.runtimes.get(serverId);
   }
 
-  async prewarm(): Promise<void> {
+  async prewarm(options: McpPrewarmOptions = {}): Promise<void> {
     // Prewarm all servers in parallel so startup latency is bounded by the
     // slowest server rather than their sum.
-    await Promise.allSettled(
+    const results = await Promise.allSettled(
       Array.from(this.runtimes.values()).map((runtime) => runtime.prewarmIfNeeded()),
     );
-    // Individual failures are retained in each server's diagnostics and do
-    // not block the provider from starting.
+    const failed = results.filter((result) => result.status === 'rejected').length;
+    if (options.failOnError && failed > 0) {
+      throw new Error(`MCP prewarm failed for ${failed} configured server${failed === 1 ? '' : 's'}.`);
+    }
+    // Normal startup remains fail-soft. Replacement callers opt into strict
+    // prewarm so a broken candidate cannot displace the active provider.
   }
 
   async search(

@@ -107,6 +107,21 @@ import type {
   WorkflowProcessSnapshot,
 } from '@kodax-ai/agent';
 import { createRuntimeAgentExecutorPlaneStore } from './runtime-agent-store.js';
+import { createRuntimeAgentBindingService } from './runtime-agent-binding.js';
+import { createAsrtSkillScriptRunner } from './sandbox-runtime.js';
+import type {
+  RuntimeAgentBindingService,
+  RuntimeAgentOwnerSession,
+  RuntimeBoundDefaultAgent,
+  RuntimeBoundLocalAgent,
+  RuntimeDefaultAgentStartInput,
+  RuntimeEffectiveSkillRef,
+  RuntimeExecutionToolPolicy,
+  RuntimeLocalAgentStartInput,
+  RuntimeResolvedLocalAgent,
+  RuntimeUserMarkdownAgentRef,
+  RuntimeWorkspaceBinding,
+} from './runtime-agent-binding.js';
 import {
   createRuntimeDaemonClient,
   type RuntimeDaemonClientTransport,
@@ -125,6 +140,19 @@ import {
   resolveRuntimeDaemonPaths,
 } from './runtime-daemon/state.js';
 export type { RuntimeDaemonClientTransport } from './runtime-daemon/client.js';
+export type {
+  RuntimeAgentBindingService,
+  RuntimeAgentOwnerSession,
+  RuntimeBoundDefaultAgent,
+  RuntimeBoundLocalAgent,
+  RuntimeDefaultAgentStartInput,
+  RuntimeEffectiveSkillRef,
+  RuntimeExecutionToolPolicy,
+  RuntimeLocalAgentStartInput,
+  RuntimeResolvedLocalAgent,
+  RuntimeUserMarkdownAgentRef,
+  RuntimeWorkspaceBinding,
+} from './runtime-agent-binding.js';
 export {
   KODAX_DAEMON_PROTOCOL,
   KODAX_DAEMON_PROTOCOL_VERSION,
@@ -324,6 +352,8 @@ export interface RuntimeAdminService {
 
 export interface RuntimeAgentService {
   readonly enabled: boolean;
+  /** Present when this facade owns an embedded execution substrate. */
+  readonly execution?: RuntimeAgentBindingService;
   listDispatchable(query: DispatchableAgentQuery): Promise<readonly DispatchableAgentListing[]>;
   describe(
     agentId: string,
@@ -1115,25 +1145,46 @@ export async function createKodaXRuntime(
     agentPlane,
     defaultAgentContext: options.externalAgents?.defaultContext,
   });
+  const sessionService = createRuntimeSessionService(
+    sessionManager,
+    bus,
+    persistence,
+    ensureOpen,
+    (sessionId) => [...runs.values()].some((run) => (
+      run.sessionId === sessionId && isActiveRunPhase(run.phase)
+    )),
+    (sessionId, permissionMode) => {
+      for (const run of runs.values()) {
+        if (run.sessionId === sessionId && isActiveRunPhase(run.phase)) {
+          run.permissionMode = permissionMode;
+        }
+      }
+    },
+  );
+  const configHome = options.homeDir
+    ? path.join(path.resolve(options.homeDir), '.kodax')
+    : replApi.KODAX_DIR;
+  const managedWorkspaceRoot = path.join(
+    options.homeDir ? path.resolve(options.homeDir) : os.homedir(),
+    'kodax_a2a_server_workspace',
+    encodeURIComponent(identity.profile),
+  );
+  const bindingService = createRuntimeAgentBindingService({
+    configHome,
+    managedWorkspaceRoot,
+    defaultProvider: options.defaultProvider,
+    defaultModel: options.defaultModel,
+    runs: runService,
+    sessions: sessionService,
+    createSkillScriptRunner: (input) => createAsrtSkillScriptRunner({
+      ...input,
+      snapshotRoot: path.join(managedWorkspaceRoot, 'bindings'),
+    }),
+  });
 
   const runtime: KodaXRuntime = {
     identity,
-    sessions: createRuntimeSessionService(
-      sessionManager,
-      bus,
-      persistence,
-      ensureOpen,
-      (sessionId) => [...runs.values()].some((run) => (
-        run.sessionId === sessionId && isActiveRunPhase(run.phase)
-      )),
-      (sessionId, permissionMode) => {
-        for (const run of runs.values()) {
-          if (run.sessionId === sessionId && isActiveRunPhase(run.phase)) {
-            run.permissionMode = permissionMode;
-          }
-        }
-      },
-    ),
+    sessions: sessionService,
     runs: runService,
     events: bus.service,
     permissions: permissions.service,
@@ -1151,7 +1202,7 @@ export async function createKodaXRuntime(
     }),
     diagnostics: createRuntimeDiagnosticsService(bus.service),
     admin: createRuntimeAdminService(agentPlane),
-    agents: createRuntimeAgentService(agentPlane),
+    agents: createRuntimeAgentService(agentPlane, bindingService),
     agentTasks: createRuntimeAgentTaskService(agentPlane),
     async close() {
       if (closed) return;
@@ -2363,8 +2414,10 @@ function runtimeLocalListings(query: DispatchableAgentQuery): readonly Dispatcha
 
 function createRuntimeAgentService(
   plane: AgentExecutorPlane | undefined,
+  bindings: RuntimeAgentBindingService,
 ): RuntimeAgentService {
   return {
+    execution: bindings,
     enabled: plane !== undefined,
     async listDispatchable(query) {
       assertRuntimeAgentContext(query);

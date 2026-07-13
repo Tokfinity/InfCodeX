@@ -213,6 +213,10 @@ export class KodaXExtensionRuntime implements ExtensionRuntimeContract {
   private readonly loadedExtensions = new Map<string, LoadedExtensionRecord>();
   private readonly failures: ExtensionFailureDiagnostic[] = [];
   private readonly runtimeDisposables: Disposable[] = [];
+  private readonly disposedCapabilityProviders = new WeakSet<CapabilityProvider>();
+  private readonly capabilityProviderUses = new WeakMap<CapabilityProvider, number>();
+  private readonly capabilityProviderWaiters = new WeakMap<CapabilityProvider, Set<() => void>>();
+  private readonly capabilityProviderDisposals = new WeakMap<CapabilityProvider, Promise<void>>();
   private readonly runtimeLogger: ExtensionLogger;
   private readonly config: Readonly<Record<string, unknown>>;
   private readonly runtimeController: BoundExtensionRuntimeController;
@@ -424,9 +428,75 @@ export class KodaXExtensionRuntime implements ExtensionRuntimeContract {
       this.runtimeDisposables,
     );
     if (provider.dispose) {
-      this.runtimeDisposables.push(() => provider.dispose?.());
+      this.runtimeDisposables.push(() => this.disposeCapabilityProvider(provider));
     }
     return dispose;
+  }
+
+  hasCapabilityProvider(providerId: string): boolean {
+    return this.getCapabilityProvider(providerId) !== undefined;
+  }
+
+  async replaceCapabilityProvider(
+    providerId: string,
+    provider: CapabilityProvider | undefined,
+    options: { source?: ExtensionContributionSource } = {},
+  ): Promise<void> {
+    if (provider && provider.id !== providerId) throw new Error('Capability provider id mismatch.');
+    const previous = this.capabilityProviders.get(providerId) ?? [];
+    if (provider) {
+      const id = `runtime:${++this.nextRecordId}`;
+      const source = options.source ?? this.createRuntimeSource(
+        `runtime:capability:${providerId}`,
+        providerId,
+      );
+      this.capabilityProviders.set(providerId, [{ id, value: provider, source }]);
+      this.runtimeDisposables.push(() => {
+        const active = this.capabilityProviders.get(providerId);
+        if (active?.[0]?.id === id) this.capabilityProviders.delete(providerId);
+      });
+      this.runtimeDisposables.push(() => this.disposeCapabilityProvider(provider));
+    } else {
+      this.capabilityProviders.delete(providerId);
+    }
+    for (const record of previous) {
+      try {
+        await this.disposeCapabilityProvider(record.value);
+      } catch {
+        const error = new Error('Previous capability provider cleanup failed after replacement.');
+        this.recordFailure('dispose', `capability-provider:${providerId}`, record.source, error);
+        this.runtimeLogger.warn(error.message);
+      }
+    }
+  }
+
+  async reconcileExtensions(
+    paths: readonly string[],
+    options: { loadSource: ExtensionLoadSource },
+  ): Promise<{
+    readonly applied: number;
+    readonly retained: number;
+    readonly removed: number;
+  }> {
+    const candidates = await dedupeExtensionPathsByEntrypoint([...paths]);
+    let applied = 0;
+    let retained = 0;
+    for (const candidate of candidates) {
+      try {
+        await this.loadExtension(candidate, { loadSource: options.loadSource, stage: 'reload' });
+        applied += 1;
+      } catch {
+        // loadExtension activates the candidate before disposing the previous
+        // record, so failure retains that entry's last-known-good instance.
+        retained += 1;
+      }
+    }
+    const admitted = new Set(candidates.map((candidate) => path.resolve(candidate)));
+    const removed = [...this.loadedExtensions.values()].filter((extension) => (
+      extension.loadSource === options.loadSource && !admitted.has(extension.path)
+    ));
+    for (const extension of removed) await this.unloadExtension(extension.path);
+    return { applied, retained, removed: removed.length };
   }
 
   registerTool(
@@ -629,7 +699,7 @@ export class KodaXExtensionRuntime implements ExtensionRuntimeContract {
       kind: options.kind,
       limit: options.limit,
     });
-    return provider.search(query, options);
+    return this.withCapabilityProvider(provider, () => provider.search!(query, options));
   }
 
   async describeCapability(
@@ -642,7 +712,7 @@ export class KodaXExtensionRuntime implements ExtensionRuntimeContract {
     }
 
     await this.emit('capability:describe', { providerId, capabilityId });
-    return provider.describe?.(capabilityId);
+    return this.withCapabilityProvider(provider, () => provider.describe?.(capabilityId));
   }
 
   async executeCapability(
@@ -660,7 +730,7 @@ export class KodaXExtensionRuntime implements ExtensionRuntimeContract {
       capabilityId,
       kind: 'tool',
     });
-    return provider.execute(capabilityId, input);
+    return this.withCapabilityProvider(provider, () => provider.execute!(capabilityId, input));
   }
 
   async readCapability(
@@ -678,7 +748,7 @@ export class KodaXExtensionRuntime implements ExtensionRuntimeContract {
       capabilityId,
       kind: 'resource',
     });
-    return provider.read(capabilityId, options);
+    return this.withCapabilityProvider(provider, () => provider.read!(capabilityId, options));
   }
 
   async getCapabilityPrompt(
@@ -696,7 +766,7 @@ export class KodaXExtensionRuntime implements ExtensionRuntimeContract {
       capabilityId,
       kind: 'prompt',
     });
-    return provider.getPrompt(capabilityId, args);
+    return this.withCapabilityProvider(provider, () => provider.getPrompt!(capabilityId, args));
   }
 
   async getCapabilityPromptContext(
@@ -706,7 +776,7 @@ export class KodaXExtensionRuntime implements ExtensionRuntimeContract {
     if (!provider?.getPromptContext) {
       return undefined;
     }
-    return provider.getPromptContext();
+    return this.withCapabilityProvider(provider, () => provider.getPromptContext!());
   }
 
   async refreshCapabilityProviders(providerId?: string): Promise<void> {
@@ -1221,6 +1291,52 @@ export class KodaXExtensionRuntime implements ExtensionRuntimeContract {
     return dispose;
   }
 
+  private async disposeCapabilityProvider(provider: CapabilityProvider): Promise<void> {
+    const existing = this.capabilityProviderDisposals.get(provider);
+    if (existing) return existing;
+    const pending = (async () => {
+      if ((this.capabilityProviderUses.get(provider) ?? 0) > 0) {
+        await new Promise<void>((resolve) => {
+          const waiters = this.capabilityProviderWaiters.get(provider) ?? new Set();
+          waiters.add(resolve);
+          this.capabilityProviderWaiters.set(provider, waiters);
+        });
+      }
+      if (this.disposedCapabilityProviders.has(provider)) return;
+      this.disposedCapabilityProviders.add(provider);
+      await provider.dispose?.();
+    })();
+    this.capabilityProviderDisposals.set(provider, pending);
+    try {
+      await pending;
+    } catch (error: unknown) {
+      // The first caller observes the cleanup failure. Later lifecycle cleanup
+      // sees the provider as already disposed and does not repeat side effects.
+      this.capabilityProviderDisposals.delete(provider);
+      throw error;
+    }
+  }
+
+  private async withCapabilityProvider<T>(
+    provider: CapabilityProvider,
+    use: () => Promise<T> | T,
+  ): Promise<T> {
+    this.capabilityProviderUses.set(provider, (this.capabilityProviderUses.get(provider) ?? 0) + 1);
+    try {
+      return await use();
+    } finally {
+      const remaining = (this.capabilityProviderUses.get(provider) ?? 1) - 1;
+      if (remaining > 0) {
+        this.capabilityProviderUses.set(provider, remaining);
+      } else {
+        this.capabilityProviderUses.delete(provider);
+        const waiters = this.capabilityProviderWaiters.get(provider);
+        this.capabilityProviderWaiters.delete(provider);
+        for (const resolve of waiters ?? []) resolve();
+      }
+    }
+  }
+
   private registerEventHandler<TEvent extends keyof ExtensionEventMap>(
     event: TEvent,
     handler: (payload: ExtensionEventMap[TEvent]) => Promise<void> | void,
@@ -1332,6 +1448,10 @@ export class CombinedExtensionRuntime implements ExtensionRuntimeContract {
       },
       thinkingLevel: primary.thinkingLevel ?? secondary.thinkingLevel,
     };
+  }
+
+  hasCapabilityProvider(providerId: string): boolean {
+    return this.primary.hasCapabilityProvider(providerId) || this.secondary.hasCapabilityProvider(providerId);
   }
 
   bindController(controller: BoundExtensionRuntimeController): () => void {

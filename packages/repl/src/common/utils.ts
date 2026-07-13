@@ -12,6 +12,18 @@ import { promisify } from 'util';
 import { fileURLToPath } from 'url';
 import { setLocale } from './i18n.js';
 import {
+  CONFIG_TEMPLATES,
+  getConfigTemplate,
+  type ConfigTemplateName,
+} from './generated-config-templates.js';
+import {
+  parseExtensionsIntegrationDocument,
+  parseMcpIntegrationDocument,
+  readExtensionsIntegration,
+  readMcpIntegration,
+  writeIntegrationDocument,
+} from './integration-config.js';
+import {
   buildProviderCapabilitySnapshot,
   evaluateProviderPolicy,
   getProviderConfiguredCapabilityProfile,
@@ -1015,18 +1027,55 @@ export function loadConfig(): {
       // typically left over from older configs the user forgot about.
       const collapsedReasoning: KodaXReasoningMode | undefined =
         parsed.reasoningCeiling ?? parsed.reasoningMode;
+      let effectiveExtensions: string[] = [];
+      let effectiveMcpServers: KodaXMcpServersConfig = {};
+      try {
+        effectiveExtensions = [...readExtensionsIntegration(KODAX_DIR).document.paths];
+      } catch {
+        // The domain file is authoritative. Invalid startup config activates
+        // nothing; long-lived hosts retain last-known-good through the domain
+        // controller instead of falling back to shadowed legacy declarations.
+      }
+      try {
+        effectiveMcpServers = readMcpIntegration(KODAX_DIR).document.servers;
+      } catch {
+        // See the Extension-domain note above.
+      }
       return migrateAutoInProjectAliasInConfig(
         migrateLegacyPermissionModeInConfig({
           ...parsed,
           reasoningMode: collapsedReasoning,
-          extensions: normalizeConfiguredExtensions(parsed.extensions),
+          extensions: normalizeConfiguredExtensions(effectiveExtensions),
+          mcpServers: effectiveMcpServers,
         }),
       );
     }
   } catch {
     // Unreadable user config should fall back to defaults instead of breaking startup.
   }
-  return {};
+  // Split integration files are independently usable. A user does not need to
+  // create an otherwise-empty core config.json before mcp.json or
+  // extensions.json can become effective.
+  let extensions: string[] | undefined;
+  let mcpServers: KodaXMcpServersConfig | undefined;
+  try {
+    const snapshot = readExtensionsIntegration(KODAX_DIR);
+    if (snapshot.source !== 'default') {
+      extensions = normalizeConfiguredExtensions([...snapshot.document.paths]);
+    }
+  } catch {
+    // Invalid authoritative domain files activate no new value at startup.
+  }
+  try {
+    const snapshot = readMcpIntegration(KODAX_DIR);
+    if (snapshot.source !== 'default') mcpServers = snapshot.document.servers;
+  } catch {
+    // See the Extension-domain note above.
+  }
+  return {
+    ...(extensions === undefined ? {} : { extensions }),
+    ...(mcpServers === undefined ? {} : { mcpServers }),
+  };
 }
 
 /**
@@ -1043,77 +1092,44 @@ export function loadConfig(): {
  * not block startup.
  */
 export const KODAX_EXAMPLE_CONFIG_FILE = path.join(KODAX_DIR, 'config.example.jsonc');
+export const KODAX_INTEGRATION_EXAMPLE_FILES = {
+  mcp: path.join(KODAX_DIR, 'integrations', 'mcp.example.jsonc'),
+  a2a: path.join(KODAX_DIR, 'integrations', 'a2a.example.jsonc'),
+  extensions: path.join(KODAX_DIR, 'integrations', 'extensions.example.jsonc'),
+} as const;
 
-const EXAMPLE_CONFIG_JSONC = `// KodaX example configuration — copy what you need into config.json (in this same
-// folder). config.json must be STRICT JSON: no comments, no trailing commas. Most
-// settings also have a semantic KODAX_* env counterpart that overrides the file.
-// Priority: explicit option > environment > config.json > default. Delete anything
-// you don't use; everything here is optional.
-{
-  // Default provider + model. Override live with /provider and /model.
-  // "provider": "deepseek",
-  // "model": "deepseek-v4",
+const EXAMPLE_FILES: readonly {
+  readonly name: ConfigTemplateName;
+  readonly path: string;
+}[] = [
+  { name: 'core', path: KODAX_EXAMPLE_CONFIG_FILE },
+  { name: 'mcp', path: KODAX_INTEGRATION_EXAMPLE_FILES.mcp },
+  { name: 'a2a', path: KODAX_INTEGRATION_EXAMPLE_FILES.a2a },
+  { name: 'extensions', path: KODAX_INTEGRATION_EXAMPLE_FILES.extensions },
+];
 
-  // Task runtime: "embedded" (default) or shared local "daemon".
-  // "runtimeMode": "embedded",
+export { CONFIG_TEMPLATES, getConfigTemplate };
+export type { ConfigTemplateName };
 
-  // Reasoning effort for normal turns: off | auto | low | medium | high | xhigh | max.
-  // "effort": "high",
-
-  // Permission mode: "accept-edits" | "plan" | "auto".
-  // "permissionMode": "accept-edits",
-
-  // Custom providers — point KodaX at an OpenAI/Anthropic-compatible endpoint.
-  // "customProviders": [
-  //   {
-  //     "name": "my-relay",              // unique; do NOT reuse a built-in provider name
-  //     "protocol": "openai",            // "openai" or "anthropic" = the wire format the endpoint speaks
-  //     "baseUrl": "https://api.example.com/v1",
-  //     "apiKeyEnv": "MY_RELAY_API_KEY", // env var that holds the key (never put the key here)
-  //     "model": "deepseek/deepseek-v4",
-  //     "models": ["deepseek/deepseek-v4"],
-  //
-  //     // --- Thinking / reasoning (optional) ---
-  //     // For most NON-Claude models this single line is all you need:
-  //     "supportsThinking": true
-  //     //   openai-compat  : KodaX sends no thinking toggle and just shows whatever
-  //     //                    reasoning the model emits (deepseek/qwen/etc. via relays).
-  //     //   anthropic-compat: KodaX sends thinking:{type:"enabled"} — what the Anthropic
-  //     //                    endpoints of zhipu / kimi / minimax / deepseek expect.
-  //     //
-  //     // openai-compat MULTI-TURN: some models (notably DeepSeek V4) reject later turns
-  //     // whose history drops the previous reasoning_content. If thinking shows on turn 1
-  //     // but turn 2 errors, also set: "replayReasoningContent": true
-  //     //
-  //     // To expose a TUNABLE effort level, use "reasoning" instead. Include "off" to
-  //     // allow disabling thinking:
-  //     // "reasoning": { "efforts": ["off", "low", "high"], "default": "high" }
-  //     //
-  //     // Pointing anthropic-compat at REAL Claude (4.6+)? Claude needs ADAPTIVE
-  //     // thinking, not the enable toggle — set instead:
-  //     // "reasoningCapability": "native-adaptive"
-  //   }
-  // ],
-
-  // MCP servers (stdio or remote). See the /mcp command and manual topic "mcp".
-  // "mcpServers": {}
-}
-`;
-
-export function ensureExampleConfigFile(): string | undefined {
-  try {
-    if (fsSync.existsSync(KODAX_CONFIG_FILE)) {
-      return undefined;
+export function ensureExampleConfigFiles(): readonly string[] {
+  const created: string[] = [];
+  for (const example of EXAMPLE_FILES) {
+    try {
+      if (fsSync.existsSync(example.path)) continue;
+      fsSync.mkdirSync(path.dirname(example.path), { recursive: true });
+      fsSync.writeFileSync(example.path, getConfigTemplate(example.name), 'utf8');
+      created.push(example.path);
+    } catch {
+      // Reference templates are best-effort and independent. Active config
+      // never reads *.example.jsonc files.
     }
-    if (fsSync.existsSync(KODAX_EXAMPLE_CONFIG_FILE)) {
-      return undefined;
-    }
-    fsSync.mkdirSync(KODAX_DIR, { recursive: true });
-    fsSync.writeFileSync(KODAX_EXAMPLE_CONFIG_FILE, EXAMPLE_CONFIG_JSONC, 'utf-8');
-    return KODAX_EXAMPLE_CONFIG_FILE;
-  } catch {
-    return undefined;
   }
+  return created;
+}
+
+/** @deprecated Use ensureExampleConfigFiles() to observe every created path. */
+export function ensureExampleConfigFile(): string | undefined {
+  return ensureExampleConfigFiles()[0];
 }
 
 const projectedConfigEnvironment = new Map<string, string>();
@@ -1267,20 +1283,54 @@ export function saveConfig(config: {
     maxConcurrency?: number;
   };
 }): void {
-  const current = loadConfig();
-  const merged = { ...current, ...config };
-  const normalizedExtensions = normalizeConfiguredExtensions(merged.extensions);
-  if (normalizedExtensions !== undefined) {
-    merged.extensions = normalizedExtensions;
+  let current: Record<string, unknown> = {};
+  if (fsSync.existsSync(KODAX_CONFIG_FILE)) {
+    try {
+      const parsed = JSON.parse(fsSync.readFileSync(KODAX_CONFIG_FILE, 'utf8')) as unknown;
+      if (parsed && typeof parsed === 'object' && !Array.isArray(parsed)) {
+        current = parsed as Record<string, unknown>;
+      }
+    } catch {
+      // Preserve the existing public behavior: a malformed core config does
+      // not block replacing it with a valid explicitly supplied snapshot.
+    }
   }
+  const { extensions, mcpServers, ...coreConfig } = config;
+  const merged: Record<string, unknown> = { ...current, ...coreConfig };
   // Remove fields explicitly set to undefined (e.g. clearing model when switching provider)
-  for (const key of Object.keys(config) as Array<keyof typeof config>) {
-    if (config[key] === undefined) {
-      delete (merged as Record<string, unknown>)[key];
+  for (const key of Object.keys(coreConfig) as Array<keyof typeof coreConfig>) {
+    if (coreConfig[key] === undefined) {
+      delete merged[key];
     }
   }
   fsSync.mkdirSync(path.dirname(KODAX_CONFIG_FILE), { recursive: true });
   fsSync.writeFileSync(KODAX_CONFIG_FILE, JSON.stringify(merged, null, 2));
+
+  if (extensions !== undefined) {
+    const currentExtensions = readExtensionsIntegration(KODAX_DIR);
+    writeIntegrationDocument({
+      domain: 'extensions',
+      configHome: KODAX_DIR,
+      ...(currentExtensions.source === 'user'
+        ? { expectedRevision: currentExtensions.revision }
+        : {}),
+      document: {
+        version: 1,
+        paths: normalizeConfiguredExtensions(extensions) ?? [],
+      },
+      validate: parseExtensionsIntegrationDocument,
+    });
+  }
+  if (mcpServers !== undefined) {
+    const currentMcp = readMcpIntegration(KODAX_DIR);
+    writeIntegrationDocument({
+      domain: 'mcp',
+      configHome: KODAX_DIR,
+      ...(currentMcp.source === 'user' ? { expectedRevision: currentMcp.revision } : {}),
+      document: { version: 1, servers: mcpServers },
+      validate: parseMcpIntegrationDocument,
+    });
+  }
 }
 
 /**

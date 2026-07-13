@@ -340,6 +340,71 @@ describe('loadAgentsFromMarkdown', () => {
 });
 
 describe('loadMarkdownAgentScope', () => {
+  it('preserves explicit Skill selection and can bind only user-level Agents', async () => {
+    await writeUserAgent(
+      'remote-general.md',
+      [
+        '---',
+        'name: remote-general',
+        'description: user A2A specialist',
+        'tools: []',
+        'skills: [presentation-design, database-reporting]',
+        '---',
+        'complete general office tasks',
+      ].join('\n'),
+    );
+    await writeProjectAgent(
+      'project-only.md',
+      [
+        '---',
+        'name: project-only',
+        'description: must not enter a user-only binding',
+        '---',
+        'project instructions',
+      ].join('\n'),
+    );
+
+    const result = await loadMarkdownAgentScope({
+      cwd: projectCwd,
+      configHome: userHome,
+      userOnly: true,
+    });
+
+    expect(result.failed).toEqual([]);
+    expect(result.scope.resolve('project-only')).toBeUndefined();
+    expect(result.loaded[0]?.effectiveTools).toEqual([]);
+    expect(result.loaded[0]?.requestedSkills).toEqual([
+      'presentation-design',
+      'database-reporting',
+    ]);
+    await result.dispose();
+  });
+
+  it('rejects a Skill wildcard mixed with exact names', async () => {
+    await writeUserAgent(
+      'invalid-skills.md',
+      [
+        '---',
+        'name: invalid-skills',
+        'description: invalid selection',
+        'skills: ["*", presentation-design]',
+        '---',
+        'body',
+      ].join('\n'),
+    );
+
+    const result = await loadMarkdownAgentScope({
+      cwd: projectCwd,
+      configHome: userHome,
+      userOnly: true,
+    });
+
+    expect(result.loaded).toEqual([]);
+    expect(result.failed[0]?.reason).toContain('skills');
+    expect(result.failed[0]?.reason).toContain('wildcard');
+    await result.dispose();
+  });
+
   it('loads project markdown agents into a scope without mutating the global registry', async () => {
     await writeProjectAgent(
       'agent-a.md',

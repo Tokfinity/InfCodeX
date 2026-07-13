@@ -22,6 +22,7 @@ import {
 import { toolKodaxManual } from './manual.js';
 import { buildManualToolDescription } from '../self-knowledge/tool-description.js';
 import { toolSkill } from './skill.js';
+import { toolRunSkillScript } from './skill-script.js';
 import { toolWrite } from './write.js';
 import { toolEdit } from './edit.js';
 import { toolMultiEdit } from './multi-edit.js';
@@ -224,6 +225,52 @@ export const BUILTIN_TOOL_DEFINITIONS: LocalToolDefinition[] = [
     handler: toolSkill,
     sideEffect: 'mutates-state',
     toClassifierInput: () => '',
+  },
+  {
+    name: 'run_skill_script',
+    description: [
+      'Run one exact script from an admitted Skill inside the remote OS sandbox.',
+      'The script sees only its pinned Skill snapshot and a fresh staging directory.',
+      'Use inputs to copy approved workspace files into staging; use outputs to promote generated files after success.',
+      'Relative script names must exactly match toolPolicy.skillScripts; arbitrary commands are not accepted.',
+    ].join('\n'),
+    input_schema: {
+      type: 'object',
+      properties: {
+        skill: { type: 'string', description: 'Exact admitted Skill name.' },
+        script: { type: 'string', description: 'Exact Skill-relative script path.' },
+        args: { type: 'array', items: { type: 'string' }, description: 'Arguments passed as data to the script.' },
+        inputs: {
+          type: 'array',
+          items: {
+            type: 'object',
+            properties: {
+              path: { type: 'string', description: 'Workspace-relative source file.' },
+              as: { type: 'string', description: 'Optional staging-relative destination.' },
+            },
+            required: ['path'],
+          },
+        },
+        outputs: {
+          type: 'array',
+          items: {
+            type: 'object',
+            properties: {
+              path: { type: 'string', description: 'Staging-relative generated file.' },
+              target: { type: 'string', description: 'Workspace-relative destination.' },
+            },
+            required: ['path', 'target'],
+          },
+        },
+      },
+      required: ['skill', 'script'],
+    },
+    handler: toolRunSkillScript,
+    sideEffect: 'mutates-shell',
+    toClassifierInput: (input) => {
+      const value = input as { skill?: unknown; script?: unknown };
+      return `Run admitted Skill script ${String(value.skill ?? '?')}/${String(value.script ?? '?')}`;
+    },
   },
   {
     name: 'write',

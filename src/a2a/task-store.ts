@@ -10,6 +10,8 @@ export interface A2AServerTaskRecord {
   readonly principalKey: string;
   readonly runtimeIdentity: string;
   readonly sessionId: string;
+  readonly workspaceRoot?: string;
+  readonly executionPolicyRevision?: string;
   readonly messageDigests: Readonly<Record<string, string>>;
   readonly runIds: readonly string[];
   readonly task: A2ATask;
@@ -18,6 +20,8 @@ export interface A2AServerTaskRecord {
   readonly updatedAt: string;
   readonly eventSeq: number;
   readonly lastRuntimeEventSeq: number;
+  readonly runtimeEventCount: number;
+  readonly runtimeEventBytes: number;
 }
 
 type TaskListener = (record: A2AServerTaskRecord) => void;
@@ -47,6 +51,10 @@ function parseRecord(value: unknown): A2AServerTaskRecord {
     principalKey: value.principalKey as string,
     runtimeIdentity: value.runtimeIdentity as string,
     sessionId: value.sessionId as string,
+    ...(typeof value.workspaceRoot === 'string' ? { workspaceRoot: value.workspaceRoot } : {}),
+    ...(typeof value.executionPolicyRevision === 'string'
+      ? { executionPolicyRevision: value.executionPolicyRevision }
+      : {}),
     messageDigests: value.messageDigests as Record<string, string>,
     runIds: value.runIds as string[],
     task: parseA2ATask(value.task),
@@ -55,6 +63,8 @@ function parseRecord(value: unknown): A2AServerTaskRecord {
     updatedAt: value.updatedAt as string,
     eventSeq: value.eventSeq as number,
     lastRuntimeEventSeq: value.lastRuntimeEventSeq as number,
+    runtimeEventCount: Number.isSafeInteger(value.runtimeEventCount) ? value.runtimeEventCount as number : 0,
+    runtimeEventBytes: Number.isSafeInteger(value.runtimeEventBytes) ? value.runtimeEventBytes as number : 0,
   };
 }
 
@@ -62,12 +72,22 @@ export class A2AFileTaskStore {
   readonly #records = new Map<string, A2AServerTaskRecord>();
   readonly #listeners = new Map<string, Set<TaskListener>>();
   readonly #file: string;
+  readonly #lockPath: string;
+  readonly #lockFd: number;
 
   constructor(root: string) {
     const resolved = path.resolve(root);
     fs.mkdirSync(resolved, { recursive: true, mode: 0o700 });
     this.#file = path.join(resolved, 'tasks.json');
-    this.load();
+    this.#lockPath = path.join(resolved, '.server.lock');
+    this.#lockFd = this.acquireLock();
+    try {
+      this.load();
+    } catch (error: unknown) {
+      fs.closeSync(this.#lockFd);
+      fs.rmSync(this.#lockPath, { force: true });
+      throw error;
+    }
   }
 
   get(taskId: string): A2AServerTaskRecord | undefined {
@@ -116,6 +136,33 @@ export class A2AFileTaskStore {
   close(): void {
     this.persist();
     this.#listeners.clear();
+    fs.closeSync(this.#lockFd);
+    fs.rmSync(this.#lockPath, { force: true });
+  }
+
+  private acquireLock(): number {
+    const attempt = (): number => {
+      const fd = fs.openSync(this.#lockPath, 'wx', 0o600);
+      fs.writeFileSync(fd, `${process.pid}\n`, 'utf8');
+      fs.fsyncSync(fd);
+      return fd;
+    };
+    try {
+      return attempt();
+    } catch (error: unknown) {
+      let stale = false;
+      try {
+        const pid = Number.parseInt(fs.readFileSync(this.#lockPath, 'utf8').trim(), 10);
+        if (Number.isSafeInteger(pid) && pid > 0) {
+          try { process.kill(pid, 0); } catch { stale = true; }
+        }
+      } catch {
+        stale = false;
+      }
+      if (!stale) throw new Error('A2A task store is already owned by another server.', { cause: error });
+      fs.rmSync(this.#lockPath, { force: true });
+      return attempt();
+    }
   }
 
   private load(): void {

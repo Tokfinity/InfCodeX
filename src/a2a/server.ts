@@ -4,7 +4,16 @@ import { createServer, type Server } from 'node:http';
 import path from 'node:path';
 import { Readable } from 'node:stream';
 
-import type { RuntimeEvent, RuntimeInput, RuntimeRunPhase, RuntimeRunResult } from '../sdk-runtime.js';
+import type {
+  RuntimeAgentBindingService,
+  RuntimeBoundDefaultAgent,
+  RuntimeBoundLocalAgent,
+  RuntimeEvent,
+  RuntimeInput,
+  RuntimeRunHandle,
+  RuntimeRunPhase,
+  RuntimeRunResult,
+} from '../sdk-runtime.js';
 import { A2AError, errorMessage } from './errors.js';
 import { isRecord, parseA2AMessage, parseJsonRpcRequest } from './schemas.js';
 import { A2AFileTaskStore, type A2AServerTaskRecord } from './task-store.js';
@@ -17,13 +26,33 @@ import {
   type A2APart,
   type A2APrincipal,
   type A2AServerEvent,
+  type A2AServerHotOptions,
   type A2AServerOptions,
+  type A2AServerExecution,
   type A2ATask,
   type A2ATaskState,
   type KodaXA2AServer,
 } from './types.js';
 
 type RequestInitWithDuplex = RequestInit & { readonly duplex: 'half' };
+
+interface PreparedA2AExecution {
+  readonly service: RuntimeAgentBindingService;
+  readonly ownerSessionId: string;
+  readonly binding: RuntimeBoundDefaultAgent | RuntimeBoundLocalAgent;
+  readonly declaration: A2AServerExecution;
+  prepareWorkspace(contextKey: string): Promise<string>;
+  start(input: {
+    readonly sessionId: string;
+    readonly inputs: readonly RuntimeInput[];
+    readonly principalKey: string;
+  }): Promise<RuntimeRunHandle>;
+  close(): Promise<void>;
+}
+
+interface PreparedA2AServerOptions extends A2AServerOptions {
+  readonly preparedExecution?: PreparedA2AExecution;
+}
 
 const TERMINAL_STATES = new Set<A2ATaskState>([
   'TASK_STATE_COMPLETED',
@@ -202,6 +231,18 @@ function partBytes(part: A2APart): number {
   return Buffer.byteLength(JSON.stringify(part.data));
 }
 
+function directoryBytes(root: string): number {
+  if (!fs.existsSync(root)) return 0;
+  let total = 0;
+  for (const entry of fs.readdirSync(root, { withFileTypes: true })) {
+    const item = path.join(root, entry.name);
+    if (entry.isSymbolicLink()) continue;
+    if (entry.isDirectory()) total += directoryBytes(item);
+    else if (entry.isFile()) total += fs.statSync(item).size;
+  }
+  return total;
+}
+
 function validateInput(message: A2AMessage, maxPartBytes: number, inputModes: readonly string[]): void {
   if (message.role !== 'ROLE_USER') throw new A2AError(-32602, 'Inbound message role must be ROLE_USER.');
   for (const part of message.parts) {
@@ -235,8 +276,9 @@ class KodaXA2AServerRuntime implements KodaXA2AServer {
   #nodeServer: Server | undefined;
   #closed = false;
   #card: A2AAgentCard;
+  #listeningBaseUrl: string | undefined;
 
-  constructor(private readonly options: A2AServerOptions) {
+  constructor(private options: PreparedA2AServerOptions) {
     this.#now = options.now ?? (() => new Date());
     this.#store = new A2AFileTaskStore(options.dataDir);
     this.#card = buildCard(options);
@@ -245,6 +287,16 @@ class KodaXA2AServerRuntime implements KodaXA2AServer {
 
   get agentCard(): A2AAgentCard {
     return structuredClone(this.#card);
+  }
+
+  async whenReady(): Promise<void> {
+    await this.#ready;
+  }
+
+  updateHot(options: A2AServerHotOptions): void {
+    if (this.#closed) throw new Error('A2A server is closed.');
+    this.options = { ...this.options, ...options };
+    this.#card = buildCard(this.options, options.agent.publicBaseUrl);
   }
 
   async handle(request: Request): Promise<Response> {
@@ -264,7 +316,7 @@ class KodaXA2AServerRuntime implements KodaXA2AServer {
     return this.handleRpc(request);
   }
 
-  async listen(input: { readonly hostname: string; readonly port: number }): Promise<string> {
+  async listen(input: { readonly hostname: string; readonly port: number; readonly publicBaseUrl?: string }): Promise<string> {
     if (this.#nodeServer) throw new Error('A2A server is already listening.');
     if (!isLoopbackHostname(input.hostname)) {
       throw new Error('The built-in A2A HTTP listener is loopback-only; use handle() behind TLS for public service.');
@@ -294,7 +346,8 @@ class KodaXA2AServerRuntime implements KodaXA2AServer {
     const address = server.address();
     if (!address || typeof address === 'string') throw new Error('A2A server did not expose a TCP address.');
     const baseUrl = `http://${input.hostname}:${address.port}`;
-    this.#card = buildCard(this.options, baseUrl);
+    this.#listeningBaseUrl = input.publicBaseUrl ?? baseUrl;
+    this.#card = buildCard(this.options, this.#listeningBaseUrl);
     return baseUrl;
   }
 
@@ -309,6 +362,7 @@ class KodaXA2AServerRuntime implements KodaXA2AServer {
     const server = this.#nodeServer;
     this.#nodeServer = undefined;
     if (server) await new Promise<void>((resolve, reject) => server.close((error) => error ? reject(error) : resolve()));
+    await this.options.preparedExecution?.close();
   }
 
   private async handleNodeRequest(request: import('node:http').IncomingMessage): Promise<Response> {
@@ -437,8 +491,15 @@ class KodaXA2AServerRuntime implements KodaXA2AServer {
       throw new A2AError(-32004, 'Task is not waiting for input.');
     }
     const records = this.#store.list(key);
-    if (!existing && records.length >= this.options.limits.maxTasksPerPrincipal) {
+    const retainedLimit = this.options.limits.maxRetainedTasksPerPrincipal
+      ?? this.options.limits.maxTasksPerPrincipal
+      ?? 100;
+    if (!existing && records.length >= retainedLimit) {
       throw new A2AError(-32004, 'Principal task limit reached.');
+    }
+    const activeForPrincipal = records.filter((record) => !TERMINAL_STATES.has(record.task.status.state)).length;
+    if (!existing && activeForPrincipal >= (this.options.limits.maxActiveTasksPerPrincipal ?? 4)) {
+      throw new A2AError(-32004, 'Principal active task limit reached.');
     }
     const active = this.#store.all().filter((record) => !TERMINAL_STATES.has(record.task.status.state)).length;
     if (!existing && active >= this.options.limits.maxConcurrentTasks) {
@@ -454,13 +515,22 @@ class KodaXA2AServerRuntime implements KodaXA2AServer {
   private async createRecord(message: A2AMessage, key: string): Promise<A2AServerTaskRecord> {
     const contextId = message.contextId ?? randomUUID();
     const related = this.#store.list(key).find((record) => record.contextId === contextId);
+    const contextKey = sha256(`${key}\0${contextId}`);
+    const workspaceRoot = related?.workspaceRoot
+      ?? await this.options.preparedExecution?.prepareWorkspace(contextKey);
     const session = related
       ? { id: related.sessionId }
       : await this.options.runtime.sessions.create({
           title: `A2A: ${this.options.agent.name}`,
           surface: 'a2a',
-          ...(this.options.agent.profileId ? { profileId: this.options.agent.profileId } : {}),
-          ...(this.options.agent.projectPath ? { projectPath: this.options.agent.projectPath } : {}),
+          ...(this.options.execution?.profileId || this.options.agent.profileId
+            ? { profileId: this.options.execution?.profileId ?? this.options.agent.profileId }
+            : {}),
+          ...(workspaceRoot
+            ? { projectPath: workspaceRoot, gitRoot: workspaceRoot }
+            : this.options.agent.projectPath
+              ? { projectPath: this.options.agent.projectPath }
+              : {}),
         });
     const taskId = randomUUID();
     const timestamp = nowIso(this.#now);
@@ -470,6 +540,10 @@ class KodaXA2AServerRuntime implements KodaXA2AServer {
       principalKey: key,
       runtimeIdentity: this.options.runtime.identity.runtimeId,
       sessionId: session.id,
+      ...(workspaceRoot ? { workspaceRoot } : {}),
+      ...(this.options.preparedExecution ? {
+        executionPolicyRevision: this.options.preparedExecution.binding.executionPolicyRevision,
+      } : {}),
       messageDigests: { [message.messageId]: messageDigest(message) },
       runIds: [],
       task: {
@@ -483,6 +557,8 @@ class KodaXA2AServerRuntime implements KodaXA2AServer {
       updatedAt: timestamp,
       eventSeq: 1,
       lastRuntimeEventSeq: 0,
+      runtimeEventCount: 0,
+      runtimeEventBytes: 0,
     });
   }
 
@@ -500,14 +576,24 @@ class KodaXA2AServerRuntime implements KodaXA2AServer {
 
   private async startRun(record: A2AServerTaskRecord, message: A2AMessage): Promise<A2AServerTaskRecord> {
     const input = await this.inputsForMessage(record.taskId, message);
-    const handle = await this.options.runtime.runs.start({
-      sessionId: record.sessionId,
-      input,
-      mode: 'managed_task',
-      permissionBroker: 'runtime',
-      ...(this.options.agent.runOptions ? { options: this.options.agent.runOptions } : {}),
-      agentContext: { actorId: `a2a:${record.principalKey.slice(0, 16)}` },
-    });
+    const prepared = this.options.preparedExecution;
+    if (prepared && record.executionPolicyRevision !== prepared.binding.executionPolicyRevision) {
+      throw new A2AError(-32004, 'A2A task execution binding revision changed.');
+    }
+    const handle = prepared
+      ? await prepared.start({
+          sessionId: record.sessionId,
+          inputs: input,
+          principalKey: record.principalKey,
+        })
+      : await this.options.runtime.runs.start({
+          sessionId: record.sessionId,
+          input,
+          mode: 'managed_task',
+          permissionBroker: 'runtime',
+          ...(this.options.agent.runOptions ? { options: this.options.agent.runOptions } : {}),
+          agentContext: { actorId: `a2a:${record.principalKey.slice(0, 16)}` },
+        });
     const working = this.#store.save({
       ...record,
       runIds: [...record.runIds, handle.runId],
@@ -538,12 +624,22 @@ class KodaXA2AServerRuntime implements KodaXA2AServer {
   private async materializePart(taskId: string, part: A2APart): Promise<RuntimeInput> {
     const mediaType = part.mediaType ?? (part.data !== undefined ? 'application/json' : 'application/octet-stream');
     const extension = part.data !== undefined ? '.json' : '.bin';
-    const directory = path.join(path.resolve(this.options.dataDir), 'attachments', sha256(taskId));
+    const record = this.#store.get(taskId);
+    const directory = record?.workspaceRoot
+      ? path.join(record.workspaceRoot, 'inbox', sha256(taskId))
+      : path.join(path.resolve(this.options.dataDir), 'attachments', sha256(taskId));
     fs.mkdirSync(directory, { recursive: true, mode: 0o700 });
-    const file = path.join(directory, `${randomUUID()}${extension}`);
     const content = part.data !== undefined
       ? Buffer.from(JSON.stringify(part.data), 'utf8')
       : Buffer.from(part.raw ?? '', 'base64');
+    const workspaceLimit = this.options.limits.maxWorkspaceBytesPerContext ?? 1_073_741_824;
+    if (record?.workspaceRoot && directoryBytes(record.workspaceRoot) + content.byteLength > workspaceLimit) {
+      throw new A2AError(-32004, 'A2A context workspace size limit reached.');
+    }
+    const safeName = part.filename
+      ? path.basename(part.filename).replace(/[^A-Za-z0-9._-]/g, '_')
+      : `${randomUUID()}${extension}`;
+    const file = path.join(directory, `${randomUUID()}-${safeName}`);
     fs.writeFileSync(file, content, { mode: 0o600 });
     const kind = mediaType.startsWith('image/') ? 'image'
       : mediaType.startsWith('video/') ? 'video' : 'file';
@@ -568,6 +664,16 @@ class KodaXA2AServerRuntime implements KodaXA2AServer {
   private onRuntimeEvent(taskId: string, event: RuntimeEvent): void {
     const record = this.#store.get(taskId);
     if (!record || TERMINAL_STATES.has(record.task.status.state)) return;
+    const eventBytes = Buffer.byteLength(JSON.stringify(event));
+    const runtimeEventCount = record.runtimeEventCount + 1;
+    const runtimeEventBytes = record.runtimeEventBytes + eventBytes;
+    if (runtimeEventCount > (this.options.limits.maxEventsPerTask ?? 1_000)
+      || runtimeEventBytes > (this.options.limits.maxEventBytesPerTask ?? 16_777_216)) {
+      const runId = record.runIds.at(-1);
+      if (runId) void this.options.runtime.runs.abort(runId);
+      this.failTask(taskId, 'A2A task event quota exceeded.');
+      return;
+    }
     const state = event.type === 'user_input.requested' ? 'TASK_STATE_INPUT_REQUIRED' : record.task.status.state;
     this.#store.save({
       ...record,
@@ -575,6 +681,8 @@ class KodaXA2AServerRuntime implements KodaXA2AServer {
       updatedAt: event.time,
       eventSeq: record.eventSeq + 1,
       lastRuntimeEventSeq: Math.max(record.lastRuntimeEventSeq, event.seq),
+      runtimeEventCount,
+      runtimeEventBytes,
     });
   }
 
@@ -786,4 +894,86 @@ class KodaXA2AServerRuntime implements KodaXA2AServer {
 
 export function createKodaXA2AServer(options: A2AServerOptions): KodaXA2AServer {
   return new KodaXA2AServerRuntime(options);
+}
+
+async function prepareExecution(options: A2AServerOptions): Promise<PreparedA2AExecution> {
+  const declaration = options.execution;
+  if (!declaration) throw new Error('A2A execution declaration is required for prepared serving.');
+  const service = options.runtime.agents.execution;
+  if (!service) throw new Error('local-agent-capability-unavailable: Runtime does not own an embedded execution binding service.');
+  if (options.signal?.aborted) throw options.signal.reason ?? new Error('A2A preparation aborted.');
+  const owner = await service.openOwnerSession();
+  try {
+    const binding = declaration.kind === 'local-agent'
+      ? await service.bindLocal({
+          ownerSessionId: owner.ownerSessionId,
+          ref: declaration.agentRef,
+          profileId: declaration.profileId,
+          workspace: declaration.workspace,
+          toolPolicy: declaration.toolPolicy,
+          workspaceByteLimit: options.limits.maxWorkspaceBytesPerContext,
+        })
+      : await service.bindDefault({
+          ownerSessionId: owner.ownerSessionId,
+          profileId: declaration.profileId,
+          workspace: declaration.workspace,
+          toolPolicy: declaration.toolPolicy,
+          workspaceByteLimit: options.limits.maxWorkspaceBytesPerContext,
+        });
+    let closed = false;
+    return {
+      service,
+      ownerSessionId: owner.ownerSessionId,
+      binding,
+      declaration,
+      prepareWorkspace(contextKey) {
+        return service.prepareWorkspace({
+          ownerSessionId: owner.ownerSessionId,
+          bindingId: binding.bindingId,
+          contextKey,
+        });
+      },
+      start(input) {
+        const base = {
+          ownerSessionId: owner.ownerSessionId,
+          bindingId: binding.bindingId,
+          expectedExecutionPolicyRevision: binding.executionPolicyRevision,
+          sessionId: input.sessionId,
+          input: input.inputs,
+          permissionBroker: 'runtime' as const,
+          agentContext: { actorId: `a2a:${input.principalKey.slice(0, 16)}` },
+        };
+        if (declaration.kind === 'local-agent') {
+          const revision = 'configurationRevision' in binding
+            && typeof binding.configurationRevision === 'string'
+            ? binding.configurationRevision
+            : undefined;
+          if (!revision) throw new Error('Prepared local-Agent binding is missing its revision.');
+          return service.startLocal({ ...base, expectedConfigurationRevision: revision });
+        }
+        return service.startDefault(base);
+      },
+      async close() {
+        if (closed) return;
+        closed = true;
+        await service.closeOwnerSession(owner.ownerSessionId);
+      },
+    };
+  } catch (error: unknown) {
+    await service.closeOwnerSession(owner.ownerSessionId);
+    throw error;
+  }
+}
+
+/** Prepare an immutable Runtime execution binding before exposing an A2A handler. */
+export async function prepareKodaXA2AServer(options: A2AServerOptions): Promise<KodaXA2AServer> {
+  const preparedExecution = await prepareExecution(options);
+  try {
+    const server = new KodaXA2AServerRuntime({ ...options, preparedExecution });
+    await server.whenReady();
+    return server;
+  } catch (error: unknown) {
+    await preparedExecution.close();
+    throw error;
+  }
 }

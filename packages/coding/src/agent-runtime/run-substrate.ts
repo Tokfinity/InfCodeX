@@ -616,9 +616,13 @@ export async function runSubstrate(
     messages,
     options.context?.contextTokenSnapshot,
   );
+  const contextAvailableTools = options.context?.skillScriptRunner
+    ? runtimeDefaults?.activeTools ?? listToolDefinitions().map((tool) => tool.name)
+    : (runtimeDefaults?.activeTools ?? listToolDefinitions().map((tool) => tool.name))
+      .filter((name) => name !== 'run_skill_script');
   const configuredActiveTools = applyToolVisibilityPolicy(
     filterExcludedTools(
-      runtimeDefaults?.activeTools ?? listToolDefinitions().map((tool) => tool.name),
+      contextAvailableTools,
       options.context?.excludeTools,
     ),
     options.context?.toolVisibilityPolicy,
@@ -1102,7 +1106,7 @@ export async function runSubstrate(
         runtimeSessionState.activeTools,
         options.context?.repoIntelligenceMode,
         options.context?.managedProtocolEmission?.enabled === true,
-        !!runtime,
+        runtime?.hasCapabilityProvider?.('mcp') ?? !!runtime,
         options.context?.toolConstructionMode,
         unlockedDeferredTools,
         // FEATURE_221: white-label the kodax_manual description for this product.
@@ -1362,7 +1366,7 @@ export async function runSubstrate(
       const activeToolNamesForTurn = getRuntimeActiveToolNames(
         runtimeSessionState.activeTools,
         options.context?.repoIntelligenceMode,
-        !!runtime,
+        runtime?.hasCapabilityProvider?.('mcp') ?? !!runtime,
         options.context?.toolConstructionMode,
         options.context?.agentExecutorPlane !== undefined,
       );

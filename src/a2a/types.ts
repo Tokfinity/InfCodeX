@@ -4,7 +4,13 @@ import type {
   ExternalAgentRegistration,
 } from '@kodax-ai/agent';
 
-import type { KodaXRuntime, RuntimeKodaXOptions } from '../sdk-runtime.js';
+import type {
+  KodaXRuntime,
+  RuntimeExecutionToolPolicy,
+  RuntimeKodaXOptions,
+  RuntimeUserMarkdownAgentRef,
+  RuntimeWorkspaceBinding,
+} from '../sdk-runtime.js';
 
 export const A2A_PROTOCOL_VERSION = '1.0';
 export const A2A_EXECUTOR_ID = 'kodax-a2a-v1-jsonrpc';
@@ -180,8 +186,29 @@ export interface A2AServerLimits {
   readonly maxRequestBytes: number;
   readonly maxPartBytes: number;
   readonly maxConcurrentTasks: number;
-  readonly maxTasksPerPrincipal: number;
+  /** @deprecated Use maxRetainedTasksPerPrincipal. */
+  readonly maxTasksPerPrincipal?: number;
+  readonly maxActiveTasksPerPrincipal?: number;
+  readonly maxRetainedTasksPerPrincipal?: number;
+  readonly maxEventsPerTask?: number;
+  readonly maxEventBytesPerTask?: number;
+  readonly maxWorkspaceBytesPerContext?: number;
 }
+
+export type A2AServerExecution =
+  | {
+      readonly kind: 'runtime-default';
+      readonly profileId?: string;
+      readonly workspace: RuntimeWorkspaceBinding;
+      readonly toolPolicy: RuntimeExecutionToolPolicy;
+    }
+  | {
+      readonly kind: 'local-agent';
+      readonly agentRef: RuntimeUserMarkdownAgentRef;
+      readonly profileId?: string;
+      readonly workspace: RuntimeWorkspaceBinding;
+      readonly toolPolicy: RuntimeExecutionToolPolicy;
+    };
 
 export interface A2APublishedSkill extends A2AAgentSkill {}
 
@@ -211,6 +238,8 @@ export interface A2AServerEvent {
 export interface A2AServerOptions {
   readonly runtime: KodaXRuntime;
   readonly agent: A2APublishedAgent;
+  /** When set, prepareKodaXA2AServer binds an immutable Runtime execution snapshot. */
+  readonly execution?: A2AServerExecution;
   readonly dataDir: string;
   readonly limits: A2AServerLimits;
   readonly authentication: A2AAuthentication;
@@ -218,12 +247,23 @@ export interface A2AServerOptions {
   readonly extendedAgentCard?: A2AAgentCard;
   readonly onEvent?: (event: A2AServerEvent) => void;
   readonly now?: () => Date;
+  readonly signal?: AbortSignal;
+}
+
+export interface A2AServerHotOptions {
+  readonly agent: A2APublishedAgent;
+  readonly limits: A2AServerLimits;
+  readonly authentication: A2AAuthentication;
+  authorize(input: A2AAuthorizationInput): Promise<boolean>;
+  readonly extendedAgentCard?: A2AAgentCard;
 }
 
 export interface KodaXA2AServer {
   readonly agentCard: A2AAgentCard;
   handle(request: Request): Promise<Response>;
-  listen(input: { readonly hostname: string; readonly port: number }): Promise<string>;
+  listen(input: { readonly hostname: string; readonly port: number; readonly publicBaseUrl?: string }): Promise<string>;
+  /** Atomically replace publication/auth/limit policy for subsequent requests. */
+  updateHot(options: A2AServerHotOptions): void;
   close(): Promise<void>;
 }
 

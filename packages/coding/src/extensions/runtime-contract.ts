@@ -56,6 +56,7 @@ export interface BoundExtensionRuntimeController {
 }
 
 export interface CapabilityRuntimeContract {
+  hasCapabilityProvider?(providerId: string): boolean;
   searchCapabilities(
     providerId: string,
     query: string,

@@ -67,7 +67,9 @@
     "./package.json": "./package.json"
   },
   "scripts": {
-    "build": "npm run build:packages && npm run build:bundle && npm run build:dts",
+    "build": "npm run config:templates:check && npm run build:packages && npm run build:bundle && npm run build:dts",
+    "config:templates:sync": "node scripts/sync-config-templates.mjs",
+    "config:templates:check": "node scripts/sync-config-templates.mjs --check",
     "build:dts": "node scripts/build-dts.mjs",
     "build:packages": "tsc -b tsconfig.build.json && npm run copy:builtin -w @kodax-ai/agent && npm run copy:provider-caps -w @kodax-ai/llm",
     "build:bundle": "node scripts/build-bundle.mjs",
@@ -102,6 +104,7 @@
   "dependencies": {
     "@agentclientprotocol/sdk": "^0.15.0",
     "@alcalzone/ansi-tokenize": "^0.2.5",
+    "@anthropic-ai/sandbox-runtime": "0.0.65",
     "@anthropic-ai/sdk": "^0.104.2",
     "ansi-escapes": "^7.3.0",
     "auto-bind": "^5.0.1",
@@ -172,6 +175,7 @@
     "dist/runtime-worker.js",
     "dist/constructed-handler-worker.js",
     "dist/types-chunks",
+    "config-templates",
     "scripts/kodax-bin.cjs",
     "scripts/production-env.cjs",
     "README.md",

@@ -22,6 +22,7 @@ import {
 
 let tmpHome: string;
 let configPath: string;
+let integrationPath: string;
 
 beforeEach(() => {
   setAgentConfigHome(undefined);
@@ -29,6 +30,7 @@ beforeEach(() => {
   setAgentConfigHome(tmpHome);
   mkdirSync(tmpHome, { recursive: true });
   configPath = join(tmpHome, 'config.json');
+  integrationPath = join(tmpHome, 'integrations', 'mcp.json');
 });
 
 afterEach(() => {
@@ -41,6 +43,12 @@ function writeConfig(content: unknown): void {
 }
 
 function readConfig(): { mcpServers?: Record<string, unknown> } {
+  if (existsSync(integrationPath)) {
+    const domain = JSON.parse(readFileSync(integrationPath, 'utf-8')) as {
+      servers?: Record<string, unknown>;
+    };
+    return { mcpServers: domain.servers };
+  }
   if (!existsSync(configPath)) return {};
   return JSON.parse(readFileSync(configPath, 'utf-8')) as {
     mcpServers?: Record<string, unknown>;
@@ -112,11 +120,12 @@ describe('getMcpServerConfig', () => {
 });
 
 describe('upsertMcpServer — insert', () => {
-  it('creates config.json + mcpServers when none exists', () => {
-    expect(existsSync(configPath)).toBe(false);
+  it('creates integrations/mcp.json when none exists', () => {
+    expect(existsSync(integrationPath)).toBe(false);
     upsertMcpServer('foo', makeStdioServer('foo-cmd'));
 
-    expect(existsSync(configPath)).toBe(true);
+    expect(existsSync(integrationPath)).toBe(true);
+    expect(existsSync(configPath)).toBe(false);
     expect(readConfig().mcpServers).toHaveProperty('foo');
   });
 
@@ -132,7 +141,10 @@ describe('upsertMcpServer — insert', () => {
     writeConfig({ provider: 'anthropic', model: 'claude', mcpServers: {} });
     upsertMcpServer('foo', makeStdioServer());
 
-    const persisted = readConfig() as { provider?: string; model?: string };
+    const persisted = JSON.parse(readFileSync(configPath, 'utf8')) as {
+      provider?: string;
+      model?: string;
+    };
     expect(persisted.provider).toBe('anthropic');
     expect(persisted.model).toBe('claude');
   });
@@ -237,9 +249,13 @@ describe('removeMcpServer', () => {
     });
     expect(removeMcpServer('foo')).toBe(true);
 
-    const persisted = readConfig() as { provider?: string; mcpServers?: Record<string, unknown> };
+    const persisted = JSON.parse(readFileSync(configPath, 'utf8')) as {
+      provider?: string;
+      mcpServers?: Record<string, unknown>;
+    };
     expect(persisted.provider).toBe('anthropic');
-    expect(persisted.mcpServers).toEqual({});
+    expect(persisted.mcpServers).toHaveProperty('foo');
+    expect(readConfig().mcpServers).toEqual({});
   });
 });
 

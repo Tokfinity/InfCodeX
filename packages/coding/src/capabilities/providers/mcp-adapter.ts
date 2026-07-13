@@ -33,3 +33,37 @@ export async function registerConfiguredMcpCapabilityProvider(
   await provider.prewarm();
   return provider;
 }
+
+/** Prewarm a complete candidate before atomically replacing the active MCP provider. */
+export async function replaceConfiguredMcpCapabilityProvider(
+  runtime: KodaXExtensionRuntime,
+  servers: McpServersConfig | undefined,
+  options: McpProviderOptions = {},
+): Promise<McpCapabilityProvider | undefined> {
+  const provider = new McpCapabilityProvider(servers, options);
+  if (!provider.hasActiveServers()) {
+    await runtime.replaceCapabilityProvider('mcp', undefined);
+    return undefined;
+  }
+  try {
+    await provider.prewarm({ failOnError: true });
+  } catch (error: unknown) {
+    try {
+      await provider.dispose();
+    } catch (cleanupError: unknown) {
+      throw new AggregateError(
+        [error, cleanupError],
+        'MCP replacement candidate failed preparation and cleanup.',
+      );
+    }
+    throw error;
+  }
+  await runtime.replaceCapabilityProvider('mcp', provider, {
+    source: {
+      kind: 'runtime',
+      id: 'runtime:capability:mcp',
+      label: 'MCP Capability Provider',
+    },
+  });
+  return provider;
+}

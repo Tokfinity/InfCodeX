@@ -248,6 +248,61 @@ describe('FEATURE_267 bidirectional A2A', () => {
     expect(() => parseA2AAgentCard({ name: 'missing-fields' })).toThrow(/Agent Card/i);
   });
 
+  it('hot-reloads publication metadata without replacing execution state', async () => {
+    const options = serverOptions(fakeRuntime(), temporaryRoot());
+    const server = createKodaXA2AServer(options);
+    server.updateHot({
+      agent: { ...options.agent, name: 'Reloaded General Agent', description: 'New public projection.' },
+      limits: { ...options.limits, maxConcurrentTasks: 2 },
+      authentication: options.authentication,
+      authorize: options.authorize,
+    });
+
+    expect(server.agentCard).toMatchObject({
+      name: 'Reloaded General Agent', description: 'New public projection.',
+    });
+    await server.close();
+  });
+
+  it('prepares a user Markdown Agent through the Runtime-owned binding capability', async () => {
+    const base = fakeRuntime();
+    let closed = false;
+    const execution = {
+      async openOwnerSession() { return { ownerSessionId: 'owner-1' }; },
+      async bindLocal() {
+        return {
+          ownerSessionId: 'owner-1', bindingId: 'binding-1',
+          executionPolicyRevision: 'execution-r1', toolPolicyRevision: 'tools-r1',
+          workspaceBindingRevision: 'workspace-r1', skillSetRevision: 'skills-r1',
+          effectiveSkills: [], effectiveTools: ['read'],
+          ref: { source: 'markdown:user' as const, name: 'office-agent' },
+          agentId: 'markdown:user:office-agent', displayName: 'office-agent', description: 'Office',
+          configurationRevision: 'agent-r1',
+        };
+      },
+      async startLocal(input: { sessionId: string }) {
+        return base.runs.start({ sessionId: input.sessionId, input: { type: 'text', text: 'test' } });
+      },
+      async prepareWorkspace() { return temporaryRoot(); },
+      async closeOwnerSession() { closed = true; },
+    };
+    const runtime = { ...base, agents: { execution } } as unknown as KodaXRuntime;
+    const options = serverOptions(runtime, temporaryRoot());
+    const server = await (await import('./server.js')).prepareKodaXA2AServer({
+      ...options,
+      execution: {
+        kind: 'local-agent', agentRef: { source: 'markdown:user', name: 'office-agent' },
+        workspace: { mode: 'managed' },
+        toolPolicy: {
+          workspace: 'read', process: 'deny', network: { mode: 'deny' },
+          tools: [], mcp: {}, skillScripts: {}, subagents: 'deny',
+        },
+      },
+    });
+    await server.close();
+    expect(closed).toBe(true);
+  });
+
   it('serves KodaX inbound and dispatches it through the F258 outbound plane', async () => {
     const runtime = fakeRuntime('A2A completed');
     const server = createKodaXA2AServer(serverOptions(runtime, temporaryRoot()));

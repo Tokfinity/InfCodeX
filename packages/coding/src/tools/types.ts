@@ -50,6 +50,38 @@ export type ToolHandler = ToolHandlerSync | ToolHandlerStreaming;
 import type { ToolSideEffect } from './side-effect.js';
 export type { ToolSideEffect };
 
+export interface RuntimeRemoteWorkspaceBroker {
+  resolveReadablePath(relativePath: string): Promise<string>;
+  stageOutput(suggestedName: string): Promise<{
+    readonly stagingId: string;
+    readonly path: string;
+  }>;
+}
+
+export interface RuntimeRemoteToolContext {
+  readonly workspaceAccess: 'none' | 'read' | 'write';
+  readonly allowedNetworkOrigins: readonly string[];
+  readonly workspace: RuntimeRemoteWorkspaceBroker;
+  readonly signal: AbortSignal;
+}
+
+export type RuntimeRemoteToolDecision =
+  | { readonly allowed: true; readonly input: Readonly<Record<string, unknown>> }
+  | { readonly allowed: false; readonly reason: string };
+
+/** Explicit opt-in contract required before a non-native tool can serve remote callers. */
+export interface RuntimeRemoteToolContract {
+  readonly kind: 'managed-service' | 'narrow';
+  readonly workspaceEffect: 'none' | 'read' | 'write';
+  readonly networkOrigins: readonly string[];
+  readonly credentialHandling: 'none' | 'internal-only';
+  readonly processImplementation: 'none' | 'fixed-host-operation';
+  authorizeCall(
+    input: Readonly<Record<string, unknown>>,
+    context: RuntimeRemoteToolContext,
+  ): Promise<RuntimeRemoteToolDecision>;
+}
+
 /**
  * FEATURE_149 (v0.7.38) — interrupt-on-submit policy for in-flight tools.
  *
@@ -81,6 +113,8 @@ export interface LocalToolDefinition extends KodaXToolDefinition {
    * not optional, to prevent silent drift when new tools are added).
    */
   sideEffect: ToolSideEffect;
+  /** Absent means this tool is not eligible for remote A2A execution. */
+  remoteContract?: RuntimeRemoteToolContract;
 
   /**
    * v0.7.42 — Optional plan-mode override.

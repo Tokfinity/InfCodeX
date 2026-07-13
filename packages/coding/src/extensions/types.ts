@@ -115,7 +115,7 @@ export interface RegisteredHookDiagnostic {
   source: ExtensionContributionSource;
 }
 
-export type ExtensionFailureStage = 'load' | 'reload' | 'event' | 'hook' | 'persistence';
+export type ExtensionFailureStage = 'load' | 'reload' | 'event' | 'hook' | 'persistence' | 'dispose';
 
 export interface ExtensionFailureDiagnostic {
   stage: ExtensionFailureStage;

@@ -36,6 +36,7 @@ export interface RuntimeDaemonHostOptions {
 export interface RuntimeDaemonHost {
   readonly endpoint: RuntimeDaemonEndpoint;
   readonly state: RuntimeDaemonState;
+  readonly closed: Promise<void>;
   unref(): void;
   close(): Promise<void>;
 }
@@ -100,18 +101,24 @@ export async function startRuntimeDaemonHost(
     endpoint: ready.endpoint,
   });
   let closed = false;
+  let signalClosed: (() => void) | undefined;
+  const closedPromise = new Promise<void>((resolve) => { signalClosed = resolve; });
   const closeHost = async (): Promise<void> => {
     if (closed) return;
     closed = true;
-    writeRuntimeDaemonState(options.paths, createHostState(options, 'stopping'));
-    appendRuntimeDaemonLog(options.paths, 'info', 'Runtime daemon stopping.');
-    await server?.close();
-    runResults.clear();
-    await options.runtime.close();
-    appendRuntimeDaemonLog(options.paths, 'info', 'Runtime daemon stopped.');
-    restoreDiagnostics();
-    if (releaseRuntimeDaemonLock(options.lock)) {
-      removeRuntimeDaemonStateFiles(options.paths);
+    try {
+      writeRuntimeDaemonState(options.paths, createHostState(options, 'stopping'));
+      appendRuntimeDaemonLog(options.paths, 'info', 'Runtime daemon stopping.');
+      await server?.close();
+      runResults.clear();
+      await options.runtime.close();
+      appendRuntimeDaemonLog(options.paths, 'info', 'Runtime daemon stopped.');
+      restoreDiagnostics();
+      if (releaseRuntimeDaemonLock(options.lock)) {
+        removeRuntimeDaemonStateFiles(options.paths);
+      }
+    } finally {
+      signalClosed?.();
     }
   };
   requestStop = () => {
@@ -124,6 +131,7 @@ export async function startRuntimeDaemonHost(
   return {
     endpoint: options.endpoint,
     state: ready,
+    closed: closedPromise,
     unref() {
       server?.unref();
     },

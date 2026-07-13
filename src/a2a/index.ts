@@ -4,3 +4,6 @@ export * from './schemas.js';
 export * from './safe-fetch.js';
 export * from './client-executor.js';
 export * from './server.js';
+export * from './config.js';
+export * from './product.js';
+export * from './runtime-config.js';

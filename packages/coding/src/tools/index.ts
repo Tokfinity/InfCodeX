@@ -12,6 +12,10 @@ export type {
   RegisteredToolDefinition,
   ToolDefinitionSource,
   ToolRegistrationOptions,
+  RuntimeRemoteToolContract,
+  RuntimeRemoteToolContext,
+  RuntimeRemoteToolDecision,
+  RuntimeRemoteWorkspaceBroker,
   KodaXRetrievalToolName,
   KodaXRetrievalScope,
   KodaXRetrievalTrust,
@@ -57,6 +61,7 @@ export {
 } from './edit.js';
 export { toolInsertAfterAnchor } from './insert-after-anchor.js';
 export { toolBash } from './bash.js';
+export { toolRunSkillScript } from './skill-script.js';
 export { toolGlob } from './glob.js';
 export { toolGrep } from './grep.js';
 export { toolUndo } from './undo.js';

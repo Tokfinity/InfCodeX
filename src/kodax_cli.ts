@@ -143,7 +143,8 @@ import {
   FileSessionStorage,
   dedupeSessions,
   KODAX_CONFIG_FILE,
-  ensureExampleConfigFile,
+  KODAX_DIR,
+  ensureExampleConfigFiles,
   resolveInteractiveSurfacePreference,
   runInteractiveMode,
   runInkInteractiveMode,
@@ -154,6 +155,13 @@ import {
   type SessionDedupeReport,
 } from '@kodax-ai/repl';
 import type { AcpPermissionMode } from './acp_server.js';
+import { configureIntegrationCommands } from './integration-cli.js';
+import { startIntegrationHotReload, type IntegrationHotReloadHandle } from './integration-hot-reload.js';
+import {
+  createConfiguredA2ARuntimeIntegration,
+  type ConfiguredA2ARuntimeHandle,
+} from './a2a/runtime-config.js';
+import { runAsrtBrokerProcess } from './sandbox-runtime.js';
 export {
   ACP_PERMISSION_MODES,
   getDefaultCommandDir,
@@ -997,20 +1005,30 @@ async function serveDaemonCommand(input: {
   readonly sessionsDir?: string;
   readonly permissionTimeoutMs?: number;
 }): Promise<void> {
-  const extensionRuntime = await createDaemonOwnedExtensionRuntime();
+  const extensions = await createDaemonOwnedExtensionRuntime();
+  const a2aIntegration = createConfiguredA2ARuntimeIntegration({
+    configHome: KODAX_DIR,
+    onEvent: (message) => console.error(chalk.dim(`[integrations] ${message}`)),
+  });
+  let ownedRuntime: KodaXRuntime | undefined;
+  let a2aHandle: ConfiguredA2ARuntimeHandle | undefined;
   try {
     const lease = await acquireRuntimeDaemonLease({
       profile: input.profile,
       homeDir: input.homeDir,
-      createRuntime: () => createKodaXRuntime({
-        mode: 'embedded',
-        profile: input.profile,
-        homeDir: input.homeDir,
-        sessionsDir: input.sessionsDir ?? path.join(input.homeDir, '.kodax', 'sessions'),
-        defaultProvider: input.provider,
-        defaultModel: input.model,
-        permissionTimeoutMs: input.permissionTimeoutMs,
-      }),
+      createRuntime: async () => {
+        ownedRuntime = await createKodaXRuntime({
+          mode: 'embedded',
+          profile: input.profile,
+          homeDir: input.homeDir,
+          sessionsDir: input.sessionsDir ?? path.join(input.homeDir, '.kodax', 'sessions'),
+          defaultProvider: input.provider,
+          defaultModel: input.model,
+          permissionTimeoutMs: input.permissionTimeoutMs,
+          externalAgents: a2aIntegration.runtimeOptions,
+        });
+        return ownedRuntime;
+      },
     });
     if (!lease.ownsHost) {
       await lease.close();
@@ -1018,14 +1036,25 @@ async function serveDaemonCommand(input: {
       console.log(chalk.yellow(`KodaX runtime daemon already owned by PID ${observation.state?.pid ?? 'unknown'}.`));
       return;
     }
-
-    await waitForShutdownSignal(() => lease.shutdown());
+    if (!ownedRuntime) throw new Error('Runtime daemon owner was not created.');
+    try {
+      a2aHandle = await a2aIntegration.start(ownedRuntime);
+      await waitForShutdownSignal(() => lease.shutdown(), lease.hostClosed);
+    } finally {
+      a2aHandle?.close();
+      a2aHandle = undefined;
+      await lease.shutdown();
+    }
   } finally {
-    await extensionRuntime?.dispose();
+    extensions.hotReload.close();
+    await extensions.runtime.dispose();
   }
 }
 
-async function createDaemonOwnedExtensionRuntime(): Promise<ReturnType<typeof createExtensionRuntime> | undefined> {
+async function createDaemonOwnedExtensionRuntime(): Promise<{
+  readonly runtime: ReturnType<typeof createExtensionRuntime>;
+  readonly hotReload: IntegrationHotReloadHandle;
+}> {
   const config = prepareRuntimeConfig();
   const configWithExtensions = config as typeof config & { extensions?: string[] };
   const configured = Array.isArray(configWithExtensions.extensions)
@@ -1039,10 +1068,6 @@ async function createDaemonOwnedExtensionRuntime(): Promise<ReturnType<typeof cr
     await dedupeExtensionPathsByEntrypoint(configured),
   );
   const configuredOnly = await dedupeExtensionPathsByEntrypoint(configured);
-  if (active.length === 0 && configuredOnly.length === 0 && !hasConfiguredMcpServers(configWithExtensions)) {
-    return undefined;
-  }
-
   const runtime = createExtensionRuntime({ config });
   await registerConfiguredMcpCapabilityProvider(runtime, configWithExtensions.mcpServers, {
     reverse: buildMcpReverseCapabilities({ cwd: process.cwd(), enableElicitation: false }),
@@ -1053,7 +1078,14 @@ async function createDaemonOwnedExtensionRuntime(): Promise<ReturnType<typeof cr
   await loader.loadExtensions(active, { continueOnError: true, loadSource: 'discovery' });
   await loader.loadExtensions(configuredOnly, { continueOnError: true, loadSource: 'config' });
   runtime.activate();
-  return runtime;
+  const hotReload = await startIntegrationHotReload({
+    runtime,
+    mcpOptions: {
+      reverse: buildMcpReverseCapabilities({ cwd: process.cwd(), enableElicitation: false }),
+    },
+    onEvent: (message) => console.error(chalk.dim(`[integrations] ${message}`)),
+  });
+  return { runtime, hotReload };
 }
 
 async function stopDaemonCommand(input: {
@@ -1425,16 +1457,25 @@ async function waitForDaemonProcessExit(pid: number, timeoutMs: number): Promise
   return true;
 }
 
-function waitForShutdownSignal(onShutdown: () => Promise<void>): Promise<void> {
+function waitForShutdownSignal(
+  onShutdown: () => Promise<void>,
+  hostClosed?: Promise<void>,
+): Promise<void> {
   return new Promise((resolve, reject) => {
     let closing = false;
+    const finish = (): void => {
+      process.off('SIGINT', close);
+      process.off('SIGTERM', close);
+      resolve();
+    };
     const close = (): void => {
       if (closing) return;
       closing = true;
-      void onShutdown().then(resolve, reject);
+      void onShutdown().then(finish, reject);
     };
     process.once('SIGINT', close);
     process.once('SIGTERM', close);
+    void hostClosed?.then(finish, reject);
   });
 }
 
@@ -1634,6 +1675,12 @@ const CLI_SUBCOMMAND_NAMES = new Set([
   'doctor',
   'daemon',
   'completion',
+  'config',
+  'integrations',
+  'mcp',
+  'extensions',
+  'a2a',
+  'sandbox',
 ]);
 
 function collectRepeatedOption(value: string, previous: string[] = []): string[] {
@@ -1953,6 +2000,11 @@ async function main() {
   // addons. Opt-out: KODAX_DISABLE_HARDENING=1. Debug-preserving (no
   // PR_SET_DUMPABLE). No-op on Windows.
   applyProcessHardening();
+  if (argv[0] === '__asrt-broker') {
+    if (!argv[1]) throw new Error('Missing internal ASRT broker request.');
+    process.exitCode = await runAsrtBrokerProcess(argv[1]);
+    return;
+  }
   if (!isDaemonManagementCommand) {
     await cleanupRegisteredManagedChildren();
   }
@@ -1991,6 +2043,7 @@ async function main() {
     .name('kodax')
     .description('KodaX - Intelligent Coding Agent')
     .version(version));
+  configureIntegrationCommands(program, { version });
 
   // ============== completion subcommand ==============
   program
@@ -2003,7 +2056,7 @@ async function main() {
       const effortModes = 'off auto low medium high xhigh max';
       const agentModes = 'ama amaw sa';
       const repoModes = 'auto full light off';
-      const rootSubcommands = 'acp skill tools sessions constructed doctor daemon completion';
+      const rootSubcommands = 'acp skill tools sessions constructed doctor daemon completion config integrations mcp extensions a2a sandbox';
       const allOptions = [
         '-p', '-c', '-r', '-n', '-m', '-t', '-s', '-y', '-h',
         '--help', '--print', '--mode', '--runtime-mode', '--continue', '--resume', '--new',
@@ -2047,6 +2100,12 @@ _kodax_complete() {
     tools) COMPREPLY=( $(compgen -W "${toolsSubcommands}" -- "\${cur}") ); return 0 ;;
     sessions) COMPREPLY=( $(compgen -W "${sessionsSubcommands}" -- "\${cur}") ); return 0 ;;
     constructed) COMPREPLY=( $(compgen -W "${constructedSubcommands}" -- "\${cur}") ); return 0 ;;
+    config) COMPREPLY=( $(compgen -W "template paths" -- "\${cur}") ); return 0 ;;
+    integrations) COMPREPLY=( $(compgen -W "status validate reload migrate" -- "\${cur}") ); return 0 ;;
+    mcp) COMPREPLY=( $(compgen -W "list add remove" -- "\${cur}") ); return 0 ;;
+    extensions) COMPREPLY=( $(compgen -W "list add remove reload" -- "\${cur}") ); return 0 ;;
+    a2a) COMPREPLY=( $(compgen -W "list add remove test call expose serve" -- "\${cur}") ); return 0 ;;
+    sandbox) COMPREPLY=( $(compgen -W "doctor setup" -- "\${cur}") ); return 0 ;;
   esac
 
   if [[ "\${cur}" == -* ]]; then
@@ -2112,6 +2171,12 @@ complete -c kodax -n '__fish_seen_subcommand_from skill' -a '${skillSubcommands}
 complete -c kodax -n '__fish_seen_subcommand_from tools' -a '${toolsSubcommands}' -d 'Tools subcommand'
 complete -c kodax -n '__fish_seen_subcommand_from sessions' -a '${sessionsSubcommands}' -d 'Sessions subcommand'
 complete -c kodax -n '__fish_seen_subcommand_from constructed' -a '${constructedSubcommands}' -d 'Constructed subcommand'
+complete -c kodax -n '__fish_seen_subcommand_from config' -a 'template paths' -d 'Config subcommand'
+complete -c kodax -n '__fish_seen_subcommand_from integrations' -a 'status validate reload migrate' -d 'Integration subcommand'
+complete -c kodax -n '__fish_seen_subcommand_from mcp' -a 'list add remove' -d 'MCP subcommand'
+complete -c kodax -n '__fish_seen_subcommand_from extensions' -a 'list add remove reload' -d 'Extension subcommand'
+complete -c kodax -n '__fish_seen_subcommand_from a2a' -a 'list add remove test call expose serve' -d 'A2A subcommand'
+complete -c kodax -n '__fish_seen_subcommand_from sandbox' -a 'doctor setup' -d 'Sandbox subcommand'
 complete -c kodax -s h -l help -d 'Show help'
 complete -c kodax -s p -l print -d 'Print mode' -r
 complete -c kodax -l mode -d 'Output mode' -xa 'json'
@@ -2801,7 +2866,6 @@ complete -c kodax -l version -d 'Show version'`);
     ...configuredOnlyExtensions,
     ...dedupedCliExtensions,
   ];
-  const hasActiveMcp = hasConfiguredMcpServers(configWithExtensions);
   const providerOverride = opts.provider ?? process.env.KODAX_PROVIDER;
   const selectedProvider = resolveCliProviderSelection(
     opts.provider,
@@ -2842,12 +2906,20 @@ complete -c kodax -l version -d 'Show version'`);
     print: opts.print ? true : false,
   };
   let extensionRuntime: ReturnType<typeof createExtensionRuntime> | undefined;
+  let integrationHotReload: IntegrationHotReloadHandle | undefined;
+  let a2aRuntimeHandle: ConfiguredA2ARuntimeHandle | undefined;
   let cliRuntime: KodaXRuntime | undefined;
   let shouldHardExitAfterInteractiveCleanup = false;
 
   const getCliRuntime = async (): Promise<KodaXRuntime> => {
     if (cliRuntime !== undefined) return cliRuntime;
     const mode = options.runtimeMode ?? 'embedded';
+    const a2aIntegration = mode === 'embedded'
+      ? createConfiguredA2ARuntimeIntegration({
+          configHome: KODAX_DIR,
+          onEvent: (message) => console.error(chalk.dim(`[integrations] ${message}`)),
+        })
+      : undefined;
     cliRuntime = await createKodaXRuntime({
       mode,
       homeDir: resolveDefaultRuntimeDaemonHomeDir(),
@@ -2855,7 +2927,9 @@ complete -c kodax -l version -d 'Show version'`);
       autoStartDaemon: mode === 'daemon',
       defaultProvider: options.provider,
       ...(options.model !== undefined ? { defaultModel: options.model } : {}),
+      ...(a2aIntegration ? { externalAgents: a2aIntegration.runtimeOptions } : {}),
     });
+    if (a2aIntegration) a2aRuntimeHandle = await a2aIntegration.start(cliRuntime);
     return cliRuntime;
   };
 
@@ -2993,7 +3067,7 @@ complete -c kodax -l version -d 'Show version'`);
       + 'Add the extension to the daemon profile config or use --runtime-mode embedded.',
     );
   }
-  if (selectedRuntimeMode !== 'daemon' && ((options.extensions?.length ?? 0) > 0 || hasActiveMcp)) {
+  if (selectedRuntimeMode !== 'daemon') {
     extensionRuntime = createExtensionRuntime({ config });
     // FEATURE_222 — expose the workspace as MCP roots, and (interactive mode)
     // serve elicitation through the REPL's live ask-user dialogs. In print /
@@ -3022,6 +3096,13 @@ complete -c kodax -l version -d 'Show version'`);
     });
     options.extensionRuntime = extensionRuntime;
     extensionRuntime.activate();
+    integrationHotReload = await startIntegrationHotReload({
+      runtime: extensionRuntime,
+      mcpOptions: {
+        reverse: buildMcpReverseCapabilities({ cwd: process.cwd(), enableElicitation: true }),
+      },
+      onEvent: (message) => console.error(chalk.dim(`[integrations] ${message}`)),
+    });
   }
 
   // Command dispatch for /command-style invocations.
@@ -3109,11 +3190,12 @@ complete -c kodax -l version -d 'Show version'`);
 
       // F1 — first launch with no config.json: drop a commented config.example.jsonc
       // reference next to it and point the user at it (one time only).
-      const exampleConfigPath = ensureExampleConfigFile();
-      if (exampleConfigPath) {
+      const exampleConfigPaths = ensureExampleConfigFiles();
+      if (exampleConfigPaths.length > 0) {
         console.error(chalk.dim(
-          `\n[First launch] No config found. Wrote an annotated example to ${exampleConfigPath}\n` +
-          `Copy the fields you need into config.json (custom providers, models, thinking config).\n`,
+          `\n[Configuration] Wrote missing annotated examples:\n` +
+          `${exampleConfigPaths.map((file) => `  ${file}`).join('\n')}\n` +
+          `Core settings belong in config.json; integrations belong in integrations/*.json.\n`,
         ));
       }
 
@@ -3163,6 +3245,8 @@ complete -c kodax -l version -d 'Show version'`);
   } finally {
     let runtimeCloseFailed = false;
     let runtimeCloseError: unknown;
+    a2aRuntimeHandle?.close();
+    a2aRuntimeHandle = undefined;
     try {
       await cliRuntime?.close();
     } catch (error: unknown) {
@@ -3170,6 +3254,8 @@ complete -c kodax -l version -d 'Show version'`);
       runtimeCloseError = error;
     }
     cliRuntime = undefined;
+    integrationHotReload?.close();
+    integrationHotReload = undefined;
     await extensionRuntime?.dispose();
     extensionRuntime = undefined;
     await shutdownDefaultLspService();

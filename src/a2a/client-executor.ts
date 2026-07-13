@@ -431,12 +431,19 @@ class A2AClientExecutor implements AgentExecutor {
   }
 }
 
-export function createA2AAgentExecutorFactory(options: A2AClientOptions): AgentExecutorFactory {
+export type A2AClientOptionsResolver = (
+  registration: ExternalAgentRegistration,
+) => A2AClientOptions;
+
+export function createA2AAgentExecutorFactory(
+  options: A2AClientOptions | A2AClientOptionsResolver,
+): AgentExecutorFactory {
   return {
     executorId: A2A_EXECUTOR_ID,
     protocol: 'a2a',
     async create(registration, context) {
-      return new A2AClientExecutor(registration, context, options);
+      const resolved = typeof options === 'function' ? options(registration) : options;
+      return new A2AClientExecutor(registration, context, resolved);
     },
   };
 }

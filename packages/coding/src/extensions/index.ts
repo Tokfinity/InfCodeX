@@ -42,6 +42,7 @@ export {
 // runtime adapter (the function below) now lives beside the package boundary.
 export {
   registerConfiguredMcpCapabilityProvider,
+  replaceConfiguredMcpCapabilityProvider,
 } from '../capabilities/providers/mcp-adapter.js';
 
 // FEATURE_222 — host helper that builds the MCP reverse-capability handlers

@@ -86,7 +86,10 @@ export {
   isProviderConfigured,
   hydrateProcessEnvFromShell,
   loadConfig,
+  ensureExampleConfigFiles,
   ensureExampleConfigFile,
+  getConfigTemplate,
+  CONFIG_TEMPLATES,
   prepareRuntimeConfig,
   resolveRuntimeProviderSelection,
   resolveRuntimeModelSelection,
@@ -99,8 +102,10 @@ export {
   KODAX_SESSIONS_DIR,
   KODAX_CONFIG_FILE,
   KODAX_EXAMPLE_CONFIG_FILE,
+  KODAX_INTEGRATION_EXAMPLE_FILES,
   PREVIEW_MAX_LENGTH,
 } from "./common/utils.js";
+export type { ConfigTemplateName } from "./common/utils.js";
 
 // === Custom provider CRUD (v0.7.42 SDK export) ===
 // SDK embedders (KodaX Space etc.) can add / remove `customProviders`
@@ -127,6 +132,32 @@ export {
   removeMcpServer,
   validateMcpServerConfig,
 } from "./common/mcp-servers.js";
+
+export {
+  IntegrationConfigController,
+  migrateLegacyIntegrationConfig,
+  planLegacyIntegrationMigration,
+  parseExtensionsIntegrationDocument,
+  parseMcpIntegrationDocument,
+  readExtensionsIntegration,
+  readMcpIntegration,
+  resolveIntegrationConfigPath,
+  writeIntegrationDocument,
+} from "./common/integration-config.js";
+export type {
+  ExtensionsIntegrationDocument,
+  IntegrationConfigDiagnostic,
+  IntegrationConfigListener,
+  IntegrationConfigSnapshot,
+  IntegrationConfigSource,
+  IntegrationConfigStatus,
+  IntegrationDocumentValidator,
+  IntegrationDomain,
+  LegacyIntegrationMigrationDomainPlan,
+  LegacyIntegrationMigrationPlan,
+  LegacyIntegrationMigrationResult,
+  McpIntegrationDocument,
+} from "./common/integration-config.js";
 
 // === 会话存储 ===
 export { FileSessionStorage } from "./interactive/storage.js";

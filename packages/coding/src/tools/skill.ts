@@ -54,9 +54,10 @@ export async function toolSkill(
   const cwd = ctx.executionCwd ?? process.cwd();
   const projectRoot = ctx.gitRoot ?? cwd;
 
-  const registry = getSkillRegistry(projectRoot);
+  const registry = ctx.skillRegistry ?? getSkillRegistry(projectRoot);
   if (registry.size === 0) {
-    await initializeSkillRegistry(projectRoot);
+    if (ctx.skillRegistry) await ctx.skillRegistry.discover();
+    else await initializeSkillRegistry(projectRoot);
   }
 
   if (!registry.has(skillName)) {

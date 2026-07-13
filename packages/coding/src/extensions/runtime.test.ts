@@ -1051,6 +1051,27 @@ describe('KodaXExtensionRuntime — FEATURE_191 registerAgent', () => {
     // Agent must NOT be registered on rejection.
     expect(resolveConstructedAgent('rejected')).toBeUndefined();
   });
+
+  it('atomically replaces a capability provider and disposes superseded state once', async () => {
+    const runtime = createExtensionRuntime();
+    const firstDispose = vi.fn(async () => undefined);
+    const secondDispose = vi.fn(async () => undefined);
+    runtime.registerCapabilityProvider({
+      id: 'hot-provider', kinds: ['tool'],
+      search: async () => [{ version: 1 }], dispose: firstDispose,
+    });
+    await runtime.replaceCapabilityProvider('hot-provider', {
+      id: 'hot-provider', kinds: ['tool'],
+      search: async () => [{ version: 2 }], dispose: secondDispose,
+    });
+
+    expect(runtime.hasCapabilityProvider('hot-provider')).toBe(true);
+    await expect(runtime.searchCapabilities('hot-provider', '')).resolves.toEqual([{ version: 2 }]);
+    expect(firstDispose).toHaveBeenCalledOnce();
+    await runtime.dispose();
+    expect(firstDispose).toHaveBeenCalledOnce();
+    expect(secondDispose).toHaveBeenCalledOnce();
+  });
 });
 
 declare global {

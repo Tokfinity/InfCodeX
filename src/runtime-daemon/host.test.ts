@@ -130,6 +130,7 @@ describe('runtime daemon host', () => {
       },
     });
     await expect(client.request('daemon.stop')).resolves.toEqual({ ok: true });
+    await host.closed;
     await waitForHostStateRemoval(paths);
 
     expect(runtime.closed).toBe(true);

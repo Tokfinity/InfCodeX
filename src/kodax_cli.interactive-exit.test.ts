@@ -52,6 +52,7 @@ afterEach(() => {
   vi.doUnmock('@kodax-ai/coding');
   vi.doUnmock('@kodax-ai/repl');
   vi.doUnmock('./sdk-runtime.js');
+  vi.doUnmock('./a2a/runtime-config.js');
   process.argv = originalArgv;
   if (originalVitest === undefined) {
     delete process.env.VITEST;
@@ -233,6 +234,7 @@ async function importMainWithMocks(options: {
       }),
       dispose: runtimeDispose,
       loadExtensions: vi.fn(async () => undefined),
+      reconcileExtensions: vi.fn(async () => undefined),
     })),
     dedupeExtensionPathsByEntrypoint: vi.fn(async (paths: readonly string[]) => [...paths]),
     discoverDefaultExtensions: vi.fn(async () => []),
@@ -240,6 +242,7 @@ async function importMainWithMocks(options: {
     registerConfiguredMcpCapabilityProvider: vi.fn(async () => {
       calls.push('register-mcp');
     }),
+    replaceConfiguredMcpCapabilityProvider: vi.fn(async () => undefined),
     buildMcpReverseCapabilities: vi.fn(() => ({})),
     KODAX_DEFAULT_PROVIDER: 'mock-provider',
     checkPromiseSignal: vi.fn(),
@@ -257,6 +260,28 @@ async function importMainWithMocks(options: {
   }));
 
   vi.doMock('@kodax-ai/repl', () => {
+    class MockIntegrationConfigController {
+      private readonly domain: 'mcp' | 'extensions';
+
+      constructor(options: { readonly domain: 'mcp' | 'extensions' }) {
+        this.domain = options.domain;
+      }
+
+      initialize(): Promise<{ readonly revision: string; readonly document: object }> {
+        return Promise.resolve({
+          revision: 'default',
+          document: this.domain === 'mcp' ? { version: 1, servers: {} } : { version: 1, paths: [] },
+        });
+      }
+
+      subscribe(): () => void { return () => undefined; }
+      startWatching(): void {}
+      close(): void {}
+      status(): { readonly domain: string; readonly state: 'watching' } {
+        return { domain: this.domain, state: 'watching' };
+      }
+    }
+
     class MockFileSessionStorage {
       cleanupOldSessions(): Promise<void> {
         calls.push('session-retention');
@@ -273,7 +298,13 @@ async function importMainWithMocks(options: {
       FileSessionStorage: MockFileSessionStorage,
       dedupeSessions: vi.fn(),
       KODAX_CONFIG_FILE: 'C:/Users/test/.kodax/config.json',
-      ensureExampleConfigFile: vi.fn(() => undefined),
+      KODAX_DIR: 'C:/Users/test/.kodax',
+      IntegrationConfigController: MockIntegrationConfigController,
+      parseMcpIntegrationDocument: vi.fn((value: unknown) => value),
+      parseExtensionsIntegrationDocument: vi.fn((value: unknown) => value),
+      readMcpIntegration: vi.fn(() => ({ revision: 'default', document: { version: 1, servers: {} } })),
+      readExtensionsIntegration: vi.fn(() => ({ revision: 'default', document: { version: 1, paths: [] } })),
+      ensureExampleConfigFiles: vi.fn(() => []),
       resolveInteractiveSurfacePreference: vi.fn(() => surface),
       runInteractiveMode,
       runInkInteractiveMode,
@@ -285,6 +316,16 @@ async function importMainWithMocks(options: {
       createKodaXRuntime,
     }));
   }
+  vi.doMock('./a2a/runtime-config.js', () => ({
+    createConfiguredA2ARuntimeIntegration: vi.fn(() => ({
+      runtimeOptions: { factories: [], policy: vi.fn(() => ({ allowed: true })) },
+      start: vi.fn(async () => ({
+        status: vi.fn(() => ({ domain: 'a2a' })),
+        reload: vi.fn(async () => undefined),
+        close: vi.fn(),
+      })),
+    })),
+  }));
 
   const module = await import('./kodax_cli.js');
   return {
@@ -452,6 +493,7 @@ describe('CLI interactive exit lifecycle', () => {
       profile: 'default',
       autoStartDaemon: true,
     });
+    expect(harness.runtimeOptions[0]).not.toHaveProperty('externalAgents');
     expect(harness.runtimeStarts).toHaveLength(1);
     expect(harness.runtimeStarts[0]).toMatchObject({
       sessionId: 'cli-session-1',
@@ -497,6 +539,7 @@ describe('CLI interactive exit lifecycle', () => {
       mode: 'embedded',
       defaultProvider: 'env-provider',
       autoStartDaemon: false,
+      externalAgents: expect.objectContaining({ factories: [] }),
     });
   });
 

@@ -35,6 +35,7 @@ export interface RuntimeDaemonLease {
   readonly endpoint: RuntimeDaemonEndpoint;
   readonly paths: RuntimeDaemonPaths;
   readonly ownsHost: boolean;
+  readonly hostClosed?: Promise<void>;
   close(): Promise<void>;
   shutdown(): Promise<void>;
 }
@@ -168,6 +169,7 @@ function createOwnedLease(
     endpoint,
     paths,
     ownsHost: true,
+    hostClosed: host.closed,
     async close() {
       if (transportClosed) return;
       transportClosed = true;

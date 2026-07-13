@@ -97,6 +97,7 @@ import type {
   WorkflowEventCorrelation,
   WorkflowProcessEvent,
   SkillDynamicContextExecutor,
+  ISkillRegistry,
   AgentExecutorPlaneBinding,
 } from '@kodax-ai/agent';
 // v0.7.35.1 FEATURE_142 (A-R4): AMA / harness types live in @kodax-ai/llm
@@ -1273,6 +1274,37 @@ export interface KodaXToolVisibilityMeta {
  */
 export type KodaXToolVisibilityPolicy = (tool: KodaXToolVisibilityMeta) => boolean;
 
+export interface KodaXSkillScriptInputFile {
+  /** Workspace-relative source path copied into the isolated staging directory. */
+  readonly path: string;
+  /** Optional staging-relative name; defaults to the source basename. */
+  readonly as?: string;
+}
+
+export interface KodaXSkillScriptOutputFile {
+  /** Staging-relative path produced by the script. */
+  readonly path: string;
+  /** Workspace-relative destination populated after a successful run. */
+  readonly target: string;
+}
+
+export interface KodaXSkillScriptRunInput {
+  readonly skill: string;
+  readonly script: string;
+  readonly args: readonly string[];
+  readonly inputs: readonly KodaXSkillScriptInputFile[];
+  readonly outputs: readonly KodaXSkillScriptOutputFile[];
+}
+
+/** Run-scoped, fail-closed broker used by the remote-only Skill script tool. */
+export interface KodaXSkillScriptRunner {
+  run(input: KodaXSkillScriptRunInput, context: {
+    readonly workspaceRoot: string;
+    readonly signal?: AbortSignal;
+  }): Promise<string>;
+  dispose(): Promise<void>;
+}
+
 export interface KodaXContextOptions {
   /** FEATURE_260 runtime-owned identity used for scoped memory reads. */
   memoryIdentity?: MemoryContextIdentity;
@@ -1321,6 +1353,10 @@ export interface KodaXContextOptions {
   toolConstructionMode?: boolean;
   /** Skills system prompt snippet for progressive disclosure - Skills 系统提示词片段（渐进式披露） */
   skillsPrompt?: string;
+  /** Optional run-scoped registry used to pin and restrict Skill invocation. */
+  skillRegistry?: ISkillRegistry;
+  /** Remote-runtime broker for explicitly admitted, OS-sandboxed Skill scripts. */
+  skillScriptRunner?: KodaXSkillScriptRunner;
   rawUserInput?: string;
   skillInvocation?: KodaXSkillInvocationContext;
   /** Optional repository-intelligence snapshot injected into the system prompt. */
@@ -1961,6 +1997,10 @@ export interface KodaXToolExecutionContext {
   /** FEATURE_222 skill security — host policy for skill `!`cmd`` dynamic-context,
    *  forwarded from `KodaXOptions.skillDynamicContext`. Consumed by the `skill` tool. */
   skillDynamicContext?: KodaXSkillDynamicContextPolicy;
+  /** Runtime-bound Skill registry; avoids process-global cross-session drift. */
+  skillRegistry?: ISkillRegistry;
+  /** Present only when the host admitted exact Skill scripts for this run. */
+  skillScriptRunner?: KodaXSkillScriptRunner;
   /** Working directory used to resolve relative paths and execute shell commands. */
   executionCwd?: string;
   /** Session-scoped directory for helper scripts and scratch outputs. */
