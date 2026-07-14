@@ -10,6 +10,7 @@ import type {
   RuntimeClientCapabilities,
   RuntimeCompactSessionInput,
   RuntimeCreateSessionInput,
+  RuntimeDaemonPreflight,
   RuntimeEvent,
   RuntimeEventFilter,
   RuntimeEventReplayFilter,
@@ -23,9 +24,11 @@ import type {
   RuntimeRewindSessionInput,
   RuntimeRunFilter,
   RuntimeRunResult,
+  RuntimeRunStatus,
   RuntimeSetActiveEntryInput,
   RuntimeSessionFilter,
   RuntimeSessionSettingsPatch,
+  RuntimeSessionObservationSnapshot,
   RuntimeStartRunInput,
   RuntimeSubmitInput,
   RuntimeSubscription,
@@ -53,6 +56,8 @@ import {
   createRuntimeDaemonReverseBridge,
   runtimeDaemonReverseBridgeLimits,
   type RuntimeDaemonReverseBridge,
+  type RuntimeDaemonReverseBridgeHub,
+  type RuntimeDaemonReverseBridgeHubAttachment,
 } from './reverse-bridge.js';
 
 export type RuntimeDaemonNotificationSink = (
@@ -66,6 +71,7 @@ export interface RuntimeDaemonDispatcherOptions {
   readonly authToken?: string;
   readonly status?: () => Promise<unknown> | unknown;
   readonly stop?: () => Promise<unknown> | unknown;
+  readonly preflight?: () => Promise<RuntimeDaemonPreflight> | RuntimeDaemonPreflight;
   readonly logs?: () => Promise<unknown> | unknown;
   readonly config?: () => Promise<unknown> | unknown;
   readonly providerList?: () => Promise<unknown> | unknown;
@@ -75,6 +81,8 @@ export interface RuntimeDaemonDispatcherOptions {
   readonly controlJournal?: RuntimeControlJournal;
   readonly requireOperationEnvelope?: boolean;
   readonly grantedScopes?: readonly RuntimeGrantedScope[];
+  readonly reverseBridgeHub?: RuntimeDaemonReverseBridgeHub;
+  readonly durableHostToolInvocations?: boolean;
 }
 
 export interface RuntimeDaemonDispatcher {
@@ -85,6 +93,9 @@ export interface RuntimeDaemonDispatcher {
 }
 
 const MAX_DAEMON_RUN_RESULT_RECORDS = 1_000;
+const CODER_DAEMON_SESSION_SURFACES = [
+  'code', 'cli', 'repl', 'acp', 'a2a', 'sdk', 'ide', 'space-desktop',
+] as const;
 
 const ALL_RUNTIME_GRANTED_SCOPES = [
   'session:observe',
@@ -132,10 +143,11 @@ const RUNTIME_METHOD_SCOPES: ReadonlyMap<RuntimeDaemonMethod, RuntimeGrantedScop
   ...scopeEntries('permission:grant-admin', ['permission.grants.revoke']),
   ...scopeEntries('interaction:respond', ['user_input.respond', 'user_input.dismiss']),
   ...scopeEntries('credential:register', [
-    'credential.register', 'credential.revoke', 'credential.supply',
+    'credential.register', 'credential.get', 'credential.revoke', 'credential.supply',
   ]),
   ...scopeEntries('host-tool:register', [
-    'host_tool.register', 'host_tool.revoke', 'host_tool.complete',
+    'host_tool.register', 'host_tool.get', 'host_tool.invocation.get',
+    'host_tool.revoke', 'host_tool.complete',
   ]),
   ...scopeEntries('integration:admin', [
     'config.patch', 'config.reload', 'provider.custom.upsert', 'provider.custom.remove',
@@ -150,7 +162,7 @@ const RUNTIME_METHOD_SCOPES: ReadonlyMap<RuntimeDaemonMethod, RuntimeGrantedScop
     'agentTasks.list', 'agentTasks.get', 'agentTasks.events', 'agentTasks.wait', 'agentTasks.start',
     'agentTasks.sendInput', 'agentTasks.cancel', 'agentTasks.reconcile',
   ]),
-  ...scopeEntries('daemon:admin', ['runtime.shutdown', 'daemon.stop']),
+  ...scopeEntries('daemon:admin', ['runtime.shutdown', 'daemon.stop', 'daemon.preflight']),
 ]);
 
 const UNSCOPED_RUNTIME_METHODS = RUNTIME_DAEMON_METHODS.filter((method) => (
@@ -226,7 +238,10 @@ export function createRuntimeDaemonDispatcher(
 ): RuntimeDaemonDispatcher {
   const subscriptions = new Map<string, RuntimeSubscription>();
   const runResults = options.runResults ?? createRuntimeDaemonRunResultStore();
-  const reverseBridge = createRuntimeDaemonReverseBridge(options.notify);
+  const connectionId = `connection_${randomUUID().replace(/-/g, '')}`;
+  const privateReverseBridge = createRuntimeDaemonReverseBridge(options.notify);
+  let reverseBridge = privateReverseBridge;
+  let reverseBridgeAttachment: RuntimeDaemonReverseBridgeHubAttachment | undefined;
   let initialized = false;
   let clientCapabilities: RuntimeClientCapabilities = {};
   let principalId = `client_${randomUUID().replace(/-/g, '')}`;
@@ -333,8 +348,20 @@ export function createRuntimeDaemonDispatcher(
       const result = serializeRuntimeDaemonMethodResult(request.method, dispatched);
       validateDaemonMethodValue(request.method, 'result', result, 'internal_error');
       if (isInitializeMethod(request.method)) {
-        initialized = true;
         clientCapabilities = parseRuntimeClientCapabilities(initializeParams?.capabilities);
+        if (options.reverseBridgeHub !== undefined && options.notify !== undefined) {
+          reverseBridgeAttachment = options.reverseBridgeHub.attach({
+            principalId,
+            connectionId,
+            ...(parseRuntimeClientInstanceSecret(initializeParams?.clientInfo) !== undefined
+              ? { instanceSecret: parseRuntimeClientInstanceSecret(initializeParams?.clientInfo) }
+              : {}),
+            notify: options.notify,
+          });
+          reverseBridge = reverseBridgeAttachment.bridge;
+          privateReverseBridge.close();
+        }
+        initialized = true;
       }
       return createRuntimeDaemonSuccessResponse(request.id, result);
     } catch (error: unknown) {
@@ -348,7 +375,8 @@ export function createRuntimeDaemonDispatcher(
       for (const id of [...subscriptions.keys()]) {
         closeSubscription(id);
       }
-      reverseBridge.close();
+      if (reverseBridgeAttachment !== undefined) reverseBridgeAttachment.close();
+      else reverseBridge.close();
     },
   };
 }
@@ -434,6 +462,12 @@ function parseRuntimeClientPrincipal(value: unknown, fallback: string): string {
   return instanceId;
 }
 
+function parseRuntimeClientInstanceSecret(value: unknown): string | undefined {
+  if (!isRecord(value)) return undefined;
+  const secret = value.instanceSecret;
+  return typeof secret === 'string' ? secret : undefined;
+}
+
 async function dispatchRuntimeDaemonRequest(
   request: RuntimeDaemonRequest,
   options: RuntimeDaemonDispatcherOptions,
@@ -448,6 +482,7 @@ async function dispatchRuntimeDaemonRequest(
   reverseBridge: RuntimeDaemonReverseBridge,
 ): Promise<unknown> {
   const runtime = options.runtime;
+  const runRequirementSource = options.reverseBridgeHub ?? reverseBridge;
 
   switch (request.method) {
     case 'initialize':
@@ -458,6 +493,8 @@ async function dispatchRuntimeDaemonRequest(
           options.capabilities,
           runtime.agents.enabled,
           options.controlJournal,
+          options.reverseBridgeHub !== undefined,
+          options.durableHostToolInvocations === true,
         ),
         principalId,
         ...(options.controlJournal !== undefined
@@ -471,17 +508,27 @@ async function dispatchRuntimeDaemonRequest(
       return runtime.identity;
     case 'daemon.status':
     case 'runtime.status':
-      return options.status ? options.status() : runtime.status.snapshot();
+      return augmentStatusRunRequirements(
+        await (options.status ? options.status() : runtime.status.snapshot()),
+        runRequirementSource,
+      );
     case 'daemon.stop':
     case 'runtime.shutdown':
       return options.stop ? options.stop() : runtime.close().then(() => ({ ok: true }));
     case 'daemon.logs':
       return options.logs ? options.logs() : { entries: [] };
+    case 'daemon.preflight':
+      return augmentPreflightRunRequirements(
+        await (options.preflight ? options.preflight() : runtime.status.preflight()),
+        runRequirementSource,
+      );
     case 'runtime.capabilities':
       return runtimeDaemonCapabilities(
         options.capabilities,
         runtime.agents.enabled,
         options.controlJournal,
+        options.reverseBridgeHub !== undefined,
+        options.durableHostToolInvocations === true,
       );
     case 'operation.get': {
       const params = requireRecord(request.params);
@@ -676,10 +723,13 @@ async function dispatchRuntimeDaemonRequest(
       const subscriptionId = createSubscriptionId();
       const observation = await runtime.sessions.observe(
         requireStringParam(request.params, 'sessionId'),
-        (event) => notify(subscriptionId, event),
+        (event) => notify(subscriptionId, augmentRuntimeEventRequirements(event, runRequirementSource)),
       );
       rememberSubscription(subscriptionId, observation);
-      return { subscriptionId, snapshot: observation.snapshot };
+      return {
+        subscriptionId,
+        snapshot: augmentObservationRunRequirements(observation.snapshot, runRequirementSource),
+      };
     }
     case 'session.fork':
       return runtime.sessions.fork(requireRecord(request.params) as unknown as RuntimeForkSessionInput);
@@ -798,9 +848,13 @@ async function dispatchRuntimeDaemonRequest(
       return result;
     }
     case 'run.get':
-      return runtime.runs.get(requireStringParam(request.params, 'runId'));
+      return augmentRunRequirements(
+        await runtime.runs.get(requireStringParam(request.params, 'runId')),
+        runRequirementSource,
+      );
     case 'run.list':
-      return runtime.runs.list(optionalRecord(request.params) as RuntimeRunFilter | undefined);
+      return (await runtime.runs.list(optionalRecord(request.params) as RuntimeRunFilter | undefined))
+        .map((status) => augmentRunRequirements(status, runRequirementSource));
     case 'run.await': {
       const runId = requireStringParam(request.params, 'runId');
       const result = runResults.get(runId);
@@ -836,26 +890,36 @@ async function dispatchRuntimeDaemonRequest(
     case 'event.subscribe': {
       const params = optionalRecord(request.params) ?? {};
       const filter = optionalRecord(params.filter) as RuntimeEventFilter | undefined;
+      await assertAdmittedSessionId(runtime, filter?.sessionId);
       const subscriptionId = createSubscriptionId();
       const subscription = runtime.events.subscribe(filter ?? {}, (event: RuntimeEvent) => {
-        notify(subscriptionId, event);
+        notify(subscriptionId, augmentRuntimeEventRequirements(event, runRequirementSource));
       });
       rememberSubscription(subscriptionId, subscription);
       return { subscriptionId };
     }
     case 'event.unsubscribe':
       return { ok: closeSubscription(requireStringParam(request.params, 'subscriptionId')) };
-    case 'event.replay':
+    case 'event.replay': {
+      const filter = optionalRecord(request.params) as RuntimeEventReplayFilter | undefined;
+      await assertAdmittedSessionId(runtime, filter?.sessionId);
       return filterReplayForClientCapabilities(
-        await runtime.events.replay(optionalRecord(request.params) as RuntimeEventReplayFilter | undefined),
+        await runtime.events.replay(filter),
         getClientCapabilities(),
-      );
+      ).map((event) => augmentRuntimeEventRequirements(event, runRequirementSource));
+    }
 
     case 'permission.list':
-    case 'permission.listPending':
-      return runtime.permissions.listPending(optionalRecord(request.params) as RuntimePermissionFilter | undefined);
-    case 'permission.request':
-      return runtime.permissions.request(requireRecord(request.params) as unknown as RuntimePermissionRequestInput);
+    case 'permission.listPending': {
+      const filter = optionalRecord(request.params) as RuntimePermissionFilter | undefined;
+      await assertAdmittedSessionId(runtime, filter?.sessionId);
+      return runtime.permissions.listPending(filter);
+    }
+    case 'permission.request': {
+      const input = requireRecord(request.params) as unknown as RuntimePermissionRequestInput;
+      await assertAdmittedSessionId(runtime, input.sessionId);
+      return runtime.permissions.request(input);
+    }
     case 'permission.respond': {
       const params = requireRecord(request.params);
       const runId = optionalStringField(params, 'runId');
@@ -874,10 +938,14 @@ async function dispatchRuntimeDaemonRequest(
         requireIntegerField(params, 'expectedRevision'),
       );
     }
-    case 'user_input.listPending':
-      return runtime.userInputs.listPending(
-        optionalRecord(request.params) as { readonly sessionId?: string; readonly runId?: string } | undefined,
-      );
+    case 'user_input.listPending': {
+      const filter = optionalRecord(request.params) as {
+        readonly sessionId?: string;
+        readonly runId?: string;
+      } | undefined;
+      await assertAdmittedSessionId(runtime, filter?.sessionId);
+      return runtime.userInputs.listPending(filter);
+    }
     case 'user_input.respond': {
       const params = requireRecord(request.params);
       const expectedRevision = optionalIntegerField(params, 'expectedRevision');
@@ -917,6 +985,8 @@ async function dispatchRuntimeDaemonRequest(
           : {}),
       });
     }
+    case 'credential.get':
+      return reverseBridge.getCredential(requireStringParam(request.params, 'leaseId'));
     case 'credential.revoke':
       return reverseBridge.revokeCredential(requireStringParam(request.params, 'leaseId'));
     case 'credential.supply': {
@@ -939,6 +1009,12 @@ async function dispatchRuntimeDaemonRequest(
         tools: parseRuntimeHostToolDescriptors(params.tools),
       });
     }
+    case 'host_tool.get':
+      return reverseBridge.getHostTools(requireStringParam(request.params, 'leaseId'));
+    case 'host_tool.invocation.get':
+      return reverseBridge.getHostToolInvocation(
+        requireStringParam(request.params, 'invocationId'),
+      );
     case 'host_tool.revoke':
       return reverseBridge.revokeHostTools(requireStringParam(request.params, 'leaseId'));
     case 'host_tool.complete': {
@@ -980,6 +1056,10 @@ async function dispatchRuntimeDaemonRequest(
 
     case 'context.budget.get':
       requireContextDiagnosticsCapability(getClientCapabilities());
+      await assertAdmittedSessionId(
+        runtime,
+        optionalStringField(optionalRecord(request.params) ?? {}, 'sessionId'),
+      );
       return latestRuntimeDiagnosticPayload(
         runtime,
         'context.budget.snapshot',
@@ -987,6 +1067,10 @@ async function dispatchRuntimeDaemonRequest(
       );
     case 'tool.exposure.preview':
       requireContextDiagnosticsCapability(getClientCapabilities());
+      await assertAdmittedSessionId(
+        runtime,
+        optionalStringField(optionalRecord(request.params) ?? {}, 'sessionId'),
+      );
       return latestRuntimeDiagnosticPayload(
         runtime,
         'tool.exposure.planned',
@@ -1077,6 +1161,8 @@ function runtimeDaemonCapabilities(
   overrides: Readonly<Record<string, unknown>> = {},
   externalAgents = false,
   controlJournal?: RuntimeControlJournal,
+  reverseBridgeResume = false,
+  durableHostToolInvocations = false,
 ): Record<string, unknown> {
   const reverseBridgeLimits = runtimeDaemonReverseBridgeLimits();
   return {
@@ -1102,18 +1188,57 @@ function runtimeDaemonCapabilities(
       version: 1,
       maxBufferedEvents: 256,
     },
+    sessionAdmission: {
+      version: 1,
+      surfaces: CODER_DAEMON_SESSION_SURFACES,
+      legacySurface: true,
+      partnerDenied: true,
+    },
+    completeObservationSnapshot: {
+      version: 1,
+      transcriptRevision: true,
+      managedTasks: true,
+      queuedInputs: true,
+    },
+    connectionLifecycle: { version: 1 },
+    typedRuntimeEvents: { version: 1 },
+    daemonSafeRunInput: { version: 1 },
+    sharedSessionSettings: {
+      version: 1,
+      keys: [
+        'provider', 'model', 'effort', 'thinking', 'reasoningMode',
+        'permissionMode', 'executionCwd', 'agentMode', 'autoModeEngine',
+      ],
+    },
+    ...(controlJournal !== undefined
+      ? {
+          durableRecoveryQueries: {
+            version: 1,
+            operationResult: true,
+            hostToolInvocation: durableHostToolInvocations,
+            permissionGrants: true,
+            daemonPreflight: true,
+            terminalAcknowledgement: false,
+            terminalAcknowledgementOwner: 'client',
+          },
+        }
+      : {}),
     afterTurnInput: { version: 1 },
     askUserTransport: { version: 1 },
     permissionCas: { version: 1 },
     providerCredentialBroker: {
       version: 1,
-      registrationConnectionBound: true,
+      registrationConnectionBound: !reverseBridgeResume,
+      stableClientResume: reverseBridgeResume,
+      runtimeRestartExpiresLease: true,
       acquiredCredentialSurvivesDisconnect: true,
       requestTimeoutMs: reverseBridgeLimits.callTimeoutMs,
     },
     runBoundHostTools: {
       version: 1,
-      registrationConnectionBound: true,
+      registrationConnectionBound: !reverseBridgeResume,
+      stableClientResume: reverseBridgeResume,
+      invocationStatusQuery: reverseBridgeResume,
       invocationReplay: false,
       invocationTimeoutMs: reverseBridgeLimits.callTimeoutMs,
       maxResultBytes: reverseBridgeLimits.maxResultBytes,
@@ -1140,8 +1265,7 @@ function publicOperationReceipt(
   receipt: ReturnType<RuntimeControlJournal['get']> & {},
 ): Record<string, unknown> {
   if (!receipt) return {};
-  const { result: _result, ...publicReceipt } = receipt;
-  return publicReceipt;
+  return { ...receipt };
 }
 
 function requireExternalAgentsEnabled(runtime: KodaXRuntime): void {
@@ -1163,6 +1287,95 @@ function filterReplayForClientCapabilities(
 ): readonly RuntimeEvent[] {
   if (capabilities.contextDiagnostics === true) return events;
   return events.filter((event) => !isContextDiagnosticRuntimeEvent(event));
+}
+
+async function assertAdmittedSessionId(
+  runtime: KodaXRuntime,
+  sessionId: string | undefined,
+): Promise<void> {
+  if (sessionId !== undefined) await runtime.sessions.transcript(sessionId);
+}
+
+function augmentObservationRunRequirements(
+  snapshot: RuntimeSessionObservationSnapshot,
+  source: RuntimeRunRequirementSource | undefined,
+): RuntimeSessionObservationSnapshot {
+  return {
+    ...snapshot,
+    runs: snapshot.runs.map((status) => augmentRunRequirements(status, source)),
+  };
+}
+
+function augmentStatusRunRequirements(
+  value: unknown,
+  source: RuntimeRunRequirementSource | undefined,
+): unknown {
+  if (!isRecord(value) || !Array.isArray(value.runs)) return value;
+  return {
+    ...value,
+    runs: value.runs.map((status) => (
+      isRuntimeRunStatus(status) ? augmentRunRequirements(status, source) : status
+    )),
+  };
+}
+
+function augmentPreflightRunRequirements(
+  value: RuntimeDaemonPreflight,
+  source: RuntimeRunRequirementSource | undefined,
+): RuntimeDaemonPreflight {
+  return {
+    ...value,
+    activeRuns: value.activeRuns.map((status) => augmentRunRequirements(status, source)),
+    queuedRuns: value.queuedRuns.map((status) => augmentRunRequirements(status, source)),
+  };
+}
+
+function augmentRuntimeEventRequirements(
+  event: RuntimeEvent,
+  source: RuntimeRunRequirementSource | undefined,
+): RuntimeEvent {
+  if (!isRuntimeRunStatus(event.payload)) return event;
+  return { ...event, payload: augmentRunRequirements(event.payload, source) };
+}
+
+type RuntimeRunRequirementSource = Pick<RuntimeDaemonReverseBridge, 'getRunRequirements'>;
+
+function augmentRunRequirements(
+  status: RuntimeRunStatus,
+  source: RuntimeRunRequirementSource | undefined,
+): RuntimeRunStatus {
+  const requirements = source?.getRunRequirements(status.runId);
+  if (requirements === undefined) return status;
+  if (isTerminalRuntimeRunPhase(status.phase)) {
+    return {
+      ...status,
+      requirements: {
+        ...(requirements.credential !== undefined
+          ? { credential: { ...requirements.credential, state: 'terminal' } }
+          : {}),
+        ...(requirements.hostTools !== undefined
+          ? { hostTools: { ...requirements.hostTools, state: 'terminal' } }
+          : {}),
+      },
+    };
+  }
+  return { ...status, requirements };
+}
+
+function isRuntimeRunStatus(value: unknown): value is RuntimeRunStatus {
+  return isRecord(value)
+    && typeof value.runId === 'string'
+    && typeof value.sessionId === 'string'
+    && typeof value.phase === 'string'
+    && typeof value.startedAt === 'string'
+    && typeof value.provider === 'string';
+}
+
+function isTerminalRuntimeRunPhase(phase: RuntimeRunStatus['phase']): boolean {
+  return phase === 'completed'
+    || phase === 'failed'
+    || phase === 'cancelled'
+    || phase === 'interrupted';
 }
 
 function requireContextDiagnosticsCapability(capabilities: RuntimeClientCapabilities): void {
@@ -1548,6 +1761,7 @@ function isRuntimeDaemonErrorCode(value: string): value is RuntimeDaemonErrorCod
     || value === 'permission_denied'
     || value === 'conflict'
     || value === 'not_found'
+    || value === 'session_not_admitted'
     || value === 'cancelled'
     || value === 'overloaded'
     || value === 'client_upgrade_required'

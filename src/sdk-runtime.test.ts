@@ -404,7 +404,7 @@ describe('createKodaXRuntime', () => {
       const session = await runtime.sessions.create({
         title: 'Auto Daemon Session',
         projectPath: tempRoot,
-        surface: 'sdk-test',
+        surface: 'sdk',
       });
 
       expect(runtime.identity).toMatchObject({
@@ -690,7 +690,7 @@ describe('createKodaXRuntime', () => {
     const session = await runtime.sessions.create({
       title: 'Runtime Test',
       projectPath: tempRoot,
-      surface: 'sdk-test',
+      surface: 'sdk',
       profileId: 'coder',
     });
     const listed = await runtime.sessions.list({ limit: 10 });
@@ -1609,6 +1609,37 @@ describe('createKodaXRuntime', () => {
     await runtime.close();
   });
 
+  it('keeps parallel active tools when another tool finishes', async () => {
+    const { createKodaXRuntime } = await import('@kodax-ai/kodax/runtime');
+    const runtime = await createKodaXRuntime({
+      homeDir: tempRoot,
+      sessionsDir: path.join(tempRoot, 'sessions'),
+      defaultProvider: 'mock-provider',
+    });
+    const session = await runtime.sessions.create({ title: 'Parallel Tool Projection' });
+    codingMock.startKodaX.mockImplementation((options: KodaXOptions): RunningSession => {
+      const meta = { sessionId: session.id, turnId: 'turn-tools' };
+      options.events?.onToolUseStart?.({ id: 'tool-a', name: 'read' }, meta);
+      options.events?.onToolUseStart?.({ id: 'tool-b', name: 'bash' }, meta);
+      options.events?.onToolResult?.({ id: 'tool-a', name: 'read', content: 'done' }, meta);
+      return fakeRunningSession(options, new Promise<KodaXResult>(() => undefined));
+    });
+
+    const run = await runtime.runs.start({ sessionId: session.id, prompt: 'parallel tools' });
+    const observation = await runtime.sessions.observe(session.id, () => undefined);
+
+    expect(observation.snapshot.live.activeTools).toEqual([
+      expect.objectContaining({
+        runId: run.runId,
+        started: expect.objectContaining({
+          tool: expect.objectContaining({ id: 'tool-b' }),
+        }),
+      }),
+    ]);
+    observation.close();
+    await runtime.close();
+  });
+
   it('flushes buffered streaming events before replay without dropping deltas', async () => {
     const { createKodaXRuntime } = await import('@kodax-ai/kodax/runtime');
     const runtime = await createKodaXRuntime({
@@ -1936,7 +1967,24 @@ describe('createKodaXRuntime', () => {
     });
     expect(starts).toEqual(['first']);
     if (!continuation.accepted) throw new Error('Expected accepted continuation');
-    expect((await runtime.runs.get(continuation.runId)).phase).toBe('queued');
+    await expect(runtime.runs.get(continuation.runId)).resolves.toMatchObject({
+      phase: 'queued',
+      continuation: {
+        inputId: continuation.runId,
+        afterRunId: first.runId,
+        delivery: 'after_turn',
+        state: 'queued',
+        contentPreview: 'second',
+      },
+    });
+    const observation = await runtime.sessions.observe(session.id, () => undefined);
+    expect(observation.snapshot.runs).toEqual(expect.arrayContaining([
+      expect.objectContaining({
+        runId: continuation.runId,
+        continuation: expect.objectContaining({ inputId: continuation.runId }),
+      }),
+    ]));
+    observation.close();
 
     finishers[0]?.({ success: true, lastText: 'done', messages: [], sessionId: session.id });
     await first.result;
@@ -2461,6 +2509,15 @@ describe('createKodaXRuntime', () => {
 
     codingMock.runManagedTask.mockImplementation((options: KodaXOptions) => {
       signal = options.abortSignal;
+      options.events?.onManagedTaskStatus?.({
+        agentMode: 'ama',
+        harnessProfile: 'standard' as never,
+        phase: 'worker',
+        activeWorkerId: 'worker-1',
+        activeWorkerTitle: 'Implementing',
+        currentRound: 2,
+        maxRounds: 4,
+      });
       return new Promise<KodaXResult>(() => undefined);
     });
 
@@ -2471,6 +2528,18 @@ describe('createKodaXRuntime', () => {
     });
     expect(codingMock.runManagedTask).toHaveBeenCalledOnce();
     expect(codingMock.startKodaX).not.toHaveBeenCalled();
+    const observation = await runtime.sessions.observe(session.id, () => undefined);
+    expect(observation.snapshot.live.managedTasks).toEqual([
+      expect.objectContaining({
+        runId: handle.runId,
+        status: expect.objectContaining({
+          phase: 'worker',
+          activeWorkerId: 'worker-1',
+          currentRound: 2,
+        }),
+      }),
+    ]);
+    observation.close();
 
     await runtime.runs.abort(handle.runId);
 
@@ -2734,6 +2803,11 @@ describe('createKodaXRuntime', () => {
     await flushMicrotasks();
     const [request] = await runtime.userInputs.listPending({ runId: handle.runId });
     if (!request) throw new Error('expected pending AskUser request');
+    const observation = await runtime.sessions.observe(session.id, () => undefined);
+    expect(observation.snapshot.live.pendingUserInputs).toEqual([
+      expect.objectContaining({ requestId: request.id, runId: handle.runId }),
+    ]);
+    observation.close();
 
     const results = await Promise.all([
       runtime.userInputs.respond(request.id, 'yes', { expectedRevision: request.revision }),

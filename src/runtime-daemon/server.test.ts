@@ -33,6 +33,7 @@ import {
   type RuntimeDaemonClientTransport,
 } from './client.js';
 import { createRuntimeControlJournal } from './control-journal.js';
+import { createRuntimeDaemonReverseBridgeHub } from './reverse-bridge.js';
 
 describe('runtime daemon dispatcher', () => {
   it('requires initialize before runtime methods and rejects double initialize', async () => {
@@ -83,6 +84,51 @@ describe('runtime daemon dispatcher', () => {
     if (!isRuntimeDaemonSuccessResponse(invalidResult)) {
       expect(invalidResult.error).toMatchObject({ code: 'internal_error' });
       expect(invalidResult.error.message).toContain('invalid result');
+    }
+  });
+
+  it('applies session admission to event, interaction, and diagnostic side paths', async () => {
+    const runtime = makeRuntime();
+    vi.spyOn(runtime.sessions, 'transcript').mockImplementation(async (sessionId) => {
+      if (sessionId === 'partner-session') {
+        throw Object.assign(new Error('Partner session is not admitted.'), {
+          code: 'session_not_admitted' as const,
+        });
+      }
+      return null;
+    });
+    const dispatcher = createRuntimeDaemonDispatcher({ runtime });
+    await initializeDispatcher(dispatcher);
+
+    const requests = [
+      createRuntimeDaemonRequest('req-event-subscribe', 'event.subscribe', {
+        filter: { sessionId: 'partner-session' },
+      }),
+      createRuntimeDaemonRequest('req-event-replay', 'event.replay', {
+        sessionId: 'partner-session',
+      }),
+      createRuntimeDaemonRequest('req-permission-list', 'permission.list', {
+        sessionId: 'partner-session',
+      }),
+      createRuntimeDaemonRequest('req-permission-request', 'permission.request', {
+        sessionId: 'partner-session',
+        runId: 'partner-run',
+        toolName: 'read',
+      }),
+      createRuntimeDaemonRequest('req-user-input-list', 'user_input.listPending', {
+        sessionId: 'partner-session',
+      }),
+      createRuntimeDaemonRequest('req-diagnostic', 'context.budget.get', {
+        sessionId: 'partner-session',
+      }),
+    ];
+
+    for (const request of requests) {
+      const response = await dispatcher.handle(request);
+      expect(isRuntimeDaemonSuccessResponse(response)).toBe(false);
+      if (!isRuntimeDaemonSuccessResponse(response)) {
+        expect(response.error.code).toBe('session_not_admitted');
+      }
     }
   });
 
@@ -157,7 +203,9 @@ describe('runtime daemon dispatcher', () => {
       expect(isRuntimeDaemonSuccessResponse(receipt)).toBe(true);
       if (isRuntimeDaemonSuccessResponse(receipt)) {
         expect(receipt.result).toMatchObject({ operationId: operation.operationId, state: 'applied' });
-        expect(receipt.result).not.toHaveProperty('result');
+        expect(receipt.result).toMatchObject({
+          result: { runId: 'run-1', sessionId: 'session-1' },
+        });
       }
       expect(start).toHaveBeenCalledTimes(1);
       dispatcher.close();
@@ -330,9 +378,11 @@ describe('runtime daemon dispatcher', () => {
 
   it('binds credential and host-tool reverse calls only to the requesting run', async () => {
     const runtime = makeRuntime();
+    const reverseBridgeHub = createRuntimeDaemonReverseBridgeHub();
     let notificationListener: ((notification: RuntimeDaemonNotification) => void) | undefined;
     const dispatcher = createRuntimeDaemonDispatcher({
       runtime,
+      reverseBridgeHub,
       notify(notification) {
         notificationListener?.(notification);
       },
@@ -360,7 +410,10 @@ describe('runtime daemon dispatcher', () => {
     };
     let handlerCalls = 0;
     const start = vi.spyOn(runtime.runs, 'start').mockImplementation(async (input) => {
-      const trusted = input as RuntimeStartRunInput & { readonly providerCredential?: string };
+      const trusted = input as RuntimeStartRunInput & {
+        readonly providerCredential?: string;
+        readonly trustedRunId: string;
+      };
       expect(trusted.providerCredential).toBe('space-secret');
       const extensionRuntime = input.options?.extensionRuntime;
       if (!extensionRuntime) throw new Error('expected run-bound extension runtime');
@@ -371,12 +424,19 @@ describe('runtime daemon dispatcher', () => {
       await expect(extensionRuntime.executeCapability('mcp', tool.id, { title: 'Report' }))
         .resolves.toMatchObject({ content: 'artifact-created' });
       const result: RuntimeRunResult = {
-        runId: 'run-bound',
+        runId: trusted.trustedRunId,
         sessionId: input.sessionId,
         phase: 'completed',
       };
       return { runId: result.runId, sessionId: result.sessionId, result: Promise.resolve(result) };
     });
+    vi.spyOn(runtime.runs, 'get').mockImplementation(async (runId) => ({
+      runId,
+      sessionId: 'session-1',
+      phase: 'running',
+      startedAt: '2026-07-14T00:00:00.000Z',
+      provider: 'mock',
+    }));
     const client = createRuntimeDaemonClient({
       identity: runtime.identity,
       transport,
@@ -395,17 +455,24 @@ describe('runtime daemon dispatcher', () => {
       },
     });
 
-    await client.runs.start({
+    const handle = await client.runs.start({
       sessionId: 'session-1',
       prompt: 'create an artifact',
       credential: { leaseId: credential.id, provider: 'mock' },
       hostTools: { leaseId: tools.id },
+    });
+    await expect(client.runs.get(handle.runId)).resolves.toMatchObject({
+      requirements: {
+        credential: { leaseId: credential.id, provider: 'mock', state: 'ready' },
+        hostTools: { leaseId: tools.id, state: 'ready' },
+      },
     });
 
     expect(start).toHaveBeenCalledTimes(1);
     expect(handlerCalls).toBe(1);
     await client.close();
     dispatcher.close();
+    reverseBridgeHub.close();
   });
 
   it('rejects initialize when the requested profile differs from the daemon identity', async () => {
@@ -512,6 +579,21 @@ describe('runtime daemon dispatcher', () => {
           runBoundHostTools: { version: 1 },
           coderOwnerFencing: { version: 1 },
           crashOutcomeModel: { version: 1 },
+          sessionAdmission: { version: 1, partnerDenied: true },
+          completeObservationSnapshot: { version: 1, queuedInputs: true },
+          connectionLifecycle: { version: 1 },
+          typedRuntimeEvents: { version: 1 },
+          daemonSafeRunInput: { version: 1 },
+          sharedSessionSettings: {
+            version: 1,
+            keys: expect.arrayContaining(['agentMode', 'autoModeEngine']),
+          },
+          durableRecoveryQueries: {
+            version: 1,
+            operationResult: true,
+            daemonPreflight: true,
+            terminalAcknowledgement: false,
+          },
         },
       });
       expect((initialized.capabilities as Record<string, unknown>).interruptInput).toBeUndefined();
@@ -1101,6 +1183,7 @@ const METHOD_SMOKE_PARAMS = {
   'daemon.status': undefined,
   'daemon.stop': undefined,
   'daemon.logs': undefined,
+  'daemon.preflight': undefined,
   'operation.get': { operationId: 'op-missing', journalEpoch: 'epoch-missing' },
   'session.create': { sessionId: 'session-smoke', title: 'Smoke Session' },
   'session.load': { sessionId: 'session-1' },
@@ -1154,6 +1237,7 @@ const METHOD_SMOKE_PARAMS = {
   'user_input.respond': { requestId: 'input-1', answer: 'yes', expectedRevision: 0 },
   'user_input.dismiss': { requestId: 'input-1', expectedRevision: 0 },
   'credential.register': { leaseId: 'credential-1', providers: ['mock'] },
+  'credential.get': { leaseId: 'credential-1' },
   'credential.revoke': { leaseId: 'credential-1' },
   'credential.supply': { requestId: 'credential-request-1', error: 'unavailable' },
   'host_tool.register': {
@@ -1165,6 +1249,8 @@ const METHOD_SMOKE_PARAMS = {
       sideEffect: 'non_idempotent',
     }],
   },
+  'host_tool.get': { leaseId: 'host-tools-1' },
+  'host_tool.invocation.get': { invocationId: 'host-invocation-1' },
   'host_tool.revoke': { leaseId: 'host-tools-1' },
   'host_tool.complete': { invocationId: 'host-invocation-1', error: 'unknown' },
   'workflow.list': { runId: 'run-1' },
@@ -1719,6 +1805,18 @@ function makeRuntime(): KodaXRuntime & { emit(event: RuntimeEvent): void } {
           workflows: [],
         };
       },
+      async preflight() {
+        return {
+          runtimeId: runtime.identity.runtimeId,
+          clientCount: 0,
+          activeRuns: [],
+          queuedRuns: [],
+          pendingPermissions: [],
+          pendingUserInputs: [],
+          blockers: [],
+          canStop: true,
+        };
+      },
     },
     diagnostics: {
       async latestContextBudget() {
@@ -1756,6 +1854,7 @@ function createTestUserInputs(): KodaXRuntime['userInputs'] {
 function createTestCredentialService(): KodaXRuntime['credentials'] {
   return {
     async register(input) { return { id: 'credential-test', ...input }; },
+    async resume() { throw new Error('Missing credential lease.'); },
     async revoke() { return false; },
   };
 }
@@ -1763,7 +1862,9 @@ function createTestCredentialService(): KodaXRuntime['credentials'] {
 function createTestHostToolService(): KodaXRuntime['hostTools'] {
   return {
     async register(tools) { return { id: 'host-tools-test', tools }; },
+    async resume() { throw new Error('Missing host tool lease.'); },
     async revoke() { return false; },
+    async getInvocation() { return undefined; },
   };
 }
 
@@ -1772,6 +1873,7 @@ function createTestObservation(sessionId: string) {
     snapshot: {
       runtimeId: 'runtime-test',
       cursor: 0,
+      transcriptRevision: 'sha256:test',
       session: { id: sessionId, title: 'Test Session' },
       transcript: null,
       settings: { revision: 0, value: {} },
@@ -1782,6 +1884,7 @@ function createTestObservation(sessionId: string) {
         thinkingTextByRun: {},
         activeTools: [],
         pendingUserInputs: [],
+        managedTasks: [],
       },
     },
     close() {},

@@ -12,6 +12,7 @@ export type RuntimeDaemonMethod =
   | 'daemon.status'
   | 'daemon.stop'
   | 'daemon.logs'
+  | 'daemon.preflight'
   | 'operation.get'
   | 'session.create'
   | 'session.load'
@@ -56,9 +57,12 @@ export type RuntimeDaemonMethod =
   | 'user_input.respond'
   | 'user_input.dismiss'
   | 'credential.register'
+  | 'credential.get'
   | 'credential.revoke'
   | 'credential.supply'
   | 'host_tool.register'
+  | 'host_tool.get'
+  | 'host_tool.invocation.get'
   | 'host_tool.revoke'
   | 'host_tool.complete'
   | 'workflow.list'
@@ -140,10 +144,6 @@ export type RuntimeDaemonMutationMethod =
   | 'permission.grants.revoke'
   | 'user_input.respond'
   | 'user_input.dismiss'
-  | 'credential.register'
-  | 'credential.revoke'
-  | 'host_tool.register'
-  | 'host_tool.revoke'
   | 'workflow.pause'
   | 'workflow.resume'
   | 'workflow.stop'
@@ -187,6 +187,7 @@ export type RuntimeDaemonErrorCode =
   | 'permission_denied'
   | 'conflict'
   | 'not_found'
+  | 'session_not_admitted'
   | 'cancelled'
   | 'overloaded'
   | 'client_upgrade_required'
@@ -254,6 +255,7 @@ export const RUNTIME_DAEMON_METHODS: readonly RuntimeDaemonMethod[] = [
   'daemon.status',
   'daemon.stop',
   'daemon.logs',
+  'daemon.preflight',
   'operation.get',
   'session.create',
   'session.load',
@@ -298,9 +300,12 @@ export const RUNTIME_DAEMON_METHODS: readonly RuntimeDaemonMethod[] = [
   'user_input.respond',
   'user_input.dismiss',
   'credential.register',
+  'credential.get',
   'credential.revoke',
   'credential.supply',
   'host_tool.register',
+  'host_tool.get',
+  'host_tool.invocation.get',
   'host_tool.revoke',
   'host_tool.complete',
   'workflow.list',
@@ -383,10 +388,6 @@ export const RUNTIME_DAEMON_MUTATION_METHODS: readonly RuntimeDaemonMutationMeth
   'permission.grants.revoke',
   'user_input.respond',
   'user_input.dismiss',
-  'credential.register',
-  'credential.revoke',
-  'host_tool.register',
-  'host_tool.revoke',
   'workflow.pause',
   'workflow.resume',
   'workflow.stop',
@@ -431,6 +432,7 @@ const ERROR_CODES: ReadonlySet<string> = new Set<RuntimeDaemonErrorCode>([
   'permission_denied',
   'conflict',
   'not_found',
+  'session_not_admitted',
   'cancelled',
   'overloaded',
   'client_upgrade_required',

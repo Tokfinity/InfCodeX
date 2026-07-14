@@ -214,6 +214,73 @@ describe('daemon CLI smoke', () => {
     expect(readAllDaemonText(homeDir)).not.toContain('SPACE_SMOKE_SECRET_DO_NOT_PERSIST');
   }, 120_000);
 
+  it('resumes client-owned credential and Host Tool leases from a distinct process', async () => {
+    const homeDir = fs.mkdtempSync(path.join(os.tmpdir(), 'kodax-daemon-resume-smoke-'));
+    tempRoots.push(homeDir);
+    const profile = `resume-${process.pid}-${Date.now()}`;
+    const instanceSecret = `space_${'s'.repeat(48)}`;
+    await runDaemonCommand([
+      'start', '--home', homeDir, '--profile', profile,
+      '--provider', 'mock-provider', '--timeout-ms', '30000', '--json',
+    ]);
+
+    const registerScript = `
+      const { createKodaXRuntime } = await import('./src/sdk-runtime.ts');
+      const runtime = await createKodaXRuntime({
+        mode: 'daemon', profile: process.argv[2], homeDir: process.argv[1],
+        autoStartDaemon: false,
+        clientInfo: {
+          name: 'space-resume-smoke',
+          instanceId: 'space-resume-installation',
+          instanceSecret: process.argv[3],
+        },
+      });
+      const credential = await runtime.credentials.register({ providers: ['mock-provider'] }, async () => 'secret');
+      const hostTools = await runtime.hostTools.register([{
+        name: 'space_control', description: 'Control Space',
+        inputSchema: { type: 'object' }, sideEffect: 'non_idempotent',
+      }], { space_control: async () => ({ content: 'done' }) });
+      process.stdout.write(JSON.stringify({ credentialId: credential.id, hostToolId: hostTools.id }) + '\\n');
+      await runtime.close();
+    `;
+    const registered = await runSdkProbe(
+      registerScript,
+      homeDir,
+      profile,
+      instanceSecret,
+    ) as { readonly credentialId: string; readonly hostToolId: string };
+
+    const resumeScript = `
+      const { createKodaXRuntime } = await import('./src/sdk-runtime.ts');
+      const runtime = await createKodaXRuntime({
+        mode: 'daemon', profile: process.argv[2], homeDir: process.argv[1],
+        autoStartDaemon: false,
+        clientInfo: {
+          name: 'space-resume-smoke',
+          instanceId: 'space-resume-installation',
+          instanceSecret: process.argv[3],
+        },
+      });
+      const credential = await runtime.credentials.resume(process.argv[4], async () => 'secret');
+      const hostTools = await runtime.hostTools.resume(process.argv[5], {
+        space_control: async () => ({ content: 'done' }),
+      });
+      process.stdout.write(JSON.stringify({ credential, hostTools }) + '\\n');
+      await runtime.close();
+    `;
+    await expect(runSdkProbe(
+      resumeScript,
+      homeDir,
+      profile,
+      instanceSecret,
+      registered.credentialId,
+      registered.hostToolId,
+    )).resolves.toMatchObject({
+      credential: { id: registered.credentialId, providers: ['mock-provider'] },
+      hostTools: { id: registered.hostToolId },
+    });
+  }, 120_000);
+
   it('prints JSON for real start/stop commands and releases daemon state', async () => {
     const homeDir = fs.mkdtempSync(path.join(os.tmpdir(), 'kodax-daemon-cli-smoke-'));
     tempRoots.push(homeDir);
@@ -454,7 +521,12 @@ async function runDaemonCommand(args: readonly string[]): Promise<Record<string,
   return JSON.parse(stdout) as Record<string, unknown>;
 }
 
-async function runSdkProbe(script: string, homeDir: string, profile: string): Promise<unknown> {
+async function runSdkProbe(
+  script: string,
+  homeDir: string,
+  profile: string,
+  ...args: readonly string[]
+): Promise<unknown> {
   const stdout = await runNodeProcess([
     '--import',
     'tsx',
@@ -463,6 +535,7 @@ async function runSdkProbe(script: string, homeDir: string, profile: string): Pr
     script,
     homeDir,
     profile,
+    ...args,
   ]);
   return JSON.parse(stdout) as unknown;
 }

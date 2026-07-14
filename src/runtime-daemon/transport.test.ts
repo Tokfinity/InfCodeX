@@ -167,6 +167,32 @@ describe('runtime daemon transport', () => {
     await expect(pending).rejects.toThrow('Runtime daemon transport closed.');
   });
 
+  it('notifies clients immediately when the daemon connection closes', async () => {
+    const endpoint = await makeTestEndpoint();
+    let accepted: net.Socket | undefined;
+    const server = await listen(endpoint, (socket) => {
+      accepted = socket;
+    });
+    cleanupTasks.push(() => closeServer(server));
+    const transport = await createRuntimeDaemonSocketClientTransport(endpoint);
+    cleanupTasks.push(async () => {
+      await transport.close?.();
+    });
+    const states: Array<{ readonly state: string; readonly reason?: string }> = [];
+    const subscription = transport.subscribeLifecycle?.((state) => states.push(state));
+
+    await waitFor(() => accepted !== undefined);
+    accepted?.destroy();
+    await waitFor(() => states.some((state) => state.state === 'disconnected'));
+
+    expect(states[0]).toMatchObject({ state: 'connected' });
+    expect(states.at(-1)).toMatchObject({
+      state: 'disconnected',
+      reconnectable: true,
+    });
+    subscription?.close();
+  });
+
   it('hosts per-connection dispatchers without leaking notifications across clients', async () => {
     const endpoint = await makeTestEndpoint();
     const server = await createRuntimeDaemonSocketServer({

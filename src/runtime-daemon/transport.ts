@@ -4,9 +4,13 @@ import * as net from 'node:net';
 import os from 'node:os';
 import path from 'node:path';
 import { StringDecoder } from 'node:string_decoder';
+import { emitKodaXDiagnostic } from '@kodax-ai/agent';
 
 import type { RuntimeSubscription } from '../sdk-runtime.js';
-import type { RuntimeDaemonClientTransport } from './client.js';
+import type {
+  RuntimeDaemonClientTransport,
+  RuntimeDaemonTransportLifecycleState,
+} from './client.js';
 import {
   createRuntimeDaemonErrorResponse,
   createRuntimeDaemonRequest,
@@ -47,6 +51,7 @@ export interface RuntimeDaemonSocketServerOptions {
 
 export interface RuntimeDaemonSocketServer {
   readonly endpoint: RuntimeDaemonEndpoint;
+  connectionCount(): number;
   unref(): void;
   close(): Promise<void>;
 }
@@ -165,7 +170,37 @@ export async function createRuntimeDaemonSocketClientTransport(
   let closed = false;
   let journalEpoch: string | undefined;
   const clientInstanceId = `transport_${randomUUID().replace(/-/g, '')}`;
+  const clientInstanceSecret = randomUUID().replace(/-/g, '') + randomUUID().replace(/-/g, '');
+  const connectionId = `connection_${randomUUID().replace(/-/g, '')}`;
   const listeners = new Set<(notification: RuntimeDaemonNotification) => void>();
+  const lifecycleListeners = new Set<Parameters<NonNullable<
+    RuntimeDaemonClientTransport['subscribeLifecycle']
+  >>[0]>();
+  let lifecycleState: RuntimeDaemonTransportLifecycleState = {
+    state: 'connected' as const,
+    connectionId,
+    reconnectable: false,
+  };
+  const disconnect = (reason: string, reconnectable: boolean): void => {
+    if (lifecycleState.state === 'disconnected') return;
+    lifecycleState = {
+      state: 'disconnected',
+      connectionId,
+      reason,
+      reconnectable,
+    };
+    for (const listener of lifecycleListeners) {
+      try {
+        listener(lifecycleState);
+      } catch {
+        emitKodaXDiagnostic({
+          source: 'runtime.daemon.transport',
+          level: 'warn',
+          message: 'Runtime transport lifecycle listener failed.',
+        });
+      }
+    }
+  };
   const pending = new Map<string, {
     readonly resolve: (value: unknown) => void;
     readonly reject: (error: Error) => void;
@@ -195,7 +230,11 @@ export async function createRuntimeDaemonSocketClientTransport(
         try {
           listener(frame);
         } catch {
-          // A local notification consumer must not tear down the shared transport.
+          emitKodaXDiagnostic({
+            source: 'runtime.daemon.transport',
+            level: 'warn',
+            message: 'Runtime transport notification listener failed.',
+          });
         }
       }
     }
@@ -207,16 +246,19 @@ export async function createRuntimeDaemonSocketClientTransport(
     } catch (error: unknown) {
       closed = true;
       const normalized = normalizeTransportError(error);
+      disconnect(normalized.message, true);
       rejectPending(pending, normalized);
       socket.destroy(normalized);
     }
   });
   socket.on('close', () => {
     closed = true;
+    disconnect('Runtime daemon transport closed.', true);
     rejectPending(pending, new Error('Runtime daemon transport closed.'));
   });
   socket.on('error', (error) => {
     closed = true;
+    disconnect(error.message, true);
     rejectPending(pending, error);
   });
 
@@ -227,7 +269,7 @@ export async function createRuntimeDaemonSocketClientTransport(
       }
       const id = `req_${randomUUID().replace(/-/g, '').slice(0, 12)}`;
       const requestParams = method === 'initialize' || method === 'runtime.initialize'
-        ? withDurableOperationCapability(params, clientInstanceId)
+        ? withDurableOperationCapability(params, clientInstanceId, clientInstanceSecret)
         : params;
       const requestOperation = operation ?? (
         journalEpoch !== undefined && isRuntimeDaemonMutationMethod(method)
@@ -270,18 +312,33 @@ export async function createRuntimeDaemonSocketClientTransport(
       };
       return subscription;
     },
+    subscribeLifecycle(listener) {
+      lifecycleListeners.add(listener);
+      listener(lifecycleState);
+      return {
+        close() {
+          lifecycleListeners.delete(listener);
+        },
+      };
+    },
     async close() {
       if (closed) return;
       closed = true;
+      disconnect('Runtime daemon transport closed by client.', false);
       parser.flush();
       socket.end();
       socket.destroy();
       rejectPending(pending, new Error('Runtime daemon transport closed.'));
+      lifecycleListeners.clear();
     },
   };
 }
 
-function withDurableOperationCapability(value: unknown, instanceId: string): Record<string, unknown> {
+function withDurableOperationCapability(
+  value: unknown,
+  instanceId: string,
+  instanceSecret: string,
+): Record<string, unknown> {
   const params = asRecord(value) ?? {};
   const capabilities = asRecord(params.capabilities) ?? {};
   const clientInfo = asRecord(params.clientInfo) ?? { name: 'kodax-transport' };
@@ -293,6 +350,9 @@ function withDurableOperationCapability(value: unknown, instanceId: string): Rec
       instanceId: typeof clientInfo.instanceId === 'string'
         ? clientInfo.instanceId
         : instanceId,
+      instanceSecret: typeof clientInfo.instanceSecret === 'string'
+        ? clientInfo.instanceSecret
+        : instanceSecret,
     },
   };
 }
@@ -407,6 +467,9 @@ export async function createRuntimeDaemonSocketServer(
 
   return {
     endpoint: options.endpoint,
+    connectionCount() {
+      return sockets.size;
+    },
     unref() {
       server.unref();
     },

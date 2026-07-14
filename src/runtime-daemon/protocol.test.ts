@@ -73,6 +73,7 @@ describe('runtime daemon protocol frames', () => {
     for (const code of [
       'invalid_params',
       'permission_denied',
+      'session_not_admitted',
       'overloaded',
       'credential_unavailable',
       'host_tool_unavailable',

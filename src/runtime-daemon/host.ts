@@ -28,6 +28,7 @@ import {
   type RuntimeDaemonSocketServer,
 } from './transport.js';
 import { createRuntimeControlJournal } from './control-journal.js';
+import { createRuntimeDaemonReverseBridgeHub } from './reverse-bridge.js';
 
 export interface RuntimeDaemonHostOptions {
   readonly runtime: KodaXRuntime;
@@ -66,6 +67,9 @@ export async function startRuntimeDaemonHost(
   const controlJournal = createRuntimeControlJournal({
     rootDir: path.join(options.paths.rootDir, 'control'),
   });
+  const reverseBridgeHub = createRuntimeDaemonReverseBridgeHub({
+    invocationStateFile: path.join(options.paths.rootDir, 'host-tool-invocations.json'),
+  });
   let ready: RuntimeDaemonState;
   try {
     server = await createRuntimeDaemonSocketServer({
@@ -77,6 +81,8 @@ export async function startRuntimeDaemonHost(
         notify,
         runResults,
         controlJournal,
+        reverseBridgeHub,
+        durableHostToolInvocations: true,
         requireOperationEnvelope: true,
         logs: () => ({
           logFile: options.paths.logFile,
@@ -86,6 +92,20 @@ export async function startRuntimeDaemonHost(
           appendRuntimeDaemonLog(options.paths, 'info', 'Runtime daemon stop requested.');
           requestStop?.();
           return { ok: true };
+        },
+        preflight: async () => {
+          const current = await options.runtime.status.preflight();
+          const clientCount = server?.connectionCount() ?? 0;
+          const blockers = [...current.blockers];
+          if (clientCount > 1 && !blockers.includes('connected_clients')) {
+            blockers.push('connected_clients');
+          }
+          return {
+            ...current,
+            clientCount,
+            blockers,
+            canStop: blockers.length === 0,
+          };
         },
       }),
     });
@@ -109,6 +129,7 @@ export async function startRuntimeDaemonHost(
       });
     }
     runResults.clear();
+    reverseBridgeHub.close();
     restoreDiagnostics();
     if (transportClosed) {
       await releaseHostOwnership(options.paths, options.lock);
@@ -143,6 +164,7 @@ export async function startRuntimeDaemonHost(
       } catch (error: unknown) {
         failures.push(`transport close: ${normalizeHostError(error).message}`);
       }
+      reverseBridgeHub.close();
       runResults.clear();
       try {
         await options.runtime.close();

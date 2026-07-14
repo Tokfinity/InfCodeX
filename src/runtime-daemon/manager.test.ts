@@ -608,6 +608,18 @@ function makeRuntime(
           workflows: [],
         };
       },
+      async preflight() {
+        return {
+          runtimeId: runtime.identity.runtimeId,
+          clientCount: 0,
+          activeRuns: [],
+          queuedRuns: [],
+          pendingPermissions: [],
+          pendingUserInputs: [],
+          blockers: [],
+          canStop: true,
+        };
+      },
     },
     diagnostics: {
       async latestContextBudget() {
@@ -639,6 +651,7 @@ function createTestUserInputs(): KodaXRuntime['userInputs'] {
 function createTestCredentialService(): KodaXRuntime['credentials'] {
   return {
     async register(input) { return { id: 'credential-test', ...input }; },
+    async resume() { throw new Error('Missing credential lease.'); },
     async revoke() { return false; },
   };
 }
@@ -646,7 +659,9 @@ function createTestCredentialService(): KodaXRuntime['credentials'] {
 function createTestHostToolService(): KodaXRuntime['hostTools'] {
   return {
     async register(tools) { return { id: 'host-tools-test', tools }; },
+    async resume() { throw new Error('Missing host tool lease.'); },
     async revoke() { return false; },
+    async getInvocation() { return undefined; },
   };
 }
 
@@ -655,6 +670,7 @@ function createTestObservation(sessionId: string) {
     snapshot: {
       runtimeId: 'runtime-test',
       cursor: 0,
+      transcriptRevision: 'sha256:test',
       session: { id: sessionId, title: 'Test Session' },
       transcript: null,
       settings: { revision: 0, value: {} },
@@ -665,6 +681,7 @@ function createTestObservation(sessionId: string) {
         thinkingTextByRun: {},
         activeTools: [],
         pendingUserInputs: [],
+        managedTasks: [],
       },
     },
     close() {},

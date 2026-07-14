@@ -3,6 +3,7 @@ import { setKodaXDiagnosticSink, type KodaXDiagnostic } from '@kodax-ai/agent';
 
 import type {
   RuntimeEvent,
+  RuntimeConnectionState,
   RuntimeSubscription,
 } from '../sdk-runtime.js';
 import {
@@ -12,6 +13,7 @@ import {
 import {
   createRuntimeDaemonClient,
   type RuntimeDaemonClientTransport,
+  type RuntimeDaemonTransportLifecycleState,
 } from './client.js';
 
 describe('runtime daemon client proxy', () => {
@@ -33,8 +35,45 @@ describe('runtime daemon client proxy', () => {
       options: {
         extensionRuntime: { activate: () => undefined },
       } as never,
-    })).rejects.toThrow(/run\.start\.options\.extensionRuntime.*not transport-safe/i);
+    })).rejects.toMatchObject({
+      code: 'invalid_transport_value',
+      path: 'run.start.options.extensionRuntime.activate',
+    });
     expect(calls).toHaveLength(0);
+  });
+
+  it('exposes prompt daemon connection lifecycle and Runtime epochs', async () => {
+    const calls: Array<{ readonly method: string; readonly params: unknown }> = [];
+    const transport = fakeTransport(calls);
+    const client = createRuntimeDaemonClient({
+      identity: {
+        runtimeId: 'runtime-epoch-1',
+        mode: 'daemon',
+        profile: 'default',
+        startedAt: '2026-07-09T00:00:00.000Z',
+        version: '0.7.69',
+      },
+      transport,
+      journalEpoch: 'journal-epoch-1',
+    });
+    const seen: RuntimeConnectionState[] = [];
+
+    const subscription = client.connection?.subscribe((state) => seen.push(state));
+    transport.emitLifecycle({
+      state: 'disconnected',
+      connectionId: 'connection-1',
+      reason: 'socket closed',
+      reconnectable: true,
+    });
+
+    expect(client.connection?.current()).toMatchObject({
+      state: 'disconnected',
+      runtimeEpoch: 'runtime-epoch-1',
+      journalEpoch: 'journal-epoch-1',
+    });
+    expect(seen.at(-1)).toMatchObject({ state: 'disconnected', reason: 'socket closed' });
+    subscription?.close();
+    await client.close();
   });
 
   it('maps sessions and run handles onto daemon requests', async () => {
@@ -97,8 +136,8 @@ describe('runtime daemon client proxy', () => {
       time: '2026-07-09T00:00:00.000Z',
       sessionId: 'session-1',
       runId: 'run-1',
-      type: 'run.completed',
-      payload: { ok: true },
+      type: 'assistant.delta',
+      payload: { text: 'done' },
     };
     transport.emit(createRuntimeDaemonNotification('event', {
       subscriptionId: 'sub-1',
@@ -111,6 +150,74 @@ describe('runtime daemon client proxy', () => {
     expect(calls.map((call) => call.method)).toContain('event.unsubscribe');
   });
 
+  it('drops one malformed event without terminating the observation stream', async () => {
+    const calls: Array<{ readonly method: string; readonly params: unknown }> = [];
+    const transport = fakeTransport(calls);
+    const client = createRuntimeDaemonClient({
+      identity: {
+        runtimeId: 'runtime-client',
+        mode: 'daemon',
+        profile: 'default',
+        startedAt: '2026-07-09T00:00:00.000Z',
+        version: '0.7.69',
+      },
+      transport,
+    });
+    const seen: RuntimeEvent[] = [];
+    client.events.subscribe({}, (event) => seen.push(event));
+    await Promise.resolve();
+
+    transport.emit(createRuntimeDaemonNotification('event', {
+      subscriptionId: 'sub-1',
+      event: { type: 'assistant.delta', payload: { text: 42 } },
+    }));
+    const valid: RuntimeEvent = {
+      id: 'evt-valid',
+      seq: 2,
+      time: '2026-07-09T00:00:00.000Z',
+      sessionId: 'session-1',
+      runId: 'run-1',
+      type: 'assistant.delta',
+      payload: { text: 'continued' },
+    };
+    transport.emit(createRuntimeDaemonNotification('event', {
+      subscriptionId: 'sub-1',
+      event: valid,
+    }));
+
+    expect(seen).toEqual([valid]);
+    await client.close();
+  });
+
+  it('drops malformed replay entries while retaining valid events', async () => {
+    const calls: Array<{ readonly method: string; readonly params: unknown }> = [];
+    const valid: RuntimeEvent = {
+      id: 'evt-replay-valid',
+      seq: 2,
+      time: '2026-07-09T00:00:00.000Z',
+      sessionId: 'session-1',
+      runId: 'run-1',
+      type: 'assistant.delta',
+      payload: { text: 'continued' },
+    };
+    const transport = fakeTransport(calls, {
+      eventReplayResult: [{ type: 'assistant.delta', payload: { text: 42 } }, valid],
+    });
+    const client = createRuntimeDaemonClient({
+      identity: {
+        runtimeId: 'runtime-client',
+        mode: 'daemon',
+        profile: 'default',
+        startedAt: '2026-07-09T00:00:00.000Z',
+        version: '0.7.69',
+      },
+      transport,
+    });
+
+    await expect(client.events.replay()).resolves.toEqual([valid]);
+    await client.close();
+  });
+
   it('delivers notifications that arrive before subscribe resolves', async () => {
     const calls: Array<{ readonly method: string; readonly params: unknown }> = [];
     const event: RuntimeEvent = {
@@ -119,8 +226,8 @@ describe('runtime daemon client proxy', () => {
       time: '2026-07-09T00:00:00.000Z',
       sessionId: 'session-1',
       runId: 'run-1',
-      type: 'run.started',
-      payload: {},
+      type: 'assistant.delta',
+      payload: { text: 'early' },
     };
     const transport = fakeTransport(calls, {
       notificationBeforeEventSubscribeResult: createRuntimeDaemonNotification('event', {
@@ -183,6 +290,7 @@ describe('runtime daemon client proxy', () => {
       snapshot: {
         runtimeId: 'runtime-client',
         cursor: 0,
+        transcriptRevision: 'sha256:test',
         session: { id: 'session-target', title: 'Target' },
         transcript: null,
         settings: { revision: 0, value: {} },
@@ -193,6 +301,7 @@ describe('runtime daemon client proxy', () => {
           thinkingTextByRun: {},
           activeTools: [],
           pendingUserInputs: [],
+          managedTasks: [],
         },
       },
     });
@@ -673,6 +782,37 @@ describe('runtime daemon client proxy', () => {
     }
   });
 
+  it('reattaches credential and host handlers after a stable client reconnect', async () => {
+    const calls: Array<{ readonly method: string; readonly params: unknown }> = [];
+    const transport = fakeTransport(calls);
+    const client = createRuntimeDaemonClient({
+      identity: {
+        runtimeId: 'runtime-client',
+        mode: 'daemon',
+        profile: 'default',
+        startedAt: '2026-07-09T00:00:00.000Z',
+        version: '0.7.69',
+      },
+      transport,
+    });
+
+    await expect(client.credentials.resume('credential-resumed', async () => 'secret'))
+      .resolves.toMatchObject({ providers: ['openai'] });
+    await expect(client.hostTools.resume('host-resumed', {
+      async space_control() { return { content: 'done' }; },
+    })).resolves.toMatchObject({ id: 'host-resumed' });
+    await expect(client.hostTools.getInvocation('invocation-1')).resolves.toMatchObject({
+      state: 'unknown',
+    });
+
+    expect(calls.map((call) => call.method)).toEqual([
+      'credential.get',
+      'host_tool.get',
+      'host_tool.invocation.get',
+    ]);
+    await client.close();
+  });
+
   it('maps daemon null lookup results back to SDK undefined semantics', async () => {
     const calls: Array<{ readonly method: string; readonly params: unknown }> = [];
     const transport = fakeTransport(calls);
@@ -703,6 +843,7 @@ function fakeTransport(
   calls: Array<{ readonly method: string; readonly params: unknown }>,
   options: {
     readonly eventSubscribeResult?: Promise<unknown>;
+    readonly eventReplayResult?: unknown;
     readonly workflowSubscribeResult?: Promise<unknown>;
     readonly notificationBeforeEventSubscribeResult?: RuntimeDaemonNotification;
     readonly runAwaitResult?: unknown;
@@ -711,11 +852,14 @@ function fakeTransport(
   } = {},
 ): RuntimeDaemonClientTransport & {
   emit(notification: RuntimeDaemonNotification): void;
+  emitLifecycle(state: RuntimeDaemonTransportLifecycleState): void;
   listenerCount(): number;
 } {
   const listeners: Array<Parameters<RuntimeDaemonClientTransport['subscribe']>[0]> = [];
+  const lifecycleListeners: Array<(state: RuntimeDaemonTransportLifecycleState) => void> = [];
   const transport: RuntimeDaemonClientTransport & {
     emit(notification: RuntimeDaemonNotification): void;
+    emitLifecycle(state: RuntimeDaemonTransportLifecycleState): void;
     listenerCount(): number;
   } = {
     async request(method, params) {
@@ -744,9 +888,34 @@ function fakeTransport(
         const input = params as { readonly leaseId: string; readonly providers: readonly string[] };
         return { id: input.leaseId, providers: input.providers };
       }
+      if (method === 'credential.get') {
+        return { id: 'credential-resumed', providers: ['openai'] };
+      }
       if (method === 'host_tool.register') {
         const input = params as { readonly leaseId: string; readonly tools: readonly unknown[] };
         return { id: input.leaseId, tools: input.tools };
+      }
+      if (method === 'host_tool.get') {
+        return {
+          id: 'host-resumed',
+          tools: [{
+            name: 'space_control',
+            description: 'Control Space',
+            inputSchema: { type: 'object' },
+            sideEffect: 'non_idempotent',
+          }],
+        };
+      }
+      if (method === 'host_tool.invocation.get') {
+        return {
+          invocationId: 'invocation-1',
+          leaseId: 'host-resumed',
+          toolName: 'space_control',
+          sessionId: 'session-1',
+          runId: 'run-1',
+          state: 'unknown',
+          updatedAt: '2026-07-09T00:00:00.000Z',
+        };
       }
       if (method === 'credential.supply' || method === 'host_tool.complete') {
         if (options.reverseRequestError) throw options.reverseRequestError;
@@ -759,6 +928,7 @@ function fakeTransport(
           snapshot: {
             runtimeId: 'runtime-client',
             cursor: 0,
+            transcriptRevision: 'sha256:test',
             session: { id: 'session-1', title: 'Session' },
             transcript: null,
             settings: { revision: 0, value: {} },
@@ -769,6 +939,7 @@ function fakeTransport(
               thinkingTextByRun: {},
               activeTools: [],
               pendingUserInputs: [],
+              managedTasks: [],
             },
           },
         };
@@ -789,6 +960,9 @@ function fakeTransport(
         }
         if (options.eventSubscribeResult) return options.eventSubscribeResult;
         return { subscriptionId: 'sub-1' };
+      }
+      if (method === 'event.replay') {
+        return options.eventReplayResult ?? [];
       }
       if (method === 'event.unsubscribe') {
         return { ok: true };
@@ -880,10 +1054,23 @@ function fakeTransport(
       };
       return subscription;
     },
+    subscribeLifecycle(listener) {
+      lifecycleListeners.push(listener);
+      listener({ state: 'connected', connectionId: 'connection-1', reconnectable: false });
+      return {
+        close() {
+          const index = lifecycleListeners.indexOf(listener);
+          if (index >= 0) lifecycleListeners.splice(index, 1);
+        },
+      };
+    },
     emit(notification) {
       for (const listener of listeners) {
         listener(notification);
       }
+    },
+    emitLifecycle(state) {
+      for (const listener of lifecycleListeners) listener(state);
     },
     listenerCount() {
       return listeners.length;

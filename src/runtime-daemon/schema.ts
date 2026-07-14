@@ -90,6 +90,7 @@ export const RUNTIME_DAEMON_METHOD_SCHEMAS = {
   'daemon.status': { params: noParamsSchema, result: objectAnySchema },
   'daemon.stop': { params: noParamsSchema, result: okSchema },
   'daemon.logs': { params: noParamsSchema, result: objectAnySchema },
+  'daemon.preflight': { params: noParamsSchema, result: objectAnySchema },
   'operation.get': {
     params: objectSchema({
       operationId: stringSchema,
@@ -245,6 +246,10 @@ export const RUNTIME_DAEMON_METHOD_SCHEMAS = {
     }, ['leaseId', 'providers'], true),
     result: objectAnySchema,
   },
+  'credential.get': {
+    params: objectSchema({ leaseId: stringSchema }, ['leaseId']),
+    result: { oneOf: [objectAnySchema, { type: 'null' }] },
+  },
   'credential.revoke': {
     params: objectSchema({ leaseId: stringSchema }, ['leaseId']),
     result: booleanSchema,
@@ -259,6 +264,14 @@ export const RUNTIME_DAEMON_METHOD_SCHEMAS = {
       tools: { type: 'array', items: objectAnySchema },
     }, ['leaseId', 'tools']),
     result: objectAnySchema,
+  },
+  'host_tool.get': {
+    params: objectSchema({ leaseId: stringSchema }, ['leaseId']),
+    result: { oneOf: [objectAnySchema, { type: 'null' }] },
+  },
+  'host_tool.invocation.get': {
+    params: objectSchema({ invocationId: stringSchema }, ['invocationId']),
+    result: { oneOf: [objectAnySchema, { type: 'null' }] },
   },
   'host_tool.revoke': {
     params: objectSchema({ leaseId: stringSchema }, ['leaseId']),

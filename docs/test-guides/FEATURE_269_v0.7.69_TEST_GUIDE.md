@@ -22,6 +22,8 @@ daemon，并对同一 session/run 获得一致 transcript、队列、实时状�
 - Windows 11（named pipe）以及 Ubuntu（Unix socket）各一套；Node.js 20 或 22。
 - 使用临时 `KODAX_HOME`，不要在真实用户 profile 上执行崩溃、损坏或 rollback 用例。
 - 准备 CLI、Space-like Node client 和 Observer Node client 三个独立进程。
+- Space-like client 使用 OS keychain 持久化稳定 `instanceId` 和 32+ 字符
+  `instanceSecret`；renderer 不得读取二者。
 - Space-like client 的 credential broker 使用随机 canary，例如
   `F269_SECRET_<UUID>`；不要使用真实 provider key。
 - Host Tool fixture 必须把 invocation ID 与副作用结果写入 Space 自己的测试账本，
@@ -33,6 +35,7 @@ daemon，并对同一 session/run 获得一致 transcript、队列、实时状�
 ```bash
 npx tsc -p tsconfig.json --noEmit
 npx vitest run src/runtime-daemon src/sdk-runtime.test.ts src/sdk-runtime.shared-daemon.test.ts
+npx vitest run src/runtime-event.test.ts
 npx vitest run packages/llm/src/provider-credential-context.test.ts
 npx vitest run src/kodax_cli.daemon-smoke.test.ts
 npm test
@@ -60,7 +63,8 @@ npm pack --dry-run
 
 **预期结果**：
 
-- [ ] snapshot 含完整 transcript、running run、开始时间、origin、tool、Todo 与 live draft。
+- [ ] snapshot 含完整 transcript/revision、running run、开始时间、origin、tool、Todo、
+  managed-task、pending interaction、queued continuation safe preview 与 live draft。
 - [ ] listener 只收到 cursor 之后的事件，没有 join gap。
 - [ ] transcript item、terminal event 和 event ID 均不重复。
 - [ ] CLI 与 Space 的最终 run phase、terminal revision 和 Todo 一致。
@@ -82,6 +86,8 @@ npm pack --dry-run
 - [ ] Space 退出不取消 run，也不终止 daemon。
 - [ ] 第一次重连得到一致 transcript，终态只显示一次。
 - [ ] daemon 重启后 `runtimeId` 改变，客户端丢弃旧 derived projection 后完整重建。
+- [ ] transport 中断立即收到含原因、`reconnectable`、connection/runtime epoch 的
+  lifecycle signal，不依赖 5 秒 status polling。
 - [ ] 原 queued run 为 `runtime_restarted/effectOutcome:none`；原 active run 为
   `daemon_crashed/effectOutcome:unknown`，不会自动恢复或重放。
 
@@ -113,7 +119,8 @@ npm pack --dry-run
 **步骤**：
 
 1. 两个 client 读取同一 session 的 settings revision。
-2. 使用同一 expected revision 同时写不同 model。
+2. 使用同一 expected revision 同时写不同 model，并分别覆盖 `agentMode` 与
+   `autoModeEngine`。
 3. 两端继续观察 `session.settings.updated`，失败端重新读取。
 
 **预期结果**：
@@ -121,6 +128,7 @@ npm pack --dry-run
 - [ ] 只有一个更新成功，另一个返回结构化 `conflict` 与当前 revision。
 - [ ] 不发生静默 last-write-wins。
 - [ ] 两个观察端最终显示同一个 settings value/revision。
+- [ ] `agentMode` 与 `autoModeEngine` 和其他共享设置一样经过 CAS 并跨客户端同步。
 
 ### TC-005：AskUser 跨客户端回答与竞争
 
@@ -172,7 +180,8 @@ npm pack --dry-run
 
 1. Space Main 注册只允许测试 provider 的 credential lease。
 2. 用该 lease 启动匹配 provider 的 run，并记录 broker 收到的 session/run/provider。
-3. 尝试跨 provider、跨 lease、过期 lease 和已断线 broker。
+3. 关闭 Space 进程后，以相同稳定 client 身份重连并调用
+   `credentials.resume(leaseId, broker)`；再尝试跨 provider、跨 lease、过期 lease。
 4. 完成后递归扫描 daemon profile、session、日志、journal、diagnostic 与状态文件，
    同时检查所有 SDK observable payload。
 
@@ -182,6 +191,8 @@ npm pack --dry-run
 - [ ] 其他 client 无 API 可以读取 credential。
 - [ ] provider mismatch 不回退 daemon 环境变量，返回 `credential_unavailable`。
 - [ ] 已获取凭证的 run 可按声明完成；断线后的新请求明确失败。
+- [ ] 已接受/排队 run 不依赖旧 connection；同一稳定 client 可恢复 callback，错误
+  secret 或其他 client 无法接管 lease。
 - [ ] canary 及其明文片段不出现在任何 KodaX 持久化或可观察面。
 
 ### TC-008：Space Host Tool 仅绑定一个 run
@@ -194,7 +205,8 @@ npm pack --dry-run
 1. Space 注册一个 `non_idempotent` Artifact-like Host Tool。
 2. Space 启动 run 并显式绑定 lease；验证工具可调用。
 3. CLI 启动不绑定 lease 的 run，再让 Space 加入同 session。
-4. 尝试伪造 lease/session/run/client 字段以及调用未声明工具。
+4. 断开 Space，确认 run 显示 `waiting_host`；用相同稳定 client resume handlers。
+5. 尝试伪造 lease/session/run/client 字段以及调用未声明工具。
 
 **预期结果**：
 
@@ -203,6 +215,7 @@ npm pack --dry-run
 - [ ] handler 收到的 invocation/session/run/lease 上下文由 daemon 注入。
 - [ ] 伪造、越权、未知 capability 均 fail closed。
 - [ ] KodaX 不持久化 Space Artifact 产品数据。
+- [ ] resume 后状态回到 `ready`；CLI/其他 client 无法恢复或继承该 lease。
 
 ### TC-009：Host Tool 不确定结果不重放
 
@@ -214,12 +227,15 @@ npm pack --dry-run
 1. Host Tool handler 完成一次副作用并写 Space 测试账本。
 2. 在返回结果已发出但 daemon 未确认时断开 Space transport。
 3. 等待 invocation timeout，随后重连 Space 并检查 run 与账本。
+4. 调用 `hostTools.getInvocation(invocationId)` 查询恢复结果。
 
 **预期结果**：
 
 - [ ] handler 对同一 invocation ID 只执行一次。
 - [ ] run terminal 为 `host_outcome_unknown/effectOutcome:unknown`。
 - [ ] daemon 不自动重放 Host Tool、run 或 provider 请求。
+- [ ] invocation 查询返回 `completed`、`unknown` 或 `not_dispatched` 之一，不包含参数、
+  结果或 credential。
 - [ ] UI 显示“结果不确定”，不伪装成功或失败；后续动作由用户显式触发。
 
 ### TC-010：daemon/inline Coder owner 竞争与 sticky rollback
@@ -252,7 +268,9 @@ npm pack --dry-run
 1. 用独立 data/session root 启动 Partner inline Runtime。
 2. 同时启动 Coder daemon，分别创建 session、修改设置、触发 permission。
 3. 停止、重启和损坏 Coder daemon transport。
-4. 分别列出 Partner/Coder session、grant、runtime status 与 config mutation。
+4. 让 daemon client 使用已知 Partner sessionId 尝试 list/load/run/settings/delete/
+   rewind/fork/compact。
+5. 分别列出 Partner/Coder session、grant、runtime status 与 config mutation。
 
 **预期结果**：
 
@@ -260,6 +278,8 @@ npm pack --dry-run
 - [ ] 两侧 session、Runtime 状态、permission grant、journal 和 owner state 不交叉。
 - [ ] Coder daemon 可用、不可用或重启均不改变 Partner 当前 run。
 - [ ] Partner 不获取 Coder owner fence，也不被 Coder rollback 影响。
+- [ ] 所有 daemon 侧 Partner 路径返回 typed `session_not_admitted`，且 Partner
+  transcript/settings/metadata/锁均未改变。
 
 ### TC-012：capability、安全监听与 packaged smoke
 
@@ -275,6 +295,9 @@ npm pack --dry-run
 3. 使用旧 client（不声明 operation capability）尝试 mutation。
 4. 使用错误 token、跨 profile endpoint、缺失 capability requirement 连接。
 5. 检查系统监听地址与 packaged DTS/sidecar。
+6. 给 daemon run 传入 callback、`AbortSignal`、Extension Runtime、guardrail 实例，
+   并向 event parser 注入一个 malformed event 后再发送合法 event。
+7. 在 active/queued/pending 状态下调用 `status.preflight()`。
 
 **预期结果**：
 
@@ -283,6 +306,9 @@ npm pack --dry-run
 - [ ] 未认证、跨 profile 与 capability 缺失均明确失败。
 - [ ] legacy client 可执行授权 read，但 mutation 返回 `client_upgrade_required` 且无副作用。
 - [ ] packaged 两客户端状态、终态、credential 与 Host Tool 结果一致。
+- [ ] inline-only run 值在类型或运行时以 `invalid_transport_value` + value path 拒绝。
+- [ ] malformed event 被单独降级，后续合法 event 继续到达。
+- [ ] preflight 准确返回 client、active/queued/pending、blocker 与 `canStop`。
 
 ---
 
@@ -297,7 +323,18 @@ npm pack --dry-run
 **证据位置**：待填写（命令输出、两个 client 日志、Space 副作用账本、secret scan、
 owner state、package tarball SHA-256）
 
+### 2026-07-15 自动化预检证据
+
+- 聚焦 Runtime/daemon：10 个测试文件，105/105 通过。
+- Runtime facade 完整回归：65/65 通过。
+- 真实 process-distinct daemon smoke：7/7 通过。
+- `build:bundle` 与 12 个公共入口的 `build:dts` 通过。
+- 本地 tarball clean-install 与 `@kodax-ai/kodax/runtime` import smoke 通过；
+  候选 integrity 为
+  `sha512-BeNsnNfX+Z1M4C+9gN9y60tG8HGJ4Eio1ycgnhs1Vytp+PmOpK88DjC5pkjaWbWy+D/oXV5LgN/nd0zIk6UizA==`。
+- 上述结果不替代 Space packaged smoke 和本指南 12 项人工签收；npm 版本仍未发布。
+
 ---
 
-*测试指南更新时间：2026-07-14*
+*测试指南更新时间：2026-07-15*
 *Feature ID：FEATURE_269*

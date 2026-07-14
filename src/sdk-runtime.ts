@@ -6,7 +6,7 @@
  * process manager without introducing a daemon or a fifth workspace package.
  */
 
-import { randomUUID } from 'node:crypto';
+import { createHash, randomUUID } from 'node:crypto';
 import * as fs from 'node:fs';
 import os from 'node:os';
 import path from 'node:path';
@@ -33,6 +33,7 @@ import type {
   ExtensionRuntimeDiagnostics,
   LoadedExtensionDiagnostic,
   KodaXCustomProviderConfig,
+  KodaXContextOptions,
   KodaXActivityEventMeta,
   KodaXEvents,
   KodaXFileInputArtifact,
@@ -40,6 +41,7 @@ import type {
   KodaXInputArtifact,
   KodaXInputArtifactSource,
   KodaXMessage,
+  KodaXManagedTaskStatusEvent,
   KodaXOptions,
   KodaXReasoningMode,
   KodaXResult,
@@ -147,7 +149,12 @@ import {
   resolveRuntimeDaemonPaths,
   updateRuntimeOwnerPolicy,
 } from './runtime-daemon/state.js';
-export type { RuntimeDaemonClientTransport } from './runtime-daemon/client.js';
+export { RuntimeTransportBoundaryError } from './runtime-daemon/client.js';
+export type {
+  RuntimeDaemonClientTransport,
+  RuntimeDaemonTransportLifecycleState,
+} from './runtime-daemon/client.js';
+export { parseRuntimeEvent } from './runtime-event.js';
 export type {
   RuntimeAgentBindingService,
   RuntimeAgentOwnerSession,
@@ -282,6 +289,17 @@ const RUNTIME_CONFIG_PATCH_KEYS = [
   'workflow',
 ] as const satisfies readonly (keyof ReplRuntimeConfigPatch)[];
 
+const CODER_DAEMON_SESSION_SURFACES = new Set([
+  'code',
+  'cli',
+  'repl',
+  'acp',
+  'a2a',
+  'sdk',
+  'ide',
+  'space-desktop',
+]);
+
 type RuntimeConfigPatchKey = typeof RUNTIME_CONFIG_PATCH_KEYS[number];
 
 export interface RuntimeIdentity {
@@ -298,6 +316,8 @@ export interface RuntimeClientInfo {
   readonly name: string;
   /** Stable host-generated identity used only after daemon authentication. */
   readonly instanceId?: string;
+  /** Stable host-generated secret; persist in OS keychain to resume client-owned leases. */
+  readonly instanceSecret?: string;
   readonly title?: string;
   readonly version?: string;
 }
@@ -405,6 +425,13 @@ export interface RuntimeCapabilityRequirements {
   readonly coderOwnerFencing?: 1;
   readonly crashOutcomeModel?: 1;
   readonly coderFeatureMatrix?: 1;
+  readonly sessionAdmission?: 1;
+  readonly completeObservationSnapshot?: 1;
+  readonly connectionLifecycle?: 1;
+  readonly typedRuntimeEvents?: 1;
+  readonly daemonSafeRunInput?: 1;
+  readonly sharedSessionSettings?: 1;
+  readonly durableRecoveryQueries?: 1;
 }
 
 export type RuntimeOperationState =
@@ -423,6 +450,8 @@ export interface RuntimeOperationReceipt {
   readonly resourceId?: string;
   readonly requestDigest: string;
   readonly state: RuntimeOperationState;
+  /** Serialized mutation result when state is applied; exact retries return the same value. */
+  readonly result?: unknown;
   readonly updatedAt: string;
   readonly error?: {
     readonly code: string;
@@ -447,6 +476,20 @@ export interface RuntimeDiagnosticsService {
   latestToolExposure(filter?: RuntimeDiagnosticFilter): Promise<RuntimeToolExposurePlan | null>;
 }
 
+export interface RuntimeConnectionState {
+  readonly state: 'connected' | 'disconnected';
+  readonly connectionId: string;
+  readonly runtimeEpoch: string;
+  readonly journalEpoch?: string;
+  readonly reason?: string;
+  readonly reconnectable: boolean;
+}
+
+export interface RuntimeConnectionService {
+  current(): RuntimeConnectionState;
+  subscribe(listener: (state: RuntimeConnectionState) => void): RuntimeSubscription;
+}
+
 export interface KodaXRuntime {
   readonly identity: RuntimeIdentity;
   /** Server-advertised facts. Authorization remains defined by grantedScopes. */
@@ -467,6 +510,8 @@ export interface KodaXRuntime {
   readonly artifacts: RuntimeArtifactService;
   readonly status: RuntimeStatusService;
   readonly diagnostics: RuntimeDiagnosticsService;
+  /** Present on daemon facades; emits disconnects without waiting for polling. */
+  readonly connection?: RuntimeConnectionService;
   readonly admin: RuntimeAdminService;
   readonly agents: RuntimeAgentService;
   readonly agentTasks: RuntimeAgentTaskService;
@@ -668,6 +713,7 @@ export interface RuntimeCreateSessionInput {
   readonly surface?: string;
   readonly profileId?: string;
   readonly tag?: string;
+  readonly operation?: RuntimeOperationOptions;
 }
 
 export interface RuntimeSession {
@@ -679,6 +725,19 @@ export interface RuntimeSession {
   readonly profileId?: string;
   readonly createdAt?: string;
 }
+
+/** Payload emitted when an executing run binds its provider session. */
+export interface RuntimeRunSessionLoadedEventPayload {
+  readonly provider: string;
+  readonly sessionId: string;
+  readonly turnId?: string;
+  readonly iteration?: number;
+}
+
+/** `session.loaded` is emitted both for an explicit SDK load and a run provider session bind. */
+export type RuntimeSessionLoadedEventPayload =
+  | RuntimeSession
+  | RuntimeRunSessionLoadedEventPayload;
 
 export interface RuntimeSessionSummary extends RuntimeSession {
   /** Opaque continuation token accepted by RuntimeSessionFilter.cursor. */
@@ -717,6 +776,8 @@ export interface RuntimeSessionSettings {
   readonly reasoningMode?: KodaXReasoningMode;
   readonly permissionMode?: string;
   readonly executionCwd?: string;
+  readonly agentMode?: KodaXOptions['agentMode'];
+  readonly autoModeEngine?: 'llm' | 'rules';
 }
 
 export interface RuntimeSessionSettingsPatch {
@@ -727,6 +788,8 @@ export interface RuntimeSessionSettingsPatch {
   readonly reasoningMode?: KodaXReasoningMode | null;
   readonly permissionMode?: string | null;
   readonly executionCwd?: string | null;
+  readonly agentMode?: KodaXOptions['agentMode'] | null;
+  readonly autoModeEngine?: 'llm' | 'rules' | null;
 }
 
 export interface RuntimeAppendNoticeInput {
@@ -781,17 +844,26 @@ export interface RuntimePendingUserInputProjection {
   readonly detail: unknown;
 }
 
+export interface RuntimeManagedTaskProjection {
+  readonly runId: string;
+  readonly turnId?: string;
+  readonly status: KodaXManagedTaskStatusEvent;
+}
+
 export interface RuntimeSessionLiveProjection {
   readonly assistantTextByRun: Readonly<Record<string, string>>;
   readonly thinkingTextByRun: Readonly<Record<string, string>>;
   readonly activeTools: readonly RuntimeActiveToolProjection[];
   readonly todo?: unknown;
   readonly pendingUserInputs: readonly RuntimePendingUserInputProjection[];
+  readonly managedTasks: readonly RuntimeManagedTaskProjection[];
 }
 
 export interface RuntimeSessionObservationSnapshot {
   readonly runtimeId: string;
   readonly cursor: number;
+  /** Content-derived token for the transcript captured at this observation boundary. */
+  readonly transcriptRevision: string;
   readonly session: RuntimeSession;
   readonly transcript: RuntimeTranscript | null;
   readonly settings: RuntimeVersionedValue<RuntimeSessionSettings>;
@@ -969,6 +1041,76 @@ export type RuntimeKodaXOptions =
     readonly events?: KodaXEvents;
   };
 
+export type RuntimeDaemonContextOptions = Pick<KodaXContextOptions,
+  | 'memoryIdentity'
+  | 'gitRoot'
+  | 'executionCwd'
+  | 'contextTokenSnapshot'
+  | 'projectSnapshot'
+  | 'longRunning'
+  | 'providerPolicyHints'
+  | 'repoRoutingSignals'
+  | 'repoIntelligenceMode'
+  | 'repoIntelligenceTrace'
+  | 'contextDiagnostics'
+  | 'disableAutoTaskReroute'
+  | 'toolConstructionMode'
+  | 'skillsPrompt'
+  | 'rawUserInput'
+  | 'skillInvocation'
+  | 'repoIntelligenceContext'
+  | 'inputArtifacts'
+  | 'promptOverlay'
+  | 'taskSurface'
+  | 'liveTurn'
+  | 'managedTaskWorkspaceDir'
+  | 'managedProtocolEmission'
+  | 'excludeTools'
+  | 'systemPromptOverride'
+  | 'taskMetadata'
+  | 'taskVerification'
+  | 'agentProfile'
+  | 'currentAgentId'
+  | 'parentAgentId'
+>;
+
+export type RuntimeDaemonKodaXOptions = Pick<RuntimeKodaXOptions,
+  | 'provider'
+  | 'model'
+  | 'modelOverride'
+  | 'effort'
+  | 'thinking'
+  | 'reasoningMode'
+  | 'agentMode'
+  | 'maxIter'
+  | 'workflowRunsBaseDir'
+  | 'modelTiers'
+  | 'maxOutputTokens'
+  | 'disablePromptCache'
+  | 'lsp'
+  | 'workflow'
+  | 'selfManual'
+  | 'compaction'
+  | 'timeouts'
+> & {
+  readonly context?: RuntimeDaemonContextOptions;
+};
+
+export type RuntimeDaemonStartRunInput = Omit<
+  RuntimeStartRunInput,
+  'options' | 'agentContext' | 'permissionBroker'
+> & {
+  readonly options?: RuntimeDaemonKodaXOptions;
+};
+
+export interface RuntimeDaemonRunService extends Omit<RuntimeRunService, 'start'> {
+  start(input: RuntimeDaemonStartRunInput): Promise<RuntimeRunHandle>;
+}
+
+export type KodaXDaemonRuntime = Omit<KodaXRuntime, 'runs'> & {
+  readonly runs: RuntimeDaemonRunService;
+};
+
 export interface RuntimeRunStatus {
   readonly runId: string;
   readonly sessionId: string;
@@ -994,6 +1136,28 @@ export interface RuntimeRunStatus {
   readonly reasoning?: KodaXReasoningMode;
   readonly error?: string;
   readonly terminal?: RuntimeTerminalFact;
+  readonly continuation?: RuntimeContinuationStatus;
+  readonly requirements?: RuntimeRunRequirements;
+}
+
+export interface RuntimeRunRequirements {
+  readonly credential?: {
+    readonly leaseId: string;
+    readonly provider: string;
+    readonly state: 'ready' | 'expired' | 'terminal';
+  };
+  readonly hostTools?: {
+    readonly leaseId: string;
+    readonly state: 'ready' | 'waiting_host' | 'expired' | 'terminal';
+  };
+}
+
+export interface RuntimeContinuationStatus {
+  readonly inputId: string;
+  readonly afterRunId: string;
+  readonly delivery: 'after_turn';
+  readonly state: 'queued' | 'delivered' | 'terminal';
+  readonly contentPreview: string;
 }
 
 export type RuntimeTerminalCode =
@@ -1099,6 +1263,146 @@ export type RuntimeEventType =
   | 'config.effective'
   | 'runtime.warning';
 
+export interface RuntimeTextDeltaEventPayload {
+  readonly text: string;
+  readonly meta?: KodaXActivityEventMeta;
+}
+
+export interface RuntimeThinkingFinishedEventPayload {
+  readonly thinking: string;
+  readonly meta?: KodaXActivityEventMeta;
+}
+
+export interface RuntimeToolStartedEventPayload {
+  readonly tool: { readonly name: string; readonly id: string; readonly input?: Readonly<Record<string, unknown>> };
+  readonly meta?: KodaXToolEventMeta;
+}
+
+export type RuntimeToolProgressEventPayload =
+  | { readonly update: { readonly id: string; readonly message: string }; readonly meta?: KodaXToolEventMeta }
+  | { readonly toolName: string; readonly partialJson: string; readonly meta?: KodaXToolEventMeta };
+
+export interface RuntimeToolFinishedEventPayload {
+  readonly result: { readonly id: string; readonly name: string; readonly content: string };
+  readonly meta?: KodaXToolEventMeta;
+}
+
+export type RuntimeRunProgressEventPayload =
+  | { readonly kind: 'managed_task_status'; readonly status: KodaXManagedTaskStatusEvent }
+  | { readonly kind: 'stream_end' | 'complete'; readonly meta?: KodaXActivityEventMeta }
+  | {
+      readonly kind: 'iteration_start';
+      readonly iter: number;
+      readonly maxIter: number;
+      readonly meta?: KodaXActivityEventMeta;
+    }
+  | { readonly kind: 'iteration_end'; readonly info: Readonly<Record<string, unknown>> }
+  | {
+      readonly kind: 'mid_turn_user_messages';
+      readonly contents: readonly string[];
+      readonly meta?: KodaXActivityEventMeta;
+    };
+
+export interface RuntimeTodoUpdatedEventPayload {
+  readonly items: readonly unknown[];
+  readonly meta?: KodaXActivityEventMeta;
+}
+
+export interface RuntimeInteractionResolvedEventPayload {
+  readonly requestId: string;
+  readonly status?: string;
+  readonly decision?: RuntimePermissionDecision;
+  readonly kind?: RuntimeUserInputKind;
+}
+
+export interface RuntimeWarningEventPayload {
+  readonly message: string;
+  readonly source?: string;
+  readonly severity?: string;
+  readonly sourceEventId?: string;
+}
+
+export interface RuntimeSessionSettingsUpdatedEventPayload {
+  readonly sessionId: string;
+  readonly revision: number;
+  readonly settings: RuntimeSessionSettings;
+  readonly patch: RuntimeSessionSettingsPatch;
+}
+
+export type RuntimeUserInputRequestedEventPayload = RuntimeUserInputRequest | {
+  readonly requestId: string;
+  readonly kind: RuntimeUserInputKind;
+  readonly options: unknown;
+};
+
+type RuntimeEventPayloadDefaults = { readonly [K in RuntimeEventType]: unknown };
+
+export type RuntimeEventPayloadMap = Omit<RuntimeEventPayloadDefaults,
+  | 'session.created'
+  | 'session.loaded'
+  | 'run.queued'
+  | 'run.started'
+  | 'run.updated'
+  | 'run.completed'
+  | 'run.failed'
+  | 'run.cancelled'
+  | 'run.interrupted'
+  | 'assistant.delta'
+  | 'thinking.delta'
+  | 'thinking.finished'
+  | 'tool.started'
+  | 'tool.progress'
+  | 'tool.finished'
+  | 'run.progress'
+  | 'todo.updated'
+  | 'user_input.requested'
+  | 'user_input.resolved'
+  | 'permission.requested'
+  | 'permission.resolved'
+  | 'session.settings.updated'
+  | 'turn.started'
+  | 'turn.completed'
+  | 'turn.failed'
+  | 'workflow.started'
+  | 'workflow.updated'
+  | 'workflow.finished'
+  | 'context.budget.snapshot'
+  | 'tool.exposure.planned'
+  | 'runtime.warning'
+> & {
+  readonly 'session.created': RuntimeSession;
+  readonly 'session.loaded': RuntimeSessionLoadedEventPayload;
+  readonly 'run.queued': RuntimeRunStatus;
+  readonly 'run.started': RuntimeRunStatus;
+  readonly 'run.updated': RuntimeRunStatus;
+  readonly 'run.completed': RuntimeRunStatus;
+  readonly 'run.failed': RuntimeRunStatus;
+  readonly 'run.cancelled': RuntimeRunStatus;
+  readonly 'run.interrupted': RuntimeRunStatus;
+  readonly 'assistant.delta': RuntimeTextDeltaEventPayload;
+  readonly 'thinking.delta': RuntimeTextDeltaEventPayload;
+  readonly 'thinking.finished': RuntimeThinkingFinishedEventPayload;
+  readonly 'tool.started': RuntimeToolStartedEventPayload;
+  readonly 'tool.progress': RuntimeToolProgressEventPayload;
+  readonly 'tool.finished': RuntimeToolFinishedEventPayload;
+  readonly 'run.progress': RuntimeRunProgressEventPayload;
+  readonly 'todo.updated': RuntimeTodoUpdatedEventPayload;
+  readonly 'user_input.requested': RuntimeUserInputRequestedEventPayload;
+  readonly 'user_input.resolved': RuntimeInteractionResolvedEventPayload;
+  readonly 'permission.requested': RuntimePermissionRequest;
+  readonly 'permission.resolved': RuntimeInteractionResolvedEventPayload;
+  readonly 'session.settings.updated': RuntimeSessionSettingsUpdatedEventPayload;
+  readonly 'turn.started': KodaXTurnStartedEvent;
+  readonly 'turn.completed': KodaXTurnCompletedEvent;
+  readonly 'turn.failed': KodaXTurnFailedEvent;
+  readonly 'workflow.started': WorkflowProcessEvent;
+  readonly 'workflow.updated': WorkflowProcessEvent;
+  readonly 'workflow.finished': WorkflowProcessEvent;
+  readonly 'context.budget.snapshot': RuntimeContextBudgetSnapshot;
+  readonly 'tool.exposure.planned': RuntimeToolExposurePlan;
+  readonly 'runtime.warning': RuntimeWarningEventPayload;
+};
+
 export interface RuntimeEventEnvelope<TPayload = unknown> {
   readonly id: string;
   readonly seq: number;
@@ -1110,7 +1414,16 @@ export interface RuntimeEventEnvelope<TPayload = unknown> {
   readonly payload: TPayload;
 }
 
+export type RuntimeTypedEvent<TType extends RuntimeEventType = RuntimeEventType> = {
+  readonly [K in TType]: RuntimeEventEnvelope<RuntimeEventPayloadMap[K]> & { readonly type: K };
+}[TType];
+
+/** Backward-compatible raw envelope; use parseRuntimeEvent for payload narrowing. */
 export type RuntimeEvent = RuntimeEventEnvelope;
+
+export type RuntimeEventParseResult =
+  | { readonly ok: true; readonly event: RuntimeTypedEvent }
+  | { readonly ok: false; readonly error: string };
 
 export interface RuntimeEventFilter {
   readonly sessionId?: string;
@@ -1124,6 +1437,7 @@ export interface RuntimeEventReplayFilter extends RuntimeEventFilter {
 }
 
 export type RuntimeEventListener = (event: RuntimeEvent) => void;
+export type RuntimeTypedEventListener = (event: RuntimeTypedEvent) => void;
 
 export interface RuntimeSubscription {
   close(): void;
@@ -1261,6 +1575,7 @@ export interface RuntimeCredentialService {
     input: { readonly providers: readonly string[]; readonly expiresAt?: string },
     broker: RuntimeCredentialBroker,
   ): Promise<RuntimeCredentialLease>;
+  resume(leaseId: string, broker: RuntimeCredentialBroker): Promise<RuntimeCredentialLease>;
   revoke(leaseId: string): Promise<boolean>;
 }
 
@@ -1294,11 +1609,26 @@ export interface RuntimeHostToolLease {
   readonly tools: readonly RuntimeHostToolDescriptor[];
 }
 
+export interface RuntimeHostToolInvocationStatus {
+  readonly invocationId: string;
+  readonly leaseId: string;
+  readonly toolName: string;
+  readonly sessionId: string;
+  readonly runId: string;
+  readonly state: 'prepared' | 'dispatched' | 'completed' | 'unknown' | 'not_dispatched';
+  readonly updatedAt: string;
+}
+
 export interface RuntimeHostToolService {
   register(
     tools: readonly RuntimeHostToolDescriptor[],
     handlers: Readonly<Record<string, RuntimeHostToolHandler>>,
   ): Promise<RuntimeHostToolLease>;
+  resume(
+    leaseId: string,
+    handlers: Readonly<Record<string, RuntimeHostToolHandler>>,
+  ): Promise<RuntimeHostToolLease>;
+  getInvocation(invocationId: string): Promise<RuntimeHostToolInvocationStatus | undefined>;
   revoke(leaseId: string): Promise<boolean>;
 }
 
@@ -1337,8 +1667,25 @@ export interface RuntimeStatusSnapshot {
   readonly workflows: readonly RuntimeWorkflowSummary[];
 }
 
+export interface RuntimeDaemonPreflight {
+  readonly runtimeId: string;
+  readonly clientCount: number;
+  readonly activeRuns: readonly RuntimeRunStatus[];
+  readonly queuedRuns: readonly RuntimeRunStatus[];
+  readonly pendingPermissions: readonly RuntimePermissionRequest[];
+  readonly pendingUserInputs: readonly RuntimeUserInputRequest[];
+  readonly blockers: readonly (
+    | 'connected_clients'
+    | 'active_runs'
+    | 'queued_runs'
+    | 'pending_interactions'
+  )[];
+  readonly canStop: boolean;
+}
+
 export interface RuntimeStatusService {
   snapshot(): Promise<RuntimeStatusSnapshot>;
+  preflight(): Promise<RuntimeDaemonPreflight>;
 }
 
 interface RuntimeRunRecord {
@@ -1355,6 +1702,7 @@ interface RuntimeRunRecord {
   model?: string;
   permissionBroker?: RuntimePermissionBroker;
   permissionMode?: string;
+  autoModeEngine?: RuntimeSessionSettings['autoModeEngine'];
   reasoning?: KodaXReasoningMode;
   error?: string;
   terminal?: RuntimeTerminalFact;
@@ -1363,7 +1711,9 @@ interface RuntimeRunRecord {
   abortController?: AbortController;
   mode: RuntimeRunMode;
   readonly origin?: RuntimeRunStatus['origin'];
+  readonly continuation?: Omit<RuntimeContinuationStatus, 'state'>;
   providerCredential?: string;
+  readonly hadProviderCredential: boolean;
   readonly agentContext?: AgentDispatchContext;
   start?: PendingRunStart;
   terminalEmitted: boolean;
@@ -1427,6 +1777,16 @@ interface RuntimePersistence {
   ): void;
 }
 
+interface RuntimeSessionAdmission {
+  assertCreate(input: RuntimeCreateSessionInput): void;
+  assertFilter(filter: RuntimeSessionFilter | undefined): void;
+  admitsData(data: KodaXSessionData): boolean;
+  admitsSummary(summary: SessionSummary): boolean;
+  admitsSession(sessionId: string): Promise<boolean>;
+  assertRunAccess(sessionId: string): Promise<void>;
+  loadRequired(sessionId: string): Promise<KodaXSessionData>;
+}
+
 class RuntimeContinuationStaleError extends Error {
   constructor(readonly afterRunId: string) {
     super(`Runtime continuation target is already terminal: ${afterRunId}`);
@@ -1444,6 +1804,7 @@ const MAX_RUNTIME_EVENT_FILE_BYTES = 16 * 1024 * 1024;
 const TARGET_RUNTIME_EVENT_FILE_BYTES = MAX_RUNTIME_EVENT_FILE_BYTES / 2;
 const MAX_RUNTIME_EVENT_SEQUENCE_TAIL_BYTES = 128 * 1024;
 const MAX_RUNTIME_SNAPSHOT_ATTEMPTS = 8;
+const MAX_RUNTIME_INPUT_PREVIEW_LENGTH = 1_024;
 const BUFFERED_RUNTIME_EVENT_TYPES: ReadonlySet<RuntimeEventType> = new Set([
   'assistant.delta',
   'thinking.delta',
@@ -1456,6 +1817,12 @@ const RUNTIME_PERMISSION_BRIDGE_TOOLS: ReadonlySet<string> = new Set([
 ]);
 const RUNTIME_ARTIFACT_KINDS: ReadonlySet<string> = new Set(['image', 'file', 'video']);
 
+export function createKodaXRuntime(
+  options: CreateKodaXRuntimeOptions & { readonly mode: 'daemon' },
+): Promise<KodaXDaemonRuntime>;
+export function createKodaXRuntime(
+  options?: CreateKodaXRuntimeOptions,
+): Promise<KodaXRuntime>;
 export async function createKodaXRuntime(
   options: CreateKodaXRuntimeOptions = {},
 ): Promise<KodaXRuntime> {
@@ -1536,6 +1903,11 @@ export async function createKodaXRuntime(
   const sessionManager = createSessionManager(
     sessionsDir ? { sessionsDir } : undefined,
   );
+  const sessionAdmission = createRuntimeSessionAdmission(
+    identity.profile,
+    sessionManager,
+    options.sharedDaemonHost === true,
+  );
   const configFile = resolveRuntimeConfigFile(options);
   registerRuntimeConfiguredCustomProviders(configFile);
   const persistence = createRuntimePersistence(options);
@@ -1599,6 +1971,7 @@ export async function createKodaXRuntime(
     persistence,
     runs,
     sessionManager,
+    sessionAdmission,
     agentPlane,
     defaultAgentContext: options.externalAgents?.defaultContext,
   });
@@ -1620,6 +1993,7 @@ export async function createKodaXRuntime(
     },
     (sessionId) => runService.list({ sessionId }),
     (sessionId) => permissions.service.listPending({ sessionId }),
+    sessionAdmission,
   );
   const configHome = options.homeDir
     ? path.join(path.resolve(options.homeDir), '.kodax')
@@ -1669,8 +2043,10 @@ export async function createKodaXRuntime(
     status: createRuntimeStatusService({
       identity,
       permissions,
+      userInputs,
       runs,
       sessionManager,
+      sessionAdmission,
       workflows,
     }),
     diagnostics: createRuntimeDiagnosticsService(bus.service),
@@ -1837,6 +2213,13 @@ function assertRuntimeCapabilities(
     && requirements?.coderOwnerFencing === undefined
     && requirements?.crashOutcomeModel === undefined
     && requirements?.coderFeatureMatrix === undefined
+    && requirements?.sessionAdmission === undefined
+    && requirements?.completeObservationSnapshot === undefined
+    && requirements?.connectionLifecycle === undefined
+    && requirements?.typedRuntimeEvents === undefined
+    && requirements?.daemonSafeRunInput === undefined
+    && requirements?.sharedSessionSettings === undefined
+    && requirements?.durableRecoveryQueries === undefined
   ) return;
   const capabilities = requireRuntimeRecord(value);
   if (requirements.hardDispose && capabilities.hardDispose !== true) {
@@ -1859,6 +2242,13 @@ function assertRuntimeCapabilities(
     ['coderOwnerFencing', requirements.coderOwnerFencing],
     ['crashOutcomeModel', requirements.crashOutcomeModel],
     ['coderFeatureMatrix', requirements.coderFeatureMatrix],
+    ['sessionAdmission', requirements.sessionAdmission],
+    ['completeObservationSnapshot', requirements.completeObservationSnapshot],
+    ['connectionLifecycle', requirements.connectionLifecycle],
+    ['typedRuntimeEvents', requirements.typedRuntimeEvents],
+    ['daemonSafeRunInput', requirements.daemonSafeRunInput],
+    ['sharedSessionSettings', requirements.sharedSessionSettings],
+    ['durableRecoveryQueries', requirements.durableRecoveryQueries],
   ] as const;
   for (const [name, version] of versionedRequirements) {
     if (version !== undefined) assertVersionedRuntimeCapability(capabilities, name, version);
@@ -1896,7 +2286,7 @@ async function settleWithin(promise: Promise<unknown>, timeoutMs: number): Promi
 
 export async function connectKodaXRuntime(
   options: ConnectKodaXRuntimeOptions = {},
-): Promise<KodaXRuntime> {
+): Promise<KodaXDaemonRuntime> {
   assertPositiveRuntimeTimeout('daemonStartupTimeoutMs', options.daemonStartupTimeoutMs);
   assertPositiveRuntimeTimeout('daemonConnectTimeoutMs', options.daemonConnectTimeoutMs);
   const explicitEndpoint = options.endpoint !== undefined
@@ -1949,6 +2339,9 @@ export async function connectKodaXRuntime(
       name: options.clientInfo?.name ?? 'kodax-sdk',
       instanceId: options.clientInfo?.instanceId
         ?? `sdk_${randomUUID().replace(/-/g, '')}`,
+      ...(options.clientInfo?.instanceSecret !== undefined
+        ? { instanceSecret: options.clientInfo.instanceSecret }
+        : {}),
       ...(options.clientInfo?.title !== undefined ? { title: options.clientInfo.title } : {}),
       ...(options.clientInfo?.version !== undefined ? { version: options.clientInfo.version } : {}),
     };
@@ -2061,7 +2454,9 @@ function createRuntimeSessionService(
   updateActivePermissionMode: (sessionId: string, permissionMode: string | undefined) => void,
   listRuns: (sessionId: string) => Promise<readonly RuntimeRunStatus[]>,
   listPendingPermissions: (sessionId: string) => Promise<readonly RuntimePermissionRequest[]>,
+  admission: RuntimeSessionAdmission,
 ): RuntimeSessionService {
+  const creatingSessionIds = new Set<string>();
   const toRuntimeSession = (
     id: string,
     data: KodaXSessionData,
@@ -2081,8 +2476,7 @@ function createRuntimeSessionService(
   ): Promise<RuntimeSessionObservationSnapshot> => {
     for (let attempt = 0; attempt < MAX_RUNTIME_SNAPSHOT_ATTEMPTS; attempt += 1) {
       const before = bus.currentSessionSeq(sessionId);
-      const data = await manager.loadSession(sessionId);
-      if (!data) throw new Error(`Session not found: ${sessionId}`);
+      const data = await admission.loadRequired(sessionId);
       const [transcript, runs, pendingPermissions] = await Promise.all([
         manager.loadFullTranscript(sessionId),
         listRuns(sessionId),
@@ -2094,6 +2488,7 @@ function createRuntimeSessionService(
       return {
         runtimeId: identity.runtimeId,
         cursor: after,
+        transcriptRevision: createRuntimeTranscriptRevision(transcript),
         session: toRuntimeSession(sessionId, data),
         transcript,
         settings,
@@ -2110,30 +2505,43 @@ function createRuntimeSessionService(
   return {
     async create(input = {}) {
       ensureOpen();
+      admission.assertCreate(input);
       const sessionId = input.sessionId ?? await generateSessionId();
-      const projectPath = input.projectPath ? path.resolve(input.projectPath) : undefined;
-      const gitRoot = input.gitRoot ? path.resolve(input.gitRoot) : projectPath;
-      const runtimeInfo = buildSessionRuntimeInfo(input, projectPath, gitRoot);
-      const data: KodaXSessionData = {
-        messages: [],
-        title: input.title ?? '',
-        gitRoot: gitRoot ?? '',
-        ...(input.tag !== undefined ? { tag: input.tag } : {}),
-        ...(runtimeInfo !== undefined ? { runtimeInfo } : {}),
-        scope: 'user',
-      };
-      await manager.storage.save(sessionId, data);
-      const session = toRuntimeSession(sessionId, data, new Date().toISOString());
-      bus.emit('session.created', session, { sessionId, runId: sessionId });
-      return session;
+      if (creatingSessionIds.has(sessionId)) {
+        throw Object.assign(new Error(`Session already exists: ${sessionId}`), {
+          code: 'conflict' as const,
+        });
+      }
+      creatingSessionIds.add(sessionId);
+      try {
+        if (await manager.loadSession(sessionId) !== null) {
+          throw Object.assign(new Error(`Session already exists: ${sessionId}`), {
+            code: 'conflict' as const,
+          });
+        }
+        const projectPath = input.projectPath ? path.resolve(input.projectPath) : undefined;
+        const gitRoot = input.gitRoot ? path.resolve(input.gitRoot) : projectPath;
+        const runtimeInfo = buildSessionRuntimeInfo(input, projectPath, gitRoot);
+        const data: KodaXSessionData = {
+          messages: [],
+          title: input.title ?? '',
+          gitRoot: gitRoot ?? '',
+          ...(input.tag !== undefined ? { tag: input.tag } : {}),
+          ...(runtimeInfo !== undefined ? { runtimeInfo } : {}),
+          scope: 'user',
+        };
+        await manager.storage.save(sessionId, data);
+        const session = toRuntimeSession(sessionId, data, new Date().toISOString());
+        bus.emit('session.created', session, { sessionId, runId: sessionId });
+        return session;
+      } finally {
+        creatingSessionIds.delete(sessionId);
+      }
     },
 
     async load(sessionId) {
       ensureOpen();
-      const data = await manager.loadSession(sessionId);
-      if (!data) {
-        throw new Error(`Session not found: ${sessionId}`);
-      }
+      const data = await admission.loadRequired(sessionId);
       const session = toRuntimeSession(sessionId, data);
       bus.emit('session.loaded', session, { sessionId, runId: sessionId });
       return session;
@@ -2141,12 +2549,14 @@ function createRuntimeSessionService(
 
     async list(filter) {
       ensureOpen();
+      admission.assertFilter(filter);
       const summaries = await manager.listSessions(filter);
-      return summaries.map(toRuntimeSessionSummary);
+      return summaries.filter(admission.admitsSummary).map(toRuntimeSessionSummary);
     },
 
     async transcript(sessionId) {
       ensureOpen();
+      await admission.loadRequired(sessionId);
       return manager.loadFullTranscript(sessionId);
     },
 
@@ -2199,14 +2609,13 @@ function createRuntimeSessionService(
 
     async fork(input) {
       ensureOpen();
+      const source = await admission.loadRequired(input.sessionId);
       const forked = await manager.forkSession(input.sessionId, {
         ...(input.selector !== undefined ? { selector: input.selector } : {}),
         ...(input.newSessionId !== undefined ? { sessionId: input.newSessionId } : {}),
         ...(input.title !== undefined ? { title: input.title } : {}),
       });
       if (!forked) {
-        const source = await manager.loadSession(input.sessionId);
-        if (!source) return null;
         const sessionId = input.newSessionId ?? await generateSessionId();
         const data: KodaXSessionData = {
           ...source,
@@ -2225,7 +2634,7 @@ function createRuntimeSessionService(
 
     async getSettingsVersioned(sessionId) {
       ensureOpen();
-      await loadRequiredSession(manager, sessionId);
+      await admission.loadRequired(sessionId);
       return persistence.loadSessionSettingsVersioned(sessionId);
     },
 
@@ -2244,7 +2653,7 @@ function createRuntimeSessionService(
 
     async updateSettingsVersioned(sessionId, patch, options) {
       ensureOpen();
-      const sessionData = await loadRequiredSession(manager, sessionId);
+      const sessionData = await admission.loadRequired(sessionId);
       const current = persistence.loadSessionSettingsVersioned(sessionId);
       if (current.revision !== options.expectedRevision) {
         throw createRuntimeConflictError(
@@ -2270,6 +2679,7 @@ function createRuntimeSessionService(
 
     async appendNotice(input) {
       ensureOpen();
+      await admission.loadRequired(input.sessionId);
       const entry = await manager.appendClientNotice(input.sessionId, {
         content: input.content,
         ...(input.source !== undefined ? { source: input.source } : {}),
@@ -2285,6 +2695,7 @@ function createRuntimeSessionService(
 
     async rewind(input) {
       ensureOpen();
+      await admission.loadRequired(input.sessionId);
       assertSessionMutationAllowed(input.sessionId, hasActiveRun);
       const data = await manager.rewindSession(input.sessionId, {
         ...(input.selector !== undefined ? { selector: input.selector } : {}),
@@ -2301,6 +2712,7 @@ function createRuntimeSessionService(
 
     async setActiveEntry(input) {
       ensureOpen();
+      await admission.loadRequired(input.sessionId);
       assertSessionMutationAllowed(input.sessionId, hasActiveRun);
       const data = await manager.setActiveEntry(input.sessionId, input.entryId);
       if (!data) return null;
@@ -2315,6 +2727,7 @@ function createRuntimeSessionService(
 
     async compact(input) {
       ensureOpen();
+      await admission.loadRequired(input.sessionId);
       assertSessionMutationAllowed(input.sessionId, hasActiveRun);
       const result = await manager.compactSession(input.sessionId, {
         ...(input.provider !== undefined ? { provider: input.provider } : {}),
@@ -2350,18 +2763,21 @@ function createRuntimeSessionService(
 
     async archive(sessionId) {
       ensureOpen();
+      await admission.loadRequired(sessionId);
       const ok = await manager.archiveSession(sessionId);
       if (!ok) throw new Error(`Session not found or not archived: ${sessionId}`);
     },
 
     async unarchive(sessionId) {
       ensureOpen();
+      await admission.loadRequired(sessionId);
       const ok = await manager.unarchiveSession(sessionId);
       if (!ok) throw new Error(`Session not found or not unarchived: ${sessionId}`);
     },
 
     async delete(sessionId) {
       ensureOpen();
+      await admission.loadRequired(sessionId);
       const result = await manager.deleteSession(sessionId);
       assertDeleteSucceeded(sessionId, result);
     },
@@ -2383,6 +2799,7 @@ function createRuntimeRunService(deps: {
   readonly persistence: RuntimePersistence;
   readonly runs: Map<string, RuntimeRunRecord>;
   readonly sessionManager: SessionManager;
+  readonly sessionAdmission: RuntimeSessionAdmission;
 }): RuntimeRunServiceInternal {
   const activeRunBySession = new Map<string, string>();
   const queueBySession = new Map<string, string[]>();
@@ -2496,7 +2913,9 @@ function createRuntimeRunService(deps: {
       ...(runOptions.effort !== undefined ? { effort: runOptions.effort } : {}),
       ...(runOptions.thinking !== undefined ? { thinking: runOptions.thinking } : {}),
       ...(runOptions.reasoningMode !== undefined ? { reasoningMode: runOptions.reasoningMode } : {}),
+      ...(runOptions.agentMode !== undefined ? { agentMode: runOptions.agentMode } : {}),
       ...(record.permissionMode !== undefined ? { permissionMode: record.permissionMode } : {}),
+      ...(record.autoModeEngine !== undefined ? { autoModeEngine: record.autoModeEngine } : {}),
       ...(runOptions.context?.executionCwd !== undefined ? { executionCwd: runOptions.context.executionCwd } : {}),
     }, {
       sessionId: record.sessionId,
@@ -2607,10 +3026,7 @@ function createRuntimeRunService(deps: {
   const startRun = async (input: RuntimeStartRunInput): Promise<RuntimeRunHandle> => {
       deps.ensureOpen();
       const normalizedInput = normalizeRuntimeRunInput(input, deps.artifacts);
-      const session = await deps.sessionManager.loadSession(input.sessionId);
-      if (!session) {
-        throw new Error(`Session not found: ${input.sessionId}`);
-      }
+      const session = await deps.sessionAdmission.loadRequired(input.sessionId);
       const settings = deps.persistence.loadSessionSettings(input.sessionId);
       assertSessionSettingsAllowed(session, settings);
       const options = buildEffectiveRuntimeOptions(
@@ -2670,13 +3086,25 @@ function createRuntimeRunService(deps: {
           ? { permissionBroker: input.permissionBroker }
           : {}),
         ...(settings.permissionMode !== undefined ? { permissionMode: settings.permissionMode } : {}),
+        ...(settings.autoModeEngine !== undefined ? { autoModeEngine: settings.autoModeEngine } : {}),
         ...(options.reasoningMode !== undefined ? { reasoning: options.reasoningMode } : {}),
         mode: input.mode ?? 'coding',
         ...((input as RuntimeTrustedStartRunInput).providerCredential !== undefined
           ? { providerCredential: (input as RuntimeTrustedStartRunInput).providerCredential }
           : {}),
+        hadProviderCredential: (input as RuntimeTrustedStartRunInput).providerCredential !== undefined,
         ...((input as RuntimeTrustedStartRunInput).origin !== undefined
           ? { origin: (input as RuntimeTrustedStartRunInput).origin }
+          : {}),
+        ...(requiredAfterRunId !== undefined
+          ? {
+              continuation: {
+                inputId: runId,
+                afterRunId: requiredAfterRunId,
+                delivery: 'after_turn' as const,
+                contentPreview: previewQueuedInput(normalizedInput.prompt),
+              },
+            }
           : {}),
         ...(input.agentContext ?? deps.defaultAgentContext
           ? { agentContext: input.agentContext ?? deps.defaultAgentContext }
@@ -2728,6 +3156,7 @@ function createRuntimeRunService(deps: {
 
     async submitInput(input) {
       deps.ensureOpen();
+      await deps.sessionAdmission.loadRequired(input.sessionId);
       const afterRun = getRecord(input.afterRunId);
       if (afterRun.sessionId !== input.sessionId) {
         throw new Error(
@@ -2794,31 +3223,48 @@ function createRuntimeRunService(deps: {
     async await(runId) {
       deps.ensureOpen();
       const run = deps.runs.get(runId);
-      if (run) return run.result;
+      if (run) {
+        await deps.sessionAdmission.assertRunAccess(run.sessionId);
+        return run.result;
+      }
       const persisted = deps.persistence.loadRunStatus(runId);
-      if (persisted) return resultFromStatus(persisted);
+      if (persisted) {
+        await deps.sessionAdmission.assertRunAccess(persisted.sessionId);
+        return resultFromStatus(persisted);
+      }
       throw new Error(`Runtime run not found: ${runId}`);
     },
 
     async get(runId) {
       deps.ensureOpen();
       const run = deps.runs.get(runId);
-      if (run) return statusFromRecord(run);
+      if (run) {
+        await deps.sessionAdmission.assertRunAccess(run.sessionId);
+        return statusFromRecord(run);
+      }
       const persisted = deps.persistence.loadRunStatus(runId);
-      if (persisted) return persisted;
+      if (persisted) {
+        await deps.sessionAdmission.assertRunAccess(persisted.sessionId);
+        return persisted;
+      }
       throw new Error(`Runtime run not found: ${runId}`);
     },
 
     async list(filter) {
       deps.ensureOpen();
-      return [...deps.runs.values()]
+      if (filter?.sessionId !== undefined) {
+        await deps.sessionAdmission.assertRunAccess(filter.sessionId);
+      }
+      const matching = [...deps.runs.values()]
         .filter((run) => runMatchesFilter(run, filter))
         .map(statusFromRecord);
+      return filterAdmittedRunStatuses(matching, deps.sessionAdmission);
     },
 
     async abort(runId) {
       deps.ensureOpen();
       const run = getRecord(runId);
+      await deps.sessionAdmission.assertRunAccess(run.sessionId);
       if (run.phase === 'queued' || isActiveRunPhase(run.phase)) {
         cancelRun(run, 'runtime run aborted', true);
       }
@@ -2827,6 +3273,7 @@ function createRuntimeRunService(deps: {
     async setModel(runId, model) {
       deps.ensureOpen();
       const run = getRecord(runId);
+      await deps.sessionAdmission.assertRunAccess(run.sessionId);
       run.model = model;
       run.running?.setModel(model);
       publishRunUpdate(run);
@@ -2835,6 +3282,7 @@ function createRuntimeRunService(deps: {
     async setProvider(runId, provider) {
       deps.ensureOpen();
       const run = getRecord(runId);
+      await deps.sessionAdmission.assertRunAccess(run.sessionId);
       run.provider = provider;
       run.running?.setProvider(provider);
       publishRunUpdate(run);
@@ -2843,6 +3291,7 @@ function createRuntimeRunService(deps: {
     async setReasoning(runId, reasoning) {
       deps.ensureOpen();
       const run = getRecord(runId);
+      await deps.sessionAdmission.assertRunAccess(run.sessionId);
       run.reasoning = reasoning;
       run.running?.setReasoning(reasoning);
       publishRunUpdate(run);
@@ -3315,22 +3764,59 @@ function createRuntimeAgentTaskService(
 function createRuntimeStatusService(deps: {
   readonly identity: RuntimeIdentity;
   readonly permissions: RuntimePermissionRegistry;
+  readonly userInputs: RuntimeUserInputRegistry;
   readonly runs: Map<string, RuntimeRunRecord>;
   readonly sessionManager: SessionManager;
+  readonly sessionAdmission: RuntimeSessionAdmission;
   readonly workflows: RuntimeWorkflowService;
 }): RuntimeStatusService {
   return {
     async snapshot() {
+      const runs = await filterAdmittedRunStatuses(
+        [...deps.runs.values()].map(statusFromRecord),
+        deps.sessionAdmission,
+      );
       return {
         runtimeId: deps.identity.runtimeId,
         mode: deps.identity.mode,
         profile: deps.identity.profile,
         startedAt: deps.identity.startedAt,
         sessions: (await deps.sessionManager.listSessions({ includeArchived: true }))
+          .filter(deps.sessionAdmission.admitsSummary)
           .map(toRuntimeSessionSummary),
-        runs: [...deps.runs.values()].map(statusFromRecord),
+        runs,
         pendingPermissions: await deps.permissions.service.listPending(),
         workflows: await deps.workflows.list({}),
+      };
+    },
+    async preflight() {
+      const runs = await filterAdmittedRunStatuses(
+        [...deps.runs.values()].map(statusFromRecord),
+        deps.sessionAdmission,
+      );
+      const activeRuns = runs.filter((run) => (
+        run.phase === 'running'
+        || run.phase === 'waiting_permission'
+        || run.phase === 'waiting_user_input'
+      ));
+      const queuedRuns = runs.filter((run) => run.phase === 'queued');
+      const pendingPermissions = await deps.permissions.service.listPending();
+      const pendingUserInputs = await deps.userInputs.service.listPending();
+      const blockers: RuntimeDaemonPreflight['blockers'][number][] = [];
+      if (activeRuns.length > 0) blockers.push('active_runs');
+      if (queuedRuns.length > 0) blockers.push('queued_runs');
+      if (pendingPermissions.length > 0 || pendingUserInputs.length > 0) {
+        blockers.push('pending_interactions');
+      }
+      return {
+        runtimeId: deps.identity.runtimeId,
+        clientCount: 0,
+        activeRuns,
+        queuedRuns,
+        pendingPermissions,
+        pendingUserInputs,
+        blockers,
+        canStop: blockers.length === 0,
       };
     },
   };
@@ -3545,6 +4031,7 @@ interface RuntimeSessionLiveProjectionState {
   readonly thinkingTextByRun: Record<string, string>;
   readonly activeTools: Map<string, RuntimeActiveToolProjection>;
   readonly pendingUserInputs: Map<string, RuntimePendingUserInputProjection>;
+  readonly managedTasks: Map<string, RuntimeManagedTaskProjection>;
   todo: unknown;
 }
 
@@ -3554,6 +4041,7 @@ function createRuntimeSessionLiveProjectionState(): RuntimeSessionLiveProjection
     thinkingTextByRun: {},
     activeTools: new Map(),
     pendingUserInputs: new Map(),
+    managedTasks: new Map(),
     todo: undefined,
   };
 }
@@ -3589,9 +4077,22 @@ function applyRuntimeSessionEvent(
     }
   } else if (event.type === 'todo.updated') {
     live.todo = event.payload;
-  } else if (event.type === 'user_input.requested' && typeof payload?.requestId === 'string') {
-    live.pendingUserInputs.set(payload.requestId, {
-      requestId: payload.requestId,
+  } else if (event.type === 'run.progress' && payload?.kind === 'managed_task_status') {
+    const status = parseRuntimeManagedTaskStatus(payload.status);
+    if (status !== undefined) {
+      live.managedTasks.set(event.runId, {
+        runId: event.runId,
+        ...(event.turnId !== undefined ? { turnId: event.turnId } : {}),
+        status,
+      });
+    }
+  } else if (
+    event.type === 'user_input.requested'
+    && (typeof payload?.id === 'string' || typeof payload?.requestId === 'string')
+  ) {
+    const requestId = typeof payload?.id === 'string' ? payload.id : payload!.requestId as string;
+    live.pendingUserInputs.set(requestId, {
+      requestId,
       runId: event.runId,
       ...(event.turnId !== undefined ? { turnId: event.turnId } : {}),
       detail: event.payload,
@@ -3607,6 +4108,7 @@ function applyRuntimeSessionEvent(
     for (const [key, input] of live.pendingUserInputs) {
       if (input.runId === event.runId) live.pendingUserInputs.delete(key);
     }
+    live.managedTasks.delete(event.runId);
   }
 }
 
@@ -3619,7 +4121,17 @@ function snapshotRuntimeSessionLiveProjection(
     activeTools: [...live.activeTools.values()],
     ...(live.todo !== undefined ? { todo: live.todo } : {}),
     pendingUserInputs: [...live.pendingUserInputs.values()],
+    managedTasks: [...live.managedTasks.values()],
   };
+}
+
+function parseRuntimeManagedTaskStatus(value: unknown): KodaXManagedTaskStatusEvent | undefined {
+  if (
+    !isRecord(value)
+    || typeof value.agentMode !== 'string'
+    || typeof value.harnessProfile !== 'string'
+  ) return undefined;
+  return value as unknown as KodaXManagedTaskStatusEvent;
 }
 
 function latestRuntimeEventSeq(events: readonly RuntimeEvent[]): number {
@@ -3630,8 +4142,14 @@ function runtimeToolProjectionKey(event: RuntimeEvent): string {
   const payload = isRecord(event.payload) ? event.payload : undefined;
   const meta = isRecord(payload?.meta) ? payload.meta : undefined;
   const tool = isRecord(payload?.tool) ? payload.tool : undefined;
+  const update = isRecord(payload?.update) ? payload.update : undefined;
   const result = isRecord(payload?.result) ? payload.result : undefined;
-  const candidate = meta?.toolCallId ?? meta?.toolUseId ?? tool?.id ?? result?.toolCallId;
+  const candidate = meta?.toolCallId
+    ?? meta?.toolUseId
+    ?? tool?.id
+    ?? update?.id
+    ?? result?.id
+    ?? result?.toolCallId;
   return typeof candidate === 'string' && candidate.length > 0
     ? `${event.runId}:${candidate}`
     : `${event.runId}:${event.turnId ?? 'turn'}:${event.id}`;
@@ -4150,6 +4668,27 @@ function parseRuntimeRunStatus(value: unknown): RuntimeRunStatus | undefined {
     ...(parseRuntimeTerminalFact(value.terminal) !== undefined
       ? { terminal: parseRuntimeTerminalFact(value.terminal)! }
       : {}),
+    ...(parseRuntimeContinuationStatus(value.continuation) !== undefined
+      ? { continuation: parseRuntimeContinuationStatus(value.continuation)! }
+      : {}),
+  };
+}
+
+function parseRuntimeContinuationStatus(value: unknown): RuntimeContinuationStatus | undefined {
+  if (
+    !isRecord(value)
+    || typeof value.inputId !== 'string'
+    || typeof value.afterRunId !== 'string'
+    || value.delivery !== 'after_turn'
+    || (value.state !== 'queued' && value.state !== 'delivered' && value.state !== 'terminal')
+    || typeof value.contentPreview !== 'string'
+  ) return undefined;
+  return {
+    inputId: value.inputId,
+    afterRunId: value.afterRunId,
+    delivery: value.delivery,
+    state: value.state,
+    contentPreview: value.contentPreview,
   };
 }
 
@@ -4221,7 +4760,18 @@ function recordFromPersistedStatus(status: RuntimeRunStatus): RuntimeRunRecord {
     ...(status.reasoning !== undefined ? { reasoning: status.reasoning } : {}),
     ...(status.error !== undefined ? { error: status.error } : {}),
     ...(status.terminal !== undefined ? { terminal: status.terminal } : {}),
+    ...(status.continuation !== undefined
+      ? {
+          continuation: {
+            inputId: status.continuation.inputId,
+            afterRunId: status.continuation.afterRunId,
+            delivery: status.continuation.delivery,
+            contentPreview: status.continuation.contentPreview,
+          },
+        }
+      : {}),
     mode: status.mode ?? 'coding',
+    hadProviderCredential: false,
     result: Promise.resolve(resultFromStatus(status)),
     terminalEmitted: isTerminalRunPhase(status.phase),
   };
@@ -5189,6 +5739,7 @@ function buildEffectiveRuntimeOptions(
   const effort = options.effort ?? settings.effort;
   const thinking = options.thinking ?? settings.thinking;
   const reasoningMode = options.reasoningMode ?? settings.reasoningMode;
+  const agentMode = options.agentMode ?? settings.agentMode;
   return {
     ...options,
     ...(provider !== undefined ? { provider } : {}),
@@ -5196,6 +5747,7 @@ function buildEffectiveRuntimeOptions(
     ...(effort !== undefined ? { effort } : {}),
     ...(thinking !== undefined ? { thinking } : {}),
     ...(reasoningMode !== undefined ? { reasoningMode } : {}),
+    ...(agentMode !== undefined ? { agentMode } : {}),
     ...(Object.keys(context).length > 0 ? { context } : {}),
   };
 }
@@ -5209,6 +5761,92 @@ async function loadRequiredSession(
     throw new Error(`Session not found: ${sessionId}`);
   }
   return data;
+}
+
+function createRuntimeSessionAdmission(
+  profile: string,
+  manager: SessionManager,
+  enforced: boolean,
+): RuntimeSessionAdmission {
+  const admitted = (surface: string | undefined, profileId: string | undefined): boolean => {
+    if (!enforced) return true;
+    if (isPartnerSessionIdentity(surface, profileId)) return false;
+    return surface === undefined || CODER_DAEMON_SESSION_SURFACES.has(surface.toLowerCase());
+  };
+  const reject = (sessionId: string): never => {
+    throw Object.assign(
+      new Error(`Session is not admitted by shared Runtime profile ${profile}: ${sessionId}`),
+      { code: 'session_not_admitted' as const },
+    );
+  };
+  return {
+    assertCreate(input) {
+      if (!admitted(input.surface, input.profileId)) reject(input.sessionId ?? '<new>');
+    },
+    assertFilter(filter) {
+      if (filter?.surface !== undefined && !admitted(filter.surface, undefined)) {
+        reject('<list>');
+      }
+    },
+    admitsData(data) {
+      return admitted(data.runtimeInfo?.surface, data.runtimeInfo?.profileId);
+    },
+    admitsSummary(summary) {
+      return admitted(summary.runtimeInfo?.surface, summary.runtimeInfo?.profileId);
+    },
+    async admitsSession(sessionId) {
+      if (!enforced) return true;
+      const data = await manager.loadSession(sessionId);
+      return data !== null && admitted(data.runtimeInfo?.surface, data.runtimeInfo?.profileId);
+    },
+    async assertRunAccess(sessionId) {
+      if (!enforced) return;
+      const data = await loadRequiredSession(manager, sessionId);
+      if (!admitted(data.runtimeInfo?.surface, data.runtimeInfo?.profileId)) reject(sessionId);
+    },
+    async loadRequired(sessionId) {
+      const data = await loadRequiredSession(manager, sessionId);
+      if (!admitted(data.runtimeInfo?.surface, data.runtimeInfo?.profileId)) reject(sessionId);
+      return data;
+    },
+  };
+}
+
+async function filterAdmittedRunStatuses(
+  statuses: readonly RuntimeRunStatus[],
+  admission: RuntimeSessionAdmission,
+): Promise<readonly RuntimeRunStatus[]> {
+  const admittedBySession = new Map<string, boolean>();
+  const result: RuntimeRunStatus[] = [];
+  for (const status of statuses) {
+    let admitted = admittedBySession.get(status.sessionId);
+    if (admitted === undefined) {
+      admitted = await admission.admitsSession(status.sessionId);
+      admittedBySession.set(status.sessionId, admitted);
+    }
+    if (admitted) result.push(status);
+  }
+  return result;
+}
+
+function isPartnerSessionIdentity(
+  surface: string | undefined,
+  profileId: string | undefined,
+): boolean {
+  const hasPartnerToken = (value: string | undefined): boolean => (
+    value?.toLowerCase().split(/[^a-z0-9]+/).includes('partner') === true
+  );
+  return hasPartnerToken(surface) || hasPartnerToken(profileId);
+}
+
+function createRuntimeTranscriptRevision(transcript: RuntimeTranscript | null): string {
+  return `sha256:${createHash('sha256').update(JSON.stringify(transcript)).digest('hex')}`;
+}
+
+function previewQueuedInput(prompt: string): string {
+  return prompt.length <= MAX_RUNTIME_INPUT_PREVIEW_LENGTH
+    ? prompt
+    : `${prompt.slice(0, MAX_RUNTIME_INPUT_PREVIEW_LENGTH - 1)}…`;
 }
 
 function assertSessionSettingsAllowed(
@@ -5247,6 +5885,8 @@ function applySessionSettingsPatch(
   applyNullablePatch(next, 'effort', patch.effort);
   applyNullablePatch(next, 'thinking', patch.thinking);
   applyNullablePatch(next, 'reasoningMode', patch.reasoningMode);
+  applyNullablePatch(next, 'agentMode', patch.agentMode);
+  applyNullablePatch(next, 'autoModeEngine', patch.autoModeEngine);
   return next;
 }
 
@@ -5313,6 +5953,10 @@ function parseRuntimeSessionSettings(value: unknown): RuntimeSessionSettings {
     setMutableSetting(settings, 'thinking', value.thinking);
   }
   setStringIfPresent(settings, 'reasoningMode', value.reasoningMode);
+  setStringIfPresent(settings, 'agentMode', value.agentMode);
+  if (value.autoModeEngine === 'llm' || value.autoModeEngine === 'rules') {
+    setMutableSetting(settings, 'autoModeEngine', value.autoModeEngine);
+  }
   return settings;
 }
 
@@ -5723,6 +6367,8 @@ function serializeSessionSettings(settings: RuntimeSessionSettings): RuntimeSess
   if (settings.reasoningMode !== undefined) setMutableSetting(result, 'reasoningMode', settings.reasoningMode);
   if (settings.permissionMode !== undefined) setMutableSetting(result, 'permissionMode', settings.permissionMode);
   if (settings.executionCwd !== undefined) setMutableSetting(result, 'executionCwd', settings.executionCwd);
+  if (settings.agentMode !== undefined) setMutableSetting(result, 'agentMode', settings.agentMode);
+  if (settings.autoModeEngine !== undefined) setMutableSetting(result, 'autoModeEngine', settings.autoModeEngine);
   return result;
 }
 
@@ -5750,7 +6396,22 @@ function statusFromRecord(run: RuntimeRunRecord): RuntimeRunStatus {
     ...(run.reasoning !== undefined ? { reasoning: run.reasoning } : {}),
     ...(run.error !== undefined ? { error: run.error } : {}),
     ...(run.terminal !== undefined ? { terminal: run.terminal } : {}),
+    ...(run.continuation !== undefined
+      ? {
+          continuation: {
+            ...run.continuation,
+            state: runtimeContinuationState(run.phase),
+          },
+        }
+      : {}),
   };
+}
+
+function runtimeContinuationState(
+  phase: RuntimeRunPhase,
+): RuntimeContinuationStatus['state'] {
+  if (phase === 'queued') return 'queued';
+  return isTerminalRunPhase(phase) ? 'terminal' : 'delivered';
 }
 
 function resultFromStatus(status: RuntimeRunStatus): RuntimeRunResult {
@@ -5931,7 +6592,7 @@ function classifyRuntimeRunFailure(error: unknown): {
 }
 
 function normalizeRuntimeRunError(error: unknown, run: RuntimeRunRecord): Error {
-  if (run.providerCredential === undefined) return normalizeError(error);
+  if (!run.hadProviderCredential) return normalizeError(error);
   const safe = new Error('Provider run failed while using a run-scoped credential.');
   safe.name = 'KodaXProviderRunError';
   return safe;
@@ -6081,6 +6742,9 @@ function createUnsupportedCredentialService(): RuntimeCredentialService {
     async register() {
       throw new Error('Credential broker registration requires a shared daemon client.');
     },
+    async resume() {
+      throw new Error('Credential broker resume requires a shared daemon client.');
+    },
     async revoke() { return false; },
   };
 }
@@ -6090,6 +6754,10 @@ function createUnsupportedHostToolService(): RuntimeHostToolService {
     async register() {
       throw new Error('Host tool registration requires a shared daemon client.');
     },
+    async resume() {
+      throw new Error('Host tool resume requires a shared daemon client.');
+    },
+    async getInvocation() { return undefined; },
     async revoke() { return false; },
   };
 }

@@ -3399,8 +3399,9 @@ data root.
 ### Connect and fail closed on required capabilities
 
 Space should own the daemon SDK client in Electron Main. Persist a random,
-stable `instanceId` per Space installation; do not accept it from renderer or
-model output. `connectKodaXRuntime()` is attach-only unless `autoStart: true`.
+stable `instanceId` and a separate 32+ character `instanceSecret` per Space
+installation. Store the secret in the OS keychain; never accept either value
+from renderer or model output. `connectKodaXRuntime()` is attach-only unless `autoStart: true`.
 An explicit inline rollback policy blocks auto-start until the owner policy is
 explicitly changed back to daemon.
 
@@ -3414,6 +3415,7 @@ const runtime = await connectKodaXRuntime({
     name: 'kodax-space',
     version: '0.1.32',
     instanceId: spaceInstallationId,
+    instanceSecret: await spaceKeychain.readRuntimeClientSecret(),
   },
   capabilities: {
     richEvents: true,
@@ -3431,6 +3433,13 @@ const runtime = await connectKodaXRuntime({
     coderOwnerFencing: 1,
     crashOutcomeModel: 1,
     coderFeatureMatrix: 1,
+    sessionAdmission: 1,
+    completeObservationSnapshot: 1,
+    connectionLifecycle: 1,
+    typedRuntimeEvents: 1,
+    daemonSafeRunInput: 1,
+    sharedSessionSettings: 1,
+    durableRecoveryQueries: 1,
   },
 });
 ```
@@ -3450,20 +3459,24 @@ plane.
 
 The packaged daemon authenticates one local OS-user/profile trust domain with
 a random token stored beside daemon state and a user-only local endpoint. It
-does not issue a different token to each application in v0.7.69. The returned
-scope set is chosen by the host (the packaged host grants the public local-user
-set). `clientInfo.instanceId` is stable attribution for origin and operation
-deduplication, not an authentication secret. Keep the token and instance ID in
-Electron Main; mutually distrusting processes running as the same OS account
-are outside this release's threat model.
+does not issue a different daemon token to each application in v0.7.69. The
+returned scope set is chosen by the host (the packaged host grants the public
+local-user set). `clientInfo.instanceId` is stable attribution for origin and
+operation deduplication. `instanceSecret` proves that a new authenticated
+connection is the same stable client when it resumes that client's credential
+or Host Tool leases; only its hash participates in daemon-owned bridge state.
+Keep all three values in Electron Main. Mutually distrusting processes running
+as the same OS account remain outside this release's threat model.
 
 ### Join atomically and resync after disconnect
 
 `sessions.observe()` installs the live subscription before taking the
-snapshot. Its snapshot contains one authoritative `runtimeId`, cursor, complete
-transcript, versioned settings, run/queue state, pending permission requests,
-and live assistant/thinking/tool/Todo/user-input projection. Listener events
-are strictly after the returned cursor.
+snapshot. Its snapshot contains one authoritative `runtimeId`, cursor,
+`transcriptRevision`, complete transcript, versioned settings, run/queue state,
+queued continuation IDs/order/origin/safe previews, pending permission and
+AskUser requests, and live assistant/thinking/tool/Todo/managed-task
+projection. Run requirements include the current credential/Host Tool
+availability. Listener events are strictly after the returned cursor.
 
 ```ts
 let observedRuntimeId: string | undefined;
@@ -3486,6 +3499,24 @@ async function openCoderSession(sessionId: string) {
 }
 ```
 
+Subscribe to `runtime.connection` to freeze mutation UI immediately rather
+than waiting for a status poll:
+
+```ts
+runtime.connection?.subscribe((state) => {
+  setCoderConnectionState(state.state, state.reason);
+  if (state.state === 'disconnected' && state.reconnectable) {
+    scheduleReconnect();
+  }
+});
+```
+
+The SDK reports the current `connectionId`, `runtimeEpoch`, optional
+`journalEpoch`, disconnect reason, and whether a new connection may be
+attempted. It does not transparently replay requests or subscriptions. Space
+creates a replacement Runtime client, checks its new epochs, resumes eligible
+leases, and observes the session again.
+
 On transport failure, Runtime change, expired history, or `resync_required`,
 discard the local derived projection and call `sessions.observe()` again. Do
 not merge a new snapshot into the old projection. The handshake buffer is
@@ -3505,17 +3536,24 @@ ID; changing its method, payload, resource, or authenticated principal is
 rejected.
 
 ```ts
+const session = await runtime.sessions.create({
+  sessionId: stableSpaceSessionId,
+  title: 'Shared session',
+  surface: 'space-desktop',
+  operation: { operationId: loadOrCreatePendingOperationId('space-session-draft-7') },
+});
+
 const operationId = loadOrCreatePendingOperationId('space-run-draft-42');
 const handle = await runtime.runs.start({
-  sessionId,
+  sessionId: session.id,
   input: { type: 'text', text: prompt },
   options: { provider: 'anthropic' },
   operation: { operationId },
 });
 
-const current = await runtime.sessions.getSettingsVersioned(sessionId);
+const current = await runtime.sessions.getSettingsVersioned(session.id);
 const updated = await runtime.sessions.updateSettingsVersioned(
-  sessionId,
+  session.id,
   { model: 'claude-sonnet-4-5' },
   {
     operationId: loadOrCreatePendingOperationId('space-settings-draft-9'),
@@ -3524,14 +3562,18 @@ const updated = await runtime.sessions.updateSettingsVersioned(
 );
 ```
 
-Same-session starts and after-turn inputs receive a durable `sessionOrder`.
+Create retries with the same explicit session and operation IDs cannot overwrite
+an existing session. Same-session starts and after-turn inputs receive a durable `sessionOrder`.
 Retries with the same operation ID return the canonical result and do not
 create another run. Settings use compare-and-swap; a stale revision returns a
-structured conflict and must be reloaded, never silently overwritten.
+structured conflict and must be reloaded, never silently overwritten. The
+shared settings keys are `provider`, `model`, `effort`, `thinking`,
+`reasoningMode`, `permissionMode`, `executionCwd`, `agentMode`, and
+`autoModeEngine`.
 
 ```ts
 const queued = await runtime.runs.submitInput({
-  sessionId,
+  sessionId: session.id,
   afterRunId: handle.runId,
   delivery: 'after_turn',
   input: { type: 'text', text: 'Also update the tests.' },
@@ -3548,7 +3590,10 @@ Run status exposes acceptance/start/queue times, authenticated origin,
 `runtime_restarted`, `daemon_crashed`, `credential_unavailable`,
 `host_not_dispatched`, `host_outcome_unknown`, and
 `control_history_untrusted`. Respect `effectOutcome`; `unknown` must never be
-presented as success or automatically retried.
+presented as success or automatically retried. After a lost response, query
+`runtime.operations.get({ operationId, journalEpoch })`; applied receipts
+include the canonical result. Permission grants remain daemon-owned and
+revisioned.
 
 ### AskUser and permission from any client
 
@@ -3583,10 +3628,9 @@ Clients must not keep separate persistent permission rule stores.
 
 ### Broker a Space keychain credential
 
-Credentials remain owned by Space's OS keychain. Register a connection-bound
-broker in Electron Main, bind the returned lease only to runs that Space
-starts, and return the key only after checking the daemon-provided
-provider/session/run context.
+Credentials remain owned by Space's OS keychain. Register a broker in Electron
+Main, bind the returned lease only to runs that Space starts, and return the
+key only after checking the daemon-provided provider/session/run context.
 
 ```ts
 const credentialLease = await runtime.credentials.register(
@@ -3610,15 +3654,21 @@ The secret crosses only the authenticated reverse frame and an in-memory
 run/provider scope. It is excluded from events, status, logs, diagnostics,
 operation records, and Runtime persistence. While such a scope is active,
 provider mismatch fails closed and never falls back to daemon environment.
-Registration ends when the Space connection closes. A credential already
-acquired by an accepted run may finish after disconnect; a later credential
-request fails `credential_unavailable`.
+Without a stable `instanceSecret`, registration ends when the Space connection
+closes. With it, the daemon keeps the registration owned by that stable client;
+a replacement Space process reattaches the callback with
+`runtime.credentials.resume(leaseId, broker)`. An accepted run has already
+acquired its scoped credential, so it reports `requirements.credential.state`
+as `ready` and may continue after disconnect. If the broker cannot answer, the
+start is rejected instead of accepting an indefinitely waiting run. Expiry or
+Runtime restart is explicit (`expired` or terminal); no provider request is
+automatically replayed.
 
 ### Bind Space-owned Host Tools to one run
 
 Register only narrow product capabilities. Descriptors are data; handlers stay
-in Electron Main. A lease is connection-bound and grants nothing until its ID
-is explicitly bound to a run.
+in Electron Main. A lease grants nothing until its ID is explicitly bound to a
+run.
 
 ```ts
 const hostLease = await runtime.hostTools.register([{
@@ -3651,9 +3701,55 @@ The daemon injects session/run/lease/invocation identity; renderer, model, and
 ordinary tool input cannot choose it. CLI runs never inherit a Space lease just
 because Space later observes their session. The client memoizes one handler
 promise per invocation ID, and the daemon never replays a dispatched Host Tool.
-Disconnect or timeout after dispatch produces `host_outcome_unknown`; Space
+After a stable-client reconnect, call
+`runtime.hostTools.resume(leaseId, handlers)`. Bound run status reports
+`ready`, `waiting_host`, `expired`, or `terminal`. Disconnect or timeout after dispatch produces `host_outcome_unknown`; Space
 must reconcile the product side effect itself before offering a new user
-action.
+action. `runtime.hostTools.getInvocation(invocationId)` returns the durable
+metadata state `prepared`, `dispatched`, `completed`, `unknown`, or
+`not_dispatched`; it never returns handler input, result, or credential data.
+The daemon writes the `dispatched` marker before attempting the reverse frame
+and never auto-replays an invocation.
+
+### Coder admission, typed events, and transport-safe inputs
+
+The daemon enforces Coder session admission on the server for list/create/load,
+run, settings, delete, rewind, fork, compact, transcript, event, interaction,
+and diagnostic paths. Coder
+surfaces are `code`, `cli`, `repl`, `acp`, `a2a`, `sdk`, `ide`, and
+`space-desktop`. A session marked with
+Partner surface/profile metadata, or any unknown product surface, fails with
+typed `session_not_admitted` before mutation. Space must continue marking
+Partner sessions as `surface: 'partner'` and keep their inline storage root
+separate. Legacy sessions without a surface remain admitted for existing Coder
+compatibility, so absence of metadata is not a Partner namespace mechanism.
+
+`RuntimeEventPayloadMap` and `RuntimeTypedEvent` provide the public
+discriminated contract for known events. Existing raw listeners remain
+compatible; consumers can use `parseRuntimeEvent(value)` before exhaustive
+handling. One unknown or malformed event is diagnosed and dropped without
+closing the observation stream.
+
+Daemon clients use `RuntimeDaemonStartRunInput`. Function callbacks,
+`AbortSignal`, Extension Runtime objects, and guardrail instances are excluded
+from that type and rejected at runtime with `RuntimeTransportBoundaryError`
+and an exact value path if an untyped caller supplies them. Host-only values
+remain valid only for embedded Runtime calls.
+
+### Recovery queries and stop preflight
+
+`runtime.status.preflight()` returns connected-client count, active and queued
+runs, pending AskUser/permission records, blockers, and `canStop`. Treat this as
+a required check before stop or inline rollback; the query does not stop the
+daemon by itself. `runtime.operations.get()` reconciles durable mutations,
+`hostTools.getInvocation()` reconciles Host Tool metadata, and
+`permissions.listGrants()` returns the daemon-owned persistent grant set.
+
+Terminal notification read/unread state is intentionally client-owned in
+v0.7.69 (`durableRecoveryQueries.terminalAcknowledgement === false`): Space
+persists its own UI acknowledgement cursor against Runtime/run terminal facts.
+This avoids a false claim that one client's acknowledgement is global daemon
+truth.
 
 ### Owner policy, rollback, and Electron boundary
 

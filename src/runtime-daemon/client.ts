@@ -1,18 +1,21 @@
 import { randomUUID } from 'node:crypto';
 
 import type {
+  KodaXDaemonRuntime,
   KodaXRuntime,
   RuntimeCompactSessionResult,
   RuntimeCredentialBroker,
   RuntimeCredentialLease,
   RuntimeConfigReloadResult,
   RuntimeConfigPatch,
+  RuntimeConnectionState,
   RuntimeContextBudgetSnapshot,
   RuntimeCommandResolveInput,
   RuntimeCommandInfo,
   RuntimeCreateArtifactInput,
   RuntimeArtifact,
   RuntimeDiagnosticFilter,
+  RuntimeDaemonPreflight,
   RuntimeEvent,
   RuntimeEventFilter,
   RuntimeEventListener,
@@ -21,6 +24,7 @@ import type {
   RuntimeGrantedScope,
   RuntimeHostToolDescriptor,
   RuntimeHostToolHandler,
+  RuntimeHostToolInvocationStatus,
   RuntimeHostToolLease,
   RuntimeHostToolResult,
   RuntimeMcpReloadResult,
@@ -46,7 +50,7 @@ import type {
   RuntimeSkillDescription,
   RuntimeSkillListFilter,
   RuntimeSkillSummary,
-  RuntimeStartRunInput,
+  RuntimeDaemonStartRunInput,
   RuntimeStatusSnapshot,
   RuntimeSubscription,
   RuntimeToolExposurePlan,
@@ -58,6 +62,7 @@ import type {
   RuntimeWorkflowSnapshot,
   RuntimeWorkflowSummary,
 } from '../sdk-runtime.js';
+import { parseRuntimeEvent } from '../runtime-event.js';
 import type {
   McpServerConfig,
   McpServerToolList,
@@ -85,7 +90,26 @@ export interface RuntimeDaemonClientTransport {
     operation?: RuntimeDaemonOperationEnvelope,
   ): Promise<unknown>;
   subscribe(listener: (notification: RuntimeDaemonNotification) => void): RuntimeSubscription;
+  subscribeLifecycle?(
+    listener: (state: RuntimeDaemonTransportLifecycleState) => void,
+  ): RuntimeSubscription;
   close?(): Promise<void> | void;
+}
+
+export interface RuntimeDaemonTransportLifecycleState {
+  readonly state: 'connected' | 'disconnected';
+  readonly connectionId: string;
+  readonly reason?: string;
+  readonly reconnectable: boolean;
+}
+
+export class RuntimeTransportBoundaryError extends Error {
+  readonly code = 'invalid_transport_value' as const;
+
+  constructor(readonly path: string, message: string) {
+    super(message);
+    this.name = 'RuntimeTransportBoundaryError';
+  }
 }
 
 export interface RuntimeDaemonClientOptions {
@@ -98,7 +122,7 @@ export interface RuntimeDaemonClientOptions {
 
 export function createRuntimeDaemonClient(
   options: RuntimeDaemonClientOptions,
-): KodaXRuntime {
+): KodaXDaemonRuntime {
   const request = (
     method: RuntimeDaemonMethod,
     params?: unknown,
@@ -113,6 +137,33 @@ export function createRuntimeDaemonClient(
   const credentialBrokers = new Map<string, RuntimeCredentialBroker>();
   const hostToolHandlers = new Map<string, Readonly<Record<string, RuntimeHostToolHandler>>>();
   const hostToolResults = new Map<string, HostToolInvocationResult>();
+  const connectionListeners = new Set<(state: RuntimeConnectionState) => void>();
+  let connectionState: RuntimeConnectionState = {
+    state: 'connected',
+    connectionId: `connection_${randomUUID().replace(/-/g, '')}`,
+    runtimeEpoch: options.identity.runtimeId,
+    ...(options.journalEpoch !== undefined ? { journalEpoch: options.journalEpoch } : {}),
+    reconnectable: false,
+  };
+  const transportLifecycleSubscription = options.transport.subscribeLifecycle?.((state) => {
+    connectionState = {
+      ...state,
+      runtimeEpoch: options.identity.runtimeId,
+      ...(options.journalEpoch !== undefined ? { journalEpoch: options.journalEpoch } : {}),
+    };
+    for (const listener of connectionListeners) {
+      try {
+        listener(connectionState);
+      } catch (error: unknown) {
+        emitKodaXDiagnostic({
+          source: 'runtime.daemon.client',
+          level: 'warn',
+          message: 'Runtime connection lifecycle listener failed.',
+          detail: { errorType: error instanceof Error ? error.name : typeof error },
+        });
+      }
+    }
+  });
   const reverseSubscription = options.transport.subscribe((notification) => {
     if (notification.method === 'credential.request') {
       void answerCredentialRequest(notification.params, credentialBrokers, request)
@@ -132,8 +183,9 @@ export function createRuntimeDaemonClient(
     capabilities: options.capabilities,
     ...(options.grantedScopes !== undefined ? { grantedScopes: options.grantedScopes } : {}),
     sessions: {
-      create(input) {
-        return request('session.create', input) as Promise<RuntimeSession>;
+      create(input = {}) {
+        const { operation, ...transportInput } = input;
+        return request('session.create', transportInput, operation) as Promise<RuntimeSession>;
       },
       load(sessionId) {
         return request('session.load', { sessionId }) as Promise<RuntimeSession>;
@@ -194,9 +246,9 @@ export function createRuntimeDaemonClient(
       },
     },
     runs: {
-      async start(input: RuntimeStartRunInput): Promise<RuntimeRunHandle> {
-        assertRuntimeTransportSafe(input.options, 'run.start.options');
+      async start(input: RuntimeDaemonStartRunInput): Promise<RuntimeRunHandle> {
         const { operation, ...transportInput } = input;
+        assertRuntimeTransportSafe(transportInput, 'run.start');
         const started = requireRecord(await request('run.start', transportInput, operation));
         const runId = requireStringField(started, 'runId');
         const sessionId = requireStringField(started, 'sessionId');
@@ -210,6 +262,7 @@ export function createRuntimeDaemonClient(
       },
       async submitInput(input) {
         const { operation, ...transportInput } = input;
+        assertRuntimeTransportSafe(transportInput, 'run.input.submit');
         return request('run.input.submit', transportInput, operation) as ReturnType<
           KodaXRuntime['runs']['submitInput']
         >;
@@ -241,7 +294,13 @@ export function createRuntimeDaemonClient(
         return subscribeToDaemonEvents(options.transport, request, filter, listener);
       },
       replay(filter) {
-        return request('event.replay', filter) as Promise<readonly RuntimeEvent[]>;
+        return request('event.replay', filter).then((value) => {
+          if (!Array.isArray(value)) throw new Error('Expected daemon event replay array.');
+          return value.flatMap((item) => {
+            const event = parseRuntimeEventForClient(item);
+            return event === undefined ? [] : [event];
+          });
+        });
       },
     },
     permissions: {
@@ -304,6 +363,22 @@ export function createRuntimeDaemonClient(
           throw error;
         }
       },
+      async resume(leaseId, broker) {
+        credentialBrokers.set(leaseId, broker);
+        try {
+          const value = await request('credential.get', { leaseId });
+          if (value === null || value === undefined) {
+            throw Object.assign(
+              new Error(`Credential lease is unavailable after Runtime reconnect: ${leaseId}`),
+              { code: 'credential_unavailable' as const },
+            );
+          }
+          return requireRecord(value) as unknown as RuntimeCredentialLease;
+        } catch (error: unknown) {
+          credentialBrokers.delete(leaseId);
+          throw error;
+        }
+      },
       async revoke(leaseId) {
         const revoked = await request('credential.revoke', { leaseId }) as boolean;
         if (revoked) credentialBrokers.delete(leaseId);
@@ -321,6 +396,29 @@ export function createRuntimeDaemonClient(
           hostToolHandlers.delete(leaseId);
           throw error;
         }
+      },
+      async resume(leaseId, handlers) {
+        hostToolHandlers.set(leaseId, handlers);
+        try {
+          const value = await request('host_tool.get', { leaseId });
+          if (value === null || value === undefined) {
+            throw Object.assign(
+              new Error(`Host tool lease is unavailable after Runtime reconnect: ${leaseId}`),
+              { code: 'host_tool_unavailable' as const },
+            );
+          }
+          const lease = requireRecord(value) as unknown as RuntimeHostToolLease;
+          validateHostToolHandlers(lease.tools, handlers);
+          return lease;
+        } catch (error: unknown) {
+          hostToolHandlers.delete(leaseId);
+          throw error;
+        }
+      },
+      async getInvocation(invocationId) {
+        return nullToUndefined<RuntimeHostToolInvocationStatus>(
+          await request('host_tool.invocation.get', { invocationId }),
+        );
       },
       async revoke(leaseId) {
         const revoked = await request('host_tool.revoke', { leaseId }) as boolean;
@@ -503,6 +601,9 @@ export function createRuntimeDaemonClient(
       snapshot() {
         return request('daemon.status') as Promise<RuntimeStatusSnapshot>;
       },
+      preflight() {
+        return request('daemon.preflight') as Promise<RuntimeDaemonPreflight>;
+      },
     },
     diagnostics: {
       latestContextBudget(filter?: RuntimeDiagnosticFilter) {
@@ -512,8 +613,24 @@ export function createRuntimeDaemonClient(
         return request('tool.exposure.preview', filter) as Promise<RuntimeToolExposurePlan | null>;
       },
     },
+    connection: {
+      current() {
+        return connectionState;
+      },
+      subscribe(listener) {
+        connectionListeners.add(listener);
+        listener(connectionState);
+        return {
+          close() {
+            connectionListeners.delete(listener);
+          },
+        };
+      },
+    },
     async close() {
+      transportLifecycleSubscription?.close();
       reverseSubscription.close();
+      connectionListeners.clear();
       credentialBrokers.clear();
       hostToolHandlers.clear();
       hostToolResults.clear();
@@ -606,8 +723,10 @@ async function answerHostToolInvocation(
   } catch {
     try {
       await request('host_tool.complete', { invocationId, error: 'host_tool_failed' });
-    } catch {
-      // Never replay a host handler here. The daemon reports an unknown outcome.
+    } catch (error: unknown) {
+      throw new Error('Failed to report the Host Tool outcome to the Runtime daemon.', {
+        cause: error,
+      });
     }
   }
 }
@@ -656,7 +775,7 @@ function subscribeToDaemonEvents(
   return subscribeToDaemonNotification(transport, request, 'event.subscribe', {
     filter,
   }, (event) => {
-    listener(event as RuntimeEvent);
+    deliverRuntimeEvent(event, listener);
   });
 }
 
@@ -683,7 +802,7 @@ async function observeDaemonSession(
       return;
     }
     if (payload.subscriptionId === remoteSubscriptionId) {
-      listener(payload.event as RuntimeEvent);
+      deliverRuntimeEvent(payload.event, listener);
     }
   });
   try {
@@ -698,7 +817,7 @@ async function observeDaemonSession(
     const snapshot = requireRecord(result.snapshot) as unknown as RuntimeSessionObservationSnapshot;
     for (const payload of pending.splice(0)) {
       if (payload.subscriptionId === remoteSubscriptionId) {
-        listener(payload.event as RuntimeEvent);
+        deliverRuntimeEvent(payload.event, listener);
       }
     }
     return {
@@ -731,6 +850,24 @@ function isRuntimeEventForSession(value: unknown, sessionId: string): boolean {
     && typeof value === 'object'
     && !Array.isArray(value)
     && (value as Record<string, unknown>).sessionId === sessionId;
+}
+
+function deliverRuntimeEvent(value: unknown, listener: RuntimeEventListener): void {
+  const event = parseRuntimeEventForClient(value);
+  if (event !== undefined) listener(event);
+}
+
+function parseRuntimeEventForClient(value: unknown): RuntimeEvent | undefined {
+  const parsed = parseRuntimeEvent(value);
+  if (!parsed.ok) {
+    emitKodaXDiagnostic({
+      source: 'runtime.daemon.client',
+      level: 'warn',
+      message: `Ignored malformed Runtime event: ${parsed.error}`,
+    });
+    return;
+  }
+  return parsed.event;
 }
 
 function subscribeToDaemonWorkflowEvents(
@@ -884,20 +1021,32 @@ function assertRuntimeTransportSafe(
   }
   if (typeof value === 'number') {
     if (Number.isFinite(value)) return;
-    throw new Error(`${path} is not transport-safe: numbers must be finite.`);
+    throw new RuntimeTransportBoundaryError(
+      path,
+      `${path} is not transport-safe: numbers must be finite.`,
+    );
   }
   if (typeof value === 'function' || typeof value === 'symbol' || typeof value === 'bigint') {
-    throw new Error(`${path} is not transport-safe: ${typeof value} values cannot cross a Runtime boundary.`);
+    throw new RuntimeTransportBoundaryError(
+      path,
+      `${path} is not transport-safe: ${typeof value} values cannot cross a Runtime boundary.`,
+    );
   }
   if (typeof value !== 'object') return;
   if (ancestors.has(value)) {
-    throw new Error(`${path} is not transport-safe: cyclic values cannot cross a Runtime boundary.`);
+    throw new RuntimeTransportBoundaryError(
+      path,
+      `${path} is not transport-safe: cyclic values cannot cross a Runtime boundary.`,
+    );
   }
 
   const prototype = Object.getPrototypeOf(value);
   if (!Array.isArray(value) && prototype !== Object.prototype && prototype !== null) {
     const name = prototype?.constructor?.name ?? 'object';
-    throw new Error(`${path} is not transport-safe: ${name} instances cannot cross a Runtime boundary.`);
+    throw new RuntimeTransportBoundaryError(
+      path,
+      `${path} is not transport-safe: ${name} instances cannot cross a Runtime boundary.`,
+    );
   }
 
   ancestors.add(value);
