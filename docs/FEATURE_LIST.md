@@ -241,11 +241,20 @@
 > delegation and recursion under the Codex V2 default of four total session
 > slots including a reserved Root lane (three active non-root turns), explicit
 > `AgentLimitReached` without a hidden capacity queue, direct-parent
-> completion, follow-up, interruption, unified limits, and a canonical
-> Ultra-aligned tool surface;
-> AMAW adds proactive Workflow selection on that same control plane. Released
-> F248 Workflow-first/static-plan wording and the old model-visible task tool
-> names are superseded rather than kept as a second orchestration system.
+> completion, reusable Actor identities with separate Turn lifecycles,
+> safe-boundary follow-up, interruption, a root-owned work budget, and a
+> canonical Ultra-aligned collaboration surface. F270 retires AMAW and F248's
+> complexity-driven Workflow directive, leaving AMA as the single adaptive
+> multi-Agent mode.
+> F249's explicit natural-language Workflow request plus `/workflow`,
+> `/review --workflow`, named, and SDK execution remain available; task
+> complexity alone never activates Workflow in either prompt or tool-description
+> bytes. Released Workflow product capabilities remain while their declared
+> pending steps stay protocol state and child execution moves to the unified
+> control plane; post-F270 use determines later retirement or evolution. The old
+> model-visible task tool names are superseded rather than kept as a second
+> orchestration system, and F269's released owner/recovery schema is a hard ship
+> prerequisite.
 >
 > **2026-07-12 F225 early cleanup slice**: the Classic readline
 > reverse-video StatusBar was proven write-only (`update()` calls with no
