@@ -1,4 +1,4 @@
-﻿# Feature 总表
+# Feature 总表
 
 > 这是活跃 roadmap 与近期完成项索引：保留仍需计划/实现/验证的 feature，
 > 并保留 archive cutoff 之后的近期发布项。更早的已发布、取消、吸收、搁置
@@ -12,14 +12,14 @@
 | Item | Value |
 |---|---|
 | Current released version | `v0.7.68` |
-| Current package version | `@kodax-ai/kodax@0.7.68`; Git tag and GitHub binary release prepared, npm publication remains an explicit operator step |
+| Current package version | `@kodax-ai/kodax@0.7.68`; Git tag, GitHub binary release, and npm `latest` publication completed 2026-07-12 |
 | Workspace baseline | `llm / agent / coding / repl` 4 packages |
-| Total tracked features | `53` |
-| InProgress | `3` |
-| Planned | `10` |
+| Total tracked features | `55` |
+| InProgress | `4` |
+| Planned | `11` |
 | Completed | `33` |
 | Reviewed out of active roadmap | `7` (`105, 108, 231, 232, 235, 238, 244`) |
-| Tracked feature IDs | `007, 030, 093, 105, 108, 113, 139, 174, 211, 221, 224, 225, 228, 229, 230, 231, 232, 233, 234, 235, 236, 237, 238, 239, 240, 241, 242, 243, 244, 245, 246, 247, 248, 249, 250, 251, 252, 253, 254, 255, 256, 257, 258, 259, 260, 261, 262, 263, 264, 265, 266, 267, 268` |
+| Tracked feature IDs | `007, 030, 093, 105, 108, 113, 139, 174, 211, 221, 224, 225, 228, 229, 230, 231, 232, 233, 234, 235, 236, 237, 238, 239, 240, 241, 242, 243, 244, 245, 246, 247, 248, 249, 250, 251, 252, 253, 254, 255, 256, 257, 258, 259, 260, 261, 262, 263, 264, 265, 266, 267, 268, 269, 270` |
 | Archive cutoff | Shipped / canceled / absorbed / shelved items through `v0.7.49` are archived. |
 
 ### 一览表
@@ -27,8 +27,8 @@
 | Status | Count | Feature IDs | Next checkpoint |
 |---|---:|---|---|
 | Completed | 33 | `260, 261, 259, 258, 253, 254, 255, 256, 257, 228, 251, 252, 250, 248, 249, 247, 246, 245, 243, 242, 241, 233, 240, 239, 224, 221, 174, 211, 237, 229, 230, 234, 236` | `260` completed for v0.7.68 (2026-07-12) with 9593/9593 passing tests on both Node 20 and Node 22 release CI, full build and artifact validation, 87.58% focused line coverage, and all preregistered v2 memory-routing gates passing. `261`, `259`, and `258` shipped in v0.7.67 (2026-07-11). Earlier completion history is unchanged. |
-| InProgress | 3 | `267, 268, 225` | `267` and `268` are one release-blocking delivery batch. Their implementation is complete: shared user-domain lifecycle, no-code bidirectional A2A, automatic `external:<name>` registration, admitted Markdown Agent/Skill execution, exact Skill-script ASRT isolation, live hot fields, and explicit restart-required execution fields. Release status remains InProgress until independent A2A/TCK and cross-platform release evidence is attached. `225` broader current-HEAD cleanup remains. |
-| Planned, near-term | 4 | `266, 263, 264, 265` | `v0.7.70` -> `v0.7.85` |
+| InProgress | 4 | `269, 267, 268, 225` | `269` started 2026-07-14 with the released F255 daemon baseline green; delivery proceeds through durable operations, atomic observation, transport-safe interactions, Space credential/Host Tool bridges, owner fencing, and process-distinct recovery/package gates. `267`/`268` await independent release evidence; `225` broader current-HEAD cleanup remains. |
+| Planned, near-term | 5 | `266, 270, 263, 264, 265` | `v0.7.70` -> `v0.7.85` |
 | Planned, v0.8.x | 5 | `007, 030, 093, 113, 139` | `v0.8.5+` |
 | Planned, v0.9.x | 1 | `262` | `v0.9.0` |
 | Reviewed out, 2026-07-12 | 7 | `244, 231, 235, 238, 232, 105, 108` | Shelved, deferred, absorbed, or cancelled after the post-v0.7.70 roadmap review. |
@@ -52,8 +52,8 @@
 | `v0.7.66` | `0` |
 | `v0.7.67` | `0` |
 | `v0.7.68` | `0` |
-| `v0.7.69` | `2` |
-| `v0.7.70` | `1` |
+| `v0.7.69` | `3` |
+| `v0.7.70` | `2` |
 | `v0.7.71` | `0` |
 | `v0.7.72` | `0` |
 | `v0.7.73` | `0` |
@@ -216,9 +216,36 @@
 > bundle/DTS/template checks, npm dry-run contents, and four real daemon CLI
 > smoke tests. The current Windows host correctly reports ASRT setup-required
 > until its explicit one-time sandbox account provisioning is performed; there
-> is no host-shell fallback. Both Features remain InProgress only for the
+> is no host-shell fallback. Both Features remain InProgress for the
 > independent A2A/TCK and cross-platform release evidence required by their
-> release gates, not because F268 or the no-code F267 product path is missing.
+> release gates. Their original product paths are implemented; the F269
+> insertion additionally requires the cross-Feature operation/revision
+> integration recorded in the v0.7.69 design before they can ship together.
+>
+> **2026-07-13 shared-daemon priority insertion**: `FEATURE_269` joins
+> `v0.7.69` as a third Critical Feature without automatically moving
+> `FEATURE_267` or `FEATURE_268`. It closes the released F255 gaps required
+> by Space v0.1.32's default Coder migration: atomic session observation and
+> resync, durable operation ordering/idempotency, transport-safe AskUser and
+> permission concurrency, run/provider-scoped Space credential brokerage,
+> immutable run-bound Host Tools, explicit unknown/interrupted recovery, and a
+> shared daemon/inline Coder owner fence with sticky rollback. Partner remains
+> private embedded and Space Artifact remains Space-owned. The three
+> v0.7.69 Features keep separate release gates so product can explicitly
+> reschedule F267/F268 later without weakening F269.
+>
+> **2026-07-14 adaptive collaboration insertion**: `FEATURE_270` joins
+> `v0.7.70` beside F266. It replaces KodaX's overlapping one-shot child,
+> Workflow-local, and external-task collaboration authorities with one
+> Runtime-owned actor tree and scheduler. AMA gains feedback-driven Agent
+> delegation and recursion under the Codex V2 default of four total session
+> slots including a reserved Root lane (three active non-root turns), explicit
+> `AgentLimitReached` without a hidden capacity queue, direct-parent
+> completion, follow-up, interruption, unified limits, and a canonical
+> Ultra-aligned tool surface;
+> AMAW adds proactive Workflow selection on that same control plane. Released
+> F248 Workflow-first/static-plan wording and the old model-visible task tool
+> names are superseded rather than kept as a second orchestration system.
 >
 > **2026-07-12 F225 early cleanup slice**: the Classic readline
 > reverse-video StatusBar was proven write-only (`update()` calls with no
@@ -250,9 +277,25 @@
 |---|---|---|---|---|---|
 | `267` | Bidirectional A2A Client Executor + KodaX Agent Server | Core / Agent Interoperability + Runtime SDK | Critical | `v0.7.69` | [v0.7.69](features/v0.7.69.md#feature_267-bidirectional-a2a-client-executor--kodax-agent-server) |
 | `268` | Hot-Reloadable Integration Configuration Split | Core / Configuration + Runtime | Critical | `v0.7.69` | [v0.7.69](features/v0.7.69.md#feature_268-hot-reloadable-integration-configuration-split) |
+| `269` | Shared Daemon Multi-Client Consistency + Secure Host Bridges | Core / Runtime + SDK + Local Security | Critical | `v0.7.69` | [v0.7.69](features/v0.7.69.md#feature_269-shared-daemon-multi-client-consistency--secure-host-bridges) |
 | `225` | REPL Dead / Legacy Code Cleanup | Internal / Refactor + Tech Debt | Medium | `v0.7.100` | [v0.7.100](features/v0.7.100.md#feature_225-repl-dead--legacy-code-cleanup) |
 
 Recent completion notes:
+
+`269` implementation is complete for `v0.7.69`: the existing Runtime daemon now
+provides atomic session observation, durable operation deduplication, stable
+same-session order, settings/grant CAS, transport-safe AskUser/permission,
+structured crash outcomes, Space keychain credential brokerage, run-bound Host
+Tools, and a shared daemon/inline Coder owner fence with sticky rollback. A real
+daemon process plus independent Space-like/observer processes verifies shared
+state and credential non-persistence. F269 remains InProgress only for the
+formal npm/Space packaged smoke and Windows/Ubuntu release evidence; it does
+not move F267 or F268. The 2026-07-14 implementation review closed ordering,
+restart reconciliation, event-trim projection, owner-lock/atomic-release,
+Host Tool revoke, credential expiry/configuration/redaction, and legacy
+settings-CAS gaps. Focused new-module line coverage is 86.40%; Runtime/daemon,
+64-test facade, six process-distinct smoke, TypeScript/build/DTS, and npm
+dry-run gates pass locally.
 
 `260` completed for `v0.7.68`: the thin experimental Memory Agent SDK,
 zero-wait scoped recall, deliberate read-only `memory_recall`, trace-only
@@ -330,6 +373,7 @@ fixed GitHub binary archive sidecar omission before tagging.
 | ID | Title | Category | Priority | Planned | Design |
 |---|---|---|---|---|---|
 | `266` | Learning Center + Learned Capability Runtime Control Plane | Core / Agent Learning + Runtime SDK | High | `v0.7.70` | [v0.7.70](features/v0.7.70.md#feature_266-learning-center--learned-capability-runtime-control-plane) |
+| `270` | Ultra-Aligned Adaptive Multi-Agent Actor Control Plane | Core / Agent Orchestration + Runtime | High | `v0.7.70` | [v0.7.70](features/v0.7.70.md#feature_270-ultra-aligned-adaptive-multi-agent-actor-control-plane) |
 | `263` | Evidence-Gated Background Skill Learning Loop | Core / Skills + Self-Improvement | High | `v0.7.75` | [v0.7.75](features/v0.7.75.md#feature_263-evidence-gated-background-skill-learning-loop) |
 | `264` | Evidence-Gated Extension Learning Loop | Core / Extensions + Self-Improvement | High | `v0.7.80` | [v0.7.80](features/v0.7.80.md#feature_264-evidence-gated-extension-learning-loop) |
 | `265` | Work Fast Path + Coding Assurance Budget | Core / Performance + Agent Quality | High | `v0.7.85` | [v0.7.85](features/v0.7.85.md#feature_265-work-fast-path--coding-assurance-budget) |
