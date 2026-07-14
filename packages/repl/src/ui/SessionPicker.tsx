@@ -1,5 +1,5 @@
 import React, { useMemo, useState } from 'react';
-import { Box, Text, render, useApp, useInput } from 'ink';
+import { Box, Text, render, useApp, useInput } from './tui.js';
 
 export interface SessionPickerItem {
   readonly id: string;

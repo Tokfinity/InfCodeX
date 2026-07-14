@@ -1,6 +1,8 @@
+import { EventEmitter } from 'node:events';
 import React from 'react';
 import { render } from 'ink-testing-library';
 import { describe, expect, it, vi } from 'vitest';
+import { render as renderOwnedTui } from './tui.js';
 import {
   SessionPicker,
   buildSessionPickerPage,
@@ -31,6 +33,22 @@ const sessions: SessionPickerItem[] = [
     createdAt: '2026-07-11T01:00:00.000Z',
   },
 ];
+
+class MockInput extends EventEmitter {
+  isTTY = true;
+  isRaw = false;
+
+  setRawMode(enabled: boolean): void {
+    this.isRaw = enabled;
+  }
+}
+
+class MockOutput extends EventEmitter {
+  isTTY = true;
+  columns = 120;
+  rows = 40;
+  write = vi.fn(() => true);
+}
 
 describe('SessionPicker', () => {
   it('searches incrementally across title, id, and surface using all query tokens', () => {
@@ -67,5 +85,35 @@ describe('SessionPicker', () => {
     expect(frame).toContain('Tab complete');
     expect(frame).toContain('Page 1/2');
     expect(frame).toContain('Selected ID: session-alpha-12345678');
+  });
+
+  it('selects and exits through the owned TUI input lifecycle', async () => {
+    const stdin = new MockInput();
+    const stdout = new MockOutput();
+    const stderr = new MockOutput();
+    const onSelect = vi.fn();
+    const instance = renderOwnedTui(
+      <SessionPicker
+        sessions={sessions}
+        onSelect={onSelect}
+        onCancel={vi.fn()}
+        pageSize={2}
+      />,
+      {
+        stdin: stdin as unknown as NodeJS.ReadStream,
+        stdout: stdout as unknown as NodeJS.WriteStream,
+        stderr: stderr as unknown as NodeJS.WriteStream,
+      },
+    );
+
+    try {
+      stdin.emit('data', Buffer.from('\r'));
+      expect(onSelect).toHaveBeenCalledWith(sessions[0]);
+      await instance.waitUntilExit();
+      expect(stdin.isRaw).toBe(false);
+    } finally {
+      instance.unmount();
+      instance.cleanup();
+    }
   });
 });

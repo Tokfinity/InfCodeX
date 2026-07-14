@@ -287,6 +287,41 @@ describe('Session Management Public SDK', () => {
     expect(secondPage.map((session) => session.id)).toEqual(['cursor-2', 'cursor-1']);
   });
 
+  it('project-scoped listing does not full-read modern session transcripts', async () => {
+    await api.listSessions({ limit: 1 });
+    const id = 'project-head-read-only';
+    const sessionPath = path.join(sessionsDir, `${id}.jsonl`);
+    const meta = {
+      _type: 'meta',
+      id,
+      title: 'Head Read Only',
+      gitRoot: '/tmp/test-repo',
+      createdAt: '2026-07-14T03:00:00.000Z',
+      scope: 'user',
+      activeMessageCount: 1,
+    };
+    await writeFile(
+      sessionPath,
+      `${JSON.stringify(meta)}\n${JSON.stringify({ role: 'user', content: 'x'.repeat(256_000) })}\n`,
+      'utf-8',
+    );
+    const readFileSpy = vi.spyOn(fs.promises, 'readFile');
+
+    try {
+      const results = await api.listSessions({
+        projectRoot: '/tmp/test-repo',
+        scope: 'user',
+        limit: 100,
+      });
+
+      expect(results.map((session) => session.id)).toContain(id);
+      expect(readFileSpy.mock.calls.some(([file]) => String(file).endsWith(`${id}.jsonl`)))
+        .toBe(false);
+    } finally {
+      readFileSpy.mockRestore();
+    }
+  });
+
   // ── Test 4: loadSession returns null for missing id ───────────────────────
   it('loadSession returns null for a non-existent session id', async () => {
     const result = await api.loadSession('does-not-exist-xyz');

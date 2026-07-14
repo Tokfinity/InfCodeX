@@ -25,7 +25,7 @@ import type {
   KodaXTaskResultMetadata,
 } from '@kodax-ai/agent';
 
-import { FileSessionStorage } from '../interactive/storage.js';
+import { FileSessionStorage, readSessionFirstLine } from '../interactive/storage.js';
 import { compactSession } from './compact-session.js';
 export { compactSession } from './compact-session.js';
 export type { CompactSessionOptions, CompactSessionResult } from './compact-session.js';
@@ -238,6 +238,85 @@ export interface ListSessionsOptions {
   readonly cursor?: string;
 }
 
+type SessionListCandidate = SessionSummary & { _createdAtMs?: number };
+
+interface SessionListReadFilter {
+  readonly scope: NonNullable<ListSessionsOptions['scope']>;
+  readonly before?: number;
+  readonly tag?: string;
+  readonly surface?: string;
+  readonly gitRoot?: string;
+}
+
+async function readSessionMetaRecord(filePath: string): Promise<Record<string, unknown> | undefined> {
+  const firstLine = await readSessionFirstLine(filePath);
+  if (!firstLine) return undefined;
+  const first: unknown = JSON.parse(firstLine);
+  if (first === null || typeof first !== 'object') return undefined;
+  const meta = first as Record<string, unknown>;
+  return meta._type === 'meta' ? meta : undefined;
+}
+
+async function readActiveMessageCount(
+  filePath: string,
+  meta: Record<string, unknown>,
+): Promise<number> {
+  if (typeof meta.activeMessageCount === 'number' && meta.activeMessageCount >= 0) {
+    return meta.activeMessageCount;
+  }
+  const content = (await fsPromises.readFile(filePath, 'utf-8')).trim();
+  const extensionRecordCount =
+    typeof meta.extensionRecordCount === 'number' && meta.extensionRecordCount > 0
+      ? meta.extensionRecordCount
+      : 0;
+  return Math.max(0, content.split('\n').length - 1 - extensionRecordCount);
+}
+
+async function readSessionListCandidate(
+  filePath: string,
+  filter: SessionListReadFilter,
+): Promise<SessionListCandidate | undefined> {
+  const meta = await readSessionMetaRecord(filePath);
+  if (!meta) return undefined;
+  const sessionScope = meta.scope === 'managed-task-worker' ? 'managed-task-worker' : 'user';
+  if (filter.scope !== 'all' && filter.scope !== sessionScope) return undefined;
+
+  const createdAt = typeof meta.createdAt === 'string' ? meta.createdAt : undefined;
+  const createdAtMs = createdAt ? Date.parse(createdAt) : undefined;
+  if (
+    filter.before !== undefined
+    && createdAtMs !== undefined
+    && Number.isFinite(createdAtMs)
+    && createdAtMs >= filter.before
+  ) {
+    return undefined;
+  }
+  const tag = typeof meta.tag === 'string' ? meta.tag : undefined;
+  if (filter.tag !== undefined && tag !== filter.tag) return undefined;
+
+  const runtimeInfo = meta.runtimeInfo !== null && typeof meta.runtimeInfo === 'object'
+    ? extractRuntimeInfoSummary(meta.runtimeInfo as KodaXSessionRuntimeInfo)
+    : undefined;
+  const metaGitRoot = typeof meta.gitRoot === 'string' ? meta.gitRoot : undefined;
+  const summaryRuntime = runtimeInfo ?? (metaGitRoot ? { gitRoot: metaGitRoot } : undefined);
+  if (!sessionMatchesProjectRoot(summaryRuntime, metaGitRoot, filter.gitRoot)) return undefined;
+  if (filter.surface !== undefined && summaryRuntime?.surface !== filter.surface) return undefined;
+
+  const id = path.basename(filePath, '.jsonl');
+  const archived = path.basename(path.dirname(filePath)) === 'archived';
+  return {
+    id,
+    title: typeof meta.title === 'string' ? meta.title : '',
+    msgCount: await readActiveMessageCount(filePath, meta),
+    ...(tag !== undefined ? { tag } : {}),
+    ...(createdAt !== undefined ? { createdAt } : {}),
+    ...(summaryRuntime !== undefined ? { runtimeInfo: summaryRuntime } : {}),
+    projectKey: deriveProjectKeyFromRoot(summaryRuntime?.gitRoot ?? summaryRuntime?.workspaceRoot).key,
+    ...(archived ? { archived: true } : {}),
+    _createdAtMs: createdAtMs,
+  };
+}
+
 export type WatchSessionsCallback = (
   event: { kind: 'change' | 'add' | 'remove'; sessionId: string },
 ) => void;
@@ -361,81 +440,32 @@ async function listSessionsImpl(
     // legacy pool), dedup by id (a session mid-migration may appear twice).
     const filePaths = await collectSessionFilePaths(sessionsDir, includeArchived);
 
-    const sessions: Array<SessionSummary & { _createdAtMs?: number }> = [];
+    const sessions: SessionListCandidate[] = [];
     const seenIds = new Set<string>();
+    const readFilter: SessionListReadFilter = {
+      scope,
+      ...(before !== undefined ? { before } : {}),
+      ...(tag !== undefined ? { tag } : {}),
+      ...(surface !== undefined ? { surface } : {}),
+      ...(gitRoot !== undefined ? { gitRoot } : {}),
+    };
 
-    for (const filePath of filePaths) {
-      try {
-        const id = path.basename(filePath, '.jsonl');
-        if (seenIds.has(id)) continue;
-        const archived = path.basename(path.dirname(filePath)) === 'archived';
-        const content = (await fsPromises.readFile(filePath, 'utf-8')).trim();
-        const firstLine = content.split('\n')[0];
-        if (!firstLine) continue;
-
-        const first: unknown = JSON.parse(firstLine);
-        if (
-          first === null
-          || typeof first !== 'object'
-          || (first as Record<string, unknown>)._type !== 'meta'
-        ) {
-          continue;
+    const readConcurrency = 48;
+    for (let index = 0; index < filePaths.length; index += readConcurrency) {
+      const batch = await Promise.all(
+        filePaths.slice(index, index + readConcurrency).map(async (filePath) => {
+          try {
+            return await readSessionListCandidate(filePath, readFilter);
+          } catch {
+            return undefined;
+          }
+        }),
+      );
+      for (const candidate of batch) {
+        if (candidate && !seenIds.has(candidate.id)) {
+          seenIds.add(candidate.id);
+          sessions.push(candidate);
         }
-
-        const meta = first as Record<string, unknown>;
-        const sessionScope: string =
-          meta.scope === 'managed-task-worker' ? 'managed-task-worker' : 'user';
-
-        if (scope === 'user' && sessionScope !== 'user') continue;
-        if (scope === 'managed-task-worker' && sessionScope !== 'managed-task-worker') continue;
-        // scope === 'all' → no filter
-
-        const createdAt = typeof meta.createdAt === 'string' ? meta.createdAt : undefined;
-        if (before !== undefined && createdAt !== undefined) {
-          const ts = Date.parse(createdAt);
-          if (!Number.isNaN(ts) && ts >= before) continue;
-        }
-
-        const sessionTag = typeof meta.tag === 'string' ? meta.tag : undefined;
-        if (tag !== undefined && sessionTag !== tag) continue;
-
-        const lineCount = content.split('\n').length;
-        const extensionRecordCount =
-          typeof meta.extensionRecordCount === 'number' && meta.extensionRecordCount > 0
-            ? meta.extensionRecordCount
-            : 0;
-        const activeMessageCount =
-          typeof meta.activeMessageCount === 'number' && meta.activeMessageCount >= 0
-            ? meta.activeMessageCount
-            : Math.max(0, lineCount - 1 - extensionRecordCount);
-
-        const runtimeInfo =
-          meta.runtimeInfo !== null && typeof meta.runtimeInfo === 'object'
-            ? extractRuntimeInfoSummary(meta.runtimeInfo as KodaXSessionRuntimeInfo)
-            : undefined;
-
-        const gitRootVal = typeof meta.gitRoot === 'string' ? meta.gitRoot : undefined;
-        const ri = runtimeInfo ?? (gitRootVal ? { gitRoot: gitRootVal } : undefined);
-        if (!sessionMatchesProjectRoot(ri, gitRootVal, gitRoot)) continue;
-        if (surface !== undefined && ri?.surface !== surface) continue;
-
-        const projectKey = deriveProjectKeyFromRoot(ri?.gitRoot ?? ri?.workspaceRoot).key;
-
-        seenIds.add(id);
-        sessions.push({
-          id,
-          title: typeof meta.title === 'string' ? meta.title : '',
-          msgCount: activeMessageCount,
-          ...(sessionTag !== undefined ? { tag: sessionTag } : {}),
-          createdAt,
-          runtimeInfo: ri,
-          projectKey,
-          ...(archived ? { archived: true } : {}),
-          _createdAtMs: createdAt ? Date.parse(createdAt) : undefined,
-        });
-      } catch {
-        // Corrupt or unreadable file — skip silently.
-        continue;
       }
     }
 

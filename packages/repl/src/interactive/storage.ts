@@ -566,7 +566,7 @@ async function readPersistedSessionFile(filePath: string): Promise<PersistedSess
 // total line count).
 const SESSION_HEAD_READ_BYTES = 65536;
 
-async function readSessionFirstLine(filePath: string): Promise<string | null> {
+export async function readSessionFirstLine(filePath: string): Promise<string | null> {
   let fh: fs.FileHandle | undefined;
   try {
     fh = await fs.open(filePath, 'r');

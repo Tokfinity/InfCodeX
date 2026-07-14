@@ -1961,34 +1961,20 @@ function showBasicHelp(): void {
 }
 
 async function loadResumableSessions(maxSessions = 1000): Promise<SessionPickerItem[]> {
-  const resumable: SessionPickerItem[] = [];
-  let cursor: string | undefined;
-  let scanned = 0;
-  while (scanned < maxSessions) {
-    const limit = Math.min(100, maxSessions - scanned);
-    const page = await listSessions({
-      projectRoot: process.cwd(),
-      scope: 'user',
-      limit,
-      ...(cursor !== undefined ? { cursor } : {}),
-    });
-    if (page.length === 0) break;
-    scanned += page.length;
-    for (const session of page) {
-      if (session.msgCount === 0) continue;
-      resumable.push({
-        id: session.id,
-        title: session.title,
-        msgCount: session.msgCount,
-        ...(session.createdAt !== undefined ? { createdAt: session.createdAt } : {}),
-        ...(session.runtimeInfo?.surface !== undefined ? { surface: session.runtimeInfo.surface } : {}),
-      });
-    }
-    const nextCursor = page.at(-1)?.cursor;
-    if (page.length < limit || !nextCursor || nextCursor === cursor) break;
-    cursor = nextCursor;
-  }
-  return resumable;
+  const sessions = await listSessions({
+    projectRoot: process.cwd(),
+    scope: 'user',
+    limit: maxSessions,
+  });
+  return sessions
+    .filter((session) => session.msgCount > 0)
+    .map((session) => ({
+      id: session.id,
+      title: session.title,
+      msgCount: session.msgCount,
+      ...(session.createdAt !== undefined ? { createdAt: session.createdAt } : {}),
+      ...(session.runtimeInfo?.surface !== undefined ? { surface: session.runtimeInfo.surface } : {}),
+    }));
 }
 
 async function main() {

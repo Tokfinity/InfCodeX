@@ -361,6 +361,17 @@ describe('CLI Entry Point', () => {
     expect(source).not.toContain('Enter interactive mode (auto-resume)');
   });
 
+  it('should load the bounded resume picker dataset in one list pass', async () => {
+    const source = await fs.readFile(path.join(process.cwd(), 'src', 'kodax_cli.ts'), 'utf-8');
+    const loader = source.match(
+      /async function loadResumableSessions[\s\S]*?\n}\n\nasync function main/,
+    )?.[0] ?? '';
+
+    expect(loader).not.toBe('');
+    expect(loader.match(/listSessions\(/g)).toHaveLength(1);
+    expect(loader).not.toContain('while (');
+  });
+
   it('should document provider and project caveats in help topics', async () => {
     const source = await fs.readFile(path.join(process.cwd(), 'src', 'kodax_cli.ts'), 'utf-8');
     expect(source).toContain('CLI bridge provider (latest-user-message only, MCP unavailable)');
