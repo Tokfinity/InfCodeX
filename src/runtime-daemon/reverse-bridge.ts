@@ -108,6 +108,15 @@ export function createRuntimeDaemonReverseBridge(
     if (closed) throw bridgeError('host_tool_unavailable', 'Host bridge connection is closed.');
   };
 
+  const pruneExpiredCredentials = (): void => {
+    const now = Date.now();
+    for (const [leaseId, lease] of credentials) {
+      if (lease.expiresAt !== undefined && Date.parse(lease.expiresAt) <= now) {
+        credentials.delete(leaseId);
+      }
+    }
+  };
+
   const invokeHostTool = async (input: {
     readonly lease: HostToolLeaseRecord;
     readonly descriptor: RuntimeHostToolDescriptor;
@@ -158,6 +167,7 @@ export function createRuntimeDaemonReverseBridge(
   return {
     registerCredential(input) {
       requireOpen();
+      pruneExpiredCredentials();
       if (
         input.providers.length === 0
         || input.providers.some((provider) => provider.trim().length === 0)

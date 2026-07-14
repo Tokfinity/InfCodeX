@@ -4,6 +4,8 @@ import { createServer, type Server } from 'node:http';
 import path from 'node:path';
 import { Readable } from 'node:stream';
 
+import { emitKodaXDiagnostic } from '@kodax-ai/agent';
+
 import type {
   RuntimeAgentBindingService,
   RuntimeBoundDefaultAgent,
@@ -384,6 +386,7 @@ class KodaXA2AServerRuntime implements KodaXA2AServer {
   }
 
   private async handleRpc(request: Request): Promise<Response> {
+    const options = this.options;
     let id: string | number | null = null;
     try {
       const requestedVersion = request.headers.get('a2a-version');
@@ -393,7 +396,7 @@ class KodaXA2AServerRuntime implements KodaXA2AServer {
       if (!request.headers.get('content-type')?.toLowerCase().includes('application/json')) {
         throw new A2AError(-32600, 'A2A JSON-RPC requests require application/json.', 415);
       }
-      const body = await readBoundedBody(request, this.options.limits.maxRequestBytes);
+      const body = await readBoundedBody(request, options.limits.maxRequestBytes);
       let parsed: unknown;
       try {
         parsed = JSON.parse(new TextDecoder().decode(body)) as unknown;
@@ -402,7 +405,7 @@ class KodaXA2AServerRuntime implements KodaXA2AServer {
       }
       const rpc = parseJsonRpcRequest(parsed);
       id = rpc.id;
-      const principal = await this.options.authentication.authenticate(request);
+      const principal = await options.authentication.authenticate(request);
       if (!principal) throw new A2AError(-32600, 'Authentication required.', 401);
       if (PUSH_METHODS.has(rpc.method)) throw new A2AError(-32003, 'Push notifications are not supported.');
       const operation = operationForMethod(rpc.method);
@@ -410,9 +413,9 @@ class KodaXA2AServerRuntime implements KodaXA2AServer {
         ? rpc.params.id
         : isRecord(rpc.params?.message) && typeof rpc.params.message.taskId === 'string'
           ? rpc.params.message.taskId : undefined;
-      const allowed = await this.options.authorize({ principal, operation, ...(taskId ? { taskId } : {}) });
+      const allowed = await options.authorize({ principal, operation, ...(taskId ? { taskId } : {}) });
       if (!allowed) throw new A2AError(-32001, 'Task not found.');
-      return await this.dispatch(rpc, principal);
+      return await this.dispatch(rpc, principal, options);
     } catch (error: unknown) {
       const diagnosticId = sha256(errorMessage(error)).slice(0, 16);
       const normalized = error instanceof A2AError
@@ -428,20 +431,26 @@ class KodaXA2AServerRuntime implements KodaXA2AServer {
     }
   }
 
-  private async dispatch(rpc: A2AJsonRpcRequest, principal: A2APrincipal): Promise<Response> {
+  private async dispatch(
+    rpc: A2AJsonRpcRequest,
+    principal: A2APrincipal,
+    options: PreparedA2AServerOptions,
+  ): Promise<Response> {
     switch (rpc.method) {
-      case 'SendMessage': return rpcResult(rpc.id, { task: await this.sendMessage(rpc.params, principal, false) });
+      case 'SendMessage': return rpcResult(rpc.id, {
+        task: await this.sendMessage(rpc.params, principal, false, options),
+      });
       case 'SendStreamingMessage': {
-        const task = await this.sendMessage(rpc.params, principal, true);
+        const task = await this.sendMessage(rpc.params, principal, true, options);
         return this.streamTask(rpc.id, task.id, principalKey(principal));
       }
       case 'GetTask': return rpcResult(rpc.id, await this.getTask(rpc.params, principal));
       case 'ListTasks': return rpcResult(rpc.id, this.listTasks(rpc.params, principal));
-      case 'CancelTask': return rpcResult(rpc.id, await this.cancelTask(rpc.params, principal));
+      case 'CancelTask': return rpcResult(rpc.id, await this.cancelTask(rpc.params, principal, options));
       case 'SubscribeToTask': return this.subscribeTask(rpc.id, rpc.params, principal);
       case 'GetExtendedAgentCard': {
-        if (!this.options.extendedAgentCard) throw new A2AError(-32007, 'Extended Agent Card is not configured.');
-        return rpcResult(rpc.id, this.options.extendedAgentCard);
+        if (!options.extendedAgentCard) throw new A2AError(-32007, 'Extended Agent Card is not configured.');
+        return rpcResult(rpc.id, options.extendedAgentCard);
       }
       default: throw new A2AError(-32601, 'Method not found.');
     }
@@ -451,6 +460,7 @@ class KodaXA2AServerRuntime implements KodaXA2AServer {
     params: Readonly<Record<string, unknown>> | undefined,
     principal: A2APrincipal,
     streaming: boolean,
+    options: PreparedA2AServerOptions,
   ): Promise<A2ATask> {
     const key = principalKey(principal);
     const previous = this.#messageTails.get(key) ?? Promise.resolve();
@@ -459,7 +469,7 @@ class KodaXA2AServerRuntime implements KodaXA2AServer {
     this.#messageTails.set(key, tail);
     await previous;
     try {
-      return await this.sendMessageUnserialized(params, principal, streaming);
+      return await this.sendMessageUnserialized(params, principal, streaming, options);
     } finally {
       release();
       if (this.#messageTails.get(key) === tail) this.#messageTails.delete(key);
@@ -470,9 +480,10 @@ class KodaXA2AServerRuntime implements KodaXA2AServer {
     params: Readonly<Record<string, unknown>> | undefined,
     principal: A2APrincipal,
     streaming: boolean,
+    options: PreparedA2AServerOptions,
   ): Promise<A2ATask> {
     const message = parseA2AMessage(params?.message);
-    validateInput(message, this.options.limits.maxPartBytes, this.options.agent.inputModes);
+    validateInput(message, options.limits.maxPartBytes, options.agent.inputModes);
     const key = principalKey(principal);
     const digest = messageDigest(message);
     const duplicate = this.#store.findByMessage(key, message.messageId);
@@ -491,45 +502,51 @@ class KodaXA2AServerRuntime implements KodaXA2AServer {
       throw new A2AError(-32004, 'Task is not waiting for input.');
     }
     const records = this.#store.list(key);
-    const retainedLimit = this.options.limits.maxRetainedTasksPerPrincipal
-      ?? this.options.limits.maxTasksPerPrincipal
+    const retainedLimit = options.limits.maxRetainedTasksPerPrincipal
+      ?? options.limits.maxTasksPerPrincipal
       ?? 100;
     if (!existing && records.length >= retainedLimit) {
       throw new A2AError(-32004, 'Principal task limit reached.');
     }
     const activeForPrincipal = records.filter((record) => !TERMINAL_STATES.has(record.task.status.state)).length;
-    if (!existing && activeForPrincipal >= (this.options.limits.maxActiveTasksPerPrincipal ?? 4)) {
+    if (!existing && activeForPrincipal >= (options.limits.maxActiveTasksPerPrincipal ?? 4)) {
       throw new A2AError(-32004, 'Principal active task limit reached.');
     }
     const active = this.#store.all().filter((record) => !TERMINAL_STATES.has(record.task.status.state)).length;
-    if (!existing && active >= this.options.limits.maxConcurrentTasks) {
+    if (!existing && active >= options.limits.maxConcurrentTasks) {
       throw new A2AError(-32004, 'Server task concurrency limit reached.');
     }
-    const record = existing ?? await this.createRecord(message, key);
+    const record = existing ?? await this.createRecord(message, key, options);
     const next = existing ? this.appendMessage(record, message, digest) : record;
-    const started = await this.startRun(next, message);
+    const started = await this.startRun(next, message, options);
     const immediate = streaming || isRecord(params?.configuration) && params.configuration.returnImmediately === true;
-    return immediate ? started.task : (await this.waitForTask(started.taskId)).task;
+    return immediate
+      ? started.task
+      : (await this.waitForTask(started.taskId, options.limits.maxTaskWaitMs ?? 30_000)).task;
   }
 
-  private async createRecord(message: A2AMessage, key: string): Promise<A2AServerTaskRecord> {
+  private async createRecord(
+    message: A2AMessage,
+    key: string,
+    options: PreparedA2AServerOptions,
+  ): Promise<A2AServerTaskRecord> {
     const contextId = message.contextId ?? randomUUID();
     const related = this.#store.list(key).find((record) => record.contextId === contextId);
     const contextKey = sha256(`${key}\0${contextId}`);
     const workspaceRoot = related?.workspaceRoot
-      ?? await this.options.preparedExecution?.prepareWorkspace(contextKey);
+      ?? await options.preparedExecution?.prepareWorkspace(contextKey);
     const session = related
       ? { id: related.sessionId }
-      : await this.options.runtime.sessions.create({
-          title: `A2A: ${this.options.agent.name}`,
+      : await options.runtime.sessions.create({
+          title: `A2A: ${options.agent.name}`,
           surface: 'a2a',
-          ...(this.options.execution?.profileId || this.options.agent.profileId
-            ? { profileId: this.options.execution?.profileId ?? this.options.agent.profileId }
+          ...(options.execution?.profileId || options.agent.profileId
+            ? { profileId: options.execution?.profileId ?? options.agent.profileId }
             : {}),
           ...(workspaceRoot
             ? { projectPath: workspaceRoot, gitRoot: workspaceRoot }
-            : this.options.agent.projectPath
-              ? { projectPath: this.options.agent.projectPath }
+            : options.agent.projectPath
+              ? { projectPath: options.agent.projectPath }
               : {}),
         });
     const taskId = randomUUID();
@@ -538,11 +555,11 @@ class KodaXA2AServerRuntime implements KodaXA2AServer {
       taskId,
       contextId,
       principalKey: key,
-      runtimeIdentity: this.options.runtime.identity.runtimeId,
+      runtimeIdentity: options.runtime.identity.runtimeId,
       sessionId: session.id,
       ...(workspaceRoot ? { workspaceRoot } : {}),
-      ...(this.options.preparedExecution ? {
-        executionPolicyRevision: this.options.preparedExecution.binding.executionPolicyRevision,
+      ...(options.preparedExecution ? {
+        executionPolicyRevision: options.preparedExecution.binding.executionPolicyRevision,
       } : {}),
       messageDigests: { [message.messageId]: messageDigest(message) },
       runIds: [],
@@ -574,9 +591,13 @@ class KodaXA2AServerRuntime implements KodaXA2AServer {
     });
   }
 
-  private async startRun(record: A2AServerTaskRecord, message: A2AMessage): Promise<A2AServerTaskRecord> {
-    const input = await this.inputsForMessage(record.taskId, message);
-    const prepared = this.options.preparedExecution;
+  private async startRun(
+    record: A2AServerTaskRecord,
+    message: A2AMessage,
+    options: PreparedA2AServerOptions,
+  ): Promise<A2AServerTaskRecord> {
+    const input = await this.inputsForMessage(record.taskId, message, options);
+    const prepared = options.preparedExecution;
     if (prepared && record.executionPolicyRevision !== prepared.binding.executionPolicyRevision) {
       throw new A2AError(-32004, 'A2A task execution binding revision changed.');
     }
@@ -586,12 +607,12 @@ class KodaXA2AServerRuntime implements KodaXA2AServer {
           inputs: input,
           principalKey: record.principalKey,
         })
-      : await this.options.runtime.runs.start({
+      : await options.runtime.runs.start({
           sessionId: record.sessionId,
           input,
           mode: 'managed_task',
           permissionBroker: 'runtime',
-          ...(this.options.agent.runOptions ? { options: this.options.agent.runOptions } : {}),
+          ...(options.agent.runOptions ? { options: options.agent.runOptions } : {}),
           agentContext: { actorId: `a2a:${record.principalKey.slice(0, 16)}` },
         });
     const working = this.#store.save({
@@ -601,7 +622,7 @@ class KodaXA2AServerRuntime implements KodaXA2AServer {
       updatedAt: nowIso(this.#now),
       eventSeq: record.eventSeq + 1,
     });
-    this.subscribeRuntime(working, handle.runId);
+    this.subscribeRuntime(working, handle.runId, options);
     void handle.result.then((result) => this.finishRun(working.taskId, result)).catch((error: unknown) => {
       this.failTask(working.taskId, errorMessage(error));
     });
@@ -609,30 +630,38 @@ class KodaXA2AServerRuntime implements KodaXA2AServer {
     return working;
   }
 
-  private async inputsForMessage(taskId: string, message: A2AMessage): Promise<readonly RuntimeInput[]> {
+  private async inputsForMessage(
+    taskId: string,
+    message: A2AMessage,
+    options: PreparedA2AServerOptions,
+  ): Promise<readonly RuntimeInput[]> {
     const inputs: RuntimeInput[] = [];
     for (const part of message.parts) {
       if (part.text !== undefined) {
         inputs.push({ type: 'text', text: part.text });
         continue;
       }
-      inputs.push(await this.materializePart(taskId, part));
+      inputs.push(await this.materializePart(taskId, part, options));
     }
     return inputs;
   }
 
-  private async materializePart(taskId: string, part: A2APart): Promise<RuntimeInput> {
+  private async materializePart(
+    taskId: string,
+    part: A2APart,
+    options: PreparedA2AServerOptions,
+  ): Promise<RuntimeInput> {
     const mediaType = part.mediaType ?? (part.data !== undefined ? 'application/json' : 'application/octet-stream');
     const extension = part.data !== undefined ? '.json' : '.bin';
     const record = this.#store.get(taskId);
     const directory = record?.workspaceRoot
       ? path.join(record.workspaceRoot, 'inbox', sha256(taskId))
-      : path.join(path.resolve(this.options.dataDir), 'attachments', sha256(taskId));
+      : path.join(path.resolve(options.dataDir), 'attachments', sha256(taskId));
     fs.mkdirSync(directory, { recursive: true, mode: 0o700 });
     const content = part.data !== undefined
       ? Buffer.from(JSON.stringify(part.data), 'utf8')
       : Buffer.from(part.raw ?? '', 'base64');
-    const workspaceLimit = this.options.limits.maxWorkspaceBytesPerContext ?? 1_073_741_824;
+    const workspaceLimit = options.limits.maxWorkspaceBytesPerContext ?? 1_073_741_824;
     if (record?.workspaceRoot && directoryBytes(record.workspaceRoot) + content.byteLength > workspaceLimit) {
       throw new A2AError(-32004, 'A2A context workspace size limit reached.');
     }
@@ -643,7 +672,7 @@ class KodaXA2AServerRuntime implements KodaXA2AServer {
     fs.writeFileSync(file, content, { mode: 0o600 });
     const kind = mediaType.startsWith('image/') ? 'image'
       : mediaType.startsWith('video/') ? 'video' : 'file';
-    const artifact = await this.options.runtime.artifacts.create({
+    const artifact = await options.runtime.artifacts.create({
       kind,
       path: file,
       mediaType,
@@ -655,22 +684,33 @@ class KodaXA2AServerRuntime implements KodaXA2AServer {
     return { type: 'artifact_ref', artifactId: artifact.id, description: 'Inbound A2A attachment' };
   }
 
-  private subscribeRuntime(record: A2AServerTaskRecord, runId: string): void {
+  private subscribeRuntime(
+    record: A2AServerTaskRecord,
+    runId: string,
+    options: PreparedA2AServerOptions,
+  ): void {
     this.#runtimeSubscriptions.get(record.taskId)?.close();
-    const subscription = this.options.runtime.events.subscribe({ runId }, (event) => this.onRuntimeEvent(record.taskId, event));
+    const subscription = options.runtime.events.subscribe(
+      { runId },
+      (event) => this.onRuntimeEvent(record.taskId, event, options),
+    );
     this.#runtimeSubscriptions.set(record.taskId, subscription);
   }
 
-  private onRuntimeEvent(taskId: string, event: RuntimeEvent): void {
+  private onRuntimeEvent(
+    taskId: string,
+    event: RuntimeEvent,
+    options: PreparedA2AServerOptions,
+  ): void {
     const record = this.#store.get(taskId);
     if (!record || TERMINAL_STATES.has(record.task.status.state)) return;
     const eventBytes = Buffer.byteLength(JSON.stringify(event));
     const runtimeEventCount = record.runtimeEventCount + 1;
     const runtimeEventBytes = record.runtimeEventBytes + eventBytes;
-    if (runtimeEventCount > (this.options.limits.maxEventsPerTask ?? 1_000)
-      || runtimeEventBytes > (this.options.limits.maxEventBytesPerTask ?? 16_777_216)) {
+    if (runtimeEventCount > (options.limits.maxEventsPerTask ?? 1_000)
+      || runtimeEventBytes > (options.limits.maxEventBytesPerTask ?? 16_777_216)) {
       const runId = record.runIds.at(-1);
-      if (runId) void this.options.runtime.runs.abort(runId);
+      if (runId) void options.runtime.runs.abort(runId);
       this.failTask(taskId, 'A2A task event quota exceeded.');
       return;
     }
@@ -759,12 +799,16 @@ class KodaXA2AServerRuntime implements KodaXA2AServer {
     };
   }
 
-  private async cancelTask(params: Readonly<Record<string, unknown>> | undefined, principal: A2APrincipal): Promise<A2ATask> {
+  private async cancelTask(
+    params: Readonly<Record<string, unknown>> | undefined,
+    principal: A2APrincipal,
+    options: PreparedA2AServerOptions,
+  ): Promise<A2ATask> {
     const id = typeof params?.id === 'string' ? params.id : '';
     const record = this.requireOwnedTask(id, principalKey(principal));
     if (TERMINAL_STATES.has(record.task.status.state)) throw new A2AError(-32002, 'Task is not cancelable.');
     const runId = record.runIds.at(-1);
-    if (runId) await this.options.runtime.runs.abort(runId);
+    if (runId) await options.runtime.runs.abort(runId);
     const canceled = this.#store.save({
       ...record,
       task: { ...record.task, status: { state: 'TASK_STATE_CANCELED', timestamp: nowIso(this.#now) } },
@@ -836,21 +880,34 @@ class KodaXA2AServerRuntime implements KodaXA2AServer {
     return `data: ${JSON.stringify({ jsonrpc: '2.0', id, result })}\n\n`;
   }
 
-  private waitForTask(taskId: string): Promise<A2AServerTaskRecord> {
+  private waitForTask(taskId: string, timeoutMs: number): Promise<A2AServerTaskRecord> {
     const current = this.#store.get(taskId);
     if (!current) return Promise.reject(new A2AError(-32001, 'Task not found.'));
     if (TERMINAL_STATES.has(current.task.status.state)
       || current.task.status.state === 'TASK_STATE_INPUT_REQUIRED'
       || current.task.status.state === 'TASK_STATE_AUTH_REQUIRED') return Promise.resolve(current);
     return new Promise((resolve) => {
-      const unsubscribe = this.#store.subscribe(taskId, (record) => {
+      let settled = false;
+      let unsubscribe = (): void => undefined;
+      const finish = (record: A2AServerTaskRecord): void => {
+        if (settled) return;
+        settled = true;
+        clearTimeout(timer);
+        unsubscribe();
+        resolve(record);
+      };
+      const timer = setTimeout(() => finish(this.#store.get(taskId) ?? current), timeoutMs);
+      unsubscribe = this.#store.subscribe(taskId, (record) => {
         if (TERMINAL_STATES.has(record.task.status.state)
           || record.task.status.state === 'TASK_STATE_INPUT_REQUIRED'
           || record.task.status.state === 'TASK_STATE_AUTH_REQUIRED') {
-          unsubscribe();
-          resolve(record);
+          finish(record);
         }
       });
+      const latest = this.#store.get(taskId);
+      if (latest && (TERMINAL_STATES.has(latest.task.status.state)
+        || latest.task.status.state === 'TASK_STATE_INPUT_REQUIRED'
+        || latest.task.status.state === 'TASK_STATE_AUTH_REQUIRED')) finish(latest);
     });
   }
 
@@ -861,27 +918,34 @@ class KodaXA2AServerRuntime implements KodaXA2AServer {
   }
 
   private async recover(): Promise<void> {
+    const options = this.options;
     for (const record of this.#store.all()) {
       if (TERMINAL_STATES.has(record.task.status.state)) continue;
       const runId = record.runIds.at(-1);
-      if (!runId || record.runtimeIdentity !== this.options.runtime.identity.runtimeId) {
+      if (!runId || record.runtimeIdentity !== options.runtime.identity.runtimeId) {
         this.failTask(record.taskId, 'Runtime execution was interrupted before A2A recovery.');
         continue;
       }
       try {
-        const status = await this.options.runtime.runs.get(runId);
+        const status = await options.runtime.runs.get(runId);
         if (status.phase === 'running' || status.phase === 'queued' || status.phase === 'waiting_permission' || status.phase === 'waiting_user_input') {
-          for (const event of await this.options.runtime.events.replay({ runId, sinceSeq: record.lastRuntimeEventSeq })) {
-            this.onRuntimeEvent(record.taskId, event);
+          for (const event of await options.runtime.events.replay({ runId, sinceSeq: record.lastRuntimeEventSeq })) {
+            this.onRuntimeEvent(record.taskId, event, options);
           }
-          this.subscribeRuntime(record, runId);
-          void this.options.runtime.runs.await(runId).then((result) => this.finishRun(record.taskId, result)).catch((error: unknown) => {
+          this.subscribeRuntime(record, runId, options);
+          void options.runtime.runs.await(runId).then((result) => this.finishRun(record.taskId, result)).catch((error: unknown) => {
             this.failTask(record.taskId, errorMessage(error));
           });
         } else {
           this.finishRun(record.taskId, { runId, sessionId: record.sessionId, phase: status.phase });
         }
-      } catch {
+      } catch (error: unknown) {
+        emitKodaXDiagnostic({
+          source: 'a2a.server',
+          level: 'warn',
+          message: 'A2A task recovery could not reattach to its Runtime run.',
+          detail: { taskId: record.taskId, error },
+        });
         this.failTask(record.taskId, 'Runtime execution was unavailable during A2A recovery.');
       }
     }

@@ -6,6 +6,7 @@ import {
   hashMemoryIdentityComponent,
   type MemoryContextIdentity,
 } from '../memory/index.js';
+import { emitKodaXDiagnostic } from '../diagnostics.js';
 import { getAgentConfigPath } from '../runtime/agent-home.js';
 import type { KodaXMemoryOutcomeDigest } from '../types.js';
 
@@ -308,15 +309,34 @@ async function readJsonFiles(root: string): Promise<readonly string[]> {
 async function readPending(filePath: string): Promise<PendingEpisodeReview | undefined> {
   try {
     const value: unknown = JSON.parse(await readFile(filePath, 'utf8'));
-    if (!isRecord(value) || value.version !== 1 || typeof value.reviewKey !== 'string') return undefined;
-    if (typeof value.ownerSessionRef !== 'string' || typeof value.ownerAgentHash !== 'string') return undefined;
-    if (value.ownerProjectHash !== undefined && typeof value.ownerProjectHash !== 'string') return undefined;
-    if (typeof value.createdAt !== 'string' || !isOutcomeDigest(value.digest)) return undefined;
+    if (!isRecord(value) || value.version !== 1 || typeof value.reviewKey !== 'string') {
+      return invalidPending(filePath, 'invalid envelope');
+    }
+    if (typeof value.ownerSessionRef !== 'string' || typeof value.ownerAgentHash !== 'string') {
+      return invalidPending(filePath, 'invalid owner');
+    }
+    if (value.ownerProjectHash !== undefined && typeof value.ownerProjectHash !== 'string') {
+      return invalidPending(filePath, 'invalid project owner');
+    }
+    if (typeof value.createdAt !== 'string' || !isOutcomeDigest(value.digest)) {
+      return invalidPending(filePath, 'invalid digest');
+    }
     return value as unknown as PendingEpisodeReview;
   } catch (error) {
-    if (isMissing(error) || error instanceof SyntaxError) return undefined;
+    if (isMissing(error)) return undefined;
+    if (error instanceof SyntaxError) return invalidPending(filePath, 'invalid JSON');
     throw error;
   }
+}
+
+function invalidPending(filePath: string, reason: string): undefined {
+  emitKodaXDiagnostic({
+    source: 'memory.review-inbox',
+    level: 'warn',
+    message: 'Invalid pending episode review was skipped.',
+    detail: { filePath, reason },
+  });
+  return undefined;
 }
 
 function isOutcomeDigest(value: unknown): value is KodaXMemoryOutcomeDigest {

@@ -579,6 +579,31 @@ describe('Session Management Public SDK', () => {
     expect(fs.existsSync(path.join(sessionsDir, '20260901_000000.jsonl'))).toBe(false);
   });
 
+  it('reports unreadable slow-path session records without failing the listing', async () => {
+    await writeMinimalSession(sessionsDir, 'valid-session');
+    await api.listSessions({ scope: 'all' });
+    const projectDir = fs.readdirSync(sessionsDir, { withFileTypes: true })
+      .find((entry) => entry.isDirectory() && !entry.name.startsWith('.'));
+    expect(projectDir).toBeDefined();
+    if (projectDir === undefined) throw new Error('Expected migrated project directory.');
+    const corruptPath = path.join(sessionsDir, projectDir.name, 'corrupt-session.jsonl');
+    await writeFile(corruptPath, '{not json}\n', 'utf8');
+    const diagnostics: Array<{ source: string; level: string; message: string }> = [];
+    const { setKodaXDiagnosticSink } = await import('@kodax-ai/agent');
+    const restoreDiagnostics = setKodaXDiagnosticSink((diagnostic) => diagnostics.push(diagnostic));
+    try {
+      expect((await api.listSessions({ scope: 'all' })).map((session) => session.id))
+        .toContain('valid-session');
+    } finally {
+      restoreDiagnostics();
+    }
+    expect(diagnostics).toEqual([expect.objectContaining({
+      source: 'session.public-api',
+      level: 'warn',
+      message: 'Unreadable session record was skipped.',
+    })]);
+  });
+
   // ── Test 12: createSessionManager returns object with all methods + storage ───
   it('createSessionManager returns an object with all expected methods and a storage field', async () => {
     const manager = api.createSessionManager() as Record<string, unknown>;

@@ -24,6 +24,7 @@ import type {
 import {
   createMemoryControlPlane,
 } from './index.js';
+import { forgetManagedMemoryRef } from './lifecycle.js';
 import type {
   MemoryItemRef,
   MemoryReviewModelInput,
@@ -318,6 +319,42 @@ describe('MemoryControlPlane', () => {
       await readFile(join(memoryRoot, '.governance', 'lifecycle.json'), 'utf8'),
     ) as { readonly entries: Readonly<Record<string, unknown>> };
     expect(Object.keys(state.entries)).toHaveLength(2);
+  });
+
+  it('serializes concurrent forgets without restoring removed index entries', async () => {
+    await mkdir(memoryRoot, { recursive: true });
+    const names = Array.from({ length: 24 }, (_value, index) => `forget-${index}`);
+    for (const name of names) {
+      await writeFile(join(memoryRoot, `${name}.md`), [
+        '---',
+        `name: ${name}`,
+        `description: ${name} memory`,
+        'type: project',
+        '---',
+        '',
+        `${name} body`,
+      ].join('\n'), 'utf8');
+    }
+    await writeFile(
+      join(memoryRoot, 'MEMORY.md'),
+      names.map((name) => `- [${name}](${name}.md) - ${name} memory`).join('\n') + '\n',
+      'utf8',
+    );
+    await Promise.all(names.map((name) => forgetManagedMemoryRef(memoryRoot, {
+      kind: 'memdir',
+      id: `memdir:${name}.md`,
+      scope: 'project',
+      owner: 'project',
+      lifecycle: 'trusted',
+      authority: 'approved_write',
+      visibility: 'prompt_safe',
+      sourceRefs: [],
+      relatedRefs: [],
+      storageUri: join(memoryRoot, `${name}.md`),
+    }, '2026-07-12T00:00:00.000Z')));
+
+    expect(await readFile(join(memoryRoot, 'MEMORY.md'), 'utf8')).toBe('');
+    expect(await readdir(memoryRoot)).not.toEqual(expect.arrayContaining(names.map((name) => `${name}.md`)));
   });
 
   it('filters pack candidates by conjunctive applicability before reading bodies', async () => {

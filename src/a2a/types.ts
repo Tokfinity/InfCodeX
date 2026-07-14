@@ -138,6 +138,7 @@ export interface A2AClientOptions {
   readonly networkPolicy: A2ANetworkPolicy;
   readonly pollIntervalMs: number;
   readonly authorization?: string;
+  /** Trusted transport override. Supplying one opts out of the default DNS-pinned connector. */
   readonly fetch?: typeof globalThis.fetch;
 }
 
@@ -186,6 +187,8 @@ export interface A2AServerLimits {
   readonly maxRequestBytes: number;
   readonly maxPartBytes: number;
   readonly maxConcurrentTasks: number;
+  /** Maximum synchronous SendMessage wait before returning the current task. */
+  readonly maxTaskWaitMs?: number;
   /** @deprecated Use maxRetainedTasksPerPrincipal. */
   readonly maxTasksPerPrincipal?: number;
   readonly maxActiveTasksPerPrincipal?: number;

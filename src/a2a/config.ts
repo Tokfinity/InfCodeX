@@ -77,6 +77,7 @@ export interface A2AServerLimitsConfig {
   readonly maxRequestBytes: number;
   readonly maxPartBytes: number;
   readonly maxConcurrentTasks: number;
+  readonly maxTaskWaitMs: number;
   readonly maxActiveTasksPerPrincipal: number;
   readonly maxRetainedTasksPerPrincipal: number;
   readonly maxEventsPerTask: number;
@@ -108,6 +109,7 @@ const LIMIT_DEFAULTS: A2AServerLimitsConfig = {
   maxRequestBytes: 33_554_432,
   maxPartBytes: 16_777_216,
   maxConcurrentTasks: 4,
+  maxTaskWaitMs: 30_000,
   maxActiveTasksPerPrincipal: 4,
   maxRetainedTasksPerPrincipal: 100,
   maxEventsPerTask: 1_000,

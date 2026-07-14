@@ -509,6 +509,217 @@ describe('FEATURE_267 bidirectional A2A', () => {
     }
   });
 
+  it('does not time out a paused stream consumer and aborts it on dispose', async () => {
+    const endpoint = 'http://127.0.0.1:43123/a2a';
+    let streamController: ReadableStreamDefaultController<Uint8Array> | undefined;
+    let streamSignal: AbortSignal | undefined;
+    let markStarted!: () => void;
+    const started = new Promise<void>((resolve) => { markStarted = resolve; });
+    const fetchImpl = (async (_input: string | URL | Request, init?: RequestInit) => {
+      if (init?.body === undefined) {
+        return new Response(JSON.stringify({
+          name: 'idle remote',
+          description: 'idle remote',
+          supportedInterfaces: [{
+            url: endpoint,
+            protocolBinding: 'JSONRPC',
+            protocolVersion: '1.0',
+          }],
+          version: '1.0.0',
+          capabilities: { streaming: true, pushNotifications: false },
+          defaultInputModes: ['text/plain'],
+          defaultOutputModes: ['text/plain'],
+          skills: [],
+        }), { headers: { 'content-type': 'application/json' } });
+      }
+      streamSignal = init.signal ?? undefined;
+      return new Response(new ReadableStream<Uint8Array>({
+        start(controller) {
+          streamController = controller;
+          markStarted();
+        },
+      }), { headers: { 'content-type': 'text/event-stream' } });
+    }) as typeof fetch;
+    const options = {
+      networkPolicy: {
+        allowedOrigins: ['http://127.0.0.1:43123'], allowPrivateAddresses: true,
+        requestTimeoutMs: 20, maxResponseBytes: 128 * 1024, maxRedirects: 0,
+      },
+      pollIntervalMs: 100,
+      fetch: fetchImpl,
+    } as const;
+    const discovered = await discoverA2ARegistration({
+      agentId: 'external:idle-stream',
+      agentCardUrl: 'http://127.0.0.1:43123/.well-known/agent-card.json',
+      effects: { remote: 'read' },
+    }, options);
+    const executor = await createA2AAgentExecutorFactory(options).create(
+      discovered.registration,
+      {
+        async withCredential(_reference, use) { return use('unused'); },
+        async authorizeArtifact() {},
+      },
+    );
+    const iterator = executor.events({
+      idempotencyKey: 'idle-stream-op',
+      remoteTaskId: 'idle-task',
+      metadata: { contextId: 'idle-context' },
+    })[Symbol.asyncIterator]();
+    const pending = iterator.next();
+    await started;
+    streamController?.enqueue(new TextEncoder().encode(
+      'data: {"result":{"statusUpdate":{"taskId":"idle-task","contextId":"idle-context","status":{"state":"TASK_STATE_WORKING"}}}}\n\n',
+    ));
+    await pending;
+    await new Promise<void>((resolve) => setTimeout(resolve, 40));
+    expect(streamSignal?.aborted).toBe(false);
+
+    await executor.dispose();
+    const abortedByDispose = streamSignal?.aborted === true;
+    streamController?.close();
+
+    expect(abortedByDispose).toBe(true);
+  });
+
+  it('falls back to polling when an outbound event stream stays idle', async () => {
+    const endpoint = 'http://127.0.0.1:43124/a2a';
+    let streamAborted = false;
+    const fetchImpl = (async (_input: string | URL | Request, init?: RequestInit) => {
+      if (init?.body === undefined) {
+        return new Response(JSON.stringify({
+          name: 'idle remote',
+          description: 'idle remote',
+          supportedInterfaces: [{
+            url: endpoint,
+            protocolBinding: 'JSONRPC',
+            protocolVersion: '1.0',
+          }],
+          version: '1.0.0',
+          capabilities: { streaming: true, pushNotifications: false },
+          defaultInputModes: ['text/plain'],
+          defaultOutputModes: ['text/plain'],
+          skills: [],
+        }), { headers: { 'content-type': 'application/json' } });
+      }
+      return new Response(new ReadableStream<Uint8Array>({
+        start(controller) {
+          init?.signal?.addEventListener('abort', () => {
+            streamAborted = true;
+            controller.error(init.signal?.reason);
+          }, { once: true });
+        },
+      }), { headers: { 'content-type': 'text/event-stream' } });
+    }) as typeof fetch;
+    const options = {
+      networkPolicy: {
+        allowedOrigins: ['http://127.0.0.1:43124'], allowPrivateAddresses: true,
+        requestTimeoutMs: 20, maxResponseBytes: 128 * 1024, maxRedirects: 0,
+      },
+      pollIntervalMs: 100,
+      fetch: fetchImpl,
+    } as const;
+    const discovered = await discoverA2ARegistration({
+      agentId: 'external:idle-timeout',
+      agentCardUrl: 'http://127.0.0.1:43124/.well-known/agent-card.json',
+      effects: { remote: 'read' },
+    }, options);
+    const executor = await createA2AAgentExecutorFactory(options).create(
+      discovered.registration,
+      {
+        async withCredential(_reference, use) { return use('unused'); },
+        async authorizeArtifact() {},
+      },
+    );
+    const iterator = executor.events({
+      idempotencyKey: 'idle-timeout-op',
+      remoteTaskId: 'idle-task',
+      metadata: { contextId: 'idle-context' },
+    })[Symbol.asyncIterator]();
+
+    const first = await Promise.race([
+      iterator.next(),
+      new Promise<undefined>((resolve) => setTimeout(() => resolve(undefined), 250)),
+    ]);
+    await executor.dispose();
+
+    expect(streamAborted).toBe(true);
+    expect(first?.value).toEqual({ progress: { message: 'A2A stream unavailable; polling.' } });
+  });
+
+  it('returns a running task when a blocking A2A wait reaches its configured limit', async () => {
+    const controlled = pendingRuntime();
+    const options = serverOptions(controlled.runtime, temporaryRoot());
+    const server = createKodaXA2AServer({
+      ...options,
+      limits: { ...options.limits, maxTaskWaitMs: 20 },
+    });
+    const baseUrl = await server.listen({ hostname: '127.0.0.1', port: 0 });
+    const response = rpc(baseUrl, 'SendMessage', {
+      message: { messageId: 'bounded-blocking', role: 'ROLE_USER', parts: [{ text: 'wait' }] },
+    });
+    const bounded = await Promise.race([
+      response,
+      new Promise<undefined>((resolve) => setTimeout(() => resolve(undefined), 250)),
+    ]);
+    controlled.complete();
+    await response;
+    await server.close();
+
+    expect(bounded?.status).toBe(200);
+    expect(JSON.stringify(bounded?.body)).toContain('TASK_STATE_WORKING');
+  });
+
+  it('uses one hot-option snapshot for authentication and authorization during a request', async () => {
+    const initial = serverOptions(fakeRuntime(), temporaryRoot());
+    const server = createKodaXA2AServer(initial);
+    await server.whenReady();
+    let releaseBody!: () => void;
+    const bodyGate = new Promise<void>((resolve) => { releaseBody = resolve; });
+    let markReading!: () => void;
+    const reading = new Promise<void>((resolve) => { markReading = resolve; });
+    const payload = JSON.stringify({ jsonrpc: '2.0', id: 'hot', method: 'ListTasks', params: {} });
+    const split = Math.floor(payload.length / 2);
+    let sent = false;
+    const body = new ReadableStream<Uint8Array>({
+      async pull(controller) {
+        if (sent) return;
+        sent = true;
+        controller.enqueue(new TextEncoder().encode(payload.slice(0, split)));
+        markReading();
+        await bodyGate;
+        controller.enqueue(new TextEncoder().encode(payload.slice(split)));
+        controller.close();
+      },
+    });
+    const request = new Request('http://127.0.0.1:1/a2a', {
+      method: 'POST',
+      headers: { authorization: 'Bearer test-token', 'content-type': 'application/json' },
+      body,
+      duplex: 'half',
+    } as RequestInit & { readonly duplex: 'half' });
+    const response = server.handle(request);
+    await reading;
+    server.updateHot({
+      agent: initial.agent,
+      limits: initial.limits,
+      authentication: {
+        ...initial.authentication,
+        async authenticate() { return null; },
+      },
+      authorize: initial.authorize,
+    });
+    releaseBody();
+
+    expect((await response).status).toBe(200);
+    const nextRequest = new Request('http://127.0.0.1:1/a2a', {
+      method: 'POST',
+      headers: { authorization: 'Bearer test-token', 'content-type': 'application/json' },
+      body: payload,
+    });
+    expect((await server.handle(nextRequest)).status).toBe(401);
+    await server.close();
+  });
+
   it('fails closed for private targets and strips authorization on cross-origin redirect', async () => {
     const deniedPolicy = {
       allowedOrigins: ['http://127.0.0.1:4000'], allowPrivateAddresses: false,

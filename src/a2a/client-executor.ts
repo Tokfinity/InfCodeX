@@ -1,20 +1,21 @@
 import { createHash, randomUUID } from 'node:crypto';
 
-import type {
-  AgentArtifactReference,
-  AgentContinuationInput,
-  AgentExecutor,
-  AgentExecutorEvent,
-  AgentExecutorFactory,
-  AgentExecutorFactoryContext,
-  AgentExecutorTaskReference,
-  AgentExecutorTaskSnapshot,
-  AgentTaskStartInput,
-  ExternalAgentRegistration,
+import {
+  emitKodaXDiagnostic,
+  type AgentArtifactReference,
+  type AgentContinuationInput,
+  type AgentExecutor,
+  type AgentExecutorEvent,
+  type AgentExecutorFactory,
+  type AgentExecutorFactoryContext,
+  type AgentExecutorTaskReference,
+  type AgentExecutorTaskSnapshot,
+  type AgentTaskStartInput,
+  type ExternalAgentRegistration,
 } from '@kodax-ai/agent';
 
 import { A2AError } from './errors.js';
-import { assertSafeA2AUrl, decodeUtf8, safeA2AFetch } from './safe-fetch.js';
+import { decodeUtf8, openSafeA2AResponse, safeA2AFetch } from './safe-fetch.js';
 import { isRecord, parseA2AAgentCard, parseA2AMessage, parseA2ATask } from './schemas.js';
 import {
   A2A_EXECUTOR_ID,
@@ -195,6 +196,7 @@ function isTerminal(state: AgentExecutorTaskSnapshot['state']): boolean {
 
 class A2AClientExecutor implements AgentExecutor {
   #disposed = false;
+  readonly #streamControllers = new Set<AbortController>();
 
   constructor(
     private readonly registration: ExternalAgentRegistration,
@@ -246,7 +248,14 @@ class A2AClientExecutor implements AgentExecutor {
       try {
         yield* this.streamEvents(reference);
         return;
-      } catch {
+      } catch (error: unknown) {
+        if (this.#disposed) return;
+        emitKodaXDiagnostic({
+          source: 'a2a.client',
+          level: 'warn',
+          message: 'A2A event stream failed; polling fallback started.',
+          detail: error,
+        });
         yield { progress: { message: 'A2A stream unavailable; polling.' } };
       }
     }
@@ -291,59 +300,83 @@ class A2AClientExecutor implements AgentExecutor {
 
   async dispose(): Promise<void> {
     this.#disposed = true;
+    for (const controller of this.#streamControllers) {
+      controller.abort(new Error('A2A executor disposed.'));
+    }
   }
 
   private async *streamEvents(reference: AgentExecutorTaskReference): AsyncIterable<AgentExecutorEvent> {
     if (!reference.remoteTaskId) throw new Error('A2A stream requires a remote task ID.');
     const config = executorConfig(this.registration);
     const url = new URL(config.interfaceUrl);
-    await assertSafeA2AUrl(url, this.options.networkPolicy);
     const headers = new Headers({
       accept: 'text/event-stream',
       'a2a-version': A2A_PROTOCOL_VERSION,
       'content-type': 'application/json',
     });
     if (this.options.authorization) headers.set('authorization', this.options.authorization);
-    const response = await (this.options.fetch ?? globalThis.fetch)(url, {
-      method: 'POST',
-      headers,
-      redirect: 'manual',
-      body: JSON.stringify({
-        jsonrpc: '2.0',
-        id: randomUUID(),
-        method: 'SubscribeToTask',
-        params: this.taskParams(reference),
-      }),
-    });
-    if (!response.ok || !response.body) throw new Error(`A2A stream failed with HTTP ${response.status}.`);
-    if (!response.headers.get('content-type')?.toLowerCase().startsWith('text/event-stream')) {
-      throw new Error('A2A stream returned an invalid content type.');
-    }
-    const reader = response.body.getReader();
-    const decoder = new TextDecoder();
-    let buffered = '';
-    let receivedBytes = 0;
-    while (!this.#disposed) {
-      const chunk = await reader.read();
-      if (chunk.done) break;
-      receivedBytes += chunk.value.byteLength;
-      if (receivedBytes > this.options.networkPolicy.maxResponseBytes) {
-        throw new Error('A2A stream exceeded the response size limit.');
+    const controller = new AbortController();
+    this.#streamControllers.add(controller);
+    let timeout: ReturnType<typeof setTimeout> | undefined;
+    const disarmTimeout = (): void => {
+      if (timeout !== undefined) clearTimeout(timeout);
+      timeout = undefined;
+    };
+    const armTimeout = (message: string): void => {
+      disarmTimeout();
+      timeout = setTimeout(() => controller.abort(new Error(message)), this.options.networkPolicy.requestTimeoutMs);
+      timeout.unref?.();
+    };
+    try {
+      armTimeout('A2A stream connection timed out.');
+      const response = await openSafeA2AResponse(url, {
+        method: 'POST',
+        headers,
+        redirect: 'manual',
+        signal: controller.signal,
+        body: JSON.stringify({
+          jsonrpc: '2.0',
+          id: randomUUID(),
+          method: 'SubscribeToTask',
+          params: this.taskParams(reference),
+        }),
+      }, this.options.networkPolicy, this.options.fetch);
+      disarmTimeout();
+      if (!response.ok || !response.body) throw new Error(`A2A stream failed with HTTP ${response.status}.`);
+      if (!response.headers.get('content-type')?.toLowerCase().startsWith('text/event-stream')) {
+        throw new Error('A2A stream returned an invalid content type.');
       }
-      buffered += decoder.decode(chunk.value, { stream: true });
-      const frames = buffered.split(/\r?\n\r?\n/);
-      buffered = frames.pop() ?? '';
-      for (const frame of frames) {
-        const data = frame.split(/\r?\n/)
-          .filter((line) => line.startsWith('data:'))
-          .map((line) => line.slice(5).trimStart())
-          .join('\n');
-        if (!data) continue;
-        const event = this.snapshotFromStreamPayload(parseJson(data, 'A2A stream'));
-        if (!event) continue;
-        yield event;
-        if (event.state && (isTerminal(event.state) || event.state === 'input-required' || event.state === 'auth-required')) return;
+      const reader = response.body.getReader();
+      const decoder = new TextDecoder();
+      let buffered = '';
+      let receivedBytes = 0;
+      while (!this.#disposed) {
+        armTimeout('A2A stream was idle for too long.');
+        const chunk = await reader.read();
+        disarmTimeout();
+        if (chunk.done) break;
+        receivedBytes += chunk.value.byteLength;
+        if (receivedBytes > this.options.networkPolicy.maxResponseBytes) {
+          throw new Error('A2A stream exceeded the response size limit.');
+        }
+        buffered += decoder.decode(chunk.value, { stream: true });
+        const frames = buffered.split(/\r?\n\r?\n/);
+        buffered = frames.pop() ?? '';
+        for (const frame of frames) {
+          const data = frame.split(/\r?\n/)
+            .filter((line) => line.startsWith('data:'))
+            .map((line) => line.slice(5).trimStart())
+            .join('\n');
+          if (!data) continue;
+          const event = this.snapshotFromStreamPayload(parseJson(data, 'A2A stream'));
+          if (!event) continue;
+          yield event;
+          if (event.state && (isTerminal(event.state) || event.state === 'input-required' || event.state === 'auth-required')) return;
+        }
       }
+    } finally {
+      disarmTimeout();
+      this.#streamControllers.delete(controller);
     }
   }
 

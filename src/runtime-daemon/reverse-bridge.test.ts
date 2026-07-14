@@ -66,6 +66,27 @@ describe('runtime daemon reverse bridge', () => {
     }
   });
 
+  it('prunes expired credential leases before registering a replacement', () => {
+    vi.useFakeTimers();
+    try {
+      const bridge = createRuntimeDaemonReverseBridge(() => undefined);
+      bridge.registerCredential({
+        leaseId: 'credential-renewed',
+        providers: ['openai'],
+        expiresAt: new Date(Date.now() + 100).toISOString(),
+      });
+      vi.advanceTimersByTime(101);
+
+      expect(bridge.registerCredential({
+        leaseId: 'credential-renewed',
+        providers: ['anthropic'],
+      })).toMatchObject({ id: 'credential-renewed', providers: ['anthropic'] });
+      bridge.close();
+    } finally {
+      vi.useRealTimers();
+    }
+  });
+
   it('binds host tools to one run and marks disconnect outcomes unknown', async () => {
     const notifications: RuntimeDaemonNotification[] = [];
     const bridge = createRuntimeDaemonReverseBridge((notification) => notifications.push(notification));

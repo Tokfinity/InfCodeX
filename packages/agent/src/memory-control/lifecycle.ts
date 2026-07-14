@@ -35,12 +35,15 @@ export async function forgetManagedMemoryRef(
   ref: MemoryItemRef,
   updatedAt: string,
 ): Promise<void> {
-  if (ref.storageUri === undefined || !isWithin(memoryRoot, ref.storageUri)) {
+  const storageUri = ref.storageUri;
+  if (storageUri === undefined || !isWithin(memoryRoot, storageUri)) {
     throw new Error('memory ref is not stored under the managed memory root');
   }
-  await rm(ref.storageUri, { force: true });
-  await removeIndexLine(memoryRoot, path.basename(ref.storageUri));
-  await updateLifecycle(memoryRoot, ref.id, 'forgotten', updatedAt);
+  await withLifecycleLock(memoryRoot, async () => {
+    await rm(storageUri, { force: true });
+    await removeIndexLine(memoryRoot, path.basename(storageUri));
+    await updateLifecycleUnlocked(memoryRoot, ref.id, 'forgotten', updatedAt);
+  });
 }
 
 async function updateLifecycle(
@@ -50,12 +53,21 @@ async function updateLifecycle(
   updatedAt: string,
 ): Promise<void> {
   await withLifecycleLock(memoryRoot, async () => {
-    const state = await readLifecycleState(memoryRoot);
-    const key = await tombstoneKey(memoryRoot, refId);
-    await writeState(memoryRoot, {
-      version: 1,
-      entries: { ...state.entries, [key]: { lifecycle, updatedAt } },
-    });
+    await updateLifecycleUnlocked(memoryRoot, refId, lifecycle, updatedAt);
+  });
+}
+
+async function updateLifecycleUnlocked(
+  memoryRoot: string,
+  refId: string,
+  lifecycle: 'archived' | 'forgotten',
+  updatedAt: string,
+): Promise<void> {
+  const state = await readLifecycleState(memoryRoot);
+  const key = await tombstoneKey(memoryRoot, refId);
+  await writeState(memoryRoot, {
+    version: 1,
+    entries: { ...state.entries, [key]: { lifecycle, updatedAt } },
   });
 }
 
@@ -106,7 +118,7 @@ async function isStaleLifecycleLock(lockPath: string): Promise<boolean> {
   try {
     if (Date.now() - (await stat(lockPath)).mtimeMs <= 30_000) return false;
     const owner = parseLockOwner(await readFile(lockPath, 'utf8'));
-    return owner === undefined || !isProcessAlive(owner.pid);
+    return owner !== undefined && !isProcessAlive(owner.pid);
   } catch (error) {
     if (isMissing(error)) return false;
     throw error;
@@ -141,11 +153,14 @@ function isProcessAlive(pid: number): boolean {
 
 async function removeIndexLine(memoryRoot: string, filename: string): Promise<void> {
   const indexPath = path.join(memoryRoot, 'MEMORY.md');
+  const tempPath = `${indexPath}.${randomUUID()}.tmp`;
   try {
     const content = await readFile(indexPath, 'utf8');
     const next = content.split(/\r?\n/).filter((line) => !line.includes(`(${filename})`)).join('\n');
-    await writeFile(indexPath, next.endsWith('\n') || next.length === 0 ? next : `${next}\n`, 'utf8');
+    await writeFile(tempPath, next.endsWith('\n') || next.length === 0 ? next : `${next}\n`, 'utf8');
+    await rename(tempPath, indexPath);
   } catch (error) {
+    await rm(tempPath, { force: true });
     if (!isMissing(error)) throw error;
   }
 }

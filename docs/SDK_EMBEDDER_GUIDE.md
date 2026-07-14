@@ -30,6 +30,7 @@ are NOT obvious from inspecting the type definitions alone:
 20. [Cost-disciplined workflow routing and telemetry](#20-cost-disciplined-workflow-routing-and-telemetry-feature_259-v0767)
 21. [Experimental governed memory — `/experimental-memory`](#21-experimental-governed-memory--experimental-memory-feature_260-v0768)
 22. [Bidirectional A2A 1.0 — `/a2a`](#22-bidirectional-a2a-10--a2a-feature_267-v0769)
+23. [Shared Coder daemon for Space and IDE hosts](#23-shared-coder-daemon-for-space-and-ide-hosts-feature_269-v0769)
 
 §1–§3 (and the Phase-7/8 MCP-popout surface in §1) land in v0.7.42
 under FEATURE_186 (see [ADR-032](ADR.md#adr-032-sdk-embedder-surface-closure-feature_186-v0742)).
@@ -3199,8 +3200,11 @@ facade; `/agent` and `/coding` remain free of A2A wire types and dependencies.
 ### Call an A2A Agent through F258
 
 Discovery is an explicit host action. The URL must match `allowedOrigins`, and
-the safe fetch path revalidates DNS and redirects, rejects public plain HTTP,
-bounds time/body/redirects, and strips authorization on a cross-origin redirect.
+the default safe transport pins the validated DNS address for each connection
+and independently revalidates redirects, rejects public plain HTTP, bounds
+time/body/redirects, and strips authorization on a cross-origin redirect. A
+custom `fetch` option is a trusted transport override: the embedder then owns
+equivalent DNS-to-connection binding in that transport or proxy.
 
 ```ts
 import {
@@ -3340,7 +3344,12 @@ const server = createKodaXA2AServer({
     maxRequestBytes: 1_048_576,
     maxPartBytes: 524_288,
     maxConcurrentTasks: 8,
-    maxTasksPerPrincipal: 64,
+    maxTaskWaitMs: 30_000,
+    maxActiveTasksPerPrincipal: 8,
+    maxRetainedTasksPerPrincipal: 64,
+    maxEventsPerTask: 1_000,
+    maxEventBytesPerTask: 16_777_216,
+    maxWorkspaceBytesPerContext: 1_073_741_824,
   },
 });
 
@@ -3355,6 +3364,11 @@ continuation, cancellation, ordered SSE subscription, and surviving Runtime-run
 reattachment after an edge restart. Push notifications, A2A 0.3, gRPC, and
 HTTP+JSON are not advertised; unsupported push methods return the standard
 `PushNotificationNotSupportedError`.
+
+Non-streaming `SendMessage` waits at most `maxTaskWaitMs` (30 seconds by
+default). When that bound is reached the response contains the current working
+task; it does not cancel the Runtime run, and clients can continue with
+`GetTask` or `SubscribeToTask`.
 
 Remote messages are ordinary user inputs. They cannot select provider, model,
 profile, tools, working directory, permission mode, or Runtime configuration.

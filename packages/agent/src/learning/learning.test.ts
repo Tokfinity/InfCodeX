@@ -1,5 +1,5 @@
 import { writeFileSync } from 'node:fs';
-import { mkdir, mkdtemp, readFile, rm, stat, writeFile } from 'fs/promises';
+import { mkdir, mkdtemp, readFile, rm, stat, utimes, writeFile } from 'fs/promises';
 import { tmpdir } from 'os';
 import { join } from 'path';
 import { afterEach, describe, expect, it } from 'vitest';
@@ -680,6 +680,40 @@ describe('learning proposal store', () => {
 
     await expect(readFile(lockPath, 'utf8')).resolves.toBe(successorLock);
     await rm(lockPath, { force: true });
+  });
+
+  it('does not reclaim a malformed stale proposal-store lock', async () => {
+    const dir = await createTempDir('kodax-learning-store-malformed-lock-');
+    const storePath = join(dir, 'proposals.json');
+    const lockPath = `${storePath}.lock`;
+    await writeFile(lockPath, 'corrupt owner\n', 'utf8');
+    const stale = new Date(Date.now() - 31_000);
+    await utimes(lockPath, stale, stale);
+    const proposal = triageProceduralLearning({
+      proposalId: 'p-malformed-lock',
+      origin: 'background_learning',
+      completedTurn: true,
+      sourceRefs: ['turn:malformed-lock'],
+      candidate: {
+        kind: 'skill_patch',
+        skillName: 'malformed-lock',
+        whyDurable: 'Unparseable ownership must not be guessed.',
+        trigger: 'When a store lock is damaged.',
+        changeSummary: 'Fail closed on malformed lock ownership.',
+      },
+    });
+    if (proposal.destination === 'discard' || proposal.destination === 'trace_only') {
+      throw new Error('test setup expected a reviewable proposal');
+    }
+
+    const update = upsertLearningProposal(storePath, proposal);
+    const settledEarly = await Promise.race([
+      update.then(() => true),
+      new Promise<false>((resolve) => setTimeout(() => resolve(false), 100)),
+    ]);
+    expect(settledEarly).toBe(false);
+    await rm(lockPath, { force: true });
+    await expect(update).resolves.toMatchObject({ proposalId: 'p-malformed-lock' });
   });
 
   it('stores reviewable proposals and records rejection feedback', async () => {

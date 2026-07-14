@@ -14,6 +14,7 @@ _Last Updated: 2026-07-14_
 
 | ID | Priority | Status | Title | Introduced | Fixed | Created | Resolved |
 |----|----------|--------|-------|------------|-------|---------|----------|
+| 157 | High | Resolved | F267/F269 review found durability, network, concurrency, and diagnostic gaps | v0.7.69 RC | v0.7.69 | 2026-07-14 | 2026-07-14 |
 | 156 | Medium | Resolved | Bare `kodax -r` repeatedly full-reads large session sets before opening the picker | v0.7.68 | v0.7.69 | 2026-07-14 | 2026-07-14 |
 | 155 | High | Resolved | Bare `kodax -r` exits after selection during the picker-to-TUI handoff | v0.7.68 | v0.7.69 | 2026-07-14 | 2026-07-14 |
 | 154 | High | Resolved | FEATURE_267/268 review found remote execution and hot-reload reliability gaps | v0.7.69 RC | v0.7.69 | 2026-07-13 | 2026-07-13 |
@@ -106,6 +107,81 @@ _Last Updated: 2026-07-14_
 
 ## Issue Details
 <!-- Full details for each issue - REQUIRED for all issues -->
+
+### 157: F267/F269 review found durability, network, concurrency, and diagnostic gaps
+
+- **Priority**: High
+- **Status**: **Resolved** (v0.7.69)
+- **Introduced**: v0.7.69 RC
+- **Created**: 2026-07-14
+- **Resolved**: 2026-07-14
+- **Fixed**: v0.7.69
+
+#### Original Problem
+
+An external review reported 25 possible defects across the shared Runtime
+daemon, A2A transport, governed memory, and SDK documentation. Reproduction and
+source-to-sink validation confirmed that daemon state and owner locks were not
+fsynced; A2A streams could remain blocked after idle/dispose; blocking A2A calls
+had no wait bound; request handling could mix hot configurations; default A2A
+fetch validated and connected through separate DNS resolutions; concurrent
+memory forgets restored deleted index entries; expired credential leases and
+malformed stale learning locks were retained or reclaimed unsafely; and corrupt
+best-effort records were skipped without internal diagnostics.
+
+#### Root Cause
+
+- Two new daemon files did not reuse the existing `0600` plus fsync pattern.
+- Streaming and blocking A2A paths lacked explicit lifecycle bounds, and hot
+  options were read repeatedly across asynchronous request steps.
+- URL policy validation preceded a second resolver inside global `fetch`.
+- Memory index mutation occurred outside the lifecycle lock with a direct
+  read-modify-write, while malformed locks were treated as provably abandoned.
+- Best-effort public APIs preserved availability but did not emit a redacted
+  diagnostic when they skipped invalid persisted input.
+
+#### Resolution
+
+Daemon state staging and owner locks now use `0600` file descriptors and fsync
+before publication. A2A event streams have connection/idle aborts tied to
+executor disposal, blocking calls return the current task after a configurable
+wait, each request and its run capture one hot-options snapshot, and the default
+HTTP(S) transport pins the validated address while retaining the hostname for
+Host/TLS verification. Memory forget now serializes file removal, atomic index
+replacement, and tombstone update under the lifecycle lock. Expired credential
+leases are pruned on registration, malformed stale locks fail closed, and
+invalid review/session records plus A2A fallback/recovery failures emit redacted
+diagnostics without changing their public fail-soft result.
+
+#### Files Changed
+
+- `src/runtime-daemon/state.ts`
+- `src/runtime-daemon/reverse-bridge.ts`
+- `src/a2a/client-executor.ts`, `safe-fetch.ts`, `server.ts`, `config.ts`
+- `packages/agent/src/memory-control/lifecycle.ts`, `review-inbox.ts`
+- `packages/agent/src/learning/store.ts`
+- `packages/repl/src/session/public-api.ts`
+- `docs/SDK_EMBEDDER_GUIDE.md`, `docs/features/v0.7.69.md`
+
+#### Tests Added
+
+- File-descriptor fsync and restrictive daemon-file modes.
+- Stream disposal/idle abort, bounded blocking waits, and hot-option snapshots.
+- DNS address pinning against a hostname unavailable to the system resolver.
+- Concurrent direct lifecycle forgets, malformed stale locks, lease renewal,
+  and diagnostics for invalid persisted records.
+
+#### Review Disposition
+
+The remaining report items were not changed when they described intentional
+fail-closed behavior, documented sandbox limits, bounded synchronous storage,
+or lifecycle ownership: credential errors are already normalized before public
+serialization; no-code A2A is explicitly single-principal; daemon startup and
+ownership timers intentionally keep work alive; transport close intentionally
+rejects pending RPCs; socket `EADDRINUSE` remains authoritative; detached daemon
+survival is required; PowerShell aliases and symlinks are rejected/skipped
+fail-closed; and the memory shell guard's process-isolation limit is already
+recorded under Issue 153.
 
 ### 156: Bare `kodax -r` repeatedly full-reads large session sets before opening the picker
 

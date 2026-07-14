@@ -1,6 +1,7 @@
-import type {
-  AgentCredentialBroker,
-  ExternalAgentRegistration,
+import {
+  emitKodaXDiagnostic,
+  type AgentCredentialBroker,
+  type ExternalAgentRegistration,
 } from '@kodax-ai/agent';
 import {
   IntegrationConfigController,
@@ -124,7 +125,13 @@ export function createConfiguredA2ARuntimeIntegration(input: {
             );
             await runtime.admin.agentRegistrations.upsert(discovered.registration);
             activeNames.delete(agentId);
-          } catch {
+          } catch (error: unknown) {
+            emitKodaXDiagnostic({
+              source: 'a2a.runtime-config',
+              level: 'warn',
+              message: `A2A Agent "${name}" refresh failed; last-known-good registration retained.`,
+              detail: error,
+            });
             input.onEvent?.(`A2A Agent "${name}" could not be refreshed; its last-known-good registration was retained.`);
             activeNames.delete(agentId);
           }

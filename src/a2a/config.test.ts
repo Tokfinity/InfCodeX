@@ -70,6 +70,7 @@ describe('FEATURE_267/268 A2A integration config', () => {
       subagents: 'deny',
     });
     expect(parsed.server?.limits.maxConcurrentTasks).toBe(4);
+    expect(parsed.server?.limits.maxTaskWaitMs).toBe(30_000);
   });
 
   it('rejects partial policy, wildcard authority, and process/script mismatches', () => {

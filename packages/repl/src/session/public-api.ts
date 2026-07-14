@@ -14,7 +14,7 @@ import fsPromises from 'node:fs/promises';
 import path from 'node:path';
 import { randomUUID } from 'node:crypto';
 
-import { createSessionLineage, discoverInstances } from '@kodax-ai/agent';
+import { createSessionLineage, discoverInstances, emitKodaXDiagnostic } from '@kodax-ai/agent';
 import type {
   KodaXJsonValue,
   KodaXMessage,
@@ -456,7 +456,13 @@ async function listSessionsImpl(
         filePaths.slice(index, index + readConcurrency).map(async (filePath) => {
           try {
             return await readSessionListCandidate(filePath, readFilter);
-          } catch {
+          } catch (error: unknown) {
+            emitKodaXDiagnostic({
+              source: 'session.public-api',
+              level: 'warn',
+              message: 'Unreadable session record was skipped.',
+              detail: { filePath, error },
+            });
             return undefined;
           }
         }),

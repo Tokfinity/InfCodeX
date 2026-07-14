@@ -5,6 +5,7 @@ import path from 'node:path';
 import { afterEach, describe, expect, it } from 'vitest';
 
 import { setAgentConfigHome } from '../runtime/agent-home.js';
+import { setKodaXDiagnosticSink, type KodaXDiagnostic } from '../diagnostics.js';
 import type { KodaXMemoryOutcomeDigest } from '../types.js';
 import {
   completeEpisodeReview,
@@ -200,7 +201,18 @@ describe('FEATURE_260 episode review inbox', () => {
       'utf8',
     );
 
-    expect(await listPendingEpisodeReviews({ tenantId: identity.tenantId })).toEqual([]);
+    const diagnostics: KodaXDiagnostic[] = [];
+    const restoreDiagnostics = setKodaXDiagnosticSink((diagnostic) => diagnostics.push(diagnostic));
+    try {
+      expect(await listPendingEpisodeReviews({ tenantId: identity.tenantId })).toEqual([]);
+    } finally {
+      restoreDiagnostics();
+    }
+    expect(diagnostics).toEqual([expect.objectContaining({
+      source: 'memory.review-inbox',
+      level: 'warn',
+      message: 'Invalid pending episode review was skipped.',
+    })]);
   });
 
   it('atomically claims a pending review across concurrent drains', async () => {

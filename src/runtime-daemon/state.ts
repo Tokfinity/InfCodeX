@@ -368,7 +368,13 @@ export function writeRuntimeDaemonState(
   ensureRuntimeDaemonDirectories(paths);
   const temporary = `${paths.stateFile}.${process.pid}.${randomUUID()}.tmp`;
   try {
-    fs.writeFileSync(temporary, `${JSON.stringify(state, null, 2)}\n`, 'utf8');
+    const fd = fs.openSync(temporary, 'wx', 0o600);
+    try {
+      fs.writeFileSync(fd, `${JSON.stringify(state, null, 2)}\n`, 'utf8');
+      fs.fsyncSync(fd);
+    } finally {
+      fs.closeSync(fd);
+    }
     fs.renameSync(temporary, paths.stateFile);
   } finally {
     fs.rmSync(temporary, { force: true });
@@ -432,8 +438,9 @@ export function tryAcquireRuntimeDaemonLock(
   ensureRuntimeDaemonDirectories(paths);
   let fd: number | undefined;
   try {
-    fd = fs.openSync(paths.lockFile, 'wx');
+    fd = fs.openSync(paths.lockFile, 'wx', 0o600);
     fs.writeFileSync(fd, `${JSON.stringify(owner, null, 2)}\n`, 'utf8');
+    fs.fsyncSync(fd);
     return { file: paths.lockFile, owner };
   } catch (error) {
     if (isNodeFileError(error) && error.code === 'EEXIST') {

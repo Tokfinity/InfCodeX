@@ -1,4 +1,5 @@
-import * as fs from 'node:fs';
+import fsDefault, * as fs from 'node:fs';
+import { syncBuiltinESMExports } from 'node:module';
 import os from 'node:os';
 import path from 'node:path';
 import { afterEach, describe, expect, it } from 'vitest';
@@ -35,6 +36,23 @@ function tempHome(): string {
   const dir = fs.mkdtempSync(path.join(os.tmpdir(), 'kodax-daemon-state-'));
   tempRoots.push(dir);
   return dir;
+}
+
+function countFsyncCalls(operation: () => void): number {
+  const original = fsDefault.fsyncSync;
+  let calls = 0;
+  fsDefault.fsyncSync = (fd) => {
+    calls += 1;
+    original(fd);
+  };
+  syncBuiltinESMExports();
+  try {
+    operation();
+    return calls;
+  } finally {
+    fsDefault.fsyncSync = original;
+    syncBuiltinESMExports();
+  }
 }
 
 function state(overrides: Partial<RuntimeDaemonState> = {}): RuntimeDaemonState {
@@ -87,6 +105,17 @@ describe('runtime daemon state paths', () => {
     expect(fs.readdirSync(paths.rootDir).filter((name) => name.endsWith('.tmp'))).toEqual([]);
   });
 
+  it('fsyncs a user-only staging file before publishing daemon state', () => {
+    const paths = resolveRuntimeDaemonPaths(tempHome(), 'default');
+
+    const fsyncCalls = countFsyncCalls(() => writeRuntimeDaemonState(paths, state()));
+
+    expect(fsyncCalls).toBe(1);
+    if (process.platform !== 'win32') {
+      expect(fs.statSync(paths.stateFile).mode & 0o777).toBe(0o600);
+    }
+  });
+
   it('treats malformed daemon state as missing instead of throwing', () => {
     const paths = resolveRuntimeDaemonPaths(tempHome(), 'default');
     fs.mkdirSync(paths.rootDir, { recursive: true });
@@ -110,6 +139,24 @@ describe('runtime daemon state paths', () => {
 });
 
 describe('runtime daemon lock ownership', () => {
+  it('fsyncs a user-only owner lock before returning ownership', () => {
+    const paths = resolveRuntimeDaemonPaths(tempHome(), 'default');
+    let lock: ReturnType<typeof tryAcquireRuntimeDaemonLock> = undefined;
+    const fsyncCalls = countFsyncCalls(() => {
+      lock = tryAcquireRuntimeDaemonLock(paths, {
+        runtimeId: 'runtime-durable',
+        pid: 111,
+        createdAt: '2026-07-14T00:00:00.000Z',
+      });
+    });
+
+    expect(lock).toBeDefined();
+    expect(fsyncCalls).toBe(1);
+    if (process.platform !== 'win32') {
+      expect(fs.statSync(paths.lockFile).mode & 0o777).toBe(0o600);
+    }
+  });
+
   it('allows exactly one atomic lock owner', () => {
     const paths = resolveRuntimeDaemonPaths(tempHome(), 'default');
     const first = tryAcquireRuntimeDaemonLock(paths, {
