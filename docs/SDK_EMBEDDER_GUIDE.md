@@ -2790,9 +2790,10 @@ the v0.7.66 delivery. v0.7.67 adds
 `FEATURE_258_v0.7.67_TEST_GUIDE.md`, `FEATURE_259_v0.7.67_TEST_GUIDE.md`, and
 `FEATURE_261_v0.7.67_TEST_GUIDE.md`; v0.7.69 adds
 `FEATURE_267_v0.7.69_TEST_GUIDE.md`, `FEATURE_268_v0.7.69_TEST_GUIDE.md`, and
-`FEATURE_269_v0.7.69_TEST_GUIDE.md`. The final GitHub Actions evidence is
-recorded after the release-preparation commit is pushed; npm publication remains
-a maintainer-owned manual step.
+`FEATURE_269_v0.7.69_TEST_GUIDE.md`. GitHub Actions run `29321123765` passed the
+Node 20/22 build, DTS, and full-test matrix plus the Node 22 Unix-domain-socket
+daemon gate for the release-preparation commit. npm publication remains a
+maintainer-owned manual step.
 
 ---
 
