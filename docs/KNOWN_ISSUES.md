@@ -1,6 +1,6 @@
-﻿# Known Issues
+# Known Issues
 
-_Last Updated: 2026-07-13_
+_Last Updated: 2026-07-14_
 
 ---
 
@@ -14,7 +14,10 @@ _Last Updated: 2026-07-13_
 
 | ID | Priority | Status | Title | Introduced | Fixed | Created | Resolved |
 |----|----------|--------|-------|------------|-------|---------|----------|
+| 156 | Medium | Resolved | Bare `kodax -r` repeatedly full-reads large session sets before opening the picker | v0.7.68 | v0.7.69 | 2026-07-14 | 2026-07-14 |
+| 155 | High | Resolved | Bare `kodax -r` exits after selection during the picker-to-TUI handoff | v0.7.68 | v0.7.69 | 2026-07-14 | 2026-07-14 |
 | 154 | High | Resolved | FEATURE_267/268 review found remote execution and hot-reload reliability gaps | v0.7.69 RC | v0.7.69 | 2026-07-13 | 2026-07-13 |
+| 153 | High | Resolved | FEATURE_260 post-release review found memory guard bypass and persistence isolation gaps | v0.7.68 | v0.7.69 | 2026-07-12 | 2026-07-12 |
 | 152 | High | Resolved | FEATURE_260 review found credential, mutation-guard, concurrent persistence, and eval-integrity gaps | v0.7.68 RC | v0.7.68 | 2026-07-12 | 2026-07-12 |
 | 151 | High | Resolved | Runtime config tests leak detached daemon processes and interrupted background fixtures can survive | v0.7.67 RC | v0.7.67 | 2026-07-11 | 2026-07-11 |
 | 150 | High | Resolved | v0.7.67 外部 Agent 脚本路由与执行平面关闭契约存在发布阻断缺口 | v0.7.67 RC | v0.7.67 | 2026-07-11 | 2026-07-11 |
@@ -104,6 +107,120 @@ _Last Updated: 2026-07-13_
 ## Issue Details
 <!-- Full details for each issue - REQUIRED for all issues -->
 
+### 156: Bare `kodax -r` repeatedly full-reads large session sets before opening the picker
+
+- **Priority**: Medium
+- **Status**: **Resolved** (v0.7.69)
+- **Introduced**: v0.7.68
+- **Created**: 2026-07-14
+- **Resolved**: 2026-07-14
+- **Fixed**: v0.7.69
+
+#### Original Problem
+
+Opening bare `kodax -r` becomes noticeably slow as the session store grows.
+On a real Windows store containing 1174 session files and about 221 MB of data,
+the picker waited roughly 13.8 seconds before becoming interactive.
+
+#### Root Cause
+
+The CLI requested up to 1000 sessions in pages of 100. Every project-scoped
+cursor request entered the general `listSessions` path, which traversed the
+session tree, read every candidate JSONL file in full, sorted the complete set,
+and only then sliced one page. Up to ten pages therefore repeated the same
+directory scan and transcript reads.
+
+#### Resolution
+
+The picker now requests its bounded 1000-session dataset in one pass. The
+general list path reads only the metadata first line for modern sessions, in
+batches of 48, and falls back to a full read only for legacy metadata that lacks
+`activeMessageCount` or for a pathological metadata line over 64 KiB. It still
+scans project aliases so old sessions are not hidden.
+
+On the same 755 matching sessions, the published v0.7.68 path took about
+13.8 seconds. The worktree source completed in about 0.47 seconds and the
+publish-shaped bundle in about 0.77 seconds, while returning the same 755 IDs.
+
+#### Files Changed
+
+- `src/kodax_cli.ts`
+- `packages/repl/src/interactive/storage.ts`
+- `packages/repl/src/session/public-api.ts`
+- `packages/repl/src/session/public-api.test.ts`
+- `tests/kodax_cli.test.ts`
+
+#### Tests Added
+
+- Project-scoped listing must not full-read a modern session transcript.
+- The CLI resume picker dataset must be loaded with one bounded list pass.
+- Real-store source and publish-bundle timings retain the complete result set.
+
+### 155: Bare `kodax -r` exits after selection during the picker-to-TUI handoff
+
+- **Priority**: High
+- **Status**: **Resolved** (v0.7.69)
+- **Introduced**: v0.7.68
+- **Created**: 2026-07-14
+- **Resolved**: 2026-07-14
+- **Fixed**: v0.7.69
+
+#### Original Problem
+
+Running bare `kodax -r` opens the searchable session picker and allows normal
+keyboard navigation, but pressing Enter briefly opens the main KodaX UI and
+then exits the process before the resumed transcript is rendered. The failure
+reproduces for both new and old sessions. Resuming the same session with
+`kodax -r <session-id>` works because that path bypasses the picker.
+
+#### Root Cause
+
+The picker uses the external Ink renderer while the main KodaX UI uses the
+project-owned renderer. External Ink releases raw input ownership on picker
+unmount by calling `process.stdin.unref()`. The owned renderer then enables raw
+mode and attaches its data listener, but it does not restore the stream
+reference. With no referenced event-loop handle left, its `beforeExit` handler
+immediately unmounts the newly rendered main UI.
+
+#### Proposed Solution
+
+Use the project-owned renderer for the session picker too, keeping input
+ownership inside one renderer lifecycle. Add a regression that exercises the
+Enter-to-resumed-UI transition, not only picker filtering and static rendering.
+Keep direct ID/title resume and Escape/Ctrl+C cancellation behavior unchanged.
+
+#### Resolution
+
+`SessionPicker` now imports `render`, `useApp`, and `useInput` from KodaX's
+owned TUI facade. Picker selection and the resumed REPL therefore share one
+input-ownership model and no external Ink teardown can unref stdin between the
+two surfaces.
+
+#### Workaround
+
+List sessions with `kodax -s list`, then resume explicitly with
+`kodax -r <session-id>`. `kodax -c` also remains available for the most recent
+session.
+
+#### Affected Files
+
+- `packages/repl/src/ui/SessionPicker.tsx`
+- `packages/repl/src/ui/SessionPicker.test.tsx`
+
+#### Test Gap
+
+The v0.7.68 tests verify filtering, paging, hints, and static rendering, but do
+not start a second interactive renderer after the picker exits. The human guide
+contains the expected Enter-resume behavior, but it was not enforced by an
+automated lifecycle test.
+
+#### Tests Added
+
+- A simulated TTY renders the picker through the owned renderer, sends Enter,
+  and verifies that the highlighted session is selected through that lifecycle.
+- Existing filtering, paging, rendering, and terminal-input controller tests
+  remain green.
+
 ### 154: FEATURE_267/268 review found remote execution and hot-reload reliability gaps
 
 - **Priority**: High
@@ -177,6 +294,80 @@ Real-path validation is defense in depth against stable links; ASRT or an outer
 container/VM remains the process-isolation boundary for admitted scripts and
 hostile tenants. Independent A2A TCK/client evidence, POSIX release validation,
 and a provisioned Windows ASRT run remain release gates rather than code gaps.
+
+### 153: FEATURE_260 post-release review found memory guard bypass and persistence isolation gaps
+
+- **Priority**: High
+- **Status**: **Resolved** (v0.7.69)
+- **Introduced**: v0.7.68
+- **Created**: 2026-07-12
+- **Resolved**: 2026-07-12
+- **Fixed**: v0.7.69
+
+#### Original Problem
+
+Post-release adversarial review showed that the governed-memory shell guard can
+be bypassed by chaining a permitted read with an interpreter write, or by using
+home-relative and environment-relative paths. Separately, malformed approval
+metadata can be dropped without a warning and allow a later proposal write to
+replace the remaining store; a review drain without `projectId` can claim
+project-owned work; and stale lock recovery can remove a successor owner's lock.
+
+Expected behavior is fail-closed protection of governed memory at the Bash tool
+boundary, fail-loud preservation of corrupt proposal stores, exact project
+ownership during drains, and owner-checked release of recovered file locks.
+
+#### Root Cause
+
+- The shell guard recognizes literal configured roots but treats any command
+  beginning with a read verb as read-only, even when later commands mutate.
+- Five approval fields return an invalid proposal without appending a warning.
+- Missing drain filters behave as wildcards for project-owned entries.
+- Lock files contain no owner token and are removed unconditionally by path.
+
+#### Proposed Solution
+
+Add failing boundary tests first, then enforce single read-only shell commands,
+warn on every invalid stored field, make project-less drains defer project-owned
+reviews, and release locks only when their owner token still matches. Preserve
+tenant-wide listing, legitimate read-only inspection, and normal project-scoped
+drains.
+
+#### Resolution
+
+The Bash guard now recognizes scoped and legacy memory paths in absolute,
+home-relative, and environment-relative forms, and permits only a single simple
+read-only inspection when governed memory is addressed. Every invalid approval
+field now emits a warning, so proposal writes refuse to replace a corrupt store.
+Project-less drains defer project-owned reviews while retaining tenant-wide list
+and project-less owner behavior. Proposal and lifecycle locks now persist PID and
+random owner tokens, check process liveness before stale recovery, and remove a
+lock only when the releasing token still owns it. Lifecycle state writes and
+review inbox writes also use cleaned-up atomic temporary files, and persisted
+outcome evidence receives complete runtime shape validation.
+
+#### Files Changed
+
+- `packages/coding/src/tools/memory-mutation-guard.ts`
+- `packages/agent/src/learning/store.ts`
+- `packages/agent/src/memory-control/review-inbox.ts`
+- `packages/agent/src/memory-control/lifecycle.ts`
+
+#### Tests Added
+
+- Chained, piped, home-relative, environment-relative, and legacy memory shell paths.
+- All five approval metadata corruption fields plus fail-closed rewrite preservation.
+- Project-owned versus project-less review drain ownership.
+- Successor lock token preservation and malformed outcome evidence rejection.
+
+#### Remaining Risk
+
+The Bash check is deterministic defense-in-depth for commands that directly
+address recognized governed-memory paths. It is not an OS filesystem sandbox:
+an intentionally obfuscated program can construct a path without including the
+protected literal in its command text. Preventing that broader same-user process
+authority requires process-level filesystem isolation or a privileged memory
+writer boundary, which is outside this minimal patch.
 
 ### 152: FEATURE_260 review found credential, mutation-guard, concurrent persistence, and eval-integrity gaps
 
@@ -5397,11 +5588,16 @@ Commit `ef085fc` 把 V1 精简到 V2 时没区分"信息载体"和"脚手架"，
 ---
 
 ## Summary
-- Total: 80 (24 Open, 56 Resolved, 0 Partially Resolved, 0 Won't Fix)
+- Total: 83 (24 Open, 59 Resolved, 0 Partially Resolved, 0 Won't Fix)
 - Highest Priority Open: 091 - 缺少一等公民 MCP / Web Search / Code Search 工具体系 (High)
 - Historical archived issues are maintained in ISSUES_ARCHIVED.md
 
 ## Changelog
+
+### 2026-07-14: Issues 155 and 156 added and resolved (v0.7.69)
+- Unified the resume picker with the owned TUI input lifecycle.
+- Replaced repeated full-transcript pagination with one bounded, concurrent
+  metadata-head scan while preserving legacy project aliases.
 
 ### 2026-07-11: Issue 151 added and resolved (v0.7.67)
 - Distinguished Codex-owned MCP Node processes from KodaX test residues by

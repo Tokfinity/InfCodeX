@@ -1,4 +1,4 @@
-﻿# Changelog
+# Changelog
 
 All notable changes to this project will be documented in this file.
 
@@ -31,6 +31,21 @@ All notable changes to this project will be documented in this file.
   size policy. The built-in server listener is loopback-only; public hosts use
   `handle()` behind TLS. A2A 0.3, gRPC, HTTP+JSON, push notifications, automatic
   public Agent exposure, and remote Runtime configuration are not advertised.
+
+### Fixed
+
+- **Governed-memory Bash guard bypasses.** Commands that directly address
+  recognized scoped or legacy memory roots now permit only one simple read-only
+  inspection; command chaining, pipelines, redirects, home-relative paths, and
+  interpreter writes fail closed at the Bash tool boundary.
+- **Memory proposal and review persistence integrity.** Invalid approval
+  metadata now produces a store warning and blocks rewrites; project-less review
+  drains no longer claim project-owned work; persisted outcome evidence receives
+  full shape validation; atomic writes clean temporary files on failure.
+- **Memory store lock ownership.** Proposal and lifecycle locks now carry a PID
+  plus random owner token, avoid reclaiming stale locks held by a live process,
+  and remove a lock only when the releasing owner token still matches. Lifecycle
+  state writes now use temporary-file rename instead of direct truncating writes.
 
 ## [0.7.68] - 2026-07-12
 
