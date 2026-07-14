@@ -1,3 +1,4 @@
+import { randomUUID } from 'node:crypto';
 import { mkdir, open, readFile, rename, rm, stat, writeFile, type FileHandle } from 'fs/promises';
 import { basename, dirname, join } from 'path';
 
@@ -284,11 +285,26 @@ function parseStoredProposal(value: unknown, index: number, warnings: string[]):
     warnings.push(`proposal entry ${proposalId} has invalid approvedBy`);
     return undefined;
   }
-  if (approvedAt !== undefined && typeof approvedAt !== 'string') return undefined;
-  if (approvalPolicyId !== undefined && typeof approvalPolicyId !== 'string') return undefined;
-  if (approvalPolicyReason !== undefined && typeof approvalPolicyReason !== 'string') return undefined;
-  if (approvalExpectedFingerprints !== undefined && !isStringRecord(approvalExpectedFingerprints)) return undefined;
-  if (approvalResultingFingerprints !== undefined && !isStringRecord(approvalResultingFingerprints)) return undefined;
+  if (approvedAt !== undefined && typeof approvedAt !== 'string') {
+    warnings.push(`proposal entry ${proposalId} has invalid approvedAt`);
+    return undefined;
+  }
+  if (approvalPolicyId !== undefined && typeof approvalPolicyId !== 'string') {
+    warnings.push(`proposal entry ${proposalId} has invalid approvalPolicyId`);
+    return undefined;
+  }
+  if (approvalPolicyReason !== undefined && typeof approvalPolicyReason !== 'string') {
+    warnings.push(`proposal entry ${proposalId} has invalid approvalPolicyReason`);
+    return undefined;
+  }
+  if (approvalExpectedFingerprints !== undefined && !isStringRecord(approvalExpectedFingerprints)) {
+    warnings.push(`proposal entry ${proposalId} has invalid approvalExpectedFingerprints`);
+    return undefined;
+  }
+  if (approvalResultingFingerprints !== undefined && !isStringRecord(approvalResultingFingerprints)) {
+    warnings.push(`proposal entry ${proposalId} has invalid approvalResultingFingerprints`);
+    return undefined;
+  }
   if (appliedSnapshotPath !== undefined && typeof appliedSnapshotPath !== 'string') {
     warnings.push(`proposal entry ${proposalId} has invalid applied snapshot path`);
     return undefined;
@@ -510,26 +526,29 @@ export async function updateLearningProposalStatus(
 async function withStoreWriteLock<T>(filePath: string, operation: () => Promise<T>): Promise<T> {
   const lockPath = `${filePath}.lock`;
   await mkdir(dirname(filePath), { recursive: true });
-  const handle = await acquireStoreWriteLock(lockPath);
+  const lock = await acquireStoreWriteLock(lockPath);
   try {
     return await operation();
   } finally {
     try {
-      await handle.close();
+      await lock.handle.close();
     } finally {
-      await rm(lockPath, { force: true });
+      await releaseStoreWriteLock(lockPath, lock.token);
     }
   }
 }
 
-async function acquireStoreWriteLock(lockPath: string): Promise<FileHandle> {
+async function acquireStoreWriteLock(
+  lockPath: string,
+): Promise<{ readonly handle: FileHandle; readonly token: string }> {
   const deadline = Date.now() + 5_000;
   while (true) {
     try {
       const handle = await open(lockPath, 'wx');
+      const token = randomUUID();
       try {
-        await handle.writeFile(`${process.pid}\n`, 'utf8');
-        return handle;
+        await handle.writeFile(`${process.pid} ${token}\n`, 'utf8');
+        return { handle, token };
       } catch (error) {
         await handle.close();
         await rm(lockPath, { force: true });
@@ -549,10 +568,38 @@ async function acquireStoreWriteLock(lockPath: string): Promise<FileHandle> {
 
 async function isStaleStoreLock(lockPath: string): Promise<boolean> {
   try {
-    return Date.now() - (await stat(lockPath)).mtimeMs > 30_000;
+    if (Date.now() - (await stat(lockPath)).mtimeMs <= 30_000) return false;
+    const owner = parseLockOwner(await readFile(lockPath, 'utf8'));
+    return owner === undefined || !isProcessAlive(owner.pid);
   } catch (error) {
     if (isFileError(error, 'ENOENT')) return false;
     throw error;
+  }
+}
+
+async function releaseStoreWriteLock(lockPath: string, token: string): Promise<void> {
+  try {
+    const owner = parseLockOwner(await readFile(lockPath, 'utf8'));
+    if (owner?.token === token) await rm(lockPath, { force: true });
+  } catch (error) {
+    if (!isFileError(error, 'ENOENT')) throw error;
+  }
+}
+
+function parseLockOwner(raw: string): { readonly pid: number; readonly token?: string } | undefined {
+  const match = /^(\d+)(?: ([0-9a-f-]+))?\s*$/i.exec(raw);
+  if (match === null) return undefined;
+  const pid = Number(match[1]);
+  if (!Number.isSafeInteger(pid) || pid <= 0) return undefined;
+  return match[2] === undefined ? { pid } : { pid, token: match[2] };
+}
+
+function isProcessAlive(pid: number): boolean {
+  try {
+    process.kill(pid, 0);
+    return true;
+  } catch (error) {
+    return !isFileError(error, 'ESRCH');
   }
 }
 

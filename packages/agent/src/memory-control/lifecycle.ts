@@ -1,5 +1,5 @@
-import { createHmac, randomBytes } from 'node:crypto';
-import { mkdir, open, readFile, rm, stat, writeFile, type FileHandle } from 'node:fs/promises';
+import { createHmac, randomBytes, randomUUID } from 'node:crypto';
+import { mkdir, open, readFile, rename, rm, stat, writeFile, type FileHandle } from 'node:fs/promises';
 import path from 'node:path';
 
 import type { MemoryItemRef, MemoryLifecycle } from './types.js';
@@ -62,23 +62,34 @@ async function updateLifecycle(
 async function withLifecycleLock(memoryRoot: string, operation: () => Promise<void>): Promise<void> {
   const lockPath = path.join(memoryRoot, '.governance', 'lifecycle.lock');
   await mkdir(path.dirname(lockPath), { recursive: true });
-  const handle = await acquireLifecycleLock(lockPath);
+  const lock = await acquireLifecycleLock(lockPath);
   try {
     await operation();
   } finally {
     try {
-      await handle.close();
+      await lock.handle.close();
     } finally {
-      await rm(lockPath, { force: true });
+      await releaseLifecycleLock(lockPath, lock.token);
     }
   }
 }
 
-async function acquireLifecycleLock(lockPath: string): Promise<FileHandle> {
+async function acquireLifecycleLock(
+  lockPath: string,
+): Promise<{ readonly handle: FileHandle; readonly token: string }> {
   const deadline = Date.now() + 5_000;
   while (true) {
     try {
-      return await open(lockPath, 'wx');
+      const handle = await open(lockPath, 'wx');
+      const token = randomUUID();
+      try {
+        await handle.writeFile(`${process.pid} ${token}\n`, 'utf8');
+        return { handle, token };
+      } catch (error) {
+        await handle.close();
+        await rm(lockPath, { force: true });
+        throw error;
+      }
     } catch (error) {
       if (!isAlreadyExists(error)) throw error;
       if (await isStaleLifecycleLock(lockPath)) {
@@ -93,10 +104,38 @@ async function acquireLifecycleLock(lockPath: string): Promise<FileHandle> {
 
 async function isStaleLifecycleLock(lockPath: string): Promise<boolean> {
   try {
-    return Date.now() - (await stat(lockPath)).mtimeMs > 30_000;
+    if (Date.now() - (await stat(lockPath)).mtimeMs <= 30_000) return false;
+    const owner = parseLockOwner(await readFile(lockPath, 'utf8'));
+    return owner === undefined || !isProcessAlive(owner.pid);
   } catch (error) {
     if (isMissing(error)) return false;
     throw error;
+  }
+}
+
+async function releaseLifecycleLock(lockPath: string, token: string): Promise<void> {
+  try {
+    const owner = parseLockOwner(await readFile(lockPath, 'utf8'));
+    if (owner?.token === token) await rm(lockPath, { force: true });
+  } catch (error) {
+    if (!isMissing(error)) throw error;
+  }
+}
+
+function parseLockOwner(raw: string): { readonly pid: number; readonly token?: string } | undefined {
+  const match = /^(\d+)(?: ([0-9a-f-]+))?\s*$/i.exec(raw);
+  if (match === null) return undefined;
+  const pid = Number(match[1]);
+  if (!Number.isSafeInteger(pid) || pid <= 0) return undefined;
+  return match[2] === undefined ? { pid } : { pid, token: match[2] };
+}
+
+function isProcessAlive(pid: number): boolean {
+  try {
+    process.kill(pid, 0);
+    return true;
+  } catch (error) {
+    return !(isRecord(error) && error.code === 'ESRCH');
   }
 }
 
@@ -156,7 +195,14 @@ async function readLifecycleState(memoryRoot: string): Promise<LifecycleState> {
 async function writeState(memoryRoot: string, state: LifecycleState): Promise<void> {
   const filePath = statePath(memoryRoot);
   await mkdir(path.dirname(filePath), { recursive: true });
-  await writeFile(filePath, `${JSON.stringify(state, null, 2)}\n`, 'utf8');
+  const tempPath = `${filePath}.${randomUUID()}.tmp`;
+  try {
+    await writeFile(tempPath, `${JSON.stringify(state, null, 2)}\n`, 'utf8');
+    await rename(tempPath, filePath);
+  } catch (error) {
+    await rm(tempPath, { force: true });
+    throw error;
+  }
 }
 
 function statePath(memoryRoot: string): string {

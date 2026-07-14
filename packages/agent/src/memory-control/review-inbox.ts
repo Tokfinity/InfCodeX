@@ -138,6 +138,9 @@ export async function drainPendingEpisodeReviews(
     agentId: identity.agentId,
     ...(identity.projectId !== undefined ? { projectId: identity.projectId } : {}),
   });
+  const owned = identity.projectId === undefined
+    ? pending.filter((entry) => entry.ownerProjectHash === undefined)
+    : pending;
   const maxEntries = Math.max(1, Math.min(8, options.maxEntries ?? 8));
   const result: {
     reviewed: number;
@@ -145,8 +148,14 @@ export async function drainPendingEpisodeReviews(
     deferred: number;
     failed: number;
     failures: Array<{ reviewKey: string; error: string }>;
-  } = { reviewed: 0, discarded: 0, deferred: 0, failed: 0, failures: [] };
-  for (const entry of pending.slice(0, maxEntries)) {
+  } = {
+    reviewed: 0,
+    discarded: 0,
+    deferred: pending.length - owned.length,
+    failed: 0,
+    failures: [],
+  };
+  for (const entry of owned.slice(0, maxEntries)) {
     const ownerIdentity = { ...identity, sessionId: entry.ownerSessionRef };
     const claimPath = await claimPendingReview(ownerIdentity, entry.reviewKey);
     if (claimPath === undefined) continue;
@@ -175,7 +184,7 @@ export async function drainPendingEpisodeReviews(
       });
     }
   }
-  result.deferred += Math.max(0, pending.length - maxEntries);
+  result.deferred += Math.max(0, owned.length - maxEntries);
   return result;
 }
 
@@ -265,8 +274,13 @@ function safeKey(value: string): string {
 async function writeJsonAtomic(filePath: string, value: unknown): Promise<void> {
   await mkdir(path.dirname(filePath), { recursive: true });
   const tempPath = `${filePath}.${randomUUID()}.tmp`;
-  await writeFile(tempPath, `${JSON.stringify(value, null, 2)}\n`, 'utf8');
-  await rename(tempPath, filePath);
+  try {
+    await writeFile(tempPath, `${JSON.stringify(value, null, 2)}\n`, 'utf8');
+    await rename(tempPath, filePath);
+  } catch (error) {
+    await rm(tempPath, { force: true });
+    throw error;
+  }
 }
 
 async function readDirectories(root: string): Promise<readonly string[]> {
@@ -316,10 +330,34 @@ function isOutcomeDigest(value: unknown): value is KodaXMemoryOutcomeDigest {
     && typeof value.approach === 'string'
     && (value.outcome === 'succeeded' || value.outcome === 'failed')
     && typeof value.summary === 'string'
+    && (value.actionSignature === undefined || typeof value.actionSignature === 'string')
+    && (value.preconditions === undefined || typeof value.preconditions === 'string')
+    && (value.lesson === undefined || typeof value.lesson === 'string')
     && Array.isArray(value.evidenceRefs)
     && value.evidenceRefs.every((ref) => typeof ref === 'string')
+    && (value.evidence === undefined
+      || (Array.isArray(value.evidence) && value.evidence.every(isOutcomeEvidence)))
+    && (value.memoryInfluence === undefined
+      || (Array.isArray(value.memoryInfluence) && value.memoryInfluence.every(isMemoryInfluence)))
     && (value.visibility === 'prompt_safe' || value.visibility === 'private' || value.visibility === 'sensitive')
     && typeof value.createdAt === 'string';
+}
+
+function isOutcomeEvidence(value: unknown): boolean {
+  return isRecord(value)
+    && typeof value.ref === 'string'
+    && (value.grade === 'authoritative' || value.grade === 'verified'
+      || value.grade === 'corroborated' || value.grade === 'observed' || value.grade === 'inferred')
+    && (value.source === 'user' || value.source === 'host' || value.source === 'tool'
+      || value.source === 'environment' || value.source === 'agent')
+    && typeof value.observedAt === 'string';
+}
+
+function isMemoryInfluence(value: unknown): boolean {
+  return isRecord(value)
+    && typeof value.decisionReceiptRef === 'string'
+    && (value.grade === 'direct' || value.grade === 'supporting'
+      || value.grade === 'exposed' || value.grade === 'unknown');
 }
 
 function isRecord(value: unknown): value is Record<string, unknown> {

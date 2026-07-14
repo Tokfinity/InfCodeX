@@ -1,3 +1,4 @@
+import { writeFileSync } from 'node:fs';
 import { mkdir, mkdtemp, readFile, rm, stat, writeFile } from 'fs/promises';
 import { tmpdir } from 'os';
 import { join } from 'path';
@@ -30,6 +31,10 @@ import {
 } from './index.js';
 
 const tempDirs: string[] = [];
+
+function isMutableRecord(value: unknown): value is Record<string, unknown> {
+  return typeof value === 'object' && value !== null && !Array.isArray(value);
+}
 
 afterEach(async () => {
   await Promise.all(tempDirs.splice(0).map((dir) => rm(dir, { recursive: true, force: true })));
@@ -644,6 +649,39 @@ describe('learning proposal store', () => {
       .toEqual(['p-concurrent-a', 'p-concurrent-b']);
   });
 
+  it('does not remove a successor lock when the current lock owner finishes', async () => {
+    const dir = await createTempDir('kodax-learning-store-lock-owner-');
+    const storePath = join(dir, 'proposals.json');
+    const lockPath = `${storePath}.lock`;
+    const successorLock = `${process.pid} 11111111-1111-4111-8111-111111111111\n`;
+    const proposal = triageProceduralLearning({
+      proposalId: 'p-lock-owner',
+      origin: 'background_learning',
+      completedTurn: true,
+      sourceRefs: ['turn:lock-owner'],
+      candidate: {
+        kind: 'skill_patch',
+        skillName: 'lock-owner',
+        whyDurable: 'Concurrent writers must preserve lock ownership.',
+        trigger: 'When proposal writes overlap.',
+        changeSummary: 'Preserve the successor lock.',
+      },
+    });
+    if (proposal.destination === 'discard' || proposal.destination === 'trace_only') {
+      throw new Error('test setup expected a reviewable proposal');
+    }
+
+    await upsertLearningProposal(storePath, proposal, {
+      now: () => {
+        writeFileSync(lockPath, successorLock, 'utf8');
+        return '2026-07-12T00:00:00.000Z';
+      },
+    });
+
+    await expect(readFile(lockPath, 'utf8')).resolves.toBe(successorLock);
+    await rm(lockPath, { force: true });
+  });
+
   it('stores reviewable proposals and records rejection feedback', async () => {
     const dir = await createTempDir('kodax-learning-store-');
     const storePath = join(dir, 'proposals.json');
@@ -865,6 +903,57 @@ describe('learning proposal store', () => {
 
     expect(read.proposals).toEqual([]);
     expect(read.warnings[0]).toContain('not valid JSON');
+  });
+
+  it.each([
+    ['approvedAt', 123],
+    ['approvalPolicyId', 123],
+    ['approvalPolicyReason', 123],
+    ['approvalExpectedFingerprints', []],
+    ['approvalResultingFingerprints', []],
+  ])('warns and refuses to overwrite an invalid %s field', async (field, invalidValue) => {
+    const dir = await createTempDir(`kodax-learning-corrupt-${field}-`);
+    const storePath = join(dir, 'proposals.json');
+    const proposal = triageProceduralLearning({
+      proposalId: `p-corrupt-${field}`,
+      origin: 'background_learning',
+      completedTurn: true,
+      sourceRefs: [`turn:${field}`],
+      candidate: {
+        kind: 'skill_patch',
+        skillName: `corrupt-${field}`,
+        whyDurable: 'Approval metadata must fail loudly when corrupt.',
+        trigger: 'When approval metadata is loaded.',
+        changeSummary: 'Reject the corrupt store.',
+      },
+    });
+    if (proposal.destination === 'discard' || proposal.destination === 'trace_only') {
+      throw new Error('test setup expected a reviewable proposal');
+    }
+    await upsertLearningProposal(storePath, proposal);
+    await updateLearningProposalStatus(storePath, proposal.proposalId, 'approved', {
+      approvedBy: 'host',
+      approvedAt: '2026-07-12T00:00:00.000Z',
+      approvalPolicyId: 'policy-v1',
+      approvalPolicyReason: 'verified',
+      approvalExpectedFingerprints: { before: 'sha256:before' },
+      approvalResultingFingerprints: { after: 'sha256:after' },
+    });
+    const document: unknown = JSON.parse(await readFile(storePath, 'utf8'));
+    if (!isMutableRecord(document) || !Array.isArray(document.proposals)
+      || !isMutableRecord(document.proposals[0])) {
+      throw new Error('test setup expected a stored proposal document');
+    }
+    document.proposals[0][field] = invalidValue;
+    await writeFile(storePath, `${JSON.stringify(document, null, 2)}\n`, 'utf8');
+    const corruptBytes = await readFile(storePath, 'utf8');
+
+    const read = await readLearningProposalStore(storePath);
+
+    expect(read.proposals).toEqual([]);
+    expect(read.warnings).toContain(`proposal entry ${proposal.proposalId} has invalid ${field}`);
+    await expect(upsertLearningProposal(storePath, proposal)).rejects.toThrow(/refusing to write corrupt/);
+    await expect(readFile(storePath, 'utf8')).resolves.toBe(corruptBytes);
   });
 
   it('rejects trace-only and unknown destinations as reviewable proposals', async () => {

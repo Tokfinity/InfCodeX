@@ -1,4 +1,4 @@
-import { mkdtemp, readFile, rm } from 'node:fs/promises';
+import { mkdtemp, readFile, rm, writeFile } from 'node:fs/promises';
 import os from 'node:os';
 import path from 'node:path';
 
@@ -138,6 +138,69 @@ describe('FEATURE_260 episode review inbox', () => {
       failures: [{ reviewKey: 'review-1', error: 'transient reviewer failure' }],
     });
     expect(await listPendingEpisodeReviews({ tenantId: identity.tenantId })).toHaveLength(2);
+  });
+
+  it('does not drain project-owned reviews without a project identity', async () => {
+    home = await mkdtemp(path.join(os.tmpdir(), 'kodax-review-inbox-projectless-'));
+    setAgentConfigHome(home);
+    await persistPendingEpisodeReview(identity, digest());
+    let reviewCalls = 0;
+
+    const result = await drainPendingEpisodeReviews({
+      tenantId: identity.tenantId,
+      agentId: identity.agentId,
+      sessionId: identity.sessionId,
+    }, {
+      revalidate: async () => 'eligible',
+      review: async () => {
+        reviewCalls += 1;
+        return ['proposal-1'];
+      },
+    });
+
+    expect(result).toEqual({
+      reviewed: 0,
+      discarded: 0,
+      deferred: 1,
+      failed: 0,
+      failures: [],
+    });
+    expect(reviewCalls).toBe(0);
+    expect(await listPendingEpisodeReviews({ tenantId: identity.tenantId })).toHaveLength(1);
+  });
+
+  it('still drains reviews that are owned by a project-less identity', async () => {
+    home = await mkdtemp(path.join(os.tmpdir(), 'kodax-review-inbox-unscoped-'));
+    setAgentConfigHome(home);
+    const projectless = {
+      tenantId: identity.tenantId,
+      agentId: identity.agentId,
+      sessionId: identity.sessionId,
+    } as const;
+    await persistPendingEpisodeReview(projectless, digest());
+
+    const result = await drainPendingEpisodeReviews(projectless, {
+      revalidate: async () => 'eligible',
+      review: async () => ['proposal-1'],
+    });
+
+    expect(result.reviewed).toBe(1);
+    expect(result.deferred).toBe(0);
+    expect(await listPendingEpisodeReviews({ tenantId: identity.tenantId })).toEqual([]);
+  });
+
+  it('ignores persisted digests with an invalid evidence shape', async () => {
+    home = await mkdtemp(path.join(os.tmpdir(), 'kodax-review-inbox-invalid-evidence-'));
+    setAgentConfigHome(home);
+    const persisted = await persistPendingEpisodeReview(identity, digest());
+    const raw = await readFile(persisted.path, 'utf8');
+    await writeFile(
+      persisted.path,
+      raw.replace('"evidenceRefs":', '"evidence": {},\n    "evidenceRefs":'),
+      'utf8',
+    );
+
+    expect(await listPendingEpisodeReviews({ tenantId: identity.tenantId })).toEqual([]);
   });
 
   it('atomically claims a pending review across concurrent drains', async () => {
