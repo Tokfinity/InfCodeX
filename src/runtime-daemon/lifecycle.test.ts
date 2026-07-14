@@ -36,6 +36,7 @@ describe('runtime daemon lifecycle health checks', () => {
     const current = state();
     writeRuntimeDaemonState(paths, current);
     writeRuntimeDaemonToken(paths, 'token-health');
+    expect(tryAcquireRuntimeDaemonLock(paths, owner(current.runtimeId, current.pid))).toBeDefined();
     let initializeParams: unknown;
 
     const observation = await observeRuntimeDaemonHealth(paths, {

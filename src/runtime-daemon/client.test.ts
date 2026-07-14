@@ -1,4 +1,5 @@
 import { describe, expect, it } from 'vitest';
+import { setKodaXDiagnosticSink, type KodaXDiagnostic } from '@kodax-ai/agent';
 
 import type {
   RuntimeEvent,
@@ -145,6 +146,63 @@ describe('runtime daemon client proxy', () => {
     expect(seen).toEqual([event]);
   });
 
+  it('ignores unrelated subscription traffic during a session observation handshake', async () => {
+    const calls: Array<{ readonly method: string; readonly params: unknown }> = [];
+    let resolveObservation!: (value: unknown) => void;
+    const observationResult = new Promise<unknown>((resolve) => {
+      resolveObservation = resolve;
+    });
+    const transport = fakeTransport(calls, { sessionObserveResult: observationResult });
+    const client = createRuntimeDaemonClient({
+      identity: {
+        runtimeId: 'runtime-client',
+        mode: 'daemon',
+        profile: 'default',
+        startedAt: '2026-07-09T00:00:00.000Z',
+        version: '0.7.69',
+      },
+      transport,
+    });
+    const observation = client.sessions.observe('session-target', () => undefined);
+    for (let seq = 1; seq <= 300; seq += 1) {
+      transport.emit(createRuntimeDaemonNotification('event', {
+        subscriptionId: 'unrelated-subscription',
+        event: {
+          id: `evt-unrelated-${seq}`,
+          seq,
+          time: '2026-07-09T00:00:00.000Z',
+          sessionId: 'session-unrelated',
+          runId: 'run-unrelated',
+          type: 'run.progress',
+          payload: {},
+        },
+      }));
+    }
+    resolveObservation({
+      subscriptionId: 'observe-target',
+      snapshot: {
+        runtimeId: 'runtime-client',
+        cursor: 0,
+        session: { id: 'session-target', title: 'Target' },
+        transcript: null,
+        settings: { revision: 0, value: {} },
+        runs: [],
+        pendingPermissions: [],
+        live: {
+          assistantTextByRun: {},
+          thinkingTextByRun: {},
+          activeTools: [],
+          pendingUserInputs: [],
+        },
+      },
+    });
+
+    await expect(observation).resolves.toMatchObject({
+      snapshot: { session: { id: 'session-target' } },
+    });
+    await client.close();
+  });
+
   it('hydrates serialized daemon run failures as Error instances', async () => {
     const calls: Array<{ readonly method: string; readonly params: unknown }> = [];
     const transport = fakeTransport(calls, {
@@ -262,7 +320,9 @@ describe('runtime daemon client proxy', () => {
     client.events.subscribe({}, () => undefined);
     await flushAsyncNotifications();
 
-    expect(transport.listenerCount()).toBe(0);
+    // The persistent reverse-capability listener remains; the failed event
+    // subscription itself is removed.
+    expect(transport.listenerCount()).toBe(1);
   });
 
   it('maps runtime admin/catalog/MCP/artifact services onto daemon requests', async () => {
@@ -333,6 +393,8 @@ describe('runtime daemon client proxy', () => {
     await client.sessions.load('session-1');
     await client.sessions.list({ limit: 5 });
     await client.sessions.transcript('session-1');
+    const observation = await client.sessions.observe('session-1', () => undefined);
+    observation.close();
     await client.sessions.fork({ sessionId: 'session-1' });
     await client.sessions.getSettings('session-1');
     await client.sessions.updateSettings('session-1', { model: 'm1' });
@@ -345,6 +407,12 @@ describe('runtime daemon client proxy', () => {
     await client.sessions.delete('session-1');
     await client.runs.get('run-1');
     await client.runs.list({ sessionId: 'session-1' });
+    await client.runs.submitInput({
+      sessionId: 'session-1',
+      afterRunId: 'run-1',
+      delivery: 'after_turn',
+      input: { type: 'text', text: 'continue' },
+    });
     await client.runs.abort('run-1');
     await client.runs.setModel('run-1', 'm2');
     await client.runs.setProvider('run-1', 'openai');
@@ -357,6 +425,11 @@ describe('runtime daemon client proxy', () => {
       inputPreview: 'echo ok',
     });
     await client.permissions.listPending({ runId: 'run-1' });
+    await client.permissions.listGrants();
+    await client.permissions.revokeGrant('grant-1', 0);
+    await client.userInputs.listPending({ runId: 'run-1' });
+    await client.userInputs.respond('input-1', 'yes', { expectedRevision: 0 });
+    await client.userInputs.dismiss('input-2', { expectedRevision: 0 });
     await client.workflows.list({ activeOnly: true });
     await client.workflows.pause('workflow-1');
     await client.workflows.resume('workflow-1');
@@ -377,9 +450,12 @@ describe('runtime daemon client proxy', () => {
       'session.load',
       'session.list',
       'session.transcript',
+      'session.observe',
+      'event.unsubscribe',
       'session.fork',
       'session.settings.get',
-      'session.settings.update',
+      'session.settings.getVersioned',
+      'session.settings.updateVersioned',
       'session.notice.append',
       'session.rewind',
       'session.active_entry.set',
@@ -389,6 +465,7 @@ describe('runtime daemon client proxy', () => {
       'session.delete',
       'run.get',
       'run.list',
+      'run.input.submit',
       'run.abort',
       'run.model.set',
       'run.provider.set',
@@ -396,6 +473,11 @@ describe('runtime daemon client proxy', () => {
       'event.replay',
       'permission.request',
       'permission.list',
+      'permission.grants.list',
+      'permission.grants.revoke',
+      'user_input.listPending',
+      'user_input.respond',
+      'user_input.dismiss',
       'workflow.list',
       'workflow.pause',
       'workflow.resume',
@@ -445,6 +527,152 @@ describe('runtime daemon client proxy', () => {
     }]);
   });
 
+  it('answers credential and host-tool reverse calls without replaying a handler', async () => {
+    const calls: Array<{ readonly method: string; readonly params: unknown }> = [];
+    const transport = fakeTransport(calls);
+    const client = createRuntimeDaemonClient({
+      identity: {
+        runtimeId: 'runtime-client',
+        mode: 'daemon',
+        profile: 'default',
+        startedAt: '2026-07-09T00:00:00.000Z',
+        version: '0.7.69',
+      },
+      transport,
+    });
+    const credential = await client.credentials.register({ providers: ['openai'] }, async () => 'secret');
+    let handlerCalls = 0;
+    const hostTools = await client.hostTools.register([{
+      name: 'space_artifact_create',
+      description: 'Create a Space artifact',
+      inputSchema: { type: 'object' },
+      sideEffect: 'non_idempotent',
+    }], {
+      async space_artifact_create() {
+        handlerCalls += 1;
+        return { content: 'artifact-created' };
+      },
+    });
+
+    transport.emit(createRuntimeDaemonNotification('credential.request', {
+      requestId: 'credential-request-1',
+      leaseId: credential.id,
+      provider: 'openai',
+      sessionId: 'session-1',
+      runId: 'run-1',
+    }));
+    const invocation = createRuntimeDaemonNotification('host_tool.invoke', {
+      invocationId: 'host-invocation-1',
+      leaseId: hostTools.id,
+      toolName: 'space_artifact_create',
+      sessionId: 'session-1',
+      runId: 'run-1',
+      input: { title: 'Report' },
+    });
+    transport.emit(invocation);
+    transport.emit(invocation);
+    await flushAsyncNotifications();
+
+    expect(handlerCalls).toBe(1);
+    expect(calls).toContainEqual({
+      method: 'credential.supply',
+      params: { requestId: 'credential-request-1', credential: 'secret' },
+    });
+    expect(calls.filter((call) => call.method === 'host_tool.complete')).toHaveLength(2);
+    expect(calls.filter((call) => call.method === 'host_tool.complete')[0]?.params)
+      .toEqual({ invocationId: 'host-invocation-1', result: { content: 'artifact-created' } });
+    await client.close();
+  });
+
+  it('never evicts pending host-tool invocations into duplicate side effects', async () => {
+    const calls: Array<{ readonly method: string; readonly params: unknown }> = [];
+    const transport = fakeTransport(calls);
+    const client = createRuntimeDaemonClient({
+      identity: {
+        runtimeId: 'runtime-client',
+        mode: 'daemon',
+        profile: 'default',
+        startedAt: '2026-07-09T00:00:00.000Z',
+        version: '0.7.69',
+      },
+      transport,
+    });
+    let handlerCalls = 0;
+    const tools = await client.hostTools.register([{
+      name: 'space_side_effect',
+      description: 'Perform one Space side effect',
+      inputSchema: { type: 'object' },
+      sideEffect: 'non_idempotent',
+    }], {
+      space_side_effect() {
+        handlerCalls += 1;
+        return new Promise(() => undefined);
+      },
+    });
+    const notification = (invocationId: string) => createRuntimeDaemonNotification(
+      'host_tool.invoke',
+      {
+        invocationId,
+        leaseId: tools.id,
+        toolName: 'space_side_effect',
+        sessionId: 'session-1',
+        runId: 'run-1',
+        input: {},
+      },
+    );
+
+    for (let index = 0; index <= 1_000; index += 1) {
+      transport.emit(notification(`invocation-${index}`));
+    }
+    transport.emit(notification('invocation-0'));
+    await flushAsyncNotifications();
+
+    expect(handlerCalls).toBe(1_001);
+    await client.close();
+  });
+
+  it('reports reverse credential delivery failures without leaking broker errors', async () => {
+    const calls: Array<{ readonly method: string; readonly params: unknown }> = [];
+    const diagnostics: KodaXDiagnostic[] = [];
+    const restore = setKodaXDiagnosticSink((diagnostic) => diagnostics.push(diagnostic));
+    const transport = fakeTransport(calls, {
+      reverseRequestError: new Error('SECRET_BROKER_DETAIL'),
+    });
+    const client = createRuntimeDaemonClient({
+      identity: {
+        runtimeId: 'runtime-client',
+        mode: 'daemon',
+        profile: 'default',
+        startedAt: '2026-07-09T00:00:00.000Z',
+        version: '0.7.69',
+      },
+      transport,
+    });
+    try {
+      const credential = await client.credentials.register(
+        { providers: ['openai'] },
+        async () => 'secret',
+      );
+      transport.emit(createRuntimeDaemonNotification('credential.request', {
+        requestId: 'credential-request-failed',
+        leaseId: credential.id,
+        provider: 'openai',
+        sessionId: 'session-1',
+        runId: 'run-1',
+      }));
+      await flushAsyncNotifications();
+
+      expect(diagnostics).toContainEqual(expect.objectContaining({
+        source: 'runtime.daemon.client',
+        level: 'warn',
+      }));
+      expect(JSON.stringify(diagnostics)).not.toContain('SECRET_BROKER_DETAIL');
+    } finally {
+      restore();
+      await client.close();
+    }
+  });
+
   it('maps daemon null lookup results back to SDK undefined semantics', async () => {
     const calls: Array<{ readonly method: string; readonly params: unknown }> = [];
     const transport = fakeTransport(calls);
@@ -478,6 +706,8 @@ function fakeTransport(
     readonly workflowSubscribeResult?: Promise<unknown>;
     readonly notificationBeforeEventSubscribeResult?: RuntimeDaemonNotification;
     readonly runAwaitResult?: unknown;
+    readonly reverseRequestError?: Error;
+    readonly sessionObserveResult?: Promise<unknown>;
   } = {},
 ): RuntimeDaemonClientTransport & {
   emit(notification: RuntimeDaemonNotification): void;
@@ -499,6 +729,55 @@ function fakeTransport(
       }
       if (method === 'run.start') {
         return { runId: 'run-1', sessionId: 'session-1' };
+      }
+      if (method === 'run.input.submit') {
+        return {
+          accepted: true,
+          delivery: 'after_turn',
+          runId: 'run-2',
+          sessionId: 'session-1',
+          afterRunId: 'run-1',
+          sessionOrder: 2,
+        };
+      }
+      if (method === 'credential.register') {
+        const input = params as { readonly leaseId: string; readonly providers: readonly string[] };
+        return { id: input.leaseId, providers: input.providers };
+      }
+      if (method === 'host_tool.register') {
+        const input = params as { readonly leaseId: string; readonly tools: readonly unknown[] };
+        return { id: input.leaseId, tools: input.tools };
+      }
+      if (method === 'credential.supply' || method === 'host_tool.complete') {
+        if (options.reverseRequestError) throw options.reverseRequestError;
+        return true;
+      }
+      if (method === 'session.observe') {
+        if (options.sessionObserveResult) return options.sessionObserveResult;
+        return {
+          subscriptionId: 'observe-sub-1',
+          snapshot: {
+            runtimeId: 'runtime-client',
+            cursor: 0,
+            session: { id: 'session-1', title: 'Session' },
+            transcript: null,
+            settings: { revision: 0, value: {} },
+            runs: [],
+            pendingPermissions: [],
+            live: {
+              assistantTextByRun: {},
+              thinkingTextByRun: {},
+              activeTools: [],
+              pendingUserInputs: [],
+            },
+          },
+        };
+      }
+      if (method === 'session.settings.getVersioned') {
+        return { revision: 0, value: {} };
+      }
+      if (method === 'session.settings.updateVersioned') {
+        return { revision: 1, value: {} };
       }
       if (method === 'run.await') {
         return options.runAwaitResult

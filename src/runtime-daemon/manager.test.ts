@@ -34,12 +34,38 @@ afterEach(async () => {
 });
 
 describe('runtime daemon lease manager', () => {
+  it('attaches without constructing a second Runtime owner', async () => {
+    const homeDir = tempHome();
+    const endpoint = await makeTestEndpoint();
+    const firstLease = await acquireRuntimeDaemonLease({
+      homeDir,
+      endpoint,
+      createRuntime: async (runtimeId) => makeRuntime(runtimeId),
+    });
+    let candidateCalls = 0;
+    const secondLease = await acquireRuntimeDaemonLease({
+      homeDir,
+      endpoint,
+      createRuntime: async (runtimeId) => {
+        candidateCalls += 1;
+        return makeRuntime(runtimeId);
+      },
+    });
+    cleanupTasks.push(async () => {
+      await secondLease.close();
+      await firstLease.close();
+      await firstLease.shutdown();
+    });
+
+    expect(secondLease.ownsHost).toBe(false);
+    expect(candidateCalls).toBe(0);
+  });
+
   it('lets concurrent starters converge on one daemon owner', async () => {
     const homeDir = tempHome();
     const paths = resolveRuntimeDaemonPaths(homeDir, 'default');
     const endpoint = await makeTestEndpoint();
-    const firstRuntime = makeRuntime('runtime-concurrent-1');
-    const secondRuntime = makeRuntime('runtime-concurrent-2');
+    const createdRuntimes: KodaXRuntime[] = [];
 
     const [firstLease, secondLease] = await Promise.all([
       acquireRuntimeDaemonLease({
@@ -48,7 +74,11 @@ describe('runtime daemon lease manager', () => {
         endpoint,
         startupTimeoutMs: 2_000,
         pollIntervalMs: 10,
-        createRuntime: async () => firstRuntime,
+        createRuntime: async (runtimeId) => {
+          const runtime = makeRuntime(runtimeId);
+          createdRuntimes.push(runtime);
+          return runtime;
+        },
       }),
       acquireRuntimeDaemonLease({
         homeDir,
@@ -56,7 +86,11 @@ describe('runtime daemon lease manager', () => {
         endpoint,
         startupTimeoutMs: 2_000,
         pollIntervalMs: 10,
-        createRuntime: async () => secondRuntime,
+        createRuntime: async (runtimeId) => {
+          const runtime = makeRuntime(runtimeId);
+          createdRuntimes.push(runtime);
+          return runtime;
+        },
       }),
     ]);
     const ownerLease = firstLease.ownsHost ? firstLease : secondLease;
@@ -68,8 +102,8 @@ describe('runtime daemon lease manager', () => {
 
     expect([firstLease.ownsHost, secondLease.ownsHost].filter(Boolean)).toHaveLength(1);
     const owner = readRuntimeDaemonLockOwner(paths.lockFile);
-    expect(owner?.runtimeId).toMatch(/^runtime-concurrent-/);
-    expect([firstRuntime.closed, secondRuntime.closed].filter(Boolean)).toHaveLength(1);
+    expect(owner?.runtimeId).toMatch(/^rt_/);
+    expect(createdRuntimes).toHaveLength(1);
 
     const token = readRuntimeDaemonToken(paths);
     await expect(firstLease.transport.request('initialize', { profile: 'default', token }))
@@ -83,8 +117,8 @@ describe('runtime daemon lease manager', () => {
     const secondHome = tempHome();
     const firstPaths = resolveRuntimeDaemonPaths(firstHome, 'shared');
     const secondPaths = resolveRuntimeDaemonPaths(secondHome, 'shared');
-    const firstRuntime = makeRuntime('runtime-home-1', 'shared');
-    const secondRuntime = makeRuntime('runtime-home-2', 'shared');
+    let firstRuntime: KodaXRuntime | undefined;
+    let secondRuntime: KodaXRuntime | undefined;
 
     const [firstLease, secondLease] = await Promise.all([
       acquireRuntimeDaemonLease({
@@ -92,14 +126,20 @@ describe('runtime daemon lease manager', () => {
         profile: 'shared',
         startupTimeoutMs: 2_000,
         pollIntervalMs: 10,
-        createRuntime: async () => firstRuntime,
+        createRuntime: async (runtimeId) => {
+          firstRuntime = makeRuntime(runtimeId, 'shared');
+          return firstRuntime;
+        },
       }),
       acquireRuntimeDaemonLease({
         homeDir: secondHome,
         profile: 'shared',
         startupTimeoutMs: 2_000,
         pollIntervalMs: 10,
-        createRuntime: async () => secondRuntime,
+        createRuntime: async (runtimeId) => {
+          secondRuntime = makeRuntime(runtimeId, 'shared');
+          return secondRuntime;
+        },
       }),
     ]);
     cleanupTasks.push(async () => {
@@ -111,6 +151,7 @@ describe('runtime daemon lease manager', () => {
 
     expect(firstLease.ownsHost).toBe(true);
     expect(secondLease.ownsHost).toBe(true);
+    if (!firstRuntime || !secondRuntime) throw new Error('Expected both Runtime owners.');
     expect(firstLease.endpoint.path).not.toBe(secondLease.endpoint.path);
     expect(readRuntimeDaemonLockOwner(firstPaths.lockFile)).toMatchObject({
       runtimeId: firstRuntime.identity.runtimeId,
@@ -139,7 +180,7 @@ describe('runtime daemon lease manager', () => {
     })).toBeDefined();
 
     let pidChecks = 0;
-    const runtime = makeRuntime();
+    let runtime: KodaXRuntime | undefined;
     const lease = await acquireRuntimeDaemonLease({
       homeDir,
       profile: 'default',
@@ -152,7 +193,10 @@ describe('runtime daemon lease manager', () => {
           return pidChecks === 1;
         },
       },
-      createRuntime: async () => runtime,
+      createRuntime: async (runtimeId) => {
+        runtime = makeRuntime(runtimeId);
+        return runtime;
+      },
     });
     cleanupTasks.push(async () => {
       await lease.close();
@@ -160,6 +204,7 @@ describe('runtime daemon lease manager', () => {
     });
 
     expect(lease.ownsHost).toBe(true);
+    if (!runtime) throw new Error('Expected Runtime owner.');
     expect(readRuntimeDaemonLockOwner(paths.lockFile)).toMatchObject({
       runtimeId: runtime.identity.runtimeId,
     });
@@ -168,17 +213,21 @@ describe('runtime daemon lease manager', () => {
   it('keeps the daemon alive when its original client detaches', async () => {
     const homeDir = tempHome();
     const endpoint = await makeTestEndpoint();
+    let runtimeId: string | undefined;
     const firstLease = await acquireRuntimeDaemonLease({
       homeDir,
       endpoint,
-      createRuntime: async () => makeRuntime('runtime-owner'),
+      createRuntime: async (ownerId) => {
+        runtimeId = ownerId;
+        return makeRuntime(ownerId);
+      },
     });
     const token = readRuntimeDaemonToken(firstLease.paths);
     await firstLease.transport.request('initialize', { profile: 'default', token });
     const secondLease = await acquireRuntimeDaemonLease({
       homeDir,
       endpoint,
-      createRuntime: async () => makeRuntime('runtime-candidate'),
+      createRuntime: async (ownerId) => makeRuntime(ownerId),
     });
     await secondLease.transport.request('initialize', { profile: 'default', token });
     cleanupTasks.push(async () => {
@@ -190,7 +239,7 @@ describe('runtime daemon lease manager', () => {
 
     await expect(secondLease.transport.request('ping')).resolves.toEqual({
       ok: true,
-      runtimeId: 'runtime-owner',
+      runtimeId,
     });
   });
 
@@ -200,8 +249,8 @@ describe('runtime daemon lease manager', () => {
     const lease = await acquireRuntimeDaemonLease({
       homeDir,
       endpoint,
-      createRuntime: async () => makeRuntime(
-        'runtime-errors',
+      createRuntime: async (runtimeId) => makeRuntime(
+        runtimeId,
         'default',
         new TypeError('provider unavailable'),
       ),
@@ -237,7 +286,7 @@ describe('runtime daemon lease manager', () => {
     const lease = await acquireRuntimeDaemonLease({
       homeDir,
       endpoint: await makeTestEndpoint(),
-      createRuntime: async () => makeRuntime('runtime-explicit-shutdown'),
+      createRuntime: async (runtimeId) => makeRuntime(runtimeId),
     });
     cleanupTasks.push(() => lease.shutdown());
     const token = readRuntimeDaemonToken(lease.paths);
@@ -300,14 +349,23 @@ function makeRuntime(
       async transcript() {
         return null;
       },
+      async observe(sessionId) {
+        return createTestObservation(sessionId);
+      },
       async fork() {
         return null;
       },
       async getSettings() {
         return {};
       },
+      async getSettingsVersioned() {
+        return { revision: 0, value: {} };
+      },
       async updateSettings() {
         return {};
+      },
+      async updateSettingsVersioned(_sessionId, _patch, options) {
+        return { revision: options.expectedRevision + 1, value: {} };
       },
       async appendNotice() {
         return null;
@@ -343,6 +401,15 @@ function makeRuntime(
           runId: result.runId,
           sessionId: result.sessionId,
           result: Promise.resolve(result),
+        };
+      },
+      async submitInput(input) {
+        return {
+          accepted: false,
+          delivery: input.delivery,
+          sessionId: input.sessionId,
+          afterRunId: input.afterRunId,
+          reason: 'stale_run',
         };
       },
       async await(runId) {
@@ -387,6 +454,16 @@ function makeRuntime(
       },
       async respond() {
         return true;
+      },
+      async listGrants() { return { revision: 0, value: [] }; },
+      async revokeGrant() { return false; },
+    },
+    userInputs: createTestUserInputs(),
+    credentials: createTestCredentialService(),
+    hostTools: createTestHostToolService(),
+    operations: {
+      async get() {
+        throw new Error('operation not found');
       },
     },
     workflows: {
@@ -545,4 +622,51 @@ function makeRuntime(
     },
   };
   return runtime;
+}
+
+function createTestUserInputs(): KodaXRuntime['userInputs'] {
+  return {
+    async listPending() { return []; },
+    async respond(requestId) {
+      return { requestId, accepted: false, status: 'already_resolved' };
+    },
+    async dismiss(requestId) {
+      return { requestId, accepted: false, status: 'already_resolved' };
+    },
+  };
+}
+
+function createTestCredentialService(): KodaXRuntime['credentials'] {
+  return {
+    async register(input) { return { id: 'credential-test', ...input }; },
+    async revoke() { return false; },
+  };
+}
+
+function createTestHostToolService(): KodaXRuntime['hostTools'] {
+  return {
+    async register(tools) { return { id: 'host-tools-test', tools }; },
+    async revoke() { return false; },
+  };
+}
+
+function createTestObservation(sessionId: string) {
+  return {
+    snapshot: {
+      runtimeId: 'runtime-test',
+      cursor: 0,
+      session: { id: sessionId, title: 'Test Session' },
+      transcript: null,
+      settings: { revision: 0, value: {} },
+      runs: [],
+      pendingPermissions: [],
+      live: {
+        assistantTextByRun: {},
+        thinkingTextByRun: {},
+        activeTools: [],
+        pendingUserInputs: [],
+      },
+    },
+    close() {},
+  };
 }

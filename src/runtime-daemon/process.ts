@@ -10,6 +10,7 @@ import {
   type RuntimeDaemonHealthCheckOptions,
 } from './lifecycle.js';
 import {
+  assertRuntimeDaemonOwnerAllowed,
   classifyRuntimeDaemonHealth,
   resolveRuntimeDaemonPaths,
   type RuntimeDaemonPaths,
@@ -49,6 +50,7 @@ export async function acquireRuntimeDaemonProcessLease(
   const profile = options.profile ?? 'default';
   const homeDir = path.resolve(options.homeDir ?? os.homedir());
   const paths = resolveRuntimeDaemonPaths(homeDir, profile);
+  assertRuntimeDaemonOwnerAllowed(paths);
   const expectedEndpoint = defaultRuntimeDaemonEndpoint(paths.profile, homeDir);
   if (options.endpoint && options.endpoint.path !== expectedEndpoint.path) {
     throw new Error('SDK daemon auto-start only supports the profile default endpoint; use attach-only mode for custom endpoints.');

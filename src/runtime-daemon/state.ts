@@ -39,12 +39,21 @@ export interface RuntimeDaemonPaths {
   readonly logFile: string;
   readonly runsDir: string;
   readonly eventsDir: string;
+  readonly ownerPolicyFile: string;
+  readonly ownerPolicyLockFile: string;
 }
 
 export interface RuntimeDaemonLockOwner {
   readonly runtimeId: string;
   readonly pid: number;
   readonly createdAt: string;
+  readonly kind?: 'daemon' | 'inline';
+}
+
+export interface RuntimeOwnerPolicy {
+  readonly mode: 'daemon' | 'inline';
+  readonly revision: number;
+  readonly updatedAt: string;
 }
 
 export interface RuntimeDaemonLockHandle {
@@ -65,6 +74,12 @@ export interface RuntimeDaemonHealthObservation {
   readonly endpointReachable: boolean;
   readonly identityMatches: boolean;
   readonly lockOwnerPidAlive?: boolean;
+  readonly observedLockOwner?: RuntimeDaemonLockOwner;
+}
+
+interface RuntimeOwnerCoordinationHandle {
+  readonly nonce: string;
+  readonly owner: RuntimeDaemonLockOwner;
 }
 
 export type RuntimeDaemonOwnershipDecision =
@@ -106,7 +121,209 @@ export function resolveRuntimeDaemonPaths(
     logFile: path.join(rootDir, 'daemon.log'),
     runsDir: path.join(rootDir, 'runs'),
     eventsDir: path.join(rootDir, 'events'),
+    ownerPolicyFile: path.join(rootDir, 'owner-policy.json'),
+    ownerPolicyLockFile: path.join(rootDir, 'owner-policy.lock'),
   };
+}
+
+export function readRuntimeOwnerPolicy(paths: RuntimeDaemonPaths): RuntimeOwnerPolicy {
+  if (!fs.existsSync(paths.ownerPolicyFile)) {
+    return { mode: 'daemon', revision: 0, updatedAt: new Date(0).toISOString() };
+  }
+  try {
+    const parsed: unknown = JSON.parse(fs.readFileSync(paths.ownerPolicyFile, 'utf8'));
+    if (
+      isRecord(parsed)
+      && (parsed.mode === 'daemon' || parsed.mode === 'inline')
+      && typeof parsed.revision === 'number'
+      && Number.isSafeInteger(parsed.revision)
+      && parsed.revision >= 0
+      && typeof parsed.updatedAt === 'string'
+    ) {
+      return {
+        mode: parsed.mode,
+        revision: parsed.revision,
+        updatedAt: parsed.updatedAt,
+      };
+    }
+  } catch {
+    // Fail closed below: a corrupt policy must not enable a competing daemon.
+  }
+  throw new Error('Runtime owner policy is corrupt; refusing to choose an owner.');
+}
+
+export function updateRuntimeOwnerPolicy(
+  paths: RuntimeDaemonPaths,
+  mode: RuntimeOwnerPolicy['mode'],
+  expectedRevision: number,
+): RuntimeOwnerPolicy {
+  ensureRuntimeDaemonDirectories(paths);
+  const coordination = tryAcquireRuntimeOwnerCoordination(paths);
+  if (!coordination) throw new Error('Runtime owner policy update is already in progress.');
+  try {
+    if (fs.existsSync(paths.lockFile)) {
+      throw new Error('Cannot change Runtime owner mode while an owner lock exists.');
+    }
+    return writeRuntimeOwnerPolicy(paths, mode, expectedRevision, coordination.nonce);
+  } finally {
+    releaseRuntimeOwnerCoordination(paths, coordination);
+  }
+}
+
+export function acquireRuntimeInlineOwner(
+  paths: RuntimeDaemonPaths,
+  owner: RuntimeDaemonLockOwner,
+  enableRollback = false,
+): RuntimeDaemonLockHandle {
+  ensureRuntimeDaemonDirectories(paths);
+  const coordination = tryAcquireRuntimeOwnerCoordination(paths);
+  if (!coordination) throw new Error('Runtime owner transition is already in progress.');
+  try {
+    const current = readRuntimeOwnerPolicy(paths);
+    if (current.mode !== 'inline') {
+      if (!enableRollback) {
+        throw new Error('Coder inline ownership requires explicit enableRollback: true.');
+      }
+      if (fs.existsSync(paths.lockFile)) {
+        throw new Error('Cannot enable inline rollback while a Coder owner lock exists.');
+      }
+      writeRuntimeOwnerPolicy(paths, 'inline', current.revision, coordination.nonce);
+    }
+    if (fs.existsSync(paths.lockFile)) {
+      throw new Error(`Coder profile "${paths.profile}" already has an owner.`);
+    }
+    const lock = tryAcquireRuntimeDaemonLock(paths, owner);
+    if (!lock) throw new Error(`Coder profile "${paths.profile}" already has an owner.`);
+    return lock;
+  } finally {
+    releaseRuntimeOwnerCoordination(paths, coordination);
+  }
+}
+
+function writeRuntimeOwnerPolicy(
+  paths: RuntimeDaemonPaths,
+  mode: RuntimeOwnerPolicy['mode'],
+  expectedRevision: number,
+  nonce: string,
+): RuntimeOwnerPolicy {
+  const current = readRuntimeOwnerPolicy(paths);
+  if (current.revision !== expectedRevision) {
+    throw new Error(`Runtime owner policy conflict: expected ${expectedRevision}, current ${current.revision}.`);
+  }
+  const updated: RuntimeOwnerPolicy = {
+    mode,
+    revision: current.revision + 1,
+    updatedAt: new Date().toISOString(),
+  };
+  const temporary = `${paths.ownerPolicyFile}.${process.pid}.${nonce}.tmp`;
+  try {
+    const policyFd = fs.openSync(temporary, 'wx', 0o600);
+    try {
+      fs.writeFileSync(policyFd, `${JSON.stringify(updated, null, 2)}\n`, 'utf8');
+      fs.fsyncSync(policyFd);
+    } finally {
+      fs.closeSync(policyFd);
+    }
+    fs.renameSync(temporary, paths.ownerPolicyFile);
+    return updated;
+  } finally {
+    fs.rmSync(temporary, { force: true });
+  }
+}
+
+function tryAcquireRuntimeOwnerCoordination(
+  paths: Pick<RuntimeDaemonPaths, 'ownerPolicyLockFile'>,
+  recoverAbandoned = true,
+): RuntimeOwnerCoordinationHandle | undefined {
+  const nonce = randomUUID();
+  const owner: RuntimeDaemonLockOwner = {
+    runtimeId: `owner-transition-${nonce}`,
+    pid: process.pid,
+    createdAt: new Date().toISOString(),
+  };
+  let fd: number | undefined;
+  try {
+    fd = fs.openSync(paths.ownerPolicyLockFile, 'wx', 0o600);
+    fs.writeFileSync(fd, `${JSON.stringify({ ...owner, nonce })}\n`, 'utf8');
+    fs.fsyncSync(fd);
+    return { nonce, owner };
+  } catch (error: unknown) {
+    if (isNodeFileError(error) && error.code === 'EEXIST') {
+      if (recoverAbandoned && removeAbandonedRuntimeOwnerCoordination(paths)) {
+        return tryAcquireRuntimeOwnerCoordination(paths, false);
+      }
+      return undefined;
+    }
+    throw error;
+  } finally {
+    if (fd !== undefined) fs.closeSync(fd);
+  }
+}
+
+function removeAbandonedRuntimeOwnerCoordination(
+  paths: Pick<RuntimeDaemonPaths, 'ownerPolicyLockFile'>,
+): boolean {
+  const current = readRuntimeOwnerCoordinationHandle(paths);
+  if (!current || isRuntimeOwnerProcessAlive(current.owner.pid)) return false;
+  try {
+    const latest = readRuntimeOwnerCoordinationHandle(paths);
+    if (!latest || latest.nonce !== current.nonce) return false;
+    fs.unlinkSync(paths.ownerPolicyLockFile);
+    return true;
+  } catch {
+    return false;
+  }
+}
+
+function readRuntimeOwnerCoordinationHandle(
+  paths: Pick<RuntimeDaemonPaths, 'ownerPolicyLockFile'>,
+): RuntimeOwnerCoordinationHandle | undefined {
+  try {
+    const parsed: unknown = JSON.parse(fs.readFileSync(paths.ownerPolicyLockFile, 'utf8'));
+    if (
+      !isRecord(parsed)
+      || typeof parsed.nonce !== 'string'
+      || !isRuntimeDaemonLockOwner(parsed)
+      || !parsed.runtimeId.startsWith('owner-transition-')
+    ) return undefined;
+    return { nonce: parsed.nonce, owner: parsed };
+  } catch {
+    return undefined;
+  }
+}
+
+function isRuntimeOwnerProcessAlive(pid: number): boolean {
+  if (!Number.isInteger(pid) || pid <= 0) return false;
+  try {
+    process.kill(pid, 0);
+    return true;
+  } catch (error: unknown) {
+    return isNodeFileError(error) && error.code === 'EPERM';
+  }
+}
+
+function readRuntimeOwnerCoordinator(paths: RuntimeDaemonPaths): RuntimeDaemonLockOwner | undefined {
+  return readRuntimeDaemonLockOwner(paths.ownerPolicyLockFile);
+}
+
+function releaseRuntimeOwnerCoordination(
+  paths: Pick<RuntimeDaemonPaths, 'ownerPolicyLockFile'>,
+  handle: RuntimeOwnerCoordinationHandle,
+): void {
+  try {
+    const parsed: unknown = JSON.parse(fs.readFileSync(paths.ownerPolicyLockFile, 'utf8'));
+    if (isRecord(parsed) && parsed.nonce === handle.nonce) {
+      fs.unlinkSync(paths.ownerPolicyLockFile);
+    }
+  } catch {
+    // A missing or replaced coordinator is not ours to remove.
+  }
+}
+
+export function assertRuntimeDaemonOwnerAllowed(paths: RuntimeDaemonPaths): void {
+  if (readRuntimeOwnerPolicy(paths).mode !== 'daemon') {
+    throw new Error(`Runtime daemon auto-start is disabled for profile "${paths.profile}" by inline rollback policy.`);
+  }
 }
 
 export function normalizeRuntimeDaemonProfile(profile: string): string {
@@ -231,14 +448,37 @@ export function tryAcquireRuntimeDaemonLock(
 }
 
 export function releaseRuntimeDaemonLock(handle: RuntimeDaemonLockHandle): boolean {
-  const current = readRuntimeDaemonLockOwner(handle.file);
-  if (
-    !current
-    || current.runtimeId !== handle.owner.runtimeId
-    || current.pid !== handle.owner.pid
-  ) {
-    return false;
+  const coordinationPaths = {
+    ownerPolicyLockFile: path.join(path.dirname(handle.file), 'owner-policy.lock'),
+  };
+  const coordination = tryAcquireRuntimeOwnerCoordination(coordinationPaths);
+  if (!coordination) return false;
+  try {
+    return unlinkRuntimeDaemonLockIfOwned(handle);
+  } finally {
+    releaseRuntimeOwnerCoordination(coordinationPaths, coordination);
   }
+}
+
+export function releaseRuntimeDaemonOwnership(
+  paths: RuntimeDaemonPaths,
+  handle: RuntimeDaemonLockHandle,
+): boolean {
+  const coordination = tryAcquireRuntimeOwnerCoordination(paths);
+  if (!coordination) return false;
+  try {
+    const current = readRuntimeDaemonLockOwner(handle.file);
+    if (!sameRuntimeLockOwner(current, handle.owner)) return false;
+    removeRuntimeDaemonStateFiles(paths);
+    return unlinkRuntimeDaemonLockIfOwned(handle);
+  } finally {
+    releaseRuntimeOwnerCoordination(paths, coordination);
+  }
+}
+
+function unlinkRuntimeDaemonLockIfOwned(handle: RuntimeDaemonLockHandle): boolean {
+  const current = readRuntimeDaemonLockOwner(handle.file);
+  if (!sameRuntimeLockOwner(current, handle.owner)) return false;
   fs.unlinkSync(handle.file);
   return true;
 }
@@ -260,11 +500,16 @@ export function claimRuntimeDaemonOwnership(
   owner: RuntimeDaemonLockOwner,
   observation: RuntimeDaemonHealthObservation,
 ): RuntimeDaemonOwnershipDecision {
+  ensureRuntimeDaemonDirectories(paths);
   const health = classifyRuntimeDaemonHealth(observation);
   const lockOwner = readRuntimeDaemonLockOwner(paths.lockFile);
 
   if (health === 'healthy') {
-    if (observation.state) {
+    if (
+      observation.state
+      && lockOwner !== undefined
+      && sameRuntimeOwner(lockOwner, observation.state)
+    ) {
       return {
         kind: 'attach',
         state: observation.state,
@@ -273,7 +518,9 @@ export function claimRuntimeDaemonOwnership(
     }
     return {
       kind: 'unhealthy',
-      health: 'unhealthy',
+      health: 'mismatch',
+      ...(observation.state !== undefined ? { state: observation.state } : {}),
+      ...(lockOwner !== undefined ? { lockOwner } : {}),
     };
   }
 
@@ -302,19 +549,77 @@ export function claimRuntimeDaemonOwnership(
   }
 
   const claimHealth: 'missing' | 'stale' = health === 'stale' ? 'stale' : 'missing';
+  const coordination = tryAcquireRuntimeOwnerCoordination(paths);
+  if (!coordination) {
+    const waitingOwner = readRuntimeDaemonLockOwner(paths.lockFile)
+      ?? readRuntimeOwnerCoordinator(paths);
+    return waitingOwner
+      ? {
+          kind: 'wait',
+          lockOwner: waitingOwner,
+          ...(observation.state !== undefined ? { state: observation.state } : {}),
+          health: claimHealth,
+        }
+      : {
+          kind: 'unhealthy',
+          health: 'unhealthy',
+          ...(observation.state !== undefined ? { state: observation.state } : {}),
+        };
+  }
+  try {
+    if (readRuntimeOwnerPolicy(paths).mode !== 'daemon') {
+      return {
+        kind: 'unhealthy',
+        health: 'unhealthy',
+        ...(observation.state !== undefined ? { state: observation.state } : {}),
+      };
+    }
+    return claimAvailableRuntimeDaemonOwnership(
+      paths,
+      owner,
+      observation,
+      claimHealth,
+    );
+  } finally {
+    releaseRuntimeOwnerCoordination(paths, coordination);
+  }
+}
 
+function claimAvailableRuntimeDaemonOwnership(
+  paths: RuntimeDaemonPaths,
+  owner: RuntimeDaemonLockOwner,
+  observation: RuntimeDaemonHealthObservation,
+  claimHealth: 'missing' | 'stale',
+): RuntimeDaemonOwnershipDecision {
+  const lockOwner = readRuntimeDaemonLockOwner(paths.lockFile);
   if (claimHealth === 'stale') {
+    if (
+      lockOwner !== undefined
+      && (
+        (
+          observation.observedLockOwner !== undefined
+          && !sameRuntimeLockOwner(lockOwner, observation.observedLockOwner)
+        )
+        || (
+          observation.state !== undefined
+          && !sameRuntimeOwner(lockOwner, observation.state)
+        )
+      )
+    ) {
+      return waitForRuntimeOwner(lockOwner, observation, claimHealth);
+    }
     removeRuntimeDaemonOwnershipFiles(paths);
   } else if (lockOwner !== undefined) {
+    if (
+      observation.observedLockOwner !== undefined
+      && !sameRuntimeOwner(lockOwner, observation.observedLockOwner)
+    ) {
+      return waitForRuntimeOwner(lockOwner, observation, claimHealth);
+    }
     if (observation.lockOwnerPidAlive === false) {
       removeRuntimeDaemonOwnershipFiles(paths);
     } else {
-      return {
-        kind: 'wait',
-        lockOwner,
-        ...(observation.state !== undefined ? { state: observation.state } : {}),
-        health: claimHealth,
-      };
+      return waitForRuntimeOwner(lockOwner, observation, claimHealth);
     }
   }
 
@@ -341,12 +646,7 @@ export function claimRuntimeDaemonOwnership(
 
   const nextLockOwner = readRuntimeDaemonLockOwner(paths.lockFile);
   if (nextLockOwner) {
-    return {
-      kind: 'wait',
-      lockOwner: nextLockOwner,
-      ...(observation.state !== undefined ? { state: observation.state } : {}),
-      health: claimHealth,
-    };
+    return waitForRuntimeOwner(nextLockOwner, observation, claimHealth);
   }
 
   return {
@@ -356,10 +656,88 @@ export function claimRuntimeDaemonOwnership(
   };
 }
 
+function waitForRuntimeOwner(
+  lockOwner: RuntimeDaemonLockOwner,
+  observation: RuntimeDaemonHealthObservation,
+  health: 'missing' | 'stale',
+): RuntimeDaemonOwnershipDecision {
+  return {
+    kind: 'wait',
+    lockOwner,
+    ...(observation.state !== undefined ? { state: observation.state } : {}),
+    health,
+  };
+}
+
+function sameRuntimeOwner(
+  left: Pick<RuntimeDaemonLockOwner, 'runtimeId' | 'pid'>,
+  right: Pick<RuntimeDaemonLockOwner, 'runtimeId' | 'pid'>,
+): boolean {
+  return left.runtimeId === right.runtimeId && left.pid === right.pid;
+}
+
+function sameOptionalRuntimeOwner(
+  left: RuntimeDaemonLockOwner | undefined,
+  right: RuntimeDaemonLockOwner | undefined,
+): boolean {
+  if (left === undefined || right === undefined) return left === right;
+  return sameRuntimeLockOwner(left, right);
+}
+
+function sameRuntimeLockOwner(
+  left: RuntimeDaemonLockOwner | undefined,
+  right: RuntimeDaemonLockOwner | undefined,
+): boolean {
+  if (left === undefined || right === undefined) return left === right;
+  return left.runtimeId === right.runtimeId
+    && left.pid === right.pid
+    && left.createdAt === right.createdAt
+    && left.kind === right.kind;
+}
+
+function sameRuntimeDaemonState(
+  left: RuntimeDaemonState | undefined,
+  right: RuntimeDaemonState | undefined,
+): boolean {
+  if (left === undefined || right === undefined) return left === right;
+  return left.runtimeId === right.runtimeId
+    && left.profile === right.profile
+    && left.pid === right.pid
+    && left.startedAt === right.startedAt
+    && left.endpoint === right.endpoint
+    && left.version === right.version
+    && left.status === right.status
+    && left.lastError === right.lastError;
+}
+
 export function removeRuntimeDaemonOwnershipFiles(paths: RuntimeDaemonPaths): void {
   fs.rmSync(paths.lockFile, { force: true });
   fs.rmSync(paths.stateFile, { force: true });
   fs.rmSync(paths.tokenFile, { force: true });
+}
+
+export function removeRuntimeDaemonOwnershipIfUnchanged(
+  paths: RuntimeDaemonPaths,
+  expected: {
+    readonly state?: RuntimeDaemonState;
+    readonly lockOwner?: RuntimeDaemonLockOwner;
+  },
+): boolean {
+  ensureRuntimeDaemonDirectories(paths);
+  const coordination = tryAcquireRuntimeOwnerCoordination(paths);
+  if (!coordination) return false;
+  try {
+    const currentState = readRuntimeDaemonState(paths);
+    const currentLockOwner = readRuntimeDaemonLockOwner(paths.lockFile);
+    if (!sameRuntimeDaemonState(currentState, expected.state)) return false;
+    if (!sameOptionalRuntimeOwner(currentLockOwner, expected.lockOwner)) return false;
+    if (currentState === undefined && fs.existsSync(paths.stateFile)) return false;
+    if (currentLockOwner === undefined && fs.existsSync(paths.lockFile)) return false;
+    removeRuntimeDaemonOwnershipFiles(paths);
+    return true;
+  } finally {
+    releaseRuntimeOwnerCoordination(paths, coordination);
+  }
 }
 
 export function removeRuntimeDaemonStateFiles(paths: RuntimeDaemonPaths): void {
@@ -448,4 +826,8 @@ function isRuntimeDaemonTransitionStatus(status: RuntimeDaemonStatus): boolean {
 
 function isNodeFileError(error: unknown): error is NodeJS.ErrnoException {
   return error instanceof Error && 'code' in error;
+}
+
+function isRecord(value: unknown): value is Record<string, unknown> {
+  return value !== null && typeof value === 'object' && !Array.isArray(value);
 }

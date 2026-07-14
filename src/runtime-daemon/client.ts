@@ -1,6 +1,10 @@
+import { randomUUID } from 'node:crypto';
+
 import type {
   KodaXRuntime,
   RuntimeCompactSessionResult,
+  RuntimeCredentialBroker,
+  RuntimeCredentialLease,
   RuntimeConfigReloadResult,
   RuntimeConfigPatch,
   RuntimeContextBudgetSnapshot,
@@ -14,10 +18,16 @@ import type {
   RuntimeEventListener,
   RuntimeExtensionListResult,
   RuntimeIdentity,
+  RuntimeGrantedScope,
+  RuntimeHostToolDescriptor,
+  RuntimeHostToolHandler,
+  RuntimeHostToolLease,
+  RuntimeHostToolResult,
   RuntimeMcpReloadResult,
   RuntimeMcpToolListFilter,
   RuntimeMcpValidateResult,
   RuntimeModelListFilter,
+  RuntimeOperationOptions,
   RuntimePermissionDecision,
   RuntimePermissionFilter,
   RuntimePermissionRequest,
@@ -28,6 +38,8 @@ import type {
   RuntimeRunResult,
   RuntimeRunStatus,
   RuntimeSession,
+  RuntimeSessionObservation,
+  RuntimeSessionObservationSnapshot,
   RuntimeSessionSettings,
   RuntimeSessionSummary,
   RuntimeSkillDescribeInput,
@@ -39,6 +51,8 @@ import type {
   RuntimeSubscription,
   RuntimeToolExposurePlan,
   RuntimeTranscript,
+  RuntimeUserInputRequest,
+  RuntimeUserInputResolution,
   RuntimeWorkflowFilter,
   RuntimeWorkflowListener,
   RuntimeWorkflowSnapshot,
@@ -48,15 +62,28 @@ import type {
   McpServerConfig,
   McpServerToolList,
 } from '@kodax-ai/agent';
+import { emitKodaXDiagnostic } from '@kodax-ai/agent';
 import type {
   RuntimeDaemonMethod,
   RuntimeDaemonNotification,
+  RuntimeDaemonOperationEnvelope,
 } from './protocol.js';
+import { isRuntimeDaemonMutationMethod } from './protocol.js';
 
 const MAX_PENDING_SUBSCRIPTION_NOTIFICATIONS = 256;
+const MAX_RETAINED_HOST_TOOL_RESULTS = 1_000;
+
+interface HostToolInvocationResult {
+  readonly promise: Promise<RuntimeHostToolResult>;
+  settled: boolean;
+}
 
 export interface RuntimeDaemonClientTransport {
-  request(method: RuntimeDaemonMethod, params?: unknown): Promise<unknown>;
+  request(
+    method: RuntimeDaemonMethod,
+    params?: unknown,
+    operation?: RuntimeDaemonOperationEnvelope,
+  ): Promise<unknown>;
   subscribe(listener: (notification: RuntimeDaemonNotification) => void): RuntimeSubscription;
   close?(): Promise<void> | void;
 }
@@ -65,15 +92,45 @@ export interface RuntimeDaemonClientOptions {
   readonly identity: RuntimeIdentity;
   readonly transport: RuntimeDaemonClientTransport;
   readonly capabilities?: Readonly<Record<string, unknown>>;
+  readonly journalEpoch?: string;
+  readonly grantedScopes?: readonly RuntimeGrantedScope[];
 }
 
 export function createRuntimeDaemonClient(
   options: RuntimeDaemonClientOptions,
 ): KodaXRuntime {
-  const request = options.transport.request.bind(options.transport);
+  const request = (
+    method: RuntimeDaemonMethod,
+    params?: unknown,
+    operation?: RuntimeOperationOptions,
+  ): Promise<unknown> => options.transport.request(
+    method,
+    params,
+    isRuntimeDaemonMutationMethod(method)
+      ? createOperationEnvelope(options.journalEpoch, operation)
+      : undefined,
+  );
+  const credentialBrokers = new Map<string, RuntimeCredentialBroker>();
+  const hostToolHandlers = new Map<string, Readonly<Record<string, RuntimeHostToolHandler>>>();
+  const hostToolResults = new Map<string, HostToolInvocationResult>();
+  const reverseSubscription = options.transport.subscribe((notification) => {
+    if (notification.method === 'credential.request') {
+      void answerCredentialRequest(notification.params, credentialBrokers, request)
+        .catch(() => reportReverseBridgeFailure('credential request'));
+    } else if (notification.method === 'host_tool.invoke') {
+      void answerHostToolInvocation(
+        notification.params,
+        hostToolHandlers,
+        hostToolResults,
+        request,
+      ).catch(() => reportReverseBridgeFailure('host tool invocation'));
+    }
+  });
 
   return {
     identity: options.identity,
+    capabilities: options.capabilities,
+    ...(options.grantedScopes !== undefined ? { grantedScopes: options.grantedScopes } : {}),
     sessions: {
       create(input) {
         return request('session.create', input) as Promise<RuntimeSession>;
@@ -87,14 +144,32 @@ export function createRuntimeDaemonClient(
       transcript(sessionId) {
         return request('session.transcript', { sessionId }) as Promise<RuntimeTranscript | null>;
       },
+      observe(sessionId, listener) {
+        return observeDaemonSession(options.transport, request, sessionId, listener);
+      },
       fork(input) {
         return request('session.fork', input) as Promise<RuntimeSession | null>;
       },
       getSettings(sessionId) {
         return request('session.settings.get', { sessionId }) as Promise<RuntimeSessionSettings>;
       },
-      updateSettings(sessionId, patch) {
-        return request('session.settings.update', { sessionId, patch }) as Promise<RuntimeSessionSettings>;
+      getSettingsVersioned(sessionId) {
+        return request('session.settings.getVersioned', { sessionId }) as ReturnType<KodaXRuntime['sessions']['getSettingsVersioned']>;
+      },
+      async updateSettings(sessionId, patch) {
+        const current = await this.getSettingsVersioned(sessionId);
+        return (await this.updateSettingsVersioned(
+          sessionId,
+          patch,
+          { expectedRevision: current.revision },
+        )).value;
+      },
+      updateSettingsVersioned(sessionId, patch, operation) {
+        return request(
+          'session.settings.updateVersioned',
+          { sessionId, patch, expectedRevision: operation.expectedRevision },
+          operation,
+        ) as ReturnType<KodaXRuntime['sessions']['updateSettingsVersioned']>;
       },
       appendNotice(input) {
         return request('session.notice.append', input) as ReturnType<KodaXRuntime['sessions']['appendNotice']>;
@@ -121,7 +196,8 @@ export function createRuntimeDaemonClient(
     runs: {
       async start(input: RuntimeStartRunInput): Promise<RuntimeRunHandle> {
         assertRuntimeTransportSafe(input.options, 'run.start.options');
-        const started = requireRecord(await request('run.start', input));
+        const { operation, ...transportInput } = input;
+        const started = requireRecord(await request('run.start', transportInput, operation));
         const runId = requireStringField(started, 'runId');
         const sessionId = requireStringField(started, 'sessionId');
         const turnId = optionalStringField(started, 'turnId');
@@ -131,6 +207,12 @@ export function createRuntimeDaemonClient(
           ...(turnId !== undefined ? { turnId } : {}),
           result: requestRuntimeRunResult(request, runId),
         };
+      },
+      async submitInput(input) {
+        const { operation, ...transportInput } = input;
+        return request('run.input.submit', transportInput, operation) as ReturnType<
+          KodaXRuntime['runs']['submitInput']
+        >;
       },
       await(runId) {
         return requestRuntimeRunResult(request, runId);
@@ -175,6 +257,80 @@ export function createRuntimeDaemonClient(
           decision,
           ...(options?.runId !== undefined ? { runId: options.runId } : {}),
         }) as Promise<boolean>;
+      },
+      listGrants() {
+        return request('permission.grants.list') as ReturnType<KodaXRuntime['permissions']['listGrants']>;
+      },
+      revokeGrant(grantId, expectedRevision) {
+        return request('permission.grants.revoke', { grantId, expectedRevision }) as Promise<boolean>;
+      },
+    },
+    userInputs: {
+      listPending(filter) {
+        return request('user_input.listPending', filter) as Promise<readonly RuntimeUserInputRequest[]>;
+      },
+      respond(requestId, answer, options) {
+        return request('user_input.respond', {
+          requestId,
+          answer,
+          ...(options?.expectedRevision !== undefined
+            ? { expectedRevision: options.expectedRevision }
+            : {}),
+          ...(options?.runId !== undefined ? { runId: options.runId } : {}),
+        }) as Promise<RuntimeUserInputResolution>;
+      },
+      dismiss(requestId, options) {
+        return request('user_input.dismiss', {
+          requestId,
+          ...(options?.expectedRevision !== undefined
+            ? { expectedRevision: options.expectedRevision }
+            : {}),
+          ...(options?.runId !== undefined ? { runId: options.runId } : {}),
+        }) as Promise<RuntimeUserInputResolution>;
+      },
+    },
+    credentials: {
+      async register(input, broker) {
+        const leaseId = `credlease_${randomUUID().replace(/-/g, '')}`;
+        credentialBrokers.set(leaseId, broker);
+        try {
+          return await request('credential.register', {
+            leaseId,
+            providers: input.providers,
+            ...(input.expiresAt !== undefined ? { expiresAt: input.expiresAt } : {}),
+          }) as RuntimeCredentialLease;
+        } catch (error: unknown) {
+          credentialBrokers.delete(leaseId);
+          throw error;
+        }
+      },
+      async revoke(leaseId) {
+        const revoked = await request('credential.revoke', { leaseId }) as boolean;
+        if (revoked) credentialBrokers.delete(leaseId);
+        return revoked;
+      },
+    },
+    hostTools: {
+      async register(tools, handlers) {
+        validateHostToolHandlers(tools, handlers);
+        const leaseId = `hostlease_${randomUUID().replace(/-/g, '')}`;
+        hostToolHandlers.set(leaseId, handlers);
+        try {
+          return await request('host_tool.register', { leaseId, tools }) as RuntimeHostToolLease;
+        } catch (error: unknown) {
+          hostToolHandlers.delete(leaseId);
+          throw error;
+        }
+      },
+      async revoke(leaseId) {
+        const revoked = await request('host_tool.revoke', { leaseId }) as boolean;
+        if (revoked) hostToolHandlers.delete(leaseId);
+        return revoked;
+      },
+    },
+    operations: {
+      get(input) {
+        return request('operation.get', input) as ReturnType<KodaXRuntime['operations']['get']>;
       },
     },
     workflows: {
@@ -357,8 +513,137 @@ export function createRuntimeDaemonClient(
       },
     },
     async close() {
+      reverseSubscription.close();
+      credentialBrokers.clear();
+      hostToolHandlers.clear();
+      hostToolResults.clear();
       await options.transport.close?.();
     },
+  };
+}
+
+function reportReverseBridgeFailure(kind: string): void {
+  emitKodaXDiagnostic({
+    source: 'runtime.daemon.client',
+    level: 'warn',
+    message: `Failed to deliver ${kind} result to the Runtime daemon.`,
+  });
+}
+
+async function answerCredentialRequest(
+  params: unknown,
+  brokers: ReadonlyMap<string, RuntimeCredentialBroker>,
+  request: (
+    method: RuntimeDaemonMethod,
+    params?: unknown,
+    operation?: RuntimeOperationOptions,
+  ) => Promise<unknown>,
+): Promise<void> {
+  const payload = requireRecord(params);
+  const requestId = requireStringField(payload, 'requestId');
+  const leaseId = requireStringField(payload, 'leaseId');
+  const broker = brokers.get(leaseId);
+  if (!broker) {
+    await request('credential.supply', { requestId, error: 'credential_lease_unavailable' });
+    return;
+  }
+  try {
+    const credential = await broker({
+      leaseId,
+      provider: requireStringField(payload, 'provider'),
+      sessionId: requireStringField(payload, 'sessionId'),
+      runId: requireStringField(payload, 'runId'),
+    });
+    await request('credential.supply', {
+      requestId,
+      ...(credential !== undefined ? { credential } : { error: 'credential_unavailable' }),
+    });
+  } catch {
+    await request('credential.supply', { requestId, error: 'credential_broker_failed' });
+  }
+}
+
+async function answerHostToolInvocation(
+  params: unknown,
+  handlersByLease: ReadonlyMap<string, Readonly<Record<string, RuntimeHostToolHandler>>>,
+  results: Map<string, HostToolInvocationResult>,
+  request: (
+    method: RuntimeDaemonMethod,
+    params?: unknown,
+    operation?: RuntimeOperationOptions,
+  ) => Promise<unknown>,
+): Promise<void> {
+  const payload = requireRecord(params);
+  const invocationId = requireStringField(payload, 'invocationId');
+  const leaseId = requireStringField(payload, 'leaseId');
+  const toolName = requireStringField(payload, 'toolName');
+  const handler = handlersByLease.get(leaseId)?.[toolName];
+  if (!handler) {
+    await request('host_tool.complete', { invocationId, error: 'host_tool_unavailable' });
+    return;
+  }
+  let result = results.get(invocationId);
+  if (!result) {
+    const promise = Promise.resolve().then(() => handler({
+        invocationId,
+        leaseId,
+        toolName,
+        sessionId: requireStringField(payload, 'sessionId'),
+        runId: requireStringField(payload, 'runId'),
+        input: requireRecord(payload.input),
+      }));
+    result = { promise, settled: false };
+    results.set(invocationId, result);
+    const tracked = result;
+    void promise.finally(() => {
+      tracked.settled = true;
+      pruneHostToolResults(results);
+    }).catch(() => undefined);
+    pruneHostToolResults(results);
+  }
+  try {
+    await request('host_tool.complete', { invocationId, result: await result.promise });
+  } catch {
+    try {
+      await request('host_tool.complete', { invocationId, error: 'host_tool_failed' });
+    } catch {
+      // Never replay a host handler here. The daemon reports an unknown outcome.
+    }
+  }
+}
+
+function validateHostToolHandlers(
+  tools: readonly RuntimeHostToolDescriptor[],
+  handlers: Readonly<Record<string, RuntimeHostToolHandler>>,
+): void {
+  const names = new Set(tools.map((tool) => tool.name));
+  if (names.size !== tools.length || tools.length === 0) {
+    throw new Error('Host tool descriptors must have unique, non-empty names.');
+  }
+  for (const name of names) {
+    if (typeof handlers[name] !== 'function') {
+      throw new Error(`Missing host tool handler: ${name}`);
+    }
+  }
+}
+
+function pruneHostToolResults(results: Map<string, HostToolInvocationResult>): void {
+  if (results.size <= MAX_RETAINED_HOST_TOOL_RESULTS) return;
+  for (const [invocationId, result] of results) {
+    if (results.size <= MAX_RETAINED_HOST_TOOL_RESULTS) return;
+    if (result.settled) results.delete(invocationId);
+  }
+}
+
+function createOperationEnvelope(
+  journalEpoch: string | undefined,
+  operation: RuntimeOperationOptions | undefined,
+): RuntimeDaemonOperationEnvelope | undefined {
+  const epoch = operation?.journalEpoch ?? journalEpoch;
+  if (epoch === undefined) return undefined;
+  return {
+    operationId: operation?.operationId ?? `op_${randomUUID().replace(/-/g, '')}`,
+    journalEpoch: epoch,
   };
 }
 
@@ -373,6 +658,79 @@ function subscribeToDaemonEvents(
   }, (event) => {
     listener(event as RuntimeEvent);
   });
+}
+
+async function observeDaemonSession(
+  transport: RuntimeDaemonClientTransport,
+  request: RuntimeDaemonClientTransport['request'],
+  sessionId: string,
+  listener: RuntimeEventListener,
+): Promise<RuntimeSessionObservation> {
+  let closed = false;
+  let remoteSubscriptionId: string | undefined;
+  let bufferOverflowed = false;
+  const pending: Array<Record<string, unknown>> = [];
+  const local = transport.subscribe((notification) => {
+    if (closed || notification.method !== 'event') return;
+    const payload = requireRecord(notification.params);
+    if (remoteSubscriptionId === undefined) {
+      if (!isRuntimeEventForSession(payload.event, sessionId)) return;
+      if (pending.length >= MAX_PENDING_SUBSCRIPTION_NOTIFICATIONS) {
+        bufferOverflowed = true;
+      } else {
+        pending.push(payload);
+      }
+      return;
+    }
+    if (payload.subscriptionId === remoteSubscriptionId) {
+      listener(payload.event as RuntimeEvent);
+    }
+  });
+  try {
+    const result = requireRecord(await request('session.observe', { sessionId }));
+    remoteSubscriptionId = requireStringField(result, 'subscriptionId');
+    if (bufferOverflowed) {
+      throw Object.assign(
+        new Error('Runtime session observation handshake exceeded its event buffer; full resync is required.'),
+        { code: 'resync_required' as const },
+      );
+    }
+    const snapshot = requireRecord(result.snapshot) as unknown as RuntimeSessionObservationSnapshot;
+    for (const payload of pending.splice(0)) {
+      if (payload.subscriptionId === remoteSubscriptionId) {
+        listener(payload.event as RuntimeEvent);
+      }
+    }
+    return {
+      snapshot,
+      close() {
+        if (closed) return;
+        closed = true;
+        pending.length = 0;
+        local.close();
+        if (remoteSubscriptionId !== undefined) {
+          void request('event.unsubscribe', {
+            subscriptionId: remoteSubscriptionId,
+          }).catch(() => undefined);
+        }
+      },
+    };
+  } catch (error: unknown) {
+    closed = true;
+    pending.length = 0;
+    local.close();
+    if (remoteSubscriptionId !== undefined) {
+      void request('event.unsubscribe', { subscriptionId: remoteSubscriptionId }).catch(() => undefined);
+    }
+    throw error;
+  }
+}
+
+function isRuntimeEventForSession(value: unknown, sessionId: string): boolean {
+  return value !== null
+    && typeof value === 'object'
+    && !Array.isArray(value)
+    && (value as Record<string, unknown>).sessionId === sessionId;
 }
 
 function subscribeToDaemonWorkflowEvents(

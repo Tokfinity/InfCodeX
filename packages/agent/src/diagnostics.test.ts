@@ -1,4 +1,5 @@
 import { describe, expect, it, vi } from 'vitest';
+import { runWithProviderCredential } from '@kodax-ai/llm';
 
 import { emitKodaXDiagnostic, setKodaXDiagnosticSink } from './diagnostics.js';
 
@@ -30,5 +31,28 @@ describe('diagnostic sink registration', () => {
     expect(second).not.toHaveBeenCalled();
     expect(first).toHaveBeenCalledOnce();
     restoreFirst();
+  });
+
+  it('redacts the active provider credential before calling a diagnostic sink', () => {
+    const sink = vi.fn();
+    const restore = setKodaXDiagnosticSink(sink);
+    try {
+      runWithProviderCredential('openai', 'diagnostic-secret', () => {
+        emitKodaXDiagnostic({
+          source: 'test',
+          level: 'error',
+          message: 'provider returned diagnostic-secret',
+          detail: { error: new Error('diagnostic-secret leaked') },
+        });
+      });
+
+      const delivered = sink.mock.calls[0]?.[0];
+      expect(JSON.stringify(delivered)).not.toContain('diagnostic-secret');
+      expect(delivered).toMatchObject({
+        message: 'provider returned [REDACTED_CREDENTIAL]',
+      });
+    } finally {
+      restore();
+    }
   });
 });

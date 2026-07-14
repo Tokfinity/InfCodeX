@@ -3351,6 +3351,311 @@ The normative baseline is A2A repository commit
 
 ---
 
+## 23. Shared Coder daemon for Space and IDE hosts (FEATURE_269, v0.7.69)
+
+FEATURE_269 makes one local daemon the source of truth for a Coder profile.
+CLI, Space, IDE, and SDK clients can observe and control the same sessions and
+runs. The transport remains local to the current OS user; it is not a remote
+collaboration protocol. Closing a client detaches that client and does not stop
+the daemon or another client's run.
+
+Partner is deliberately outside this migration. Keep Partner on its existing
+inline callbacks and give it a distinct product data root and sessions root.
+Do not point a Partner inline Runtime at the Coder daemon profile or the Coder
+data root.
+
+### Connect and fail closed on required capabilities
+
+Space should own the daemon SDK client in Electron Main. Persist a random,
+stable `instanceId` per Space installation; do not accept it from renderer or
+model output. `connectKodaXRuntime()` is attach-only unless `autoStart: true`.
+An explicit inline rollback policy blocks auto-start until the owner policy is
+explicitly changed back to daemon.
+
+```ts
+import { connectKodaXRuntime } from '@kodax-ai/kodax/runtime';
+
+const runtime = await connectKodaXRuntime({
+  profile: 'coder',
+  autoStart: true,
+  clientInfo: {
+    name: 'kodax-space',
+    version: '0.1.32',
+    instanceId: spaceInstallationId,
+  },
+  capabilities: {
+    richEvents: true,
+    permissionPrompts: true,
+    operationDeduplication: true,
+  },
+  requirements: {
+    operationDeduplication: 1,
+    sessionObservation: 1,
+    afterTurnInput: 1,
+    askUserTransport: 1,
+    permissionCas: 1,
+    providerCredentialBroker: 1,
+    runBoundHostTools: 1,
+    coderOwnerFencing: 1,
+    crashOutcomeModel: 1,
+    coderFeatureMatrix: 1,
+  },
+});
+```
+
+Requirements are server facts, not authorization requests. Check
+`runtime.grantedScopes` before enabling controls. Missing capabilities or
+scopes must disable the affected UI; Space must not silently start inline
+Coder. FEATURE_269 does not advertise `interruptInput`, so an interrupt-only
+product must require `{ interruptInput: 1 }` and fail connection. The supported
+fallback is `delivery: 'after_turn'` only when that is the user's intent.
+
+The `coderFeatureMatrix` capability reports daemon availability for managed
+runs, transcript/session operations, Todo projection, managed tasks, Workflow,
+MCP, Reference External Agent, Memory, and Runtime artifacts. Reference
+External Agent is `false` when the daemon owner did not install its executor
+plane.
+
+The packaged daemon authenticates one local OS-user/profile trust domain with
+a random token stored beside daemon state and a user-only local endpoint. It
+does not issue a different token to each application in v0.7.69. The returned
+scope set is chosen by the host (the packaged host grants the public local-user
+set). `clientInfo.instanceId` is stable attribution for origin and operation
+deduplication, not an authentication secret. Keep the token and instance ID in
+Electron Main; mutually distrusting processes running as the same OS account
+are outside this release's threat model.
+
+### Join atomically and resync after disconnect
+
+`sessions.observe()` installs the live subscription before taking the
+snapshot. Its snapshot contains one authoritative `runtimeId`, cursor, complete
+transcript, versioned settings, run/queue state, pending permission requests,
+and live assistant/thinking/tool/Todo/user-input projection. Listener events
+are strictly after the returned cursor.
+
+```ts
+let observedRuntimeId: string | undefined;
+let lastCursor = 0;
+
+async function openCoderSession(sessionId: string) {
+  const observation = await runtime.sessions.observe(sessionId, (event) => {
+    if (event.seq <= lastCursor) return;
+    applyRuntimeEvent(event);
+    lastCursor = event.seq;
+  });
+
+  const { snapshot } = observation;
+  const runtimeChanged = observedRuntimeId !== undefined
+    && observedRuntimeId !== snapshot.runtimeId;
+  observedRuntimeId = snapshot.runtimeId;
+  lastCursor = snapshot.cursor;
+  replaceSessionProjection(snapshot, { runtimeChanged });
+  return observation;
+}
+```
+
+On transport failure, Runtime change, expired history, or `resync_required`,
+discard the local derived projection and call `sessions.observe()` again. Do
+not merge a new snapshot into the old projection. The handshake buffer is
+bounded; overflow fails explicitly instead of dropping events. A Runtime
+restart changes `runtimeId`, marks persisted non-terminal runs with a durable
+terminal fact, and closes old in-memory AskUser/permission requests through the
+reset boundary.
+
+### Durable mutations, stable ordering, and settings CAS
+
+Every public control mutation uses a durable operation envelope. Credential
+supply and Host Tool completion are connection-local reverse-result frames and
+are deliberately excluded from the control journal so secrets/results are not
+persisted. The SDK creates an operation ID for ordinary one-shot calls. A
+product-level retry after a lost response must reuse its own stable operation
+ID; changing its method, payload, resource, or authenticated principal is
+rejected.
+
+```ts
+const operationId = loadOrCreatePendingOperationId('space-run-draft-42');
+const handle = await runtime.runs.start({
+  sessionId,
+  input: { type: 'text', text: prompt },
+  options: { provider: 'anthropic' },
+  operation: { operationId },
+});
+
+const current = await runtime.sessions.getSettingsVersioned(sessionId);
+const updated = await runtime.sessions.updateSettingsVersioned(
+  sessionId,
+  { model: 'claude-sonnet-4-5' },
+  {
+    operationId: loadOrCreatePendingOperationId('space-settings-draft-9'),
+    expectedRevision: current.revision,
+  },
+);
+```
+
+Same-session starts and after-turn inputs receive a durable `sessionOrder`.
+Retries with the same operation ID return the canonical result and do not
+create another run. Settings use compare-and-swap; a stale revision returns a
+structured conflict and must be reloaded, never silently overwritten.
+
+```ts
+const queued = await runtime.runs.submitInput({
+  sessionId,
+  afterRunId: handle.runId,
+  delivery: 'after_turn',
+  input: { type: 'text', text: 'Also update the tests.' },
+  operation: { operationId: loadOrCreatePendingOperationId('space-input-17') },
+});
+
+if (!queued.accepted) {
+  // stale_run or unsupported_capability: show the factual result.
+}
+```
+
+Run status exposes acceptance/start/queue times, authenticated origin,
+`sessionOrder`, and a single terminal fact. Important terminal codes include
+`runtime_restarted`, `daemon_crashed`, `credential_unavailable`,
+`host_not_dispatched`, `host_outcome_unknown`, and
+`control_history_untrusted`. Respect `effectOutcome`; `unknown` must never be
+presented as success or automatically retried.
+
+### AskUser and permission from any client
+
+AskUser is no longer an in-process callback for daemon Coder runs. Any client
+with the responder scope can list the pending request and answer or dismiss it.
+The request revision and run binding prevent a stale UI from answering a new
+request. Exactly one concurrent answer is accepted.
+
+```ts
+for (const request of await runtime.userInputs.listPending({ sessionId })) {
+  const resolution = await runtime.userInputs.respond(request.id, answer, {
+    expectedRevision: request.revision,
+    runId: request.runId,
+  });
+  if (!resolution.accepted) refreshPendingInteractions();
+}
+
+for (const request of await runtime.permissions.listPending({ sessionId })) {
+  const accepted = await runtime.permissions.respond(
+    request.id,
+    { type: 'allow_once' },
+    { runId: request.runId },
+  );
+  if (!accepted) refreshPendingInteractions();
+}
+```
+
+Persistent `allow_always` grants are owned by the daemon and require
+`permission:grant-admin`. Use `permissions.listGrants()` and
+`revokeGrant(grantId, expectedRevision)` for revision-safe administration.
+Clients must not keep separate persistent permission rule stores.
+
+### Broker a Space keychain credential
+
+Credentials remain owned by Space's OS keychain. Register a connection-bound
+broker in Electron Main, bind the returned lease only to runs that Space
+starts, and return the key only after checking the daemon-provided
+provider/session/run context.
+
+```ts
+const credentialLease = await runtime.credentials.register(
+  { providers: ['anthropic'] },
+  async ({ provider, sessionId: requestedSession, runId }) => {
+    authorizeSpaceRunCredential({ provider, sessionId: requestedSession, runId });
+    return spaceKeychain.readProviderCredential(provider);
+  },
+);
+
+const run = await runtime.runs.start({
+  sessionId,
+  input: { type: 'text', text: prompt },
+  options: { provider: 'anthropic' },
+  credential: { leaseId: credentialLease.id, provider: 'anthropic' },
+  operation: { operationId: loadOrCreatePendingOperationId('space-run-88') },
+});
+```
+
+The secret crosses only the authenticated reverse frame and an in-memory
+run/provider scope. It is excluded from events, status, logs, diagnostics,
+operation records, and Runtime persistence. While such a scope is active,
+provider mismatch fails closed and never falls back to daemon environment.
+Registration ends when the Space connection closes. A credential already
+acquired by an accepted run may finish after disconnect; a later credential
+request fails `credential_unavailable`.
+
+### Bind Space-owned Host Tools to one run
+
+Register only narrow product capabilities. Descriptors are data; handlers stay
+in Electron Main. A lease is connection-bound and grants nothing until its ID
+is explicitly bound to a run.
+
+```ts
+const hostLease = await runtime.hostTools.register([{
+  name: 'space_artifact_create',
+  description: 'Create a Space-owned artifact for this run.',
+  inputSchema: {
+    type: 'object',
+    properties: { title: { type: 'string' } },
+    required: ['title'],
+    additionalProperties: false,
+  },
+  sideEffect: 'non_idempotent',
+}], {
+  async space_artifact_create(invocation) {
+    authorizeBoundSpaceInvocation(invocation);
+    const artifact = await createSpaceArtifact(invocation.input);
+    return { content: `Created artifact ${artifact.displayId}` };
+  },
+});
+
+await runtime.runs.start({
+  sessionId,
+  input: { type: 'text', text: 'Create the report artifact.' },
+  hostTools: { leaseId: hostLease.id },
+  operation: { operationId: loadOrCreatePendingOperationId('space-artifact-run') },
+});
+```
+
+The daemon injects session/run/lease/invocation identity; renderer, model, and
+ordinary tool input cannot choose it. CLI runs never inherit a Space lease just
+because Space later observes their session. The client memoizes one handler
+promise per invocation ID, and the daemon never replays a dispatched Host Tool.
+Disconnect or timeout after dispatch produces `host_outcome_unknown`; Space
+must reconcile the product side effect itself before offering a new user
+action.
+
+### Owner policy, rollback, and Electron boundary
+
+Daemon and inline Coder use one profile fence. For an emergency rollback, stop
+the daemon, switch the policy with revision CAS, then acquire the inline owner:
+
+```ts
+import {
+  acquireKodaXInlineOwner,
+  setKodaXRuntimeOwnerMode,
+} from '@kodax-ai/kodax/runtime';
+
+const policy = setKodaXRuntimeOwnerMode({
+  homeDir: kodaxHome,
+  profile: 'coder',
+  mode: 'inline',
+  expectedRevision: currentPolicyRevision,
+});
+const inlineOwner = acquireKodaXInlineOwner({ homeDir: kodaxHome, profile: 'coder' });
+```
+
+The inline policy is sticky: later CLI auto-start is rejected until an explicit
+CAS changes the policy back to `daemon`. Stale-owner handling validates the
+owned lock/state and never kills a process merely because a PID was reused.
+
+Keep all trusted objects in Electron Main: daemon token/endpoint, stable client
+identity, operation IDs, owner policy, keychain broker, Host Tool handlers, and
+permission-grant administration. Renderer IPC should expose product-specific
+commands and sanitized projections only. Never pass daemon credentials,
+leases, operation epochs, or trusted session/run context to renderer or model
+tool arguments.
+
+---
+
 ## See also
 
 - [README.md](../README.md) — end-user CLI quick start

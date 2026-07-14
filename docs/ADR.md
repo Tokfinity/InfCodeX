@@ -1,6 +1,13 @@
 # KodaX Architecture Decision Records
 
-> Last updated: 2026-07-12
+> Last updated: 2026-07-13
+>
+> **v0.7.69 planned shared-daemon addendum:** FEATURE_269 extends the released
+> F255 local daemon with atomic session observation/resync, durable operation
+> receipts and revisions, transport-safe AskUser/permission resolution,
+> run-scoped Space credential and Host Tool reverse bridges, explicit
+> interrupted/unknown recovery, and one daemon/inline Coder owner fence with
+> sticky rollback. Partner remains a private embedded Runtime. See ADR-054.
 >
 > **v0.7.68 governed-memory addendum:** FEATURE_260 keeps F228 as the sole
 > long-term memory plane and adds an opt-in `/experimental-memory` SDK surface,
@@ -3812,3 +3819,136 @@ allowed only if at least three concrete host requirements cannot be expressed
 through the shared lifecycle and action-driver seam. Learned Extension slash
 commands or broader generated registration APIs require a separate security
 and discoverability review.
+
+---
+
+## ADR-054: Shared Coder Runtime Uses Atomic Observation, Durable Operations, Narrow Host Bridges, and One Owner Fence
+
+**Status**: Accepted (2026-07-13)
+
+**Driver**: `FEATURE_269`, KodaX Space v0.1.32 default Coder migration
+
+**Context**: F255 established a local authenticated daemon with multi-client
+connections, per-session FIFO runs, persistent event replay, daemon-held
+permissions, and conservative crash interruption. Space now needs CLI, Space,
+IDE, and other local SDK clients to open and control the same active Coder
+session. The released surface still leaves a snapshot/subscription race, lacks
+durable command idempotency and transport-safe AskUser, assumes provider
+credentials exist in the Runtime process, cannot call explicitly bound
+Space-owned capabilities, and fences daemon candidates without fencing an
+inline Coder owner.
+
+These gaps are coupled by one correctness requirement: the policy-selected,
+fenced owner must be the only Coder profile fact and authority source (the
+daemon in normal mode, inline only during explicit rollback). Solving them independently in
+Space would create per-client transcript merge, queue, permission, grant,
+credential, tool, and rollback state that can diverge from KodaX.
+
+**Decision**:
+
+1. The Runtime SDK adds one atomic session observation primitive. The daemon
+   installs a buffered subscription, takes a short session snapshot barrier,
+   returns transcript/state/live projection plus `runtimeId` and numeric event
+   cursor, then flushes only post-barrier events in order. A bounded 256-event
+   pre-subscribe buffer and `resync_required` close the handoff boundary; there
+   is no separate ACK/resume-token protocol.
+2. Runtime instance change or `resync_required` forces an explicit full reset.
+   Clients replace snapshot state and deduplicate delivery by sequence; they do
+   not infer continuity across Runtime instances.
+3. The existing session/event persistence remains. A small profile-owned
+   append-only control journal stores mutation operation receipts and critical
+   dispatch markers. KodaX does not add SQLite or rebuild all state as a new
+   event-sourced system. Untrusted control history quarantines mutations while
+   reads remain available; a reset changes journal epoch and old-epoch retries
+   remain rejected.
+4. Every daemon mutation has a high-entropy profile-global operation ID.
+   Acceptance/order is persisted before external dispatch; retry returns the
+   same receipt only when epoch, authenticated principal, method, authorized
+   resource, and normalized request digest match. Same-session order is the
+   daemon commit order. Settings and persistent grants use compare-and-swap;
+   AskUser uses request revision while permission uses request/run identity and
+   first-winner resolution. Legacy clients may read but mutations fail upgrade-
+   required; a schema drift test covers every mutating handler.
+5. AskUser receives a dedicated transport-safe pending-input service.
+   Permission remains a distinct service, but both commit exactly one valid
+   resolution and close explicitly on timeout, cancellation, run terminal, or
+   Runtime restart. The Coder Runtime owner is the only persistent permission
+   grant writer.
+6. Space provider credentials use a narrow reverse credential broker registered
+   by Space Main. A connection-owned lease has a provider allowlist and a run
+   binds it to exact provider/session/run scope. The secret is supplied through
+   a dedicated non-journaled reverse response into `AsyncLocalStorage` and never
+   enters environment, config, state, event, transcript, log, diagnostic, or
+   persistence data.
+7. Space Artifact/Office/Control style tools use a separate narrow Host Tool
+   reverse bridge. One immutable descriptor set is captured by an explicit run
+   acceptance. Trusted client/profile/session/run/invocation identity is
+   daemon-derived and never model-controlled. A dispatched call with no known
+   result becomes `unknown` and is never automatically invoked again. Host
+   registration is not ambient authorization: results use bounded transport-safe
+   content, capability sets are single-run, and product-side outcome checking
+   after an unknown result remains Space's responsibility.
+8. Credential and Host Tool bridges may share a small internal reverse-frame
+   router, but KodaX exposes no generic callback/plugin bus. Space product data
+   remains Space-owned; only bounded model-safe results cross Runtime.
+9. Daemon and explicitly shared inline Coder modes acquire the same
+   profile-scoped owner fence. An atomic lock nonce prevents dual ownership and
+   makes release ownership-safe. A persisted compare-and-swap policy selects
+   `daemon` or `inline`; auto-start never changes it. Fresh profiles default to
+   daemon. Existing inline hosts must explicitly acquire the shared fence when
+   participating as Coder owner.
+10. Emergency rollback first stops the verified daemon, persists `inline`, and
+    acquires the same fence for inline Coder. Later CLI auto-start fails
+    closed until an explicit transition back to daemon. Stale cleanup requires
+    owner identity/nonce and health evidence where available; PID liveness alone
+    never authorizes killing another process.
+11. Partner stays on a private embedded storage namespace and does not acquire
+    the Coder fence. Generic private embedded SDK Runtime behavior remains
+    available; only a Runtime explicitly requesting Coder-profile ownership
+    participates in daemon/inline election.
+12. The daemon never automatically resumes a queued/running run, provider
+    request, continuation run, or Host Tool call after process ambiguity. Recovery
+    exposes stable interrupted/unavailable/unknown facts.
+13. Reliability features are versioned capabilities separate from client UI
+    hints and server-issued client scopes. Every RPC checks scope plus profile/
+    resource authority. Space requires the needed versions and published Coder
+    feature matrix and fails closed; capability absence never triggers silent
+    inline Coder fallback.
+14. F267 continues to own A2A wire/server behavior and F268 continues to own
+    MCP/A2A/Extension configuration. Owner policy, operation receipts,
+    credential leases, and Host Tool leases are Runtime control state, not a
+    fourth F268 configuration domain.
+
+**Consequences**:
+
+- CLI, Space, IDE, and SDK clients can converge on one active session without
+  implementing their own transcript/event merge protocol.
+- Transport retry becomes safe for accepted mutations while genuinely
+  unknowable external effects remain visible as unknown.
+- Space can keep credentials in OS keychain and product capabilities in Space
+  without forcing the daemon to depend on Electron or Space Artifact models.
+- The Runtime/daemon implementation gains focused session-observation,
+  control-journal, credential, Host Tool, and owner modules, but no new
+  workspace package or public network service.
+- Coder CLI behavior follows the profile owner policy; generic private SDK
+  embedding and Partner remain separate, explicit ownership forms.
+- v0.7.69 now contains three Critical Features. F267/F268 are not implicitly
+  rescheduled; the release remains incomplete until every still-assigned
+  Feature passes its own gate or product explicitly moves it.
+- HLD/DD describe the implemented architecture; formal npm/Space and
+  cross-platform evidence remains a v0.7.69 release gate.
+
+**Rejected alternatives**: client-side snapshot/replay composition, polling,
+SQLite/event-sourcing rewrite, transport request IDs as idempotency keys,
+credential-in-run/config/environment, daemon-owned copies of Space keychain
+secrets, generic callback/plugin RPC, auto-replay of apparently idempotent Host
+Tools, client-owned persistent grants, separate inline/daemon locks, PID-only
+stale cleanup, and moving Runtime leases/owner policy into F268 integration
+files.
+
+**Reconsideration gates**: A generic reverse callback framework requires at
+least three additional concrete non-credential/non-Host-Tool use cases plus a
+separate security review. A database replaces JSONL only after measured
+retention/compaction or atomicity evidence shows the single-owner control
+journal is insufficient. Automatic side-effect replay requires an end-to-end
+provider/tool idempotency proof, not a descriptor claim.

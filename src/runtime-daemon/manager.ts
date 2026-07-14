@@ -1,3 +1,4 @@
+import { randomUUID } from 'node:crypto';
 import os from 'node:os';
 import path from 'node:path';
 
@@ -10,6 +11,8 @@ import {
 } from './lifecycle.js';
 import { startRuntimeDaemonHost, type RuntimeDaemonHost } from './host.js';
 import {
+  assertRuntimeDaemonOwnerAllowed,
+  releaseRuntimeDaemonLock,
   resolveRuntimeDaemonPaths,
   type RuntimeDaemonPaths,
 } from './state.js';
@@ -27,7 +30,7 @@ export interface RuntimeDaemonLeaseOptions {
   readonly startupTimeoutMs?: number;
   readonly pollIntervalMs?: number;
   readonly healthCheck?: RuntimeDaemonHealthCheckOptions;
-  createRuntime(): Promise<KodaXRuntime>;
+  createRuntime(runtimeId: string): Promise<KodaXRuntime>;
 }
 
 export interface RuntimeDaemonLease {
@@ -46,43 +49,33 @@ export async function acquireRuntimeDaemonLease(
   const profile = options.profile ?? 'default';
   const homeDir = resolveRuntimeDaemonHomeDir(options.homeDir);
   const paths = resolveRuntimeDaemonPaths(homeDir, profile);
+  assertRuntimeDaemonOwnerAllowed(paths);
   const endpoint = options.endpoint ?? defaultRuntimeDaemonEndpoint(profile, homeDir);
-  const candidateRuntime = await options.createRuntime();
   const owner = {
-    runtimeId: candidateRuntime.identity.runtimeId,
+    runtimeId: `rt_${randomUUID().replace(/-/g, '').slice(0, 12)}`,
     pid: process.pid,
     createdAt: new Date().toISOString(),
+    kind: 'daemon' as const,
   };
 
   const decision = await resolveRuntimeDaemonOwnership(paths, owner, options.healthCheck);
   if (decision.kind === 'attach') {
-    await candidateRuntime.close();
     const attachedEndpoint = runtimeDaemonEndpointFromState(decision.state);
     return createAttachedLease(paths, attachedEndpoint, options.connectTimeoutMs);
   }
 
   if (decision.kind === 'wait') {
-    return waitForDaemonLease(paths, endpoint, candidateRuntime, owner, {
+    return waitForDaemonLease(paths, endpoint, owner, {
       ...options,
       profile,
     });
   }
 
   if (decision.kind === 'unhealthy') {
-    await candidateRuntime.close();
     throw new Error(`Runtime daemon is ${decision.health}; refusing to take ownership.`);
   }
 
-  const host = await startRuntimeDaemonHost({
-    runtime: candidateRuntime,
-    paths,
-    endpoint,
-    lock: decision.lock,
-  });
-  const transport = await createRuntimeDaemonSocketClientTransport(endpoint, {
-    connectTimeoutMs: options.connectTimeoutMs,
-  });
-  return createOwnedLease(paths, endpoint, transport, host);
+  return createClaimedDaemonLease(paths, endpoint, owner, decision.lock, options);
 }
 
 function resolveRuntimeDaemonHomeDir(homeDir: string | undefined): string {
@@ -92,7 +85,6 @@ function resolveRuntimeDaemonHomeDir(homeDir: string | undefined): string {
 async function waitForDaemonLease(
   paths: RuntimeDaemonPaths,
   endpoint: RuntimeDaemonEndpoint,
-  candidateRuntime: KodaXRuntime,
   owner: { readonly runtimeId: string; readonly pid: number; readonly createdAt: string },
   options: RuntimeDaemonLeaseOptions & { readonly profile: string },
 ): Promise<RuntimeDaemonLease> {
@@ -100,7 +92,6 @@ async function waitForDaemonLease(
   while (Date.now() <= deadline) {
     const decision = await resolveRuntimeDaemonOwnership(paths, owner, options.healthCheck);
     if (decision.kind === 'attach') {
-      await candidateRuntime.close();
       return createAttachedLease(
         paths,
         runtimeDaemonEndpointFromState(decision.state),
@@ -108,25 +99,46 @@ async function waitForDaemonLease(
       );
     }
     if (decision.kind === 'claim') {
-      const host = await startRuntimeDaemonHost({
-        runtime: candidateRuntime,
-        paths,
-        endpoint,
-        lock: decision.lock,
-      });
-      const transport = await createRuntimeDaemonSocketClientTransport(endpoint, {
-        connectTimeoutMs: options.connectTimeoutMs,
-      });
-      return createOwnedLease(paths, endpoint, transport, host);
+      return createClaimedDaemonLease(paths, endpoint, owner, decision.lock, options);
     }
     if (decision.kind === 'unhealthy') {
-      await candidateRuntime.close();
       throw new Error(`Runtime daemon is ${decision.health}; refusing to take ownership.`);
     }
     await delay(options.pollIntervalMs ?? 100);
   }
-  await candidateRuntime.close();
   throw new Error(`Timed out waiting for runtime daemon profile "${options.profile}" to become ready.`);
+}
+
+async function createClaimedDaemonLease(
+  paths: RuntimeDaemonPaths,
+  endpoint: RuntimeDaemonEndpoint,
+  owner: { readonly runtimeId: string },
+  lock: Parameters<typeof startRuntimeDaemonHost>[0]['lock'],
+  options: RuntimeDaemonLeaseOptions,
+): Promise<RuntimeDaemonLease> {
+  let runtime: KodaXRuntime | undefined;
+  let hostStartAttempted = false;
+  try {
+    runtime = await options.createRuntime(owner.runtimeId);
+    if (runtime.identity.runtimeId !== owner.runtimeId) {
+      throw new Error('Runtime factory returned an identity that does not match its owner fence.');
+    }
+    hostStartAttempted = true;
+    const host = await startRuntimeDaemonHost({ runtime, paths, endpoint, lock });
+    try {
+      const transport = await createRuntimeDaemonSocketClientTransport(endpoint, {
+        connectTimeoutMs: options.connectTimeoutMs,
+      });
+      return createOwnedLease(paths, endpoint, transport, host);
+    } catch (error: unknown) {
+      await host.close();
+      throw error;
+    }
+  } catch (error: unknown) {
+    if (!hostStartAttempted) releaseRuntimeDaemonLock(lock);
+    await runtime?.close();
+    throw error;
+  }
 }
 
 async function createAttachedLease(

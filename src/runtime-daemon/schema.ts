@@ -42,6 +42,7 @@ const stringSchema: RuntimeDaemonJsonSchema = { type: 'string' };
 const booleanSchema: RuntimeDaemonJsonSchema = { type: 'boolean' };
 const integerSchema: RuntimeDaemonJsonSchema = { type: 'integer' };
 const objectAnySchema: RuntimeDaemonJsonSchema = { type: 'object', additionalProperties: true };
+const anyValueSchema: RuntimeDaemonJsonSchema = {};
 const arrayAnySchema: RuntimeDaemonJsonSchema = { type: 'array', items: objectAnySchema };
 const nullOrObjectSchema: RuntimeDaemonJsonSchema = {
   oneOf: [{ type: 'null' }, objectAnySchema],
@@ -89,6 +90,13 @@ export const RUNTIME_DAEMON_METHOD_SCHEMAS = {
   'daemon.status': { params: noParamsSchema, result: objectAnySchema },
   'daemon.stop': { params: noParamsSchema, result: okSchema },
   'daemon.logs': { params: noParamsSchema, result: objectAnySchema },
+  'operation.get': {
+    params: objectSchema({
+      operationId: stringSchema,
+      journalEpoch: stringSchema,
+    }, ['operationId', 'journalEpoch']),
+    result: objectAnySchema,
+  },
 
   'session.create': { params: createSessionParamsSchema(), result: sessionSchema() },
   'session.load': {
@@ -97,6 +105,10 @@ export const RUNTIME_DAEMON_METHOD_SCHEMAS = {
   },
   'session.list': { params: sessionFilterSchema(), result: arraySchema(sessionSchema()) },
   'session.transcript': { params: objectSchema({ sessionId: stringSchema }, ['sessionId']), result: nullOrObjectSchema },
+  'session.observe': {
+    params: objectSchema({ sessionId: stringSchema }, ['sessionId']),
+    result: objectAnySchema,
+  },
   'session.fork': { params: forkSessionParamsSchema(), result: nullableSchema(sessionSchema()) },
   'session.notice.append': {
     params: objectSchema({
@@ -123,6 +135,10 @@ export const RUNTIME_DAEMON_METHOD_SCHEMAS = {
   'session.unarchive': { params: objectSchema({ sessionId: stringSchema }, ['sessionId']), result: okSchema },
   'session.delete': { params: objectSchema({ sessionId: stringSchema }, ['sessionId']), result: okSchema },
   'session.settings.get': { params: objectSchema({ sessionId: stringSchema }, ['sessionId']), result: objectAnySchema },
+  'session.settings.getVersioned': {
+    params: objectSchema({ sessionId: stringSchema }, ['sessionId']),
+    result: objectAnySchema,
+  },
   'session.settings.update': {
     params: objectSchema({
       sessionId: stringSchema,
@@ -130,8 +146,27 @@ export const RUNTIME_DAEMON_METHOD_SCHEMAS = {
     }, ['sessionId', 'patch']),
     result: objectAnySchema,
   },
+  'session.settings.updateVersioned': {
+    params: objectSchema({
+      sessionId: stringSchema,
+      patch: objectAnySchema,
+      expectedRevision: integerSchema,
+    }, ['sessionId', 'patch', 'expectedRevision']),
+    result: objectAnySchema,
+  },
 
   'run.start': { params: startRunParamsSchema(), result: runStartedSchema() },
+  'run.input.submit': {
+    params: objectSchema({
+      sessionId: stringSchema,
+      afterRunId: stringSchema,
+      delivery: { type: 'string', enum: ['after_turn', 'interrupt'] },
+      input: anyValueSchema,
+      credential: objectAnySchema,
+      hostTools: objectAnySchema,
+    }, ['sessionId', 'afterRunId', 'delivery', 'input']),
+    result: objectAnySchema,
+  },
   'run.get': { params: runIdParamsSchema(), result: runStatusSchema() },
   'run.list': { params: runFilterSchema(), result: arraySchema(runStatusSchema()) },
   'run.await': { params: runIdParamsSchema(), result: runResultSchema() },
@@ -178,6 +213,64 @@ export const RUNTIME_DAEMON_METHOD_SCHEMAS = {
       decision: permissionDecisionSchema(),
     }, ['requestId', 'decision']),
     result: booleanSchema,
+  },
+  'permission.grants.list': { params: noParamsSchema, result: objectAnySchema },
+  'permission.grants.revoke': {
+    params: objectSchema({ grantId: stringSchema, expectedRevision: integerSchema }, ['grantId', 'expectedRevision']),
+    result: booleanSchema,
+  },
+  'user_input.listPending': { params: permissionFilterSchema(), result: arraySchema(objectAnySchema) },
+  'user_input.respond': {
+    params: objectSchema({
+      requestId: stringSchema,
+      answer: anyValueSchema,
+      runId: stringSchema,
+      expectedRevision: integerSchema,
+    }, ['requestId', 'answer'], true),
+    result: objectAnySchema,
+  },
+  'user_input.dismiss': {
+    params: objectSchema({
+      requestId: stringSchema,
+      runId: stringSchema,
+      expectedRevision: integerSchema,
+    }, ['requestId'], true),
+    result: objectAnySchema,
+  },
+  'credential.register': {
+    params: objectSchema({
+      leaseId: stringSchema,
+      providers: { type: 'array', items: stringSchema },
+      expiresAt: stringSchema,
+    }, ['leaseId', 'providers'], true),
+    result: objectAnySchema,
+  },
+  'credential.revoke': {
+    params: objectSchema({ leaseId: stringSchema }, ['leaseId']),
+    result: booleanSchema,
+  },
+  'credential.supply': {
+    params: objectSchema({ requestId: stringSchema, credential: stringSchema, error: stringSchema }, ['requestId'], true),
+    result: okSchema,
+  },
+  'host_tool.register': {
+    params: objectSchema({
+      leaseId: stringSchema,
+      tools: { type: 'array', items: objectAnySchema },
+    }, ['leaseId', 'tools']),
+    result: objectAnySchema,
+  },
+  'host_tool.revoke': {
+    params: objectSchema({ leaseId: stringSchema }, ['leaseId']),
+    result: booleanSchema,
+  },
+  'host_tool.complete': {
+    params: objectSchema({
+      invocationId: stringSchema,
+      result: objectAnySchema,
+      error: stringSchema,
+    }, ['invocationId'], true),
+    result: okSchema,
   },
 
   'workflow.list': { params: workflowFilterSchema(), result: arrayAnySchema },
@@ -319,6 +412,8 @@ export const RUNTIME_DAEMON_METHOD_SCHEMAS = {
 
 export const RUNTIME_DAEMON_NOTIFICATION_SCHEMAS = {
   event: objectSchema({ subscriptionId: stringSchema, event: objectAnySchema }, ['subscriptionId', 'event']),
+  'credential.request': objectAnySchema,
+  'host_tool.invoke': objectAnySchema,
   'runtime.warning': objectAnySchema,
 } satisfies Record<RuntimeDaemonNotificationMethod, RuntimeDaemonJsonSchema>;
 

@@ -1,3 +1,5 @@
+import { redactScopedProviderCredential } from '@kodax-ai/llm';
+
 export type KodaXDiagnosticLevel = 'debug' | 'info' | 'warn' | 'error';
 
 export interface KodaXDiagnostic {
@@ -34,10 +36,11 @@ export function setKodaXDiagnosticSink(sink: KodaXDiagnosticSink | undefined): (
 }
 
 export function emitKodaXDiagnostic(diagnostic: KodaXDiagnostic): void {
+  const safeDiagnostic = redactScopedProviderCredential(diagnostic);
   const sink = diagnosticSinks.at(-1)?.sink;
   if (sink) {
     try {
-      sink(diagnostic);
+      sink(safeDiagnostic);
     } catch {
       // Diagnostics must never affect the primary runtime path.
     }
@@ -49,15 +52,16 @@ export function emitKodaXDiagnostic(diagnostic: KodaXDiagnostic): void {
   }
 
   try {
-    process.stderr.write(`${formatKodaXDiagnostic(diagnostic)}\n`);
+    process.stderr.write(`${formatKodaXDiagnostic(safeDiagnostic)}\n`);
   } catch {
     // No fallback diagnostic sink is available here.
   }
 }
 
 export function formatKodaXDiagnostic(diagnostic: KodaXDiagnostic): string {
-  const detail = formatDiagnosticDetail(diagnostic.detail);
-  return `[${diagnostic.source}] ${diagnostic.level}: ${diagnostic.message}${detail ? ` ${detail}` : ''}`;
+  const safeDiagnostic = redactScopedProviderCredential(diagnostic);
+  const detail = formatDiagnosticDetail(safeDiagnostic.detail);
+  return `[${safeDiagnostic.source}] ${safeDiagnostic.level}: ${safeDiagnostic.message}${detail ? ` ${detail}` : ''}`;
 }
 
 function formatDiagnosticDetail(detail: unknown): string {

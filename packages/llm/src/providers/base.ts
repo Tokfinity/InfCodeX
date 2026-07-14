@@ -21,6 +21,7 @@ import {
 } from '../types.js';
 import { KodaXError, KodaXRateLimitError, KodaXProviderError, KodaXReasoningEffortRejectedError } from '../errors.js';
 import { classifyReasoningEffortRejection } from './reasoning-effort-rejection.js';
+import { resolveProviderCredential } from '../provider-credential-context.js';
 
 /**
  * Passive-learning guard threaded into `withRateLimit`: when the request fails
@@ -310,7 +311,10 @@ export abstract class KodaXBaseProvider {
   }
 
   isConfigured(): boolean {
-    return !!process.env[this.config.apiKeyEnv];
+    return resolveProviderCredential(
+      this.name,
+      process.env[this.config.apiKeyEnv],
+    ) !== undefined;
   }
 
   /**
@@ -530,7 +534,7 @@ export abstract class KodaXBaseProvider {
   }
 
   protected getApiKey(): string {
-    const key = process.env[this.config.apiKeyEnv];
+    const key = resolveProviderCredential(this.name, process.env[this.config.apiKeyEnv]);
     if (!key) throw new Error(`${this.config.apiKeyEnv} not set`);
     return key;
   }

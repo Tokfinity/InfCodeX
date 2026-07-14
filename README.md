@@ -359,12 +359,25 @@ experiments.
 One daemon owns many sessions. Different sessions may run concurrently; starts
 within the same session are queued so that only one run is active for that
 session. Multiple `kodax` processes can attach to the same daemon and open or
-observe different sessions.
+observe the same session. FEATURE_269 adds atomic snapshot-plus-stream joining,
+durable idempotent mutations, revision-safe settings and grants, transport-safe
+AskUser/permission responses, run-scoped credential and Host Tool bridges, and
+one daemon/inline Coder owner fence. In-flight external effects are never
+blindly replayed after a crash; clients receive explicit interrupted/unknown
+terminal facts and resync when `runtimeId` changes.
+
+Space and IDE hosts should require these capabilities through the Runtime SDK.
+Partner remains on its private inline Runtime and must use a distinct product
+data/session root. A missing daemon capability is an error, not permission to
+silently fall back to inline Coder.
 
 For the full host-integration contract, including inline/Worker/daemon selection,
 multi-client permission handling, config/catalog/MCP admin APIs, artifacts,
 context diagnostics, and daemon protocol schemas, see
 [docs/SDK_EMBEDDER_GUIDE.md §17](docs/SDK_EMBEDDER_GUIDE.md#17-runtime-sdk-worker-isolation-and-local-daemon-feature_253-feature_257).
+
+The Space/IDE shared-daemon contract is documented in
+[SDK Embedder Guide section 23](docs/SDK_EMBEDDER_GUIDE.md#23-shared-coder-daemon-for-space-and-ide-hosts-feature_269-v0769).
 
 ## Repo Intelligence
 

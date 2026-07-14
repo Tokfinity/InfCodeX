@@ -56,7 +56,7 @@ import {
   classifyRuntimeDaemonHealth,
   readRuntimeDaemonLockOwner,
   readRuntimeDaemonToken,
-  removeRuntimeDaemonOwnershipFiles,
+  removeRuntimeDaemonOwnershipIfUnchanged,
   resolveRuntimeDaemonPaths,
   type RuntimeDaemonHealth,
   type RuntimeDaemonState,
@@ -1016,7 +1016,7 @@ async function serveDaemonCommand(input: {
     const lease = await acquireRuntimeDaemonLease({
       profile: input.profile,
       homeDir: input.homeDir,
-      createRuntime: async () => {
+      createRuntime: async (runtimeId) => {
         ownedRuntime = await createKodaXRuntime({
           mode: 'embedded',
           profile: input.profile,
@@ -1025,6 +1025,8 @@ async function serveDaemonCommand(input: {
           defaultProvider: input.provider,
           defaultModel: input.model,
           permissionTimeoutMs: input.permissionTimeoutMs,
+          sharedDaemonHost: true,
+          daemonHostRuntimeId: runtimeId,
           externalAgents: a2aIntegration.runtimeOptions,
         });
         return ownedRuntime;
@@ -1183,7 +1185,17 @@ function forceStopDaemonOwnership(
         state,
       };
     }
-    removeRuntimeDaemonOwnershipFiles(paths);
+    if (!removeRuntimeDaemonOwnershipIfUnchanged(paths, {
+      ...(lockOwner !== undefined ? { lockOwner } : {}),
+    })) {
+      return {
+        stopped: false,
+        forced: true,
+        reason: 'unverified_owner',
+        health,
+        state,
+      };
+    }
     return {
       stopped: true,
       forced: true,
@@ -1192,7 +1204,24 @@ function forceStopDaemonOwnership(
     };
   }
   if (health === 'stale') {
-    removeRuntimeDaemonOwnershipFiles(paths);
+    const lockOwner = readRuntimeDaemonLockOwner(paths.lockFile);
+    if (
+      state === null
+      || (lockOwner !== undefined
+        && (lockOwner.runtimeId !== state.runtimeId || lockOwner.pid !== state.pid))
+      || !removeRuntimeDaemonOwnershipIfUnchanged(paths, {
+        state,
+        ...(lockOwner !== undefined ? { lockOwner } : {}),
+      })
+    ) {
+      return {
+        stopped: false,
+        forced: true,
+        reason: 'unverified_owner',
+        health,
+        state,
+      };
+    }
     return {
       stopped: true,
       forced: true,

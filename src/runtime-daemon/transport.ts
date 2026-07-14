@@ -14,6 +14,7 @@ import {
   isRuntimeDaemonRequest,
   isRuntimeDaemonNotification,
   isRuntimeDaemonSuccessResponse,
+  isRuntimeDaemonMutationMethod,
   parseRuntimeDaemonFrame,
   type RuntimeDaemonFrame,
   type RuntimeDaemonNotification,
@@ -162,6 +163,8 @@ export async function createRuntimeDaemonSocketClientTransport(
   await waitForConnect(socket, options.connectTimeoutMs);
 
   let closed = false;
+  let journalEpoch: string | undefined;
+  const clientInstanceId = `transport_${randomUUID().replace(/-/g, '')}`;
   const listeners = new Set<(notification: RuntimeDaemonNotification) => void>();
   const pending = new Map<string, {
     readonly resolve: (value: unknown) => void;
@@ -218,12 +221,23 @@ export async function createRuntimeDaemonSocketClientTransport(
   });
 
   return {
-    request(method, params) {
+    request(method, params, operation) {
       if (closed) {
         return Promise.reject(new Error('Runtime daemon transport is closed.'));
       }
       const id = `req_${randomUUID().replace(/-/g, '').slice(0, 12)}`;
-      const frame = createRuntimeDaemonRequest(id, method, params);
+      const requestParams = method === 'initialize' || method === 'runtime.initialize'
+        ? withDurableOperationCapability(params, clientInstanceId)
+        : params;
+      const requestOperation = operation ?? (
+        journalEpoch !== undefined && isRuntimeDaemonMutationMethod(method)
+          ? {
+              operationId: `op_${randomUUID().replace(/-/g, '')}`,
+              journalEpoch,
+            }
+          : undefined
+      );
+      const frame = createRuntimeDaemonRequest(id, method, requestParams, requestOperation);
       let encoded: string;
       try {
         encoded = JSON.stringify(frame);
@@ -237,7 +251,15 @@ export async function createRuntimeDaemonSocketClientTransport(
         pending.set(id, { resolve, reject });
       });
       socket.write(`${encoded}\n`);
-      return result;
+      return result.then((value) => {
+        if (method === 'initialize' || method === 'runtime.initialize') {
+          const initialized = asRecord(value);
+          if (typeof initialized?.journalEpoch === 'string') {
+            journalEpoch = initialized.journalEpoch;
+          }
+        }
+        return value;
+      });
     },
     subscribe(listener) {
       listeners.add(listener);
@@ -257,6 +279,28 @@ export async function createRuntimeDaemonSocketClientTransport(
       rejectPending(pending, new Error('Runtime daemon transport closed.'));
     },
   };
+}
+
+function withDurableOperationCapability(value: unknown, instanceId: string): Record<string, unknown> {
+  const params = asRecord(value) ?? {};
+  const capabilities = asRecord(params.capabilities) ?? {};
+  const clientInfo = asRecord(params.clientInfo) ?? { name: 'kodax-transport' };
+  return {
+    ...params,
+    capabilities: { ...capabilities, operationDeduplication: true },
+    clientInfo: {
+      ...clientInfo,
+      instanceId: typeof clientInfo.instanceId === 'string'
+        ? clientInfo.instanceId
+        : instanceId,
+    },
+  };
+}
+
+function asRecord(value: unknown): Record<string, unknown> | undefined {
+  return value && typeof value === 'object' && !Array.isArray(value)
+    ? value as Record<string, unknown>
+    : undefined;
 }
 
 export async function createRuntimeDaemonSocketServer(
@@ -352,6 +396,14 @@ export async function createRuntimeDaemonSocketServer(
   });
 
   await waitForListen(server, options.endpoint.path);
+  if (options.endpoint.kind === 'unix') {
+    try {
+      await fs.chmod(options.endpoint.path, 0o600);
+    } catch (error: unknown) {
+      await closeNetServer(server);
+      throw error;
+    }
+  }
 
   return {
     endpoint: options.endpoint,

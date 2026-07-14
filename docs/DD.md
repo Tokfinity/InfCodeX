@@ -100,6 +100,51 @@ being established. Non-terminal persisted runs become `interrupted` after an
 owner restart. Reconnection is explicit; automatic replay of an unknown
 in-flight operation is forbidden.
 
+#### 3.1.1 Shared Coder daemon consistency (FEATURE_269)
+
+`sessions.observe(sessionId, listener)` installs a server subscription first,
+takes a stable snapshot, and returns its `runtimeId` plus cursor. The daemon
+client buffers at most 256 handshake notifications; overflow returns
+`resync_required`. Consumers replace their derived projection on reconnect or
+Runtime change instead of merging two authority epochs.
+
+Daemon mutations require the authenticated client's operation capability and
+an `{ journalEpoch, operationId }` envelope. The append/fsync control journal
+records accepted/dispatched/applied/rejected facts and binds reuse to principal,
+method, resource, and canonical request digest. Accepted work becomes
+`interrupted` after restart; dispatched work becomes `unknown`; neither is
+automatically executed again. Corrupt control history quarantines all
+mutations while read/status operations remain available. Run status and
+versioned settings/grants use atomic temp-file + fsync + rename writes.
+
+The packaged daemon has one random token per `homeDir + profile`, protected by
+the local OS-user filesystem boundary. Its host grants the advertised scope
+set to token-authenticated connections. `clientInfo.instanceId` is stable
+attribution used by operation receipts; it is not a per-application secret.
+Renderer/model surfaces must therefore remain behind a trusted host such as
+Electron Main and never receive the profile token.
+
+Same-session run creation allocates a monotonic `sessionOrder`. `after_turn`
+input is a real queued continuation run and accepts the same operation
+contract. `interrupt` is not advertised in v0.7.69 and returns an explicit
+unsupported result. AskUser and permission registries expose pending lists and
+first-winner responses over transport; persistent permission grants have one
+daemon-owned revisioned store.
+
+The credential reverse bridge stores only lease metadata. It requests the
+secret from the registering connection for a bound provider/session/run and
+places it in `AsyncLocalStorage` only for provider execution. An active scoped
+credential never falls back to daemon environment on provider mismatch. The
+Host Tool bridge creates an extension runtime only for the bound run, bounds
+result size/time, memoizes invocation handling client-side, and classifies a
+lost dispatched result as `host_outcome_unknown` without replay.
+
+`homeDir + profile` has one Coder owner-policy file and one cross-process fence
+shared by daemon and inline ownership. CAS policy changes make rollback to
+inline sticky. Partner compatibility depends on the embedder retaining its
+existing distinct inline data/sessions root; Partner does not acquire or write
+the Coder owner fence.
+
 `runs.start({ options })` is transport-safe data in Worker/daemon forms. The
 client rejects functions, symbols, bigint, cycles, non-finite numbers, and
 class instances. CLI integration additionally rejects known process-local host

@@ -88,6 +88,30 @@ ends the shared owner. Restart marks persisted non-terminal runs interrupted;
 clients reconnect explicitly and KodaX does not pretend to resume an unknown
 in-flight provider/tool operation.
 
+Shared Coder daemon control is fact-based rather than connection-owned. One
+atomic `sessions.observe` call returns the authoritative transcript/settings/
+run/interaction projection and installs the post-snapshot event stream without
+a gap. Mutations carry daemon-epoch operation identities, same-session runs
+receive stable order, and settings/persistent grants use revision CAS. The
+durable control journal never replays an operation whose external effect may
+already have started. Runtime restart changes `runtimeId`; queued work becomes
+interrupted with no effect, while active external work is explicitly unknown.
+The packaged transport authenticates a single local OS-user/profile trust
+domain with a random profile token and user-only pipe/socket access. Host-
+granted scopes gate RPC families; stable client instance IDs provide
+attribution and retry binding, not independent authentication. Per-application
+credentials between mutually distrusting same-user processes are not part of
+v0.7.69.
+
+Space-only integration stays behind two narrow reverse bridges. A keychain
+broker supplies a provider/run-scoped credential directly into an in-memory
+provider context; a Host Tool lease injects only the explicitly bound run's
+capabilities. Both registrations are authenticated-client/connection owned,
+never ambient profile capability. Dispatched Host Tool calls are never blindly
+replayed. Daemon and inline Coder share one owner policy fence, including a
+sticky inline rollback mode. Partner remains a private inline Runtime with a
+distinct product data namespace and does not participate in the Coder fence.
+
 Worker and daemon calls cross a typed DTO boundary. Process-local callbacks,
 class instances, `AbortSignal`, cyclic values, and extension runtime objects do
 not silently cross or execute in the client. Runtime methods bridge abort,

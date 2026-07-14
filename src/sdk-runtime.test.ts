@@ -1,4 +1,5 @@
 import { randomUUID } from 'node:crypto';
+import { readFileSync } from 'node:fs';
 import fs from 'node:fs/promises';
 import os from 'node:os';
 import path from 'node:path';
@@ -15,12 +16,21 @@ import type {
   KodaXResult,
   RunningSession,
 } from '@kodax-ai/coding';
-import type { RuntimeDaemonClientTransport } from './sdk-runtime.js';
+import type {
+  RuntimeDaemonClientTransport,
+  RuntimeEvent,
+  RuntimeStartRunInput,
+} from './sdk-runtime.js';
 import type { RuntimeDaemonEndpoint } from './runtime-daemon/transport.js';
 
 const codingMock = vi.hoisted(() => ({
   runManagedTask: vi.fn(),
   startKodaX: vi.fn(),
+}));
+
+const replMock = vi.hoisted(() => ({
+  beforeLoadSession: null as null | ((call: number) => Promise<void>),
+  loadSessionCalls: 0,
 }));
 
 vi.mock('@kodax-ai/coding', async (importOriginal) => {
@@ -32,6 +42,25 @@ vi.mock('@kodax-ai/coding', async (importOriginal) => {
   };
 });
 
+vi.mock('@kodax-ai/repl', async (importOriginal) => {
+  const actual = await importOriginal<typeof import('@kodax-ai/repl')>();
+  return {
+    ...actual,
+    createSessionManager: (...args: Parameters<typeof actual.createSessionManager>) => {
+      const manager = actual.createSessionManager(...args);
+      return {
+        ...manager,
+        async loadSession(sessionId: string) {
+          const call = replMock.loadSessionCalls + 1;
+          replMock.loadSessionCalls = call;
+          await replMock.beforeLoadSession?.(call);
+          return manager.loadSession(sessionId);
+        },
+      };
+    },
+  };
+});
+
 describe('createKodaXRuntime', () => {
   let tempRoot: string;
 
@@ -39,6 +68,8 @@ describe('createKodaXRuntime', () => {
     tempRoot = await fs.mkdtemp(path.join(os.tmpdir(), 'kodax-runtime-'));
     codingMock.runManagedTask.mockReset();
     codingMock.startKodaX.mockReset();
+    replMock.beforeLoadSession = null;
+    replMock.loadSessionCalls = 0;
   });
 
   afterEach(async () => {
@@ -878,11 +909,21 @@ describe('createKodaXRuntime', () => {
       sessionId: 'session-crashed',
       phase: 'interrupted',
       error: 'daemon_crashed',
+      terminal: {
+        kind: 'interrupted',
+        code: 'daemon_crashed',
+        effectOutcome: 'unknown',
+      },
     });
     await expect(runtime.runs.get('run-queued')).resolves.toMatchObject({
       runId: 'run-queued',
       phase: 'interrupted',
-      error: 'daemon_restarted',
+      error: 'runtime_restarted',
+      terminal: {
+        kind: 'interrupted',
+        code: 'runtime_restarted',
+        effectOutcome: 'none',
+      },
     });
     await expect(runtime.runs.await('run-crashed')).resolves.toMatchObject({
       runId: 'run-crashed',
@@ -895,6 +936,55 @@ describe('createKodaXRuntime', () => {
       type: 'run.interrupted',
     })).resolves.toHaveLength(1);
 
+    await runtime.close();
+  });
+
+  it('restores a durable terminal event instead of emitting a conflicting restart terminal', async () => {
+    const { createKodaXRuntime } = await import('@kodax-ai/kodax/runtime');
+    const runId = 'run-terminal-event-won';
+    const sessionId = 'session-terminal-event-won';
+    const runDir = path.join(tempRoot, '.kodax', 'runtime', 'runs', runId);
+    const completed = {
+      runId,
+      sessionId,
+      phase: 'completed',
+      startedAt: '2026-07-09T00:00:00.000Z',
+      endedAt: '2026-07-09T00:01:00.000Z',
+      provider: 'mock-provider',
+      terminal: {
+        revision: 1,
+        kind: 'completed',
+        code: 'completed',
+        effectOutcome: 'known',
+      },
+    };
+    await fs.mkdir(runDir, { recursive: true });
+    await fs.writeFile(path.join(runDir, 'status.json'), JSON.stringify({
+      runId,
+      sessionId,
+      phase: 'running',
+      startedAt: completed.startedAt,
+      provider: completed.provider,
+    }), 'utf-8');
+    await fs.writeFile(path.join(runDir, 'events.jsonl'), `${JSON.stringify({
+      id: 'evt-terminal-event-won',
+      seq: 1,
+      time: completed.endedAt,
+      sessionId,
+      runId,
+      type: 'run.completed',
+      payload: completed,
+    })}\n`, 'utf-8');
+
+    const runtime = await createKodaXRuntime({ homeDir: tempRoot });
+
+    await expect(runtime.runs.get(runId)).resolves.toMatchObject({
+      phase: 'completed',
+      terminal: { kind: 'completed', code: 'completed' },
+    });
+    await expect(runtime.events.replay({ runId })).resolves.toEqual([
+      expect.objectContaining({ type: 'run.completed' }),
+    ]);
     await runtime.close();
   });
 
@@ -1476,6 +1566,49 @@ describe('createKodaXRuntime', () => {
     await runtime.close();
   });
 
+  it('keeps active live projection complete after durable event history is trimmed', async () => {
+    const { createKodaXRuntime } = await import('@kodax-ai/kodax/runtime');
+    const runtime = await createKodaXRuntime({
+      homeDir: tempRoot,
+      sessionsDir: path.join(tempRoot, 'sessions'),
+      defaultProvider: 'mock-provider',
+    });
+    const session = await runtime.sessions.create({ title: 'Live Projection Retention' });
+    const chunk = 'x'.repeat(2 * 1024 * 1024);
+    codingMock.startKodaX.mockImplementation((options: KodaXOptions): RunningSession => {
+      const sessionId = options.session?.id ?? session.id;
+      options.events?.onToolUseStart?.(
+        { id: 'long-tool', name: 'bash', input: { command: 'long-running' } },
+        {
+          sessionId,
+          seq: 1,
+          turnId: 'turn-live',
+          toolId: 'long-tool',
+          timestamp: '2026-07-09T00:00:00.000Z',
+        },
+      );
+      for (let index = 0; index < 9; index += 1) {
+        options.events?.onTextDelta?.(chunk, {
+          sessionId,
+          seq: index + 2,
+          turnId: 'turn-live',
+          timestamp: '2026-07-09T00:00:00.000Z',
+        });
+      }
+      return fakeRunningSession(options, new Promise<KodaXResult>(() => undefined));
+    });
+
+    const run = await runtime.runs.start({ sessionId: session.id, prompt: 'large active run' });
+    const observation = await runtime.sessions.observe(session.id, () => undefined);
+
+    expect(observation.snapshot.live.activeTools).toEqual([
+      expect.objectContaining({ runId: run.runId }),
+    ]);
+    expect(observation.snapshot.live.assistantTextByRun[run.runId]).toHaveLength(chunk.length * 9);
+    observation.close();
+    await runtime.close();
+  });
+
   it('flushes buffered streaming events before replay without dropping deltas', async () => {
     const { createKodaXRuntime } = await import('@kodax-ai/kodax/runtime');
     const runtime = await createKodaXRuntime({
@@ -1651,10 +1784,24 @@ describe('createKodaXRuntime', () => {
     const session = await runtime.sessions.create({ title: 'Queue Test' });
     const starts: string[] = [];
     const queuedEvents: string[] = [];
+    const persistedAtPublication: Array<{ readonly event: string; readonly phase: string }> = [];
     let finishFirst: ((value: KodaXResult) => void) | undefined;
     let finishSecond: ((value: KodaXResult) => void) | undefined;
 
     runtime.events.subscribe({ type: 'run.queued' }, (event) => queuedEvents.push(event.runId));
+    runtime.events.subscribe({
+      type: ['run.started', 'run.queued', 'run.completed'],
+    }, (event) => {
+      const persisted: { readonly phase: string } = JSON.parse(readFileSync(path.join(
+        tempRoot,
+        '.kodax',
+        'runtime',
+        'runs',
+        encodeURIComponent(event.runId),
+        'status.json',
+      ), 'utf-8')) as { readonly phase: string };
+      persistedAtPublication.push({ event: event.type, phase: persisted.phase });
+    });
     codingMock.startKodaX.mockImplementation((options: KodaXOptions, prompt: string): RunningSession => {
       const sessionId = options.session?.id ?? session.id;
       starts.push(prompt);
@@ -1695,8 +1842,179 @@ describe('createKodaXRuntime', () => {
       sessionId: session.id,
     });
     await expect(second.result).resolves.toMatchObject({ phase: 'completed' });
+    expect(persistedAtPublication).toEqual([
+      { event: 'run.started', phase: 'running' },
+      { event: 'run.queued', phase: 'queued' },
+      { event: 'run.completed', phase: 'completed' },
+      { event: 'run.started', phase: 'running' },
+      { event: 'run.completed', phase: 'completed' },
+    ]);
 
     await runtime.close();
+  });
+
+  it('preserves same-session start arrival order when session loading completes out of order', async () => {
+    const { createKodaXRuntime } = await import('@kodax-ai/kodax/runtime');
+    const runtime = await createKodaXRuntime({
+      homeDir: tempRoot,
+      sessionsDir: path.join(tempRoot, 'sessions'),
+      defaultProvider: 'mock-provider',
+    });
+    const session = await runtime.sessions.create({ title: 'Concurrent Queue Test' });
+    let releaseFirstLoad: (() => void) | undefined;
+    const firstLoadBlocked = new Promise<void>((resolve) => {
+      releaseFirstLoad = resolve;
+    });
+    replMock.beforeLoadSession = async (call) => {
+      if (call === 1) await firstLoadBlocked;
+    };
+    codingMock.startKodaX.mockImplementation((options: KodaXOptions) => fakeRunningSession(
+      options,
+      new Promise<KodaXResult>(() => undefined),
+    ));
+
+    const firstStart = runtime.runs.start({ sessionId: session.id, prompt: 'first' });
+    const secondStart = runtime.runs.start({ sessionId: session.id, prompt: 'second' });
+    await vi.waitFor(() => expect(replMock.loadSessionCalls).toBe(1));
+    releaseFirstLoad?.();
+    const [first, second] = await Promise.all([firstStart, secondStart]);
+
+    await expect(runtime.runs.get(first.runId)).resolves.toMatchObject({
+      phase: 'running',
+      sessionOrder: 1,
+    });
+    await expect(runtime.runs.get(second.runId)).resolves.toMatchObject({
+      phase: 'queued',
+      sessionOrder: 2,
+    });
+    await runtime.close();
+  });
+
+  it('creates ordered after-turn continuation runs and rejects stale or interrupt delivery', async () => {
+    const { createKodaXRuntime } = await import('@kodax-ai/kodax/runtime');
+    const runtime = await createKodaXRuntime({
+      homeDir: tempRoot,
+      sessionsDir: path.join(tempRoot, 'sessions'),
+      defaultProvider: 'mock-provider',
+    });
+    const session = await runtime.sessions.create({ title: 'Continuation Test' });
+    const starts: string[] = [];
+    const finishers: Array<(value: KodaXResult) => void> = [];
+    codingMock.startKodaX.mockImplementation((options: KodaXOptions, prompt: string): RunningSession => {
+      starts.push(prompt);
+      return fakeRunningSession(options, new Promise<KodaXResult>((resolve) => {
+        finishers.push(resolve);
+      }));
+    });
+
+    const first = await runtime.runs.start({ sessionId: session.id, prompt: 'first' });
+    const continuation = await runtime.runs.submitInput({
+      sessionId: session.id,
+      afterRunId: first.runId,
+      delivery: 'after_turn',
+      input: { type: 'text', text: 'second' },
+    });
+    const unsupported = await runtime.runs.submitInput({
+      sessionId: session.id,
+      afterRunId: first.runId,
+      delivery: 'interrupt',
+      input: { type: 'text', text: 'urgent' },
+    });
+
+    expect(continuation).toMatchObject({
+      accepted: true,
+      delivery: 'after_turn',
+      afterRunId: first.runId,
+      sessionOrder: 2,
+    });
+    expect(unsupported).toEqual({
+      accepted: false,
+      delivery: 'interrupt',
+      sessionId: session.id,
+      afterRunId: first.runId,
+      reason: 'unsupported_capability',
+    });
+    expect(starts).toEqual(['first']);
+    if (!continuation.accepted) throw new Error('Expected accepted continuation');
+    expect((await runtime.runs.get(continuation.runId)).phase).toBe('queued');
+
+    finishers[0]?.({ success: true, lastText: 'done', messages: [], sessionId: session.id });
+    await first.result;
+    await flushMicrotasks();
+    expect(starts).toEqual(['first', 'second']);
+    finishers[1]?.({ success: true, lastText: 'continued', messages: [], sessionId: session.id });
+    await runtime.runs.await(continuation.runId);
+
+    await expect(runtime.runs.submitInput({
+      sessionId: session.id,
+      afterRunId: first.runId,
+      delivery: 'after_turn',
+      input: { type: 'text', text: 'too late' },
+    })).resolves.toMatchObject({ accepted: false, reason: 'stale_run' });
+    await runtime.close();
+  });
+
+  it('fails closed when a run-scoped credential is bound to another provider', async () => {
+    const { createKodaXRuntime } = await import('@kodax-ai/kodax/runtime');
+    const runtime = await createKodaXRuntime({
+      homeDir: tempRoot,
+      sessionsDir: path.join(tempRoot, 'sessions'),
+      defaultProvider: 'mock-provider',
+    });
+    const session = await runtime.sessions.create({ title: 'Credential Scope' });
+    const trustedInput = {
+      sessionId: session.id,
+      prompt: 'must not run',
+      providerCredential: 'leased-secret',
+      providerCredentialProvider: 'another-provider',
+    } as RuntimeStartRunInput & {
+      readonly providerCredential: string;
+      readonly providerCredentialProvider: string;
+    };
+
+    await expect(runtime.runs.start(trustedInput)).rejects.toMatchObject({
+      code: 'credential_unavailable',
+    });
+    expect(codingMock.startKodaX).not.toHaveBeenCalled();
+    await runtime.close();
+  });
+
+  it('never persists a provider error that may echo a run-scoped credential', async () => {
+    const { createKodaXRuntime } = await import('@kodax-ai/kodax/runtime');
+    const secret = 'F269_PROVIDER_ERROR_SECRET';
+    const runtime = await createKodaXRuntime({
+      homeDir: tempRoot,
+      sessionsDir: path.join(tempRoot, 'sessions'),
+      defaultProvider: 'mock-provider',
+    });
+    const session = await runtime.sessions.create({ title: 'Credential Error Redaction' });
+    codingMock.startKodaX.mockImplementation((options: KodaXOptions) => {
+      options.events?.onRetry?.(`provider echoed ${secret}`, 1, 1);
+      options.events?.onError?.(new Error(`provider emitted ${secret}`));
+      return fakeRunningSession(
+        options,
+        Promise.reject(new Error(`provider rejected ${secret}`)),
+      );
+    });
+    const trustedInput = {
+      sessionId: session.id,
+      prompt: 'fail safely',
+      providerCredential: secret,
+      providerCredentialProvider: 'mock-provider',
+    } as RuntimeStartRunInput & {
+      readonly providerCredential: string;
+      readonly providerCredentialProvider: string;
+    };
+
+    const handle = await runtime.runs.start(trustedInput);
+    await expect(handle.result).resolves.toMatchObject({
+      phase: 'failed',
+      error: { message: 'Provider run failed while using a run-scoped credential.' },
+    });
+    expect(JSON.stringify(await runtime.runs.get(handle.runId))).not.toContain(secret);
+    expect(JSON.stringify(await runtime.events.replay({ runId: handle.runId }))).not.toContain(secret);
+    await runtime.close();
+    expect(await readDirectoryText(tempRoot)).not.toContain(secret);
   });
 
   it('keeps queued runs on the session settings snapshot captured at queue time', async () => {
@@ -2386,6 +2704,49 @@ describe('createKodaXRuntime', () => {
     await runtime.close();
   });
 
+  it('brokers daemon AskUser and accepts exactly one concurrent answer', async () => {
+    const { createKodaXRuntime } = await import('@kodax-ai/kodax/runtime');
+    const runtime = await createKodaXRuntime({
+      sessionsDir: tempRoot,
+      defaultProvider: 'mock-provider',
+      sharedDaemonHost: true,
+    });
+    const session = await runtime.sessions.create({ title: 'Shared AskUser' });
+    let answerDone: Promise<unknown> | undefined;
+
+    codingMock.startKodaX.mockImplementation((options: KodaXOptions): RunningSession => {
+      queueMicrotask(() => {
+        answerDone = options.events?.askUser?.({
+          question: 'Continue?',
+          options: [
+            { label: 'Yes', value: 'yes' },
+            { label: 'No', value: 'no' },
+          ],
+        });
+      });
+      return fakeRunningSession(options, new Promise<KodaXResult>(() => undefined));
+    });
+
+    const handle = await runtime.runs.start({
+      sessionId: session.id,
+      prompt: 'ask the user',
+    });
+    await flushMicrotasks();
+    const [request] = await runtime.userInputs.listPending({ runId: handle.runId });
+    if (!request) throw new Error('expected pending AskUser request');
+
+    const results = await Promise.all([
+      runtime.userInputs.respond(request.id, 'yes', { expectedRevision: request.revision }),
+      runtime.userInputs.respond(request.id, 'no', { expectedRevision: request.revision }),
+    ]);
+
+    expect(results.filter((result) => result.accepted)).toHaveLength(1);
+    await expect(answerDone).resolves.toBe('yes');
+    await expect(runtime.userInputs.listPending({ runId: handle.runId })).resolves.toEqual([]);
+    await runtime.runs.abort(handle.runId);
+    await runtime.close();
+  });
+
   it('keeps pending permission requests when a response is bound to another run', async () => {
     const { createKodaXRuntime } = await import('@kodax-ai/kodax/runtime');
     const runtime = await createKodaXRuntime({
@@ -2524,6 +2885,40 @@ describe('createKodaXRuntime', () => {
     expect(firstReplay.every((event) => event.sessionId === first.id)).toBe(true);
     expect(secondReplay.every((event) => event.sessionId === second.id)).toBe(true);
 
+    await runtime.close();
+  });
+
+  it('persists and publishes run setting changes to other observers', async () => {
+    const { createKodaXRuntime } = await import('@kodax-ai/kodax/runtime');
+    const runtime = await createKodaXRuntime({
+      sessionsDir: tempRoot,
+      defaultProvider: 'mock-provider',
+    });
+    const session = await runtime.sessions.create({ title: 'Run settings' });
+    codingMock.startKodaX.mockImplementation((options: KodaXOptions): RunningSession => (
+      fakeRunningSession(options, new Promise<KodaXResult>(() => undefined))
+    ));
+    const updates: RuntimeEvent[] = [];
+    runtime.events.subscribe({ sessionId: session.id, type: 'run.updated' }, (event) => {
+      updates.push(event);
+    });
+    const handle = await runtime.runs.start({ sessionId: session.id, prompt: 'configure me' });
+
+    await runtime.runs.setModel(handle.runId, 'model-next');
+    await runtime.runs.setProvider(handle.runId, 'provider-next');
+    await runtime.runs.setReasoning(handle.runId, 'on');
+
+    await expect(runtime.runs.get(handle.runId)).resolves.toMatchObject({
+      model: 'model-next',
+      provider: 'provider-next',
+      reasoning: 'on',
+    });
+    expect(updates).toHaveLength(3);
+    expect(updates.at(-1)?.payload).toMatchObject({
+      model: 'model-next',
+      provider: 'provider-next',
+      reasoning: 'on',
+    });
     await runtime.close();
   });
 
@@ -2676,6 +3071,22 @@ function isPermissionRequestPayload(value: unknown): value is { readonly id: str
 
 async function flushMicrotasks(): Promise<void> {
   await new Promise<void>((resolve) => setTimeout(resolve, 0));
+}
+
+async function readDirectoryText(root: string): Promise<string> {
+  const chunks: string[] = [];
+  const visit = async (directory: string): Promise<void> => {
+    for (const entry of await fs.readdir(directory, { withFileTypes: true })) {
+      const target = path.join(directory, entry.name);
+      if (entry.isDirectory()) {
+        await visit(target);
+      } else if (entry.isFile()) {
+        chunks.push((await fs.readFile(target)).toString('utf8'));
+      }
+    }
+  };
+  await visit(root);
+  return chunks.join('\n');
 }
 
 async function waitForCondition(predicate: () => boolean, timeoutMs = 2_000): Promise<void> {

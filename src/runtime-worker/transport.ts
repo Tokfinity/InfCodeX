@@ -79,13 +79,13 @@ export function createRuntimeWorkerTransport(
   worker.on('exit', (code) => markClosed(new Error(`Runtime Worker exited with code ${code}.`)));
 
   const transport: RuntimeDaemonClientTransport = {
-    request(method, params) {
+    request(method, params, operation) {
       if (closed) return Promise.reject(new Error('Runtime Worker transport is closed.'));
       const id = `worker_${++requestSequence}`;
       return new Promise<unknown>((resolve, reject) => {
         pending.set(id, { resolve, reject });
         try {
-          worker.postMessage(createRuntimeDaemonRequest(id, method, params));
+          worker.postMessage(createRuntimeDaemonRequest(id, method, params, operation));
         } catch (error: unknown) {
           pending.delete(id);
           reject(error instanceof Error ? error : new Error(String(error)));

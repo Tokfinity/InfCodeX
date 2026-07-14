@@ -318,6 +318,7 @@ describe('runtime daemon host', () => {
     const runtime: KodaXRuntime & { closed: boolean } = {
       ...baseRuntime,
       permissions: {
+        ...baseRuntime.permissions,
         async request() {
           return { type: 'allow_once' };
         },
@@ -467,14 +468,23 @@ function makeRuntime(): KodaXRuntime & { closed: boolean } {
       async transcript() {
         return null;
       },
+      async observe(sessionId) {
+        return createTestObservation(sessionId);
+      },
       async fork() {
         return { id: 'fork-1', title: 'Forked Session' };
       },
       async getSettings() {
         return {};
       },
+      async getSettingsVersioned() {
+        return { revision: 0, value: {} };
+      },
       async updateSettings() {
         return {};
+      },
+      async updateSettingsVersioned(_sessionId, _patch, options) {
+        return { revision: options.expectedRevision + 1, value: {} };
       },
       async appendNotice() {
         return null;
@@ -524,6 +534,15 @@ function makeRuntime(): KodaXRuntime & { closed: boolean } {
           result: Promise.resolve(result),
         };
       },
+      async submitInput(input) {
+        return {
+          accepted: false,
+          delivery: input.delivery,
+          sessionId: input.sessionId,
+          afterRunId: input.afterRunId,
+          reason: 'stale_run',
+        };
+      },
       async await(runId) {
         const result = runs.get(runId);
         if (result) return result;
@@ -571,6 +590,16 @@ function makeRuntime(): KodaXRuntime & { closed: boolean } {
       },
       async respond() {
         return true;
+      },
+      async listGrants() { return { revision: 0, value: [] }; },
+      async revokeGrant() { return false; },
+    },
+    userInputs: createTestUserInputs(),
+    credentials: createTestCredentialService(),
+    hostTools: createTestHostToolService(),
+    operations: {
+      async get() {
+        throw new Error('operation not found');
       },
     },
     workflows: {
@@ -729,6 +758,53 @@ function makeRuntime(): KodaXRuntime & { closed: boolean } {
     },
   };
   return runtime;
+}
+
+function createTestUserInputs(): KodaXRuntime['userInputs'] {
+  return {
+    async listPending() { return []; },
+    async respond(requestId) {
+      return { requestId, accepted: false, status: 'already_resolved' };
+    },
+    async dismiss(requestId) {
+      return { requestId, accepted: false, status: 'already_resolved' };
+    },
+  };
+}
+
+function createTestCredentialService(): KodaXRuntime['credentials'] {
+  return {
+    async register(input) { return { id: 'credential-test', ...input }; },
+    async revoke() { return false; },
+  };
+}
+
+function createTestHostToolService(): KodaXRuntime['hostTools'] {
+  return {
+    async register(tools) { return { id: 'host-tools-test', tools }; },
+    async revoke() { return false; },
+  };
+}
+
+function createTestObservation(sessionId: string) {
+  return {
+    snapshot: {
+      runtimeId: 'runtime-test',
+      cursor: 0,
+      session: { id: sessionId, title: 'Test Session' },
+      transcript: null,
+      settings: { revision: 0, value: {} },
+      runs: [],
+      pendingPermissions: [],
+      live: {
+        assistantTextByRun: {},
+        thinkingTextByRun: {},
+        activeTools: [],
+        pendingUserInputs: [],
+      },
+    },
+    close() {},
+  };
 }
 
 function extractRuntimeEventNotification(params: unknown): RuntimeEvent | undefined {

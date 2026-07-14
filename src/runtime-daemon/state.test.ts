@@ -8,12 +8,16 @@ import {
   classifyRuntimeDaemonHealth,
   createRuntimeDaemonToken,
   normalizeRuntimeDaemonProfile,
+  readRuntimeOwnerPolicy,
   readRuntimeDaemonLockOwner,
   readRuntimeDaemonState,
   readRuntimeDaemonToken,
   releaseRuntimeDaemonLock,
+  releaseRuntimeDaemonOwnership,
+  removeRuntimeDaemonOwnershipIfUnchanged,
   resolveRuntimeDaemonPaths,
   tryAcquireRuntimeDaemonLock,
+  updateRuntimeOwnerPolicy,
   writeRuntimeDaemonState,
   writeRuntimeDaemonToken,
   type RuntimeDaemonState,
@@ -54,6 +58,7 @@ describe('runtime daemon state paths', () => {
     expect(paths.stateFile.replaceAll('\\', '/')).toContain('/.kodax/runtime/daemon/space/daemon.json');
     expect(paths.lockFile.endsWith('daemon.lock')).toBe(true);
     expect(paths.tokenFile.endsWith('daemon.token')).toBe(true);
+    expect(paths.ownerPolicyLockFile.endsWith('owner-policy.lock')).toBe(true);
   });
 
   it('rejects path-like profile names', () => {
@@ -144,12 +149,96 @@ describe('runtime daemon lock ownership', () => {
     expect(owner ? releaseRuntimeDaemonLock(owner) : false).toBe(true);
   });
 
+  it('does not release an owner lock during an owner-policy transaction', () => {
+    const paths = resolveRuntimeDaemonPaths(tempHome(), 'default');
+    const lock = tryAcquireRuntimeDaemonLock(paths, {
+      runtimeId: 'runtime-1',
+      pid: 111,
+      createdAt: '2026-07-09T00:00:00.000Z',
+    });
+    expect(lock).toBeDefined();
+    fs.writeFileSync(paths.ownerPolicyLockFile, JSON.stringify({
+      runtimeId: 'owner-transition-live',
+      pid: process.pid,
+      createdAt: '2026-07-09T00:00:01.000Z',
+      nonce: 'live',
+    }), 'utf8');
+
+    expect(lock ? releaseRuntimeDaemonLock(lock) : false).toBe(false);
+    expect(fs.existsSync(paths.lockFile)).toBe(true);
+  });
+
+  it('removes daemon state and token before atomically releasing ownership', () => {
+    const paths = resolveRuntimeDaemonPaths(tempHome(), 'default');
+    const daemonState = state();
+    const lock = tryAcquireRuntimeDaemonLock(paths, {
+      runtimeId: daemonState.runtimeId,
+      pid: daemonState.pid,
+      createdAt: daemonState.startedAt,
+    });
+    expect(lock).toBeDefined();
+    writeRuntimeDaemonState(paths, daemonState);
+    writeRuntimeDaemonToken(paths, 'token-to-remove');
+
+    expect(lock ? releaseRuntimeDaemonOwnership(paths, lock) : false).toBe(true);
+    expect(readRuntimeDaemonState(paths)).toBeUndefined();
+    expect(readRuntimeDaemonToken(paths)).toBeUndefined();
+    expect(readRuntimeDaemonLockOwner(paths.lockFile)).toBeUndefined();
+  });
+
   it('treats malformed lock ownership as unreadable instead of throwing', () => {
     const paths = resolveRuntimeDaemonPaths(tempHome(), 'default');
     fs.mkdirSync(paths.rootDir, { recursive: true });
     fs.writeFileSync(paths.lockFile, '{not-json', 'utf8');
 
     expect(readRuntimeDaemonLockOwner(paths.lockFile)).toBeUndefined();
+  });
+});
+
+describe('runtime Coder owner policy', () => {
+  it('uses revision CAS and leaves no transition lock after a successful update', () => {
+    const paths = resolveRuntimeDaemonPaths(tempHome(), 'default');
+
+    const updated = updateRuntimeOwnerPolicy(paths, 'inline', 0);
+
+    expect(updated).toMatchObject({ mode: 'inline', revision: 1 });
+    expect(readRuntimeOwnerPolicy(paths)).toEqual(updated);
+    expect(fs.existsSync(paths.ownerPolicyLockFile)).toBe(false);
+    expect(() => updateRuntimeOwnerPolicy(paths, 'daemon', 0)).toThrow(/conflict/i);
+  });
+
+  it('fails closed while another process-shaped policy transaction owns the lock', () => {
+    const paths = resolveRuntimeDaemonPaths(tempHome(), 'default');
+    fs.mkdirSync(paths.rootDir, { recursive: true });
+    fs.writeFileSync(paths.ownerPolicyLockFile, JSON.stringify({ pid: 1234, nonce: 'other' }), 'utf8');
+
+    expect(() => updateRuntimeOwnerPolicy(paths, 'inline', 0)).toThrow(/already in progress/i);
+    expect(readRuntimeOwnerPolicy(paths)).toMatchObject({ mode: 'daemon', revision: 0 });
+    expect(fs.readFileSync(paths.ownerPolicyLockFile, 'utf8')).toContain('other');
+  });
+
+  it('recovers a verified abandoned owner transition without touching live processes', () => {
+    const paths = resolveRuntimeDaemonPaths(tempHome(), 'default');
+    fs.mkdirSync(paths.rootDir, { recursive: true });
+    fs.writeFileSync(paths.ownerPolicyLockFile, JSON.stringify({
+      runtimeId: 'owner-transition-stale',
+      pid: 999_999_999,
+      createdAt: '2026-07-09T00:00:00.000Z',
+      nonce: 'stale-transition',
+    }), 'utf8');
+
+    expect(updateRuntimeOwnerPolicy(paths, 'inline', 0)).toMatchObject({
+      mode: 'inline',
+      revision: 1,
+    });
+  });
+
+  it('does not change owner policy while a Runtime owner holds the profile', () => {
+    const paths = resolveRuntimeDaemonPaths(tempHome(), 'default');
+    expect(tryAcquireRuntimeDaemonLock(paths, owner('runtime-active'))).toBeDefined();
+
+    expect(() => updateRuntimeOwnerPolicy(paths, 'inline', 0)).toThrow(/owner lock exists/i);
+    expect(readRuntimeOwnerPolicy(paths)).toMatchObject({ mode: 'daemon', revision: 0 });
   });
 });
 
@@ -188,6 +277,7 @@ describe('runtime daemon ownership claims', () => {
   it('attaches to a healthy daemon instead of taking the lock', () => {
     const paths = resolveRuntimeDaemonPaths(tempHome(), 'default');
     const current = state();
+    expect(tryAcquireRuntimeDaemonLock(paths, owner(current.runtimeId, current.pid))).toBeDefined();
 
     const decision = claimRuntimeDaemonOwnership(paths, owner('runtime-next'), {
       state: current,
@@ -197,7 +287,23 @@ describe('runtime daemon ownership claims', () => {
     });
 
     expect(decision).toMatchObject({ kind: 'attach', state: current });
-    expect(readRuntimeDaemonLockOwner(paths.lockFile)).toBeUndefined();
+    expect(readRuntimeDaemonLockOwner(paths.lockFile)).toMatchObject({
+      runtimeId: current.runtimeId,
+    });
+  });
+
+  it('refuses to attach when a healthy endpoint has no matching owner fence', () => {
+    const paths = resolveRuntimeDaemonPaths(tempHome(), 'default');
+    const current = state();
+
+    const decision = claimRuntimeDaemonOwnership(paths, owner('runtime-next'), {
+      state: current,
+      pidAlive: true,
+      endpointReachable: true,
+      identityMatches: true,
+    });
+
+    expect(decision).toMatchObject({ kind: 'unhealthy', health: 'mismatch' });
   });
 
   it('claims an atomic lock when no daemon exists and makes a racing claimant wait', () => {
@@ -269,6 +375,97 @@ describe('runtime daemon ownership claims', () => {
     expect(decision.kind).toBe('claim');
     expect(readRuntimeDaemonState(paths)).toBeUndefined();
     expect(readRuntimeDaemonLockOwner(paths.lockFile)).toMatchObject({ runtimeId: 'runtime-next' });
+  });
+
+  it('never deletes a replacement owner based on an older stale observation', () => {
+    const paths = resolveRuntimeDaemonPaths(tempHome(), 'default');
+    const stale = state({ runtimeId: 'runtime-stale', pid: 999 });
+    writeRuntimeDaemonState(paths, stale);
+    const staleLock = tryAcquireRuntimeDaemonLock(paths, owner('runtime-stale', 999));
+    expect(staleLock).toBeDefined();
+    expect(staleLock ? releaseRuntimeDaemonLock(staleLock) : false).toBe(true);
+    expect(tryAcquireRuntimeDaemonLock(paths, owner('runtime-replacement', 777))).toBeDefined();
+
+    const decision = claimRuntimeDaemonOwnership(paths, owner('runtime-next'), {
+      state: stale,
+      pidAlive: false,
+      endpointReachable: false,
+      identityMatches: false,
+    });
+
+    expect(decision).toMatchObject({
+      kind: 'wait',
+      lockOwner: { runtimeId: 'runtime-replacement' },
+    });
+    expect(readRuntimeDaemonLockOwner(paths.lockFile)).toMatchObject({
+      runtimeId: 'runtime-replacement',
+    });
+  });
+
+  it('does not delete a reacquired lock with the same runtime and process identity', () => {
+    const paths = resolveRuntimeDaemonPaths(tempHome(), 'default');
+    const stale = state({ runtimeId: 'runtime-stale', pid: 999 });
+    const observedOwner = owner('runtime-stale', 999);
+    writeRuntimeDaemonState(paths, stale);
+    const staleLock = tryAcquireRuntimeDaemonLock(paths, observedOwner);
+    expect(staleLock).toBeDefined();
+    expect(staleLock ? releaseRuntimeDaemonLock(staleLock) : false).toBe(true);
+    const replacementOwner = {
+      ...observedOwner,
+      createdAt: '2026-07-09T00:00:02.000Z',
+    };
+    expect(tryAcquireRuntimeDaemonLock(paths, replacementOwner)).toBeDefined();
+
+    const decision = claimRuntimeDaemonOwnership(paths, owner('runtime-next'), {
+      state: stale,
+      pidAlive: false,
+      endpointReachable: false,
+      identityMatches: false,
+      observedLockOwner: observedOwner,
+    });
+
+    expect(decision).toMatchObject({ kind: 'wait', lockOwner: replacementOwner });
+    expect(readRuntimeDaemonLockOwner(paths.lockFile)).toEqual(replacementOwner);
+  });
+
+  it('refuses force cleanup when ownership changed after observation', () => {
+    const paths = resolveRuntimeDaemonPaths(tempHome(), 'default');
+    const stale = state({ runtimeId: 'runtime-stale', pid: 999 });
+    writeRuntimeDaemonState(paths, stale);
+    const staleLock = tryAcquireRuntimeDaemonLock(paths, owner('runtime-stale', 999));
+    expect(staleLock).toBeDefined();
+    expect(staleLock ? releaseRuntimeDaemonLock(staleLock) : false).toBe(true);
+    expect(tryAcquireRuntimeDaemonLock(paths, owner('runtime-replacement', 777))).toBeDefined();
+
+    expect(removeRuntimeDaemonOwnershipIfUnchanged(paths, {
+      state: stale,
+      lockOwner: owner('runtime-stale', 999),
+    })).toBe(false);
+    expect(readRuntimeDaemonLockOwner(paths.lockFile)).toMatchObject({
+      runtimeId: 'runtime-replacement',
+    });
+  });
+
+  it('refuses force cleanup after the same owner reacquires its lock', () => {
+    const paths = resolveRuntimeDaemonPaths(tempHome(), 'default');
+    const stale = state({ runtimeId: 'runtime-stale', pid: 999 });
+    const observedOwner = owner('runtime-stale', 999);
+    writeRuntimeDaemonState(paths, stale);
+    const staleLock = tryAcquireRuntimeDaemonLock(paths, observedOwner);
+    expect(staleLock).toBeDefined();
+    expect(staleLock ? releaseRuntimeDaemonLock(staleLock) : false).toBe(true);
+    expect(tryAcquireRuntimeDaemonLock(paths, {
+      ...observedOwner,
+      createdAt: '2026-07-09T00:00:02.000Z',
+    })).toBeDefined();
+
+    expect(removeRuntimeDaemonOwnershipIfUnchanged(paths, {
+      state: stale,
+      lockOwner: observedOwner,
+    })).toBe(false);
+    expect(readRuntimeDaemonLockOwner(paths.lockFile)).toMatchObject({
+      createdAt: '2026-07-09T00:00:02.000Z',
+    });
   });
 
   it('waits for a live transitional daemon instead of marking it unhealthy', () => {

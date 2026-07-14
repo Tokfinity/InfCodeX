@@ -12,10 +12,12 @@ export type RuntimeDaemonMethod =
   | 'daemon.status'
   | 'daemon.stop'
   | 'daemon.logs'
+  | 'operation.get'
   | 'session.create'
   | 'session.load'
   | 'session.list'
   | 'session.transcript'
+  | 'session.observe'
   | 'session.fork'
   | 'session.notice.append'
   | 'session.rewind'
@@ -26,8 +28,11 @@ export type RuntimeDaemonMethod =
   | 'session.unarchive'
   | 'session.delete'
   | 'session.settings.get'
+  | 'session.settings.getVersioned'
   | 'session.settings.update'
+  | 'session.settings.updateVersioned'
   | 'run.start'
+  | 'run.input.submit'
   | 'run.get'
   | 'run.list'
   | 'run.await'
@@ -45,6 +50,17 @@ export type RuntimeDaemonMethod =
   | 'permission.listPending'
   | 'permission.request'
   | 'permission.respond'
+  | 'permission.grants.list'
+  | 'permission.grants.revoke'
+  | 'user_input.listPending'
+  | 'user_input.respond'
+  | 'user_input.dismiss'
+  | 'credential.register'
+  | 'credential.revoke'
+  | 'credential.supply'
+  | 'host_tool.register'
+  | 'host_tool.revoke'
+  | 'host_tool.complete'
   | 'workflow.list'
   | 'workflow.get'
   | 'workflow.subscribe'
@@ -95,8 +111,64 @@ export type RuntimeDaemonMethod =
   | 'context.budget.get'
   | 'tool.exposure.preview';
 
+export type RuntimeDaemonMutationMethod =
+  | 'runtime.shutdown'
+  | 'daemon.stop'
+  | 'session.create'
+  | 'session.fork'
+  | 'session.notice.append'
+  | 'session.rewind'
+  | 'session.active_entry.set'
+  | 'session.activeEntry.set'
+  | 'session.compact'
+  | 'session.archive'
+  | 'session.unarchive'
+  | 'session.delete'
+  | 'session.settings.update'
+  | 'session.settings.updateVersioned'
+  | 'run.start'
+  | 'run.input.submit'
+  | 'run.abort'
+  | 'run.model.set'
+  | 'run.provider.set'
+  | 'run.reasoning.set'
+  | 'run.setModel'
+  | 'run.setProvider'
+  | 'run.setReasoning'
+  | 'permission.request'
+  | 'permission.respond'
+  | 'permission.grants.revoke'
+  | 'user_input.respond'
+  | 'user_input.dismiss'
+  | 'credential.register'
+  | 'credential.revoke'
+  | 'host_tool.register'
+  | 'host_tool.revoke'
+  | 'workflow.pause'
+  | 'workflow.resume'
+  | 'workflow.stop'
+  | 'config.patch'
+  | 'config.reload'
+  | 'provider.custom.upsert'
+  | 'provider.custom.remove'
+  | 'mcp.server.upsert'
+  | 'mcp.server.delete'
+  | 'mcp.server.remove'
+  | 'mcp.server.reload'
+  | 'extension.reload'
+  | 'artifact.create'
+  | 'artifact.delete'
+  | 'agentRegistrations.upsert'
+  | 'agentRegistrations.remove'
+  | 'agentTasks.start'
+  | 'agentTasks.sendInput'
+  | 'agentTasks.cancel'
+  | 'agentTasks.reconcile';
+
 export type RuntimeDaemonNotificationMethod =
   | 'event'
+  | 'credential.request'
+  | 'host_tool.invoke'
   | 'runtime.warning';
 
 export interface RuntimeDaemonError {
@@ -117,6 +189,16 @@ export type RuntimeDaemonErrorCode =
   | 'not_found'
   | 'cancelled'
   | 'overloaded'
+  | 'client_upgrade_required'
+  | 'operation_required'
+  | 'operation_epoch_mismatch'
+  | 'operation_id_reuse'
+  | 'operation_interrupted'
+  | 'operation_unknown'
+  | 'control_history_untrusted'
+  | 'credential_unavailable'
+  | 'host_tool_unavailable'
+  | 'host_tool_unknown'
   | 'internal_error';
 
 interface RuntimeDaemonFrameBase {
@@ -129,6 +211,12 @@ export interface RuntimeDaemonRequest extends RuntimeDaemonFrameBase {
   readonly id: string;
   readonly method: RuntimeDaemonMethod;
   readonly params?: unknown;
+  readonly operation?: RuntimeDaemonOperationEnvelope;
+}
+
+export interface RuntimeDaemonOperationEnvelope {
+  readonly operationId: string;
+  readonly journalEpoch: string;
 }
 
 export interface RuntimeDaemonSuccessResponse extends RuntimeDaemonFrameBase {
@@ -166,10 +254,12 @@ export const RUNTIME_DAEMON_METHODS: readonly RuntimeDaemonMethod[] = [
   'daemon.status',
   'daemon.stop',
   'daemon.logs',
+  'operation.get',
   'session.create',
   'session.load',
   'session.list',
   'session.transcript',
+  'session.observe',
   'session.fork',
   'session.notice.append',
   'session.rewind',
@@ -180,8 +270,11 @@ export const RUNTIME_DAEMON_METHODS: readonly RuntimeDaemonMethod[] = [
   'session.unarchive',
   'session.delete',
   'session.settings.get',
+  'session.settings.getVersioned',
   'session.settings.update',
+  'session.settings.updateVersioned',
   'run.start',
+  'run.input.submit',
   'run.get',
   'run.list',
   'run.await',
@@ -199,6 +292,17 @@ export const RUNTIME_DAEMON_METHODS: readonly RuntimeDaemonMethod[] = [
   'permission.listPending',
   'permission.request',
   'permission.respond',
+  'permission.grants.list',
+  'permission.grants.revoke',
+  'user_input.listPending',
+  'user_input.respond',
+  'user_input.dismiss',
+  'credential.register',
+  'credential.revoke',
+  'credential.supply',
+  'host_tool.register',
+  'host_tool.revoke',
+  'host_tool.complete',
   'workflow.list',
   'workflow.get',
   'workflow.subscribe',
@@ -250,10 +354,70 @@ export const RUNTIME_DAEMON_METHODS: readonly RuntimeDaemonMethod[] = [
   'tool.exposure.preview',
 ];
 
+export const RUNTIME_DAEMON_MUTATION_METHODS: readonly RuntimeDaemonMutationMethod[] = [
+  'runtime.shutdown',
+  'daemon.stop',
+  'session.create',
+  'session.fork',
+  'session.notice.append',
+  'session.rewind',
+  'session.active_entry.set',
+  'session.activeEntry.set',
+  'session.compact',
+  'session.archive',
+  'session.unarchive',
+  'session.delete',
+  'session.settings.update',
+  'session.settings.updateVersioned',
+  'run.start',
+  'run.input.submit',
+  'run.abort',
+  'run.model.set',
+  'run.provider.set',
+  'run.reasoning.set',
+  'run.setModel',
+  'run.setProvider',
+  'run.setReasoning',
+  'permission.request',
+  'permission.respond',
+  'permission.grants.revoke',
+  'user_input.respond',
+  'user_input.dismiss',
+  'credential.register',
+  'credential.revoke',
+  'host_tool.register',
+  'host_tool.revoke',
+  'workflow.pause',
+  'workflow.resume',
+  'workflow.stop',
+  'config.patch',
+  'config.reload',
+  'provider.custom.upsert',
+  'provider.custom.remove',
+  'mcp.server.upsert',
+  'mcp.server.delete',
+  'mcp.server.remove',
+  'mcp.server.reload',
+  'extension.reload',
+  'artifact.create',
+  'artifact.delete',
+  'agentRegistrations.upsert',
+  'agentRegistrations.remove',
+  'agentTasks.start',
+  'agentTasks.sendInput',
+  'agentTasks.cancel',
+  'agentTasks.reconcile',
+];
+
 const REQUEST_METHODS: ReadonlySet<string> = new Set<RuntimeDaemonMethod>(RUNTIME_DAEMON_METHODS);
+const MUTATION_METHODS: ReadonlySet<string> = new Set<RuntimeDaemonMutationMethod>(
+  RUNTIME_DAEMON_MUTATION_METHODS,
+);
 
 const NOTIFICATION_METHODS: ReadonlySet<string> = new Set<RuntimeDaemonNotificationMethod>([
   'event',
+  'credential.request',
+  'host_tool.invoke',
   'runtime.warning',
 ]);
 
@@ -269,6 +433,16 @@ const ERROR_CODES: ReadonlySet<string> = new Set<RuntimeDaemonErrorCode>([
   'not_found',
   'cancelled',
   'overloaded',
+  'client_upgrade_required',
+  'operation_required',
+  'operation_epoch_mismatch',
+  'operation_id_reuse',
+  'operation_interrupted',
+  'operation_unknown',
+  'control_history_untrusted',
+  'credential_unavailable',
+  'host_tool_unavailable',
+  'host_tool_unknown',
   'internal_error',
 ]);
 
@@ -276,6 +450,7 @@ export function createRuntimeDaemonRequest(
   id: string,
   method: RuntimeDaemonMethod,
   params?: unknown,
+  operation?: RuntimeDaemonOperationEnvelope,
 ): RuntimeDaemonRequest {
   return {
     protocol: KODAX_DAEMON_PROTOCOL,
@@ -284,7 +459,14 @@ export function createRuntimeDaemonRequest(
     id,
     method,
     ...(params !== undefined ? { params } : {}),
+    ...(operation !== undefined ? { operation } : {}),
   };
+}
+
+export function isRuntimeDaemonMutationMethod(
+  method: RuntimeDaemonMethod,
+): method is RuntimeDaemonMutationMethod {
+  return MUTATION_METHODS.has(method);
 }
 
 export function createRuntimeDaemonSuccessResponse(
@@ -333,7 +515,8 @@ export function isRuntimeDaemonRequest(value: unknown): value is RuntimeDaemonRe
     && typeof frame.id === 'string'
     && frame.id.length > 0
     && typeof frame.method === 'string'
-    && REQUEST_METHODS.has(frame.method);
+    && REQUEST_METHODS.has(frame.method)
+    && (frame.operation === undefined || isRuntimeDaemonOperationEnvelope(frame.operation));
 }
 
 export function isRuntimeDaemonSuccessResponse(
@@ -408,4 +591,13 @@ function isRuntimeDaemonError(value: unknown): value is RuntimeDaemonError {
   return typeof error.code === 'string'
     && ERROR_CODES.has(error.code)
     && typeof error.message === 'string';
+}
+
+function isRuntimeDaemonOperationEnvelope(value: unknown): value is RuntimeDaemonOperationEnvelope {
+  if (!value || typeof value !== 'object' || Array.isArray(value)) return false;
+  const operation = value as Record<string, unknown>;
+  return typeof operation.operationId === 'string'
+    && operation.operationId.length > 0
+    && typeof operation.journalEpoch === 'string'
+    && operation.journalEpoch.length > 0;
 }

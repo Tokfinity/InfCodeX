@@ -20,6 +20,10 @@ import {
   startKodaX,
   validateCustomProviderConfig,
 } from '@kodax-ai/coding';
+import {
+  redactScopedProviderCredential,
+  runWithProviderCredential,
+} from '@kodax-ai/llm';
 import * as replApi from '@kodax-ai/repl';
 import type {
   AskUserAnswer,
@@ -136,8 +140,12 @@ import {
   type RuntimeDaemonEndpoint,
 } from './runtime-daemon/transport.js';
 import {
+  acquireRuntimeInlineOwner,
+  readRuntimeDaemonLockOwner,
   readRuntimeDaemonToken,
+  releaseRuntimeDaemonLock,
   resolveRuntimeDaemonPaths,
+  updateRuntimeOwnerPolicy,
 } from './runtime-daemon/state.js';
 export type { RuntimeDaemonClientTransport } from './runtime-daemon/client.js';
 export type {
@@ -189,6 +197,58 @@ export type KodaXRuntimeMode = 'embedded' | 'daemon';
 export type KodaXRuntimeIsolation = 'inline' | 'worker' | 'process';
 export type { RuntimeWorkerOptions, RuntimeWorkerResourceLimits } from './runtime-worker/protocol.js';
 
+export interface RuntimeInlineOwnerHandle {
+  readonly profile: string;
+  readonly ownerId: string;
+  close(): void;
+}
+
+/**
+ * Reserve the Coder profile for inline rollback. Partner runtimes must not use
+ * this fence; they remain in their independent embedded namespace.
+ */
+export function acquireKodaXInlineOwner(input: {
+  readonly homeDir?: string;
+  readonly profile?: string;
+  readonly enableRollback?: boolean;
+} = {}): RuntimeInlineOwnerHandle {
+  const homeDir = path.resolve(input.homeDir ?? os.homedir());
+  const paths = resolveRuntimeDaemonPaths(homeDir, input.profile ?? 'default');
+  const ownerId = `inline_${randomUUID().replace(/-/g, '')}`;
+  const lock = acquireRuntimeInlineOwner(paths, {
+    runtimeId: ownerId,
+    pid: process.pid,
+    createdAt: new Date().toISOString(),
+    kind: 'inline',
+  }, input.enableRollback === true);
+  let closed = false;
+  return {
+    profile: paths.profile,
+    ownerId,
+    close() {
+      if (closed) return;
+      closed = true;
+      releaseRuntimeDaemonLock(lock);
+    },
+  };
+}
+
+export function setKodaXRuntimeOwnerMode(input: {
+  readonly mode: 'daemon' | 'inline';
+  readonly expectedRevision: number;
+  readonly homeDir?: string;
+  readonly profile?: string;
+}): { readonly mode: 'daemon' | 'inline'; readonly revision: number; readonly updatedAt: string } {
+  const paths = resolveRuntimeDaemonPaths(
+    path.resolve(input.homeDir ?? os.homedir()),
+    input.profile ?? 'default',
+  );
+  if (readRuntimeDaemonLockOwner(paths.lockFile) !== undefined) {
+    throw new Error('Cannot change Runtime owner mode while an owner lock exists.');
+  }
+  return updateRuntimeOwnerPolicy(paths, input.mode, input.expectedRevision);
+}
+
 type ReplRuntimeConfigPatch = Parameters<typeof saveConfig>[0];
 
 const RUNTIME_CONFIG_PATCH_KEYS = [
@@ -236,6 +296,8 @@ export interface RuntimeIdentity {
 
 export interface RuntimeClientInfo {
   readonly name: string;
+  /** Stable host-generated identity used only after daemon authentication. */
+  readonly instanceId?: string;
   readonly title?: string;
   readonly version?: string;
 }
@@ -248,7 +310,24 @@ export interface RuntimeClientCapabilities {
   readonly skillCatalog?: boolean;
   readonly artifactUpload?: boolean;
   readonly contextDiagnostics?: boolean;
+  readonly operationDeduplication?: boolean;
 }
+
+export type RuntimeGrantedScope =
+  | 'session:observe'
+  | 'session:write'
+  | 'run:control'
+  | 'interaction:respond'
+  | 'permission:respond'
+  | 'permission:grant-admin'
+  | 'integration:admin'
+  | 'workflow:control'
+  | 'artifact:write'
+  | 'agent:control'
+  | 'credential:register'
+  | 'host-tool:register'
+  | 'owner:admin'
+  | 'daemon:admin';
 
 export interface RuntimeExternalAgentsOptions {
   readonly factories: readonly AgentExecutorFactory[];
@@ -273,6 +352,10 @@ export interface CreateKodaXRuntimeOptions {
   readonly defaultProvider?: string;
   readonly defaultModel?: string;
   readonly permissionTimeoutMs?: number;
+  /** Internal daemon-host switch; keeps ordinary embedded runs non-interactive by default. */
+  readonly sharedDaemonHost?: boolean;
+  /** @internal Owner-fence identity assigned before a shared daemon Runtime is constructed. */
+  readonly daemonHostRuntimeId?: string;
   readonly daemonStartupTimeoutMs?: number;
   readonly daemonConnectTimeoutMs?: number;
   readonly daemonTransport?: RuntimeDaemonClientTransport;
@@ -311,6 +394,47 @@ export interface RuntimeCapabilityRequirements {
   readonly hardDispose?: boolean;
   /** Reject hosts that do not advertise an installed external Agent executor plane. */
   readonly externalAgents?: boolean;
+  readonly operationDeduplication?: 1;
+  readonly sessionObservation?: 1;
+  readonly afterTurnInput?: 1;
+  readonly interruptInput?: 1;
+  readonly askUserTransport?: 1;
+  readonly permissionCas?: 1;
+  readonly providerCredentialBroker?: 1;
+  readonly runBoundHostTools?: 1;
+  readonly coderOwnerFencing?: 1;
+  readonly crashOutcomeModel?: 1;
+  readonly coderFeatureMatrix?: 1;
+}
+
+export type RuntimeOperationState =
+  | 'accepted'
+  | 'dispatched'
+  | 'applied'
+  | 'rejected'
+  | 'interrupted'
+  | 'unknown';
+
+export interface RuntimeOperationReceipt {
+  readonly operationId: string;
+  readonly journalEpoch: string;
+  readonly principalId: string;
+  readonly method: string;
+  readonly resourceId?: string;
+  readonly requestDigest: string;
+  readonly state: RuntimeOperationState;
+  readonly updatedAt: string;
+  readonly error?: {
+    readonly code: string;
+    readonly message: string;
+  };
+}
+
+export interface RuntimeOperationService {
+  get(input: {
+    readonly operationId: string;
+    readonly journalEpoch: string;
+  }): Promise<RuntimeOperationReceipt>;
 }
 
 export interface RuntimeDiagnosticFilter {
@@ -325,10 +449,17 @@ export interface RuntimeDiagnosticsService {
 
 export interface KodaXRuntime {
   readonly identity: RuntimeIdentity;
+  /** Server-advertised facts. Authorization remains defined by grantedScopes. */
+  readonly capabilities?: Readonly<Record<string, unknown>>;
+  readonly grantedScopes?: readonly RuntimeGrantedScope[];
   readonly sessions: RuntimeSessionService;
   readonly runs: RuntimeRunService;
   readonly events: RuntimeEventService;
   readonly permissions: RuntimePermissionService;
+  readonly userInputs: RuntimeUserInputService;
+  readonly credentials: RuntimeCredentialService;
+  readonly hostTools: RuntimeHostToolService;
+  readonly operations: RuntimeOperationService;
   readonly workflows: RuntimeWorkflowService;
   readonly config: RuntimeConfigService;
   readonly catalog: RuntimeCatalogService;
@@ -626,17 +757,76 @@ export interface RuntimeCompactSessionResult extends CompactSessionResult {
   readonly session?: RuntimeSession;
 }
 
+export interface RuntimeVersionedValue<T> {
+  readonly revision: number;
+  readonly value: T;
+}
+
+export interface RuntimeVersionedUpdateOptions extends RuntimeOperationOptions {
+  readonly expectedRevision: number;
+}
+
+export interface RuntimeActiveToolProjection {
+  readonly key: string;
+  readonly runId: string;
+  readonly turnId?: string;
+  readonly started: unknown;
+  readonly progress?: unknown;
+}
+
+export interface RuntimePendingUserInputProjection {
+  readonly requestId: string;
+  readonly runId: string;
+  readonly turnId?: string;
+  readonly detail: unknown;
+}
+
+export interface RuntimeSessionLiveProjection {
+  readonly assistantTextByRun: Readonly<Record<string, string>>;
+  readonly thinkingTextByRun: Readonly<Record<string, string>>;
+  readonly activeTools: readonly RuntimeActiveToolProjection[];
+  readonly todo?: unknown;
+  readonly pendingUserInputs: readonly RuntimePendingUserInputProjection[];
+}
+
+export interface RuntimeSessionObservationSnapshot {
+  readonly runtimeId: string;
+  readonly cursor: number;
+  readonly session: RuntimeSession;
+  readonly transcript: RuntimeTranscript | null;
+  readonly settings: RuntimeVersionedValue<RuntimeSessionSettings>;
+  readonly runs: readonly RuntimeRunStatus[];
+  readonly pendingPermissions: readonly RuntimePermissionRequest[];
+  readonly live: RuntimeSessionLiveProjection;
+}
+
+export interface RuntimeSessionObservation extends RuntimeSubscription {
+  readonly snapshot: RuntimeSessionObservationSnapshot;
+}
+
 export interface RuntimeSessionService {
   create(input?: RuntimeCreateSessionInput): Promise<RuntimeSession>;
   load(sessionId: string): Promise<RuntimeSession>;
   list(filter?: RuntimeSessionFilter): Promise<readonly RuntimeSessionSummary[]>;
   transcript(sessionId: string): Promise<RuntimeTranscript | null>;
+  observe(
+    sessionId: string,
+    listener: RuntimeEventListener,
+  ): Promise<RuntimeSessionObservation>;
   fork(input: RuntimeForkSessionInput): Promise<RuntimeSession | null>;
   getSettings(sessionId: string): Promise<RuntimeSessionSettings>;
+  getSettingsVersioned(
+    sessionId: string,
+  ): Promise<RuntimeVersionedValue<RuntimeSessionSettings>>;
   updateSettings(
     sessionId: string,
     patch: RuntimeSessionSettingsPatch,
   ): Promise<RuntimeSessionSettings>;
+  updateSettingsVersioned(
+    sessionId: string,
+    patch: RuntimeSessionSettingsPatch,
+    options: RuntimeVersionedUpdateOptions,
+  ): Promise<RuntimeVersionedValue<RuntimeSessionSettings>>;
   appendNotice(input: RuntimeAppendNoticeInput): Promise<SessionTranscriptEntry | null>;
   rewind(input: RuntimeRewindSessionInput): Promise<RuntimeSession | null>;
   setActiveEntry(input: RuntimeSetActiveEntryInput): Promise<RuntimeSession | null>;
@@ -714,6 +904,61 @@ export interface RuntimeStartRunInput {
   readonly options?: RuntimeKodaXOptions;
   /** Host-derived dispatch identity; never accepted from an LLM tool payload. */
   readonly agentContext?: AgentDispatchContext;
+  /** Daemon-issued lease binding; contains no credential material. */
+  readonly credential?: { readonly leaseId: string; readonly provider: string };
+  /** Daemon-issued host capability binding. Unbound runs never inherit it. */
+  readonly hostTools?: { readonly leaseId: string };
+  readonly operation?: RuntimeOperationOptions;
+}
+
+interface RuntimeTrustedStartRunInput extends RuntimeStartRunInput {
+  readonly providerCredential?: string;
+  readonly providerCredentialProvider?: string;
+  readonly origin?: RuntimeRunStatus['origin'];
+  readonly trustedRunId?: string;
+  readonly requiredAfterRunId?: string;
+}
+
+export interface RuntimeSubmitInput {
+  readonly sessionId: string;
+  readonly afterRunId: string;
+  readonly delivery: 'after_turn' | 'interrupt';
+  readonly input: RuntimeInput | readonly RuntimeInput[];
+  /** Continuations receive only bindings explicitly supplied for this input. */
+  readonly credential?: { readonly leaseId: string; readonly provider: string };
+  readonly hostTools?: { readonly leaseId: string };
+  readonly operation?: RuntimeOperationOptions;
+}
+
+interface RuntimeTrustedSubmitInput extends RuntimeSubmitInput {
+  readonly providerCredential?: string;
+  readonly providerCredentialProvider?: string;
+  readonly origin?: RuntimeRunStatus['origin'];
+  readonly trustedRunId?: string;
+  readonly options?: RuntimeKodaXOptions;
+}
+
+export type RuntimeSubmitInputResult =
+  | {
+      readonly accepted: true;
+      readonly delivery: 'after_turn';
+      readonly runId: string;
+      readonly sessionId: string;
+      readonly afterRunId: string;
+      readonly sessionOrder: number;
+    }
+  | {
+      readonly accepted: false;
+      readonly delivery: 'after_turn' | 'interrupt';
+      readonly sessionId: string;
+      readonly afterRunId: string;
+      readonly reason: 'stale_run' | 'unsupported_capability';
+    };
+
+export interface RuntimeOperationOptions {
+  readonly operationId?: string;
+  readonly journalEpoch?: string;
+  readonly expectedRevision?: number;
 }
 
 export type RuntimeKodaXOptions =
@@ -730,11 +975,45 @@ export interface RuntimeRunStatus {
   readonly turnId?: string;
   readonly phase: RuntimeRunPhase;
   readonly startedAt: string;
+  /** Durable acceptance timestamp; equals startedAt for protocol v1. */
+  readonly acceptedAt?: string;
+  readonly sessionOrder?: number;
+  readonly queuedAt?: string;
+  readonly runningAt?: string;
+  readonly executionStartedAt?: string;
   readonly endedAt?: string;
   readonly provider: string;
+  readonly mode?: RuntimeRunMode;
+  readonly origin?: {
+    readonly principalId: string;
+    readonly clientName?: string;
+    readonly clientVersion?: string;
+    readonly operationId?: string;
+  };
   readonly model?: string;
   readonly reasoning?: KodaXReasoningMode;
   readonly error?: string;
+  readonly terminal?: RuntimeTerminalFact;
+}
+
+export type RuntimeTerminalCode =
+  | 'completed'
+  | 'run_failed'
+  | 'cancelled'
+  | 'interrupted'
+  | 'runtime_restarted'
+  | 'daemon_crashed'
+  | 'credential_unavailable'
+  | 'host_not_dispatched'
+  | 'host_outcome_unknown'
+  | 'control_history_untrusted';
+
+export interface RuntimeTerminalFact {
+  readonly revision: number;
+  readonly kind: 'completed' | 'failed' | 'cancelled' | 'interrupted';
+  readonly code: RuntimeTerminalCode;
+  readonly effectOutcome: 'none' | 'known' | 'unknown';
+  readonly message?: string;
 }
 
 export interface RuntimeRunResult {
@@ -759,6 +1038,7 @@ export interface RuntimeRunFilter {
 
 export interface RuntimeRunService {
   start(input: RuntimeStartRunInput): Promise<RuntimeRunHandle>;
+  submitInput(input: RuntimeSubmitInput): Promise<RuntimeSubmitInputResult>;
   await(runId: string): Promise<RuntimeRunResult>;
   get(runId: string): Promise<RuntimeRunStatus>;
   list(filter?: RuntimeRunFilter): Promise<readonly RuntimeRunStatus[]>;
@@ -778,6 +1058,7 @@ export type RuntimeEventType =
   | 'session.compacted'
   | 'run.queued'
   | 'run.started'
+  | 'run.updated'
   | 'run.progress'
   | 'turn.started'
   | 'turn.completed'
@@ -902,6 +1183,12 @@ export interface RuntimePermissionRespondOptions {
   readonly runId?: string;
 }
 
+export interface RuntimePermissionGrant {
+  readonly id: string;
+  readonly scope: RuntimePermissionScope;
+  readonly createdAt: string;
+}
+
 export interface RuntimePermissionService {
   request(input: RuntimePermissionRequestInput): Promise<RuntimePermissionDecision>;
   listPending(filter?: RuntimePermissionFilter): Promise<readonly RuntimePermissionRequest[]>;
@@ -910,6 +1197,109 @@ export interface RuntimePermissionService {
     decision: RuntimePermissionDecision,
     options?: RuntimePermissionRespondOptions,
   ): Promise<boolean>;
+  listGrants(): Promise<RuntimeVersionedValue<readonly RuntimePermissionGrant[]>>;
+  revokeGrant(grantId: string, expectedRevision: number): Promise<boolean>;
+}
+
+export type RuntimeUserInputKind = 'askUser' | 'askUserMulti' | 'askUserInput';
+
+export interface RuntimeUserInputRequest {
+  readonly id: string;
+  readonly revision: number;
+  readonly sessionId: string;
+  readonly runId: string;
+  readonly turnId?: string;
+  readonly kind: RuntimeUserInputKind;
+  readonly options: unknown;
+  readonly createdAt: string;
+  readonly expiresAt: string;
+}
+
+export interface RuntimeUserInputFilter {
+  readonly sessionId?: string;
+  readonly runId?: string;
+}
+
+export interface RuntimeUserInputResolution {
+  readonly requestId: string;
+  readonly accepted: boolean;
+  readonly status: 'answered' | 'dismissed' | 'already_resolved';
+}
+
+export interface RuntimeUserInputService {
+  listPending(filter?: RuntimeUserInputFilter): Promise<readonly RuntimeUserInputRequest[]>;
+  respond(
+    requestId: string,
+    answer: unknown,
+    options?: { readonly expectedRevision?: number; readonly runId?: string },
+  ): Promise<RuntimeUserInputResolution>;
+  dismiss(
+    requestId: string,
+    options?: { readonly expectedRevision?: number; readonly runId?: string },
+  ): Promise<RuntimeUserInputResolution>;
+}
+
+export interface RuntimeCredentialRequest {
+  readonly leaseId: string;
+  readonly provider: string;
+  readonly sessionId: string;
+  readonly runId: string;
+}
+
+export type RuntimeCredentialBroker = (
+  request: RuntimeCredentialRequest,
+) => Promise<string | undefined>;
+
+export interface RuntimeCredentialLease {
+  readonly id: string;
+  readonly providers: readonly string[];
+  readonly expiresAt?: string;
+}
+
+export interface RuntimeCredentialService {
+  register(
+    input: { readonly providers: readonly string[]; readonly expiresAt?: string },
+    broker: RuntimeCredentialBroker,
+  ): Promise<RuntimeCredentialLease>;
+  revoke(leaseId: string): Promise<boolean>;
+}
+
+export interface RuntimeHostToolDescriptor {
+  readonly name: string;
+  readonly description: string;
+  readonly inputSchema: Readonly<Record<string, unknown>>;
+  readonly sideEffect: 'none' | 'idempotent' | 'non_idempotent';
+}
+
+export interface RuntimeHostToolInvocation {
+  readonly invocationId: string;
+  readonly leaseId: string;
+  readonly toolName: string;
+  readonly sessionId: string;
+  readonly runId: string;
+  readonly input: Readonly<Record<string, unknown>>;
+}
+
+export interface RuntimeHostToolResult {
+  readonly content: string;
+  readonly structuredContent?: unknown;
+}
+
+export type RuntimeHostToolHandler = (
+  invocation: RuntimeHostToolInvocation,
+) => Promise<RuntimeHostToolResult>;
+
+export interface RuntimeHostToolLease {
+  readonly id: string;
+  readonly tools: readonly RuntimeHostToolDescriptor[];
+}
+
+export interface RuntimeHostToolService {
+  register(
+    tools: readonly RuntimeHostToolDescriptor[],
+    handlers: Readonly<Record<string, RuntimeHostToolHandler>>,
+  ): Promise<RuntimeHostToolLease>;
+  revoke(leaseId: string): Promise<boolean>;
 }
 
 type RuntimePermissionToolDecision = boolean | string;
@@ -957,7 +1347,9 @@ interface RuntimeRunRecord {
   turnId?: string;
   phase: RuntimeRunPhase;
   readonly startedAt: string;
+  readonly sessionOrder: number;
   queuedAt?: string;
+  runningAt?: string;
   endedAt?: string;
   provider: string;
   model?: string;
@@ -965,10 +1357,13 @@ interface RuntimeRunRecord {
   permissionMode?: string;
   reasoning?: KodaXReasoningMode;
   error?: string;
+  terminal?: RuntimeTerminalFact;
   readonly result: Promise<RuntimeRunResult>;
   running?: RunningSession;
   abortController?: AbortController;
   mode: RuntimeRunMode;
+  readonly origin?: RuntimeRunStatus['origin'];
+  providerCredential?: string;
   readonly agentContext?: AgentDispatchContext;
   start?: PendingRunStart;
   terminalEmitted: boolean;
@@ -980,8 +1375,20 @@ interface PendingPermission {
   readonly timer?: ReturnType<typeof setTimeout>;
 }
 
+interface PendingUserInput {
+  readonly request: RuntimeUserInputRequest;
+  readonly resolve: (resolution: RuntimePendingUserInputResolution) => void;
+  readonly timer: ReturnType<typeof setTimeout>;
+}
+
+interface RuntimePendingUserInputResolution {
+  readonly status: 'answered' | 'dismissed';
+  readonly answer?: unknown;
+}
+
 type RuntimeEventBus = ReturnType<typeof createRuntimeEventBus>;
 type RuntimePermissionRegistry = ReturnType<typeof createRuntimePermissionRegistry>;
+type RuntimeUserInputRegistry = ReturnType<typeof createRuntimeUserInputRegistry>;
 type RuntimeArtifactStore = ReturnType<typeof createRuntimeArtifactStore>;
 
 interface RuntimeRunServiceInternal extends RuntimeRunService {
@@ -1000,12 +1407,31 @@ interface RuntimePersistence {
   appendEvent(event: RuntimeEvent): void;
   close(): void;
   nextEventSeq(): number;
+  currentEventSeq(): number;
   replay(filter?: RuntimeEventReplayFilter): readonly RuntimeEvent[];
   saveRunStatus(status: RuntimeRunStatus): void;
   loadRunStatus(runId: string): RuntimeRunStatus | undefined;
   loadRunStatuses(): readonly RuntimeRunStatus[];
   loadSessionSettings(sessionId: string): RuntimeSessionSettings;
   saveSessionSettings(sessionId: string, settings: RuntimeSessionSettings): void;
+  loadSessionSettingsVersioned(
+    sessionId: string,
+  ): RuntimeVersionedValue<RuntimeSessionSettings>;
+  saveSessionSettingsVersioned(
+    sessionId: string,
+    settings: RuntimeVersionedValue<RuntimeSessionSettings>,
+  ): void;
+  loadPermissionGrants(): RuntimeVersionedValue<readonly RuntimePermissionGrant[]>;
+  savePermissionGrants(
+    grants: RuntimeVersionedValue<readonly RuntimePermissionGrant[]>,
+  ): void;
+}
+
+class RuntimeContinuationStaleError extends Error {
+  constructor(readonly afterRunId: string) {
+    super(`Runtime continuation target is already terminal: ${afterRunId}`);
+    this.name = 'RuntimeContinuationStaleError';
+  }
 }
 
 const DEFAULT_PERMISSION_TIMEOUT_MS = 5 * 60_000;
@@ -1017,6 +1443,7 @@ const RUNTIME_EVENT_FLUSH_INTERVAL_MS = 10;
 const MAX_RUNTIME_EVENT_FILE_BYTES = 16 * 1024 * 1024;
 const TARGET_RUNTIME_EVENT_FILE_BYTES = MAX_RUNTIME_EVENT_FILE_BYTES / 2;
 const MAX_RUNTIME_EVENT_SEQUENCE_TAIL_BYTES = 128 * 1024;
+const MAX_RUNTIME_SNAPSHOT_ATTEMPTS = 8;
 const BUFFERED_RUNTIME_EVENT_TYPES: ReadonlySet<RuntimeEventType> = new Set([
   'assistant.delta',
   'thinking.delta',
@@ -1032,6 +1459,15 @@ const RUNTIME_ARTIFACT_KINDS: ReadonlySet<string> = new Set(['image', 'file', 'v
 export async function createKodaXRuntime(
   options: CreateKodaXRuntimeOptions = {},
 ): Promise<KodaXRuntime> {
+  if (options.daemonHostRuntimeId !== undefined && options.sharedDaemonHost !== true) {
+    throw new Error('daemonHostRuntimeId is reserved for a claimed shared daemon owner.');
+  }
+  if (
+    options.daemonHostRuntimeId !== undefined
+    && !/^rt_[a-f0-9]{12}$/.test(options.daemonHostRuntimeId)
+  ) {
+    throw new Error('Invalid shared daemon Runtime owner identity.');
+  }
   if (
     options.isolation !== undefined
     && options.isolation !== 'inline'
@@ -1088,7 +1524,8 @@ export async function createKodaXRuntime(
   }, options.requirements);
 
   const identity: RuntimeIdentity = {
-    runtimeId: `rt_${randomUUID().replace(/-/g, '').slice(0, 12)}`,
+    runtimeId: options.daemonHostRuntimeId
+      ?? `rt_${randomUUID().replace(/-/g, '').slice(0, 12)}`,
     mode: 'embedded',
     profile: options.profile ?? 'default',
     startedAt: new Date().toISOString(),
@@ -1115,12 +1552,30 @@ export async function createKodaXRuntime(
   const permissions = createRuntimePermissionRegistry(
     bus,
     options.permissionTimeoutMs ?? DEFAULT_PERMISSION_TIMEOUT_MS,
+    persistence,
+  );
+  const userInputs = createRuntimeUserInputRegistry(
+    bus,
+    options.permissionTimeoutMs ?? DEFAULT_PERMISSION_TIMEOUT_MS,
   );
   const artifacts = createRuntimeArtifactStore();
   const workflows = createRuntimeWorkflowService();
   const runs = new Map<string, RuntimeRunRecord>();
-  for (const status of recentRunStatuses(persistence.loadRunStatuses())) {
-    const recovered = interruptPersistedNonTerminalRun(status, bus, persistence);
+  const recoveredSessionOrders = new Map<string, number>();
+  const persistedStatuses = [...recentRunStatuses(persistence.loadRunStatuses())]
+    .sort(compareRunStatusRecency);
+  for (const status of persistedStatuses) {
+    const sessionOrder = status.sessionOrder
+      ?? (recoveredSessionOrders.get(status.sessionId) ?? 0) + 1;
+    recoveredSessionOrders.set(
+      status.sessionId,
+      Math.max(recoveredSessionOrders.get(status.sessionId) ?? 0, sessionOrder),
+    );
+    const recovered = interruptPersistedNonTerminalRun({
+      ...status,
+      acceptedAt: status.acceptedAt ?? status.startedAt,
+      sessionOrder,
+    }, bus, persistence);
     runs.set(recovered.runId, recordFromPersistedStatus(recovered));
   }
   let closed = false;
@@ -1139,6 +1594,8 @@ export async function createKodaXRuntime(
     isClosed: () => closed,
     artifacts,
     permissions,
+    userInputs,
+    enableSharedInteractions: options.sharedDaemonHost === true,
     persistence,
     runs,
     sessionManager,
@@ -1146,6 +1603,7 @@ export async function createKodaXRuntime(
     defaultAgentContext: options.externalAgents?.defaultContext,
   });
   const sessionService = createRuntimeSessionService(
+    identity,
     sessionManager,
     bus,
     persistence,
@@ -1160,6 +1618,8 @@ export async function createKodaXRuntime(
         }
       }
     },
+    (sessionId) => runService.list({ sessionId }),
+    (sessionId) => permissions.service.listPending({ sessionId }),
   );
   const configHome = options.homeDir
     ? path.join(path.resolve(options.homeDir), '.kodax')
@@ -1184,10 +1644,23 @@ export async function createKodaXRuntime(
 
   const runtime: KodaXRuntime = {
     identity,
+    capabilities: {
+      hardDispose: false,
+      externalAgents: options.externalAgents !== undefined,
+      afterTurnInput: { version: 1 },
+    },
     sessions: sessionService,
     runs: runService,
     events: bus.service,
     permissions: permissions.service,
+    userInputs: userInputs.service,
+    credentials: createUnsupportedCredentialService(),
+    hostTools: createUnsupportedHostToolService(),
+    operations: {
+      async get() {
+        throw new Error('Embedded Runtime does not persist daemon operation receipts.');
+      },
+    },
     workflows,
     config: createRuntimeConfigService(ensureOpen, configFile),
     catalog: createRuntimeCatalogService(ensureOpen, configFile),
@@ -1209,6 +1682,7 @@ export async function createKodaXRuntime(
       closed = true;
       runService.closeAll('runtime closed');
       permissions.rejectAll('runtime closed');
+      userInputs.rejectAll('runtime closed');
       await agentPlane?.close();
       bus.close();
     },
@@ -1237,7 +1711,7 @@ async function createInProcessExternalAgentDaemon(
     endpoint,
     connectTimeoutMs: options.daemonConnectTimeoutMs,
     startupTimeoutMs: options.daemonStartupTimeoutMs,
-    createRuntime: () => createKodaXRuntime({
+    createRuntime: (runtimeId) => createKodaXRuntime({
       mode: 'embedded',
       homeDir: options.homeDir,
       profile: options.profile,
@@ -1245,6 +1719,8 @@ async function createInProcessExternalAgentDaemon(
       defaultProvider: options.defaultProvider,
       defaultModel: options.defaultModel,
       permissionTimeoutMs: options.permissionTimeoutMs,
+      sharedDaemonHost: true,
+      daemonHostRuntimeId: runtimeId,
       clientInfo: options.clientInfo,
       capabilities: options.capabilities,
       requirements: options.requirements,
@@ -1347,13 +1823,56 @@ function assertRuntimeCapabilities(
   value: unknown,
   requirements: RuntimeCapabilityRequirements | undefined,
 ): void {
-  if (!requirements?.hardDispose && !requirements?.externalAgents) return;
+  if (
+    !requirements?.hardDispose
+    && !requirements?.externalAgents
+    && requirements?.operationDeduplication === undefined
+    && requirements?.sessionObservation === undefined
+    && requirements?.afterTurnInput === undefined
+    && requirements?.interruptInput === undefined
+    && requirements?.askUserTransport === undefined
+    && requirements?.permissionCas === undefined
+    && requirements?.providerCredentialBroker === undefined
+    && requirements?.runBoundHostTools === undefined
+    && requirements?.coderOwnerFencing === undefined
+    && requirements?.crashOutcomeModel === undefined
+    && requirements?.coderFeatureMatrix === undefined
+  ) return;
   const capabilities = requireRuntimeRecord(value);
   if (requirements.hardDispose && capabilities.hardDispose !== true) {
     throw new Error('Runtime does not support the required hardDispose capability.');
   }
   if (requirements.externalAgents && capabilities.externalAgents !== true) {
     throw new Error('Runtime does not support the required externalAgents capability.');
+  }
+  if (requirements.operationDeduplication !== undefined) {
+    assertVersionedRuntimeCapability(capabilities, 'operationDeduplication', requirements.operationDeduplication);
+  }
+  const versionedRequirements = [
+    ['sessionObservation', requirements.sessionObservation],
+    ['afterTurnInput', requirements.afterTurnInput],
+    ['interruptInput', requirements.interruptInput],
+    ['askUserTransport', requirements.askUserTransport],
+    ['permissionCas', requirements.permissionCas],
+    ['providerCredentialBroker', requirements.providerCredentialBroker],
+    ['runBoundHostTools', requirements.runBoundHostTools],
+    ['coderOwnerFencing', requirements.coderOwnerFencing],
+    ['crashOutcomeModel', requirements.crashOutcomeModel],
+    ['coderFeatureMatrix', requirements.coderFeatureMatrix],
+  ] as const;
+  for (const [name, version] of versionedRequirements) {
+    if (version !== undefined) assertVersionedRuntimeCapability(capabilities, name, version);
+  }
+}
+
+function assertVersionedRuntimeCapability(
+  capabilities: Record<string, unknown>,
+  name: string,
+  version: number,
+): void {
+  const capability = capabilities[name];
+  if (!isRecord(capability) || capability.version !== version) {
+    throw new Error(`Runtime does not support the required ${name} capability.`);
   }
 }
 
@@ -1423,14 +1942,26 @@ export async function connectKodaXRuntime(
   const token = resolveConnectDaemonToken(options);
   let identity: RuntimeIdentity;
   let daemonCapabilities: Readonly<Record<string, unknown>> = {};
+  let journalEpoch: string | undefined;
+  let grantedScopes: readonly RuntimeGrantedScope[] | undefined;
   try {
+    const clientInfo: RuntimeClientInfo = {
+      name: options.clientInfo?.name ?? 'kodax-sdk',
+      instanceId: options.clientInfo?.instanceId
+        ?? `sdk_${randomUUID().replace(/-/g, '')}`,
+      ...(options.clientInfo?.title !== undefined ? { title: options.clientInfo.title } : {}),
+      ...(options.clientInfo?.version !== undefined ? { version: options.clientInfo.version } : {}),
+    };
     const initialized = requireRuntimeRecord(
       await transport.request('initialize', {
         profile: options.profile ?? 'default',
         autoStart: options.autoStart === true,
         ...(token !== undefined ? { token } : {}),
-        ...(options.clientInfo !== undefined ? { clientInfo: options.clientInfo } : {}),
-        ...(options.capabilities !== undefined ? { capabilities: options.capabilities } : {}),
+        clientInfo,
+        capabilities: {
+          ...options.capabilities,
+          operationDeduplication: true,
+        },
         ...(endpoint !== undefined ? { endpoint: endpoint.path } : {}),
       }),
     );
@@ -1438,6 +1969,10 @@ export async function connectKodaXRuntime(
     daemonCapabilities = initialized.capabilities === undefined
       ? {}
       : requireRuntimeRecord(initialized.capabilities);
+    journalEpoch = typeof initialized.journalEpoch === 'string'
+      ? initialized.journalEpoch
+      : undefined;
+    grantedScopes = parseRuntimeGrantedScopes(initialized.grantedScopes);
     assertRuntimeCapabilities(daemonCapabilities, options.requirements);
     const expectedProfile = options.profile ?? 'default';
     if (identity.profile !== expectedProfile) {
@@ -1454,6 +1989,8 @@ export async function connectKodaXRuntime(
     identity: { ...identity, mode: 'daemon', isolation: 'process' },
     transport,
     capabilities: daemonCapabilities,
+    ...(journalEpoch !== undefined ? { journalEpoch } : {}),
+    ...(grantedScopes !== undefined ? { grantedScopes } : {}),
   });
   if (!lease) return runtime;
   return {
@@ -1468,6 +2005,31 @@ export async function connectKodaXRuntime(
 function assertPositiveRuntimeTimeout(name: string, value: number | undefined): void {
   if (value === undefined || (Number.isFinite(value) && value > 0)) return;
   throw new Error(`${name} must be a positive finite number.`);
+}
+
+function parseRuntimeGrantedScopes(value: unknown): readonly RuntimeGrantedScope[] | undefined {
+  if (!Array.isArray(value)) return undefined;
+  const scopes = value.filter((scope): scope is RuntimeGrantedScope => (
+    typeof scope === 'string' && isRuntimeGrantedScope(scope)
+  ));
+  return scopes.length === value.length ? scopes : undefined;
+}
+
+function isRuntimeGrantedScope(value: string): value is RuntimeGrantedScope {
+  return value === 'session:observe'
+    || value === 'session:write'
+    || value === 'run:control'
+    || value === 'interaction:respond'
+    || value === 'permission:respond'
+    || value === 'permission:grant-admin'
+    || value === 'integration:admin'
+    || value === 'workflow:control'
+    || value === 'artifact:write'
+    || value === 'agent:control'
+    || value === 'credential:register'
+    || value === 'host-tool:register'
+    || value === 'owner:admin'
+    || value === 'daemon:admin';
 }
 
 function resolveConnectDaemonToken(options: ConnectKodaXRuntimeOptions): string | undefined {
@@ -1490,12 +2052,15 @@ function normalizeRuntimeDaemonEndpoint(
 }
 
 function createRuntimeSessionService(
+  identity: RuntimeIdentity,
   manager: SessionManager,
   bus: RuntimeEventBus,
   persistence: RuntimePersistence,
   ensureOpen: () => void,
   hasActiveRun: (sessionId: string) => boolean,
   updateActivePermissionMode: (sessionId: string, permissionMode: string | undefined) => void,
+  listRuns: (sessionId: string) => Promise<readonly RuntimeRunStatus[]>,
+  listPendingPermissions: (sessionId: string) => Promise<readonly RuntimePermissionRequest[]>,
 ): RuntimeSessionService {
   const toRuntimeSession = (
     id: string,
@@ -1510,6 +2075,37 @@ function createRuntimeSessionService(
     ...(data.runtimeInfo?.profileId ? { profileId: data.runtimeInfo.profileId } : {}),
     ...(createdAt ? { createdAt } : {}),
   });
+
+  const captureObservationSnapshot = async (
+    sessionId: string,
+  ): Promise<RuntimeSessionObservationSnapshot> => {
+    for (let attempt = 0; attempt < MAX_RUNTIME_SNAPSHOT_ATTEMPTS; attempt += 1) {
+      const before = bus.currentSessionSeq(sessionId);
+      const data = await manager.loadSession(sessionId);
+      if (!data) throw new Error(`Session not found: ${sessionId}`);
+      const [transcript, runs, pendingPermissions] = await Promise.all([
+        manager.loadFullTranscript(sessionId),
+        listRuns(sessionId),
+        listPendingPermissions(sessionId),
+      ]);
+      const settings = persistence.loadSessionSettingsVersioned(sessionId);
+      const after = bus.currentSessionSeq(sessionId);
+      if (before !== after) continue;
+      return {
+        runtimeId: identity.runtimeId,
+        cursor: after,
+        session: toRuntimeSession(sessionId, data),
+        transcript,
+        settings,
+        runs,
+        pendingPermissions,
+        live: bus.projectSession(sessionId),
+      };
+    }
+    throw createRuntimeResyncError(
+      `Session ${sessionId} changed continuously while taking a snapshot`,
+    );
+  };
 
   return {
     async create(input = {}) {
@@ -1554,6 +2150,53 @@ function createRuntimeSessionService(
       return manager.loadFullTranscript(sessionId);
     },
 
+    async observe(sessionId, listener) {
+      ensureOpen();
+      const pending: RuntimeEvent[] = [];
+      let cursor: number | undefined;
+      let closed = false;
+      const deliver = (event: RuntimeEvent): void => {
+        if (closed || (cursor !== undefined && event.seq <= cursor)) return;
+        try {
+          listener(event);
+        } catch (error: unknown) {
+          emitKodaXDiagnostic({
+            source: 'runtime.sessions.observe',
+            level: 'error',
+            message: `Session observation listener failed for ${event.type}`,
+            detail: normalizeError(error),
+          });
+        }
+      };
+      const subscription = bus.service.subscribe({ sessionId }, (event) => {
+        if (cursor === undefined) {
+          pending.push(event);
+        } else {
+          deliver(event);
+        }
+      });
+      try {
+        const snapshot = await captureObservationSnapshot(sessionId);
+        cursor = snapshot.cursor;
+        for (const event of pending.splice(0).sort((left, right) => left.seq - right.seq)) {
+          deliver(event);
+        }
+        return {
+          snapshot,
+          close() {
+            if (closed) return;
+            closed = true;
+            pending.length = 0;
+            subscription.close();
+          },
+        };
+      } catch (error: unknown) {
+        closed = true;
+        subscription.close();
+        throw error;
+      }
+    },
+
     async fork(input) {
       ensureOpen();
       const forked = await manager.forkSession(input.sessionId, {
@@ -1580,28 +2223,49 @@ function createRuntimeSessionService(
       return session;
     },
 
-    async getSettings(sessionId) {
+    async getSettingsVersioned(sessionId) {
       ensureOpen();
       await loadRequiredSession(manager, sessionId);
-      return persistence.loadSessionSettings(sessionId);
+      return persistence.loadSessionSettingsVersioned(sessionId);
+    },
+
+    async getSettings(sessionId) {
+      return (await this.getSettingsVersioned(sessionId)).value;
     },
 
     async updateSettings(sessionId, patch) {
+      const current = await this.getSettingsVersioned(sessionId);
+      return (await this.updateSettingsVersioned(
+        sessionId,
+        patch,
+        { expectedRevision: current.revision },
+      )).value;
+    },
+
+    async updateSettingsVersioned(sessionId, patch, options) {
       ensureOpen();
       const sessionData = await loadRequiredSession(manager, sessionId);
-      const current = persistence.loadSessionSettings(sessionId);
-      const settings = applySessionSettingsPatch(current, patch);
+      const current = persistence.loadSessionSettingsVersioned(sessionId);
+      if (current.revision !== options.expectedRevision) {
+        throw createRuntimeConflictError(
+          `Session settings revision ${options.expectedRevision} is stale; current revision is ${current.revision}`,
+          current.revision,
+        );
+      }
+      const settings = applySessionSettingsPatch(current.value, patch);
       assertSessionSettingsAllowed(sessionData, settings);
-      persistence.saveSessionSettings(sessionId, settings);
+      const updated = { revision: current.revision + 1, value: settings };
+      persistence.saveSessionSettingsVersioned(sessionId, updated);
       if (patch.permissionMode !== undefined) {
         updateActivePermissionMode(sessionId, settings.permissionMode);
       }
       bus.emit('session.settings.updated', {
         sessionId,
+        revision: updated.revision,
         settings,
         patch,
       }, { sessionId, runId: sessionId });
-      return settings;
+      return updated;
     },
 
     async appendNotice(input) {
@@ -1714,12 +2378,22 @@ function createRuntimeRunService(deps: {
   readonly ensureOpen: () => void;
   readonly isClosed: () => boolean;
   readonly permissions: RuntimePermissionRegistry;
+  readonly userInputs: RuntimeUserInputRegistry;
+  readonly enableSharedInteractions: boolean;
   readonly persistence: RuntimePersistence;
   readonly runs: Map<string, RuntimeRunRecord>;
   readonly sessionManager: SessionManager;
 }): RuntimeRunServiceInternal {
   const activeRunBySession = new Map<string, string>();
   const queueBySession = new Map<string, string[]>();
+  const latestSessionOrder = new Map<string, number>();
+  const startOrderBySession = new Map<string, Promise<void>>();
+  for (const run of deps.runs.values()) {
+    latestSessionOrder.set(
+      run.sessionId,
+      Math.max(latestSessionOrder.get(run.sessionId) ?? 0, run.sessionOrder),
+    );
+  }
 
   const getRecord = (runId: string): RuntimeRunRecord => {
     const run = deps.runs.get(runId);
@@ -1738,10 +2412,12 @@ function createRuntimeRunService(deps: {
   const resolveRunStart = (record: RuntimeRunRecord, result: RuntimeRunResult): void => {
     record.start?.resolve(result);
     record.start = undefined;
+    delete record.providerCredential;
   };
 
   const finishRun = (record: RuntimeRunRecord, result: RuntimeRunResult): RuntimeRunResult => {
     deps.permissions.rejectForRun(record.runId, 'runtime run ended');
+    deps.userInputs.rejectForRun(record.runId, 'runtime run ended');
     resolveRunStart(record, result);
     releaseActiveRun(record);
     pruneTerminalRuns(deps.runs);
@@ -1754,13 +2430,19 @@ function createRuntimeRunService(deps: {
     reason: string,
     drain: boolean,
   ): RuntimeRunResult => {
+    const wasQueued = record.phase === 'queued';
     if (record.phase === 'queued') {
       removeQueuedRun(queueBySession, record);
     }
     record.running?.abort(new Error(reason));
     record.abortController?.abort(new Error(reason));
     deps.permissions.rejectForRun(record.runId, reason);
-    markRunTerminal(deps.bus, deps.persistence, record, 'cancelled');
+    deps.userInputs.rejectForRun(record.runId, reason);
+    markRunTerminal(deps.bus, deps.persistence, record, 'cancelled', {
+      code: 'cancelled',
+      effectOutcome: wasQueued ? 'none' : 'unknown',
+      message: reason,
+    });
     const result: RuntimeRunResult = {
       runId: record.runId,
       sessionId: record.sessionId,
@@ -1781,17 +2463,20 @@ function createRuntimeRunService(deps: {
     }
     record.phase = 'running';
     record.queuedAt = undefined;
+    record.runningAt = new Date().toISOString();
     activeRunBySession.set(record.sessionId, record.runId);
+    saveRunStatusSafely(deps.bus, deps.persistence, record, statusFromRecord(record));
     deps.bus.emit('run.started', statusFromRecord(record), {
       sessionId: record.sessionId,
       runId: record.runId,
     });
-    saveRunStatusSafely(deps.bus, deps.persistence, record, statusFromRecord(record));
 
     const events = wrapKodaXEvents({
       bus: deps.bus,
       original: record.start.options.events,
       permissions: deps.permissions,
+      userInputs: deps.userInputs,
+      enableSharedInteractions: deps.enableSharedInteractions,
       record,
     });
     const runOptions = buildRunOptions({
@@ -1829,10 +2514,14 @@ function createRuntimeRunService(deps: {
           abortController.abort(upstreamSignal.reason);
         }, { once: true });
       }
-      void runManagedTask({
-        ...runOptions,
-        abortSignal: abortController.signal,
-      }, record.start.prompt)
+      const managedOperation = () => runManagedTask({
+          ...runOptions,
+          abortSignal: abortController.signal,
+        }, record.start!.prompt);
+      const managedResult = record.providerCredential !== undefined
+        ? runWithProviderCredential(record.provider, record.providerCredential, managedOperation)
+        : managedOperation();
+      void managedResult
         .then((value): RuntimeRunResult => {
           const phase = record.terminalEmitted
             ? record.phase
@@ -1841,19 +2530,23 @@ function createRuntimeRunService(deps: {
           return { runId: record.runId, sessionId: record.sessionId, phase: record.phase, result: value };
         })
         .catch((error: unknown): RuntimeRunResult => {
-          const normalized = normalizeError(error);
-          const phase = record.terminalEmitted ? record.phase : 'failed';
-          if (phase === 'failed') {
+          const normalized = normalizeRuntimeRunError(error, record);
+          const failure = classifyRuntimeRunFailure(error);
+          const phase = record.terminalEmitted ? record.phase : failure.phase;
+          if (!record.terminalEmitted) {
             record.error = normalized.message;
           }
-          markRunTerminal(deps.bus, deps.persistence, record, phase);
+          markRunTerminal(deps.bus, deps.persistence, record, phase, failure.terminal);
           return { runId: record.runId, sessionId: record.sessionId, phase: record.phase, error: normalized };
         })
         .then((result) => finishRun(record, result));
       return;
     }
 
-    const running = startKodaX(runOptions, record.start.prompt);
+    const codingOperation = () => startKodaX(runOptions, record.start!.prompt);
+    const running = record.providerCredential !== undefined
+      ? runWithProviderCredential(record.provider, record.providerCredential, codingOperation)
+      : codingOperation();
     record.running = running;
     void running.result
       .then((value): RuntimeRunResult => {
@@ -1864,12 +2557,13 @@ function createRuntimeRunService(deps: {
         return { runId: record.runId, sessionId: record.sessionId, phase: record.phase, result: value };
       })
       .catch((error: unknown): RuntimeRunResult => {
-        const normalized = normalizeError(error);
-        const phase = record.terminalEmitted ? record.phase : 'failed';
-        if (phase === 'failed') {
+        const normalized = normalizeRuntimeRunError(error, record);
+        const failure = classifyRuntimeRunFailure(error);
+        const phase = record.terminalEmitted ? record.phase : failure.phase;
+        if (!record.terminalEmitted) {
           record.error = normalized.message;
         }
-        markRunTerminal(deps.bus, deps.persistence, record, phase);
+        markRunTerminal(deps.bus, deps.persistence, record, phase, failure.terminal);
         return { runId: record.runId, sessionId: record.sessionId, phase: record.phase, error: normalized };
       })
       .then((result) => finishRun(record, result));
@@ -1893,15 +2587,24 @@ function createRuntimeRunService(deps: {
     const queue = queueBySession.get(record.sessionId) ?? [];
     queue.push(record.runId);
     queueBySession.set(record.sessionId, queue);
+    saveRunStatusSafely(deps.bus, deps.persistence, record, statusFromRecord(record));
     deps.bus.emit('run.queued', statusFromRecord(record), {
       sessionId: record.sessionId,
       runId: record.runId,
     });
-    saveRunStatusSafely(deps.bus, deps.persistence, record, statusFromRecord(record));
   };
 
-  return {
-    async start(input) {
+  const publishRunUpdate = (record: RuntimeRunRecord): void => {
+    const status = statusFromRecord(record);
+    saveRunStatusSafely(deps.bus, deps.persistence, record, status);
+    deps.bus.emit('run.updated', status, {
+      sessionId: record.sessionId,
+      runId: record.runId,
+      ...(record.turnId !== undefined ? { turnId: record.turnId } : {}),
+    });
+  };
+
+  const startRun = async (input: RuntimeStartRunInput): Promise<RuntimeRunHandle> => {
       deps.ensureOpen();
       const normalizedInput = normalizeRuntimeRunInput(input, deps.artifacts);
       const session = await deps.sessionManager.loadSession(input.sessionId);
@@ -1919,19 +2622,47 @@ function createRuntimeRunService(deps: {
       if (!provider) {
         throw new Error('runtime.runs.start requires input.options.provider or runtime defaultProvider');
       }
+      const trustedInput = input as RuntimeTrustedStartRunInput;
+      if (
+        trustedInput.providerCredential !== undefined
+        && trustedInput.providerCredentialProvider !== undefined
+        && trustedInput.providerCredentialProvider !== provider
+      ) {
+        throw createRuntimeCredentialUnavailableError(
+          `Credential lease is bound to ${trustedInput.providerCredentialProvider}, not ${provider}.`,
+        );
+      }
       const model = options.modelOverride ?? options.model ?? deps.defaultModel;
-      const runId = createRunId();
+      const runId = (input as RuntimeTrustedStartRunInput).trustedRunId ?? createRunId();
+      if (deps.runs.has(runId)) throw createRuntimeConflictError(`Runtime run already exists: ${runId}`, 0);
       const startedAt = new Date().toISOString();
       let resolveResult: (result: RuntimeRunResult) => void = () => undefined;
       const result = new Promise<RuntimeRunResult>((resolve) => {
         resolveResult = resolve;
       });
-      const isQueued = activeRunBySession.has(input.sessionId);
+      const requiredAfterRunId = (input as RuntimeTrustedStartRunInput).requiredAfterRunId;
+      const requiredAfterRun = requiredAfterRunId === undefined
+        ? undefined
+        : getRecord(requiredAfterRunId);
+      if (requiredAfterRun !== undefined) {
+        if (requiredAfterRun.sessionId !== input.sessionId) {
+          throw new Error(
+            `Runtime continuation target ${requiredAfterRunId} does not belong to session ${input.sessionId}`,
+          );
+        }
+        if (!isActiveRunPhase(requiredAfterRun.phase) && requiredAfterRun.phase !== 'queued') {
+          throw new RuntimeContinuationStaleError(requiredAfterRun.runId);
+        }
+      }
+      const sessionOrder = (latestSessionOrder.get(input.sessionId) ?? 0) + 1;
+      latestSessionOrder.set(input.sessionId, sessionOrder);
+      const isQueued = requiredAfterRun !== undefined || activeRunBySession.has(input.sessionId);
       const record: RuntimeRunRecord = {
         runId,
         sessionId: input.sessionId,
         phase: isQueued ? 'queued' : 'running',
         startedAt,
+        sessionOrder,
         ...(isQueued ? { queuedAt: startedAt } : {}),
         provider,
         ...(model !== undefined ? { model } : {}),
@@ -1941,6 +2672,12 @@ function createRuntimeRunService(deps: {
         ...(settings.permissionMode !== undefined ? { permissionMode: settings.permissionMode } : {}),
         ...(options.reasoningMode !== undefined ? { reasoning: options.reasoningMode } : {}),
         mode: input.mode ?? 'coding',
+        ...((input as RuntimeTrustedStartRunInput).providerCredential !== undefined
+          ? { providerCredential: (input as RuntimeTrustedStartRunInput).providerCredential }
+          : {}),
+        ...((input as RuntimeTrustedStartRunInput).origin !== undefined
+          ? { origin: (input as RuntimeTrustedStartRunInput).origin }
+          : {}),
         ...(input.agentContext ?? deps.defaultAgentContext
           ? { agentContext: input.agentContext ?? deps.defaultAgentContext }
           : {}),
@@ -1967,6 +2704,90 @@ function createRuntimeRunService(deps: {
           return record.turnId;
         },
         result,
+      };
+  };
+
+  const start = (input: RuntimeStartRunInput): Promise<RuntimeRunHandle> => {
+    const previous = startOrderBySession.get(input.sessionId) ?? Promise.resolve();
+    const result = previous.then(() => startRun(input));
+    const tail = result.then(
+      () => undefined,
+      () => undefined,
+    );
+    startOrderBySession.set(input.sessionId, tail);
+    void tail.then(() => {
+      if (startOrderBySession.get(input.sessionId) === tail) {
+        startOrderBySession.delete(input.sessionId);
+      }
+    });
+    return result;
+  };
+
+  return {
+    start,
+
+    async submitInput(input) {
+      deps.ensureOpen();
+      const afterRun = getRecord(input.afterRunId);
+      if (afterRun.sessionId !== input.sessionId) {
+        throw new Error(
+          `Runtime continuation target ${input.afterRunId} does not belong to session ${input.sessionId}`,
+        );
+      }
+      if (!isActiveRunPhase(afterRun.phase) && afterRun.phase !== 'queued') {
+        return {
+          accepted: false,
+          delivery: input.delivery,
+          sessionId: input.sessionId,
+          afterRunId: input.afterRunId,
+          reason: 'stale_run',
+        };
+      }
+      if (input.delivery === 'interrupt') {
+        return {
+          accepted: false,
+          delivery: input.delivery,
+          sessionId: input.sessionId,
+          afterRunId: input.afterRunId,
+          reason: 'unsupported_capability',
+        };
+      }
+
+      const trusted = input as RuntimeTrustedSubmitInput;
+      let handle: RuntimeRunHandle;
+      try {
+        handle = await start({
+          sessionId: input.sessionId,
+          input: input.input,
+          ...(trusted.options !== undefined ? { options: trusted.options } : {}),
+          ...(trusted.providerCredential !== undefined
+            ? { providerCredential: trusted.providerCredential }
+            : {}),
+          ...(trusted.providerCredentialProvider !== undefined
+            ? { providerCredentialProvider: trusted.providerCredentialProvider }
+            : {}),
+          ...(trusted.origin !== undefined ? { origin: trusted.origin } : {}),
+          ...(trusted.trustedRunId !== undefined ? { trustedRunId: trusted.trustedRunId } : {}),
+          requiredAfterRunId: input.afterRunId,
+        } as RuntimeTrustedStartRunInput);
+      } catch (error: unknown) {
+        if (!(error instanceof RuntimeContinuationStaleError)) throw error;
+        return {
+          accepted: false,
+          delivery: input.delivery,
+          sessionId: input.sessionId,
+          afterRunId: input.afterRunId,
+          reason: 'stale_run',
+        };
+      }
+      const sessionOrder = getRecord(handle.runId).sessionOrder;
+      return {
+        accepted: true,
+        delivery: input.delivery,
+        runId: handle.runId,
+        sessionId: input.sessionId,
+        afterRunId: input.afterRunId,
+        sessionOrder,
       };
     },
 
@@ -2008,6 +2829,7 @@ function createRuntimeRunService(deps: {
       const run = getRecord(runId);
       run.model = model;
       run.running?.setModel(model);
+      publishRunUpdate(run);
     },
 
     async setProvider(runId, provider) {
@@ -2015,6 +2837,7 @@ function createRuntimeRunService(deps: {
       const run = getRecord(runId);
       run.provider = provider;
       run.running?.setProvider(provider);
+      publishRunUpdate(run);
     },
 
     async setReasoning(runId, reasoning) {
@@ -2022,6 +2845,7 @@ function createRuntimeRunService(deps: {
       const run = getRecord(runId);
       run.reasoning = reasoning;
       run.running?.setReasoning(reasoning);
+      publishRunUpdate(run);
     },
 
     closeAll(reason) {
@@ -2568,6 +3392,8 @@ function removeQueuedRun(queueBySession: Map<string, string[]>, run: RuntimeRunR
 function createRuntimeEventBus(persistence: RuntimePersistence) {
   let closed = false;
   const events: RuntimeEvent[] = [];
+  const liveBySession = new Map<string, RuntimeSessionLiveProjectionState>();
+  const latestSeqBySession = new Map<string, number>();
   const subscribers = new Set<{
     readonly filter: RuntimeEventFilter;
     readonly listener: RuntimeEventListener;
@@ -2663,6 +3489,10 @@ function createRuntimeEventBus(persistence: RuntimePersistence) {
       scope: { readonly sessionId: string; readonly runId: string; readonly turnId?: string },
     ): RuntimeEvent {
       const event = createEvent(type, payload, scope);
+      latestSeqBySession.set(event.sessionId, event.seq);
+      const live = liveBySession.get(event.sessionId) ?? createRuntimeSessionLiveProjectionState();
+      liveBySession.set(event.sessionId, live);
+      applyRuntimeSessionEvent(live, event);
       remember(event);
       const notifyEvents: RuntimeEvent[] = [event];
       try {
@@ -2678,6 +3508,19 @@ function createRuntimeEventBus(persistence: RuntimePersistence) {
       for (const emitted of notifyEvents) notify(emitted);
       return event;
     },
+    projectSession(sessionId: string): RuntimeSessionLiveProjection {
+      const live = liveBySession.get(sessionId);
+      return live === undefined
+        ? snapshotRuntimeSessionLiveProjection(createRuntimeSessionLiveProjectionState())
+        : snapshotRuntimeSessionLiveProjection(live);
+    },
+    currentSessionSeq(sessionId: string): number {
+      const current = latestSeqBySession.get(sessionId);
+      if (current !== undefined) return current;
+      const recovered = latestRuntimeEventSeq(persistence.replay({ sessionId }));
+      latestSeqBySession.set(sessionId, recovered);
+      return recovered;
+    },
     close() {
       closed = true;
       try {
@@ -2691,8 +3534,121 @@ function createRuntimeEventBus(persistence: RuntimePersistence) {
         });
       }
       subscribers.clear();
+      liveBySession.clear();
+      latestSeqBySession.clear();
     },
   };
+}
+
+interface RuntimeSessionLiveProjectionState {
+  readonly assistantTextByRun: Record<string, string>;
+  readonly thinkingTextByRun: Record<string, string>;
+  readonly activeTools: Map<string, RuntimeActiveToolProjection>;
+  readonly pendingUserInputs: Map<string, RuntimePendingUserInputProjection>;
+  todo: unknown;
+}
+
+function createRuntimeSessionLiveProjectionState(): RuntimeSessionLiveProjectionState {
+  return {
+    assistantTextByRun: {},
+    thinkingTextByRun: {},
+    activeTools: new Map(),
+    pendingUserInputs: new Map(),
+    todo: undefined,
+  };
+}
+
+function applyRuntimeSessionEvent(
+  live: RuntimeSessionLiveProjectionState,
+  event: RuntimeEvent,
+): void {
+  const payload = isRecord(event.payload) ? event.payload : undefined;
+  if (event.type === 'assistant.delta' && typeof payload?.text === 'string') {
+    live.assistantTextByRun[event.runId] = `${live.assistantTextByRun[event.runId] ?? ''}${payload.text}`;
+  } else if (event.type === 'thinking.delta' && typeof payload?.text === 'string') {
+    live.thinkingTextByRun[event.runId] = `${live.thinkingTextByRun[event.runId] ?? ''}${payload.text}`;
+  } else if (event.type === 'tool.started') {
+    const key = runtimeToolProjectionKey(event);
+    live.activeTools.set(key, {
+      key,
+      runId: event.runId,
+      ...(event.turnId !== undefined ? { turnId: event.turnId } : {}),
+      started: event.payload,
+    });
+  } else if (event.type === 'tool.progress') {
+    const key = runtimeToolProjectionKey(event);
+    const current = live.activeTools.get(key)
+      ?? latestActiveToolForRun(live.activeTools, event.runId);
+    if (current) live.activeTools.set(current.key, { ...current, progress: event.payload });
+  } else if (event.type === 'tool.finished') {
+    const key = runtimeToolProjectionKey(event);
+    if (!live.activeTools.delete(key)) {
+      for (const [candidate, tool] of live.activeTools) {
+        if (tool.runId === event.runId) live.activeTools.delete(candidate);
+      }
+    }
+  } else if (event.type === 'todo.updated') {
+    live.todo = event.payload;
+  } else if (event.type === 'user_input.requested' && typeof payload?.requestId === 'string') {
+    live.pendingUserInputs.set(payload.requestId, {
+      requestId: payload.requestId,
+      runId: event.runId,
+      ...(event.turnId !== undefined ? { turnId: event.turnId } : {}),
+      detail: event.payload,
+    });
+  } else if (event.type === 'user_input.resolved' && typeof payload?.requestId === 'string') {
+    live.pendingUserInputs.delete(payload.requestId);
+  } else if (isTerminalRuntimeEvent(event.type)) {
+    delete live.assistantTextByRun[event.runId];
+    delete live.thinkingTextByRun[event.runId];
+    for (const [key, tool] of live.activeTools) {
+      if (tool.runId === event.runId) live.activeTools.delete(key);
+    }
+    for (const [key, input] of live.pendingUserInputs) {
+      if (input.runId === event.runId) live.pendingUserInputs.delete(key);
+    }
+  }
+}
+
+function snapshotRuntimeSessionLiveProjection(
+  live: RuntimeSessionLiveProjectionState,
+): RuntimeSessionLiveProjection {
+  return {
+    assistantTextByRun: { ...live.assistantTextByRun },
+    thinkingTextByRun: { ...live.thinkingTextByRun },
+    activeTools: [...live.activeTools.values()],
+    ...(live.todo !== undefined ? { todo: live.todo } : {}),
+    pendingUserInputs: [...live.pendingUserInputs.values()],
+  };
+}
+
+function latestRuntimeEventSeq(events: readonly RuntimeEvent[]): number {
+  return events.at(-1)?.seq ?? 0;
+}
+
+function runtimeToolProjectionKey(event: RuntimeEvent): string {
+  const payload = isRecord(event.payload) ? event.payload : undefined;
+  const meta = isRecord(payload?.meta) ? payload.meta : undefined;
+  const tool = isRecord(payload?.tool) ? payload.tool : undefined;
+  const result = isRecord(payload?.result) ? payload.result : undefined;
+  const candidate = meta?.toolCallId ?? meta?.toolUseId ?? tool?.id ?? result?.toolCallId;
+  return typeof candidate === 'string' && candidate.length > 0
+    ? `${event.runId}:${candidate}`
+    : `${event.runId}:${event.turnId ?? 'turn'}:${event.id}`;
+}
+
+function latestActiveToolForRun(
+  activeTools: ReadonlyMap<string, RuntimeActiveToolProjection>,
+  runId: string,
+): RuntimeActiveToolProjection | undefined {
+  return [...activeTools.values()].reverse().find((tool) => tool.runId === runId);
+}
+
+function isTerminalRuntimeEvent(type: RuntimeEventType): boolean {
+  return type === 'run.completed'
+    || type === 'run.failed'
+    || type === 'run.cancelled'
+    || type === 'run.interrupted';
 }
 
 function createRuntimePersistence(options: CreateKodaXRuntimeOptions): RuntimePersistence {
@@ -2701,9 +3657,12 @@ function createRuntimePersistence(options: CreateKodaXRuntimeOptions): RuntimePe
     : options.sessionsDir
       ? path.resolve(options.sessionsDir, '..')
       : process.cwd();
-  const runtimeDir = path.join(baseDir, '.kodax', 'runtime');
+  const runtimeDir = options.sharedDaemonHost === true
+    ? path.join(baseDir, '.kodax', 'runtime', 'profiles', encodeURIComponent(options.profile ?? 'default'))
+    : path.join(baseDir, '.kodax', 'runtime');
   const runsDir = path.join(runtimeDir, 'runs');
   const sessionSettingsDir = path.join(runtimeDir, 'session-settings');
+  const permissionGrantsFile = path.join(runtimeDir, 'permission-grants.json');
   const eventSequenceFile = path.join(runtimeDir, 'event-sequence');
   const bufferedEventLines = new Map<string, string[]>();
   let bufferedEventBytes = 0;
@@ -2936,6 +3895,12 @@ function createRuntimePersistence(options: CreateKodaXRuntimeOptions): RuntimePe
     nextEventSeq() {
       return allocateEventSeq();
     },
+    currentEventSeq() {
+      if (nextSequence === undefined) {
+        nextSequence = findMaxPersistedEventSeq() + 1;
+      }
+      return nextSequence - 1;
+    },
     replay(filter) {
       try {
         flushBufferedEvents();
@@ -2960,7 +3925,7 @@ function createRuntimePersistence(options: CreateKodaXRuntimeOptions): RuntimePe
     saveRunStatus(status) {
       const dir = runDir(status.runId);
       fs.mkdirSync(dir, { recursive: true });
-      fs.writeFileSync(statusFile(status.runId), JSON.stringify(status, null, 2), 'utf-8');
+      writeRuntimeJsonAtomic(statusFile(status.runId), status);
     },
     loadRunStatus(runId) {
       const file = statusFile(runId);
@@ -3012,32 +3977,88 @@ function createRuntimePersistence(options: CreateKodaXRuntimeOptions): RuntimePe
       }
       return statuses;
     },
-    loadSessionSettings(sessionId) {
+    loadSessionSettingsVersioned(sessionId) {
       const file = sessionSettingsFile(sessionId);
-      if (!fs.existsSync(file)) return {};
+      if (!fs.existsSync(file)) return { revision: 0, value: {} };
       try {
         const parsed: unknown = JSON.parse(fs.readFileSync(file, 'utf-8'));
-        return parseRuntimeSessionSettings(parsed);
+        if (
+          isRecord(parsed)
+          && Number.isSafeInteger(parsed.revision)
+          && typeof parsed.revision === 'number'
+          && parsed.revision >= 0
+          && isRecord(parsed.value)
+        ) {
+          return {
+            revision: parsed.revision,
+            value: parseRuntimeSessionSettings(parsed.value),
+          };
+        }
+        // v0.7.68 and earlier stored a plain settings object.
+        return { revision: 0, value: parseRuntimeSessionSettings(parsed) };
       } catch (error: unknown) {
         pushPersistenceWarning(
           `${file}:parse`,
           `Skipped malformed runtime session settings at ${path.basename(file)}: ${normalizeError(error).message}`,
           { sessionId, file },
         );
-        return {};
+        return { revision: 0, value: {} };
       }
+    },
+    loadSessionSettings(sessionId) {
+      return this.loadSessionSettingsVersioned(sessionId).value;
+    },
+    saveSessionSettingsVersioned(sessionId, settings) {
+      fs.mkdirSync(sessionSettingsDir, { recursive: true });
+      const file = sessionSettingsFile(sessionId);
+      writeRuntimeJsonAtomic(file, {
+        revision: settings.revision,
+        value: serializeSessionSettings(settings.value),
+      });
     },
     saveSessionSettings(sessionId, settings) {
-      fs.mkdirSync(sessionSettingsDir, { recursive: true });
-      const serialized = serializeSessionSettings(settings);
-      const file = sessionSettingsFile(sessionId);
-      if (Object.keys(serialized).length === 0) {
-        if (fs.existsSync(file)) fs.unlinkSync(file);
-        return;
+      const current = this.loadSessionSettingsVersioned(sessionId);
+      this.saveSessionSettingsVersioned(sessionId, {
+        revision: current.revision + 1,
+        value: settings,
+      });
+    },
+    loadPermissionGrants() {
+      if (!fs.existsSync(permissionGrantsFile)) return { revision: 0, value: [] };
+      try {
+        const parsed: unknown = JSON.parse(fs.readFileSync(permissionGrantsFile, 'utf-8'));
+        if (!isRecord(parsed) || !Number.isSafeInteger(parsed.revision) || !Array.isArray(parsed.value)) {
+          throw new Error('invalid permission grant store shape');
+        }
+        return {
+          revision: parsed.revision as number,
+          value: parsed.value.map(parseRuntimePermissionGrant),
+        };
+      } catch (error: unknown) {
+        throw new Error(`Permission grant store is untrusted: ${normalizeError(error).message}`);
       }
-      fs.writeFileSync(file, JSON.stringify(serialized, null, 2), 'utf-8');
+    },
+    savePermissionGrants(grants) {
+      fs.mkdirSync(runtimeDir, { recursive: true });
+      writeRuntimeJsonAtomic(permissionGrantsFile, grants);
     },
   };
+}
+
+function writeRuntimeJsonAtomic(file: string, value: unknown): void {
+  const temporary = `${file}.${process.pid}.${randomUUID()}.tmp`;
+  let descriptor: number | undefined;
+  try {
+    descriptor = fs.openSync(temporary, 'wx', 0o600);
+    fs.writeFileSync(descriptor, `${JSON.stringify(value, null, 2)}\n`, 'utf-8');
+    fs.fsyncSync(descriptor);
+    fs.closeSync(descriptor);
+    descriptor = undefined;
+    fs.renameSync(temporary, file);
+  } finally {
+    if (descriptor !== undefined) fs.closeSync(descriptor);
+    fs.rmSync(temporary, { force: true });
+  }
 }
 
 function resolveRuntimeSessionsDir(
@@ -3095,11 +4116,40 @@ function parseRuntimeRunStatus(value: unknown): RuntimeRunStatus | undefined {
     ...(typeof value.turnId === 'string' ? { turnId: value.turnId } : {}),
     phase: value.phase,
     startedAt: value.startedAt,
+    ...(typeof value.acceptedAt === 'string' ? { acceptedAt: value.acceptedAt } : {}),
+    ...(Number.isSafeInteger(value.sessionOrder) && typeof value.sessionOrder === 'number'
+      ? { sessionOrder: value.sessionOrder }
+      : {}),
+    ...(typeof value.queuedAt === 'string' ? { queuedAt: value.queuedAt } : {}),
+    ...(typeof value.runningAt === 'string' ? { runningAt: value.runningAt } : {}),
+    ...(typeof value.executionStartedAt === 'string'
+      ? { executionStartedAt: value.executionStartedAt }
+      : {}),
     ...(typeof value.endedAt === 'string' ? { endedAt: value.endedAt } : {}),
     provider: value.provider,
+    ...(value.mode === 'coding' || value.mode === 'managed_task' ? { mode: value.mode } : {}),
+    ...(isRecord(value.origin) && typeof value.origin.principalId === 'string'
+      ? {
+          origin: {
+            principalId: value.origin.principalId,
+            ...(typeof value.origin.clientName === 'string'
+              ? { clientName: value.origin.clientName }
+              : {}),
+            ...(typeof value.origin.clientVersion === 'string'
+              ? { clientVersion: value.origin.clientVersion }
+              : {}),
+            ...(typeof value.origin.operationId === 'string'
+              ? { operationId: value.origin.operationId }
+              : {}),
+          },
+        }
+      : {}),
     ...(typeof value.model === 'string' ? { model: value.model } : {}),
     ...(typeof value.reasoning === 'string' ? { reasoning: value.reasoning as KodaXReasoningMode } : {}),
     ...(typeof value.error === 'string' ? { error: value.error } : {}),
+    ...(parseRuntimeTerminalFact(value.terminal) !== undefined
+      ? { terminal: parseRuntimeTerminalFact(value.terminal)! }
+      : {}),
   };
 }
 
@@ -3114,6 +4164,46 @@ function isRuntimeRunPhase(value: unknown): value is RuntimeRunPhase {
     || value === 'interrupted';
 }
 
+function parseRuntimeTerminalFact(value: unknown): RuntimeTerminalFact | undefined {
+  if (!isRecord(value)) return undefined;
+  if (
+    !Number.isSafeInteger(value.revision)
+    || typeof value.revision !== 'number'
+    || !isRuntimeTerminalKind(value.kind)
+    || !isRuntimeTerminalCode(value.code)
+    || (value.effectOutcome !== 'none'
+      && value.effectOutcome !== 'known'
+      && value.effectOutcome !== 'unknown')
+  ) return undefined;
+  return {
+    revision: value.revision,
+    kind: value.kind,
+    code: value.code,
+    effectOutcome: value.effectOutcome,
+    ...(typeof value.message === 'string' ? { message: value.message } : {}),
+  };
+}
+
+function isRuntimeTerminalKind(value: unknown): value is RuntimeTerminalFact['kind'] {
+  return value === 'completed'
+    || value === 'failed'
+    || value === 'cancelled'
+    || value === 'interrupted';
+}
+
+function isRuntimeTerminalCode(value: unknown): value is RuntimeTerminalCode {
+  return value === 'completed'
+    || value === 'run_failed'
+    || value === 'cancelled'
+    || value === 'interrupted'
+    || value === 'runtime_restarted'
+    || value === 'daemon_crashed'
+    || value === 'credential_unavailable'
+    || value === 'host_not_dispatched'
+    || value === 'host_outcome_unknown'
+    || value === 'control_history_untrusted';
+}
+
 function recordFromPersistedStatus(status: RuntimeRunStatus): RuntimeRunRecord {
   return {
     runId: status.runId,
@@ -3121,12 +4211,17 @@ function recordFromPersistedStatus(status: RuntimeRunStatus): RuntimeRunRecord {
     ...(status.turnId !== undefined ? { turnId: status.turnId } : {}),
     phase: status.phase,
     startedAt: status.startedAt,
+    sessionOrder: status.sessionOrder ?? 0,
+    ...(status.queuedAt !== undefined ? { queuedAt: status.queuedAt } : {}),
+    ...(status.runningAt !== undefined ? { runningAt: status.runningAt } : {}),
     ...(status.endedAt !== undefined ? { endedAt: status.endedAt } : {}),
     provider: status.provider,
+    ...(status.origin !== undefined ? { origin: status.origin } : {}),
     ...(status.model !== undefined ? { model: status.model } : {}),
     ...(status.reasoning !== undefined ? { reasoning: status.reasoning } : {}),
     ...(status.error !== undefined ? { error: status.error } : {}),
-    mode: 'coding',
+    ...(status.terminal !== undefined ? { terminal: status.terminal } : {}),
+    mode: status.mode ?? 'coding',
     result: Promise.resolve(resultFromStatus(status)),
     terminalEmitted: isTerminalRunPhase(status.phase),
   };
@@ -3138,12 +4233,35 @@ function interruptPersistedNonTerminalRun(
   persistence: RuntimePersistence,
 ): RuntimeRunStatus {
   if (isTerminalRunPhase(status.phase)) return status;
-  const reason = status.phase === 'queued' ? 'daemon_restarted' : 'daemon_crashed';
+  const durableTerminal = [...persistence.replay({ runId: status.runId })]
+    .reverse()
+    .find((event) => {
+      if (!isTerminalRuntimeEvent(event.type)) return false;
+      const eventStatus = parseRuntimeRunStatus(event.payload);
+      return eventStatus?.runId === status.runId
+        && eventStatus.sessionId === status.sessionId
+        && eventStatus.phase === terminalPhaseFromEvent(event.type);
+    });
+  if (durableTerminal !== undefined) {
+    const recovered = parseRuntimeRunStatus(durableTerminal.payload);
+    if (recovered !== undefined) {
+      saveRunStatusSafely(bus, persistence, undefined, recovered);
+      return recovered;
+    }
+  }
+  const reason: RuntimeTerminalCode = status.phase === 'queued' ? 'runtime_restarted' : 'daemon_crashed';
   const recovered: RuntimeRunStatus = {
     ...status,
     phase: 'interrupted',
     endedAt: new Date().toISOString(),
     error: reason,
+    terminal: {
+      revision: 1,
+      kind: 'interrupted',
+      code: reason,
+      effectOutcome: status.phase === 'queued' ? 'none' : 'unknown',
+      message: 'Runtime process restarted before this run reached a durable terminal state.',
+    },
   };
   bus.emit('run.interrupted', recovered, {
     sessionId: recovered.sessionId,
@@ -3154,6 +4272,14 @@ function interruptPersistedNonTerminalRun(
   return recovered;
 }
 
+function terminalPhaseFromEvent(type: RuntimeEventType): RuntimeRunPhase | undefined {
+  if (type === 'run.completed') return 'completed';
+  if (type === 'run.failed') return 'failed';
+  if (type === 'run.cancelled') return 'cancelled';
+  if (type === 'run.interrupted') return 'interrupted';
+  return undefined;
+}
+
 function resolvePermissionTimeoutMs(expiresAt: string | undefined, fallbackMs: number): number {
   if (expiresAt === undefined) return fallbackMs;
   const expiresAtMs = Date.parse(expiresAt);
@@ -3161,7 +4287,164 @@ function resolvePermissionTimeoutMs(expiresAt: string | undefined, fallbackMs: n
   return Math.max(1, expiresAtMs - Date.now());
 }
 
-function createRuntimePermissionRegistry(bus: RuntimeEventBus, defaultTimeoutMs: number) {
+function createRuntimeUserInputRegistry(bus: RuntimeEventBus, defaultTimeoutMs: number) {
+  const pending = new Map<string, PendingUserInput>();
+
+  const resolvePending = (
+    requestId: string,
+    resolution: RuntimePendingUserInputResolution,
+    options?: { readonly expectedRevision?: number; readonly runId?: string },
+    reason?: string,
+  ): RuntimeUserInputResolution => {
+    const item = pending.get(requestId);
+    if (
+      !item
+      || (options?.runId !== undefined && item.request.runId !== options.runId)
+      || (
+        options?.expectedRevision !== undefined
+        && item.request.revision !== options.expectedRevision
+      )
+    ) {
+      return { requestId, accepted: false, status: 'already_resolved' };
+    }
+    if (resolution.status === 'answered') {
+      assertRuntimeUserInputAnswer(item.request.kind, resolution.answer);
+    }
+    pending.delete(requestId);
+    clearTimeout(item.timer);
+    item.resolve(resolution);
+    bus.emit('user_input.resolved', {
+      requestId,
+      kind: item.request.kind,
+      status: resolution.status,
+      ...(reason !== undefined ? { reason } : {}),
+    }, {
+      sessionId: item.request.sessionId,
+      runId: item.request.runId,
+      ...(item.request.turnId !== undefined ? { turnId: item.request.turnId } : {}),
+    });
+    return { requestId, accepted: true, status: resolution.status };
+  };
+
+  const trackAndWait = (
+    input: {
+      readonly sessionId: string;
+      readonly runId: string;
+      readonly turnId?: string;
+      readonly kind: RuntimeUserInputKind;
+      readonly options: unknown;
+    },
+    timeoutMs = defaultTimeoutMs,
+  ): {
+    readonly request: RuntimeUserInputRequest;
+    readonly response: Promise<RuntimePendingUserInputResolution>;
+  } => {
+    const id = `input_${randomUUID().replace(/-/g, '').slice(0, 12)}`;
+    const createdAt = new Date();
+    const request: RuntimeUserInputRequest = {
+      id,
+      revision: 0,
+      sessionId: input.sessionId,
+      runId: input.runId,
+      ...(input.turnId !== undefined ? { turnId: input.turnId } : {}),
+      kind: input.kind,
+      options: input.options,
+      createdAt: createdAt.toISOString(),
+      expiresAt: new Date(createdAt.getTime() + timeoutMs).toISOString(),
+    };
+    let resolveResponse: (resolution: RuntimePendingUserInputResolution) => void = () => undefined;
+    const response = new Promise<RuntimePendingUserInputResolution>((resolve) => {
+      resolveResponse = resolve;
+    });
+    const timer = setTimeout(() => {
+      resolvePending(id, { status: 'dismissed' }, undefined, 'timeout');
+    }, Math.max(1, timeoutMs));
+    timer.unref?.();
+    pending.set(id, { request, resolve: resolveResponse, timer });
+    bus.emit('user_input.requested', request, {
+      sessionId: request.sessionId,
+      runId: request.runId,
+      ...(request.turnId !== undefined ? { turnId: request.turnId } : {}),
+    });
+    return { request, response };
+  };
+
+  const dismissMatching = (
+    predicate: (request: RuntimeUserInputRequest) => boolean,
+    reason: string,
+  ): void => {
+    for (const item of [...pending.values()]) {
+      if (predicate(item.request)) {
+        resolvePending(item.request.id, { status: 'dismissed' }, undefined, reason);
+      }
+    }
+  };
+
+  const service: RuntimeUserInputService = {
+    async listPending(filter) {
+      return [...pending.values()]
+        .map((item) => item.request)
+        .filter((request) => (
+          (filter?.sessionId === undefined || request.sessionId === filter.sessionId)
+          && (filter?.runId === undefined || request.runId === filter.runId)
+        ));
+    },
+    async respond(requestId, answer, options) {
+      return resolvePending(requestId, { status: 'answered', answer }, options);
+    },
+    async dismiss(requestId, options) {
+      return resolvePending(requestId, { status: 'dismissed' }, options, 'client_dismissed');
+    },
+  };
+
+  return {
+    service,
+    trackAndWait,
+    resolve: resolvePending,
+    rejectForRun(runId: string, reason: string) {
+      dismissMatching((request) => request.runId === runId, reason);
+    },
+    rejectAll(reason: string) {
+      dismissMatching(() => true, reason);
+    },
+  };
+}
+
+function assertRuntimeUserInputAnswer(kind: RuntimeUserInputKind, answer: unknown): void {
+  const valid = kind === 'askUser'
+    ? isAskUserAnswer(answer)
+    : kind === 'askUserMulti'
+      ? isAskUserMultiAnswer(answer)
+      : typeof answer === 'string';
+  if (!valid) {
+    throw createRuntimeInvalidInputError(`Invalid answer for ${kind}`);
+  }
+}
+
+function isAskUserAnswer(value: unknown): value is AskUserAnswer {
+  return Array.isArray(value)
+    ? value.every(isAskUserSelectionAnswer)
+    : isAskUserSelectionAnswer(value);
+}
+
+function isAskUserSelectionAnswer(value: unknown): boolean {
+  return typeof value === 'string'
+    || (
+      isRecord(value)
+      && value.kind === 'customInput'
+      && typeof value.value === 'string'
+    );
+}
+
+function isAskUserMultiAnswer(value: unknown): boolean {
+  return isRecord(value) && Object.values(value).every(isAskUserAnswer);
+}
+
+function createRuntimePermissionRegistry(
+  bus: RuntimeEventBus,
+  defaultTimeoutMs: number,
+  persistence: RuntimePersistence,
+) {
   const pending = new Map<string, PendingPermission>();
 
   const trackAndWait = (
@@ -3191,6 +4474,9 @@ function createRuntimePermissionRegistry(bus: RuntimeEventBus, defaultTimeoutMs:
     const item = pending.get(requestId);
     if (!item) return false;
     if (expectedRunId !== undefined && item.request.runId !== expectedRunId) return false;
+    if (decision.type === 'allow_always') {
+      saveRuntimePermissionGrant(persistence, item.request, decision.scope);
+    }
     pending.delete(requestId);
     if (item.timer) clearTimeout(item.timer);
     for (const resolve of item.waiters) resolve(decision);
@@ -3216,6 +4502,10 @@ function createRuntimePermissionRegistry(bus: RuntimeEventBus, defaultTimeoutMs:
 
   const service: RuntimePermissionService = {
     request(input) {
+      const grant = findRuntimePermissionGrant(persistence, input.sessionId, input.toolName);
+      if (grant !== undefined) {
+        return Promise.resolve({ type: 'allow_always', scope: grant.scope });
+      }
       const pendingPermission = trackAndWait({
         sessionId: input.sessionId,
         runId: input.runId,
@@ -3239,6 +4529,22 @@ function createRuntimePermissionRegistry(bus: RuntimeEventBus, defaultTimeoutMs:
     async respond(requestId, decision, options) {
       return resolvePending(requestId, decision, options?.runId);
     },
+    async listGrants() {
+      return persistence.loadPermissionGrants();
+    },
+    async revokeGrant(grantId, expectedRevision) {
+      const current = persistence.loadPermissionGrants();
+      if (current.revision !== expectedRevision) {
+        throw createRuntimeConflictError(
+          `Permission grant revision ${expectedRevision} is stale; current revision is ${current.revision}`,
+          current.revision,
+        );
+      }
+      const next = current.value.filter((grant) => grant.id !== grantId);
+      if (next.length === current.value.length) return false;
+      persistence.savePermissionGrants({ revision: current.revision + 1, value: next });
+      return true;
+    },
   };
 
   return {
@@ -3259,6 +4565,9 @@ function createRuntimePermissionRegistry(bus: RuntimeEventBus, defaultTimeoutMs:
     },
     resolve(requestId: string, decision: RuntimePermissionDecision): void {
       resolvePending(requestId, decision);
+    },
+    isGranted(sessionId: string, toolName: string): boolean {
+      return findRuntimePermissionGrant(persistence, sessionId, toolName) !== undefined;
     },
     rejectForRun(runId: string, reason: string): void {
       resolveMatching(
@@ -3320,9 +4629,11 @@ function wrapKodaXEvents(input: {
   readonly bus: RuntimeEventBus;
   readonly original?: KodaXEvents;
   readonly permissions: RuntimePermissionRegistry;
+  readonly userInputs: RuntimeUserInputRegistry;
+  readonly enableSharedInteractions: boolean;
   readonly record: RuntimeRunRecord;
 }): KodaXEvents {
-  const { bus, original, permissions, record } = input;
+  const { bus, original, permissions, userInputs, enableSharedInteractions, record } = input;
   const scopeFromMeta = (meta?: Partial<KodaXActivityEventMeta>) => ({
     sessionId: meta?.sessionId ?? record.sessionId,
     runId: record.runId,
@@ -3333,21 +4644,50 @@ function wrapKodaXEvents(input: {
     payload: unknown,
     meta?: Partial<KodaXActivityEventMeta>,
   ): void => {
-    bus.emit(type, payload, scopeFromMeta(meta));
+    bus.emit(type, redactScopedProviderCredential(payload), scopeFromMeta(meta));
   };
   const runWithUserInputPhase = async <T>(
-    kind: 'askUser' | 'askUserMulti' | 'askUserInput',
+    kind: RuntimeUserInputKind,
     options: unknown,
     meta: KodaXToolEventMeta | undefined,
-    execute: () => Promise<T>,
+    execute: (() => Promise<T>) | undefined,
+    dismissed: T,
   ): Promise<T> => {
-    const requestId = `input_${randomUUID().replace(/-/g, '').slice(0, 12)}`;
     const previousPhase = record.phase;
     if (record.phase === 'running') {
       record.phase = 'waiting_user_input';
     }
+    if (enableSharedInteractions) {
+      const pendingInput = userInputs.trackAndWait({
+        sessionId: meta?.sessionId ?? record.sessionId,
+        runId: record.runId,
+        ...(meta?.turnId ?? record.turnId ? { turnId: meta?.turnId ?? record.turnId } : {}),
+        kind,
+        options,
+      });
+      try {
+        const resolution = execute === undefined
+          ? await pendingInput.response
+          : await Promise.race([
+              pendingInput.response,
+              execute().then((answer): RuntimePendingUserInputResolution => ({
+                status: answer === undefined ? 'dismissed' : 'answered',
+                ...(answer !== undefined ? { answer } : {}),
+              })).then((hookResolution) => {
+                userInputs.resolve(pendingInput.request.id, hookResolution);
+                return hookResolution;
+              }),
+            ]);
+        return resolution.status === 'answered' ? resolution.answer as T : dismissed;
+      } finally {
+        if (record.phase === 'waiting_user_input') record.phase = previousPhase;
+      }
+    }
+
+    const requestId = `input_${randomUUID().replace(/-/g, '').slice(0, 12)}`;
     emit('user_input.requested', { requestId, kind, options }, meta);
     try {
+      if (execute === undefined) return dismissed;
       const answer = await execute();
       emit('user_input.resolved', {
         requestId,
@@ -3410,7 +4750,7 @@ function wrapKodaXEvents(input: {
     },
     onSessionStart(info) {
       record.provider = info.provider;
-      bus.emit('session.loaded', info, {
+      bus.emit('session.loaded', redactScopedProviderCredential(info), {
         sessionId: info.sessionId,
         runId: record.runId,
         turnId: info.turnId ?? record.turnId,
@@ -3419,7 +4759,7 @@ function wrapKodaXEvents(input: {
     },
     onTurnStarted(event) {
       record.turnId = event.turnId;
-      bus.emit('turn.started', event, {
+      bus.emit('turn.started', redactScopedProviderCredential(event), {
         sessionId: event.sessionId,
         runId: record.runId,
         turnId: event.turnId,
@@ -3427,7 +4767,7 @@ function wrapKodaXEvents(input: {
       original?.onTurnStarted?.(event);
     },
     onTurnCompleted(event) {
-      bus.emit('turn.completed', event, {
+      bus.emit('turn.completed', redactScopedProviderCredential(event), {
         sessionId: event.sessionId,
         runId: record.runId,
         turnId: event.turnId,
@@ -3435,7 +4775,7 @@ function wrapKodaXEvents(input: {
       original?.onTurnCompleted?.(event);
     },
     onTurnFailed(event) {
-      bus.emit('turn.failed', event, {
+      bus.emit('turn.failed', redactScopedProviderCredential(event), {
         sessionId: event.sessionId,
         runId: record.runId,
         turnId: event.turnId,
@@ -3538,7 +4878,7 @@ function wrapKodaXEvents(input: {
     },
     onWorkflowProcessEvent(event) {
       const mapped = workflowEventType(event);
-      bus.emit(mapped, event, {
+      bus.emit(mapped, redactScopedProviderCredential(event), {
         sessionId: event.snapshot.hostMetadata?.sessionId ?? record.sessionId,
         runId: record.runId,
         turnId: record.turnId,
@@ -3566,6 +4906,9 @@ function wrapKodaXEvents(input: {
       toolInput: Record<string, unknown>,
       meta?: KodaXToolEventMeta,
     ): Promise<RuntimePermissionToolDecision> => {
+      if (permissions.isGranted(meta?.sessionId ?? record.sessionId, tool)) {
+        return true;
+      }
       // An in-process host hook is authoritative. The runtime policy is the
       // fallback for headless/daemon execution where no executable callback can
       // cross the wire.
@@ -3620,7 +4963,7 @@ function wrapKodaXEvents(input: {
         }
       }
     },
-    ...(original?.askUser
+    ...(original?.askUser || enableSharedInteractions
       ? {
           askUser: (
             options: AskUserQuestionOptions,
@@ -3629,11 +4972,12 @@ function wrapKodaXEvents(input: {
             'askUser',
             options,
             meta,
-            () => original.askUser!(options, meta),
+            original?.askUser ? () => original.askUser!(options, meta) : undefined,
+            '',
           ),
         }
       : {}),
-    ...(original?.askUserMulti
+    ...(original?.askUserMulti || enableSharedInteractions
       ? {
           askUserMulti: (
             options: AskUserMultiOptions,
@@ -3643,11 +4987,12 @@ function wrapKodaXEvents(input: {
               'askUserMulti',
               options,
               meta,
-              () => original.askUserMulti!(options, meta),
+              original?.askUserMulti ? () => original.askUserMulti!(options, meta) : undefined,
+              undefined,
             ),
         }
       : {}),
-    ...(original?.askUserInput
+    ...(original?.askUserInput || enableSharedInteractions
       ? {
           askUserInput: (
             options: { question: string; default?: string },
@@ -3656,7 +5001,8 @@ function wrapKodaXEvents(input: {
             'askUserInput',
             options,
             meta,
-            () => original.askUserInput!(options, meta),
+            original?.askUserInput ? () => original.askUserInput!(options, meta) : undefined,
+            undefined,
           ),
         }
       : {}),
@@ -3968,6 +5314,30 @@ function parseRuntimeSessionSettings(value: unknown): RuntimeSessionSettings {
   }
   setStringIfPresent(settings, 'reasoningMode', value.reasoningMode);
   return settings;
+}
+
+function parseRuntimePermissionGrant(value: unknown): RuntimePermissionGrant {
+  if (!isRecord(value) || !isRecord(value.scope)) {
+    throw new Error('invalid permission grant');
+  }
+  const toolName = value.scope.toolName;
+  const sessionId = value.scope.sessionId;
+  if (
+    typeof value.id !== 'string'
+    || typeof value.createdAt !== 'string'
+    || (toolName !== undefined && typeof toolName !== 'string')
+    || (sessionId !== undefined && typeof sessionId !== 'string')
+  ) {
+    throw new Error('invalid permission grant');
+  }
+  return {
+    id: value.id,
+    createdAt: value.createdAt,
+    scope: {
+      ...(toolName !== undefined ? { toolName } : {}),
+      ...(sessionId !== undefined ? { sessionId } : {}),
+    },
+  };
 }
 
 function setStringIfPresent<K extends keyof RuntimeSessionSettings>(
@@ -4367,11 +5737,19 @@ function statusFromRecord(run: RuntimeRunRecord): RuntimeRunStatus {
     ...(run.turnId !== undefined ? { turnId: run.turnId } : {}),
     phase: run.phase,
     startedAt: run.startedAt,
+    acceptedAt: run.startedAt,
+    sessionOrder: run.sessionOrder,
+    ...(run.queuedAt !== undefined ? { queuedAt: run.queuedAt } : {}),
+    ...(run.runningAt !== undefined ? { runningAt: run.runningAt } : {}),
+    ...(run.runningAt !== undefined ? { executionStartedAt: run.runningAt } : {}),
     ...(run.endedAt !== undefined ? { endedAt: run.endedAt } : {}),
     provider: run.provider,
+    mode: run.mode,
+    ...(run.origin !== undefined ? { origin: run.origin } : {}),
     ...(run.model !== undefined ? { model: run.model } : {}),
     ...(run.reasoning !== undefined ? { reasoning: run.reasoning } : {}),
     ...(run.error !== undefined ? { error: run.error } : {}),
+    ...(run.terminal !== undefined ? { terminal: run.terminal } : {}),
   };
 }
 
@@ -4427,11 +5805,26 @@ function markRunTerminal(
   persistence: RuntimePersistence,
   run: RuntimeRunRecord,
   phase: RuntimeRunPhase,
+  terminal?: Omit<RuntimeTerminalFact, 'revision' | 'kind'>,
 ): void {
   if (run.terminalEmitted) return;
   run.phase = phase;
   run.endedAt = new Date().toISOString();
   run.terminalEmitted = true;
+  const kind: RuntimeTerminalFact['kind'] = phase === 'completed'
+    ? 'completed'
+    : phase === 'cancelled'
+      ? 'cancelled'
+      : phase === 'interrupted'
+        ? 'interrupted'
+        : 'failed';
+  run.terminal = {
+    revision: 1,
+    kind,
+    code: terminal?.code ?? defaultRuntimeTerminalCode(kind),
+    effectOutcome: terminal?.effectOutcome ?? (kind === 'interrupted' ? 'unknown' : 'known'),
+    ...(terminal?.message !== undefined ? { message: terminal.message } : {}),
+  };
   const type: RuntimeEventType =
     phase === 'completed'
       ? 'run.completed'
@@ -4440,12 +5833,12 @@ function markRunTerminal(
         : phase === 'interrupted'
           ? 'run.interrupted'
           : 'run.failed';
+  saveRunStatusSafely(bus, persistence, run, statusFromRecord(run));
   bus.emit(type, statusFromRecord(run), {
     sessionId: run.sessionId,
     runId: run.runId,
     ...(run.turnId !== undefined ? { turnId: run.turnId } : {}),
   });
-  saveRunStatusSafely(bus, persistence, run, statusFromRecord(run));
 }
 
 function saveRunStatusSafely(
@@ -4485,6 +5878,100 @@ function workflowEventType(event: WorkflowProcessEvent): RuntimeEventType {
 
 function isFinalWorkflowStatus(status: WorkflowProcessSnapshot['status']): boolean {
   return status === 'completed' || status === 'failed' || status === 'cancelled';
+}
+
+function defaultRuntimeTerminalCode(kind: RuntimeTerminalFact['kind']): RuntimeTerminalCode {
+  if (kind === 'completed') return 'completed';
+  if (kind === 'failed') return 'run_failed';
+  if (kind === 'cancelled') return 'cancelled';
+  return 'interrupted';
+}
+
+function classifyRuntimeRunFailure(error: unknown): {
+  readonly phase: 'failed' | 'interrupted';
+  readonly terminal: Omit<RuntimeTerminalFact, 'revision' | 'kind'>;
+} {
+  const code = error instanceof Error
+    ? (error as Error & { readonly code?: unknown }).code
+    : undefined;
+  if (code === 'host_tool_unknown') {
+    return {
+      phase: 'interrupted',
+      terminal: {
+        code: 'host_outcome_unknown',
+        effectOutcome: 'unknown',
+        message: 'A run-bound host tool may have produced a side effect; it was not replayed.',
+      },
+    };
+  }
+  if (code === 'host_tool_unavailable') {
+    return {
+      phase: 'failed',
+      terminal: {
+        code: 'host_not_dispatched',
+        effectOutcome: 'none',
+        message: 'The run-bound host tool was unavailable before dispatch.',
+      },
+    };
+  }
+  if (code === 'credential_unavailable') {
+    return {
+      phase: 'failed',
+      terminal: {
+        code: 'credential_unavailable',
+        effectOutcome: 'none',
+        message: 'The provider credential was unavailable before the request could continue.',
+      },
+    };
+  }
+  return {
+    phase: 'failed',
+    terminal: { code: 'run_failed', effectOutcome: 'known' },
+  };
+}
+
+function normalizeRuntimeRunError(error: unknown, run: RuntimeRunRecord): Error {
+  if (run.providerCredential === undefined) return normalizeError(error);
+  const safe = new Error('Provider run failed while using a run-scoped credential.');
+  safe.name = 'KodaXProviderRunError';
+  return safe;
+}
+
+function saveRuntimePermissionGrant(
+  persistence: RuntimePersistence,
+  request: RuntimePermissionRequest,
+  scope: RuntimePermissionScope,
+): void {
+  if (
+    (scope.toolName !== undefined && scope.toolName !== request.toolName)
+    || (scope.sessionId !== undefined && scope.sessionId !== request.sessionId)
+  ) {
+    throw createRuntimeInvalidInputError('Persistent permission scope exceeds the pending request.');
+  }
+  const current = persistence.loadPermissionGrants();
+  if (current.value.some((grant) => (
+    grant.scope.toolName === scope.toolName && grant.scope.sessionId === scope.sessionId
+  ))) return;
+  const grant: RuntimePermissionGrant = {
+    id: `grant_${randomUUID().replace(/-/g, '').slice(0, 12)}`,
+    scope,
+    createdAt: new Date().toISOString(),
+  };
+  persistence.savePermissionGrants({
+    revision: current.revision + 1,
+    value: [...current.value, grant],
+  });
+}
+
+function findRuntimePermissionGrant(
+  persistence: RuntimePersistence,
+  sessionId: string,
+  toolName: string,
+): RuntimePermissionGrant | undefined {
+  return persistence.loadPermissionGrants().value.find((grant) => (
+    (grant.scope.sessionId === undefined || grant.scope.sessionId === sessionId)
+    && (grant.scope.toolName === undefined || grant.scope.toolName === toolName)
+  ));
 }
 
 function permissionMatchesFilter(
@@ -4559,6 +6046,52 @@ function previewInput(input: Record<string, unknown>): string {
 
 function normalizeError(error: unknown): Error {
   return error instanceof Error ? error : new Error(String(error));
+}
+
+function createRuntimeConflictError(
+  message: string,
+  currentRevision: number,
+): Error & { readonly code: 'conflict'; readonly currentRevision: number } {
+  return Object.assign(new Error(message), {
+    code: 'conflict' as const,
+    currentRevision,
+  });
+}
+
+function createRuntimeResyncError(
+  message: string,
+): Error & { readonly code: 'resync_required' } {
+  return Object.assign(new Error(message), { code: 'resync_required' as const });
+}
+
+function createRuntimeInvalidInputError(
+  message: string,
+): Error & { readonly code: 'invalid_input' } {
+  return Object.assign(new Error(message), { code: 'invalid_input' as const });
+}
+
+function createRuntimeCredentialUnavailableError(
+  message: string,
+): Error & { readonly code: 'credential_unavailable' } {
+  return Object.assign(new Error(message), { code: 'credential_unavailable' as const });
+}
+
+function createUnsupportedCredentialService(): RuntimeCredentialService {
+  return {
+    async register() {
+      throw new Error('Credential broker registration requires a shared daemon client.');
+    },
+    async revoke() { return false; },
+  };
+}
+
+function createUnsupportedHostToolService(): RuntimeHostToolService {
+  return {
+    async register() {
+      throw new Error('Host tool registration requires a shared daemon client.');
+    },
+    async revoke() { return false; },
+  };
 }
 
 function assertSessionMutationAllowed(

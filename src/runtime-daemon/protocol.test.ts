@@ -24,6 +24,23 @@ describe('runtime daemon protocol frames', () => {
     expect(parseRuntimeDaemonFrame(JSON.stringify(request))).toEqual(request);
   });
 
+  it('carries a durable mutation envelope independently from method params', () => {
+    const request = createRuntimeDaemonRequest('req-operation', 'run.start', {
+      sessionId: 'session-1',
+      prompt: 'hello',
+    }, {
+      operationId: 'op-request-1',
+      journalEpoch: 'epoch-1',
+    });
+
+    expect(isRuntimeDaemonRequest(request)).toBe(true);
+    expect(request.operation).toEqual({
+      operationId: 'op-request-1',
+      journalEpoch: 'epoch-1',
+    });
+    expect(parseRuntimeDaemonFrame(JSON.stringify(request))).toEqual(request);
+  });
+
   it('rejects unknown request methods fail-closed', () => {
     const frame = {
       ...createRuntimeDaemonRequest('req-1', 'ping'),
@@ -53,7 +70,14 @@ describe('runtime daemon protocol frames', () => {
   });
 
   it('accepts the public daemon error code families', () => {
-    for (const code of ['invalid_params', 'permission_denied', 'overloaded'] as const) {
+    for (const code of [
+      'invalid_params',
+      'permission_denied',
+      'overloaded',
+      'credential_unavailable',
+      'host_tool_unavailable',
+      'host_tool_unknown',
+    ] as const) {
       const response = createRuntimeDaemonErrorResponse({ code, message: code }, 'req-error');
       expect(isRuntimeDaemonErrorResponse(response)).toBe(true);
       expect(parseRuntimeDaemonFrame(JSON.stringify(response))).toEqual(response);

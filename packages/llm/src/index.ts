@@ -74,6 +74,12 @@ export type {
   KodaXListModelsResult,
 } from './types.js';
 
+export {
+  getScopedProviderCredential,
+  redactScopedProviderCredential,
+  runWithProviderCredential,
+} from './provider-credential-context.js';
+
 // ============== Errors ==============
 export {
   KodaXError,

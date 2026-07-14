@@ -38,6 +38,7 @@ export async function observeRuntimeDaemonHealth(
     };
   }
 
+  const lockOwner = readRuntimeDaemonLockOwner(paths.lockFile);
   const pidAlive = (options.isPidAlive ?? isRuntimeDaemonPidAlive)(state.pid);
   const endpoint = runtimeDaemonEndpointFromState(state);
   const token = readRuntimeDaemonToken(paths);
@@ -64,7 +65,9 @@ export async function observeRuntimeDaemonHealth(
       state,
       pidAlive,
       endpointReachable: true,
-      identityMatches: daemonIdentityMatchesState(initialized, state),
+      identityMatches: daemonIdentityMatchesState(initialized, state)
+        && runtimeDaemonLockMatchesState(lockOwner, state),
+      ...(lockOwner !== undefined ? { observedLockOwner: lockOwner } : {}),
     };
   } catch (error: unknown) {
     if (isRuntimeDaemonTransportError(error) && error.code === 'unauthorized') {
@@ -73,6 +76,7 @@ export async function observeRuntimeDaemonHealth(
         pidAlive,
         endpointReachable: true,
         identityMatches: false,
+        ...(lockOwner !== undefined ? { observedLockOwner: lockOwner } : {}),
       };
     }
     return {
@@ -80,6 +84,7 @@ export async function observeRuntimeDaemonHealth(
       pidAlive,
       endpointReachable: false,
       identityMatches: false,
+      ...(lockOwner !== undefined ? { observedLockOwner: lockOwner } : {}),
     };
   } finally {
     await transport?.close?.();
@@ -96,6 +101,7 @@ export async function resolveRuntimeDaemonOwnership(
   const enriched = lockOwner
     ? {
         ...observation,
+        observedLockOwner: lockOwner,
         lockOwnerPidAlive: (options.isPidAlive ?? isRuntimeDaemonPidAlive)(lockOwner.pid),
       }
     : observation;
@@ -149,6 +155,13 @@ function daemonIdentityMatchesState(value: unknown, state: RuntimeDaemonState): 
   const identity = asRecord(record?.identity) ?? record;
   return identity?.runtimeId === state.runtimeId
     && identity.profile === state.profile;
+}
+
+function runtimeDaemonLockMatchesState(
+  lockOwner: RuntimeDaemonLockOwner | undefined,
+  state: RuntimeDaemonState,
+): boolean {
+  return lockOwner?.runtimeId === state.runtimeId && lockOwner.pid === state.pid;
 }
 
 function asRecord(value: unknown): Record<string, unknown> | undefined {

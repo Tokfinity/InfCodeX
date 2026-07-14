@@ -18,6 +18,7 @@ import {
   KodaXVerifyStrategy,
 } from '../types.js';
 import { KodaXProviderError } from '../errors.js';
+import { resolveProviderCredential } from '../provider-credential-context.js';
 import {
   cloneCapabilityProfile,
   normalizeCapabilityProfile,
@@ -365,7 +366,10 @@ export function getProvider(name?: string): KodaXBaseProvider {
   if (!factory) throw new KodaXProviderError(`Unknown provider: ${n}. Available: ${Object.keys(KODAX_PROVIDERS).join(', ')}`, n);
 
   const apiKeyEnv = resolveApiKeyEnvForProvider(n);
-  const currentApiKey = apiKeyEnv ? process.env[apiKeyEnv] : undefined;
+  const currentApiKey = resolveProviderCredential(
+    n,
+    apiKeyEnv ? process.env[apiKeyEnv] : undefined,
+  );
 
   const cached = builtinProviderCache.get(n);
   if (cached && cached.apiKey === currentApiKey) {
@@ -392,7 +396,10 @@ export function isProviderConfigured(name: string): boolean {
   if (!isProviderName(name)) {
     return false;
   }
-  return !!process.env[KODAX_PROVIDER_SNAPSHOTS[name].apiKeyEnv];
+  return resolveProviderCredential(
+    name,
+    process.env[KODAX_PROVIDER_SNAPSHOTS[name].apiKeyEnv],
+  ) !== undefined;
 }
 
 // 获取 Provider 使用的模型名称

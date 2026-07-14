@@ -66,6 +66,21 @@ kodax
 
 ---
 
+## Runtime SDK 与共享 daemon
+
+`@kodax-ai/kodax/runtime` 支持 inline、Worker 和本机共享 daemon。FEATURE_269
+让 CLI、Space、IDE 与其他本地 SDK 客户端可以原子加入同一个 Coder
+session/run，共享 transcript、Todo、tool、AskUser、permission、队列与唯一终态。
+daemon mutation 使用持久 operation identity 和 revision CAS；崩溃后不会盲目重放
+可能已有副作用的 provider、run 或 Host Tool 调用。
+
+Space 的 provider credential 仍由 OS keychain 持有，只通过 run/provider-scoped
+broker 使用；Space Artifact/Office/Control 只通过显式绑定到该 run 的 Host Tool
+lease 暴露。CLI run 不会因为 Space 后来加入而继承这些能力。Partner 继续使用独立
+data/session root 下的 inline Runtime，不参与 Coder owner fence。capability 缺失时必须
+fail closed，不能静默退回 inline Coder。完整接入说明见
+[SDK Embedder Guide §23](docs/SDK_EMBEDDER_GUIDE.md#23-shared-coder-daemon-for-space-and-ide-hosts-feature_269-v0769)。
+
 ## 为什么用 KodaX
 
 <table>
