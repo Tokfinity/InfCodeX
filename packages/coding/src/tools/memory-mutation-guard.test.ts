@@ -35,6 +35,14 @@ describe('FEATURE_260 memory mutation guard', () => {
     expect(shellMemoryMutationDenial(`rm '${target}'`)).toContain('denied');
     expect(shellMemoryMutationDenial(`node overwrite-memory.js '${target}'`)).toContain('denied');
     expect(shellMemoryMutationDenial(`python -c "open(r'${target}', 'w').write('x')"`)).toContain('denied');
+    expect(shellMemoryMutationDenial(`cat '${target}' && node overwrite-memory.js '${target}'`))
+      .toContain('denied');
+    expect(shellMemoryMutationDenial(`Get-Content '${target}'; Set-Content '${target}' hacked`))
+      .toContain('denied');
+    expect(shellMemoryMutationDenial(`cat '${target}' | tee '${target}'`)).toContain('denied');
+    expect(shellMemoryMutationDenial('cd ~/.kodax && rm -rf memory-scopes')).toContain('denied');
+    expect(shellMemoryMutationDenial('rm -rf $HOME/.kodax/memory-scopes')).toContain('denied');
+    expect(shellMemoryMutationDenial('cd ~/.kodax/projects/repo && rm -rf memory')).toContain('denied');
     expect(shellMemoryMutationDenial(`Get-Content '${target}'`)).toBeUndefined();
     expect(shellMemoryMutationDenial(`Get-Content '${target.toUpperCase()}'`)).toBeUndefined();
     expect(shellMemoryMutationDenial('node scripts/check-build.mjs')).toBeUndefined();
