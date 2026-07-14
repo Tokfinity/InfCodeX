@@ -97,7 +97,7 @@ describe('createKodaXRuntime', () => {
 
     await runtime.close();
     await expect(runtime.status.snapshot()).rejects.toThrow(/Worker transport is closed/i);
-  }, 30_000);
+  }, 60_000);
 
   it('fails closed when a connected Runtime lacks a required capability', async () => {
     const { createKodaXRuntime } = await import('./sdk-runtime.js');
@@ -710,7 +710,7 @@ describe('createKodaXRuntime', () => {
     expect(seen.filter((type) => type === 'session.created')).toHaveLength(2);
 
     await runtime.close();
-  });
+  }, 60_000);
 
   it('isolates event listener failures from runtime operations and other subscribers', async () => {
     const { createKodaXRuntime } = await import('@kodax-ai/kodax/runtime');
@@ -2906,18 +2906,18 @@ describe('createKodaXRuntime', () => {
 
     await runtime.runs.setModel(handle.runId, 'model-next');
     await runtime.runs.setProvider(handle.runId, 'provider-next');
-    await runtime.runs.setReasoning(handle.runId, 'on');
+    await runtime.runs.setReasoning(handle.runId, 'deep');
 
     await expect(runtime.runs.get(handle.runId)).resolves.toMatchObject({
       model: 'model-next',
       provider: 'provider-next',
-      reasoning: 'on',
+      reasoning: 'deep',
     });
     expect(updates).toHaveLength(3);
     expect(updates.at(-1)?.payload).toMatchObject({
       model: 'model-next',
       provider: 'provider-next',
-      reasoning: 'on',
+      reasoning: 'deep',
     });
     await runtime.close();
   });

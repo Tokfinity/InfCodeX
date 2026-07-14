@@ -6,6 +6,15 @@ All notable changes to this project will be documented in this file.
 
 ## [Unreleased]
 
+## [0.7.69] - 2026-07-14
+
+> Scope note: this release delivers **FEATURE_267**, **FEATURE_268**, and
+> **FEATURE_269** as one bounded interoperability/runtime release: bidirectional
+> A2A 1.0, split hot-reloadable integration configuration, and one authoritative
+> shared Coder daemon with secure host bridges. It does not expose the daemon
+> remotely, migrate Partner from its private embedded Runtime, or publish
+> credentials/Host Tools outside their bound run.
+
 ### Added
 
 - **Bidirectional A2A 1.0 interoperability (FEATURE_267).** Added the
@@ -31,6 +40,24 @@ All notable changes to this project will be documented in this file.
   size policy. The built-in server listener is loopback-only; public hosts use
   `handle()` behind TLS. A2A 0.3, gRPC, HTTP+JSON, push notifications, automatic
   public Agent exposure, and remote Runtime configuration are not advertised.
+- **Authoritative shared Coder daemon (FEATURE_269).** Added atomic
+  `sessions.observe()` join/resync, durable operation identities and receipts,
+  stable same-session ordering, settings/grant CAS, transport-safe AskUser and
+  permission resolution, live run projection, structured restart outcomes, and
+  a truthful per-capability Coder compatibility matrix for CLI, Space, IDE, and
+  SDK clients.
+- **Secure host bridges and owner fencing.** Provider credentials are supplied
+  just in time through connection/run/provider-bound leases and never persisted;
+  Host Tools are immutable and run-bound, with explicit unknown outcomes rather
+  than blind replay. Daemon and inline Coder ownership now share one revisioned
+  fence with sticky rollback, while Partner remains isolated.
+
+### Changed
+
+- **Self-knowledge follows the v0.7.69 capability surface.** `kodax_manual`
+  now documents the three split integration files and migration/hot-reload
+  behavior, the `/a2a` SDK subpath, atomic shared-daemon observation, durable
+  controls, run-scoped credentials/Host Tools, and daemon/inline ownership.
 
 ### Fixed
 
@@ -46,6 +73,14 @@ All notable changes to this project will be documented in this file.
   plus random owner token, avoid reclaiming stale locks held by a live process,
   and remove a lock only when the releasing owner token still matches. Lifecycle
   state writes now use temporary-file rename instead of direct truncating writes.
+- **Interactive resume handoff and large-store startup.** Bare `kodax -r` now
+  keeps the selected session through the picker-to-TUI handoff instead of
+  exiting, and the picker uses bounded metadata paging instead of repeatedly
+  full-reading every matching session before it opens.
+- **A2A/configuration release hardening.** Review gaps in remote execution,
+  Skill-script admission/isolation, hot reload, listener preparation, binding
+  pinning, last-known-good reconciliation, and redacted diagnostics now fail
+  closed or retain the prior healthy revision as specified.
 
 ## [0.7.68] - 2026-07-12
 
@@ -2335,7 +2370,7 @@ repl            → coding, skills
 ### Tests
 - Added / expanded tests for `task-engine`, `reasoning`, `tool-display`, `live-streaming`, `StatusBar`, `invocation-runtime`, `types-legacy`, and `InkREPL.interrupted`
 
-<!-- last-sync: fe6ca81a -->
+<!-- last-sync: cf5f273b -->
 
 ### Added
 - **Repository intelligence substrate (FEATURE_018)**: Task-aware repository intelligence layer under `.agent/repo-intelligence/` with durable artifacts — `repo-overview.json`, `changed-scope.json`, `module-index.json`, `symbol-index.json`, `process-index.json`, `repo-intelligence-manifest.json` — supporting incremental refresh, freshness metadata, and language-tiered extraction (TS/JS via AST, Python, Go, Rust, Java, C++)

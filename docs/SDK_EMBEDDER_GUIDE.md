@@ -2740,10 +2740,11 @@ fields requires a protocol version bump.
 
 ### Current verification status
 
-The v0.7.68 release validation covers the runtime migration, the Worker
+The v0.7.69 release validation covers the runtime migration, the Worker
 isolation follow-ups delivered ahead of their original v0.7.71/v0.7.72
-planning slots, the v0.7.67 external-agent/session additions, and the v0.7.68
-experimental Memory Agent surface:
+planning slots, the v0.7.67 external-agent/session additions, the v0.7.68
+experimental Memory Agent surface, and the v0.7.69 A2A/integration/shared-
+daemon delivery:
 
 - complete repository test suite on Node 20 and Node 22;
 - package builds, Worker sidecar builds, and self-contained
@@ -2762,6 +2763,19 @@ experimental Memory Agent surface:
 - scoped zero-wait memory recall, read-only deliberate query, trace-only
   receipts, bounded episode review, governed consult-before-write promotion,
   and the self-contained `/experimental-memory` bundle/DTS surface;
+- bidirectional A2A 1.0 discovery/call/serve, durable task replay, no-code
+  configuration, local-Agent binding, exact Skill-script admission, SSRF/
+  credential boundaries, and the self-contained `/a2a` bundle/DTS surface;
+- split MCP/A2A/Extension configuration, lossless migration, canonical-template
+  drift checks, last-known-good hot reload, draining, and restart-required
+  classification;
+- atomic shared-daemon observation/resync, durable operations and same-session
+  ordering, settings/grant CAS, AskUser/permission transport, credential/Host
+  Tool reverse bridges, owner fencing, restart outcomes, and process-distinct
+  client/daemon smokes with credential-canary scans;
+- a fresh `0.7.69` tarball consumer importing all 11 public subpaths, creating a
+  Worker-hosted session, running the packaged CLI, and checking packaged DTS and
+  Worker sidecars; plus a Windows x64 binary/version/sidecar smoke;
 - external fresh npm consumer installation of the `0.7.67` tarball, proving
   Worker isolation and a distinct daemon PID through the published subpath;
 - Ubuntu Node 22 Unix-domain-socket daemon gate, including two clients sharing
@@ -2774,8 +2788,11 @@ The portable manual gates remain in
 two filenames retain their original planning slots while their content records
 the v0.7.66 delivery. v0.7.67 adds
 `FEATURE_258_v0.7.67_TEST_GUIDE.md`, `FEATURE_259_v0.7.67_TEST_GUIDE.md`, and
-`FEATURE_261_v0.7.67_TEST_GUIDE.md`. The final GitHub Actions run is recorded in
-the v0.7.67 release after the release commit is pushed.
+`FEATURE_261_v0.7.67_TEST_GUIDE.md`; v0.7.69 adds
+`FEATURE_267_v0.7.69_TEST_GUIDE.md`, `FEATURE_268_v0.7.69_TEST_GUIDE.md`, and
+`FEATURE_269_v0.7.69_TEST_GUIDE.md`. The final GitHub Actions evidence is
+recorded after the release-preparation commit is pushed; npm publication remains
+a maintainer-owned manual step.
 
 ---
 

@@ -12,7 +12,7 @@ vi.mock('node:child_process', async (importOriginal) => {
   const actual = await importOriginal<typeof import('node:child_process')>();
   return {
     ...actual,
-    spawn: vi.fn((_command: string, args: readonly string[]) => {
+    spawn: vi.fn((_command: string, argsOrOptions?: readonly string[] | object) => {
       const child = new EventEmitter() as EventEmitter & {
         stdout: PassThrough;
         stderr: PassThrough;
@@ -21,8 +21,8 @@ vi.mock('node:child_process', async (importOriginal) => {
       child.stdout = new PassThrough();
       child.stderr = new PassThrough();
       child.kill = vi.fn();
-      const requestFile = args.at(-1);
-      if (requestFile?.endsWith('.json')) {
+      const requestFile = Array.isArray(argsOrOptions) ? argsOrOptions.at(-1) : undefined;
+      if (typeof requestFile === 'string' && requestFile.endsWith('.json')) {
         const request = JSON.parse(readFileSync(requestFile, 'utf8')) as { readonly cwd?: string };
         if (request.cwd) {
           mkdirSync(path.join(request.cwd, 'outputs'), { recursive: true });

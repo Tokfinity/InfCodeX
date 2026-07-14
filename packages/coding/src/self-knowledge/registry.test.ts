@@ -64,8 +64,24 @@ describe('FEATURE_218 manual registry', () => {
   it('keeps the SDK topic aligned with current published subpaths', () => {
     const content = resolveKodaXManual({ topic: 'sdk' }).content;
 
-    expect(content).toContain('10 SDK subpaths');
+    expect(content).toContain('11 SDK subpaths');
     expect(content).toContain('@kodax-ai/kodax/runtime');
     expect(content).toContain('@kodax-ai/kodax/experimental-memory');
+    expect(content).toContain('@kodax-ai/kodax/a2a');
+    expect(content).toContain('sessions.observe()');
+    expect(content).toContain('run-bound Host Tools');
+  });
+
+  it('documents the split integration configuration instead of legacy core fields', () => {
+    const config = resolveKodaXManual({ topic: 'config' }).content;
+    const mcp = resolveKodaXManual({ topic: 'mcp' }).content;
+    const extensions = resolveKodaXManual({ topic: 'extensions' }).content;
+
+    expect(config).toContain('~/.kodax/integrations/mcp.json');
+    expect(config).toContain('~/.kodax/integrations/a2a.json');
+    expect(config).toContain('~/.kodax/integrations/extensions.json');
+    expect(config).toContain('kodax integrations migrate --apply');
+    expect(mcp).toContain('~/.kodax/integrations/mcp.json');
+    expect(extensions).toContain('~/.kodax/integrations/extensions.json');
   });
 });

@@ -11,8 +11,8 @@
 
 | Item | Value |
 |---|---|
-| Current released version | `v0.7.68` |
-| Current package version | `@kodax-ai/kodax@0.7.68`; Git tag, GitHub binary release, and npm `latest` publication completed 2026-07-12 |
+| Current released version | `v0.7.69` (release baseline prepared 2026-07-14) |
+| Current package version | `@kodax-ai/kodax@0.7.69`; npm publication remains the maintainer-owned final step |
 | Workspace baseline | `llm / agent / coding / repl` 4 packages |
 | Total tracked features | `55` |
 | InProgress | `4` |
@@ -27,7 +27,7 @@
 | Status | Count | Feature IDs | Next checkpoint |
 |---|---:|---|---|
 | Completed | 33 | `260, 261, 259, 258, 253, 254, 255, 256, 257, 228, 251, 252, 250, 248, 249, 247, 246, 245, 243, 242, 241, 233, 240, 239, 224, 221, 174, 211, 237, 229, 230, 234, 236` | `260` completed for v0.7.68 (2026-07-12) with 9593/9593 passing tests on both Node 20 and Node 22 release CI, full build and artifact validation, 87.58% focused line coverage, and all preregistered v2 memory-routing gates passing. `261`, `259`, and `258` shipped in v0.7.67 (2026-07-11). Earlier completion history is unchanged. |
-| InProgress | 4 | `269, 267, 268, 225` | `269` started 2026-07-14 with the released F255 daemon baseline green; delivery proceeds through durable operations, atomic observation, transport-safe interactions, Space credential/Host Tool bridges, owner fencing, and process-distinct recovery/package gates. `267`/`268` await independent release evidence; `225` broader current-HEAD cleanup remains. |
+| InProgress | 4 | `269, 267, 268, 225` | `267`/`268`/`269` source implementation and joint integration are complete for v0.7.69. Local Node 20/22 full suites, build/DTS, npm dry-run, fresh-tarball consumer/Worker/CLI, and Windows binary gates are green. Remaining sign-off is pushed GitHub CI, independent A2A interoperability, cross-platform release artifacts, and the formal Space/package smoke. `225` broader current-HEAD cleanup remains outside this release. |
 | Planned, near-term | 5 | `266, 270, 263, 264, 265` | `v0.7.70` -> `v0.7.85` |
 | Planned, v0.8.x | 5 | `007, 030, 093, 113, 139` | `v0.8.5+` |
 | Planned, v0.9.x | 1 | `262` | `v0.9.0` |
@@ -290,6 +290,15 @@
 | `225` | REPL Dead / Legacy Code Cleanup | Internal / Refactor + Tech Debt | Medium | `v0.7.100` | [v0.7.100](features/v0.7.100.md#feature_225-repl-dead--legacy-code-cleanup) |
 
 Recent completion notes:
+
+`267` and `268` implementation and F269 integration are complete for
+`v0.7.69`: the package exposes the bounded A2A 1.0 JSON-RPC/SSE client/server
+edge, no-code A2A management/serving, local Agent and exact Skill-script
+admission, three split user integration files, lossless migration, canonical
+templates, last-known-good hot reload, draining, and restart-required
+classification. They remain InProgress only for independent interoperability,
+cross-platform package/binary, and release-machine evidence; no known source
+implementation item remains open.
 
 `269` implementation is complete for `v0.7.69`: the existing Runtime daemon now
 provides atomic session observation, durable operation deduplication, stable
