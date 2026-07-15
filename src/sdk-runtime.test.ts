@@ -3246,7 +3246,7 @@ async function shutdownRuntimeDaemon(homeDir: string, profile: string): Promise<
     const deadline = Date.now() + 10_000;
     for (;;) {
       try {
-        await transport.request('daemon.preflight');
+        await transport.request('runtime.shutdown');
         break;
       } catch (error: unknown) {
         if (
@@ -3259,7 +3259,6 @@ async function shutdownRuntimeDaemon(homeDir: string, profile: string): Promise<
         await new Promise<void>((resolve) => setTimeout(resolve, 10));
       }
     }
-    await transport.request('runtime.shutdown');
   } finally {
     await transport.close?.();
   }

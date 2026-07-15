@@ -428,7 +428,7 @@ async function dispatchWithOperation(
 ): Promise<unknown> {
   const execute = (): Promise<unknown> => (
     options.management !== undefined && isManagedRuntimeMutation(request.method)
-      ? options.management.runMutation(dispatch)
+      ? options.management.runMutation(request.method, dispatch)
       : dispatch()
   );
   if (!isRuntimeDaemonMutationMethod(request.method) || options.requireOperationEnvelope !== true) {

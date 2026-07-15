@@ -285,15 +285,15 @@ describe('runtime daemon dispatcher', () => {
   });
 
   it('routes reverse-bridge state changes through the daemon draining fence', async () => {
-    let fencedMutations = 0;
+    const fencedMutations: RuntimeDaemonMethod[] = [];
     const conflict = Object.assign(new Error('Runtime daemon is draining.'), {
       code: 'conflict' as const,
     });
     const management: RuntimeDaemonManagementController = {
       attachClient() {},
       detachClient() {},
-      async runMutation<T>(): Promise<T> {
-        fencedMutations += 1;
+      async runMutation<T>(method: RuntimeDaemonMethod): Promise<T> {
+        fencedMutations.push(method);
         throw conflict;
       },
       async preflight() { throw new Error('not used'); },
@@ -351,7 +351,7 @@ describe('runtime daemon dispatcher', () => {
       }
     }
 
-    expect(fencedMutations).toBe(requests.length);
+    expect(fencedMutations).toEqual(requests.map((request) => request.method));
     dispatcher.close();
   });
 

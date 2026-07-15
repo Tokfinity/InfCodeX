@@ -6,6 +6,7 @@ import type {
   RuntimeDaemonRollbackResult,
   RuntimeSubscription,
 } from '../sdk-runtime.js';
+import type { RuntimeDaemonMethod } from './protocol.js';
 import {
   commitRuntimeDaemonRollbackPolicy,
   readRuntimeDaemonLockOwner,
@@ -16,7 +17,7 @@ import {
 export interface RuntimeDaemonManagementController {
   attachClient(connectionId: string): void;
   detachClient(connectionId: string): void;
-  runMutation<T>(effect: () => Promise<T>): Promise<T>;
+  runMutation<T>(method: RuntimeDaemonMethod, effect: () => Promise<T>): Promise<T>;
   preflight(): Promise<RuntimeDaemonPreflight>;
   inspect(): Promise<RuntimeDaemonManagementState>;
   stop(): Promise<{ readonly ok: true }>;
@@ -37,6 +38,7 @@ class DaemonManagementController implements RuntimeDaemonManagementController {
   private readonly runtimeEvents: RuntimeSubscription;
   private revision = 0;
   private activeMutations = 0;
+  private readonly activeMutationMethods = new Map<RuntimeDaemonMethod, number>();
   private draining = false;
   private closed = false;
   private preflightFingerprint: string | undefined;
@@ -65,16 +67,20 @@ class DaemonManagementController implements RuntimeDaemonManagementController {
     this.revision += 1;
   }
 
-  async runMutation<T>(effect: () => Promise<T>): Promise<T> {
+  async runMutation<T>(method: RuntimeDaemonMethod, effect: () => Promise<T>): Promise<T> {
     if (this.draining || this.closed) {
       throw managementError('conflict', 'Runtime daemon is draining and rejects new mutations.');
     }
     this.activeMutations += 1;
+    this.activeMutationMethods.set(method, (this.activeMutationMethods.get(method) ?? 0) + 1);
     this.revision += 1;
     try {
       return await effect();
     } finally {
       this.activeMutations -= 1;
+      const remaining = (this.activeMutationMethods.get(method) ?? 1) - 1;
+      if (remaining === 0) this.activeMutationMethods.delete(method);
+      else this.activeMutationMethods.set(method, remaining);
     }
   }
 
@@ -172,7 +178,12 @@ class DaemonManagementController implements RuntimeDaemonManagementController {
       );
     }
     if (this.activeMutations > 0) {
-      throw managementError('conflict', 'Runtime daemon has an in-flight mutation.');
+      throw managementError(
+        'conflict',
+        `Runtime daemon has in-flight mutations: ${[...this.activeMutationMethods]
+          .map(([method, count]) => `${method} (${count})`)
+          .join(', ')}.`,
+      );
     }
     this.draining = true;
   }
