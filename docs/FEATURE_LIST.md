@@ -269,6 +269,13 @@
 > daemon/inline owner cycles. F269 remains assigned to `v0.7.69`; this is a
 > compatibility fix, not a new Feature or a reschedule of F266/F270.
 >
+> **2026-07-15 v0.7.70 release hardening**: issues 161-164 close MCP physical-
+> capacity/cache/pagination and multilingual zero-match defects, plus A2A
+> provider-default, endpoint-trust, task-lifecycle, artifact, and protocol gaps.
+> The release also begins the KAI-FCL-1.0 license boundary. These are bounded
+> compatibility, correctness, and distribution changes; they do not add a new
+> Feature or move F266/F270 back into this patch slot.
+>
 > **2026-07-12 F225 early cleanup slice**: the Classic readline
 > reverse-video StatusBar was proven write-only (`update()` calls with no
 > production `show()`/`toggle()`), internal-only, and independent of the live

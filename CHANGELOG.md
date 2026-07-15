@@ -6,7 +6,7 @@ All notable changes to this project will be documented in this file.
 
 ## [Unreleased]
 
-## [0.7.70] - Unreleased
+## [0.7.70] - 2026-07-15
 
 ### Added
 
@@ -15,8 +15,31 @@ All notable changes to this project will be documented in this file.
   `stopForInline()`, plus public owner-fence queries and revision-free daemon
   re-enable helpers for safe embedder rollback workflows.
 
+### Changed
+
+- **KAI-FCL licensing from v0.7.70.** Official KodaX source, binaries, and npm
+  packages now use the KodaX-AI Fair Core License 1.0: community use remains
+  available, while commercial or managed use requires KodaX-AI authorization.
+  Previously released Apache-2.0 copies retain their original grants.
+
 ### Fixed
 
+- **A2A interoperability and execution boundaries.** Selected Card interfaces
+  remain bound to their trusted discovery origin and advertised Bearer scheme;
+  concrete recursive reads and child runs retain the parent policy ceiling;
+  pending input resumes the original Runtime run; task retention, history,
+  cleanup, stable cursor pagination, protocol correlation/version, authenticated
+  SSE, appended artifact chunks, and early-stream-EOF semantics are bounded;
+  and direct, staged, or successfully promoted admitted Skill outputs are
+  returned as negotiated artifacts without exposing ordinary workspace writes.
+- **MCP multilingual zero-match efficiency.** Compact CJK queries now segment
+  into words, while cross-language lexical zero matches can return a lossless
+  shared-prefix exact-id inventory only when it is no more expensive than a
+  normal default search page and fits the real result capacity. Oversized
+  recovery emits one concise catalog-language retry with no biased partial list.
+  Fully unavailable catalogs no longer trigger a duplicate inventory attempt;
+  concurrent discovery is coalesced, in-flight invalidation cannot be overwritten,
+  and filtered cursor revisions ignore unrelated capability families.
 - **Logical daemon client accounting.** Stop preflight now counts only live,
   initialized SDK clients. Daemon self-connections and read-only health probes
   are excluded, and awaited client close converges the count across processes.
@@ -32,7 +55,7 @@ All notable changes to this project will be documented in this file.
   remain outside the durable journal so credentials and Host Tool results are
   not persisted.
 
-## [0.7.69] - Unreleased
+## [0.7.69] - 2026-07-15
 
 > Scope note: this release delivers **FEATURE_267**, **FEATURE_268**, and
 > **FEATURE_269** as one bounded interoperability/runtime release: bidirectional

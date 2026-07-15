@@ -57,7 +57,7 @@
     "url": "https://github.com/icetomoyo/KodaX.git",
     "directory": "packages/repl"
   },
-  "license": "Apache-2.0",
+  "license": "SEE LICENSE IN LICENSE",
   "files": [
     "dist",
     "README.md",

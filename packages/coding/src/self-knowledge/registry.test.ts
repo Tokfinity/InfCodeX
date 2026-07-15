@@ -82,8 +82,33 @@ describe('FEATURE_218 manual registry', () => {
     expect(config).toContain('~/.kodax/integrations/a2a.json');
     expect(config).toContain('~/.kodax/integrations/extensions.json');
     expect(config).toContain('kodax integrations migrate --apply');
+    expect(config).toContain('MCP and Extensions');
+    expect(config).toContain('does not overwrite an existing destination');
+    expect(config).toContain('first MCP/Extension mutation');
+    expect(config).toContain('literal-secret warnings');
     expect(mcp).toContain('~/.kodax/integrations/mcp.json');
     expect(extensions).toContain('~/.kodax/integrations/extensions.json');
+    expect(extensions).toContain('config.json#extensions');
+  });
+
+  it('documents the v0.7.70 A2A and MCP interoperability boundaries', () => {
+    const a2a = resolveKodaXManual({ topic: 'a2a' });
+    const mcp = resolveKodaXManual({ topic: 'mcp' }).content;
+
+    expect(a2a.matchedTopic).toBe('a2a');
+    expect(a2a.content).toContain('~/.kodax/integrations/a2a.json');
+    expect(a2a.content).toContain('a2a add|list|test|call|remove');
+    expect(a2a.content).toContain('a2a expose');
+    expect(a2a.content).toContain('a2a serve');
+    expect(a2a.content).toContain('same trusted origin');
+    expect(a2a.content).toContain('advertised Bearer');
+    expect(a2a.content).toContain('original Runtime run');
+    expect(a2a.content).toContain('stable opaque cursor');
+    expect(a2a.content).toContain('explicitly admitted artifacts');
+    expect(mcp).toContain('exact capability ids');
+    expect(mcp).toContain('physical result capacity');
+    expect(mcp).toContain('zero lexical match');
+    expect(mcp).toContain('partial provider failure');
   });
 
   it('documents the KAI-FCL boundary from v0.7.70 without rewriting history', () => {

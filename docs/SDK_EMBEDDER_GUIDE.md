@@ -3208,6 +3208,12 @@ time/body/redirects, and strips authorization on a cross-origin redirect. A
 custom `fetch` option is a trusted transport override: the embedder then owns
 equivalent DNS-to-connection binding in that transport or proxy.
 
+Starting in v0.7.70, the interface selected from the Agent Card must remain on
+the Card's trusted origin. A configured `credentialRef` is used only when the
+Card advertises the A2A 1.0 Bearer security scheme; discovery fails closed
+rather than sending a secret to an unadvertised or differently secured
+endpoint.
+
 ```ts
 import {
   createA2AAgentExecutorFactory,
@@ -3264,6 +3270,12 @@ The executor supports durable task start/get, input continuation, cancel,
 reconcile, SSE events, and polling fallback. An ambiguous start is not retried
 automatically. A `credentialRef` is resolved just in time by the F258 broker;
 the registration, task store, and diagnostics never contain the credential.
+Authenticated SSE uses that same broker. JSON-RPC ID/version and task/context
+correlation are validated before an event is accepted; if a stream ends
+normally before a terminal snapshot, the executor resumes bounded polling.
+Streamed `artifactUpdate` chunks are accumulated by artifact ID according to
+`append`, and direct Message file Parts are preserved as authorized artifact
+references.
 
 ### Built-in configured path (no host code)
 
@@ -3293,6 +3305,12 @@ kodax a2a expose document-agent     # ~/.kodax/agents/document-agent.md
 kodax a2a serve --port 8765
 ```
 
+`a2a serve` resolves its Runtime provider in this order: explicit CLI option,
+environment, core configuration, then the built-in default. Provider-compatible
+model selection follows the normal hosted Runtime rule. A selected Markdown
+Agent may declare its own validated `provider`; remote A2A input cannot choose
+or override provider, model, reasoning, profile, workspace, or tools.
+
 `expose` validates a named user Markdown Agent before writing its reference.
 `serve` loads configured MCP and Extensions before it resolves the execution
 binding or opens a socket. Native workspace read tools are admitted by
@@ -3308,6 +3326,10 @@ require an explicit restart. Managed contexts live below
 `~/kodax_a2a_server_workspace/<profile>/contexts/`. Exact Skill scripts require
 `process: isolated`, an admitted `scripts/...` path, and a passing
 `kodax sandbox doctor`; KodaX never falls back to an unsandboxed shell.
+
+Every concrete file reached by `read`, `grep`, or `glob` is checked against the
+bound workspace. Child runs inherit ceilings for native reads, tools, Skills,
+and Skill scripts; they cannot expand the parent's admitted authority.
 
 ### Publish one KodaX Agent
 
@@ -3375,11 +3397,27 @@ default). When that bound is reached the response contains the current working
 task; it does not cancel the Runtime run, and clients can continue with
 `GetTask` or `SubscribeToTask`.
 
+When a task enters `INPUT_REQUIRED`, the next accepted input answers the pending
+interaction on the original Runtime run; it does not start a replacement run.
+History length and list filters are validated and bounded. Task listing uses a
+stable opaque cursor, while per-principal retention prunes only the oldest
+terminal records. Terminal subscriptions and failed-start resources are closed
+by their owning lifecycle.
+
 Remote messages are ordinary user inputs. They cannot select provider, model,
 profile, tools, working directory, permission mode, or Runtime configuration.
 URL parts are rejected; inline raw/data parts are bounded and materialized under
 the server-owned data directory. Responses expose final approved output only,
 not system prompts, reasoning deltas, tool payloads, credentials, or local paths.
+
+Generated files are published only through the trusted output broker: a normal
+tool or Extension stages a file in the context's `.kodax-a2a-staging` area, or
+a successfully admitted `run_skill_script` promotes one of its declared
+outputs. The server rechecks that the result is a regular non-symlink file in
+the real bound workspace and applies part-size/output-mode limits before
+inlining it. A declaration from a failed Skill run, an ordinary `write`/`edit`
+elsewhere in the workspace, and a local path in model text never become A2A
+artifacts implicitly.
 
 The normative baseline is A2A repository commit
 `2183794bfb9b67af4aee1be0a0ef726050642873`, protocol `1.0`, with

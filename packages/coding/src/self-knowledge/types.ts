@@ -21,6 +21,7 @@ export type KodaXManualTopicId =
   | 'skills'
   | 'extensions'
   | 'mcp'
+  | 'a2a'
   | 'repo-intelligence'
   | 'sessions'
   | 'memory'

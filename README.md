@@ -511,6 +511,24 @@ KodaX has two layers that consumers should understand separately:
 
 **Bidirectional A2A 1.0 (FEATURE_267, v0.7.69)**: `/a2a` discovers allowed Agent Cards and installs a JSON-RPC/SSE executor through the existing F258 plane. Configured outbound Agents are also registered automatically as `external:<name>` in embedded CLI and user-daemon Runtimes, so the main Agent can orchestrate them without host code. The same module can publish the Runtime default or one validated `~/.kodax/agents/*.md` Agent behind an authenticated Runtime facade. The built-in listener is loopback-only; public deployment uses `handle()` behind host-owned TLS and authorization. A2A 0.3, gRPC, HTTP+JSON, push notifications, and automatic public exposure are not advertised. See the [client/server recipes and security boundaries](docs/SDK_EMBEDDER_GUIDE.md#22-bidirectional-a2a-10--a2a-feature_267-v0769).
 
+**v0.7.70 interoperability hardening** keeps a discovered A2A interface on the
+trusted Agent Card origin and sends a credential only when the Card advertises
+Bearer authentication. `a2a serve` now resolves its provider from CLI, then
+environment, config, and the built-in default; a Markdown Agent can pin its own
+provider. Input continuation resumes the original Runtime run, task history and
+retention are bounded with stable cursor pagination, and authenticated SSE is
+correlated before falling back to polling after an early normal EOF. Only
+direct remote artifacts, broker-staged outputs, and outputs from a successfully
+admitted Skill script can be published; ordinary workspace writes and local
+paths stay private.
+
+**v0.7.70 MCP discovery hardening** uses exact capability IDs and revisioned
+cursors while admitting results against real physical capacity. Compact CJK
+queries are segmented, and a cross-language lexical zero match either returns a
+lossless bounded grouped inventory or one concise retry in the catalog language.
+Partial provider failure remains explicit rather than disappearing into an
+apparently complete result.
+
 The complete built-in path is available without writing TypeScript:
 
 ```bash
@@ -528,7 +546,13 @@ kodax a2a serve                  # loopback http://127.0.0.1:8765
 MCP, A2A, and Extension declarations live in one user file per domain under
 `~/.kodax/integrations/`. Use `kodax config template <mcp|a2a|extensions>`,
 `kodax integrations migrate --apply`, and the `kodax mcp`, `kodax a2a`, or
-`kodax extensions` commands to manage them. Running CLI/daemon hosts retain the
+`kodax extensions` commands to manage them. Migration imports only legacy
+`config.json#mcpServers` and `config.json#extensions`; A2A has no legacy source.
+It never overwrites an existing destination. The first MCP/Extension mutation
+can stage legacy entries. Remove legacy keys only with
+`--apply --cleanup-legacy`, after reviewing destination files and
+literal-secret warnings. Running
+CLI/daemon hosts retain the
 last valid revision, atomically replace the complete MCP provider, reconcile
 Extensions per entry, and hot-register outbound A2A Agents. `a2a serve` loads
 its configured MCP/Extension capability surface before listening and pins that

@@ -60,7 +60,7 @@
     "url": "https://github.com/icetomoyo/KodaX.git",
     "directory": "packages/coding"
   },
-  "license": "Apache-2.0",
+  "license": "SEE LICENSE IN LICENSE",
   "optionalDependencies": {
     "@lezer/common": "^1.5.1",
     "@lezer/go": "^1.0.1",

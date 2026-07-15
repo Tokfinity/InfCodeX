@@ -100,7 +100,7 @@
     "cli"
   ],
   "author": "",
-  "license": "Apache-2.0",
+  "license": "SEE LICENSE IN LICENSE",
   "dependencies": {
     "@agentclientprotocol/sdk": "^0.15.0",
     "@alcalzone/ansi-tokenize": "^0.2.5",
