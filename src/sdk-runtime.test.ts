@@ -632,6 +632,7 @@ describe('createKodaXRuntime', () => {
     });
     let space: Awaited<ReturnType<typeof connectKodaXRuntime>> | undefined;
     let approvalDone: Promise<unknown> | undefined;
+    let responseDone: Promise<boolean> | undefined;
     const seen: string[] = [];
 
     try {
@@ -653,7 +654,11 @@ describe('createKodaXRuntime', () => {
         if (event.type !== 'permission.requested') return;
         const payload = event.payload;
         if (!isPermissionRequestPayload(payload)) return;
-        void space?.permissions.respond(payload.id, { type: 'allow_once' }, { runId: payload.runId });
+        responseDone = space?.permissions.respond(
+          payload.id,
+          { type: 'allow_once' },
+          { runId: payload.runId },
+        );
       });
 
       approvalDone = worker.permissions.request({
@@ -667,6 +672,8 @@ describe('createKodaXRuntime', () => {
       await expect(expectSettles(approvalDone, 'space permission approval')).resolves.toEqual({
         type: 'allow_once',
       });
+      if (!responseDone) throw new Error('Space permission response was not submitted.');
+      await expect(expectSettles(responseDone, 'space permission response')).resolves.toBe(true);
       await flushMicrotasks();
 
       expect(await space.permissions.listPending({ runId: 'run-space-permission' })).toEqual([]);
@@ -3225,7 +3232,10 @@ async function shutdownRuntimeDaemon(homeDir: string, profile: string): Promise<
   const state = readRuntimeDaemonState(resolveRuntimeDaemonPaths(homeDir, profile));
   if (!state) return;
   const { runtimeDaemonEndpointFromState } = await import('./runtime-daemon/lifecycle.js');
-  const { createRuntimeDaemonSocketClientTransport } = await import('./runtime-daemon/transport.js');
+  const {
+    createRuntimeDaemonSocketClientTransport,
+    isRuntimeDaemonTransportError,
+  } = await import('./runtime-daemon/transport.js');
   const paths = resolveRuntimeDaemonPaths(homeDir, profile);
   const transport = await createRuntimeDaemonSocketClientTransport(runtimeDaemonEndpointFromState(state));
   try {
@@ -3233,6 +3243,22 @@ async function shutdownRuntimeDaemon(homeDir: string, profile: string): Promise<
       profile,
       token: readRuntimeDaemonToken(paths),
     });
+    const deadline = Date.now() + 10_000;
+    for (;;) {
+      try {
+        await transport.request('daemon.preflight');
+        break;
+      } catch (error: unknown) {
+        if (
+          !isRuntimeDaemonTransportError(error)
+          || error.code !== 'conflict'
+          || Date.now() >= deadline
+        ) {
+          throw error;
+        }
+        await new Promise<void>((resolve) => setTimeout(resolve, 10));
+      }
+    }
     await transport.request('runtime.shutdown');
   } finally {
     await transport.close?.();
