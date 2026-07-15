@@ -1,7 +1,7 @@
 import fs from 'node:fs';
 import path from 'node:path';
 
-import { isRecord, parseA2ATask } from './schemas.js';
+import { isRecord, parseA2AMessage, parseA2ATask } from './schemas.js';
 import type { A2AMessage, A2ATask } from './types.js';
 
 export interface A2AServerTaskRecord {
@@ -22,6 +22,13 @@ export interface A2AServerTaskRecord {
   readonly lastRuntimeEventSeq: number;
   readonly runtimeEventCount: number;
   readonly runtimeEventBytes: number;
+  readonly acceptedOutputModes?: readonly string[];
+  readonly pendingUserInput?: {
+    readonly requestId: string;
+    readonly revision: number;
+    readonly runId: string;
+    readonly kind: string;
+  };
 }
 
 type TaskListener = (record: A2AServerTaskRecord) => void;
@@ -45,6 +52,20 @@ function parseRecord(value: unknown): A2AServerTaskRecord {
   if (!Number.isSafeInteger(value.eventSeq) || !Number.isSafeInteger(value.lastRuntimeEventSeq)) {
     throw new Error('A2A task store event cursors are invalid.');
   }
+  const pendingUserInput = value.pendingUserInput;
+  if (pendingUserInput !== undefined && (
+    !isRecord(pendingUserInput)
+    || typeof pendingUserInput.requestId !== 'string'
+    || !Number.isSafeInteger(pendingUserInput.revision)
+    || typeof pendingUserInput.runId !== 'string'
+    || typeof pendingUserInput.kind !== 'string'
+  )) {
+    throw new Error('A2A task store pending user input is invalid.');
+  }
+  if (value.acceptedOutputModes !== undefined && (
+    !Array.isArray(value.acceptedOutputModes)
+    || !value.acceptedOutputModes.every((mode) => typeof mode === 'string')
+  )) throw new Error('A2A task store accepted output modes are invalid.');
   return {
     taskId: value.taskId as string,
     contextId: value.contextId as string,
@@ -58,13 +79,24 @@ function parseRecord(value: unknown): A2AServerTaskRecord {
     messageDigests: value.messageDigests as Record<string, string>,
     runIds: value.runIds as string[],
     task: parseA2ATask(value.task),
-    history: value.history as A2AMessage[],
+    history: value.history.map(parseA2AMessage),
     createdAt: value.createdAt as string,
     updatedAt: value.updatedAt as string,
     eventSeq: value.eventSeq as number,
     lastRuntimeEventSeq: value.lastRuntimeEventSeq as number,
     runtimeEventCount: Number.isSafeInteger(value.runtimeEventCount) ? value.runtimeEventCount as number : 0,
     runtimeEventBytes: Number.isSafeInteger(value.runtimeEventBytes) ? value.runtimeEventBytes as number : 0,
+    ...(value.acceptedOutputModes !== undefined
+      ? { acceptedOutputModes: value.acceptedOutputModes as string[] }
+      : {}),
+    ...(pendingUserInput !== undefined ? {
+      pendingUserInput: {
+        requestId: pendingUserInput.requestId as string,
+        revision: pendingUserInput.revision as number,
+        runId: pendingUserInput.runId as string,
+        kind: pendingUserInput.kind as string,
+      },
+    } : {}),
   };
 }
 
@@ -107,7 +139,10 @@ export class A2AFileTaskStore {
   list(principalKey: string): readonly A2AServerTaskRecord[] {
     return [...this.#records.values()]
       .filter((record) => record.principalKey === principalKey)
-      .sort((left, right) => right.updatedAt.localeCompare(left.updatedAt))
+      .sort((left, right) => (
+        right.updatedAt.localeCompare(left.updatedAt)
+        || right.taskId.localeCompare(left.taskId)
+      ))
       .map(clone);
   }
 
@@ -121,6 +156,29 @@ export class A2AFileTaskStore {
     this.persist();
     for (const listener of this.#listeners.get(record.taskId) ?? []) listener(clone(next));
     return clone(next);
+  }
+
+  pruneTerminal(principalKey: string, maxRecords: number): readonly A2AServerTaskRecord[] {
+    const records = [...this.#records.values()]
+      .filter((record) => record.principalKey === principalKey)
+      .sort((left, right) => left.updatedAt.localeCompare(right.updatedAt));
+    const removed: A2AServerTaskRecord[] = [];
+    while (records.length > maxRecords) {
+      const index = records.findIndex((record) => (
+        record.task.status.state === 'TASK_STATE_COMPLETED'
+        || record.task.status.state === 'TASK_STATE_FAILED'
+        || record.task.status.state === 'TASK_STATE_CANCELED'
+        || record.task.status.state === 'TASK_STATE_REJECTED'
+      ));
+      if (index < 0) break;
+      const [record] = records.splice(index, 1);
+      if (!record) break;
+      this.#records.delete(record.taskId);
+      this.#listeners.delete(record.taskId);
+      removed.push(clone(record));
+    }
+    if (removed.length > 0) this.persist();
+    return removed;
   }
 
   subscribe(taskId: string, listener: TaskListener): () => void {
@@ -154,7 +212,10 @@ export class A2AFileTaskStore {
       try {
         const pid = Number.parseInt(fs.readFileSync(this.#lockPath, 'utf8').trim(), 10);
         if (Number.isSafeInteger(pid) && pid > 0) {
-          try { process.kill(pid, 0); } catch { stale = true; }
+          try { process.kill(pid, 0); }
+          catch (probeError: unknown) {
+            stale = (probeError as NodeJS.ErrnoException).code === 'ESRCH';
+          }
         }
       } catch {
         stale = false;

@@ -1317,6 +1317,8 @@ export interface KodaXContextOptions {
    * and shell execution. Defaults to `gitRoot`, then `process.cwd()`.
    */
   executionCwd?: string;
+  /** Fail-closed host policy applied to every concrete file a read tool opens. */
+  assertReadablePath?: (candidate: string) => void;
   /**
    * Best-known token snapshot for the current conversation history.
    * When present, the core will prefer it over local estimation and rebase it as
@@ -2003,6 +2005,10 @@ export interface KodaXToolExecutionContext {
   skillScriptRunner?: KodaXSkillScriptRunner;
   /** Working directory used to resolve relative paths and execute shell commands. */
   executionCwd?: string;
+  /** Fail-closed host policy applied to every concrete file a read tool opens. */
+  assertReadablePath?: (candidate: string) => void;
+  /** Host tool visibility ceiling inherited by child agents. */
+  toolVisibilityPolicy?: KodaXToolVisibilityPolicy;
   /** Maximum physical input capacity of the active model request. */
   maximumInputTokens?: number;
   /** Remaining capacity for the complete tool-result batch in this request. */

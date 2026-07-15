@@ -31,6 +31,78 @@ describe('extractArtifactLedger', () => {
       ]),
     );
   });
+
+  it('records only successfully promoted Skill script outputs as created files', () => {
+    const ledger = extractArtifactLedger([
+      {
+        role: 'assistant',
+        content: [{
+          type: 'tool_use',
+          id: 'skill-script-1',
+          name: 'run_skill_script',
+          input: {
+            skill: 'office-reports',
+            script: 'scripts/render.py',
+            outputs: [
+              { path: 'deck.pptx', target: 'deliverables/deck.pptx' },
+              { path: 'data.csv', target: 'reports/data.csv' },
+            ],
+          },
+        }],
+      },
+      {
+        role: 'user',
+        content: [{
+          type: 'tool_result',
+          tool_use_id: 'skill-script-1',
+          content: JSON.stringify({
+            stdout: 'rendered',
+            outputs: ['deliverables/deck.pptx', 'reports/data.csv', 'undeclared/private.txt'],
+          }),
+        }],
+      },
+    ]);
+
+    expect(ledger).toHaveLength(2);
+    expect(ledger).toEqual(expect.arrayContaining([
+      expect.objectContaining({
+        kind: 'file_created',
+        sourceTool: 'run_skill_script',
+        action: 'promote_output',
+        target: 'deliverables/deck.pptx',
+      }),
+      expect.objectContaining({
+        kind: 'file_created',
+        sourceTool: 'run_skill_script',
+        action: 'promote_output',
+        target: 'reports/data.csv',
+      }),
+    ]));
+  });
+
+  it('does not record declared Skill script outputs when execution fails', () => {
+    const ledger = extractArtifactLedger([
+      {
+        role: 'assistant',
+        content: [{
+          type: 'tool_use', id: 'skill-script-2', name: 'run_skill_script',
+          input: {
+            skill: 'office-reports', script: 'scripts/render.py',
+            outputs: [{ path: 'deck.pptx', target: 'deliverables/deck.pptx' }],
+          },
+        }],
+      },
+      {
+        role: 'user',
+        content: [{
+          type: 'tool_result', tool_use_id: 'skill-script-2',
+          content: '[Tool Error] run_skill_script: render failed', is_error: true,
+        }],
+      },
+    ]);
+
+    expect(ledger).toEqual([]);
+  });
 });
 
 describe('FEATURE_185 (v0.7.42): result-side enrichment', () => {

@@ -571,4 +571,35 @@ describe('CLI interactive exit lifecycle', () => {
       await rm(homeDir, { recursive: true, force: true });
     }
   });
+
+  it('does not fall through when a root option precedes a subcommand', async () => {
+    process.env.VITEST = 'true';
+    const homeDir = await mkdtemp(join(tmpdir(), 'kodax-prefixed-daemon-cli-'));
+    const logSpy = vi.spyOn(console, 'log').mockImplementation(() => undefined);
+    try {
+      process.argv = [
+        'node',
+        'kodax',
+        '--provider',
+        'prefixed-provider',
+        'daemon',
+        'status',
+        '--home',
+        homeDir,
+        '--profile',
+        'test',
+        '--json',
+      ];
+      const { main, harness } = await importMainWithMocks();
+
+      await main();
+
+      expect(harness.runInkInteractiveMode).not.toHaveBeenCalled();
+      expect(harness.runInteractiveMode).not.toHaveBeenCalled();
+      expect(harness.createKodaXRuntime).not.toHaveBeenCalled();
+      expect(logSpy).toHaveBeenCalledWith(expect.stringContaining('"health": "missing"'));
+    } finally {
+      await rm(homeDir, { recursive: true, force: true });
+    }
+  });
 });

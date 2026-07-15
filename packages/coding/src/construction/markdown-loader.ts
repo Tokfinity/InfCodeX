@@ -15,6 +15,7 @@
  *   name: db-reviewer
  *   description: Reviews DB migrations for safety
  *   tools: [read, grep]
+ *   provider: anthropic
  *   model: claude-sonnet-4-6
  *   effort: high
  *   ---
@@ -153,6 +154,8 @@ export interface DiscoveredMarkdownAgent {
    */
   readonly tools?: readonly string[];
   readonly skills?: readonly string[];
+  /** Optional provider alias from frontmatter `provider` field. */
+  readonly provider?: string;
   /** Optional model alias from frontmatter `model` field. */
   readonly model?: string;
   /** Optional reasoning effort from frontmatter `effort` field. */
@@ -336,7 +339,9 @@ async function admitOneMarkdownAgentFile(
     return { kind: 'fail', reason: parseOutcome.reason, warnings: [] };
   }
 
-  const { name, description, instructions, toolNames, skillNames, model, effort } = parseOutcome.parsed;
+  const {
+    name, description, instructions, toolNames, skillNames, provider, model, effort,
+  } = parseOutcome.parsed;
   const filteredTools: MarkdownAgentToolFilter[] = [];
   const warnings: MarkdownAgentLoadWarning[] = [];
   const toolResolution = resolveMarkdownToolRefs(filePath, name, toolNames);
@@ -354,6 +359,7 @@ async function admitOneMarkdownAgentFile(
     instructions,
     description,
     ...(toolResolution.tools !== undefined ? { tools: toolResolution.tools } : {}),
+    ...(provider !== undefined ? { provider } : {}),
     ...(model !== undefined ? { model } : {}),
     ...(effort !== undefined ? { effort } : {}),
   };
@@ -581,6 +587,9 @@ export async function discoverMarkdownAgents(
           ...(outcome.parsed.skillNames !== undefined
             ? { skills: outcome.parsed.skillNames }
             : {}),
+          ...(outcome.parsed.provider !== undefined
+            ? { provider: outcome.parsed.provider }
+            : {}),
           ...(outcome.parsed.model !== undefined ? { model: outcome.parsed.model } : {}),
           ...(outcome.parsed.effort !== undefined ? { effort: outcome.parsed.effort } : {}),
         });
@@ -601,6 +610,7 @@ interface ParsedAgent {
   /** Raw tool names without `builtin:` prefix. */
   readonly toolNames?: readonly string[];
   readonly skillNames?: readonly string[];
+  readonly provider?: string;
   readonly model?: string;
   readonly effort?: string;
 }
@@ -662,6 +672,18 @@ async function parseMarkdownAgentFile(filePath: string): Promise<ParseOutcome> {
     return { kind: 'fail', reason: 'frontmatter "skills" contains duplicate names' };
   }
 
+  const providerField = frontmatter.provider;
+  if (
+    providerField !== undefined
+    && (typeof providerField !== 'string' || providerField.trim().length === 0)
+  ) {
+    return {
+      kind: 'fail',
+      reason: `frontmatter "provider" must be a non-empty string (got ${typeof providerField})`,
+    };
+  }
+  const provider = typeof providerField === 'string' ? providerField.trim() : undefined;
+
   const modelField = frontmatter.model;
   const model =
     typeof modelField === 'string' && modelField.trim().length > 0
@@ -685,6 +707,7 @@ async function parseMarkdownAgentFile(filePath: string): Promise<ParseOutcome> {
       instructions,
       ...(toolNames !== undefined ? { toolNames } : {}),
       ...(skillNames !== undefined ? { skillNames } : {}),
+      ...(provider !== undefined ? { provider } : {}),
       ...(model !== undefined ? { model } : {}),
       ...(effort !== undefined ? { effort } : {}),
     },

@@ -107,6 +107,10 @@ export function parseA2APart(value: unknown): A2APart {
   if (!isRecord(value)) throw new A2AError(-32602, 'Message Part must be an object.');
   const keys = ['text', 'raw', 'url', 'data'].filter((key) => value[key] !== undefined);
   if (keys.length !== 1) throw new A2AError(-32602, 'Message Part must contain exactly one content field.');
+  const contentKey = keys[0]!;
+  if (contentKey !== 'data' && typeof value[contentKey] !== 'string') {
+    throw new A2AError(-32602, `Message Part ${contentKey} content must be a string.`);
+  }
   return {
     ...(typeof value.text === 'string' ? { text: value.text } : {}),
     ...(typeof value.raw === 'string' ? { raw: value.raw } : {}),
@@ -152,14 +156,17 @@ function parseArtifact(value: unknown): A2AArtifact {
 export function parseA2ATask(value: unknown): A2ATask {
   if (!isRecord(value) || !isRecord(value.status)) throw new A2AError(-32603, 'A2A task is invalid.');
   const state = value.status.state;
-  if (typeof state !== 'string' || !TASK_STATES.has(state as A2ATaskState)) {
+  if (typeof state !== 'string') {
     throw new A2AError(-32603, 'A2A task state is invalid.');
   }
+  const normalizedState = TASK_STATES.has(state as A2ATaskState)
+    ? state as A2ATaskState
+    : 'TASK_STATE_UNSPECIFIED';
   return {
     id: requiredString(value, 'id', 'Task'),
-    contextId: requiredString(value, 'contextId', 'Task'),
+    contextId: optionalString(value, 'contextId') ?? '',
     status: {
-      state: state as A2ATaskState,
+      state: normalizedState,
       ...(value.status.message !== undefined ? { message: parseA2AMessage(value.status.message) } : {}),
       ...(optionalString(value.status, 'timestamp') ? { timestamp: optionalString(value.status, 'timestamp') } : {}),
     },

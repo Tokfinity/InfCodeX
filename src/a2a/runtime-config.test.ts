@@ -32,6 +32,10 @@ function card(name: string): Response {
       protocolVersion: '1.0',
     }],
     capabilities: { streaming: false },
+    securitySchemes: {
+      bearer: { httpAuthSecurityScheme: { scheme: 'Bearer', bearerFormat: 'opaque' } },
+    },
+    securityRequirements: [{ schemes: { bearer: { list: [] } } }],
     defaultInputModes: ['text/plain'],
     defaultOutputModes: ['text/plain'],
     skills: [{ id: 'general', name: 'General', description: 'General tasks', tags: [] }],

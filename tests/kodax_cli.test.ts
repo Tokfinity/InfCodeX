@@ -309,7 +309,8 @@ describe('CLI Entry Point', () => {
     expect(source).toContain('kodax -h acp');
     expect(source).toContain('kodax acp serve');
     expect(source).toContain(".option('--effort <level>', 'Reasoning effort");
-    expect(source).toContain('effort: subcommandOptions.effort');
+    expect(source).toContain('const options = mergeCommandOptionsWithGlobals(localOptions, command);');
+    expect(source).toContain('effort: options.effort');
     expect(source).not.toContain("--agent-mode <mode>          ') + 'Agent mode");
   });
 

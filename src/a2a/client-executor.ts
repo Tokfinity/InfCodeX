@@ -24,11 +24,10 @@ import {
   type A2AArtifact,
   type A2AClientOptions,
   type A2ADiscoveredRegistration,
-  type A2AJsonRpcResponse,
   type A2AMessage,
+  type A2APart,
   type A2ARegistrationInput,
   type A2ATask,
-  type A2ATaskState,
 } from './types.js';
 
 interface A2AExecutorConfig {
@@ -62,13 +61,39 @@ function executorConfig(registration: ExternalAgentRegistration): A2AExecutorCon
   };
 }
 
-function chooseInterface(card: A2AAgentCard): A2AAgentCard['supportedInterfaces'][number] {
+function chooseInterface(
+  card: A2AAgentCard,
+  cardUrl: URL,
+): A2AAgentCard['supportedInterfaces'][number] {
   const selected = card.supportedInterfaces.find((entry) => (
     entry.protocolBinding.toUpperCase() === 'JSONRPC'
     && entry.protocolVersion === A2A_PROTOCOL_VERSION
   ));
   if (!selected) throw new Error('Agent Card has no supported A2A 1.0 JSONRPC interface.');
+  const interfaceUrl = new URL(selected.url);
+  if (interfaceUrl.username || interfaceUrl.password) {
+    throw new Error('A2A interface URL must not contain credentials.');
+  }
+  if (interfaceUrl.origin !== cardUrl.origin) {
+    throw new Error('A2A interface must use the same origin as the trusted Agent Card.');
+  }
   return selected;
+}
+
+function advertisesBearerAuthentication(card: A2AAgentCard): boolean {
+  const bearerSchemes = new Set(
+    Object.entries(card.securitySchemes ?? {}).flatMap(([name, value]) => {
+      if (!isRecord(value) || !isRecord(value.httpAuthSecurityScheme)) return [];
+      return typeof value.httpAuthSecurityScheme.scheme === 'string'
+        && value.httpAuthSecurityScheme.scheme.toLowerCase() === 'bearer'
+        ? [name]
+        : [];
+    }),
+  );
+  return (card.securityRequirements ?? []).some((requirement) => (
+    isRecord(requirement.schemes)
+    && Object.keys(requirement.schemes).some((name) => bearerSchemes.has(name))
+  ));
 }
 
 function parseJson(text: string, label: string): unknown {
@@ -94,7 +119,10 @@ export async function discoverA2ARegistration(
     throw new Error('Agent Card response is not JSON.');
   }
   const card = parseA2AAgentCard(parseJson(decodeUtf8(result.body), 'Agent Card'));
-  const selected = chooseInterface(card);
+  const selected = chooseInterface(card, result.url);
+  if (input.credentialRef && !advertisesBearerAuthentication(card)) {
+    throw new Error('Configured A2A credential requires an advertised Bearer security scheme.');
+  }
   const identity = stableJson({
     agentCardUrl: result.url.href,
     interfaceUrl: selected.url,
@@ -145,8 +173,8 @@ function directMessage(reference: AgentExecutorTaskReference): A2AMessage | unde
   return value === undefined ? undefined : parseA2AMessage(value);
 }
 
-function taskState(state: A2ATaskState): AgentExecutorTaskSnapshot['state'] {
-  const mapping: Record<A2ATaskState, AgentExecutorTaskSnapshot['state']> = {
+function taskState(state: string): AgentExecutorTaskSnapshot['state'] {
+  const mapping: Readonly<Record<string, AgentExecutorTaskSnapshot['state']>> = {
     TASK_STATE_UNSPECIFIED: 'unknown',
     TASK_STATE_SUBMITTED: 'submitted',
     TASK_STATE_WORKING: 'working',
@@ -157,21 +185,36 @@ function taskState(state: A2ATaskState): AgentExecutorTaskSnapshot['state'] {
     TASK_STATE_REJECTED: 'rejected',
     TASK_STATE_AUTH_REQUIRED: 'auth-required',
   };
-  return mapping[state];
+  return mapping[state] ?? 'unknown';
 }
 
 function textFromParts(parts: readonly { readonly text?: string }[]): string {
   return parts.flatMap((part) => part.text === undefined ? [] : [part.text]).join('\n');
 }
 
-function artifactReference(artifact: A2AArtifact): AgentArtifactReference {
-  const urlPart = artifact.parts.find((part) => part.url !== undefined);
+function partArtifactReference(part: A2APart, name: string): AgentArtifactReference | undefined {
+  const mimeType = part.mediaType ?? (part.data !== undefined ? 'application/json' : 'application/octet-stream');
+  const inline = part.raw !== undefined
+    ? `data:${mimeType};base64,${part.raw}`
+    : part.data !== undefined
+      ? `data:${mimeType};base64,${Buffer.from(JSON.stringify(part.data), 'utf8').toString('base64')}`
+      : undefined;
+  const uri = part.url ?? inline;
+  if (!uri) return undefined;
   return {
-    name: artifact.name ?? artifact.artifactId,
-    ...(artifact.parts[0]?.mediaType ? { mimeType: artifact.parts[0].mediaType } : {}),
-    ...(urlPart?.url ? { uri: urlPart.url } : {}),
+    name,
+    ...(part.mediaType ? { mimeType: part.mediaType } : {}),
+    ...(part.raw !== undefined ? { size: Buffer.from(part.raw, 'base64').byteLength } : {}),
+    uri,
     provenance: 'a2a',
   };
+}
+
+function artifactReference(artifact: A2AArtifact): AgentArtifactReference | undefined {
+  const part = artifact.parts.find((candidate) => (
+    candidate.url !== undefined || candidate.raw !== undefined || candidate.data !== undefined
+  ));
+  return part ? partArtifactReference(part, artifact.name ?? artifact.artifactId) : undefined;
 }
 
 function snapshotFromTask(task: A2ATask): AgentExecutorTaskSnapshot {
@@ -182,16 +225,39 @@ function snapshotFromTask(task: A2ATask): AgentExecutorTaskSnapshot {
     state: taskState(task.status.state),
     ...(output ? { output } : {}),
     ...(task.status.state === 'TASK_STATE_FAILED' ? { error: statusText || 'Remote A2A task failed.' } : {}),
-    ...(task.artifacts?.length ? { artifacts: task.artifacts.map(artifactReference) } : {}),
+    ...(task.artifacts?.length
+      ? { artifacts: task.artifacts.flatMap((artifact) => artifactReference(artifact) ?? []) }
+      : {}),
   };
 }
 
 function snapshotFromMessage(message: A2AMessage): AgentExecutorTaskSnapshot {
-  return { state: 'completed', output: textFromParts(message.parts) };
+  const output = textFromParts(message.parts);
+  const artifacts = message.parts.flatMap((part, index) => {
+    if (part.text !== undefined) return [];
+    const reference = partArtifactReference(part, part.filename ?? `message-part-${index + 1}`);
+    return reference ? [reference] : [];
+  });
+  return {
+    state: 'completed',
+    ...(output ? { output } : {}),
+    ...(artifacts.length > 0 ? { artifacts } : {}),
+  };
 }
 
 function isTerminal(state: AgentExecutorTaskSnapshot['state']): boolean {
   return state === 'completed' || state === 'failed' || state === 'canceled' || state === 'rejected';
+}
+
+function mergeStreamArtifact(
+  artifacts: Map<string, A2AArtifact>,
+  artifact: A2AArtifact,
+  append: boolean,
+): void {
+  const current = artifacts.get(artifact.artifactId);
+  artifacts.set(artifact.artifactId, append && current
+    ? { ...current, ...artifact, parts: [...current.parts, ...artifact.parts] }
+    : artifact);
 }
 
 class A2AClientExecutor implements AgentExecutor {
@@ -229,7 +295,7 @@ class A2AClientExecutor implements AgentExecutor {
       return {
         idempotencyKey,
         remoteTaskId: task.id,
-        metadata: { contextId: task.contextId },
+        ...(task.contextId ? { metadata: { contextId: task.contextId } } : {}),
       };
     }
     if (result.message !== undefined) {
@@ -241,10 +307,10 @@ class A2AClientExecutor implements AgentExecutor {
   async *events(reference: AgentExecutorTaskReference): AsyncIterable<AgentExecutorEvent> {
     const direct = directMessage(reference);
     if (direct) {
-      yield snapshotFromMessage(direct);
+      yield await this.authorizeArtifacts(snapshotFromMessage(direct));
       return;
     }
-    if (this.registration.capabilities.streaming === 'supported' && !this.registration.credentialRef) {
+    if (this.registration.capabilities.streaming === 'supported') {
       try {
         yield* this.streamEvents(reference);
         return;
@@ -269,9 +335,11 @@ class A2AClientExecutor implements AgentExecutor {
 
   async get(reference: AgentExecutorTaskReference): Promise<AgentExecutorTaskSnapshot> {
     const direct = directMessage(reference);
-    if (direct) return snapshotFromMessage(direct);
+    if (direct) return this.authorizeArtifacts(snapshotFromMessage(direct));
     if (!reference.remoteTaskId) throw new Error('A2A task reference has no remote task ID.');
-    return snapshotFromTask(parseA2ATask(await this.rpc('GetTask', this.taskParams(reference))));
+    const task = parseA2ATask(await this.rpc('GetTask', this.taskParams(reference)));
+    this.assertTaskReference(task, reference);
+    return this.authorizeArtifacts(snapshotFromTask(task));
   }
 
   async sendInput(reference: AgentExecutorTaskReference, input: AgentContinuationInput): Promise<void> {
@@ -291,7 +359,9 @@ class A2AClientExecutor implements AgentExecutor {
 
   async cancel(reference: AgentExecutorTaskReference): Promise<AgentExecutorTaskSnapshot> {
     if (!reference.remoteTaskId) return this.get(reference);
-    return snapshotFromTask(parseA2ATask(await this.rpc('CancelTask', this.taskParams(reference))));
+    const task = parseA2ATask(await this.rpc('CancelTask', this.taskParams(reference)));
+    this.assertTaskReference(task, reference);
+    return this.authorizeArtifacts(snapshotFromTask(task));
   }
 
   async reconcile(reference: AgentExecutorTaskReference): Promise<AgentExecutorTaskSnapshot> {
@@ -314,8 +384,8 @@ class A2AClientExecutor implements AgentExecutor {
       'a2a-version': A2A_PROTOCOL_VERSION,
       'content-type': 'application/json',
     });
-    if (this.options.authorization) headers.set('authorization', this.options.authorization);
     const controller = new AbortController();
+    const requestId = randomUUID();
     this.#streamControllers.add(controller);
     let timeout: ReturnType<typeof setTimeout> | undefined;
     const disarmTimeout = (): void => {
@@ -329,18 +399,12 @@ class A2AClientExecutor implements AgentExecutor {
     };
     try {
       armTimeout('A2A stream connection timed out.');
-      const response = await openSafeA2AResponse(url, {
-        method: 'POST',
-        headers,
-        redirect: 'manual',
-        signal: controller.signal,
-        body: JSON.stringify({
-          jsonrpc: '2.0',
-          id: randomUUID(),
-          method: 'SubscribeToTask',
-          params: this.taskParams(reference),
-        }),
-      }, this.options.networkPolicy, this.options.fetch);
+      const response = await this.openStreamResponse(url, headers, controller.signal, {
+        jsonrpc: '2.0',
+        id: requestId,
+        method: 'SubscribeToTask',
+        params: this.taskParams(reference),
+      });
       disarmTimeout();
       if (!response.ok || !response.body) throw new Error(`A2A stream failed with HTTP ${response.status}.`);
       if (!response.headers.get('content-type')?.toLowerCase().startsWith('text/event-stream')) {
@@ -348,6 +412,7 @@ class A2AClientExecutor implements AgentExecutor {
       }
       const reader = response.body.getReader();
       const decoder = new TextDecoder();
+      const artifacts = new Map<string, A2AArtifact>();
       let buffered = '';
       let receivedBytes = 0;
       while (!this.#disposed) {
@@ -368,47 +433,131 @@ class A2AClientExecutor implements AgentExecutor {
             .map((line) => line.slice(5).trimStart())
             .join('\n');
           if (!data) continue;
-          const event = this.snapshotFromStreamPayload(parseJson(data, 'A2A stream'));
+          const event = await this.snapshotFromStreamPayload(
+            parseJson(data, 'A2A stream'),
+            requestId,
+            reference,
+            artifacts,
+          );
           if (!event) continue;
           yield event;
           if (event.state && (isTerminal(event.state) || event.state === 'input-required' || event.state === 'auth-required')) return;
         }
       }
+      if (!this.#disposed) throw new Error('A2A event stream ended before the task reached a stable state.');
     } finally {
       disarmTimeout();
       this.#streamControllers.delete(controller);
     }
   }
 
-  private snapshotFromStreamPayload(payload: unknown): AgentExecutorTaskSnapshot | undefined {
+  private async snapshotFromStreamPayload(
+    payload: unknown,
+    requestId: string,
+    reference: AgentExecutorTaskReference,
+    artifacts: Map<string, A2AArtifact>,
+  ): Promise<AgentExecutorTaskSnapshot | undefined> {
     if (!isRecord(payload)) throw new Error('A2A stream frame is invalid.');
+    if (payload.jsonrpc !== '2.0' || payload.id !== requestId) {
+      throw new Error('A2A stream frame has an invalid JSON-RPC version or response id.');
+    }
     if (payload.error !== undefined) {
       const error = isRecord(payload.error) ? payload.error : {};
       throw new A2AError(typeof error.code === 'number' ? error.code : -32603, typeof error.message === 'string' ? error.message : 'A2A stream error.');
     }
     if (!isRecord(payload.result)) return undefined;
-    if (payload.result.task !== undefined) return snapshotFromTask(parseA2ATask(payload.result.task));
-    if (payload.result.message !== undefined) return snapshotFromMessage(parseA2AMessage(payload.result.message));
+    if (payload.result.task !== undefined) {
+      const task = parseA2ATask(payload.result.task);
+      this.assertTaskReference(task, reference);
+      artifacts.clear();
+      for (const artifact of task.artifacts ?? []) artifacts.set(artifact.artifactId, artifact);
+      return this.authorizeArtifacts(snapshotFromTask(task));
+    }
+    if (payload.result.message !== undefined) {
+      const message = parseA2AMessage(payload.result.message);
+      if (message.taskId !== undefined && message.taskId !== reference.remoteTaskId) {
+        throw new Error('A2A stream message belongs to a different task.');
+      }
+      return this.authorizeArtifacts(snapshotFromMessage(message));
+    }
     if (isRecord(payload.result.statusUpdate) && isRecord(payload.result.statusUpdate.status)) {
-      const state = payload.result.statusUpdate.status.state;
-      if (typeof state !== 'string') throw new Error('A2A status update has no state.');
-      const message = payload.result.statusUpdate.status.message;
-      const output = message === undefined ? '' : textFromParts(parseA2AMessage(message).parts);
-      return {
-        state: taskState(state as A2ATaskState),
-        ...(output ? { output } : {}),
-      };
+      this.assertStreamTaskScope(payload.result.statusUpdate, reference);
+      const task = parseA2ATask({
+        id: reference.remoteTaskId,
+        contextId: payload.result.statusUpdate.contextId,
+        status: payload.result.statusUpdate.status,
+        ...(artifacts.size > 0 ? { artifacts: [...artifacts.values()] } : {}),
+      });
+      return this.authorizeArtifacts(snapshotFromTask(task));
     }
     if (isRecord(payload.result.artifactUpdate) && payload.result.artifactUpdate.artifact !== undefined) {
+      this.assertStreamTaskScope(payload.result.artifactUpdate, reference);
       const task = parseA2ATask({
-        id: 'stream-artifact',
-        contextId: 'stream-artifact',
+        id: reference.remoteTaskId,
+        contextId: payload.result.artifactUpdate.contextId,
         status: { state: 'TASK_STATE_WORKING' },
         artifacts: [payload.result.artifactUpdate.artifact],
       });
-      return snapshotFromTask(task);
+      const artifact = task.artifacts?.[0];
+      if (!artifact) throw new Error('A2A artifact update has no artifact.');
+      mergeStreamArtifact(artifacts, artifact, payload.result.artifactUpdate.append === true);
+      return this.authorizeArtifacts(snapshotFromTask({ ...task, artifacts: [...artifacts.values()] }));
     }
     return undefined;
+  }
+
+  private async authorizeArtifacts(snapshot: AgentExecutorTaskSnapshot): Promise<AgentExecutorTaskSnapshot> {
+    for (const artifact of snapshot.artifacts ?? []) await this.context.authorizeArtifact(artifact);
+    return snapshot;
+  }
+
+  private assertTaskReference(
+    task: A2ATask,
+    reference: AgentExecutorTaskReference,
+  ): void {
+    if (task.id !== reference.remoteTaskId) {
+      throw new Error('A2A response belongs to a different task id.');
+    }
+    const expectedContext = metadata(reference).contextId;
+    if (typeof expectedContext === 'string' && task.contextId && task.contextId !== expectedContext) {
+      throw new Error('A2A response belongs to a different task context.');
+    }
+  }
+
+  private assertStreamTaskScope(
+    event: Readonly<Record<string, unknown>>,
+    reference: AgentExecutorTaskReference,
+  ): void {
+    if (typeof event.taskId !== 'string' || event.taskId !== reference.remoteTaskId) {
+      throw new Error('A2A stream event belongs to a different task.');
+    }
+    const expectedContext = metadata(reference).contextId;
+    if (typeof event.contextId !== 'string'
+      || (typeof expectedContext === 'string' && event.contextId !== expectedContext)) {
+      throw new Error('A2A stream event belongs to a different task context.');
+    }
+  }
+
+  private async openStreamResponse(
+    url: URL,
+    baseHeaders: Headers,
+    signal: AbortSignal,
+    body: Readonly<Record<string, unknown>>,
+  ): Promise<Response> {
+    const open = (authorization?: string): Promise<Response> => {
+      const headers = new Headers(baseHeaders);
+      if (authorization) headers.set('authorization', authorization);
+      return openSafeA2AResponse(url, {
+        method: 'POST', headers, redirect: 'manual', signal, body: JSON.stringify(body),
+      }, this.options.networkPolicy, this.options.fetch);
+    };
+    if (this.registration.credentialRef) {
+      return this.context.withCredential(
+        this.registration.credentialRef,
+        (credential) => open(`Bearer ${credential}`),
+      );
+    }
+    return open(this.options.authorization);
   }
 
   private taskParams(reference: AgentExecutorTaskReference): Readonly<Record<string, unknown>> {
@@ -447,20 +596,33 @@ class A2AClientExecutor implements AgentExecutor {
       'content-type': 'application/json',
     });
     if (authorization) headers.set('authorization', authorization);
+    const requestId = randomUUID();
     const result = await safeA2AFetch(new URL(config.interfaceUrl), {
       method: 'POST',
       headers,
-      body: JSON.stringify({ jsonrpc: '2.0', id: randomUUID(), method, params }),
+      body: JSON.stringify({ jsonrpc: '2.0', id: requestId, method, params }),
     }, this.options.networkPolicy, this.options.fetch);
     if (!result.response.headers.get('content-type')?.toLowerCase().includes('json')) {
       throw new Error('A2A JSON-RPC response has an invalid content type.');
     }
     const payload = parseJson(decodeUtf8(result.body), 'A2A endpoint');
     if (!isRecord(payload)) throw new Error('A2A JSON-RPC response is invalid.');
-    const response = payload as unknown as A2AJsonRpcResponse;
-    if (response.error) throw new A2AError(response.error.code, response.error.message, result.response.status);
+    if (payload.jsonrpc !== '2.0' || payload.id !== requestId) {
+      throw new Error('A2A JSON-RPC response has an invalid version or response id.');
+    }
+    const hasResult = Object.hasOwn(payload, 'result');
+    const hasError = Object.hasOwn(payload, 'error');
+    if (hasResult === hasError) throw new Error('A2A JSON-RPC response must contain exactly one result or error.');
+    if (hasError) {
+      if (!isRecord(payload.error)
+        || typeof payload.error.code !== 'number'
+        || typeof payload.error.message !== 'string') {
+        throw new Error('A2A JSON-RPC error response is invalid.');
+      }
+      throw new A2AError(payload.error.code, payload.error.message, result.response.status);
+    }
     if (!result.response.ok) throw new Error(`A2A request failed with HTTP ${result.response.status}.`);
-    return response.result;
+    return payload.result;
   }
 }
 

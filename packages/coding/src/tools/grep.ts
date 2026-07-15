@@ -356,11 +356,18 @@ export async function toolGrep(
   let totalMatchCount = 0;
   let scannedFiles = 0;
   let candidateFiles = 0;
+  let policyExcludedFiles = 0;
 
   const processFile = async (filePath: string): Promise<void> => {
     if (allEntries.length >= collectLimit) return;
     if (typeExtensions && !fileMatchesType(filePath, typeExtensions)) return;
     scannedFiles += 1;
+    try {
+      ctx.assertReadablePath?.(filePath);
+    } catch {
+      policyExcludedFiles += 1;
+      return;
+    }
     try {
       const content = await fs.readFile(filePath, 'utf-8');
       const lines = content.split('\n');
@@ -417,11 +424,14 @@ export async function toolGrep(
   }
 
   const readWarning = buildReadWarning(readErrors);
+  const policyWarning = policyExcludedFiles > 0
+    ? `\n\n[${policyExcludedFiles} file(s) excluded by the active read policy.]`
+    : '';
   const nextScanOffset = scanOffset + scannedFiles;
   const scanWarning = nextScanOffset < candidateFiles
     ? `\n\n[SOURCE_INCOMPLETE: scanned ${scannedFiles} of ${candidateFiles} candidate file(s) from scan_offset=${scanOffset}; continue with scan_offset=${nextScanOffset} or narrow path.]`
     : '';
-  const sourceWarning = `${readWarning}${scanWarning}`;
+  const sourceWarning = `${readWarning}${policyWarning}${scanWarning}`;
   if (outputMode === 'count') return `${totalMatchCount} matches${sourceWarning}`;
   if (allEntries.length === 0) return `No matches for "${pattern}"${sourceWarning}`;
 

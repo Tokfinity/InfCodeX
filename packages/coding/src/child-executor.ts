@@ -740,6 +740,10 @@ async function createWorkflowChildDigest(
         context: {
           gitRoot: input.scopeCtx.gitRoot,
           executionCwd: input.scopeCtx.executionCwd ?? input.scopeCtx.gitRoot,
+          assertReadablePath: input.scopeCtx.assertReadablePath,
+          toolVisibilityPolicy: input.scopeCtx.toolVisibilityPolicy,
+          skillRegistry: input.scopeCtx.skillRegistry,
+          skillScriptRunner: input.scopeCtx.skillScriptRunner,
           ...inheritRepoIntelligenceContext(input.options),
           systemPromptOverride: WORKFLOW_CHILD_DIGEST_SYSTEM_PROMPT,
           excludeTools: getAllRegisteredTools().map((tool) => tool.name),
@@ -871,6 +875,10 @@ async function resolveChildStructuredOutput(input: {
         context: {
           gitRoot: input.scopeCtx.gitRoot,
           executionCwd: input.scopeCtx.executionCwd ?? input.scopeCtx.gitRoot,
+          assertReadablePath: input.scopeCtx.assertReadablePath,
+          toolVisibilityPolicy: input.scopeCtx.toolVisibilityPolicy,
+          skillRegistry: input.scopeCtx.skillRegistry,
+          skillScriptRunner: input.scopeCtx.skillScriptRunner,
           ...inheritRepoIntelligenceContext(input.options),
           systemPromptOverride: STRUCTURED_OUTPUT_REPAIR_SYSTEM_PROMPT,
           excludeTools: getAllRegisteredTools().map((tool) => tool.name),
@@ -1160,6 +1168,10 @@ async function runReadChildBody(
         context: {
           gitRoot: scope.ctx.gitRoot,
           executionCwd: scope.ctx.executionCwd ?? scope.ctx.gitRoot,
+          assertReadablePath: scope.ctx.assertReadablePath,
+          toolVisibilityPolicy: scope.ctx.toolVisibilityPolicy,
+          skillRegistry: scope.ctx.skillRegistry,
+          skillScriptRunner: scope.ctx.skillScriptRunner,
           ...inheritRepoIntelligenceContext(options),
           systemPromptOverride,
           excludeTools,
@@ -1389,6 +1401,10 @@ async function runWriteChildBody(
         context: {
           gitRoot: childCtx.gitRoot,
           executionCwd: childCtx.executionCwd ?? childCtx.gitRoot,
+          assertReadablePath: childCtx.assertReadablePath,
+          toolVisibilityPolicy: childCtx.toolVisibilityPolicy,
+          skillRegistry: childCtx.skillRegistry,
+          skillScriptRunner: childCtx.skillScriptRunner,
           ...inheritRepoIntelligenceContext(options),
           systemPromptOverride,
           excludeTools,

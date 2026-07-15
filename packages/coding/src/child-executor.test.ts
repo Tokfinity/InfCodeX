@@ -4,7 +4,7 @@ import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
-import { resetSkillRegistry } from '@kodax-ai/agent';
+import { getSkillRegistry, resetSkillRegistry } from '@kodax-ai/agent';
 
 // Mock runKodaX before importing child-executor
 vi.mock('./agent.js', () => ({
@@ -593,6 +593,36 @@ describe('executeChildAgents', () => {
     expect(result.results).toEqual([]);
     expect(result.mergedFindings).toEqual([]);
     expect(result.cancelledChildren).toEqual([]);
+  });
+
+  it('inherits the parent read, tool, Skill, and Skill-script ceilings', async () => {
+    mockRunKodaX.mockResolvedValue({
+      success: true,
+      lastText: 'done',
+      messages: [{ role: 'assistant', content: 'done' }],
+      sessionId: 's-child-policy',
+    });
+    const assertReadablePath = vi.fn();
+    const toolVisibilityPolicy = vi.fn(() => true);
+    const skillRegistry = getSkillRegistry('/test/repo');
+    const skillScriptRunner = { run: vi.fn(async () => 'ok'), dispose: vi.fn(async () => undefined) };
+
+    await executeChildAgents(
+      [createBundle({ id: 'cb-policy' })],
+      {
+        ...createCtx(), assertReadablePath, toolVisibilityPolicy, skillRegistry, skillScriptRunner,
+      },
+      createOptions(),
+    );
+
+    expect(mockRunKodaX).toHaveBeenCalledWith(
+      expect.objectContaining({
+        context: expect.objectContaining({
+          assertReadablePath, toolVisibilityPolicy, skillRegistry, skillScriptRunner,
+        }),
+      }),
+      expect.any(String),
+    );
   });
 
   it('spills child evidence only when the complete initial request cannot fit', async () => {

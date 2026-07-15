@@ -449,4 +449,31 @@ describe('toolGrep', () => {
     }
     expect(result).not.toContain('more');
   });
+
+  it('revalidates every enumerated file through the host read policy', async () => {
+    const dir = setup({
+      'public.txt': 'needle public\n',
+      'credentials': 'needle secret\n',
+    });
+    const checked: string[] = [];
+    const result = await toolGrep(
+      { pattern: 'needle', path: dir, head_limit: 0 },
+      {
+        backups: new Map(),
+        executionCwd: dir,
+        assertReadablePath(candidate) {
+          checked.push(candidate);
+          if (candidate.endsWith('credentials')) throw new Error('blocked');
+        },
+      },
+    );
+
+    expect(checked.map((candidate) => candidate.split(/[\\/]/).at(-1))).toEqual([
+      'credentials',
+      'public.txt',
+    ]);
+    expect(result).toContain('needle public');
+    expect(result).not.toContain('needle secret');
+    expect(result).not.toContain('credentials');
+  });
 });

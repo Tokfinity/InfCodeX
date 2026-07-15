@@ -14,6 +14,10 @@ _Last Updated: 2026-07-15_
 
 | ID | Priority | Status | Title | Introduced | Fixed | Created | Resolved |
 |----|----------|--------|-------|------------|-------|---------|----------|
+| 164 | High | Resolved | MCP cross-language zero matches can force an avoidable second model/tool round | v0.7.70 RC | v0.7.70 | 2026-07-15 | 2026-07-15 |
+| 163 | High | Resolved | A2A review found endpoint trust, task lifecycle, artifact, and protocol gaps | v0.7.69 | v0.7.70 | 2026-07-15 | 2026-07-15 |
+| 162 | High | Resolved | A2A serve drops Runtime defaults and Markdown Agent provider | v0.7.69 | v0.7.70 | 2026-07-15 | 2026-07-15 |
+| 161 | High | Resolved | MCP complete discovery can exceed result capacity or trust malformed pagination/cache state | v0.7.70 RC | v0.7.70 | 2026-07-15 | 2026-07-15 |
 | 160 | High | Resolved | Shared-daemon rollback omits reverse-bridge mutations and daemon-owned background work | v0.7.70 RC | v0.7.70 | 2026-07-15 | 2026-07-15 |
 | 159 | High | Resolved | Windows process cleanup can lose descendants when `taskkill /t` fails under load | v0.7.67 | v0.7.69 | 2026-07-15 | 2026-07-15 |
 | 158 | High | Resolved | Post-hoc output/history loss hides evidence and can increase end-to-end token use | v0.7.61 | v0.7.69 | 2026-07-14 | 2026-07-15 |
@@ -70,6 +74,321 @@ _Last Updated: 2026-07-15_
 
 ## Issue Details
 <!-- Full details for each issue - REQUIRED for all issues -->
+
+### 164: MCP cross-language zero matches can force an avoidable second model/tool round
+
+- **Priority**: High
+- **Status**: **Resolved** (v0.7.70)
+- **Introduced**: v0.7.70 RC
+- **Created**: 2026-07-15
+- **Resolved**: 2026-07-15
+- **Fixed**: v0.7.70
+
+#### Original Problem
+
+`mcp_search` used lexical matching only. A Chinese query against a provider whose
+catalog metadata is English could therefore return a truthful but unhelpful zero
+result even though the requested capability existed. The model then had to infer
+that the query vocabulary was wrong and issue another search or inventory call.
+This made progressive disclosure less accurate and could spend more tokens and
+latency than returning a compact, exact recovery in the first result.
+
+#### Context
+
+The issue affects cross-language or vocabulary-mismatched searches, especially
+large English MCP catalogs queried by Chinese users. Successful lexical searches
+were already efficient and should not pay any permanent prompt text, embedding,
+translation, or extra lookup cost. A fallback also must not expose an order-biased
+prefix or exceed the physical tool-result capacity.
+
+#### Root Cause
+
+- Query tokenization split punctuation and whitespace but not compact CJK words.
+- A non-empty zero result did not distinguish an actually empty filtered catalog
+  from a query/catalog vocabulary mismatch.
+- The search facade had no cost-admitted, lossless zero-match recovery path.
+
+#### Resolution
+
+- Added `Intl.Segmenter` word segmentation for CJK query tokens. This improves
+  same-language CJK metadata matching without pretending to translate languages.
+- On a non-empty zero match only, `mcp_search` reads the same filtered inventory
+  through the already validated runtime snapshot. The MCP runtime reuses its
+  in-memory live catalog unless a dirty signal invalidated it, so this adds no
+  second model/tool round and no normal-path discovery work.
+- When every exact id can be represented losslessly as a shared canonical prefix
+  plus all suffixes, the tool returns that complete known-snapshot inventory only
+  if it costs no more than a normal default eight-item search page and fits the
+  current physical result capacity.
+- If either admission check fails, the tool emits a compact catalog-language retry
+  signal with no partial id list or cursor. A revision change between the zero
+  result and recovery inventory fails closed with `MCP_CATALOG_CHANGED_RESTART`.
+- No embeddings, model translation, bilingual dictionary, permanent language
+  instruction, static byte threshold, or lossy artifact was added.
+- A fully unavailable catalog is no longer mistaken for a lexical zero match,
+  avoiding a duplicate discovery/connection attempt. Stale or mixed grouped
+  recovery retains the affected server and bounded failure reason.
+
+#### Files Changed
+
+- `packages/agent/src/capabilities/mcp/catalog.ts`
+- `packages/coding/src/tools/mcp-search.ts`
+- Adjacent MCP catalog/tool tests and FEATURE_035 design/test documentation
+
+#### Tests Added
+
+- Compact CJK same-language ranking
+- Successful-search single-pass invariant
+- Lossless grouped zero-match recovery with preserved server/kind filters
+- Dynamic normal-page and physical-capacity admission
+- Revision-change fail-closed behavior and no order-biased oversized fallback
+- Fully unavailable single-pass behavior and preserved grouped failure diagnostics
+- Real local GitHub snapshot: 26/26 exact ids reconstructed; grouped recovery
+  214 tokens versus 353 for literal inventory (39.4% reduction)
+
+### 163: A2A review found endpoint trust, task lifecycle, artifact, and protocol gaps
+
+- **Priority**: High
+- **Status**: **Resolved** (v0.7.70)
+- **Introduced**: v0.7.69
+- **Created**: 2026-07-15
+- **Resolved**: 2026-07-15
+- **Fixed**: v0.7.70
+
+#### Original Problem
+
+Post-fix review found that outbound discovery trusted an Agent Card's selected
+interface without binding it to the trusted Card origin; the no-code Bearer
+Card used a pre-1.0 authentication shape; recursive remote reads did not
+revalidate every concrete file; `INPUT_REQUIRED` started another Runtime run
+instead of answering the pending interaction; terminal records were never
+pruned; and generated file artifacts were not returned over A2A. Additional
+lifecycle and interoperability gaps left failed starts or subscriptions live,
+accepted absent protocol versions as 1.0, ignored bounded history/list filters,
+and failed to poll after a premature normal stream EOF.
+
+#### Context
+
+These defects affect configured outbound Agents, inbound no-code serving,
+fixed workspaces, long-lived principals, interactive tasks, and the document or
+presentation scenarios that motivated the general-Agent A2A surface. Existing
+happy-path tests passed because they did not exercise these boundaries.
+
+#### Root Cause
+
+- Discovery validated the Card fetch and later endpoint independently instead
+  of pinning the selected interface to the discovery trust decision.
+- Remote read guardrails authorized only the requested search root, while the
+  grep/glob handlers enumerated additional concrete paths internally.
+- The server mapped Runtime state names but did not bridge Runtime interaction,
+  artifact, pruning, or cleanup ownership into A2A task semantics.
+- Product Card construction and several request fields were tested only against
+  internal parsers rather than the frozen A2A 1.0 ProtoJSON contract.
+
+#### Proposed Solution
+
+Add boundary-first regression tests, then minimally bind selected interfaces to
+the trusted origin and advertised Bearer scheme; revalidate concrete read paths;
+bridge pending Runtime user input into the same task/run; prune only oldest
+terminal records; publish explicitly staged run artifacts; close terminal
+subscriptions and fail starts safely; and implement the missing bounded A2A 1.0
+request/version/stream semantics. Avoid new storage engines, generic credential
+frameworks, or public artifact hosting.
+
+#### Resolution
+
+- Bound Card-selected interfaces to the trusted discovery origin, required
+  advertised A2A 1.0 Bearer security before credential use, completed private
+  address classification, and preserved DNS-pinned transport behavior.
+- Revalidated every concrete `read`/`grep`/`glob` path, propagated the read,
+  tool, Skill, and Skill-script ceilings to child runs, and kept staged output
+  paths inside the bound workspace.
+- Resumed pending Runtime input on the original run, redacted private defaults
+  and task paths, cleaned terminal subscriptions, failed start errors safely,
+  and pruned only oldest terminal records.
+- Added bounded history/list/version validation, accepted-output negotiation,
+  explicit staged document artifacts, successful admitted Skill-script output
+  promotion, streaming artifact updates, inline remote artifact authorization,
+  and polling fallback after premature stream EOF. Declared-but-failed Skill
+  outputs and ordinary workspace writes are never published implicitly.
+- Restored authenticated SSE through the credential broker, validated JSON-RPC
+  correlation and task/context scope, accumulated `artifactUpdate.append`
+  chunks by artifact ID, preserved direct-Message file Parts, replaced offset
+  pagination with the designed stable opaque task cursor, and supplied
+  sanitized context/input modes to host authorization.
+- Tightened Part/task forward-compatible parsing and optional-operation errors,
+  kept successful tasks successful when a staged output disappears, and stopped
+  treating an access-denied live-process probe as a stale Windows store lock.
+- Kept the implementation on the existing file store, Runtime interaction
+  service, artifact ledger, `.kodax-a2a-staging` broker, and ASRT promotion
+  result; no task database, generic OAuth framework, or public artifact host was
+  introduced.
+
+#### Files Changed
+
+- `src/a2a/{server,task-store,client-executor,safe-fetch,schemas,product}.ts`
+- `src/runtime-agent-binding.ts`
+- `packages/agent/src/session-lineage/compaction/file-tracker.ts`
+- `packages/coding/src/{types,child-executor}.ts`
+- `packages/coding/src/agent-runtime/tool-execution-context.ts`
+- `packages/coding/src/tools/{read,grep,glob}.ts`
+- Adjacent A2A, binding, tool, child-executor, CLI, and protocol tests
+
+#### Tests Added
+
+- Added regressions for same-origin endpoint trust, A2A 1.0 Bearer Card shape,
+  mapped/private address handling, per-file read guards, child policy
+  inheritance, input continuation, retention, cleanup, history/list validation,
+  staged/Skill/direct/remote artifacts, failed Skill output, non-published
+  ordinary writes, authenticated SSE, cross-task/mismatched JSON-RPC responses,
+  appended artifact chunks, stable cursor pagination, authorization scope, lock
+  ownership, redaction, failed starts, and early stream EOF.
+
+### 162: A2A serve drops Runtime defaults and Markdown Agent provider
+
+- **Priority**: High
+- **Status**: **Resolved** (v0.7.70)
+- **Introduced**: v0.7.69
+- **Created**: 2026-07-15
+- **Resolved**: 2026-07-15
+- **Fixed**: v0.7.70
+
+#### Original Problem
+
+`kodax a2a serve --provider zai-coding` could start listening but fail the
+first inbound run with `runtime.runs.start requires input.options.provider or
+runtime defaultProvider`. Declaring the same provider in the selected user
+Markdown Agent did not help. The expected behavior is that an admitted local
+Agent uses its explicit provider, while an Agent without one falls back through
+the serving Runtime's CLI, environment, core config, and built-in defaults.
+
+#### Context
+
+The failure blocked both `runtime-default` and user Markdown Agent A2A serving
+when no other provider happened to reach the Runtime. The same Commander option
+ownership pattern could silently drop prefixed provider/model/reasoning options
+from daemon, ACP, and Skill subcommands. It failed closed and did not expose
+credentials or expand remote authority.
+
+#### Root Cause
+
+- Commander stored duplicated root/subcommand options on the root command,
+  while affected actions read only their local option object.
+- A root option before a subcommand bypassed the raw `argv[0]` early-return
+  check and could fall through into the ordinary CLI after the subcommand.
+- `a2a serve` did not run the normal environment/config/default Runtime
+  provider and provider-compatible model selection.
+- The Markdown loader supported model and effort but omitted the already
+  supported `AgentContent.provider` field.
+- Integration tests configured only a bare command and therefore did not
+  reproduce the real root/subcommand collision.
+
+#### Resolution
+
+Affected actions now merge accepted global and local options explicitly, with
+the selected command's values authoritative, without changing Commander's
+existing option-position compatibility. Parsed command identity, rather than
+raw argument position, prevents subcommand fallthrough. `a2a serve` now applies
+the same CLI/environment/config/default provider precedence and model-provider
+compatibility rule as other hosted Runtime entry points. Markdown Agent
+`provider` is trimmed, validated, admitted, discoverable, and passed to local
+Runtime runs; remote requests still cannot override provider or model.
+
+#### Files Changed
+
+- `src/cli_option_helpers.ts`
+- `src/kodax_cli.ts`
+- `src/integration-cli.ts`
+- `packages/coding/src/construction/markdown-loader.ts`
+- Related CLI, integration, Markdown loader, and Runtime binding tests
+
+#### Tests Added
+
+- Root/subcommand duplicate option positions and subcommand fallthrough
+- A2A CLI, environment, config, model compatibility, and override precedence
+- Markdown provider pass-through, discovery, validation, and Runtime binding
+
+### 161: MCP complete discovery can exceed result capacity or trust malformed pagination/cache state
+
+- **Priority**: High
+- **Status**: **Resolved** (v0.7.70)
+- **Introduced**: v0.7.70 RC
+- **Created**: 2026-07-15
+- **Resolved**: 2026-07-15
+- **Fixed**: v0.7.70
+
+#### Original Problem
+
+The progressive MCP catalog implementation can return a page larger than the
+reported `toolResultCapacityTokens` when even one rendered capability does not
+fit. At the provider boundary, structurally invalid cache files can prevent a
+healthy live server from recovering, and invalid or cyclic MCP list pagination
+can be accepted as complete or can keep discovery paging indefinitely.
+
+#### Context
+
+These failures affect `mcp_search` inventory/search results, first-use live
+catalog validation, stale-cache fallback, and any MCP server whose list results
+are paginated. They violate the feature's complete-or-explicitly-incomplete and
+capacity-bounded contracts.
+
+#### Root Cause
+
+- Capacity fitting returned the one-item candidate without checking whether it
+  actually fit.
+- Cache loading trusted TypeScript casts instead of validating the two persisted
+  catalog files as one coherent snapshot.
+- MCP list parsing treated malformed payloads as empty lists and did not reject
+  repeated cursors or duplicate capabilities across pages.
+- A successful live refresh was marked stale when only optional cache
+  persistence failed.
+
+#### Proposed Solution
+
+Reject or explicitly report an unrenderable page without consuming an item;
+validate cache structure and cross-file consistency; fail boundedly on malformed
+or cyclic pagination while deduplicating stable capability ids; and keep live
+catalog truth independent from best-effort cache persistence.
+
+#### Resolution
+
+Capacity fitting now returns a bounded no-consumption marker when even one item
+cannot fit, and reports context exhaustion rather than an oversized item when
+an empty result's metadata cannot fit. Search ranking uses complete-token
+coverage as a dominant sort key.
+List parsing rejects malformed containers, entries, identifiers, resource URIs,
+explicit null or repeated cursors while deduplicating ids across pages. A
+`list_changed` notification received during pagination invalidates the in-flight
+transaction instead of being overwritten by its result. Concurrent first-use
+discovery calls share one refresh, and kind-filtered cursors use a revision scoped
+to that filtered catalog. Cache reads validate
+both files as one coherent snapshot, so corrupt state falls through to live
+recovery. Live discovery remains complete when only best-effort cache
+persistence fails; the error is emitted and retained in diagnostics. Inventory
+and ranked results both mark provider data as untrusted.
+
+#### Files Changed
+
+- `packages/agent/src/capabilities/mcp/catalog.ts`
+- `packages/agent/src/capabilities/mcp/runtime.ts`
+- `packages/agent/src/capabilities/mcp/catalog.test.ts`
+- `packages/agent/src/capabilities/mcp/runtime.test.ts`
+- `packages/agent/src/capabilities/mcp/provider.test.ts`
+- `packages/coding/src/tools/mcp-search.ts`
+- `packages/coding/src/tools/mcp-tools.test.ts`
+- `docs/features/v0.8.5.md`
+- `docs/test-guides/FEATURE_035_v0.7.70_TEST_GUIDE.md`
+
+#### Tests Added
+
+- Single-item capacity overflow, empty-result exhaustion, and no-consumption behavior.
+- Long-query complete-token ranking dominance.
+- Malformed list shape/entry/id/URI rejection, repeated-cursor rejection, and
+  explicit-null cursor rejection, cross-page id deduplication, and in-flight
+  `list_changed` invalidation.
+- Corrupt-cache live recovery and cache-write-failure live truth.
+- Concurrent discovery coalescing and kind-scoped catalog revisions.
+- Untrusted-data labeling on inventory output.
 
 ### 160: Shared-daemon rollback omits reverse-bridge mutations and daemon-owned background work
 
@@ -3095,11 +3414,34 @@ Commit `ef085fc` 把 V1 精简到 V2 时没区分"信息载体"和"脚手架"，
 ---
 
 ## Summary
-- Total: 47 (24 Open, 23 Resolved, 0 Partially Resolved, 0 Won't Fix)
+- Total: 51 (24 Open, 27 Resolved, 0 Partially Resolved, 0 Won't Fix)
 - Highest Priority Open: 091 - 缺少一等公民 MCP / Web Search / Code Search 工具体系 (High)
 - Historical archived issues are maintained in ISSUES_ARCHIVED.md
 
 ## Changelog
+
+### 2026-07-15: Issue 164 added and resolved (v0.7.70)
+- Added cost-admitted, lossless zero-match MCP recovery and compact CJK query
+  segmentation without changing successful lexical-search behavior.
+
+### 2026-07-15: Issue 163 added and resolved (v0.7.70)
+- Closed A2A endpoint trust, read-boundary, task continuation/retention,
+  artifact, cleanup, redaction, version, and stream-interoperability gaps while
+  retaining the existing lightweight Runtime and file-store architecture.
+
+### 2026-07-15: Issue 162 added and resolved (v0.7.70)
+- Restored hosted Runtime provider/model precedence for `a2a serve`, admitted
+  Markdown Agent providers, and made root/subcommand option ownership and
+  command termination explicit.
+
+### 2026-07-15: Issue 161 added and resolved (v0.7.70)
+- Closed MCP result-capacity, ranking, pagination integrity, cache recovery,
+  cache-persistence truth, and provider-data trust-label gaps found in review.
+
+### 2026-07-15: Issue 160 added and resolved (v0.7.70)
+- Added reverse-bridge draining and daemon-owned Workflow/External Agent
+  blockers to the atomic rollback revision so shutdown cannot abandon live
+  background work or mutate transient credential/Host Tool state.
 
 ### 2026-07-15: Resolved issues older than 30 days archived
 - Moved 40 resolved issues to `ISSUES_ARCHIVED.md`; all open and recent issues remain active.

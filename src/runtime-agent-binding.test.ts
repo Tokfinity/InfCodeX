@@ -41,7 +41,11 @@ function policy(overrides: Partial<RuntimeExecutionToolPolicy> = {}): RuntimeExe
   };
 }
 
-function writeAgent(input: { readonly tools: string; readonly skills: string }): void {
+function writeAgent(input: {
+  readonly tools: string;
+  readonly skills: string;
+  readonly provider?: string;
+}): void {
   const dir = path.join(home, '.kodax', 'agents');
   mkdirSync(dir, { recursive: true });
   writeFileSync(path.join(dir, 'office-agent.md'), [
@@ -51,6 +55,7 @@ function writeAgent(input: { readonly tools: string; readonly skills: string }):
     `tools: ${input.tools}`,
     `skills: ${input.skills}`,
     'model: bound-model',
+    ...(input.provider ? [`provider: ${input.provider}`] : []),
     'effort: high',
     '---',
     'You are a general office agent.',
@@ -98,7 +103,11 @@ function host(): RuntimeAgentBindingHost {
 
 describe('FEATURE_267 Runtime local Agent binding', () => {
   it('pins a user Markdown Agent, selected Skills, tools, and run options', async () => {
-    writeAgent({ tools: '[read, grep, write, skill]', skills: '[office-reports]' });
+    writeAgent({
+      tools: '[read, grep, write, skill]',
+      skills: '[office-reports]',
+      provider: 'bound-provider',
+    });
     writeSkill();
     const service = createRuntimeAgentBindingService(host());
     const owner = await service.openOwnerSession();
@@ -124,6 +133,7 @@ describe('FEATURE_267 Runtime local Agent binding', () => {
     });
 
     const options = starts[0]?.options;
+    expect(options?.provider).toBe('bound-provider');
     expect(options?.modelOverride).toBe('bound-model');
     expect(options?.effort).toBe('high');
     expect(options?.context?.systemPromptOverride).toBe('You are a general office agent.');
@@ -134,6 +144,8 @@ describe('FEATURE_267 Runtime local Agent binding', () => {
     expect(options?.events?.beforeToolExecute).toBeTypeOf('function');
     await expect(options?.events?.beforeToolExecute?.('read', { path: 'report.md' }))
       .resolves.toBe(true);
+    expect(() => options?.context?.assertReadablePath?.(path.join(workspace, 'credentials')))
+      .toThrow(/secret-bearing/i);
   });
 
   it('blocks path escape and secret-bearing reads at call time', async () => {

@@ -165,6 +165,11 @@ export async function toolRead(
   ctx: KodaXToolExecutionContext,
 ): Promise<string | readonly KodaXToolResultContentItem[]> {
   const filePath = resolveExecutionPath(input.path as string, ctx);
+  try {
+    ctx.assertReadablePath?.(filePath);
+  } catch {
+    return '[Tool Error] File is unavailable under the active read policy.';
+  }
   let stat;
   try {
     stat = await fs.stat(filePath);

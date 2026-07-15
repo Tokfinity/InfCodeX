@@ -84,6 +84,7 @@ import {
   parseReasoningModeOption,
   parseRepoIntelligenceModeOption,
   parseRuntimeModeOption,
+  mergeCommandOptionsWithGlobals,
   normalizeCliSessionFlags,
   resolveCliAgentMode,
   resolveCliEffort,
@@ -2267,21 +2268,22 @@ complete -c kodax -l version -d 'Show version'`);
     .option('--model <name>', 'Default model for hosted runs')
     .option('--timeout-ms <n>', 'Milliseconds to wait for daemon health', parseOptionalNonNegativeInt, 5_000)
     .option('--json', 'Output machine-readable JSON')
-    .action(async (subOpts: {
+    .action(async (localOptions: {
       profile?: string;
       home?: string;
       provider?: string;
       model?: string;
       timeoutMs?: number;
       json?: boolean;
-    }) => {
+    }, command: Command) => {
+      const options = mergeCommandOptionsWithGlobals(localOptions, command);
       await startDaemonCommand({
-        profile: subOpts.profile ?? 'default',
-        homeDir: subOpts.home ?? resolveDefaultRuntimeDaemonHomeDir(),
-        provider: subOpts.provider,
-        model: subOpts.model,
-        timeoutMs: subOpts.timeoutMs ?? 5_000,
-        json: subOpts.json === true,
+        profile: options.profile ?? 'default',
+        homeDir: options.home ?? resolveDefaultRuntimeDaemonHomeDir(),
+        provider: options.provider,
+        model: options.model,
+        timeoutMs: options.timeoutMs ?? 5_000,
+        json: options.json === true,
       });
     });
 
@@ -2318,21 +2320,22 @@ complete -c kodax -l version -d 'Show version'`);
     .option('--model <name>', 'Default model for hosted runs')
     .option('--timeout-ms <n>', 'Milliseconds to wait for daemon shutdown/startup', parseOptionalNonNegativeInt, 5_000)
     .option('--json', 'Output machine-readable JSON')
-    .action(async (subOpts: {
+    .action(async (localOptions: {
       profile?: string;
       home?: string;
       provider?: string;
       model?: string;
       timeoutMs?: number;
       json?: boolean;
-    }) => {
+    }, command: Command) => {
+      const options = mergeCommandOptionsWithGlobals(localOptions, command);
       await restartDaemonCommand({
-        profile: subOpts.profile ?? 'default',
-        homeDir: subOpts.home ?? resolveDefaultRuntimeDaemonHomeDir(),
-        provider: subOpts.provider,
-        model: subOpts.model,
-        timeoutMs: subOpts.timeoutMs ?? 5_000,
-        json: subOpts.json === true,
+        profile: options.profile ?? 'default',
+        homeDir: options.home ?? resolveDefaultRuntimeDaemonHomeDir(),
+        provider: options.provider,
+        model: options.model,
+        timeoutMs: options.timeoutMs ?? 5_000,
+        json: options.json === true,
       });
     });
 
@@ -2361,14 +2364,18 @@ complete -c kodax -l version -d 'Show version'`);
     .option('--model <name>', 'Default model for hosted runs')
     .option('--sessions-dir <dir>', 'Runtime session storage directory')
     .option('--permission-timeout-ms <n>', 'Permission request timeout', parseOptionalNonNegativeInt)
-    .action(async (subOpts: { profile?: string; home?: string; provider?: string; model?: string; sessionsDir?: string; permissionTimeoutMs?: number }) => {
+    .action(async (localOptions: {
+      profile?: string; home?: string; provider?: string; model?: string;
+      sessionsDir?: string; permissionTimeoutMs?: number;
+    }, command: Command) => {
+      const options = mergeCommandOptionsWithGlobals(localOptions, command);
       await serveDaemonCommand({
-        profile: subOpts.profile ?? 'default',
-        homeDir: subOpts.home ?? resolveDefaultRuntimeDaemonHomeDir(),
-        provider: subOpts.provider,
-        model: subOpts.model,
-        sessionsDir: subOpts.sessionsDir,
-        permissionTimeoutMs: subOpts.permissionTimeoutMs,
+        profile: options.profile ?? 'default',
+        homeDir: options.home ?? resolveDefaultRuntimeDaemonHomeDir(),
+        provider: options.provider,
+        model: options.model,
+        sessionsDir: options.sessionsDir,
+        permissionTimeoutMs: options.permissionTimeoutMs,
       });
     });
 
@@ -2408,7 +2415,7 @@ complete -c kodax -l version -d 'Show version'`);
     .option('--repo-intelligence <mode>', 'Repo intelligence mode: auto, full, light, off', parseRepoIntelligenceModeOption)
     .option('--repo-intelligence-trace', 'Enable repo intelligence trace metadata/logging')
     .option('--permission-mode <mode>', 'Initial permission mode', parsePermissionModeOption, 'accept-edits')
-    .action(async (subcommandOptions: {
+    .action(async (localOptions: {
       cwd?: string;
       provider?: string;
       model?: string;
@@ -2418,21 +2425,22 @@ complete -c kodax -l version -d 'Show version'`);
       repoIntelligence?: string;
       repoIntelligenceTrace?: boolean;
       permissionMode?: AcpPermissionMode;
-    }) => {
-      if (typeof subcommandOptions.repoIntelligence === 'string' && subcommandOptions.repoIntelligence.trim()) {
-        process.env.KODAX_REPO_INTELLIGENCE = subcommandOptions.repoIntelligence.trim();
+    }, command: Command) => {
+      const options = mergeCommandOptionsWithGlobals(localOptions, command);
+      if (typeof options.repoIntelligence === 'string' && options.repoIntelligence.trim()) {
+        process.env.KODAX_REPO_INTELLIGENCE = options.repoIntelligence.trim();
       }
-      if (subcommandOptions.repoIntelligenceTrace === true) {
+      if (options.repoIntelligenceTrace === true) {
         process.env.KODAX_REPO_INTELLIGENCE_TRACE = '1';
       }
       await runAcpServer({
-        cwd: subcommandOptions.cwd,
-        provider: subcommandOptions.provider,
-        model: subcommandOptions.model,
-        effort: subcommandOptions.effort,
-        thinking: subcommandOptions.thinking,
-        reasoningMode: subcommandOptions.reasoning,
-        permissionMode: subcommandOptions.permissionMode,
+        cwd: options.cwd,
+        provider: options.provider,
+        model: options.model,
+        effort: options.effort,
+        thinking: options.thinking,
+        reasoningMode: options.reasoning,
+        permissionMode: options.permissionMode,
         agentVersion: version,
       });
     });
@@ -2490,7 +2498,7 @@ complete -c kodax -l version -d 'Show version'`);
     .option('--cwd <dir>', 'Working directory for the runs')
     .option('--configs <list>', 'Comma-separated configs, e.g. with_skill,without_skill')
     .option('-o, --output <file>', 'Optional JSON summary output')
-    .action(async (subcommandOptions: {
+    .action(async (localOptions: {
       skillPath: string;
       evals: string;
       workspace: string;
@@ -2502,35 +2510,36 @@ complete -c kodax -l version -d 'Show version'`);
       cwd?: string;
       configs?: string;
       output?: string;
-    }) => {
+    }, command: Command) => {
+      const options = mergeCommandOptionsWithGlobals(localOptions, command);
       const args = [
-        '--skill-path', subcommandOptions.skillPath,
-        '--evals', subcommandOptions.evals,
-        '--workspace', subcommandOptions.workspace,
+        '--skill-path', options.skillPath,
+        '--evals', options.evals,
+        '--workspace', options.workspace,
       ];
-      if (subcommandOptions.provider) {
-        args.push('--provider', subcommandOptions.provider);
+      if (options.provider) {
+        args.push('--provider', options.provider);
       }
-      if (subcommandOptions.model) {
-        args.push('--model', subcommandOptions.model);
+      if (options.model) {
+        args.push('--model', options.model);
       }
-      if (subcommandOptions.runs) {
-        args.push('--runs', subcommandOptions.runs);
+      if (options.runs) {
+        args.push('--runs', options.runs);
       }
-      if (subcommandOptions.maxIter) {
-        args.push('--max-iter', subcommandOptions.maxIter);
+      if (options.maxIter) {
+        args.push('--max-iter', options.maxIter);
       }
-      if (subcommandOptions.reasoning) {
-        args.push('--reasoning', subcommandOptions.reasoning);
+      if (options.reasoning) {
+        args.push('--reasoning', options.reasoning);
       }
-      if (subcommandOptions.cwd) {
-        args.push('--cwd', subcommandOptions.cwd);
+      if (options.cwd) {
+        args.push('--cwd', options.cwd);
       }
-      if (subcommandOptions.configs) {
-        args.push('--configs', subcommandOptions.configs);
+      if (options.configs) {
+        args.push('--configs', options.configs);
       }
-      if (subcommandOptions.output) {
-        args.push('--output', subcommandOptions.output);
+      if (options.output) {
+        args.push('--output', options.output);
       }
       await runSkillCreatorTool('eval', args);
     });
@@ -2544,31 +2553,32 @@ complete -c kodax -l version -d 'Show version'`);
     .option('--max-iter <n>', 'Max iterations per grading run')
     .option('--configs <list>', 'Comma-separated configs, e.g. with_skill,without_skill')
     .option('--overwrite', 'Re-grade runs that already have grading.json')
-    .action(async (workspace: string, subcommandOptions: {
+    .action(async (workspace: string, localOptions: {
       provider?: string;
       model?: string;
       reasoning?: string;
       maxIter?: string;
       configs?: string;
       overwrite?: boolean;
-    }) => {
+    }, command: Command) => {
+      const options = mergeCommandOptionsWithGlobals(localOptions, command);
       const args = [workspace];
-      if (subcommandOptions.provider) {
-        args.push('--provider', subcommandOptions.provider);
+      if (options.provider) {
+        args.push('--provider', options.provider);
       }
-      if (subcommandOptions.model) {
-        args.push('--model', subcommandOptions.model);
+      if (options.model) {
+        args.push('--model', options.model);
       }
-      if (subcommandOptions.reasoning) {
-        args.push('--reasoning', subcommandOptions.reasoning);
+      if (options.reasoning) {
+        args.push('--reasoning', options.reasoning);
       }
-      if (subcommandOptions.maxIter) {
-        args.push('--max-iter', subcommandOptions.maxIter);
+      if (options.maxIter) {
+        args.push('--max-iter', options.maxIter);
       }
-      if (subcommandOptions.configs) {
-        args.push('--configs', subcommandOptions.configs);
+      if (options.configs) {
+        args.push('--configs', options.configs);
       }
-      if (subcommandOptions.overwrite) {
+      if (options.overwrite) {
         args.push('--overwrite');
       }
       await runSkillCreatorTool('grade', args);
@@ -2584,7 +2594,7 @@ complete -c kodax -l version -d 'Show version'`);
     .option('--provider <name>', 'Provider to use')
     .option('--model <name>', 'Model override')
     .option('--reasoning <mode>', 'Reasoning mode', parseReasoningModeOption)
-    .action(async (workspace: string, subcommandOptions: {
+    .action(async (workspace: string, localOptions: {
       benchmark?: string;
       output?: string;
       markdown?: string;
@@ -2592,28 +2602,29 @@ complete -c kodax -l version -d 'Show version'`);
       provider?: string;
       model?: string;
       reasoning?: string;
-    }) => {
+    }, command: Command) => {
+      const options = mergeCommandOptionsWithGlobals(localOptions, command);
       const args = [workspace];
-      if (subcommandOptions.benchmark) {
-        args.push('--benchmark', subcommandOptions.benchmark);
+      if (options.benchmark) {
+        args.push('--benchmark', options.benchmark);
       }
-      if (subcommandOptions.output) {
-        args.push('--output', subcommandOptions.output);
+      if (options.output) {
+        args.push('--output', options.output);
       }
-      if (subcommandOptions.markdown) {
-        args.push('--markdown', subcommandOptions.markdown);
+      if (options.markdown) {
+        args.push('--markdown', options.markdown);
       }
-      if (subcommandOptions.skillName) {
-        args.push('--skill-name', subcommandOptions.skillName);
+      if (options.skillName) {
+        args.push('--skill-name', options.skillName);
       }
-      if (subcommandOptions.provider) {
-        args.push('--provider', subcommandOptions.provider);
+      if (options.provider) {
+        args.push('--provider', options.provider);
       }
-      if (subcommandOptions.model) {
-        args.push('--model', subcommandOptions.model);
+      if (options.model) {
+        args.push('--model', options.model);
       }
-      if (subcommandOptions.reasoning) {
-        args.push('--reasoning', subcommandOptions.reasoning);
+      if (options.reasoning) {
+        args.push('--reasoning', options.reasoning);
       }
       await runSkillCreatorTool('analyze', args);
     });
@@ -2629,7 +2640,7 @@ complete -c kodax -l version -d 'Show version'`);
     .option('--provider <name>', 'Provider to use')
     .option('--model <name>', 'Model override')
     .option('--reasoning <mode>', 'Reasoning mode', parseReasoningModeOption)
-    .action(async (workspace: string, subcommandOptions: {
+    .action(async (workspace: string, localOptions: {
       configA: string;
       configB: string;
       output?: string;
@@ -2638,29 +2649,30 @@ complete -c kodax -l version -d 'Show version'`);
       provider?: string;
       model?: string;
       reasoning?: string;
-    }) => {
+    }, command: Command) => {
+      const options = mergeCommandOptionsWithGlobals(localOptions, command);
       const args = [
         workspace,
-        '--config-a', subcommandOptions.configA,
-        '--config-b', subcommandOptions.configB,
+        '--config-a', options.configA,
+        '--config-b', options.configB,
       ];
-      if (subcommandOptions.output) {
-        args.push('--output', subcommandOptions.output);
+      if (options.output) {
+        args.push('--output', options.output);
       }
-      if (subcommandOptions.markdown) {
-        args.push('--markdown', subcommandOptions.markdown);
+      if (options.markdown) {
+        args.push('--markdown', options.markdown);
       }
-      if (subcommandOptions.maxPairs) {
-        args.push('--max-pairs', subcommandOptions.maxPairs);
+      if (options.maxPairs) {
+        args.push('--max-pairs', options.maxPairs);
       }
-      if (subcommandOptions.provider) {
-        args.push('--provider', subcommandOptions.provider);
+      if (options.provider) {
+        args.push('--provider', options.provider);
       }
-      if (subcommandOptions.model) {
-        args.push('--model', subcommandOptions.model);
+      if (options.model) {
+        args.push('--model', options.model);
       }
-      if (subcommandOptions.reasoning) {
-        args.push('--reasoning', subcommandOptions.reasoning);
+      if (options.reasoning) {
+        args.push('--reasoning', options.reasoning);
       }
       await runSkillCreatorTool('compare', args);
     });
@@ -2833,8 +2845,8 @@ complete -c kodax -l version -d 'Show version'`);
 
   await program.parseAsync(process.argv);
   if (
-    argv[0] !== undefined
-    && CLI_SUBCOMMAND_NAMES.has(argv[0])
+    program.args[0] !== undefined
+    && CLI_SUBCOMMAND_NAMES.has(program.args[0])
   ) {
     return;
   }

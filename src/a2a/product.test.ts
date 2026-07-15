@@ -23,6 +23,12 @@ describe('FEATURE_267 A2A product authentication', () => {
     await expect(authentication.authenticate(new Request('https://agent.example', {
       headers: { authorization: 'Bearer wrong-token' },
     }))).resolves.toBeNull();
+    expect(authentication.securitySchemes).toEqual({
+      bearer: { httpAuthSecurityScheme: { scheme: 'Bearer', bearerFormat: 'opaque' } },
+    });
+    expect(authentication.securityRequirements).toEqual([
+      { schemes: { bearer: { list: [] } } },
+    ]);
   });
 
   it('fails before serving when the configured secret is absent', () => {

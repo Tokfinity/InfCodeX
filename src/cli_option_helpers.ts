@@ -55,6 +55,14 @@ export interface NormalizedCliSessionFlags {
   noSession: boolean;
 }
 
+/** Merge accepted parent options while keeping the selected command authoritative. */
+export function mergeCommandOptionsWithGlobals<T extends object>(
+  localOptions: T,
+  command: Command,
+): T {
+  return { ...command.optsWithGlobals(), ...localOptions };
+}
+
 export function normalizeCliSessionFlags(opts: {
   session?: unknown;
   noSession?: unknown;

@@ -556,7 +556,7 @@ function workspaceBroker(root: string) {
       const safeName = path.basename(suggestedName).replace(/[^A-Za-z0-9._-]/g, '_') || 'output';
       const target = path.join(root, '.kodax-a2a-staging', `${stagingId}-${safeName}`);
       await mkdir(path.dirname(target), { recursive: true });
-      return { stagingId, path: target };
+      return { stagingId, path: resolveToolPath(root, target) ?? target };
     },
   };
 }
@@ -769,6 +769,7 @@ export function createRuntimeAgentBindingService(
             toolVisibilityPolicy: (tool) => binding.effectiveTools.includes(tool.name),
             skillRegistry: binding.skillRegistry,
             skillScriptRunner: binding.skillScriptRunner,
+            assertReadablePath: (candidate) => { resolveToolPath(root, candidate); },
             skillsPrompt: skillsPrompt(binding.effectiveSkills, binding.skillRegistry),
           },
           skillDynamicContext: { disable: true },
@@ -873,6 +874,7 @@ export function createRuntimeAgentBindingService(
             toolVisibilityPolicy: (tool) => binding.effectiveTools.includes(tool.name),
             skillRegistry: binding.skillRegistry,
             skillScriptRunner: binding.skillScriptRunner,
+            assertReadablePath: (candidate) => { resolveToolPath(root, candidate); },
             skillsPrompt: skillsPrompt(binding.effectiveSkills, binding.skillRegistry),
           },
           skillDynamicContext: { disable: true },

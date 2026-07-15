@@ -285,6 +285,41 @@ describe('loadAgentsFromMarkdown', () => {
     expect(agent?.model).toBe('claude-sonnet-4-6');
   });
 
+  it('passes a trimmed provider field through to the registered agent', async () => {
+    await writeUserAgent(
+      'with-provider.md',
+      [
+        '---',
+        'name: with-provider',
+        'description: tests provider passthrough',
+        'provider: " zai-coding "',
+        '---',
+        'body',
+      ].join('\n'),
+    );
+    const result = await load();
+    expect(result.loaded).toBe(1);
+    const agent = resolveConstructedAgent('with-provider');
+    expect(agent?.provider).toBe('zai-coding');
+  });
+
+  it('reports an invalid provider frontmatter value instead of silently falling back', async () => {
+    await writeUserAgent(
+      'bad-provider.md',
+      [
+        '---',
+        'name: bad-provider',
+        'description: tests provider validation',
+        'provider: []',
+        '---',
+        'body',
+      ].join('\n'),
+    );
+    const result = await load();
+    expect(result.loaded).toBe(0);
+    expect(result.failed[0]?.reason).toContain('frontmatter "provider"');
+  });
+
   it('passes effort field through to the registered agent', async () => {
     await writeUserAgent(
       'with-effort.md',
@@ -818,6 +853,23 @@ describe('discoverMarkdownAgents', () => {
     const result = await discover();
     expect(result.agents).toHaveLength(1);
     expect(result.agents[0].model).toBe('claude-sonnet-4-6');
+  });
+
+  it('exposes provider from frontmatter', async () => {
+    await writeUserAgent(
+      'with-provider.md',
+      [
+        '---',
+        'name: with-provider',
+        'description: provider passthrough',
+        'provider: zai-coding',
+        '---',
+        'body',
+      ].join('\n'),
+    );
+    const result = await discover();
+    expect(result.agents).toHaveLength(1);
+    expect(result.agents[0].provider).toBe('zai-coding');
   });
 
   it('exposes effort from frontmatter', async () => {

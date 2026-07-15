@@ -9,6 +9,7 @@ import {
 } from '@kodax-ai/agent';
 import {
   createExtensionRuntime,
+  KODAX_DEFAULT_PROVIDER,
   loadMarkdownAgentScope,
   registerConfiguredMcpCapabilityProvider,
   resolveExtensionEntrypoint,
@@ -22,9 +23,12 @@ import {
   migrateLegacyIntegrationConfig,
   parseExtensionsIntegrationDocument,
   planLegacyIntegrationMigration,
+  prepareRuntimeConfig,
   readExtensionsIntegration,
   readMcpIntegration,
   removeMcpServer,
+  resolveRuntimeModelSelection,
+  resolveRuntimeProviderSelection,
   upsertMcpServer,
   writeIntegrationDocument,
 } from '@kodax-ai/repl';
@@ -49,6 +53,7 @@ import {
   type A2AOutboundEffect,
   type A2AServerConfig,
 } from './a2a/index.js';
+import { mergeCommandOptionsWithGlobals } from './cli_option_helpers.js';
 import { createKodaXRuntime } from './sdk-runtime.js';
 import { doctorSandboxRuntime, setupSandboxRuntime } from './sandbox-runtime.js';
 
@@ -436,11 +441,26 @@ async function serveA2A(options: {
   let server: Awaited<ReturnType<typeof prepareKodaXA2AServer>> | undefined;
   let applied = initial.document.server;
   try {
+    const environmentProvider = process.env.KODAX_PROVIDER;
+    const config = prepareRuntimeConfig();
+    const defaultProvider = resolveRuntimeProviderSelection({
+      explicitProvider: options.provider,
+      environmentProvider,
+      configuredProvider: config.provider,
+      defaultProvider: KODAX_DEFAULT_PROVIDER,
+    });
+    const defaultModel = resolveRuntimeModelSelection({
+      explicitProvider: options.provider,
+      environmentProvider,
+      explicitModel: options.model,
+      configuredProvider: config.provider,
+      configuredModel: config.model,
+    });
     runtime = await createKodaXRuntime({
       mode: 'embedded', isolation: 'inline', profile: options.profile,
       ...(options.home ? { homeDir: path.resolve(options.home) } : {}),
-      ...(options.provider ? { defaultProvider: options.provider } : {}),
-      ...(options.model ? { defaultModel: options.model } : {}),
+      defaultProvider,
+      ...(defaultModel ? { defaultModel } : {}),
       externalAgents: outboundIntegration.runtimeOptions,
     });
     outboundHandle = await outboundIntegration.start(runtime);
@@ -520,9 +540,19 @@ function configureA2ACommands(program: Command, version: string): void {
     .option('--home <dir>', 'Runtime home directory')
     .option('--provider <name>', 'Default provider')
     .option('--model <name>', 'Default model')
-    .action((options: { host: string; port: number; profile: string; home?: string; provider?: string; model?: string }) => (
-      serveA2A({ hostname: options.host, port: options.port, profile: options.profile, home: options.home, provider: options.provider, model: options.model })
-    ));
+    .action((localOptions: {
+      host: string; port: number; profile: string; home?: string; provider?: string; model?: string;
+    }, command: Command) => {
+      const options = mergeCommandOptionsWithGlobals(localOptions, command);
+      return serveA2A({
+        hostname: options.host,
+        port: options.port,
+        profile: options.profile,
+        home: options.home,
+        provider: options.provider,
+        model: options.model,
+      });
+    });
 }
 
 function configureSandboxCommands(program: Command): void {

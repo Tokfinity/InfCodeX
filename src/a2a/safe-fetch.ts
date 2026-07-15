@@ -9,19 +9,33 @@ import type { A2ANetworkPolicy } from './types.js';
 
 function isPrivateIpv4(address: string): boolean {
   const octets = address.split('.').map(Number);
-  const [a, b] = octets;
-  if (octets.length !== 4 || a === undefined || b === undefined) return true;
+  const [a, b, c, d] = octets;
+  if (octets.length !== 4 || a === undefined || b === undefined || c === undefined || d === undefined) return true;
   return a === 0
     || a === 10
     || a === 127
+    || (a === 100 && b >= 64 && b <= 127)
     || (a === 169 && b === 254)
     || (a === 172 && b >= 16 && b <= 31)
     || (a === 192 && b === 168)
+    || (a === 192 && b === 0 && c === 0 && d !== 9 && d !== 10)
+    || (a === 192 && b === 0 && c === 2)
+    || (a === 198 && (b === 18 || b === 19))
+    || (a === 198 && b === 51 && c === 100)
+    || (a === 203 && b === 0 && c === 113)
     || a >= 224;
 }
 
 function isPrivateIpv6(address: string): boolean {
   const normalized = address.toLowerCase();
+  const mappedDotted = /^::ffff:(\d+\.\d+\.\d+\.\d+)$/.exec(normalized)?.[1];
+  if (mappedDotted) return isPrivateIpv4(mappedDotted);
+  const mappedHex = /^::ffff:([0-9a-f]{1,4}):([0-9a-f]{1,4})$/.exec(normalized);
+  if (mappedHex?.[1] && mappedHex[2]) {
+    const high = Number.parseInt(mappedHex[1], 16);
+    const low = Number.parseInt(mappedHex[2], 16);
+    return isPrivateIpv4(`${high >> 8}.${high & 255}.${low >> 8}.${low & 255}`);
+  }
   return normalized === '::'
     || normalized === '::1'
     || normalized.startsWith('fc')
@@ -51,7 +65,10 @@ async function validateA2AUrl(url: URL, policy: A2ANetworkPolicy): Promise<Valid
     throw new A2AError(-32602, `A2A origin is not allowed: ${url.origin}`);
   }
   if (url.username || url.password) throw new A2AError(-32602, 'A2A URL must not include credentials.');
-  const addresses = await lookup(url.hostname, { all: true, verbatim: true });
+  const hostname = url.hostname.startsWith('[') && url.hostname.endsWith(']')
+    ? url.hostname.slice(1, -1)
+    : url.hostname;
+  const addresses = await lookup(hostname, { all: true, verbatim: true });
   if (addresses.length === 0) throw new A2AError(-32602, 'A2A hostname did not resolve.');
   if (url.protocol === 'http:' && !addresses.every((entry) => isPrivateAddress(entry.address))) {
     throw new A2AError(-32602, 'Public A2A targets must use HTTPS.');

@@ -36,9 +36,9 @@ export function createBearerEnvA2AAuthentication(
   if (!expected) throw new Error(`A2A bearer token environment variable is unset: ${config.tokenEnv}.`);
   return {
     securitySchemes: {
-      bearer: { type: 'http', scheme: 'bearer', bearerFormat: 'opaque' },
+      bearer: { httpAuthSecurityScheme: { scheme: 'Bearer', bearerFormat: 'opaque' } },
     },
-    securityRequirements: [{ bearer: [] }],
+    securityRequirements: [{ schemes: { bearer: { list: [] } } }],
     async authenticate(request) {
       const actual = bearerToken(request);
       return actual && equalSecret(expected, actual)

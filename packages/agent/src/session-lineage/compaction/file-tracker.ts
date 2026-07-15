@@ -199,6 +199,49 @@ function createLedgerEntry(
 interface ToolResultEvidence {
   readonly content?: string;
   readonly metadata?: Record<string, unknown>;
+  readonly isError?: boolean;
+}
+
+function normalizedRelativePath(value: string): string {
+  return value.trim().replaceAll('\\', '/').replace(/^\.\//, '');
+}
+
+function buildSkillScriptArtifactEntries(
+  block: KodaXToolUseBlock,
+  result: ToolResultEvidence | undefined,
+): KodaXSessionArtifactLedgerEntry[] {
+  if (result?.isError || result?.content === undefined) return [];
+  const input = block.input as Record<string, unknown>;
+  const declared = input.outputs;
+  if (!Array.isArray(declared)) return [];
+  const declaredTargets = new Set<string>();
+  for (const item of declared) {
+    if (!item || typeof item !== 'object' || !('target' in item) || typeof item.target !== 'string') continue;
+    const target = normalizedRelativePath(item.target);
+    if (target) declaredTargets.add(target);
+  }
+
+  let parsed: unknown;
+  try { parsed = JSON.parse(result.content) as unknown; }
+  catch { return []; }
+  if (!parsed || typeof parsed !== 'object' || !('outputs' in parsed) || !Array.isArray(parsed.outputs)) return [];
+
+  const entries: KodaXSessionArtifactLedgerEntry[] = [];
+  const seen = new Set<string>();
+  for (const value of parsed.outputs) {
+    if (typeof value !== 'string') continue;
+    const target = normalizedRelativePath(value);
+    if (!declaredTargets.has(target) || seen.has(target)) continue;
+    seen.add(target);
+    entries.push(createLedgerEntry(
+      'file_created',
+      block.name,
+      'promote_output',
+      target,
+      `Created ${target} from admitted Skill script`,
+    ));
+  }
+  return entries;
 }
 
 function extractRecoveryMetadata(
@@ -501,10 +544,11 @@ export function extractArtifactLedger(
     for (const block of msg.content) {
       if (!isToolResultBlock(block)) continue;
       const text = readToolResultText(block);
-      if (text !== undefined || block.metadata !== undefined) {
+      if (text !== undefined || block.metadata !== undefined || block.is_error === true) {
         toolResultsById.set(block.tool_use_id, {
           ...(text !== undefined ? { content: text } : {}),
           ...(block.metadata !== undefined ? { metadata: block.metadata } : {}),
+          ...(block.is_error === true ? { isError: true } : {}),
         });
       }
     }
@@ -528,6 +572,10 @@ export function extractArtifactLedger(
       }
 
       const result = toolResultsById.get(block.id);
+      if (block.name === 'run_skill_script') {
+        entries.push(...buildSkillScriptArtifactEntries(block, result));
+        continue;
+      }
       const entry = buildArtifactEntry(block, result);
       if (entry) {
         entries.push(entry);

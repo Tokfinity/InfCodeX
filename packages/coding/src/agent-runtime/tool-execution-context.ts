@@ -119,6 +119,8 @@ export function buildToolExecutionContext(
     skillDynamicContext: options.skillDynamicContext,
     skillRegistry: options.context?.skillRegistry,
     skillScriptRunner: options.context?.skillScriptRunner,
+    assertReadablePath: options.context?.assertReadablePath,
+    toolVisibilityPolicy: options.context?.toolVisibilityPolicy,
     // FEATURE_132 v0.7.47 — LSP service for edit-time diagnostics reflux.
     // Host-injected when present, else the process-wide default (which is
     // a no-op unless a language server is installed; `KODAX_LSP=0` disables).
