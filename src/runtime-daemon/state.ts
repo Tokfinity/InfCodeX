@@ -425,9 +425,13 @@ export function writeRuntimeDaemonToken(paths: RuntimeDaemonPaths, token: string
 }
 
 export function readRuntimeDaemonToken(paths: RuntimeDaemonPaths): string | undefined {
-  if (!fs.existsSync(paths.tokenFile)) return undefined;
-  const token = fs.readFileSync(paths.tokenFile, 'utf8').trim();
-  return token.length > 0 ? token : undefined;
+  try {
+    const token = fs.readFileSync(paths.tokenFile, 'utf8').trim();
+    return token.length > 0 ? token : undefined;
+  } catch (error: unknown) {
+    if ((error as NodeJS.ErrnoException).code === 'ENOENT') return undefined;
+    throw error;
+  }
 }
 
 export function writeRuntimeDaemonState(

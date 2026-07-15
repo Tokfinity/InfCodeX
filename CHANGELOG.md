@@ -43,6 +43,8 @@ All notable changes to this project will be documented in this file.
 - **Logical daemon client accounting.** Stop preflight now counts only live,
   initialized SDK clients. Daemon self-connections and read-only health probes
   are excluded, and awaited client close converges the count across processes.
+  Health probes also tolerate the daemon token disappearing during a concurrent
+  shutdown or owner transition instead of leaking an `ENOENT` race to clients.
 - **Preflight/stop race.** Rollback commit gates new clients and mutations,
   validates the same Runtime, management revision, owner-policy revision, and
   blockers, and changes sticky inline policy while the verified daemon still

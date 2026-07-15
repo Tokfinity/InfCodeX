@@ -138,6 +138,24 @@ describe('runtime daemon state paths', () => {
       expect(fs.statSync(paths.tokenFile).mode & 0o777).toBe(0o600);
     }
   });
+
+  it('treats a daemon token removed during a concurrent lifecycle transition as missing', () => {
+    const paths = resolveRuntimeDaemonPaths(tempHome(), 'default');
+    writeRuntimeDaemonToken(paths, 'token-to-remove-concurrently');
+    const original = fsDefault.readFileSync;
+    fsDefault.readFileSync = (() => {
+      const error = new Error('token removed') as NodeJS.ErrnoException;
+      error.code = 'ENOENT';
+      throw error;
+    }) as typeof fsDefault.readFileSync;
+    syncBuiltinESMExports();
+    try {
+      expect(readRuntimeDaemonToken(paths)).toBeUndefined();
+    } finally {
+      fsDefault.readFileSync = original;
+      syncBuiltinESMExports();
+    }
+  });
 });
 
 describe('runtime daemon lock ownership', () => {

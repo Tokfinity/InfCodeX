@@ -54,8 +54,12 @@ npm run build
     register, revoke, supply, and completion requests. Each request must return
     typed `conflict`; no bridge state may change and no credential/result may
     appear in the operation journal or diagnostics.
+12. Race a health probe with daemon shutdown or an owner transition so the
+    profile token is removed between discovery and read. The probe must observe
+    changed/missing state and retry normally; raw `ENOENT` must not escape to
+    `connectKodaXRuntime()`.
 
 Expected result: `1 -> 2 -> 1`, no internal-connection inflation, no stale
 stop, no background-work abandonment, no reverse-bridge mutation after
-draining, no dual owner, two daemon-to-inline-to-daemon cycles, and no run or
-side-effect replay.
+draining, no token-read race, no dual owner, two daemon-to-inline-to-daemon
+cycles, and no run or side-effect replay.
