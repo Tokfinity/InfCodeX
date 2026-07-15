@@ -59,19 +59,20 @@
  * **`tryMcpFallback` (CAP-025)** — see CAP-025 docstring section
  * below. Three short-circuits + result wrapping.
  *
- * **`runToolDispatch` (CAP-077 + CAP-079)** — splits assistant tool_use
+ * **`runToolDispatch` (CAP-077)** — splits assistant tool_use
  * blocks into bash and non-bash, runs non-bash tools in parallel
  * (`Promise.all`) and bash tools sequentially (so side-effecting bash
- * never races), wrapping each call with `applyToolResultGuardrail` so
- * the post-tool truncation policy is the FIRST registered guardrail
- * layer (FEATURE_085 will register more on top). Each iteration of the
+ * never races), and returns raw results. `applyPostToolProcessing` owns the
+ * aggregate capacity decision only after visibility/reflection have formed
+ * the final transcript batch. Individual tools and bridge targets do not
+ * pre-truncate their output. Each iteration of the
  * bash sequential loop re-checks `abortSignal` (Issue 088 mid-batch
  * Ctrl+C); the upstream pre-tool abort gate (CAP-076 / `checkPreToolAbort`)
  * prevents this helper from running at all when the user has already
  * aborted before dispatch. Returns a `Map<id, content>` keyed by
  * `tool_use_id`.
  *
- * **`applyPostToolProcessing` (CAP-078)** — per-result chain that runs
+ * **`applyPostToolProcessing` (CAP-078 + CAP-079)** — per-result chain that runs
  * AFTER the dispatch map is built and BEFORE history push:
  *
  *   1. Mutation scope reflection (CAP-016 calling site) — appended
@@ -83,10 +84,10 @@
  *      `'edit'` tool results that carry an error envelope, build a
  *      synthetic recovery user message accumulated for the caller to
  *      append after the tool_results block.
- *   4. Visibility events — for visible tool names (CAP-035), emit
- *      `tool:result` extension event + `events.onToolResult` and push
- *      a `tool_result` block into the accumulator. Invisible tools
- *      (managed-protocol) are silently dropped from the transcript.
+ *   4. Visibility filter — only visible tool names enter the transcript.
+ *   5. Final-batch capacity admission — visible, reflected results and the
+ *      synthetic edit-recovery message share one aggregate decision.
+ *   6. Visibility events — emit the admitted content to extensions/hosts.
  *
  * Returns `{ toolResults, editRecoveryMessages }` — the caller pushes
  * `toolResults` into history and (if non-empty) the recovery messages
@@ -107,7 +108,7 @@ import type {
   KodaXToolExecutionContext,
   KodaXToolResultBlock,
 } from '../types.js';
-import type { KodaXToolUseBlock } from '@kodax-ai/llm';
+import type { CapabilityResult, KodaXToolUseBlock } from '@kodax-ai/llm';
 import { emitKodaXDiagnostic } from '@kodax-ai/agent';
 import { CANCELLED_TOOL_RESULT_MESSAGE } from '../constants.js';
 import {
@@ -126,7 +127,7 @@ import {
 } from './middleware/edit-recovery.js';
 import { isToolResultErrorContent } from './tool-result-classify.js';
 import type { RuntimeSessionState } from './runtime-session-state.js';
-import { applyToolResultGuardrail } from '../tools/tool-result-policy.js';
+import { applyToolResultBatchGuardrail } from '../tools/tool-result-policy.js';
 import type { ToolResultBudget } from '../tools/tool-result-budget.js';
 import {
   buildMutationScopeReflection,
@@ -135,16 +136,19 @@ import {
 } from './middleware/mutation-reflection.js';
 import { updateToolOutcomeTracking } from './middleware/tool-outcome-tracking.js';
 import type { ExtensionEventEmitter } from './stream-handler-wiring.js';
+import { estimateTokens } from '../tokenizer.js';
 
 export function createToolResultBlock(
   toolUseId: string,
   content: string,
+  metadata?: KodaXToolResultBlock['metadata'],
 ): KodaXToolResultBlock {
   return {
     type: 'tool_result',
     tool_use_id: toolUseId,
     content,
     ...(isToolResultErrorContent(content) ? { is_error: true } : {}),
+    ...(metadata ? { metadata } : {}),
   };
 }
 
@@ -155,7 +159,6 @@ export async function executeToolCall(
   runtimeSessionState: RuntimeSessionState,
   activeToolNames?: string[],
   abortSignal?: AbortSignal,
-  toolResultBudget?: ToolResultBudget,
 ): Promise<string> {
   // Issue 088: Check abort signal before executing each tool
   if (abortSignal?.aborted) {
@@ -219,7 +222,6 @@ export async function executeToolCall(
       runtimeSessionState,
       activeToolNames,
       abortSignal,
-      toolResultBudget,
     });
   }
 
@@ -303,7 +305,7 @@ function describeBridgeTools(
 
   const active = activeToolNames ? new Set(activeToolNames) : undefined;
   const lines: string[] = [];
-  for (const name of names.slice(0, 8)) {
+  for (const name of names) {
     if (active && !active.has(name)) {
       lines.push(`<!-- ${name}: not active in the current runtime -->`);
       continue;
@@ -320,11 +322,7 @@ function describeBridgeTools(
     })}</function>`);
   }
 
-  const output = lines.join('\n');
-  if (output.length <= 16_000) {
-    return output;
-  }
-  return `${output.slice(0, 16_000)}\n<!-- tool_describe output truncated -->`;
+  return lines.join('\n');
 }
 
 function readBridgeToolNames(input: Record<string, unknown>): string[] {
@@ -352,7 +350,6 @@ async function executeBridgeToolCall(input: {
   readonly runtimeSessionState: RuntimeSessionState;
   readonly activeToolNames: readonly string[] | undefined;
   readonly abortSignal: AbortSignal | undefined;
-  readonly toolResultBudget: ToolResultBudget | undefined;
 }): Promise<string> {
   const parsed = parseBridgeCallInput(input.bridgeCall.input ?? {});
   if (!parsed.ok) {
@@ -400,11 +397,7 @@ async function executeBridgeToolCall(input: {
       result = fallbackResult;
     }
   }
-  return (
-    await applyToolResultGuardrail(targetName, result, input.ctx, {
-      toolResultBudget: input.toolResultBudget,
-    })
-  ).content;
+  return result;
 }
 
 function parseBridgeCallInput(input: Record<string, unknown>): (
@@ -443,6 +436,29 @@ export const MCP_FALLBACK_ALLOWED_TOOLS = new Set([
   'semantic_lookup',
 ]);
 
+function stringifyMcpFallbackPart(value: unknown): string | undefined {
+  if (value === undefined || value === null) {
+    return undefined;
+  }
+  if (typeof value === 'string') {
+    return value.trim().length > 0 ? value : undefined;
+  }
+  try {
+    return JSON.stringify(value, null, 2);
+  } catch {
+    return String(value);
+  }
+}
+
+function formatMcpFallbackContent(result: CapabilityResult): string {
+  const content = stringifyMcpFallbackPart(result.content);
+  const structured = stringifyMcpFallbackPart(result.structuredContent);
+  if (content && structured && content !== structured) {
+    return `${content}\n\nStructured content:\n${structured}`;
+  }
+  return content ?? structured ?? JSON.stringify(result, null, 2);
+}
+
 export async function tryMcpFallback(
   toolName: string,
   input: Record<string, unknown>,
@@ -465,9 +481,7 @@ export async function tryMcpFallback(
       return undefined;
     }
     const mcpResult = await ctx.extensionRuntime!.executeCapability('mcp', hit.id, input);
-    const content = typeof mcpResult.content === 'string'
-      ? mcpResult.content
-      : JSON.stringify(mcpResult.structuredContent ?? mcpResult, null, 2);
+    const content = formatMcpFallbackContent(mcpResult);
     return `[MCP Fallback via ${hit.id}]\n${content}`;
   } catch (error) {
     if (process.env.KODAX_DEBUG_TOOL_HISTORY) {
@@ -489,15 +503,14 @@ export interface RunToolDispatchInput {
   readonly runtimeSessionState: RuntimeSessionState;
   readonly activeToolNames: string[] | undefined;
   readonly abortSignal: AbortSignal | undefined;
-  readonly toolResultBudget?: ToolResultBudget;
 }
 
 /**
- * CAP-077 + CAP-079: dispatch the assistant's tool_use blocks. Non-bash
+ * CAP-077: dispatch the assistant's tool_use blocks. Non-bash
  * tools run in parallel via `Promise.all`; bash tools run sequentially
  * with a per-iteration `abortSignal` recheck (mid-batch Ctrl+C honored).
- * Each call is wrapped with `applyToolResultGuardrail` (CAP-079) so the
- * truncation policy is the FIRST guardrail layer.
+ * Results remain raw here because visibility filtering and mutation
+ * reflection have not formed the final transcript batch yet.
  *
  * Returns a `Map<id, content>` keyed by tool_use_id. Caller threads the
  * map into `applyPostToolProcessing` (CAP-078).
@@ -512,26 +525,18 @@ export async function runToolDispatch(
   if (nonBashTools.length > 0) {
     const promises = nonBashTools.map(async (tc) => ({
       id: tc.id,
-      content: (
-        await applyToolResultGuardrail(
-          tc.name,
-          await executeToolCall(
-            input.events,
-            {
-              id: tc.id,
-              name: tc.name,
-              input: tc.input as Record<string, unknown> | undefined,
-            },
-            input.ctx,
-            input.runtimeSessionState,
-            input.activeToolNames,
-            input.abortSignal,
-            input.toolResultBudget,
-          ),
-          input.ctx,
-          { toolResultBudget: input.toolResultBudget },
-        )
-      ).content,
+      content: await executeToolCall(
+        input.events,
+        {
+          id: tc.id,
+          name: tc.name,
+          input: tc.input as Record<string, unknown> | undefined,
+        },
+        input.ctx,
+        input.runtimeSessionState,
+        input.activeToolNames,
+        input.abortSignal,
+      ),
     }));
     const results = await Promise.all(promises);
     for (const r of results) resultMap.set(r.id, r.content);
@@ -543,26 +548,18 @@ export async function runToolDispatch(
       resultMap.set(tc.id, CANCELLED_TOOL_RESULT_MESSAGE);
       continue;
     }
-    const content = (
-      await applyToolResultGuardrail(
-        tc.name,
-        await executeToolCall(
-          input.events,
-          {
-            id: tc.id,
-            name: tc.name,
-            input: tc.input as Record<string, unknown> | undefined,
-          },
-          input.ctx,
-          input.runtimeSessionState,
-          input.activeToolNames,
-          input.abortSignal,
-          input.toolResultBudget,
-        ),
-        input.ctx,
-        { toolResultBudget: input.toolResultBudget },
-      )
-    ).content;
+    const content = await executeToolCall(
+      input.events,
+      {
+        id: tc.id,
+        name: tc.name,
+        input: tc.input as Record<string, unknown> | undefined,
+      },
+      input.ctx,
+      input.runtimeSessionState,
+      input.activeToolNames,
+      input.abortSignal,
+    );
     resultMap.set(tc.id, content);
   }
 
@@ -585,6 +582,9 @@ export interface PostToolProcessingInput {
    */
   readonly ctx: KodaXToolExecutionContext;
   readonly runtimeSessionState: RuntimeSessionState;
+  readonly toolResultBudget?: ToolResultBudget;
+  /** Trusted artifacts recorded by tools during this dispatch. */
+  readonly toolResultArtifactPaths?: ReadonlyMap<string, string>;
 }
 
 export interface PostToolProcessingOutput {
@@ -601,9 +601,10 @@ export interface PostToolProcessingOutput {
  *      auto-reroute judge.
  *   3. Edit recovery message synthesis — for `'edit'` results carrying
  *      an error envelope.
- *   4. Visibility events — `tool:result` extension event +
- *      `events.onToolResult`, then push `tool_result` block into the
- *      accumulator for visible tools.
+ *   4. Visibility filter into the final `tool_result` accumulator.
+ *   5. Aggregate capacity admission over the final visible/reflected batch
+ *      plus its same-request edit-recovery message.
+ *   6. Visibility events carrying the admitted content.
  *
  * Invisible tools (managed-protocol) are silently dropped from the
  * transcript: they neither emit visibility events nor push a
@@ -645,18 +646,81 @@ export async function applyPostToolProcessing(
       }
     }
     if (isVisibleToolName(tc.name)) {
-      await input.emitActiveExtensionEvent('tool:result', {
-        id: tc.id,
-        name: tc.name,
+      const outputPath = input.toolResultArtifactPaths?.get(tc.id);
+      toolResults.push(createToolResultBlock(
+        tc.id,
         content,
-      });
-      input.events.onToolResult?.(
-        { id: tc.id, name: tc.name, content },
-        createToolEventMeta(input.events, tc.id),
-      );
-      toolResults.push(createToolResultBlock(tc.id, content));
+        outputPath
+          ? { truncated: true, capacityFallback: true, outputPath }
+          : undefined,
+      ));
     }
   }
 
-  return { toolResults, editRecoveryMessages };
+  const finalToolResults = await admitAndEmitVisibleToolResults(
+    input,
+    toolResults,
+    editRecoveryMessages,
+  );
+  return {
+    toolResults: finalToolResults,
+    editRecoveryMessages,
+  };
+}
+
+async function admitAndEmitVisibleToolResults(
+  input: PostToolProcessingInput,
+  toolResults: readonly KodaXToolResultBlock[],
+  editRecoveryMessages: readonly string[],
+): Promise<KodaXToolResultBlock[]> {
+  const toolBlockById = new Map(input.toolBlocks.map((block) => [block.id, block]));
+  const recoveryMessageTokens = editRecoveryMessages.length > 0
+    ? estimateTokens([{
+        role: 'user',
+        content: editRecoveryMessages.join('\n\n'),
+        _synthetic: true,
+      }])
+    : 0;
+  const guardedBatch = await applyToolResultBatchGuardrail(
+    toolResults.map((result) => ({
+      id: result.tool_use_id,
+      toolName: toolBlockById.get(result.tool_use_id)?.name ?? 'tool',
+      content: result.content as string,
+      ...(typeof result.metadata?.outputPath === 'string' && result.metadata.outputPath.length > 0
+        ? { outputPath: result.metadata.outputPath }
+        : {}),
+    })),
+    input.ctx,
+    input.toolResultBudget,
+    recoveryMessageTokens,
+  );
+  const guardedById = new Map(guardedBatch.map((entry) => [entry.id, entry]));
+  const finalResults = toolResults.map((result) => {
+    const guarded = guardedById.get(result.tool_use_id);
+    if (!guarded || guarded.content === result.content) return result;
+    return {
+      ...result,
+      content: guarded.content,
+      metadata: {
+        ...(result.metadata ?? {}),
+        truncated: true,
+        capacityFallback: true,
+        ...(guarded.outputPath ? { outputPath: guarded.outputPath } : {}),
+      },
+    };
+  });
+  for (const result of finalResults) {
+    const toolBlock = toolBlockById.get(result.tool_use_id);
+    if (!toolBlock || typeof result.content !== 'string') continue;
+    await input.emitActiveExtensionEvent('tool:result', {
+      id: toolBlock.id,
+      name: toolBlock.name,
+      content: result.content,
+    });
+    input.events.onToolResult?.(
+      { id: toolBlock.id, name: toolBlock.name, content: result.content },
+      createToolEventMeta(input.events, toolBlock.id),
+    );
+  }
+  return finalResults;
 }

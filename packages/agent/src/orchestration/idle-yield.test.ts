@@ -982,6 +982,11 @@ describe('composeIdleYieldUserMessage', () => {
 
     it('enforceAggregate applies ONLY to synthetic banners, NEVER to user prompts', async () => {
       let calls = 0;
+      let capacityContext: {
+        transcript: readonly unknown[];
+        pendingMessages: readonly unknown[];
+      } | undefined;
+      const priorMessages = [{ role: 'user' as const, content: 'prior turn' }];
       const result = await composeIdleYieldUserMessage(
         {
           kind: 'messages-arrived',
@@ -991,12 +996,22 @@ describe('composeIdleYieldUserMessage', () => {
           ],
         },
         () => [],
-        (fragments) => {
+        (fragments, context) => {
           calls++;
+          capacityContext = context;
           return fragments.map((f) => `[shrunk]${f}`);
         },
+        undefined,
+        undefined,
+        priorMessages,
       );
       expect(calls).toBe(1); // called once, only for synthetic side
+      expect(capacityContext?.transcript).toBe(priorMessages);
+      expect(capacityContext?.pendingMessages).toHaveLength(1);
+      expect(capacityContext?.pendingMessages[0]).toMatchObject({
+        role: 'user',
+        content: 'my exact prompt',
+      });
       expect(result).toHaveLength(2);
       expect(result[0]!._synthetic).toBe(true);
       expect(result[0]!.content).toContain('[shrunk]huge banner payload');

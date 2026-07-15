@@ -8,11 +8,17 @@
  *     is not collapsed to 1 line (which let large rewrites slip the gate).
  */
 import { readFileSync } from 'node:fs';
-import { join } from 'node:path';
+import { fileURLToPath } from 'node:url';
 
 import { describe, expect, it } from 'vitest';
+import type { Agent, RunnerToolContext } from '@kodax-ai/agent';
+import type { KodaXToolDefinition } from '@kodax-ai/llm';
 
-import { recordMutationForTool, MUTATES_FS_TOOL_NAMES } from './tool-wrappers.js';
+import {
+  recordMutationForTool,
+  MUTATES_FS_TOOL_NAMES,
+  wrapCodingToolAsRunnable,
+} from './tool-wrappers.js';
 import type { ManagedMutationTracker } from '../../../types.js';
 
 function tracker(): ManagedMutationTracker {
@@ -140,11 +146,11 @@ describe('recordMutationForTool — file mutation tracking', () => {
   // tools, so adding one without tracking it fails here with the exact name.
   it('MUTATES_FS_TOOL_NAMES covers every mutates-fs tool in the registry source', () => {
     const src = readFileSync(
-      join(process.cwd(), 'packages/coding/src/tools/tool-definitions.ts'),
+      fileURLToPath(new URL('../../../tools/tool-definitions.ts', import.meta.url)),
       'utf-8',
     );
     const selfModifySrc = readFileSync(
-      join(process.cwd(), 'packages/coding/src/tools/self-modify-tool.ts'),
+      fileURLToPath(new URL('../../../tools/self-modify-tool.ts', import.meta.url)),
       'utf-8',
     );
     const constNames = new Map<string, string>();
@@ -178,5 +184,36 @@ describe('recordMutationForTool — file mutation tracking', () => {
     expect(mutatesFs).not.toContain('scaffold_tool'); // readonly draft generator
     const missing = mutatesFs.filter((name) => !MUTATES_FS_TOOL_NAMES.has(name));
     expect(missing).toEqual([]);
+  });
+});
+
+describe('wrapCodingToolAsRunnable — recovery artifact metadata', () => {
+  it('returns a tool-owned artifact path as trusted Runner metadata', async () => {
+    const definition: KodaXToolDefinition = {
+      name: 'bash',
+      description: 'test bash wrapper',
+      input_schema: { type: 'object', properties: {} },
+    };
+    const runnable = wrapCodingToolAsRunnable(
+      definition,
+      async (_input, ctx) => {
+        ctx.recordToolResultArtifact?.(ctx.toolCallId!, 'C:/tmp/bash-manifest.txt');
+        return '[KODAX_RESULT_INCOMPLETE]';
+      },
+      { backups: new Map() },
+    );
+    const runnerCtx: RunnerToolContext = {
+      agent: { name: 'worker' } as Agent,
+      toolCallId: 'bash-1',
+    };
+
+    await expect(runnable.execute({}, runnerCtx)).resolves.toMatchObject({
+      content: '[KODAX_RESULT_INCOMPLETE]',
+      metadata: {
+        truncated: true,
+        capacityFallback: true,
+        outputPath: 'C:/tmp/bash-manifest.txt',
+      },
+    });
   });
 });

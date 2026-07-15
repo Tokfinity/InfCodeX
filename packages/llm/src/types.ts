@@ -83,6 +83,11 @@ export interface KodaXToolResultBlock {
    */
   content: string | readonly KodaXToolResultContentItem[];
   is_error?: boolean;
+  /**
+   * Local recovery/accounting metadata. Provider serializers intentionally
+   * omit this field from the wire payload.
+   */
+  metadata?: Record<string, unknown>;
 }
 
 export interface KodaXImageBlock {

@@ -29,10 +29,13 @@ export async function toolKodaxManual(
   );
 
   const parts: string[] = [`# ${result.title}`, '', result.content];
+  if (result.topics.length > 0) {
+    parts.push('', 'Topics:', JSON.stringify(result.topics));
+  }
   if (result.sources.length > 0) {
     parts.push('', `Sources: ${result.sources.map((s) => s.path).join(', ')}`);
   }
-  if (result.nextTopics.length > 0) {
+  if (result.topics.length === 0 && result.nextTopics.length > 0) {
     parts.push(`Related topics (pass as "topic"): ${result.nextTopics.join(', ')}`);
   }
   return parts.join('\n');

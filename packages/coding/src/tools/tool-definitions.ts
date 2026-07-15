@@ -150,7 +150,7 @@ export const BUILTIN_TOOL_DEFINITIONS: LocalToolDefinition[] = [
     name: 'read',
     description: [
       'Read a file from the local filesystem with bounded output.',
-      '- Text files: returns line-numbered content. Large files are capped per call; use offset/limit to continue in smaller slices.',
+      '- Text files: returns line-numbered content. Large files are capped per call; use offset/limit to continue in smaller slices. A partial-line continuation marker provides the exact line_offset cursor for lines that exceed one response chunk.',
       '- Image files (PNG, JPG, JPEG, GIF, WEBP): returns the image as inline vision content. The model is multimodal — when an image is delivered through this tool, you can see the picture directly in your next turn. Describe what you see; do NOT claim binary files are unsupported — the tool decodes the image bytes into vision content for the model, so refusing as "binary file" skips a valid read and frustrates the user.',
       '- For pasted/attached images already inlined in the user message, you already perceive them via native vision — no `read` call is needed. Use `read` on an image path only when the file is on disk and not yet in the conversation (e.g., a fresh path the user mentioned in text without attaching).',
       '- PDF files (.pdf): do not use this tool for PDF content. If the `read_pdf` tool is available, call `read_pdf` directly with the PDF path; it extracts page-marked text and can OCR scanned pages when configured. If `read_pdf` is unavailable, tell the user to enable/install the read_pdf extension.',
@@ -161,6 +161,10 @@ export const BUILTIN_TOOL_DEFINITIONS: LocalToolDefinition[] = [
         path: { type: 'string', description: 'The absolute path to the file' },
         offset: { type: 'number', description: 'Line number to start from (text files only)' },
         limit: { type: 'number', description: 'Number of lines to read (text files only)' },
+        line_offset: {
+          type: 'number',
+          description: 'Zero-based Unicode character offset within the first selected line. Use the exact value from a partial-line continuation marker.',
+        },
       },
       required: ['path'],
     },
@@ -400,7 +404,7 @@ export const BUILTIN_TOOL_DEFINITIONS: LocalToolDefinition[] = [
   {
     name: 'bash',
     description:
-      'Execute a shell command. Use `run_in_background` for long-running commands. Large output may be truncated to the most relevant tail.\n\n'
+      'Execute a shell command. Use `run_in_background` for long-running commands. Output is captured completely; only a real next-request capacity overflow produces an explicit recoverable artifact preview.\n\n'
       + '## When to Use This Tool\n\n'
       + '- Tests, builds, lint, type-checking, package managers.\n'
       + '- Git operations (status, diff, log, blame, commit, push).\n'
@@ -479,6 +483,7 @@ export const BUILTIN_TOOL_DEFINITIONS: LocalToolDefinition[] = [
         multiline: { type: 'boolean', description: 'Enable multiline mode where . matches newlines and patterns can span lines. Default: false.' },
         head_limit: { type: 'number', description: 'Limit output to first N entries. Defaults to 250. Pass 0 for unlimited.' },
         offset: { type: 'number', description: 'Skip first N entries before applying head_limit. Defaults to 0.' },
+        scan_offset: { type: 'number', description: 'Skip candidate files already scanned by a prior SOURCE_INCOMPLETE continuation.' },
       },
       required: ['pattern'],
     },
@@ -528,7 +533,7 @@ export const BUILTIN_TOOL_DEFINITIONS: LocalToolDefinition[] = [
         objective: { type: 'string', description: 'Detailed multi-step goal for this child agent' },
         readOnly: { type: 'boolean', description: 'true (default): child can only read files. false: child may edit files (Generator/Worker only); use for non-conflicting file-level edits across modules.' },
         scope_summary: { type: 'string', description: 'Optional scope hint (e.g. "packages/llm/src/")' },
-        evidence_refs: { type: 'array', items: { type: 'string' }, description: 'Optional known evidence. Prefixed strings: "file:path" inlines the first 200 lines of a working-tree file, "diff:path" inlines the git diff against HEAD, "finding:text" transcribes a fact you already know, "task_id:<child_id>" forwards a completed sibling child\'s output verbatim — use this after dispatching one child whose findings feed the next so the new child sees the sibling\'s full report without you re-narrating it. An unknown prefix is surfaced as an error in the next dispatch tool_result so you can correct it.' },
+        evidence_refs: { type: 'array', items: { type: 'string' }, description: 'Optional known evidence. Prefixed strings: "file:path" inlines the complete working-tree file, "diff:path" inlines the complete git diff against HEAD, "finding:text" transcribes a fact you already know, "task_id:<child_id>" forwards a completed sibling child\'s output verbatim. The complete child request is capacity-checked after provider/model routing; only a request that cannot fit receives a recoverable artifact preview. An unknown prefix is surfaced as an error in the next dispatch tool_result so you can correct it.' },
         constraints: { type: 'array', items: { type: 'string' }, description: 'Optional constraints' },
         // FEATURE_120 v0.7.39 Phase 4 — model tier hint. Routing is a
         // no-op for now; FEATURE_102 (v0.7.45) will translate this
@@ -694,7 +699,7 @@ export const BUILTIN_TOOL_DEFINITIONS: LocalToolDefinition[] = [
   {
     name: 'task_output',
     description:
-      'Peek at the current state of a child task launched via dispatch_child_task. Returns a structured snapshot (status, iteration count, recent tool-call breadcrumbs, and final text once the child settles). Normal Worker usage is task_output({task_id}) with block omitted/false for a status snapshot. If block:true is used, timeout_ms is only a bounded read-window cap; retrieval_status=wait_expired with status=running means the child is still running, not timed out or failed. Prefer idle-yield (end the turn text-only) for normal waits. Coordinator-only: child agents cannot call this tool. Completed children\'s snapshots remain queryable for the lifetime of the parent runner; very old snapshots may be evicted under a per-runner cap.',
+      'Peek at the current state of a child task launched via dispatch_child_task. Returns a structured snapshot (status, output_state, iteration count, recent tool-call breadcrumbs, and final text once the child settles). Terminal output is emitted in full by this tool so the shared outer tool-result capacity policy owns any recoverable spill or pagination; running external output may be a bounded live tail and is marked output_state=live_partial. Normal Worker usage is task_output({task_id}) with block omitted/false for a status snapshot. If block:true is used, timeout_ms is only a bounded read-window cap; retrieval_status=wait_expired with status=running means the child is still running, not timed out or failed. Prefer idle-yield (end the turn text-only) for normal waits. Coordinator-only: child agents cannot call this tool. Completed children\'s snapshots remain queryable for the lifetime of the parent runner; very old snapshots may be evicted under a per-runner cap.',
     input_schema: {
       type: 'object',
       properties: {
@@ -777,6 +782,7 @@ export const BUILTIN_TOOL_DEFINITIONS: LocalToolDefinition[] = [
         query: { type: 'string', description: 'String query to search for' },
         path: { type: 'string', description: 'Optional file or directory scope for the search' },
         limit: { type: 'number', description: 'Maximum number of matches to return' },
+        scan_offset: { type: 'number', description: 'Skip candidate files already scanned by a prior SOURCE_INCOMPLETE continuation.' },
         case_sensitive: { type: 'boolean', description: 'Whether the query should be matched case-sensitively' },
         provider_id: { type: 'string', description: 'Optional extension capability provider id for provider-backed code search' },
       },
@@ -1483,6 +1489,7 @@ export const BUILTIN_TOOL_DEFINITIONS: LocalToolDefinition[] = [
           type: 'array',
           description: 'Changed file paths to inspect in one bundle, relative to the workspace root or absolute inside it',
           items: { type: 'string' },
+          maxItems: 64,
         },
         offset: { type: 'number', description: '1-based diff line offset applied to each path in the bundle' },
         limit_per_path: { type: 'number', description: 'Maximum diff lines to return per path in this bundle' },

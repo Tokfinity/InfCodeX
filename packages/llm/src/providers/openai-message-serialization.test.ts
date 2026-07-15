@@ -330,6 +330,46 @@ describe('openai message serialization', () => {
     expect(toolMsg.content).not.toContain('image_url');
   });
 
+  it('keeps tool-result recovery metadata local instead of serializing it to the wire', async () => {
+    const create = vi.fn().mockResolvedValue({
+      choices: [{ message: { role: 'assistant', content: 'ok', tool_calls: [] } }],
+      usage: { prompt_tokens: 1, completion_tokens: 1, total_tokens: 2 },
+    });
+    const provider = new TestOpenAIProvider({ chat: { completions: { create } } });
+    const messages: KodaXMessage[] = [
+      {
+        role: 'assistant',
+        content: [{ type: 'tool_use', id: 'tool_local', name: 'read', input: {} }],
+      },
+      {
+        role: 'user',
+        content: [{
+          type: 'tool_result',
+          tool_use_id: 'tool_local',
+          content: 'preview',
+          metadata: {
+            outputPath: 'C:/private/full-output.txt',
+            localOnlySentinel: 'must-not-reach-provider',
+          },
+        }],
+      },
+    ];
+
+    await provider.complete(messages, TOOLS, 'sys');
+
+    const kwargs = create.mock.calls[0]?.[0];
+    const toolMessage = kwargs.messages.find(
+      (message: { role: string }) => message.role === 'tool',
+    ) as Record<string, unknown>;
+    expect(toolMessage).toEqual({
+      role: 'tool',
+      tool_call_id: 'tool_local',
+      content: 'preview',
+    });
+    expect(JSON.stringify(kwargs)).not.toContain('must-not-reach-provider');
+    expect(JSON.stringify(kwargs)).not.toContain('C:/private/full-output.txt');
+  });
+
   it('repairs orphan assistant tool_calls before replaying history', async () => {
     const completion = {
       choices: [{ message: { role: 'assistant', content: 'ok', tool_calls: [] } }],

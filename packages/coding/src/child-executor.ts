@@ -30,6 +30,8 @@ import type {
   KodaXWireReasoningEffort,
 } from './types.js';
 import { resolveExecutionCwd } from './runtime-paths.js';
+import { countTokens } from './tokenizer.js';
+import { resolveProvider } from './providers/index.js';
 import { resolveModelHintTier } from './model-hint-routing.js';
 import { invokeChildWithFallback } from './child-fallback.js';
 import { toolWorktreeCreate, toolWorktreeRemove } from './tools/worktree.js';
@@ -44,7 +46,12 @@ import {
 // @kodax-ai/agent (ADR-021). All coding-side concerns (read vs write,
 // worktree isolation, briefing, role policy) stay below; the wrapper
 // owns only bounded concurrency + abort + progress eventing.
-import { getSkillRegistry, initializeSkillRegistry, runFanOut } from '@kodax-ai/agent';
+import {
+  calculateMaxContextInputTokens,
+  getSkillRegistry,
+  initializeSkillRegistry,
+  runFanOut,
+} from '@kodax-ai/agent';
 import { normalizeReasoningEffortValue } from '@kodax-ai/llm';
 // FEATURE_191 — specialist agent override resolution. `resolveConstructedAgent`
 // returns `Agent | undefined`; the dispatch-child-tasks layer has already
@@ -55,6 +62,10 @@ import { normalizeReasoningEffortValue } from '@kodax-ai/llm';
 // is the YAGNI-compliant substitute per ADR-035 R11).
 import { resolveConstructedAgentEntry } from './construction/agent-resolver.js';
 import { getAllRegisteredTools } from './tools/registry.js';
+import {
+  applyToolResultBatchGuardrail,
+  ToolResultBatchCapacityError,
+} from './tools/tool-result-policy.js';
 import type { Agent, WorkflowEventCorrelation } from '@kodax-ai/agent';
 // FEATURE_093 (v0.7.24): lazy-load `runKodaX` to break the cycle
 // `agent.ts → extensions/runtime.ts → tools/index.ts → tools/registry.ts
@@ -1023,6 +1034,23 @@ function resolveChildRoute(
   };
 }
 
+function resolveChildBriefingTokenBudget(
+  providerName: string,
+  model: string | undefined,
+  systemPrompt: string,
+  excludeTools: readonly string[],
+): number {
+  const provider = resolveProvider(providerName);
+  const maxInputTokens = calculateMaxContextInputTokens(
+    provider.getEffectiveContextWindow(model),
+    provider.getEffectiveMaxOutputTokens(model),
+  );
+  const excluded = new Set(excludeTools);
+  const activeTools = getAllRegisteredTools().filter((tool) => !excluded.has(tool.name));
+  const fixedTokens = countTokens(systemPrompt) + countTokens(JSON.stringify(activeTools)) + 64;
+  return Math.max(0, maxInputTokens - fixedTokens);
+}
+
 /* ---------- Read-only child execution ---------- */
 
 async function executeReadChild(
@@ -1041,17 +1069,6 @@ async function runReadChildBody(
   scope: ChildIsolationScope,
   options: ChildExecutorOptions,
 ): Promise<KodaXChildAgentResult> {
-  let briefing: string;
-  try {
-    briefing = await buildChildBriefing(bundle, scope.ctx, options.maxIterationsPerChild);
-  } catch (error) {
-    return extractChildResult(
-      bundle,
-      error instanceof Error ? error.message : String(error),
-      'failed',
-      { actualIterations: 0, interrupted: false },
-    );
-  }
   const childEvents = buildChildEvents(
     bundle.id,
     options.onProgress,
@@ -1094,6 +1111,22 @@ async function runReadChildBody(
     hintTier,
   );
   const { provider, model } = route;
+  let briefing: string;
+  try {
+    briefing = await buildChildBriefing(
+      bundle,
+      scope.ctx,
+      options.maxIterationsPerChild,
+      resolveChildBriefingTokenBudget(provider, model, systemPromptOverride, excludeTools),
+    );
+  } catch (error) {
+    return extractChildResult(
+      bundle,
+      error instanceof Error ? error.message : String(error),
+      'failed',
+      { actualIterations: 0, interrupted: false },
+    );
+  }
 
   let childResult: KodaXChildAgentResult;
   try {
@@ -1262,18 +1295,6 @@ async function runWriteChildBody(
   options: ChildExecutorOptions,
 ): Promise<KodaXChildAgentResult> {
   const childCtx = scope.ctx;
-
-  let briefing: string;
-  try {
-    briefing = await buildChildBriefing(bundle, childCtx, options.maxIterationsPerChild);
-  } catch (error) {
-    return extractChildResult(
-      bundle,
-      error instanceof Error ? error.message : String(error),
-      'failed',
-      { actualIterations: 0, interrupted: false },
-    );
-  }
   const childEvents = buildChildEvents(
     bundle.id,
     options.onProgress,
@@ -1321,6 +1342,22 @@ async function runWriteChildBody(
     hintTier,
   );
   const { provider, model } = route;
+  let briefing: string;
+  try {
+    briefing = await buildChildBriefing(
+      bundle,
+      childCtx,
+      options.maxIterationsPerChild,
+      resolveChildBriefingTokenBudget(provider, model, systemPromptOverride, excludeTools),
+    );
+  } catch (error) {
+    return extractChildResult(
+      bundle,
+      error instanceof Error ? error.message : String(error),
+      'failed',
+      { actualIterations: 0, interrupted: false },
+    );
+  }
 
   let childResult: KodaXChildAgentResult;
   try {
@@ -1464,6 +1501,7 @@ async function buildChildBriefing(
   bundle: KodaXChildContextBundle,
   ctx: KodaXToolExecutionContext,
   maxIter: number,
+  maxBriefingTokens: number,
 ): Promise<string> {
   // v0.7.26 NEW-2 — give the child agent explicit cwd / git root /
   // platform context. Without this block, the child's LLM has to guess
@@ -1534,15 +1572,7 @@ async function buildChildBriefing(
     `- Signal completion with a text-only response (no tool calls). Any final tool call re-opens the turn and forces another LLM round without giving the parent new information.`,
   ];
 
-  if (bundle.evidenceRefs.length > 0) {
-    parts.push(``, `## Known Evidence`);
-    for (const ref of bundle.evidenceRefs) {
-      const resolved = await resolveEvidenceRef(ref, ctx);
-      parts.push(resolved);
-    }
-  }
-
-  parts.push(
+  const footer = [
     ``,
     `## Output Format`,
     `When done, provide a concise text summary:`,
@@ -1550,15 +1580,41 @@ async function buildChildBriefing(
     `- Severity assessment (if applicable)`,
     `- Specific recommendations`,
     `Do NOT call any more tools in your final response.`,
-  );
+  ];
 
   // FEATURE_246 Part B — when the workflow requested a structured result, the
   // schema instruction comes LAST so it is the final framing the child reads.
   if (bundle.outputSchema !== undefined) {
-    parts.push(``, buildStructuredOutputInstruction(bundle.outputSchema));
+    footer.push(``, buildStructuredOutputInstruction(bundle.outputSchema));
   }
 
-  return parts.join('\n');
+  if (bundle.evidenceRefs.length > 0) {
+    const evidenceHeading = [``, `## Known Evidence`];
+    const fixedTokens = countTokens([...parts, ...evidenceHeading, ...footer].join('\n'));
+    const evidenceBudget = Math.max(0, maxBriefingTokens - fixedTokens);
+    const evidence: Array<{ id: string; toolName: string; content: string }> = [];
+
+    for (const [index, ref] of bundle.evidenceRefs.entries()) {
+      evidence.push({
+        id: `child-evidence-${index}`,
+        toolName: 'child_task_summary',
+        content: await resolveEvidenceRef(ref, ctx),
+      });
+    }
+
+    const admitted = await applyToolResultBatchGuardrail(evidence, ctx, {
+      aggregateInlineTokens: evidenceBudget,
+    });
+    parts.push(...evidenceHeading, ...admitted.map((item) => item.content));
+  }
+
+  parts.push(...footer);
+  const briefing = parts.join('\n');
+  const briefingTokens = countTokens(briefing);
+  if (briefingTokens > maxBriefingTokens) {
+    throw new ToolResultBatchCapacityError(briefingTokens, maxBriefingTokens);
+  }
+  return briefing;
 }
 
 /**
@@ -1629,8 +1685,7 @@ export async function resolveEvidenceRef(
     const filePath = ref.slice(5);
     try {
       const content = await fsPromises.readFile(filePath, 'utf-8');
-      const lines = content.split('\n').slice(0, 200);
-      return `### ${filePath}\n\`\`\`\n${lines.join('\n')}\n\`\`\``;
+      return `### ${filePath}\n\`\`\`\n${content}\n\`\`\``;
     } catch {
       return `- ${ref} (could not read file)`;
     }
@@ -1645,7 +1700,7 @@ export async function resolveEvidenceRef(
         timeout: 10_000,
       });
       return diff.length > 0
-        ? `### diff: ${filePath}\n\`\`\`diff\n${diff.slice(0, 4000)}\n\`\`\``
+        ? `### diff: ${filePath}\n\`\`\`diff\n${diff}\n\`\`\``
         : `- ${ref} (no changes)`;
     } catch {
       return `- ${ref} (could not get diff)`;
@@ -1677,19 +1732,10 @@ export async function resolveEvidenceRef(
       // plainly that the sibling result is not available yet.
       return `- task_id:${childId} (sibling still running — its result is not available to you yet; proceed with what you have, or note this dependency in your summary so the coordinator can follow up)`;
     }
-    // Cap + code-fence wrap finalText so multi-hop prompt injection
-    // through a compromised child cannot escape the briefing framing.
-    // Mirrors the `diff:` branch's slice(0, 4000) cap pattern. The
-    // ``` fence prevents internal Markdown / XML tags in finalText
-    // from being interpreted as new briefing sections by the next
-    // child's LLM. Cap is 10000 chars — large enough for a thorough
-    // scout report, small enough to bound a hostile payload.
-    const FINAL_TEXT_CAP = 10000;
+    // Code-fence finalText so multi-hop prompt injection through a
+    // compromised child cannot escape the briefing framing.
     const FENCE = '```';
-    const rawBody = snap.finalText ?? '(no final text recorded)';
-    let body = rawBody.length > FINAL_TEXT_CAP
-      ? `${rawBody.slice(0, FINAL_TEXT_CAP)}\n[truncated ${rawBody.length - FINAL_TEXT_CAP} chars; full sibling output is not included in this child briefing. Proceed with this excerpt, or note the dependency for the coordinator]`
-      : rawBody;
+    let body = snap.finalText ?? '(no final text recorded)';
     // Defensive: if the body itself contains the exact fence
     // sequence, escape it so the fence cannot be closed mid-body.
     if (body.includes(FENCE)) {

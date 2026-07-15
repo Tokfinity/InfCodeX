@@ -14,6 +14,7 @@ import { getCurrentTheme } from './themes.js';
 import { formatWorkspaceTruth } from './workspace-runtime.js';
 import type { InteractiveContext } from './context.js';
 import type { CurrentConfig } from './commands.js';
+import { formatCompactionPolicy } from '../common/compaction-display.js';
 
 export function printWorkspaceEntryNotice(runtimeInfo: InteractiveContext['runtimeInfo']): void {
   if (!runtimeInfo?.workspaceRoot) {
@@ -68,9 +69,12 @@ export function printStartupBanner(config: CurrentConfig, mode: string, compacti
   // Compaction info
   if (compactionInfo) {
     const ctxK = Math.round(compactionInfo.contextWindow / 1000);
-    const triggerK = Math.round(compactionInfo.contextWindow * compactionInfo.triggerPercent / 100 / 1000);
     const statusText = compactionInfo.enabled ? chalk.hex(theme.colors.success)('on') : chalk.hex(theme.colors.secondary)('off');
-    console.log(bar(theme.colors.accent) + chalk.hex(theme.colors.secondary)(`ctx ${ctxK}k  ·  compaction `) + statusText + chalk.hex(theme.colors.secondary)(` @ ${compactionInfo.triggerPercent}% (${triggerK}k)`));
+    const policyText = formatCompactionPolicy(
+      compactionInfo.contextWindow,
+      compactionInfo.triggerPercent,
+    );
+    console.log(bar(theme.colors.accent) + chalk.hex(theme.colors.secondary)(`ctx ${ctxK}k  ·  compaction `) + statusText + chalk.hex(theme.colors.secondary)(` · ${policyText}`));
   }
 
   // Show AGENTS.md loading status

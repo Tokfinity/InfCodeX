@@ -1,75 +1,60 @@
 /**
- * FEATURE_121 (v0.7.40) — Envelope aggregate budget enforcer.
+ * Capacity owner for background child/workflow completion envelopes.
  *
- * Provides the coding-layer implementation of `EnvelopeAggregateEnforcer`
- * (a pure `string[] → string[] | Promise<string[]>` callback type
- * defined in `@kodax-ai/agent` `orchestration/idle-yield.ts`).
- *
- * The agent layer drains the background message queue and joins fragments
- * into one synthetic user message. Per-banner spillover already happens at
- * enqueue time (see `dispatch-child-tasks.ts` calling
- * `applyToolResultGuardrail('child_task_summary', ...)`); per-banner limit
- * is 50KB head + spill-to-file.
- *
- * The aggregate enforcer is the second line of defense: when N banners each
- * < 50KB (bytes, per-banner) still combine to exceed the envelope limit in
- * chars (e.g. 5×40_000 chars = 200_000 chars), this hook forces additional
- * banners to spill until the joined envelope fits under the limit.
- *
- * Limit constant `ENVELOPE_AGGREGATE_LIMIT_CHARS` defaults to 200_000 chars
- * to mirror claudecode's `MAX_TOOL_RESULTS_PER_MESSAGE_CHARS` (see
- * `c:/Works/claudecode/src/constants/toolLimits.ts:49`). The unit is chars
- * (`string.length`), not bytes — this matches claudecode's `contentSize()`
- * in `toolResultStorage.ts:521` which sums `.length`, and is intentionally
- * a rough token heuristic rather than a precise byte budget. The byte-correct
- * first line of defense is `truncate.ts` (per-banner 50KB via
- * `Buffer.byteLength`), so single oversized fragments never reach here.
- *
- * Layer independence: this file lives in `@kodax-ai/coding`. The
- * `@kodax-ai/agent` side never imports it; it only accepts a callback of
- * the abstract `EnvelopeAggregateEnforcer` shape. Caller in
- * `runner-driven.ts` constructs the enforcer with the live
- * `KodaXToolExecutionContext` and passes it down via
- * `runWithIdleYield({ envelopeAggregateEnforcer })`.
+ * Child results are queued in full. Immediately before the synthetic user
+ * message is built, this callback checks the same physical next-request budget
+ * used by ordinary tool-result batches. No budget means pass-through; there is
+ * deliberately no fixed character fallback.
  */
 
-import type { EnvelopeAggregateEnforcer } from '@kodax-ai/agent';
+import type {
+  EnvelopeAggregateCapacityContext,
+  EnvelopeAggregateEnforcer,
+} from '@kodax-ai/agent';
+import { countTokens } from '../tokenizer.js';
 import type { KodaXToolExecutionContext } from '../types.js';
-import { applyToolResultGuardrail } from './tool-result-policy.js';
+import type { ToolResultBudget } from './tool-result-budget.js';
+import {
+  applyToolResultBatchGuardrail,
+  ToolResultBatchCapacityError,
+} from './tool-result-policy.js';
 
-export const ENVELOPE_AGGREGATE_LIMIT_CHARS = 200_000;
+export type EnvelopeBudgetResolver = (
+  context?: EnvelopeAggregateCapacityContext,
+) => ToolResultBudget | undefined;
 
 export function createEnvelopeAggregateBudgetEnforcer(
   ctx: KodaXToolExecutionContext,
+  resolveBudget?: EnvelopeBudgetResolver,
 ): EnvelopeAggregateEnforcer {
-  return async (fragments) => {
-    // Fast path: total within budget, nothing to do.
-    const total = fragments.reduce((sum, f) => sum + f.length, 0);
-    if (total <= ENVELOPE_AGGREGATE_LIMIT_CHARS) return fragments;
-
-    // Reclaim by force-spilling the largest fragments first until total fits.
-    const indexed = fragments.map((content, idx) => ({ idx, content, size: content.length }));
-    indexed.sort((a, b) => b.size - a.size);
-
-    const result: string[] = [...fragments];
-    let runningTotal = total;
-
-    for (const item of indexed) {
-      if (runningTotal <= ENVELOPE_AGGREGATE_LIMIT_CHARS) break;
-      // forceSpill clamps the effective preview window to a small head/tail
-      // window and routes through the spill-to-file path regardless of
-      // `policy.maxBytes`. The replaced fragment is a short preview + the
-      // absolute path Worker can Read on demand.
-      const forced = await applyToolResultGuardrail(
-        'child_task_summary',
-        item.content,
-        ctx,
-        { forceSpill: true },
-      );
-      result[item.idx] = forced.content;
-      runningTotal = runningTotal - item.size + forced.content.length;
+  return async (fragments, capacityContext) => {
+    const budget = resolveBudget?.(capacityContext);
+    if (!budget || fragments.length === 0) return fragments;
+    if (countEnvelopeTokens(fragments) <= budget.aggregateInlineTokens) {
+      return fragments;
     }
 
+    const guarded = await applyToolResultBatchGuardrail(
+      fragments.map((content, index) => ({
+        id: `background-${index}`,
+        toolName: 'child_task_summary',
+        content,
+      })),
+      ctx,
+      budget,
+    );
+    const result = guarded.map((entry) => entry.content);
+    const finalTokens = countEnvelopeTokens(result);
+    if (finalTokens > budget.aggregateInlineTokens) {
+      throw new ToolResultBatchCapacityError(
+        finalTokens,
+        budget.aggregateInlineTokens,
+      );
+    }
     return result;
   };
+}
+
+function countEnvelopeTokens(fragments: readonly string[]): number {
+  return countTokens(fragments.join('\n\n')) + 4;
 }

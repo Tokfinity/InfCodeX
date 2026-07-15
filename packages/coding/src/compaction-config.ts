@@ -1,19 +1,10 @@
 /**
  * @kodax-ai/coding Compaction Config
  *
- * Default trigger picks an adaptive percent based on the active provider's
- * context window. Short-window models compact earlier so the LLM doesn't
- * cross the attention-degradation zone (empirically ~120K based on
- * FEATURE_107 P6 eval, 2026-05-01).
- *
- * Mapping (chosen so the absolute trigger token count stays comparable
- * across windows — short-window models hit attention degradation at the
- * same absolute token count, not at the same percentage):
- *
- *   contextWindow ≤ 200K   →  60%   (~120K trigger)
- *   contextWindow ≤ 256K   →  65%   (~166K trigger)
- *   contextWindow ≤ 500K   →  70%   (~350K trigger)
- *   contextWindow > 500K   →  75%   (~750K @ 1M, prior default)
+ * Default automatic compaction is capacity-only: 100% means there is no
+ * independent early percentage trigger. The final provider-envelope capacity
+ * check remains authoritative and includes tools, framing, response reserve,
+ * and safety margin.
  *
  * User config can override via `~/.kodax/config.json`:
  *   { "compaction": { "triggerPercent": 80 } }
@@ -22,20 +13,15 @@
 import { readFile } from 'fs/promises';
 import { getAgentConfigPath } from '@kodax-ai/agent';
 import type { CompactionConfig } from '@kodax-ai/agent';
-const LEGACY_DEFAULT_TRIGGER_PERCENT = 75;
+const CAPACITY_ONLY_TRIGGER_PERCENT = 100;
 
 /**
- * Pick the trigger percent for a given context window. Exported so callers
- * (and tests) can resolve the same value the loader would.
+ * Resolve the default automatic trigger. The context-window argument remains
+ * for public API compatibility; the default no longer varies by window.
  */
 export function adaptiveTriggerPercent(contextWindow: number | undefined): number {
-  if (typeof contextWindow !== 'number' || contextWindow <= 0) {
-    return LEGACY_DEFAULT_TRIGGER_PERCENT;
-  }
-  if (contextWindow <= 200_000) return 60;
-  if (contextWindow <= 256_000) return 65;
-  if (contextWindow <= 500_000) return 70;
-  return 75;
+  void contextWindow;
+  return CAPACITY_ONLY_TRIGGER_PERCENT;
 }
 
 const BASE_CONFIG: Pick<CompactionConfig, 'enabled'> = {
@@ -56,14 +42,12 @@ export type CompactionConfigOverride = Partial<
  *
  *   1. SDK override (`overrides` arg — in-process `KodaXOptions.compaction`)
  *   2. user config (`~/.kodax/config.json` → `compaction.*`)
- *   3. adaptive / base default
+ *   3. capacity-only base default
  *
- * For `triggerPercent` the bottom of the cascade is the adaptive bucket
- * keyed off the *effective* context window (an override window must move
- * the bucket too); falls back to legacy 75% when no window is known.
+ * `triggerPercent < 100` is an explicit caller/user opt-in to early lossy
+ * summarization. The default is 100 regardless of effective context window.
  *
- * @param contextWindow active provider's context window in tokens (used for
- *   the adaptive trigger bucket when neither layer pins a window/percent).
+ * @param contextWindow retained for compatibility; it does not change the default.
  * @param overrides in-process overrides that win over the user config file.
  */
 export async function loadCompactionConfig(
@@ -86,7 +70,7 @@ export async function loadCompactionConfig(
     ...userOverrides,
     // triggerPercent is recomputed below; this satisfies the required field
     // during the spread when userOverrides omits it.
-    triggerPercent: LEGACY_DEFAULT_TRIGGER_PERCENT,
+    triggerPercent: CAPACITY_ONLY_TRIGGER_PERCENT,
   };
 
   // SDK overrides win over the user config file — only for fields the
@@ -96,8 +80,8 @@ export async function loadCompactionConfig(
     merged.contextWindow = overrides.contextWindow;
   }
 
-  // The adaptive bucket keys off the effective window so a pinned window
-  // (SDK or user config) lands in the right bucket.
+  // Retain the effective-window call shape for compatibility; the default
+  // resolver is capacity-only and intentionally ignores the value.
   const bucketWindow = merged.contextWindow ?? contextWindow;
   merged.triggerPercent =
     typeof overrides?.triggerPercent === 'number'

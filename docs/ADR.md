@@ -45,7 +45,7 @@
 > **⚠️ Architecture state notice (2026-05-25)**: 早期 ADR (ADR-005/006/007/008 等) 描述 `FEATURE_061/062` Scout-first + Planner/Generator/Evaluator H2 chain 模型，已被 [**ADR-030 claudecode-shape Main Agent + Sidecar Verifier**](#adr-030-claudecode-shape-main-agent--sidecar-verifier-substrate-feature_184-v0745) (FEATURE_184 v0.7.42) 取代。
 > 当前运行时架构：**V2 Worker 单循环 + Sidecar Verifier**。V1 chain (Scout/Planner/Generator/Evaluator) 已于 [ADR-030 §F193 cross-ref](#adr-030-claudecode-shape-main-agent--sidecar-verifier-substrate-feature_184-v0745) FEATURE_193 v0.7.43 全量退役；`emit_handoff` 工具已于 FEATURE_190 v0.7.43 删除。
 > 早期 Scout-first ADR 保留以便 archive 查阅，不反映当前实现。
-> **Current package / SDK state (2026-07-14 / v0.7.69)**: 源码 workspace 为 `llm / agent / coding / repl` 4 包；根 npm 包 `@kodax-ai/kodax` 暴露 11 个 SDK subpath（`/agent`、`/llm`、`/coding`、`/media`、`/repl`、`/skills`、`/mcp`、`/session`、`/runtime`、`/a2a`、`/experimental-memory`）；LLM registry 有 15 个内置 provider alias（含 `zai-coding`）。当前 Runtime 事实包括 embedded inline、embedded Worker 与本机 daemon 三种 ownership/isolation 形态，以及 F269 的 authoritative shared Coder daemon：atomic observe/resync、durable operation、AskUser/permission transport、run-scoped credential/Host Tool bridge、crash outcome 与 daemon/inline owner fence。F267 提供双向 A2A 1.0 edge，F268 将 MCP/A2A/Extension 拆入三个 user-level versioned file 并提供 last-known-good hot reload。small-window 工具 schema 仍通过 `tool_search` / `tool_describe` / `tool_call` 渐进披露，最终目标工具只经过一次权限校验。既有事实仍含 inline workflow authoring、profile-gated SDK agent profile、可白标 self-knowledge、effort-first reasoning、内置 repo intelligence、workflow process/durable replay/hostMetadata、external-agent executor plane，以及 FEATURE_250/251/252/259/260 的渐进披露、工具输出压缩、workflow quality lint、review handoff optimization 与 governed memory recall/review。
+> **Current package / SDK state (2026-07-14 / v0.7.69)**: 源码 workspace 为 `llm / agent / coding / repl` 4 包；根 npm 包 `@kodax-ai/kodax` 暴露 11 个 SDK subpath（`/agent`、`/llm`、`/coding`、`/media`、`/repl`、`/skills`、`/mcp`、`/session`、`/runtime`、`/a2a`、`/experimental-memory`）；LLM registry 有 15 个内置 provider alias（含 `zai-coding`）。当前 Runtime 事实包括 embedded inline、embedded Worker 与本机 daemon 三种 ownership/isolation 形态，以及 F269 的 authoritative shared Coder daemon：atomic observe/resync、durable operation、AskUser/permission transport、run-scoped credential/Host Tool bridge、crash outcome 与 daemon/inline owner fence。F267 提供双向 A2A 1.0 edge，F268 将 MCP/A2A/Extension 拆入三个 user-level versioned file 并提供 last-known-good hot reload。small-window 工具 schema 仍通过 `tool_search` / `tool_describe` / `tool_call` 渐进披露，最终目标工具只经过一次权限校验。既有事实仍含 inline workflow authoring、profile-gated SDK agent profile、可白标 self-knowledge、effort-first reasoning、内置 repo intelligence、workflow process/durable replay/hostMetadata、external-agent executor plane，以及 FEATURE_250/251/252/259/260 的渐进披露、工具输出完整采集/无损优先/批次容量回退、workflow quality lint、review handoff optimization 与 governed memory recall/review。
 >
 > 之前的执行模型注脚（v0.7.42 前）：
 > 这组 ADR 反映 `FEATURE_061/062` 之后的执行模型：
@@ -3605,6 +3605,10 @@ agent's digest in history.
 
 ## ADR-050: Tool-Output 语义压缩层 —— 命令感知的 in-tool 压缩（rtk-style Token Killer 移植, FEATURE_251, v0.7.61）
 
+> **历史原始决策（2026-07-05）。** 本节直到“后果 / 测试”为止记录 v0.7.61 当时发布的
+> 行为，不描述当前默认策略。当前权威决策是下方“2026-07-14 纠偏决策”；两者冲突时以后者
+> 为准。
+
 **背景**。参考项目 `rtk (Rust Token Killer)` 是一个外部 CLI 代理：别的 agent（Claude Code 等）通过 `PreToolUse` hook 把 `git status` 重写成 `rtk git status`，由 rtk 执行真实命令并**在输出进入 LLM context 前压缩 60-90%**——四类策略：智能过滤 / 分组聚合 / 截断 / 去重，覆盖 100+ 命令（git/cargo/npm/pytest/go/docker/kubectl/aws…）。KodaX 当前的对应能力是**空白**：[bash.ts](../packages/coding/src/tools/bash.ts) 的 `toolBash` 对命令输出只做**尾部截断**（`truncateTail` 600 行/32KB，bash.ts:395）+ 采集期字节封顶（512KB），没有任何命令感知的语义压缩——一次完整的 `git status`/`cargo test`/`npm install` 原样进 context。两条派发路径（SA `runToolDispatch`→`applyToolResultGuardrail`，tool-dispatch.ts:334/362；AMA `runnerGuardrails`，runner-driven.ts:1389）也只做 per-tool 字节/行截断（[tool-result-policy.ts](../packages/coding/src/tools/tool-result-policy.ts) `TOOL_RESULT_POLICIES`），是纯语法层。
 
 **核心决策**。把 rtk 的**语义压缩能力**移植进 KodaX，但**抛弃 rtk 一半的架构**：rtk 的命令重写子系统（`discover/` 词法器 + 复合命令拆分 + `classify_command` + hook 协议）与 SQLite `tracking`/`gain`/`discover` 分析，**只是因为 rtk 是外部 hook 二进制、必须从一个 bash 字符串反推意图**。KodaX 自己就是 agent、拥有 tool 层——在 `toolBash` 内 `command`/`stdout`/`stderr`/`exitCode` 全部原生在手，因此**不重写命令、不装 hook、不建分析 DB**，直接在 tool 内对输出做事后压缩。压缩后的字符串**就是**进 context 计数的内容，context accounting（token-accounting.ts）自动正确（注意：这不等于能测出"节省了多少"，反事实收益只在测试里量）。
@@ -3628,6 +3632,206 @@ agent's digest in history.
 **非目标**。命令重写 / lexer / 复合命令段级重写 / 14-agent hook 安装器 / SQLite gain·discover 分析——KodaX 拥有 tool 层，全部无意义；用户可编辑过滤文件与信任门控推迟。**无 prompt 改动**（透明压缩），不触发 ADR-033；recovery hint 复用 `buildToolResultHint` 现有措辞。
 
 **后果 / 测试**。确定性代码，不触发 FEATURE_104 prompt-eval。已覆盖：每过滤器单测、`never_worse` 不变式、ANSI 去除、声明式 package/docker/infra 规则、git/test/lint/JSON compiled filters、registry raw recovery、lossy persist 失败 raw fallback、filter 失败 raw fallback、`toolBash` 头部保真、`extractBashResult` ledger 解析、tool-result guardrail 回归、`@kodax-ai/coding` build。风险=通用层无损性未证的 spinner/dedup 分支——继续默认关，直到语料验证。预期收益与 rtk README「30 分钟会话 -80%」同量级，且因压缩即计数，有效 context 窗口直接变大。
+
+### 2026-07-14 纠偏决策：完整采集、无损优先、批次单一容量边界
+
+> **状态：Accepted，且在冲突处取代本 ADR 上述 v0.7.61 决策。** 上文保留为
+> FEATURE_251 的历史设计记录；其中“透明事后有损压缩默认开启”“32KB / 600 行是
+> token 策略”“512KB 是采集上限”和“隔离 body-token 降幅可代表会话收益”不再是
+> 当前行为或验收依据。
+
+**触发证据**。证据来自一条真实 review 会话，而不是频率或收益率 benchmark：
+
+- session：`C:\Users\iceto\.kodax\sessions\c-works-gitworks-kodax-author-kodax-66910f2fd8\20260714_174750.jsonl`
+- raw artifact：`C:\Users\iceto\.kodax\tool-results\2026-07-14T09-52-03-904Z-KodaX-bash-output-raw-6qsktp.txt`
+
+第一次 `git log v0.7.68..HEAD --oneline --stat` 被改写为
+`[git log summarized: showing 30 of 207 lines]`。Worker 随即明确表示需要完整原始输出，读取
+12,577-byte artifact；同一段流程还修正并重跑了另一个 `%` 转义失败的 `git log --format`
+命令。直接可归因于压缩的证据只有**一次 raw 恢复读取及其额外 tool-result 循环**；格式命令
+重跑有独立原因，不能归因于压缩。这条记录也不能推出恢复率、token 增幅或盈亏平衡点。此前
+写入文档的百分比推断没有对应样本集，现已删除。原
+Layer-1 测试只比较 `raw body` 与 `filtered body + hint`，没有计入恢复读取、额外请求、tool
+schema、模型输出和信息误判，因此只能作为历史 fixture 测量，不能证明端到端正收益。
+
+**目标函数**。优先减少完成任务所需的总 token 与总轮次，而不是让单次 tool result 看起来
+更短。默认路径必须保持证据完整；容量回退只解决“下一次物理请求确实放不下”的可用性问题，
+不能被当作普通 token 优化。由此确立以下不变量：
+
+“任意内容、任意长度都必须节省一些 token”不是可满足的无损目标：对已经紧凑或高熵的任意
+文本，不改变契约就不存在保证更短的表示；强制正收益必然在某些输入上丢信息或增加 framing。
+因此单次结果允许 **0 节省**，但不允许负节省：候选无损表示只有严格更短才采用；系统级收益
+来自可证明的重复开销消除、渐进 schema、显式请求整形和避免 recovery，而不是为每个结果凑
+一个压缩百分比。
+
+1. **先完整采集，再决定交付形态。** Bash 从第一个字节起保留 stdout/stderr；512KiB 只触发
+   内存到临时文件的 spool，不是采集上限。工具退出后才形成完整结果，并负责清理临时资源。
+2. **默认只做契约等价、且严格更短的无损规范化。** 例如可以移除不承载内容的终端样式码；
+   OSC 8 hyperlink 必须保留 URL。候选结果不更短时返回原文。compiled/declarative 的
+   git/test/lint/JSON/package/docker/infra 有损过滤器默认关闭。
+3. **一个结果帧只有一个语义 owner。** 这不是要求每条命令强制选择一个 adapter，而是禁止
+   Bash 内层、retrieval bridge 和外层 guardrail 对同一正文反复摘要。单一、明确的工具 API
+   可以在执行前通过参数/请求整形减少无关源数据；普通 simple-command adapter 只有在保持
+   请求证据契约时才可启用。compound Bash 可能混合多条命令和重定向，语义 adapter 数量为 0。
+4. **批次只有一个 capacity owner。** 并行 tool calls 全部完成后，由即将构造下一次 LLM 请求的
+   调度层统一判断；工具、bridge 与 retrieval renderer 不再各自应用固定 per-tool 上限。
+5. **显式不完整，且可精确恢复。** 只有整个批次放不下时，才把被移出的完整结果持久化一次，
+   并交付带 `KODAX_RESULT_INCOMPLETE` 的预览和 continuation。marker 对重复守卫必须幂等，
+   不能生成嵌套 artifact；若连所有 tool-call/tool-result 配对所需的最小 marker 都放不下，
+   必须显式失败并给出诊断，不能继续提交一个已知超预算请求。
+
+**容量算法**。容量使用将要发送给 provider 的物理请求计数，而不是某个逻辑 session 的近似值：
+
+```text
+safety(P) = max(2048, ceil(P * 0.03))
+Pmax      = max P such that P + providerReservedOutputTokens + safety(P)
+            <= contextWindow
+Cbatch    = max(0, Pmax - currentPhysicalRequestTokens)
+```
+
+`P` 是加入整个批次后的最终输入候选值；不能只按加入前的
+`currentPhysicalRequestTokens` 计算 3%，否则大批次会把 safety margin 本身挤穿。
+
+若批次所有 tool-result（含协议 framing）总计 `<= Cbatch`，全部原样进入下一请求，哪怕超过
+旧的 32KB / 600 行或 64KB per-tool 经验值；不得创建 artifact 或恢复 hint。只有总计超过
+`Cbatch` 才执行上一条容量回退。prompt cache read/write token 仍占 context，因此必须包含在
+`currentPhysicalRequestTokens` 中；成本统计则把 uncached input、cache read、cache write 分开，
+各自只计费一次。
+
+这里的 2048/3% 也不是“科学常数”或压缩收益阈值，而是当前 token 估算与 provider framing 误差
+的工程安全余量。它与旧 32KB/600 行的关键差别是：按最终物理请求缩放、与 output reserve 分开、
+只由唯一 capacity owner 使用。落入“hard window 尚可容纳、但 uncertainty margin 不容纳”的结果
+属于**可靠性回退**，不得计作 token 优化收益；应记录 estimate-vs-actual 误差与 artifact recovery，
+若长期出现不必要恢复就校准余量。未来若 final-envelope 计数能被 provider 精确给出，应基于证据
+收窄余量，而不是把该常数永久固化或复制到各工具。
+
+**“adapter” 的精确定义与边界**。这里的 command/parameter adapter 是**执行前的请求整形**：
+例如调用一个本来就声明支持 `limit`、path scope 或字段选择的工具时，根据当前任务显式选择
+更窄参数。它不是执行后删 stdout 的 filter。一个调用最多允许一个 adapter 的含义，是禁止
+多个语义投影串联后无法判断哪一层丢了证据；不是要求每个调用都选一个。当前默认 Bash 选择
+0 个，compound Bash 强制 0 个。只有工具契约能证明所请求证据保持等价时，simple command
+才允许选择 1 个；否则仍为 0。即使选择 adapter，工具也必须诚实报告显式 limit/continuation。
+
+**历史压缩使用同一物理容量不变量**。有损历史压缩与 tool-result 溢出不同：历史 summary
+不能通过 artifact 精确恢复模型当时的完整推理关系，因此不能把“随时缩短一些”当成无风险
+优化。默认策略如下：
+
+1. **容量内不做自动有损历史变换。** 契约等价的无损规范化、tool schema 渐进披露和执行前
+   请求整形仍可在任意长度节省 token；但普通 tool-result 清空、user message crop、默认
+   microcompaction 都关闭。否则节省的是一次输入，风险却是后续重读、重跑或错误结论。
+2. **以最终 provider envelope 判断。** 在 provider prepare/policy、最终 system prompt、实际
+   tool schema 和 output reserve 确定后计算物理请求 `P`。固定 overhead（system/tools/framing
+   与 transcript 估算的差）在候选 summary 上继续保留，cache token 仍占 `P`。当
+   `P + providerReservedOutputTokens + max(2048, ceil(P * 0.03)) <= contextWindow` 时不触发。
+3. **真实压力下 summary-first。** 只选完整、原子的最旧消息前缀（tool-use/tool-result 配对不拆），
+   在同一物理容量约束内生成语义 summary；不在 summary 前清空 tool result 或裁 user message。
+   每次只压到下一请求刚好可容纳就停止，不追逐 36%/52% 等静态低水位。
+4. **不以静默删除兜底。** summary 失败、为空或仍不足时，canonical history 保持不变并抛出
+   typed `ContextCapacityError`。调度层必须透传该错误；不得把异常吞掉后继续提交已知超限请求，
+   也不得用“graceful”名义删除消息/配对。
+5. **百分比仅是显式策略。** 默认自动 trigger 为 capacity-only（100% 表示没有额外提前阈值）。
+   用户显式配置 `<100%` 可选择提前 summary，手动 `/compact` 可显式 force；二者是用户接受
+   信息损失的策略，不宣称必然降低端到端 token。
+
+该设计解释了为什么“完整结果仍超一个任意 32KB/600 行阈值就先 artifact”是负优化：只要
+最终物理请求仍可容纳，artifact + preview 既增加 marker/token，又很可能增加一次读取。只有
+超出**真实 provider 容量**时，可恢复 artifact 才是可用性回退，而不是常规优化。
+
+**边界与工具契约**。
+
+- `read` 以 `line_offset` 精确续读超长单行；`grep`、`glob`、`code_search` 与 retrieval 不再有
+  隐藏的 100/200/2000 条、24/32KB 等内部 caps。用户显式请求的 `limit` / `head_limit` 是
+  查询契约，达到边界时必须返回 continuation，而不是暗中声称结果完备。
+- `task_output` 对仍在运行的任务可显示有明确标记的 live tail；任务进入终态后返回完整输出。
+- web search/fetch 的 256/512KiB 是上游资源采集安全上限，不是 token 优化。命中时结果必须含
+  `SOURCE_INCOMPLETE`，禁止把截断内容表述为完整来源。
+- 32KB / 600 行仅是 v0.7.61 的历史 UI/经验值，不能参与当前 token policy；512KiB 仅是 Bash
+  collector 的 memory→spool 阈值。collector 记录总字节数；若字节数已超过
+  `当前请求剩余 token × cl100k_base 最大 token 字节数（128）`，则可严格证明完整输出不可能
+  进入该请求，此时直接封存 spool，避免先把超大文件重新物化进内存再由 batch owner 溢出。
+  直落盘结果必须把 canonical manifest 路径通过 tool-call ID 的可信 side-channel 传给 SA 和 AMA
+  的最终 batch owner，并把 incomplete marker 放在结果末尾；不得从原始工具文本猜测可信路径，
+  也不得在最终准入时把同一 marker 再落盘一层。
+- 物理请求 fallback 在 provider 未返回 usage 时也必须从最终 envelope 估算：最终 system prompt
+  只计一次（skills 已合并后不得重复）、active tool schemas、messages/framing、cache 占用以及同一
+  next request 的 edit-recovery 等 synthetic sibling 都要计入；有效 provider usage 仍是权威值。
+- 显式查询 `limit` 通过请求 `limit + 1` 个候选判断是否确有遗漏，再只交付 `limit` 个并标记；
+  不能仅因返回数等于 limit 就猜测还有结果，也不能把真实的第 `limit + 1` 项静默吞掉。
+  该规则覆盖 local/provider `code_search`、`semantic_lookup`、keyword `tool_search`、`mcp_search`、
+  web search、`read` 与 `grep`；`grep.head_limit < 0` 必须报错，不能被解释为 `0=unlimited`。
+
+全工具审计把任何“变短”归入下面五类；不属于其中之一的隐藏裁剪应删除：
+
+| 类别 | 何时允许 | 模型必须看到什么 |
+|---|---|---|
+| 契约等价无损规范化 | 语义等价且序列化 token 严格更少 | 完整等价结果，无 lossy hint |
+| 调用者显式查询边界 | 工具 schema 已有 `limit` / page / field / scope 参数 | continuation、总量或明确“还有结果” |
+| 上游采集安全边界 | 文件/网络/协议资源安全上限被命中 | `SOURCE_INCOMPLETE` 与可用恢复坐标；不得声称完整 |
+| 运行中展示 | 任务尚未终态，仅提供 live tail/status | 明确 `LIVE`/pending；终态接口必须完整 |
+| 真实请求容量回退 | 唯一 batch owner 证明完整结果放不下 | 完整 artifact + 幂等 `KODAX_RESULT_INCOMPLETE` |
+
+没有物理容量上下文的 public guard 必须 passthrough，不能猜一个 per-tool cap。MCP ordinary
+resource text 只进入 `content` 一次，不复制进 `structuredContent`；若 server 确实返回独立的
+top-level `structuredContent`，则原样保留两个 distinct channel，只对完全相同表示去重且不改空白；
+MCP fallback 也必须使用同一双通道契约，不能二选一丢失。分页中途失败必须抛错且不缓存局部页。
+Self-knowledge 的精确 topic 读取返回全文，只有 index
+listing 采用结构化 metadata。Bash cancellation 返回已捕获的 partial stdout/stderr、command 和
+cancelled 状态。kill 后先有界等待 stdout/stderr close；若 drain deadline 仍未 close，collector
+必须转交给持续追加的 recovery artifact，返回 `KODAX_CAPTURE_INCOMPLETE` 与路径，后台继续持有
+managed-child/collector ownership，只有真正 close 后写入 `KODAX_CAPTURE_COMPLETE`。这样既不无限
+挂起，也不把 deadline 后 chunk 写进已关闭 collector。spool 读取失败同样必须返回
+`KODAX_CAPTURE_INCOMPLETE`、恢复坐标和仍在内存的 suffix；background capture 只有出现最终
+`[Exit]` footer 才可视为完成。恢复链优先读结构化 metadata，
+同时兼容旧文本 marker，并始终保留 artifact pointer 与诚实 omission 状态。
+
+完整 artifact 是可恢复会话的 canonical evidence。仅凭 mtime/固定 TTL 无法证明引用已消失，
+因此 `persistToolOutput` 不再自动 age-delete。REPL session manager 启动时先扫描 active/archived
+JSONL 中的 artifact 文件名，只删除超过 grace window 且未被任何可恢复会话引用的文件；引用发现
+失败时 fail closed，不做删除。遗留 age-only helper 继续保留为显式兼容/operator API，但不在生产
+写入路径调用。Bash spool 也进入同一 `tool-results` 生命周期，进程崩溃残留和容量 artifact 不再落在
+无人管理的临时目录。粘贴图片路径也会进入 canonical session messages，所以 Classic/Ink REPL
+启动时不再按 24 小时自动删除。明确声明为瞬态、拥有恢复
+窗口的 managed-task checkpoint 仍可过期，但活跃度必须按最近成功写入的 mtime 判断，不能按任务
+最初 `createdAt` 误删仍在运行任务刚写出的 checkpoint。
+
+append capacity 只允许从 `calculateMaxContextInputTokens(contextWindow, reserve) - currentTokens`
+导出。旧的 snapshot budget builder 与 byte/per-result clamp 为 SDK 源码兼容继续导出并标记为
+compatibility helper；KodaX 内部不调用它们，唯一 batch owner 只消费上述 fixed-point token capacity，
+避免重新形成第二套策略 owner。
+
+审计同时移除了散落在其他结果表面的隐式经验 cap：`changed_diff_bundle` 的 10-path 截断、单行
+`edit` 的 100-char preview、`relationship_scan` supplemental evidence 的 10-line/1800-char 裁剪、
+`tool_search` select-mode 的结果 cap，以及 child evidence/result 的 200-line/4000/10000-char slices。
+这些结果先保持完整，再由其下一请求的 batch/envelope capacity owner 判容；工具 schema 中显式的
+per-path/page/query limit 仍是调用契约，必须可见并提供 continuation，不能与隐藏截断混为一谈。
+为避免一次调用无界占用文件句柄/子进程，`grep` 与 `code_search` 每次最多扫描 512 个候选文件并返回
+`scan_offset`，`changed_diff_bundle` 每次最多接收 64 个唯一 path 且内部并发为 4；这些都是显式、可续的
+acquisition 契约，不得静默声称全量完成。
+
+**与 rtk 的关系**。保留 rtk 值得借鉴的“在执行前理解命令与参数、尽量让上游只产生任务所需
+证据”原则；不照抄其透明 hook、事后有损过滤、隐藏截断或收益口径。KodaX 的优化顺序是：
+显式请求整形 → 严格更短的契约等价规范化 → 物理批次容量判断 → 必要时的可恢复不完整交付。
+
+**收益验证口径**。任何未来有损策略都必须按 `benchmark/EVAL_GUIDELINES.md` 预注册并比较完整
+任务，而不是只比较一个字符串。至少同时报告：provider 总 input/output（cache read/write 分列）、
+模型轮次、tool call 数、artifact/recovery read 与改格式重跑、完成质量和证据完整性；覆盖小结果、
+高噪声但可容纳结果、真实 tool-batch 溢出和历史容量压力。只有端到端 token/轮次改善且质量不
+回退时，候选才有资格显式启用；单个 fixture 变短、artifact 可读或模型最终完成任务均不能单独
+作为正收益证据。当前不基于这条 ADR 新增默认有损 adapter 或配置开关。
+
+**验证门槛**。回归必须覆盖：小结果与超过旧固定阈值但仍可容纳的结果逐字返回；Bash
+memory→spool 前后首/中/尾 sentinel 完整；compound 命令不触发语义过滤；SA 与 AMA 使用同一
+物理容量公式；并行批次只溢出一次且 marker 幂等；最小 marker 不可容纳时显式失败；长单行
+可续读；终态 task output 完整；网络源限额显式不完整；cache 容量与计费口径互不混淆。
+历史压缩还必须覆盖：容量内逐字保持、默认 microcompaction no-op、最终 provider envelope
+判容、skills 不重复计数、无 usage 时 system/tools envelope 不漏计、同请求 recovery sibling 计入、
+固定 overhead 与首个 Worker system prompt 原样保留、原子 tool 配对、summary-first、无效 summary
+不消费 source chunk、刚好可容纳即停止、失败时 typed error 携带最新 transcript 且 canonical history
+不变。工具侧还要覆盖显式 limit 的 `limit + 1` 探测、MCP ordinary resource body 单份交付、Bash
+取消的正常 close 与 delayed-close recovery handoff、spool read 失败 marker、MCP fallback 双通道、
+各显式 limit 的 N/N+1 两侧、负数 grep limit，以及 tool/paste artifact 不被启动或新写入触发
+age-only GC；长任务 checkpoint 则按最近写入时间保持可恢复。旧的“每个 fixture 压缩后必须更短”
+不再是发布门槛。
 
 ## ADR-051: Runtime Isolation Is an Ownership Axis, Not a Generic Execution Service
 

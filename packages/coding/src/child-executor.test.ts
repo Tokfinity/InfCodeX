@@ -1,4 +1,5 @@
 import { mkdirSync, mkdtempSync, rmSync, writeFileSync } from 'node:fs';
+import { execFileSync } from 'node:child_process';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 
@@ -39,6 +40,7 @@ import {
 } from './construction/agent-resolver.js';
 import type { AgentArtifact } from './construction/types.js';
 import { toolWorktreeCreate, toolWorktreeRemove } from './tools/worktree.js';
+import { TOOL_OUTPUT_DIR_ENV } from './tools/truncate.js';
 
 const mockRunKodaX = runKodaX as ReturnType<typeof vi.fn>;
 const mockToolWorktreeCreate = vi.mocked(toolWorktreeCreate);
@@ -591,6 +593,32 @@ describe('executeChildAgents', () => {
     expect(result.results).toEqual([]);
     expect(result.mergedFindings).toEqual([]);
     expect(result.cancelledChildren).toEqual([]);
+  });
+
+  it('spills child evidence only when the complete initial request cannot fit', async () => {
+    const outputDir = mkdtempSync(join(tmpdir(), 'kodax-child-evidence-'));
+    process.env[TOOL_OUTPUT_DIR_ENV] = outputDir;
+    mockRunKodaX.mockResolvedValue({
+      success: true,
+      lastText: 'done',
+      messages: [{ role: 'assistant', content: 'done' }],
+      sessionId: 's-child-budget',
+    });
+    const evidence = `BEGIN_SENTINEL ${'evidence '.repeat(240_000)} END_SENTINEL`;
+
+    try {
+      await executeChildAgents([
+        createBundle({ evidenceRefs: [`finding:${evidence}`] }),
+      ], createCtx(), createOptions());
+
+      const briefing = mockRunKodaX.mock.calls[0]![1] as string;
+      expect(briefing).toContain('KODAX_RESULT_INCOMPLETE');
+      expect(briefing).toContain('Full output saved to:');
+      expect(briefing).not.toContain('END_SENTINEL');
+    } finally {
+      delete process.env[TOOL_OUTPUT_DIR_ENV];
+      rmSync(outputDir, { recursive: true, force: true });
+    }
   });
 
   it('routes opt-in workflow children through a dedicated worktree context', async () => {
@@ -2210,14 +2238,13 @@ describe('resolveEvidenceRef — FEATURE_199 task_id prefix + regression', () =>
 
   // -------------------- regression (pre-F199 prefixes) --------------------
 
-  it('regression: file: reads the first 200 lines of an existing file into a fenced block', async () => {
+  it('file: preserves the complete referenced file', async () => {
     const filePath = join(evidenceTmpDir, 'foo.ts');
-    writeFileSync(filePath, 'line-1\nline-2\nline-3\n');
+    writeFileSync(filePath, Array.from({ length: 240 }, (_, index) => `line-${index + 1}`).join('\n'));
     const result = await resolveEvidenceRef(`file:${filePath}`, makeEvidenceCtx());
     expect(result).toContain(`### ${filePath}`);
     expect(result).toContain('line-1');
-    expect(result).toContain('line-2');
-    expect(result).toContain('line-3');
+    expect(result).toContain('line-240');
     // No "[evidence_refs error]" framing should appear for a valid prefix.
     expect(result).not.toContain('[evidence_refs error]');
   });
@@ -2231,6 +2258,22 @@ describe('resolveEvidenceRef — FEATURE_199 task_id prefix + regression', () =>
     // rather than falling through to the unknown-prefix error.
     expect(result).toMatch(/diff: |\(no changes\)|\(could not get diff\)/);
     expect(result).not.toContain('[evidence_refs error]');
+  });
+
+  it('diff: preserves a complete diff larger than the former 4000-character cap', async () => {
+    execFileSync('git', ['init'], { cwd: evidenceTmpDir, stdio: 'ignore' });
+    execFileSync('git', ['config', 'user.email', 'tests@kodax.local'], { cwd: evidenceTmpDir });
+    execFileSync('git', ['config', 'user.name', 'KodaX Tests'], { cwd: evidenceTmpDir });
+    const filePath = join(evidenceTmpDir, 'large.ts');
+    writeFileSync(filePath, Array.from({ length: 260 }, (_, index) => `export const value${index} = 'before';`).join('\n'));
+    execFileSync('git', ['add', 'large.ts'], { cwd: evidenceTmpDir });
+    execFileSync('git', ['commit', '-m', 'baseline'], { cwd: evidenceTmpDir, stdio: 'ignore' });
+    writeFileSync(filePath, Array.from({ length: 260 }, (_, index) => `export const value${index} = 'after-${index}';`).join('\n'));
+
+    const result = await resolveEvidenceRef(`diff:${filePath}`, makeEvidenceCtx());
+
+    expect(result.length).toBeGreaterThan(4_000);
+    expect(result).toContain("+export const value259 = 'after-259';");
   });
 
   it('regression: finding: transcribes the literal text after the prefix as a Known fact bullet', async () => {
@@ -2347,7 +2390,7 @@ describe('resolveEvidenceRef — FEATURE_199 task_id prefix + regression', () =>
     expect(result).toContain('fake injected section');
   });
 
-  it('task_id: finalText is capped at 10000 chars with a truncation marker', async () => {
+  it('task_id: preserves complete sibling finalText', async () => {
     const big = 'A'.repeat(12000);
     const snapshots = new Map<string, ChildProgressSnapshot>();
     snapshots.set('hooks-audit', makeSnapshot({
@@ -2361,11 +2404,8 @@ describe('resolveEvidenceRef — FEATURE_199 task_id prefix + regression', () =>
       'task_id:hooks-audit',
       makeEvidenceCtx({ childProgressSnapshots: snapshots }),
     );
-    expect(result).toContain('[truncated 2000 chars; full sibling output is not included in this child briefing.');
-    expect(result).toContain('note the dependency for the coordinator]');
-    expect(result).not.toContain('task_output');
-    // First 10000 chars present, last 2000 not:
-    expect(result.split('A').length - 1).toBe(10000);
+    expect(result).not.toContain('[truncated');
+    expect(result.split('A').length - 1).toBe(12000);
   });
 
   it('task_id: literal ``` in finalText is defanged so the fence cannot be closed mid-body', async () => {

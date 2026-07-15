@@ -15,6 +15,10 @@ import path from 'node:path';
 import { randomUUID } from 'node:crypto';
 
 import { createSessionLineage, discoverInstances, emitKodaXDiagnostic } from '@kodax-ai/agent';
+import {
+  maybeRunReferenceAwareToolOutputGc,
+  resolveToolOutputDir,
+} from '@kodax-ai/coding';
 import type {
   KodaXJsonValue,
   KodaXMessage,
@@ -188,6 +192,72 @@ export interface SessionTranscriptEntry {
   readonly summary?: string;
   readonly payload?: unknown;
   readonly taskResults?: readonly KodaXTaskResultMetadata[];
+}
+
+async function collectJsonlFiles(root: string): Promise<string[]> {
+  const files: string[] = [];
+  const pending = [root];
+  while (pending.length > 0) {
+    const dir = pending.pop()!;
+    let entries: import('node:fs').Dirent[];
+    try {
+      entries = await fsPromises.readdir(dir, { withFileTypes: true });
+    } catch {
+      continue;
+    }
+    for (const entry of entries) {
+      const entryPath = path.join(dir, entry.name);
+      if (entry.isDirectory() && !entry.isSymbolicLink()) pending.push(entryPath);
+      else if (entry.isFile() && entry.name.endsWith('.jsonl')) files.push(entryPath);
+    }
+  }
+  return files;
+}
+
+async function collectToolOutputReferences(
+  sessionsDir: string,
+  outputDir: string,
+): Promise<ReadonlySet<string>> {
+  let artifactNames: Set<string>;
+  try {
+    artifactNames = new Set(await fsPromises.readdir(outputDir));
+  } catch {
+    return new Set();
+  }
+  const referenced = new Set<string>();
+  const collectNames = (content: string): void => {
+    for (const match of content.matchAll(/[a-zA-Z0-9._-]+\.txt/g)) {
+      const name = match[0];
+      if (artifactNames.has(name)) referenced.add(path.join(outputDir, name));
+    }
+  };
+  for (const sessionFile of await collectJsonlFiles(sessionsDir)) {
+    let content: string;
+    try {
+      content = await fsPromises.readFile(sessionFile, 'utf-8');
+    } catch {
+      continue;
+    }
+    collectNames(content);
+  }
+  for (const manifestPath of [...referenced].filter((filePath) => (
+    path.basename(filePath).includes('-bash-recovery-manifest-')
+  ))) {
+    try {
+      collectNames(await fsPromises.readFile(manifestPath, 'utf-8'));
+    } catch {
+      // A missing/unreadable manifest is still retained by its session reference.
+    }
+  }
+  return referenced;
+}
+
+function scheduleToolOutputRetention(sessionsDir: string): void {
+  const outputDir = resolveToolOutputDir();
+  void maybeRunReferenceAwareToolOutputGc(
+    outputDir,
+    () => collectToolOutputReferences(sessionsDir, outputDir),
+  );
 }
 
 export interface FullTranscriptSessionData extends Omit<SessionData, 'messages'> {
@@ -1577,6 +1647,7 @@ function watchSessionsWindows(
  */
 export function createSessionManager(opts?: { sessionsDir?: string }): SessionManager {
   const sessionsDir = opts?.sessionsDir;
+  scheduleToolOutputRetention(sessionsDir ?? KODAX_SESSIONS_DIR);
   // Single FileSessionStorage instance per manager. Returned via the
   // `storage` field so callers can pass it through
   // `runKodaX({ session: { id, storage } })`; sharing one instance keeps

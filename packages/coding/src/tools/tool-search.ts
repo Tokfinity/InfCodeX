@@ -121,6 +121,13 @@ function buildResult(
   return lines.join('\n');
 }
 
+function appendLimitMarker(result: string, maxResults: number, hasMore: boolean): string {
+  if (!hasMore) {
+    return result;
+  }
+  return `${result}\n[RESULT_LIMIT_REACHED: max_results=${maxResults}; additional tools matched. Narrow the keyword query or use \`select:NAME\` for an exact schema.]`;
+}
+
 export const toolSearchHandler: ToolHandlerSync = async (input, context) => {
   const i = input as ToolSearchInput;
   const query = typeof i.query === 'string' ? i.query : '';
@@ -131,10 +138,17 @@ export const toolSearchHandler: ToolHandlerSync = async (input, context) => {
     ? Math.min(Math.floor(i.max_results), MAX_RESULTS_CAP)
     : DEFAULT_MAX_RESULTS;
   const parsed = parseQuery(query);
-  const resolved = parsed.mode === 'select'
-    ? resolveSelectNames(parsed.names).slice(0, MAX_RESULTS_CAP)
-    : searchKeywords(parsed.required, parsed.loose, requestedMax);
-  return buildResult(resolved, context, context.selfManual?.productName);
+  if (parsed.mode === 'select') {
+    return buildResult(
+      resolveSelectNames(parsed.names),
+      context,
+      context.selfManual?.productName,
+    );
+  }
+  const probed = searchKeywords(parsed.required, parsed.loose, requestedMax + 1);
+  const resolved = probed.slice(0, requestedMax);
+  const result = buildResult(resolved, context, context.selfManual?.productName);
+  return appendLimitMarker(result, requestedMax, probed.length > requestedMax);
 };
 
 /**

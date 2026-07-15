@@ -155,7 +155,14 @@ export async function toolWebSearch(
       if (!ctx.extensionRuntime) {
         throw new Error('provider-backed web_search requires an active extension runtime.');
       }
-      const providerResults = await ctx.extensionRuntime.searchCapabilities(providerId, query, { limit });
+      const probedResults = await ctx.extensionRuntime.searchCapabilities(providerId, query, {
+        limit: limit + 1,
+      });
+      const hasMore = probedResults.length > limit;
+      const providerResults = probedResults.slice(0, limit);
+      const limitStatus = hasMore
+        ? `[RESULT_LIMIT_REACHED: limit=${limit}; additional provider matches were omitted.] `
+        : '';
       return finalizeRetrievalResult({
         tool: 'web_search',
         query,
@@ -163,9 +170,9 @@ export async function toolWebSearch(
         trust: 'provider',
         freshness: 'unknown',
         provider: providerId,
-        summary: providerResults.length > 0
+        summary: `${limitStatus}${providerResults.length > 0
           ? `Provider ${providerId} returned ${providerResults.length} search result(s).`
-          : `Provider ${providerId} returned no search results for "${query}".`,
+          : `Provider ${providerId} returned no search results for "${query}".`}`,
         items: convertProviderSearchResults(providerResults, limit),
         metadata: {
           endpoint: 'provider-search',
@@ -182,9 +189,16 @@ export async function toolWebSearch(
       },
     });
     const { text: html, truncated, bytesRead } = await readResponseTextLimited(response, SEARCH_MAX_BYTES);
-    const items = isBingHost(searchUrl.hostname)
-      ? parseBingResults(html, limit)
-      : parseSearchResults(html, searchUrl, limit);
+    const probedItems = isBingHost(searchUrl.hostname)
+      ? parseBingResults(html, limit + 1)
+      : parseSearchResults(html, searchUrl, limit + 1);
+    const items = probedItems.slice(0, limit);
+    const limitStatus = probedItems.length > limit
+      ? `[RESULT_LIMIT_REACHED: limit=${limit}; additional parsed matches were omitted.] `
+      : '';
+    const sourceStatus = truncated
+      ? `[SOURCE_INCOMPLETE: response exceeded the ${SEARCH_MAX_BYTES / 1024} KiB network acquisition safety limit.] `
+      : '';
 
     return finalizeRetrievalResult({
       tool: 'web_search',
@@ -192,9 +206,9 @@ export async function toolWebSearch(
       scope: 'remote',
       trust: 'open-world',
       freshness: 'fresh',
-      summary: items.length > 0
+      summary: `${sourceStatus}${limitStatus}${items.length > 0
         ? `Found ${items.length} web search result(s) for "${query}".`
-        : `No web search results for "${query}".`,
+        : `No web search results for "${query}".`}`,
       items,
       artifacts: items.map((item) => ({
         kind: 'url',

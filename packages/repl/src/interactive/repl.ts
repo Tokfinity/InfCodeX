@@ -427,18 +427,6 @@ export async function runInteractiveMode(options: RepLOptions): Promise<void> {
   const gitRoot = startupRuntime.workspaceRoot ?? await getGitRoot() ?? undefined;
   const storage = options.storage ?? new MemorySessionStorage();
 
-  // FEATURE_134 v0.7.40 follow-up — best-effort GC of cross-session paste temp
-  // files older than PASTE_TMP_TTL_MS (24h). The paste tmp dir is a single
-  // machine-global directory shared by both REPL surfaces, so the classic REPL
-  // must run the same sweep as InkREPL — otherwise a user who only ever uses the
-  // classic surface never reclaims stale paste files. Fire-and-forget; never
-  // blocks startup.
-  void import('../paste/index.js')
-    .then((mod) => mod.prunePasteTmpDir())
-    .catch(() => {
-      /* GC failure is non-fatal — OS tmpdir cleanup remains the backstop */
-    });
-
   // FEATURE_125 v0.7.41 — Bootstrap Team Mode (multi-instance auto
   // coordination). Returns null when KODAX_DISABLE_MULTI_INSTANCE=1
   // is set; otherwise registers this session under

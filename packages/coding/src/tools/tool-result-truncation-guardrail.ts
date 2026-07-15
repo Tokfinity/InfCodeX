@@ -1,19 +1,10 @@
 /**
- * Adapter: wrap `applyToolResultGuardrail` (the existing per-tool truncation
- * policy) as a Layer A `ToolGuardrail.afterTool`.
+ * Compatibility adapter for the former per-result truncation guardrail.
+ * A per-result hook cannot see sibling results or the physical next-request
+ * capacity, so calls without an explicit capacity remain lossless.
  *
- * FEATURE_085 (v0.7.26): the tri-layer Guardrail runtime lives in
- * `@kodax-ai/core`. The existing truncation logic in `tool-result-policy.ts`
- * predates that runtime and targets `KodaXToolExecutionContext`. Rather
- * than merge the two, we expose an adapter that coding consumers can
- * register when driving a Runner through the generic path — the adapter
- * preserves byte-exact truncation behaviour while participating in the
- * new Guardrail lifecycle (Span emission, declaration-order composition).
- *
- * **Not** registered by default. Consumers opt in via
- * `Runner.run(agent, input, { guardrails: [createToolResultTruncationGuardrail(ctx)] })`.
- * The built-in `runKodaX` preset dispatcher continues to call
- * `applyToolResultGuardrail` directly — no behavioural change there.
+ * FEATURE_085 (v0.7.26) exposed this adapter for compatibility. The Runner's
+ * post-settlement batch transform now owns the only lossy capacity decision.
  */
 
 import type {
@@ -25,63 +16,31 @@ import type {
 } from '@kodax-ai/agent';
 
 import type { KodaXToolExecutionContext } from '../types.js';
-import { applyToolResultGuardrail } from './tool-result-policy.js';
 
 export const TOOL_RESULT_TRUNCATION_GUARDRAIL_NAME = 'tool-result-truncation';
 
 /**
- * Create a `ToolGuardrail` that delegates to `applyToolResultGuardrail` in
- * its `afterTool` hook. The returned guardrail does not touch the call
- * going in (no `beforeTool`).
+ * Create a compatibility `ToolGuardrail` whose `afterTool` hook explicitly
+ * allows every result. It does not touch the call going in (no `beforeTool`).
  *
- * @param ctx The coding-layer execution context that
- * `applyToolResultGuardrail` needs (mutation tracker, persistence dir,
- * etc.). Typically created alongside the `KodaXOptions` for the run.
+ * @param ctx The coding-layer execution context retained for API compatibility.
+ * @deprecated Use the Runner post-settlement tool-result batch transform.
  */
 export function createToolResultTruncationGuardrail(
-  ctx: KodaXToolExecutionContext,
+  _ctx: KodaXToolExecutionContext,
 ): ToolGuardrail {
   return {
     kind: 'tool',
     name: TOOL_RESULT_TRUNCATION_GUARDRAIL_NAME,
     afterTool: async (
-      call: RunnerToolCall,
-      result: RunnerToolResult,
+      _call: RunnerToolCall,
+      _result: RunnerToolResult,
       _guardrailCtx: GuardrailContext,
     ): Promise<GuardrailVerdict> => {
-      // Only truncate successful results. Errors carry their own messages
-      // and are already short; wrapping them in policy text would leak
-      // infra detail into LLM context.
-      if (result.isError) {
-        return { action: 'allow' };
-      }
-      // Multimodal tool results (e.g. image-aware read) carry image items
-      // the guardrail's string-only spill API can't preserve. Truncating
-      // would silently drop the image; skip the guardrail and let the
-      // result pass through. Image-bearing payloads are rarely the source
-      // of context blow-up anyway.
-      if (typeof result.content !== 'string') {
-        return { action: 'allow' };
-      }
-      const guarded = await applyToolResultGuardrail(call.name, result.content, ctx);
-      if (!guarded.truncated) {
-        return { action: 'allow' };
-      }
-      const rewritten: RunnerToolResult = {
-        content: guarded.content,
-        isError: result.isError,
-        metadata: {
-          ...(result.metadata ?? {}),
-          truncated: true,
-          outputPath: guarded.outputPath,
-          policy: guarded.policy,
-        },
-      };
-      return {
-        action: 'rewrite',
-        payload: rewritten,
-        reason: `Truncated to ${guarded.policy.maxLines} lines / ${guarded.policy.maxBytes} bytes`,
-      };
+      // This compatibility hook has no batch siblings or physical request
+      // budget. It must therefore remain strictly lossless; the Runner's
+      // post-settlement batch transform owns capacity spill decisions.
+      return { action: 'allow' };
     },
   };
 }

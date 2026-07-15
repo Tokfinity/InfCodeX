@@ -145,7 +145,7 @@ describe('B-R1 byte-equivalence — runtime routing', () => {
       messages: [{ role: 'user', content: 'hello' }],
       needsCompact: true,
       compactConsecutiveFailures: 0,
-      compactionConfig: compactionConfig(),
+      compactionConfig: { ...compactionConfig(), triggerPercent: 99 },
       provider: new StubProvider(),
       model: 'active-model',
       contextWindow: 10_000,
@@ -215,11 +215,11 @@ describe('compaction diagnostic trace is debug-gated (TUI safety)', () => {
       messages: [{ role: 'user', content: 'hello' }],
       needsCompact: true,
       compactConsecutiveFailures: 0,
-      compactionConfig: compactionConfig(),
+      compactionConfig: { ...compactionConfig(), triggerPercent: 99 },
       provider: new StubProvider(),
       contextWindow: 10_000,
       systemPrompt: 'sys',
-      currentTokens: 9_000,
+      currentTokens: 1_000,
       events: { onCompactStats, onCompact },
     });
 
@@ -239,11 +239,11 @@ describe('compaction diagnostic trace is debug-gated (TUI safety)', () => {
       messages: [{ role: 'user', content: 'hello' }],
       needsCompact: true,
       compactConsecutiveFailures: 0,
-      compactionConfig: compactionConfig(),
+      compactionConfig: { ...compactionConfig(), triggerPercent: 99 },
       provider: new StubProvider(),
       contextWindow: 10_000,
       systemPrompt: 'sys',
-      currentTokens: 9_000,
+      currentTokens: 1_000,
       events: {},
     });
 

@@ -33,6 +33,7 @@
 
 import type { Agent } from '../primitives/agent.js';
 import type { AgentMessage } from '../primitives/agent.js';
+import { attachRunnerRecoveryTranscript } from '../primitives/runner.js';
 import type { MessageQueue } from '../messaging/index.js';
 
 import { composeIdleYieldUserMessage, type EnvelopeAggregateEnforcer } from './idle-yield.js';
@@ -144,6 +145,10 @@ export interface RunWithIdleYieldOptions<
    */
   readonly maxIterations?: number;
   /**
+   * Current contract: the host receives the completed transcript and any
+   * same-request user prompt, then admits the complete synthetic banner batch
+   * once against physical model capacity. Enqueue-time fixed caps are not used.
+   *
    * FEATURE_121 (v0.7.40): optional aggregate budget enforcer for the
    * synthetic user message built from drained background banners. When
    * provided, it transforms the fragment array before they're joined
@@ -235,7 +240,9 @@ export async function runWithIdleYield<
     // banner + real user prompt). Empty array = wake yielded no
     // content; treat as terminal exit (same as the legacy `undefined`
     // path).
-    const resumeMessages = await composeIdleYieldUserMessage(
+    let resumeMessages: readonly AgentMessage[];
+    try {
+      resumeMessages = await composeIdleYieldUserMessage(
       wakeEvent,
       () =>
         opts.messageQueue.dequeue({
@@ -248,7 +255,17 @@ export async function runWithIdleYield<
       // the transcript (it otherwise only reaches the agent input below).
       opts.onResumedUserPrompts,
       opts.resolveResumeTurnId,
-    );
+        runResult.messages,
+      );
+    } catch (error) {
+      if (error instanceof Error) {
+        const recoverableTranscript = runResult.messages[0]?.role === 'system'
+          ? runResult.messages.slice(1)
+          : runResult.messages;
+        attachRunnerRecoveryTranscript(error, recoverableTranscript);
+      }
+      throw error;
+    }
     if (resumeMessages.length === 0) break;
 
     currentInput = [...runResult.messages, ...resumeMessages];

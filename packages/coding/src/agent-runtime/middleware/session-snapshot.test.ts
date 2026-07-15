@@ -214,6 +214,35 @@ describe('saveSessionSnapshot — happy path with storage', () => {
     expect(saveMock.mock.calls[0]?.[1]?.messages).toBe(messages);
   });
 
+  it('error snapshot never replaces an existing transcript with an empty carrier', async () => {
+    const existingMessages = [
+      { role: 'user' as const, content: 'previous prompt' },
+      { role: 'assistant' as const, content: 'previous answer' },
+    ];
+    const saveMock = vi.fn().mockResolvedValue(undefined);
+    const loadMock = vi.fn().mockResolvedValue({
+      messages: existingMessages,
+      title: 'old',
+      gitRoot: '/repo',
+    } satisfies KodaXSessionData);
+    const opts = {
+      provider: 'anthropic',
+      session: {
+        id: `empty-error-${Date.now()}`,
+        storage: { save: saveMock, load: loadMock } as KodaXSessionStorage,
+      },
+    } as unknown as KodaXOptions;
+
+    await saveSessionSnapshot(opts, opts.session!.id!, {
+      messages: [],
+      title: 'errored',
+      errorMetadata: { lastError: 'capacity', lastErrorTime: 1, consecutiveErrors: 1 },
+    });
+
+    expect(loadMock).toHaveBeenCalledOnce();
+    expect(saveMock.mock.calls[0]?.[1]?.messages).toBe(existingMessages);
+  });
+
   it('error snapshot rejects headless assistant tool_use fragments as authoritative history', async () => {
     const existingLineage: KodaXSessionData['lineage'] = {
       version: 2,

@@ -48,8 +48,6 @@ import {
   createMemoryControlPlane,
   completeEpisodeReview,
   persistPendingEpisodeReview,
-  microcompact,
-  DEFAULT_MICROCOMPACTION_CONFIG,
   type CompactionConfig,
   type MemoryController,
   type MemoryPack,
@@ -100,6 +98,7 @@ import {
 // `agent.ts` shim re-export — no duplicate re-export here.
 import {
   cleanupIncompleteToolCalls,
+  ContextCapacityError,
   emitKodaXDiagnostic,
   validateAndFixToolHistory,
 } from '@kodax-ai/agent';
@@ -919,7 +918,7 @@ export async function runSubstrate(
       turnState.currentModelOverride = turnProvider.modelOverride;
       turnState.runtimeThinkingLevel = turnProvider.thinkingLevel;
       const provider = turnProvider.provider;
-      const contextWindow = turnProvider.contextWindow;
+      let contextWindow = turnProvider.contextWindow;
       let memorySuffix: KodaXEphemeralSuffix | undefined;
       if (memorySession !== undefined) {
         const memoryContext = buildCodingMemoryContext({
@@ -963,43 +962,6 @@ export async function runSubstrate(
       // CAP-058: user-facing iteration-start event.
       emitIterationStartStep(events, iter, maxIter);
 
-      // Microcompaction: lightweight cleanup each turn (no LLM calls)
-      // Clears old tool results, thinking blocks, and image blocks
-      messages = microcompact(messages, DEFAULT_MICROCOMPACTION_CONFIG) as KodaXMessage[];
-
-      // CAP-059/060/061/062/063: compaction lifecycle (trigger gate +
-      // LLM compact + post-compact attachments + graceful degradation +
-      // validate/commit). The orchestrator returns the next-turn
-      // counter and a fresh contextTokenSnapshot only when compaction
-      // actually fired.
-      const currentTokens = resolveContextTokenCount(messages, contextTokenSnapshot);
-      const needsCompact = shouldCompact({
-        messages,
-        compactionConfig,
-        contextWindow,
-        currentTokens,
-      });
-      const compactionLifecycle = await runCompactionLifecycle({
-        messages,
-        needsCompact,
-        compactConsecutiveFailures: turnState.compactConsecutiveFailures,
-        compactionConfig,
-        provider,
-        model: turnState.currentModelOverride,
-        contextWindow,
-        systemPrompt: currentExecution.systemPrompt,
-        currentTokens,
-        events,
-        compactionAntiThrash: turnState.compactAntiThrash,
-        emitCompactionDiagnostics: options.context?.contextDiagnostics === true,
-      });
-      messages = compactionLifecycle.messages;
-      turnState.compactConsecutiveFailures = compactionLifecycle.nextCompactConsecutiveFailures;
-      turnState.compactAntiThrash = compactionLifecycle.nextCompactionAntiThrash;
-      if (compactionLifecycle.contextTokenSnapshot !== undefined) {
-        contextTokenSnapshot = compactionLifecycle.contextTokenSnapshot;
-      }
-
       const preparedProviderState = await applyProviderPrepareHook({
         provider: turnState.currentProviderName,
         model: turnState.currentModelOverride,
@@ -1016,6 +978,11 @@ export async function runSubstrate(
       turnState.runtimeThinkingLevel = preparedProviderState.reasoningMode;
       runtimeSessionState.thinkingLevel = turnState.runtimeThinkingLevel;
       const streamProvider = resolveProvider(turnState.currentProviderName);
+      contextWindow = resolveContextWindow(
+        compactionConfig,
+        streamProvider,
+        turnState.currentModelOverride,
+      );
 
       let effectiveProviderEffort = turnState.runtimeThinkingLevel ?? effectiveReasoningPlan.effort;
       // FEATURE_222 (R5) — self-heal a hard-rejected reasoning_effort across turns.
@@ -1113,7 +1080,7 @@ export async function runSubstrate(
         options.selfManual?.productName,
         options.context?.agentExecutorPlane !== undefined,
       );
-      const budgetSnapshotBase = createRuntimeContextBudgetSnapshot({
+      const planningBudgetSnapshotBase = createRuntimeContextBudgetSnapshot({
         sessionId,
         turnId: liveTurnScope.turnId,
         provider: turnState.currentProviderName,
@@ -1122,17 +1089,18 @@ export async function runSubstrate(
         contextWindow,
         systemPrompt: effectiveSystemPrompt,
         toolDefinitions: fullActiveToolDefinitions,
-        skillCatalogText: options.context?.skillsPrompt,
         messages: providerMessages,
       });
-      const contextOptimizationProfile = selectRuntimeContextOptimizationProfile(budgetSnapshotBase);
-      const budgetSnapshot = {
-        ...budgetSnapshotBase,
+      const contextOptimizationProfile = selectRuntimeContextOptimizationProfile(
+        planningBudgetSnapshotBase,
+      );
+      const planningBudgetSnapshot = {
+        ...planningBudgetSnapshotBase,
         profile: contextOptimizationProfile,
       };
       const exposurePlan = planToolExposure({
         tools: fullActiveToolDefinitions,
-        budget: budgetSnapshot,
+        budget: planningBudgetSnapshot,
         profile: contextOptimizationProfile,
         bridgeAvailable: hasPortableToolBridge(fullActiveToolDefinitions),
         nativeDeferredAvailable: false,
@@ -1142,6 +1110,79 @@ export async function runSubstrate(
         fullActiveToolDefinitions,
         exposurePlan,
       );
+      const reservedResponseTokens = streamProvider.getEffectiveMaxOutputTokens(
+        turnState.currentModelOverride,
+      );
+      const requestBudgetSnapshot = createRuntimeContextBudgetSnapshot({
+        sessionId,
+        turnId: liveTurnScope.turnId,
+        provider: turnState.currentProviderName,
+        model: turnState.currentModelOverride ?? streamProvider.getModel(),
+        profile: contextOptimizationProfile,
+        contextWindow,
+        systemPrompt: effectiveSystemPrompt,
+        toolDefinitions: activeToolDefinitions,
+        messages: providerMessages,
+      });
+      const currentTokens = Math.max(
+        resolveContextTokenCount(messages, contextTokenSnapshot),
+        requestBudgetSnapshot.usedTokens,
+      );
+      const needsCompact = shouldCompact({
+        messages,
+        compactionConfig,
+        contextWindow,
+        currentTokens,
+        reservedResponseTokens,
+      });
+      const compactionLifecycle = await runCompactionLifecycle({
+        messages,
+        needsCompact,
+        compactConsecutiveFailures: turnState.compactConsecutiveFailures,
+        compactionConfig,
+        provider: streamProvider,
+        model: turnState.currentModelOverride,
+        contextWindow,
+        systemPrompt: effectiveSystemPrompt,
+        currentTokens,
+        reservedResponseTokens,
+        events,
+        compactionAntiThrash: turnState.compactAntiThrash,
+        emitCompactionDiagnostics: options.context?.contextDiagnostics === true,
+      });
+      messages = compactionLifecycle.messages;
+      providerMessages = messages;
+      turnState.compactConsecutiveFailures = compactionLifecycle.nextCompactConsecutiveFailures;
+      turnState.compactAntiThrash = compactionLifecycle.nextCompactionAntiThrash;
+      if (compactionLifecycle.contextTokenSnapshot !== undefined) {
+        contextTokenSnapshot = compactionLifecycle.contextTokenSnapshot;
+      }
+      const budgetSnapshot = {
+        ...createRuntimeContextBudgetSnapshot({
+          sessionId,
+          turnId: liveTurnScope.turnId,
+          provider: turnState.currentProviderName,
+          model: turnState.currentModelOverride ?? streamProvider.getModel(),
+          profile: contextOptimizationProfile,
+          contextWindow,
+          systemPrompt: effectiveSystemPrompt,
+          toolDefinitions: activeToolDefinitions,
+          messages: providerMessages,
+          reservedResponseTokens,
+        }),
+        profile: contextOptimizationProfile,
+      };
+      // The effective wire prompt already contains the skills addendum (or is
+      // replaced wholesale by systemPromptOverride), so the final request
+      // estimate consists of that prompt, active schemas, and transcript once.
+      // Keep this physical-envelope baseline for providers that omit usage.
+      let estimatedRequestTokenSnapshot = {
+        ...createContextTokenSnapshot(providerMessages),
+        currentTokens: Math.max(
+          resolveContextTokenCount(providerMessages, contextTokenSnapshot),
+          budgetSnapshot.usedTokens - budgetSnapshot.tokenBreakdown.reservedResponse,
+        ),
+      };
       const shouldEmitContextDiagnostics =
         options.context?.contextDiagnostics === true
         && (events.onContextBudgetSnapshot !== undefined || events.onToolExposurePlanned !== undefined);
@@ -1152,6 +1193,12 @@ export async function runSubstrate(
 
       while (true) {
         attempt += 1;
+        // Recovery may replace providerMessages between attempts. Rebase the
+        // same fixed request overhead onto the exact messages sent next.
+        estimatedRequestTokenSnapshot = rebaseContextTokenSnapshot(
+          providerMessages,
+          estimatedRequestTokenSnapshot,
+        );
         boundarySession.beginAttempt(
           turnState.currentProviderName,
           turnState.currentModelOverride ?? streamProvider.getModel(),
@@ -1355,7 +1402,10 @@ export async function runSubstrate(
       }
 
       turnState.lastText = result.textBlocks.map(b => b.text).join(' ');
-      const preAssistantTokenSnapshot = createContextTokenSnapshot(messages, result.usage);
+      const reportedPreAssistantTokenSnapshot = createContextTokenSnapshot(messages, result.usage);
+      const preAssistantTokenSnapshot = reportedPreAssistantTokenSnapshot.source === 'api'
+        ? reportedPreAssistantTokenSnapshot
+        : rebaseContextTokenSnapshot(messages, estimatedRequestTokenSnapshot);
 
       // Conservative tool-name repair ONCE per turn (`Write` → `write`), before
       // ANY consumer reads `result.toolBlocks` — history (assistant message),
@@ -1456,7 +1506,13 @@ export async function runSubstrate(
         turnId: liveTurnScope.turnId,
         timestamp: new Date().toISOString(),
       });
-      const completedTurnTokenSnapshot = createCompletedTurnTokenSnapshot(messages, result.usage);
+      const reportedCompletedTurnTokenSnapshot = createCompletedTurnTokenSnapshot(
+        messages,
+        result.usage,
+      );
+      const completedTurnTokenSnapshot = reportedCompletedTurnTokenSnapshot.source === 'api'
+        ? reportedCompletedTurnTokenSnapshot
+        : rebaseContextTokenSnapshot(messages, preAssistantTokenSnapshot);
       contextTokenSnapshot = completedTurnTokenSnapshot;
 
       // L5 continuation: max_tokens hit and no tool was emitted (so the
@@ -1648,23 +1704,46 @@ export async function runSubstrate(
         // the pre-FEATURE_100 inline branch).
         toolResults.push(...preToolCancelled);
       } else {
+        const toolResultCurrentTokens = resolveContextTokenCount(
+          messages,
+          contextTokenSnapshot,
+        );
         const toolResultBudget = buildToolResultBudgetFromUsage({
           contextWindow,
-          currentTokens: resolveContextTokenCount(messages, contextTokenSnapshot),
+          currentTokens: toolResultCurrentTokens,
+          reservedResponseTokens: streamProvider.getEffectiveMaxOutputTokens(
+            turnState.currentModelOverride,
+          ),
         });
-        // CAP-077 + CAP-079: parallel non-bash / sequential bash dispatch
-        // wrapped via the post-tool truncation guardrail.
-        const resultMap = await runToolDispatch({
-          toolBlocks: result.toolBlocks,
-          events,
-          ctx,
-          runtimeSessionState,
-          activeToolNames: activeToolNamesForTurn,
-          abortSignal: options.abortSignal,
-          toolResultBudget,
-        });
-        // CAP-078: per-result post-processing chain (mutation reflection,
-        // outcome tracking, edit recovery, visibility events).
+        // CAP-077: parallel non-bash / sequential bash dispatch. Results stay
+        // raw until visibility filtering and mutation reflection finish.
+        const previousToolResultCapacity = ctx.toolResultCapacityTokens;
+        const previousArtifactRecorder = ctx.recordToolResultArtifact;
+        const toolResultArtifactPaths = new Map<string, string>();
+        ctx.maximumInputTokens = toolResultCurrentTokens + toolResultBudget.aggregateInlineTokens;
+        ctx.toolResultCapacityTokens = toolResultBudget.aggregateInlineTokens;
+        ctx.recordToolResultArtifact = (toolCallId, outputPath) => {
+          toolResultArtifactPaths.set(toolCallId, outputPath);
+          previousArtifactRecorder?.(toolCallId, outputPath);
+        };
+        let resultMap: Map<string, string>;
+        try {
+          resultMap = await runToolDispatch({
+            toolBlocks: result.toolBlocks,
+            events,
+            ctx,
+            runtimeSessionState,
+            activeToolNames: activeToolNamesForTurn,
+            abortSignal: options.abortSignal,
+          });
+        } finally {
+          if (previousToolResultCapacity === undefined) delete ctx.toolResultCapacityTokens;
+          else ctx.toolResultCapacityTokens = previousToolResultCapacity;
+          if (previousArtifactRecorder === undefined) delete ctx.recordToolResultArtifact;
+          else ctx.recordToolResultArtifact = previousArtifactRecorder;
+        }
+        // CAP-078 + CAP-079: form the final visible batch, then admit that
+        // physical transcript payload against the one aggregate capacity.
         const postProcessed = await applyPostToolProcessing({
           toolBlocks: result.toolBlocks,
           resultMap,
@@ -1672,6 +1751,8 @@ export async function runSubstrate(
           emitActiveExtensionEvent,
           ctx,
           runtimeSessionState,
+          toolResultBudget,
+          toolResultArtifactPaths,
         });
         toolResults = postProcessed.toolResults;
         editRecoveryMessages = postProcessed.editRecoveryMessages;
@@ -1880,6 +1961,14 @@ export async function runSubstrate(
       const cleanedMessages = cleanup.cleanedMessages;
       const updatedErrorMetadata = cleanup.updatedErrorMetadata;
       contextTokenSnapshot = cleanup.contextTokenSnapshot;
+
+      // Capacity is a control-flow failure, not a model/tool result. Cleanup
+      // above preserves the resumable canonical history; the typed error must
+      // still reach the caller so no known-overflow request is reported as a
+      // normal `success:false` turn.
+      if (error instanceof ContextCapacityError) {
+        throw error;
+      }
 
       // CAP-083: AbortError silent terminal. Per Gemini CLI parity,
       // user interrupts return success:true with interrupted flag.

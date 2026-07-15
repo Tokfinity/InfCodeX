@@ -6,6 +6,11 @@
  *   - docs/features/v0.7.29-capability-inventory.md#cap-062-graceful-compact-degradation-gating
  *   - docs/features/v0.7.29-capability-inventory.md#cap-063-pre-stream-validateandfixtoolhistory--oncompactedmessages-emission
  *
+ * Current contract: default compaction is physical-capacity-driven and gives
+ * the semantic summarizer complete evidence. Hard pressure bypasses breaker
+ * skips; failure preserves canonical history and propagates a typed error.
+ * Deterministic destructive pruning is an explicit legacy opt-in only.
+ *
  * Class 1 (substrate). Three sequential phases of the compaction
  * lifecycle:
  *
@@ -48,8 +53,11 @@
 
 import type { KodaXBaseProvider, KodaXMessage } from '@kodax-ai/llm';
 import {
+  ContextCapacityError,
   compact as intelligentCompact,
   emitKodaXDiagnostic,
+  exceedsContextCapacity,
+  needsCompaction,
   type CompactionConfig,
   type CompactionUpdate,
 } from '@kodax-ai/agent';
@@ -59,9 +67,6 @@ import {
 } from '../coding-compaction-prompts.js';
 import type { KodaXContextTokenSnapshot, KodaXEvents } from '../../types.js';
 import { estimateTokens } from '../../tokenizer.js';
-import {
-  createEstimatedContextTokenSnapshot,
-} from '../../token-accounting.js';
 import { validateAndFixToolHistory } from '@kodax-ai/agent';
 import { gracefulCompactDegradation } from '@kodax-ai/agent';
 import { applyPostCompactAttachments } from './post-compact-attachments.js';
@@ -90,6 +95,7 @@ export interface TryIntelligentCompactInput {
   readonly contextWindow: number;
   readonly systemPrompt: string;
   readonly currentTokens: number;
+  readonly reservedResponseTokens?: number;
   readonly events: KodaXEvents;
   readonly compactionAntiThrash?: CompactionAntiThrashState;
   readonly compactionAntiThrashConfig?: CompactionAntiThrashConfig;
@@ -107,11 +113,9 @@ export interface TryIntelligentCompactOutput {
 }
 
 /**
- * CAP-060: LLM-based intelligent compaction with circuit breaker and
- * lifecycle event emission. When `needsCompact` is false OR the
- * circuit breaker is tripped, returns identity (`compacted = messages`,
- * counter unchanged) so the caller routes directly to the graceful
- * degradation gate.
+ * CAP-060: semantic compaction with circuit-breaker and lifecycle events.
+ * Breaker/cooldown skips apply only to optional early compaction; hard
+ * physical pressure always attempts summary and propagates typed failures.
  */
 export async function tryIntelligentCompact(
   input: TryIntelligentCompactInput,
@@ -119,8 +123,13 @@ export async function tryIntelligentCompact(
   const limit = input.circuitBreakerLimit ?? COMPACT_CIRCUIT_BREAKER_LIMIT;
   const circuitBreakerTripped = input.compactConsecutiveFailures >= limit;
   const antiThrash = input.compactionAntiThrash ?? createCompactionAntiThrashState();
+  const requiresCapacityRelief = exceedsContextCapacity({
+    contextWindow: input.contextWindow,
+    currentTokens: input.currentTokens,
+    reservedResponseTokens: input.reservedResponseTokens,
+  });
 
-  if (!input.needsCompact || circuitBreakerTripped) {
+  if (!input.needsCompact || (circuitBreakerTripped && !requiresCapacityRelief)) {
     return {
       compacted: input.messages,
       compactionUpdate: undefined,
@@ -130,7 +139,7 @@ export async function tryIntelligentCompact(
     };
   }
 
-  if (shouldSkipLlmCompaction(antiThrash)) {
+  if (shouldSkipLlmCompaction(antiThrash) && !requiresCapacityRelief) {
     const nextAntiThrash = consumeCompactionCooldown(antiThrash);
     if (input.emitCompactionDiagnostics) {
       input.events.onContextCompactionSkipped?.({
@@ -170,6 +179,8 @@ export async function tryIntelligentCompact(
       CODING_SUMMARY_PROMPT,
       CODING_UPDATE_SUMMARY_PROMPT,
       input.model,
+      false,
+      input.reservedResponseTokens,
     );
 
     if (result.compacted) {
@@ -179,6 +190,7 @@ export async function tryIntelligentCompact(
       // FEATURE_072: `postCompactAttachmentsForLineage` is also routed
       // via `compactionUpdate.postCompactAttachments` for REPL-side
       // native storage on the CompactionEntry.
+      const semanticCompacted = compacted;
       let postCompactAttachmentsForLineage: readonly KodaXMessage[] = [];
       if (result.artifactLedger && result.artifactLedger.length > 0) {
         const attached = await applyPostCompactAttachments({
@@ -189,6 +201,18 @@ export async function tryIntelligentCompact(
         });
         compacted = attached.compacted;
         postCompactAttachmentsForLineage = attached.postCompactAttachmentsForLineage;
+        const fixedOverheadTokens = Math.max(
+          0,
+          input.currentTokens - estimateTokens(input.messages),
+        );
+        if (exceedsContextCapacity({
+          contextWindow: input.contextWindow,
+          currentTokens: fixedOverheadTokens + estimateTokens(compacted),
+          reservedResponseTokens: input.reservedResponseTokens,
+        })) {
+          compacted = semanticCompacted;
+          postCompactAttachmentsForLineage = [];
+        }
       }
 
       didCompactMessages = true;
@@ -196,13 +220,16 @@ export async function tryIntelligentCompact(
       // context below trigger. "Partial success" (pruning only with
       // silent summary failure) would otherwise keep the counter at
       // zero forever and prevent graceful degradation from ever running.
-      const triggerTokens = input.contextWindow * (input.compactionConfig.triggerPercent / 100);
-      const postCompactTokens = estimateTokens(compacted);
+      const fixedOverheadTokens = Math.max(
+        0,
+        input.currentTokens - estimateTokens(input.messages),
+      );
+      const postCompactTokens = fixedOverheadTokens + estimateTokens(compacted);
       const savings = recordCompactionSavings(
         antiThrash,
         {
-          tokensBefore: result.tokensBefore,
-          tokensAfter: result.tokensAfter,
+          tokensBefore: input.currentTokens,
+          tokensAfter: postCompactTokens,
         },
         input.compactionAntiThrashConfig,
       );
@@ -226,10 +253,10 @@ export async function tryIntelligentCompact(
           detail: {
             contextWindow: input.contextWindow,
             triggerPercent: input.compactionConfig.triggerPercent,
-            triggerTokens: Math.floor(triggerTokens),
-            tokensBefore: result.tokensBefore,
+            capacityDriven: input.compactionConfig.triggerPercent >= 100,
+            tokensBefore: input.currentTokens,
             tokensAfter: postCompactTokens,
-            reduction: result.tokensBefore - postCompactTokens,
+            reduction: input.currentTokens - postCompactTokens,
           },
         });
       }
@@ -244,7 +271,13 @@ export async function tryIntelligentCompact(
           },
         });
       }
-      if (postCompactTokens < triggerTokens) {
+      if (!needsCompaction(
+        compacted,
+        input.compactionConfig,
+        input.contextWindow,
+        postCompactTokens,
+        input.reservedResponseTokens,
+      )) {
         nextFailures = 0;
       } else {
         // Counter increment is load-bearing (drives the circuit breaker) and
@@ -257,7 +290,7 @@ export async function tryIntelligentCompact(
             message: 'Compaction partial success remained above trigger.',
             detail: {
               postCompactTokens,
-              triggerTokens: Math.floor(triggerTokens),
+              capacityDriven: input.compactionConfig.triggerPercent >= 100,
               attempt: nextFailures,
               limit,
             },
@@ -275,14 +308,17 @@ export async function tryIntelligentCompact(
             : undefined,
       };
       input.events.onCompactStats?.({
-        tokensBefore: result.tokensBefore,
+        tokensBefore: input.currentTokens,
         tokensAfter: postCompactTokens,
       });
-      input.events.onCompact?.(result.tokensBefore);
+      input.events.onCompact?.(input.currentTokens);
     } else {
       compacted = result.messages;
     }
   } catch (error) {
+    if (error instanceof ContextCapacityError) {
+      throw error;
+    }
     // Error is handled, not swallowed: the counter increment drives the
     // circuit breaker and we fall through to deterministic graceful
     // degradation below. Report the real failure through diagnostics; raw
@@ -319,6 +355,8 @@ export interface GracefulDegradationGateInput {
   readonly contextWindow: number;
   readonly compactionConfig: CompactionConfig;
   readonly currentTokens: number;
+  readonly fixedOverheadTokens?: number;
+  readonly reservedResponseTokens?: number;
   readonly events: KodaXEvents;
 }
 
@@ -338,16 +376,30 @@ export interface GracefulDegradationGateOutput {
  * case (c), which is the root cause of monotonic context growth
  * observed in 0.7.18+.
  */
+/**
+ * Current CAP-062 contract: default no-op. Explicit legacy deterministic
+ * pruning can run only when `pruningThresholdTokens` is configured and the
+ * complete request remains physically over capacity.
+ */
 export function applyGracefulDegradationGate(
   input: GracefulDegradationGateInput,
 ): GracefulDegradationGateOutput {
   if (!input.needsCompact) {
     return { compacted: input.compacted, didCompactMessages: false };
   }
-  const triggerTokens = input.contextWindow * (input.compactionConfig.triggerPercent / 100);
-  const gapRatio = input.compactionConfig.pruningGapRatio ?? 0.8;
-  const stillOverTrigger = estimateTokens(input.compacted) > triggerTokens * gapRatio;
-  if (!stillOverTrigger) {
+  if (input.compactionConfig.pruningThresholdTokens === undefined) {
+    return { compacted: input.compacted, didCompactMessages: false };
+  }
+  const fixedOverheadTokens = input.fixedOverheadTokens ?? Math.max(
+    0,
+    input.currentTokens - estimateTokens(input.compacted),
+  );
+  const candidateTokens = fixedOverheadTokens + estimateTokens(input.compacted);
+  if (!exceedsContextCapacity({
+    contextWindow: input.contextWindow,
+    currentTokens: candidateTokens,
+    reservedResponseTokens: input.reservedResponseTokens,
+  })) {
     return { compacted: input.compacted, didCompactMessages: false };
   }
   const degraded = gracefulCompactDegradation(
@@ -362,9 +414,9 @@ export function applyGracefulDegradationGate(
   // step (CAP-063) fires `onCompactedMessages`.
   input.events.onCompactStats?.({
     tokensBefore: input.currentTokens,
-    tokensAfter: estimateTokens(degraded),
+    tokensAfter: fixedOverheadTokens + estimateTokens(degraded),
   });
-  input.events.onCompact?.(estimateTokens(degraded));
+  input.events.onCompact?.(input.currentTokens);
   return { compacted: degraded, didCompactMessages: true };
 }
 
@@ -377,6 +429,7 @@ export interface CommitCompactedHistoryInput {
   readonly didCompactMessages: boolean;
   readonly compactionUpdate: CompactionUpdate | undefined;
   readonly events: KodaXEvents;
+  readonly physicalTokensAfter?: number;
 }
 
 export interface CommitCompactedHistoryOutput {
@@ -403,7 +456,20 @@ export function commitCompactedHistory(
   if (!input.didCompactMessages) {
     return { messages: validated, contextTokenSnapshot: undefined };
   }
-  const snapshot = createEstimatedContextTokenSnapshot(validated);
+  const compactedEstimate = estimateTokens(input.compacted);
+  const validatedEstimate = estimateTokens(validated);
+  const snapshot: KodaXContextTokenSnapshot = {
+    currentTokens: Math.max(
+      0,
+      Math.round(
+        (input.physicalTokensAfter ?? compactedEstimate)
+          + validatedEstimate
+          - compactedEstimate,
+      ),
+    ),
+    baselineEstimatedTokens: validatedEstimate,
+    source: 'estimate',
+  };
   input.events.onCompactedMessages?.(validated, input.compactionUpdate);
   return { messages: validated, contextTokenSnapshot: snapshot };
 }
@@ -422,6 +488,7 @@ export interface CompactionLifecycleInput {
   readonly contextWindow: number;
   readonly systemPrompt: string;
   readonly currentTokens: number;
+  readonly reservedResponseTokens?: number;
   readonly events: KodaXEvents;
   readonly compactionAntiThrash?: CompactionAntiThrashState;
   readonly compactionAntiThrashConfig?: CompactionAntiThrashConfig;
@@ -443,8 +510,10 @@ export interface CompactionLifecycleOutput {
 }
 
 /**
- * Compose the three compaction phases into one call for the agent.ts
- * dispatch site. Phase ordering is load-bearing:
+ * Compose the three compaction phases into one call. The current default is
+ * semantic summary, no-op legacy degradation, then validated commit. A final
+ * physical-capacity check prevents submitting a known-overflow request.
+ * Phase ordering is load-bearing:
  *   1. `tryIntelligentCompact` — LLM compact (or skip on circuit
  *      breaker / `!needsCompact`)
  *   2. `applyGracefulDegradationGate` — deterministic prune fallback
@@ -464,6 +533,7 @@ export async function runCompactionLifecycle(
     contextWindow: input.contextWindow,
     systemPrompt: input.systemPrompt,
     currentTokens: input.currentTokens,
+    reservedResponseTokens: input.reservedResponseTokens,
     events: input.events,
     compactionAntiThrash: input.compactionAntiThrash,
     compactionAntiThrashConfig: input.compactionAntiThrashConfig,
@@ -476,15 +546,36 @@ export async function runCompactionLifecycle(
     contextWindow: input.contextWindow,
     compactionConfig: input.compactionConfig,
     currentTokens: input.currentTokens,
+    fixedOverheadTokens: Math.max(
+      0,
+      input.currentTokens - estimateTokens(input.messages),
+    ),
+    reservedResponseTokens: input.reservedResponseTokens,
     events: input.events,
   });
   const didCompactMessages =
     llmPhase.didCompactMessages || degradationPhase.didCompactMessages;
+  const physicalTokensAfter = Math.max(
+    0,
+    input.currentTokens - estimateTokens(input.messages),
+  ) + estimateTokens(degradationPhase.compacted);
+  if (exceedsContextCapacity({
+    contextWindow: input.contextWindow,
+    currentTokens: physicalTokensAfter,
+    reservedResponseTokens: input.reservedResponseTokens,
+  })) {
+    throw new ContextCapacityError({
+      contextWindow: input.contextWindow,
+      currentTokens: physicalTokensAfter,
+      reservedResponseTokens: input.reservedResponseTokens,
+    }, 'History compaction');
+  }
   const commitPhase = commitCompactedHistory({
     compacted: degradationPhase.compacted,
     didCompactMessages,
     compactionUpdate: llmPhase.compactionUpdate,
     events: input.events,
+    physicalTokensAfter,
   });
   return {
     messages: commitPhase.messages,

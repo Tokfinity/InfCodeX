@@ -30,7 +30,12 @@ import type {
   KodaXToolUseBlock,
 } from '@kodax-ai/llm';
 import { KODAX_ESCALATED_MAX_OUTPUT_TOKENS, KodaXProviderError } from '@kodax-ai/llm';
-import type { Agent, RunnerLlmResult } from '@kodax-ai/agent';
+import {
+  attachRunnerRecoveryTranscript,
+  buildAssistantMessageFromLlmResult,
+  type Agent,
+  type RunnerLlmResult,
+} from '@kodax-ai/agent';
 import { resolveProvider } from '../../../providers/index.js';
 import {
   KODAX_MAX_MAXTOKENS_RETRIES,
@@ -66,7 +71,8 @@ import {
   recordUsage as recordCostUsage,
   type CostTracker,
 } from '../../../agent-runtime/middleware/cost-tracker.js';
-import { estimateTokens } from '../../../tokenizer.js';
+import { countTokens, estimateTokens } from '../../../tokenizer.js';
+import { estimateToolSchemaTokens } from '../../../agent-runtime/context-budget.js';
 import {
   resolveReasoningMode,
   resolveRoleEffort,
@@ -139,6 +145,18 @@ function isEmptyCompletion(raw: {
   const text = (raw.textBlocks ?? []).map((b) => b.text).join('').trim();
   const toolCount = raw.toolBlocks?.length ?? 0;
   return text.length === 0 && toolCount === 0;
+}
+
+function estimateFinalEnvelopeTokens(
+  messages: readonly KodaXMessage[],
+  tools: readonly KodaXToolDefinition[],
+  system: string,
+): number {
+  const toolSchemaTokens = tools.reduce(
+    (total, definition) => total + estimateToolSchemaTokens(definition),
+    0,
+  );
+  return estimateTokens(messages) + countTokens(system) + toolSchemaTokens;
 }
 
 export function buildRunnerLlmAdapter(
@@ -689,10 +707,7 @@ export function buildRunnerLlmAdapter(
             // instead of `[]`. Non-enumerable so JSON-serializing telemetry
             // does not dump conversation history into logs. The outer catch
             // uses Array.isArray as a guard.
-            Object.defineProperty(error, '__kodaxRecoveredMessages', {
-              value: providerMessages,
-              enumerable: false,
-            });
+            attachRunnerRecoveryTranscript(error, providerMessages);
             throw error;
           }
 
@@ -720,10 +735,7 @@ export function buildRunnerLlmAdapter(
           'Provider returned no user-visible text or tool calls after recovery attempts; refusing to commit an empty assistant turn.',
           providerName,
         );
-        Object.defineProperty(error, '__kodaxRecoveredMessages', {
-          value: providerMessages,
-          enumerable: false,
-        });
+        attachRunnerRecoveryTranscript(error, providerMessages);
         throw error;
       }
 
@@ -860,27 +872,6 @@ export function buildRunnerLlmAdapter(
       };
     }
 
-    // v0.7.40 — refresh the API-accurate snapshot ref so the AMA
-    // compaction hook can compute `resolveContextTokenCount(transcript,
-    // snapshot)` on its next call. `messages` here is the adapter's
-    // input (the transcript at LLM-call time); subsequent Runner
-    // appends (assistant + tool_results) become the delta on top of
-    // this baseline. Mirrors SA path's `createCompletedTurnTokenSnapshot`
-    // in `run-substrate.ts`. Inlined rather than imported to keep the
-    // snapshot-construction logic colocated with its single consumer.
-    if (contextTokenSnapshotRef && streamResult.usage) {
-      const baselineEstimatedTokens = estimateTokens(messages as KodaXMessage[]);
-      const apiTotal = streamResult.usage.totalTokens;
-      if (typeof apiTotal === 'number' && Number.isFinite(apiTotal) && apiTotal >= 0) {
-        contextTokenSnapshotRef.current = {
-          currentTokens: apiTotal,
-          baselineEstimatedTokens,
-          source: 'api',
-          usage: streamResult.usage,
-        };
-      }
-    }
-
     // Record turn usage into the cost tracker so `/cost` reflects AMA spend.
     if (streamResult.usage) {
       const providerName = options.provider ?? 'anthropic';
@@ -939,6 +930,40 @@ export function buildRunnerLlmAdapter(
     // provider returns 400 if prior assistant turns with tool_use are
     // missing the thinking block in history.
     const thinkingBlocks = streamResult.thinkingBlocks;
-    return { text, toolCalls, thinkingBlocks };
+    const runnerResult: RunnerLlmResult = { text, toolCalls, thinkingBlocks };
+
+    // Anchor the API total to the same completed assistant transcript Runner
+    // appends. Future tool-result growth is then counted exactly once by
+    // `resolveContextTokenCount`; cached input remains included in apiTotal.
+    if (contextTokenSnapshotRef) {
+      const completedRunnerTranscript = [
+        ...messages,
+        buildAssistantMessageFromLlmResult(runnerResult),
+      ] as KodaXMessage[];
+      const apiTotal = streamResult.usage?.totalTokens;
+      if (typeof apiTotal === 'number' && Number.isFinite(apiTotal) && apiTotal >= 0) {
+        contextTokenSnapshotRef.current = {
+          currentTokens: apiTotal,
+          baselineEstimatedTokens: estimateTokens(completedRunnerTranscript),
+          source: 'api',
+          usage: streamResult.usage,
+        };
+      } else {
+        const completedProviderTranscript = [
+          ...transcript,
+          buildAssistantMessageFromLlmResult(runnerResult),
+        ] as KodaXMessage[];
+        contextTokenSnapshotRef.current = {
+          currentTokens: estimateFinalEnvelopeTokens(
+            completedProviderTranscript,
+            wireTools,
+            system,
+          ),
+          baselineEstimatedTokens: estimateTokens(completedRunnerTranscript),
+          source: 'estimate',
+        };
+      }
+    }
+    return runnerResult;
   };
 }

@@ -20,7 +20,8 @@
 import { describe, expect, it } from 'vitest';
 
 import { createAgent, type Agent } from './agent.js';
-import { Runner } from './runner.js';
+import { readRunnerRecoveryTranscript, Runner } from './runner.js';
+import { ContextCapacityError } from '../context-capacity.js';
 import type {
   RunnableTool,
   RunnerLlmResult,
@@ -168,6 +169,32 @@ describe('Runner compactionHook — FEATURE_179 trigger parity', () => {
     await expect(
       Runner.run(agentNoTools, 'hi', { llm, compactionHook: hook, tracer: null }),
     ).resolves.toMatchObject({ output: 'ok' });
+  });
+
+  it('carries the latest canonical transcript on a hard-capacity error', async () => {
+    const capacityError = new ContextCapacityError({
+      contextWindow: 1_000,
+      currentTokens: 2_000,
+      reservedResponseTokens: 100,
+    }, 'Runner compaction test');
+
+    let caught: unknown;
+    try {
+      await Runner.run(agentNoTools, 'RECOVERY_TRANSCRIPT_SENTINEL', {
+        llm: async () => 'unreachable',
+        compactionHook: async () => {
+          throw capacityError;
+        },
+        tracer: null,
+      });
+    } catch (error) {
+      caught = error;
+    }
+
+    expect(caught).toBe(capacityError);
+    expect(readRunnerRecoveryTranscript(caught)).toEqual([
+      { role: 'user', content: 'RECOVERY_TRANSCRIPT_SENTINEL' },
+    ]);
   });
 
   it('fires the hook on iter 0 of a second Runner.run() with an existing transcript (idle-yield resume)', async () => {

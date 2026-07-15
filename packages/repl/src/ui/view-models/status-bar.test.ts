@@ -83,6 +83,36 @@ describe("status-bar (Ink view-model) reasoning effort display", () => {
   });
 });
 
+describe("status-bar context pressure", () => {
+  it("uses physical capacity for the default capacity-driven policy", () => {
+    const viewModel = buildStatusBarViewModel(baseProps({
+      contextUsage: {
+        currentTokens: 164_000,
+        contextWindow: 200_000,
+        triggerPercent: 100,
+        reservedResponseTokens: 32_000,
+      },
+    }));
+
+    expect(viewModel.segments.find((segment) => segment.id === "context-usage")?.color)
+      .toBe("red");
+  });
+
+  it("keeps an explicit early trigger as the lower pressure threshold", () => {
+    const viewModel = buildStatusBarViewModel(baseProps({
+      contextUsage: {
+        currentTokens: 151_000,
+        contextWindow: 200_000,
+        triggerPercent: 75,
+        reservedResponseTokens: 32_000,
+      },
+    }));
+
+    expect(viewModel.segments.find((segment) => segment.id === "context-usage")?.color)
+      .toBe("red");
+  });
+});
+
 describe("status-bar (Ink view-model) — auto-mode engine indicator (FEATURE_092 phase 2b.8)", () => {
   it("renders Auto[LLM] when permissionMode=auto and engine=llm", () => {
     const text = getStatusBarText(baseProps({ permissionMode: "auto", autoModeEngine: "llm" }));

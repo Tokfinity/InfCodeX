@@ -243,6 +243,8 @@ export interface StatusBarProps {
     contextWindow: number;
     /** Compaction trigger percentage (0-100) */
     triggerPercent: number;
+    /** Provider output capacity reserved from the physical context window. */
+    reservedResponseTokens?: number;
   };
   /** Whether current busy/thinking status should be visible in the bar */
   showBusyStatus?: boolean;

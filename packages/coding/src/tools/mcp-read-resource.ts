@@ -8,13 +8,29 @@ function stringifyValue(value: unknown): string | undefined {
     return undefined;
   }
   if (typeof value === 'string') {
-    return value.trim() || undefined;
+    return value.trim().length > 0 ? value : undefined;
   }
   try {
-    return JSON.stringify(value, null, 2);
+    return JSON.stringify(value);
   } catch {
     return String(value);
   }
+}
+
+function combineDistinctContent(content: unknown, structuredContent: unknown): string | undefined {
+  const primary = stringifyValue(content);
+  const structured = stringifyValue(structuredContent);
+  if (!primary) return structured;
+  if (!structured || structured === primary) return primary;
+  return `${primary}\n\nStructured content:\n${structured}`;
+}
+
+function omitRepeatedMetadata(
+  metadata: Record<string, unknown> | undefined,
+): Record<string, unknown> {
+  return Object.fromEntries(
+    Object.entries(metadata ?? {}).filter(([key]) => key !== 'providerId' && key !== 'capabilityId'),
+  );
 }
 
 export async function toolMcpReadResource(
@@ -44,17 +60,11 @@ export async function toolMcpReadResource(
       freshness: 'unknown',
       provider: 'mcp',
       summary: `Read MCP resource ${capabilityId}.`,
-      content: stringifyValue(result.content) ?? stringifyValue(result.structuredContent),
+      content: combineDistinctContent(result.content, result.structuredContent),
       items: [],
-      artifacts: [{
-        kind: 'provider',
-        label: capabilityId,
-        value: capabilityId,
-      }],
       metadata: {
-        capabilityId,
         capabilityKind: result.kind,
-        ...(result.metadata ?? {}),
+        ...omitRepeatedMetadata(result.metadata),
       },
     }, ctx);
   } catch (error) {

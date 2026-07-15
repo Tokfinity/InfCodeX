@@ -151,7 +151,7 @@ function describeManagedBridgeTools(
 
   const active = new Map(activeDefinitions.map((definition) => [definition.name, definition]));
   const lines: string[] = [];
-  for (const name of names.slice(0, 8)) {
+  for (const name of names) {
     const definition = active.get(name);
     if (!definition) {
       lines.push(`<!-- ${name}: not active in the current runtime -->`);
@@ -165,10 +165,7 @@ function describeManagedBridgeTools(
     })}</function>`);
   }
 
-  const output = lines.join('\n');
-  return output.length <= 16_000
-    ? output
-    : `${output.slice(0, 16_000)}\n<!-- tool_describe output truncated -->`;
+  return lines.join('\n');
 }
 
 function parseManagedBridgeCallInput(input: Record<string, unknown>): (

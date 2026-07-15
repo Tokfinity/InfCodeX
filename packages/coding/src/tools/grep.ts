@@ -3,16 +3,11 @@ import nodePath from 'node:path';
 import { glob as globAsync } from 'glob';
 import type { KodaXToolExecutionContext } from '../types.js';
 import { resolveExecutionPathOrCwd } from '../runtime-paths.js';
-import { formatSize, persistToolOutput, truncateHead, truncateLine } from './truncate.js';
 
 /* ---------- Constants ---------- */
 
 const MAX_GREP_PATTERN_LENGTH = 256;
 const VALID_OUTPUT_MODES = new Set(['content', 'files_with_matches', 'count']);
-const MAX_GREP_FILES = 100;
-const MAX_GREP_RESULTS = 200;
-const MAX_GREP_OUTPUT_LINES = 400;
-const MAX_GREP_OUTPUT_BYTES = 24 * 1024;
 const DEFAULT_HEAD_LIMIT = 250;
 
 const FILE_TYPE_EXTENSIONS: Readonly<Record<string, readonly string[]>> = {
@@ -161,7 +156,7 @@ function matchFileLines(
   if (!hasContext) {
     for (const idx of matchIndices) {
       if (entries.length >= remaining) break;
-      const text = truncateLine(lines[idx]!.trim()).text;
+      const text = lines[idx]!.trim();
       entries.push(`${filePath}:${idx + 1}: ${text}`);
     }
     return { entries, matchCount: matchIndices.length };
@@ -183,7 +178,7 @@ function matchFileLines(
     for (let i = start; i <= end; i++) {
       if (i <= lastOutput) continue;
       const sep = matchSet.has(i) ? ':' : '-';
-      const text = truncateLine(lines[i]!.trim()).text;
+      const text = lines[i]!.trim();
       entries.push(`${filePath}${sep}${i + 1}${sep} ${text}`);
     }
     lastOutput = end;
@@ -220,7 +215,7 @@ function matchFileMultiline(
     const endOffset = match.index + Math.max(match[0].length - 1, 0);
     const endLine = offsetToLine(lineOffsets, endOffset);
     matchRanges.push({ startLine, endLine });
-    if (matchRanges.length >= MAX_GREP_RESULTS) break;
+    if (outputMode !== 'count' && matchRanges.length >= remaining) break;
     if (match[0].length === 0) globalRegex.lastIndex++;
   }
 
@@ -250,7 +245,7 @@ function matchFileMultiline(
     for (let i = start; i <= end; i++) {
       if (i <= lastOutput) continue;
       const sep = matchLineSet.has(i) ? ':' : '-';
-      const text = truncateLine(lines[i]!.trim()).text;
+      const text = lines[i]!.trim();
       entries.push(`${filePath}${sep}${i + 1}${sep} ${text}`);
     }
     lastOutput = end;
@@ -261,27 +256,24 @@ function matchFileMultiline(
 
 /* ---------- Output ---------- */
 
-async function finalizeGrepResults(
-  results: string[],
-  ctx: KodaXToolExecutionContext,
-): Promise<string> {
-  const joined = results.join('\n');
-  const preview = truncateHead(joined, {
-    maxLines: MAX_GREP_OUTPUT_LINES,
-    maxBytes: MAX_GREP_OUTPUT_BYTES,
-  });
+function buildReadWarning(errors: readonly string[]): string {
+  if (errors.length === 0) return '';
+  return `\n\n[SOURCE_INCOMPLETE: ${errors.length} file(s) could not be read: ${errors.join('; ')}.]`;
+}
 
-  if (!preview.truncated) return joined;
+function buildPageMarker(offset: number, resultCount: number, hasMore: boolean): string {
+  if (!hasMore) return '';
+  return `\n\n[More matches available. Continue with offset=${offset + resultCount}.]`;
+}
 
-  let outputPath: string | undefined;
-  try {
-    outputPath = await persistToolOutput('grep', joined, ctx);
-  } catch {
-    outputPath = undefined;
+const MAX_SCAN_FILES_PER_CALL = 512;
+
+function readScanOffset(value: unknown): number | undefined {
+  if (value === undefined) return 0;
+  if (typeof value !== 'number' || !Number.isFinite(value) || value < 0) {
+    return undefined;
   }
-
-  const saved = outputPath ? ` Full output saved to: ${outputPath}.` : '';
-  return `${preview.content}\n\n[Grep output truncated: showing ${preview.outputLines} of ${preview.totalLines} lines (${formatSize(preview.outputBytes)} of ${formatSize(preview.totalBytes)}).${saved} Narrow the pattern or path, or switch to files_with_matches/count first.]`;
+  return Math.floor(value);
 }
 
 /* ---------- Main handler ---------- */
@@ -298,8 +290,20 @@ export async function toolGrep(
   const multiline = (input.multiline as boolean) ?? false;
   const fileType = input.type as string | undefined;
   const fileGlob = input.glob as string | undefined;
-  const offset = Math.max(0, (input.offset as number) ?? 0);
-  const headLimit = (input.head_limit as number) ?? DEFAULT_HEAD_LIMIT;
+  const offset = Math.max(0, Math.floor((input.offset as number) ?? 0));
+  const scanOffset = readScanOffset(input.scan_offset);
+  if (scanOffset === undefined) {
+    return '[Tool Error] grep: scan_offset must be a non-negative finite number.';
+  }
+  const rawHeadLimit = input.head_limit;
+  if (rawHeadLimit !== undefined && (
+    typeof rawHeadLimit !== 'number'
+    || !Number.isFinite(rawHeadLimit)
+    || rawHeadLimit < 0
+  )) {
+    return '[Tool Error] grep: head_limit must be a non-negative finite number.';
+  }
+  const headLimit = Math.floor(rawHeadLimit ?? DEFAULT_HEAD_LIMIT);
   const contextValue =
     (input.context as number) ?? (input['-C'] as number) ?? 0;
   const beforeCtx = Math.max(
@@ -344,14 +348,19 @@ export async function toolGrep(
   }
   if (!stat) return `[Tool Error] grep: Path not found: ${searchPath}`;
 
-  const collectLimit =
-    headLimit === 0 ? MAX_GREP_RESULTS * 10 : headLimit + offset;
+  const collectLimit = outputMode === 'count' || headLimit === 0
+    ? Number.POSITIVE_INFINITY
+    : headLimit + offset + 1;
   const allEntries: string[] = [];
+  const readErrors: string[] = [];
   let totalMatchCount = 0;
+  let scannedFiles = 0;
+  let candidateFiles = 0;
 
   const processFile = async (filePath: string): Promise<void> => {
     if (allEntries.length >= collectLimit) return;
     if (typeExtensions && !fileMatchesType(filePath, typeExtensions)) return;
+    scannedFiles += 1;
     try {
       const content = await fs.readFile(filePath, 'utf-8');
       const lines = content.split('\n');
@@ -378,32 +387,43 @@ export async function toolGrep(
           );
       allEntries.push(...result.entries);
       totalMatchCount += result.matchCount;
-    } catch {
-      // Skip unreadable files and continue with a best-effort search result.
+    } catch (error) {
+      const message = error instanceof Error ? error.message : String(error);
+      readErrors.push(`${filePath}: ${message}`);
     }
   };
 
   if (stat.isFile()) {
-    await processFile(resolvedPath);
+    candidateFiles = 1;
+    if (scanOffset === 0) await processFile(resolvedPath);
   } else {
     const globPattern = fileGlob ?? '**/*';
-    const files = (
-      await globAsync(globPattern, {
-        cwd: resolvedPath,
-        nodir: true,
-        absolute: true,
-        ignore: ['**/node_modules/**', '**/.*'],
-      })
-    ).slice(0, MAX_GREP_FILES);
+    const files = await globAsync(globPattern, {
+      cwd: resolvedPath,
+      nodir: true,
+      absolute: true,
+      ignore: ['**/node_modules/**', '**/.*'],
+    });
 
-    for (const file of files) {
+    const eligibleFiles = typeExtensions
+      ? files.filter((file) => fileMatchesType(file, typeExtensions))
+      : files;
+    eligibleFiles.sort((left, right) => left.localeCompare(right));
+    candidateFiles = eligibleFiles.length;
+    for (const file of eligibleFiles.slice(scanOffset, scanOffset + MAX_SCAN_FILES_PER_CALL)) {
       await processFile(file);
       if (allEntries.length >= collectLimit) break;
     }
   }
 
-  if (outputMode === 'count') return `${totalMatchCount} matches`;
-  if (allEntries.length === 0) return `No matches for "${pattern}"`;
+  const readWarning = buildReadWarning(readErrors);
+  const nextScanOffset = scanOffset + scannedFiles;
+  const scanWarning = nextScanOffset < candidateFiles
+    ? `\n\n[SOURCE_INCOMPLETE: scanned ${scannedFiles} of ${candidateFiles} candidate file(s) from scan_offset=${scanOffset}; continue with scan_offset=${nextScanOffset} or narrow path.]`
+    : '';
+  const sourceWarning = `${readWarning}${scanWarning}`;
+  if (outputMode === 'count') return `${totalMatchCount} matches${sourceWarning}`;
+  if (allEntries.length === 0) return `No matches for "${pattern}"${sourceWarning}`;
 
   const sliced =
     headLimit === 0
@@ -411,8 +431,9 @@ export async function toolGrep(
       : allEntries.slice(offset, offset + headLimit);
 
   if (sliced.length === 0) {
-    return `No matches for "${pattern}" in the requested range (offset=${offset})`;
+    return `No matches for "${pattern}" in the requested range (offset=${offset})${sourceWarning}`;
   }
 
-  return finalizeGrepResults(sliced, ctx);
+  const hasMore = headLimit > 0 && allEntries.length > offset + headLimit;
+  return `${sliced.join('\n')}${buildPageMarker(offset, sliced.length, hasMore)}${sourceWarning}`;
 }

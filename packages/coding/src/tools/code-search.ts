@@ -11,7 +11,7 @@ import type { KodaXRetrievalItem } from './types.js';
 
 const DEFAULT_LIMIT = 20;
 const MAX_LIMIT = 50;
-const MAX_SCANNED_FILES = 300;
+const MAX_SCAN_FILES_PER_CALL = 512;
 const SEARCHABLE_EXTENSIONS = new Set([
   '.ts', '.tsx', '.js', '.jsx', '.mjs', '.cjs',
   '.json', '.md', '.yml', '.yaml',
@@ -42,9 +42,15 @@ async function collectCandidateFiles(searchRoot: string): Promise<string[]> {
     ],
   });
 
-  return files
-    .filter(isSearchableFile)
-    .slice(0, MAX_SCANNED_FILES);
+  return files.filter(isSearchableFile).sort((left, right) => left.localeCompare(right));
+}
+
+function readScanOffset(value: unknown): number {
+  if (value === undefined) return 0;
+  if (typeof value !== 'number' || !Number.isFinite(value) || value < 0) {
+    throw new Error('scan_offset must be a non-negative finite number.');
+  }
+  return Math.floor(value);
 }
 
 function clampLimit(input: unknown): number {
@@ -77,13 +83,19 @@ export async function toolCodeSearch(
       throw new Error('query is required.');
     }
     const providerId = readOptionalString(input, 'provider_id');
+    const limit = clampLimit(input.limit);
     if (providerId) {
       if (!ctx.extensionRuntime) {
         throw new Error('provider-backed code_search requires an active extension runtime.');
       }
-      const providerResults = await ctx.extensionRuntime.searchCapabilities(providerId, query, {
-        limit: clampLimit(input.limit),
+      const probedResults = await ctx.extensionRuntime.searchCapabilities(providerId, query, {
+        limit: limit + 1,
       });
+      const hasMore = probedResults.length > limit;
+      const providerResults = probedResults.slice(0, limit);
+      const limitStatus = hasMore
+        ? `[RESULT_LIMIT_REACHED: limit=${limit}; additional provider matches were omitted.] `
+        : '';
       return finalizeRetrievalResult({
         tool: 'code_search',
         query,
@@ -91,10 +103,10 @@ export async function toolCodeSearch(
         trust: 'provider',
         freshness: 'unknown',
         provider: providerId,
-        summary: providerResults.length > 0
+        summary: `${limitStatus}${providerResults.length > 0
           ? `Provider ${providerId} returned ${providerResults.length} code search result(s).`
-          : `Provider ${providerId} returned no code search results for "${query}".`,
-        items: convertProviderSearchResults(providerResults, clampLimit(input.limit)),
+          : `Provider ${providerId} returned no code search results for "${query}".`}`,
+        items: convertProviderSearchResults(providerResults, limit),
         metadata: {
           searchRoot: 'provider-search',
         },
@@ -103,26 +115,31 @@ export async function toolCodeSearch(
 
     const searchRoot = resolveExecutionPathOrCwd(readOptionalString(input, 'path'), ctx);
     const caseSensitive = input.case_sensitive === true;
-    const limit = clampLimit(input.limit);
     const queryNeedle = caseSensitive ? query : query.toLowerCase();
     const files = await collectCandidateFiles(searchRoot);
-    const items: KodaXRetrievalItem[] = [];
+    const scanOffset = readScanOffset(input.scan_offset);
+    const scanCandidates = files.slice(scanOffset, scanOffset + MAX_SCAN_FILES_PER_CALL);
+    const probedItems: KodaXRetrievalItem[] = [];
+    const probeLimit = limit + 1;
+    let unreadableFiles = 0;
+    let scannedFiles = 0;
 
-    for (const filePath of files) {
-      if (items.length >= limit) {
+    for (const filePath of scanCandidates) {
+      if (probedItems.length >= probeLimit) {
         break;
       }
+      scannedFiles += 1;
 
       const pathHaystack = caseSensitive ? filePath : filePath.toLowerCase();
       if (pathHaystack.includes(queryNeedle)) {
-        items.push({
+        probedItems.push({
           title: filePath,
           locator: filePath,
           snippet: 'Filename/path match',
           score: 1,
           metadata: { matchType: 'path' },
         });
-        if (items.length >= limit) {
+        if (probedItems.length >= probeLimit) {
           break;
         }
       }
@@ -131,17 +148,18 @@ export async function toolCodeSearch(
       try {
         content = await fs.readFile(filePath, 'utf-8');
       } catch {
+        unreadableFiles += 1;
         continue;
       }
 
       const lines = content.split('\n');
-      for (let index = 0; index < lines.length && items.length < limit; index++) {
+      for (let index = 0; index < lines.length && probedItems.length < probeLimit; index++) {
         const rawLine = lines[index] ?? '';
         const haystack = caseSensitive ? rawLine : rawLine.toLowerCase();
         if (!haystack.includes(queryNeedle)) {
           continue;
         }
-        items.push({
+        probedItems.push({
           title: `${filePath}:${index + 1}`,
           locator: `${filePath}:${index + 1}`,
           snippet: buildSnippet(rawLine, query, caseSensitive),
@@ -151,15 +169,27 @@ export async function toolCodeSearch(
       }
     }
 
+    const hasMore = probedItems.length > limit;
+    const items = probedItems.slice(0, limit);
+    const nextScanOffset = scanOffset + scannedFiles;
+    const sourceIncomplete = nextScanOffset < files.length;
+    const limitStatus = hasMore
+      ? `[RESULT_LIMIT_REACHED: limit=${limit}; additional matches were omitted. Narrow the query or path.] `
+      : '';
+
     return finalizeRetrievalResult({
       tool: 'code_search',
       query,
       scope: 'workspace',
       trust: 'workspace',
       freshness: 'snapshot',
-      summary: items.length > 0
+      summary: `${unreadableFiles > 0
+        ? `[SOURCE_INCOMPLETE: ${unreadableFiles} candidate file(s) could not be read.] `
+        : ''}${sourceIncomplete
+        ? `[SOURCE_INCOMPLETE: scanned ${scannedFiles} of ${files.length} candidate file(s) from scan_offset=${scanOffset}; continue with scan_offset=${nextScanOffset} or narrow path.] `
+        : ''}${limitStatus}${items.length > 0
         ? `Found ${items.length} code search matches under ${searchRoot}.`
-        : `No code search matches for "${query}" under ${searchRoot}.`,
+        : `No code search matches for "${query}" under ${searchRoot}.`}`,
       items,
       artifacts: items.map((item) => ({
         kind: 'path',
@@ -168,7 +198,10 @@ export async function toolCodeSearch(
       })),
       metadata: {
         searchRoot,
-        scannedFiles: files.length,
+        scannedFiles,
+        candidateFiles: files.length,
+        scanOffset,
+        unreadableFiles,
       },
     }, ctx);
   } catch (error) {

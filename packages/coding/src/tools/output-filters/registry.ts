@@ -1,6 +1,4 @@
 import { persistToolOutput } from '../truncate.js';
-import { applyCompiledOutputFilters } from './compiled/index.js';
-import { applyDeclarativeOutputFilters } from './declarative.js';
 import { applyGenericOutputFilter } from './generic.js';
 import { neverWorse } from './never-worse.js';
 import type {
@@ -12,8 +10,6 @@ import type {
 
 const DEFAULT_FILTERS: readonly BashOutputFilter[] = [
   applyGenericOutputFilter,
-  applyCompiledOutputFilters,
-  applyDeclarativeOutputFilters,
 ];
 
 export function renderBashBody(body: FilterResult): string {
@@ -71,6 +67,15 @@ export async function filterBashOutputBodies(
   try {
     for (const filter of filters) {
       filtered = filter({ ...filtered, command: input.command });
+    }
+
+    if (
+      filtered.stdout === raw.stdout
+      && filtered.stderr === raw.stderr
+      && filtered.lossiness === 'none'
+      && filtered.note === undefined
+    ) {
+      return raw;
     }
 
     return await finalizeFilteredBashOutput({

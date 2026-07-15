@@ -15,6 +15,9 @@
  */
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
 import { _resetMessageQueueForTests, getMessageQueue } from '@kodax-ai/agent';
+import { mkdtemp, rm } from 'node:fs/promises';
+import { tmpdir } from 'node:os';
+import { join } from 'node:path';
 
 import { toolDispatchChildTask } from './dispatch-child-tasks.js';
 // FEATURE_155 v0.7.39 Slice C1 — `await_child_task` tool deleted; all
@@ -126,6 +129,54 @@ describe('FEATURE_119 Pattern B — async dispatch', () => {
     // Settle so the test does not leak an unresolved promise.
     resolveExec(buildSuccessResult('c1', ['ok']));
     await registry.get('c1');
+  });
+
+  it('queues a large completed child summary verbatim for the envelope capacity owner', async () => {
+    const outputDir = await mkdtemp(join(tmpdir(), 'kodax-child-raw-'));
+    process.env.KODAX_TOOL_OUTPUT_DIR = outputDir;
+    const evidence = `start-sentinel\n${'evidence line\n'.repeat(6_000)}end-sentinel`;
+    try {
+      mockExec.mockResolvedValue(buildSuccessResult('large-async', [evidence]));
+      const registry = new Map<string, Promise<KodaXChildExecutionResult>>();
+
+      await drainGeneratorReturn(toolDispatchChildTask(
+        { id: 'large-async', objective: 'scan' },
+        buildBaseCtx(registry),
+      ));
+      await registry.get('large-async');
+
+      const banner = getMessageQueue().peek({ maxPriority: 'background' })[0]?.content ?? '';
+      expect(banner).toContain('start-sentinel');
+      expect(banner).toContain('end-sentinel');
+      expect(banner).not.toContain('KODAX_RESULT_INCOMPLETE');
+      expect(await import('node:fs/promises').then((fs) => fs.readdir(outputDir))).toEqual([]);
+    } finally {
+      delete process.env.KODAX_TOOL_OUTPUT_DIR;
+      await rm(outputDir, { recursive: true, force: true });
+    }
+  });
+
+  it('returns a large synchronous child summary verbatim for the normal batch owner', async () => {
+    const outputDir = await mkdtemp(join(tmpdir(), 'kodax-child-raw-'));
+    process.env.KODAX_TOOL_OUTPUT_DIR = outputDir;
+    process.env.KODAX_ASYNC_DISPATCH = '0';
+    const evidence = `start-sentinel\n${'evidence line\n'.repeat(6_000)}end-sentinel`;
+    try {
+      mockExec.mockResolvedValue(buildSuccessResult('large-sync', [evidence]));
+
+      const result = await drainGeneratorReturn(toolDispatchChildTask(
+        { id: 'large-sync', objective: 'scan' },
+        buildBaseCtx(undefined),
+      ));
+
+      expect(result).toContain('start-sentinel');
+      expect(result).toContain('end-sentinel');
+      expect(result).not.toContain('KODAX_RESULT_INCOMPLETE');
+      expect(await import('node:fs/promises').then((fs) => fs.readdir(outputDir))).toEqual([]);
+    } finally {
+      delete process.env.KODAX_TOOL_OUTPUT_DIR;
+      await rm(outputDir, { recursive: true, force: true });
+    }
   });
 
   it('passes parent events into child executor options for child live telemetry', async () => {

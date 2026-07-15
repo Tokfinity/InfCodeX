@@ -97,6 +97,8 @@ export interface RunnerToolObserver {
 export interface RunnerToolContext {
   readonly agent: Agent;
   readonly abortSignal?: AbortSignal;
+  /** Transcript that the resulting tool_result batch will extend. */
+  readonly transcript?: readonly AgentMessage[];
   /** The agent's Span, so tool implementations can nest custom spans if needed. */
   readonly agentSpan?: Span | null;
   /**
@@ -123,6 +125,18 @@ export interface RunnerToolResult {
   readonly isError?: boolean;
   readonly metadata?: Record<string, unknown>;
 }
+
+/** Complete settled batch presented once before the tool_result message. */
+export interface RunnerToolResultBatch {
+  readonly calls: readonly RunnerToolCall[];
+  readonly results: readonly RunnerToolResult[];
+  readonly transcript: readonly AgentMessage[];
+}
+
+/** Optional host-owned transform for aggregate result admission. */
+export type RunnerToolResultBatchTransform = (
+  batch: RunnerToolResultBatch,
+) => Promise<readonly RunnerToolResult[]>;
 
 /**
  * A tool bundled with its executor. Extends `AgentTool` (the wire-format
@@ -283,6 +297,7 @@ export function buildToolResultMessage(
       tool_use_id: call.id,
       content: result.content,
       ...(result.isError === true ? { is_error: true } : {}),
+      ...(result.metadata ? { metadata: result.metadata } : {}),
     };
     blocks.push(block);
   }

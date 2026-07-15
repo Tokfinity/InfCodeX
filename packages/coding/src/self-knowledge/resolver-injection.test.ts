@@ -50,9 +50,9 @@ describe('FEATURE_221 injectable self-manual', () => {
     // 'providers' is a KodaX base topic, still reachable.
     expect(resolveKodaXManual({ topic: 'providers' }, SPACE).matchedTopic).toBe('providers');
     // index lists both injected and base topics.
-    const index = resolveKodaXManual({}, SPACE).content;
-    expect(index).toContain('space-settings');
-    expect(index).toContain('troubleshooting');
+    const topicIds = resolveKodaXManual({}, SPACE).topics.map((topic) => topic.id);
+    expect(topicIds).toContain('space-settings');
+    expect(topicIds).toContain('troubleshooting');
   });
 
   it('re-brands the scope anchor and index title with productName', () => {
@@ -69,13 +69,34 @@ describe('FEATURE_221 injectable self-manual', () => {
     expect(resolveKodaXManual({ topic: 'providers' }).content).toContain('~/.kodax/config.json');
   });
 
-  it('byte-caps an oversized injected topic body', () => {
-    const huge = 'x'.repeat(20000);
+  it('returns an oversized injected topic body completely', () => {
+    const huge = `BEGIN-${'x'.repeat(20000)}-END`;
     const r = resolveKodaXManual(
       { topic: 'big' },
       { extraTopics: [{ id: 'big', title: 'Big', summary: 's', body: huge }] },
     );
-    expect(Buffer.byteLength(r.content, 'utf-8')).toBeLessThanOrEqual(MANUAL_TOPIC_MAX_BYTES);
+    expect(Buffer.byteLength(r.content, 'utf-8')).toBeGreaterThan(MANUAL_TOPIC_MAX_BYTES);
+    expect(r.content.endsWith(huge)).toBe(true);
+    expect(r.content).not.toContain('truncated');
+    expect(r.topics).toEqual([]);
+  });
+
+  it('returns every injected index topic as structured metadata without byte cropping', () => {
+    const extraTopics = Array.from({ length: 30 }, (_, index) => ({
+      id: `topic-${index}`,
+      title: `Topic ${index}`,
+      summary: `summary-${index}-${'detail'.repeat(40)}`,
+      body: `body-${index}`,
+    }));
+    const r = resolveKodaXManual({}, { baseTopics: [], extraTopics });
+
+    expect(r.topics).toHaveLength(extraTopics.length);
+    expect(r.topics.at(-1)).toEqual({
+      id: 'topic-29',
+      title: 'Topic 29',
+      summary: extraTopics[29]?.summary,
+    });
+    expect(Buffer.byteLength(JSON.stringify(r.topics), 'utf-8')).toBeGreaterThan(2048);
   });
 
   it('is backward compatible — no options resolves the default KodaX manual', () => {
@@ -115,11 +136,11 @@ describe('FEATURE_221 injectable self-manual', () => {
 });
 
 describe('FEATURE_221 baseTopics seed control (curate / replace)', () => {
-  it('undefined baseTopics seeds the full base (byte-identical default)', () => {
+  it('undefined baseTopics seeds the full base', () => {
     const withUndefined = resolveKodaXManual({}, { extraTopics: SPACE_TOPICS });
-    const index = withUndefined.content;
-    for (const id of MANUAL_TOPIC_IDS) expect(index).toContain(id);
-    expect(index).toContain('space-settings'); // extras still appended
+    const topicIds = withUndefined.topics.map((topic) => topic.id);
+    for (const id of MANUAL_TOPIC_IDS) expect(topicIds).toContain(id);
+    expect(topicIds).toContain('space-settings'); // extras still appended
   });
 
   it('baseTopics: [] is a full white-label replace — zero base topics seeded', () => {
@@ -127,11 +148,11 @@ describe('FEATURE_221 baseTopics seed control (curate / replace)', () => {
     // A base-only id no longer resolves (not seeded).
     expect(resolveKodaXManual({ topic: 'providers' }, opts).matchedTopic).not.toBe('providers');
     // The index carries only the injected topics.
-    const index = resolveKodaXManual({}, opts).content;
-    expect(index).toContain('space-settings');
-    expect(index).toContain('overview'); // injected override id
-    expect(index).not.toContain('troubleshooting'); // base id, dropped
-    expect(index).not.toContain('- install:'); // base id, dropped
+    const topicIds = resolveKodaXManual({}, opts).topics.map((topic) => topic.id);
+    expect(topicIds).toContain('space-settings');
+    expect(topicIds).toContain('overview'); // injected override id
+    expect(topicIds).not.toContain('troubleshooting'); // base id, dropped
+    expect(topicIds).not.toContain('install'); // base id, dropped
   });
 
   it('baseTopics: subset seeds exactly those base ids + injected', () => {
@@ -150,8 +171,7 @@ describe('FEATURE_221 baseTopics seed control (curate / replace)', () => {
     });
     // Mechanism topics a product inherits are retained…
     expect(resolveKodaXManual({ topic: 'mcp' }, { baseTopics: KODAX_UNDERLYING_CAPABILITY_TOPICS }).matchedTopic).toBe('mcp');
-    expect(r.content).toContain('providers');
-    expect(r.content).toContain('config');
+    expect(r.topics.map((topic) => topic.id)).toEqual(expect.arrayContaining(['providers', 'config']));
     // …while KodaX-CLI-specific UX topics are excluded.
     expect(KODAX_UNDERLYING_CAPABILITY_TOPICS).not.toContain('install');
     expect(KODAX_UNDERLYING_CAPABILITY_TOPICS).not.toContain('doctor');
@@ -163,12 +183,10 @@ describe('FEATURE_221 baseTopics seed control (curate / replace)', () => {
   });
 
   it('dedups a repeated id in baseTopics (no duplicate index entry)', () => {
-    const index = resolveKodaXManual({}, { baseTopics: ['providers', 'providers', 'config'] }).content;
-    const providersLines = index.split('\n').filter((l) => l.startsWith('- providers:')).length;
-    expect(providersLines).toBe(1);
+    const topics = resolveKodaXManual({}, { baseTopics: ['providers', 'providers', 'config'] }).topics;
+    expect(topics.filter((topic) => topic.id === 'providers')).toHaveLength(1);
     // both distinct ids still present
-    expect(index).toContain('- providers:');
-    expect(index).toContain('- config:');
+    expect(topics.map((topic) => topic.id)).toEqual(['providers', 'config']);
   });
 
   it('MANUAL_REGISTRY exposes every base topic body for build-time consumer docs', () => {

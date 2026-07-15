@@ -1,6 +1,9 @@
 import { describe, expect, it } from 'vitest';
 import { countTokens } from '../../tokenizer.js';
 import type { KodaXToolExecutionContext } from '../../types.js';
+import { applyCompiledOutputFilters } from './compiled/index.js';
+import { applyDeclarativeOutputFilters } from './declarative.js';
+import { applyGenericOutputFilter } from './generic.js';
 import { filterBashOutputBodies, renderBashBody } from './registry.js';
 import type { FilterResult, Lossiness } from './types.js';
 
@@ -207,8 +210,8 @@ function bodyTokens(body: FilterResult): number {
   return countTokens(renderBashBody(body));
 }
 
-describe('FEATURE_251 context savings', () => {
-  it.each(SAVINGS_CASES)('$id reduces bash body context tokens', async (testCase) => {
+describe('explicit lossy Bash output filters', () => {
+  it.each(SAVINGS_CASES)('$id can reduce bash body context tokens when explicitly requested', async (testCase) => {
     const raw: FilterResult = {
       stdout: testCase.stdout,
       stderr: testCase.stderr,
@@ -219,6 +222,11 @@ describe('FEATURE_251 context savings', () => {
       stdout: testCase.stdout,
       stderr: testCase.stderr,
       ctx: makeCtx(),
+      filters: [
+        applyGenericOutputFilter,
+        applyCompiledOutputFilters,
+        applyDeclarativeOutputFilters,
+      ],
       persist: async () => 'C:\\tmp\\feature-251-raw.txt',
     });
     const rawTokens = bodyTokens(raw);

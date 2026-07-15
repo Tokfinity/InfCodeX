@@ -33,6 +33,13 @@ export interface KodaXManualSource {
   readonly path: string;
 }
 
+/** Lightweight index metadata; topic bodies stay behind exact-topic lookup. */
+export interface KodaXManualIndexTopic {
+  readonly id: string;
+  readonly title: string;
+  readonly summary: string;
+}
+
 export interface KodaXManualTopic {
   readonly id: KodaXManualTopicId;
   /** Human title, shown as the answer heading. */
@@ -41,10 +48,7 @@ export interface KodaXManualTopic {
   readonly aliases: readonly string[];
   /** One-line summary, shown in the index listing. */
   readonly summary: string;
-  /**
-   * Bounded topic body. Built at module load — dynamic parts (e.g. the
-   * provider list) read live constants so the manual cannot drift from code.
-   */
+  /** Exact topic body. Dynamic parts read live constants so it cannot drift from code. */
   readonly body: string;
   readonly sources: readonly KodaXManualSource[];
   readonly nextTopics: readonly KodaXManualTopicId[];
@@ -62,7 +66,8 @@ export interface ResolveKodaXManualInput {
  * injects via `KodaXOptions.selfManual.topics`. Same shape as a KodaX base
  * topic but `id` is a free string (new id = add; existing base id = override),
  * and aliases/nextTopics/sources are optional to lower the authoring burden.
- * Bodies are still byte-capped by the resolver (no unbounded items).
+ * Exact-topic bodies are returned completely; normal tool-result admission
+ * owns any request-level capacity fallback.
  */
 export interface KodaXManualTopicInput {
   readonly id: string;
@@ -85,8 +90,8 @@ export interface ResolveKodaXManualOptions {
    * layered on top. Orthogonal to `extraTopics` (whose override-by-id/append
    * semantics are unchanged).
    *
-   *   - `undefined` → seed all base topics (`MANUAL_TOPIC_IDS`). Today's exact
-   *     behavior (byte-identical default).
+   *   - `undefined` → seed all base topics (`MANUAL_TOPIC_IDS`), preserving the
+   *     legacy topic selection behavior.
    *   - `[]` → seed ZERO base topics; only `extraTopics` populate the manual
    *     (full white-label replace).
    *   - `KodaXManualTopicId[]` → seed exactly this curated subset (e.g.
@@ -100,8 +105,10 @@ export interface ResolveKodaXManualResult {
   /** A topic id (KodaX base or injected consumer topic), or 'index'. */
   readonly matchedTopic: string;
   readonly title: string;
-  /** Assembled, byte-capped content (scope anchor + body, or index list). */
+  /** Complete exact-topic content, or a short index/search instruction. */
   readonly content: string;
+  /** Structured index candidates; empty for an exact-topic result. */
+  readonly topics: readonly KodaXManualIndexTopic[];
   readonly sources: readonly KodaXManualSource[];
   readonly nextTopics: readonly string[];
 }

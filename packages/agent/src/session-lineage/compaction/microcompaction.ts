@@ -1,8 +1,9 @@
 /**
- * KodaX Microcompaction - Time-driven context cleanup
+ * KodaX Microcompaction - Explicit legacy context cleanup
  *
- * Clears old tool result content from messages to slow context growth.
- * Pure function, no LLM calls, runs after each agent turn.
+ * Clears old tool result content only when a caller explicitly enables it.
+ * The default is disabled because age alone is not evidence that deleting a
+ * complete result will reduce end-to-end token use.
  *
  * Design:
  * - Tracks "turns" (role switches from assistant to user)
@@ -20,6 +21,7 @@
 
 import type { KodaXMessage, KodaXContentBlock, KodaXToolResultBlock } from '@kodax-ai/llm';
 import { buildToolContextMap, PROTECTED_TOOL_NAMES } from './compaction.js';
+import { preserveToolResultRecovery } from './result-extractors.js';
 
 export interface MicrocompactionConfig {
   readonly enabled: boolean;
@@ -37,7 +39,7 @@ export interface MicrocompactionConfig {
  * first — semantically incoherent.
  */
 export const DEFAULT_MICROCOMPACTION_CONFIG: MicrocompactionConfig = {
-  enabled: true,
+  enabled: false,
   maxAge: 20,
   protectedTools: Array.from(PROTECTED_TOOL_NAMES),
 };
@@ -141,9 +143,10 @@ export function microcompact(
       const preview = toolInfo?.preview ?? toolName ?? 'unknown';
 
       blockChanged = true;
+      const placeholder = `[Cleared: ${preview}]`;
       return {
         ...toolResult,
-        content: `[Cleared: ${preview}]`,
+        content: preserveToolResultRecovery(toolResult.content, placeholder, toolResult.metadata),
       };
     });
 

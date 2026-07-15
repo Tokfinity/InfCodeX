@@ -96,16 +96,9 @@ export async function compactSession(
       ?? 200_000;
     const currentTokens = estimateTokens(messages);
 
-    // Force the trigger just below current usage so `needsCompaction` fires
-    // immediately (mirrors the REPL /compact manual-config trick).
-    const forcedTriggerPercent =
-      Number.isFinite(currentTokens) && currentTokens > 0 && contextWindow > 0
-        ? Math.max(1, Math.ceil((currentTokens / contextWindow) * 100) - 1)
-        : 1;
-
     const result = await compact(
       messages,
-      { enabled: true, triggerPercent: forcedTriggerPercent, contextWindow },
+      { enabled: true, triggerPercent: 100, contextWindow },
       provider,
       contextWindow,
       options?.customInstructions,
@@ -114,6 +107,8 @@ export async function compactSession(
       CODING_SUMMARY_PROMPT,
       CODING_UPDATE_SUMMARY_PROMPT,
       options?.model,
+      true,
+      provider.getEffectiveMaxOutputTokens(options?.model),
     );
 
     if (!result.compacted) {

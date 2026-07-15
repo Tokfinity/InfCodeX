@@ -5,13 +5,16 @@ import {
   MANUAL_TOPIC_MAX_BYTES,
   resolveKodaXManual,
 } from './resolver.js';
+import { MANUAL_REGISTRY, MANUAL_TOPIC_IDS } from './registry.js';
 
 describe('FEATURE_218 resolveKodaXManual', () => {
   it('resolves an exact topic id', () => {
     const r = resolveKodaXManual({ topic: 'providers' });
     expect(r.matchedTopic).toBe('providers');
     expect(r.content.toLowerCase()).toContain('provider');
+    expect(r.content.endsWith(MANUAL_REGISTRY.providers.body)).toBe(true);
     expect(r.nextTopics.length).toBeGreaterThan(0);
+    expect(r.topics).toEqual([]);
   });
 
   it('resolves an English alias', () => {
@@ -57,10 +60,12 @@ describe('FEATURE_218 resolveKodaXManual', () => {
   it('returns the full index for empty input', () => {
     const r = resolveKodaXManual({});
     expect(r.matchedTopic).toBe('index');
-    // index lists all bundled topic ids
-    expect(r.content).toContain('overview');
-    expect(r.content).toContain('extensions');
-    expect(r.content).toContain('troubleshooting');
+    expect(r.topics).toEqual(MANUAL_TOPIC_IDS.map((id) => ({
+      id,
+      title: MANUAL_REGISTRY[id].title,
+      summary: MANUAL_REGISTRY[id].summary,
+    })));
+    expect(r.content).toContain('call kodax_manual');
   });
 
   it('prepends an anti-confusion scope anchor on topic answers', () => {
@@ -69,13 +74,10 @@ describe('FEATURE_218 resolveKodaXManual', () => {
     expect(r.content).toContain('~/.kodax/config.json');
   });
 
-  it('caps topic output to the byte budget', () => {
+  it('keeps legacy byte-limit constants as compatibility hints, not active crops', () => {
     const r = resolveKodaXManual({ topic: 'providers' });
-    expect(Buffer.byteLength(r.content, 'utf-8')).toBeLessThanOrEqual(MANUAL_TOPIC_MAX_BYTES);
-  });
-
-  it('caps index output to the byte budget', () => {
-    const r = resolveKodaXManual({});
-    expect(Buffer.byteLength(r.content, 'utf-8')).toBeLessThanOrEqual(MANUAL_INDEX_MAX_BYTES);
+    expect(MANUAL_TOPIC_MAX_BYTES).toBe(4096);
+    expect(MANUAL_INDEX_MAX_BYTES).toBe(2048);
+    expect(r.content.endsWith(MANUAL_REGISTRY.providers.body)).toBe(true);
   });
 });

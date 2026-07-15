@@ -4,12 +4,13 @@
  * base (override by id) and to re-brand the scope anchor with a product name.
  *
  * Matching order: exact topic id → alias exact match → query token overlap →
- * unknown falls back to the index (never fabricates). Output is byte-capped
- * and prefixed with an anti-confusion scope anchor on every topic answer.
+ * unknown falls back to a lightweight structured index (never fabricates).
+ * Exact-topic answers are complete and carry an anti-confusion scope anchor.
  */
 
 import { MANUAL_REGISTRY, MANUAL_TOPIC_IDS } from './registry.js';
 import type {
+  KodaXManualIndexTopic,
   KodaXManualSource,
   KodaXManualTopicId,
   KodaXManualTopicInput,
@@ -18,8 +19,9 @@ import type {
   ResolveKodaXManualResult,
 } from './types.js';
 
-/** Hard caps — bounded output is a load-bearing requirement (no unbounded items). */
+/** @deprecated Capacity is enforced once by the final tool-result admission layer. */
 export const MANUAL_TOPIC_MAX_BYTES = 4096;
+/** @deprecated Indexes use structured lightweight metadata and are not byte-cropped. */
 export const MANUAL_INDEX_MAX_BYTES = 2048;
 
 const DEFAULT_PRODUCT_NAME = 'KodaX';
@@ -38,7 +40,7 @@ interface ManualEntry {
 function normalizeInjected(t: KodaXManualTopicInput): ManualEntry {
   // Coerce the string fields defensively: an SDK consumer is plain JS and may
   // pass a null/undefined body/summary, which would otherwise blow up in
-  // Buffer.byteLength during truncation with an opaque Node TypeError.
+  // downstream string assembly with an opaque Node TypeError.
   return {
     id: String(t.id ?? ''),
     title: String(t.title ?? ''),
@@ -61,7 +63,7 @@ function buildEntries(
   const byId = new Map<string, ManualEntry>();
   const ids: string[] = [];
   // FEATURE_221: `baseTopics` parameterizes which base topics are seeded.
-  // `undefined` ⇒ all base topics (byte-identical default); `[]` ⇒ none (full
+  // `undefined` ⇒ all base topics (legacy selection behavior); `[]` ⇒ none (full
   // white-label replace); a subset ⇒ exactly those (keep inherited mechanisms).
   const seedIds = baseTopics ?? MANUAL_TOPIC_IDS;
   for (const id of seedIds) {
@@ -80,21 +82,6 @@ function buildEntries(
     byId.set(t.id, normalizeInjected(t));
   }
   return { ids, byId };
-}
-
-function byteLength(text: string): number {
-  return Buffer.byteLength(text, 'utf-8');
-}
-
-function truncateToBytes(text: string, maxBytes: number): string {
-  if (byteLength(text) <= maxBytes) return text;
-  const marker = '\n…(truncated; ask for a narrower topic)';
-  const budget = maxBytes - byteLength(marker);
-  let out = text;
-  while (byteLength(out) > budget && out.length > 0) {
-    out = out.slice(0, Math.max(0, out.length - 16));
-  }
-  return out + marker;
 }
 
 /** Anti-confusion anchor — this product, not Claude Code / Codex CLI. */
@@ -159,13 +146,21 @@ function rankByQuery(ids: readonly string[], byId: Map<string, ManualEntry>, que
 }
 
 function buildTopicResult(topic: ManualEntry, productName: string): ResolveKodaXManualResult {
-  const content = truncateToBytes(`${scopeAnchor(topic.id, productName)}\n\n${topic.body}`, MANUAL_TOPIC_MAX_BYTES);
   return {
     matchedTopic: topic.id,
     title: topic.title,
-    content,
+    content: `${scopeAnchor(topic.id, productName)}\n\n${topic.body}`,
+    topics: [],
     sources: topic.sources,
     nextTopics: topic.nextTopics,
+  };
+}
+
+function toIndexTopic(topic: ManualEntry): KodaXManualIndexTopic {
+  return {
+    id: topic.id,
+    title: topic.title,
+    summary: topic.summary,
   };
 }
 
@@ -175,18 +170,18 @@ function buildIndexResult(
   productName: string,
   suggested?: readonly ManualEntry[],
 ): ResolveKodaXManualResult {
-  const lead =
+  const content =
     suggested && suggested.length > 0
-      ? `No exact ${productName} manual topic matched. Closest topics:`
-      : `${productName} manual topics (call kodax_manual with one of these as "topic"):`;
-  const list = (suggested && suggested.length > 0 ? suggested : ids.map((id) => byId.get(id)!))
-    .map((t) => `- ${t.id}: ${t.summary}`)
-    .join('\n');
+      ? `No exact ${productName} manual topic matched. Choose a closest topic id and call kodax_manual again.`
+      : `${productName} manual topic index. Choose an exact topic id and call kodax_manual again.`;
+  const topics = (suggested && suggested.length > 0 ? suggested : ids.map((id) => byId.get(id)!))
+    .map(toIndexTopic);
   const nextTopics = (suggested ?? []).slice(0, 3).map((t) => t.id);
   return {
     matchedTopic: 'index',
     title: `${productName} Manual — Index`,
-    content: truncateToBytes(`${lead}\n\n${list}`, MANUAL_INDEX_MAX_BYTES),
+    content,
+    topics,
     sources: [],
     nextTopics,
   };

@@ -4,8 +4,8 @@
  * Inventory entry: docs/features/v0.7.29-capability-inventory.md#cap-014-microcompact-per-turn-cleanup
  *
  * Test obligations (reformulated to match the actual implementation):
- * - CAP-MICROCOMPACT-001a: tool_result blocks older than `maxAge`
- *   turns are replaced with `[Cleared: ...]` placeholders
+ * - CAP-MICROCOMPACT-001a: the default policy is disabled; explicit legacy
+ *   opt-in replaces tool_result blocks older than `maxAge` with placeholders
  * - CAP-MICROCOMPACT-001b: thinking blocks are NOT cleared
  *   (preserves signature for API continuity)
  * - CAP-MICROCOMPACT-001c: image blocks are preserved across all ages
@@ -42,28 +42,21 @@ import { describe, expect, it } from 'vitest';
 
 import type { KodaXMessage } from '@kodax-ai/llm';
 import { microcompact, DEFAULT_MICROCOMPACTION_CONFIG } from '@kodax-ai/agent';
+
+const ACTIVE_MICROCOMPACTION_CONFIG = {
+  ...DEFAULT_MICROCOMPACTION_CONFIG,
+  enabled: true,
+};
+
 describe('CAP-014: microcompact per-turn cleanup contract', () => {
-  it('CAP-MICROCOMPACT-001a: tool_result blocks older than maxAge turns are replaced with `[Cleared: ...]` placeholders', () => {
-    const messages: KodaXMessage[] = [
-      {
-        role: 'assistant',
-        content: [
-          { type: 'tool_use', id: 'tc-old', name: 'bash', input: { command: 'echo old' } },
-        ],
-      } as KodaXMessage,
-      {
-        role: 'user',
-        content: [
-          { type: 'tool_result', tool_use_id: 'tc-old', content: 'old output' },
-        ],
-      } as KodaXMessage,
-    ];
-    // Add 25 more user/assistant turns to age the original beyond maxAge=20.
-    for (let i = 0; i < 25; i++) {
-      messages.push({ role: 'assistant', content: `a${i}` });
-      messages.push({ role: 'user', content: `u${i}` });
-    }
-    const compacted = microcompact(messages, DEFAULT_MICROCOMPACTION_CONFIG);
+  it('CAP-MICROCOMPACT-001a: default policy preserves old evidence', () => {
+    const messages = agedToolResultMessages('default evidence');
+    expect(microcompact(messages, DEFAULT_MICROCOMPACTION_CONFIG)).toBe(messages);
+  });
+
+  it('CAP-MICROCOMPACT-001a: explicit legacy opt-in clears tool results older than maxAge', () => {
+    const messages = agedToolResultMessages('old output');
+    const compacted = microcompact(messages, ACTIVE_MICROCOMPACTION_CONFIG);
 
     const firstUser = compacted[1] as KodaXMessage;
     const block = (firstUser.content as ReadonlyArray<{ type: string; content?: unknown }>)[0]!;
@@ -87,7 +80,7 @@ describe('CAP-014: microcompact per-turn cleanup contract', () => {
       messages.push({ role: 'user', content: `u${i}` });
       messages.push({ role: 'assistant', content: `a${i}` });
     }
-    const compacted = microcompact(messages, DEFAULT_MICROCOMPACTION_CONFIG);
+    const compacted = microcompact(messages, ACTIVE_MICROCOMPACTION_CONFIG);
     const firstAssistant = compacted[0] as KodaXMessage;
     const blocks = firstAssistant.content as ReadonlyArray<{ type: string; thinking?: string }>;
     const thinkingBlock = blocks.find((b) => b.type === 'thinking');
@@ -112,7 +105,7 @@ describe('CAP-014: microcompact per-turn cleanup contract', () => {
       messages.push({ role: 'assistant', content: `a${i}` });
       messages.push({ role: 'user', content: `u${i}` });
     }
-    const compacted = microcompact(messages, DEFAULT_MICROCOMPACTION_CONFIG);
+    const compacted = microcompact(messages, ACTIVE_MICROCOMPACTION_CONFIG);
     const firstUser = compacted[0] as KodaXMessage;
     const blocks = firstUser.content as ReadonlyArray<{ type: string; path?: string }>;
     const preserved = blocks[0]!;
@@ -148,7 +141,7 @@ describe('CAP-014: microcompact per-turn cleanup contract', () => {
       messages.push({ role: 'assistant', content: `a${i}` });
       messages.push({ role: 'user', content: `u${i}` });
     }
-    const compacted = microcompact(messages, DEFAULT_MICROCOMPACTION_CONFIG);
+    const compacted = microcompact(messages, ACTIVE_MICROCOMPACTION_CONFIG);
     const firstToolResult = compacted[1] as KodaXMessage;
     const block = (firstToolResult.content as ReadonlyArray<{ type: string; content?: unknown }>)[0]!;
     const content = (block as { content?: string }).content;
@@ -160,7 +153,7 @@ describe('CAP-014: microcompact per-turn cleanup contract', () => {
       { role: 'user', content: 'hi' },
       { role: 'assistant', content: 'hello' },
     ];
-    const compacted = microcompact(recent, DEFAULT_MICROCOMPACTION_CONFIG);
+    const compacted = microcompact(recent, ACTIVE_MICROCOMPACTION_CONFIG);
     // No clearing happened → function returns the same input array
     // reference (documented "Returns ... or original if unchanged" at
     // microcompaction.ts:65).
@@ -175,3 +168,25 @@ describe('CAP-014: microcompact per-turn cleanup contract', () => {
     'CAP-MICROCOMPACT-003: redundant tool-result echoes pruned across 5+ turn sessions — single-tool-result aging is covered by 001a; multi-tool-result pruning across multiple turns is integration-level.',
   );
 });
+
+function agedToolResultMessages(content: string): KodaXMessage[] {
+  const messages: KodaXMessage[] = [
+    {
+      role: 'assistant',
+      content: [
+        { type: 'tool_use', id: 'tc-old', name: 'bash', input: { command: 'echo old' } },
+      ],
+    } as KodaXMessage,
+    {
+      role: 'user',
+      content: [
+        { type: 'tool_result', tool_use_id: 'tc-old', content },
+      ],
+    } as KodaXMessage,
+  ];
+  for (let i = 0; i < 25; i++) {
+    messages.push({ role: 'assistant', content: `a${i}` });
+    messages.push({ role: 'user', content: `u${i}` });
+  }
+  return messages;
+}

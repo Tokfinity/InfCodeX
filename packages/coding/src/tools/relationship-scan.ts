@@ -40,8 +40,6 @@ interface SymbolLocation {
   readonly column: number;
 }
 
-const MAX_SUPPLEMENT_OUTPUT_LINES = 10;
-const MAX_SUPPLEMENT_OUTPUT_CHARS = 1800;
 const MAX_ROOT_ASCENT = 3;
 
 function readDirection(value: unknown): RelationshipDirection {
@@ -517,7 +515,7 @@ function renderDownstream(lines: string[], parts: RelationshipParts): void {
     );
   }
   if (parts.processContext) {
-    for (const step of parts.processContext.process.steps.slice(0, 8)) {
+    for (const step of parts.processContext.process.steps) {
       const line = step.line === undefined ? '' : `:${step.line}`;
       const evidence = step.line === undefined ? `${step.filePath}:line-unknown` : `${step.filePath}:${step.line}`;
       lines.push(`- Process ${step.kind}: ${step.symbolName} (${step.filePath}${line}) ${edgeMeta(
@@ -566,17 +564,10 @@ function renderEvidence(lines: string[], parts: RelationshipParts): void {
   lines.push('');
 }
 
-function compactSupplementOutput(output: string): string[] {
+function splitSupplementOutput(output: string): string[] {
   const trimmed = output.trim();
   if (!trimmed) return ['(no output)'];
-  const clipped = trimmed.length > MAX_SUPPLEMENT_OUTPUT_CHARS
-    ? `${trimmed.slice(0, MAX_SUPPLEMENT_OUTPUT_CHARS)}...`
-    : trimmed;
-  const lines = clipped.split(/\r?\n/).slice(0, MAX_SUPPLEMENT_OUTPUT_LINES);
-  if (clipped.split(/\r?\n/).length > MAX_SUPPLEMENT_OUTPUT_LINES) {
-    lines.push('...');
-  }
-  return lines;
+  return trimmed.split(/\r?\n/);
 }
 
 function renderSupplementalEvidence(
@@ -588,7 +579,7 @@ function renderSupplementalEvidence(
   lines.push(title);
   for (const item of evidence) {
     lines.push(`- ${item.label}`);
-    for (const outputLine of compactSupplementOutput(item.output)) {
+    for (const outputLine of splitSupplementOutput(item.output)) {
       lines.push(`  ${outputLine}`);
     }
   }

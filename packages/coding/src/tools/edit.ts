@@ -189,15 +189,12 @@ async function runEditOnce(
   }
   result += `\n  (+${changes.added} lines, -${changes.removed} lines)`;
 
-  const oldStrPreview = oldStr.length > 100 ? `${oldStr.slice(0, 100)}...` : oldStr;
-  const newStrPreview = newStr.length > 100 ? `${newStr.slice(0, 100)}...` : newStr;
-
   if (
     replacementPlan.diffPreviewMode === 'inline'
     && !oldStr.includes('\n')
     && !newStr.includes('\n')
   ) {
-    result += `\n\n- ${oldStrPreview}\n+ ${newStrPreview}`;
+    result += `\n\n- ${oldStr}\n+ ${newStr}`;
   } else if (diff) {
     const preview = await formatDiffPreview({ diff, toolName: 'edit', filePath, ctx });
     result += `\n\n${preview}`;

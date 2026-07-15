@@ -1,6 +1,5 @@
 import type { CapabilityResult } from '../extensions/types.js';
 import type { KodaXToolExecutionContext } from '../types.js';
-import { applyToolResultGuardrail } from './tool-result-policy.js';
 import type {
   KodaXRetrievalArtifact,
   KodaXRetrievalItem,
@@ -17,6 +16,31 @@ function asRecord(value: unknown): Record<string, unknown> | undefined {
 
 function readString(value: unknown): string | undefined {
   return typeof value === 'string' && value.trim().length > 0 ? value.trim() : undefined;
+}
+
+function readText(value: unknown): string | undefined {
+  return typeof value === 'string' && value.trim().length > 0 ? value : undefined;
+}
+
+function readFirstString(
+  record: Record<string, unknown>,
+  keys: readonly string[],
+): { key: string; value: string } | undefined {
+  for (const key of keys) {
+    const value = readString(record[key]);
+    if (value) {
+      return { key, value };
+    }
+  }
+  return undefined;
+}
+
+function omitRecordKeys(
+  record: Record<string, unknown>,
+  keys: ReadonlySet<string>,
+): Record<string, unknown> | undefined {
+  const entries = Object.entries(record).filter(([key]) => !keys.has(key));
+  return entries.length > 0 ? Object.fromEntries(entries) : undefined;
 }
 
 function stringifyScalar(value: unknown): string | undefined {
@@ -44,10 +68,6 @@ function formatMetadataValue(value: unknown): string | undefined {
   }
 }
 
-function truncateValue(value: string, maxLength = 240): string {
-  return value.length > maxLength ? `${value.slice(0, maxLength - 3)}...` : value;
-}
-
 function collectMetadataLines(metadata?: Record<string, unknown>): string[] {
   if (!metadata) {
     return [];
@@ -56,7 +76,7 @@ function collectMetadataLines(metadata?: Record<string, unknown>): string[] {
   return Object.entries(metadata)
     .map(([key, value]) => {
       const formatted = formatMetadataValue(value);
-      return formatted ? `- ${key}: ${truncateValue(formatted, 320)}` : undefined;
+      return formatted ? `- ${key}: ${formatted}` : undefined;
     })
     .filter((line): line is string => line !== undefined);
 }
@@ -160,34 +180,29 @@ export function convertProviderSearchResults(
     if (!record) {
       const text = formatMetadataValue(entry);
       if (text) {
-        items.push({ title: truncateValue(text, 120) });
+        items.push({ title: text });
       }
       continue;
     }
 
-    const title = readString(record.title)
-      ?? readString(record.name)
-      ?? readString(record.label)
-      ?? readString(record.id)
-      ?? 'provider result';
-    const locator = readString(record.url)
-      ?? readString(record.path)
-      ?? readString(record.uri)
-      ?? readString(record.locator);
-    const snippet = readString(record.snippet)
-      ?? readString(record.summary)
-      ?? readString(record.description)
-      ?? readString(record.preview);
+    const titleField = readFirstString(record, ['title', 'name', 'label', 'id']);
+    const locatorField = readFirstString(record, ['url', 'path', 'uri', 'locator']);
+    const snippetField = readFirstString(record, ['snippet', 'summary', 'description', 'preview']);
     const scoreValue = record.score;
     const score = typeof scoreValue === 'number' && Number.isFinite(scoreValue)
       ? scoreValue
       : undefined;
+    const projectedKeys = new Set<string>();
+    if (titleField) projectedKeys.add(titleField.key);
+    if (locatorField) projectedKeys.add(locatorField.key);
+    if (snippetField) projectedKeys.add(snippetField.key);
+    if (score !== undefined) projectedKeys.add('score');
     items.push({
-      title,
-      locator,
-      snippet,
+      title: titleField?.value ?? 'provider result',
+      locator: locatorField?.value,
+      snippet: snippetField?.value,
       score,
-      metadata: record,
+      metadata: omitRecordKeys(record, projectedKeys),
     });
   }
 
@@ -221,7 +236,7 @@ export function convertCapabilityReadResult(
     freshness: 'unknown',
     provider: providerId,
     summary,
-    content: readString(result.content),
+    content: readText(result.content),
     items: structured
       ? convertProviderSearchResults([structured], 1)
       : [],
@@ -249,7 +264,7 @@ export function renderRetrievalResult(result: KodaXRetrievalResult): string {
   lines.push(`Summary: ${result.summary}`);
 
   if (result.content?.trim()) {
-    lines.push('', 'Content:', result.content.trim());
+    lines.push('', 'Content:', result.content);
   }
 
   if (result.items.length > 0) {
@@ -257,25 +272,28 @@ export function renderRetrievalResult(result: KodaXRetrievalResult): string {
     result.items.forEach((item, index) => {
       lines.push(`${index + 1}. ${item.title}`);
       if (item.locator) {
-        lines.push(`   Locator: ${truncateValue(item.locator, 240)}`);
+        lines.push(`   Locator: ${item.locator}`);
       }
       if (item.snippet) {
-        lines.push(`   Snippet: ${truncateValue(item.snippet, 320)}`);
+        lines.push(`   Snippet: ${item.snippet}`);
       }
       if (item.score !== undefined) {
         lines.push(`   Score: ${item.score.toFixed(2)}`);
       }
       const metadataLines = collectMetadataLines(item.metadata);
-      metadataLines.slice(0, 3).forEach((line) => {
+      metadataLines.forEach((line) => {
         lines.push(`   ${line}`);
       });
     });
   }
 
-  if (result.artifacts && result.artifacts.length > 0) {
+  const artifacts = result.artifacts?.filter((artifact) => !result.items.some((item) => (
+    item.title === artifact.label && item.locator === artifact.value
+  )));
+  if (artifacts && artifacts.length > 0) {
     lines.push('', 'Artifacts:');
-    result.artifacts.forEach((artifact) => {
-      lines.push(`- ${artifact.kind}: ${artifact.label} -> ${truncateValue(artifact.value, 280)}`);
+    artifacts.forEach((artifact) => {
+      lines.push(`- ${artifact.kind}: ${artifact.label} -> ${artifact.value}`);
     });
   }
 
@@ -289,9 +307,7 @@ export function renderRetrievalResult(result: KodaXRetrievalResult): string {
 
 export async function finalizeRetrievalResult(
   result: KodaXRetrievalResult,
-  ctx: KodaXToolExecutionContext,
+  _ctx: KodaXToolExecutionContext,
 ): Promise<string> {
-  const rendered = renderRetrievalResult(result);
-  const guarded = await applyToolResultGuardrail(result.tool, rendered, ctx);
-  return guarded.content;
+  return renderRetrievalResult(result);
 }

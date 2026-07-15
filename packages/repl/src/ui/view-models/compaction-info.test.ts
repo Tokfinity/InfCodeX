@@ -71,6 +71,22 @@ describe('resolveEffectiveCompactionInfo', () => {
     ).toBe(128_000);
   });
 
+  it('refreshes reserved response capacity with the active model', () => {
+    const result = resolveEffectiveCompactionInfo(
+      BASE,
+      { provider: 'ark', model: 'deepseek-v4-pro' },
+      () => ({
+        getEffectiveContextWindow: () => 1_000_000,
+        getEffectiveMaxOutputTokens: () => 131_072,
+      }),
+    );
+
+    expect(result).toMatchObject({
+      contextWindow: 1_000_000,
+      reservedResponseTokens: 131_072,
+    });
+  });
+
   it('falls through to the startup contextWindow when provider lookup fails', () => {
     const lookup: CompactionInfoResolverProviderLookup = (name) => {
       throw new Error(`Provider not found: ${name}`);

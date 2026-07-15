@@ -163,14 +163,16 @@ export async function findValidCheckpoint(
           : [],
         scoutCompleted: candidate.scoutCompleted === true,
       };
-      // Validate age
+      // A task can run longer than the recovery window. `createdAt` belongs to
+      // the task contract and is intentionally stable, while the file mtime is
+      // refreshed by every successful checkpoint write.
       const createdTime = new Date(checkpoint.createdAt).getTime();
       if (Number.isNaN(createdTime)) {
         continue;
       }
-      const age = now - createdTime;
+      const age = now - fileStat.mtimeMs;
       if (age > CHECKPOINT_MAX_AGE_MS || age < 0) {
-        // Auto-clean expired checkpoints to prevent accumulation.
+        // Auto-clean checkpoints not refreshed within the recovery window.
         await deleteCheckpoint(workspaceDir);
         continue;
       }

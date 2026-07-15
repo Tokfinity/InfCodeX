@@ -6,6 +6,67 @@ All notable changes to this project will be documented in this file.
 
 ## [Unreleased]
 
+### Changed
+
+- **Tool-result delivery now optimizes end-to-end context use.** Tool handlers
+  collect complete results and one aggregate next-request capacity owner keeps
+  every result inline when the batch fits. Default Bash processing no longer
+  applies command-specific lossy filters; its former 512 KiB capture limit is
+  now only a memory-to-disk spool threshold. Capacity is solved against the
+  final input (`Pmax`), so the 3% uncertainty margin grows with the admitted
+  batch instead of being frozen at the smaller pre-batch request.
+- **History compaction is physical-capacity driven.** Default automatic
+  compaction waits until the final provider envelope (system prompt, actual
+  tools, messages/framing, output reserve, and safety margin) cannot fit.
+  Default microcompaction and destructive pre-summary/fallback pruning are off;
+  pressure uses semantic summary first and stops as soon as the next request
+  fits. Static early percentages remain explicit opt-ins, and manual
+  `/compact` remains an explicit force operation.
+
+### Fixed
+
+- **Recoverable overflow and hidden output caps.** Overflow of the final
+  operational request budget (including output reserve and estimation safety)
+  saves the complete result and emits one explicit incomplete marker. Fallback
+  inside the safety-margin zone is reliability protection, not a claimed token
+  optimization. Long lines have
+  exact continuation offsets, completed task output is complete, and hidden
+  caps were removed from grep, glob, code search, and retrieval rendering.
+- **Cache token accounting.** Uncached input, cache reads, and cache writes are
+  now billed once each instead of double-counting cached tokens already present
+  in total input usage.
+- **Compaction failure preserves canonical history.** Empty, failed, or
+  insufficient summaries now surface a typed capacity error instead of
+  silently clearing tool results, cropping user messages, or dropping message
+  pairs. The leading Worker system prompt stays byte-identical, invalid
+  summaries consume no source chunk, and hard failures preserve the latest
+  recoverable transcript.
+- **Tool-result completeness edge cases.** No-usage fallback accounting now
+  includes the final system prompt once, active tool schemas, and same-request
+  recovery messages. Legacy snapshot/byte budget helpers remain exported for
+  SDK source compatibility, but internal admission uses only the fixed-point
+  batch token capacity. MCP resource text is not duplicated into a synthetic
+  structured channel and distinct channels survive fallback. Every explicit
+  search limit uses a one-extra-item probe. Bash cancellation either drains to
+  close or hands live collectors to recovery artifacts; only
+  `KODAX_CAPTURE_COMPLETE` proves delayed drain completion.
+- **Recovery artifact retention.** Writing a new result no longer runs an
+  age-only TTL sweep that could delete evidence still referenced by a resumable
+  session. REPL session startup now removes only artifacts older than the grace
+  window that are absent from active and archived JSONL; discovery failure
+  cancels deletion. Bash spools share this managed directory. REPL startup no longer
+  age-prunes pasted images referenced by history, and long-running managed-task
+  checkpoints use their latest write time for the declared recovery window.
+- **Post-review capacity correctness.** Trusted artifact metadata is no longer
+  inferred from raw tool text; capacity failures carry the last legal transcript;
+  AMA observers see admitted content; child evidence uses the routed model's
+  physical initial-request budget; grep/code search expose 512-file continuation
+  and changed-diff bundles reject more than 64 paths. ANSI normalization preserves
+  cursor-control sequences, and Bash avoids rematerializing output whose byte
+  count proves it cannot fit the active request. These direct Bash artifacts
+  carry trusted tool-call metadata through both SA and AMA admission, so the
+  final batch cannot nest the recovery marker into a second artifact.
+
 ## [0.7.69] - 2026-07-14
 
 > Scope note: this release delivers **FEATURE_267**, **FEATURE_268**, and
@@ -471,6 +532,10 @@ All notable changes to this project will be documented in this file.
 
 ## [0.7.61] - 2026-07-06
 
+> Historical release record: the command-aware lossy-filter behavior below is
+> what v0.7.61 shipped, not the current default. The 2026-07-14 correction is
+> recorded under Unreleased, ADR-050, and the FEATURE_251 design/test guide.
+
 > Scope note: a token-efficiency + workflow-reliability release. **FEATURE_251** adds command-aware
 > in-tool output compression (an rtk-style Token Killer port) inside KodaX's own `bash` tool layer,
 > so a noisy `git diff` / test run / package-install / docker-build no longer spends thousands of
@@ -483,7 +548,7 @@ All notable changes to this project will be documented in this file.
 
 ### Added
 
-- **Tool-output semantic compression — command-aware in-tool Token Killer (FEATURE_251, ADR-050).** A new `packages/coding/src/tools/output-filters/` module compresses bash `stdout`/`stderr` **body** after decode, before the `Command:` / `Exit:` header is assembled, at the single `bash.ts` close-handler integration point (so both the SA and AMA dispatch paths are covered by one change). It ships a lossless generic layer (ANSI strip), compiled stateful filters (`git-diff`, `git-log`, `git-status`, `test-runner` failure-focus, `lint` diagnostic grouping, `json-output` / NDJSON structural summary), and a built-in declarative long-tail table (package-manager / docker / infra CLI progress). Hard constraints: the `Command:` / `Exit:` header is preserved verbatim (FEATURE_185 hits-ledger depends on it); the generic layer is lossless-by-construction with `never_worse` as a size-only backstop; content-signature detection is preferred over command-name matching (robust to compound commands and pipes); and every lossy filter (`lossiness: tail | whole`) first persists the raw decoded body via `persistToolOutput` and appends a recovery hint, falling back to the raw body + existing tail-truncation if the persist fails. `background` / `timeout` / `abort` paths do not reach the completion assembly and are naturally excluded. Isolated Layer-1 measurements (`context-savings.test.ts`) show ~66–99% body-token reduction on high-noise commands (e.g. a 120-file `git diff` 9,960 → 1,344 tokens; a `terraform apply` progress stream 10,617 → 59). Deterministic code — no prompt change, no FEATURE_104 eval. Human test guide: `docs/test-guides/FEATURE_251_v0.7.61_TEST_GUIDE.md`.
+- **Historical implementation — tool-output semantic compression / command-aware in-tool Token Killer (FEATURE_251, ADR-050).** A new `packages/coding/src/tools/output-filters/` module compressed bash `stdout`/`stderr` **body** after decode, before the `Command:` / `Exit:` header was assembled, at the single `bash.ts` close-handler integration point (so both the SA and AMA dispatch paths were covered by one change). It shipped a lossless generic layer (ANSI strip), compiled stateful filters (`git-diff`, `git-log`, `git-status`, `test-runner` failure-focus, `lint` diagnostic grouping, `json-output` / NDJSON structural summary), and a built-in declarative long-tail table (package-manager / docker / infra CLI progress). Hard constraints at release time: the `Command:` / `Exit:` header was preserved verbatim (FEATURE_185 hits-ledger depends on it); the generic layer was lossless-by-construction with `never_worse` as a size-only backstop; and every lossy filter persisted raw decoded body before appending a recovery hint. Isolated Layer-1 fixtures measured shorter bodies, but did not measure recovery reads, extra inference rounds, or task-level evidence quality; they are historical measurements, not current release gates or end-to-end benefit claims. Current default behavior is the correction described above. Human test guide: `docs/test-guides/FEATURE_251_v0.7.61_TEST_GUIDE.md`.
 - **Deterministic workflow-quality preflight lint (FEATURE_252).** A new `packages/agent/src/workflow/quality-lint.ts` (`lintRestrictedWorkflowSource` / `assertRestrictedWorkflowQuality`, exported from the workflow package) runs inside restricted workflow module materialization (`script-runner.ts` `createRestrictedWorkflowModule`) and in the coding workflow host with host-policy `maxAgents`, so structural contract violations fail before a run can start — matching the existing inline-smoke hard-fail feedback loop. It hard-fails three deterministic contract classes only: (1) an unawaited workflow-command variable (`wf.runAgent` / `wf.spawnAgent` / `wf.wait` / `wf.synthesize` / `wf.workflow` / `wf.artifact`) used in a boolean position (`if (x)`, `!x`, ternary test, `x && …`, `x || …`, loop test) — a case a runtime Proxy cannot catch because object truthiness has no Proxy trap; (2) top-level structured-output field access (`result.findings`, `result.summary`, …) when the fields belong under `result.structured`; and (3) a literal `[...]`/`[...].map(...)` agent fanout whose static upper bound exceeds `manifest.maxAgents` or a known host cap. Review/verifier/generic quality heuristics are intentionally **not** emitted as model-visible warnings (a lightweight AST pass cannot distinguish a weak workflow from a valid optimized one, and surfacing them causes needless rewrite churn). Human test guide: `docs/test-guides/FEATURE_252_v0.7.61_TEST_GUIDE.md`.
 
 ### Changed

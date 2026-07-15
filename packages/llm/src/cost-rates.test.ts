@@ -139,16 +139,33 @@ describe('cost-rates', () => {
       expect(cost).toBe(3.0);
     });
 
-    it('should calculate cost with cache tokens', () => {
-      const rate: CostRate = { inputPer1M: 1.0, outputPer1M: 2.0, cachePer1M: 0.5 };
-      const cost = calculateCost(rate, 1_000_000, 1_000_000, 1_000_000);
-      expect(cost).toBe(3.5);
+    it('should bill cached input once using separate read and write rates', () => {
+      const rate: CostRate = {
+        inputPer1M: 1.0,
+        outputPer1M: 2.0,
+        cacheReadPer1M: 0.1,
+        cacheWritePer1M: 1.25,
+      };
+      const cost = calculateCost(
+        rate,
+        3_000_000,
+        1_000_000,
+        1_000_000,
+        1_000_000,
+      );
+      expect(cost).toBeCloseTo(4.35); // 1 uncached + 0.1 read + 1.25 write + 2 output
     });
 
     it('should calculate cost without cache tokens when rate has no cache pricing', () => {
       const rate: CostRate = { inputPer1M: 1.0, outputPer1M: 2.0 };
       const cost = calculateCost(rate, 1_000_000, 1_000_000, 1_000_000);
       expect(cost).toBe(3.0);
+    });
+
+    it('should retain cachePer1M as the fallback for both cache categories', () => {
+      const rate: CostRate = { inputPer1M: 1.0, outputPer1M: 2.0, cachePer1M: 0.5 };
+      const cost = calculateCost(rate, 2_000_000, 1_000_000, 500_000, 500_000);
+      expect(cost).toBeCloseTo(3.5); // 1 uncached + 0.5 cached + 2 output
     });
 
     it('should handle partial token amounts', () => {
@@ -166,7 +183,7 @@ describe('cost-rates', () => {
     it('should calculate with real Anthropic rates', () => {
       const rate = DEFAULT_COST_RATES.anthropic['claude-opus-4-6']!;
       const cost = calculateCost(rate, 1_000_000, 100_000, 50_000);
-      expect(cost).toBeCloseTo(7.525); // 5 (input) + 2.5 (output) + 0.025 (cache)
+      expect(cost).toBeCloseTo(7.275); // 4.75 uncached + 2.5 output + 0.025 cache
     });
   });
 });

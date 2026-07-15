@@ -123,8 +123,15 @@ export function recordUsage(
   userCostOverrides?: Readonly<Record<string, Readonly<Record<string, CostRate>>>>,
 ): CostTracker {
   const rate = getCostRate(entry.provider, entry.model, userCostOverrides);
-  const cacheTokens = (entry.cacheReadTokens ?? 0) + (entry.cacheWriteTokens ?? 0);
-  const cost = rate ? calculateCost(rate, entry.inputTokens, entry.outputTokens, cacheTokens) : 0;
+  const cost = rate
+    ? calculateCost(
+        rate,
+        entry.inputTokens,
+        entry.outputTokens,
+        entry.cacheReadTokens,
+        entry.cacheWriteTokens,
+      )
+    : 0;
 
   const record: TokenUsageRecord = {
     timestamp: Date.now(),

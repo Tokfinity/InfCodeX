@@ -18,8 +18,8 @@
  *     retrieval_status=wait_expired
  *   - block:true with no registry entry (e.g. settled & cleaned) falls
  *     through to read snapshot, retrievalStatus=success
- *   - tail-to-bytes caps very large finalText at OUTPUT_TAIL_BYTES with
- *     the truncation marker
+ *   - terminal output remains complete for the shared outer capacity owner
+ *   - live external output is an explicitly labelled bounded tail
  *   - pin: tool name is in CHILD_EXCLUDE_TOOLS_BASE and PLANNER_EXTRA_EXCLUDE
  */
 
@@ -28,6 +28,7 @@ import { afterEach, beforeEach, describe, expect, it } from 'vitest';
 import {
   _resetMessageQueueForTests,
   getMessageQueue,
+  type AgentTaskSnapshot,
   type ChildTaskRegistry,
 } from '@kodax-ai/agent';
 
@@ -90,6 +91,8 @@ describe('toolTaskOutput — schema wording', () => {
     expect(visibleText).toContain('Normal Worker usage');
     expect(visibleText).toContain('retrieval_status=wait_expired');
     expect(visibleText).toContain('not a child task timeout');
+    expect(visibleText).toContain('Terminal output is emitted in full');
+    expect(visibleText).toContain('output_state');
     expect(visibleText).not.toContain('retrieval_status=timeout');
   });
 });
@@ -181,6 +184,7 @@ describe('toolTaskOutput — running snapshot', () => {
     expect(out).toMatch(/<status>running<\/status>/);
     expect(out).toMatch(/<iterations>3\/200<\/iterations>/);
     expect(out).toMatch(/<recent_tool_calls>/);
+    expect(out).toContain('<output_state>pending</output_state>');
     expect(out).toMatch(/\[iter 3\] read src\/foo\.ts/);
     expect(out).toMatch(/\[iter 4\] grep handleAuth/);
     // No <output>/<error> blocks while running.
@@ -218,6 +222,7 @@ describe('toolTaskOutput — terminal snapshots', () => {
     const ctx = makeCtx({ childProgressSnapshots: snapshots });
     const out = await toolTaskOutput({ task_id: 'c1' }, ctx);
     expect(out).toMatch(/<status>completed<\/status>/);
+    expect(out).toContain('<output_state>complete</output_state>');
     expect(out).toMatch(/<output>\nAll findings checked\. Auth path is clean\.\n<\/output>/);
     expect(out).not.toMatch(/<error>/);
     expect(out).toMatch(/<duration_ms>4000<\/duration_ms>/);
@@ -414,8 +419,8 @@ describe('toolTaskOutput — block parameter', () => {
   });
 });
 
-describe('toolTaskOutput — tail-to-bytes', () => {
-  it('caps very large finalText at OUTPUT_TAIL_BYTES with truncation marker', async () => {
+describe('toolTaskOutput — output ownership', () => {
+  it('returns complete local terminal output for the shared outer capacity owner', async () => {
     const snapshots = new Map<string, ChildProgressSnapshot>();
     initChildSnapshot(snapshots, {
       childId: 'c1',
@@ -431,12 +436,12 @@ describe('toolTaskOutput — tail-to-bytes', () => {
     });
     const ctx = makeCtx({ childProgressSnapshots: snapshots });
     const out = await toolTaskOutput({ task_id: 'c1' }, ctx);
-    expect(out).toMatch(/\[\.\.\.truncated to last 8192 bytes\.\.\.\]/);
-    // Sanity: the entire response should be much smaller than the input.
-    expect(out.length).toBeLessThan(huge.length);
+    expect(out).toContain('<output_state>complete</output_state>');
+    expect(out).not.toContain('truncated to last 8192 bytes');
+    expect(out).toContain(`<output>\n${huge}\n</output>`);
   });
 
-  it('does NOT truncate finalText that fits within the cap', async () => {
+  it('returns small terminal output unchanged', async () => {
     const snapshots = new Map<string, ChildProgressSnapshot>();
     initChildSnapshot(snapshots, {
       childId: 'c1',
@@ -451,7 +456,53 @@ describe('toolTaskOutput — tail-to-bytes', () => {
     const ctx = makeCtx({ childProgressSnapshots: snapshots });
     const out = await toolTaskOutput({ task_id: 'c1' }, ctx);
     expect(out).not.toMatch(/truncated/);
+    expect(out).toContain('<output_state>complete</output_state>');
     expect(out).toMatch(/<output>\nsmall body\n<\/output>/);
+  });
+
+  it('returns complete external terminal output but labels running output as a bounded live tail', async () => {
+    const huge = 'R'.repeat(20000);
+    const baseTask = {
+      route: 'external',
+      agentId: 'external:risk',
+      objective: 'Review risk',
+      cancellation: 'none',
+      createdAt: '2026-07-14T00:00:00.000Z',
+      updatedAt: '2026-07-14T00:00:01.000Z',
+    } as const;
+    const tasks = new Map<string, AgentTaskSnapshot>([
+      ['done', {
+        ...baseTask,
+        taskId: 'done',
+        state: 'completed',
+        output: huge,
+      } as unknown as AgentTaskSnapshot],
+      ['live', {
+        ...baseTask,
+        taskId: 'live',
+        state: 'working',
+        output: huge,
+      } as unknown as AgentTaskSnapshot],
+    ]);
+    const agentExecutorPlane = {
+      plane: {
+        tasks: {
+          get: async (taskId: string) => tasks.get(taskId),
+        },
+      },
+    } as unknown as NonNullable<KodaXToolExecutionContext['agentExecutorPlane']>;
+    const ctx = makeCtx({ agentExecutorPlane });
+
+    const completed = await toolTaskOutput({ task_id: 'done' }, ctx);
+    const running = await toolTaskOutput({ task_id: 'live' }, ctx);
+
+    expect(completed).toContain('<output_state>complete</output_state>');
+    expect(completed).toContain(huge);
+    expect(completed).not.toContain('truncated to last 8192 bytes');
+    expect(running).toContain('<status>running</status>');
+    expect(running).toContain('<output_state>live_partial</output_state>');
+    expect(running).toContain('[...truncated to last 8192 bytes...]');
+    expect(running.length).toBeLessThan(huge.length);
   });
 });
 

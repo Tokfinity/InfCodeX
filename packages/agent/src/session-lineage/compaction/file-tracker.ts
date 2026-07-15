@@ -36,7 +36,12 @@ import type {
 } from '@kodax-ai/llm';
 import type { FileOperations } from './types.js';
 import type { KodaXJsonValue, KodaXSessionArtifactLedgerEntry } from '../../index.js';
-import { extractGrepHits, extractGlobPaths, extractBashResult } from './result-extractors.js';
+import {
+  extractBashResult,
+  extractGlobPaths,
+  extractGrepHits,
+  extractToolResultRecovery,
+} from './result-extractors.js';
 
 const LEDGER_MAX_ENTRIES = 256;
 const PATH_LIKE_KEYS = [
@@ -191,16 +196,46 @@ function createLedgerEntry(
   };
 }
 
+interface ToolResultEvidence {
+  readonly content?: string;
+  readonly metadata?: Record<string, unknown>;
+}
+
+function extractRecoveryMetadata(
+  evidence: ToolResultEvidence | undefined,
+): Record<string, KodaXJsonValue> | undefined {
+  const markerRecovery = extractToolResultRecovery(evidence?.content);
+  const structured = evidence?.metadata;
+  const structuredRecovery = structured?.truncated === true || structured?.capacityFallback === true;
+  const structuredPath = structuredRecovery
+    && typeof structured?.outputPath === 'string'
+    && structured.outputPath.trim().length > 0
+    ? structured.outputPath
+    : undefined;
+  const outputPath = structuredPath ?? markerRecovery?.artifactPath;
+  const truncated = structured?.truncated === true || markerRecovery !== undefined;
+  const capacityFallback = structured?.capacityFallback === true;
+
+  if (!outputPath && !truncated && !capacityFallback) return undefined;
+  return {
+    ...(outputPath ? { outputPath } : {}),
+    ...(truncated ? { truncated: true } : {}),
+    ...(capacityFallback ? { capacityFallback: true } : {}),
+  };
+}
+
 function buildArtifactEntry(
   block: KodaXToolUseBlock,
-  resultContent?: string,
+  result?: ToolResultEvidence,
 ): KodaXSessionArtifactLedgerEntry | null {
   const input = block.input as Record<string, unknown>;
+  const resultContent = result?.content;
+  const recoveryMetadata = extractRecoveryMetadata(result);
 
   if (block.name === 'read') {
     const target = readString(input, 'path');
     return target
-      ? createLedgerEntry('file_read', block.name, 'read', target, `Read ${target}`)
+      ? createLedgerEntry('file_read', block.name, 'read', target, `Read ${target}`, recoveryMetadata)
       : null;
   }
 
@@ -213,6 +248,7 @@ function buildArtifactEntry(
         block.name,
         target,
         `${block.name === 'write' ? 'Wrote' : 'Edited'} ${target}`,
+        recoveryMetadata,
       )
       : null;
   }
@@ -221,7 +257,10 @@ function buildArtifactEntry(
     const pattern = readString(input, 'pattern') ?? readString(input, 'glob');
     const scope = readString(input, 'path') ?? '.';
     if (!pattern) return null;
-    const metadata = toLedgerMetadata(input, ['pattern']) ?? {};
+    const metadata = {
+      ...(toLedgerMetadata(input, ['pattern']) ?? {}),
+      ...(recoveryMetadata ?? {}),
+    };
     // FEATURE_185 (v0.7.42): result-side enrichment — survive compaction by
     // capturing matched paths in ledger metadata. The metadata Record persists
     // past microcompact (which only clears tool_result.content) so the model
@@ -231,6 +270,9 @@ function buildArtifactEntry(
     if (extracted) {
       metadata.matchedPaths = [...extracted.paths] as KodaXJsonValue;
       if (extracted.truncated) metadata.truncated = true;
+      if (extracted.capturedCount !== undefined) metadata.capturedCount = extracted.capturedCount;
+      if (extracted.omittedCount !== undefined) metadata.omittedCount = extracted.omittedCount;
+      if (extracted.artifactPath) metadata.outputPath = extracted.artifactPath;
     }
     return createLedgerEntry(
       'path_scope',
@@ -246,7 +288,10 @@ function buildArtifactEntry(
     const query = readString(input, 'pattern') ?? readString(input, 'query');
     const scope = readString(input, 'path') ?? readString(input, 'provider') ?? 'default';
     if (!query) return null;
-    const metadata = toLedgerMetadata(input, ['path', 'provider', 'provider_id']) ?? {};
+    const metadata = {
+      ...(toLedgerMetadata(input, ['path', 'provider', 'provider_id']) ?? {}),
+      ...(recoveryMetadata ?? {}),
+    };
     // FEATURE_185 (v0.7.42): result-side enrichment. Same rationale as glob —
     // path:line + 80-char preview survives compaction in ledger metadata so
     // the model can recall "grep found auth.ts:42 / login.ts:56" without
@@ -263,6 +308,9 @@ function buildArtifactEntry(
         }
         if (extracted.matchCount !== undefined) metadata.matchCount = extracted.matchCount;
         if (extracted.truncated) metadata.truncated = true;
+        if (extracted.capturedCount !== undefined) metadata.capturedCount = extracted.capturedCount;
+        if (extracted.omittedCount !== undefined) metadata.omittedCount = extracted.omittedCount;
+        if (extracted.artifactPath) metadata.outputPath = extracted.artifactPath;
         if (extracted.resultMode !== 'unknown') metadata.resultMode = extracted.resultMode;
       }
     }
@@ -286,7 +334,10 @@ function buildArtifactEntry(
         'semantic_lookup',
         query,
         `Semantic lookup ${query} (${scope})`,
-        toLedgerMetadata(input, ['module', 'target_path']),
+        {
+          ...(toLedgerMetadata(input, ['module', 'target_path']) ?? {}),
+          ...(recoveryMetadata ?? {}),
+        },
       )
       : null;
   }
@@ -300,7 +351,10 @@ function buildArtifactEntry(
         'fetch',
         url,
         `Fetched ${url}`,
-        toLedgerMetadata(input, ['format', 'provider_id', 'capability_id']),
+        {
+          ...(toLedgerMetadata(input, ['format', 'provider_id', 'capability_id']) ?? {}),
+          ...(recoveryMetadata ?? {}),
+        },
       )
       : null;
   }
@@ -311,7 +365,10 @@ function buildArtifactEntry(
       return null;
     }
     const parsed = parseCommandTarget(command);
-    const metadata = toLedgerMetadata(input, ['timeout']) ?? {};
+    const metadata = {
+      ...(toLedgerMetadata(input, ['timeout']) ?? {}),
+      ...(recoveryMetadata ?? {}),
+    };
     // FEATURE_185 (v0.7.42): result-side enrichment for bash. Capture
     // exit_code + tail so the model can recall "npm test exited 1 with
     // FAIL auth.test.ts" without re-running. Cancellation / timeout
@@ -347,7 +404,17 @@ function buildArtifactEntry(
 
   const target = pickPathLikeTarget(input);
   if (!target) {
-    return null;
+    const outputPath = recoveryMetadata?.outputPath;
+    return typeof outputPath === 'string'
+      ? createLedgerEntry(
+        'path_scope',
+        block.name,
+        'recover_output',
+        outputPath,
+        `Recover full ${block.name} output from ${outputPath}`,
+        recoveryMetadata,
+      )
+      : null;
   }
 
   return createLedgerEntry(
@@ -356,6 +423,7 @@ function buildArtifactEntry(
     block.name,
     target,
     `${block.name} ${target}`,
+    recoveryMetadata,
   );
 }
 
@@ -427,14 +495,17 @@ export function extractArtifactLedger(
   // map so `buildArtifactEntry` can enrich search/glob entries with parsed
   // hits/paths from the corresponding tool_result block. The map is built in
   // a single scan; cost is linear in total block count.
-  const toolResultsById = new Map<string, string>();
+  const toolResultsById = new Map<string, ToolResultEvidence>();
   for (const msg of messages) {
     if (!Array.isArray(msg.content)) continue;
     for (const block of msg.content) {
       if (!isToolResultBlock(block)) continue;
       const text = readToolResultText(block);
-      if (text !== undefined) {
-        toolResultsById.set(block.tool_use_id, text);
+      if (text !== undefined || block.metadata !== undefined) {
+        toolResultsById.set(block.tool_use_id, {
+          ...(text !== undefined ? { content: text } : {}),
+          ...(block.metadata !== undefined ? { metadata: block.metadata } : {}),
+        });
       }
     }
   }
@@ -456,8 +527,8 @@ export function extractArtifactLedger(
         continue;
       }
 
-      const resultContent = toolResultsById.get(block.id);
-      const entry = buildArtifactEntry(block, resultContent);
+      const result = toolResultsById.get(block.id);
+      const entry = buildArtifactEntry(block, result);
       if (entry) {
         entries.push(entry);
       }

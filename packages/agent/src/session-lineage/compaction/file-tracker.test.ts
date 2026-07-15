@@ -34,11 +34,15 @@ describe('extractArtifactLedger', () => {
 });
 
 describe('FEATURE_185 (v0.7.42): result-side enrichment', () => {
+  const recoverableOutputPath = 'C:\\Users\\test\\.kodax\\tool-results\\full-result.txt';
+  const recoverableMarker = `[KODAX_RESULT_INCOMPLETE. Tool output truncated. Showing 1 of 200 lines. Full output saved to: ${recoverableOutputPath}. Use read on the saved output path.]`;
+
   function buildToolPair(opts: {
     toolUseId: string;
     toolName: string;
     input: Record<string, unknown>;
     resultContent: string;
+    resultMetadata?: Record<string, unknown>;
   }): KodaXMessage[] {
     return [
       {
@@ -59,6 +63,7 @@ describe('FEATURE_185 (v0.7.42): result-side enrichment', () => {
             type: 'tool_result',
             tool_use_id: opts.toolUseId,
             content: opts.resultContent,
+            ...(opts.resultMetadata ? { metadata: opts.resultMetadata } : {}),
           },
         ],
       },
@@ -90,6 +95,21 @@ describe('FEATURE_185 (v0.7.42): result-side enrichment', () => {
       preview: 'function authenticate(user) {',
     });
     expect(entry.metadata?.resultMode).toBe('content');
+  });
+
+  it('grep ledger entry keeps a recoverable output pointer from the capacity marker', () => {
+    const ledger = extractArtifactLedger(buildToolPair({
+      toolUseId: 'tool_use_recoverable_grep',
+      toolName: 'grep',
+      input: { pattern: 'authenticate', path: 'src/' },
+      resultContent: `src/auth.ts:42: function authenticate(user) {\n\n${recoverableMarker}`,
+    }));
+
+    expect(ledger[0]?.metadata).toEqual(expect.objectContaining({
+      outputPath: recoverableOutputPath,
+      truncated: true,
+      capturedCount: 1,
+    }));
   });
 
   it('grep ledger entry has no `hits` metadata when result is a placeholder', () => {
@@ -149,6 +169,66 @@ describe('FEATURE_185 (v0.7.42): result-side enrichment', () => {
       'packages/coding/src/login.ts',
       'packages/session-lineage/src/session.ts',
     ]);
+  });
+
+  it('glob ledger entry keeps a recoverable output pointer from the capacity marker', () => {
+    const ledger = extractArtifactLedger(buildToolPair({
+      toolUseId: 'tool_use_recoverable_glob',
+      toolName: 'glob',
+      input: { pattern: '**/*.ts', path: 'packages/' },
+      resultContent: `packages/coding/src/auth.ts\n\n${recoverableMarker}`,
+    }));
+
+    expect(ledger[0]?.metadata).toEqual(expect.objectContaining({
+      outputPath: recoverableOutputPath,
+      truncated: true,
+      capturedCount: 1,
+    }));
+  });
+
+  it('creates a recoverable ledger entry for a generic tool result with no path input', () => {
+    const ledger = extractArtifactLedger(buildToolPair({
+      toolUseId: 'tool_use_recoverable_generic',
+      toolName: 'custom_report',
+      input: { topic: 'audit' },
+      resultContent: `short preview\n\n${recoverableMarker}`,
+    }));
+
+    expect(ledger).toHaveLength(1);
+    expect(ledger[0]).toEqual(expect.objectContaining({
+      kind: 'path_scope',
+      sourceTool: 'custom_report',
+      action: 'recover_output',
+      target: recoverableOutputPath,
+      metadata: expect.objectContaining({
+        outputPath: recoverableOutputPath,
+        truncated: true,
+      }),
+    }));
+  });
+
+  it('prefers structured tool-result recovery metadata when no text marker exists', () => {
+    const structuredPath = 'C:\\Users\\test\\.kodax\\tool-results\\structured.txt';
+    const ledger = extractArtifactLedger(buildToolPair({
+      toolUseId: 'tool_use_structured_recovery',
+      toolName: 'custom_report',
+      input: { topic: 'audit' },
+      resultContent: 'short preview',
+      resultMetadata: {
+        outputPath: structuredPath,
+        truncated: true,
+        capacityFallback: true,
+      },
+    }));
+
+    expect(ledger[0]).toEqual(expect.objectContaining({
+      target: structuredPath,
+      metadata: expect.objectContaining({
+        outputPath: structuredPath,
+        truncated: true,
+        capacityFallback: true,
+      }),
+    }));
   });
 
   it('count-mode grep records matchCount instead of hits', () => {
@@ -389,7 +469,10 @@ describe('FEATURE_185 (v0.7.42): end-to-end enrichment survives microcompact', (
     }
 
     // Step 4 — top-of-loop microcompact
-    const microcompacted = microcompact(messages, DEFAULT_MICROCOMPACTION_CONFIG) as KodaXMessage[];
+    const microcompacted = microcompact(messages, {
+      ...DEFAULT_MICROCOMPACTION_CONFIG,
+      enabled: true,
+    }) as KodaXMessage[];
     const earlyToolResultBlock = (microcompacted[1]!.content as KodaXToolResultBlock[])[0]!;
     expect(typeof earlyToolResultBlock.content).toBe('string');
     expect(earlyToolResultBlock.content).toMatch(/^\[Cleared:/);
@@ -442,7 +525,10 @@ describe('FEATURE_185 (v0.7.42): end-to-end enrichment survives microcompact', (
       messages.push({ role: 'user', content: [{ type: 'text', text: `u${i}` }] });
     }
 
-    const microcompacted = microcompact(messages, DEFAULT_MICROCOMPACTION_CONFIG) as KodaXMessage[];
+    const microcompacted = microcompact(messages, {
+      ...DEFAULT_MICROCOMPACTION_CONFIG,
+      enabled: true,
+    }) as KodaXMessage[];
     const ledgerAtCompaction = extractArtifactLedger(microcompacted);
     // After clearance the re-extract sees a placeholder, so no fresh enrichment.
     expect(ledgerAtCompaction[0]!.metadata?.exitCode).toBeUndefined();

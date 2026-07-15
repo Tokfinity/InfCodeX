@@ -1,4 +1,4 @@
-import { mkdir, readFile, rm, writeFile } from 'node:fs/promises';
+import { mkdir, readFile, rm, utimes, writeFile } from 'node:fs/promises';
 import path from 'node:path';
 import { mkdtemp } from 'node:fs/promises';
 import { tmpdir } from 'node:os';
@@ -136,6 +136,8 @@ describe('Checkpoint: findValidCheckpoint', () => {
       JSON.stringify(expiredCheckpoint),
       'utf8',
     );
+    const expiredMtime = new Date(Date.now() - CHECKPOINT_MAX_AGE_MS - 1000);
+    await utimes(path.join(taskDir, CHECKPOINT_FILE), expiredMtime, expiredMtime);
 
     const result = await findValidCheckpoint({
       provider: 'test',
@@ -161,6 +163,8 @@ describe('Checkpoint: findValidCheckpoint', () => {
       JSON.stringify(expiredCheckpoint),
       'utf8',
     );
+    const expiredMtime = new Date(Date.now() - CHECKPOINT_MAX_AGE_MS - 1000);
+    await utimes(checkpointPath, expiredMtime, expiredMtime);
 
     const result = await findValidCheckpoint({
       provider: 'test',
@@ -173,6 +177,41 @@ describe('Checkpoint: findValidCheckpoint', () => {
 
     expect(result).toBeUndefined();
     await expect(readFile(checkpointPath, 'utf8')).rejects.toThrow();
+  });
+
+  it('uses the latest checkpoint write time instead of the task creation time', async () => {
+    const root = await createTempDir('ckpt-long-task-');
+    const taskDir = path.join(root, 'task-001');
+    await mkdir(taskDir, { recursive: true });
+
+    const checkpoint = buildValidCheckpoint({
+      createdAt: new Date(Date.now() - CHECKPOINT_MAX_AGE_MS * 3).toISOString(),
+      gitCommit: '',
+      sessionId: 'session-current',
+      currentRound: 4,
+    });
+    await writeFile(
+      path.join(taskDir, CHECKPOINT_FILE),
+      JSON.stringify(checkpoint),
+      'utf8',
+    );
+    await writeFile(
+      path.join(taskDir, 'managed-task.json'),
+      JSON.stringify(buildMinimalManagedTask('task-001')),
+      'utf8',
+    );
+
+    const result = await findValidCheckpoint({
+      provider: 'test',
+      session: { id: 'session-current' },
+      context: {
+        managedTaskWorkspaceDir: root,
+        gitRoot: '/nonexistent',
+      },
+    });
+
+    expect(result?.checkpoint.currentRound).toBe(4);
+    await expect(readFile(path.join(taskDir, CHECKPOINT_FILE), 'utf8')).resolves.toBeDefined();
   });
 
   it('returns undefined when git commit does not match', async () => {

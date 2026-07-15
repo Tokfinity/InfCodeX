@@ -34,6 +34,7 @@ export interface RuntimeContextBudgetSnapshot {
   readonly pressure: RuntimeContextPressure;
   readonly tokenBreakdown: RuntimeContextBudgetBreakdown;
   readonly usedTokens: number;
+  /** Diagnostic slack for the existing snapshot; never an append budget. */
   readonly availableTokens: number;
   readonly usedRatio: number;
   readonly toolSchemaRatio: number;

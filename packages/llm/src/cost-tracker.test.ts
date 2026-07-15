@@ -148,19 +148,29 @@ describe('cost-tracker', () => {
       expect(record.cost).toBeCloseTo(4.8); // 0.8 + 4.0
     });
 
-    it('should handle cache tokens', () => {
+    it('should not bill cache tokens again as uncached input', () => {
       let tracker = createCostTracker();
+      const overrides: Readonly<Record<string, Readonly<Record<string, CostRate>>>> = {
+        anthropic: {
+          'claude-opus-4-6': {
+            inputPer1M: 5,
+            outputPer1M: 25,
+            cacheReadPer1M: 0.5,
+            cacheWritePer1M: 6.25,
+          },
+        },
+      };
       tracker = recordUsage(tracker, {
         provider: 'anthropic',
         model: 'claude-opus-4-6',
-        inputTokens: 1_000_000,
+        inputTokens: 2_000_000,
         outputTokens: 100_000,
         cacheReadTokens: 500_000,
         cacheWriteTokens: 500_000,
-      });
+      }, overrides);
 
       const record = tracker.records[0];
-      const expected = 5 + 2.5 + 0.5; // input + output + cache (1M * 0.5 per 1M)
+      const expected = 5 + 2.5 + 0.25 + 3.125;
       expect(record.cost).toBeCloseTo(expected);
     });
 

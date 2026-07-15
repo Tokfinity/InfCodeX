@@ -46,11 +46,13 @@ export async function toolMcpSearch(
     const kind = readOptionalString(input, 'kind');
     const server = readOptionalString(input, 'server');
     const limit = clampLimit(input.limit);
-    const results = await ctx.extensionRuntime.searchCapabilities('mcp', query, {
+    const probedResults = await ctx.extensionRuntime.searchCapabilities('mcp', query, {
       kind: kind as 'tool' | 'resource' | 'prompt' | undefined,
-      limit,
+      limit: limit + 1,
       server,
     });
+    const hasMore = probedResults.length > limit;
+    const results = probedResults.slice(0, limit);
 
     const items: KodaXRetrievalItem[] = results.map((entry) => {
       const record = asRecord(entry);
@@ -88,7 +90,9 @@ export async function toolMcpSearch(
       trust: 'provider',
       freshness: 'unknown',
       provider: server ? `mcp:${server}` : 'mcp',
-      summary: formatSearchSummary(items.length, query),
+      summary: `${hasMore
+        ? `[RESULT_LIMIT_REACHED: limit=${limit}; additional MCP capabilities were omitted.] `
+        : ''}${formatSearchSummary(items.length, query)}`,
       items,
       artifacts,
       metadata: {

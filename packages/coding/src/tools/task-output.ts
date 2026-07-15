@@ -51,11 +51,10 @@ const TOOL_NAME = 'task_output';
 
 const DEFAULT_TIMEOUT_MS = 30000;
 const MAX_TIMEOUT_MS = 120000;
-/** Cap on inlined `<output>` content. Mirrors the per-snapshot
- * `finalText` size which is already guardrailed by the dispatch
- * pipeline, but the tool result also enforces a tail cap so a 50KB
- * spillover preview cannot blow the parent's per-tool budget. */
-const OUTPUT_TAIL_BYTES = 8192;
+/** Running external tasks may expose an evolving output preview. Keep that
+ * diagnostic view bounded; terminal output is returned in full and the shared
+ * tool-result policy owns any context-driven spill or pagination. */
+const LIVE_OUTPUT_TAIL_BYTES = 8192;
 
 export async function toolTaskOutput(
   input: Record<string, unknown>,
@@ -185,6 +184,8 @@ function renderLedgerTask(
   retrievalStatus: TaskOutputRetrievalStatus,
 ): string {
   const duration = Math.max(0, Date.parse(task.updatedAt) - Date.parse(task.createdAt));
+  const terminal = isLedgerTerminal(task);
+  const body = task.output ?? task.error;
   const lines = [
     `<retrieval_status>${retrievalStatus}</retrieval_status>`,
     `<task_id>${escapeXmlContent(task.taskId)}</task_id>`,
@@ -194,6 +195,7 @@ function renderLedgerTask(
     `<agent_state>${task.state}</agent_state>`,
     `<cancellation>${task.cancellation}</cancellation>`,
     `<duration_ms>${duration}</duration_ms>`,
+    `<output_state>${terminal ? 'complete' : body === undefined ? 'pending' : 'live_partial'}</output_state>`,
   ];
   if (retrievalStatus === 'wait_expired') {
     lines.push('<note>The bounded read window expired; the task remains active or uncertain.</note>');
@@ -202,18 +204,19 @@ function renderLedgerTask(
     lines.push(`<progress>${escapeXmlContent(JSON.stringify(task.progress))}</progress>`);
   }
   if (task.artifacts && task.artifacts.length > 0) {
-    lines.push(`<artifacts>${escapeXmlContent(tailToBytes(
-      JSON.stringify(task.artifacts),
-      OUTPUT_TAIL_BYTES,
-    ))}</artifacts>`);
+    const artifacts = JSON.stringify(task.artifacts);
+    lines.push(`<artifacts>${escapeXmlContent(
+      terminal ? artifacts : tailToBytes(artifacts, LIVE_OUTPUT_TAIL_BYTES),
+    )}</artifacts>`);
   }
   if (task.usage) {
     lines.push(`<usage>${escapeXmlContent(JSON.stringify(task.usage))}</usage>`);
   }
-  const body = task.output ?? task.error;
   if (body !== undefined) {
     lines.push(task.output !== undefined ? '<output>' : '<error>');
-    lines.push(escapeXmlContent(tailToBytes(body, OUTPUT_TAIL_BYTES)));
+    lines.push(escapeXmlContent(
+      terminal ? body : tailToBytes(body, LIVE_OUTPUT_TAIL_BYTES),
+    ));
     lines.push(task.output !== undefined ? '</output>' : '</error>');
   }
   return lines.join('\n');
@@ -241,6 +244,7 @@ function renderWorkflowRunProgress(taskId: string, view: WorkflowRunProgressView
     `<kind>workflow</kind>`,
     `<workflow>${escapeXmlContent(view.workflowName)}</workflow>`,
     `<status>${view.status}</status>`,
+    '<output_state>pending</output_state>',
   ];
   if (view.phase !== undefined) {
     const phase =
@@ -291,6 +295,7 @@ function renderSnapshot(
     `<status>${snap.status}</status>`,
     `<iterations>${snap.iterations}/${snap.maxIterations}</iterations>`,
     `<duration_ms>${duration}</duration_ms>`,
+    `<output_state>${snap.status === 'running' ? 'pending' : 'complete'}</output_state>`,
   ];
 
   if (retrievalStatus === 'wait_expired') {
@@ -313,10 +318,9 @@ function renderSnapshot(
   }
 
   if (snap.status !== 'running' && snap.finalText !== undefined) {
-    const body = tailToBytes(snap.finalText, OUTPUT_TAIL_BYTES);
     const tag = snap.status === 'completed' ? 'output' : 'error';
     lines.push(`<${tag}>`);
-    lines.push(body);
+    lines.push(snap.finalText);
     lines.push(`</${tag}>`);
   }
 

@@ -30,8 +30,9 @@ describe('FEATURE_218 kodax_manual tool', () => {
   it('returns the index for empty input (never fabricates)', async () => {
     const out = await toolKodaxManual({}, ctx);
     expect(out).toContain('KodaX Manual — Index');
-    expect(out).toContain('extensions');
-    expect(out).toContain('troubleshooting');
+    expect(out).toContain('Topics:');
+    expect(out).toContain('"id":"extensions"');
+    expect(out).toContain('"id":"troubleshooting"');
   });
 
   it('returns extension authoring and usage guidance', async () => {

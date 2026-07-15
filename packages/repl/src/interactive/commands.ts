@@ -256,20 +256,10 @@ async function reloadExtensionRuntimeFromDisk(): Promise<ReloadExtensionRuntimeS
 
 function createManualCompactionConfig(
   config: CompactionConfig,
-  currentTokens: number,
-  contextWindow: number
 ): CompactionConfig {
-  if (!Number.isFinite(currentTokens) || currentTokens <= 0 || contextWindow <= 0) {
-    return { ...config, enabled: true };
-  }
-
-  const currentUsagePercent = (currentTokens / contextWindow) * 100;
-  const forcedTriggerPercent = Math.max(1, Math.ceil(currentUsagePercent) - 1);
-
   return {
     ...config,
     enabled: true,
-    triggerPercent: Math.min(config.triggerPercent, forcedTriggerPercent),
   };
 }
 
@@ -501,7 +491,7 @@ export const BUILTIN_COMMANDS: Command[] = [
           ?? provider.getContextWindow?.()
           ?? 200000;
         const currentTokens = context.contextTokenSnapshot?.currentTokens ?? estimateTokens(context.messages);
-        const manualConfig = createManualCompactionConfig(config, currentTokens, contextWindow);
+        const manualConfig = createManualCompactionConfig(config);
 
         console.log(chalk.dim('\n[Compacting conversation...]'));
 
@@ -522,6 +512,8 @@ export const BUILTIN_COMMANDS: Command[] = [
             CODING_SUMMARY_PROMPT,
             CODING_UPDATE_SUMMARY_PROMPT,
             currentConfig.model,
+            true,
+            provider.getEffectiveMaxOutputTokens(currentConfig.model),
           );
 
           if (!result.compacted) {
@@ -534,8 +526,8 @@ export const BUILTIN_COMMANDS: Command[] = [
           context.messages = result.messages;
           context.contextTokenSnapshot = {
             currentTokens: result.tokensAfter,
-            baselineEstimatedTokens: result.tokensAfter,
-            source: 'estimate',
+            baselineEstimatedTokens: estimateTokens(result.messages),
+            source: context.contextTokenSnapshot?.source ?? 'estimate',
           };
 
           // Push the post-compact token count into the UI layer's live
@@ -589,7 +581,7 @@ export const BUILTIN_COMMANDS: Command[] = [
       console.log(chalk.bold('Configuration:'));
       console.log(chalk.dim('  Config file: ~/.kodax/config.json'));
       console.log(chalk.dim('  Settings:'));
-      console.log(chalk.dim('    - compaction.triggerPercent: Usage percentage that triggers compaction'));
+      console.log(chalk.dim('    - compaction.triggerPercent: Optional early trigger below 100; 100 uses physical capacity'));
       console.log(chalk.dim('    - compaction.enabled: Controls auto-compaction only; /compact always remains available'));
       console.log(chalk.dim('    - compaction.contextWindow: Optional token-window override'));
       console.log(chalk.dim('    - compaction.protectionPercent / rollingSummaryPercent / pruningThresholdTokens: Advanced tuning'));
@@ -2498,14 +2490,20 @@ function printHelp(): void {
 // Print detailed help for a specific command.
 /**
  * FEATURE_218 — render a KodaX self-knowledge manual topic in the REPL,
- * reusing the same bounded resolver the `kodax_manual` tool uses. Unknown
+ * reusing the same structured resolver the `kodax_manual` tool uses. Unknown
  * topics resolve to the manual index instead of erroring.
  */
 function printManualTopic(topic: string): void {
   const result = resolveKodaXManual({ topic });
   console.log(`\n${chalk.cyan(result.title)}`);
   console.log(result.content);
-  if (result.nextTopics.length > 0) {
+  if (result.topics.length > 0) {
+    console.log();
+    for (const topic of result.topics) {
+      console.log(`- ${topic.id}: ${topic.summary}`);
+    }
+  }
+  if (result.topics.length === 0 && result.nextTopics.length > 0) {
     console.log(chalk.dim(`\nRelated topics: ${result.nextTopics.join(', ')}`));
   }
   console.log();

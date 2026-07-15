@@ -464,8 +464,16 @@ export function waitForWakeEvent<TChildResult = unknown>(
  * may leak into this signature**, otherwise ADR-021 layer
  * independence breaks and `@kodax/agent` cannot build standalone.
  */
+export interface EnvelopeAggregateCapacityContext {
+  /** Authoritative transcript immediately before the resume messages. */
+  readonly transcript: readonly KodaXMessage[];
+  /** Non-synthetic messages that will share the same next request. */
+  readonly pendingMessages: readonly KodaXMessage[];
+}
+
 export type EnvelopeAggregateEnforcer = (
   fragments: readonly string[],
+  context?: EnvelopeAggregateCapacityContext,
 ) => readonly string[] | Promise<readonly string[]>;
 
 /**
@@ -508,6 +516,7 @@ export async function composeIdleYieldUserMessage<TChildResult = unknown>(
   // only signal the UI gets about a follow-up typed during idle-yield.
   onUserPrompts?: (prompts: readonly string[]) => void,
   resolveTurnId?: () => string | undefined,
+  priorMessages: readonly KodaXMessage[] = [],
 ): Promise<readonly KodaXMessage[]> {
   const promptFragments: PromptFragment[] = [];
   const syntheticFragments: string[] = [];
@@ -581,12 +590,24 @@ export async function composeIdleYieldUserMessage<TChildResult = unknown>(
   }
 
   const messages: KodaXMessage[] = [];
+  const promptTurnId = promptFragments.length > 0 ? resolveTurnId?.() : undefined;
+  const promptMessage: KodaXMessage | undefined = promptFragments.length > 0
+    ? {
+        role: 'user',
+        content: buildQueuedPromptContent(promptFragments),
+        ...(promptTurnId !== undefined ? { turnId: promptTurnId } : {}),
+        timestamp: new Date().toISOString(),
+      }
+    : undefined;
 
   if (syntheticFragments.length > 0) {
     // Aggregate budget enforcer applies only here — task-notification
     // envelopes are the side that can balloon into MB of child output.
     const enforced = enforceAggregate
-      ? await enforceAggregate(syntheticFragments)
+      ? await enforceAggregate(syntheticFragments, {
+          transcript: priorMessages,
+          pendingMessages: promptMessage ? [promptMessage] : [],
+        })
       : syntheticFragments;
     if (enforced.length > 0) {
       messages.push({
@@ -607,25 +628,14 @@ export async function composeIdleYieldUserMessage<TChildResult = unknown>(
     }
   }
 
-  if (promptFragments.length > 0) {
+  if (promptMessage) {
     // FEATURE_213 — tell the caller about the user's typed prompt(s) so the UI
     // records them. The message below only reaches the AGENT transcript; the UI
     // renders from its own history/ledger and would otherwise never see this.
-    const content = buildQueuedPromptContent(promptFragments);
-    const promptTurnId = resolveTurnId?.();
     onUserPrompts?.(promptFragments.map((fragment) => fragment.content));
-    messages.push({
-      role: 'user',
-      // No `_synthetic` flag — this IS the user's typed input echoed
-      // into the transcript as a normal user bubble. Multiple drained
-      // prompts (rare: user typed N before wake) are joined with the
-      // same `\n\n---\n\n` separator the REPL's `popAllEditable` uses,
-      // so the agent sees a structured boundary between them.
-      content,
-      ...(promptTurnId !== undefined ? { turnId: promptTurnId } : {}),
-      // GOAL 2: real finalize-time for the chat-while-waiting user turn.
-      timestamp: new Date().toISOString(),
-    });
+    // No `_synthetic` flag — this IS the user's typed input echoed into
+    // the transcript as a normal user bubble.
+    messages.push(promptMessage);
   }
 
   return messages;

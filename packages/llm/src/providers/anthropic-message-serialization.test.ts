@@ -238,6 +238,46 @@ describe('anthropic message serialization', () => {
     });
   });
 
+  it('keeps tool-result recovery metadata local instead of serializing it to the wire', async () => {
+    const create = vi.fn().mockResolvedValue(createCompletedAnthropicStream());
+    const provider = new TestAnthropicProvider({ messages: { create } });
+    const messages: KodaXMessage[] = [
+      {
+        role: 'assistant',
+        content: [{ type: 'tool_use', id: 'tool_local', name: 'read', input: {} }],
+      },
+      {
+        role: 'user',
+        content: [{
+          type: 'tool_result',
+          tool_use_id: 'tool_local',
+          content: 'preview',
+          metadata: {
+            outputPath: 'C:/private/full-output.txt',
+            localOnlySentinel: 'must-not-reach-provider',
+          },
+        }],
+      },
+    ];
+
+    await provider.stream(messages, TOOLS, 'sys');
+
+    const kwargs = create.mock.calls[0]?.[0];
+    const userMessage = kwargs.messages.find(
+      (message: { role: string }) => message.role === 'user',
+    );
+    const toolResult = userMessage.content.find(
+      (block: { type: string }) => block.type === 'tool_result',
+    );
+    expect(toolResult).toEqual({
+      type: 'tool_result',
+      tool_use_id: 'tool_local',
+      content: 'preview',
+    });
+    expect(JSON.stringify(kwargs)).not.toContain('must-not-reach-provider');
+    expect(JSON.stringify(kwargs)).not.toContain('C:/private/full-output.txt');
+  });
+
   // L5 (v0.7.28): strictThinkingSignature mode (Anthropic proper)
   // converts thinking blocks with empty/cross-provider signatures into
   // a <prior_reasoning> text block. This preserves the reasoning text

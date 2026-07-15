@@ -23,6 +23,13 @@
 
 import { spawn } from 'child_process';
 import { killChildProcessTree } from '@kodax-ai/agent';
+import {
+  appendBashOutputChunk,
+  createBashOutputCollector,
+  disposeBashOutputCollector,
+  finishBashOutputCollector,
+  type BashOutputCollector,
+} from '../tools/bash-output-collector.js';
 
 export type DeterministicEvaluatorHint = 'build' | 'test' | 'lint';
 
@@ -32,9 +39,9 @@ export interface DeterministicEvaluatorResult {
   readonly status: 'pass' | 'fail' | 'skipped' | 'error';
   /** Process exit code; `undefined` when the process did not run. */
   readonly exitCode: number | undefined;
-  /** Stderr captured from the child process, truncated to 4 KiB. */
+  /** Complete stderr. The historical field name is retained for API compatibility. */
   readonly stderrTail: string;
-  /** Stdout tail captured for context, truncated to 2 KiB. */
+  /** Complete stdout. The historical field name is retained for API compatibility. */
   readonly stdoutTail: string;
   /** Wall-clock duration in milliseconds. */
   readonly durationMs: number;
@@ -60,8 +67,6 @@ export interface RunDeterministicEvaluatorInput {
 }
 
 const DEFAULT_TIMEOUT_MS = 90_000;
-const STDERR_CAP = 4096;
-const STDOUT_CAP = 2048;
 
 function defaultCommandFor(input: RunDeterministicEvaluatorInput): string {
   if (input.commandOverride && input.commandOverride.trim().length > 0) {
@@ -79,14 +84,32 @@ function defaultCommandFor(input: RunDeterministicEvaluatorInput): string {
   }
 }
 
-function tail(value: string, max: number): string {
-  if (value.length <= max) return value;
-  return `…${value.slice(-max)}`;
+interface FinalizedStream {
+  readonly text: string;
+  readonly error?: string;
+}
+
+function finalizeStream(label: 'stdout' | 'stderr', collector: BashOutputCollector): FinalizedStream {
+  try {
+    return { text: finishBashOutputCollector(collector).toString('utf-8') };
+  } catch (error) {
+    const message = error instanceof Error ? error.message : String(error);
+    return {
+      text: '',
+      error: `[deterministic-evaluator] Failed to finalize complete ${label}: ${message}`,
+    };
+  } finally {
+    disposeBashOutputCollector(collector);
+  }
+}
+
+function appendDiagnostic(output: string, diagnostic: string): string {
+  return output.length > 0 ? `${output}\n${diagnostic}` : diagnostic;
 }
 
 /**
- * Run a deterministic check for the given hint. Captures stderr +
- * stdout tail + exit code. The `status` summarizes the outcome:
+ * Run a deterministic check for the given hint. Captures complete stderr,
+ * complete stdout, and exit code. The `status` summarizes the outcome:
  *
  *  - `'pass'`   — exit code 0
  *  - `'fail'`   — exit code !== 0
@@ -110,10 +133,21 @@ export async function runDeterministicEvaluator(
       detached: process.platform !== 'win32',
     });
 
-    let stdout = '';
-    let stderr = '';
+    const stdoutCollector = createBashOutputCollector();
+    const stderrCollector = createBashOutputCollector();
     let timedOut = false;
     let resolved = false;
+
+    const finalizeOutput = (): { stdout: string; stderr: string; captureFailed: boolean } => {
+      const stdout = finalizeStream('stdout', stdoutCollector);
+      const stderr = finalizeStream('stderr', stderrCollector);
+      const diagnostics = [stdout.error, stderr.error].filter((value): value is string => Boolean(value));
+      return {
+        stdout: stdout.text,
+        stderr: diagnostics.reduce(appendDiagnostic, stderr.text),
+        captureFailed: diagnostics.length > 0,
+      };
+    };
 
     const timeoutHandle = setTimeout(() => {
       timedOut = true;
@@ -121,31 +155,31 @@ export async function runDeterministicEvaluator(
     }, timeoutMs);
 
     proc.stdout?.on('data', (chunk: Buffer | string) => {
-      const text = typeof chunk === 'string' ? chunk : chunk.toString('utf-8');
-      stdout += text;
-      if (stdout.length > STDOUT_CAP * 4) {
-        stdout = stdout.slice(-STDOUT_CAP * 2);
-      }
+      appendBashOutputChunk(
+        stdoutCollector,
+        typeof chunk === 'string' ? Buffer.from(chunk, 'utf-8') : chunk,
+      );
     });
     proc.stderr?.on('data', (chunk: Buffer | string) => {
-      const text = typeof chunk === 'string' ? chunk : chunk.toString('utf-8');
-      stderr += text;
-      if (stderr.length > STDERR_CAP * 4) {
-        stderr = stderr.slice(-STDERR_CAP * 2);
-      }
+      appendBashOutputChunk(
+        stderrCollector,
+        typeof chunk === 'string' ? Buffer.from(chunk, 'utf-8') : chunk,
+      );
     });
 
     proc.on('error', (err) => {
       if (resolved) return;
       resolved = true;
       clearTimeout(timeoutHandle);
+      const output = finalizeOutput();
+      const message = err instanceof Error ? err.message : String(err);
       resolve({
         hint: input.hint,
         command,
         status: 'error',
         exitCode: undefined,
-        stderrTail: tail(stderr || (err instanceof Error ? err.message : String(err)), STDERR_CAP),
-        stdoutTail: tail(stdout, STDOUT_CAP),
+        stderrTail: appendDiagnostic(output.stderr, message),
+        stdoutTail: output.stdout,
         durationMs: Date.now() - startedAt,
       });
     });
@@ -154,17 +188,33 @@ export async function runDeterministicEvaluator(
       if (resolved) return;
       resolved = true;
       clearTimeout(timeoutHandle);
+      const output = finalizeOutput();
+      const { stdout } = output;
+      let { stderr } = output;
       if (timedOut) {
+        stderr = appendDiagnostic(
+          stderr,
+          `[deterministic-evaluator] TIMEOUT after ${timeoutMs}ms (signal=${signal ?? 'SIGTERM'})`,
+        );
         resolve({
           hint: input.hint,
           command,
           status: 'error',
           exitCode: code ?? undefined,
-          stderrTail: tail(
-            `${stderr}\n[deterministic-evaluator] TIMEOUT after ${timeoutMs}ms (signal=${signal ?? 'SIGTERM'})`,
-            STDERR_CAP,
-          ),
-          stdoutTail: tail(stdout, STDOUT_CAP),
+          stderrTail: stderr,
+          stdoutTail: stdout,
+          durationMs: Date.now() - startedAt,
+        });
+        return;
+      }
+      if (output.captureFailed) {
+        resolve({
+          hint: input.hint,
+          command,
+          status: 'error',
+          exitCode: code ?? undefined,
+          stderrTail: stderr,
+          stdoutTail: stdout,
           durationMs: Date.now() - startedAt,
         });
         return;
@@ -187,8 +237,8 @@ export async function runDeterministicEvaluator(
           command,
           status: 'skipped',
           exitCode: code ?? undefined,
-          stderrTail: tail(stderr, STDERR_CAP),
-          stdoutTail: tail(stdout, STDOUT_CAP),
+          stderrTail: stderr,
+          stdoutTail: stdout,
           durationMs: Date.now() - startedAt,
         });
         return;
@@ -198,8 +248,8 @@ export async function runDeterministicEvaluator(
         command,
         status: code === 0 ? 'pass' : 'fail',
         exitCode: code ?? undefined,
-        stderrTail: tail(stderr, STDERR_CAP),
-        stdoutTail: tail(stdout, STDOUT_CAP),
+        stderrTail: stderr,
+        stdoutTail: stdout,
         durationMs: Date.now() - startedAt,
       });
     });
@@ -217,18 +267,15 @@ export function formatDeterministicEvaluatorResult(
   const header = `[deterministic-evaluator:${result.hint}] ${result.status} (exit=${
     result.exitCode ?? 'n/a'
   }, ${result.durationMs}ms) — \`${result.command}\``;
-  if (result.status === 'pass' || result.status === 'skipped') {
-    return result.status === 'skipped'
-      ? `${header}\n  Skipped: command not available; not blocking the run.`
-      : header;
+  const parts = [header];
+  if (result.status === 'skipped') {
+    parts.push('  Skipped: command not available; not blocking the run.');
   }
-  const tailParts = [header];
+  if (result.stdoutTail) {
+    parts.push('--- stdout ---', result.stdoutTail);
+  }
   if (result.stderrTail) {
-    tailParts.push('--- stderr tail ---');
-    tailParts.push(result.stderrTail);
-  } else if (result.stdoutTail) {
-    tailParts.push('--- stdout tail (no stderr) ---');
-    tailParts.push(result.stdoutTail);
+    parts.push('--- stderr ---', result.stderrTail);
   }
-  return tailParts.join('\n');
+  return parts.join('\n');
 }

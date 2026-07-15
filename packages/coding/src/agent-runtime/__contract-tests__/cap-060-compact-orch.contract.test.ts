@@ -1,335 +1,133 @@
-/**
- * Contract test for CAP-060: compaction lifecycle orchestration
- * (intelligentCompact + circuit breaker + events).
- *
- * Inventory entry: docs/features/v0.7.29-capability-inventory.md#cap-060-compaction-lifecycle-orchestration-intelligentcompact--circuit-breaker--events
- *
- * Test obligations:
- * - CAP-COMPACT-ORCH-001: success path emits all compaction events
- * - CAP-COMPACT-ORCH-002: failure increments consecutive failure counter
- * - CAP-COMPACT-ORCH-003: partial success keeps counter incrementing
- * - CAP-COMPACT-ORCH-004: circuit breaker trips, only LLM disabled
- *
- * Risk: HIGH (stateful — circuit breaker counter spans multiple turns)
- *
- * Class: 1
- *
- * Verified location: agent-runtime/middleware/compaction-orchestration.ts:tryIntelligentCompact
- * (extracted from agent.ts:605-704 — pre-FEATURE_100 baseline —
- * during FEATURE_100 P3.4c).
- *
- * Time-ordering constraint: AFTER trigger decision (CAP-059); BEFORE
- * graceful degradation gate (CAP-062). Counter only resets when
- * post-compact tokens drop below trigger.
- *
- * Active here:
- *   - `needsCompact === false` → identity, counter unchanged
- *   - circuit breaker tripped → identity, counter unchanged
- *   - LLM threw → counter++, compacted = messages identity
- *   - LLM success below trigger → counter reset to 0
- *   - LLM partial success still over trigger → counter++
- *   - all four lifecycle events fire in success path
- *
- * STATUS: ACTIVE since FEATURE_100 P3.4c.
- */
-
 import { beforeEach, describe, expect, it, vi } from 'vitest';
 
-import type { KodaXBaseProvider, KodaXMessage } from '@kodax-ai/llm';
-import {
-  setKodaXDiagnosticSink,
-  type CompactionConfig,
-  type CompactionResult,
-  type KodaXDiagnostic,
-} from '@kodax-ai/agent';
-// Mock @kodax-ai/agent's `compact` so we can deterministically control
-// the LLM compaction outcome (success / partial / throw / no-op)
-// without exercising the real provider/LLM stack.
-// (v0.7.35.1 FEATURE_142 Batch B: compact() moved from @kodax-ai/agent to
-// @kodax-ai/agent; see ADR-021.)
 vi.mock('@kodax-ai/agent', async (importOriginal) => {
   const actual = await importOriginal<typeof import('@kodax-ai/agent')>();
-  return {
-    ...actual,
-    compact: vi.fn(),
-  };
+  return { ...actual, compact: vi.fn() };
 });
 
-import { compact as mockedCompact } from '@kodax-ai/agent';
 import {
-  tryIntelligentCompact,
-  COMPACT_CIRCUIT_BREAKER_LIMIT,
-} from '../middleware/compaction-orchestration.js';
+  ContextCapacityError,
+  compact as mockedCompact,
+  type CompactionResult,
+} from '@kodax-ai/agent';
+import type { KodaXMessage } from '@kodax-ai/llm';
+import { estimateTokens } from '../../tokenizer.js';
 import type { KodaXEvents } from '../../types.js';
+import { tryIntelligentCompact } from '../middleware/compaction-orchestration.js';
 
 const compactMock = mockedCompact as unknown as ReturnType<typeof vi.fn>;
 
-// Reset the mock at the top-level so gate tests (which never reach
-// the LLM call) do not inherit stale state from a future edit that
-// adds a path-reaching test in the wrong describe.
+function messages(): KodaXMessage[] {
+  return [{ role: 'user', content: `FULL_HISTORY\n${'evidence '.repeat(12_000)}` }];
+}
+
+function result(input: KodaXMessage[]): CompactionResult {
+  const compacted = [{ role: 'system' as const, content: 'semantic summary' }];
+  return {
+    compacted: true,
+    messages: compacted,
+    summary: 'semantic summary',
+    tokensBefore: estimateTokens(input),
+    tokensAfter: estimateTokens(compacted),
+    entriesRemoved: input.length,
+  };
+}
+
+function events(): KodaXEvents {
+  return {
+    onCompactStart: vi.fn(),
+    onCompactEnd: vi.fn(),
+    onCompactStats: vi.fn(),
+    onCompact: vi.fn(),
+  };
+}
+
+function input(
+  currentTokens: number,
+  triggerPercent: number,
+  compactConsecutiveFailures = 0,
+) {
+  return {
+    messages: messages(),
+    needsCompact: true,
+    compactConsecutiveFailures,
+    compactionConfig: { enabled: true, triggerPercent },
+    provider: { name: 'test-provider' },
+    contextWindow: 100_000,
+    systemPrompt: 'system',
+    currentTokens,
+    reservedResponseTokens: 10_000,
+    events: events(),
+  } as unknown as Parameters<typeof tryIntelligentCompact>[0];
+}
+
 beforeEach(() => {
   compactMock.mockReset();
 });
 
-// ---------------------------------------------------------------------------
-// Test fixtures
-// ---------------------------------------------------------------------------
-
-function makeConfig(overrides: Partial<CompactionConfig> = {}): CompactionConfig {
-  return {
-    enabled: true,
-    triggerPercent: 75,
-    keepRecentTurns: 3,
-    ...overrides,
-  } as CompactionConfig;
-}
-
-const baseMessages: KodaXMessage[] = [
-  { role: 'user', content: 'turn one' },
-  { role: 'assistant', content: 'reply one' },
-  { role: 'user', content: 'turn two' },
-];
-
-/**
- * Provider stub. Since `intelligentCompact` is mocked at module
- * scope (see `vi.mock('@kodax-ai/agent', ...)` above), the provider's
- * methods are never actually invoked. We just need a typed
- * placeholder that satisfies the helper's input contract.
- */
-function rejectingProvider(): KodaXBaseProvider {
-  return { name: 'test-provider' } as unknown as KodaXBaseProvider;
-}
-
-describe('CAP-060: tryIntelligentCompact — gate short-circuits', () => {
-  it('CAP-COMPACT-ORCH-NEEDS-COMPACT-FALSE: needsCompact=false → identity, no events fire, counter unchanged', async () => {
-    const events: KodaXEvents = {
-      onCompactStart: vi.fn(),
-      onCompactEnd: vi.fn(),
-      onCompactStats: vi.fn(),
-      onCompact: vi.fn(),
-    };
-    const out = await tryIntelligentCompact({
-      messages: baseMessages,
-      needsCompact: false,
-      compactConsecutiveFailures: 1,
-      compactionConfig: makeConfig(),
-      provider: rejectingProvider(),
-      contextWindow: 10000,
-      systemPrompt: 'sys',
-      currentTokens: 100,
-      events,
-    });
-
-    expect(out.compacted).toBe(baseMessages); // identity
-    expect(out.didCompactMessages).toBe(false);
-    expect(out.compactionUpdate).toBeUndefined();
-    expect(out.nextCompactConsecutiveFailures).toBe(1); // unchanged
-    expect(events.onCompactStart).not.toHaveBeenCalled();
-    expect(events.onCompactEnd).not.toHaveBeenCalled();
-  });
-
-  it('CAP-COMPACT-ORCH-004: circuit breaker tripped (counter ≥ limit) → identity, no LLM call, counter unchanged', async () => {
-    const provider = rejectingProvider();
-    const events: KodaXEvents = { onCompactStart: vi.fn(), onCompactEnd: vi.fn() };
-    const out = await tryIntelligentCompact({
-      messages: baseMessages,
-      needsCompact: true,
-      compactConsecutiveFailures: COMPACT_CIRCUIT_BREAKER_LIMIT, // tripped
-      compactionConfig: makeConfig(),
-      provider,
-      contextWindow: 10000,
-      systemPrompt: 'sys',
-      currentTokens: 9000,
-      events,
-    });
-
-    expect(out.compacted).toBe(baseMessages);
-    expect(out.didCompactMessages).toBe(false);
-    expect(out.nextCompactConsecutiveFailures).toBe(COMPACT_CIRCUIT_BREAKER_LIMIT);
-    // LLM gate prevented the call.
-    expect(compactMock).not.toHaveBeenCalled();
-    expect(events.onCompactStart).not.toHaveBeenCalled();
-  });
-
-  it('CAP-COMPACT-ORCH-LIMIT-OVERRIDE: custom circuitBreakerLimit honored', async () => {
-    const provider = rejectingProvider();
-    const out = await tryIntelligentCompact({
-      messages: baseMessages,
-      needsCompact: true,
-      compactConsecutiveFailures: 1,
-      compactionConfig: makeConfig(),
-      provider,
-      contextWindow: 10000,
-      systemPrompt: 'sys',
-      currentTokens: 9000,
-      events: {},
-      circuitBreakerLimit: 1, // tripped at 1
-    });
-    expect(out.didCompactMessages).toBe(false);
+describe('CAP-060 capacity-driven semantic compaction', () => {
+  it('short-circuits when compaction is not needed', async () => {
+    const value = input(75_000, 100);
+    const output = await tryIntelligentCompact({ ...value, needsCompact: false });
+    expect(output.compacted).toBe(value.messages);
     expect(compactMock).not.toHaveBeenCalled();
   });
-});
 
-describe('CAP-060: tryIntelligentCompact — LLM threw path', () => {
-  it('CAP-COMPACT-ORCH-002: LLM throws → counter increments, compacted = messages identity, onCompactStart + onCompactEnd fire', async () => {
-    compactMock.mockReset();
-    compactMock.mockRejectedValueOnce(new Error('boom'));
-    const diagnostics: KodaXDiagnostic[] = [];
-    const restoreDiagnostics = setKodaXDiagnosticSink((diagnostic) => {
-      diagnostics.push(diagnostic);
-    });
-    const events: KodaXEvents = {
-      onCompactStart: vi.fn(),
-      onCompactEnd: vi.fn(),
-      onCompactStats: vi.fn(),
-      onCompact: vi.fn(),
-    };
-
-    try {
-      const out = await tryIntelligentCompact({
-        messages: baseMessages,
-        needsCompact: true,
-        compactConsecutiveFailures: 0,
-        compactionConfig: makeConfig(),
-        provider: rejectingProvider(),
-        contextWindow: 10000,
-        systemPrompt: 'sys',
-        currentTokens: 9000,
-        events,
-      });
-
-      expect(out.compacted).toBe(baseMessages); // identity (catch sets it)
-      expect(out.didCompactMessages).toBe(false);
-      expect(out.nextCompactConsecutiveFailures).toBe(1); // incremented
-      expect(events.onCompactStart).toHaveBeenCalledOnce();
-      expect(events.onCompactEnd).toHaveBeenCalledOnce();
-      // Stats / onCompact NOT fired on failure path.
-      expect(events.onCompactStats).not.toHaveBeenCalled();
-      expect(events.onCompact).not.toHaveBeenCalled();
-      expect(diagnostics).toContainEqual(expect.objectContaining({
-        source: 'coding:compaction',
-        level: 'error',
-        message: 'Compaction LLM summary failed (attempt 1/3).',
-      }));
-    } finally {
-      restoreDiagnostics();
-    }
+  it('honors the circuit breaker for an explicit early policy', async () => {
+    const value = input(75_000, 70, 3);
+    const output = await tryIntelligentCompact(value);
+    expect(output.compacted).toBe(value.messages);
+    expect(output.nextCompactConsecutiveFailures).toBe(3);
+    expect(compactMock).not.toHaveBeenCalled();
   });
 
-  it('CAP-COMPACT-ORCH-002b: counter increment compounds across multiple failures, then circuit breaker trips', async () => {
-    compactMock.mockReset();
-    compactMock.mockRejectedValue(new Error('boom'));
-
-    let counter = 0;
-    for (let i = 0; i < COMPACT_CIRCUIT_BREAKER_LIMIT; i++) {
-      const out = await tryIntelligentCompact({
-        messages: baseMessages,
-        needsCompact: true,
-        compactConsecutiveFailures: counter,
-        compactionConfig: makeConfig(),
-        provider: rejectingProvider(),
-        contextWindow: 10000,
-        systemPrompt: 'sys',
-        currentTokens: 9000,
-        events: {},
-      });
-      counter = out.nextCompactConsecutiveFailures;
-    }
-    expect(counter).toBe(COMPACT_CIRCUIT_BREAKER_LIMIT);
-    // The mock was invoked exactly LIMIT times — all three threw.
-    expect(compactMock).toHaveBeenCalledTimes(COMPACT_CIRCUIT_BREAKER_LIMIT);
-
-    // Next call: circuit breaker trips, mock NOT invoked, counter unchanged.
-    const guarded = await tryIntelligentCompact({
-      messages: baseMessages,
-      needsCompact: true,
-      compactConsecutiveFailures: counter,
-      compactionConfig: makeConfig(),
-      provider: rejectingProvider(),
-      contextWindow: 10000,
-      systemPrompt: 'sys',
-      currentTokens: 9000,
-      events: {},
-    });
-    expect(guarded.nextCompactConsecutiveFailures).toBe(COMPACT_CIRCUIT_BREAKER_LIMIT);
-    expect(compactMock).toHaveBeenCalledTimes(COMPACT_CIRCUIT_BREAKER_LIMIT); // no extra call
-  });
-});
-
-describe('CAP-060: tryIntelligentCompact — LLM success paths', () => {
-  function successResult(overrides: Partial<CompactionResult> = {}): CompactionResult {
-    return {
-      compacted: true,
-      messages: [{ role: 'system', content: 'compacted summary' }],
-      summary: 'sum',
-      tokensBefore: 9000,
-      tokensAfter: 1000,
-      entriesRemoved: 2,
-      ...overrides,
-    } as CompactionResult;
-  }
-
-  it('CAP-COMPACT-ORCH-001: success path emits onCompactStart, onCompactStats, onCompact, onCompactEnd in order; counter resets to 0 when below trigger', async () => {
-    compactMock.mockReset();
-    compactMock.mockResolvedValueOnce(successResult());
-    const events: KodaXEvents = {
-      onCompactStart: vi.fn(),
-      onCompactStats: vi.fn(),
-      onCompact: vi.fn(),
-      onCompactEnd: vi.fn(),
-    };
-
-    const out = await tryIntelligentCompact({
-      messages: baseMessages,
-      needsCompact: true,
-      compactConsecutiveFailures: 2, // pre-existing failures
-      compactionConfig: makeConfig({ triggerPercent: 75 }),
-      provider: rejectingProvider(),
-      contextWindow: 10000,
-      systemPrompt: 'sys',
-      currentTokens: 9000,
-      events,
-    });
-
-    expect(out.didCompactMessages).toBe(true);
-    expect(out.nextCompactConsecutiveFailures).toBe(0); // reset
-    expect(out.compactionUpdate).toBeDefined();
-    expect(events.onCompactStart).toHaveBeenCalledOnce();
-    expect(events.onCompactStats).toHaveBeenCalledOnce();
-    expect(events.onCompact).toHaveBeenCalledOnce();
-    expect(events.onCompactEnd).toHaveBeenCalledOnce();
+  it('bypasses the circuit breaker when the complete request no longer fits', async () => {
+    const value = input(88_000, 100, 3);
+    compactMock.mockResolvedValue(result(value.messages));
+    const output = await tryIntelligentCompact(value);
+    expect(compactMock).toHaveBeenCalledOnce();
+    expect(output.didCompactMessages).toBe(true);
   });
 
-  it('CAP-COMPACT-ORCH-003: partial success — compacted=true but post-compact tokens still ≥ trigger → counter increments instead of resetting', async () => {
-    compactMock.mockReset();
-    // Compact returns success but the post-compact messages still
-    // estimate above the trigger. We pin this with a very low
-    // triggerPercent (1%) and a tiny contextWindow so triggerTokens
-    // is ~1, while even a few-word message clears the threshold.
-    const smallCompacted: KodaXMessage[] = [
-      { role: 'user', content: 'still a bit too big after compact' },
-    ];
-    compactMock.mockResolvedValueOnce(
-      successResult({ messages: smallCompacted, tokensBefore: 200, tokensAfter: 50 }),
+  it('rethrows typed capacity failures instead of converting them to lossy fallback', async () => {
+    const value = input(88_000, 100);
+    compactMock.mockRejectedValue(new ContextCapacityError({
+      contextWindow: 100_000,
+      currentTokens: 88_000,
+      reservedResponseTokens: 10_000,
+    }, 'Compaction summary request'));
+    await expect(tryIntelligentCompact(value)).rejects.toBeInstanceOf(
+      ContextCapacityError,
     );
-    const warnSpy = vi.spyOn(console, 'warn').mockImplementation(() => undefined);
+  });
 
-    const out = await tryIntelligentCompact({
-      messages: baseMessages,
-      needsCompact: true,
-      compactConsecutiveFailures: 1,
-      // triggerPercent=1, contextWindow=100 → triggerTokens=1.
-      // Any non-empty smallCompacted estimates above 1 token.
-      compactionConfig: makeConfig({ triggerPercent: 1 }),
-      provider: rejectingProvider(),
-      contextWindow: 100,
-      systemPrompt: 'sys',
-      currentTokens: 200,
-      events: {},
-    });
+  it('fails open and increments the breaker on an early-policy provider error', async () => {
+    const value = input(75_000, 70);
+    compactMock.mockRejectedValue(new Error('temporary provider error'));
+    const output = await tryIntelligentCompact(value);
+    expect(output.compacted).toBe(value.messages);
+    expect(output.nextCompactConsecutiveFailures).toBe(1);
+    expect(value.events.onCompactStart).toHaveBeenCalledOnce();
+    expect(value.events.onCompactEnd).toHaveBeenCalledOnce();
+  });
 
-    expect(out.didCompactMessages).toBe(true);
-    expect(out.nextCompactConsecutiveFailures).toBe(2); // incremented (not reset)
-    warnSpy.mockRestore();
+  it('accounts for fixed envelope overhead and resets after sufficient relief', async () => {
+    const value = input(88_000, 100);
+    compactMock.mockResolvedValue(result(value.messages));
+    const output = await tryIntelligentCompact(value);
+    expect(output.nextCompactConsecutiveFailures).toBe(0);
+    expect(value.events.onCompactStats).toHaveBeenCalledWith(expect.objectContaining({
+      tokensBefore: 88_000,
+      tokensAfter: expect.any(Number),
+    }));
+  });
+
+  it('keeps the failure counter when a claimed rewrite leaves physical pressure', async () => {
+    const tiny = [{ role: 'user' as const, content: 'tiny transcript' }];
+    const value = { ...input(88_000, 100), messages: tiny };
+    compactMock.mockResolvedValue(result(tiny));
+    const output = await tryIntelligentCompact(value);
+    expect(output.didCompactMessages).toBe(true);
+    expect(output.nextCompactConsecutiveFailures).toBe(1);
   });
 });

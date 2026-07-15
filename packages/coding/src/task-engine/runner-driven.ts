@@ -35,12 +35,19 @@ import type {
   RunnerToolObserver,
   StopHookFn,
 } from '@kodax-ai/agent';
-import { Runner, buildSystemPrompt, getMessageQueue } from '@kodax-ai/agent';
+import {
+  Runner,
+  buildSystemPrompt,
+  getMessageQueue,
+  readRunnerRecoveryTranscript,
+} from '@kodax-ai/agent';
 // FEATURE_193 (v0.7.43): SCOUT_AGENT_NAME / PLANNER_AGENT_NAME /
 // GENERATOR_AGENT_NAME imports removed alongside the V1 chain agents —
 // the only remaining V2 chain agent is the Worker.
 import { WORKER_AGENT_NAME } from '../agents/task-engine-agents.js';
 import { resolveProvider } from '../providers/index.js';
+import { estimateTokens } from '../tokenizer.js';
+import { rebaseContextTokenSnapshot } from '../token-accounting.js';
 import { buildCapabilityContextSections } from '../prompts/capability-sections.js';
 import { getSessionScratchDir } from '../session-scratch.js';
 import {
@@ -118,7 +125,10 @@ import {
   sanitizeEvaluatorPublicAnswer,
   sanitizeManagedUserFacingText,
 } from './_internal/managed-task/sanitize.js';
-import { buildManagedTaskCompactionHook } from './_internal/managed-task/compaction.js';
+import {
+  buildManagedTaskCompactionHook,
+  resolveManagedTaskContextCapacity,
+} from './_internal/managed-task/compaction.js';
 // FEATURE_155 (v0.7.39) — idle-yield outer loop primitives. The wiring
 // here detects an agent turn that exited via the no-tool-calls /
 // pending-children branch, waits for a wake event (child completion or
@@ -159,11 +169,14 @@ import {
 } from './todo-drift-reminder.js';
 // FEATURE_193 (v0.7.43): createScopeAwareHarnessGuardrail import removed —
 // scope-aware-harness-guardrail.ts deleted (V1 Scout H0→H1/H2 guardrail).
-import { createToolResultTruncationGuardrail } from '../tools/tool-result-truncation-guardrail.js';
 import { createEnvelopeAggregateBudgetEnforcer } from '../tools/envelope-budget.js';
 import { createBlobSummarizer } from '../tools/blob-summarizer.js';
 import { buildPromptMessageContent } from '../input-artifacts.js';
 import { validateInputArtifactsForModel } from '../media/index.js';
+import {
+  createRunnerToolResultBatchTransform,
+  resolveRunnerToolResultBudget,
+} from './runner-tool-result-batch.js';
 // CAP-003/004/005/006/007: shared event emit helpers. Both SA (substrate
 // frame) and AMA (this runner-driven path) fire through the same
 // surface so the contract for each event lives in exactly one place.
@@ -664,18 +677,17 @@ export async function runManagedTaskViaRunner(
     // pick up the last turn even after a crash. Legacy does the same at
     // agent.ts:2824. Best-effort.
     //
-    // Inner catch (runManagedTaskViaRunnerInner) attaches the in-flight
-    // providerMessages on the thrown error via __kodaxRecoveredMessages
-    // so we can persist real history. Without that carrier we used to
+    // Runner and the managed LLM adapter attach the latest legal transcript
+    // through the shared recovery carrier, which we read via the agent helper.
+    // Without that carrier we used to
     // write `messages: []`, which wiped the user's conversation on any
     // permanent error (e.g., deepseek thinking-mode 400) and made the
     // next prompt start as a fresh session.
     if (optionsWithSessionId.session?.storage) {
       try {
-        const recoveredMessages = (err as { __kodaxRecoveredMessages?: unknown })
-          ?.__kodaxRecoveredMessages;
-        const messagesToPersist = Array.isArray(recoveredMessages)
-          ? (recoveredMessages as KodaXMessage[])
+        const recoveredMessages = readRunnerRecoveryTranscript(err);
+        const messagesToPersist = recoveredMessages
+          ? [...recoveredMessages] as KodaXMessage[]
           : [];
         await saveSessionSnapshot(optionsWithSessionId, initialSessionId, {
           messages: messagesToPersist,
@@ -726,10 +738,8 @@ async function runManagedTaskViaRunnerInner(
   // `routingOverrideReason` can be populated on the managed task shape.
   let rawRoutingDecision: KodaXTaskRoutingDecision | undefined;
   let routingOverrideReason: string | undefined;
-  // F4 parity — track tool-output truncation so the managed task can
-  // surface `runtime.toolOutputTruncated` + `toolOutputTruncationNotes`.
-  // The guardrail's `afterTool.rewrite` sets `result.metadata.truncated`
-  // which the `toolObserver.onToolResult` hook below harvests.
+  // F4 parity — track capacity fallbacks so the managed task can surface
+  // `runtime.toolOutputTruncated` + `toolOutputTruncationNotes`.
   const toolTruncationRef: { truncated: boolean; notes: string[] } = {
     truncated: false,
     notes: [],
@@ -1144,7 +1154,7 @@ async function runManagedTaskViaRunnerInner(
   // for the bugfix history (transcript-only estimate vs API-reported
   // total tokens parity gap).
   const contextTokenSnapshotRef: import('./_internal/managed-task/compaction.js').ContextTokenSnapshotRef = {
-    current: undefined,
+    current: options.context?.contextTokenSnapshot,
   };
   // Build the full role-prompt context so every role's
   // system prompt carries the full surface (decision summary + contract
@@ -1482,8 +1492,14 @@ async function runManagedTaskViaRunnerInner(
   // check uses API-accurate token accounting (`usage.totalTokens` +
   // delta) instead of the transcript-only estimate that silently
   // missed the threshold by the system + tools schema overhead.
+  // FEATURE_193 (v0.7.43): V1 chain (Scout/Planner/Generator) retired. The
+  // Worker single-loop is the only entry path.
+  const entryAgent: Agent = chain.worker;
+  const resolvedContextCapacity = await resolveManagedTaskContextCapacity(options);
   const compactionHook = await buildManagedTaskCompactionHook(options, {
+    resolvedContextCapacity,
     contextTokenSnapshotRef,
+    activeToolDefinitions: entryAgent.tools,
     // FEATURE_177 v0.7.42 — clear the read-file-state cache after a
     // real compaction. The cache returns stubs that point the LLM at
     // earlier `tool_result` blocks; after summarization those blocks
@@ -1503,29 +1519,30 @@ async function runManagedTaskViaRunnerInner(
       stallSidecar.reset();
     },
   });
+  const toolResultBatchOptions = {
+    ctx: baseCtx,
+    contextWindow: resolvedContextCapacity.contextWindow,
+    reservedResponseTokens:
+      resolvedContextCapacity.provider.getEffectiveMaxOutputTokens(
+        resolvedContextCapacity.activeModel,
+      ),
+    contextTokenSnapshotRef,
+    onCapacityFallback: (call: import('@kodax-ai/agent').RunnerToolCall) => {
+      toolTruncationRef.truncated = true;
+      toolTruncationRef.notes.push(
+        `${call.name}: result spilled because the complete tool-result batch exceeded model capacity`,
+      );
+    },
+  };
+  baseCtx.maximumInputTokens = resolvedContextCapacity.contextWindow;
+  baseCtx.resolveToolResultCapacityTokens = (messages) => (
+    resolveRunnerToolResultBudget(messages, toolResultBatchOptions).aggregateInlineTokens
+  );
+  const toolResultBatchTransform = createRunnerToolResultBatchTransform(toolResultBatchOptions);
 
-  // FEATURE_193 v0.7.43: V1 chain (Scout/Planner/Generator) retired. The
-  // Worker single-loop is the only entry path. structuralResumeSeed survives
-  // on the type only for backward-compat reading of legacy V1 checkpoints —
-  // V2 resume from V1 checkpoints isn't supported (and never was), so V1
-  // checkpoint resumes fall back to a fresh Worker entry as well.
-  const entryAgent: Agent = chain.worker;
-  // Run-scoped guardrails — built ONCE so the FEATURE_155 idle-yield
-  // outer loop can re-enter `Runner.run` cheaply. The factories return
-  // stateless objects (idempotency state lives on the closed-over
-  // `mutationTracker` / `payloadRef`, which persist across iterations
-  // either way), so reusing is purely a small allocation saving on the
-  // resume path; correctness is unchanged from the pre-loop shape.
-  // FEATURE_193 (v0.7.43): scope-aware-harness-guardrail removed from
-  // runnerGuardrails — was FEATURE_106 V1 Scout H0→H1/H2 miscalibration
-  // detection, no longer applicable post-V1-chain retirement.
-  const runnerGuardrails = [
-    // tool-result-truncation: post-execute size policy parity with
-    // the SA substrate (`applyToolResultGuardrail`). Without it the
-    // LLM sees raw unbounded tool output, blowing the context window
-    // on read/grep of large files.
-    createToolResultTruncationGuardrail(baseCtx),
-  ] as const;
+  // structuralResumeSeed survives on the type only for backward-compat
+  // reading of legacy V1 checkpoints. V2 resume from V1 checkpoints isn't
+  // supported, so those checkpoints fall back to a fresh Worker entry.
   // Surface Runner tool-loop invocations through the KodaXEvents
   // channels the worker ledger consumes. Without this wiring the REPL
   // worker ledger stays empty mid-run — only the final formal output
@@ -1593,15 +1610,13 @@ async function runManagedTaskViaRunnerInner(
       }));
     },
     onToolResult: (call, result) => {
-      // F4 parity — track whether any tool result was truncated by the
-      // tool-result-truncation guardrail. `result.metadata.truncated`
-      // is set by the guardrail's rewrite step. Observed values feed
-      // into `runtime.toolOutputTruncated` / `toolOutputTruncationNotes`.
+      // Track tool-declared truncation that occurred before batch admission.
+      // Capacity fallback itself is recorded by `onCapacityFallback` above.
       const meta = result.metadata as { truncated?: boolean; policy?: unknown } | undefined;
       if (meta?.truncated) {
         toolTruncationRef.truncated = true;
         toolTruncationRef.notes.push(
-          `${call.name}: result was truncated to guardrail policy`,
+          `${call.name}: tool returned truncated output`,
         );
       }
       // CAP-035: same visibility filter on the result side.
@@ -1755,7 +1770,7 @@ async function runManagedTaskViaRunnerInner(
       llm,
       abortSignal: options.abortSignal,
       compactionHook,
-      guardrails: [...runnerGuardrails],
+      toolResultBatchTransform,
       toolObserver: runnerToolObserver,
       // FEATURE_164 (v0.7.41) — mid-turn user-prompt injection.
       // FEATURE_192 v0.7.44 Phase F — wrapped with `withGoalBeforeNextTurn`
@@ -1937,13 +1952,29 @@ async function runManagedTaskViaRunnerInner(
     // transition logic will pick up where the Worker left off (the
     // handoff slot is empty, so no handoff replay races).
     resumeAgent: () => chain.worker,
-    // FEATURE_121 (v0.7.40) — envelope aggregate budget enforcer.
-    // Per-banner guardrail already happens at enqueue time
-    // (dispatch-child-tasks.ts). This second-line hook fires only when
-    // N banners' combined size after per-banner spillover still exceeds
-    // ENVELOPE_AGGREGATE_LIMIT_CHARS (200_000, claudecode parity), and
-    // forces additional banners to spill until total fits.
-    envelopeAggregateEnforcer: createEnvelopeAggregateBudgetEnforcer(baseCtx),
+    // Child results stay raw at enqueue time. Immediately before resume, use
+    // the same physical next-request budget as ordinary tool-result batches,
+    // including any user prompt that shares this wake-up request.
+    envelopeAggregateEnforcer: createEnvelopeAggregateBudgetEnforcer(
+      baseCtx,
+      (capacityContext) => capacityContext
+        ? resolveRunnerToolResultBudget(
+            [
+              ...capacityContext.transcript,
+              ...capacityContext.pendingMessages,
+            ],
+            {
+              ctx: baseCtx,
+              contextWindow: resolvedContextCapacity.contextWindow,
+              reservedResponseTokens:
+                resolvedContextCapacity.provider.getEffectiveMaxOutputTokens(
+                  resolvedContextCapacity.activeModel,
+                ),
+              contextTokenSnapshotRef,
+            },
+          )
+        : undefined,
+    ),
     onIdleWaiting: (currentAgent) => {
       // FEATURE_156 — surface "alive but suspended" to the REPL.
       // Agent-agnostic identity lookup: today only the Worker can
@@ -2061,20 +2092,21 @@ async function runManagedTaskViaRunnerInner(
   // equal to currentTokens when the provider returned usage — the REPL
   // uses the delta only to adjust subsequent local estimates.
   const tokenState = tokenStateRef.current;
-  const contextTokenSnapshot =
-    tokenState.source === 'api'
-      ? {
-          currentTokens: tokenState.totalTokens,
-          baselineEstimatedTokens: tokenState.totalTokens,
-          source: 'api' as const,
-          usage: tokenState.lastUsage,
-        }
-      : undefined;
   const persistedTranscriptMessages = dropRunnerInjectedSystemMessage(
     effectiveRunResult.messages,
     entryAgent,
   );
   const resultMessages = attachTurnIdsFromUserBoundaries(persistedTranscriptMessages);
+  const contextTokenSnapshot = contextTokenSnapshotRef.current
+    ? rebaseContextTokenSnapshot(resultMessages, contextTokenSnapshotRef.current)
+    : tokenState.source === 'api'
+      ? {
+          currentTokens: tokenState.totalTokens,
+          baselineEstimatedTokens: estimateTokens(resultMessages),
+          source: 'api' as const,
+          usage: tokenState.lastUsage,
+        }
+      : undefined;
 
   const result: KodaXResult = {
     // FEATURE_184 (v0.7.45) Phase C.1: success=false when the run is

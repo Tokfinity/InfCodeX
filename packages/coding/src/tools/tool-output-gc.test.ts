@@ -12,6 +12,7 @@ import {
   GC_COOLDOWN_MS,
   __resetGcCooldownForTests,
   cleanupExpiredToolOutputs,
+  cleanupUnreferencedToolOutputs,
   maybeRunToolOutputGc,
 } from './tool-output-gc.js';
 
@@ -109,6 +110,23 @@ describe('cleanupExpiredToolOutputs', () => {
 
     expect(r.removed).toBe(1);
     expect(await fs.readdir(dir)).toEqual(['edge-13d.txt']);
+  });
+
+  it('keeps stale artifacts that are still referenced by resumable sessions', async () => {
+    const referenced = path.join(dir, 'referenced.txt');
+    const orphaned = path.join(dir, 'orphaned.txt');
+    await writeFileWithMtime(referenced, 'needed', 30 * DAY_MS, NOW);
+    await writeFileWithMtime(orphaned, 'dead', 30 * DAY_MS, NOW);
+
+    const result = await cleanupUnreferencedToolOutputs(
+      dir,
+      new Set([referenced]),
+      DAY_MS,
+      NOW,
+    );
+
+    expect(result.removed).toBe(1);
+    expect(await fs.readdir(dir)).toEqual(['referenced.txt']);
   });
 });
 

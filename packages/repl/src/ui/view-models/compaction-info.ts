@@ -16,12 +16,15 @@ export interface LiveCompactionInfo {
   contextWindow: number;
   triggerPercent: number;
   enabled: boolean;
+  /** Provider response capacity reserved from the same model descriptor. */
+  reservedResponseTokens?: number;
   /** Raw user-config override; preserved across resolutions. */
   userOverrideContextWindow?: number;
 }
 
 export interface CompactionInfoResolverProviderLike {
   getEffectiveContextWindow?: (model?: string) => number;
+  getEffectiveMaxOutputTokens?: (model?: string) => number;
 }
 
 export type CompactionInfoResolverProviderLookup = (
@@ -40,28 +43,27 @@ export function resolveEffectiveCompactionInfo(
 ): LiveCompactionInfo | undefined {
   if (!startupInfo) return undefined;
 
-  // 1. user override wins unconditionally
-  if (startupInfo.userOverrideContextWindow !== undefined) {
-    return startupInfo.contextWindow === startupInfo.userOverrideContextWindow
-      ? startupInfo
-      : { ...startupInfo, contextWindow: startupInfo.userOverrideContextWindow };
-  }
+  let contextWindow = startupInfo.userOverrideContextWindow ?? startupInfo.contextWindow;
+  let reservedResponseTokens = startupInfo.reservedResponseTokens;
 
-  // 2. provider's per-model resolution
   try {
     const provider = resolveProvider(currentConfig.provider);
-    const perModel = provider?.getEffectiveContextWindow?.(currentConfig.model);
-    if (perModel !== undefined && perModel !== startupInfo.contextWindow) {
-      return { ...startupInfo, contextWindow: perModel };
+    if (startupInfo.userOverrideContextWindow === undefined) {
+      contextWindow = provider?.getEffectiveContextWindow?.(currentConfig.model)
+        ?? contextWindow;
     }
-    if (perModel !== undefined) {
-      // Same value already — no-op.
-      return startupInfo;
-    }
+    reservedResponseTokens = provider?.getEffectiveMaxOutputTokens?.(currentConfig.model)
+      ?? reservedResponseTokens;
   } catch {
-    // Unknown provider name (e.g. stale state during a swap) — fall through.
+    // Unknown provider name during a swap: keep the startup snapshot.
   }
 
-  // 3. fallback to startup snapshot
-  return startupInfo;
+  if (
+    contextWindow === startupInfo.contextWindow
+    && reservedResponseTokens === startupInfo.reservedResponseTokens
+  ) {
+    return startupInfo;
+  }
+
+  return { ...startupInfo, contextWindow, reservedResponseTokens };
 }

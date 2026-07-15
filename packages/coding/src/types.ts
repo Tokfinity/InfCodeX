@@ -1491,8 +1491,8 @@ export interface KodaXContextOptions {
  * injects its own product manual so that when ITS users ask "how do I use /
  * configure <product>?", the kodax_manual tool answers with the consumer's
  * topics. `topics` extend the seeded base (override by id, then append);
- * `productName` re-brands the routing rule + scope anchor. Topics are still
- * byte-capped.
+ * `productName` re-brands the routing rule + scope anchor. Exact topic bodies
+ * remain complete; the shared tool-result admission layer owns capacity.
  *
  * `baseTopics` controls how much of KodaX's own manual is present underneath:
  * omit it for the default full base, `[]` for a full white-label replace, or a
@@ -2003,6 +2003,14 @@ export interface KodaXToolExecutionContext {
   skillScriptRunner?: KodaXSkillScriptRunner;
   /** Working directory used to resolve relative paths and execute shell commands. */
   executionCwd?: string;
+  /** Maximum physical input capacity of the active model request. */
+  maximumInputTokens?: number;
+  /** Remaining capacity for the complete tool-result batch in this request. */
+  toolResultCapacityTokens?: number;
+  /** Runner path resolver for the transcript that the current batch extends. */
+  resolveToolResultCapacityTokens?: (messages: readonly KodaXMessage[]) => number;
+  /** Trusted side-channel for a tool-owned recovery artifact. */
+  recordToolResultArtifact?: (toolCallId: string, outputPath: string) => void;
   /** Session-scoped directory for helper scripts and scratch outputs. */
   sessionScratchDir?: string;
   /**

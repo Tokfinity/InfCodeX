@@ -31,6 +31,7 @@ import { afterEach, beforeEach, describe, expect, it } from 'vitest';
 
 import { createAgent } from '../primitives/agent.js';
 import type { Agent } from '../primitives/agent.js';
+import { readRunnerRecoveryTranscript } from '../primitives/runner.js';
 import { MessageQueue } from '../messaging/index.js';
 import type { KodaXMessage } from '@kodax-ai/llm';
 
@@ -147,6 +148,49 @@ describe('runWithIdleYield — happy paths', () => {
     expect(runOnceCalls).toBe(2);
     expect(resumeAgentReceived).toBe(worker);
     expect(result.tag).toBe('run-2-worker');
+  });
+  it('attaches the last legal transcript when envelope admission fails', async () => {
+    const agent = buildAgent('entry');
+    const registry: ChildTaskRegistry<TestChildResult> = new Map([
+      ['c1', Promise.resolve({ status: 'completed' })],
+    ]);
+    const queue = new MessageQueue();
+    queue.enqueue({
+      priority: 'background',
+      mode: 'task-notification',
+      content: '<task-completed task_id="c1">large</task-completed>',
+    });
+    const capacityError = new Error('envelope cannot fit');
+    let caught: unknown;
+
+    try {
+      await runWithIdleYield<TestRunResult, TestChildResult>({
+        initialAgent: agent,
+        initialInput: [{ role: 'user', content: 'start' }],
+        runOnce: async () => ({
+          messages: [
+            { role: 'system', content: 'sys' },
+            { role: 'user', content: 'start' },
+            { role: 'assistant', content: 'waiting' },
+          ],
+          tag: 'run-1',
+        }),
+        computeSnapshot: () => snapshotIdleYielding(1),
+        registry,
+        messageQueue: queue,
+        agentId: undefined,
+        resumeAgent: () => agent,
+        envelopeAggregateEnforcer: async () => { throw capacityError; },
+      });
+    } catch (error) {
+      caught = error;
+    }
+
+    expect(caught).toBe(capacityError);
+    expect(readRunnerRecoveryTranscript(caught)).toEqual([
+      { role: 'user', content: 'start' },
+      { role: 'assistant', content: 'waiting' },
+    ]);
   });
 });
 

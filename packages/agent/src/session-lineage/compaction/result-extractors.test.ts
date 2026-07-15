@@ -6,11 +6,39 @@ import {
   extractGrepHits,
   extractGlobPaths,
   extractBashResult,
+  extractToolResultRecovery,
+  preserveToolResultRecovery,
   HIT_PREVIEW_MAX_CHARS,
   MAX_HITS_PER_ENTRY,
   MAX_GLOB_PATHS_PER_ENTRY,
   BASH_TAIL_MAX_CHARS,
 } from './result-extractors.js';
+
+const RECOVERABLE_OUTPUT_PATH = 'C:\\Users\\test\\.kodax\\tool-results\\grep-result.txt';
+
+function incompleteMarker(path = RECOVERABLE_OUTPUT_PATH): string {
+  return `[KODAX_RESULT_INCOMPLETE. Tool output truncated. Showing 1 of 200 lines. Full output saved to: ${path}. Use read on the saved output path.]`;
+}
+
+describe('recoverable tool-result markers', () => {
+  it('extracts the artifact path from a generic KODAX_RESULT_INCOMPLETE marker', () => {
+    const marker = incompleteMarker();
+    expect(extractToolResultRecovery(`preview\n\n${marker}`)).toEqual({
+      artifactPath: RECOVERABLE_OUTPUT_PATH,
+      marker,
+    });
+  });
+
+  it('parses generated artifact paths containing spaces, dots, and brackets', () => {
+    const path = 'C:\\Tool Results\\[session. one]\\full.result.txt';
+    expect(extractToolResultRecovery(incompleteMarker(path))?.artifactPath).toBe(path);
+  });
+
+  it('keeps a compact recovery pointer when result content is replaced', () => {
+    expect(preserveToolResultRecovery(`preview\n\n${incompleteMarker()}`, '[Pruned: generic tool]'))
+      .toBe(`[Pruned: generic tool]\n[KODAX_RESULT_INCOMPLETE. Full output saved to: ${RECOVERABLE_OUTPUT_PATH}.]`);
+  });
+});
 
 describe('extractGrepHits', () => {
   it('parses content-mode hits with Linux paths', () => {
@@ -58,6 +86,17 @@ describe('extractGrepHits', () => {
     }
     const r = extractGrepHits(lines.join('\n'));
     expect(r?.hits).toHaveLength(MAX_HITS_PER_ENTRY);
+    expect(r?.truncated).toBe(true);
+    expect(r?.capturedCount).toBe(MAX_HITS_PER_ENTRY);
+    expect(r?.omittedCount).toBe(10);
+  });
+
+  it('recognizes a recoverable capacity marker without parsing it as grep output', () => {
+    const raw = `src/auth.ts:42: const token = generateToken();\n\n${incompleteMarker()}`;
+    const r = extractGrepHits(raw);
+    expect(r?.hits).toHaveLength(1);
+    expect(r?.truncated).toBe(true);
+    expect(r?.artifactPath).toBe(RECOVERABLE_OUTPUT_PATH);
   });
 
   it('detects truncation footer and strips it from hit parsing', () => {
@@ -156,6 +195,17 @@ describe('extractGlobPaths', () => {
     }
     const r = extractGlobPaths(lines.join('\n'));
     expect(r?.paths).toHaveLength(MAX_GLOB_PATHS_PER_ENTRY);
+    expect(r?.truncated).toBe(true);
+    expect(r?.capturedCount).toBe(MAX_GLOB_PATHS_PER_ENTRY);
+    expect(r?.omittedCount).toBe(30);
+  });
+
+  it('recognizes a recoverable capacity marker and exposes its artifact path', () => {
+    const raw = `src/auth.ts\n\n${incompleteMarker()}`;
+    const r = extractGlobPaths(raw);
+    expect(r?.paths).toEqual(['src/auth.ts']);
+    expect(r?.truncated).toBe(true);
+    expect(r?.artifactPath).toBe(RECOVERABLE_OUTPUT_PATH);
   });
 
   it('detects truncation footer', () => {

@@ -2,6 +2,11 @@ import { describe, expect, it } from 'vitest';
 import type { KodaXMessage } from '@kodax-ai/llm';
 import { microcompact, DEFAULT_MICROCOMPACTION_CONFIG } from './microcompaction.js';
 
+const ACTIVE_MICROCOMPACTION_CONFIG = {
+  ...DEFAULT_MICROCOMPACTION_CONFIG,
+  enabled: true,
+};
+
 function createTextMessage(role: KodaXMessage['role'], content: string): KodaXMessage {
   return { role, content };
 }
@@ -27,6 +32,7 @@ function createToolUseMessage(
 function createToolResultMessage(
   toolUseId: string,
   content: string,
+  metadata?: Record<string, unknown>,
 ): KodaXMessage {
   return {
     role: 'user',
@@ -35,6 +41,7 @@ function createToolResultMessage(
         type: 'tool_result',
         tool_use_id: toolUseId,
         content,
+        ...(metadata ? { metadata } : {}),
       },
     ],
   };
@@ -115,6 +122,26 @@ describe('microcompaction', () => {
     // Tool result at index 5 (turn 1) should NOT be cleared (age < maxAge)
     const recentBlock = (result[5]?.content as { content: string }[])[0];
     expect(recentBlock?.content).toBe('original content 2');
+  });
+
+  it('keeps a structured recovery pointer visible when clearing an old result', () => {
+    const outputPath = 'C:\\Users\\test\\.kodax\\tool-results\\full-output.txt';
+    const messages: KodaXMessage[] = [
+      createTextMessage('user', 'task 1'),
+      createToolUseMessage('grep', 'tool_recoverable', { path: 'src', pattern: 'token' }),
+      createToolResultMessage('tool_recoverable', 'short preview', {
+        outputPath,
+        truncated: true,
+        capacityFallback: true,
+      }),
+      ...filler(30),
+    ];
+
+    const result = microcompact(messages, { enabled: true, maxAge: 1, protectedTools: [] });
+    const block = (result[2]?.content as { content: string }[])[0];
+    expect(block?.content).toContain('[Cleared:');
+    expect(block?.content).toContain('KODAX_RESULT_INCOMPLETE');
+    expect(block?.content).toContain(outputPath);
   });
 
   it('generates rich preview for bash commands', () => {
@@ -233,7 +260,7 @@ describe('microcompaction', () => {
     expect(JSON.stringify(messages[2])).toBe(originalContent);
   });
 
-  it('respects DEFAULT_MICROCOMPACTION_CONFIG', () => {
+  it('keeps complete results with the default configuration', () => {
     const messages: KodaXMessage[] = [
       createTextMessage('user', 'task 1'),
       createToolUseMessage('read', 'tool_1', { path: 'src/auth.ts' }),
@@ -244,7 +271,8 @@ describe('microcompaction', () => {
     const result = microcompact(messages);
 
     const block = (result[2]?.content as { content: string }[])[0];
-    expect(block?.content).toContain('[Cleared:');
+    expect(result).toBe(messages);
+    expect(block?.content).toBe('original content');
   });
 
   it('handles messages with string content (no tool results)', () => {
@@ -449,7 +477,7 @@ describe('FEATURE_072 regression guard: microcompact must never mutate in place'
       createToolResultMessage('tool_1', 'large output'),
       ...filler(DEFAULT_MICROCOMPACTION_CONFIG.maxAge + 1),
     ];
-    const output = microcompact(input);
+    const output = microcompact(input, ACTIVE_MICROCOMPACTION_CONFIG);
     expect(output).not.toBe(input);
   });
 
@@ -459,7 +487,7 @@ describe('FEATURE_072 regression guard: microcompact must never mutate in place'
       createToolResultMessage('tool_1', 'large output'),
       ...filler(DEFAULT_MICROCOMPACTION_CONFIG.maxAge + 1),
     ];
-    const output = microcompact(input);
+    const output = microcompact(input, ACTIVE_MICROCOMPACTION_CONFIG);
 
     // The tool_result message (input[1]) should have been trimmed; the output
     // at that index must NOT be the same reference.
@@ -503,7 +531,7 @@ describe('FEATURE_183 (v0.7.42): microcompact respects PROTECTED_TOOL_NAMES via 
       ...filler(DEFAULT_MICROCOMPACTION_CONFIG.maxAge + 1),
     ];
 
-    const result = microcompact(messages);
+    const result = microcompact(messages, ACTIVE_MICROCOMPACTION_CONFIG);
     const toolResult = (result[1].content as { type: string; content: string }[])
       .find((b) => b.type === 'tool_result');
     expect(toolResult?.content).toBe('{"ok":true,"id":"todo_1"}');
@@ -517,7 +545,7 @@ describe('FEATURE_183 (v0.7.42): microcompact respects PROTECTED_TOOL_NAMES via 
       ...filler(DEFAULT_MICROCOMPACTION_CONFIG.maxAge + 1),
     ];
 
-    const result = microcompact(messages);
+    const result = microcompact(messages, ACTIVE_MICROCOMPACTION_CONFIG);
     const toolResult = (result[1].content as { type: string; content: string }[])
       .find((b) => b.type === 'tool_result');
     expect(toolResult?.content).toBe('{"rows":[{"id":42,"name":"alice"}]}');
@@ -530,7 +558,7 @@ describe('FEATURE_183 (v0.7.42): microcompact respects PROTECTED_TOOL_NAMES via 
       ...filler(DEFAULT_MICROCOMPACTION_CONFIG.maxAge + 1),
     ];
 
-    const result = microcompact(messages);
+    const result = microcompact(messages, ACTIVE_MICROCOMPACTION_CONFIG);
     const toolResult = (result[1].content as { type: string; content: string }[])
       .find((b) => b.type === 'tool_result');
     expect(toolResult?.content).toBe('capsule: 3 files changed across packages/coding/, ~80 lines');
@@ -545,7 +573,7 @@ describe('FEATURE_183 (v0.7.42): microcompact respects PROTECTED_TOOL_NAMES via 
       ...filler(DEFAULT_MICROCOMPACTION_CONFIG.maxAge + 1),
     ];
 
-    const result = microcompact(messages);
+    const result = microcompact(messages, ACTIVE_MICROCOMPACTION_CONFIG);
     const toolResult = (result[1].content as { type: string; content: string }[])
       .find((b) => b.type === 'tool_result');
     expect(toolResult?.content.startsWith('[Cleared:')).toBe(true);

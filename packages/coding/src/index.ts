@@ -369,6 +369,11 @@ export {
   truncateTail,
   truncateLine,
   persistToolOutput,
+  resolveToolOutputDir,
+  cleanupExpiredToolOutputs,
+  cleanupUnreferencedToolOutputs,
+  maybeRunReferenceAwareToolOutputGc,
+  maybeRunToolOutputGc,
   applyToolResultGuardrail,
   getToolResultPolicy,
   buildToolResultBudget,
@@ -384,6 +389,8 @@ export type {
   ToolResultBudget,
   ToolResultBudgetReason,
   ToolResultBudgetUsageInput,
+  ToolResultCapacity,
+  ToolOutputGcResult,
 } from './tools/index.js';
 
 // ============== Repo Intelligence ==============
@@ -1313,6 +1320,7 @@ export {
 } from './self-knowledge/tool-description.js';
 export type {
   KodaXManualTopicId,
+  KodaXManualIndexTopic,
   KodaXManualTopicInput,
   // FEATURE_221: KodaXManualTopic / KodaXManualSource are the value types of the
   // newly-exported MANUAL_REGISTRY, so a consumer reading base topics can name them.

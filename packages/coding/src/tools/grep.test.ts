@@ -1,7 +1,8 @@
 import { mkdtempSync, rmSync, writeFileSync, mkdirSync } from 'node:fs';
+import fs from 'fs/promises';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
-import { afterEach, describe, expect, it } from 'vitest';
+import { afterEach, describe, expect, it, vi } from 'vitest';
 import { toolGrep } from './grep.js';
 
 function ctx(cwd?: string) {
@@ -12,6 +13,7 @@ describe('toolGrep', () => {
   let tempDir = '';
 
   afterEach(() => {
+    vi.restoreAllMocks();
     if (tempDir) {
       rmSync(tempDir, { recursive: true, force: true });
       tempDir = '';
@@ -199,6 +201,21 @@ describe('toolGrep', () => {
     expect(result).toBe('2 matches');
   });
 
+  it('counts every multiline match instead of silently stopping at 200', async () => {
+    const content = Array.from({ length: 240 }, () => 'ab\ncd').join('\n');
+    const dir = setup({ 'multi.txt': content });
+    const result = await toolGrep(
+      {
+        pattern: 'ab.cd',
+        path: join(dir, 'multi.txt'),
+        multiline: true,
+        output_mode: 'count',
+      },
+      ctx(dir),
+    );
+    expect(result).toBe('240 matches');
+  });
+
   /* ---------- File type filter ---------- */
 
   it('filters by file type', async () => {
@@ -266,8 +283,9 @@ describe('toolGrep', () => {
       { pattern: '[a-f]', path: join(dir, 'data.txt'), head_limit: 3 },
       ctx(dir),
     );
-    const lines = result.split('\n').filter(Boolean);
-    expect(lines.length).toBe(3);
+    const matchLines = result.split('\n').filter((line) => /data\.txt:\d+:/.test(line));
+    expect(matchLines).toHaveLength(3);
+    expect(result).toContain('Continue with offset=3');
   });
 
   it('head_limit 0 returns all matches (unlimited)', async () => {
@@ -280,6 +298,109 @@ describe('toolGrep', () => {
     );
     expect(result).toContain(':1: a');
     expect(result).toContain(':5: e');
+  });
+
+  it('rejects a negative head_limit instead of treating it as unlimited', async () => {
+    const dir = setup({
+      'data.txt': 'a\nb\nc\n',
+    });
+    const result = await toolGrep(
+      { pattern: '[a-c]', path: join(dir, 'data.txt'), head_limit: -1 },
+      ctx(dir),
+    );
+
+    expect(result).toBe('[Tool Error] grep: head_limit must be a non-negative finite number.');
+    expect(result).not.toContain(':3: c');
+  });
+
+  it('head_limit 0 remains unlimited beyond the former 2000-entry cap', async () => {
+    const content = Array.from({ length: 2_100 }, (_, index) => `match-${index + 1}`).join('\n');
+    const dir = setup({ 'large.txt': content });
+    const result = await toolGrep(
+      { pattern: 'match-', path: join(dir, 'large.txt'), head_limit: 0 },
+      ctx(dir),
+    );
+    expect(result).toContain(':1: match-1');
+    expect(result).toContain(':2100: match-2100');
+    expect(result).not.toContain('Grep output truncated');
+  });
+
+  it('searches beyond the former 100-file scan cap', async () => {
+    const files = Object.fromEntries(
+      Array.from({ length: 120 }, (_, index) => [
+        `file-${index.toString().padStart(3, '0')}.txt`,
+        `needle-${index}\n`,
+      ]),
+    );
+    const dir = setup(files);
+    const result = await toolGrep(
+      { pattern: 'needle-', path: dir, head_limit: 0 },
+      ctx(dir),
+    );
+    const matchLines = result.split('\n').filter((line) => /file-\d+\.txt:1:/.test(line));
+    expect(matchLines).toHaveLength(120);
+  });
+
+  it('marks a bounded directory scan incomplete and continues with scan_offset', async () => {
+    const files = Object.fromEntries(
+      Array.from({ length: 513 }, (_, index) => [
+        `file-${index.toString().padStart(3, '0')}.txt`,
+        'no match here\n',
+      ]),
+    );
+    const dir = setup(files);
+
+    const first = await toolGrep({ pattern: 'needle', path: dir }, ctx(dir));
+    const second = await toolGrep({
+      pattern: 'needle',
+      path: dir,
+      scan_offset: 512,
+    }, ctx(dir));
+
+    expect(first).toContain('SOURCE_INCOMPLETE');
+    expect(first).toContain('scan_offset=512');
+    expect(second).not.toContain('SOURCE_INCOMPLETE');
+  });
+
+  it('leaves large exact result pages to the outer aggregate capacity owner', async () => {
+    const content = Array.from(
+      { length: 350 },
+      (_, index) => `needle-${index}-${'x'.repeat(100)}`,
+    ).join('\n');
+    const dir = setup({ 'large.txt': content });
+    const result = await toolGrep(
+      { pattern: 'needle-', path: join(dir, 'large.txt'), head_limit: 0 },
+      ctx(dir),
+    );
+    expect(Buffer.byteLength(result, 'utf8')).toBeGreaterThan(24 * 1024);
+    expect(result).toContain(':350: needle-349-');
+    expect(result).not.toContain('Grep output truncated');
+  });
+
+  it('preserves complete long lines in match, context, and multiline output', async () => {
+    const contextLine = `context-${'c'.repeat(700)}`;
+    const matchLine = `needle-${'m'.repeat(700)}`;
+    const dir = setup({ 'long-lines.txt': `${contextLine}\n${matchLine}\n` });
+    const filePath = join(dir, 'long-lines.txt');
+
+    const direct = await toolGrep(
+      { pattern: 'needle-', path: filePath },
+      ctx(dir),
+    );
+    const withContext = await toolGrep(
+      { pattern: 'needle-', path: filePath, '-B': 1 },
+      ctx(dir),
+    );
+    const multiline = await toolGrep(
+      { pattern: 'needle-', path: filePath, multiline: true },
+      ctx(dir),
+    );
+
+    expect(direct).toContain(matchLine);
+    expect(withContext).toContain(contextLine);
+    expect(withContext).toContain(matchLine);
+    expect(multiline).toContain(matchLine);
+    expect(`${direct}\n${withContext}\n${multiline}`).not.toContain('[truncated]');
   });
 
   it('offset beyond total matches returns no-matches message', async () => {
@@ -308,5 +429,24 @@ describe('toolGrep', () => {
       ctx(),
     );
     expect(result).toContain('[Tool Error] grep: Path not found');
+  });
+
+  it('reports every unreadable file instead of hiding errors after a sample', async () => {
+    const fileNames = Array.from({ length: 5 }, (_, index) => `unreadable-${index + 1}.txt`);
+    const dir = setup(Object.fromEntries(fileNames.map((name) => [name, 'needle\n'])));
+    const readFileSpy = vi.spyOn(fs, 'readFile').mockRejectedValue(
+      new Error('simulated read failure'),
+    );
+
+    const result = await toolGrep(
+      { pattern: 'needle', path: dir, head_limit: 0 },
+      ctx(dir),
+    );
+
+    expect(readFileSpy).toHaveBeenCalledTimes(fileNames.length);
+    for (const fileName of fileNames) {
+      expect(result).toContain(join(dir, fileName));
+    }
+    expect(result).not.toContain('more');
   });
 });

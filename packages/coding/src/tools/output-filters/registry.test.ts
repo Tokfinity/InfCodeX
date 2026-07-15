@@ -1,5 +1,8 @@
 import { describe, expect, it } from 'vitest';
 import type { KodaXToolExecutionContext } from '../../types.js';
+import { applyCompiledOutputFilters } from './compiled/index.js';
+import { applyDeclarativeOutputFilters } from './declarative.js';
+import { applyGenericOutputFilter } from './generic.js';
 import {
   filterBashOutputBodies,
   finalizeFilteredBashOutput,
@@ -36,7 +39,31 @@ describe('output filter registry', () => {
     expect(result.lossiness).toBe('none');
   });
 
-  it('runs command-specific default filters through raw-output recovery', async () => {
+  it('does not run command-specific lossy filters by default', async () => {
+    const repeatedBody = Array.from({ length: 60 }, (_, index) => (
+      `${index.toString(16).padStart(7, 'a')} commit-${index}`
+    )).join('\n');
+    let persisted = false;
+    const result = await filterBashOutputBodies({
+      command: 'git log --oneline',
+      stdout: repeatedBody,
+      stderr: '',
+      ctx: makeCtx(),
+      persist: async () => {
+        persisted = true;
+        return 'C:\\tmp\\unused.txt';
+      },
+    });
+
+    expect(result).toEqual({
+      stdout: repeatedBody,
+      stderr: '',
+      lossiness: 'none',
+    });
+    expect(persisted).toBe(false);
+  });
+
+  it('keeps command-specific filters available for explicit use', async () => {
     const repeatedBody = Array.from({ length: 120 }, (_, index) => [
       `diff --git a/src/file-${index}.ts b/src/file-${index}.ts`,
       'index 111..222 100644',
@@ -51,6 +78,11 @@ describe('output filter registry', () => {
       stdout: repeatedBody,
       stderr: '',
       ctx: makeCtx(),
+      filters: [
+        applyGenericOutputFilter,
+        applyCompiledOutputFilters,
+        applyDeclarativeOutputFilters,
+      ],
       persist: async (toolName, content) => {
         expect(toolName).toBe('bash-output-raw');
         expect(content).toBe(repeatedBody);

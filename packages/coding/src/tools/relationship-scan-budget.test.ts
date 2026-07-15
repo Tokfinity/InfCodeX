@@ -8,7 +8,12 @@ const runtimeMocks = vi.hoisted(() => ({
   readRepoIntelligenceToolWaitMs: vi.fn(() => 1),
 }));
 
+const grepMocks = vi.hoisted(() => ({
+  toolGrep: vi.fn(),
+}));
+
 vi.mock('../repo-intelligence/runtime.js', () => runtimeMocks);
+vi.mock('./grep.js', () => grepMocks);
 
 import { toolRelationshipScan } from './relationship-scan.js';
 
@@ -104,5 +109,68 @@ describe('relationship_scan budget behavior', () => {
     expect(result).toContain('Structural relationships unavailable');
     expect(result).toContain('NOT a "no relationships found" result');
     expect(result).toContain('retry');
+  });
+
+  it('preserves grep evidence already bounded by head_limit without a second lossy clip', async () => {
+    const evidenceLines = Array.from(
+      { length: 16 },
+      (_, index) => `grep-evidence-${index + 1}-${'x'.repeat(180)}`,
+    );
+    grepMocks.toolGrep.mockResolvedValueOnce(evidenceLines.join('\n'));
+    runtimeMocks.getModuleContext.mockResolvedValueOnce(undefined);
+    runtimeMocks.getImpactEstimate.mockResolvedValueOnce(undefined);
+
+    const result = await toolRelationshipScan({
+      module: 'example-module',
+      direction: 'upstream',
+      include_text_search: true,
+    }, {
+      backups: new Map(),
+      executionCwd: 'C:/repo',
+    });
+
+    expect(grepMocks.toolGrep).toHaveBeenCalledWith(
+      expect.objectContaining({ head_limit: 16 }),
+      expect.any(Object),
+    );
+    for (const evidenceLine of evidenceLines) {
+      expect(result).toContain(evidenceLine);
+    }
+  });
+
+  it('renders every process step instead of silently clipping downstream evidence at eight', async () => {
+    runtimeMocks.getModuleContext.mockResolvedValueOnce(undefined);
+    runtimeMocks.getProcessContext.mockResolvedValueOnce({
+      process: {
+        id: 'process:entry',
+        label: 'entry',
+        moduleId: '.',
+        entryFile: 'src/entry.ts',
+        summary: 'test process',
+        steps: Array.from({ length: 12 }, (_, index) => ({
+          kind: index === 0 ? 'entry' : 'calls',
+          symbolName: `step${index + 1}`,
+          filePath: `src/step-${index + 1}.ts`,
+          note: 'evidence',
+          line: index + 1,
+        })),
+        confidence: 0.9,
+      },
+      alternatives: [],
+      freshness: 'fresh',
+      confidence: 0.9,
+    });
+    runtimeMocks.getImpactEstimate.mockResolvedValueOnce(undefined);
+
+    const result = await toolRelationshipScan({
+      entry: 'entry',
+      direction: 'downstream',
+    }, {
+      backups: new Map(),
+      executionCwd: 'C:/repo',
+    });
+
+    expect(result).toContain('Process entry: step1');
+    expect(result).toContain('Process calls: step12');
   });
 });

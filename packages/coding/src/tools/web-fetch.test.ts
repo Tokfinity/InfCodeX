@@ -43,6 +43,29 @@ describe('toolWebFetch', () => {
     expect(result).toContain('Wave B retrieval body.');
   });
 
+  it('preserves leading and trailing whitespace in non-HTML response bodies', async () => {
+    server = createServer((_, response) => {
+      response.writeHead(200, { 'content-type': 'text/plain; charset=utf-8' });
+      response.end('  leading\nmiddle\ntrailing  ');
+    });
+    await new Promise<void>((resolve) => {
+      server?.listen(0, '127.0.0.1', () => {
+        const address = server?.address();
+        if (address && typeof address === 'object') {
+          baseUrl = `http://127.0.0.1:${address.port}`;
+        }
+        resolve();
+      });
+    });
+
+    const result = await toolWebFetch({ url: `${baseUrl}/plain` }, {
+      backups: new Map(),
+      executionCwd: process.cwd(),
+    });
+
+    expect(result).toContain('Content:\n  leading\nmiddle\ntrailing  \n\nArtifacts:');
+  });
+
   it('uses provider-backed fetch when requested', async () => {
     const result = await toolWebFetch({
       provider_id: 'provider-1',
@@ -61,5 +84,30 @@ describe('toolWebFetch', () => {
 
     expect(result).toContain('Provider: provider-1');
     expect(result).toContain('provider body');
+  });
+
+  it('marks a response incomplete when the network acquisition safety limit is reached', async () => {
+    server = createServer((_, response) => {
+      response.writeHead(200, { 'content-type': 'text/plain; charset=utf-8' });
+      response.end(`first\n${'x'.repeat(512 * 1024)}\nlast-after-limit`);
+    });
+    await new Promise<void>((resolve) => {
+      server?.listen(0, '127.0.0.1', () => {
+        const address = server?.address();
+        if (address && typeof address === 'object') {
+          baseUrl = `http://127.0.0.1:${address.port}`;
+        }
+        resolve();
+      });
+    });
+
+    const result = await toolWebFetch({ url: `${baseUrl}/large` }, {
+      backups: new Map(),
+      executionCwd: process.cwd(),
+    });
+
+    expect(result).toContain('SOURCE_INCOMPLETE');
+    expect(result).toContain('- truncated: true');
+    expect(result).not.toContain('last-after-limit');
   });
 });

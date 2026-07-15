@@ -67,6 +67,7 @@ describe('/compact command', () => {
 
     mocks.resolveProvider.mockReturnValue({
       getContextWindow: () => 200000,
+      getEffectiveMaxOutputTokens: () => 32_000,
     });
     mocks.loadCompactionConfig.mockResolvedValue({
       enabled: false,
@@ -92,9 +93,11 @@ describe('/compact command', () => {
     const compactionConfig = mocks.compact.mock.calls[0]?.[1];
     expect(compactionConfig).toMatchObject({
       enabled: true,
-      triggerPercent: 24,
+      triggerPercent: 75,
     });
     expect(mocks.compact.mock.calls[0]?.[6]).toBe(50000);
+    expect(mocks.compact.mock.calls[0]?.[10]).toBe(true);
+    expect(mocks.compact.mock.calls[0]?.[11]).toBe(32_000);
     expect(logSpy.mock.calls.flat().join('\n')).not.toContain('Compaction is disabled in config');
     expect(callbacks.startCompacting).toHaveBeenCalledTimes(1);
     expect(callbacks.stopCompacting).toHaveBeenCalledTimes(1);
@@ -112,6 +115,7 @@ describe('/compact command', () => {
     const output = logSpy.mock.calls.flat().join('\n');
     expect(output).toContain('/compact still works even if auto-compaction is disabled');
     expect(output).toContain('compaction.enabled: Controls auto-compaction only');
+    expect(output).toContain('100 uses physical capacity');
 
     logSpy.mockRestore();
   });

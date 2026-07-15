@@ -511,10 +511,9 @@ function normalizeWorkerResult<TOutput>(
   if (result.success) {
     return {
       ...result,
-      // FEATURE_121 (v0.7.40): no longer pre-truncate to 1600 chars here.
-      // Downstream `dispatch-child-tasks.ts` enqueue path now runs the summary
-      // through `applyToolResultGuardrail('child_task_summary', ...)` so child
-      // summaries are framework-managed (50KB head + spill-to-file). Other
+      // Child summaries stay complete here and at enqueue time. The final
+      // ordinary tool-result batch or idle-yield resume envelope is the sole
+      // physical-capacity owner. Other
       // consumers of `summary` (summary.md / summary.json diagnostic writes,
       // mergedFindings.evidence, formatDependencyHandoff which has its own
       // 600-char truncate) accept full content intentionally — see

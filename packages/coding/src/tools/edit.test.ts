@@ -39,6 +39,23 @@ describe('edit tool', () => {
     await expect(fs.readFile(filePath, 'utf8')).resolves.toContain('delta');
   });
 
+  it('returns complete single-line replacements without a hidden 100-character preview cap', async () => {
+    const filePath = path.join(tempDir, 'long-line.txt');
+    const oldLine = `before-${'a'.repeat(180)}-old-tail`;
+    const newLine = `after-${'b'.repeat(180)}-new-tail`;
+    await fs.writeFile(filePath, oldLine, 'utf8');
+
+    const result = await toolEdit({
+      path: filePath,
+      old_string: oldLine,
+      new_string: newLine,
+    }, ctx);
+
+    expect(result).toContain(`- ${oldLine}`);
+    expect(result).toContain(`+ ${newLine}`);
+    expect(result).not.toContain('...');
+  });
+
   it('matches safely across CRLF, trailing space, blank-line, and indentation differences', async () => {
     const filePath = path.join(tempDir, 'doc.md');
     await fs.writeFile(

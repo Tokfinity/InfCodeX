@@ -1,27 +1,22 @@
 /**
- * FEATURE_121 v0.7.40 — TTL-based GC for tool-output spillover directory.
+ * FEATURE_121 v0.7.40 — explicit TTL cleanup helper for legacy tool-output
+ * spillover files plus production reference-aware cleanup.
  *
  * `persistToolOutput` (`./truncate.ts`) writes large tool outputs (read /
  * grep / bash / child-task spillover) to `~/.kodax/tool-results/<file>.txt`.
- * Without GC, that directory grows unbounded over a long install lifetime —
- * each spillover is a few-KB to a few-hundred-KB file, and a heavy KodaX
- * user can accumulate thousands per week.
+ * Recovery artifacts can be referenced by resumable session history. Age alone
+ * cannot prove that an artifact is dead, so `persistToolOutput` never runs an
+ * age-only sweep. Production callers supply the complete live-reference set;
+ * the legacy age-only helper remains an explicit host/operator action.
  *
  * Design:
- *   - 14-day TTL by default. Spillover files only matter during the
- *     session that wrote them (Worker reads them once when the user
- *     asks for detail). Past 14 days they are dead storage.
- *   - Lazy + throttled: triggered from `persistToolOutput` itself with
- *     a 1-hour in-process cooldown so heavy spillover bursts do not
- *     scan-storm the filesystem.
- *   - Best-effort: every IO failure is swallowed. GC must never break
- *     the calling write path.
+ *   - 14-day TTL remains the legacy/manual default, not a liveness claim.
+ *   - Reference-aware cleanup retains every path named by resumable sessions.
+ *   - Optional throttling coalesces calls made by a host.
+ *   - Per-file IO failures are returned in the result summary.
  *   - Stateless across processes: the cooldown lives in a module-level
  *     variable. Process restart resets it. No `.last-gc` marker file
  *     (that would just be another file to manage).
- *
- * No new dependency, no env var, no config. Operators who need a manual
- * sweep can run `find ~/.kodax/tool-results -type f -mtime +14 -delete`.
  *
  * Tested at `./tool-output-gc.test.ts`.
  */
@@ -29,9 +24,7 @@
 import fs from 'fs/promises';
 import path from 'path';
 
-/** 14 days — long enough to survive normal session pauses, short enough
- * that a stopped-and-resumed laptop-month doesn't pile up GB of dead
- * spillover. Override per-call only (not via env) — surface kept tight. */
+/** Legacy/manual retention default. Callers must establish artifact liveness. */
 export const DEFAULT_TOOL_OUTPUT_TTL_MS = 14 * 24 * 60 * 60 * 1000;
 
 /** 1-hour in-process cooldown for `maybeRunToolOutputGc`. */
@@ -103,20 +96,63 @@ export async function cleanupExpiredToolOutputs(
   return { scanned, removed, failed, bytesRemoved };
 }
 
+function normalizeArtifactPath(filePath: string): string {
+  const resolved = path.resolve(filePath);
+  return process.platform === 'win32' ? resolved.toLowerCase() : resolved;
+}
+
+/**
+ * Production-safe sweep: age is only a grace gate; a referenced artifact is
+ * retained regardless of age. Callers must supply references from every live
+ * and resumable session in their storage scope.
+ */
+export async function cleanupUnreferencedToolOutputs(
+  dir: string,
+  referencedPaths: ReadonlySet<string>,
+  graceMs: number = DEFAULT_TOOL_OUTPUT_TTL_MS,
+  now: number = Date.now(),
+): Promise<ToolOutputGcResult> {
+  let entries: string[];
+  try {
+    entries = await fs.readdir(dir);
+  } catch {
+    return { scanned: 0, removed: 0, failed: 0, bytesRemoved: 0 };
+  }
+
+  const referenced = new Set([...referencedPaths].map(normalizeArtifactPath));
+  let scanned = 0;
+  let removed = 0;
+  let failed = 0;
+  let bytesRemoved = 0;
+  for (const name of entries) {
+    const filePath = path.join(dir, name);
+    try {
+      const stat = await fs.stat(filePath);
+      if (!stat.isFile()) continue;
+      scanned += 1;
+      if (referenced.has(normalizeArtifactPath(filePath)) || now - stat.mtimeMs <= graceMs) continue;
+      await fs.unlink(filePath);
+      removed += 1;
+      bytesRemoved += stat.size;
+    } catch {
+      failed += 1;
+    }
+  }
+  return { scanned, removed, failed, bytesRemoved };
+}
+
 // In-process throttle state — reset on process restart. Not exported;
 // `__resetGcCooldownForTests` below punches through for the test file.
 let lastGcAtMs = 0;
 let inFlight: Promise<ToolOutputGcResult | null> | null = null;
 
 /**
- * Fire-and-forget GC trigger called from `persistToolOutput` after each
- * spillover write. Returns:
+ * Throttled wrapper for an explicit host/operator cleanup request. It is not
+ * called by `persistToolOutput`. Returns:
  *   - the GC result promise if this call actually launched a sweep, OR
  *   - `null` if the cooldown is still in effect (no sweep launched).
  *
- * Callers should NOT await this — the whole point is to not block the
- * write path. The return value is exposed only so tests can deterministi-
- * cally observe sweep completion.
+ * Callers may await the result when they need an auditable cleanup summary.
  */
 export function maybeRunToolOutputGc(
   dir: string,
@@ -131,6 +167,32 @@ export function maybeRunToolOutputGc(
   }
   lastGcAtMs = now;
   inFlight = cleanupExpiredToolOutputs(dir, ttlMs, now)
+    .then((result) => {
+      inFlight = null;
+      return result;
+    })
+    .catch(() => {
+      inFlight = null;
+      return null;
+    });
+  return inFlight;
+}
+
+/**
+ * Throttled production entry point. Reference discovery happens only after the
+ * cooldown admits a sweep; discovery failure cancels deletion fail-closed.
+ */
+export function maybeRunReferenceAwareToolOutputGc(
+  dir: string,
+  loadReferencedPaths: () => Promise<ReadonlySet<string>>,
+  graceMs: number = DEFAULT_TOOL_OUTPUT_TTL_MS,
+  now: number = Date.now(),
+): Promise<ToolOutputGcResult | null> {
+  if (inFlight) return inFlight;
+  if (now - lastGcAtMs < GC_COOLDOWN_MS) return Promise.resolve(null);
+  lastGcAtMs = now;
+  inFlight = loadReferencedPaths()
+    .then((referenced) => cleanupUnreferencedToolOutputs(dir, referenced, graceMs, now))
     .then((result) => {
       inFlight = null;
       return result;

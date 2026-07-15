@@ -164,10 +164,12 @@ export function wrapCodingToolAsRunnable(
       if (budget) incrementManagedBudgetUsage(budget, 1);
       recordMutationForTool(baseCtx.mutationTracker, definition.name, input);
       const toolCallId = runnerCtx?.toolCallId;
-      const ctxForCall: KodaXToolExecutionContext = events?.onToolProgress && toolCallId
-        ? {
-          ...baseCtx,
-          reportToolProgress: (message: string) => {
+      let outputPath: string | undefined;
+      const toolResultCapacityTokens = runnerCtx?.transcript
+        ? baseCtx.resolveToolResultCapacityTokens?.(runnerCtx.transcript)
+        : undefined;
+      const reportToolProgress = events?.onToolProgress && toolCallId
+        ? (message: string): void => {
             events.onToolProgress?.(
               { id: toolCallId, message },
               {
@@ -177,12 +179,30 @@ export function wrapCodingToolAsRunnable(
                   : {}),
               },
             );
-          },
-        }
-        : baseCtx;
+          }
+        : undefined;
+      const ctxForCall: KodaXToolExecutionContext = {
+        ...baseCtx,
+        ...(toolCallId ? { toolCallId } : {}),
+        ...(toolResultCapacityTokens !== undefined ? { toolResultCapacityTokens } : {}),
+        ...(reportToolProgress ? { reportToolProgress } : {}),
+        ...(toolCallId
+          ? {
+              recordToolResultArtifact: (recordedToolCallId, recordedOutputPath) => {
+                if (recordedToolCallId === toolCallId) outputPath = recordedOutputPath;
+                baseCtx.recordToolResultArtifact?.(recordedToolCallId, recordedOutputPath);
+              },
+            }
+          : {}),
+      };
       try {
         const content = await handler(input, ctxForCall);
-        return { content };
+        return {
+          content,
+          ...(outputPath
+            ? { metadata: { truncated: true, capacityFallback: true, outputPath } }
+            : {}),
+        };
       } catch (err) {
         const message = err instanceof Error ? err.message : String(err);
         return { content: `[Tool Error] ${definition.name}: ${message}`, isError: true };

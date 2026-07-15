@@ -225,6 +225,22 @@ function renderLedgerSummary(
 
   const lines: string[] = [];
 
+  // These pointers are the lossless route back to capacity-spilled output.
+  // Render them first and as complete lines, including for generic tools that
+  // do not belong to one of the specialized groups below.
+  const seenRecoveryPaths = new Set<string>();
+  for (const entry of [...ledger].reverse()) {
+    const outputPath = entry.metadata?.outputPath;
+    if (typeof outputPath !== 'string' || outputPath.length === 0 || seenRecoveryPaths.has(outputPath)) {
+      continue;
+    }
+    if (entry.metadata?.truncated !== true && entry.metadata?.capacityFallback !== true) {
+      continue;
+    }
+    seenRecoveryPaths.add(outputPath);
+    lines.push(`Recoverable full output (${entry.sourceTool ?? 'tool'}): ${outputPath}`);
+  }
+
   if (modified.length > 0) {
     const items = modified.map((e) => {
       const action = e.action ?? e.kind.replace('file_', '');
@@ -266,7 +282,18 @@ function renderLedgerSummary(
         const overflow = hits.length > LEDGER_HITS_PREVIEW_LIMIT
           ? ` (+${hits.length - LEDGER_HITS_PREVIEW_LIMIT} more)`
           : '';
-        return `${head} → ${hits.length} hits: ${previews.join(', ')}${overflow}`;
+        const incomplete = e.metadata?.truncated === true || e.metadata?.capacityFallback === true;
+        const capturedCount = typeof e.metadata?.capturedCount === 'number'
+          ? e.metadata.capturedCount
+          : hits.length;
+        const omittedCount = typeof e.metadata?.omittedCount === 'number'
+          ? e.metadata.omittedCount
+          : 0;
+        const hitNoun = capturedCount === 1 ? 'hit' : 'hits';
+        const countLabel = incomplete
+          ? `${capturedCount} captured ${hitNoun} (incomplete${omittedCount > 0 ? `; ${omittedCount} omitted from ledger` : ''})`
+          : `${hits.length} hits`;
+        return `${head} → ${countLabel}: ${previews.join(', ')}${overflow}`;
       }
       const matchCount = e.metadata?.matchCount;
       if (typeof matchCount === 'number') {
@@ -291,7 +318,17 @@ function renderLedgerSummary(
       const overflow = paths.length > LEDGER_GLOB_PATHS_PREVIEW_LIMIT
         ? ` (+${paths.length - LEDGER_GLOB_PATHS_PREVIEW_LIMIT} more)`
         : '';
-      return `${e.target}: ${shown}${overflow}`;
+      const incomplete = e.metadata?.truncated === true || e.metadata?.capacityFallback === true;
+      const capturedCount = typeof e.metadata?.capturedCount === 'number'
+        ? e.metadata.capturedCount
+        : paths.length;
+      const omittedCount = typeof e.metadata?.omittedCount === 'number'
+        ? e.metadata.omittedCount
+        : 0;
+      const countLabel = incomplete
+        ? `${capturedCount} captured paths (incomplete${omittedCount > 0 ? `; ${omittedCount} omitted from ledger` : ''}): `
+        : '';
+      return `${e.target}: ${countLabel}${shown}${overflow}`;
     });
     lines.push(`Glob: ${items.join('; ')}`);
   }
@@ -335,16 +372,15 @@ function renderLedgerSummary(
 
   if (lines.length === 0) return null;
 
-  const summary = lines.join('\n');
-  // Respect budget — return null if budget exhausted, truncate if over
-  const summaryTokens = estimateTokens([{ role: 'system', content: summary }]);
-  if (summaryTokens > budgetTokens) {
-    if (budgetTokens <= 0) return null;
-    const ratio = budgetTokens / summaryTokens;
-    return summary.slice(0, Math.floor(summary.length * ratio));
+  if (budgetTokens <= 0) return null;
+  const selected: string[] = [];
+  for (const line of lines) {
+    const candidate = [...selected, line].join('\n');
+    if (estimateTokens([{ role: 'system', content: candidate }]) <= budgetTokens) {
+      selected.push(line);
+    }
   }
-
-  return summary;
+  return selected.length > 0 ? selected.join('\n') : null;
 }
 
 /**

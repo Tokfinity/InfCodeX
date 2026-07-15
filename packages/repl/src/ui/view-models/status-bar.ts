@@ -1,5 +1,6 @@
 import type { StatusBarProps } from "../types.js";
 import { permissionModeDisplayName } from "../../permission/types.js";
+import { resolveCompactionThresholdTokens } from "../../common/compaction-display.js";
 
 const ITERATION_SYMBOL = "\u{1F504}";
 const BAR_FILLED = "\u2588";
@@ -92,16 +93,20 @@ function getContextColor(
   currentTokens: number,
   contextWindow: number,
   triggerPercent: number,
+  reservedResponseTokens?: number,
 ): string {
   if (contextWindow === 0) {
     return "green";
   }
-  const percent = (currentTokens / contextWindow) * 100;
-  const warningThreshold = triggerPercent * (2 / 3);
-  if (percent >= triggerPercent) {
+  const compactionThreshold = resolveCompactionThresholdTokens(
+    contextWindow,
+    triggerPercent,
+    reservedResponseTokens,
+  );
+  if (currentTokens >= compactionThreshold) {
     return "red";
   }
-  if (percent >= warningThreshold) {
+  if (currentTokens >= compactionThreshold * (2 / 3)) {
     return "yellow";
   }
   return "green";
@@ -530,6 +535,7 @@ function buildStatusBarSegments(props: StatusBarProps): StatusBarSegment[] {
         contextUsage.currentTokens,
         contextUsage.contextWindow,
         contextUsage.triggerPercent,
+        contextUsage.reservedResponseTokens,
       ),
     });
   }

@@ -132,6 +132,49 @@ describe('FEATURE_185 (v0.7.42): hits/matched-paths rendering', () => {
     expect(content).toContain('import { authenticate }');
   });
 
+  it('labels bounded/incomplete search hits honestly and renders the recovery path', () => {
+    const outputPath = 'C:\\Users\\test\\.kodax\\tool-results\\full-grep.txt';
+    const ledger = [
+      createLedgerEntry('search_scope', 'authenticate', {
+        sourceTool: 'grep',
+        metadata: {
+          path: 'src/',
+          hits: [{ path: 'src/auth.ts', line: 42, preview: 'function authenticate(user) {' }],
+          capturedCount: 1,
+          omittedCount: 12,
+          truncated: true,
+          outputPath,
+          resultMode: 'content',
+        },
+      }),
+    ];
+
+    const result = buildPostCompactAttachments(ledger, 50000);
+    const content = result.ledgerMessage?.content as string;
+    expect(content).toContain('1 captured hit');
+    expect(content).toContain('incomplete');
+    expect(content).toContain('12 omitted from ledger');
+    expect(content).not.toContain('1 hits');
+    expect(content).toContain(outputPath);
+  });
+
+  it('renders a recovery path for a generic tool-result artifact', () => {
+    const outputPath = 'C:\\Users\\test\\.kodax\\tool-results\\custom-report.txt';
+    const ledger = [
+      createLedgerEntry('path_scope', outputPath, {
+        sourceTool: 'custom_report',
+        action: 'recover_output',
+        metadata: { outputPath, truncated: true, capacityFallback: true },
+      }),
+    ];
+
+    const result = buildPostCompactAttachments(ledger, 50000);
+    const content = result.ledgerMessage?.content as string;
+    expect(content).toContain('Recoverable full output');
+    expect(content).toContain('custom_report');
+    expect(content).toContain(outputPath);
+  });
+
   it('omits preview when hit lacks preview string (backward-compat)', () => {
     const ledger = [
       createLedgerEntry('search_scope', 'foo', {

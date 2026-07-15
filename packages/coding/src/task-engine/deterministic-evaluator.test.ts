@@ -6,6 +6,8 @@
  * one-liner that finishes in well under 1s.
  */
 import { describe, expect, it } from 'vitest';
+import { readdirSync } from 'node:fs';
+import { tmpdir } from 'node:os';
 import {
   formatDeterministicEvaluatorResult,
   runDeterministicEvaluator,
@@ -34,6 +36,40 @@ describe('runDeterministicEvaluator', () => {
     expect(result.status).toBe('fail');
     expect(result.exitCode).toBe(2);
     expect(result.stderrTail).toContain('bad-thing');
+  });
+
+  it('preserves complete stdout and stderr across the memory-to-spool boundary', async () => {
+    const spoolPrefix = `kodax-bash-${process.pid}-`;
+    const before = new Set(readdirSync(tmpdir()).filter((name) => name.startsWith(spoolPrefix)));
+    const result = await runDeterministicEvaluator({
+      hint: 'test',
+      cwd: process.cwd(),
+      commandOverride: 'node -e "process.stdout.write(\'STDOUT-FIRST\\n\'+\'o\'.repeat(600000)+\'\\nSTDOUT-LAST\'); process.stderr.write(\'STDERR-FIRST\\n\'+\'e\'.repeat(600000)+\'\\nSTDERR-LAST\'); process.exitCode=3"',
+      timeoutMs: 10_000,
+    });
+
+    expect(result.status).toBe('fail');
+    expect(result.stdoutTail).toMatch(/^STDOUT-FIRST\r?\n/);
+    expect(result.stdoutTail).toMatch(/\r?\nSTDOUT-LAST$/);
+    expect(result.stdoutTail.length).toBeGreaterThan(600_000);
+    expect(result.stderrTail).toMatch(/^STDERR-FIRST\r?\n/);
+    expect(result.stderrTail).toMatch(/\r?\nSTDERR-LAST$/);
+    expect(result.stderrTail.length).toBeGreaterThan(600_000);
+
+    const rendered = formatDeterministicEvaluatorResult(result);
+    expect(rendered).toContain('--- stdout ---');
+    expect(rendered).toContain('STDOUT-FIRST');
+    expect(rendered).toContain('STDOUT-LAST');
+    expect(rendered).toContain('--- stderr ---');
+    expect(rendered).toContain('STDERR-FIRST');
+    expect(rendered).toContain('STDERR-LAST');
+    expect(rendered).not.toContain('--- stdout tail');
+    expect(rendered).not.toContain('--- stderr tail');
+
+    const after = readdirSync(tmpdir()).filter(
+      (name) => name.startsWith(spoolPrefix) && !before.has(name),
+    );
+    expect(after).toEqual([]);
   });
 
   it('reports exit code 0 for noop commands', async () => {

@@ -1,6 +1,5 @@
 /**
- * Contract tests for CAP-077 (parallel/sequential dispatch split) and
- * CAP-079 (post-tool truncation guardrail wrapping).
+ * Contract tests for CAP-077 dispatch and CAP-079 final-batch capacity.
  *
  * Inventory entries:
  *   - docs/features/v0.7.29-capability-inventory.md#cap-077-tool-dispatch-parallelization-bash-sequential-non-bash-parallel
@@ -12,42 +11,47 @@
  *   - CAP-TOOL-DISPATCH-PAR-003: mid-bash abort honored
  *
  * Test obligations (CAP-079):
- *   - CAP-TOOL-RESULT-GUARDRAIL-001: truncation honored when output
- *     exceeds limit (verified via wiring — `runToolDispatch` routes
- *     every result through `applyToolResultGuardrail`)
+ *   - complete final batches pass unchanged; over-capacity batches spill
  *
  * Risk: CAP-077 = HIGH (correctness); CAP-079 = MEDIUM
  *
- * Class: 1 (CAP-077); 2 (CAP-079 — Runner-level guardrail primitive)
+ * Class: 1
  *
- * Verified location: agent-runtime/tool-dispatch.ts:runToolDispatch
+ * Verified locations: agent-runtime/tool-dispatch.ts:runToolDispatch and
+ * applyPostToolProcessing
  * (extracted from agent.ts:1271-1322 — pre-FEATURE_100 baseline —
  * during FEATURE_100 P3.3d).
  *
- * Time-ordering constraint: AFTER pre-tool abort check (CAP-076);
- * BEFORE per-result post-processing (CAP-078).
+ * Time-ordering constraint: dispatch precedes per-result post-processing;
+ * aggregate admission follows visibility/reflection and precedes history.
  *
  * Active here:
  *   - bash vs non-bash split via `tc.name === 'bash'`
  *   - non-bash dispatched through `Promise.all` (parallel)
  *   - bash dispatched in a sequential `for` loop
  *   - per-bash-iteration `abortSignal.aborted` recheck (Issue 088)
- *   - every call wrapped via `applyToolResultGuardrail(name, ..., ctx)`
+ *   - raw dispatch preserves concurrency; final visible batch owns capacity
  *
  * STATUS: ACTIVE since FEATURE_100 P3.3d.
  */
 
-import { describe, expect, it, vi } from 'vitest';
+import fs from 'fs/promises';
+import os from 'os';
+import path from 'path';
+import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
 
 import type { KodaXEvents, KodaXToolExecutionContext } from '../../types.js';
 import type { KodaXToolUseBlock } from '@kodax-ai/llm';
 
-import { runToolDispatch } from '../tool-dispatch.js';
+import { applyPostToolProcessing, runToolDispatch } from '../tool-dispatch.js';
 import {
   buildRuntimeSessionState,
   type RuntimeSessionState,
 } from '../runtime-session-state.js';
 import { CANCELLED_TOOL_RESULT_MESSAGE } from '../../constants.js';
+import { countTokens } from '../../tokenizer.js';
+import { TOOL_OUTPUT_DIR_ENV } from '../../tools/truncate.js';
+import type { ToolResultBudget } from '../../tools/tool-result-budget.js';
 
 function freshState(): RuntimeSessionState {
   return buildRuntimeSessionState({
@@ -62,6 +66,10 @@ function makeCtx(): KodaXToolExecutionContext {
 
 function tool(id: string, name: string): KodaXToolUseBlock {
   return { id, name, type: 'tool_use', input: {} } as unknown as KodaXToolUseBlock;
+}
+
+function budget(aggregateInlineTokens: number): ToolResultBudget {
+  return { aggregateInlineTokens };
 }
 
 describe('CAP-077: runToolDispatch — non-bash parallelization', () => {
@@ -224,8 +232,8 @@ describe('CAP-077: runToolDispatch — mid-bash abort (Issue 088)', () => {
   });
 });
 
-describe('CAP-079: applyToolResultGuardrail wrapping — wired into runToolDispatch', () => {
-  it('CAP-TOOL-RESULT-GUARDRAIL-001: short content passes through the guardrail unchanged (truncation policy is wired but no-op for under-limit content)', async () => {
+describe('CAP-077: raw result handoff', () => {
+  it('returns short content unchanged for final post-processing', async () => {
     const shortContent = 'fits well within the policy limits';
     const events: KodaXEvents = {
       beforeToolExecute: async () => shortContent,
@@ -240,9 +248,90 @@ describe('CAP-079: applyToolResultGuardrail wrapping — wired into runToolDispa
       abortSignal: undefined,
     });
 
-    // Identity: under-limit content survives the guardrail untouched.
-    // Truncation behavior itself is exhaustively tested in
-    // tool-result-policy.test.ts; here we only pin the wiring.
     expect(resultMap.get('t1')).toBe(shortContent);
+  });
+});
+
+describe('CAP-079: single aggregate capacity owner', () => {
+  let tempDir = '';
+
+  beforeEach(async () => {
+    tempDir = await fs.mkdtemp(path.join(os.tmpdir(), 'kodax-dispatch-budget-'));
+    process.env[TOOL_OUTPUT_DIR_ENV] = tempDir;
+  });
+
+  afterEach(async () => {
+    delete process.env[TOOL_OUTPUT_DIR_ENV];
+    await fs.rm(tempDir, { recursive: true, force: true });
+  });
+
+  it('keeps one large result complete when the final batch token budget can hold it', async () => {
+    const content = Array.from({ length: 8_000 }, (_, index) => `complete-evidence-${index}`).join('\n');
+    expect(Buffer.byteLength(content, 'utf8')).toBeGreaterThan(64 * 1024);
+    const toolBlocks = [tool('large', 'read')];
+    const executionContext = makeCtx();
+    const toolResultBudget = budget(countTokens(content) + 100);
+    const runtimeSessionState = freshState();
+    const resultMap = await runToolDispatch({
+      toolBlocks,
+      events: { beforeToolExecute: async () => content },
+      ctx: executionContext,
+      runtimeSessionState,
+      activeToolNames: ['read'],
+      abortSignal: undefined,
+    });
+    const processed = await applyPostToolProcessing({
+      toolBlocks,
+      resultMap,
+      events: {},
+      emitActiveExtensionEvent: vi.fn().mockResolvedValue(undefined),
+      ctx: executionContext,
+      runtimeSessionState,
+      toolResultBudget,
+    });
+
+    expect(processed.toolResults[0]!.content).toBe(content);
+    expect(await fs.readdir(tempDir)).toEqual([]);
+  });
+
+  it('spills only after the complete result batch exceeds its aggregate token budget', async () => {
+    const first = Array.from({ length: 1_800 }, (_, index) => `first-${index}`).join('\n');
+    const second = Array.from({ length: 1_800 }, (_, index) => `second-${index}`).join('\n');
+    const aggregateLimit = Math.floor((countTokens(first) + countTokens(second)) * 0.7);
+    const toolBlocks = [tool('first', 'read'), tool('second', 'grep')];
+    const executionContext = makeCtx();
+    const toolResultBudget = budget(aggregateLimit);
+    const runtimeSessionState = freshState();
+    const onToolResult = vi.fn();
+    const emitActiveExtensionEvent = vi.fn().mockResolvedValue(undefined);
+    const events: KodaXEvents = {
+      beforeToolExecute: async (_name, _input, hint) => hint?.toolId === 'first' ? first : second,
+      onToolResult,
+    };
+    const resultMap = await runToolDispatch({
+      toolBlocks,
+      events,
+      ctx: executionContext,
+      runtimeSessionState,
+      activeToolNames: ['read', 'grep'],
+      abortSignal: undefined,
+    });
+    const processed = await applyPostToolProcessing({
+      toolBlocks,
+      resultMap,
+      events,
+      emitActiveExtensionEvent,
+      ctx: executionContext,
+      runtimeSessionState,
+      toolResultBudget,
+    });
+
+    const outputs = processed.toolResults.map((result) => result.content as string);
+    expect(outputs.filter((content) => content.includes('Full output saved to:'))).toHaveLength(1);
+    expect(4 + outputs.reduce((total, content) => total + countTokens(content) + 4, 0))
+      .toBeLessThanOrEqual(aggregateLimit);
+    expect(await fs.readdir(tempDir)).toHaveLength(1);
+    expect(onToolResult.mock.calls.map(([event]) => event.content)).toEqual(outputs);
+    expect(emitActiveExtensionEvent.mock.calls.map(([, event]) => event.content)).toEqual(outputs);
   });
 });

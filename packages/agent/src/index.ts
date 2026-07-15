@@ -114,6 +114,15 @@ export {
   estimateTokens,
   countTokens,
 } from './tokenizer.js';
+export {
+  CONTEXT_SAFETY_FLOOR_TOKENS,
+  CONTEXT_SAFETY_RATIO,
+  ContextCapacityError,
+  calculateContextSafetyMargin,
+  calculateMaxContextInputTokens,
+  exceedsContextCapacity,
+  type ContextCapacityInput,
+} from './context-capacity.js';
 
 // ============== Diagnostics ==============
 export {
@@ -199,16 +208,19 @@ export type {
   RunEvent,
   RunOptions,
   RunResult,
+  RunnerRecoveryTranscriptCarrier,
   StopHookContext,
   StopHookFn,
   StopHookResult,
 } from './primitives/runner.js';
 export {
   Runner,
+  attachRunnerRecoveryTranscript,
   buildSystemPrompt,
   registerPresetDispatcher,
   _resetPresetDispatchers,
   extractAssistantTextFromMessage,
+  readRunnerRecoveryTranscript,
 } from './primitives/runner.js';
 
 export type {
@@ -219,6 +231,8 @@ export type {
   RunnerToolContext,
   RunnerToolObserver,
   RunnerToolResult,
+  RunnerToolResultBatch,
+  RunnerToolResultBatchTransform,
 } from './primitives/runner-tool-loop.js';
 export {
   MAX_TOOL_LOOP_ITERATIONS,
@@ -458,6 +472,7 @@ export * from './media/index.js';
 export type {
   ChildTaskRegistry,
   EnvelopeAggregateEnforcer,
+  EnvelopeAggregateCapacityContext,
   FanOutOutcome,
   FanOutProgressEvent,
   IdleYieldSnapshot,

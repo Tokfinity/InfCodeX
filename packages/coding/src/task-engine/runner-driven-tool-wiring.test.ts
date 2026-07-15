@@ -266,6 +266,37 @@ describe('FEATURE_250 — managed-path progressive disclosure (deferred hint-swa
     expect(callResult.content).toBe('managed-target:ok');
   });
 
+  it('managed tool_describe preserves every requested schema without character caps', async () => {
+    const names = Array.from({ length: 9 }, (_, index) => `managed_full_schema_${index}`);
+    for (const [index, name] of names.entries()) {
+      cleanupToolRegistrations.push(registerTool({
+        name,
+        description: index === 8
+          ? `large-start-${'detail '.repeat(2_400)}large-end`
+          : `schema ${index}`,
+        input_schema: { type: 'object', properties: {} },
+        handler: async () => 'ok',
+        sideEffect: 'readonly',
+        toClassifierInput: () => '',
+      }));
+    }
+
+    const chain = buildRunnerAgentChain(makeCtx(true, true), makeRecorder());
+    const describeTool = (chain.worker.tools ?? []).find((tool) => tool.name === 'tool_describe') as {
+      execute?: (input: Record<string, unknown>, ctx: { agent: typeof chain.worker; toolCallId: string }) => Promise<{ content: string | readonly unknown[] }>;
+    } | undefined;
+    const result = await describeTool!.execute!(
+      { names },
+      { agent: chain.worker, toolCallId: 'describe-full' },
+    );
+    const content = String(result.content);
+
+    expect(content).toContain('"name":"managed_full_schema_8"');
+    expect(content).toContain('large-start-');
+    expect(content).toContain('large-end');
+    expect(content).not.toContain('tool_describe output truncated');
+  });
+
   it('non-deferred tools keep their full description (e.g. bash)', () => {
     expect(workerTool('bash')?.description).toBe(getToolDefinition('bash')?.description);
   });

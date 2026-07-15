@@ -254,6 +254,7 @@ import {
 } from "../interactive/auto-mode-bootstrap.js";
 import { isAutoMode, createAutoInProjectDeprecationEmitter } from "../permission/types.js";
 import { copyTextToClipboard } from "../common/clipboard.js";
+import { formatCompactionPolicy } from "../common/compaction-display.js";
 import { initializeSkillRegistry, getSkillRegistry } from "@kodax-ai/agent";
 import { getTheme } from "./themes/index.js";
 import { KODAX_BANNER_LOGO_LINES } from "./constants/banner-logo.js";
@@ -533,6 +534,7 @@ interface InkREPLProps {
     contextWindow: number;
     triggerPercent: number;
     enabled: boolean;
+    reservedResponseTokens?: number;
     /**
      * Raw user-config override (`compaction.contextWindow`) if set.
      * When defined, wins unconditionally over provider per-model values —
@@ -613,6 +615,7 @@ interface BannerProps {
     contextWindow: number;
     triggerPercent: number;
     enabled: boolean;
+    reservedResponseTokens?: number;
     /**
      * Raw user-config override (`compaction.contextWindow`) if set.
      * When defined, wins unconditionally over provider per-model values —
@@ -1212,7 +1215,9 @@ const Banner: React.FC<BannerProps> = ({
 
   // Compute compaction display values
   const ctxK = compactionInfo ? Math.round(compactionInfo.contextWindow / 1000) : 0;
-  const triggerK = compactionInfo ? Math.round(compactionInfo.contextWindow * compactionInfo.triggerPercent / 100 / 1000) : 0;
+  const compactionPolicy = compactionInfo
+    ? formatCompactionPolicy(compactionInfo.contextWindow, compactionInfo.triggerPercent)
+    : undefined;
 
   return (
     <Box flexDirection="column" marginBottom={1}>
@@ -1250,7 +1255,7 @@ const Banner: React.FC<BannerProps> = ({
           <Text color={compactionInfo.enabled ? theme.colors.success : theme.colors.text}>
             {compactionInfo.enabled ? "on" : "off"}
           </Text>
-          <Text color={theme.colors.text}>{` @ ${compactionInfo.triggerPercent}% (${triggerK}k)`}</Text>
+          <Text color={theme.colors.text}>{` · ${compactionPolicy}`}</Text>
         </Box>
       )}
 
@@ -1277,13 +1282,16 @@ function buildBannerTranscriptSection(props: BannerProps): TranscriptSection {
     reasoningMode: props.config.reasoningMode,
   });
   const ctxK = props.compactionInfo ? Math.round(props.compactionInfo.contextWindow / 1000) : 0;
-  const triggerK = props.compactionInfo
-    ? Math.round(props.compactionInfo.contextWindow * props.compactionInfo.triggerPercent / 100 / 1000)
-    : 0;
+  const compactionPolicy = props.compactionInfo
+    ? formatCompactionPolicy(
+        props.compactionInfo.contextWindow,
+        props.compactionInfo.triggerPercent,
+      )
+    : undefined;
   const taglineLine = "  ▎ AI Coding Agent · Minimalist & Intelligent";
   const versionLine = `  ▎ v${KODAX_VERSION}  ·  ${props.config.provider}/${model}  ·  effort:${reasoningEffortLabel}  ·  ${props.config.agentMode.toUpperCase()} / ${props.config.permissionMode}`;
   const compactionLine = props.compactionInfo
-    ? `  ▎ ctx ${ctxK}k  ·  compaction ${props.compactionInfo.enabled ? "on" : "off"} @ ${props.compactionInfo.triggerPercent}% (${triggerK}k)`
+    ? `  ▎ ctx ${ctxK}k  ·  compaction ${props.compactionInfo.enabled ? "on" : "off"} · ${compactionPolicy}`
     : undefined;
   const sessionLine = `  ▎ session ${props.sessionId}  ·  ${props.workingDir}`;
   const rows: TranscriptRow[] = [];
@@ -2738,7 +2746,7 @@ const InkREPLInner: React.FC<InkREPLProps> = ({
   const contextUsage = useMemo(() => {
     if (!effectiveCompactionInfo) return undefined;
 
-    const { contextWindow, triggerPercent } = effectiveCompactionInfo;
+    const { contextWindow, triggerPercent, reservedResponseTokens } = effectiveCompactionInfo;
     const currentTokens =
       liveTokenCount ??
       context.contextTokenSnapshot?.currentTokens ??
@@ -2748,6 +2756,7 @@ const InkREPLInner: React.FC<InkREPLProps> = ({
       currentTokens,
       contextWindow,
       triggerPercent,
+      reservedResponseTokens,
     };
   }, [context.messages, context.contextTokenSnapshot, effectiveCompactionInfo, liveTokenCount]);
 
@@ -10006,6 +10015,7 @@ export async function runInkInteractiveMode(options: InkREPLOptions): Promise<vo
         contextWindow: number;
         triggerPercent: number;
         enabled: boolean;
+        reservedResponseTokens?: number;
         userOverrideContextWindow?: number;
       }
     | undefined;
@@ -10020,6 +10030,7 @@ export async function runInkInteractiveMode(options: InkREPLOptions): Promise<vo
       contextWindow: effectiveContextWindow,
       triggerPercent: compConfig.triggerPercent,
       enabled: compConfig.enabled,
+      reservedResponseTokens: providerInstance.getEffectiveMaxOutputTokens?.(initialModel),
       // Track the raw user override separately so the React layer can
       // honour it across `/model` swaps (per-model resolution must NOT
       // override an explicit `compaction.contextWindow` setting).
@@ -10183,15 +10194,6 @@ export async function runInkInteractiveMode(options: InkREPLOptions): Promise<vo
   try {
     const stdout = process.stdout;
     const stdin = process.stdin;
-    // FEATURE_134 v0.7.40 follow-up — best-effort GC of cross-session paste
-    // temp files older than PASTE_TMP_TTL_MS (24h). Fire-and-forget; never
-    // blocks REPL startup. Files written by the active session (always
-    // within TTL) are preserved.
-    void import('../paste/index.js')
-      .then((mod) => mod.prunePasteTmpDir())
-      .catch(() => {
-        /* GC failure is non-fatal — OS tmpdir cleanup remains the backstop */
-      });
     // FEATURE_134 v0.7.40 follow-up — DEC 2004 bracketed paste mode is
     // owned by `KeypressContext.tsx` (which writes `\x1b[?2004h` via
     // Ink's managed stdout in a useEffect AFTER Ink's first render, and

@@ -1,3 +1,5 @@
+import { calculateMaxContextInputTokens } from '@kodax-ai/agent';
+
 import type {
   RuntimeContextBudgetSnapshot,
   RuntimeContextPressure,
@@ -10,7 +12,16 @@ export type ToolResultBudgetReason =
   | 'small_window_pressure'
   | 'critical_pressure';
 
-export interface ToolResultBudget {
+/** Minimal capacity contract used by the request-level batch admission owner. */
+export interface ToolResultCapacity {
+  readonly aggregateInlineTokens: number;
+}
+
+/**
+ * Public budget shape. Byte fields remain for source compatibility with SDK
+ * embedders; KodaX's internal admission path uses only aggregateInlineTokens.
+ */
+export interface ToolResultBudget extends ToolResultCapacity {
   readonly pressure: RuntimeContextPressure;
   readonly contextWindow: number;
   readonly aggregateInlineBytes: number;
@@ -21,6 +32,8 @@ export interface ToolResultBudget {
 export interface ToolResultBudgetUsageInput {
   readonly contextWindow: number;
   readonly currentTokens: number;
+  /** Tokens reserved for the next model response by the provider/model. */
+  readonly reservedResponseTokens?: number;
 }
 
 const TOKENS_TO_BYTES = 4;
@@ -29,15 +42,19 @@ const MIN_PER_RESULT_INLINE_BYTES = 4 * 1024;
 const LARGE_WINDOW_AGGREGATE_BYTES = 192 * 1024;
 const LARGE_WINDOW_PER_RESULT_BYTES = 64 * 1024;
 
+/** @deprecated Prefer buildToolResultBudgetFromUsage for request admission. */
 export function buildToolResultBudget(
   snapshot: RuntimeContextBudgetSnapshot,
 ): ToolResultBudget {
-  return buildToolResultBudgetFromPressure({
-    availableTokens: snapshot.availableTokens,
-    contextWindow: snapshot.contextWindow,
-    pressure: snapshot.pressure,
-    smallWindow: snapshot.smallWindow,
-  });
+  return {
+    aggregateInlineTokens: Math.max(0, Math.floor(snapshot.availableTokens)),
+    ...buildCompatibilityMetadata({
+      availableTokens: snapshot.availableTokens,
+      contextWindow: snapshot.contextWindow,
+      pressure: snapshot.pressure,
+      smallWindow: snapshot.smallWindow,
+    }),
+  };
 }
 
 export function buildToolResultBudgetFromUsage(
@@ -45,43 +62,76 @@ export function buildToolResultBudgetFromUsage(
 ): ToolResultBudget {
   const contextWindow = Math.max(0, Math.floor(input.contextWindow));
   const currentTokens = Math.max(0, Math.floor(input.currentTokens));
-  const availableTokens = contextWindow > 0 ? Math.max(0, contextWindow - currentTokens) : 0;
+  const reservedResponseTokens = Math.max(0, Math.floor(input.reservedResponseTokens ?? 0));
+  const maxFinalInputTokens = calculateMaxContextInputTokens(
+    contextWindow,
+    reservedResponseTokens,
+  );
+  const aggregateInlineTokens = Math.max(0, maxFinalInputTokens - currentTokens);
   const usedRatio = contextWindow > 0 ? currentTokens / contextWindow : 1;
   const smallWindow = contextWindow > 0 && contextWindow <= 32_000;
-  return buildToolResultBudgetFromPressure({
-    availableTokens,
-    contextWindow,
-    pressure: classifyPressure(contextWindow, availableTokens, usedRatio, smallWindow),
-    smallWindow,
-  });
+  const pressure = classifyPressure(contextWindow, aggregateInlineTokens, usedRatio, smallWindow);
+
+  return {
+    aggregateInlineTokens,
+    ...buildCompatibilityMetadata({
+      availableTokens: aggregateInlineTokens,
+      contextWindow,
+      pressure,
+      smallWindow,
+    }),
+  };
 }
 
-function buildToolResultBudgetFromPressure(input: {
+/**
+ * @deprecated Opt-in compatibility helper. Internal request admission does not
+ * call this per-result byte clamp because the batch token budget is authoritative.
+ */
+export function clampToolResultPolicyToBudget(
+  policy: ToolResultPolicy,
+  budget: ToolResultBudget | undefined,
+): ToolResultPolicy {
+  if (!budget) return policy;
+  const maxBytes = Math.min(policy.maxBytes, budget.perResultInlineBytes);
+  return {
+    ...policy,
+    maxBytes,
+    maxLines: Math.min(policy.maxLines, estimateLineCap(policy, maxBytes)),
+  };
+}
+
+function buildCompatibilityMetadata(input: {
   readonly availableTokens: number;
   readonly contextWindow: number;
   readonly pressure: RuntimeContextPressure;
   readonly smallWindow: boolean;
-}): ToolResultBudget {
+}): Omit<ToolResultBudget, 'aggregateInlineTokens'> {
   if (input.pressure === 'critical') {
     return {
       pressure: input.pressure,
       contextWindow: input.contextWindow,
-      aggregateInlineBytes: Math.max(MIN_AGGREGATE_INLINE_BYTES, Math.floor(input.availableTokens * TOKENS_TO_BYTES * 0.2)),
+      aggregateInlineBytes: Math.max(
+        MIN_AGGREGATE_INLINE_BYTES,
+        Math.floor(input.availableTokens * TOKENS_TO_BYTES * 0.2),
+      ),
       perResultInlineBytes: MIN_PER_RESULT_INLINE_BYTES,
       reason: 'critical_pressure',
     };
   }
 
   if (input.smallWindow || input.pressure === 'high') {
-    const aggregate = Math.max(
+    const aggregateInlineBytes = Math.max(
       MIN_AGGREGATE_INLINE_BYTES,
       Math.floor(input.availableTokens * TOKENS_TO_BYTES * 0.35),
     );
     return {
       pressure: input.pressure,
       contextWindow: input.contextWindow,
-      aggregateInlineBytes: aggregate,
-      perResultInlineBytes: Math.min(16 * 1024, Math.max(MIN_PER_RESULT_INLINE_BYTES, Math.floor(aggregate / 3))),
+      aggregateInlineBytes,
+      perResultInlineBytes: Math.min(
+        16 * 1024,
+        Math.max(MIN_PER_RESULT_INLINE_BYTES, Math.floor(aggregateInlineBytes / 3)),
+      ),
       reason: 'small_window_pressure',
     };
   }
@@ -102,19 +152,6 @@ function buildToolResultBudgetFromPressure(input: {
     aggregateInlineBytes: LARGE_WINDOW_AGGREGATE_BYTES,
     perResultInlineBytes: LARGE_WINDOW_PER_RESULT_BYTES,
     reason: 'large_window',
-  };
-}
-
-export function clampToolResultPolicyToBudget(
-  policy: ToolResultPolicy,
-  budget: ToolResultBudget | undefined,
-): ToolResultPolicy {
-  if (!budget) return policy;
-  const maxBytes = Math.min(policy.maxBytes, budget.perResultInlineBytes);
-  return {
-    ...policy,
-    maxBytes,
-    maxLines: Math.min(policy.maxLines, estimateLineCap(policy, maxBytes)),
   };
 }
 

@@ -13,7 +13,8 @@ const MAX_DIFF_LIMIT = 800;
 const DEFAULT_CONTEXT_LINES = 3;
 const MAX_CONTEXT_LINES = 12;
 const DEFAULT_BUNDLE_LIMIT_PER_PATH = 200;
-const MAX_BUNDLE_PATHS = 10;
+const MAX_BUNDLE_PATHS = 64;
+const BUNDLE_GIT_CONCURRENCY = 4;
 const GIT_TIMEOUT_MS = 10000;
 
 async function runGit(args: string[], cwd: string): Promise<string> {
@@ -341,29 +342,38 @@ export async function toolChangedDiffBundle(
 
     const uniquePaths = Array.from(new Set(
       rawPaths
-        .slice(0, MAX_BUNDLE_PATHS)
         .map((candidatePath) => normalizeDiffPath(candidatePath, workspaceRoot)),
     ));
+    if (uniquePaths.length > MAX_BUNDLE_PATHS) {
+      throw new Error(
+        `paths accepts at most ${MAX_BUNDLE_PATHS} unique paths per call; `
+        + 'split the request into multiple explicit bundles.',
+      );
+    }
     const offset = readPositiveInteger(input, 'offset', 1, Number.MAX_SAFE_INTEGER);
     const limitPerPath = readPositiveInteger(input, 'limit_per_path', DEFAULT_BUNDLE_LIMIT_PER_PATH, MAX_DIFF_LIMIT);
     const contextLines = readPositiveInteger(input, 'context_lines', DEFAULT_CONTEXT_LINES, MAX_CONTEXT_LINES);
     const baseRef = readOptionalString(input, 'base_ref');
     const targetRef = readOptionalString(input, 'target_ref');
 
-    const sections = await Promise.all(uniquePaths.map(async (relativePath) => {
-      const diff = baseRef
-        ? await buildCompareDiff(workspaceRoot, relativePath, baseRef, targetRef, contextLines)
-        : await buildWorkspaceDiff(workspaceRoot, relativePath, contextLines);
-      return renderBundleSection({
-        diff,
-        relativePath,
-        offset,
-        limit: limitPerPath,
-        baseRef,
-        targetRef,
-        contextLines,
-      });
-    }));
+    const sections: string[] = [];
+    for (let index = 0; index < uniquePaths.length; index += BUNDLE_GIT_CONCURRENCY) {
+      const batch = uniquePaths.slice(index, index + BUNDLE_GIT_CONCURRENCY);
+      sections.push(...await Promise.all(batch.map(async (relativePath) => {
+        const diff = baseRef
+          ? await buildCompareDiff(workspaceRoot, relativePath, baseRef, targetRef, contextLines)
+          : await buildWorkspaceDiff(workspaceRoot, relativePath, contextLines);
+        return renderBundleSection({
+          diff,
+          relativePath,
+          offset,
+          limit: limitPerPath,
+          baseRef,
+          targetRef,
+          contextLines,
+        });
+      })));
+    }
 
     return [
       `Changed diff bundle for ${uniquePaths.length} file(s)`,
@@ -371,9 +381,7 @@ export async function toolChangedDiffBundle(
       '',
       ...sections.flatMap((section, index) => index === 0 ? [section] : ['', section]),
       '',
-      uniquePaths.length >= MAX_BUNDLE_PATHS && rawPaths.length > uniquePaths.length
-        ? `[Additional paths omitted after ${MAX_BUNDLE_PATHS} entries. Re-run changed_diff_bundle with a narrower path batch.]`
-        : '[Bundle complete]',
+      '[Bundle complete]',
     ].join('\n');
   } catch (error) {
     const message = error instanceof Error ? error.message : String(error);

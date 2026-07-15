@@ -17,6 +17,7 @@ import { createAgent, type Agent, type Guardrail } from './agent.js';
 import type { InputGuardrail, ToolGuardrail } from './guardrail.js';
 import { createInMemorySession } from './session.js';
 import {
+  readRunnerRecoveryTranscript,
   Runner,
   _resetPresetDispatchers,
   registerPresetDispatcher,
@@ -263,6 +264,148 @@ describe('Runner', () => {
       expect(result.messages[3]!.role).toBe('user');
       const toolResultBlocks = result.messages[3]!.content as Array<{ type: string }>;
       expect(toolResultBlocks[0]!.type).toBe('tool_result');
+    });
+
+    it('transforms the settled tool-result batch once before building the result message', async () => {
+      const first: RunnableTool = {
+        name: 'first',
+        description: 'first result',
+        input_schema: { type: 'object', properties: {} },
+        execute: async () => ({ content: 'raw-first', metadata: { handoffTarget: 'next' } }),
+      };
+      const second: RunnableTool = {
+        name: 'bash',
+        description: 'multimodal result',
+        input_schema: { type: 'object', properties: {} },
+        execute: async () => ({
+          content: [
+            { type: 'text', text: 'visual evidence' },
+            { type: 'image', path: 'C:/tmp/evidence.png' },
+          ],
+          metadata: { source: 'image-reader' },
+        }),
+      };
+      const agent = createAgent({
+        name: 'batch-transform-agent',
+        instructions: 'sys',
+        tools: [first, second],
+      });
+      let turn = 0;
+      const llm = async (messages: readonly { content: unknown }[]): Promise<RunnerLlmResult> => {
+        turn += 1;
+        if (turn === 1) {
+          return {
+            text: '',
+            toolCalls: [
+              { id: 'first-call', name: 'first', input: {} },
+              { id: 'second-call', name: 'bash', input: {} },
+            ],
+          };
+        }
+        const blocks = messages.at(-1)!.content as Array<{
+          content: unknown;
+          metadata?: Record<string, unknown>;
+        }>;
+        expect(blocks[0]!.content).toBe('batch:first');
+        expect(blocks[0]!.metadata).toEqual({ handoffTarget: 'next' });
+        expect(blocks[1]!.content).toEqual([
+          { type: 'text', text: 'visual evidence' },
+          { type: 'image', path: 'C:/tmp/evidence.png' },
+        ]);
+        expect(blocks[1]!.metadata).toEqual({ source: 'image-reader' });
+        return { text: 'done', toolCalls: [] };
+      };
+      const transform = vi.fn(async ({ calls, results, transcript }) => {
+        expect(calls.map((call) => call.id)).toEqual(['first-call', 'second-call']);
+        expect(results.map((result) => result.content)).toHaveLength(2);
+        expect(transcript.at(-1)?.role).toBe('assistant');
+        return [
+          { ...results[0]!, content: 'batch:first' },
+          results[1]!,
+        ];
+      });
+
+      const result = await Runner.run(agent, 'q', {
+        llm,
+        toolResultBatchTransform: transform,
+      });
+
+      expect(result.output).toBe('done');
+      expect(transform).toHaveBeenCalledTimes(1);
+      const transformedResults = await transform.mock.results[0]!.value;
+      expect(transformedResults[0]!.metadata).toEqual({ handoffTarget: 'next' });
+      expect(transformedResults[1]!.metadata).toEqual({ source: 'image-reader' });
+    });
+
+    it('rejects a batch transform that breaks tool-call/result pairing', async () => {
+      const agent = createAgent({
+        name: 'invalid-batch-transform-agent',
+        instructions: 'sys',
+        tools: [makeEchoTool()],
+      });
+      const llm = async (): Promise<RunnerLlmResult> => ({
+        text: '',
+        toolCalls: [{ id: 'call-1', name: 'echo', input: { text: 'x' } }],
+      });
+
+      await expect(Runner.run(agent, 'q', {
+        llm,
+        toolResultBatchTransform: async () => [],
+      })).rejects.toThrow(/must preserve one result per tool call/i);
+    });
+
+    it('delivers post-transform results to the observer', async () => {
+      const agent = createAgent({
+        name: 'observed-batch-transform-agent',
+        instructions: 'sys',
+        tools: [makeEchoTool()],
+      });
+      let turn = 0;
+      let observedContent: unknown;
+      await Runner.run(agent, 'q', {
+        llm: async (): Promise<RunnerLlmResult> => {
+          turn += 1;
+          return turn === 1
+            ? { text: '', toolCalls: [{ id: 'call-1', name: 'echo', input: { text: 'raw' } }] }
+            : { text: 'done', toolCalls: [] };
+        },
+        toolResultBatchTransform: async ({ results }) => [
+          { ...results[0]!, content: 'admitted-result' },
+        ],
+        toolObserver: {
+          onToolResult: (_call, result) => { observedContent = result.content; },
+        },
+      });
+
+      expect(observedContent).toBe('admitted-result');
+    });
+
+    it('attaches the last legal transcript when a batch transform fails', async () => {
+      const agent = createAgent({
+        name: 'batch-transform-recovery-agent',
+        instructions: 'sys',
+        tools: [makeEchoTool()],
+      });
+      const capacityError = new Error('batch cannot fit');
+      capacityError.name = 'ToolResultBatchCapacityError';
+      let caught: unknown;
+
+      try {
+        await Runner.run(agent, 'q', {
+          llm: async (): Promise<RunnerLlmResult> => ({
+            text: '',
+            toolCalls: [{ id: 'call-1', name: 'echo', input: { text: 'raw' } }],
+          }),
+          toolResultBatchTransform: async () => { throw capacityError; },
+        });
+      } catch (error) {
+        caught = error;
+      }
+
+      expect(caught).toBe(capacityError);
+      expect(readRunnerRecoveryTranscript(caught)).toEqual([
+        { role: 'user', content: 'q' },
+      ]);
     });
 
     it('returns tool error content to the LLM when tool is unknown', async () => {

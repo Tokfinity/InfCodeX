@@ -1,19 +1,26 @@
 import { describe, expect, it } from 'vitest';
+import { exceedsContextCapacity } from '@kodax-ai/agent';
+import type {
+  RuntimeContextBudgetSnapshot,
+  RuntimeContextPressure,
+} from '../agent-runtime/context-budget.js';
 
-import type { RuntimeContextBudgetSnapshot } from '../agent-runtime/context-budget.js';
 import {
   buildToolResultBudget,
   buildToolResultBudgetFromUsage,
   clampToolResultPolicyToBudget,
 } from './tool-result-budget.js';
-import type { ToolResultPolicy } from './tool-result-policy.js';
 
-function snapshot(overrides: Partial<RuntimeContextBudgetSnapshot>): RuntimeContextBudgetSnapshot {
+function snapshot(input: {
+  contextWindow: number;
+  availableTokens: number;
+  usedRatio: number;
+  pressure: RuntimeContextPressure;
+  smallWindow: boolean;
+}): RuntimeContextBudgetSnapshot {
   return {
-    profile: 'report_only',
-    contextWindow: 128_000,
-    smallWindow: false,
-    pressure: 'low',
+    ...input,
+    profile: 'balanced',
     tokenBreakdown: {
       systemPrompt: 0,
       toolSchemas: 0,
@@ -23,83 +30,87 @@ function snapshot(overrides: Partial<RuntimeContextBudgetSnapshot>): RuntimeCont
       pendingInput: 0,
       recentToolResults: 0,
       reservedResponse: 0,
-      total: 0,
+      total: input.contextWindow - input.availableTokens,
     },
-    usedTokens: 0,
-    availableTokens: 128_000,
-    usedRatio: 0,
+    usedTokens: input.contextWindow - input.availableTokens,
     toolSchemaRatio: 0,
     recommendations: [],
-    createdAt: '2026-07-08T00:00:00.000Z',
-    ...overrides,
+    createdAt: '2026-07-15T00:00:00.000Z',
   };
 }
 
 describe('tool result budget', () => {
-  it('keeps generous caps for low-pressure large-window sessions', () => {
-    const budget = buildToolResultBudget(snapshot({}));
-
-    expect(budget.pressure).toBe('low');
-    expect(budget.aggregateInlineBytes).toBeGreaterThanOrEqual(96 * 1024);
-    expect(budget.perResultInlineBytes).toBeGreaterThanOrEqual(32 * 1024);
-  });
-
-  it('tightens aggregate and per-result caps for small-window pressure', () => {
+  it('preserves the public snapshot-budget compatibility API', () => {
     const budget = buildToolResultBudget(snapshot({
-      contextWindow: 16_000,
-      smallWindow: true,
-      pressure: 'high',
-      availableTokens: 1_500,
-      usedRatio: 0.9,
+      contextWindow: 128_000,
+      availableTokens: 64_000,
+      usedRatio: 0.5,
+      pressure: 'low',
+      smallWindow: false,
     }));
 
-    expect(budget.aggregateInlineBytes).toBeLessThan(64 * 1024);
-    expect(budget.perResultInlineBytes).toBeLessThanOrEqual(16 * 1024);
-    expect(budget.reason).toBe('small_window_pressure');
+    expect(budget.aggregateInlineTokens).toBe(64_000);
+    expect(budget.aggregateInlineBytes).toBe(192 * 1024);
+    expect(budget.reason).toBe('large_window');
   });
 
-  it('builds the same pressure class from lightweight usage counters', () => {
+  it('preserves the opt-in legacy policy clamp without using it internally', () => {
+    const budget = buildToolResultBudget(snapshot({
+      contextWindow: 16_000,
+      availableTokens: 1_600,
+      usedRatio: 0.9,
+      pressure: 'critical',
+      smallWindow: true,
+    }));
+    const clamped = clampToolResultPolicyToBudget({
+      maxLines: 1_200,
+      maxBytes: 40 * 1024,
+      direction: 'head',
+      spillToFile: true,
+    }, budget);
+
+    expect(clamped.maxBytes).toBe(4 * 1024);
+    expect(clamped.maxLines).toBe(120);
+  });
+
+  it('honors the safety floor when lightweight usage leaves no admissible batch space', () => {
     const budget = buildToolResultBudgetFromUsage({
       contextWindow: 16_000,
       currentTokens: 14_000,
     });
 
-    expect(budget.pressure).toBe('high');
-    expect(budget.reason).toBe('small_window_pressure');
-    expect(budget.perResultInlineBytes).toBeLessThanOrEqual(16 * 1024);
+    expect(budget.aggregateInlineTokens).toBe(0);
   });
 
-  it('never increases an existing per-tool policy', () => {
-    const policy: ToolResultPolicy = {
-      maxLines: 600,
-      maxBytes: 32 * 1024,
-      direction: 'tail',
-      spillToFile: true,
-    };
-    const budget = buildToolResultBudget(snapshot({
-      contextWindow: 16_000,
-      smallWindow: true,
-      pressure: 'critical',
-      availableTokens: 600,
-      usedRatio: 0.96,
-    }));
+  it('subtracts response and canonical safety reserves from the final batch capacity', () => {
+    const budget = buildToolResultBudgetFromUsage({
+      contextWindow: 128_000,
+      currentTokens: 20_000,
+      reservedResponseTokens: 8_000,
+    });
 
-    const clamped = clampToolResultPolicyToBudget(policy, budget);
-
-    expect(clamped.direction).toBe('tail');
-    expect(clamped.spillToFile).toBe(true);
-    expect(clamped.maxBytes).toBeLessThan(policy.maxBytes);
-    expect(clamped.maxLines).toBeLessThanOrEqual(policy.maxLines);
+    expect(budget.aggregateInlineTokens).toBe(96_504);
+    expect(exceedsContextCapacity({
+      contextWindow: 128_000,
+      currentTokens: 20_000 + budget.aggregateInlineTokens,
+      reservedResponseTokens: 8_000,
+    })).toBe(false);
+    expect(exceedsContextCapacity({
+      contextWindow: 128_000,
+      currentTokens: 20_001 + budget.aggregateInlineTokens,
+      reservedResponseTokens: 8_000,
+    })).toBe(true);
   });
 
-  it('does not clamp when diagnostics are unavailable', () => {
-    const policy: ToolResultPolicy = {
-      maxLines: 120,
-      maxBytes: 8 * 1024,
-      direction: 'head',
-      spillToFile: true,
-    };
+  it('keeps fixed-point token capacity alongside compatibility metadata', () => {
+    const budget = buildToolResultBudgetFromUsage({
+      contextWindow: 128_000,
+      currentTokens: 20_000,
+      reservedResponseTokens: 8_000,
+    });
 
-    expect(clampToolResultPolicyToBudget(policy, undefined)).toEqual(policy);
+    expect(budget.aggregateInlineTokens).toBe(96_504);
+    expect(budget.contextWindow).toBe(128_000);
+    expect(budget.pressure).toBe('low');
   });
 });

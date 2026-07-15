@@ -34,12 +34,18 @@ export async function toolSemanticLookup(
     const result = await semanticLookup(ctx, {
       query,
       kind,
-      limit,
+      limit: limit + 1,
       targetPath: readOptionalString(input, 'target_path'),
       refresh: input.refresh === true,
       maxWaitMs: readRepoIntelligenceToolWaitMs(),
     });
     const isWarming = result.capability?.status === 'warming';
+    const hasMore = result.items.length > limit;
+    const items = result.items.slice(0, limit);
+    const artifacts = result.artifacts.slice(0, limit);
+    const limitStatus = hasMore
+      ? `[RESULT_LIMIT_REACHED: limit=${limit}; additional semantic matches were omitted. Narrow \`query\`, \`kind\`, or \`target_path\`, then rerun \`semantic_lookup\`.] `
+      : '';
 
     return finalizeRetrievalResult({
       tool: 'semantic_lookup',
@@ -49,11 +55,11 @@ export async function toolSemanticLookup(
       freshness: 'snapshot',
       summary: isWarming
         ? 'Repository intelligence index is still warming; retry semantic_lookup shortly for full structural matches. Use read, grep, glob, and LSP tools for immediate exploration.'
-        : result.items.length > 0
-        ? `Found ${result.items.length} semantic match(es) for "${query}" in repository intelligence.`
+        : items.length > 0
+        ? `${limitStatus}Found ${items.length} semantic match(es) for "${query}" in repository intelligence.`
         : `No semantic matches for "${query}" in repository intelligence.`,
-      items: result.items,
-      artifacts: result.artifacts,
+      items,
+      artifacts,
       metadata: {
         kind,
         generatedAt: result.generatedAt,

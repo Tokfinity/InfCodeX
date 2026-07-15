@@ -26,7 +26,12 @@ vi.mock('../child-executor.js', async () => ({
 }));
 const { executeChildAgents: mockExecuteChildAgents } = await import('../child-executor.js');
 const mockExec = mockExecuteChildAgents as unknown as ReturnType<typeof vi.fn>;
-import { _resetMessageQueueForTests, getMessageQueue } from '@kodax-ai/agent';
+import {
+  _resetMessageQueueForTests,
+  buildAssistantMessageFromLlmResult,
+  ContextCapacityError,
+  getMessageQueue,
+} from '@kodax-ai/agent';
 import {
   buildRunnerAgentChain,
   buildRunnerLlmAdapter,
@@ -56,6 +61,9 @@ import type {
   KodaXToolEventMeta,
   KodaXToolExecutionContext,
 } from '../types.js';
+import { countTokens, estimateTokens } from '../tokenizer.js';
+import { resolveContextTokenCount } from '../token-accounting.js';
+import { estimateToolSchemaTokens } from '../agent-runtime/context-budget.js';
 
 // Shared scratch directory for `managedTaskWorkspaceDir` so the
 // Shard 6d-h artifact writes (contract.json / managed-task.json /
@@ -363,6 +371,166 @@ describe('buildRunnerLlmAdapter (via overrideStream)', () => {
     expect(result.toolCalls).toHaveLength(1);
     expect(result.toolCalls![0]!.name).toBe('read');
     expect(result.toolCalls![0]!.input).toEqual({ path: 'package.json' });
+  });
+
+  it('anchors API total tokens to the completed assistant transcript', async () => {
+    const snapshotRef: import('./_internal/managed-task/compaction.js').ContextTokenSnapshotRef = {
+      current: undefined,
+    };
+    const usage = {
+      inputTokens: 100,
+      outputTokens: 40,
+      totalTokens: 140,
+      cachedReadTokens: 60,
+    };
+    const adapter = buildRunnerLlmAdapter(
+      makeOptions(),
+      async () => ({
+        textBlocks: [{ text: 'using a tool' }],
+        toolBlocks: [{
+          type: 'tool_use',
+          id: 'read-1',
+          name: 'read',
+          input: { path: 'package.json' },
+        }],
+        thinkingBlocks: [],
+        usage,
+      } as KodaXStreamResult),
+      undefined,
+      undefined,
+      snapshotRef,
+    );
+    const messages: KodaXMessage[] = [
+      { role: 'system', content: 'system' },
+      { role: 'user', content: 'inspect the package' },
+    ];
+    const result = await adapter(messages, { name: 'worker', instructions: '' });
+    const completedTranscript = [
+      ...messages,
+      buildAssistantMessageFromLlmResult(result),
+    ] as KodaXMessage[];
+
+    expect(snapshotRef.current?.currentTokens).toBe(usage.totalTokens);
+    expect(snapshotRef.current?.baselineEstimatedTokens)
+      .toBe(estimateTokens(completedTranscript));
+    expect(snapshotRef.current?.usage?.cachedReadTokens).toBe(60);
+    expect(resolveContextTokenCount(completedTranscript, snapshotRef.current)).toBe(140);
+
+    const nextTranscript: KodaXMessage[] = [
+      ...completedTranscript,
+      {
+        role: 'user',
+        content: [{
+          type: 'tool_result',
+          tool_use_id: 'read-1',
+          content: 'new result only',
+        }],
+      },
+    ];
+    const physicalDelta = estimateTokens(nextTranscript) - estimateTokens(completedTranscript);
+    expect(resolveContextTokenCount(nextTranscript, snapshotRef.current))
+      .toBe(usage.totalTokens + physicalDelta);
+  });
+
+  it('builds a no-usage fallback snapshot from the final system + active tool-schema envelope', async () => {
+    const snapshotRef: import('./_internal/managed-task/compaction.js').ContextTokenSnapshotRef = {
+      current: undefined,
+    };
+    const largeSchemaTool: RunnableTool = {
+      name: 'large_schema_tool',
+      description: 'schema sentinel '.repeat(12_000),
+      input_schema: {
+        type: 'object',
+        properties: {
+          query: { type: 'string', description: 'query sentinel '.repeat(2_000) },
+        },
+      },
+      execute: async () => ({ content: 'unused' }),
+    };
+    const adapter = buildRunnerLlmAdapter(
+      makeOptions(),
+      async () => ({ textBlocks: [{ text: 'done without usage' }] }),
+      undefined,
+      undefined,
+      snapshotRef,
+    );
+    const messages: KodaXMessage[] = [
+      { role: 'system', content: 'FINAL_SYSTEM_SENTINEL '.repeat(200) },
+      { role: 'user', content: 'restored history request' },
+    ];
+    const result = await adapter(messages, {
+      name: 'worker',
+      instructions: '',
+      tools: [largeSchemaTool],
+    });
+    const completedRunnerTranscript = [
+      ...messages,
+      buildAssistantMessageFromLlmResult(result),
+    ] as KodaXMessage[];
+    const wireTool: KodaXToolDefinition = {
+      name: largeSchemaTool.name,
+      description: largeSchemaTool.description,
+      input_schema: largeSchemaTool.input_schema,
+    };
+    const completedProviderTranscript = completedRunnerTranscript.slice(1);
+    const expectedEnvelopeTokens = estimateTokens(completedProviderTranscript)
+      + countTokens(String(messages[0]!.content))
+      + estimateToolSchemaTokens(wireTool);
+
+    expect(snapshotRef.current?.source).toBe('estimate');
+    expect(snapshotRef.current?.baselineEstimatedTokens)
+      .toBe(estimateTokens(completedRunnerTranscript));
+    expect(snapshotRef.current?.currentTokens).toBe(expectedEnvelopeTokens);
+    expect(expectedEnvelopeTokens)
+      .toBeGreaterThan(estimateTokens(completedRunnerTranscript) + 5_000);
+  });
+
+  it('persists the latest legal transcript when hard capacity fails before the provider call', async () => {
+    const save = vi.fn(async () => undefined);
+    const providerCall = vi.fn(async () => ({
+      textBlocks: [{ text: 'unreachable' }],
+      toolBlocks: [],
+    }));
+    const optionsWithPressure: KodaXOptions = {
+      ...makeOptions(),
+      context: {
+        ...makeOptions().context,
+        contextTokenSnapshot: {
+          currentTokens: 1_000_000,
+          baselineEstimatedTokens: 0,
+          source: 'estimate',
+        },
+      },
+      session: {
+        id: 'runner-hard-capacity-recovery',
+        storage: {
+          load: vi.fn(async () => null),
+          save,
+        },
+      },
+    };
+
+    await expect(runManagedTaskViaRunner(
+      optionsWithPressure,
+      'HARD_CAPACITY_PERSISTENCE_SENTINEL',
+      providerCall,
+    )).rejects.toBeInstanceOf(ContextCapacityError);
+
+    expect(providerCall).not.toHaveBeenCalled();
+    expect(save).toHaveBeenCalledWith(
+      'runner-hard-capacity-recovery',
+      expect.objectContaining({
+        messages: expect.arrayContaining([
+          expect.objectContaining({ role: 'user' }),
+        ]),
+        errorMetadata: expect.objectContaining({
+          consecutiveErrors: 1,
+        }),
+      }),
+    );
+    expect(JSON.stringify(save.mock.calls.at(-1)?.[1])).toContain(
+      'HARD_CAPACITY_PERSISTENCE_SENTINEL',
+    );
   });
 });
 
@@ -2313,16 +2481,19 @@ describe('Shard 6d-c4 — onIterationEnd + contextTokenSnapshot', () => {
     expect(iterations.every((i) => i.scope === 'worker')).toBe(true);
   });
 
-  it('returns undefined contextTokenSnapshot when no provider usage is reported', async () => {
-    // Using adapterOverride (no real provider.stream) means no usage data,
-    // so the snapshot stays undefined — same behaviour as the SA-mode
-    // path for estimated-only runs.
+  it('returns a full-envelope estimate when no provider usage is reported', async () => {
     const result = await runManagedTaskViaRunner(
       makeOptions(),
       'Hi',
       async () => ({ textBlocks: [{ text: 'Hi' }], toolBlocks: [] }),
     );
-    expect(result.contextTokenSnapshot).toBeUndefined();
+    expect(result.contextTokenSnapshot).toEqual(expect.objectContaining({
+      source: 'estimate',
+      currentTokens: expect.any(Number),
+      baselineEstimatedTokens: expect.any(Number),
+    }));
+    expect(result.contextTokenSnapshot!.currentTokens)
+      .toBeGreaterThan(result.contextTokenSnapshot!.baselineEstimatedTokens);
   });
 });
 

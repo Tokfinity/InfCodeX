@@ -13,6 +13,7 @@ import {
   setKodaXDiagnosticSink,
   type KodaXDiagnostic,
 } from '../../diagnostics.js';
+import { ContextCapacityError } from '../../context-capacity.js';
 import { compact, isEmptyLikeSummary, needsCompaction, PROTECTED_TOOL_NAMES, truncateUserText } from './compaction.js';
 import { generateSummary } from './summary-generator.js';
 
@@ -32,7 +33,7 @@ class FakeSummaryProvider extends KodaXBaseProvider {
   public callCount = 0;
 
   constructor(
-    private readonly summaryText: string = [
+    private readonly summaryText: string | readonly string[] = [
       '## Goal',
       'Continue the current task.',
       '',
@@ -59,6 +60,7 @@ class FakeSummaryProvider extends KodaXBaseProvider {
       '- packages/agent/src/compaction/compaction.ts',
     ].join('\n'),
     private readonly failOnCall?: number,
+    private readonly evolveSummary = false,
   ) {
     super();
   }
@@ -80,8 +82,14 @@ class FakeSummaryProvider extends KodaXBaseProvider {
     this.systems.push(system);
     this.modelOverrides.push(streamOptions?.modelOverride);
 
+    let summaryText = typeof this.summaryText === 'string'
+      ? this.summaryText
+      : this.summaryText[Math.min(this.callCount - 1, this.summaryText.length - 1)] ?? '';
+    if (this.evolveSummary && this.callCount > 1) {
+      summaryText += `\n- Incorporated semantic summary chunk ${this.callCount}.`;
+    }
     return {
-      textBlocks: [{ type: 'text', text: this.summaryText }],
+      textBlocks: [{ type: 'text', text: summaryText }],
       toolBlocks: [],
       thinkingBlocks: [],
     };
@@ -126,25 +134,40 @@ function buildToolPair(index: number, outputWords: number): KodaXMessage[] {
 }
 
 describe('compaction', () => {
+  it('uses physical capacity by default and keeps percentage triggers opt-in', () => {
+    const messages = [{ role: 'user' as const, content: 'short prompt' }];
+    const capacityOnly = { enabled: true, triggerPercent: 100 };
+
+    expect(needsCompaction(messages, capacityOnly, 100_000, 75_000, 10_000)).toBe(false);
+    expect(needsCompaction(messages, capacityOnly, 100_000, 88_000, 10_000)).toBe(true);
+    expect(needsCompaction(
+      messages,
+      { enabled: true, triggerPercent: 70 },
+      100_000,
+      75_000,
+      10_000,
+    )).toBe(true);
+  });
+
   it('prefers an explicit token count override when checking trigger thresholds', () => {
     const config = {
       enabled: true,
       triggerPercent: 60,
     };
-    const contextWindow = 1000;
+    const contextWindow = 10_000;
     const messages = [{ role: 'user' as const, content: 'short prompt' }];
 
     expect(needsCompaction(messages, config, contextWindow)).toBe(false);
-    expect(needsCompaction(messages, config, contextWindow, 700)).toBe(true);
+    expect(needsCompaction(messages, config, contextWindow, 7_000)).toBe(true);
     expect(needsCompaction(messages, config, contextWindow, 100)).toBe(false);
   });
 
   it('compacts down to the internal low-water mark and avoids immediate re-compaction', async () => {
-    const provider = new FakeSummaryProvider();
-    const contextWindow = 4000;
+    const provider = new FakeSummaryProvider(undefined, undefined, true);
+    const contextWindow = 10_000;
     const config = {
       enabled: true,
-      triggerPercent: 60,
+      triggerPercent: 30,
       protectionPercent: 20,
       rollingSummaryPercent: 10,
       pruningThresholdTokens: 500,
@@ -177,10 +200,10 @@ describe('compaction', () => {
 
   it('passes the active model override to summary generation', async () => {
     const provider = new FakeSummaryProvider();
-    const contextWindow = 4000;
+    const contextWindow = 10_000;
     const config = {
       enabled: true,
-      triggerPercent: 60,
+      triggerPercent: 30,
       protectionPercent: 20,
       rollingSummaryPercent: 10,
       pruningThresholdTokens: 500,
@@ -209,10 +232,10 @@ describe('compaction', () => {
     });
     try {
       const provider = new FakeSummaryProvider(undefined, 1);
-      const contextWindow = 4000;
+      const contextWindow = 10_000;
       const config = {
         enabled: true,
-        triggerPercent: 60,
+        triggerPercent: 30,
         protectionPercent: 20,
         rollingSummaryPercent: 10,
         pruningThresholdTokens: 500,
@@ -228,6 +251,19 @@ describe('compaction', () => {
     } finally {
       restoreDiagnostics();
     }
+  });
+
+  it('preserves the original history and fails explicitly when no summary request fits', async () => {
+    const provider = new FakeSummaryProvider();
+    const messages = buildToolPair(1, 6_500);
+
+    await expect(compact(messages, {
+      enabled: true,
+      triggerPercent: 100,
+      protectionPercent: 0,
+      rollingSummaryPercent: 10,
+    }, provider, 4_000)).rejects.toBeInstanceOf(ContextCapacityError);
+    expect(messages).toEqual(buildToolPair(1, 6_500));
   });
 
   it('prunes older tool results while keeping recent tool context and normal messages', async () => {
@@ -297,14 +333,19 @@ describe('compaction', () => {
   // default — follows precedent commit d4a47bc9 (v0.7.37) "bump per-test
   // timeouts on flaky suites under heavy parallel load".
   it('keeps partial summary progress when a later summary attempt fails', { timeout: 15_000 }, async () => {
-    const provider = new FakeSummaryProvider('partial summary', 2);
+    const partialSummary = [
+      '## Goal',
+      'Preserve the successfully summarized prefix while retaining every later canonical message.',
+      '## Progress',
+      '- The first summary chunk completed successfully and is safe to consume.',
+    ].join('\n');
+    const provider = new FakeSummaryProvider(partialSummary, 2);
     const contextWindow = 200000;
     const config = {
       enabled: true,
       triggerPercent: 10,
       protectionPercent: 0,
-      rollingSummaryPercent: 100,
-      pruningThresholdTokens: 50000,
+      rollingSummaryPercent: 20,
     };
 
     const messages = buildLongConversation(3, 30000);
@@ -312,18 +353,18 @@ describe('compaction', () => {
 
     expect(provider.callCount).toBe(2);
     expect(result.compacted).toBe(true);
-    expect(result.summary).toBe('partial summary');
+    expect(result.summary).toBe(partialSummary);
     expect(result.entriesRemoved).toBeGreaterThan(0);
     expect(result.messages[0]).toEqual(expect.objectContaining({
       role: 'system',
-      content: expect.stringContaining('partial summary'),
+      content: expect.stringContaining('successfully summarized prefix'),
     }));
     expect(result.anchor).toEqual(expect.objectContaining({
-      summary: 'partial summary',
+      summary: partialSummary,
       reason: 'automatic_compaction',
     }));
     expect(result.memorySeed).toEqual({
-      objective: undefined,
+      objective: expect.stringContaining('successfully summarized prefix'),
       constraints: [],
       progress: {
         completed: [],
@@ -336,6 +377,64 @@ describe('compaction', () => {
       importantTargets: [],
       tombstones: [],
     });
+  });
+
+  it('does not consume a chunk when its summary is empty-like', async () => {
+    const provider = new FakeSummaryProvider(
+      '## Goal\nNo active goal. The conversation is empty with no prior context provided.',
+    );
+    const messages: KodaXMessage[] = [{
+      role: 'user',
+      content: `UNEXPRESSED_CHUNK_SENTINEL\n${makeLongText('evidence', 8_000)}`,
+    }, {
+      role: 'assistant',
+      content: 'recent protected tail',
+    }];
+    const original = structuredClone(messages);
+
+    const result = await compact(messages, {
+      enabled: true,
+      triggerPercent: 10,
+      protectionPercent: 0,
+      rollingSummaryPercent: 10,
+    }, provider, 20_000);
+
+    expect(provider.callCount).toBe(1);
+    expect(result.compacted).toBe(false);
+    expect(result.entriesRemoved).toBe(0);
+    expect(result.messages).toEqual(original);
+  });
+
+  it('commits only valid partial-summary progress and retains the failed chunk plus suffix', { timeout: 15_000 }, async () => {
+    const validPartialSummary = [
+      '## Goal',
+      'Retain deterministic progress from the first chunk without consuming evidence from later chunks.',
+      '## Progress',
+      '- The prefix was summarized successfully and can be represented by this durable summary.',
+    ].join('\n');
+    // Echoing the prior summary unchanged does not express the next chunk.
+    const provider = new FakeSummaryProvider([validPartialSummary, validPartialSummary]);
+    const messages = buildLongConversation(3, 30_000).map((message, index) => ({
+      ...message,
+      content: `CANONICAL_SENTINEL_${index}\n${String(message.content)}`,
+    }));
+
+    const result = await compact(messages, {
+      enabled: true,
+      triggerPercent: 10,
+      protectionPercent: 0,
+      rollingSummaryPercent: 20,
+    }, provider, 200_000);
+
+    expect(provider.callCount).toBe(2);
+    expect(result.summary).toBe(validPartialSummary);
+    expect(result.entriesRemoved).toBeGreaterThan(0);
+    expect(result.entriesRemoved).toBeLessThan(messages.length);
+    const retained = result.messages.filter((message) => message.role !== 'system');
+    expect(retained).toEqual(messages.slice(result.entriesRemoved));
+    expect(JSON.stringify(retained)).toContain(
+      `CANONICAL_SENTINEL_${result.entriesRemoved}`,
+    );
   });
 });
 
@@ -498,18 +597,14 @@ describe('FEATURE_181 (v0.7.42): empty LLM summary does not overwrite a non-empt
     const result = await compact(messages, config, provider, contextWindow);
 
     expect(provider.callCount).toBeGreaterThan(0);
-    expect(result.compacted).toBe(true);
-    // The empty-like LLM output must NOT have replaced the prior summary.
-    expect(result.summary).toBeDefined();
-    expect(isEmptyLikeSummary(result.summary || '')).toBe(false);
-    expect(result.summary || '').toContain('PRIOR_REAL_SUMMARY');
+    expect(result.compacted).toBe(false);
+    // No chunk was expressed by the invalid output, so canonical history —
+    // including the prior summary message — is returned byte-for-byte.
+    expect(result.messages).toEqual(messages);
+    expect(JSON.stringify(result.messages)).toContain('PRIOR_REAL_SUMMARY');
   });
 
-  it('still consumes chunks (loop terminates) when every LLM call returns empty-like', async () => {
-    // Without F181 progress guarantee, infinite loop could occur — every
-    // chunk gets the same empty-like summary and workingProcess never
-    // advances. F181 explicitly advances workingProcess by summarizedMessages
-    // even when keeping the prior summary; this test enforces that.
+  it('terminates without consuming chunks when every LLM call returns empty-like', async () => {
     const provider = new FakeSummaryProvider(EMPTY_SUMMARY_TEXT);
     const config = {
       enabled: true,
@@ -533,8 +628,8 @@ describe('FEATURE_181 (v0.7.42): empty LLM summary does not overwrite a non-empt
         setTimeout(() => rej(new Error('compact loop did not terminate within 10s')), 10000),
       ),
     ]);
-    expect(result.compacted).toBeDefined();
-    // The fake provider should have been called at least once.
+    expect(result.compacted).toBe(false);
+    expect(result.messages).toEqual(messages);
     expect(provider.callCount).toBeGreaterThan(0);
   });
 
@@ -676,15 +771,7 @@ describe('FEATURE_182 (v0.7.42): fast-path requires a non-empty previousSummary'
     expect(result.summary).toBe(PRIOR_SUMMARY);
   });
 
-  it('composes with F181: first compaction + empty LLM output falls back gracefully', async () => {
-    // Pre-F182 + empty LLM: fast-path returned the generic fallback
-    // template (acceptable but stuck).
-    // Post-F182 + empty LLM: slow-path runs, every chunk returns empty, F181
-    // keeps `summary = ''` because there is no prior to retain, the loop
-    // terminates when workingProcess is exhausted, and finalSummary || ...
-    // line still falls back to buildFallbackCompactionSummary. Same
-    // user-visible behaviour as pre-F182 for the no-prior + empty-LLM edge
-    // case — no regression.
+  it('composes with F181: first compaction + empty LLM output preserves canonical history', async () => {
     const provider = new FakeSummaryProvider(
       '## Goal\nNo active goal. The conversation appears empty with no prior context.',
     );
@@ -700,13 +787,9 @@ describe('FEATURE_182 (v0.7.42): fast-path requires a non-empty previousSummary'
     const messages = buildPrunableConversation();
     const result = await compact(messages, config, provider, contextWindow);
 
-    expect(result.compacted).toBe(true);
-    // LLM WAS invoked (slow-path forced by F182).
+    expect(result.compacted).toBe(false);
     expect(provider.callCount).toBeGreaterThan(0);
-    // Summary is the fallback template (acceptable degraded state, matches
-    // pre-F182 first-compaction behaviour). Critical: the result is not
-    // undefined / not a crash.
-    expect(result.summary).toBeDefined();
+    expect(result.messages).toEqual(messages);
   });
 });
 
@@ -779,6 +862,84 @@ describe('FEATURE_183 (v0.7.42): PROTECTED_TOOL_NAMES whitelist expansion', () =
       ].sort(),
     );
     expect(PROTECTED_TOOL_NAMES.size).toBe(34);
+  });
+
+  it('keeps a recoverable artifact pointer when pruning a capacity-limited result', async () => {
+    const provider = new FakeSummaryProvider();
+    const outputPath = 'C:\\Users\\test\\.kodax\\tool-results\\full-bash-output.txt';
+    const messages: KodaXMessage[] = [
+      {
+        role: 'system',
+        content: '[\u5bf9\u8bdd\u5386\u53f2\u6458\u8981]\n\nPrior summary with enough context for the prune fast path.',
+      },
+      {
+        role: 'assistant',
+        content: [{ type: 'tool_use', id: 'recoverable-tool', name: 'bash', input: { command: 'git log --stat' } }],
+      },
+      {
+        role: 'user',
+        content: [{
+          type: 'tool_result',
+          tool_use_id: 'recoverable-tool',
+          content: makeLongText('commit-stat', 6000),
+          metadata: { outputPath, truncated: true, capacityFallback: true },
+        }],
+      },
+      ...buildLongConversation(2, 120),
+    ];
+
+    const result = await compact(messages, {
+      enabled: true,
+      triggerPercent: 50,
+      protectionPercent: 1,
+      rollingSummaryPercent: 10,
+      pruningThresholdTokens: 100,
+    }, provider, 5000);
+
+    const recoverableBlock = result.messages
+      .flatMap((message) => Array.isArray(message.content) ? message.content : [])
+      .find((block): block is KodaXToolResultBlock =>
+        block.type === 'tool_result' && block.tool_use_id === 'recoverable-tool');
+    expect(recoverableBlock?.content).toContain('[Pruned:');
+    expect(recoverableBlock?.content).toContain('KODAX_RESULT_INCOMPLETE');
+    expect(recoverableBlock?.content).toContain(outputPath);
+    expect(result.artifactLedger?.[0]?.metadata).toEqual(expect.objectContaining({
+      outputPath,
+      truncated: true,
+      capacityFallback: true,
+    }));
+  });
+
+  it('does not head-tail truncate task-completed envelopes before LLM summarization', async () => {
+    const provider = new FakeSummaryProvider();
+    const artifactPath = 'C:\\Users\\test\\.kodax\\tool-results\\middle-child-report.txt';
+    const taskCompleted = [
+      '<task-completed task_id="child-a">',
+      makeLongText('before', 1000),
+      `Full output saved to: ${artifactPath}`,
+      makeLongText('after', 1000),
+      '</task-completed>',
+    ].join('\n');
+    const messages: KodaXMessage[] = [
+      {
+        role: 'user',
+        content: taskCompleted,
+        _synthetic: true,
+        _source: 'task-completed',
+      },
+      { role: 'assistant', content: makeLongText('assistant', 1000) },
+      { role: 'user', content: 'recent tail' },
+    ];
+
+    await compact(messages, {
+      enabled: true,
+      triggerPercent: 10,
+      protectionPercent: 1,
+      rollingSummaryPercent: 20,
+    }, provider, 10_000);
+
+    expect(provider.callCount).toBeGreaterThan(0);
+    expect(provider.prompts.join('\n')).toContain(artifactPath);
   });
 
   it('exposes the set as a ReadonlySet (frozen API surface)', () => {

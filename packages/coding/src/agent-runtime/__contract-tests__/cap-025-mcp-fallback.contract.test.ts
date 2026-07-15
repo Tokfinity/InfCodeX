@@ -158,6 +158,34 @@ describe('CAP-025: tryMcpFallback -result wrapping + error best-effort', () => {
     expect(result).toContain('"lines": 42');
   });
 
+  it('preserves distinct content and structuredContent in their original order', async () => {
+    const runtime = fakeRuntime({
+      hits: [{ id: 'mcp:read', name: 'read' }],
+      result: {
+        kind: 'resource',
+        content: 'primary body',
+        structuredContent: { lines: 42 },
+      },
+    });
+
+    const result = await tryMcpFallback('read', {}, makeCtx(runtime));
+    expect(result).toContain('primary body\n\nStructured content:\n{\n  "lines": 42\n}');
+  });
+
+  it('renders identical content and structuredContent only once', async () => {
+    const runtime = fakeRuntime({
+      hits: [{ id: 'mcp:read', name: 'read' }],
+      result: {
+        kind: 'resource',
+        content: 'same body',
+        structuredContent: 'same body',
+      },
+    });
+
+    const result = await tryMcpFallback('read', {}, makeCtx(runtime));
+    expect(result?.match(/same body/g)).toHaveLength(1);
+  });
+
   it('CAP-MCP-FALLBACK-SEARCH-ERROR: searchCapabilities throws ->undefined (best-effort, original [Tool Error] surfaces)', async () => {
     const runtime = fakeRuntime({ searchThrows: new Error('mcp connection lost') });
     expect(await tryMcpFallback('read', {}, makeCtx(runtime))).toBeUndefined();

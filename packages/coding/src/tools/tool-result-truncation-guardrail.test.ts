@@ -1,12 +1,9 @@
 /**
  * Adapter tests — FEATURE_085 (v0.7.26).
  *
- * Verifies that the ToolGuardrail wrapper around `applyToolResultGuardrail`
- * preserves the byte-exact truncation behaviour of the legacy path:
- *   - When content fits the policy, returns allow (no rewrite)
- *   - When content exceeds the policy, returns rewrite with the same
- *     truncated content the legacy function would produce
- *   - Passes through error results without inspection
+ * Per-result guardrails cannot see the final parallel batch or the physical
+ * next-request capacity. They therefore remain compatibility no-ops; the
+ * Runner batch transform owns capacity admission after all results settle.
  */
 
 import { describe, expect, it } from 'vitest';
@@ -15,7 +12,6 @@ import {
   TOOL_RESULT_TRUNCATION_GUARDRAIL_NAME,
   createToolResultTruncationGuardrail,
 } from './tool-result-truncation-guardrail.js';
-import { applyToolResultGuardrail } from './tool-result-policy.js';
 
 function makeCtx(): KodaXToolExecutionContext {
   return {
@@ -45,29 +41,28 @@ describe('tool-result-truncation-guardrail adapter', () => {
     expect(verdict.action).toBe('allow');
   });
 
-  it('rewrites content when exceeding tool policy (byte-equivalent to legacy modulo spill-file noise)', async () => {
-    const ctx = makeCtx();
-    // `bash` policy: 600 lines / 32KB tail. Generate 1000 numbered lines.
+  it('does not rewrite large content using a context-blind per-result cap', async () => {
     const big = Array.from({ length: 1000 }, (_, i) => `line-${i}`).join('\n');
-    const legacyResult = await applyToolResultGuardrail('bash', big, ctx);
-    expect(legacyResult.truncated).toBe(true);
-
     const g = createToolResultTruncationGuardrail(makeCtx());
     const verdict = await g.afterTool!(
       { id: 'c1', name: 'bash', input: {} },
       { content: big },
       { agent: { name: 't', instructions: '' } },
     );
-    expect(verdict.action).toBe('rewrite');
-    if (verdict.action === 'rewrite') {
-      const payload = verdict.payload as { content: string };
-      // Mask the spill-file noise (timestamp + random suffix in filename) so
-      // the byte-comparison targets the truncated payload proper. Any change
-      // to the truncation algorithm would still be caught.
-      const mask = (s: string): string =>
-        s.replace(/Full output saved to: [^.]+\.kodax[^\s]+\.txt\./g, 'Full output saved to: <PATH>.');
-      expect(mask(payload.content)).toBe(mask(legacyResult.content));
-    }
+    expect(verdict.action).toBe('allow');
+  });
+
+  it('does not reinterpret an existing incomplete marker without a capacity budget', async () => {
+    const g = createToolResultTruncationGuardrail(makeCtx());
+    const verdict = await g.afterTool!(
+      { id: 'c1', name: 'bash', input: {} },
+      {
+        content: 'preview\n[KODAX_RESULT_INCOMPLETE. Full output saved to: /tmp/full.txt.]',
+        metadata: { truncated: true, outputPath: '/tmp/full.txt' },
+      },
+      { agent: { name: 't', instructions: '' } },
+    );
+    expect(verdict.action).toBe('allow');
   });
 
   it('skips inspection when the tool result is an error', async () => {

@@ -12,7 +12,6 @@ import {
   READ_DEFAULT_LIMIT,
   READ_MAX_LINE_CHARS,
   READ_PREFLIGHT_SIZE_BYTES,
-  READ_TRUNCATED_LINE_SUFFIX,
 } from './truncate.js';
 
 const BINARY_SAMPLE_BYTES = 4096;
@@ -38,6 +37,14 @@ const IMAGE_MIME_TYPES: Record<string, string> = {
 // huge payloads.
 const READ_IMAGE_MAX_BYTES = 10 * 1024 * 1024;
 
+interface LineContinuation {
+  readonly lineNumber: number;
+  readonly start: number;
+  readonly end: number;
+  readonly total: number;
+  readonly nextOffset: number;
+}
+
 function buildReadNotes(options: {
   offset: number;
   linesShown: number;
@@ -45,7 +52,7 @@ function buildReadNotes(options: {
   totalLines: number;
   hasMoreLines: boolean;
   preflightNote: string;
-  truncatedLongLine: boolean;
+  lineContinuation?: LineContinuation;
 }): string[] {
   const {
     offset,
@@ -54,15 +61,21 @@ function buildReadNotes(options: {
     totalLines,
     hasMoreLines,
     preflightNote,
-    truncatedLongLine,
+    lineContinuation,
   } = options;
   const notes: string[] = [];
 
   if (preflightNote) {
     notes.push(preflightNote);
   }
-  if (truncatedLongLine) {
-    notes.push(`[Some long lines were shortened to ${READ_MAX_LINE_CHARS} characters.]`);
+  if (lineContinuation) {
+    notes.push(
+      `[Line ${lineContinuation.lineNumber} is partial: showing Unicode characters `
+      + `${lineContinuation.start}-${lineContinuation.end} of ${lineContinuation.total}. `
+      + `Continue with offset=${lineContinuation.lineNumber} limit=1 `
+      + `line_offset=${lineContinuation.nextOffset}.]`,
+    );
+    return notes;
   }
   if (hasMoreLines) {
     const nextOffset = offset + linesShown;
@@ -204,8 +217,10 @@ export async function toolRead(
 
   const rawOffset = Number.isFinite(input.offset) ? Number(input.offset) : 1;
   const rawLimit = Number.isFinite(input.limit) ? Number(input.limit) : READ_DEFAULT_LIMIT;
+  const rawLineOffset = Number.isFinite(input.line_offset) ? Number(input.line_offset) : 0;
   const offset = Math.max(1, Math.floor(rawOffset));
   const limit = Math.max(1, Math.floor(rawLimit));
+  const lineOffset = Math.max(0, Math.floor(rawLineOffset));
   const startLine = offset - 1;
 
   // FEATURE_177 v0.7.42 — anti-loop dedup. When the LLM re-reads the
@@ -216,7 +231,7 @@ export async function toolRead(
   // (created in `runner-driven.ts`); when undefined the lookup is
   // skipped and disk read proceeds normally. Killswitch:
   // `KODAX_READ_DEDUP_KILLSWITCH=1`.
-  if (ctx.readFileStateCache) {
+  if (ctx.readFileStateCache && lineOffset === 0) {
     const cached = ctx.readFileStateCache.lookup(filePath, offset, limit);
     if (cached.kind === 'hit') {
       return buildReadFileUnchangedStub(filePath, offset, limit);
@@ -233,7 +248,8 @@ export async function toolRead(
   let totalLines = 0;
   let outputBytes = 0;
   let hasMoreLines = false;
-  let truncatedLongLine = false;
+  let lineContinuation: LineContinuation | undefined;
+  let lineOffsetError: string | undefined;
 
   try {
     for await (const rawLine of reader) {
@@ -248,11 +264,29 @@ export async function toolRead(
       }
 
       const lineNumber = offset + lines.length;
-      const displayLine =
-        rawLine.length > READ_MAX_LINE_CHARS
-          ? `${rawLine.slice(0, READ_MAX_LINE_CHARS)}${READ_TRUNCATED_LINE_SUFFIX}`
-          : rawLine;
-      truncatedLongLine ||= displayLine !== rawLine;
+      const characters = Array.from(rawLine);
+      const currentLineOffset = lineNumber === offset ? lineOffset : 0;
+      if (currentLineOffset > characters.length) {
+        lineOffsetError =
+          `[Tool Error] line_offset ${currentLineOffset} is beyond end of line `
+          + `${lineNumber} (${characters.length} Unicode characters total)`;
+        break;
+      }
+      const visibleCharacters = characters.slice(
+        currentLineOffset,
+        currentLineOffset + READ_MAX_LINE_CHARS,
+      );
+      const displayLine = visibleCharacters.join('');
+      const nextLineOffset = currentLineOffset + visibleCharacters.length;
+      const nextLineContinuation = nextLineOffset < characters.length
+        ? {
+            lineNumber,
+            start: currentLineOffset,
+            end: nextLineOffset - 1,
+            total: characters.length,
+            nextOffset: nextLineOffset,
+          }
+        : undefined;
       const numberedLine = `${lineNumber.toString().padStart(6)}\t${displayLine}`;
       const lineBytes = Buffer.byteLength(numberedLine, 'utf-8') + (lines.length > 0 ? 1 : 0);
 
@@ -263,10 +297,19 @@ export async function toolRead(
 
       lines.push(numberedLine);
       outputBytes += lineBytes;
+      if (nextLineContinuation) {
+        lineContinuation = nextLineContinuation;
+        hasMoreLines = true;
+        break;
+      }
     }
   } finally {
     reader.close();
     stream.destroy();
+  }
+
+  if (lineOffsetError) {
+    return lineOffsetError;
   }
 
   if (totalLines < offset && !(totalLines === 0 && offset === 1)) {
@@ -279,6 +322,7 @@ export async function toolRead(
       : '';
   let effectiveLines = [...lines];
   let effectiveHasMoreLines = hasMoreLines;
+  let effectiveLineContinuation = lineContinuation;
 
   while (true) {
     const notes = buildReadNotes({
@@ -288,7 +332,7 @@ export async function toolRead(
       totalLines,
       hasMoreLines: effectiveHasMoreLines,
       preflightNote,
-      truncatedLongLine,
+      lineContinuation: effectiveLineContinuation,
     });
     const output = renderReadOutput(effectiveLines, notes);
     if (
@@ -305,11 +349,16 @@ export async function toolRead(
       // for the anti-loop dedup. The next re-read with these same
       // params + unchanged mtime returns a stub instead of paying disk
       // I/O and re-flooding the conversation with identical content.
-      ctx.readFileStateCache?.record(filePath, offset, limit, stat.mtimeMs);
+      if (lineOffset === 0) {
+        ctx.readFileStateCache?.record(filePath, offset, limit, stat.mtimeMs);
+      }
       return output;
     }
 
     effectiveLines.pop();
     effectiveHasMoreLines = true;
+    if (effectiveLineContinuation && effectiveLines.length < lines.length) {
+      effectiveLineContinuation = undefined;
+    }
   }
 }

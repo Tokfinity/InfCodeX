@@ -10,9 +10,19 @@ import type { KodaXBaseProvider, KodaXContentBlock, KodaXMessage } from '@kodax-
 import type { CompactionAnchor, CompactionConfig, CompactionResult } from './types.js';
 import { countTokens, estimateTokens } from '../../tokenizer.js';
 import { extractArtifactLedger, extractFileOps } from './file-tracker.js';
-import { extractCompactMemorySeed, generateSummary } from './summary-generator.js';
+import {
+  buildCompactionPromptSnapshot,
+  extractCompactMemorySeed,
+  generateSummary,
+} from './summary-generator.js';
 import { extractBashIntent } from './bash-intent.js';
 import { emitKodaXDiagnostic } from '../../diagnostics.js';
+import { preserveToolResultRecovery } from './result-extractors.js';
+import {
+  calculateMaxContextInputTokens,
+  ContextCapacityError,
+  exceedsContextCapacity,
+} from '../../context-capacity.js';
 
 const DEFAULT_CONTEXT_WINDOW = 200000;
 const STRUCTURED_PRUNE_MINIMUM_TOKENS = 20000;
@@ -144,7 +154,6 @@ const PRUNE_PROTECTED_TOOLS: ReadonlySet<string> = new Set([
  */
 export const PROTECTED_TOOL_NAMES: ReadonlySet<string> = PRUNE_PROTECTED_TOOLS;
 
-const MAX_SUMMARIZATION_TOKENS_PER_CHUNK = 50000;
 const SUMMARIZATION_RETRY_DELAY_MS = 2000;
 /**
  * Marker prefix on the synthesized summary system message. Other packages
@@ -229,12 +238,19 @@ export function needsCompaction(
   config: CompactionConfig,
   contextWindow: number = DEFAULT_CONTEXT_WINDOW,
   tokenCountOverride?: number,
+  reservedResponseTokens = 0,
 ): boolean {
   if (!config.enabled) return false;
 
   const tokens = tokenCountOverride ?? estimateTokens(messages);
-  const threshold = getTriggerTokens(config, contextWindow);
-  return tokens > threshold;
+  const exceedsPhysicalCapacity = exceedsContextCapacity({
+    contextWindow,
+    currentTokens: tokens,
+    reservedResponseTokens,
+  });
+  const configuredEarlyTrigger = config.triggerPercent < 100
+    && tokens > getTriggerTokens(config, contextWindow);
+  return exceedsPhysicalCapacity || configuredEarlyTrigger;
 }
 
 export async function compact(
@@ -248,10 +264,37 @@ export async function compact(
   summaryPrompt?: string,
   updateSummaryPrompt?: string,
   modelOverride?: string,
+  force: boolean = false,
+  reservedResponseTokens = 0,
 ): Promise<CompactionResult> {
   const tokensBefore = tokenCountOverride ?? estimateTokens(messages);
+  const estimatedTranscriptTokensBefore = estimateTokens(messages);
+  const fixedOverheadTokens = Math.max(
+    0,
+    tokensBefore - estimatedTranscriptTokensBefore,
+  );
+  const maxPhysicalInputTokens = calculateMaxContextInputTokens(
+    contextWindow,
+    reservedResponseTokens,
+  );
+  const configuredEarlyTarget = force || (
+    config.triggerPercent < 100
+    && tokensBefore > getTriggerTokens(config, contextWindow)
+  );
+  const targetPhysicalTokens = configuredEarlyTarget
+    ? Math.min(maxPhysicalInputTokens, getTargetTokens(config, contextWindow))
+    : maxPhysicalInputTokens;
+  const physicalTokensFor = (candidate: KodaXMessage[]): number => (
+    fixedOverheadTokens + estimateTokens(candidate)
+  );
 
-  if (!needsCompaction(messages, config, contextWindow, tokenCountOverride)) {
+  if (!force && !needsCompaction(
+    messages,
+    config,
+    contextWindow,
+    tokenCountOverride,
+    reservedResponseTokens,
+  )) {
     return {
       compacted: false,
       messages,
@@ -284,6 +327,17 @@ export async function compact(
   const toProtect = remainingMessages.slice(protectCutIndex);
 
   if (toProcess.length === 0) {
+    if (exceedsContextCapacity({
+      contextWindow,
+      currentTokens: tokensBefore,
+      reservedResponseTokens,
+    })) {
+      throw new ContextCapacityError({
+        contextWindow,
+        currentTokens: tokensBefore,
+        reservedResponseTokens,
+      }, 'History compaction');
+    }
     return {
       compacted: false,
       messages,
@@ -296,21 +350,22 @@ export async function compact(
   const totalFileOps = extractFileOps(toProcess);
   const artifactLedger = extractArtifactLedger(toProcess);
 
-  const pruningThresholdTokens = config.pruningThresholdTokens ?? 500;
-  const toolContextMap = buildToolContextMap(toProcess);
-  const structuredPrune = collectStructuredPruneIds(toProcess, toolContextMap);
-  const pruneResult = pruneToolResults(
-    toProcess,
-    toolContextMap,
-    structuredPrune,
-    pruningThresholdTokens,
-  );
+  // Deterministic tool-result/user-message pruning is lossy and cannot be
+  // reconstructed from the transcript. Keep it as an explicit legacy opt-in;
+  // the default path gives the semantic summarizer the complete evidence.
+  let pruneResult: PruneResult = { messages: toProcess, hasPruned: false };
+  if (config.pruningThresholdTokens !== undefined) {
+    const toolContextMap = buildToolContextMap(toProcess);
+    pruneResult = pruneToolResults(
+      toProcess,
+      toolContextMap,
+      collectStructuredPruneIds(toProcess, toolContextMap),
+      config.pruningThresholdTokens,
+    );
+  }
 
   const prunedMessages = pruneResult.messages;
   const prunedQueue = [...prunedMessages, ...toProtect];
-  const triggerTokens = getTriggerTokens(config, contextWindow);
-
-  const pruningGapRatio = config.pruningGapRatio ?? 0.8;
   // FEATURE_182 (v0.7.42): fast-path is ONLY safe when a previousSummary
   // exists to retain. Without one, fast-path returns
   // buildFallbackCompactionSummary which cements the generic "Continue the
@@ -325,11 +380,12 @@ export async function compact(
   if (
     previousSummary
     && pruneResult.hasPruned
-    && estimateTokens(prunedQueue) <= triggerTokens * pruningGapRatio
+    && physicalTokensFor([createSummaryMessage(previousSummary), ...prunedQueue])
+      <= maxPhysicalInputTokens
   ) {
     const retainedSummary = previousSummary;
     const finalMessages = [createSummaryMessage(retainedSummary), ...prunedQueue];
-    const tokensAfter = estimateTokens(finalMessages);
+    const tokensAfter = physicalTokensFor(finalMessages);
     const memorySeed = extractCompactMemorySeed(retainedSummary, totalFileOps);
 
     return {
@@ -359,15 +415,18 @@ export async function compact(
     1,
     Math.floor(contextWindow * (rollingSummaryPercent / 100)),
   );
-  const targetTokens = getTargetTokens(config, contextWindow);
 
   let summary = previousSummary || '';
   let workingProcess = prunedMessages;
+  let workingCanonical = toProcess;
   let entriesRemoved = 0;
 
   while (workingProcess.length > 0) {
     const currentMessages = buildCompactedMessages(summary, workingProcess, toProtect);
-    if (estimateTokens(currentMessages) <= targetTokens) {
+    const forceFirstSemanticPass = force
+      && entriesRemoved === 0
+      && !pruneResult.hasPruned;
+    if (!forceFirstSemanticPass && physicalTokensFor(currentMessages) <= targetPhysicalTokens) {
       break;
     }
 
@@ -389,35 +448,17 @@ export async function compact(
       summaryPrompt,
       updateSummaryPrompt,
       modelOverride,
+      contextWindow,
+      reservedResponseTokens,
     );
 
     if (summaryAttempt.summarizedMessages === 0) {
       break;
     }
 
-    // FEATURE_181 (v0.7.42): empty-like LLM summary must NOT overwrite a
-    // non-empty previous summary. Empty output happens 7.8% of the time
-    // (788-session scan) when the toSummarize chunk consists entirely of
-    // [Cleared:...] / [Pruned:...] placeholders — microcompact +
-    // pruneToolResults already stripped the facts before the LLM ran. The
-    // LLM correctly reports "no content to summarize" but overwriting a
-    // real prior summary with that empty marker erases the only memory of
-    // earlier islands. This caused the 091743 kimi loop: post-compact
-    // summary said "No active goal" and the model re-attempted file reads
-    // it had no record of having done. Always consume the chunk (move
-    // workingProcess forward) but keep the previous summary if the new
-    // one is empty-like.
-    if (isEmptyLikeSummary(summaryAttempt.summary) && summary) {
-      workingProcess = workingProcess.slice(summaryAttempt.summarizedMessages);
-      entriesRemoved += summaryAttempt.summarizedMessages;
-      if (summaryAttempt.failed) {
-        break;
-      }
-      continue;
-    }
-
     summary = summaryAttempt.summary;
     workingProcess = workingProcess.slice(summaryAttempt.summarizedMessages);
+    workingCanonical = workingCanonical.slice(summaryAttempt.summarizedMessages);
     entriesRemoved += summaryAttempt.summarizedMessages;
 
     if (summaryAttempt.failed) {
@@ -426,8 +467,19 @@ export async function compact(
   }
 
   const summaryChanged = summary !== (previousSummary || '');
-  const didCompact = pruneResult.hasPruned || entriesRemoved > 0 || summaryChanged;
+  const didCompact = entriesRemoved > 0 || summaryChanged;
   if (!didCompact) {
+    if (exceedsContextCapacity({
+      contextWindow,
+      currentTokens: tokensBefore,
+      reservedResponseTokens,
+    })) {
+      throw new ContextCapacityError({
+        contextWindow,
+        currentTokens: tokensBefore,
+        reservedResponseTokens,
+      }, 'History compaction');
+    }
     return {
       compacted: false,
       messages,
@@ -439,8 +491,19 @@ export async function compact(
   }
 
   const finalSummary = summary || buildFallbackCompactionSummary(totalFileOps, artifactLedger);
-  const compactedMessages = buildCompactedMessages(finalSummary, workingProcess, toProtect);
-  const tokensAfter = estimateTokens(compactedMessages);
+  const compactedMessages = buildCompactedMessages(finalSummary, workingCanonical, toProtect);
+  const tokensAfter = physicalTokensFor(compactedMessages);
+  if (exceedsContextCapacity({
+    contextWindow,
+    currentTokens: tokensAfter,
+    reservedResponseTokens,
+  })) {
+    throw new ContextCapacityError({
+      contextWindow,
+      currentTokens: tokensAfter,
+      reservedResponseTokens,
+    }, 'History compaction');
+  }
   const memorySeed = extractCompactMemorySeed(finalSummary, totalFileOps);
 
   return {
@@ -474,17 +537,28 @@ async function summarizeMessages(
   summaryPrompt: string | undefined,
   updateSummaryPrompt: string | undefined,
   modelOverride: string | undefined,
+  contextWindow: number,
+  reservedResponseTokens: number,
 ): Promise<SummaryAttemptResult> {
   let summary = previousSummary;
   let summarizedMessages = 0;
-  const chunks = chunkMessages(messages, MAX_SUMMARIZATION_TOKENS_PER_CHUNK);
+  let remaining = messages;
 
-  for (let i = 0; i < chunks.length; i++) {
-    const chunk = chunks[i];
-    if (!chunk || chunk.length === 0) continue;
+  while (remaining.length > 0) {
+    const chunkEnd = findSummaryChunkEnd(
+      remaining,
+      customInstructions,
+      systemPrompt,
+      summary,
+      summaryPrompt,
+      updateSummaryPrompt,
+      contextWindow,
+      reservedResponseTokens,
+    );
+    const chunk = remaining.slice(0, chunkEnd);
 
     try {
-      summary = await generateSummary(
+      const candidateSummary = await generateSummary(
         chunk,
         provider,
         extractFileOps(chunk),
@@ -495,8 +569,23 @@ async function summarizeMessages(
         updateSummaryPrompt,
         modelOverride,
       );
+      const unchangedSummary = summary.trim().length > 0
+        && candidateSummary.trim() === summary.trim();
+      if (isEmptyLikeSummary(candidateSummary) || unchangedSummary) {
+        emitKodaXDiagnostic({
+          source: 'agent:compaction',
+          level: 'warn',
+          message: 'Summary chunk returned no usable semantic content; canonical messages were retained.',
+        });
+        return { summary, summarizedMessages, failed: true };
+      }
+      summary = candidateSummary;
       summarizedMessages += chunk.length;
+      remaining = remaining.slice(chunk.length);
     } catch (error) {
+      if (error instanceof ContextCapacityError) {
+        throw error;
+      }
       emitKodaXDiagnostic({
         source: 'agent:compaction',
         level: 'error',
@@ -506,12 +595,84 @@ async function summarizeMessages(
       return { summary, summarizedMessages, failed: true };
     }
 
-    if (i < chunks.length - 1) {
+    if (remaining.length > 0) {
       await new Promise((resolve) => setTimeout(resolve, SUMMARIZATION_RETRY_DELAY_MS));
     }
   }
 
   return { summary, summarizedMessages, failed: false };
+}
+
+function findSummaryChunkEnd(
+  messages: KodaXMessage[],
+  customInstructions: string | undefined,
+  systemPrompt: string | undefined,
+  previousSummary: string,
+  summaryPrompt: string | undefined,
+  updateSummaryPrompt: string | undefined,
+  contextWindow: number,
+  reservedResponseTokens: number,
+): number {
+  let bestEnd = 0;
+  const atomicBlocks = getAtomicBlocks(messages);
+
+  for (const block of atomicBlocks) {
+    const end = block.end + 1;
+    const candidate = messages.slice(0, end);
+    const promptTokens = countSummaryRequestTokens(candidate, {
+      customInstructions, systemPrompt, previousSummary,
+      summaryPrompt, updateSummaryPrompt,
+    });
+    if (exceedsContextCapacity({
+      contextWindow,
+      currentTokens: promptTokens,
+      reservedResponseTokens,
+    })) {
+      break;
+    }
+    bestEnd = end;
+  }
+
+  if (bestEnd === 0) {
+    const firstBlock = atomicBlocks[0];
+    const firstEnd = firstBlock ? firstBlock.end + 1 : 0;
+    const firstMessages = messages.slice(0, firstEnd);
+    const promptTokens = countSummaryRequestTokens(firstMessages, {
+      customInstructions, systemPrompt, previousSummary,
+      summaryPrompt, updateSummaryPrompt,
+    });
+    throw new ContextCapacityError({
+      contextWindow,
+      currentTokens: promptTokens,
+      reservedResponseTokens,
+    }, 'Compaction summary request');
+  }
+
+  return bestEnd;
+}
+
+interface SummaryPromptOptions {
+  readonly customInstructions?: string;
+  readonly systemPrompt?: string;
+  readonly previousSummary?: string;
+  readonly summaryPrompt?: string;
+  readonly updateSummaryPrompt?: string;
+}
+
+function countSummaryRequestTokens(
+  messages: KodaXMessage[],
+  options: SummaryPromptOptions,
+): number {
+  const snapshot = buildCompactionPromptSnapshot({
+    messages,
+    details: extractFileOps(messages),
+    customInstructions: options.customInstructions,
+    systemPrompt: options.systemPrompt,
+    previousSummary: options.previousSummary || undefined,
+    summaryPrompt: options.summaryPrompt,
+    updateSummaryPrompt: options.updateSummaryPrompt,
+  });
+  return countTokens(snapshot.systemPrompt) + countTokens(snapshot.userPrompt);
 }
 
 function buildCompactedMessages(
@@ -809,6 +970,14 @@ function pruneToolResults(
 ): PruneResult {
   let hasPruned = false;
   const prunedMessages = messages.map((msg) => {
+    // Child-result envelopes have already passed aggregate capacity admission.
+    // Let the summary model see the complete, recoverable envelope once; the
+    // generic user-message head/tail crop can otherwise erase a middle child
+    // banner or its artifact reference before summarization.
+    if (msg.role === 'user' && msg._source === 'task-completed') {
+      return msg;
+    }
+
     if (msg.role !== 'user' || !Array.isArray(msg.content)) {
       // Truncate long string-content user messages (non-array)
       if (msg.role === 'user' && typeof msg.content === 'string') {
@@ -856,9 +1025,10 @@ function pruneToolResults(
       changed = true;
       hasPruned = true;
       const toolInfo = toolContextMap.get(block.tool_use_id);
+      const placeholder = toolInfo ? `[Pruned: ${toolInfo.preview}]` : '[Pruned]';
       return {
         ...block,
-        content: toolInfo ? `[Pruned: ${toolInfo.preview}]` : '[Pruned]',
+        content: preserveToolResultRecovery(block.content, placeholder, block.metadata),
       };
     });
 
@@ -986,33 +1156,4 @@ function findForwardCutPoint(messages: KodaXMessage[], targetTokens: number): nu
   }
 
   return Math.min(cutEndIndex, messages.length);
-}
-
-function chunkMessages(messages: KodaXMessage[], maxTokensPerChunk: number): KodaXMessage[][] {
-  const chunks: KodaXMessage[][] = [];
-  let currentChunk: KodaXMessage[] = [];
-  let currentTokens = 0;
-
-  const atomicBlocks = getAtomicBlocks(messages);
-
-  for (const block of atomicBlocks) {
-    const group = messages.slice(block.start, block.end + 1);
-    const groupTokens = block.tokens;
-
-    if (currentTokens + groupTokens > maxTokensPerChunk && currentChunk.length > 0) {
-      chunks.push(currentChunk);
-      currentChunk = [...group];
-      currentTokens = groupTokens;
-      continue;
-    }
-
-    currentChunk.push(...group);
-    currentTokens += groupTokens;
-  }
-
-  if (currentChunk.length > 0) {
-    chunks.push(currentChunk);
-  }
-
-  return chunks;
 }

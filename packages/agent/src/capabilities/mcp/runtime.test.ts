@@ -666,6 +666,100 @@ process.on('SIGINT', () => process.exit(0));
 `;
 }
 
+function createPartialCatalogFailureServerSource(): string {
+  return `
+let buffer = '';
+let toolsListCalls = 0;
+function writeMessage(p){ process.stdout.write(JSON.stringify(p) + '\\n'); }
+function handle(m){
+  if (m.method === 'initialize') {
+    writeMessage({ jsonrpc: '2.0', id: m.id, result: { protocolVersion: '2025-11-25', capabilities: { tools: {} }, serverInfo: { name: 'partial-catalog-test', version: '1.0.0' } } });
+    return;
+  }
+  if (m.method === 'tools/list') {
+    toolsListCalls += 1;
+    if (toolsListCalls === 1) {
+      writeMessage({ jsonrpc: '2.0', id: m.id, result: { tools: [{ name: 'complete_tool', inputSchema: { type: 'object' } }] } });
+      return;
+    }
+    if (!m.params || !m.params.cursor) {
+      writeMessage({ jsonrpc: '2.0', id: m.id, result: { tools: [{ name: 'partial_tool', inputSchema: { type: 'object' } }], nextCursor: 'page-2' } });
+      return;
+    }
+    writeMessage({ jsonrpc: '2.0', id: m.id, error: { code: -32000, message: 'catalog page 2 failed' } });
+  }
+}
+process.stdin.setEncoding('utf8');
+process.stdin.on('data', (chunk) => {
+  buffer += chunk;
+  while (true) {
+    const lineEnd = buffer.indexOf('\\n');
+    if (lineEnd < 0) { return; }
+    const line = buffer.slice(0, lineEnd).replace(/\\r$/, '').trim();
+    buffer = buffer.slice(lineEnd + 1);
+    if (!line) { continue; }
+    try { handle(JSON.parse(line)); } catch { process.exit(2); }
+  }
+});
+process.on('SIGTERM', () => process.exit(0));
+process.on('SIGINT', () => process.exit(0));
+`;
+}
+
+function createWhitespaceContentServerSource(): string {
+  return `
+let buffer = '';
+function writeMessage(p){ process.stdout.write(JSON.stringify(p) + '\\n'); }
+function handle(m){
+  if (m.method === 'initialize') {
+    writeMessage({ jsonrpc: '2.0', id: m.id, result: { protocolVersion: '2025-11-25', capabilities: { tools: {}, resources: {} }, serverInfo: { name: 'whitespace-content-test', version: '1.0.0' } } });
+    return;
+  }
+  if (m.method === 'tools/list') {
+    writeMessage({ jsonrpc: '2.0', id: m.id, result: { tools: [
+      { name: 'whitespace_tool', inputSchema: { type: 'object' } },
+      { name: 'multi_tool', inputSchema: { type: 'object' } },
+    ] } });
+    return;
+  }
+  if (m.method === 'resources/list') {
+    writeMessage({ jsonrpc: '2.0', id: m.id, result: { resources: [
+      { uri: 'data://whitespace', mimeType: 'text/plain' },
+      { uri: 'data://multi', mimeType: 'text/plain' },
+    ] } });
+    return;
+  }
+  if (m.method === 'tools/call') {
+    const content = m.params.name === 'multi_tool'
+      ? [{ type: 'text', text: 'first tool body' }, { type: 'text', text: 'second tool body' }]
+      : [{ type: 'text', text: '  tool line\\n    nested\\n' }];
+    writeMessage({ jsonrpc: '2.0', id: m.id, result: { content } });
+    return;
+  }
+  if (m.method === 'resources/read') {
+    const contents = m.params.uri === 'data://multi'
+      ? [{ type: 'text', text: 'first resource body' }, { type: 'text', text: 'second resource body' }]
+      : [{ type: 'text', text: '\\n  yaml:\\n    nested: true\\n' }];
+    writeMessage({ jsonrpc: '2.0', id: m.id, result: { contents } });
+  }
+}
+process.stdin.setEncoding('utf8');
+process.stdin.on('data', (chunk) => {
+  buffer += chunk;
+  while (true) {
+    const lineEnd = buffer.indexOf('\\n');
+    if (lineEnd < 0) { return; }
+    const line = buffer.slice(0, lineEnd).replace(/\\r$/, '').trim();
+    buffer = buffer.slice(lineEnd + 1);
+    if (!line) { continue; }
+    try { handle(JSON.parse(line)); } catch { process.exit(2); }
+  }
+});
+process.on('SIGTERM', () => process.exit(0));
+process.on('SIGINT', () => process.exit(0));
+`;
+}
+
 async function createRuntime(
   dir: string,
   scriptPath: string,
@@ -1322,6 +1416,10 @@ describe('McpServerRuntime protocol compatibility', () => {
 
       const result = await runtime.callTool('echo', {});
       expect(result.content).toBe('called');
+      expect(result.metadata).toEqual({
+        serverId: 'test-server',
+        isError: false,
+      });
     } finally {
       await runtime.dispose();
     }
@@ -1340,6 +1438,63 @@ describe('McpServerRuntime protocol compatibility', () => {
 
       const result = await runtime.readResource('data://one', {});
       expect(result.content).toBe('resource text');
+      expect(result.structuredContent).toBeUndefined();
+      expect(result.metadata).toEqual({ serverId: 'test-server' });
+    } finally {
+      await runtime.dispose();
+    }
+  });
+
+  it('rejects an incomplete paginated catalog refresh and preserves the last complete snapshot', async () => {
+    const dir = await createTempDir();
+    const scriptPath = await writeScript(dir, createPartialCatalogFailureServerSource());
+    const runtime = await createRuntime(dir, scriptPath, 1_000, 1_000);
+
+    try {
+      await runtime.refreshCatalog(true);
+      expect((await runtime.getCachedCatalog())?.descriptors.map((entry) => entry.name))
+        .toEqual(['complete_tool']);
+
+      await expect(runtime.refreshCatalog()).rejects.toThrow(/catalog page 2 failed/);
+      expect((await runtime.getCachedCatalog())?.descriptors.map((entry) => entry.name))
+        .toEqual(['complete_tool']);
+      expect(runtime.getDiagnostics()).toEqual(expect.objectContaining({
+        dirty: true,
+        status: 'error',
+        tools: 1,
+      }));
+    } finally {
+      await runtime.dispose();
+    }
+
+    const diskReader = await createRuntime(dir, scriptPath, 1_000, 1_000);
+    try {
+      expect((await diskReader.getCachedCatalog())?.descriptors.map((entry) => entry.name))
+        .toEqual(['complete_tool']);
+    } finally {
+      await diskReader.dispose();
+    }
+  });
+
+  it('preserves leading indentation and trailing newlines in MCP text content', async () => {
+    const dir = await createTempDir();
+    const scriptPath = await writeScript(dir, createWhitespaceContentServerSource());
+    const runtime = await createRuntime(dir, scriptPath, 1_000, 1_000);
+
+    try {
+      await runtime.refreshCatalog(true);
+      await expect(runtime.callTool('whitespace_tool', {})).resolves.toEqual(expect.objectContaining({
+        content: '  tool line\n    nested\n',
+      }));
+      await expect(runtime.readResource('data://whitespace', {})).resolves.toEqual(expect.objectContaining({
+        content: '\n  yaml:\n    nested: true\n',
+      }));
+      await expect(runtime.callTool('multi_tool', {})).resolves.toEqual(expect.objectContaining({
+        content: 'first tool body\n\nsecond tool body',
+      }));
+      await expect(runtime.readResource('data://multi', {})).resolves.toEqual(expect.objectContaining({
+        content: 'first resource body\n\nsecond resource body',
+      }));
     } finally {
       await runtime.dispose();
     }

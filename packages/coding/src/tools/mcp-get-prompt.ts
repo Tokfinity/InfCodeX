@@ -8,7 +8,7 @@ function stringifyValue(value: unknown): string | undefined {
     return undefined;
   }
   if (typeof value === 'string') {
-    return value.trim() || undefined;
+    return value.trim().length > 0 ? value : undefined;
   }
   try {
     return JSON.stringify(value, null, 2);

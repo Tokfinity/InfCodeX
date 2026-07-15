@@ -8,18 +8,51 @@
 export interface CostRate {
   readonly inputPer1M: number; // USD per 1M input tokens
   readonly outputPer1M: number; // USD per 1M output tokens
-  readonly cachePer1M?: number; // USD per 1M cached tokens
+  /** @deprecated Use cacheReadPer1M/cacheWritePer1M when the provider prices them separately. */
+  readonly cachePer1M?: number;
+  readonly cacheReadPer1M?: number;
+  readonly cacheWritePer1M?: number;
 }
 
 // Default rates for all built-in providers (approximate, user can override)
 // Rates are from official pricing pages as of 2026-06
 export const DEFAULT_COST_RATES: Readonly<Record<string, Readonly<Record<string, CostRate>>>> = {
   anthropic: {
-    'claude-opus-4-8': { inputPer1M: 5.0, outputPer1M: 25.0, cachePer1M: 0.5 },
-    'claude-opus-4-7': { inputPer1M: 5.0, outputPer1M: 25.0, cachePer1M: 0.5 },
-    'claude-opus-4-6': { inputPer1M: 5.0, outputPer1M: 25.0, cachePer1M: 0.5 },
-    'claude-sonnet-4-6': { inputPer1M: 3.0, outputPer1M: 15.0, cachePer1M: 0.375 },
-    'claude-haiku-4-5': { inputPer1M: 0.8, outputPer1M: 4.0, cachePer1M: 0.08 },
+    'claude-opus-4-8': {
+      inputPer1M: 5.0,
+      outputPer1M: 25.0,
+      cachePer1M: 0.5,
+      cacheReadPer1M: 0.5,
+      cacheWritePer1M: 6.25,
+    },
+    'claude-opus-4-7': {
+      inputPer1M: 5.0,
+      outputPer1M: 25.0,
+      cachePer1M: 0.5,
+      cacheReadPer1M: 0.5,
+      cacheWritePer1M: 6.25,
+    },
+    'claude-opus-4-6': {
+      inputPer1M: 5.0,
+      outputPer1M: 25.0,
+      cachePer1M: 0.5,
+      cacheReadPer1M: 0.5,
+      cacheWritePer1M: 6.25,
+    },
+    'claude-sonnet-4-6': {
+      inputPer1M: 3.0,
+      outputPer1M: 15.0,
+      cachePer1M: 0.375,
+      cacheReadPer1M: 0.375,
+      cacheWritePer1M: 3.75,
+    },
+    'claude-haiku-4-5': {
+      inputPer1M: 0.8,
+      outputPer1M: 4.0,
+      cachePer1M: 0.08,
+      cacheReadPer1M: 0.08,
+      cacheWritePer1M: 1.0,
+    },
   },
   openai: {
     'gpt-5.4': { inputPer1M: 30.0, outputPer1M: 120.0 },
@@ -134,12 +167,20 @@ export function getCostRate(
 
 export function calculateCost(
   rate: CostRate,
-  inputTokens: number,
+  totalInputTokens: number,
   outputTokens: number,
-  cacheTokens = 0,
+  cacheReadTokens = 0,
+  cacheWriteTokens = 0,
 ): number {
-  const inputCost = (inputTokens / 1_000_000) * rate.inputPer1M;
+  const uncachedInputTokens = Math.max(
+    0,
+    totalInputTokens - cacheReadTokens - cacheWriteTokens,
+  );
+  const cacheReadRate = rate.cacheReadPer1M ?? rate.cachePer1M ?? rate.inputPer1M;
+  const cacheWriteRate = rate.cacheWritePer1M ?? rate.cachePer1M ?? rate.inputPer1M;
+  const inputCost = (uncachedInputTokens / 1_000_000) * rate.inputPer1M;
   const outputCost = (outputTokens / 1_000_000) * rate.outputPer1M;
-  const cacheCost = rate.cachePer1M ? (cacheTokens / 1_000_000) * rate.cachePer1M : 0;
-  return inputCost + outputCost + cacheCost;
+  const cacheReadCost = (cacheReadTokens / 1_000_000) * cacheReadRate;
+  const cacheWriteCost = (cacheWriteTokens / 1_000_000) * cacheWriteRate;
+  return inputCost + outputCost + cacheReadCost + cacheWriteCost;
 }

@@ -11,7 +11,10 @@ import type {
 export interface CompactionConfig {
   /** Whether automatic compaction is enabled. */
   enabled: boolean;
-  /** Trigger compaction when context usage exceeds this percentage of the window. */
+  /**
+   * Optional early trigger percentage. `100` means capacity-only; values below
+   * 100 explicitly opt in to semantic compaction before physical pressure.
+   */
   triggerPercent: number;
   /**
    * @deprecated V2 compaction no longer uses this option.
@@ -27,12 +30,14 @@ export interface CompactionConfig {
    * summary pass. Defaults to 10.
    */
   rollingSummaryPercent?: number;
-  /** Prune oversized tool results when they exceed roughly this many tokens. Defaults to 500. */
+  /**
+   * Explicit legacy opt-in for destructive pre-summary tool-result pruning.
+   * Undefined keeps the complete evidence for semantic summarization.
+   */
   pruningThresholdTokens?: number;
   /**
-   * Gap ratio for prune fast-return. After pruning, if remaining tokens still exceed
-   * triggerTokens * pruningGapRatio, the system continues to the summarization path
-   * instead of returning early. Defaults to 0.8.
+   * Legacy deterministic-pruning gap ratio. Only relevant when
+   * `pruningThresholdTokens` is explicitly configured.
    */
   pruningGapRatio?: number;
   /** Optional override for the provider context window. */

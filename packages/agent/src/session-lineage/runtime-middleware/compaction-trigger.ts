@@ -3,10 +3,10 @@
  *
  * Capability inventory: docs/features/v0.7.29-capability-inventory.md#cap-059-compaction-trigger-decision
  *
- * Class 1 (substrate). Per-turn predicate read BEFORE the provider
- * stream call to decide whether the compaction lifecycle (CAP-060)
- * should run this turn. Time-ordering: AFTER microcompact (CAP-014);
- * BEFORE intelligentCompact orchestration (CAP-060).
+ * Class 1 (substrate). Per-turn predicate read before the provider stream
+ * call. The default policy compares the final physical request, provider
+ * output reserve, and shared safety margin against the model window. A
+ * trigger below 100 remains an explicit early-compaction opt-in.
  *
  * The wrapper preserves the historical short-circuit `compactionConfig.enabled`
  * gate from `agent.ts` even though the underlying `needsCompaction`
@@ -37,12 +37,13 @@ export interface ShouldCompactInput {
   readonly compactionConfig: CompactionConfig;
   readonly contextWindow: number;
   readonly currentTokens: number;
+  readonly reservedResponseTokens?: number;
 }
 
 /**
- * Returns `true` iff the compaction lifecycle should run this turn.
- * Combines the config-enabled gate with the underlying trigger
- * threshold check from `@kodax-ai/session-lineage`'s `needsCompaction`.
+ * Returns `true` iff the complete request exceeds physical capacity or an
+ * explicitly configured early trigger. `currentTokens` must already include
+ * the final system/tool/framing overhead selected for this provider turn.
  */
 export function shouldCompact(input: ShouldCompactInput): boolean {
   return (
@@ -52,6 +53,7 @@ export function shouldCompact(input: ShouldCompactInput): boolean {
       input.compactionConfig,
       input.contextWindow,
       input.currentTokens,
+      input.reservedResponseTokens,
     )
   );
 }

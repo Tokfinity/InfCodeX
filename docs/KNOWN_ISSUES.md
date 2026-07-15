@@ -1,6 +1,6 @@
 # Known Issues
 
-_Last Updated: 2026-07-14_
+_Last Updated: 2026-07-15_
 
 ---
 
@@ -14,6 +14,7 @@ _Last Updated: 2026-07-14_
 
 | ID | Priority | Status | Title | Introduced | Fixed | Created | Resolved |
 |----|----------|--------|-------|------------|-------|---------|----------|
+| 158 | High | Resolved | Post-hoc output/history loss hides evidence and can increase end-to-end token use | v0.7.61 | v0.7.69 | 2026-07-14 | 2026-07-15 |
 | 157 | High | Resolved | F267/F269 review found durability, network, concurrency, and diagnostic gaps | v0.7.69 RC | v0.7.69 | 2026-07-14 | 2026-07-14 |
 | 156 | Medium | Resolved | Bare `kodax -r` repeatedly full-reads large session sets before opening the picker | v0.7.68 | v0.7.69 | 2026-07-14 | 2026-07-14 |
 | 155 | High | Resolved | Bare `kodax -r` exits after selection during the picker-to-TUI handoff | v0.7.68 | v0.7.69 | 2026-07-14 | 2026-07-14 |
@@ -107,6 +108,253 @@ _Last Updated: 2026-07-14_
 
 ## Issue Details
 <!-- Full details for each issue - REQUIRED for all issues -->
+
+### 158: Post-hoc output/history loss hides evidence and can increase end-to-end token use
+
+- **Priority**: High
+- **Status**: **Resolved** (reopened and corrected after implementation review)
+- **Introduced**: v0.7.61
+- **Created**: 2026-07-14
+- **Resolved**: 2026-07-15
+- **Fixed**: v0.7.69
+
+#### Original Problem
+
+FEATURE_251 applied command-aware lossy filters and fixed per-tool truncation
+before the model's next request. In a real `git log --stat` review, the Worker
+received a compressed result, announced that it needed to read the raw artifact,
+and performed that recovery read. The intended one-round token saving therefore
+added a second tool-result cycle, while the first response no longer contained
+all decision-relevant evidence. A separate malformed `git log --format` command
+was also rerun in the trace, but that rerun is not attributed to compression.
+
+The same failure mode existed beyond Bash: fixed caps or shortened fields in
+`grep`, `glob`, `code_search`, retrieval rendering, long-line `read`, completed
+`task_output`, and independently guarded SA/AMA dispatch paths could omit data
+before the system knew whether the complete result fit the real context window.
+The old 32 KiB / 600-line threshold was an empirical preview size, not a valid
+model-capacity boundary.
+
+The audit found the same policy error in history compaction. Default
+microcompaction could clear ordinary tool results below physical capacity, and
+the semantic compactor could prune tool results or crop user messages before
+asking the summary model. Static trigger/target percentages ignored the final
+provider system prompt, tool schema, output reserve, and fixed request overhead.
+Those operations could discard exact evidence when the next request still fit.
+
+#### Root Cause
+
+- A local `never_worse` comparison optimized only the current string; it did
+  not price recovery calls, an extra inference round, or evidence loss.
+- Bash semantic filters ran transparently after execution, so the model could
+  not choose a task-preserving projection before producing the data.
+- Multiple layers owned truncation independently: Bash, retrieval helpers,
+  bridge dispatch, and the AMA Runner. Their fixed byte/line caps ignored the
+  aggregate tool-result batch and the physical next-request capacity.
+- History compaction treated a percentage of the advertised context window as
+  the decision boundary and used destructive pre-summary/fallback pruning. It
+  did not stop as soon as the final physical provider request fit.
+- The 512 KiB Bash capture constant was an irreversible tail cap rather than a
+  memory-to-disk transition. Long lines also lacked an exact continuation
+  coordinate.
+- Anthropic cache-read/write tokens were included in total input and then
+  charged again, distorting the cost signal used to assess the optimization.
+
+#### Evidence
+
+The evidence is one captured production-shaped review, not a population
+benchmark:
+
+- Session: `C:\Users\iceto\.kodax\sessions\c-works-gitworks-kodax-author-kodax-66910f2fd8\20260714_174750.jsonl`
+- Raw artifact: `C:\Users\iceto\.kodax\tool-results\2026-07-14T09-52-03-904Z-KodaX-bash-output-raw-6qsktp.txt`
+
+The first `git log v0.7.68..HEAD --oneline --stat` result was replaced with
+`[git log summarized: showing 30 of 207 lines]`. The Worker then said it needed
+the complete raw output and read the 12,577-byte artifact. It also repaired and
+reran a separate `%`-escaping-broken `git log --format` command. This establishes
+one recovery read and its additional tool-result cycle after automatic lossy
+filtering; it does not establish that compression caused the format-command
+rerun. It also does **not** establish a recovery frequency, percentage token
+penalty, or break-even rate; earlier percentage claims had no supporting sample
+set and were removed.
+
+#### Reopened Review Findings (2026-07-15)
+
+The first corrective implementation established the intended aggregate-capacity
+direction, but review found unresolved correctness and resource regressions:
+
+- untrusted tool text could forge the internal incomplete-result marker and a
+  recovery path;
+- batch-capacity failures did not carry a recoverable transcript and could save
+  an empty authoritative session;
+- AMA observers and the stall sidecar consumed raw results before batch
+  admission;
+- child evidence and removed acquisition/concurrency limits bypassed the
+  next-request capacity owner;
+- Bash spool finalization still materialized the complete output in memory, and
+  generic ANSI removal was not contract-equivalent;
+- public compatibility, reference-aware artifact cleanup, and documentation
+  claims were incomplete.
+
+#### Final Resolution After Review
+
+- Incomplete-result idempotence now requires trusted structured `outputPath`
+  metadata. Raw tool text containing a forged marker is treated as ordinary
+  content and, when necessary, receives a new canonical artifact.
+- SA and AMA capacity failures attach the last legal transcript; empty error
+  carriers cannot overwrite a valid stored session. AMA result observers and
+  stall-sidecar inputs fire only after batch admission.
+- Child evidence is admitted against the actual routed provider/model initial
+  request, including system prompt and active tool schemas. Acquisition work is
+  bounded without silent loss: grep/code-search return `scan_offset` after 512
+  candidates, and changed-diff bundles reject more than 64 unique paths while
+  running Git subprocesses four at a time.
+- ANSI normalization strips SGR styling and terminal metadata but preserves
+  cursor-control sequences it cannot render losslessly. Bash tracks total bytes,
+  releases raw buffers after decode, avoids a redundant spool copy, and directly
+  seals a recovery artifact only when the cl100k token-byte upper bound proves
+  the output cannot fit the active request. Its canonical manifest path is
+  propagated as trusted tool-call metadata on both SA and AMA paths, and the
+  terminal marker remains last so final admission reuses rather than nests it.
+- Bash spools now live under the managed tool-results directory. REPL session
+  startup scans active and archived JSONL references and removes only old,
+  unreferenced artifacts; reference discovery failure performs no deletion.
+- Legacy public budget builders/clamps were restored for SDK source
+  compatibility. Internal admission still consumes only the fixed-point
+  aggregate token capacity, so the compatibility surface is not a second owner.
+
+#### Initial Resolution (incomplete; retained for audit history)
+
+- Tool handlers now capture and return complete results. Bash keeps output from
+  the first byte and changes from memory to a temporary spool at 512 KiB; that
+  value is no longer an output limit. Completed background tasks return their
+  full terminal output.
+- Default Bash processing is limited to contract-equivalent terminal
+  normalization. Command-specific compiled/declarative lossy filters remain
+  available only for explicit use and are not selected by the default registry;
+  compound commands receive no semantic adapter.
+- One aggregate batch owner now decides delivery after every tool call in the
+  batch settles. If the complete batch fits the actual next-request budget, it
+  is delivered unchanged. Only overflow of the final operational budget
+  (physical request, output reserve, and estimation safety) persists the
+  complete value and emits one idempotent `KODAX_RESULT_INCOMPLETE` preview. An
+  unrepresentable minimum marker fails explicitly instead of overfilling the
+  request.
+- Capacity first solves the largest final input `Pmax` satisfying
+  `Pmax + providerReservedOutputTokens + max(2048, ceil(Pmax * 3%)) <=
+  contextWindow`, then admits at most `Cbatch = max(0, Pmax -
+  currentPhysicalRequestTokens)`. Computing the margin from the smaller
+  pre-batch request is incorrect. Cache tokens remain part of physical context
+  occupancy. The margin is an uncertainty guardrail, not a token-saving claim,
+  and must be calibrated against estimate-vs-actual/recovery evidence rather
+  than copied into per-tool caps.
+- `read` has exact Unicode-safe `line_offset` continuation. Hidden result caps
+  were removed from `grep`, `glob`, `code_search`, and retrieval rendering;
+  unreadable or acquisition-limited sources carry `SOURCE_INCOMPLETE`. Local
+  and provider code search, semantic lookup, keyword tool search, MCP search,
+  web search, read, and grep use a true one-extra-item probe before claiming a
+  limit was reached. Invalid negative `grep.head_limit` is rejected rather than
+  becoming `0=unlimited`.
+- Public guards without physical-capacity context are pass-through. MCP keeps
+  genuinely distinct text/structured channels (including the fallback path)
+  without duplicating an ordinary
+  resource body into both, and rejects incomplete pagination instead of caching
+  partial pages. Explicit search limits probe one extra item so the limit marker
+  is truthful. Exact self-knowledge topics return full content. Bash cancellation
+  first waits a bounded interval for process-tree termination and stream closure.
+  If close is delayed, capture ownership moves to live recovery artifacts and
+  the result exposes `KODAX_CAPTURE_INCOMPLETE`; only the later
+  `KODAX_CAPTURE_COMPLETE` footer proves drain completion. A spool-read failure
+  emits the same incomplete contract and a recovery locator instead of hanging
+  or pretending completion. Live/paged/acquisition-limited results remain
+  allowed only when their incompleteness and continuation contract are explicit.
+- Hidden preview caps were also removed from changed-diff bundles, inline edit
+  receipts, relationship supplemental evidence, exact tool selection, child
+  evidence refs, and child completion envelopes. Their explicit schema limits
+  remain valid query contracts; aggregate delivery belongs to the next-request
+  batch/envelope capacity owner.
+- Cache cost now splits uncached input, cache read, and cache write tokens and
+  charges each token exactly once.
+- Physical fallback accounting uses the final system prompt exactly once,
+  includes active tool schemas and same-request synthetic recovery messages,
+  and remains available when a provider omits usage. Provider-reported usage,
+  when valid, remains authoritative. The misleading pre-batch
+  instantaneous-slack behavior is not used internally; append capacity has one
+  fixed-point implementation. Legacy snapshot/byte helpers remain exported only
+  for SDK source compatibility.
+- Recovery artifacts are canonical evidence for resumable sessions and are not
+  deleted by an age-only TTL. REPL session startup performs reference-aware GC
+  over active and archived JSONL, deleting only old unreferenced artifacts and
+  failing closed if references cannot be discovered. The legacy age-only helper
+  remains an explicit host/operator compatibility action. REPL
+  startup likewise no longer deletes 24-hour-old pasted images referenced by
+  session messages. The explicitly transient managed-task checkpoint window is
+  measured from its latest successful write, not the task's original creation.
+- Automatic history compaction now uses the same physical-capacity invariant.
+  Default microcompaction and destructive graceful pruning are disabled.
+  Below capacity, history remains exact; at actual pressure, semantic summary
+  is attempted first over complete atomic message/tool pairs and stops when the
+  next physical request fits. A failed, empty, or insufficient summary leaves
+  canonical history unchanged and raises a typed capacity error instead of
+  silently deleting messages. The immutable leading Worker system prompt is
+  retained byte-for-byte; invalid summaries consume no source chunk, and hard
+  capacity errors carry the latest recoverable transcript for persistence.
+- The default automatic trigger is capacity-only. A static trigger below 100%
+  is an explicit opt-in policy, and manual `/compact` remains an explicit force
+  operation; neither is presented as guaranteed token optimization.
+
+#### Files Changed
+
+- `packages/coding/src/tools/bash.ts`, `bash-output-collector.ts`,
+  `output-filters/`, `read.ts`, `grep.ts`, `glob.ts`, `code-search.ts`,
+  `semantic-lookup.ts`, `retrieval.ts`, `web-fetch.ts`, `web-search.ts`,
+  `task-output.ts`
+- `packages/coding/src/tools/mcp-call.ts`, `mcp-read-resource.ts`,
+  `mcp-get-prompt.ts`, `packages/coding/src/self-knowledge/resolver.ts`
+- `packages/coding/src/tools/changed-diff.ts`, `edit.ts`, `tool-search.ts`,
+  `relationship-scan.ts`, `envelope-budget.ts`,
+  `packages/coding/src/child-executor.ts`
+- `packages/coding/src/tools/tool-result-budget.ts`, `tool-result-policy.ts`
+- `packages/coding/src/tools/tool-output-gc.ts`,
+  `packages/repl/src/session/public-api.ts`
+- `packages/coding/src/agent-runtime/tool-dispatch.ts`
+- `packages/coding/src/task-engine/runner-driven.ts`
+- `packages/coding/src/task-engine/_internal/managed-task/checkpoint.ts`
+- `packages/agent/src/context-capacity.ts`, `primitives/runner.ts`,
+  `primitives/runner-tool-loop.ts`, `capabilities/mcp/runtime.ts`,
+  `session-lineage/compaction/`
+- `packages/coding/src/compaction-config.ts`,
+  `agent-runtime/middleware/compaction-orchestration.ts`,
+  `task-engine/_internal/managed-task/compaction.ts`
+- `packages/llm/src/cost-rates.ts`, `cost-tracker.ts`
+- `packages/repl/src/interactive/repl.ts`, `ui/InkREPL.tsx`
+
+#### Tests Added
+
+- Raw Bash fidelity for git/test/JSON/compound commands, OSC 8 URLs, and
+  stdout/stderr larger than 512 KiB.
+- Aggregate fit/spill behavior, one-marker idempotence, SA/AMA parity, and
+  explicit minimum-marker capacity failure.
+- Forged marker rejection, recovery-transcript persistence, post-admission AMA
+  observation, routed child-briefing capacity, bounded acquisition continuation,
+  Bash guaranteed-oversize artifacts, semantic ANSI preservation, public budget
+  compatibility, and reference-aware artifact retention.
+- Exact long-line continuation, complete terminal task output, and removal of
+  hidden grep/glob/code-search/retrieval caps.
+- N/N+1 boundaries for semantic/code/tool/MCP/web search and grep; MCP direct
+  and fallback channel fidelity; delayed Bash drain recovery; pasted-image and
+  long-task checkpoint retention.
+- Source-incomplete diagnostics for unreadable files and bounded network
+  acquisition, plus cache read/write single-charge accounting.
+- Capacity-only history triggers, default microcompaction no-op, summary-first
+  compaction, preserved atomic tool pairs/fixed overhead, and typed failure
+  without mutation when no recoverable compacted request can fit.
+
+#### Design Record
+
+The corrective decision and regression matrix are recorded in ADR-050,
+`docs/features/v0.7.61.md`, and
+`docs/test-guides/FEATURE_251_v0.7.61_TEST_GUIDE.md`.
 
 ### 157: F267/F269 review found durability, network, concurrency, and diagnostic gaps
 
@@ -5664,11 +5912,27 @@ Commit `ef085fc` 把 V1 精简到 V2 时没区分"信息载体"和"脚手架"，
 ---
 
 ## Summary
-- Total: 83 (24 Open, 59 Resolved, 0 Partially Resolved, 0 Won't Fix)
+- Total: 85 (24 Open, 61 Resolved, 0 Partially Resolved, 0 Won't Fix)
 - Highest Priority Open: 091 - 缺少一等公民 MCP / Web Search / Code Search 工具体系 (High)
 - Historical archived issues are maintained in ISSUES_ARCHIVED.md
 
 ## Changelog
+
+### 2026-07-15: Issue 158 reopened review findings resolved (v0.7.69)
+- Closed trusted-marker, recovery-transcript, observer-ordering, child-capacity,
+  bounded-acquisition, Bash memory/ANSI, public-API, and artifact-lifecycle gaps
+  found during implementation review.
+
+### 2026-07-14: Issue 158 added and initially resolved (v0.7.69)
+- Replaced transparent post-hoc lossy compression with complete collection and
+  one aggregate next-request capacity decision.
+- Removed default semantic Bash filters and hidden fixed caps, added exact
+  recovery coordinates and incomplete-source markers, and corrected cache-token
+  cost accounting.
+- Replaced default destructive history microcompaction/static percentage
+  targeting with physical-capacity, summary-first compaction and typed failure
+  that preserves canonical history.
+- Added regression coverage and a corrective ADR/feature/test-guide record.
 
 ### 2026-07-14: Issues 155 and 156 added and resolved (v0.7.69)
 - Unified the resume picker with the owned TUI input lifecycle.

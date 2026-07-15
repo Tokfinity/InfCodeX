@@ -1,15 +1,13 @@
 import type { KodaXToolExecutionContext } from '../types.js';
 import { emitKodaXDiagnostic } from '@kodax-ai/agent';
+import { countTokens } from '../tokenizer.js';
 import {
   formatSize,
   persistToolOutput,
   truncateHead,
   truncateTail,
 } from './truncate.js';
-import {
-  clampToolResultPolicyToBudget,
-  type ToolResultBudget,
-} from './tool-result-budget.js';
+import type { ToolResultCapacity } from './tool-result-budget.js';
 
 export interface ToolResultPolicy {
   maxLines: number;
@@ -33,6 +31,9 @@ export interface GuardedToolResult {
   spillFailed?: boolean;
 }
 
+// These are preview-shape ceilings used only after the request-level batch
+// owner has proven that complete delivery cannot fit. They are not spill
+// triggers and never shorten an otherwise admissible result.
 const DEFAULT_POLICY: ToolResultPolicy = {
   maxLines: 1200,
   maxBytes: 40 * 1024,
@@ -167,8 +168,31 @@ export interface ApplyToolResultGuardrailOptions {
    * but together exceed the envelope cap.
    */
   forceSpill?: boolean;
-  /** Optional context-aware cap; omitted keeps the legacy per-tool policy. */
-  toolResultBudget?: ToolResultBudget;
+  /** Optional physical capacity for a single-result compatibility caller. */
+  toolResultBudget?: ToolResultCapacity;
+  /** Exact final content budget, including the artifact marker. */
+  maxInlineTokens?: number;
+  /** Existing local artifact pointer when re-admitting an already guarded result. */
+  existingOutputPath?: string;
+}
+
+export interface ToolResultBatchEntry {
+  readonly id: string;
+  readonly toolName: string;
+  readonly content: string;
+  readonly outputPath?: string;
+}
+
+export const TOOL_RESULT_INCOMPLETE_MARKER = 'KODAX_RESULT_INCOMPLETE';
+
+export class ToolResultBatchCapacityError extends Error {
+  constructor(requiredTokens: number, availableTokens: number) {
+    super(
+      `Tool result batch cannot preserve recoverable tool/result pairs within capacity: `
+      + `${requiredTokens} tokens required, ${availableTokens} available.`,
+    );
+    this.name = 'ToolResultBatchCapacityError';
+  }
 }
 
 export async function applyToolResultGuardrail(
@@ -177,27 +201,57 @@ export async function applyToolResultGuardrail(
   ctx: KodaXToolExecutionContext,
   options?: ApplyToolResultGuardrailOptions,
 ): Promise<GuardedToolResult> {
-  const policy = clampToolResultPolicyToBudget(
-    getToolResultPolicy(toolName),
-    options?.toolResultBudget,
-  );
-  // Under forceSpill, we still want the same head/tail preview behaviour, but
-  // we treat any content as "must spill" so we go through the spill path.
-  const effectivePolicy: ToolResultPolicy = options?.forceSpill
-    ? { ...policy, maxBytes: Math.min(policy.maxBytes, 2 * 1024), maxLines: Math.min(policy.maxLines, 20) }
-    : policy;
-  const truncation =
-    effectivePolicy.direction === 'tail'
-      ? truncateTail(content, effectivePolicy)
-      : truncateHead(content, effectivePolicy);
-
-  if (!truncation.truncated && !options?.forceSpill) {
+  const policy = getToolResultPolicy(toolName);
+  const maxInlineTokens = options?.maxInlineTokens
+    ?? options?.toolResultBudget?.aggregateInlineTokens;
+  const existingOutputPath = options?.existingOutputPath;
+  const existingGuard = existingOutputPath
+    ? splitGuardedContent(content)
+    : undefined;
+  if (existingGuard) {
+    const outputPath = existingOutputPath;
+    return {
+      content: maxInlineTokens !== undefined && countTokens(content) > maxInlineTokens
+        ? fitExistingGuardedContentToTokenBudget(existingGuard, policy, maxInlineTokens)
+        : content,
+      truncated: true,
+      ...(outputPath ? { outputPath } : {}),
+      policy,
+    };
+  }
+  if (!options?.forceSpill && maxInlineTokens === undefined) {
     return {
       content,
       truncated: false,
       policy,
     };
   }
+  if (
+    !options?.forceSpill
+    && maxInlineTokens !== undefined
+    && countTokens(content) <= maxInlineTokens
+  ) {
+    return {
+      content,
+      truncated: false,
+      policy,
+    };
+  }
+  // Under forceSpill, we still want the same head/tail preview behaviour, but
+  // we treat any content as "must spill" so we go through the spill path.
+  const effectivePolicy: ToolResultPolicy = maxInlineTokens !== undefined
+    ? {
+        ...policy,
+        maxBytes: Buffer.byteLength(content, 'utf-8'),
+        maxLines: Number.MAX_SAFE_INTEGER,
+      }
+    : options?.forceSpill
+    ? { ...policy, maxBytes: Math.min(policy.maxBytes, 2 * 1024), maxLines: Math.min(policy.maxLines, 20) }
+    : policy;
+  const truncation =
+    effectivePolicy.direction === 'tail'
+      ? truncateTail(content, effectivePolicy)
+      : truncateHead(content, effectivePolicy);
 
   let outputPath: string | undefined;
   let spillFailed = false;
@@ -253,24 +307,15 @@ export async function applyToolResultGuardrail(
     };
   }
 
-  const preview =
-    truncation.firstLineExceedsLimit && !truncation.content
-      ? '[Output preview omitted because the first line alone exceeded the tool-output byte limit.]'
-      : truncation.content;
-
-  const prefix =
-    policy.direction === 'tail'
-      ? 'Tool output truncated to the most recent portion.'
-      : 'Tool output truncated.';
-  const summary =
-    `${prefix} Showing ${truncation.outputLines} of ${truncation.totalLines} lines `
-    + `(${formatSize(truncation.outputBytes)} of ${formatSize(truncation.totalBytes)}).`;
-  const saved =
-    outputPath
-      ? ` Full output saved to: ${outputPath}.`
-      : '';
-  const hint = ` ${buildToolResultHint(toolName)}`;
-  const guardedContent = `${preview}\n\n[${summary}${saved}${hint}]`;
+  const guardedContent = maxInlineTokens !== undefined
+    ? fitGuardedContentToTokenBudget(
+        toolName,
+        content,
+        policy,
+        outputPath,
+        maxInlineTokens,
+      )
+    : formatGuardedContent(toolName, policy, truncation, outputPath, true);
 
   if (process.env.KODAX_DEBUG_TOOL_GUARDRAILS) {
     emitKodaXDiagnostic({
@@ -293,4 +338,200 @@ export async function applyToolResultGuardrail(
     outputPath,
     policy,
   };
+}
+
+/**
+ * The sole capacity owner for a dispatched tool-result batch.
+ *
+ * Results remain complete while the complete batch fits. If the final batch
+ * exceeds the available token capacity, the largest raw results are spilled
+ * one at a time. The actual replacement (including its artifact marker and
+ * tool-result envelope overhead) is recounted before deciding whether another
+ * result must spill. `additionalMessageTokens` reserves other messages that
+ * the caller will append to the same next request (currently edit recovery).
+ */
+export async function applyToolResultBatchGuardrail(
+  entries: readonly ToolResultBatchEntry[],
+  ctx: KodaXToolExecutionContext,
+  budget: ToolResultCapacity | undefined,
+  additionalMessageTokens = 0,
+): Promise<ToolResultBatchEntry[]> {
+  if (!budget || entries.length === 0) {
+    return [...entries];
+  }
+
+  const result = entries.map((entry) => ({ ...entry }));
+  const entryTokens = result.map((entry) => countToolResultTokens(entry.content));
+  const fixedMessageTokens = Math.max(0, Math.floor(additionalMessageTokens));
+  let totalTokens = fixedMessageTokens
+    + 4
+    + entryTokens.reduce((total, tokens) => total + tokens, 0);
+  if (totalTokens <= budget.aggregateInlineTokens) {
+    return result;
+  }
+
+  const candidates = result
+    .map((_entry, index) => ({ index, tokens: entryTokens[index]! }))
+    .sort((left, right) => right.tokens - left.tokens);
+
+  for (const candidate of candidates) {
+    if (totalTokens <= budget.aggregateInlineTokens) break;
+    const entry = result[candidate.index]!;
+    const otherTokens = totalTokens - entryTokens[candidate.index]!;
+    const maxInlineTokens = Math.max(
+      0,
+      budget.aggregateInlineTokens - otherTokens - 4,
+    );
+    const guarded = await applyToolResultGuardrail(entry.toolName, entry.content, ctx, {
+      forceSpill: true,
+      maxInlineTokens,
+      existingOutputPath: entry.outputPath,
+    });
+    result[candidate.index] = {
+      ...entry,
+      content: guarded.content,
+      ...(guarded.outputPath ? { outputPath: guarded.outputPath } : {}),
+    };
+    entryTokens[candidate.index] = countToolResultTokens(guarded.content);
+    totalTokens = otherTokens + entryTokens[candidate.index]!;
+  }
+
+  if (totalTokens > budget.aggregateInlineTokens) {
+    emitKodaXDiagnostic({
+      source: 'coding:tool-result-policy',
+      level: 'error',
+      message:
+        `Tool result artifact markers require ${totalTokens} tokens, exceeding the `
+        + `${budget.aggregateInlineTokens}-token batch capacity; preserving recoverability.`,
+    });
+    throw new ToolResultBatchCapacityError(
+      totalTokens,
+      budget.aggregateInlineTokens,
+    );
+  }
+
+  return result;
+}
+
+function countToolResultTokens(content: string): number {
+  // Mirrors the current tokenizer's structural overhead for a tool_result block.
+  return countTokens(content) + 4;
+}
+
+interface ExistingGuardedContent {
+  readonly preview: string;
+  readonly marker: string;
+}
+
+function splitGuardedContent(content: string): ExistingGuardedContent | undefined {
+  const markerStart = content.lastIndexOf(`[${TOOL_RESULT_INCOMPLETE_MARKER}.`);
+  if (markerStart < 0) return undefined;
+
+  const marker = content.slice(markerStart).trimEnd();
+  if (!marker.endsWith(']')) return undefined;
+  const separatorLength = content.slice(Math.max(0, markerStart - 2), markerStart) === '\n\n'
+    ? 2
+    : 0;
+  const preview = content.slice(0, markerStart - separatorLength);
+  return {
+    preview,
+    marker,
+  };
+}
+
+function fitExistingGuardedContentToTokenBudget(
+  guarded: ExistingGuardedContent,
+  policy: ToolResultPolicy,
+  maxInlineTokens: number,
+): string {
+  if (countTokens(guarded.marker) > maxInlineTokens || !guarded.preview) {
+    return guarded.marker;
+  }
+
+  const truncate = policy.direction === 'tail' ? truncateTail : truncateHead;
+  let best = guarded.marker;
+  let low = 1;
+  let high = Buffer.byteLength(guarded.preview, 'utf-8');
+  while (low <= high) {
+    const candidateBytes = Math.floor((low + high) / 2);
+    const preview = truncate(guarded.preview, {
+      maxBytes: candidateBytes,
+      maxLines: Number.MAX_SAFE_INTEGER,
+    }).content;
+    const candidate = preview ? `${preview}\n\n${guarded.marker}` : guarded.marker;
+    if (countTokens(candidate) <= maxInlineTokens) {
+      best = candidate;
+      low = candidateBytes + 1;
+    } else {
+      high = candidateBytes - 1;
+    }
+  }
+  return best;
+}
+
+function fitGuardedContentToTokenBudget(
+  toolName: string,
+  content: string,
+  policy: ToolResultPolicy,
+  outputPath: string | undefined,
+  maxInlineTokens: number,
+): string {
+  const truncate = policy.direction === 'tail' ? truncateTail : truncateHead;
+  const markerOnly = formatGuardedContent(
+    toolName,
+    policy,
+    truncate(content, { maxBytes: 0, maxLines: 0 }),
+    outputPath,
+    false,
+  );
+  if (countTokens(markerOnly) > maxInlineTokens) {
+    return markerOnly;
+  }
+
+  let best = markerOnly;
+  let low = 1;
+  let high = Math.max(0, Buffer.byteLength(content, 'utf-8') - 1);
+  while (low <= high) {
+    const candidateBytes = Math.floor((low + high) / 2);
+    const truncation = truncate(content, {
+      maxBytes: candidateBytes,
+      maxLines: Number.MAX_SAFE_INTEGER,
+    });
+    const candidate = formatGuardedContent(
+      toolName,
+      policy,
+      truncation,
+      outputPath,
+      false,
+    );
+    if (countTokens(candidate) <= maxInlineTokens) {
+      best = candidate;
+      low = candidateBytes + 1;
+    } else {
+      high = candidateBytes - 1;
+    }
+  }
+  return best;
+}
+
+function formatGuardedContent(
+  toolName: string,
+  policy: ToolResultPolicy,
+  truncation: ReturnType<typeof truncateHead>,
+  outputPath: string | undefined,
+  explainMissingFirstLine: boolean,
+): string {
+  const preview = explainMissingFirstLine && truncation.firstLineExceedsLimit && !truncation.content
+    ? '[Output preview omitted because the first line alone exceeded the tool-output byte limit.]'
+    : truncation.content;
+  const prefix = policy.direction === 'tail'
+    ? 'Tool output truncated to the most recent portion.'
+    : 'Tool output truncated.';
+  const summary =
+    `${prefix} Showing ${truncation.outputLines} of ${truncation.totalLines} lines `
+    + `(${formatSize(truncation.outputBytes)} of ${formatSize(truncation.totalBytes)}).`;
+  const saved = outputPath ? ` Full output saved to: ${outputPath}.` : '';
+  const hint = ` ${buildToolResultHint(toolName)}`;
+  const marker = `[${TOOL_RESULT_INCOMPLETE_MARKER}. ${summary}${saved}${hint}]`;
+  return preview ? `${preview}\n\n${marker}` : marker;
 }

@@ -183,6 +183,7 @@ describe('help command output', () => {
 
     const output = logSpy.mock.calls.flat().join('\n');
     expect(output).toContain('KodaX Manual — Index');
+    expect(output).toContain('- troubleshooting: First run kodax doctor');
     expect(output).not.toContain('Unknown command');
   });
 

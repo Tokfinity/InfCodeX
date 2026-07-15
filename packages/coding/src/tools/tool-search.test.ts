@@ -141,11 +141,34 @@ describe('FEATURE_189 B.2 — tool_search handler', () => {
     expect(getUnlockedDeferredTools(ctx).has('web_search')).toBe(true);
   });
 
+  it('returns every explicitly selected schema instead of silently capping the list at 15', async () => {
+    const names = Object.keys(DEFERRED_TOOL_HINTS);
+    const out = await toolSearchHandler({ query: `select:${names.join(',')}` }, ctx);
+
+    expect(out.match(/<function>/g)).toHaveLength(names.length);
+    expect(getUnlockedDeferredTools(ctx).size).toBe(names.length);
+  });
+
   it('keyword search finds matching deferred tools', async () => {
     const out = await toolSearchHandler({ query: 'module exploration', max_results: 3 }, ctx);
     expect(out).toContain('<function>');
     // module_context hint mentions "module" — should be in the top results
     expect(out).toMatch(/"name":"module_context"/);
+  });
+
+  it('probes one extra keyword match and returns only max_results with an actionable marker', async () => {
+    const out = await toolSearchHandler({ query: 'module', max_results: 1 }, ctx);
+
+    expect(out.match(/<function>/g)).toHaveLength(1);
+    expect(out).toContain('RESULT_LIMIT_REACHED');
+    expect(out).toContain('select:NAME');
+  });
+
+  it('does not add a limit marker when keyword matches exactly fit max_results', async () => {
+    const out = await toolSearchHandler({ query: 'pre-indexed', max_results: 1 }, ctx);
+
+    expect(out.match(/<function>/g)).toHaveLength(1);
+    expect(out).not.toContain('RESULT_LIMIT_REACHED');
   });
 
   it('`+keyword` enforces required term', async () => {

@@ -13,6 +13,7 @@ import {
   KodaXBaseProvider,
   registerModelProvider,
 } from '@kodax-ai/llm';
+import { ContextCapacityError } from '@kodax-ai/agent';
 import { runKodaX } from './agent.js';
 import type { RuntimeContextBudgetSnapshot } from './agent-runtime/context-budget.js';
 import type { RuntimeToolExposurePlan } from './agent-runtime/tool-exposure-planner.js';
@@ -33,7 +34,8 @@ class ContextDiagnosticsProvider extends KodaXBaseProvider {
     apiKeyEnv: TEST_PROVIDER_API_KEY_ENV,
     model: 'diagnostic-model',
     supportsThinking: false,
-    contextWindow: 16_000,
+    contextWindow: 32_000,
+    maxOutputTokens: 1_000,
   };
 
   async stream(
@@ -117,7 +119,7 @@ describe('runKodaX context diagnostics', () => {
     expect(budgets).toHaveLength(1);
     expect(budgets[0]?.sessionId).toBeDefined();
     expect(budgets[0]?.turnId).toBeDefined();
-    expect(budgets[0]?.contextWindow).toBe(16_000);
+    expect(budgets[0]?.contextWindow).toBe(32_000);
     expect(budgets[0]?.profile).toBe('small_window');
     expect(budgets[0]?.tokenBreakdown.toolSchemas).toBeGreaterThan(0);
     expect(JSON.stringify(budgets[0])).not.toContain('inspect this repository');
@@ -131,5 +133,20 @@ describe('runKodaX context diagnostics', () => {
     expect(exposures[0]?.modelVisibleToolNames).not.toContain('web_fetch');
     expect(ContextDiagnosticsProvider.calls[0]?.tools.map((tool) => tool.name)).not.toContain('web_fetch');
     expect(exposures[0]?.estimatedTokensSaved).toBeGreaterThan(0);
+  });
+
+  it('propagates a typed capacity failure instead of returning success:false', async () => {
+    await expect(runKodaX(
+      {
+        provider: TEST_PROVIDER_NAME,
+        reasoningMode: 'off',
+        maxIter: 1,
+        compaction: { contextWindow: 1_000 },
+        context: { repoIntelligenceMode: 'off' },
+      },
+      'hello',
+    )).rejects.toBeInstanceOf(ContextCapacityError);
+
+    expect(ContextDiagnosticsProvider.calls).toEqual([]);
   });
 });

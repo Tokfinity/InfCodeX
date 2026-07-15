@@ -47,6 +47,7 @@ import {
   type RunnerToolCall,
   type RunnerToolObserver,
   type RunnerToolResult,
+  type RunnerToolResultBatchTransform,
 } from './runner-tool-loop.js';
 import {
   collectGuardrails,
@@ -61,6 +62,7 @@ import {
   emitHandoffSpan,
   replaceSystemMessage,
 } from './runner-handoff.js';
+import { ContextCapacityError } from '../context-capacity.js';
 
 /**
  * Options accepted by `Runner.run` and `Runner.runStream`.
@@ -136,6 +138,12 @@ export interface RunOptions {
    * `onToolResult` through the usual `KodaXEvents` bus.
    */
   readonly toolObserver?: RunnerToolObserver;
+  /**
+   * Runs once after every tool call in a batch has settled and before the
+   * corresponding tool_result message is built. The transform must preserve
+   * result count/order so tool_use pairing remains valid.
+   */
+  readonly toolResultBatchTransform?: RunnerToolResultBatchTransform;
   /**
    * Compaction hook. Fires at the TOP of every tool-loop iteration,
    * BEFORE the LLM call. Return the replacement transcript to trigger
@@ -375,6 +383,31 @@ export interface RunResult<TData = unknown> {
    *  abort reason is in `output`. Sidecar Verifier sets this when it
    *  outputs a `blocked` verdict (halt + surface to user). */
   readonly stoppedByHook?: boolean;
+}
+
+/** Non-enumerable recovery payload carried across Runner error boundaries. */
+export interface RunnerRecoveryTranscriptCarrier {
+  readonly __kodaxRecoveredMessages?: readonly AgentMessage[];
+}
+
+export function attachRunnerRecoveryTranscript(
+  error: Error,
+  messages: readonly AgentMessage[],
+): void {
+  Object.defineProperty(error, '__kodaxRecoveredMessages', {
+    value: [...messages],
+    enumerable: false,
+    configurable: true,
+  });
+}
+
+export function readRunnerRecoveryTranscript(
+  error: unknown,
+): readonly AgentMessage[] | undefined {
+  if (!error || typeof error !== 'object') return undefined;
+  const messages = (error as RunnerRecoveryTranscriptCarrier)
+    .__kodaxRecoveredMessages;
+  return Array.isArray(messages) ? messages : undefined;
 }
 
 /**
@@ -748,6 +781,13 @@ async function genericRun<TData>(
           summaryLength: 0,
           error: error instanceof Error ? error.message : String(error),
         }).end();
+        if (error instanceof ContextCapacityError) {
+          const recoverableTranscript = transcript[0]?.role === 'system'
+            ? transcript.slice(1)
+            : transcript;
+          attachRunnerRecoveryTranscript(error, recoverableTranscript);
+          throw error;
+        }
       }
     }
 
@@ -955,12 +995,15 @@ async function genericRun<TData>(
     // runaway tool loops from runaway stop-hook reanimate loops
     // (FEATURE_184).
     allIterationsWereReanimates = false;
+    const recoverableTranscriptBeforeToolTurn = transcript[0]?.role === 'system'
+      ? transcript.slice(1)
+      : [...transcript];
     transcript.push(assistantMessage);
     if (opts.session) {
       await appendMessageEntry(opts.session, assistantMessage);
     }
 
-    const results: RunnerToolResult[] = new Array(toolCalls.length);
+    let results: RunnerToolResult[] = new Array(toolCalls.length);
     const finalCalls: typeof toolCalls = [...toolCalls];
 
     // v0.7.26 parity (C2): execute tool calls with the legacy concurrency
@@ -990,7 +1033,6 @@ async function genericRun<TData>(
           // guardrail-blocked tool as a real invocation from the user's
           // point of view (they see it happened and was rejected).
           opts.toolObserver?.onToolCall?.(call);
-          opts.toolObserver?.onToolResult?.(call, beforeOutcome.result);
           return;
         }
         call = beforeOutcome.call;
@@ -1025,7 +1067,6 @@ async function genericRun<TData>(
             content: blockedMessage,
             isError: true,
           };
-          opts.toolObserver?.onToolResult?.(call, blockedResult);
           results[index] = blockedResult;
           // Dispatch tool_call observe event so toolPermission.observe
           // (when registered) sees the rejected attempt — invariants
@@ -1051,7 +1092,6 @@ async function genericRun<TData>(
             content: blockedMessage,
             isError: true,
           };
-          opts.toolObserver.onToolResult?.(call, blockedResult);
           results[index] = blockedResult;
           return;
         }
@@ -1060,6 +1100,7 @@ async function genericRun<TData>(
         agent: currentAgent,
         abortSignal: opts.abortSignal,
         agentSpan,
+        transcript,
       });
       if (guardrailSlots.tool.length > 0) {
         // Per-invocation: pass the CURRENT agent (may differ from
@@ -1073,9 +1114,6 @@ async function genericRun<TData>(
           agentSpan,
         );
       }
-      // Fire `onToolResult` AFTER guardrails so consumers see the final
-      // result shape the LLM will receive on the next turn.
-      opts.toolObserver?.onToolResult?.(call, result);
       results[index] = result;
       // FEATURE_101 (v0.7.31.1): dispatch tool_call observe event to
       // bound invariants. Capability comes from the injected
@@ -1103,6 +1141,30 @@ async function genericRun<TData>(
     }
     for (const i of serialIndices) {
       await executeOneCall(i);
+    }
+    if (opts.toolResultBatchTransform) {
+      let transformed: readonly RunnerToolResult[];
+      try {
+        transformed = await opts.toolResultBatchTransform({
+          calls: finalCalls,
+          results,
+          transcript,
+        });
+      } catch (error) {
+        if (error instanceof Error) {
+          attachRunnerRecoveryTranscript(error, recoverableTranscriptBeforeToolTurn);
+        }
+        throw error;
+      }
+      if (!Array.isArray(transformed) || transformed.length !== finalCalls.length) {
+        throw new Error(
+          'Runner toolResultBatchTransform must preserve one result per tool call in the original order.',
+        );
+      }
+      results = [...transformed];
+    }
+    for (let index = 0; index < finalCalls.length; index += 1) {
+      opts.toolObserver?.onToolResult?.(finalCalls[index]!, results[index]!);
     }
     const toolResultMessage = buildToolResultMessage(finalCalls, results);
     transcript.push(toolResultMessage);

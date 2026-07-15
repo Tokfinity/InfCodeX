@@ -67,8 +67,51 @@ function asRecord(value: unknown): Record<string, unknown> | undefined {
   return value as Record<string, unknown>;
 }
 
+function omitRecordKeys(
+  record: Record<string, unknown> | undefined,
+  keys: ReadonlySet<string>,
+): Record<string, unknown> {
+  if (!record) {
+    return {};
+  }
+  return Object.fromEntries(Object.entries(record).filter(([key]) => !keys.has(key)));
+}
+
+function collectContentMetadata(value: unknown): unknown[] | undefined {
+  if (!Array.isArray(value)) {
+    return undefined;
+  }
+  const metadata = value.flatMap((entry) => {
+    const record = asRecord(entry);
+    if (!record) {
+      return [];
+    }
+    const selectedKey = readString(record.text) !== undefined
+      ? 'text'
+      : readString(record.content) !== undefined
+        ? 'content'
+        : readString(record.uri) !== undefined
+          ? 'uri'
+          : undefined;
+    if (!selectedKey) {
+      return [];
+    }
+    const ignored = new Set([selectedKey]);
+    if (record.type === selectedKey || (selectedKey === 'content' && record.type === 'text')) {
+      ignored.add('type');
+    }
+    const remaining = omitRecordKeys(record, ignored);
+    return Object.keys(remaining).length > 0 ? [remaining] : [];
+  });
+  return metadata.length > 0 ? metadata : undefined;
+}
+
 function readString(value: unknown): string | undefined {
   return typeof value === 'string' && value.trim().length > 0 ? value.trim() : undefined;
+}
+
+function readTextContent(value: unknown): string | undefined {
+  return typeof value === 'string' && value.trim().length > 0 ? value : undefined;
 }
 
 function toStringArray(value: unknown): string[] | undefined {
@@ -90,7 +133,7 @@ function stringifyStructuredValue(value: unknown): string | undefined {
     return undefined;
   }
   if (typeof value === 'string') {
-    return value.trim() || undefined;
+    return readTextContent(value);
   }
   if (typeof value === 'number' || typeof value === 'boolean') {
     return String(value);
@@ -104,7 +147,7 @@ function stringifyStructuredValue(value: unknown): string | undefined {
 
 function flattenMcpContent(value: unknown): string | undefined {
   if (typeof value === 'string') {
-    return value.trim() || undefined;
+    return readTextContent(value);
   }
 
   if (Array.isArray(value)) {
@@ -114,8 +157,8 @@ function flattenMcpContent(value: unknown): string | undefined {
         if (!record) {
           return stringifyStructuredValue(entry);
         }
-        return readString(record.text)
-          ?? readString(record.content)
+        return readTextContent(record.text)
+          ?? readTextContent(record.content)
           ?? readString(record.uri)
           ?? stringifyStructuredValue(record);
       })
@@ -128,8 +171,8 @@ function flattenMcpContent(value: unknown): string | undefined {
     return stringifyStructuredValue(value);
   }
 
-  return readString(record.text)
-    ?? readString(record.content)
+  return readTextContent(record.text)
+    ?? readTextContent(record.content)
     ?? stringifyStructuredValue(record);
 }
 
@@ -500,13 +543,21 @@ export class McpServerRuntime {
       try {
         const response = await this.request('tools/call', { name, arguments: args });
         const record = asRecord(response);
+        const contentMetadata = collectContentMetadata(record?.content);
         return {
           content: flattenMcpContent(record?.content),
           structuredContent: record?.structuredContent ?? record?.structured_content,
           metadata: {
             serverId: this.serverId,
             isError: readBoolean(record?.isError) ?? readBoolean(record?.is_error) ?? false,
-            raw: record,
+            ...omitRecordKeys(record, new Set([
+              'content',
+              'structuredContent',
+              'structured_content',
+              'isError',
+              'is_error',
+            ])),
+            ...(contentMetadata ? { contentMetadata } : {}),
           },
         };
       } catch (error) {
@@ -580,12 +631,14 @@ export class McpServerRuntime {
     });
     const record = asRecord(response);
     const contents = Array.isArray(record?.contents) ? record.contents : [];
+    const contentMetadata = collectContentMetadata(contents);
     return {
       content: flattenMcpContent(contents),
-      structuredContent: contents,
+      structuredContent: record?.structuredContent,
       metadata: {
         serverId: this.serverId,
-        raw: record,
+        ...omitRecordKeys(record, new Set(['contents', 'structuredContent'])),
+        ...(contentMetadata ? { contentMetadata } : {}),
       },
     };
   }
@@ -878,11 +931,8 @@ export class McpServerRuntime {
         result = await this.request(method, cursor ? { cursor } : {});
       } catch (error) {
         const isOptionalList = method === 'resources/list' || method === 'prompts/list';
-        if (isOptionalList && isMethodNotFoundLikeError(error, method)) {
+        if (cursor === undefined && isOptionalList && isMethodNotFoundLikeError(error, method)) {
           return [];
-        }
-        if (descriptors.length > 0) {
-          break;
         }
         throw error;
       }

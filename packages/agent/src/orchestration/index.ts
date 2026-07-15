@@ -20,6 +20,7 @@ export { registerChildTask } from './task-registry.js';
 
 export type {
   EnvelopeAggregateEnforcer,
+  EnvelopeAggregateCapacityContext,
   IdleYieldSnapshot,
   WaitForWakeEventOptions,
   WakeEvent,

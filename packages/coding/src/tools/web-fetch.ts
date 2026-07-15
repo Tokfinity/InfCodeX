@@ -29,7 +29,7 @@ function isSupportedUrl(value: string): boolean {
 
 function readCapabilityContent(result: CapabilityResult): string | undefined {
   if (typeof result.content === 'string' && result.content.trim().length > 0) {
-    return result.content.trim();
+    return result.content;
   }
   return undefined;
 }
@@ -88,23 +88,25 @@ export async function toolWebFetch(
     const { text: body, truncated, bytesRead } = await readResponseTextLimited(response, FETCH_MAX_BYTES);
     const isHtml = contentType.includes('text/html');
     const title = isHtml ? extractHtmlTitle(body) : undefined;
-    const content = isHtml ? stripHtmlToText(body) : body.trim();
+    const content = isHtml ? stripHtmlToText(body) : body;
     const finalUrl = response.url || url;
+    const sourceStatus = truncated
+      ? `[SOURCE_INCOMPLETE: response exceeded the ${FETCH_MAX_BYTES / 1024} KiB network acquisition safety limit.] `
+      : '';
 
     return finalizeRetrievalResult({
       tool: 'web_fetch',
       scope: 'remote',
       trust: 'open-world',
       freshness: 'fresh',
-      summary: response.ok
+      summary: `${sourceStatus}${response.ok
         ? `Fetched ${finalUrl} (${response.status}).`
-        : `Fetched ${finalUrl} with non-success status ${response.status}.`,
+        : `Fetched ${finalUrl} with non-success status ${response.status}.`}`,
       content: readCapabilityContent({ kind: 'resource', content }) ?? content,
       items: title
         ? [{
           title,
           locator: finalUrl,
-          snippet: content.slice(0, 240).trim(),
           metadata: { status: response.status, contentType },
         }]
         : [],

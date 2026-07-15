@@ -1,688 +1,302 @@
-/**
- * v0.7.40 — buildManagedTaskCompactionHook parity tests.
- *
- * The pre-v0.7.40 hook had three structural gaps versus SA path's
- * `runCompactionLifecycle`:
- *
- *   1. Trigger check used `estimateTokens(transcript)` (transcript-only,
- *      excludes system + tools schema). With FEATURE_114's 4→2 role
- *      consolidation + FEATURE_161 Worker prompt growth, system+tools
- *      overhead grew to 20-35k tokens, making the transcript-only
- *      estimate systematically under-count by that margin. A 200K
- *      window's 60% trigger (120k) would never fire when API context
- *      was at 130-150k but transcript estimate was ~95-115k.
- *
- *   2. No `microcompact` phase. SA path ran microcompact every turn
- *      (zero LLM cost). AMA hook ran straight into LLM compact.
- *
- *   3. No `gracefulCompactDegradation` fallback. SA path's three-phase
- *      lifecycle (`compaction-orchestration.ts`) used graceful prune
- *      as the third phase when LLM compact threw / returned no diff /
- *      left context still high. AMA hook bailed silently after LLM
- *      failure, letting context grow unbounded.
- *
- * These tests pin all three behaviours so future drift fails a test
- * instead of silently regressing back to monotonic context growth.
- */
-
-import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
-import { mkdtemp, rm } from 'node:fs/promises';
-import os from 'node:os';
-import path from 'node:path';
+import { beforeEach, describe, expect, it, vi } from 'vitest';
 
 vi.mock('@kodax-ai/agent', async (importOriginal) => {
   const actual = await importOriginal<typeof import('@kodax-ai/agent')>();
-  return {
-    ...actual,
-    compact: vi.fn(),
-    microcompact: vi.fn(),
-    gracefulCompactDegradation: vi.fn(),
-  };
+  return { ...actual, compact: vi.fn() };
 });
 
 import {
+  ContextCapacityError,
+  Runner,
   compact as mockedCompact,
-  microcompact as mockedMicrocompact,
-  gracefulCompactDegradation as mockedGracefulDegradation,
-  setAgentConfigHome,
+  createAgent,
+  type AgentMessage,
   type CompactionResult,
 } from '@kodax-ai/agent';
-import type { KodaXMessage } from '@kodax-ai/llm';
+import type { KodaXMessage, KodaXToolDefinition } from '@kodax-ai/llm';
+import { resolveProvider } from '../../../providers/index.js';
+import { estimateTokens } from '../../../tokenizer.js';
 import type { KodaXContextTokenSnapshot, KodaXOptions } from '../../../types.js';
 import {
   buildManagedTaskCompactionHook,
   type ContextTokenSnapshotRef,
+  type resolveManagedTaskContextCapacity,
 } from './compaction.js';
 
 const compactMock = mockedCompact as unknown as ReturnType<typeof vi.fn>;
-const microcompactMock = mockedMicrocompact as unknown as ReturnType<typeof vi.fn>;
-const gracefulDegradationMock = mockedGracefulDegradation as unknown as ReturnType<typeof vi.fn>;
 
-beforeEach(() => {
-  compactMock.mockReset();
-  microcompactMock.mockReset();
-  gracefulDegradationMock.mockReset();
-  // Sensible defaults: identity pass-through (so the test surface only
-  // overrides what it actually exercises).
-  microcompactMock.mockImplementation((msgs) => msgs);
-  gracefulDegradationMock.mockImplementation((msgs) => msgs);
-});
-
-afterEach(() => {
-  vi.restoreAllMocks();
-});
-
-function makeOptions(overrides: Partial<KodaXOptions> = {}): KodaXOptions {
-  return {
-    provider: 'anthropic',
-    model: 'claude-test',
-    events: {},
-    ...overrides,
-  } as KodaXOptions;
+function makeMessages(): KodaXMessage[] {
+  return [{
+    role: 'user',
+    content: `FULL_EVIDENCE_SENTINEL\n${'evidence '.repeat(12_000)}`,
+  }];
 }
 
-/**
- * Build a tiny transcript whose `estimateTokens` is negligible. The
- * trigger is forced via the snapshot's `currentTokens` carrying an
- * API-total above the threshold — that's the v0.7.40 bugfix path
- * being exercised. Keeping the transcript tiny avoids tiktoken
- * processing large strings in tests (the trigger check uses
- * `resolveContextTokenCount(transcript, snapshot)` which short-
- * circuits to `snapshot.currentTokens + small-delta` when transcript
- * is small).
- */
-function buildLargeTranscript(): KodaXMessage[] {
-  return [{ role: 'user', content: 'tiny but tagged as 150k via snapshot' }];
-}
-
-function snapshotAtApiTotal(
-  apiTotal: number,
-  messages: KodaXMessage[],
-): KodaXContextTokenSnapshot {
-  // Use the actual messages' estimate as the baseline so
-  // `resolveContextTokenCount(transcript, snapshot)` returns
-  // `apiTotal` when transcript equals messages.
-  // estimateTokens of buildLargeTranscript() is roughly the message
-  // chars / 4 + structural overhead.
-  // We don't import the real function here to keep the test
-  // self-contained — we read the actual baseline via dynamic import.
-  // For the cold-start tests below we only need the API field.
+function snapshot(currentTokens: number, messages: KodaXMessage[]): KodaXContextTokenSnapshot {
   return {
-    currentTokens: apiTotal,
-    baselineEstimatedTokens:
-      // approx — actual import below
-      messages.reduce(
-        (acc, m) =>
-          acc
-          + 4
-          + (typeof m.content === 'string'
-            ? Math.ceil(m.content.length / 4)
-            : 0),
-        0,
-      ),
+    currentTokens,
+    baselineEstimatedTokens: estimateTokens(messages),
     source: 'api',
   };
 }
 
-describe('buildManagedTaskCompactionHook — v0.7.40 parity gaps', () => {
-  describe('Phase 1: microcompact runs every call (even below trigger)', () => {
-    it('returns microcompacted transcript when microcompact prunes and threshold not crossed', async () => {
-      // Snapshot makes API total 50k — well below 120k trigger.
-      // Microcompact returns a DIFFERENT array (simulates a pruned
-      // tool_result block). Hook should return that array even
-      // though LLM compact never runs.
-      const messages: KodaXMessage[] = [
-        { role: 'user', content: 'hi' },
-      ];
-      const prunedMessages: KodaXMessage[] = [
-        { role: 'user', content: 'hi (post-microcompact)' },
-      ];
-      microcompactMock.mockReturnValueOnce(prunedMessages);
+function compactedResult(messages: KodaXMessage[]): CompactionResult {
+  const compacted = [{
+    role: 'system' as const,
+    content: '[对话历史摘要]\n\nComplete semantic summary with preserved decisions.',
+  }];
+  return {
+    compacted: true,
+    messages: compacted,
+    summary: 'Complete semantic summary with preserved decisions.',
+    tokensBefore: estimateTokens(messages),
+    tokensAfter: estimateTokens(compacted),
+    entriesRemoved: messages.length,
+  };
+}
 
-      const snapshotRef: ContextTokenSnapshotRef = {
-        current: snapshotAtApiTotal(50_000, messages),
-      };
+function resolvedCapacity(
+  triggerPercent: number,
+  contextWindow = 100_000,
+  reservedResponseTokens = 10_000,
+): Awaited<ReturnType<typeof resolveManagedTaskContextCapacity>> {
+  const provider = resolveProvider('anthropic');
+  vi.spyOn(provider, 'getEffectiveMaxOutputTokens').mockReturnValue(
+    reservedResponseTokens,
+  );
+  return {
+    provider,
+    activeModel: 'claude-test',
+    compactionConfig: { enabled: true, triggerPercent },
+    contextWindow,
+  };
+}
 
-      const hook = await buildManagedTaskCompactionHook(makeOptions(), {
-        contextTokenSnapshotRef: snapshotRef,
-      });
-      const result = await hook!(messages);
-      // Deep equality, not reference: the hook spreads the
-      // microcompact output into its working array, so the returned
-      // reference differs from `prunedMessages` even though contents
-      // match. Runner.run's `compacted !== transcript` reference
-      // check (runner.ts:730) still picks up the new array correctly.
-      expect(result).toEqual(prunedMessages);
-      expect(compactMock).not.toHaveBeenCalled();
+function options(events: KodaXOptions['events'] = {}): KodaXOptions {
+  return { provider: 'anthropic', model: 'claude-test', events } as KodaXOptions;
+}
+
+beforeEach(() => {
+  compactMock.mockReset();
+});
+
+describe('managed history compaction', () => {
+  it('does nothing while the complete request fits physical capacity', async () => {
+    const messages = makeMessages();
+    const ref: ContextTokenSnapshotRef = { current: snapshot(70_000, messages) };
+    const hook = await buildManagedTaskCompactionHook(options(), {
+      resolvedContextCapacity: resolvedCapacity(100),
+      contextTokenSnapshotRef: ref,
     });
 
-    it('returns undefined when microcompact made no changes and threshold not crossed', async () => {
-      const messages: KodaXMessage[] = [{ role: 'user', content: 'hi' }];
-      microcompactMock.mockReturnValueOnce(messages); // identity = no change
-
-      const snapshotRef: ContextTokenSnapshotRef = {
-        current: snapshotAtApiTotal(50_000, messages),
-      };
-
-      const hook = await buildManagedTaskCompactionHook(makeOptions(), {
-        contextTokenSnapshotRef: snapshotRef,
-      });
-      const result = await hook!(messages);
-      expect(result).toBeUndefined();
-      expect(compactMock).not.toHaveBeenCalled();
-    });
+    await expect(hook?.(messages)).resolves.toBeUndefined();
+    expect(compactMock).not.toHaveBeenCalled();
   });
 
-  describe('Phase 2: trigger check uses snapshot-aware token accounting', () => {
-    it('fires LLM compact when snapshot says API total > trigger (even if transcript-only estimate is below)', async () => {
-      // Build a tiny transcript (~10 tokens) so transcript-only
-      // estimate is far below 120k. Snapshot says API total is
-      // 150k. Hook should trigger because the snapshot puts us
-      // above the threshold.
-      const messages: KodaXMessage[] = [{ role: 'user', content: 'tiny' }];
-      const snapshotRef: ContextTokenSnapshotRef = {
-        current: snapshotAtApiTotal(150_000, messages),
-      };
-
-      const successResult: CompactionResult = {
-        compacted: true,
-        messages: [{ role: 'user', content: 'compacted' }],
-        tokensBefore: 150_000,
-        tokensAfter: 50_000,
-        entriesRemoved: 3,
-        summary: 'summary',
-        details: { readFiles: [], modifiedFiles: [] },
-        artifactLedger: [],
-        memorySeed: {
-          objective: undefined,
-          constraints: [],
-          progress: { completed: [], inProgress: [], blockers: [] },
-          keyDecisions: [],
-          nextSteps: [],
-          keyContext: [],
-          importantTargets: [],
-          tombstones: [],
-        },
-      };
-      compactMock.mockResolvedValueOnce(successResult);
-
-      const hook = await buildManagedTaskCompactionHook(makeOptions(), {
-        contextTokenSnapshotRef: snapshotRef,
-      });
-      const result = await hook!(messages);
-      expect(compactMock).toHaveBeenCalledTimes(1);
-      expect(result).toEqual(successResult.messages);
+  it('passes the complete evidence to semantic compaction at hard pressure', async () => {
+    const messages = makeMessages();
+    const ref: ContextTokenSnapshotRef = { current: snapshot(88_000, messages) };
+    compactMock.mockResolvedValue(compactedResult(messages));
+    const hook = await buildManagedTaskCompactionHook(options(), {
+      resolvedContextCapacity: resolvedCapacity(100),
+      contextTokenSnapshotRef: ref,
     });
 
-    it('does NOT fire LLM compact when no snapshot ref provided and transcript-only estimate is below trigger', async () => {
-      // Without snapshot ref, hook falls back to raw estimate.
-      // Tiny transcript → far below trigger → no compaction.
-      const messages: KodaXMessage[] = [{ role: 'user', content: 'tiny' }];
-      const hook = await buildManagedTaskCompactionHook(makeOptions());
-      const result = await hook!(messages);
-      expect(result).toBeUndefined();
-      expect(compactMock).not.toHaveBeenCalled();
-    });
-
-    it('passes compaction anchor to host even when no artifact ledger is present', async () => {
-      const messages: KodaXMessage[] = [{ role: 'user', content: 'tiny' }];
-      const snapshotRef: ContextTokenSnapshotRef = {
-        current: snapshotAtApiTotal(150_000, messages),
-      };
-      const onCompactedMessages = vi.fn();
-      const compactedMessages: KodaXMessage[] = [
-        { role: 'system', content: '[对话历史摘要]\n\nsummary' },
-        { role: 'user', content: 'tail' },
-      ];
-      const anchor = {
-        summary: 'summary',
-        tokensBefore: 150_000,
-        tokensAfter: 50_000,
-        entriesRemoved: 3,
-        reason: 'context_window',
-      };
-      compactMock.mockResolvedValueOnce({
-        compacted: true,
-        messages: compactedMessages,
-        tokensBefore: 150_000,
-        tokensAfter: 50_000,
-        entriesRemoved: 3,
-        summary: 'summary',
-        anchor,
-      } satisfies CompactionResult);
-
-      const hook = await buildManagedTaskCompactionHook(
-        makeOptions({ events: { onCompactedMessages } }),
-        { contextTokenSnapshotRef: snapshotRef },
-      );
-      const result = await hook!(messages);
-
-      expect(result).toEqual(compactedMessages);
-      expect(onCompactedMessages).toHaveBeenCalledTimes(1);
-      expect(onCompactedMessages.mock.calls[0]?.[1]?.anchor).toBe(anchor);
-      expect(onCompactedMessages.mock.calls[0]?.[1]?.artifactLedger).toBeUndefined();
-    });
+    const result = await hook?.(messages);
+    expect(compactMock).toHaveBeenCalledTimes(1);
+    expect(compactMock.mock.calls[0]?.[0]).toBe(messages);
+    expect(JSON.stringify(compactMock.mock.calls[0]?.[0])).toContain(
+      'FULL_EVIDENCE_SENTINEL',
+    );
+    expect(result).toEqual(compactedResult(messages).messages);
   });
 
-  describe('Phase 3: graceful degradation fallback', () => {
-    it('falls back to graceful prune when LLM compact throws', async () => {
-      const messages = buildLargeTranscript();
-      const snapshotRef: ContextTokenSnapshotRef = {
-        current: snapshotAtApiTotal(150_000, messages),
-      };
-      compactMock.mockRejectedValueOnce(new Error('zhipu LLM 400'));
-
-      const prunedByGraceful: KodaXMessage[] = [
-        { role: 'user', content: 'graceful prune' },
-      ];
-      gracefulDegradationMock.mockReturnValueOnce(prunedByGraceful);
-
-      const hook = await buildManagedTaskCompactionHook(makeOptions(), {
-        contextTokenSnapshotRef: snapshotRef,
-      });
-      const result = await hook!(messages);
-
-      expect(compactMock).toHaveBeenCalledTimes(1);
-      expect(gracefulDegradationMock).toHaveBeenCalledTimes(1);
-      expect(result).toEqual(prunedByGraceful);
+  it('keeps Runner\'s immutable Worker system prompt outside semantic compaction', async () => {
+    const immutableSystem: KodaXMessage = {
+      role: 'system',
+      content: 'IMMUTABLE_WORKER_SYSTEM_PROMPT_BYTE_SENTINEL',
+    };
+    const mutableMessages = makeMessages();
+    const messages = [immutableSystem, ...mutableMessages];
+    const ref: ContextTokenSnapshotRef = { current: snapshot(88_000, messages) };
+    compactMock.mockResolvedValue(compactedResult(mutableMessages));
+    const hook = await buildManagedTaskCompactionHook(options(), {
+      resolvedContextCapacity: resolvedCapacity(100),
+      contextTokenSnapshotRef: ref,
     });
 
-    it('falls back to graceful prune when LLM compact returns compacted: false', async () => {
-      const messages = buildLargeTranscript();
-      const snapshotRef: ContextTokenSnapshotRef = {
-        current: snapshotAtApiTotal(150_000, messages),
-      };
-      const noCompactResult: CompactionResult = {
-        compacted: false,
-        messages,
-        tokensBefore: 150_000,
-        tokensAfter: 150_000,
-        entriesRemoved: 0,
-      };
-      compactMock.mockResolvedValueOnce(noCompactResult);
+    const result = await hook?.(messages);
 
-      const prunedByGraceful: KodaXMessage[] = [
-        { role: 'user', content: 'graceful prune' },
-      ];
-      gracefulDegradationMock.mockReturnValueOnce(prunedByGraceful);
-
-      const hook = await buildManagedTaskCompactionHook(makeOptions(), {
-        contextTokenSnapshotRef: snapshotRef,
-      });
-      const result = await hook!(messages);
-
-      expect(gracefulDegradationMock).toHaveBeenCalledTimes(1);
-      expect(result).toEqual(prunedByGraceful);
-    });
-
-    it('falls back to graceful prune when LLM compact succeeded but tokensAfter is still over trigger × gapRatio', async () => {
-      const messages = buildLargeTranscript();
-      const snapshotRef: ContextTokenSnapshotRef = {
-        current: snapshotAtApiTotal(150_000, messages),
-      };
-      // LLM "partial success" — compacted=true but tokensAfter
-      // (~105k) is still above triggerTokens (120k) × 0.8 = 96k.
-      // Graceful should still fire.
-      const partialResult: CompactionResult = {
-        compacted: true,
-        messages,
-        tokensBefore: 150_000,
-        tokensAfter: 105_000,
-        entriesRemoved: 1,
-        summary: 'partial',
-        details: { readFiles: [], modifiedFiles: [] },
-        artifactLedger: [],
-        memorySeed: {
-          objective: undefined,
-          constraints: [],
-          progress: { completed: [], inProgress: [], blockers: [] },
-          keyDecisions: [],
-          nextSteps: [],
-          keyContext: [],
-          importantTargets: [],
-          tombstones: [],
-        },
-      };
-      compactMock.mockResolvedValueOnce(partialResult);
-
-      const prunedByGraceful: KodaXMessage[] = [
-        { role: 'user', content: 'graceful after partial' },
-      ];
-      gracefulDegradationMock.mockReturnValueOnce(prunedByGraceful);
-
-      const hook = await buildManagedTaskCompactionHook(makeOptions(), {
-        contextTokenSnapshotRef: snapshotRef,
-      });
-      const result = await hook!(messages);
-
-      expect(gracefulDegradationMock).toHaveBeenCalledTimes(1);
-      expect(result).toEqual(prunedByGraceful);
-    });
+    expect(compactMock.mock.calls[0]?.[0]).toEqual(mutableMessages);
+    expect(result?.[0]).toEqual(immutableSystem);
+    expect(result?.[1]?.content).toContain('Complete semantic summary');
   });
 
-  describe('snapshot ref maintenance', () => {
-    it('rebases snapshot to estimate after successful LLM compaction', async () => {
-      const messages = buildLargeTranscript();
-      const snapshotRef: ContextTokenSnapshotRef = {
-        current: snapshotAtApiTotal(150_000, messages),
-      };
-
-      const compactedMessages: KodaXMessage[] = [
-        { role: 'user', content: 'compacted small' },
-      ];
-      compactMock.mockResolvedValueOnce({
-        compacted: true,
-        messages: compactedMessages,
-        tokensBefore: 150_000,
-        tokensAfter: 50_000,
-        entriesRemoved: 5,
-        summary: 's',
-        details: { readFiles: [], modifiedFiles: [] },
-        artifactLedger: [],
-        memorySeed: {
-          objective: undefined,
-          constraints: [],
-          progress: { completed: [], inProgress: [], blockers: [] },
-          keyDecisions: [],
-          nextSteps: [],
-          keyContext: [],
-          importantTargets: [],
-          tombstones: [],
-        },
-      } satisfies CompactionResult);
-
-      const hook = await buildManagedTaskCompactionHook(makeOptions(), {
-        contextTokenSnapshotRef: snapshotRef,
-      });
-      await hook!(messages);
-
-      // Snapshot's currentTokens should now reflect the compacted
-      // estimate (much smaller than 150k), not the original 150k.
-      expect(snapshotRef.current).toBeDefined();
-      expect(snapshotRef.current!.currentTokens).toBeLessThan(50_000);
-      expect(snapshotRef.current!.source).toBe('estimate');
+  it('preserves the exact Runner system message for the next LLM turn while adding a summary', async () => {
+    const systemText = 'IMMUTABLE_WORKER_SYSTEM_PROMPT_BYTE_SENTINEL';
+    const agent = createAgent({
+      name: 'managed-compaction-worker',
+      instructions: systemText,
     });
+    const originalMessages: KodaXMessage[] = [
+      { role: 'system', content: systemText },
+      { role: 'user', content: `start\n${'reducible history '.repeat(2_000)}` },
+    ];
+    const currentTokens = estimateTokens(originalMessages) + 20_000;
+    const contextWindow = currentTokens
+      + 10_000
+      + Math.max(2_048, Math.ceil(currentTokens * 0.03))
+      - 1;
+    const ref: ContextTokenSnapshotRef = {
+      current: snapshot(currentTokens, originalMessages),
+    };
+    compactMock.mockImplementation(async (mutable: KodaXMessage[]) => (
+      compactedResult(mutable)
+    ));
+    const hook = await buildManagedTaskCompactionHook(options(), {
+      resolvedContextCapacity: resolvedCapacity(100, contextWindow),
+      contextTokenSnapshotRef: ref,
+    });
+    let nextLlmMessages: readonly AgentMessage[] = [];
+
+    await Runner.run(agent, String(originalMessages[1]!.content), {
+      compactionHook: hook,
+      llm: async (messages) => {
+        nextLlmMessages = messages;
+        return 'done';
+      },
+      tracer: null,
+    });
+
+    expect(nextLlmMessages[0]).toEqual({ role: 'system', content: systemText });
+    expect(nextLlmMessages.some((message, index) => (
+      index > 0
+      && message.role === 'system'
+      && String(message.content).includes('Complete semantic summary')
+    ))).toBe(true);
   });
 
-  describe('circuit breaker still works (3 strikes → skip LLM, graceful still fires)', () => {
-    it('skips LLM compact after 3 consecutive failures but graceful still attempts prune', async () => {
-      const messages = buildLargeTranscript();
-      const snapshotRef: ContextTokenSnapshotRef = {
-        current: snapshotAtApiTotal(150_000, messages),
-      };
-      const noCompactResult: CompactionResult = {
-        compacted: false,
-        messages,
-        tokensBefore: 150_000,
-        tokensAfter: 150_000,
-        entriesRemoved: 0,
-      };
-      // First 3 calls return no-compact → counter climbs to 3.
-      compactMock
-        .mockResolvedValueOnce(noCompactResult)
-        .mockResolvedValueOnce(noCompactResult)
-        .mockResolvedValueOnce(noCompactResult);
-      // Graceful no-op: return the SAME reference passed in (the
-      // hook's spread copy `workingMessages`). Returning `messages`
-      // (test-side reference) would compare unequal to the spread
-      // copy and the hook would treat it as a successful prune,
-      // rebasing the snapshot and skipping subsequent LLM retries.
-      gracefulDegradationMock.mockImplementation((wm: KodaXMessage[]) => wm);
-
-      const hook = await buildManagedTaskCompactionHook(makeOptions(), {
-        contextTokenSnapshotRef: snapshotRef,
-      });
-
-      // First three calls — LLM tried each time, fails each time.
-      await hook!(messages);
-      await hook!(messages);
-      await hook!(messages);
-      expect(compactMock).toHaveBeenCalledTimes(3);
-
-      // Fourth call — circuit breaker tripped, LLM skipped, but
-      // graceful is still called.
-      gracefulDegradationMock.mockClear();
-      const degradedMessages: KodaXMessage[] = [
-        { role: 'user', content: 'graceful after breaker' },
-      ];
-      gracefulDegradationMock.mockReturnValueOnce(degradedMessages);
-      const result = await hook!(messages);
-      expect(compactMock).toHaveBeenCalledTimes(3); // unchanged
-      expect(gracefulDegradationMock).toHaveBeenCalledTimes(1);
-      expect(result).toEqual(degradedMessages);
+  it('counts active tool schemas before the first provider usage snapshot exists', async () => {
+    const messages: KodaXMessage[] = [
+      { role: 'system', content: 'worker system' },
+      { role: 'user', content: `RESTORED_HISTORY_SENTINEL\n${'history '.repeat(8_000)}` },
+    ];
+    const activeToolDefinitions: KodaXToolDefinition[] = [{
+      name: 'large_schema_tool',
+      description: 'schema '.repeat(20_000),
+      input_schema: {
+        type: 'object',
+        properties: { query: { type: 'string', description: 'query '.repeat(4_000) } },
+      },
+    }];
+    const transcriptTokens = estimateTokens(messages);
+    const ref: ContextTokenSnapshotRef = { current: undefined };
+    compactMock.mockResolvedValue(compactedResult(messages.slice(1)));
+    const hook = await buildManagedTaskCompactionHook(options(), {
+      resolvedContextCapacity: resolvedCapacity(
+        100,
+        30_000,
+        2_000,
+      ),
+      contextTokenSnapshotRef: ref,
+      activeToolDefinitions,
     });
+
+    await hook?.(messages);
+
+    expect(compactMock).toHaveBeenCalledTimes(1);
+    expect(compactMock.mock.calls[0]?.[6]).toBeGreaterThan(transcriptTokens);
   });
 
-  describe('FEATURE_177 v0.7.42 — onPostCompact fires for read-file-state cache invalidation', () => {
-    it('fires onPostCompact after a full LLM compaction succeeds', async () => {
-      const messages = buildLargeTranscript();
-      const snapshotRef: ContextTokenSnapshotRef = {
-        current: snapshotAtApiTotal(150_000, messages),
-      };
-      compactMock.mockResolvedValueOnce({
-        compacted: true,
-        messages: [{ role: 'user', content: 'compacted' }],
-        tokensBefore: 150_000,
-        tokensAfter: 50_000,
-        entriesRemoved: 3,
-        summary: 's',
-        details: { readFiles: [], modifiedFiles: [] },
-        artifactLedger: [],
-        memorySeed: {
-          objective: undefined,
-          constraints: [],
-          progress: { completed: [], inProgress: [], blockers: [] },
-          keyDecisions: [],
-          nextSteps: [],
-          keyContext: [],
-          importantTargets: [],
-          tombstones: [],
-        },
-      } satisfies CompactionResult);
-
-      const onPostCompact = vi.fn();
-      const hook = await buildManagedTaskCompactionHook(makeOptions(), {
-        contextTokenSnapshotRef: snapshotRef,
-        onPostCompact,
-      });
-      await hook!(messages);
-      expect(onPostCompact).toHaveBeenCalledTimes(1);
+  it('preserves fixed envelope overhead when rebasing the compacted snapshot', async () => {
+    const messages = makeMessages();
+    const beforeEstimate = estimateTokens(messages);
+    const ref: ContextTokenSnapshotRef = {
+      current: snapshot(beforeEstimate + 20_000, messages),
+    };
+    const compacted = compactedResult(messages);
+    compactMock.mockResolvedValue(compacted);
+    const hook = await buildManagedTaskCompactionHook(options(), {
+      resolvedContextCapacity: resolvedCapacity(20),
+      contextTokenSnapshotRef: ref,
     });
 
-    it('fires onPostCompact after gracefulCompactDegradation prunes (LLM failed)', async () => {
-      const messages = buildLargeTranscript();
-      const snapshotRef: ContextTokenSnapshotRef = {
-        current: snapshotAtApiTotal(150_000, messages),
-      };
-      compactMock.mockRejectedValueOnce(new Error('LLM 400'));
-      gracefulDegradationMock.mockReturnValueOnce([
-        { role: 'user', content: 'graceful' },
-      ]);
-
-      const onPostCompact = vi.fn();
-      const hook = await buildManagedTaskCompactionHook(makeOptions(), {
-        contextTokenSnapshotRef: snapshotRef,
-        onPostCompact,
-      });
-      await hook!(messages);
-      expect(onPostCompact).toHaveBeenCalledTimes(1);
-    });
-
-    it('fires onPostCompact when microcompact mutates below trigger (no LLM compact)', async () => {
-      // This is the cache-stale-from-microcompact gap the user
-      // surfaced: microcompact clears tool_results aged >= 20 turns
-      // to `[Cleared: ...]` stubs without firing the compaction event
-      // surface. If the readFileStateCache is not also cleared, it
-      // returns "refer to your earlier read" stubs pointing at
-      // tool_results whose actual content has been wiped → LLM is
-      // stuck with neither cache content nor transcript content.
-      const messages: KodaXMessage[] = [
-        { role: 'user', content: 'tiny' },
-      ];
-      const microcompacted: KodaXMessage[] = [
-        { role: 'user', content: 'tiny (post-microcompact)' },
-      ];
-      microcompactMock.mockReturnValueOnce(microcompacted);
-
-      const snapshotRef: ContextTokenSnapshotRef = {
-        current: snapshotAtApiTotal(50_000, messages), // below 120k trigger
-      };
-
-      const onPostCompact = vi.fn();
-      const hook = await buildManagedTaskCompactionHook(makeOptions(), {
-        contextTokenSnapshotRef: snapshotRef,
-        onPostCompact,
-      });
-      const result = await hook!(messages);
-
-      expect(result).toEqual(microcompacted);
-      expect(compactMock).not.toHaveBeenCalled();
-      expect(onPostCompact).toHaveBeenCalledTimes(1);
-    });
-
-    it('does NOT fire onPostCompact when microcompact made no changes and no LLM compaction', async () => {
-      const messages: KodaXMessage[] = [{ role: 'user', content: 'tiny' }];
-      microcompactMock.mockReturnValueOnce(messages); // identity = no change
-      const snapshotRef: ContextTokenSnapshotRef = {
-        current: snapshotAtApiTotal(50_000, messages),
-      };
-
-      const onPostCompact = vi.fn();
-      const hook = await buildManagedTaskCompactionHook(makeOptions(), {
-        contextTokenSnapshotRef: snapshotRef,
-        onPostCompact,
-      });
-      await hook!(messages);
-      expect(onPostCompact).not.toHaveBeenCalled();
-    });
-
-    it('fires onPostCompact when LLM throws + graceful no-op + microcompact mutated (above-trigger edge)', async () => {
-      // needsCompact=true, LLM throws, graceful returns identity,
-      // microcompact already did some work. Without the second branch
-      // in compaction.ts:404, this edge would silently keep the
-      // micro-pruned transcript while leaving the read cache pointing
-      // at now-cleared tool_results.
-      const messages = buildLargeTranscript();
-      const microcompacted: KodaXMessage[] = [
-        { role: 'user', content: 'tiny (post-microcompact)' },
-      ];
-      microcompactMock.mockReturnValueOnce(microcompacted);
-
-      const snapshotRef: ContextTokenSnapshotRef = {
-        current: snapshotAtApiTotal(150_000, messages),
-      };
-      compactMock.mockRejectedValueOnce(new Error('LLM threw'));
-      // Graceful returns the same reference it got → degraded=false.
-      gracefulDegradationMock.mockImplementation((wm: KodaXMessage[]) => wm);
-
-      const onPostCompact = vi.fn();
-      const hook = await buildManagedTaskCompactionHook(makeOptions(), {
-        contextTokenSnapshotRef: snapshotRef,
-        onPostCompact,
-      });
-      await hook!(messages);
-      expect(onPostCompact).toHaveBeenCalledTimes(1);
-    });
-
-    it('swallows errors thrown by onPostCompact (cache bug must not crash the hook)', async () => {
-      const messages: KodaXMessage[] = [{ role: 'user', content: 'tiny' }];
-      microcompactMock.mockReturnValueOnce([
-        { role: 'user', content: 'micro' },
-      ]);
-      const snapshotRef: ContextTokenSnapshotRef = {
-        current: snapshotAtApiTotal(50_000, messages),
-      };
-
-      const onPostCompact = vi.fn(() => {
-        throw new Error('cache went bang');
-      });
-      const hook = await buildManagedTaskCompactionHook(makeOptions(), {
-        contextTokenSnapshotRef: snapshotRef,
-        onPostCompact,
-      });
-      // Must not throw.
-      await expect(hook!(messages)).resolves.toBeDefined();
-      expect(onPostCompact).toHaveBeenCalledTimes(1);
-    });
+    await hook?.(messages);
+    expect(ref.current?.baselineEstimatedTokens).toBe(estimateTokens(compacted.messages));
+    expect(ref.current?.currentTokens).toBe(
+      20_000 + estimateTokens(compacted.messages),
+    );
   });
 
-  describe('SDK compaction override (KodaXOptions.compaction)', () => {
-    it('uses zhipu-coding glm-5.2 per-model 1M context window without contextWindow override', async () => {
-      const previousApiKey = process.env.ZHIPU_CODING_API_KEY;
-      const tempHome = await mkdtemp(path.join(os.tmpdir(), 'kodax-compaction-'));
-      setAgentConfigHome(tempHome);
-      process.env.ZHIPU_CODING_API_KEY = previousApiKey ?? 'test-key';
-      try {
-        const messages = buildLargeTranscript();
-        const snapshotRef: ContextTokenSnapshotRef = {
-          current: snapshotAtApiTotal(150_000, messages),
-        };
-        const hook = await buildManagedTaskCompactionHook(
-          makeOptions({ provider: 'zhipu-coding', model: 'glm-5.2' }),
-          { contextTokenSnapshotRef: snapshotRef },
-        );
-        const result = await hook!(messages);
-        expect(compactMock).not.toHaveBeenCalled();
-        expect(gracefulDegradationMock).not.toHaveBeenCalled();
-        expect(result).toBeUndefined();
-      } finally {
-        setAgentConfigHome(undefined);
-        if (previousApiKey === undefined) {
-          delete process.env.ZHIPU_CODING_API_KEY;
-        } else {
-          process.env.ZHIPU_CODING_API_KEY = previousApiKey;
-        }
-        await rm(tempHome, { recursive: true, force: true });
-      }
+  it('fails explicitly and leaves canonical history untouched when hard-pressure summary fails', async () => {
+    const messages = makeMessages();
+    const original = structuredClone(messages);
+    const ref: ContextTokenSnapshotRef = { current: snapshot(88_000, messages) };
+    compactMock.mockRejectedValue(new Error('summary provider unavailable'));
+    const hook = await buildManagedTaskCompactionHook(options(), {
+      resolvedContextCapacity: resolvedCapacity(100),
+      contextTokenSnapshotRef: ref,
     });
 
-    // These pin triggerPercent explicitly so they don't depend on the
-    // dev machine's ~/.kodax/config.json. They exercise the #1 + #4 fix:
-    // options.compaction flows through loadCompactionConfig and
-    // resolveContextWindow, so the override window actually controls the
-    // trigger threshold (the bug was AMA resolving a 1M model to 200K).
-    it('enabled=false disables the hook entirely', async () => {
-      const hook = await buildManagedTaskCompactionHook(
-        makeOptions({ compaction: { enabled: false } }),
-      );
-      expect(hook).toBeUndefined();
+    await expect(hook?.(messages)).rejects.toBeInstanceOf(ContextCapacityError);
+    expect(messages).toEqual(original);
+  });
+
+  it('fails open for an explicit early policy while physical capacity remains', async () => {
+    const messages = makeMessages();
+    const ref: ContextTokenSnapshotRef = { current: snapshot(75_000, messages) };
+    compactMock.mockRejectedValue(new Error('temporary summary failure'));
+    const hook = await buildManagedTaskCompactionHook(options(), {
+      resolvedContextCapacity: resolvedCapacity(70),
+      contextTokenSnapshotRef: ref,
     });
 
-    it('large contextWindow override raises the threshold so mid-size context does not compact', async () => {
-      const messages = buildLargeTranscript();
-      const snapshotRef: ContextTokenSnapshotRef = {
-        current: snapshotAtApiTotal(150_000, messages),
-      };
-      // 1M window * 80% = 800k threshold; 150k API total is well under it.
-      const hook = await buildManagedTaskCompactionHook(
-        makeOptions({ compaction: { contextWindow: 1_000_000, triggerPercent: 80 } }),
-        { contextTokenSnapshotRef: snapshotRef },
-      );
-      const result = await hook!(messages);
-      expect(compactMock).not.toHaveBeenCalled();
-      expect(gracefulDegradationMock).not.toHaveBeenCalled();
-      expect(result).toBeUndefined();
+    await expect(hook?.(messages)).resolves.toBeUndefined();
+    expect(messages[0]?.content).toContain('FULL_EVIDENCE_SENTINEL');
+  });
+
+  it('uses the circuit breaker only while physical capacity still exists', async () => {
+    const messages = makeMessages();
+    const ref: ContextTokenSnapshotRef = { current: snapshot(75_000, messages) };
+    compactMock.mockRejectedValue(new Error('temporary summary failure'));
+    const hook = await buildManagedTaskCompactionHook(options(), {
+      resolvedContextCapacity: resolvedCapacity(70),
+      contextTokenSnapshotRef: ref,
     });
 
-    it('small contextWindow override lowers the threshold so the same context compacts', async () => {
-      const messages = buildLargeTranscript();
-      const snapshotRef: ContextTokenSnapshotRef = {
-        current: snapshotAtApiTotal(150_000, messages),
-      };
-      compactMock.mockResolvedValueOnce({
-        compacted: true,
-        messages: [{ role: 'user', content: 'compacted' }],
-        tokensBefore: 150_000,
-        tokensAfter: 40_000,
-        entriesRemoved: 2,
-      } satisfies CompactionResult);
-      // 100k window * 80% = 80k threshold; 150k API total is over it.
-      const hook = await buildManagedTaskCompactionHook(
-        makeOptions({ compaction: { contextWindow: 100_000, triggerPercent: 80 } }),
-        { contextTokenSnapshotRef: snapshotRef },
-      );
-      await hook!(messages);
-      expect(compactMock).toHaveBeenCalledTimes(1);
+    await hook?.(messages);
+    await hook?.(messages);
+    await hook?.(messages);
+    await hook?.(messages);
+    expect(compactMock).toHaveBeenCalledTimes(3);
+
+    ref.current = snapshot(88_000, messages);
+    compactMock.mockResolvedValueOnce(compactedResult(messages));
+    await hook?.(messages);
+    expect(compactMock).toHaveBeenCalledTimes(4);
+  });
+
+  it('fires lifecycle events and post-compact invalidation only after a real rewrite', async () => {
+    const messages = makeMessages();
+    const onCompactStart = vi.fn();
+    const onCompactEnd = vi.fn();
+    const onCompactedMessages = vi.fn();
+    const onPostCompact = vi.fn();
+    compactMock.mockResolvedValue(compactedResult(messages));
+    const hook = await buildManagedTaskCompactionHook(options({
+      onCompactStart,
+      onCompactEnd,
+      onCompactedMessages,
+    }), {
+      resolvedContextCapacity: resolvedCapacity(100),
+      contextTokenSnapshotRef: { current: snapshot(88_000, messages) },
+      onPostCompact,
     });
+
+    await hook?.(messages);
+    expect(onCompactStart).toHaveBeenCalledTimes(1);
+    expect(onCompactEnd).toHaveBeenCalledTimes(1);
+    expect(onCompactedMessages).toHaveBeenCalledTimes(1);
+    expect(onPostCompact).toHaveBeenCalledTimes(1);
   });
 });

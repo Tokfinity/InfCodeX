@@ -119,7 +119,15 @@ export {
   truncateTail,
   truncateLine,
   persistToolOutput,
+  resolveToolOutputDir,
 } from './truncate.js';
+export {
+  cleanupExpiredToolOutputs,
+  cleanupUnreferencedToolOutputs,
+  maybeRunReferenceAwareToolOutputGc,
+  maybeRunToolOutputGc,
+} from './tool-output-gc.js';
+export type { ToolOutputGcResult } from './tool-output-gc.js';
 export {
   applyToolResultGuardrail,
   getToolResultPolicy,
@@ -133,6 +141,7 @@ export type {
   ToolResultBudget,
   ToolResultBudgetReason,
   ToolResultBudgetUsageInput,
+  ToolResultCapacity,
 } from './tool-result-budget.js';
 export {
   TOOL_CALL_DEFINITION,

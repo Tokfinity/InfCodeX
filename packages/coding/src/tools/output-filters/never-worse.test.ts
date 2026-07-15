@@ -10,7 +10,7 @@ describe('neverWorse', () => {
     expect(neverWorse('ok', 'ok with extra explanation')).toBe('ok');
   });
 
-  it('keeps filtered output on ties', () => {
-    expect(neverWorse('a', 'b')).toBe('b');
+  it('keeps raw output on ties because a rewrite without token savings is not an optimization', () => {
+    expect(neverWorse('a', 'b')).toBe('a');
   });
 });

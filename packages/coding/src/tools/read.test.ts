@@ -5,6 +5,7 @@ import { afterEach, beforeEach, describe, expect, it } from 'vitest';
 import { applyToolResultGuardrail } from './tool-result-policy.js';
 import { DEFAULT_TOOL_OUTPUT_MAX_BYTES } from './truncate.js';
 import { toolRead } from './read.js';
+import { getToolDefinition } from './registry.js';
 
 describe('toolRead', () => {
   let tempDir = '';
@@ -71,6 +72,58 @@ describe('toolRead', () => {
     expect(result).toContain('line-10');
     expect(result).toContain('line-12');
     expect(result).not.toContain('line-9');
+  });
+
+  it('continues a long Unicode line exactly without claiming end-of-file early', async () => {
+    const filePath = path.join(tempDir, 'long-line.txt');
+    const content = '🙂'.repeat(4500);
+    await fs.writeFile(filePath, content, 'utf-8');
+
+    const first = await toolRead({ path: filePath, limit: 1 }, {
+      backups: new Map(),
+      executionCwd: tempDir,
+    });
+    const second = await toolRead({ path: filePath, offset: 1, limit: 1, line_offset: 2000 }, {
+      backups: new Map(),
+      executionCwd: tempDir,
+    });
+    const third = await toolRead({ path: filePath, offset: 1, limit: 1, line_offset: 4000 }, {
+      backups: new Map(),
+      executionCwd: tempDir,
+    });
+
+    expect(typeof first).toBe('string');
+    expect(typeof second).toBe('string');
+    expect(typeof third).toBe('string');
+    if (typeof first !== 'string' || typeof second !== 'string' || typeof third !== 'string') {
+      throw new Error('Expected text read results');
+    }
+
+    const body = (value: string): string =>
+      (value.split('\n\n')[0] ?? '').replace(/^\s*1\t/, '');
+
+    expect(body(first) + body(second) + body(third)).toBe(content);
+    expect(first).toContain(
+      '[Line 1 is partial: showing Unicode characters 0-1999 of 4500. Continue with offset=1 limit=1 line_offset=2000.]',
+    );
+    expect(second).toContain(
+      '[Line 1 is partial: showing Unicode characters 2000-3999 of 4500. Continue with offset=1 limit=1 line_offset=4000.]',
+    );
+    expect(first).not.toContain('[End of file');
+    expect(second).not.toContain('[End of file');
+    expect(third).toContain('[End of file - 1 lines total]');
+    expect(first + second + third).not.toContain('\uFFFD');
+  });
+
+  it('documents line_offset as the exact continuation cursor for partial lines', () => {
+    const definition = getToolDefinition('read');
+    const schema = definition?.input_schema as {
+      properties?: Record<string, { description?: string }>;
+    } | undefined;
+
+    expect(definition?.description).toContain('partial-line continuation marker');
+    expect(schema?.properties?.line_offset?.description).toContain('Unicode character offset');
+    expect(schema?.properties?.line_offset?.description).toContain('continuation marker');
   });
 
   it('rejects binary files', async () => {

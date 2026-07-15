@@ -134,7 +134,7 @@ function collectToolResultIds(message: KodaXMessage): string[] {
 function isSafeAuthoritativeTranscript(messages: readonly KodaXMessage[]): boolean {
   const firstNonSystem = messages.find((message) => message.role !== 'system');
   if (!firstNonSystem) {
-    return messages.length === 0;
+    return false;
   }
   if (firstNonSystem.role !== 'user') {
     return false;
