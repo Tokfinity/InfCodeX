@@ -55,7 +55,8 @@ All notable changes to this project will be documented in this file.
   running/paused Workflows and non-terminal or unknown External Agent tasks now
   block stop and participate in the management revision. Reverse-result frames
   remain outside the durable journal so credentials and Host Tool results are
-  not persisted.
+  not persisted. In-flight stop conflicts identify the active mutation methods
+  and counts so lifecycle stalls can be diagnosed without reproducing them.
 
 ## [0.7.69] - 2026-07-15
 

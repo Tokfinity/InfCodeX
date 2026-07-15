@@ -58,8 +58,12 @@ npm run build
     profile token is removed between discovery and read. The probe must observe
     changed/missing state and retry normally; raw `ENOENT` must not escape to
     `connectKodaXRuntime()`.
+13. Keep one mutation in flight and request daemon shutdown. Assert the typed
+    `conflict` identifies the active method and count. After the mutation
+    settles, retry the atomic shutdown request directly and assert it succeeds
+    without a separate preflight/stop race.
 
 Expected result: `1 -> 2 -> 1`, no internal-connection inflation, no stale
 stop, no background-work abandonment, no reverse-bridge mutation after
-draining, no token-read race, no dual owner, two daemon-to-inline-to-daemon
-cycles, and no run or side-effect replay.
+draining, actionable in-flight diagnostics, no token-read race, no dual owner,
+two daemon-to-inline-to-daemon cycles, and no run or side-effect replay.
