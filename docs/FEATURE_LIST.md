@@ -262,6 +262,13 @@
 > This schedule correction supersedes the earlier `v0.7.70` target references
 > above without rewriting their historical record.
 >
+> **2026-07-15 F269 embedder patch**: the feature-free `v0.7.70` patch fixes
+> logical daemon client accounting and adds a public, revisioned, atomic
+> daemon-to-inline rollback contract. Process-distinct automation proves
+> `1 -> 2 -> 1` clients, stale-commit rejection, detach-only `close()`, and two
+> daemon/inline owner cycles. F269 remains assigned to `v0.7.69`; this is a
+> compatibility fix, not a new Feature or a reschedule of F266/F270.
+>
 > **2026-07-12 F225 early cleanup slice**: the Classic readline
 > reverse-video StatusBar was proven write-only (`update()` calls with no
 > production `show()`/`toggle()`), internal-only, and independent of the live

@@ -76,6 +76,41 @@ describe('runtime daemon client proxy', () => {
     await client.close();
   });
 
+  it('maps typed daemon inspection and safe inline rollback without leaking operation metadata', async () => {
+    const calls: Array<{ readonly method: string; readonly params: unknown }> = [];
+    const client = createRuntimeDaemonClient({
+      identity: {
+        runtimeId: 'runtime-management',
+        mode: 'daemon',
+        profile: 'default',
+        startedAt: '2026-07-15T00:00:00.000Z',
+        version: '0.7.70',
+      },
+      transport: fakeTransport(calls),
+    });
+
+    const state = await client.daemon.inspect();
+    await expect(client.daemon.stopForInline({
+      expectedRuntimeId: state.runtimeId,
+      expectedRevision: state.revision,
+      expectedOwnerPolicyRevision: state.ownerPolicy.revision,
+      operation: { operationId: 'op-rollback' },
+    })).resolves.toMatchObject({ accepted: true, ownerPolicy: { mode: 'inline' } });
+
+    expect(calls).toEqual([
+      { method: 'daemon.management.get', params: undefined },
+      {
+        method: 'daemon.rollbackToInline',
+        params: {
+          expectedRuntimeId: 'runtime-management',
+          expectedRevision: 4,
+          expectedOwnerPolicyRevision: 2,
+        },
+      },
+    ]);
+    await client.close();
+  });
+
   it('maps sessions and run handles onto daemon requests', async () => {
     const calls: Array<{ readonly method: string; readonly params: unknown }> = [];
     const transport = fakeTransport(calls);
@@ -873,6 +908,39 @@ function fakeTransport(
       }
       if (method === 'run.start') {
         return { runId: 'run-1', sessionId: 'session-1' };
+      }
+      if (method === 'daemon.management.get') {
+        return {
+          runtimeId: 'runtime-management',
+          revision: 4,
+          ownerPolicy: {
+            mode: 'daemon',
+            revision: 2,
+            updatedAt: '2026-07-15T00:00:00.000Z',
+          },
+          preflight: {
+            runtimeId: 'runtime-management',
+            clientCount: 1,
+            activeRuns: [],
+            queuedRuns: [],
+            pendingPermissions: [],
+            pendingUserInputs: [],
+            blockers: [],
+            canStop: true,
+          },
+        };
+      }
+      if (method === 'daemon.rollbackToInline') {
+        return {
+          accepted: true,
+          runtimeId: 'runtime-management',
+          revision: 5,
+          ownerPolicy: {
+            mode: 'inline',
+            revision: 3,
+            updatedAt: '2026-07-15T00:00:01.000Z',
+          },
+        };
       }
       if (method === 'run.input.submit') {
         return {

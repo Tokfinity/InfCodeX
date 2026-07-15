@@ -6,6 +6,26 @@ All notable changes to this project will be documented in this file.
 
 ## [Unreleased]
 
+## [0.7.70] - Unreleased
+
+### Added
+
+- **Typed shared-daemon rollback management (FEATURE_269 patch).** Daemon
+  facades now expose revisioned management inspection and atomic
+  `stopForInline()`, plus public owner-fence queries and revision-free daemon
+  re-enable helpers for safe embedder rollback workflows.
+
+### Fixed
+
+- **Logical daemon client accounting.** Stop preflight now counts only live,
+  initialized SDK clients. Daemon self-connections and read-only health probes
+  are excluded, and awaited client close converges the count across processes.
+- **Preflight/stop race.** Rollback commit gates new clients and mutations,
+  validates the same Runtime, management revision, owner-policy revision, and
+  blockers, and changes sticky inline policy while the verified daemon still
+  owns the profile fence. Stale commits fail with structured `conflict` and do
+  not stop or change policy.
+
 ## [0.7.69] - Unreleased
 
 > Scope note: this release delivers **FEATURE_267**, **FEATURE_268**, and

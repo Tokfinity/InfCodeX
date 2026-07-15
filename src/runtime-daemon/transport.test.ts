@@ -163,8 +163,9 @@ describe('runtime daemon transport', () => {
 
     await expect(transport.request('daemon.logs')).rejects.toThrow('log stream failed');
     const pending = transport.request('daemon.status');
+    const rejected = expect(pending).rejects.toThrow('Runtime daemon transport closed.');
     await transport.close?.();
-    await expect(pending).rejects.toThrow('Runtime daemon transport closed.');
+    await rejected;
   });
 
   it('notifies clients immediately when the daemon connection closes', async () => {

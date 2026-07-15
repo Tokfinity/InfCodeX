@@ -53,6 +53,7 @@ export async function observeRuntimeDaemonHealth(
     );
     const request = transport.request('initialize', {
       profile: state.profile,
+      connectionPurpose: 'probe',
       ...(token !== undefined ? { token } : {}),
     });
     request.catch(() => undefined);

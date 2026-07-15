@@ -510,8 +510,12 @@ describe('runtime daemon dispatcher', () => {
       ));
       dispatcher.close();
 
+      const implemented = isRuntimeDaemonSuccessResponse(response) || (
+        (method === 'daemon.management.get' || method === 'daemon.rollbackToInline')
+        && response.error.code === 'client_upgrade_required'
+      );
       expect(
-        isRuntimeDaemonSuccessResponse(response),
+        implemented,
         `${method} should be implemented by runtime daemon dispatcher`,
       ).toBe(true);
     }
@@ -1184,6 +1188,12 @@ const METHOD_SMOKE_PARAMS = {
   'daemon.stop': undefined,
   'daemon.logs': undefined,
   'daemon.preflight': undefined,
+  'daemon.management.get': undefined,
+  'daemon.rollbackToInline': {
+    expectedRuntimeId: 'runtime-smoke',
+    expectedRevision: 0,
+    expectedOwnerPolicyRevision: 0,
+  },
   'operation.get': { operationId: 'op-missing', journalEpoch: 'epoch-missing' },
   'session.create': { sessionId: 'session-smoke', title: 'Smoke Session' },
   'session.load': { sessionId: 'session-1' },

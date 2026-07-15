@@ -164,6 +164,9 @@ export async function createRuntimeDaemonSocketClientTransport(
 ): Promise<RuntimeDaemonClientTransport> {
   const socket = net.createConnection(endpoint.path);
   socket.setEncoding('utf8');
+  const socketClosed = new Promise<void>((resolve) => {
+    socket.once('close', () => resolve());
+  });
 
   await waitForConnect(socket, options.connectTimeoutMs);
 
@@ -322,14 +325,22 @@ export async function createRuntimeDaemonSocketClientTransport(
       };
     },
     async close() {
-      if (closed) return;
-      closed = true;
-      disconnect('Runtime daemon transport closed by client.', false);
-      parser.flush();
-      socket.end();
-      socket.destroy();
-      rejectPending(pending, new Error('Runtime daemon transport closed.'));
+      let flushError: Error | undefined;
+      if (!closed) {
+        closed = true;
+        disconnect('Runtime daemon transport closed by client.', false);
+        try {
+          parser.flush();
+        } catch (error: unknown) {
+          flushError = normalizeTransportError(error);
+        }
+        socket.end();
+        socket.destroy();
+        rejectPending(pending, new Error('Runtime daemon transport closed.'));
+      }
+      await socketClosed;
       lifecycleListeners.clear();
+      if (flushError !== undefined) throw flushError;
     },
   };
 }

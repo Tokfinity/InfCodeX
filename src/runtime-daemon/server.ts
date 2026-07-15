@@ -11,6 +11,7 @@ import type {
   RuntimeCompactSessionInput,
   RuntimeCreateSessionInput,
   RuntimeDaemonPreflight,
+  RuntimeDaemonRollbackInput,
   RuntimeEvent,
   RuntimeEventFilter,
   RuntimeEventReplayFilter,
@@ -48,6 +49,7 @@ import {
   isRuntimeDaemonMutationMethod,
 } from './protocol.js';
 import type { RuntimeControlJournal } from './control-journal.js';
+import type { RuntimeDaemonManagementController } from './management.js';
 import {
   RUNTIME_DAEMON_METHOD_SCHEMAS,
   validateRuntimeDaemonJsonSchema,
@@ -83,6 +85,7 @@ export interface RuntimeDaemonDispatcherOptions {
   readonly grantedScopes?: readonly RuntimeGrantedScope[];
   readonly reverseBridgeHub?: RuntimeDaemonReverseBridgeHub;
   readonly durableHostToolInvocations?: boolean;
+  readonly management?: RuntimeDaemonManagementController;
 }
 
 export interface RuntimeDaemonDispatcher {
@@ -96,6 +99,9 @@ const MAX_DAEMON_RUN_RESULT_RECORDS = 1_000;
 const CODER_DAEMON_SESSION_SURFACES = [
   'code', 'cli', 'repl', 'acp', 'a2a', 'sdk', 'ide', 'space-desktop',
 ] as const;
+const RUNTIME_PROBE_METHODS = new Set<RuntimeDaemonMethod>([
+  'ping', 'runtime.identity', 'runtime.status', 'runtime.capabilities', 'daemon.status',
+]);
 
 const ALL_RUNTIME_GRANTED_SCOPES = [
   'session:observe',
@@ -162,7 +168,10 @@ const RUNTIME_METHOD_SCOPES: ReadonlyMap<RuntimeDaemonMethod, RuntimeGrantedScop
     'agentTasks.list', 'agentTasks.get', 'agentTasks.events', 'agentTasks.wait', 'agentTasks.start',
     'agentTasks.sendInput', 'agentTasks.cancel', 'agentTasks.reconcile',
   ]),
-  ...scopeEntries('daemon:admin', ['runtime.shutdown', 'daemon.stop', 'daemon.preflight']),
+  ...scopeEntries('owner:admin', ['daemon.rollbackToInline']),
+  ...scopeEntries('daemon:admin', [
+    'runtime.shutdown', 'daemon.stop', 'daemon.preflight', 'daemon.management.get',
+  ]),
 ]);
 
 const UNSCOPED_RUNTIME_METHODS = RUNTIME_DAEMON_METHODS.filter((method) => (
@@ -243,6 +252,8 @@ export function createRuntimeDaemonDispatcher(
   let reverseBridge = privateReverseBridge;
   let reverseBridgeAttachment: RuntimeDaemonReverseBridgeHubAttachment | undefined;
   let initialized = false;
+  let logicalClientAttached = false;
+  let connectionPurpose: 'client' | 'probe' = 'client';
   let clientCapabilities: RuntimeClientCapabilities = {};
   let principalId = `client_${randomUUID().replace(/-/g, '')}`;
   let clientName: string | undefined;
@@ -297,8 +308,16 @@ export function createRuntimeDaemonDispatcher(
       if (initialized && isInitializeMethod(request.method)) {
         throw daemonError('conflict', 'Runtime daemon connection is already initialized.');
       }
+      if (
+        initialized
+        && connectionPurpose === 'probe'
+        && !RUNTIME_PROBE_METHODS.has(request.method)
+      ) {
+        throw daemonError('unauthorized', 'Runtime daemon probe connections are read-only and method-limited.');
+      }
       if (isInitializeMethod(request.method)) {
         initializeParams = optionalRecord(request.params);
+        connectionPurpose = initializeParams?.connectionPurpose === 'probe' ? 'probe' : 'client';
         const token = typeof initializeParams?.token === 'string'
           ? initializeParams.token
           : undefined;
@@ -349,7 +368,11 @@ export function createRuntimeDaemonDispatcher(
       validateDaemonMethodValue(request.method, 'result', result, 'internal_error');
       if (isInitializeMethod(request.method)) {
         clientCapabilities = parseRuntimeClientCapabilities(initializeParams?.capabilities);
-        if (options.reverseBridgeHub !== undefined && options.notify !== undefined) {
+        if (
+          connectionPurpose === 'client'
+          && options.reverseBridgeHub !== undefined
+          && options.notify !== undefined
+        ) {
           reverseBridgeAttachment = options.reverseBridgeHub.attach({
             principalId,
             connectionId,
@@ -360,6 +383,16 @@ export function createRuntimeDaemonDispatcher(
           });
           reverseBridge = reverseBridgeAttachment.bridge;
           privateReverseBridge.close();
+        }
+        if (connectionPurpose === 'client' && options.management !== undefined) {
+          try {
+            options.management.attachClient(connectionId);
+            logicalClientAttached = true;
+          } catch (error: unknown) {
+            reverseBridgeAttachment?.close();
+            reverseBridgeAttachment = undefined;
+            throw error;
+          }
         }
         initialized = true;
       }
@@ -377,6 +410,10 @@ export function createRuntimeDaemonDispatcher(
       }
       if (reverseBridgeAttachment !== undefined) reverseBridgeAttachment.close();
       else reverseBridge.close();
+      if (logicalClientAttached) {
+        options.management?.detachClient(connectionId);
+        logicalClientAttached = false;
+      }
     },
   };
 }
@@ -388,8 +425,13 @@ async function dispatchWithOperation(
   principalId: string,
   dispatch: () => Promise<unknown>,
 ): Promise<unknown> {
+  const execute = (): Promise<unknown> => (
+    options.management !== undefined && isManagedRuntimeMutation(request.method)
+      ? options.management.runMutation(dispatch)
+      : dispatch()
+  );
   if (!isRuntimeDaemonMutationMethod(request.method) || options.requireOperationEnvelope !== true) {
-    return dispatch();
+    return execute();
   }
   if (capabilities.operationDeduplication !== true) {
     throw daemonError(
@@ -416,7 +458,14 @@ async function dispatchWithOperation(
     // Once dispatch begins, every mutation may have changed durable or
     // externally visible state before its applied receipt is persisted.
     externalEffect: true,
-  }, dispatch);
+  }, execute);
+}
+
+function isManagedRuntimeMutation(method: RuntimeDaemonMethod): boolean {
+  return isRuntimeDaemonMutationMethod(method)
+    && method !== 'daemon.stop'
+    && method !== 'runtime.shutdown'
+    && method !== 'daemon.rollbackToInline';
 }
 
 function requireRuntimeMethodScope(
@@ -495,6 +544,7 @@ async function dispatchRuntimeDaemonRequest(
           options.controlJournal,
           options.reverseBridgeHub !== undefined,
           options.durableHostToolInvocations === true,
+          options.management !== undefined,
         ),
         principalId,
         ...(options.controlJournal !== undefined
@@ -514,14 +564,37 @@ async function dispatchRuntimeDaemonRequest(
       );
     case 'daemon.stop':
     case 'runtime.shutdown':
-      return options.stop ? options.stop() : runtime.close().then(() => ({ ok: true }));
+      return options.management
+        ? options.management.stop()
+        : options.stop ? options.stop() : runtime.close().then(() => ({ ok: true }));
     case 'daemon.logs':
       return options.logs ? options.logs() : { entries: [] };
     case 'daemon.preflight':
       return augmentPreflightRunRequirements(
-        await (options.preflight ? options.preflight() : runtime.status.preflight()),
+        await (
+          options.management
+            ? options.management.preflight()
+            : options.preflight ? options.preflight() : runtime.status.preflight()
+        ),
         runRequirementSource,
       );
+    case 'daemon.management.get':
+      if (!options.management) {
+        throw daemonError('client_upgrade_required', 'Runtime daemon management is unavailable.');
+      }
+      return options.management.inspect();
+    case 'daemon.rollbackToInline': {
+      if (!options.management) {
+        throw daemonError('client_upgrade_required', 'Runtime daemon rollback management is unavailable.');
+      }
+      const params = requireRecord(request.params);
+      const rollback: RuntimeDaemonRollbackInput = {
+        expectedRuntimeId: requireStringField(params, 'expectedRuntimeId'),
+        expectedRevision: requireIntegerField(params, 'expectedRevision'),
+        expectedOwnerPolicyRevision: requireIntegerField(params, 'expectedOwnerPolicyRevision'),
+      };
+      return options.management.rollbackToInline(rollback);
+    }
     case 'runtime.capabilities':
       return runtimeDaemonCapabilities(
         options.capabilities,
@@ -529,6 +602,7 @@ async function dispatchRuntimeDaemonRequest(
         options.controlJournal,
         options.reverseBridgeHub !== undefined,
         options.durableHostToolInvocations === true,
+        options.management !== undefined,
       );
     case 'operation.get': {
       const params = requireRecord(request.params);
@@ -1163,6 +1237,7 @@ function runtimeDaemonCapabilities(
   controlJournal?: RuntimeControlJournal,
   reverseBridgeResume = false,
   durableHostToolInvocations = false,
+  daemonManagement = false,
 ): Record<string, unknown> {
   const reverseBridgeLimits = runtimeDaemonReverseBridgeLimits();
   return {
@@ -1203,6 +1278,15 @@ function runtimeDaemonCapabilities(
     connectionLifecycle: { version: 1 },
     typedRuntimeEvents: { version: 1 },
     daemonSafeRunInput: { version: 1 },
+    ...(daemonManagement ? {
+      daemonManagement: {
+        version: 1,
+        logicalClientCount: true,
+        revisionedStop: true,
+        ownerPolicy: true,
+        ownerFenceState: true,
+      },
+    } : {}),
     sharedSessionSettings: {
       version: 1,
       keys: [

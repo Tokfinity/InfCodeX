@@ -6,6 +6,14 @@ import path from 'node:path';
 import { afterEach, describe, expect, it } from 'vitest';
 
 import {
+  acquireKodaXInlineOwner,
+  connectKodaXRuntime,
+  enableKodaXDaemonOwner,
+  getKodaXRuntimeOwnerState,
+  type KodaXDaemonRuntime,
+} from './sdk-runtime.js';
+
+import {
   resolveRuntimeDaemonPaths,
   tryAcquireRuntimeDaemonLock,
   writeRuntimeDaemonState,
@@ -120,6 +128,118 @@ describe('daemon CLI smoke', () => {
       kind: 'daemon',
     });
   }, 120_000);
+
+  it('counts process-distinct logical clients and atomically switches daemon ownership twice', async () => {
+    const homeDir = fs.mkdtempSync(path.join(os.tmpdir(), 'kodax-daemon-management-smoke-'));
+    tempRoots.push(homeDir);
+    const profile = `management-${process.pid}-${Date.now()}`;
+    const first = await connectKodaXRuntime({
+      homeDir,
+      profile,
+      autoStart: true,
+      clientInfo: { name: 'management-parent', instanceId: 'management-parent' },
+      requirements: { daemonManagement: 1 },
+    });
+    await expect(first.status.preflight()).resolves.toMatchObject({
+      clientCount: 1,
+      blockers: [],
+      canStop: true,
+    });
+    const stale = await first.daemon.inspect();
+
+    const readyFile = path.join(homeDir, 'child-ready');
+    const releaseFile = path.join(homeDir, 'child-release');
+    const childScript = `
+      const fs = await import('node:fs');
+      const { connectKodaXRuntime } = await import('./src/sdk-runtime.ts');
+      const runtime = await connectKodaXRuntime({
+        homeDir: process.argv[1], profile: process.argv[2], autoStart: false,
+        clientInfo: { name: 'management-child', instanceId: 'management-child' },
+        requirements: { daemonManagement: 1 },
+      });
+      fs.writeFileSync(process.argv[3], 'ready', 'utf8');
+      while (!fs.existsSync(process.argv[4])) {
+        await new Promise((resolve) => setTimeout(resolve, 20));
+      }
+      await runtime.close();
+      process.stdout.write(JSON.stringify({ runtimeId: runtime.identity.runtimeId }) + '\\n');
+    `;
+    const child = runSdkProbe(childScript, homeDir, profile, readyFile, releaseFile);
+    try {
+      await waitForFile(readyFile);
+      await expect(first.status.preflight()).resolves.toMatchObject({
+        clientCount: 2,
+        blockers: ['connected_clients'],
+        canStop: false,
+      });
+      await expect(first.daemon.stopForInline({
+        expectedRuntimeId: stale.runtimeId,
+        expectedRevision: stale.revision,
+        expectedOwnerPolicyRevision: stale.ownerPolicy.revision,
+      })).rejects.toMatchObject({ code: 'conflict' });
+    } finally {
+      fs.writeFileSync(releaseFile, 'release', 'utf8');
+    }
+    await child;
+    await waitForDaemonClientCount(first, 1);
+    const firstCommit = await first.daemon.inspect();
+    await expect(first.daemon.stopForInline({
+      expectedRuntimeId: firstCommit.runtimeId,
+      expectedRevision: firstCommit.revision,
+      expectedOwnerPolicyRevision: firstCommit.ownerPolicy.revision,
+    })).resolves.toMatchObject({ accepted: true, ownerPolicy: { mode: 'inline', revision: 1 } });
+    await first.close();
+    await waitForDaemonState(profile, homeDir, false);
+    expect(getKodaXRuntimeOwnerState({ homeDir, profile })).toMatchObject({
+      policy: { mode: 'inline', revision: 1 },
+      ownerStatus: 'unowned',
+      owner: null,
+    });
+
+    const firstInline = acquireKodaXInlineOwner({ homeDir, profile });
+    expect(firstInline.ownerPolicy).toMatchObject({ mode: 'inline', revision: 1 });
+    firstInline.close();
+    expect(enableKodaXDaemonOwner({ homeDir, profile })).toMatchObject({ mode: 'daemon', revision: 2 });
+
+    const second = await connectKodaXRuntime({
+      homeDir,
+      profile,
+      autoStart: true,
+      clientInfo: { name: 'management-second', instanceId: 'management-second' },
+      requirements: { daemonManagement: 1 },
+    });
+    const secondCommit = await second.daemon.inspect();
+    await second.daemon.stopForInline({
+      expectedRuntimeId: secondCommit.runtimeId,
+      expectedRevision: secondCommit.revision,
+      expectedOwnerPolicyRevision: secondCommit.ownerPolicy.revision,
+    });
+    await second.close();
+    await waitForDaemonState(profile, homeDir, false);
+
+    const secondInline = acquireKodaXInlineOwner({ homeDir, profile });
+    expect(secondInline.ownerPolicy).toMatchObject({ mode: 'inline', revision: 3 });
+    secondInline.close();
+    expect(enableKodaXDaemonOwner({ homeDir, profile })).toMatchObject({ mode: 'daemon', revision: 4 });
+
+    const third = await connectKodaXRuntime({
+      homeDir,
+      profile,
+      autoStart: true,
+      clientInfo: { name: 'management-third', instanceId: 'management-third' },
+      requirements: { daemonManagement: 1 },
+    });
+    expect(getKodaXRuntimeOwnerState({ homeDir, profile })).toMatchObject({
+      policy: { mode: 'daemon', revision: 4 },
+      ownerStatus: 'owned',
+      owner: { runtimeId: third.identity.runtimeId, kind: 'daemon' },
+    });
+    await expect(third.status.preflight()).resolves.toMatchObject({ clientCount: 1 });
+    await third.close();
+    await expect(runDaemonCommand([
+      'status', '--home', homeDir, '--profile', profile, '--json',
+    ])).resolves.toMatchObject({ health: 'healthy' });
+  }, 180_000);
 
   it('converges process-distinct SDK clients and brokers a scoped credential without persistence', async () => {
     const homeDir = fs.mkdtempSync(path.join(os.tmpdir(), 'kodax-daemon-shared-smoke-'));
@@ -570,6 +690,43 @@ function readAllDaemonText(homeDir: string): string {
   };
   visit(root);
   return content.join('\n');
+}
+
+async function waitForFile(file: string): Promise<void> {
+  const deadline = Date.now() + 30_000;
+  while (Date.now() <= deadline) {
+    if (fs.existsSync(file)) return;
+    await new Promise((resolve) => setTimeout(resolve, 25));
+  }
+  throw new Error(`Timed out waiting for process marker: ${file}`);
+}
+
+async function waitForDaemonClientCount(
+  runtime: Pick<KodaXDaemonRuntime, 'status'>,
+  expected: number,
+): Promise<void> {
+  const deadline = Date.now() + 30_000;
+  while (Date.now() <= deadline) {
+    const preflight = await runtime.status.preflight();
+    if (preflight.clientCount === expected) return;
+    await new Promise((resolve) => setTimeout(resolve, 25));
+  }
+  throw new Error(`Timed out waiting for daemon client count ${expected}.`);
+}
+
+async function waitForDaemonState(
+  profile: string,
+  homeDir: string,
+  present: boolean,
+): Promise<void> {
+  const paths = resolveRuntimeDaemonPaths(homeDir, profile);
+  const deadline = Date.now() + 30_000;
+  while (Date.now() <= deadline) {
+    const exists = fs.existsSync(paths.stateFile) || fs.existsSync(paths.lockFile);
+    if (exists === present) return;
+    await new Promise((resolve) => setTimeout(resolve, 25));
+  }
+  throw new Error(`Timed out waiting for daemon state present=${present}.`);
 }
 
 async function stopDaemonBestEffort(homeDir: string): Promise<void> {

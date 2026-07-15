@@ -143,7 +143,9 @@ import {
 } from './runtime-daemon/transport.js';
 import {
   acquireRuntimeInlineOwner,
+  enableRuntimeDaemonOwner,
   readRuntimeDaemonLockOwner,
+  readRuntimeOwnerPolicy,
   readRuntimeDaemonToken,
   releaseRuntimeDaemonLock,
   resolveRuntimeDaemonPaths,
@@ -207,7 +209,28 @@ export type { RuntimeWorkerOptions, RuntimeWorkerResourceLimits } from './runtim
 export interface RuntimeInlineOwnerHandle {
   readonly profile: string;
   readonly ownerId: string;
+  readonly ownerPolicy: RuntimeOwnerPolicyState;
   close(): void;
+}
+
+export interface RuntimeOwnerPolicyState {
+  readonly mode: 'daemon' | 'inline';
+  readonly revision: number;
+  readonly updatedAt: string;
+}
+
+export interface RuntimeOwnerIdentity {
+  readonly runtimeId: string;
+  readonly pid: number;
+  readonly createdAt: string;
+  readonly kind?: 'daemon' | 'inline';
+}
+
+export interface RuntimeOwnerState {
+  readonly profile: string;
+  readonly policy: RuntimeOwnerPolicyState;
+  readonly ownerStatus: 'unowned' | 'owned' | 'unreadable';
+  readonly owner: RuntimeOwnerIdentity | null;
 }
 
 /**
@@ -232,12 +255,53 @@ export function acquireKodaXInlineOwner(input: {
   return {
     profile: paths.profile,
     ownerId,
+    ownerPolicy: readRuntimeOwnerPolicy(paths),
     close() {
       if (closed) return;
       closed = true;
       releaseRuntimeDaemonLock(lock);
     },
   };
+}
+
+export function getKodaXRuntimeOwnerPolicy(input: {
+  readonly homeDir?: string;
+  readonly profile?: string;
+} = {}): RuntimeOwnerPolicyState {
+  return readRuntimeOwnerPolicy(resolveRuntimeDaemonPaths(
+    path.resolve(input.homeDir ?? os.homedir()),
+    input.profile ?? 'default',
+  ));
+}
+
+export function getKodaXRuntimeOwnerState(input: {
+  readonly homeDir?: string;
+  readonly profile?: string;
+} = {}): RuntimeOwnerState {
+  const paths = resolveRuntimeDaemonPaths(
+    path.resolve(input.homeDir ?? os.homedir()),
+    input.profile ?? 'default',
+  );
+  const owner = readRuntimeDaemonLockOwner(paths.lockFile);
+  return {
+    profile: paths.profile,
+    policy: readRuntimeOwnerPolicy(paths),
+    ownerStatus: owner !== undefined
+      ? 'owned'
+      : fs.existsSync(paths.lockFile) ? 'unreadable' : 'unowned',
+    owner: owner ?? null,
+  };
+}
+
+/** Enable daemon auto-start after the inline owner has released its fence. */
+export function enableKodaXDaemonOwner(input: {
+  readonly homeDir?: string;
+  readonly profile?: string;
+} = {}): RuntimeOwnerPolicyState {
+  return enableRuntimeDaemonOwner(resolveRuntimeDaemonPaths(
+    path.resolve(input.homeDir ?? os.homedir()),
+    input.profile ?? 'default',
+  ));
 }
 
 export function setKodaXRuntimeOwnerMode(input: {
@@ -432,6 +496,7 @@ export interface RuntimeCapabilityRequirements {
   readonly daemonSafeRunInput?: 1;
   readonly sharedSessionSettings?: 1;
   readonly durableRecoveryQueries?: 1;
+  readonly daemonManagement?: 1;
 }
 
 export type RuntimeOperationState =
@@ -1109,6 +1174,7 @@ export interface RuntimeDaemonRunService extends Omit<RuntimeRunService, 'start'
 
 export type KodaXDaemonRuntime = Omit<KodaXRuntime, 'runs'> & {
   readonly runs: RuntimeDaemonRunService;
+  readonly daemon: RuntimeDaemonManagementService;
 };
 
 export interface RuntimeRunStatus {
@@ -1683,6 +1749,34 @@ export interface RuntimeDaemonPreflight {
   readonly canStop: boolean;
 }
 
+export interface RuntimeDaemonManagementState {
+  readonly runtimeId: string;
+  /** Monotonic for logical client, mutation, and Runtime event changes. */
+  readonly revision: number;
+  readonly ownerPolicy: RuntimeOwnerPolicyState;
+  readonly owner: RuntimeOwnerIdentity;
+  readonly preflight: RuntimeDaemonPreflight;
+}
+
+export interface RuntimeDaemonRollbackInput {
+  readonly expectedRuntimeId: string;
+  readonly expectedRevision: number;
+  readonly expectedOwnerPolicyRevision: number;
+  readonly operation?: RuntimeOperationOptions;
+}
+
+export interface RuntimeDaemonRollbackResult {
+  readonly accepted: true;
+  readonly runtimeId: string;
+  readonly revision: number;
+  readonly ownerPolicy: RuntimeOwnerPolicyState & { readonly mode: 'inline' };
+}
+
+export interface RuntimeDaemonManagementService {
+  inspect(): Promise<RuntimeDaemonManagementState>;
+  stopForInline(input: RuntimeDaemonRollbackInput): Promise<RuntimeDaemonRollbackResult>;
+}
+
 export interface RuntimeStatusService {
   snapshot(): Promise<RuntimeStatusSnapshot>;
   preflight(): Promise<RuntimeDaemonPreflight>;
@@ -2220,6 +2314,7 @@ function assertRuntimeCapabilities(
     && requirements?.daemonSafeRunInput === undefined
     && requirements?.sharedSessionSettings === undefined
     && requirements?.durableRecoveryQueries === undefined
+    && requirements?.daemonManagement === undefined
   ) return;
   const capabilities = requireRuntimeRecord(value);
   if (requirements.hardDispose && capabilities.hardDispose !== true) {
@@ -2249,6 +2344,7 @@ function assertRuntimeCapabilities(
     ['daemonSafeRunInput', requirements.daemonSafeRunInput],
     ['sharedSessionSettings', requirements.sharedSessionSettings],
     ['durableRecoveryQueries', requirements.durableRecoveryQueries],
+    ['daemonManagement', requirements.daemonManagement],
   ] as const;
   for (const [name, version] of versionedRequirements) {
     if (version !== undefined) assertVersionedRuntimeCapability(capabilities, name, version);
@@ -2348,6 +2444,7 @@ export async function connectKodaXRuntime(
     const initialized = requireRuntimeRecord(
       await transport.request('initialize', {
         profile: options.profile ?? 'default',
+        connectionPurpose: 'client',
         autoStart: options.autoStart === true,
         ...(token !== undefined ? { token } : {}),
         clientInfo,

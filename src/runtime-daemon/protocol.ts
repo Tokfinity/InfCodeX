@@ -13,6 +13,8 @@ export type RuntimeDaemonMethod =
   | 'daemon.stop'
   | 'daemon.logs'
   | 'daemon.preflight'
+  | 'daemon.management.get'
+  | 'daemon.rollbackToInline'
   | 'operation.get'
   | 'session.create'
   | 'session.load'
@@ -118,6 +120,7 @@ export type RuntimeDaemonMethod =
 export type RuntimeDaemonMutationMethod =
   | 'runtime.shutdown'
   | 'daemon.stop'
+  | 'daemon.rollbackToInline'
   | 'session.create'
   | 'session.fork'
   | 'session.notice.append'
@@ -256,6 +259,8 @@ export const RUNTIME_DAEMON_METHODS: readonly RuntimeDaemonMethod[] = [
   'daemon.stop',
   'daemon.logs',
   'daemon.preflight',
+  'daemon.management.get',
+  'daemon.rollbackToInline',
   'operation.get',
   'session.create',
   'session.load',
@@ -362,6 +367,7 @@ export const RUNTIME_DAEMON_METHODS: readonly RuntimeDaemonMethod[] = [
 export const RUNTIME_DAEMON_MUTATION_METHODS: readonly RuntimeDaemonMutationMethod[] = [
   'runtime.shutdown',
   'daemon.stop',
+  'daemon.rollbackToInline',
   'session.create',
   'session.fork',
   'session.notice.append',

@@ -7,7 +7,9 @@ import { afterEach, describe, expect, it } from 'vitest';
 import {
   claimRuntimeDaemonOwnership,
   classifyRuntimeDaemonHealth,
+  commitRuntimeDaemonRollbackPolicy,
   createRuntimeDaemonToken,
+  enableRuntimeDaemonOwner,
   normalizeRuntimeDaemonProfile,
   readRuntimeOwnerPolicy,
   readRuntimeDaemonLockOwner,
@@ -286,6 +288,36 @@ describe('runtime Coder owner policy', () => {
 
     expect(() => updateRuntimeOwnerPolicy(paths, 'inline', 0)).toThrow(/owner lock exists/i);
     expect(readRuntimeOwnerPolicy(paths)).toMatchObject({ mode: 'daemon', revision: 0 });
+  });
+
+  it('atomically commits daemon rollback policy for the verified owner and resumes without a guessed revision', () => {
+    const paths = resolveRuntimeDaemonPaths(tempHome(), 'default');
+    const lock = tryAcquireRuntimeDaemonLock(paths, {
+      runtimeId: 'runtime-rollback',
+      pid: process.pid,
+      createdAt: '2026-07-15T00:00:00.000Z',
+      kind: 'daemon',
+    });
+    expect(lock).toBeDefined();
+    if (!lock) throw new Error('Expected daemon owner lock.');
+
+    expect(() => commitRuntimeDaemonRollbackPolicy(
+      paths,
+      'runtime-other',
+      0,
+    )).toThrow(/owner.*changed/i);
+    const inline = commitRuntimeDaemonRollbackPolicy(paths, 'runtime-rollback', 0);
+
+    expect(inline).toMatchObject({ mode: 'inline', revision: 1 });
+    expect(readRuntimeDaemonLockOwner(paths.lockFile)).toMatchObject({
+      runtimeId: 'runtime-rollback',
+      kind: 'daemon',
+    });
+    expect(releaseRuntimeDaemonLock(lock)).toBe(true);
+
+    const daemon = enableRuntimeDaemonOwner(paths);
+    expect(daemon).toMatchObject({ mode: 'daemon', revision: 2 });
+    expect(enableRuntimeDaemonOwner(paths)).toEqual(daemon);
   });
 });
 

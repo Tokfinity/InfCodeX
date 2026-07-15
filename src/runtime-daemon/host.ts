@@ -29,6 +29,7 @@ import {
 } from './transport.js';
 import { createRuntimeControlJournal } from './control-journal.js';
 import { createRuntimeDaemonReverseBridgeHub } from './reverse-bridge.js';
+import { createRuntimeDaemonManagementController } from './management.js';
 
 export interface RuntimeDaemonHostOptions {
   readonly runtime: KodaXRuntime;
@@ -62,13 +63,26 @@ export async function startRuntimeDaemonHost(
   });
 
   let server: RuntimeDaemonSocketServer | undefined;
-  let requestStop: (() => void) | undefined;
+  let scheduleStop: (() => void) | undefined;
+  let stopPending = false;
+  const requestStop = (): void => {
+    if (scheduleStop === undefined) {
+      stopPending = true;
+      return;
+    }
+    scheduleStop();
+  };
   const runResults = createRuntimeDaemonRunResultStore();
   const controlJournal = createRuntimeControlJournal({
     rootDir: path.join(options.paths.rootDir, 'control'),
   });
   const reverseBridgeHub = createRuntimeDaemonReverseBridgeHub({
     invocationStateFile: path.join(options.paths.rootDir, 'host-tool-invocations.json'),
+  });
+  const management = createRuntimeDaemonManagementController({
+    runtime: options.runtime,
+    paths: options.paths,
+    requestStop,
   });
   let ready: RuntimeDaemonState;
   try {
@@ -82,31 +96,13 @@ export async function startRuntimeDaemonHost(
         runResults,
         controlJournal,
         reverseBridgeHub,
+        management,
         durableHostToolInvocations: true,
         requireOperationEnvelope: true,
         logs: () => ({
           logFile: options.paths.logFile,
           entries: readRuntimeDaemonLog(options.paths),
         }),
-        stop: () => {
-          appendRuntimeDaemonLog(options.paths, 'info', 'Runtime daemon stop requested.');
-          requestStop?.();
-          return { ok: true };
-        },
-        preflight: async () => {
-          const current = await options.runtime.status.preflight();
-          const clientCount = server?.connectionCount() ?? 0;
-          const blockers = [...current.blockers];
-          if (clientCount > 1 && !blockers.includes('connected_clients')) {
-            blockers.push('connected_clients');
-          }
-          return {
-            ...current,
-            clientCount,
-            blockers,
-            canStop: blockers.length === 0,
-          };
-        },
       }),
     });
     ready = createHostState(options, 'ready');
@@ -128,6 +124,7 @@ export async function startRuntimeDaemonHost(
         error: normalizeHostError(closeError).message,
       });
     }
+    management.close();
     runResults.clear();
     reverseBridgeHub.close();
     restoreDiagnostics();
@@ -164,6 +161,7 @@ export async function startRuntimeDaemonHost(
       } catch (error: unknown) {
         failures.push(`transport close: ${normalizeHostError(error).message}`);
       }
+      management.close();
       reverseBridgeHub.close();
       runResults.clear();
       try {
@@ -214,7 +212,17 @@ export async function startRuntimeDaemonHost(
       signalClosed?.();
     }
   };
-  requestStop = () => {
+  scheduleStop = () => {
+    try {
+      appendRuntimeDaemonLog(options.paths, 'info', 'Runtime daemon stop requested.');
+    } catch (error: unknown) {
+      emitKodaXDiagnostic({
+        source: 'runtime.daemon.host',
+        level: 'warn',
+        message: 'Runtime daemon stop request could not be logged.',
+        detail: normalizeHostError(error),
+      });
+    }
     const timer = setTimeout(() => {
       void closeHost().catch((error: unknown) => {
         emitKodaXDiagnostic({
@@ -227,6 +235,7 @@ export async function startRuntimeDaemonHost(
     }, 0);
     timer.unref?.();
   };
+  if (stopPending) scheduleStop();
 
   return {
     endpoint: options.endpoint,

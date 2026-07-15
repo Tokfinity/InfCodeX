@@ -350,6 +350,7 @@ async function readDaemonRuntimeStatusSummary(
     const token = readRuntimeDaemonToken(paths);
     await transport.request('initialize', {
       profile: paths.profile,
+      connectionPurpose: 'probe',
       ...(token !== undefined ? { token } : {}),
       clientInfo: { name: 'kodax-cli', title: 'KodaX CLI' },
       capabilities: { configAdmin: true },

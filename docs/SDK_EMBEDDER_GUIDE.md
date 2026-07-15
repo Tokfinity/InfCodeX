@@ -3445,6 +3445,7 @@ const runtime = await connectKodaXRuntime({
     daemonSafeRunInput: 1,
     sharedSessionSettings: 1,
     durableRecoveryQueries: 1,
+    daemonManagement: 1,
   },
 });
 ```
@@ -3743,10 +3744,17 @@ remain valid only for embedded Runtime calls.
 
 ### Recovery queries and stop preflight
 
-`runtime.status.preflight()` returns connected-client count, active and queued
-runs, pending AskUser/permission records, blockers, and `canStop`. Treat this as
-a required check before stop or inline rollback; the query does not stop the
-daemon by itself. `runtime.operations.get()` reconciles durable mutations,
+`runtime.status.preflight()` returns the initialized logical-client count,
+active and queued runs, pending AskUser/permission records, blockers, and
+`canStop`. The current facade counts as one; daemon self-connections and
+bounded health probes do not count. A second process changes the count to two,
+and its awaited `close()` makes the count converge back to one.
+
+Preflight is useful for UI, but it is not a stop authorization token. Use
+`runtime.daemon.inspect()` to obtain one consistent management revision,
+verified owner fence, owner-policy revision, and preflight projection. Only
+`runtime.daemon.stopForInline()` atomically rechecks and commits a rollback.
+`runtime.operations.get()` reconciles durable mutations,
 `hostTools.getInvocation()` reconciles Host Tool metadata, and
 `permissions.listGrants()` returns the daemon-owned persistent grant set.
 
@@ -3758,27 +3766,62 @@ truth.
 
 ### Owner policy, rollback, and Electron boundary
 
-Daemon and inline Coder use one profile fence. For an emergency rollback, stop
-the daemon, switch the policy with revision CAS, then acquire the inline owner:
+Daemon and inline Coder use one profile fence. Do not compose
+`status.preflight()` with a low-level unconditional stop: another client or run
+can appear between those calls. The public rollback transaction gates new
+clients and mutations, rechecks the same Runtime and management/policy
+revisions, verifies there is no other client or active/queued/pending work,
+commits sticky inline policy while that daemon still owns the fence, and then
+requests shutdown.
 
 ```ts
 import {
   acquireKodaXInlineOwner,
-  setKodaXRuntimeOwnerMode,
+  enableKodaXDaemonOwner,
+  getKodaXRuntimeOwnerState,
 } from '@kodax-ai/kodax/runtime';
 
-const policy = setKodaXRuntimeOwnerMode({
-  homeDir: kodaxHome,
-  profile: 'coder',
-  mode: 'inline',
-  expectedRevision: currentPolicyRevision,
+const management = await runtime.daemon.inspect();
+if (!management.preflight.canStop) {
+  showRollbackBlockers(management.preflight.blockers);
+  return;
+}
+
+const rollback = await runtime.daemon.stopForInline({
+  expectedRuntimeId: management.runtimeId,
+  expectedRevision: management.revision,
+  expectedOwnerPolicyRevision: management.ownerPolicy.revision,
+  operation: { operationId: loadOrCreatePendingOperationId('coder-inline-rollback') },
 });
+
+// `accepted` means inline policy is committed and shutdown is in progress.
+// Wait through the public owner-state query; never infer release from a PID.
+const shutdownDeadline = Date.now() + 30_000;
+while (getKodaXRuntimeOwnerState({ homeDir: kodaxHome, profile: 'coder' }).owner?.runtimeId
+  === rollback.runtimeId) {
+  if (Date.now() >= shutdownDeadline) throw new Error('Timed out waiting for daemon owner release.');
+  await delay(25);
+}
+const releasedOwner = getKodaXRuntimeOwnerState({ homeDir: kodaxHome, profile: 'coder' });
+if (releasedOwner.ownerStatus !== 'unowned') {
+  throw new Error('Coder profile acquired a different owner during rollback.');
+}
+await runtime.close(); // Detach only; it does not perform a second stop.
 const inlineOwner = acquireKodaXInlineOwner({ homeDir: kodaxHome, profile: 'coder' });
+
+// Later, after the inline owner has released its fence:
+inlineOwner.close();
+const daemonPolicy = enableKodaXDaemonOwner({ homeDir: kodaxHome, profile: 'coder' });
+// daemonPolicy.revision is authoritative; no expectedRevision guess is needed.
 ```
 
-The inline policy is sticky: later CLI auto-start is rejected until an explicit
-CAS changes the policy back to `daemon`. Stale-owner handling validates the
-owned lock/state and never kills a process merely because a PID was reused.
+Any management revision change, another logical client, active or queued run,
+pending AskUser/permission, or in-flight mutation returns structured
+`conflict`; the daemon remains running and policy remains unchanged. The inline
+policy is sticky: later CLI auto-start is rejected until
+`enableKodaXDaemonOwner()` changes it back to `daemon`. `runtime.close()` still
+only detaches. Stale-owner handling validates the owned lock/state and never
+kills a process merely because a PID was reused.
 
 Keep all trusted objects in Electron Main: daemon token/endpoint, stable client
 identity, operation IDs, owner policy, keychain broker, Host Tool handlers, and

@@ -170,6 +170,65 @@ export function updateRuntimeOwnerPolicy(
   }
 }
 
+/**
+ * Commit sticky inline policy while the verified daemon still owns the fence.
+ * The caller must stop that same daemon after this transaction returns.
+ */
+export function commitRuntimeDaemonRollbackPolicy(
+  paths: RuntimeDaemonPaths,
+  expectedRuntimeId: string,
+  expectedRevision: number,
+): RuntimeOwnerPolicy {
+  ensureRuntimeDaemonDirectories(paths);
+  const coordination = tryAcquireRuntimeOwnerCoordination(paths);
+  if (!coordination) {
+    throw runtimeOwnerPolicyConflict('Runtime owner rollback is already in progress.');
+  }
+  try {
+    const owner = readRuntimeDaemonLockOwner(paths.lockFile);
+    if (
+      owner?.kind !== 'daemon'
+      || owner.runtimeId !== expectedRuntimeId
+    ) {
+      throw runtimeOwnerPolicyConflict('Runtime daemon owner changed before rollback commit.');
+    }
+    const current = readRuntimeOwnerPolicy(paths);
+    if (current.mode !== 'daemon') {
+      throw runtimeOwnerPolicyConflict('Runtime owner policy changed before rollback commit.');
+    }
+    return writeRuntimeOwnerPolicy(
+      paths,
+      'inline',
+      expectedRevision,
+      coordination.nonce,
+    );
+  } finally {
+    releaseRuntimeOwnerCoordination(paths, coordination);
+  }
+}
+
+/** Enable daemon ownership after the inline owner has released its fence. */
+export function enableRuntimeDaemonOwner(paths: RuntimeDaemonPaths): RuntimeOwnerPolicy {
+  ensureRuntimeDaemonDirectories(paths);
+  const coordination = tryAcquireRuntimeOwnerCoordination(paths);
+  if (!coordination) throw new Error('Runtime owner transition is already in progress.');
+  try {
+    if (fs.existsSync(paths.lockFile)) {
+      throw new Error('Cannot enable Runtime daemon ownership while an owner lock exists.');
+    }
+    const current = readRuntimeOwnerPolicy(paths);
+    if (current.mode === 'daemon') return current;
+    return writeRuntimeOwnerPolicy(
+      paths,
+      'daemon',
+      current.revision,
+      coordination.nonce,
+    );
+  } finally {
+    releaseRuntimeOwnerCoordination(paths, coordination);
+  }
+}
+
 export function acquireRuntimeInlineOwner(
   paths: RuntimeDaemonPaths,
   owner: RuntimeDaemonLockOwner,
@@ -208,7 +267,9 @@ function writeRuntimeOwnerPolicy(
 ): RuntimeOwnerPolicy {
   const current = readRuntimeOwnerPolicy(paths);
   if (current.revision !== expectedRevision) {
-    throw new Error(`Runtime owner policy conflict: expected ${expectedRevision}, current ${current.revision}.`);
+    throw runtimeOwnerPolicyConflict(
+      `Runtime owner policy conflict: expected ${expectedRevision}, current ${current.revision}.`,
+    );
   }
   const updated: RuntimeOwnerPolicy = {
     mode,
@@ -229,6 +290,14 @@ function writeRuntimeOwnerPolicy(
   } finally {
     fs.rmSync(temporary, { force: true });
   }
+}
+
+function runtimeOwnerPolicyConflict(
+  message: string,
+): Error & { readonly code: 'conflict' } {
+  const error = new Error(message) as Error & { code: 'conflict' };
+  error.code = 'conflict';
+  return error;
 }
 
 function tryAcquireRuntimeOwnerCoordination(

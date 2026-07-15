@@ -21,6 +21,7 @@ import {
   readRuntimeDaemonLockOwner,
   readRuntimeDaemonState,
   readRuntimeDaemonToken,
+  readRuntimeOwnerPolicy,
   resolveRuntimeDaemonPaths,
   tryAcquireRuntimeDaemonLock,
 } from './state.js';
@@ -136,6 +137,99 @@ describe('runtime daemon host', () => {
     expect(runtime.closed).toBe(true);
     expect(readRuntimeDaemonState(paths)).toBeUndefined();
     expect(readRuntimeDaemonLockOwner(paths.lockFile)).toBeUndefined();
+  });
+
+  it('counts initialized logical clients instead of internal sockets and rejects stale rollback commits', async () => {
+    const paths = resolveRuntimeDaemonPaths(tempHome(), 'default');
+    const runtime = makeRuntime();
+    const lock = tryAcquireRuntimeDaemonLock(paths, {
+      runtimeId: runtime.identity.runtimeId,
+      pid: process.pid,
+      createdAt: runtime.identity.startedAt,
+      kind: 'daemon',
+    });
+    expect(lock).toBeDefined();
+    if (!lock) throw new Error('Expected daemon lock for management test.');
+
+    const host = await startRuntimeDaemonHost({
+      runtime,
+      paths,
+      endpoint: await makeTestEndpoint(),
+      lock,
+    });
+    cleanupTasks.push(() => host.close());
+    const token = readRuntimeDaemonToken(paths);
+    const internalSocket = await createRuntimeDaemonSocketClientTransport(host.endpoint);
+    const first = await createRuntimeDaemonSocketClientTransport(host.endpoint);
+    cleanupTasks.push(async () => internalSocket.close?.());
+    cleanupTasks.push(async () => first.close?.());
+    const initialized = await first.request('initialize', {
+      profile: 'default',
+      token,
+      clientInfo: { name: 'space', instanceId: 'space-client' },
+    });
+    expect(initialized).toMatchObject({
+      capabilities: { daemonManagement: { version: 1, revisionedStop: true } },
+    });
+
+    await expect(first.request('daemon.preflight')).resolves.toMatchObject({
+      clientCount: 1,
+      blockers: [],
+      canStop: true,
+    });
+    const probe = await createRuntimeDaemonSocketClientTransport(host.endpoint);
+    cleanupTasks.push(async () => probe.close?.());
+    await probe.request('initialize', {
+      profile: 'default',
+      token,
+      connectionPurpose: 'probe',
+    });
+    await expect(probe.request('daemon.preflight')).rejects.toMatchObject({ code: 'unauthorized' });
+    await expect(first.request('daemon.preflight')).resolves.toMatchObject({ clientCount: 1 });
+    const stale = await first.request('daemon.management.get') as {
+      runtimeId: string;
+      revision: number;
+      ownerPolicy: { revision: number };
+    };
+
+    const second = await createRuntimeDaemonSocketClientTransport(host.endpoint);
+    cleanupTasks.push(async () => second.close?.());
+    await second.request('initialize', {
+      profile: 'default',
+      token,
+      clientInfo: { name: 'ide', instanceId: 'ide-client' },
+    });
+    await expect(first.request('daemon.preflight')).resolves.toMatchObject({
+      clientCount: 2,
+      blockers: ['connected_clients'],
+      canStop: false,
+    });
+    await second.close?.();
+    await waitForClientCount(first, 1);
+
+    await expect(first.request('daemon.rollbackToInline', {
+      expectedRuntimeId: stale.runtimeId,
+      expectedRevision: stale.revision,
+      expectedOwnerPolicyRevision: stale.ownerPolicy.revision,
+    })).rejects.toMatchObject({ code: 'conflict' });
+    expect(readRuntimeDaemonState(paths)).toMatchObject({ status: 'ready' });
+
+    const current = await first.request('daemon.management.get') as {
+      runtimeId: string;
+      revision: number;
+      ownerPolicy: { revision: number };
+    };
+    await expect(first.request('daemon.rollbackToInline', {
+      expectedRuntimeId: current.runtimeId,
+      expectedRevision: current.revision,
+      expectedOwnerPolicyRevision: current.ownerPolicy.revision,
+    })).resolves.toMatchObject({
+      accepted: true,
+      ownerPolicy: { mode: 'inline', revision: 1 },
+    });
+    await host.closed;
+    await waitForHostStateRemoval(paths);
+    expect(readRuntimeOwnerPolicy(paths)).toMatchObject({ mode: 'inline', revision: 1 });
   });
 
   it('routes runtime diagnostics to the daemon log without writing to the live terminal', async () => {
@@ -427,6 +521,22 @@ async function waitForHostStateRemoval(
     });
   }
   throw new Error('Timed out waiting for daemon host state removal.');
+}
+
+async function waitForClientCount(
+  client: Awaited<ReturnType<typeof createRuntimeDaemonSocketClientTransport>>,
+  expected: number,
+): Promise<void> {
+  const deadline = Date.now() + 2_000;
+  while (Date.now() <= deadline) {
+    const preflight = await client.request('daemon.preflight') as { clientCount?: unknown };
+    if (preflight.clientCount === expected) return;
+    await new Promise((resolve) => {
+      const timer = setTimeout(resolve, 25);
+      timer.unref?.();
+    });
+  }
+  throw new Error(`Timed out waiting for daemon client count ${expected}.`);
 }
 
 function makeRuntime(): KodaXRuntime & { closed: boolean } {

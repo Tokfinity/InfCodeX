@@ -57,6 +57,7 @@ export const RUNTIME_DAEMON_METHOD_SCHEMAS = {
       token: stringSchema,
       autoStart: booleanSchema,
       endpoint: stringSchema,
+      connectionPurpose: { type: 'string', enum: ['client', 'probe'] },
       clientInfo: objectAnySchema,
       capabilities: objectAnySchema,
     }, [], true),
@@ -71,6 +72,7 @@ export const RUNTIME_DAEMON_METHOD_SCHEMAS = {
       token: stringSchema,
       autoStart: booleanSchema,
       endpoint: stringSchema,
+      connectionPurpose: { type: 'string', enum: ['client', 'probe'] },
       clientInfo: objectAnySchema,
       capabilities: objectAnySchema,
     }, [], true),
@@ -91,6 +93,29 @@ export const RUNTIME_DAEMON_METHOD_SCHEMAS = {
   'daemon.stop': { params: noParamsSchema, result: okSchema },
   'daemon.logs': { params: noParamsSchema, result: objectAnySchema },
   'daemon.preflight': { params: noParamsSchema, result: objectAnySchema },
+  'daemon.management.get': {
+    params: noParamsSchema,
+    result: objectSchema({
+      runtimeId: stringSchema,
+      revision: integerSchema,
+      ownerPolicy: ownerPolicySchema(),
+      owner: ownerIdentitySchema(),
+      preflight: objectAnySchema,
+    }, ['runtimeId', 'revision', 'ownerPolicy', 'owner', 'preflight']),
+  },
+  'daemon.rollbackToInline': {
+    params: objectSchema({
+      expectedRuntimeId: stringSchema,
+      expectedRevision: integerSchema,
+      expectedOwnerPolicyRevision: integerSchema,
+    }, ['expectedRuntimeId', 'expectedRevision', 'expectedOwnerPolicyRevision']),
+    result: objectSchema({
+      accepted: { type: 'boolean', enum: [true] },
+      runtimeId: stringSchema,
+      revision: integerSchema,
+      ownerPolicy: ownerPolicySchema('inline'),
+    }, ['accepted', 'runtimeId', 'revision', 'ownerPolicy']),
+  },
   'operation.get': {
     params: objectSchema({
       operationId: stringSchema,
@@ -618,6 +643,23 @@ function sessionFilterSchema(): RuntimeDaemonJsonSchema {
     surface: stringSchema,
     cursor: stringSchema,
   });
+}
+
+function ownerPolicySchema(mode?: 'daemon' | 'inline'): RuntimeDaemonJsonSchema {
+  return objectSchema({
+    mode: { type: 'string', enum: mode === undefined ? ['daemon', 'inline'] : [mode] },
+    revision: integerSchema,
+    updatedAt: stringSchema,
+  }, ['mode', 'revision', 'updatedAt']);
+}
+
+function ownerIdentitySchema(): RuntimeDaemonJsonSchema {
+  return objectSchema({
+    runtimeId: stringSchema,
+    pid: integerSchema,
+    createdAt: stringSchema,
+    kind: { type: 'string', enum: ['daemon', 'inline'] },
+  }, ['runtimeId', 'pid', 'createdAt']);
 }
 
 function forkSessionParamsSchema(): RuntimeDaemonJsonSchema {

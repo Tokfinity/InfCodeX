@@ -16,6 +16,9 @@ import type {
   RuntimeArtifact,
   RuntimeDiagnosticFilter,
   RuntimeDaemonPreflight,
+  RuntimeDaemonManagementState,
+  RuntimeDaemonRollbackInput,
+  RuntimeDaemonRollbackResult,
   RuntimeEvent,
   RuntimeEventFilter,
   RuntimeEventListener,
@@ -603,6 +606,19 @@ export function createRuntimeDaemonClient(
       },
       preflight() {
         return request('daemon.preflight') as Promise<RuntimeDaemonPreflight>;
+      },
+    },
+    daemon: {
+      inspect() {
+        return request('daemon.management.get') as Promise<RuntimeDaemonManagementState>;
+      },
+      stopForInline(input: RuntimeDaemonRollbackInput) {
+        const { operation, ...params } = input;
+        return request(
+          'daemon.rollbackToInline',
+          params,
+          operation,
+        ) as Promise<RuntimeDaemonRollbackResult>;
       },
     },
     diagnostics: {
