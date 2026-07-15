@@ -4007,7 +4007,8 @@ write-only path was removed as an early F225 cleanup slice.
 
 **Consequences**:
 
-- F266 occupies v0.7.70 and becomes a dependency of F263/F264.
+- F266 targets v0.7.71 after the 2026-07-15 patch deferral and becomes a
+  dependency of F263/F264.
 - A daemon may continue background review/testing after all UI clients detach;
   embedded modes recover persisted queued state on the next owner start.
 - Users can distinguish a learned capability from fresh LLM reasoning without

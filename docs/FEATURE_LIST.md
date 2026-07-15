@@ -28,7 +28,7 @@
 |---|---:|---|---|
 | Completed | 33 | `260, 261, 259, 258, 253, 254, 255, 256, 257, 228, 251, 252, 250, 248, 249, 247, 246, 245, 243, 242, 241, 233, 240, 239, 224, 221, 174, 211, 237, 229, 230, 234, 236` | `260` completed for v0.7.68 (2026-07-12) with 9593/9593 passing tests on both Node 20 and Node 22 release CI, full build and artifact validation, 87.58% focused line coverage, and all preregistered v2 memory-routing gates passing. `261`, `259`, and `258` shipped in v0.7.67 (2026-07-11). Earlier completion history is unchanged. |
 | InProgress | 4 | `269, 267, 268, 225` | `267`/`268` source implementation and F269 integration remain in the v0.7.69 slot; they are not automatically rescheduled. `269` is hardened after the Space SDK package review: server admission, complete snapshots, lifecycle/events/transport types, shared settings, stable bridge resume, recovery queries, and preflight are implemented. Node 20/22 focused regression, root type/build/bundle/DTS, fresh-tarball consumer/Worker/CLI/DTS, and Windows binary gates pass locally. GitHub Actions run `29385073422` is green for Node 20/22 build/DTS/full tests and the Node 22 Unix-socket gate. Remaining gates are formal Space smoke, npm publication, and independent F267/F268 release evidence. `225` broader current-HEAD cleanup remains outside this release. |
-| Planned, near-term | 5 | `266, 270, 263, 264, 265` | `v0.7.70` -> `v0.7.85` |
+| Planned, near-term | 5 | `266, 270, 263, 264, 265` | `v0.7.71` -> `v0.7.85` |
 | Planned, v0.8.x | 5 | `007, 030, 093, 113, 139` | `v0.8.5+` |
 | Planned, v0.9.x | 1 | `262` | `v0.9.0` |
 | Reviewed out, 2026-07-12 | 7 | `244, 231, 235, 238, 232, 105, 108` | Shelved, deferred, absorbed, or cancelled after the post-v0.7.70 roadmap review. |
@@ -53,8 +53,8 @@
 | `v0.7.67` | `0` |
 | `v0.7.68` | `0` |
 | `v0.7.69` | `3` |
-| `v0.7.70` | `2` |
-| `v0.7.71` | `0` |
+| `v0.7.70` | `0` |
+| `v0.7.71` | `2` |
 | `v0.7.72` | `0` |
 | `v0.7.73` | `0` |
 | `v0.7.74` | `0` |
@@ -256,6 +256,12 @@
 > orchestration system, and F269's released owner/recovery schema is a hard ship
 > prerequisite.
 >
+> **2026-07-15 patch deferral**: `FEATURE_266` and `FEATURE_270` move together
+> from `v0.7.70` to `v0.7.71` so `v0.7.70` remains a bounded, feature-free patch
+> release. Scope, priority, dependencies, and acceptance criteria are unchanged.
+> This schedule correction supersedes the earlier `v0.7.70` target references
+> above without rewriting their historical record.
+>
 > **2026-07-12 F225 early cleanup slice**: the Classic readline
 > reverse-video StatusBar was proven write-only (`update()` calls with no
 > production `show()`/`toggle()`), internal-only, and independent of the live
@@ -395,8 +401,8 @@ fixed GitHub binary archive sidecar omission before tagging.
 
 | ID | Title | Category | Priority | Planned | Design |
 |---|---|---|---|---|---|
-| `266` | Learning Center + Learned Capability Runtime Control Plane | Core / Agent Learning + Runtime SDK | High | `v0.7.70` | [v0.7.70](features/v0.7.70.md#feature_266-learning-center--learned-capability-runtime-control-plane) |
-| `270` | Ultra-Aligned Adaptive Multi-Agent Actor Control Plane | Core / Agent Orchestration + Runtime | High | `v0.7.70` | [v0.7.70](features/v0.7.70.md#feature_270-ultra-aligned-adaptive-multi-agent-actor-control-plane) |
+| `266` | Learning Center + Learned Capability Runtime Control Plane | Core / Agent Learning + Runtime SDK | High | `v0.7.71` | [v0.7.71](features/v0.7.71.md#feature_266-learning-center--learned-capability-runtime-control-plane) |
+| `270` | Ultra-Aligned Adaptive Multi-Agent Actor Control Plane | Core / Agent Orchestration + Runtime | High | `v0.7.71` | [v0.7.71](features/v0.7.71.md#feature_270-ultra-aligned-adaptive-multi-agent-actor-control-plane) |
 | `263` | Evidence-Gated Background Skill Learning Loop | Core / Skills + Self-Improvement | High | `v0.7.75` | [v0.7.75](features/v0.7.75.md#feature_263-evidence-gated-background-skill-learning-loop) |
 | `264` | Evidence-Gated Extension Learning Loop | Core / Extensions + Self-Improvement | High | `v0.7.80` | [v0.7.80](features/v0.7.80.md#feature_264-evidence-gated-extension-learning-loop) |
 | `265` | Work Fast Path + Coding Assurance Budget | Core / Performance + Agent Quality | High | `v0.7.85` | [v0.7.85](features/v0.7.85.md#feature_265-work-fast-path--coding-assurance-budget) |
