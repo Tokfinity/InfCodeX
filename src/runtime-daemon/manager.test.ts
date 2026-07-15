@@ -614,6 +614,8 @@ function makeRuntime(
           clientCount: 0,
           activeRuns: [],
           queuedRuns: [],
+          activeWorkflows: [],
+          activeAgentTasks: [],
           pendingPermissions: [],
           pendingUserInputs: [],
           blockers: [],

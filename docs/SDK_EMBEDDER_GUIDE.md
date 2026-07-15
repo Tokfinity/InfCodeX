@@ -3533,10 +3533,13 @@ reset boundary.
 
 ### Durable mutations, stable ordering, and settings CAS
 
-Every public control mutation uses a durable operation envelope. Credential
-supply and Host Tool completion are connection-local reverse-result frames and
-are deliberately excluded from the control journal so secrets/results are not
-persisted. The SDK creates an operation ID for ordinary one-shot calls. A
+Every durable public control mutation uses an operation envelope. Credential
+and Host Tool register/revoke/supply/complete requests are reverse-bridge
+control frames and are deliberately excluded from the control journal so
+secrets/results are not persisted. They still enter the daemon management
+draining fence: once an atomic stop begins, they fail with typed `conflict` and
+cannot change reverse-bridge state. The SDK creates an operation ID for
+ordinary one-shot calls. A
 product-level retry after a lost response must reuse its own stable operation
 ID; changing its method, payload, resource, or authenticated principal is
 rejected.
@@ -3745,15 +3748,22 @@ remain valid only for embedded Runtime calls.
 ### Recovery queries and stop preflight
 
 `runtime.status.preflight()` returns the initialized logical-client count,
-active and queued runs, pending AskUser/permission records, blockers, and
-`canStop`. The current facade counts as one; daemon self-connections and
-bounded health probes do not count. A second process changes the count to two,
-and its awaited `close()` makes the count converge back to one.
+active and queued runs, running/paused Workflows, every non-terminal External
+Agent task (including `unknown`), pending AskUser/permission records, blockers,
+and `canStop`. The background-work blockers are `active_workflows` and
+`active_agent_tasks`. The current facade counts as one; daemon self-connections
+and bounded health probes do not count. A second process changes the count to
+two, and its awaited `close()` makes the count converge back to one.
 
 Preflight is useful for UI, but it is not a stop authorization token. Use
 `runtime.daemon.inspect()` to obtain one consistent management revision,
 verified owner fence, owner-policy revision, and preflight projection. Only
 `runtime.daemon.stopForInline()` atomically rechecks and commits a rollback.
+The management revision also advances when the preflight projection changes,
+so a Workflow or AgentTask lifecycle transition between inspect and commit
+invalidates the stale stop. Capability details
+`daemonManagement.backgroundWorkPreflight` and
+`daemonManagement.reverseBridgeDrainingFence` identify this complete contract.
 `runtime.operations.get()` reconciles durable mutations,
 `hostTools.getInvocation()` reconciles Host Tool metadata, and
 `permissions.listGrants()` returns the daemon-owned persistent grant set.
@@ -3816,9 +3826,11 @@ const daemonPolicy = enableKodaXDaemonOwner({ homeDir: kodaxHome, profile: 'code
 ```
 
 Any management revision change, another logical client, active or queued run,
-pending AskUser/permission, or in-flight mutation returns structured
-`conflict`; the daemon remains running and policy remains unchanged. The inline
-policy is sticky: later CLI auto-start is rejected until
+running/paused Workflow, non-terminal/unknown AgentTask, pending
+AskUser/permission, or in-flight mutation returns structured `conflict`; the
+daemon remains running and policy remains unchanged. Draining also rejects
+credential and Host Tool state changes without journaling their secrets or
+results. The inline policy is sticky: later CLI auto-start is rejected until
 `enableKodaXDaemonOwner()` changes it back to `daemon`. `runtime.close()` still
 only detaches. Stale-owner handling validates the owned lock/state and never
 kills a process merely because a PID was reused.

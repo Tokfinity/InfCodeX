@@ -1738,12 +1738,16 @@ export interface RuntimeDaemonPreflight {
   readonly clientCount: number;
   readonly activeRuns: readonly RuntimeRunStatus[];
   readonly queuedRuns: readonly RuntimeRunStatus[];
+  readonly activeWorkflows: readonly RuntimeWorkflowSummary[];
+  readonly activeAgentTasks: readonly AgentTaskSnapshot[];
   readonly pendingPermissions: readonly RuntimePermissionRequest[];
   readonly pendingUserInputs: readonly RuntimeUserInputRequest[];
   readonly blockers: readonly (
     | 'connected_clients'
     | 'active_runs'
     | 'queued_runs'
+    | 'active_workflows'
+    | 'active_agent_tasks'
     | 'pending_interactions'
   )[];
   readonly canStop: boolean;
@@ -1751,7 +1755,7 @@ export interface RuntimeDaemonPreflight {
 
 export interface RuntimeDaemonManagementState {
   readonly runtimeId: string;
-  /** Monotonic for logical client, mutation, and Runtime event changes. */
+  /** Monotonic for logical client, mutation, Runtime event, and preflight state changes. */
   readonly revision: number;
   readonly ownerPolicy: RuntimeOwnerPolicyState;
   readonly owner: RuntimeOwnerIdentity;
@@ -2026,6 +2030,7 @@ export async function createKodaXRuntime(
   );
   const artifacts = createRuntimeArtifactStore();
   const workflows = createRuntimeWorkflowService();
+  const agentTasks = createRuntimeAgentTaskService(agentPlane);
   const runs = new Map<string, RuntimeRunRecord>();
   const recoveredSessionOrders = new Map<string, number>();
   const persistedStatuses = [...recentRunStatuses(persistence.loadRunStatuses())]
@@ -2142,11 +2147,12 @@ export async function createKodaXRuntime(
       sessionManager,
       sessionAdmission,
       workflows,
+      agentTasks,
     }),
     diagnostics: createRuntimeDiagnosticsService(bus.service),
     admin: createRuntimeAdminService(agentPlane),
     agents: createRuntimeAgentService(agentPlane, bindingService),
-    agentTasks: createRuntimeAgentTaskService(agentPlane),
+    agentTasks,
     async close() {
       if (closed) return;
       closed = true;
@@ -3866,6 +3872,7 @@ function createRuntimeStatusService(deps: {
   readonly sessionManager: SessionManager;
   readonly sessionAdmission: RuntimeSessionAdmission;
   readonly workflows: RuntimeWorkflowService;
+  readonly agentTasks: RuntimeAgentTaskService;
 }): RuntimeStatusService {
   return {
     async snapshot() {
@@ -3897,11 +3904,25 @@ function createRuntimeStatusService(deps: {
         || run.phase === 'waiting_user_input'
       ));
       const queuedRuns = runs.filter((run) => run.phase === 'queued');
+      const activeWorkflows = (await deps.workflows.list({})).filter((workflow) => (
+        workflow.status !== 'completed'
+        && workflow.status !== 'failed'
+        && workflow.status !== 'denied'
+        && workflow.status !== 'stopped'
+      ));
+      const activeAgentTasks = (await deps.agentTasks.list()).filter((task) => (
+        task.state !== 'completed'
+        && task.state !== 'failed'
+        && task.state !== 'canceled'
+        && task.state !== 'rejected'
+      ));
       const pendingPermissions = await deps.permissions.service.listPending();
       const pendingUserInputs = await deps.userInputs.service.listPending();
       const blockers: RuntimeDaemonPreflight['blockers'][number][] = [];
       if (activeRuns.length > 0) blockers.push('active_runs');
       if (queuedRuns.length > 0) blockers.push('queued_runs');
+      if (activeWorkflows.length > 0) blockers.push('active_workflows');
+      if (activeAgentTasks.length > 0) blockers.push('active_agent_tasks');
       if (pendingPermissions.length > 0 || pendingUserInputs.length > 0) {
         blockers.push('pending_interactions');
       }
@@ -3910,6 +3931,8 @@ function createRuntimeStatusService(deps: {
         clientCount: 0,
         activeRuns,
         queuedRuns,
+        activeWorkflows,
+        activeAgentTasks,
         pendingPermissions,
         pendingUserInputs,
         blockers,

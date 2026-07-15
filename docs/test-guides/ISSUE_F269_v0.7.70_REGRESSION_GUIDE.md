@@ -3,8 +3,9 @@
 ## Scope
 
 This patch verifies logical daemon-client accounting and the public atomic
-daemon-to-inline rollback contract. Use two independently spawned Node
-processes, not two client objects in one process.
+daemon-to-inline rollback contract, including reverse-bridge draining and
+daemon-owned background work. Use two independently spawned Node processes,
+not two client objects in one process.
 
 ## Automated baseline
 
@@ -13,6 +14,7 @@ npx tsc --noEmit
 npx vitest run src/runtime-daemon/state.test.ts src/runtime-daemon/host.test.ts \
   src/runtime-daemon/client.test.ts src/runtime-daemon/server.test.ts \
   src/runtime-daemon/schema.test.ts src/runtime-daemon/transport.test.ts
+npx vitest run src/sdk-runtime.test.ts src/sdk-runtime.external-agents.test.ts
 npx vitest run src/kodax_cli.daemon-smoke.test.ts \
   -t "counts process-distinct logical clients"
 npm run build
@@ -39,7 +41,21 @@ npm run build
    once more.
 7. Close the final facade normally and assert the daemon remains healthy;
    `runtime.close()` remains detach-only.
+8. Leave a Workflow in `running` and `paused` states. Assert preflight exposes
+   it in `activeWorkflows`, reports `active_workflows`, and refuses stop. After
+   it reaches a terminal state, assert that blocker clears.
+9. Leave an External Agent task non-terminal, including an `unknown` recovery
+   state. Assert preflight exposes it in `activeAgentTasks`, reports
+   `active_agent_tasks`, and refuses stop. Terminal tasks must clear the blocker.
+10. Inspect a clean daemon, then create background work before committing the
+    inspected rollback. Assert the management revision advances and the stale
+    `stopForInline()` returns typed `conflict` without changing owner policy.
+11. While rollback draining is active, attempt credential and Host Tool
+    register, revoke, supply, and completion requests. Each request must return
+    typed `conflict`; no bridge state may change and no credential/result may
+    appear in the operation journal or diagnostics.
 
 Expected result: `1 -> 2 -> 1`, no internal-connection inflation, no stale
-stop, no dual owner, two daemon-to-inline-to-daemon cycles, and no run or
+stop, no background-work abandonment, no reverse-bridge mutation after
+draining, no dual owner, two daemon-to-inline-to-daemon cycles, and no run or
 side-effect replay.

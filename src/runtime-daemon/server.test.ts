@@ -34,6 +34,7 @@ import {
 } from './client.js';
 import { createRuntimeControlJournal } from './control-journal.js';
 import { createRuntimeDaemonReverseBridgeHub } from './reverse-bridge.js';
+import type { RuntimeDaemonManagementController } from './management.js';
 
 describe('runtime daemon dispatcher', () => {
   it('requires initialize before runtime methods and rejects double initialize', async () => {
@@ -281,6 +282,77 @@ describe('runtime daemon dispatcher', () => {
     } finally {
       fs.rmSync(rootDir, { force: true, recursive: true });
     }
+  });
+
+  it('routes reverse-bridge state changes through the daemon draining fence', async () => {
+    let fencedMutations = 0;
+    const conflict = Object.assign(new Error('Runtime daemon is draining.'), {
+      code: 'conflict' as const,
+    });
+    const management: RuntimeDaemonManagementController = {
+      attachClient() {},
+      detachClient() {},
+      async runMutation<T>(): Promise<T> {
+        fencedMutations += 1;
+        throw conflict;
+      },
+      async preflight() { throw new Error('not used'); },
+      async inspect() { throw new Error('not used'); },
+      async stop() { throw new Error('not used'); },
+      async rollbackToInline() { throw new Error('not used'); },
+      close() {},
+    };
+    const dispatcher = createRuntimeDaemonDispatcher({
+      runtime: makeRuntime(),
+      management,
+      requireOperationEnvelope: true,
+    });
+    await initializeDispatcher(dispatcher, { operationDeduplication: true });
+    const requests: readonly {
+      readonly method: RuntimeDaemonMethod;
+      readonly params: unknown;
+    }[] = [
+      {
+        method: 'credential.register',
+        params: { leaseId: 'credential-fenced', providers: ['mock'] },
+      },
+      { method: 'credential.revoke', params: { leaseId: 'credential-fenced' } },
+      {
+        method: 'credential.supply',
+        params: { requestId: 'credential-request-fenced', credential: 'never-dispatched' },
+      },
+      {
+        method: 'host_tool.register',
+        params: {
+          leaseId: 'host-tools-fenced',
+          tools: [{
+            name: 'space_artifact_create',
+            inputSchema: { type: 'object' },
+            sideEffect: 'non_idempotent',
+          }],
+        },
+      },
+      { method: 'host_tool.revoke', params: { leaseId: 'host-tools-fenced' } },
+      {
+        method: 'host_tool.complete',
+        params: { invocationId: 'host-invocation-fenced', error: 'not dispatched' },
+      },
+    ];
+
+    for (const [index, request] of requests.entries()) {
+      const response = await dispatcher.handle(createRuntimeDaemonRequest(
+        `req-fenced-${index}`,
+        request.method,
+        request.params,
+      ));
+      expect(isRuntimeDaemonSuccessResponse(response)).toBe(false);
+      if (!isRuntimeDaemonSuccessResponse(response)) {
+        expect(response.error).toMatchObject({ code: 'conflict' });
+      }
+    }
+
+    expect(fencedMutations).toBe(requests.length);
+    dispatcher.close();
   });
 
   it('rejects non-versioned session setting writes on a shared daemon', async () => {
@@ -1821,6 +1893,8 @@ function makeRuntime(): KodaXRuntime & { emit(event: RuntimeEvent): void } {
           clientCount: 0,
           activeRuns: [],
           queuedRuns: [],
+          activeWorkflows: [],
+          activeAgentTasks: [],
           pendingPermissions: [],
           pendingUserInputs: [],
           blockers: [],

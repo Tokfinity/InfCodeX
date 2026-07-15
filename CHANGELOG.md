@@ -25,6 +25,12 @@ All notable changes to this project will be documented in this file.
   blockers, and changes sticky inline policy while the verified daemon still
   owns the profile fence. Stale commits fail with structured `conflict` and do
   not stop or change policy.
+- **Complete rollback draining and background-work blockers.** Credential and
+  Host Tool bridge state can no longer change after draining starts, while
+  running/paused Workflows and non-terminal or unknown External Agent tasks now
+  block stop and participate in the management revision. Reverse-result frames
+  remain outside the durable journal so credentials and Host Tool results are
+  not persisted.
 
 ## [0.7.69] - Unreleased
 

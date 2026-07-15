@@ -5,10 +5,12 @@ import path from 'node:path';
 
 import { afterEach, describe, expect, it } from 'vitest';
 import { emitKodaXDiagnostic } from '@kodax-ai/agent';
+import type { AgentTaskSnapshot, ManagedWorkflowSnapshot } from '@kodax-ai/agent';
 
 import type {
   KodaXRuntime,
   RuntimeCompactSessionResult,
+  RuntimeDaemonPreflight,
   RuntimeEvent,
   RuntimeEventFilter,
   RuntimeEventListener,
@@ -169,7 +171,14 @@ describe('runtime daemon host', () => {
       clientInfo: { name: 'space', instanceId: 'space-client' },
     });
     expect(initialized).toMatchObject({
-      capabilities: { daemonManagement: { version: 1, revisionedStop: true } },
+      capabilities: {
+        daemonManagement: {
+          version: 1,
+          revisionedStop: true,
+          reverseBridgeDrainingFence: true,
+          backgroundWorkPreflight: true,
+        },
+      },
     });
 
     await expect(first.request('daemon.preflight')).resolves.toMatchObject({
@@ -230,6 +239,117 @@ describe('runtime daemon host', () => {
     await host.closed;
     await waitForHostStateRemoval(paths);
     expect(readRuntimeOwnerPolicy(paths)).toMatchObject({ mode: 'inline', revision: 1 });
+  });
+
+  it('advances management revision for daemon-owned background lifecycle changes', async () => {
+    let activeWorkflow: ManagedWorkflowSnapshot | undefined;
+    let activeAgentTask: AgentTaskSnapshot | undefined;
+    const backgroundWorkflow: ManagedWorkflowSnapshot = {
+      runId: 'workflow-background',
+      workflow: 'background-review',
+      status: 'running',
+      totalSpawned: 1,
+      eventCount: 1,
+      startedAt: 1,
+    };
+    const runtime = makeRuntime({
+      async preflight() {
+        const activeWorkflows = activeWorkflow ? [activeWorkflow] : [];
+        const activeAgentTasks = activeAgentTask ? [activeAgentTask] : [];
+        const blockers: RuntimeDaemonPreflight['blockers'][number][] = [];
+        if (activeWorkflows.length > 0) blockers.push('active_workflows');
+        if (activeAgentTasks.length > 0) blockers.push('active_agent_tasks');
+        return {
+          runtimeId: 'runtime-host-test',
+          clientCount: 0,
+          activeRuns: [],
+          queuedRuns: [],
+          activeWorkflows,
+          activeAgentTasks,
+          pendingPermissions: [],
+          pendingUserInputs: [],
+          blockers,
+          canStop: blockers.length === 0,
+        };
+      },
+    });
+    const paths = resolveRuntimeDaemonPaths(tempHome(), 'default');
+    const lock = tryAcquireRuntimeDaemonLock(paths, {
+      runtimeId: runtime.identity.runtimeId,
+      pid: process.pid,
+      createdAt: runtime.identity.startedAt,
+      kind: 'daemon',
+    });
+    expect(lock).toBeDefined();
+    if (!lock) throw new Error('Expected daemon lock for background revision test.');
+    const host = await startRuntimeDaemonHost({
+      runtime,
+      paths,
+      endpoint: await makeTestEndpoint(),
+      lock,
+    });
+    cleanupTasks.push(() => host.close());
+    const client = await createRuntimeDaemonSocketClientTransport(host.endpoint);
+    cleanupTasks.push(async () => client.close?.());
+    await client.request('initialize', {
+      profile: 'default',
+      token: readRuntimeDaemonToken(paths),
+    });
+
+    const first = await client.request('daemon.management.get') as {
+      runtimeId: string;
+      revision: number;
+      ownerPolicy: { revision: number };
+      preflight: RuntimeDaemonPreflight;
+    };
+    expect(first.preflight).toMatchObject({
+      blockers: [],
+      canStop: true,
+    });
+
+    activeWorkflow = backgroundWorkflow;
+    activeAgentTask = backgroundAgentTask();
+    await expect(client.request('daemon.rollbackToInline', {
+      expectedRuntimeId: first.runtimeId,
+      expectedRevision: first.revision,
+      expectedOwnerPolicyRevision: first.ownerPolicy.revision,
+    })).rejects.toMatchObject({ code: 'conflict' });
+
+    const changed = await client.request('daemon.management.get') as {
+      revision: number;
+      preflight: RuntimeDaemonPreflight;
+    };
+    expect(changed.revision).toBeGreaterThan(first.revision);
+    expect(changed.preflight).toMatchObject({
+      blockers: expect.arrayContaining(['active_workflows', 'active_agent_tasks']),
+      canStop: false,
+    });
+
+    activeWorkflow = { ...backgroundWorkflow, eventCount: 2 };
+    activeAgentTask = {
+      ...activeAgentTask,
+      progress: { percent: 50 },
+      updatedAt: '2026-07-15T00:00:01.000Z',
+    };
+    const progressed = await client.request('daemon.management.get') as {
+      revision: number;
+      preflight: RuntimeDaemonPreflight;
+    };
+    expect(progressed.revision).toBeGreaterThan(changed.revision);
+
+    activeWorkflow = undefined;
+    activeAgentTask = undefined;
+    const settled = await client.request('daemon.management.get') as {
+      revision: number;
+      preflight: RuntimeDaemonPreflight;
+    };
+    expect(settled.revision).toBeGreaterThan(progressed.revision);
+    expect(settled.preflight).toMatchObject({
+      activeWorkflows: [],
+      activeAgentTasks: [],
+      blockers: [],
+      canStop: true,
+    });
   });
 
   it('routes runtime diagnostics to the daemon log without writing to the live terminal', async () => {
@@ -539,7 +659,9 @@ async function waitForClientCount(
   throw new Error(`Timed out waiting for daemon client count ${expected}.`);
 }
 
-function makeRuntime(): KodaXRuntime & { closed: boolean } {
+function makeRuntime(options: {
+  readonly preflight?: () => Promise<RuntimeDaemonPreflight>;
+} = {}): KodaXRuntime & { closed: boolean } {
   const runs = new Map<string, RuntimeRunResult>();
   const eventSubscribers: Array<{
     readonly filter: RuntimeEventFilter;
@@ -860,11 +982,14 @@ function makeRuntime(): KodaXRuntime & { closed: boolean } {
         };
       },
       async preflight() {
+        if (options.preflight) return options.preflight();
         return {
           runtimeId: runtime.identity.runtimeId,
           clientCount: 0,
           activeRuns: [],
           queuedRuns: [],
+          activeWorkflows: [],
+          activeAgentTasks: [],
           pendingPermissions: [],
           pendingUserInputs: [],
           blockers: [],
@@ -885,6 +1010,36 @@ function makeRuntime(): KodaXRuntime & { closed: boolean } {
     },
   };
   return runtime;
+}
+
+function backgroundAgentTask(): AgentTaskSnapshot {
+  return {
+    taskId: 'agent-task-background',
+    route: 'external',
+    agentId: 'external:background',
+    objective: 'Background task',
+    state: 'working',
+    cancellation: 'none',
+    registration: {
+      agentId: 'external:background',
+      origin: 'external',
+      executorId: 'background-executor',
+      protocol: 'http',
+      configurationRevision: 'rev-1',
+      capabilities: {
+        streaming: 'supported',
+        durableTasks: 'supported',
+        inputRequired: 'supported',
+        cancellation: 'supported',
+        artifacts: 'supported',
+      },
+      effects: { remote: 'read', workspace: 'proposal' },
+    },
+    idempotencyKey: 'background-idempotency',
+    dispatchAttempt: 1,
+    createdAt: '2026-07-15T00:00:00.000Z',
+    updatedAt: '2026-07-15T00:00:00.000Z',
+  };
 }
 
 function createTestUserInputs(): KodaXRuntime['userInputs'] {

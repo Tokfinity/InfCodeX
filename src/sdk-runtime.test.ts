@@ -3061,6 +3061,12 @@ describe('createKodaXRuntime', () => {
 
     await flushMicrotasks();
 
+    await expect(runtime.status.preflight()).resolves.toMatchObject({
+      activeWorkflows: [expect.objectContaining({ runId, status: 'running' })],
+      activeAgentTasks: [],
+      blockers: expect.arrayContaining(['active_workflows']),
+      canStop: false,
+    });
     expect(await runtime.workflows.list({ runId })).toHaveLength(1);
     expect(await runtime.workflows.get(runId)).toMatchObject({
       runId,
@@ -3069,6 +3075,11 @@ describe('createKodaXRuntime', () => {
     });
     expect(await runtime.workflows.pause(runId)).toBe(true);
     expect((await runtime.workflows.get(runId))?.status).toBe('paused');
+    await expect(runtime.status.preflight()).resolves.toMatchObject({
+      activeWorkflows: [expect.objectContaining({ runId, status: 'paused' })],
+      blockers: expect.arrayContaining(['active_workflows']),
+      canStop: false,
+    });
     expect(await runtime.workflows.resume(runId)).toBe(true);
 
     finishWorkflow?.();
@@ -3082,6 +3093,11 @@ describe('createKodaXRuntime', () => {
     expect(workflowEvents).toContain('workflow_updated');
     expect(workflowEvents).toContain('workflow_finished');
     expect(await runtime.workflows.stop('missing-workflow')).toBe(false);
+    const settledPreflight = await runtime.status.preflight();
+    expect(settledPreflight.activeWorkflows).not.toEqual(expect.arrayContaining([
+      expect.objectContaining({ runId }),
+    ]));
+    expect(settledPreflight.blockers).not.toContain('active_workflows');
 
     subscription.close();
     await runtime.close();

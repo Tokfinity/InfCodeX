@@ -39,6 +39,7 @@ class DaemonManagementController implements RuntimeDaemonManagementController {
   private activeMutations = 0;
   private draining = false;
   private closed = false;
+  private preflightFingerprint: string | undefined;
 
   constructor(private readonly input: {
     readonly runtime: KodaXRuntime;
@@ -81,6 +82,7 @@ class DaemonManagementController implements RuntimeDaemonManagementController {
     for (let attempt = 0; attempt < 8; attempt += 1) {
       const before = this.revision;
       const current = await this.input.runtime.status.preflight();
+      this.observePreflight(current);
       if (before === this.revision && this.activeMutations === 0) {
         return withLogicalClients(current, this.clients.size);
       }
@@ -190,6 +192,17 @@ class DaemonManagementController implements RuntimeDaemonManagementController {
         { preflight: current },
       );
     }
+  }
+
+  private observePreflight(current: RuntimeDaemonPreflight): void {
+    const fingerprint = JSON.stringify(current);
+    if (this.preflightFingerprint === undefined) {
+      this.preflightFingerprint = fingerprint;
+      return;
+    }
+    if (fingerprint === this.preflightFingerprint) return;
+    this.preflightFingerprint = fingerprint;
+    this.revision += 1;
   }
 }
 

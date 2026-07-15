@@ -4,7 +4,11 @@ import path from 'node:path';
 import { afterEach, describe, expect, it } from 'vitest';
 
 import { createReferenceAgentExecutorFactory } from '@kodax-ai/agent';
-import type { ExternalAgentRegistration } from '@kodax-ai/agent';
+import type {
+  AgentExecutorFactory,
+  AgentTaskState,
+  ExternalAgentRegistration,
+} from '@kodax-ai/agent';
 import { createKodaXRuntime, type KodaXRuntime } from './sdk-runtime.js';
 import { createRuntimeDaemonClient } from './runtime-daemon/client.js';
 import {
@@ -53,6 +57,56 @@ function externalAgentOptions() {
   };
 }
 
+function deferredExternalAgentFixture() {
+  let state: AgentTaskState = 'unknown';
+  let finish: (() => void) | undefined;
+  const finished = new Promise<void>((resolve) => { finish = resolve; });
+  const factory: AgentExecutorFactory = {
+    executorId: 'deferred-http',
+    protocol: 'http',
+    async create() {
+      return {
+        async start(input) {
+          return { idempotencyKey: input.idempotencyKey ?? 'deferred-task' };
+        },
+        async *events() {
+          yield { state: 'unknown' as const };
+          await finished;
+          state = 'completed';
+          yield { state, output: 'deferred-complete' };
+        },
+        async get() { return { state }; },
+        async sendInput() {},
+        async cancel() {
+          state = 'canceled';
+          finish?.();
+          return { state };
+        },
+        async reconcile() { return { state }; },
+        async dispose() { finish?.(); },
+      };
+    },
+  };
+  const deferredRegistration: ExternalAgentRegistration = {
+    ...registration(),
+    agentId: 'external:deferred-runtime',
+    displayName: 'Deferred Runtime',
+    executorId: factory.executorId,
+    protocol: factory.protocol,
+    configurationRevision: 'deferred-rev-1',
+    endpointIdentityHash: 'sha256:deferred-runtime',
+  };
+  return {
+    registration: deferredRegistration,
+    options: {
+      factories: [factory],
+      policy: async () => ({ allowed: true }),
+      defaultContext: { actorId: 'runtime-host' },
+    },
+    finish() { finish?.(); },
+  };
+}
+
 async function assertRuntimeAgentServiceConformance(
   runtime: KodaXRuntime,
   actorId: string,
@@ -85,6 +139,45 @@ async function assertRuntimeAgentServiceConformance(
 }
 
 describe('FEATURE_258 Embedded Runtime agent services', () => {
+  it('blocks stop preflight while an external AgentTask is active or unknown', async () => {
+    homeDir = fs.mkdtempSync(path.join(os.tmpdir(), 'kodax-runtime-agent-preflight-'));
+    const fixture = deferredExternalAgentFixture();
+    const runtime = await createKodaXRuntime({
+      homeDir,
+      externalAgents: fixture.options,
+    });
+    try {
+      await runtime.admin.agentRegistrations.upsert(fixture.registration);
+      const started = await runtime.agentTasks.start({
+        agentId: fixture.registration.agentId,
+        objective: 'Remain active during stop preflight',
+        context: { actorId: 'runtime-host' },
+      });
+      await waitForAgentTaskState(runtime, started.taskId, 'unknown');
+
+      await expect(runtime.status.preflight()).resolves.toMatchObject({
+        activeWorkflows: [],
+        activeAgentTasks: [expect.objectContaining({
+          taskId: started.taskId,
+          state: 'unknown',
+        })],
+        blockers: expect.arrayContaining(['active_agent_tasks']),
+        canStop: false,
+      });
+
+      fixture.finish();
+      await expect(runtime.agentTasks.wait(started.taskId, 1_000)).resolves.toMatchObject({
+        state: 'completed',
+      });
+      const settled = await runtime.status.preflight();
+      expect(settled.activeAgentTasks).toEqual([]);
+      expect(settled.blockers).not.toContain('active_agent_tasks');
+    } finally {
+      fixture.finish();
+      await runtime.close();
+    }
+  });
+
   it('provides redacted registration, shared catalog and durable task services', async () => {
     homeDir = fs.mkdtempSync(path.join(os.tmpdir(), 'kodax-runtime-agents-'));
     const runtime = await createKodaXRuntime({
@@ -214,3 +307,16 @@ describe('FEATURE_258 Embedded Runtime agent services', () => {
     await host.close();
   });
 });
+
+async function waitForAgentTaskState(
+  runtime: KodaXRuntime,
+  taskId: string,
+  expected: AgentTaskState,
+): Promise<void> {
+  const deadline = Date.now() + 2_000;
+  while (Date.now() <= deadline) {
+    if ((await runtime.agentTasks.get(taskId)).state === expected) return;
+    await new Promise((resolve) => setTimeout(resolve, 10));
+  }
+  throw new Error(`Timed out waiting for AgentTask ${taskId} state ${expected}.`);
+}

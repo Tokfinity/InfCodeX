@@ -46,6 +46,7 @@ import {
   type RuntimeDaemonRequest,
   type RuntimeDaemonSuccessResponse,
   RUNTIME_DAEMON_METHODS,
+  isRuntimeDaemonDrainingSensitiveMethod,
   isRuntimeDaemonMutationMethod,
 } from './protocol.js';
 import type { RuntimeControlJournal } from './control-journal.js';
@@ -462,7 +463,7 @@ async function dispatchWithOperation(
 }
 
 function isManagedRuntimeMutation(method: RuntimeDaemonMethod): boolean {
-  return isRuntimeDaemonMutationMethod(method)
+  return isRuntimeDaemonDrainingSensitiveMethod(method)
     && method !== 'daemon.stop'
     && method !== 'runtime.shutdown'
     && method !== 'daemon.rollbackToInline';
@@ -1285,6 +1286,8 @@ function runtimeDaemonCapabilities(
         revisionedStop: true,
         ownerPolicy: true,
         ownerFenceState: true,
+        reverseBridgeDrainingFence: true,
+        backgroundWorkPreflight: true,
       },
     } : {}),
     sharedSessionSettings: {

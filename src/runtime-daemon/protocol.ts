@@ -421,6 +421,18 @@ const MUTATION_METHODS: ReadonlySet<string> = new Set<RuntimeDaemonMutationMetho
   RUNTIME_DAEMON_MUTATION_METHODS,
 );
 
+// Reverse-bridge control requests mutate daemon-owned live state, but must not
+// enter the durable operation journal: credential.supply can contain a secret,
+// while supply/complete are already reconciled by their one-shot request IDs.
+const REVERSE_BRIDGE_STATE_METHODS: ReadonlySet<RuntimeDaemonMethod> = new Set([
+  'credential.register',
+  'credential.revoke',
+  'credential.supply',
+  'host_tool.register',
+  'host_tool.revoke',
+  'host_tool.complete',
+]);
+
 const NOTIFICATION_METHODS: ReadonlySet<string> = new Set<RuntimeDaemonNotificationMethod>([
   'event',
   'credential.request',
@@ -475,6 +487,12 @@ export function isRuntimeDaemonMutationMethod(
   method: RuntimeDaemonMethod,
 ): method is RuntimeDaemonMutationMethod {
   return MUTATION_METHODS.has(method);
+}
+
+export function isRuntimeDaemonDrainingSensitiveMethod(
+  method: RuntimeDaemonMethod,
+): boolean {
+  return isRuntimeDaemonMutationMethod(method) || REVERSE_BRIDGE_STATE_METHODS.has(method);
 }
 
 export function createRuntimeDaemonSuccessResponse(

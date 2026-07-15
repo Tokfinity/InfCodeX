@@ -14,6 +14,7 @@ _Last Updated: 2026-07-15_
 
 | ID | Priority | Status | Title | Introduced | Fixed | Created | Resolved |
 |----|----------|--------|-------|------------|-------|---------|----------|
+| 160 | High | Resolved | Shared-daemon rollback omits reverse-bridge mutations and daemon-owned background work | v0.7.70 RC | v0.7.70 | 2026-07-15 | 2026-07-15 |
 | 159 | High | Resolved | Windows process cleanup can lose descendants when `taskkill /t` fails under load | v0.7.67 | v0.7.69 | 2026-07-15 | 2026-07-15 |
 | 158 | High | Resolved | Post-hoc output/history loss hides evidence and can increase end-to-end token use | v0.7.61 | v0.7.69 | 2026-07-14 | 2026-07-15 |
 | 157 | High | Resolved | F267/F269 review found durability, network, concurrency, and diagnostic gaps | v0.7.69 RC | v0.7.69 | 2026-07-14 | 2026-07-14 |
@@ -69,6 +70,67 @@ _Last Updated: 2026-07-15_
 
 ## Issue Details
 <!-- Full details for each issue - REQUIRED for all issues -->
+
+### 160: Shared-daemon rollback omits reverse-bridge mutations and daemon-owned background work
+
+- **Priority**: High
+- **Status**: **Resolved** (v0.7.70)
+- **Introduced**: v0.7.70 RC
+- **Created**: 2026-07-15
+- **Resolved**: 2026-07-15
+- **Fixed**: v0.7.70
+
+#### Original Problem
+
+The revisioned daemon-to-inline rollback fence did not classify credential and
+Host Tool register/revoke/completion requests as draining-sensitive mutations.
+Those requests could still alter reverse-bridge state after rollback draining
+began. Stop preflight also ignored non-terminal Workflow and External Agent
+tasks, so `canStop` could be true while daemon-owned background work remained.
+
+#### Root Cause
+
+The protocol mutation classifier was reused as the management draining fence
+but omitted reverse-bridge control methods. Runtime preflight projected only
+ordinary runs and pending interactions, while management revision observed
+ordinary Runtime events rather than every daemon-owned background lifecycle.
+
+#### Proposed Solution
+
+Fence all reverse-bridge state changes without persisting credentials, expose
+active Workflow and AgentTask state in typed preflight, fail closed on active or
+uncertain work, and make rollback CAS observe background lifecycle changes.
+Add race tests that mutate each state after inspection and require `conflict`.
+
+#### Resolution
+
+Reverse-bridge register/revoke/supply/completion requests now use a dedicated
+draining-sensitive classifier. This keeps them inside the atomic stop fence
+without adding credential or Host Tool result frames to the durable operation
+journal. Typed preflight now exposes active Workflows and AgentTasks, treats
+unknown/future non-terminal states conservatively, and reports dedicated
+blockers. Management fingerprints each authoritative preflight projection, so
+background lifecycle changes advance the rollback revision even when they do
+not emit a normal Runtime event.
+
+#### Files Changed
+
+- `src/runtime-daemon/protocol.ts`
+- `src/runtime-daemon/server.ts`
+- `src/runtime-daemon/management.ts`
+- `src/sdk-runtime.ts`
+- `docs/SDK_EMBEDDER_GUIDE.md`
+- `docs/features/v0.7.70.md`
+- `docs/test-guides/ISSUE_F269_v0.7.70_REGRESSION_GUIDE.md`
+
+#### Tests Added
+
+- All six credential/Host Tool state-changing methods are rejected by the
+  management fence during draining while remaining outside durable operations.
+- Running/paused Workflow and non-terminal/unknown AgentTask states block stop
+  and clear only after reaching terminal states.
+- A background lifecycle change after management inspection advances revision
+  and rejects the stale rollback without changing owner policy.
 
 ### 159: Windows process cleanup can lose descendants when `taskkill /t` fails under load
 
@@ -3033,7 +3095,7 @@ Commit `ef085fc` 把 V1 精简到 V2 时没区分"信息载体"和"脚手架"，
 ---
 
 ## Summary
-- Total: 46 (24 Open, 22 Resolved, 0 Partially Resolved, 0 Won't Fix)
+- Total: 47 (24 Open, 23 Resolved, 0 Partially Resolved, 0 Won't Fix)
 - Highest Priority Open: 091 - 缺少一等公民 MCP / Web Search / Code Search 工具体系 (High)
 - Historical archived issues are maintained in ISSUES_ARCHIVED.md
 
