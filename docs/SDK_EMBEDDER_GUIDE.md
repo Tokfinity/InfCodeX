@@ -2793,9 +2793,10 @@ the v0.7.66 delivery. v0.7.67 adds
 `FEATURE_261_v0.7.67_TEST_GUIDE.md`; v0.7.69 adds
 `FEATURE_267_v0.7.69_TEST_GUIDE.md`, `FEATURE_268_v0.7.69_TEST_GUIDE.md`, and
 `FEATURE_269_v0.7.69_TEST_GUIDE.md`. The earlier release-preparation Actions
-run is not reused after the severe-fix review; the current candidate must pass
-a fresh Node 20/22 full-test matrix and Node 22 Unix-domain-socket daemon gate.
-npm publication remains a maintainer-owned manual step.
+run is not reused after the severe-fix review. Fresh GitHub Actions run
+`29385073422` passes the Node 20/22 build, bundle, DTS, and full-test matrix plus
+the Node 22 Unix-domain-socket daemon gate. npm publication remains a
+maintainer-owned manual step.
 
 ---
 

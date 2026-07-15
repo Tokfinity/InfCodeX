@@ -27,7 +27,7 @@
 | Status | Count | Feature IDs | Next checkpoint |
 |---|---:|---|---|
 | Completed | 33 | `260, 261, 259, 258, 253, 254, 255, 256, 257, 228, 251, 252, 250, 248, 249, 247, 246, 245, 243, 242, 241, 233, 240, 239, 224, 221, 174, 211, 237, 229, 230, 234, 236` | `260` completed for v0.7.68 (2026-07-12) with 9593/9593 passing tests on both Node 20 and Node 22 release CI, full build and artifact validation, 87.58% focused line coverage, and all preregistered v2 memory-routing gates passing. `261`, `259`, and `258` shipped in v0.7.67 (2026-07-11). Earlier completion history is unchanged. |
-| InProgress | 4 | `269, 267, 268, 225` | `267`/`268` source implementation and F269 integration remain in the v0.7.69 slot; they are not automatically rescheduled. `269` is hardened after the Space SDK package review: server admission, complete snapshots, lifecycle/events/transport types, shared settings, stable bridge resume, recovery queries, and preflight are implemented. Node 20/22 focused regression, root type/build/bundle/DTS, fresh-tarball consumer/Worker/CLI/DTS, and Windows binary gates pass locally. Remaining gates are the current GitHub full matrix, formal Space smoke, npm publication, and independent F267/F268 release evidence. `225` broader current-HEAD cleanup remains outside this release. |
+| InProgress | 4 | `269, 267, 268, 225` | `267`/`268` source implementation and F269 integration remain in the v0.7.69 slot; they are not automatically rescheduled. `269` is hardened after the Space SDK package review: server admission, complete snapshots, lifecycle/events/transport types, shared settings, stable bridge resume, recovery queries, and preflight are implemented. Node 20/22 focused regression, root type/build/bundle/DTS, fresh-tarball consumer/Worker/CLI/DTS, and Windows binary gates pass locally. GitHub Actions run `29385073422` is green for Node 20/22 build/DTS/full tests and the Node 22 Unix-socket gate. Remaining gates are formal Space smoke, npm publication, and independent F267/F268 release evidence. `225` broader current-HEAD cleanup remains outside this release. |
 | Planned, near-term | 5 | `266, 270, 263, 264, 265` | `v0.7.70` -> `v0.7.85` |
 | Planned, v0.8.x | 5 | `007, 030, 093, 113, 139` | `v0.8.5+` |
 | Planned, v0.9.x | 1 | `262` | `v0.9.0` |
@@ -316,9 +316,9 @@ and Windows/Ubuntu release evidence; it does not move F267 or F268. The 2026-07-
 restart reconciliation, event-trim projection, owner-lock/atomic-release,
 Host Tool revoke, credential expiry/configuration/redaction, and legacy
 settings-CAS gaps. Earlier release-candidate evidence remains recorded, but the
-post-review delta passes its local type/build/package/binary gates; the current
-GitHub full matrix and formal Space/package smoke remain required before
-publication.
+post-review delta passes its local type/build/package/binary gates, and GitHub
+Actions run `29385073422` passes the Node 20/22 full matrix plus Node 22 Unix
+socket gate. Formal Space/package smoke remains required before publication.
 
 `260` completed for `v0.7.68`: the thin experimental Memory Agent SDK,
 zero-wait scoped recall, deliberate read-only `memory_recall`, trace-only
