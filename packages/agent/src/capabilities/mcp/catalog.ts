@@ -1,5 +1,6 @@
 import fs from 'fs/promises';
 import path from 'path';
+import { createHash } from 'node:crypto';
 
 import { getAgentConfigPath } from '../../runtime/agent-home.js';
 
@@ -51,6 +52,71 @@ export interface McpServerCatalogSnapshot {
 export interface McpCatalogSearchOptions {
   kind?: McpCapabilityKind;
   limit?: number;
+}
+
+function isRecord(value: unknown): value is Record<string, unknown> {
+  return value !== null && typeof value === 'object' && !Array.isArray(value);
+}
+
+function isOptionalString(value: unknown): boolean {
+  return value === undefined || typeof value === 'string';
+}
+
+function isCatalogItem(value: unknown, serverId: string): value is McpCatalogItem {
+  if (!isRecord(value)) return false;
+  const kind = value.kind;
+  const validKind = kind === 'tool' || kind === 'resource' || kind === 'prompt';
+  if (
+    !validKind
+    || typeof value.id !== 'string'
+    || value.serverId !== serverId
+    || typeof value.name !== 'string'
+    || value.name.trim().length === 0
+    || typeof value.summary !== 'string'
+    || typeof value.cachedAt !== 'string'
+    || !isOptionalString(value.title)
+  ) {
+    return false;
+  }
+  if (value.id !== createMcpCapabilityId(serverId, kind, value.name)) return false;
+  if (value.tags !== undefined && (
+    !Array.isArray(value.tags) || !value.tags.every((tag) => typeof tag === 'string')
+  )) {
+    return false;
+  }
+  if (value.risk !== undefined && !['read', 'write', 'network', 'exec'].includes(String(value.risk))) {
+    return false;
+  }
+  return value.annotations === undefined || isRecord(value.annotations);
+}
+
+function hasMatchingCatalogIds(
+  items: readonly McpCatalogItem[],
+  descriptors: readonly McpCapabilityDescriptor[],
+): boolean {
+  const itemIds = items.map((item) => item.id);
+  const descriptorIds = descriptors.map((item) => item.id);
+  if (new Set(itemIds).size !== itemIds.length || new Set(descriptorIds).size !== descriptorIds.length) {
+    return false;
+  }
+  return [...itemIds].sort(compareText).join('\n') === [...descriptorIds].sort(compareText).join('\n');
+}
+
+function compareText(left: string, right: string): number {
+  return left < right ? -1 : left > right ? 1 : 0;
+}
+
+export function createMcpCatalogRevision(items: readonly McpCatalogItem[]): string {
+  const content = [...items]
+    .sort((left, right) => compareText(left.id, right.id))
+    .map((item) => ({
+      id: item.id,
+      title: item.title,
+      summary: item.summary,
+      tags: item.tags,
+      risk: item.risk,
+    }));
+  return createHash('sha256').update(JSON.stringify(content)).digest('hex').slice(0, 16);
 }
 
 function safeIdComponent(value: string): string {
@@ -226,21 +292,92 @@ export function buildCatalogSearchText(item: McpCatalogItem): string {
     .toLowerCase();
 }
 
+function normalizeSearchText(value: string): string {
+  return value
+    .replace(/([a-z0-9])([A-Z])/g, '$1 $2')
+    .toLowerCase()
+    .replace(/[^\p{L}\p{N}]+/gu, ' ')
+    .trim();
+}
+
+const CJK_SCRIPT = /[\p{Script=Han}\p{Script=Hiragana}\p{Script=Katakana}\p{Script=Hangul}]/u;
+const CJK_WORD_SEGMENTER = new Intl.Segmenter('zh-CN', { granularity: 'word' });
+
+function tokenizeSearchText(value: string): string[] {
+  const normalized = normalizeSearchText(value);
+  if (!normalized) return [];
+  return normalized.split(/\s+/).flatMap((token) => {
+    if (!CJK_SCRIPT.test(token)) return [token];
+    return [...CJK_WORD_SEGMENTER.segment(token)]
+      .filter((segment) => segment.isWordLike)
+      .map((segment) => segment.segment);
+  });
+}
+
+interface McpCatalogScore {
+  score: number;
+  complete: boolean;
+}
+
+function scoreCatalogItem(
+  item: McpCatalogItem,
+  query: string,
+  tokens: readonly string[],
+): McpCatalogScore {
+  const rawId = item.id.toLowerCase();
+  const rawName = item.name.toLowerCase();
+  if (rawId === query) return { score: 100_000, complete: true };
+  if (rawName === query || normalizeSearchText(item.name) === normalizeSearchText(query)) {
+    return { score: 90_000, complete: true };
+  }
+
+  const fields = [
+    { text: normalizeSearchText(item.name), weight: 80 },
+    { text: normalizeSearchText(item.id), weight: 60 },
+    { text: normalizeSearchText(item.title ?? ''), weight: 40 },
+    { text: normalizeSearchText((item.tags ?? []).join(' ')), weight: 30 },
+    { text: normalizeSearchText(item.summary), weight: 15 },
+    { text: normalizeSearchText(item.serverId), weight: 10 },
+    { text: item.kind, weight: 5 },
+  ];
+  let matched = 0;
+  let score = 0;
+  for (const token of tokens) {
+    const best = fields.reduce((weight, field) => (
+      field.text.includes(token) ? Math.max(weight, field.weight) : weight
+    ), 0);
+    if (best > 0) {
+      matched += 1;
+      score += best;
+    }
+  }
+  return { score, complete: matched === tokens.length };
+}
+
 export function searchMcpCatalog(
   items: readonly McpCatalogItem[],
   query: string,
   options: McpCatalogSearchOptions = {},
 ): McpCatalogItem[] {
-  const normalizedQuery = query.trim().toLowerCase();
-  const limit = Math.max(1, Math.floor(options.limit ?? 10));
+  const rawQuery = query.trim().toLowerCase();
+  const tokens = tokenizeSearchText(query);
+  const limit = options.limit === undefined
+    ? Number.POSITIVE_INFINITY
+    : Math.max(1, Math.floor(options.limit));
+  const candidates = items.filter((item) => !options.kind || item.kind === options.kind);
 
-  return items
-    .filter((item) => !options.kind || item.kind === options.kind)
-    .map((item) => ({
-      item,
-      haystack: buildCatalogSearchText(item),
-    }))
-    .filter(({ haystack }) => normalizedQuery.length === 0 || haystack.includes(normalizedQuery))
+  if (tokens.length === 0) {
+    return [...candidates]
+      .sort((left, right) => compareText(left.id, right.id))
+      .slice(0, limit);
+  }
+
+  return candidates
+    .map((item) => ({ item, ...scoreCatalogItem(item, rawQuery, tokens) }))
+    .filter(({ score }) => score > 0)
+    .sort((left, right) => Number(right.complete) - Number(left.complete)
+      || right.score - left.score
+      || compareText(left.item.id, right.item.id))
     .slice(0, limit)
     .map(({ item }) => item);
 }
@@ -294,22 +431,31 @@ export async function readMcpServerCatalog(
       fs.readFile(indexPath, 'utf8'),
       fs.readFile(itemsPath, 'utf8'),
     ]);
-    const indexJson = JSON.parse(indexRaw) as {
-      serverId?: string;
-      updatedAt?: string;
-      items?: McpCatalogItem[];
-    };
-    const itemsJson = JSON.parse(itemsRaw) as {
-      serverId?: string;
-      updatedAt?: string;
-      descriptors?: McpCapabilityDescriptor[];
-    };
+    const indexJson = JSON.parse(indexRaw) as unknown;
+    const itemsJson = JSON.parse(itemsRaw) as unknown;
+    if (!isRecord(indexJson) || !isRecord(itemsJson)) return undefined;
+    if (
+      (indexJson.serverId !== undefined && indexJson.serverId !== serverId)
+      || (itemsJson.serverId !== undefined && itemsJson.serverId !== serverId)
+      || !Array.isArray(indexJson.items)
+      || !Array.isArray(itemsJson.descriptors)
+      || !indexJson.items.every((item) => isCatalogItem(item, serverId))
+      || !itemsJson.descriptors.every((item) => isCatalogItem(item, serverId))
+    ) {
+      return undefined;
+    }
+    const indexUpdatedAt = typeof indexJson.updatedAt === 'string' ? indexJson.updatedAt : undefined;
+    const itemsUpdatedAt = typeof itemsJson.updatedAt === 'string' ? itemsJson.updatedAt : undefined;
+    if (indexUpdatedAt && itemsUpdatedAt && indexUpdatedAt !== itemsUpdatedAt) return undefined;
+    const catalogItems = indexJson.items as McpCatalogItem[];
+    const descriptors = itemsJson.descriptors as McpCapabilityDescriptor[];
+    if (!hasMatchingCatalogIds(catalogItems, descriptors)) return undefined;
 
     return {
       serverId,
-      updatedAt: itemsJson.updatedAt ?? indexJson.updatedAt ?? new Date(0).toISOString(),
-      items: indexJson.items ?? [],
-      descriptors: itemsJson.descriptors ?? [],
+      updatedAt: itemsUpdatedAt ?? indexUpdatedAt ?? new Date(0).toISOString(),
+      items: catalogItems,
+      descriptors,
     };
   } catch {
     return undefined;

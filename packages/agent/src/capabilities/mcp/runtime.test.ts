@@ -2,7 +2,7 @@ import http from 'node:http';
 import os from 'node:os';
 import path from 'node:path';
 import { mkdtemp, readFile, rm, writeFile } from 'node:fs/promises';
-import { afterEach, describe, expect, it } from 'vitest';
+import { afterEach, describe, expect, it, vi } from 'vitest';
 import { McpServerRuntime } from './runtime.js';
 import type { McpReverseCapabilities } from './reverse-capabilities.js';
 
@@ -698,6 +698,91 @@ process.stdin.on('data', (chunk) => {
     const line = buffer.slice(0, lineEnd).replace(/\\r$/, '').trim();
     buffer = buffer.slice(lineEnd + 1);
     if (!line) { continue; }
+    try { handle(JSON.parse(line)); } catch { process.exit(2); }
+  }
+});
+process.on('SIGTERM', () => process.exit(0));
+process.on('SIGINT', () => process.exit(0));
+`;
+}
+
+function createCatalogIntegrityServerSource(
+  mode: 'malformed'
+    | 'missing-identifier'
+    | 'missing-resource-uri'
+    | 'null-cursor'
+    | 'repeated-cursor'
+    | 'duplicate-entry'
+    | 'list-changed-during-pagination',
+): string {
+  return `
+let buffer = '';
+let toolsListCalls = 0;
+const mode = ${JSON.stringify(mode)};
+function writeMessage(p){ process.stdout.write(JSON.stringify(p) + '\\n'); }
+function handle(m){
+  if (m.method === 'initialize') {
+    const capabilities = mode === 'missing-resource-uri' ? { resources: {} } : { tools: {} };
+    writeMessage({ jsonrpc: '2.0', id: m.id, result: { protocolVersion: '2025-11-25', capabilities, serverInfo: { name: 'catalog-integrity-test', version: '1.0.0' } } });
+    return;
+  }
+  if (mode === 'missing-resource-uri' && m.method === 'resources/list') {
+    writeMessage({ jsonrpc: '2.0', id: m.id, result: { resources: [{ name: 'not-a-readable-uri' }] } });
+    return;
+  }
+  if (m.method !== 'tools/list') return;
+  toolsListCalls += 1;
+  if (mode === 'list-changed-during-pagination') {
+    if (toolsListCalls === 1) {
+      writeMessage({ jsonrpc: '2.0', id: m.id, result: { tools: [{ name: 'stable_tool', inputSchema: { type: 'object' } }] } });
+      return;
+    }
+    if (toolsListCalls === 2) {
+      writeMessage({ jsonrpc: '2.0', id: m.id, result: { tools: [{ name: 'possibly_stale_one', inputSchema: { type: 'object' } }], nextCursor: 'page-2' } });
+      return;
+    }
+    writeMessage({ jsonrpc: '2.0', method: 'notifications/tools/list_changed' });
+    writeMessage({ jsonrpc: '2.0', id: m.id, result: { tools: [{ name: 'possibly_stale_two', inputSchema: { type: 'object' } }] } });
+    return;
+  }
+  if (mode === 'malformed') {
+    writeMessage({ jsonrpc: '2.0', id: m.id, result: { tools: {} } });
+    return;
+  }
+  if (mode === 'missing-identifier') {
+    writeMessage({ jsonrpc: '2.0', id: m.id, result: { tools: [{ inputSchema: { type: 'object' } }] } });
+    return;
+  }
+  if (mode === 'null-cursor') {
+    writeMessage({ jsonrpc: '2.0', id: m.id, result: { tools: [], nextCursor: null } });
+    return;
+  }
+  if (mode === 'repeated-cursor') {
+    if (toolsListCalls > 2) {
+      writeMessage({ jsonrpc: '2.0', id: m.id, error: { code: -32000, message: 'server safeguard tripped' } });
+      return;
+    }
+    writeMessage({ jsonrpc: '2.0', id: m.id, result: { tools: [{ name: 'one', inputSchema: { type: 'object' } }], nextCursor: 'same-cursor' } });
+    return;
+  }
+  if (!m.params || !m.params.cursor) {
+    writeMessage({ jsonrpc: '2.0', id: m.id, result: { tools: [{ name: 'one', inputSchema: { type: 'object' } }], nextCursor: 'page-2' } });
+    return;
+  }
+  writeMessage({ jsonrpc: '2.0', id: m.id, result: { tools: [
+    { name: 'one', inputSchema: { type: 'object' } },
+    { name: 'two', inputSchema: { type: 'object' } },
+  ] } });
+}
+process.stdin.setEncoding('utf8');
+process.stdin.on('data', (chunk) => {
+  buffer += chunk;
+  while (true) {
+    const lineEnd = buffer.indexOf('\\n');
+    if (lineEnd < 0) return;
+    const line = buffer.slice(0, lineEnd).replace(/\\r$/, '').trim();
+    buffer = buffer.slice(lineEnd + 1);
+    if (!line) continue;
     try { handle(JSON.parse(line)); } catch { process.exit(2); }
   }
 });
@@ -1473,6 +1558,135 @@ describe('McpServerRuntime protocol compatibility', () => {
         .toEqual(['complete_tool']);
     } finally {
       await diskReader.dispose();
+    }
+  });
+
+  it('coalesces concurrent model-facing discovery into one catalog refresh', async () => {
+    const dir = await createTempDir();
+    const runtime = new McpServerRuntime(
+      'coalesced',
+      { type: 'stdio', command: path.join(dir, 'not-used.exe') },
+      dir,
+    );
+    let releaseRefresh: (() => void) | undefined;
+    const refreshGate = new Promise<void>((resolve) => {
+      releaseRefresh = resolve;
+    });
+    const refresh = vi.spyOn(runtime, 'refreshCatalog').mockImplementation(() => refreshGate);
+
+    const first = runtime.getDiscoveryCatalog();
+    const second = runtime.getDiscoveryCatalog();
+    await vi.waitFor(() => expect(refresh).toHaveBeenCalledTimes(1));
+    releaseRefresh?.();
+
+    await expect(Promise.all([first, second])).resolves.toEqual([
+      expect.objectContaining({ freshness: 'live', complete: true }),
+      expect.objectContaining({ freshness: 'live', complete: true }),
+    ]);
+    expect(refresh).toHaveBeenCalledTimes(1);
+  });
+
+  it('rejects malformed list payloads instead of treating them as a complete empty catalog', async () => {
+    const dir = await createTempDir();
+    const scriptPath = await writeScript(dir, createCatalogIntegrityServerSource('malformed'));
+    const runtime = await createRuntime(dir, scriptPath, 1_000, 1_000);
+
+    try {
+      await expect(runtime.refreshCatalog(true)).rejects.toThrow(/invalid tools\/list response/i);
+      expect(runtime.getDiagnostics()).toEqual(expect.objectContaining({
+        dirty: true,
+        status: 'error',
+        tools: 0,
+      }));
+    } finally {
+      await runtime.dispose();
+    }
+  });
+
+  it('rejects capability entries with no callable identifier instead of inventing one', async () => {
+    const dir = await createTempDir();
+    const scriptPath = await writeScript(dir, createCatalogIntegrityServerSource('missing-identifier'));
+    const runtime = await createRuntime(dir, scriptPath, 1_000, 1_000);
+
+    try {
+      await expect(runtime.refreshCatalog(true)).rejects.toThrow(/tools\/list entry.*name/i);
+      expect(runtime.getDiagnostics().tools).toBe(0);
+    } finally {
+      await runtime.dispose();
+    }
+  });
+
+  it('rejects resource entries with no URI instead of treating a display name as readable', async () => {
+    const dir = await createTempDir();
+    const scriptPath = await writeScript(dir, createCatalogIntegrityServerSource('missing-resource-uri'));
+    const runtime = await createRuntime(dir, scriptPath, 1_000, 1_000);
+
+    try {
+      await expect(runtime.refreshCatalog(true)).rejects.toThrow(/resources\/list entry.*uri/i);
+      expect(runtime.getDiagnostics().resources).toBe(0);
+    } finally {
+      await runtime.dispose();
+    }
+  });
+
+  it('rejects cyclic list cursors before an MCP server can keep discovery paging', async () => {
+    const dir = await createTempDir();
+    const scriptPath = await writeScript(dir, createCatalogIntegrityServerSource('repeated-cursor'));
+    const runtime = await createRuntime(dir, scriptPath, 1_000, 1_000);
+
+    try {
+      await expect(runtime.refreshCatalog(true)).rejects.toThrow(/repeated pagination cursor/i);
+    } finally {
+      await runtime.dispose();
+    }
+  });
+
+  it('rejects an explicit null pagination cursor instead of treating it as completion', async () => {
+    const dir = await createTempDir();
+    const scriptPath = await writeScript(dir, createCatalogIntegrityServerSource('null-cursor'));
+    const runtime = await createRuntime(dir, scriptPath, 1_000, 1_000);
+
+    try {
+      await expect(runtime.refreshCatalog(true)).rejects.toThrow(/nextCursor must be a non-empty string/i);
+    } finally {
+      await runtime.dispose();
+    }
+  });
+
+  it('does not overwrite a list-changed notification received during paginated discovery', async () => {
+    const dir = await createTempDir();
+    const scriptPath = await writeScript(
+      dir,
+      createCatalogIntegrityServerSource('list-changed-during-pagination'),
+    );
+    const runtime = await createRuntime(dir, scriptPath, 1_000, 1_000);
+
+    try {
+      await runtime.refreshCatalog(true);
+      await expect(runtime.refreshCatalog()).rejects.toThrow(/catalog changed during discovery/i);
+      expect((await runtime.getCachedCatalog())?.descriptors.map((entry) => entry.name))
+        .toEqual(['stable_tool']);
+      expect(runtime.getDiagnostics()).toEqual(expect.objectContaining({
+        dirty: true,
+        status: 'error',
+        tools: 1,
+      }));
+    } finally {
+      await runtime.dispose();
+    }
+  });
+
+  it('deduplicates capabilities repeated across list pages', async () => {
+    const dir = await createTempDir();
+    const scriptPath = await writeScript(dir, createCatalogIntegrityServerSource('duplicate-entry'));
+    const runtime = await createRuntime(dir, scriptPath, 1_000, 1_000);
+
+    try {
+      await runtime.refreshCatalog(true);
+      expect((await runtime.getCachedCatalog())?.descriptors.map((entry) => entry.name))
+        .toEqual(['one', 'two']);
+    } finally {
+      await runtime.dispose();
     }
   });
 

@@ -304,4 +304,8 @@ export type {
   CapabilityKind,
   CapabilityProvider,
   CapabilityResult,
+  CapabilitySearchFailure,
+  CapabilitySearchFreshness,
+  CapabilitySearchOptions,
+  CapabilitySearchSnapshot,
 } from './capability.js';

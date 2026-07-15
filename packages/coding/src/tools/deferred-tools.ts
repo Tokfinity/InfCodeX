@@ -39,13 +39,6 @@ export const DEFERRED_TOOL_HINTS: Readonly<Record<string, string>> = Object.free
   code_search:     'Ranked text search across the repo with noise filtering — call `tool_search("code_search")` for selection heuristics vs grep / symbol_context.',
   semantic_lookup: 'Symbol-/module-/process-aware semantic queries against repo intelligence — call `tool_search("semantic_lookup")` for full schema and selection rules.',
 
-  // MCP family
-  mcp_search:        'Search active MCP capabilities by query / server / kind — call `tool_search("mcp_search")` for full schema.',
-  mcp_describe:      'Describe a specific MCP capability by id (JSON schema + trust) — call `tool_search("mcp_describe")` for full schema.',
-  mcp_call:          'Invoke an MCP tool capability — can MUTATE remote state. Call `tool_search("mcp_call")` for the full safety contract.',
-  mcp_read_resource: 'Read an MCP resource (no mutation) — call `tool_search("mcp_read_resource")` for full schema.',
-  mcp_get_prompt:    'Retrieve an MCP prompt template — call `tool_search("mcp_get_prompt")` for full schema.',
-
   // Repo intelligence
   repo_overview:   'Workspace structure snapshot — call ONCE at session start; `tool_search("repo_overview")` for full schema.',
   changed_scope:   'List files / areas changed in current git diff — canonical review entry. `tool_search("changed_scope")` for full schema.',

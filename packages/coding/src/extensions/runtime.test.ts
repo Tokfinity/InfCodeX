@@ -368,6 +368,12 @@ describe('KodaXExtensionRuntime', () => {
           id: 'test-capability-provider',
           kinds: ['tool', 'resource', 'prompt'],
           search: async (query, options) => [{ query, options }],
+          searchSnapshot: async (query, options) => ({
+            items: [{ query, options, snapshot: true }],
+            revision: 'test-revision',
+            complete: true,
+            freshness: 'live',
+          }),
           describe: async (id) => ({ id, title: 'Capability ' + id }),
           execute: async (id, input) => ({ kind: 'tool', content: id + ':' + String(input.value) }),
           read: async (id, options) => ({ kind: 'resource', structuredContent: { id, options } }),
@@ -390,6 +396,17 @@ describe('KodaXExtensionRuntime', () => {
         limit: 2,
       }),
     ).resolves.toEqual([{ query: 'needle', options: { kind: 'resource', limit: 2 } }]);
+
+    await expect(
+      runtime.searchCapabilitySnapshot('test-capability-provider', 'needle', {
+        kind: 'resource',
+      }),
+    ).resolves.toEqual({
+      items: [{ query: 'needle', options: { kind: 'resource' }, snapshot: true }],
+      revision: 'test-revision',
+      complete: true,
+      freshness: 'live',
+    });
 
     await expect(
       runtime.describeCapability('test-capability-provider', 'cap-1'),
@@ -454,12 +471,25 @@ describe('KodaXExtensionRuntime', () => {
       id: 'mcp',
       kinds: ['tool'],
       search: async () => [{ id: 'session/tool:echo', name: 'echo', kind: 'tool' }],
+      searchSnapshot: async () => ({
+        items: [{ id: 'session/tool:echo', name: 'echo', kind: 'tool' }],
+        revision: 'session-v1',
+        complete: true,
+        freshness: 'live',
+      }),
       getPromptContext: async () => 'session MCP context',
     });
     globalRuntime.registerCapabilityProvider({
       id: 'mcp',
       kinds: ['tool'],
       search: async () => [{ id: 'global/tool:echo', name: 'echo', kind: 'tool' }],
+      searchSnapshot: async () => ({
+        items: [{ id: 'global/tool:echo', name: 'echo', kind: 'tool' }],
+        revision: 'global-v1',
+        complete: false,
+        freshness: 'stale',
+        failures: [{ source: 'global', message: 'offline' }],
+      }),
       getPromptContext: async () => 'global MCP context',
     });
 
@@ -471,6 +501,18 @@ describe('KodaXExtensionRuntime', () => {
     await expect(combined.getCapabilityPromptContext('mcp'))
       .resolves
       .toBe('global MCP context\n\nsession MCP context');
+    await expect(combined.searchCapabilitySnapshot('mcp', 'echo', { kind: 'tool' }))
+      .resolves
+      .toEqual(expect.objectContaining({
+        items: [
+          { id: 'session/tool:echo', name: 'echo', kind: 'tool' },
+          { id: 'global/tool:echo', name: 'echo', kind: 'tool' },
+        ],
+        revision: expect.any(String),
+        complete: false,
+        freshness: 'mixed',
+        failures: [{ source: 'global', message: 'offline' }],
+      }));
 
     const toolDiagnostics = combined.getDiagnostics().tools;
     const toolKeys = toolDiagnostics.map((tool) => `${tool.name}:${tool.source.kind}:${tool.source.id}`);
@@ -509,6 +551,23 @@ describe('KodaXExtensionRuntime', () => {
         }),
       ]),
     );
+
+    await runtime.dispose();
+  });
+
+  it('does not claim a legacy provider search is a complete snapshot', async () => {
+    const runtime = createExtensionRuntime().activate();
+    runtime.registerCapabilityProvider({
+      id: 'legacy-search',
+      kinds: ['tool'],
+      search: async () => [{ id: 'legacy:one' }],
+    });
+
+    await expect(runtime.searchCapabilitySnapshot('legacy-search', '', {})).resolves.toEqual({
+      items: [{ id: 'legacy:one' }],
+      complete: false,
+      freshness: 'unknown',
+    });
 
     await runtime.dispose();
   });

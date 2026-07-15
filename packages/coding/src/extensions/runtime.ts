@@ -1,5 +1,6 @@
 import path from 'path';
 import { pathToFileURL } from 'url';
+import { createHash } from 'node:crypto';
 import type { KodaXMessage, KodaXWireReasoningEffort } from '@kodax-ai/llm';
 import { exec as extensionExec, webhook as extensionWebhook } from './helpers.js';
 import {
@@ -50,6 +51,8 @@ import type {
 import { createExtensionStore } from '@kodax-ai/agent';
 import type {
   CapabilityProvider,
+  CapabilitySearchFreshness,
+  CapabilitySearchSnapshot,
   ExtensionContributionSource,
   ExtensionFileContributionSource,
   ExtensionCommandDefinition,
@@ -66,6 +69,18 @@ import type {
   KodaXExtensionModule,
   ModelProviderRegistration,
 } from './types.js';
+
+function combineSearchFreshness(
+  values: readonly CapabilitySearchFreshness[],
+): CapabilitySearchFreshness {
+  if (values.length === 0) return 'unknown';
+  return values.every((value) => value === values[0]) ? values[0] ?? 'unknown' : 'mixed';
+}
+
+function combineSearchRevision(snapshots: readonly CapabilitySearchSnapshot[]): string {
+  const content = snapshots.map((snapshot) => snapshot.revision ?? JSON.stringify(snapshot.items));
+  return createHash('sha256').update(JSON.stringify(content)).digest('hex').slice(0, 16);
+}
 
 type Disposable = () => void | Promise<void>;
 
@@ -700,6 +715,25 @@ export class KodaXExtensionRuntime implements ExtensionRuntimeContract {
       limit: options.limit,
     });
     return this.withCapabilityProvider(provider, () => provider.search!(query, options));
+  }
+
+  async searchCapabilitySnapshot(
+    providerId: string,
+    query: string,
+    options: { kind?: CapabilityProvider['kinds'][number]; server?: string } = {},
+  ): Promise<CapabilitySearchSnapshot> {
+    const provider = this.getCapabilityProvider(providerId);
+    if (!provider) {
+      throw new Error(`Unknown capability provider: ${providerId}`);
+    }
+    await this.emit('capability:search', { providerId, query, kind: options.kind });
+    if (provider.searchSnapshot) {
+      return this.withCapabilityProvider(provider, () => provider.searchSnapshot!(query, options));
+    }
+    const items = provider.search
+      ? await this.withCapabilityProvider(provider, () => provider.search!(query, options))
+      : [];
+    return { items, complete: false, freshness: 'unknown' };
   }
 
   async describeCapability(
@@ -1513,6 +1547,42 @@ export class CombinedExtensionRuntime implements ExtensionRuntimeContract {
     return typeof options.limit === 'number'
       ? results.slice(0, options.limit)
       : results;
+  }
+
+  async searchCapabilitySnapshot(
+    providerId: string,
+    query: string,
+    options: Parameters<KodaXExtensionRuntime['searchCapabilitySnapshot']>[2] = {},
+  ): Promise<CapabilitySearchSnapshot> {
+    const snapshots: CapabilitySearchSnapshot[] = [];
+    let firstError: unknown;
+    for (const runtime of [this.primary, this.secondary]) {
+      try {
+        snapshots.push(await runtime.searchCapabilitySnapshot(providerId, query, options));
+      } catch (error) {
+        if (!this.shouldTryNextCapabilityRuntime(error, providerId)) throw error;
+        firstError ??= error;
+      }
+    }
+    if (snapshots.length === 0 && firstError) throw firstError;
+
+    const seenIds = new Set<string>();
+    const items = snapshots.flatMap((snapshot) => snapshot.items).filter((item) => {
+      const id = item && typeof item === 'object' && !Array.isArray(item)
+        ? (item as Record<string, unknown>).id
+        : undefined;
+      if (typeof id !== 'string') return true;
+      if (seenIds.has(id)) return false;
+      seenIds.add(id);
+      return true;
+    });
+    return {
+      items,
+      revision: combineSearchRevision(snapshots),
+      complete: snapshots.every((snapshot) => snapshot.complete),
+      freshness: combineSearchFreshness(snapshots.map((snapshot) => snapshot.freshness)),
+      failures: snapshots.flatMap((snapshot) => snapshot.failures ?? []),
+    };
   }
 
   describeCapability(

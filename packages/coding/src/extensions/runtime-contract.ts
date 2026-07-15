@@ -15,6 +15,7 @@
 import type {
   CapabilityKind,
   CapabilityResult,
+  CapabilitySearchSnapshot,
   KodaXExtensionSessionRecord,
   KodaXJsonValue,
 } from '@kodax-ai/agent';
@@ -62,6 +63,12 @@ export interface CapabilityRuntimeContract {
     query: string,
     options?: { kind?: CapabilityKind; limit?: number; server?: string },
   ): Promise<unknown[]>;
+
+  searchCapabilitySnapshot?(
+    providerId: string,
+    query: string,
+    options?: { kind?: CapabilityKind; server?: string },
+  ): Promise<CapabilitySearchSnapshot>;
 
   describeCapability(providerId: string, capabilityId: string): Promise<unknown>;
 

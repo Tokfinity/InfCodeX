@@ -25,8 +25,20 @@ import type {
   CapabilityKind,
   CapabilityProvider,
   CapabilityResult,
+  CapabilitySearchFailure,
+  CapabilitySearchFreshness,
+  CapabilitySearchOptions,
+  CapabilitySearchSnapshot,
 } from '@kodax-ai/agent';
-export type { CapabilityKind, CapabilityProvider, CapabilityResult };
+export type {
+  CapabilityKind,
+  CapabilityProvider,
+  CapabilityResult,
+  CapabilitySearchFailure,
+  CapabilitySearchFreshness,
+  CapabilitySearchOptions,
+  CapabilitySearchSnapshot,
+};
 
 export interface ModelProviderRegistration {
   name: string;

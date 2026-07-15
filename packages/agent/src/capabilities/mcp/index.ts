@@ -39,7 +39,7 @@ export {
   getMcpCachePaths,
 } from './catalog.js';
 
-export type { McpServerRuntimeDiagnostics } from './runtime.js';
+export type { McpDiscoveryCatalog, McpServerRuntimeDiagnostics } from './runtime.js';
 export { McpServerRuntime } from './runtime.js';
 
 export type { McpProviderOptions } from './provider.js';

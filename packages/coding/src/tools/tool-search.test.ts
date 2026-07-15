@@ -31,7 +31,7 @@ function makeContext(): KodaXToolExecutionContext {
 
 describe('FEATURE_189 B.2 — deferred-tools registry', () => {
   it('exports a non-empty hint map', () => {
-    expect(Object.keys(DEFERRED_TOOL_HINTS).length).toBeGreaterThanOrEqual(15);
+    expect(Object.keys(DEFERRED_TOOL_HINTS).length).toBeGreaterThanOrEqual(10);
   });
 
   it('classifies all deferred hint entries as deferred', () => {
@@ -40,10 +40,9 @@ describe('FEATURE_189 B.2 — deferred-tools registry', () => {
     }
   });
 
-  it('classifies the original expanded tool set as deferred', () => {
+  it('classifies the intended rich-schema tool set as deferred', () => {
     const expected = [
       'web_search', 'web_fetch', 'code_search', 'semantic_lookup',
-      'mcp_search', 'mcp_describe', 'mcp_call', 'mcp_read_resource', 'mcp_get_prompt',
       'repo_overview', 'changed_scope',
       'module_context', 'symbol_context', 'process_context', 'impact_estimate',
       'run_workflow',
@@ -54,7 +53,11 @@ describe('FEATURE_189 B.2 — deferred-tools registry', () => {
   });
 
   it('does NOT classify core tools as deferred', () => {
-    for (const name of ['read', 'write', 'edit', 'bash', 'grep', 'glob', 'todo_create', 'todo_update', 'dispatch_child_task', 'tool_search']) {
+    for (const name of [
+      'read', 'write', 'edit', 'bash', 'grep', 'glob', 'todo_create', 'todo_update',
+      'dispatch_child_task', 'tool_search',
+      'mcp_search', 'mcp_describe', 'mcp_call', 'mcp_read_resource', 'mcp_get_prompt',
+    ]) {
       expect(isDeferredTool(name)).toBe(false);
     }
   });
@@ -242,6 +245,18 @@ describe('FEATURE_189 B.2 — getActiveToolDefinitions deferred description swap
     expect(read).toBeDefined();
     // read's real description should be substantial, not a tiny hint
     expect(read!.description.length).toBeGreaterThan(200);
+  });
+
+  it('keeps MCP facades directly callable without a tool_search unlock round-trip', () => {
+    const defs = getActiveToolDefinitions([
+      'mcp_search', 'mcp_describe', 'mcp_call', 'mcp_read_resource', 'mcp_get_prompt',
+    ], undefined, false, true);
+
+    expect(defs).toHaveLength(5);
+    expect(defs.find((definition) => definition.name === 'mcp_search')?.description)
+      .toContain('compact inventory');
+    expect(defs.find((definition) => definition.name === 'mcp_call')?.description)
+      .toContain('may mutate files');
   });
 
   it('emits hints simultaneously for multiple un-unlocked deferred tools', () => {

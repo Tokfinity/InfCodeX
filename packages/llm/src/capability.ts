@@ -12,6 +12,28 @@
 
 export type CapabilityKind = 'tool' | 'resource' | 'prompt';
 
+export interface CapabilitySearchOptions {
+  kind?: CapabilityKind;
+  limit?: number;
+  server?: string;
+}
+
+export type CapabilitySearchFreshness = 'live' | 'cached' | 'stale' | 'mixed' | 'unknown';
+
+export interface CapabilitySearchFailure {
+  source: string;
+  message: string;
+}
+
+/** Complete internal search view. Model-facing tools page this snapshot. */
+export interface CapabilitySearchSnapshot {
+  items: unknown[];
+  revision?: string;
+  complete: boolean;
+  freshness: CapabilitySearchFreshness;
+  failures?: CapabilitySearchFailure[];
+}
+
 export interface CapabilityResult {
   kind: CapabilityKind;
   content?: string;
@@ -26,8 +48,12 @@ export interface CapabilityProvider {
   kinds: CapabilityKind[];
   search?: (
     query: string,
-    options?: { kind?: CapabilityKind; limit?: number; server?: string },
+    options?: CapabilitySearchOptions,
   ) => Promise<unknown[]>;
+  searchSnapshot?: (
+    query: string,
+    options?: Omit<CapabilitySearchOptions, 'limit'>,
+  ) => Promise<CapabilitySearchSnapshot>;
   describe?: (id: string) => Promise<unknown>;
   execute?: (id: string, input: Record<string, unknown>) => Promise<CapabilityResult>;
   read?: (id: string, options?: Record<string, unknown>) => Promise<CapabilityResult>;

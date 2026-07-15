@@ -60,6 +60,13 @@ export interface McpServerRuntimeDiagnostics {
   resources: number;
   prompts: number;
 }
+
+export interface McpDiscoveryCatalog {
+  snapshot: McpServerCatalogSnapshot;
+  freshness: 'live' | 'stale';
+  complete: boolean;
+  error?: string;
+}
 function asRecord(value: unknown): Record<string, unknown> | undefined {
   if (!value || Array.isArray(value) || typeof value !== 'object') {
     return undefined;
@@ -185,7 +192,10 @@ function buildToolDescriptor(
   raw: Record<string, unknown>,
   cachedAt: string,
 ): McpCapabilityDescriptor {
-  const name = readString(raw.name) ?? 'unnamed_tool';
+  const name = readString(raw.name);
+  if (!name) {
+    throw new Error('Invalid tools/list entry: name must be a non-empty string.');
+  }
   const annotations = asRecord(raw.annotations);
   const summary = summarizeMcpCatalogEntry(raw, `MCP tool ${name}`);
   return {
@@ -216,7 +226,10 @@ function buildResourceDescriptor(
   raw: Record<string, unknown>,
   cachedAt: string,
 ): McpCapabilityDescriptor {
-  const uri = readString(raw.uri) ?? readString(raw.name) ?? 'resource';
+  const uri = readString(raw.uri);
+  if (!uri) {
+    throw new Error('Invalid resources/list entry: uri must be a non-empty string.');
+  }
   const annotations = asRecord(raw.annotations);
   const summary = summarizeMcpCatalogEntry(raw, `MCP resource ${uri}`);
   return {
@@ -240,7 +253,10 @@ function buildPromptDescriptor(
   raw: Record<string, unknown>,
   cachedAt: string,
 ): McpCapabilityDescriptor {
-  const name = readString(raw.name) ?? 'prompt';
+  const name = readString(raw.name);
+  if (!name) {
+    throw new Error('Invalid prompts/list entry: name must be a non-empty string.');
+  }
   const annotations = asRecord(raw.annotations);
   const summary = summarizeMcpCatalogEntry(raw, `MCP prompt ${name}`);
   return {
@@ -279,19 +295,23 @@ function extractListEntries(
   key: 'tools' | 'resources' | 'prompts',
 ): { entries: Record<string, unknown>[]; nextCursor?: string } {
   const record = asRecord(result);
-  if (!record) {
-    return { entries: [] };
+  if (!record || !Array.isArray(record[key])) {
+    throw new Error(`Invalid ${key}/list response: expected an object with a ${key} array.`);
+  }
+  const entries = record[key].map((entry) => asRecord(entry));
+  if (entries.some((entry) => entry === undefined)) {
+    throw new Error(`Invalid ${key}/list response: every ${key} entry must be an object.`);
+  }
+  const rawNextCursor = Object.prototype.hasOwnProperty.call(record, 'nextCursor')
+    ? record.nextCursor
+    : record.next_cursor;
+  if (rawNextCursor !== undefined && readString(rawNextCursor) === undefined) {
+    throw new Error(`Invalid ${key}/list response: nextCursor must be a non-empty string.`);
   }
 
-  const entries = Array.isArray(record[key])
-    ? record[key]
-      .map((entry) => asRecord(entry))
-      .filter((entry): entry is Record<string, unknown> => entry !== undefined)
-    : [];
-
   return {
-    entries,
-    nextCursor: readString(record.nextCursor) ?? readString(record.next_cursor),
+    entries: entries.filter((entry): entry is Record<string, unknown> => entry !== undefined),
+    nextCursor: readString(rawNextCursor),
   };
 }
 
@@ -441,7 +461,10 @@ export class McpServerRuntime {
   private readonly completedElicitations = new Set<string>();
   private nextRequestId = 0;
   private initialized = false;
+  private liveCatalogValidated = false;
+  private catalogInvalidationVersion = 0;
   private connectPromise?: Promise<void>;
+  private discoveryPromise?: Promise<McpDiscoveryCatalog>;
   private catalog?: McpServerCatalogSnapshot;
   private serverCapabilities?: Record<string, unknown>;
   private cachedHttpTransport?: 'streamable-http' | 'sse';
@@ -510,6 +533,42 @@ export class McpServerRuntime {
       descriptors: [],
       updatedAt: new Date(0).toISOString(),
     };
+  }
+
+  /** Validate cached capability truth on first model-facing discovery use. */
+  async getDiscoveryCatalog(): Promise<McpDiscoveryCatalog> {
+    if (this.discoveryPromise) return this.discoveryPromise;
+    const discovery = this.resolveDiscoveryCatalog();
+    this.discoveryPromise = discovery;
+    try {
+      return await discovery;
+    } finally {
+      if (this.discoveryPromise === discovery) this.discoveryPromise = undefined;
+    }
+  }
+
+  private async resolveDiscoveryCatalog(): Promise<McpDiscoveryCatalog> {
+    await this.getCachedCatalog();
+    if (this.catalog && this.liveCatalogValidated && !this.diagnostics.dirty) {
+      return { snapshot: this.catalog, freshness: 'live', complete: true };
+    }
+
+    try {
+      await this.refreshCatalog();
+      return {
+        snapshot: this.catalog ?? this.emptyCatalog(),
+        freshness: 'live',
+        complete: true,
+      };
+    } catch (error) {
+      if (!this.catalog) throw error;
+      return {
+        snapshot: this.catalog,
+        freshness: 'stale',
+        complete: false,
+        error: error instanceof Error ? error.message : String(error),
+      };
+    }
   }
 
   async describeCapability(capabilityId: string): Promise<McpCapabilityDescriptor | undefined> {
@@ -662,8 +721,10 @@ export class McpServerRuntime {
       await this.dispose();
     }
 
+    let snapshot: McpServerCatalogSnapshot;
     try {
       await this.connect();
+      const invalidationVersion = this.catalogInvalidationVersion;
       const cachedAt = new Date().toISOString();
       const tools = hasServerCapability(this.serverCapabilities, 'tools')
         ? await this.listDescriptors('tools/list', 'tools', cachedAt)
@@ -674,22 +735,41 @@ export class McpServerRuntime {
       const prompts = hasServerCapability(this.serverCapabilities, 'prompts')
         ? await this.listDescriptors('prompts/list', 'prompts', cachedAt)
         : [];
+      if (
+        this.catalogInvalidationVersion !== invalidationVersion
+        || !this.transport?.connected
+        || !this.initialized
+      ) {
+        throw new Error(
+          `MCP catalog changed during discovery for "${this.serverId}"; retry the refresh.`,
+        );
+      }
       const descriptors = [...tools, ...resources, ...prompts];
-      const snapshot: McpServerCatalogSnapshot = {
+      snapshot = {
         serverId: this.serverId,
         descriptors,
         items: descriptors.map(toCatalogItem),
         updatedAt: cachedAt,
       };
-      this.catalog = snapshot;
-      this.applyCatalogSnapshot(snapshot);
-      await writeMcpServerCatalog(this.cacheDir, snapshot);
     } catch (error) {
       const message = error instanceof Error ? error.message : String(error);
       this.diagnostics.status = 'error';
       this.diagnostics.lastError = message;
       this.diagnostics.dirty = true;
+      this.liveCatalogValidated = false;
       throw error;
+    }
+
+    this.catalog = snapshot;
+    this.applyCatalogSnapshot(snapshot);
+    this.liveCatalogValidated = true;
+    this.diagnostics.lastError = undefined;
+    try {
+      await writeMcpServerCatalog(this.cacheDir, snapshot);
+    } catch (error) {
+      const message = `MCP catalog cache write failed for "${this.serverId}": ${error instanceof Error ? error.message : String(error)}`;
+      this.diagnostics.lastError = message;
+      emitKodaXDiagnostic({ source: 'agent:mcp', level: 'warn', message });
     }
   }
 
@@ -710,6 +790,7 @@ export class McpServerRuntime {
     const elicitationWaiters = [...this.elicitationWaiters.values()];
     this.completedElicitations.clear();
     this.initialized = false;
+    this.liveCatalogValidated = false;
     this.serverCapabilities = undefined;
     if (this.transport) {
       await this.transport.close();
@@ -831,6 +912,7 @@ export class McpServerRuntime {
           this.diagnostics.status = 'error';
           this.diagnostics.lastError = reason;
           this.diagnostics.dirty = true;
+          this.liveCatalogValidated = false;
         },
       });
 
@@ -923,6 +1005,8 @@ export class McpServerRuntime {
     cachedAt: string,
   ): Promise<McpCapabilityDescriptor[]> {
     const descriptors: McpCapabilityDescriptor[] = [];
+    const descriptorById = new Map<string, McpCapabilityDescriptor>();
+    const seenCursors = new Set<string>();
     let cursor: string | undefined;
 
     while (true) {
@@ -939,19 +1023,28 @@ export class McpServerRuntime {
 
       const { entries, nextCursor } = extractListEntries(result, kind);
       for (const entry of entries) {
+        let descriptor: McpCapabilityDescriptor;
         if (kind === 'tools') {
-          descriptors.push(buildToolDescriptor(this.serverId, entry, cachedAt));
+          descriptor = buildToolDescriptor(this.serverId, entry, cachedAt);
+        } else if (kind === 'resources') {
+          descriptor = buildResourceDescriptor(this.serverId, entry, cachedAt);
+        } else {
+          descriptor = buildPromptDescriptor(this.serverId, entry, cachedAt);
+        }
+        const previous = descriptorById.get(descriptor.id);
+        if (previous) {
           continue;
         }
-        if (kind === 'resources') {
-          descriptors.push(buildResourceDescriptor(this.serverId, entry, cachedAt));
-          continue;
-        }
-        descriptors.push(buildPromptDescriptor(this.serverId, entry, cachedAt));
+        descriptorById.set(descriptor.id, descriptor);
+        descriptors.push(descriptor);
       }
       if (!nextCursor) {
         break;
       }
+      if (seenCursors.has(nextCursor)) {
+        throw new Error(`MCP ${method} returned a repeated pagination cursor: ${nextCursor}`);
+      }
+      seenCursors.add(nextCursor);
       cursor = nextCursor;
     }
 
@@ -1077,7 +1170,9 @@ export class McpServerRuntime {
 
     // Server notification (no id).
     if (method.endsWith('/list_changed')) {
+      this.catalogInvalidationVersion += 1;
       this.diagnostics.dirty = true;
+      this.liveCatalogValidated = false;
     }
     // Slice C — the server completed a url elicitation; let the host dismiss
     // its waiting state (correlated by elicitationId).
@@ -1203,5 +1298,14 @@ export class McpServerRuntime {
     if (this.diagnostics.status !== 'disabled') {
       this.diagnostics.status = this.transport?.connected ? 'ready' : 'idle';
     }
+  }
+
+  private emptyCatalog(): McpServerCatalogSnapshot {
+    return {
+      serverId: this.serverId,
+      items: [],
+      descriptors: [],
+      updatedAt: new Date(0).toISOString(),
+    };
   }
 }

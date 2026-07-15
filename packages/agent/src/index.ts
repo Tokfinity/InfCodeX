@@ -357,6 +357,10 @@ export type {
   CapabilityKind,
   CapabilityProvider,
   CapabilityResult,
+  CapabilitySearchFailure,
+  CapabilitySearchFreshness,
+  CapabilitySearchOptions,
+  CapabilitySearchSnapshot,
 } from '@kodax-ai/llm';
 
 // ============== Agent config home resolver (v0.7.35.1 FEATURE_145) ==============
