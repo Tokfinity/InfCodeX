@@ -7,14 +7,14 @@
 </p>
 
 <p align="center">
-  <b>Open-source AI coding agent on every LLM you can reach.</b><br>
+  <b>Source-available AI coding agent on every LLM you can reach.</b><br>
   Anthropic · OpenAI · DeepSeek · Kimi · Zhipu · MiniMax · MiMo · Ark · Qwen · Gemini · Codex.<br>
   REPL · CLI · library · Node-free single binary.
 </p>
 
 <p align="center">
   <a href="https://www.npmjs.com/package/@kodax-ai/kodax"><img alt="npm version" src="https://img.shields.io/npm/v/@kodax-ai/kodax?style=flat-square&color=cb3837"></a>
-  <a href="LICENSE"><img alt="license" src="https://img.shields.io/badge/license-Apache--2.0-blue?style=flat-square"></a>
+  <a href="LICENSE"><img alt="license" src="https://img.shields.io/badge/license-KAI--FCL_1.0-orange?style=flat-square"></a>
   <a href="https://github.com/icetomoyo/KodaX/stargazers"><img alt="GitHub stars" src="https://img.shields.io/github/stars/icetomoyo/KodaX?style=flat-square&logo=github&color=f1c40f"></a>
   <a href="https://github.com/icetomoyo/KodaX/actions"><img alt="CI" src="https://img.shields.io/github/actions/workflow/status/icetomoyo/KodaX/release.yml?style=flat-square&label=release"></a>
   <img alt="providers" src="https://img.shields.io/badge/LLMs-15_aliases_+_custom-2ecc71?style=flat-square">
@@ -115,7 +115,7 @@ That's it. You're in the REPL — ask anything in natural language.
 
 | Feature | **KodaX** | Claude Code | Aider | Codex CLI | Cursor | Cline |
 |---|---|---|---|---|---|---|
-| Open source | ✅ Apache&nbsp;2.0 | ❌ Source-available | ✅ Apache&nbsp;2.0 | ✅ Apache&nbsp;2.0 | ❌ Proprietary | ✅ Apache&nbsp;2.0 |
+| Source license | ⚠️ KAI-FCL, non-commercial | ❌ Source-available | ✅ Apache&nbsp;2.0 | ✅ Apache&nbsp;2.0 | ❌ Proprietary | ✅ Apache&nbsp;2.0 |
 | Node-free single binary | ✅ Bun | ❌ Node | ❌ Python | ✅ Rust | ❌ Electron | ❌ Extension |
 | Native China providers<br><sub>(Zhipu · Kimi · MiniMax · MiMo · Ark · Qwen)</sub> | ✅ 6 native | ❌ | ⚠ via LiteLLM | ❌ OpenAI-first | ❌ no provider menu | ⚠ Kimi / Qwen / DeepSeek |
 | Branchable session lineage | ✅ fork & rewind | ⚠ routines / sessions | ❌ | ❌ | ❌ | ⚠ checkpoints |
@@ -1385,4 +1385,13 @@ KodaX uses an **English-first** comment style with selective Chinese brief notes
 
 ## License
 
-[Apache License 2.0](LICENSE) - Copyright 2026 [icetomoyo](mailto:icetomoyo@gmail.com)
+[KodaX-AI Fair Core License (KAI-FCL) 1.0](LICENSE) - Copyright 2026 [icetomoyo](mailto:icetomoyo@gmail.com).
+
+KAI-FCL is source-available / fair-core, not OSI open source. Commercial,
+enterprise, managed deployment, paid service, or customer redistribution use
+requires KodaX-AI authorization and a valid entitlement where required.
+
+Official KodaX 0.7.70 and later distributions use KAI-FCL or accompanying
+KodaX-AI customer terms. Historical tags, archives, binaries, npm packages, or
+other copies already distributed with Apache-2.0 notices remain Apache-2.0 for
+those specific copies.

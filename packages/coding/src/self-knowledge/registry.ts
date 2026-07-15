@@ -18,6 +18,7 @@ const PROVIDER_LIST = PROVIDER_NAMES.join(', ');
 /** Canonical topic order (also the index ordering). */
 export const MANUAL_TOPIC_IDS: readonly KodaXManualTopicId[] = [
   'overview',
+  'license',
   'install',
   'quickstart',
   'providers',
@@ -47,7 +48,7 @@ export const MANUAL_TOPIC_IDS: readonly KodaXManualTopicId[] = [
  * on — e.g. `selfManual.baseTopics = [...KODAX_UNDERLYING_CAPABILITY_TOPICS]`.
  *
  * Excluded from this set (KodaX-CLI-specific UX, not mechanisms a product
- * inherits): overview / install / quickstart / commands / agents / doctor /
+ * inherits): overview / license / install / quickstart / commands / agents / doctor /
  * troubleshooting. It is a recommended STARTING POINT — a consumer is free to
  * pass any explicit subset of `MANUAL_TOPIC_IDS`.
  */
@@ -81,7 +82,45 @@ const TOPICS: readonly KodaXManualTopic[] = [
       'general pretraining knowledge.',
     ].join('\n'),
     sources: [{ label: 'README', path: 'README.md' }],
-    nextTopics: ['install', 'quickstart', 'providers'],
+    nextTopics: ['license', 'install', 'quickstart'],
+  },
+  {
+    id: 'license',
+    title: 'License & commercial-use boundary',
+    aliases: [
+      'licensing',
+      'kai-fcl',
+      'fair core',
+      'commercial use',
+      'non-commercial',
+      '许可证',
+      '许可协议',
+      '商业使用',
+      '商用',
+    ],
+    summary: 'KAI-FCL from v0.7.70, community use, commercial authorization, and historical Apache copies.',
+    body: [
+      'Official KodaX 0.7.70 and later distributions use the KodaX-AI Fair Core',
+      'License (KAI-FCL) 1.0 or accompanying KodaX-AI customer terms.',
+      'KAI-FCL is source-available / fair-core, not OSI open source.',
+      '',
+      'Community Use covers individual personal learning, individual non-commercial work,',
+      'classroom instruction, non-production research, and contribution development/testing.',
+      'Commercial or Managed Use is not granted by the community license. Company, team,',
+      'institutional, government, production, intranet, managed-device, paid-service, hosted,',
+      'or customer redistribution use requires a Customer Agreement with KodaX-AI and, where',
+      'required, a valid License Entitlement.',
+      '',
+      'This change is not retroactive: historical tags, archives, binaries, npm packages, or',
+      'other specific copies already distributed under Apache-2.0 keep that Apache-2.0 grant.',
+      'Third-party components remain under their own licenses. The repository LICENSE file is',
+      'the governing text; this topic is only a concise product summary.',
+    ].join('\n'),
+    sources: [
+      { label: 'license', path: 'LICENSE' },
+      { label: 'README license summary', path: 'README.md' },
+    ],
+    nextTopics: ['overview', 'install', 'sdk'],
   },
   {
     id: 'install',

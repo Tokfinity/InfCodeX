@@ -135,7 +135,7 @@ existing `__dirname`-based resolution.
 
 ## Code signing
 
-**Currently unsigned**, matching common open-source CLI practice (Bun, Deno,
+**Currently unsigned**, matching common unsigned CLI distribution practice (Bun, Deno,
 ripgrep, fd). Users will see warnings on first run:
 
 - **macOS**: `xattr -d com.apple.quarantine kodax` once after extraction.

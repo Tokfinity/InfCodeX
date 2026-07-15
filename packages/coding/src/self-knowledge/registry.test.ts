@@ -85,4 +85,15 @@ describe('FEATURE_218 manual registry', () => {
     expect(mcp).toContain('~/.kodax/integrations/mcp.json');
     expect(extensions).toContain('~/.kodax/integrations/extensions.json');
   });
+
+  it('documents the KAI-FCL boundary from v0.7.70 without rewriting history', () => {
+    const result = resolveKodaXManual({ topic: 'license' });
+
+    expect(result.matchedTopic).toBe('license');
+    expect(result.content).toContain('KAI-FCL');
+    expect(result.content).toContain('0.7.70 and later');
+    expect(result.content).toContain('not OSI open source');
+    expect(result.content).toContain('Commercial or Managed Use');
+    expect(result.content).toContain('Apache-2.0');
+  });
 });

@@ -8,6 +8,7 @@
 
 export type KodaXManualTopicId =
   | 'overview'
+  | 'license'
   | 'install'
   | 'quickstart'
   | 'providers'

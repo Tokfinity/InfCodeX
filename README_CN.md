@@ -7,14 +7,14 @@
 </p>
 
 <p align="center">
-  <b>开源 AI Coding Agent，跑你能拿到的任何 LLM。</b><br>
+  <b>源代码可用的 AI Coding Agent，跑你能拿到的任何 LLM。</b><br>
   Anthropic · OpenAI · DeepSeek · Kimi · 智谱 · MiniMax · 小米 MiMo · 火山方舟 · Qwen · Gemini · Codex<br>
   REPL · CLI · 库 · 免 Node 单文件二进制
 </p>
 
 <p align="center">
   <a href="https://www.npmjs.com/package/@kodax-ai/kodax"><img alt="npm version" src="https://img.shields.io/npm/v/@kodax-ai/kodax?style=flat-square&color=cb3837"></a>
-  <a href="LICENSE"><img alt="license" src="https://img.shields.io/badge/license-Apache--2.0-blue?style=flat-square"></a>
+  <a href="LICENSE"><img alt="license" src="https://img.shields.io/badge/license-KAI--FCL_1.0-orange?style=flat-square"></a>
   <a href="https://github.com/icetomoyo/KodaX/stargazers"><img alt="GitHub stars" src="https://img.shields.io/github/stars/icetomoyo/KodaX?style=flat-square&logo=github&color=f1c40f"></a>
   <a href="https://github.com/icetomoyo/KodaX/actions"><img alt="CI" src="https://img.shields.io/github/actions/workflow/status/icetomoyo/KodaX/release.yml?style=flat-square&label=release"></a>
   <img alt="providers" src="https://img.shields.io/badge/LLMs-15_aliases_+_custom-2ecc71?style=flat-square">
@@ -130,7 +130,7 @@ fail closed，不能静默退回 inline Coder。完整接入说明见
 
 | 能力 | **KodaX** | Claude Code | Aider | Codex CLI | Cursor | Cline |
 |---|---|---|---|---|---|---|
-| 开源协议 | ✅ Apache&nbsp;2.0 | ❌ source-available | ✅ Apache&nbsp;2.0 | ✅ Apache&nbsp;2.0 | ❌ 闭源 | ✅ Apache&nbsp;2.0 |
+| 源代码许可 | ⚠️ KAI-FCL，非商业 | ❌ source-available | ✅ Apache&nbsp;2.0 | ✅ Apache&nbsp;2.0 | ❌ 闭源 | ✅ Apache&nbsp;2.0 |
 | 免 Node 单文件 | ✅ Bun | ❌ 需 Node | ❌ 需 Python | ✅ Rust | ❌ Electron | ❌ 插件 |
 | 国内 6 家原生<br><sub>（智谱·Kimi·MiniMax·MiMo·方舟·Qwen）</sub> | ✅ 6 家原生 | ❌ | ⚠ 走 LiteLLM | ❌ OpenAI 主线 | ❌ 无 provider 菜单 | ⚠ Kimi/Qwen/DeepSeek |
 | 可分叉会话血缘 | ✅ fork & rewind | ⚠ routines/sessions | ❌ | ❌ | ❌ | ⚠ checkpoints |
@@ -756,9 +756,16 @@ KodaX 现在会把 Repo Intelligence 的本地缓存分成内置引擎 profile�
 
 ## 许可证
 
-公共仓库当前采用：
+[KodaX-AI Fair Core License (KAI-FCL) 1.0](LICENSE) - Copyright 2026 icetomoyo。
 
-- `Apache-2.0`
+KAI-FCL 是 source-available / fair-core 协议，不是 OSI open source。商业、
+企业、托管部署、付费服务或客户再分发用途，需要 KodaX-AI 授权，并在需要时
+具备有效 entitlement。
+
+KodaX-AI 当前官方许可政策：KodaX 0.7.70 及之后版本，在由 KodaX-AI 带有该
+notice 分发时，适用 KAI-FCL 或配套 KodaX-AI 客户条款。此前已带 Apache-2.0
+notice 分发的历史 tag、source archive、二进制、npm 包或其他副本，仍只对那些
+特定副本保留 Apache-2.0。
 
 ## 相关仓库
 
