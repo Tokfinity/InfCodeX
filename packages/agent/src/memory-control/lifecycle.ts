@@ -120,7 +120,10 @@ async function isStaleLifecycleLock(lockPath: string): Promise<boolean> {
     const owner = parseLockOwner(await readFile(lockPath, 'utf8'));
     return owner !== undefined && !isProcessAlive(owner.pid);
   } catch (error) {
-    if (isMissing(error)) return false;
+    if (
+      isMissing(error)
+      || (isRecord(error) && ['EPERM', 'EACCES', 'EBUSY'].includes(String(error.code)))
+    ) return false;
     throw error;
   }
 }

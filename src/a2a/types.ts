@@ -263,6 +263,7 @@ export interface A2AServerHotOptions {
 
 export interface KodaXA2AServer {
   readonly agentCard: A2AAgentCard;
+  whenReady(): Promise<void>;
   handle(request: Request): Promise<Response>;
   listen(input: { readonly hostname: string; readonly port: number; readonly publicBaseUrl?: string }): Promise<string>;
   /** Atomically replace publication/auth/limit policy for subsequent requests. */

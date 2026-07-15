@@ -572,7 +572,12 @@ async function isStaleStoreLock(lockPath: string): Promise<boolean> {
     const owner = parseLockOwner(await readFile(lockPath, 'utf8'));
     return owner !== undefined && !isProcessAlive(owner.pid);
   } catch (error) {
-    if (isFileError(error, 'ENOENT')) return false;
+    if (
+      isFileError(error, 'ENOENT')
+      || isFileError(error, 'EPERM')
+      || isFileError(error, 'EACCES')
+      || isFileError(error, 'EBUSY')
+    ) return false;
     throw error;
   }
 }

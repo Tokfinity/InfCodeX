@@ -63,14 +63,14 @@ async function validateA2AUrl(url: URL, policy: A2ANetworkPolicy): Promise<Valid
   if (selected === undefined || (selected.family !== 4 && selected.family !== 6)) {
     throw new A2AError(-32602, 'A2A hostname returned an unsupported address.');
   }
-  return selected;
+  return { address: selected.address, family: selected.family };
 }
 
 export async function assertSafeA2AUrl(url: URL, policy: A2ANetworkPolicy): Promise<void> {
   await validateA2AUrl(url, policy);
 }
 
-function encodeRequestBody(body: BodyInit | null | undefined): string | Uint8Array | undefined {
+function encodeRequestBody(body: RequestInit['body']): string | Uint8Array | undefined {
   if (body === undefined || body === null || typeof body === 'string') return body ?? undefined;
   if (body instanceof URLSearchParams) return body.toString();
   if (body instanceof Uint8Array) return body;

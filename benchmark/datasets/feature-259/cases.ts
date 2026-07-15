@@ -140,8 +140,34 @@ function workflowTool(description: string): KodaXToolDefinition {
   return { ...tool('run_workflow'), description };
 }
 
-const SHARED_WORKER_TOOLS = ['dispatch_child_task', 'tool_search', 'todo_create', 'todo_update']
-  .map(tool);
+const BASELINE_DISPATCH_EVIDENCE_REFS_DESCRIPTION = 'Optional known evidence. Prefixed strings: "file:path" inlines the first 200 lines of a working-tree file, "diff:path" inlines the git diff against HEAD, "finding:text" transcribes a fact you already know, "task_id:<child_id>" forwards a completed sibling child\'s output verbatim — use this after dispatching one child whose findings feed the next so the new child sees the sibling\'s full report without you re-narrating it. An unknown prefix is surfaced as an error in the next dispatch tool_result so you can correct it.';
+
+function baselineDispatchTool(): KodaXToolDefinition {
+  const definition = tool('dispatch_child_task');
+  const evidenceRefs = definition.input_schema.properties.evidence_refs;
+  if (typeof evidenceRefs !== 'object' || evidenceRefs === null || Array.isArray(evidenceRefs)) {
+    throw new Error('feature-259 baseline reconstruction missed dispatch evidence_refs');
+  }
+  return {
+    ...definition,
+    input_schema: {
+      ...definition.input_schema,
+      properties: {
+        ...definition.input_schema.properties,
+        evidence_refs: {
+          ...evidenceRefs,
+          description: BASELINE_DISPATCH_EVIDENCE_REFS_DESCRIPTION,
+        },
+      },
+    },
+  };
+}
+
+const SHARED_WORKER_TOOLS = ['dispatch_child_task', 'tool_search', 'todo_create', 'todo_update'].map(tool);
+const BASELINE_SHARED_WORKER_TOOLS = [
+  baselineDispatchTool(),
+  ...SHARED_WORKER_TOOLS.slice(1),
+];
 
 export const BASELINE_RUN_WORKFLOW_DESCRIPTION = tool('run_workflow').description;
 export const PROPOSED_RUN_WORKFLOW_DESCRIPTION = DEFERRED_TOOL_HINTS.run_workflow ?? '';
@@ -266,7 +292,7 @@ export function buildFeature259Layer2Cases(): readonly Feature259Layer2Case[] {
       systemPrompt: buildBaselineWorkerPrompt(),
       priorMessages: WORKFLOW_SELECTION_HISTORY,
       userMessage: 'The multi-area audit plan is already recorded and current. Do not create or update plan items. Start its best bounded execution now.',
-      tools: [workflowTool(BASELINE_RUN_WORKFLOW_DESCRIPTION), ...SHARED_WORKER_TOOLS],
+      tools: [workflowTool(BASELINE_RUN_WORKFLOW_DESCRIPTION), ...BASELINE_SHARED_WORKER_TOOLS],
     },
     {
       id: 'proposed',

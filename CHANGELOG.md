@@ -6,68 +6,7 @@ All notable changes to this project will be documented in this file.
 
 ## [Unreleased]
 
-### Changed
-
-- **Tool-result delivery now optimizes end-to-end context use.** Tool handlers
-  collect complete results and one aggregate next-request capacity owner keeps
-  every result inline when the batch fits. Default Bash processing no longer
-  applies command-specific lossy filters; its former 512 KiB capture limit is
-  now only a memory-to-disk spool threshold. Capacity is solved against the
-  final input (`Pmax`), so the 3% uncertainty margin grows with the admitted
-  batch instead of being frozen at the smaller pre-batch request.
-- **History compaction is physical-capacity driven.** Default automatic
-  compaction waits until the final provider envelope (system prompt, actual
-  tools, messages/framing, output reserve, and safety margin) cannot fit.
-  Default microcompaction and destructive pre-summary/fallback pruning are off;
-  pressure uses semantic summary first and stops as soon as the next request
-  fits. Static early percentages remain explicit opt-ins, and manual
-  `/compact` remains an explicit force operation.
-
-### Fixed
-
-- **Recoverable overflow and hidden output caps.** Overflow of the final
-  operational request budget (including output reserve and estimation safety)
-  saves the complete result and emits one explicit incomplete marker. Fallback
-  inside the safety-margin zone is reliability protection, not a claimed token
-  optimization. Long lines have
-  exact continuation offsets, completed task output is complete, and hidden
-  caps were removed from grep, glob, code search, and retrieval rendering.
-- **Cache token accounting.** Uncached input, cache reads, and cache writes are
-  now billed once each instead of double-counting cached tokens already present
-  in total input usage.
-- **Compaction failure preserves canonical history.** Empty, failed, or
-  insufficient summaries now surface a typed capacity error instead of
-  silently clearing tool results, cropping user messages, or dropping message
-  pairs. The leading Worker system prompt stays byte-identical, invalid
-  summaries consume no source chunk, and hard failures preserve the latest
-  recoverable transcript.
-- **Tool-result completeness edge cases.** No-usage fallback accounting now
-  includes the final system prompt once, active tool schemas, and same-request
-  recovery messages. Legacy snapshot/byte budget helpers remain exported for
-  SDK source compatibility, but internal admission uses only the fixed-point
-  batch token capacity. MCP resource text is not duplicated into a synthetic
-  structured channel and distinct channels survive fallback. Every explicit
-  search limit uses a one-extra-item probe. Bash cancellation either drains to
-  close or hands live collectors to recovery artifacts; only
-  `KODAX_CAPTURE_COMPLETE` proves delayed drain completion.
-- **Recovery artifact retention.** Writing a new result no longer runs an
-  age-only TTL sweep that could delete evidence still referenced by a resumable
-  session. REPL session startup now removes only artifacts older than the grace
-  window that are absent from active and archived JSONL; discovery failure
-  cancels deletion. Bash spools share this managed directory. REPL startup no longer
-  age-prunes pasted images referenced by history, and long-running managed-task
-  checkpoints use their latest write time for the declared recovery window.
-- **Post-review capacity correctness.** Trusted artifact metadata is no longer
-  inferred from raw tool text; capacity failures carry the last legal transcript;
-  AMA observers see admitted content; child evidence uses the routed model's
-  physical initial-request budget; grep/code search expose 512-file continuation
-  and changed-diff bundles reject more than 64 paths. ANSI normalization preserves
-  cursor-control sequences, and Bash avoids rematerializing output whose byte
-  count proves it cannot fit the active request. These direct Bash artifacts
-  carry trusted tool-call metadata through both SA and AMA admission, so the
-  final batch cannot nest the recovery marker into a second artifact.
-
-## [0.7.69] - 2026-07-14
+## [0.7.69] - Unreleased
 
 > Scope note: this release delivers **FEATURE_267**, **FEATURE_268**, and
 > **FEATURE_269** as one bounded interoperability/runtime release: bidirectional
@@ -107,14 +46,37 @@ All notable changes to this project will be documented in this file.
   permission resolution, live run projection, structured restart outcomes, and
   a truthful per-capability Coder compatibility matrix for CLI, Space, IDE, and
   SDK clients.
+- **Shared-daemon SDK completion.** Server-side Coder/Partner admission now
+  covers every session and run path; late-join snapshots include transcript
+  revision, managed tasks, queued continuation metadata, and reverse
+  requirements. The SDK adds prompt connection lifecycle signals, typed event
+  parsing with per-event degradation, daemon-safe run DTOs,
+  `agentMode`/`autoModeEngine` settings CAS, durable operation/Host Tool outcome
+  queries, and daemon stop/rollback preflight.
 - **Secure host bridges and owner fencing.** Provider credentials are supplied
-  just in time through connection/run/provider-bound leases and never persisted;
-  Host Tools are immutable and run-bound, with explicit unknown outcomes rather
-  than blind replay. Daemon and inline Coder ownership now share one revisioned
+  just in time through stable-client/run/provider-bound leases and never
+  persisted. A keychain-held stable client secret can reattach credential and
+  Host Tool handlers after Space reconnects; Host Tools remain immutable and
+  run-bound, with fsynced dispatch truth and explicit unknown outcomes rather
+  than blind replay. Daemon and inline Coder ownership share one revisioned
   fence with sticky rollback, while Partner remains isolated.
 
 ### Changed
 
+- **Tool-result delivery now optimizes end-to-end context use.** Tool handlers
+  collect complete results and one aggregate next-request capacity owner keeps
+  every result inline when the batch fits. Default Bash processing no longer
+  applies command-specific lossy filters; its former 512 KiB capture limit is
+  now only a memory-to-disk spool threshold. Capacity is solved against the
+  final input (`Pmax`), so the 3% uncertainty margin grows with the admitted
+  batch instead of being frozen at the smaller pre-batch request.
+- **History compaction is physical-capacity driven.** Default automatic
+  compaction waits until the final provider envelope (system prompt, actual
+  tools, messages/framing, output reserve, and safety margin) cannot fit.
+  Default microcompaction and destructive pre-summary/fallback pruning are off;
+  pressure uses semantic summary first and stops as soon as the next request
+  fits. Static early percentages remain explicit opt-ins, and manual
+  `/compact` remains an explicit force operation.
 - **Self-knowledge follows the v0.7.69 capability surface.** `kodax_manual`
   now documents the three split integration files and migration/hot-reload
   behavior, the `/a2a` SDK subpath, atomic shared-daemon observation, durable
@@ -122,6 +84,34 @@ All notable changes to this project will be documented in this file.
 
 ### Fixed
 
+- **Recoverable overflow and hidden output caps.** Overflow of the final
+  operational request budget saves the complete result and emits one explicit
+  incomplete marker. Long lines have exact continuation offsets, completed task
+  output is complete, and hidden caps were removed from grep, glob, code search,
+  and retrieval rendering.
+- **Cache token accounting and history preservation.** Cache tokens are charged
+  once. Empty, failed, or insufficient summaries now surface a typed capacity
+  error while retaining the canonical transcript and immutable Worker prompt.
+- **Tool-result completeness and retention edge cases.** No-usage accounting
+  includes the final system prompt, active schemas, and same-request recovery;
+  explicit limits use one-extra-item probes; delayed Bash drain remains
+  recoverable. Referenced result/image artifacts and fresh checkpoints are no
+  longer removed by age-only cleanup.
+- **Post-review capacity correctness.** Trusted artifact metadata cannot be
+  forged by raw tool text; failures carry the last legal transcript; observers
+  see admitted content; child evidence uses the routed model's physical budget;
+  bounded acquisition exposes continuation instead of silent loss; direct Bash
+  artifacts remain canonical without nested spill markers.
+- **Windows process-tree fallback.** A failed or timed-out `taskkill /t` now
+  triggers a native Toolhelp parent snapshot before direct escalation, with
+  CIM/WMIC retained only as fallback. Agent and LLM cleanup stay aligned and a
+  real nested-process regression proves descendants exit.
+- **Windows lock deletion races.** Proposal and lifecycle lock probes treat
+  transient `EPERM`/`EACCES`/`EBUSY` as non-stale and retry, preserving the
+  fail-closed owner-token contract during concurrent removal.
+- **Frozen FEATURE_259 eval inputs.** The pre-iteration dispatch schema is
+  reconstructed from its historical bytes, so later production tool-schema
+  improvements cannot mutate the baseline or invite a hash-only CI workaround.
 - **Governed-memory Bash guard bypasses.** Commands that directly address
   recognized scoped or legacy memory roots now permit only one simple read-only
   inspection; command chaining, pipelines, redirects, home-relative paths, and
@@ -141,7 +131,10 @@ All notable changes to this project will be documented in this file.
 - **A2A/configuration release hardening.** Review gaps in remote execution,
   Skill-script admission/isolation, hot reload, listener preparation, binding
   pinning, last-known-good reconciliation, and redacted diagnostics now fail
-  closed or retain the prior healthy revision as specified.
+  closed or retain the prior healthy revision as specified. The public A2A
+  server type now exposes its existing readiness wait, validated DNS results
+  narrow explicitly to IPv4/IPv6, and safe request-body typing no longer
+  depends on an undeclared DOM global, keeping root TypeScript validation green.
 
 ## [0.7.68] - 2026-07-12
 

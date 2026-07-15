@@ -2747,9 +2747,10 @@ planning slots, the v0.7.67 external-agent/session additions, the v0.7.68
 experimental Memory Agent surface, and the v0.7.69 A2A/integration/shared-
 daemon delivery:
 
-- complete repository test suite on Node 20 and Node 22;
-- package builds, Worker sidecar builds, and self-contained
-  `dist/sdk-runtime.d.ts` generation;
+- Node 20 and Node 22 post-review regression for process cleanup, lock
+  ownership, frozen eval inputs, A2A transport, and the built-in manual;
+- root `tsc --noEmit`, package builds, bundle builds, and all 12 public DTS
+  entries on Node 20 and Node 22;
 - runtime/daemon/SDK/ACP/REPL integration tests, including process-distinct SDK
   auto-start and multi-client sessions/permissions;
 - Worker Runtime identity, service parity, hard close, capability requirements,
@@ -2791,10 +2792,10 @@ the v0.7.66 delivery. v0.7.67 adds
 `FEATURE_258_v0.7.67_TEST_GUIDE.md`, `FEATURE_259_v0.7.67_TEST_GUIDE.md`, and
 `FEATURE_261_v0.7.67_TEST_GUIDE.md`; v0.7.69 adds
 `FEATURE_267_v0.7.69_TEST_GUIDE.md`, `FEATURE_268_v0.7.69_TEST_GUIDE.md`, and
-`FEATURE_269_v0.7.69_TEST_GUIDE.md`. GitHub Actions run `29321123765` passed the
-Node 20/22 build, DTS, and full-test matrix plus the Node 22 Unix-domain-socket
-daemon gate for the release-preparation commit. npm publication remains a
-maintainer-owned manual step.
+`FEATURE_269_v0.7.69_TEST_GUIDE.md`. The earlier release-preparation Actions
+run is not reused after the severe-fix review; the current candidate must pass
+a fresh Node 20/22 full-test matrix and Node 22 Unix-domain-socket daemon gate.
+npm publication remains a maintainer-owned manual step.
 
 ---
 
@@ -3359,7 +3360,10 @@ const localBaseUrl = await server.listen({ hostname: '127.0.0.1', port: 0 });
 
 Production hosts route `GET /.well-known/agent-card.json` and JSON-RPC `POST /`
 to `server.handle(request)` behind their own TLS terminator. `POST /a2a` remains
-an accepted compatibility alias. The durable edge store supports get/list,
+an accepted compatibility alias. `listen()` waits for durable recovery before
+it resolves. A host that wires `handle()` directly may explicitly await
+`server.whenReady()` before it starts accepting traffic; `handle()` also waits
+for the same recovery promise. The durable edge store supports get/list,
 continuation, cancellation, ordered SSE subscription, and surviving Runtime-run
 reattachment after an edge restart. Push notifications, A2A 0.3, gRPC, and
 HTTP+JSON are not advertised; unsupported push methods return the standard

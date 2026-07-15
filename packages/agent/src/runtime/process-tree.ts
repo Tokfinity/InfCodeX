@@ -10,6 +10,51 @@ import {
 const DEFAULT_GRACE_MS = 300;
 const DEFAULT_FORCE_MS = 2_000;
 const DEFAULT_TASKKILL_MS = 5_000;
+const NATIVE_PARENT_PROCESS_SOURCE = String.raw`
+using System;
+using System.Runtime.InteropServices;
+using System.Text;
+public static class KodaXNativeProcessSnapshot {
+  [StructLayout(LayoutKind.Sequential, CharSet = CharSet.Auto)]
+  private struct ProcessEntry32 {
+    public uint dwSize;
+    public uint cntUsage;
+    public uint th32ProcessID;
+    public IntPtr th32DefaultHeapID;
+    public uint th32ModuleID;
+    public uint cntThreads;
+    public uint th32ParentProcessID;
+    public int pcPriClassBase;
+    public uint dwFlags;
+    [MarshalAs(UnmanagedType.ByValTStr, SizeConst = 260)]
+    public string szExeFile;
+  }
+  [DllImport("kernel32.dll", SetLastError = true)]
+  private static extern IntPtr CreateToolhelp32Snapshot(uint flags, uint processId);
+  [DllImport("kernel32.dll", CharSet = CharSet.Auto, SetLastError = true)]
+  private static extern bool Process32First(IntPtr snapshot, ref ProcessEntry32 entry);
+  [DllImport("kernel32.dll", CharSet = CharSet.Auto, SetLastError = true)]
+  private static extern bool Process32Next(IntPtr snapshot, ref ProcessEntry32 entry);
+  [DllImport("kernel32.dll")]
+  private static extern bool CloseHandle(IntPtr handle);
+  public static string ReadRows() {
+    var snapshot = CreateToolhelp32Snapshot(2, 0);
+    if (snapshot == new IntPtr(-1)) return string.Empty;
+    var rows = new StringBuilder();
+    var entry = new ProcessEntry32();
+    entry.dwSize = (uint)Marshal.SizeOf(entry);
+    try {
+      if (!Process32First(snapshot, ref entry)) return string.Empty;
+      do {
+        rows.Append(entry.th32ProcessID).Append(',').Append(entry.th32ParentProcessID).Append('\n');
+        entry.dwSize = (uint)Marshal.SizeOf(entry);
+      } while (Process32Next(snapshot, ref entry));
+      return rows.ToString();
+    } finally {
+      CloseHandle(snapshot);
+    }
+  }
+}`;
 
 export interface ProcessTreeKillOptions {
   readonly gracefulStdinEnd?: boolean;
@@ -50,15 +95,15 @@ export function waitForChildProcessExit(
   });
 }
 
-function runTaskkill(pid: number, timeoutMs: number): Promise<void> {
-  return new Promise<void>((resolve) => {
+function runTaskkill(pid: number, timeoutMs: number): Promise<boolean> {
+  return new Promise<boolean>((resolve) => {
     const killer = spawn('taskkill', ['/pid', String(pid), '/t', '/f'], {
       stdio: 'ignore',
       windowsHide: true,
     });
     let settled = false;
     let timer: ReturnType<typeof setTimeout> | undefined;
-    const finish = (): void => {
+    const finish = (succeeded: boolean): void => {
       if (settled) {
         return;
       }
@@ -66,7 +111,7 @@ function runTaskkill(pid: number, timeoutMs: number): Promise<void> {
       if (timer) {
         clearTimeout(timer);
       }
-      resolve();
+      resolve(succeeded);
     };
     timer = setTimeout(() => {
       try {
@@ -74,11 +119,11 @@ function runTaskkill(pid: number, timeoutMs: number): Promise<void> {
       } catch {
         // Best-effort cleanup fallback; caller may still try direct kill.
       }
-      finish();
+      finish(false);
     }, timeoutMs);
     timer.unref?.();
-    killer.once('exit', finish);
-    killer.once('error', finish);
+    killer.once('exit', (code) => finish(code === 0));
+    killer.once('error', () => finish(false));
   });
 }
 
@@ -195,6 +240,54 @@ function getWindowsChildPidsViaWmic(parentPid: number): number[] {
   return pids;
 }
 
+function collectWindowsDescendantPidsNative(parentPid: number): number[] {
+  const script = [
+    "$source = @'",
+    NATIVE_PARENT_PROCESS_SOURCE,
+    "'@",
+    'Add-Type -TypeDefinition $source',
+    '[KodaXNativeProcessSnapshot]::ReadRows()',
+  ].join('\n');
+  const result = spawnSync('powershell.exe', [
+    '-NoProfile',
+    '-NonInteractive',
+    '-Command',
+    script,
+  ], {
+    encoding: 'utf8',
+    timeout: DEFAULT_TASKKILL_MS,
+    windowsHide: true,
+  });
+  if (result.error || result.status !== 0) return [];
+  return collectDescendantsFromProcessRows(result.stdout, parentPid);
+}
+
+function collectDescendantsFromProcessRows(stdout: string, parentPid: number): number[] {
+  const children = new Map<number, number[]>();
+  for (const line of stdout.split(/\r?\n/)) {
+    const [pidText, parentText] = line.split(',', 2);
+    const pid = Number(pidText);
+    const parent = Number(parentText);
+    if (!Number.isFinite(pid) || pid <= 0 || !Number.isFinite(parent)) continue;
+    children.set(parent, [...(children.get(parent) ?? []), pid]);
+  }
+
+  const descendants: number[] = [];
+  const pending = [parentPid];
+  const seen = new Set<number>([parentPid]);
+  while (pending.length > 0) {
+    const parent = pending.shift();
+    if (parent === undefined) break;
+    for (const child of children.get(parent) ?? []) {
+      if (seen.has(child)) continue;
+      seen.add(child);
+      descendants.push(child);
+      pending.push(child);
+    }
+  }
+  return descendants;
+}
+
 function getWindowsChildPids(parentPid: number): number[] {
   // Mirror the llm copy: CIM first, partial stdout accepted, WMIC fallback.
   const script = [
@@ -248,22 +341,23 @@ export async function killPidTree(
   options: ProcessTreeKillOptions = {},
 ): Promise<void> {
   if (process.platform === 'win32') {
-    // Mirror the llm copy: taskkill first, then direct SIGTERM/SIGKILL fallbacks.
-    const descendantPids = collectWindowsDescendantPids(pid);
-    const killOrder = [...descendantPids].reverse();
-    const targets = [pid, ...descendantPids];
     const taskkillMs = options.taskkillMs ?? DEFAULT_TASKKILL_MS;
     const forceMs = options.forceMs ?? DEFAULT_FORCE_MS;
 
-    await runTaskkill(pid, taskkillMs);
-    for (const childPid of killOrder) {
-      if (signalTargetExists(childPid)) {
-        await runTaskkill(childPid, taskkillMs);
-      }
-    }
-    if (await waitForWindowsPidsExit(targets, forceMs)) {
+    const taskkillSucceeded = await runTaskkill(pid, taskkillMs);
+    if (taskkillSucceeded && await waitForWindowsPidsExit([pid], forceMs)) {
       return;
     }
+
+    // `taskkill /t` depends on Windows management services and can fail under
+    // load. Snapshot parent links before direct-killing the root so orphaned
+    // descendants remain addressable without WMI.
+    let descendantPids = collectWindowsDescendantPidsNative(pid);
+    if (descendantPids.length === 0) {
+      descendantPids = collectWindowsDescendantPids(pid);
+    }
+    const killOrder = [...descendantPids].reverse();
+    const targets = [pid, ...descendantPids];
 
     for (const childPid of killOrder) {
       if (signalTargetExists(childPid)) {

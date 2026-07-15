@@ -68,6 +68,7 @@ describe('FEATURE_218 manual registry', () => {
     expect(content).toContain('@kodax-ai/kodax/runtime');
     expect(content).toContain('@kodax-ai/kodax/experimental-memory');
     expect(content).toContain('@kodax-ai/kodax/a2a');
+    expect(content).toContain('server.whenReady()');
     expect(content).toContain('sessions.observe()');
     expect(content).toContain('run-bound Host Tools');
   });

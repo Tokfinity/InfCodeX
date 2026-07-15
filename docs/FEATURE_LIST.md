@@ -11,8 +11,8 @@
 
 | Item | Value |
 |---|---|
-| Current released version | `v0.7.69` (release baseline prepared 2026-07-14) |
-| Current package version | `@kodax-ai/kodax@0.7.69`; npm publication remains the maintainer-owned final step |
+| Current released version | `v0.7.68` |
+| Current package version | `@kodax-ai/kodax@0.7.69` release candidate; npm registry publication has not occurred |
 | Workspace baseline | `llm / agent / coding / repl` 4 packages |
 | Total tracked features | `55` |
 | InProgress | `4` |
@@ -27,7 +27,7 @@
 | Status | Count | Feature IDs | Next checkpoint |
 |---|---:|---|---|
 | Completed | 33 | `260, 261, 259, 258, 253, 254, 255, 256, 257, 228, 251, 252, 250, 248, 249, 247, 246, 245, 243, 242, 241, 233, 240, 239, 224, 221, 174, 211, 237, 229, 230, 234, 236` | `260` completed for v0.7.68 (2026-07-12) with 9593/9593 passing tests on both Node 20 and Node 22 release CI, full build and artifact validation, 87.58% focused line coverage, and all preregistered v2 memory-routing gates passing. `261`, `259`, and `258` shipped in v0.7.67 (2026-07-11). Earlier completion history is unchanged. |
-| InProgress | 4 | `269, 267, 268, 225` | `267`/`268`/`269` source implementation and joint integration are complete for v0.7.69. GitHub Actions run `29321123765` is green on Node 20/22, including build/DTS, full tests, and the Node 22 Unix-socket gate; npm dry-run, fresh-tarball consumer/Worker/CLI, and Windows binary gates are also green. Remaining sign-off is independent A2A interoperability, cross-platform release artifacts, and the formal Space/package smoke. `225` broader current-HEAD cleanup remains outside this release. |
+| InProgress | 4 | `269, 267, 268, 225` | `267`/`268` source implementation and F269 integration remain in the v0.7.69 slot; they are not automatically rescheduled. `269` is hardened after the Space SDK package review: server admission, complete snapshots, lifecycle/events/transport types, shared settings, stable bridge resume, recovery queries, and preflight are implemented. Node 20/22 focused regression, root type/build/bundle/DTS, fresh-tarball consumer/Worker/CLI/DTS, and Windows binary gates pass locally. Remaining gates are the current GitHub full matrix, formal Space smoke, npm publication, and independent F267/F268 release evidence. `225` broader current-HEAD cleanup remains outside this release. |
 | Planned, near-term | 5 | `266, 270, 263, 264, 265` | `v0.7.70` -> `v0.7.85` |
 | Planned, v0.8.x | 5 | `007, 030, 093, 113, 139` | `v0.8.5+` |
 | Planned, v0.9.x | 1 | `262` | `v0.9.0` |
@@ -300,20 +300,25 @@ classification. They remain InProgress only for independent interoperability,
 cross-platform package/binary, and release-machine evidence; no known source
 implementation item remains open.
 
-`269` implementation is complete for `v0.7.69`: the existing Runtime daemon now
+`269` source implementation is complete for the unpublished `v0.7.69` release candidate: the existing Runtime daemon now
 provides atomic session observation, durable operation deduplication, stable
 same-session order, settings/grant CAS, transport-safe AskUser/permission,
 structured crash outcomes, Space keychain credential brokerage, run-bound Host
 Tools, and a shared daemon/inline Coder owner fence with sticky rollback. A real
 daemon process plus independent Space-like/observer processes verifies shared
-state and credential non-persistence. F269 remains InProgress only for the
-formal npm/Space packaged smoke and Windows/Ubuntu release evidence; it does
-not move F267 or F268. The 2026-07-14 implementation review closed ordering,
+state and credential non-persistence. The Space package review additionally
+closed server-side Partner admission, complete late-join projection, prompt
+connection lifecycle, typed event parsing, daemon-safe run DTOs,
+`agentMode`/`autoModeEngine` settings CAS, stable-client credential/Host Tool
+resume, durable recovery lookup, and daemon stop preflight. F269 remains
+InProgress for the current GitHub full matrix, formal npm/Space packaged smoke,
+and Windows/Ubuntu release evidence; it does not move F267 or F268. The 2026-07-14 implementation review closed ordering,
 restart reconciliation, event-trim projection, owner-lock/atomic-release,
 Host Tool revoke, credential expiry/configuration/redaction, and legacy
-settings-CAS gaps. Focused new-module line coverage is 86.40%; Runtime/daemon,
-64-test facade, six process-distinct smoke, TypeScript/build/DTS, and npm
-dry-run gates pass locally.
+settings-CAS gaps. Earlier release-candidate evidence remains recorded, but the
+post-review delta passes its local type/build/package/binary gates; the current
+GitHub full matrix and formal Space/package smoke remain required before
+publication.
 
 `260` completed for `v0.7.68`: the thin experimental Memory Agent SDK,
 zero-wait scoped recall, deliberate read-only `memory_recall`, trace-only

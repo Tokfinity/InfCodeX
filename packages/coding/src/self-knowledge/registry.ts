@@ -471,6 +471,8 @@ const TOPICS: readonly KodaXManualTopic[] = [
       'Worker-hosted, or local-daemon sessions/runs/events/permissions;',
       '@kodax-ai/kodax/a2a for the A2A 1.0 JSON-RPC/SSE client/server edge; and',
       '@kodax-ai/kodax/experimental-memory for the opt-in MemoryAgent/MemorySession contract.',
+      'For an A2A server, listen() waits for durable recovery; a host wiring handle() directly',
+      'can await server.whenReady() before accepting traffic.',
       '',
       'The shared local daemon is authoritative for one Coder profile. Join a session atomically',
       'with sessions.observe(); replace local projection after runtime change/resync_required.',
