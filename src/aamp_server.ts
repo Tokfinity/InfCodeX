@@ -1,8 +1,9 @@
 import { fork } from 'node:child_process';
 import { randomUUID } from 'node:crypto';
 import { fileURLToPath } from 'node:url';
-import type { KodaXSessionStorage } from '@kodax/coding';
-import { FileSessionStorage, prepareRuntimeConfig } from '@kodax/repl';
+import chalk from 'chalk';
+import type { KodaXSessionStorage } from '@kodax-ai/coding';
+import { prepareRuntimeConfig } from '@kodax-ai/repl';
 import { createDefaultAampLogger, type AampLogger } from './aamp_logger.js';
 import type { AampTaskExecutionResult } from './aamp_runtime.js';
 import { FileAampTaskStore } from './aamp_store.js';
@@ -12,6 +13,7 @@ import type {
   AampTaskStore,
   AampTransport,
   AampWorkerInput,
+  WorkerStreamEventMessage,
 } from './aamp_types.js';
 
 /**
@@ -35,14 +37,98 @@ export interface AgentProcessHandle {
 export type AgentProcessSpawner = (
   dispatch: AampDispatchEnvelope,
   record: AampTaskRecord,
+  streamOptions?: {
+    streamId: string;
+    onStreamEvent: (msg: WorkerStreamEventMessage) => void;
+  },
 ) => AgentProcessHandle;
+
+/**
+ * The role text that identifies a streaming-eligible engineering task.
+ * Only dispatches whose bodyText contains this role get real-time streaming.
+ */
+const STREAMING_ROLE_MARKER = '你是一名在本地环境中执行开发任务的工程师。';
+
+interface PlanTodosPersistedPayload {
+  planningSummary: string;
+  todoList: string[];
+  parseError?: string;
+}
+
+function isStreamingTask(dispatch: AampDispatchEnvelope): boolean {
+  return dispatch.bodyText.includes(STREAMING_ROLE_MARKER);
+}
+
+function isPlanTodosTask(dispatch: AampDispatchEnvelope): boolean {
+  return dispatch.dispatchContext?.state_key === 'state_2';
+}
+
+function normalizePlanTodosPayload(value: unknown): { summary: string; todos: string[] } | null {
+  if (!value || typeof value !== 'object' || Array.isArray(value)) {
+    return null;
+  }
+
+  const record = value as Record<string, unknown>;
+  const summary = typeof record.summary === 'string' ? record.summary.trim() : '';
+  const todos = Array.isArray(record.todos)
+    ? record.todos.filter((item): item is string => typeof item === 'string').map((item) => item.trim()).filter(Boolean)
+    : [];
+
+  if (!summary) {
+    return null;
+  }
+
+  return {
+    summary,
+    todos: todos.slice(0, 5),
+  };
+}
+
+function extractPlanTodosPersistedPayload(dispatch: AampDispatchEnvelope, output: string): PlanTodosPersistedPayload | undefined {
+  if (!isPlanTodosTask(dispatch)) {
+    return undefined;
+  }
+
+  try {
+    const parsed = JSON.parse(output) as unknown;
+    const normalized = normalizePlanTodosPayload(parsed);
+    if (normalized) {
+      return {
+        planningSummary: normalized.summary,
+        todoList: normalized.todos,
+      };
+    }
+
+    return {
+      planningSummary: output.trim(),
+      todoList: [],
+      parseError: 'plan_todos output JSON missing required summary field',
+    };
+  } catch (error) {
+    return {
+      planningSummary: output.trim(),
+      todoList: [],
+      parseError: error instanceof Error ? error.message : String(error),
+    };
+  }
+}
+
+function isWorkerStreamEvent(msg: unknown): msg is WorkerStreamEventMessage {
+  return (
+    typeof msg === 'object' &&
+    msg !== null &&
+    '__streamEvent' in msg &&
+    (msg as WorkerStreamEventMessage).__streamEvent === true
+  );
+}
 
 function createDefaultProcessSpawner(options: {
   provider: string;
   model?: string;
   repoRoot: string;
+  dangerousFullPermissions: boolean;
 }): AgentProcessSpawner {
-  return (dispatch, record) => {
+  return (dispatch, record, streamOptions) => {
     const workerPath = fileURLToPath(new URL('./aamp_worker.js', import.meta.url));
     const workerInput: AampWorkerInput = {
       dispatch,
@@ -50,13 +136,26 @@ function createDefaultProcessSpawner(options: {
       provider: options.provider,
       model: options.model,
       repoRoot: options.repoRoot,
+      dangerousFullPermissions: options.dangerousFullPermissions,
     };
 
+    // When streaming is active, pass streamId so the worker knows to send incremental events.
+    if (streamOptions) {
+      workerInput.streamId = streamOptions.streamId;
+    }
+
+    const workerEnv: NodeJS.ProcessEnv = {
+      ...process.env,
+      AAMP_WORKER_INPUT: JSON.stringify(workerInput),
+    };
+    // Child process stdout is piped (not a TTY), so chalk auto-detect would disable colors.
+    // Preserve terminal color output by forwarding FORCE_COLOR from parent when appropriate.
+    if (!workerEnv.FORCE_COLOR && process.stdout.isTTY) {
+      workerEnv.FORCE_COLOR = '1';
+    }
+
     const child = fork(workerPath, [], {
-      env: {
-        ...process.env,
-        AAMP_WORKER_INPUT: JSON.stringify(workerInput),
-      },
+      env: workerEnv,
       silent: true,
     });
 
@@ -65,14 +164,47 @@ function createDefaultProcessSpawner(options: {
     child.stderr?.on('data', (data: Buffer) => process.stderr.write(data));
 
     const resultPromise = new Promise<AampTaskExecutionResult>((resolve, reject) => {
-      child.on('message', (msg) => resolve(msg as AampTaskExecutionResult));
-      child.on('error', reject);
-      child.on('exit', (code, signal) => {
-        if (signal === 'SIGTERM' || signal === 'SIGKILL') {
-          reject(new Error(`agent process killed with signal ${signal}`));
-        } else if (code !== 0 && code !== null) {
-          reject(new Error(`agent process exited with code ${code}`));
+      let settled = false;
+      const resolveOnce = (value: AampTaskExecutionResult): void => {
+        if (settled) {
+          return;
         }
+        settled = true;
+        resolve(value);
+      };
+      const rejectOnce = (error: Error): void => {
+        if (settled) {
+          return;
+        }
+        settled = true;
+        reject(error);
+      };
+
+      child.on('message', (msg) => {
+        if (streamOptions && isWorkerStreamEvent(msg)) {
+          streamOptions.onStreamEvent(msg);
+        } else {
+          resolveOnce(msg as AampTaskExecutionResult);
+        }
+      });
+      child.on('error', (error) => rejectOnce(error));
+      child.on('exit', (code, signal) => {
+        if (settled) {
+          return;
+        }
+        if (signal === 'SIGTERM' || signal === 'SIGKILL') {
+          rejectOnce(new Error(`agent process killed with signal ${signal}`));
+          return;
+        }
+        if (code === 0) {
+          rejectOnce(new Error('agent process exited before sending result'));
+          return;
+        }
+        if (code !== null) {
+          rejectOnce(new Error(`agent process exited with code ${code}`));
+          return;
+        }
+        rejectOnce(new Error('agent process exited before sending result'));
       });
     });
 
@@ -89,6 +221,7 @@ export interface KodaXAampServerOptions {
   repoRoot?: string;
   provider?: string;
   model?: string;
+  dangerousFullPermissions?: boolean;
   mailboxEmail?: string;
   logger?: AampLogger;
   /** @deprecated Session storage is now managed inside the spawned worker process. */
@@ -124,6 +257,7 @@ export class KodaXAampServer {
   private readonly repoRoot: string;
   private readonly provider: string;
   private readonly model?: string;
+  private readonly dangerousFullPermissions: boolean;
   private readonly mailboxEmail?: string;
   private readonly logger: AampLogger;
   private readonly processSpawner: AgentProcessSpawner;
@@ -142,11 +276,17 @@ export class KodaXAampServer {
     this.repoRoot = repoRoot;
     this.provider = provider;
     this.model = model;
+    this.dangerousFullPermissions = options.dangerousFullPermissions === true;
     this.mailboxEmail = options.mailboxEmail;
     this.logger = options.logger ?? createDefaultAampLogger();
     this.processSpawner =
       options.processSpawner ??
-      createDefaultProcessSpawner({ provider, model, repoRoot });
+      createDefaultProcessSpawner({
+        provider,
+        model,
+        repoRoot,
+        dangerousFullPermissions: this.dangerousFullPermissions,
+      });
   }
 
   async start(): Promise<void> {
@@ -165,6 +305,7 @@ export class KodaXAampServer {
       repoRoot: this.repoRoot,
       provider: this.provider,
       model: this.model ?? '(default)',
+      dangerousFullPermissions: this.dangerousFullPermissions,
     });
     try {
       await this.transport.listen(
@@ -261,6 +402,91 @@ export class KodaXAampServer {
     });
     record = await this.taskStore.update(dispatch.taskId, { status: 'acknowledged' });
 
+    // ── Streaming setup for eligible tasks ──
+    const streaming = isStreamingTask(dispatch);
+    let streamId: string | undefined;
+
+    if (streaming && this.transport.createStream && this.transport.sendStreamOpened && this.transport.appendStreamEvent) {
+      try {
+        const stream = await this.transport.createStream({
+          taskId: dispatch.taskId,
+          peerEmail: dispatch.from,
+        });
+        streamId = stream.streamId;
+
+        await this.transport.sendStreamOpened({
+          to: dispatch.from,
+          taskId: dispatch.taskId,
+          streamId,
+          inReplyTo: dispatch.messageId,
+        });
+
+        await this.transport.appendStreamEvent({
+          streamId,
+          type: 'status',
+          payload: { stage: 'running', message: 'agent accepted task' },
+        });
+
+        this.logger.info('stream.opened', 'streaming enabled for task', {
+          taskId: dispatch.taskId,
+          streamId,
+        });
+        process.stdout.write(
+          `\n${chalk.bgMagenta.bold(' ⚡ STREAM ')} ${chalk.magentaBright('streaming response activated')}` +
+          ` ${chalk.dim('taskId=')}${dispatch.taskId}` +
+          ` ${chalk.dim('streamId=')}${streamId}\n\n`,
+        );
+      } catch (streamError) {
+        const msg = streamError instanceof Error ? streamError.message : String(streamError);
+        this.logger.error('stream.setup_failed', 'failed to set up stream, proceeding without streaming', {
+          taskId: dispatch.taskId,
+          error: msg,
+        });
+        streamId = undefined;
+      }
+    }
+
+    // Keepalive & stream-closed state – declared outside `try` so the
+    // error-path teardown can also access them.
+    const STREAM_KEEPALIVE_INTERVAL_MS = 25_000;
+    let streamClosed = false;
+    let keepaliveTimer: ReturnType<typeof setInterval> | null = null;
+
+    const safeAppendStreamEvent = (
+      type: string,
+      payload: Record<string, unknown>,
+    ): Promise<void> | undefined => {
+      if (streamClosed || !streamId || !this.transport.appendStreamEvent) {
+        return undefined;
+      }
+      return this.transport.appendStreamEvent({
+        streamId,
+        type,
+        payload,
+      }).catch((err) => {
+        const errMsg = err instanceof Error ? err.message : String(err);
+        if (errMsg.includes('409') || errMsg.includes('already closed')) {
+          if (!streamClosed) {
+            streamClosed = true;
+            if (keepaliveTimer !== null) {
+              clearInterval(keepaliveTimer);
+              keepaliveTimer = null;
+            }
+            this.logger.info('stream.remotely_closed', 'stream was closed by server (idle timeout); suppressing further appends', {
+              taskId: dispatch.taskId,
+              streamId: streamId!,
+            });
+          }
+          return;
+        }
+        this.logger.error('stream.append_failed', 'failed to append stream event', {
+          taskId: dispatch.taskId,
+          streamId: streamId!,
+          error: errMsg,
+        });
+      });
+    };
+
     try {
       this.logger.info('task.running', 'executing task', {
         taskId: dispatch.taskId,
@@ -268,7 +494,34 @@ export class KodaXAampServer {
       });
       await this.taskStore.update(dispatch.taskId, { status: 'running' });
 
-      const handle = this.processSpawner(dispatch, record);
+      // Build stream options for the spawner when streaming is active.
+      // aamp-sdk ≥ 0.1.16 handles ordering internally: appendStreamEvent
+      // uses a per-stream serial queue with automatic text.delta coalescing,
+      // and closeStream drains the queue before closing. We simply forward
+      // every worker event without any client-side batching or sequencing.
+      //
+      // A keepalive interval sends periodic `status` events so the AAMP
+      // server does not close the stream due to idle timeout (e.g. during
+      // long-running tool executions like `npm run build` or `git push`).
+      // Once a 409 "stream already closed" is received, we set streamClosed
+      // to suppress further append attempts and avoid error log spam.
+
+      if (streamId && this.transport.appendStreamEvent) {
+        keepaliveTimer = setInterval(() => {
+          safeAppendStreamEvent('status', { stage: 'running', message: 'agent working…' });
+        }, STREAM_KEEPALIVE_INTERVAL_MS);
+      }
+
+      const streamOptions = streamId && this.transport.appendStreamEvent
+        ? {
+            streamId,
+            onStreamEvent: (msg: WorkerStreamEventMessage) => {
+              safeAppendStreamEvent(msg.eventType, msg.payload);
+            },
+          }
+        : undefined;
+
+      const handle = this.processSpawner(dispatch, record, streamOptions);
       this.taskProcesses.set(dispatch.taskId, handle);
       this.logger.info('task.process_spawned', 'agent process spawned', {
         taskId: dispatch.taskId,
@@ -282,15 +535,55 @@ export class KodaXAampServer {
         this.taskProcesses.delete(dispatch.taskId);
       }
 
+      // ── Stream teardown ──
+      // Stop keepalive, then close the stream if the server hasn't already.
+      if (keepaliveTimer !== null) {
+        clearInterval(keepaliveTimer);
+        keepaliveTimer = null;
+      }
+      if (streamId && !streamClosed && this.transport.appendStreamEvent && this.transport.closeStream) {
+        try {
+          await this.transport.appendStreamEvent({
+            streamId,
+            type: 'done',
+            payload: { reason: 'completed' },
+          });
+          await this.transport.closeStream({
+            streamId,
+            payload: { reason: 'completed' },
+          });
+          this.logger.info('stream.closed', 'stream closed', {
+            taskId: dispatch.taskId,
+            streamId,
+          });
+          process.stdout.write(
+            `\n${chalk.bgGreen.bold(' ✓ STREAM ')} ${chalk.greenBright('stream closed')}` +
+            ` ${chalk.dim('taskId=')}${dispatch.taskId}\n`,
+          );
+        } catch (streamError) {
+          const msg = streamError instanceof Error ? streamError.message : String(streamError);
+          this.logger.error('stream.close_failed', 'failed to close stream', {
+            taskId: dispatch.taskId,
+            streamId,
+            error: msg,
+          });
+        }
+      }
+
       await this.transport.sendResult(execution.outbound);
       this.logger.info('task.result_sent', 'sent task.result', {
         taskId: dispatch.taskId,
         status: execution.outbound.status,
         sessionId: record.sessionId,
       });
+      const planTodosPayload = extractPlanTodosPersistedPayload(dispatch, execution.outbound.output);
       await this.taskStore.update(dispatch.taskId, {
         status: execution.outbound.status === 'completed' ? 'completed' : 'failed',
+        executionStatus: execution.outbound.status,
         resultSummary: execution.outbound.output,
+        planningSummary: planTodosPayload?.planningSummary,
+        todoList: planTodosPayload?.todoList,
+        parseError: planTodosPayload?.parseError,
       });
     } catch (error) {
       const message = error instanceof Error ? error.message : String(error);
@@ -299,6 +592,33 @@ export class KodaXAampServer {
         sessionId: record.sessionId,
         error: message,
       });
+
+      // ── Stream error teardown ──
+      if (keepaliveTimer !== null) {
+        clearInterval(keepaliveTimer);
+        keepaliveTimer = null;
+      }
+      if (streamId && !streamClosed && this.transport.appendStreamEvent && this.transport.closeStream) {
+        try {
+          await this.transport.appendStreamEvent({
+            streamId,
+            type: 'error',
+            payload: { message },
+          });
+          await this.transport.closeStream({
+            streamId,
+            payload: { reason: 'failed', error: message },
+          });
+        } catch (streamError) {
+          const streamMessage = streamError instanceof Error ? streamError.message : String(streamError);
+          this.logger.error('stream.close_failed', 'failed to close stream', {
+            taskId: dispatch.taskId,
+            streamId,
+            error: streamMessage,
+          });
+        }
+      }
+
       try {
         await this.transport.sendResult({
           taskId: dispatch.taskId,
@@ -318,6 +638,7 @@ export class KodaXAampServer {
       try {
         await this.taskStore.update(dispatch.taskId, {
           status: 'failed',
+          executionStatus: 'failed',
           resultSummary: message,
         });
       } catch (updateError) {

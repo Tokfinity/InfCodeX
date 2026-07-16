@@ -5,8 +5,9 @@
  */
 
 import type { CursorPosition } from "./utils/text-buffer.js";
+import type { PastedContent, PasteStore } from "./utils/paste-store.js";
 import type { PermissionMode } from "../permission/types.js";
-import type { KodaXAgentMode, KodaXReasoningMode } from "@kodax/coding";
+import type { KodaXAgentMode, KodaXReasoningMode } from "@kodax-ai/coding";
 
 // === Keyboard Events - 键盘事件 ===
 
@@ -21,17 +22,33 @@ export interface KeyInfo {
   meta: boolean; // Alt key
   shift: boolean;
   insertable: boolean; // Whether can be inserted into text - 是否可以插入到文本中
+  isPasted?: boolean; // Whether inside bracketed paste (terminal protocol) - 是否在粘贴模式中（终端协议）
+  mouse?: {
+    action: "press" | "release" | "drag" | "move" | "wheel";
+    button: "left" | "middle" | "right" | "wheelup" | "wheeldown" | "unknown";
+    row: number;
+    column: number;
+  };
 }
-
 // === Text Buffer - 文本缓冲区 ===
 
 export type { CursorPosition };
+
+export type PromptEditingMode = "idle" | "typing" | "pasting";
 
 export interface UseTextBufferReturn {
   buffer: import("./utils/text-buffer.js").TextBuffer;
   text: string;
   cursor: CursorPosition;
   lines: string[];
+  isPasting: boolean;
+  editingMode: PromptEditingMode;
+  /**
+   * Issue 121: session-scoped paste registry. Registered paste ids survive
+   * submit so Up-arrow input-history recall can still expand them.
+   */
+  pasteStore: PasteStore;
+  resetTransientState: () => void;
   setText: (text: string) => void;
   replaceRange: (start: number, end: number, replacement: string) => void;
   insert: (text: string, options?: { paste?: boolean }) => void;
@@ -40,6 +57,10 @@ export interface UseTextBufferReturn {
   delete: () => void;
   move: (direction: "up" | "down" | "left" | "right" | "home" | "end") => void;
   moveToEnd: () => void;
+  moveToOffset: (offset: number) => void;
+  killLineRight: () => void;
+  killLineLeft: () => void;
+  deleteWordLeft: () => void;
   clear: () => void;
   undo: () => boolean;
   redo: () => boolean;
@@ -63,9 +84,19 @@ export type VisualCursor = [number, number];
 
 // === Input History - 输入历史 ===
 
+/**
+ * An input-history entry. `text` is the display form (may contain
+ * `[Pasted text #N]` placeholders). `pastedContents`, when present, carries
+ * the stored contents needed to expand those placeholders after recall.
+ *
+ * Issue 121: pastedContents preserves paste fidelity across Up-arrow and
+ * undo. For entries loaded from disk-backed history, contents may carry only
+ * `contentHash` until `retrievePastedText` resolves them.
+ */
 export interface HistoryEntry {
   text: string;
   timestamp: number;
+  pastedContents?: PastedContent[];
 }
 
 // === Autocomplete - 自动补全 ===
@@ -131,21 +162,51 @@ export interface Theme {
 
 // === Component Props - 组件 Props ===
 
+export interface PromptSubmitPayload {
+  /**
+   * Display form — what the user saw in the input bar. May contain
+   * `[Pasted text #N +K lines]` placeholders or `[...Truncated text #N ...]`
+   * refs (Issue 121).
+   */
+  displayText: string;
+  /**
+   * Fully expanded form — all paste placeholders substituted for their raw
+   * stored contents. This is what parseCommand / the agent pipeline consume.
+   */
+  fullText: string;
+  /** Paste contents referenced by displayText — for persistence / recall. */
+  pastedContents: PastedContent[];
+}
+
 export interface InputPromptProps {
-  onSubmit: (text: string) => void;
+  onSubmit: (payload: PromptSubmitPayload) => void;
   placeholder?: string;
   prompt?: string;
   focus?: boolean;
   initialValue?: string;
   /** Callback when input text changes - 输入文本变化时的回调 */
   onInputChange?: (text: string) => void;
+  /** Called for a transient UI notice when image paste falls back to text. */
+  onPasteFallback?: (message: string) => void;
+  /**
+   * Called when the ↑ arrow history recall brings back an entry with stored
+   * paste contents. Consumer can hydrate a disk-backed paste cache here.
+   */
+  onHistoryRecall?: (entry: { text: string; pastedContents: PastedContent[] }) => void;
+  /**
+   * FEATURE_149 Phase 2.1 (v0.7.38) — pop the queued follow-up inputs back
+   * into the editor when the user presses ↑ on an empty buffer. Return the
+   * joined text to load (queue gets atomically cleared by the consumer), or
+   * `undefined` to leave history-recall behavior intact when the queue is
+   * empty.
+   */
+  onPopPendingInputs?: () => string | undefined;
 }
 
 export interface StatusBarProps {
   sessionId: string;
   permissionMode: PermissionMode;
   agentMode: KodaXAgentMode;
-  parallel?: boolean;
   provider: string;
   model: string;
   tokenUsage?: {
@@ -157,6 +218,8 @@ export interface StatusBarProps {
   activeToolCount?: number;
   thinking?: boolean;
   reasoningMode?: KodaXReasoningMode;
+  effort?: string;
+  reasoningEffortLabel?: string;
   reasoningCapability?: string;
   /** Is context currently compacting - 是否正在压缩上下文 */
   isCompacting?: boolean;
@@ -180,10 +243,12 @@ export interface StatusBarProps {
     contextWindow: number;
     /** Compaction trigger percentage (0-100) */
     triggerPercent: number;
+    /** Provider output capacity reserved from the physical context window. */
+    reservedResponseTokens?: number;
   };
   /** Whether current busy/thinking status should be visible in the bar */
   showBusyStatus?: boolean;
-  managedPhase?: "starting" | "routing" | "preflight" | "round" | "worker" | "upgrade" | "completed";
+  managedPhase?: "starting" | "routing" | "preflight" | "round" | "worker" | "upgrade" | "verifying" | "completed";
   managedHarnessProfile?: string;
   managedWorkerTitle?: string;
   managedRound?: number;
@@ -191,6 +256,24 @@ export interface StatusBarProps {
   managedGlobalWorkBudget?: number;
   managedBudgetUsage?: number;
   managedBudgetApprovalRequired?: boolean;
+  /**
+   * v0.7.38 FEATURE_156 — true when the runner-driven outer loop is
+   * parked in `waitForWakeEvent` (idle-yield from FEATURE_155). The
+   * status bar renders this as "{role} - waiting for N children"
+   * instead of falling back to the last role-emit label, so the user
+   * can tell the spinner is actively waiting on something concrete.
+   * Consumers MUST branch on `=== true` (undefined transitions out).
+   */
+  managedIdleWaiting?: boolean;
+  /** v0.7.38 FEATURE_156 — child count surfaced in the idle-wait label. */
+  managedIdleWaitingPendingCount?: number;
+  /**
+   * FEATURE_092 phase 2b.8: classifier engine indicator. Only renders when
+   * permissionMode is in the auto family. `'llm'` shows green `auto[LLM]`
+   * (healthy), `'rules'` shows yellow `auto[RULES]` (downgraded — every
+   * non-Tier-1 tool call escalates to user confirm).
+   */
+  autoModeEngine?: 'llm' | 'rules';
 }
 
 /**
@@ -223,7 +306,6 @@ export interface AppProps {
   onSubmit: (input: string) => Promise<void>;
   permissionMode?: PermissionMode;
   agentMode?: KodaXAgentMode;
-  parallel?: boolean;
 }
 
 // ============================================================================
@@ -283,6 +365,8 @@ export interface ToolCall {
   output?: unknown;
   error?: string;
   progress?: number; // 0-100
+  /** Real-time progress lines displayed inside the tool block during execution. */
+  progressLines?: string[];
   startTime: number;
   endTime?: number;
 }
@@ -300,8 +384,10 @@ export type HistoryItemType =
   | "tool_group"
   | "thinking"
   | "error"
+  | "event"
   | "info"
-  | "hint";
+  | "hint"
+  | "sidecar";
 
 /**
  * History item base class - 历史项基类
@@ -326,6 +412,7 @@ export interface HistoryItemUser extends HistoryItemBase {
 export interface HistoryItemAssistant extends HistoryItemBase {
   type: "assistant";
   text: string;
+  compactText?: string;
   isStreaming?: boolean;
 }
 
@@ -351,6 +438,7 @@ export interface HistoryItemToolGroup extends HistoryItemBase {
 export interface HistoryItemThinking extends HistoryItemBase {
   type: "thinking";
   text: string;
+  compactText?: string;
 }
 
 /**
@@ -361,6 +449,13 @@ export interface HistoryItemError extends HistoryItemBase {
   text: string;
 }
 
+export interface HistoryItemEvent extends HistoryItemBase {
+  type: "event";
+  text: string;
+  icon?: string;
+  compactText?: string;
+}
+
 /**
  * Info message - 信息消息
  */
@@ -368,6 +463,15 @@ export interface HistoryItemInfo extends HistoryItemBase {
   type: "info";
   text: string;
   icon?: string;
+  compactText?: string;
+  /**
+   * When true, drop the default bottom margin so consecutive info items
+   * (e.g. a burst of repo-intelligence trace stages emitted within one
+   * turn) visually stack as a block instead of each getting a blank
+   * spacer line. Non-tight items following a tight run restore normal
+   * spacing on their own via their own `marginBottom`.
+   */
+  tightSpacing?: boolean;
 }
 
 /**
@@ -376,6 +480,22 @@ export interface HistoryItemInfo extends HistoryItemBase {
 export interface HistoryItemHint extends HistoryItemBase {
   type: "hint";
   text: string;
+}
+
+/**
+ * Sidecar Verifier message - Sidecar 验证器消息
+ * Displayed as an independent "role" with its own header so the user can
+ * clearly see that the Sidecar Verifier is actively reviewing the output.
+ * verdict: 'revise' | 'blocked' | undefined; delivery 'budget-exhausted' means
+ * the verifier ran out of budget before returning a verdict.
+ */
+export interface HistoryItemSidecar extends HistoryItemBase {
+  type: "sidecar";
+  text: string;
+  /** 'revise' or 'blocked'; absent when delivery === 'budget-exhausted' */
+  verdict?: "revise" | "blocked";
+  /** Set when the verifier exhausted its token budget before reaching a verdict */
+  delivery?: "budget-exhausted";
 }
 
 /**
@@ -388,8 +508,10 @@ export type HistoryItem =
   | HistoryItemToolGroup
   | HistoryItemThinking
   | HistoryItemError
+  | HistoryItemEvent
   | HistoryItemInfo
-  | HistoryItemHint;
+  | HistoryItemHint
+  | HistoryItemSidecar;
 
 /**
  * Creatable history item types (with text property) - 可创建的历史项类型（带 text 属性）
@@ -401,8 +523,10 @@ export type CreatableHistoryItem =
   | Omit<HistoryItemSystem, "id" | "timestamp">
   | Omit<HistoryItemThinking, "id" | "timestamp">
   | Omit<HistoryItemError, "id" | "timestamp">
+  | Omit<HistoryItemEvent, "id" | "timestamp">
   | Omit<HistoryItemInfo, "id" | "timestamp">
   | Omit<HistoryItemHint, "id" | "timestamp">
+  | Omit<HistoryItemSidecar, "id" | "timestamp">
   | Omit<HistoryItemToolGroup, "id" | "timestamp">;
 
 // === UI State - UI 状态 ===
@@ -456,6 +580,9 @@ export interface UIActions {
 
   // History operations - 历史操作
   addHistoryItem: (item: CreatableHistoryItem) => void;
+  // FEATURE_212 (v0.7.45) — add many items in ONE dispatch (one re-render).
+  // Used by session resume to avoid N dispatches → N re-renders (O(n²)).
+  addHistoryItems: (items: CreatableHistoryItem[]) => void;
   updateHistoryItem: (id: string, updates: Partial<HistoryItem>) => void;
   clearHistory: () => void;
 

@@ -70,6 +70,21 @@ export interface OrchestrationTaskContext<TTask extends OrchestrationWorkerSpec 
 export type OrchestrationWorkerRunner<TTask extends OrchestrationWorkerSpec = OrchestrationWorkerSpec, TOutput = unknown> =
   (task: TTask, context: OrchestrationTaskContext<TTask, TOutput>) => Promise<OrchestrationWorkerResult<TOutput>>;
 
+/**
+ * Trace event emitted by `runOrchestration` while stepping through a task DAG
+ * (run/task start/message/complete/failed/blocked). Persisted as JSONL via
+ * `appendTrace` to `{workspaceDir}/orchestration-trace.jsonl`.
+ *
+ * @deprecated FEATURE_083 (v0.7.24) originally superseded this by
+ * `AgentSpan` / `HandoffSpan` in `@kodax-ai/agent`. **FEATURE_086 (v0.7.27)
+ * evaluated removal and kept it**: AgentSpan is scoped to a single Runner
+ * lifecycle, whereas OrchestrationTraceEvent spans across Tasks scheduled
+ * by `runOrchestration` — no cross-task span equivalent exists yet, and
+ * `runOrchestration` + this type are part of the `@kodax-ai/coding` public
+ * surface. The `@deprecated` tag is kept as a signal that new code
+ * targeting in-Runner tracing should prefer `@kodax-ai/agent` spans;
+ * cross-task orchestration code is free to continue using this event.
+ */
 export interface OrchestrationTraceEvent {
   type:
     | 'run_started'
@@ -122,7 +137,6 @@ export interface KodaXAgentWorkerSpec extends OrchestrationWorkerSpec<string> {
   prompt: string;
   provider?: string;
   model?: string;
-  parallelTools?: boolean;
 }
 
 export interface CreateKodaXTaskRunnerOptions<TTask extends KodaXAgentWorkerSpec = KodaXAgentWorkerSpec> {
@@ -497,7 +511,14 @@ function normalizeWorkerResult<TOutput>(
   if (result.success) {
     return {
       ...result,
-      summary: result.summary ?? (typeof result.output === 'string' ? truncateText(result.output) : undefined),
+      // Child summaries stay complete here and at enqueue time. The final
+      // ordinary tool-result batch or idle-yield resume envelope is the sole
+      // physical-capacity owner. Other
+      // consumers of `summary` (summary.md / summary.json diagnostic writes,
+      // mergedFindings.evidence, formatDependencyHandoff which has its own
+      // 600-char truncate) accept full content intentionally — see
+      // docs/features/v0.7.40.md FEATURE_121 §"不改动" + 已识别下游消费方表.
+      summary: result.summary ?? (typeof result.output === 'string' ? result.output : undefined),
     };
   }
 
@@ -926,16 +947,16 @@ function mergeBeforeToolExecute(
     return undefined;
   }
 
-  return async (tool, input) => {
+  return async (tool, input, meta) => {
     if (taskHook) {
-      const taskDecision = await taskHook(tool, input);
+      const taskDecision = await taskHook(tool, input, meta);
       if (taskDecision !== true) {
         return taskDecision;
       }
     }
 
     if (baseHook) {
-      return baseHook(tool, input);
+      return baseHook(tool, input, meta);
     }
 
     return true;
@@ -961,9 +982,9 @@ export function createKodaXTaskRunner<TTask extends KodaXAgentWorkerSpec = KodaX
       ...baseEvents,
       ...taskEvents,
       beforeToolExecute: mergeBeforeToolExecute(baseEvents.beforeToolExecute, task.beforeToolExecute),
-      onToolResult: (result) => {
-        baseEvents.onToolResult?.(result);
-        taskEvents.onToolResult?.(result);
+      onToolResult: (result, meta) => {
+        baseEvents.onToolResult?.(result, meta);
+        taskEvents.onToolResult?.(result, meta);
       },
     };
 
@@ -972,7 +993,6 @@ export function createKodaXTaskRunner<TTask extends KodaXAgentWorkerSpec = KodaX
       provider: task.provider ?? options.baseOptions.provider,
       model: task.model ?? options.baseOptions.model,
       maxIter: task.budget?.maxIter ?? options.baseOptions.maxIter,
-      parallel: task.parallelTools ?? options.baseOptions.parallel,
       thinking: task.budget?.thinking ?? options.baseOptions.thinking,
       reasoningMode: task.budget?.reasoningMode ?? options.baseOptions.reasoningMode,
       abortSignal: effectiveAbortSignal,
@@ -1014,14 +1034,16 @@ export function createKodaXTaskRunner<TTask extends KodaXAgentWorkerSpec = KodaX
         : 'Worker finished successfully'
     );
 
+    // FEATURE_121 (v0.7.40): pass full lastText as summary. Downstream
+    // dispatch-child-tasks enqueue path runs it through guardrail. See
+    // normalizeWorkerResult above for the rationale.
     return {
       success: transformedResult.success,
       output: transformedResult.lastText,
-      summary: truncateText(
+      summary:
         transformedResult.lastText
           || transformedResult.signalReason
           || (transformedResult.interrupted ? 'Worker interrupted before producing a textual result.' : 'No textual output produced.'),
-      ),
       metadata: {
         sessionId: transformedResult.sessionId,
         signal: transformedResult.signal ?? null,

@@ -1,525 +1,525 @@
-# KodaX 详细设计（DD）
+# KodaX Detailed Design
 
-> Last updated: 2026-03-29
+> Last updated: 2026-07-16
 >
-> 这份 DD 描述当前 task engine 的内部模型：
-> single-agent first、intent-first、skill-aware、evidence-driven。
+> Current release baseline: `@kodax-ai/kodax@0.7.71` release candidate
+>
+> This DD describes current implementation structure. Retired V1 chain details
+> were deleted from this active document; use git history and historical feature
+> docs when archaeology is needed.
 
-## 中文导读
+## 1. Scope
 
-如果你只想快速理解当前实现，请优先看：
+This document maps product behavior to current code ownership. It is not an API
+reference and does not duplicate every type. It should answer three questions:
 
-1. `Core Domain Model`
-2. `Routing Pipeline`
-3. `Control Plane Flows`
-4. `Skill Map and Role Projections`
-5. `Runtime / UI Semantics`
+- Where does this behavior live?
+- Which package owns the contract?
+- What must not be coupled across package boundaries?
 
----
+## 2. Published Package And Build Entries
 
-## 1. 范围说明
+The root package is `@kodax-ai/kodax@0.7.71`.
 
-这份文档覆盖：
+`package.json` exposes:
 
-- task-first intake
-- intent gate / scout / harness selection
-- `H0 / H1 / H2` 三层执行语义
-- `skill-map` 与 role-aware skill projection
-- evidence-driven completion
-- user-visible work / round / tool disclosure 规则
+| Export | Build artifact | Source intent |
+|---|---|---|
+| `.` | `dist/index.js` | Root SDK and CLI-facing helpers. |
+| `./agent` | `dist/sdk-agent.js` | Generic agent framework. |
+| `./llm` | `dist/sdk-llm.js` | Provider abstraction. |
+| `./coding` | `dist/sdk-coding.js` | Coding agent SDK. |
+| `./media` | `dist/sdk-media.js` | Agent-layer media/input artifact helpers. |
+| `./repl` | `dist/sdk-repl.js` | REPL/config/session helpers. |
+| `./skills` | `dist/sdk-skills.js` | Focused skills subset. |
+| `./mcp` | `dist/sdk-mcp.js` | Focused MCP subset. |
+| `./session` | `dist/sdk-session.js` | Public session-management subset. |
+| `./runtime` | `dist/sdk-runtime.js` | Stable host Runtime facade and daemon protocol/schema exports. |
+| `./a2a` | `dist/sdk-a2a.js` | Bidirectional A2A 1.0 client/server integration edge. |
+| `./experimental-memory` | `dist/sdk-experimental-memory.js` | Opt-in governed Memory Agent and scoped session contracts. |
 
-这份文档不展开：
-
-- 每个 surface 的完整 UI 视觉细节
-- 每条内建命令的逐条行为说明
-- 未来并行执行或 `H3` 的潜在设计
-
----
-
-## 2. 核心领域模型
-
-### 2.1 Task shape
-
-```ts
-type TaskFamily =
-  | "conversation"
-  | "lookup"
-  | "review"
-  | "implementation"
-  | "investigation"
-  | "planning"
-  | "ambiguous";
-
-type TaskActionability = "non_actionable" | "actionable" | "ambiguous";
-
-type ExecutionPattern = "direct" | "checked-direct" | "coordinated";
-
-interface IntentGateDecision {
-  taskFamily: TaskFamily;
-  actionability: TaskActionability;
-  executionPattern: ExecutionPattern;
-  shouldUseRepoSignals: boolean;
-  shouldUseModelRouter: boolean;
-}
-```
-
-### 2.2 Harness profile
-
-```ts
-type HarnessProfile =
-  | "H0_DIRECT"
-  | "H1_EXECUTE_EVAL"
-  | "H2_PLAN_EXECUTE_EVAL";
-```
-
-说明：
-
-- `SA` 不是 harness profile，而是 agent mode
-- `H3_MULTI_WORKER` 已删除
-
-### 2.3 Role model
-
-```ts
-type AgentRole =
-  | "direct"
-  | "scout"
-  | "planner"
-  | "generator"
-  | "evaluator";
-```
-
-关键约束：
-
-- `Scout` 只存在于 pre-harness 阶段
-- `Planner / Generator / Evaluator` 构成 H2 主 graph
-
-### 2.4 Skill invocation and map
-
-```ts
-interface SkillInvocationContext {
-  name: string;
-  path: string;
-  description?: string;
-  arguments?: string;
-  allowedTools?: string;
-  context?: string;
-  agent?: string;
-  model?: string;
-  hookEvents?: string[];
-  expandedContent: string;
-}
-
-type SkillProjectionConfidence = "high" | "medium" | "low";
-
-interface SkillMap {
-  skillSummary: string;
-  executionObligations: string[];
-  verificationObligations: string[];
-  requiredEvidence: string[];
-  ambiguities: string[];
-  projectionConfidence: SkillProjectionConfidence;
-  rawSkillFallbackAllowed: boolean;
-  allowedTools?: string;
-  preferredAgent?: string;
-  preferredModel?: string;
-  invocationContext?: string;
-  hookEvents?: string[];
-}
-```
-
-### 2.5 Contract / handoff / verdict
-
-```ts
-interface TaskContract {
-  summary?: string;
-  successCriteria: string[];
-  requiredEvidence: string[];
-  constraints: string[];
-}
-
-interface TaskHandoff {
-  status: "ready" | "incomplete" | "blocked";
-  summary?: string;
-  evidence: string[];
-  followup: string[];
-}
-
-interface TaskVerdict {
-  status: "accept" | "revise" | "blocked";
-  reason?: string;
-  nextHarness?: "H1_EXECUTE_EVAL" | "H2_PLAN_EXECUTE_EVAL";
-  followup: string[];
-}
-```
-
----
-
-## 3. Storage Layout
+The build path is:
 
 ```text
-.agent/
-  managed-tasks/
-    <task-id>/
-      managed-task.json
-      contract.json
-      round-history.json
-      budget.json
-      runtime-contract.json
-      runtime-execution.md
-      scorecard.json
-      skill-execution.md
-      skill-map.json
-      skill-map.md
-      rounds/
-        round-01/
-          run.json
-          summary.json
-          feedback.json
-          feedback.md
+npm run build
+  -> tsc -b tsconfig.build.json
+  -> copy built-in skills and provider capabilities
+  -> scripts/build-bundle.mjs
+  -> scripts/build-dts.mjs
 ```
 
-说明：
+The bundle build also emits `dist/semantic-worker.js`,
+`dist/runtime-worker.js`, and `dist/constructed-handler-worker.js`. These are
+explicit npm/binary sidecars; CI builds them before tests so clean checkouts do
+not depend on source-only Worker fallback resolution.
 
-- raw skill 与 skill-map 都是 artifact-first 的持久化工件
-- downstream roles 优先消费 artifact，而不是依赖长 prompt 摘要
+Only `llm`, `agent`, `coding`, and `repl` are workspace package build roots.
 
----
+## 3. Main Entry Points
 
-## 4. Routing Pipeline
+| Area | Current file(s) | Notes |
+|---|---|---|
+| CLI bootstrap | `src/kodax_cli.ts` | Thin product entry for CLI and binary use. |
+| Coding SDK | `packages/coding/src/agent.ts` | `runKodaX(options, prompt)` delegates through `Runner.run`. |
+| Coding preset | `packages/coding/src/coding-preset.ts` | Declares the default coding agent and substrate executor. |
+| Continuous SDK | `packages/coding/src/client.ts`, `running-session.ts` | `KodaXClient` and non-blocking session handle. |
+| Runtime SDK | `src/sdk-runtime.ts` | One service facade for inline, Worker-hosted, and daemon ownership. |
+| Runtime daemon | `src/runtime-daemon/` | Versioned protocol/schema, socket transport, owner state/lock, host, client, and process launcher. |
+| Runtime Worker | `src/runtime-worker/` | MessagePort host that reuses the daemon dispatcher/client and supports hard termination. |
+| Generic agent | `packages/agent/src/primitives/runner.ts`, `agent.ts` | Layer-A Runner and Agent primitives. |
+| REPL | `packages/repl/src/index.ts` | `runInkInteractiveMode`, classic mode, config/session exports. |
+| LLM providers | `packages/llm/src/providers/registry.ts` | Built-in aliases and custom provider registration. |
 
-### 4.1 Intent gate
+### 3.1 Runtime Host Facade
 
-入口首先做极轻判断：
+`createKodaXRuntime()` defaults to `{ mode: 'embedded', isolation: 'inline' }`.
+`isolation: 'worker'` starts `dist/runtime-worker.js`, initializes the normal
+runtime protocol over `MessagePort`, and always calls `Worker.terminate()` after
+the shutdown grace period. `mode: 'daemon'` starts or attaches to a detached
+`kodax daemon serve` owner at the profile-default endpoint. Custom daemon
+endpoints are attach-only.
 
-- greeting / conversation
-- lookup / code navigation
-- 明显 actionable family
-- ambiguous
+When the host is packaged Electron, daemon auto-start launches through an
+internal Node bootstrap and scrubs `ELECTRON_RUN_AS_NODE` before loading the
+daemon entry. Ordinary user children inherit the scrubbed environment. The
+path requires Electron's `RunAsNode` fuse; disabling it requires an ordinary
+Node/CLI-started daemon and attach-only SDK mode.
 
-约束：
+All forms expose `identity`, `sessions`, `runs`, `events`, `permissions`,
+`workflows`, `config`, `catalog`, `mcp`, `artifacts`, `status`, and
+`diagnostics`. The deployment-specific close contract is intentional:
 
-- 非 actionable 输入不得因 dirty repo 升级到 H1/H2
-- `lookup` 默认 direct，不吃 repo scaling
+| Form | `close()` | Sharing | `hardDispose` |
+|---|---|---|---|
+| inline embedded | closes private Runtime state cooperatively | no | false |
+| Worker embedded | requests shutdown, then terminates Worker | no | true |
+| daemon client | closes only that transport | yes | false |
 
-### 4.2 Scout stage
+`requirements.hardDispose` is checked for all three forms. Worker-only options
+without `isolation: 'worker'`, or any explicit embedded isolation combined with
+daemon mode, are rejected rather than ignored.
 
-未被 direct short-circuit 的请求进入 `Scout`。
+The Worker and daemon facades reuse `runtime-daemon/server.ts` and
+`runtime-daemon/client.ts`; there is no duplicate service implementation.
+Protocol methods are schema-validated, run results preserve serialized errors,
+and pending event notifications are bounded while a remote subscription id is
+being established. Non-terminal persisted runs become `interrupted` after an
+owner restart. Reconnection is explicit; automatic replay of an unknown
+in-flight operation is forbidden.
 
-Scout 的职责：
+#### 3.1.1 Shared Coder daemon consistency (FEATURE_269)
 
-- 确认任务是否值得进入 H1/H2
-- 收集 `scope facts`
-- 最多少量补 `overview evidence`
-- 若存在 skill，则读取完整 skill 并生成 `skill-map`
+`sessions.observe(sessionId, listener)` installs a server subscription first,
+takes a stable snapshot, and returns its `runtimeId` plus cursor. The daemon
+client buffers at most 256 handshake notifications; overflow returns
+`resync_required`. Consumers replace their derived projection on reconnect or
+Runtime change instead of merging two authority epochs.
 
-Scout 输出 `kodax-task-scout`，其中至少包含：
+Daemon mutations require the authenticated client's operation capability and
+an `{ journalEpoch, operationId }` envelope. The append/fsync control journal
+records accepted/dispatched/applied/rejected facts and binds reuse to principal,
+method, resource, and canonical request digest. Accepted work becomes
+`interrupted` after restart; dispatched work becomes `unknown`; neither is
+automatically executed again. Corrupt control history quarantines all
+mutations while read/status operations remain available. Run status and
+versioned settings/grants use atomic temp-file + fsync + rename writes.
 
-- summary
-- confirmed_harness
-- required_evidence
-- optional `skill-map` fields
+The packaged daemon has one random token per `homeDir + profile`, protected by
+the local OS-user filesystem boundary. Its host grants the advertised scope
+set to token-authenticated connections. `clientInfo.instanceId` is stable
+attribution used by operation receipts; it is not a per-application secret.
+Renderer/model surfaces must therefore remain behind a trusted host such as
+Electron Main and never receive the profile token.
 
-### 4.3 Harness selection
+Same-session run creation allocates a monotonic `sessionOrder`. `after_turn`
+input is a real queued continuation run and accepts the same operation
+contract. `interrupt` is not advertised by the current daemon and returns an explicit
+unsupported result. AskUser and permission registries expose pending lists and
+first-winner responses over transport; persistent permission grants have one
+daemon-owned revisioned store.
 
-当前默认映射：
+The credential reverse bridge stores only lease metadata. It requests the
+secret from the registering connection for a bound provider/session/run and
+places it in `AsyncLocalStorage` only for provider execution. An active scoped
+credential never falls back to daemon environment on provider mismatch. The
+Host Tool bridge creates an extension runtime only for the bound run, bounds
+result size/time, memoizes invocation handling client-side, and classifies a
+lost dispatched result as `host_outcome_unknown` without replay.
 
-- `conversation` / `lookup` -> `H0_DIRECT`
-- 低风险 actionable -> `H1_EXECUTE_EVAL`
-- 需要 contract / deep evidence / stronger verification -> `H2_PLAN_EXECUTE_EVAL`
+`homeDir + profile` has one Coder owner-policy file and one cross-process fence
+shared by daemon and inline ownership. CAS policy changes make rollback to
+inline sticky. Partner compatibility depends on the embedder retaining its
+existing distinct inline data/sessions root; Partner does not acquire or write
+the Coder owner fence.
 
----
+`runs.start({ options })` is transport-safe data in Worker/daemon forms. The
+client rejects functions, symbols, bigint, cycles, non-finite numbers, and
+class instances. CLI integration additionally rejects known process-local host
+bindings rather than deleting them. Host-specific callbacks/extensions must be
+configured in the Runtime owner or use inline mode.
 
-## 5. Control Plane Flows
-
-### 5.1 SA
+## 4. Coding Run Sequence
 
 ```text
-user request -> direct runner
+runKodaX(options, prompt)
+  -> applyFollowupEscalationToOptions
+  -> Runner.run(createDefaultCodingAgent(), prompt, presetOptions)
+  -> Agent.substrateExecutor
+  -> runSubstrate
+  -> provider stream + tool loop
+  -> sidecar stop hooks as needed
+  -> KodaXResult
 ```
 
-特点：
+Important contracts:
 
-- 不进入 AMA
-- 不创建 managed task graph
-- skill 直接以完整 expanded form 生效
+- `runKodaX` must return the full `KodaXResult` lifted through
+  `RunResult.data`.
+- `Runner.run` remains generic and cannot depend on coding-specific modules.
+- Coding-specific state travels through `presetOptions`, not through global
+  Runner configuration.
+- Sidecar verifier can ask for revision, but the Worker remains the main task
+  owner and final-answer author.
 
-### 5.2 AMA H0
+## 5. Provider Design
+
+`packages/llm` owns provider concerns:
+
+- `providers/registry.ts`: built-in alias registry and custom provider loading.
+- `providers/provider-capabilities.json`: capability metadata snapshot.
+- provider implementations: Anthropic, OpenAI, compatible providers, CLI
+  bridges.
+- `side-query.ts`: out-of-band provider calls for verifier-style use.
+- shared stream/result types and error normalization.
+
+Built-in aliases are:
 
 ```text
-intent gate -> direct runner
+anthropic, openai, deepseek, kimi, kimi-code, qwen, zhipu,
+zhipu-coding, zai-coding, minimax-coding, mimo-coding, mimo, ark-coding,
+gemini-cli, codex-cli
 ```
 
-或：
+Custom provider design must remain data-driven: protocol, base URL, API key env
+var, default model, reasoning preset/profile, multimodal support, forced tool
+support, timeout normalization, and session semantics belong in provider
+config/capabilities.
 
-```text
-intent gate -> Scout -> H0 direct runner
-```
+## 6. Tool Registry
+
+Built-in tools are declared in
+`packages/coding/src/tools/tool-definitions.ts`.
+
+Each definition carries:
+
+- `name`,
+- human-readable LLM description,
+- JSON input schema,
+- handler function,
+- side-effect classification,
+- optional classifier projection.
 
-Scout downshift 到 H0 时，系统必须重新回到 direct path 收口，而不是把 Scout 口吻直接回给用户。
+Tool handlers live beside their definitions under `packages/coding/src/tools`.
+The registry consumes flat data; avoid hidden factory layers or circular
+dependencies.
 
-### 5.3 AMA H1
+Current tool families:
 
-Current implementation note:
-- `H0` downshifts no longer hand off to a second direct agent; Scout can complete `H0_DIRECT` itself when it already has enough evidence.
-- `H1` stays lightweight: Generator + light Evaluator only, no Planner, no contract negotiation, no default multi-round refinement.
-- `read-only` and `docs-only` work may use `H1` only after an explicit stronger-check request and must never upgrade from `H1` to `H2`.
-- Scout must stop after producing a medium-rich cheap-facts handoff for H1; it must not keep exploring to build a mini-plan.
+- file: read/write/edit/multi-edit/insert/undo;
+- shell and search: bash/glob/grep/web/code/semantic/LSP;
+- repo intelligence: overview, changed scope/diff, module/symbol/process
+  context, impact estimate, cyclic dependency checks;
+- MCP: search/describe/call/resource/prompt;
+- child tasks: dispatch/send/stop/output;
+- product state: goals and todos;
+- construction: tool generation, agent generation, self-modify staging.
 
-```text
-Scout -> Generator -> Evaluator
-```
+## 7. Permissions And Guardrails
 
-约束：
+Permission enforcement is runtime behavior, not just prompt text.
 
-- 仍然只有一个主执行者
-- evaluator 只做 post-hoc accept / revise / blocked
-- 最多一次同层 revise，再决定是否升 H2
+Key concepts:
 
-### 5.4 AMA H2
+- permission modes come from REPL/CLI options and config;
+- tools declare side-effect class;
+- auto-mode uses classifier and guardrail logic before allowing risky tools;
+- shell commands are classified before execution;
+- trusted-local workflow scripts require explicit confirmation;
+- verifier and stop-hook failures fail open where blocking would trap the user.
 
-```text
-Scout -> Planner -> Generator <-> Evaluator
-```
+Do not add a new permission bypass path for convenience. Route effects through
+the tool layer or an existing capability API.
 
-约束：
+## 8. Child Task Coordination
 
-- `Planner` 必须先交 `kodax-task-contract`
-- 缺 contract 时先重试 `Planner`
-- `Generator` 只有在存在可消费 contract 时才执行
-- `Evaluator` 只做 targeted spot-check 与 verdict
+Child tasks are controlled through:
 
----
+- `dispatch_child_task`,
+- `send_message`,
+- `task_stop`,
+- `task_output`,
+- `ChildTaskRegistry`,
+- task abort/progress registries,
+- idle-yield waiting.
 
-## 6. Evidence Layering
+The main Worker uses children for bounded parallel investigation or specialist
+work. Children do not own final response. When pending children remain and the
+main Worker has no useful work, idle-yield is the wait mechanism.
 
-### 6.1 Three-layer model
+## 9. Stop Hooks And Sidecar Verifier
 
-```text
-scope facts
-  -> overview evidence
-    -> deep evidence
-```
+Generic stop-hook infrastructure lives in `packages/agent`.
+KodaX-specific verifier behavior lives in `packages/coding`.
+
+Design split:
 
-`scope facts` 例如：
+- `packages/agent/src/runtime-middleware/llm-judge.ts`: generic LLM-judged
+  stop-hook primitives.
+- `packages/coding/src/agent-runtime/middleware/sidecar-verifier`: coding
+  verifier prompt, gate, parser, and integration.
+- content-aware gate skips trivial conversational turns.
+- verifier accept is silent by default in UI but preserved in session/artifacts
+  where applicable.
+
+The verifier is not an in-chain Evaluator role. Do not represent it as a second
+visible agent in current product docs.
 
-- changed files / lines / modules
-- reviewScale / risk / task family
-
-`overview evidence` 例如：
-
-- `changed_diff_bundle`
-- repo_overview
-- 关键入口 / 类型 / 测试变化摘要
-
-`deep evidence` 例如：
-
-- `changed_diff`
-- `read`
-- file-by-file verification
-- tests / runtime checks
-
-### 6.2 Role consumption rules
-
-- `Scout`: scope facts + 少量 overview
-- `Planner`: scope facts + overview + skill-map
-- `Generator`: deep evidence + full skill
-- `Evaluator`: contract/handoff + targeted deep evidence + skill-map
-
----
-
-## 7. Skill Map and Role Projections
-
-当前 skill 不是为多角色原生设计的，因此 AMA 通过 `Scout -> skill-map` 做适配。
-
-### 7.1 Projection rules
-
-- `Scout`
-  - reads full skill
-  - emits `skill-map`
-- `Planner`
-  - reads `skill-map`
-  - does not default to raw skill
-- `Generator`
-  - reads full skill + `skill-map`
-- `Evaluator`
-  - reads `skill-map`
-  - may reopen raw skill only when `projectionConfidence=low` or claims conflict
-
-### 7.2 Fallback behavior
-
-如果 skill 不规范：
-
-- `skill-map` 允许低置信度
-- `ambiguities` 必须显式记录缺失项
-- `Planner` 将缺口写进 `required_evidence / constraints`
-- `Evaluator` 获得 raw skill fallback 权限
-
----
-
-## 7.5 Same-role round summaries
-
-为了保持非-generator 角色的低成本连续性，runtime 会为：
-- `Scout`
-- `Planner`
-- `Evaluator`
-
-写入结构化 `same-role summary`。
-
-该摘要至少覆盖：
-- 上一轮该角色的目标
-- 已确认结论
-- 未决问题
-- 下一轮需要延续的判断
-
-运行规则：
-- 这些角色继续使用 `reset-handoff`
-- 下一轮通过显式输入重新注入 summary
-- 不恢复完整私有会话历史
-- `Generator` 不使用这套机制
-
----
-
-## 8. Tool Policy and Enforcement
-
-当前实现通过 role-level `toolPolicy` + `beforeToolExecute` 做硬约束。
-
-示意规则：
-
-- `Scout`
-  - allow: `changed_scope`, `repo_overview`, `changed_diff_bundle`, small reads
-  - block: deep diff paging, mutation
-- `Planner`
-  - allow: overview evidence only
-  - block: linear `changed_diff` paging, mutation
-- `Generator`
-  - owns deep evidence / execution
-- `Evaluator`
-  - allow: verification tools and targeted reads
-  - block: mutation
-
----
-
-## 9. Budget and Runtime Semantics
-
-### 9.1 Global work budget
-
-AMA 默认使用统一的 `globalWorkBudget`：
-
-- 初始 `200`
-- 使用量达到 90% 时可申请 `+200`
-- 可多次申请
-
-### 9.2 Role guidance vs user-visible budget
-
-系统内部仍可保留 role guidance：
-
-- `softMaxIter`
-- `hardMaxIter`
-- plannedRounds / refinementCap
-
-但这些只用于 runtime 调优，不应直接作为用户主进度语义。
-
-### 9.3 User-visible rules
-
-- 默认显示 `Work used/total`
-- `Round` 只在真实额外 pass 存在时显示
-- AMA 不应回退显示 `Iter x/y`
-
-### 9.4 Project + SA persistence
-
-`Project` 与 `SA / AMA` 是正交维度。
-
-当执行 `Project + SA` 时：
-- 不创建 `managed-task.json`
-- 不创建 planner/generator/evaluator graph
-- direct run 结束后写入 `lightweight run record`
-
-该记录至少包含：
-- `status`
-- `summary`
-- `sessionId`
-- `taskSurface`
-- `agentMode`
-- `executionMode`
-- `featureIndex / requestId / project metadata`
-- `changedFiles`
-- `checks`
-- `evidence`
-- `blockers`
-- `nextStep`
-- timestamps
-
-读取优先级：
-- 若存在 managed task，project surfaces 继续优先读取 managed task
-- 若不存在 managed task，但存在 lightweight run record，则使用该记录补足 status / latest summary / next-step guidance
-
----
-
-## 10. UI / Transcript Semantics
-
-### 10.1 Tool disclosure
-
-`ToolCall.input` 是主要披露来源，preview 只做补充。
-
-显示优先级：
-
-- `bash`: exact command
-- diff/read/search tools: path / scope / range / pattern
-
-### 10.2 Evaluator public answer
-
-Evaluator 的内部职责保留在：
-
-- verdict block
-- artifact / transcript
-
-用户最终答案必须：
-
-- 直接面向用户
-- 不以“我验证了 Generator 的结论”开头
-- 不把 Generator / Planner 当成用户面对对象
-- 不保留 `Confirmed:`、`I now have sufficient evidence ...`、`Let me verify ...` 之类的内部核查前导段落
-
-### 10.3 Transcript retention
-
-non-terminal worker transcript 仍然保留，以支持可观测性与调试。
-
-但 public answer contract 必须与内部 verdict 语义分离。
-
----
-
-## 11. Command / Skill Runtime Integration
-
-命令与 skill 继续走统一 invocation runtime。
-
-当前约束：
-
-- builtin / discovered command 共享 `CommandDefinition` 元数据模型
-- skill invocation metadata 会被挂入 `options.context`
-- skill 的 AMA 适配发生在 managed-task runtime，而不是 command schema
-
----
-
-## 12. 与相关 Feature 的边界
-
-- `FEATURE_019`: durable state / lineage / checkpoints
-- `FEATURE_022`: AMA/SA 主骨架
-- `FEATURE_025`: intent-first routing
-- `FEATURE_027`: agent mode UX
-- `FEATURE_028`: retrieval / evidence tooling
-- `FEATURE_029`: provider policy
-- `FEATURE_034`: capability runtime
-
----
-
-## 13. Routing Ceiling Rules
-
-The current execution ceiling is intentionally strict:
-
-- `mutationSurface = read-only` defaults to `SA/H0`.
-- `mutationSurface = docs-only` defaults to `SA/H0`.
-- Only an explicit user request for stronger checking may move `read-only` or `docs-only` work to `H1_EXECUTE_EVAL`.
-- `read-only` and `docs-only` tasks must never escalate to `H2_PLAN_EXECUTE_EVAL`.
-- `reviewScale`, repo size, and changed-scope signals are evidence-planning inputs only; they do not determine topology.
-- `H2_PLAN_EXECUTE_EVAL` is reserved for long-running code/system mutation work with real verification value.
-- H2 starts with a single main pass. Additional passes require a structured evaluator failure.
+## 10. Sessions And Storage
+
+Session behavior spans agent, coding, and repl:
+
+- `packages/agent/src/session-lineage`: lineage model and compaction helpers.
+- `packages/repl/src/session/public-api.ts`: public session SDK.
+- `packages/repl/src/interactive/storage.ts`: file-backed storage behavior.
+- coding runtime records snapshots, runtime session state, and result metadata.
+- `SessionData.uiHistory`: optional bounded replay cache for sanitized terminal
+  tool groups. It is a display projection, not the canonical model transcript.
+
+Public session APIs should preserve id-based usage while allowing storage layout
+to evolve. New storage features must be backward-compatible with old JSONL
+records whenever practical. Host code should treat `loadSession()` as active
+model context, `loadFullTranscript()` as append-order scrollback, and
+`uiHistory` as an optional replay hint.
+
+Transcript entries expose both physical and logical identity. `entryId`
+identifies the persisted lineage node; `logicalId` is stable across cloned or
+forked copies; `sourceEntryId` points at the root physical source when an entry
+is a clone. Hosts may fold display history by `logicalId`, while
+`loadFullTranscript()` continues to return raw append-order scrollback.
+
+Rewind audit markers are stored as `rewind_marker` lineage entries. They are
+visible through `loadFullTranscript().transcriptEntries` for host UI/audit, but
+they are context-silent: `loadSession()` and `loadFullTranscript().messages`
+exclude them. The public `/session` subpath also exposes `compactSession` for
+host-triggered imperative compaction.
+
+## 11. Skills
+
+Skills live under `packages/agent/src/capabilities/skills`.
+
+Core modules:
+
+- discovery and plugin paths,
+- skill loader and frontmatter parsing,
+- skill registry and resolver,
+- LLM expansion,
+- built-in skills copied during build.
+
+The published `@kodax-ai/kodax/skills` subpath is a focused subset of agent
+capabilities. It should not require importing the full coding package.
+
+## 12. Media Input Artifacts
+
+Media/input artifacts are agent-layer primitives under `packages/agent/src/media`.
+The public `@kodax-ai/kodax/media` SDK entry and the legacy
+`@kodax-ai/coding/media` source-side path both re-export that implementation.
+Coding consumes validation/enqueue helpers from this layer; file and video
+artifact contracts remain stable even when a provider route is not wired for
+send.
+
+## 13. MCP
+
+MCP lives under `packages/agent/src/capabilities/mcp`.
+
+Core modules:
+
+- catalog/search,
+- config,
+- transport/runtime/manager,
+- OAuth and protected-resource discovery,
+- reverse capabilities,
+- prompt/resource/tool bridging.
+
+The published `@kodax-ai/kodax/mcp` subpath exposes a focused MCP surface.
+Coding tools consume MCP through capability providers rather than duplicating
+connection logic.
+
+## 14. Governed Memory Runtime
+
+The sole durable memory authority remains `packages/agent/src/memory-control`.
+FEATURE_260 adds these focused layers:
+
+- `packages/agent/src/experimental-memory`: public `MemoryAgent`, scoped
+  `MemorySession`, policy, passive recall, deliberate query, observations,
+  outcomes, and bounded episode close/review.
+- `packages/agent/src/memory`: exact identity/applicability and managed memory
+  path policy.
+- `packages/coding/src/memory-runtime.ts`: coding integration, project identity,
+  passive recall preparation, episode lifecycle, and review scheduling.
+- `packages/coding/src/memory`: coding context/observation extraction,
+  prompt-safe rendering, policy artifact hashes, and trace-only decision links.
+- `packages/coding/src/tools/memory-recall.ts`: the session-bound read-only
+  `memory_recall` tool; mutation tools share the managed-path guard.
+
+Passive recall is prepared outside the Action-LLM turn and rendered only into
+the dynamic prompt suffix. Deliberate query appends a normal tool call/result
+tail. Neither path writes memory. Episode promotion first consults existing
+claims, then emits at most a governed proposal or a deferred inbox record; the
+existing preview/fingerprint/apply controller is the only durable write path.
+`MemoryDecisionReceipt` stores identifiers and policy facts in tracing, not
+hidden reasoning or a second event database.
+
+## 15. Workflow Runtime
+
+Workflow runtime has a strict boundary:
+
+- `packages/agent/src/workflow`: domain-neutral runtime, event recorder,
+  concurrency/cap accounting, abort, limit validation, public SDK types,
+  workflow capsule validation/factory helpers, and backend injection.
+- `packages/coding/src/workflows`: coding backend, built-ins, durable run graph,
+  workflow capsule persistence/preflight, saved workflow discovery, and
+  `/workflow` command integration.
+
+FEATURE_217 is the v0.7.49 Dynamic Workflow product feature. The implementation
+provides the substrate, JavaScript harness generation, background manager
+behavior, pause/resume/stop/save, workflow-level worktree wiring, hard budget
+checks, workflow capsule reuse, and advanced workflow pattern templates.
+
+Generated workflows remain dynamic JavaScript, but the runner boundary is a
+capability boundary: the script may hold loops, branches, intermediate results,
+model routing, and calls to `wf.*`; it must not receive direct host access to
+filesystem, shell, process, environment, module import, or network APIs. The
+host handles `wf.*` as structured commands and applies existing permission gates
+through child agents. `node:vm` with host objects is not a valid trust boundary
+for generated workflows.
+
+Saved generated workflows use a small capsule contract rather than a bare script
+file. A capsule stores the generated source, validated manifest, task intent,
+input examples, lightweight requirements (`git-repo`, `worktree-capable`,
+tools, MCPs, skills, model tiers), and provenance. Full JSON Schema is deferred
+until KodaX needs third-party generation, marketplace-style distribution, or
+complex cross-tool requirement validation; v0.7.49 uses TypeScript contracts and
+runtime validation to stay minimal.
+
+FEATURE_229 (`v0.7.50`, released)
+adds the process contract without changing the dynamic harness model. The agent
+workflow package exposes `WorkflowProcessSnapshot`, `WorkflowProcessEvent`, and
+`isFinalWorkflowProcessStatus`; the event model stays intentionally small:
+`workflow_started`, `workflow_updated`, and `workflow_finished`, each carrying a
+snapshot with phase/agent/item status. `WorkflowRunManager` updates and emits
+snapshots after runtime events, while `createWorkflowLifecycleController`
+provides host-owned stop/pause/resume, result/artifact reads, terminal-run
+delete/prune, identity, and preflight controls. Coding commands and SDK callers
+share the same process callbacks/read APIs; REPL inline/fullscreen surfaces
+render snapshots only. KodaX Space and other SDK hosts configure invocation
+policy, subscribe to process snapshots, and control runs through the SDK
+controller instead of replaying slash commands or depending on REPL callback
+text. This keeps progress semantics reusable and prevents terminal UI state from
+becoming the hidden source of truth. F229 also preserves workflow source and
+revision provenance (`source`, `sourceRunId`, `sourceWorkflowName`,
+`savedWorkflowName`, `revisionOf`) plus `resultSummary` in the durable run graph.
+Workflow child agents inherit or fail closed on parent guardrails, existing SDK
+event callbacks, workflow logs, capsule preflight, and provider/model policy.
+Durable run graphs remain audit/result records in this slice; they are not
+cross-process executable checkpoints.
+
+FEATURE_230 / FEATURE_234 (`v0.7.51`, released) add persistence readback on top
+of that process contract. TUI sessions persist sanitized terminal tool groups in
+`uiHistory`, with malformed siblings filtered rather than dropping the full
+array. Workflow process metadata accepts optional `hostMetadata`, normalizes it
+to a small string-only map, persists it in `run.json`, and echoes it through
+`WorkflowProcessSnapshot` / process events after restart.
+
+FEATURE_246 (`v0.7.58`, released) adds inline workflow authoring: a
+model-callable `run_workflow` tool lets the Worker scout the codebase and author
++ run a workflow script in-chat (`packages/coding/src/workflows/`
+author-via-worker / host / invocation-policy), routed through the unchanged
+sandbox + static-validation + postcondition pipeline. It carries structured
+child output (`outputSchema`), the no-barrier `wf.pipeline`, same-session resume
+(`resumeFromRunId`), and nested `wf.workflow(...)`; the neutral run-lifecycle
+manager moves to `@kodax-ai/agent` (ADR-046). ADR-044/046/047/048/049.
+
+## 16. REPL Detail
+
+`packages/repl` owns:
+
+- `runInkInteractiveMode`,
+- classic `runInteractiveMode`,
+- config load/save and custom provider CRUD,
+- permission helpers,
+- command registry and slash commands,
+- transcript rendering,
+- session list/resume/fork/rewind/archive/tag flows,
+- UI bridge for confirmations and prompts.
+
+The REPL should not become the owner of core agent semantics. Product behavior
+belongs in `coding`, reusable primitives in `agent`, and provider behavior in
+`llm`.
+
+## 17. Construction And Self-Modification
+
+Construction tools allow staged creation and admission of tools and agents.
+Self-modification tools stage proposed changes through explicit runtime paths.
+
+Design constraints:
+
+- staged artifacts must be validated before activation;
+- admission invariants live in `packages/agent/src/admission`;
+- construction runtime lives under `packages/coding/src/construction`;
+- user approval remains required for irreversible or high-risk changes;
+- generated capabilities should not bypass normal tool permissions.
+
+Activated JavaScript handlers are materialized as immutable `.mjs` files and
+loaded into a persistent per-handler Worker. Calls for one handler are FIFO.
+`ctx.tools.*` is reverse RPC: the parent creates `CtxProxy` from the live tool
+context and calls `executeTool`, preserving capability, live plan-mode,
+constructed-depth, permission, and tool sandbox behavior. The Worker receives
+only cloneable informational context plus a bridged `AbortSignal`; host
+callbacks and mutable services remain in the parent.
+
+Timeout awaits `Worker.terminate()` before rejecting. Revoke/dispose marks the
+handler entry dead before terminating it, so active, queued, and future calls
+cannot recreate an untracked Worker. Direct Node imports inside generated code
+remain possible at runtime, so admission checks and approval still matter.
+
+## 18. Observability And Eval
+
+Behavior-affecting prompt changes must follow
+`benchmark/EVAL_GUIDELINES.md`. Runtime changes should add focused Vitest
+coverage near the source file. Eval outputs belong under benchmark result
+locations, not in active docs.
+
+Tracing lives under `packages/agent/src/tracing` and is inline after package
+consolidation. It is reusable infrastructure, not a separate workspace package.
+
+## 19. Current Anti-Patterns
+
+Do not introduce:
+
+- V1 role names as current runtime concepts;
+- prompt-only permission rules without runtime checks;
+- provider-specific prompt prose;
+- SDK exports not backed by `package.json`, bundle entries, and dts output;
+- new workspace packages for code that is only used by one package;
+- REPL-only state as a dependency of headless SDK operation.
+- ignored Runtime isolation/capability options that silently select a weaker
+  ownership form;
+- Worker or daemon boundaries described as a security sandbox.
+
+## 20. Related Documents
+
+- Product requirements: [PRD.md](PRD.md)
+- High-level design: [HLD.md](HLD.md)
+- Architecture decisions: [ADR.md](ADR.md)
+- SDK embedder guide: [SDK_EMBEDDER_GUIDE.md](SDK_EMBEDDER_GUIDE.md)
+- Release process: [release.md](release.md)

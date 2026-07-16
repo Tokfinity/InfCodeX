@@ -1,0 +1,281 @@
+/**
+ * Skill Registry - Progressive Disclosure and Skill Management
+ *
+ * Manages skill discovery, loading, and invocation with progressive disclosure:
+ * - Level 1: Metadata preloaded at startup (name, description)
+ * - Level 2: Full content loaded on invoke
+ * - Level 3: Support files loaded on demand
+ */
+
+import type {
+  Skill,
+  SkillMetadata,
+  SkillContext,
+  SkillResult,
+  ISkillRegistry,
+  SkillPathsConfig,
+} from './types.js';
+import { emitKodaXDiagnostic } from '../../diagnostics.js';
+import { discoverSkills } from './discovery.js';
+import { loadFullSkill } from './skill-loader.js';
+import { resolveSkillContent } from './skill-resolver.js';
+
+/**
+ * Skill Registry implementation
+ */
+export class SkillRegistry implements ISkillRegistry {
+  private readonly skillsByName = new Map<string, SkillMetadata>();
+  private readonly fullSkillsByName = new Map<string, Skill>();
+  private readonly projectRoot?: string;
+  private readonly customPaths?: Readonly<Partial<SkillPathsConfig>>;
+
+  constructor(projectRoot?: string, customPaths?: Partial<SkillPathsConfig>) {
+    this.projectRoot = projectRoot;
+    this.customPaths = customPaths;
+  }
+
+  /**
+   * Discover skills from all configured paths
+   */
+  async discover(): Promise<void> {
+    const result = await discoverSkills(this.projectRoot, this.customPaths);
+    this.skillsByName.clear();
+    for (const [name, metadata] of result.skills) {
+      this.skillsByName.set(name, metadata);
+    }
+
+    // Log any discovery errors
+    if (result.errors.length > 0) {
+      for (const { path, error } of result.errors) {
+        emitKodaXDiagnostic({
+          source: 'agent:skills',
+          level: 'warn',
+          message: `Error scanning ${path}.`,
+          detail: error,
+        });
+      }
+    }
+  }
+
+  /**
+   * Get skill metadata by name
+   */
+  get skills(): ReadonlyMap<string, SkillMetadata> {
+    return this.skillsByName;
+  }
+
+  /**
+   * Get skill metadata by name
+   */
+  get(name: string): SkillMetadata | undefined {
+    return this.skillsByName.get(name);
+  }
+
+  /**
+   * Load full skill content
+   */
+  async loadFull(name: string): Promise<Skill> {
+    // Check cache
+    const cached = this.fullSkillsByName.get(name);
+    if (cached) return cached;
+
+    // Get metadata
+    const metadata = this.skillsByName.get(name);
+    if (!metadata) {
+      throw new Error(`Skill not found: ${name}`);
+    }
+
+    // Load full skill
+    const skill = await loadFullSkill(metadata.path, metadata.source);
+    if (!skill) {
+      throw new Error(`Failed to load skill: ${name}`);
+    }
+
+    // Cache and return
+    this.fullSkillsByName.set(name, skill);
+    return skill;
+  }
+
+  /**
+   * Invoke a skill with arguments
+   */
+  async invoke(name: string, args: string, context: SkillContext): Promise<SkillResult> {
+    try {
+      // Load full skill
+      const skill = await this.loadFull(name);
+
+      // Check if model invocation is disabled
+      if (skill.disableModelInvocation) {
+        return {
+          success: false,
+          content: '',
+          error: `Skill "${name}" has model invocation disabled`,
+        };
+      }
+
+      // Resolve variables in content
+      const resolvedContent = await resolveSkillContent(
+        skill.content,
+        args,
+        context
+      );
+
+      return {
+        success: true,
+        content: resolvedContent,
+      };
+    } catch (error) {
+      return {
+        success: false,
+        content: '',
+        error: error instanceof Error ? error.message : String(error),
+      };
+    }
+  }
+
+  /**
+   * Reload skills from disk
+   */
+  async reload(): Promise<void> {
+    // Clear caches
+    this.skillsByName.clear();
+    this.fullSkillsByName.clear();
+
+    // Re-discover
+    await this.discover();
+  }
+
+  /**
+   * List all available skills
+   */
+  list(): SkillMetadata[] {
+    return Array.from(this.skillsByName.values());
+  }
+
+  /**
+   * List user-invocable skills (for / menu)
+   */
+  listUserInvocable(): SkillMetadata[] {
+    return this.list().filter((s) => s.userInvocable);
+  }
+
+  /**
+   * Get skills formatted for system prompt injection.
+   *
+   * FEATURE_143 (v0.7.36): manifest wording hardened toward Claude
+   * Code-style strong constraints. The previous wording ("when a user
+   * request matches a skill description, use read to load the skill")
+   * was too soft — the LLM treated skill invocation as one option among
+   * many and frequently authored its own answer instead of loading the
+   * SKILL.md instructions. Aligns with the
+   * `c:/Works/claudecode/src/tools/SkillTool/prompt.ts` ruleset:
+   * BLOCKING REQUIREMENT to load the relevant skill BEFORE generating
+   * any other response when a skill matches.
+   *
+   * Filters out skills with disableModelInvocation=true (Issue 056).
+   */
+  getSystemPromptSnippet(): string {
+    // Filter out skills that disable model invocation
+    const visibleSkills = this.list().filter(s => !s.disableModelInvocation);
+
+    if (visibleSkills.length === 0) {
+      return '';
+    }
+
+    // 2026-05-20 — claudecode-parity invocation path. Skills are invoked
+    // via a dedicated `skill` tool (see packages/coding/src/tools/skill.ts)
+    // that returns the expanded skill content as tool_result, NOT by
+    // reading `SKILL.md` via the generic `read` tool. Mirrors
+    // c:/Works/claudecode/src/tools/SkillTool/prompt.ts:173-195.
+    //
+    // Why this matters: the previous "use the read tool to load the
+    // SKILL.md" wording forced the model to interpret raw markdown, which
+    // routed through generic file-reading and let the model escalate to
+    // shell-out for skills like `agent-browser` (whose markdown happens
+    // to describe a CLI). With a dedicated `skill` tool, the registry
+    // does the loading + variable resolution; the model sees structured
+    // skill output and can act on it directly.
+    const lines = [
+      '## Available Skills',
+      '',
+      'When users ask you to perform tasks, check if any of the available skills below match the request. Skills provide specialized capabilities and step-by-step instructions for specific workflows.',
+      '',
+      'When users reference a "slash command" or "/<something>" (e.g. "/feature-list-tracker", "/skill:foo"), they are referring to a skill. Invoke it via the `skill` tool with the skill name.',
+      '',
+      "**BLOCKING REQUIREMENT**: When a skill matches the user's request, you MUST invoke it via the `skill` tool BEFORE generating any other response about the task. Loading the skill is not optional and not something to defer — it is the FIRST action you take.",
+      '',
+      'NEVER mention a skill without actually calling the `skill` tool. Do not guess at skill names — only use skills listed below. Do NOT call `read` on a `SKILL.md` path to load a skill — that is the legacy path and bypasses the resolver.',
+      '',
+    ];
+
+    for (const skill of visibleSkills) {
+      const hint = skill.argumentHint ? ` ${skill.argumentHint}` : '';
+      lines.push(`- ${skill.name}:${hint} ${skill.description}`);
+    }
+
+    lines.push('');
+
+    return lines.join('\n');
+  }
+
+  /**
+   * Check if a name is a valid skill
+   */
+  has(name: string): boolean {
+    return this.skillsByName.has(name);
+  }
+
+  /**
+   * Get the count of discovered skills
+   */
+  get size(): number {
+    return this.skillsByName.size;
+  }
+}
+
+// Singleton instance and its project root
+let _instance: SkillRegistry | null = null;
+let _instanceProjectRoot: string | undefined;
+
+/**
+ * Get the global skill registry instance
+ *
+ * IMPORTANT: If projectRoot is undefined, returns existing instance without reset.
+ * This prevents accidental singleton reset when called without arguments.
+ */
+export function getSkillRegistry(
+  projectRoot?: string,
+  customPaths?: Partial<SkillPathsConfig>
+): SkillRegistry {
+  // Only reset if projectRoot is explicitly provided AND different from current
+  // 只有当 projectRoot 明确提供且与当前不同时才重置
+  // This prevents accidental reset when getSkillRegistry() is called without args
+  if (_instance && projectRoot !== undefined && _instanceProjectRoot !== projectRoot) {
+    _instance = null;
+  }
+
+  if (!_instance) {
+    _instance = new SkillRegistry(projectRoot, customPaths);
+    _instanceProjectRoot = projectRoot;
+  }
+  return _instance;
+}
+
+/**
+ * Initialize the skill registry and discover skills
+ */
+export async function initializeSkillRegistry(
+  projectRoot?: string,
+  customPaths?: Partial<SkillPathsConfig>
+): Promise<SkillRegistry> {
+  const registry = getSkillRegistry(projectRoot, customPaths);
+  await registry.discover();
+  return registry;
+}
+
+/**
+ * Reset the global registry (for testing or hot reload)
+ */
+export function resetSkillRegistry(): void {
+  _instance = null;
+}

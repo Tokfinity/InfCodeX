@@ -6,7 +6,7 @@
 
 import chalk from 'chalk';
 import readline from 'readline';
-import type { KodaXEvents } from '@kodax/coding';
+import type { KodaXEvents } from '@kodax-ai/coding';
 import { buildToolConfirmationDisplay } from '../common/tool-confirmation.js';
 import type { ConfirmResult } from '../permission/types.js';
 
@@ -172,6 +172,24 @@ export function createCliEvents(showSessionId = true): KodaXEvents {
       console.log(chalk.green(`[Result] ${result.content.slice(0, 300)}${result.content.length > 300 ? '...' : ''}`));
     },
 
+    onRepoIntelligenceTrace: (event) => {
+      if (spinner) { spinner.stop(); spinner = null; }
+      console.log(chalk.dim(`[RepoIntel] ${event.summary}`));
+    },
+
+    onSidecarMessage: (event) => {
+      if (spinner) { spinner.stop(); spinner = null; }
+      const header = event.delivery === 'budget-exhausted'
+        ? '⚡ Sidecar Verifier — budget exhausted'
+        : event.verdict === 'blocked'
+        ? '⚡ Sidecar Verifier — blocked'
+        : '⚡ Sidecar Verifier — revise';
+      const bodyText = event.suggestedFix
+        ? `${event.content}\nSuggested fix: ${event.suggestedFix}`
+        : event.content;
+      process.stdout.write(chalk.yellow(`\n${header}\n`) + chalk.dim(`${bodyText}\n`));
+    },
+
     onStreamEnd: () => {
       // Stop globalSpinner (may be created in input_json_delta) - 停止 globalSpinner（在 input_json_delta 中可能创建的）
       if (globalSpinner && !globalSpinner.isStopped()) {
@@ -221,6 +239,15 @@ export function createCliEvents(showSessionId = true): KodaXEvents {
       console.log(chalk.yellow(`[KodaX] Retry ${attempt}/${maxAttempts}: ${reason}`));
     },
 
+    onProviderRecovery: (event) => {
+      const action = event.recoveryAction === 'non_streaming_fallback'
+        ? 'switching to non-streaming fallback'
+        : event.recoveryAction === 'manual_continue'
+          ? 'awaiting manual continue'
+          : `recovering ${event.attempt}/${event.maxAttempts}`;
+      console.log(chalk.yellow(`[KodaX] ${action} (${event.errorClass}, ${event.stage})`));
+    },
+
     onComplete: () => {
       if (spinner) { spinner.stop(); spinner = null; }
       console.log(chalk.green('\n[KodaX] Done!'));
@@ -229,6 +256,16 @@ export function createCliEvents(showSessionId = true): KodaXEvents {
     onError: (error: Error) => {
       if (spinner) { spinner.stop(); spinner = null; }
       console.log(chalk.red(`\n[Error] ${error.message}`));
+    },
+
+    onScoutSuspiciousCompletion: (payload) => {
+      // X-layer: surface Scout's "inferred but uncertain" H0 completions so
+      // the user knows to verify instead of trusting a silent success.
+      console.log(
+        chalk.yellow(
+          `\n[Scout] Completion marked uncertain — signals: ${payload.signals.join(', ')}. Verify the result before continuing.`,
+        ),
+      );
     },
 
     // CLI mode: beforeToolExecute always returns true (YOLO mode)

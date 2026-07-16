@@ -7,8 +7,8 @@
 import fs from 'fs/promises';
 import os from 'os';
 import path from 'path';
-import { executeTool } from '@kodax/coding';
-import type { KodaXToolExecutionContext } from '@kodax/coding';
+import { executeTool } from '@kodax-ai/coding';
+import type { KodaXToolExecutionContext } from '@kodax-ai/coding';
 import {
   PermissionMode,
   PermissionContext,
@@ -187,7 +187,7 @@ export async function executeWithPermission(
   if (mode === 'plan') {
     const planModeBlockReason = getPlanModeBlockReason(toolName, input, permContext.gitRoot);
     if (planModeBlockReason) {
-      return `${planModeBlockReason} Do not try to modify files while planning. Finish the plan first, then use ask_user_question with intent "plan-handoff" to ask whether this session should switch to accept-edits and continue.`;
+      return `${planModeBlockReason} Do not try to modify files while planning. Finish the plan first, then use ask_user_question to ask the user whether to proceed. If the user confirms, call set_permission_mode with mode "accept-edits" to switch to implementation mode.`;
     }
   }
 
@@ -250,9 +250,19 @@ export async function executeWithPermission(
   if (permContext.confirmTools.has(toolName)) {
     let skipConfirmation = false;
 
-    // Only check alwaysAllowTools in accept-edits mode for bash
+    // Only check alwaysAllowTools in accept-edits mode for bash. FEATURE_153:
+    // pass the LLM-backed prefix extractor (set by REPL bootstrap on the
+    // PermissionContext) so `Bash(git commit:*)` allowlist patterns match
+    // against the LLM-extracted safe prefix instead of naive `startsWith`.
     if (mode === 'accept-edits' && toolName === 'bash') {
-      if (isToolCallAllowed(toolName, input, permContext.alwaysAllowTools)) {
+      if (
+        await isToolCallAllowed(
+          toolName,
+          input,
+          permContext.alwaysAllowTools,
+          permContext.bashPrefixExtractor,
+        )
+      ) {
         skipConfirmation = true;
       }
     }
@@ -285,6 +295,12 @@ export function createPermissionContext(options: {
   saveAlwaysAllowTool?: PermissionContext['saveAlwaysAllowTool'];
   switchPermissionMode?: PermissionContext['switchPermissionMode'];
   beforeToolExecute?: PermissionContext['beforeToolExecute'];
+  /**
+   * FEATURE_153 (v0.7.38) — Optional LLM-backed bash prefix extractor;
+   * when supplied, `isToolCallAllowed` matches allowlist patterns against
+   * the extracted safe prefix instead of naive `command.startsWith`.
+   */
+  bashPrefixExtractor?: PermissionContext['bashPrefixExtractor'];
 }): PermissionContext {
   const mode = normalizePermissionMode(options.permissionMode, 'accept-edits') ?? 'accept-edits';
   return {
@@ -296,5 +312,6 @@ export function createPermissionContext(options: {
     saveAlwaysAllowTool: options.saveAlwaysAllowTool,
     switchPermissionMode: options.switchPermissionMode,
     beforeToolExecute: options.beforeToolExecute,
+    bashPrefixExtractor: options.bashPrefixExtractor,
   };
 }

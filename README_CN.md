@@ -1,325 +1,182 @@
-# InfCodeX
+<p align="center">
+  <picture>
+    <source media="(prefers-color-scheme: dark)" srcset="assets/logo-dark.svg">
+    <source media="(prefers-color-scheme: light)" srcset="assets/logo-light.svg">
+    <img src="assets/logo-light.svg" alt="InfCodeX" width="640">
+  </picture>
+</p>
 
-**InfCodeX** 是词元无限新一代 AI Coding CLI，也是一个面向真实软件工程执行的智能体运行时（Agent Runtime）。
+<p align="center">
+  <b>源代码可用的 AI Coding Agent，跑你能拿到的任何 LLM。</b><br>
+  Anthropic · OpenAI · DeepSeek · Kimi · 智谱 · MiniMax · 小米 MiMo · 火山方舟 · Qwen · Gemini · Codex<br>
+  REPL · CLI · 库 · 免 Node 单文件二进制<br>
+  <b>InfCodeX</b> 为兼容现有生态，继续沿用历史包名与命令名 <b>KodaX / <code>kodax</code></b>。
+</p>
 
-它不是一个只会在终端里“对话补全”的工具，而是一个以 **执行闭环、工程可落地、平台可集成** 为核心目标构建的 TypeScript 原生系统：既可以作为 CLI 使用，也可以作为库嵌入到更大的智能体平台中。
+<p align="center">
+  <a href="https://www.npmjs.com/package/@kodax-ai/kodax"><img alt="npm version" src="https://img.shields.io/npm/v/@kodax-ai/kodax?style=flat-square&color=cb3837"></a>
+  <a href="LICENSE"><img alt="license" src="https://img.shields.io/badge/license-KAI--FCL_1.0-orange?style=flat-square"></a>
+  <a href="https://github.com/icetomoyo/KodaX/stargazers"><img alt="GitHub stars" src="https://img.shields.io/github/stars/icetomoyo/KodaX?style=flat-square&logo=github&color=f1c40f"></a>
+  <a href="https://github.com/icetomoyo/KodaX/actions"><img alt="CI" src="https://img.shields.io/github/actions/workflow/status/icetomoyo/KodaX/release.yml?style=flat-square&label=release"></a>
+  <img alt="providers" src="https://img.shields.io/badge/LLMs-15_aliases_+_custom-2ecc71?style=flat-square">
+</p>
 
-5层模块化架构 • 11 个大模型 • 流式输出 • 并行执行 • 长运行模式 • 可作为库使用
-> 当前仓库中仍保留历史命名：**KodaX / `kodax`**。仓库名已经是 **InfCodeX**，但部分代码、命令和文档仍沿用旧名称。
+<p align="center">
+  <a href="#30-秒上手">安装</a> ·
+  <a href="#四种使用形态">使用形态</a> ·
+  <a href="#为什么用-kodax">为什么用</a> ·
+  <a href="CHANGELOG.md">更新日志</a> ·
+  <a href="docs/FEATURE_LIST.md">Roadmap</a> ·
+  <a href="https://github.com/icetomoyo/KodaX/discussions">讨论</a> ·
+  <a href="README.md">English README</a>
+</p>
 
----
-
-## 为什么 InfCodeX 很重要
-
-很多 AICoding 工具更擅长做演示、做单轮回答、做局部辅助；而 InfCodeX 更值得强调的是，它从一开始就更靠近 **真实工程执行**。
-
-它的重要性来自以下几个方面：
-
-- **CLI 优先**：天然适合终端开发工作流
-- **运行时架构**：不是单体工具，而是分层 Agent Runtime
-- **项目连续性**：支持 session、长任务、自动续跑
-- **安全可控**：具备权限模式与确认边界
-- **模块化复用**：可作为 CLI，也可作为 npm library
-- **多智能体演进路径**：具备 parallel、team、skills 等基础能力
-
-对于词元无限而言，InfCodeX 的价值不只是一个开发者工具，而是一个 **工程执行型智能体底座**。
-
----
-
-## 一句话定位
-
-**InfCodeX 是一个面向真实软件工程交付的 AI Coding CLI，也是一个可复用、可扩展、可治理的智能体执行运行时。**
-
-它同时承担两种角色：
-
-1. **面向开发者的终端智能体**
-   - 阅读仓库
-   - 修改代码
-   - 执行命令
-   - 连续推进多步工程任务
-
-2. **面向平台的执行层组件**
-   - 可作为 npm package 被复用
-   - 可被上层系统编排与调用
-   - 可扩展 provider、tool、skill 和项目策略
+<p align="center">
+  <img src="kodax-hd.gif" alt="KodaX 实战演示" width="880">
+</p>
 
 ---
 
-## 核心特色
-
-### 1. 清晰分层的模块化架构
-InfCodeX 当前采用 monorepo 结构，核心分为五个包：
-
-- `@kodax/ai`
-- `@kodax/agent`
-- `@kodax/skills`
-- `@kodax/coding`
-- `@kodax/repl`
-
-这不是一个细节，而是这个项目最关键的差异点之一。它说明 InfCodeX 从设计上就不是“把所有东西揉成一个 CLI”，而是把 AI、Agent、Skills、Coding、交互层拆开，便于理解、复用、替换和治理。
-
-### 2. CLI 与库双重使用形态
-InfCodeX 既可以直接拿来做终端智能体，也可以被嵌入到其他产品或系统中。
-
-这意味着它不是一个孤立的交互工具，而更像一个 **可被上层产品调用的执行引擎**。
-
-### 3. 多 Provider / 多模型抽象
-项目当前公开文档和配置中已经体现出多 Provider 抽象能力，内置支持包括：
-
-- Anthropic
-- OpenAI
-- Kimi
-- Kimi Code
-- Qwen
-- Zhipu
-- Zhipu Coding
-- MiniMax Coding
-- Gemini CLI
-- Codex CLI
-
-这使得 InfCodeX 在以下场景中更有战略价值：
-
-- 模型成本优化
-- 国内外模型路由
-- 私有化 / 代理部署
-- 企业采购与合规适配
-- 上层平台统一模型治理
-
-### 4. 面向真实仓库执行，而不是只会回答
-InfCodeX 的 Coding Layer 不是只生成文本，而是围绕工程动作组织起来的。当前文档中的工具包括：
-
-- read
-- write
-- edit
-- bash
-- glob
-- grep
-- undo
-- diff
-
-这意味着它的核心价值不是“回答得像不像”，而是能否围绕代码仓库形成 **思考—行动—观察—继续推进** 的执行闭环。
-
-### 5. 权限可控的自治能力
-InfCodeX 设计了三级权限模式：
-
-- `plan`
-- `accept-edits`
-- `auto-in-project`
-
-这是一个非常重要的产品选择。它允许团队在效率与安全之间做渐进式平衡，而不是在“完全手动”和“完全放开”之间二选一。
-
-### 6. 会话记忆与长任务连续推进
-真实工程任务通常不是一轮 prompt 就能完成。InfCodeX 支持 session 持久化以及长任务工作流，因此更适合：
-
-- 连续迭代一个 feature
-- 跨多轮处理复杂问题
-- 在中断后恢复上下文
-- 在项目级别持续推进工作
-
-### 7. Skills 驱动的专业化能力
-InfCodeX 并不满足于通用 prompt，它内置并支持可发现的 skills、Markdown skill 定义、自然语言触发等能力。
-
-这让它有机会从“通用 coding agent”进化为“面向特定工程场景的专业智能体”。
-
-### 8. 天然具备向多智能体演化的路径
-当前仓库中已经能看到它面向多智能体方向的基础能力，例如：
-
-- parallel execution
-- team mode
-- init / auto-continue
-- project mode 相关思路
-
-这使 InfCodeX 的发展方向并不止于“单 agent CLI”，而是有潜力成为 **多智能体软件工程执行运行时**。
-
----
-
-## 架构概览
-
-```text
-InfCodeX
-├─ AI Layer        → Provider 抽象、流式输出、重试、能力适配
-├─ Agent Layer     → Session、消息管理、Token 工具、压缩逻辑
-├─ Skills Layer    → Skill 发现、注册、执行
-├─ Coding Layer    → Tools、Prompts、Agent Loop、长任务工作流
-└─ REPL / CLI      → 交互体验、权限控制、命令系统、Project 流程
-```
-
-这种分层设计的直接价值在于：
-
-| 对比项 | KodaX | 其他工具 |
-|--------|--------|----------|
-| **架构** | 5层模块化，每层可独立使用 | 通常只能作为 CLI 使用 |
-| **代码** | 清晰分离，易于理解和定制 | 成千上万文件，难以理解 |
-| **类型** | TypeScript 原生类型安全 | 无类型或弱类型 |
-| **模型** | 11 个 LLM 供应商，随意切换 | 通常只支持单一供应商 |
-| **成本** | 可用便宜的国内模型（Kimi、智谱、通义） | 往往需要昂贵订阅 |
-| **长运行** | Feature 跟踪 + 自动继续 | 通常需要人工监督 |
-| **定制** | 直接修改代码即可 | 复杂的插件系统 |
-| **学习** | 完美适合理解 Agent 原理 | 黑盒 |
-- **职责清晰**：每层边界明确
-- **便于替换**：Provider、Runtime、UI 可以分层演进
-- **便于测试**：更容易做独立测试和替换
-- **便于复用**：不必所有能力都绑死在 CLI 上
-- **便于平台化**：适合作为上层智能体系统的执行底座
-
-### Package 概览
-
-| Package | 职责 | 说明 |
-|---------|------|------|
-| `@kodax/ai` | Provider 抽象与模型适配 | 支持内置 provider 和兼容接口 |
-| `@kodax/agent` | Session、消息、Token、压缩 | 可脱离 CLI 单独复用 |
-| `@kodax/skills` | Skill 发现与执行 | 轻量专业化能力层 |
-| `@kodax/coding` | Tools、Prompts、Coding Agent Loop | 执行闭环核心 |
-| `@kodax/repl` | 终端 UI 与命令系统 | 权限交互和 REPL 体验层 |
-
-### 依赖关系
-
-```text
-kodax CLI 入口
-├─ @kodax/repl
-│  └─ @kodax/coding
-│     ├─ @kodax/ai
-│     ├─ @kodax/agent
-│     └─ @kodax/skills
-└─ @kodax/coding
-```
-
----
-
-## 为什么说 InfCodeX 对 InfOne 很关键
-
-InfOne 承载的是词元无限更长期的“智能组织 / AI org”平台愿景，强调的是：
-
-- 如何打造多智能体组织
-- 如何管理大规模智能体组织
-- 如何让智能体形成可治理、可协同、可持续运转的组织能力
-
-在这个体系里，InfCodeX 的位置非常明确，而且非常关键。
-
-### InfOne 更像控制平面（Control Plane）
-InfOne 更适合负责：
-
-- 智能体注册与生命周期管理
-- 模型路由与策略下发
-- 组织级记忆与审计
-- 权限、安全、观测与治理
-- 大规模多智能体编排
-
-### InfCodeX 更像执行平面（Execution Plane）
-InfCodeX 更适合负责：
-
-- 在代码仓库内真正执行任务
-- 进行文件读写、命令调用、工程分析
-- 按项目上下文持续推进编码任务
-- 承接 SDLC 场景中的工程执行动作
-- 作为终端形态或嵌入形态落地工程智能体
-
-### 两者组合后的价值
-如果只有管理层，没有执行层，平台容易停留在“管理看板”。
-如果只有执行工具，没有管理层，CLI 很难上升为组织级能力。
-
-**InfOne + InfCodeX** 的组合，恰好把这两层补齐：
-
-- **InfOne** 解决“哪个智能体应该做什么、如何管理它们”
-- **InfCodeX** 解决“软件工程任务如何被真正执行出来”
-
-这就是 InfCodeX 的战略意义所在：
-它不是一个孤立产品，而是连接 **开发者终端、仓库级执行、组织级智能体管理** 的关键桥梁。
-
----
-
-## 典型使用场景
-
-### 1. 终端里的工程助手
-开发者在本地终端直接使用 InfCodeX 阅读仓库、修改代码、执行命令、推进任务。
-
-### 2. 多步特性交付
-一个特性开发不必被拆成一次性 prompt，而可以通过 session 与连续执行多轮推进。
-
-### 3. 团队标准化工程智能体
-团队可以叠加统一规则、技能、模型选择，使不同仓库和成员获得更一致的智能体行为。
-
-### 4. SDLC 智能体执行底座
-InfCodeX 可以作为编码执行层，未来承接代码生成、审查、测试、交付等更大 SDLC 智能体体系中的具体动作。
-
-### 5. 企业渐进式落地
-企业可以先从安全模式、权限模式、项目边界开始使用，再逐步走向更高自治。
-
----
-
-## 能力概览
-
-- TypeScript 原生实现
-- Monorepo 分层架构
-- CLI + Library 双形态
-- Streaming 输出
-- Thinking / Reasoning 模式
-- Session 持久化
-- 权限可控执行
-- Skills 系统
-- 并行执行
-- Team 模式
-- 长任务 / 自动续跑
-- Windows / macOS / Linux 跨平台
-
----
-
-## Project 模式（Harness Engineering）
-
-从 KodaX 分支继承下来的最有辨识度的工作流，就是 **Project 模式 / harness engineering**。
-
-它不是让 Agent 自己宣布“完成了”，而是把项目真相落盘，并通过 verifier-gated 步骤来推进执行。对于真实仓库的长周期任务，这种方式更可靠。
-
-核心思路：
-
-- `kodax --init "<任务>"` 初始化项目真相和计划工件
-- `/project brainstorm` 先对齐范围
-- `/project plan` 写出当前执行计划
-- `/project next` 通过确定性门禁推进执行
-- `/project verify` 和 `/project quality` 在接受结果前重新校验
-- `kodax --auto-continue` 支持跨 session 持续推进
-
-典型流程：
+## 30 秒上手
 
 ```bash
-kodax --init "构建桌面应用"
+npm i -g @kodax-ai/kodax
+
+# 选一个你有 API key 的 provider
+export ZHIPU_API_KEY=...        # 或 KIMI_API_KEY / MINIMAX_API_KEY / MIMO_API_KEY /
+                                # ARK_API_KEY / DEEPSEEK_API_KEY / ANTHROPIC_API_KEY /
+                                # OPENAI_API_KEY / QWEN_API_KEY / GEMINI_API_KEY
+
 kodax
-/project status
-/project brainstorm
-/project plan
-/project next
-/project verify --last
-/project quality
 ```
 
-非 REPL 方式：
+就这样。进 REPL，自然语言提问。
 
-```bash
-kodax --init "构建桌面应用"
-kodax --auto-continue --max-hours 2
-```
+> **不装 Node 的目标机器**：从 [GitHub Releases](https://github.com/icetomoyo/KodaX/releases) 拿 Bun 编译的单文件二进制（Win / macOS / Linux × x64 + arm64）。详见 [docs/release.md](docs/release.md)。
 
 ---
 
-## 快速开始
+## 四种使用形态
 
-### 运行要求
+| 形态 | 命令 / 入口 | 什么时候用 |
+|---|---|---|
+| **REPL** | `kodax` | 交互式多轮编码会话，流式 UI + 权限 + slash 命令 |
+| **CLI** | `kodax -p "your task"` | 单次脚本任务、CI、批量处理 |
+| **库** | `import { runKodaX } from '@kodax-ai/kodax'` | 嵌入你自己的工具 / agent / 服务 |
+| **单文件二进制** | `./kodax` | 分发到没装 Node 的机器 |
 
-- Node.js `>=18.0.0`
-- npm workspaces
+---
 
-### 1. 安装与构建
+## Runtime SDK 与共享 daemon
+
+`@kodax-ai/kodax/runtime` 支持 inline、Worker 和本机共享 daemon。FEATURE_269
+让 CLI、Space、IDE 与其他本地 SDK 客户端可以原子加入同一个 Coder
+session/run，共享 transcript、Todo、tool、AskUser、permission、队列与唯一终态。
+daemon mutation 使用持久 operation identity 和 revision CAS；崩溃后不会盲目重放
+可能已有副作用的 provider、run 或 Host Tool 调用。
+
+Space 的 provider credential 仍由 OS keychain 持有，只通过 run/provider-scoped
+broker 使用；Space Artifact/Office/Control 只通过显式绑定到该 run 的 Host Tool
+lease 暴露。CLI run 不会因为 Space 后来加入而继承这些能力。Partner 继续使用独立
+data/session root 下的 inline Runtime，不参与 Coder owner fence。capability 缺失时必须
+fail closed，不能静默退回 inline Coder。完整接入说明见
+[SDK Embedder Guide §23](docs/SDK_EMBEDDER_GUIDE.md#23-shared-coder-daemon-for-space-and-ide-hosts-feature_269-v0769)。
+
+**v0.7.71 Electron 打包修复**：packaged/asar Electron 宿主可以直接自动启动
+daemon，不会再次打开 GUI。`ELECTRON_RUN_AS_NODE` 只存在于子进程启动边界，
+在 daemon 与普通用户子进程代码加载前即被移除。该路径要求 Electron 默认开启的
+`RunAsNode` fuse；主动关闭该 fuse 的宿主必须通过普通 Node/KodaX CLI 启动 daemon，
+再使用 attach-only 模式连接。SDK 的 `homeDir` 是拥有 `.kodax` 的 CLI 风格基础目录，
+不是 `.kodax` 目录本身。
+
+## 为什么用 KodaX
+
+<table>
+  <tr>
+    <td width="33%" align="center" valign="top">
+      <h3>🇨🇳 6 家国内 LLM 原生</h3>
+      <sub>智谱 · Kimi · MiniMax · 小米 MiMo · 火山方舟 · 通义千问</sub>
+      <br><br>
+      first-class 适配器，跨 provider 在 5-alias canonical panel 做过 <a href="benchmark/EVAL_GUIDELINES.md">prompt-eval 校准</a> —— 不是 OpenAI-compat 转发。
+    </td>
+    <td width="33%" align="center" valign="top">
+      <h3>📦 单文件二进制</h3>
+      <sub>Bun --compile · Win / macOS / Linux · x64 + arm64</sub>
+      <br><br>
+      目标机器不装 Node。一份文件随处跑 —— 受管环境、内网、CI runner、断网机器都行。
+    </td>
+    <td width="33%" align="center" valign="top">
+      <h3>🌳 可分叉会话血缘</h3>
+      <sub>fork · rewind · 并行编辑</sub>
+      <br><br>
+      对话历史是 DAG 不是链表。即将发布的 <b>KodaX Space</b> 桌面端基于此。
+    </td>
+  </tr>
+  <tr>
+    <td align="center" valign="top">
+      <h3>🤖 默认多 agent</h3>
+      <sub>V2 Worker 单循环 + Sidecar Verifier + 异步子 agent</sub>
+      <br><br>
+      <code>dispatch_child_task</code>、<code>send_message</code>、<code>task_stop</code>，多实例自动协调（content-hash safety net）。
+    </td>
+    <td align="center" valign="top">
+      <h3>🧩 Skills + 自构造</h3>
+      <sub>Markdown skill，自然语言触发</sub>
+      <br><br>
+      5 阶自改造阶梯（scaffold → validate → stage → test → activate），由 8 条 admission invariant 守护。
+    </td>
+    <td align="center" valign="top">
+      <h3>🛠 50+ 内置工具</h3>
+      <sub>文件 · shell · 搜索 · MCP · ACP</sub>
+      <br><br>
+      repo intelligence、语义搜索、git worktree、web fetch，统一从干净的 tool definition 接口暴露。
+    </td>
+  </tr>
+</table>
+
+## 同类产品对比
+
+| 能力 | **KodaX** | Claude Code | Aider | Codex CLI | Cursor | Cline |
+|---|---|---|---|---|---|---|
+| 源代码许可 | ⚠️ KAI-FCL，非商业 | ❌ source-available | ✅ Apache&nbsp;2.0 | ✅ Apache&nbsp;2.0 | ❌ 闭源 | ✅ Apache&nbsp;2.0 |
+| 免 Node 单文件 | ✅ Bun | ❌ 需 Node | ❌ 需 Python | ✅ Rust | ❌ Electron | ❌ 插件 |
+| 国内 6 家原生<br><sub>（智谱·Kimi·MiniMax·MiMo·方舟·Qwen）</sub> | ✅ 6 家原生 | ❌ | ⚠ 走 LiteLLM | ❌ OpenAI 主线 | ❌ 无 provider 菜单 | ⚠ Kimi/Qwen/DeepSeek |
+| 可分叉会话血缘 | ✅ fork & rewind | ⚠ routines/sessions | ❌ | ❌ | ❌ | ⚠ checkpoints |
+| Multi-agent + MCP + 50+ 工具 | ✅ 三项全有 | ✅ 三项全有 | ⚠ 有 tools, 无 MCP | ✅ 三项全有 | ⚠ Composer + MCP | ✅ 三项全有 |
+
+<sub>数据于 2026-05 对照官方公开文档核对（[Claude Code](https://github.com/anthropics/claude-code) · [Aider](https://aider.chat/docs/llms.html) · [Codex CLI](https://github.com/openai/codex) · [Cursor](https://cursor.com) · [Cline](https://github.com/cline/cline)）。⚠ 表示部分支持 / 需额外配置 / 非 first-class。欢迎 PR 修正。</sub>
+
+## 详细配置
+
+> 上面的 `npm i -g @kodax-ai/kodax` 一行就够了。下面这一节是给"从源码构建 / 接自定义 provider / 把 KodaX 当库使用"的场景。
+
+### 1. 从源码构建
 
 ```bash
+git clone https://github.com/icetomoyo/KodaX.git
+cd KodaX
 npm install
-npm run build:packages
 npm run build
 npm link
 ```
 
-### 2. 配置 Provider
+如需在不修改受控包元数据的情况下生成 InfCodeX 品牌 npm 包，可执行：
 
-内置 provider 的凭证通过环境变量读取：
+```bash
+npm run release:infcodex
+```
+
+该命令复用当前单 bundle 发布流程，临时生成包名为 `infcodex`、命令名为 `infcodex` 的 `infcodex-<version>.tgz`，完成后会恢复根 `package.json`。
+
+构建完成后就可以直接启动：
+
+```bash
+kodax
+```
+
+### 2. 配置模型提供商
+
+最简单的方式是先设置 API Key：
 
 ```bash
 # macOS / Linux
@@ -329,18 +186,78 @@ export ZHIPU_API_KEY=your_api_key
 $env:ZHIPU_API_KEY="your_api_key"
 ```
 
-CLI 默认配置可以写到 `~/.kodax/config.json`：
+然后在 `~/.kodax/config.json` 里写一个最小配置：
 
 ```json
 {
   "provider": "zhipu-coding",
-  "reasoningMode": "auto",
-  "permissionMode": "accept-edits",
-  "parallel": false
+  "effort": "auto"
 }
 ```
 
-如果需要自定义 `baseUrl` 或兼容 OpenAI / Anthropic 的接口：
+### 3. 启动 REPL 或执行单次任务
+
+```bash
+# 进入交互式 REPL
+kodax
+
+# 单次任务
+kodax "Review this repository and summarize the architecture"
+```
+
+进入 REPL 后，你可以直接自然语言提问，也可以使用命令：
+
+```text
+/help
+/mode
+/agent-mode ama
+```
+
+### 4. 作为库使用
+
+```bash
+npm install @kodax-ai/kodax
+```
+
+```typescript
+import { runKodaX } from '@kodax-ai/kodax';
+
+const result = await runKodaX(
+  {
+    provider: 'zhipu-coding',
+    effort: 'auto',
+  },
+  'Explain this codebase'
+);
+```
+
+#### SDK Subpath 导入（v0.7.39+）
+
+如果只想用某个子能力，按 subpath 引入更轻量，bundler 也能更好地 tree-shake：
+
+```typescript
+import { Runner } from '@kodax-ai/kodax/agent';                // Agent runtime
+import { getProvider } from '@kodax-ai/kodax/llm';              // LLM 抽象（15 个内置 alias）
+import { runKodaX } from '@kodax-ai/kodax/coding';              // Coding tools + prompts
+import { createImageArtifactFromPath } from '@kodax-ai/kodax/media'; // 输入 artifact helpers
+import { SkillRegistry } from '@kodax-ai/kodax/skills';         // 零依赖 skill loader
+import { loadConfig } from '@kodax-ai/kodax/repl';              // REPL 配置 / session 工具
+import { createMcpManager } from '@kodax-ai/kodax/mcp';         // MCP popout manager（v0.7.42 起）
+import { listSessions } from '@kodax-ai/kodax/session';         // session 历史工具
+import { createKodaXRuntime } from '@kodax-ai/kodax/runtime';   // embedded/Worker/daemon 宿主 API
+import { createKodaXA2AServer } from '@kodax-ai/kodax/a2a';    // A2A 1.0 双向接入
+import { createMemoryAgent } from '@kodax-ai/kodax/experimental-memory'; // opt-in 实验性记忆 SDK
+```
+
+12 个 SDK 入口（root + 11 subpath）通过 ESM 共享 chunk 复用底层代码 —— 只 import `/agent` 不会把 `/repl` 的 Ink + React 一起拉进来。
+
+完整的宿主集成契约——包括 embedded/Worker/daemon 所有权、外部 Agent 注册与任务控制、session cursor 分页、workflow 模型分层和效率遥测——见 [SDK Embedder Integration Guide](docs/SDK_EMBEDDER_GUIDE.md)。
+
+> **SDK 是 ESM-only**。在 CommonJS 上下文（Electron main 进程、传统 Webpack CJS bundle、`require()` 调用方）必须用 `await import('@kodax-ai/kodax/...')` 代替 `require()`。详见 [docs/SDK_EMBEDDER_GUIDE.md §5](docs/SDK_EMBEDDER_GUIDE.md#5-consuming-from-a-commonjs-context-electron-main-cjs-bundles)，含 Electron main 完整 recipe + 为什么大多数 subpath 物理上无法做 dual ESM/CJS bundle。
+
+### 5. 自定义 Provider（OpenAI / Anthropic 兼容端点）
+
+任何 OpenAI 或 Anthropic 协议兼容的 endpoint 都可以通过 `customProviders[]` 接入，CLI 模式写在 `~/.kodax/config.json` 里：
 
 ```json
 {
@@ -352,35 +269,102 @@ CLI 默认配置可以写到 `~/.kodax/config.json`：
       "baseUrl": "https://example.com/v1",
       "apiKeyEnv": "MY_LLM_API_KEY",
       "model": "my-model",
-      "userAgentMode": "compat"
+      "userAgentMode": "compat",
+      "reasoning": {
+        "efforts": ["off", "low", "medium", "high", "max"],
+        "default": "high"
+      }
     }
   ]
 }
 ```
 
-`userAgentMode` 默认是 `"compat"`，会发送 `KodaX` 而不是官方 SDK 的 `User-Agent`。只有在你的网关明确要求官方 SDK 头时，再改成 `"sdk"`。
+`userAgentMode` 默认 `"compat"`（发送 `KodaX` 而非上游 SDK 的 User-Agent）；如果你的网关要求原生 SDK header，再切到 `"sdk"`。
 
-### 3. 进入 REPL 或执行单次任务
+自定义 reasoning 模型优先使用 v0.7.57 的 `reasoning: { efforts, default }`；无 thinking 能力的模型使用 `"reasoning": "none"`。SDK 宿主的 effort 选择器应从 `reasoningProfile.supportedEfforts` / `defaultEffort` 动态生成，不要假定固定五档。
 
-```bash
-# 交互式 REPL
-kodax
+#### OpenAI 兼容推理模型
 
-# 进入后可以直接输入自然语言或命令
-读取 package.json 并总结架构
-/mode
-/help
+部分 OpenAI-compatible 推理模型要求多轮请求时回放上一轮 assistant 的 `reasoning_content`。DeepSeek V4 thinking mode 是已知必须开启的场景；内置 DeepSeek provider 已经默认开启，但自定义 provider 需要显式配置：
 
-# 单次 CLI 调用
-kodax "审查这个仓库并总结架构"
-kodax --session review "找出 src/ 中最危险的部分"
-kodax --session review "给出具体修复建议"
+```json
+{
+  "customProviders": [
+    {
+      "name": "my-deepseek-v4",
+      "protocol": "openai",
+      "baseUrl": "https://example.com/v1",
+      "apiKeyEnv": "MY_DEEPSEEK_API_KEY",
+      "model": "deepseek-v4-flash",
+      "reasoningPreset": "deepseek-v4-openai",
+      "replayReasoningContent": true
+    }
+  ]
+}
 ```
 
-### 4. 作为库接入
+如果网关同时代理 DeepSeek 和 OpenAI proper，建议用 per-model override，避免把 `reasoning_content` 发给不接受该字段的模型：
+
+```json
+{
+  "models": [
+    { "id": "deepseek-v4-flash", "replayReasoningContent": true },
+    { "id": "gpt-5", "replayReasoningContent": false }
+  ]
+}
+```
+
+Sidecar verifier 的结构化裁决请求会优先使用 provider 级 `tool_choice` 强制工具调用；如果某个兼容端点明确拒绝 `tool_choice` 参数，KodaX 会对该 verifier 请求自动重试一次“不强制但仍带 tools”的兼容模式，并保持 fail-open，不会阻塞主 Worker。
+
+调试 Worker 结束后的 verifier 行为时可设置：
+
+```bash
+export KODAX_VERIFIER_LOG=1
+export KODAX_VERIFIER_PROVIDER=anthropic
+export KODAX_VERIFIER_MODEL=claude-haiku-4-5-20251001
+```
+
+`KODAX_VERIFIER_LOG=1` 等价于在 `~/.kodax/config.json` 写 `"verifierLog": true`，会显示 verifier gate、elapsedMs 和 trace；`KODAX_VERIFIER_PROVIDER` / `KODAX_VERIFIER_MODEL` 需要成对设置，用独立模型执行 verifier；`KODAX_VERIFIER_ALWAYS=1` 仅建议调试和回归测试时使用。
+
+SDK / headless 宿主可以通过 `KodaXEvents.onSidecarMessage` 观察 Sidecar
+Verifier 的 `revise` / `blocked` 可执行消息；JSONL 输出使用同形
+`sidecar.message` 事件。`accept` 仍保持静默。
+
+#### 给自定义 provider 开图片 / vision 输入（FEATURE_134 v0.7.40）
+
+如果你的自定义 provider 后面的模型支持 vision，加 `capabilityProfile.multimodalSupport: "image-input"` 显式开启，KodaX 的 SA-path policy gate 就不会人为拦截多模态请求。内置 vision-capable alias（Anthropic、OpenAI、DeepSeek、Kimi、Qwen、Zhipu、MiniMax、MiMo、Ark，以及通过 CLI `@<path>` file-include 语法传图的 Gemini-CLI）已经默认开了这个 flag。Codex-CLI 和自定义 provider 在底层模型支持图片输入时需要手动 opt-in。
+
+```json
+{
+  "customProviders": [
+    {
+      "name": "my-vision-provider",
+      "protocol": "openai",
+      "baseUrl": "https://example.com/v1",
+      "apiKeyEnv": "MY_LLM_API_KEY",
+      "model": "my-vision-model",
+      "capabilityProfile": {
+        "transport": "native-api",
+        "conversationSemantics": "full-history",
+        "mcpSupport": "none",
+        "contextFidelity": "full",
+        "toolCallingFidelity": "full",
+        "sessionSupport": "full",
+        "longRunningSupport": "full",
+        "multimodalSupport": "image-input",
+        "evidenceSupport": "full"
+      }
+    }
+  ]
+}
+```
+
+序列化层（Anthropic-compat 走 `packages/llm/src/providers/anthropic.ts:770`，OpenAI-compat 走 `openai.ts:904`）通过基类继承自动转发 image block。这个 flag 只控制 KodaX 自身是否预先拒绝多模态请求 —— 上游模型到底支不支持 vision 由 provider 自己决定。如果模型实际是 text-only，你会看到真实的上游 API 错误，而不是 KodaX 一侧的 `[Provider Policy] multimodal requests are unsupported` 预拦截。
+
+库模式下用 `registerCustomProviders()` 显式注册：
 
 ```typescript
-import { registerCustomProviders, runKodaX } from 'kodax';
+import { registerCustomProviders, runKodaX } from '@kodax-ai/kodax';
 
 registerCustomProviders([
   {
@@ -393,725 +377,352 @@ registerCustomProviders([
   },
 ]);
 
-const result = await runKodaX(
-  {
-    provider: 'my-openai-compatible',
-    reasoningMode: 'auto',
-    context: {
-      gitRoot: '/repo',
-      executionCwd: '/repo/packages/app',
-    },
-  },
-  '解释这个代码库'
-);
+await runKodaX({ provider: 'my-openai-compatible' }, '解释这个仓库');
 ```
 
-### 常见示例
+### 6. Runtime 与本机 daemon
+
+交互 REPL、位置参数、slash-command 生成的任务和 `kodax -p` 现在都走统一的
+`KodaXRuntime` 入口。默认使用最低延迟的进程内 `embedded`；单一 SDK 宿主需要
+独立 V8 与硬销毁时，可选择 Worker-hosted embedded；需要后台持续运行、断线后
+查询或多个本机客户端共享时，可切到 `daemon`：
+
+```ts
+import { createKodaXRuntime } from '@kodax-ai/kodax/runtime';
+
+const isolated = await createKodaXRuntime({
+  mode: 'embedded',
+  isolation: 'worker',
+  requirements: { hardDispose: true },
+});
+```
+
+inline 形态由调用方私有且开销最低；Worker 形态仍然私有，但可硬销毁；
+daemon 形态使用独立进程并允许多个客户端共享。`runtime.close()` 会关闭
+私有 inline/Worker Runtime，但对 daemon 只断开当前客户端。矛盾的隔离参数
+会直接报错，不会静默降级。Worker 是 V8 故障隔离边界，不是安全沙箱。
+
+daemon 按设计会持续驻留。测试若自动启动 daemon，删除临时 home 前还必须执行
+`kodax daemon stop --home <目录> --profile <名称>`（或发送已认证的
+`runtime.shutdown`）。不要按进程名批量结束 Node；应先核验命令行和父进程归属。
 
 ```bash
-kodax --init "桌面应用"
-kodax --auto-continue --max-hours 2
+kodax daemon start
+kodax daemon stop --profile default
+kodax --runtime-mode daemon
+kodax -p "检查这个仓库" --runtime-mode daemon
 ```
 
----
-
-## 架构
-
-KodaX 使用 **monorepo 架构**，基于 npm workspaces，由 5 个独立的包组成：
-
-```
-KodaX/
-├── packages/
-│   ├── ai/                  # @kodax/ai - 独立的 LLM 抽象层
-│   │   └── providers/       # 11 个 LLM 提供商 (Anthropic, OpenAI, DeepSeek, etc.)
-│   │
-│   ├── agent/               # @kodax/agent - 通用 Agent 框架
-│   │   └── session/         # 会话管理、消息处理
-│   │
-│   ├── skills/              # @kodax/skills - Skills 标准实现
-│   │   └── builtin/         # 内置 skills (code-review, tdd, git-workflow)
-│   │
-│   ├── coding/              # @kodax/coding - Coding Agent（工具 + Prompts）
-│   │   └── tools/           # 8 个工具: read, write, edit, bash, glob, grep, undo, ask_user_question
-│   │
-│   └── repl/                # @kodax/repl - 完整的交互式终端
-│       ├── ui/              # Ink/React 组件、主题
-│       └── interactive/     # 命令、REPL 逻辑
-│
-├── src/
-│   └── kodax_cli.ts         # 主 CLI 入口点
-│
-└── package.json             # 根 workspace 配置
-```
-
-### 包依赖关系
-
-```
-                    ┌─────────────────┐
-                    │   kodax (root)  │
-                    │   CLI 入口      │
-                    └────────┬────────┘
-                             │
-              ┌──────────────┴──────────────┐
-              │                             │
-              ▼                             ▼
-       ┌─────────────┐               ┌─────────────┐
-       │ @kodax/repl │               │@kodax/coding│
-       │   UI 层     │               │ 工具+Prompts │
-       └──────┬──────┘               └──────┬──────┘
-              │                             │
-              │              ┌──────────────┼──────────────┐
-              │              │              │              │
-              ▼              ▼              ▼              ▼
-       ┌─────────────┐ ┌─────────────┐ ┌─────────────┐ ┌─────────────┐
-       │@kodax/skills│ │ @kodax/agent│ │  @kodax/ai  │ │   外部 SDK  │
-       │ (零依赖)    │ │ Agent 框架  │ │ LLM 抽象层  │ │             │
-       └─────────────┘ └─────────────┘ └─────────────┘ └─────────────┘
-```
-
-# 并行执行
-kodax --parallel "analyze and improve this module"
-
-# team 模式
-kodax --team "implement,review,test"
-
-# 初始化长任务
-kodax --init "deliver feature X"
-
-# 自动持续推进
-kodax --auto-continue --max-hours 2
-```
-┌─────────────────────────────────────────────────────────────┐
-│  方式 1: CLI 命令行                                          │
-│                                                              │
-│  kodax "你的任务"                                            │
-│                                                              │
-│  入口: package.json "bin" → dist/kodax_cli.js               │
-└─────────────────────────────────────────────────────────────┘
-
-┌─────────────────────────────────────────────────────────────┐
-│  方式 2: 库引用                                              │
-│                                                              │
-│  import { runKodaX } from 'kodax';                          │
-│                                                              │
-│  入口: packages/coding/dist/index.js                        │
-└─────────────────────────────────────────────────────────────┘
-```
-
----
-
-## 特性
-
-- **5层模块化架构** - 每层可独立使用，可作为库
-- **11 个模型** - Anthropic, OpenAI, DeepSeek, Gemini CLI, Codex CLI, Kimi, Kimi Code, 智谱, 智谱 Coding, 通义千问, Minimax
-- **推理模式** - 统一的 `off/auto/quick/balanced/deep` 推理接口
-- **流式输出** - 实时显示，不用等待
-- **8 个工具** - read, write, edit, bash, glob, grep, undo, ask_user_question
-- **会话记忆** - 对话跨次保存
-- **Project 模式 / Harness Engineering** - 带项目真相文件和 `/project` 命令的 verifier-gated 长周期工作流
-- **Skills 系统** - 自然语言触发，可扩展
-- **权限控制** - 3 种权限模式，支持命令模式匹配
-- **跨平台** - 支持 Windows、macOS 和 Linux
-- **TypeScript 原生** - 完整的类型安全和 IDE 支持
-
----
-
-## 权限模式
-
-process.env.ZHIPU_API_KEY = process.env.ZHIPU_API_KEY ?? 'your_api_key';
-
-const result = await runKodaX({
-  provider: 'zhipu-coding',
-  reasoningMode: 'auto',
-  context: {
-    gitRoot: '/repo',
-    executionCwd: '/repo/packages/app',
-  },
-  events: {
-    onTextDelta: (text) => process.stdout.write(text),
-  },
-}, '你的任务');
-```
-
-这使得 InfCodeX 更适合严肃工程环境，因为它不是简单追求“越自动越好”，而是提供 **可信度渐进提升** 的使用路径。
-
----
-
-## 详细使用方式
-
-### REPL 快速开始
-
-直接执行 `kodax` 会进入交互式 REPL：
-
-```bash
-kodax
-```
-
-进入后可以混合使用自然语言请求和斜杠命令：
-
-```text
-读取 package.json 并总结架构
-/model
-/mode
-/help
-```
-
-### CLI 快速开始
-
-```bash
-# 基础用法
-kodax "帮我创建一个 TypeScript 项目"
-
-# 指定 provider 和模型
-kodax --provider openai --model gpt-5.4 "创建一个 REST API"
-
-# 使用更深的推理模式
-kodax --reasoning deep "审查这份架构设计"
-```
-
-### Session 工作流
-
-需要跨轮记忆时，使用 session：
-
-```bash
-# 无记忆：两次独立调用
-kodax "读取 src/auth.ts"
-kodax "总结一下"
-
-# 有记忆：同一个 session
-kodax --session auth-review "读取 src/auth.ts"
-kodax --session auth-review "总结一下"
-kodax --session auth-review "第一个问题怎么修复？"
-
-# Session 管理
-kodax --session list
-kodax --session resume "继续"
-```
-
-### 工作流示例
-
-```bash
-# 代码审查
-kodax --session review "审查 src/ 目录"
-kodax --session review "重点看安全问题"
-kodax --session review "给我修复建议"
-
-# 项目开发
-kodax --session todo-app "创建一个 Todo 应用"
-kodax --session todo-app "添加删除功能"
-kodax --session todo-app "写测试"
-
-# 长时间任务
-kodax --init "构建一个 REST API"
-kodax --auto-continue
-```
-
-### Project 模式 / Harness Engineering
-
-Project 模式把初始化命令和 REPL 内的 `/project` 命令串成一条线：
-
-```bash
-# 初始化项目真相文件
-kodax --init "构建一个桌面应用"
-
-# 进入 REPL，走 verifier-gated 工作流
-kodax
-/project status
-/project brainstorm
-/project plan
-/project next
-/project verify --last
-/project quality
-
-# 或者直接使用非 REPL 自动循环
-kodax --auto-continue --max-hours 2
-```
-
-### ACP Server
-
-KodaX 也可以作为基于 stdio 的 ACP Server 运行，方便编辑器和 IDE 接入：
-
-```bash
-kodax acp serve
-kodax acp serve --cwd /path/to/repo --permission-mode accept-edits
-kodax acp serve -m openai --model gpt-5.4 --reasoning balanced
-```
-
-这个模式支持 ACP `initialize`、`sessions/new`、`chat/prompt`、`chat/cancel`、流式 session update，以及权限请求，同时复用 KodaX 原本的运行时和工具语义。
-
-ACP 的生命周期日志会写到 `stderr`，不会污染 ACP `stdout` 协议输出。可以通过 `KODAX_ACP_LOG=off|error|info|debug` 控制日志级别，默认是 `info`。
-
-ACP session 的 `cwd` 会显式传入 coding runtime 的 `executionCwd`。如果你在启动 server 时传了 `--cwd`，这个值会固定为所有 ACP session 的执行根目录。这样 prompt 上下文、相对路径工具和 shell 命令都会以显式目录为基准，而不会去修改 Node.js 进程级的全局工作目录。
-
-### AAMP Server
-
-KodaX 也可以作为基于 `aamp-sdk` 的 AAMP 异步任务 worker 运行：
-
-```bash
-kodax aamp serve \
-  --email agent@example.com \
-  --mailbox-token <token> \
-  --base-url http://localhost:8080 \
-  --smtp-host localhost \
-  --smtp-password <password>
-
-kodax aamp serve --profile mailbox-a --cwd /path/to/repo
-```
-
-这个模式会监听 AAMP `task.dispatch` 消息，把每个任务桥接到 `runKodaX(...)` 执行，并通过同一个 mailbox transport 回发 `task.result`。
-
-当前 v1 行为：
-
-- 支持入站 `task.dispatch`
-- 本地持久化 `taskId -> sessionId`，避免已完成任务重复执行
-- 通过真实 AAMP SDK 回发 `task.result`
-- 入站 `task.ack` 由 `aamp-sdk` 的自动确认逻辑处理
-
-配置文件只支持 profile 形式。每个 AAMP mailbox 都需要写在 `~/.kodax/config.json` 的 `aamp.profiles.<name>` 下：
+持久设置写入 `~/.kodax/config.json`：
 
 ```json
 {
-  "aamp": {
-    "profiles": {
-      "mailbox-a": {
-        "email": "agent@meshmail.ai",
-        "mailboxToken": "base64(email:password)",
-        "baseUrl": "https://meshmail.ai",
-        "smtpHost": "meshmail.ai",
-        "smtpPort": 587,
-        "smtpPassword": "mailbox-password",
-        "allowInsecureTls": false,
-        "logLevel": "info"
-      }
-    }
-  }
+  "runtimeMode": "daemon"
 }
 ```
 
-解析优先级是：`CLI 参数 > ~/.kodax/config.json 中选中的 profile`。
+统一优先级是：显式 CLI/SDK 参数 > 环境变量 > `config.json` > 内置默认值。
+`KODAX_RUNTIME_MODE=daemon` 适合临时覆盖。其他成对配置也遵循相同规则，例如
+`provider` ↔ `KODAX_PROVIDER`、`effort` ↔ `KODAX_EFFORT`。JSON 保持 camelCase，
+环境变量保持 `KODAX_UPPER_SNAKE_CASE`，两者按语义一一对应。
 
-旧的 `jmapToken` / `jmapUrl` profile 字段和 CLI 参数仍然保留兼容，作为 `mailboxToken` / `baseUrl` 的别名。
+一个 daemon 可以承载多个 session。不同 session 可以并发运行；同一个 session
+内部仍保持一次只运行一个任务，后续任务按队列执行。多个 `kodax` 进程可以连接
+同一个 daemon，并分别打开或观察不同 session。
 
-启动规则是严格的：
+### 7. 打包成单文件二进制（无需 Node）
 
-- 传了 `--profile <name>`，这个 profile 必须存在。
-- 不传 `--profile` 时，所有必填 AAMP 字段都必须通过 CLI 显式传入。
-- CLI 参数始终覆盖所选 profile 中的同名字段。
+KodaX 可以用 `bun --compile` 打包成单可执行文件 + 一个 `builtin/` sidecar 目录，目标机器**不需要安装 Node.js 或任何运行时**。
 
-必填 AAMP 字段：
+支持目标：`win-x64`、`linux-x64`、`linux-arm64`、`darwin-x64`、`darwin-arm64`。Win7 / glibc < 2.27 的发行版 / 龙芯 LoongArch 暂不支持。
 
-- `email`
-- `mailboxToken`
-- `baseUrl`
-- `smtpHost`
-- `smtpPassword`
-
-`provider` 和 `model` 不会在 `aamp` 下重复配置。`kodax aamp serve` 默认沿用普通 KodaX 顶层配置里的 `provider` / `model`，只有在你显式传 `--provider` 或 `--model` 时才覆盖。
-
-可选参数：
-
-- `--cwd`
-- `--profile`
-- `--provider`
-- `--model`
-- `--mailbox-token`
-- `--base-url`
-- `--jmap-token`（`--mailbox-token` 的兼容别名）
-- `--jmap-url`（`--base-url` 的兼容别名）
-- `--smtp-port`
-- `--allow-insecure-tls`
-- `--log-level`
-
-日志：
-
-- `--log-level off|error|info|debug`
-- JSONL 日志文件写入 `~/.kodax/aamp/logs/YYYY-MM-DD.jsonl`
-
-这个首版有意只覆盖最小异步闭环：`task.dispatch -> task.result`。像 `task.help_needed`、附件、结构化结果映射等 richer protocol flow，后续可以继续加，但不需要改动 KodaX runtime core。
-
-### 权限控制
-
-KodaX 提供 3 种权限模式，支持精细控制：
-
-| 模式 | 说明 | 需要确认的工具 |
-|------|------|----------------|
-| `plan` | 只读计划模式 | 所有修改工具被阻止 |
-| `accept-edits` | 自动接受文件编辑 | 仅 bash |
-| `auto-in-project` | 项目内全自动 | 无（仅限项目范围） |
+本地构建：
 
 ```bash
-# 在 REPL 中使用 /mode 命令
-/mode plan          # 切换到计划模式（只读）
-/mode accept-edits  # 切换到接受编辑模式
-/mode auto-in-project  # 切换到项目内全自动模式
-/auto                  # auto-in-project 的别名
+# 先在构建机器上装好 Bun（一次性）
+npm i -g bun                  # 或 scoop / brew / curl，详见 docs/release.md
 
-# 查看当前模式
-/mode
+npm run build:binary          # 当前平台（最快）
+npm run build:binary:all      # 一台机器出全部 5 个目标
+node scripts/build-binary.mjs --target=linux-arm64   # 指定平台
 ```
 
-### CLI 参考
-
-```text
-kodax                  启动交互式 REPL
--h, --help [topic]     显示帮助或某个主题的帮助
--p, --print <text>     单次执行并退出
--c, --continue         继续当前目录最近一次会话
--r, --resume [id]      按 ID 或最近会话恢复
--m, --provider         指定 provider
---model <name>         覆盖默认模型
---reasoning <mode>     off | auto | quick | balanced | deep
--t, --thinking         兼容别名，等价于 --reasoning auto
--s, --session <op>     Session ID 或历史会话操作
--j, --parallel         启用并行工具执行
---team <tasks>         多子 Agent 并行
---init <task>          初始化长任务
---auto-continue        自动持续推进直到完成
---max-iter <n>         最大迭代次数
---max-sessions <n>     --auto-continue 的最大会话数
---max-hours <n>        --auto-continue 的最长运行小时数
-```
-
-### 帮助主题
-
-```bash
-# 基本帮助
-kodax -h
-kodax --help
-
-# 详细主题帮助
-kodax -h sessions      # 会话管理详解
-kodax -h acp           # ACP Server 模式
-kodax -h aamp          # AAMP 异步任务 worker 模式
-kodax -h init          # 长时间运行任务初始化
-kodax -h project       # Project 模式 / Harness 工作流
-kodax -h auto          # 自动继续模式
-kodax -h provider      # LLM 供应商配置
-kodax -h thinking      # 思考/推理模式
-kodax -h team          # 多 Agent 并行执行
-kodax -h print         # 打印配置
-```
-
----
-
-## 高级库用法
-
-### `runKodaX` 简单模式
-
-```typescript
-import { runKodaX, type KodaXEvents } from 'kodax';
-
-const events: KodaXEvents = {
-  onTextDelta: (text) => process.stdout.write(text),
-  onThinkingDelta: (text) => console.log(`推理增量: ${text.length} 字符`),
-  onToolResult: (result) => console.log(`工具 ${result.name}`),
-  onComplete: () => console.log('\n完成!'),
-  onError: (e) => console.error(e.message),
-};
-
-const result = await runKodaX({
-  provider: 'zhipu-coding',
-  reasoningMode: 'auto',
-  context: {
-    gitRoot: '/repo',
-    executionCwd: '/repo/packages/service',
-  },
-  events,
-}, '1+1等于几？');
-
-console.log(result.lastText);
-```
-
-### `KodaXClient` 连续会话模式
-
-```typescript
-import { KodaXClient } from 'kodax';
-
-const client = new KodaXClient({
-  provider: 'zhipu-coding',
-  reasoningMode: 'auto',
-  events: {
-    onTextDelta: (text) => process.stdout.write(text),
-  },
-});
-
-await client.send('读取 package.json');
-await client.send('总结一下');
-
-console.log(client.getSessionId());
-```
-
-### 自定义 Session 存储
-
-```typescript
-import { type KodaXMessage, type KodaXSessionStorage } from 'kodax';
-
-class MyDatabaseStorage implements KodaXSessionStorage {
-  async save(id: string, data: { messages: KodaXMessage[]; title: string; gitRoot: string }) {
-    // 保存到自定义存储
-  }
-
-  async load(id: string) {
-    return null;
-  }
-}
-
-await runKodaX({
-  provider: 'zhipu-coding',
-  reasoningMode: 'auto',
-  context: {
-    gitRoot: '/repo',
-    executionCwd: '/repo',
-  },
-  session: {
-    id: 'my-session-123',
-    storage: new MyDatabaseStorage(),
-  },
-  events: { ... },
-}, '任务');
-```
-
-### 两种模式对比
-
-| 特性 | `runKodaX` | `KodaXClient` |
-|------|------------|---------------|
-| 消息记忆 | 无 | 有 |
-| 调用方式 | 函数 | 类实例 |
-| 上下文 | 每次独立 | 持续累积 |
-| 适用场景 | 单次任务、批处理 | 多步骤、交互式工作流 |
-
-### 工作目录语义
-
-`runKodaX()` 会区分两个相关但不完全相同的概念：
-
-- `context.gitRoot`: 用于项目范围 prompt、权限判断和项目级路径策略的项目根目录。
-- `context.executionCwd`: 用于 prompt 上下文、相对路径工具解析和 shell 执行的工作目录。
-
-如果没有显式传入 `executionCwd`，KodaX 会依次回退到 `gitRoot`，再回退到 `process.cwd()`。
-
-```typescript
-await runKodaX({
-  provider: 'zhipu-coding',
-  context: {
-    gitRoot: '/repo',
-    executionCwd: '/repo/packages/web',
-  },
-}, '审查当前子包并运行本地检查');
-```
-
-这在 monorepo 里尤其有用，因为项目根和当前正在工作的 package 目录往往不是同一个位置。
-
----
-
-## 使用独立 Package
-
-InfCodeX 仍然保留了 KodaX 分支里很重要的模块化能力。很多场景下你不需要整套 CLI，只需要其中某一层。
-
-### `@kodax/ai`
-
-适合只需要 Provider 抽象、流式输出和推理兼容能力的场景。
-
-### `@kodax/agent`
-
-适合需要 Session、消息管理、Token 估算和压缩逻辑的场景。
-
-**核心特性**:
-- 11 个 LLM Provider，统一接口
-- 流式输出支持
-- 推理模式支持
-- 错误处理和重试逻辑
-- 零业务逻辑依赖
-
-适合需要 Markdown Skill 发现和执行能力，但不想引入完整 Coding Runtime 的场景。
-
-### `@kodax/coding`
-
-适合需要完整 Coding Agent Loop、工具执行和 Prompt 体系的场景。
-
-### `@kodax/repl`
-
-### @kodax/coding - Coding Agent
-
-完整的编程 Agent，包含工具和提示词：
-
-```typescript
-import { runKodaX, KodaXClient, KODAX_TOOLS } from '@kodax/coding';
-
-// 使用 runKodaX 处理单次任务
-const result = await runKodaX({
-  provider: 'zhipu-coding',
-  reasoningMode: 'auto',
-  context: {
-    gitRoot: '/repo',
-    executionCwd: '/repo/packages/service',
-  },
-  events: {
-    onTextDelta: (text) => process.stdout.write(text)
-  }
-}, '读取 package.json 并解释依赖');
-
-// 或使用 KodaXClient 进行连续会话
-const client = new KodaXClient({
-  provider: 'anthropic',
-  reasoningMode: 'auto',
-  events: { ... }
-});
-
-await client.send('创建一个新文件');
-await client.send('添加一个函数'); // 有之前消息的上下文
-```
-
-**核心特性**:
-- 8 个内置工具（read, write, edit, bash, glob, grep, undo, ask_user_question）
-- 编程任务的系统提示词
-- Agent 循环实现
-- 会话管理
-- 自动继续模式
-
-### @kodax/repl - 交互式终端 UI
-
-完整的交互式 REPL，基于 Ink/React：
-
-```typescript
-// 通常作为 CLI 使用，但也可以集成
-import { InkREPL } from '@kodax/repl';
-
-// REPL package 提供：
-// - 交互式终端 UI
-// - 权限控制（4 种模式）
-// - 命令系统（/help, /mode 等）
-// - Skills 集成
-// - 主题支持
-```
-
-**核心特性**:
-- 基于 Ink 的 React 组件
-- 3 种权限模式
-- 内置命令
-- 实时流式显示
-- 上下文使用指示器
-
-### Package 依赖关系
+产物在 `dist/binary/<target>/`：
 
 ```
-@kodax/ai (零业务依赖)
-    ↓
-@kodax/agent (依赖 @kodax/ai)
-    ↓
-@kodax/skills (零外部依赖)  →  @kodax/coding (依赖 ai, agent, skills)
-                                        ↓
-                                  @kodax/repl (依赖 coding, ink, react)
+dist/binary/linux-x64/
+├── kodax                          # ~60 MB Bun 编译的二进制
+├── builtin/                       # 内置 skills sidecar
+├── provider-capabilities.json
+├── semantic-worker.js             # Repo intelligence Worker
+├── runtime-worker.js              # SDK Runtime Worker
+└── constructed-handler-worker.js  # Constructed tool Worker
 ```
 
-**导入建议**:
+冒烟验证：`dist/binary/<host>/kodax --version`。
 
-| 使用场景 | Package | 原因 |
-|---------|---------|------|
-| 只需要 LLM 抽象 | `@kodax/ai` | 最小依赖 |
-| 构建自定义 Agent | `@kodax/agent` | 会话 + 消息 + 分词 |
-| 使用 Skills 系统 | `@kodax/skills` | 零依赖，纯 skills |
-| 编程任务 | `@kodax/coding` | 完整的编程 Agent |
-| 终端应用 | `@kodax/repl` | 完整交互体验 |
+**自动发布**：推送 `v*` git tag 会触发 `.github/workflows/release.yml`，在原生 runner 上构建全部 5 个目标、跑冒烟测试，然后自动创建 GitHub Release 并上传 archives + SHA256SUMS。也可以从 Actions UI 用 `workflow_dispatch` 不打 tag 跑流水线测试。
 
----
+详细的构建参数、archive 结构、`KODAX_BUNDLED` / `KODAX_VERSION` build-time defines、故障排查，参见 [docs/release.md](docs/release.md)。
 
-## 支持的 Provider
+## 内置 Provider 列表
 
-| Provider | 环境变量 | 推理支持 | 默认模型 |
-|----------|----------|----------|----------|
-| `anthropic` | `ANTHROPIC_API_KEY` | 原生 | `claude-sonnet-4-6` |
-| `openai` | `OPENAI_API_KEY` | 原生 | `gpt-5.3-codex` |
-| `deepseek` | `DEEPSEEK_API_KEY` | `deepseek-chat` 原生 toggle；`deepseek-reasoner` 按模型切换推理 | `deepseek-chat` |
-| `qwen` | `QWEN_API_KEY` | 原生 | `qwen3.5-plus` |
-| `minimax-coding` | `MINIMAX_API_KEY` | 原生 | `MiniMax-M2.7` |
-| `gemini-cli` | `GEMINI_API_KEY` | prompt-only / CLI bridge | `gemini-cli` |
-| `codex-cli` | `OPENAI_API_KEY` | prompt-only / CLI bridge | `codex-cli` |
+| Provider | 环境变量 | Reasoning | 默认 Model |
+|----------|----------|-----------|-----------|
+| anthropic | `ANTHROPIC_API_KEY` | Native | claude-sonnet-4-6（可 `/model` 切换 `claude-opus-4-6` / `claude-haiku-4-5`） |
+| openai | `OPENAI_API_KEY` | Native | gpt-5.3-codex（可 `/model` 切换 `gpt-5.4` / `gpt-5.3-codex-spark`） |
+| kimi | `KIMI_API_KEY` | Native | kimi-k2.6（可 `/model` 切换 `kimi-k2.7-code` 256K / `k2.5`） |
+| kimi-code | `KIMI_CODE_API_KEY` | Native | kimi-for-coding |
+| qwen | `QWEN_API_KEY` | Native | qwen3.5-plus |
+| zhipu | `ZHIPU_API_KEY` | Native | glm-5（可 `/model` 切换 `glm-5.2` 1M ctx / `glm-5.1` / `glm-5-turbo`） |
+| zhipu-coding | `ZHIPU_CODING_API_KEY` | Native | glm-5（GLM Coding Plan；可 `/model` 切换 `glm-5.2` 1M ctx / `glm-5.1` / `glm-5-turbo`） |
+| zai-coding | `ZAI_CODING_API_KEY` | Native | glm-5.2（GLM Coding Plan 海外站，通过 `api.z.ai` 接入，Anthropic 协议 — 模型清单和 `zhipu-coding` 完全一致） |
+| minimax-coding | `MINIMAX_CODING_API_KEY` | Native | MiniMax-M2.7（可 `/model` 切换 `MiniMax-M3` Frontier Coding，原生多模态 + 1M ctx；以及 `MiniMax-M2.7-highspeed`） |
+| mimo | `MIMO_API_KEY` | Native | mimo-v2.5-pro（小米 MiMo 按量计费，Anthropic 协议） |
+| mimo-coding | `MIMO_CODING_API_KEY` | Native | mimo-v2.5-pro（小米 MiMo Token Plan，Anthropic 协议） |
+| ark-coding | `ARK_CODING_API_KEY` | Native | glm-5.2（火山方舟 Coding Plan — GLM-5.2（别名 `glm-latest`） · Kimi K2.7 Code / K2.6 · MiniMax M3 / M2.7 · DeepSeek V4 Pro / V4 Flash · Doubao Seed 2.0 Code / Pro / Lite · Doubao Seed Code） |
+| deepseek | `DEEPSEEK_API_KEY` | Native | deepseek-v4-flash（可 `/model` 切换 `deepseek-v4-pro`） |
+| gemini-cli | `GEMINI_API_KEY` | Prompt-only / CLI bridge | （通过 gemini CLI） |
+| codex-cli | `OPENAI_API_KEY` | Prompt-only / CLI bridge | （通过 codex CLI） |
 
----
+> 不在表里的端点：用上面"自定义 Provider"那一节加进来即可。
 
-### DeepSeek 示例
+## 内置工具一览
 
-```bash
-# PowerShell
-$env:DEEPSEEK_API_KEY="your_key"
-kodax --provider deepseek "总结这个仓库"
-kodax --provider deepseek --model deepseek-reasoner "分析这个重构方案"
-```
+KodaX 有 50+ 个内置工具，按类别分组如下（实际暴露给 LLM 是一张扁平表）。
 
----
-
-## 工具列表
+**文件操作**
 
 | 工具 | 说明 |
 |------|------|
-| `read` | 读取文件内容，支持 offset / limit |
-| `write` | 写文件 |
-| `edit` | 精确字符串替换，支持 `replace_all` |
-| `bash` | 执行 Shell 命令 |
-| `glob` | 文件模式匹配 |
-| `grep` | 内容搜索 |
-| `undo` | 撤销上一次修改 |
-| `ask_user_question` | 向用户发起选项问题 |
+| `read` | 读取文件（支持 offset / limit） |
+| `write` | 创建新文件或完整重写 |
+| `edit` | 精确字符串替换（支持 `replace_all`） |
+| `multi_edit` | 对同一文件做一批独立 edit，整批原子提交 |
+| `insert_after_anchor` | 在唯一 anchor 后插入内容，避免整文件重写 |
+| `undo` | 撤销最近一次文件修改 |
 
----
+**Shell 与搜索**
 
-## Skills 系统
+| 工具 | 说明 |
+|------|------|
+| `bash` | 执行 shell 命令（支持后台、输出截断） |
+| `glob` / `grep` | 文件名匹配 / 正则内容搜索 |
+| `code_search` | 代码搜索，比裸 grep 噪音更低 |
+| `semantic_lookup` | 借助 repo intelligence 的符号 / 模块 / 流程感知查找 |
+| `web_search` / `web_fetch` | 联网搜索 / 抓取，自带 trust + 时效信号 |
 
-KodaX 分支中更完整的 Skills 说明，在 InfCodeX 中仍然适用。
+**Repo Intelligence working tools**
 
-示例：
+| 工具 | 说明 |
+|------|------|
+| `repo_overview` | 仓库结构、关键区域、入口提示、intelligence 快照 |
+| `changed_scope` | 当前 diff 涉及的文件 / 区域 / 类别 |
+| `changed_diff` / `changed_diff_bundle` | 单文件 / 多文件分页 diff |
+| `module_context` | 模块 capsule（依赖、入口、符号、测试、文档） |
+| `symbol_context` | 定义 + 可能的 caller/callee + 备选 |
+| `process_context` | 入口的近似静态执行/流程 capsule |
+| `impact_estimate` | 符号 / 路径 / 模块的影响面估算 |
+
+**MCP 能力**（配置了 MCP server 时可用）
+
+| 工具 | 说明 |
+|------|------|
+| `mcp_search` / `mcp_describe` / `mcp_call` | 通过共享 capability runtime 发现并调用 MCP 工具 |
+| `mcp_read_resource` / `mcp_get_prompt` | 读取 MCP 资源、获取 MCP prompt |
+
+**Git Worktree**
+
+| 工具 | 说明 |
+|------|------|
+| `worktree_create` | 在隔离分支上新建 worktree，让 agent 安全工作 |
+| `worktree_remove` | 移除 worktree（自带安全检查） |
+
+**Agent 控制 / 交互**
+
+| 工具 | 说明 |
+|------|------|
+| `dispatch_child_task` | 派发子 agent 跑独立调研 / 改动任务。可选 `model_hint: 'fast' \| 'balanced' \| 'deep'`（advisory 标记，routing 在 FEATURE_102 v0.7.45 之前是 no-op） |
+| `send_message` | 给在跑 child 队列追加一条 `<coordinator-instruction>` 指令，child 下一个 turn 边界看到。仅 coordinator 可用。(FEATURE_120, v0.7.39) |
+| `task_stop` | 请求指定 child 优雅退出。当前 tool 原子结束后 child 看到 `<coordinator-stop-request>` 并 emit 最终摘要。仅 coordinator 可用。(FEATURE_120, v0.7.39) |
+| `ask_user_question` | 向用户发起单选 / 多选 / 自由文本提问 |
+| `exit_plan_mode` | Plan 模式下提交最终方案给用户审批（仅 REPL） |
+| `emit_managed_protocol` | managed-task 协议侧信道（verdict role payload）。v0.7.42 FEATURE_184 起默认走 V2 Worker 单循环 + Sidecar Verifier；v0.7.43 FEATURE_193 退役 V1 chain。 |
+
+## Repo Intelligence（内置 full/light 引擎）
+
+KodaX 内置 repo intelligence（`repo_overview` / `module_context` / `symbol_context` / `process_context` / `impact_estimate` 等），让 coding agent 不靠零散 grep/glob 就能理解大型仓库。
+
+REPL 中使用 `/repo-intel status` 查看当前引擎状态。旧的独立 `repointel` host skill 已移除；repo intelligence 已内置于 KodaX，无需任何外部安装。
 
 ```bash
-kodax "帮我审查这段代码"
-kodax "给这个模块写测试"
-kodax /skill:code-review
+# 选一个运行模式（auto | full | light | off）
+kodax --repo-intelligence full --repo-intelligence-trace
 ```
 
-内置 Skills 包括：
+## 仓库结构
 
-- `code-review`
-- `tdd`
-- `git-workflow`
+KodaX 是基于 npm workspaces 的 TypeScript monorepo，**源码层 4 个 workspace 包**（FEATURE_194 v0.7.43 包合并 — 9 → 4，ADR-036），npm 上以单 bundle 包 `@kodax-ai/kodax` 发布 + 11 个 SDK subpath exports（`/agent`、`/llm`、`/coding`、`/media`、`/repl`、`/skills`、`/mcp`、`/session`、`/runtime`、`/a2a`、`/experimental-memory`；ADR-024 + ADR-032 + ADR-038）。核心包：
 
-自定义 Skills 可以放在 `~/.kodax/skills/` 下。
+| Workspace 包 | 作用 | 主要依赖 |
+|----|------|---------|
+| `@kodax-ai/llm` | LLM 抽象层（15 个内置 provider alias + 自定义 provider 注册），可独立使用 | `@anthropic-ai/sdk`, `openai` |
+| `@kodax-ai/agent` | 通用 Agent 框架 —— Runner / runFanOut / runWithIdleYield / ChildTaskRegistry + media/input artifacts + 会话管理 + tokenization + 可插拔 compaction + **inline 后**:session-lineage 子树 + capabilities (mcp + skills + builtin) + tracing（subpaths: `/media`、`/session-lineage`、`/capabilities/mcp`、`/capabilities/skills`、`/tracing`） | `@kodax-ai/llm`, `js-tiktoken`, `fflate`, `jimp`, `yaml` |
+| `@kodax-ai/coding` | Coding Agent:50+ 工具(含 `dispatch_child_task`/`send_message`/`task_stop`)、role prompts、agent loop、auto-continue + repo-intelligence protocol(v0.7.43 inline) | `@kodax-ai/llm`, `@kodax-ai/agent` |
+| `@kodax-ai/repl` | 完整交互式终端 UI（Ink / React、权限模式、命令系统、流式渲染） | `@kodax-ai/coding`, `ink`, `react` |
 
----
+根目录 `src/kodax_cli.ts` 是 CLI 入口；`src/sdk-{agent,llm,coding,media,repl,skills,mcp,session,runtime,a2a,experimental-memory}.ts` 是 SDK subpath 入口；构建产物在 `dist/`，单文件二进制在 `dist/binary/<target>/`。
 
-## Commands
+### 源码层 vs npm 发布层
 
-Commands 是 CLI / REPL 里的 `/xxx` 快捷命令。
+KodaX 有两层结构，SDK 用户需要分开理解：
+
+- **源码层**：上面 4 个 workspace 包（开发者读代码时看到的物理结构）。
+- **npm 发布层**：单个 bundled 包 `@kodax-ai/kodax`，对外暴露 11 个 SDK subpath（SDK 消费者 `import` 时看到的接口）。subpath 分两种角色：
+  - **完整包 subpath**（`/agent`、`/llm`、`/coding`、`/repl`）—— 每个 1:1 对应一个源码包，暴露完整公开 API。
+  - **窄子集 subpath**（`/media`、`/skills`、`/mcp`、`/session`、`/experimental-memory`）—— 从 `/agent` 或 `/repl` 切出聚焦能力；`/experimental-memory` 明确为 opt-in 不稳定接口。
+
+| 源码包 | npm subpath | 类型 | 内容 | 典型消费者 |
+|---|---|---|---|---|
+| `packages/llm`    | `@kodax-ai/kodax/llm`     | 完整包 | 15-alias LLM 抽象 (108 exports) | 独立 LLM 客户端 |
+| `packages/agent`  | `@kodax-ai/kodax/agent`   | 完整包 | Runner / fan-out / 外部 Agent plane / session-lineage / capabilities / tracing (331 exports) | 自定义 agent 框架 |
+| `packages/agent`  | `@kodax-ai/kodax/skills`  | **窄子集** | 仅 Skills 系统 —— `SkillRegistry` / `loadFullSkill` / `expandSkillForLLM` 等 (26 exports = v0.7.43 之前 `@kodax-ai/skills` 完整 API) | Skill 加载器、IDE 插件 |
+| `packages/agent`  | `@kodax-ai/kodax/mcp`     | **窄子集** | 仅 MCP —— `McpCapabilityProvider` / `createMcpTransport` / `searchMcpCatalog` 等 (23 exports) | MCP server 宿主 |
+| `packages/agent`  | `@kodax-ai/kodax/media`   | **窄子集** | 结构化图片/文件/视频输入 artifact helpers (22 exports) | 桌面宿主、多模态客户端 |
+| `packages/agent`  | `@kodax-ai/kodax/experimental-memory` | **实验性子集** | F228-backed `MemoryAgent` / `MemorySession` scope、recall、query、observation、outcome 契约 | 显式评估 FEATURE_260 的 SDK 宿主 |
+| `packages/coding` | `@kodax-ai/kodax/coding`  | 完整包 | Coding agent + 50+ 工具 + repo-intelligence (505 exports) | 构建 Claude Code 形态产品 |
+| `packages/repl`   | `@kodax-ai/kodax/repl`    | 完整包 | Ink TUI + 权限模式 + 命令系统 (217 exports) | 终端 UI 消费者 |
+| `packages/repl`   | `@kodax-ai/kodax/session` | **窄子集** | 仅会话管理 —— `listSessions` / `loadFullTranscript` / `appendClientNotice` / `forkSession` / `compactSession` / `watchSessions` 等 (17 exports) | 读取 session 历史的 IDE 插件和桌面宿主 |
+| `src`             | `@kodax-ai/kodax/runtime` | 宿主 API | Embedded/Worker/daemon facade，含 sessions/runs/events/permissions/catalog/MCP/artifacts/diagnostics/外部 Agent 和 daemon schema (10 exports) | SDK 宿主、Space/IDE、daemon client |
+| `src`             | `@kodax-ai/kodax/a2a` | 集成边界 | A2A 1.0 Agent Card 发现、JSON-RPC/SSE F258 executor、安全 fetch 与鉴权 Runtime Agent server | Agent 编排器和 KodaX 宿主 |
+
+**经验法则**：需要 Runner / Agent / fan-out 时从 `/agent` 引入；只需要 skills 或 mcp API 时从 `/skills` 或 `/mcp` 引入，bundle 更小。窄子集是完整包的真子集 —— **不会**有额外符号。
+
+**Workflow process surface（FEATURE_229，v0.7.50）**：动态工作流不再只是 REPL 私有文本，而是 Agent 层可复用的 process/event/snapshot 契约。SDK 宿主可以订阅 `WorkflowProcessEvent`、轮询 `WorkflowProcessSnapshot`，并通过 `createWorkflowRunManager` / `createWorkflowLifecycleController` 做 stop/pause/resume、读取 final result/artifact、删除/清理 terminal runs、管理 workflow identity/preflight。`/coding` 负责 coding workflow backend 与 run graph，`/repl` 只是消费同一份 snapshot 渲染 UI；SDK 不需要解析 slash-command 输出或 Ink view-model。`KodaXEvents` 回调新增可选 meta 尾参（`KodaXToolEventMeta` / `KodaXActivityEventMeta` / `KodaXWorkflowEventMeta`），宿主据此把每个子 Agent 的 tool/thinking/progress 事件归因到对应 workflow run 与 child id，无需第二套事件协议；生成/保存的工作流脚本在运行前过 `validateRestrictedWorkflowSource`（编译 + 源策略检查）与 generator 的 repair/smoke 循环。分层取舍见 [docs/ADR.md ADR-040](docs/ADR.md)。
+
+**宿主读持久化历史（FEATURE_230 + FEATURE_234，v0.7.51；v0.7.63 hardening）**：面向「宿主读持久化状态」的 additive 闭环。**持久化工具记录回放**——resume 的会话现在会回放助手用过的工具卡片，而不是退化成纯文本。`messages` / `lineage` 仍是 canonical；`SessionData.uiHistory` 成为有界、脱敏、仅 terminal 状态的回放缓存。SDK transcript 契约明确化：`loadSession()` = 活动 model context，`loadFullTranscript()` = 带结构化条目的追加序 host scrollback（`message` / `compaction` / `branch_summary` / `rewind_marker` / `client_notice` / `task_result`）并带 clone provenance（`logicalId` / `sourceEntryId`），`uiHistory` = 可选回放缓存，工具卡片始终可从 canonical messages 重建。宿主可用 `appendClientNotice()` 持久化本地 slash 输出且不进入模型上下文；workflow/child 完成结果通过结构化 `taskResults[]` 暴露，不再要求解析 `<task-completed>` 文本。`rewind_marker` 只用于 host scrollback 审计，不进入 model-context messages。**Workflow run 宿主归属**——`WorkflowProcessTrackerOptions` / `WorkflowProcessSnapshot` 新增 host-owned 不透明 `hostMetadata?: Record<string, string>`，SDK 存储、持久化进 `run.json`、回读回显（含进程重启后）但不解释其含义，让宿主零侧表把 run 归回发起它的 session/surface。未 stamp 的旧 run 诚实回显 `hostMetadata === undefined`。详见 [docs/features/v0.7.51.md](docs/features/v0.7.51.md)。
+
+**会话恢复与 ACP 污染修复（FEATURE_261，v0.7.67）**：直接运行 `kodax -r` 会进入可搜索、上下选择、Tab 补全和翻页的交互式会话选择器，并显示当前选中项的完整 session ID；`kodax -r <值>` 优先按完整 ID 恢复，ID 不存在时再按忽略大小写的完整标题匹配。标题唯一则直接恢复，同名标题则进入只包含候选项的选择器，绝不静默选第一条。`listSessions()` / Runtime / daemon 会话列表新增 `surface` 精确过滤和不透明 `cursor` 分页。ACP session 改为收到首个有效 prompt 后才持久化，ACP 测试强制使用临时 runtime home，避免测试记录写入真实 `~/.kodax/sessions`。`kodax -s cleanup-acp` 只预览严格匹配的空 ACP 污染记录；仅显式追加 `--apply-session-cleanup` 时才归档，不做永久删除。
+
+**实验性 Memory Agent SDK（FEATURE_260，v0.7.68）**：`/experimental-memory` 暴露基于既有 F228 治理平面的薄 `MemoryAgent` 与 scoped `MemorySession`。被动 recall 零等待，`query()` 只读且由主 Action LLM 主动选择；持久化仍必须经过 proposal/preview/fingerprint/apply。召回内容保持低权限，安全与 scope 边界仍由确定性代码门禁承担。直接 session 示例与宿主边界见 [SDK Embedder Guide §21](docs/SDK_EMBEDDER_GUIDE.md#21-experimental-governed-memory--experimental-memory-feature_260-v0768)。
+
+**双向 A2A 1.0（FEATURE_267，v0.7.69）**：`/a2a` 可发现 allowlist 内的 Agent Card，并通过既有 F258 plane 安装 JSON-RPC/SSE executor。配置中的出站 Agent 还会作为 `external:<name>` 自动注册到 embedded CLI 与用户 daemon Runtime，因此主 Agent 无需宿主代码即可编排。入站方向可以发布 Runtime 默认 Agent，或发布一个经过验证的 `~/.kodax/agents/*.md` Agent。内置 listener 仅允许 loopback；公网部署必须由宿主用 TLS、鉴权和授权包住 `handle()`。不宣称支持 A2A 0.3、gRPC、HTTP+JSON、push notification，也不会自动把本地 Agent 暴露到网络。详见 [SDK Embedder Guide §22](docs/SDK_EMBEDDER_GUIDE.md#22-bidirectional-a2a-10--a2a-feature_267-v0769)。
+
+**v0.7.70 互操作加固**：发现得到的 A2A interface 必须与受信 Agent Card
+同源，且只有 Card 宣告 Bearer 鉴权时才会携带凭据。`a2a serve` 按 CLI、环境变量、
+配置、内置默认值的顺序解析 provider，Markdown Agent 也可固定自己的 provider。
+补充输入会继续原 Runtime run；任务历史、保留策略与稳定 cursor 分页均有边界；
+带鉴权的 SSE 会先校验关联信息，流在正常终止但未给出终态时回退 polling。
+仅远端直接 artifact、输出 broker 暂存结果，以及成功授权执行的 Skill 脚本输出
+可以发布；普通工作区写入与本地路径不会暴露。
+
+**v0.7.70 MCP 发现加固**：能力使用精确 ID 和带 revision 的 cursor，结果按真实物理
+容量准入。紧凑 CJK 查询会分词；跨语言 lexical 零匹配只会返回容量内的无损分组
+清单，或一条使用 catalog 语言的简短重试提示。部分 provider 失败会显式保留，
+不会伪装成完整结果。
+
+完整的内置调用路径不需要再写 TypeScript：
 
 ```bash
-kodax /review src/auth.ts
-kodax /test
+# 调用外部 A2A Agent
+kodax a2a add research https://agent.example/.well-known/agent-card.json --effect read
+kodax a2a test research
+kodax a2a call research "总结这个主题"
+
+# 暴露 Runtime 默认 Agent，或指定 ~/.kodax/agents/*.md 中的 Agent 名称
+export KODAX_A2A_TOKEN='请替换为足够长的随机令牌'
+kodax a2a expose                 # 或：kodax a2a expose document-agent
+kodax a2a serve                  # 仅监听 http://127.0.0.1:8765
 ```
 
-Command 定义位于 `~/.kodax/commands/`：
+MCP、A2A、Extension 分别使用 `~/.kodax/integrations/` 下的一个用户级文件。
+可以通过 `kodax config template <mcp|a2a|extensions>` 查看模板，通过
+`kodax integrations migrate --apply` 迁移旧配置，并用 `kodax mcp`、
+`kodax a2a`、`kodax extensions` 管理。迁移只导入旧
+`config.json#mcpServers` 与 `config.json#extensions`；A2A 没有旧来源，且不会
+覆盖已有目标文件。第一次 MCP/Extension 修改可以暂存旧条目；只有在检查目标文件
+和明文 secret 警告后，才应同时使用 `--apply --cleanup-legacy` 清理旧 key。
+运行中的 CLI/daemon 保留最后一个
+有效版本，完整替换 MCP provider、逐条协调 Extension，并热注册出站 A2A Agent。
+`a2a serve` 会在监听前装载已配置的 MCP/Extension 能力并固定执行权威，同时热加载
+公开信息、鉴权和限额。Agent、Skill、Extension 工具权威、工作区、tool policy
+或任务存储变更必须显式重启服务。
+托管 A2A 上下文默认位于 `~/kodax_a2a_server_workspace/<profile>/contexts/`。
+精确授权的 Skill 脚本必须使用隔离策略，并通过 `kodax sandbox doctor`；
+Windows 的一次性显式初始化由 `kodax sandbox setup` 完成。
 
-- `.md` 文件用于提示词命令
-- `.ts` / `.js` 文件用于可编程命令
+**外部 Agent SDK plane（FEATURE_258，v0.7.67）**：`/agent` 导出协议中立的 executor、registration、policy、credential broker、artifact policy、catalog 和 durable task 契约；`/runtime` 通过 `admin.agentRegistrations`、`agents`、`agentTasks` 向 embedded 与 daemon client 提供同一组 DTO API。Executor factory 是宿主函数，只能装入 inline owner，或在创建新的 in-process daemon owner 时装入；不能通过既有 daemon 连接或 Runtime Worker 边界注入。Plane 关闭后是终态：未完成的 wait 和后续所有服务调用都会拒绝；受限 Workflow 脚本会完整校验并传递 `phase` 与外部 `target`。完整所有权、注册、preflight、启动/等待/继续/取消/对账和安全边界见 [SDK Embedder Guide §18](docs/SDK_EMBEDDER_GUIDE.md#18-external-agent-executor-plane-feature_258-v0767)。
+
+**成本受控 Workflow SDK（FEATURE_259，v0.7.67）**：SDK 调用方用 run-scoped `modelTiers` 与 `workflow.maxConcurrency` 配置路由和并发，workflow 作者只表达 `fast` / `balanced` / `deep` 语义意图。terminal workflow event 回显 tier/source/fallback/usage/duration，持久化 `run.json.efficiencyReport` 给出 token coverage、role/tier 启动数、packet-read 拓扑、review wave 和 quality gate 结果。完整配置与遥测读取方式见 [SDK Embedder Guide §20](docs/SDK_EMBEDDER_GUIDE.md#20-cost-disciplined-workflow-routing-and-telemetry-feature_259-v0767)。
+
+**Inline workflow authoring（FEATURE_246，v0.7.58）**：AMA/AMAW 下 Worker 现在可通过 model-callable 的 `run_workflow` 工具在会话内直接编写并运行工作流——先用自己的工具 scout 代码库，再把具体发现烤进每个 child prompt，然后走**不变的** sandbox + 静态校验 + postcondition 验证流水线。它取代 context-blind 的 `sideQuery` generator 成为主交互路径（generator 仅作为显式 `/workflow create` 命令与无 investigating Worker 的 non-interactive/CI 主机的 fallback 保留）；新增结构化 child 输出（`outputSchema`）、无 barrier 的 `wf.pipeline` 分阶段原语、同会话 resume（`resumeFromRunId`）、嵌套 `wf.workflow(...)`，`/workflow create` 重定向到 Worker 的 scout-then-author；`run_workflow` 为 async / idle-yield，不阻塞当前轮。中立的 run-lifecycle manager（`createWorkflowRunManager`）已移入 `@kodax-ai/kodax/agent` 供非 coding SDK 宿主使用。详见 [docs/features/v0.7.58.md](docs/features/v0.7.58.md) 与 [docs/ADR.md](docs/ADR.md) ADR-044/046/047/048/049。
+
+**工作流激活分层（FEATURE_248 + FEATURE_249，v0.7.59）**：三种 agent 模式现在有一致的工作流姿态。**AMAW** 携带 mode-level 的 `ORCHESTRATION DEFAULT` 常驻指令（对齐参考实现的 "ultracode" 姿态）：实质性工作——多文件调查、设计决策、任何做错代价高的任务——默认编排多个交叉验证的 agent，并有 PLAN-TIME COMMITMENT 流程修正把 orchestrate-vs-solo 决策前置到第 0 轮。**AMA** 同样 host `run_workflow` 工具但没有常驻指令——当你用自然语言请求编排时才激活，绝不因复杂度独自触发。**SA** 保持单独作业。该指令通过 `amawOrchestrationAvailable` 关闭泄漏，因此 AMA 与 SA 的 prompt 保持逐字节一致。详见 [docs/features/v0.7.59.md](docs/features/v0.7.59.md)。
+
+**managed 工具路径的渐进披露（FEATURE_250，v0.7.60）**：deferred-tool 渐进披露机制——此前仅 SA path 拥有——现在也应用于 AMA/AMAW 的 **managed** path。缓存冷启的 managed 轮次对 13 个 non-mcp 延迟工具（repo-intelligence + web/code + goal）携带一行 search hint 而非完整描述；每个工具的 `input_schema` 不变，因此仍可直接调用，完整描述按需通过 `tool_search` 拉取。`mcp_*` 保持常驻，`run_workflow` 不动。对用户透明；由两个 5-alias eval panel 验证（DEFER_SAFE 5/5，0% read/grep 回退）。详见 [docs/features/v0.7.60.md](docs/features/v0.7.60.md)。
+
+**上下文高效的工具结果 + Workflow 质量预检（FEATURE_251 + FEATURE_252，v0.7.61；2026-07-14 纠偏）**：本地工具先完整采集，只采用契约等价且严格更短的无损规范化；命令专用 Bash 有损过滤默认关闭，compound Bash 不使用语义 adapter。并行结果由唯一 owner 按最终 provider 请求统一判容：先求满足 `Pmax + 输出预留 + max(2048, Pmax 的 3%) <= 上下文窗口` 的最大最终输入，再只使用剩余物理容量。能放下就逐字交付，只有真实溢出才持久化完整结果并返回 `KODAX_RESULT_INCOMPLETE`。历史压缩使用同一物理容量规则：容量内不做默认有损 microcompaction，真实压力下 summary-first，无法形成可恢复请求时 typed failure，禁止静默删消息；静态提前百分比仅为显式 opt-in。FEATURE_252 的确定性 workflow 启动前合约 lint 保持不变。详见 [docs/features/v0.7.61.md](docs/features/v0.7.61.md) 与 [docs/ADR.md ADR-050](docs/ADR.md)。
+
+```
+KodaX/                       # 4 workspace packages(FEATURE_194 v0.7.43)
+├── packages/
+│   ├── llm/                 # @kodax-ai/llm —— 15 个内置 provider alias
+│   ├── agent/               # @kodax-ai/agent —— Runner / fan-out / idle-yield + 子树:
+│   │   ├── session-lineage/ # 分支 session tree (v0.7.43 inline)
+│   │   ├── capabilities/
+│   │   │   ├── mcp/         # MCP 集成 (v0.7.43 inline)
+│   │   │   └── skills/      # Skills 标准实现 + builtin (v0.7.43 inline)
+│   │   └── tracing/         # 追踪 / 可观测性 (v0.7.43 inline)
+│   ├── coding/              # @kodax-ai/coding —— tools + prompts + agent loop
+│   │   └── repo-intelligence/ # 含 protocol.ts (v0.7.43 inline)
+│   └── repl/                # @kodax-ai/repl —— Ink TUI
+├── src/
+│   ├── kodax_cli.ts         # CLI 主入口（bin: `kodax`）
+│   └── sdk-*.ts             # SDK subpath 入口 → @kodax-ai/kodax/{agent,llm,coding,media,repl,skills,mcp,session,runtime,a2a,experimental-memory}
+├── scripts/
+│   ├── build-bundle.mjs     # esbuild 单 bundle 多 entry 打包（CLI + root + 11 SDK subpath + chunks）
+│   ├── build-binary.mjs     # Bun --compile 单文件二进制打包
+│   └── release.mjs          # ADR-024 release-time pkg name/exports 注入
+└── .github/workflows/
+    └── release.yml          # 推 v* tag 自动发布 GitHub Release
+```
+
+这套拆分让你既可以把 KodaX 当成完整产品使用，也可以只复用其中某一层能力 —— SDK 消费者装 `@kodax-ai/kodax` 后从 subpath（`@kodax-ai/kodax/agent` 等）按需 import。
+## API 导出
+
+```typescript
+// 主函数
+export { runKodaX, KodaXClient };
+
+// 类型
+export type {
+  KodaXEvents, KodaXOptions, KodaXResult,
+  KodaXMessage, KodaXContentBlock,
+  KodaXSessionStorage, KodaXToolDefinition
+};
+
+// 工具
+export { KODAX_TOOLS, KODAX_TOOL_REQUIRED_PARAMS, executeTool };
+
+// Provider
+export { getProvider, KODAX_PROVIDERS, KodaXBaseProvider };
+
+// 工具函数
+export {
+  estimateTokens,
+  getGitRoot, getGitContext, getEnvContext, getProjectSnapshot,
+  checkPromiseSignal
+};
+```
 
 ---
 
-## 配置体系
+## 术语说明
 
-仓库内置了完整的配置模板，支持：
-
-- 默认 provider 选择
-- provider 下的 model 选择
-- provider model override
-- 自定义 provider 定义
-- 统一 reasoning mode
-- compaction 压缩配置
-- permission mode 默认值
-
-当前文档中的配置文件路径是：
-
-```text
-~/.kodax/config.json
-```
-
-完整模板可参考 `config.example.jsonc`。
+| 术语 | 含义 | 位置 |
+|------|------|------|
+| **Skills** | Agent 能力（KODAX_TOOLS: read, write, bash 等）+ 扩展 Skills | Coding 层 + Skills 层 |
+| **Commands** | CLI 快捷命令（/review, /test 等） | REPL 层 |
 
 ---
 
@@ -1121,89 +732,77 @@ Command 定义位于 `~/.kodax/commands/`：
 # 开发模式
 npm run dev "你的任务"
 
-# 构建所有包
+# 构建
+npm run build
+
+# 可选：只构建 workspace packages
 npm run build:packages
 
-# 构建根 CLI
-npm run build
+# 打包成单文件二进制（当前平台 / 全平台）
+npm run build:binary
+npm run build:binary:all
 
 # 测试
 npm test
 
-# 清理生成产物
+# Eval-driven development（provider 矩阵、identity round-trip 等）
+npm run test:eval
+
+# 清理
 npm run clean
 ```
 
----
+### Repo Intelligence 缓存目录
 
-## 设计哲学
+KodaX 现在会把 Repo Intelligence 的本地缓存分成内置引擎 profile：
 
-InfCodeX 体现出一套相对清晰的设计哲学：
+- `.agent/repo-intelligence/`
+  - full 引擎索引、缓存和现有 task-engine 产物。
+- `.agent/repo-intelligence/light/`
+  - light 模式启发式索引缓存。
 
-- **透明优于黑盒**
-- **可组合优于单体封装**
-- **执行优于对话表演**
-- **可治理优于无边界自动化**
-- **可演进优于一次性工具化**
+这样拆开的目的很明确：
 
-这正是它为什么不仅能做 CLI，还能成为更大工程智能体体系基础设施的原因。
+- full 和 light profile 可以独立重建。
+- light 模式的低置信度状态不会被误认为 full 引擎状态。
+- 未来缓存迁移可以删除一个 profile，而不破坏另一个。
 
----
-
-## 演进方向
-
-结合当前仓库结构和已有文档，InfCodeX 很自然的后续方向包括：
-
-- 更强的多智能体协同
-- 更多内置 skills
-- 更成熟的插件 / 扩展能力
-- 更深的 SDLC 集成
-- IDE / Web 形态扩展
-- 与 InfOne 的更紧密协同
+`.agent/repo-intelligence/` 是本地生成目录，不应该提交到 Git。
 
 ---
 
-## 仓库说明
+## 文档
 
-当前仓库仍处于快速演进阶段，因此存在一些文档与实现前后不完全一致的地方，例如：
-
-- [README.md](README.md) - 英文文档
-- [docs/ADR.md](docs/ADR.md) - 架构决策记录
+- [README.md](README.md) - 英文版 README
+- [docs/SDK_EMBEDDER_GUIDE.md](docs/SDK_EMBEDDER_GUIDE.md) - SDK 宿主集成与 v0.7.70 公共 API 契约
+- [docs/release.md](docs/release.md) - 单文件二进制构建与发布流程
+- [docs/PRD.md](docs/PRD.md) - 产品需求
+- [docs/ADR.md](docs/ADR.md) - 架构决策
 - [docs/HLD.md](docs/HLD.md) - 高层设计
 - [docs/DD.md](docs/DD.md) - 详细设计
-- [docs/PRD.md](docs/PRD.md) - 产品需求文档
-- [docs/FEATURE_LIST.md](docs/FEATURE_LIST.md) - Feature 跟踪与路线图索引
-- [docs/features/README.md](docs/features/README.md) - Feature Design 索引
+- [docs/FEATURE_LIST.md](docs/FEATURE_LIST.md) - Feature 跟踪
 - [docs/test-guides/](docs/test-guides/) - 功能专用测试指南
-- [CHANGELOG.md](CHANGELOG.md) - 版本历史
+- [CHANGELOG.md](CHANGELOG.md) - 更新日志（v0.7.0+；更早版本见 [CHANGELOG_ARCHIVE](docs/CHANGELOG_ARCHIVE.md)）
 
-因此，这份 README 更强调 **稳定的架构事实**，同时保留了 KodaX 分支中对日常使用非常有价值的详细说明。
-
----
-
-## 相关文档
-
-- [English README](./README.md)
-- [Architecture Overview](./docs/ARCHITECTURE_OVERVIEW.md)
-- [架构概览（中文）](./docs/ARCHITECTURE_OVERVIEW_CN.md)
-- [InfCodeX + InfOne Positioning](./docs/PROJECT_POSITIONING.md)
-- [InfCodeX + InfOne 定位说明](./docs/PROJECT_POSITIONING_CN.md)
-- [Feature List](./docs/FEATURE_LIST.md)
-- [特性发布说明索引](./docs/features/README.md)
-- [贡献指南](./CONTRIBUTING.md)
-- [更新日志](./CHANGELOG.md)
 
 ---
 
 ## 许可证
 
-[Apache License 2.0](./LICENSE)
+[KodaX-AI Fair Core License (KAI-FCL) 1.0](LICENSE) - Copyright 2026 icetomoyo。
 
----
+KAI-FCL 是 source-available / fair-core 协议，不是 OSI open source。商业、
+企业、托管部署、付费服务或客户再分发用途，需要 KodaX-AI 授权，并在需要时
+具备有效 entitlement。
 
-## 总结
+KodaX-AI 当前官方许可政策：KodaX 0.7.70 及之后版本，在由 KodaX-AI 带有该
+notice 分发时，适用 KAI-FCL 或配套 KodaX-AI 客户条款。此前已带 Apache-2.0
+notice 分发的历史 tag、source archive、二进制、npm 包或其他副本，仍只对那些
+特定副本保留 Apache-2.0。
 
-**InfCodeX 的重要性不在于它是另一个 CLI，而在于它有机会成为软件工程智能体真正的执行底座。**
+## 相关仓库
 
-对今天，它是一个执行力很强的 AI Coding CLI。
-对未来，它可以成为词元无限更大智能体组织体系中最关键的工程执行节点之一。
+建议把公仓和私仓 clone 到同一个父目录下，例如：
+
+- public repo: `<parent>/KodaX`
+- private repo: `<parent>/KodaX-private`（未公开发布）

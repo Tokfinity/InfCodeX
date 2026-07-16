@@ -4,7 +4,7 @@
  * 测试 CLI 特有功能：Commands 系统、Spinner 等
  */
 
-import { describe, it, expect, beforeEach, afterEach, vi } from 'vitest';
+import { describe, it, expect, beforeEach, afterEach } from 'vitest';
 import fs from 'fs/promises';
 import fsSync from 'fs';
 import path from 'path';
@@ -13,71 +13,17 @@ import { Command } from 'commander';
 
 // 从 kodax_cli 导入 Commands 系统
 import {
+  configureKodaXRootCommand,
   loadCommands,
-  main,
   parseCommandCall,
   parsePermissionModeOption,
   processCommandCall,
   KODAX_COMMANDS_DIR,
   KodaXCommand,
-  resolveCliParallel,
 } from '../src/kodax_cli.js';
-
-const { runAampServerMock } = vi.hoisted(() => ({
-  runAampServerMock: vi.fn(),
-}));
-
-const { aampSdkTransportCtorMock } = vi.hoisted(() => ({
-  aampSdkTransportCtorMock: vi.fn(),
-}));
-
-const { prepareRuntimeConfigMock } = vi.hoisted(() => ({
-  prepareRuntimeConfigMock: vi.fn(() => ({})),
-}));
-
-const { createDefaultAampLoggerMock } = vi.hoisted(() => ({
-  createDefaultAampLoggerMock: vi.fn(() => ({
-    debug: vi.fn(),
-    info: vi.fn(),
-    error: vi.fn(),
-  })),
-}));
-
-vi.mock('../src/aamp_server.js', async (importOriginal) => {
-  const actual = await importOriginal<typeof import('../src/aamp_server.js')>();
-  return {
-    ...actual,
-    runAampServer: runAampServerMock,
-  };
-});
-
-vi.mock('../src/aamp_sdk_transport.js', () => ({
-  AampSdkTransport: class {
-    constructor(config: unknown, logger: unknown) {
-      aampSdkTransportCtorMock(config, logger);
-    }
-  },
-}));
-
-vi.mock('../src/aamp_logger.js', async (importOriginal) => {
-  const actual = await importOriginal<typeof import('../src/aamp_logger.js')>();
-  return {
-    ...actual,
-    createDefaultAampLogger: createDefaultAampLoggerMock,
-  };
-});
-
-vi.mock('@kodax/repl', async (importOriginal) => {
-  const actual = await importOriginal<typeof import('@kodax/repl')>();
-  return {
-    ...actual,
-    prepareRuntimeConfig: prepareRuntimeConfigMock,
-  };
-});
+import { normalizeCliSessionFlags } from '../src/cli_option_helpers.js';
 
 // 默认 provider
-const KODAX_DEFAULT_PROVIDER = 'zhipu-coding';
-
 // ============== 模拟测试环境 ==============
 
 const TEST_DIR = path.join(os.tmpdir(), 'kodax-cli-test-' + Date.now());
@@ -162,308 +108,6 @@ describe('Commands System', () => {
   });
 });
 
-describe('AAMP CLI', () => {
-  beforeEach(() => {
-    prepareRuntimeConfigMock.mockReset();
-    prepareRuntimeConfigMock.mockReturnValue({});
-    createDefaultAampLoggerMock.mockClear();
-    delete process.env.KODAX_AAMP_EMAIL;
-    delete process.env.KODAX_AAMP_JMAP_TOKEN;
-    delete process.env.KODAX_AAMP_JMAP_URL;
-    delete process.env.KODAX_AAMP_SMTP_HOST;
-    delete process.env.KODAX_AAMP_SMTP_PASSWORD;
-    delete process.env.KODAX_AAMP_LOG;
-  });
-
-  afterEach(() => {
-    vi.clearAllMocks();
-    delete process.env.KODAX_AAMP_EMAIL;
-    delete process.env.KODAX_AAMP_JMAP_TOKEN;
-    delete process.env.KODAX_AAMP_JMAP_URL;
-    delete process.env.KODAX_AAMP_SMTP_HOST;
-    delete process.env.KODAX_AAMP_SMTP_PASSWORD;
-    delete process.env.KODAX_AAMP_LOG;
-  });
-
-  it('reports a missing serve subcommand instead of treating aamp options as root command options', async () => {
-    const argv = process.argv;
-    const consoleErrorSpy = vi.spyOn(console, 'error').mockImplementation(() => {});
-    const originalExitCode = process.exitCode;
-    process.exitCode = undefined;
-    process.argv = [
-      'node',
-      'kodax',
-      'aamp',
-      '--profile', 'default',
-    ];
-
-    try {
-      await main();
-    } finally {
-      process.argv = argv;
-      process.exitCode = originalExitCode;
-    }
-
-    expect(consoleErrorSpy).toHaveBeenCalledWith(
-      expect.stringContaining('[Missing subcommand] `kodax aamp` requires `serve`.'),
-    );
-    expect(consoleErrorSpy).toHaveBeenCalledWith(
-      expect.stringContaining('Use `kodax aamp serve [options]`.'),
-    );
-    consoleErrorSpy.mockRestore();
-  });
-
-  it('wires kodax aamp serve into the AAMP transport adapter', async () => {
-    const argv = process.argv;
-    process.argv = [
-      'node',
-      'kodax',
-      'aamp',
-      'serve',
-      '--email', 'agent@example.com',
-      '--jmap-token', 'token',
-      '--jmap-url', 'http://localhost:8080/jmap',
-      '--smtp-host', 'localhost',
-      '--smtp-password', 'secret',
-      '--cwd', TEST_DIR,
-    ];
-
-    try {
-      await main();
-    } finally {
-      process.argv = argv;
-    }
-
-    expect(aampSdkTransportCtorMock).toHaveBeenCalledWith(expect.objectContaining({
-      email: 'agent@example.com',
-      mailboxToken: 'token',
-      baseUrl: 'http://localhost:8080',
-      smtpHost: 'localhost',
-      smtpPort: 587,
-      smtpPassword: 'secret',
-      rejectUnauthorized: true,
-    }), expect.any(Object));
-    expect(runAampServerMock).toHaveBeenCalledWith(expect.objectContaining({
-      repoRoot: TEST_DIR,
-      mailboxEmail: 'agent@example.com',
-      transport: expect.any(Object),
-    }));
-    expect(createDefaultAampLoggerMock).toHaveBeenCalledWith({
-      logLevel: 'info',
-    });
-  });
-
-  it('loads AAMP profile defaults from ~/.kodax/config.json when --profile is specified', async () => {
-    const argv = process.argv;
-    prepareRuntimeConfigMock.mockReturnValue({
-      aamp: {
-        profiles: {
-          mailboxB: {
-            email: 'config-agent@example.com',
-            jmapToken: 'config-token',
-            jmapUrl: 'https://meshmail.ai/jmap',
-            smtpHost: 'meshmail.ai',
-            smtpPort: 2525,
-            smtpPassword: 'config-secret',
-            allowInsecureTls: true,
-            logLevel: 'debug',
-          },
-        },
-      },
-    });
-    process.argv = [
-      'node',
-      'kodax',
-      'aamp',
-      'serve',
-      '--profile', 'mailboxB',
-      '--cwd', TEST_DIR,
-    ];
-
-    try {
-      await main();
-    } finally {
-      process.argv = argv;
-    }
-
-    expect(aampSdkTransportCtorMock).toHaveBeenCalledWith(expect.objectContaining({
-      email: 'config-agent@example.com',
-      mailboxToken: 'config-token',
-      baseUrl: 'https://meshmail.ai',
-      smtpHost: 'meshmail.ai',
-      smtpPort: 2525,
-      smtpPassword: 'config-secret',
-      rejectUnauthorized: false,
-    }), expect.any(Object));
-    expect(runAampServerMock).toHaveBeenCalledWith(expect.objectContaining({
-      mailboxEmail: 'config-agent@example.com',
-    }));
-    expect(createDefaultAampLoggerMock).toHaveBeenCalledWith({
-      logLevel: 'debug',
-    });
-  });
-
-  it('lets CLI flags override a configured AAMP profile', async () => {
-    const argv = process.argv;
-    prepareRuntimeConfigMock.mockReturnValue({
-      aamp: {
-        profiles: {
-          mailboxB: {
-            email: 'config-agent@example.com',
-            jmapToken: 'config-token',
-            jmapUrl: 'https://meshmail.ai/jmap',
-            smtpHost: 'meshmail.ai',
-            smtpPort: 2525,
-            smtpPassword: 'config-secret',
-            allowInsecureTls: false,
-            logLevel: 'debug',
-          },
-        },
-      },
-    });
-    process.argv = [
-      'node',
-      'kodax',
-      'aamp',
-      'serve',
-      '--profile', 'mailboxB',
-      '--email', 'override@example.com',
-      '--smtp-password', 'override-secret',
-      '--log-level', 'error',
-      '--allow-insecure-tls',
-      '--cwd', TEST_DIR,
-    ];
-
-    try {
-      await main();
-    } finally {
-      process.argv = argv;
-    }
-
-    expect(aampSdkTransportCtorMock).toHaveBeenCalledWith(expect.objectContaining({
-      email: 'override@example.com',
-      mailboxToken: 'config-token',
-      smtpPassword: 'override-secret',
-      rejectUnauthorized: false,
-    }), expect.any(Object));
-    expect(createDefaultAampLoggerMock).toHaveBeenCalledWith({
-      logLevel: 'error',
-    });
-    expect(runAampServerMock).toHaveBeenCalledWith(expect.objectContaining({
-      mailboxEmail: 'override@example.com',
-    }));
-  });
-
-  it('requires all mandatory CLI flags when no profile is specified', async () => {
-    const argv = process.argv;
-    process.env.KODAX_AAMP_EMAIL = 'ignored@example.com';
-    process.argv = [
-      'node',
-      'kodax',
-      'aamp',
-      'serve',
-      '--cwd', TEST_DIR,
-    ];
-
-    try {
-      await expect(main()).rejects.toThrow(
-        'Missing required AAMP options: email, mailboxToken, baseUrl, smtpHost, smtpPassword. Provide them via --profile <name> or explicit CLI flags.',
-      );
-    } finally {
-      process.argv = argv;
-    }
-
-    expect(aampSdkTransportCtorMock).not.toHaveBeenCalled();
-    expect(runAampServerMock).not.toHaveBeenCalled();
-  });
-
-  it('fails when the requested AAMP profile does not exist', async () => {
-    const argv = process.argv;
-    prepareRuntimeConfigMock.mockReturnValue({
-      aamp: {
-        profiles: {
-          mailboxA: {
-            email: 'config-agent@example.com',
-          },
-        },
-      },
-    });
-    process.argv = [
-      'node',
-      'kodax',
-      'aamp',
-      'serve',
-      '--profile', 'mailboxB',
-      '--cwd', TEST_DIR,
-    ];
-
-    try {
-      await expect(main()).rejects.toThrow(
-        'Unknown AAMP profile "mailboxB". Add it under aamp.profiles in ~/.kodax/config.json or omit --profile and pass all required CLI flags.',
-      );
-    } finally {
-      process.argv = argv;
-    }
-  });
-
-  it('fails when aamp.profiles is malformed', async () => {
-    const argv = process.argv;
-    prepareRuntimeConfigMock.mockReturnValue({
-      aamp: {
-        profiles: 'bad-shape',
-      },
-    });
-    process.argv = [
-      'node',
-      'kodax',
-      'aamp',
-      'serve',
-      '--profile', 'mailboxB',
-      '--cwd', TEST_DIR,
-    ];
-
-    try {
-      await expect(main()).rejects.toThrow(
-        'Invalid AAMP config in ~/.kodax/config.json: expected aamp.profiles to be an object.',
-      );
-    } finally {
-      process.argv = argv;
-    }
-  });
-
-  it('accepts canonical mailboxToken/baseUrl CLI flags', async () => {
-    const argv = process.argv;
-    process.argv = [
-      'node',
-      'kodax',
-      'aamp',
-      'serve',
-      '--email', 'agent@example.com',
-      '--mailbox-token', 'token',
-      '--base-url', 'http://localhost:8080/jmap',
-      '--smtp-host', 'localhost',
-      '--smtp-password', 'secret',
-      '--cwd', TEST_DIR,
-    ];
-
-    try {
-      await main();
-    } finally {
-      process.argv = argv;
-    }
-
-    expect(aampSdkTransportCtorMock).toHaveBeenCalledWith(expect.objectContaining({
-      email: 'agent@example.com',
-      mailboxToken: 'token',
-      baseUrl: 'http://localhost:8080',
-      smtpHost: 'localhost',
-      smtpPort: 587,
-      smtpPassword: 'secret',
-      rejectUnauthorized: true,
-    }), expect.any(Object));
-  });
-});
-
 describe('parseCommandCall', () => {
   it('should parse /command without args', () => {
     const result = parseCommandCall('/review');
@@ -488,7 +132,12 @@ describe('parseCommandCall', () => {
     const result = parseCommandCall('/search find this pattern');
     expect(result).not.toBeNull();
     expect(result![0]).toBe('search');
-    // Note: current implementation only captures first word after command
+    expect(result![1]).toBe('find this pattern');
+  });
+
+  it('should trim whitespace around command args', () => {
+    const result = parseCommandCall('/review   src/auth.ts --deep  ');
+    expect(result).toEqual(['review', 'src/auth.ts --deep']);
   });
 });
 
@@ -502,23 +151,13 @@ describe('processCommandCall', () => {
       type: 'prompt',
     });
 
-    const result = await processCommandCall('test', 'file.ts', commands, async () => ({
-      success: true,
-      lastText: 'mock',
-      messages: [],
-      sessionId: 'mock-session',
-    }));
+    const result = await processCommandCall('test', 'file.ts', commands, async () => 'mock');
     expect(result).toBe('Review this code: file.ts');
   });
 
   it('should return null for unknown command', async () => {
     const commands = new Map<string, KodaXCommand>();
-    const result = await processCommandCall('unknown', 'args', commands, async () => ({
-      success: true,
-      lastText: 'mock',
-      messages: [],
-      sessionId: 'mock-session',
-    }));
+    const result = await processCommandCall('unknown', 'args', commands, async () => 'mock');
     expect(result).toBeNull();
   });
 
@@ -531,12 +170,7 @@ describe('processCommandCall', () => {
       type: 'prompt',
     });
 
-    const result = await processCommandCall('simple', 'ignored', commands, async () => ({
-      success: true,
-      lastText: 'mock',
-      messages: [],
-      sessionId: 'mock-session',
-    }));
+    const result = await processCommandCall('simple', 'ignored', commands, async () => 'mock');
     expect(result).toBe('Just do something');
   });
 });
@@ -654,7 +288,10 @@ describe('CLI Entry Point', () => {
   it('should have correct CLI entry in package.json', async () => {
     const pkgPath = path.join(process.cwd(), 'package.json');
     const pkg = JSON.parse(await fs.readFile(pkgPath, 'utf-8'));
-    expect(pkg.bin.kodax).toBe('./dist/kodax_cli.js');
+    // v0.7.43 76e471cc deliberately baked the published bin shape (no `./`
+    // prefix) into the dev package.json so `npm link` matches the published
+    // package. Assert the intentional value.
+    expect(pkg.bin.kodax).toBe('scripts/kodax-bin.cjs');
   });
 
   it('should export commands directory constant', () => {
@@ -671,6 +308,16 @@ describe('CLI Entry Point', () => {
     expect(source).toContain("command('acp')");
     expect(source).toContain('kodax -h acp');
     expect(source).toContain('kodax acp serve');
+    expect(source).toContain(".option('--effort <level>', 'Reasoning effort");
+    expect(source).toContain('const options = mergeCommandOptionsWithGlobals(localOptions, command);');
+    expect(source).toContain('effort: options.effort');
+    expect(source).not.toContain("--agent-mode <mode>          ') + 'Agent mode");
+  });
+
+  it('should pass resolved CLI effort into interactive mode startup options', async () => {
+    const source = await fs.readFile(path.join(process.cwd(), 'src', 'kodax_cli.ts'), 'utf-8');
+    expect(source).toContain('const interactiveOptions = {');
+    expect(source).toContain('effort: kodaXOptions.effort');
   });
 
   it('should keep the root command executable when subcommands are registered', () => {
@@ -701,24 +348,40 @@ describe('CLI Entry Point', () => {
     const source = await fs.readFile(path.join(process.cwd(), 'src', 'kodax_cli.ts'), 'utf-8');
     expect(source).toContain('--model <name>');
     expect(source).toContain('kodax -h project');
+    expect(source).toContain('acp, aamp, skill, sessions, init, project, auto, provider, thinking, team, print');
+    expect(source).toContain('kodax aamp serve --profile work');
     expect(source).toContain('/project ...            Project workflow commands');
     expect(source).toContain('Legacy no-op; current CLI already starts a fresh session by default');
-    expect(source).toContain('Resume session by ID (no ID = list recent sessions, then resume the latest)');
-    expect(source).toContain('/mode [plan|accept-edits|auto-in-project]');
+    expect(source).toContain('Resume session by ID or exact title (no value = open searchable session picker)');
+    expect(source).toContain('Multiple sessions have the title');
+    expect(source).not.toContain('list recent sessions, then resume the latest');
+    expect(source).toContain('/mode [plan|accept-edits|auto]');
     expect(source).toContain('Backward-compat alias; no effect in non-REPL CLI');
-    expect(source).not.toContain('Pick session to resume');
+    expect(source).toContain('runSessionPicker');
+    expect(source).not.toContain('Auto-select the most recent session for resume');
     expect(source).not.toContain('echo "task" | kodax -p -');
     expect(source).not.toContain('/mode [code|ask]');
     expect(source).not.toContain('Enter interactive mode (auto-resume)');
   });
 
-  it('should document provider and team caveats in help topics', async () => {
+  it('should load the bounded resume picker dataset in one list pass', async () => {
+    const source = await fs.readFile(path.join(process.cwd(), 'src', 'kodax_cli.ts'), 'utf-8');
+    const loader = source.match(
+      /async function loadResumableSessions[\s\S]*?\n}\n\nasync function main/,
+    )?.[0] ?? '';
+
+    expect(loader).not.toBe('');
+    expect(loader.match(/listSessions\(/g)).toHaveLength(1);
+    expect(loader).not.toContain('while (');
+  });
+
+  it('should document provider and project caveats in help topics', async () => {
     const source = await fs.readFile(path.join(process.cwd(), 'src', 'kodax_cli.ts'), 'utf-8');
     expect(source).toContain('CLI bridge provider (latest-user-message only, MCP unavailable)');
-    expect(source).toContain('Legacy orchestration-based parallel execution for loosely coupled tasks.');
-    expect(source).toContain('Prefer --agent-mode ama|sa for the product path. --team is being sunset.');
     expect(source).toContain('Project mode spans two surfaces: non-REPL bootstrap commands and REPL /project commands.');
     expect(source).toContain('/project verify [#index|--last]');
+    expect(source).not.toContain('--team');
+    expect(source).not.toContain('Legacy orchestration-based parallel execution');
   });
 
   it('should keep custom skill subcommand help aligned with current options', async () => {
@@ -733,20 +396,7 @@ describe('CLI Entry Point', () => {
 
 // 创建与 kodax_cli.ts 一致的 Command 配置（全局可复用）
 function createTestCommand(): Command {
-  return new Command()
-    .allowUnknownOption(false)
-    .option('-p, --print <text>', 'Print mode: run single task and exit')
-    .option('-c, --continue', 'Continue most recent conversation in current directory')
-    .option('-n, --new', 'Legacy no-op; current CLI already starts a fresh session by default')
-    .option('-r, --resume [id]', 'Resume session by ID (no ID = list recent sessions, then resume the latest)')
-    .option('-m, --provider <name>', 'LLM provider', KODAX_DEFAULT_PROVIDER)
-    .option('--model <name>', 'Model override')
-    .option('-t, --thinking', 'Enable thinking mode')
-    .option('--reasoning <mode>', 'Reasoning mode: off, auto, quick, balanced, deep')
-    .option('-y, --auto', 'Backward-compat alias; no effect in non-REPL CLI')
-    .option('-s, --session <op>', 'Legacy session operations: list, resume, delete <id>, delete-all, or raw session ID')
-    .option('-j, --parallel', 'Parallel tool execution')
-    .option('--no-session', 'Disable session persistence (print mode only)');
+  return configureKodaXRootCommand(new Command().name('kodax').version('0.0.0'));
 }
 
 // ============== CLI 选项解析测试 ==============
@@ -823,11 +473,11 @@ describe('CLI Option Parsing', () => {
     expect(opts.model).toBe('gpt-5.4');
   });
 
-  it('should have default provider', () => {
+  it('should leave provider unset for runtime config resolution', () => {
     const program = createTestCommand();
     program.parse(['node', 'test']);
     const opts = program.opts();
-    expect(opts.provider).toBe(KODAX_DEFAULT_PROVIDER);
+    expect(opts.provider).toBeUndefined();
   });
 
   it('should parse -t (thinking) option', () => {
@@ -874,26 +524,48 @@ describe('CLI Option Parsing', () => {
 
   it('should parse -s (session) option with delete', () => {
     const program = createTestCommand();
-    program.parse(['node', 'test', '-s', 'delete abc123']);
+    program.parse(['node', 'test', '-s', 'delete', 'abc123']);
     const opts = program.opts();
-    expect(opts.session).toBe('delete abc123');
-  });
-
-  it('should parse -j (parallel) option', () => {
-    const program = createTestCommand();
-    program.parse(['node', 'test', '-j']);
-    const opts = program.opts();
-    expect(opts.parallel).toBe(true);
+    expect(opts.session).toBe('delete');
+    expect(program.args).toEqual(['abc123']);
   });
 
   it('should parse multiple short options together', () => {
     const program = createTestCommand();
-    program.parse(['node', 'test', '-t', '-j', '-m', 'kimi', '-c']);
+    program.parse(['node', 'test', '-t', '-m', 'kimi', '-c']);
     const opts = program.opts();
     expect(opts.thinking).toBe(true);
-    expect(opts.parallel).toBe(true);
     expect(opts.provider).toBe('kimi');
     expect(opts.continue).toBe(true);
+  });
+
+  it('should reject retired -j option', () => {
+    const program = createTestCommand();
+    program.exitOverride();
+    expect(() => program.parse(['node', 'test', '-j'])).toThrow();
+  });
+
+  it('should parse current root-only options', () => {
+    const program = createTestCommand();
+    program.parse([
+      'node',
+      'test',
+      '--mode',
+      'json',
+      '--agent-mode',
+      'amaw',
+      '--repo-intelligence',
+      'full',
+      '--repo-intelligence-trace',
+      '--max-iter',
+      '12',
+    ]);
+    const opts = program.opts();
+    expect(opts.mode).toBe('json');
+    expect(opts.agentMode).toBe('amaw');
+    expect(opts.repoIntelligence).toBe('full');
+    expect(opts.repoIntelligenceTrace).toBe(true);
+    expect(opts.maxIter).toBe('12');
   });
 
   it('should parse short and long options mixed', () => {
@@ -935,9 +607,10 @@ describe('Session Management', () => {
 
   it('should parse session delete command', () => {
     const program = createTestCommand();
-    program.parse(['node', 'test', '-s', 'delete abc123']);
+    program.parse(['node', 'test', '-s', 'delete', 'abc123']);
     const opts = program.opts();
-    expect(opts.session).toBe('delete abc123');
+    expect(opts.session).toBe('delete');
+    expect(program.args).toEqual(['abc123']);
   });
 
   it('should parse session delete-all command', () => {
@@ -960,7 +633,11 @@ describe('Session Management', () => {
     program.parse(['node', 'test', '-p', 'my task', '--no-session']);
     const opts = program.opts();
     expect(opts.print).toBe('my task');
-    // --no-session disables session persistence
+    expect(opts.session).toBe(false);
+    expect(normalizeCliSessionFlags(opts)).toEqual({
+      session: undefined,
+      noSession: true,
+    });
   });
 
   it('should handle continue mode without ID', () => {
@@ -987,7 +664,7 @@ describe('CLI Behavior', () => {
     const program = createTestCommand();
     program.parse(['node', 'test']);
     const opts = program.opts();
-    expect(opts.provider).toBe(KODAX_DEFAULT_PROVIDER);
+    expect(opts.provider).toBeUndefined();
     expect(opts.thinking).toBeUndefined();
     expect(opts.continue).toBeUndefined();
     expect(opts.resume).toBeUndefined();
@@ -1007,29 +684,14 @@ describe('CLI Behavior', () => {
 
   it('should handle combined short options', () => {
     const program = createTestCommand();
-    // Note: commander doesn't support combined short options like -tyj
+    // Note: commander doesn't support combined short options like -ty
     // Each option must be separate or have its own value
-    program.parse(['node', 'test', '-t', '-y', '-j']);
+    program.parse(['node', 'test', '-t', '-y']);
     const opts = program.opts();
     expect(opts.thinking).toBe(true);
     expect(opts.auto).toBe(true);
-    expect(opts.parallel).toBe(true);
   });
 
-  it('should fall back to config parallel mode when CLI flag is omitted', () => {
-    const program = createTestCommand();
-    program.parse(['node', 'test']);
-
-    expect(resolveCliParallel(program, program.opts(), { parallel: true })).toBe(true);
-    expect(resolveCliParallel(program, program.opts(), { parallel: false })).toBe(false);
-  });
-
-  it('should let the CLI parallel flag override persisted config', () => {
-    const program = createTestCommand();
-    program.parse(['node', 'test', '-j']);
-
-    expect(resolveCliParallel(program, program.opts(), { parallel: false })).toBe(true);
-  });
 });
 
 describe('parsePermissionModeOption', () => {
@@ -1040,5 +702,13 @@ describe('parsePermissionModeOption', () => {
 
   it('rejects invalid ACP permission modes', () => {
     expect(() => parsePermissionModeOption('architect')).toThrow(/Expected one of: plan, accept-edits, auto-in-project/);
+  });
+
+  it("rejects canonical 'auto' with a hint that ACP does not support it yet (FEATURE_092)", () => {
+    // Users who learned 'auto' from the REPL will reach for the same flag on
+    // ACP; the error must point them at 'auto-in-project' instead of just
+    // listing the allowed set. Otherwise it looks like 'auto' was forgotten.
+    expect(() => parsePermissionModeOption('auto')).toThrow(/'auto' mode is not yet supported over the ACP protocol/);
+    expect(() => parsePermissionModeOption('auto')).toThrow(/auto-in-project/);
   });
 });

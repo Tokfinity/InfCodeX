@@ -15,7 +15,7 @@ import {
   ToolCallDisplay,
   ToolStatusBadge,
   ToolProgressBar,
-} from "@kodax/repl";
+} from "@kodax-ai/repl";
 
 // === Test Helpers ===
 

@@ -1,5 +1,5 @@
-import type { AskUserQuestionOptions } from "@kodax/coding";
-import type { PermissionMode } from "../../permission/types.js";
+import type { AskUserQuestionOptions } from "@kodax-ai/coding";
+import { ASK_USER_CUSTOM_INPUT_SIGNAL } from "@kodax-ai/agent";
 
 export interface SelectOption {
   label: string;
@@ -7,9 +7,12 @@ export interface SelectOption {
   description?: string;
 }
 
+export const DEFAULT_CUSTOM_INPUT_LABEL = "Other...";
+
 export function toSelectOptions(
   options: AskUserQuestionOptions["options"],
 ): SelectOption[] {
+  if (!options) return [];
   return options.map((option) => ({
     label: option.label,
     value: option.value,
@@ -17,41 +20,36 @@ export function toSelectOptions(
   }));
 }
 
-export function isPlanHandoffRequest(
-  options: AskUserQuestionOptions,
-): boolean {
-  return (
-    options.intent === "plan-handoff" &&
-    options.targetMode === "accept-edits" &&
-    options.scope === "session" &&
-    options.resumeBehavior === "continue"
-  );
+export function appendCustomInputOption(
+  selectOptions: SelectOption[],
+  options: Pick<AskUserQuestionOptions, "kind" | "allowCustomInput" | "customInputLabel">,
+): SelectOption[] {
+  if (options.kind === "input" || options.allowCustomInput === false) {
+    return selectOptions;
+  }
+  if (selectOptions.some((option) => option.value === ASK_USER_CUSTOM_INPUT_SIGNAL)) {
+    return selectOptions;
+  }
+  return [
+    ...selectOptions,
+    {
+      label: options.customInputLabel ?? DEFAULT_CUSTOM_INPUT_LABEL,
+      value: ASK_USER_CUSTOM_INPUT_SIGNAL,
+    },
+  ];
 }
 
 export function getAskUserDialogTitle(
   options: AskUserQuestionOptions,
 ): string {
-  if (isPlanHandoffRequest(options)) {
-    return "Plan complete. Switch this session to accept-edits and continue?";
-  }
-
+  // Use the LLM-provided question text directly — it matches the user's language.
   return options.question;
 }
 
-export function resolveAskUserDismissChoice(
+export function resolveAskUserDefaultChoice(
   options: AskUserQuestionOptions,
 ): string {
-  if (isPlanHandoffRequest(options)) {
-    const fallbackOption = options.options.find(
-      (option) => option.value !== options.targetMode,
-    );
-    return (
-      options.default ??
-      fallbackOption?.value ??
-      options.options[0]?.value ??
-      ""
-    );
-  }
+  if (!options.options || options.options.length === 0) return "";
 
   const cancelOption = options.options.find((option) => {
     const label = option.label.trim().toLowerCase();
@@ -60,16 +58,4 @@ export function resolveAskUserDismissChoice(
   });
 
   return cancelOption?.value ?? "";
-}
-
-export function shouldSwitchToAcceptEdits(
-  currentMode: PermissionMode,
-  options: AskUserQuestionOptions,
-  selectedValue: string,
-): boolean {
-  return (
-    currentMode === "plan" &&
-    isPlanHandoffRequest(options) &&
-    selectedValue === options.targetMode
-  );
 }

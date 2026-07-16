@@ -1,0 +1,206 @@
+import type {
+  RuntimeEventEnvelope,
+  RuntimeEventParseResult,
+  RuntimeEventType,
+  RuntimeTypedEvent,
+} from './sdk-runtime.js';
+
+const RUNTIME_EVENT_TYPES: ReadonlySet<string> = new Set<RuntimeEventType>([
+  'session.created', 'session.loaded', 'session.settings.updated', 'session.notice.appended',
+  'session.rewound', 'session.active_entry.updated', 'session.compacted', 'run.queued',
+  'run.started', 'run.updated', 'run.progress', 'turn.started', 'turn.completed', 'turn.failed',
+  'assistant.delta', 'thinking.delta', 'thinking.finished', 'tool.started', 'tool.progress',
+  'tool.finished', 'user_input.requested', 'user_input.resolved', 'permission.requested',
+  'permission.resolved', 'workflow.started', 'workflow.updated', 'workflow.finished',
+  'context.compaction.started', 'context.compaction.stats', 'context.compaction.finished',
+  'context.compaction.messages', 'context.compaction.ended', 'context.compaction.skipped',
+  'context.budget.snapshot', 'tool.exposure.planned', 'child_activity.finished', 'provider.retry',
+  'provider.recovery', 'repo_intelligence.trace', 'todo.updated', 'todo.warning', 'sidecar.message',
+  'run.completed', 'run.failed', 'run.cancelled', 'run.interrupted', 'artifact.created',
+  'config.effective', 'runtime.warning',
+]);
+
+const RUN_STATUS_EVENT_TYPES: ReadonlySet<string> = new Set<RuntimeEventType>([
+  'run.queued',
+  'run.started',
+  'run.updated',
+  'run.completed',
+  'run.failed',
+  'run.cancelled',
+  'run.interrupted',
+]);
+
+export function parseRuntimeEvent(value: unknown): RuntimeEventParseResult {
+  if (!isRecord(value)) return invalid('Runtime event must be an object.');
+  if (
+    typeof value.id !== 'string'
+    || !Number.isSafeInteger(value.seq)
+    || typeof value.seq !== 'number'
+    || typeof value.time !== 'string'
+    || typeof value.sessionId !== 'string'
+    || typeof value.runId !== 'string'
+    || (value.turnId !== undefined && typeof value.turnId !== 'string')
+    || typeof value.type !== 'string'
+    || !RUNTIME_EVENT_TYPES.has(value.type)
+  ) return invalid('Runtime event envelope is malformed or has an unknown type.');
+
+  if (
+    (value.type === 'assistant.delta' || value.type === 'thinking.delta')
+    && (!isRecord(value.payload) || typeof value.payload.text !== 'string')
+  ) return invalid(`${value.type} requires a string text payload.`);
+  if (RUN_STATUS_EVENT_TYPES.has(value.type) && !isRuntimeRunStatusPayload(value.payload)) {
+    return invalid(`${value.type} requires a RuntimeRunStatus payload.`);
+  }
+  const payloadError = validateKnownRuntimeEventPayload(value.type as RuntimeEventType, value.payload);
+  if (payloadError !== undefined) return invalid(`${value.type} ${payloadError}`);
+
+  const envelope: RuntimeEventEnvelope = {
+    id: value.id,
+    seq: value.seq,
+    time: value.time,
+    sessionId: value.sessionId,
+    runId: value.runId,
+    ...(typeof value.turnId === 'string' ? { turnId: value.turnId } : {}),
+    type: value.type as RuntimeEventType,
+    payload: value.payload,
+  };
+  return { ok: true, event: envelope as RuntimeTypedEvent };
+}
+
+function validateKnownRuntimeEventPayload(
+  type: RuntimeEventType,
+  payload: unknown,
+): string | undefined {
+  if (type === 'session.created') {
+    return hasStrings(payload, ['id', 'title']) ? undefined : 'requires a RuntimeSession payload.';
+  }
+  if (type === 'session.loaded') {
+    return hasStrings(payload, ['id', 'title']) || hasStrings(payload, ['provider', 'sessionId'])
+      ? undefined
+      : 'requires a RuntimeSession or provider session payload.';
+  }
+  if (type === 'session.settings.updated') {
+    return isRecord(payload)
+      && typeof payload.sessionId === 'string'
+      && Number.isSafeInteger(payload.revision)
+      && isRecord(payload.settings)
+      && isRecord(payload.patch)
+      ? undefined
+      : 'requires a session settings update payload.';
+  }
+  if (type === 'thinking.finished') {
+    return isRecord(payload) && typeof payload.thinking === 'string'
+      ? undefined
+      : 'requires a string thinking payload.';
+  }
+  if (type === 'tool.started') {
+    return isRecord(payload)
+      && hasStrings(payload.tool, ['id', 'name'])
+      ? undefined
+      : 'requires a tool descriptor payload.';
+  }
+  if (type === 'tool.progress') {
+    const valid = isRecord(payload) && (
+      (hasStrings(payload.update, ['id', 'message']))
+      || (typeof payload.toolName === 'string' && typeof payload.partialJson === 'string')
+    );
+    return valid ? undefined : 'requires a tool progress payload.';
+  }
+  if (type === 'tool.finished') {
+    return isRecord(payload) && hasStrings(payload.result, ['id', 'name', 'content'])
+      ? undefined
+      : 'requires a tool result payload.';
+  }
+  if (type === 'run.progress') return validateRunProgressPayload(payload);
+  if (type === 'todo.updated') {
+    return isRecord(payload) && Array.isArray(payload.items)
+      ? undefined
+      : 'requires an items array payload.';
+  }
+  if (type === 'user_input.requested') {
+    const sharedRequest = isRecord(payload)
+      && hasStrings(payload, ['id', 'sessionId', 'runId', 'kind', 'createdAt', 'expiresAt'])
+      && Number.isSafeInteger(payload.revision);
+    const embeddedRequest = isRecord(payload)
+      && hasStrings(payload, ['requestId', 'kind'])
+      && Object.hasOwn(payload, 'options');
+    return sharedRequest || embeddedRequest
+      ? undefined
+      : 'requires a user input request payload.';
+  }
+  if (type === 'user_input.resolved' || type === 'permission.resolved') {
+    return isRecord(payload) && typeof payload.requestId === 'string'
+      ? undefined
+      : 'requires a requestId payload.';
+  }
+  if (type === 'permission.requested') {
+    return hasStrings(payload, ['id', 'sessionId', 'runId', 'toolName', 'createdAt'])
+      ? undefined
+      : 'requires a RuntimePermissionRequest payload.';
+  }
+  if (type === 'turn.started' || type === 'turn.completed' || type === 'turn.failed') {
+    return hasStrings(payload, ['sessionId', 'turnId'])
+      ? undefined
+      : 'requires a turn payload.';
+  }
+  if (type === 'workflow.started' || type === 'workflow.updated' || type === 'workflow.finished') {
+    return isRecord(payload) ? undefined : 'requires a workflow event payload.';
+  }
+  if (type === 'context.budget.snapshot' || type === 'tool.exposure.planned') {
+    return isRecord(payload) ? undefined : 'requires an object payload.';
+  }
+  if (type === 'runtime.warning') {
+    return isRecord(payload) && typeof payload.message === 'string'
+      ? undefined
+      : 'requires a warning message payload.';
+  }
+  return undefined;
+}
+
+function validateRunProgressPayload(payload: unknown): string | undefined {
+  if (!isRecord(payload) || typeof payload.kind !== 'string') {
+    return 'requires a discriminated progress payload.';
+  }
+  if (payload.kind === 'managed_task_status') {
+    return isRecord(payload.status)
+      ? undefined
+      : 'requires managed task status.';
+  }
+  if (payload.kind === 'iteration_start') {
+    return typeof payload.iter === 'number' && typeof payload.maxIter === 'number'
+      ? undefined
+      : 'requires iteration counters.';
+  }
+  if (payload.kind === 'iteration_end') {
+    return isRecord(payload.info) ? undefined : 'requires iteration info.';
+  }
+  if (payload.kind === 'mid_turn_user_messages') {
+    return Array.isArray(payload.contents) && payload.contents.every((item) => typeof item === 'string')
+      ? undefined
+      : 'requires string contents.';
+  }
+  return payload.kind === 'stream_end' || payload.kind === 'complete'
+    ? undefined
+    : 'has an unknown progress kind.';
+}
+
+function isRuntimeRunStatusPayload(value: unknown): boolean {
+  return isRecord(value)
+    && typeof value.runId === 'string'
+    && typeof value.sessionId === 'string'
+    && typeof value.startedAt === 'string'
+    && typeof value.provider === 'string'
+    && typeof value.phase === 'string';
+}
+
+function hasStrings(value: unknown, keys: readonly string[]): boolean {
+  return isRecord(value) && keys.every((key) => typeof value[key] === 'string');
+}
+
+function invalid(error: string): RuntimeEventParseResult {
+  return { ok: false, error };
+}
+
+function isRecord(value: unknown): value is Record<string, unknown> {
+  return value !== null && typeof value === 'object' && !Array.isArray(value);
+}

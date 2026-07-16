@@ -1,0 +1,50 @@
+{
+  "schema_version": 1,
+  "feature": "FEATURE_243",
+  "bench": "repo-intelligence-index",
+  "version": "0.7.57",
+  "timestamp": "2026-06-25T13:39:28.989Z",
+  "command": "npm run bench:repo-intel -- C:\\Works\\GitWorks\\KodaX-author\\KodaX",
+  "repo_root": "C:\\Works\\GitWorks\\KodaX-author\\KodaX",
+  "storage": "temporary KODAX_REPO_INTELLIGENCE_STORAGE_DIR",
+  "node_version": "v24.13.1",
+  "source_file_count": 1808,
+  "module_count": 10,
+  "symbol_count": 9292,
+  "process_count": 17,
+  "scenarios": [
+    {
+      "scenario": "full-cold-refresh",
+      "wall_ms": 18670.853,
+      "rss_delta_mb": 1167.168,
+      "heap_delta_mb": 1001.033,
+      "rss_after_mb": 1324.875,
+      "heap_after_mb": 1046.497
+    },
+    {
+      "scenario": "full-warm-cache",
+      "wall_ms": 669.155,
+      "rss_delta_mb": -83.738,
+      "heap_delta_mb": -972.251,
+      "rss_after_mb": 1241.137,
+      "heap_after_mb": 74.258
+    },
+    {
+      "scenario": "light-cold-refresh",
+      "wall_ms": 20109.515,
+      "rss_delta_mb": 86.609,
+      "heap_delta_mb": 933.37,
+      "rss_after_mb": 1327.746,
+      "heap_after_mb": 1007.632
+    },
+    {
+      "scenario": "light-warm-cache",
+      "wall_ms": 561.113,
+      "rss_delta_mb": -86.742,
+      "heap_delta_mb": -932.132,
+      "rss_after_mb": 1241.004,
+      "heap_after_mb": 75.503
+    }
+  ],
+  "release_gate_note": "Full cold indexing is memory-heavy on the KodaX repo; normal agent flows should use cache-first reads and background prewarm."
+}

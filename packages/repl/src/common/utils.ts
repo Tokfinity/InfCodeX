@@ -1,14 +1,28 @@
 /**
  * KodaX CLI Utilities
- * CLI 层工具函数
+ * CLI 灞傚伐鍏峰嚱鏁?
  */
 
 import fsSync from 'fs';
 import path from 'path';
 import os from 'os';
 import { exec, spawnSync, type SpawnSyncReturns } from 'child_process';
+import { getAgentConfigHome, getCachedRejectedEfforts } from '@kodax-ai/agent';
 import { promisify } from 'util';
 import { fileURLToPath } from 'url';
+import { setLocale } from './i18n.js';
+import {
+  CONFIG_TEMPLATES,
+  getConfigTemplate,
+  type ConfigTemplateName,
+} from './generated-config-templates.js';
+import {
+  parseExtensionsIntegrationDocument,
+  parseMcpIntegrationDocument,
+  readExtensionsIntegration,
+  readMcpIntegration,
+  writeIntegrationDocument,
+} from './integration-config.js';
 import {
   buildProviderCapabilitySnapshot,
   evaluateProviderPolicy,
@@ -17,11 +31,16 @@ import {
   getProviderList as getBuiltInProviderList,
   getProviderModel as getBuiltInProviderModel,
   getProviderModels,
+  resolveModelCapabilities,
+  resolveReasoningEffort,
+  resolveReasoningEffortForModelSwitch,
   getCustomProviderList,
   getCustomProvider,
   isProviderConfigured as isBuiltInProviderConfigured,
   registerCustomProviders,
   resolveProvider,
+  normalizeReasoningEffortValue,
+  parseReasoningEffortEnv,
   type KodaXProviderCapabilityProfile,
   type KodaXProviderCapabilitySnapshot,
   type KodaXProviderPolicyDecision,
@@ -29,14 +48,46 @@ import {
   type KodaXReasoningCapability,
   type KodaXAgentMode,
   type KodaXReasoningMode,
-  type KodaXReasoningOverride,
+  type KodaXMcpServersConfig,
   type KodaXCustomProviderConfig,
-} from '@kodax/coding';
+  type KodaXReasoningProfile,
+} from '@kodax-ai/coding';
+import { narrowReasoningProfile } from '@kodax-ai/llm';
 
 const execAsync = promisify(exec);
 
-// CLI config directory
-export const KODAX_DIR = path.join(os.homedir(), '.kodax');
+/**
+ * CLI config directory paths — top-level constants frozen at module-load time.
+ *
+ * **LOAD-TIME FREEZE WARNING (v0.7.35.1 FEATURE_145)** — these constants
+ * are computed ONCE when this module is first imported, by reading
+ * `getAgentConfigHome()` (which itself reads `KODAX_HOME` env var and
+ * the programmatic override at that single moment). Subsequent calls to
+ * `setAgentConfigHome()` have NO effect on these constants. This
+ * matches the prior v0.7.35 behavior where they were inlined as
+ * `path.join(os.homedir(), '.kodax')` — same load-time semantics, just
+ * routed through the resolver so that `KODAX_HOME` env is now honored.
+ *
+ * **For substrate consumers**: if you intend to redirect the agent
+ * config home via `setAgentConfigHome()`, you MUST call it BEFORE
+ * importing any module that transitively imports `@kodax-ai/repl`'s
+ * `utils.ts`. Common downstream consumers that capture these constants
+ * include:
+ *   - `repl/interactive/storage.ts` → `KODAX_SESSIONS_DIR` (session
+ *     persistence; silent corruption risk if override is set late)
+ *   - the SDK's `repl/index.ts` re-exports
+ *   - root `src/index.ts` re-exports
+ *
+ * **For env-var users**: setting `KODAX_HOME=/path` before launching
+ * the kodax CLI works as expected — the env var is read at first
+ * import.
+ *
+ * **For per-call resolution**: use `getAgentConfigHome()` /
+ * `getAgentConfigPath(...)` directly from `@kodax-ai/agent` instead of
+ * these constants — those resolve at call time and honor late
+ * `setAgentConfigHome()` calls.
+ */
+export const KODAX_DIR = getAgentConfigHome();
 export const KODAX_SESSIONS_DIR = path.join(KODAX_DIR, 'sessions');
 export const KODAX_CONFIG_FILE = path.join(KODAX_DIR, 'config.json');
 
@@ -61,30 +112,8 @@ export interface KodaXAampConfig {
   _invalidProfiles?: boolean;
 }
 
-export interface KodaXUserConfig {
-  provider?: string;
-  model?: string;
-  thinking?: boolean;
-  reasoningMode?: KodaXReasoningMode;
-  agentMode?: KodaXAgentMode;
-  parallel?: boolean;
-  permissionMode?: string;
-  providerReasoningOverrides?: Record<string, KodaXReasoningOverride>;
-  providerModels?: Record<string, string[]>;
-  customProviders?: KodaXCustomProviderConfig[];
-  extensions?: string[];
-  aamp?: KodaXAampConfig;
-}
-
 let cachedVersion: string | null = null;
 let shellEnvironmentHydrated = false;
-type FeatureProgressSnapshot = {
-  completed: number;
-  total: number;
-  allComplete: boolean;
-  mtimeMs: number;
-};
-let cachedFeatureProgress: FeatureProgressSnapshot | null = null;
 
 type ShellEnvRunner = (
   command: string,
@@ -255,37 +284,22 @@ function normalizeAampProfileConfig(value: unknown): KodaXAampProfileConfig | un
   const parsed = value as Record<string, unknown>;
   const normalized: KodaXAampProfileConfig = {};
 
-  if (typeof parsed.email === 'string') {
-    normalized.email = parsed.email;
-  }
-  if (typeof parsed.mailboxToken === 'string') {
-    normalized.mailboxToken = parsed.mailboxToken;
-  }
-  if (typeof parsed.baseUrl === 'string') {
-    normalized.baseUrl = parsed.baseUrl;
-  }
+  if (typeof parsed.email === 'string') normalized.email = parsed.email;
+  if (typeof parsed.mailboxToken === 'string') normalized.mailboxToken = parsed.mailboxToken;
+  if (typeof parsed.baseUrl === 'string') normalized.baseUrl = parsed.baseUrl;
   if (typeof parsed.jmapToken === 'string' && normalized.mailboxToken === undefined) {
     normalized.mailboxToken = parsed.jmapToken;
   }
   if (typeof parsed.jmapUrl === 'string' && normalized.baseUrl === undefined) {
     normalized.baseUrl = parsed.jmapUrl;
   }
-  if (typeof parsed.smtpHost === 'string') {
-    normalized.smtpHost = parsed.smtpHost;
-  }
+  if (typeof parsed.smtpHost === 'string') normalized.smtpHost = parsed.smtpHost;
   if (typeof parsed.smtpPort === 'number' && Number.isFinite(parsed.smtpPort) && parsed.smtpPort >= 0) {
     normalized.smtpPort = parsed.smtpPort;
   }
-  if (typeof parsed.smtpPassword === 'string') {
-    normalized.smtpPassword = parsed.smtpPassword;
-  }
-  if (typeof parsed.allowInsecureTls === 'boolean') {
-    normalized.allowInsecureTls = parsed.allowInsecureTls;
-  }
-  if (
-    typeof parsed.logLevel === 'string'
-    && ['off', 'error', 'info', 'debug'].includes(parsed.logLevel)
-  ) {
+  if (typeof parsed.smtpPassword === 'string') normalized.smtpPassword = parsed.smtpPassword;
+  if (typeof parsed.allowInsecureTls === 'boolean') normalized.allowInsecureTls = parsed.allowInsecureTls;
+  if (typeof parsed.logLevel === 'string' && ['off', 'error', 'info', 'debug'].includes(parsed.logLevel)) {
     normalized.logLevel = parsed.logLevel as KodaXAampProfileConfig['logLevel'];
   }
 
@@ -305,18 +319,13 @@ function normalizeAampConfig(value: unknown): KodaXAampConfig | undefined {
   const normalizedProfiles = Object.entries(parsed.profiles as Record<string, unknown>)
     .map(([name, profileValue]) => [name.trim(), normalizeAampProfileConfig(profileValue)] as const)
     .filter(
-      (
-        entry,
-      ): entry is readonly [string, KodaXAampProfileConfig] => entry[0].length > 0 && entry[1] !== undefined,
+      (entry): entry is readonly [string, KodaXAampProfileConfig] =>
+        entry[0].length > 0 && entry[1] !== undefined,
     );
 
-  if (normalizedProfiles.length === 0) {
-    return undefined;
-  }
-
-  return {
-    profiles: Object.fromEntries(normalizedProfiles),
-  };
+  return normalizedProfiles.length > 0
+    ? { profiles: Object.fromEntries(normalizedProfiles) }
+    : undefined;
 }
 
 function migrateLegacyPermissionModeInConfig<T extends { permissionMode?: string }>(
@@ -341,11 +350,49 @@ function migrateLegacyPermissionModeInConfig<T extends { permissionMode?: string
   return migrated;
 }
 
+/**
+ * FEATURE_092 follow-up (v0.7.46): the `auto-in-project` permission-mode alias is
+ * retired. Self-heal the user config to the canonical `auto` instead of nagging a
+ * deprecation notice on every startup. Uses a TARGETED rewrite of just the
+ * permissionMode value (preserves every other field, comment and formatting,
+ * unlike the lossy `JSON.stringify` rewrite above) and canonicalizes the in-memory
+ * value so the once-per-session deprecation emitter never fires.
+ */
+function migrateAutoInProjectAliasInConfig<T extends { permissionMode?: string }>(
+  config: T,
+): T {
+  if (config.permissionMode !== 'auto-in-project') {
+    return config;
+  }
+  try {
+    const raw = fsSync.readFileSync(KODAX_CONFIG_FILE, 'utf-8');
+    const next = raw.replace(
+      /("permissionMode"\s*:\s*)"auto-in-project"/,
+      '$1"auto"',
+    );
+    if (next !== raw) {
+      fsSync.writeFileSync(KODAX_CONFIG_FILE, next);
+    }
+  } catch {
+    // Best-effort self-heal; the in-memory canonicalization below still applies.
+  }
+  return { ...config, permissionMode: 'auto' } as T;
+}
+
 // Read version from package.json dynamically - 动态读取版本号
-// Uses import.meta.url for path resolution, works regardless of cwd
-// 使用 import.meta.url 获取路径，无论用户在哪个目录运行都能正确读取
+// In standalone binary builds (Bun --compile), package.json is not on disk;
+// the build script injects `process.env.KODAX_VERSION` via --define so this
+// function returns the baked-in version without filesystem access.
+// 在 Bun 编译后的单文件分发里读不到 package.json，由 build 脚本通过 --define
+// 注入 KODAX_VERSION，运行时优先返回该值。
 export function getVersion(): string {
   if (cachedVersion) {
+    return cachedVersion;
+  }
+
+  const injected = process.env.KODAX_VERSION;
+  if (injected) {
+    cachedVersion = injected;
     return cachedVersion;
   }
 
@@ -557,12 +604,249 @@ export function formatReasoningCapabilityShort(
       return 'E';
     case 'native-toggle':
       return 'T';
+    case 'native-adaptive':
+      return 'A';
     case 'none':
     case 'prompt-only':
     case 'unknown':
     default:
       return '-';
   }
+}
+
+export function formatReasoningEffortForDisplay(
+  effort: string | undefined,
+): string | undefined {
+  if (!effort) {
+    return undefined;
+  }
+  return effort === 'none' ? 'off' : effort;
+}
+
+function pushUniqueEffortDisplay(
+  values: string[],
+  effort: string | undefined,
+): void {
+  const display = formatReasoningEffortForDisplay(effort);
+  if (display && !values.includes(display)) {
+    values.push(display);
+  }
+}
+
+export function getProviderReasoningEffortOptions(
+  provider: string,
+  model?: string,
+): string[] {
+  const values = ['auto'];
+  const capability = resolveReasoningProfileForDisplay(provider, model);
+  const presets = capability?.supportedEfforts?.filter(
+    (preset) => preset.isUserVisible !== false,
+  );
+  if (!presets || presets.length === 0) {
+    for (const effort of ['off', 'low', 'medium', 'high']) {
+      pushUniqueEffortDisplay(values, effort);
+    }
+    return values;
+  }
+  for (const preset of presets) {
+    pushUniqueEffortDisplay(values, preset.value);
+  }
+  return values;
+}
+
+/**
+ * Ordered effort ladder for the Ctrl+T cycle (and any keyboard stepper).
+ *
+ * Derived from the active model's reasoning profile so the rungs are always the
+ * ones that model actually exposes. Two deliberate shaping rules:
+ *
+ * - `off` (the canonical disable stop) is included only when the model can
+ *   disable thinking (`none` in supportedEfforts or `supportsDisabledThinking`).
+ *   Always-on models (kimi-k2.7-code / minimax-m2-always) get no `off` rung.
+ * - Efforts that merely FOLD to off on this model — e.g. `minimal` on a toggle
+ *   or budget provider where it sits in `disabledEfforts` — are dropped from the
+ *   cycle so the user doesn't hit a second, redundant disable stop next to
+ *   `off`. They remain reachable via the explicit `/effort <value>` command,
+ *   which renders them honestly as `minimal->off`.
+ *
+ * `auto` (clear the explicit override → model default) is always the last rung.
+ */
+export function getProviderReasoningEffortCycle(
+  provider: string,
+  model?: string,
+): string[] {
+  const capability = resolveReasoningProfileForDisplay(provider, model);
+  const disabled = new Set(capability?.disabledEfforts ?? []);
+  const presets = capability?.supportedEfforts?.filter(
+    (preset) => preset.isUserVisible !== false,
+  );
+
+  const concrete: string[] = [];
+  let canDisable = capability?.supportsDisabledThinking === true;
+  if (!presets || presets.length === 0) {
+    for (const effort of ['low', 'medium', 'high']) {
+      pushUniqueEffortDisplay(concrete, effort);
+    }
+    canDisable = true;
+  } else {
+    for (const preset of presets) {
+      if (preset.value === 'none') {
+        canDisable = true;
+        continue;
+      }
+      if (disabled.has(preset.value)) {
+        canDisable = true;
+        continue;
+      }
+      pushUniqueEffortDisplay(concrete, preset.value);
+    }
+  }
+
+  const cycle: string[] = [];
+  if (canDisable) {
+    cycle.push('off');
+  }
+  cycle.push(...concrete);
+  cycle.push('auto');
+  return cycle;
+}
+
+function legacyReasoningModeToEffortDisplay(
+  mode: KodaXReasoningMode | undefined,
+  thinking: boolean | undefined,
+): string {
+  if (thinking === false) {
+    return 'off';
+  }
+  switch (mode) {
+    case 'off':
+      return 'off';
+    case 'quick':
+      return 'low';
+    case 'balanced':
+      return 'medium';
+    case 'deep':
+      return 'high';
+    case 'auto':
+    default:
+      return 'auto';
+  }
+}
+
+function resolveReasoningProfileForDisplay(
+  provider: string,
+  model: string | undefined,
+): KodaXReasoningProfile | undefined {
+  const modelId = model ?? getProviderModel(provider);
+  if (!modelId) {
+    return undefined;
+  }
+  const profile = resolveModelCapabilities(provider, modelId)?.reasoningProfile;
+  if (!profile) {
+    return undefined;
+  }
+  // Apply the runtime capability cache: efforts observed/probed to be rejected
+  // by this provider/model are removed so the cycle, /effort options, and the
+  // status label all stop offering them (single funnel for every display
+  // consumer).
+  return narrowReasoningProfile(profile, getCachedRejectedEfforts(provider, modelId));
+}
+
+export function formatReasoningEffortStatusLabel(input: {
+  provider: string;
+  model?: string;
+  effort?: string;
+  effortOverride?: boolean;
+  thinking?: boolean;
+  reasoningMode?: KodaXReasoningMode;
+}): string {
+  const fallback = formatReasoningEffortForDisplay(input.effort)
+    ?? legacyReasoningModeToEffortDisplay(input.reasoningMode, input.thinking);
+  const capability = resolveReasoningProfileForDisplay(input.provider, input.model);
+  if (!capability) {
+    return fallback;
+  }
+
+  try {
+    const resolved = resolveReasoningEffort({
+      capability,
+      explicitEffort: input.effortOverride ? input.effort : undefined,
+      sessionEffort: input.effortOverride ? undefined : input.effort,
+      legacyReasoningMode: input.reasoningMode,
+      thinking: input.thinking,
+    });
+    const configured = formatReasoningEffortForDisplay(resolved.configuredEffort) ?? fallback;
+    // A configured effort that sits in `disabledEfforts` (e.g. `minimal` on a
+    // toggle/budget provider) folds to "off" at the wire layer (base.ts).
+    // Reflect that truth so the status reads `minimal->off` instead of a bare
+    // `minimal` that lies about thinking still being on.
+    const foldsToOff = resolved.configuredEffort !== undefined
+      && capability.disabledEfforts?.includes(resolved.configuredEffort) === true;
+    const effective = foldsToOff
+      ? 'off'
+      : formatReasoningEffortForDisplay(resolved.effectiveEffort);
+    return effective && effective !== configured
+      ? `${configured}->${effective}`
+      : configured;
+  } catch {
+    if (input.effort) {
+      try {
+        const switchResolution = resolveReasoningEffortForModelSwitch({
+          currentEffort: input.effort,
+          capability,
+        });
+        const configured = formatReasoningEffortForDisplay(input.effort) ?? fallback;
+        const effective = formatReasoningEffortForDisplay(switchResolution.effectiveEffort);
+        return effective && effective !== configured
+          ? `${configured}->${effective}`
+          : configured;
+      } catch {
+        return fallback;
+      }
+    }
+    return fallback;
+  }
+}
+
+export function resolveProviderReasoningRuntimeEffort(input: {
+  provider: string;
+  model?: string;
+  effort?: string;
+  effortOverride?: boolean;
+  permissionMode?: string;
+  planModeEffort?: string;
+  thinking?: boolean;
+  reasoningMode?: KodaXReasoningMode;
+}): {
+  configuredEffort?: string;
+  runtimeEffort?: string;
+  preserved: boolean;
+  diagnostic?: string;
+} {
+  const configuredEffort = resolvePermissionModeEffort(input);
+  if (!configuredEffort) {
+    return { preserved: true };
+  }
+
+  const capability = resolveReasoningProfileForDisplay(input.provider, input.model);
+  if (!capability) {
+    return {
+      configuredEffort,
+      runtimeEffort: configuredEffort,
+      preserved: true,
+    };
+  }
+  const resolution = resolveReasoningEffortForModelSwitch({
+    currentEffort: configuredEffort,
+    capability,
+  });
+
+  return {
+    configuredEffort,
+    runtimeEffort: resolution.effectiveEffort,
+    preserved: resolution.preserved,
+    diagnostic: resolution.diagnostic,
+  };
 }
 
 export function describeReasoningCapabilityControl(
@@ -575,6 +859,8 @@ export function describeReasoningCapabilityControl(
       return 'effort';
     case 'native-toggle':
       return 'toggle';
+    case 'native-adaptive':
+      return 'adaptive';
     case 'none':
     case 'prompt-only':
     case 'unknown':
@@ -598,6 +884,8 @@ export function describeReasoningExecution(
       return 'Uses native reasoning effort control';
     case 'native-toggle':
       return 'Uses provider-native thinking toggle only';
+    case 'native-adaptive':
+      return 'Model adaptively decides thinking depth (Opus 4.7+)';
     case 'none':
       return 'Runs without native reasoning parameters';
     case 'prompt-only':
@@ -672,55 +960,565 @@ export function isProviderConfigured(name: string): boolean {
 }
 
 // Load config from ~/.kodax/config.json
-export function loadConfig(): KodaXUserConfig {
+export function loadConfig(): {
+  provider?: string;
+  model?: string;
+  runtimeMode?: 'embedded' | 'daemon';
+  effort?: string;
+  planModeEffort?: string;
+  thinking?: boolean;
+  reasoningMode?: KodaXReasoningMode;
+  /**
+   * FEATURE_078 (v0.7.29): preferred name for `reasoningMode`. Both
+   * fields map to the same runtime L1 user-ceiling semantic; when both
+   * are present `reasoningCeiling` wins. Prefer this name in new
+   * configs — `reasoningMode` is kept accepted for backward
+   * compatibility and never auto-renamed (no user-visible churn).
+   */
+  reasoningCeiling?: KodaXReasoningMode;
+  agentMode?: KodaXAgentMode;
+  permissionMode?: string;
+  locale?: string;
+  providerModels?: Record<string, string[]>;
+  customProviders?: KodaXCustomProviderConfig[];
+  extensions?: string[];
+  aamp?: KodaXAampConfig;
+  mcpServers?: KodaXMcpServersConfig;
+  repoIntelligenceMode?: 'auto' | 'off' | 'light' | 'full';
+  repoIntelligenceTrace?: boolean;
+  streamIdleTimeoutMs?: number;
+  /**
+   * FEATURE_184 Phase D.3 follow-up (v0.7.42) — opt-in Sidecar Verifier
+   * observability. When `true`, the runtime emits a persisted note per
+   * verifier call:
+   *   `[Sidecar Verifier] {verdict} · {model} · {ms}ms · {trace}`
+   * Mirrored to env var `KODAX_VERIFIER_LOG=1` so the agent-runtime
+   * layer (which has no access to `~/.kodax/config.json`) can read it.
+   */
+  verifierLog?: boolean;
+  /**
+   * FEATURE_187 Phase C (v0.7.43) — opt-in Stall Sidecar observability.
+   * When `true`, the runtime emits a persisted note per L2 stall
+   * verdict (isStuck true OR false):
+   *   `[Stall Sidecar] isStuck={true|false} · {provider}/{model} · {ms}ms · {trace}`
+   * Mirrored to env var `KODAX_STALL_LOG=1`.
+   */
+  stallLog?: boolean;
+  /**
+   * FEATURE_102 Phase 3 (v0.7.45) — ordered cross-provider fallback chain for
+   * child dispatch. When a child's primary provider is exhausted/down, the
+   * runtime re-runs it on the next provider here. Empty/absent = OFF. Mirrored
+   * to env var `KODAX_FALLBACK_PROVIDERS` (comma-separated) for the coding
+   * layer, which has no config access. Set via the `/fallback` command.
+   */
+  fallbackProviders?: string[];
+  /**
+   * Per-agent model TIERS for the workflow / dispatch `model_hint` (M2 config
+   * surface). Operators point a tier at a concrete provider+model; a workflow
+   * script / dispatch then expresses intent via `modelHint: 'fast' | 'deep'`.
+   * 'fast' routes read-only children only (write/codegen stays on the parent —
+   * a quality guard); 'deep' routes any child. Mirrored to
+   * KODAX_FAST/DEEP_PROVIDER/MODEL for the coding layer (which has no config
+   * access); env wins if pre-set. An unset tier inherits the parent model.
+   */
+  fastProvider?: string;
+  fastModel?: string;
+  deepProvider?: string;
+  deepModel?: string;
+  /**
+   * Config surface for settings the coding/llm layer reads only via env (it has
+   * no config access). Bridged to their KODAX_* env vars in prepareRuntimeConfig
+   * (env-wins). See CONFIG_ENV_BRIDGES for the mapping.
+   */
+  maxOutputTokens?: number;
+  disablePromptCache?: boolean;
+  lsp?: boolean;
+  lspAutoDownload?: boolean;
+  acpLogLevel?: string;
+  sessionRetentionDays?: number;
+  repoIntelligence?: {
+    toolWaitMs?: number;
+    workerTimeoutMs?: number;
+    workerOldSpaceMb?: number;
+    storageDir?: string;
+  };
+  workflow?: {
+    maxConcurrency?: number;
+  };
+} {
   try {
     if (fsSync.existsSync(KODAX_CONFIG_FILE)) {
-      const parsed = JSON.parse(fsSync.readFileSync(KODAX_CONFIG_FILE, 'utf-8')) as KodaXUserConfig & {
+      const parsed = JSON.parse(fsSync.readFileSync(KODAX_CONFIG_FILE, 'utf-8')) as {
+        provider?: string;
+        model?: string;
+        runtimeMode?: 'embedded' | 'daemon';
+        effort?: string;
+        planModeEffort?: string;
+        thinking?: boolean;
+        reasoningMode?: KodaXReasoningMode;
+        reasoningCeiling?: KodaXReasoningMode;
+        agentMode?: KodaXAgentMode;
+        permissionMode?: string;
+        locale?: string;
+        providerModels?: Record<string, string[]>;
+        customProviders?: KodaXCustomProviderConfig[];
         extensions?: unknown;
         aamp?: unknown;
+        mcpServers?: KodaXMcpServersConfig;
+        repoIntelligenceMode?: 'auto' | 'off' | 'light' | 'full';
+        repoIntelligenceTrace?: boolean;
+        streamIdleTimeoutMs?: number;
+        verifierLog?: boolean;
+        stallLog?: boolean;
+        fallbackProviders?: string[];
+        fastProvider?: string;
+        fastModel?: string;
+        deepProvider?: string;
+        deepModel?: string;
+        maxOutputTokens?: number;
+        disablePromptCache?: boolean;
+        lsp?: boolean;
+        lspAutoDownload?: boolean;
+        acpLogLevel?: string;
+        sessionRetentionDays?: number;
+        repoIntelligence?: {
+          toolWaitMs?: number;
+          workerTimeoutMs?: number;
+          workerOldSpaceMb?: number;
+          storageDir?: string;
+        };
+        workflow?: {
+          maxConcurrency?: number;
+        };
       };
-      return migrateLegacyPermissionModeInConfig({
-        ...parsed,
-        extensions: normalizeConfiguredExtensions(parsed.extensions),
-        aamp: normalizeAampConfig(parsed.aamp),
-      });
+      // FEATURE_078: collapse `reasoningCeiling` (preferred) onto
+      // `reasoningMode` so existing call sites that read
+      // `options.reasoningMode` keep working unchanged. When both are
+      // present we trust `reasoningCeiling` — that's the deliberately
+      // named L1 ceiling field, and the legacy `reasoningMode` is
+      // typically left over from older configs the user forgot about.
+      const collapsedReasoning: KodaXReasoningMode | undefined =
+        parsed.reasoningCeiling ?? parsed.reasoningMode;
+      let effectiveExtensions: string[] = [];
+      let effectiveMcpServers: KodaXMcpServersConfig = {};
+      try {
+        effectiveExtensions = [...readExtensionsIntegration(KODAX_DIR).document.paths];
+      } catch {
+        // The domain file is authoritative. Invalid startup config activates
+        // nothing; long-lived hosts retain last-known-good through the domain
+        // controller instead of falling back to shadowed legacy declarations.
+      }
+      try {
+        effectiveMcpServers = readMcpIntegration(KODAX_DIR).document.servers;
+      } catch {
+        // See the Extension-domain note above.
+      }
+      return migrateAutoInProjectAliasInConfig(
+        migrateLegacyPermissionModeInConfig({
+          ...parsed,
+          reasoningMode: collapsedReasoning,
+          extensions: normalizeConfiguredExtensions(effectiveExtensions),
+          mcpServers: effectiveMcpServers,
+          aamp: normalizeAampConfig(parsed.aamp),
+        }),
+      );
     }
   } catch {
     // Unreadable user config should fall back to defaults instead of breaking startup.
   }
-  return {};
+  // Split integration files are independently usable. A user does not need to
+  // create an otherwise-empty core config.json before mcp.json or
+  // extensions.json can become effective.
+  let extensions: string[] | undefined;
+  let mcpServers: KodaXMcpServersConfig | undefined;
+  try {
+    const snapshot = readExtensionsIntegration(KODAX_DIR);
+    if (snapshot.source !== 'default') {
+      extensions = normalizeConfiguredExtensions([...snapshot.document.paths]);
+    }
+  } catch {
+    // Invalid authoritative domain files activate no new value at startup.
+  }
+  try {
+    const snapshot = readMcpIntegration(KODAX_DIR);
+    if (snapshot.source !== 'default') mcpServers = snapshot.document.servers;
+  } catch {
+    // See the Extension-domain note above.
+  }
+  return {
+    ...(extensions === undefined ? {} : { extensions }),
+    ...(mcpServers === undefined ? {} : { mcpServers }),
+  };
+}
+
+/**
+ * F1 — first-launch onboarding. config.json must be STRICT JSON (no comments), so we
+ * cannot ship a self-documenting config.json. Instead, on first launch (no config.json
+ * yet) we write a heavily-commented `config.example.jsonc` REFERENCE file next to it.
+ * It is never loaded by KodaX — it exists purely so a new user can see the minimal
+ * fields and the inline guidance (especially custom-provider thinking/reasoning) and
+ * copy what they need into config.json.
+ *
+ * Returns the example path only when it was just created (so the caller can print a
+ * one-time pointer); returns undefined if config.json already exists, the example
+ * already exists, or the write failed. Never throws — a template-write failure must
+ * not block startup.
+ */
+export const KODAX_EXAMPLE_CONFIG_FILE = path.join(KODAX_DIR, 'config.example.jsonc');
+export const KODAX_INTEGRATION_EXAMPLE_FILES = {
+  mcp: path.join(KODAX_DIR, 'integrations', 'mcp.example.jsonc'),
+  a2a: path.join(KODAX_DIR, 'integrations', 'a2a.example.jsonc'),
+  extensions: path.join(KODAX_DIR, 'integrations', 'extensions.example.jsonc'),
+} as const;
+
+const EXAMPLE_FILES: readonly {
+  readonly name: ConfigTemplateName;
+  readonly path: string;
+}[] = [
+  { name: 'core', path: KODAX_EXAMPLE_CONFIG_FILE },
+  { name: 'mcp', path: KODAX_INTEGRATION_EXAMPLE_FILES.mcp },
+  { name: 'a2a', path: KODAX_INTEGRATION_EXAMPLE_FILES.a2a },
+  { name: 'extensions', path: KODAX_INTEGRATION_EXAMPLE_FILES.extensions },
+];
+
+export { CONFIG_TEMPLATES, getConfigTemplate };
+export type { ConfigTemplateName };
+
+export function ensureExampleConfigFiles(): readonly string[] {
+  const created: string[] = [];
+  for (const example of EXAMPLE_FILES) {
+    try {
+      if (fsSync.existsSync(example.path)) continue;
+      fsSync.mkdirSync(path.dirname(example.path), { recursive: true });
+      fsSync.writeFileSync(example.path, getConfigTemplate(example.name), 'utf8');
+      created.push(example.path);
+    } catch {
+      // Reference templates are best-effort and independent. Active config
+      // never reads *.example.jsonc files.
+    }
+  }
+  return created;
+}
+
+/** @deprecated Use ensureExampleConfigFiles() to observe every created path. */
+export function ensureExampleConfigFile(): string | undefined {
+  return ensureExampleConfigFiles()[0];
+}
+
+const projectedConfigEnvironment = new Map<string, string>();
+
+function projectConfigEnvironment(env: string, value: string | undefined): void {
+  const current = process.env[env];
+  const previousProjection = projectedConfigEnvironment.get(env);
+  const ownedProjection = previousProjection !== undefined && current === previousProjection;
+  if (current !== undefined && !ownedProjection) {
+    projectedConfigEnvironment.delete(env);
+    return;
+  }
+
+  if (value === undefined) {
+    if (ownedProjection) delete process.env[env];
+    projectedConfigEnvironment.delete(env);
+    return;
+  }
+
+  process.env[env] = value;
+  projectedConfigEnvironment.set(env, value);
+}
+
+/**
+ * Config surface — the single table of config.json fields bridged to the KODAX_*
+ * env vars the coding / llm / repo-intelligence layers read (they have no config
+ * access). `value` returns the env string to install, or undefined to skip.
+ * Env-wins: a shell-set var is never overwritten (a CI/script override beats the
+ * file). ADD A NEW BRIDGED SETTING HERE — one row, plus the config-type field.
+ * Process-bootstrap-only vars such as KODAX_HEAP_LIMIT are read before this
+ * runs, so they stay env-only — see config.example.jsonc.
+ */
+const CONFIG_ENV_BRIDGES: ReadonlyArray<{
+  readonly configPath: string;
+  readonly env: string;
+  readonly value: (config: ReturnType<typeof loadConfig>) => string | undefined;
+}> = [
+  { configPath: 'streamIdleTimeoutMs', env: 'KODAX_STREAM_IDLE_TIMEOUT_MS', value: (c) => configNumberString(c.streamIdleTimeoutMs) },
+  { configPath: 'repoIntelligenceMode', env: 'KODAX_REPO_INTELLIGENCE', value: (c) => c.repoIntelligenceMode },
+  { configPath: 'repoIntelligenceTrace', env: 'KODAX_REPO_INTELLIGENCE_TRACE', value: (c) => configBooleanString(c.repoIntelligenceTrace) },
+  { configPath: 'verifierLog', env: 'KODAX_VERIFIER_LOG', value: (c) => configBooleanString(c.verifierLog) },
+  { configPath: 'stallLog', env: 'KODAX_STALL_LOG', value: (c) => configBooleanString(c.stallLog) },
+  { configPath: 'fallbackProviders', env: 'KODAX_FALLBACK_PROVIDERS', value: (c) => configStringList(c.fallbackProviders) },
+  { configPath: 'fastProvider', env: 'KODAX_FAST_PROVIDER', value: (c) => normalizedConfigString(c.fastProvider) },
+  { configPath: 'fastModel', env: 'KODAX_FAST_MODEL', value: (c) => normalizedConfigString(c.fastModel) },
+  { configPath: 'deepProvider', env: 'KODAX_DEEP_PROVIDER', value: (c) => normalizedConfigString(c.deepProvider) },
+  { configPath: 'deepModel', env: 'KODAX_DEEP_MODEL', value: (c) => normalizedConfigString(c.deepModel) },
+  { configPath: 'provider', env: 'KODAX_PROVIDER', value: (c) => normalizedConfigString(c.provider) },
+  { configPath: 'effort', env: 'KODAX_EFFORT', value: (c) => normalizedConfigString(c.effort) },
+  { configPath: 'runtimeMode', env: 'KODAX_RUNTIME_MODE', value: (c) => c.runtimeMode },
+  { configPath: 'sessionRetentionDays', env: 'KODAX_SESSION_RETENTION_DAYS', value: (c) => configNumberString(c.sessionRetentionDays) },
+  { configPath: 'maxOutputTokens', env: 'KODAX_MAX_OUTPUT_TOKENS', value: (c) => configNumberString(c.maxOutputTokens) },
+  { configPath: 'disablePromptCache', env: 'KODAX_DISABLE_PROMPT_CACHE', value: (c) => configBooleanString(c.disablePromptCache) },
+  { configPath: 'lsp', env: 'KODAX_LSP', value: (c) => configBooleanString(c.lsp) },
+  { configPath: 'lspAutoDownload', env: 'KODAX_LSP_DOWNLOAD', value: (c) => configBooleanString(c.lspAutoDownload) },
+  { configPath: 'acpLogLevel', env: 'KODAX_ACP_LOG', value: (c) => normalizedConfigString(c.acpLogLevel) },
+  { configPath: 'repoIntelligence.toolWaitMs', env: 'KODAX_REPO_INTELLIGENCE_TOOL_WAIT_MS', value: (c) => configNumberString(c.repoIntelligence?.toolWaitMs) },
+  { configPath: 'repoIntelligence.workerTimeoutMs', env: 'KODAX_REPO_INTELLIGENCE_WORKER_TIMEOUT_MS', value: (c) => configNumberString(c.repoIntelligence?.workerTimeoutMs) },
+  { configPath: 'repoIntelligence.workerOldSpaceMb', env: 'KODAX_REPO_INTELLIGENCE_WORKER_OLD_SPACE_MB', value: (c) => configNumberString(c.repoIntelligence?.workerOldSpaceMb) },
+  { configPath: 'repoIntelligence.storageDir', env: 'KODAX_REPO_INTELLIGENCE_STORAGE_DIR', value: (c) => normalizedConfigString(c.repoIntelligence?.storageDir) },
+  { configPath: 'workflow.maxConcurrency', env: 'KODAX_WORKFLOW_MAX_CONCURRENCY', value: (c) => configNumberString(c.workflow?.maxConcurrency) },
+];
+
+function applyConfigSurfaceBridges(config: ReturnType<typeof loadConfig>): void {
+  for (const b of CONFIG_ENV_BRIDGES) {
+    projectConfigEnvironment(b.env, b.value(config));
+  }
+}
+
+function normalizedConfigString(value: string | undefined): string | undefined {
+  const normalized = value?.trim();
+  return normalized || undefined;
+}
+
+function configNumberString(value: number | undefined): string | undefined {
+  return typeof value === 'number' && Number.isFinite(value) ? String(value) : undefined;
+}
+
+function configBooleanString(value: boolean | undefined): string | undefined {
+  return value === undefined ? undefined : value ? '1' : '0';
+}
+
+function configStringList(value: string[] | undefined): string | undefined {
+  return value?.filter((entry) => entry.trim().length > 0).join(',');
+}
+
+export const KODAX_CONFIG_ENV_BINDINGS: ReadonlyArray<{
+  readonly configPath: string;
+  readonly env: string;
+}> = [
+  ...CONFIG_ENV_BRIDGES.map(({ configPath, env }) => ({ configPath, env })),
+];
+
+export function applyConfigEnvironment(config: ReturnType<typeof loadConfig>): void {
+  applyConfigSurfaceBridges(config);
 }
 
 export function prepareRuntimeConfig(): ReturnType<typeof loadConfig> {
   ensureShellEnvironmentHydrated();
   const config = loadConfig();
+  applyConfigEnvironment(config);
   registerConfiguredCustomProviders(config);
+  // Initialize i18n locale from config (falls back to system LANG)
+  setLocale(config.locale);
   return config;
 }
 
 // Save config to ~/.kodax/config.json
-export function saveConfig(config: KodaXUserConfig): void {
-  const current = loadConfig();
-  const merged = { ...current, ...config };
-  const normalizedExtensions = normalizeConfiguredExtensions(merged.extensions);
-  if (normalizedExtensions !== undefined) {
-    merged.extensions = normalizedExtensions;
+export function saveConfig(config: {
+  provider?: string;
+  model?: string;
+  runtimeMode?: 'embedded' | 'daemon';
+  effort?: string;
+  planModeEffort?: string;
+  thinking?: boolean;
+  reasoningMode?: KodaXReasoningMode;
+  agentMode?: KodaXAgentMode;
+  permissionMode?: string;
+  locale?: string;
+  providerModels?: Record<string, string[]>;
+  customProviders?: KodaXCustomProviderConfig[];
+  extensions?: string[];
+  aamp?: KodaXAampConfig;
+  mcpServers?: KodaXMcpServersConfig;
+  repoIntelligenceMode?: 'auto' | 'off' | 'light' | 'full';
+  repoIntelligenceTrace?: boolean;
+  /** FEATURE_184 Phase D.3 follow-up — opt-in verifier log line. */
+  verifierLog?: boolean;
+  /** FEATURE_187 Phase C — opt-in stall sidecar log line. */
+  stallLog?: boolean;
+  /** FEATURE_102 Phase 3 — cross-provider child fallback chain. */
+  fallbackProviders?: string[];
+  /** M2 — per-agent model tiers (workflow / dispatch model_hint). */
+  fastProvider?: string;
+  fastModel?: string;
+  deepProvider?: string;
+  deepModel?: string;
+  /** Config surface bridged to KODAX_* env for the coding/llm layer. */
+  maxOutputTokens?: number;
+  disablePromptCache?: boolean;
+  lsp?: boolean;
+  lspAutoDownload?: boolean;
+  acpLogLevel?: string;
+  sessionRetentionDays?: number;
+  repoIntelligence?: {
+    toolWaitMs?: number;
+    workerTimeoutMs?: number;
+    workerOldSpaceMb?: number;
+    storageDir?: string;
+  };
+  workflow?: {
+    maxConcurrency?: number;
+  };
+}): void {
+  let current: Record<string, unknown> = {};
+  if (fsSync.existsSync(KODAX_CONFIG_FILE)) {
+    try {
+      const parsed = JSON.parse(fsSync.readFileSync(KODAX_CONFIG_FILE, 'utf8')) as unknown;
+      if (parsed && typeof parsed === 'object' && !Array.isArray(parsed)) {
+        current = parsed as Record<string, unknown>;
+      }
+    } catch {
+      // Preserve the existing public behavior: a malformed core config does
+      // not block replacing it with a valid explicitly supplied snapshot.
+    }
   }
-  merged.aamp = normalizeAampConfig(merged.aamp);
+  const { extensions, mcpServers, ...coreConfig } = config;
+  if (Object.prototype.hasOwnProperty.call(coreConfig, 'aamp')) {
+    coreConfig.aamp = normalizeAampConfig(coreConfig.aamp);
+  }
+  const merged: Record<string, unknown> = { ...current, ...coreConfig };
   // Remove fields explicitly set to undefined (e.g. clearing model when switching provider)
-  for (const key of Object.keys(config) as Array<keyof typeof config>) {
-    if (config[key] === undefined) {
-      delete (merged as Record<string, unknown>)[key];
+  for (const key of Object.keys(coreConfig) as Array<keyof typeof coreConfig>) {
+    if (coreConfig[key] === undefined) {
+      delete merged[key];
     }
   }
   fsSync.mkdirSync(path.dirname(KODAX_CONFIG_FILE), { recursive: true });
   fsSync.writeFileSync(KODAX_CONFIG_FILE, JSON.stringify(merged, null, 2));
+
+  if (extensions !== undefined) {
+    const currentExtensions = readExtensionsIntegration(KODAX_DIR);
+    writeIntegrationDocument({
+      domain: 'extensions',
+      configHome: KODAX_DIR,
+      ...(currentExtensions.source === 'user'
+        ? { expectedRevision: currentExtensions.revision }
+        : {}),
+      document: {
+        version: 1,
+        paths: normalizeConfiguredExtensions(extensions) ?? [],
+      },
+      validate: parseExtensionsIntegrationDocument,
+    });
+  }
+  if (mcpServers !== undefined) {
+    const currentMcp = readMcpIntegration(KODAX_DIR);
+    writeIntegrationDocument({
+      domain: 'mcp',
+      configHome: KODAX_DIR,
+      ...(currentMcp.source === 'user' ? { expectedRevision: currentMcp.revision } : {}),
+      document: { version: 1, servers: mcpServers },
+      validate: parseMcpIntegrationDocument,
+    });
+  }
 }
 
-// Get git root directory
-export async function getGitRoot(): Promise<string | null> {
+/**
+ * Reconstruct `effortOverride` at startup. A persisted `config.effort` only
+ * ever comes from an explicit choice (Ctrl+T / `/effort <value>`; clearing to
+ * auto deletes the field), so a present config effort must restore as an
+ * override — otherwise the round-tripped value is mis-read as a session
+ * default and the Ctrl+T position detector treats it as `auto`. The CLI
+ * `--effort` flag or a concrete `KODAX_EFFORT` value also forces an override
+ * for the launched session. The environment `auto`/`unset` sentinel clears
+ * only that layer, so config can still supply the persisted preference.
+ */
+export function resolveInitialEffortOverride(
+  options: { effort?: string },
+  config: { effort?: string },
+  environmentEffort?: string,
+): boolean {
+  return options.effort !== undefined
+    || parseReasoningEffortEnv(environmentEffort).kind === 'value'
+    || config.effort !== undefined;
+}
+
+function nonEmptySelection(value: string | undefined): string | undefined {
+  return value?.trim() ? value : undefined;
+}
+
+export function resolveRuntimeProviderSelection(input: {
+  explicitProvider?: string;
+  environmentProvider?: string;
+  configuredProvider?: string;
+  defaultProvider: string;
+}): string {
+  return nonEmptySelection(input.explicitProvider)
+    ?? nonEmptySelection(input.environmentProvider)
+    ?? nonEmptySelection(input.configuredProvider)
+    ?? input.defaultProvider;
+}
+
+export function resolveRuntimeModelSelection(input: {
+  explicitProvider?: string;
+  environmentProvider?: string;
+  explicitModel?: string;
+  configuredProvider?: string;
+  configuredModel?: string;
+}): string | undefined {
+  const explicitModel = nonEmptySelection(input.explicitModel);
+  if (explicitModel) return explicitModel;
+
+  const configuredModel = nonEmptySelection(input.configuredModel);
+  if (!configuredModel) return undefined;
+
+  const providerOverride = nonEmptySelection(input.explicitProvider)
+    ?? nonEmptySelection(input.environmentProvider);
+  if (!providerOverride) return configuredModel;
+
+  const configuredProvider = nonEmptySelection(input.configuredProvider);
+  return configuredProvider === providerOverride ? configuredModel : undefined;
+}
+
+export function resolveRuntimeEffortSelection(input: {
+  explicitEffort?: string;
+  environmentEffort?: string;
+  configuredEffort?: string;
+}): string | undefined {
+  if (input.explicitEffort !== undefined) {
+    return normalizeReasoningEffortValue(input.explicitEffort);
+  }
+
+  const environmentEffort = parseReasoningEffortEnv(input.environmentEffort);
+  if (environmentEffort.kind === 'value') {
+    return environmentEffort.value;
+  }
+
+  return input.configuredEffort === undefined
+    ? undefined
+    : normalizeReasoningEffortValue(input.configuredEffort);
+}
+
+export function resolvePermissionModeEffort(config: {
+  effort?: string;
+  effortOverride?: boolean;
+  permissionMode?: string;
+  planModeEffort?: string;
+}): string | undefined {
+  if (
+    config.permissionMode === 'plan'
+    && config.effortOverride !== true
+    && config.planModeEffort !== undefined
+  ) {
+    return config.planModeEffort;
+  }
+  return config.effort;
+}
+
+/**
+ * Get git root directory.
+ *
+ * v0.7.46 fix — accepts optional `cwd` so in-process SDK embedders (KodaX
+ * Space) that serve multiple projects from a single runtime can resolve
+ * the git root of the project the user opened, NOT the embedder's
+ * startup directory. Without `cwd`, `git rev-parse --show-toplevel`
+ * inherits the host process's cwd, which mis-tags storage operations
+ * for multi-project embedders (the same root cause as the
+ * `saveSessionSnapshot` gitRoot bug in agent-runtime/middleware/ shipped in v0.7.45).
+ *
+ * No `cwd` arg → behaves identically to the pre-v0.7.46 form
+ * (process.cwd() of the host).
+ */
+export async function getGitRoot(cwd?: string): Promise<string | null> {
   try {
-    const { stdout } = await execAsync('git rev-parse --show-toplevel');
+    const { stdout } = await execAsync('git rev-parse --show-toplevel', { cwd });
     return stdout.trim();
   } catch {
     return null;
@@ -780,10 +1578,6 @@ export function getProviderCommonPolicyScenarios(
     { label: 'General coding', hints: {} },
     { label: 'Evidence-heavy review', hints: { evidenceHeavy: true } },
     { label: 'Long-running task', hints: { longRunning: true } },
-    {
-      label: 'Project harness',
-      hints: { longRunning: true, harness: 'project', evidenceHeavy: true },
-    },
   ];
 
   return scenarios
@@ -802,58 +1596,6 @@ export function getProviderCommonPolicyScenarios(
       ): scenario is { label: string; decision: KodaXProviderPolicyDecision } =>
         scenario.decision !== null,
     );
-}
-
-// Feature type definition
-interface Feature {
-  name?: string;
-  description?: string;
-  steps?: string[];
-  passes?: boolean;
-  [key: string]: unknown;
-}
-
-function readFeatureProgressSnapshot(): FeatureProgressSnapshot | null {
-  const featuresPath = path.resolve('feature_list.json');
-  if (!fsSync.existsSync(featuresPath)) {
-    cachedFeatureProgress = null;
-    return null;
-  }
-
-  try {
-    const stat = fsSync.statSync(featuresPath);
-    if (cachedFeatureProgress && cachedFeatureProgress.mtimeMs === stat.mtimeMs) {
-      return cachedFeatureProgress;
-    }
-
-    const features = JSON.parse(fsSync.readFileSync(featuresPath, 'utf-8'));
-    const total = (features.features ?? []).length;
-    const completed = (features.features ?? []).filter((f: Feature) => f.passes).length;
-
-    cachedFeatureProgress = {
-      completed,
-      total,
-      allComplete: total > 0 && completed === total,
-      mtimeMs: stat.mtimeMs,
-    };
-    return cachedFeatureProgress;
-  } catch {
-    // Invalid feature manifests should behave like missing progress data.
-    cachedFeatureProgress = null;
-    return null;
-  }
-}
-
-// Get feature progress from feature_list.json
-export function getFeatureProgress(): [number, number] {
-  const snapshot = readFeatureProgressSnapshot();
-  return snapshot ? [snapshot.completed, snapshot.total] : [0, 0];
-}
-
-// Check if all features are complete
-export function checkAllFeaturesComplete(): boolean {
-  const snapshot = readFeatureProgressSnapshot();
-  return snapshot?.allComplete ?? false;
 }
 
 // API rate limiting - API 速率限制
@@ -879,81 +1621,4 @@ export async function rateLimitedCall<T>(fn: () => Promise<T>): Promise<T> {
     const next = apiLock.queue.shift();
     if (next) next();
   }
-}
-
-// ============== --init prompt builder - 提示词构建 ==============
-
-/**
- * Build initialization prompt for long-running projects
- * 构建初始化长运行项目的提示词
- */
-export function buildInitPrompt(task: string, currentDate?: string, currentOS?: string): string {
-  const date = currentDate ?? new Date().toISOString().split('T')[0];
-  const os = currentOS ?? process.platform;
-  return `Initialize a long-running project: ${task}
-
-**Current Context:**
-- Date: ${date}
-- OS: ${os}
-
-Create these files in the current directory:
-
-1. **feature_list.json** - A list of features for this project.
-
-**What is a Feature?**
-A feature is a COMPLETE, TESTABLE functionality that can be finished in 1-2 sessions.
-- Code size: ~50-300 lines per feature
-- Time: ~10-60 minutes of actual development work
-- Testable: Has clear "done" criteria
-
-**Feature Count Guidelines (use your judgment, not hard limits):**
-- **Simple task** (single file, display page, config): 1-3 features
-- **Medium task** (multi-page site, CLI tool, small API): 3-8 features
-- **Complex task** (full app with frontend + backend + database): 8-15 features
-
-**DO:**
-- Split by user-facing features (page A, page B, API group C)
-- Each feature = something a user can actually USE
-
-**DO NOT:**
-- Split by technical layers (HTML → CSS → JS → content)
-- Create features smaller than ~50 lines of code
-- Create features larger than ~300 lines of code
-
-**Examples of GOOD features:**
-- "User authentication (register, login, logout)" - complete system
-- "Todo list page with add/delete/mark-done" - complete page functionality
-- "REST API for todos (GET, POST, PUT, DELETE)" - complete API resource
-
-**Examples of BAD features:**
-- "Add HTML structure" - too small, technical layer
-- "Create the entire application" - too large
-- "Add button styling" - trivial, not a feature
-
-Format:
-{
-  "features": [
-    {
-      "description": "Feature description (clear and testable)",
-      "steps": ["step 1", "step 2", "step 3"],
-      "passes": false
-    }
-  ]
-}
-
-2. **PROGRESS.md** - A progress log file:
-   # Progress Log
-
-   ## ${date} - Project Initialization
-
-   ### Completed
-   - [x] Project initialized
-
-   ### Next Steps
-   - [ ] First feature to implement
-
-After creating files, make an initial git commit:
-   git add .
-   git commit -m "Initial commit: project setup for ${task.slice(0, 50)}"
-`;
 }

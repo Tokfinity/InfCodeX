@@ -13,6 +13,7 @@ export {
   computeConfirmTools,
   isPermissionMode,
   normalizePermissionMode,
+  permissionModeDisplayName,
 } from './types.js';
 
 // Permission utilities
@@ -36,3 +37,7 @@ export {
 
 // Executor
 export { executeWithPermission, createPermissionContext } from './executor.js';
+
+// FEATURE_158 (v0.7.39): REPL-side path-aware bash signal collector. Wired
+// into the auto-mode guardrail via the bootstrap's `extraCollectors` config.
+export { replBashPathSignalCollector } from './repl-bash-signals.js';

@@ -8,9 +8,9 @@ Thank you for your interest in contributing to KodaX / InfCodeX.
 
 ### Prerequisites
 
-- **Node.js** >= 18.0.0
-- **npm** or **yarn**
-- **TypeScript** >= 5.3.0
+- **Node.js** >= 20.0.0
+- **npm** (npm workspaces)
+- **TypeScript** >= 5.7.0 (root uses 5.9.x)
 
 ### Installation
 
@@ -88,25 +88,28 @@ KodaX / InfCodeX uses a **monorepo architecture** with npm workspaces:
 ```
 KodaX/
 ├── packages/
-│   ├── ai/                  # @kodax/ai - Independent LLM abstraction layer
-│   │   └── providers/       # 10 LLM providers (Anthropic, OpenAI, etc.)
+│   ├── llm/                 # @kodax-ai/llm - Independent LLM abstraction layer
+│   │   └── providers/       # 14 built-in provider aliases + custom registry
 │   │
-│   ├── agent/               # @kodax/agent - Generic Agent framework
-│   │   └── session/         # Session management, message handling
+│   ├── agent/               # @kodax-ai/agent - Generic Agent framework
+│   │   ├── capabilities/    # Inline MCP + Skills systems
+│   │   ├── session-lineage/ # Branchable session tree
+│   │   ├── tracing/         # Observability primitives
+│   │   └── workflow/        # Domain-neutral workflow runtime
 │   │
-│   ├── skills/              # @kodax/skills - Skills standard implementation
-│   │   └── builtin/         # Built-in skills (code-review, tdd, git-workflow)
+│   ├── coding/              # @kodax-ai/coding - Coding Agent (tools + prompts)
+│   │   ├── tools/           # Tool definitions and execution helpers
+│   │   └── repo-intelligence/ # Repointel protocol integration
 │   │
-│   ├── coding/              # @kodax/coding - Coding Agent (tools + prompts)
-│   │   └── tools/           # Tool implementations and execution helpers
-│   │
-│   └── repl/                # @kodax/repl - Interactive terminal UI
-│       ├── ui/              # Ink/React components, themes
+│   └── repl/                # @kodax-ai/repl - Interactive terminal UI
+│       ├── ui/              # Ink/React components
 │       └── interactive/     # Commands, REPL logic
 │
 ├── src/
 │   └── kodax_cli.ts         # Main CLI entry point
 │
+├── clients/                 # External clients / protocol adapters
+├── benchmark/               # Eval harness and datasets
 └── package.json             # Root workspace config
 ```
 

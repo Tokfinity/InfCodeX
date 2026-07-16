@@ -1,19 +1,7 @@
 /**
  * KodaX Session
  *
- * 会话管理 - 重新导出 @kodax/agent 会话功能
+ * 会话管理 - 重新导出 @kodax-ai/agent 会话功能
  */
 
-export {
-  appendSessionLineageLabel,
-  buildSessionTree,
-  countActiveLineageMessages,
-  createSessionLineage,
-  generateSessionId,
-  extractTitleFromMessages,
-  forkSessionLineage,
-  getSessionLineagePath,
-  getSessionMessagesFromLineage,
-  resolveSessionLineageTarget,
-  setSessionLineageActiveEntry,
-} from '@kodax/agent';
+export { appendSessionLineageLabel, applySessionCompaction, archiveOldIslands, buildSessionTree, countActiveLineageMessages, createSessionLineage, generateSessionId, extractTitleFromMessages, forkSessionLineage, getSessionLineagePath, getSessionMessagesFromLineage, resolveSessionLineageTarget, findPreviousUserEntryId, rewindSessionLineage, setSessionLineageActiveEntry } from '@kodax-ai/agent';

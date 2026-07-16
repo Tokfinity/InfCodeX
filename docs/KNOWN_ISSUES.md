@@ -1,11 +1,11 @@
 # Known Issues
 
-_Last Updated: 2026-03-28_
+_Last Updated: 2026-07-16_
 
 ---
 
 > **Archive Notice**: Historical issue records are maintained in `docs/ISSUES_ARCHIVED.md`.
-> This file tracks the active issue backlog only.
+> This file tracks the active issue backlog plus recently resolved issue records that have not yet been archived.
 
 ---
 
@@ -14,714 +14,3115 @@ _Last Updated: 2026-03-28_
 
 | ID | Priority | Status | Title | Introduced | Fixed | Created | Resolved |
 |----|----------|--------|-------|------------|-------|---------|----------|
-| 088 | High | Resolved | 消息列表视口布局不稳定 - 底部区域跳动/最后一行被裁剪 | v0.5.29 | v0.5.39 | 2026-03-16 | 2026-03-16 |
-| 087 | Medium | Resolved | 自动补全触发冲突 - @文件路径中/错误触发命令补全 | v0.5.33 | v0.5.33 | 2026-03-13 | 2026-03-13 |
-| 086 | High | Resolved | 自动补全竞态条件导致快速输入时显示过期补全 | v0.5.32 | v0.5.32 | 2026-03-12 | 2026-03-12 |
-| 085 | Medium | Resolved | 只读 Bash 命令白名单未在非 plan 模式复用 | v0.5.29 | v0.5.30 | 2026-03-12 | 2026-03-12 |
-| 084 | High | Resolved | 流式响应长时间静默中断无任何提示 | v0.5.29 | v0.5.30 | 2026-03-12 | 2026-03-12 |
-| 013 | Low | Resolved | 自动补全缓存内存泄漏风险 | v0.3.1 | v0.6.17 | 2026-02-19 | 2026-03-23 |
-| 014 | Low | Resolved | 语法高亮语言支持不全 | v0.3.1 | v0.6.17 | 2026-02-19 | 2026-03-23 |
-| 015 | Low | Resolved | Unicode 检测不完整 | v0.3.1 | v0.6.17 | 2026-02-19 | 2026-03-23 |
-| 017 | Low | Resolved | TextBuffer 未使用方法 | v0.3.1 | v0.6.17 | 2026-02-19 | 2026-03-23 |
-| 018 | Low | Resolved | TODO 注释未清理 | v0.3.1 | v0.6.17 | 2026-02-19 | 2026-03-23 |
-| 055 | Low | Resolved | Built-in Skills 未完全符合 Agent Skills 规范 | v0.4.7 | v0.6.17 | 2026-03-01 | 2026-03-23 |
-| 061 | Low | Resolved | Windows Terminal 流式输出时滚轮滚动异常 | v0.4.5 | v0.6.17 | 2026-03-02 | 2026-03-23 |
-| 077 | Low | Resolved | Skills 系统高级功能未完全实现 | v0.5.5 | v0.6.17 | 2026-03-04 | 2026-03-23 |
-| 082 | Low | Open | packages/ai 缺少单元测试 | v0.5.21 | - | 2026-03-08 | - |
-| 083 | Medium | Resolved | 缺少快捷键系统 | v0.5.29 | v0.5.30 | 2026-03-11 | 2026-03-12 |
+| 166 | High | Resolved | Electron daemon bootstrap mode leaks into user child processes | v0.7.71 RC | v0.7.71 | 2026-07-16 | 2026-07-16 |
+| 165 | High | Resolved | Packaged Electron auto-start relaunches the app instead of executing the daemon CLI | v0.7.70 | v0.7.71 | 2026-07-16 | 2026-07-16 |
+| 164 | High | Resolved | MCP cross-language zero matches can force an avoidable second model/tool round | v0.7.70 RC | v0.7.70 | 2026-07-15 | 2026-07-15 |
+| 163 | High | Resolved | A2A review found endpoint trust, task lifecycle, artifact, and protocol gaps | v0.7.69 | v0.7.70 | 2026-07-15 | 2026-07-15 |
+| 162 | High | Resolved | A2A serve drops Runtime defaults and Markdown Agent provider | v0.7.69 | v0.7.70 | 2026-07-15 | 2026-07-15 |
+| 161 | High | Resolved | MCP complete discovery can exceed result capacity or trust malformed pagination/cache state | v0.7.70 RC | v0.7.70 | 2026-07-15 | 2026-07-15 |
+| 160 | High | Resolved | Shared-daemon rollback omits reverse-bridge mutations and daemon-owned background work | v0.7.70 RC | v0.7.70 | 2026-07-15 | 2026-07-15 |
+| 159 | High | Resolved | Windows process cleanup can lose descendants when `taskkill /t` fails under load | v0.7.67 | v0.7.69 | 2026-07-15 | 2026-07-15 |
+| 158 | High | Resolved | Post-hoc output/history loss hides evidence and can increase end-to-end token use | v0.7.61 | v0.7.69 | 2026-07-14 | 2026-07-15 |
+| 157 | High | Resolved | F267/F269 review found durability, network, concurrency, and diagnostic gaps | v0.7.69 RC | v0.7.69 | 2026-07-14 | 2026-07-14 |
+| 156 | Medium | Resolved | Bare `kodax -r` repeatedly full-reads large session sets before opening the picker | v0.7.68 | v0.7.69 | 2026-07-14 | 2026-07-14 |
+| 155 | High | Resolved | Bare `kodax -r` exits after selection during the picker-to-TUI handoff | v0.7.68 | v0.7.69 | 2026-07-14 | 2026-07-14 |
+| 154 | High | Resolved | FEATURE_267/268 review found remote execution and hot-reload reliability gaps | v0.7.69 RC | v0.7.69 | 2026-07-13 | 2026-07-13 |
+| 153 | High | Resolved | FEATURE_260 post-release review found memory guard bypass and persistence isolation gaps | v0.7.68 | v0.7.69 | 2026-07-12 | 2026-07-12 |
+| 152 | High | Resolved | FEATURE_260 review found credential, mutation-guard, concurrent persistence, and eval-integrity gaps | v0.7.68 RC | v0.7.68 | 2026-07-12 | 2026-07-12 |
+| 151 | High | Resolved | Runtime config tests leak detached daemon processes and interrupted background fixtures can survive | v0.7.67 RC | v0.7.67 | 2026-07-11 | 2026-07-11 |
+| 150 | High | Resolved | v0.7.67 外部 Agent 脚本路由与执行平面关闭契约存在发布阻断缺口 | v0.7.67 RC | v0.7.67 | 2026-07-11 | 2026-07-11 |
+| 149 | High | Resolved | ACP tests persist empty sessions into the real user store | v0.7.66 | v0.7.67 | 2026-07-11 | 2026-07-11 |
+| 148 | High | Resolved | FEATURE_258 外部任务在持久化失败、配置热更新和并发回调下可能失联或状态回退 | v0.7.67 RC | v0.7.67 | 2026-07-10 | 2026-07-10 |
+| 082 | Low | Open | packages/llm 缺少单元测试 | v0.5.21 | - | 2026-03-08 | - |
 
-| 089 | High | Resolved | Feature / Design / Summary 元数据漂移 | v0.6.10 | v0.6.10 | 2026-03-18 | 2026-03-19 |
-| 090 | High | Resolved | CLI Provider 桥接语义降级：上下文与 MCP 能力丢失 | v0.6.10 | v0.6.10 | 2026-03-18 | 2026-03-19 |
 | 091 | High | Open | 缺少一等公民 MCP / Web Search / Code Search 工具体系 | v0.6.10 | - | 2026-03-18 | - |
 | 092 | High | Open | Team 模式已暴露但原生多 Agent 架构仍未闭环 | v0.6.10 | - | 2026-03-18 | - |
-| 093 | Medium | Open | 缺少 IDE / Desktop / Web 一体化分发表面 | v0.6.10 | - | 2026-03-18 | - |
+| 093 | Low | Open | 缺少 IDE / Desktop / Web 一体化分发表面 (Vibe Coding 时代已降级) | v0.6.10 | - | 2026-03-18 | - |
 | 094 | Medium | Open | 核心工作流文件与函数过大，职责耦合导致重构成本持续上升 | v0.6.13 | - | 2026-03-22 | - |
 | 095 | Medium | Open | Agent / REPL 主流程仍存在重复编排与手写运行时流程 | v0.6.13 | - | 2026-03-22 | - |
 | 096 | Low | Open | 类型边界过宽且共享可变状态较多 | v0.6.13 | - | 2026-03-22 | - |
 | 097 | Medium | Open | 错误处理、阻塞式 I/O 与执行侧副作用清理仍不完整 | v0.6.13 | - | 2026-03-22 | - |
 | 098 | Low | Open | 重复 helper、兼容层导出、魔法数字与硬编码字符串需要收敛 | v0.6.13 | - | 2026-03-22 | - |
 | 099 | Low | Open | 测试辅助代码重复，局部验证资产需要收敛 | v0.6.13 | - | 2026-03-22 | - |
-| 100 | High | Resolved | ACP Server 缺少日志/可观测性输出 | v0.6.15 | v0.6.15 | 2026-03-23 | 2026-03-23 |
 
-| 101 | High | Resolved | Adaptive multi-agent code review loses Generator output and gives Evaluator a truncated handoff | v0.7.5 | v0.7.5 | 2026-03-27 | 2026-03-27 |
-| 102 | Medium | Resolved | Repo-intelligence mixes git-tracked and filesystem-discovered file sets | v0.7.5 | v0.7.5 | 2026-03-28 | 2026-03-28 |
-| 103 | Low | Resolved | Managed-task planning recomputes repo routing signals in the same workspace | v0.7.5 | v0.7.5 | 2026-03-28 | 2026-03-28 |
-| 104 | Low | Resolved | Repo-intelligence cache JSON is read without runtime shape validation | v0.7.5 | v0.7.5 | 2026-03-28 | 2026-03-28 |
+
+| 105 | Medium | Open | kodax -c 历史记录未注入 LLM 上下文 - resume 路径可能存在 gitRoot 过滤不一致 | v0.7.14 | - | 2026-04-03 | - |
+| 106 | High | Open | Managed-task structured worker blocks remain text-coupled and can fail closed on protocol drift | v0.7.14 | - | 2026-04-08 | - |
+| 107 | Medium | Open | harnessProfile 类型命名残留 - H0/H1/H2 应替换为 worker-chain composition | v0.7.16 | - | 2026-04-11 | - |
+
+| 110 | Low | Open | 缺少 /mcp status 和 /mcp refresh REPL 命令 | v0.7.16 | - | 2026-04-11 | - |
+| 112 | High | Resolved | ask_user_question 交互机制不完备 — 数字编号歧义 + 缺少 input/multiSelect 模式 | v0.7.18 | v0.7.62 | 2026-04-12 | 2026-07-06 |
+| 118 | Medium | Open | esbuild 打包替代 tsc 直接运行 — 消除运行时模块开销与 React dev 模式 | v0.7.19 | - | 2026-04-17 | - |
+| 119 | High | Open | Scout 升级 H0→H1 后残留 pre-Scout mutationSurface — Generator 被错误锁为 docs-only | v0.7.20 | - | 2026-04-19 | - |
+| 120 | High | Open | Skill / Plan-mode 调用路径下流式注入 prompt 失效 — `canQueueFollowUps` 未开启 | 一直存在 | - | 2026-04-20 | - |
+| 122 | Medium | Open | edit / multi_edit 错误消息在 v0.7.26 过度精简 — 丢失关键信息载体导致 LLM 恢复失败 | v0.7.26 | - | 2026-04-23 | - |
+| 124 | High | Open | AMA 子 Agent dispatch 实际触发率偏低 — Controller fanout gate + H1 工具白名单串联收得过紧 | v0.7.18 | - | 2026-04-26 | - |
+| 125 | Low | Open | Thinking-mode cross-provider replay — 三个不可测 OpenAI-compat 与 anthropic 官方 strict mode 待实证 | v0.7.28 | - | 2026-04-26 | - |
+| 126 | Low | Open | tmux 默认不透传 OSC 8 超链接 — kodax 输出中的 file:// / docs URL 在 tmux 内不可点击 | 一直存在 | - | 2026-04-28 | - |
+| 133 | Low | Open | `repo-intelligence/runtime.test.ts` "falls back to OSS when premium returns malformed preturn payloads" intermittent flake under heavy parallel load — failure mode not yet captured | 待调研 | - | 2026-05-16 | - |
+| 136 | Low | Open | 流式 / 滚动时 spinner 动画卡顿 + 计时变慢 — 根因在 CPU 侧每帧渲染（React reconciliation + outputToScreen 全量重建），**非**终端写入字节量（cell-diff + DECSTBM 两次否证 I/O 假设） | 待调研 | - | 2026-05-31 | - |
+| 139 | High | Resolved | SDK session full transcript hidden by active-lineage load + error snapshots can orphan activeEntryId | long-standing | v0.7.49 | 2026-06-16 | 2026-06-16 |
+| 138 | High | Resolved | Workflow host RPC 边界对对象载荷零校验 — `synthesize` 传非数组 inputs 崩裸 TypeError + `runAgent`/`spawnAgent` 缺 name/prompt 静默烧 token | v0.7.49 | v0.7.49 | 2026-06-15 | 2026-06-15 |
+| 140 | High | Resolved | Published bundle leaves computed `./agent.js` child-executor import, breaking workflow child agents | v0.7.37 bundle distribution; confirmed v0.7.48-v0.7.50 | v0.7.52 | 2026-06-17 | 2026-06-18 |
+| 141 | Medium | Open | CI workflow long-red on Linux: cross-platform test bugs (storage list() runtime-inspection, bash background-process, h2 spawn env, skill-creator API-key-at-load) | long-standing (pre-v0.7.49) | - | 2026-06-18 | - |
+| 142 | High | Resolved | kimi-code thinking-only completion can terminate Worker with only `[Worker]` visible | v0.7.56 | v0.7.56 | 2026-06-25 | 2026-06-25 |
+| 144 | High | Resolved | Worker misreads task_output block wait expiry as child-agent timeout and writes final report before children complete | v0.7.45 | v0.7.57 | 2026-06-26 | 2026-06-26 |
+| 143 | High | Resolved | Auto[llm] speculative classify 窗口默认 500ms + late verdict 被丢弃 → 远程/慢 provider 下 near-100% 误弹确认框，auto 模式形同虚设 | v0.7.39 | v0.7.57 | 2026-06-25 | 2026-06-25 |
+| 145 | High | Resolved | Runtime daemon / SDK 边界存在生命周期、事件、权限与协议一致性缺口 | v0.7.64-v0.7.66 | v0.7.66 | 2026-07-10 | 2026-07-10 |
+| 146 | Medium | Resolved | 图片路径粘贴处理失败时吞掉原始输入且无可见反馈 | v0.7.40 | v0.7.66 | 2026-07-10 | 2026-07-10 |
+| 147 | High | Resolved | GitHub Release 二进制归档遗漏 Runtime 与工具 Worker sidecar | v0.7.66 RC | v0.7.66 | 2026-07-10 | 2026-07-10 |
 
 ---
 
 ## Issue Details
 <!-- Full details for each issue - REQUIRED for all issues -->
----
 
-### 088: 消息列表视口布局不稳定 - 底部区域跳动/最后一行被裁剪 (RESOLVED)
+### 166: Electron daemon bootstrap mode leaks into user child processes
+
 - **Priority**: High
 - **Status**: Resolved
-- **Introduced**: v0.5.29
-- **Fixed**: v0.5.39
-- **Created**: 2026-03-16
-- **Resolution Date**: 2026-03-16
+- **Introduced**: v0.7.71 RC
+- **Fixed**: v0.7.71
+- **Created**: 2026-07-16
+- **Resolved**: 2026-07-16
 
-- **Original Problem**:
-  终端 REPL 界面存在多个布局不稳定问题：
+#### Original Problem
 
-  1. **底部区域高度跳动**：自动补全建议显示/消失、帮助面板显示/隐藏时，消息区域高度会突然变化，导致内容上下跳动
-  2. **最后一行消息被裁剪**：消息列表最后一行经常被底部固定区域覆盖，不可见
-  3. **状态栏换行不可预测**：窄终端下状态栏文本的换行行数与实际渲染不一致，导致 viewport budget 计算偏差
-  4. **历史消息重渲染性能**：使用 Ink `<Static>` 分割历史/动态消息，但分割逻辑不够精确，长对话中仍然存在不必要的重渲染
-  5. **Select 对话框选项无限制**：选项过多时可能占满整个终端，把消息区和输入区全部挤出视口
-  6. **确认指令逻辑内嵌 JSX**：确认对话框的指令文本生成逻辑嵌套在 JSX 中，难以测试和复用
+The packaged Electron daemon auto-start fix correctly starts the application
+executable in Node mode, but leaves `ELECTRON_RUN_AS_NODE=1` in the long-lived
+daemon environment. Bash, MCP, LSP, sandbox, and other external processes can
+inherit that environment. A user command which launches an Electron program
+may therefore start it in Node mode instead of its normal application mode.
 
-- **Root Cause Analysis**:
-  1. 没有统一的视口行数预算机制，底部各区块高度变化无法被消息区感知
-  2. 消息区依赖 Ink 的 `overflowY="hidden"` 来裁剪，但实际行数计算不考虑底部区域
-  3. StatusBar 只渲染不导出纯文本格式化结果，无法在预算计算中复用
-  4. 历史消息的 Static/Dynamic 分割基于最后一个 user/system 索引，但该索引变化时会导致整块消息重新分配渲染方式
+#### Context
 
-- **Resolution**:
+- The variable is needed only while the Electron executable bootstraps the
+  daemon or another trusted internal Node entry.
+- Deleting it only after daemon startup is insufficient unless trusted internal
+  `process.execPath` launches retain a bounded Node bootstrap path.
+- Electron's `RunAsNode` fuse may disable this mechanism and must be an explicit
+  compatibility boundary.
+- The real Windows packaged/asar smoke currently runs manually and is not a
+  required CI or release gate.
 
-  **核心变更：Viewport Budget + Transcript Layout 架构**
+#### Root Cause
 
-  1. **新增 `viewport-budget.ts`** — 统一计算底部所有区块（输入框、补全建议、帮助栏、状态栏、确认对话框、UI 请求对话框）占用的行数，从中减去得到消息区可用行数
-     - `calculateInputPromptRows()`: 考虑输入文本换行后的实际行数
-     - `calculateViewportBudget()`: 汇总所有底部区块，输出 `messageRows` 和 `visibleSelectOptions`
-     - 使用 `calculateVisualLayout()` 与实际渲染使用相同的文本换行算法
+`createRuntimeDaemonServeEnvironment()` adds `ELECTRON_RUN_AS_NODE=1` to the
+daemon child environment, and the daemon retains that copied environment for
+its full lifetime. No preload consumes the bootstrap-only variable before
+Runtime initialization or user process spawning.
 
-  2. **新增 `transcript-layout.ts`** — 将消息列表从嵌套 React 组件改为扁平的 `TranscriptRow[]` 数据模型
-     - `buildTranscriptRows()`: 将所有 HistoryItem 类型转换为统一的 TranscriptRow 数组
-     - `getVisibleTranscriptRows()`: 根据 viewportRows 从尾部切片，保证最新内容可见
-     - `resolveTranscriptColor()`: 将语义化颜色 token 映射到 theme 实际颜色值
-     - 所有文本换行使用 `calculateVisualLayout()` 与渲染保持一致
+#### Proposed Solution
 
-  3. **StatusBar 导出 `getStatusBarText()`** — 纯函数返回状态栏文本，供 viewport budget 和渲染共用，确保换行计算一致
+Introduce one internal Node launch contract which temporarily enables Electron
+Node mode and prepends a bootstrap preload that removes the variable before the
+target module executes. Use it for the daemon and every trusted internal
+`process.execPath` child, while ordinary user process environments remain
+clean. Extend the packaged Windows smoke to observe the daemon environment and
+a daemon-spawned external child, document the fuse boundary, and require the
+smoke in CI and release workflows.
 
-  4. **重构 `MessageList`** — 移除 Static/Dynamic 分割，改为统一的 TranscriptRow 渲染
-     - 移除 `<Static>` 组件（简化架构，牺牲少量长对话性能）
-     - 新增 `TranscriptRowRenderer` 组件统一渲染所有行类型
-     - 新增 `viewportRows` 和 `viewportWidth` props
+#### Resolution
 
-  5. **重构 `AutocompleteSuggestions`** — 将预留空间的状态管理提升到 `InkREPLInner`
-     - 移除组件内部的 `useState`/`useEffect`，改为由父组件传入 `reserveSpace`
-     - `width` prop 从硬编码 80 改为动态 `terminalWidth - 2`
+All trusted `process.execPath` children now use one internal launch contract.
+For a packaged Electron executable it sets `ELECTRON_RUN_AS_NODE=1` only at the
+OS exec boundary and prepends a Node import which deletes the variable before
+the target entrypoint loads. Runtime startup also removes the variable as a
+non-optional invariant. Ordinary Node launches keep their arguments unchanged,
+and user Bash, MCP, native LSP, sandbox, and external child environments remain
+clean.
 
-  6. **提取 `confirmInstruction`** — 从 JSX 内联逻辑提取为 `useMemo`，便于测试和复用
+Daemon auto-start, CLI daemon start, JavaScript LSP, Skill CLI, and sandbox
+broker/interpreter entrypoints use the bounded contract. The public guide now
+states that packaged auto-start requires Electron's default-enabled `RunAsNode`
+fuse; a deliberately disabled fuse must use an ordinary Node/CLI daemon with
+attach-only SDK mode, and packaged timeout diagnostics name that boundary.
 
-  7. **提取 `statusBarProps`** — StatusBar 的所有 props 合并为一个 `useMemo` 对象
+The Windows Electron 42.5.0 + asar smoke now loads a daemon extension which
+observes both daemon and daemon-spawned external-process environments. It is a
+required Windows CI job and a release gate for the `win-x64` build.
 
-  8. **Select 对话框选项截断** — 根据 `viewportBudget.visibleSelectOptions` 截断选项列表，避免占满视口
+#### Files Changed
 
-  9. **UI 清理** — 移除部分中文注释，emoji 改为 Unicode 转义
+- `packages/agent/src/runtime/process-hardening.ts`
+- `packages/agent/src/runtime/process-hardening.test.ts`
+- `packages/agent/src/index.ts`
+- `packages/coding/src/lsp/spawn.ts`
+- `packages/coding/src/lsp/spawn.test.ts`
+- `src/runtime-daemon/process.ts`
+- `src/runtime-daemon/process.test.ts`
+- `src/kodax_cli.ts`
+- `src/sandbox-runtime.ts`
+- `src/skill_cli.ts`
+- `scripts/test-electron-daemon-smoke.mjs`
+- `tests/fixtures/electron-daemon-smoke/main.cjs`
+- `.github/workflows/ci.yml`
+- `.github/workflows/release.yml`
+- `docs/SDK_EMBEDDER_GUIDE.md`
+- `docs/test-guides/ISSUE_166_v0.7.71_REGRESSION_GUIDE.md`
 
-- **Code Review 发现的遗留问题**（未修复，需后续处理）：
-  1. `model` 字段丢失 `currentConfig.model` 回退（statusBarProps 中 model fallback chain 不完整）
-  2. `MessageList` 的 `paddingY={1}` 未在 viewport budget 中扣除（实际可见行少 2 行）
-  3. 中文注释清理不彻底（新增了一些中文注释）
-  4. `getWrappedLogicalLines()` 不做 wrap 只按换行符切片（maxLines 截断不一致）
-  5. race condition 阻塞时移除了 `console.log` 无任何反馈
+#### Verification
 
-- **Files Changed**:
-  - `packages/repl/src/ui/InkREPL.tsx` — viewport budget 集成、状态提升、props 提取
-  - `packages/repl/src/ui/components/MessageList.tsx` — TranscriptRow 渲染重构
-  - `packages/repl/src/ui/components/StatusBar.tsx` — 导出 getStatusBarText()
-  - `packages/repl/src/ui/themes/dark.ts` — 添加 thinking 颜色
-  - `packages/repl/src/ui/types.ts` — 添加 thinking 颜色到 ThemeColors
-  - `packages/repl/src/ui/utils/viewport-budget.ts` — **新增** 视口预算计算
-  - `packages/repl/src/ui/utils/viewport-budget.test.ts` — **新增** 预算计算测试
-  - `packages/repl/src/ui/utils/transcript-layout.ts` — **新增** Transcript 数据模型
-  - `packages/repl/src/ui/utils/transcript-layout.test.ts` — **新增** Transcript 测试
-  - `tests/ui/MessageList.test.tsx` — 更新测试用例适配新 props
+- Unit/process tests prove the bootstrap switch is consumed before target code,
+  including when optional process hardening is disabled.
+- Packaged Windows Electron 42.5.0 + asar smoke passed: daemon cold-started,
+  Main ran once, daemon and external-child probes both reported the variable
+  absent, Node attached to the same Runtime, detach semantics held, and two
+  owner transitions completed.
+- Full repository suite passed: 835 files and 10,007 tests, with only the
+  repository's declared skips/todos remaining.
+- Workspace TypeScript build, SDK bundle, declarations, and workflow YAML
+  validation passed.
 
-- **Tests**:
-  - viewport-budget: 3 个测试用例（输入换行、综合预算、select 截断）
-  - transcript-layout: 4 个测试用例（末行保留、viewport 切片、流式集成、工具进度）
-  - MessageList: 14 个现有测试用例适配新 props
+### 165: Packaged Electron auto-start relaunches the app instead of executing the daemon CLI
 
----
+- **Priority**: High
+- **Status**: Resolved
+- **Introduced**: v0.7.70
+- **Fixed**: v0.7.71
+- **Created**: 2026-07-16
+- **Resolved**: 2026-07-16
 
-### 087: 自动补全触发冲突 - @文件路径中/错误触发命令补全 (RESOLVED)
+#### Original Problem
+
+In a Windows packaged Electron application using asar,
+`connectKodaXRuntime({ autoStart: true })` timed out after the full daemon
+startup budget on a fresh profile. Attaching to a daemon started beforehand by
+ordinary Node worked, proving that transport, authentication, packaged CLI
+files, and the shared Runtime were healthy. The packaged app could only start
+the daemon when its child executable was explicitly placed in Electron's Node
+execution mode. SDK embedders must not need to mutate their global environment,
+resolve private CLI paths, or duplicate owner logic.
+
+#### Context
+
+- Reproduced on Windows 10 x64 with Electron 42.5.0 and asar packaging.
+- Ordinary Node CLI/SDK auto-start is unaffected.
+- `ConnectKodaXRuntimeOptions.homeDir` is also easy to confuse with
+  `KODAX_HOME`: the option is the base directory that owns `.kodax`, while the
+  environment variable points directly at the `.kodax` data directory.
+
+#### Root Cause
+
+The SDK spawned `process.execPath`. In Node this is the Node executable, but in
+a packaged Electron Main process it is the packaged application executable.
+The child inherited normal Electron application mode and therefore did not
+execute the resolved daemon CLI entry as a Node script.
+
+#### Proposed Solution
+
+Enable Node execution mode only in the spawned daemon child when the host is
+Electron, without mutating the parent environment. Preserve the existing Node
+spawn path and daemon ownership semantics. Add focused environment tests,
+Windows Electron/asar smoke coverage, and explicit public documentation for
+`homeDir`, CLI `--home`, and `KODAX_HOME` path meanings.
+
+#### Resolution
+
+SDK auto-start now detects an Electron host and uses a bounded Node bootstrap
+for the detached daemon child. The parent Electron environment is not mutated,
+the bootstrap switch is removed before daemon code loads, and ordinary Node
+launch behavior remains unchanged. The SDK also validates the resolved daemon
+CLI sidecar before spawn, so an incorrectly bundled embedder fails immediately
+with an actionable error instead of waiting for the startup timeout.
+
+The public option comments and Embedder Guide now state that SDK `homeDir` and
+CLI `--home` identify the base directory which owns `.kodax`, whereas
+`KODAX_HOME` already identifies the `.kodax` data directory.
+
+#### Files Changed
+
+- `src/runtime-daemon/process.ts`
+- `src/runtime-daemon/process.test.ts`
+- `src/sdk-runtime.ts`
+- `scripts/test-electron-daemon-smoke.mjs`
+- `tests/fixtures/electron-daemon-smoke/`
+- `docs/SDK_EMBEDDER_GUIDE.md`
+- `docs/test-guides/ISSUE_165_v0.7.71_REGRESSION_GUIDE.md`
+
+#### Verification
+
+- Packaged Windows Electron 42.5.0 + asar smoke: passed, including cold start,
+  one GUI Main entry, same-runtime Node attach, logical `1 -> 2 -> 1` client
+  convergence, detach-only close, and two daemon/inline owner transitions.
+- Runtime daemon and process-distinct CLI regression: 156/156 passed.
+- SDK Runtime facade/config regression: 69/69 passed.
+- TypeScript `tsc --noEmit` and the publish bundle build passed.
+
+### 164: MCP cross-language zero matches can force an avoidable second model/tool round
+
+- **Priority**: High
+- **Status**: **Resolved** (v0.7.70)
+- **Introduced**: v0.7.70 RC
+- **Created**: 2026-07-15
+- **Resolved**: 2026-07-15
+- **Fixed**: v0.7.70
+
+#### Original Problem
+
+`mcp_search` used lexical matching only. A Chinese query against a provider whose
+catalog metadata is English could therefore return a truthful but unhelpful zero
+result even though the requested capability existed. The model then had to infer
+that the query vocabulary was wrong and issue another search or inventory call.
+This made progressive disclosure less accurate and could spend more tokens and
+latency than returning a compact, exact recovery in the first result.
+
+#### Context
+
+The issue affects cross-language or vocabulary-mismatched searches, especially
+large English MCP catalogs queried by Chinese users. Successful lexical searches
+were already efficient and should not pay any permanent prompt text, embedding,
+translation, or extra lookup cost. A fallback also must not expose an order-biased
+prefix or exceed the physical tool-result capacity.
+
+#### Root Cause
+
+- Query tokenization split punctuation and whitespace but not compact CJK words.
+- A non-empty zero result did not distinguish an actually empty filtered catalog
+  from a query/catalog vocabulary mismatch.
+- The search facade had no cost-admitted, lossless zero-match recovery path.
+
+#### Resolution
+
+- Added `Intl.Segmenter` word segmentation for CJK query tokens. This improves
+  same-language CJK metadata matching without pretending to translate languages.
+- On a non-empty zero match only, `mcp_search` reads the same filtered inventory
+  through the already validated runtime snapshot. The MCP runtime reuses its
+  in-memory live catalog unless a dirty signal invalidated it, so this adds no
+  second model/tool round and no normal-path discovery work.
+- When every exact id can be represented losslessly as a shared canonical prefix
+  plus all suffixes, the tool returns that complete known-snapshot inventory only
+  if it costs no more than a normal default eight-item search page and fits the
+  current physical result capacity.
+- If either admission check fails, the tool emits a compact catalog-language retry
+  signal with no partial id list or cursor. A revision change between the zero
+  result and recovery inventory fails closed with `MCP_CATALOG_CHANGED_RESTART`.
+- No embeddings, model translation, bilingual dictionary, permanent language
+  instruction, static byte threshold, or lossy artifact was added.
+- A fully unavailable catalog is no longer mistaken for a lexical zero match,
+  avoiding a duplicate discovery/connection attempt. Stale or mixed grouped
+  recovery retains the affected server and bounded failure reason.
+
+#### Files Changed
+
+- `packages/agent/src/capabilities/mcp/catalog.ts`
+- `packages/coding/src/tools/mcp-search.ts`
+- Adjacent MCP catalog/tool tests and FEATURE_035 design/test documentation
+
+#### Tests Added
+
+- Compact CJK same-language ranking
+- Successful-search single-pass invariant
+- Lossless grouped zero-match recovery with preserved server/kind filters
+- Dynamic normal-page and physical-capacity admission
+- Revision-change fail-closed behavior and no order-biased oversized fallback
+- Fully unavailable single-pass behavior and preserved grouped failure diagnostics
+- Real local GitHub snapshot: 26/26 exact ids reconstructed; grouped recovery
+  214 tokens versus 353 for literal inventory (39.4% reduction)
+
+### 163: A2A review found endpoint trust, task lifecycle, artifact, and protocol gaps
+
+- **Priority**: High
+- **Status**: **Resolved** (v0.7.70)
+- **Introduced**: v0.7.69
+- **Created**: 2026-07-15
+- **Resolved**: 2026-07-15
+- **Fixed**: v0.7.70
+
+#### Original Problem
+
+Post-fix review found that outbound discovery trusted an Agent Card's selected
+interface without binding it to the trusted Card origin; the no-code Bearer
+Card used a pre-1.0 authentication shape; recursive remote reads did not
+revalidate every concrete file; `INPUT_REQUIRED` started another Runtime run
+instead of answering the pending interaction; terminal records were never
+pruned; and generated file artifacts were not returned over A2A. Additional
+lifecycle and interoperability gaps left failed starts or subscriptions live,
+accepted absent protocol versions as 1.0, ignored bounded history/list filters,
+and failed to poll after a premature normal stream EOF.
+
+#### Context
+
+These defects affect configured outbound Agents, inbound no-code serving,
+fixed workspaces, long-lived principals, interactive tasks, and the document or
+presentation scenarios that motivated the general-Agent A2A surface. Existing
+happy-path tests passed because they did not exercise these boundaries.
+
+#### Root Cause
+
+- Discovery validated the Card fetch and later endpoint independently instead
+  of pinning the selected interface to the discovery trust decision.
+- Remote read guardrails authorized only the requested search root, while the
+  grep/glob handlers enumerated additional concrete paths internally.
+- The server mapped Runtime state names but did not bridge Runtime interaction,
+  artifact, pruning, or cleanup ownership into A2A task semantics.
+- Product Card construction and several request fields were tested only against
+  internal parsers rather than the frozen A2A 1.0 ProtoJSON contract.
+
+#### Proposed Solution
+
+Add boundary-first regression tests, then minimally bind selected interfaces to
+the trusted origin and advertised Bearer scheme; revalidate concrete read paths;
+bridge pending Runtime user input into the same task/run; prune only oldest
+terminal records; publish explicitly staged run artifacts; close terminal
+subscriptions and fail starts safely; and implement the missing bounded A2A 1.0
+request/version/stream semantics. Avoid new storage engines, generic credential
+frameworks, or public artifact hosting.
+
+#### Resolution
+
+- Bound Card-selected interfaces to the trusted discovery origin, required
+  advertised A2A 1.0 Bearer security before credential use, completed private
+  address classification, and preserved DNS-pinned transport behavior.
+- Revalidated every concrete `read`/`grep`/`glob` path, propagated the read,
+  tool, Skill, and Skill-script ceilings to child runs, and kept staged output
+  paths inside the bound workspace.
+- Resumed pending Runtime input on the original run, redacted private defaults
+  and task paths, cleaned terminal subscriptions, failed start errors safely,
+  and pruned only oldest terminal records.
+- Added bounded history/list/version validation, accepted-output negotiation,
+  explicit staged document artifacts, successful admitted Skill-script output
+  promotion, streaming artifact updates, inline remote artifact authorization,
+  and polling fallback after premature stream EOF. Declared-but-failed Skill
+  outputs and ordinary workspace writes are never published implicitly.
+- Restored authenticated SSE through the credential broker, validated JSON-RPC
+  correlation and task/context scope, accumulated `artifactUpdate.append`
+  chunks by artifact ID, preserved direct-Message file Parts, replaced offset
+  pagination with the designed stable opaque task cursor, and supplied
+  sanitized context/input modes to host authorization.
+- Tightened Part/task forward-compatible parsing and optional-operation errors,
+  kept successful tasks successful when a staged output disappears, and stopped
+  treating an access-denied live-process probe as a stale Windows store lock.
+- Kept the implementation on the existing file store, Runtime interaction
+  service, artifact ledger, `.kodax-a2a-staging` broker, and ASRT promotion
+  result; no task database, generic OAuth framework, or public artifact host was
+  introduced.
+
+#### Files Changed
+
+- `src/a2a/{server,task-store,client-executor,safe-fetch,schemas,product}.ts`
+- `src/runtime-agent-binding.ts`
+- `packages/agent/src/session-lineage/compaction/file-tracker.ts`
+- `packages/coding/src/{types,child-executor}.ts`
+- `packages/coding/src/agent-runtime/tool-execution-context.ts`
+- `packages/coding/src/tools/{read,grep,glob}.ts`
+- Adjacent A2A, binding, tool, child-executor, CLI, and protocol tests
+
+#### Tests Added
+
+- Added regressions for same-origin endpoint trust, A2A 1.0 Bearer Card shape,
+  mapped/private address handling, per-file read guards, child policy
+  inheritance, input continuation, retention, cleanup, history/list validation,
+  staged/Skill/direct/remote artifacts, failed Skill output, non-published
+  ordinary writes, authenticated SSE, cross-task/mismatched JSON-RPC responses,
+  appended artifact chunks, stable cursor pagination, authorization scope, lock
+  ownership, redaction, failed starts, and early stream EOF.
+
+### 162: A2A serve drops Runtime defaults and Markdown Agent provider
+
+- **Priority**: High
+- **Status**: **Resolved** (v0.7.70)
+- **Introduced**: v0.7.69
+- **Created**: 2026-07-15
+- **Resolved**: 2026-07-15
+- **Fixed**: v0.7.70
+
+#### Original Problem
+
+`kodax a2a serve --provider zai-coding` could start listening but fail the
+first inbound run with `runtime.runs.start requires input.options.provider or
+runtime defaultProvider`. Declaring the same provider in the selected user
+Markdown Agent did not help. The expected behavior is that an admitted local
+Agent uses its explicit provider, while an Agent without one falls back through
+the serving Runtime's CLI, environment, core config, and built-in defaults.
+
+#### Context
+
+The failure blocked both `runtime-default` and user Markdown Agent A2A serving
+when no other provider happened to reach the Runtime. The same Commander option
+ownership pattern could silently drop prefixed provider/model/reasoning options
+from daemon, ACP, and Skill subcommands. It failed closed and did not expose
+credentials or expand remote authority.
+
+#### Root Cause
+
+- Commander stored duplicated root/subcommand options on the root command,
+  while affected actions read only their local option object.
+- A root option before a subcommand bypassed the raw `argv[0]` early-return
+  check and could fall through into the ordinary CLI after the subcommand.
+- `a2a serve` did not run the normal environment/config/default Runtime
+  provider and provider-compatible model selection.
+- The Markdown loader supported model and effort but omitted the already
+  supported `AgentContent.provider` field.
+- Integration tests configured only a bare command and therefore did not
+  reproduce the real root/subcommand collision.
+
+#### Resolution
+
+Affected actions now merge accepted global and local options explicitly, with
+the selected command's values authoritative, without changing Commander's
+existing option-position compatibility. Parsed command identity, rather than
+raw argument position, prevents subcommand fallthrough. `a2a serve` now applies
+the same CLI/environment/config/default provider precedence and model-provider
+compatibility rule as other hosted Runtime entry points. Markdown Agent
+`provider` is trimmed, validated, admitted, discoverable, and passed to local
+Runtime runs; remote requests still cannot override provider or model.
+
+#### Files Changed
+
+- `src/cli_option_helpers.ts`
+- `src/kodax_cli.ts`
+- `src/integration-cli.ts`
+- `packages/coding/src/construction/markdown-loader.ts`
+- Related CLI, integration, Markdown loader, and Runtime binding tests
+
+#### Tests Added
+
+- Root/subcommand duplicate option positions and subcommand fallthrough
+- A2A CLI, environment, config, model compatibility, and override precedence
+- Markdown provider pass-through, discovery, validation, and Runtime binding
+
+### 161: MCP complete discovery can exceed result capacity or trust malformed pagination/cache state
+
+- **Priority**: High
+- **Status**: **Resolved** (v0.7.70)
+- **Introduced**: v0.7.70 RC
+- **Created**: 2026-07-15
+- **Resolved**: 2026-07-15
+- **Fixed**: v0.7.70
+
+#### Original Problem
+
+The progressive MCP catalog implementation can return a page larger than the
+reported `toolResultCapacityTokens` when even one rendered capability does not
+fit. At the provider boundary, structurally invalid cache files can prevent a
+healthy live server from recovering, and invalid or cyclic MCP list pagination
+can be accepted as complete or can keep discovery paging indefinitely.
+
+#### Context
+
+These failures affect `mcp_search` inventory/search results, first-use live
+catalog validation, stale-cache fallback, and any MCP server whose list results
+are paginated. They violate the feature's complete-or-explicitly-incomplete and
+capacity-bounded contracts.
+
+#### Root Cause
+
+- Capacity fitting returned the one-item candidate without checking whether it
+  actually fit.
+- Cache loading trusted TypeScript casts instead of validating the two persisted
+  catalog files as one coherent snapshot.
+- MCP list parsing treated malformed payloads as empty lists and did not reject
+  repeated cursors or duplicate capabilities across pages.
+- A successful live refresh was marked stale when only optional cache
+  persistence failed.
+
+#### Proposed Solution
+
+Reject or explicitly report an unrenderable page without consuming an item;
+validate cache structure and cross-file consistency; fail boundedly on malformed
+or cyclic pagination while deduplicating stable capability ids; and keep live
+catalog truth independent from best-effort cache persistence.
+
+#### Resolution
+
+Capacity fitting now returns a bounded no-consumption marker when even one item
+cannot fit, and reports context exhaustion rather than an oversized item when
+an empty result's metadata cannot fit. Search ranking uses complete-token
+coverage as a dominant sort key.
+List parsing rejects malformed containers, entries, identifiers, resource URIs,
+explicit null or repeated cursors while deduplicating ids across pages. A
+`list_changed` notification received during pagination invalidates the in-flight
+transaction instead of being overwritten by its result. Concurrent first-use
+discovery calls share one refresh, and kind-filtered cursors use a revision scoped
+to that filtered catalog. Cache reads validate
+both files as one coherent snapshot, so corrupt state falls through to live
+recovery. Live discovery remains complete when only best-effort cache
+persistence fails; the error is emitted and retained in diagnostics. Inventory
+and ranked results both mark provider data as untrusted.
+
+#### Files Changed
+
+- `packages/agent/src/capabilities/mcp/catalog.ts`
+- `packages/agent/src/capabilities/mcp/runtime.ts`
+- `packages/agent/src/capabilities/mcp/catalog.test.ts`
+- `packages/agent/src/capabilities/mcp/runtime.test.ts`
+- `packages/agent/src/capabilities/mcp/provider.test.ts`
+- `packages/coding/src/tools/mcp-search.ts`
+- `packages/coding/src/tools/mcp-tools.test.ts`
+- `docs/features/v0.8.5.md`
+- `docs/test-guides/FEATURE_035_v0.7.70_TEST_GUIDE.md`
+
+#### Tests Added
+
+- Single-item capacity overflow, empty-result exhaustion, and no-consumption behavior.
+- Long-query complete-token ranking dominance.
+- Malformed list shape/entry/id/URI rejection, repeated-cursor rejection, and
+  explicit-null cursor rejection, cross-page id deduplication, and in-flight
+  `list_changed` invalidation.
+- Corrupt-cache live recovery and cache-write-failure live truth.
+- Concurrent discovery coalescing and kind-scoped catalog revisions.
+- Untrusted-data labeling on inventory output.
+
+### 160: Shared-daemon rollback omits reverse-bridge mutations and daemon-owned background work
+
+- **Priority**: High
+- **Status**: **Resolved** (v0.7.70)
+- **Introduced**: v0.7.70 RC
+- **Created**: 2026-07-15
+- **Resolved**: 2026-07-15
+- **Fixed**: v0.7.70
+
+#### Original Problem
+
+The revisioned daemon-to-inline rollback fence did not classify credential and
+Host Tool register/revoke/completion requests as draining-sensitive mutations.
+Those requests could still alter reverse-bridge state after rollback draining
+began. Stop preflight also ignored non-terminal Workflow and External Agent
+tasks, so `canStop` could be true while daemon-owned background work remained.
+
+#### Root Cause
+
+The protocol mutation classifier was reused as the management draining fence
+but omitted reverse-bridge control methods. Runtime preflight projected only
+ordinary runs and pending interactions, while management revision observed
+ordinary Runtime events rather than every daemon-owned background lifecycle.
+
+#### Proposed Solution
+
+Fence all reverse-bridge state changes without persisting credentials, expose
+active Workflow and AgentTask state in typed preflight, fail closed on active or
+uncertain work, and make rollback CAS observe background lifecycle changes.
+Add race tests that mutate each state after inspection and require `conflict`.
+
+#### Resolution
+
+Reverse-bridge register/revoke/supply/completion requests now use a dedicated
+draining-sensitive classifier. This keeps them inside the atomic stop fence
+without adding credential or Host Tool result frames to the durable operation
+journal. Typed preflight now exposes active Workflows and AgentTasks, treats
+unknown/future non-terminal states conservatively, and reports dedicated
+blockers. Management fingerprints each authoritative preflight projection, so
+background lifecycle changes advance the rollback revision even when they do
+not emit a normal Runtime event.
+
+#### Files Changed
+
+- `src/runtime-daemon/protocol.ts`
+- `src/runtime-daemon/server.ts`
+- `src/runtime-daemon/management.ts`
+- `src/sdk-runtime.ts`
+- `docs/SDK_EMBEDDER_GUIDE.md`
+- `docs/features/v0.7.70.md`
+- `docs/test-guides/ISSUE_F269_v0.7.70_REGRESSION_GUIDE.md`
+
+#### Tests Added
+
+- All six credential/Host Tool state-changing methods are rejected by the
+  management fence during draining while remaining outside durable operations.
+- Running/paused Workflow and non-terminal/unknown AgentTask states block stop
+  and clear only after reaching terminal states.
+- A background lifecycle change after management inspection advances revision
+  and rejects the stale rollback without changing owner policy.
+
+### 159: Windows process cleanup can lose descendants when `taskkill /t` fails under load
+
+- **Priority**: High
+- **Status**: **Resolved** (v0.7.69)
+- **Introduced**: v0.7.67
+- **Created**: 2026-07-15
+- **Resolved**: 2026-07-15
+- **Fixed**: v0.7.69
+
+#### Original Problem
+
+Windows subprocess cleanup treated completion of `taskkill /t` as if the tree
+had been terminated, even when the command timed out or exited non-zero. The
+fallback then depended on CIM/WMIC parent queries, which can themselves fail
+under the same management-service load. A surviving descendant could therefore
+outlive its direct parent and accumulate across release-test runs.
+
+#### Root Cause
+
+The helper discarded the `taskkill` exit status and had no native parent graph
+that was independent of Windows management services. The agent runtime and LLM
+CLI-event copies repeated the same assumption.
+
+#### Resolution
+
+`taskkill` now reports success explicitly. When it does not finish successfully,
+cleanup captures the process parent graph with Toolhelp32 through a bounded,
+non-interactive PowerShell helper before directly terminating the root. The
+existing CIM/WMIC path remains a compatibility fallback only. Descendants are
+then terminated leaf-first and the helper waits for the complete target set.
+Both production copies use the same escalation contract.
+
+#### Files Changed
+
+- `packages/agent/src/runtime/process-tree.ts`
+- `packages/agent/src/runtime/process-tree.test.ts`
+- `packages/llm/src/cli-events/process-tree.ts`
+- `docs/test-guides/ISSUE_159_v0.7.69_REGRESSION_GUIDE.md`
+
+#### Tests Added
+
+- A Windows-only integration regression starts a real parent and nested Node
+  child, invokes process-tree cleanup, and verifies the descendant exits.
+
+### 158: Post-hoc output/history loss hides evidence and can increase end-to-end token use
+
+- **Priority**: High
+- **Status**: **Resolved** (reopened and corrected after implementation review)
+- **Introduced**: v0.7.61
+- **Created**: 2026-07-14
+- **Resolved**: 2026-07-15
+- **Fixed**: v0.7.69
+
+#### Original Problem
+
+FEATURE_251 applied command-aware lossy filters and fixed per-tool truncation
+before the model's next request. In a real `git log --stat` review, the Worker
+received a compressed result, announced that it needed to read the raw artifact,
+and performed that recovery read. The intended one-round token saving therefore
+added a second tool-result cycle, while the first response no longer contained
+all decision-relevant evidence. A separate malformed `git log --format` command
+was also rerun in the trace, but that rerun is not attributed to compression.
+
+The same failure mode existed beyond Bash: fixed caps or shortened fields in
+`grep`, `glob`, `code_search`, retrieval rendering, long-line `read`, completed
+`task_output`, and independently guarded SA/AMA dispatch paths could omit data
+before the system knew whether the complete result fit the real context window.
+The old 32 KiB / 600-line threshold was an empirical preview size, not a valid
+model-capacity boundary.
+
+The audit found the same policy error in history compaction. Default
+microcompaction could clear ordinary tool results below physical capacity, and
+the semantic compactor could prune tool results or crop user messages before
+asking the summary model. Static trigger/target percentages ignored the final
+provider system prompt, tool schema, output reserve, and fixed request overhead.
+Those operations could discard exact evidence when the next request still fit.
+
+#### Root Cause
+
+- A local `never_worse` comparison optimized only the current string; it did
+  not price recovery calls, an extra inference round, or evidence loss.
+- Bash semantic filters ran transparently after execution, so the model could
+  not choose a task-preserving projection before producing the data.
+- Multiple layers owned truncation independently: Bash, retrieval helpers,
+  bridge dispatch, and the AMA Runner. Their fixed byte/line caps ignored the
+  aggregate tool-result batch and the physical next-request capacity.
+- History compaction treated a percentage of the advertised context window as
+  the decision boundary and used destructive pre-summary/fallback pruning. It
+  did not stop as soon as the final physical provider request fit.
+- The 512 KiB Bash capture constant was an irreversible tail cap rather than a
+  memory-to-disk transition. Long lines also lacked an exact continuation
+  coordinate.
+- Anthropic cache-read/write tokens were included in total input and then
+  charged again, distorting the cost signal used to assess the optimization.
+
+#### Evidence
+
+The evidence is one captured production-shaped review, not a population
+benchmark:
+
+- Session: `C:\Users\iceto\.kodax\sessions\c-works-gitworks-kodax-author-kodax-66910f2fd8\20260714_174750.jsonl`
+- Raw artifact: `C:\Users\iceto\.kodax\tool-results\2026-07-14T09-52-03-904Z-KodaX-bash-output-raw-6qsktp.txt`
+
+The first `git log v0.7.68..HEAD --oneline --stat` result was replaced with
+`[git log summarized: showing 30 of 207 lines]`. The Worker then said it needed
+the complete raw output and read the 12,577-byte artifact. It also repaired and
+reran a separate `%`-escaping-broken `git log --format` command. This establishes
+one recovery read and its additional tool-result cycle after automatic lossy
+filtering; it does not establish that compression caused the format-command
+rerun. It also does **not** establish a recovery frequency, percentage token
+penalty, or break-even rate; earlier percentage claims had no supporting sample
+set and were removed.
+
+#### Reopened Review Findings (2026-07-15)
+
+The first corrective implementation established the intended aggregate-capacity
+direction, but review found unresolved correctness and resource regressions:
+
+- untrusted tool text could forge the internal incomplete-result marker and a
+  recovery path;
+- batch-capacity failures did not carry a recoverable transcript and could save
+  an empty authoritative session;
+- AMA observers and the stall sidecar consumed raw results before batch
+  admission;
+- child evidence and removed acquisition/concurrency limits bypassed the
+  next-request capacity owner;
+- Bash spool finalization still materialized the complete output in memory, and
+  generic ANSI removal was not contract-equivalent;
+- public compatibility, reference-aware artifact cleanup, and documentation
+  claims were incomplete.
+
+#### Final Resolution After Review
+
+- Incomplete-result idempotence now requires trusted structured `outputPath`
+  metadata. Raw tool text containing a forged marker is treated as ordinary
+  content and, when necessary, receives a new canonical artifact.
+- SA and AMA capacity failures attach the last legal transcript; empty error
+  carriers cannot overwrite a valid stored session. AMA result observers and
+  stall-sidecar inputs fire only after batch admission.
+- Child evidence is admitted against the actual routed provider/model initial
+  request, including system prompt and active tool schemas. Acquisition work is
+  bounded without silent loss: grep/code-search return `scan_offset` after 512
+  candidates, and changed-diff bundles reject more than 64 unique paths while
+  running Git subprocesses four at a time.
+- ANSI normalization strips SGR styling and terminal metadata but preserves
+  cursor-control sequences it cannot render losslessly. Bash tracks total bytes,
+  releases raw buffers after decode, avoids a redundant spool copy, and directly
+  seals a recovery artifact only when the cl100k token-byte upper bound proves
+  the output cannot fit the active request. Its canonical manifest path is
+  propagated as trusted tool-call metadata on both SA and AMA paths, and the
+  terminal marker remains last so final admission reuses rather than nests it.
+- Bash spools now live under the managed tool-results directory. REPL session
+  startup scans active and archived JSONL references and removes only old,
+  unreferenced artifacts; reference discovery failure performs no deletion.
+- Legacy public budget builders/clamps were restored for SDK source
+  compatibility. Internal admission still consumes only the fixed-point
+  aggregate token capacity, so the compatibility surface is not a second owner.
+
+#### Initial Resolution (incomplete; retained for audit history)
+
+- Tool handlers now capture and return complete results. Bash keeps output from
+  the first byte and changes from memory to a temporary spool at 512 KiB; that
+  value is no longer an output limit. Completed background tasks return their
+  full terminal output.
+- Default Bash processing is limited to contract-equivalent terminal
+  normalization. Command-specific compiled/declarative lossy filters remain
+  available only for explicit use and are not selected by the default registry;
+  compound commands receive no semantic adapter.
+- One aggregate batch owner now decides delivery after every tool call in the
+  batch settles. If the complete batch fits the actual next-request budget, it
+  is delivered unchanged. Only overflow of the final operational budget
+  (physical request, output reserve, and estimation safety) persists the
+  complete value and emits one idempotent `KODAX_RESULT_INCOMPLETE` preview. An
+  unrepresentable minimum marker fails explicitly instead of overfilling the
+  request.
+- Capacity first solves the largest final input `Pmax` satisfying
+  `Pmax + providerReservedOutputTokens + max(2048, ceil(Pmax * 3%)) <=
+  contextWindow`, then admits at most `Cbatch = max(0, Pmax -
+  currentPhysicalRequestTokens)`. Computing the margin from the smaller
+  pre-batch request is incorrect. Cache tokens remain part of physical context
+  occupancy. The margin is an uncertainty guardrail, not a token-saving claim,
+  and must be calibrated against estimate-vs-actual/recovery evidence rather
+  than copied into per-tool caps.
+- `read` has exact Unicode-safe `line_offset` continuation. Hidden result caps
+  were removed from `grep`, `glob`, `code_search`, and retrieval rendering;
+  unreadable or acquisition-limited sources carry `SOURCE_INCOMPLETE`. Local
+  and provider code search, semantic lookup, keyword tool search, MCP search,
+  web search, read, and grep use a true one-extra-item probe before claiming a
+  limit was reached. Invalid negative `grep.head_limit` is rejected rather than
+  becoming `0=unlimited`.
+- Public guards without physical-capacity context are pass-through. MCP keeps
+  genuinely distinct text/structured channels (including the fallback path)
+  without duplicating an ordinary
+  resource body into both, and rejects incomplete pagination instead of caching
+  partial pages. Explicit search limits probe one extra item so the limit marker
+  is truthful. Exact self-knowledge topics return full content. Bash cancellation
+  first waits a bounded interval for process-tree termination and stream closure.
+  If close is delayed, capture ownership moves to live recovery artifacts and
+  the result exposes `KODAX_CAPTURE_INCOMPLETE`; only the later
+  `KODAX_CAPTURE_COMPLETE` footer proves drain completion. A spool-read failure
+  emits the same incomplete contract and a recovery locator instead of hanging
+  or pretending completion. Live/paged/acquisition-limited results remain
+  allowed only when their incompleteness and continuation contract are explicit.
+- Hidden preview caps were also removed from changed-diff bundles, inline edit
+  receipts, relationship supplemental evidence, exact tool selection, child
+  evidence refs, and child completion envelopes. Their explicit schema limits
+  remain valid query contracts; aggregate delivery belongs to the next-request
+  batch/envelope capacity owner.
+- Cache cost now splits uncached input, cache read, and cache write tokens and
+  charges each token exactly once.
+- Physical fallback accounting uses the final system prompt exactly once,
+  includes active tool schemas and same-request synthetic recovery messages,
+  and remains available when a provider omits usage. Provider-reported usage,
+  when valid, remains authoritative. The misleading pre-batch
+  instantaneous-slack behavior is not used internally; append capacity has one
+  fixed-point implementation. Legacy snapshot/byte helpers remain exported only
+  for SDK source compatibility.
+- Recovery artifacts are canonical evidence for resumable sessions and are not
+  deleted by an age-only TTL. REPL session startup performs reference-aware GC
+  over active and archived JSONL, deleting only old unreferenced artifacts and
+  failing closed if references cannot be discovered. The legacy age-only helper
+  remains an explicit host/operator compatibility action. REPL
+  startup likewise no longer deletes 24-hour-old pasted images referenced by
+  session messages. The explicitly transient managed-task checkpoint window is
+  measured from its latest successful write, not the task's original creation.
+- Automatic history compaction now uses the same physical-capacity invariant.
+  Default microcompaction and destructive graceful pruning are disabled.
+  Below capacity, history remains exact; at actual pressure, semantic summary
+  is attempted first over complete atomic message/tool pairs and stops when the
+  next physical request fits. A failed, empty, or insufficient summary leaves
+  canonical history unchanged and raises a typed capacity error instead of
+  silently deleting messages. The immutable leading Worker system prompt is
+  retained byte-for-byte; invalid summaries consume no source chunk, and hard
+  capacity errors carry the latest recoverable transcript for persistence.
+- The default automatic trigger is capacity-only. A static trigger below 100%
+  is an explicit opt-in policy, and manual `/compact` remains an explicit force
+  operation; neither is presented as guaranteed token optimization.
+
+#### Files Changed
+
+- `packages/coding/src/tools/bash.ts`, `bash-output-collector.ts`,
+  `output-filters/`, `read.ts`, `grep.ts`, `glob.ts`, `code-search.ts`,
+  `semantic-lookup.ts`, `retrieval.ts`, `web-fetch.ts`, `web-search.ts`,
+  `task-output.ts`
+- `packages/coding/src/tools/mcp-call.ts`, `mcp-read-resource.ts`,
+  `mcp-get-prompt.ts`, `packages/coding/src/self-knowledge/resolver.ts`
+- `packages/coding/src/tools/changed-diff.ts`, `edit.ts`, `tool-search.ts`,
+  `relationship-scan.ts`, `envelope-budget.ts`,
+  `packages/coding/src/child-executor.ts`
+- `packages/coding/src/tools/tool-result-budget.ts`, `tool-result-policy.ts`
+- `packages/coding/src/tools/tool-output-gc.ts`,
+  `packages/repl/src/session/public-api.ts`
+- `packages/coding/src/agent-runtime/tool-dispatch.ts`
+- `packages/coding/src/task-engine/runner-driven.ts`
+- `packages/coding/src/task-engine/_internal/managed-task/checkpoint.ts`
+- `packages/agent/src/context-capacity.ts`, `primitives/runner.ts`,
+  `primitives/runner-tool-loop.ts`, `capabilities/mcp/runtime.ts`,
+  `session-lineage/compaction/`
+- `packages/coding/src/compaction-config.ts`,
+  `agent-runtime/middleware/compaction-orchestration.ts`,
+  `task-engine/_internal/managed-task/compaction.ts`
+- `packages/llm/src/cost-rates.ts`, `cost-tracker.ts`
+- `packages/repl/src/interactive/repl.ts`, `ui/InkREPL.tsx`
+
+#### Tests Added
+
+- Raw Bash fidelity for git/test/JSON/compound commands, OSC 8 URLs, and
+  stdout/stderr larger than 512 KiB.
+- Aggregate fit/spill behavior, one-marker idempotence, SA/AMA parity, and
+  explicit minimum-marker capacity failure.
+- Forged marker rejection, recovery-transcript persistence, post-admission AMA
+  observation, routed child-briefing capacity, bounded acquisition continuation,
+  Bash guaranteed-oversize artifacts, semantic ANSI preservation, public budget
+  compatibility, and reference-aware artifact retention.
+- Exact long-line continuation, complete terminal task output, and removal of
+  hidden grep/glob/code-search/retrieval caps.
+- N/N+1 boundaries for semantic/code/tool/MCP/web search and grep; MCP direct
+  and fallback channel fidelity; delayed Bash drain recovery; pasted-image and
+  long-task checkpoint retention.
+- Source-incomplete diagnostics for unreadable files and bounded network
+  acquisition, plus cache read/write single-charge accounting.
+- Capacity-only history triggers, default microcompaction no-op, summary-first
+  compaction, preserved atomic tool pairs/fixed overhead, and typed failure
+  without mutation when no recoverable compacted request can fit.
+
+#### Design Record
+
+The corrective decision and regression matrix are recorded in ADR-050,
+`docs/features/v0.7.61.md`, and
+`docs/test-guides/FEATURE_251_v0.7.61_TEST_GUIDE.md`.
+
+### 157: F267/F269 review found durability, network, concurrency, and diagnostic gaps
+
+- **Priority**: High
+- **Status**: **Resolved** (v0.7.69)
+- **Introduced**: v0.7.69 RC
+- **Created**: 2026-07-14
+- **Resolved**: 2026-07-14
+- **Fixed**: v0.7.69
+
+#### Original Problem
+
+An external review reported 25 possible defects across the shared Runtime
+daemon, A2A transport, governed memory, and SDK documentation. Reproduction and
+source-to-sink validation confirmed that daemon state and owner locks were not
+fsynced; A2A streams could remain blocked after idle/dispose; blocking A2A calls
+had no wait bound; request handling could mix hot configurations; default A2A
+fetch validated and connected through separate DNS resolutions; concurrent
+memory forgets restored deleted index entries; expired credential leases and
+malformed stale learning locks were retained or reclaimed unsafely; and corrupt
+best-effort records were skipped without internal diagnostics.
+
+#### Root Cause
+
+- Two new daemon files did not reuse the existing `0600` plus fsync pattern.
+- Streaming and blocking A2A paths lacked explicit lifecycle bounds, and hot
+  options were read repeatedly across asynchronous request steps.
+- URL policy validation preceded a second resolver inside global `fetch`.
+- Memory index mutation occurred outside the lifecycle lock with a direct
+  read-modify-write, while malformed locks were treated as provably abandoned.
+- Best-effort public APIs preserved availability but did not emit a redacted
+  diagnostic when they skipped invalid persisted input.
+
+#### Resolution
+
+Daemon state staging and owner locks now use `0600` file descriptors and fsync
+before publication. A2A event streams have connection/idle aborts tied to
+executor disposal, blocking calls return the current task after a configurable
+wait, each request and its run capture one hot-options snapshot, and the default
+HTTP(S) transport pins the validated address while retaining the hostname for
+Host/TLS verification. Memory forget now serializes file removal, atomic index
+replacement, and tombstone update under the lifecycle lock. Expired credential
+leases are pruned on registration, malformed stale locks fail closed, and
+invalid review/session records plus A2A fallback/recovery failures emit redacted
+diagnostics without changing their public fail-soft result.
+Windows lock probes also treat transient `EPERM`/`EACCES`/`EBUSY` during
+concurrent removal as non-stale and retry instead of reclaiming ownership or
+leaking the raw filesystem race.
+Root-level static validation also exposes the server's implemented
+`whenReady()` method, returns a structurally narrowed DNS address, and derives
+safe request-body input from `RequestInit` instead of an unavailable DOM-only
+type name.
+
+#### Files Changed
+
+- `src/runtime-daemon/state.ts`
+- `src/runtime-daemon/reverse-bridge.ts`
+- `src/a2a/client-executor.ts`, `safe-fetch.ts`, `server.ts`, `types.ts`, `config.ts`
+- `packages/agent/src/memory-control/lifecycle.ts`, `review-inbox.ts`
+- `packages/agent/src/learning/store.ts`
+- `packages/repl/src/session/public-api.ts`
+- `docs/SDK_EMBEDDER_GUIDE.md`, `docs/features/v0.7.69.md`
+
+#### Tests Added
+
+- File-descriptor fsync and restrictive daemon-file modes.
+- Stream disposal/idle abort, bounded blocking waits, and hot-option snapshots.
+- DNS address pinning against a hostname unavailable to the system resolver.
+- Root `tsc --noEmit` plus safe-fetch and server readiness/hot-option tests.
+- Concurrent direct lifecycle forgets, malformed stale locks, lease renewal,
+  and diagnostics for invalid persisted records.
+
+#### Review Disposition
+
+The remaining report items were not changed when they described intentional
+fail-closed behavior, documented sandbox limits, bounded synchronous storage,
+or lifecycle ownership: credential errors are already normalized before public
+serialization; no-code A2A is explicitly single-principal; daemon startup and
+ownership timers intentionally keep work alive; transport close intentionally
+rejects pending RPCs; socket `EADDRINUSE` remains authoritative; detached daemon
+survival is required; PowerShell aliases and symlinks are rejected/skipped
+fail-closed; and the memory shell guard's process-isolation limit is already
+recorded under Issue 153.
+
+### 156: Bare `kodax -r` repeatedly full-reads large session sets before opening the picker
+
 - **Priority**: Medium
-- **Status**: Resolved
-- **Introduced**: v0.5.33
-- **Fixed**: v0.5.33
-- **Created**: 2026-03-13
-- **Resolution Date**: 2026-03-13
+- **Status**: **Resolved** (v0.7.69)
+- **Introduced**: v0.7.68
+- **Created**: 2026-07-14
+- **Resolved**: 2026-07-14
+- **Fixed**: v0.7.69
 
-- **Original Problem**:
-  输入 `@.kodax/` 时，路径中的 `/` 错误地触发了命令补全，显示 `/help`、`/exit` 等命令选项。
+#### Original Problem
 
-  **期望行为**：
-  - `@.kodax/` 应该只触发文件补全，不触发命令补全
-  - `/` 和 `@` 在输入中段时，前面必须有空格才能触发补全（参考 Claude Code 的实践）
+Opening bare `kodax -r` becomes noticeably slow as the session store grows.
+On a real Windows store containing 1174 session files and about 221 MB of data,
+the picker waited roughly 13.8 seconds before becoming interactive.
 
-- **Root Cause Analysis**:
-  1. `CommandCompleter.canComplete()` 只检查最后一个 `/` 后是否有空格，没有检查 `/` 是否在有效的命令位置
-  2. `ArgumentCompleter.canComplete()` 有同样的问题
-  3. `SkillCompleter.canComplete()` 也有类似问题
-  4. `AutocompleteProvider.shouldTrigger()` 的触发条件不够严格
-  5. `FileCompleter.canComplete()` 对 `@` 的触发条件也不够严格
+#### Root Cause
 
-- **Reproduction**:
-  1. 输入 `@.kodax/`
-  2. 观察到补全列表显示 `/help`、`/exit` 等命令（错误）
-  3. 预期只显示目录内容
+The CLI requested up to 1000 sessions in pages of 100. Every project-scoped
+cursor request entered the general `listSessions` path, which traversed the
+session tree, read every candidate JSONL file in full, sorted the complete set,
+and only then sliced one page. Up to ten pages therefore repeated the same
+directory scan and transcript reads.
 
-- **Resolution**:
+#### Resolution
 
-  **统一触发规则**：
-  - `/` 或 `@` 在输入开头（位置 0）→ 触发
-  - `/` 或 `@` 不在开头，但前面有空格 → 触发
-  - 其他情况 → 不触发
+The picker now requests its bounded 1000-session dataset in one pass. The
+general list path reads only the metadata first line for modern sessions, in
+batches of 48, and falls back to a full read only for legacy metadata that lacks
+`activeMessageCount` or for a pathological metadata line over 64 KiB. It still
+scans project aliases so old sessions are not hidden.
 
-  **修改的文件和逻辑**：
+On the same 755 matching sessions, the published v0.7.68 path took about
+13.8 seconds. The worktree source completed in about 0.47 seconds and the
+publish-shaped bundle in about 0.77 seconds, while returning the same 755 IDs.
 
-  1. **`autocomplete.ts` - FileCompleter.canComplete()**
-     ```typescript
-     // If @ is not at the start, it must be preceded by a space
-     if (lastAtIndex > 0 && beforeCursor[lastAtIndex - 1] !== ' ') {
-       return false;
-     }
-     ```
+#### Files Changed
 
-  2. **`autocomplete.ts` - CommandCompleter.canComplete()**
-     ```typescript
-     // If / is not at the start, it must be preceded by a space
-     if (lastSlashIndex > 0 && beforeCursor[lastSlashIndex - 1] !== ' ') {
-       return false;
-     }
-     ```
+- `src/kodax_cli.ts`
+- `packages/repl/src/interactive/storage.ts`
+- `packages/repl/src/session/public-api.ts`
+- `packages/repl/src/session/public-api.test.ts`
+- `tests/kodax_cli.test.ts`
 
-  3. **`autocomplete-provider.ts` - shouldTrigger()**
-     ```typescript
-     const hasValidSlash =
-       lastSlashIndex === 0 || // / at start
-       (lastSlashIndex > 0 && beforeCursor[lastSlashIndex - 1] === ' ');
+#### Tests Added
 
-     const hasValidAt =
-       lastAtIndex === 0 || // @ at start
-       (lastAtIndex > 0 && beforeCursor[lastAtIndex - 1] === ' ');
-     ```
+- Project-scoped listing must not full-read a modern session transcript.
+- The CLI resume picker dataset must be loaded with one bounded list pass.
+- Real-store source and publish-bundle timings retain the complete result set.
 
-  4. **`argument-completer.ts` - ArgumentCompleter.canComplete()** - 同样的空格检查
+### 155: Bare `kodax -r` exits after selection during the picker-to-TUI handoff
 
-  5. **`skill-completer.ts` - SkillCompleter.canComplete()** - 同样的空格检查
-
-- **Verification**:
-  | 输入 | @文件补全 | /命令补全 | 预期 |
-  |------|:---------:|:---------:|:----:|
-  | `@.kodax/` | ✅ | ❌ | ✅ 原问题已解决 |
-  | `text @src/` | ✅ | ❌ | ✅ |
-  | `text@src/` | ❌ | ❌ | ✅ 防止误触发 |
-  | `/help` | ❌ | ✅ | ✅ |
-  | `text /help` | ❌ | ✅ | ✅ |
-  | `text/help` | ❌ | ❌ | ✅ 防止误触发 |
-  | `请看 @src/` | ✅ | ❌ | ✅ |
-  | `请看@src/` | ❌ | ❌ | ✅ |
-
-- **Files Modified**:
-  - `packages/repl/src/interactive/autocomplete.ts` - FileCompleter, CommandCompleter
-  - `packages/repl/src/interactive/autocomplete-provider.ts` - shouldTrigger
-  - `packages/repl/src/interactive/completers/argument-completer.ts` - ArgumentCompleter
-  - `packages/repl/src/interactive/completers/skill-completer.ts` - SkillCompleter
-
-- **Tests**:
-  - 所有 71 个现有测试通过
-  - TypeScript 编译成功
-
----
-
-### 086: 自动补全竞态条件导致快速输入时显示过期补全 (RESOLVED)
 - **Priority**: High
-- **Status**: Resolved
-- **Introduced**: v0.5.32
-- **Fixed**: v0.5.32
-- **Created**: 2026-03-12
-- **Resolution Date**: 2026-03-12
+- **Status**: **Resolved** (v0.7.69)
+- **Introduced**: v0.7.68
+- **Created**: 2026-07-14
+- **Resolved**: 2026-07-14
+- **Fixed**: v0.7.69
 
-- **Original Problem**:
-  使用补全功能时，输入 `/model zhipu-coding` 后，补全列表会停留在 `zhipu` 这个推荐上，按回车会直接变成命令 `/model zhipu`。
+#### Original Problem
 
-  **预期行为**：当用户快速输入时，补全列表应该立即更新为最新输入的补全结果，不应该显示过期的补全选项。
+Running bare `kodax -r` opens the searchable session picker and allows normal
+keyboard navigation, but pressing Enter briefly opens the main KodaX UI and
+then exits the process before the resumed transcript is rendered. The failure
+reproduces for both new and old sessions. Resuming the same session with
+`kodax -r <session-id>` works because that path bypasses the picker.
 
-- **Root Cause Analysis**:
+#### Root Cause
 
-  **问题不在前缀匹配逻辑，而在异步竞态条件**
+The picker uses the external Ink renderer while the main KodaX UI uses the
+project-owned renderer. External Ink releases raw input ownership on picker
+unmount by calling `process.stdin.unref()`. The owned renderer then enables raw
+mode and attaches its data listener, but it does not restore the stream
+reference. With no referenced event-loop handle left, its `beforeExit` handler
+immediately unmounts the newly rendered main UI.
 
-  经过详细测试分析，发现 `fuzzy.ts` 中的匹配逻辑实际上是**正确的**：
-  - `prefixMatch("zhipu-coding", "zhipu")` → `false` ✅
-  - `fuzzyMatch("zhipu-coding", "zhipu")` → `{ matched: false }` ✅
-  - `ArgumentCompleter` 的过滤逻辑也正确
+#### Proposed Solution
 
-  **真正的问题**：`AutocompleteProvider` 中的异步竞态条件
+Use the project-owned renderer for the session picker too, keeping input
+ownership inside one renderer lifecycle. Add a regression that exercises the
+Enter-to-resumed-UI transition, not only picker filtering and static rendering.
+Keep direct ID/title resume and Escape/Ctrl+C cancellation behavior unchanged.
 
-  在 `packages/repl/src/interactive/autocomplete-provider.ts` 的 `fetchCompletions()` 方法中：
+#### Resolution
 
-  ```typescript
-  private fetchCompletions(input: string, cursorPos: number): void {
-    this.updateState({ loading: true });
+`SessionPicker` now imports `render`, `useApp`, and `useInput` from KodaX's
+owned TUI facade. Picker selection and the resumed REPL therefore share one
+input-ownership model and no external Ink teardown can unref stdin between the
+two surfaces.
 
-    this.fetchCompletionsInternal(input, cursorPos)
-      .then((completions) => {
-        // ❌ 问题：没有检查 input 是否已经改变
-        if (completions.length > 0) {
-          this.updateState({ ... });
-        }
-      });
-  }
-  ```
+#### Workaround
 
-  **竞态条件流程**：
-  1. 用户输入 `/model zhipu` → 触发异步补全请求 #1
-  2. 用户快速输入 `-coding` → `lastInput` 更新为 `/model zhipu-coding`
-  3. 补全请求 #1 完成 → 更新状态为 `['zhipu', 'zhipu-coding']` (基于旧输入)
-  4. 补全请求 #2 完成 → 更新状态为 `['zhipu-coding']` (基于新输入)
+List sessions with `kodax -s list`, then resume explicitly with
+`kodax -r <session-id>`. `kodax -c` also remains available for the most recent
+session.
 
-  如果用户在步骤3按回车，就会错误地选择 `zhipu` 而不是继续输入的 `zhipu-coding`。
+#### Affected Files
 
-- **Reproduction**:
-  1. 输入 `/model zhipu` → 看到补全列表 `['zhipu', 'zhipu-coding']`
-  2. 快速输入 `-coding` → 短暂看到旧的补全列表 `['zhipu', 'zhipu-coding']`
-  3. 立即按回车 → 选择 `zhipu` 而不是 `zhipu-coding`
+- `packages/repl/src/ui/SessionPicker.tsx`
+- `packages/repl/src/ui/SessionPicker.test.tsx`
 
-- **Resolution**:
+#### Test Gap
 
-  在 `fetchCompletions()` 的 Promise 回调中添加**输入版本检查**：
+The v0.7.68 tests verify filtering, paging, hints, and static rendering, but do
+not start a second interactive renderer after the picker exits. The human guide
+contains the expected Enter-resume behavior, but it was not enforced by an
+automated lifecycle test.
 
-  ```typescript
-  private fetchCompletions(input: string, cursorPos: number): void {
-    this.updateState({ loading: true });
+#### Tests Added
 
-    this.fetchCompletionsInternal(input, cursorPos)
-      .then((completions) => {
-        // CRITICAL: Check if input has changed since we started fetching
-        // This prevents race conditions where stale completions overwrite newer ones
-        if (this.lastInput !== input || this.lastCursorPos !== cursorPos) {
-          // Input changed, discard these completions
-          return;
-        }
+- A simulated TTY renders the picker through the owned renderer, sends Enter,
+  and verifies that the highlighted session is selected through that lifecycle.
+- Existing filtering, paging, rendering, and terminal-input controller tests
+  remain green.
 
-        if (completions.length > 0) {
-          this.updateState({
-            visible: true,
-            completions: completions.slice(0, this.options.maxCompletions),
-            selectedIndex: 0,
-            loading: false,
-          });
-        } else {
-          this.updateState({
-            visible: false,
-            completions: [],
-            selectedIndex: 0,
-            loading: false,
-          });
-        }
-      })
-      .catch(() => {
-        this.updateState({ loading: false });
-      });
-  }
-  ```
+### 154: FEATURE_267/268 review found remote execution and hot-reload reliability gaps
 
-  **修复原理**：
-  - 在请求开始时记录当前的 `input` 和 `cursorPos`
-  - 在 Promise 完成时检查 `this.lastInput` 和 `this.lastCursorPos` 是否还匹配
-  - 如果不匹配，说明用户已经继续输入，丢弃这些过期的补全结果
-  - 这样可以确保只有最新的补全结果才会更新状态
+- **Priority**: High
+- **Status**: **Resolved** (v0.7.69)
+- **Introduced**: v0.7.69 RC
+- **Created**: 2026-07-13
+- **Resolved**: 2026-07-13
+- **Fixed**: v0.7.69
 
-- **Files Changed**:
-  - `packages/repl/src/interactive/autocomplete-provider.ts` (line 320-344)
+#### Original Problem
 
-- **Tests Added**:
-  - 验证测试：快速输入场景，确保最终只显示正确的补全结果
-  - 现有测试：所有 71 个测试通过，无回归
+Joint review found that inbound A2A tool execution could wait for an interactive
+permission response after its deployment guardrail had already authorized the
+call; lexical workspace checks allowed a symlink/Junction to escape; and the
+no-code CLI returned the initial submitted A2A task instead of following it to a
+stable state. F268 replacement also treated a failed MCP prewarm as usable,
+could reject after a successful provider swap when old cleanup failed, and
+copied subscriber/watch exceptions into user-visible diagnostics.
 
-- **Verification**:
-  ```bash
-  npm test --workspace=packages/repl
-  # 71 tests passed
-  ```
+#### Root Cause
 
----
+- The remote Runtime binding supplied neither a headless permission decision nor
+  a permission-mode default.
+- Workspace containment used `path.resolve` without resolving the existing
+  target or nearest existing parent.
+- `a2a call` sent one JSON-RPC request outside the F258 task lifecycle.
+- MCP prewarm deliberately used fail-soft startup semantics for replacement too.
+- Provider swap and old-instance disposal shared one rejection result, while the
+  config controller classified validation and activation in one catch block.
 
-### 085: 只读 Bash 命令白名单未在非 plan 模式复用
+#### Proposed Solution
+
+Add failing regression tests first, then keep the pinned guardrail as the remote
+authority while supplying deterministic headless approval, add real-path
+containment, route CLI calls through F258, make replacement prewarm strict, and
+separate swap success from cleanup diagnostics. Never expose raw activation or
+watcher exceptions.
+
+#### Resolution
+
+The Runtime binding now checks lexical plus real containment for existing and
+future targets and proceeds without interactive approval only after its pinned
+guardrail. The CLI discovers an `external:<name>` registration, starts it on the
+F258 plane, and waits through submitted/working states. MCP replacement rejects
+and disposes a broken candidate while retaining the previous provider. Failed
+old-provider cleanup records a generic `dispose` diagnostic without rolling back
+the new instance or poisoning later shutdown. Integration validation,
+activation, and watcher degradation now have distinct generic diagnostics.
+
+#### Files Changed
+
+- `src/runtime-agent-binding.ts`
+- `src/integration-cli.ts`
+- `packages/agent/src/capabilities/mcp/provider.ts`
+- `packages/coding/src/capabilities/providers/mcp-adapter.ts`
+- `packages/coding/src/extensions/runtime.ts`
+- `packages/repl/src/common/integration-config.ts`
+
+#### Tests Added
+
+- Existing and future targets below a symlink/Junction are denied.
+- Headless remote calls do not enter the interactive permission wait.
+- CLI polling observes submitted, working, and completed A2A states.
+- Broken MCP candidates retain the active provider.
+- Cleanup failures retain the replacement and redact secret/path canaries.
+- Activation diagnostics retain the prior snapshot and redact exception data.
+
+#### Remaining Risk
+
+Real-path validation is defense in depth against stable links; ASRT or an outer
+container/VM remains the process-isolation boundary for admitted scripts and
+hostile tenants. Independent A2A TCK/client evidence, POSIX release validation,
+and a provisioned Windows ASRT run remain release gates rather than code gaps.
+
+### 153: FEATURE_260 post-release review found memory guard bypass and persistence isolation gaps
+
+- **Priority**: High
+- **Status**: **Resolved** (v0.7.69)
+- **Introduced**: v0.7.68
+- **Created**: 2026-07-12
+- **Resolved**: 2026-07-12
+- **Fixed**: v0.7.69
+
+#### Original Problem
+
+Post-release adversarial review showed that the governed-memory shell guard can
+be bypassed by chaining a permitted read with an interpreter write, or by using
+home-relative and environment-relative paths. Separately, malformed approval
+metadata can be dropped without a warning and allow a later proposal write to
+replace the remaining store; a review drain without `projectId` can claim
+project-owned work; and stale lock recovery can remove a successor owner's lock.
+
+Expected behavior is fail-closed protection of governed memory at the Bash tool
+boundary, fail-loud preservation of corrupt proposal stores, exact project
+ownership during drains, and owner-checked release of recovered file locks.
+
+#### Root Cause
+
+- The shell guard recognizes literal configured roots but treats any command
+  beginning with a read verb as read-only, even when later commands mutate.
+- Five approval fields return an invalid proposal without appending a warning.
+- Missing drain filters behave as wildcards for project-owned entries.
+- Lock files contain no owner token and are removed unconditionally by path.
+
+#### Proposed Solution
+
+Add failing boundary tests first, then enforce single read-only shell commands,
+warn on every invalid stored field, make project-less drains defer project-owned
+reviews, and release locks only when their owner token still matches. Preserve
+tenant-wide listing, legitimate read-only inspection, and normal project-scoped
+drains.
+
+#### Resolution
+
+The Bash guard now recognizes scoped and legacy memory paths in absolute,
+home-relative, and environment-relative forms, and permits only a single simple
+read-only inspection when governed memory is addressed. Every invalid approval
+field now emits a warning, so proposal writes refuse to replace a corrupt store.
+Project-less drains defer project-owned reviews while retaining tenant-wide list
+and project-less owner behavior. Proposal and lifecycle locks now persist PID and
+random owner tokens, check process liveness before stale recovery, and remove a
+lock only when the releasing token still owns it. Lifecycle state writes and
+review inbox writes also use cleaned-up atomic temporary files, and persisted
+outcome evidence receives complete runtime shape validation.
+
+#### Files Changed
+
+- `packages/coding/src/tools/memory-mutation-guard.ts`
+- `packages/agent/src/learning/store.ts`
+- `packages/agent/src/memory-control/review-inbox.ts`
+- `packages/agent/src/memory-control/lifecycle.ts`
+
+#### Tests Added
+
+- Chained, piped, home-relative, environment-relative, and legacy memory shell paths.
+- All five approval metadata corruption fields plus fail-closed rewrite preservation.
+- Project-owned versus project-less review drain ownership.
+- Successor lock token preservation and malformed outcome evidence rejection.
+
+#### Remaining Risk
+
+The Bash check is deterministic defense-in-depth for commands that directly
+address recognized governed-memory paths. It is not an OS filesystem sandbox:
+an intentionally obfuscated program can construct a path without including the
+protected literal in its command text. Preventing that broader same-user process
+authority requires process-level filesystem isolation or a privileged memory
+writer boundary, which is outside this minimal patch.
+
+### 152: FEATURE_260 review found credential, mutation-guard, concurrent persistence, and eval-integrity gaps
+
+- **Priority**: High
+- **Status**: **Resolved** (v0.7.68)
+- **Introduced**: v0.7.68 release candidate
+- **Created**: 2026-07-12
+- **Resolved**: 2026-07-12
+- **Fixed**: v0.7.68
+
+#### Original Problem
+
+The post-implementation FEATURE_260 review found five release-integrity gaps:
+raw Git remotes could retain embedded HTTP credentials in project identity and
+legacy storage paths; structured and shell memory guards were case-sensitive or
+allowed interpreter-based mutation; concurrent inbox drains could review one
+episode twice while proposal/lifecycle read-modify-write operations lost sibling
+updates; the eval manifest omitted untracked candidate files; and malformed raw
+eval JSON was silently treated as a missing cache cell.
+
+The final routing result remained valid for policy behavior, but these gaps made
+the current working tree unsafe to publish as-is and weakened its audit trail.
+
+#### Root Cause
+
+- Repository identity reused `remote.origin.url` before canonical redaction.
+- Mutation protection relied on `.md` suffixes and a mutating-command allowlist.
+- Shared JSON stores and episode drains had atomic writes but no serialization or
+  atomic work claim.
+- Eval provenance hashed only `git diff HEAD`, which excludes untracked files.
+- Cache recovery grouped `SyntaxError` with `ENOENT`, allowing regeneration.
+
+#### Resolution
+
+Repository identities now canonicalize HTTPS/SSH remotes without userinfo,
+query strings, or raw fallback bytes. Managed-path checks are Windows-safe and
+protect governance sidecars; shell commands that address a managed root are
+fail-closed except for a narrow read-only inspection set. Pending reviews move
+atomically into a processing claim with stale-claim recovery, and proposal plus
+lifecycle stores serialize cross-process read-modify-write sections with bounded
+stale locks. The eval manifest schema now binds tracked submodule-aware diffs and
+untracked file path/content hashes. Malformed cache JSON fails loudly, and the
+summary declares the main-session review as a separate artifact rather than a
+permanently pending field.
+
+The post-review documentation pass also split governed memory out of the legacy
+sessions manual topic, added all-command drift coverage for `kodax_manual`, and
+documented direct `/experimental-memory` SDK ownership and safety boundaries.
+
+#### Files Changed
+
+- `packages/coding/src/memory-runtime.ts`
+- `packages/coding/src/tools/memory-mutation-guard.ts`
+- `packages/agent/src/memory/paths.ts`
+- `packages/agent/src/memory-control/review-inbox.ts`
+- `packages/agent/src/memory-control/lifecycle.ts`
+- `packages/agent/src/learning/store.ts`
+- `benchmark/datasets/feature-260/experiment-contract.ts`
+- `benchmark/datasets/feature-260/runner.ts`
+- `packages/coding/src/self-knowledge/registry.ts`
+- `docs/SDK_EMBEDDER_GUIDE.md`
+
+#### Tests Added
+
+- Credential-bearing HTTPS and equivalent SSH repository identity.
+- Windows path casing, interpreter shell mutation, and governance-sidecar guards.
+- Concurrent review claim, proposal upsert, and lifecycle tombstone persistence.
+- Untracked source-snapshot hashing and fail-loud malformed eval cache handling.
+- Memory/manual query routing and full built-in-command drift coverage.
+
+### 151: Runtime config tests leak detached daemon processes and interrupted background fixtures can survive
+
+- **Priority**: High
+- **Status**: **Resolved** (v0.7.67)
+- **Introduced**: v0.7.67 release candidate
+- **Created**: 2026-07-11
+- **Resolved**: 2026-07-11
+- **Fixed**: v0.7.67
+
+#### Original Problem
+
+Windows Task Manager showed many long-lived Node processes after KodaX test
+runs. Process ownership/command-line inspection separated 26 Codex-owned MCP
+servers from four real KodaX residues: three `config-*` daemon processes whose
+test parents were gone, and one background command fixture whose test parent
+had been forcibly terminated.
+
+The daemon behavior itself is intentional: a process daemon survives client
+detach and stops only through explicit shutdown. The defect is that
+`sdk-runtime.config.test.ts` creates that persistent owner but only closes the
+client before deleting its temporary home. Separately, infinite-loop child
+fixtures assume Vitest always reaches `afterEach`; a forced runner timeout can
+prevent cleanup.
+
+#### Root Cause
+
+- The config test treated client `close()` as daemon shutdown, contrary to the
+  explicit daemon ownership contract.
+- Long-running process fixtures had no parent-liveness watchdog for abnormal
+  test-runner termination.
+- Task Manager also groups Codex MCP servers under Node.js, which made the KodaX
+  residue appear much larger than it was.
+
+#### Proposed Solution
+
+- Track the config test's daemon profile, explicitly request
+  `runtime.shutdown`, and verify daemon state disappears before deleting the
+  temporary home; keep an `afterEach` fallback for failed assertions.
+- Make infinite background test fixtures exit when their original parent
+  process no longer exists, without changing production background jobs.
+- Document that daemon mode is persistent by design and provide the explicit
+  `kodax daemon stop` cleanup command; do not kill unrelated Node/Codex MCP
+  processes.
+
+#### Resolution
+
+The runtime config suite now records the exact daemon `homeDir + profile`, sends
+an authenticated `runtime.shutdown`, waits until owner state disappears, and
+keeps an `afterEach` fallback for assertion failures. Its regression run passed
+3/3 with a before/after process diff of `NEW_NODE_PIDS=none`. Infinite child
+fixtures in the Bash and managed-process suites now poll their original parent
+and self-exit if a forcibly terminated test runner cannot reach normal cleanup.
+
+A v0.7.68 full-suite follow-up exposed one remaining race: daemon state was
+rewritten by truncating `daemon.json` in place, so a shutdown poll could observe
+an empty/partial file as transiently missing and return before the subsequent
+`stopping` state became readable. State updates now use a same-directory staging
+file plus atomic rename. The config shutdown case passed three repeated runs,
+and the final process/staging-file audit found no residue.
+
+Five already-orphaned, command-line-verified KodaX test processes were stopped.
+The 26 Node processes owned by the active `codex.exe` parent were identified as
+Codex MCP servers and intentionally left untouched.
+
+#### Files Changed
+
+- `src/sdk-runtime.config.test.ts`
+- `src/runtime-daemon/state.ts`
+- `src/runtime-daemon/state.test.ts`
+- `packages/coding/src/tools/bash.test.ts`
+- `packages/agent/src/runtime/managed-child-processes.test.ts`
+- `docs/SDK_EMBEDDER_GUIDE.md`
+
+#### Tests Added or Hardened
+
+- Auto-started config daemon state must disappear after explicit test shutdown.
+- The daemon test run must leave no new Node PID after completion.
+- State replacement is atomic and leaves no staging file behind.
+- Long-lived process fixtures have an abnormal-parent-exit fallback while
+  retaining normal managed cleanup assertions.
+
+### 150: v0.7.67 外部 Agent 脚本路由与执行平面关闭契约存在发布阻断缺口
+
+- **Priority**: High
+- **Status**: **Resolved** (v0.7.67)
+- **Introduced**: v0.7.67 release candidate
+- **Created**: 2026-07-11
+- **Resolved**: 2026-07-11
+- **Fixed**: v0.7.67
+
+#### Original Problem
+
+Post-release review found that `WorkflowSpawnAgentInput.target` was present in
+the public Agent type and consumed by the Workflow runtime, but the restricted
+script host boundary silently omitted it. The same whitelist also omitted the
+public `phase` field. Therefore a model-authored `run_workflow` script could not
+route a child through FEATURE_258's shared dispatchable-agent catalog even
+though direct/built-in Workflow calls could.
+
+The same review found deterministic lifecycle gaps in the executor plane:
+`close()` disposed executors without settling pending `tasks.wait()` promises,
+and every registration/catalog/task method remained callable after close.
+Adjacent trust-boundary hardening gaps affected scoped-review structured values,
+Feature 259 baseline reconstruction, and non-authoritative local-ledger updates.
+
+#### Context
+
+- Affected components: restricted Workflow script RPC, external Agent executor
+  plane lifecycle, built-in scoped review, Feature 259 eval contract, local task
+  ledger mirroring.
+- Reproduction: run a restricted script with
+  `target: {agentId:'external:...'}` and inspect the `WorkflowApi.runAgent`
+  input; start `tasks.wait(id)` without a timeout and close the plane.
+- Expected: every public spawn field crosses the script boundary with validation;
+  close is terminal and settles pending waits; ancillary validation/ledger
+  failures cannot silently corrupt authoritative results.
+
+#### Root Cause
+
+The restricted-script whitelist was updated for Feature 259 briefing fields but
+not Feature 258's target or the existing phase field. The executor plane had no
+closed state and modeled waiters as resolve-only callbacks. The remaining gaps
+were local trust-boundary assumptions that lacked fail-loud assertions.
+
+#### Proposed Solution
+
+- Parse and validate `phase` and `target` at the restricted-script boundary.
+- Make executor-plane close idempotent and terminal, reject all pending waiters,
+  and reject all service calls after close.
+- Validate built-in scoped-review structured values against their declared
+  schemas.
+- Make every Feature 259 baseline prompt rewrite required and byte-auditable.
+- Keep local-ledger mirroring best-effort without replacing child results/errors.
+
+#### Resolution
+
+The v0.7.67 GitHub release and tag were withdrawn before npm publication. The
+restricted script boundary now validates and forwards both `phase` and
+`target`; malformed external targets fail before dispatch. Executor-plane
+closure is idempotent and terminal, rejects every pending waiter, and rejects
+all subsequent registration/catalog/task service calls. Scoped-review values
+are checked against the declared schemas, Feature 259 baseline reconstruction
+uses fail-loud exact replacements and no longer leaks proposed-only fields, and
+local ledger mirror failures are diagnostic-only.
+
+#### Files Changed
+
+- `packages/agent/src/workflow/script-runner.ts`
+- `packages/agent/src/external-agents/executor-plane.ts`
+- `packages/coding/src/workflows/builtin/scoped-review.ts`
+- `packages/coding/src/tools/dispatch-child-tasks.ts`
+- `benchmark/datasets/feature-259/cases.ts`
+
+#### Tests Added
+
+- Restricted scripts preserve `phase`, `target.agentId`, and configuration
+  revision, while rejecting blank target IDs.
+- Closing an executor plane rejects an unbounded waiter, rejects every service
+  surface after close, and remains safe when called twice.
+- Malformed scoped-review output fails with a schema diagnostic.
+- Local ledger mirror failure cannot replace an authoritative child result.
+- Frozen Feature 259 baselines exclude candidate-only briefing fields and the
+  previously malformed schema fragment.
+
+### 149: ACP tests persist empty sessions into the real user store
+
+- **Priority**: High
+- **Status**: **Resolved** (v0.7.67)
+- **Introduced**: v0.7.66 (`7dc5df52`, 2026-07-09)
+- **Created**: 2026-07-11
+- **Resolved**: 2026-07-11
+- **Fixed**: v0.7.67
+
+#### Original Problem
+
+Running the ACP test suites created batches of empty, user-scope `ACP Session`
+files in the real `~/.kodax/sessions` project bucket. These zero-message records
+polluted KodaX and SDK-consumer history, statistics, and recent-session windows.
+The affected machine accumulated 304 broad title/surface/message matches; 285
+also met the stricter no-lineage/no-artifact/no-extension cleanup predicate.
+
+#### Context
+
+- Affected components: ACP server lifecycle, both ACP test harnesses, Runtime
+  persistence home, session SDK list contract, CLI resume/list UX.
+- Reproduction: run `tests/acp_server.test.ts` from v0.7.66 and inspect the
+  current project's `~/.kodax/sessions` bucket.
+- Expected: protocol handshakes and tests that never submit a prompt leave no
+  durable user session or Runtime run evidence.
+
+#### Root Cause
+
+Commit `7dc5df52` added eager `runtime.sessions.create()` inside ACP
+`newSession()`. The main integration harness did not inject storage; a later
+optional injection covered only one test. The second ACP unit harness used an
+isolated `sessionsDir` in one case but left Runtime persistence on a shared
+home. `dispose()` correctly stopped runs but had no basis to delete already
+persisted empty sessions.
+
+#### Resolution
+
+- ACP sessions remain provisional until the first valid prompt, which creates
+  the Runtime session once and titles it from that prompt.
+- Both ACP suites now use temporary session and Runtime homes; the integration
+  harness fails immediately if a resolved path enters the real user state root.
+- SDK and Runtime listing gained exact `surface` filtering and opaque cursor
+  continuation, including Daemon schema parity.
+- Bare `-r` now opens a searchable/paged TUI; `-s list` omits non-resumable
+  zero-message entries.
+- `-s cleanup-acp` performs a strict preview. The separately confirmed
+  `--apply-session-cleanup` action archives matched records reversibly and is
+  never run automatically.
+
+#### Files Changed
+
+- `src/acp_server.ts`
+- `src/acp_server.test.ts`
+- `tests/acp_server.test.ts`
+- `packages/repl/src/session/public-api.ts`
+- `packages/repl/src/ui/SessionPicker.tsx`
+- `src/sdk-runtime.ts`
+- `src/runtime-daemon/schema.ts`
+- `src/kodax_cli.ts`
+- `src/acp_session_cleanup.ts`
+
+#### Tests Added
+
+- Provisional ACP session persistence and isolated storage/runtime-home guards.
+- Session surface filtering and cursor continuation at public SDK and Runtime layers.
+- Daemon protocol schema coverage for surface/cursor fields.
+- Session picker filtering/paging render contracts and strict cleanup predicate tests.
+- Full ACP integration regression: real-user pollution count remained unchanged.
+
+### 148: FEATURE_258 外部任务在持久化失败、配置热更新和并发回调下可能失联或状态回退
+
+- **Priority**: High
+- **Status**: **Resolved** (v0.7.67)
+- **Introduced**: v0.7.67 release candidate
+- **Created**: 2026-07-10
+- **Resolved**: 2026-07-10
+- **Fixed**: v0.7.67
+
+#### Original Problem
+
+FEATURE_258 review 发现四个相互关联的生命周期缺陷：远端 Start 已成功后若本地事件账本写入失败，任务会丢失远端句柄并错误落为 `failed`；registration 从旧 revision 更新后，在途任务无法继续 input/cancel/reconcile；慢 continuation 与终态事件并发时，旧快照可把 `completed` 覆盖回 `working`；Workflow external 分支忽略 `wait(..., { timeoutMs })`。
+
+#### Context
+
+- Components: external Agent executor plane、统一 task ledger、Workflow external adapter。
+- Impact: 远端任务可能成为无法取消或恢复的孤儿任务，终态可能回退，Workflow 可能无限等待。
+- Reproduction: fault-injection event store、registration 热更新、受控 continuation/event 并发，以及 input-required external Workflow timeout。
+
+#### Root Cause
+
+远端 Start 与其后的本地持久化共用同一个失败分支；后续控制根据当前 registration 而非任务启动时绑定的 executor 路由；异步调用完成后直接写回调用前捕获的快照；Workflow external wait 提前返回，绕过了 timeout 归一化和透传。
+
+#### Resolution
+
+- 远端引用返回后进入独立 accepted 阶段，后续账本异常保留引用并记为 `unknown`。
+- 活动任务保存不可变 executor binding，registration 更新或删除不再重定向在途任务。
+- 所有事件和远端 continuation/cancel/reconcile 回写通过任务级 mutation queue 读取最新快照，终态不再回退。
+- Workflow external wait 校验并透传 `timeoutMs`。
+
+#### Files Changed
+
+- `packages/agent/src/external-agents/executor-plane.ts`
+- `packages/agent/src/external-agents/executor-plane.test.ts`
+- `packages/coding/src/workflows/agent-adapter.ts`
+- `packages/coding/src/workflows/external-agent-adapter.test.ts`
+
+#### Tests Added
+
+- accepted Start 后账本失败仍保留远端句柄。
+- registration revision 更新后旧任务仍可 continuation。
+- completion 与 continuation 并发时终态保持单调。
+- Workflow external wait 正确执行超时和参数校验。
+
+### 147: GitHub Release 二进制归档遗漏 Runtime 与工具 Worker sidecar
+
+- **Priority**: High
+- **Status**: **Resolved** (v0.7.66)
+- **Introduced**: v0.7.66 release candidate
+- **Created**: 2026-07-10
+- **Resolved**: 2026-07-10
+- **Fixed**: v0.7.66
+
+#### Original Problem
+
+`scripts/build-binary.mjs` 已将 `provider-capabilities.json`、
+`semantic-worker.js`、`runtime-worker.js` 和
+`constructed-handler-worker.js` 复制到每个 standalone binary 目录，运行时也按
+`process.execPath` 从同目录加载这些文件；但 `.github/workflows/release.yml`
+仍只把 executable 与 `builtin/` 放入 GitHub Release 压缩包。打 tag 后生成的下载版
+会丢失 provider metadata、repo-intelligence Worker、Worker-hosted Runtime 和
+constructed-handler Worker。
+
+#### Context
+
+- Components: standalone binary GitHub Release pipeline.
+- Impact: npm 包不受影响，但 GitHub 下载的免 Node 版本会静默降级或无法启用
+  v0.7.66 的 Worker Runtime / constructed handler 隔离能力。
+- Reproduction: 对比 `dist/binary/<target>/` 的构建产物与 release workflow 的
+  `Compress-Archive` / `tar` 输入清单。
+
+#### Root Cause
+
+新增 Worker sidecar 时只更新了 build/copy guard 和发布文档，没有同步历史 release
+archive 白名单，也没有确定性测试锁定该白名单。
+
+#### Resolution
+
+- release workflow 在打包前逐项检查所有 sidecar，缺失时立即失败。
+- Windows zip 与 Unix tar 清单都包含 provider metadata 和三个 Worker sidecar。
+- GitHub Release notes 与 binary distribution 文档同步说明完整内容。
+
+#### Files Changed
+
+- `.github/workflows/release.yml`
+- `docs/release.md`
+- `tests/release-workflow.test.ts`
+
+#### Tests Added
+
+- `tests/release-workflow.test.ts` 解析真实 YAML，断言 `Package archive` 步骤包含
+  四个运行时 sidecar；测试在修复前失败、修复后通过。
+
+### 146: 图片路径粘贴处理失败时吞掉原始输入且无可见反馈
+
 - **Priority**: Medium
-- **Status**: Resolved
-- **Introduced**: v0.5.29
-- **Fixed**: v0.5.30
-- **Created**: 2026-03-12
-- **Resolved**: 2026-03-12
+- **Status**: **Resolved** (v0.7.66)
+- **Introduced**: v0.7.40 (FEATURE_134)
+- **Created**: 2026-07-10
+- **Resolved**: 2026-07-10
+- **Fixed**: v0.7.66
 
-- **Original Problem**:
-  `git diff`、`git status` 等只读 Bash 命令在 `default`、`accept-edits`、`auto-in-project` 模式下仍需要用户确认，而在 `plan` 模式下可以自动放行。
+#### Original Problem
 
-  根因分析：
-  ```typescript
-  // InkREPL.tsx:706-711 (修复前)
-  if (mode === 'plan' && tool === 'bash') {
-    const command = (input.command as string) ?? '';
-    if (isBashReadCommand(command)) {
-      return true; // 只在 plan 模式生效！
-    }
-  }
-  ```
+在 REPL 输入框粘贴以 `.png` 等图片扩展名结尾的路径时，FEATURE_134 会先消费原始粘贴事件并异步读取、解码图片。若文件不存在、不可读或图片处理失败，错误分支只发出默认不可见的 diagnostic，既不恢复原始路径，也不给用户可见反馈；用户看到的结果是粘贴内容静默消失。去掉扩展名最后一个字符后不会触发图片分支，因此可以按普通文本粘贴。
 
-  `isBashReadCommand()` 白名单检查只在 `mode === 'plan'` 条件下执行，其他模式没有复用这个逻辑。
+#### Context
 
-- **Solution Implemented**:
-  1. 将 `isBashReadCommand()` 检查逻辑从 `if (mode === 'plan')` 条件中提取出来，使其在所有模式下都生效
-  2. 将只读命令检查移到**受保护路径检查之前**，这样项目目录外的只读命令也能自动放行
+- Components: `packages/repl/src/ui/utils/prompt-input-controller.ts`, `packages/repl/src/ui/components/InputPrompt.tsx`, `packages/repl/src/ui/InkREPL.tsx`.
+- Impact: 图片路径粘贴失败会丢失当前输入，用户无法判断失败原因；有效图片粘贴不受影响。
+- Workaround before fix: 先粘贴不完整扩展名，再手动输入最后一个字符。
 
-  ```typescript
-  // 修复后的逻辑顺序
-  // 1. Safe read-only bash commands: auto-allowed BEFORE protected path check
-  if (tool === 'bash') {
-    const command = (input.command as string) ?? '';
-    if (isBashReadCommand(command)) {
-      return true; // 所有模式都自动放行只读命令（含项目目录外）
-    }
-  }
+#### Root Cause
 
-  // 2. Protected paths check (only affects non-whitelisted commands now)
-  // 受保护路径检查现在只影响非白名单命令
-  ```
+`handleKey` 在扩展名匹配后立即把 paste 标记为 handled；`insertImageRefsFromPaste` 的 `outcome.kind === "error"` 分支只调用 `emitKodaXDiagnostic`。交互式 REPL 默认没有 diagnostic UI sink，且 diagnostics 不写历史，所以该错误既不可见也没有文本 fallback。
 
-- **Fixed Behavior by Mode**:
+#### Resolution
 
-  | Mode | `git diff` 等只读命令 | 写命令 |
-  |------|----------------------|--------|
-  | `plan` | ✅ 自动放行（含项目外） | ❌ 阻止 |
-  | `default` | ✅ 自动放行（含项目外） | ⚠️ 需要确认 |
-  | `accept-edits` | ✅ 自动放行（含项目外） | ⚠️ 需要确认 |
-  | `auto-in-project` | ✅ 自动放行（含项目外） | ✅ 自动放行（项目内） |
+- 图片路径处理失败时，以 `paste: false` 将原始粘贴内容恢复到当前输入框，避免再次触发图片识别。
+- 通过局部 `onPasteFallback` 回调复用现有两秒 `ClipboardToastSurface`，显示 `Image paste failed; inserted as plain text.` 警告。
+- Toast 只存在于 React 临时状态，不追加 history、不持久化，也不进入 LLM 上下文；技术 diagnostic 继续保留供调试使用。
+- 有效图片仍转换为 `@<temporary-image-path>`，普通文本粘贴行为不变。
 
-  **Note**: Safe read-only commands are auto-allowed BEFORE protected path check, meaning they work even for paths outside the project directory (e.g., `cat /etc/hosts`, `ls /tmp`).
-  **注意**：安全的只读命令在受保护路径检查之前就自动放行，即使操作项目目录外的路径（如 `cat /etc/hosts`、`ls /tmp`）也无需确认。
+#### Files Changed
 
-- **Files Modified**:
-  - `packages/repl/src/ui/InkREPL.tsx` - UI 层权限检查
-  - `packages/repl/src/interactive/repl.ts` - 非交互模式权限检查
+- `packages/repl/src/ui/utils/prompt-input-controller.ts`
+- `packages/repl/src/ui/components/InputPrompt.tsx`
+- `packages/repl/src/ui/types.ts`
+- `packages/repl/src/ui/InkREPL.tsx`
+
+#### Tests Added
+
+- `packages/repl/src/ui/utils/prompt-input-controller.test.ts`: 验证错误时恢复原路径、触发临时通知，且不提交、不写历史。
+- Existing paste/InputPrompt/ClipboardToast regression suites remain green.
+
+### 145: Runtime daemon / SDK 边界存在生命周期、事件、权限与协议一致性缺口
+
+- **Priority**: High
+- **Status**: **Resolved** (v0.7.66)
+- **Introduced**: v0.7.64-v0.7.66 (FEATURE_254 / FEATURE_255)
+- **Created**: 2026-07-10
+- **Resolved**: 2026-07-10
+- **Fixed**: v0.7.66
+
+#### Original Problem
+
+对 v0.7.63 之后的 embedded runtime 与 local daemon 进行跨提交审查时，发现若干在单实例 happy path 中不明显、但会破坏多客户端和长生命周期宿主的边界缺口：首个 auto-start client 关闭会连带终止共享 daemon；持久化事件序号在 runtime 重建后回退；事件消费者异常会逃逸到生产者；活动 run 与会话历史变更缺少冲突保护；`permissionMode` 未真正约束 runtime 工具执行；CLI daemon REPL 会把含函数、`AbortSignal` 和进程内对象的 options 直接跨 JSON 发送；wire error、frame 大小、订阅建连竞态、artifact 路径和核心 schema 参数也缺少完整的边界处理。
+
+#### Context
+
+- Components: `src/sdk-runtime.ts`, `src/runtime-daemon/*`, CLI/ACP host adapters, diagnostic sink, LSP shutdown cleanup.
+- Impact: daemon peer clients can unexpectedly断连；重连 replay 可漏事件；权限请求可能挂起或重复；失败结果在 socket client 侧退化为 `{}`；异常/畸形输入可跨越协议边界。
+- Scope: 修复现有 FEATURE_254 / FEATURE_255 contract，不引入第二套 runtime 或假想配置层。
+
+#### Resolution
+
+- auto-start daemon host 与首个 SDK client 解耦；`close()` 只断开 client，显式 shutdown 才释放 host，peer client 在 owner 断开后继续可用。
+- event sequence 从持久化 cursor / event log 恢复；listener 异常隔离；delta 继续全量 replay，但按 tick/阈值批量落盘并限制单 run 日志体积。
+- active run 阻止 rewind / active-entry / compact；runtime permission policy、client broker、bridge meta-tool 单次授权和 protected-path 规则统一。
+- `run.await` Error 增加 wire codec；frame/buffer 限制为 8 MiB；订阅早到事件缓冲；dispatcher 按方法 schema 校验 params/result。
+- artifact create 校验可读普通文件与 256 MiB 上限；CLI daemon REPL 使用显式 JSON-safe DTO，桥接流式事件、权限和 abort。
+- ACP 共用注入 session storage 根；diagnostic sink 支持非 LIFO restore；LSP managed-child 在 stdio close 后才注销。
+
+#### Files Changed
+
+- `src/sdk-runtime.ts`, `src/runtime-daemon/*`, `src/kodax_cli.ts`, `src/acp_server.ts`
+- `packages/agent/src/diagnostics.ts`, `packages/agent/src/runtime/managed-child-processes.ts`
+- `packages/coding/src/agent-runtime/tool-dispatch.ts`, `packages/coding/src/lsp/client.ts`
+- `packages/repl/src/index.ts`, `packages/repl/src/interactive/*`, `packages/repl/src/ui/InkREPL.tsx`
+
+#### Verification
+
+- Runtime/daemon/host/ACP/LSP/diagnostic/bridge targeted suites passed.
+- Root TypeScript check and package build passed.
+- Full local suite reached 9,420 passed; its only codebase-owned failure was this tracker summary before the resolved count was updated. The other failure scanned the developer machine's mutable real-session corpus and is re-run under a clean CI-style home.
+
+### 144: Worker misreads task_output block wait expiry as child-agent timeout and writes final report before children complete
+
+- **Priority**: High
+- **Status**: **Resolved** (v0.7.57)
+- **Introduced**: v0.7.45 (FEATURE_177 `task_output`)
+- **Created**: 2026-06-26
+- **Resolved**: 2026-06-26
+- **Fixed**: v0.7.57
+
+#### Original Problem
+
+When the Worker used `task_output({ block:true })` while child agents were still running, the bounded read window could expire after 30s and return:
+
+```xml
+<retrieval_status>timeout</retrieval_status>
+<status>running</status>
+```
+
+The child agent itself was still healthy, but the `timeout` label made the Worker summarize pending children as "timed out". In review fan-out flows, this could cascade into the Worker writing a final-looking review/report before all dispatched children had produced their matching `<task-completed>` blocks.
+
+#### Context
+
+- Component: `task_output` child-progress snapshot tool.
+- Affected flow: Worker-driven parallel review / audit / exploration with async child agents.
+- User-visible symptom: transcript says child agents are "timed out" even though child activity continues, and the Worker appears to finish from partial evidence.
+
+#### Root Cause
+
+`task_output` overloaded `retrieval_status=timeout` to mean "the synchronous read window expired". In agent language, `timeout` strongly implies task failure or cancellation, especially when shown next to a still-running child. The Worker prompt also allowed terminal summary once plan items were complete without explicitly requiring every dispatched child to have returned `<task-completed>`.
+
+#### Resolution
+
+- Renamed the bounded read-window result from `timeout` to `wait_expired`.
+- Added a result note clarifying that the child task has not timed out and callers must read the `status` field.
+- Updated `task_output` schema wording so normal Worker usage is `task_output({task_id})` / `block:false`, and `timeout_ms` is documented as a read-window cap rather than child lifetime.
+- Added Worker prompt guidance: pending children are not final evidence; while any dispatched child lacks a matching `<task-completed>` block, the Worker must idle-yield with a short waiting status rather than write a final report.
+- **Added an anti-block-peek Worker rule** ("waiting is idle-yield, not a blocking peek"). The first real pilot run exposed a *second* failure mode the initial wording missed: after `wait_expired`, models escalated to `task_output(block:true, timeout_ms:120000)` to "wait harder" — freezing the turn instead of idle-yielding. The rule explains why (a blocking peek holds the whole turn open and blocks chat-while-waiting) and redirects to text-only idle-yield.
+- Adjacent fix: `resolveEvidenceRef` no longer tells a *child* agent to poll a still-running sibling with `task_output` (coordinator-only) or to await a `<task-completed>` block (a parent-only mechanic) — it now states plainly that the sibling result is not available yet.
+- Added regression tests for runtime output, schema wording, Worker prompt gating, the pending-child gate, the child-facing sibling briefing, and Worker tool-surface preservation.
+- Added a pilot eval fixture (`tests/feature-177-wait-expired-idle-yield-pilot.eval.ts`) for the `wait_expired + status=running` cascade.
+
+#### Eval Result (2026-06-26, real provider runs)
+
+- Pilot `zhipu/glm51` 3/3 PASS — model explicitly refuses to fabricate pending reports and idle-yields text-only ("I'll wait … rather than block on them" / "rather than peek again").
+- 5-alias panel on the same case confirmed the acute bug is gone everywhere with data: no alias claimed a child timed out, none wrote a premature report, none re-issued the turn-freezing `block:true`. Weak "flash" aliases (ark/v4flash, ark/v4pro) downgrade to harmless `block:false` peeks / read-only re-scans instead of pure idle-yield — a known weak-model floor, validated by dump inspection.
+- Eval-quality fix during review: the `judgeNoFinalReport` regex matched the bare token "findings", false-failing clean waiting messages that mention the one completed child ("no blocking findings"); tightened to match overall-verdict structure only.
+- Adjacent infra bug surfaced **and fixed** in the same pass: any caller that omitted `reasoning` (e.g. the eval harness) crashed `kimi-code` / `minimax-coding` with `does not support reasoning effort "none"`. These are always-on-thinking models (`localRejectEfforts: ['none','minimal']`, no `supportsDisabledThinking`); `normalizeReasoningRequest(undefined)` produces an implicit legacy effort `none`, and `resolveReasoningProfileIntent` hard-threw on it without checking `effortSource`. Fix in `packages/llm/src/providers/base.ts`: hard-reject a `localRejectEfforts` effort **only when explicitly requested** (mirrors `validateExplicitReasoningEffort`); an implicit/default `none` now falls back to the model's `defaultEffort` so the model simply thinks. Verified: 5-alias panel re-run — `kimi` and `mmx/m27` now produce data (previously zero); `mmx/m27` 3/3, `kimi` idle-yields correctly (judge-undercounted, see below). Regression test: `packages/llm/src/providers/base.test.ts` (`resolveReasoningProfileIntent — always-on-thinking models`).
+- Eval judge tightening (this pilot): `judgeNoFinalReport` no longer trips on the bare token "findings"; `judgeWaitingStatus` broadened to recognize natural waiting phrasings ("I will wait … to finish/complete", "until their reports arrive") that were false-failing correct idle-yields (kimi/zhipu).
+
+#### Files Changed
+
+- `packages/coding/src/tools/task-output.ts`
+- `packages/coding/src/tools/tool-definitions.ts`
+- `packages/coding/src/agents/worker-role-prompt.ts`
+- `packages/coding/src/tools/task-output.test.ts`
+- `packages/coding/src/agents/worker-role-prompt.test.ts`
+- `packages/coding/src/task-engine/runner-driven-tool-wiring.test.ts`
+- `tests/feature-177-wait-expired-idle-yield-pilot.eval.ts`
+
+#### Tests Added / Run
+
+- `npm test -- packages/coding/src/tools/task-output.test.ts packages/coding/src/agents/worker-role-prompt.test.ts packages/coding/src/task-engine/runner-driven-tool-wiring.test.ts`
+- `ARK_CODING_API_KEY='' npm run test:eval -- feature-177-wait-expired-idle-yield-pilot` (skip-path compile check; real provider pilot intentionally not run automatically)
+
+### 143: Auto[llm] speculative classify 窗口默认 500ms + late verdict 被丢弃 → 远程/慢 provider 下 near-100% 误弹确认框，auto 模式形同虚设
+
+- **Priority**: High
+- **Status**: **Resolved** (v0.7.57)
+- **Introduced**: v0.7.39（FEATURE_158 / ADR-025，commit `97e99d7d`；0.7.39 之前完整 await classify，只在真 block/escalate 才弹）
+- **Created**: 2026-06-25
+- **Resolved**: 2026-06-25
+- **Fixed**: v0.7.57
+
+#### Original Problem
+
+SDK 用户报告：在 `auto[llm]` 模式下，几乎每个经过 classifier 的非 Tier-1 工具调用
+（bash 跑的 cat/ls/grep、write/edit、web_fetch、mcp_call、semantic_lookup 等以及重型
+repo-intelligence 工具）都会弹出确认框。只读类 Tier-1（read/grep/glob/repo_overview
+投影为 `''`）不弹，但凡需要 classifier 裁决的调用近乎 100% 误弹。等于 auto 模式形同虚设。
+
+复现条件：远程 provider / 走代理 / 较大模型——classifier 是一次真实 LLM sideQuery，
+单次往返典型 1–5s，几乎不可能在 500ms 投机窗口内返回。
+
+#### Context
+
+- 组件：`AutoModeToolGuardrail` 的 speculative classify。
+- 受影响表面：REPL 与 Space 都中招——
+  [`auto-mode-bootstrap.ts:137-198`](../packages/repl/src/interactive/auto-mode-bootstrap.ts#L137-L198)
+  构造 guardrail 时传了 `timeoutMs` 却**没传 `speculativeWindowMs`**，两个 host 都退回
+  env / 默认值。这是 guardrail 默认值层面的问题，不是某个 surface 的接线遗漏。
+- 配置面缺失：[`config.example.jsonc`](../config.example.jsonc#L244-L247) 的 `autoMode`
+  段暴露了 `engine` / `classifierModel` / `timeoutMs`，**唯独 speculative window 没有
+  config.json 面**，只能靠 `KODAX_AUTO_SPECULATIVE_WINDOW_MS` 环境变量，普通用户无从调。
+
+#### Root Cause
+
+三个根因叠加，按严重度排序：
+
+1. **late verdict 被硬丢弃（核心放大器）**。窗口过期后后台 classify 仍在跑且**不**被
+   abort，但其裁决在 v1 被明确丢弃。三处代码互证：
+   [`speculative.ts:13-17`](../packages/coding/src/guardrails/auto-mode/speculative.ts#L13-L17)、
+   [`guardrail.ts:443-449`](../packages/coding/src/guardrails/auto-mode/guardrail.ts#L443-L449)
+   （注释 *"its result is dropped in v1"*，直接 `escalateOrAsk(...)`）、
+   接口文档 [`guardrail.ts:257-268`](../packages/coding/src/guardrails/auto-mode/guardrail.ts#L257-L268)
+   （*"its eventual result is discarded in v1 (UI doesn't adopt late verdicts yet)"*）。
+   因此即便 200ms 后 classifier 返回 allow 也没用——窗口一过就是一个必须人点的硬弹窗。
+   CC 的 `peekSpeculativeClassifierCheck` 对应能力在 KodaX 未接。
+
+2. **500ms 是占位值，micro-bench 从未回填**。设计稿
+   [`v0.7.39.md` commit 4](features/v0.7.39.md#L711) 承诺 "Anthropic/DeepSeek/Zhipu
+   micro-bench 报告附在文档末尾"，但文档末尾（结尾第 769 行）没有任何 bench 报告；
+   release gate [`v0.7.39.md:729`](features/v0.7.39.md#L729) "Speculative classify
+   p50/p95 < 1500ms p95" 是 `[ ]` 未勾选；`benchmark/` 下搜不到任何 speculative /
+   classifier-latency 数据集或结果。代码注释
+   [`speculative.ts:21-23`](../packages/coding/src/guardrails/auto-mode/speculative.ts#L21-L23)
+   自承 "finalized after micro-bench in commit body"——那个 bench 不存在。
+
+3. **窗口与 timeout 的 16× 内部矛盾**。同一 guardrail 内 classifier sideQuery 的
+   `timeoutMs` 默认 **8000ms**（[`guardrail.ts:306`](../packages/coding/src/guardrails/auto-mode/guardrail.ts#L306)），
+   speculative 窗口默认 **500ms**。设计上允许 classifier 跑 8s，却只给它 500ms 自证，
+   远程/慢 provider 的 p95 必然秒级 → 误弹是数学必然，非偶发。
+
+补充事实（影响修复设计）：cost-tracker 在
+[`classify.ts:96-98`](../packages/coding/src/guardrails/auto-mode/classify.ts#L96-L98)
+内部、sideQuery 返回时结算，每次 classify 恰好一次，与窗口是否过期无关——**采纳 late
+verdict 不会 double-settle cost**。当前窗口过期路径不记录 denial-tracker/breaker（裁决被丢），
+这是采纳 late verdict 时需要补齐的点。
+
+#### Proposed Solution（完整修复，非治标；按 KodaX 极简原则裁掉冗余 knob）
+
+分 5 个 workstream，WS1 治本、WS2 把 SDK/非交互路径一并修对、WS3 补可配置面、WS4 还文档债、
+WS5 是 WS1 内的验证项。**显式 descope**：原报告建议的"provider/latency-aware 默认窗口表"
+不做——一旦 WS1 采纳 late verdict，慢 provider 只意味着确认框先出现再自动消失，per-provider
+调参变成多余的 knob（违反 YAGNI / 无 3+ 用例不抽象）。这是比加 knob 更合理的完整方案。
+
+- **WS1（核心）— 采纳 late verdict / peek 模式**。窗口从"是否硬弹一个需人点的框"降级为
+  "是否先显示一个 pending（analyzing…）UI"。guardrail 不再丢弃 `classifyPromise`，把它
+  透传到 escalate 路径；`AutoModeAskUser` 契约扩展为可接收一个 late-verdict promise（或
+  AbortSignal + resolver），REPL 确认框 race 两件事：(a) 用户手动作答，(b) 迟到裁决。迟到
+  `allow` → 自动放行并关框；迟到 `block` → 自动关框并 block（带 reason）；迟到 `escalate`
+  → 保持等待用户（这才是真正需要人判的场景）；用户先作答 → 以用户为准。无论哪条路径，
+  `classifyPromise` 结算时按裁决补记 denial-tracker/breaker（reset/increment），且保证
+  user-answer 与 late-verdict 两条路径不重复记录（WS5）。
+
+- **WS2 — host/surface-aware 策略：无 askUser ⇒ 不投机**。speculative race 只在"有人会因此
+  干等"时才有意义。非交互 / SDK / 无 askUser 表面下，窗口过期提前 escalate 是纯伤害（没有人
+  可被抢答，还把 transient 的早退当裁决）。规则：无 `askUser` 时禁用 speculative，退回完整
+  await classify（即 0.7.39 之前行为）。这一条单独就修对 SDK / 非交互路径，并把原报告的
+  "GUI/非交互默认"收敛成一条干净规则。
+
+- **WS3 — 补 config 面 + 合理默认**。`autoMode.speculativeWindowMs` 加入 config.json（与
+  `timeoutMs` 并列），bootstrap 透传到 guardrail 与 Space。采纳 WS1 后默认窗口只决定"几 ms 后
+  显示 pending UI"，把默认提到一个不靠运气、又不至于让快裁决闪一下 pending 的值（候选由 WS4
+  实测）。
+
+- **WS4 — 回填并固化 micro-bench**。按 canonical 5-alias provider panel 实测 classifier
+  sideQuery 的 p50/p95，据此定 WS3 默认值，更新 `v0.7.39.md` 文档末尾报告并勾掉 release gate；
+  落 `benchmark/` 永久回归。
+
+- **WS5 — 防 double-record / double-settle 验证**。证实 cost-tracker 仍恰好结算一次；
+  新增 denial-tracker/breaker 记录在 "user 先答" 与 "late verdict 先到" 两条路径下互斥不重复；
+  late verdict 抵达后若用户已作答则只结算 cost + 记 tracker，不再触发 UI。
+
+#### Expected Outcome
+
+`auto[llm]` 模式在远程/慢 provider 下恢复可用：classifier 判 allow 的调用不再弹框（快则
+无感、慢则先显 pending 再自动放行），只有 classifier 真正判 escalate / 用户需介入时才落人工
+确认框。SDK / 非交互路径行为正确（完整 await，不再因 500ms 早退假弹）。speculative window 既
+可经 env 也可经 config.json 调整。default 值由实测固化、release gate 勾齐。
+
+#### Resolution
+
+实施分 5 个 workstream（全部完成）。**WS1 落地时对原 Proposed Solution 做了一处精炼**：
+原计划走「窗口过期即弹 pending 确认框，迟到 allow 再 auto-dismiss（peek-race）」；实现时改为
+更简洁且更正确的**「窗口过期 → `await` 同一 classifyPromise → 采纳裁决」**——allow/block 直接
+落地不弹框，只有真正 `escalate` 才弹框。后者无需 auto-dismiss、无需扩 askUser 契约、无需碰
+readline/Ink UI（现有 agent spinner 覆盖等待期），无弹框闪烁，且 allow 裁决产生**零**弹框，
+正是对症修复。
+
+- **WS1（核心，late-verdict 采纳）**：`packages/coding/src/guardrails/auto-mode/guardrail.ts`
+  `beforeTool` —— `speculativeRace` 返回 `window-expired` 时不再 `escalateOrAsk`，改为
+  `decision = await classifyPromise` 后走既有 switch（allow→allow / block→block / escalate→弹框）。
+  迟到 block 现在正确喂 denial-tracker（旧路径丢弃，曾被误记为 breaker error）。cost-tracker 在
+  `classify.ts:96-98` 内部结算恰好一次，二次 await 不 double-settle（reviewer code-trace 证实）。
+- **WS2（host-aware）**：同文件 —— 无 `askUser` 表面（SDK / 非交互 / 子 Agent）时强制窗口为 0，
+  直接 await 完整裁决，不再因 500ms 早退把 transient timeout 当裁决。
+- **WS3（config 面）**：`packages/repl/src/common/permission-config.ts` 新增
+  `autoMode.speculativeWindowMs`（env `KODAX_AUTO_SPECULATIVE_WINDOW_MS` 覆盖，0 合法=禁用，
+  env>file）；`packages/repl/src/interactive/auto-mode-bootstrap.ts` 透传到 guardrail（REPL +
+  Space 同时生效）；`config.example.jsonc` 文档化。
+- **WS4（文档对账）**：`docs/features/v0.7.39.md` —— 记录 late-verdict 采纳使原「Commit 4
+  micro-bench → 固化默认值」失去正确性意义（任何窗口值都不再造成误 escalate），按
+  EVAL_GUIDELINES Layer 1 纪律不补跑无决策价值的付费 bench；release gate p95 项标记 obviated。
+- **WS5（防退化验证）**：double-settle / double-record 由 WS1 单测覆盖（「late block 恰好记一次」
+  + 「窗口过期后 abort 仍正确传播」）；coding 全包 3570 passed（1 项 `orchestration.test.ts`
+  maxConcurrent 并发计时 flaky，隔离复跑绿，与本修复无关）、repl 全包 2135 passed、coding+repl
+  `tsc -b` clean。
+
+**Files Changed**：
+- `packages/coding/src/guardrails/auto-mode/guardrail.ts`（WS1 窗口过期采纳 + WS2 host-aware 窗口 + 接口/注释更正）
+- `packages/coding/src/guardrails/auto-mode/speculative.ts`（模块文档更正：late-verdict 采纳 + WS2 说明）
+- `packages/repl/src/common/permission-config.ts`（WS3：`speculativeWindowMs` 解析 + `parseSpeculativeWindow`）
+- `packages/repl/src/interactive/auto-mode-bootstrap.ts`（WS3：透传 `speculativeWindowMs`）
+- `config.example.jsonc`（WS3 文档化）
+- `docs/features/v0.7.39.md`（WS4 对账）
+
+**Tests Added**：
+- `guardrail.test.ts`：WS2×2（无 askUser 慢分类器 allow / block）、WS1×4（采纳迟到 allow / block、
+  真 escalate 仍弹框、late block 喂 denial-tracker 恰好一次）、WS1 abort-after-window-expiry×1
+- `permission-config.test.ts`：WS3×8（默认 undefined / file 读取 / 0 合法 / env>file / env 0 / 负数 clamp / 非数字回落 / 取整）
+- `auto-mode-bootstrap.test.ts`：WS3×2（透传 1500 / 省略转 undefined，capturing-spy）
+
+#### Related
+
+- FEATURE_158 / ADR-025（v0.7.39）：speculative classify 的引入版本。
+- Issue 131（v0.7.39，已修）：同 feature 的 Windows-flag 误判；本 issue 是同 feature 的
+  另一类回归（投机窗口默认值 + late-verdict 丢弃），独立成项。
+- 参考实现：Claude Code `peekSpeculativeClassifierCheck` 模式（WS1 对标对象；KodaX 采用更简洁的
+  await-adopt 变体）。
 
 ---
 
-### 084: 流式响应长时间静默中断无任何提示
+### 142: kimi-code thinking-only completion can terminate Worker with only `[Worker]` visible
+
 - **Priority**: High
-- **Status**: Resolved
-- **Introduced**: v0.5.29
-- **Fixed**: v0.5.30
-- **Created**: 2026-03-12
-- **Resolved**: 2026-03-12
+- **Status**: **Resolved** (v0.7.56)
+- **Introduced**: v0.7.56
+- **Created**: 2026-06-25
+- **Resolved**: 2026-06-25
+- **Fixed**: v0.7.56
+
+#### Original Problem
+
+In v0.7.56, users can intermittently see an Assistant turn that contains only
+the managed role label, for example:
+
+```text
+Assistant [04:33 AM]
+[Worker]
+```
+
+The reported repro used `/model kimi-code` followed by a trivial Chinese
+greeting (`你好`). The first run produced a visible Thinking block but no
+assistant answer after `[Worker]`; sending the same greeting again produced a
+normal Chinese response. This makes the CLI look like it finished successfully
+while giving no user-facing answer.
+
+#### Context
+
+- Affected provider path: `kimi-code`, which uses the Anthropic-compatible
+  coding endpoint and supports thinking blocks.
+- Affected runtime path: managed Worker / Runner-driven adapter.
+- The symptom is intermittent because it depends on whether the upstream
+  reasoning model emits final public text after its thinking block.
+- Probe evidence: a scripted-provider reproduction with `thinkingBlocks`
+  present, empty `textBlocks`, empty `toolBlocks`, and stop reason `end_turn`
+  returns `text === ''` and does not consume the retry sentinel.
+
+#### Root Cause
+
+The current empty-completion retry guard in
+`packages/coding/src/task-engine/_internal/managed-task/llm-adapter.ts`
+classifies a turn as empty only when text, tool calls, and thinking blocks are
+all absent. A thinking-only completion therefore bypasses the retry branch even
+though it has no user-visible answer and no tool action.
+
+Downstream, the Runner treats `toolCalls.length === 0` as a valid text-only
+terminal turn. The final assistant text is empty, but the REPL managed
+foreground renderer may have already created an assistant block with the
+`[Worker]` prefix, so the transcript shows a role label with no body.
+
+#### Proposed Solution
+
+Treat "no user-visible text and no tool calls" as a degraded empty completion,
+even when thinking blocks are present. Let the existing bounded re-stream
+mechanism retry the same turn, while preserving thinking blocks for legitimate
+history replay when a real assistant turn exists.
+
+Implementation guardrails:
+
+1. Change the adapter predicate to trim concatenated `textBlocks` and ignore
+   `thinkingBlocks` for empty-output detection.
+2. Keep `stopReason === 'max_tokens'` excluded so max-token continuation and
+   escalation keep owning that path.
+3. Do not use thinking content as fallback public output.
+4. Keep the retry inside the adapter before the Runner commits the assistant
+   turn, so the failed attempt's empty public output never becomes model-facing
+   history.
+5. Add UI defensive handling so leading whitespace deltas do not create a
+   managed assistant ledger item containing only `[Worker]`.
+6. If the bounded retries are exhausted, fail the turn with a local provider
+   empty-output notice instead of committing an empty or thinking-only
+   assistant message to the model-facing transcript.
+7. Add regression tests for thinking-only, whitespace-text-only,
+   normal text-only, tool-only, and max-token cases.
+
+#### Expected Outcome
+
+When kimi-code or another reasoning provider emits a thinking-only or
+whitespace-only final turn, KodaX retries transparently. If a retry returns real
+public text or a tool call, the user sees the normal answer/tool flow. If the
+bounded retries are exhausted, the run should surface an explicit local
+empty-output failure rather than a bare `[Worker]` line, and the next user turn
+must not replay a malformed empty assistant message to the provider.
+
+#### Resolution
+
+- `packages/coding/src/task-engine/_internal/managed-task/llm-adapter.ts` now
+  treats empty/whitespace public text plus no tool calls as a degraded empty
+  completion even when thinking blocks are present.
+- The existing bounded same-turn re-stream path handles recoverable
+  thinking-only completions. If all retries are exhausted, the adapter throws a
+  local provider error and preserves only the safe pre-turn provider messages,
+  so no empty or thinking-only assistant turn is committed for the next request.
+- `packages/repl/src/ui/InkREPL.tsx` now avoids opening a managed assistant
+  block from leading whitespace deltas and treats a bare `[Worker]` prefix as
+  non-substantive assistant text during finalization.
+- Regression tests were added in
+  `packages/coding/src/task-engine/runner-driven.test.ts` and
+  `packages/repl/src/ui/InkREPL.managed-transcript.test.ts`.
+
+---
+
+### 141: CI workflow long-red on Linux — cross-platform test bugs
+
+- **Priority**: Medium
+- **Status**: **Open** (partially fixed — see Progress)
+- **Introduced**: long-standing; CI `ci.yml` has been red on the `KodaX` branch across many releases (v0.7.48–v0.7.51) while the product itself is unaffected
+- **Created**: 2026-06-18
+- **Fixed**: -
+
+#### Overview
+
+The GitHub Actions `CI` workflow (`.github/workflows/ci.yml`, Ubuntu, full
+`npm test`) has been failing on every push for 40+ runs. This is **not a
+product regression** — the suite is green locally on Windows and the
+tag-triggered `Release` workflow (binaries + GitHub Release) succeeds
+independently. The red is a cluster of **cross-platform / environment test
+bugs** that only surface on the Linux CI runner.
+
+#### Root Causes (diagnosed 2026-06-18 via CI as the repro environment)
+
+1. **`packages/repl/src/interactive/storage.test.ts` (6 tests)** — `FileSessionStorage.list()` (`storage.ts:~1307`) derives the per-project session key from a **live** `inspectWorkspaceRuntime({ cwd: gitRoot })`, whereas `save()` derives it from the persisted session data. When the test's `gitRoot` is a non-existent directory, the `git`-spawn-with-bad-cwd fallback diverges between Windows and Linux, so the list-time key ≠ the save-time key and `list()` returns `[]`. **A portable-path fix was tried and DISPROVEN by CI** — the failure is the runtime-inspection layer, not path format. **Robust fix:** mock `inspectWorkspaceRuntime` in these 6 tests (as the passing "lists sibling workspace sessions" test already does) so the key derivation is deterministic on all platforms. Needs a Linux repro to verify.
+2. **`benchmark/harness/h2-boundary-runner.test.ts` (3 tests)** — env propagation to the spawned fake-kodax process (`KODAX_FORCE_MAX_HARNESS`, `KODAX_PLANNER_INPUTFILTER`) + `mustNotTouchViolations` forbidden-path detection behave differently under the Linux spawn/path semantics.
+3. **`packages/coding/src/tools/bash.test.ts` (2 tests)** — "registers background commands for managed cleanup" / "stops background commands when the caller aborts": background-process registration + kill/abort lifecycle differs on Linux (process-tree semantics). (The third bash failure, "keeps the tail for large command output", was a shell-quoting bug and is **fixed**.)
+4. **`packages/agent/src/capabilities/skills/skill-creator-tools.test.ts` (collection failure)** — the file throws at module-load time: `agent-task-runner: API key env DEEPSEEK_API_KEY not set for alias ds/v4flash`. **Fix:** skip (or lazily construct) when the API key is absent, so the suite collects without provider credentials.
+
+#### Progress (fixed and CI-confirmed, 2026-06-17→18)
+
+- **Node 18 floor dropped** (commit `f9ab5596`): a `v`-flag RegExp (unicodeSets, requires Node 20+) in a dependency made ~65 of 71 node-18 test files fail to even load. `engines.node` raised to `>=20.0.0` (root + 4 packages), `ci.yml` matrix reduced to `['20','22']`, README/AGENTS/CLAUDE tech-stack tables synced. This eliminated the bulk of the red.
+- **`bash.test.ts` large-output** (`e9b88a95`): backtick/`${}` in a `node -e` script was expanded by POSIX `sh`; switched to single-quoted concatenation.
+- **`terminalCapabilities.test.ts`** + **`workspace-runtime.test.ts`** (`8344a13a`): `isScreenReader()` treats `CI` as a signal (Actions sets `CI=true`) — test now clears it; `resolveSessionRuntimeInfo` normalizes via `path.resolve`, so the legacy-gitRoot case now uses a both-absolute root.
+
+Net: node 22 went from **71 failed files → 4 failed files / 11 failed tests**.
+
+#### Why this is tracked rather than fixed now
+
+The remaining failures (storage `list()`, h2 spawn, bash background) are Linux
+runtime/process/workspace behaviors that **cannot be fixed confidently without a
+Linux reproduction environment** — the one blind hypothesis attempted (storage
+portable path) was disproven by CI. The dev machine has no Docker and no
+installed WSL distro, and `node_modules` deps were wiped post-publish
+(`npm ls` = empty), so local verification is currently impossible.
+
+#### Proposed Solution
+
+Pick up with a Linux repro env (WSL distro / Docker / Linux box):
+1. Mock `inspectWorkspaceRuntime` in the 6 storage `list()` tests.
+2. Make `skill-creator-tools.test.ts` skip when `DEEPSEEK_API_KEY` is absent.
+3. Reproduce + fix the h2-boundary-runner env-propagation and bash background-process tests on Linux.
+4. Verify the full matrix (node 20 + 22) goes green, then keep CI green as a gate.
+
+#### Context
+
+- Full per-root-cause diagnosis captured in this session; the analysis is the hard part — once on Linux the fixes are largely mechanical.
+- `Release` workflow is independent of `CI` and remains green.
+
+---
+
+### 140: Published bundle leaves computed `./agent.js` child-executor import, breaking workflow child agents
+
+- **Priority**: High
+- **Status**: **Resolved** (v0.7.52)
+- **Introduced**: v0.7.37 bundle distribution; confirmed in published `0.7.48`, `0.7.49`, and `0.7.50`
+- **Created**: 2026-06-17
+- **Resolved**: 2026-06-18
+- **Fixed**: v0.7.52
+
+#### Original Problem
+
+When a locally linked or published `kodax` package runs a workflow that dispatches child agents, the run can fail with:
+
+```text
+[child-executor] Failed to lazy-load agent module (`./agent.js`) for dispatch_child_task. This usually means the @kodax-ai/coding build is broken or out of date. Underlying cause: Cannot find module '...\dist\agent.js' imported from ...\dist\kodax_cli.js
+```
+
+The npm `@kodax-ai/kodax@0.7.50` tarball has the same failure signature: `package/dist/agent.js` is absent, while `package/dist/kodax_cli.js` and an SDK shared chunk still contain a runtime `./agent.js` dynamic import.
+
+#### Root Cause
+
+`packages/coding/src/child-executor.ts` used a computed dynamic import (`const spec = './agent.js'; await import(spec)`) to hide the `child-executor -> agent` edge from circular dependency tooling. That works in `packages/coding/dist`, where `agent.js` is a sibling file.
+
+In the bundled root distribution, esbuild cannot statically see the computed import and leaves it as a runtime import. At runtime it resolves relative to `dist/kodax_cli.js`, so Node looks for root `dist/agent.js`, which is not shipped.
+
+#### Proposed Solution
+
+- Keep the import lazy, but make the import target a string literal (`await import('./agent.js')`) so esbuild bundles the target into `dist/kodax_cli.js` / SDK chunks instead of leaving a raw runtime import.
+- Add a build/package regression guard that fails if built `dist/kodax_cli.js` or `dist/chunks/*.js` still contain the child-executor lazy-load error plus a raw `./agent.js` import.
+- Verify the fix against the packed tarball, not only TypeScript unit tests: `npm run build`, `npm pack`, inspect/extract the tarball, then run/grep the generated bundle.
+
+#### Resolution
+
+v0.7.52 changed the child-executor lazy load to a literal `import('./agent.js')`
+while keeping the import lazy, and added bundle/release guards so raw
+child-executor `./agent.js` imports fail the build or release check before
+publishing. The fixed release line was verified against the packaged bundle
+rather than only against TypeScript source output.
+
+#### Context
+
+- Reproduced from a local `npm link` workflow run on 2026-06-17.
+- Confirmed against the online npm package `@kodax-ai/kodax@0.7.50` tarball on 2026-06-17.
+- Spot-checked published `0.7.49` and `0.7.48`; both have the same missing `dist/agent.js` plus raw `./agent.js` import signature.
+- Fixed release line: v0.7.52.
+
+---
+
+### 139: SDK session full transcript hidden by active-lineage load + error snapshots can orphan activeEntryId
+
+- **Priority**: High
+- **Status**: **Resolved** (v0.7.49)
+- **Introduced**: long-standing / pre-existing
+- **Created**: 2026-06-16
+- **Resolved**: 2026-06-16
+- **Fixed**: v0.7.49
+
+#### Original Problem
+
+KodaX Space renders SDK sessions through public `loadSession(id)`. For a session compacted four times, on-disk lineage contained 164 entries, but `loadSession` returned only the active branch's 10 messages. The earlier entries remained on disk, but users saw most conversation history disappear.
+
+The same session ended with an error snapshot whose first message was an assistant `tool_use`, not a clean system/user start. The provider rejected the request with zhipu code 1214, then the error snapshot advanced active lineage to that malformed tool-loop fragment.
+
+#### Root Cause
+
+- `loadSession` exposes active model context, not append-order full transcript.
+- Headless SDK persistence does not write TUI-style `uiHistory`.
+- Error snapshots can persist in-flight provider messages that are unsafe as authoritative session history.
+- Runner-driven compaction can drop the compaction anchor when no artifact ledger is present.
+
+#### Resolution
+
+- Added public `loadFullTranscript(id)` / `createSessionManager().loadFullTranscript(id)` for append-order UI scrollback while keeping `loadSession` active-context semantics.
+- Guarded error snapshots so malformed provider transcripts may record `errorMetadata` but cannot update active lineage.
+- Changed Runner-driven compaction to pass compaction anchors whenever they exist, independent of artifact ledger presence.
+
+#### Files Changed
+
+- `packages/coding/src/agent-runtime/middleware/session-snapshot.ts`
+- `packages/coding/src/task-engine/_internal/managed-task/compaction.ts`
+- `packages/repl/src/session/public-api.ts`
+- `packages/repl/src/index.ts`
+- `src/sdk-session.ts`
+- Regression tests in the matching `*.test.ts` files.
+
+#### Tests Added
+
+- Error snapshot guard tests for valid user-starting transcripts and invalid assistant-tool fragments.
+- Public API tests proving `loadFullTranscript` returns append-order entries across disconnected lineage roots, including `.islands.jsonl` sidecar entries, while `loadSession` stays active-only.
+- Compaction hook test proving anchor propagation without artifact ledger.
+
+#### Follow-up hardening (v0.7.63)
+
+- Rewind audit entries now use a dedicated `rewind_marker` lineage type instead
+  of overloading compaction entries. Host scrollback sees the marker through
+  `loadFullTranscript().transcriptEntries`; model context and
+  `loadFullTranscript().messages` do not include it.
+- `/rewind` previous-turn selection skips synthetic user entries and
+  tool-result-only user messages, so the target is the previous real user
+  prompt rather than protocol plumbing.
+- `startKodaX()` generated handle IDs are threaded into run options only when
+  they will not override auto-resume/resume discovery, and they no longer
+  trigger the caller-provided `session.id` without storage warning.
+- `@kodax-ai/kodax/session` now re-exports `compactSession` and its public
+  types, with an SDK subpath regression test.
+
+#### Verification
+
+- `npx vitest run packages/coding/src/agent-runtime/middleware/session-snapshot.test.ts packages/coding/src/task-engine/_internal/managed-task/compaction.test.ts packages/repl/src/session/public-api.test.ts` -> 61 passed.
+- `npm run build:packages` -> passed.
+- `npm run build:dts` -> passed; bundled SDK declarations include `loadFullTranscript`.
+- `git diff --check` -> passed.
+
+Additional suite observations:
+
+- `npx vitest run packages/repl` exposed the existing workflow-command parallel-suite flake; `npx vitest run packages/repl/src/commands/workflow-command.test.ts` passed in isolation.
+- `npx vitest run packages/coding` exposed the existing Issue 133 repo-intelligence atomic rename flake; `npx vitest run packages/coding/src/repo-intelligence/runtime.test.ts` passed in isolation.
+
+#### Context
+
+Evidence session: `C:\Users\iceto\.kodax\sessions\c-works-gitworks-kodax-author-kodax-space-fad022fc3b\s_8b5c4bc1-4034-438a-8258-04e0eb5d4723.jsonl`.
+
+---
+### 138: Workflow host RPC 边界对对象载荷零校验 — `synthesize` 传非数组 inputs 崩裸 TypeError + `runAgent`/`spawnAgent` 缺 name/prompt 静默烧 token
+
+- **Priority**: High（畸形的生成脚本会让整轮 workflow 在合成阶段全损，或静默派发空 objective 的子 Agent 消耗预算）
+- **Status**: **Resolved**（v0.7.49）
+- **Introduced**: v0.7.49（FEATURE_217 dynamic workflow invocation）
+- **Created**: 2026-06-15
+- **Resolved**: 2026-06-15
+- **Fixed**: v0.7.49
+
+#### Original Problem
+
+`/workflow create` 生成的动态 workflow 在合成阶段失败，报错 `restricted workflow script failed: Error: input.inputs.map is not a function`。三个 investigator 子 Agent 全部成功完成（摘要已产出），却在最后一步整轮丢弃，且抛出的是一条看似内部崩溃的裸 `TypeError`。
+
+复现信号：
+
+- 生成脚本把 findings 先 `.map().join()` 拼成一份带标题的可读文档，再 `wf.synthesize({ inputs: combined, rubric })` —— `combined` 是字符串，不是数组。
+- 事件时间线：3× `agent_completed` → `phase_started(synthesize)` → 1ms 内 `workflow_failed`，**没有** `agent_spawned(synthesize)`，说明崩在 prompt 构造，连合成 Agent 都没起。
+
+#### Root Cause
+
+Workflow host RPC 边界对**标量字符串参数**（taskId/name/content/reason）在沙箱 + host 两层都有校验和友好报错，但对**对象载荷**（`runAgent`/`spawnAgent` 的 input、`synthesize` 的 input、`log` 的 event）只检查"是不是对象"，随即 `readRecord(input) as unknown as X` 强转放行，字段形状零校验。同源缺陷的三个表现：
+
+- `synthesize`：`buildSynthesisPrompt` 同步 `input.inputs.map(...)` → 非数组直接崩裸 `TypeError`，整轮全损（本 issue 的触发点）。
+- `runAgent`/`spawnAgent`：`name`/`prompt` 为 `undefined` 时静默流入真实 child 派发，烧 token 跑空 objective 的子 Agent，事件/UI 里 `name=undefined`（比崩溃更隐蔽）。
+- `log`：`message` 为 `undefined` 时产生 UI 垃圾行。
+
+同 runtime 的 `wf.parallel` 反而做对了（`Array.isArray` + 逐项 function 检查 + 清晰报错），证明这是"host 边界缺一个复合载荷校验 helper"导致的系统性遗漏，而非逐点疏忽。静态校验（`validateGeneratedWorkflowSource` 正则）无法拦——`inputs` 是运行时值。
+
+#### Resolution
+
+按"放宽契约 + 边界统一校验"两路修复：
+
+- **容忍单值**（runtime）：`WorkflowSynthesizeInput.inputs` 拓宽为 `array | string | object`；`normalizeSynthesisInputs` 把字符串/对象归一为数组，`normalizeSynthesisRubric` 校验 rubric 非空。从源头消除"模型先拼成串"这个几乎必然复发的陷阱。
+- **host 边界校验**（script-runner）：新增 `readSpawnAgentInput` / `readSynthesizeInput` / `readLogEvent`，替换 `handleCommand` 中 `runAgent`/`spawnAgent`/`synthesize`/`log` 的 4 处 `as unknown as` 裸转。强制 name/prompt 非空串（堵静默烧 token）、`readOnly` 必须 boolean（read-only 白名单为安全相关 flag）、rubric 非空、inputs 形状合法；畸形输入以"哪个调用、哪个字段"的明确信息在边界失败。
+- **prompt 提示**（generator）：`wf.synthesize` 说明 inputs 可为数组 / 单个已拼接字符串 / 命名对象，减少模型生成错误形状。
+- `wait` 的 opts 裸转刻意保留——仅 `{ timeoutMs? }`，downstream `normalizeWaitTimeoutMs` 已校验并给友好报错，不属于崩溃/烧钱类。
+
+#### Files Changed
+
+- `packages/agent/src/workflow/script-runner.ts`（host 边界校验器 + 接线）
+- `packages/agent/src/workflow/script-runner.test.ts`（6 个边界拒绝/接受测试）
+- `packages/agent/src/workflow/runtime.ts`（`normalizeSynthesisInputs/Rubric`）
+- `packages/agent/src/workflow/types.ts`（`WorkflowSynthesizeInput.inputs` 拓宽）
+- `packages/agent/src/workflow/runtime.test.ts`（命名对象 / 已格式化字符串两个 synthesize 测试）
+- `packages/coding/src/workflows/generator.ts`（synthesize prompt 提示）
+- `docs/KNOWN_ISSUES.md`
+
+#### Tests Added
+
+- script-runner：缺 prompt 拒绝、空 name 拒绝、`readOnly` 非布尔拒绝、缺 rubric 拒绝、`inputs: 42` 拒绝、单字符串 inputs 接受（验证不再误报）。
+- runtime：synthesize 接受命名对象（转 `{name,value}` 列表）+ 已格式化字符串（包进 `## Input 1`）。
+
+#### Verification
+
+- `npx vitest run packages/coding/src/workflows/ packages/agent/src/workflow/` → 135 passed
+- `npx tsc --noEmit -p packages/agent/tsconfig.json` + `packages/coding/tsconfig.json` → clean
+- `npm run build:packages` → success
+
+---
+
+
+### 136: 流式 / 滚动时 spinner 动画卡顿 + 计时变慢 — 瓶颈在 CPU 侧每帧渲染，非终端写入字节量
+
+- **Priority**: Low（用户实测"影响不大"；不阻塞功能，纯视觉/手感）
+- **Status**: **Open**（根因待 trace 确认）
+- **Introduced**: 待调研（疑似一直存在；v0.7.41 spinner stats 尾巴 `58682cbf` 让每 tick 输出变化，可能放大可见度）
+- **Created**: 2026-05-31
+
+#### Symptom
+
+流式输出过程中、以及上下文很长时滚动过程中，spinner 动画明显卡顿、计时变慢（驱动 spinner 的 `setInterval` 回调被推迟，帧率不稳）。注意：**打字卡顿是另一个独立症状，已由 FEATURE_212 cell-diff（`60c38896`）修复**；本 issue 的 spinner 卡顿独立存在，未被修复。
+
+#### Investigation — 已排除的假设（两次 I/O 否证）
+
+- ❌ **假设 1「全屏每帧整屏重画（~6KB ANSI 写）是瓶颈」** → FEATURE_212 fullscreen cell-diff（`60c38896`，default ON）把打字时的写入量从整屏降到只画变化的格子，**打字卡顿消失**，但 spinner 卡顿无变化。
+- ❌ **假设 2「滚动时 cell-diff 退化成近整屏写」** → FEATURE_212 DECSTBM 硬件滚动快路径（`870f59aa`→`424b1a34`，default ON）把滚动写入量降到只画滚进来的行（terminal-model gate 证明逐字节重建正确），**实测 spinner 卡顿仍无变化**。
+- **结论**：两次都否证了「终端写入字节量（I/O 侧）是瓶颈」。DECSTBM 对本症状无效（见下方 Related 的回滚评估）。
+
+#### Likely root cause（待 trace 确认）
+
+瓶颈在 **CPU 侧每帧渲染工作**，不在 I/O 字节量：
+
+- 流式每个 token 到达 / 滚动每帧都触发 React reconciliation 重建整棵 transcript 子树；
+- `outputToScreen` / `Output.getGrid` 全量重建 Screen 网格（参考 FEATURE_172 Phase A 诊断 + Issue 094 的"核心渲染文件过大/耦合"）；
+- 上述同步 CPU 工作（叠加同步 stdout 写）占满主线程 → 驱动 spinner 动画的 `setInterval` 回调被推迟 → 动画帧率不稳 + 计时变慢。
+
+DECSTBM 只优化了「把字节写到终端」这一 I/O 步，没有触碰上面的 CPU 侧重建——这正解释了为何它对 spinner 无效。
+
+#### Next
+
+- 用 `KODAX_RENDER_TRACE` + 多 agent 并行 trace（参考 `feedback_render_pipeline_full_trace`）定位 CPU 侧热点，**端到端测 wall-time**（参考 `feedback_bench_must_be_end_to_end`，不要只测 inner function）。
+- 对照 `C:/Works/claudecode` 的 spinner 机制：是否用不受 render 阻塞的独立 timer，或对流式 render 做节流（throttle / coalesce）。
+
+#### Related
+
+- **FEATURE_212**：`60c38896`（cell-diff）有效修复打字卡顿，保留。DECSTBM 部分（`870f59aa`→`424b1a34`）对本 issue（spinner）**无效**——它只降低滚动帧的 I/O 写入量，不碰 CPU 侧重建。但用户实测**滚动本身手感有改善**（I/O 写入量下降的预期效果，与 spinner 症状独立）→ **保留**（2026-05-31，escape hatch `KODAX_SCROLL_DECSTBM=0`）。本 issue 的 spinner 卡顿仍 **Open**，需 CPU 侧 trace。
+- [FEATURE_172](FEATURE_LIST.md#feature_172) / ADR-028 — render pipeline 底层瓶颈（真实瓶颈在 ink 底层 ~80%，非数据层）。
+- Issue 094 — 核心渲染文件过大、职责耦合。
+
+---
+
+
+### 133: `repo-intelligence/runtime.test.ts` "falls back to OSS when premium returns malformed preturn payloads" intermittent flake
+
+- **Priority**: Low（测试 flake only；不影响 user-facing 行为，仅在并行 suite 高负载下偶发）
+- **Status**: Open（调研已展开，**暂未复现**，候选根因 narrowed）
+- **Introduced**: 待调研（commit history 显示文件最近一次改动是 v0.7.37 FEATURE_142 `a840f22b`，但 flake 表现实际何时起飞需调研）
+- **Created**: 2026-05-16
+
+#### Current Behavior
+
+跑 `npm test` 全套（512 files / 5,935 tests，Windows 并行模式）偶尔出现这个 case 失败；单独 `npx vitest run packages/coding/src/repo-intelligence/runtime.test.ts` 始终通过（5 tests / 288ms）。多次 full-suite 跑结果跳跃（pass → fail → pass）。
+
+**2026-05-16 复现尝试**：连续 5 次 full-suite run **0/5 复现**；本次调研期间反而稳定通过。可能性：
+- (a) 本次 PR 加的全局 `vitest.setup.queue.ts` `_resetMessageQueueForTests()` 间接降低了 worker 内 module-state 污染概率（不直接相关但环境变了）
+- (b) Flake 本身概率极低（之前 ~6 次中触发 1 次 ≈ 17%），5 次未复现仍可能 just lucky
+- (c) 失败模式可能与 specific worker 调度顺序相关，难以稳定 trigger
+
+#### Code Reading 发现的候选根因（**code-read 已确认存在；race trigger 未实证**）
+
+在 [`packages/coding/src/repo-intelligence/runtime.ts:57-62`](../packages/coding/src/repo-intelligence/runtime.ts#L57-L62) 有 **module-level 单例 cache**：
+
+```typescript
+const PRETURN_CACHE_TTL_MS = 1_500;
+const premiumPreturnCache = new Map<string, { expiresAt: number; promise: Promise<PremiumPreturnResult | null>; }>();
+```
+
+Cache key（[runtime.ts:296-305](../packages/coding/src/repo-intelligence/runtime.ts#L296-L305)）由 `mode / endpoint / bin / executionCwd / gitRoot / targetPath / refresh / trace` 组成。
+
+**关键观察**：每个 test 用 `mkdtempSync` 创建独立 `tempDir` → cache key 中 `executionCwd` 不同 → 同文件内 test 间 cache key **理论不冲突**。但：
+
+1. **gitRoot 未在 test context 中显式设**：测试只传 `{ executionCwd: tempDir }`，没传 gitRoot。Cache key 用 `context.gitRoot ?? ''`。但如果 `tryPremiumPreturn` 内部隐式 resolve gitRoot 为 `process.cwd()` 的 git root（在 vitest worker 中是 monorepo root），则**所有 test 共享同一个 gitRoot 段**——但 cacheKey 看的是 `context.gitRoot`，不是 resolved value，所以仍是 ''
+2. **Promise 是 cached**（不只 result）：cache 存 `Promise<PremiumPreturnResult | null>`。如果 test A 的 mock 返回的 promise 被存进 cache，test B 复用了同一个 cacheKey（极小可能 — 需要相同 tempDir，几乎不可能），就会拿到 test A 的 mock 结果
+3. **`vi.mock('./premium-client.js')` 是 file-scoped**：vitest 的 vi.mock hoist 到文件顶部，正常情况不会跨 file 污染——除非 worker 复用时模块状态部分泄漏
+
+#### 暂不复现 → 暂不修
+
+无法实证复现路径，**贸然修代码风险大于收益**（可能引入新 bug，或修了非 root cause）。建议留作 dormant tracking：
+- 后续如再次复现，捕获完整 stderr/stdout + cache 状态 dump
+- 在 `beforeEach` 加 `premiumPreturnCache.clear()` 是低成本防御性 fix 但属非测试代码改动；当前不做
+
+#### Workaround
+
+- 跑测试时若复现，单独 `npx vitest run` 该文件验证；不构成实际功能问题
+- 若高频复现可在 [runtime.ts](../packages/coding/src/repo-intelligence/runtime.ts) export 一个 `_resetPremiumPreturnCacheForTests()` 并在测试 beforeEach 调用（test helper 模式）—— 同 `_resetMessageQueueForTests` 的做法
+
+#### Related
+
+- Issue 132（同期 known flake，h2-boundary-runner.test.ts）—— 两个 flake 都在 heavy parallel load 下偶发，但失败模式 root cause 不同（132 是 Windows fs visibility，133 是 module cache 假设）
+- precedent commit `d4a47bc9`（v0.7.37）—— "logic is sound — single-test runs always pass" 同款判断
+
+---
+
+
+### 126: tmux 默认不透传 OSC 8 超链接 — kodax 输出中的 file:// / docs URL 在 tmux 内不可点击
+
+- **Priority**: Low
+- **Status**: Open（terminal multiplexer 默认配置问题，非 KodaX bug；提供一行 workaround）
+- **Introduced**: 一直存在（OSC 8 hyperlink 自 v0.6.x 起被广泛用于 file 路径 / docs 链接）
+- **Created**: 2026-04-28
+- **Target Version**: 不修复（外部依赖）
+
+#### Background
+
+KodaX 在多处使用 OSC 8 hyperlink escape sequence（`\x1b]8;;<URL>\x1b]8;;\x07`）让支持的终端把 URL 渲染成可点击文本：
+
+- `file://` 链接：edit/read 工具结果中的文件引用
+- `docs/...` 路径：诊断消息中指向项目文档的快捷跳转
+- 外部 URL：知识/技能链接
+
+主流现代终端（iTerm2、WezTerm、Alacritty、Windows Terminal、Ghostty、VS Code integrated terminal）默认支持 OSC 8。**但 tmux ≤ 3.3 默认开启的"过滤未知 OSC"行为会丢弃所有 OSC 8 序列**，URL 不渲染为可点击，只看到裸文字。
+
+FEATURE_057 Track F（v0.7.30 cell-level diff renderer）评审过程中确认这是 tmux 已知缺省行为，与 KodaX 的渲染层无关——legacy log-update.js 路径同样被影响。
+
+#### Reproduction
+
+1. 在原生终端（iTerm2 / WezTerm / Windows Terminal）运行 kodax，让其输出一条带 `file://` 链接的诊断消息 → 链接显示为带下划线、可 Cmd/Ctrl+点击
+2. 进入 tmux session（默认配置），同样运行 → 链接显示为普通文本，鼠标点击无响应
+3. `cat` 一段内联 OSC 8 测试串验证：`printf '\e]8;;https://example.com\e\\example link\e]8;;\e\\\n'`
+
+#### Workaround
+
+在用户的 `~/.tmux.conf` 添加一行：
+
+```
+set -g allow-passthrough on
+```
+
+之后 `tmux kill-server` + 重新 attach 生效。`allow-passthrough` 让 tmux 把它不识别的 OSC/CSI/DCS 序列原样转给底层终端，OSC 8 即被外部终端解析。
+
+注意：`allow-passthrough on` 是 tmux 3.3+ 的设置。tmux 3.2 及以下需要升级或忍受 OSC 8 不可用。
+
+#### Why Not Fix in KodaX
+
+- 关闭 OSC 8 emission 会让所有非 tmux 用户失去可点击链接（占绝大多数）
+- 自动 detect tmux 不可靠：`$TMUX` 环境变量在嵌套 SSH / sudo 后可能丢失，且无法判断用户是否已设 passthrough
+- terminfo 没有标准化 OSC 8 capability bit，运行时 probe 成本高
+- tmux upstream 已在演进 passthrough 默认策略，由 tmux 维护者收敛是更合理的归宿
+
+KodaX 选择记录 known issue + 一行 workaround，让 tmux 用户主动配置。
+
+#### Related
+
+- FEATURE_057 Track F Phase 4 review（v0.7.30）— 在 cell-level renderer 终端兼容性分析中确认该 issue 跨 legacy / cell 路径同形
+- `packages/repl/src/tui/substrate/ink/osc.ts` — OSC 8 emit 实现（`link()` / `LINK_END`）
+- tmux upstream 讨论：[tmux/tmux#3083](https://github.com/tmux/tmux/issues/3083) passthrough default 历史记录
+
+---
+### 125: Thinking-mode cross-provider replay — 三个不可测 OpenAI-compat 与 anthropic 官方 strict mode 待实证
+
+- **Priority**: Low
+- **Status**: Open（tracking — 不阻塞发版，记录待实证项以便未来拿到 API key 时回填）
+- **Introduced**: v0.7.28（伴随 deepseek V4 thinking-mode 400 修复 + 跨 provider 切换保护工作落地）
+- **Created**: 2026-04-26
+- **Target Version**: 无固定版本，等可获取的 API key / 实证窗口
+
+#### Background
+
+DeepSeek V4 thinking-mode 修复（v0.7.28）落地了三层保护：
+
+1. **L1**（[openai.ts:807](../packages/llm/src/providers/openai.ts)）：`replayReasoningContent: true` flag 的 provider 把每个 assistant turn 的 `reasoning_content` 字段补齐（默认 `''`），避免 multi-turn 缺字段时 400
+2. **L5**（[anthropic.ts:619-645](../packages/llm/src/providers/anthropic.ts)）：strict signature mode 下，缺签名的跨 provider thinking 块转 `<prior_reasoning>` text 注入 ——目的是切到 anthropic 官方时不丢推理痕迹
+3. **Kimi guard**（[anthropic.ts:704](../packages/llm/src/providers/anthropic.ts)）：assistant tool_use turn 缺 thinking 块时注入 `{ thinking: '...', signature: '' }` 占位
+
+L1 deepseek V4 路径已实证（直接 API probe 重现 400 + 修复）。但还有三个**未独立实证**的项：
+
+#### Unverified Items
+
+| 项 | 风险 | 现状 |
+|---|---|---|
+| `kimi` / `qwen` / `zhipu` OpenAI-compat 是否真的拒绝缺 `reasoning_content` 的 replay | 低 — 同字段约定，假设失败模式同形 | v0.7.28 全部 opt-in `replayReasoningContent: true`（按 deepseek 方案 max-tolerance），但**没有 probe 证明该 flag 必要 / 安全**。若任一家对额外字段 strict，会引入新 regression（罕见 — Chinese OpenAI-compat 普遍 lenient on extra fields） |
+| Anthropic 官方对历史 thinking 块的签名严格度（L5 strict mode 的真实工作场景） | 极低 — 默认 strict flag 仅对 `anthropic` provider 启用 | 未跑过实测；只在理论上有效。需要 ANTHROPIC_API_KEY 跑一次「带跨 provider thinking history → 切到 anthropic.com」端到端验证 |
+| Kimi guard 注入 `{thinking:'...', signature:''}` 是否仍必要 | 低 — 5 个第三方 Anthropic-compat provider（kimi-code / ark-coding / mimo-coding / minimax-coding / zhipu-coding）实测对 (a) 无 thinking 块 / (b) 空 thinking / (c) `'...'` 占位 / (d) 真 thinking 全 LENIENT | guard 当前可能是死代码。删除是独立 cleanup，等再观察 1-2 个版本无人触发后再做 |
+
+#### Reproduction（待补）
+
+各项需要的实证步骤：
+
+1. **kimi/qwen/zhipu OpenAI-compat 严格度**：用对应的 `KIMI_API_KEY` / `DASHSCOPE_API_KEY` / `ZHIPU_API_KEY`（注意：用户当前持有的 `ZHIPU_API_KEY` 是 `zhipu-coding` 的 Anthropic-compat 端点 key，不是 `zhipu` OpenAI-compat 的；`KIMI_API_KEY` 同理与 `kimi-code` 不同）跑 `c:/tmp/openai-compat-tool-calls-probe.mjs`，看 (II.omit) vs (II.empty) 是否复现 deepseek 的 400/200 模式
+2. **Anthropic 官方 L5 strict**：用 `ANTHROPIC_API_KEY` 构造一段含「signature 缺失或不可信的 thinking block」历史，切到 `anthropic` provider 重发，观察是否真按 strict 拒绝 → 验证 `<prior_reasoning>` text 转换路径
+3. **Kimi guard**：监控生产 trace，若 1-2 版本内无人在含 tool_use 的 anthropic-compat 历史上触发该 guard 注入路径，可视为死代码删除
+
+#### Workaround / Acceptance
+
+当前 v0.7.28 接受这三项 known limitation：
+- kimi/qwen/zhipu OpenAI-compat：opt-in 失败的 risk 低（同协议族 lenient on extra fields），收益大（max-tolerance），用户报障再回退
+- Anthropic 官方 L5：默认行为正确（pass-through with 空签名），strict mode 是额外保护层，最坏情况是退回 pre-v0.7.28 行为
+- Kimi guard：保留无害；观察期满后再删
+
+#### Related
+
+- 修复 commit 链：L0 错误史保护（runner-driven.ts:2679）/ L1 reasoning_content always-attach（openai.ts:807）/ L3 sanitize_thinking_and_retry recovery action / L5 cross-provider thinking conversion（anthropic.ts:619-645）/ Kimi guard（anthropic.ts:704）
+- [v0.7.28.md FEATURE_087/088 Risk 节](features/v0.7.28.md) 同一限制条目
+- 经验性证据矩阵：deepseek V4 直接 API probe 已重现 400 + 修复确认；5 个 Anthropic-compat provider 4 种 thinking shape 全 LENIENT；其余维度未测
+
+---
+### 124: AMA 子 Agent dispatch 实际触发率偏低 — Controller fanout gate + H1 工具白名单串联收得过紧
+
+- **Priority**: High
+- **Status**: Open
+- **Introduced**: v0.7.18 / v0.7.19（FEATURE_067 / 047 / 052 落地时定的保守门槛）
+- **Created**: 2026-04-26
+- **Target Version**: v0.7.28（unreleased，与本次 prompt+gate 调整同期）
+
+#### Current Behavior
+
+`dispatch_child_task` 工具（FEATURE_067）和 fan-out scheduler（FEATURE_047）已经在 v0.7.18-v0.7.19 落地并通过测试，但**真实运行中子 Agent 派发频率明显低于预期**。表现：
+
+- H1 普通改代码任务：Generator 看不到 `dispatch_child_task` 工具（白名单未包含），无法并行修改多个独立模块
+- H1 read-only 调研任务：Scout 升级到 H1 后 controller 的 `fanout.admissible` 立刻变 false，Scout fan-out 提示被关闭
+- H2 写多模块任务：`hypothesis-check` fanout class 在 controller 里硬编码 `return false`，Generator 即使在 H2 也得不到 fanout 提示
+- Plan / systemic 任务的调研阶段：`profile === 'tactical'` 一刀切，managed profile 完全没有 fan-out 路径
+
+#### Expected Behavior
+
+子 Agent dispatch 是已交付能力，应当在能提升效率的场景被自然激活：
+
+- H1 read-only 调研：Scout 和 Generator 都能在多目标场景派 read-only child
+- H2 多模块写入：Generator 能在独立模块改动时派 write child（已有 worktree 隔离机制）
+- Plan / systemic 调研：Scout / Planner 能并行调研多个模块作为决策输入
+
+但**不能**强制并行——Rule A/B/C prompt 仍由 LLM 自主判断，gate 只负责"capability available"。
+
+#### Reproduction
+
+观察任意真实多模块任务的 KodaX session：
+
+1. `kodax "审查 packages/llm 和 packages/coding 的安全问题"` —— 触发 H1 review-only 路径，Scout 会 fan-out（这条路径正常）
+2. `kodax "在 packages/llm、packages/agent、packages/coding 三个独立模块各加一个空函数"` —— 触发 H2 write，但 Generator 不会派 write child（hypothesis-check 硬编码 false）
+3. `kodax "重构 task-engine 的 H1/H2 路由逻辑"` —— 触发 managed profile（`requiresBrainstorm + code` 命中），即使是 read-only 调研阶段也拿不到 fan-out 提示
+
+#### Root Cause（已通过 isolated eval 实测确认）
+
+实测证据：`tests/dispatch-prompt-comparison.eval.ts` 在 zhipu-coding / minimax-coding / deepseek 三家 provider 上，**给 LLM 看到 `dispatch_child_task` 工具 + 现有 RULE A/B/C prompt 的隔离环境下，T1（fan-out）任务全部正确触发 3 child，T2（不该派）全部正确不派，T3（context preservation）多数正确**。说明 LLM 知道何时该派——**问题不在 prompt，在 gate**。
+
+现状的 4 层串联 gate（任一层关上即 0 触发）：
+
+**Layer 1 - Controller fanout class gate**（[reasoning.ts:1098-1133](../packages/coding/src/reasoning.ts)）：
+- `evidence-scan`（bugfix/investigation read-only）只在 `harnessProfile === 'H0_DIRECT'` 启用，H1/H2 一律关闭
+- `module-triage`（lookup）同上
+- `hypothesis-check`（write 类）硬编码 `return false`
+- 只有 `finding-validation`（review）永远开
+
+**Layer 2 - Profile filter**（[reasoning.ts:1158](../packages/coding/src/reasoning.ts)）：
+- `profile === 'tactical'` 一刀切。plan / systemic / brainstorm 任务的 managed profile 直接屏蔽 fan-out
+
+**Layer 3 - H1 工具白名单**（V1 chain 时期分析；FEATURE_193 (v0.7.43) 已 retire 整层）：
+- 初步分析以为"H1 Generator 在非 review-only 路径下拿不到 `dispatch_child_task`"，但**实地核对后是误判**：
+  - 当时 `H1_READONLY_GENERATOR_ALLOWED_TOOLS` 数组本身已经包含 `dispatch_child_task`（该常量在 FEATURE_193 v0.7.43 退役 V1 Planner / readonly Generator 时被删）
+  - 非 review-only / 非 docs-scoped 的默认 H1 路径返回 `undefined`，没有 `allowedTools` 过滤，全工具可用
+  - 当时 Generator agent 的 tools 数组无条件包含 `generatorDispatch`（FEATURE_193 v0.7.43 退役 V1 chain agent declarations 时删除）
+- 既有测试 `Shard 6d-Q — dispatch_child_task exposed to Scout + Generator only` 已经覆盖这个不变量（FEATURE_193 retire 后测试也已迁移到 Worker）
+- **本层无 fix 工作**（A3 移除）。V2 Worker 直接拿全工具集，不走 allow-list 路径。
+
+**Layer 4 - 缺乏 telemetry**（[dispatch-child-tasks.ts](../packages/coding/src/tools/dispatch-child-tasks.ts)）：
+- 现有 `onToolUseStart` 已记录 LLM 端的"我要派 child"，但缺乏 child 完成的状态 + 耗时聚合
+- 改完无法度量"触发率上升了多少 / 平均耗时 / 有没有过头"
+- 解决路径：复用工具内已有的 `ctx.reportToolProgress`（KodaXEvents 标准事件），在入口和出口加结构化标记行，无需引入新类型
+
+#### Proposed Solution（v0.7.28 切片）
+
+**Prompt 层（最小化）**：
+- A5b：在 Scout 和 Generator 的 RULE C 后追加 "When NOT to use" 否定清单 4 条（参考 Claude Code / opencode 的 negative-bumper 风格）。**已实测无回归**。
+- 不重写 RULE A/B/C 结构（实测说明对国产 coding 模型 RULE 标签是有效 anchor）
+
+**Gate 层（核心修复）**：
+- A1：`evidence-scan` 解锁到 H1 + read-only（去掉 `harnessProfile === 'H0_DIRECT'` 限制）
+- A2：`hypothesis-check` 解锁到 H2_PLAN_EXECUTE_EVAL（去掉硬 `return false`）
+- ~~A3~~：实地核对后**phantom problem**，Generator 一直能 dispatch_child_task，无 fix 工作
+- B1：`profile === 'tactical'` 改为对 read-only fanout class 不限制 profile，对 hypothesis-check 仍要求 tactical（精确放开，避免一刀切）
+
+**Telemetry 层（验证手段）**：
+- A4：在 `dispatch-child-tasks.ts` 入口和出口通过现有 `ctx.reportToolProgress` 发送结构化标记行（`[dispatch] start childId=... readOnly=...` / `[dispatch] end childId=... status=... duration_ms=...`）。**复用既有 KodaXEvents 通道，零新类型、零新 logger**。session transcript 自动持久化，未来 `grep '\[dispatch\]'` 可聚合"改完之后触发率上升了多少 / 哪些任务派了几个 / 平均跑多久 / 是否过头"。
+
+**Provider/model 行为差异（实测发现）**：
+跨 provider × 跨 deepseek 模型档位的 dispatch 行为不完全一致——这是模型本身的特性，不是 prompt 缺陷：
+- `zhipu-coding (glm-5.1)` / `minimax-coding (M2.7)` / `deepseek-v4-flash`：T1 fan-out 全部 100% 直接派 child
+- `deepseek-v4-pro`：60% 直接 fan-out，40% 先 glob 侦察再下一轮 dispatch（v4-pro 是深度推理档，"scope-first" 是合理特性，**不是漏 dispatch**——延迟一轮而已）
+- `deepseek-chat`（已废弃，2026-07-24 deprecate）：40% 直接 fan-out，因模型问题不是 prompt 问题
+T3（context preservation 单 child）所有 provider 都有概率走"先 grep 再 dispatch"的多轮路径——这是合理 strategy（先看搜索结果再决定要不要 child），不是回归。
+
+**Follow-up（不在本次切片）**：
+- B2：Scout opportunity scan 字段（实测说明非紧急）
+- B3：Rule B 的 `≥10 file reads` 数字调整（实测说明 LLM 用语义不用数字，无害）
+- A2 pre-Scout 限制：`buildAmaControllerDecision` 用的是 routing heuristic 预测的 `harnessProfile`（不是 Scout 确认值）。本次依靠 Generator role-prompt 里的 post-Scout 二次 gate（[role-prompt.ts:608-610](../packages/coding/src/task-engine/_internal/managed-task/role-prompt.ts)）兜底，但 controller 信号在"routing 预测 H1 / Scout 升 H2"路径上仍是关闭的——后续若 telemetry 数据显示该路径有真实需求，可考虑改为 post-Scout 重算 `activeFanoutClass`
+
+#### Acceptance Criteria
+
+Issue 124 关闭条件：
+1. v0.7.28 发布后跑过的真实 session 中，`grep '\[dispatch\] start' ~/.kodax/sessions/*/transcript*` 出现非零结果——证明 telemetry 路径通
+2. 上述结果至少覆盖一种之前关闭的路径（H1 read-only 调研 / managed profile 调研 / H2 write hypothesis-check 至少一种）——证明 gate 解锁实际生效
+3. 没有 user-reported "误派 child / token 飙升" 回归——证明 R5 风险（过度并行）未兑现
+
+不需要硬性"触发率提升 X%"指标，因为没有可信的 baseline（改之前 telemetry 不存在）。改完用绝对触发数 + 主观体感判断即可。
+
+#### Context
+
+- [reasoning.ts:1098-1186](../packages/coding/src/reasoning.ts)（fan-out class gate + buildAmaControllerDecision）
+- [tool-policy.ts:362-394](../packages/coding/src/task-engine/_internal/managed-task/tool-policy.ts)（H1 Generator allowedTools）
+- [role-prompt.ts:476-499](../packages/coding/src/task-engine/_internal/managed-task/role-prompt.ts)（Scout dispatch_child_task prompt）
+- [role-prompt.ts:572-595](../packages/coding/src/task-engine/_internal/managed-task/role-prompt.ts)（Generator dispatch_child_task prompt）
+- [tests/dispatch-prompt-comparison.eval.ts](../tests/dispatch-prompt-comparison.eval.ts)（prompt 实测基线，3 providers × 3 variants × 3 tasks）
+- [tests/dispatch-prompt-deepseek-variance.eval.ts](../tests/dispatch-prompt-deepseek-variance.eval.ts)（deepseek 跨模型方差探针：v4-flash 100% / v4-pro 60% / chat 40% 直接 fan-out）
+
+#### References
+
+- FEATURE_067 Child Agent Execution（v0.7.18 完成）
+- FEATURE_047 Invisible Adaptive Parallelism（v0.7.19 完成）
+- FEATURE_052 Dual-Profile AMA Harness and Child Fan-Out Boundaries（v0.7.19 完成）
+- 用户反馈：现实际使用中子 Agent 触发频率明显偏低
+- 跨家 prompt 风格对比：Claude Code（Agent tool, 4 层结构）、opencode（task tool, "Use 1 / Use multiple" 场景对照）、pi-mono（subagent extension, single/parallel/chain mode 参数）
+
+---
+
+### 122: edit / multi_edit 错误消息在 v0.7.26 过度精简 — 丢失关键信息载体导致 LLM 恢复失败
+
+- **Priority**: Medium
+- **Status**: Open
+- **Introduced**: v0.7.26
+- **Fixed**: -
+- **Created**: 2026-04-23
+- **Resolved**: -
+- **Target Version**: v0.7.27（修复已 commit `4423e0d` 于 KodaX 分支，等待随 v0.7.27 发布）
+
+#### Current Behavior
+
+v0.7.26 在 commit `ef085fc` 里为降低 token 开销对 `edit` / `multi_edit` 的错误消息和工具描述做了精简，但与此同时也把若干**信息载体**（不是脚手架）砍掉了。对**强模型**（Claude Opus / Sonnet / GPT-4 级）影响小，但对**中档模型做 Scout**（Kimi / MiniMax / Zhipu 的 capped-budget 档，正是 AMA 里 Scout 的常见模型）会观察到错误消息不足以帮它自恢复：
+
+- **ambiguous-match 缺具体示例**：原消息 `"(a heading, function name, or distinctive comment)"` 被砍 → LLM 不知道什么算"nearby unique context"，可能选随意文本作为 widen 的依据
+- **`"Do NOT just shorten"` 的 scope limiter `"just"` 被砍**：变成 `"(Shorter anchors match more, not fewer.)"` 这类范畴判断 → 可能被 LLM 误应用为"任何场景都不要缩短"
+- **not-found 错误丢了第二个备选诊断**：原文里 `"...whitespace drift vs the actual file, OR it was never in the file to begin with"` 的 `OR` 分支被砍 → 当 LLM 实际**幻觉**了 anchor 时，它会无限尝试"再读更宽窗口找精确文本"而永远找不到
+- **anchor-consumed 诊断语气削弱**：原文 `"is present in the original file but was consumed by..."` 告诉 LLM "你的 anchor 本来对了，问题在另一个 edit"；精简版 `"anchor was consumed by ..."` 读起来像普通失败
+- **ANCHOR WARNING 丢了触发语**：原文 `"If later edits need to reference text an earlier edit overlaps..."` 的前置条件被砍 → 规则从"if-then 识别"变成"plain fact"，触发概率下降
+- **UNIQUENESS RULE 丢了具体尺寸和示例**：`"#1 cause"` 框架、`"a 6-line window"` 具体尺寸、`"multi-line block"` 示例都被砍
+
+#### Expected Behavior
+
+错误消息在保持 token 经济的前提下**不丢信息载体**。具体来说，具体示例 / scope limiter / 幻觉备选诊断 / diagnostic framing / 触发条件应该全部保留——纯脚手架（`Either (a) ... or (b) ...` 外壳 / `"on that edit if all matches should change"` 等冗余从句）是可砍的。
+
+一次恢复失败造成的额外 retry 成本（几百至几千 tokens）远大于保留这些信息载体的 per-error 成本（每条错误 <25 tokens）。
+
+#### Reproduction
+
+观察到的触发场景（2026-04-23 实际会话）：
+
+```
+✗ [Scout] multi_edit (failed)
+  edits[1] old_string not found. ...Re-read the file and retry with a stable anchor.
+
+Scout → read - offset=226 - limit=6   # 窄 6 行重读
+
+✗ [Scout] multi_edit (failed)
+  edits[1] matched 2 places. Retry with a unique anchor or set replace_all=true on that edit.
+```
+
+Scout 的 6 行窄重读在整文件里产生歧义 anchor；v0.7.26 的错误消息**既没提示窄读陷阱，也没提示 anchor 可能根本不在文件里**，Scout 只能盲猜继续。
+
+#### Root Cause
+
+Commit `ef085fc` 把 V1 精简到 V2 时没区分"信息载体"和"脚手架"，整体砍。具体对照：
+
+| 被砍内容 | 作用类别 | 是否该保留 |
+|---|---|---|
+| `Either (a) ... or (b) ...` 枚举外壳 | 脚手架 | 可砍 |
+| `"on that edit if all matches should change"` 从句 | 脚手架 | 可砍 |
+| `"at lines"` → `"lines"` | 脚手架 | 可砍 |
+| `"This aborts the whole batch — no edits have been applied"` | 冗余（tool description 已有） | 可砍 |
+| **`"(a heading, function name, or distinctive comment)"`** | **信息载体** | **必保留** |
+| **`"Do NOT just shorten"` 里的 `just`** | **scope limiter** | **必保留** |
+| **`"OR it was never in the file to begin with"`** | **幻觉备选诊断** | **必保留** |
+| **`"is present in the original file but was consumed"`** | **diagnostic framing** | **必保留** |
+| **ANCHOR WARNING 的 `"If later edits need to reference..."`** | **触发语** | **必保留** |
+| **UNIQUENESS RULE 的 `"#1 cause"` / 具体尺寸 / `"multi-line block"`** | **具体示例** | **必保留** |
+
+#### Proposed Solution
+
+已在 commit `4423e0d`（KodaX 分支本地，未发布）里**选择性回填**所有信息载体，保留所有脚手架的精简。应用对象：`edit.ts` + `multi_edit.ts` + `registry.ts`，并同步更新 `edit.test.ts` / `multi-edit.test.ts` 断言。
+
+- 净开销：4 个错误消息 +~280 chars（平均 +70/条），工具描述 +~130 chars（session 级缓存）
+- 等价 token：每次错误 <25 tokens
+- 验证：29/29 edit+multi_edit 测试绿，`tsc --noEmit` 干净
+
+**关闭条件**：v0.7.27 tag 推出时由 `4423e0d` 随版本发布 → 将本 issue 标为 Resolved，Fixed 字段填 v0.7.27。
+
+#### References
+
+- v0.7.26 原精简 commit: `ef085fc fix(coding): enrich edit / multi_edit errors with locations + narrow-read hints`
+- 回填 commit（本地未发布）: `4423e0d fix(coding): restore information-carrying detail in edit/multi_edit error messages (bundled for v0.7.27)`
+- 相关文件: `packages/coding/src/tools/{edit,multi-edit,registry}.ts` + 对应 `*.test.ts`
+- 原 review 建议（要求"少 token"）：v0.7.26 发布前对话上下文
+
+---
+
+### 120: Skill / Plan-mode 调用路径下流式注入 prompt 失效 — `canQueueFollowUps` 未开启
+
+- **Priority**: High
+- **Status**: Open
+- **Introduced**: 一直存在（自 v0.6.0 引入队列功能起，非主对话路径就未接入）
+- **Fixed**: -
+- **Created**: 2026-04-20
+
+- **Update 2026-05-04 (FEATURE_110, v0.7.34)**: plan-mode 路径 1 已整体删除（`runWithPlanMode` / `/plan` slash 命令 / `[planMode, setPlanMode]` state 全部移除），本 issue 现仅剩 skill / prompt 调用一条路径。skill 路径已在 v0.7.24 (Issue 121) 顺手补了 `setCanQueueFollowUps(true)` 包裹（[InkREPL.tsx:6237-6239](../packages/repl/src/ui/InkREPL.tsx#L6237-L6239)），需独立验证是否完全闭合。
 
 - **Original Problem**:
-  会话在长时间运行后（如电脑休眠或网络长时间空闲）突然中断，现象如下：
-  - Assistant 输出中途停止（如"现在创建题库管理页面"）
-  - 无任何 info 信息、重试消息或错误提示
-  - LLM API 统计中无调用日志
-  - 时间跨度约 9 小时（12:07 AM → 09:32 AM）
-  - 用户输入新消息后，程序才"恢复"，但之前的上下文已丢失
 
-- **Expected Behavior**:
-  - 连接断开时应该有明确的错误提示或重试消息
-  - 即使无法重试，也应该告知用户发生了什么
-  - API 调用应该有日志记录（至少在重试时）
+  用户通过 `/skill:...`（例如 `/skill:smart-changelog`）或 plan-mode（已于 v0.7.34 删除）触发 agent 执行期间，在流式过程中按 Enter 想排队追加下一条 prompt，会出现：
+
+  - 输入栏字符被吞（由 [prompt-input-controller.ts:251-252](../packages/repl/src/ui/utils/prompt-input-controller.ts#L251-L252) 无条件 `clear()` 导致）
+  - 底部 `QueuedCommandsSurface` 无排队提示
+  - 输入栏占位符显示 `Agent is busy...`（不是 `Queue a follow-up...`）
+
+  按占位符映射 [surface-liveness.ts:66-71](../packages/repl/src/ui/view-models/surface-liveness.ts#L66-L71)：`busy` = `isLoading=true` + `canQueueFollowUps=false`。证实 `handleSubmit` 在 [InkREPL.tsx:5849](../packages/repl/src/ui/InkREPL.tsx#L5849) 的 `if (!canQueueFollowUps) return;` 命中，输入被静默丢弃。
 
 - **Context**:
-  - 相关代码：`packages/ai/src/providers/anthropic.ts` 流式响应循环
-  - 相关代码：`packages/coding/src/retry-handler.ts` 重试逻辑
-  - 现有 3 分钟硬超时可能未生效（或超时后消息未显示）
-  - 可能是 `for await...of` 循环在网络断开时静默结束
 
-- **Root Cause Analysis**:
-  1. **流式响应静默失败**：`for await (const event of response)` 循环在网络中断时没有抛出错误，而是返回不完整结果
-  2. **HTTP 连接静默断开**：网络连接可能在某个时间点断开，但没有被检测到
-  3. **超时机制可能未生效**：如果 `for await` 循环阻塞在等待数据，setTimeout 可能不会触发
-  4. **无完整性检查**：流式响应结束后没有验证响应是否完整（如检查 stop_reason）
+  **三条"agent 执行"路径，只有一条开启队列**：
 
-- **Additional Context**:
-  - 电脑没有休眠，排除了系统挂起的可能性
-  - 9 小时期间没有任何输出，说明请求可能被"挂起"或返回了不完整结果
+  | 入口 | 调用 | `canQueueFollowUps` |
+  |---|---|---|
+  | 普通对话（[InkREPL.tsx:6518](../packages/repl/src/ui/InkREPL.tsx#L6518)） | `runQueueableAgentSequence` → 内部 `setCanQueueFollowUps(true)` | ✅ true |
+  | Skill / prompt 调用（[InkREPL.tsx:6349](../packages/repl/src/ui/InkREPL.tsx#L6349) → `executeInvocation` 内 [:5763](../packages/repl/src/ui/InkREPL.tsx#L5763)） | 直接 `runAgentRound` | ❌ false |
+  | Plan mode（[InkREPL.tsx:6466](../packages/repl/src/ui/InkREPL.tsx#L6466)） | 直接 `runWithPlanMode` | ❌ false |
 
-- **Reproduction**:
-  1. 启动 KodaX 会话
-  2. 让电脑进入休眠状态或断开网络 8+ 小时
-  3. 恢复后发送消息
-  4. 观察是否没有任何错误/重试信息
+  另有 `executeInvocation` 内的 plan-mode 子分支（[InkREPL.tsx:5749-5753](../packages/repl/src/ui/InkREPL.tsx#L5749-L5753)）同样未接入。
 
-- **Solution Implemented**:
-  1. **添加流式完整性检查**：
-     - 在 `anthropic.ts` 中追踪 `message_stop` 事件
-     - 如果流式响应结束时未收到 `message_stop`，抛出 `StreamIncompleteError`
-     - 同时追踪 `message_start`、`message_delta` 事件
-  2. **添加错误分类**：
-     - 在 `error-classification.ts` 中添加 `StreamIncompleteError` 分类
-     - 将其标记为 `TRANSIENT`，支持最多 3 次重试
-  3. **OpenAI Provider 同步修复**：
-     - 在 `openai.ts` 中追踪 `finish_reason`
-     - 如果流结束时未收到 `finish_reason`，抛出相同错误
-  4. **调试日志**：
-     - 设置 `KODAX_DEBUG_STREAM=1` 可查看流式事件详情
-     - 记录流开始时间、结束时间、事件类型等
+  **为什么 v0.7.22/v0.7.23 才被察觉**：代码路径一直是这样。用户升级后开始频繁使用 `/skill:` 命令（如 `smart-changelog`），才撞上这个一直存在的盲区。queue 代码本身自 v0.7.20 未变。
 
-- **Files Modified**:
-  - `packages/ai/src/providers/anthropic.ts` - 添加 message_stop 检测
-  - `packages/ai/src/providers/openai.ts` - 添加 finish_reason 检测
-  - `packages/coding/src/error-classification.ts` - 添加 StreamIncompleteError 分类
+  **另有一条独立路径**（同 issue 另一病灶，当 `isLoading=false` 但屏幕仍在流式时）尚未完全复现，需后续追查——本 issue 先闭合可确诊的这一条。
 
----
+- **Planned Resolution**: **B-全（修"不丢 + 自动续"）**
 
-### 013: 自动补全缓存内存泄漏风险 (RESOLVED)
-- **Priority**: Low
-- **Status**: Resolved
-- **Introduced**: v0.3.1 (auto-detected)
-- **Fixed**: v0.6.17
-- **Created**: 2026-02-19
-- **Resolution Date**: 2026-03-23
-- **Original Problem**:
-  ```typescript
-  setTimeout(() => this.cache.delete(dir), this.cacheTimeout);
-  ```
-  - 使用 `setTimeout` 进行缓存过期清理，在高频率调用时可能导致大量定时器积压和内存无法及时释放
-- **Context**: `packages/repl/src/interactive/autocomplete.ts` - 行 95-110
-- **Proposed Solution**: 使用 LRU cache with TTL 替代 setTimeout
+  **方向**：不做 v0.7.30/v0.8.0 预告的"REPL substrate 重写"（那是大工），只在 skill / plan-mode 两条旁路上**对齐普通对话路径的队列语义**：
+
+  1. 流式期间允许入队（`canQueueFollowUps=true`）
+  2. 本轮结束后自动 drain 队列，每条作为后续对话轮执行
+
+  **改动点**（约 30 行集中在 [InkREPL.tsx](../packages/repl/src/ui/InkREPL.tsx)）：
+
+  1. **新增 helper `drainPendingInputsAsFollowUps`**（紧邻 `runQueueableAgentSequence` 之后）
+     - 从 `streamingState.pendingInputs` 取第一条
+     - 通过 `stageQueuedPrompt` 补 UI 前置
+     - 调 `runQueueableAgentSequence` 用这条作 initialPrompt，它内部会 drain 后续所有
+
+  2. **包一层 `setCanQueueFollowUps(true)` / `finally` `setCanQueueFollowUps(false)` 到 `executeInvocation`**
+     - 现有 try/catch 结构保留
+     - 外层 finally 关闸
+     - 正常返回路径后调 `drainPendingInputsAsFollowUps`；抛错路径不 drain（队列保留到用户下一次提交时 drain，与主路径失败行为一致）
+
+  3. **同样模式应用到 handleSubmit 的 plan-mode 分支**（[InkREPL.tsx:6459-6500](../packages/repl/src/ui/InkREPL.tsx#L6459-L6500)）
+     - 在 `setIsLoading(false)` 之前 drain，保证 drain 期间仍有 loading 状态
+
+  **不做的事**（刻意保持边界窄）：
+  - 不碰 `runQueueableAgentSequence` 本身
+  - 不改 `handleSubmit` 的主结构
+  - 不碰 `runAgentRound` / task-engine / 任何 coding 层代码
+  - 不做 plan-mode-aware drain（drained follow-ups 走普通 agent round，与主路径一致）
+
+  **与 v0.7.30/v0.8.0 roadmap 的关系**：FEATURE_055 "REPL Substrate Hardening" 会重写整个 submit / queue / surface 层。本补丁是"**撑到 v0.7.30**"的战术修复——集中在两处 wrapper，届时随 InkREPL 被抽薄自然被 prune。
+
+  **测试**：
+  - 人工 e2e：`/skill:smart-changelog` 流式中按 Enter → 底部排队提示出现 → 命令结束后自动跑该 prompt
+  - plan-mode 同路径验证
+  - 回归：`packages/repl/src/ui/utils/queued-prompt-sequence.test.ts` 仍绿（不动 sequence 核心）
 
 ---
+### 119: Scout 升级 H0→H1 后残留 pre-Scout mutationSurface — Generator 被错误锁为 docs-only
 
-### 014: 语法高亮语言支持不全 (RESOLVED)
-- **Priority**: Low
-- **Status**: Resolved
-- **Introduced**: v0.3.1 (auto-detected)
-- **Fixed**: v0.6.17
-- **Created**: 2026-02-19
-- **Resolution Date**: 2026-03-23
+- **Priority**: High
+- **Status**: Open
+- **Introduced**: v0.7.20（结构性遗留，v0.7.20 修复了 harness/ceiling 两条残留通道后暴露）
+- **Fixed**: -
+- **Created**: 2026-04-19
+
 - **Original Problem**:
-  ```typescript
-  function highlightCode(code: string, _language: string): string {
-    const keywords = /\b(const|let|var|...)\b/g;
-    // _language 参数未使用
-  }
-  ```
-  - 无法针对不同语言高亮（Python、Go、Rust 等）
-  - 关键词列表只覆盖 JavaScript/TypeScript
-- **Context**: `packages/repl/src/interactive/markdown-render.ts` - 行 43-65
-- **Proposed Solution**: 添加多语言关键词集 或 集成 `highlight.js` / `prism` 库
 
----
+  Scout 把任务从 H0 升级到 H1 后，Generator 的系统提示仍带着 `This H1 run is docs-only. Restrict any edits to documentation artifacts.` 这种约束，导致 Generator 看到用户明确要求（例如"补测试"、"把完成状态挪到对应版本"）也不敢修改测试文件或代码，只能改文档。真实会话中出现过：用户要求补测试 + 同步 FEATURE_LIST.md + 调整版本归属，Scout 已升级到 H1，Generator 仍只做了文档侧编辑、跳过测试。
 
-### 015: Unicode 检测不完整 (RESOLVED)
-- **Priority**: Low
-- **Status**: Resolved
-- **Introduced**: v0.3.1 (auto-detected)
-- **Fixed**: v0.6.17
-- **Created**: 2026-02-19
-- **Resolution Date**: 2026-03-23
-- **Original Problem**:
-  ```typescript
-  function supportsUnicode(): boolean {
-    if (process.platform === 'win32') {
-      const env = process.env;
-      return env.WT_SESSION !== undefined ||  // Windows Terminal
-             env.TERM_PROGRAM === 'vscode' ||
-             env.CI === 'true';
-    }
-    return true;
-  }
-  ```
-  - 未检测 CMD/PowerShell 的代码页设置 (`chcp 65001`)
-  - 用户设置了 UTF-8 代码页但仍显示 ASCII 字符
-- **Context**: `packages/repl/src/interactive/themes.ts` - 行 93-101
-- **Proposed Solution**: 在启动时检测并缓存代码页设置结果
+  本质是 `plan.decision.mutationSurface` 这个字段**同时承担了两个语义**：
+  1. Scout **前**：正则启发（`deriveMutationSurface` on original prompt）推出的粗糙上界，给 Scout 当参考
+  2. Scout **后**：下游 Generator / fan-out scheduler 读来判断"允许改动面"
 
----
+  Scout 可以覆盖 `confirmedHarness`（commit `3efdb7b` 已修 clamp bug）和 `upgradeCeiling`（commit `fa4708f` 已修 evaluator 读旧 ceiling），但 `mutationSurface` 从没被 Scout 覆盖过的渠道——升级后仍然是 pre-Scout 的正则残留值。这是"升级后残留"这条主线 bug 的第三条通道。
 
-### 017: TextBuffer 未使用方法 (RESOLVED)
-- **Priority**: Low
-- **Status**: Resolved
-- **Introduced**: v0.3.1 (auto-detected)
-- **Fixed**: v0.6.17
-- **Created**: 2026-02-19
-- **Resolution Date**: 2026-03-23
-- **Original Problem**:
-  ```typescript
-  getAbsoluteOffset(): number {
-    let offset = 0;
-    for (let i = 0; i < this._cursor.row; i++) {
-      offset += (this._lines[i]?.length ?? 0) + 1;
-    }
-    offset += sliceByCodePoints(line, 0, this._cursor.col).length;
-    return offset;
-  }
-  ```
-  - `getAbsoluteOffset()` 方法计算光标在文本中的字节偏移位置，但当前未被任何 UI 组件调用
-- **Context**: `packages/repl/src/ui/utils/text-buffer.ts` - 行 436-445
-- **Proposed Solution**: 保留作为未来扩展点 或 删除如果确定不需要
-
----
-
-### 018: TODO 注释未清理 (RESOLVED)
-- **Priority**: Low
-- **Status**: Resolved
-- **Introduced**: v0.3.1 (auto-detected)
-- **Fixed**: v0.6.17
-- **Created**: 2026-02-19
-- **Resolution Date**: 2026-03-23
-- **Original Problem**:
-  ```typescript
-  // 应用主题 (使用默认 dark 主题)
-  // TODO: 从配置文件读取主题设置
-  const theme = getCurrentTheme();
-  ```
-  - 代码中留有 TODO 注释，表明主题配置功能尚未完全实现
-- **Context**: `packages/repl/src/interactive/repl.ts` - 行 112-113
-- **Proposed Solution**: 实现功能 或 转换为 issue 追踪 或 移除注释
-
----
-
-### 055: Built-in Skills 未完全符合 Agent Skills 规范 (RESOLVED)
-- **Priority**: Low
-- **Status**: Resolved
-- **Introduced**: v0.4.7
-- **Fixed**: v0.6.17
-- **Created**: 2026-03-01
-- **Resolution Date**: 2026-03-23
-- **Original Problem**:
-  当前 Built-in Skills（如 `/help`, `/model`, `/project`）使用 console.log 输出，而非返回结构化数据给 LLM。这与 Agent Skills 标准不一致：
-  - Agent Skills 标准：Skill 内容应注入 LLM 上下文
-  - Built-in Skills 当前：直接使用 console.log 输出到终端
-  - 用户期望：所有 Skills 都应该统一行为
 - **Context**:
-  - Issue 054 已修复，核心 Skills 系统已正常工作
-  - 此 Issue 追踪 Built-in Skills 的统一性问题
-- **Proposed Solution**:
-  - 将 Built-in Skills 迁移到统一的 Skill 框架
-  - 或明确文档说明 Built-in Skills 与 User Skills 的区别
+
+  **触发路径**：
+  - [packages/coding/src/reasoning.ts:2275](../packages/coding/src/reasoning.ts#L2275) — `deriveMutationSurface` 基于原始 prompt 文本做正则匹配，把 `plan.decision.mutationSurface` 初始化为 `docs-only` 等值
+  - [packages/coding/src/task-engine.ts:951-1011](../packages/coding/src/task-engine.ts#L951-L1011) — `applyScoutDecisionToPlan` 只同步 `harnessProfile` 和 `upgradeCeiling`，**从不触碰** `mutationSurface`
+  - [packages/coding/src/task-engine.ts:3096-3104](../packages/coding/src/task-engine.ts#L3096-L3104) — Generator 的 `h1MutationGuardance` 读 `decision.mutationSurface`，看到旧的 `docs-only` 就把 Generator 锁死
+
+  **相关下游读点**（同样读 pre-Scout 残留值）：
+  - [task-engine.ts:1743-1744](../packages/coding/src/task-engine.ts#L1743-L1744) — fan-out scheduler 判 read-only/docs-only
+  - [task-engine.ts:2567, 2578](../packages/coding/src/task-engine.ts#L2567-L2578) — `createRolePrompt` 的 H1 分支
+  - [task-engine.ts:2915](../packages/coding/src/task-engine.ts#L2915) — 元数据打印
+  - [task-engine.ts:3401](../packages/coding/src/task-engine.ts#L3401) — 传给 `createRolePrompt`
+
+  **相关已修复 commits**（同类 bug 的另外两条通道）：
+  - `3efdb7b fix(task-engine): trust Scout routing authority, fix ceiling clamp context-loss bug`
+  - `fa4708f fix(task-engine): evaluator prompt uses effective ceiling, not stale heuristic`
+
+  这两个 commit 修了 harness/ceiling 的残留，但漏了 `mutationSurface`。本 issue 闭合最后一条通道。
+
+- **Planned Resolution**:
+
+  **方向**：单一真理源 + 轻推断。不加新字段、不加 validator、不加 retry、不改 Scout prompt。让下游停止信任 Scout 前的启发式字段，改读 Scout 自己的结构化输出。
+
+  **为什么不走"让 Scout 多声明一个字段 + 升级时强制要求"路线**：
+  - 违背 KodaX 极简 + 智能哲学，把"LLM 该自己判断"的事变成"schema 枷锁 + retry 循环"
+  - 反而把 bug 换方向：未声明时如果 auto-relax 到 `code`，纯 review 任务又会被错误放开
+  - Scout 的 `scope` / `reviewFilesOrAreas` / `primaryTask` 已经携带了比"一个 enum 值"更精确的意图信息，不需要再加一个冗余字段
+
+  **具体改动**（半天量）：
+
+  1. **新增纯函数 `inferScoutMutationIntent(scout, primaryTask)`**（约 20 行）
+     返回三档：`'review-only'` / `'docs-scoped'` / `'open'`
+     - `primaryTask === 'review'` 且 `scope` 为空 → `review-only`
+     - `scope ∪ reviewFilesOrAreas` 全部匹配 `*.md`/`docs/`/`CHANGELOG` 等文档路径 → `docs-scoped`
+     - 其它 → `open`（默认开放，信任 Scout scope + Evaluator 兜底）
+
+  2. **替换 [task-engine.ts:3096-3104](../packages/coding/src/task-engine.ts#L3096-L3104) 的 `h1MutationGuardance`**
+     改读 Scout 的 directive 而非 `decision.mutationSurface`；语气从"restrict/do not mutate"改成"unless ... asks for fixes"的软引导；`open` 档不加任何约束
+
+  3. **迁移或删除另外 4 处下游读点**
+     [task-engine.ts:1743-1744, 2567, 2578, 3401](../packages/coding/src/task-engine.ts) — 或迁移到同一推断，或直接删除该分支（依赖 Scout scope + Evaluator 作为自然约束）
+     [task-engine.ts:2915](../packages/coding/src/task-engine.ts#L2915) 元数据打印保留，但改为打印 Scout 推断结果
+
+  4. **保留不动的东西**
+     - `KodaXManagedScoutPayload` 结构、Scout prompt、validator、parser、persistence schema 全部不动
+     - `plan.decision.mutationSurface` 字段本身保留（`reasoning.ts` 内部仍用它推 `topologyCeiling`），只是**下游 H1+ 路径不再读它**
+     - `applyScoutDecisionToPlan` 不动（或仅加一条 routing note 声明"下游已走推断"）
+
+  5. **测试**
+     - `inferScoutMutationIntent` 纯函数单测（3 档各 1-2 例）
+     - 3 个核心回归（task-engine.test.ts）：
+       * Scout H0→H1 升级 + 原启发式为 `docs-only` → Generator prompt 不再含"docs-only"字样
+       * Scout H1 review 任务（scope 空）→ Generator prompt 含 review-only 软引导
+       * Scout H1 纯文档任务（scope 全 .md）→ Generator prompt 含 docs-scoped 软引导
+     - 手工 e2e：重跑触发此 bug 的那类 docs + tests 组合任务，确认 Generator 能改 test 文件
+
+  **风险与代价**：
+  - Scout `scope` 描述粒度粗时（如 `packages/coding/src`），`isDocsLikePath` 会判失败，推断落 `'open'` → 这是正确行为，不算退化。极简原则下信任 Scout scope 本身 + Evaluator 兜底，不要硬收紧
+  - 现有依赖 `decision.mutationSurface === 'docs-only'` 的测试会需要更新（因为下游不再读它）——这反映的是语义修复，不是回归
+
+  **为什么不选其他方案**：
+  - ❌ Scout payload 新增 `confirmedMutationSurface` + fail-loud retry：违背极简哲学，加枷锁；retry 烧 token 且体验不自然；弱模型缺省会频繁失败
+  - ❌ Scout 升级未声明时 auto-relax 到 `code`：方向错了，会把纯 review 任务错误放开，比现状还危险
+  - ❌ 拆 `heuristicMutationSurface` / `mutationSurface` 双字段：结构上更干净，但 7+ 处读点要迁移 + 持久化 schema 扩字段 + 旧快照迁移，scope 太大，收益被推断方案覆盖
+  - ❌ 只做最小补丁（Scout 覆盖时同步清 `mutationSurface`）：治标不治本，下次再有"Scout 前 vs Scout 后"冲突字段还会复发
 
 ---
+### 112: ask_user_question 交互机制不完备 — 数字编号歧义 + 缺少 input/multiSelect 模式 (RESOLVED)
 
-### 061: Windows Terminal 流式输出时滚轮滚动异常 (RESOLVED)
-- **Priority**: Low
+- **Priority**: High
 - **Status**: Resolved
-- **Introduced**: v0.4.5
-- **Fixed**: v0.6.17
-- **Created**: 2026-03-02
-- **Resolution Date**: 2026-03-23
-- **Related**: Issue 058 (闪烁问题已解决)
-- **Affected Platforms**: Windows Terminal
+- **Introduced**: v0.7.18
+- **Fixed**: v0.7.62
+- **Created**: 2026-04-12
+- **Resolved**: 2026-07-06
 
-- **Problem**:
-  流式输出时用鼠标滚轮向上滚动后，无法用滚轮向下滚动（但拖动滚动条可以）
-
-- **Root Cause Analysis**:
-
-  ### 历史消息未使用 `Static` 组件
-
-  **当前代码** (`MessageList.tsx`):
-  ```tsx
-  {filteredItems.map((item) => (
-    <HistoryItemRenderer key={item.id} item={item} theme={theme} maxLines={maxLines} />
-  ))}
-  ```
-
-  **问题**: 每次流式内容更新时，所有历史消息都会重新渲染，Ink 重新计算整个视口，
-  可能导致终端滚动状态被重置。
-
-- **Proposed Solution**:
-
-  ### 方案 A: 使用 Static 包裹历史消息 ⭐
-
-  **优先级**: 高 | **效果**: 显著
-
-  **改动文件**: `packages/repl/src/ui/components/MessageList.tsx`
-
-  **改动内容**:
-  ```tsx
-  import { Static } from "ink";
-
-  // 将已完成的历史消息用 Static 包裹
-  <Static items={filteredItems}>
-    {(item) => <HistoryItemRenderer item={item} theme={theme} maxLines={maxLines} />}
-  </Static>
-
-  // 流式内容保持动态渲染（不使用 Static）
-  {streamingResponse && (
-    <Box flexDirection="column" marginBottom={1}>
-      <Text color={theme.colors.secondary} bold>Assistant</Text>
-      <Box marginLeft={2} flexDirection="column">
-        {streamingResponse.split("\n").map((line, index) => (
-          <Text key={index} color={theme.colors.text}>{line || " "}</Text>
-        ))}
-      </Box>
-    </Box>
-  )}
-  ```
-
-  **原理**: Ink 的 `Static` 组件将内容写入终端后不再参与后续渲染周期，
-  新内容追加到 Static 内容下方，不会触发整个视口重绘。
-
-  **预期效果**:
-  - ✅ 历史消息只渲染一次
-  - ✅ 只有流式内容参与动态渲染
-  - ✅ 滚动状态不会被重置
-
----
-
-### 077: Skills 系统高级功能未完全实现 (RESOLVED)
-- **Priority**: Low
-- **Status**: Resolved
-- **Introduced**: v0.5.5
-- **Fixed**: v0.6.17
-- **Created**: 2026-03-04
-- **Resolution Date**: 2026-03-23
 - **Original Problem**:
-  Issue 054 已修复，Skills 系统的核心功能（命令注入、渐进式披露、自然语言触发）已正常工作。但 KodaX 扩展的以下高级功能尚未完全实现：
 
-  1. **`context: fork` 子代理执行**
-     - 期望行为：Skill 在独立子代理中执行，不影响主会话
-     - 当前状态：`executor.ts` 中有占位符实现，返回 fork 配置但未集成
-     - Pi-mono 实现：作为独立扩展 (`subagent`) 实现，不是 Skills 系统的一部分
+  `ask_user_question` 的 Select 对话框存在两个根本性缺陷：
 
-  2. **`allowed-tools` 工具限制**
-     - 期望行为：限制 skill 执行时 LLM 可用的工具
-     - 当前状态：解析工具列表但未强制执行
-     - Pi-mono 实现：文档中有说明（experimental），但代码中未实现
+  **缺陷 1 — 数字编号歧义（当前最严重的体验问题）**
 
-  3. **`agent` / `model` 字段**
-     - 期望行为：指定子代理类型或模型
-     - 当前状态：已解析并传递，但依赖于 `context: fork` 完整实现
+  KodaX Select 使用"输入数字编号 + 按 Enter"选择方式（`InkREPL.tsx` L4152-4196）。当 LLM 的文字输出中也包含编号列表时（如 smart-changelog 列出的步骤 1-6），用户会混淆"步骤编号"和"选项编号"：
 
-- **Expected Behavior**:
-  以上功能为 **KodaX 扩展**（非 Agent Skills 标准或 pi-mono 实现的一部分），属于"锦上添花"功能：
-  - 基本 Skills 功能（`/skill-name` 命令、自然语言触发、渐进式披露）已正常工作
-  - 高级功能需要更大架构改动（子代理执行需要完整的子进程管理）
+  ```
+  [LLM 的文字输出]
+  步骤 1: Update CHANGELOG.md
+  步骤 2: Sync version
+  步骤 3: Create Git Tag
+  ...
 
-- **Reference**:
-  **Pi-mono 对比分析** (参考 `C:\Works\GitWorks\pi-mono`):
+  [Select 对话框]
+  1. 步骤 1,2,3      ← 用户以为按 1 = 选步骤 1
+  2. 步骤 1,2,3,4    ← 用户按 2 以为 = 选步骤 2，实际选了这个组合
+  3. 全部执行
+  ```
 
-  | 功能 | Pi-mono | KodaX |
-  |------|---------|-------|
-  | `context: fork` | 独立扩展（非 Skills） | 占位符 |
-  | `allowed-tools` | 文档有，代码未实现 | 解析但未执行 |
-  | `agent` | 独立扩展 | 占位符 |
-  | `model` | Agent 定义中支持 | 解析但未使用 |
-  | 上下文字符预算 | 未实现 | 未实现 |
+  Claude Code 使用**上下箭头导航 + Enter 确认**模式（`CustomSelect/use-select-navigation.ts`），聚焦项显示 `❯` 指针，完全避免了数字编号歧义。
 
-- **Files**:
-  - `packages/skills/src/types.ts` - 类型定义（已有字段）
-  - `packages/skills/src/executor.ts` - fork 模式占位符实现
-  - `packages/skills/src/skill-loader.ts` - 字段解析
+  **缺陷 2 — 缺少 input 和 multiSelect 模式**
 
-- **Resolution Approach**:
-  这些是**可选的高级功能**，当前不需要紧急实现：
-  - 核心 Skills 功能已满足基本使用需求
-  - 如需完整子代理功能，可参考 pi-mono 的 subagent 扩展实现
+  KodaX `ask_user_question` 只有单选列表一种交互模式。Claude Code 提供三种：
+  - **单选**（默认）：上下导航 + Enter
+  - **multiSelect**：空格键切换选中/取消，✓ 标记已选项，Enter 提交全部选择
+  - **input 类型选项**：Tab 键展开自由文本输入，用户可输入任意内容
+
+  缺少后两种模式导致：组合选择场景（如 "选择步骤 1,3,5"）LLM 被迫将组合打包为预设选项；用户无法自行输入任意组合。
+
+- **Context**:
+
+  **KodaX 现有实现**：
+  - 工具定义：`packages/coding/src/tools/registry.ts` L420-462 — `required: ['question', 'options']`
+  - 工具实现：`packages/coding/src/tools/ask-user-question.ts` — 始终走 `ctx.askUser()` → Select 路径
+  - REPL Select 交互：`packages/repl/src/ui/InkREPL.tsx` L4152-4196 — 数字输入 + Enter
+  - UI 已有 Input 对话框：`showInputDialog()` 支持自由文本 + 默认值，但 `ask_user_question` 无法触发
+
+  **Claude Code 参考实现**（`C:\Works\claudecode`）：
+  - `CustomSelect/use-select-navigation.ts` — 基于 reducer 的焦点管理，支持 up/down/pageUp/pageDown
+  - `CustomSelect/use-select-input.ts` L241-282 — 数字键快捷选择（可通过 `disableSelection: 'numeric'` 禁用）
+  - `CustomSelect/select-option.tsx` — `ListItem` 渲染：`❯` 聚焦指针 + `✓` 选中标记
+  - `AskUserQuestionTool.tsx` L19-23 — schema 包含 `multiSelect?: boolean`
+  - `use-multiple-choice-state.ts` — 完整的多问题 + 多选状态管理
+  - `keybindings/defaultBindings.ts` L319-330 — Select 上下文绑定：up/down/j/k/enter/escape/space
+
+  **影响范围**：所有需要自由文本/组合输入的 skill（smart-changelog, monorepo version-strategy 等）
+
+- **Planned Resolution**:
+
+  **分两阶段实施，第一阶段解决最紧迫的数字歧义问题：**
+
+  **Phase 1：Select 从数字输入改为上下导航（高优先级）**
+
+  将 Select 对话框从"输入数字编号"改为 Claude Code 风格的"上下箭头导航 + Enter 确认"：
+
+  1. **DialogSurface 渲染层**：
+     - 选项不再显示 `1. xxx`，改为 `❯ xxx`（聚焦项）/ `  xxx`（非聚焦项）
+     - 追踪 `focusedIndex` 状态，随箭头键更新
+     - 选中项右侧显示 `✓`
+
+  2. **Keypress handler 改造**（`InkREPL.tsx` L4152-4196）：
+     - `↑` / `k` → 上移焦点
+     - `↓` / `j` → 下移焦点
+     - `Enter` → 确认当前聚焦项（替代数字 + Enter）
+     - `Escape` → 取消
+     - 数字键保留为**快捷键**直接选中（按 `2` 直接确认第 2 项，不需再按 Enter），但不是主交互方式
+
+  3. **Select 状态提升**：将 `focusedIndex` 加入 `uiRequest` state，让 DialogSurface 能渲染焦点指针
+
+  这一步完全消除数字编号歧义——用户通过视觉焦点指针明确知道选的是哪一项。
+
+  **Phase 2：新增 multiSelect + input 模式（中优先级）**
+
+  1. **multiSelect 模式**：
+     - `ask_user_question` schema 新增 `multiSelect?: boolean`
+     - 空格键切换当前聚焦项的选中/取消，`✓` 标记已选项
+     - Enter 提交所有已选项，返回逗号分隔的 value 列表
+     - 解决"选择步骤组合"场景，用户按空格自由勾选任意步骤
+
+  2. **input 模式**：
+     - `ask_user_question` schema 新增 `kind?: "select" | "input"`
+     - `kind: "input"` 时走 `showInputDialog(question, default)`
+     - 用户可自由输入任意文本（如 "1,3,5" 或 "all"）
+     - `options` 在 input 模式下变为可选
+
+  3. **返回格式**：
+     - 单选：`{"success": true, "choice": "selected_value"}`
+     - 多选：`{"success": true, "choice": "value1, value2, value3"}`
+     - 输入：`{"success": true, "choice": "<用户自由输入>"}`
+
+  具体改动文件：
+  - `packages/repl/src/ui/components/DialogSurface.tsx` — 渲染焦点指针 + 选中标记
+  - `packages/repl/src/ui/InkREPL.tsx` — keypress handler 改造 + multiSelect/input 路由
+  - `packages/coding/src/tools/registry.ts` — schema 增加 `multiSelect`, `kind`
+  - `packages/coding/src/tools/ask-user-question.ts` — 按 kind/multiSelect 分流
+  - `packages/coding/src/types.ts` — `AskUserQuestionOptions` 增加新字段
+
+  **为什么不选其他方案**：
+  - ❌ 只加 input 模式不改 Select：不解决数字歧义根因，单选场景仍有问题
+  - ❌ 只改 skill prompt：无法解决工具能力缺失，LLM 仍被迫打包组合
+  - ❌ 全量复刻 Claude Code CustomSelect 组件：过度工程化，KodaX 的 Ink 版本和组件体系不同
+
+#### Resolution (v0.7.62)
+
+- `ask_user_question` now supports `kind: "input"` for free-text answers, with
+  cancellation surfaced through the standard cancelled-tool result.
+- Select questions now support `multi_select`, `min_selections`, and
+  `max_selections`; unsatisfiable bounds are rejected before opening a dialog.
+- Choice dialogs now allow a host-provided custom input option by default
+  (`allow_custom_input: false` opts out), with custom answers normalized into
+  `choice` / `choices` plus `custom_inputs` metadata.
+- The agent-layer interaction contract models custom input answers with a typed
+  sentinel (`ASK_USER_CUSTOM_INPUT_SIGNAL`) instead of overloading normal option
+  values.
+- The REPL routes custom choice answers through the existing input dialog and
+  supports focused single-select / multi-select submission, preserving
+  backward-compatible string and string-array host returns.
+
+#### Files Changed
+
+- `packages/agent/src/runtime/user-interaction.ts`
+- `packages/coding/src/tools/ask-user-question.ts`
+- `packages/coding/src/tools/tool-definitions.ts`
+- `packages/coding/src/types.ts`
+- `packages/repl/src/ui/InkREPL.tsx`
+- `packages/repl/src/ui/utils/ask-user.ts`
+- `tests/ui/ask-user.test.ts`
+- `packages/coding/src/tools/ask-user-question.test.ts`
+
+#### Tests Added / Run
+
+- `npm test -- packages/coding/src/tools/ask-user-question.test.ts tests/ui/ask-user.test.ts`
+- `npm test -- tests/tracker-consistency.test.ts tests/memory-prompt-injection.test.ts`
 
 ---
 
-### 082: packages/ai 缺少单元测试
+
+### 118: esbuild 打包替代 tsc 直接运行 — 消除运行时模块开销与 React dev 模式
+
+- **Priority**: Medium
+- **Status**: Open
+- **Introduced**: v0.7.19
+- **Created**: 2026-04-17
+
+- **Original Problem**:
+
+  KodaX 使用 `tsc` 编译 + `tsx`/`node` 直接运行，没有 bundling。这导致：
+
+  1. **React development 模式默认加载**：`process.env.NODE_ENV` 在运行时检查，React 加载 `react-reconciler.development.js`。开发模式每次 render 创建 PerformanceMeasure 和 prop diff 追踪对象（heap snapshot 确认每轮 +20万个 string、+54万个 Array、+6万个 PerformanceMeasure），永不释放。当前通过 `--require ./scripts/production-env.cjs` 设 NODE_ENV 绕过，但不如编译期替换干净。
+  2. **Source map 字符串占 ~10MB**：tsx 将 source map 以 `data:application/json;base64,...` 内联到内存。
+  3. **模块加载 baseline ~85MB**：每个 `.js` 文件是独立模块，V8 维护模块元数据。
+  4. **Tiktoken BPE 数据 4 份副本**、**React reconciler 2 份**：模块被多次解析。
+
+  Claude Code 通过 esbuild/Bun bundler 在编译期 `define: { 'process.env.NODE_ENV': '"production"' }` 彻底消除 development 分支，单文件部署，baseline 显著降低。
+
+- **Proposed Fix**:
+
+  使用 esbuild 打包，编译期替换 NODE_ENV，tree-shake 无用代码，合并模块，外置 source map。预期 baseline 从 85MB 降至 40-50MB，同时消除对 `--require` preload 的依赖。
+
+  注意事项：需处理 Node.js 原生模块 external、动态 import（skill 加载、MCP provider）、打包后回归测试。
+
+---
+
+
+### 110: 缺少 /mcp status 和 /mcp refresh REPL 命令
+
+- **Priority**: Low
+- **Status**: Open
+- **Introduced**: v0.7.16
+- **Fixed**: -
+- **Created**: 2026-04-11
+
+- **Original Problem**:
+  用户无法在 REPL 中查看 MCP 连接状态（哪些 server 连接成功、哪些失败、catalog 有什么工具），也无法手动刷新 catalog。只能从 prompt context 间接看到 status=idle/ready/error。
+
+- **Context**: 涉及 `packages/repl/src/interactive/commands.ts`。调用 `extensionRuntime.getDiagnostics()` 和 `refreshCapabilityProviders()`。
+
+- **Planned Resolution**: 在 FEATURE_065 范围内添加 `/mcp` 命令（status 子命令 + refresh 子命令）。
+
+---
+
+
+### 107: harnessProfile 类型命名残留 - H0/H1/H2 应替换为 worker-chain composition
+
+- **Priority**: Medium
+- **Status**: Open
+- **Introduced**: v0.7.16
+- **Fixed**: -
+- **Created**: 2026-04-11
+
+- **Original Problem**:
+  FEATURE_061 移除了预 Scout 状态机和 Tactical Flow，但 `harnessProfile: 'H0_DIRECT' | 'H1_EXECUTE_EVAL' | 'H2_PLAN_EXECUTE_EVAL'` 类型命名残留在 237 处引用、10 个文件中。这些名字编码的是"哪个预设配置"的思维，而 FEATURE_061 后系统实际运作方式是"Scout 决定需要哪些角色"。
+
+- **Context**:
+  `harnessProfile` 字段在以下位置被广泛使用：
+  - `types.ts`（5 处）：类型定义
+  - `reasoning.ts`（29 处）：路由决策
+  - `task-engine.ts`（106 处）：核心引擎
+  - `provider-policy.ts`（4 处）：provider 策略
+  - `agent.ts`（1 处）：agent 层
+  - 各测试文件（~90 处）
+
+  当前 `harnessProfile` 实际上只是一个 worker chain 的标签：
+  - `H0_DIRECT` → `[scout]`
+  - `H1_EXECUTE_EVAL` → `[generator, evaluator]`
+  - `H2_PLAN_EXECUTE_EVAL` → `[planner, generator, evaluator]`
+
+  `buildManagedTaskWorkers` 已经在做 worker chain 映射，harnessProfile 只是触发条件。
+
+- **Planned Resolution**:
+  1. 在 `KodaXTaskRoutingDecision` 中用 `workerChain: KodaXTaskRole[]` 替代 `harnessProfile`
+  2. 保留 `harnessProfile` 作为 derived label（向后兼容导出类型）
+  3. 内部路由逻辑改为基于 `workerChain` 而非 `harnessProfile`
+  4. 逐步更新 237 处引用
+
+- **Workaround**: 无需 workaround，当前命名不影响功能正确性。
+
+---
+### 106: Managed-task structured worker blocks remain text-coupled and can fail closed on protocol drift
+- **Priority**: High
+- **Status**: Open
+- **Introduced**: v0.7.14
+- **Fixed**: -
+- **Created**: 2026-04-08
+
+- **Original Problem**:
+  Managed-task workers still depend on long visible prose that ends with fenced protocol blocks such as
+  `kodax-task-scout`, `kodax-task-contract`, `kodax-task-handoff`, and `kodax-task-verdict`.
+
+  In practice, minor protocol drift can still break orchestration:
+
+  1. evaluator verdicts can be rejected when structured output drifts
+  2. planner / scout / handoff blocks can still fail closed on formatting variations
+  3. missing protocol blocks can produce blocked runs even when visible content is otherwise useful
+  4. malformed worker output can push too much raw text into failure paths, artifacts, or session memory
+
+- **Context**:
+  This issue is broader than a single evaluator bug. It is a protocol-layer reliability issue across all managed workers.
+  The recent `missing kodax-task-verdict` crash / OOM chain exposed the highest-severity symptom, but the same text-coupled
+  design exists for planner, scout, and handoff blocks too.
+
+- **Planned Resolution**:
+  Resolve in phases under `FEATURE_059 Managed Task Structured Protocol V2`:
+
+  1. harden all managed parsers to accept the last valid block, JSON variants, and common field aliases
+  2. keep protocol-failure UI compact while persisting raw artifacts separately
+  3. move toward a dual-track model with separate `visibleText` and `protocolPayload`
+  4. eventually let evaluator act as a structured verdict producer instead of relying on a prose-tail block
+
+---
+
+
+### 082: packages/llm 缺少单元测试
 - **Priority**: Low
 - **Status**: Open
 - **Introduced**: v0.5.21
 - **Created**: 2026-03-08
 
 - **Original Problem**:
-  `packages/ai` 已经补上了一批 provider / reasoning 相关单元测试，但覆盖仍不完整。当前 issue 已从“完全没有单元测试”收敛为“关键基础层测试覆盖仍然偏薄”。
+  `packages/llm` 已经补上了一批 provider / reasoning 相关单元测试，但覆盖仍不完整。当前 issue 已从“完全没有单元测试”收敛为“关键基础层测试覆盖仍然偏薄”。
 
   当前仍需继续补齐的模块：
   - `providers/base.ts` - Provider 基类行为与回退链
@@ -765,341 +3166,6 @@ _Last Updated: 2026-03-28_
 
 ---
 
-### 083: 缺少快捷键系统 (RESOLVED)
-- **Priority**: Medium
-- **Status**: Resolved
-- **Introduced**: v0.5.29
-- **Fixed**: v0.5.30
-- **Created**: 2026-03-11
-- **Resolved**: 2026-03-12
-
-- **Original Problem**:
-  KodaX 目前缺少快捷键系统，用户需要完全依赖命令输入来改变程序行为，
-  例如切换工作模式等。这与 Gemini CLI 和 Claude Code 的用户体验有差距，
-  两者都提供了快捷键支持。
-
-- **Expected Behavior**:
-  - 支持常用快捷键，如：
-    - `Ctrl+O`: 切换工作模式（Project/Coding 等）
-    - `Ctrl+T`: 切换 Extended Thinking
-    - `Ctrl+C`: 中断当前操作
-    - `Ctrl+L`: 清屏
-    - `?`: 显示帮助
-  - 快捷键应该是可发现、可配置的
-  - 在流式输出或 LLM 响应期间也能响应快捷键
-
-- **Impact**: 中等
-  - 影响用户体验和操作效率
-  - 与竞品功能对齐有助于用户迁移
-
-- **Context**:
-  - 参考 Gemini CLI 的快捷键设计
-  - 参考 Claude Code 的快捷键设计
-  - 当前已有 `Ctrl+C` 中断功能，可扩展
-
-- **现有架构**:
-  - `KeypressContext.tsx`: 已有优先级键盘事件分发系统
-  - `InputPrompt.tsx`: 硬编码的输入快捷键 (Tab, Esc, Ctrl+C, 方向键等)
-  - `InkREPL.tsx`: 流式中断处理 (Ctrl+C)
-
-- **差距分析**:
-  1. 无快捷键注册表 - 快捷键硬编码在各组件
-  2. 无用户配置支持
-  3. 无快捷键发现/帮助机制
-  4. 无操作抽象层
-
-- **Implementation Plan**:
-
-  **Phase 1: Core Infrastructure (2-3 files)**
-
-  创建文件结构:
-  ```
-  packages/repl/src/ui/shortcuts/
-    index.ts                    # Public exports
-    types.ts                    # 核心类型定义
-    ShortcutsRegistry.ts        # 集中式注册表单例
-    defaultShortcuts.ts         # 默认快捷键定义
-    useShortcut.ts              # React hook
-    shortcuts-config.ts         # 配置文件加载/保存
-  ```
-
-  核心类型 (types.ts):
-  ```typescript
-  type ShortcutActionId =
-    | 'interrupt'       // Ctrl+C - 中断
-    | 'clearScreen'     // Ctrl+L - 清屏
-    | 'showHelp'        // ? - 显示帮助
-    | 'toggleWorkMode'  // Ctrl+O - 切换模式
-    | 'toggleThinking'  // Ctrl+T - 切换思考
-    | 'acceptCompletion'| 'submitInput' | 'historyUp' | 'historyDown'
-    // ... 更多
-
-  interface KeyBinding {
-    key: string;
-    ctrl?: boolean;
-    shift?: boolean;
-    meta?: boolean;
-  }
-
-  interface ShortcutDefinition {
-    id: ShortcutActionId;
-    name: string;
-    description: string;
-    defaultBindings: KeyBinding[];
-    context: 'global' | 'input' | 'streaming';
-    priority: number;
-    category: 'global' | 'navigation' | 'editing' | 'mode';
-  }
-  ```
-
-  **Phase 2: Registry & Hook**
-
-  ShortcutsRegistry (ShortcutsRegistry.ts):
-  - 单例模式，存储所有注册的快捷键
-  - 从 `~/.kodax/keybindings.json` 加载用户配置
-  - 提供 `findMatchingShortcut(key, context)` 查询
-  - 支持上下文感知激活
-
-  useShortcut Hook (useShortcut.ts):
-  ```typescript
-  function useShortcut(
-    actionId: ShortcutActionId,
-    handler: () => boolean | void,
-    options?: { context?: ShortcutContext; isActive?: boolean }
-  ): void;
-  ```
-
-  **Phase 3: Default Shortcuts**
-
-  | Action | Key | Context | Description |
-  |--------|-----|---------|-------------|
-  | `interrupt` | Ctrl+C | streaming | 中断当前操作 |
-  | `clearScreen` | Ctrl+L | global | 清屏 |
-  | `showHelp` | ? | global | 显示帮助 |
-  | `toggleWorkMode` | Ctrl+O | global | 切换 Project/Coding 模式 |
-  | `toggleThinking` | Ctrl+T | global | 切换 Extended Thinking |
-  | `acceptCompletion` | Tab | input | 接受补全 |
-  | `submitInput` | Enter | input | 提交输入 |
-  | `historyUp` | Up | input | 历史上一条 |
-  | `historyDown` | Down | input | 历史下一条 |
-
-  **Phase 4: Integration**
-
-  修改 InkREPL.tsx:
-  1. 添加 `ShortcutsProvider` 包装
-  2. 追踪当前上下文 (input/streaming)
-  3. 注册全局快捷键 (toggleWorkMode, toggleThinking, clearScreen, showHelp)
-
-  修改 InputPrompt.tsx:
-  1. 移除硬编码的键处理
-  2. 使用 `useShortcut` 注册快捷键
-  3. 保留现有的输入逻辑，但通过快捷键触发
-
-  **Phase 5: Help System**
-
-  创建 ShortcutsHelp 组件:
-  - 按 `?` 显示帮助面板
-  - 按类别分组显示快捷键
-  - 显示当前键绑定和描述
-
-  **Phase 6: User Configuration**
-
-  配置文件结构 (`~/.kodax/keybindings.json`):
-  ```json
-  {
-    "version": 1,
-    "bindings": {
-      "toggleWorkMode": [{ "key": "o", "ctrl": true }],
-      "toggleThinking": [{ "key": "t", "ctrl": true }],
-      "clearScreen": [{ "key": "l", "ctrl": true }]
-    }
-  }
-  ```
-
-- **Critical Files**:
-
-  | File | Purpose |
-  |------|---------|
-  | `packages/repl/src/ui/contexts/KeypressContext.tsx` | 集成现有优先级系统 |
-  | `packages/repl/src/ui/InkREPL.tsx` | 添加全局快捷键注册 |
-  | `packages/repl/src/ui/components/InputPrompt.tsx` | 迁移硬编码快捷键 |
-  | `packages/repl/src/ui/types.ts` | 扩展快捷键类型 |
-
-- **Verification**:
-
-  1. 功能测试:
-     - Ctrl+O 切换工作模式
-     - Ctrl+T 切换 Extended Thinking
-     - Ctrl+L 清屏
-     - ? 显示帮助
-     - Ctrl+C 中断流式输出
-
-  2. 上下文测试:
-     - 流式输出时 Ctrl+C 中断有效
-     - 输入时 Tab 补全有效
-     - 全局快捷键在各上下文都可用
-
-  3. 配置测试:
-     - 用户配置文件正确加载
-     - 自定义键绑定覆盖默认值
-
-- **Migration Strategy**:
-  1. Phase 1-2: 创建新基础设施，不修改现有代码
-  2. Phase 3-4: 逐步迁移，先 InkREPL 后 InputPrompt
-  3. Phase 5-6: 添加帮助和配置功能
-  4. Backward compatibility: 保留所有现有快捷键行为
-
-- **Resolution**:
-  实现了完整的快捷键系统，包括以下组件：
-
-  1. **核心基础设施** (Phase 1-3 完成):
-     - `types.ts`: 定义 ShortcutActionId, KeyBinding, ShortcutDefinition 等核心类型
-     - `ShortcutsRegistry.ts`: 单例模式注册表
-     - `defaultShortcuts.ts`: 默认快捷键定义，涵盖全局、输入、导航、编辑类别
-     - `useShortcut.ts`: React Hook 集成 KeypressContext 优先级系统
-     - `ShortcutsProvider.tsx`: Context Provider 初始化注册表
-
-  2. **全局快捷键集成** (Phase 4 完成):
-     - `GlobalShortcuts.tsx`: 注册全局快捷键处理器
-     - `InkREPL.tsx`: 添加 ShortcutsProvider 和 GlobalShortcuts 组件
-     - 实现的快捷键：Ctrl+C (中断), Ctrl+L (清屏), ? (帮助), Ctrl+T (思考)
-     - 新增 `onInputChange` 回调追踪输入状态
-
-  3. **帮助面板** (Phase 5 完成):
-     - 按 ? 显示/隐藏帮助面板（仅当输入为空时，且消费 ? 字符不输入）
-     - 发送消息后自动隐藏帮助面板
-     - 显示已注册快捷键列表
-
-  4. **设计决策**（按用户要求简化）:
-     - **不实现用户配置文件**：用户明确表示不需要过度工程化
-     - interrupt 快捷键使用 'global' 上下文 + `isActive: isLoading` 控制触发时机
-     - **不实现模式切换快捷键**：原计划的 `toggleWorkMode` 语义有误（涉及安全敏感的权限模式），已移除
-
-  5. **GPT Review 问题处理**:
-     - ✅ `?` 快捷键优先级从 -10 提升到 150（高于 InputPrompt 的 100，确保能触发）
-     - ✅ 添加 Shift+Tab 转义序列支持 (`\x1b[Z`)
-     - ✅ 移除 `toggleWorkMode` 快捷键（语义错误，会切换包含 'plan' 在内的权限模式）
-     - ✅ 移除用户配置相关代码和类型
-
-- **Files Modified**:
-  - `packages/repl/src/ui/shortcuts/types.ts` - 核心类型定义
-  - `packages/repl/src/ui/shortcuts/ShortcutsRegistry.ts` - 注册表单例
-  - `packages/repl/src/ui/shortcuts/defaultShortcuts.ts` - 默认快捷键定义
-  - `packages/repl/src/ui/shortcuts/useShortcut.ts` - React Hook
-  - `packages/repl/src/ui/shortcuts/ShortcutsProvider.tsx` - Context Provider
-  - `packages/repl/src/ui/shortcuts/GlobalShortcuts.tsx` - 全局快捷键组件
-  - `packages/repl/src/ui/shortcuts/index.ts` - 导出入口
-  - `packages/repl/src/ui/InkREPL.tsx` - 集成快捷键系统
-  - `packages/repl/src/ui/types.ts` - 添加 onInputChange 回调类型
-  - `packages/repl/src/ui/components/InputPrompt.tsx` - 添加 onInputChange 支持
-  - `packages/repl/src/ui/utils/keypress-parser.ts` - 添加 Shift+Tab 转义序列支持
-
----
-
-### 089: Feature / Design / Summary 元数据漂移 (RESOLVED)
-- **Priority**: High
-- **Status**: Resolved
-- **Introduced**: v0.6.10
-- **Fixed**: v0.6.10
-- **Created**: 2026-03-18
-- **Resolution Date**: 2026-03-19
-
-- **Original Problem**:
-  KodaX 依赖 `FEATURE_LIST.md`、各版本 feature design、summary 区块和发布元数据作为 project truth，但这些内容目前仍需要人工同步。计数、状态、规划版本和设计文档头部信息在多次编辑或发版准备后容易漂移；即使人工修正了某一次快照，流程本身仍然脆弱。
-
-- **Expected Behavior**:
-  - feature / issue summary、版本统计、planned / released 字段、design doc header 应保持一致，或在不一致时直接报错
-  - self-hosting 工作流和后续自动化不应依赖过期元数据
-
-- **Context**:
-  - `docs/FEATURE_LIST.md`
-  - `docs/features/v0.7.0.md`
-  - `docs/features/v0.8.0.md`
-  - `docs/features/v1.0.0.md`
-
-- **Root Cause**:
-  1. 多个 Markdown 文件同时承载重叠的真相字段
-  2. 缺少 consistency validator 或 summary regeneration
-  3. 缺少 CI / release guard 在元数据漂移时阻断流程
-
-- **Proposed Solution**:
-  - 实施 `FEATURE_026 Roadmap Integrity and Tracker Consistency Hardening`
-  - 为 tracker 建立校验和自动汇总能力，并在发版前强制运行
-
-- **Resolution**:
-  - 新增 `tests/tracker-consistency.test.ts`，把 `FEATURE_LIST.md` 的版本信息与 summary 真相字段、`KNOWN_ISSUES.md` 的 summary 计数与最高优先级 open issue、以及 feature design 文件存在性变成可执行校验
-  - 这次只覆盖 089 根因对应的关键元数据，不把当前历史 Markdown 结构差异一并扩大成新的 blocker
-  - 基于新测试修正了 `KNOWN_ISSUES.md` summary 的总数、open/resolved 计数和最高优先级 open issue 选择逻辑
-
-- **Files Changed**:
-  - `tests/tracker-consistency.test.ts`
-  - `docs/KNOWN_ISSUES.md`
-
-- **Tests Added**:
-  - `npm test -- tests/tracker-consistency.test.ts`
-
----
-
-### 090: CLI Provider 桥接语义降级：上下文与 MCP 能力丢失 (RESOLVED)
-- **Priority**: High
-- **Status**: Resolved
-- **Introduced**: v0.6.10
-- **Fixed**: v0.6.10
-- **Created**: 2026-03-18
-- **Resolution Date**: 2026-03-19
-
-- **Original Problem**:
-  `gemini-cli`、`codex-cli` 目前被作为一等 provider 暴露，但桥接路径会把会话内容压成最后一条用户 prompt，并在 ACP session 创建时传入空的 `mcpServers`。这会让用户误以为桥接 provider 与原生 provider 具备相同上下文和连接器语义，实际上存在静默降级。
-
-- **Expected Behavior**:
-  - bridge provider 的上下文、MCP、reasoning 能力边界必须被明确暴露
-  - 不支持的能力不应静默丢失
-  - 在可行情况下，多轮上下文语义应尽量保持一致
-
-- **Context**:
-  - `packages/ai/src/providers/acp-base.ts`
-  - `packages/ai/src/cli-events/acp-client.ts`
-  - `packages/ai/src/providers/gemini-cli.ts`
-  - `packages/ai/src/providers/codex-cli.ts`
-  - `packages/ai/src/providers/registry.ts`
-
-- **Root Cause**:
-  1. pseudo ACP bridge 将外部 CLI 视作普通 provider 适配
-  2. provider capability contract 没有区分 native API 与 CLI bridge
-  3. 缺少 bridge-provider 的语义兼容性测试
-
-- **Proposed Solution**:
-  - 实施 `FEATURE_029 Provider Adapter Transparency and Semantic Compatibility`
-  - 配合 `FEATURE_027 Native MCP and Connector Runtime` 补足真实连接器路径
-
-- **Resolution**:
-  - 新增 provider capability profile 合同，显式区分 `native-api` 与 `cli-bridge` 两类 transport，并记录上下文语义 (`full-history` / `last-user-message`) 与 MCP 支持边界
-  - 将 `gemini-cli`、`codex-cli` 的 bridge 语义固化到 provider snapshot 与 provider base override 中，避免它们继续被 UI 和上层逻辑当作“原生等价 provider”
-  - 在 REPL 的 `/model` 列表和 `/status` 输出中直接暴露 bridge provider 的限制：只转发最新一条用户消息，且 MCP 不可用
-  - 为 capability metadata 和用户可见 disclosure 新增回归测试，后续若 bridge provider 再次被误标成原生语义，测试会直接失败
-
-- **Files Changed**:
-  - `packages/ai/src/types.ts`
-  - `packages/ai/src/providers/capability-profile.ts`
-  - `packages/ai/src/providers/base.ts`
-  - `packages/ai/src/providers/acp-base.ts`
-  - `packages/ai/src/providers/registry.ts`
-  - `packages/ai/src/providers/registry.js`
-  - `packages/ai/src/providers/index.ts`
-  - `packages/ai/src/providers/custom-provider.ts`
-  - `packages/ai/src/providers/custom-registry.ts`
-  - `packages/ai/src/index.ts`
-  - `packages/coding/src/providers/index.ts`
-  - `packages/coding/src/index.ts`
-  - `packages/repl/src/common/utils.ts`
-  - `packages/repl/src/interactive/commands.ts`
-
-- **Tests Added**:
-  - `packages/ai/src/providers/capability-profile.test.ts`
-  - `packages/repl/src/interactive/provider-capabilities.test.ts`
-  - `tests/tracker-consistency.test.ts`（持续校验 tracker summary / highest-priority open issue，防止 issue 状态回写再次漂移）
-
----
 
 ### 091: 缺少一等公民 MCP / Web Search / Code Search 工具体系 (OPEN)
 - **Priority**: High
@@ -1157,13 +3223,13 @@ _Last Updated: 2026-03-28_
   3. 当前 Team mode 仍未与后续 session / harness 体系完全打通
 
 - **Proposed Solution**:
-  - 继续推进现有 `FEATURE_022 Multi-Agent Orchestration Layer`
-  - 在完成前，明确 CLI 文案和能力边界，避免过度承诺
+  - `FEATURE_067 Parallel Task Dispatch` (v0.7.18) 作为最小可用切片：Scout 识别可并行子任务 → `runOrchestration` 并行派发 → 聚合结果
+  - 完整的 Team Agent 架构 (角色语义/状态聚合/review 边界) 留 v0.8.0 与 FEATURE_059 (Protocol V2) 同版本
 
 ---
 
 ### 093: 缺少 IDE / Desktop / Web 一体化分发表面 (OPEN)
-- **Priority**: Medium
+- **Priority**: Low (2026-04-11 降级: Vibe Coding 时代 terminal 是主入口，IDE Bridge 非关键)
 - **Status**: Open
 - **Introduced**: v0.6.10
 - **Created**: 2026-03-18
@@ -1180,14 +3246,22 @@ _Last Updated: 2026-03-28_
   - `packages/repl/`
   - 当前仓库中缺少对应 app / sdk surface 目录
 
+- **Priority Downgrade Rationale (2026-04-11)**:
+  基于 KodaX vs Claude Code 全面对比分析，IDE Bridge 的优先级从 Medium 降级为 Low：
+  1. Vibe Coding 范式下对话终端是主入口，不是 IDE 编辑器
+  2. KodaX 已有 terminal host 检测 (FEATURE_051)，在 VSCode 集成终端中可正常工作
+  3. Cursor/Windsurf/Copilot 已占领 IDE 原生 AI 赛道，KodaX 的核心差异化 (AMA/多 Provider/Repo Intelligence) 全部是 CLI-native
+  4. 建 IDE bridge 是高成本低差异化投入 (Claude Code 的 bridge 有 25+ 文件)
+
 - **Root Cause**:
   1. 研发重心长期集中在 CLI 与 project workflow
   2. 缺少统一的 surface protocol 与 session handoff layer
   3. 尚未形成跨表面的产品抽象
 
 - **Proposed Solution**:
-- 实施 `FEATURE_030 Multi-Surface Delivery`
-- 在 terminal UX 和 multi-agent 基础稳定后再逐步展开
+- 长期目标：实施 `FEATURE_030 Multi-Surface Delivery`
+- 短期：依赖 terminal host 检测 + IDE 集成终端作为分发面
+- 在 terminal UX 和 multi-agent 基础稳定后再评估是否需要原生 IDE 集成
 
 ---
 
@@ -1212,8 +3286,8 @@ _Last Updated: 2026-03-28_
   - `src/kodax_cli.ts`
   - `packages/coding/src/agent.ts`
   - `packages/coding/src/reasoning.ts`
-  - `packages/ai/src/providers/anthropic.ts`
-  - `packages/ai/src/providers/openai.ts`
+  - `packages/llm/src/providers/anthropic.ts`
+  - `packages/llm/src/providers/openai.ts`
 
 - **Source Debt IDs**:
   - `C5`, `C6`, `H1`, `H2`, `H3`, `H4`, `H5`, `H6`, `H7`, `H8`, `H9`, `H10`
@@ -1280,7 +3354,7 @@ _Last Updated: 2026-03-28_
   - session / routing / registry 相关模型应尽量复用统一类型定义
 
 - **Context**:
-  - `packages/ai/src/providers/anthropic.ts`
+  - `packages/llm/src/providers/anthropic.ts`
   - `packages/coding/src/agent.ts`
   - `packages/coding/src/acp/pseudo-acp-server.ts`
   - `packages/skills/src/skill-registry.ts`
@@ -1412,7 +3486,7 @@ _Last Updated: 2026-03-28_
 - **Created**: 2026-03-22
 
 - **Original Problem**:
-  除了已单独跟踪的 `082 packages/ai 缺少单元测试` 之外，当前测试资产本身也存在一批结构性债务，包括超大的测试文件、重复实现 helper、散落的 scratch / 临时验证脚本，以及若干直接依赖硬编码常量的断言。这类问题会降低新增测试的速度，也会让回归定位变得更慢。
+  除了已单独跟踪的 `082 packages/llm 缺少单元测试` 之外，当前测试资产本身也存在一批结构性债务，包括超大的测试文件、重复实现 helper、散落的 scratch / 临时验证脚本，以及若干直接依赖硬编码常量的断言。这类问题会降低新增测试的速度，也会让回归定位变得更慢。
 
 - **Expected Behavior**:
   - 通用测试 helper 应抽到共享位置，而不是在多个测试文件内重复实现
@@ -1444,288 +3518,237 @@ _Last Updated: 2026-03-28_
 
 ---
 
-### 100: ACP Server 缺少日志/可观测性输出 (RESOLVED)
-- **Priority**: High
-- **Status**: Resolved
-- **Introduced**: v0.6.15
-- **Fixed**: v0.6.15
-- **Created**: 2026-03-23
-- **Resolution Date**: 2026-03-23
+
+### 105: kodax -c 历史记录未注入 LLM 上下文 - resume 路径可能存在 gitRoot 过滤不一致 (OPEN)
+- **Priority**: Medium
+- **Status**: Open
+- **Introduced**: v0.7.14
+- **Created**: 2026-04-03
 
 - **Original Problem**:
-  执行 `kodax acp serve` 启动 ACP Server 后，整个进程完全静默，无任何启动信息、运行状态或错误输出。与 REPL 模式（有 Banner、StatusBar、错误提示等丰富反馈）形成鲜明对比。
-
-  **缺失的日志场景**：
-
-  | 阶段 | 当前状态 |
-  |------|----------|
-  | 服务启动 | 无输出，不知道 provider/model/cwd/mode |
-  | initialize 握手 | 无日志 |
-  | newSession 创建 | 无日志（session ID、cwd、mode） |
-  | prompt 请求/响应 | 无日志（请求内容、stopReason、耗时） |
-  | 权限协商 | 无日志（工具名、决策结果） |
-  | 错误/异常 | 仅 1 处 console.error（L610 notification 发送失败） |
-  | 服务关闭 | 无日志 |
-
-  **根因分析**：
-  1. `runAcpServer()` 将 `process.stdin` 和 `process.stdout` 绑定给 `ndJsonStream`，stdout 被 ACP 协议占用
-  2. `console.log()` 写入 stdout 会污染 JSON Lines 输出，导致客户端解析错误
-  3. `console.error()` 是唯一安全的日志通道，但整份 `acp_server.ts` 仅在 L610 使用了一处
-  4. 无 `--verbose` / `KODAX_DEBUG` / `LOG_LEVEL` 等调试开关
-  5. 无结构化日志（JSON log line / timestamp / level）
-  6. 无启动信息摘要（provider、model、cwd、permission mode）
+  用户报告使用 `kodax -c`（继续最近会话）后，之前的历史记录没有正常注入 LLM 上下文。
+  LLM 似乎"忘记"了之前的对话内容，表现为不认识之前讨论过的内容。
 
 - **Expected Behavior**:
-  - 启动时应输出启动摘要到 stderr（provider、model、cwd、mode、version）
-  - 关键生命周期事件应输出到 stderr（session 创建/关闭、prompt 开始/结束、权限请求）
-  - 错误应输出到 stderr，包含上下文信息（session ID、工具名、错误原因）
-  - 支持 `--verbose` 或环境变量控制日志级别（off / error / info / debug）
+  - `kodax -c` 应该自动加载当前目录最近的会话历史
+  - 历史消息应该作为 `initialMessages` 注入 LLM 上下文
+  - UI 应显示 `[Continuing session: xxx]` 横幅
+
+- **Code Path Analysis**:
+
+  代码链完整，但存在多个潜在故障点：
+
+  **1. CLI → buildSessionOptions** (`src/cli_option_helpers.ts:295-297`)
+  - 设置 `resume: true`，未传 `autoResume`。✅ 正确
+
+  **2. InkREPL 交互模式** (`packages/repl/src/ui/InkREPL.tsx:3527-3543`)
+  - 使用 `storage.list(gitRoot)` 过滤当前目录会话。✅ 正确
+
+  **3. agent.ts runKodaX** (`packages/coding/src/agent.ts:959-962`)
+  - ⚠️ **潜在问题 1**: `storage.list()` 不传 `gitRoot`，虽然内部会调用 `getGitRoot()` 获取默认值，
+    但在 managed task worker 路径中 cwd 可能不是用户的项目目录，导致找不到匹配会话。
+
+  **4. initialMessages 优先级** (`packages/coding/src/agent.ts:979-982`)
+  - ✅ 逻辑正确：`initialMessages` 优先，否则从 storage 加载
+
+  **5. managed task worker 路径** (`packages/coding/src/task-engine.ts:4091-4096`)
+  - ⚠️ **潜在问题 2**: compact 策略下 `initialMessages` 设为 `undefined`，不传递原始历史。
+    虽然这是设计意图（compact 应该用 compactInitialMessages），但可能导致历史丢失。
+
+  **6. storage.list gitRoot 过滤** (`packages/repl/src/interactive/storage.ts:501-504`)
+  - ⚠️ **潜在问题 3**: 如果会话保存时没有记录 gitRoot（旧版本），
+    `sessionGitRoot` 为空字符串，会被过滤掉，导致找不到任何会话。
+
+- **Ambiguities**:
+  1. 用户描述可能指 LLM 没有接收历史（代码路径完整但可能有运行时故障）
+  2. 也可能指 UI 没有显示历史（不同的显示问题）
+  3. 需确认 `[Continuing session: xxx]` 横幅是否出现，以判断是加载阶段还是注入阶段的问题
+  4. 可能与特定 memory strategy 有关（compact vs continuous）
+
+- **Reproduction Steps** (待确认):
+  1. 在项目目录中启动 `kodax` 并进行多轮对话
+  2. 退出后执行 `kodax -c`
+  3. 检查是否出现 `[Continuing session: xxx]` 横幅
+  4. 询问 LLM 之前讨论的内容，确认是否记得
+
+- **Proposed Investigation**:
+  1. 添加调试日志确认 `storage.list()` 在 `agent.ts` 中是否返回有效会话
+  2. 确认 `initialMessages` 是否正确传递到 `runKodaX`
+  3. 检查旧版本保存的会话是否缺少 `gitRoot` 字段
+  4. 对比 `InkREPL` 和 `agent.ts` 中 `storage.list()` 的参数差异
 
 - **Context**:
-  - `src/acp_server.ts` — `KodaXAcpServer` 类，622 行
-  - `src/kodax_cli.ts` — `acp serve` 子命令（L806-837）
-  - REPL 模式通过 `KodaXEvents` 回调实现丰富反馈，ACP 模式缺少等价机制
-
-- **Proposed Solution**:
-  1. 新增 `acp-logger.ts`，将所有日志输出到 `process.stderr`，避免污染 ACP stdout
-  2. 启动时输出摘要：`[ACP] KodaX v{version} | provider={provider} model={model} cwd={cwd} mode={mode}`
-  3. 在 `initialize`、`newSession`、`prompt`、`cancel`、`setSessionMode` 入口添加生命周期日志
-  4. 在 `evaluateToolPermission` 和 `requestPermissionFromClient` 添加权限决策日志
-  5. 支持 `KODAX_ACP_LOG=debug|info|error|off` 环境变量控制日志级别
-  6. 错误日志包含 session ID 和上下文，便于排查
-
-- **Resolution**:
-  1. 新增 `src/acp_logger.ts`，统一将 ACP 日志写入 `stderr`，并支持 `off / error / info / debug` 四级日志级别
-  2. `KodaXAcpServer` 现在会记录启动摘要、`initialize`、`newSession`、`setSessionMode`、`prompt start/finish`、`cancel` 等关键生命周期事件
-  3. 权限协商链路补上了请求、授权、拒绝、remembered allow、客户端断开等日志
-  4. 原来 notification 发送失败时零散的 `console.error` 已统一收口到 ACP logger
-  5. CLI 帮助和 README / README_CN 已补充 `KODAX_ACP_LOG` 说明，方便用户调节 ACP 日志详细度
-
-- **Superseded Design Note (Historical Context)**:
-  当前修复解决了“ACP 完全静默、无法排障”的发布阻塞问题，但实现仍偏务实：`acp_server.ts` 直接在生命周期节点里调用 logger，运行时事件与日志文案仍然耦合在一起。
-
-  **后续更优雅的重构方向**：
-  1. 引入 `acp_events.ts` 或等价模块，定义强类型 ACP 运行时事件，例如 `server_attached`、`session_created`、`prompt_started`、`prompt_finished`、`permission_requested`、`permission_granted`、`notification_failed`
-  2. `acp_server.ts` 只负责发出结构化事件，不直接拼接日志文案
-  3. `acp_logger.ts` 退化为一个 sink / formatter，专门负责把事件渲染到 `stderr`
-  4. 后续可以在不触碰 ACP 协议逻辑的前提下新增其他 sink，例如 JSON 日志、文件日志、IDE debug console、遥测上报
-  5. 测试层也可以从“断言字符串日志”进一步升级为“断言发出了哪些 runtime events”，让协议逻辑与展示逻辑解耦
-
-  **设计结论**：
-  - 当前版本适合作为可发版修复
-  - 后续应继续把 ACP 可观测性从“直接写日志”收敛到“运行时事件 + sink”架构
-  - 等进入下一轮 ACP 清理时，应优先按这一方案演进，而不是继续在 `acp_server.ts` 内追加零散日志调用
-
-- **Architecture Update**:
-  - The follow-up refactor is now landed: `src/acp_events.ts` defines structured ACP runtime events plus the shared emitter/sink contract.
-  - `src/acp_server.ts` now emits runtime events instead of directly composing log strings in protocol handlers.
-  - `src/acp_logger.ts` now acts as the default `stderr` sink/formatter for those events.
-  - `KodaXAcpServerOptions` now supports `eventSinks`, so additional sinks can be attached without touching ACP protocol flow.
-  - ACP tests now assert runtime events directly and keep only a small `stderr` integration surface for the default sink.
-- **Files Changed**:
-  - `src/acp_events.ts`
-  - `src/acp_logger.ts`
-  - `src/acp_server.ts`
-  - `src/index.ts`
-  - `src/kodax_cli.ts`
-  - `README.md`
-  - `README_CN.md`
-  - `tests/acp_server.test.ts`
-  - `tests/kodax_cli.test.ts`
-
-- **Tests**:
-  - `npx vitest run tests/acp_server.test.ts tests/kodax_cli.test.ts`
-  - `npx tsc -p tsconfig.json --noEmit`
-
----
-
-### 101: Adaptive multi-agent code review loses Generator output and gives Evaluator a truncated handoff (RESOLVED)
-- **Priority**: High
-- **Status**: Resolved
-- **Introduced**: v0.7.5
-- **Fixed**: v0.7.5
-- **Created**: 2026-03-27
-- **Resolution Date**: 2026-03-27
-- **Original Problem**:
-  In adaptive multi-agent code review, the user can see Generator start streaming review findings, but after a few hundred characters the text disappears from the UI. Then Evaluator takes over and may report that the generator review was truncated or incomplete.
-  This creates two concrete failures:
-  1. The user loses the original Generator review text instead of being able to inspect it as part of the task transcript.
-  2. Evaluator may be judging a truncated handoff summary rather than the full review body, so the final review can be misleading.
-- **Expected Behavior**:
-  1. Important output from non-terminal workers should remain visible as transcript history rather than existing only as temporary streaming text.
-  2. For review / audit / analysis tasks, Evaluator should receive the full upstream review content or a full artifact reference, not only a short truncated summary.
-  3. The final user-facing answer should be the final code review, not a meta-evaluation of the generator's review.
-- **Affected Components**:
-  - packages/coding/src/orchestration.ts
-  - packages/coding/src/task-engine.ts
-  - packages/repl/src/ui/InkREPL.tsx
-  - packages/repl/src/ui/utils/message-utils.ts
-  - CLI / REPL managed-task streaming surfaces
-- **Reproduction**:
-  1. Trigger a code review request that routes into H1, H2, or H3 managed-task execution.
-  2. Watch Generator begin streaming review findings.
-  3. Observe that the visible streamed text disappears after the task completes or when Evaluator takes over.
-  4. Observe that Evaluator reports the upstream review as truncated, incomplete, or only partially verifiable.
-- **Root Cause Analysis**:
-  1. **The UI preserves only the terminal worker's final message**
-     The streamed Generator text is shown live, but the final persisted assistant output comes from the terminal worker, which is Evaluator. When the round completes, the UI resolves history from the final assistant message and clears the transient response buffer, so the earlier generator text vanishes.
-  2. **The worker-to-worker handoff is lossy**
-     The orchestration runner builds worker summary from truncateText(result.lastText, 400), and dependency handoff prefers that summary. As a result, Evaluator often receives only a clipped summary instead of the full review body.
-  3. **The review-specific final-answer contract is wrong**
-     The current user-facing semantics encourage Evaluator to describe its work as an evaluation of the generator review, rather than delivering a merged and verified final review.
-- **Impact**:
-  - Final code review quality can depend on incomplete evidence
-  - User trust in adaptive multi-agent review drops because the flow looks self-contradictory
-  - Token cost increases without reliably improving correctness
-  - Users may incorrectly conclude that Generator failed, when the visible failure is actually caused by lossy handoff and transcript replacement
-- **Proposed Solution**:
-  1. **Separate display summary from evaluator handoff**
-     Keep short summaries for status and trace output, but provide full review content, structured findings, or artifact-backed handoff for downstream evaluators in long-text review flows.
-  2. **Persist non-terminal worker transcript output**
-     Store Generator / Planner / Validator output as managed-task transcript history or collapsible sections so it remains inspectable after task completion.
-  3. **Redefine the review final-answer contract**
-     Let Evaluator remain the final speaker, but require it to deliver the final code review with verified findings, additions, and gaps, not a meta-review of the generator.
-  4. **Add targeted tests**
-     - Non-terminal worker output remains visible after task completion
-     - Review handoff to Evaluator uses full content or full artifact references
-     - Final user-facing output is a final review, not a review-of-review
-- **Suggested Implementation Plan**:
-  - Phase 1: Extend orchestration handoff to support full handoffBody or artifact-based handoff
-  - Phase 2: Extend Ink / CLI managed-task history so non-terminal worker transcript is retained
-  - Phase 3: Update review-specific evaluator prompt and final-answer contract
-  - Phase 4: Add H1 / H2 / H3 review integration tests for long findings
-- **Current Workaround**:
-  - Do not treat Evaluator claims about generator truncation as authoritative without checking artifacts
-  - For important review tasks, inspect managed-task trace/artifacts or re-run in single-agent mode for comparison
-- **Notes**:
-  This is not just a cosmetic UI issue. It combines correctness risk, broken review semantics, and weak observability in one path.
-- **Resolution**:
-  1. **Handoff 从 summary-only 改成 summary + artifact + fuller output**
-     `orchestration` 现在在 dependency handoff 中同时提供短摘要、`result.json` artifact 路径和更完整的 output excerpt，避免 Evaluator 只基于几百字符摘要下判断。
-  2. **managed-task transcript 保留非终态 worker 输出**
-     `Generator / Planner / Validator` 的输出会进入 managed-task evidence，并在 Ink REPL 收口时回填为可检查的 transcript history，而不是只作为临时 streaming 文本出现后消失。
-  3. **review final-answer contract 修正**
-     `Evaluator` 仍然负责最终收口，但现在会按“final review / final verdict”对用户说话，不再把最终答复写成对 Generator 的元评审。
-  4. **补齐显式 refinement loop**
-     AMA 现在支持 evaluator 发出 `revise` 指令后，把反馈送回 Generator / worker set 再跑下一轮，直到 `accept`、`blocked` 或达到轮次上限。
-- **Files Changed**:
-  - `packages/coding/src/orchestration.ts`
-  - `packages/coding/src/orchestration.test.ts`
-  - `packages/coding/src/task-engine.ts`
-  - `packages/coding/src/task-engine.test.ts`
-  - `packages/repl/src/ui/InkREPL.tsx`
-- **Tests**:
-  - `packages/coding/src/orchestration.test.ts`
-  - `packages/coding/src/task-engine.test.ts`
-
----
-
-### 102: Repo-intelligence mixes git-tracked and filesystem-discovered file sets (RESOLVED)
-- **Priority**: Medium
-- **Status**: Resolved
-- **Introduced**: v0.7.5
-- **Fixed**: v0.7.5
-- **Created**: 2026-03-28
-- **Resolution Date**: 2026-03-28
-- **Original Problem**:
-  `buildRepoOverview()` chooses a file source (`git` when available, otherwise `filesystem`), but `buildRepoIntelligenceIndex()` has a separate `collectWorkspaceFiles()` path that always walks the filesystem directly.
-  As a result, overview-level routing and query-level intelligence can disagree about which files belong to the workspace, especially when untracked or ignored files are present.
-- **Expected Behavior**:
-  - Repo overview and repo-intelligence indexing should derive from the same file-source policy for a given workspace.
-  - If the system intentionally falls back from git to filesystem, that choice should be explicit and reused consistently.
-- **Affected Components**:
-  - `packages/coding/src/repo-intelligence/index.ts`
-  - `packages/coding/src/repo-intelligence/query.ts`
-- **Root Cause Analysis**:
-  1. `index.ts` calls `collectWorkspaceFiles(workspaceRoot, source)` where `source` can be `git`.
-  2. `query.ts` defines its own `collectWorkspaceFiles()` helper that walks the filesystem without consulting the overview source.
-  3. The two layers therefore build repo-intelligence on different file universes for the same workspace.
-- **Impact**:
-  - File counts, affected areas, and intelligence capsules can drift between overview and query layers.
-  - Untracked or ignored files may leak into repo-intelligence even when the higher-level overview is git-scoped.
-  - Downstream routing and context-building can become less predictable.
-- **Resolution**:
-  Added a shared `collectWorkspaceFilesForSource()` helper in `repo-intelligence/index.ts`, and both repo overview generation and query/index generation now reuse the same source-aware file policy. `query.ts` no longer walks the filesystem through a private collector, and both cache validation and live rebuild paths now derive from the same `overview.source`.
-- **Files Changed**:
-  - `packages/coding/src/repo-intelligence/index.ts`
-  - `packages/coding/src/repo-intelligence/query.ts`
-
----
-
-### 103: Managed-task planning recomputes repo routing signals in the same workspace (RESOLVED)
-- **Priority**: Low
-- **Status**: Resolved
-- **Introduced**: v0.7.5
-- **Fixed**: v0.7.5
-- **Created**: 2026-03-28
-- **Resolution Date**: 2026-03-28
-- **Original Problem**:
-  In managed-task flows, repo routing signals can be computed once in the outer `runKodaX()` path and then recomputed again when `task-engine` creates the managed reasoning plan for the same workspace.
-  The behavior is correct, but it adds avoidable latency and duplicated repo analysis work.
-- **Expected Behavior**:
-  - Repo routing signals should be computed once per workspace/run boundary and reused by downstream planning layers whenever possible.
-  - Managed-task planning should accept already-derived signals instead of recomputing them by default.
-- **Affected Components**:
-  - `packages/coding/src/agent.ts`
-  - `packages/coding/src/task-engine.ts`
-- **Root Cause Analysis**:
-  1. `runKodaX()` computes `repoRoutingSignals` before building the initial reasoning plan.
-  2. `task-engine` later calls `getRepoRoutingSignals(...)` again when building the managed reasoning plan.
-  3. There is no shared cache/parameter handoff for the already-computed signal set.
-- **Impact**:
-  - Extra repo-analysis latency on managed-task runs.
-  - Unnecessary duplicated work for the same workspace snapshot.
-  - Harder-to-reason-about performance costs when AMA routing becomes more sophisticated.
-- **Resolution**:
-  Introduced `context.repoRoutingSignals` as a reusable handoff field. `runKodaX()` now reuses precomputed routing signals when present, and `task-engine` threads the same signal set through `createManagedReasoningPlan()` and `runManagedTask()` instead of recomputing it for the same workspace boundary by default.
-- **Files Changed**:
-  - `packages/coding/src/agent.ts`
-  - `packages/coding/src/task-engine.ts`
-  - `packages/coding/src/types.ts`
-
----
-
-### 104: Repo-intelligence cache JSON is read without runtime shape validation (RESOLVED)
-- **Priority**: Low
-- **Status**: Resolved
-- **Introduced**: v0.7.5
-- **Fixed**: v0.7.5
-- **Created**: 2026-03-28
-- **Resolution Date**: 2026-03-28
-- **Original Problem**:
-  `safeReadJson<T>()` reads cache files and returns `JSON.parse(content) as T` without validating the runtime shape.
-  Corrupted, partially written, or schema-drifted cache files therefore get treated as trusted typed objects until later code trips over missing fields.
-- **Expected Behavior**:
-  - Cache JSON should be validated against minimal runtime shape checks before being treated as typed repo-intelligence data.
-  - Invalid cache payloads should be discarded explicitly rather than silently masquerading as valid typed data.
-- **Affected Components**:
-  - `packages/coding/src/repo-intelligence/internal.ts`
-  - Repo-intelligence cache readers that consume `safeReadJson()`
-- **Root Cause Analysis**:
-  1. `safeReadJson<T>()` uses a compile-time generic but no runtime schema/guard.
-  2. Cache corruption currently collapses into either `null` on parse failure or structurally-invalid objects on parse success.
-  3. Downstream callers assume the generic type is already trustworthy.
-- **Impact**:
-  - Cache corruption can surface later as confusing downstream failures instead of a clean cache miss.
-  - Schema migrations become riskier because old cache payloads are not rejected at the boundary.
-  - Debugging repo-intelligence drift becomes harder.
-- **Resolution**:
-  `safeReadJson<T>()` now accepts an optional runtime validator and returns `null` on shape mismatch. Repo overview and repo-intelligence cache readers now use lightweight payload guards, so corrupted or schema-drifted cache JSON is treated as a cache miss instead of an unchecked typed object.
-- **Files Changed**:
-  - `packages/coding/src/repo-intelligence/internal.ts`
-  - `packages/coding/src/repo-intelligence/index.ts`
-  - `packages/coding/src/repo-intelligence/query.ts`
+  - `src/cli_option_helpers.ts` - buildSessionOptions
+  - `src/kodax_cli.ts` - CLI -c 选项处理
+  - `packages/repl/src/ui/InkREPL.tsx` - 交互模式 session resume
+  - `packages/coding/src/agent.ts` - runKodaX session loading
+  - `packages/coding/src/task-engine.ts` - createWorkerSession
+  - `packages/repl/src/interactive/storage.ts` - FileSessionStorage.list
 
 ---
 
 ## Summary
-- Total: 31 (10 Open, 21 Resolved, 0 Partially Resolved, 0 Won't Fix)
+- Total: 53 (24 Open, 29 Resolved, 0 Partially Resolved, 0 Won't Fix)
 - Highest Priority Open: 091 - 缺少一等公民 MCP / Web Search / Code Search 工具体系 (High)
 - Historical archived issues are maintained in ISSUES_ARCHIVED.md
 
----
-
 ## Changelog
+
+### 2026-07-15: Issue 164 added and resolved (v0.7.70)
+- Added cost-admitted, lossless zero-match MCP recovery and compact CJK query
+  segmentation without changing successful lexical-search behavior.
+
+### 2026-07-15: Issue 163 added and resolved (v0.7.70)
+- Closed A2A endpoint trust, read-boundary, task continuation/retention,
+  artifact, cleanup, redaction, version, and stream-interoperability gaps while
+  retaining the existing lightweight Runtime and file-store architecture.
+
+### 2026-07-15: Issue 162 added and resolved (v0.7.70)
+- Restored hosted Runtime provider/model precedence for `a2a serve`, admitted
+  Markdown Agent providers, and made root/subcommand option ownership and
+  command termination explicit.
+
+### 2026-07-15: Issue 161 added and resolved (v0.7.70)
+- Closed MCP result-capacity, ranking, pagination integrity, cache recovery,
+  cache-persistence truth, and provider-data trust-label gaps found in review.
+
+### 2026-07-15: Issue 160 added and resolved (v0.7.70)
+- Added reverse-bridge draining and daemon-owned Workflow/External Agent
+  blockers to the atomic rollback revision so shutdown cannot abandon live
+  background work or mutate transient credential/Host Tool state.
+
+### 2026-07-15: Resolved issues older than 30 days archived
+- Moved 40 resolved issues to `ISSUES_ARCHIVED.md`; all open and recent issues remain active.
+
+### 2026-07-15: Issue 158 reopened review findings resolved (v0.7.69)
+- Closed trusted-marker, recovery-transcript, observer-ordering, child-capacity,
+  bounded-acquisition, Bash memory/ANSI, public-API, and artifact-lifecycle gaps
+  found during implementation review.
+
+### 2026-07-14: Issue 158 added and initially resolved (v0.7.69)
+- Replaced transparent post-hoc lossy compression with complete collection and
+  one aggregate next-request capacity decision.
+- Removed default semantic Bash filters and hidden fixed caps, added exact
+  recovery coordinates and incomplete-source markers, and corrected cache-token
+  cost accounting.
+- Replaced default destructive history microcompaction/static percentage
+  targeting with physical-capacity, summary-first compaction and typed failure
+  that preserves canonical history.
+- Added regression coverage and a corrective ADR/feature/test-guide record.
+
+### 2026-07-14: Issues 155 and 156 added and resolved (v0.7.69)
+- Unified the resume picker with the owned TUI input lifecycle.
+- Replaced repeated full-transcript pagination with one bounded, concurrent
+  metadata-head scan while preserving legacy project aliases.
+
+### 2026-07-11: Issue 151 added and resolved (v0.7.67)
+- Distinguished Codex-owned MCP Node processes from KodaX test residues by
+  command line, parent PID, and start time.
+- Added explicit Runtime daemon shutdown to the config suite and parent-death
+  watchdogs to long-running process fixtures.
+- Verified the corrected suite leaves no new Node PID and removed five verified
+  orphaned KodaX test processes without touching Codex MCP servers.
+
+### 2026-07-11: Issue 150 added and resolved (v0.7.67)
+- Withdrew the initial GitHub release/tag before npm publication.
+- Restored restricted-script `phase` / external `target` forwarding.
+- Made executor-plane close terminal and waiter-safe.
+- Hardened scoped-review schemas, Feature 259 baseline reconstruction, and
+  best-effort local ledger mirroring.
+- Added focused regression tests and prepared a rebuilt v0.7.67 release.
+
+### 2026-07-11: Issue 149 added and resolved (v0.7.67)
+
+- Isolated both ACP test harnesses from real user session and Runtime storage.
+- Delayed ACP persistence until the first valid prompt and added reversible,
+  preview-first cleanup for the narrow legacy placeholder shape.
+- Added searchable session resume plus SDK/Daemon surface and cursor pagination.
+
+### 2026-07-10: Issue 147 added and resolved (v0.7.66)
+
+- GitHub Release archive 现在携带 provider metadata 与全部 Worker sidecar。
+- 新增 workflow YAML 回归测试，并在 sidecar 缺失时让发布任务 fail closed。
+
+### 2026-07-10: Issue 146 added and resolved (v0.7.66)
+
+- 图片路径处理失败时恢复原始文本，并通过非持久化两秒 Toast 提示用户。
+- 保留有效图片附件行为；新增回归测试锁定不提交、不写历史的边界。
+
+### 2026-07-10: Issue 145 added and resolved (v0.7.66)
+- Resolved the runtime daemon / SDK lifecycle, event replay, permission,
+  serialization, protocol-validation, artifact, and host-cleanup gaps found in
+  the post-v0.7.63 architecture review.
+- Added multi-client socket, restart/replay, listener isolation, active-run
+  conflict, protected-path broker, frame-limit, wire-error, subscription-race,
+  JSON-safe REPL, ACP storage, diagnostic restore, and LSP close regressions.
+
+### 2026-07-06: Issue 112 resolved (v0.7.62)
+- Resolved 112: `ask_user_question` now supports free-text input,
+  multi-select with selection bounds, and default-on custom input answers. The
+  REPL routes custom choice answers through the existing input dialog, while the
+  tool returns normalized `choice` / `choices` and `custom_inputs` fields for
+  the model.
+
+### 2026-06-25: Issue 143 resolved (v0.7.57)
+- Resolved 143: Auto[llm] speculative classify 窗口默认 500ms + late verdict 被丢弃 → 远程/慢 provider 下 near-100% 误弹确认框 (High).
+- Fix (5 workstream, all landed): WS1 late-verdict 采纳（窗口过期改为 `await` 同一 classifyPromise 并采纳裁决 — allow/block 不弹框，仅真 escalate 弹框；比原 peek-race 设计更简洁、无 UI 改动、无闪烁）+ WS2 无 askUser ⇒ 窗口强制 0（修对 SDK/非交互）+ WS3 `autoMode.speculativeWindowMs` config 面 + env 透传（REPL+Space）+ WS4 v0.7.39.md 对账（late-verdict 使 micro-bench 失去正确性意义，按 EVAL_GUIDELINES Layer 1 不补跑付费 bench）+ WS5 防 double-record/settle 验证。
+- Verification: coding 3570 passed（1 项 orchestration maxConcurrent 并发计时 flaky，隔离复跑绿，无关）、repl 2135 passed、coding+repl tsc clean；新增 17 个单测（guardrail 7 + permission-config 8 + bootstrap 2）。
+- cost-tracker 在 classify.ts:96-98 内部结算恰好一次 → 二次 await 不 double-settle（reviewer code-trace 证实）；迟到 block 现正确喂 denial-tracker（旧路径丢弃曾误记为 breaker error）。
+
+### 2026-06-25: Issue 143 added
+- Added 143: Auto[llm] speculative classify 窗口默认 500ms + late verdict 被丢弃 → 远程/慢 provider 下 near-100% 误弹确认框，auto 模式形同虚设 (High, Open).
+- Diagnosis (代码实证): 三根因叠加 —— (1) 窗口过期后后台 classify 裁决在 v1 被硬丢弃，即便迟到 allow 也变成必须人点的硬弹窗 (`guardrail.ts:443-449` / `speculative.ts:13-17`); (2) 500ms 是占位值，FEATURE_158 承诺的 Anthropic/DeepSeek/Zhipu micro-bench 从未回填 (文档末尾无报告 + release gate 未勾 + benchmark 无数据); (3) 窗口 500ms 与 classifier timeout 8000ms 的 16× 内部矛盾使远程/慢 provider 误弹成数学必然。REPL 与 Space 均未传 `speculativeWindowMs`，且无 config.json 面。
+- Proposed (完整修复，非治标): WS1 采纳 late verdict / peek 模式 (窗口降级为"是否显示 pending UI") + WS2 无 askUser ⇒ 不投机 (修对 SDK/非交互) + WS3 补 `autoMode.speculativeWindowMs` config 面 + WS4 回填 micro-bench 固化默认 + WS5 防 double-record 验证。显式 descope provider/latency-aware knob (采纳 WS1 后冗余)。
+- cost-tracker 在 `classify.ts:96-98` 内部结算，每次 classify 恰好一次，与窗口无关 → 采纳 late verdict 不会 double-settle。
+
+### 2026-06-25: Issue 142 added and resolved
+- Added and resolved 142: kimi-code thinking-only completion can terminate Worker with only `[Worker]` visible (High).
+- Diagnosis: upstream reasoning provider can return a completed thinking-only/whitespace-only turn; KodaX v0.7.56 only retried fully-empty turns, so the Runner could incorrectly accept it as a terminal text-only completion.
+- Fix: classify "no user-visible text and no tool calls" as degraded empty output, retry via the existing bounded re-stream path, fail locally if retries are exhausted, and guard the UI against committing bare managed role labels.
+
+### 2026-06-18: Issue 140 resolved (v0.7.52)
+- Resolved 140: Published bundle leaves computed `./agent.js` child-executor import, breaking workflow child agents (High).
+- Fix: child-executor keeps lazy loading but uses a literal `import('./agent.js')`, and build/release guards reject raw child-executor runtime imports in generated bundles before publishing.
+- Verification: fixed release line v0.7.52 was checked at the bundle/package level, not only through source-level TypeScript tests.
+
+### 2026-06-15: Issue 138 added & resolved
+- Added & Resolved 138: Workflow host RPC 边界对对象载荷零校验 — `synthesize` 传非数组 inputs 崩裸 TypeError + `runAgent`/`spawnAgent` 缺 name/prompt 静默烧 token (High)
+- Root cause: host RPC 边界对标量字符串参数两层校验，但对对象载荷（runAgent/spawnAgent/synthesize/log input）只检查"是对象"后 `as unknown as` 裸转，字段形状零校验；`buildSynthesisPrompt` 同步 `.inputs.map` 让非数组直接崩，runAgent/spawnAgent 的缺字段则静默派发空 objective 子 Agent。
+- Fix: runtime 容忍 inputs 为 array/string/object（`normalizeSynthesisInputs/Rubric`）+ script-runner 新增 `readSpawnAgentInput`/`readSynthesizeInput`/`readLogEvent` 替换 4 处裸转、强制 name/prompt 非空 + readOnly 布尔 + rubric 非空 + generator prompt 提示。
+- Verification: workflow 全套件 135 passed、agent+coding typecheck clean、`npm run build:packages` success。
+
+### 2026-06-05: Issue 137 added & resolved
+- Added & Resolved 137: Streamable HTTP MCP transport drops `Mcp-Session-Id` on sessionful servers (High)
+- Root cause: `createStreamableHttpTransport` did not persist the session id returned by initialize and did not attach it to later POST / GET / DELETE requests.
+- Fix: persist `Mcp-Session-Id`, inject it into later requests, delay notification stream startup until after the first successful POST, and clear session state on 404 expiry.
+- Verification: transport regression tests, MCP provider/tool tests, agent package typecheck, and live `toolMcpCall` smoke against `http://82.156.201.14:4747/api/mcp`.
+
+### 2026-05-16: Issue 132 resolved (v0.7.41)
+- Resolved 132: `h2-boundary-runner.test.ts` "session.jsonl" ENOENT — eager-read + retry budget enlargement
+- Strategy: structurally eliminate the race window (read content immediately after `findEvalSessionJsonl`'s `fs.stat` succeeds, before git diff / worktree cleanup / 3x fs.writeFile add 200-400ms) instead of just absorbing it
+- AgentTaskResult adds `sessionJsonlContent: string | null` (alongside existing `sessionJsonlPath`); persistCell now consumes content directly (no readFile)
+- retry budget: 6 attempts × `[50, 100, 200, 400, 800]` ms backoff = ~1.55s total (outlasts Windows AV scan windows observed >150ms in initial fix attempt)
+- Verification: 5 sequential full-suite runs (heavy parallel load) green; no warning fired
+
+### 2026-05-16: Issue 132 + Issue 133 added (test flake tracking)
+- Added 132: `h2-boundary-runner.test.ts` "session.jsonl" ENOENT race — runner silent error swallow + cleanup race causes intermittent flake under heavy parallel load (Low, Open，调研中，per user 暂不动 runner 代码)
+- Added 133: `repo-intelligence/runtime.test.ts` "falls back to OSS when premium returns malformed preturn payloads" intermittent flake under heavy parallel load (Low, Open，独立调研，per user 不推迟到后续版本 milestone)
+- 同期 `compaction.test.ts` "keeps partial summary progress when a later summary attempt fails" 加 `{ timeout: 15_000 }` 直接 fix（precedent commit `d4a47bc9` 模式）
+
+### 2026-05-09: Issue 129 added & resolved
+- Added 129: Auto 模式下纯只读管道命令被误判为"修改文件"并强制确认 (Medium)
+- Resolved 129 in v0.7.38: 三个相互叠加的根因（`2>NUL` 假阳性 + 缺 `findstr` 白名单 + 管道一票否决）以最小切口"strip-then-classify"统一修掉
+- 新增 `NULL_DEVICE_REDIRECT_PATTERN` 模块常量被 `isBashReadCommand` / `isBashWriteCommand` 共用；`BASH_SAFE_READ_COMMANDS` 加 `findstr`、`fc`、`where` 三件套
+- 新加 8 个 unit test，全包重跑 232/232 PASS
+
+### 2026-04-11: Issue 107 added
+- Added 107: harnessProfile 类型命名残留 - H0/H1/H2 应替换为 worker-chain composition (Medium Priority)
+- 由 FEATURE_061 Phase 5 识别，237 处引用跨 10 文件，需 v0.7.16 提交后独立处理
+
+### 2026-04-03: Issue 105 added
+- Added 105: kodax -c 历史记录未注入 LLM 上下文 - resume 路径可能存在 gitRoot 过滤不一致 (Medium Priority)
+- 代码链分析完成，确认代码路径完整但存在多个潜在故障点
+- 主要关注: agent.ts 中 storage.list() 未传 gitRoot 参数、旧会话缺少 gitRoot 字段、compact 策略下 initialMessages 不传递
 
 ### 2026-03-28: Issues 102-104 resolved
 - Resolved 102: Repo-intelligence now reuses the same source-aware file collector across overview and query/index layers
@@ -1770,7 +3793,7 @@ _Last Updated: 2026-03-28_
 - Resolved 090: CLI Provider 桥接语义降级：上下文与 MCP 能力丢失 (High Priority)
 - 新增 provider capability profile，显式区分 Native API 与 CLI bridge，并记录上下文语义和 MCP 支持边界
 - `/model` 与 `/status` 现在会直接披露 bridge provider 的限制：只转发最新一条用户消息，且 MCP 不可用
-- 新增 `packages/ai/src/providers/capability-profile.test.ts` 与 `packages/repl/src/interactive/provider-capabilities.test.ts`，防止桥接 provider 再次被误标为原生语义
+- 新增 `packages/llm/src/providers/capability-profile.test.ts` 与 `packages/repl/src/interactive/provider-capabilities.test.ts`，防止桥接 provider 再次被误标为原生语义
 
 ### 2026-03-19: Issue 089 resolved
 - Resolved 089: Feature / Design / Summary 元数据漂移 (High Priority)

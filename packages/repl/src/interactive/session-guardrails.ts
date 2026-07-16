@@ -1,4 +1,4 @@
-import type { KodaXProviderPolicyDecision } from '@kodax/coding';
+import type { KodaXProviderPolicyDecision } from '@kodax-ai/coding';
 import type { CurrentConfig } from '../commands/types.js';
 import { getProviderPolicyDecision } from '../common/utils.js';
 

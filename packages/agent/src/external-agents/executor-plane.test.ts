@@ -1,0 +1,616 @@
+import { describe, expect, it } from 'vitest';
+
+import {
+  AgentCancellationUncertainError,
+  AgentStartUncertainError,
+  createAgentExecutorPlane,
+  createMemoryAgentExecutorPlaneStore,
+} from './executor-plane.js';
+import type {
+  AgentDispatchPolicy,
+  AgentExecutor,
+  AgentExecutorFactory,
+  AgentExecutorFactoryContext,
+  AgentExecutorPlaneStore,
+  AgentExecutorTaskReference,
+  AgentExecutorTaskSnapshot,
+  AgentTaskStartInput,
+  ExternalAgentRegistration,
+} from './types.js';
+
+const CAPABILITIES = {
+  streaming: 'supported',
+  durableTasks: 'supported',
+  inputRequired: 'supported',
+  cancellation: 'supported',
+  artifacts: 'supported',
+} as const;
+
+const EFFECTS = {
+  remote: 'read',
+  workspace: 'proposal',
+} as const;
+
+function registration(
+  patch: Partial<ExternalAgentRegistration> = {},
+): ExternalAgentRegistration {
+  return {
+    agentId: 'external:risk-reviewer',
+    displayName: 'Risk Reviewer',
+    description: 'Reviews customer risk.',
+    enabled: true,
+    executorId: 'fake-http',
+    protocol: 'http',
+    configurationRevision: 'rev-1',
+    endpointIdentityHash: 'sha256:endpoint-a',
+    credentialRef: 'credential:risk',
+    skills: ['risk-review'],
+    inputModalities: ['text'],
+    outputModalities: ['text'],
+    capabilities: CAPABILITIES,
+    effects: EFFECTS,
+    health: { status: 'healthy', checkedAt: '2026-07-10T00:00:00.000Z' },
+    ...patch,
+  };
+}
+
+function taskInput(
+  patch: Partial<AgentTaskStartInput> = {},
+): AgentTaskStartInput {
+  return {
+    agentId: 'external:risk-reviewer',
+    objective: 'Assess account risk',
+    context: { actorId: 'actor-1', projectId: 'project-1', parentTaskId: 'parent-1' },
+    readOnly: true,
+    ...patch,
+  };
+}
+
+function allowAllPolicy(): AgentDispatchPolicy {
+  return async () => ({ allowed: true });
+}
+
+class FakeExecutor implements AgentExecutor {
+  readonly starts: AgentTaskStartInput[] = [];
+  readonly sent: string[] = [];
+  snapshot: AgentExecutorTaskSnapshot = {
+    state: 'working',
+    progress: { message: 'started', percent: 10 },
+  };
+  startError: Error | undefined;
+  cancelError: Error | undefined;
+
+  async start(input: AgentTaskStartInput): Promise<AgentExecutorTaskReference> {
+    this.starts.push(input);
+    if (this.startError) throw this.startError;
+    return { idempotencyKey: input.idempotencyKey!, remoteTaskId: 'remote-1' };
+  }
+
+  async *events(): AsyncIterable<never> {
+    return;
+  }
+
+  async get(): Promise<AgentExecutorTaskSnapshot> {
+    return this.snapshot;
+  }
+
+  async sendInput(_reference: AgentExecutorTaskReference, input: { readonly content: string }): Promise<void> {
+    this.sent.push(input.content);
+  }
+
+  async cancel(): Promise<AgentExecutorTaskSnapshot> {
+    if (this.cancelError) throw this.cancelError;
+    return this.snapshot;
+  }
+
+  async reconcile(): Promise<AgentExecutorTaskSnapshot> {
+    return this.snapshot;
+  }
+
+  async dispose(): Promise<void> {}
+}
+
+function factory(executor: FakeExecutor): AgentExecutorFactory {
+  return {
+    executorId: 'fake-http',
+    protocol: 'http',
+    async create(
+      _registration: ExternalAgentRegistration,
+      _context: AgentExecutorFactoryContext,
+    ) {
+      return executor;
+    },
+  };
+}
+
+describe('FEATURE_258 AgentExecutorPlane', () => {
+  it('registers, filters, dispatches and freezes the selected registration revision', async () => {
+    const executor = new FakeExecutor();
+    const plane = await createAgentExecutorPlane({
+      factories: [factory(executor)],
+      policy: allowAllPolicy(),
+      credentialBroker: {
+        async withCredential(_ref, use) {
+          return use('credential-secret');
+        },
+      },
+      store: createMemoryAgentExecutorPlaneStore(),
+      createTaskId: () => 'agent-task-1',
+      createIdempotencyKey: () => 'idem-1',
+    });
+
+    await plane.registrations.upsert(registration({
+      health: {
+        status: 'healthy',
+        checkedAt: '2026-07-10T00:00:00.000Z',
+        diagnostic: 'TOP-SECRET',
+      },
+    }));
+    const listed = await plane.listDispatchable({
+      actorId: 'actor-1',
+      projectId: 'project-1',
+      requiredSkills: ['risk-review'],
+      requiredCapabilities: { cancellation: true },
+      readOnly: true,
+    });
+    expect(listed).toHaveLength(1);
+    expect(listed[0]?.descriptor.agentId).toBe('external:risk-reviewer');
+    expect(JSON.stringify(listed)).not.toContain('credential-secret');
+
+    const started = await plane.tasks.start(taskInput());
+    expect(started.taskId).toBe('agent-task-1');
+    expect(started.parentTaskId).toBe('parent-1');
+    expect(started.registration.configurationRevision).toBe('rev-1');
+    expect(started.remoteTaskId).toBe('remote-1');
+
+    await plane.registrations.upsert(registration({ configurationRevision: 'rev-2' }));
+    expect((await plane.tasks.get('agent-task-1')).registration.configurationRevision).toBe('rev-1');
+    await expect(plane.tasks.sendInput('agent-task-1', { content: 'continue' }))
+      .resolves.toMatchObject({ state: 'working' });
+    expect(executor.sent).toEqual(['continue']);
+    expect(executor.starts).toHaveLength(1);
+    expect(executor.starts[0]?.idempotencyKey).toBe('idem-1');
+  });
+
+  it('preserves the accepted remote handle when ledger persistence fails after start', async () => {
+    const executor = new FakeExecutor();
+    const memoryStore = createMemoryAgentExecutorPlaneStore();
+    let appendCalls = 0;
+    const store: AgentExecutorPlaneStore = {
+      ...memoryStore,
+      async appendEvent(event) {
+        appendCalls += 1;
+        if (appendCalls === 2) throw new Error('event store unavailable');
+        await memoryStore.appendEvent(event);
+      },
+    };
+    const plane = await createAgentExecutorPlane({
+      factories: [factory(executor)],
+      policy: allowAllPolicy(),
+      store,
+    });
+    await plane.registrations.upsert(registration({ credentialRef: undefined }));
+
+    const started = await plane.tasks.start(taskInput({ taskId: 'accepted-ledger-failure' }));
+
+    expect(started).toMatchObject({
+      state: 'unknown',
+      remoteTaskId: 'remote-1',
+      executorReference: { remoteTaskId: 'remote-1' },
+    });
+    expect(executor.starts).toHaveLength(1);
+    expect((await store.loadTasks()).find((task) => task.taskId === started.taskId))
+      .toMatchObject({
+        state: 'unknown',
+        remoteTaskId: 'remote-1',
+        executorReference: { remoteTaskId: 'remote-1' },
+      });
+  });
+
+  it('rejects pending waiters and service calls after the plane closes', async () => {
+    const executor = new FakeExecutor();
+    const plane = await createAgentExecutorPlane({
+      factories: [factory(executor)],
+      policy: allowAllPolicy(),
+      store: createMemoryAgentExecutorPlaneStore(),
+    });
+    await plane.registrations.upsert(registration({ credentialRef: undefined }));
+    const started = await plane.tasks.start(taskInput({ taskId: 'close-pending' }));
+    const waiting = plane.tasks.wait(started.taskId);
+
+    await plane.close();
+
+    await expect(waiting).rejects.toThrow(/executor plane is closed/i);
+    await expect(plane.tasks.list()).rejects.toThrow(/executor plane is closed/i);
+    await expect(plane.tasks.start(taskInput())).rejects.toThrow(/executor plane is closed/i);
+    await expect(plane.registrations.list()).rejects.toThrow(/executor plane is closed/i);
+    await expect(plane.listDispatchable({ actorId: 'actor-1' }))
+      .rejects.toThrow(/executor plane is closed/i);
+    await expect(plane.close()).resolves.toBeUndefined();
+  });
+
+  it('does not let a stale continuation overwrite a concurrently completed task', async () => {
+    let releaseEvent: (() => void) | undefined;
+    let enterSend: (() => void) | undefined;
+    let releaseSend: (() => void) | undefined;
+    const eventReleased = new Promise<void>((resolve) => { releaseEvent = resolve; });
+    const sendEntered = new Promise<void>((resolve) => { enterSend = resolve; });
+    const sendReleased = new Promise<void>((resolve) => { releaseSend = resolve; });
+    const executor: AgentExecutor = {
+      async start(input) {
+        return { idempotencyKey: input.idempotencyKey!, remoteTaskId: 'remote-race' };
+      },
+      async *events() {
+        await eventReleased;
+        yield { state: 'completed', output: 'done' };
+      },
+      async get() {
+        return { state: 'input-required' };
+      },
+      async sendInput() {
+        enterSend?.();
+        await sendReleased;
+      },
+      async cancel() {
+        return { state: 'canceled' };
+      },
+      async reconcile() {
+        return { state: 'working' };
+      },
+      async dispose() {},
+    };
+    const plane = await createAgentExecutorPlane({
+      factories: [{
+        executorId: 'fake-http',
+        protocol: 'http',
+        async create() { return executor; },
+      }],
+      policy: allowAllPolicy(),
+      store: createMemoryAgentExecutorPlaneStore(),
+    });
+    await plane.registrations.upsert(registration({ credentialRef: undefined }));
+    const started = await plane.tasks.start(taskInput({ taskId: 'continuation-race' }));
+
+    const sending = plane.tasks.sendInput(started.taskId, { content: 'continue' });
+    await sendEntered;
+    const completed = plane.tasks.wait(started.taskId, 1_000);
+    releaseEvent?.();
+    await expect(completed).resolves.toMatchObject({ state: 'completed', output: 'done' });
+    releaseSend?.();
+    await expect(sending).resolves.toMatchObject({ state: 'completed', output: 'done' });
+    await expect(plane.tasks.get(started.taskId))
+      .resolves.toMatchObject({ state: 'completed', output: 'done' });
+  });
+
+  it('persists the accepted remote handle before refreshing remote state', async () => {
+    const executor = new FakeExecutor();
+    let enterGet: (() => void) | undefined;
+    let releaseGet: (() => void) | undefined;
+    const getEntered = new Promise<void>((resolve) => { enterGet = resolve; });
+    const getReleased = new Promise<void>((resolve) => { releaseGet = resolve; });
+    executor.get = async () => {
+      enterGet?.();
+      await getReleased;
+      return { state: 'working' };
+    };
+    const store = createMemoryAgentExecutorPlaneStore();
+    const plane = await createAgentExecutorPlane({
+      factories: [factory(executor)],
+      policy: allowAllPolicy(),
+      store,
+    });
+    await plane.registrations.upsert(registration({ credentialRef: undefined }));
+
+    const starting = plane.tasks.start(taskInput({ taskId: 'accepted-before-get' }));
+    await getEntered;
+    expect((await store.loadTasks()).find((task) => task.taskId === 'accepted-before-get'))
+      .toMatchObject({ remoteTaskId: 'remote-1', state: 'working' });
+    releaseGet?.();
+    await starting;
+  });
+
+  it('fails closed before start for policy, credential, health, capability and read-only mismatches', async () => {
+    const executor = new FakeExecutor();
+    const denied = await createAgentExecutorPlane({
+      factories: [factory(executor)],
+      policy: async () => ({ allowed: false, reasons: ['policy denied'] }),
+      store: createMemoryAgentExecutorPlaneStore(),
+    });
+    await denied.registrations.upsert(registration({ credentialRef: undefined }));
+    expect(await denied.listDispatchable({ actorId: 'actor-1' })).toEqual([]);
+    await expect(denied.tasks.start(taskInput())).rejects.toThrow(/policy denied/i);
+
+    const plane = await createAgentExecutorPlane({
+      factories: [factory(executor)],
+      policy: allowAllPolicy(),
+      store: createMemoryAgentExecutorPlaneStore(),
+    });
+    await plane.registrations.upsert(registration({
+      health: { status: 'unhealthy', checkedAt: '2026-07-10T00:00:00.000Z' },
+      capabilities: { ...CAPABILITIES, cancellation: 'unsupported' },
+      effects: { remote: 'write', workspace: 'proposal' },
+    }));
+    const preflight = await plane.preflight({
+      agentId: 'external:risk-reviewer',
+      query: {
+        actorId: 'actor-1',
+        readOnly: true,
+        requiredCapabilities: { cancellation: true },
+      },
+    });
+    expect(preflight.ok).toBe(false);
+    expect(preflight.reasons.join(' ')).toMatch(/credential|unhealthy|cancellation|read-only/i);
+    expect(executor.starts).toHaveLength(0);
+  });
+
+  it('rejects a registration revision changed during asynchronous preflight', async () => {
+    const executor = new FakeExecutor();
+    let enterPolicy: (() => void) | undefined;
+    let releasePolicy: (() => void) | undefined;
+    const policyEntered = new Promise<void>((resolve) => { enterPolicy = resolve; });
+    const policyReleased = new Promise<void>((resolve) => { releasePolicy = resolve; });
+    const plane = await createAgentExecutorPlane({
+      factories: [factory(executor)],
+      policy: async () => {
+        enterPolicy?.();
+        await policyReleased;
+        return { allowed: true };
+      },
+      store: createMemoryAgentExecutorPlaneStore(),
+    });
+    await plane.registrations.upsert(registration({ credentialRef: undefined }));
+
+    const starting = plane.tasks.start(taskInput());
+    await policyEntered;
+    await plane.registrations.upsert(registration({
+      credentialRef: undefined,
+      configurationRevision: 'rev-2',
+    }));
+    releasePolicy?.();
+
+    await expect(starting).rejects.toThrow(/changed during preflight/i);
+    expect(executor.starts).toHaveLength(0);
+  });
+
+  it('enforces budget, data classification and concurrency before start', async () => {
+    const executor = new FakeExecutor();
+    const plane = await createAgentExecutorPlane({
+      factories: [factory(executor)],
+      policy: allowAllPolicy(),
+      store: createMemoryAgentExecutorPlaneStore(),
+    });
+    await plane.registrations.upsert(registration({
+      credentialRef: undefined,
+      maxConcurrency: 1,
+      minimumBudget: 10,
+      allowedDataClassifications: ['public'],
+    }));
+
+    const resourceMismatch = await plane.preflight({
+      agentId: 'external:risk-reviewer',
+      query: {
+        actorId: 'actor-1',
+        budget: 9,
+        dataClassifications: ['restricted'],
+      },
+    });
+    expect(resourceMismatch.reasons.join(' ')).toMatch(/budget.*classification/i);
+
+    const eligibleContext = {
+      actorId: 'actor-1',
+      projectId: 'project-1',
+      parentTaskId: 'parent-1',
+      dataClassifications: ['public'],
+      budget: 10,
+    } as const;
+    const concurrent = await Promise.allSettled([
+      plane.tasks.start(taskInput({ taskId: 'concurrent-1', context: eligibleContext })),
+      plane.tasks.start(taskInput({ taskId: 'concurrent-2', context: eligibleContext })),
+    ]);
+    expect(concurrent.map((result) => result.status).sort()).toEqual(['fulfilled', 'rejected']);
+    const busy = await plane.preflight({
+      agentId: 'external:risk-reviewer',
+      query: { actorId: 'actor-1', budget: 10, dataClassifications: ['public'] },
+    });
+    expect(busy.ok).toBe(false);
+    expect(busy.reasons.join(' ')).toMatch(/concurrency/i);
+    expect(executor.starts).toHaveLength(1);
+  });
+
+  it('keeps cancel requested separate from confirmed, unsupported and failed', async () => {
+    const executor = new FakeExecutor();
+    const plane = await createAgentExecutorPlane({
+      factories: [factory(executor)],
+      policy: allowAllPolicy(),
+      store: createMemoryAgentExecutorPlaneStore(),
+    });
+    await plane.registrations.upsert(registration({ credentialRef: undefined }));
+
+    const started = await plane.tasks.start(taskInput());
+    executor.snapshot = { state: 'working' };
+    expect((await plane.tasks.cancel(started.taskId, 'stop')).cancellation).toBe('requested');
+
+    executor.snapshot = {
+      state: 'canceled',
+      artifacts: [{ name: 'report.pdf', uri: 'https://remote.example/report.pdf' }],
+    };
+    const confirmed = await plane.tasks.cancel(started.taskId, 'stop');
+    expect(confirmed.cancellation).toBe('confirmed');
+    expect(confirmed.artifacts).toEqual([expect.objectContaining({
+      producingAgentId: 'external:risk-reviewer',
+      remoteTaskId: 'remote-1',
+    })]);
+
+    const unsupported = await plane.registrations.upsert(registration({
+      agentId: 'external:no-cancel',
+      configurationRevision: 'rev-1',
+      credentialRef: undefined,
+      capabilities: { ...CAPABILITIES, cancellation: 'unsupported' },
+    }));
+    executor.snapshot = { state: 'working' };
+    const unsupportedTask = await plane.tasks.start(taskInput({ agentId: unsupported.agentId }));
+    expect((await plane.tasks.cancel(unsupportedTask.taskId, 'stop')).cancellation).toBe('unsupported');
+
+    executor.cancelError = new AgentCancellationUncertainError('cancel response lost');
+    const unknown = await plane.tasks.start(taskInput({ taskId: 'cancel-unknown' }));
+    expect((await plane.tasks.cancel(unknown.taskId, 'stop')).cancellation).toBe('unknown');
+
+    executor.cancelError = new Error('remote cancellation failed');
+    const failed = await plane.tasks.start(taskInput({ taskId: 'cancel-failed' }));
+    expect((await plane.tasks.cancel(failed.taskId, 'stop')).cancellation).toBe('failed');
+  });
+
+  it('reconciles an ambiguous start without issuing a second start', async () => {
+    const executor = new FakeExecutor();
+    executor.startError = new AgentStartUncertainError('response lost');
+    const store = createMemoryAgentExecutorPlaneStore();
+    const plane = await createAgentExecutorPlane({
+      factories: [factory(executor)],
+      policy: allowAllPolicy(),
+      store,
+      createTaskId: () => 'uncertain-task',
+      createIdempotencyKey: () => 'uncertain-idem',
+    });
+    await plane.registrations.upsert(registration({ credentialRef: undefined }));
+
+    const started = await plane.tasks.start(taskInput());
+    expect(started.state).toBe('unknown');
+    expect(executor.starts).toHaveLength(1);
+
+    await plane.close();
+    executor.startError = undefined;
+    executor.snapshot = { state: 'completed', output: 'recovered' };
+    const reopened = await createAgentExecutorPlane({
+      factories: [factory(executor)],
+      policy: allowAllPolicy(),
+      store,
+    });
+    const recovered = await reopened.tasks.get(started.taskId);
+    expect(recovered.state).toBe('completed');
+    expect(recovered.output).toBe('recovered');
+    expect(executor.starts).toHaveLength(1);
+  });
+
+  it('recovers as unknown instead of failing Runtime startup when a captured factory is absent', async () => {
+    const executor = new FakeExecutor();
+    const store = createMemoryAgentExecutorPlaneStore();
+    const plane = await createAgentExecutorPlane({
+      factories: [factory(executor)],
+      policy: allowAllPolicy(),
+      store,
+    });
+    await plane.registrations.upsert(registration({ credentialRef: undefined }));
+    const started = await plane.tasks.start(taskInput({ taskId: 'missing-factory-task' }));
+    expect(started.state).toBe('working');
+    await plane.close();
+
+    const reopened = await createAgentExecutorPlane({
+      factories: [],
+      policy: allowAllPolicy(),
+      store,
+    });
+    expect(await reopened.tasks.get(started.taskId)).toMatchObject({
+      state: 'unknown',
+      error: expect.stringMatching(/executor is unavailable/i),
+    });
+    expect(executor.starts).toHaveLength(1);
+  });
+
+  it('redacts credential content from failures and mirrors local tasks into the same ledger', async () => {
+    const executor = new FakeExecutor();
+    const secretFactory: AgentExecutorFactory = {
+      executorId: 'fake-http',
+      protocol: 'http',
+      async create(_registration, context) {
+        return {
+          ...executor,
+          async start(input) {
+            return context.withCredential('credential:risk', async (secret) => {
+              throw new Error(`upstream rejected ${secret}`);
+            });
+          },
+        } as AgentExecutor;
+      },
+    };
+    const plane = await createAgentExecutorPlane({
+      factories: [secretFactory],
+      policy: allowAllPolicy(),
+      credentialBroker: {
+        async withCredential(_ref, use) {
+          return use('TOP-SECRET');
+        },
+      },
+      store: createMemoryAgentExecutorPlaneStore(),
+    });
+    await plane.registrations.upsert(registration({
+      health: {
+        status: 'healthy',
+        checkedAt: '2026-07-10T00:00:00.000Z',
+        diagnostic: 'TOP-SECRET',
+      },
+    }));
+    const failed = await plane.tasks.start(taskInput({ taskId: 'redacted-task' }));
+    expect(failed.state).toBe('failed');
+    expect(failed.error).toContain('[REDACTED]');
+    expect(JSON.stringify(failed)).not.toContain('TOP-SECRET');
+    expect(JSON.stringify(await plane.tasks.events(failed.taskId))).not.toContain('TOP-SECRET');
+    const registrationJson = JSON.stringify(await plane.registrations.list());
+    expect(registrationJson).not.toContain('credential:risk');
+    expect(registrationJson).not.toContain('TOP-SECRET');
+
+    await plane.tasks.recordLocal({
+      taskId: 'local-task',
+      agentId: 'native:kodax-child',
+      objective: 'Inspect files',
+      parentTaskId: 'parent-1',
+      configurationRevision: 'native-v1',
+    });
+    await plane.tasks.updateLocal('local-task', { state: 'completed', output: 'done' });
+    const all = await plane.tasks.list({ parentTaskId: 'parent-1' });
+    expect(all.map((task) => [task.taskId, task.route, task.state])).toContainEqual([
+      'local-task',
+      'local',
+      'completed',
+    ]);
+  });
+
+  it('fails closed when an executor asks to materialize an artifact', async () => {
+    const executor = new FakeExecutor();
+    let factoryContext: AgentExecutorFactoryContext | undefined;
+    const artifactFactory: AgentExecutorFactory = {
+      executorId: 'fake-http',
+      protocol: 'http',
+      async create(_registration, context) {
+        factoryContext = context;
+        return executor;
+      },
+    };
+    const plane = await createAgentExecutorPlane({
+      factories: [artifactFactory],
+      policy: allowAllPolicy(),
+      store: createMemoryAgentExecutorPlaneStore(),
+    });
+    await plane.registrations.upsert(registration({ credentialRef: undefined }));
+    await plane.tasks.start(taskInput());
+
+    expect(factoryContext).toBeDefined();
+    await expect(factoryContext!.authorizeArtifact({
+      name: 'report.pdf',
+      uri: 'https://remote.example/report.pdf',
+    })).rejects.toThrow(/not authorized/i);
+
+    const allowedPlane = await createAgentExecutorPlane({
+      factories: [artifactFactory],
+      policy: allowAllPolicy(),
+      artifactPolicy: ({ artifact }) => ({ allowed: artifact.hash === 'sha256:trusted' }),
+      store: createMemoryAgentExecutorPlaneStore(),
+    });
+    await allowedPlane.registrations.upsert(registration({ credentialRef: undefined }));
+    await allowedPlane.tasks.start(taskInput({ taskId: 'artifact-task' }));
+    expect(factoryContext).toBeDefined();
+    await expect(factoryContext!.authorizeArtifact({
+      name: 'trusted.pdf',
+      hash: 'sha256:trusted',
+    })).resolves.toBeUndefined();
+  });
+});

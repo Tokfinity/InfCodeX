@@ -41,6 +41,7 @@ type UIAction =
   | { type: "APPEND_TO_RESPONSE"; payload: string }
   | { type: "CLEAR_RESPONSE" }
   | { type: "ADD_HISTORY_ITEM"; payload: HistoryItem }
+  | { type: "BULK_ADD_HISTORY_ITEMS"; payload: HistoryItem[] }
   | { type: "UPDATE_HISTORY_ITEM"; payload: { id: string; updates: Partial<HistoryItem> } }
   | { type: "CLEAR_HISTORY" }
   | { type: "ADD_TOOL_CALL"; payload: ToolCall }
@@ -78,6 +79,55 @@ export function createHistoryItem(
 }
 
 /**
+ * Trim history to the most recent ~50 rounds at a round boundary (a round
+ * starts with a "user" item). Shared by the single-add and bulk-add reducer
+ * paths so they trim identically. No-op when under the cap.
+ */
+export function trimHistoryToRounds(history: HistoryItem[]): HistoryItem[] {
+  if (history.length <= MAX_HISTORY_ITEMS) {
+    return history;
+  }
+  let userCount = 0;
+  let cutIndex = 0;
+  for (let i = history.length - 1; i >= 0; i--) {
+    if (history[i]?.type === "user") {
+      userCount++;
+      if (userCount > 50) {
+        cutIndex = i;
+        break;
+      }
+    }
+  }
+  return cutIndex > 0 ? history.slice(cutIndex) : history;
+}
+
+/**
+ * FEATURE_213 (v0.7.45) — rescue mid-turn user messages from a ledger wipe.
+ *
+ * A user message queued while a managed worker owns the foreground (e.g. typed
+ * while waiting for a sub-agent) is appended to the foreground ledger and only
+ * committed to history at round-end. If the ledger is cleared before that
+ * commit (a premature `clearManagedForegroundTurnHistory`), the message is
+ * lost. This returns the ledger's `user` items whose id has NOT already been
+ * committed — the caller commits them to history before wiping, deduped by id
+ * so a clear that follows a real round-end commit does not double-add.
+ *
+ * Pure. Skips items without a string id (only the managed-foreground ledger
+ * assigns ids, so id-less items are never mid-turn user messages).
+ */
+export function selectUncommittedLedgerUserItems(
+  ledger: readonly HistoryItem[],
+  committedIds: ReadonlySet<string>,
+): HistoryItem[] {
+  return ledger.filter(
+    (item) =>
+      item.type === "user" &&
+      typeof item.id === "string" &&
+      !committedIds.has(item.id),
+  );
+}
+
+/**
  * Create tool call with auto-generated ID and start time - 创建带自动生成 ID 和开始时间的工具调用
  */
 export function createToolCall(
@@ -105,31 +155,13 @@ function uiReducer(state: UIState, action: UIAction): UIState {
 
     case "ADD_HISTORY_ITEM":
       // Add item and trim to max limit at round boundaries - 添加项目并在 round 边界处裁剪到最大限制
-      const newHistory = [...state.history, action.payload];
-      if (newHistory.length <= MAX_HISTORY_ITEMS) {
-        return { ...state, history: newHistory };
-      }
+      return { ...state, history: trimHistoryToRounds([...state.history, action.payload]) };
 
-      // Find the start of the oldest complete round to keep - 找到要保留的最老完整 round 的起始位置
-      // A round starts with a "user" type message - round 以 "user" 类型消息开始
-      // Count backwards from the end to find where to cut - 从末尾向前计数找到裁剪点
-      let userCount = 0;
-      let cutIndex = 0;
-
-      for (let i = newHistory.length - 1; i >= 0; i--) {
-        if (newHistory[i]?.type === "user") {
-          userCount++;
-          // Estimate: if we have too many items, cut at round boundary - 估算：如果项目太多，在 round 边界处裁剪
-          // Target ~50 rounds, so cut when we've seen 50 user messages from the end
-          if (userCount > 50) {
-            cutIndex = i;
-            break;
-          }
-        }
-      }
-
-      const trimmedHistory = cutIndex > 0 ? newHistory.slice(cutIndex) : newHistory;
-      return { ...state, history: trimmedHistory };
+    case "BULK_ADD_HISTORY_ITEMS":
+      // FEATURE_212 (v0.7.45) — append many items in ONE dispatch (one
+      // re-render) instead of N dispatches. Same round-boundary trim as the
+      // single-add path. Used by session resume to avoid O(n²) re-renders.
+      return { ...state, history: trimHistoryToRounds([...state.history, ...action.payload]) };
 
     case "UPDATE_HISTORY_ITEM":
       return {
@@ -231,6 +263,15 @@ export function UIStateProvider({
     []
   );
 
+  // FEATURE_212 (v0.7.45) — one dispatch for many items (one re-render).
+  const addHistoryItems = useCallback(
+    (items: CreatableHistoryItem[]) => {
+      if (items.length === 0) return;
+      dispatch({ type: "BULK_ADD_HISTORY_ITEMS", payload: items.map(createHistoryItem) });
+    },
+    []
+  );
+
   const updateHistoryItem = useCallback(
     (id: string, updates: Partial<HistoryItem>) => {
       dispatch({ type: "UPDATE_HISTORY_ITEM", payload: { id, updates } });
@@ -297,6 +338,7 @@ export function UIStateProvider({
       appendToResponse,
       clearResponse,
       addHistoryItem,
+      addHistoryItems,
       updateHistoryItem,
       clearHistory,
       addToolCall,
@@ -315,6 +357,7 @@ export function UIStateProvider({
       appendToResponse,
       clearResponse,
       addHistoryItem,
+      addHistoryItems,
       updateHistoryItem,
       clearHistory,
       addToolCall,

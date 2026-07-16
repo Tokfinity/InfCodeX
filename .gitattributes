@@ -1,4 +1,4 @@
-# Protected files: always keep main branch version during merges
+# Protected InfCodeX branding files: keep the current branch version during merges
 README.md merge=infcodeX-protect
 README_CN.md merge=infcodeX-protect
 docs/ARCHITECTURE_OVERVIEW.md merge=infcodeX-protect
@@ -17,3 +17,8 @@ packages/repl/src/interactive/project-brainstorm.test.ts text eol=lf
 packages/repl/src/interactive/project-planner.ts text eol=lf
 packages/repl/src/interactive/project-planner.test.ts text eol=lf
 packages/repl/src/interactive/project-storage.test.ts text eol=lf
+packages/coding/src/guardrails/auto-mode/classify.ts text eol=lf
+packages/coding/src/guardrails/auto-mode/guardrail.ts text eol=lf
+packages/coding/src/guardrails/auto-mode/guardrail.test.ts text eol=lf
+packages/repl/src/interactive/auto-mode-bootstrap.ts text eol=lf
+packages/repl/src/interactive/auto-mode-bootstrap.test.ts text eol=lf

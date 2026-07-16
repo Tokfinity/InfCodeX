@@ -1,0 +1,474 @@
+/**
+ * Event-emitter helpers — CAP-035 + CAP-038 + CAP-053 + CAP-058
+ *
+ * Capability inventory:
+ *   - docs/features/v0.7.29-capability-inventory.md#cap-035-tool-name-visibility-classification
+ *   - docs/features/v0.7.29-capability-inventory.md#cap-038-queued-follow-up-detection
+ *   - docs/features/v0.7.29-capability-inventory.md#cap-053-emititerationend-helper-eventsoniterationend--token-snapshot-rebase
+ *   - docs/features/v0.7.29-capability-inventory.md#cap-058-eventsoniterationstart-event
+ *
+ * Predicates and event-fan-out helpers used by the SA loop:
+ *
+ *   - `isVisibleToolName` (CAP-035): predicate for whether a given tool
+ *     call should be surfaced to the host (REPL, IDE extension, AMA
+ *     observer) via `onToolUseStart` / `onToolResult`. Managed-protocol
+ *     tools (e.g. `emit_managed_protocol`) are infrastructure-level
+ *     signals the host should not echo back — they belong to the harness,
+ *     not to the user-visible work transcript.
+ *
+ *   - `hasQueuedFollowUp` (CAP-038): consulted at end-of-turn terminal
+ *     decision points to keep the loop running when the host has a
+ *     queued user input ready. The optional-chained call to
+ *     `events.hasPendingInputs?.()` ensures hosts that don't implement
+ *     this hook (the default) simply return `false` — no behavioural
+ *     change for non-REPL embedders.
+ *
+ *   - `emitIterationStart` (CAP-058): fires `events.onIterationStart`
+ *     with `iter+1` (1-based for display) and `maxIter`. Caller must
+ *     have already fired the `turn:start` extension event — this helper
+ *     is the user-visible counterpart that runs immediately after.
+ *
+ *   - `emitIterationEnd` (CAP-053): rebases the context-token snapshot
+ *     against the latest messages buffer, then fires
+ *     `events.onIterationEnd` carrying the rebased snapshot. Returns
+ *     the new snapshot so the caller can reassign its mutable holder.
+ *     The rebase is load-bearing — it's the only place where streaming
+ *     usage deltas accumulated during the turn are reconciled with the
+ *     persistent message-count baseline before the next turn begins.
+ *
+ * Migration history:
+ *   - `isVisibleToolName` extracted from `agent.ts:882-884` during the
+ *     FEATURE_100 P2 baseline batch.
+ *   - `hasQueuedFollowUp` extracted from `agent.ts:769-771` during
+ *     FEATURE_100 P2 (CAP-031/032/037/038 batch).
+ *   - `emitIterationStart` / `emitIterationEnd` extracted from
+ *     `agent.ts:511-528` and `agent.ts:577` during FEATURE_100 P3.1.
+ */
+
+import { randomUUID } from 'node:crypto';
+
+import type {
+  KodaXActivityEventMeta,
+  KodaXEvents,
+  KodaXContextTokenSnapshot,
+  KodaXLiveEventMeta,
+  KodaXTurnCompletedEvent,
+  KodaXTurnDeliveryKind,
+  KodaXTurnFailedEvent,
+  KodaXTurnStartedEvent,
+} from '../types.js';
+import type { KodaXMessage } from '@kodax-ai/llm';
+import { getMessageQueue } from '@kodax-ai/agent';
+import { isManagedProtocolToolName } from '../managed-protocol.js';
+import { rebaseContextTokenSnapshot } from '../token-accounting.js';
+
+const LIVE_TURN_ATTRIBUTED = Symbol('KodaXLiveTurnAttributed');
+const LIVE_TURN_BASE_EVENTS = Symbol('KodaXLiveTurnBaseEvents');
+const LIVE_TURN_ID_HEX_LENGTH = 16;
+// Process-lifetime by design: without a session-close signal, evicting an entry
+// can make a later resume of the same sessionId reuse seq values.
+const liveSessionSeq = new Map<string, number>();
+
+type AttributedEvents = KodaXEvents & {
+  readonly [LIVE_TURN_ATTRIBUTED]: true;
+  readonly [LIVE_TURN_BASE_EVENTS]: KodaXEvents;
+};
+
+export interface LiveTurnScope {
+  readonly sessionId: string;
+  readonly turnId: string;
+  readonly deliveryId?: string;
+  readonly deliveryKind: KodaXTurnDeliveryKind;
+  readonly promptId?: string;
+  nextMeta(): KodaXLiveEventMeta;
+}
+
+export interface LiveTurnScopeRef {
+  current: LiveTurnScope;
+}
+
+export function createLiveTurnScope(input: {
+  readonly sessionId: string;
+  readonly deliveryKind?: KodaXTurnDeliveryKind;
+  readonly turnId?: string;
+  readonly deliveryId?: string;
+  readonly promptId?: string;
+}): LiveTurnScope {
+  const turnId = input.turnId ?? `turn_${randomUUID().replace(/-/g, '').slice(0, LIVE_TURN_ID_HEX_LENGTH)}`;
+  const deliveryId = input.deliveryId ?? `delivery_${randomUUID().replace(/-/g, '').slice(0, LIVE_TURN_ID_HEX_LENGTH)}`;
+  return {
+    sessionId: input.sessionId,
+    turnId,
+    deliveryId,
+    deliveryKind: input.deliveryKind ?? 'initial',
+    promptId: input.promptId,
+    nextMeta() {
+      const seq = (liveSessionSeq.get(input.sessionId) ?? 0) + 1;
+      liveSessionSeq.set(input.sessionId, seq);
+      return {
+        sessionId: input.sessionId,
+        seq,
+        turnId,
+        deliveryId,
+        timestamp: new Date().toISOString(),
+      };
+    },
+  };
+}
+
+function isAttributedEvents(events: KodaXEvents): events is AttributedEvents {
+  return (events as Partial<AttributedEvents>)[LIVE_TURN_ATTRIBUTED] === true;
+}
+
+function resolveLiveTurnScope(scope: LiveTurnScope | LiveTurnScopeRef): LiveTurnScope {
+  return 'current' in scope ? scope.current : scope;
+}
+
+function withActivityMeta<TMeta extends KodaXActivityEventMeta>(
+  scope: LiveTurnScope | LiveTurnScopeRef,
+  meta: TMeta | undefined,
+): TMeta & KodaXLiveEventMeta {
+  return {
+    ...(meta ?? ({} as TMeta)),
+    ...resolveLiveTurnScope(scope).nextMeta(),
+  } as TMeta & KodaXLiveEventMeta;
+}
+
+function withLiveMeta<TEvent extends object>(
+  scope: LiveTurnScope | LiveTurnScopeRef,
+  event: TEvent,
+): TEvent & KodaXLiveEventMeta {
+  return {
+    ...event,
+    ...resolveLiveTurnScope(scope).nextMeta(),
+  };
+}
+
+export function withLiveTurnAttribution(
+  events: KodaXEvents,
+  scope: LiveTurnScope | LiveTurnScopeRef,
+): KodaXEvents {
+  const baseEvents = isAttributedEvents(events) ? events[LIVE_TURN_BASE_EVENTS] : events;
+  const wrapped: KodaXEvents = {
+    ...baseEvents,
+    onSessionStart: (info) => {
+      baseEvents.onSessionStart?.(withLiveMeta(scope, info));
+    },
+    onTextDelta: (text, meta) => {
+      baseEvents.onTextDelta?.(text, withActivityMeta(scope, meta));
+    },
+    onThinkingDelta: (text, meta) => {
+      baseEvents.onThinkingDelta?.(text, withActivityMeta(scope, meta));
+    },
+    onThinkingEnd: (thinking, meta) => {
+      baseEvents.onThinkingEnd?.(thinking, withActivityMeta(scope, meta));
+    },
+    onToolUseStart: (tool, meta) => {
+      baseEvents.onToolUseStart?.(tool, withActivityMeta(scope, meta));
+    },
+    onToolInputDelta: (toolName, partialJson, meta) => {
+      baseEvents.onToolInputDelta?.(toolName, partialJson, withActivityMeta(scope, meta));
+    },
+    onToolProgress: (update, meta) => {
+      baseEvents.onToolProgress?.(update, withActivityMeta(scope, meta));
+    },
+    onToolResult: (result, meta) => {
+      baseEvents.onToolResult?.(result, withActivityMeta(scope, meta));
+    },
+    onChildActivityEnd: (meta) => {
+      baseEvents.onChildActivityEnd?.(withActivityMeta(scope, meta));
+    },
+    onStreamEnd: (meta) => {
+      baseEvents.onStreamEnd?.(withActivityMeta(scope, meta));
+    },
+    onIterationStart: (iter, maxIter, meta) => {
+      baseEvents.onIterationStart?.(iter, maxIter, withActivityMeta(scope, meta));
+    },
+    onIterationEnd: (info) => {
+      baseEvents.onIterationEnd?.(withLiveMeta(scope, info));
+    },
+    onCompactStart: (meta) => {
+      baseEvents.onCompactStart?.(withActivityMeta(scope, meta));
+    },
+    onCompact: (estimatedTokens, meta) => {
+      baseEvents.onCompact?.(estimatedTokens, withActivityMeta(scope, meta));
+    },
+    onCompactStats: (info) => {
+      baseEvents.onCompactStats?.(withLiveMeta(scope, info));
+    },
+    onCompactedMessages: (messages, update, meta) => {
+      baseEvents.onCompactedMessages?.(messages, update, withActivityMeta(scope, meta));
+    },
+    onCompactEnd: (meta) => {
+      baseEvents.onCompactEnd?.(withActivityMeta(scope, meta));
+    },
+    onMidTurnUserMessages: (contents, meta) => {
+      baseEvents.onMidTurnUserMessages?.(contents, withActivityMeta(scope, meta));
+    },
+    onRetry: (reason, attempt, maxAttempts, meta) => {
+      baseEvents.onRetry?.(reason, attempt, maxAttempts, withActivityMeta(scope, meta));
+    },
+    onProviderRateLimit: (attempt, maxRetries, delayMs, meta) => {
+      baseEvents.onProviderRateLimit?.(attempt, maxRetries, delayMs, withActivityMeta(scope, meta));
+    },
+    onRetryAfter: (payload, meta) => {
+      baseEvents.onRetryAfter?.(payload, withActivityMeta(scope, meta));
+    },
+    onProviderRecovery: (event, meta) => {
+      baseEvents.onProviderRecovery?.(event, withActivityMeta(scope, meta));
+    },
+    onReasoningEffortRejected: (event) => {
+      baseEvents.onReasoningEffortRejected?.(withLiveMeta(scope, event));
+    },
+    onRepoIntelligenceTrace: (event) => {
+      baseEvents.onRepoIntelligenceTrace?.(withLiveMeta(scope, event));
+    },
+    onContextBudgetSnapshot: (event) => {
+      baseEvents.onContextBudgetSnapshot?.(withLiveMeta(scope, event));
+    },
+    onToolExposurePlanned: (event) => {
+      baseEvents.onToolExposurePlanned?.(withLiveMeta(scope, event));
+    },
+    onContextCompactionSkipped: (event) => {
+      baseEvents.onContextCompactionSkipped?.(withLiveMeta(scope, event));
+    },
+    onSidecarMessage: (event) => {
+      baseEvents.onSidecarMessage?.(withLiveMeta(scope, event));
+    },
+    onTodoUpdate: (items, meta) => {
+      baseEvents.onTodoUpdate?.(items, withActivityMeta(scope, meta));
+    },
+    onTodoDriftWarning: (event) => {
+      baseEvents.onTodoDriftWarning?.(withLiveMeta(scope, event));
+    },
+    onManagedTaskStatus: (status) => {
+      baseEvents.onManagedTaskStatus?.(withLiveMeta(scope, status));
+    },
+    onEffectiveConfig: (config) => {
+      baseEvents.onEffectiveConfig?.(withLiveMeta(scope, config));
+    },
+    onWorkflowProcessEvent: (event) => {
+      baseEvents.onWorkflowProcessEvent?.(withLiveMeta(scope, event));
+    },
+    onWorkflowAgentDigest: (event) => {
+      baseEvents.onWorkflowAgentDigest?.(withLiveMeta(scope, event));
+    },
+    onScoutSuspiciousCompletion: (payload) => {
+      baseEvents.onScoutSuspiciousCompletion?.(withLiveMeta(scope, payload));
+    },
+    onComplete: (meta) => {
+      baseEvents.onComplete?.(withActivityMeta(scope, meta));
+    },
+    onError: (error, meta) => {
+      baseEvents.onError?.(error, withActivityMeta(scope, meta));
+    },
+  };
+  Object.defineProperty(wrapped, LIVE_TURN_ATTRIBUTED, {
+    value: true,
+    enumerable: false,
+  });
+  Object.defineProperty(wrapped, LIVE_TURN_BASE_EVENTS, {
+    value: baseEvents,
+    enumerable: false,
+  });
+  return wrapped;
+}
+
+export function emitTurnStarted(events: KodaXEvents, scope: LiveTurnScope): void {
+  const event: KodaXTurnStartedEvent = {
+    ...scope.nextMeta(),
+    deliveryKind: scope.deliveryKind,
+    ...(scope.promptId !== undefined ? { promptId: scope.promptId } : {}),
+  };
+  events.onTurnStarted?.(event);
+}
+
+export function emitTurnCompleted(
+  events: KodaXEvents,
+  scope: LiveTurnScope,
+  status: KodaXTurnCompletedEvent['status'],
+): void {
+  events.onTurnCompleted?.({
+    ...scope.nextMeta(),
+    status,
+  });
+}
+
+export function emitTurnFailed(
+  events: KodaXEvents,
+  scope: LiveTurnScope,
+  error: Error,
+): void {
+  const payload: KodaXTurnFailedEvent = {
+    ...scope.nextMeta(),
+    error: {
+      name: error.name,
+      message: error.message,
+      ...(error.stack !== undefined ? { stack: error.stack } : {}),
+    },
+  };
+  events.onTurnFailed?.(payload);
+}
+
+/**
+ * FEATURE_151 (v0.7.38) Slice E — `todo_update` and `todo_list` are
+ * scaffolding for the user-visible TodoListSurface. The user already
+ * sees plan progress through that surface; surfacing every individual
+ * tool call (especially during a multi-step task where the Generator
+ * fires `op:'update'` 2-4 times per round) is pure transcript noise.
+ *
+ * Mirrors Claude Code's stance: `TodoWriteTool` / `TaskCreateTool` /
+ * `TaskUpdateTool` / `TaskListTool` all set `shouldDefer: true +
+ * renderToolUseMessage() => null + userFacingName() => ''`, hiding the
+ * call entirely from the user transcript.
+ */
+const HIDDEN_TODO_TOOL_NAMES: ReadonlySet<string> = new Set([
+  'todo_update',
+  'todo_list',
+  // FEATURE_170 (v0.7.41) — `todo_create` is also plan-list scaffolding.
+  // Same rationale as todo_update: the user sees inserted items via the
+  // TodoListSurface; the raw tool call is pure transcript noise.
+  'todo_create',
+  // v0.7.42 — `todo_get` is read-only per-id lookup. Same scaffolding
+  // role as todo_list (Generator / Worker uses it to refresh state
+  // before `todo_update`, or to fetch full description on pick-up).
+  // Mirrors CC's `TaskGetTool` (also `shouldDefer: true`).
+  'todo_get',
+]);
+
+export function isVisibleToolName(name: string): boolean {
+  return (
+    !isManagedProtocolToolName(name)
+    && !HIDDEN_TODO_TOOL_NAMES.has(name)
+  );
+}
+
+/**
+ * CAP-038 + FEATURE_159 (v0.7.40) — queue-aware queued-follow-up
+ * predicate.
+ *
+ * Pre-FEATURE_159: only consulted `events.hasPendingInputs?.()` — the
+ * REPL implemented this hook to expose its React `pendingInputs` array.
+ * That coupling required the REPL to mirror its array into the agent-
+ * side MessageQueue (legacy `syncPendingInputsToQueue`) so other
+ * substrate consumers could see the same queued input.
+ *
+ * Post-FEATURE_159: MessageQueue is the canonical source of queued
+ * user prompts. We OR-in a queue probe for `mode:'prompt'`
+ * main-thread user-priority entries — so any origin (REPL,
+ * idle-yield wake-resumed prompts, SDK consumer that enqueues
+ * directly) triggers the same yield. The `events.hasPendingInputs?.()`
+ * fallback is kept for SDK consumers that implement custom
+ * queueing without routing through MessageQueue (BC-preserved).
+ */
+export function hasQueuedFollowUp(events: KodaXEvents): boolean {
+  if (events.hasPendingInputs?.() === true) return true;
+  return getMessageQueue().has({
+    agentId: undefined,
+    maxPriority: 'user',
+    mode: 'prompt',
+  });
+}
+
+/**
+ * Fire `onSessionStart` — CAP-003. Single shared site so SA (substrate
+ * frame entry) and AMA (`runManagedTaskViaRunner`) emit through the
+ * same surface. Future contract changes (richer payload, ordering
+ * invariants) only need updating here.
+ */
+export function emitSessionStart(
+  events: KodaXEvents,
+  payload: { provider: string; sessionId: string },
+): void {
+  events.onSessionStart?.(payload);
+}
+
+/**
+ * Fire `onStreamEnd` — CAP-004. Shared between SA's per-turn stream
+ * finalization and AMA's per-worker-turn stream finalization.
+ */
+export function emitStreamEnd(events: KodaXEvents): void {
+  events.onStreamEnd?.();
+}
+
+/**
+ * Fire `onComplete` — CAP-005. Shared terminal signal across all
+ * non-error terminals (success / interrupt / managed-protocol exit).
+ * Mutually exclusive with `emitError` per CAP-084.
+ */
+export function emitComplete(events: KodaXEvents): void {
+  events.onComplete?.();
+}
+
+/**
+ * Fire `onError` — CAP-006. Shared catch-branch signal. Mutually
+ * exclusive with `emitComplete` per CAP-084.
+ */
+export function emitError(events: KodaXEvents, error: Error): void {
+  events.onError?.(error);
+}
+
+/**
+ * Fire `onProviderRateLimit` — CAP-007. Distinct from generic
+ * `onRetry`: only fires when the resilience classifier returns
+ * `reasonCode === 'rate_limit'`. SA dispatches via the provider stream
+ * handler bridge (`stream-handler-wiring.ts`); AMA dispatches inline
+ * during its own retry decision pipeline. Both now emit through this
+ * helper so the (attempt, maxRetries, delayMs) tuple shape is locked.
+ */
+export function emitProviderRateLimit(
+  events: KodaXEvents,
+  attempt: number,
+  maxRetries: number,
+  delayMs: number,
+  meta?: KodaXActivityEventMeta,
+): void {
+  if (meta !== undefined) {
+    events.onProviderRateLimit?.(attempt, maxRetries, delayMs, meta);
+    return;
+  }
+  events.onProviderRateLimit?.(attempt, maxRetries, delayMs);
+}
+
+/**
+ * Fire the user-facing `onIterationStart` event. `iter` is 0-based at
+ * the call site; this helper translates to the 1-based display value.
+ */
+export function emitIterationStart(
+  events: KodaXEvents,
+  iter: number,
+  maxIter: number,
+): void {
+  events.onIterationStart?.(iter + 1, maxIter);
+}
+
+/**
+ * Rebase the context-token snapshot and fire `onIterationEnd`. Returns
+ * the rebased snapshot so the caller can reassign its holder. Pass
+ * `snapshotOverride` when an upstream step (compaction, post-compact
+ * attachments) has already produced a fresher baseline.
+ */
+export function emitIterationEnd(
+  events: KodaXEvents,
+  params: {
+    iter: number;
+    maxIter: number;
+    messages: readonly KodaXMessage[];
+    currentSnapshot: KodaXContextTokenSnapshot;
+    snapshotOverride?: KodaXContextTokenSnapshot;
+  },
+): KodaXContextTokenSnapshot {
+  const rebased = rebaseContextTokenSnapshot(
+    params.messages as KodaXMessage[],
+    params.snapshotOverride ?? params.currentSnapshot,
+  );
+  events.onIterationEnd?.({
+    iter: params.iter,
+    maxIter: params.maxIter,
+    tokenCount: rebased.currentTokens,
+    tokenSource: rebased.source,
+    usage: rebased.usage,
+    contextTokenSnapshot: rebased,
+  });
+  return rebased;
+}

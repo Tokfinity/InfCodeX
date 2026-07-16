@@ -180,6 +180,12 @@ function mapEventToLogEntry(event: AcpRuntimeEvent): AcpLogEntry | null {
           error: event.error,
         },
       };
+    case 'repo_intelligence_trace':
+      return {
+        level: 'debug',
+        message: 'ACP repo intelligence trace',
+        fields: toLogFields(event),
+      };
     default:
       return null;
   }
@@ -197,6 +203,7 @@ function mapPermissionOutcomeToLogEntry(
     sessionId: event.sessionId,
     tool: event.tool,
     toolId: event.toolId,
+    error: event.error,
   };
 
   switch (event.outcome) {

@@ -1,4 +1,4 @@
-import type { KodaXToolDefinition } from '@kodax/ai';
+import type { KodaXToolDefinition } from '@kodax-ai/llm';
 import type { KodaXToolExecutionContext } from '../types.js';
 import type {
   LocalToolDefinition,
@@ -8,24 +8,37 @@ import type {
   ToolRegistry,
   ToolRegistrationOptions,
 } from './types.js';
-import { toolRead } from './read.js';
-import { toolWrite } from './write.js';
-import { toolEdit } from './edit.js';
-import { toolBash } from './bash.js';
-import { toolGlob } from './glob.js';
-import { toolGrep } from './grep.js';
-import { toolUndo } from './undo.js';
-import { toolAskUserQuestion } from './ask-user-question.js';
-import { toolRepoOverview } from './repo-overview.js';
-import { toolChangedScope } from './changed-scope.js';
-import { toolChangedDiff, toolChangedDiffBundle } from './changed-diff.js';
-import { toolModuleContext } from './module-context.js';
-import { toolSymbolContext } from './symbol-context.js';
-import { toolProcessContext } from './process-context.js';
-import { toolImpactEstimate } from './impact-estimate.js';
-
+import { BUILTIN_TOOL_DEFINITIONS } from './tool-definitions.js';
 const TOOL_REGISTRY: ToolRegistry = new Map();
 let nextToolRegistrationId = 0;
+
+export const REPO_INTELLIGENCE_WORKING_TOOL_NAMES = [
+  'repo_overview',
+  'changed_scope',
+  'changed_diff',
+  'changed_diff_bundle',
+  'module_context',
+  'symbol_context',
+  'process_context',
+  'impact_estimate',
+  'relationship_scan',
+  'cyclic_dependencies',
+  'semantic_lookup',
+] as const;
+
+const REPO_INTELLIGENCE_WORKING_TOOL_NAME_SET = new Set<string>(
+  REPO_INTELLIGENCE_WORKING_TOOL_NAMES,
+);
+
+export const MCP_TOOL_NAMES = [
+  'mcp_search',
+  'mcp_describe',
+  'mcp_call',
+  'mcp_read_resource',
+  'mcp_get_prompt',
+] as const;
+
+const MCP_TOOL_NAME_SET = new Set<string>(MCP_TOOL_NAMES);
 
 function extractRequiredParams(
   inputSchema: KodaXToolDefinition['input_schema'] | undefined,
@@ -102,269 +115,6 @@ function registerToolInternal(
   };
 }
 
-const BUILTIN_TOOL_DEFINITIONS: LocalToolDefinition[] = [
-  {
-    name: 'read',
-    description: 'Read a text file with bounded output. Large files are capped per call; use offset/limit to continue in smaller slices.',
-    input_schema: {
-      type: 'object',
-      properties: {
-        path: { type: 'string', description: 'The absolute path to the file' },
-        offset: { type: 'number', description: 'Line number to start from' },
-        limit: { type: 'number', description: 'Number of lines to read' },
-      },
-      required: ['path'],
-    },
-    handler: toolRead,
-  },
-  {
-    name: 'write',
-    description: 'Write content to a file. Large diffs may be summarized in the tool result.',
-    input_schema: {
-      type: 'object',
-      properties: {
-        path: { type: 'string', description: 'The absolute path to the file' },
-        content: { type: 'string', description: 'The content to write' },
-      },
-      required: ['path', 'content'],
-    },
-    handler: toolWrite,
-  },
-  {
-    name: 'edit',
-    description: 'Perform exact string replacement in a file. Large diff previews may be summarized.',
-    input_schema: {
-      type: 'object',
-      properties: {
-        path: { type: 'string', description: 'The file to edit' },
-        old_string: { type: 'string', description: 'The text to replace' },
-        new_string: { type: 'string', description: 'The replacement text' },
-        replace_all: { type: 'boolean', description: 'Replace all occurrences' },
-      },
-      required: ['path', 'old_string', 'new_string'],
-    },
-    handler: toolEdit,
-  },
-  {
-    name: 'bash',
-    description: 'Execute a shell command. Large output may be truncated to the most relevant tail.',
-    input_schema: {
-      type: 'object',
-      properties: {
-        command: { type: 'string', description: 'The command to execute' },
-        timeout: { type: 'number', description: 'Timeout in seconds' },
-      },
-      required: ['command'],
-    },
-    handler: toolBash,
-  },
-  {
-    name: 'glob',
-    description: 'Find files matching a pattern.',
-    input_schema: {
-      type: 'object',
-      properties: {
-        pattern: { type: 'string', description: 'The glob pattern' },
-        path: { type: 'string', description: 'Directory to search' },
-      },
-      required: ['pattern'],
-    },
-    handler: toolGlob,
-  },
-  {
-    name: 'grep',
-    description: 'Search for a pattern in files. Large result sets may be truncated; narrow the pattern or path when needed.',
-    input_schema: {
-      type: 'object',
-      properties: {
-        pattern: { type: 'string', description: 'The regex pattern' },
-        path: { type: 'string', description: 'File or directory to search' },
-        ignore_case: { type: 'boolean', description: 'Case insensitive search' },
-        output_mode: { type: 'string', enum: ['content', 'files_with_matches', 'count'] },
-      },
-      required: ['pattern', 'path'],
-    },
-    handler: toolGrep,
-  },
-  {
-    name: 'undo',
-    description: 'Revert the last file modification.',
-    input_schema: { type: 'object', properties: {} },
-    handler: toolUndo,
-  },
-  {
-    name: 'ask_user_question',
-    description: 'Ask the user a question with multiple choice options. Use this when you need the user to make a decision.',
-    input_schema: {
-      type: 'object',
-      properties: {
-        question: { type: 'string', description: 'The question to ask the user' },
-        options: {
-          type: 'array',
-          description: 'Available options for the user to choose from',
-          items: {
-            type: 'object',
-            properties: {
-              label: { type: 'string', description: 'Display label for this option' },
-              description: { type: 'string', description: 'Optional description of this option' },
-              value: { type: 'string', description: 'Optional value to return (defaults to label)' },
-            },
-            required: ['label'],
-          },
-        },
-        default: { type: 'string', description: 'Optional default choice' },
-        intent: {
-          type: 'string',
-          enum: ['generic', 'plan-handoff'],
-          description: 'Optional ask intent. Use "plan-handoff" only after the plan is complete and you need permission to continue in accept-edits mode.',
-        },
-        target_mode: {
-          type: 'string',
-          enum: ['accept-edits'],
-          description: 'Target permission mode for a plan handoff request.',
-        },
-        scope: {
-          type: 'string',
-          enum: ['session'],
-          description: 'Scope of the permission change. Only session scope is supported.',
-        },
-        resume_behavior: {
-          type: 'string',
-          enum: ['continue'],
-          description: 'Whether execution should continue immediately after approval.',
-        },
-      },
-      required: ['question', 'options'],
-    },
-    handler: toolAskUserQuestion,
-  },
-  {
-    name: 'repo_overview',
-    description: 'Summarize the repository structure, key areas, entry hints, and stored repo-intelligence snapshot for the current workspace.',
-    input_schema: {
-      type: 'object',
-      properties: {
-        target_path: { type: 'string', description: 'Optional path inside the workspace to resolve the repository root from' },
-        refresh: { type: 'boolean', description: 'When true, rebuild the repo overview snapshot before returning it' },
-      },
-    },
-    handler: toolRepoOverview,
-  },
-  {
-    name: 'changed_scope',
-    description: 'Analyze which files, areas, and categories are touched by the current git diff or a comparison range.',
-    input_schema: {
-      type: 'object',
-      properties: {
-        target_path: { type: 'string', description: 'Optional path inside the workspace to resolve the repository root from' },
-        scope: {
-          type: 'string',
-          enum: ['unstaged', 'staged', 'all', 'compare'],
-          description: 'Which git change set to inspect. Defaults to all.',
-        },
-        base_ref: { type: 'string', description: 'Base ref used when scope=compare. Defaults to HEAD~1.' },
-        refresh_overview: { type: 'boolean', description: 'When true, rebuild the repo overview snapshot before analyzing changes' },
-      },
-    },
-    handler: toolChangedScope,
-  },
-  {
-    name: 'changed_diff',
-    description: 'Read a paged diff slice for a specific changed file. Prefer this over broad git diff output during large reviews.',
-    input_schema: {
-      type: 'object',
-      properties: {
-        target_path: { type: 'string', description: 'Optional path inside the workspace to resolve the repository root from' },
-        base_ref: { type: 'string', description: 'Optional base git ref for compare-range review' },
-        target_ref: { type: 'string', description: 'Optional target git ref for compare-range review (defaults to HEAD when base_ref is provided)' },
-        path: { type: 'string', description: 'Changed file path to inspect, relative to the workspace root or absolute inside it' },
-        offset: { type: 'number', description: '1-based diff line offset for pagination' },
-        limit: { type: 'number', description: 'Maximum diff lines to return in this slice' },
-        context_lines: { type: 'number', description: 'Unified diff context lines to request' },
-      },
-      required: ['path'],
-    },
-    handler: toolChangedDiff,
-  },
-  {
-    name: 'changed_diff_bundle',
-    description: 'Read diff slices for multiple changed files in one call. Prefer this for large reviews before drilling down with changed_diff.',
-    input_schema: {
-      type: 'object',
-      properties: {
-        target_path: { type: 'string', description: 'Optional path inside the workspace to resolve the repository root from' },
-        base_ref: { type: 'string', description: 'Optional base git ref for compare-range review' },
-        target_ref: { type: 'string', description: 'Optional target git ref for compare-range review (defaults to HEAD when base_ref is provided)' },
-        paths: {
-          type: 'array',
-          description: 'Changed file paths to inspect in one bundle, relative to the workspace root or absolute inside it',
-          items: { type: 'string' },
-        },
-        offset: { type: 'number', description: '1-based diff line offset applied to each path in the bundle' },
-        limit_per_path: { type: 'number', description: 'Maximum diff lines to return per path in this bundle' },
-        context_lines: { type: 'number', description: 'Unified diff context lines to request' },
-      },
-      required: ['paths'],
-    },
-    handler: toolChangedDiffBundle,
-  },
-  {
-    name: 'module_context',
-    description: 'Return a task-shaped module capsule with dependencies, entry files, symbols, tests, docs, and follow-up handles.',
-    input_schema: {
-      type: 'object',
-      properties: {
-        module: { type: 'string', description: 'Module id, label, or package name to inspect' },
-        target_path: { type: 'string', description: 'Optional path used to infer the enclosing module' },
-        refresh: { type: 'boolean', description: 'When true, rebuild repo intelligence before returning the module capsule' },
-      },
-    },
-    handler: toolModuleContext,
-  },
-  {
-    name: 'symbol_context',
-    description: 'Return definition, probable callers/callees, imports, and alternatives for a repository symbol.',
-    input_schema: {
-      type: 'object',
-      properties: {
-        symbol: { type: 'string', description: 'The symbol name to inspect' },
-        module: { type: 'string', description: 'Optional module hint to disambiguate the symbol search' },
-        target_path: { type: 'string', description: 'Optional path inside the workspace to resolve the repository root from' },
-        refresh: { type: 'boolean', description: 'When true, rebuild repo intelligence before returning the symbol capsule' },
-      },
-    },
-    handler: toolSymbolContext,
-  },
-  {
-    name: 'process_context',
-    description: 'Return an approximate static execution/process capsule for an entry symbol, module, or path.',
-    input_schema: {
-      type: 'object',
-      properties: {
-        entry: { type: 'string', description: 'Entry symbol or file hint for the process to trace' },
-        module: { type: 'string', description: 'Optional module hint used to select a process capsule' },
-        target_path: { type: 'string', description: 'Optional path used to infer the relevant module or entry file' },
-        refresh: { type: 'boolean', description: 'When true, rebuild repo intelligence before returning the process capsule' },
-      },
-    },
-    handler: toolProcessContext,
-  },
-  {
-    name: 'impact_estimate',
-    description: 'Estimate blast radius for a symbol, path, or module using local intelligence plus changed-scope overlap.',
-    input_schema: {
-      type: 'object',
-      properties: {
-        symbol: { type: 'string', description: 'Optional symbol to estimate impact for' },
-        module: { type: 'string', description: 'Optional module to estimate impact for' },
-        path: { type: 'string', description: 'Optional repository-relative or absolute path to estimate impact for' },
-        target_path: { type: 'string', description: 'Optional path used to resolve the repository root from' },
-        refresh: { type: 'boolean', description: 'When true, rebuild repo intelligence before returning the impact estimate' },
-      },
-    },
-    handler: toolImpactEstimate,
-  },
-];
 
 for (const definition of BUILTIN_TOOL_DEFINITIONS) {
   registerToolInternal(definition, {
@@ -462,6 +212,105 @@ export function listBuiltinToolDefinitions(): RegisteredToolDefinition[] {
   }));
 }
 
+/**
+ * v0.7.42 — snapshot of every currently-active tool registration.
+ *
+ * Returns the most-recent registration for each tool name (mirroring
+ * {@link getRegisteredToolDefinition}'s single-name semantics across the
+ * full registry). Use this to drive metadata-based filters such as:
+ *
+ *   - SDK embedder permission brokers building a blocklist by side-effect class:
+ *     `getAllRegisteredTools().filter(t => t.sideEffect !== 'readonly')`
+ *   - UI that displays available tools grouped by category.
+ *   - Plan-mode gates that compute their own blocklist from metadata
+ *     instead of hardcoded `Set<string>` of names.
+ *
+ * The returned array is a fresh copy per call (safe to mutate without
+ * affecting the registry). Order is registration order (sorted by name
+ * within each registration to keep the snapshot deterministic).
+ */
+export function getAllRegisteredTools(): RegisteredToolDefinition[] {
+  const result: RegisteredToolDefinition[] = [];
+  for (const [name] of TOOL_REGISTRY) {
+    const active = getActiveToolRegistration(name);
+    if (active) result.push(active);
+  }
+  result.sort((left, right) => left.name.localeCompare(right.name));
+  return result;
+}
+
+/**
+ * v0.7.42 — plan-mode permit check driven by tool metadata.
+ *
+ *   - `sideEffect === 'readonly'` ⇒ permitted (unless explicitly
+ *     `planModeAllowed: false`).
+ *   - `planModeAllowed: true` ⇒ permitted (overrides non-readonly).
+ *   - any other sideEffect ⇒ blocked.
+ *
+ * Returns `false` for unknown tool names (fail-closed). Use this in
+ * preference to hardcoded `Set<string>` of tool names — adding a new
+ * `'mutates-fs'` builtin will flow through automatically.
+ */
+export function isToolPlanModeAllowed(name: string): boolean {
+  const def =
+    getActiveToolRegistration(name)
+    ?? BUILTIN_TOOL_DEFINITIONS.find((entry) => entry.name === name);
+  if (!def) return false;
+  if (def.planModeAllowed === true) return true;
+  if (def.planModeAllowed === false) return false;
+  return def.sideEffect === 'readonly';
+}
+
+/**
+ * v0.7.42 — does this tool mutate the filesystem?
+ *
+ * Wraps `sideEffect === 'mutates-fs'`. Used by the REPL permission
+ * pipeline's gitRoot guard and Space's permission broker. Replaces the
+ * previous practice of hardcoding `Set(["write", "edit"])`-style lookups
+ * scattered across 5+ callsites.
+ */
+export function isToolFileMutation(name: string): boolean {
+  const def =
+    getActiveToolRegistration(name)
+    ?? BUILTIN_TOOL_DEFINITIONS.find((entry) => entry.name === name);
+  return def?.sideEffect === 'mutates-fs';
+}
+
+/**
+ * FEATURE_247 — does this tool perform a read-only network request
+ * (`sideEffect === 'reads-network'`)?
+ *
+ * Lets an SDK embedder's permission broker (e.g. KodaX-Space Partner) allow
+ * web research / MCP reads (`web_search`, `mcp_read_resource`, `mcp_get_prompt`)
+ * while still blocking mutating network calls (`web_fetch`, `mcp_call` →
+ * `mutates-network`). Fail-closed: unknown names return `false`.
+ *
+ * Note: `isToolMutation` intentionally still returns `true` for a
+ * `reads-network` tool (only `readonly` is treated as non-mutating there), so
+ * existing mutation-gate behavior is unchanged — use THIS predicate, or the
+ * `sideEffect` value directly, to select the read-network class.
+ */
+export function isToolNetworkRead(name: string): boolean {
+  const def =
+    getActiveToolRegistration(name)
+    ?? BUILTIN_TOOL_DEFINITIONS.find((entry) => entry.name === name);
+  return def?.sideEffect === 'reads-network';
+}
+
+/**
+ * v0.7.42 — does this tool mutate anything (FS, shell, network, state)?
+ *
+ * True for every `sideEffect` except `'readonly'`. Fail-closed (unknown
+ * names return `true` — assumed mutating until proven otherwise).
+ */
+export function isToolMutation(name: string): boolean {
+  const def =
+    getActiveToolRegistration(name)
+    ?? BUILTIN_TOOL_DEFINITIONS.find((entry) => entry.name === name);
+  if (!def) return true;
+  return def.sideEffect !== 'readonly';
+}
+
 export function getRequiredToolParams(name: string): string[] {
   return getActiveToolRegistration(name)?.requiredParams ?? [];
 }
@@ -476,6 +325,62 @@ export function listToolDefinitions(): KodaXToolDefinition[] {
   return listTools()
     .map((name) => getToolDefinition(name))
     .filter((definition): definition is KodaXToolDefinition => definition !== undefined);
+}
+
+export function isRepoIntelligenceWorkingToolName(name: string): boolean {
+  return REPO_INTELLIGENCE_WORKING_TOOL_NAME_SET.has(name);
+}
+
+export function filterRepoIntelligenceWorkingToolNames<T extends string>(
+  toolNames: readonly T[],
+): T[] {
+  return toolNames.filter((name) => !isRepoIntelligenceWorkingToolName(name));
+}
+
+export function isMcpToolName(name: string): boolean {
+  return MCP_TOOL_NAME_SET.has(name);
+}
+
+export function filterMcpToolNames<T extends string>(
+  toolNames: readonly T[],
+): T[] {
+  return toolNames.filter((name) => !isMcpToolName(name));
+}
+
+/**
+ * Detect whether a handler's return value is an AsyncGenerator (streaming tool).
+ * Async generators have Symbol.asyncIterator; Promises do not.
+ */
+function isAsyncGenerator(value: unknown): value is AsyncGenerator<unknown, unknown, unknown> {
+  return (
+    value !== null
+    && value !== undefined
+    && typeof value === 'object'
+    && Symbol.asyncIterator in (value as object)
+  );
+}
+
+/**
+ * Consume an async generator: forward each yield as a progress update,
+ * then return the generator's final return value.
+ *
+ * NOTE: `for await...of` does NOT capture the return value of a generator.
+ * We must use manual .next() iteration to capture `{ done: true, value }`.
+ */
+async function consumeToolGenerator(
+  gen: AsyncGenerator<import('./types.js').ToolProgress, string, void>,
+  onProgress?: (message: string) => void,
+): Promise<string> {
+  let step = await gen.next();
+  while (!step.done) {
+    const progress = step.value;
+    if (progress && typeof progress.message === 'string') {
+      onProgress?.(progress.message);
+    }
+    step = await gen.next();
+  }
+  // step.done === true → step.value is the return value (string)
+  return step.value;
 }
 
 export async function executeTool(
@@ -496,7 +401,18 @@ export async function executeTool(
   }
 
   try {
-    return await definition.handler(input, ctx);
+    const result = definition.handler(input, ctx);
+
+    // Streaming tool (async generator): consume yields as progress, return final value
+    if (isAsyncGenerator(result)) {
+      return await consumeToolGenerator(
+        result as AsyncGenerator<import('./types.js').ToolProgress, string, void>,
+        ctx.reportToolProgress,
+      );
+    }
+
+    // Standard tool (Promise<string>): await as before
+    return await (result as Promise<string>);
   } catch (error) {
     const errorMsg = error instanceof Error ? error.message : String(error);
     if (errorMsg.includes('ENOENT')) {

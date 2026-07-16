@@ -5,6 +5,7 @@ import { afterEach, describe, expect, it } from 'vitest';
 import {
   formatSize,
   formatDiffPreview,
+  persistToolOutput,
   TOOL_OUTPUT_DIR_ENV,
   trimBufferStartToUtf8Boundary,
   truncateHead,
@@ -64,7 +65,7 @@ describe('truncate helpers', () => {
     expect(trimmed.toString('utf-8')).toBe('B');
   });
 
-  it('returns a diff preview even when spill-file persistence fails', async () => {
+  it('keeps the complete diff even when legacy preview limits are supplied', async () => {
     const tempRoot = await fs.mkdtemp(path.join(os.tmpdir(), 'kodax-truncate-'));
     tempPaths.push(tempRoot);
     const invalidOutputDir = path.join(tempRoot, 'not-a-dir');
@@ -80,8 +81,23 @@ describe('truncate helpers', () => {
       maxBytes: 256,
     });
 
-    expect(preview).toContain('Diff preview truncated');
-    expect(preview).not.toContain('Full diff saved to:');
+    expect(preview).toContain('+ line-0');
+    expect(preview).toContain('+ line-499');
+    expect(preview).not.toContain('Diff preview truncated');
+    expect(await fs.readdir(tempRoot)).toEqual(['not-a-dir']);
+  });
+
+  it('does not age-delete recovery artifacts that may still be referenced by a resumable session', async () => {
+    const outputDir = await fs.mkdtemp(path.join(os.tmpdir(), 'kodax-tool-output-retention-'));
+    tempPaths.push(outputDir);
+    process.env[TOOL_OUTPUT_DIR_ENV] = outputDir;
+    const referencedArtifact = path.join(outputDir, 'referenced-by-live-session.txt');
+    await fs.writeFile(referencedArtifact, 'canonical evidence', 'utf-8');
+    await fs.utimes(referencedArtifact, new Date(0), new Date(0));
+    await persistToolOutput('bash', 'new evidence', { executionCwd: outputDir });
+    await new Promise((resolve) => setTimeout(resolve, 25));
+
+    await expect(fs.readFile(referencedArtifact, 'utf-8')).resolves.toBe('canonical evidence');
   });
 
   it('formats byte sizes', () => {

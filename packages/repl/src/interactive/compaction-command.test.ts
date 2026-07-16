@@ -6,16 +6,23 @@ const mocks = vi.hoisted(() => ({
   resolveProvider: vi.fn(),
 }));
 
-vi.mock('@kodax/agent', () => ({
-  compact: mocks.compact,
-}));
+vi.mock('@kodax-ai/agent', async () => {
+  // Partial mock: only override `compact`. Keep all other exports real.
+  // (v0.7.35.1 FEATURE_142 Batch B: compact() moved from @kodax-ai/agent to
+  // @kodax-ai/agent; mock the new home — see ADR-021.)
+  const actual = await vi.importActual<typeof import('@kodax-ai/agent')>('@kodax-ai/agent');
+  return {
+    ...actual,
+    compact: mocks.compact,
+  };
+});
 
 vi.mock('../common/compaction-config.js', () => ({
   loadCompactionConfig: mocks.loadCompactionConfig,
 }));
 
-vi.mock('@kodax/coding', async () => {
-  const actual = await vi.importActual<typeof import('@kodax/coding')>('@kodax/coding');
+vi.mock('@kodax-ai/coding', async () => {
+  const actual = await vi.importActual<typeof import('@kodax-ai/coding')>('@kodax-ai/coding');
   return {
     ...actual,
     resolveProvider: mocks.resolveProvider,
@@ -55,12 +62,12 @@ describe('/compact command', () => {
       thinking: true,
       reasoningMode: 'auto',
       agentMode: 'ama',
-      parallel: false,
       permissionMode: 'accept-edits',
     };
 
     mocks.resolveProvider.mockReturnValue({
       getContextWindow: () => 200000,
+      getEffectiveMaxOutputTokens: () => 32_000,
     });
     mocks.loadCompactionConfig.mockResolvedValue({
       enabled: false,
@@ -86,9 +93,11 @@ describe('/compact command', () => {
     const compactionConfig = mocks.compact.mock.calls[0]?.[1];
     expect(compactionConfig).toMatchObject({
       enabled: true,
-      triggerPercent: 24,
+      triggerPercent: 75,
     });
     expect(mocks.compact.mock.calls[0]?.[6]).toBe(50000);
+    expect(mocks.compact.mock.calls[0]?.[10]).toBe(true);
+    expect(mocks.compact.mock.calls[0]?.[11]).toBe(32_000);
     expect(logSpy.mock.calls.flat().join('\n')).not.toContain('Compaction is disabled in config');
     expect(callbacks.startCompacting).toHaveBeenCalledTimes(1);
     expect(callbacks.stopCompacting).toHaveBeenCalledTimes(1);
@@ -106,6 +115,7 @@ describe('/compact command', () => {
     const output = logSpy.mock.calls.flat().join('\n');
     expect(output).toContain('/compact still works even if auto-compaction is disabled');
     expect(output).toContain('compaction.enabled: Controls auto-compaction only');
+    expect(output).toContain('100 uses physical capacity');
 
     logSpy.mockRestore();
   });

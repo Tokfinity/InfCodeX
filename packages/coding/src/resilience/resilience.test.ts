@@ -1,0 +1,757 @@
+/**
+ * Resilience Regression Test Suite (Feature 045)
+ *
+ * Tests the resilience module's core components:
+ * config resolution, error classification, stable boundary tracking,
+ * recovery coordinator, tool guard.
+ */
+
+import { describe, it, expect } from 'vitest';
+import { KodaXProviderError } from '@kodax-ai/llm';
+import { resolveResilienceConfig, DEFAULT_RESILIENCE_CONFIG } from './config.js';
+import { classifyResilienceError, isSessionRecoveryCandidateError } from './classifier.js';
+import { StableBoundaryTracker } from './stable-boundary.js';
+import { ProviderRecoveryCoordinator, sanitizeThinkingBlocks } from './recovery-coordinator.js';
+import { reconstructMessagesWithToolGuard } from './tool-guard.js';
+import type { KodaXMessage } from '@kodax-ai/llm';
+
+// ============== Config Tests ==============
+
+describe('resolveResilienceConfig', () => {
+  it('returns defaults when no config provided', () => {
+    const config = resolveResilienceConfig('anthropic');
+    expect(config.requestTimeoutMs).toBe(600_000);
+    expect(config.streamIdleTimeoutMs).toBe(0);
+    expect(config.maxRetries).toBe(4);
+    expect(config.maxRetryDelayMs).toBe(60_000);
+    expect(config.enableNonStreamingFallback).toBe(true);
+  });
+
+  it('merges global config overrides', () => {
+    const config = resolveResilienceConfig('anthropic', {
+      requestTimeoutMs: 120_000,
+    });
+    expect(config.requestTimeoutMs).toBe(120_000);
+    expect(config.streamIdleTimeoutMs).toBe(0);
+  });
+
+  it('applies per-provider policy override', () => {
+    const config = resolveResilienceConfig('anthropic', undefined, [
+      { provider: 'anthropic', requestTimeoutMs: 300_000 },
+    ]);
+    expect(config.requestTimeoutMs).toBe(300_000);
+  });
+
+  it('unaffected provider keeps defaults', () => {
+    const config = resolveResilienceConfig('openai', undefined, [
+      { provider: 'anthropic', maxRetries: 5 },
+    ]);
+    expect(config.maxRetries).toBe(4);
+  });
+});
+
+// ============== Classifier Tests ==============
+
+describe('classifyResilienceError', () => {
+  it('classifies AbortError as user_abort', () => {
+    const error = new DOMException('The user aborted a request', 'AbortError');
+    const result = classifyResilienceError(error);
+    expect(result.errorClass).toBe('user_abort');
+    expect(result.retryable).toBe(false);
+  });
+
+  it('classifies rate limit from message pattern', () => {
+    const error = new Error('Rate limit exceeded: too many requests (429)');
+    const result = classifyResilienceError(error);
+    expect(result.errorClass).toBe('rate_limit');
+    expect(result.retryable).toBe(true);
+  });
+
+  it('classifies connection failure from message pattern', () => {
+    const error = new Error('socket hang up');
+    const result = classifyResilienceError(error);
+    expect(result.errorClass).toBe('connection_failure');
+    expect(result.retryable).toBe(true);
+  });
+
+  it('classifies stream incomplete with stage context', () => {
+    const error = new Error('Stream incomplete');
+    error.name = 'StreamIncompleteError';
+    const result = classifyResilienceError(error, 'mid_stream_text');
+    expect(result.errorClass).toBe('incomplete_stream');
+    expect(result.failureStage).toBe('mid_stream_text');
+  });
+
+  it('classifies stream idle timeout with explicit pattern', () => {
+    const error = new Error('idle timeout: no data received for 60 seconds');
+    const result = classifyResilienceError(error);
+    expect(result.errorClass).toBe('stream_idle_timeout');
+    expect(result.retryable).toBe(true);
+  });
+
+  it('classifies hard timeout', () => {
+    const error = new Error('API Hard Timeout (10 minutes)');
+    const result = classifyResilienceError(error);
+    expect(result.errorClass).toBe('request_timeout');
+    expect(result.retryable).toBe(true);
+  });
+
+  it('defaults to non_retryable for unknown errors', () => {
+    const error = new Error('Something completely unexpected');
+    const result = classifyResilienceError(error);
+    expect(result.errorClass).toBe('non_retryable_provider_error');
+    expect(result.retryable).toBe(false);
+  });
+
+  it('infers mid_stream_tool_input from tool message', () => {
+    const error = new Error('Stream incomplete');
+    error.name = 'StreamIncompleteError';
+    const result = classifyResilienceError(error, 'mid_stream_tool_input');
+    expect(result.failureStage).toBe('mid_stream_tool_input');
+  });
+
+  // Chinese provider error patterns (中文 provider 错误消息)
+  it('classifies Chinese network error as connection_failure', () => {
+    const error = new Error('zhipu-coding API error: 网络错误，错误id：abc123');
+    const result = classifyResilienceError(error);
+    expect(result.errorClass).toBe('connection_failure');
+    expect(result.retryable).toBe(true);
+  });
+
+  it('classifies Chinese timeout error as request_timeout', () => {
+    const error = new Error('zhipu API error: 请求超时');
+    const result = classifyResilienceError(error);
+    expect(result.errorClass).toBe('request_timeout');
+    expect(result.retryable).toBe(true);
+  });
+
+  it('classifies Chinese service busy as provider_overloaded', () => {
+    const error = new KodaXProviderError('deepseek API error: 服务繁忙，请稍后重试', 'deepseek');
+    const result = classifyResilienceError(error);
+    expect(result.errorClass).toBe('provider_overloaded');
+    expect(result.retryable).toBe(true);
+  });
+
+  it('classifies Chinese rate limit as rate_limit', () => {
+    const error = new Error('zhipu API error: 请求过多，请稍后再试');
+    const result = classifyResilienceError(error);
+    expect(result.errorClass).toBe('rate_limit');
+    expect(result.retryable).toBe(true);
+  });
+
+  it('classifies "Request was aborted" as retryable connection_failure', () => {
+    const error = new KodaXProviderError('zhipu-coding API error: Request was aborted.', 'zhipu-coding');
+    const result = classifyResilienceError(error);
+    expect(result.errorClass).toBe('connection_failure');
+    expect(result.retryable).toBe(true);
+    expect(result.maxRetries).toBe(3);
+  });
+
+  it('classifies provider-service try-later errors as provider_overloaded', () => {
+    const error = new KodaXProviderError(
+      'custom API error: Provider service Error, Try a moment later',
+      'custom',
+    );
+    const result = classifyResilienceError(error);
+    expect(result.errorClass).toBe('provider_overloaded');
+    expect(result.retryable).toBe(true);
+    expect(result.maxRetries).toBe(3);
+  });
+
+  it('classifies explicit provider 500 errors as provider_overloaded', () => {
+    const error = new KodaXProviderError('custom API error: 500', 'custom');
+    const result = classifyResilienceError(error);
+    expect(result.errorClass).toBe('provider_overloaded');
+    expect(result.retryable).toBe(true);
+    expect(result.maxRetries).toBe(3);
+  });
+
+  it('does not treat unrelated 500-like numbers as provider overload', () => {
+    const error = new KodaXProviderError('requested 500 tokens is below the minimum', 'custom');
+    const result = classifyResilienceError(error);
+    expect(result.errorClass).toBe('non_retryable_provider_error');
+    expect(result.retryable).toBe(false);
+  });
+
+  it('identifies session recovery candidate errors with shared classifier rules', () => {
+    expect(isSessionRecoveryCandidateError(
+      new Error('Provider service Error, Try a moment later'),
+      5,
+    )).toBe(true);
+    expect(isSessionRecoveryCandidateError(
+      new KodaXProviderError('custom API error: context too long', 'custom'),
+      5,
+    )).toBe(true);
+    expect(isSessionRecoveryCandidateError(
+      new KodaXProviderError('Provider API error: 401 unauthorized', 'custom'),
+      5,
+    )).toBe(false);
+    expect(isSessionRecoveryCandidateError(
+      new KodaXProviderError('requested 500 tokens is below the minimum', 'custom'),
+      5,
+    )).toBe(false);
+  });
+
+  it('classifies generic aborted error as retryable connection_failure', () => {
+    const error = new Error('The request was aborted by the server');
+    const result = classifyResilienceError(error);
+    expect(result.errorClass).toBe('connection_failure');
+    expect(result.retryable).toBe(true);
+  });
+
+  // Regression: undici "terminated" surfaced via provider wrapping.
+  // Previously fell through to non_retryable_provider_error, which caused
+  // the recovery ladder to skip retries and emit manual_continue immediately.
+  it('classifies undici "terminated" wrapped by provider as retryable connection_failure', () => {
+    const error = new KodaXProviderError('zhipu-coding API error: terminated', 'zhipu-coding');
+    const result = classifyResilienceError(error);
+    expect(result.errorClass).toBe('connection_failure');
+    expect(result.retryable).toBe(true);
+    expect(result.maxRetries).toBe(3);
+  });
+
+  it('classifies bare undici "terminated" Error as retryable connection_failure', () => {
+    const error = new TypeError('terminated');
+    const result = classifyResilienceError(error);
+    expect(result.errorClass).toBe('connection_failure');
+    expect(result.retryable).toBe(true);
+  });
+
+  it('classifies "premature close" stream error as retryable connection_failure', () => {
+    const error = new Error('Premature close');
+    const result = classifyResilienceError(error);
+    expect(result.errorClass).toBe('connection_failure');
+    expect(result.retryable).toBe(true);
+  });
+
+  it('classifies EPIPE as retryable connection_failure', () => {
+    const error = new Error('write EPIPE');
+    const result = classifyResilienceError(error);
+    expect(result.errorClass).toBe('connection_failure');
+    expect(result.retryable).toBe(true);
+  });
+
+  it('classifies undici body timeout as request_timeout', () => {
+    const error = new Error('Body Timeout Error');
+    const result = classifyResilienceError(error);
+    expect(result.errorClass).toBe('request_timeout');
+    expect(result.retryable).toBe(true);
+  });
+
+  it('classifies undici headers timeout as request_timeout', () => {
+    const error = new Error('Headers Timeout Error');
+    const result = classifyResilienceError(error);
+    expect(result.errorClass).toBe('request_timeout');
+    expect(result.retryable).toBe(true);
+  });
+
+  // Regression: error.cause chain must be walked so wrapped undici errors
+  // whose outer `.message` gives no hint (e.g. generic "fetch failed") still
+  // match via the inner SocketError message or code.
+  it('walks error.cause to classify wrapped socket error as connection_failure', () => {
+    const inner: Error & { code?: string } = new Error('other side closed');
+    inner.code = 'UND_ERR_SOCKET';
+    const outer = new TypeError('fetch failed', { cause: inner });
+    const result = classifyResilienceError(outer);
+    expect(result.errorClass).toBe('connection_failure');
+    expect(result.retryable).toBe(true);
+  });
+
+  it('walks error.cause to classify provider-wrapped terminated as connection_failure', () => {
+    const inner: Error & { code?: string } = new Error('terminated');
+    inner.code = 'UND_ERR_SOCKET';
+    const wrapped = new KodaXProviderError('zhipu-coding API error: Stream closed', 'zhipu-coding');
+    (wrapped as Error & { cause?: unknown }).cause = inner;
+    const result = classifyResilienceError(wrapped);
+    expect(result.errorClass).toBe('connection_failure');
+    expect(result.retryable).toBe(true);
+  });
+
+  it('classifies ECONNRESET via error.code (not message) as connection_failure', () => {
+    const inner: Error & { code?: string } = new Error('');
+    inner.code = 'ECONNRESET';
+    const outer: Error & { cause?: unknown } = new Error('request failed');
+    outer.cause = inner;
+    const result = classifyResilienceError(outer);
+    expect(result.errorClass).toBe('connection_failure');
+    expect(result.retryable).toBe(true);
+  });
+
+  it('classifies Chinese "连接被终止" as retryable connection_failure', () => {
+    const error = new KodaXProviderError('zhipu-coding API error: 连接被终止', 'zhipu-coding');
+    const result = classifyResilienceError(error);
+    expect(result.errorClass).toBe('connection_failure');
+    expect(result.retryable).toBe(true);
+  });
+});
+
+// ============== Stable Boundary Tracker Tests ==============
+
+describe('StableBoundaryTracker', () => {
+  it('starts with initial state', () => {
+    const tracker = new StableBoundaryTracker();
+    const snap = tracker.snapshot();
+    expect(snap.lastStableMessageIndex).toBe(0);
+    expect(snap.executedToolCallIds).toEqual([]);
+    expect(snap.pendingToolCallIds).toEqual([]);
+  });
+
+  it('sets lastStableMessageIndex on beginRequest', () => {
+    const tracker = new StableBoundaryTracker();
+    const messages = [
+      { role: 'user' as const, content: 'hello' },
+      { role: 'assistant' as const, content: 'hi' },
+    ];
+    tracker.beginRequest('anthropic', 'claude-3', messages);
+    const snap = tracker.snapshot();
+    expect(snap.lastStableMessageIndex).toBe(2);
+    expect(snap.provider).toBe('anthropic');
+  });
+
+  it('tracks text delta length', () => {
+    const tracker = new StableBoundaryTracker();
+    tracker.beginRequest('anthropic', 'claude-3', []);
+    tracker.markTextDelta('Hello ');
+    tracker.markTextDelta('World');
+    const snap = tracker.snapshot();
+    expect(snap.visibleLiveTextLength).toBe(11);
+    expect(snap.failureStage).toBeUndefined();
+  });
+
+  it('tracks tool input as pending', () => {
+    const tracker = new StableBoundaryTracker();
+    tracker.beginRequest('anthropic', 'claude-3', []);
+    tracker.markToolInputStart('tool_1');
+    const snap = tracker.snapshot();
+    expect(snap.pendingToolCallIds).toEqual(['tool_1']);
+  });
+
+  it('moves tool from pending to executed', () => {
+    const tracker = new StableBoundaryTracker();
+    tracker.beginRequest('anthropic', 'claude-3', []);
+    tracker.markToolInputStart('tool_1');
+    tracker.markToolExecuted('tool_1');
+    const snap = tracker.snapshot();
+    expect(snap.pendingToolCallIds).toEqual([]);
+    expect(snap.executedToolCallIds).toEqual(['tool_1']);
+  });
+
+  it('recovers to stable boundary dropping pending tools', () => {
+    const tracker = new StableBoundaryTracker();
+    const messages = [
+      { role: 'user' as const, content: 'hello' },
+      { role: 'assistant' as const, content: 'hi' },
+    ];
+    tracker.beginRequest('anthropic', 'claude-3', messages);
+    tracker.markToolInputStart('tool_1');
+    tracker.markTextDelta('some live text');
+
+    const recovery = tracker.recoverToStableBoundary([
+      ...messages,
+      { role: 'assistant' as const, content: [{ type: 'tool_use' as const, id: 'tool_1', name: 'read', input: {} }] },
+    ]);
+    expect(recovery.messages.length).toBe(2);
+    expect(recovery.droppedToolCallIds).toEqual(['tool_1']);
+  });
+
+  it('infers failure stage before first delta', () => {
+    const tracker = new StableBoundaryTracker();
+    tracker.beginRequest('anthropic', 'claude-3', []);
+    expect(tracker.inferFailureStage()).toBe('before_first_delta');
+  });
+
+  it('infers failure stage mid_stream_text after delta', () => {
+    const tracker = new StableBoundaryTracker();
+    tracker.beginRequest('anthropic', 'claude-3', []);
+    tracker.markTextDelta('hello');
+    expect(tracker.inferFailureStage()).toBe('mid_stream_text');
+  });
+
+  it('infers failure stage mid_stream_tool_input', () => {
+    const tracker = new StableBoundaryTracker();
+    tracker.beginRequest('anthropic', 'claude-3', []);
+    tracker.markToolInputStart('tool_1');
+    expect(tracker.inferFailureStage()).toBe('mid_stream_tool_input');
+  });
+});
+
+// ============== Recovery Coordinator Tests ==============
+
+describe('ProviderRecoveryCoordinator', () => {
+  it('selects manual_continue for non-retryable errors', () => {
+    const tracker = new StableBoundaryTracker();
+    const coordinator = new ProviderRecoveryCoordinator(tracker, {});
+    const error = new DOMException('aborted', 'AbortError');
+    const classified = classifyResilienceError(error);
+    const decision = coordinator.decideRecoveryAction(error, classified, 1);
+    expect(decision.action).toBe('manual_continue');
+    expect(decision.ladderStep).toBe(4);
+  });
+
+  it('selects fresh_connection_retry for pre-delta failures', () => {
+    const tracker = new StableBoundaryTracker();
+    const coordinator = new ProviderRecoveryCoordinator(tracker, {});
+    const error = new Error('socket hang up');
+    const classified = classifyResilienceError(error, 'before_first_delta');
+    const decision = coordinator.decideRecoveryAction(error, classified, 1);
+    expect(decision.action).toBe('fresh_connection_retry');
+    expect(decision.ladderStep).toBe(1);
+  });
+
+  it('selects stable_boundary_retry for mid-stream failures', () => {
+    const tracker = new StableBoundaryTracker();
+    const coordinator = new ProviderRecoveryCoordinator(tracker, {});
+    const error = new Error('Stream incomplete');
+    error.name = 'StreamIncompleteError';
+    const classified = classifyResilienceError(error, 'mid_stream_text');
+    const decision = coordinator.decideRecoveryAction(error, classified, 1);
+    expect(decision.action).toBe('stable_boundary_retry');
+    expect(decision.ladderStep).toBe(2);
+  });
+
+  it('selects manual_continue when retries exhausted', () => {
+    const tracker = new StableBoundaryTracker();
+    const coordinator = new ProviderRecoveryCoordinator(tracker, { maxRetries: 2 });
+    const error = new Error('socket hang up');
+    const classified = classifyResilienceError(error);
+    const decision = coordinator.decideRecoveryAction(error, classified, 2);
+    expect(decision.action).toBe('manual_continue');
+    expect(decision.ladderStep).toBe(4);
+  });
+
+  it('fresh_connection_retry preserves messages', () => {
+    const tracker = new StableBoundaryTracker();
+    tracker.beginRequest('anthropic', 'claude-3', []);
+    const coordinator = new ProviderRecoveryCoordinator(tracker, {});
+    const messages = [
+      { role: 'user' as const, content: 'hello' },
+    ];
+    const result = coordinator.executeRecovery(messages, {
+      action: 'fresh_connection_retry',
+      ladderStep: 1,
+      delayMs: 1000,
+      maxDelayMs: 60_000,
+      shouldUseNonStreaming: false,
+      reasonCode: 'connection_failure',
+      failureStage: 'before_first_delta',
+    });
+    expect(result.messages.length).toBe(1);
+    expect(result.fallbackUsed).toBe(false);
+  });
+
+  // Layer A: terminated / connection_failure must qualify for non_streaming_fallback
+  // on attempt >= 2. Before this fix, terminated was locked into stable_boundary_retry
+  // forever — every retry replayed the same request against the same streaming endpoint
+  // and was killed the same way (observed repeatedly against zhipu-coding mid-stream).
+  it('connection_failure on attempt >= 2 triggers non_streaming_fallback', () => {
+    const tracker = new StableBoundaryTracker();
+    const coordinator = new ProviderRecoveryCoordinator(tracker, {});
+    const error = new Error('zhipu-coding API error: terminated');
+    const classified = classifyResilienceError(error, 'mid_stream_text');
+    expect(classified.errorClass).toBe('connection_failure');
+    const decision = coordinator.decideRecoveryAction(error, classified, 2);
+    expect(decision.action).toBe('non_streaming_fallback');
+    expect(decision.ladderStep).toBe(3);
+    expect(decision.shouldUseNonStreaming).toBe(true);
+  });
+
+  it('connection_failure on attempt 1 still uses stable_boundary_retry (fallback reserved for attempt >= 2)', () => {
+    const tracker = new StableBoundaryTracker();
+    const coordinator = new ProviderRecoveryCoordinator(tracker, {});
+    const error = new Error('zhipu-coding API error: terminated');
+    const classified = classifyResilienceError(error, 'mid_stream_text');
+    const decision = coordinator.decideRecoveryAction(error, classified, 1);
+    expect(decision.action).toBe('stable_boundary_retry');
+    expect(decision.shouldUseNonStreaming).toBe(false);
+  });
+
+  it('non_streaming_fallback fires at most once per coordinator instance', () => {
+    const tracker = new StableBoundaryTracker();
+    const coordinator = new ProviderRecoveryCoordinator(tracker, {});
+    const error = new Error('zhipu-coding API error: terminated');
+    const classified = classifyResilienceError(error, 'mid_stream_text');
+    // First attempt 2 claim: fallback granted.
+    const first = coordinator.decideRecoveryAction(error, classified, 2);
+    expect(first.action).toBe('non_streaming_fallback');
+    // Second attempt 2 (or 3, etc) after fallback used: falls back to stable_boundary_retry.
+    const second = coordinator.decideRecoveryAction(error, classified, 3);
+    expect(second.action).toBe('stable_boundary_retry');
+    expect(second.shouldUseNonStreaming).toBe(false);
+  });
+
+  it('raising maxRetries default to 4 lets connection_failure reach manual_continue only at attempt 4', () => {
+    const tracker = new StableBoundaryTracker();
+    const coordinator = new ProviderRecoveryCoordinator(tracker, {});
+    const error = new Error('zhipu-coding API error: terminated');
+    const classified = classifyResilienceError(error, 'mid_stream_text');
+    expect(coordinator.decideRecoveryAction(error, classified, 3).action).not.toBe('manual_continue');
+    expect(coordinator.decideRecoveryAction(error, classified, 4).action).toBe('manual_continue');
+  });
+
+  // L3 (v0.7.28): reasoning_content_required is recoverable — first
+  // hit returns sanitize_thinking_and_retry, subsequent hits fall
+  // through to manual_continue (single-shot guard).
+  it('classifies deepseek reasoning_content 400 as recoverable', () => {
+    const error = new KodaXProviderError(
+      'deepseek API error: 400 The `reasoning_content` in the thinking mode must be passed back to the API.',
+      'deepseek',
+    );
+    const classified = classifyResilienceError(error);
+    expect(classified.errorClass).toBe('reasoning_content_required');
+    expect(classified.retryable).toBe(true);
+  });
+
+  it('classifies anthropic thinking signature error as recoverable', () => {
+    const error = new KodaXProviderError(
+      'anthropic API error: 400 thinking.0.signature: signature invalid',
+      'anthropic',
+    );
+    const classified = classifyResilienceError(error);
+    expect(classified.errorClass).toBe('reasoning_content_required');
+    expect(classified.retryable).toBe(true);
+  });
+
+  // False-positive guard: auth-related "signature invalid" errors must
+  // NOT be classified as reasoning_content_required. They don't mention
+  // "thinking" or "reasoning_content", so a sanitize retry can't help.
+  // Misclassifying them would burn one retry slot on each occurrence.
+  it('does not misclassify generic signature errors as reasoning_content_required', () => {
+    const authError = new KodaXProviderError(
+      'API error: 401 request signature invalid',
+      'someprovider',
+    );
+    const classified = classifyResilienceError(authError);
+    expect(classified.errorClass).not.toBe('reasoning_content_required');
+
+    const apiKeyError = new KodaXProviderError(
+      'API error: 403 API key signature mismatch',
+      'someprovider',
+    );
+    const classified2 = classifyResilienceError(apiKeyError);
+    expect(classified2.errorClass).not.toBe('reasoning_content_required');
+  });
+
+  it('first reasoning_content_required hit returns sanitize_thinking_and_retry', () => {
+    const tracker = new StableBoundaryTracker();
+    const coordinator = new ProviderRecoveryCoordinator(tracker, {});
+    const error = new KodaXProviderError(
+      'deepseek API error: 400 The `reasoning_content` in the thinking mode must be passed back to the API.',
+      'deepseek',
+    );
+    const classified = classifyResilienceError(error);
+    const decision = coordinator.decideRecoveryAction(error, classified, 1);
+    expect(decision.action).toBe('sanitize_thinking_and_retry');
+    expect(decision.reasonCode).toBe('reasoning_content_required');
+  });
+
+  it('reasoning_content_required sanitize fires at most once per coordinator', () => {
+    const tracker = new StableBoundaryTracker();
+    const coordinator = new ProviderRecoveryCoordinator(tracker, {});
+    const error = new KodaXProviderError(
+      'deepseek API error: 400 The `reasoning_content` in the thinking mode must be passed back to the API.',
+      'deepseek',
+    );
+    const classified = classifyResilienceError(error);
+    const first = coordinator.decideRecoveryAction(error, classified, 1);
+    expect(first.action).toBe('sanitize_thinking_and_retry');
+    // Second hit (sanitization already used) — falls through to the
+    // generic ladder. Since reasoning_content errors carry maxRetries=1
+    // in classification but the coordinator uses its own (default 4)
+    // budget, this resolves to fresh_connection_retry / manual_continue
+    // depending on attempt count, but NEVER another sanitize.
+    const second = coordinator.decideRecoveryAction(error, classified, 2);
+    expect(second.action).not.toBe('sanitize_thinking_and_retry');
+  });
+
+  it('sanitize_thinking_and_retry bypasses retry-budget gate (fires even when attempt high)', () => {
+    const tracker = new StableBoundaryTracker();
+    const coordinator = new ProviderRecoveryCoordinator(tracker, { maxRetries: 1 });
+    const error = new KodaXProviderError(
+      'deepseek API error: 400 The `reasoning_content` in the thinking mode must be passed back to the API.',
+      'deepseek',
+    );
+    const classified = classifyResilienceError(error);
+    // attempt=5 with maxRetries=1: normal errors would manual_continue,
+    // but sanitize fires first because the special case is checked
+    // ahead of the budget gate.
+    const decision = coordinator.decideRecoveryAction(error, classified, 5);
+    expect(decision.action).toBe('sanitize_thinking_and_retry');
+  });
+
+  it('sanitize_thinking_and_retry executor strips thinking blocks from history', () => {
+    const tracker = new StableBoundaryTracker();
+    tracker.beginRequest('deepseek', 'deepseek-v4-flash', []);
+    const coordinator = new ProviderRecoveryCoordinator(tracker, {});
+    const messages: KodaXMessage[] = [
+      { role: 'user', content: 'Hi' },
+      {
+        role: 'assistant',
+        content: [
+          { type: 'thinking', thinking: 'walking through it' },
+          { type: 'text', text: 'Hello!' },
+        ],
+      },
+      { role: 'user', content: 'Continue.' },
+      {
+        role: 'assistant',
+        content: [
+          { type: 'redacted_thinking', data: 'opaque' },
+          { type: 'tool_use', id: 'call_1', name: 'grep', input: { pattern: 'x' } },
+        ],
+      },
+      {
+        role: 'user',
+        content: [{ type: 'tool_result', tool_use_id: 'call_1', content: 'ok' }],
+      },
+    ];
+
+    const result = coordinator.executeRecovery(messages, {
+      action: 'sanitize_thinking_and_retry',
+      ladderStep: 2,
+      delayMs: 0,
+      maxDelayMs: 60_000,
+      shouldUseNonStreaming: false,
+      reasonCode: 'reasoning_content_required',
+      failureStage: 'before_first_delta',
+    });
+
+    // First assistant turn: thinking stripped, text preserved.
+    const a1 = result.messages[1] as KodaXMessage;
+    expect(Array.isArray(a1.content)).toBe(true);
+    const a1Blocks = a1.content as Array<{ type: string }>;
+    expect(a1Blocks.map((b) => b.type)).toEqual(['text']);
+    // Second assistant turn: redacted_thinking stripped, tool_use preserved.
+    const a2 = result.messages[3] as KodaXMessage;
+    const a2Blocks = a2.content as Array<{ type: string }>;
+    expect(a2Blocks.map((b) => b.type)).toEqual(['tool_use']);
+    // User turns untouched.
+    expect((result.messages[0] as KodaXMessage).content).toBe('Hi');
+    expect((result.messages[2] as KodaXMessage).content).toBe('Continue.');
+  });
+
+  it('sanitize collapses thinking-only assistant turn into an empty-text marker', () => {
+    const tracker = new StableBoundaryTracker();
+    tracker.beginRequest('deepseek', 'deepseek-v4-flash', []);
+    const coordinator = new ProviderRecoveryCoordinator(tracker, {});
+    const messages: KodaXMessage[] = [
+      { role: 'user', content: 'Hi' },
+      {
+        role: 'assistant',
+        content: [{ type: 'thinking', thinking: 'silent reasoning' }],
+      },
+      { role: 'user', content: 'Continue.' },
+    ];
+
+    const result = coordinator.executeRecovery(messages, {
+      action: 'sanitize_thinking_and_retry',
+      ladderStep: 2,
+      delayMs: 0,
+      maxDelayMs: 60_000,
+      shouldUseNonStreaming: false,
+      reasonCode: 'reasoning_content_required',
+      failureStage: 'before_first_delta',
+    });
+
+    const assistant = result.messages[1] as KodaXMessage;
+    const blocks = assistant.content as Array<{ type: string; text?: string }>;
+    expect(blocks).toHaveLength(1);
+    expect(blocks[0].type).toBe('text');
+    // Empty-text marker, not a persisted '...'. The DeepSeek retry path
+    // attaches reasoning_content separately; the wire serializer adds '...'
+    // only if the gateway rejects empty content.
+    expect(blocks[0].text).toBe('');
+  });
+});
+
+// ============== Sanitize Thinking ==============
+
+describe('sanitizeThinkingBlocks', () => {
+  it('returns identity for messages with no thinking blocks', () => {
+    const messages: KodaXMessage[] = [
+      { role: 'user', content: 'Hi' },
+      { role: 'assistant', content: [{ type: 'text', text: 'Hello' }] },
+    ];
+    const result = sanitizeThinkingBlocks(messages);
+    expect(result).toHaveLength(2);
+    expect((result[1] as KodaXMessage).content).toEqual([{ type: 'text', text: 'Hello' }]);
+  });
+
+  it('is idempotent', () => {
+    const messages: KodaXMessage[] = [
+      { role: 'user', content: 'Hi' },
+      {
+        role: 'assistant',
+        content: [
+          { type: 'thinking', thinking: 'reasoning' },
+          { type: 'text', text: 'Hello' },
+        ],
+      },
+    ];
+    const once = sanitizeThinkingBlocks(messages);
+    const twice = sanitizeThinkingBlocks(once);
+    expect(twice).toEqual(once);
+  });
+
+  it('preserves user messages exactly', () => {
+    const messages: KodaXMessage[] = [
+      { role: 'user', content: 'string content' },
+      {
+        role: 'user',
+        content: [{ type: 'tool_result', tool_use_id: 'call_1', content: 'result' }],
+      },
+    ];
+    const result = sanitizeThinkingBlocks(messages);
+    expect(result).toEqual(messages);
+  });
+});
+
+// ============== Tool Guard Tests ==============
+
+describe('reconstructMessagesWithToolGuard', () => {
+  it('returns empty for empty messages', () => {
+    const result = reconstructMessagesWithToolGuard([], [], []);
+    expect(result).toEqual([]);
+  });
+
+  it('preserves messages with no tool calls', () => {
+    const messages = [
+      { role: 'user' as const, content: 'hello' },
+      { role: 'assistant' as const, content: 'hi' },
+    ];
+    const result = reconstructMessagesWithToolGuard(messages, [], []);
+    expect(result.length).toBe(2);
+  });
+
+  it('filters out dropped tool calls', () => {
+    const messages = [
+      { role: 'user' as const, content: 'do something' },
+      {
+        role: 'assistant' as const,
+        content: [
+          { type: 'tool_use' as const, id: 'tool_1', name: 'read', input: {} },
+          { type: 'tool_use' as const, id: 'tool_2', name: 'write', input: {} },
+        ],
+      },
+    ];
+    const result = reconstructMessagesWithToolGuard(messages, [], ['tool_1']);
+    const assistant = result[1] as { content: Array<{ type: string; id?: string }> };
+    const toolIds = assistant.content.filter(b => b.type === 'tool_use').map(b => (b as { id: string }).id);
+    expect(toolIds).toEqual(['tool_2']);
+  });
+
+  it('preserves executed tool results', () => {
+    const messages = [
+      { role: 'user' as const, content: 'read file' },
+      {
+        role: 'assistant' as const,
+        content: [{ type: 'tool_use' as const, id: 'tool_1', name: 'read', input: { path: '/foo' } }],
+      },
+      {
+        role: 'user' as const,
+        content: [{ type: 'tool_result' as const, tool_use_id: 'tool_1', content: 'file contents' }],
+      },
+    ];
+    const result = reconstructMessagesWithToolGuard(messages, ['tool_1'], []);
+    expect(result.length).toBe(3);
+  });
+});

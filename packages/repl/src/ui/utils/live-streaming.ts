@@ -1,17 +1,4 @@
-import type { KodaXManagedTaskStatusEvent } from "@kodax/coding";
-
-function formatHarnessProfileShort(harnessProfile?: string): string | undefined {
-  switch (harnessProfile) {
-    case "H0_DIRECT":
-      return "H0";
-    case "H1_EXECUTE_EVAL":
-      return "H1";
-    case "H2_PLAN_EXECUTE_EVAL":
-      return "H2";
-    default:
-      return harnessProfile;
-  }
-}
+import type { KodaXManagedTaskStatusEvent } from "@kodax-ai/coding";
 
 export function mergeLiveThinkingContent(currentThinking: string, finalThinking: string): string {
   const current = currentThinking.trim();
@@ -52,17 +39,28 @@ function trimRepeatedWorkerPrefix(note: string | undefined, workerTitle?: string
 export function formatManagedTaskLiveStatusLabel(
   status: KodaXManagedTaskStatusEvent,
 ): string | undefined {
-  const harness = formatHarnessProfileShort(status.harnessProfile) ?? status.harnessProfile;
   const trimmedNote = trimRepeatedWorkerPrefix(status.note, status.activeWorkerTitle);
+
+  if (status.phase === "verifying") {
+    const label = `[${status.agentMode.toUpperCase()} Verifying]`;
+    return trimmedNote ? `${label} ${trimmedNote}` : label;
+  }
 
   if (status.activeWorkerTitle) {
     if (status.phase === "preflight") {
-      return trimmedNote ? `[Scout] ${trimmedNote}` : "[Phase] Scout preflight";
+      // FEATURE_114 v0.7.38 Slice 7 — use the runner-supplied title
+      // instead of the V1 hardcoded "Scout". Under V2 the preflight
+      // emit carries `activeWorkerTitle: 'Worker'`; this keeps the V1
+      // path bit-for-bit ('Scout' in → '[Scout]' out) while letting
+      // V2 render `[Worker] analyzing task` correctly.
+      return trimmedNote
+        ? `[${status.activeWorkerTitle}] ${trimmedNote}`
+        : `[Phase] ${status.activeWorkerTitle} preflight`;
     }
     if (status.phase === "routing") {
       return trimmedNote ? `[Routing] ${trimmedNote}` : "[Routing]";
     }
-    const prefix = `[Phase] ${status.agentMode.toUpperCase()} ${harness}${status.activeWorkerTitle ? ` - ${status.activeWorkerTitle}` : ""}`;
+    const prefix = `[Phase] ${status.agentMode.toUpperCase()} ${status.activeWorkerTitle}`;
     return trimmedNote ? `${prefix} - ${trimmedNote}` : prefix;
   }
 
@@ -75,6 +73,9 @@ export function formatManagedTaskLiveStatusLabel(
   }
 
   if (status.phase === "preflight") {
+    // No activeWorkerTitle on this preflight emit (defensive — runner
+    // always supplies one). Keep the V1 fallback string so legacy
+    // call sites that omit the title still render something sensible.
     return "[Phase] Scout preflight";
   }
 
@@ -83,10 +84,19 @@ export function formatManagedTaskLiveStatusLabel(
 
 export function formatManagedTaskBreadcrumb(
   status: KodaXManagedTaskStatusEvent,
+  options?: { expanded?: boolean },
 ): string | undefined {
-  const harness = formatHarnessProfileShort(status.harnessProfile) ?? status.harnessProfile;
-  const prefix = `${status.agentMode.toUpperCase()} ${harness}`;
-  const scoutPrefix = `${status.agentMode.toUpperCase()} Scout`;
+  const note = options?.expanded ? (status.detailNote ?? status.note) : status.note;
+  const prefix = status.activeWorkerTitle
+    ? `${status.agentMode.toUpperCase()} ${status.activeWorkerTitle}`
+    : status.agentMode.toUpperCase();
+  // FEATURE_114 v0.7.38 Slice 7 — preflight breadcrumb derives the
+  // role label from the runner-supplied title. V1 keeps "AMA Scout";
+  // V2 renders "AMA Worker". When the title is missing (legacy
+  // breadcrumb call), fall back to "Scout" so existing transcripts
+  // don't regress.
+  const preflightRole = status.activeWorkerTitle ?? "Scout";
+  const preflightPrefix = `${status.agentMode.toUpperCase()} ${preflightRole}`;
   const routingPrefix = `${status.agentMode.toUpperCase()} Routing`;
   const roundSuffix = status.currentRound && status.maxRounds && status.currentRound > 1
     ? ` - Round ${status.currentRound}/${status.maxRounds}`
@@ -96,17 +106,23 @@ export function formatManagedTaskBreadcrumb(
     case "routing":
       return `${routingPrefix} - Routing ready`;
     case "starting":
-      return status.note ? `${prefix} - ${status.note}` : `${prefix} - Managed task starting`;
+      return note ? `${prefix} - ${note}` : `${prefix} - Managed task starting`;
     case "preflight":
-      return status.note ? `${scoutPrefix} - ${status.note}` : `${scoutPrefix} - Scout preflight starting`;
+      return note
+        ? `${preflightPrefix} - ${note}`
+        : `${preflightPrefix} - ${preflightRole} preflight starting`;
     case "round":
-      return status.note ? `${prefix} - ${status.note}` : `${prefix} - Managed task round update${roundSuffix}`;
+      return note ? `${prefix} - ${note}` : `${prefix} - Managed task round update${roundSuffix}`;
     case "worker":
-      return `${prefix} - ${status.activeWorkerTitle ?? "Worker"} starting${roundSuffix}`;
+      return note
+        ? `${prefix} - ${note}${roundSuffix}`
+        : `${prefix} - ${status.activeWorkerTitle ?? "Worker"} starting${roundSuffix}`;
     case "upgrade":
-      return status.note ? `${prefix} - ${status.note}` : `${prefix} - Harness transition${roundSuffix}`;
+      return note ? `${prefix} - ${note}` : `${prefix} - Harness transition${roundSuffix}`;
+    case "verifying":
+      return note ? `${status.agentMode.toUpperCase()} Verifying - ${note}` : `${status.agentMode.toUpperCase()} Verifying`;
     case "completed":
-      return status.note ? `${prefix} - ${status.note}` : `${prefix} - Managed task completed`;
+      return note ? `${prefix} - ${note}` : `${prefix} - Managed task completed`;
     default:
       return undefined;
   }

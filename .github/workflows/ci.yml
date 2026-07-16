@@ -1,0 +1,174 @@
+name: CI
+
+# Verifies the declared runtime floor actually holds. `engines.node` is
+# ">=20.0.0" across the root and every workspace package, but nothing was
+# proving the suite runs on anything other than the release build's Node 22.
+# This matrix runs the full build + test suite on the engines floor (20) and
+# the build version (22) so a Node-version regression is caught on push/PR
+# instead of at a user's install. Node 18 was dropped from the floor: the
+# codebase relies on Node 20+ features (e.g. the RegExp `v` flag), so 18 is no
+# longer supported.
+
+on:
+  push:
+    branches: [KodaX, InfX]
+  pull_request:
+  workflow_dispatch:
+
+# Cancel superseded runs on the same ref to save CI minutes.
+concurrency:
+  group: ci-${{ github.ref }}
+  cancel-in-progress: true
+
+jobs:
+  test:
+    name: test (node ${{ matrix.node }})
+    runs-on: ubuntu-latest
+    strategy:
+      fail-fast: false
+      matrix:
+        node: ['20', '22']
+    steps:
+      - uses: actions/checkout@v6
+
+      - uses: actions/setup-node@v6
+        with:
+          node-version: ${{ matrix.node }}
+          cache: 'npm'
+
+      - name: Install dependencies
+        run: npm ci
+
+      - name: Build packages
+        run: npm run build:packages
+
+      - name: Build bundled SDK and Worker sidecars
+        run: npm run build:bundle
+
+      - name: Build type declarations (SDK .d.ts — catches missing exports)
+        run: npm run build:dts
+
+      - name: Test
+        run: npm test
+
+      - name: Runtime daemon Unix socket gate
+        if: matrix.node == '22'
+        shell: bash
+        run: |
+          set -euo pipefail
+
+          home_dir="$(mktemp -d)"
+          profile="ci-unix-${GITHUB_RUN_ID:-local}-${GITHUB_RUN_ATTEMPT:-0}"
+          cleanup() {
+            rm -rf "$home_dir"
+          }
+          trap cleanup EXIT
+
+          KODAX_UNIX_GATE_HOME="$home_dir" KODAX_UNIX_GATE_PROFILE="$profile" node --input-type=module <<'NODE'
+          import path from 'node:path';
+          import { readFile } from 'node:fs/promises';
+          import { createKodaXRuntime, connectKodaXRuntime } from '@kodax-ai/kodax/runtime';
+
+          const homeDir = process.env.KODAX_UNIX_GATE_HOME;
+          const profile = process.env.KODAX_UNIX_GATE_PROFILE;
+          if (!homeDir || !profile) {
+            throw new Error('Missing Unix runtime gate environment.');
+          }
+
+          const capabilities = {
+            richEvents: true,
+            permissionPrompts: true,
+            contextDiagnostics: true,
+          };
+          let first;
+          let second;
+          try {
+            first = await createKodaXRuntime({
+              mode: 'daemon',
+              homeDir,
+              profile,
+              defaultProvider: 'mock-provider',
+              clientInfo: { name: 'ci-unix-a', version: '0.7.66' },
+              capabilities,
+            });
+            second = await connectKodaXRuntime({
+              homeDir,
+              profile,
+              clientInfo: { name: 'ci-unix-b', version: '0.7.66' },
+              capabilities,
+            });
+
+            const events = [];
+            second.events.subscribe({}, (event) => {
+              events.push(event.type);
+              if (event.type !== 'permission.requested') return;
+              const payload = event.payload;
+              if (!payload || typeof payload !== 'object' || typeof payload.id !== 'string') return;
+              void second.permissions.respond(payload.id, { type: 'allow_once' }, { runId: payload.runId });
+            });
+
+            const session = await first.sessions.create({ title: 'CI Unix Runtime Gate', projectPath: homeDir });
+            const decision = await first.permissions.request({
+              sessionId: session.id,
+              runId: 'ci-unix-permission-run',
+              toolName: 'bash',
+              inputPreview: 'echo ok',
+            });
+            await new Promise((resolve) => setTimeout(resolve, 25));
+
+            const status = await second.status.snapshot();
+            const pending = await second.permissions.listPending({ runId: 'ci-unix-permission-run' });
+            const statePath = path.join(homeDir, '.kodax', 'runtime', 'daemon', profile, 'daemon.json');
+            const state = JSON.parse(await readFile(statePath, 'utf8'));
+            const endpoint = typeof state.endpoint === 'string' ? state.endpoint : '';
+            const proof = {
+              sameRuntime: first.identity.runtimeId === second.identity.runtimeId,
+              endpointKind: endpoint.startsWith('\\\\.\\pipe\\') ? 'pipe' : 'unix',
+              sessions: status.sessions.length,
+              decisionType: decision.type,
+              hasPermissionEvents: events.includes('permission.requested') && events.includes('permission.resolved'),
+              pending: pending.length,
+            };
+
+            if (
+              !proof.sameRuntime
+              || proof.endpointKind !== 'unix'
+              || proof.sessions !== 1
+              || proof.decisionType !== 'allow_once'
+              || !proof.hasPermissionEvents
+              || proof.pending !== 0
+            ) {
+              throw new Error(`Unexpected Unix runtime proof: ${JSON.stringify(proof)}`);
+            }
+            console.log(JSON.stringify(proof));
+          } finally {
+            await second?.close();
+            await first?.close();
+          }
+          NODE
+
+  packaged-electron-daemon:
+    name: packaged Electron daemon (Windows)
+    runs-on: windows-latest
+    steps:
+      - uses: actions/checkout@v6
+
+      - uses: actions/setup-node@v6
+        with:
+          node-version: '22'
+          cache: 'npm'
+
+      - name: Install dependencies
+        run: npm ci
+
+      - name: Install packaged Electron smoke toolchain
+        run: npm install --no-save --package-lock=false --no-audit --no-fund electron@42.5.0 electron-builder@25.1.8
+
+      - name: Download packaged Electron runtime
+        run: node node_modules/electron/install.js
+
+      - name: Packaged Electron daemon gate
+        env:
+          KODAX_ELECTRON_DIST: ${{ github.workspace }}\node_modules\electron\dist
+          KODAX_ELECTRON_BUILDER_CLI: ${{ github.workspace }}\node_modules\electron-builder\out\cli\cli.js
+        run: npm run test:electron-daemon

@@ -10,7 +10,7 @@ import fsSync from 'fs';
 import path from 'path';
 import os from 'os';
 
-// 从 @kodax/coding 包导入函数
+// 从 @kodax-ai/coding 包导入函数
 import {
   checkPromiseSignal,
   estimateTokens,
@@ -21,13 +21,10 @@ import {
   getProvider,
   runKodaX,
   KodaXClient,
-  compactMessages,
   executeTool,
   KodaXToolExecutionContext,
   KodaXMessage,
   KODAX_DEFAULT_PROVIDER,
-  KODAX_FEATURES_FILE,
-  KODAX_PROGRESS_FILE,
   KODAX_MAX_TOKENS,
   KODAX_DEFAULT_TIMEOUT,
   KODAX_HARD_TIMEOUT,
@@ -39,17 +36,15 @@ import {
   KodaXToolError,
   KodaXRateLimitError,
   KodaXSessionError,
-} from '@kodax/coding';
+} from '@kodax-ai/coding';
 
-// 从 @kodax/repl 包导入工具函数
+// 从 @kodax-ai/repl 包导入工具函数
 import {
   getGitRoot,
-  getFeatureProgress,
-  checkAllFeaturesComplete,
   rateLimitedCall,
   KODAX_DIR,
   KODAX_SESSIONS_DIR,
-} from '@kodax/repl';
+} from '@kodax-ai/repl';
 
 // 从 prompts/builder 导入环境上下文函数（内部函数，需要特殊处理）
 // 暂时移除 getEnvContext 和 getProjectSnapshot 的测试，因为它们现在是内部函数
@@ -118,7 +113,10 @@ describe('Core Module Exports', () => {
 
   it('should export KODAX_TOOLS array', () => {
     expect(Array.isArray(KODAX_TOOLS)).toBe(true);
-    expect(KODAX_TOOLS.length).toBe(16);
+    // Tool count grew with each FEATURE adding domain-specific tools
+    // (worktree mgmt, dispatch_child_task v2, plan-mode tools, etc.).
+    // The minimum guarantee is the full v0.7.x core tool surface.
+    expect(KODAX_TOOLS.length).toBeGreaterThanOrEqual(30);
   });
 
   it('should export getRequiredToolParams', () => {
@@ -138,10 +136,6 @@ describe('Core Module Exports', () => {
 
   it('should export getProvider function', () => {
     expect(typeof getProvider).toBe('function');
-  });
-
-  it('should export compactMessages function', () => {
-    expect(typeof compactMessages).toBe('function');
   });
 });
 
@@ -394,9 +388,22 @@ describe('Tool Definitions', () => {
 // ============== Provider 测试 ==============
 
 describe('Provider System', () => {
-  it('should have 11 providers', () => {
+  // `getProvider` instantiates the provider, which requires its API key.
+  // v0.7.45 FEATURE_102-A moved coding-plan keys onto dedicated env vars, so
+  // zhipu-coding now needs ZHIPU_CODING_API_KEY specifically.
+  beforeEach(() => {
+    vi.stubEnv('ZHIPU_CODING_API_KEY', 'test-key');
+  });
+  afterEach(() => {
+    vi.unstubAllEnvs();
+  });
+
+  it('should have at least the v0.7.0 baseline of 11 providers', () => {
     const providerCount = Object.keys(KODAX_PROVIDERS).length;
-    expect(providerCount).toBe(11);
+    // FEATURE_099 (v0.7.28) added DeepSeek V4 + ark-coding (Volcengine
+    // Ark Coding Plan); future provider catalog refreshes will continue
+    // to grow this count. The minimum guarantee is the original 11.
+    expect(providerCount).toBeGreaterThanOrEqual(11);
   });
 
   it('should throw error for unknown provider', () => {
@@ -404,23 +411,9 @@ describe('Provider System', () => {
   });
 
   it('should return provider for valid name', () => {
-    process.env.ZHIPU_API_KEY = 'test-key';
     const provider = getProvider('zhipu-coding');
     expect(provider).toBeDefined();
     expect(provider.name).toBe('zhipu-coding');
-  });
-});
-
-// ============== Compact Messages 测试 ==============
-
-describe('Compact Messages', () => {
-  it('should return same messages if under threshold', () => {
-    const messages = [
-      { role: 'user' as const, content: 'Hello' },
-      { role: 'assistant' as const, content: 'Hi!' },
-    ];
-    const compacted = compactMessages(messages);
-    expect(compacted).toEqual(messages);
   });
 });
 
@@ -440,14 +433,6 @@ describe('Constants Export', () => {
   it('should export KODAX_DEFAULT_PROVIDER', () => {
     expect(KODAX_DEFAULT_PROVIDER).toBeDefined();
     expect(typeof KODAX_DEFAULT_PROVIDER).toBe('string');
-  });
-
-  it('should export KODAX_FEATURES_FILE', () => {
-    expect(KODAX_FEATURES_FILE).toBe('feature_list.json');
-  });
-
-  it('should export KODAX_PROGRESS_FILE', () => {
-    expect(KODAX_PROGRESS_FILE).toBe('PROGRESS.md');
   });
 
   it('should export KODAX_MAX_TOKENS', () => {
@@ -573,7 +558,7 @@ describe('Tool Execution', () => {
       new_string: 'KodaX'
     }, ctx);
     expect(result).toContain('[Tool Error]');
-    expect(result).toContain('old_string not found');
+    expect(result).toContain('EDIT_NOT_FOUND');
   });
 
   it('should require replace_all for multiple occurrences', async () => {
@@ -687,17 +672,15 @@ describe('Tool Execution Context', () => {
 describe('Session ID Generation', () => {
   it('should generate valid session ID', async () => {
     const sessionId = await generateSessionId();
-    expect(sessionId).toMatch(/^\d{8}_\d{6}$/);
+    // FEATURE_219: YYYYMMDD_HHMMSS_<suffix>
+    expect(sessionId).toMatch(/^\d{8}_\d{6}_[a-z0-9]+$/);
   });
 
   it('should generate unique session IDs', async () => {
     const id1 = await generateSessionId();
-    // Small delay to ensure different timestamp
-    await new Promise(r => setTimeout(r, 10));
     const id2 = await generateSessionId();
-    // IDs should be different or same if generated in same second
-    expect(typeof id1).toBe('string');
-    expect(typeof id2).toBe('string');
+    // FEATURE_219: globally unique by construction (no same-second collision).
+    expect(id1).not.toBe(id2);
   });
 });
 
@@ -708,32 +691,6 @@ describe('Git Root Detection', () => {
     const gitRoot = await getGitRoot();
     // In a git repo, should return a string; otherwise null
     expect(gitRoot === null || typeof gitRoot === 'string').toBe(true);
-  });
-});
-
-// ============== Feature 进度测试 ==============
-
-describe('Feature Progress', () => {
-  const testDir = path.join(os.tmpdir(), 'kodax-feature-test-' + Date.now());
-
-  beforeEach(async () => {
-    await fs.mkdir(testDir, { recursive: true });
-  });
-
-  afterEach(async () => {
-    await fs.rm(testDir, { recursive: true, force: true });
-  });
-
-  it('should return [0, 0] when no feature_list.json exists', () => {
-    const [completed, total] = getFeatureProgress();
-    // Without feature_list.json in current directory
-    expect(completed).toBeGreaterThanOrEqual(0);
-    expect(total).toBeGreaterThanOrEqual(0);
-  });
-
-  it('should check all features complete', () => {
-    const result = checkAllFeaturesComplete();
-    expect(typeof result).toBe('boolean');
   });
 });
 
@@ -860,19 +817,17 @@ describe('Session Initial Messages', () => {
 describe('generateSessionId', () => {
   it('should generate session ID in correct format', async () => {
     const id = await generateSessionId();
-    // Format: YYYYMMDD_HHMMSS
-    expect(id).toMatch(/^\d{8}_\d{6}$/);
+    // FEATURE_219: Format YYYYMMDD_HHMMSS_<suffix> (date prefix + unique suffix)
+    expect(id).toMatch(/^\d{8}_\d{6}_[a-z0-9]+$/);
   });
 
-  it('should generate unique IDs', async () => {
+  it('should generate unique IDs even within the same second', async () => {
+    // FEATURE_219: ids are now globally unique by construction (suffix).
     const id1 = await generateSessionId();
-    // Small delay to ensure different timestamp
-    await new Promise(resolve => setTimeout(resolve, 10));
     const id2 = await generateSessionId();
-    // They might be the same if called within the same second
-    // So we just check the format
-    expect(id1).toMatch(/^\d{8}_\d{6}$/);
-    expect(id2).toMatch(/^\d{8}_\d{6}$/);
+    expect(id1).toMatch(/^\d{8}_\d{6}_[a-z0-9]+$/);
+    expect(id2).toMatch(/^\d{8}_\d{6}_[a-z0-9]+$/);
+    expect(id1).not.toBe(id2);
   });
 });
 
@@ -1083,3 +1038,4 @@ describe('Tool Execution Basic Tests', () => {
     });
   });
 });
+

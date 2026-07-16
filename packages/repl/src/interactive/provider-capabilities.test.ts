@@ -17,7 +17,6 @@ describe('provider capability disclosure', () => {
       thinking: true,
       reasoningMode: 'balanced',
       agentMode: 'ama',
-      parallel: false,
       permissionMode: 'accept-edits',
     };
   });
@@ -66,7 +65,6 @@ describe('provider capability disclosure', () => {
     expect(output).toContain('Long-running support: limited');
     expect(output).toContain('Common Scenarios:');
     expect(output).toContain('Long-running task: BLOCK');
-    expect(output).toContain('Project harness: BLOCK');
   });
 
   it('keeps bridge providers marked as configured and prompt-only for reasoning UX', () => {
@@ -78,8 +76,8 @@ describe('provider capability disclosure', () => {
   });
 
   it('resolves deepseek capability by active model when available', () => {
-    expect(getProviderReasoningCapability('deepseek', 'deepseek-chat')).toBe('native-toggle');
-    expect(getProviderReasoningCapability('deepseek', 'deepseek-reasoner')).toBe('none');
+    expect(getProviderReasoningCapability('deepseek', 'deepseek-v4-pro')).toBe('native-effort');
+    expect(getProviderReasoningCapability('deepseek', 'deepseek-v4-flash')).toBe('native-effort');
   });
 
   it('does not overstate MCP support for native API providers', async () => {

@@ -1,4 +1,7 @@
+import type { ToolCallSignal } from "@kodax-ai/coding";
+
 import { isBashReadCommand, isBashWriteCommand } from "../permission/permission.js";
+import { t } from "./i18n.js";
 
 const SUMMARY_MAX_LENGTH = 100;
 const NETWORK_COMMAND_PATTERN = /\b(curl|wget|invoke-webrequest|invoke-restmethod|iwr|irm)\b/i;
@@ -82,45 +85,122 @@ function summarizeCommand(command: string): string {
 
 function classifyShellIntent(command: string): string {
   if (isBashReadCommand(command)) {
-    return "Read project files";
+    return t("intent.read");
   }
   if (DELETE_COMMAND_PATTERN.test(command)) {
-    return "Delete files";
+    return t("intent.delete");
   }
   if (ENVIRONMENT_COMMAND_PATTERN.test(command)) {
-    return "Modify dependencies or environment";
+    return t("intent.deps");
   }
   if (isBashWriteCommand(command) || FILE_MODIFY_COMMAND_PATTERN.test(command)) {
-    return "Modify files";
+    return t("intent.modify");
   }
-  return "Execute command";
+  return t("intent.execute");
 }
 
 function classifyShellRisks(command: string): string[] {
   const risks: string[] = [];
 
   if (DELETE_COMMAND_PATTERN.test(command)) {
-    risks.push("Destructive change");
+    risks.push(t("risk.destructive"));
   } else if (ENVIRONMENT_COMMAND_PATTERN.test(command)) {
-    risks.push("May change dependencies or local tools");
+    risks.push(t("risk.deps"));
   } else if (isBashWriteCommand(command) || FILE_MODIFY_COMMAND_PATTERN.test(command)) {
-    risks.push("May modify files");
+    risks.push(t("risk.modify"));
   } else if (!isBashReadCommand(command)) {
-    risks.push("Command effects depend on its arguments");
+    risks.push(t("risk.unknown"));
   }
 
   if (NETWORK_COMMAND_PATTERN.test(command)) {
-    risks.push("May access network");
+    risks.push(t("risk.network"));
   }
 
   return risks;
 }
 
+// FEATURE_158: signal-driven Scope/Risk rendering for auto[llm] escalate path.
+// Plan/accept-edits keep marker-based rendering (scopeFromMarkers).
+
+function readSignals(value: unknown): readonly ToolCallSignal[] | undefined {
+  if (!Array.isArray(value)) return undefined;
+  // We trust the runtime shape — guardrail attaches the same type we read.
+  // Defensive narrowing keeps malicious inputs from crashing render.
+  return value.filter(
+    (s): s is ToolCallSignal => typeof s === "object" && s !== null && typeof (s as { kind?: unknown }).kind === "string",
+  );
+}
+
+function scopeFromSignals(signals: readonly ToolCallSignal[] | undefined): string | undefined {
+  if (!signals) return undefined;
+  if (signals.some((s) => s.kind === "protected_path")) return t("scope.protected");
+  if (signals.some((s) => s.kind === "outside_project" || s.kind === "shell_redirect_outside")) {
+    return t("scope.outside");
+  }
+  return undefined;
+}
+
+function scopeFromMarkers(input: Record<string, unknown>): string | undefined {
+  if (input._outsideProject === true) return t("scope.outside");
+  if (input._alwaysConfirm === true) return t("scope.protected");
+  return undefined;
+}
+
+function risksFromSignals(signals: readonly ToolCallSignal[] | undefined): string[] {
+  if (!signals) return [];
+  const risks: string[] = [];
+  // High-priority severity dangerous patterns surface as Destructive.
+  const hasHighDanger = signals.some((s) => s.kind === "dangerous_pattern" && s.severity === "high");
+  const hasMediumDanger = signals.some((s) => s.kind === "dangerous_pattern" && s.severity === "medium");
+  if (hasHighDanger) {
+    risks.push(t("risk.destructive"));
+  } else if (hasMediumDanger) {
+    // Medium severity = "may modify" framing (e.g. broad rm).
+    risks.push(t("risk.modify"));
+  }
+  // Network always adds its own line (orthogonal axis).
+  if (signals.some((s) => s.kind === "network")) {
+    risks.push(t("risk.network"));
+  }
+  // Package install / git write → deps-style risk.
+  if (signals.some((s) => s.kind === "package_install")) {
+    risks.push(t("risk.deps"));
+  }
+  return risks;
+}
+
+const FIELD_LABEL_KEYS: Record<ToolConfirmationField["label"], string> = {
+  Reason: "field.reason",
+  Intent: "field.intent",
+  Target: "field.target",
+  Scope: "field.scope",
+  Risk: "field.risk",
+  Summary: "field.summary",
+};
+
+function localizeFieldLabel(label: ToolConfirmationField["label"]): string {
+  return t(FIELD_LABEL_KEYS[label] as Parameters<typeof t>[0]);
+}
+
+/**
+ * FEATURE_074: truncate a long plan for dialog display.
+ *
+ * Strategy: show head + tail with an ellipsis notice in the middle. Missing the
+ * middle of a plan is recoverable — missing the tail (where the final verdict /
+ * last step typically lives) is not, because the user can't tell if the plan
+ * actually reaches a terminal state.
+ *
+ * FEATURE_075 removed the head+tail truncation: InkREPL renders the full plan
+ * in a scrollable DialogSurface panel, and readline relies on native terminal
+ * scroll. LLM-first prompt constraint in the exit_plan_mode tool description
+ * keeps plans within ~40 lines as the primary defense.
+ */
+
 function buildDisplayFromFields(title: string, fields: ToolConfirmationField[]): ToolConfirmationDisplay {
   return {
     title,
     fields,
-    details: fields.map((field) => `${field.label}: ${field.value}`),
+    details: fields.map((field) => `${localizeFieldLabel(field.label)}: ${field.value}`),
   };
 }
 
@@ -135,15 +215,38 @@ export function buildToolConfirmationDisplay(
     }
   }
 
+  // FEATURE_074/075: render the finalized plan so the user can read it before approving.
+  //
+  // Readline: receives the full plan as details (native terminal scroll handles
+  // arbitrary length).
+  //
+  // InkREPL: ignores details for this tool; DialogSurface.planContent renders
+  // the plan in a scrollable panel with approval buttons pinned (FEATURE_075).
+  if (tool === "exit_plan_mode") {
+    const plan = readString(input.plan);
+    const title = "Approve plan? (exits plan mode → accept-edits)";
+    if (plan) {
+      return {
+        title,
+        fields: [],
+        details: plan.split("\n"),
+      };
+    }
+    return buildDisplayFromFields(title, []);
+  }
+
   const fields: ToolConfirmationField[] = [];
   const path = readString(input.path);
   const command = readString(input.command);
   const reason = readString(input._reason) ?? readString(input.justification);
-  const scope = input._outsideProject === true
-    ? "Outside project"
-    : input._alwaysConfirm === true
-      ? "Protected path"
-      : undefined;
+
+  // FEATURE_158 (v0.7.39): when auto[llm] guardrail escalates, it attaches
+  // `_classifierSignals` to the confirm-dialog input. Prefer signals-based
+  // scope rendering — it's strictly richer than the marker-based path
+  // (FEATURE_066 _alwaysConfirm / _outsideProject), which serves
+  // plan / accept-edits modes that don't go through askUser.
+  const signals = readSignals(input._classifierSignals);
+  const scope = scopeFromSignals(signals) ?? scopeFromMarkers(input);
 
   pushField(fields, "Reason", reason);
 
@@ -153,7 +256,11 @@ export function buildToolConfirmationDisplay(
       if (command) {
         pushField(fields, "Intent", classifyShellIntent(command));
         pushField(fields, "Scope", scope);
-        const risks = classifyShellRisks(command);
+        // FEATURE_158: prefer signal-derived risks when present (auto[llm]
+        // escalate path); fall back to command-regex risks (plan / accept-
+        // edits / auto[rules] paths where signals aren't threaded).
+        const signalRisks = risksFromSignals(signals);
+        const risks = signalRisks.length > 0 ? signalRisks : classifyShellRisks(command);
         if (risks.length > 0) {
           pushField(fields, "Risk", risks.join("; "));
         }
@@ -162,28 +269,28 @@ export function buildToolConfirmationDisplay(
         pushField(fields, "Scope", scope);
       }
       return buildDisplayFromFields(
-        tool === "bash" ? "Execute bash command?" : "Execute shell command?",
+        tool === "bash" ? t("tool.bash.title") : t("tool.shell.title"),
         fields,
       );
     }
     case "write":
-      pushField(fields, "Intent", "Write file");
+      pushField(fields, "Intent", t("intent.write_file"));
       pushField(fields, "Target", path);
       pushField(fields, "Scope", scope);
-      return buildDisplayFromFields("Write to file?", fields);
+      return buildDisplayFromFields(t("tool.write.title"), fields);
     case "edit":
-      pushField(fields, "Intent", "Edit file");
+      pushField(fields, "Intent", t("intent.edit_file"));
       pushField(fields, "Target", path);
       pushField(fields, "Scope", scope);
-      return buildDisplayFromFields("Edit file?", fields);
+      return buildDisplayFromFields(t("tool.edit.title"), fields);
     default:
-      pushField(fields, "Intent", `Use ${tool}`);
+      pushField(fields, "Intent", t("intent.use_tool", { tool }));
       pushField(fields, "Target", path);
       pushField(fields, "Scope", scope);
       if (command) {
         pushField(fields, "Summary", summarizeCommand(command));
       }
-      return buildDisplayFromFields(`Execute ${tool}?`, fields);
+      return buildDisplayFromFields(t("tool.generic.title", { tool }), fields);
   }
 }
 

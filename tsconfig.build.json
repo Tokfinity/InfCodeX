@@ -1,8 +1,7 @@
 {
   "files": [],
   "references": [
-    { "path": "./packages/ai" },
-    { "path": "./packages/skills" },
+    { "path": "./packages/llm" },
     { "path": "./packages/agent" },
     { "path": "./packages/coding" },
     { "path": "./packages/repl" }

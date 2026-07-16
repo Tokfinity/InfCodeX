@@ -12,7 +12,7 @@ import {
   type KeypressHandler,
   createKeypressManager,
   type KeypressManager,
-} from "@kodax/repl";
+} from "@kodax-ai/repl";
 
 // === Test Helpers ===
 

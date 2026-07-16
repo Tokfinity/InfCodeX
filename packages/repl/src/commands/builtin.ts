@@ -8,6 +8,7 @@
 
 import type { CommandRegistry } from './registry.js';
 import { toCommandDefinition } from './types.js';
+import { emitKodaXDiagnostic } from '@kodax-ai/agent';
 
 // Import builtin commands from the interactive command module, which now
 // serves as the single source of truth for shipped REPL commands.
@@ -25,7 +26,12 @@ export function registerBuiltinCommands(registry: CommandRegistry): void {
       const def = toCommandDefinition(cmd, 'builtin');
       registry.register(def);
     } catch (error) {
-      console.error(`Failed to register command "${cmd.name}":`, error);
+      emitKodaXDiagnostic({
+        source: 'repl:commands',
+        level: 'error',
+        message: `Failed to register command "${cmd.name}".`,
+        detail: error,
+      });
     }
   }
 }

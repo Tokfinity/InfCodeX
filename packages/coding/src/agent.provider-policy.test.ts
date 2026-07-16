@@ -6,12 +6,12 @@ import type {
   KodaXReasoningRequest,
   KodaXStreamResult,
   KodaXToolDefinition,
-} from '@kodax/ai';
+} from '@kodax-ai/llm';
 import {
   clearRuntimeModelProviders,
   KodaXBaseProvider,
   registerModelProvider,
-} from '@kodax/ai';
+} from '@kodax-ai/llm';
 import { runKodaX } from './agent.js';
 
 const TEST_PROVIDER_NAME = 'feature-029-bridge-provider';
@@ -81,22 +81,22 @@ describe('runKodaX provider policy integration', () => {
     delete process.env[TEST_PROVIDER_API_KEY_ENV];
   });
 
-  it('blocks long-running project flows before the provider stream starts', async () => {
+  it('blocks long-running flows on lossy bridge providers before the provider stream starts', async () => {
     const result = await runKodaX(
       {
         provider: TEST_PROVIDER_NAME,
         context: {
           providerPolicyHints: {
             longRunning: true,
-            harness: 'project',
           },
+          repoIntelligenceMode: 'off',
         },
       },
-      'Finish the managed task and keep project mode active.',
+      'Finish the managed task and keep the session active across turns.',
     );
-
     expect(result.success).toBe(false);
     expect(result.errorMetadata?.lastError).toMatch(/\[Provider Policy\]/);
+    expect(result.routingDecision?.harnessProfile).toBe('H0_DIRECT');
     expect(Feature029BridgeProvider.calls).toEqual([]);
   });
 
@@ -105,31 +105,48 @@ describe('runKodaX provider policy integration', () => {
       {
         provider: TEST_PROVIDER_NAME,
         reasoningMode: 'off',
-        context: {
-          providerPolicyHints: {
-            evidenceHeavy: true,
-          },
-        },
       },
-      'Summarize the current diff in one paragraph.',
+      'Please review this change for merge blockers and failing tests.',
     );
 
     expect(result.success).toBe(true);
     expect(Feature029BridgeProvider.calls).toHaveLength(1);
     expect(Feature029BridgeProvider.calls[0]?.system).toContain(
-      'Provider uses a CLI bridge rather than a native API, so semantic parity should not be assumed.',
+      `[Provider Policy] provider=${TEST_PROVIDER_NAME}; status=warn.`,
     );
     expect(Feature029BridgeProvider.calls[0]?.system).toContain(
-      'Provider forwards only the latest user message instead of preserving full-history semantics.',
+      '[Provider Semantics] transport=cli-bridge; context=lossy',
     );
     expect(Feature029BridgeProvider.calls[0]?.system).toContain(
-      'Evidence-heavy routing remains available, but this provider can lose prior-turn context and should not be treated as equivalent to full-history providers.',
+      '[Provider Constraint] WARN:',
     );
+    // Router harness/mode overlay retired (ADR-043 P1.7): the SA agent now
+    // self-judges from the static EXECUTION GUIDANCE block instead of being
+    // told its harness tier. Provider-policy notes (asserted above) still flow
+    // via the separate provider-policy-gate path — they are NOT affected.
+    expect(Feature029BridgeProvider.calls[0]?.system).toContain('EXECUTION GUIDANCE');
+    expect(Feature029BridgeProvider.calls[0]?.system).not.toContain('[Harness Profile');
     expect(
-      Feature029BridgeProvider.calls[0]?.system.match(/Provider uses a CLI bridge rather than a native API/g)?.length ?? 0,
+      Feature029BridgeProvider.calls[0]?.system.match(
+        new RegExp(`\\[Provider Policy\\] provider=${TEST_PROVIDER_NAME}; status=warn\\.`, 'g'),
+      )?.length ?? 0,
     ).toBe(1);
+    expect(result.routingDecision?.primaryTask).toBe('review');
     expect(result.routingDecision?.harnessProfile).toBe('H0_DIRECT');
-  });
+  // 180_000 (was 90_000 → 60_000 → 30_000): runKodaX with mock provider
+  // takes ~22-26s baseline (system prompt build + routing pipeline +
+  // iteration scaffolding). Under full-suite parallel load (~4800
+  // concurrent tests as of v0.7.37) the wall-clock has pushed past
+  // 90s on heavily-loaded runs (observed: 90005ms timeout). Each
+  // version adds tests so the headroom needs to grow with the suite.
+  // 180s gives ~150s headroom against the worst observed wall-clock.
+  // NOTE: Vitest's timeout aborts the it-block but does NOT cancel
+  // the runKodaX substrate's in-flight provider.stream — a timeout
+  // here therefore cascades into the next test's
+  // `Feature029BridgeProvider.calls` length assertion (leaked call
+  // lands in the next test's bucket). Keeping deterministic headroom
+  // prevents that cascade.
+  }, 180_000);
 
   it('allows benign text-only prompts that merely mention MCP, project mode, or screenshots', async () => {
     const result = await runKodaX(
@@ -137,7 +154,7 @@ describe('runKodaX provider policy integration', () => {
         provider: TEST_PROVIDER_NAME,
         reasoningMode: 'off',
       },
-      'Explain how screenshot support, project mode, and MCP are described in the docs.',
+      'Write release notes about screenshot support, project mode updates, and how MCP fits into the docs.',
     );
 
     expect(result.success).toBe(true);
@@ -149,5 +166,10 @@ describe('runKodaX provider policy integration', () => {
       '[Provider Constraint]',
     );
     expect(result.routingDecision?.harnessProfile).toBe('H0_DIRECT');
-  });
+  // 180_000: see preceding test for rationale. Bumped together so the
+  // pair stays symmetric — if the warning-only test times out and leaks
+  // its substrate, this test's `calls.length === 1` assertion absorbs
+  // the leaked call and fails with "got 2 vs 1". Keeping both tests
+  // bounded above the worst observed wall-clock prevents the cascade.
+  }, 180_000);
 });

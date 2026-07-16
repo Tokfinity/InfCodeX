@@ -1,14 +1,22 @@
 import { describe, it, expect, beforeEach, afterEach, vi } from "vitest";
-import { mkdirSync, writeFileSync, rmSync } from "node:fs";
+import { mkdirSync, writeFileSync, rmSync, mkdtempSync, utimesSync, statSync } from "node:fs";
+import { tmpdir } from "node:os";
 import { join, resolve } from "node:path";
-import { loadAgentsFiles, formatAgentsForPrompt, getKodaxGlobalDir } from "./agents-loader.js";
+import {
+  loadAgentsFiles,
+  formatAgentsForPrompt,
+  getKodaxGlobalDir,
+  clearAgentsLoaderCacheForTesting,
+} from "./agents-loader.js";
 
 describe("agents-loader", () => {
-  const testDir = join(__dirname, "test-fixture-agents");
+  // Use OS tmpdir so the parent-directory walk doesn't pick up the repo's
+  // own AGENTS.md / CLAUDE.md (added in fb15937 — moving this fixture out
+  // of the repo prevents the loader from finding ancestor agent files).
+  let testDir: string;
 
   beforeEach(() => {
-    // Create test directory structure
-    mkdirSync(testDir, { recursive: true });
+    testDir = mkdtempSync(join(tmpdir(), "kodax-agents-loader-"));
   });
 
   afterEach(() => {
@@ -38,21 +46,25 @@ describe("agents-loader", () => {
       expect(files[0].scope).toBe("directory");
     });
 
-    it("should prefer AGENTS.md over CLAUDE.md", () => {
+    // v0.7.38 (2026-05-09): KodaX only reads `AGENTS.md`. `CLAUDE.md` is
+    // intentionally NOT a fallback — it is Claude Code-specific project
+    // guidance and is rejected to prevent semantic mis-injection. See the
+    // rationale on `CONTEXT_FILE_CANDIDATES` in agents-loader.ts.
+    it("only reads AGENTS.md when both AGENTS.md and CLAUDE.md exist", () => {
       writeFileSync(join(testDir, "AGENTS.md"), "# AGENTS");
       writeFileSync(join(testDir, "CLAUDE.md"), "# CLAUDE");
 
       const files = loadAgentsFiles({ cwd: testDir });
       expect(files).toHaveLength(1);
       expect(files[0].content).toBe("# AGENTS");
+      expect(files[0].path).toMatch(/AGENTS\.md$/);
     });
 
-    it("should load CLAUDE.md if AGENTS.md does not exist", () => {
+    it("does NOT fall back to CLAUDE.md when AGENTS.md is missing (v0.7.38 breaking)", () => {
       writeFileSync(join(testDir, "CLAUDE.md"), "# CLAUDE");
 
       const files = loadAgentsFiles({ cwd: testDir });
-      expect(files).toHaveLength(1);
-      expect(files[0].content).toBe("# CLAUDE");
+      expect(files).toHaveLength(0);
     });
 
     it("should load .kodax/AGENTS.md with project scope", () => {
@@ -85,7 +97,13 @@ describe("agents-loader", () => {
       expect(files).toHaveLength(1);
     });
 
-    it("should handle file read errors gracefully", () => {
+    it("should handle file read errors gracefully (silent — CLAUDE.md no-console rule)", () => {
+      // FEATURE_149 v0.7.38: previously emitted `console.warn` on read
+      // failure-after-stat-success, but the project rule (CLAUDE.md)
+      // forbids `console.log/warn` in production code. Treat as absent
+      // — same outcome as the pre-FEATURE_149 silent behavior. Pin that
+      // no warn fires so a future `console.warn` re-introduction trips
+      // this test.
       const consoleWarnSpy = vi.spyOn(console, "warn").mockImplementation(() => {});
 
       // Create a directory with same name as file to cause read error
@@ -94,7 +112,7 @@ describe("agents-loader", () => {
 
       const files = loadAgentsFiles({ cwd: testDir });
       expect(files).toHaveLength(0);
-      expect(consoleWarnSpy).toHaveBeenCalled();
+      expect(consoleWarnSpy).not.toHaveBeenCalled();
 
       consoleWarnSpy.mockRestore();
     });
@@ -239,6 +257,73 @@ describe("agents-loader", () => {
       expect(result).toContain("Global Rules");
       expect(result).toContain("Project Rules");
       expect(result).toContain("Directory Rules");
+    });
+  });
+
+  // FEATURE_149 Phase 1.2 (v0.7.38) — mtime-based cache hit/miss behavior.
+  describe("mtime cache", () => {
+    beforeEach(() => {
+      clearAgentsLoaderCacheForTesting();
+    });
+
+    it("returns cached content when mtime is unchanged (no re-read)", () => {
+      const filePath = join(testDir, "AGENTS.md");
+      // Anchor mtime to a stable past timestamp so both reads see the SAME
+      // mtimeMs value regardless of OS clock precision (Windows NTFS sub-ms
+      // can otherwise drift during `utimesSync`).
+      const anchor = new Date("2024-01-01T00:00:00.000Z");
+
+      writeFileSync(filePath, "cached-bytes");
+      utimesSync(filePath, anchor, anchor);
+
+      // Cold load — populates cache with anchor mtime + "cached-bytes".
+      const first = loadAgentsFiles({ cwd: testDir, projectRoot: testDir });
+      expect(first).toHaveLength(1);
+      expect(first[0].content).toBe("cached-bytes");
+
+      // Modify file content but re-pin mtime to the SAME anchor. If the
+      // cache is honored, the next read must return the OLD bytes; if the
+      // loader re-reads from disk, we'd see the new bytes.
+      writeFileSync(filePath, "fresh-bytes-not-cached");
+      utimesSync(filePath, anchor, anchor);
+
+      const second = loadAgentsFiles({ cwd: testDir, projectRoot: testDir });
+      expect(second[0].content).toBe("cached-bytes");
+    });
+
+    it("re-reads the file when its mtime changes", () => {
+      const filePath = join(testDir, "AGENTS.md");
+      writeFileSync(filePath, "v1");
+
+      const first = loadAgentsFiles({ cwd: testDir, projectRoot: testDir });
+      expect(first[0].content).toBe("v1");
+
+      // Mutate the file and bump its mtime forward.
+      writeFileSync(filePath, "v2");
+      const futureMtime = new Date(Date.now() + 60_000);
+      utimesSync(filePath, futureMtime, futureMtime);
+
+      const second = loadAgentsFiles({ cwd: testDir, projectRoot: testDir });
+      expect(second[0].content).toBe("v2");
+    });
+
+    it("evicts the cache entry when the file is removed", () => {
+      const filePath = join(testDir, "AGENTS.md");
+      writeFileSync(filePath, "doomed");
+
+      const first = loadAgentsFiles({ cwd: testDir, projectRoot: testDir });
+      expect(first).toHaveLength(1);
+
+      rmSync(filePath);
+
+      const second = loadAgentsFiles({ cwd: testDir, projectRoot: testDir });
+      expect(second).toHaveLength(0);
+
+      // Recreate with new content; cache must miss and re-read.
+      writeFileSync(filePath, "reborn");
+      const third = loadAgentsFiles({ cwd: testDir, projectRoot: testDir });
+      expect(third).toHaveLength(1);
+      expect(third[0].content).toBe("reborn");
     });
   });
 });

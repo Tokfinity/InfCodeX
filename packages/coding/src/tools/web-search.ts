@@ -1,0 +1,229 @@
+import type { KodaXToolExecutionContext } from '../types.js';
+import { readOptionalString } from './internal.js';
+import {
+  convertProviderSearchResults,
+  finalizeRetrievalResult,
+  readResponseTextLimited,
+  stripHtmlToText,
+} from './retrieval.js';
+
+const DEFAULT_LIMIT = 5;
+const MAX_LIMIT = 10;
+const FETCH_TIMEOUT_MS = 12_000;
+const SEARCH_MAX_BYTES = 256 * 1024;
+const SEARCH_ENDPOINT_ENV = 'KODAX_WEB_SEARCH_ENDPOINT';
+// Bing is reachable from mainland China (DuckDuckGo is GFW-blocked), so it is the
+// default engine. Node fetch follows Bing's regional redirect automatically.
+const DEFAULT_SEARCH_ENDPOINT = 'https://www.bing.com/search';
+
+function clampLimit(input: unknown): number {
+  const value = typeof input === 'number' && Number.isFinite(input)
+    ? Math.floor(input)
+    : DEFAULT_LIMIT;
+  return Math.max(1, Math.min(MAX_LIMIT, value));
+}
+
+function createFetchTimeoutSignal(timeoutMs: number): AbortSignal {
+  const controller = new AbortController();
+  setTimeout(() => controller.abort(), timeoutMs).unref?.();
+  return controller.signal;
+}
+
+function buildSearchUrl(query: string): URL {
+  const endpoint = process.env[SEARCH_ENDPOINT_ENV] || DEFAULT_SEARCH_ENDPOINT;
+  if (endpoint.includes('{query}')) {
+    return new URL(endpoint.replace('{query}', encodeURIComponent(query)));
+  }
+
+  const url = new URL(endpoint);
+  if (!url.searchParams.has('q')) {
+    url.searchParams.set('q', query);
+  } else {
+    url.searchParams.set('q', query);
+  }
+  return url;
+}
+
+function resolveSearchHref(rawHref: string, searchUrl: URL): string | undefined {
+  try {
+    const url = new URL(rawHref, searchUrl);
+    const redirected = url.searchParams.get('uddg');
+    if (redirected) {
+      return decodeURIComponent(redirected);
+    }
+    if (url.protocol !== 'http:' && url.protocol !== 'https:') {
+      return undefined;
+    }
+    return url.toString();
+  } catch {
+    return undefined;
+  }
+}
+
+function parseSearchResults(html: string, searchUrl: URL, limit: number) {
+  const results: Array<{
+    title: string;
+    locator: string;
+    snippet?: string;
+  }> = [];
+  const seen = new Set<string>();
+  const anchorPattern = /<a\b[^>]*href="([^"]+)"[^>]*>([\s\S]*?)<\/a>/gi;
+
+  for (const match of html.matchAll(anchorPattern)) {
+    const href = match[1]?.trim();
+    const title = stripHtmlToText(match[2] ?? '').trim();
+    if (!href || !title) {
+      continue;
+    }
+    const locator = resolveSearchHref(href, searchUrl);
+    if (!locator || seen.has(locator)) {
+      continue;
+    }
+    seen.add(locator);
+    results.push({
+      title,
+      locator,
+    });
+    if (results.length >= limit) {
+      break;
+    }
+  }
+
+  return results;
+}
+
+function isBingHost(host: string): boolean {
+  return host === 'bing.com' || host.endsWith('.bing.com');
+}
+
+// Bing renders each organic result title as `<h2><a href="...">title</a></h2>`,
+// so the generic anchor scan (which depends on DuckDuckGo's `uddg=` redirect
+// markers) would otherwise return Bing's own navigation chrome instead.
+export function parseBingResults(html: string, limit: number) {
+  const results: Array<{
+    title: string;
+    locator: string;
+    snippet?: string;
+  }> = [];
+  const seen = new Set<string>();
+  const headingPattern = /<h2\b[^>]*>\s*<a\b[^>]*href="([^"]+)"[^>]*>([\s\S]*?)<\/a>/gi;
+
+  // Bing stacks paid ads (`b_ad`) above the organic block (`b_algo`). Scanning
+  // from the first organic block skips that ad stack so results stay relevant.
+  const organicStart = html.indexOf('b_algo');
+  const scope = organicStart >= 0 ? html.slice(organicStart) : html;
+
+  for (const match of scope.matchAll(headingPattern)) {
+    const href = (match[1] ?? '').trim().replace(/&amp;/g, '&');
+    const title = stripHtmlToText(match[2] ?? '').trim();
+    if (!href || !title || !/^https?:\/\//i.test(href)) {
+      continue;
+    }
+    // Drop Bing's ad/click-tracking redirects; keep only direct destinations.
+    if (/\/(aclk|aclick)\b/i.test(href) || /\/ck\/a\b/i.test(href)) {
+      continue;
+    }
+    if (seen.has(href)) {
+      continue;
+    }
+    seen.add(href);
+    results.push({
+      title,
+      locator: href,
+    });
+    if (results.length >= limit) {
+      break;
+    }
+  }
+
+  return results;
+}
+
+export async function toolWebSearch(
+  input: Record<string, unknown>,
+  ctx: KodaXToolExecutionContext,
+): Promise<string> {
+  try {
+    const query = readOptionalString(input, 'query');
+    if (!query) {
+      throw new Error('query is required.');
+    }
+    const limit = clampLimit(input.limit);
+    const providerId = readOptionalString(input, 'provider_id');
+
+    if (providerId) {
+      if (!ctx.extensionRuntime) {
+        throw new Error('provider-backed web_search requires an active extension runtime.');
+      }
+      const probedResults = await ctx.extensionRuntime.searchCapabilities(providerId, query, {
+        limit: limit + 1,
+      });
+      const hasMore = probedResults.length > limit;
+      const providerResults = probedResults.slice(0, limit);
+      const limitStatus = hasMore
+        ? `[RESULT_LIMIT_REACHED: limit=${limit}; additional provider matches were omitted.] `
+        : '';
+      return finalizeRetrievalResult({
+        tool: 'web_search',
+        query,
+        scope: 'remote',
+        trust: 'provider',
+        freshness: 'unknown',
+        provider: providerId,
+        summary: `${limitStatus}${providerResults.length > 0
+          ? `Provider ${providerId} returned ${providerResults.length} search result(s).`
+          : `Provider ${providerId} returned no search results for "${query}".`}`,
+        items: convertProviderSearchResults(providerResults, limit),
+        metadata: {
+          endpoint: 'provider-search',
+        },
+      }, ctx);
+    }
+
+    const searchUrl = buildSearchUrl(query);
+    const response = await fetch(searchUrl, {
+      signal: createFetchTimeoutSignal(FETCH_TIMEOUT_MS),
+      headers: {
+        'user-agent': 'KodaX/0.7 retrieval',
+        accept: 'text/html,text/plain;q=0.8,*/*;q=0.5',
+      },
+    });
+    const { text: html, truncated, bytesRead } = await readResponseTextLimited(response, SEARCH_MAX_BYTES);
+    const probedItems = isBingHost(searchUrl.hostname)
+      ? parseBingResults(html, limit + 1)
+      : parseSearchResults(html, searchUrl, limit + 1);
+    const items = probedItems.slice(0, limit);
+    const limitStatus = probedItems.length > limit
+      ? `[RESULT_LIMIT_REACHED: limit=${limit}; additional parsed matches were omitted.] `
+      : '';
+    const sourceStatus = truncated
+      ? `[SOURCE_INCOMPLETE: response exceeded the ${SEARCH_MAX_BYTES / 1024} KiB network acquisition safety limit.] `
+      : '';
+
+    return finalizeRetrievalResult({
+      tool: 'web_search',
+      query,
+      scope: 'remote',
+      trust: 'open-world',
+      freshness: 'fresh',
+      summary: `${sourceStatus}${limitStatus}${items.length > 0
+        ? `Found ${items.length} web search result(s) for "${query}".`
+        : `No web search results for "${query}".`}`,
+      items,
+      artifacts: items.map((item) => ({
+        kind: 'url',
+        label: item.title,
+        value: item.locator,
+      })),
+      metadata: {
+        endpoint: searchUrl.origin,
+        status: response.status,
+        bytesRead,
+        truncated,
+      },
+    }, ctx);
+  } catch (error) {
+    const message = error instanceof Error ? error.message : String(error);
+    return `[Tool Error] web_search: ${message}`;
+  }
+}

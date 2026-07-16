@@ -3,12 +3,16 @@
  */
 
 import type {
+  WorkflowProcessSource,
+} from '@kodax-ai/agent';
+import type {
   AgentsFile,
   KodaXAgentMode,
+  KodaXRepoIntelligenceMode,
   KodaXOptions,
   KodaXReasoningMode,
   KodaXSkillInvocationContext,
-} from '@kodax/coding';
+} from '@kodax-ai/coding';
 import type * as readline from 'readline';
 import type { InteractiveContext } from '../interactive/context.js';
 import type { PermissionMode } from '../permission/types.js';
@@ -48,19 +52,44 @@ export interface CommandExecutionMetadata {
 export interface CurrentConfig {
   provider: string;
   model?: string;
+  effort?: string;
+  effortOverride?: boolean;
+  planModeEffort?: string;
   thinking: boolean;
   reasoningMode: KodaXReasoningMode;
   agentMode: KodaXAgentMode;
-  parallel: boolean;
   permissionMode: PermissionMode;
+  repoIntelligenceMode?: KodaXRepoIntelligenceMode;
+  repoIntelligenceTrace?: boolean;
+  /** FEATURE_102 Phase 3 — cross-provider child fallback chain. */
+  fallbackProviders?: string[];
+}
+
+export type RuntimeSurfaceMode = 'embedded' | 'daemon';
+
+export interface RuntimeSurfaceStatus {
+  readonly mode: RuntimeSurfaceMode;
+  readonly runtimeId: string;
+  readonly profile: string;
+  readonly startedAt?: string;
+  readonly endpoint?: string;
+  readonly health?: string;
+  readonly sessions?: number;
+  readonly runs?: number;
+  readonly activeRuns?: number;
+  readonly queuedRuns?: number;
+  readonly pendingPermissions?: number;
+  readonly workflows?: number;
 }
 
 export type SessionLoadStatus = 'loaded' | 'missing' | 'blocked';
 export type SessionBranchSwitchStatus = 'switched' | 'missing' | 'blocked';
 export type SessionForkStatus = 'forked' | 'failed' | 'blocked';
+export type SessionRewindStatus = 'rewound' | 'failed' | 'blocked';
+export type SessionRecoverStatus = 'recovered' | 'empty' | 'failed' | 'blocked';
 
 export interface CommandCallbacks {
-  exit: () => void;
+  exit: () => void | Promise<void>;
   saveSession: () => Promise<void>;
   startNewSession?: () => void;
   loadSession: (id: string) => Promise<SessionLoadStatus>;
@@ -68,24 +97,84 @@ export interface CommandCallbacks {
   clearHistory: () => void;
   printHistory: () => void;
   switchProvider?: (provider: string, model?: string) => void;
+  setEffort?: (effort?: string) => void;
   setThinking?: (enabled: boolean) => void;
   setReasoningMode?: (mode: KodaXReasoningMode) => void;
   setAgentMode?: (mode: KodaXAgentMode) => void;
-  setParallel?: (enabled: boolean) => void;
   setPermissionMode?: (mode: PermissionMode) => void;
+  setRepoIntelligenceRuntime?: (update: {
+    mode?: KodaXRepoIntelligenceMode;
+    trace?: boolean;
+  }) => void;
   deleteSession?: (id: string) => Promise<void>;
   deleteAllSessions?: () => Promise<void>;
-  setPlanMode?: (enabled: boolean) => void;
   createKodaXOptions?: () => KodaXOptions;
   reloadAgentsFiles?: () => Promise<AgentsFile[]>;
   confirm?: (message: string) => Promise<boolean>;
   readline?: readline.Interface;
+  onWorkflowBuilderEvent?: (event: {
+    readonly stage: string;
+    readonly message: string;
+  }) => void;
+  onWorkflowRunMessage?: (event: {
+    readonly type: 'info' | 'success' | 'error' | 'event' | 'assistant';
+    readonly text: string;
+    readonly final?: boolean;
+  }) => void;
+  onWorkflowRunUpdate?: (event: {
+    readonly runId: string;
+    readonly workflow: string;
+    readonly status: 'running' | 'completed' | 'failed' | 'stopped';
+    readonly phase?: string;
+    readonly phaseIndex?: number;
+    readonly phaseTotal?: number;
+    readonly startedAt?: number;
+    readonly elapsedMs?: number;
+    readonly activeAgents: readonly string[];
+    readonly totalSpawned: number;
+    readonly plannedAgents?: number;
+    readonly agentCap?: number;
+    readonly tokenBudgetSpent?: number;
+    readonly tokenBudgetTotal?: number;
+    readonly completedAgents: number;
+    readonly failedAgents: number;
+    readonly stoppedAgents: number;
+    readonly message?: string;
+    readonly locale?: 'en' | 'zh';
+  }) => void;
   startCompacting?: () => void;
   stopCompacting?: () => void;
+  /**
+   * Fired by `/compact` after a successful manual compaction so the UI
+   * layer can update its live token count (mirrors the agent-runtime
+   * `onCompactStats` for auto-compaction). Without this, the status bar
+   * keeps showing the pre-compact `liveTokenCount` because that field
+   * outranks `context.contextTokenSnapshot` in the cascade.
+   */
+  onCompactStats?: (info: { tokensBefore: number; tokensAfter: number }) => void;
   printSessionTree?: () => Promise<void>;
   switchSessionBranch?: (selector: string) => Promise<SessionBranchSwitchStatus>;
   labelSessionBranch?: (selector: string, label?: string) => Promise<boolean>;
   forkSession?: (selector?: string) => Promise<SessionForkStatus>;
+  recoverSession?: (prompt?: string) => Promise<SessionRecoverStatus>;
+  rewindSession?: (selector?: string) => Promise<SessionRewindStatus>;
+  getCostReport?: () => string | null;
+  getRuntimeStatus?: () => Promise<RuntimeSurfaceStatus | undefined>;
+  /**
+   * FEATURE_092 phase 2b.8: read-only stats accessor for the auto-mode
+   * classifier guardrail. Returns undefined when the guardrail hasn't been
+   * constructed yet (REPL never entered auto mode this session). The
+   * returned snapshot is a copy of references — caller cannot mutate
+   * guardrail state through it. Used by `/auto-engine` (show), `/auto-denials`,
+   * and the status bar engine indicator.
+   */
+  getAutoModeStats?: () => import('@kodax-ai/coding').AutoModeStats | undefined;
+  /**
+   * FEATURE_092 phase 2b.8: manual engine setter for `/auto-engine llm|rules`.
+   * No-op when the guardrail hasn't been constructed yet. Threshold downgrades
+   * still operate normally — a subsequent denial cross will downgrade again.
+   */
+  setAutoModeEngine?: (engine: 'llm' | 'rules') => void;
   ui: UIContext;
 }
 
@@ -94,8 +183,8 @@ export interface CommandResultData {
   message?: string;
   data?: unknown;
   skillContent?: string;
-  projectInitPrompt?: string;
   invocation?: CommandInvocationRequest;
+  workflow?: CommandWorkflowInvocationRequest;
 }
 
 export interface CommandInvocationRequest extends CommandExecutionMetadata {
@@ -104,6 +193,25 @@ export interface CommandInvocationRequest extends CommandExecutionMetadata {
   displayName: string;
   path?: string;
   skillInvocation?: KodaXSkillInvocationContext;
+  /**
+   * FEATURE_246: per-turn agent-mode elevation for this invocation only.
+   * The `/workflow` command in AMA sets this to `'amaw'` so its authoring turn
+   * gets `run_workflow` (scout-then-author) — matching AMAW's capability without
+   * making plain AMA self-activate workflows from natural language. The session
+   * mode is unchanged; only this one turn runs elevated.
+   */
+  agentModeOverride?: KodaXAgentMode;
+}
+
+export interface CommandWorkflowInvocationRequest {
+  request: string;
+  source: 'command' | 'natural-language';
+  displayName: string;
+  processSource?: WorkflowProcessSource;
+  builtin?: {
+    name: string;
+    args: unknown;
+  };
 }
 
 export type CommandResult = boolean | CommandResultData;

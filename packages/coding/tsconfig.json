@@ -3,13 +3,9 @@
     "target": "ES2022",
     "module": "NodeNext",
     "moduleResolution": "NodeNext",
-    "baseUrl": ".",
-    "paths": {
-      "@kodax/agent": ["../agent/src/index.ts"],
-      "@kodax/ai": ["../ai/src/index.ts"],
-      "@kodax/skills": ["../skills/src/index.ts"]
-    },
-    "lib": ["ES2022"],
+    "lib": [
+      "ES2022"
+    ],
     "outDir": "./dist",
     "rootDir": "./src",
     "strict": true,
@@ -24,10 +20,21 @@
     "tsBuildInfoFile": "./dist/tsconfig.tsbuildinfo"
   },
   "references": [
-    { "path": "../ai" },
-    { "path": "../agent" },
-    { "path": "../skills" }
+    {
+      "path": "../llm"
+    },
+    {
+      "path": "../agent"
+    }
   ],
-  "include": ["src/**/*.ts"],
-  "exclude": ["node_modules", "dist"]
+  "include": [
+    "src/**/*.ts"
+  ],
+  "exclude": [
+    "node_modules",
+    "dist",
+    "**/*.test.ts",
+    "**/*.test.tsx",
+    "**/__tests__/**"
+  ]
 }

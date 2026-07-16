@@ -37,7 +37,34 @@ describe("live-streaming", () => {
       currentRound: 1,
       maxRounds: 4,
       phase: "worker",
-    })).toBe("AMA H2 - Planner starting");
+    })).toBe("AMA Planner - Planner starting");
+  });
+
+  it("keeps worker completion summaries in managed-task breadcrumbs", () => {
+    expect(formatManagedTaskBreadcrumb({
+      agentMode: "ama",
+      harnessProfile: "H2_PLAN_EXECUTE_EVAL",
+      activeWorkerTitle: "Planner",
+      currentRound: 1,
+      maxRounds: 4,
+      phase: "worker",
+      note: "Planner completed: Compared ScrollBox ownership with Claude's fullscreen host.",
+    })).toBe("AMA Planner - Planner completed: Compared ScrollBox ownership with Claude's fullscreen host.");
+  });
+
+  it("uses the expanded detail note when transcript show-all requests the full breadcrumb", () => {
+    expect(formatManagedTaskBreadcrumb({
+      agentMode: "ama",
+      harnessProfile: "H2_PLAN_EXECUTE_EVAL",
+      activeWorkerTitle: "Planner",
+      currentRound: 1,
+      maxRounds: 4,
+      phase: "worker",
+      note: "Planner completed: compact summary",
+      detailNote: "Planner completed: compact summary\n\nFull multiline planner detail that should stay available in transcript mode.",
+    }, { expanded: true })).toBe(
+      "AMA Planner - Planner completed: compact summary\n\nFull multiline planner detail that should stay available in transcript mode."
+    );
   });
 
   it("shows round info only after an actual additional pass starts", () => {
@@ -48,7 +75,7 @@ describe("live-streaming", () => {
       currentRound: 2,
       maxRounds: 4,
       phase: "worker",
-    })).toBe("AMA H2 - Generator starting - Round 2/4");
+    })).toBe("AMA Generator - Generator starting - Round 2/4");
   });
 
   it("formats managed-task routing breadcrumbs", () => {
@@ -68,7 +95,25 @@ describe("live-streaming", () => {
       maxRounds: 2,
       phase: "round",
       note: "Starting refinement round 2",
-    })).toBe("AMA H1 - Starting refinement round 2");
+    })).toBe("AMA - Starting refinement round 2");
+  });
+
+  it("formats sidecar verifier live labels instead of falling back to PLANNED", () => {
+    expect(formatManagedTaskLiveStatusLabel({
+      agentMode: "ama",
+      harnessProfile: "PLANNED",
+      phase: "verifying",
+      note: "Verifying agent output",
+    })).toBe("[AMA Verifying] Verifying agent output");
+  });
+
+  it("formats sidecar verifier breadcrumbs", () => {
+    expect(formatManagedTaskBreadcrumb({
+      agentMode: "ama",
+      harnessProfile: "PLANNED",
+      phase: "verifying",
+      note: "Verifying agent output",
+    })).toBe("AMA Verifying - Verifying agent output");
   });
 
   it("formats managed-task live labels for round updates without a worker title", () => {
@@ -92,6 +137,31 @@ describe("live-streaming", () => {
     })).toBe("[Scout] analyzing task complexity");
   });
 
+  it("renders [Worker] in V2 preflight live labels (FEATURE_114 v0.7.38)", () => {
+    // V2 entry is chain.worker; the runner now emits Worker on
+    // preflight so the live label must follow the supplied title
+    // instead of the V1 hardcoded "Scout".
+    expect(formatManagedTaskLiveStatusLabel({
+      agentMode: "ama",
+      harnessProfile: "PLANNED",
+      activeWorkerTitle: "Worker",
+      phase: "preflight",
+      note: "Worker analyzing task",
+    })).toBe("[Worker] analyzing task");
+  });
+
+  it("renders V2 preflight breadcrumb as 'AMA Worker - …'", () => {
+    expect(formatManagedTaskBreadcrumb({
+      agentMode: "ama",
+      harnessProfile: "PLANNED",
+      activeWorkerTitle: "Worker",
+      currentRound: 0,
+      maxRounds: 8,
+      phase: "preflight",
+      note: "Worker analyzing task",
+    })).toBe("AMA Worker - Worker analyzing task");
+  });
+
   it("keeps worker completion notes in managed-task live labels", () => {
     expect(formatManagedTaskLiveStatusLabel({
       agentMode: "ama",
@@ -99,7 +169,7 @@ describe("live-streaming", () => {
       activeWorkerTitle: "Planner",
       phase: "worker",
       note: "Planner completed",
-    })).toBe("[Phase] AMA H1 - Planner - completed");
+    })).toBe("[Phase] AMA Planner - completed");
   });
 
   it("formats silent tool-only iteration summaries", () => {

@@ -37,4 +37,17 @@ describe("managed-run-context", () => {
     expect(result.gitRoot).toBe("C:/repo");
     expect(result.executionCwd).toBe("C:/repo/packages/repl");
   });
+
+  it("uses runtime execution cwd when the interactive session has no git root", () => {
+    const result = buildManagedRunContext(
+      undefined,
+      undefined,
+      undefined,
+      "skills",
+      "/mnt/c/Users/surui/tmp",
+    );
+
+    expect(result.gitRoot).toBeUndefined();
+    expect(result.executionCwd).toBe("/mnt/c/Users/surui/tmp");
+  });
 });

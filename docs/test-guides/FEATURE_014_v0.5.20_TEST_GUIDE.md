@@ -25,7 +25,7 @@
 
 ### 前置条件
 - ✅ KodaX REPL 已安装并可用
-- ✅ Node.js >= 18.0.0
+- ✅ Node.js >= 20.0.0
 - ✅ Git 仓库（用于测试 project init）
 - ✅ AI 提供商已配置（Claude/OpenAI）
 

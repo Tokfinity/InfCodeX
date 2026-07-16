@@ -1,0 +1,761 @@
+import { execFile } from 'node:child_process';
+import fs from 'node:fs';
+import os from 'node:os';
+import path from 'node:path';
+
+import { afterEach, describe, expect, it } from 'vitest';
+
+import {
+  acquireKodaXInlineOwner,
+  connectKodaXRuntime,
+  enableKodaXDaemonOwner,
+  getKodaXRuntimeOwnerState,
+  type KodaXDaemonRuntime,
+} from './sdk-runtime.js';
+
+import {
+  resolveRuntimeDaemonPaths,
+  tryAcquireRuntimeDaemonLock,
+  writeRuntimeDaemonState,
+} from './runtime-daemon/state.js';
+
+const tempRoots: string[] = [];
+
+afterEach(async () => {
+  for (const dir of tempRoots.splice(0)) {
+    await stopDaemonBestEffort(dir);
+    fs.rmSync(dir, { recursive: true, force: true });
+  }
+});
+
+describe('daemon CLI smoke', () => {
+  it('SDK auto-start owns a daemon process outside the embedding process', async () => {
+    const homeDir = fs.mkdtempSync(path.join(os.tmpdir(), 'kodax-daemon-sdk-smoke-'));
+    tempRoots.push(homeDir);
+    const profile = `sdk-${process.pid}-${Date.now()}`;
+    const extensionPath = path.join(homeDir, 'daemon-owner-extension.mjs');
+    fs.writeFileSync(extensionPath, `export default function(api) {
+      api.registerTool({
+        name: 'daemon_owner_echo',
+        description: 'Daemon owner extension smoke',
+        input_schema: { type: 'object', properties: {} },
+        handler: async () => 'ok',
+      });
+    }`, 'utf8');
+    fs.mkdirSync(path.join(homeDir, '.kodax'), { recursive: true });
+    fs.writeFileSync(
+      path.join(homeDir, '.kodax', 'config.json'),
+      JSON.stringify({ extensions: [extensionPath] }),
+      'utf8',
+    );
+    const probeScript = `
+      const { createKodaXRuntime } = await import('./src/sdk-runtime.ts');
+      const runtime = await createKodaXRuntime({
+        mode: 'daemon',
+        profile: process.argv[2],
+        homeDir: process.argv[1],
+        autoStartDaemon: true,
+        defaultProvider: 'mock-provider',
+      });
+      const extensions = await runtime.catalog.extensions();
+      const identity = runtime.identity;
+      await runtime.close();
+      console.log(JSON.stringify({ callerPid: process.pid, identity, extensions }));
+    `;
+    const probe = JSON.parse(await runNodeProcess([
+      '--import',
+      'tsx',
+      '--input-type=module',
+      '--eval',
+      probeScript,
+      homeDir,
+      profile,
+    ])) as {
+      callerPid: number;
+      identity: { runtimeId: string };
+      extensions: { active: boolean; extensions: Array<{ path: string }> };
+    };
+    const paths = resolveRuntimeDaemonPaths(homeDir, profile);
+    const state = JSON.parse(fs.readFileSync(paths.stateFile, 'utf8')) as { pid: number };
+
+    expect(state.pid).not.toBe(probe.callerPid);
+    expect(probe.extensions).toMatchObject({
+      active: true,
+      extensions: [expect.objectContaining({ path: extensionPath })],
+    });
+
+    const status = await runDaemonCommand([
+      'status',
+      '--home',
+      homeDir,
+      '--profile',
+      profile,
+      '--json',
+    ]);
+    expect(status).toMatchObject({ health: 'healthy' });
+  }, 90_000);
+
+  it('lets process-distinct concurrent SDK starters elect exactly one owner', async () => {
+    const homeDir = fs.mkdtempSync(path.join(os.tmpdir(), 'kodax-daemon-race-smoke-'));
+    tempRoots.push(homeDir);
+    const profile = `race-${process.pid}-${Date.now()}`;
+    const probeScript = `
+      const { createKodaXRuntime } = await import('./src/sdk-runtime.ts');
+      const runtime = await createKodaXRuntime({
+        mode: 'daemon',
+        profile: process.argv[2],
+        homeDir: process.argv[1],
+        autoStartDaemon: true,
+        clientInfo: { name: 'race-probe', instanceId: 'probe-' + process.pid },
+      });
+      console.log(JSON.stringify({ runtimeId: runtime.identity.runtimeId }));
+      await runtime.close();
+    `;
+
+    const [first, second] = await Promise.all([
+      runSdkProbe(probeScript, homeDir, profile),
+      runSdkProbe(probeScript, homeDir, profile),
+    ]) as Array<{ readonly runtimeId: string }>;
+    const paths = resolveRuntimeDaemonPaths(homeDir, profile);
+    const state = JSON.parse(fs.readFileSync(paths.stateFile, 'utf8')) as {
+      readonly runtimeId: string;
+    };
+
+    expect(first.runtimeId).toBe(second.runtimeId);
+    expect(state.runtimeId).toBe(first.runtimeId);
+    expect(JSON.parse(fs.readFileSync(paths.lockFile, 'utf8'))).toMatchObject({
+      runtimeId: state.runtimeId,
+      kind: 'daemon',
+    });
+  }, 120_000);
+
+  it('counts process-distinct logical clients and atomically switches daemon ownership twice', async () => {
+    const homeDir = fs.mkdtempSync(path.join(os.tmpdir(), 'kodax-daemon-management-smoke-'));
+    tempRoots.push(homeDir);
+    const profile = `management-${process.pid}-${Date.now()}`;
+    const first = await connectKodaXRuntime({
+      homeDir,
+      profile,
+      autoStart: true,
+      clientInfo: { name: 'management-parent', instanceId: 'management-parent' },
+      requirements: { daemonManagement: 1 },
+    });
+    await expect(first.status.preflight()).resolves.toMatchObject({
+      clientCount: 1,
+      blockers: [],
+      canStop: true,
+    });
+    const stale = await first.daemon.inspect();
+
+    const readyFile = path.join(homeDir, 'child-ready');
+    const releaseFile = path.join(homeDir, 'child-release');
+    const childScript = `
+      const fs = await import('node:fs');
+      const { connectKodaXRuntime } = await import('./src/sdk-runtime.ts');
+      const runtime = await connectKodaXRuntime({
+        homeDir: process.argv[1], profile: process.argv[2], autoStart: false,
+        clientInfo: { name: 'management-child', instanceId: 'management-child' },
+        requirements: { daemonManagement: 1 },
+      });
+      fs.writeFileSync(process.argv[3], 'ready', 'utf8');
+      while (!fs.existsSync(process.argv[4])) {
+        await new Promise((resolve) => setTimeout(resolve, 20));
+      }
+      await runtime.close();
+      process.stdout.write(JSON.stringify({ runtimeId: runtime.identity.runtimeId }) + '\\n');
+    `;
+    const child = runSdkProbe(childScript, homeDir, profile, readyFile, releaseFile);
+    try {
+      await waitForFile(readyFile);
+      await expect(first.status.preflight()).resolves.toMatchObject({
+        clientCount: 2,
+        blockers: ['connected_clients'],
+        canStop: false,
+      });
+      await expect(first.daemon.stopForInline({
+        expectedRuntimeId: stale.runtimeId,
+        expectedRevision: stale.revision,
+        expectedOwnerPolicyRevision: stale.ownerPolicy.revision,
+      })).rejects.toMatchObject({ code: 'conflict' });
+    } finally {
+      fs.writeFileSync(releaseFile, 'release', 'utf8');
+    }
+    await child;
+    await waitForDaemonClientCount(first, 1);
+    const firstCommit = await first.daemon.inspect();
+    await expect(first.daemon.stopForInline({
+      expectedRuntimeId: firstCommit.runtimeId,
+      expectedRevision: firstCommit.revision,
+      expectedOwnerPolicyRevision: firstCommit.ownerPolicy.revision,
+    })).resolves.toMatchObject({ accepted: true, ownerPolicy: { mode: 'inline', revision: 1 } });
+    await first.close();
+    await waitForDaemonState(profile, homeDir, false);
+    expect(getKodaXRuntimeOwnerState({ homeDir, profile })).toMatchObject({
+      policy: { mode: 'inline', revision: 1 },
+      ownerStatus: 'unowned',
+      owner: null,
+    });
+
+    const firstInline = acquireKodaXInlineOwner({ homeDir, profile });
+    expect(firstInline.ownerPolicy).toMatchObject({ mode: 'inline', revision: 1 });
+    firstInline.close();
+    expect(enableKodaXDaemonOwner({ homeDir, profile })).toMatchObject({ mode: 'daemon', revision: 2 });
+
+    const second = await connectKodaXRuntime({
+      homeDir,
+      profile,
+      autoStart: true,
+      clientInfo: { name: 'management-second', instanceId: 'management-second' },
+      requirements: { daemonManagement: 1 },
+    });
+    const secondCommit = await second.daemon.inspect();
+    await second.daemon.stopForInline({
+      expectedRuntimeId: secondCommit.runtimeId,
+      expectedRevision: secondCommit.revision,
+      expectedOwnerPolicyRevision: secondCommit.ownerPolicy.revision,
+    });
+    await second.close();
+    await waitForDaemonState(profile, homeDir, false);
+
+    const secondInline = acquireKodaXInlineOwner({ homeDir, profile });
+    expect(secondInline.ownerPolicy).toMatchObject({ mode: 'inline', revision: 3 });
+    secondInline.close();
+    expect(enableKodaXDaemonOwner({ homeDir, profile })).toMatchObject({ mode: 'daemon', revision: 4 });
+
+    const third = await connectKodaXRuntime({
+      homeDir,
+      profile,
+      autoStart: true,
+      clientInfo: { name: 'management-third', instanceId: 'management-third' },
+      requirements: { daemonManagement: 1 },
+    });
+    expect(getKodaXRuntimeOwnerState({ homeDir, profile })).toMatchObject({
+      policy: { mode: 'daemon', revision: 4 },
+      ownerStatus: 'owned',
+      owner: { runtimeId: third.identity.runtimeId, kind: 'daemon' },
+    });
+    await expect(third.status.preflight()).resolves.toMatchObject({ clientCount: 1 });
+    await third.close();
+    await expect(runDaemonCommand([
+      'status', '--home', homeDir, '--profile', profile, '--json',
+    ])).resolves.toMatchObject({ health: 'healthy' });
+  }, 180_000);
+
+  it('converges process-distinct SDK clients and brokers a scoped credential without persistence', async () => {
+    const homeDir = fs.mkdtempSync(path.join(os.tmpdir(), 'kodax-daemon-shared-smoke-'));
+    tempRoots.push(homeDir);
+    const profile = `shared-${process.pid}-${Date.now()}`;
+    await runDaemonCommand([
+      'start', '--home', homeDir, '--profile', profile,
+      '--provider', 'mock-provider', '--timeout-ms', '30000', '--json',
+    ]);
+
+    const spaceScript = `
+      const { createKodaXRuntime } = await import('./src/sdk-runtime.ts');
+      const runtime = await createKodaXRuntime({
+        mode: 'daemon', profile: process.argv[2], homeDir: process.argv[1],
+        autoStartDaemon: false,
+        clientInfo: { name: 'space-smoke', instanceId: 'space-smoke-1' },
+      });
+      const session = await runtime.sessions.create({ sessionId: 'shared-session', title: 'Shared' });
+      const settings = await runtime.sessions.getSettingsVersioned(session.id);
+      await runtime.sessions.updateSettingsVersioned(session.id, { model: 'space-model' }, {
+        expectedRevision: settings.revision,
+        operationId: 'space-settings-1',
+      });
+      let brokerCalls = 0;
+      const credential = await runtime.credentials.register({ providers: ['mock-provider'] }, async (request) => {
+        brokerCalls += 1;
+        if (request.sessionId !== session.id || request.provider !== 'mock-provider') throw new Error('scope mismatch');
+        return 'SPACE_SMOKE_SECRET_DO_NOT_PERSIST';
+      });
+      const hostTools = await runtime.hostTools.register([{
+        name: 'space_artifact_create',
+        description: 'Create a Space artifact',
+        inputSchema: { type: 'object' },
+        sideEffect: 'non_idempotent',
+      }], { space_artifact_create: async () => ({ content: 'artifact-created' }) });
+      let runError;
+      try {
+        const run = await runtime.runs.start({
+          sessionId: session.id,
+          prompt: 'credential smoke',
+          options: { provider: 'mock-provider' },
+          credential: { leaseId: credential.id, provider: 'mock-provider' },
+          hostTools: { leaseId: hostTools.id },
+          operation: { operationId: 'space-run-1' },
+        });
+        await run.result;
+      } catch (error) {
+        runError = error instanceof Error ? error.message : String(error);
+      }
+      console.log(JSON.stringify({ brokerCalls, runError, runtimeId: runtime.identity.runtimeId }));
+      await runtime.close();
+    `;
+    const space = await runSdkProbe(spaceScript, homeDir, profile) as {
+      brokerCalls: number;
+      runtimeId: string;
+      runError?: string;
+    };
+    expect(space.brokerCalls).toBe(1);
+
+    const observerScript = `
+      const { createKodaXRuntime } = await import('./src/sdk-runtime.ts');
+      const runtime = await createKodaXRuntime({
+        mode: 'daemon', profile: process.argv[2], homeDir: process.argv[1],
+        autoStartDaemon: false,
+        clientInfo: { name: 'observer-smoke', instanceId: 'observer-smoke-1' },
+      });
+      const observation = await runtime.sessions.observe('shared-session', () => {});
+      console.log(JSON.stringify({
+        runtimeId: runtime.identity.runtimeId,
+        sessionId: observation.snapshot.session.id,
+        settings: observation.snapshot.settings,
+        terminalEvents: (await runtime.events.replay({
+          sessionId: 'shared-session',
+          type: ['run.completed', 'run.failed', 'run.cancelled', 'run.interrupted'],
+        })).map((event) => event.id),
+      }));
+      observation.close();
+      await runtime.close();
+    `;
+    const observer = await runSdkProbe(observerScript, homeDir, profile) as {
+      runtimeId: string;
+      sessionId: string;
+      settings: { revision: number; value: { model: string } };
+      terminalEvents: string[];
+    };
+    expect(observer).toMatchObject({
+      runtimeId: space.runtimeId,
+      sessionId: 'shared-session',
+      settings: { revision: 1, value: { model: 'space-model' } },
+    });
+    expect(new Set(observer.terminalEvents).size).toBe(observer.terminalEvents.length);
+    expect(readAllDaemonText(homeDir)).not.toContain('SPACE_SMOKE_SECRET_DO_NOT_PERSIST');
+  }, 120_000);
+
+  it('resumes client-owned credential and Host Tool leases from a distinct process', async () => {
+    const homeDir = fs.mkdtempSync(path.join(os.tmpdir(), 'kodax-daemon-resume-smoke-'));
+    tempRoots.push(homeDir);
+    const profile = `resume-${process.pid}-${Date.now()}`;
+    const instanceSecret = `space_${'s'.repeat(48)}`;
+    await runDaemonCommand([
+      'start', '--home', homeDir, '--profile', profile,
+      '--provider', 'mock-provider', '--timeout-ms', '30000', '--json',
+    ]);
+
+    const registerScript = `
+      const { createKodaXRuntime } = await import('./src/sdk-runtime.ts');
+      const runtime = await createKodaXRuntime({
+        mode: 'daemon', profile: process.argv[2], homeDir: process.argv[1],
+        autoStartDaemon: false,
+        clientInfo: {
+          name: 'space-resume-smoke',
+          instanceId: 'space-resume-installation',
+          instanceSecret: process.argv[3],
+        },
+      });
+      const credential = await runtime.credentials.register({ providers: ['mock-provider'] }, async () => 'secret');
+      const hostTools = await runtime.hostTools.register([{
+        name: 'space_control', description: 'Control Space',
+        inputSchema: { type: 'object' }, sideEffect: 'non_idempotent',
+      }], { space_control: async () => ({ content: 'done' }) });
+      process.stdout.write(JSON.stringify({ credentialId: credential.id, hostToolId: hostTools.id }) + '\\n');
+      await runtime.close();
+    `;
+    const registered = await runSdkProbe(
+      registerScript,
+      homeDir,
+      profile,
+      instanceSecret,
+    ) as { readonly credentialId: string; readonly hostToolId: string };
+
+    const resumeScript = `
+      const { createKodaXRuntime } = await import('./src/sdk-runtime.ts');
+      const runtime = await createKodaXRuntime({
+        mode: 'daemon', profile: process.argv[2], homeDir: process.argv[1],
+        autoStartDaemon: false,
+        clientInfo: {
+          name: 'space-resume-smoke',
+          instanceId: 'space-resume-installation',
+          instanceSecret: process.argv[3],
+        },
+      });
+      const credential = await runtime.credentials.resume(process.argv[4], async () => 'secret');
+      const hostTools = await runtime.hostTools.resume(process.argv[5], {
+        space_control: async () => ({ content: 'done' }),
+      });
+      process.stdout.write(JSON.stringify({ credential, hostTools }) + '\\n');
+      await runtime.close();
+    `;
+    await expect(runSdkProbe(
+      resumeScript,
+      homeDir,
+      profile,
+      instanceSecret,
+      registered.credentialId,
+      registered.hostToolId,
+    )).resolves.toMatchObject({
+      credential: { id: registered.credentialId, providers: ['mock-provider'] },
+      hostTools: { id: registered.hostToolId },
+    });
+  }, 120_000);
+
+  it('prints JSON for real start/stop commands and releases daemon state', async () => {
+    const homeDir = fs.mkdtempSync(path.join(os.tmpdir(), 'kodax-daemon-cli-smoke-'));
+    tempRoots.push(homeDir);
+    const profile = `smoke-${process.pid}-${Date.now()}`;
+
+    const start = await runDaemonCommand([
+      'start',
+      '--home',
+      homeDir,
+      '--profile',
+      profile,
+      '--provider',
+      'mock-provider',
+      '--timeout-ms',
+      '30000',
+      '--json',
+    ]);
+    expect(start).toMatchObject({
+      started: true,
+      health: 'healthy',
+    });
+    expect(start.state).toMatchObject({
+      profile,
+      status: 'ready',
+    });
+
+    const status = await runDaemonCommand([
+      'status',
+      '--home',
+      homeDir,
+      '--profile',
+      profile,
+      '--json',
+    ]);
+    expect(status).toMatchObject({
+      profile,
+      health: 'healthy',
+      runtime: {
+        ok: true,
+        summary: {
+          sessions: 0,
+          runs: 0,
+          activeRuns: 0,
+          queuedRuns: 0,
+          pendingPermissions: 0,
+          workflows: 0,
+        },
+      },
+    });
+
+    const logs = await runDaemonCommand([
+      'logs',
+      '--home',
+      homeDir,
+      '--profile',
+      profile,
+      '--json',
+    ]);
+    expect(logs).toMatchObject({
+      profile,
+      exists: true,
+    });
+    expect(Array.isArray(logs.lines) ? logs.lines.join('\n') : '').toContain('Runtime daemon ready.');
+    expect(String(logs.logFile)).toContain(path.join('.kodax', 'runtime', 'daemon', profile, 'daemon.log'));
+
+    const { createKodaXRuntime } = await import('@kodax-ai/kodax/runtime');
+    const { defaultRuntimeDaemonEndpoint } = await import('./runtime-daemon/transport.js');
+    const runtime = await createKodaXRuntime({
+      mode: 'daemon',
+      profile,
+      homeDir,
+      daemonEndpoint: defaultRuntimeDaemonEndpoint(profile, homeDir),
+      autoStartDaemon: false,
+    });
+    try {
+      await expect(runtime.config.patch({
+        provider: 'mock-provider',
+        model: 'daemon-home-model',
+      })).resolves.toMatchObject({
+        provider: 'mock-provider',
+        model: 'daemon-home-model',
+      });
+    } finally {
+      await runtime.close();
+    }
+    const configFile = path.join(homeDir, '.kodax', 'config.json');
+    expect(JSON.parse(fs.readFileSync(configFile, 'utf8'))).toMatchObject({
+      provider: 'mock-provider',
+      model: 'daemon-home-model',
+    });
+
+    const restart = await runDaemonCommand([
+      'restart',
+      '--home',
+      homeDir,
+      '--profile',
+      profile,
+      '--provider',
+      'mock-provider',
+      '--timeout-ms',
+      '30000',
+      '--json',
+    ]);
+    expect(restart).toMatchObject({
+      restarted: true,
+      stop: {
+        stopped: true,
+      },
+      start: {
+        started: true,
+        health: 'healthy',
+      },
+    });
+
+    const stop = await runDaemonCommand([
+      'stop',
+      '--home',
+      homeDir,
+      '--profile',
+      profile,
+      '--timeout-ms',
+      '30000',
+      '--json',
+    ]);
+    expect(stop).toEqual({
+      stopped: true,
+      health: 'missing',
+      state: null,
+    });
+
+    const stateFile = path.join(homeDir, '.kodax', 'runtime', 'daemon', profile, 'daemon.json');
+    const lockFile = path.join(homeDir, '.kodax', 'runtime', 'daemon', profile, 'daemon.lock');
+    expect(fs.existsSync(stateFile)).toBe(false);
+    expect(fs.existsSync(lockFile)).toBe(false);
+  }, 180_000);
+
+  it('force-cleans stale daemon ownership without a live owner process', async () => {
+    const homeDir = fs.mkdtempSync(path.join(os.tmpdir(), 'kodax-daemon-cli-force-stale-'));
+    tempRoots.push(homeDir);
+    const profile = `force-stale-${process.pid}-${Date.now()}`;
+    const paths = resolveRuntimeDaemonPaths(homeDir, profile);
+    writeRuntimeDaemonState(paths, {
+      runtimeId: 'runtime-stale',
+      profile,
+      pid: 999_999_999,
+      startedAt: '2026-07-09T00:00:00.000Z',
+      endpoint: process.platform === 'win32'
+        ? '\\\\.\\pipe\\kodax-runtime-force-stale-missing'
+        : path.join(os.tmpdir(), 'kodax-runtime-force-stale-missing.sock'),
+      version: '0.7.66',
+      status: 'ready',
+    });
+    expect(tryAcquireRuntimeDaemonLock(paths, {
+      runtimeId: 'runtime-stale',
+      pid: 999_999_999,
+      createdAt: '2026-07-09T00:00:00.000Z',
+    })).toBeDefined();
+
+    const stop = await runDaemonCommand([
+      'stop',
+      '--home',
+      homeDir,
+      '--profile',
+      profile,
+      '--timeout-ms',
+      '3000',
+      '--force',
+      '--json',
+    ]);
+
+    expect(stop).toMatchObject({
+      stopped: true,
+      forced: true,
+      health: 'missing',
+      state: null,
+    });
+    expect(fs.existsSync(paths.stateFile)).toBe(false);
+    expect(fs.existsSync(paths.lockFile)).toBe(false);
+  }, 30_000);
+
+  it('refuses force stop when a live pid cannot be verified as the daemon owner', async () => {
+    const homeDir = fs.mkdtempSync(path.join(os.tmpdir(), 'kodax-daemon-cli-force-live-'));
+    tempRoots.push(homeDir);
+    const profile = `force-live-${process.pid}-${Date.now()}`;
+    const paths = resolveRuntimeDaemonPaths(homeDir, profile);
+    writeRuntimeDaemonState(paths, {
+      runtimeId: 'runtime-live',
+      profile,
+      pid: process.pid,
+      startedAt: '2026-07-09T00:00:00.000Z',
+      endpoint: process.platform === 'win32'
+        ? '\\\\.\\pipe\\kodax-runtime-force-live-missing'
+        : path.join(os.tmpdir(), 'kodax-runtime-force-live-missing.sock'),
+      version: '0.7.66',
+      status: 'ready',
+    });
+    expect(tryAcquireRuntimeDaemonLock(paths, {
+      runtimeId: 'runtime-live',
+      pid: process.pid,
+      createdAt: '2026-07-09T00:00:00.000Z',
+    })).toBeDefined();
+
+    const stop = await runDaemonCommand([
+      'stop',
+      '--home',
+      homeDir,
+      '--profile',
+      profile,
+      '--timeout-ms',
+      '3000',
+      '--force',
+      '--json',
+    ]);
+
+    expect(stop).toMatchObject({
+      stopped: false,
+      forced: true,
+      reason: 'unverified_owner',
+      health: 'unhealthy',
+      state: {
+        runtimeId: 'runtime-live',
+        pid: process.pid,
+      },
+    });
+    expect(fs.existsSync(paths.stateFile)).toBe(true);
+    expect(fs.existsSync(paths.lockFile)).toBe(true);
+  }, 30_000);
+});
+
+async function runDaemonCommand(args: readonly string[]): Promise<Record<string, unknown>> {
+  const stdout = await runNodeProcess([
+    '--import',
+    'tsx',
+    path.join(process.cwd(), 'src', 'kodax_cli.ts'),
+    'daemon',
+    ...args,
+  ]);
+  return JSON.parse(stdout) as Record<string, unknown>;
+}
+
+async function runSdkProbe(
+  script: string,
+  homeDir: string,
+  profile: string,
+  ...args: readonly string[]
+): Promise<unknown> {
+  const stdout = await runNodeProcess([
+    '--import',
+    'tsx',
+    '--input-type=module',
+    '--eval',
+    script,
+    homeDir,
+    profile,
+    ...args,
+  ]);
+  return JSON.parse(stdout) as unknown;
+}
+
+function runNodeProcess(args: readonly string[]): Promise<string> {
+  return new Promise((resolve, reject) => {
+    execFile(process.execPath, [...args], {
+      cwd: process.cwd(),
+      encoding: 'utf8',
+      timeout: 90_000,
+      env: { ...process.env, KODAX_TRACING: '0' },
+    }, (error, stdout) => {
+      if (error) {
+        reject(error);
+        return;
+      }
+      resolve(stdout);
+    });
+  });
+}
+
+function readAllDaemonText(homeDir: string): string {
+  const root = path.join(homeDir, '.kodax', 'runtime');
+  if (!fs.existsSync(root)) return '';
+  const content: string[] = [];
+  const visit = (directory: string): void => {
+    for (const entry of fs.readdirSync(directory, { withFileTypes: true })) {
+      const target = path.join(directory, entry.name);
+      if (entry.isDirectory()) visit(target);
+      else content.push(fs.readFileSync(target, 'utf8'));
+    }
+  };
+  visit(root);
+  return content.join('\n');
+}
+
+async function waitForFile(file: string): Promise<void> {
+  const deadline = Date.now() + 30_000;
+  while (Date.now() <= deadline) {
+    if (fs.existsSync(file)) return;
+    await new Promise((resolve) => setTimeout(resolve, 25));
+  }
+  throw new Error(`Timed out waiting for process marker: ${file}`);
+}
+
+async function waitForDaemonClientCount(
+  runtime: Pick<KodaXDaemonRuntime, 'status'>,
+  expected: number,
+): Promise<void> {
+  const deadline = Date.now() + 30_000;
+  while (Date.now() <= deadline) {
+    const preflight = await runtime.status.preflight();
+    if (preflight.clientCount === expected) return;
+    await new Promise((resolve) => setTimeout(resolve, 25));
+  }
+  throw new Error(`Timed out waiting for daemon client count ${expected}.`);
+}
+
+async function waitForDaemonState(
+  profile: string,
+  homeDir: string,
+  present: boolean,
+): Promise<void> {
+  const paths = resolveRuntimeDaemonPaths(homeDir, profile);
+  const deadline = Date.now() + 30_000;
+  while (Date.now() <= deadline) {
+    const exists = fs.existsSync(paths.stateFile) || fs.existsSync(paths.lockFile);
+    if (exists === present) return;
+    await new Promise((resolve) => setTimeout(resolve, 25));
+  }
+  throw new Error(`Timed out waiting for daemon state present=${present}.`);
+}
+
+async function stopDaemonBestEffort(homeDir: string): Promise<void> {
+  const daemonRoot = path.join(homeDir, '.kodax', 'runtime', 'daemon');
+  if (!fs.existsSync(daemonRoot)) return;
+  for (const entry of fs.readdirSync(daemonRoot, { withFileTypes: true })) {
+    if (!entry.isDirectory()) continue;
+    const profile = entry.name;
+    try {
+      await runDaemonCommand([
+        'stop',
+        '--home',
+        homeDir,
+        '--profile',
+        profile,
+        '--timeout-ms',
+        '3000',
+        '--json',
+      ]);
+    } catch {
+      const stateFile = path.join(daemonRoot, profile, 'daemon.json');
+      try {
+        const state = JSON.parse(fs.readFileSync(stateFile, 'utf8')) as { pid?: unknown };
+        if (typeof state.pid === 'number') {
+          process.kill(state.pid, 'SIGTERM');
+        }
+      } catch {
+        // Best-effort cleanup only.
+      }
+    }
+  }
+}

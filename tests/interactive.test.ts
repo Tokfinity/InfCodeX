@@ -18,18 +18,13 @@ import {
   BUILTIN_COMMANDS,
   type CommandCallbacks,
   processSpecialSyntax,
-  ProjectStorage,
-  type ProjectFeature,
-  calculateStatistics,
-  getNextPendingIndex,
-  isAllCompleted,
   loadConfig,
   saveConfig,
   getProviderModel,
   getProviderList,
   isProviderConfigured,
-} from '@kodax/repl';
-import { type KodaXMessage, KODAX_PROVIDERS } from '@kodax/coding';
+} from '@kodax-ai/repl';
+import { type KodaXMessage, KODAX_PROVIDERS } from '@kodax-ai/coding';
 
 // ============== 上下文管理测试 ==============
 
@@ -145,12 +140,15 @@ describe('BUILTIN_COMMANDS', () => {
   });
 
   it('should have mode commands', () => {
+    // v0.7.34 FEATURE_110 retired the legacy `/plan` slash command in favor
+    // of `PermissionMode="plan"` + `exit_plan_mode` (FEATURE_074, path 2).
+    // The wizard-style `/plan on|off|once|list|resume|clear` variants no
+    // longer exist; only `/mode` + `/auto` remain as user-facing mode
+    // commands. Re-asserting `/plan` here would trip on the v0.7.34 cleanup.
     const mode = BUILTIN_COMMANDS.find(c => c.name === 'mode');
     const auto = BUILTIN_COMMANDS.find(c => c.name === 'auto');
-    const plan = BUILTIN_COMMANDS.find(c => c.name === 'plan');
     expect(mode).toBeDefined();
     expect(auto).toBeDefined();
-    expect(plan).toBeDefined();
   });
 
   it('should have session commands', () => {
@@ -162,10 +160,11 @@ describe('BUILTIN_COMMANDS', () => {
     expect(sessions).toBeDefined();
   });
 
-  it('should have parallel command', () => {
-    const parallel = BUILTIN_COMMANDS.find(c => c.name === 'parallel');
-    expect(parallel).toBeDefined();
-    expect(parallel?.aliases).toContain('pm');
+  it('should expose only the singular skill command', () => {
+    const skill = BUILTIN_COMMANDS.find(c => c.name === 'skill');
+    const skills = BUILTIN_COMMANDS.find(c => c.name === 'skills');
+    expect(skill).toBeDefined();
+    expect(skills).toBeUndefined();
   });
 });
 
@@ -181,6 +180,7 @@ describe('executeCommand', () => {
     reasoningMode: 'off' | 'auto' | 'quick' | 'balanced' | 'deep';
     parallel: boolean;
     permissionMode?: string;
+    agentMode: string;
   };
   let exitCalled: boolean;
   let savedSession: { id: string; messages: unknown[]; title: string } | null;
@@ -195,6 +195,7 @@ describe('executeCommand', () => {
       reasoningMode: 'off',
       parallel: false,
       permissionMode: 'accept-edits',
+      agentMode: 'sa',
     };
     exitCalled = false;
     savedSession = null;
@@ -285,51 +286,10 @@ describe('executeCommand', () => {
   it('should execute auto command', async () => {
     const consoleSpy = vi.spyOn(console, 'log').mockImplementation(() => {});
     await executeCommand({ command: 'auto', args: [] }, context, callbacks, currentConfig);
-    expect(currentConfig.permissionMode).toBe('auto-in-project');
-    consoleSpy.mockRestore();
-  });
-
-  it('should show current parallel execution mode', async () => {
-    const consoleSpy = vi.spyOn(console, 'log').mockImplementation(() => {});
-    await executeCommand({ command: 'parallel', args: [] }, context, callbacks, currentConfig);
-    const output = consoleSpy.mock.calls.map(c => c.join(' ')).join('\n');
-    expect(output).toContain('Tool execution');
-    expect(output).toMatch(/sequential|serial/);
-    consoleSpy.mockRestore();
-  });
-
-  it('should enable parallel execution', async () => {
-    const consoleSpy = vi.spyOn(console, 'log').mockImplementation(() => {});
-    await executeCommand({ command: 'parallel', args: ['on'] }, context, callbacks, currentConfig);
-    expect(currentConfig.parallel).toBe(true);
-    consoleSpy.mockRestore();
-  });
-
-  it('should disable parallel execution', async () => {
-    currentConfig.parallel = true;
-    const consoleSpy = vi.spyOn(console, 'log').mockImplementation(() => {});
-    await executeCommand({ command: 'parallel', args: ['off'] }, context, callbacks, currentConfig);
-    expect(currentConfig.parallel).toBe(false);
-    consoleSpy.mockRestore();
-  });
-
-  it('should toggle parallel execution', async () => {
-    const consoleSpy = vi.spyOn(console, 'log').mockImplementation(() => {});
-    await executeCommand({ command: 'parallel', args: ['toggle'] }, context, callbacks, currentConfig);
-    expect(currentConfig.parallel).toBe(true);
-
-    await executeCommand({ command: 'parallel', args: ['toggle'] }, context, callbacks, currentConfig);
-    expect(currentConfig.parallel).toBe(false);
-    consoleSpy.mockRestore();
-  });
-
-  it('should reject invalid parallel values', async () => {
-    const consoleSpy = vi.spyOn(console, 'log').mockImplementation(() => {});
-    await executeCommand({ command: 'parallel', args: ['foo'] }, context, callbacks, currentConfig);
-    const output = consoleSpy.mock.calls.map(c => c.join(' ')).join('\n');
-    expect(currentConfig.parallel).toBe(false);
-    expect(output).toContain('Invalid value');
-    expect(output).toContain('Usage: /parallel on|off|toggle');
+    // FEATURE_092 (v0.7.33): /auto switches to canonical 'auto', not the
+    // deprecated 'auto-in-project' alias. The alias remains accessible via
+    // /mode auto-in-project for users who explicitly want it.
+    expect(currentConfig.permissionMode).toBe('auto');
     consoleSpy.mockRestore();
   });
 
@@ -367,7 +327,6 @@ describe('executeCommand', () => {
     const output = consoleSpy.mock.calls.map(c => c.join(' ')).join('\n');
     expect(output).toContain('Session Status');
     expect(output).toContain('Permission');
-    expect(output).toContain('Execution');
     expect(output).toContain('Session ID');
     consoleSpy.mockRestore();
   });
@@ -403,6 +362,7 @@ describe('Command Aliases', () => {
       reasoningMode: 'off',
       parallel: false,
       permissionMode: 'accept-edits',
+      agentMode: 'sa',
     };
     callbacks = {
       exit: () => {},
@@ -507,6 +467,7 @@ describe('Mode Switching Detailed', () => {
       reasoningMode: 'off',
       parallel: false,
       permissionMode: 'accept-edits',
+      agentMode: 'sa',
     };
     callbacks = {
       exit: () => {},
@@ -930,7 +891,9 @@ describe('Config Loading and Saving', () => {
   afterEach(async () => {
     try {
       await fs.rm(TEST_CONFIG_FILE, { recursive: true, force: true });
-    } catch { }
+    } catch (error) {
+      void error;
+    }
   });
 
   it('should load empty config when file does not exist', async () => {
@@ -1002,428 +965,5 @@ describe('New Commands', () => {
   });
 });
 
-// ============== Project State 工具函数测试 ==============
-
-describe('Project State Utilities', () => {
-  describe('calculateStatistics', () => {
-    it('should calculate statistics for empty features', () => {
-      const stats = calculateStatistics([]);
-      expect(stats.total).toBe(0);
-      expect(stats.completed).toBe(0);
-      expect(stats.pending).toBe(0);
-      expect(stats.skipped).toBe(0);
-      expect(stats.percentage).toBe(0);
-    });
-
-    it('should calculate statistics for mixed features', () => {
-      const features: ProjectFeature[] = [
-        { description: 'Feature 1', passes: true },
-        { description: 'Feature 2', passes: false },
-        { description: 'Feature 3', skipped: true },
-        { description: 'Feature 4', passes: true },
-        { description: 'Feature 5', passes: false },
-      ];
-
-      const stats = calculateStatistics(features);
-      expect(stats.total).toBe(5);
-      expect(stats.completed).toBe(2);
-      expect(stats.skipped).toBe(1);
-      expect(stats.pending).toBe(2);
-      expect(stats.percentage).toBe(40);
-    });
-
-    it('should calculate 100% when all completed', () => {
-      const features: ProjectFeature[] = [
-        { description: 'Feature 1', passes: true },
-        { description: 'Feature 2', passes: true },
-      ];
-
-      const stats = calculateStatistics(features);
-      expect(stats.percentage).toBe(100);
-    });
-
-    it('should handle features with passes=false', () => {
-      const features: ProjectFeature[] = [
-        { description: 'Feature 1', passes: false },
-        { description: 'Feature 2' }, // no passes field
-      ];
-
-      const stats = calculateStatistics(features);
-      expect(stats.completed).toBe(0);
-      expect(stats.pending).toBe(2);
-    });
-  });
-
-  describe('getNextPendingIndex', () => {
-    it('should return -1 for empty features', () => {
-      expect(getNextPendingIndex([])).toBe(-1);
-    });
-
-    it('should return first pending feature index', () => {
-      const features: ProjectFeature[] = [
-        { description: 'Feature 1', passes: true },
-        { description: 'Feature 2', passes: false },
-        { description: 'Feature 3', passes: false },
-      ];
-
-      expect(getNextPendingIndex(features)).toBe(1);
-    });
-
-    it('should skip skipped features', () => {
-      const features: ProjectFeature[] = [
-        { description: 'Feature 1', passes: true },
-        { description: 'Feature 2', skipped: true },
-        { description: 'Feature 3', passes: false },
-      ];
-
-      expect(getNextPendingIndex(features)).toBe(2);
-    });
-
-    it('should return -1 when all completed', () => {
-      const features: ProjectFeature[] = [
-        { description: 'Feature 1', passes: true },
-        { description: 'Feature 2', passes: true },
-      ];
-
-      expect(getNextPendingIndex(features)).toBe(-1);
-    });
-
-    it('should return -1 when all completed or skipped', () => {
-      const features: ProjectFeature[] = [
-        { description: 'Feature 1', passes: true },
-        { description: 'Feature 2', skipped: true },
-      ];
-
-      expect(getNextPendingIndex(features)).toBe(-1);
-    });
-  });
-
-  describe('isAllCompleted', () => {
-    it('should return true for empty features', () => {
-      expect(isAllCompleted([])).toBe(true);
-    });
-
-    it('should return true when all passed or skipped', () => {
-      const features: ProjectFeature[] = [
-        { description: 'Feature 1', passes: true },
-        { description: 'Feature 2', skipped: true },
-        { description: 'Feature 3', passes: true },
-      ];
-
-      expect(isAllCompleted(features)).toBe(true);
-    });
-
-    it('should return false when pending exists', () => {
-      const features: ProjectFeature[] = [
-        { description: 'Feature 1', passes: true },
-        { description: 'Feature 2', passes: false },
-      ];
-
-      expect(isAllCompleted(features)).toBe(false);
-    });
-  });
-});
-
-// ============== ProjectStorage 测试 ==============
-
-describe('ProjectStorage', () => {
-  let tempDir: string;
-  let storage: ProjectStorage;
-
-  beforeEach(async () => {
-    // Create temp directory
-    tempDir = path.join(os.tmpdir(), 'kodax-test-project-' + Date.now());
-    await fs.mkdir(tempDir, { recursive: true });
-    storage = new ProjectStorage(tempDir);
-  });
-
-  afterEach(async () => {
-    // Cleanup temp directory
-    try {
-      await fs.rm(tempDir, { recursive: true, force: true });
-    } catch { }
-  });
-
-  describe('exists', () => {
-    it('should return false when no project exists', async () => {
-      expect(await storage.exists()).toBe(false);
-    });
-
-    it('should return true when feature_list.json exists', async () => {
-      await fs.writeFile(
-        path.join(tempDir, 'feature_list.json'),
-        JSON.stringify({ features: [] }),
-        'utf-8'
-      );
-      expect(await storage.exists()).toBe(true);
-    });
-  });
-
-  describe('loadFeatures and saveFeatures', () => {
-    it('should return null when no features file exists', async () => {
-      expect(await storage.loadFeatures()).toBeNull();
-    });
-
-    it('should save and load features', async () => {
-      const data = {
-        features: [
-          { description: 'Feature 1', passes: false },
-          { description: 'Feature 2', passes: true },
-        ],
-      };
-
-      await storage.saveFeatures(data);
-      const loaded = await storage.loadFeatures();
-
-      expect(loaded).not.toBeNull();
-      expect(loaded?.features).toHaveLength(2);
-      expect(loaded?.features[0]?.description).toBe('Feature 1');
-      expect(loaded?.features[1]?.passes).toBe(true);
-    });
-  });
-
-  describe('readProgress and appendProgress', () => {
-    it('should return empty string when no progress file exists', async () => {
-      expect(await storage.readProgress()).toBe('');
-    });
-
-    it('should append and read progress', async () => {
-      await storage.appendProgress('# Progress\n');
-      await storage.appendProgress('## Day 1\n');
-
-      const progress = await storage.readProgress();
-      expect(progress).toContain('# Progress');
-      expect(progress).toContain('## Day 1');
-    });
-  });
-
-  describe('readSessionPlan and writeSessionPlan', () => {
-    it('should return empty string when no session plan exists', async () => {
-      expect(await storage.readSessionPlan()).toBe('');
-    });
-
-    it('should write and read session plan', async () => {
-      const plan = '# Session Plan\n\n## Steps\n1. Step 1\n2. Step 2';
-      await storage.writeSessionPlan(plan);
-
-      const read = await storage.readSessionPlan();
-      expect(read).toBe(plan);
-    });
-
-    it('should create .agent/project directory if not exists', async () => {
-      await storage.writeSessionPlan('Test plan');
-
-      const projectArtifactsDir = path.join(tempDir, '.agent', 'project');
-      const stat = await fs.stat(projectArtifactsDir);
-      expect(stat.isDirectory()).toBe(true);
-    });
-  });
-
-  describe('getNextPendingFeature', () => {
-    it('should return null when no project exists', async () => {
-      expect(await storage.getNextPendingFeature()).toBeNull();
-    });
-
-    it('should return first pending feature', async () => {
-      await storage.saveFeatures({
-        features: [
-          { description: 'Feature 1', passes: true },
-          { description: 'Feature 2', passes: false },
-          { description: 'Feature 3', passes: false },
-        ],
-      });
-
-      const result = await storage.getNextPendingFeature();
-      expect(result).not.toBeNull();
-      expect(result?.index).toBe(1);
-      expect(result?.feature.description).toBe('Feature 2');
-    });
-
-    it('should return null when all completed', async () => {
-      await storage.saveFeatures({
-        features: [
-          { description: 'Feature 1', passes: true },
-          { description: 'Feature 2', skipped: true },
-        ],
-      });
-
-      expect(await storage.getNextPendingFeature()).toBeNull();
-    });
-  });
-
-  describe('getFeatureByIndex', () => {
-    it('should return null when no project exists', async () => {
-      expect(await storage.getFeatureByIndex(0)).toBeNull();
-    });
-
-    it('should return feature at index', async () => {
-      await storage.saveFeatures({
-        features: [
-          { description: 'Feature 1', passes: false },
-          { description: 'Feature 2', passes: true },
-        ],
-      });
-
-      const feature = await storage.getFeatureByIndex(1);
-      expect(feature?.description).toBe('Feature 2');
-      expect(feature?.passes).toBe(true);
-    });
-
-    it('should return null for invalid index', async () => {
-      await storage.saveFeatures({ features: [{ description: 'Feature 1' }] });
-
-      expect(await storage.getFeatureByIndex(-1)).toBeNull();
-      expect(await storage.getFeatureByIndex(10)).toBeNull();
-    });
-  });
-
-  describe('updateFeatureStatus', () => {
-    it('should return false when no project exists', async () => {
-      expect(await storage.updateFeatureStatus(0, { passes: true })).toBe(false);
-    });
-
-    it('should update feature status', async () => {
-      await storage.saveFeatures({
-        features: [
-          { description: 'Feature 1', passes: false },
-          { description: 'Feature 2', passes: false },
-        ],
-      });
-
-      const result = await storage.updateFeatureStatus(1, { passes: true });
-      expect(result).toBe(true);
-
-      const feature = await storage.getFeatureByIndex(1);
-      expect(feature?.passes).toBe(true);
-    });
-
-    it('should merge updates with existing data', async () => {
-      await storage.saveFeatures({
-        features: [{ description: 'Feature 1', passes: false, notes: 'Original' }],
-      });
-
-      await storage.updateFeatureStatus(0, { passes: true, completedAt: '2025-01-01' });
-
-      const feature = await storage.getFeatureByIndex(0);
-      expect(feature?.description).toBe('Feature 1');
-      expect(feature?.notes).toBe('Original');
-      expect(feature?.passes).toBe(true);
-      expect(feature?.completedAt).toBe('2025-01-01');
-    });
-  });
-
-  describe('getStatistics', () => {
-    it('should return zeros when no project exists', async () => {
-      const stats = await storage.getStatistics();
-      expect(stats.total).toBe(0);
-      expect(stats.percentage).toBe(0);
-    });
-
-    it('should return correct statistics', async () => {
-      await storage.saveFeatures({
-        features: [
-          { description: 'Feature 1', passes: true },
-          { description: 'Feature 2', passes: false },
-          { description: 'Feature 3', skipped: true },
-        ],
-      });
-
-      const stats = await storage.getStatistics();
-      expect(stats.total).toBe(3);
-      expect(stats.completed).toBe(1);
-      expect(stats.pending).toBe(1);
-      expect(stats.skipped).toBe(1);
-      expect(stats.percentage).toBe(33);
-    });
-  });
-
-  describe('listFeatures', () => {
-    it('should return empty array when no project exists', async () => {
-      expect(await storage.listFeatures()).toEqual([]);
-    });
-
-    it('should return all features', async () => {
-      await storage.saveFeatures({
-        features: [
-          { description: 'Feature 1' },
-          { description: 'Feature 2' },
-        ],
-      });
-
-      const features = await storage.listFeatures();
-      expect(features).toHaveLength(2);
-    });
-  });
-
-  describe('getPaths', () => {
-    it('should return correct paths', () => {
-      const paths = storage.getPaths();
-      expect(paths.features).toBe(path.join(tempDir, 'feature_list.json'));
-      expect(paths.progress).toBe(path.join(tempDir, 'PROGRESS.md'));
-      expect(paths.projectArtifactsRoot).toBe(path.join(tempDir, '.agent', 'project'));
-      expect(paths.sessionPlan).toBe(path.join(tempDir, '.agent', 'project', 'session_plan.md'));
-      expect(paths.legacySessionPlan).toBe(path.join(tempDir, '.kodax', 'session_plan.md'));
-    });
-  });
-});
-
-// ============== Project 命令测试 ==============
-
-describe('Project Command', () => {
-  it('should have project command', () => {
-    const projectCmd = BUILTIN_COMMANDS.find(c => c.name === 'project');
-    expect(projectCmd).toBeDefined();
-    expect(projectCmd?.aliases).toContain('proj');
-  });
-
-  it('should have project command with correct usage', () => {
-    const projectCmd = BUILTIN_COMMANDS.find(c => c.name === 'project');
-    expect(projectCmd?.usage).toContain('init');
-    expect(projectCmd?.usage).toContain('status');
-    expect(projectCmd?.usage).toContain('next');
-  });
-});
-
-// ============== parseAutoOptions 测试 ==============
-
-describe('parseAutoOptions', () => {
-  // 复制 project-commands.ts 中的函数逻辑进行测试
-  function parseAutoOptions(args: string[]): { hasConfirm: boolean; maxRuns: number } {
-    const hasConfirm = args.includes('--confirm');
-    const maxArg = args.find(a => a.startsWith('--max='));
-    const maxRuns = maxArg ? parseInt(maxArg.split('=')[1] ?? '10', 10) : 0;
-    return { hasConfirm, maxRuns };
-  }
-
-  it('should return hasConfirm=false by default', () => {
-    const result = parseAutoOptions([]);
-    expect(result.hasConfirm).toBe(false);
-    expect(result.maxRuns).toBe(0);
-  });
-
-  it('should detect --confirm flag', () => {
-    const result = parseAutoOptions(['--confirm']);
-    expect(result.hasConfirm).toBe(true);
-  });
-
-  it('should parse --max=N option', () => {
-    const result = parseAutoOptions(['--max=5']);
-    expect(result.maxRuns).toBe(5);
-  });
-
-  it('should parse both --confirm and --max=N', () => {
-    const result = parseAutoOptions(['--confirm', '--max=3']);
-    expect(result.hasConfirm).toBe(true);
-    expect(result.maxRuns).toBe(3);
-  });
-
-  it('should return 0 for unlimited when no --max specified', () => {
-    const result = parseAutoOptions([]);
-    expect(result.maxRuns).toBe(0);
-  });
-
-  it('should handle invalid --max value gracefully', () => {
-    const result = parseAutoOptions(['--max=invalid']);
-    expect(result.maxRuns).toBeNaN();
-  });
-});
+// Project state utilities, ProjectStorage, and parseAutoOptions were retired
+// with the /project command surface (FEATURE_086 Commit C).

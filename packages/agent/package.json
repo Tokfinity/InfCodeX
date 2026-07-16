@@ -1,7 +1,8 @@
 {
-  "name": "@kodax/agent",
-  "version": "0.7.14",
-  "description": "KodaX Agent - 通用 Agent 框架，会话管理和消息处理",
+  "name": "@kodax-ai/agent",
+  "version": "0.7.71",
+  "description": "KodaX Agent — 通用 Agent 框架（智能体底座）。Agent / Runner / Handoff / Guardrail / Admission / Messaging / Orchestration / Memory / Team / Scratchpad / Construction / Runtime middleware。不绑定 coding。",
+  "private": true,
   "type": "module",
   "main": "dist/index.js",
   "types": "dist/index.d.ts",
@@ -9,31 +10,87 @@
     ".": {
       "types": "./dist/index.d.ts",
       "import": "./dist/index.js"
+    },
+    "./messaging/queue": {
+      "types": "./dist/messaging/queue.d.ts",
+      "import": "./dist/messaging/queue.js"
+    },
+    "./capabilities/mcp": {
+      "types": "./dist/capabilities/mcp/index.d.ts",
+      "import": "./dist/capabilities/mcp/index.js"
+    },
+    "./capabilities/skills": {
+      "types": "./dist/capabilities/skills/index.d.ts",
+      "import": "./dist/capabilities/skills/index.js"
+    },
+    "./capabilities/skills/shared/yaml": {
+      "types": "./dist/capabilities/skills/shared/yaml.d.ts",
+      "import": "./dist/capabilities/skills/shared/yaml.js"
+    },
+    "./tracing": {
+      "types": "./dist/tracing/index.d.ts",
+      "import": "./dist/tracing/index.js"
+    },
+    "./session-lineage": {
+      "types": "./dist/session-lineage/index.d.ts",
+      "import": "./dist/session-lineage/index.js"
+    },
+    "./workflow": {
+      "types": "./dist/workflow/index.d.ts",
+      "import": "./dist/workflow/index.js"
+    },
+    "./learning": {
+      "types": "./dist/learning/index.d.ts",
+      "import": "./dist/learning/index.js"
+    },
+    "./memory-control": {
+      "types": "./dist/memory-control/index.d.ts",
+      "import": "./dist/memory-control/index.js"
+    },
+    "./experimental-memory": {
+      "types": "./dist/experimental-memory/index.d.ts",
+      "import": "./dist/experimental-memory/index.js"
+    },
+    "./media": {
+      "types": "./dist/media/index.d.ts",
+      "import": "./dist/media/index.js"
     }
   },
   "scripts": {
-    "build": "tsc -b",
+    "build": "tsc -b && npm run copy:builtin",
     "dev": "tsc --watch",
     "clean": "node -e \"require('fs').rmSync('dist',{recursive:true,force:true})\"",
     "test": "vitest run",
-    "test:watch": "vitest"
+    "test:watch": "vitest",
+    "copy:builtin": "node -e \"require('fs').cpSync('src/capabilities/skills/builtin','dist/capabilities/skills/builtin',{recursive:true})\""
   },
   "dependencies": {
-    "@kodax/ai": "*",
-    "js-tiktoken": "^1.0.12"
+    "@kodax-ai/llm": "*",
+    "js-tiktoken": "^1.0.12",
+    "fflate": "^0.8.2",
+    "jimp": "^1.6.0",
+    "typescript": "^5.9.3",
+    "yaml": "^2.8.2"
   },
   "devDependencies": {
     "@types/node": "^22.13.4",
-    "typescript": "^5.7.3",
     "vitest": "^3.2.4"
   },
   "engines": {
-    "node": ">=18.0.0"
+    "node": ">=20.0.0"
   },
   "repository": {
     "type": "git",
     "url": "https://github.com/icetomoyo/KodaX.git",
     "directory": "packages/agent"
   },
-  "license": "Apache-2.0"
+  "license": "SEE LICENSE IN LICENSE",
+  "files": [
+    "dist",
+    "README.md",
+    "LICENSE"
+  ],
+  "publishConfig": {
+    "access": "public"
+  }
 }

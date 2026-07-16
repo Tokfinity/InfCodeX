@@ -1,7 +1,8 @@
 {
-  "name": "@kodax/coding",
-  "version": "0.7.14",
+  "name": "@kodax-ai/coding",
+  "version": "0.7.71",
   "description": "KodaX Coding Agent - Coding 工具 + Prompts",
+  "private": true,
   "type": "module",
   "main": "dist/index.js",
   "types": "dist/index.d.ts",
@@ -13,6 +14,14 @@
     "./repo-intelligence-bridge": {
       "types": "./dist/repo-intelligence/public-bridge.d.ts",
       "import": "./dist/repo-intelligence/public-bridge.js"
+    },
+    "./extensions": {
+      "types": "./dist/extensions/index.d.ts",
+      "import": "./dist/extensions/index.js"
+    },
+    "./media": {
+      "types": "./dist/media/index.d.ts",
+      "import": "./dist/media/index.js"
     }
   },
   "scripts": {
@@ -23,28 +32,47 @@
     "test:watch": "vitest"
   },
   "dependencies": {
-    "@kodax/agent": "*",
-    "@kodax/ai": ">=0.5.0",
-    "@kodax/skills": "*",
+    "@kodax-ai/agent": "*",
+    "@kodax-ai/llm": "*",
+    "glob": "^11.0.1",
+    "iconv-lite": "^0.6.3",
+    "jimp": "^1.6.0",
+    "tsx": "^4.21.0",
+    "typescript": "^5.9.3",
+    "vscode-languageserver-protocol": "^3.17.5"
+  },
+  "devDependencies": {
     "@lezer/common": "^1.5.1",
     "@lezer/go": "^1.0.1",
     "@lezer/python": "^1.1.18",
-    "@lezer/rust": "^1.0.2"
-  },
-  "devDependencies": {
+    "@lezer/rust": "^1.0.2",
     "@types/node": "^22.13.4",
     "vitest": "^3.2.4"
   },
   "peerDependencies": {
-    "@kodax/ai": ">=0.5.0"
+    "@kodax-ai/llm": "*"
   },
   "engines": {
-    "node": ">=18.0.0"
+    "node": ">=20.0.0"
   },
   "repository": {
     "type": "git",
     "url": "https://github.com/icetomoyo/KodaX.git",
     "directory": "packages/coding"
   },
-  "license": "Apache-2.0"
+  "license": "SEE LICENSE IN LICENSE",
+  "optionalDependencies": {
+    "@lezer/common": "^1.5.1",
+    "@lezer/go": "^1.0.1",
+    "@lezer/python": "^1.1.18",
+    "@lezer/rust": "^1.0.2"
+  },
+  "files": [
+    "dist",
+    "README.md",
+    "LICENSE"
+  ],
+  "publishConfig": {
+    "access": "public"
+  }
 }

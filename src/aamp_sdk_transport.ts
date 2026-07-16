@@ -76,8 +76,41 @@ export class AampSdkTransport implements AampTransport {
       status: result.status === 'completed' ? 'completed' : 'rejected',
       output: result.output,
       errorMsg: result.status === 'failed' ? result.output : undefined,
+      structuredResult: result.structuredResult,
       inReplyTo: result.inReplyToMessageId,
     });
+  }
+
+  /* ── Streaming ── */
+
+  async createStream(opts: { taskId: string; peerEmail: string }): Promise<{ streamId: string }> {
+    const result = await this.client.createStream(opts);
+    return { streamId: result.streamId };
+  }
+
+  async sendStreamOpened(opts: {
+    to: string;
+    taskId: string;
+    streamId: string;
+    inReplyTo?: string;
+  }): Promise<void> {
+    await this.client.sendStreamOpened(opts);
+  }
+
+  async appendStreamEvent(opts: {
+    streamId: string;
+    type: string;
+    payload: Record<string, unknown>;
+  }): Promise<void> {
+    await this.client.appendStreamEvent({
+      streamId: opts.streamId,
+      type: opts.type as import('aamp-sdk').AampStreamEvent['type'],
+      payload: opts.payload,
+    });
+  }
+
+  async closeStream(opts: { streamId: string; payload?: Record<string, unknown> }): Promise<void> {
+    await this.client.closeStream(opts);
   }
 
   async dispose(): Promise<void> {

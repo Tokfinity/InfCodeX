@@ -1,13 +1,20 @@
 import { describe, expect, it } from 'vitest';
+import { Command } from 'commander';
 import {
   buildSessionOptions,
-  mergeConfiguredExtensions,
+  createKodaXOptions,
   parseAgentModeOption,
-  parseNonNegativeIntWithFallback,
+  parseEffortOption,
   parseOptionalNonNegativeInt,
   parseOutputModeOption,
-  parsePositiveNumberWithFallback,
+  parseReasoningModeOption,
+  parseRepoIntelligenceModeOption,
+  normalizeCliSessionFlags,
+  resolveCliEffort,
   resolveCliModelSelection,
+  resolveCliProviderSelection,
+  resolveCliRuntimeMode,
+  findSessionTitleMatches,
   validateCliModeSelection,
   type CliOptions,
 } from './cli_option_helpers.js';
@@ -17,14 +24,9 @@ function createCliOptions(overrides: Partial<CliOptions> = {}): CliOptions {
     provider: 'openai',
     thinking: true,
     reasoningMode: 'auto',
+    effort: 'auto',
     agentMode: 'ama',
     outputMode: 'text',
-    parallel: false,
-    append: false,
-    overwrite: false,
-    autoContinue: false,
-    maxSessions: 50,
-    maxHours: 2,
     prompt: ['inspect', 'repo'],
     noSession: false,
     ...overrides,
@@ -60,13 +62,38 @@ describe('validateCliModeSelection', () => {
     ).toThrow('`--mode json` requires a prompt as positional arguments.');
   });
 
+  it('rejects ACP cleanup as a json session-management mode', () => {
+    expect(() =>
+      validateCliModeSelection(
+        createCliOptions({ outputMode: 'json', session: 'cleanup-acp', prompt: [] }),
+      ),
+    ).toThrow('`--mode json` does not support session management sub-modes.');
+  });
+
   it('rejects bare resume in json mode', () => {
     expect(() =>
       validateCliModeSelection(
         createCliOptions({ outputMode: 'json' }),
         { resumeWithoutId: true },
       ),
-    ).toThrow('`--mode json` requires an explicit session id for `--resume`');
+    ).toThrow('`--mode json` requires an explicit session ID or exact title for `--resume`');
+  });
+});
+
+describe('findSessionTitleMatches', () => {
+  const sessions = [
+    { id: 'session-1', title: 'Review Runtime' },
+    { id: 'session-2', title: 'review runtime' },
+    { id: 'session-3', title: 'Fix ACP storage' },
+  ];
+
+  it('matches titles exactly while ignoring case and surrounding whitespace', () => {
+    expect(findSessionTitleMatches(sessions, '  REVIEW RUNTIME  ').map((session) => session.id))
+      .toEqual(['session-1', 'session-2']);
+  });
+
+  it('does not treat a partial title as a direct resume match', () => {
+    expect(findSessionTitleMatches(sessions, 'runtime')).toEqual([]);
   });
 });
 
@@ -91,14 +118,227 @@ describe('buildSessionOptions', () => {
   });
 });
 
+describe('normalizeCliSessionFlags', () => {
+  it('treats Commander --no-session as noSession without a session id', () => {
+    const normalized = normalizeCliSessionFlags({ session: false });
+
+    expect(normalized).toEqual({
+      session: undefined,
+      noSession: true,
+    });
+  });
+
+  it('preserves real session strings, including the literal string "false"', () => {
+    expect(normalizeCliSessionFlags({ session: 'resume' })).toEqual({
+      session: 'resume',
+      noSession: false,
+    });
+    expect(normalizeCliSessionFlags({ session: 'false' })).toEqual({
+      session: 'false',
+      noSession: false,
+    });
+  });
+});
+
+describe('createKodaXOptions', () => {
+  it('projects repo intelligence mode and trace flags from runtime env into context', () => {
+    const previousMode = process.env.KODAX_REPO_INTELLIGENCE;
+    const previousTrace = process.env.KODAX_REPO_INTELLIGENCE_TRACE;
+    process.env.KODAX_REPO_INTELLIGENCE = 'full';
+    process.env.KODAX_REPO_INTELLIGENCE_TRACE = '1';
+
+    try {
+      const options = createKodaXOptions(createCliOptions());
+      expect(options.context).toMatchObject({
+        repoIntelligenceMode: 'full',
+        repoIntelligenceTrace: true,
+      });
+    } finally {
+      if (previousMode === undefined) {
+        delete process.env.KODAX_REPO_INTELLIGENCE;
+      } else {
+        process.env.KODAX_REPO_INTELLIGENCE = previousMode;
+      }
+      if (previousTrace === undefined) {
+        delete process.env.KODAX_REPO_INTELLIGENCE_TRACE;
+      } else {
+        process.env.KODAX_REPO_INTELLIGENCE_TRACE = previousTrace;
+      }
+    }
+  });
+
+  it('projects resolved effort into KodaX options', () => {
+    const options = createKodaXOptions(createCliOptions({ effort: 'high' }));
+    expect(options.effort).toBe('high');
+  });
+
+  it('projects effort none as disabled thinking', () => {
+    const options = createKodaXOptions(createCliOptions({
+      effort: 'none',
+      thinking: true,
+      reasoningMode: 'auto',
+    }));
+
+    expect(options.thinking).toBe(false);
+    expect(options.reasoningMode).toBe('off');
+  });
+
+  it('treats effort off as the user-facing alias for none', () => {
+    const effort = parseEffortOption('off');
+    const options = createKodaXOptions(createCliOptions({
+      effort,
+      thinking: true,
+      reasoningMode: 'auto',
+    }));
+
+    expect(effort).toBe('none');
+    expect(options.thinking).toBe(false);
+    expect(options.reasoningMode).toBe('off');
+  });
+});
+
+describe('parseEffortOption', () => {
+  it('normalizes effort values case-insensitively', () => {
+    expect(parseEffortOption(' HIGH ')).toBe('high');
+  });
+
+  it('rejects empty effort values', () => {
+    expect(() => parseEffortOption('   ')).toThrow('Reasoning effort cannot be empty.');
+  });
+});
+
+describe('resolveCliEffort', () => {
+  it('uses explicit --effort before config and legacy reasoning', () => {
+    const program = new Command();
+    program.option('--effort <level>', 'effort');
+    program.parse(['node', 'kodax', '--effort', 'high']);
+
+    expect(resolveCliEffort(program, program.opts(), { effort: 'low' })).toBe('high');
+  });
+
+  it('uses explicit --effort before KODAX_EFFORT', () => {
+    const previous = process.env.KODAX_EFFORT;
+    process.env.KODAX_EFFORT = 'low';
+    const program = new Command();
+    program.option('--effort <level>', 'effort');
+    program.parse(['node', 'kodax', '--effort', 'high']);
+
+    try {
+      expect(resolveCliEffort(program, program.opts(), { effort: 'medium' })).toBe('high');
+    } finally {
+      if (previous === undefined) {
+        delete process.env.KODAX_EFFORT;
+      } else {
+        process.env.KODAX_EFFORT = previous;
+      }
+    }
+  });
+
+  it('lets KODAX_EFFORT=auto clear only the env layer', () => {
+    const previous = process.env.KODAX_EFFORT;
+    process.env.KODAX_EFFORT = 'auto';
+    const program = new Command();
+    program.option('--effort <level>', 'effort');
+    program.parse(['node', 'kodax']);
+
+    try {
+      expect(resolveCliEffort(program, program.opts(), { effort: 'medium' })).toBe('medium');
+    } finally {
+      if (previous === undefined) {
+        delete process.env.KODAX_EFFORT;
+      } else {
+        process.env.KODAX_EFFORT = previous;
+      }
+    }
+  });
+});
+
+describe('resolveCliProviderSelection', () => {
+  it('uses CLI > env > config > default precedence', () => {
+    expect(resolveCliProviderSelection(
+      'cli-provider',
+      'env-provider',
+      'config-provider',
+      'default-provider',
+    )).toBe('cli-provider');
+    expect(resolveCliProviderSelection(
+      undefined,
+      'env-provider',
+      'config-provider',
+      'default-provider',
+    )).toBe('env-provider');
+    expect(resolveCliProviderSelection(
+      undefined,
+      undefined,
+      'config-provider',
+      'default-provider',
+    )).toBe('config-provider');
+    expect(resolveCliProviderSelection(
+      undefined,
+      undefined,
+      undefined,
+      'default-provider',
+    )).toBe('default-provider');
+  });
+});
+
+describe('resolveCliRuntimeMode', () => {
+  it('uses CLI > env > config > embedded precedence', () => {
+    expect(resolveCliRuntimeMode('daemon', 'embedded', 'embedded')).toBe('daemon');
+    expect(resolveCliRuntimeMode(undefined, 'daemon', 'embedded')).toBe('daemon');
+    expect(resolveCliRuntimeMode(undefined, undefined, 'daemon')).toBe('daemon');
+    expect(resolveCliRuntimeMode(undefined, undefined, undefined)).toBe('embedded');
+  });
+
+  it('validates environment and config values', () => {
+    expect(() => resolveCliRuntimeMode(undefined, 'remote', undefined)).toThrow(
+      'Expected one of: embedded, daemon.',
+    );
+    expect(() => resolveCliRuntimeMode(undefined, undefined, 'remote')).toThrow(
+      'Expected one of: embedded, daemon.',
+    );
+  });
+});
+
 describe('parseAgentModeOption', () => {
   it('accepts SA mode case-insensitively', () => {
     expect(parseAgentModeOption('SA')).toBe('sa');
   });
 
+  it('accepts AMAW mode case-insensitively', () => {
+    expect(parseAgentModeOption('AMAW')).toBe('amaw');
+  });
+
   it('rejects unsupported agent modes', () => {
     expect(() => parseAgentModeOption('team')).toThrow(
-      'Expected one of: ama, sa.',
+      'Expected one of: ama, amaw, sa.',
+    );
+  });
+});
+
+describe('parseReasoningModeOption', () => {
+  it('accepts supported reasoning modes', () => {
+    expect(parseReasoningModeOption('balanced')).toBe('balanced');
+  });
+
+  it('rejects unsupported reasoning modes', () => {
+    expect(() => parseReasoningModeOption('verbose')).toThrow(
+      'Expected one of: off, auto, quick, balanced, deep.',
+    );
+  });
+});
+
+describe('parseRepoIntelligenceModeOption', () => {
+  it('accepts public repo-intelligence modes', () => {
+    expect(parseRepoIntelligenceModeOption('full')).toBe('full');
+    expect(parseRepoIntelligenceModeOption('light')).toBe('light');
+    expect(parseRepoIntelligenceModeOption('auto')).toBe('auto');
+    expect(parseRepoIntelligenceModeOption('off')).toBe('off');
+  });
+
+  it('rejects unsupported repo-intelligence modes', () => {
+    expect(() => parseRepoIntelligenceModeOption('premium')).toThrow(
+      'Expected one of: auto, full, light, off.',
     );
   });
 });
@@ -114,39 +354,13 @@ describe('numeric CLI helpers', () => {
     );
   });
 
-  it('uses the fallback for absent non-negative integer values', () => {
-    expect(parseNonNegativeIntWithFallback(undefined, 50)).toBe(50);
-  });
-
-  it('throws on invalid fallback-backed integer values', () => {
-    expect(() => parseNonNegativeIntWithFallback('-1', 50)).toThrow(
-      'Expected a non-negative integer, got "-1".',
+  it('rejects partially numeric and decimal values', () => {
+    expect(() => parseOptionalNonNegativeInt('12abc')).toThrow(
+      'Expected a non-negative integer, got "12abc".',
     );
-  });
-
-  it('uses the fallback for absent positive numeric values', () => {
-    expect(parsePositiveNumberWithFallback(undefined, 2)).toBe(2);
-  });
-
-  it('throws on invalid positive numeric values', () => {
-    expect(() => parsePositiveNumberWithFallback('0', 2)).toThrow(
-      'Expected a positive number, got "0".',
+    expect(() => parseOptionalNonNegativeInt('1.5')).toThrow(
+      'Expected a non-negative integer, got "1.5".',
     );
-  });
-});
-
-describe('mergeConfiguredExtensions', () => {
-  it('merges configured and CLI extension lists with deduplication', () => {
-    expect(
-      mergeConfiguredExtensions(
-        ['  ./local-ext.mjs  ', './shared-ext.mjs'],
-        ['./shared-ext.mjs', './config-ext.mjs', ''],
-      ),
-    ).toEqual([
-      './shared-ext.mjs',
-      './config-ext.mjs',
-      './local-ext.mjs',
-    ]);
   });
 });
 

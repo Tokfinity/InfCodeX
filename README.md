@@ -1,278 +1,154 @@
-# InfCodeX
+<p align="center">
+  <picture>
+    <source media="(prefers-color-scheme: dark)" srcset="assets/logo-dark.svg">
+    <source media="(prefers-color-scheme: light)" srcset="assets/logo-light.svg">
+    <img src="assets/logo-light.svg" alt="InfCodeX" width="640">
+  </picture>
+</p>
 
-[English](README.md) | [中文](README_CN.md)
+<p align="center">
+  <b>Source-available AI coding agent on every LLM you can reach.</b><br>
+  Anthropic · OpenAI · DeepSeek · Kimi · Zhipu · MiniMax · MiMo · Ark · Qwen · Gemini · Codex.<br>
+  REPL · CLI · library · Node-free single binary.<br>
+  <b>InfCodeX</b> keeps the historical <b>KodaX / <code>kodax</code></b> package and command names for compatibility.
+</p>
 
-**InfCodeX** is Tokfinity's next-generation AI coding CLI and execution-oriented agent runtime for real software engineering.
+<p align="center">
+  <a href="https://www.npmjs.com/package/@kodax-ai/kodax"><img alt="npm version" src="https://img.shields.io/npm/v/@kodax-ai/kodax?style=flat-square&color=cb3837"></a>
+  <a href="LICENSE"><img alt="license" src="https://img.shields.io/badge/license-KAI--FCL_1.0-orange?style=flat-square"></a>
+  <a href="https://github.com/icetomoyo/KodaX/stargazers"><img alt="GitHub stars" src="https://img.shields.io/github/stars/icetomoyo/KodaX?style=flat-square&logo=github&color=f1c40f"></a>
+  <a href="https://github.com/icetomoyo/KodaX/actions"><img alt="CI" src="https://img.shields.io/github/actions/workflow/status/icetomoyo/KodaX/release.yml?style=flat-square&label=release"></a>
+  <img alt="providers" src="https://img.shields.io/badge/LLMs-15_aliases_+_custom-2ecc71?style=flat-square">
+</p>
 
-It is not just a terminal chatbot for code. It is a modular, TypeScript-native system that can run as a CLI, be embedded as a library, and evolve into the execution layer of a larger agent platform.
+<p align="center">
+  <a href="#install-in-30-seconds">Install</a> ·
+  <a href="#four-ways-to-use-kodax">Usage</a> ·
+  <a href="#sdk-usage">SDK</a> ·
+  <a href="CHANGELOG.md">Changelog</a> ·
+  <a href="docs/FEATURE_LIST.md">Roadmap</a> ·
+  <a href="https://github.com/icetomoyo/KodaX/discussions">Discussions</a> ·
+  <a href="README_CN.md">中文 README</a>
+</p>
 
-> Current repository alias and command name: **KodaX / `kodax`**. The repository name is **InfCodeX**, while parts of the codebase and docs still use the historical KodaX naming.
-
----
-
-## Why InfCodeX
-
-Most AI coding tools optimize for quick demos or single-turn assistance. InfCodeX is built around a different goal: **reliable engineering execution**.
-
-InfCodeX matters because it combines:
-
-- **CLI-first execution** for developers who work in the terminal
-- **Agent runtime architecture** instead of a single monolithic app
-- **Project-aware continuity** through session memory and long-running task flows
-- **Safety and governance** through permission modes and confirmation boundaries
-- **Modularity** through reusable packages and clear dependency boundaries
-- **Future multi-agent evolution** through parallel execution, team mode, and skills
-
-For Tokfinity, InfCodeX is important not only as a developer tool, but as a **software-engineering execution substrate** that can integrate with the broader **InfOne** intelligent-organization platform.
-
----
-
-## Positioning
-
-**InfCodeX is a production-oriented AI coding CLI and agent runtime for serious software engineering.**
-
-It serves two roles at the same time:
-
-1. **Developer-facing CLI**
-   - inspect repositories
-   - read and modify files
-   - run commands
-   - iterate across multi-step engineering tasks
-
-2. **Platform-facing execution layer**
-   - reusable as npm packages
-   - suitable for orchestration by higher-level systems
-   - extensible with providers, tools, skills, and project policies
+<p align="center">
+  <img src="kodax-hd.gif" alt="KodaX in action" width="880">
+</p>
 
 ---
 
-## Core Highlights
-
-### 1. Modular layered architecture
-InfCodeX is structured as a monorepo with five major packages:
-
-- `@kodax/ai`
-- `@kodax/agent`
-- `@kodax/skills`
-- `@kodax/coding`
-- `@kodax/repl`
-
-This separation is one of the project's strongest differentiators. Each layer has a clear responsibility, and several layers are designed to be independently reusable.
-
-### 2. CLI and library dual use
-InfCodeX can be used as:
-
-- a terminal coding agent for day-to-day development
-- a library embedded into other products or agent systems
-
-That makes it much more strategic than a purely interactive tool.
-
-### 3. Multi-provider model abstraction
-The project exposes a provider abstraction layer and currently documents support for built-in providers such as:
-
-- Anthropic
-- OpenAI
-- Kimi
-- Kimi Code
-- Qwen
-- Zhipu
-- Zhipu Coding
-- MiniMax Coding
-- Gemini CLI
-- Codex CLI
-
-This helps teams avoid hard vendor lock-in and makes the runtime more suitable for cost optimization, regional routing, private deployment, and enterprise model governance.
-
-### 4. Real coding-agent execution loop
-InfCodeX is designed around action, not just answer generation. Its coding layer includes tools and an iterative agent loop so the system can work on actual repositories.
-
-Documented built-in tool capabilities include:
-
-- read
-- write
-- edit
-- bash
-- glob
-- grep
-- undo
-- diff
-
-### 5. Permission-aware autonomy
-InfCodeX introduces three permission modes:
-
-- `plan`
-- `accept-edits`
-- `auto-in-project`
-
-This is a critical design choice. It lets teams balance safety and efficiency rather than forcing a binary choice between manual mode and unrestricted automation.
-
-### 6. Session memory and long-running work
-Real engineering is rarely completed in one turn. InfCodeX supports persistent sessions and long-running workflows so the agent can resume work, preserve context, and move a task forward across multiple steps.
-
-### 7. Skills-driven specialization
-The skills layer allows InfCodeX to be specialized beyond generic prompting. It supports built-in skills, discoverable skills, markdown-based skill definitions, and natural-language triggering.
-
-### 8. Native path toward multi-agent workflows
-The project already points toward coordinated agent execution through features such as:
-
-- parallel execution
-- team mode
-- project initialization
-- auto-continue
-
-This gives InfCodeX a credible path from "AI CLI" to "multi-agent engineering runtime".
-
----
-
-## Architecture Overview
-
-```text
-InfCodeX
-├─ AI Layer        → provider abstraction, streaming, retry, capability handling
-├─ Agent Layer     → sessions, messages, token utilities, compaction
-├─ Skills Layer    → skill discovery, registry, execution
-├─ Coding Layer    → tools, prompts, coding-agent loop, long-running workflows
-└─ REPL / CLI      → interactive UX, permission control, commands, project flows
-```
-
-This design provides several advantages:
-
-- **Clear separation of concerns**
-- **Replaceable boundaries across provider, runtime, and UI layers**
-- **Better testability and replacement boundaries**
-- **Potential for independent package reuse**
-- **A stronger foundation for future enterprise orchestration**
-
-### Package Overview
-
-| Package | Responsibility | Notes |
-|---------|----------------|-------|
-| `@kodax/ai` | Provider abstraction and model adapters | Supports built-in providers and custom compatible endpoints |
-| `@kodax/agent` | Sessions, messages, tokens, and compaction | Reusable outside the coding workflow |
-| `@kodax/skills` | Skill discovery and execution | Lightweight specialization layer |
-| `@kodax/coding` | Tools, prompts, and coding-agent loop | Execution-oriented core runtime |
-| `@kodax/repl` | Terminal UI and slash commands | Permission UX and interactive workflow layer |
-
-### Dependency Shape
-
-```text
-kodax CLI entry
-├─ @kodax/repl
-│  └─ @kodax/coding
-│     ├─ @kodax/ai
-│     ├─ @kodax/agent
-│     └─ @kodax/skills
-└─ @kodax/coding
-```
-
----
-
-## Why InfCodeX is strategically important to InfOne
-
-InfOne represents the broader vision of an **intelligent organization / AI org** platform: defining, governing, routing, and managing large-scale agents across business scenarios.
-
-Within that picture, InfCodeX can play a highly specific and valuable role.
-
-### InfOne as control plane
-InfOne is suited to handle:
-
-- agent registration and lifecycle management
-- model routing and policy decisions
-- organization-level memory and governance
-- permissions, auditability, and observability
-- multi-agent orchestration at scale
-
-### InfCodeX as execution plane
-InfCodeX is suited to handle:
-
-- repository-local engineering execution
-- coding tools and file operations
-- project-aware task continuation
-- engineering-specific skills and workflows
-- interactive and semi-automatic task delivery
-
-### Combined value
-Without a strong execution layer, an agent management platform can become a dashboard without operational depth.
-Without a strong management layer, a coding CLI remains a local power tool with limited organizational leverage.
-
-**InfOne + InfCodeX** together form a more complete system:
-
-- InfOne decides **which agents should do what**.
-- InfCodeX carries out **how software-engineering work gets done**.
-
-That is why InfCodeX is not merely "another coding CLI". It is a practical bridge between:
-
-- single-developer AI assistance,
-- repository-level engineering execution,
-- organization-level agent management.
-
----
-
-## Typical Use Cases
-
-### 1. Terminal-native coding copilot
-Developers use InfCodeX locally to inspect code, patch files, run commands, and iterate faster without leaving the terminal.
-
-### 2. Multi-step feature delivery
-A task can continue across sessions rather than being constrained to one-shot prompting.
-
-### 3. Team-standard engineering agent
-A team can combine common rules, selected models, and skills to create more consistent coding-agent behavior across repositories.
-
-### 4. SDLC agent execution substrate
-InfCodeX can serve as the execution layer for coding-oriented agents inside a broader SDLC agent stack, including future integration with code review, testing, or delivery workflows.
-
-### 5. Enterprise-safe rollout path
-Organizations can adopt it incrementally with permission modes, scoped automation, and provider flexibility.
-
----
-
-## Feature Snapshot
-
-- TypeScript-native implementation
-- Monorepo with reusable packages
-- CLI + library usage model
-- Streaming output
-- Thinking / reasoning mode support
-- Session persistence
-- Permission-aware execution
-- Skills system
-- Parallel execution
-- Team mode
-- Long-running project workflows
-- Cross-platform usage on Windows / macOS / Linux
-
----
-
-## Project Mode
-
-| Feature | KodaX | Typical hosted coding assistant |
-|---------|-------|----------------------------------|
-| **Architecture** | Modular (5 packages), library-friendly | Usually product-first, less reusable as code |
-| **Provider choice** | 11 providers, custom provider support | Often optimized for one provider |
-| **Customization** | Edit prompts, tools, skills, session flow directly | Limited extension surface |
-| **Codebase clarity** | Small TypeScript monorepo | Often much larger and harder to trace |
-| **Learning value** | Good for understanding agent internals | More black-box |
-
-## Quick Start
-
-### Requirements
-
-- Node.js `>=18.0.0`
-- npm workspaces
-
-### 1. Install and build
+## Install in 30 seconds
 
 ```bash
+npm i -g @kodax-ai/kodax
+
+# Pick any one you have an API key for:
+export ZHIPU_API_KEY=...        # or ANTHROPIC_API_KEY / OPENAI_API_KEY / KIMI_API_KEY /
+                                # MINIMAX_API_KEY / MIMO_API_KEY / ARK_API_KEY / QWEN_API_KEY /
+                                # DEEPSEEK_API_KEY / GEMINI_API_KEY
+
+kodax
+```
+
+That's it. You're in the REPL — ask anything in natural language.
+
+> **No-Node target machines:** download a Bun-compiled single binary for Windows / macOS / Linux × x64 + arm64 from the [GitHub Releases](https://github.com/icetomoyo/KodaX/releases) page. See [docs/release.md](docs/release.md) for the build pipeline.
+
+---
+
+## Four ways to use KodaX
+
+| Form | Command / Import | When to use it |
+|---|---|---|
+| **REPL** | `kodax` | Interactive multi-turn coding session with streaming UI, permissions, slash commands |
+| **CLI** | `kodax -p "your task"` | One-shot scripted task, CI runs, batch processing |
+| **Library** | `import { runKodaX } from '@kodax-ai/kodax'` | Embed in your own tool / agent / web service |
+| **Single binary** | `./kodax` | Distribute to machines that don't have Node installed |
+
+---
+
+## Why KodaX
+
+<table>
+  <tr>
+    <td width="33%" align="center" valign="top">
+      <h3>🇨🇳 6 China-native LLMs</h3>
+      <sub>Zhipu · Kimi · MiniMax · MiMo · Ark · Qwen</sub>
+      <br><br>
+      First-class adapters with cross-provider <a href="benchmark/EVAL_GUIDELINES.md">prompt-eval calibration</a> on a canonical 5-alias panel — not OpenAI-compat shims.
+    </td>
+    <td width="33%" align="center" valign="top">
+      <h3>📦 Single-file binary</h3>
+      <sub>Bun --compile · Win / macOS / Linux · x64 + arm64</sub>
+      <br><br>
+      No Node required on the target machine. Drop one file, run anywhere — restricted envs, CI runners, air-gapped boxes.
+    </td>
+    <td width="33%" align="center" valign="top">
+      <h3>🌳 Branchable session lineage</h3>
+      <sub>Fork · rewind · parallel edit</sub>
+      <br><br>
+      Conversation history is a DAG, not a list. Powers the upcoming <b>KodaX Space</b> desktop app.
+    </td>
+  </tr>
+  <tr>
+    <td align="center" valign="top">
+      <h3>🤖 Multi-agent by default</h3>
+      <sub>V2 Worker single-loop + Sidecar Verifier + async children</sub>
+      <br><br>
+      <code>dispatch_child_task</code>, <code>send_message</code>, <code>task_stop</code>, multi-instance auto-coordination with content-hash safety net.
+    </td>
+    <td align="center" valign="top">
+      <h3>🧩 Skills + self-construction</h3>
+      <sub>Markdown skills, NL triggers</sub>
+      <br><br>
+      5-stage self-modification staircase (scaffold → validate → stage → test → activate) gated by an 8-invariant admission contract.
+    </td>
+    <td align="center" valign="top">
+      <h3>🛠 50+ built-in tools</h3>
+      <sub>File · shell · search · MCP · ACP</sub>
+      <br><br>
+      Repo intelligence, semantic search, git worktree, web fetch — all addressable through one clean tool surface.
+    </td>
+  </tr>
+</table>
+
+## How KodaX compares
+
+| Feature | **KodaX** | Claude Code | Aider | Codex CLI | Cursor | Cline |
+|---|---|---|---|---|---|---|
+| Source license | ⚠️ KAI-FCL, non-commercial | ❌ Source-available | ✅ Apache&nbsp;2.0 | ✅ Apache&nbsp;2.0 | ❌ Proprietary | ✅ Apache&nbsp;2.0 |
+| Node-free single binary | ✅ Bun | ❌ Node | ❌ Python | ✅ Rust | ❌ Electron | ❌ Extension |
+| Native China providers<br><sub>(Zhipu · Kimi · MiniMax · MiMo · Ark · Qwen)</sub> | ✅ 6 native | ❌ | ⚠ via LiteLLM | ❌ OpenAI-first | ❌ no provider menu | ⚠ Kimi / Qwen / DeepSeek |
+| Branchable session lineage | ✅ fork & rewind | ⚠ routines / sessions | ❌ | ❌ | ❌ | ⚠ checkpoints |
+| Multi-agent + MCP + 50+ tools | ✅ all three | ✅ all three | ⚠ tools, no MCP | ✅ all three | ⚠ Composer + MCP | ✅ all three |
+
+<sub>Data verified May 2026 against public docs ([Claude Code](https://github.com/anthropics/claude-code) · [Aider](https://aider.chat/docs/llms.html) · [Codex CLI](https://github.com/openai/codex) · [Cursor](https://cursor.com) · [Cline](https://github.com/cline/cline)). ⚠ = partial / requires extra setup / not first-class. Corrections welcome via PR.</sub>
+
+## Detailed Setup
+
+> The `npm i -g @kodax-ai/kodax` one-liner above is the fastest path. This section is for building from source, configuring custom providers, or using KodaX as a library.
+
+### 1. Build the CLI from source
+
+```bash
+git clone https://github.com/icetomoyo/KodaX.git
+cd KodaX
 npm install
-npm run build:packages
 npm run build
 npm link
 ```
 
+To create an InfCodeX-branded npm tarball without changing tracked package metadata, run:
+
+```bash
+npm run release:infcodex
+```
+
+The command reuses the current single-bundle release pipeline, temporarily packages the unscoped `infcodex` package with an `infcodex` CLI command, and restores `package.json` afterward. The artifact is written as `infcodex-<version>.tgz` at the repository root.
+
 ### 2. Configure a provider
 
-Built-in providers read credentials from environment variables:
+KodaX reads API keys from environment variables. For built-in providers, the fastest path is:
 
 ```bash
 # macOS / Linux
@@ -287,13 +163,11 @@ For CLI defaults, create `~/.kodax/config.json`:
 ```json
 {
   "provider": "zhipu-coding",
-  "reasoningMode": "auto",
-  "permissionMode": "accept-edits",
-  "parallel": false
+  "effort": "auto"
 }
 ```
 
-If you need a custom base URL or an OpenAI/Anthropic-compatible endpoint:
+If you need a custom base URL or an OpenAI/Anthropic-compatible endpoint, define a custom provider in the same config file:
 
 ```json
 {
@@ -305,13 +179,82 @@ If you need a custom base URL or an OpenAI/Anthropic-compatible endpoint:
       "baseUrl": "https://example.com/v1",
       "apiKeyEnv": "MY_LLM_API_KEY",
       "model": "my-model",
-      "userAgentMode": "compat"
+      "userAgentMode": "compat",
+      "reasoning": {
+        "efforts": ["off", "low", "medium", "high", "max"],
+        "default": "high"
+      }
     }
   ]
 }
 ```
 
 `userAgentMode` defaults to `"compat"`, which sends `KodaX` instead of the official SDK User-Agent. Switch it to `"sdk"` only when your gateway expects the upstream SDK header.
+For custom reasoning models, `reasoning: { efforts, default }` is the preferred v0.7.57 shape; use `"reasoning": "none"` for models without thinking capability. SDK hosts should render effort pickers from `reasoningProfile.supportedEfforts` / `defaultEffort` rather than assuming a fixed five-option ladder.
+
+#### OpenAI-compatible reasoning providers
+
+Some OpenAI-compatible reasoning models require KodaX to replay the previous assistant turn's `reasoning_content` on later requests. DeepSeek V4 thinking mode is the known load-bearing case. Built-in DeepSeek already opts in; custom providers must say so explicitly:
+
+```json
+{
+  "customProviders": [
+    {
+      "name": "my-deepseek-v4",
+      "protocol": "openai",
+      "baseUrl": "https://example.com/v1",
+      "apiKeyEnv": "MY_DEEPSEEK_API_KEY",
+      "model": "deepseek-v4-flash",
+      "reasoningPreset": "deepseek-v4-openai",
+      "replayReasoningContent": true
+    }
+  ]
+}
+```
+
+Keep `replayReasoningContent` unset or `false` for OpenAI proper and gateways that reject unknown assistant-message fields. If one gateway routes mixed models, prefer per-model overrides:
+
+```json
+{
+  "models": [
+    { "id": "deepseek-v4-flash", "replayReasoningContent": true },
+    { "id": "gpt-5", "replayReasoningContent": false }
+  ]
+}
+```
+
+Sidecar verifier judge calls use provider-level forced tool choice when supported. If a compatible endpoint rejects the `tool_choice` parameter, KodaX retries that verifier request once without forced tool choice and still fails open rather than blocking the main Worker.
+
+#### Opting a custom provider into image / vision input (FEATURE_134 v0.7.40)
+
+If your custom provider's underlying model supports image input (vision), add a `capabilityProfile.multimodalSupport: "image-input"` block so KodaX does not artificially block multimodal requests at the SA-path policy gate. Built-in vision-capable aliases (Anthropic, OpenAI, Anthropic-/OpenAI-compatible aliases such as DeepSeek, Kimi, Qwen, Zhipu, MiniMax, MiMo, Ark, plus Gemini-CLI via the CLI's `@<path>` file-include syntax) already ship with this flag enabled by default; Codex-CLI and custom providers need to opt in when their underlying model supports image input.
+
+```json
+{
+  "customProviders": [
+    {
+      "name": "my-vision-provider",
+      "protocol": "openai",
+      "baseUrl": "https://example.com/v1",
+      "apiKeyEnv": "MY_LLM_API_KEY",
+      "model": "my-vision-model",
+      "capabilityProfile": {
+        "transport": "native-api",
+        "conversationSemantics": "full-history",
+        "mcpSupport": "none",
+        "contextFidelity": "full",
+        "toolCallingFidelity": "full",
+        "sessionSupport": "full",
+        "longRunningSupport": "full",
+        "multimodalSupport": "image-input",
+        "evidenceSupport": "full"
+      }
+    }
+  ]
+}
+```
+
+The serializer layer (`packages/llm/src/providers/anthropic.ts:770` for Anthropic-compat, `openai.ts:904` for OpenAI-compat) forwards image blocks automatically through base-class inheritance. The flag only gates whether KodaX's policy layer pre-rejects multimodal requests — the model-level vision contract remains your upstream provider's responsibility. If the model is actually text-only, you'll see the real upstream API error instead of a KodaX-side rejection.
 
 ### 3. Start in REPL or run a one-shot task
 
@@ -332,8 +275,10 @@ kodax --session review "Give me concrete fix suggestions"
 
 ### 4. Use it as a library
 
+Library usage still expects API keys from environment variables. If you want custom provider names or base URLs in code, register them explicitly:
+
 ```typescript
-import { registerCustomProviders, runKodaX } from 'kodax';
+import { registerCustomProviders, runKodaX } from '@kodax-ai/kodax';
 
 registerCustomProviders([
   {
@@ -349,136 +294,435 @@ registerCustomProviders([
 const result = await runKodaX(
   {
     provider: 'my-openai-compatible',
-    reasoningMode: 'auto',
-    context: {
-      gitRoot: '/repo',
-      executionCwd: '/repo/packages/app',
-    },
+    effort: 'auto',
   },
   'Explain this codebase'
 );
 ```
 
-### Common examples
+> **Embedding KodaX inside another app?** (KodaX Space, IDE extensions, custom CLIs)
+> See [docs/SDK_EMBEDDER_GUIDE.md](docs/SDK_EMBEDDER_GUIDE.md) for the runtime-mutation
+> surface (`startKodaX` + `RunningSession`), MCP popout manager API (`McpManager`),
+> Skill `` !`cmd` `` host hook, and per-app data dir namespacing (`getAppDataDir`).
 
-```bash
-# session memory
-kodax --session my-project "Read package.json"
-kodax --session my-project "Summarize it"
+## Runtime SDK and daemon
 
-# parallel execution
-kodax --parallel "analyze and improve this module"
+SDK hosts can use `@kodax-ai/kodax/runtime` in three forms: inline embedded for
+lowest latency, Worker-hosted embedded for private state plus hard V8 disposal,
+or a local daemon shared by REPL, Space, IDE adapters, and custom SDK clients.
+All three expose the same `KodaXRuntime` services.
 
-# team mode
-kodax --team "implement,review,test"
+```ts
+import { createKodaXRuntime } from '@kodax-ai/kodax/runtime';
 
-# initialize long-running project work
-kodax --init "deliver feature X"
-
-# auto-continue until complete
-kodax --auto-continue --max-hours 2
+const isolated = await createKodaXRuntime({
+  mode: 'embedded',
+  isolation: 'worker',
+  requirements: { hardDispose: true },
+});
 ```
 
----
+Inline is private and lowest-overhead; Worker is private and hard-disposable;
+daemon is process-isolated and shared. `runtime.close()` closes private
+inline/Worker ownership, but only detaches one daemon client. Contradictory
+isolation options fail instead of silently selecting a weaker mode. Worker
+isolation is a V8 fault boundary, not a security sandbox.
+
+Because a daemon is intentionally persistent, tests that auto-start one must
+also run `kodax daemon stop --home <dir> --profile <name>` (or send authenticated
+`runtime.shutdown`) before deleting their temporary home. A remaining Node
+process is not safe to kill by name alone; verify its command line and owner.
+
+```bash
+kodax daemon start
+kodax daemon stop --profile default
+kodax --runtime-mode daemon
+kodax -p "Review this repository" --runtime-mode daemon
+```
+
+All CLI task forms now use the same Runtime path: interactive REPL, positional
+prompts, slash-command prompts, and `kodax -p`. Select the persistent default in
+`~/.kodax/config.json`:
+
+```json
+{
+  "runtimeMode": "daemon"
+}
+```
+
+Resolution order is explicit CLI/SDK option > environment variable >
+`config.json` > built-in default (`embedded`). `KODAX_RUNTIME_MODE=daemon` is a
+temporary environment override. The same rule applies to other paired settings,
+for example `provider` ↔ `KODAX_PROVIDER` and `effort` ↔ `KODAX_EFFORT`.
+JSON names stay camelCase while environment names use `KODAX_UPPER_SNAKE_CASE`.
+
+By default, daemon state, config, and runtime session storage are scoped under
+the OS user home directory, so `kodax --runtime-mode daemon` and SDK clients
+using `createKodaXRuntime({ mode: 'daemon' })` converge on the same local daemon
+profile. The high-level `createKodaXRuntime({ mode: 'daemon' })` API starts or
+reuses that daemon unless you pass an explicit endpoint/transport or
+`autoStartDaemon: false`. Pass `--home <dir>` or `homeDir` only when you
+intentionally want an isolated daemon namespace for tests, CI, or project-local
+experiments.
+
+**v0.7.71 packaged Electron patch:** packaged/asar Electron hosts can use daemon
+auto-start without relaunching the GUI. `ELECTRON_RUN_AS_NODE` is limited to a
+bootstrap-only child exec boundary and removed before daemon or ordinary user
+child code loads. The default-enabled Electron `RunAsNode` fuse is required;
+hosts that disable it must start the daemon through ordinary Node/KodaX CLI and
+connect in attach-only mode. For SDK calls, `homeDir` is the CLI-style base
+directory that owns `.kodax`, not the `.kodax` path itself.
+
+One daemon owns many sessions. Different sessions may run concurrently; starts
+within the same session are queued so that only one run is active for that
+session. Multiple `kodax` processes can attach to the same daemon and open or
+observe the same session. FEATURE_269 adds atomic snapshot-plus-stream joining,
+durable idempotent mutations, revision-safe settings and grants, transport-safe
+AskUser/permission responses, run-scoped credential and Host Tool bridges, and
+one daemon/inline Coder owner fence. In-flight external effects are never
+blindly replayed after a crash; clients receive explicit interrupted/unknown
+terminal facts and resync when `runtimeId` changes.
+
+Space and IDE hosts should require these capabilities through the Runtime SDK.
+Partner remains on its private inline Runtime and must use a distinct product
+data/session root. A missing daemon capability is an error, not permission to
+silently fall back to inline Coder.
+
+For the full host-integration contract, including inline/Worker/daemon selection,
+multi-client permission handling, config/catalog/MCP admin APIs, artifacts,
+context diagnostics, and daemon protocol schemas, see
+[docs/SDK_EMBEDDER_GUIDE.md §17](docs/SDK_EMBEDDER_GUIDE.md#17-runtime-sdk-worker-isolation-and-local-daemon-feature_253-feature_257).
+
+The Space/IDE shared-daemon contract is documented in
+[SDK Embedder Guide section 23](docs/SDK_EMBEDDER_GUIDE.md#23-shared-coder-daemon-for-space-and-ide-hosts-feature_269-v0769).
+
+## Repo Intelligence
+
+KodaX ships with built-in repo intelligence (`repo_overview`, `module_context`, `symbol_context`, `process_context`, `impact_estimate`, and related tools) that helps the coding agent understand large codebases without ad-hoc grep/glob exploration.
+
+Use `/repo-intel status` in the REPL to inspect the active engine. The former standalone `repointel` host skill has been removed; repo intelligence is built into KodaX and requires no external installation.
+
+```bash
+# Pick a runtime mode (auto | full | light | off)
+kodax --repo-intelligence full --repo-intelligence-trace
+```
 
 ## Architecture
 
-KodaX uses a **monorepo architecture** with npm workspaces, consisting of 5 packages:
+KodaX uses a **monorepo architecture** with npm workspaces. Source layout currently has 4 workspace packages; published as a single bundled npm package `@kodax-ai/kodax` with 11 SDK subpath exports (`/agent`, `/llm`, `/coding`, `/media`, `/repl`, `/skills`, `/mcp`, `/session`, `/runtime`, `/a2a`, `/experimental-memory`; ADR-024 + ADR-032 + ADR-038, with ADR-036 consolidation):
 
 ```
 KodaX/
-├── packages/
-│   ├── ai/                  # @kodax/ai - Independent LLM abstraction layer
-│   │   └── providers/       # 11 LLM providers (Anthropic, OpenAI, DeepSeek, etc.)
+├── packages/                # 4 workspace packages (FEATURE_194 v0.7.43)
+│   ├── llm/                 # @kodax-ai/llm - LLM abstraction (15 built-in provider aliases)
+│   │   └── providers/       # Anthropic, OpenAI, DeepSeek, Kimi, MiMo, MiniMax, Zhipu, Ark, …
 │   │
-│   ├── agent/               # @kodax/agent - Generic Agent framework
-│   │   └── session/         # Session management, message handling
+│   ├── agent/               # @kodax-ai/agent - Generic Agent framework
+│   │   ├── orchestration/   # Runner, runFanOut, runWithIdleYield, ChildTaskRegistry
+│   │   ├── session-lineage/ # branchable session tree (inline v0.7.43)
+│   │   ├── capabilities/
+│   │   │   ├── mcp/         # MCP integration (inline v0.7.43)
+│   │   │   └── skills/      # Skills standard implementation + builtin (inline v0.7.43)
+│   │   └── tracing/         # tracing / observability (inline v0.7.43)
 │   │
-│   ├── skills/              # @kodax/skills - Skills standard implementation
-│   │   └── builtin/         # Built-in skills (code-review, tdd, git-workflow)
+│   ├── coding/              # @kodax-ai/coding - Coding Agent (tools + prompts)
+│   │   ├── tools/           # 50+ tools: read, write, edit, bash, glob, grep, undo,
+│   │   │                    #   dispatch_child_task, send_message, task_stop,
+│   │   │                    #   ask_user_question, repo-intelligence, …
+│   │   └── repo-intelligence/ # incl. protocol.ts (inline v0.7.43)
 │   │
-│   ├── coding/              # @kodax/coding - Coding Agent (tools + prompts)
-│   │   └── tools/           # 8 tools: read, write, edit, bash, glob, grep, undo, ask_user_question
-│   │
-│   └── repl/                # @kodax/repl - Interactive terminal UI
-│       ├── ui/              # Ink/React components, themes
-│       └── interactive/     # Commands, REPL logic
+│   └── repl/                # @kodax-ai/repl - Interactive terminal UI (Ink TUI)
 │
-├── src/
-│   └── kodax_cli.ts         # Main CLI entry point
+├── src/                     # CLI entry + SDK subpath entries
+│   ├── kodax_cli.ts         # Main CLI entry point (bin: `kodax`)
+│   └── sdk-*.ts             # SDK subpath re-exports → @kodax-ai/kodax/{agent,llm,coding,media,repl,skills,mcp,session,runtime,a2a,experimental-memory}
 │
-└── package.json             # Root workspace config
+└── package.json             # Root workspace config; release.mjs rewrites name + injects subpath exports
 ```
 
 ### Package Dependencies
 
 ```
-                    ┌─────────────────┐
-                    │   kodax (root)  │
-                    │   CLI Entry     │
-                    └────────┬────────┘
+                    ┌──────────────────┐
+                    │  kodax (root)    │
+                    │  CLI Entry       │
+                    └────────┬─────────┘
                              │
               ┌──────────────┴──────────────┐
               │                             │
               ▼                             ▼
-       ┌─────────────┐               ┌─────────────┐
-       │ @kodax/repl │               │@kodax/coding│
-       │  UI Layer   │               │ Tools+Prompts│
-       └──────┬──────┘               └──────┬──────┘
+       ┌──────────────┐              ┌────────────────┐
+       │@kodax-ai/repl│              │@kodax-ai/coding│
+       │  UI Layer    │              │ Tools+Prompts  │
+       └──────┬───────┘              └──────┬─────────┘
               │                             │
-              │              ┌──────────────┼──────────────┐
-              │              │              │              │
-              ▼              ▼              ▼              ▼
-       ┌─────────────┐ ┌─────────────┐ ┌─────────────┐ ┌─────────────┐
-       │@kodax/skills│ │ @kodax/agent│ │  @kodax/ai  │ │  External   │
-       │(zero deps)  │ │Agent Frame  │ │LLM Abstract │ │   SDKs      │
-       └─────────────┘ └─────────────┘ └─────────────┘ └─────────────┘
+              │              ┌──────────────┴──────────────┐
+              │              │                             │
+              ▼              ▼                             ▼
+       ┌──────────────┐ ┌──────────────────────────┐ ┌──────────────┐
+       │@kodax-ai/    │ │@kodax-ai/agent           │ │@kodax-ai/llm │
+       │coding (via   │ │Runner + fan-out +        │ │LLM Abstract  │
+       │above)        │ │idle-yield + session-     │ │(15 aliases)  │
+       │              │ │lineage + skills + mcp +  │ │              │
+       │              │ │tracing (FEATURE_194)     │ │              │
+       └──────────────┘ └──────────────────────────┘ └──────────────┘
 ```
 
 ### Package Overview
 
-| Package | Purpose | Key Dependencies |
+Source-side workspace package names (`@kodax-ai/*`). npm consumers install the single bundled `@kodax-ai/kodax` package and import from SDK subpaths — see [Source-side vs npm-published surface](#source-side-vs-npm-published-surface) and [SDK Usage](#sdk-usage) below.
+
+| Workspace package | Purpose | Key Dependencies |
 |---------|---------|------------------|
-| `@kodax/ai` | Independent LLM abstraction, reusable by other projects | @anthropic-ai/sdk, openai |
-| `@kodax/agent` | Generic Agent framework, session management | @kodax/ai, js-tiktoken |
-| `@kodax/skills` | Skills standard implementation | Zero external deps |
-| `@kodax/coding` | Coding Agent with tools and prompts | @kodax/ai, @kodax/agent, @kodax/skills |
-| `@kodax/repl` | Complete interactive terminal UI | @kodax/coding, ink, react |
+| `@kodax-ai/llm` | LLM abstraction (15 built-in provider aliases + custom registration) | @anthropic-ai/sdk, openai |
+| `@kodax-ai/agent` | Generic Agent framework — Runner, fan-out, idle-yield, media/input artifacts, session-lineage, capabilities (mcp + skills), tracing (ADR-036 v0.7.43 consolidation; subpaths: `/media`, `/session-lineage`, `/capabilities/mcp`, `/capabilities/skills`, `/tracing`) | @kodax-ai/llm, js-tiktoken, fflate, jimp, yaml |
+| `@kodax-ai/coding` | Coding Agent — 50+ tools (incl. `dispatch_child_task` / `send_message` / `task_stop`) + role prompts + auto-continue + repo-intelligence protocol | @kodax-ai/llm, @kodax-ai/agent |
+| `@kodax-ai/repl` | Complete interactive terminal UI (Ink/React, permission modes, commands, streaming) | @kodax-ai/coding, ink, react |
 
-| Mode | Meaning |
-|------|---------|
-| `plan` | Read-only planning mode |
-| `accept-edits` | Automatically accept file edits; confirm bash |
-| `auto-in-project` | Full auto execution within project scope |
+### Source-side vs npm-published surface
 
-## Features
+KodaX has two layers that consumers should understand separately:
 
-- **Modular Architecture** - Use as CLI or as a library
-- **11 LLM Providers** - Anthropic, OpenAI, DeepSeek, Kimi, Kimi Code, Qwen, Zhipu, Zhipu Coding, MiniMax Coding, Gemini CLI, Codex CLI
-- **Reasoning Modes** - Unified `off/auto/quick/balanced/deep` interface across providers
-- **Streaming Output** - Real-time response display
-- **8 Tools** - read, write, edit, bash, glob, grep, undo, ask_user_question
-- **Session Management** - JSONL format persistent storage
-- **Project Mode / Harness Engineering** - Verifier-gated long-running workflow with project truth files and `/project` commands
-- **Skills System** - Natural language triggering, extensible
-- **Permission Control** - 3 permission modes with pattern-based control
-- **Cross-Platform** - Windows/macOS/Linux
-- **TypeScript Native** - Full type safety and IDE support
-These modes make InfCodeX more suitable for serious environments where safety, auditability, and trust calibration matter.
+- **Source-side**: 4 workspace packages above (what developers see when reading the repo).
+- **npm-published**: a single bundled package `@kodax-ai/kodax` with 11 SDK subpaths (what SDK consumers `import` from). The subpaths are split into two roles:
+  - **Full-package subpaths** (`/agent`, `/llm`, `/coding`, `/repl`) — each one maps 1:1 to a source workspace and exposes its complete public API.
+  - **Integration and narrow subpaths** (`/media`, `/skills`, `/mcp`, `/session`, `/runtime`, `/a2a`, `/experimental-memory`) — focused host surfaces. `/a2a` composes the neutral F258 plane with the Runtime facade; it does not add A2A wire types to `/agent`.
+
+| Source package | npm subpath | Type | What you get | Example consumer |
+|---|---|---|---|---|
+| `packages/llm`    | `@kodax-ai/kodax/llm`     | Full package | 15-alias LLM abstraction (108 exports) | Standalone LLM clients |
+| `packages/agent`  | `@kodax-ai/kodax/agent`   | Full package | Runner / fan-out / external-agent plane / session-lineage / capabilities / tracing (331 exports) | Custom agent frameworks |
+| `packages/agent`  | `@kodax-ai/kodax/skills`  | **Narrow subset** | Skills system only — `SkillRegistry` / `loadFullSkill` / `expandSkillForLLM` / ... (26 exports = pre-v0.7.43 `@kodax-ai/skills` complete API) | Skill loaders, IDE plugins |
+| `packages/agent`  | `@kodax-ai/kodax/mcp`     | **Narrow subset** | MCP only — `McpCapabilityProvider` / `createMcpTransport` / `searchMcpCatalog` / ... (23 exports) | MCP server hosts |
+| `packages/agent`  | `@kodax-ai/kodax/media`   | **Narrow subset** | Structured image/file/video input-artifact helpers (22 exports) | Desktop hosts and multimodal clients |
+| `packages/agent`  | `@kodax-ai/kodax/experimental-memory` | **Experimental subset** | Thin F228-backed `MemoryAgent` / `MemorySession` contracts for scoped recall, deliberate query, observations, and outcomes | SDK hosts explicitly evaluating FEATURE_260 |
+| `packages/coding` | `@kodax-ai/kodax/coding`  | Full package | Coding agent + 50+ tools + repo-intelligence (505 exports) | Build a Claude Code-shape product |
+| `packages/repl`   | `@kodax-ai/kodax/repl`    | Full package | Ink TUI + permission modes + commands (217 exports) | Terminal-UI consumers |
+| `packages/repl`   | `@kodax-ai/kodax/session` | **Narrow subset** | Session management only — `listSessions` / `loadFullTranscript` / `appendClientNotice` / `forkSession` / `compactSession` / `watchSessions` / ... (17 exports) | IDE plugins and desktop hosts reading session history |
+| `src`             | `@kodax-ai/kodax/runtime` | Host API | Embedded/Worker/daemon runtime facade, sessions/runs/events/permissions/catalog/MCP/artifacts/diagnostics/external agents, daemon protocol schema (10 exports) | SDK hosts, Space/IDE clients, daemon clients |
+| `src`             | `@kodax-ai/kodax/a2a` | Integration edge | A2A 1.0 Agent Card discovery, JSON-RPC/SSE F258 executor, safe fetch policy, and authenticated Runtime-backed Agent server | Agent orchestrators and KodaX hosts |
+
+**Rule of thumb**: if you need Runner / Agent / fan-out, import from `/agent`. If you only need skills or mcp APIs, import from `/skills` or `/mcp` to get a smaller bundle. The narrow subsets are subsets of the full packages — they do **not** expose extra symbols.
+
+**Dynamic Workflows (FEATURE_217, v0.7.49)**: the domain-neutral workflow runtime is part of `/agent` — `import { createWorkflowRuntime, runWorkflow, WorkflowAbortError, WorkflowLimitError } from '@kodax-ai/kodax/agent'`. The coding-side integration (agent backend + built-in workflows + saved-workflow discovery/generation: `createCodingWorkflowBackend`, `runWorkflowFromOptions`, `parallelInvestigation`, `discoverSavedWorkflows`, `generateWorkflowFromOptions`, …) is part of `/coding`. FEATURE_217 is the v0.7.49 home for the full Dynamic Workflow product loop: `/workflow create <request>` generates restricted scripts, `/workflow save <runId> <name>` stores `.workflow.json` rerunnable workflows, generated/saved scripts coordinate agents through `WorkflowApi`, run lifecycle state stays observable, opt-in `isolation:"worktree"` routes selected children to parent-managed worktrees, and all file/shell effects still pass through agent tools and the existing permission gates. There is **no** separate `@kodax-ai/kodax/agent/workflow` root-package subpath; source-package consumers of `@kodax-ai/agent` can still use that package's `./workflow` subpath.
+
+**Workflow Process Surface (FEATURE_229, v0.7.50)**: workflow progress is now a reusable Agent-layer process contract rather than private REPL text. SDK hosts can subscribe to `WorkflowProcessEvent`/poll `WorkflowProcessSnapshot`, use `createWorkflowRunManager` and `createWorkflowLifecycleController` for stop/pause/resume/result/artifact/delete/prune/identity/preflight controls, and receive ANSI-free provenance fields (`source`, `sourceRunId`, `sourceWorkflowName`, `savedWorkflowName`, `revisionOf`) plus `resultSummary`. `/coding` owns the coding workflow backend and run graph, `/repl` renders the same snapshots, and the terminal UI is not the hidden source of truth. `KodaXEvents` callbacks also take an optional metadata arg (`KodaXToolEventMeta` / `KodaXActivityEventMeta` / `KodaXWorkflowEventMeta`) so a host can attribute every child-agent tool/thinking/progress event to its workflow run and child id without a second event protocol, and generated/saved workflow scripts pass `validateRestrictedWorkflowSource` (compile + source-policy check) plus a generator repair/smoke loop before they run. See [docs/ADR.md ADR-040](docs/ADR.md) for the layering rationale.
+
+**Host Reads Persisted History (FEATURE_230 + FEATURE_234, v0.7.51; v0.7.63 hardening)**: additive closures for hosts that read persisted state. **Durable tool transcript replay** — a resumed session now replays the tool cards the assistant used instead of degrading to text-only. `messages` / `lineage` stay canonical; `SessionData.uiHistory` becomes a bounded, sanitized, terminal-only replay cache. The SDK transcript contract is explicit: `loadSession()` = active model context, `loadFullTranscript()` = append-order host scrollback with typed entries (`message` / `compaction` / `branch_summary` / `rewind_marker` / `client_notice` / `task_result`) plus clone provenance (`logicalId` / `sourceEntryId`), `uiHistory` = optional replay cache, and tool cards can always be reconstructed from canonical messages. Hosts can persist local slash output with `appendClientNotice()` without entering model context, and workflow/child completions expose structured `taskResults[]` instead of requiring `<task-completed>` parsing. `rewind_marker` is an audit entry for host scrollback only and is excluded from model-context messages. **Workflow run host attribution** — `WorkflowProcessTrackerOptions` / `WorkflowProcessSnapshot` gain a host-owned opaque `hostMetadata?: Record<string, string>` that the SDK stores, persists to `run.json`, and echoes back (including after a restart) without interpreting it, so a host can map a run to the session/surface that launched it with zero side table. Unstamped/legacy runs honestly echo `hostMetadata === undefined`. See [docs/features/v0.7.51.md](docs/features/v0.7.51.md).
+
+**Inline Workflow Authoring (FEATURE_246, v0.7.58)**: in AMA/AMAW the Worker can now author and run a workflow inline via a model-callable `run_workflow` tool — it scouts the codebase with its own tools first, then bakes concrete findings into each child prompt, and runs the script through the **unchanged** sandbox + static-validation + postcondition-verification pipeline. This replaces the context-blind `sideQuery` generator as the primary interactive path (the generator survives only as a fallback for the explicit `/workflow create` command and non-interactive / CI hosts that have no investigating Worker). It adds structured child output (`outputSchema`), the no-barrier `wf.pipeline` staged primitive, same-session resume (`resumeFromRunId`), nested `wf.workflow(...)`, and a `/workflow create` redirect to Worker-authored scouting; `run_workflow` is async / idle-yield so the turn is not blocked. The neutral run-lifecycle manager (`createWorkflowRunManager` / `getDefaultWorkflowRunManager`) now lives in `@kodax-ai/kodax/agent` for non-coding SDK hosts. See [docs/features/v0.7.58.md](docs/features/v0.7.58.md) and [docs/ADR.md](docs/ADR.md) ADR-044/046/047/048/049.
+
+**Workflow Activation Tiers (FEATURE_248 + FEATURE_249, v0.7.59)**: the three agent modes now have a coherent workflow posture. **AMAW** carries a mode-level `ORCHESTRATION DEFAULT` standing directive (mirroring the reference "ultracode" posture): substantive work — a multi-file investigation, a design decision, anything costly to get wrong — defaults to orchestrating multiple cross-checking agents, with a PLAN-TIME COMMITMENT flow-fix that front-loads the orchestrate-vs-solo call to turn 0. **AMA** hosts the same `run_workflow` tool but with no standing directive — it activates a workflow when you ask for orchestration in natural language, never on complexity alone. **SA** stays solo. The directive is leak-closed via `amawOrchestrationAvailable`, so AMA and SA prompts stay byte-identical. See [docs/features/v0.7.59.md](docs/features/v0.7.59.md).
+
+**Progressive Disclosure on the Managed Tool Path (FEATURE_250, v0.7.60)**: the deferred-tool progressive-disclosure mechanism — previously SA-path-only — now applies to the AMA/AMAW **managed** path too. Cache-cold managed turns carry one-line search hints instead of full descriptions for the 13 non-mcp deferred tools (repo-intelligence + web/code + goal); each tool's `input_schema` is unchanged, so it stays directly callable and the full description is fetched on demand via `tool_search`. `mcp_*` stay resident and `run_workflow` is untouched. Transparent to users; validated by two 5-alias eval panels (DEFER_SAFE 5/5, 0% read/grep fallback). See [docs/features/v0.7.60.md](docs/features/v0.7.60.md).
+
+**Context-Efficient Tool Results + Workflow Quality Preflight (FEATURE_251 + FEATURE_252, v0.7.61; corrected 2026-07-14)**: local tools collect complete output and apply only contract-equivalent normalization that is strictly shorter; command-specific lossy Bash filters are off by default, and compound Bash uses no semantic adapter. One owner evaluates the complete parallel-result batch against the final provider request: it solves the largest final input `Pmax` for which `Pmax + output reserve + max(2048, 3% of Pmax) <= context window`, then admits only the remaining physical capacity. Results stay verbatim whenever they fit; only real overflow persists the complete value and emits `KODAX_RESULT_INCOMPLETE`. History follows the same physical-capacity rule: no default lossy microcompaction below capacity, summary-first at actual pressure, and typed failure without silent message deletion when a recoverable request cannot be formed. Static early percentages are explicit opt-ins. FEATURE_252's deterministic pre-start workflow contract lint is unchanged. See [docs/features/v0.7.61.md](docs/features/v0.7.61.md) and [docs/ADR.md ADR-050](docs/ADR.md).
+
+**External Agent SDK Plane (FEATURE_258, v0.7.67)**: `/agent` exports the protocol-neutral executor, registration, policy, credential-broker, artifact-policy, catalog, and durable task contracts. `/runtime` exposes the installed plane through `admin.agentRegistrations`, `agents`, and `agentTasks`, with the same DTO service methods over embedded and daemon clients. Executor factories are host functions: install them in an inline owner or while creating a new in-process daemon owner; they cannot be injected through an existing daemon connection or across a Runtime Worker boundary. Plane shutdown is terminal: pending waits and all later service calls reject. Restricted Workflow scripts preserve validated `phase` and external `target` routing. See the [complete owner/consumer recipes and safety contract](docs/SDK_EMBEDDER_GUIDE.md#18-external-agent-executor-plane-feature_258-v0767).
+
+**Cost-Disciplined Workflow SDK (FEATURE_259, v0.7.67)**: SDK callers configure run-scoped `modelTiers` and `workflow.maxConcurrency`, while workflow authors express semantic `fast` / `balanced` / `deep` intent. Terminal workflow events expose resolved tier/source/fallback/usage/duration facts, and each durable `run.json` contains an `efficiencyReport` with token coverage, role/tier starts, packet-read topology, review waves, and quality-gate outcomes. See the [routing and telemetry contract](docs/SDK_EMBEDDER_GUIDE.md#20-cost-disciplined-workflow-routing-and-telemetry-feature_259-v0767).
+
+**Paged Session Listing (FEATURE_261, v0.7.67)**: both `/session` `listSessions()` and `runtime.sessions.list()` accept an exact `surface` filter and opaque continuation `cursor`; each returned summary carries the cursor for the next page. Filtering happens before the page limit, so a host does not need to over-fetch mixed surfaces. See the [pagination recipes](docs/SDK_EMBEDDER_GUIDE.md#19-session-surface-filtering-and-cursor-pagination-feature_261-v0767).
+
+**Experimental Memory Agent SDK (FEATURE_260, v0.7.68)**: `/experimental-memory` exposes the thin agent-layer `MemoryAgent` and scoped `MemorySession` lifecycle over the existing governed F228 plane. Passive recall is zero-wait; `query()` is read-only and deliberate; durable changes still require the proposal/preview/fingerprint/apply path. The Action LLM remains the final decision maker, recalled content stays low-authority, and safety/scope gates remain deterministic. See the [direct session and boundary guide](docs/SDK_EMBEDDER_GUIDE.md#21-experimental-governed-memory--experimental-memory-feature_260-v0768).
+
+**Bidirectional A2A 1.0 (FEATURE_267, v0.7.69)**: `/a2a` discovers allowed Agent Cards and installs a JSON-RPC/SSE executor through the existing F258 plane. Configured outbound Agents are also registered automatically as `external:<name>` in embedded CLI and user-daemon Runtimes, so the main Agent can orchestrate them without host code. The same module can publish the Runtime default or one validated `~/.kodax/agents/*.md` Agent behind an authenticated Runtime facade. The built-in listener is loopback-only; public deployment uses `handle()` behind host-owned TLS and authorization. A2A 0.3, gRPC, HTTP+JSON, push notifications, and automatic public exposure are not advertised. See the [client/server recipes and security boundaries](docs/SDK_EMBEDDER_GUIDE.md#22-bidirectional-a2a-10--a2a-feature_267-v0769).
+
+**v0.7.70 interoperability hardening** keeps a discovered A2A interface on the
+trusted Agent Card origin and sends a credential only when the Card advertises
+Bearer authentication. `a2a serve` now resolves its provider from CLI, then
+environment, config, and the built-in default; a Markdown Agent can pin its own
+provider. Input continuation resumes the original Runtime run, task history and
+retention are bounded with stable cursor pagination, and authenticated SSE is
+correlated before falling back to polling after an early normal EOF. Only
+direct remote artifacts, broker-staged outputs, and outputs from a successfully
+admitted Skill script can be published; ordinary workspace writes and local
+paths stay private.
+
+**v0.7.70 MCP discovery hardening** uses exact capability IDs and revisioned
+cursors while admitting results against real physical capacity. Compact CJK
+queries are segmented, and a cross-language lexical zero match either returns a
+lossless bounded grouped inventory or one concise retry in the catalog language.
+Partial provider failure remains explicit rather than disappearing into an
+apparently complete result.
+
+The complete built-in path is available without writing TypeScript:
+
+```bash
+# Call another A2A Agent
+kodax a2a add research https://agent.example/.well-known/agent-card.json --effect read
+kodax a2a test research
+kodax a2a call research "Summarize this topic"
+
+# Expose the Runtime default Agent, or pass a name from ~/.kodax/agents/*.md
+export KODAX_A2A_TOKEN='replace-with-a-long-random-token'
+kodax a2a expose                 # or: kodax a2a expose document-agent
+kodax a2a serve                  # loopback http://127.0.0.1:8765
+```
+
+MCP, A2A, and Extension declarations live in one user file per domain under
+`~/.kodax/integrations/`. Use `kodax config template <mcp|a2a|extensions>`,
+`kodax integrations migrate --apply`, and the `kodax mcp`, `kodax a2a`, or
+`kodax extensions` commands to manage them. Migration imports only legacy
+`config.json#mcpServers` and `config.json#extensions`; A2A has no legacy source.
+It never overwrites an existing destination. The first MCP/Extension mutation
+can stage legacy entries. Remove legacy keys only with
+`--apply --cleanup-legacy`, after reviewing destination files and
+literal-secret warnings. Running
+CLI/daemon hosts retain the
+last valid revision, atomically replace the complete MCP provider, reconcile
+Extensions per entry, and hot-register outbound A2A Agents. `a2a serve` loads
+its configured MCP/Extension capability surface before listening and pins that
+execution authority; it hot-reloads publication, authentication, and limits.
+Agent, Skill, Extension-tool authority, workspace, tool-policy, or task-store
+changes require an explicit server restart. Managed
+A2A contexts default to `~/kodax_a2a_server_workspace/<profile>/contexts/`.
+Exact Skill scripts require the opt-in isolated policy and a passing
+`kodax sandbox doctor` (`kodax sandbox setup` performs the explicit Windows
+one-time provisioning).
 
 ---
 
-## Detailed Usage
+## Features
+
+- **Modular Architecture** - Use as CLI, as a library, or as a Node-free single binary
+- **15 Built-in Provider Aliases** - Anthropic, OpenAI, DeepSeek, Kimi, Kimi Code, Qwen, Zhipu, Zhipu Coding, Zai Coding, MiniMax Coding, MiMo Coding, MiMo, Ark Coding, Gemini CLI, Codex CLI - plus user-defined OpenAI/Anthropic-compatible providers
+- **Dynamic Workflows + SDK Process Surface** - Generate/reuse capability-routed workflows, observe live progress through `WorkflowProcessSnapshot`, and control workflow lifecycle from SDK hosts without parsing REPL output
+- **V2 Worker single-loop + Sidecar Verifier (default)** - Single-agent main loop with an out-of-band Sidecar Verifier as Stop-hook (claudecode-shape; FEATURE_184 v0.7.42, ADR-030). Verifier returns accept/revise/blocked verdict on Worker text-only termination. The pre-v0.7.43 V1 chain is retired, `emit_handoff` is deleted, accept-verdict UI silently passes through, and content-aware gating skips trivial-chat sidecar calls. Async child steering uses `dispatch_child_task` + `send_message` + `task_stop` with idle-yield wait; specialist routing uses `subagent_type`.
+- **Reasoning Effort** - Effort-first control (`off/auto/low/medium/high` plus model-supported extras) across providers
+- **Streaming Output** - Real-time response display
+- **Session Management** - JSONL format with branchable session lineage tree
+- **Skills System** - Natural language triggering, extensible, role-projected in AMA
+- **Repo Intelligence** - Built-in full/light repository intelligence with native KodaX auto-injection lane
+- **Rich Tool Surface** - 50+ built-in tools across file ops, shell, search, repo intelligence, MCP capabilities, git worktree, and agent control
+- **Permission Control** - 3 permission modes with pattern-based control
+- **Standalone Binary** - `bun --compile` releases for Win/macOS/Linux x64+arm64, no Node.js required on target machines
+- **Cross-Platform** - Windows/macOS/Linux
+- **TypeScript Native** - Full type safety and IDE support
+
+---
+
+## Installation
+
+### As CLI Tool
+
+```bash
+# Clone repository
+git clone https://github.com/icetomoyo/KodaX.git
+cd KodaX
+
+# Install dependencies (includes workspace packages)
+npm install
+
+# Build the monorepo
+npm run build
+
+# Link globally (development mode)
+npm link
+
+# Now you can use 'kodax' anywhere
+kodax "your task"
+```
+
+### As Standalone Binary (no Node required on target)
+
+KodaX can be packaged into a single executable + a small `builtin/` sidecar directory using `bun --compile`. The target machine does **not** need Node.js or any other runtime.
+
+Supported targets: `win-x64`, `linux-x64`, `linux-arm64`, `darwin-x64`, `darwin-arm64`. Win7 / pre-glibc-2.27 distros / LoongArch are not supported.
+
+**Build locally**:
+
+```bash
+# Install Bun once on your build machine
+npm i -g bun                  # or scoop/brew/curl install — see docs/release.md
+
+npm run build:binary          # Current host platform (fastest)
+npm run build:binary:all      # All five targets in sequence
+node scripts/build-binary.mjs --target=linux-arm64   # Specific target
+```
+
+Output lives under `dist/binary/<target>/`:
+
+```
+dist/binary/linux-x64/
+├── kodax                          # ~60 MB Bun-compiled executable
+├── builtin/                       # Sidecar built-in skills
+├── provider-capabilities.json
+├── semantic-worker.js             # Repo-intelligence Worker
+├── runtime-worker.js              # SDK Runtime Worker
+└── constructed-handler-worker.js  # Constructed-tool Worker
+```
+
+Smoke-test: `dist/binary/<host>/kodax --version`.
+
+**Automated release**: pushing a `v*` git tag triggers `.github/workflows/release.yml`, which builds all five targets on native runners, runs smoke tests, and publishes a GitHub Release with archives + SHA256SUMS. Use the `workflow_dispatch` button in the Actions UI to test the pipeline without tagging.
+
+See [docs/release.md](docs/release.md) for full details on build flags, archive layout, troubleshooting, and the build-time `KODAX_BUNDLED` / `KODAX_VERSION` defines.
+
+### As Library
+
+```bash
+npm install @kodax-ai/kodax
+```
+
+```typescript
+import { runKodaX } from '@kodax-ai/kodax';
+
+process.env.ZHIPU_API_KEY = process.env.ZHIPU_API_KEY ?? 'your_api_key';
+
+const result = await runKodaX({
+  provider: 'zhipu-coding',
+  effort: 'auto',
+  events: {
+    onTextDelta: (text) => process.stdout.write(text),
+    onComplete: () => console.log('\nDone!'),
+  },
+}, 'your task');
+
+console.log(result.lastText);
+```
+
+#### SDK Subpath Imports (v0.7.39+)
+
+For smaller surface and tree-shake-friendly imports, the SDK is also exposed via subpath exports — pick only the package(s) you need:
+
+```typescript
+import { Runner } from '@kodax-ai/kodax/agent';                // agent runtime
+import { getProvider } from '@kodax-ai/kodax/llm';              // LLM abstraction (15 aliases)
+import { runKodaX } from '@kodax-ai/kodax/coding';              // coding tools + prompts
+import { createImageArtifactFromPath } from '@kodax-ai/kodax/media'; // input artifacts
+import { SkillRegistry } from '@kodax-ai/kodax/skills';         // zero-dep skill loader
+import { loadConfig } from '@kodax-ai/kodax/repl';              // REPL config / session helpers
+import { createMcpManager } from '@kodax-ai/kodax/mcp';         // MCP popout manager (v0.7.42)
+import { listSessions } from '@kodax-ai/kodax/session';         // session history helpers
+import { createKodaXRuntime } from '@kodax-ai/kodax/runtime';   // embedded/daemon runtime API
+import { createKodaXA2AServer } from '@kodax-ai/kodax/a2a';    // A2A 1.0 client/server edge
+```
+
+All 12 SDK entries (root + 11 subpaths) share internal code via ESM chunk splitting — importing from `/agent` does not pull in `/repl`'s Ink + React surface.
+
+For the complete host-facing contract — including embedded/Worker/daemon ownership,
+external-agent registration and task control, session cursor pagination, workflow
+model-tier routing, and efficiency telemetry — see the
+[SDK Embedder Integration Guide](docs/SDK_EMBEDDER_GUIDE.md).
+
+> **ESM-only.** The SDK is published as ES Modules. In a CommonJS context (Electron main process, legacy Webpack CJS bundles, `require()`-based code) you must use `await import(...)` instead of `require()`. See [docs/SDK_EMBEDDER_GUIDE.md §5](docs/SDK_EMBEDDER_GUIDE.md#5-consuming-from-a-commonjs-context-electron-main-cjs-bundles) for the canonical recipe + the technical reason most subpaths cannot ship a dual ESM/CJS build.
+
+For CLI users, provider defaults live in `~/.kodax/config.json`. For library users, API keys are still read from environment variables; if you need custom base URLs or provider aliases, use `registerCustomProviders()` as shown above.
+
+---
+
+## Usage
 
 ### REPL Quickstart
 
-Running `kodax` with no prompt starts the interactive REPL:
+Running `kodax` with no prompt starts the interactive REPL.
 
 ```bash
 kodax
 ```
 
-Inside the REPL you can mix natural-language requests with slash commands:
+Inside the REPL you can type normal requests or slash commands:
 
 ```text
 Read package.json and summarize the architecture
@@ -490,19 +734,22 @@ Read package.json and summarize the architecture
 ### CLI Quickstart
 
 ```bash
+# Set API key
+export ZHIPU_API_KEY=your_api_key
+
 # Basic usage
 kodax "Help me create a TypeScript project"
 
 # Choose a provider explicitly
 kodax --provider openai --model gpt-5.4 "Create a REST API"
 
-# Use a deeper reasoning mode
-kodax --reasoning deep "Review this architecture"
+# Use higher reasoning effort
+kodax --effort high "Review this architecture"
 ```
 
 ### Session Workflows
 
-Use a session when you want memory across turns:
+Use a session when you want memory across turns. Without a session, each CLI call is independent.
 
 ```bash
 # No memory: two separate calls
@@ -510,24 +757,48 @@ kodax "Read src/auth.ts"
 kodax "Summarize it"
 
 # With memory: same session
-kodax --session auth-review "Read src/auth.ts"
-kodax --session auth-review "Summarize it"
-kodax --session auth-review "How should I fix the first issue?"
+kodax --session my-project "Read package.json"
+kodax --session my-project "Summarize it"
+kodax --session my-project "How should I fix the first issue?"
 
 # Session management
-kodax --session list
-kodax --session resume "continue"
+kodax -r                    # Search, page, and select a non-empty session
+kodax -r <session-id>       # Resume a known session directly
+kodax -r "Review runtime"   # Resume a unique exact title; duplicates open the picker
+kodax --session list        # List up to 50 non-empty sessions
+kodax --session cleanup-acp # Preview strictly matched empty ACP-test pollution
+```
+
+Bare `-r` opens an interactive picker with incremental search, arrow/PageUp/PageDown
+navigation, Tab completion, full selected-session ID display, and Enter-to-resume.
+An explicit value checks the complete session ID first, then an exact
+case-insensitive title; duplicate titles open a narrowed picker instead of
+silently choosing one. Cleanup is preview-only unless
+`--apply-session-cleanup` is also provided; matching sessions are archived rather
+than permanently deleted.
+
+### Session Patterns
+
+```bash
+# ❌ No memory: two independent calls
+kodax "Read src/auth.ts"           # Agent reads and responds
+kodax "Summarize it"               # Agent doesn't know what to summarize
+
+# ✅ With memory: same session
+kodax --session auth-review "Read src/auth.ts"
+kodax --session auth-review "Summarize it"        # Agent knows to summarize auth.ts
+kodax --session auth-review "How to fix first issue"  # Agent has context
 ```
 
 ### Workflow Examples
 
 ```bash
-# Code review
-kodax --session review "Review src/"
+# Code review (multi-turn conversation)
+kodax --session review "Review src/ directory"
 kodax --session review "Focus on security issues"
 kodax --session review "Give me fix suggestions"
 
-# Project development
+# Project development (continuous session)
 kodax --session todo-app "Create a Todo application"
 kodax --session todo-app "Add delete functionality"
 kodax --session todo-app "Write tests"
@@ -540,122 +811,15 @@ kodax                    Start the interactive REPL
 -h, --help [topic]   Show help or topic help
 -p, --print <text>   Run a single task and exit
 -c, --continue       Continue the most recent conversation in this directory
--r, --resume [id]    Resume a session by ID, or the latest session
+-r, --resume [value] Resume by ID/exact title, or open the searchable picker
 -m, --provider       Provider to use
 --model <name>       Override the model
 --reasoning <mode>   off | auto | quick | balanced | deep
 -t, --thinking       Compatibility alias for --reasoning auto
 -s, --session <op>   Session ID or legacy session operation
 -j, --parallel       Enable parallel tool execution
---team <tasks>       Run multiple sub-agents in parallel
---init <task>        Initialize a long-running task
---auto-continue      Continue long-running tasks until complete
 --max-iter <n>       Max iterations
---max-sessions <n>   Max sessions for --auto-continue
---max-hours <n>      Max runtime hours for --auto-continue
 ```
-
-### ACP Server
-
-KodaX can also run as a stdio ACP server for editors and IDEs:
-
-```bash
-kodax acp serve
-kodax acp serve --cwd /path/to/repo --permission-mode accept-edits
-kodax acp serve -m openai --model gpt-5.4 --reasoning balanced
-```
-
-This mode exposes ACP `initialize`, `sessions/new`, `chat/prompt`, `chat/cancel`, streaming session updates, and permission requests while reusing KodaX's normal runtime and tool semantics.
-
-ACP lifecycle logs are written to `stderr` so they do not pollute ACP `stdout`. Use `KODAX_ACP_LOG=off|error|info|debug` to control verbosity. The default is `info`.
-
-ACP session `cwd` is passed into the coding runtime as an explicit `executionCwd`. If you start the server with `--cwd`, that value pins the execution root for every ACP session. Prompt context, relative file paths, and shell commands stay scoped to that explicit directory without mutating the Node.js process-global working directory.
-
-### AAMP Server
-
-KodaX can also run as an AAMP async task worker backed by `aamp-sdk`:
-
-```bash
-kodax aamp serve \
-  --email agent@example.com \
-  --mailbox-token <token> \
-  --base-url http://localhost:8080 \
-  --smtp-host localhost \
-  --smtp-password <password>
-
-kodax aamp serve --profile mailbox-a --cwd /path/to/repo
-```
-
-This mode listens for AAMP `task.dispatch` messages, bridges each task into `runKodaX(...)`, and sends `task.result` replies back through the same mailbox transport.
-
-Current v1 behavior:
-
-- inbound `task.dispatch` is supported
-- `taskId -> sessionId` is persisted locally so completed tasks are not re-executed
-- outbound `task.result` is sent through the real AAMP SDK
-- inbound `task.ack` is handled by `aamp-sdk` automatic acknowledgement logic
-
-Configuration file support is profile-based only. Each AAMP mailbox must live under `aamp.profiles.<name>` in `~/.kodax/config.json`:
-
-```json
-{
-  "aamp": {
-    "profiles": {
-      "mailbox-a": {
-        "email": "agent@meshmail.ai",
-        "mailboxToken": "base64(email:password)",
-        "baseUrl": "https://meshmail.ai",
-        "smtpHost": "meshmail.ai",
-        "smtpPort": 587,
-        "smtpPassword": "mailbox-password",
-        "allowInsecureTls": false,
-        "logLevel": "info"
-      }
-    }
-  }
-}
-```
-
-Resolution order is `CLI flags > selected profile in ~/.kodax/config.json`.
-
-Legacy `jmapToken` / `jmapUrl` profile fields and CLI flags remain supported as compatibility aliases for `mailboxToken` / `baseUrl`.
-
-Startup is strict:
-
-- If `--profile <name>` is provided, that profile must exist.
-- If `--profile` is omitted, all required AAMP fields must be passed explicitly via CLI.
-- CLI flags always override the selected profile.
-
-Required AAMP fields:
-
-- `email`
-- `mailboxToken`
-- `baseUrl`
-- `smtpHost`
-- `smtpPassword`
-
-Provider and model are not duplicated under `aamp`. `kodax aamp serve` reuses the normal top-level KodaX `provider` / `model` configuration unless you pass `--provider` or `--model` as one-off overrides.
-
-Optional flags:
-
-- `--cwd`
-- `--profile`
-- `--provider`
-- `--model`
-- `--mailbox-token`
-- `--base-url`
-- `--jmap-token` (legacy alias for `--mailbox-token`)
-- `--jmap-url` (legacy alias for `--base-url`)
-- `--smtp-port`
-- `--allow-insecure-tls`
-- `--log-level`
-
-Logging:
-
-- `--log-level off|error|info|debug`
-- JSONL log files are written under `~/.kodax/aamp/logs/YYYY-MM-DD.jsonl`
-
-This first version intentionally focuses on the minimal async loop: `task.dispatch -> task.result`. Richer protocol flows such as `task.help_needed`, attachments, and structured result mapping can be layered on later without changing the KodaX runtime core.
 
 ### Permission Control
 
@@ -668,14 +832,14 @@ KodaX provides 3 permission modes for fine-grained control:
 | `auto-in-project` | Full auto within project | None (project-scoped) |
 
 ```bash
-kodax -h sessions
-kodax -h init
-kodax -h project
-kodax -h auto
-kodax -h provider
-kodax -h thinking
-kodax -h team
-kodax -h print
+# In REPL, use /mode command
+/mode plan          # Switch to plan mode (read-only)
+/mode accept-edits  # Switch to accept-edits mode
+/mode auto-in-project  # Switch to auto-in-project mode
+/auto                  # Alias for auto-in-project
+
+# Check current mode
+/mode
 ```
 
 **Features:**
@@ -696,85 +860,127 @@ kodax --help
 
 # Detailed topic help
 kodax -h sessions      # Session management details
-kodax -h acp           # ACP server mode
-kodax -h aamp          # AAMP async task worker mode
 kodax -h init          # Long-running project initialization
 kodax -h project       # Project mode / harness workflow
 kodax -h auto          # Auto-continue mode
 kodax -h provider      # LLM provider configuration
-kodax -h thinking      # Thinking/reasoning mode
+kodax -h thinking      # Thinking/reasoning effort and compatibility modes
 kodax -h team          # Multi-agent parallel execution
 kodax -h print         # Print configuration
 ```
 
+### Environment Variables
+
+KodaX recognizes a number of environment variables for tuning runtime behavior. The most commonly used ones are listed below; for the full list, search the repo for `process.env.KODAX_`.
+
+#### `KODAX_MAX_OUTPUT_TOKENS`
+
+Overrides the per-turn `max_tokens` value sent to **every** provider (Anthropic, OpenAI, Zhipu, Kimi, MiniMax, Qwen, DeepSeek, MiMo, Gemini, Codex, …). Set to a positive integer; unset or non-numeric values are ignored. This is an **explicit user intent**: when set, it wins over the provider's model descriptor cap, over the provider config default, and over the global `KODAX_MAX_TOKENS` fallback. RST defense is handled at the provider config layer (`streamMaxDurationMs` watchdog + non-streaming fallback in `packages/llm/src/providers/registry.ts`), so this variable is purely an output-budget knob.
+
+```bash
+# Allow up to 48K output tokens per turn (use a higher cap when generating long files)
+export KODAX_MAX_OUTPUT_TOKENS=48000
+kodax "generate the full implementation"
+
+# Unset to restore default behavior
+unset KODAX_MAX_OUTPUT_TOKENS
+```
+
+Precedence used by every provider's `getEffectiveMaxOutputTokens()` (see `packages/llm/src/providers/base.ts`):
+
+1. One-shot per-request override (agent-loop escalation / context-overflow recovery — internal)
+2. **`KODAX_MAX_OUTPUT_TOKENS`** (this variable, explicit user intent)
+3. Active model descriptor's `maxOutputTokens` (FEATURE_098 per-model cap)
+4. Provider config default
+5. Global `KODAX_MAX_TOKENS` fallback
+
+Related variables: `KODAX_MAX_TOKENS` (global fallback when no provider/model cap applies), `KODAX_ESCALATED_MAX_OUTPUT_TOKENS` (escalation budget used by the agent loop when a turn returns `stop_reason: max_tokens`).
+
+> **Retired in v0.7.42**: `KODAX_RST_PRONE_PROVIDERS` and `KODAX_WRITE_TURN_MAX_TOKENS` (the v0.7.28 P2b write-turn cap mechanism) are no longer recognized. The 2026-04 bench measured RST as time-based (zhipu-coding 308s server kill window), not payload-size-based, so the cap was retired in favor of the per-provider `streamMaxDurationMs` watchdog + non-streaming fallback chain (configured in `registry.ts`). Existing env exports become silent no-ops; remove them from shell profiles when convenient.
+
+#### Sidecar verifier diagnostics
+
+Use these when diagnosing Worker text-only completion stalls or custom provider verifier behavior:
+
+```bash
+export KODAX_VERIFIER_LOG=1
+export KODAX_VERIFIER_PROVIDER=anthropic
+export KODAX_VERIFIER_MODEL=claude-haiku-4-5-20251001
+```
+
+- `KODAX_VERIFIER_LOG=1` shows verifier gate/elapsed/trace information and is equivalent to `"verifierLog": true` in `~/.kodax/config.json`.
+- `KODAX_VERIFIER_PROVIDER` + `KODAX_VERIFIER_MODEL` route the verifier to a separate provider/model instead of inheriting the main Worker model. Set both together.
+- `KODAX_VERIFIER_ALWAYS=1` forces the verifier to fire on every text-only completion for debugging/regression sweeps.
+
+SDK/headless hosts can observe actionable Sidecar Verifier messages via
+`KodaXEvents.onSidecarMessage`; JSONL output emits the same payload as
+`sidecar.message`. Only `revise` and `blocked` verdicts are surfaced; `accept`
+stays silent.
+
 ## Advanced Library Usage
 
-### Simple Mode with `runKodaX`
+#### Simple Mode (runKodaX)
 
 ```typescript
-import { runKodaX, type KodaXEvents } from 'kodax';
+import { runKodaX, KodaXEvents } from '@kodax-ai/kodax';
 
 const events: KodaXEvents = {
   onTextDelta: (text) => process.stdout.write(text),
   onThinkingDelta: (text) => console.log(`Thinking delta: ${text.length} chars`),
-  onToolResult: (result) => console.log(`Tool ${result.name}`),
+  onToolResult: (result) => console.log(`Tool ${result.name}: ${result.content.slice(0, 100)}`),
+  onSidecarMessage: (event) => console.log(`[sidecar:${event.verdict}] ${event.content}`),
   onComplete: () => console.log('\nDone!'),
   onError: (e) => console.error(e.message),
 };
 
 const result = await runKodaX({
   provider: 'zhipu-coding',
-  reasoningMode: 'auto',
-  context: {
-    gitRoot: '/repo',
-    executionCwd: '/repo/packages/service',
-  },
+  effort: 'auto',
   events,
 }, 'What is 1+1?');
 
 console.log(result.lastText);
 ```
 
-### Continuous Session with `KodaXClient`
+#### Continuous Session (KodaXClient)
 
 ```typescript
-import { KodaXClient } from 'kodax';
+import { KodaXClient } from '@kodax-ai/kodax';
 
 const client = new KodaXClient({
   provider: 'zhipu-coding',
-  reasoningMode: 'auto',
+  effort: 'auto',
   events: {
-    onTextDelta: (text) => process.stdout.write(text),
+    onTextDelta: (t) => process.stdout.write(t),
   },
 });
 
+// First message
 await client.send('Read package.json');
+
+// Continue same session
 await client.send('Summarize it');
 
 console.log(client.getSessionId());
 ```
 
-### Custom Session Storage
+#### Custom Session Storage
 
 ```typescript
-import { type KodaXMessage, type KodaXSessionStorage } from 'kodax';
+import { runKodaX, KodaXSessionStorage, KodaXMessage } from '@kodax-ai/kodax';
 
 class MyDatabaseStorage implements KodaXSessionStorage {
   async save(id: string, data: { messages: KodaXMessage[]; title: string; gitRoot: string }) {
-    // Save to your own storage
+    // Save to your database
   }
-
   async load(id: string) {
+    // Load from your database
     return null;
   }
 }
 
 await runKodaX({
   provider: 'zhipu-coding',
-  context: {
-    gitRoot: '/repo',
-    executionCwd: '/repo',
-  },
   session: {
     id: 'my-session-123',
     storage: new MyDatabaseStorage(),
@@ -785,171 +991,208 @@ await runKodaX({
 
 ### Library Modes Comparison
 
-| Feature | `runKodaX` | `KodaXClient` |
-|---------|------------|---------------|
-| Message memory | No | Yes |
-| Call style | Function | Class instance |
-| Context | Independent each time | Accumulates |
-| Use case | Single tasks and batch work | Multi-step or interactive workflows |
-
-### Working Directory Semantics
-
-`runKodaX()` distinguishes between two related but different concepts:
-
-- `context.gitRoot`: the project root used for project-scoped prompts and permission logic.
-- `context.executionCwd`: the working directory used for prompt context, relative tool paths, and shell execution.
-
-If `executionCwd` is omitted, KodaX falls back to `gitRoot`, then `process.cwd()`.
-
-```typescript
-await runKodaX({
-  provider: 'zhipu-coding',
-  context: {
-    gitRoot: '/repo',
-    executionCwd: '/repo/packages/web',
-  },
-}, 'Review the current package and run local checks');
-```
-
-This is especially useful for monorepos where the project root and the active package directory are not the same.
+| Feature | runKodaX | KodaXClient |
+|---------|----------|-------------|
+| **Message Memory** | ❌ No | ✅ Yes |
+| **Call Style** | Function | Class instance |
+| **Context** | Independent each time | Accumulates |
+| **Use Case** | Single tasks, batch processing | Interactive dialogue, multi-step tasks |
 
 ---
 
-## Using Individual Packages
+## SDK Usage
 
-KodaX is built with a modular architecture. Each package can be used independently:
+KodaX ships as a single npm package `@kodax-ai/kodax` with 11 SDK subpath exports (ADR-024 v0.7.39 + ADR-032 v0.7.42 + ADR-038 v0.7.49 + v0.7.56 `/media` + v0.7.64 `/runtime` + v0.7.68 `/experimental-memory` + v0.7.69 `/a2a`). Each subpath is tree-shake-friendly so consumers pull only what they need:
 
-### @kodax/ai - LLM Abstraction Layer
-
-Independent LLM provider abstraction, reusable in any project:
+```bash
+npm install @kodax-ai/kodax
+```
 
 ```typescript
-import { getProvider, KodaXBaseProvider } from '@kodax/ai';
+import { runKodaX } from '@kodax-ai/kodax';                       // root: CLI helpers + runKodaX
+import { Runner, runFanOut } from '@kodax-ai/kodax/agent';        // generic Agent framework
+import { getProvider } from '@kodax-ai/kodax/llm';                // 15-alias LLM abstraction
+import { KODAX_TOOLS } from '@kodax-ai/kodax/coding';             // tools + prompts + agent loop
+import { createImageArtifactFromPath } from '@kodax-ai/kodax/media'; // input artifact helpers
+import { runInkInteractiveMode } from '@kodax-ai/kodax/repl';     // Ink TUI entrypoint
+import { SkillRegistry } from '@kodax-ai/kodax/skills';           // zero-dep skill loader
+import { createMcpManager } from '@kodax-ai/kodax/mcp';           // MCP popout manager (v0.7.42)
+import { listSessions } from '@kodax-ai/kodax/session';           // session history helpers
+import { createKodaXRuntime } from '@kodax-ai/kodax/runtime';     // embedded/daemon runtime API
+import { createKodaXA2AServer } from '@kodax-ai/kodax/a2a';      // A2A 1.0 client/server edge
+import { createMemoryAgent } from '@kodax-ai/kodax/experimental-memory'; // opt-in experimental memory SDK
+```
 
-// Get a provider instance
+> The SDK is **ESM-only**. CommonJS consumers (Electron main / Webpack CJS / `require()` callers) must use `await import('@kodax-ai/kodax/...')` — see [docs/SDK_EMBEDDER_GUIDE.md §5](docs/SDK_EMBEDDER_GUIDE.md#5-consuming-from-a-commonjs-context-electron-main-cjs-bundles).
+
+### `@kodax-ai/kodax/llm` — LLM Abstraction
+
+15 built-in provider aliases (Anthropic, OpenAI, DeepSeek, Kimi, Kimi-Code, Qwen, Zhipu, Zhipu-Coding, Zai-Coding, MiniMax-Coding, MiMo, MiMo-Coding, Ark-Coding, Gemini-CLI, Codex-CLI) + custom provider registration.
+
+```typescript
+import { getProvider, KodaXBaseProvider } from '@kodax-ai/kodax/llm';
+
 const provider = getProvider('anthropic');
-
-// Stream completion
 const stream = await provider.streamCompletion(
   [{ role: 'user', content: 'Hello!' }],
   { onTextDelta: (text) => process.stdout.write(text) }
 );
 
 for await (const result of stream) {
-  if (result.type === 'text') {
-    // Handle text delta
-  } else if (result.type === 'tool_use') {
-    // Handle tool call
-  }
+  if (result.type === 'text') { /* … */ }
+  else if (result.type === 'tool_use') { /* … */ }
 }
 ```
 
-**Key Features**:
-- 11 LLM providers with unified interface
-- Streaming output support
-- Thinking mode support
-- Error handling and retry logic
-- Zero business logic dependencies
+**Key Features**: unified provider interface · streaming · reasoning effort (`off/auto/low/medium/high` plus model-supported extras) · per-provider retry + error handling · zero business-logic dependencies.
 
-### @kodax/agent - Agent Framework
+### `@kodax-ai/kodax/agent` — Agent Framework (standalone-consumable)
 
-Generic agent framework with session management:
+ADR-021 standalone-consumable: `@kodax-ai/agent` has **zero inbound `@kodax-ai/coding` dependency** — you can wire any tool surface on top of it.
 
 ```typescript
 import {
+  Runner,
+  runFanOut,
+  runWithIdleYield,
+  registerChildTask,
+  type ChildTaskRegistry,
   generateSessionId,
   estimateTokens,
-  compactMessages,
-  type KodaXMessage
-} from '@kodax/agent';
+  DefaultSummaryCompaction,
+} from '@kodax-ai/kodax/agent';
 
-// Generate session ID
-const sessionId = generateSessionId();
+// Bounded-concurrency fan-out with abort + structured progress events (v0.7.39 FEATURE_120)
+const result = await runFanOut({
+  bundles: [{ id: 'a', task: 'audit-foo' }, { id: 'b', task: 'audit-bar' }],
+  maxParallel: 4,
+  run: async (bundle) => doWork(bundle),
+});
 
-// Estimate tokens
-const tokens = estimateTokens(messages);
+// Idle-yield wait — pause when out of useful work, resume when a wake event arrives
+await runWithIdleYield({ runOnce, computeSnapshot, registry, messageQueue, agentId });
 
-// Compact messages when context is too long
-if (tokens > 100000) {
-  const compacted = await compactMessages(messages, {
-    threshold: 75000,
-    keepRecent: 20
-  });
-}
+// Pluggable compaction policy (FEATURE_081)
+const policy = new DefaultSummaryCompaction({ thresholdRatio: 0.8, keepRecent: 10 });
 ```
 
-**Key Features**:
-- Session ID generation and title extraction
-- Token estimation (tiktoken-based)
-- Message compaction with AI summarization
-- Generic types for messages and tools
+**Key Features**: `Runner` + per-step lifecycle · `runFanOut` (bounded-concurrency + abort + progress events) · `runWithIdleYield` (chat-while-waiting) · `ChildTaskRegistry` / `TaskAbortRegistry` · session-id generation · tiktoken-based token estimation · `CompactionPolicy` interface.
 
-### @kodax/skills - Skills System
+### `@kodax-ai/kodax/skills` — Skills System
 
-Agent Skills standard implementation with zero external dependencies:
+Zero external dependencies. Markdown-based skill files with natural-language triggers and variable resolution.
 
 ```typescript
 import {
   SkillRegistry,
   discoverSkills,
   executeSkill,
-  type SkillContext
-} from '@kodax/skills';
+  type SkillContext,
+} from '@kodax-ai/kodax/skills';
 
-// Discover skills from paths
 const skills = await discoverSkills(['/path/to/skills']);
-
-// Initialize registry
-const registry = getSkillRegistry();
+const registry = new SkillRegistry();
 await registry.registerSkills(skills);
 
-// Execute a skill
-const context: SkillContext = {
+const result = await executeSkill({
   skillId: 'code-review',
   arguments: { target: 'src/' },
-  workingDirectory: process.cwd()
-};
-
-const result = await executeSkill(context);
+  workingDirectory: process.cwd(),
+});
 ```
 
-### `@kodax/ai`
+**Key Features**: zero deps · markdown-based skill files · natural-language triggering · variable resolution · built-in skills included.
 
-Use when you only need provider abstraction, streaming, and reasoning compatibility.
+### `@kodax-ai/kodax/coding` — Coding Agent
 
-### `@kodax/agent`
+Complete coding agent: 50+ tools (`read`/`write`/`edit`/`bash`/`grep`/`glob`/`dispatch_child_task`/`send_message`/`task_stop`/...) + Worker role prompt + Sidecar Verifier (out-of-band Stop-hook) + agent loop + auto-continue + session management.
 
-Use when you need sessions, message handling, token estimation, or compaction behavior.
+```typescript
+import { runKodaX, KodaXClient, KODAX_TOOLS } from '@kodax-ai/kodax/coding';
 
-### `@kodax/skills`
+// Single-task helper
+const result = await runKodaX({
+  provider: 'zhipu-coding',
+  effort: 'auto',
+  events: { onTextDelta: (text) => process.stdout.write(text) },
+}, 'Read package.json and explain the dependencies');
 
-Use when you want markdown-based skill discovery and execution without pulling in the full coding runtime.
+// Continuous session
+const client = new KodaXClient({
+  provider: 'anthropic',
+  effort: 'auto',
+  events: { /* … */ },
+});
+await client.send('Create a new file');
+await client.send('Add a function to it'); // Has context from previous message
+```
 
-### `@kodax/coding`
+**Key Features**: 50+ built-in tools (see [Tools](#tools)) · V2 Worker single-loop + Sidecar Verifier (FEATURE_184 v0.7.42 / V1 chain fully retired by FEATURE_193 v0.7.43) · async child steering via `send_message` / `task_stop` (FEATURE_120, v0.7.39) · idle-yield wait mechanic (FEATURE_155, v0.7.38) · specialist routing via `subagent_type` (FEATURE_191, v0.7.43) · auto-continue · session lineage.
 
-Use when you want the complete coding-agent loop, tool execution, prompts, and session-aware task handling.
+### `@kodax-ai/kodax/repl` — Interactive Terminal UI
 
-### `@kodax/repl`
+Ink/React-based interactive REPL. Permission modes, command system, themed streaming display.
 
-Use when you want the interactive terminal UI, slash-command system, and permission UX.
+```typescript
+import { runInkInteractiveMode } from '@kodax-ai/kodax/repl';
+
+// Usually used via the `kodax` bin command; can be embedded:
+// - Interactive terminal UI (Ink components)
+// - Permission control (auto/plan/accept-edits modes)
+// - Command system (/help, /mode, /clear, /status, …)
+// - Skills integration
+// - Theme support
+await runInkInteractiveMode({ provider: 'zhipu-coding', effort: 'auto' });
+```
+
+**Key Features**: Ink-based React components · 3 permission modes (auto / plan / accept-edits) · built-in commands · real-time streaming display · context-usage indicator.
+
+### Package Dependency Graph (workspace internal)
+
+```
+@kodax-ai/llm    (zero business-logic deps)
+    ↓
+@kodax-ai/agent  (depends @kodax-ai/llm; ADR-021 standalone-consumable;
+                  inlines session-lineage + capabilities/{mcp,skills} +
+                  tracing per ADR-036 v0.7.43)
+    ↓
+@kodax-ai/coding (depends llm + agent; inlines repo-intelligence/protocol per ADR-036)
+    ↓
+@kodax-ai/repl   (depends coding + ink + react)
+```
+
+**Subpath Recommendations**:
+
+| Use Case | Subpath | Why |
+|----------|---------|-----|
+| Only need LLM abstraction | `@kodax-ai/kodax/llm` | Minimal deps; 15 built-in aliases |
+| Building custom agent | `@kodax-ai/kodax/agent` | Runner + fan-out + idle-yield + session-lineage + capabilities |
+| Coding tasks | `@kodax-ai/kodax/coding` | Complete coding agent + tools |
+| Terminal app | `@kodax-ai/kodax/repl` | Full interactive experience |
+| Runtime host / daemon client | `@kodax-ai/kodax/runtime` | Sessions, runs, events, permissions, catalog, MCP, artifacts, diagnostics |
+| Experimental governed memory | `@kodax-ai/kodax/experimental-memory` | Scoped `MemoryAgent` / `MemorySession` recall and outcome contracts |
 
 ---
 
-## Supported Providers
-
 | Provider | Environment Variable | Reasoning Support | Default Model |
 |----------|----------------------|-------------------|---------------|
-| anthropic | `ANTHROPIC_API_KEY` | Native budget | claude-sonnet-4-6 |
-| openai | `OPENAI_API_KEY` | Native effort | gpt-5.3-codex |
-| deepseek | `DEEPSEEK_API_KEY` | Native toggle on `deepseek-chat`; model-selected reasoning on `deepseek-reasoner` | deepseek-chat |
-| kimi | `KIMI_API_KEY` | Native effort | k2.5 |
-| kimi-code | `KIMI_API_KEY` | Native budget | k2.5 |
-| qwen | `QWEN_API_KEY` | Native budget | qwen3.5-plus |
-| zhipu | `ZHIPU_API_KEY` | Native budget | glm-5 |
-| zhipu-coding | `ZHIPU_API_KEY` | Native budget | glm-5 |
-| minimax-coding | `MINIMAX_API_KEY` | Native budget | MiniMax-M2.7 |
+| anthropic | `ANTHROPIC_API_KEY` | Native | claude-sonnet-4-6 (`claude-opus-4-6` / `claude-haiku-4-5` via `/model`) |
+| openai | `OPENAI_API_KEY` | Native | gpt-5.3-codex (`gpt-5.4` / `gpt-5.3-codex-spark` via `/model`) |
+| kimi | `KIMI_API_KEY` | Native | kimi-k2.6 (`kimi-k2.7-code` 256K / `k2.5` via `/model`) |
+| kimi-code | `KIMI_CODE_API_KEY` | Native | kimi-for-coding |
+| qwen | `QWEN_API_KEY` | Native | qwen3.5-plus |
+| zhipu | `ZHIPU_API_KEY` | Native | glm-5 (`glm-5.2` 1M ctx / `glm-5.1` / `glm-5-turbo` via `/model`) |
+| zhipu-coding | `ZHIPU_CODING_API_KEY` | Native | glm-5 (`glm-5.2` 1M ctx / `glm-5.1` / `glm-5-turbo` via `/model`) |
+| zai-coding | `ZAI_CODING_API_KEY` | Native | glm-5.2 (Zhipu Coding Plan overseas mirror via `api.z.ai`, Anthropic-compat — same model lineup as `zhipu-coding`, served from outside CN) |
+| minimax-coding | `MINIMAX_CODING_API_KEY` | Native | MiniMax-M2.7 (`MiniMax-M3` Frontier Coding, native multimodal + 1M ctx, plus `MiniMax-M2.7-highspeed` via `/model`) |
+| mimo | `MIMO_API_KEY` | Native | mimo-v2.5-pro (Xiaomi MiMo pay-per-token, Anthropic-compat) |
+| mimo-coding | `MIMO_CODING_API_KEY` | Native | mimo-v2.5-pro (Xiaomi Token Plan, Anthropic-compat) |
+| ark-coding | `ARK_CODING_API_KEY` | Native | glm-5.2 (Volcengine Ark Coding Plan — GLM-5.2 (alias: `glm-latest`) · Kimi K2.7 Code / K2.6 · MiniMax M3 / M2.7 · DeepSeek V4 Pro / V4 Flash · Doubao Seed 2.0 Code / Pro / Lite · Doubao Seed Code) |
+| deepseek | `DEEPSEEK_API_KEY` | Native | deepseek-v4-flash (`deepseek-v4-pro` via `/model`) |
 | gemini-cli | `GEMINI_API_KEY` | Prompt-only / CLI bridge | (via gemini CLI) |
 | codex-cli | `OPENAI_API_KEY` | Prompt-only / CLI bridge | (via codex CLI) |
+
+> **Custom providers**: any OpenAI- or Anthropic-compatible endpoint can be added via `customProviders[]` in `~/.kodax/config.json` (CLI) or `registerCustomProviders()` (library). See the [Quick Start](#2-configure-a-provider) for the configuration shape.
 
 ### Examples
 
@@ -961,11 +1204,6 @@ kodax --provider zhipu-coding --thinking "Help me optimize this code"
 export OPENAI_API_KEY=your_key
 kodax --provider openai "Create a REST API"
 
-# Use DeepSeek
-export DEEPSEEK_API_KEY=your_key
-kodax --provider deepseek "Summarize this repository"
-kodax --provider deepseek --model deepseek-reasoner "Think through this refactor plan"
-
 # Resume last session
 kodax --session resume
 
@@ -975,150 +1213,226 @@ kodax --session list
 # Parallel tool execution
 kodax --parallel "Read package.json and tsconfig.json"
 
-# Agent Team
-kodax --team "Analyze code structure,Check test coverage,Find bugs"
-
-# Long-running project
-kodax --init "Build a Todo application"
-kodax --auto-continue --max-hours 2
+# Adaptive multi-agent (AMA) mode — V2 Worker single-loop with `dispatch_child_task` fan-out
+kodax --agent-mode ama "Analyze code structure, check test coverage, find bugs"
 ```
 
 ---
 
 ## Tools
 
+KodaX ships 50+ built-in tools, grouped below. They are registered as a single flat tool surface to the LLM; the categories here are just for navigation.
+
+### File operations
 | Tool | Description |
 |------|-------------|
-| `read` | Read file contents with offset and limit support |
-| `write` | Write a file |
-| `edit` | Exact string replacement with `replace_all` support |
-| `bash` | Execute shell commands |
-| `glob` | File pattern matching |
-| `grep` | Content search |
-| `undo` | Revert the last modification |
-| `ask_user_question` | Ask the user to choose between options |
+| `read` | Read file contents (supports offset/limit) |
+| `write` | Write a new file or fully rewrite an existing one |
+| `edit` | Exact string replacement (supports `replace_all`) |
+| `multi_edit` | Atomic batch of independent edits to one file |
+| `insert_after_anchor` | Insert content after a unique anchor without rewriting the file |
+| `undo` | Revert the last file modification |
+
+### Shell & search
+| Tool | Description |
+|------|-------------|
+| `bash` | Execute a shell command (supports `run_in_background`; complete capture with recoverable capacity fallback) |
+| `glob` | Find files by pattern |
+| `grep` | Regex content search (context lines, multiline, file-type filter, pagination) |
+| `code_search` | Lower-noise code search (extension-provider aware) |
+| `semantic_lookup` | Symbol/module/process-aware search backed by repo intelligence |
+| `web_search` | Discovery-oriented web search with trust + freshness signals |
+| `web_fetch` | Fetch a specific URL with provenance hints |
+
+### Repo Intelligence (working tools)
+| Tool | Description |
+|------|-------------|
+| `repo_overview` | Summarize structure, key areas, entry hints, intelligence snapshot |
+| `changed_scope` | Which files/areas/categories the current diff touches |
+| `changed_diff` | Paged diff slice for a single file |
+| `changed_diff_bundle` | Paged diff slices for multiple files in one call |
+| `module_context` | Module capsule (deps, entries, symbols, tests, docs) |
+| `symbol_context` | Definition + probable callers/callees + alternatives |
+| `process_context` | Approximate static execution capsule for an entry |
+| `impact_estimate` | Blast radius for a symbol/path/module |
+
+### MCP capabilities (when MCP servers are configured)
+| Tool | Description |
+|------|-------------|
+| `mcp_search` / `mcp_describe` / `mcp_call` | Discover and invoke MCP tools through the shared capability runtime |
+| `mcp_read_resource` / `mcp_get_prompt` | Read MCP resources and prompts |
+
+### Git worktree
+| Tool | Description |
+|------|-------------|
+| `worktree_create` | Create a new worktree on an isolated branch for safe agent work |
+| `worktree_remove` | Remove a worktree (with safety checks) |
+
+### Agent control & UX
+| Tool | Description |
+|------|-------------|
+| `dispatch_child_task` | Spawn a sub-agent for an independent investigation/edit task. Optional `model_hint: 'fast' \| 'balanced' \| 'deep'` (advisory; routing no-op until FEATURE_102 v0.7.45). |
+| `send_message` | Append an instruction to an in-flight child's queue — surfaces as `<coordinator-instruction>` at the child's next turn boundary. Coordinator-only. (FEATURE_120, v0.7.39) |
+| `task_stop` | Request graceful exit of a specific child. Current tool finishes atomically, then the child sees a `<coordinator-stop-request>` and emits a final summary. Coordinator-only. (FEATURE_120, v0.7.39) |
+| `ask_user_question` | Single/multi-select or free-text prompt back to the user |
+| `exit_plan_mode` | Present a finalized plan for approval (REPL only) |
+| `run_workflow` | Author and run a workflow script inline. Hosted in AMAW (self-activates on complexity via the ORCHESTRATION DEFAULT directive) and AMA (activates on an explicit natural-language request); not in SA. Scouts the codebase first, then bakes findings into child prompts; structured output via `outputSchema`, same-session `resumeFromRunId`, nested `wf.workflow(...)`. Async / idle-yield. (FEATURE_246 v0.7.58; FEATURE_248/249 v0.7.59) |
+| `emit_managed_protocol` | Internal managed-task protocol side-channel for role payloads (verdict). V2 Worker single-loop + Sidecar Verifier is the default since v0.7.42 (FEATURE_184); V1 chain retired in v0.7.43 (FEATURE_193). |
 
 ---
 
 ## Skills System
 
-The KodaX branch also introduced a more explicit skills story that remains relevant in InfCodeX.
-
-Examples:
+KodaX includes a built-in Skills system that can be triggered by natural language:
 
 ```bash
-kodax "Help me review this code"
-kodax "Write tests for this module"
+# Natural language triggering (no explicit /skill needed)
+kodax "帮我审查代码"           # Triggers code-review skill
+kodax "写测试用例"             # Triggers tdd skill
+kodax "提交代码"               # Triggers git-workflow skill
+
+# Explicit skill command
 kodax /skill:code-review
 ```
 
 Built-in skills include:
+- **code-review** - Code review and quality analysis
+- **tdd** - Test-driven development workflow
+- **git-workflow** - Git commit and workflow automation
 
-- `code-review`
-- `tdd`
-- `git-workflow`
-
-Custom skills can live under `~/.kodax/skills/`.
+Skills are stored in `~/.kodax/skills/` and can be extended with custom skills.
 
 ---
 
-## Commands
+## Commands (CLI)
 
-Commands are `/xxx` shortcuts exposed through the CLI and REPL experience.
+Commands are `/xxx` shortcuts in CLI:
 
 ```bash
 kodax /review src/auth.ts
 kodax /test
 ```
 
-Command definitions live in `~/.kodax/commands/`:
-
-- `.md` files provide prompt commands
-- `.ts` / `.js` files provide programmable commands
+Commands are stored in `~/.kodax/commands/`:
+- `.md` files → Prompt commands (content used as prompt)
+- `.ts/.js` files → Programmable commands
 
 ---
 
-## Configuration
+## API Exports
 
-The repository includes a configuration template with:
+```typescript
+// Main functions
+export { runKodaX, KodaXClient };
 
-- default provider selection
-- provider model selection
-- provider model overrides
-- custom provider definitions
-- unified reasoning mode
-- compaction settings
-- permission mode defaults
+// Types
+export type {
+  KodaXEvents, KodaXOptions, KodaXResult,
+  KodaXMessage, KodaXContentBlock,
+  KodaXSessionStorage, KodaXToolDefinition
+};
 
-The current documented config path is:
+// Tools
+export { KODAX_TOOLS, KODAX_TOOL_REQUIRED_PARAMS, executeTool };
 
-```text
-~/.kodax/config.json
+// Providers
+export { getProvider, KODAX_PROVIDERS, KodaXBaseProvider };
+
+// Utilities
+export {
+  estimateTokens,
+  getGitRoot, getGitContext, getEnvContext, getProjectSnapshot,
+  checkPromiseSignal
+};
 ```
-
-See `config.example.jsonc` for the full template.
 
 ---
 
 ## Development
 
 ```bash
-# Development mode
+# Development mode (using tsx)
 npm run dev "your task"
 
-# Build all packages
+# Build
+npm run build
+
+# Optional: only build workspace packages
 npm run build:packages
 
-# Build the root CLI
-npm run build
+# Build standalone binary (current platform / all platforms)
+npm run build:binary
+npm run build:binary:all
 
 # Run tests
 npm test
 
-# Clean generated artifacts
+# Eval-driven development tests (provider matrices, identity round-trip, etc.)
+npm run test:eval
+
+# Clean
 npm run clean
 ```
 
+### Repo Intelligence cache directories
+
+KodaX uses one repo-intelligence cache root with separate built-in engine profiles:
+
+- `.agent/repo-intelligence/`
+  - Full-engine repo-intelligence artifacts and existing task-engine snapshots.
+- `.agent/repo-intelligence/light/`
+  - Light-mode heuristic index artifacts.
+
+They are intentionally separated so:
+
+- full and light profiles can be rebuilt independently.
+- light-mode confidence/capability state cannot be mistaken for full-engine state.
+- future cache migrations can delete one profile without corrupting the other.
+
+`.agent/repo-intelligence/` is local generated state and should not be committed.
+
 ---
 
-## Design Philosophy
+## Code Style
 
-InfCodeX is guided by several principles:
+### Comment Guidelines
 
-- **Transparent over black-box**
-- **Composable over monolithic**
-- **Execution-oriented over chat-oriented**
-- **Governable over uncontrolled**
-- **Evolvable over one-off**
+KodaX uses an **English-first** comment style with selective Chinese brief notes for complex logic.
 
-This is what makes the project valuable not only as a CLI, but as a foundation for a broader engineering-agent ecosystem.
+| Situation | Style | Example |
+|-----------|-------|---------|
+| Import/Export | English only | `// Import dependencies` |
+| Simple constants | English only | `// Max retry count` |
+| Simple logic | English only | `// Return if null` |
+| **Business rules** | English + Chinese | `// Skip tool_result - 跳过工具结果块` |
+| **Platform compatibility** | English + Chinese | `// Windows path handling - Windows 路径处理` |
+| **Performance optimization** | English + Chinese | `// Debounce to prevent flicker - 防抖避免闪烁` |
 
 ---
 
-## Roadmap Direction
+## Documentation
 
-Based on the existing repo structure and internal documents, the natural forward path includes:
-
-- [README_CN.md](README_CN.md) - Chinese documentation
-- [docs/ADR.md](docs/ADR.md) - Architecture decision records
-- [docs/HLD.md](docs/HLD.md) - High-level design
-- [docs/DD.md](docs/DD.md) - Detailed design
-- [docs/PRD.md](docs/PRD.md) - Product requirements
-- [docs/FEATURE_LIST.md](docs/FEATURE_LIST.md) - Feature tracker and roadmap
-- [docs/features/README.md](docs/features/README.md) - Feature design index
+- [README_CN.md](README_CN.md) - Chinese Documentation
+- [docs/release.md](docs/release.md) - Standalone binary build & release pipeline
+- [docs/PRD.md](docs/PRD.md) - Product Requirements
+- [docs/ADR.md](docs/ADR.md) - Architecture Decisions
+- [docs/HLD.md](docs/HLD.md) - High-Level Design
+- [docs/DD.md](docs/DD.md) - Detailed Design
+- [docs/FEATURE_LIST.md](docs/FEATURE_LIST.md) - Feature Tracking
 - [docs/test-guides/](docs/test-guides/) - Feature-specific test guides
-- [CHANGELOG.md](CHANGELOG.md) - Version history
+- [CHANGELOG.md](CHANGELOG.md) - Version History (v0.7.0+; [archive](docs/CHANGELOG_ARCHIVE.md) for older)
 
 ---
 
 ## License
 
-[Apache License 2.0](./LICENSE)
+[KodaX-AI Fair Core License (KAI-FCL) 1.0](LICENSE) - Copyright 2026 [icetomoyo](mailto:icetomoyo@gmail.com).
 
----
+KAI-FCL is source-available / fair-core, not OSI open source. Commercial,
+enterprise, managed deployment, paid service, or customer redistribution use
+requires KodaX-AI authorization and a valid entitlement where required.
 
-## Summary
-
-**InfCodeX is important because it is not only a CLI.**
-
-It is a practical execution runtime for software-engineering agents, and it has the right architecture to grow from a powerful terminal tool into a key execution component inside Tokfinity's larger intelligent-agent platform strategy.
+Official KodaX 0.7.70 and later distributions use KAI-FCL or accompanying
+KodaX-AI customer terms. Historical tags, archives, binaries, npm packages, or
+other copies already distributed with Apache-2.0 notices remain Apache-2.0 for
+those specific copies.

@@ -1,0 +1,190 @@
+// Vitest Snapshot v1, https://vitest.dev/guide/snapshot.html
+
+exports[`transcript render data-layer golden — FEATURE_172 Layer 0 G1 > CJK + emoji — wide-char wrap deterministic 1`] = `
+"=== STATIC SECTIONS (0) ===
+
+=== ACTIVE SECTIONS (2) ===
+# section: u-1
+  [key=u-1-header-0 itemId=u-1 color=primary bold] "You [<ts>]"
+  [key=u-1-body-0 itemId=u-1 color=text indent=2] "你好,这是一个测试 with mixed 中英文 and 🎉 emoji"
+  [key=u-1-blank itemId=u-1] " "
+# section: a-1
+  [key=a-1-header-0 itemId=a-1 color=secondary bold] "Assistant [<ts>]"
+  [key=a-1-body-0 itemId=a-1 color=text indent=2] "中文回复:测试通过 ✓ — wide chars render correctly"
+  [key=a-1-blank itemId=a-1] " "
+
+=== PREVIEW SECTIONS (0) ===
+
+=== FLATTENED ROW COUNT ===
+active rows: 6
+preview rows: 0
+flattened total: 6"
+`;
+
+exports[`transcript render data-layer golden — FEATURE_172 Layer 0 G1 > empty state — no items, no streaming 1`] = `
+"=== STATIC SECTIONS (0) ===
+
+=== ACTIVE SECTIONS (0) ===
+
+=== PREVIEW SECTIONS (0) ===
+
+=== FLATTENED ROW COUNT ===
+active rows: 0
+preview rows: 0
+flattened total: 0"
+`;
+
+exports[`transcript render data-layer golden — FEATURE_172 Layer 0 G1 > multi-turn with tool_group — typical coding session 1`] = `
+"=== STATIC SECTIONS (3) ===
+# section: u-1
+  [key=u-1-header-0 itemId=u-1 color=primary bold] "You [<ts>]"
+  [key=u-1-body-0 itemId=u-1 color=text indent=2] "Read packages/repl/src/index.ts"
+  [key=u-1-blank itemId=u-1] " "
+# section: t-1
+  [key=t-1-header-0 itemId=t-1 color=accent bold] "Tools [<ts>]"
+  [key=t-1-tool-t-1-call-main-0 color=success indent=2] "✓ Read (50ms)"
+  [key=t-1-blank itemId=t-1] " "
+# section: a-1
+  [key=a-1-header-0 itemId=a-1 color=secondary bold] "Assistant [<ts>]"
+  [key=a-1-body-0 itemId=a-1 color=text indent=2] "The file exports the InkREPL entry point."
+  [key=a-1-blank itemId=a-1] " "
+
+=== ACTIVE SECTIONS (3) ===
+# section: u-2
+  [key=u-2-header-0 itemId=u-2 color=primary bold] "You [<ts>]"
+  [key=u-2-body-0 itemId=u-2 color=text indent=2] "Now read packages/agent/src/index.ts"
+  [key=u-2-blank itemId=u-2] " "
+# section: t-2
+  [key=t-2-header-0 itemId=t-2 color=accent bold] "Tools [<ts>]"
+  [key=t-2-tool-t-2-call-main-0 color=success indent=2] "✓ Read (50ms)"
+  [key=t-2-blank itemId=t-2] " "
+# section: a-2
+  [key=a-2-header-0 itemId=a-2 color=secondary bold] "Assistant [<ts>]"
+  [key=a-2-body-0 itemId=a-2 color=text indent=2] "This is the agent framework public API."
+  [key=a-2-blank itemId=a-2] " "
+
+=== PREVIEW SECTIONS (0) ===
+
+=== FLATTENED ROW COUNT ===
+active rows: 9
+preview rows: 0
+flattened total: 18"
+`;
+
+exports[`transcript render data-layer golden — FEATURE_172 Layer 0 G1 > narrow viewport — wrap behavior with 60-column width 1`] = `
+"=== STATIC SECTIONS (0) ===
+
+=== ACTIVE SECTIONS (2) ===
+# section: u-1
+  [key=u-1-header-0 itemId=u-1 color=primary bold] "You [<ts>]"
+  [key=u-1-body-0 itemId=u-1 color=text indent=2] "This is a longer user prompt that will definitely wrap at "
+  [key=u-1-body-1 itemId=u-1 color=text indent=2] "narrow widths to test the text-wrap behavior"
+  [key=u-1-blank itemId=u-1] " "
+# section: a-1
+  [key=a-1-header-0 itemId=a-1 color=secondary bold] "Assistant [<ts>]"
+  [key=a-1-body-0 itemId=a-1 color=text indent=2] "And here is an assistant response that is also long "
+  [key=a-1-body-1 itemId=a-1 color=text indent=2] "enough to wrap multiple times across the viewport so we "
+  [key=a-1-body-2 itemId=a-1 color=text indent=2] "can verify that wrap math stays deterministic"
+  [key=a-1-blank itemId=a-1] " "
+
+=== PREVIEW SECTIONS (0) ===
+
+=== FLATTENED ROW COUNT ===
+active rows: 9
+preview rows: 0
+flattened total: 9"
+`;
+
+exports[`transcript render data-layer golden — FEATURE_172 Layer 0 G1 > post-thinking — committed thinking item + streaming response 1`] = `
+"=== STATIC SECTIONS (0) ===
+
+=== ACTIVE SECTIONS (2) ===
+# section: u-1
+  [key=u-1-header-0 itemId=u-1 color=primary bold] "You [<ts>]"
+  [key=u-1-body-0 itemId=u-1 color=text indent=2] "Refactor the auth module"
+  [key=u-1-blank itemId=u-1] " "
+# section: th-1
+  [key=th-1-header-0 itemId=th-1 color=thinking italic] "Thinking"
+  [key=th-1-body-0 itemId=th-1 color=thinking indent=2 italic] "I'll start by examining the existing structure."
+  [key=th-1-blank itemId=th-1] " "
+
+=== PREVIEW SECTIONS (1) ===
+# section: active-pending
+  [key=loading-indicator-0 color=accent spinner] "Thinking..."
+  [key=streaming-header-0 color=secondary bold] "Assistant"
+  [key=streaming-body-0 color=text indent=2] "First, let's look at the current organization."
+  [key=streaming-body-1 color=text indent=2] ""
+  [key=streaming-blank] " "
+
+=== FLATTENED ROW COUNT ===
+active rows: 6
+preview rows: 5
+flattened total: 11"
+`;
+
+exports[`transcript render data-layer golden — FEATURE_172 Layer 0 G1 > single-turn — user prompt + short assistant response 1`] = `
+"=== STATIC SECTIONS (0) ===
+
+=== ACTIVE SECTIONS (2) ===
+# section: u-1
+  [key=u-1-header-0 itemId=u-1 color=primary bold] "You [<ts>]"
+  [key=u-1-body-0 itemId=u-1 color=text indent=2] "What's the capital of France?"
+  [key=u-1-blank itemId=u-1] " "
+# section: a-1
+  [key=a-1-header-0 itemId=a-1 color=secondary bold] "Assistant [<ts>]"
+  [key=a-1-body-0 itemId=a-1 color=text indent=2] "The capital of France is Paris."
+  [key=a-1-blank itemId=a-1] " "
+
+=== PREVIEW SECTIONS (0) ===
+
+=== FLATTENED ROW COUNT ===
+active rows: 6
+preview rows: 0
+flattened total: 6"
+`;
+
+exports[`transcript render data-layer golden — FEATURE_172 Layer 0 G1 > streaming state — active assistant response in progress 1`] = `
+"=== STATIC SECTIONS (0) ===
+
+=== ACTIVE SECTIONS (1) ===
+# section: u-1
+  [key=u-1-header-0 itemId=u-1 color=primary bold] "You [<ts>]"
+  [key=u-1-body-0 itemId=u-1 color=text indent=2] "Explain dependency injection in TypeScript"
+  [key=u-1-blank itemId=u-1] " "
+
+=== PREVIEW SECTIONS (1) ===
+# section: active-pending
+  [key=loading-indicator-0 color=accent spinner] "Thinking..."
+  [key=streaming-header-0 color=secondary bold] "Assistant"
+  [key=streaming-body-0 color=text indent=2] "Dependency injection (DI) is a design pattern"
+  [key=streaming-body-1 color=text indent=2] ""
+  [key=streaming-blank] " "
+
+=== FLATTENED ROW COUNT ===
+active rows: 3
+preview rows: 5
+flattened total: 8"
+`;
+
+exports[`transcript render data-layer golden — FEATURE_172 Layer 0 G1 > thinking state — model is reasoning, no streamed response yet 1`] = `
+"=== STATIC SECTIONS (0) ===
+
+=== ACTIVE SECTIONS (1) ===
+# section: u-1
+  [key=u-1-header-0 itemId=u-1 color=primary bold] "You [<ts>]"
+  [key=u-1-body-0 itemId=u-1 color=text indent=2] "Plan a refactor of the auth module"
+  [key=u-1-blank itemId=u-1] " "
+
+=== PREVIEW SECTIONS (1) ===
+# section: active-pending
+  [key=thinking-stream-header-0 color=thinking italic] "Thinking"
+  [key=thinking-stream-body-0 color=thinking indent=2 italic] "Let me consider the existing structure first."
+  [key=thinking-stream-body-1 color=thinking indent=2 italic] "The auth module has 3 layers."
+  [key=thinking-stream-blank] " "
+  [key=loading-indicator-0 color=accent spinner] "[Thinking] 80 chars..."
+
+=== FLATTENED ROW COUNT ===
+active rows: 3
+preview rows: 5
+flattened total: 8"
+`;

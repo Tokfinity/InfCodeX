@@ -1,0 +1,906 @@
+import { createHash, randomUUID } from 'node:crypto';
+import fs from 'node:fs';
+import { mkdir, readFile } from 'node:fs/promises';
+import path from 'node:path';
+
+import {
+  SkillRegistry,
+  getDefaultSkillPaths,
+  type AgentDispatchContext,
+  type Agent,
+  type ISkillRegistry,
+  type Skill,
+  type SkillContext,
+  type SkillMetadata,
+  type SkillResult,
+  type ToolGuardrail,
+} from '@kodax-ai/agent';
+import {
+  getAllRegisteredTools,
+  loadMarkdownAgentScope,
+  type KodaXAgentScope,
+  type KodaXSkillScriptRunner,
+  type LoadedMarkdownAgent,
+  type RuntimeRemoteToolContract,
+} from '@kodax-ai/coding';
+
+import type {
+  RuntimeInput,
+  RuntimePermissionBroker,
+  RuntimeRunHandle,
+  RuntimeRunService,
+  RuntimeSessionService,
+} from './sdk-runtime.js';
+
+export interface RuntimeUserMarkdownAgentRef {
+  readonly source: 'markdown:user';
+  readonly name: string;
+}
+
+export interface RuntimeEffectiveSkillRef {
+  readonly name: string;
+  readonly source: 'workspace' | 'user' | 'plugin' | 'builtin';
+  readonly revision: string;
+}
+
+export type RuntimeWorkspaceBinding =
+  | { readonly mode: 'managed' }
+  | { readonly mode: 'fixed'; readonly root: string };
+
+export interface RuntimeExecutionToolPolicy {
+  readonly workspace: 'none' | 'read' | 'write';
+  readonly process: 'deny' | 'isolated';
+  readonly network:
+    | { readonly mode: 'deny' }
+    | { readonly mode: 'allowlist'; readonly origins: readonly string[] };
+  readonly tools: readonly string[];
+  readonly mcp: Readonly<Record<string, readonly string[]>>;
+  readonly skillScripts: Readonly<Record<string, readonly string[]>>;
+  readonly subagents: 'deny' | 'inherit';
+}
+
+export interface RuntimeResolvedLocalAgent {
+  readonly ref: RuntimeUserMarkdownAgentRef;
+  readonly agentId: string;
+  readonly displayName: string;
+  readonly description: string;
+  readonly configurationRevision: string;
+  readonly effectiveSkills: readonly RuntimeEffectiveSkillRef[];
+  readonly skillSetRevision: string;
+}
+
+export interface RuntimeAgentOwnerSession {
+  readonly ownerSessionId: string;
+}
+
+export interface RuntimeBoundDefaultAgent {
+  readonly ownerSessionId: string;
+  readonly bindingId: string;
+  readonly executionPolicyRevision: string;
+  readonly toolPolicyRevision: string;
+  readonly workspaceBindingRevision: string;
+  readonly skillSetRevision: string;
+  readonly effectiveSkills: readonly RuntimeEffectiveSkillRef[];
+  readonly effectiveTools: readonly string[];
+}
+
+export interface RuntimeBoundLocalAgent extends RuntimeResolvedLocalAgent {
+  readonly ownerSessionId: string;
+  readonly bindingId: string;
+  readonly executionPolicyRevision: string;
+  readonly toolPolicyRevision: string;
+  readonly workspaceBindingRevision: string;
+  readonly effectiveTools: readonly string[];
+}
+
+interface RuntimeAgentStartBase {
+  readonly ownerSessionId: string;
+  readonly bindingId: string;
+  readonly expectedExecutionPolicyRevision: string;
+  readonly sessionId: string;
+  readonly input: RuntimeInput | readonly RuntimeInput[];
+  readonly permissionBroker?: RuntimePermissionBroker;
+  readonly agentContext?: AgentDispatchContext;
+}
+
+export interface RuntimeDefaultAgentStartInput extends RuntimeAgentStartBase {}
+
+export interface RuntimeLocalAgentStartInput extends RuntimeAgentStartBase {
+  readonly expectedConfigurationRevision: string;
+}
+
+export interface RuntimeAgentBindingService {
+  resolveLocal(input: {
+    readonly ref: RuntimeUserMarkdownAgentRef;
+    readonly workspace: RuntimeWorkspaceBinding;
+  }): Promise<RuntimeResolvedLocalAgent>;
+  openOwnerSession(): Promise<RuntimeAgentOwnerSession>;
+  bindDefault(input: {
+    readonly ownerSessionId: string;
+    readonly profileId?: string;
+    readonly workspace: RuntimeWorkspaceBinding;
+    readonly toolPolicy: RuntimeExecutionToolPolicy;
+    readonly expectedExecutionPolicyRevision?: string;
+    readonly workspaceByteLimit?: number;
+  }): Promise<RuntimeBoundDefaultAgent>;
+  startDefault(input: RuntimeDefaultAgentStartInput): Promise<RuntimeRunHandle>;
+  bindLocal(input: {
+    readonly ownerSessionId: string;
+    readonly ref: RuntimeUserMarkdownAgentRef;
+    readonly profileId?: string;
+    readonly workspace: RuntimeWorkspaceBinding;
+    readonly toolPolicy: RuntimeExecutionToolPolicy;
+    readonly expectedConfigurationRevision?: string;
+    readonly expectedExecutionPolicyRevision?: string;
+    readonly workspaceByteLimit?: number;
+  }): Promise<RuntimeBoundLocalAgent>;
+  startLocal(input: RuntimeLocalAgentStartInput): Promise<RuntimeRunHandle>;
+  prepareWorkspace(input: {
+    readonly ownerSessionId: string;
+    readonly bindingId: string;
+    readonly contextKey: string;
+  }): Promise<string>;
+  releaseBinding(input: {
+    readonly ownerSessionId: string;
+    readonly bindingId: string;
+  }): Promise<void>;
+  closeOwnerSession(ownerSessionId: string): Promise<void>;
+}
+
+export interface RuntimeAgentBindingHost {
+  readonly configHome: string;
+  readonly managedWorkspaceRoot: string;
+  readonly defaultProvider?: string;
+  readonly defaultModel?: string;
+  readonly runs: Pick<RuntimeRunService, 'start'>;
+  readonly sessions: Pick<RuntimeSessionService, 'load'>;
+  createSkillScriptRunner?(input: {
+    readonly registry: ISkillRegistry;
+    readonly admissions: Readonly<Record<string, readonly string[]>>;
+    readonly workspaceAccess: RuntimeExecutionToolPolicy['workspace'];
+    readonly network: RuntimeExecutionToolPolicy['network'];
+    readonly workspaceByteLimit?: number;
+  }): Promise<KodaXSkillScriptRunner>;
+}
+
+interface BindingResources {
+  readonly ownerSessionId: string;
+  readonly bindingId: string;
+  readonly kind: 'runtime-default' | 'local-agent';
+  readonly executionPolicyRevision: string;
+  readonly toolPolicyRevision: string;
+  readonly workspaceBindingRevision: string;
+  readonly workspace: RuntimeWorkspaceBinding;
+  readonly toolPolicy: RuntimeExecutionToolPolicy;
+  readonly effectiveTools: readonly string[];
+  readonly effectiveSkills: readonly RuntimeEffectiveSkillRef[];
+  readonly skillSetRevision: string;
+  readonly skillRegistry: ISkillRegistry;
+  readonly skillScriptRunner?: KodaXSkillScriptRunner;
+  readonly remoteContracts: ReadonlyMap<string, RuntimeRemoteToolContract>;
+  readonly toolRegistrations: ReadonlyMap<string, string>;
+  readonly workspaceByteLimit?: number;
+  readonly scope?: KodaXAgentScope;
+  readonly loadedAgent?: LoadedMarkdownAgent;
+  readonly agent?: Agent;
+  readonly configurationRevision?: string;
+}
+
+const NATIVE_READ_TOOLS = ['read', 'grep', 'glob'] as const;
+const NATIVE_WRITE_TOOLS = ['write', 'edit', 'multi_edit', 'insert_after_anchor'] as const;
+const MCP_TOOLS = ['mcp_search', 'mcp_describe', 'mcp_call', 'mcp_read_resource', 'mcp_get_prompt'] as const;
+const SUBAGENT_TOOLS = ['list_dispatchable_agents', 'dispatch_child_task', 'task_output', 'task_stop', 'send_message'] as const;
+const PATH_TOOLS = new Set<string>([...NATIVE_READ_TOOLS, ...NATIVE_WRITE_TOOLS]);
+const SENSITIVE_PATH_PARTS = new Set(['.ssh', '.aws', '.azure', '.gnupg', '.kodax', '.agents']);
+const SENSITIVE_FILES = new Set(['.env', '.npmrc', '.pypirc', 'credentials', 'id_rsa', 'id_ed25519']);
+
+function canonicalValue(value: unknown): unknown {
+  if (Array.isArray(value)) return value.map(canonicalValue);
+  if (value === null || typeof value !== 'object') return value;
+  return Object.fromEntries(Object.entries(value as Record<string, unknown>)
+    .sort(([left], [right]) => left.localeCompare(right))
+    .map(([key, item]) => [key, canonicalValue(item)]));
+}
+
+function stableHash(value: unknown): string {
+  return createHash('sha256').update(JSON.stringify(canonicalValue(value))).digest('hex');
+}
+
+function hashParts(parts: readonly (string | Buffer)[]): string {
+  const digest = createHash('sha256');
+  for (const part of parts) digest.update(part);
+  return digest.digest('hex');
+}
+
+function isInside(root: string, candidate: string): boolean {
+  const relative = path.relative(path.resolve(root), path.resolve(candidate));
+  return relative === '' || (!relative.startsWith('..') && !path.isAbsolute(relative));
+}
+
+function directoryBytes(root: string): number {
+  if (!fs.existsSync(root)) return 0;
+  let total = 0;
+  for (const entry of fs.readdirSync(root, { withFileTypes: true })) {
+    const item = path.join(root, entry.name);
+    if (entry.isSymbolicLink()) continue;
+    if (entry.isDirectory()) total += directoryBytes(item);
+    else if (entry.isFile()) total += fs.statSync(item).size;
+  }
+  return total;
+}
+
+function validateWorkspaceByteLimit(value: number | undefined): number | undefined {
+  if (value === undefined) return undefined;
+  if (!Number.isSafeInteger(value) || value <= 0) throw new Error('Runtime workspace byte limit must be positive.');
+  return value;
+}
+
+function normalizedWorkspace(input: RuntimeWorkspaceBinding): RuntimeWorkspaceBinding {
+  if (input.mode === 'managed') return { mode: 'managed' };
+  if (!path.isAbsolute(input.root)) throw new Error('Fixed Runtime workspace root must be absolute.');
+  return { mode: 'fixed', root: path.resolve(input.root) };
+}
+
+function exactList(value: unknown, label: string, allowEmpty = true): string[] {
+  if (!Array.isArray(value) || (!allowEmpty && value.length === 0)) {
+    throw new Error(`${label} must be ${allowEmpty ? 'an' : 'a non-empty'} array.`);
+  }
+  const result = value.map((item) => {
+    if (typeof item !== 'string' || item.trim().length === 0 || item.includes('*')) {
+      throw new Error(`${label} must contain exact names without wildcards.`);
+    }
+    return item.trim();
+  });
+  if (new Set(result).size !== result.length) throw new Error(`${label} contains duplicates.`);
+  return result.sort();
+}
+
+function exactMap(value: unknown, label: string): Record<string, readonly string[]> {
+  if (!value || typeof value !== 'object' || Array.isArray(value)) throw new Error(`${label} must be an object.`);
+  return Object.fromEntries(Object.entries(value as Record<string, unknown>)
+    .sort(([left], [right]) => left.localeCompare(right))
+    .map(([name, entries]) => {
+      if (!name || name.includes('*')) throw new Error(`${label} keys must be exact names.`);
+      return [name, exactList(entries, `${label}.${name}`, false)];
+    }));
+}
+
+function validatedToolPolicy(value: RuntimeExecutionToolPolicy): RuntimeExecutionToolPolicy {
+  if (!['none', 'read', 'write'].includes(value?.workspace)) throw new Error('Runtime toolPolicy.workspace is invalid.');
+  if (!['deny', 'isolated'].includes(value?.process)) throw new Error('Runtime toolPolicy.process is invalid.');
+  if (!['deny', 'inherit'].includes(value?.subagents)) throw new Error('Runtime toolPolicy.subagents is invalid.');
+  const network = value?.network;
+  if (!network || (network.mode !== 'deny' && network.mode !== 'allowlist')) throw new Error('Runtime toolPolicy.network is invalid.');
+  const normalizedNetwork = network.mode === 'deny'
+    ? { mode: 'deny' as const }
+    : {
+        mode: 'allowlist' as const,
+        origins: exactList(network.origins, 'Runtime toolPolicy.network.origins')
+          .map((origin) => {
+            const url = new URL(origin);
+            if (!['http:', 'https:'].includes(url.protocol) || url.origin !== origin) {
+              throw new Error('Runtime network authority must be an exact HTTP(S) origin.');
+            }
+            return url.origin;
+          }),
+      };
+  const skillScripts = exactMap(value.skillScripts, 'Runtime toolPolicy.skillScripts');
+  const scriptCount = Object.values(skillScripts).reduce((sum, entries) => sum + entries.length, 0);
+  if ((value.process === 'deny') !== (scriptCount === 0)) {
+    throw new Error('Runtime isolated process authority and skillScripts must be enabled together.');
+  }
+  return {
+    workspace: value.workspace,
+    process: value.process,
+    network: normalizedNetwork,
+    tools: exactList(value.tools, 'Runtime toolPolicy.tools'),
+    mcp: exactMap(value.mcp, 'Runtime toolPolicy.mcp'),
+    skillScripts,
+    subagents: value.subagents,
+  };
+}
+
+function skillSource(source: SkillMetadata['source']): RuntimeEffectiveSkillRef['source'] {
+  return source === 'project' ? 'workspace' : source;
+}
+
+function skillFiles(skill: Skill): readonly { readonly relativePath: string; readonly path: string }[] {
+  return [
+    ...(skill.scripts ?? []).map((file) => ({ ...file, relativePath: `scripts/${file.relativePath}` })),
+    ...(skill.references ?? []).map((file) => ({ ...file, relativePath: `references/${file.relativePath}` })),
+    ...(skill.assets ?? []).map((file) => ({ ...file, relativePath: `assets/${file.relativePath}` })),
+    ...(skill.templates ?? []).map((file) => ({ ...file, relativePath: `templates/${file.relativePath}` })),
+    ...(skill.resources ?? []).map((file) => ({ ...file, relativePath: `resources/${file.relativePath}` })),
+  ].sort((left, right) => left.relativePath.localeCompare(right.relativePath));
+}
+
+async function skillRevision(skill: Skill): Promise<string> {
+  const parts: Array<string | Buffer> = [skill.name, skill.rawContent];
+  for (const file of skillFiles(skill)) {
+    parts.push(file.relativePath, await readFile(file.path));
+  }
+  return hashParts(parts);
+}
+
+class PinnedSkillRegistry implements ISkillRegistry {
+  readonly #delegate: SkillRegistry;
+  readonly #metadata: ReadonlyMap<string, SkillMetadata>;
+
+  constructor(delegate: SkillRegistry, metadata: readonly SkillMetadata[]) {
+    this.#delegate = delegate;
+    this.#metadata = new Map(metadata.map((item) => [item.name, item]));
+  }
+
+  get skills(): ReadonlyMap<string, SkillMetadata> { return this.#metadata; }
+  get size(): number { return this.#metadata.size; }
+  async discover(): Promise<void> {}
+  get(name: string): SkillMetadata | undefined { return this.#metadata.get(name); }
+  has(name: string): boolean { return this.#metadata.has(name); }
+  list(): SkillMetadata[] { return [...this.#metadata.values()]; }
+  listUserInvocable(): SkillMetadata[] { return this.list().filter((skill) => skill.userInvocable); }
+  async loadFull(name: string): Promise<Skill> {
+    if (!this.has(name)) throw new Error(`Skill not admitted by Runtime binding: ${name}`);
+    return this.#delegate.loadFull(name);
+  }
+  async invoke(name: string, args: string, context: SkillContext): Promise<SkillResult> {
+    if (!this.has(name)) return { success: false, content: '', error: `Skill not admitted: ${name}` };
+    return this.#delegate.invoke(name, args, context);
+  }
+  async reload(): Promise<void> {
+    throw new Error('A bound Skill registry is immutable; create a new Runtime binding.');
+  }
+}
+
+async function resolveSkills(input: {
+  readonly configHome: string;
+  readonly workspace: RuntimeWorkspaceBinding;
+  readonly selection?: readonly string[];
+}): Promise<{
+  readonly registry: ISkillRegistry;
+  readonly refs: readonly RuntimeEffectiveSkillRef[];
+  readonly revision: string;
+}> {
+  const projectRoot = input.workspace.mode === 'fixed' ? input.workspace.root : undefined;
+  const defaults = getDefaultSkillPaths(projectRoot);
+  const standardUserSkillPaths = defaults.userPaths.filter((skillPath) => (
+    path.basename(path.dirname(skillPath)) === '.agents'
+  ));
+  const registry = new SkillRegistry(projectRoot, {
+    projectPaths: input.workspace.mode === 'managed' ? [] : defaults.projectPaths,
+    userPaths: [
+      path.join(input.configHome, 'skills'),
+      ...standardUserSkillPaths,
+    ],
+    pluginPaths: defaults.pluginPaths,
+    builtinPath: defaults.builtinPath,
+  });
+  await registry.discover();
+  const all = registry.list();
+  const wildcard = input.selection === undefined || input.selection.includes('*');
+  const selected = wildcard
+    ? all.filter((skill) => skill.source !== 'project' && !skill.disableModelInvocation)
+    : input.selection.map((name) => {
+        const skill = registry.get(name);
+        if (!skill) throw new Error(`Markdown Agent requires unknown Skill "${name}".`);
+        if (skill.disableModelInvocation) throw new Error(`Skill "${name}" disables model invocation.`);
+        return skill;
+      });
+  const refs: RuntimeEffectiveSkillRef[] = [];
+  for (const metadata of selected.sort((left, right) => left.name.localeCompare(right.name))) {
+    const revision = await skillRevision(await registry.loadFull(metadata.name));
+    refs.push({ name: metadata.name, source: skillSource(metadata.source), revision });
+  }
+  return {
+    registry: new PinnedSkillRegistry(registry, selected),
+    refs,
+    revision: stableHash(refs),
+  };
+}
+
+function validateRemoteContract(
+  name: string,
+  contract: RuntimeRemoteToolContract,
+  policy: RuntimeExecutionToolPolicy,
+): void {
+  const workspaceRank = { none: 0, read: 1, write: 2 } as const;
+  if (workspaceRank[contract.workspaceEffect] > workspaceRank[policy.workspace]) {
+    throw new Error(`Remote tool "${name}" requires broader workspace access.`);
+  }
+  const allowedOrigins = new Set(policy.network.mode === 'allowlist' ? policy.network.origins : []);
+  if (contract.networkOrigins.some((origin) => !allowedOrigins.has(new URL(origin).origin))) {
+    throw new Error(`Remote tool "${name}" requires a network origin outside toolPolicy.`);
+  }
+}
+
+function resolveToolSurface(input: {
+  readonly declared?: readonly string[];
+  readonly policy: RuntimeExecutionToolPolicy;
+  readonly hasSkills: boolean;
+  readonly hasSkillScripts: boolean;
+}): {
+  readonly tools: readonly string[];
+  readonly contracts: ReadonlyMap<string, RuntimeRemoteToolContract>;
+  readonly registrations: ReadonlyMap<string, string>;
+} {
+  const allowed = new Set<string>();
+  if (input.policy.workspace !== 'none') NATIVE_READ_TOOLS.forEach((name) => allowed.add(name));
+  if (input.policy.workspace === 'write') NATIVE_WRITE_TOOLS.forEach((name) => allowed.add(name));
+  if (input.hasSkills) allowed.add('skill');
+  if (input.hasSkillScripts) allowed.add('run_skill_script');
+  if (Object.keys(input.policy.mcp).length > 0) MCP_TOOLS.forEach((name) => allowed.add(name));
+  if (input.policy.subagents === 'inherit') SUBAGENT_TOOLS.forEach((name) => allowed.add(name));
+
+  const registered = new Map(getAllRegisteredTools().map((tool) => [tool.name, tool]));
+  const contracts = new Map<string, RuntimeRemoteToolContract>();
+  for (const name of input.policy.tools) {
+    const contract = registered.get(name)?.remoteContract;
+    if (!contract) throw new Error(`Tool "${name}" has no Runtime remote contract.`);
+    validateRemoteContract(name, contract, input.policy);
+    contracts.set(name, contract);
+    allowed.add(name);
+  }
+  const registrations = new Map<string, string>();
+  for (const name of allowed) {
+    const active = registered.get(name);
+    if (!active) throw new Error(`Runtime tool is unavailable: ${name}.`);
+    if (!contracts.has(name) && active.source.kind !== 'builtin') {
+      throw new Error(`Native Runtime tool "${name}" is shadowed by a non-builtin registration.`);
+    }
+    registrations.set(name, active.registrationId);
+  }
+  if (input.declared !== undefined) {
+    const unavailable = input.declared.filter((name) => !allowed.has(name));
+    if (unavailable.length > 0) {
+      throw new Error(`Markdown Agent tools are denied by remote policy: ${unavailable.join(', ')}.`);
+    }
+    const tools = [...new Set(input.declared)].sort();
+    return {
+      tools,
+      contracts,
+      registrations: new Map(tools.map((name) => [name, registrations.get(name)!])),
+    };
+  }
+  return { tools: [...allowed].sort(), contracts, registrations };
+}
+
+function skillsPrompt(skills: readonly RuntimeEffectiveSkillRef[], registry: ISkillRegistry): string {
+  if (skills.length === 0) return '## Available Skills\n\nNo Skills are admitted for this deployment.';
+  return [
+    '## Available Skills',
+    '',
+    'Invoke a matching Skill with the `skill` tool before completing that work.',
+    ...skills.map((skill) => `- ${skill.name}: ${registry.get(skill.name)?.description ?? ''}`),
+  ].join('\n');
+}
+
+function sensitivePath(candidate: string, root: string): boolean {
+  const relative = path.relative(root, candidate);
+  const parts = relative.split(path.sep).map((part) => part.toLowerCase());
+  return parts.some((part) => SENSITIVE_PATH_PARTS.has(part))
+    || parts.some((part) => SENSITIVE_FILES.has(part) || part.startsWith('.env.'));
+}
+
+function nearestExistingPath(candidate: string): string {
+  let current = candidate;
+  while (!fs.existsSync(current)) {
+    const parent = path.dirname(current);
+    if (parent === current) throw new Error('Tool path has no existing parent.');
+    current = parent;
+  }
+  return current;
+}
+
+function resolveRealToolPath(root: string, candidate: string): { readonly root: string; readonly candidate: string } {
+  const realRoot = fs.realpathSync(root);
+  const existing = nearestExistingPath(candidate);
+  const realExisting = fs.realpathSync(existing);
+  if (!isInside(realRoot, realExisting)) throw new Error('Tool path escapes the bound workspace through a link.');
+  const realCandidate = path.resolve(realExisting, path.relative(existing, candidate));
+  if (!isInside(realRoot, realCandidate)) throw new Error('Tool path escapes the bound workspace through a link.');
+  return { root: realRoot, candidate: realCandidate };
+}
+
+function resolveToolPath(root: string, raw: unknown): string | undefined {
+  if (raw === undefined) return undefined;
+  if (typeof raw !== 'string' || raw.trim().length === 0) throw new Error('Tool path must be a string.');
+  const candidate = path.resolve(root, raw);
+  if (!isInside(root, candidate)) throw new Error('Tool path escapes the bound workspace.');
+  const real = resolveRealToolPath(root, candidate);
+  if (sensitivePath(candidate, root) || sensitivePath(real.candidate, real.root)) {
+    throw new Error('Secret-bearing paths are unavailable to remote Agents.');
+  }
+  return candidate;
+}
+
+function remoteRunEvents() {
+  return {
+    // Remote policy guardrails are the authority; A2A runs cannot wait for interactive approval.
+    beforeToolExecute: async () => true,
+  };
+}
+
+function authorizeMcp(
+  name: string,
+  input: Readonly<Record<string, unknown>>,
+  policy: RuntimeExecutionToolPolicy,
+): void {
+  if (!MCP_TOOLS.includes(name as typeof MCP_TOOLS[number])) return;
+  if (name === 'mcp_search') {
+    const server = input.server;
+    if (typeof server !== 'string' || policy.mcp[server] === undefined) {
+      throw new Error('MCP search requires an explicitly admitted server.');
+    }
+    return;
+  }
+  const id = input.id;
+  if (typeof id !== 'string') throw new Error('MCP calls require a canonical capability id.');
+  const match = /^mcp:([^:]+):(tool|resource|prompt):(.+)$/.exec(id);
+  if (!match) throw new Error('MCP capability id is invalid.');
+  const [, server, kind, capability] = match;
+  const admitted = policy.mcp[server ?? ''] ?? [];
+  if (kind === 'tool' && !admitted.includes(capability ?? '')) {
+    throw new Error('MCP tool is not admitted by the remote policy.');
+  }
+  if (kind !== 'tool' && !admitted.includes(capability ?? '')) {
+    throw new Error('MCP capability is not admitted by the remote policy.');
+  }
+}
+
+function workspaceBroker(root: string) {
+  return {
+    async resolveReadablePath(relativePath: string): Promise<string> {
+      return resolveToolPath(root, relativePath) ?? root;
+    },
+    async stageOutput(suggestedName: string): Promise<{ readonly stagingId: string; readonly path: string }> {
+      const stagingId = randomUUID();
+      const safeName = path.basename(suggestedName).replace(/[^A-Za-z0-9._-]/g, '_') || 'output';
+      const target = path.join(root, '.kodax-a2a-staging', `${stagingId}-${safeName}`);
+      await mkdir(path.dirname(target), { recursive: true });
+      return { stagingId, path: resolveToolPath(root, target) ?? target };
+    },
+  };
+}
+
+function createToolGuardrail(binding: BindingResources, workspaceRoot: string): ToolGuardrail {
+  return {
+    kind: 'tool',
+    name: `runtime-remote-policy:${binding.bindingId}`,
+    async beforeTool(call, context) {
+      try {
+        if (binding.workspaceByteLimit !== undefined
+          && directoryBytes(workspaceRoot) > binding.workspaceByteLimit) {
+          throw new Error('Remote workspace byte quota is already exceeded.');
+        }
+        if (!binding.effectiveTools.includes(call.name)) throw new Error('Tool is outside the bound surface.');
+        const active = getAllRegisteredTools().find((tool) => tool.name === call.name);
+        if (active?.registrationId !== binding.toolRegistrations.get(call.name)) {
+          throw new Error('Tool registration changed after the Runtime binding was prepared.');
+        }
+        if (PATH_TOOLS.has(call.name)) {
+          const pathKey = call.name === 'grep' || call.name === 'glob' ? 'path' : 'path';
+          resolveToolPath(workspaceRoot, call.input[pathKey]);
+        }
+        authorizeMcp(call.name, call.input, binding.toolPolicy);
+        const contract = binding.remoteContracts.get(call.name);
+        if (contract) {
+          const decision = await contract.authorizeCall(call.input, {
+            workspaceAccess: binding.toolPolicy.workspace,
+            allowedNetworkOrigins: binding.toolPolicy.network.mode === 'allowlist'
+              ? binding.toolPolicy.network.origins
+              : [],
+            workspace: workspaceBroker(workspaceRoot),
+            signal: context.abortSignal ?? new AbortController().signal,
+          });
+          if (!decision.allowed) throw new Error(decision.reason);
+          return { action: 'rewrite', payload: { ...call, input: decision.input } };
+        }
+        return { action: 'allow' };
+      } catch (error: unknown) {
+        return { action: 'block', reason: error instanceof Error ? error.message : String(error) };
+      }
+    },
+    async afterTool() {
+      if (binding.workspaceByteLimit !== undefined
+        && directoryBytes(workspaceRoot) > binding.workspaceByteLimit) {
+        return { action: 'block', reason: 'Remote workspace byte quota exceeded.' };
+      }
+      return { action: 'allow' };
+    },
+  };
+}
+
+async function requiredWorkspaceRoot(
+  host: RuntimeAgentBindingHost,
+  binding: BindingResources,
+  sessionId: string,
+): Promise<string> {
+  const session = await host.sessions.load(sessionId);
+  const root = session.workspaceRoot ?? session.gitRoot;
+  if (!root) throw new Error('Remote Runtime session has no bound workspace.');
+  if (binding.workspace.mode === 'fixed' && path.resolve(root) !== binding.workspace.root) {
+    throw new Error('Runtime session workspace does not match the fixed binding.');
+  }
+  if (binding.workspace.mode === 'managed' && !isInside(host.managedWorkspaceRoot, root)) {
+    throw new Error('Runtime session workspace is outside the managed A2A root.');
+  }
+  return path.resolve(root);
+}
+
+async function localAgentResources(
+  host: RuntimeAgentBindingHost,
+  ref: RuntimeUserMarkdownAgentRef,
+  workspace: RuntimeWorkspaceBinding,
+): Promise<{
+  readonly scope: KodaXAgentScope;
+  readonly loaded: LoadedMarkdownAgent;
+  readonly configurationRevision: string;
+  readonly skills: Awaited<ReturnType<typeof resolveSkills>>;
+}> {
+  const cwd = workspace.mode === 'fixed' ? workspace.root : host.managedWorkspaceRoot;
+  const result = await loadMarkdownAgentScope({ cwd, configHome: host.configHome, userOnly: true });
+  const loaded = result.loaded.find((agent) => agent.name === ref.name && agent.source === 'markdown:user');
+  const entry = result.scope.resolve(ref.name);
+  if (!loaded || !entry || entry.source !== 'markdown:user') {
+    await result.dispose();
+    const failure = result.failed.find((item) => path.basename(item.path, '.md') === ref.name);
+    throw new Error(failure?.reason ?? `User Markdown Agent not found: ${ref.name}`);
+  }
+  const configurationRevision = hashParts([await readFile(loaded.path)]);
+  try {
+    const skills = await resolveSkills({
+      configHome: host.configHome,
+      workspace,
+      selection: loaded.requestedSkills,
+    });
+    return { scope: result.scope, loaded, configurationRevision, skills };
+  } catch (error: unknown) {
+    await result.dispose();
+    throw error;
+  }
+}
+
+function resolvedLocal(
+  ref: RuntimeUserMarkdownAgentRef,
+  resources: Awaited<ReturnType<typeof localAgentResources>>,
+): RuntimeResolvedLocalAgent {
+  return {
+    ref,
+    agentId: `markdown:user:${ref.name}`,
+    displayName: ref.name,
+    description: resources.loaded.description,
+    configurationRevision: resources.configurationRevision,
+    effectiveSkills: resources.skills.refs,
+    skillSetRevision: resources.skills.revision,
+  };
+}
+
+export function createRuntimeAgentBindingService(
+  host: RuntimeAgentBindingHost,
+): RuntimeAgentBindingService {
+  const owners = new Map<string, Set<string>>();
+  const bindings = new Map<string, BindingResources>();
+
+  const requireOwner = (ownerSessionId: string): Set<string> => {
+    const owner = owners.get(ownerSessionId);
+    if (!owner) throw new Error('Runtime Agent owner session is not active.');
+    return owner;
+  };
+  const requireBinding = (ownerSessionId: string, bindingId: string): BindingResources => {
+    const binding = bindings.get(bindingId);
+    if (!binding || binding.ownerSessionId !== ownerSessionId) throw new Error('Runtime Agent binding not found.');
+    return binding;
+  };
+  const release = async (binding: BindingResources): Promise<void> => {
+    bindings.delete(binding.bindingId);
+    owners.get(binding.ownerSessionId)?.delete(binding.bindingId);
+    binding.scope?.dispose();
+    await binding.skillScriptRunner?.dispose();
+  };
+
+  return {
+    async resolveLocal(input) {
+      const workspace = normalizedWorkspace(input.workspace);
+      const resources = await localAgentResources(host, input.ref, workspace);
+      try { return resolvedLocal(input.ref, resources); }
+      finally { resources.scope.dispose(); }
+    },
+    async openOwnerSession() {
+      const ownerSessionId = randomUUID();
+      owners.set(ownerSessionId, new Set());
+      return { ownerSessionId };
+    },
+    async bindDefault(input) {
+      const owner = requireOwner(input.ownerSessionId);
+      const workspace = normalizedWorkspace(input.workspace);
+      const toolPolicy = validatedToolPolicy(input.toolPolicy);
+      const workspaceByteLimit = validateWorkspaceByteLimit(input.workspaceByteLimit);
+      const skills = await resolveSkills({ configHome: host.configHome, workspace });
+      const hasSkillScripts = Object.keys(toolPolicy.skillScripts).length > 0;
+      const toolSurface = resolveToolSurface({ policy: toolPolicy, hasSkills: skills.refs.length > 0, hasSkillScripts });
+      const skillScriptRunner = hasSkillScripts
+        ? await host.createSkillScriptRunner?.({
+            registry: skills.registry, admissions: toolPolicy.skillScripts,
+            workspaceAccess: toolPolicy.workspace, network: toolPolicy.network, workspaceByteLimit,
+          })
+        : undefined;
+      if (hasSkillScripts && !skillScriptRunner) throw new Error('Runtime isolated Skill script backend is unavailable.');
+      const bindingId = randomUUID();
+      const toolPolicyRevision = stableHash(toolPolicy);
+      const workspaceBindingRevision = stableHash(workspace);
+      const executionPolicyRevision = stableHash({
+        kind: 'runtime-default', profileId: input.profileId, toolPolicyRevision,
+        workspaceBindingRevision, skillSetRevision: skills.revision,
+        provider: host.defaultProvider, model: host.defaultModel, tools: toolSurface.tools,
+        workspaceByteLimit,
+      });
+      if (input.expectedExecutionPolicyRevision && input.expectedExecutionPolicyRevision !== executionPolicyRevision) {
+        await skillScriptRunner?.dispose();
+        throw new Error('Runtime default execution policy revision changed.');
+      }
+      const resources: BindingResources = {
+        ownerSessionId: input.ownerSessionId, bindingId, kind: 'runtime-default',
+        executionPolicyRevision, toolPolicyRevision, workspaceBindingRevision,
+        workspace, toolPolicy, effectiveTools: toolSurface.tools,
+        effectiveSkills: skills.refs, skillSetRevision: skills.revision,
+        skillRegistry: skills.registry, skillScriptRunner, remoteContracts: toolSurface.contracts,
+        toolRegistrations: toolSurface.registrations, workspaceByteLimit,
+      };
+      bindings.set(bindingId, resources);
+      owner.add(bindingId);
+      return {
+        ownerSessionId: input.ownerSessionId, bindingId, executionPolicyRevision,
+        toolPolicyRevision, workspaceBindingRevision, skillSetRevision: skills.revision,
+        effectiveSkills: skills.refs, effectiveTools: toolSurface.tools,
+      };
+    },
+    async startDefault(input) {
+      const binding = requireBinding(input.ownerSessionId, input.bindingId);
+      if (binding.kind !== 'runtime-default') throw new Error('Runtime Agent binding kind mismatch.');
+      if (binding.executionPolicyRevision !== input.expectedExecutionPolicyRevision) {
+        throw new Error('Runtime default execution policy revision changed.');
+      }
+      const root = await requiredWorkspaceRoot(host, binding, input.sessionId);
+      return host.runs.start({
+        sessionId: input.sessionId, input: input.input, permissionBroker: input.permissionBroker,
+        agentContext: input.agentContext,
+        options: {
+          context: {
+            executionCwd: root, gitRoot: root, managedTaskWorkspaceDir: root,
+            toolVisibilityPolicy: (tool) => binding.effectiveTools.includes(tool.name),
+            skillRegistry: binding.skillRegistry,
+            skillScriptRunner: binding.skillScriptRunner,
+            assertReadablePath: (candidate) => { resolveToolPath(root, candidate); },
+            skillsPrompt: skillsPrompt(binding.effectiveSkills, binding.skillRegistry),
+          },
+          skillDynamicContext: { disable: true },
+          guardrails: [createToolGuardrail(binding, root)],
+          events: remoteRunEvents(),
+        },
+      });
+    },
+    async bindLocal(input) {
+      const owner = requireOwner(input.ownerSessionId);
+      const workspace = normalizedWorkspace(input.workspace);
+      const toolPolicy = validatedToolPolicy(input.toolPolicy);
+      const workspaceByteLimit = validateWorkspaceByteLimit(input.workspaceByteLimit);
+      const resources = await localAgentResources(host, input.ref, workspace);
+      const resolved = resolvedLocal(input.ref, resources);
+      if (input.expectedConfigurationRevision && input.expectedConfigurationRevision !== resolved.configurationRevision) {
+        resources.scope.dispose();
+        throw new Error('User Markdown Agent configuration revision changed.');
+      }
+      const toolSurface = resolveToolSurface({
+        declared: resources.loaded.effectiveTools,
+        policy: toolPolicy,
+        hasSkills: resources.skills.refs.length > 0,
+        hasSkillScripts: Object.keys(toolPolicy.skillScripts).length > 0,
+      });
+      const hasSkillScripts = Object.keys(toolPolicy.skillScripts).length > 0;
+      const skillScriptRunner = hasSkillScripts
+        ? await host.createSkillScriptRunner?.({
+            registry: resources.skills.registry, admissions: toolPolicy.skillScripts,
+            workspaceAccess: toolPolicy.workspace, network: toolPolicy.network, workspaceByteLimit,
+          })
+        : undefined;
+      if (hasSkillScripts && !skillScriptRunner) {
+        resources.scope.dispose();
+        throw new Error('Runtime isolated Skill script backend is unavailable.');
+      }
+      const bindingId = randomUUID();
+      const toolPolicyRevision = stableHash(toolPolicy);
+      const workspaceBindingRevision = stableHash(workspace);
+      const executionPolicyRevision = stableHash({
+        kind: 'local-agent', profileId: input.profileId,
+        configurationRevision: resolved.configurationRevision,
+        toolPolicyRevision, workspaceBindingRevision,
+        skillSetRevision: resources.skills.revision, tools: toolSurface.tools,
+        workspaceByteLimit,
+      });
+      if (input.expectedExecutionPolicyRevision && input.expectedExecutionPolicyRevision !== executionPolicyRevision) {
+        await skillScriptRunner?.dispose();
+        resources.scope.dispose();
+        throw new Error('Local Agent execution policy revision changed.');
+      }
+      const agent = resources.scope.resolve(input.ref.name)?.agent;
+      if (!agent) {
+        await skillScriptRunner?.dispose();
+        resources.scope.dispose();
+        throw new Error(`User Markdown Agent not found: ${input.ref.name}`);
+      }
+      const binding: BindingResources = {
+        ownerSessionId: input.ownerSessionId, bindingId, kind: 'local-agent',
+        executionPolicyRevision, toolPolicyRevision, workspaceBindingRevision,
+        workspace, toolPolicy, effectiveTools: toolSurface.tools,
+        effectiveSkills: resources.skills.refs, skillSetRevision: resources.skills.revision,
+        skillRegistry: resources.skills.registry, skillScriptRunner, remoteContracts: toolSurface.contracts,
+        toolRegistrations: toolSurface.registrations,
+        workspaceByteLimit,
+        scope: resources.scope, loadedAgent: resources.loaded, agent,
+        configurationRevision: resources.configurationRevision,
+      };
+      bindings.set(bindingId, binding);
+      owner.add(bindingId);
+      return {
+        ...resolved, ownerSessionId: input.ownerSessionId, bindingId,
+        executionPolicyRevision, toolPolicyRevision, workspaceBindingRevision,
+        effectiveTools: toolSurface.tools,
+      };
+    },
+    async startLocal(input) {
+      const binding = requireBinding(input.ownerSessionId, input.bindingId);
+      if (binding.kind !== 'local-agent' || !binding.agent || !binding.scope) {
+        throw new Error('Runtime Agent binding kind mismatch.');
+      }
+      if (binding.configurationRevision !== input.expectedConfigurationRevision) {
+        throw new Error('User Markdown Agent configuration revision changed.');
+      }
+      if (binding.executionPolicyRevision !== input.expectedExecutionPolicyRevision) {
+        throw new Error('Local Agent execution policy revision changed.');
+      }
+      const root = await requiredWorkspaceRoot(host, binding, input.sessionId);
+      const instructions = typeof binding.agent.instructions === 'string'
+        ? binding.agent.instructions
+        : binding.agent.instructions({});
+      return host.runs.start({
+        sessionId: input.sessionId, input: input.input, permissionBroker: input.permissionBroker,
+        agentContext: input.agentContext,
+        options: {
+          ...(binding.agent.provider ? { provider: binding.agent.provider } : {}),
+          ...(binding.agent.model ? { modelOverride: binding.agent.model } : {}),
+          ...(binding.agent.effort ? { effort: binding.agent.effort } : {}),
+          context: {
+            executionCwd: root, gitRoot: root, managedTaskWorkspaceDir: root,
+            systemPromptOverride: instructions, agentScope: binding.scope,
+            toolVisibilityPolicy: (tool) => binding.effectiveTools.includes(tool.name),
+            skillRegistry: binding.skillRegistry,
+            skillScriptRunner: binding.skillScriptRunner,
+            assertReadablePath: (candidate) => { resolveToolPath(root, candidate); },
+            skillsPrompt: skillsPrompt(binding.effectiveSkills, binding.skillRegistry),
+          },
+          skillDynamicContext: { disable: true },
+          guardrails: [createToolGuardrail(binding, root)],
+          events: remoteRunEvents(),
+        },
+      });
+    },
+    async prepareWorkspace(input) {
+      const binding = requireBinding(input.ownerSessionId, input.bindingId);
+      if (binding.workspace.mode === 'fixed') return binding.workspace.root;
+      if (!/^[a-f0-9]{32,64}$/.test(input.contextKey)) {
+        throw new Error('Managed Runtime workspace context key is invalid.');
+      }
+      const root = path.join(host.managedWorkspaceRoot, 'contexts', input.contextKey);
+      await mkdir(root, { recursive: true });
+      return root;
+    },
+    async releaseBinding(input) {
+      requireOwner(input.ownerSessionId);
+      await release(requireBinding(input.ownerSessionId, input.bindingId));
+    },
+    async closeOwnerSession(ownerSessionId) {
+      const owner = requireOwner(ownerSessionId);
+      for (const bindingId of [...owner]) await release(requireBinding(ownerSessionId, bindingId));
+      owners.delete(ownerSessionId);
+    },
+  };
+}

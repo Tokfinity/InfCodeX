@@ -1,0 +1,93 @@
+// Vitest Snapshot v1, https://vitest.dev/guide/snapshot.html
+
+exports[`FEATURE_187 Phase A — byte-identity prompt lock for F178 eval 1909d5d2 > REPORT_TOOL schema matches snapshot (tool schema byte-identical) 1`] = `
+{
+  "description": "Report your second-pass judgment of whether the main agent is in a real stall.",
+  "input_schema": {
+    "properties": {
+      "isStuck": {
+        "description": "true = main agent has lost progress and needs a nudge; false = repetition is part of a legitimate flow.",
+        "type": "boolean",
+      },
+      "nudge": {
+        "description": "A single concrete instruction the main agent will see as a synthetic user message. Reference suggestedTool by name. Required when isStuck=true; pass empty string when isStuck=false.",
+        "type": "string",
+      },
+      "reason": {
+        "description": "A brief one-sentence rationale citing the specific evidence in the recent history.",
+        "type": "string",
+      },
+      "suggestedTool": {
+        "description": "The specific tool name the main agent should call next. Must be one of: read, edit, write, multi_edit, grep, glob, bash, task_stop. Required when isStuck=true; pass empty string when isStuck=false.",
+        "type": "string",
+      },
+    },
+    "required": [
+      "isStuck",
+      "reason",
+      "suggestedTool",
+      "nudge",
+    ],
+    "type": "object",
+  },
+  "name": "report_stall_judgment",
+}
+`;
+
+exports[`FEATURE_187 Phase A — byte-identity prompt lock for F178 eval 1909d5d2 > SIDECAR_SYSTEM_PROMPT matches snapshot (F178 SHIP-SIDECAR-ALL baseline) 1`] = `
+"You are a stall-detector for an autonomous coding agent. A DIFFERENT agent (the "main agent") has been running and has issued the same tool call multiple times in a row. A rule-based detector flagged this as a potential stall. Your job is to do a second-pass judgment by reading the main agent's recent transcript.
+
+# IMPORTANT — role separation
+
+The transcript shown to you contains the MAIN AGENT's past messages and tool calls. You are NOT the author of those messages. You are a third-party observer judging whether that agent is stuck. Do not say "I read the file" or "my behavior" — the actions in the transcript belong to the main agent, not you. Your only action is to call \`report_stall_judgment\` once.
+
+# Decision criteria
+
+Classify the repetition as **isStuck=true** ONLY when the main agent has made no real progress between the repeated calls:
+- Same tool + same input args repeatedly invoked
+- No new information gathered between calls (tool_results are identical or stub-served)
+- No other tool was called between the repeated invocations
+- No substantive textual reasoning that indicates a forward step
+- The cache may have already served a "[Read Cache] unchanged" stub — if the model continues calling read on that target after the stub, that is a strong stall signal
+
+Classify as **isStuck=false** when the repetition is part of a legitimate iterative workflow:
+- The model called other distinct tools between the repeats (progressing on other axes)
+- The repeated call follows a substantive textual reasoning step ("now verifying that the edit landed", "let me re-check after my batch of changes")
+- The model is updating todo items in batches — re-marking the same todo as completed alongside new ones is wasteful but not stuck
+- The model is performing legitimate verification (read same file after an edit it just made)
+
+# Output format
+
+Call the \`report_stall_judgment\` tool exactly once. Do not narrate. Do not call any other tool.
+
+If isStuck=true, populate \`nudge\` with a concrete, actionable next step the main agent could take — reference one specific tool name from the registry (read, edit, write, grep, bash, task_stop). Keep the nudge short and focused on one action.
+
+If isStuck=false, leave nudge empty."
+`;
+
+exports[`FEATURE_187 Phase A — byte-identity prompt lock for F178 eval 1909d5d2 > buildSidecarUserMessage output matches snapshot for canonical sample 1`] = `
+"=== L1 SIGNAL ===
+kind: repeat-identical-call
+tool: grep
+count: 2
+
+=== MAIN AGENT TRANSCRIPT (you are reading, not authoring) ===
+
+[USER → MAIN AGENT]
+Find every place we read package.json.
+
+[MAIN AGENT — assistant turn 1]
+text: I will use grep.
+tool_use: grep({"pattern":"package.json","glob":"**/*"}) [id=tool_1]
+
+[TOOL_RESULT for tool_1]
+src/cli/main.ts:12:import pkg from "../../package.json";
+
+[MAIN AGENT — assistant turn 2]
+text: Let me grep again with a different scope.
+tool_use: grep({"pattern":"package.json","glob":"**/*"}) [id=tool_2]
+
+=== END TRANSCRIPT ===
+
+Judge whether the main agent in the transcript above is in a real stall. Call report_stall_judgment exactly once."
+`;

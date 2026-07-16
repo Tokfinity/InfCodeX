@@ -1,12 +1,13 @@
 /**
- * @kodax/agent Types
+ * @kodax-ai/agent Types
  *
  * 通用 Agent 类型定义
  */
 
-// ============== Re-export AI Types from @kodax/ai ==============
+// ============== Re-export AI Types from @kodax-ai/llm ==============
 
 export type {
+  KodaXImageBlock,
   KodaXTextBlock,
   KodaXToolUseBlock,
   KodaXToolResultBlock,
@@ -14,6 +15,8 @@ export type {
   KodaXRedactedThinkingBlock,
   KodaXContentBlock,
   KodaXMessage,
+  KodaXTaskResultMetadata,
+  KodaXTaskResultSource,
   KodaXTokenUsage,
   KodaXStreamResult,
   KodaXToolDefinition,
@@ -32,15 +35,18 @@ export type {
   KodaXExecutionPattern,
   KodaXMutationSurface,
   KodaXAssuranceIntent,
-  KodaXHarnessProfile,
+  // v0.7.35.1 FEATURE_142 (A-R4): KodaXHarnessProfile / KodaXChildFanoutClass
+  // removed — coding-routing-specific, see ADR-021. Coding-side consumers
+  // import directly from `@kodax-ai/llm`. (AMA-controller advisory types were
+  // deleted in ADR-043.)
   KodaXTaskRoutingDecision,
   KodaXThinkingBudgetMap,
   KodaXTaskBudgetOverrides,
   KodaXReasoningRequest,
-} from '@kodax/ai';
+} from '@kodax-ai/llm';
 
 // Import for local types
-import type { KodaXMessage } from '@kodax/ai';
+import type { KodaXMessage } from '@kodax-ai/llm';
 
 export type KodaXJsonPrimitive = string | number | boolean | null;
 export type KodaXJsonValue =
@@ -78,6 +84,14 @@ export interface KodaXSessionEntryBase {
   id: string;
   parentId: string | null;
   timestamp: string;
+  /**
+   * Stable logical identity for this transcript item. Cloned/forked entries get
+   * a fresh physical `id` but keep their source entry's `logicalId`, allowing
+   * SDK hosts to group or fold cloned history without comparing content.
+   */
+  logicalId?: string;
+  /** Root physical entry id this item was cloned from, when it is a clone. */
+  sourceEntryId?: string;
 }
 
 export interface KodaXSessionMessageEntry extends KodaXSessionEntryBase {
@@ -90,6 +104,22 @@ export interface KodaXSessionCompactionEntry extends KodaXSessionEntryBase {
   summary: string;
   firstKeptEntryId?: string;
   tokensBefore?: number;
+  tokensAfter?: number;
+  artifactLedgerId?: string;
+  reason?: string;
+  details?: KodaXJsonValue;
+  memorySeed?: KodaXCompactMemorySeed;
+  /**
+   * FEATURE_072: post-compact ledger summary + file-content messages that
+   * are inlined after the compaction summary at slicer time
+   * (`getSessionMessagesFromLineage`). Stored here so they leave the active
+   * path automatically when a new compaction entry is appended.
+   *
+   * NOTE: attachments are emitted by the slicer, NOT by `getContextMessagesForEntry`
+   * — preserving the latter's 1-to-1 contract that `entryMatchesContextMessage`
+   * and FEATURE_073's future slicing both depend on.
+   */
+  postCompactAttachments?: readonly KodaXMessage[];
 }
 
 export interface KodaXSessionBranchSummaryEntry extends KodaXSessionEntryBase {
@@ -105,11 +135,186 @@ export interface KodaXSessionLabelEntry extends KodaXSessionEntryBase {
   label?: string;
 }
 
+export interface KodaXSessionArchiveMarkerEntry extends KodaXSessionEntryBase {
+  type: 'archive_marker';
+  /** Links to the corresponding batch in the .archive.jsonl sidecar file */
+  archiveBatchId: string;
+  /** Number of entries that were archived in this batch */
+  archivedEntryCount: number;
+  /** Brief summary of the archived content */
+  summary: string;
+}
+
+export interface KodaXSessionRewindMarkerEntry extends KodaXSessionEntryBase {
+  type: 'rewind_marker';
+  targetId: string;
+  fromId?: string;
+  truncatedCount: number;
+  summary: string;
+}
+
+export interface KodaXSessionClientNoticeEntry extends KodaXSessionEntryBase {
+  type: 'client_notice';
+  source: string;
+  content: string;
+  turnId?: string;
+  payload?: KodaXJsonValue;
+}
+
+export interface KodaXMemoryOutcomeDigest {
+  readonly id: string;
+  readonly reviewKey: string;
+  readonly sessionId: string;
+  readonly branchId: string;
+  readonly sequence: number;
+  readonly objective: string;
+  readonly actionSignature?: string;
+  readonly approach: string;
+  readonly outcome: 'succeeded' | 'failed';
+  readonly summary: string;
+  readonly preconditions?: string;
+  readonly lesson?: string;
+  readonly evidenceRefs: readonly string[];
+  readonly evidence?: readonly KodaXMemoryOutcomeEvidence[];
+  readonly memoryInfluence?: readonly KodaXMemoryInfluenceRef[];
+  readonly visibility: 'prompt_safe' | 'private' | 'sensitive';
+  readonly createdAt: string;
+}
+
+export interface KodaXMemoryOutcomeEvidence {
+  readonly ref: string;
+  readonly grade: 'authoritative' | 'verified' | 'corroborated' | 'observed' | 'inferred';
+  readonly source: 'user' | 'host' | 'tool' | 'environment' | 'agent';
+  readonly observedAt: string;
+}
+
+export interface KodaXMemoryInfluenceRef {
+  readonly decisionReceiptRef: string;
+  readonly grade: 'direct' | 'supporting' | 'exposed' | 'unknown';
+}
+
+export interface KodaXSessionMemoryOutcomeDigestEntry extends KodaXSessionEntryBase {
+  readonly type: 'memory_outcome_digest';
+  readonly digest: KodaXMemoryOutcomeDigest;
+}
+
+export interface KodaXSessionMemoryReviewReceiptEntry extends KodaXSessionEntryBase {
+  readonly type: 'memory_review_receipt';
+  readonly reviewKey: string;
+  readonly proposalIds: readonly string[];
+  readonly status: 'completed' | 'no_action';
+  readonly completedAt: string;
+}
+
+// ============== Goal (FEATURE_192 v0.7.44) ==============
+
+export type KodaXGoalStatus =
+  | 'active'
+  | 'paused'
+  | 'budget_limited'
+  | 'blocked'
+  | 'complete';
+
+/**
+ * Persistent user-set goal state. v0.7.44 FEATURE_192 — backs the
+ * `/goal` slash command and the get_goal / create_goal / update_goal
+ * tools.
+ *
+ * Persistence model: each lifecycle event (create / update / pause /
+ * resume / clear / budget_limited / blocked / complete) appends a
+ * `KodaXSessionGoalEntry` carrying a frozen `KodaXGoalState` snapshot
+ * to the session lineage. `readLatestGoalFromBranch` walks the active
+ * branch's message-entry IDs and returns the latest goal entry whose
+ * parentId belongs to that branch — so forks and rewinds naturally
+ * drop goals attached to abandoned message paths.
+ */
+export interface KodaXGoalState {
+  readonly version: 1;
+  /** `${createdAt}-${rand}` — stable across updates of the same goal. */
+  readonly id: string;
+  readonly objective: string;
+  readonly status: KodaXGoalStatus;
+  /** Optional explicit token budget; null when the user did not set one. */
+  readonly tokenBudget: number | null;
+  readonly tokensUsed: number;
+  readonly timeUsedSeconds: number;
+  /** Consecutive turns the model has reported the same blocker. */
+  readonly blockerTurnCount: number;
+  /** The blocker_kind string the model last reported, or null. */
+  readonly lastBlockerKind: string | null;
+  readonly createdAt: number;
+  readonly updatedAt: number;
+}
+
+export type KodaXGoalEventType =
+  | 'created'
+  | 'updated'
+  | 'paused'
+  | 'resumed'
+  | 'cleared'
+  | 'budget_limited'
+  | 'blocked'
+  | 'complete';
+
+export interface KodaXSessionGoalEntry extends KodaXSessionEntryBase {
+  type: 'goal';
+  /** Snapshot at time of event; `null` only when `event === 'cleared'`. */
+  goal: KodaXGoalState | null;
+  event: KodaXGoalEventType;
+}
+
 export type KodaXSessionEntry =
   | KodaXSessionMessageEntry
   | KodaXSessionCompactionEntry
   | KodaXSessionBranchSummaryEntry
-  | KodaXSessionLabelEntry;
+  | KodaXSessionLabelEntry
+  | KodaXSessionArchiveMarkerEntry
+  | KodaXSessionRewindMarkerEntry
+  | KodaXSessionClientNoticeEntry
+  | KodaXSessionMemoryOutcomeDigestEntry
+  | KodaXSessionMemoryReviewReceiptEntry
+  | KodaXSessionGoalEntry;
+
+export interface KodaXSessionArtifactLedgerEntry {
+  id: string;
+  kind:
+    | 'file_read'
+    | 'file_modified'
+    | 'file_created'
+    | 'file_deleted'
+    | 'path_scope'
+    | 'search_scope'
+      | 'command_scope'
+      | 'check_result'
+      | 'decision'
+      | 'image_input'
+      | 'tombstone';
+  sourceTool?: string;
+  action?: string;
+  target: string;
+  displayTarget?: string;
+  summary?: string;
+  sessionEntryId?: string;
+  timestamp: string;
+  metadata?: Record<string, KodaXJsonValue>;
+}
+
+export interface KodaXCompactMemoryProgress {
+  completed: string[];
+  inProgress: string[];
+  blockers: string[];
+}
+
+export interface KodaXCompactMemorySeed {
+  objective?: string;
+  constraints: string[];
+  progress: KodaXCompactMemoryProgress;
+  keyDecisions: string[];
+  nextSteps: string[];
+  keyContext: string[];
+  importantTargets: string[];
+  tombstones: string[];
+}
 
 export interface KodaXSessionLineage {
   version: 2;
@@ -122,7 +327,15 @@ export interface KodaXSessionNavigationOptions {
 }
 
 export interface KodaXSessionTreeNode {
-  entry: Exclude<KodaXSessionEntry, KodaXSessionLabelEntry>;
+  entry: Exclude<
+    KodaXSessionEntry,
+    KodaXSessionLabelEntry
+      | KodaXSessionGoalEntry
+      | KodaXSessionClientNoticeEntry
+      | KodaXSessionRewindMarkerEntry
+      | KodaXSessionMemoryOutcomeDigestEntry
+      | KodaXSessionMemoryReviewReceiptEntry
+  >;
   children: KodaXSessionTreeNode[];
   label?: string;
   active: boolean;
@@ -130,30 +343,100 @@ export interface KodaXSessionTreeNode {
 
 export type KodaXSessionScope = 'user' | 'managed-task-worker';
 
-export type KodaXSessionUiHistoryItemType =
+export type KodaXSessionUiTextHistoryItemType =
   | 'user'
   | 'assistant'
   | 'system'
   | 'thinking'
   | 'error'
+  | 'event'
   | 'info'
-  | 'hint';
+  | 'hint'
+  | 'sidecar';
 
-export interface KodaXSessionUiHistoryItem {
-  type: KodaXSessionUiHistoryItemType;
+export type KodaXSessionUiHistoryItemType =
+  | KodaXSessionUiTextHistoryItemType
+  | 'tool_group';
+
+export interface KodaXSessionUiTextHistoryItem {
+  type: KodaXSessionUiTextHistoryItemType;
   text: string;
+  icon?: string;
+  compactText?: string;
+}
+
+export type KodaXSessionUiToolCallStatus =
+  | 'success'
+  | 'error'
+  | 'cancelled'
+  | 'awaiting_approval';
+
+export interface KodaXSessionUiToolCall {
+  id: string;
+  name: string;
+  status: KodaXSessionUiToolCallStatus;
+  input?: { [key: string]: KodaXJsonValue };
+  preview?: string;
+  output?: string;
+  error?: string;
+  startTime?: number;
+  endTime?: number;
+}
+
+export interface KodaXSessionUiToolGroupHistoryItem {
+  type: 'tool_group';
+  tools: KodaXSessionUiToolCall[];
+}
+
+export type KodaXSessionUiHistoryItem =
+  | KodaXSessionUiTextHistoryItem
+  | KodaXSessionUiToolGroupHistoryItem;
+
+export type KodaXSessionWorkspaceKind = 'detected' | 'managed';
+
+export interface KodaXSessionRuntimeInfo {
+  canonicalRepoRoot?: string;
+  workspaceRoot?: string;
+  executionCwd?: string;
+  branch?: string;
+  workspaceKind?: KodaXSessionWorkspaceKind;
+  // FEATURE_247 (R5) — structured profile/runtime identity so an SDK embedder
+  // (e.g. KodaX-Space) can restore a historical Partner session and keep it a
+  // Partner after fork, without packing everything into the opaque `tag`. All
+  // optional and opaque to the agent layer (plain strings — no coding-layer
+  // enum imports, preserving layer independence). Absent on old session files.
+  /** SDK consumer surface/profile label, e.g. `'code'` | `'partner'`. */
+  surface?: string;
+  /** SDK consumer profile id (stable name or UUID). */
+  profileId?: string;
+  /** SDK consumer profile version. */
+  profileVersion?: string;
+  /** LLM provider alias active at session start, e.g. `'anthropic'`. */
+  provider?: string;
+  /** Model identifier active at session start. */
+  model?: string;
+  /** Reasoning mode active at session start. */
+  reasoningMode?: string;
+  /** Permission mode active at session start, e.g. `'auto'` | `'plan'`. */
+  permissionMode?: string;
+  /** Agent mode active at session start, e.g. `'sa'` | `'ama'` | `'amaw'`. */
+  agentMode?: string;
 }
 
 export interface KodaXSessionData {
   messages: KodaXMessage[];
   title: string;
   gitRoot: string;
+  /** Consumer-owned private string persisted with the session. */
+  tag?: string;
+  runtimeInfo?: KodaXSessionRuntimeInfo;
   scope?: KodaXSessionScope;
   uiHistory?: KodaXSessionUiHistoryItem[];
   errorMetadata?: SessionErrorMetadata;
   extensionState?: KodaXExtensionSessionState;
   extensionRecords?: KodaXExtensionSessionRecord[];
   lineage?: KodaXSessionLineage;
+  artifactLedger?: KodaXSessionArtifactLedgerEntry[];
 }
 
 export interface KodaXSessionMeta {
@@ -161,11 +444,15 @@ export interface KodaXSessionMeta {
   title: string;
   id: string;
   gitRoot: string;
+  /** Consumer-owned private string persisted with the session. */
+  tag?: string;
+  runtimeInfo?: KodaXSessionRuntimeInfo;
   createdAt: string;
   scope?: KodaXSessionScope;
   uiHistory?: KodaXSessionUiHistoryItem[];
   extensionState?: KodaXExtensionSessionState;
   extensionRecordCount?: number;
+  artifactLedgerCount?: number;
   lineageVersion?: 2;
   activeEntryId?: string | null;
   lineageEntryCount?: number;
@@ -247,12 +534,19 @@ export interface KodaXSessionStorage {
     options?: KodaXSessionNavigationOptions,
   ): Promise<KodaXSessionData | null>;
   setLabel?(id: string, selector: string, label?: string): Promise<KodaXSessionData | null>;
+  rewind?(id: string, selector?: string): Promise<KodaXSessionData | null>;
   fork?(
     id: string,
     selector?: string,
     options?: { sessionId?: string; title?: string },
   ): Promise<{ sessionId: string; data: KodaXSessionData } | null>;
-  list?(gitRoot?: string): Promise<Array<{ id: string; title: string; msgCount: number }>>;
+  list?(gitRoot?: string): Promise<Array<{
+    id: string;
+    title: string;
+    msgCount: number;
+    tag?: string;
+    runtimeInfo?: KodaXSessionRuntimeInfo;
+  }>>;
   delete?(id: string): Promise<void>;
   deleteAll?(gitRoot?: string): Promise<void>;
 }

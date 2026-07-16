@@ -6,21 +6,19 @@
 
 import { useState, useCallback, useRef, useEffect } from "react";
 import { TextBuffer, type CursorPosition } from "../utils/text-buffer.js";
-import type { KeyInfo, UseTextBufferReturn } from "../types.js";
+import {
+  PasteStore,
+  findPlaceholderAfterCursor,
+  findPlaceholderBeforeCursor,
+  getOrCreateModulePasteStore,
+  shouldReplacePasteWithPlaceholder,
+} from "../utils/paste-store.js";
+import type { PromptEditingMode, UseTextBufferReturn } from "../types.js";
 
 export interface UseTextBufferOptions {
   initialValue?: string;
-  onSubmit?: (text: string) => void;
   onTextChange?: (text: string) => void;
 }
-
-/**
- * Paste detection configuration - 粘贴检测配置
- */
-const PASTE_DETECTION = {
-  MIN_CHARS: 16, // Minimum consecutive characters - 最少连续字符数
-  MAX_INTERVAL_MS: 8, // Maximum interval in milliseconds - 最大间隔毫秒
-};
 
 /**
  * Unified state interface - ensures atomic updates to text, cursor, and lines - 统一状态接口 - 保证 text, cursor, lines 原子更新
@@ -29,22 +27,30 @@ interface TextBufferState {
   text: string;
   cursor: CursorPosition;
   lines: string[];
+  isPasting: boolean;
+  editingMode: PromptEditingMode;
 }
 
 export function useTextBuffer(options: UseTextBufferOptions = {}): UseTextBufferReturn {
-  const { initialValue = "", onSubmit, onTextChange } = options;
+  const { initialValue = "", onTextChange } = options;
 
   // Use ref to store TextBuffer instance, avoiding recreation - 使用 ref 存储 TextBuffer 实例，避免重新创建
   const bufferRef = useRef<TextBuffer | null>(null);
-  // Paste detection state - 粘贴检测状态
-  const lastInputTimeRef = useRef<number>(0);
-  const consecutiveCharsRef = useRef<number>(0);
-
+  // Issue 121: the PasteStore is MODULE-SCOPED (see paste-store.ts
+  // getOrCreateModulePasteStore) so it survives composer unmount+remount
+  // (e.g. Ctrl+O transcript toggle). Holding it by ref here is just for
+  // render-time access convenience — mount/unmount does not create a new
+  // store. Reset is explicit, via startNewSession / test helper.
+  const pasteStoreRef = useRef<PasteStore | null>(null);
+  // Paste reset timeout ref - 粘贴重置超时引用
+  const pasteResetTimeoutRef = useRef<ReturnType<typeof setTimeout> | null>(null);
   // React state - use single state object for atomic updates (Issue 036) - React 状态 - 使用单一状态对象保证原子更新（Issue 036）
   const [state, setState] = useState<TextBufferState>({
     text: initialValue,
     cursor: { row: 0, col: 0 },
     lines: [""],
+    isPasting: false,
+    editingMode: initialValue ? "typing" : "idle",
   });
 
   // Initialize TextBuffer - 初始化 TextBuffer
@@ -54,24 +60,48 @@ export function useTextBuffer(options: UseTextBufferOptions = {}): UseTextBuffer
       bufferRef.current.setText(initialValue);
     }
   }
+  if (pasteStoreRef.current === null) {
+    pasteStoreRef.current = getOrCreateModulePasteStore();
+  }
 
   const buffer = bufferRef.current;
+  const pasteStore = pasteStoreRef.current;
 
   // Sync state - atomic updates, avoiding intermediate states (Issue 036 fix) - 同步状态 - 原子更新，避免中间状态（Issue 036 修复）
-  const syncState = useCallback(() => {
-    setState({
+  const syncState = useCallback((overrides?: Partial<Pick<TextBufferState, "isPasting" | "editingMode">>) => {
+    setState((prev) => ({
       text: buffer.text,
       cursor: buffer.cursor,
       lines: buffer.lines,
-    });
+      isPasting: overrides?.isPasting ?? prev.isPasting,
+      editingMode: overrides?.editingMode ?? prev.editingMode,
+    }));
     onTextChange?.(buffer.text);
   }, [buffer, onTextChange]);
+
+  const schedulePasteReset = useCallback(() => {
+    if (pasteResetTimeoutRef.current) {
+      clearTimeout(pasteResetTimeoutRef.current);
+    }
+
+    pasteResetTimeoutRef.current = setTimeout(() => {
+      setState((prev) => ({
+        ...prev,
+        isPasting: false,
+        editingMode: prev.text ? "typing" : "idle",
+      }));
+      pasteResetTimeoutRef.current = null;
+    }, 120);
+  }, []);
 
   // setText
   const handleSetText = useCallback(
     (newText: string) => {
       buffer.setText(newText);
-      syncState();
+      syncState({
+        isPasting: false,
+        editingMode: newText ? "typing" : "idle",
+      });
     },
     [buffer, syncState]
   );
@@ -80,50 +110,94 @@ export function useTextBuffer(options: UseTextBufferOptions = {}): UseTextBuffer
   const handleReplaceRange = useCallback(
     (start: number, end: number, replacement: string) => {
       buffer.replaceRange(start, end, replacement);
-      syncState();
+      syncState({
+        isPasting: false,
+        editingMode: buffer.text ? "typing" : "idle",
+      });
     },
     [buffer, syncState]
   );
 
-  // insert
+  // insert - paste detection relies on bracketed paste mode (terminal protocol), not timing - 插入 - 粘贴检测依赖终端 bracketed paste 协议，非时间频率
   const handleInsert = useCallback(
     (insertText: string, insertOptions?: { paste?: boolean }) => {
-      // Paste detection - 粘贴检测
-      const now = Date.now();
-      const isPaste =
-        insertOptions?.paste ??
-        (now - lastInputTimeRef.current < PASTE_DETECTION.MAX_INTERVAL_MS &&
-          consecutiveCharsRef.current >= PASTE_DETECTION.MIN_CHARS);
+      const isPaste = insertOptions?.paste ?? false;
 
-      if (insertText.length === 1) {
-        consecutiveCharsRef.current++;
-      } else {
-        consecutiveCharsRef.current = insertText.length;
+      // Issue 121 Layer 1: above threshold, register paste content and insert
+      // only the placeholder. Normalize CRLF before threshold check (matches
+      // Issue 075 CRLF handling).
+      //
+      // The keypress-parser now aggregates bracketed-paste content and emits
+      // ONE synthetic event with the full paste body, so `insertText` here is
+      // the whole paste (not individual chars). Small pastes fall through to
+      // the raw-insert branch below with paste:false so newlines split into
+      // buffer lines correctly.
+      if (isPaste && shouldReplacePasteWithPlaceholder(insertText)) {
+        const normalized = insertText.replace(/\r\n/g, "\n").replace(/\r/g, "\n");
+        const { placeholder } = pasteStore.registerText(normalized);
+        // Placeholder never contains newlines, so paste: true (raw insert) is safe.
+        buffer.insert(placeholder, { paste: true });
+        syncState({ isPasting: true, editingMode: "pasting" });
+        schedulePasteReset();
+        return;
       }
-      lastInputTimeRef.current = now;
 
-      buffer.insert(insertText, { paste: isPaste });
-      syncState();
+      // Below threshold: always use paste:false so buffer.insert splits on
+      // newlines. An aggregated below-threshold paste may contain `\n`
+      // (e.g. 3 logical lines of short text); passing paste:true would insert
+      // them as a single flat line, merging the lines visually.
+      buffer.insert(insertText, { paste: false });
+      syncState({
+        isPasting: isPaste,
+        editingMode: isPaste ? "pasting" : "typing",
+      });
+      if (isPaste) {
+        schedulePasteReset();
+      }
     },
-    [buffer, syncState]
+    [buffer, pasteStore, schedulePasteReset, syncState]
   );
-
   // newline
   const handleNewline = useCallback(() => {
     buffer.newline();
-    syncState();
+    syncState({
+      isPasting: false,
+      editingMode: "typing",
+    });
   }, [buffer, syncState]);
 
   // backspace
+  // Issue 121: atomic delete when cursor sits immediately after a placeholder
+  // at a word boundary. We do NOT remove the paste-store entry so undo/redo
+  // can restore the placeholder text alongside the map (undo snapshot is
+  // handled by buffer._saveHistory within replaceRange).
   const handleBackspace = useCallback(() => {
-    buffer.backspace();
-    syncState();
+    const cursorOffset = buffer.getAbsoluteOffset();
+    const adj = findPlaceholderBeforeCursor(buffer.text, cursorOffset);
+    if (adj) {
+      buffer.replaceRange(adj.start, adj.end, "");
+    } else {
+      buffer.backspace();
+    }
+    syncState({
+      isPasting: false,
+      editingMode: buffer.text ? "typing" : "idle",
+    });
   }, [buffer, syncState]);
 
   // delete
   const handleDelete = useCallback(() => {
-    buffer.delete();
-    syncState();
+    const cursorOffset = buffer.getAbsoluteOffset();
+    const adj = findPlaceholderAfterCursor(buffer.text, cursorOffset);
+    if (adj) {
+      buffer.replaceRange(adj.start, adj.end, "");
+    } else {
+      buffer.delete();
+    }
+    syncState({
+      isPasting: false,
+      editingMode: buffer.text ? "typing" : "idle",
+    });
   }, [buffer, syncState]);
 
   // move
@@ -138,7 +212,10 @@ export function useTextBuffer(options: UseTextBufferOptions = {}): UseTextBuffer
   // clear
   const handleClear = useCallback(() => {
     buffer.clear();
-    syncState();
+    syncState({
+      isPasting: false,
+      editingMode: "idle",
+    });
   }, [buffer, syncState]);
 
   // undo
@@ -165,111 +242,55 @@ export function useTextBuffer(options: UseTextBufferOptions = {}): UseTextBuffer
     syncState();
   }, [buffer, syncState]);
 
-  // handleInput - process keyboard input - 处理键盘输入
-  const handleInput = useCallback(
-    (key: KeyInfo): boolean => {
-      const { name, sequence, ctrl, meta, shift: isShift } = key;
+  // Issue 121: jump cursor to absolute offset. Used by arrow-key atomic
+  // jump over `[Pasted text #N ...]` placeholders. Doesn't touch undo
+  // history — pure cursor move.
+  const handleMoveToOffset = useCallback((offset: number) => {
+    buffer.moveToAbsoluteOffset(offset);
+    syncState();
+  }, [buffer, syncState]);
 
-      // Ctrl key combinations - Ctrl 组合键
-      if (ctrl) {
-        switch (name) {
-          case "a":
-            handleMove("home");
-            return true;
-          case "e":
-            handleMove("end");
-            return true;
-          case "k":
-            buffer.killLineRight();
-            syncState();
-            return true;
-          case "u":
-            buffer.killLineLeft();
-            syncState();
-            return true;
-          case "w":
-            buffer.deleteWordLeft();
-            syncState();
-            return true;
-          case "z":
-            handleUndo();
-            return true;
-          case "y":
-            handleRedo();
-            return true;
-        }
-      }
+  const handleKillLineRight = useCallback(() => {
+    buffer.killLineRight();
+    syncState({
+      isPasting: false,
+      editingMode: buffer.text ? "typing" : "idle",
+    });
+  }, [buffer, syncState]);
 
-      // Arrow keys - 方向键
-      switch (name) {
-        case "up":
-          handleMove("up");
-          return true;
-        case "down":
-          handleMove("down");
-          return true;
-        case "left":
-          handleMove("left");
-          return true;
-        case "right":
-          handleMove("right");
-          return true;
-        case "home":
-          handleMove("home");
-          return true;
-        case "end":
-          handleMove("end");
-          return true;
-      }
+  const handleKillLineLeft = useCallback(() => {
+    buffer.killLineLeft();
+    syncState({
+      isPasting: false,
+      editingMode: buffer.text ? "typing" : "idle",
+    });
+  }, [buffer, syncState]);
 
-      // Backspace and delete - 退格和删除
-      if (name === "backspace") {
-        handleBackspace();
-        return true;
-      }
-      if (name === "delete") {
-        handleDelete();
-        return true;
-      }
+  const handleDeleteWordLeft = useCallback(() => {
+    buffer.deleteWordLeft();
+    syncState({
+      isPasting: false,
+      editingMode: buffer.text ? "typing" : "idle",
+    });
+  }, [buffer, syncState]);
 
-      // Enter key - 回车
-      if (name === "return") {
-        // Shift+Enter always inserts newline - Shift+Enter 始终换行
-        if (isShift) {
-          handleNewline();
-          return true;
-        }
-
-        // Check if newline is needed (line ends with \) - 检查是否需要换行 (行尾是 \)
-        if (buffer.isLineContinuation()) {
-          // Delete backslash and insert newline - 删除反斜杠并换行
-          buffer.backspace();
-          handleNewline();
-          return true;
-        }
-
-        // Submit - 提交
-        if (onSubmit && buffer.text.trim()) {
-          onSubmit(buffer.text);
-          handleClear();
-        }
-        return true;
-      }
-
-      // Regular character input - 普通字符输入
-      if (sequence && sequence.length === 1 && !ctrl && !meta) {
-        handleInsert(sequence);
-        return true;
-      }
-
-      return false;
-    },
-    [buffer, handleMove, handleBackspace, handleDelete, handleNewline, handleInsert, handleClear, handleUndo, handleRedo, syncState, onSubmit]
-  );
+  const handleResetTransientState = useCallback(() => {
+    if (pasteResetTimeoutRef.current) {
+      clearTimeout(pasteResetTimeoutRef.current);
+      pasteResetTimeoutRef.current = null;
+    }
+    syncState({
+      isPasting: false,
+      editingMode: buffer.text ? "typing" : "idle",
+    });
+  }, [buffer, syncState]);
 
   // Cleanup - 清理
   useEffect(() => {
     return () => {
+      if (pasteResetTimeoutRef.current) {
+        clearTimeout(pasteResetTimeoutRef.current);
+      }
       bufferRef.current = null;
     };
   }, []);
@@ -279,6 +300,10 @@ export function useTextBuffer(options: UseTextBufferOptions = {}): UseTextBuffer
     text: state.text,
     cursor: state.cursor,
     lines: state.lines,
+    isPasting: state.isPasting,
+    editingMode: state.editingMode,
+    pasteStore,
+    resetTransientState: handleResetTransientState,
     setText: handleSetText,
     replaceRange: handleReplaceRange,
     insert: handleInsert,
@@ -287,6 +312,10 @@ export function useTextBuffer(options: UseTextBufferOptions = {}): UseTextBuffer
     delete: handleDelete,
     move: handleMove,
     moveToEnd: handleMoveToEnd,
+    moveToOffset: handleMoveToOffset,
+    killLineRight: handleKillLineRight,
+    killLineLeft: handleKillLineLeft,
+    deleteWordLeft: handleDeleteWordLeft,
     clear: handleClear,
     undo: handleUndo,
     redo: handleRedo,

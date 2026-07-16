@@ -5,7 +5,7 @@
  */
 
 import { describe, it, expect, beforeEach } from "vitest";
-import { TextBuffer } from "@kodax/repl";
+import { TextBuffer } from "@kodax-ai/repl";
 
 describe("TextBuffer", () => {
   let buffer: TextBuffer;

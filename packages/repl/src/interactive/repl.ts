@@ -13,33 +13,72 @@ import chalk from 'chalk';
 export { runInkInteractiveMode } from '../ui/index.js';
 export type { InkREPLOptions } from '../ui/index.js';
 import {
+  extractArtifactLedger,
+  KodaXInputArtifact,
   KodaXOptions,
-  KodaXMessage,
+  type KodaXAgentMode,
   KodaXResult,
   KodaXReasoningMode,
-  KodaXSessionData,
+  mergeArtifactLedger,
   runManagedTask,
+  resolveRepoIntelligenceRuntimeConfig,
+  KodaXError,
+  KodaXRateLimitError,
+  KodaXProviderError,
+  KODAX_DEFAULT_PROVIDER,
+  buildGoalRuntimeBinding,
+  decideWorkflowInvocation,
+  workflowStartOutcomeConsumesTurn,
+} from '@kodax-ai/coding';
+import {
   appendSessionLineageLabel,
+  appendMemoryClientNotice,
+  appendMemoryOutcomeDigest,
+  appendMemoryReviewReceipt,
   buildSessionTree,
   countActiveLineageMessages,
   createSessionLineage,
   estimateTokens,
   forkSessionLineage,
   generateSessionId as generateCoreSessionId,
+  findPreviousUserEntryId,
+  getAgentConfigPath,
+  getMessageQueue,
   getSessionMessagesFromLineage,
-  KodaXSessionStorage,
-  KodaXError,
-  KodaXRateLimitError,
-  KodaXProviderError,
-  KODAX_DEFAULT_PROVIDER,
+  rewindSessionLineage,
   setSessionLineageActiveEntry,
-  getCustomProvider,
-} from '@kodax/coding';
-import type { AgentsFile } from '@kodax/coding';
+} from '@kodax-ai/agent';
+import type {
+  KodaXMessage,
+  KodaXSessionData,
+  KodaXSessionStorage,
+  KodaXSessionUiHistoryItem,
+} from '@kodax-ai/agent';
+import type { AgentsFile, KodaXWorkflowAgentDigestEvent } from '@kodax-ai/coding';
 import type { PermissionMode, ConfirmResult } from '../permission/types.js';
-import { computeConfirmTools, FILE_MODIFICATION_TOOLS, normalizePermissionMode } from '../permission/types.js';
+import {
+  computeConfirmTools,
+  createAutoInProjectDeprecationEmitter,
+  FILE_MODIFICATION_TOOLS,
+  isAutoMode,
+  normalizePermissionMode,
+} from '../permission/types.js';
+import { bootstrapAutoMode, type AutoModeBootstrapResult } from './auto-mode-bootstrap.js';
+import { createBashPrefixExtractor, type BashPrefixExtractor } from '@kodax-ai/coding';
+import { bootstrapTeamMode, type TeamModeHandle, type WorkflowProcessEvent } from '@kodax-ai/agent';
 import { isToolCallAllowed, isAlwaysConfirmPath, isBashReadCommand, getPlanModeBlockReason } from '../permission/permission.js';
-import { getGitRoot, prepareRuntimeConfig, getProviderModel, getProviderAvailableModels, KODAX_VERSION } from '../common/utils.js';
+import { replBashPathSignalCollector } from '../permission/repl-bash-signals.js';
+import {
+  getGitRoot,
+  prepareRuntimeConfig,
+  getProviderAvailableModels,
+  KODAX_VERSION,
+  resolveRuntimeEffortSelection,
+  resolveRuntimeModelSelection,
+  resolveRuntimeProviderSelection,
+  resolveInitialEffortOverride,
+  resolveProviderReasoningRuntimeEffort,
+} from '../common/utils.js';
 import {
   InteractiveContext,
   InteractiveMode,
@@ -47,44 +86,84 @@ import {
   generateSessionId as generateInteractiveSessionId,
   touchContext,
 } from './context.js';
+import { deriveProjectKeyFromRoot } from './project-key.js';
 import {
   parseCommand,
   executeCommand,
   CommandCallbacks,
   CurrentConfig,
 } from './commands.js';
-import { runWithPlanMode } from '../common/plan-mode.js';
+import type {
+  CommandWorkflowInvocationRequest,
+  RuntimeSurfaceStatus,
+  SessionRecoverStatus,
+} from '../commands/types.js';
 import { loadCompactionConfig } from '../common/compaction-config.js';
-import { loadAlwaysAllowTools, saveAlwaysAllowToolPattern } from '../common/permission-config.js';
-import { detectAndShowProjectHint } from './project-commands.js';
+import { loadAlwaysAllowTools, loadAutoModeSettings, saveAlwaysAllowToolPattern } from '../common/permission-config.js';
 import {
   confirmToolExecution,
   getTerminalWidth,
 } from './prompts.js';
-import {
-  StatusBar,
-  createStatusBarState,
-  supportsStatusBar,
-  formatTokenCount,
-} from './status-bar.js';
 import {
   createCompleter,
   getCompletionSuggestions,
   type Completion,
 } from './autocomplete.js';
 import { getCurrentTheme, setTheme, type Theme } from './themes.js';
+import { getSkillRegistry, initializeSkillRegistry } from '@kodax-ai/agent';
 import { ReadlineUIContext } from '../ui/readline-ui.js';
 import { extractLastAssistantText, extractTitle as extractSessionTitle } from '../ui/utils/message-utils.js';
 import { executeShellCommand, isShellCommandHandled } from '../ui/utils/shell-executor.js';
 import { prepareInvocationExecution } from './invocation-runtime.js';
 import {
+  resolveConfirm,
+  startGeneratedWorkflowFromRequest,
+} from '../commands/workflow-command.js';
+import { formatWorkflowAgentDigest, inferWorkflowLocaleFromParts } from '../commands/workflow-command-results.js';
+import {
   enforceSessionTransitionGuard,
 } from './session-guardrails.js';
 import { formatSessionTree } from './session-tree.js';
+import {
+  formatWorkspaceTruth,
+  inspectWorkspaceRuntime,
+  resolveSessionRuntimeInfo,
+  workspaceExists,
+} from './workspace-runtime.js';
+import { preparePromptInputArtifacts } from '../common/input-artifacts.js';
+import {
+  buildRecoverySeed,
+  normalizeRecoveryPrompt,
+  SESSION_RECOVERY_CONFIRM_MESSAGE,
+  SESSION_RECOVERY_HINT_MESSAGE,
+  shouldOfferSessionRecovery,
+} from '../session/recovery.js';
 
 // Extended session storage interface (adds list method) - 扩展的会话存储接口（增加 list 方法）
 interface SessionStorage extends KodaXSessionStorage {
-  list(gitRoot?: string): Promise<Array<{ id: string; title: string; msgCount: number }>>;
+  list(gitRoot?: string): Promise<Array<{
+    id: string;
+    title: string;
+    msgCount: number;
+    tag?: string;
+    runtimeInfo?: KodaXSessionData['runtimeInfo'];
+  }>>;
+}
+
+export async function buildClassicCliSkillsPrompt(gitRoot?: string): Promise<string> {
+  const registry = await initializeSkillRegistry(gitRoot);
+  return registry.getSystemPromptSnippet();
+}
+
+function syncClassicCliSkillsPrompt(
+  gitRoot: string | undefined,
+  options: KodaXOptions,
+): void {
+  const registry = getSkillRegistry(gitRoot);
+  options.context = {
+    ...options.context,
+    skillsPrompt: registry.getSystemPromptSnippet(),
+  };
 }
 
 // Simple in-memory session storage (replaceable with persistent storage) - 简单的内存会话存储（可替换为持久化存储）
@@ -105,6 +184,7 @@ class MemorySessionStorage implements SessionStorage {
         uiHistory: data.uiHistory ?? existing?.data.uiHistory,
         extensionState: data.extensionState ?? existing?.data.extensionState,
         extensionRecords: data.extensionRecords ?? existing?.data.extensionRecords,
+        tag: data.tag ?? existing?.data.tag,
         lineage,
       },
     });
@@ -181,6 +261,10 @@ class MemorySessionStorage implements SessionStorage {
       messages: getSessionMessagesFromLineage(lineage),
       title: options?.title ?? current.data.title,
       gitRoot: current.data.gitRoot,
+      tag: current.data.tag,
+      runtimeInfo: current.data.runtimeInfo
+        ? structuredClone(current.data.runtimeInfo)
+        : undefined,
       scope: current.data.scope ?? 'user',
       extensionState: current.data.extensionState
         ? structuredClone(current.data.extensionState)
@@ -200,7 +284,36 @@ class MemorySessionStorage implements SessionStorage {
     };
   }
 
-  async list(_gitRoot?: string): Promise<Array<{ id: string; title: string; msgCount: number }>> {
+  async rewind(id: string, selector?: string): Promise<KodaXSessionData | null> {
+    const current = this.sessions.get(id);
+    if (!current?.data.lineage) {
+      return null;
+    }
+
+    const targetId = selector ?? findPreviousUserEntryId(current.data.lineage);
+    if (!targetId) return null;
+
+    const lineage = rewindSessionLineage(current.data.lineage, targetId);
+    if (!lineage) {
+      return null;
+    }
+
+    const data: KodaXSessionData = {
+      ...current.data,
+      messages: getSessionMessagesFromLineage(lineage),
+      lineage,
+    };
+    this.sessions.set(id, { ...current, data });
+    return structuredClone(data);
+  }
+
+  async list(_gitRoot?: string): Promise<Array<{
+    id: string;
+    title: string;
+    msgCount: number;
+    tag?: string;
+    runtimeInfo?: KodaXSessionData['runtimeInfo'];
+  }>> {
     return Array.from(this.sessions.entries())
       .filter(([, session]) => (session.data.scope ?? 'user') === 'user')
       .map(([id, session]) => ({
@@ -209,6 +322,12 @@ class MemorySessionStorage implements SessionStorage {
         msgCount: session.data.lineage
           ? countActiveLineageMessages(session.data.lineage)
           : session.data.messages.length,
+        ...(session.data.tag !== undefined ? { tag: session.data.tag } : {}),
+        ...(session.data.runtimeInfo
+          ? {
+            runtimeInfo: structuredClone(session.data.runtimeInfo),
+          }
+          : {}),
       }));
   }
 
@@ -221,9 +340,66 @@ class MemorySessionStorage implements SessionStorage {
   }
 }
 
+export { MemorySessionStorage };
+
+function applyRuntimeContext(
+  context: InteractiveContext,
+  currentOptions: RepLOptions,
+  runtimeInfo: InteractiveContext['runtimeInfo'],
+): void {
+  context.runtimeInfo = runtimeInfo;
+  context.gitRoot = runtimeInfo?.workspaceRoot ?? context.gitRoot;
+  currentOptions.context = {
+    ...currentOptions.context,
+    gitRoot: context.gitRoot,
+    executionCwd: runtimeInfo?.executionCwd ?? process.cwd(),
+  };
+}
+
+function applyRuntimeSessionSnapshot(context: InteractiveContext, result: KodaXResult): void {
+  const snapshot = result.runtimeSessionSnapshot;
+  if (!snapshot) return;
+  if ('extensionState' in snapshot) {
+    context.extensionState = snapshot.extensionState
+      ? structuredClone(snapshot.extensionState)
+      : {};
+    context.extensionStateDirty = true;
+  }
+  if ('extensionRecords' in snapshot) {
+    context.extensionRecords = snapshot.extensionRecords?.map((record) => ({ ...record })) ?? [];
+    context.extensionRecordsDirty = true;
+  }
+}
+
+export function contextExtensionSessionData(
+  context: InteractiveContext,
+): Pick<KodaXSessionData, 'extensionState' | 'extensionRecords'> {
+  return {
+    ...(context.extensionStateDirty ? { extensionState: context.extensionState ?? {} } : {}),
+    ...(context.extensionRecordsDirty ? { extensionRecords: context.extensionRecords ?? [] } : {}),
+  };
+}
+
+function markExtensionSessionPersisted(context: InteractiveContext): void {
+  context.extensionStateDirty = false;
+  context.extensionRecordsDirty = false;
+}
+
 // REPL options - REPL 选项
+export interface ReplRuntimeRunnerInput {
+  readonly options: KodaXOptions;
+  readonly prompt: string;
+  readonly sessionId: string;
+  readonly permissionMode: PermissionMode;
+}
+
+export type ReplRuntimeRunner = (input: ReplRuntimeRunnerInput) => Promise<KodaXResult>;
+export type ReplRuntimeStatusProvider = () => Promise<RuntimeSurfaceStatus | undefined>;
+
 export interface RepLOptions extends KodaXOptions {
   storage?: SessionStorage;
+  runtimeRunner?: ReplRuntimeRunner;
+  getRuntimeStatus?: ReplRuntimeStatusProvider;
 }
 
 function resolveInitialReasoningMode(
@@ -242,23 +418,70 @@ function resolveInitialReasoningMode(
   return 'auto';
 }
 
+// Module-level cost report ref — agent populates via events.getCostReport, /cost reads it
+const costReportRef: { current: (() => string) | null } = { current: null };
+
 // Run interactive mode - 运行交互式模式
 export async function runInteractiveMode(options: RepLOptions): Promise<void> {
-  const gitRoot = await getGitRoot() ?? undefined;
+  const startupRuntime = await inspectWorkspaceRuntime({ cwd: process.cwd() });
+  const gitRoot = startupRuntime.workspaceRoot ?? await getGitRoot() ?? undefined;
   const storage = options.storage ?? new MemorySessionStorage();
+
+  // FEATURE_125 v0.7.41 — Bootstrap Team Mode (multi-instance auto
+  // coordination). Returns null when KODAX_DISABLE_MULTI_INSTANCE=1
+  // is set; otherwise registers this session under
+  // `<configHome>/instances/<pid>/`, reaps stale peer directories
+  // from crashed sessions, and installs the writer in the
+  // process-level singleton. Tools / runner-driven adapter consume
+  // the singleton via `getActiveTeamModeWriter()`.
+  const teamModeHandle: TeamModeHandle | null = bootstrapTeamMode({
+    meta: {
+      cwd: process.cwd(),
+      startedAt: Date.now(),
+    },
+  });
 
   // Load config (priority: CLI args > config file > defaults) - 加载配置（优先级：CLI参数 > 配置文件 > 默认值）
   const config = prepareRuntimeConfig();
 
   // Initialize custom providers from config - 从配置初始化自定义 Provider
-  const initialProvider = options.provider ?? config.provider ?? KODAX_DEFAULT_PROVIDER;
-  const initialModel = options.model ?? config.model;
+  const initialProvider = resolveRuntimeProviderSelection({
+    explicitProvider: options.provider,
+    environmentProvider: process.env.KODAX_PROVIDER,
+    configuredProvider: config.provider,
+    defaultProvider: KODAX_DEFAULT_PROVIDER,
+  });
+  const initialModel = resolveRuntimeModelSelection({
+    explicitProvider: options.provider,
+    environmentProvider: process.env.KODAX_PROVIDER,
+    explicitModel: options.model,
+    configuredProvider: config.provider,
+    configuredModel: config.model,
+  });
   const initialReasoningMode = resolveInitialReasoningMode(options, config);
-  const initialAgentMode = options.agentMode ?? (config as { agentMode?: 'ama' | 'sa' }).agentMode ?? 'ama';
+  const initialEffort = resolveRuntimeEffortSelection({
+    explicitEffort: options.effort,
+    environmentEffort: process.env.KODAX_EFFORT,
+    configuredEffort: config.effort,
+  });
+  const initialEffortOverride = resolveInitialEffortOverride(
+    options,
+    config,
+    process.env.KODAX_EFFORT,
+  );
+  const initialAgentMode = options.agentMode ?? (config as { agentMode?: KodaXAgentMode }).agentMode ?? 'ama';
   const initialThinking = initialReasoningMode !== 'off';
-  const initialParallel = options.parallel ?? (config as { parallel?: boolean }).parallel ?? false;
   const initialPermissionMode: PermissionMode =
     normalizePermissionMode((config as { permissionMode?: string }).permissionMode, 'accept-edits') ?? 'accept-edits';
+  // FEATURE_092 phase 2b.7b slice E: emit the auto-in-project alias
+  // deprecation notice once per session — at startup if config picked the
+  // alias, plus on `/mode auto-in-project`. Internal state is shared so
+  // it fires AT MOST once even across both code paths.
+  const emitAutoInProjectDeprecation = createAutoInProjectDeprecationEmitter();
+  if (initialPermissionMode === 'auto-in-project') {
+    emitAutoInProjectDeprecation();
+  }
+  const repoIntelligenceRuntime = resolveRepoIntelligenceRuntimeConfig();
 
   const configuredTheme = (config as { theme?: string }).theme;
   if (configuredTheme) {
@@ -270,19 +493,37 @@ export async function runInteractiveMode(options: RepLOptions): Promise<void> {
   let currentConfig: CurrentConfig = {
     provider: initialProvider,
     model: initialModel,
+    effort: initialEffort,
+    effortOverride: initialEffortOverride,
+    planModeEffort: config.planModeEffort,
     thinking: initialThinking,
     reasoningMode: initialReasoningMode,
     agentMode: initialAgentMode,
-    parallel: initialParallel,
     permissionMode: initialPermissionMode,
+    repoIntelligenceMode: repoIntelligenceRuntime.mode,
+    repoIntelligenceTrace: repoIntelligenceRuntime.trace,
+    fallbackProviders: config.fallbackProviders,
   };
 
   // Local permission state - 本地权限状态
   let currentPermissionMode: PermissionMode = initialPermissionMode;
   let alwaysAllowTools: string[] = loadAlwaysAllowTools();
 
-  // Plan mode state - Plan mode 状态
-  let planMode = false;
+  const resolveCurrentRuntimeEffort = (override?: {
+    provider?: string;
+    model?: string;
+    permissionMode?: PermissionMode;
+  }): ReturnType<typeof resolveProviderReasoningRuntimeEffort> =>
+    resolveProviderReasoningRuntimeEffort({
+      provider: override?.provider ?? currentConfig.provider,
+      model: override?.model ?? currentConfig.model,
+      effort: currentConfig.effort,
+      effortOverride: currentConfig.effortOverride,
+      permissionMode: override?.permissionMode ?? currentConfig.permissionMode,
+      planModeEffort: currentConfig.planModeEffort,
+      thinking: currentConfig.thinking,
+      reasoningMode: currentConfig.reasoningMode,
+    });
 
   // Esc+Esc edit state - Esc+Esc 编辑状态
   let lastEscTime = 0;
@@ -293,7 +534,16 @@ export async function runInteractiveMode(options: RepLOptions): Promise<void> {
   const context = await createInteractiveContext({
     sessionId: options.session?.id,
     gitRoot,
+    runtimeInfo: startupRuntime,
   });
+  // FEATURE_222 (R4): forward the host skill dynamic-context policy so the
+  // user-typed `/skill` slash path is gated the same as the model-triggered tool.
+  context.skillDynamicContext = options.skillDynamicContext;
+
+  // v0.7.43 (FEATURE_173 Part B follow-up) — publish the resolved
+  // sessionId to the FEATURE_125 heartbeat so `listRunningSessions()`
+  // can correlate a running instance with its `.jsonl` file.
+  teamModeHandle?.writer.update({ sessionId: context.sessionId });
 
   const guardSessionTransition = (action: string): boolean => {
     return enforceSessionTransitionGuard(currentConfig, action, (status, headline, details) => {
@@ -307,18 +557,19 @@ export async function runInteractiveMode(options: RepLOptions): Promise<void> {
 
   // Load compaction config for banner display
   const compactionConfig = await loadCompactionConfig(gitRoot ?? undefined);
-  const { resolveProvider } = await import('@kodax/coding');
+  const { resolveProvider } = await import('@kodax-ai/coding');
   const providerInstance = resolveProvider(currentConfig.provider);
   const effectiveContextWindow = compactionConfig.contextWindow
+    ?? providerInstance.getEffectiveContextWindow?.(currentConfig.model)
     ?? providerInstance.getContextWindow?.()
     ?? 200000;
 
   // Load AGENTS.md files
-  const { loadAgentsFiles } = await import('@kodax/coding');
+  const { loadAgentsFiles } = await import('@kodax-ai/coding');
   const reloadAgentsFiles = async (): Promise<AgentsFile[]> => {
     return loadAgentsFiles({
       cwd: process.cwd(),
-      projectRoot: gitRoot ?? undefined,
+      projectRoot: context.gitRoot ?? undefined,
     });
   };
   let agentsFiles = await reloadAgentsFiles();
@@ -329,12 +580,12 @@ export async function runInteractiveMode(options: RepLOptions): Promise<void> {
     triggerPercent: compactionConfig.triggerPercent,
     enabled: compactionConfig.enabled,
   }, agentsFiles);
+  printWorkspaceEntryNotice(startupRuntime);
 
   // Detect and show project hint - 检测并显示项目提示
-  await detectAndShowProjectHint();
 
   // Create autocomplete - 创建自动补全器
-  const completer = createCompleter(gitRoot ?? process.cwd());
+  const completer = createCompleter(() => context.gitRoot ?? process.cwd());
 
   const rl = readline.createInterface({
     input: process.stdin,
@@ -351,19 +602,53 @@ export async function runInteractiveMode(options: RepLOptions): Promise<void> {
     },
   });
 
-  // Initialize status bar (if terminal supports) - 初始化状态栏 (如果终端支持)
-  const effectiveModel = currentConfig.model ?? getProviderModel(currentConfig.provider) ?? currentConfig.provider;
-  let statusBar: StatusBar | null = null;
-  if (supportsStatusBar()) {
-    statusBar = new StatusBar(createStatusBarState(
-      context.sessionId,
-      currentConfig.permissionMode,
-      currentConfig.provider,
-      effectiveModel,
-      currentConfig.reasoningMode,
-      currentConfig.parallel,
-    ));
-  }
+  // FEATURE_092 phase 2b.7b: bootstrap auto-mode guardrail (factory only;
+  // the guardrail is constructed lazily on first 'auto' tool call so the
+  // cost is paid only by users who actually use auto mode).
+  // Slice C: settings/env block resolved here so the bootstrap stays free
+  // of file-system I/O — env override layers feed the resolver chain.
+  const autoModeSettings = loadAutoModeSettings();
+  const autoModeBootstrap: AutoModeBootstrapResult = await bootstrapAutoMode({
+    askUser: async (call, reason, signals) => {
+      const result = await confirmToolExecution(
+        rl,
+        call.name,
+        // FEATURE_158: attach signals so confirmToolExecution renders
+        // Scope/Risk from the classifier's view. Readline path follows
+        // the same _classifierSignals input-marker convention as Ink.
+        {
+          ...(call.input as Record<string, unknown>),
+          ...(signals && signals.length > 0 ? { _classifierSignals: signals } : {}),
+        },
+        {
+          permissionMode: currentPermissionMode,
+          reason: `[auto-mode] ${reason}`,
+        },
+      );
+      return result.confirmed ? 'allow' : 'block';
+    },
+    projectRoot: gitRoot ?? process.cwd(),
+    getCurrentProviderName: () => currentConfig.provider,
+    getCurrentModel: () => currentConfig.model,
+    getCurrentPermissionMode: () => currentPermissionMode,
+    autoModeSettings,
+    log: (level, msg) => {
+      if (level === 'warn') console.log(chalk.yellow(msg));
+      else console.log(chalk.dim(msg));
+    },
+    // FEATURE_158: inject the REPL-side path-aware bash signal collector.
+    extraCollectors: [replBashPathSignalCollector],
+  });
+
+  // FEATURE_153 (v0.7.38): build the LLM-backed bash prefix extractor used by
+  // `isToolCallAllowed`. Live getters re-resolve provider + model on every
+  // call, so mid-session `/provider` and `/model` swaps redirect the
+  // extractor without an explicit reset (mirrors the auto-mode guardrail's
+  // hotfix-3 LIVE getter pattern).
+  const bashPrefixExtractor: BashPrefixExtractor = createBashPrefixExtractor({
+    getProvider: () => resolveProvider(currentConfig.provider),
+    getModel: () => currentConfig.model ?? '',
+  });
 
   // Keyboard shortcut state (Phase 2 will use) - 键盘快捷键状态 (Phase 2 将实际使用)
   // let showToolOutput = true;
@@ -372,9 +657,9 @@ export async function runInteractiveMode(options: RepLOptions): Promise<void> {
   // Keyboard shortcut mapping - 键盘快捷键映射
   const KEYBOARD_SHORTCUTS_HELP = `
 Keyboard Shortcuts:
-  Tab       Auto-complete (@files, /commands)
+  Tab       Auto-complete (@paths, /commands)
   Esc+Esc   Edit last message
-  Ctrl+T    Cycle reasoning mode
+  Ctrl+T    Cycle reasoning effort
   Ctrl+E    Open external editor
   Ctrl+R    Search command history (built-in)
   Ctrl+C    Cancel current input
@@ -406,23 +691,179 @@ Keyboard Shortcuts:
     });
   }
 
+  // FEATURE_143 (v0.7.36) — classic CLI parity with InkREPL: build the
+  // skill registry's system-prompt snippet at startup and forward it via
+  // `context.skillsPrompt`. Without this, classic CLI users got an empty
+  // skills list in the system prompt while Ink TUI users got the full
+  // hardened skills manifest. See `getSystemPromptSnippet()` for the
+  // hardened wording.
+  const classicCliSkillsPrompt = await buildClassicCliSkillsPrompt(gitRoot);
+
   let isRunning = true;
   // Fix: Ensure session.id is set to reuse same session - 修复：确保 session.id 被设置以复用同一 session
   let currentOptions: RepLOptions = {
     ...options,
-    parallel: initialParallel,
+    provider: initialProvider,
+    model: initialModel,
+    effort: resolveCurrentRuntimeEffort().runtimeEffort,
+    agentMode: initialAgentMode,
     reasoningMode: initialReasoningMode,
     thinking: initialThinking,
+    // FEATURE_246 A5 (ADR-047): the session options that flow to runAgentRound
+    // must carry the workflow runs dir so the Worker's tool-execution context
+    // wires ctx.workflowHost and the run_workflow tool is live on NL turns (not
+    // just the /workflow command path). The createKodaXOptions closure inherits
+    // this via its `...currentOptions` spread.
+    workflowRunsBaseDir: getAgentConfigPath(
+      'workflow-runs',
+      deriveProjectKeyFromRoot(process.cwd()).key,
+    ),
+    context: {
+      ...options.context,
+      gitRoot,
+      executionCwd: startupRuntime.executionCwd,
+      repoIntelligenceMode: repoIntelligenceRuntime.mode,
+      repoIntelligenceTrace: repoIntelligenceRuntime.trace,
+      skillsPrompt: classicCliSkillsPrompt,
+    },
     session: {
       ...options.session,
       id: context.sessionId,
+      // FEATURE_173 dual-writer fix: the REPL owns session persistence
+      // (full lineage + uiHistory + artifactLedger via persistContextState).
+      // Suppress the runner's redundant flat snapshot so it can't clobber.
+      persistedByHost: true,
     },
+  };
+
+  // Cost tracking ref — agent populates this via events.getCostReport, /cost command reads it
+  const refreshCurrentEffort = (): void => {
+    const effortResolution = resolveCurrentRuntimeEffort();
+    currentOptions.effort = effortResolution.runtimeEffort;
+  };
+
+  costReportRef.current = null;
+
+  const recoverCurrentSession = async (prompt?: string): Promise<SessionRecoverStatus> => {
+    if (context.messages.length === 0) {
+      return 'empty';
+    }
+    if (!guardSessionTransition('Recovering into a new session')) {
+      return 'blocked';
+    }
+
+    const sourceSessionId = context.sessionId;
+    const sourceLineage = context.lineage ?? createSessionLineage(context.messages);
+    context.lineage = sourceLineage;
+    const sourceArtifactLedger = context.artifactLedger
+      ? structuredClone(context.artifactLedger)
+      : undefined;
+    const sourceTitle = context.title || extractTitle(context.messages);
+    const seed = buildRecoverySeed({
+      sourceSessionId,
+      messages: context.messages,
+      lineage: sourceLineage,
+      artifactLedger: sourceArtifactLedger,
+      reason: 'provider session recovery',
+    });
+
+    await storage.save(sourceSessionId, {
+      messages: context.messages,
+      title: sourceTitle,
+      gitRoot: context.gitRoot ?? '',
+      runtimeInfo: context.runtimeInfo,
+      lineage: sourceLineage,
+      artifactLedger: sourceArtifactLedger,
+      uiHistory: context.uiHistory,
+      ...contextExtensionSessionData(context),
+      ...(currentOptions.session?.tag !== undefined ? { tag: currentOptions.session.tag } : {}),
+    });
+
+    const nextSessionId = generateInteractiveSessionId();
+    const seedLineage = createSessionLineage(seed.messages);
+    await storage.save(nextSessionId, {
+      messages: seed.messages,
+      title: seed.title,
+      gitRoot: context.gitRoot ?? '',
+      runtimeInfo: context.runtimeInfo,
+      lineage: seedLineage,
+      artifactLedger: sourceArtifactLedger,
+      ...(currentOptions.session?.tag !== undefined ? { tag: currentOptions.session.tag } : {}),
+    });
+
+    const now = new Date().toISOString();
+    context.sessionId = nextSessionId;
+    context.messages = seed.messages;
+    context.title = seed.title;
+    context.contextTokenSnapshot = undefined;
+    context.lineage = seedLineage;
+    context.artifactLedger = sourceArtifactLedger;
+    context.extensionState = undefined;
+    context.extensionRecords = undefined;
+    context.extensionStateDirty = false;
+    context.extensionRecordsDirty = false;
+    context.createdAt = now;
+    context.lastAccessed = now;
+    currentOptions.session = {
+      ...currentOptions.session,
+      id: nextSessionId,
+    };
+    teamModeHandle?.writer.update({ sessionId: nextSessionId });
+
+    console.log(chalk.green(`\n[Recovered session: ${nextSessionId}]`));
+    console.log(chalk.dim(`  Source session saved: ${sourceSessionId}`));
+    console.log(chalk.dim('  Raw provider history was not replayed.'));
+
+    let result: KodaXResult;
+    try {
+      result = await runAgentRound(
+        currentOptions,
+        context,
+        normalizeRecoveryPrompt(prompt),
+        context.messages,
+        undefined,
+        options.runtimeRunner,
+        currentPermissionMode,
+      );
+    } catch (error: unknown) {
+      const message = error instanceof Error ? error.message : String(error);
+      console.log(chalk.red(`\n[Recover failed] ${message}`));
+      return 'failed';
+    }
+    context.messages = result.messages;
+    context.contextTokenSnapshot = result.contextTokenSnapshot;
+    applyRuntimeSessionSnapshot(context, result);
+    context.artifactLedger = mergeArtifactLedger(
+      context.artifactLedger ?? [],
+      (result.artifactLedger as typeof context.artifactLedger | undefined)
+        ?? extractArtifactLedger(result.messages),
+    );
+    context.lineage = createSessionLineage(context.messages, context.lineage);
+    const title = extractTitle(context.messages);
+    context.title = title;
+    await storage.save(context.sessionId, {
+      messages: context.messages,
+      title,
+      gitRoot: context.gitRoot ?? '',
+      runtimeInfo: context.runtimeInfo,
+      lineage: context.lineage,
+      artifactLedger: context.artifactLedger,
+      ...contextExtensionSessionData(context),
+      ...(currentOptions.session?.tag !== undefined ? { tag: currentOptions.session.tag } : {}),
+    });
+    markExtensionSessionPersisted(context);
+    return 'recovered';
   };
 
   // Command callbacks - 命令回调
   const callbacks: CommandCallbacks = {
+    getRuntimeStatus: options.getRuntimeStatus,
     exit: () => {
       isRunning = false;
+      // FEATURE_125 — release the instance directory + clear the
+      // process-level singleton on /exit so the next session's
+      // discovery scan does not have to reap us as a stale peer.
+      void teamModeHandle?.shutdown();
       rl.close();
     },
     saveSession: async () => {
@@ -432,24 +873,34 @@ Keyboard Shortcuts:
         await storage.save(context.sessionId, {
           messages: context.messages,
           title,
-          gitRoot: gitRoot ?? '',
+          gitRoot: context.gitRoot ?? '',
+          runtimeInfo: context.runtimeInfo,
+          artifactLedger: context.artifactLedger,
+          ...contextExtensionSessionData(context),
+          // FEATURE_226: carry the session tag so a brand-new session's first
+          // save persists it (storage merges `data.tag ?? existing` otherwise).
+          ...(currentOptions.session?.tag !== undefined ? { tag: currentOptions.session.tag } : {}),
         });
+        markExtensionSessionPersisted(context);
       }
     },
     startNewSession: () => {
       context.sessionId = generateInteractiveSessionId();
       context.title = '';
       context.contextTokenSnapshot = undefined;
+      context.artifactLedger = undefined;
+      context.extensionState = undefined;
+      context.extensionRecords = undefined;
+      context.extensionStateDirty = false;
+      context.extensionRecordsDirty = false;
       context.createdAt = new Date().toISOString();
       context.lastAccessed = context.createdAt;
+      applyRuntimeContext(context, currentOptions, startupRuntime);
       currentOptions.session = {
         ...currentOptions.session,
         id: context.sessionId,
       };
-      statusBar?.update({
-        sessionId: context.sessionId,
-        messageCount: 0,
-      });
+      teamModeHandle?.writer.update({ sessionId: context.sessionId });
     },
     loadSession: async (id: string) => {
       const loaded = await storage.load(id);
@@ -457,37 +908,75 @@ Keyboard Shortcuts:
         if (!guardSessionTransition('Resuming a saved session')) {
           return 'blocked';
         }
+        const currentWorkspaceRuntime = await inspectWorkspaceRuntime({ cwd: process.cwd() });
+        const savedRuntime = resolveSessionRuntimeInfo(loaded);
+        let appliedRuntime = savedRuntime ?? currentWorkspaceRuntime;
+        if (savedRuntime?.workspaceRoot && !workspaceExists(savedRuntime)) {
+          console.log(chalk.yellow('\n[Saved workspace unavailable]'));
+          console.log(chalk.dim(`  Session workspace: ${formatWorkspaceTruth(savedRuntime)}`));
+          console.log(chalk.dim(`  Falling back to current workspace: ${formatWorkspaceTruth(currentWorkspaceRuntime)}`));
+          appliedRuntime = currentWorkspaceRuntime;
+        } else if (
+          savedRuntime?.workspaceRoot
+          && currentWorkspaceRuntime.workspaceRoot
+          && savedRuntime.workspaceRoot !== currentWorkspaceRuntime.workspaceRoot
+        ) {
+          console.log(chalk.cyan('\n[Loading sibling workspace session]'));
+          console.log(chalk.dim(`  Current workspace: ${formatWorkspaceTruth(currentWorkspaceRuntime)}`));
+          console.log(chalk.dim(`  Session workspace: ${formatWorkspaceTruth(savedRuntime)}`));
+        }
+
         context.messages = loaded.messages;
         context.title = loaded.title;
         context.sessionId = id;
         context.contextTokenSnapshot = undefined;
+        context.artifactLedger = loaded.artifactLedger;
+        context.extensionState = loaded.extensionState
+          ? structuredClone(loaded.extensionState)
+          : undefined;
+        context.extensionRecords = loaded.extensionRecords?.map((record) => ({ ...record }));
+        context.extensionStateDirty = false;
+        context.extensionRecordsDirty = false;
         context.lastAccessed = new Date().toISOString();
+        applyRuntimeContext(context, currentOptions, appliedRuntime);
         currentOptions.session = {
           ...currentOptions.session,
           id,
+          // FEATURE_226: reflect the loaded session's tag in-memory so saves
+          // / forks carry it (storage merges `data.tag ?? existing` on save).
+          tag: loaded.tag,
         };
-        statusBar?.update({
-          sessionId: id,
-          messageCount: loaded.messages.length,
-        });
+        teamModeHandle?.writer.update({ sessionId: id });
         console.log(chalk.green(`\n[Loaded session: ${id}]`));
         console.log(chalk.dim(`  Messages: ${loaded.messages.length}`));
+        if (context.runtimeInfo?.workspaceRoot) {
+          console.log(chalk.dim(`  Workspace: ${formatWorkspaceTruth(context.runtimeInfo)}`));
+        }
         return 'loaded';
       }
       return 'missing';
     },
-    listSessions: async () => {
-      const sessions = await storage.list(gitRoot ?? undefined);
-      if (sessions.length === 0) {
-        console.log(chalk.dim('\n[No saved sessions]'));
-        return;
+      listSessions: async () => {
+        const sessions = await storage.list(context.gitRoot ?? undefined);
+        if (sessions.length === 0) {
+          console.log(chalk.dim('\n[No saved sessions]'));
+          return;
       }
       console.log(chalk.bold('\nRecent Sessions:\n'));
-      for (const s of sessions.slice(0, 10)) {
-        console.log(`  ${chalk.cyan(s.id)} ${chalk.dim(`(${s.msgCount} messages)`)} ${s.title.slice(0, 40)}`);
-      }
-      console.log();
-    },
+        if (context.runtimeInfo?.workspaceRoot) {
+          console.log(chalk.dim(`  Current workspace: ${formatWorkspaceTruth(context.runtimeInfo)}`));
+          console.log();
+        }
+        for (const s of sessions.slice(0, 10)) {
+          console.log(`  ${chalk.cyan(s.id)} ${chalk.dim(`(${s.msgCount} messages)`)} ${s.title.slice(0, 40)}`);
+          if (s.runtimeInfo?.workspaceRoot) {
+            const sameWorkspace = context.runtimeInfo?.workspaceRoot === s.runtimeInfo.workspaceRoot;
+            const suffix = sameWorkspace ? ' (current workspace)' : '';
+            console.log(chalk.dim(`      workspace: ${formatWorkspaceTruth(s.runtimeInfo)}${suffix}`));
+          }
+        }
+        console.log();
+      },
     clearHistory: () => {
       context.messages = [];
       context.contextTokenSnapshot = undefined;
@@ -510,31 +999,26 @@ Keyboard Shortcuts:
       console.log();
     },
     switchProvider: (provider: string, model?: string) => {
+      const effortResolution = resolveCurrentRuntimeEffort({ provider, model });
       currentConfig.provider = provider;
       currentConfig.model = model;
       currentOptions.provider = provider;
       currentOptions.model = model;
-      let newModel = model ?? getProviderModel(provider);
-      if (!newModel) {
-        // Fallback for custom providers - 自定义 Provider 的后备
-        try {
-          const custom = getCustomProvider(provider);
-          newModel = custom?.getModel() ?? provider;
-        } catch {
-          newModel = provider;
-        }
+      currentOptions.effort = effortResolution.runtimeEffort;
+      if (effortResolution.diagnostic) {
+        console.log(chalk.yellow(`\n[${effortResolution.diagnostic}]`));
       }
-      statusBar?.update({
-        provider,
-        model: newModel,
-      });
     },
     setThinking: (enabled: boolean) => {
       currentConfig.thinking = enabled;
       currentOptions.thinking = enabled;
       currentConfig.reasoningMode = enabled ? 'auto' : 'off';
       currentOptions.reasoningMode = currentConfig.reasoningMode;
-      statusBar?.update({ reasoningMode: currentConfig.reasoningMode });
+    },
+    setEffort: (effort?: string) => {
+      currentConfig.effort = effort;
+      currentConfig.effortOverride = effort !== undefined;
+      refreshCurrentEffort();
     },
     setReasoningMode: (mode: KodaXReasoningMode) => {
       const thinking = mode !== 'off';
@@ -542,26 +1026,52 @@ Keyboard Shortcuts:
       currentConfig.thinking = thinking;
       currentOptions.reasoningMode = mode;
       currentOptions.thinking = thinking;
-      statusBar?.update({ reasoningMode: mode });
     },
-    setParallel: (enabled: boolean) => {
-      // Persistence is handled by the command layer; this callback only syncs runtime state and UI.
-      currentConfig.parallel = enabled;
-      currentOptions.parallel = enabled;
-      statusBar?.update({ parallel: enabled });
+    setAgentMode: (mode: KodaXAgentMode) => {
+      currentConfig.agentMode = mode;
+      currentOptions.agentMode = mode;
     },
     setPermissionMode: (mode: PermissionMode) => {
       currentConfig.permissionMode = mode;
       currentPermissionMode = mode; // Sync with local permission state
-      statusBar?.update({ permissionMode: mode });
+      refreshCurrentEffort();
+      // FEATURE_092 phase 2b.7b slice E: surface the deprecation when the
+      // user explicitly picks the alias via `/mode auto-in-project`.
+      // Once-per-session semantics means picking it at startup THEN typing
+      // /mode auto-in-project later still emits AT MOST once.
+      if (mode === 'auto-in-project') {
+        emitAutoInProjectDeprecation();
+      }
       // Note: permissionMode is no longer part of KodaXOptions
       // Permission control is handled locally via beforeToolExecute callback
+    },
+    setRepoIntelligenceRuntime: (update) => {
+      if (update.mode !== undefined) {
+        currentConfig.repoIntelligenceMode = update.mode;
+          process.env.KODAX_REPO_INTELLIGENCE = update.mode;
+        currentOptions.context = {
+          ...currentOptions.context,
+          repoIntelligenceMode: update.mode,
+        };
+      }
+      if (update.trace !== undefined) {
+        currentConfig.repoIntelligenceTrace = update.trace;
+        if (update.trace) {
+          process.env.KODAX_REPO_INTELLIGENCE_TRACE = '1';
+        } else {
+          delete process.env.KODAX_REPO_INTELLIGENCE_TRACE;
+        }
+        currentOptions.context = {
+          ...currentOptions.context,
+          repoIntelligenceTrace: update.trace,
+        };
+      }
     },
     deleteSession: async (id: string) => {
       await storage.delete?.(id);
     },
     deleteAllSessions: async () => {
-      await storage.deleteAll?.(gitRoot ?? undefined);
+      await storage.deleteAll?.(context.gitRoot ?? undefined);
     },
     printSessionTree: async () => {
       const lineage = await storage.getLineage?.(context.sessionId);
@@ -594,7 +1104,6 @@ Keyboard Shortcuts:
       context.messages = loaded.messages;
       context.title = loaded.title;
       context.contextTokenSnapshot = undefined;
-      statusBar?.update({ messageCount: context.messages.length });
       console.log(chalk.green(`\n[Switched to tree entry: ${selector}]`));
       console.log(chalk.dim(`  Messages: ${loaded.messages.length}`));
       return 'switched';
@@ -627,30 +1136,120 @@ Keyboard Shortcuts:
       context.contextTokenSnapshot = undefined;
       context.createdAt = new Date().toISOString();
       context.lastAccessed = context.createdAt;
+      applyRuntimeContext(context, currentOptions, resolveSessionRuntimeInfo(forked.data) ?? context.runtimeInfo);
       currentOptions.session = {
         ...currentOptions.session,
         id: forked.sessionId,
       };
-      statusBar?.update({
-        sessionId: forked.sessionId,
-        messageCount: context.messages.length,
-      });
       console.log(chalk.green(`\n[Forked session: ${forked.sessionId}]`));
       console.log(chalk.dim(`  Messages: ${forked.data.messages.length}`));
       return 'forked';
     },
-    setPlanMode: (enabled: boolean) => {
-      planMode = enabled;
+    recoverSession: recoverCurrentSession,
+    rewindSession: async (selector?: string) => {
+      if (!guardSessionTransition('Rewinding session')) {
+        return 'blocked';
+      }
+
+      const rewound = await storage.rewind?.(context.sessionId, selector);
+      if (!rewound) {
+        return 'failed';
+      }
+
+      context.messages = rewound.messages;
+      context.title = rewound.title;
+      context.contextTokenSnapshot = undefined;
+      context.lastAccessed = new Date().toISOString();
+      console.log(chalk.green(`\n[Rewound session${selector ? ` to ${selector}` : ' to previous turn'}]`));
+      console.log(chalk.dim(`  Messages: ${rewound.messages.length}`));
+      return 'rewound';
+    },
+    getCostReport: () => costReportRef.current?.() ?? null,
+    // FEATURE_092 phase 2b.8: auto-mode read-only stats + manual engine setter
+    // for /auto-engine and /auto-denials. The accessors
+    // delegate to the lazy guardrail factory — when REPL never enters auto
+    // mode, the guardrail is never constructed and the stats are undefined.
+    getAutoModeStats: () => {
+      if (!isAutoMode(currentPermissionMode)) return undefined;
+      return autoModeBootstrap.getGuardrail().getStats();
+    },
+    setAutoModeEngine: (engine) => {
+      if (!isAutoMode(currentPermissionMode)) return;
+      autoModeBootstrap.getGuardrail().setEngine(engine);
     },
     createKodaXOptions: () => {
+      // FEATURE_074: live plan-mode check for child agents. The closure reads
+      // currentPermissionMode lazily, so mid-run parent-mode toggles propagate
+      // into in-flight children (user flipping plan ↔ accept-edits mid-stream
+      // is a common case and was the original request).
+      const planModeBlockCheck = (tool: string, input: Record<string, unknown>): string | null => {
+        if (currentPermissionMode !== 'plan') return null;
+        return getPlanModeBlockReason(tool, input, gitRoot ?? process.cwd());
+      };
+      // FEATURE_092 phase 2b.7b: when the user is in 'auto' (canonical) or
+      // 'auto-in-project' (alias), forward the AutoModeToolGuardrail to
+      // Runner via KodaXOptions.guardrails. The lazy factory means we only
+      // pay the construction + rules-load cost for users who use auto mode.
+      const guardrails = isAutoMode(currentPermissionMode)
+        ? [autoModeBootstrap.getGuardrail()]
+        : undefined;
       return {
         ...currentOptions,
         provider: currentConfig.provider,
         model: currentConfig.model,
+        effort: resolveCurrentRuntimeEffort().runtimeEffort,
         thinking: currentConfig.thinking,
         reasoningMode: currentConfig.reasoningMode,
+        guardrails,
+        // workflowRunsBaseDir is inherited from `...currentOptions` (set at
+        // session init for FEATURE_246 A5) — no need to re-derive here.
+        context: {
+          ...currentOptions.context,
+          planModeBlockCheck,
+        },
         events: {
           ...currentOptions.events,
+          onMemoryOutcomeDigest: (digest) => {
+            context.lineage = appendMemoryOutcomeDigest(
+              context.lineage ?? createSessionLineage(context.messages),
+              digest,
+            );
+            currentOptions.events?.onMemoryOutcomeDigest?.(digest);
+          },
+          onMemoryReviewReceipt: (receipt) => {
+            context.lineage = appendMemoryReviewReceipt(
+              context.lineage ?? createSessionLineage(context.messages),
+              receipt,
+            );
+            currentOptions.events?.onMemoryReviewReceipt?.(receipt);
+          },
+          onMemoryNotice: (notice) => {
+            context.lineage = appendMemoryClientNotice(
+              context.lineage ?? createSessionLineage(context.messages),
+              { ...notice, createdAt: new Date().toISOString() },
+            );
+            console.log(chalk.dim(`\n[memory] ${notice.summaries.slice(0, 3).join('; ')}`));
+            currentOptions.events?.onMemoryNotice?.(notice);
+          },
+          // FEATURE_074: exit_plan_mode tool callback. Three-state return:
+          //   'not-in-plan-mode' when called outside plan mode (tool turns this
+          //   into an explicit error); true on approval; false on rejection.
+          // buildToolConfirmationDisplay renders the full plan from input.plan,
+          // so the user actually sees what they're approving.
+          exitPlanMode: async (plan: string): Promise<boolean | 'not-in-plan-mode'> => {
+            if (currentPermissionMode !== 'plan') return 'not-in-plan-mode';
+            const result = await confirmToolExecution(rl, 'exit_plan_mode', { plan }, {
+              isProtectedPath: false,
+              permissionMode: currentPermissionMode,
+            });
+            if (result.confirmed) {
+              currentConfig.permissionMode = 'accept-edits';
+              currentPermissionMode = 'accept-edits';
+              refreshCurrentEffort();
+              return true;
+            }
+            return false;
+          },
           // Permission control via beforeToolExecute hook - 通过 beforeToolExecute 钩子控制权限
           beforeToolExecute: async (tool: string, input: Record<string, unknown>): Promise<boolean | string> => {
             const mode = currentPermissionMode;
@@ -660,7 +1259,7 @@ Keyboard Shortcuts:
               const planModeBlockReason = getPlanModeBlockReason(tool, input, gitRoot ?? process.cwd());
               if (planModeBlockReason) {
                 console.log(chalk.yellow(planModeBlockReason));
-                return `${planModeBlockReason} Do not try to modify files while planning. Finish the plan first, then use ask_user_question with intent "plan-handoff" to ask whether this session should switch to accept-edits and continue.`;
+                return `${planModeBlockReason} Do not modify files while planning. Finish the plan first, then call exit_plan_mode with the finalized plan — the user will review and approve or reject.`;
               }
             }
 
@@ -691,9 +1290,19 @@ Keyboard Shortcuts:
 
             // Check if tool needs confirmation based on mode
             if (confirmTools.has(tool)) {
-              // Check alwaysAllowTools in accept-edits mode for bash
+              // Check alwaysAllowTools in accept-edits mode for bash.
+              // FEATURE_153: pass LLM extractor (constructed at REPL bootstrap;
+              // see bashPrefixExtractor below) so allowlist patterns match
+              // against extracted safe prefix instead of naive startsWith.
               if (mode === 'accept-edits' && tool === 'bash') {
-                if (isToolCallAllowed(tool, input, alwaysAllowTools)) {
+                if (
+                  await isToolCallAllowed(
+                    tool,
+                    input,
+                    alwaysAllowTools,
+                    bashPrefixExtractor,
+                  )
+                ) {
                   return true;
                 }
               }
@@ -733,20 +1342,159 @@ Keyboard Shortcuts:
     ui: new ReadlineUIContext(rl),
   };
 
+  const appendPersistedUiHistoryItem = async (item: KodaXSessionUiHistoryItem): Promise<void> => {
+    context.uiHistory = [...(context.uiHistory ?? []), item];
+    const title = context.title || extractTitle(context.messages);
+    context.title = title;
+    await storage.save(context.sessionId, {
+      messages: context.messages,
+      title,
+      gitRoot: context.gitRoot ?? '',
+      runtimeInfo: context.runtimeInfo,
+      lineage: context.lineage,
+      artifactLedger: context.artifactLedger,
+      uiHistory: context.uiHistory,
+      ...contextExtensionSessionData(context),
+      ...(currentOptions.session?.tag !== undefined ? { tag: currentOptions.session.tag } : {}),
+    });
+  };
+
+  const maybeRecoverAfterProviderError = async (error: Error, prompt: string): Promise<boolean> => {
+    if (!shouldOfferSessionRecovery({ error, messageCount: context.messages.length })) {
+      return false;
+    }
+    console.log(chalk.dim(`\n${SESSION_RECOVERY_HINT_MESSAGE}`));
+    try {
+      await appendPersistedUiHistoryItem({
+        type: 'info',
+        text: SESSION_RECOVERY_HINT_MESSAGE,
+      });
+    } catch (historyError: unknown) {
+      const message = historyError instanceof Error ? historyError.message : String(historyError);
+      console.log(chalk.dim(`Could not persist recovery hint: ${message}`));
+    }
+    const confirm = resolveConfirm(callbacks);
+    if (!confirm) {
+      console.log();
+      return false;
+    }
+
+    const approved = await confirm(SESSION_RECOVERY_CONFIRM_MESSAGE);
+    if (!approved) {
+      return false;
+    }
+
+    let status: SessionRecoverStatus | undefined;
+    try {
+      status = await callbacks.recoverSession?.(prompt);
+    } catch (recoverError: unknown) {
+      const message = recoverError instanceof Error ? recoverError.message : String(recoverError);
+      console.log(chalk.red(`\n[Recover failed] ${message}`));
+      return false;
+    }
+    if (status === 'failed') {
+      console.log(chalk.dim('Recovery session was created, but the continuation request still failed.\n'));
+    }
+    return status === 'recovered';
+  };
+
   // Handle Ctrl+C - 处理 Ctrl+C
   rl.on('SIGINT', async () => {
     console.log(chalk.dim('\n\n[Press /exit to quit]'));
     rl.prompt();
   });
 
-  // Handle cleanup on exit - 处理退出时清理状态栏
+  // Handle cleanup on exit
   const cleanup = () => {
-    statusBar?.hide();
+    // FEATURE_125 — fire-and-forget Team Mode shutdown. The
+    // state-writer's shutdown() does its work synchronously
+    // (clearInterval + fs.rmSync) before the trailing
+    // `await Promise.resolve()`, so the instance directory is
+    // gone by the time the 'exit' handler returns even though
+    // the promise is unawaited.
+    void teamModeHandle?.shutdown();
     rl.close();
   };
 
   process.on('exit', cleanup);
   process.on('SIGTERM', cleanup);
+
+  const startWorkflowInvocation = async (
+    workflow: CommandWorkflowInvocationRequest,
+    rawInput: string,
+  ): Promise<boolean> => {
+    const decision = decideWorkflowInvocation({ source: workflow.source });
+
+    // FEATURE_246 A5 (ADR-047): this launcher is reached only from a parsed
+    // `/workflow` command (the natural-language intercept was removed), so the
+    // policy returns 'suggest'. 'none' stays as a defensive guard.
+    if (decision.action === 'none') {
+      return false;
+    }
+
+    let workflowUserCommitted = false;
+    const commitWorkflowFinal = (text: string): void => {
+      if (!workflowUserCommitted) {
+        workflowUserCommitted = true;
+        context.messages.push({
+          role: 'user',
+          content: rawInput || workflow.request,
+          // GOAL 2: real time for the workflow-commit echo (bypasses runner/substrate).
+          timestamp: new Date().toISOString(),
+        });
+      }
+      context.messages.push({ role: 'assistant', content: text, timestamp: new Date().toISOString() });
+      const title = extractTitle(context.messages);
+      context.title = title;
+      void storage.save(context.sessionId, {
+        messages: context.messages,
+        title,
+        gitRoot: context.gitRoot ?? '',
+        runtimeInfo: context.runtimeInfo,
+        artifactLedger: context.artifactLedger,
+        ...(currentOptions.session?.tag !== undefined ? { tag: currentOptions.session.tag } : {}),
+      }).catch((error: unknown) => {
+        const message = error instanceof Error ? error.message : String(error);
+        console.log(chalk.red(`\n[workflow] failed to save final answer: ${message}\n`));
+      });
+    };
+    const workflowCallbacks: CommandCallbacks = {
+      ...callbacks,
+      onWorkflowRunMessage: (event) => {
+        if (event.type === 'event') return;
+        const text = event.text.trimEnd();
+        if (!text.trim()) return;
+        if (event.type === 'error') {
+          console.log(chalk.red(`\n${text}\n`));
+          return;
+        }
+        if (event.type === 'success') {
+          console.log(chalk.green(`\n${text}\n`));
+          return;
+        }
+        if (event.type === 'assistant') {
+          console.log(`\n${text}\n`);
+          if (event.final === true) {
+            commitWorkflowFinal(text);
+          }
+          return;
+        }
+        console.log(chalk.dim(`\n${text}\n`));
+      },
+    };
+
+    const outcome = await startGeneratedWorkflowFromRequest({
+      request: workflow.request,
+      callbacks: workflowCallbacks,
+      approval: currentConfig.permissionMode === 'plan' ? 'required' : 'silent',
+      presentation: 'agentic',
+      sourceLabel: workflow.displayName,
+      processSource: workflow.processSource ?? 'command',
+      ...(workflow.builtin !== undefined ? { builtin: workflow.builtin } : {}),
+    });
+
+    return workflowStartOutcomeConsumesTurn({ outcome });
+  };
 
   const handleCommandResult = async (
     result: Awaited<ReturnType<typeof executeCommand>>,
@@ -756,38 +1504,9 @@ Keyboard Shortcuts:
       return;
     }
 
-    if (result.projectInitPrompt) {
-      if (planMode) {
-        await runWithPlanMode(result.projectInitPrompt, {
-          ...currentOptions,
-          provider: currentConfig.provider,
-          thinking: currentConfig.thinking,
-          reasoningMode: currentConfig.reasoningMode,
-        });
-      } else {
-        const runResult = await runAgentRound(
-          {
-            ...currentOptions,
-            provider: currentConfig.provider,
-            thinking: currentConfig.thinking,
-            reasoningMode: currentConfig.reasoningMode,
-          },
-          context,
-          result.projectInitPrompt
-        );
-        context.messages = runResult.messages;
-        context.contextTokenSnapshot = runResult.contextTokenSnapshot;
-        statusBar?.update({ messageCount: context.messages.length });
-        if (context.messages.length > 0) {
-          const title = extractTitle(context.messages);
-          context.title = title;
-          await storage.save(context.sessionId, {
-            messages: context.messages,
-            title,
-            gitRoot: gitRoot ?? '',
-          });
-        }
-      }
+    if (result.workflow) {
+      await startWorkflowInvocation(result.workflow, rawInput);
+      return;
     }
 
     if (!result.invocation) {
@@ -820,40 +1539,42 @@ Keyboard Shortcuts:
     }
 
     try {
-      if (planMode) {
-        await runWithPlanMode(prepared.prompt, prepared.options);
-        await prepared.finalize();
-        return;
-      }
-
       const initialMessages = prepared.mode === 'fork' ? [] : context.messages;
       const runResult = await runAgentRound(
         prepared.options,
         context,
         prepared.prompt,
-        initialMessages
+        initialMessages,
+        undefined,
+        options.runtimeRunner,
+        currentPermissionMode,
       );
 
       if (prepared.mode === 'fork') {
         const assistantText = extractLastAssistantText(runResult.messages);
         if (assistantText.trim()) {
           console.log(`\n${assistantText}\n`);
-          context.messages.push({ role: 'assistant', content: assistantText });
+          // GOAL 2: real time for the fork-mode assistant echo (manual push).
+          context.messages.push({ role: 'assistant', content: assistantText, timestamp: new Date().toISOString() });
         }
       } else {
         context.messages = runResult.messages;
         context.contextTokenSnapshot = runResult.contextTokenSnapshot;
       }
+      applyRuntimeSessionSnapshot(context, runResult);
 
-      statusBar?.update({ messageCount: context.messages.length });
       if (context.messages.length > 0) {
         const title = extractTitle(context.messages);
         context.title = title;
         await storage.save(context.sessionId, {
           messages: context.messages,
           title,
-          gitRoot: gitRoot ?? '',
+          gitRoot: context.gitRoot ?? '',
+          runtimeInfo: context.runtimeInfo,
+          ...contextExtensionSessionData(context),
+          ...(currentOptions.session?.tag !== undefined ? { tag: currentOptions.session.tag } : {}),
         });
+        markExtensionSessionPersisted(context);
       }
       await prepared.finalize();
     } catch (error) {
@@ -890,52 +1611,145 @@ Keyboard Shortcuts:
         if (trimmed.startsWith('!') && isShellCommandHandled(processed)) {
           continue;
         }
-        context.messages.push({ role: 'user', content: processed });
+        // FEATURE_246 A5 (ADR-047): natural language is never intercepted into a
+        // host-generated workflow; it flows to the agent, which authors workflows
+        // itself via the run_workflow tool. Only `/workflow` commands launch here.
+        const preparedArtifacts = preparePromptInputArtifacts(
+          processed,
+          currentOptions.context?.executionCwd ?? process.cwd(),
+        );
+        for (const warning of preparedArtifacts.warnings) {
+          console.log(chalk.yellow(`\n${warning}`));
+        }
+        context.messages.push({ role: 'user', content: preparedArtifacts.messageContent });
         lastUserMessage = trimmed;
-        statusBar?.update({ messageCount: context.messages.length });
 
         // Run agent (copy main loop logic) - 运行 agent (复制主循环逻辑)
+        // FEATURE_192 v0.7.44 — build the goal runtime binding so the
+        // runner-driven adapter can wire turn-end accounting + auto-
+        // continue on a Worker text-only termination. Default ON; the
+        // binding is a no-op until the user creates a goal via `/goal`
+        // or the model calls `create_goal` (the ADR-033 §1 prompt
+        // discourages autonomous goal creation on simple tasks).
+        const goalRuntime =
+          context.lineage
+            ? buildGoalRuntimeBinding({
+                getLineage: () => context.lineage!,
+                setLineage: (next) => {
+                  context.lineage = next;
+                },
+                saveSession: async () => {
+                  await storage.save(context.sessionId, {
+                    messages: context.messages,
+                    title: context.title ?? extractTitle(context.messages),
+                    gitRoot: context.gitRoot ?? '',
+                    runtimeInfo: context.runtimeInfo,
+                    artifactLedger: context.artifactLedger,
+                    lineage: context.lineage,
+                    ...contextExtensionSessionData(context),
+                    ...(currentOptions.session?.tag !== undefined ? { tag: currentOptions.session.tag } : {}),
+                  });
+                  markExtensionSessionPersisted(context);
+                },
+                // getLatestUsage + getTurnStartMs are overridden inside
+                // runner-driven.ts (it owns the per-turn token state +
+                // turn-start clock). Stubs here.
+                getLatestUsage: () => undefined,
+                getTurnStartMs: () => undefined,
+                getPermissionMode: () => currentPermissionMode,
+                // user-priority `mode:'prompt'` messages on the main
+                // queue mean the user is typing — defer goal auto-
+                // continue so their input lands naturally.
+                hasPendingUserInput: () =>
+                  getMessageQueue().has({
+                    agentId: undefined,
+                    maxPriority: 'user',
+                    mode: 'prompt',
+                  }),
+                // STUB — Commit 3 of the v0.7.44 review-cycle replaces
+                // this with a real verifier wire that closes over the
+                // runner's per-turn transcript + fileEdits. Until the
+                // adapter extraction lands (Commit 2 of the same cycle),
+                // verifyComplete is constructed inside runner-driven.ts
+                // (where transcript/edits are accessible) and overrides
+                // the stub via the same dep-injection pattern as
+                // getLatestUsage / getTurnStartMs.
+                verifyComplete: async () => ({ ok: true }),
+              })
+            : undefined;
+
         try {
-          if (planMode) {
-            await runWithPlanMode(processed, {
+          const result = await runManagedTask(
+            {
               ...currentOptions,
               provider: currentConfig.provider,
               thinking: currentConfig.thinking,
               reasoningMode: currentConfig.reasoningMode,
-            });
-          } else {
-            const result = await runManagedTask(
-              {
-                ...currentOptions,
-                provider: currentConfig.provider,
-                thinking: currentConfig.thinking,
-                reasoningMode: currentConfig.reasoningMode,
-                session: { ...currentOptions.session, initialMessages: context.messages },
-                context: {
-                  ...currentOptions.context,
-                  taskSurface: 'repl',
-                },
+              session: {
+                ...currentOptions.session,
+                // FEATURE_072: Scout / managed-task workers inherit the
+                // derived view (summary + attachments + kept tail) when a
+                // lineage is available, instead of the flat `context.messages`
+                // snapshot. Behaviour is identical post-072-Phase-B because
+                // lineage is reconciled on every compaction; the derived
+                // view is preferred as the authoritative source.
+                initialMessages: context.lineage
+                  ? getSessionMessagesFromLineage(context.lineage, context.lineage.activeEntryId)
+                  : context.messages,
+                initialExtensionState: context.extensionState ?? {},
+                initialExtensionRecords: context.extensionRecords ?? [],
               },
-              processed
-            );
-            context.messages = result.messages;
-            context.contextTokenSnapshot = result.contextTokenSnapshot;
+              context: {
+                ...currentOptions.context,
+                taskSurface: 'repl',
+                // FEATURE_074: live plan-mode check for child-agent inheritance.
+                // Separate code path from createKodaXOptions — must propagate too.
+                planModeBlockCheck: (tool: string, input: Record<string, unknown>): string | null => {
+                  if (currentPermissionMode !== 'plan') return null;
+                  return getPlanModeBlockReason(tool, input, gitRoot ?? process.cwd());
+                },
+                ...(preparedArtifacts.inputArtifacts.length > 0
+                  ? { inputArtifacts: preparedArtifacts.inputArtifacts }
+                  : {}),
+                ...(goalRuntime ? { goalRuntime } : {}),
+              },
+            },
+            processed
+          );
+          context.messages = result.messages;
+          context.contextTokenSnapshot = result.contextTokenSnapshot;
+          applyRuntimeSessionSnapshot(context, result);
+          // FEATURE_076: prefer pre-extracted result.artifactLedger; fall
+          // back to walking result.messages for backward compatibility
+          // with paths that have not yet been reshape-updated.
+          context.artifactLedger = mergeArtifactLedger(
+            context.artifactLedger ?? [],
+            (result.artifactLedger as typeof context.artifactLedger | undefined)
+              ?? extractArtifactLedger(result.messages),
+          );
 
-            // Auto save - 自动保存
-            if (context.messages.length > 0) {
-              const title = extractTitle(context.messages);
-              context.title = title;
-              await storage.save(context.sessionId, {
-                messages: context.messages,
-                title,
-                gitRoot: context.gitRoot ?? '',
-              });
-            }
+          // Auto save - 自动保存
+          if (context.messages.length > 0) {
+            const title = extractTitle(context.messages);
+            context.title = title;
+            await storage.save(context.sessionId, {
+              messages: context.messages,
+              title,
+              gitRoot: context.gitRoot ?? '',
+              runtimeInfo: context.runtimeInfo,
+              artifactLedger: context.artifactLedger,
+              ...contextExtensionSessionData(context),
+              ...(currentOptions.session?.tag !== undefined ? { tag: currentOptions.session.tag } : {}),
+            });
+            markExtensionSessionPersisted(context);
           }
         } catch (err) {
           const error = err instanceof Error ? err : new Error(String(err));
           context.messages.pop();
           console.log(chalk.red(`\n[Error] ${error.message}`));
+          if (await maybeRecoverAfterProviderError(error, processed)) {
+            continue;
+          }
         }
         continue;
       } else if (edited === lastUserMessage) {
@@ -943,7 +1757,7 @@ Keyboard Shortcuts:
       }
     }
 
-    const prompt = getPrompt(currentConfig.permissionMode, currentConfig, planMode);
+    const prompt = getPrompt(currentConfig.permissionMode, currentConfig);
     const input = await askInput(rl, prompt);
 
     if (!isRunning) break;
@@ -975,42 +1789,44 @@ Keyboard Shortcuts:
     }
 
     // Add user message to context - 添加用户消息到上下文
-    context.messages.push({ role: 'user', content: processed });
+    // FEATURE_246 A5 (ADR-047): no natural-language workflow intercept — NL flows
+    // to the agent (which owns run_workflow); only `/workflow` commands launch.
+    const preparedArtifacts = preparePromptInputArtifacts(
+      processed,
+      currentOptions.context?.executionCwd ?? process.cwd(),
+    );
+    for (const warning of preparedArtifacts.warnings) {
+      console.log(chalk.yellow(`\n${warning}`));
+    }
+    context.messages.push({ role: 'user', content: preparedArtifacts.messageContent });
 
     // Save last user message (for Esc+Esc editing) - 保存最后一条用户消息 (用于 Esc+Esc 编辑)
     lastUserMessage = trimmed;
 
-    // Update status bar message count - 更新状态栏消息数量
-    statusBar?.update({ messageCount: context.messages.length });
-
-    // If Plan Mode is enabled, execute in plan mode - 如果启用了 Plan Mode，使用计划模式执行
-    if (planMode) {
-      try {
-        await runWithPlanMode(processed, {
-          ...currentOptions,
-          provider: currentConfig.provider,
-          thinking: currentConfig.thinking,
-          reasoningMode: currentConfig.reasoningMode,
-        });
-      } catch (err) {
-        const error = err instanceof Error ? err : new Error(String(err));
-        console.log(chalk.red(`\n[Plan Mode Error] ${error.message}`));
-      }
-      continue;
-    }
-
     // Run Agent - 运行 Agent
     try {
-      const result = await runAgentRound(currentOptions, context, processed);
+      const result = await runAgentRound(
+        currentOptions,
+        context,
+        processed,
+        context.messages,
+        preparedArtifacts.inputArtifacts,
+        options.runtimeRunner,
+        currentPermissionMode,
+      );
 
       // Update context messages (runKodaX returns complete message list) - 更新上下文中的消息（runKodaX 返回完整的消息列表）
       context.messages = result.messages;
       context.contextTokenSnapshot = result.contextTokenSnapshot;
-
-      // Update status bar - 更新状态栏
-      statusBar?.update({
-        messageCount: context.messages.length,
-      });
+      applyRuntimeSessionSnapshot(context, result);
+      // FEATURE_076: prefer pre-extracted result.artifactLedger; fall back
+      // to walking result.messages for backward compatibility with paths
+      // that have not yet been reshape-updated.
+      context.artifactLedger = mergeArtifactLedger(
+        context.artifactLedger ?? [],
+        (result.artifactLedger as typeof context.artifactLedger | undefined)
+          ?? extractArtifactLedger(result.messages),
+      );
 
       // Auto save - 自动保存
       if (context.messages.length > 0) {
@@ -1019,8 +1835,13 @@ Keyboard Shortcuts:
         await storage.save(context.sessionId, {
           messages: context.messages,
           title,
-          gitRoot: gitRoot ?? '',
+          gitRoot: context.gitRoot ?? '',
+          runtimeInfo: context.runtimeInfo,
+          artifactLedger: context.artifactLedger,
+          ...contextExtensionSessionData(context),
+          ...(currentOptions.session?.tag !== undefined ? { tag: currentOptions.session.tag } : {}),
         });
+        markExtensionSessionPersisted(context);
       }
     } catch (err) {
       // Handle different error types - 处理不同类型的错误
@@ -1046,194 +1867,14 @@ Keyboard Shortcuts:
         console.log(chalk.red(`\n[Error] ${error.message}`));
         console.log(chalk.dim('Your message was not sent. Please try again.\n'));
       }
+      await maybeRecoverAfterProviderError(error, processed);
     }
   }
 }
 
 // Get prompt (responsive, using theme colors) - 获取提示符 (响应式，使用主题颜色)
-function getPrompt(mode: string, config: CurrentConfig, planMode: boolean): string {
-  const theme = getCurrentTheme();
-  const modeColor = mode === 'plan' ? chalk.hex(theme.colors.warning) : chalk.hex(theme.colors.success);
-  const model = config.model ?? getProviderModel(config.provider) ?? config.provider;
-  const width = getTerminalWidth();
-
-  // Decide prompt detail level based on terminal width - 根据终端宽度决定提示符详细程度
-  if (width < 60) {
-    // Narrow terminal: minimal prompt - 窄终端：最简提示符
-    const modeIndicator = mode === 'plan' ? '?' : theme.symbols.prompt;
-    return modeColor(`${modeIndicator} `);
-  } else if (width < 100) {
-    // Medium width: short prompt - 中等宽度：简短提示符
-    const flagChar = planMode
-      ? 'P'
-      : config.reasoningMode !== 'off'
-        ? config.reasoningMode[0]?.toUpperCase() ?? 'R'
-        : '';
-    const flagPart = flagChar ? chalk.hex(theme.colors.dim)(`[${flagChar}]`) : '';
-    return modeColor(`kodax:${mode}${flagPart}> `);
-  }
-
-  // Wide terminal: full prompt - 宽终端：完整提示符
-  const reasoningFlag = config.reasoningMode !== 'off'
-    ? chalk.hex(theme.colors.info)(`[reason:${config.reasoningMode}]`)
-    : '';
-  const planFlag = planMode ? chalk.hex(theme.colors.accent)('[plan]') : '';
-  const flags = [reasoningFlag, planFlag].filter(Boolean).join('');
-  return modeColor(`kodax:${mode} (${config.provider}:${model})${flags}> `);
-}
-
-// Read input (supports multiline and external editor) - 读取输入 (支持多行和外部编辑器)
-async function askInput(rl: readline.Interface, prompt: string): Promise<string> {
-  const theme = getCurrentTheme();
-  const lines: string[] = [];
-
-  // Read first line - 读取第一行
-  const firstLine = await new Promise<string>((resolve) => {
-    rl.question(prompt, resolve);
-  });
-
-  // Check if user wants to open external editor (Ctrl+E is input as special char) - 检查是否要打开外部编辑器 (Ctrl+E 会被输入为特殊字符)
-  if (firstLine === '\x05' || firstLine.toLowerCase() === '/e') {
-    const edited = await openExternalEditor(lines.join('\n'));
-    return edited;
-  }
-
-  lines.push(firstLine);
-
-  // Detect if multiline input is needed - 检测是否需要多行输入
-  // 1. Ends with \ (continuation char) - 以 \ 结尾 (续行符)
-  // 2. Unclosed brackets/quotes - 括号/引号未闭合
-  while (needsContinuation(lines.join('\n'))) {
-    const continuationPrompt = chalk.hex(theme.colors.dim)('... ');
-    const nextLine = await new Promise<string>((resolve) => {
-      rl.question(continuationPrompt, resolve);
-    });
-    lines.push(nextLine);
-  }
-
-  // Process continuation: remove trailing \ - 处理续行符：移除行尾的 \
-  const result = lines.join('\n').replace(/\\\n/g, '\n');
-  return result;
-}
-
-// Open external editor - 打开外部编辑器
-// Security note: Use spawnSync instead of execSync to avoid command injection - 安全说明: 使用 spawnSync 代替 execSync 避免命令注入
-async function openExternalEditor(initialContent: string): Promise<string> {
-  // Use os.tmpdir() to get system-safe temp directory - 使用 os.tmpdir() 获取系统安全的临时目录
-  const tmpDir = path.join(os.tmpdir(), 'kodax');
-  // Use random suffix to avoid filename conflicts - 使用随机后缀避免文件名冲突
-  const tmpFile = path.join(tmpDir, `input-${Date.now()}-${Math.random().toString(36).slice(2)}.txt`);
-
-  try {
-    // Ensure temp directory exists - 确保临时目录存在
-    await fs.promises.mkdir(tmpDir, { recursive: true });
-    await fs.promises.writeFile(tmpFile, initialContent, 'utf-8');
-
-    let editor = process.env.EDITOR ?? process.env.VISUAL ??
-      (process.platform === 'win32' ? 'notepad.exe' : 'nano');
-
-    // Basic security check: verify editor name doesn't contain path separators or suspicious chars - 基本的安全检查: 验证编辑器名称不包含路径分隔符或可疑字符
-    // This prevents some obvious injection attempts but won't stop all attacks - 这可以防止一些明显的注入尝试，但不会阻止所有攻击
-    // spawnSync itself doesn't execute through shell, so most command injection is prevented - spawnSync 本身不通过 shell 执行，所以大部分命令注入已被阻止
-    if (editor.includes('/') || editor.includes('\\') || editor.includes('&&') || editor.includes('|')) {
-      // If editor path contains special chars, try to extract base name - 如果编辑器路径包含特殊字符，尝试提取基本名称
-      const baseName = path.basename(editor);
-      console.log(chalk.yellow(`\n[Security] Editor path sanitized: ${baseName}`));
-      editor = baseName;
-    }
-
-    console.log(chalk.dim(`\n[Opening editor: ${editor}]`));
-
-    // Windows notepad special hint - Windows notepad 特殊提示
-    const isWindowsNotepad = process.platform === 'win32' &&
-      (editor.toLowerCase() === 'notepad' || editor.toLowerCase() === 'notepad.exe');
-
-    if (isWindowsNotepad) {
-      console.log(chalk.dim('Note: Please close Notepad manually after editing to continue.\n'));
-    } else {
-      console.log(chalk.dim('Save and close the editor to continue...\n'));
-    }
-
-    // Use spawnSync instead of execSync - avoid shell command injection - 使用 spawnSync 代替 execSync - 避免 shell 命令注入
-    // spawnSync executes program directly, args passed as array, not parsed through shell - spawnSync 直接执行程序，参数作为数组传递，不经过 shell 解析
-    childProcess.spawnSync(editor, [tmpFile], {
-      stdio: 'inherit',
-      timeout: 300000, // 5 minutes timeout
-      shell: false,    // Explicitly disable shell - 明确禁用 shell
-    });
-
-    // Read edited content - 读取编辑后的内容
-    const content = await fs.promises.readFile(tmpFile, 'utf-8');
-    return content.trim();
-  } catch (error) {
-    const err = error instanceof Error ? error : new Error(String(error));
-    console.log(chalk.red(`\n[Editor Error] ${err.message}`));
-    return initialContent;
-  } finally {
-    // Clean up temp file - 清理临时文件
-    try {
-      await fs.promises.unlink(tmpFile);
-    } catch {
-      // Ignore cleanup errors - 忽略清理错误
-    }
-  }
-}
-
-// Detect if continuation is needed - 检测是否需要续行
-function needsContinuation(input: string): boolean {
-  // Ends with \ (continuation char) - 以 \ 结尾（续行符）
-  if (input.endsWith('\\') && !input.endsWith('\\\\')) {
-    return true;
-  }
-
-  // Detect unclosed brackets - 检测未闭合的括号
-  const openBrackets = { '(': 0, '[': 0, '{': 0 };
-  const closeBrackets = { ')': '(', ']': '[', '}': '{' };
-  let inString: string | null = null;
-
-  for (let i = 0; i < input.length; i++) {
-    const char = input[i];
-
-    // Handle strings - 处理字符串
-    if ((char === '"' || char === "'" || char === '`') && input[i - 1] !== '\\') {
-      if (inString === char) {
-        inString = null;
-      } else if (inString === null) {
-        inString = char;
-      }
-      continue;
-    }
-
-    // Don't detect brackets inside strings - 在字符串内不检测括号
-    if (inString) continue;
-
-    // Detect brackets - 检测括号
-    if (char in openBrackets) {
-      openBrackets[char as keyof typeof openBrackets]++;
-    } else if (char in closeBrackets) {
-      const openChar = closeBrackets[char as keyof typeof closeBrackets];
-      if (openChar) {
-        openBrackets[openChar as keyof typeof openBrackets]--;
-      }
-    }
-  }
-
-  // Has unclosed brackets - 有未闭合的括号
-  if (Object.values(openBrackets).some(count => count > 0)) {
-    return true;
-  }
-
-  // Has unclosed string - 有未闭合的字符串
-  if (inString) {
-    return true;
-  }
-
-  return false;
-}
-
-// Process special syntax - 处理特殊语法
 export async function processSpecialSyntax(input: string): Promise<string> {
-  // @file syntax: add file content to context - @file 语法：添加文件内容到上下文
+  // @path syntax: attach image artifacts to context - @path 语法：将图片工件附加到上下文
   const fileRefs = input.match(/@[\w./-]+/g);
   if (fileRefs) {
     for (const ref of fileRefs) {
@@ -1253,32 +1894,88 @@ export async function processSpecialSyntax(input: string): Promise<string> {
 }
 
 // Run one round of Agent - 运行一轮 Agent
+// FEATURE_246 (P1 review): concise console progress for the model-launched
+// run_workflow path. The Ink UI renders a live work-strip; the plain console REPL
+// just prints start / finish (and any runtime-surfaced message) so an inline
+// workflow is not an opaque long tool call. Stateless — one line per event, and
+// only on the events worth surfacing (no per-agent spam).
+function renderInlineWorkflowProcessLine(event: WorkflowProcessEvent): string | undefined {
+  const s = event.snapshot;
+  if (event.type === 'workflow_started') {
+    return chalk.dim(`\n▶ workflow ${s.workflowName} started (${s.runId})`);
+  }
+  if (event.type === 'workflow_finished') {
+    const mark = s.status === 'completed' ? chalk.green('✓')
+      : s.status === 'failed' ? chalk.red('✗')
+      : chalk.yellow('•');
+    const summary = s.resultSummary ? ` — ${s.resultSummary.split('\n')[0]}` : '';
+    return `${mark} workflow ${s.workflowName} ${s.status}${summary}`;
+  }
+  if (event.type === 'workflow_updated' && event.message) {
+    return chalk.dim(`  ${event.message}`);
+  }
+  return undefined;
+}
+
 async function runAgentRound(
   options: KodaXOptions,
   context: InteractiveContext,
   prompt: string,
-  initialMessages: KodaXMessage[] = context.messages
+  initialMessages: KodaXMessage[] = context.messages,
+  inputArtifacts?: readonly KodaXInputArtifact[],
+  runtimeRunner?: ReplRuntimeRunner,
+  permissionMode: PermissionMode = 'accept-edits',
 ): Promise<KodaXResult> {
   // Create event callbacks - 创建事件回调
-  const events = options.events ?? {};
-
-  // Pass existing conversation history for multi-turn dialogue - 传递已有的对话历史，实现多轮对话
-  return runManagedTask(
-    {
-      ...options,
-      events,
-      session: {
-        ...options.session,
-        initialMessages,  // Pass existing messages - 传递已有消息
-      },
-      context: {
-        ...options.context,
-        contextTokenSnapshot: context.contextTokenSnapshot,
-        taskSurface: 'repl',
-      },
+  const events = {
+    ...(options.events ?? {}),
+    getCostReport: costReportRef,
+    // FEATURE_246 (P1 review): surface inline run_workflow progress in the console.
+    onWorkflowProcessEvent: (event: WorkflowProcessEvent) => {
+      const line = renderInlineWorkflowProcessLine(event);
+      if (line) console.log(line);
     },
-    prompt
-  );
+    // ADR-049: print each workflow child agent's completion digest so the
+    // console REPL keeps the same scrollback record the Ink UI + slash path do.
+    onWorkflowAgentDigest: ({ runId, event }: KodaXWorkflowAgentDigestEvent) => {
+      const data = event.data ?? {};
+      const summary = typeof data.summary === 'string' ? data.summary : undefined;
+      const name = typeof data.name === 'string' ? data.name : undefined;
+      const locale = inferWorkflowLocaleFromParts(summary, name);
+      const digest = formatWorkflowAgentDigest(event, locale, runId);
+      if (digest) console.log(`\n${digest}\n`);
+    },
+  };
+
+  syncClassicCliSkillsPrompt(context.gitRoot, options);
+
+  const runOptions: KodaXOptions = {
+    ...options,
+    events,
+    session: {
+      ...options.session,
+      initialExtensionState: context.extensionState ?? {},
+      initialExtensionRecords: context.extensionRecords ?? [],
+      initialMessages,
+    },
+    context: {
+      ...options.context,
+      contextTokenSnapshot: context.contextTokenSnapshot,
+      taskSurface: 'repl',
+      ...(inputArtifacts && inputArtifacts.length > 0
+        ? { inputArtifacts: [...inputArtifacts] }
+        : {}),
+    },
+  };
+  if (runtimeRunner) {
+    return runtimeRunner({
+      options: runOptions,
+      prompt,
+      sessionId: context.sessionId,
+      permissionMode,
+    });
+  }
+  return runManagedTask(runOptions, prompt);
 }
 
 // Extract title from messages - 从消息中提取标题
@@ -1287,58 +1984,8 @@ function extractTitle(messages: KodaXMessage[]): string {
 }
 
 // Print startup Banner (using theme colors) - 打印启动 Banner (使用主题颜色)
-function printStartupBanner(config: CurrentConfig, mode: string, compactionInfo?: { contextWindow: number; triggerPercent: number; enabled: boolean }, agentsFiles?: AgentsFile[]): void {
-  const theme = getCurrentTheme();
-  const model = config.model ?? getProviderModel(config.provider) ?? config.provider;
+// FEATURE_200 Phase E: readline/input helpers extracted to ./readline-helpers.ts.
+import { getPrompt, askInput, openExternalEditor, needsContinuation } from './readline-helpers.js';
 
-  // KODAX block character logo - KODAX 方块字符 logo
-  const logo = `
-  ██╗  ██╗  ██████╗  ██████╗    █████╗   ██╗  ██╗
-  ██║ ██╔╝ ██╔═══██╗ ██╔══██╗  ██╔══██╗  ╚██╗██╔╝
-  █████╔╝  ██║   ██║ ██║  ██║  ███████║   ╚███╔╝
-  ██╔═██╗  ██║   ██║ ██║  ██║  ██╔══██║   ██╔██╗
-  ██║  ██╗ ╚██████╔╝ ██████╔╝  ██║  ██║  ██╔╝ ██╗
-  ╚═╝  ╚═╝  ╚═════╝  ╚═════╝   ╚═╝  ╚═╝  ╚═╝  ╚═╝`;
-
-  console.log(chalk.hex(theme.colors.primary)('\n' + logo));
-  console.log(chalk.hex(theme.colors.text)(`\n  v${KODAX_VERSION}  |  AI Coding Agent  |  ${config.provider}:${model}`));
-  console.log(chalk.hex(theme.colors.dim)('\n  ────────────────────────────────────────────────────────'));
-  console.log(
-    chalk.hex(theme.colors.dim)('  Mode: ') +
-    chalk.hex(theme.colors.primary)(mode) +
-    chalk.hex(theme.colors.dim)('  |  Reasoning: ') +
-    (config.reasoningMode === 'off'
-      ? chalk.hex(theme.colors.dim)('off')
-      : chalk.hex(theme.colors.success)(config.reasoningMode)) +
-    chalk.hex(theme.colors.dim)('  |  Execution: ') +
-    (config.parallel
-      ? chalk.hex(theme.colors.success)('parallel')
-      : chalk.hex(theme.colors.dim)('sequential'))
-  );
-
-  // Compaction info
-  if (compactionInfo) {
-    const ctxK = Math.round(compactionInfo.contextWindow / 1000);
-    const triggerK = Math.round(compactionInfo.contextWindow * compactionInfo.triggerPercent / 100 / 1000);
-    const statusText = compactionInfo.enabled ? chalk.hex(theme.colors.success)('on') : chalk.hex(theme.colors.dim)('off');
-    console.log(chalk.hex(theme.colors.dim)(`  Context: ${ctxK}k  |  Compaction: `) + statusText + chalk.hex(theme.colors.dim)(` @ ${compactionInfo.triggerPercent}% (${triggerK}k)`));
-  }
-
-  console.log(chalk.hex(theme.colors.dim)('  ────────────────────────────────────────────────────────\n'));
-
-  // Show AGENTS.md loading status
-  if (agentsFiles) {
-    const totalFiles = agentsFiles.length;
-    console.log(chalk.hex(theme.colors.dim)('  Project Rules: ') + chalk.hex(theme.colors.success)(`${totalFiles} rule file(s) loaded`));
-    console.log(chalk.hex(theme.colors.dim)('  Use /reload to refresh rules\n'));
-  }
-
-  console.log(chalk.hex(theme.colors.dim)('  Quick tips:'));
-  console.log(chalk.hex(theme.colors.primary)('    /help      ') + chalk.hex(theme.colors.dim)('Show all commands'));
-  console.log(chalk.hex(theme.colors.primary)('    /mode      ') + chalk.hex(theme.colors.dim)('Switch permission mode'));
-  console.log(chalk.hex(theme.colors.primary)('    /parallel  ') + chalk.hex(theme.colors.dim)('Toggle parallel tool execution'));
-  console.log(chalk.hex(theme.colors.primary)('    /clear     ') + chalk.hex(theme.colors.dim)('Clear conversation'));
-  console.log(chalk.hex(theme.colors.primary)('    @file      ') + chalk.hex(theme.colors.dim)('Add file to context'));
-  console.log(chalk.hex(theme.colors.primary)('    !cmd       ') + chalk.hex(theme.colors.dim)('Run read-only shell command'));
-  console.log(chalk.hex(theme.colors.dim)('\n  Keyboard: Tab (complete) | Esc+Esc (edit last) | Ctrl+T (reasoning) | Ctrl+E (editor) | Ctrl+R (history)\n'));
-}
+// FEATURE_200 Phase E: startup banner extracted to ./startup-banner.ts.
+import { printStartupBanner, printWorkspaceEntryNotice } from './startup-banner.js';

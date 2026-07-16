@@ -1,13 +1,14 @@
 /**
- * TextInput - Multi-line text input component - 多行文本输入组件
+ * TextInput - Multi-line text input component.
  *
- * Display text content and render cursor - 显示文本内容并渲染光标
+ * Display text content and render cursor.
  */
 
-import React, { useMemo, useState, useEffect } from "react";
-import { Text, Box, useStdout } from "ink";
+import React, { useMemo } from "react";
+import { Text, Box, useTerminalSize } from "../tui.js";
 import stringWidth from "string-width";
 import { getTheme } from "../themes/index.js";
+import type { PromptEditingMode } from "../types.js";
 import {
   calculateVisualLayout,
   calculateVisualCursorFromLayout,
@@ -22,50 +23,24 @@ export interface TextInputProps {
   prompt?: string;
   placeholder?: string;
   focus?: boolean;
+  terminalFocused?: boolean;
+  isPasting?: boolean;
+  editingMode?: PromptEditingMode;
   theme?: string;
   width?: number;
 }
 
 /**
- * Maximum divider width (prevent performance issues with very wide terminals) - 分隔线最大宽度（防止超宽终端性能问题）
- */
-const MAX_DIVIDER_WIDTH = 200;
-
-/**
- * Generate divider line - 生成分隔线
- */
-function generateDivider(width: number): string {
-  const safeWidth = Math.min(MAX_DIVIDER_WIDTH, Math.max(1, width));
-  return "-".repeat(safeWidth);
-}
-
-/**
- * Hook to get terminal width - 获取终端宽度的 Hook
+ * Hook to get terminal width via the renderer-owned terminal size context.
+ *
+ * FEATURE_057 Track E: previously this hook subscribed to `process.stdout`
+ * directly, bypassing the substrate's owned stdout. With Track E ownership
+ * purification, all terminal-size reads go through `useTerminalSize`, which
+ * resolves the renderer's owned stdout and tracks resize via the listener
+ * mounted by `TuiRuntimeProvider` at runtime mount.
  */
 function useTerminalWidth(): number {
-  const { stdout } = useStdout();
-  const [width, setWidth] = useState(() => {
-    // Use stdout or process.stdout on initialization - 初始化时使用 stdout 或 process.stdout
-    return stdout?.columns ?? process.stdout?.columns ?? 80;
-  });
-
-  useEffect(() => {
-    const handleResize = () => {
-      // Use process.stdout.columns instead of stdout in closure
-      // because closure value may be stale - 使用 process.stdout.columns 而非闭包中的 stdout，因为闭包中的值可能过时
-      const newWidth = process.stdout?.columns ?? stdout?.columns ?? 80;
-      setWidth(newWidth);
-    };
-
-    // Listen for terminal resize events - 监听终端 resize 事件
-    process.stdout?.on("resize", handleResize);
-
-    return () => {
-      process.stdout?.off("resize", handleResize);
-    };
-  }, [stdout]);
-
-  return width;
+  return useTerminalSize().columns;
 }
 
 export const TextInput: React.FC<TextInputProps> = ({
@@ -75,18 +50,23 @@ export const TextInput: React.FC<TextInputProps> = ({
   prompt = ">",
   placeholder = "Type your message...",
   focus = true,
+  terminalFocused = true,
+  isPasting = false,
+  editingMode = "idle",
   theme: themeName = "dark",
   width: propWidth,
 }) => {
   const theme = useMemo(() => getTheme(themeName), [themeName]);
-  const terminalWidth = propWidth ?? useTerminalWidth();
+  // Always invoke the hook (React rules of hooks): the short-circuit form
+  // `propWidth ?? useTerminalWidth()` would skip the hook when `propWidth`
+  // is supplied, breaking React's hook-order invariant if a single instance
+  // toggles between supplying / not supplying `width`.
+  const contextTerminalWidth = useTerminalWidth();
+  const terminalWidth = propWidth ?? contextTerminalWidth;
 
-  // Calculate prompt width (for alignment) - 计算提示符宽度（用于对齐）
-  const promptWidth = stringWidth(prompt) + 1; // +1 for space
+  const promptWidth = stringWidth(prompt) + 1;
 
-  // Calculate visual layout for wrapping - 计算视觉布局用于换行
   const visualLayout = useMemo(() => {
-    // Calculate available width for text (excluding prompt) - 计算文本可用宽度（排除提示符）
     const availableWidth = Math.max(20, terminalWidth - promptWidth);
 
     return calculateVisualLayout(
@@ -97,7 +77,6 @@ export const TextInput: React.FC<TextInputProps> = ({
     );
   }, [lines, terminalWidth, cursorRow, cursorCol, promptWidth]);
 
-  // Calculate visual cursor position - 计算视觉光标位置
   const visualCursor = useMemo(() => {
     if (!visualLayout) return null;
 
@@ -108,26 +87,41 @@ export const TextInput: React.FC<TextInputProps> = ({
     return { row: visualRow, col: visualCol };
   }, [visualLayout, cursorRow, cursorCol]);
 
-  // Use visual layout rendering for all input (including empty and single-line) - 所有输入使用视觉布局渲染（包括空输入和单行）
-  const divider = generateDivider(terminalWidth);
+  const showCursor = focus && terminalFocused;
+  const pasteHintVisible = isPasting && lines.some((line) => line.length > 0);
 
-  // TypeScript non-null assertion: visualLayout and visualCursor are  // TypeScript 非空断言：visualLayout 和 visualCursor 保证非空
   const layout = visualLayout!;
   const vCursor = visualCursor!;
 
+  // Mirrors claudecode/src/components/PromptInput/PromptInput.tsx:2268 —
+  // Ink's built-in `borderStyle` + `borderTop`/`borderBottom` lets Yoga
+  // compute the border width from the box's resolved layout, so the rule
+  // always reaches the right edge. The hand-rolled `"-".repeat(columns)`
+  // path it replaces was capped + relied on implicit-stretch alignItems
+  // (Yoga C++ default), neither of which held under wide terminals.
   return (
-    <Box flexDirection="column" width={propWidth}>
-      {/* Top divider - 顶部分隔线 */}
-      <Text dimColor>{divider}</Text>
+    <Box
+      flexDirection="column"
+      borderStyle="round"
+      borderColor={theme.colors.dim}
+      borderTop
+      borderBottom
+      borderLeft={false}
+      borderRight={false}
+      width={propWidth ?? "100%"}
+    >
+      {pasteHintVisible ? (
+        <Box>
+          <Text dimColor>{editingMode === "pasting" ? "Pasting input..." : "Editing input..."}</Text>
+        </Box>
+      ) : null}
 
-      {/* Content lines - 内容行 */}
       {layout.visualLines.length === 0 || (layout.visualLines.length === 1 && layout.visualLines[0] === "") ? (
-        // Empty input - show placeholder and cursor - 空输入 - 显示占位符和光标
         <Box>
           <Text color={theme.colors.primary}>{prompt} </Text>
-          {focus ? (
+          {showCursor ? (
             <>
-              <Text backgroundColor={theme.colors.primary} color="#000000"> </Text>
+              <Text internal_cursorAnchor backgroundColor={theme.colors.primary} color="#000000"> </Text>
               <Text dimColor>{placeholder}</Text>
             </>
           ) : (
@@ -139,8 +133,7 @@ export const TextInput: React.FC<TextInputProps> = ({
           const isCurrentVisualLine = visualRowIndex === vCursor.row;
           const linePrompt = visualRowIndex === 0 ? prompt : " ".repeat(promptWidth - 1);
 
-          // Current line needs to show cursor - 当前行需要显示光标
-          if (isCurrentVisualLine && focus) {
+          if (isCurrentVisualLine && showCursor) {
             const { before, current, after } = splitAtVisualColumn(visualLine, vCursor.col);
             const cursorChar = current || " ";
 
@@ -148,7 +141,7 @@ export const TextInput: React.FC<TextInputProps> = ({
               <Box key={visualRowIndex}>
                 <Text color={theme.colors.primary}>{linePrompt} </Text>
                 <Text color={theme.colors.text}>{before}</Text>
-                <Text backgroundColor={theme.colors.primary} color="#000000">
+                <Text internal_cursorAnchor backgroundColor={theme.colors.primary} color="#000000">
                   {cursorChar}
                 </Text>
                 <Text color={theme.colors.text}>{after}</Text>
@@ -156,7 +149,6 @@ export const TextInput: React.FC<TextInputProps> = ({
             );
           }
 
-          // Non-current line - 非当前行
           return (
             <Box key={visualRowIndex}>
               <Text color={theme.colors.dim}>{linePrompt} </Text>
@@ -165,15 +157,12 @@ export const TextInput: React.FC<TextInputProps> = ({
           );
         })
       )}
-
-      {/* Bottom divider - 底部分隔线 */}
-      <Text dimColor>{divider}</Text>
     </Box>
   );
 };
 
 /**
- * Single-line TextInput (simplified version) - 单行 TextInput（简化版）
+ * Single-line TextInput (simplified version).
  */
 export const SingleLineTextInput: React.FC<{
   value: string;

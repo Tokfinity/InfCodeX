@@ -5,14 +5,15 @@
  * Following Gemini CLI's StreamingContext architecture.
  */
 
-import { describe, it, expect, beforeEach, vi } from "vitest";
-import { StreamingState } from "@kodax/repl";
+import { describe, it, expect, beforeEach, afterEach, vi } from "vitest";
+import { _resetMessageQueueForTests } from "@kodax-ai/agent";
+import { StreamingState } from "@kodax-ai/repl";
 import {
   type StreamingContextValue,
   type StreamingActions,
   createStreamingManager,
   type StreamingManager,
-} from "@kodax/repl";
+} from "@kodax-ai/repl";
 
 // === Tests ===
 
@@ -36,7 +37,16 @@ describe("StreamingManager", () => {
   let manager: StreamingManager;
 
   beforeEach(() => {
+    // FEATURE_159 (v0.7.40): createStreamingManager seeds from the
+    // process-global MessageQueue. Reset between cases so addPendingInput
+    // from a prior test doesn't leak into the next manager's initial state.
+    _resetMessageQueueForTests();
     manager = createStreamingManager();
+  });
+
+  afterEach(() => {
+    manager.dispose();
+    _resetMessageQueueForTests();
   });
 
   describe("initial state", () => {
@@ -447,7 +457,13 @@ describe("StreamingManager - Thinking Feature", () => {
   let manager: StreamingManager;
 
   beforeEach(() => {
+    _resetMessageQueueForTests();
     manager = createStreamingManager();
+  });
+
+  afterEach(() => {
+    manager.dispose();
+    _resetMessageQueueForTests();
   });
 
   describe("initial thinking state", () => {
@@ -491,24 +507,47 @@ describe("StreamingManager - Thinking Feature", () => {
   });
 
   describe("appendThinkingChars", () => {
-    it("should increment thinking char count", () => {
-      manager.appendThinkingChars(10);
-      expect(manager.getState().thinkingCharCount).toBe(10);
-
-      manager.appendThinkingChars(5);
-      expect(manager.getState().thinkingCharCount).toBe(15);
+    // appendThinkingChars is batched (same flush window as thinking/response
+    // text) to reduce setState churn during streaming. Tests use fake timers
+    // to advance past the flush interval before asserting.
+    it("should increment thinking char count after flush", () => {
+      vi.useFakeTimers();
+      try {
+        const m = createStreamingManager();
+        m.appendThinkingChars(10);
+        m.appendThinkingChars(5);
+        vi.advanceTimersByTime(100);
+        expect(m.getState().thinkingCharCount).toBe(15);
+      } finally {
+        vi.useRealTimers();
+      }
     });
 
-    it("should set isThinking to true", () => {
-      manager.appendThinkingChars(1);
-      expect(manager.getState().isThinking).toBe(true);
+    it("should set isThinking to true after flush", () => {
+      vi.useFakeTimers();
+      try {
+        const m = createStreamingManager();
+        m.appendThinkingChars(1);
+        vi.advanceTimersByTime(100);
+        expect(m.getState().isThinking).toBe(true);
+        expect(m.getState().thinkingCharCount).toBe(1);
+      } finally {
+        vi.useRealTimers();
+      }
     });
 
-    it("should notify listeners", () => {
-      const listener = vi.fn();
-      manager.subscribe(listener);
-      manager.appendThinkingChars(100);
-      expect(listener).toHaveBeenCalled();
+    it("should notify listeners after flush", () => {
+      vi.useFakeTimers();
+      try {
+        const m = createStreamingManager();
+        const listener = vi.fn();
+        m.subscribe(listener);
+        m.appendThinkingChars(100);
+        vi.advanceTimersByTime(100);
+        expect(listener).toHaveBeenCalled();
+      } finally {
+        vi.useRealTimers();
+      }
     });
   });
 
@@ -653,7 +692,13 @@ describe("StreamingManager - Tool Feature", () => {
   let manager: StreamingManager;
 
   beforeEach(() => {
+    _resetMessageQueueForTests();
     manager = createStreamingManager();
+  });
+
+  afterEach(() => {
+    manager.dispose();
+    _resetMessageQueueForTests();
   });
 
   describe("initial tool state", () => {

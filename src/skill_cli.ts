@@ -1,7 +1,12 @@
 import path from 'path';
 import { pathToFileURL } from 'url';
 import { spawn } from 'child_process';
-import { getDefaultSkillPaths } from '@kodax/skills';
+import {
+  getDefaultSkillPaths,
+  killChildProcessTreeSync,
+  prepareInternalNodeLaunch,
+  registerManagedChildProcess,
+} from '@kodax-ai/agent';
 
 export const SKILL_CREATOR_TOOLS = {
   init: 'init-skill.js',
@@ -33,12 +38,34 @@ export async function defaultSkillToolRunner(
   args: string[]
 ): Promise<number> {
   return await new Promise<number>((resolve, reject) => {
-    const child = spawn(process.execPath, [scriptPath, ...args], {
-      stdio: 'inherit',
+    const launch = prepareInternalNodeLaunch({
+      args: [scriptPath, ...args],
+      env: process.env,
+      isElectron: process.versions.electron !== undefined,
     });
+    const child = spawn(process.execPath, launch.args, {
+      stdio: 'inherit',
+      detached: process.platform !== 'win32',
+      env: launch.env,
+    });
+    const unregisterManagedChild = registerManagedChildProcess(child, {
+      kind: 'skill-cli',
+      command: process.execPath,
+      args: [scriptPath, ...args],
+    });
+    const cleanupOnProcessExit = (): void => killChildProcessTreeSync(child);
+    process.once('exit', cleanupOnProcessExit);
+    const cleanup = (): void => {
+      process.off('exit', cleanupOnProcessExit);
+      unregisterManagedChild();
+    };
 
-    child.once('error', reject);
+    child.once('error', (error) => {
+      cleanup();
+      reject(error);
+    });
     child.once('exit', (code) => {
+      cleanup();
       resolve(code ?? 1);
     });
   });

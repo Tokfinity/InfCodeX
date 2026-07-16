@@ -1,459 +1,378 @@
-# KodaX 高层设计（HLD）
+# KodaX High-Level Design
 
-> Last updated: 2026-03-29
+> Last updated: 2026-07-16
 >
-> 这份文档描述 `FEATURE_022` 当前已经落地的高层架构：
-> KodaX 现在是一个以 `task` 为中心、强调“极简且智能”的执行引擎。
+> Current release baseline: `@kodax-ai/kodax@0.7.71` release candidate
+>
+> This HLD is intentionally current-state only. The old pre-v0.7.43
+> chain/harness model has been removed from this active design document because
+> it no longer describes the runtime.
 
-## 中文导读
+## 1. System Overview
 
-阅读这份 HLD 时，可以先抓住 6 个核心判断：
-
-1. `SA` 与 `AMA` 是用户可见的执行模式，但不是两套完全独立的产品。
-2. `SA` 完全不走 AMA；它是单 agent 直接执行路径。
-3. `AMA` 只保留 `H0 / H1 / H2` 三层；`H3` 已移除。
-4. `Scout` 是 pre-harness 角色，只负责判断/牵引，不属于 H2 主 graph。
-5. `H2` 的核心骨架固定为 `Planner -> Generator <-> Evaluator`。
-6. `Work` 是用户可见的主预算语义；`Round` 只在真实额外 pass 存在时出现。
-7. `Project` 与 `SA / AMA` 是正交维度；`Project + SA` 是一等路径，但只写 lightweight run record，不写 managed task。
-
----
-
-## 1. 产品主张
-
-KodaX 不应再被理解为：
-
-- 一个要求用户先切 mode 再提问的 CLI
-- 一个把多智能体默认做成“角色越多越稳”的系统
-- 一个把 `Project Mode` 当作唯一长流程入口的产品
-
-当前更准确的理解应该是：
-
-- 一个 single-agent first 的 `task engine`
-- 一个在必要时才升级到 coordinated harness 的执行系统
-- 一个以 `evidence`、`contract`、`verdict` 为核心真相面的 runtime
-- 一个能跨 CLI / REPL / ACP 复用的 headless substrate
-
-对应的用户体验目标是：
-
-- 简单问题要像单 agent 一样直接完成
-- 复杂问题才逐步增加 planning / verification ceremony
-- 用户默认只感知结果与必要进度，不需要先理解内部角色图
-
----
-
-## 2. 设计目标与非目标
-
-### 2.1 核心目标
-
-1. 默认把复杂度判断隐藏在系统内部，不要求用户先选 mode。
-2. 让简单任务保持直接、快速、低 ceremony。
-3. 让复杂任务在升级后有清晰的 contract / evidence / verdict 结构。
-4. 让 skill 能进入 AMA，但不污染所有角色。
-5. 让 tool / budget / verification 的关键过程对用户可见，但不喧宾夺主。
-
-### 2.2 非目标
-
-1. 不再保留 `H3_MULTI_WORKER` 这种默认并行层级。
-2. 不再把 `Lead / Admission / Contract Reviewer` 当作主骨架。
-3. 不把 skill 做成独立于 task engine 的第二套 orchestrator。
-4. 不把内部 worker iter 暴露成用户可见的主进度语义。
-
----
-
-## 3. 系统概览
+KodaX is a TypeScript monorepo published as one npm package with multiple SDK
+subpaths. Source code is organized into four workspace packages:
 
 ```text
-Surfaces
-  -> Intent Gate / Direct Path
-    -> Scout (pre-harness only)
-      -> AMA Control Plane
-        -> Coding Runtime and Capability Substrate
-          -> Provider / Tool / Skill Adapters
-            -> Durable Task State and Evidence Store
+packages/
+  llm/      provider abstraction, streaming, capability metadata
+  agent/    generic Agent/Runner, orchestration, skills, MCP, tracing, workflow
+  coding/   coding-agent preset, tools, prompts, sessions, workflows
+  repl/     Ink terminal UI, config, commands, session management surface
+src/        CLI entry point and binary-facing bootstrap
+clients/    optional external clients and protocol adapters
+benchmark/  eval harness, datasets, and prompt-change rules
 ```
 
-### 3.1 Surfaces
+The published package is `@kodax-ai/kodax`. It exposes the root API plus eleven
+SDK subpaths: `/agent`, `/llm`, `/coding`, `/media`, `/repl`, `/skills`,
+`/mcp`, `/session`, `/runtime`, `/a2a`, and `/experimental-memory`.
 
-用户或宿主的入口包括：
-
-- CLI one-shot
-- interactive REPL
-- ACP server
-- future IDE / desktop / web surfaces
-
-这些表面只负责收集输入、显示状态、触发审批、展示结果，不拥有任务逻辑。
-
-### 3.2 Intent Gate 与 Direct Path
-
-每个请求都会先经过极轻的 intent gate：
-
-- `conversation`
-- `lookup`
-- 明显轻量解释/导航问答
-
-命中的请求直接走 `H0_DIRECT` 或 `SA` direct path，不读 dirty repo，不起 managed ceremony。
-
-### 3.3 Scout
-
-`Scout` 是 pre-harness 单 agent 牵引层。
-
-它的职责是：
-
-- 判断任务是否 actionable
-- 判断是否值得进入 `H1 / H2`
-- 收集 `scope facts`
-- 最多少量补 `overview evidence`
-- 如果 skill 被激活，则读取完整 expanded skill 并生成 `skill-map`
-
-它**不是** H2 内的长期角色。
-
-### 3.4 AMA Control Plane
-
-AMA 当前只保留 3 个执行层级：
-
-| Profile | Typical task | Shape |
-|---|---|---|
-| `H0_DIRECT` | 对话、lookup、极轻说明 | direct |
-| `H1_EXECUTE_EVAL` | 中低风险但值得独立检查的任务 | checked-direct |
-| `H2_PLAN_EXECUTE_EVAL` | 需要 contract、deep evidence、独立验收的复杂任务 | coordinated |
-
-`H3_MULTI_WORKER` 已被移除。
-
-### 3.5 Coding Runtime and Capability Substrate
-
-这层提供：
-
-- prompt building
-- tool execution
-- skill invocation
-- session handling
-- checkpoint / artifact plumbing
-- verification and evidence capture
-
-它保持 headless，供多个 surface 复用。
-
-### 3.6 Durable Task State
-
-所有非平凡 managed task 都有持久化事实面，例如：
-
-- `managed-task.json`
-- `contract.json`
-- `round-history.json`
-- `budget.json`
-- `runtime-contract.json`
-- `scorecard.json`
-- `skill-execution.md`
-- `skill-map.json`
-- `skill-map.md`
-
----
-
-## 4. 执行形态
-
-### 4.1 SA
-
-`SA` = 单 agent 直接执行。
-
-关键约束：
-
-- 完全脱离 AMA
-- 不走 Scout
-- 不创建 managed worker graph
-- 不暴露 AMA breadcrumb / round / budget ceremony
-
-如果 skill 被触发，`SA` 直接消费完整 expanded skill。
-
-### 4.2 AMA H0
-
-`AMA-H0` 用于：
-
-- conversation
-- lookup
-- 明显轻量问答
-- Scout 调研后确认可直接收口的任务
-
-它仍是 direct path，不做独立 evaluator。
-
-### 4.3 AMA H1
-
-`AMA-H1` 是 checked-direct：
-
-- 一个主执行者完成任务
-- 结尾允许一个轻量 `Evaluator` 做 post-hoc 检查
-- evaluator 只做 accept / revise / blocked
-- 最多一次同层 revise，再决定是否升级 H2
-
-### 4.4 AMA H2
-
-`AMA-H2` 是唯一完整 harness：
+## 2. Layering
 
 ```text
-Planner -> Generator <-> Evaluator
+CLI / REPL / Space / IDE / SDK / binary
+          |
+          v
+src/sdk-runtime  - optional stable host facade (inline / Worker / daemon)
+          |
+          v
+packages/coding  - KodaX coding preset and tool loop
+          |
+          v
+packages/agent   - Runner, fan-out, idle-yield, stop hooks, skills, MCP
+          |
+          v
+packages/llm     - provider registry, streaming, side queries
 ```
 
-关键原则：
+Layer rules:
 
-- `Planner` 负责 contract、风险、evidence checklist、slice plan
-- `Generator` 负责 deep evidence 与实际执行
-- `Evaluator` 负责 targeted spot-check 和最终 verdict
-- `Planner` 缺 contract 时，必须先打回 `Planner`，不能让 `Generator` 静默全仓兜底
+- `llm` has no dependency on KodaX product logic.
+- `agent` can be used without `coding`.
+- `coding` builds the coding agent on top of `agent` and `llm`.
+- `repl` depends on `coding` for the product runtime and owns terminal UX.
+- `src/sdk-runtime.ts` composes public host services over `coding`; it is a root
+  package facade, not a fifth workspace package and not a second agent engine.
+- Inline capabilities such as skills, MCP, tracing, session-lineage, memory,
+  and workflow are subtrees, not separate workspace packages.
 
----
+## 3. Runtime Shape
 
-## 5. 角色模型
-
-### 5.1 Scout
-
-职责：
-
-- 判断是否进入 harness
-- 提供 pre-harness summary
-- 生成 `skill-map`
-
-输入层级：
-
-- `scope facts`
-- 少量 `overview evidence`
-- 完整 raw skill（若 skill 被激活）
-
-### 5.2 Planner
-
-职责：
-
-- 生成 `kodax-task-contract`
-- 定义成功标准
-- 列出 required evidence / constraints
-
-输入层级：
-
-- `scope facts`
-- `overview evidence`
-- `skill-map`
-
-默认**不**读取 raw skill，也不线性翻大 diff。
-
-### 5.3 Generator
-
-职责：
-
-- 执行任务
-- 深挖证据
-- 交付 `kodax-task-handoff`
-
-输入层级：
-
-- `deep evidence`
-- 完整 raw skill
-- `skill-map`
-- planner contract
-
-### 5.4 Evaluator
-
-职责：
-
-- 检查 handoff 是否满足 contract
-- 做 targeted spot-check
-- 输出 `kodax-task-verdict`
-
-输入层级：
-
-- contract
-- generator handoff
-- `skill-map`
-- 定点 `deep evidence`
-
-它默认不读取 raw skill；只有 `projectionConfidence=low` 或 claim 冲突时才 fallback。
-
-### 5.5 Same-role summary continuity
-
-`Scout`、`Planner`、`Evaluator` 继续默认使用 `reset-handoff`，但跨轮不再完全依赖隐式 artifact continuity。
-
-当前语义：
-- 每轮结束时，为非-generator 角色写入 compact same-role summary
-- 下一轮同角色运行时，显式注入上一轮摘要
-- 不恢复这些角色的完整私有对话历史
-- `Generator` 仍是主要深度上下文消费者
-
----
-
-## 6. Skill 集成
-
-skill 不再作为“整段 prompt 平铺给所有角色”的全局上下文。
-
-当前采用：
+KodaX separates the stable Runtime service contract from deployment ownership:
 
 ```text
-skill invocation
-  -> Scout reads full expanded skill
-    -> emits skill-map
-      -> Planner consumes skill-map
-      -> Generator consumes full skill + skill-map
-      -> Evaluator consumes skill-map (+ raw fallback only when needed)
+                         same KodaXRuntime facade
+                                  |
+             +--------------------+--------------------+
+             |                    |                    |
+      embedded / inline    embedded / Worker      local daemon
+      caller JS process      MessagePort IPC      pipe / Unix socket
+      private ownership      private ownership    shared profile owner
+             |                    |                    |
+             +--------------------+--------------------+
+                                  |
+                          packages/coding engine
 ```
 
-`skill-map` 至少包含：
+Inline is the compatibility and lowest-latency default. Worker isolation keeps
+one private Runtime in a disposable V8 Worker and reuses the daemon protocol
+dispatcher/client over `MessagePort`. Daemon mode owns the same embedded Runtime
+in a detached OS process and allows multiple REPL, Space, IDE, or SDK clients to
+share sessions, runs, permissions, events, config, MCP, and catalogs.
 
-- `skillSummary`
-- `executionObligations`
-- `verificationObligations`
-- `requiredEvidence`
-- `ambiguities`
-- `projectionConfidence`
-- `allowedTools / hooks / model / context`
+Daemon uniqueness is scoped by `homeDir + profile`. An atomic owner lock,
+persisted PID/endpoint/token/runtime identity, and health handshake make
+concurrent starters converge. Client `close()` detaches; explicit daemon stop
+ends the shared owner. Restart marks persisted non-terminal runs interrupted;
+clients reconnect explicitly and KodaX does not pretend to resume an unknown
+in-flight provider/tool operation.
 
-这保证了：
+Packaged Electron daemon auto-start uses the application executable only as a
+bootstrap Node host. A preloaded scrub import removes `ELECTRON_RUN_AS_NODE`
+before daemon application code loads, so ordinary children do not inherit it.
+This requires Electron's default-enabled `RunAsNode` fuse; fuse-disabled hosts
+must start an ordinary Node/CLI daemon and attach to it.
 
-- `Planner` 不被完整 workflow 污染
-- `Generator` 仍能按 skill 执行
-- `Evaluator` 保持独立性
+Shared Coder daemon control is fact-based rather than connection-owned. One
+atomic `sessions.observe` call returns the authoritative transcript/settings/
+run/interaction projection and installs the post-snapshot event stream without
+a gap. Mutations carry daemon-epoch operation identities, same-session runs
+receive stable order, and settings/persistent grants use revision CAS. The
+durable control journal never replays an operation whose external effect may
+already have started. Runtime restart changes `runtimeId`; queued work becomes
+interrupted with no effect, while active external work is explicitly unknown.
+The packaged transport authenticates a single local OS-user/profile trust
+domain with a random profile token and user-only pipe/socket access. Host-
+granted scopes gate RPC families; stable client instance IDs provide
+attribution and retry binding, not independent authentication. Per-application
+credentials between mutually distrusting same-user processes are not part of
+the current local-daemon contract.
 
----
+Space-only integration stays behind two narrow reverse bridges. A keychain
+broker supplies a provider/run-scoped credential directly into an in-memory
+provider context; a Host Tool lease injects only the explicitly bound run's
+capabilities. Both registrations are authenticated-client/connection owned,
+never ambient profile capability. Dispatched Host Tool calls are never blindly
+replayed. Daemon and inline Coder share one owner policy fence, including a
+sticky inline rollback mode. Partner remains a private inline Runtime with a
+distinct product data namespace and does not participate in the Coder fence.
 
-## 7. 证据分层
+Worker and daemon calls cross a typed DTO boundary. Process-local callbacks,
+class instances, `AbortSignal`, cyclic values, and extension runtime objects do
+not silently cross or execute in the client. Runtime methods bridge abort,
+events, permissions, artifacts, config, and owner-loaded extensions instead.
 
-AMA 现在显式区分三层证据：
+The main coding path is:
 
-### 7.1 Scope facts
+```text
+user input
+  -> CLI / REPL / SDK adapter
+  -> KodaXOptions
+  -> Runner.run(createDefaultCodingAgent(), prompt, presetOptions)
+  -> coding substrate
+  -> provider stream + tool loop
+  -> Sidecar Verifier stop hook when Worker text-finishes
+  -> KodaXResult + session updates + UI/events
+```
 
-- changed files / lines / modules
-- task family / risk / reviewScale
-- repo spread and scope hints
+The Worker single-loop is the only current main-agent execution shape. The
+Worker plans, reads, edits, tests, dispatches children, and writes the final
+answer. Sidecar Verifier is out-of-band and only judges termination quality.
 
-### 7.2 Overview evidence
+## 4. Provider Architecture
 
-- `changed_diff_bundle`
-- 高优先文件概览
-- 关键类型 / 入口 / 测试变化摘要
+`packages/llm` provides:
 
-### 7.3 Deep evidence
+- 15 built-in provider aliases,
+- custom provider registration,
+- OpenAI- and Anthropic-compatible protocols,
+- CLI bridge providers for Gemini CLI and Codex CLI,
+- stream normalization,
+- effort-first reasoning and request-timeout config normalization,
+- capability metadata and provider policy gates,
+- side-query support for verifier and other out-of-band LLM calls.
 
-- `changed_diff`
-- `read`
-- 逐条 claim 验证
-- 必要测试 / 检查
+Provider-specific logic belongs at the provider boundary: request shape,
+reasoning parameters, token caps, image support, forced tool choice support,
+retry behavior, and stream watchdogs. Prompt prose should not fork by provider
+family.
 
-角色消费规则：
+## 5. Coding Runtime
 
-- `Scout`: scope facts + 少量 overview
-- `Planner`: scope facts + overview
-- `Generator`: deep evidence
-- `Evaluator`: contract/handoff + targeted deep evidence
+`packages/coding` owns KodaX-specific agent behavior:
 
-### 7.4 Project surface 与执行拓扑
+- `runKodaX` and `KodaXClient`,
+- default coding agent declaration,
+- coding substrate and run loop,
+- 50+ built-in tools from `tools/tool-definitions.ts`,
+- Worker prompts and capability sections,
+- permission and auto-mode integration,
+- built-in full/light repo-intelligence context and semantic worker wiring,
+- sidecar verifier integration,
+- session snapshots and runtime state,
+- construction and self-modification tools,
+- workflow backend integration.
 
-`Project` 描述任务语境；`SA / AMA` 描述执行拓扑。
+The coding runtime is the only layer that knows about KodaX's coding-product
+tool bundle and user-facing task semantics.
 
-合法组合包括：
-- `repl + sa`
-- `repl + ama`
-- `project + sa`
-- `project + ama`
+Generated constructed handlers are a narrower coding-layer isolation case.
+Each active handler runs in a persistent Worker, while `ctx.tools.*` calls
+return to the host through reverse RPC and still traverse capability,
+plan-mode, recursion-depth, permission, tool-registry, truncation, and OS
+sandbox checks. Handler Workers are fault boundaries, not security sandboxes.
 
-其中：
-- `Project + AMA` = project-aware managed execution
-- `Project + SA` = project-aware direct execution
+## 6. Tool And Control Plane
 
-`Project + SA` 不进入 managed-task graph，也不伪装成 mini-AMA；但会写一份 lightweight run record，用于：
-- `/project status`
-- latest execution summary
-- 推荐下一步
+Tools are data-defined and handler-backed. Each tool declares name, description,
+JSON schema, side-effect class, handler, and optional classifier projection.
+Major tool families include:
 
----
+- file operations: `read`, `write`, `edit`, `multi_edit`, `insert_after_anchor`,
+  `undo`;
+- execution and search: `bash`, `glob`, `grep`, web search/fetch, code search,
+  semantic lookup, LSP navigation;
+- repo intelligence: overview, changed scope, diff bundles, module/symbol/
+  process context, impact estimates, cyclic dependency checks;
+- coordination: `dispatch_child_task`, `send_message`, `task_stop`,
+  `task_output`;
+- product state: goals, todos, sessions, manual lookup;
+- extension capabilities: MCP calls, MCP resources, MCP prompts;
+- construction: tool generation, agent generation, self-modify staging.
 
-## 8. 用户可见语义
+Permission modes and auto-mode guardrails must operate on tool side effects and
+runtime context, not on prompt-only convention.
 
-### 8.1 Budget
+## 7. Child Tasks
 
-用户默认看到的主预算语义是：
+Child work is explicit and tool-driven. The main Worker can dispatch a child,
+send it follow-up messages, stop it, and inspect output. Idle-yield is the
+canonical waiting behavior when useful main work is exhausted and child tasks
+remain in flight.
 
-- `Work used/total`
+Children are a coordination primitive, not a replacement for the main Worker.
+The main Worker owns final synthesis and user communication.
 
-初始预算：
+## 8. Sessions
 
-- AMA 默认从 `Work x/200` 开始
+KodaX sessions are local JSONL records with branchable lineage. Session
+requirements span both product and SDK:
 
-当使用量达到 90% 且系统判断仍值得继续时：
+- CLI and REPL resume/list/fork/rewind flows;
+- SDK session APIs via `@kodax-ai/kodax/session`;
+- session snapshots and runtime state persistence;
+- durable terminal tool-card replay from sanitized `uiHistory`, with canonical
+  `messages` / `lineage` remaining the source of truth;
+- tags, filters, archive state, and project-aware storage evolution;
+- compatibility with old session records where practical.
 
-- 请求用户审批
-- 每次批准 `+200`
-- 可多次追加
+Session management is a product feature, not merely a debug log.
 
-### 8.2 Round
+## 9. Skills And MCP
 
-`Round` 不再表示预分配的容量。
+Skills are Markdown-based capabilities discovered from configured paths and
+expanded for the LLM through `packages/agent/src/capabilities/skills`.
 
-它只在真实额外 pass 已被分配/进入时才显示，例如：
+MCP integration lives under `packages/agent/src/capabilities/mcp` and includes
+catalog/search, transport, runtime connection, OAuth helpers, protected-resource
+discovery, prompts, resources, tools, and reverse capabilities.
 
-- evaluator request revise
-- H1 -> H2 upgrade 后继续
-- 获批预算后继续 refinement
+Media/input artifact helpers live under `packages/agent/src/media`. The
+published `/media` SDK subpath and `@kodax-ai/coding/media` compatibility
+barrel both point at this agent-layer implementation.
 
-任务刚开始时，不应显示 `Round 1/2`。
+Published SDK subpaths expose focused subsets:
 
-### 8.3 Tool disclosure
+- `@kodax-ai/kodax/media`
+- `@kodax-ai/kodax/skills`
+- `@kodax-ai/kodax/mcp`
 
-工具摘要必须优先显示：
+## 10. Governed Memory Runtime
 
-- `bash`: `cmd=<exact command>`
-- `changed_diff`: path + range
-- `changed_diff_bundle`: file count + representative path
-- `read`: path + offset/limit
-- `glob/grep`: pattern + scope/path
+FEATURE_260 adds a thin experimental Memory Agent without creating a second
+long-term memory plane. `packages/agent/src/experimental-memory` owns the
+domain-neutral `MemoryAgent` / `MemorySession` contracts; the existing
+`packages/agent/src/memory-control` plane remains the sole governed persistence
+authority. `packages/coding` owns coding observations, prompt-safe rendering,
+the `memory_recall` tool, Action-LLM integration, and trace correlation.
 
-不应只剩裸工具名。
+Passive recall is computed before the run and injected as a bounded dynamic
+suffix, so it adds no extra LLM wait. Deliberate `query()` / `memory_recall` is
+read-only and initiated by the Action LLM. Episode review may create a governed
+proposal or defer it to the scoped inbox; only the existing
+proposal/preview/fingerprint/apply path can mutate durable memory. Exact scope,
+secret filtering, poisoning checks, and managed-path guards remain
+deterministic. Decision receipts are trace-only references and never store
+hidden reasoning.
 
-### 8.4 Evaluator public answer
+The public opt-in entry is `@kodax-ai/kodax/experimental-memory`; it does not
+become an implicit dependency for consumers of the stable root or Runtime SDK.
 
-Evaluator 的内部职责保留在 verdict / artifact 中。
+## 11. Workflow Runtime
 
-用户最终答案：
+Workflow has two layers:
 
-- 应直接面向用户交付结果
-- 不应说“我验证了 Generator 的结论”
-- 不应把 Generator / Planner 当作用户面对的对象
+- `packages/agent/src/workflow`: domain-neutral runtime, events, types, caps,
+  concurrency, abort, backend injection, and the generic workflow capsule
+  contract.
+- `packages/coding/src/workflows`: coding backend, built-in workflows,
+  durable run graph, workflow capsule persistence/preflight, saved-workflow
+  discovery, and REPL command integration.
 
----
+FEATURE_217 is the v0.7.49 Dynamic Workflow feature. It provides the runtime
+substrate, coding backend, durable run graph, on-the-fly JavaScript harness
+generation, background management, pause/resume/stop/save, opt-in worktree
+routing, hard budget checks, workflow capsules for reusable generated runs, and
+reusable workflow pattern templates. The domain-neutral SDK surface lives in
+`@kodax-ai/agent/workflow`; coding and REPL layers consume it rather than owning
+the core runtime.
 
-## 9. Transitional Product Surface
+Generated workflow scripts keep the orchestration plan in JavaScript, matching
+Claude-style dynamic workflows. They must not receive raw host authority:
+filesystem, shell, process, environment, module import, and network effects stay
+behind child agents and KodaX permission gates. Generated scripts run through a
+capability runner that exposes only structured `wf.*` calls to the host. Pattern
+templates are examples and scaffolds, not a replacement for dynamic harness
+generation.
 
-### 9.1 `/project`
+Saved generated workflows are persisted as lightweight workflow capsules:
+source, manifest, intent, input examples, environment/tool/skill/MCP
+requirements, and provenance. The capsule protocol belongs in `agent`; checks
+that depend on the local repository, skills, MCPs, or `.kodax` paths belong in
+`coding`; command help and approval text belong in `repl`.
 
-`/project` 继续存在，但它是 managed task 的 control surface：
+FEATURE_229 (`v0.7.50`, released)
+is the process layer on top of FEATURE_217. It standardizes workflow progress as
+agent-layer snapshots and events so SDK embedders, coding commands, REPL
+inline/fullscreen surfaces, and future system event bridges can subscribe to the
+same source of truth. This follows the same boundary rule as the runtime itself:
+`agent` owns process state and terminal status semantics; `coding` maps domain
+workflow runs, host policy, lifecycle controls, source/provenance fields, final
+result summaries, artifacts, and retention into that state; `repl` renders it.
+Space-style hosts must consume the F229 snapshot/controller contract rather than
+parsing terminal text, slash-command output, or Ink view models. The host
+contract also preserves parent guardrails, existing SDK event callbacks,
+workflow logs, capsule preflight, and provider/model policy when a workflow
+spawns child agents; entering workflow mode must not weaken safety or
+observability.
 
-- inspection
-- resume / pause / verify
-- artifact browsing
+FEATURE_230 and FEATURE_234 (`v0.7.51`, released) close the host-read
+persistence loop around sessions and workflow runs. Resumed TUI sessions replay
+bounded terminal tool cards from sanitized `uiHistory` while headless hosts can
+still reconstruct tool facts from canonical messages. Workflow process snapshots
+also carry optional `hostMetadata`, a small string-only map persisted in
+`run.json` and echoed after restart so hosts can attribute runs without a side
+table.
 
-它不再是唯一的长流程产品抽象。
+CAP-099 extends the host transcript contract with clone provenance. Public
+transcript entries include stable `logicalId` and optional `sourceEntryId` so
+Space-style hosts can fold cloned or forked history precisely, without parsing
+message text or relying on timestamp heuristics. The transcript API still
+returns raw append-order scrollback.
 
-### 9.2 `--team`
+FEATURE_246 (`v0.7.58`, released) is the largest workflow change since F229: the
+Worker authors and runs workflows inline through a model-callable `run_workflow`
+tool (scout-then-author), running generated scripts through the same sandbox +
+static-validation + postcondition pipeline. It adds structured child output
+(`outputSchema`), the no-barrier `wf.pipeline`, same-session resume
+(`resumeFromRunId`), and nested workflows; the neutral run-lifecycle manager is
+lifted to `@kodax-ai/agent` (ADR-046) and the inline run is async / idle-yield
+(ADR-049). See ADR-044/046/047/048/049.
 
-`--team` 已退出主产品语义。
+## 12. REPL And CLI
 
-如果仍保留兼容入口，也只应视为 deprecated plumbing，而不是未来主故事。
+`packages/repl` owns terminal UX:
 
----
+- Ink interactive mode,
+- slash commands,
+- config and custom provider CRUD,
+- permissions UI,
+- session list/resume/fork/rewind/archive surfaces,
+- transcript rendering,
+- status and progress surfaces,
+- MCP and workflow command surfaces.
 
-## 10. 参考 Feature
+`src/kodax_cli.ts` is the product entry for command-line execution and binary
+bootstrap. The CLI should stay thin and delegate product behavior to package
+APIs.
 
-- `FEATURE_019`: session tree、checkpoints、rewindable runs
-- `FEATURE_022`: adaptive task engine + AMA/SA 执行骨架
-- `FEATURE_025`: intent-first routing and harness selection
-- `FEATURE_027`: SA / AMA 模式切换
-- `FEATURE_028`: retrieval / evidence tooling
-- `FEATURE_029`: provider-aware harness policy
-- `FEATURE_034`: extension / capability runtime
+## 13. Design Constraints
 
----
+- Do not reintroduce retired V1 chain abstractions into current docs or prompts.
+- Do not add a new workspace package unless there is a real independence need.
+- Do not expose source-only subpaths as published root-package subpaths unless
+  `package.json`, bundle build, and dts generation all support them.
+- Do not make SDK consumers depend on REPL-only APIs for headless use cases.
+- Do not make provider-specific behavior leak into generic prompt prose.
+- Do not add a generic execution manager when a whole-Runtime ownership form or
+  an existing typed tool/workflow service is the real contract.
+- Do not describe Worker `resourceLimits` as hostile-code containment.
 
-## 11. Routing Ceiling Update
+## 14. Related Documents
 
-This routing update keeps KodaX lightweight by default:
-
-- `read-only` work stays on the direct path unless the user explicitly asks for a stronger second pass.
-- `docs-only` work stays on the direct path unless the user explicitly asks for a stronger second pass.
-- `read-only` and `docs-only` tasks must never enter `H2_PLAN_EXECUTE_EVAL`.
-- `reviewScale`, repo size, changed file count, and changed line count now affect evidence strategy only.
-- `H2_PLAN_EXECUTE_EVAL` is reserved for long-running mutation work that changes code or system state and benefits from contract plus executable verification.
-- H2 now defaults to one main pass; extra passes require a structured evaluator failure rather than default ceremony.
+- Product requirements: [PRD.md](PRD.md)
+- Detailed design: [DD.md](DD.md)
+- Architecture decisions: [ADR.md](ADR.md)
+- Active roadmap: [FEATURE_LIST.md](FEATURE_LIST.md)
+- Feature index: [features/README.md](features/README.md)

@@ -2,7 +2,7 @@
  * Utils exports - Utils 导出
  *
  * Centralizes exports of all utility modules, simplifying import paths - 集中导出所有工具模块，简化导入路径
- * Includes modules extracted from InkREPL.tsx (Issue 016) - 包含从 InkREPL.tsx 提取的模块 (Issue 016)
+ * Includes modules extracted from InkREPL.tsx (Issue 016) - 鍖呭惈浠?InkREPL.tsx 鎻愬彇鐨勬ā鍧?(Issue 016)
  */
 
 // Text buffer utilities
@@ -36,14 +36,65 @@ export {
 } from "./terminalCapabilities.js";
 export type { TerminalCapabilities } from "./terminalCapabilities.js";
 
+export {
+  detectTerminalRenderHost,
+  detectTerminalHostProfile,
+  getTerminalHostCapabilities,
+  hasCursorUpViewportYankRisk,
+  hasMainScreenRenderScrollRisk,
+  isRemoteConptyHost,
+  isTmuxControlMode,
+  isVsCodeTerminalHostEnv,
+  resetTmuxControlModeProbeForTesting,
+  resolveConfiguredTuiRendererMode,
+  resolveEffectiveTuiRendererMode,
+  resolveFullscreenPolicy,
+  resolveInteractiveSurfacePreference,
+  isOwnedRendererPreferred,
+  isClassicReplForced,
+} from "./terminal-host-profile.js";
+export type {
+  EffectiveTuiRendererMode,
+  FullscreenPolicy,
+  InteractiveSurfacePreference,
+  TerminalHostCapabilities,
+  TerminalHostDetectionOptions,
+  TerminalHostProfile,
+  TerminalRenderHost,
+  TuiRendererMode,
+} from "./terminal-host-profile.js";
+
 // Console capture utilities (Issue 040, 045)
 export { ConsoleCapturer, withCapture, withCaptureSync } from "./console-capturer.js";
 
 // Retry history utilities
-export { createRetryHistoryItem, emitRetryHistoryItem } from "./retry-history.js";
+export {
+  createRetryHistoryItem,
+  emitRetryHistoryItem,
+  createRecoveryHistoryItem,
+  emitRecoveryHistoryItem,
+} from "./retry-history.js";
 
 // Message processing utilities
-export { extractTextContent, extractTitle, formatMessagePreview } from "./message-utils.js";
+export {
+  extractHistorySeedsFromMessage,
+  extractHistorySeedsFromMessages,
+  extractTextContent,
+  extractTitle,
+  formatMessagePreview,
+  seedToHistoryItem,
+  toolCallSeedToHistoryToolCall,
+} from "./message-utils.js";
+export type {
+  HistorySeedSourceMessage,
+  RestoredHistorySeed,
+} from "./message-utils.js";
+
+export {
+  restoreHistoryItemsFromSession,
+  trimPersistedUiHistorySnapshot,
+} from "./restore-history.js";
+export type { RestoreHistoryItemsFromSessionInput } from "./restore-history.js";
 
 // Session storage utilities
 export {
