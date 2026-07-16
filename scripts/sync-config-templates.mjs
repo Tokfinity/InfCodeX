@@ -5,6 +5,7 @@ import path from 'node:path';
 import { fileURLToPath } from 'node:url';
 
 const root = path.resolve(path.dirname(fileURLToPath(import.meta.url)), '..');
+const normalizeLineEndings = (content) => content.replace(/\r\n?/g, '\n');
 const sources = {
   core: 'config-templates/config.example.jsonc',
   mcp: 'config-templates/integrations/mcp.example.jsonc',
@@ -15,7 +16,7 @@ const sources = {
 const contents = Object.fromEntries(await Promise.all(
   Object.entries(sources).map(async ([name, relativePath]) => [
     name,
-    await readFile(path.join(root, relativePath), 'utf8'),
+    normalizeLineEndings(await readFile(path.join(root, relativePath), 'utf8')),
   ]),
 ));
 
@@ -38,7 +39,7 @@ for (const [file, expected] of outputs) {
   } catch {
     // Missing generated output is drift in check mode and created otherwise.
   }
-  if (current === expected) continue;
+  if (normalizeLineEndings(current) === expected) continue;
   drift = true;
   if (!check) await writeFile(file, expected, 'utf8');
   else process.stderr.write(`[config-templates] drift: ${path.relative(root, file)}\n`);

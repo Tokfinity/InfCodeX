@@ -6,6 +6,12 @@ All notable changes to this project will be documented in this file.
 
 ## [Unreleased]
 
+### Fixed
+
+- **Cross-platform release template checks.** Generated configuration templates
+  now compare normalized line endings, so Windows CRLF checkouts no longer report
+  false drift during binary builds.
+
 ## [0.7.70] - 2026-07-15
 
 ### Added
