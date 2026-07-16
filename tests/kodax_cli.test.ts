@@ -306,8 +306,8 @@ describe('CLI Entry Point', () => {
   it('should advertise ACP server help and register the ACP subcommand', async () => {
     const source = await fs.readFile(path.join(process.cwd(), 'src', 'kodax_cli.ts'), 'utf-8');
     expect(source).toContain("command('acp')");
-    expect(source).toContain('kodax -h acp');
-    expect(source).toContain('kodax acp serve');
+    expect(source).toContain('infcodex -h acp');
+    expect(source).toContain('infcodex acp serve');
     expect(source).toContain(".option('--effort <level>', 'Reasoning effort");
     expect(source).toContain('const options = mergeCommandOptionsWithGlobals(localOptions, command);');
     expect(source).toContain('effort: options.effort');
@@ -347,9 +347,9 @@ describe('CLI Entry Point', () => {
   it('should keep root help text aligned with current CLI behavior', async () => {
     const source = await fs.readFile(path.join(process.cwd(), 'src', 'kodax_cli.ts'), 'utf-8');
     expect(source).toContain('--model <name>');
-    expect(source).toContain('kodax -h project');
+    expect(source).toContain('infcodex -h project');
     expect(source).toContain('acp, aamp, skill, sessions, init, project, auto, provider, thinking, team, print');
-    expect(source).toContain('kodax aamp serve --profile work');
+    expect(source).toContain('infcodex aamp serve --profile work');
     expect(source).toContain('/project ...            Project workflow commands');
     expect(source).toContain('Legacy no-op; current CLI already starts a fresh session by default');
     expect(source).toContain('Resume session by ID or exact title (no value = open searchable session picker)');
@@ -387,8 +387,8 @@ describe('CLI Entry Point', () => {
   it('should keep custom skill subcommand help aligned with current options', async () => {
     const source = await fs.readFile(path.join(process.cwd(), 'src', 'kodax_cli.ts'), 'utf-8');
     expect(source).toContain('Required Options:');
-    expect(source).toContain('Usage: kodax skill eval [options]');
-    expect(source).toContain('Usage: kodax skill compare [options] <workspace>');
+    expect(source).toContain('Usage: infcodex skill eval [options]');
+    expect(source).toContain('Usage: infcodex skill compare [options] <workspace>');
     expect(source).toContain('Primary config (default: with_skill)');
     expect(source).toContain('Baseline config (default: without_skill)');
   });

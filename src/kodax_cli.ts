@@ -28,7 +28,7 @@ if (
 }
 
 /**
- * KodaX CLI — Command-line entry point.
+ * InfCodeX CLI — Command-line entry point.
  * UI module: Ink-based interactive REPL with managed task lifecycle.
  */
 import { Command } from 'commander';
@@ -240,7 +240,7 @@ function printSessionDedupeReport(report: SessionDedupeReport, applied: boolean)
   }
 
   if (!applied) {
-    console.log(chalk.dim('\nRun `kodax sessions dedupe --apply` to move uniquely matched runner ghosts.'));
+    console.log(chalk.dim('\nRun `infcodex sessions dedupe --apply` to move uniquely matched runner ghosts.'));
   }
 }
 
@@ -325,7 +325,7 @@ async function printDaemonStatus(input: {
     console.log(JSON.stringify(snapshot, null, 2));
     return;
   }
-  console.log(chalk.cyan('\nKodaX Runtime Daemon\n'));
+  console.log(chalk.cyan('\nInfCodeX Runtime Daemon\n'));
   console.log(`Profile: ${snapshot.profile}`);
   console.log(`Health: ${formatDaemonHealth(health)}`);
   console.log(`State: ${snapshot.state ? snapshot.state.status : 'missing'}`);
@@ -361,7 +361,7 @@ async function readDaemonRuntimeStatusSummary(
       profile: paths.profile,
       connectionPurpose: 'probe',
       ...(token !== undefined ? { token } : {}),
-      clientInfo: { name: 'kodax-cli', title: 'KodaX CLI' },
+      clientInfo: { name: 'infcodex-cli', title: 'InfCodeX CLI' },
       capabilities: { configAdmin: true },
     });
     return {
@@ -619,7 +619,7 @@ function assertDaemonHostBindingsAbsent(options: KodaXOptions): void {
   const binding = unsupported.find(([, value]) => value !== undefined);
   if (!binding) return;
   throw new Error(
-    `KodaX daemon run option '${binding[0]}' cannot cross the process boundary. `
+    `InfCodeX daemon run option '${binding[0]}' cannot cross the process boundary. `
     + 'Configure the capability in the daemon owner or use embedded mode.',
   );
 }
@@ -960,13 +960,13 @@ async function startDaemonCommand(input: {
     return;
   }
   if (result.reason === 'already_running') {
-    console.log(chalk.green(`KodaX runtime daemon already running for profile "${paths.profile}".`));
+    console.log(chalk.green(`InfCodeX runtime daemon already running for profile "${paths.profile}".`));
     return;
   }
   if (result.health !== 'healthy') {
-    throw new Error(`KodaX runtime daemon did not become healthy within ${input.timeoutMs}ms.`);
+    throw new Error(`InfCodeX runtime daemon did not become healthy within ${input.timeoutMs}ms.`);
   }
-  console.log(chalk.green(`KodaX runtime daemon started for profile "${paths.profile}".`));
+  console.log(chalk.green(`InfCodeX runtime daemon started for profile "${paths.profile}".`));
   if (result.state) {
     console.log(chalk.dim(`PID: ${result.state.pid}`));
     console.log(chalk.dim(`Endpoint: ${result.state.endpoint}`));
@@ -1045,7 +1045,7 @@ async function serveDaemonCommand(input: {
     if (!lease.ownsHost) {
       await lease.close();
       const observation = await observeRuntimeDaemonHealth(lease.paths);
-      console.log(chalk.yellow(`KodaX runtime daemon already owned by PID ${observation.state?.pid ?? 'unknown'}.`));
+      console.log(chalk.yellow(`InfCodeX runtime daemon already owned by PID ${observation.state?.pid ?? 'unknown'}.`));
       return;
     }
     if (!ownedRuntime) throw new Error('Runtime daemon owner was not created.');
@@ -1119,13 +1119,13 @@ async function stopDaemonCommand(input: {
     );
   }
   if (result.reason !== undefined) {
-    console.log(chalk.yellow(`No healthy KodaX runtime daemon for profile "${paths.profile}" (${result.reason}).`));
+    console.log(chalk.yellow(`No healthy InfCodeX runtime daemon for profile "${paths.profile}" (${result.reason}).`));
     return;
   }
   if (!result.stopped) {
-    throw new Error(`KodaX runtime daemon did not stop within ${input.timeoutMs}ms.`);
+    throw new Error(`InfCodeX runtime daemon did not stop within ${input.timeoutMs}ms.`);
   }
-  console.log(chalk.green(`KodaX runtime daemon stopped for profile "${paths.profile}".`));
+  console.log(chalk.green(`InfCodeX runtime daemon stopped for profile "${paths.profile}".`));
 }
 
 async function getDaemonStopResult(input: {
@@ -1158,7 +1158,7 @@ async function getDaemonStopResult(input: {
     await transport.request('initialize', {
       profile: paths.profile,
       ...(token !== undefined ? { token } : {}),
-      clientInfo: { name: 'kodax-cli', title: 'KodaX CLI' },
+      clientInfo: { name: 'infcodex-cli', title: 'InfCodeX CLI' },
       capabilities: { configAdmin: true },
     });
     await transport.request('daemon.stop');
@@ -1263,9 +1263,9 @@ async function restartDaemonCommand(input: {
   }
   const paths = resolveRuntimeDaemonPaths(input.homeDir, input.profile);
   if (!result.restarted) {
-    throw new Error(`KodaX runtime daemon restart failed for profile "${paths.profile}".`);
+    throw new Error(`InfCodeX runtime daemon restart failed for profile "${paths.profile}".`);
   }
-  console.log(chalk.green(`KodaX runtime daemon restarted for profile "${paths.profile}".`));
+  console.log(chalk.green(`InfCodeX runtime daemon restarted for profile "${paths.profile}".`));
   if (result.start.state) {
     console.log(chalk.dim(`PID: ${result.start.state.pid}`));
     console.log(chalk.dim(`Endpoint: ${result.start.state.endpoint}`));
@@ -1332,7 +1332,7 @@ async function printDaemonLogs(input: {
     console.log(JSON.stringify(result, null, 2));
     return;
   }
-  console.log(chalk.cyan(`KodaX runtime daemon log (${result.profile})`));
+  console.log(chalk.cyan(`InfCodeX runtime daemon log (${result.profile})`));
   console.log(chalk.dim(result.logFile));
   if (!result.exists) {
     console.log(chalk.yellow('No daemon log file exists yet.'));
@@ -1381,7 +1381,7 @@ function spawnDaemonServeProcess(input: {
 }): ReturnType<typeof spawn> {
   const entry = fileURLToPath(import.meta.url);
   if (!entry) {
-    throw new Error('Cannot resolve current KodaX CLI entrypoint for daemon start.');
+    throw new Error('Cannot resolve current InfCodeX CLI entrypoint for daemon start.');
   }
   const args = [
     ...daemonServeExecArgv(process.execArgv),
@@ -1576,10 +1576,10 @@ const CLI_HELP_TOPICS: Record<string, () => void> = {
   acp: () => {
     console.log(chalk.cyan('\nACP Server\n'));
     console.log(chalk.bold('Overview:'));
-    console.log(chalk.dim('  Run KodaX as a stdio ACP server so editors and IDEs can connect directly.'));
-    console.log(chalk.dim('  Session creation, prompt streaming, cancellation, and permission prompts reuse KodaX runtime semantics.\n'));
+    console.log(chalk.dim('  Run InfCodeX as a stdio ACP server so editors and IDEs can connect directly.'));
+    console.log(chalk.dim('  Session creation, prompt streaming, cancellation, and permission prompts reuse InfCodeX runtime semantics.\n'));
     console.log(chalk.bold('Command:'));
-    console.log(chalk.dim('  kodax acp serve [options]\n'));
+    console.log(chalk.dim('  infcodex acp serve [options]\n'));
     console.log(chalk.bold('Options:'));
     console.log(chalk.dim('  --cwd <dir>                  ') + 'Working directory exposed to ACP sessions');
     console.log(chalk.dim('  -m, --provider <name>        ') + 'Provider to use');
@@ -1592,22 +1592,22 @@ const CLI_HELP_TOPICS: Record<string, () => void> = {
     console.log(chalk.dim('  --permission-mode <mode>     ') + 'Initial mode: plan, accept-edits, auto-in-project');
     console.log(chalk.dim('  KODAX_ACP_LOG=<level>        ') + 'stderr log level: off, error, info, debug\n');
     console.log(chalk.bold('Examples:'));
-    console.log(chalk.dim('  kodax acp serve'));
-    console.log(chalk.dim('  kodax acp serve --cwd C:\\repo --permission-mode accept-edits'));
-    console.log(chalk.dim('  kodax acp serve -m openai --model gpt-5.4 --reasoning balanced\n'));
+    console.log(chalk.dim('  infcodex acp serve'));
+    console.log(chalk.dim('  infcodex acp serve --cwd C:\\repo --permission-mode accept-edits'));
+    console.log(chalk.dim('  infcodex acp serve -m openai --model gpt-5.4 --reasoning balanced\n'));
   },
   aamp: () => {
     console.log(chalk.cyan('\nAAMP Server\n'));
     console.log(chalk.bold('Overview:'));
-    console.log(chalk.dim('  Run KodaX as an AAMP async task worker backed by aamp-sdk.'));
-    console.log(chalk.dim('  Incoming task.dispatch messages are bridged into runKodaX and replied with task.result.\n'));
+    console.log(chalk.dim('  Run InfCodeX as an AAMP async task worker backed by aamp-sdk.'));
+    console.log(chalk.dim('  Incoming task.dispatch messages are bridged into the InfCodeX runtime and replied with task.result.\n'));
     console.log(chalk.bold('Command:'));
-    console.log(chalk.dim('  kodax aamp serve [options]\n'));
+    console.log(chalk.dim('  infcodex aamp serve [options]\n'));
     console.log(chalk.bold('Options:'));
     console.log(chalk.dim('  --cwd <dir>                  ') + 'Working directory used for task execution');
     console.log(chalk.dim('  --profile <name>             ') + 'AAMP profile name under aamp.profiles');
-    console.log(chalk.dim('  -m, --provider <name>        ') + 'Provider override (defaults to normal KodaX provider config)');
-    console.log(chalk.dim('  --model <name>               ') + 'Model override (defaults to normal KodaX model config)');
+    console.log(chalk.dim('  -m, --provider <name>        ') + 'Provider override (defaults to normal InfCodeX provider config)');
+    console.log(chalk.dim('  --model <name>               ') + 'Model override (defaults to normal InfCodeX model config)');
     console.log(chalk.dim('  --email <addr>               ') + 'AAMP mailbox email');
     console.log(chalk.dim('  --mailbox-token <token>      ') + 'Mailbox auth token (base64(email:password))');
     console.log(chalk.dim('  --base-url <url>             ') + 'AAMP/JMAP base URL');
@@ -1627,28 +1627,28 @@ const CLI_HELP_TOPICS: Record<string, () => void> = {
     console.log(chalk.dim('  Use built-in skill packaging commands without starting an agent session.'));
     console.log(chalk.dim('  These commands are thin wrappers around the builtin skill-creator tools.\n'));
     console.log(chalk.bold('Commands:'));
-    console.log(chalk.dim('  kodax skill init <name> [options]   ') + 'Create a new skill scaffold');
-    console.log(chalk.dim('  kodax skill validate <dir>          ') + 'Validate a skill directory');
-    console.log(chalk.dim('  kodax skill eval --skill-path ...   ') + 'Run end-to-end eval workspace generation');
-    console.log(chalk.dim('  kodax skill grade <workspace>       ') + 'Grade eval runs into grading.json files');
-    console.log(chalk.dim('  kodax skill analyze <workspace>     ') + 'Analyze benchmark variance and failures');
-    console.log(chalk.dim('  kodax skill compare <workspace>     ') + 'Blind-compare two configs across runs');
-    console.log(chalk.dim('  kodax skill package <dir> [options] ') + 'Package a skill as .skill');
-    console.log(chalk.dim('  kodax skill install <input> [opts]  ') + 'Install a skill from dir or .skill');
+    console.log(chalk.dim('  infcodex skill init <name> [options]   ') + 'Create a new skill scaffold');
+    console.log(chalk.dim('  infcodex skill validate <dir>          ') + 'Validate a skill directory');
+    console.log(chalk.dim('  infcodex skill eval --skill-path ...   ') + 'Run end-to-end eval workspace generation');
+    console.log(chalk.dim('  infcodex skill grade <workspace>       ') + 'Grade eval runs into grading.json files');
+    console.log(chalk.dim('  infcodex skill analyze <workspace>     ') + 'Analyze benchmark variance and failures');
+    console.log(chalk.dim('  infcodex skill compare <workspace>     ') + 'Blind-compare two configs across runs');
+    console.log(chalk.dim('  infcodex skill package <dir> [options] ') + 'Package a skill as .skill');
+    console.log(chalk.dim('  infcodex skill install <input> [opts]  ') + 'Install a skill from dir or .skill');
     console.log(chalk.bold('Examples:'));
-    console.log(chalk.dim('  kodax skill init release-notes --dest ./.kodax/skills'));
-    console.log(chalk.dim('  kodax skill validate ./.kodax/skills/my-skill'));
-    console.log(chalk.dim('  kodax skill eval --skill-path ./.kodax/skills/my-skill --evals ./.kodax/skills/my-skill/evals/evals.json --workspace ./iteration-1'));
-    console.log(chalk.dim('  kodax skill grade ./iteration-1'));
-    console.log(chalk.dim('  kodax skill analyze ./iteration-1'));
-    console.log(chalk.dim('  kodax skill compare ./iteration-1 --config-a with_skill --config-b without_skill'));
-    console.log(chalk.dim('  kodax skill package ./.kodax/skills/my-skill --output ./my-skill.skill'));
-    console.log(chalk.dim('  kodax skill install ./my-skill.skill --dest ~/.kodax/skills --force\n'));
+    console.log(chalk.dim('  infcodex skill init release-notes --dest ./.kodax/skills'));
+    console.log(chalk.dim('  infcodex skill validate ./.kodax/skills/my-skill'));
+    console.log(chalk.dim('  infcodex skill eval --skill-path ./.kodax/skills/my-skill --evals ./.kodax/skills/my-skill/evals/evals.json --workspace ./iteration-1'));
+    console.log(chalk.dim('  infcodex skill grade ./iteration-1'));
+    console.log(chalk.dim('  infcodex skill analyze ./iteration-1'));
+    console.log(chalk.dim('  infcodex skill compare ./iteration-1 --config-a with_skill --config-b without_skill'));
+    console.log(chalk.dim('  infcodex skill package ./.kodax/skills/my-skill --output ./my-skill.skill'));
+    console.log(chalk.dim('  infcodex skill install ./my-skill.skill --dest ~/.kodax/skills --force\n'));
   },
   sessions: () => {
     console.log(chalk.cyan('\nSession Management\n'));
     console.log(chalk.bold('Overview:'));
-    console.log(chalk.dim('  KodaX automatically saves conversation sessions, allowing you to'));
+    console.log(chalk.dim('  InfCodeX automatically saves conversation sessions, allowing you to'));
     console.log(chalk.dim('  resume work later or switch between different conversations.\n'));
     console.log(chalk.bold('Options:'));
     console.log(chalk.dim('  -c, --continue       ') + 'Continue most recent conversation');
@@ -1657,14 +1657,14 @@ const CLI_HELP_TOPICS: Record<string, () => void> = {
     console.log(chalk.dim('  -s, --session <op>   ') + 'Legacy session operations: list, resume, delete <id>, delete-all, or raw session ID');
     console.log(chalk.dim('  --no-session         ') + 'Disable session persistence (print mode only)\n');
     console.log(chalk.bold('Examples:'));
-    console.log(chalk.dim('  kodax                      ') + '# Start new session (interactive)');
-    console.log(chalk.dim('  kodax -c                   ') + '# Continue recent conversation');
-    console.log(chalk.dim('  kodax -r                   ') + '# Search and select a saved session');
-    console.log(chalk.dim('  kodax -r 20260219_143052   ') + '# Resume specific session');
-    console.log(chalk.dim('  kodax -r "Review runtime"  ') + '# Resume a unique exact title; duplicates open the picker');
-    console.log(chalk.dim('  kodax -s list              ') + '# List all sessions');
-    console.log(chalk.dim('  kodax -s delete 20260219   ') + '# Delete a session');
-    console.log(chalk.dim('  kodax -p "task" --no-session') + ' # Run without saving\n');
+    console.log(chalk.dim('  infcodex                      ') + '# Start new session (interactive)');
+    console.log(chalk.dim('  infcodex -c                   ') + '# Continue recent conversation');
+    console.log(chalk.dim('  infcodex -r                   ') + '# Search and select a saved session');
+    console.log(chalk.dim('  infcodex -r 20260219_143052   ') + '# Resume specific session');
+    console.log(chalk.dim('  infcodex -r "Review runtime"  ') + '# Resume a unique exact title; duplicates open the picker');
+    console.log(chalk.dim('  infcodex -s list              ') + '# List all sessions');
+    console.log(chalk.dim('  infcodex -s delete 20260219   ') + '# Delete a session');
+    console.log(chalk.dim('  infcodex -p "task" --no-session') + ' # Run without saving\n');
   },
   project: () => {
     console.log(chalk.cyan('\nProject Mode\n'));
@@ -1689,9 +1689,9 @@ const CLI_HELP_TOPICS: Record<string, () => void> = {
     console.log(chalk.dim('  - /project quality combines deterministic checks with optional model-generated guidance'));
     console.log(chalk.dim('  - /project brainstorm aligns requirements into .agent/project/alignment.md\n'));
     console.log(chalk.bold('Examples:'));
-    console.log(chalk.dim('  kodax -h project'));
-    console.log(chalk.dim('  kodax  # then: /project brainstorm -> /project plan -> /project next'));
-    console.log(chalk.dim('  kodax  # then: /project quality | /project verify --last | /project auto --max=3\n'));
+    console.log(chalk.dim('  infcodex -h project'));
+    console.log(chalk.dim('  infcodex  # then: /project brainstorm -> /project plan -> /project next'));
+    console.log(chalk.dim('  infcodex  # then: /project quality | /project verify --last | /project auto --max=3\n'));
   },
   auto: () => {
     console.log(chalk.cyan('\nAuto Mode\n'));
@@ -1701,13 +1701,13 @@ const CLI_HELP_TOPICS: Record<string, () => void> = {
     console.log(chalk.bold('Options:'));
     console.log(chalk.dim('  -y, --auto             ') + 'Backward-compat alias (no-op in non-REPL CLI)\n');
     console.log(chalk.bold('Examples:'));
-    console.log(chalk.dim('  kodax -y "refactor code"          ') + '# Legacy alias; same as plain non-REPL run\n');
+    console.log(chalk.dim('  infcodex -y "refactor code"          ') + '# Legacy alias; same as plain non-REPL run\n');
   },
   provider: () => {
     const providerNames = getAvailableProviderNames();
     console.log(chalk.cyan('\nLLM Providers\n'));
     console.log(chalk.bold('Overview:'));
-    console.log(chalk.dim('  KodaX supports multiple LLM providers. Configure via -m option'));
+    console.log(chalk.dim('  InfCodeX supports multiple LLM providers. Configure via -m option'));
     console.log(chalk.dim('  or set default in ~/.kodax/config.json. Use --model to override the default model.\n'));
     console.log(chalk.bold('Available Providers:'));
     providerNames.forEach((name) => {
@@ -1721,14 +1721,14 @@ const CLI_HELP_TOPICS: Record<string, () => void> = {
     console.log(chalk.dim('  -m, --provider <name> ') + 'Provider to use');
     console.log(chalk.dim('  --model <name>        ') + 'Model override for the selected provider\n');
     console.log(chalk.bold('Examples:'));
-    console.log(chalk.dim('  kodax -m anthropic "task"     ') + '# Use Claude');
-    console.log(chalk.dim('  kodax -m openai --model gpt-5.4 "task"') + '# Override model');
+    console.log(chalk.dim('  infcodex -m anthropic "task"     ') + '# Use Claude');
+    console.log(chalk.dim('  infcodex -m openai --model gpt-5.4 "task"') + '# Override model');
     console.log(chalk.dim('  /model                        ') + '# Switch in REPL (saves to config)\n');
   },
   thinking: () => {
     console.log(chalk.cyan('\nReasoning Effort\n'));
     console.log(chalk.bold('Overview:'));
-    console.log(chalk.dim('  Reasoning controls how much deliberate analysis KodaX should apply.'));
+    console.log(chalk.dim('  Reasoning controls how much deliberate analysis InfCodeX should apply.'));
     console.log(chalk.dim('  Use --effort for new configs; --reasoning remains as a compatibility alias.\n'));
     console.log(chalk.bold('Options:'));
     console.log(chalk.dim('  --effort <level>     ') + 'Set reasoning effort: off, auto, low, medium, high, xhigh, max, or model-supported value');
@@ -1736,10 +1736,10 @@ const CLI_HELP_TOPICS: Record<string, () => void> = {
     console.log(chalk.dim('  --agent-mode <mode>  ') + 'Set agent mode: ama, sa');
     console.log(chalk.dim('  -t, --thinking       ') + 'Compatibility alias for --reasoning auto\n');
     console.log(chalk.bold('Examples:'));
-    console.log(chalk.dim('  kodax --effort high "design the architecture"     ') + '# High effort');
-    console.log(chalk.dim('  kodax --reasoning deep "design the architecture"   ') + '# Legacy alias for high effort');
-    console.log(chalk.dim('  kodax --reasoning balanced -p "analyze this bug"   ') + '# Medium-depth reasoning');
-    console.log(chalk.dim('  kodax -t "review this PR"                           ') + '# Alias for auto');
+    console.log(chalk.dim('  infcodex --effort high "design the architecture"     ') + '# High effort');
+    console.log(chalk.dim('  infcodex --reasoning deep "design the architecture"   ') + '# Legacy alias for high effort');
+    console.log(chalk.dim('  infcodex --reasoning balanced -p "analyze this bug"   ') + '# Medium-depth reasoning');
+    console.log(chalk.dim('  infcodex -t "review this PR"                           ') + '# Alias for auto');
     console.log(chalk.dim('  /reasoning balanced                                 ') + '# Set in REPL\n');
   },
   print: () => {
@@ -1753,12 +1753,12 @@ const CLI_HELP_TOPICS: Record<string, () => void> = {
     console.log(chalk.dim('  --model <name>      ') + 'Override the selected provider model');
     console.log(chalk.dim('  --no-session        ') + 'Disable session saving\n');
     console.log(chalk.bold('Examples:'));
-    console.log(chalk.dim('  kodax -p "fix the bug in auth.ts"   ') + '# Quick fix');
-    console.log(chalk.dim('  kodax -p "generate tests" --reasoning balanced') + ' # With reasoning');
-    console.log(chalk.dim('  kodax -p "task" -m openai --model gpt-5.4') + ' # Provider + model override');
-    console.log(chalk.dim('  kodax -p "task" --no-session        ') + '# Stateless run');
-    console.log(chalk.dim('  kodax --mode json "inspect auth flow"') + ' # Structured JSONL output');
-    console.log(chalk.dim('  kodax -p "task" -m anthropic --reasoning deep') + ' # Explicit provider selection\n');
+    console.log(chalk.dim('  infcodex -p "fix the bug in auth.ts"   ') + '# Quick fix');
+    console.log(chalk.dim('  infcodex -p "generate tests" --reasoning balanced') + ' # With reasoning');
+    console.log(chalk.dim('  infcodex -p "task" -m openai --model gpt-5.4') + ' # Provider + model override');
+    console.log(chalk.dim('  infcodex -p "task" --no-session        ') + '# Stateless run');
+    console.log(chalk.dim('  infcodex --mode json "inspect auth flow"') + ' # Structured JSONL output');
+    console.log(chalk.dim('  infcodex -p "task" -m anthropic --reasoning deep') + ' # Explicit provider selection\n');
   },
 };
 
@@ -1826,15 +1826,15 @@ function showCliHelpTopic(topic: string): boolean {
 
 function showCliHelpTopics(): void {
   console.log(chalk.cyan('\nDetailed Help Topics:\n'));
-  console.log(chalk.dim('  kodax -h acp        ') + 'ACP server mode for editors and IDEs');
-  console.log(chalk.dim('  kodax -h aamp       ') + 'AAMP async task worker mode');
-  console.log(chalk.dim('  kodax -h sessions   ') + 'Session management (-c, -r, -s options)');
-  console.log(chalk.dim('  kodax -h skill      ') + 'Skill packaging and installation helpers');
-  console.log(chalk.dim('  kodax -h project    ') + 'Project mode workflow across CLI and /project');
-  console.log(chalk.dim('  kodax -h auto       ') + 'Auto mode backward-compat alias');
-  console.log(chalk.dim('  kodax -h provider   ') + 'LLM provider options');
-  console.log(chalk.dim('  kodax -h thinking   ') + 'Reasoning modes and depth control');
-  console.log(chalk.dim('  kodax -h print      ') + 'Print mode for scripting\n');
+  console.log(chalk.dim('  infcodex -h acp        ') + 'ACP server mode for editors and IDEs');
+  console.log(chalk.dim('  infcodex -h aamp       ') + 'AAMP async task worker mode');
+  console.log(chalk.dim('  infcodex -h sessions   ') + 'Session management (-c, -r, -s options)');
+  console.log(chalk.dim('  infcodex -h skill      ') + 'Skill packaging and installation helpers');
+  console.log(chalk.dim('  infcodex -h project    ') + 'Project mode workflow across CLI and /project');
+  console.log(chalk.dim('  infcodex -h auto       ') + 'Auto mode backward-compat alias');
+  console.log(chalk.dim('  infcodex -h provider   ') + 'LLM provider options');
+  console.log(chalk.dim('  infcodex -h thinking   ') + 'Reasoning modes and depth control');
+  console.log(chalk.dim('  infcodex -h print      ') + 'Print mode for scripting\n');
 }
 
 type CliRunResultEvent = {
@@ -1872,9 +1872,9 @@ function emitJsonRunResultIfNeeded(
 
 function printAcpSubcommandHelp(name: string): boolean {
   if (name === 'serve') {
-    console.log('Usage: kodax acp serve [options]');
+    console.log('Usage: infcodex acp serve [options]');
     console.log();
-    console.log('Run KodaX as a stdio ACP server for editors and IDEs.');
+    console.log('Run InfCodeX as a stdio ACP server for editors and IDEs.');
     console.log();
     console.log('Options:');
     console.log('  --cwd <dir>                  Working directory exposed to ACP sessions');
@@ -1895,15 +1895,15 @@ function printAcpSubcommandHelp(name: string): boolean {
 
 function printAampSubcommandHelp(name: string): boolean {
   if (name === 'serve') {
-    console.log('Usage: kodax aamp serve [options]');
+    console.log('Usage: infcodex aamp serve [options]');
     console.log();
-    console.log('Run KodaX as an AAMP async worker backed by aamp-sdk.');
+    console.log('Run InfCodeX as an AAMP async worker backed by aamp-sdk.');
     console.log();
     console.log('Options:');
     console.log('  --cwd <dir>                  Working directory used for task execution');
     console.log('  --profile <name>             AAMP profile name under aamp.profiles');
-    console.log('  -m, --provider <name>        Provider override (defaults to normal KodaX provider config)');
-    console.log('  --model <name>               Model override (defaults to normal KodaX model config)');
+    console.log('  -m, --provider <name>        Provider override (defaults to normal InfCodeX provider config)');
+    console.log('  --model <name>               Model override (defaults to normal InfCodeX model config)');
     console.log('  --email <addr>               AAMP mailbox email');
     console.log('  --mailbox-token <token>      Mailbox auth token (base64(email:password))');
     console.log('  --base-url <url>             AAMP/JMAP base URL');
@@ -1923,8 +1923,8 @@ function printAampSubcommandHelp(name: string): boolean {
 }
 
 function printMissingAampSubcommand(): void {
-  console.error(chalk.red('\n[Missing subcommand] `kodax aamp` requires `serve`.'));
-  console.error(chalk.dim('Use `kodax aamp serve [options]`.\n'));
+  console.error(chalk.red('\n[Missing subcommand] `infcodex aamp` requires `serve`.'));
+  console.error(chalk.dim('Use `infcodex aamp serve [options]`.\n'));
 }
 
 function normalizeOptionalString(value: string | undefined): string | undefined {
@@ -2031,7 +2031,7 @@ function readAampLogLevelOption(
 
 function printSkillSubcommandHelp(name: string): boolean {
   if (name === 'init') {
-    console.log('Usage: kodax skill init [options] <name>');
+    console.log('Usage: infcodex skill init [options] <name>');
     console.log();
     console.log('Initialize a new skill scaffold.');
     console.log();
@@ -2044,14 +2044,14 @@ function printSkillSubcommandHelp(name: string): boolean {
   }
 
   if (name === 'validate') {
-    console.log('Usage: kodax skill validate <skillDir>');
+    console.log('Usage: infcodex skill validate <skillDir>');
     console.log();
     console.log('Validate a skill directory using builtin skill-creator.');
     return true;
   }
 
   if (name === 'eval') {
-    console.log('Usage: kodax skill eval [options]');
+    console.log('Usage: infcodex skill eval [options]');
     console.log();
     console.log('Run end-to-end skill evals and write a benchmark/review workspace.');
     console.log();
@@ -2073,7 +2073,7 @@ function printSkillSubcommandHelp(name: string): boolean {
   }
 
   if (name === 'grade') {
-    console.log('Usage: kodax skill grade [options] <workspace>');
+    console.log('Usage: infcodex skill grade [options] <workspace>');
     console.log();
     console.log('Grade eval runs into grading.json files.');
     console.log();
@@ -2088,7 +2088,7 @@ function printSkillSubcommandHelp(name: string): boolean {
   }
 
   if (name === 'analyze') {
-    console.log('Usage: kodax skill analyze [options] <workspace>');
+    console.log('Usage: infcodex skill analyze [options] <workspace>');
     console.log();
     console.log('Analyze benchmark variance and write analysis.json + analysis.md.');
     console.log();
@@ -2104,7 +2104,7 @@ function printSkillSubcommandHelp(name: string): boolean {
   }
 
   if (name === 'compare') {
-    console.log('Usage: kodax skill compare [options] <workspace>');
+    console.log('Usage: infcodex skill compare [options] <workspace>');
     console.log();
     console.log('Blind-compare two configs across eval run pairs.');
     console.log();
@@ -2121,7 +2121,7 @@ function printSkillSubcommandHelp(name: string): boolean {
   }
 
   if (name === 'package') {
-    console.log('Usage: kodax skill package [options] <skillDir>');
+    console.log('Usage: infcodex skill package [options] <skillDir>');
     console.log();
     console.log('Package a skill directory as a .skill archive.');
     console.log();
@@ -2131,7 +2131,7 @@ function printSkillSubcommandHelp(name: string): boolean {
   }
 
   if (name === 'install') {
-    console.log('Usage: kodax skill install [options] <input>');
+    console.log('Usage: infcodex skill install [options] <input>');
     console.log();
     console.log('Install a skill directory or .skill archive into a skills directory.');
     console.log();
@@ -2146,10 +2146,10 @@ function printSkillSubcommandHelp(name: string): boolean {
 
 function showBasicHelp(): void {
   const providerNames = getAvailableProviderNames().join(', ');
-  console.log('KodaX - Intelligent Coding Agent\n');
-  console.log('Usage: kodax [options] [prompt]');
-  console.log('       kodax "your task"');
-  console.log('       kodax /command_name\n');
+  console.log('InfCodeX - Intelligent Coding Agent\n');
+  console.log('Usage: infcodex [options] [prompt]');
+  console.log('       infcodex "your task"');
+  console.log('       infcodex /command_name\n');
   console.log('Options:');
   console.log('  -h, --help [TOPIC]      Show help, or detailed help for a topic');
   console.log('  -p, --print TEXT        Print mode: run single task and exit');
@@ -2178,21 +2178,21 @@ function showBasicHelp(): void {
   console.log('  /project ...            Project workflow commands');
   console.log('  /sessions               List saved sessions\n');
   console.log('Examples:');
-  console.log('  kodax                             # Enter interactive mode');
-  console.log('  kodax "create a component"        # Run single task (with session)');
-  console.log('  kodax acp serve                   # Start ACP stdio server');
-  console.log('  kodax aamp serve --profile work   # Start AAMP async task worker');
-  console.log('  kodax skill init my-skill         # Scaffold a new skill');
-  console.log('  kodax skill package ./my-skill    # Package a skill without starting the agent');
-  console.log('  kodax -h project                 # Project mode workflow across CLI and REPL');
-  console.log('  kodax -p "quick fix" --reasoning balanced  # Quick task with reasoning');
-  console.log('  kodax -c                          # Continue recent conversation');
-  console.log('  kodax -c "finish this"            # Continue with new task');
-  console.log('  kodax -r                          # Search and select a saved session');
-  console.log('  kodax -r "Review runtime"         # Resume by unique exact title');
-  console.log('  kodax -p "task" --model gpt-5.4   # Override model for a one-off run');
-  console.log('  kodax -p "task" --no-session      # Run without saving session');
-  console.log('  kodax -h sessions                 # Detailed help on sessions\n');
+  console.log('  infcodex                             # Enter interactive mode');
+  console.log('  infcodex "create a component"        # Run single task (with session)');
+  console.log('  infcodex acp serve                   # Start ACP stdio server');
+  console.log('  infcodex aamp serve --profile work   # Start AAMP async task worker');
+  console.log('  infcodex skill init my-skill         # Scaffold a new skill');
+  console.log('  infcodex skill package ./my-skill    # Package a skill without starting the agent');
+  console.log('  infcodex -h project                 # Project mode workflow across CLI and REPL');
+  console.log('  infcodex -p "quick fix" --reasoning balanced  # Quick task with reasoning');
+  console.log('  infcodex -c                          # Continue recent conversation');
+  console.log('  infcodex -c "finish this"            # Continue with new task');
+  console.log('  infcodex -r                          # Search and select a saved session');
+  console.log('  infcodex -r "Review runtime"         # Resume by unique exact title');
+  console.log('  infcodex -p "task" --model gpt-5.4   # Override model for a one-off run');
+  console.log('  infcodex -p "task" --no-session      # Run without saving session');
+  console.log('  infcodex -h sessions                 # Detailed help on sessions\n');
 }
 
 async function loadResumableSessions(maxSessions = 1000): Promise<SessionPickerItem[]> {
@@ -2247,7 +2247,7 @@ async function main() {
   // older than KODAX_SESSION_RETENTION_DAYS. DEFAULT OFF (0) — auto-deleting a
   // user's accumulated history is destructive and surprising, so it must be
   // explicitly enabled (e.g. KODAX_SESSION_RETENTION_DAYS=30). The `list()`
-  // head-read path already keeps `kodax -c` + the picker fast regardless of
+  // head-read path already keeps `infcodex -c` + the picker fast regardless of
   // file count, so retention is a housekeeping convenience, not a perf
   // requirement. Fire-and-forget — never blocks startup; errors are swallowed
   // inside cleanupOldSessions, and a non-positive value is a no-op.
@@ -2261,8 +2261,8 @@ async function main() {
   }
 
   const program = configureKodaXRootCommand(new Command()
-    .name('kodax')
-    .description('KodaX - Intelligent Coding Agent')
+    .name('infcodex')
+    .description('InfCodeX - Intelligent Coding Agent')
     .version(version));
   configureIntegrationCommands(program, { version });
 
@@ -2295,9 +2295,9 @@ async function main() {
       const constructedSubcommands = 'reset-self-modify-budget audit disable-self-modify rollback';
 
       if (shell === 'bash') {
-        console.log(`# KodaX bash completion — add to ~/.bashrc:
-#   eval "$(kodax completion bash)"
-_kodax_complete() {
+        console.log(`# InfCodeX bash completion — add to ~/.bashrc:
+#   eval "$(infcodex completion bash)"
+_infcodex_complete() {
   local cur prev opts subcmds
   COMPREPLY=()
   cur="\${COMP_WORDS[COMP_CWORD]}"
@@ -2336,11 +2336,11 @@ _kodax_complete() {
     COMPREPLY=( $(compgen -W "\${subcmds}" -- "\${cur}") )
   fi
 }
-complete -F _kodax_complete kodax`);
+complete -F _infcodex_complete infcodex`);
       } else if (shell === 'zsh') {
-        console.log(`# KodaX zsh completion — add to ~/.zshrc:
-#   eval "$(kodax completion zsh)"
-_kodax() {
+        console.log(`# InfCodeX zsh completion — add to ~/.zshrc:
+#   eval "$(infcodex completion zsh)"
+_infcodex() {
   local -a subcmds opts providers reasoning_modes agent_modes repo_modes
   subcmds=(${rootSubcommands})
   providers=(${providerNames.replace(/ /g, ' ')})
@@ -2381,46 +2381,46 @@ _kodax() {
     '1:subcommand:($subcmds)' \\
     '*::arg:->args'
 }
-compdef _kodax kodax`);
+compdef _infcodex infcodex`);
       } else if (shell === 'fish') {
-        console.log(`# KodaX fish completion — add to ~/.config/fish/completions/kodax.fish:
-#   kodax completion fish > ~/.config/fish/completions/kodax.fish
-complete -c kodax -n '__fish_use_subcommand' -a '${rootSubcommands}' -d 'Subcommands'
-complete -c kodax -n '__fish_seen_subcommand_from completion' -a 'bash zsh fish' -d 'Shell'
-complete -c kodax -n '__fish_seen_subcommand_from acp' -a 'serve' -d 'ACP subcommand'
-complete -c kodax -n '__fish_seen_subcommand_from aamp' -a 'serve' -d 'AAMP subcommand'
-complete -c kodax -n '__fish_seen_subcommand_from daemon' -a 'start stop restart status logs serve' -d 'Daemon subcommand'
-complete -c kodax -n '__fish_seen_subcommand_from skill' -a '${skillSubcommands}' -d 'Skill subcommand'
-complete -c kodax -n '__fish_seen_subcommand_from tools' -a '${toolsSubcommands}' -d 'Tools subcommand'
-complete -c kodax -n '__fish_seen_subcommand_from sessions' -a '${sessionsSubcommands}' -d 'Sessions subcommand'
-complete -c kodax -n '__fish_seen_subcommand_from constructed' -a '${constructedSubcommands}' -d 'Constructed subcommand'
-complete -c kodax -n '__fish_seen_subcommand_from config' -a 'template paths' -d 'Config subcommand'
-complete -c kodax -n '__fish_seen_subcommand_from integrations' -a 'status validate reload migrate' -d 'Integration subcommand'
-complete -c kodax -n '__fish_seen_subcommand_from mcp' -a 'list add remove' -d 'MCP subcommand'
-complete -c kodax -n '__fish_seen_subcommand_from extensions' -a 'list add remove reload' -d 'Extension subcommand'
-complete -c kodax -n '__fish_seen_subcommand_from a2a' -a 'list add remove test call expose serve' -d 'A2A subcommand'
-complete -c kodax -n '__fish_seen_subcommand_from sandbox' -a 'doctor setup' -d 'Sandbox subcommand'
-complete -c kodax -s h -l help -d 'Show help'
-complete -c kodax -s p -l print -d 'Print mode' -r
-complete -c kodax -l mode -d 'Output mode' -xa 'json'
-complete -c kodax -l runtime-mode -d 'Interactive runtime mode' -xa 'embedded daemon'
-complete -c kodax -s c -l continue -d 'Continue most recent conversation'
-complete -c kodax -s n -l new -d 'Start fresh session'
-complete -c kodax -s r -l resume -d 'Resume session by ID or exact title' -r
-complete -c kodax -s m -l provider -d 'LLM provider' -xa '${providerNames}'
-complete -c kodax -l model -d 'Model override' -r
-complete -c kodax -s t -l thinking -d 'Enable thinking'
-complete -c kodax -l effort -d 'Reasoning effort' -xa 'off auto low medium high xhigh max'
-complete -c kodax -l reasoning -d 'Reasoning mode' -xa '${reasoningModes}'
-complete -c kodax -l agent-mode -d 'Agent mode' -xa '${agentModes}'
-complete -c kodax -l repo-intelligence -d 'Repo intelligence mode' -xa '${repoModes}'
-complete -c kodax -l repo-intelligence-trace -d 'Enable repo intelligence trace'
-complete -c kodax -s y -l auto -d 'Backward-compatible no-op'
-complete -c kodax -s s -l session -d 'Legacy session operation' -xa 'list resume delete delete-all'
-complete -c kodax -l extension -d 'Load local extension' -r
-complete -c kodax -l no-session -d 'Disable session persistence in print mode'
-complete -c kodax -l max-iter -d 'Max iterations' -r
-complete -c kodax -l version -d 'Show version'`);
+        console.log(`# InfCodeX fish completion — add to ~/.config/fish/completions/infcodex.fish:
+#   infcodex completion fish > ~/.config/fish/completions/infcodex.fish
+complete -c infcodex -n '__fish_use_subcommand' -a '${rootSubcommands}' -d 'Subcommands'
+complete -c infcodex -n '__fish_seen_subcommand_from completion' -a 'bash zsh fish' -d 'Shell'
+complete -c infcodex -n '__fish_seen_subcommand_from acp' -a 'serve' -d 'ACP subcommand'
+complete -c infcodex -n '__fish_seen_subcommand_from aamp' -a 'serve' -d 'AAMP subcommand'
+complete -c infcodex -n '__fish_seen_subcommand_from daemon' -a 'start stop restart status logs serve' -d 'Daemon subcommand'
+complete -c infcodex -n '__fish_seen_subcommand_from skill' -a '${skillSubcommands}' -d 'Skill subcommand'
+complete -c infcodex -n '__fish_seen_subcommand_from tools' -a '${toolsSubcommands}' -d 'Tools subcommand'
+complete -c infcodex -n '__fish_seen_subcommand_from sessions' -a '${sessionsSubcommands}' -d 'Sessions subcommand'
+complete -c infcodex -n '__fish_seen_subcommand_from constructed' -a '${constructedSubcommands}' -d 'Constructed subcommand'
+complete -c infcodex -n '__fish_seen_subcommand_from config' -a 'template paths' -d 'Config subcommand'
+complete -c infcodex -n '__fish_seen_subcommand_from integrations' -a 'status validate reload migrate' -d 'Integration subcommand'
+complete -c infcodex -n '__fish_seen_subcommand_from mcp' -a 'list add remove' -d 'MCP subcommand'
+complete -c infcodex -n '__fish_seen_subcommand_from extensions' -a 'list add remove reload' -d 'Extension subcommand'
+complete -c infcodex -n '__fish_seen_subcommand_from a2a' -a 'list add remove test call expose serve' -d 'A2A subcommand'
+complete -c infcodex -n '__fish_seen_subcommand_from sandbox' -a 'doctor setup' -d 'Sandbox subcommand'
+complete -c infcodex -s h -l help -d 'Show help'
+complete -c infcodex -s p -l print -d 'Print mode' -r
+complete -c infcodex -l mode -d 'Output mode' -xa 'json'
+complete -c infcodex -l runtime-mode -d 'Interactive runtime mode' -xa 'embedded daemon'
+complete -c infcodex -s c -l continue -d 'Continue most recent conversation'
+complete -c infcodex -s n -l new -d 'Start fresh session'
+complete -c infcodex -s r -l resume -d 'Resume session by ID or exact title' -r
+complete -c infcodex -s m -l provider -d 'LLM provider' -xa '${providerNames}'
+complete -c infcodex -l model -d 'Model override' -r
+complete -c infcodex -s t -l thinking -d 'Enable thinking'
+complete -c infcodex -l effort -d 'Reasoning effort' -xa 'off auto low medium high xhigh max'
+complete -c infcodex -l reasoning -d 'Reasoning mode' -xa '${reasoningModes}'
+complete -c infcodex -l agent-mode -d 'Agent mode' -xa '${agentModes}'
+complete -c infcodex -l repo-intelligence -d 'Repo intelligence mode' -xa '${repoModes}'
+complete -c infcodex -l repo-intelligence-trace -d 'Enable repo intelligence trace'
+complete -c infcodex -s y -l auto -d 'Backward-compatible no-op'
+complete -c infcodex -s s -l session -d 'Legacy session operation' -xa 'list resume delete delete-all'
+complete -c infcodex -l extension -d 'Load local extension' -r
+complete -c infcodex -l no-session -d 'Disable session persistence in print mode'
+complete -c infcodex -l max-iter -d 'Max iterations' -r
+complete -c infcodex -l version -d 'Show version'`);
       } else {
         console.error(`Unknown shell: ${shell}. Supported: bash, zsh, fish`);
         process.exit(1);
@@ -2430,14 +2430,14 @@ complete -c kodax -l version -d 'Show version'`);
   // ============== sessions subcommands ==============
   const sessionsCommand = program
     .command('sessions')
-    .description('Manage saved KodaX sessions')
+    .description('Manage saved InfCodeX sessions')
     .action(() => {
-      console.log(chalk.cyan('\nKodaX Sessions\n'));
+      console.log(chalk.cyan('\nInfCodeX Sessions\n'));
       console.log(chalk.bold('Commands:'));
-      console.log(chalk.dim('  kodax sessions dedupe          ') + 'Dry-run historical runner ghost cleanup');
-      console.log(chalk.dim('  kodax sessions dedupe --apply  ') + 'Move uniquely matched runner ghosts to .dedupe-archive');
+      console.log(chalk.dim('  infcodex sessions dedupe          ') + 'Dry-run historical runner ghost cleanup');
+      console.log(chalk.dim('  infcodex sessions dedupe --apply  ') + 'Move uniquely matched runner ghosts to .dedupe-archive');
       console.log(chalk.dim('\nLegacy:'));
-      console.log(chalk.dim('  kodax -s list                  ') + 'List saved sessions');
+      console.log(chalk.dim('  infcodex -s list                  ') + 'List saved sessions');
     });
 
   sessionsCommand
@@ -2462,7 +2462,7 @@ complete -c kodax -l version -d 'Show version'`);
 
   const daemonCommand = program
     .command('daemon')
-    .description('Inspect and manage the local KodaX runtime daemon')
+    .description('Inspect and manage the local InfCodeX runtime daemon')
     .helpOption('-h, --help', 'Show daemon help');
 
   daemonCommand
@@ -2606,12 +2606,12 @@ complete -c kodax -l version -d 'Show version'`);
 
   const acpCommand = program
     .command('acp')
-    .description('Run KodaX as an ACP server for editors and IDEs')
+    .description('Run InfCodeX as an ACP server for editors and IDEs')
     .helpOption('-h, --help', 'Show ACP server help');
 
   const aampCommand = program
     .command('aamp')
-    .description('Run KodaX as an AAMP async task worker')
+    .description('Run InfCodeX as an AAMP async task worker')
     .helpOption('-h, --help', 'Show AAMP server help');
 
   acpCommand
@@ -3095,7 +3095,7 @@ complete -c kodax -l version -d 'Show version'`);
 
   // ============== constructed subcommand (FEATURE_090, v0.7.32) ==============
   // Self-modify lifecycle helpers for constructed agents — separate
-  // command group from `kodax tools` because the surface targets
+  // command group from `infcodex tools` because the surface targets
   // agent governance (budget reset, rollback, audit, disable), not
   // tool inventory. Activate is intentionally NOT exposed here for
   // the same reason as tools — must originate from the REPL where a
@@ -3151,7 +3151,7 @@ complete -c kodax -l version -d 'Show version'`);
     });
 
   // ============== constructed-tool direct dispatch ==============
-  // BEFORE commander parses, intercept `kodax <constructed-tool-name> ...`
+  // BEFORE commander parses, intercept `infcodex <constructed-tool-name> ...`
   // and dispatch to the registered handler. The detection bootstraps the
   // ConstructionRuntime and consults TOOL_REGISTRY — only fires when the
   // name matches an activated constructed tool. On no match we fall
@@ -3305,7 +3305,7 @@ complete -c kodax -l version -d 'Show version'`);
       return `  ${session.id} [${session.msgCount}]${surface} ${session.title}`;
     });
     if (sessions.length > visible.length) {
-      lines.push(`  ... ${sessions.length - visible.length} more; use \`kodax -r\` to search and page.`);
+      lines.push(`  ... ${sessions.length - visible.length} more; use \`infcodex -r\` to search and page.`);
     }
     console.log(lines.length > 0 ? `Sessions:\n${lines.join('\n')}` : 'No resumable sessions.');
     return;
@@ -3343,7 +3343,7 @@ complete -c kodax -l version -d 'Show version'`);
     const positionalId = sessionOperation === 'delete' ? options.prompt[0]?.trim() : undefined;
     const sessionId = quotedId || positionalId;
     if (!sessionId) {
-      throw new Error('`-s delete` requires a session id. Usage: kodax -s delete <id>');
+      throw new Error('`-s delete` requires a session id. Usage: infcodex -s delete <id>');
     }
     if (sessionOperation === 'delete' && options.prompt.length > 1) {
       throw new Error('`-s delete` accepts exactly one session id.');
