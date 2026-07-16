@@ -136,6 +136,7 @@ import {
   cleanupRegisteredManagedChildren,
   shutdownTracing,
   applyProcessHardening,
+  prepareInternalNodeLaunch,
 } from '@kodax-ai/agent';
 import {
   getGitRoot,
@@ -1391,15 +1392,20 @@ function spawnDaemonServeProcess(input: {
   if (input.model !== undefined) {
     args.push('--model', input.model);
   }
-  const child = spawn(process.execPath, args, {
-    detached: true,
-    stdio: 'ignore',
-    windowsHide: true,
+  const launch = prepareInternalNodeLaunch({
+    args,
     env: {
       ...process.env,
       KODAX_DAEMON_SERVE: '1',
       KODAX_HOME: path.join(input.homeDir, '.kodax'),
     },
+    isElectron: process.versions.electron !== undefined,
+  });
+  const child = spawn(process.execPath, launch.args, {
+    detached: true,
+    stdio: 'ignore',
+    windowsHide: true,
+    env: launch.env,
   });
   child.unref();
   return child;

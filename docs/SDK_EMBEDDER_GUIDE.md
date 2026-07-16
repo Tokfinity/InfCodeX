@@ -3460,7 +3460,16 @@ For Electron, `homeDir` is still the CLI-style base directory, not
 `process.env.KODAX_HOME`. Packaged/asar applications may use `autoStart: true`
 directly; the SDK launches only the daemon child in Electron's Node execution
 mode and does not mutate the application's environment or start a second GUI
-instance.
+instance. `ELECTRON_RUN_AS_NODE` exists only at the child exec boundary and is
+removed before daemon application code loads, so Bash, MCP, LSP, sandboxed
+commands, and ordinary external processes do not inherit Electron Node mode.
+
+Packaged auto-start requires Electron's `RunAsNode` fuse, which Electron enables
+by default. If an embedder deliberately disables that fuse, the packaged
+executable cannot serve as a detached Node host: start the daemon with an
+ordinary Node/CLI process and use attach-only mode instead. A packaged
+`autoStart: true` timeout includes this fuse requirement in its diagnostic; the
+SDK does not relaunch the GUI or silently fall back to an inline Runtime.
 
 ```ts
 import { connectKodaXRuntime } from '@kodax-ai/kodax/runtime';

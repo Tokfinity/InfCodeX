@@ -146,3 +146,26 @@ jobs:
             await first?.close();
           }
           NODE
+
+  packaged-electron-daemon:
+    name: packaged Electron daemon (Windows)
+    runs-on: windows-latest
+    steps:
+      - uses: actions/checkout@v6
+
+      - uses: actions/setup-node@v6
+        with:
+          node-version: '22'
+          cache: 'npm'
+
+      - name: Install dependencies
+        run: npm ci
+
+      - name: Install packaged Electron smoke toolchain
+        run: npm install --no-save --package-lock=false --no-audit --no-fund electron@42.5.0 electron-builder@25.1.8
+
+      - name: Packaged Electron daemon gate
+        env:
+          KODAX_ELECTRON_DIST: ${{ github.workspace }}\node_modules\electron\dist
+          KODAX_ELECTRON_BUILDER_CLI: ${{ github.workspace }}\node_modules\electron-builder\out\cli\cli.js
+        run: npm run test:electron-daemon

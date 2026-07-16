@@ -12,6 +12,7 @@
  */
 
 import { spawn, type ChildProcess, type SpawnOptions } from 'child_process';
+import { prepareInternalNodeLaunch } from '@kodax-ai/agent';
 
 export function needsShell(command: string): boolean {
   return process.platform === 'win32' && command !== process.execPath && !/\.exe$/i.test(command);
@@ -25,6 +26,14 @@ export function spawnLspProcess(
   if (needsShell(command)) {
     const line = [quoteIfNeeded(command), ...args].join(' ');
     return spawn(line, { ...options, shell: true });
+  }
+  if (command === process.execPath) {
+    const launch = prepareInternalNodeLaunch({
+      args,
+      env: options.env ?? process.env,
+      isElectron: process.versions.electron !== undefined,
+    });
+    return spawn(command, launch.args, { ...options, env: launch.env, shell: false });
   }
   return spawn(command, [...args], { ...options, shell: false });
 }

@@ -15,7 +15,13 @@ import {
   type SandboxAskCallback,
   type SandboxRuntimeConfig,
 } from '@anthropic-ai/sandbox-runtime';
-import type { ISkillRegistry, Skill } from '@kodax-ai/agent';
+import {
+  ELECTRON_NODE_ENV_SCRUB_IMPORT,
+  ELECTRON_RUN_AS_NODE_ENV,
+  prepareInternalNodeLaunch,
+  type ISkillRegistry,
+  type Skill,
+} from '@kodax-ai/agent';
 import type {
   KodaXSkillScriptRunInput,
   KodaXSkillScriptRunner,
@@ -69,6 +75,8 @@ const ASRT_MODULE_URL = process.env.KODAX_BUNDLED === 'true'
   : pathToFileURL(moduleRequire.resolve('@anthropic-ai/sandbox-runtime')).href;
 const SENSITIVE_PATH_PARTS = new Set(['.ssh', '.aws', '.azure', '.gnupg', '.kodax', '.agents']);
 const SENSITIVE_FILES = new Set(['.env', '.npmrc', '.pypirc', 'credentials', 'id_rsa', 'id_ed25519']);
+const ELECTRON_NODE_ENV_SCRUB_IMPORT_LITERAL = JSON.stringify(ELECTRON_NODE_ENV_SCRUB_IMPORT);
+const ELECTRON_RUN_AS_NODE_ENV_LITERAL = JSON.stringify(ELECTRON_RUN_AS_NODE_ENV);
 const BROKER_SOURCE = String.raw`
 import { spawn } from 'node:child_process';
 import { readFile } from 'node:fs/promises';
@@ -82,13 +90,23 @@ try {
   const quote = (value) => process.platform === 'win32'
     ? '"' + value.replaceAll('"', '""') + '"'
     : "'" + value.replaceAll("'", "'\"'\"'") + "'";
-  const command = [request.command, ...request.args].map(quote).join(' ');
+  const internalElectronNode = request.command === process.execPath && process.versions.electron !== undefined;
+  const childArgs = internalElectronNode
+    ? ['--import', ${ELECTRON_NODE_ENV_SCRUB_IMPORT_LITERAL}, ...request.args]
+    : request.args;
+  const command = [request.command, ...childArgs].map(quote).join(' ');
   if (process.platform === 'win32') {
     const wrapped = await SandboxManager.wrapWithSandboxArgv(command, 'cmd', undefined, undefined, request.cwd);
-    child = spawn(wrapped.argv[0], wrapped.argv.slice(1), { cwd: request.cwd, env: wrapped.env, shell: false, stdio: 'inherit' });
+    const childEnv = internalElectronNode
+      ? { ...wrapped.env, [${ELECTRON_RUN_AS_NODE_ENV_LITERAL}]: '1' }
+      : wrapped.env;
+    child = spawn(wrapped.argv[0], wrapped.argv.slice(1), { cwd: request.cwd, env: childEnv, shell: false, stdio: 'inherit' });
   } else {
     const wrapped = await SandboxManager.wrapWithSandbox(command);
-    child = spawn(wrapped, { cwd: request.cwd, env: process.env, shell: true, stdio: 'inherit' });
+    const childEnv = internalElectronNode
+      ? { ...process.env, [${ELECTRON_RUN_AS_NODE_ENV_LITERAL}]: '1' }
+      : process.env;
+    child = spawn(wrapped, { cwd: request.cwd, env: childEnv, shell: true, stdio: 'inherit' });
   }
   const stop = () => child?.kill('SIGTERM');
   process.once('SIGINT', stop);
@@ -140,8 +158,13 @@ async function inspectSandboxRuntime(): Promise<SandboxRuntimeDoctorResult> {
   }
   const nodeCommand = process.env.KODAX_A2A_NODE
     ?? (process.env.KODAX_BUNDLED === 'true' ? 'node' : process.execPath);
-  const nodeProbe = spawnSync(nodeCommand, ['--version'], {
-    env: sanitizedEnvironment(), shell: false, encoding: 'utf8', windowsHide: true, timeout: 5_000,
+  const nodeProbeLaunch = prepareInternalNodeLaunch({
+    args: ['--version'],
+    env: sanitizedEnvironment(),
+    isElectron: nodeCommand === process.execPath && process.versions.electron !== undefined,
+  });
+  const nodeProbe = spawnSync(nodeCommand, nodeProbeLaunch.args, {
+    env: nodeProbeLaunch.env, shell: false, encoding: 'utf8', windowsHide: true, timeout: 5_000,
   });
   if (nodeProbe.status !== 0) {
     setupRequired = true;
@@ -321,8 +344,13 @@ async function runBroker(request: SandboxBrokerRequest, signal?: AbortSignal): P
     const args = process.env.KODAX_BUNDLED === 'true'
       ? ['__asrt-broker', requestFile]
       : ['--input-type=module', '-e', BROKER_SOURCE, ASRT_MODULE_URL!, requestFile];
-    const child = spawn(process.execPath, args, {
-      env: sanitizedEnvironment(), shell: false, stdio: ['ignore', 'pipe', 'pipe'], windowsHide: true,
+    const launch = prepareInternalNodeLaunch({
+      args,
+      env: sanitizedEnvironment(),
+      isElectron: process.versions.electron !== undefined,
+    });
+    const child = spawn(process.execPath, launch.args, {
+      env: launch.env, shell: false, stdio: ['ignore', 'pipe', 'pipe'], windowsHide: true,
     });
     return (await collectProcess(child, signal)).stdout;
   } finally {

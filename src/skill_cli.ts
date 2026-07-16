@@ -4,6 +4,7 @@ import { spawn } from 'child_process';
 import {
   getDefaultSkillPaths,
   killChildProcessTreeSync,
+  prepareInternalNodeLaunch,
   registerManagedChildProcess,
 } from '@kodax-ai/agent';
 
@@ -37,9 +38,15 @@ export async function defaultSkillToolRunner(
   args: string[]
 ): Promise<number> {
   return await new Promise<number>((resolve, reject) => {
-    const child = spawn(process.execPath, [scriptPath, ...args], {
+    const launch = prepareInternalNodeLaunch({
+      args: [scriptPath, ...args],
+      env: process.env,
+      isElectron: process.versions.electron !== undefined,
+    });
+    const child = spawn(process.execPath, launch.args, {
       stdio: 'inherit',
       detached: process.platform !== 'win32',
+      env: launch.env,
     });
     const unregisterManagedChild = registerManagedChildProcess(child, {
       kind: 'skill-cli',

@@ -27,20 +27,63 @@ export const HARDENED_ENV_VARS = [
 /** Env var that disables all hardening when set to `'1'`. */
 export const HARDENING_OPT_OUT_ENV = 'KODAX_DISABLE_HARDENING';
 
+/** Electron bootstrap switch. It must never survive in long-running KodaX code. */
+export const ELECTRON_RUN_AS_NODE_ENV = 'ELECTRON_RUN_AS_NODE';
+
+/**
+ * Runs before the requested Node entrypoint and removes the Electron-only
+ * bootstrap switch. The switch is still present when the OS creates the
+ * process, which is the only point where Electron needs it.
+ */
+export const ELECTRON_NODE_ENV_SCRUB_IMPORT =
+  'data:text/javascript,delete%20process.env.ELECTRON_RUN_AS_NODE';
+
+export interface InternalNodeLaunch {
+  readonly args: readonly string[];
+  readonly env: NodeJS.ProcessEnv;
+}
+
+export interface PrepareInternalNodeLaunchOptions {
+  readonly args: readonly string[];
+  readonly env: NodeJS.ProcessEnv;
+  readonly isElectron: boolean;
+}
+
 function hardeningDisabled(): boolean {
   return process.env[HARDENING_OPT_OUT_ENV] === '1';
 }
 
 /**
- * Strip the dynamic-linker preload vars from the live `process.env`. Call once
- * at process startup, before anything spawns children or loads native addons.
- * No-op when `KODAX_DISABLE_HARDENING=1`.
+ * Consume the Electron bootstrap switch and strip dynamic-linker preload vars
+ * from the live `process.env`. Call once at process startup, before anything
+ * spawns children or loads native addons. `KODAX_DISABLE_HARDENING=1` keeps the
+ * linker vars but never keeps the one-shot Electron bootstrap switch.
  */
 export function applyProcessHardening(): void {
+  // This is a bootstrap invariant, not optional process hardening. Keeping it
+  // would silently change any Electron application spawned by KodaX into Node.
+  delete process.env[ELECTRON_RUN_AS_NODE_ENV];
   if (hardeningDisabled()) return;
   for (const name of HARDENED_ENV_VARS) {
     delete process.env[name];
   }
+}
+
+/**
+ * Prepare a trusted JavaScript child launch when `process.execPath` may be a
+ * packaged Electron executable. Electron receives Node mode at the exec
+ * boundary; the target process removes it before loading application code.
+ */
+export function prepareInternalNodeLaunch(
+  options: PrepareInternalNodeLaunchOptions,
+): InternalNodeLaunch {
+  const env: NodeJS.ProcessEnv = { ...options.env };
+  delete env[ELECTRON_RUN_AS_NODE_ENV];
+  if (!options.isElectron) return { args: [...options.args], env };
+  return {
+    args: ['--import', ELECTRON_NODE_ENV_SCRUB_IMPORT, ...options.args],
+    env: { ...env, [ELECTRON_RUN_AS_NODE_ENV]: '1' },
+  };
 }
 
 /**

@@ -4,6 +4,11 @@ import { fileURLToPath } from 'node:url';
 import os from 'node:os';
 import path from 'node:path';
 
+import {
+  ELECTRON_RUN_AS_NODE_ENV,
+  prepareInternalNodeLaunch,
+} from '@kodax-ai/agent';
+
 import type { RuntimeDaemonClientTransport } from './client.js';
 import {
   observeRuntimeDaemonHealth,
@@ -120,7 +125,12 @@ async function waitForHealthyDaemon(
     }
     await delay(options.pollIntervalMs ?? 100);
   }
-  throw new Error(`Timed out waiting for runtime daemon profile "${paths.profile}" to become ready.`);
+  const electronHint = process.versions.electron === undefined
+    ? ''
+    : ' Packaged Electron auto-start requires the RunAsNode fuse to remain enabled.';
+  throw new Error(
+    `Timed out waiting for runtime daemon profile "${paths.profile}" to become ready.${electronHint}`,
+  );
 }
 
 async function spawnRuntimeDaemonServeProcess(input: {
@@ -149,15 +159,19 @@ async function spawnRuntimeDaemonServeProcess(input: {
   if (input.permissionTimeoutMs !== undefined) {
     args.push('--permission-timeout-ms', String(input.permissionTimeoutMs));
   }
-  const child = spawn(process.execPath, args, {
-    detached: true,
-    stdio: 'ignore',
-    windowsHide: true,
+  const launch = prepareInternalNodeLaunch({
+    args,
     env: createRuntimeDaemonServeEnvironment({
       homeDir: input.homeDir,
       parentEnv: process.env,
-      isElectron: process.versions.electron !== undefined,
     }),
+    isElectron: process.versions.electron !== undefined,
+  });
+  const child = spawn(process.execPath, launch.args, {
+    detached: true,
+    stdio: 'ignore',
+    windowsHide: true,
+    env: launch.env,
   });
   await new Promise<void>((resolve, reject) => {
     child.once('spawn', resolve);
@@ -179,16 +193,14 @@ export function assertRuntimeDaemonCliEntryAvailable(entry: string | undefined):
 export function createRuntimeDaemonServeEnvironment(input: {
   readonly homeDir: string;
   readonly parentEnv: NodeJS.ProcessEnv;
-  readonly isElectron: boolean;
 }): NodeJS.ProcessEnv {
-  return {
+  const env: NodeJS.ProcessEnv = {
     ...input.parentEnv,
-    // process.execPath is the packaged application executable under Electron.
-    // Limit Node mode to this copied child environment so Main remains untouched.
-    ...(input.isElectron ? { ELECTRON_RUN_AS_NODE: '1' } : {}),
     KODAX_DAEMON_SERVE: '1',
     KODAX_HOME: path.join(input.homeDir, '.kodax'),
   };
+  delete env[ELECTRON_RUN_AS_NODE_ENV];
+  return env;
 }
 
 function resolveDaemonCliEntry(): string | undefined {

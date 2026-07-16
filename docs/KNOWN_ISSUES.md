@@ -14,6 +14,7 @@ _Last Updated: 2026-07-16_
 
 | ID | Priority | Status | Title | Introduced | Fixed | Created | Resolved |
 |----|----------|--------|-------|------------|-------|---------|----------|
+| 166 | High | Resolved | Electron daemon bootstrap mode leaks into user child processes | v0.7.71 RC | v0.7.71 | 2026-07-16 | 2026-07-16 |
 | 165 | High | Resolved | Packaged Electron auto-start relaunches the app instead of executing the daemon CLI | v0.7.70 | v0.7.71 | 2026-07-16 | 2026-07-16 |
 | 164 | High | Resolved | MCP cross-language zero matches can force an avoidable second model/tool round | v0.7.70 RC | v0.7.70 | 2026-07-15 | 2026-07-15 |
 | 163 | High | Resolved | A2A review found endpoint trust, task lifecycle, artifact, and protocol gaps | v0.7.69 | v0.7.70 | 2026-07-15 | 2026-07-15 |
@@ -76,6 +77,103 @@ _Last Updated: 2026-07-16_
 ## Issue Details
 <!-- Full details for each issue - REQUIRED for all issues -->
 
+### 166: Electron daemon bootstrap mode leaks into user child processes
+
+- **Priority**: High
+- **Status**: Resolved
+- **Introduced**: v0.7.71 RC
+- **Fixed**: v0.7.71
+- **Created**: 2026-07-16
+- **Resolved**: 2026-07-16
+
+#### Original Problem
+
+The packaged Electron daemon auto-start fix correctly starts the application
+executable in Node mode, but leaves `ELECTRON_RUN_AS_NODE=1` in the long-lived
+daemon environment. Bash, MCP, LSP, sandbox, and other external processes can
+inherit that environment. A user command which launches an Electron program
+may therefore start it in Node mode instead of its normal application mode.
+
+#### Context
+
+- The variable is needed only while the Electron executable bootstraps the
+  daemon or another trusted internal Node entry.
+- Deleting it only after daemon startup is insufficient unless trusted internal
+  `process.execPath` launches retain a bounded Node bootstrap path.
+- Electron's `RunAsNode` fuse may disable this mechanism and must be an explicit
+  compatibility boundary.
+- The real Windows packaged/asar smoke currently runs manually and is not a
+  required CI or release gate.
+
+#### Root Cause
+
+`createRuntimeDaemonServeEnvironment()` adds `ELECTRON_RUN_AS_NODE=1` to the
+daemon child environment, and the daemon retains that copied environment for
+its full lifetime. No preload consumes the bootstrap-only variable before
+Runtime initialization or user process spawning.
+
+#### Proposed Solution
+
+Introduce one internal Node launch contract which temporarily enables Electron
+Node mode and prepends a bootstrap preload that removes the variable before the
+target module executes. Use it for the daemon and every trusted internal
+`process.execPath` child, while ordinary user process environments remain
+clean. Extend the packaged Windows smoke to observe the daemon environment and
+a daemon-spawned external child, document the fuse boundary, and require the
+smoke in CI and release workflows.
+
+#### Resolution
+
+All trusted `process.execPath` children now use one internal launch contract.
+For a packaged Electron executable it sets `ELECTRON_RUN_AS_NODE=1` only at the
+OS exec boundary and prepends a Node import which deletes the variable before
+the target entrypoint loads. Runtime startup also removes the variable as a
+non-optional invariant. Ordinary Node launches keep their arguments unchanged,
+and user Bash, MCP, native LSP, sandbox, and external child environments remain
+clean.
+
+Daemon auto-start, CLI daemon start, JavaScript LSP, Skill CLI, and sandbox
+broker/interpreter entrypoints use the bounded contract. The public guide now
+states that packaged auto-start requires Electron's default-enabled `RunAsNode`
+fuse; a deliberately disabled fuse must use an ordinary Node/CLI daemon with
+attach-only SDK mode, and packaged timeout diagnostics name that boundary.
+
+The Windows Electron 42.5.0 + asar smoke now loads a daemon extension which
+observes both daemon and daemon-spawned external-process environments. It is a
+required Windows CI job and a release gate for the `win-x64` build.
+
+#### Files Changed
+
+- `packages/agent/src/runtime/process-hardening.ts`
+- `packages/agent/src/runtime/process-hardening.test.ts`
+- `packages/agent/src/index.ts`
+- `packages/coding/src/lsp/spawn.ts`
+- `packages/coding/src/lsp/spawn.test.ts`
+- `src/runtime-daemon/process.ts`
+- `src/runtime-daemon/process.test.ts`
+- `src/kodax_cli.ts`
+- `src/sandbox-runtime.ts`
+- `src/skill_cli.ts`
+- `scripts/test-electron-daemon-smoke.mjs`
+- `tests/fixtures/electron-daemon-smoke/main.cjs`
+- `.github/workflows/ci.yml`
+- `.github/workflows/release.yml`
+- `docs/SDK_EMBEDDER_GUIDE.md`
+- `docs/test-guides/ISSUE_166_v0.7.71_REGRESSION_GUIDE.md`
+
+#### Verification
+
+- Unit/process tests prove the bootstrap switch is consumed before target code,
+  including when optional process hardening is disabled.
+- Packaged Windows Electron 42.5.0 + asar smoke passed: daemon cold-started,
+  Main ran once, daemon and external-child probes both reported the variable
+  absent, Node attached to the same Runtime, detach semantics held, and two
+  owner transitions completed.
+- Full repository suite passed: 835 files and 10,007 tests, with only the
+  repository's declared skips/todos remaining.
+- Workspace TypeScript build, SDK bundle, declarations, and workflow YAML
+  validation passed.
+
 ### 165: Packaged Electron auto-start relaunches the app instead of executing the daemon CLI
 
 - **Priority**: High
@@ -121,12 +219,12 @@ Windows Electron/asar smoke coverage, and explicit public documentation for
 
 #### Resolution
 
-SDK auto-start now detects an Electron host and sets `ELECTRON_RUN_AS_NODE=1`
-only in the detached daemon child's copied environment. The parent Electron
-environment is not mutated, while ordinary Node launch behavior remains
-unchanged. The SDK also validates the resolved daemon CLI sidecar before spawn,
-so an incorrectly bundled embedder fails immediately with an actionable error
-instead of waiting for the startup timeout.
+SDK auto-start now detects an Electron host and uses a bounded Node bootstrap
+for the detached daemon child. The parent Electron environment is not mutated,
+the bootstrap switch is removed before daemon code loads, and ordinary Node
+launch behavior remains unchanged. The SDK also validates the resolved daemon
+CLI sidecar before spawn, so an incorrectly bundled embedder fails immediately
+with an actionable error instead of waiting for the startup timeout.
 
 The public option comments and Embedder Guide now state that SDK `homeDir` and
 CLI `--home` identify the base directory which owns `.kodax`, whereas
@@ -3490,7 +3588,7 @@ Commit `ef085fc` 把 V1 精简到 V2 时没区分"信息载体"和"脚手架"，
 ---
 
 ## Summary
-- Total: 52 (24 Open, 28 Resolved, 0 Partially Resolved, 0 Won't Fix)
+- Total: 53 (24 Open, 29 Resolved, 0 Partially Resolved, 0 Won't Fix)
 - Highest Priority Open: 091 - 缺少一等公民 MCP / Web Search / Code Search 工具体系 (High)
 - Historical archived issues are maintained in ISSUES_ARCHIVED.md
 

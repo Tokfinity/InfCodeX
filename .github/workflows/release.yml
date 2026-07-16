@@ -92,6 +92,17 @@ jobs:
         if: steps.filter.outputs.skip == 'false'
         run: npm ci
 
+      - name: Install packaged Electron smoke toolchain
+        if: steps.filter.outputs.skip == 'false' && matrix.target == 'win-x64'
+        run: npm install --no-save --package-lock=false --no-audit --no-fund electron@42.5.0 electron-builder@25.1.8
+
+      - name: Packaged Electron daemon release gate
+        if: steps.filter.outputs.skip == 'false' && matrix.target == 'win-x64'
+        env:
+          KODAX_ELECTRON_DIST: ${{ github.workspace }}\node_modules\electron\dist
+          KODAX_ELECTRON_BUILDER_CLI: ${{ github.workspace }}\node_modules\electron-builder\out\cli\cli.js
+        run: npm run test:electron-daemon
+
       - name: Build binary (${{ matrix.target }})
         if: steps.filter.outputs.skip == 'false'
         run: node scripts/build-binary.mjs --target=${{ matrix.target }}

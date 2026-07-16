@@ -10,10 +10,13 @@ All notable changes to this project will be documented in this file.
 
 - **Packaged Electron shared-daemon auto-start.** Runtime SDK embedders running
   from packaged/asar Electron applications now launch the detached daemon child
-  in Electron's Node execution mode without changing the host application
-  environment or opening a second GUI instance. Missing packaged CLI sidecars
-  fail immediately with a diagnostic instead of waiting for the startup
-  timeout, and public docs now distinguish CLI-style `homeDir` from the
+  through a bootstrap-only Node execution boundary without changing the host or
+  long-lived daemon environment, leaking `ELECTRON_RUN_AS_NODE` to user child
+  processes, or opening a second GUI instance. Trusted internal JavaScript
+  children retain a bounded Electron-to-Node launch path. Missing packaged CLI
+  sidecars fail immediately, disabled `RunAsNode` fuses receive an actionable
+  timeout diagnostic, and a real Windows Electron 42.5.0 + asar smoke now gates
+  CI and releases. Public docs also distinguish CLI-style `homeDir` from the
   lower-level `.kodax` path used by `KODAX_HOME`.
 - **Cross-platform release template checks.** Generated configuration templates
   now compare normalized line endings, so Windows CRLF checkouts no longer report

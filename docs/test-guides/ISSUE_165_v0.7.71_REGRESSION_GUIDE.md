@@ -4,7 +4,8 @@
 
 Verify that a packaged Electron Main process can cold-start and attach to the
 shared Runtime daemon through the public SDK, without relaunching the GUI or
-changing ordinary Node behavior.
+changing ordinary Node behavior or leaking Electron Node mode into daemon-owned
+user child processes.
 
 ## Automated Windows packaged/asar smoke
 
@@ -38,6 +39,8 @@ It must prove all of the following:
    revisions, daemon mode can be re-enabled, and a new daemon starts normally.
 7. A second stop/enable cycle completes and leaves the isolated profile in
    daemon policy with no running owner.
+8. Daemon application code and a normal Windows child spawned by a daemon
+   extension both observe `ELECTRON_RUN_AS_NODE` as absent.
 
 ## Focused and process-distinct regression
 
@@ -65,3 +68,7 @@ the SDK will intentionally resolve a different `<value>\.kodax` namespace.
 The focused process test also verifies that a bundled embedder which omits the
 published `dist/kodax_cli.js` sidecar receives an immediate, actionable error.
 It must not wait for the 60-second daemon startup timeout.
+
+Packaged auto-start requires Electron's default-enabled `RunAsNode` fuse. When
+an embedder deliberately disables it, use an ordinary Node/CLI-started daemon
+and attach-only SDK mode; a packaged auto-start timeout names this requirement.

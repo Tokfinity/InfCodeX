@@ -214,6 +214,13 @@ async function importMainWithMocks(options: {
     applyProcessHardening: vi.fn(() => {
       calls.push('hardening');
     }),
+    ELECTRON_NODE_ENV_SCRUB_IMPORT:
+      'data:text/javascript,delete%20process.env.ELECTRON_RUN_AS_NODE',
+    ELECTRON_RUN_AS_NODE_ENV: 'ELECTRON_RUN_AS_NODE',
+    prepareInternalNodeLaunch: (input: {
+      readonly args: readonly string[];
+      readonly env: NodeJS.ProcessEnv;
+    }) => ({ args: [...input.args], env: { ...input.env } }),
     cleanupRegisteredManagedChildren,
     shutdownTracing,
   }));

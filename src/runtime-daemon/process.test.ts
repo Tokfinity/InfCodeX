@@ -8,7 +8,7 @@ import {
 } from './process.js';
 
 describe('runtime daemon child process environment', () => {
-  it('enables Node execution only for the spawned Electron daemon child', () => {
+  it('does not retain the Electron bootstrap variable in the daemon environment', () => {
     const parentEnv: NodeJS.ProcessEnv = {
       ELECTRON_RUN_AS_NODE: '0',
       KODAX_HOME: 'parent-config-home',
@@ -18,15 +18,14 @@ describe('runtime daemon child process environment', () => {
     const childEnv = createRuntimeDaemonServeEnvironment({
       homeDir: 'runtime-home',
       parentEnv,
-      isElectron: true,
     });
 
     expect(childEnv).toMatchObject({
-      ELECTRON_RUN_AS_NODE: '1',
       KODAX_DAEMON_SERVE: '1',
       KODAX_HOME: path.join('runtime-home', '.kodax'),
       PARENT_SENTINEL: 'preserved',
     });
+    expect(childEnv.ELECTRON_RUN_AS_NODE).toBeUndefined();
     expect(parentEnv).toEqual({
       ELECTRON_RUN_AS_NODE: '0',
       KODAX_HOME: 'parent-config-home',
@@ -38,7 +37,6 @@ describe('runtime daemon child process environment', () => {
     const childEnv = createRuntimeDaemonServeEnvironment({
       homeDir: 'runtime-home',
       parentEnv: { PARENT_SENTINEL: 'preserved' },
-      isElectron: false,
     });
 
     expect(childEnv).toMatchObject({

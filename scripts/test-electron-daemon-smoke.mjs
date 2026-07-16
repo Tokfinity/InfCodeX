@@ -27,13 +27,24 @@ try {
   const resultFile = path.join(temporaryRoot, 'result.json');
   const detachFile = path.join(temporaryRoot, 'detach');
   const guiCountFile = path.join(temporaryRoot, 'gui-count.txt');
-  electronProcess = startElectron(executable, { resultFile, detachFile, guiCountFile });
+  const environmentProofFile = path.join(temporaryRoot, 'environment-proof.json');
+  electronProcess = startElectron(executable, {
+    resultFile,
+    detachFile,
+    guiCountFile,
+    environmentProofFile,
+  });
 
   // Let the SDK's 60-second cold-start budget report its own structured failure
   // before the harness times out, including on slow CI/antivirus hosts.
   const result = await waitForJson(resultFile, 75_000);
   assert.deepEqual(result.ok, true, result.error ?? 'Packaged Electron startup failed.');
   assert.equal(result.clientCount, 1, 'The packaged facade must be the only logical client after cold start.');
+  assert.deepEqual(result.environmentProof, {
+    daemon: 'absent',
+    externalChild: 'absent',
+    externalChildStatus: 0,
+  }, 'The Electron Node bootstrap switch must not reach daemon or user child code.');
   const sdk = await importInstalledRuntimeSdk();
   await verifyAttachDetachAndOwnerFence(sdk, result.runtimeId, detachFile, guiCountFile);
   await waitForExit(electronProcess, 15_000);
@@ -87,6 +98,7 @@ function startElectron(executable, files) {
       KODAX_SMOKE_RESULT: files.resultFile,
       KODAX_SMOKE_DETACH: files.detachFile,
       KODAX_SMOKE_GUI_COUNT: files.guiCountFile,
+      KODAX_SMOKE_ENV_PROOF: files.environmentProofFile,
       KODAX_TRACING: '0',
     },
     stdio: ['ignore', 'pipe', 'pipe'],
