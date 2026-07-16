@@ -2348,7 +2348,7 @@ The important creation options are:
 | `worker.resourceLimits` | unset | Optional V8 heap/stack limits; requires `isolation: 'worker'`. |
 | `worker.shutdownTimeoutMs` | `2000` | Grace before the parent terminates the Runtime Worker. |
 | `requirements.hardDispose` | `false` | Rejects inline and daemon forms; prevents an accidental weaker ownership form. |
-| `homeDir` | OS user home | Root for `.kodax` config/state and default sessions. Use a private value in tests. |
+| `homeDir` | OS user home | Base directory that owns `.kodax`, with the same meaning as CLI `daemon --home`. The SDK stores daemon state/config under `<homeDir>/.kodax`; do not pass the `.kodax` directory itself. |
 | `profile` | `'default'` | Daemon uniqueness and runtime configuration namespace. |
 | `sessionsDir` | `<homeDir>/.kodax/sessions` | Explicit session storage override. |
 | `daemonStartupTimeoutMs` | `60000` | Total cold-start/concurrent-owner wait budget. |
@@ -2433,6 +2433,14 @@ SDK auto-start allows `daemonStartupTimeoutMs` (default 60 seconds) and
 `daemonConnectTimeoutMs`. The longer startup budget covers cold machines and
 concurrent test/desktop startup without weakening PID, endpoint, token, or
 runtime-identity validation.
+
+`homeDir` and `KODAX_HOME` deliberately name different levels. Runtime SDK and
+CLI daemon `--home` accept the **base directory that contains `.kodax`**;
+lower-level `KODAX_HOME` points at the **`.kodax` data directory itself**. To
+share the default CLI daemon, omit `homeDir` or pass `os.homedir()`. For an
+isolated embedder namespace, pass a private base directory and expect data at
+`<homeDir>/.kodax`. Passing `~/.kodax` as `homeDir` would instead select
+`~/.kodax/.kodax` and a different daemon namespace.
 
 ### Worker-hosted embedded usage
 
@@ -3448,12 +3456,19 @@ from renderer or model output. `connectKodaXRuntime()` is attach-only unless `au
 An explicit inline rollback policy blocks auto-start until the owner policy is
 explicitly changed back to daemon.
 
+For Electron, `homeDir` is still the CLI-style base directory, not
+`process.env.KODAX_HOME`. Packaged/asar applications may use `autoStart: true`
+directly; the SDK launches only the daemon child in Electron's Node execution
+mode and does not mutate the application's environment or start a second GUI
+instance.
+
 ```ts
 import { connectKodaXRuntime } from '@kodax-ai/kodax/runtime';
 
 const runtime = await connectKodaXRuntime({
   profile: 'coder',
   autoStart: true,
+  homeDir: coderRuntimeBaseDir, // owns <coderRuntimeBaseDir>/.kodax
   clientInfo: {
     name: 'kodax-space',
     version: '0.1.32',

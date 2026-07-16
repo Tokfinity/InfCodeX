@@ -1,4 +1,5 @@
 import { spawn } from 'node:child_process';
+import { existsSync } from 'node:fs';
 import { fileURLToPath } from 'node:url';
 import os from 'node:os';
 import path from 'node:path';
@@ -131,6 +132,7 @@ async function spawnRuntimeDaemonServeProcess(input: {
   readonly permissionTimeoutMs?: number;
 }): Promise<{ readonly pid: number | undefined }> {
   const entry = resolveDaemonCliEntry();
+  assertRuntimeDaemonCliEntryAvailable(entry);
   const args = [
     ...(entry !== undefined ? daemonServeExecArgv(process.execArgv, entry.endsWith('.ts')) : []),
     ...(entry !== undefined ? [entry] : []),
@@ -151,11 +153,11 @@ async function spawnRuntimeDaemonServeProcess(input: {
     detached: true,
     stdio: 'ignore',
     windowsHide: true,
-    env: {
-      ...process.env,
-      KODAX_DAEMON_SERVE: '1',
-      KODAX_HOME: path.join(input.homeDir, '.kodax'),
-    },
+    env: createRuntimeDaemonServeEnvironment({
+      homeDir: input.homeDir,
+      parentEnv: process.env,
+      isElectron: process.versions.electron !== undefined,
+    }),
   });
   await new Promise<void>((resolve, reject) => {
     child.once('spawn', resolve);
@@ -163,6 +165,30 @@ async function spawnRuntimeDaemonServeProcess(input: {
   });
   child.unref();
   return { pid: child.pid };
+}
+
+export function assertRuntimeDaemonCliEntryAvailable(entry: string | undefined): void {
+  if (entry !== undefined && !existsSync(entry)) {
+    throw new Error(
+      `Runtime daemon CLI entry is unavailable at "${entry}". `
+      + 'Keep the published KodaX dist files external to the embedder bundle.',
+    );
+  }
+}
+
+export function createRuntimeDaemonServeEnvironment(input: {
+  readonly homeDir: string;
+  readonly parentEnv: NodeJS.ProcessEnv;
+  readonly isElectron: boolean;
+}): NodeJS.ProcessEnv {
+  return {
+    ...input.parentEnv,
+    // process.execPath is the packaged application executable under Electron.
+    // Limit Node mode to this copied child environment so Main remains untouched.
+    ...(input.isElectron ? { ELECTRON_RUN_AS_NODE: '1' } : {}),
+    KODAX_DAEMON_SERVE: '1',
+    KODAX_HOME: path.join(input.homeDir, '.kodax'),
+  };
 }
 
 function resolveDaemonCliEntry(): string | undefined {

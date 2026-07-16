@@ -430,6 +430,7 @@ export interface CreateKodaXRuntimeOptions {
   readonly isolation?: 'inline' | 'worker';
   /** Requires `isolation: 'worker'`; rejected instead of being silently ignored. */
   readonly worker?: RuntimeWorkerOptions;
+  /** Base directory that owns `.kodax`, matching CLI `--home`; not the `.kodax` directory used by `KODAX_HOME`. */
   readonly homeDir?: string;
   readonly profile?: string;
   readonly sessionsDir?: string;
@@ -460,6 +461,7 @@ export interface ConnectKodaXRuntimeOptions {
   readonly autoStart?: boolean;
   readonly endpoint?: string | RuntimeDaemonEndpoint;
   readonly transport?: RuntimeDaemonClientTransport;
+  /** Base directory that owns `.kodax`, matching CLI `--home`; not the `.kodax` directory used by `KODAX_HOME`. */
   readonly homeDir?: string;
   readonly sessionsDir?: string;
   readonly defaultProvider?: string;

@@ -8,6 +8,13 @@ All notable changes to this project will be documented in this file.
 
 ### Fixed
 
+- **Packaged Electron shared-daemon auto-start.** Runtime SDK embedders running
+  from packaged/asar Electron applications now launch the detached daemon child
+  in Electron's Node execution mode without changing the host application
+  environment or opening a second GUI instance. Missing packaged CLI sidecars
+  fail immediately with a diagnostic instead of waiting for the startup
+  timeout, and public docs now distinguish CLI-style `homeDir` from the
+  lower-level `.kodax` path used by `KODAX_HOME`.
 - **Cross-platform release template checks.** Generated configuration templates
   now compare normalized line endings, so Windows CRLF checkouts no longer report
   false drift during binary builds.

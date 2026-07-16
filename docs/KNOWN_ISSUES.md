@@ -1,6 +1,6 @@
 # Known Issues
 
-_Last Updated: 2026-07-15_
+_Last Updated: 2026-07-16_
 
 ---
 
@@ -14,6 +14,7 @@ _Last Updated: 2026-07-15_
 
 | ID | Priority | Status | Title | Introduced | Fixed | Created | Resolved |
 |----|----------|--------|-------|------------|-------|---------|----------|
+| 165 | High | Resolved | Packaged Electron auto-start relaunches the app instead of executing the daemon CLI | v0.7.70 | v0.7.71 | 2026-07-16 | 2026-07-16 |
 | 164 | High | Resolved | MCP cross-language zero matches can force an avoidable second model/tool round | v0.7.70 RC | v0.7.70 | 2026-07-15 | 2026-07-15 |
 | 163 | High | Resolved | A2A review found endpoint trust, task lifecycle, artifact, and protocol gaps | v0.7.69 | v0.7.70 | 2026-07-15 | 2026-07-15 |
 | 162 | High | Resolved | A2A serve drops Runtime defaults and Markdown Agent provider | v0.7.69 | v0.7.70 | 2026-07-15 | 2026-07-15 |
@@ -74,6 +75,81 @@ _Last Updated: 2026-07-15_
 
 ## Issue Details
 <!-- Full details for each issue - REQUIRED for all issues -->
+
+### 165: Packaged Electron auto-start relaunches the app instead of executing the daemon CLI
+
+- **Priority**: High
+- **Status**: Resolved
+- **Introduced**: v0.7.70
+- **Fixed**: v0.7.71
+- **Created**: 2026-07-16
+- **Resolved**: 2026-07-16
+
+#### Original Problem
+
+In a Windows packaged Electron application using asar,
+`connectKodaXRuntime({ autoStart: true })` timed out after the full daemon
+startup budget on a fresh profile. Attaching to a daemon started beforehand by
+ordinary Node worked, proving that transport, authentication, packaged CLI
+files, and the shared Runtime were healthy. The packaged app could only start
+the daemon when its child executable was explicitly placed in Electron's Node
+execution mode. SDK embedders must not need to mutate their global environment,
+resolve private CLI paths, or duplicate owner logic.
+
+#### Context
+
+- Reproduced on Windows 10 x64 with Electron 42.5.0 and asar packaging.
+- Ordinary Node CLI/SDK auto-start is unaffected.
+- `ConnectKodaXRuntimeOptions.homeDir` is also easy to confuse with
+  `KODAX_HOME`: the option is the base directory that owns `.kodax`, while the
+  environment variable points directly at the `.kodax` data directory.
+
+#### Root Cause
+
+The SDK spawned `process.execPath`. In Node this is the Node executable, but in
+a packaged Electron Main process it is the packaged application executable.
+The child inherited normal Electron application mode and therefore did not
+execute the resolved daemon CLI entry as a Node script.
+
+#### Proposed Solution
+
+Enable Node execution mode only in the spawned daemon child when the host is
+Electron, without mutating the parent environment. Preserve the existing Node
+spawn path and daemon ownership semantics. Add focused environment tests,
+Windows Electron/asar smoke coverage, and explicit public documentation for
+`homeDir`, CLI `--home`, and `KODAX_HOME` path meanings.
+
+#### Resolution
+
+SDK auto-start now detects an Electron host and sets `ELECTRON_RUN_AS_NODE=1`
+only in the detached daemon child's copied environment. The parent Electron
+environment is not mutated, while ordinary Node launch behavior remains
+unchanged. The SDK also validates the resolved daemon CLI sidecar before spawn,
+so an incorrectly bundled embedder fails immediately with an actionable error
+instead of waiting for the startup timeout.
+
+The public option comments and Embedder Guide now state that SDK `homeDir` and
+CLI `--home` identify the base directory which owns `.kodax`, whereas
+`KODAX_HOME` already identifies the `.kodax` data directory.
+
+#### Files Changed
+
+- `src/runtime-daemon/process.ts`
+- `src/runtime-daemon/process.test.ts`
+- `src/sdk-runtime.ts`
+- `scripts/test-electron-daemon-smoke.mjs`
+- `tests/fixtures/electron-daemon-smoke/`
+- `docs/SDK_EMBEDDER_GUIDE.md`
+- `docs/test-guides/ISSUE_165_v0.7.71_REGRESSION_GUIDE.md`
+
+#### Verification
+
+- Packaged Windows Electron 42.5.0 + asar smoke: passed, including cold start,
+  one GUI Main entry, same-runtime Node attach, logical `1 -> 2 -> 1` client
+  convergence, detach-only close, and two daemon/inline owner transitions.
+- Runtime daemon and process-distinct CLI regression: 156/156 passed.
+- SDK Runtime facade/config regression: 69/69 passed.
+- TypeScript `tsc --noEmit` and the publish bundle build passed.
 
 ### 164: MCP cross-language zero matches can force an avoidable second model/tool round
 
@@ -3414,7 +3490,7 @@ Commit `ef085fc` 把 V1 精简到 V2 时没区分"信息载体"和"脚手架"，
 ---
 
 ## Summary
-- Total: 51 (24 Open, 27 Resolved, 0 Partially Resolved, 0 Won't Fix)
+- Total: 52 (24 Open, 28 Resolved, 0 Partially Resolved, 0 Won't Fix)
 - Highest Priority Open: 091 - 缺少一等公民 MCP / Web Search / Code Search 工具体系 (High)
 - Historical archived issues are maintained in ISSUES_ARCHIVED.md
 
