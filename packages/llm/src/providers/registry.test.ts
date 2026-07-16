@@ -87,6 +87,24 @@ describe('provider registry', () => {
     expectReasoningPreset('mimo', 'mimo-v2.5-pro', 'mimo-v2.5-toggle');
   });
 
+  it('registers the complete Kimi Code K3/K2.7 subscription lineup', () => {
+    vi.stubEnv('KIMI_CODE_API_KEY', 'kimi-code-test-key');
+    const kimiCode = getProvider('kimi-code');
+
+    expect(kimiCode.getModel()).toBe('kimi-for-coding');
+    expect(kimiCode.getAvailableModels()).toEqual([
+      'kimi-for-coding',
+      'k3',
+      'kimi-for-coding-highspeed',
+    ]);
+    expect(kimiCode.getEffectiveContextWindow('kimi-for-coding')).toBe(262_144);
+    expect(kimiCode.getEffectiveContextWindow('kimi-for-coding-highspeed')).toBe(262_144);
+    expect(kimiCode.getEffectiveContextWindow('k3')).toBe(1_048_576);
+    expectReasoningPreset('kimi-code', 'kimi-for-coding', 'kimi-k2.7-code');
+    expectReasoningPreset('kimi-code', 'kimi-for-coding-highspeed', 'kimi-k2.7-code');
+    expectReasoningPreset('kimi-code', 'k3', 'kimi-k3');
+  });
+
   it('registers Volcengine Ark Coding Plan as ark-coding (Anthropic-compat, ARK_CODING_API_KEY)', () => {
     vi.stubEnv('ARK_CODING_API_KEY', 'ark-test-key');
     const ark = getProvider('ark-coding');
@@ -186,15 +204,23 @@ describe('provider registry', () => {
     vi.stubEnv('ZHIPU_CODING_API_KEY', 'test-key');
 
     const kimi = getProvider('kimi');
-    expect(kimi.getEffectiveContextWindow('kimi-k2.6')).toBe(256_000);
-    // User-confirmed (2026-04): K2.5 also ships a 256K context window;
-    // the historical 128K pin from FEATURE_098 was either outdated or
-    // sourced incorrectly. Both Kimi models now inherit the 256K
-    // provider-level window without per-model overrides.
-    expect(kimi.getEffectiveContextWindow('k2.5')).toBe(256_000);
-    expect(kimi.getAvailableModels()).toContain('kimi-k2.7-code');
-    expect(kimi.getEffectiveContextWindow('kimi-k2.7-code')).toBe(256_000);
+    expect(kimi.getModel()).toBe('kimi-k2.7-code');
+    expect(kimi.getAvailableModels()).toEqual([
+      'kimi-k2.7-code',
+      'kimi-k2.7-code-highspeed',
+      'kimi-k2.6',
+      'kimi-k2.5',
+    ]);
+    expect(kimi.getEffectiveContextWindow('kimi-k2.7-code')).toBe(262_144);
+    expect(kimi.getEffectiveContextWindow('kimi-k2.7-code-highspeed')).toBe(262_144);
+    expect(kimi.getEffectiveContextWindow('kimi-k2.6')).toBe(262_144);
+    expect(kimi.getEffectiveContextWindow('kimi-k2.5')).toBe(262_144);
     expect(kimi.getEffectiveMaxOutputTokens('kimi-k2.7-code')).toBe(32_768);
+    expect(kimi.getEffectiveMaxOutputTokens('kimi-k2.7-code-highspeed')).toBe(32_768);
+    expectReasoningPreset('kimi', 'kimi-k2.7-code', 'kimi-k2.7-code');
+    expectReasoningPreset('kimi', 'kimi-k2.7-code-highspeed', 'kimi-k2.7-code');
+    expectReasoningPreset('kimi', 'kimi-k2.6', 'kimi-hybrid-toggle');
+    expectReasoningPreset('kimi', 'kimi-k2.5', 'kimi-hybrid-toggle');
 
     const zhipu = getProvider('zhipu');
     expect(zhipu.getEffectiveContextWindow('glm-5')).toBe(200_000);

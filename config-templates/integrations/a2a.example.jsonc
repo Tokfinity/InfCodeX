@@ -1,23 +1,17 @@
 // Bidirectional A2A configuration: ~/.kodax/integrations/a2a.json.
-// `agents` calls third-party Agents. The optional singleton `server` exposes
-// one KodaX general task Agent; ACP remains the coding/editor protocol.
+// `agents` calls many third-party Agents. The optional singleton `server`
+// exposes exactly one KodaX general task Agent; ACP remains the coding/editor
+// protocol. Uncomment only the entries you need; no token value belongs here.
+// Legacy version 1 files remain readable. Non-empty files require an explicit
+// stopped-daemon migration; new/empty files and every later write use version 2.
 {
-  "version": 1,
-  "agents": {}
+  "version": 2,
 
-  // Outbound example (keep tokens in the named environment variable):
-  // "agents": {
-  //   "reporting": {
-  //     "cardUrl": "https://agents.example.com/.well-known/agent-card.json",
-  //     "credentialEnv": "REPORTING_A2A_TOKEN",
-  //     "effect": "read"
-  //   }
-  // },
-
-  // Create the inbound block with `kodax a2a expose`; do not copy private
-  // Agent instructions, Runtime Skills, model names, or local paths into the
-  // public `published.skills` list. Managed workspaces default below
-  // ~/kodax_a2a_server_workspace/<server>/contexts/<caller-context>/.
+  // Create this inbound block with `kodax a2a expose`; config never starts a
+  // listener by itself. Do not copy private Agent instructions, Runtime Skills,
+  // model names, or local paths into the public `published.skills` list.
+  // Managed workspaces default below
+  // ~/kodax_a2a_server_workspace/<runtime-profile>/contexts/<context-key>/.
   // Native read/grep/glob remains available according to workspace access.
   // Arbitrary shell is never exposed. Skill instructions/assets need no
   // process authority. An exact checked-in scripts/... entry requires
@@ -43,12 +37,62 @@
   //   "published": {
   //     "name": "KodaX Agent",
   //     "description": "Completes approved general tasks.",
-  //     "version": "0.7.70",
+  //     "version": "0.7.71",
   //     "skills": [{ "id": "general", "name": "General", "description": "Complete general tasks.", "tags": [] }],
   //     "inputModes": ["text/plain"],
   //     "outputModes": ["text/plain"]
   //   },
   //   "authentication": { "type": "bearer-env", "tokenEnv": "KODAX_A2A_TOKEN", "principalId": "configured-client" },
   //   "dataDir": "~/.kodax/a2a/tasks"
+  // },
+
+  // Production OAuth2 resource-server alternative for the server above. The
+  // external Authorization Server issues access tokens and, for JWT tokens,
+  // signs them. KodaX holds no issuer signing key; it validates RFC 9068 tokens
+  // against the issuer's rotating JWKS, audience, expiry, subject, and scopes.
+  // Replace the server.authentication value above with:
+  // {
+  //   "type": "oauth2-jwt",
+  //   "scheme": "enterprise-oauth",
+  //   "issuer": "https://identity.example.com",
+  //   "audience": "https://agent.example.com/a2a",
+  //   "jwksUrl": "https://identity.example.com/.well-known/jwks.json",
+  //   "tokenUrl": "https://identity.example.com/oauth/token",
+  //   "metadataUrl": "https://identity.example.com/.well-known/oauth-authorization-server",
+  //   "requiredScopes": ["a2a.invoke"]
   // }
+
+  "agents": {
+    // Fixed Bearer compatibility example. `enabled` is hot desired state:
+    // disabled Agents remain configured but are not candidates for new
+    // orchestration, while already admitted remote tasks may finish.
+    // "reporting": {
+    //   "cardUrl": "https://agents.example.com/.well-known/agent-card.json",
+    //   "enabled": true,
+    //   "credentialEnv": "REPORTING_A2A_TOKEN",
+    //   "effect": "read"
+    // },
+
+    // Standards-based machine-to-machine OAuth2 example. The external
+    // Authorization Server issues access tokens; KodaX obtains and caches them
+    // only in process memory. `tokenUrl` must exactly match the selected Card
+    // OAuth2 clientCredentials flow. Use `kodax a2a enable|disable <name>` to
+    // mutate `enabled` atomically; the owning Runtime applies it asynchronously.
+    // "reviewer": {
+    //   "cardUrl": "https://reviewer.example.com/.well-known/agent-card.json",
+    //   "enabled": false,
+    //   "effect": "read",
+    //   "authentication": {
+    //     "type": "oauth2-client-credentials",
+    //     "scheme": "enterprise-oauth",
+    //     "issuer": "https://identity.example.com",
+    //     "tokenUrl": "https://identity.example.com/oauth/token",
+    //     "clientId": "kodax-reviewer",
+    //     "clientSecretEnv": "REVIEWER_CLIENT_SECRET",
+    //     "scopes": ["a2a.invoke"],
+    //     "resource": "https://reviewer.example.com/",
+    //     "clientAuthentication": "client-secret-basic"
+    //   }
+    // }
+  }
 }

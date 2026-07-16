@@ -13,6 +13,62 @@ import { createRuntimeAgentExecutorPlaneStore } from './runtime-agent-store.js';
 
 let tempDir: string | undefined;
 
+function createTaskSnapshot(taskId: string): AgentTaskSnapshot {
+  return {
+    taskId,
+    route: 'external',
+    agentId: 'external:durable',
+    objective: 'test',
+    state: 'working',
+    cancellation: 'none',
+    registration: {
+      agentId: 'external:durable',
+      origin: 'external',
+      executorId: 'reference-http',
+      protocol: 'http',
+      configurationRevision: 'rev-1',
+      endpointIdentityHash: 'sha256:endpoint',
+      capabilities: {
+        streaming: 'supported',
+        durableTasks: 'supported',
+        inputRequired: 'supported',
+        cancellation: 'supported',
+        artifacts: 'supported',
+      },
+      effects: { remote: 'read', workspace: 'proposal' },
+    },
+    idempotencyKey: 'idem-1',
+    dispatchAttempt: 1,
+    createdAt: '2026-07-10T00:00:00.000Z',
+    updatedAt: '2026-07-10T00:00:01.000Z',
+  };
+}
+
+function writeTaskSnapshot(
+  root: string,
+  directoryName: string,
+  task: AgentTaskSnapshot,
+): void {
+  const directory = path.join(root, 'tasks', directoryName);
+  fs.mkdirSync(directory, { recursive: true });
+  fs.writeFileSync(
+    path.join(directory, 'snapshot.json'),
+    `${JSON.stringify(task, null, 2)}\n`,
+    'utf8',
+  );
+}
+
+function writeTaskEvents(root: string, taskId: string, events: readonly AgentTaskEvent[]): void {
+  const directoryName = createHash('sha256').update(taskId).digest('hex');
+  const directory = path.join(root, 'tasks', directoryName);
+  fs.mkdirSync(directory, { recursive: true });
+  fs.writeFileSync(
+    path.join(directory, 'events.jsonl'),
+    `${events.map((event) => JSON.stringify(event)).join('\n')}\n`,
+    'utf8',
+  );
+}
+
 afterEach(() => {
   if (tempDir) fs.rmSync(tempDir, { recursive: true, force: true });
   tempDir = undefined;
@@ -25,6 +81,7 @@ describe('FEATURE_258 Runtime agent store', () => {
     const registration: ExternalAgentRegistration = {
       agentId: 'external:durable',
       displayName: 'Durable',
+      managementOwner: 'runtime-config-test',
       enabled: true,
       executorId: 'reference-http',
       protocol: 'http',
@@ -73,11 +130,13 @@ describe('FEATURE_258 Runtime agent store', () => {
     };
 
     await store.saveRegistrations([registration]);
+    await store.saveTaskRegistrationSnapshots?.([registration]);
     await store.saveTask(task);
     await store.appendEvent(event);
 
     const reopened = createRuntimeAgentExecutorPlaneStore(tempDir);
     expect(await reopened.loadRegistrations()).toEqual([registration]);
+    expect(await reopened.loadTaskRegistrationSnapshots?.()).toEqual([registration]);
     expect(await reopened.loadTasks()).toEqual([task]);
     expect(await reopened.loadEvents(task.taskId)).toEqual([event]);
     const taskDirectory = createHash('sha256').update(task.taskId).digest('hex');
@@ -86,5 +145,70 @@ describe('FEATURE_258 Runtime agent store', () => {
       'utf8',
     ).trim().split(/\r?\n/)).toHaveLength(1);
     expect(fs.existsSync(path.join(tempDir, 'snapshot.json'))).toBe(false);
+  });
+
+  it('rejects a task snapshot whose directory does not match its taskId hash', async () => {
+    tempDir = fs.mkdtempSync(path.join(os.tmpdir(), 'kodax-agent-store-'));
+    const task = createTaskSnapshot('task-in-the-wrong-directory');
+    writeTaskSnapshot(tempDir, 'wrong-directory', task);
+
+    const store = createRuntimeAgentExecutorPlaneStore(tempDir);
+    await expect(store.loadTasks()).rejects.toThrow(
+      /Runtime agent task directory does not match taskId hash/,
+    );
+  });
+
+  it('rejects duplicate persisted taskIds instead of silently selecting one', async () => {
+    tempDir = fs.mkdtempSync(path.join(os.tmpdir(), 'kodax-agent-store-'));
+    const task = createTaskSnapshot('duplicate-task');
+    const canonicalDirectory = createHash('sha256').update(task.taskId).digest('hex');
+    writeTaskSnapshot(tempDir, canonicalDirectory, task);
+    writeTaskSnapshot(tempDir, 'copied-snapshot', task);
+
+    const store = createRuntimeAgentExecutorPlaneStore(tempDir);
+    await expect(store.loadTasks()).rejects.toThrow(
+      /Duplicate Runtime agent taskId: duplicate-task/,
+    );
+  });
+
+  it('rejects an event ledger entry belonging to a different task', async () => {
+    tempDir = fs.mkdtempSync(path.join(os.tmpdir(), 'kodax-agent-store-'));
+    const task = createTaskSnapshot('event-owner');
+    await createRuntimeAgentExecutorPlaneStore(tempDir).saveTask(task);
+    writeTaskEvents(tempDir, task.taskId, [{
+      taskId: 'different-task',
+      seq: 1,
+      timestamp: task.updatedAt,
+      type: 'state',
+      state: 'working',
+    }]);
+
+    const store = createRuntimeAgentExecutorPlaneStore(tempDir);
+    await expect(store.loadEvents(task.taskId)).rejects.toThrow(/event taskId does not match/i);
+  });
+
+  it('rejects a non-positive or non-increasing event sequence', async () => {
+    tempDir = fs.mkdtempSync(path.join(os.tmpdir(), 'kodax-agent-store-'));
+    const task = createTaskSnapshot('invalid-event-sequence');
+    await createRuntimeAgentExecutorPlaneStore(tempDir).saveTask(task);
+    writeTaskEvents(tempDir, task.taskId, [
+      {
+        taskId: task.taskId,
+        seq: 1,
+        timestamp: task.updatedAt,
+        type: 'state',
+        state: 'working',
+      },
+      {
+        taskId: task.taskId,
+        seq: 1,
+        timestamp: task.updatedAt,
+        type: 'state',
+        state: 'working',
+      },
+    ]);
+
+    const store = createRuntimeAgentExecutorPlaneStore(tempDir);
+    await expect(store.loadEvents(task.taskId)).rejects.toThrow(/strictly increasing positive sequence/i);
   });
 });

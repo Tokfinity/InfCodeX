@@ -404,11 +404,29 @@ export const RUNTIME_DAEMON_METHOD_SCHEMAS = {
 
   'agentRegistrations.list': { params: noParamsSchema, result: arrayAnySchema },
   'agentRegistrations.upsert': {
-    params: objectSchema({ registration: objectAnySchema }, ['registration']),
+    params: objectSchema({
+      registration: objectAnySchema,
+      expectedConfigurationRevision: nullableSchema(stringSchema),
+      expectedManagementOwner: nullableSchema(stringSchema),
+    }, ['registration']),
     result: objectAnySchema,
   },
+  'agentRegistrations.setEnabled': {
+    params: objectSchema({
+      agentId: stringSchema,
+      enabled: booleanSchema,
+      expectedConfigurationRevision: nullableSchema(stringSchema),
+      expectedManagementOwner: nullableSchema(stringSchema),
+      claimOwner: stringSchema,
+    }, ['agentId', 'enabled']),
+    result: nullableSchema(objectAnySchema),
+  },
   'agentRegistrations.remove': {
-    params: objectSchema({ agentId: stringSchema }, ['agentId']),
+    params: objectSchema({
+      agentId: stringSchema,
+      expectedConfigurationRevision: nullableSchema(stringSchema),
+      expectedManagementOwner: nullableSchema(stringSchema),
+    }, ['agentId']),
     result: booleanSchema,
   },
   'agents.listDispatchable': { params: objectAnySchema, result: arrayAnySchema },

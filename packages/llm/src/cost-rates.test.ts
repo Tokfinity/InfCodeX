@@ -57,6 +57,40 @@ describe('cost-rates', () => {
       });
     });
 
+    it('should price every routed Kimi model, including both K2.7 Code tiers', () => {
+      const kimi = DEFAULT_COST_RATES.kimi;
+      expect(Object.keys(kimi)).toEqual([
+        'kimi-k2.7-code',
+        'kimi-k2.7-code-highspeed',
+        'kimi-k2.6',
+        'kimi-k2.5',
+      ]);
+      expect(kimi['kimi-k2.7-code']).toEqual({
+        inputPer1M: 0.91,
+        outputPer1M: 3.78,
+        cachePer1M: 0.182,
+      });
+      expect(kimi['kimi-k2.7-code-highspeed']).toEqual({
+        inputPer1M: 1.82,
+        outputPer1M: 7.56,
+        cachePer1M: 0.364,
+      });
+    });
+
+    it('should track every Kimi Code subscription route without zero-cost fallthrough', () => {
+      const kimiCode = DEFAULT_COST_RATES['kimi-code'];
+      expect(Object.keys(kimiCode)).toEqual([
+        'kimi-for-coding',
+        'k3',
+        'kimi-for-coding-highspeed',
+      ]);
+      expect(kimiCode.k3).toEqual(kimiCode['kimi-for-coding']);
+      expect(kimiCode['kimi-for-coding-highspeed']).toEqual({
+        inputPer1M: 0.015,
+        outputPer1M: 0.045,
+      });
+    });
+
     it('should have Anthropic models with cache pricing', () => {
       const anthropic = DEFAULT_COST_RATES.anthropic;
       expect(anthropic['claude-opus-4-6']).toBeDefined();

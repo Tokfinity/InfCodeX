@@ -41,6 +41,7 @@ import { buildImageDataUrl } from './image-serialization.js';
 const KODAX_OPENAI_COMPAT_USER_AGENT = 'KodaX';
 
 type OpenAIReasoningAttempt =
+  | 'profile'
   | 'native-budget'
   | 'native-effort'
   | 'native-toggle'
@@ -48,7 +49,7 @@ type OpenAIReasoningAttempt =
 
 function isOpenAIReasoningAttempt(
   capability: KodaXReasoningCapability,
-): capability is OpenAIReasoningAttempt {
+): capability is Exclude<OpenAIReasoningAttempt, 'profile'> {
   return capability === 'native-budget' ||
     capability === 'native-effort' ||
     capability === 'native-toggle' ||
@@ -482,7 +483,7 @@ export abstract class KodaXOpenAICompatProvider extends KodaXBaseProvider {
 
   private applyReasoningCapability(
     createParams: OpenAI.Chat.ChatCompletionCreateParamsStreaming,
-    capability: KodaXReasoningCapability,
+    capability: OpenAIReasoningAttempt,
     reasoning: KodaXNormalizedReasoningRequest,
   ): void {
     // Passive-learning self-heal retry: the prior attempt was rejected for its
@@ -700,8 +701,10 @@ export abstract class KodaXOpenAICompatProvider extends KodaXBaseProvider {
     return budget;
   }
 
-  private getFallbackTerms(capability: KodaXReasoningCapability): string[] {
+  private getFallbackTerms(capability: OpenAIReasoningAttempt): string[] {
     switch (capability) {
+      case 'profile':
+        return ['thinking', 'reasoning_effort', 'enable_thinking', 'thinking_budget', 'budget_tokens'];
       case 'native-budget':
         return ['thinking_budget', 'budget_tokens', 'thinking'];
       case 'native-effort':
@@ -759,14 +762,18 @@ export abstract class KodaXOpenAICompatProvider extends KodaXBaseProvider {
 
       // 传递 signal 给 SDK，确保底层 HTTP 请求能被取消
       const normalizedReasoning = this.normalizeReasoning(reasoning);
+      this.validateExplicitReasoningEffort(normalizedReasoning, model);
+      const reasoningProfile = this.getReasoningProfile(model);
       const initialCapability =
         isReasoningEnabled(normalizedReasoning)
           ? this.getReasoningCapability(model)
           : 'none';
       const attempts: OpenAIReasoningAttempt[] =
-        isReasoningEnabled(normalizedReasoning)
-          ? this.getReasoningFallbackChain(initialCapability).filter(isOpenAIReasoningAttempt)
-          : ['none'];
+        reasoningProfile
+          ? ['profile', 'none']
+          : isReasoningEnabled(normalizedReasoning)
+            ? this.getReasoningFallbackChain(initialCapability).filter(isOpenAIReasoningAttempt)
+            : ['none'];
       const createParams: OpenAI.Chat.ChatCompletionCreateParamsStreaming = {
         model,
         messages: fullMessages,
@@ -1034,19 +1041,17 @@ export abstract class KodaXOpenAICompatProvider extends KodaXBaseProvider {
       let shouldForceToolChoice = Boolean(forcedToolName);
 
       const normalizedReasoning = this.normalizeReasoning(reasoning);
+      this.validateExplicitReasoningEffort(normalizedReasoning, model);
+      const reasoningProfile = this.getReasoningProfile(model);
       const initialCapability =
         isReasoningEnabled(normalizedReasoning)
           ? this.getReasoningCapability(model)
           : 'none';
-      const attempts: Array<'native-budget' | 'native-effort' | 'native-toggle' | 'none'> = isReasoningEnabled(normalizedReasoning)
-        ? this.getReasoningFallbackChain(initialCapability)
-            .filter((capability): capability is 'native-budget' | 'native-effort' | 'native-toggle' | 'none' =>
-              capability === 'native-budget' ||
-              capability === 'native-effort' ||
-              capability === 'native-toggle' ||
-              capability === 'none',
-            )
-        : ['none'];
+      const attempts: OpenAIReasoningAttempt[] = reasoningProfile
+        ? ['profile', 'none']
+        : isReasoningEnabled(normalizedReasoning)
+          ? this.getReasoningFallbackChain(initialCapability).filter(isOpenAIReasoningAttempt)
+          : ['none'];
       const createParams: OpenAI.Chat.ChatCompletionCreateParamsNonStreaming = {
         model,
         messages: fullMessages,

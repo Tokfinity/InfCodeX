@@ -148,7 +148,8 @@ import {
   readRuntimeOwnerPolicy,
   readRuntimeDaemonToken,
   releaseRuntimeDaemonLock,
-  resolveRuntimeDaemonPaths,
+  resolveRuntimeDaemonEndpointScope,
+  resolveRuntimeDaemonPathsFromConfigHome,
   updateRuntimeOwnerPolicy,
 } from './runtime-daemon/state.js';
 export { RuntimeTransportBoundaryError } from './runtime-daemon/client.js';
@@ -233,6 +234,30 @@ export interface RuntimeOwnerState {
   readonly owner: RuntimeOwnerIdentity | null;
 }
 
+function resolveRuntimeDaemonClientLocation(homeDir: string | undefined): {
+  readonly homeDir: string;
+  readonly configHome: string;
+} {
+  const resolvedHome = path.resolve(homeDir ?? os.homedir());
+  return {
+    homeDir: resolvedHome,
+    configHome: homeDir === undefined
+      ? path.resolve(replApi.KODAX_DIR)
+      : path.join(resolvedHome, '.kodax'),
+  };
+}
+
+function resolveRuntimeDaemonClientPaths(
+  homeDir: string | undefined,
+  profile = 'default',
+) {
+  const location = resolveRuntimeDaemonClientLocation(homeDir);
+  return {
+    ...location,
+    paths: resolveRuntimeDaemonPathsFromConfigHome(location.configHome, profile),
+  };
+}
+
 /**
  * Reserve the Coder profile for inline rollback. Partner runtimes must not use
  * this fence; they remain in their independent embedded namespace.
@@ -242,8 +267,7 @@ export function acquireKodaXInlineOwner(input: {
   readonly profile?: string;
   readonly enableRollback?: boolean;
 } = {}): RuntimeInlineOwnerHandle {
-  const homeDir = path.resolve(input.homeDir ?? os.homedir());
-  const paths = resolveRuntimeDaemonPaths(homeDir, input.profile ?? 'default');
+  const { paths } = resolveRuntimeDaemonClientPaths(input.homeDir, input.profile);
   const ownerId = `inline_${randomUUID().replace(/-/g, '')}`;
   const lock = acquireRuntimeInlineOwner(paths, {
     runtimeId: ownerId,
@@ -268,20 +292,14 @@ export function getKodaXRuntimeOwnerPolicy(input: {
   readonly homeDir?: string;
   readonly profile?: string;
 } = {}): RuntimeOwnerPolicyState {
-  return readRuntimeOwnerPolicy(resolveRuntimeDaemonPaths(
-    path.resolve(input.homeDir ?? os.homedir()),
-    input.profile ?? 'default',
-  ));
+  return readRuntimeOwnerPolicy(resolveRuntimeDaemonClientPaths(input.homeDir, input.profile).paths);
 }
 
 export function getKodaXRuntimeOwnerState(input: {
   readonly homeDir?: string;
   readonly profile?: string;
 } = {}): RuntimeOwnerState {
-  const paths = resolveRuntimeDaemonPaths(
-    path.resolve(input.homeDir ?? os.homedir()),
-    input.profile ?? 'default',
-  );
+  const { paths } = resolveRuntimeDaemonClientPaths(input.homeDir, input.profile);
   const owner = readRuntimeDaemonLockOwner(paths.lockFile);
   return {
     profile: paths.profile,
@@ -298,10 +316,7 @@ export function enableKodaXDaemonOwner(input: {
   readonly homeDir?: string;
   readonly profile?: string;
 } = {}): RuntimeOwnerPolicyState {
-  return enableRuntimeDaemonOwner(resolveRuntimeDaemonPaths(
-    path.resolve(input.homeDir ?? os.homedir()),
-    input.profile ?? 'default',
-  ));
+  return enableRuntimeDaemonOwner(resolveRuntimeDaemonClientPaths(input.homeDir, input.profile).paths);
 }
 
 export function setKodaXRuntimeOwnerMode(input: {
@@ -310,10 +325,7 @@ export function setKodaXRuntimeOwnerMode(input: {
   readonly homeDir?: string;
   readonly profile?: string;
 }): { readonly mode: 'daemon' | 'inline'; readonly revision: number; readonly updatedAt: string } {
-  const paths = resolveRuntimeDaemonPaths(
-    path.resolve(input.homeDir ?? os.homedir()),
-    input.profile ?? 'default',
-  );
+  const { paths } = resolveRuntimeDaemonClientPaths(input.homeDir, input.profile);
   if (readRuntimeDaemonLockOwner(paths.lockFile) !== undefined) {
     throw new Error('Cannot change Runtime owner mode while an owner lock exists.');
   }
@@ -480,6 +492,10 @@ export interface RuntimeCapabilityRequirements {
   readonly hardDispose?: boolean;
   /** Reject hosts that do not advertise an installed external Agent executor plane. */
   readonly externalAgents?: boolean;
+  /** Require owner/revision-fenced external Agent registration administration. */
+  readonly externalAgentAdmin?: 1;
+  /** Require a daemon that owns and hot-reconciles its A2A integration config. */
+  readonly a2aConfigReconciler?: 1;
   readonly operationDeduplication?: 1;
   readonly sessionObservation?: 1;
   readonly afterTurnInput?: 1;
@@ -1988,6 +2004,7 @@ export async function createKodaXRuntime(
   assertRuntimeCapabilities({
     hardDispose: false,
     externalAgents: options.externalAgents !== undefined,
+    ...(options.externalAgents !== undefined ? { externalAgentAdmin: { version: 1 } } : {}),
   }, options.requirements);
 
   const identity: RuntimeIdentity = {
@@ -2183,8 +2200,10 @@ async function createInProcessExternalAgentDaemon(
   const endpoint = options.daemonEndpoint !== undefined
     ? normalizeRuntimeDaemonEndpoint(options.daemonEndpoint)
     : undefined;
+  const daemonLocation = resolveRuntimeDaemonClientLocation(options.homeDir);
   const lease = await acquireRuntimeDaemonLease({
-    homeDir: options.homeDir,
+    homeDir: daemonLocation.homeDir,
+    configHome: daemonLocation.configHome,
     profile: options.profile,
     endpoint,
     connectTimeoutMs: options.daemonConnectTimeoutMs,
@@ -2218,7 +2237,7 @@ async function createInProcessExternalAgentDaemon(
       daemonToken: options.daemonToken ?? readRuntimeDaemonToken(lease.paths),
       clientInfo: options.clientInfo,
       capabilities: options.capabilities,
-      requirements: { ...options.requirements, externalAgents: true },
+      requirements: { ...options.requirements, externalAgents: true, externalAgentAdmin: 1 },
     });
     let closed = false;
     return {
@@ -2304,6 +2323,8 @@ function assertRuntimeCapabilities(
   if (
     !requirements?.hardDispose
     && !requirements?.externalAgents
+    && requirements?.externalAgentAdmin === undefined
+    && requirements?.a2aConfigReconciler === undefined
     && requirements?.operationDeduplication === undefined
     && requirements?.sessionObservation === undefined
     && requirements?.afterTurnInput === undefined
@@ -2335,6 +2356,8 @@ function assertRuntimeCapabilities(
     assertVersionedRuntimeCapability(capabilities, 'operationDeduplication', requirements.operationDeduplication);
   }
   const versionedRequirements = [
+    ['externalAgentAdmin', requirements.externalAgentAdmin],
+    ['a2aConfigReconciler', requirements.a2aConfigReconciler],
     ['sessionObservation', requirements.sessionObservation],
     ['afterTurnInput', requirements.afterTurnInput],
     ['interruptInput', requirements.interruptInput],
@@ -2396,9 +2419,11 @@ export async function connectKodaXRuntime(
   const explicitEndpoint = options.endpoint !== undefined
     ? normalizeRuntimeDaemonEndpoint(options.endpoint)
     : undefined;
+  const daemonLocation = resolveRuntimeDaemonClientLocation(options.homeDir);
   const lease = options.transport === undefined && options.autoStart === true
     ? await acquireRuntimeDaemonProcessLease({
-        homeDir: options.homeDir,
+        homeDir: daemonLocation.homeDir,
+        configHome: daemonLocation.configHome,
         profile: options.profile,
         endpoint: explicitEndpoint,
         defaultProvider: options.defaultProvider,
@@ -2415,7 +2440,10 @@ export async function connectKodaXRuntime(
       options.transport === undefined
         ? defaultRuntimeDaemonEndpoint(
             options.profile ?? 'default',
-            path.resolve(options.homeDir ?? os.homedir()),
+            resolveRuntimeDaemonEndpointScope(
+              daemonLocation.homeDir,
+              daemonLocation.configHome,
+            ),
           )
         : undefined
     );
@@ -2533,8 +2561,9 @@ function isRuntimeGrantedScope(value: string): value is RuntimeGrantedScope {
 function resolveConnectDaemonToken(options: ConnectKodaXRuntimeOptions): string | undefined {
   if (options.daemonToken !== undefined) return options.daemonToken;
   if (options.transport !== undefined && options.autoStart !== true) return undefined;
-  const homeDir = path.resolve(options.homeDir ?? os.homedir());
-  return readRuntimeDaemonToken(resolveRuntimeDaemonPaths(homeDir, options.profile ?? 'default'));
+  return readRuntimeDaemonToken(
+    resolveRuntimeDaemonClientPaths(options.homeDir, options.profile).paths,
+  );
 }
 
 function normalizeRuntimeDaemonEndpoint(
@@ -3845,6 +3874,7 @@ function createRuntimeAdminService(
     agentRegistrations: plane?.registrations ?? {
       async list() { return []; },
       async upsert() { throw externalAgentsDisabled(); },
+      async setEnabled() { throw externalAgentsDisabled(); },
       async remove() { throw externalAgentsDisabled(); },
     },
   };

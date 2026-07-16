@@ -1296,7 +1296,7 @@ import {
 ```ts
 interface KodaXModelCapabilities {
   provider: string;                 // 'anthropic' | 'kimi' | 'ark-coding' | <custom-name>
-  model: string;                    // model id (e.g. 'claude-sonnet-4-6', 'kimi-k2.6')
+  model: string;                    // model id (e.g. 'claude-sonnet-4-6', 'kimi-k2.7-code')
   displayName: string;              // human label — falls back to model id
   supportsThinking: boolean;        // native reasoning is available?
   reasoningCapability: 'native-budget' | 'native-effort' | 'native-toggle' | 'prompt-only' | 'none' | 'unknown'; // legacy mechanism label
@@ -1328,8 +1328,8 @@ for (const caps of listAllModelCapabilities()) {
 ```ts
 import { resolveModelCapabilities } from '@kodax-ai/kodax/llm';
 
-const caps = resolveModelCapabilities('kimi', 'kimi-k2.6');
-// => { contextWindow: 256_000, supportsThinking: true, reasoningProfile: { defaultEffort: 'high', ... }, ... }
+const caps = resolveModelCapabilities('kimi', 'kimi-k2.7-code');
+// => { contextWindow: 262_144, supportsThinking: true, reasoningProfile: { defaultEffort: 'high', ... }, ... }
 ```
 
 For picker/status UIs, use `reasoningProfile.supportedEfforts` and
@@ -1466,11 +1466,11 @@ and loaded into the in-memory `KODAX_PROVIDER_SNAPSHOTS` export. When upstream
 providers publish a new model or change a context-window cap, the JSON file is
 the patch site — the new value flows to runtime (via `buildProviderConfig`) AND
 to SDK consumers (via the getters) in a single edit. The current snapshot is
-dated 2026-06-14 and includes the GPT-5.4, Kimi K2.7 Code, GLM-5.2, MiniMax
+dated 2026-07-16 and includes the GPT-5.4, Kimi K2.7 Code / HighSpeed, GLM-5.2, MiniMax
 M3/M2.7, DeepSeek V4, and Doubao Seed 2.0 route refreshes where supported. The
 test suite at
 [`packages/llm/src/providers/model-capabilities.test.ts`](../packages/llm/src/providers/model-capabilities.test.ts)
-locks in specific values (e.g. kimi-k2.6 at 256K, deepseek-v4-pro at 1M)
+locks in specific values (e.g. the public Kimi lineup at 262,144 tokens, deepseek-v4-pro at 1M)
 so accidental drift is caught at PR time.
 
 The probe scripts that surveyed upstream APIs live at
@@ -1954,7 +1954,7 @@ Cli-bridge providers (`gemini-cli`, `codex-cli`) return their CLI binary's known
 
 ### Reference
 
-- Source: `packages/llm/src/providers/verify-credential.ts` (orchestrator + classifier) + `verify-credential.test.ts` (19 unit tests) + `verify-credential-integration.test.ts` (10 real-key tests, gated on `KODAX_INTEGRATION_TEST=1`).
+- Source: `packages/llm/src/providers/verify-credential.ts` (orchestrator + classifier) + `verify-credential.test.ts` (27 unit tests) + `verify-credential-integration.test.ts` (12 gated real-key/fake-key tests, enabled by `KODAX_INTEGRATION_TEST=1`).
 - Data: `packages/llm/src/providers/provider-capabilities.json` `verifyStrategy` field per provider.
 - Design notes + probe matrix: [docs/features/v0.7.45.md FEATURE_216](features/v0.7.45.md#feature_216-provider-credential-verification-api).
 
@@ -2348,7 +2348,7 @@ The important creation options are:
 | `worker.resourceLimits` | unset | Optional V8 heap/stack limits; requires `isolation: 'worker'`. |
 | `worker.shutdownTimeoutMs` | `2000` | Grace before the parent terminates the Runtime Worker. |
 | `requirements.hardDispose` | `false` | Rejects inline and daemon forms; prevents an accidental weaker ownership form. |
-| `homeDir` | OS user home | Base directory that owns `.kodax`, with the same meaning as CLI `daemon --home`. The SDK stores daemon state/config under `<homeDir>/.kodax`; do not pass the `.kodax` directory itself. |
+| `homeDir` | unset | When omitted, use the exact resolved `KODAX_HOME`. When set, this is the base directory that owns `.kodax`, with the same meaning as CLI `daemon --home`; daemon state/config live under `<homeDir>/.kodax`. |
 | `profile` | `'default'` | Daemon uniqueness and runtime configuration namespace. |
 | `sessionsDir` | `<homeDir>/.kodax/sessions` | Explicit session storage override. |
 | `daemonStartupTimeoutMs` | `60000` | Total cold-start/concurrent-owner wait budget. |
@@ -2436,8 +2436,10 @@ runtime-identity validation.
 
 `homeDir` and `KODAX_HOME` deliberately name different levels. Runtime SDK and
 CLI daemon `--home` accept the **base directory that contains `.kodax`**;
-lower-level `KODAX_HOME` points at the **`.kodax` data directory itself**. To
-share the default CLI daemon, omit `homeDir` or pass `os.homedir()`. For an
+lower-level `KODAX_HOME` points at the **data directory itself** and need not be
+named `.kodax`. To share the default CLI daemon, omit `homeDir`; this honors the
+exact resolved `KODAX_HOME`. Passing `os.homedir()` explicitly instead selects
+`<os.homedir()>/.kodax`, regardless of an ambient custom `KODAX_HOME`. For an
 isolated embedder namespace, pass a private base directory and expect data at
 `<homeDir>/.kodax`. Passing `~/.kodax` as `homeDir` would instead select
 `~/.kodax/.kodax` and a different daemon namespace.
@@ -2583,7 +2585,7 @@ Every `KodaXRuntime` exposes the same service set in inline, Worker, and daemon 
 | `artifacts` | Create/get/delete runtime artifact references for file/image/video inputs. |
 | `status` | Runtime snapshot with sessions, runs, permissions, workflows, and daemon counters. |
 | `diagnostics` | Latest context-budget and tool-exposure decisions for GUI/debug surfaces. |
-| `admin.agentRegistrations` | List/upsert/remove redacted external-agent registrations. With no plane, list is empty and mutations fail clearly. |
+| `admin.agentRegistrations` | List/upsert, atomically set `enabled` while preserving the full registration, or remove redacted external-agent registrations. Owner/revision-conditional mutation prevents a stale manager from changing a same-ID replacement. With no plane, list is empty and mutations fail clearly. |
 | `agents` | Check `enabled`, list/describe policy-filtered dispatchable agents, and preflight a selected route. |
 | `agentTasks` | Start/list/get/wait/continue/cancel/reconcile durable external-agent tasks and read their ordered event stream. |
 
@@ -2923,7 +2925,7 @@ fail clearly. Set
 
 | Surface | Methods | Contract |
 |---|---|---|
-| `runtime.admin.agentRegistrations` | `list`, `upsert`, `remove` | Durable owner configuration. List results expose `credentialConfigured`, never a credential value. With no plane, `list()` is empty and mutations fail clearly. |
+| `runtime.admin.agentRegistrations` | `list`, `upsert`, `setEnabled`, `remove` | Durable owner configuration. `setEnabled` preserves the complete captured executor registration while changing admission. Mutations accept both `expectedConfigurationRevision` and `expectedManagementOwner`; `setEnabled` can also atomically `claimOwner` on an unowned registration and rejects another owner. List results expose `managementOwner` and `credentialConfigured`, never a credential value. The same contract is carried across the daemon transport. With no plane, `list()` is empty and mutations fail clearly. |
 | `runtime.agents` | `enabled`, `listDispatchable`, `describe`, `preflight` | Applies health, capability, effect, concurrency, credential-presence, configuration-revision, and host-policy checks before dispatch. |
 | `runtime.agentTasks` | `start`, `list`, `get`, `events`, `wait`, `sendInput`, `cancel`, `reconcile` | Durable snapshots and append-only events for external tasks. The task keeps the immutable registration/executor binding captured at start. |
 
@@ -2933,6 +2935,24 @@ terminal task state and rejects on a positive `timeoutMs` expiry. `sendInput()`
 is valid only while the task reports `input-required` or `auth-required`.
 `reconcile()` asks the bound executor for authoritative remote state after an
 owner restart or uncertain failure.
+
+For external tasks, the built-in stores persist an internal full registration
+snapshot before the public task ledger. It is keyed by Agent ID and revision,
+is never returned by task or daemon APIs, and lets an admitted task keep using
+its original executor route after registration update/removal and Runtime
+restart. The internal form fixes `enabled: true` and omits management ownership
+and health diagnostics. The task's public route summary is validated against that internal
+snapshot before recovery. Terminal task state is durable before the last
+unreferenced snapshot is removed; startup cleans crash-window orphans.
+
+Custom `AgentExecutorPlaneStore` implementations should implement
+`loadTaskRegistrationSnapshots()` and `saveTaskRegistrationSnapshots()` as a
+pair and give one Runtime exclusive write ownership of that store. Omitting
+both remains compatible, but restart recovery then succeeds only while the
+exact current registration still exists. Store only non-secret executor config
+or secret references in `executorConfig`/`credentialRef`; the broker resolves
+the current referenced credential just in time, so removing a registration is
+not equivalent to revoking that credential at its issuer.
 
 The owner plane has a terminal close contract. Closing it rejects every pending
 `wait()` (including a wait without `timeoutMs`), disposes its executor instances,
@@ -2956,8 +2976,18 @@ silently falling back to the native child backend.
   each artifact before it materializes in the host boundary.
 - External agents may declare workspace effect `none` or `proposal`; direct
   workspace mutation is intentionally not a valid external registration.
-- Use `expectedConfigurationRevision` to prevent dispatching against a stale
-  endpoint/configuration seen by an earlier catalog read.
+- Use `expectedConfigurationRevision` for dispatch. For registration mutations,
+  compare both it and `expectedManagementOwner` so a same-revision ownership
+  change cannot be overwritten from an earlier catalog read. Config managers
+  should set a stable `managementOwner`; they may atomically claim an unowned
+  legacy registration while disabling it, but must not mutate a registration
+  owned by another manager.
+- Treat `configurationRevision` as the stable identity of immutable execution
+  content, not as a small counter. The same content may deterministically reuse
+  the same revision across remove/re-add or Runtime restart, but different
+  endpoint, protocol, executor/auth config, capabilities, effects, Skills,
+  modalities, or resource limits must never reuse it. Built-in A2A
+  configuration derives it from content.
 - A remote start followed by uncertain local persistence is recorded as
   `unknown` with its executor reference preserved; reconcile it rather than
   blindly starting a duplicate. Stable idempotency keys protect retries.
@@ -3216,11 +3246,23 @@ time/body/redirects, and strips authorization on a cross-origin redirect. A
 custom `fetch` option is a trusted transport override: the embedder then owns
 equivalent DNS-to-connection binding in that transport or proxy.
 
-Starting in v0.7.70, the interface selected from the Agent Card must remain on
-the Card's trusted origin. A configured `credentialRef` is used only when the
-Card advertises the A2A 1.0 Bearer security scheme; discovery fails closed
-rather than sending a secret to an unadvertised or differently secured
-endpoint.
+The selected interface must remain on the Card's trusted origin. KodaX parses
+typed Card-level and Skill-level security declarations: requirement objects are
+alternatives (OR), every scheme inside one object is conjunctive (AND), and an
+empty requirement is anonymous. A configured credential is used only when one
+complete requirement is satisfiable; protected Skills that the configured
+profile cannot satisfy are not advertised to the Runtime catalog.
+
+The built-in profiles are HTTP Bearer and OAuth 2.0 Client Credentials. The
+OAuth profile pins the Card scheme, issuer, exact token endpoint, client ID,
+secret reference, scopes, optional RFC 8707 resource, and client authentication
+method. The external Authorization Server—not the Agent and not KodaX—issues
+the access token. KodaX resolves the client secret only for refresh, keeps an
+expiring token in process memory, coalesces refreshes, and retries one RPC once
+with a fresh token after `401`. Card, Agent RPC, and token endpoints remain
+separate safe-fetch trust boundaries, so a remote Agent cannot redirect a task
+payload to the token origin. API key, Basic, interactive OAuth, OIDC, mTLS, and
+multi-scheme AND requirements fail explicitly in the built-in client.
 
 ```ts
 import {
@@ -3231,7 +3273,8 @@ import { createKodaXRuntime } from '@kodax-ai/kodax/runtime';
 
 const client = {
   networkPolicy: {
-    allowedOrigins: ['https://reviewer.example'],
+    // Card/RPC and OAuth token endpoints are separate trust boundaries.
+    allowedOrigins: ['https://reviewer.example', 'https://identity.example'],
     allowPrivateAddresses: false,
     requestTimeoutMs: 10_000,
     maxResponseBytes: 1_048_576,
@@ -3254,8 +3297,13 @@ const runtime = await createKodaXRuntime({
     factories: [createA2AAgentExecutorFactory(client)],
     credentialBroker: {
       async withCredential(ref, use) {
-        if (ref !== 'a2a/reviewer') throw new Error('Unknown credential reference.');
-        return use(process.env.A2A_REVIEWER_TOKEN ?? '');
+        const value = ref === 'a2a/reviewer'
+          ? process.env.A2A_REVIEWER_TOKEN
+          : ref === 'a2a/reviewer-client-secret'
+            ? process.env.A2A_REVIEWER_CLIENT_SECRET
+            : undefined;
+        if (!value) throw new Error(`Missing credential for reference: ${ref}.`);
+        return use(value);
       },
     },
     policy: ({ registration }) => ({ allowed: registration.effects.remote === 'read' }),
@@ -3272,6 +3320,30 @@ const started = await runtime.agentTasks.start({
   expectedConfigurationRevision: discovered.registration.configurationRevision,
 });
 const terminal = await runtime.agentTasks.wait(started.taskId, 60_000);
+```
+
+For OAuth, replace the legacy `credentialRef` input with the structured form;
+the same F258 `credentialBroker` must resolve `clientSecretRef`. The shared
+network policy must admit both origins, while each Card, RPC, and token request
+is still narrowed to its own exact origin:
+
+```ts
+const discovered = await discoverA2ARegistration({
+  agentId: 'external:a2a-reviewer',
+  agentCardUrl: 'https://reviewer.example/.well-known/agent-card.json',
+  authentication: {
+    type: 'oauth2-client-credentials',
+    scheme: 'enterprise-oauth',
+    issuer: 'https://identity.example/',
+    tokenUrl: 'https://identity.example/oauth/token',
+    clientId: 'kodax-reviewer',
+    clientSecretRef: 'a2a/reviewer-client-secret',
+    scopes: ['a2a.invoke'],
+    resource: 'https://reviewer.example/',
+    clientAuthentication: 'client-secret-basic',
+  },
+  effects: { remote: 'read' },
+}, client);
 ```
 
 The executor supports durable task start/get, input continuation, cancel,
@@ -3297,6 +3369,24 @@ kodax a2a test reviewer
 kodax a2a call reviewer "Review this document"
 ```
 
+The no-code OAuth path stores only the environment-variable name for the client
+secret. It can be staged disabled and hot-activated later:
+
+```bash
+export A2A_REVIEWER_CLIENT_SECRET='provisioned-out-of-band'
+# PowerShell: $env:A2A_REVIEWER_CLIENT_SECRET='provisioned-out-of-band'
+# PowerShell: use one line or replace each trailing \ with a backtick.
+kodax a2a add reviewer https://reviewer.example/.well-known/agent-card.json \
+  --disabled --effect read --oauth-scheme enterprise-oauth \
+  --oauth-issuer https://identity.example/ \
+  --oauth-token-url https://identity.example/oauth/token \
+  --oauth-client-id kodax-reviewer \
+  --oauth-client-secret-env A2A_REVIEWER_CLIENT_SECRET \
+  --oauth-scope a2a.invoke --oauth-resource https://reviewer.example/
+kodax a2a enable reviewer
+kodax a2a disable reviewer
+```
+
 Embedded CLI Runtimes and the user-owned daemon automatically reconcile these
 entries as `external:<name>`. Discovery/update failure retains that entry's
 last-known-good registration; another entry can still update. The environment
@@ -3304,14 +3394,63 @@ broker resolves `credentialEnv` only at call time. Automatic Runtime
 registration accepts public HTTPS and exact loopback targets; explicit private
 network access remains an operator action on the direct CLI/SDK path.
 
+`enabled` is desired state in `a2a.json`, not a fabricated cross-process live
+flag. `a2a list` reports configured entries and that desired state. The owning
+Runtime's `admin.agentRegistrations.list()` is authoritative for applied
+registrations. Automatic reconciliation handles disables/removals first,
+skips unchanged peers, performs no Card or token request for disabled entries,
+and rediscovers before re-enable. Once the owning Runtime observes and applies
+the revision, disable blocks all new starts, including an explicit
+`external:<name>` target, but does not cancel or break an already admitted task.
+The CLI mutation returning is not cross-process acknowledgement. A failed
+activation remains retryable through the owning
+`ConfiguredA2ARuntimeHandle.reload()` even when the disk revision is unchanged;
+the passive `kodax integrations reload` command validates only its own process.
+
+`kodax a2a test` performs Card discovery and security planning only. It never
+requests an OAuth access token; token acquisition starts at `a2a call` or the
+first Runtime dispatch.
+
 Inbound publication is also no-code:
 
 ```bash
 export KODAX_A2A_TOKEN='replace-with-a-long-random-token'
+# PowerShell: $env:KODAX_A2A_TOKEN='replace-with-a-long-random-token'
 kodax a2a expose                    # Runtime default Agent
 kodax a2a expose document-agent     # ~/.kodax/agents/document-agent.md
 kodax a2a serve --port 8765
 ```
+
+The fixed token above is the compatibility profile. For dynamic production
+tokens, configure KodaX as an OAuth Resource Server and point it at an external
+issuer:
+
+```bash
+kodax a2a expose document-agent --auth oauth2-jwt \
+  --oauth-scheme enterprise-oauth \
+  --oauth-issuer https://identity.example/ \
+  --oauth-audience https://kodax.example/a2a \
+  --oauth-jwks-url https://identity.example/.well-known/jwks.json \
+  --oauth-token-url https://identity.example/oauth/token \
+  --oauth-metadata-url https://identity.example/.well-known/oauth-authorization-server \
+  --required-scope a2a.invoke
+kodax a2a serve --port 8765
+```
+
+The Authorization Server authenticates clients, provisions client IDs/secrets,
+issues/rotates/revokes tokens and, for JWT access tokens, signs them and
+publishes metadata/JWKS. The calling A2A
+client obtains a token out of band or with Client Credentials and sends it in
+the Bearer header. KodaX validates JWT type, asymmetric signature, issuer,
+audience, lifetime, subject, and required scopes before task lookup, then maps
+`sub` to the A2A principal. Missing/invalid credentials return `401`; a valid
+token without the required scope returns `403 insufficient_scope`. KodaX does
+not hold the issuer signing key or expose token, refresh, client-registration,
+login, or consent endpoints. Opaque-token introspection and mTLS deployments
+must use a host authentication adapter or reverse proxy. Offline JWT/JWKS
+validation also cannot observe immediate per-token revocation: use short access
+token lifetimes, signing-key rotation, or an introspecting proxy/adapter when
+that property is required.
 
 `a2a serve` resolves its Runtime provider in this order: explicit CLI option,
 environment, core configuration, then the built-in default. Provider-compatible
@@ -3331,7 +3470,7 @@ projection and never reveal the private Skill inventory.
 The running server pins Agent, Skill, workspace, tool registration, process and
 store revisions. Card/auth/limits can hot reload; execution-authority changes
 require an explicit restart. Managed contexts live below
-`~/kodax_a2a_server_workspace/<profile>/contexts/`. Exact Skill scripts require
+  `~/kodax_a2a_server_workspace/<runtime-profile>/contexts/<context-key>/`. Exact Skill scripts require
 `process: isolated`, an admitted `scripts/...` path, and a passing
 `kodax sandbox doctor`; KodaX never falls back to an unsandboxed shell.
 
@@ -3346,7 +3485,10 @@ configured Agent, media types, and skills. Authentication runs before task
 lookup; authorization runs per operation; task visibility is principal-scoped.
 
 ```ts
-import { createKodaXA2AServer } from '@kodax-ai/kodax/a2a';
+import {
+  createBearerEnvA2AAuthentication,
+  createKodaXA2AServer,
+} from '@kodax-ai/kodax/a2a';
 import { createKodaXRuntime } from '@kodax-ai/kodax/runtime';
 
 const runtime = await createKodaXRuntime({ mode: 'embedded', isolation: 'inline' });
@@ -3362,16 +3504,12 @@ const server = createKodaXA2AServer({
     inputModes: ['text/plain'],
     outputModes: ['text/plain'],
   },
-  authentication: {
-    securitySchemes: { bearer: { httpAuthSecurityScheme: { scheme: 'Bearer' } } },
-    securityRequirements: [{ schemes: { bearer: { list: [] } } }],
-    async authenticate(request) {
-      return request.headers.get('authorization') === `Bearer ${process.env.KODAX_A2A_TOKEN}`
-        ? { subject: 'trusted-orchestrator', scopes: ['a2a'] }
-        : null;
-    },
-  },
-  async authorize({ principal }) { return principal.scopes.includes('a2a'); },
+  authentication: createBearerEnvA2AAuthentication({
+    type: 'bearer-env',
+    tokenEnv: 'KODAX_A2A_TOKEN',
+    principalId: 'trusted-orchestrator',
+  }),
+  async authorize({ principal }) { return principal.scopes.includes('a2a:invoke'); },
   limits: {
     maxRequestBytes: 1_048_576,
     maxPartBytes: 524_288,
@@ -3389,9 +3527,9 @@ const server = createKodaXA2AServer({
 const localBaseUrl = await server.listen({ hostname: '127.0.0.1', port: 0 });
 ```
 
-Production hosts route `GET /.well-known/agent-card.json` and JSON-RPC `POST /`
-to `server.handle(request)` behind their own TLS terminator. `POST /a2a` remains
-an accepted compatibility alias. `listen()` waits for durable recovery before
+Production hosts route `GET /.well-known/agent-card.json` and canonical
+JSON-RPC `POST /a2a` to `server.handle(request)` behind their own TLS
+terminator. `POST /` remains an accepted compatibility alias. `listen()` waits for durable recovery before
 it resolves. A host that wires `handle()` directly may explicitly await
 `server.whenReady()` before it starts accepting traffic; `handle()` also waits
 for the same recovery promise. The durable edge store supports get/list,

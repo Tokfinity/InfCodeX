@@ -131,6 +131,30 @@ function createBaseReasoningProfileFromPreset(
         disabledEfforts: ['none', 'minimal'],
         supportsDisabledThinking: true,
       };
+    case 'kimi-k3':
+      return {
+        reasoningPreset: preset,
+        effortStrategy: 'provider-toggle',
+        thinkingStrategy: 'provider-toggle',
+        defaultEffort: 'max',
+        supportedEfforts: [
+          { value: 'none' },
+          { value: 'low', isUserVisible: false },
+          { value: 'high', isUserVisible: false },
+          { value: 'max', isDefault: true },
+        ],
+        effortAliases: {
+          minimal: 'low',
+          minimum: 'low',
+          light: 'low',
+          medium: 'high',
+          xhigh: 'max',
+          ultra: 'max',
+        },
+        disabledEfforts: ['none'],
+        supportsReasoningEffort: true,
+        supportsDisabledThinking: true,
+      };
     case 'kimi-k2.7-code':
     case 'minimax-m2-always':
       return {

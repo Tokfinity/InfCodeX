@@ -4,6 +4,7 @@ export class A2AError extends Error {
     message: string,
     readonly httpStatus = 200,
     readonly data?: unknown,
+    readonly headers?: Readonly<Record<string, string>>,
   ) {
     super(message);
     this.name = 'A2AError';

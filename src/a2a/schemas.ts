@@ -1,6 +1,8 @@
 import { A2AError } from './errors.js';
+import { parseA2ASecurity } from './security.js';
 import type {
   A2AAgentCard,
+  A2AAgentExtension,
   A2AAgentInterface,
   A2AAgentSkill,
   A2AArtifact,
@@ -25,6 +27,22 @@ const TASK_STATES = new Set<A2ATaskState>([
 
 export function isRecord(value: unknown): value is Record<string, unknown> {
   return value !== null && typeof value === 'object' && !Array.isArray(value);
+}
+
+function mediaTypeEssence(value: string | null): string | undefined {
+  if (value === null) return undefined;
+  const essence = value.split(';', 1)[0]?.trim().toLowerCase();
+  return essence && !/\s/u.test(essence) ? essence : undefined;
+}
+
+export function isJsonMediaType(value: string | null): boolean {
+  const essence = mediaTypeEssence(value);
+  return essence === 'application/json'
+    || /^application\/[!#$%&'*+\-.^_`|~0-9a-z]+\+json$/u.test(essence ?? '');
+}
+
+export function isEventStreamMediaType(value: string | null): boolean {
+  return mediaTypeEssence(value) === 'text/event-stream';
 }
 
 function requiredString(record: Record<string, unknown>, key: string, label: string): string {
@@ -57,8 +75,24 @@ function parseInterface(value: unknown): A2AAgentInterface {
   };
 }
 
-function parseSkill(value: unknown): A2AAgentSkill {
+function validateSecurity(
+  schemes: unknown,
+  requirements: unknown,
+  label: string,
+): void {
+  try {
+    parseA2ASecurity(schemes, requirements);
+  } catch (error: unknown) {
+    const detail = error instanceof Error ? error.message : String(error);
+    throw new A2AError(-32602, `${label} is invalid: ${detail}`);
+  }
+}
+
+function parseSkill(value: unknown, securitySchemes: unknown): A2AAgentSkill {
   if (!isRecord(value)) throw new A2AError(-32602, 'Agent Card skill is invalid.');
+  if (value.securityRequirements !== undefined) {
+    validateSecurity(securitySchemes, value.securityRequirements, 'skill.securityRequirements');
+  }
   return {
     id: requiredString(value, 'id', 'skill'),
     name: requiredString(value, 'name', 'skill'),
@@ -67,6 +101,33 @@ function parseSkill(value: unknown): A2AAgentSkill {
     ...(Array.isArray(value.examples) ? { examples: stringArray(value.examples, 'skill.examples') } : {}),
     ...(Array.isArray(value.inputModes) ? { inputModes: stringArray(value.inputModes, 'skill.inputModes') } : {}),
     ...(Array.isArray(value.outputModes) ? { outputModes: stringArray(value.outputModes, 'skill.outputModes') } : {}),
+    ...(Array.isArray(value.securityRequirements)
+      ? { securityRequirements: value.securityRequirements.filter(isRecord) } : {}),
+  };
+}
+
+function parseExtension(value: unknown): A2AAgentExtension {
+  if (!isRecord(value)) throw new A2AError(-32602, 'Agent Card extension is invalid.');
+  const uri = requiredString(value, 'uri', 'extension');
+  try {
+    new URL(uri);
+  } catch {
+    throw new A2AError(-32602, 'Agent Card extension.uri must be an absolute URI.');
+  }
+  if (value.description !== undefined && typeof value.description !== 'string') {
+    throw new A2AError(-32602, 'Agent Card extension.description must be a string.');
+  }
+  if (value.required !== undefined && typeof value.required !== 'boolean') {
+    throw new A2AError(-32602, 'Agent Card extension.required must be a boolean.');
+  }
+  if (value.params !== undefined && !isRecord(value.params)) {
+    throw new A2AError(-32602, 'Agent Card extension.params must be an object.');
+  }
+  return {
+    uri,
+    ...(typeof value.description === 'string' ? { description: value.description } : {}),
+    ...(typeof value.required === 'boolean' ? { required: value.required } : {}),
+    ...(isRecord(value.params) ? { params: value.params } : {}),
   };
 }
 
@@ -79,6 +140,11 @@ export function parseA2AAgentCard(value: unknown): A2AAgentCard {
   }
   if (!Array.isArray(skills)) throw new A2AError(-32602, 'Agent Card must declare skills.');
   if (!isRecord(value.capabilities)) throw new A2AError(-32602, 'Agent Card capabilities are invalid.');
+  if (value.capabilities.extensions !== undefined
+    && !Array.isArray(value.capabilities.extensions)) {
+    throw new A2AError(-32602, 'Agent Card capabilities.extensions must be an array.');
+  }
+  validateSecurity(value.securitySchemes, value.securityRequirements, 'Agent Card security declaration');
   return {
     name: requiredString(value, 'name', 'Agent Card'),
     description: requiredString(value, 'description', 'Agent Card'),
@@ -92,14 +158,14 @@ export function parseA2AAgentCard(value: unknown): A2AAgentCard {
       ...(typeof value.capabilities.extendedAgentCard === 'boolean'
         ? { extendedAgentCard: value.capabilities.extendedAgentCard } : {}),
       ...(Array.isArray(value.capabilities.extensions)
-        ? { extensions: value.capabilities.extensions.filter(isRecord) } : {}),
+        ? { extensions: value.capabilities.extensions.map(parseExtension) } : {}),
     },
     ...(isRecord(value.securitySchemes) ? { securitySchemes: value.securitySchemes } : {}),
     ...(Array.isArray(value.securityRequirements)
       ? { securityRequirements: value.securityRequirements.filter(isRecord) } : {}),
     defaultInputModes: stringArray(value.defaultInputModes, 'Agent Card defaultInputModes'),
     defaultOutputModes: stringArray(value.defaultOutputModes, 'Agent Card defaultOutputModes'),
-    skills: skills.map(parseSkill),
+    skills: skills.map((skill) => parseSkill(skill, value.securitySchemes)),
   };
 }
 

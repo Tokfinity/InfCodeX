@@ -86,6 +86,14 @@ export interface A2AAgentSkill {
   readonly examples?: readonly string[];
   readonly inputModes?: readonly string[];
   readonly outputModes?: readonly string[];
+  readonly securityRequirements?: readonly Readonly<Record<string, unknown>>[];
+}
+
+export interface A2AAgentExtension {
+  readonly uri: string;
+  readonly description?: string;
+  readonly required?: boolean;
+  readonly params?: Readonly<Record<string, unknown>>;
 }
 
 export interface A2AAgentCard {
@@ -97,7 +105,7 @@ export interface A2AAgentCard {
     readonly streaming?: boolean;
     readonly pushNotifications?: boolean;
     readonly extendedAgentCard?: boolean;
-    readonly extensions?: readonly Readonly<Record<string, unknown>>[];
+    readonly extensions?: readonly A2AAgentExtension[];
   };
   readonly securitySchemes?: Readonly<Record<string, unknown>>;
   readonly securityRequirements?: readonly Readonly<Record<string, unknown>>[];
@@ -136,16 +144,38 @@ export interface A2ANetworkPolicy {
 
 export interface A2AClientOptions {
   readonly networkPolicy: A2ANetworkPolicy;
+  /** RPC/SSE task payload ceiling; Card/OAuth discovery keeps the stricter network limit. */
+  readonly maxTaskResponseBytes?: number;
   readonly pollIntervalMs: number;
   readonly authorization?: string;
   /** Trusted transport override. Supplying one opts out of the default DNS-pinned connector. */
   readonly fetch?: typeof globalThis.fetch;
 }
 
+export type A2AClientAuthenticationInput =
+  | {
+      readonly type: 'http-bearer';
+      readonly scheme: string;
+      readonly credentialRef: string;
+    }
+  | {
+      readonly type: 'oauth2-client-credentials';
+      readonly scheme: string;
+      readonly issuer: string;
+      readonly tokenUrl: string;
+      readonly clientId: string;
+      readonly clientSecretRef: string;
+      readonly scopes: readonly string[];
+      readonly resource?: string;
+      readonly clientAuthentication: 'client-secret-basic' | 'client-secret-post';
+    };
+
 export interface A2ARegistrationInput {
   readonly agentId: string;
   readonly agentCardUrl: string;
+  /** Legacy shorthand for HTTP Bearer; prefer authentication. */
   readonly credentialRef?: string;
+  readonly authentication?: A2AClientAuthenticationInput;
   readonly effects: Pick<AgentEffectDeclaration, 'remote'>;
 }
 
@@ -161,6 +191,11 @@ export interface A2APrincipal {
 }
 
 export interface A2AAuthentication {
+  /**
+   * Non-secret authority identifier used to namespace durable task ownership.
+   * Keep it stable across credential rotation; change it when the identity authority changes.
+   */
+  readonly securityRealm: string;
   readonly securitySchemes: Readonly<Record<string, unknown>>;
   readonly securityRequirements: readonly Readonly<Record<string, unknown>>[];
   authenticate(request: Request): Promise<A2APrincipal | null>;

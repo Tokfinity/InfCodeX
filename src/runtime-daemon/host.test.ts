@@ -67,6 +67,7 @@ describe('runtime daemon host', () => {
       runtimeId: runtime.identity.runtimeId,
       status: 'ready',
       endpoint: host.endpoint.path,
+      configHome: paths.configHome,
     });
 
     const client = await createRuntimeDaemonSocketClientTransport(host.endpoint);
@@ -952,6 +953,7 @@ function makeRuntime(options: {
       agentRegistrations: {
         async list() { return []; },
         async upsert() { throw new Error('External agents are disabled in this test runtime.'); },
+        async setEnabled() { throw new Error('External agents are disabled in this test runtime.'); },
         async remove() { throw new Error('External agents are disabled in this test runtime.'); },
       },
     },

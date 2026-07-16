@@ -23,10 +23,10 @@ const TARGETS = [
     auth: (k) => `Bearer ${k}`,
   },
   {
-    name: 'kimi-code',
-    apiKeyEnv: 'KIMI_CODE_API_KEY',
-    // Coding endpoint owns its own model list; the OpenAI-style sibling
-    // exposes a /models listing.
+    name: 'kimi',
+    apiKeyEnv: 'KIMI_API_KEY',
+    // Kimi Open Platform and Kimi For Coding use different credentials.
+    // This public model list must be queried with the Open Platform key.
     url: 'https://api.moonshot.cn/v1/models',
     auth: (k) => `Bearer ${k}`,
   },

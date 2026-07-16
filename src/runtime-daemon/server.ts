@@ -3,6 +3,7 @@ import {
   getActiveExtensionRuntime,
 } from '@kodax-ai/coding';
 import type { ExtensionRuntimeContract } from '@kodax-ai/coding';
+import { ExternalAgentRegistrationConflictError } from '@kodax-ai/agent';
 
 import type {
   KodaXRuntime,
@@ -81,6 +82,8 @@ export interface RuntimeDaemonDispatcherOptions {
   readonly capabilities?: Readonly<Record<string, unknown>>;
   /** Host authorization; client capability negotiation alone never grants registration admin. */
   readonly allowAgentRegistrationAdmin?: boolean;
+  /** Trusted host fact; arbitrary capability overrides cannot assert config ownership. */
+  readonly ownsA2AConfigReconciler?: boolean;
   readonly controlJournal?: RuntimeControlJournal;
   readonly requireOperationEnvelope?: boolean;
   readonly grantedScopes?: readonly RuntimeGrantedScope[];
@@ -164,7 +167,8 @@ const RUNTIME_METHOD_SCOPES: ReadonlyMap<RuntimeDaemonMethod, RuntimeGrantedScop
   ...scopeEntries('workflow:control', ['workflow.pause', 'workflow.resume', 'workflow.stop']),
   ...scopeEntries('artifact:write', ['artifact.create', 'artifact.delete']),
   ...scopeEntries('agent:control', [
-    'agentRegistrations.list', 'agentRegistrations.upsert', 'agentRegistrations.remove',
+    'agentRegistrations.list', 'agentRegistrations.upsert', 'agentRegistrations.setEnabled',
+    'agentRegistrations.remove',
     'agents.listDispatchable', 'agents.describe', 'agents.preflight',
     'agentTasks.list', 'agentTasks.get', 'agentTasks.events', 'agentTasks.wait', 'agentTasks.start',
     'agentTasks.sendInput', 'agentTasks.cancel', 'agentTasks.reconcile',
@@ -542,6 +546,8 @@ async function dispatchRuntimeDaemonRequest(
         capabilities: runtimeDaemonCapabilities(
           options.capabilities,
           runtime.agents.enabled,
+          runtime.agents.enabled && options.allowAgentRegistrationAdmin === true,
+          options.ownsA2AConfigReconciler === true,
           options.controlJournal,
           options.reverseBridgeHub !== undefined,
           options.durableHostToolInvocations === true,
@@ -600,6 +606,8 @@ async function dispatchRuntimeDaemonRequest(
       return runtimeDaemonCapabilities(
         options.capabilities,
         runtime.agents.enabled,
+        runtime.agents.enabled && options.allowAgentRegistrationAdmin === true,
+        options.ownsA2AConfigReconciler === true,
         options.controlJournal,
         options.reverseBridgeHub !== undefined,
         options.durableHostToolInvocations === true,
@@ -718,12 +726,43 @@ async function dispatchRuntimeDaemonRequest(
         requireRecord(params.registration) as unknown as Parameters<
           KodaXRuntime['admin']['agentRegistrations']['upsert']
         >[0],
+        {
+          expectedConfigurationRevision: optionalExpectedConfigurationRevision(params),
+          expectedManagementOwner: optionalExpectedManagementOwner(params),
+        },
+      );
+    }
+    case 'agentRegistrations.setEnabled': {
+      requireAgentRegistrationAdmin(options);
+      requireExternalAgentsEnabled(runtime);
+      const params = requireRecord(request.params);
+      const claimOwner = optionalStringField(params, 'claimOwner');
+      if (claimOwner !== undefined && claimOwner.length === 0) {
+        throw daemonError('invalid_request', 'Expected non-empty optional string param: claimOwner');
+      }
+      return runtime.admin.agentRegistrations.setEnabled(
+        requireStringField(params, 'agentId'),
+        requireBooleanField(params, 'enabled'),
+        {
+          expectedConfigurationRevision: optionalExpectedConfigurationRevision(params),
+          expectedManagementOwner: optionalExpectedManagementOwner(params),
+          ...(claimOwner ? { claimOwner } : {}),
+        },
       );
     }
     case 'agentRegistrations.remove':
       requireAgentRegistrationAdmin(options);
       requireExternalAgentsEnabled(runtime);
-      return runtime.admin.agentRegistrations.remove(requireStringParam(request.params, 'agentId'));
+      {
+        const params = requireRecord(request.params);
+        return runtime.admin.agentRegistrations.remove(
+          requireStringField(params, 'agentId'),
+          {
+            expectedConfigurationRevision: optionalExpectedConfigurationRevision(params),
+            expectedManagementOwner: optionalExpectedManagementOwner(params),
+          },
+        );
+      }
     case 'agents.listDispatchable':
       return runtime.agents.listDispatchable(
         requireRecord(request.params) as unknown as Parameters<KodaXRuntime['agents']['listDispatchable']>[0],
@@ -1235,11 +1274,17 @@ function parseRuntimeClientCapabilities(value: unknown): RuntimeClientCapabiliti
 function runtimeDaemonCapabilities(
   overrides: Readonly<Record<string, unknown>> = {},
   externalAgents = false,
+  externalAgentAdmin = false,
+  ownsA2AConfigReconciler = false,
   controlJournal?: RuntimeControlJournal,
   reverseBridgeResume = false,
   durableHostToolInvocations = false,
   daemonManagement = false,
 ): Record<string, unknown> {
+  const safeOverrides = { ...overrides };
+  delete safeOverrides.externalAgents;
+  delete safeOverrides.externalAgentAdmin;
+  delete safeOverrides.a2aConfigReconciler;
   const reverseBridgeLimits = runtimeDaemonReverseBridgeLimits();
   return {
     events: true,
@@ -1252,6 +1297,17 @@ function runtimeDaemonCapabilities(
     contextDiagnostics: true,
     hardDispose: false,
     externalAgents,
+    ...(externalAgentAdmin ? {
+      externalAgentAdmin: {
+        version: 1,
+        activation: true,
+        conditionalMutations: true,
+        managementOwner: true,
+      },
+    } : {}),
+    ...(ownsA2AConfigReconciler ? {
+      a2aConfigReconciler: { version: 1 },
+    } : {}),
     ...(controlJournal !== undefined ? {
       operationDeduplication: {
         version: 1,
@@ -1344,7 +1400,7 @@ function runtimeDaemonCapabilities(
       memory: true,
       runtimeArtifacts: true,
     },
-    ...overrides,
+    ...safeOverrides,
   };
 }
 
@@ -1730,11 +1786,47 @@ function requireStringField(record: Record<string, unknown>, key: string): strin
   return value;
 }
 
+function requireBooleanField(record: Record<string, unknown>, key: string): boolean {
+  const value = record[key];
+  if (typeof value !== 'boolean') {
+    throw daemonError('invalid_request', `Expected boolean param: ${key}`);
+  }
+  return value;
+}
+
 function optionalStringField(record: Record<string, unknown>, key: string): string | undefined {
   const value = record[key];
   if (value === undefined || value === null) return undefined;
   if (typeof value !== 'string') {
     throw daemonError('invalid_request', `Expected optional string param: ${key}`);
+  }
+  return value;
+}
+
+function optionalExpectedConfigurationRevision(
+  record: Record<string, unknown>,
+): string | null | undefined {
+  const value = record.expectedConfigurationRevision;
+  if (value === undefined || value === null) return value;
+  if (typeof value !== 'string' || value.length === 0) {
+    throw daemonError(
+      'invalid_request',
+      'Expected optional string or null param: expectedConfigurationRevision',
+    );
+  }
+  return value;
+}
+
+function optionalExpectedManagementOwner(
+  record: Record<string, unknown>,
+): string | null | undefined {
+  const value = record.expectedManagementOwner;
+  if (value === undefined || value === null) return value;
+  if (typeof value !== 'string' || value.length === 0) {
+    throw daemonError(
+      'invalid_request',
+      'Expected optional string or null param: expectedManagementOwner',
+    );
   }
   return value;
 }
@@ -1818,6 +1910,13 @@ function normalizeRuntimeDaemonError(error: unknown): {
   readonly message: string;
   readonly data?: unknown;
 } {
+  if (error instanceof ExternalAgentRegistrationConflictError) {
+    return {
+      code: 'conflict',
+      message: error.message,
+      data: { agentId: error.agentId, conflict: error.code },
+    };
+  }
   if (error instanceof Error) {
     const maybe = error as Error & {
       readonly code?: unknown;

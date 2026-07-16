@@ -24,14 +24,14 @@ import { getProvider } from '@kodax-ai/llm';
 
 ## 内置 Provider Alias
 
-Capability 数据的单一来源是 `src/providers/provider-capabilities.json`（当前更新时间：2026-06-14）。
+Capability 数据的单一来源是 `src/providers/provider-capabilities.json`（当前更新时间：2026-07-16）。
 
 | Alias | Environment variable | Reasoning | Default model |
 |---|---|---|---|
 | `anthropic` | `ANTHROPIC_API_KEY` | Yes | `claude-sonnet-4-6` |
 | `openai` | `OPENAI_API_KEY` | Yes | `gpt-5.3-codex` |
 | `deepseek` | `DEEPSEEK_API_KEY` | Yes | `deepseek-v4-flash` |
-| `kimi` | `KIMI_API_KEY` | Yes | `kimi-k2.6` |
+| `kimi` | `KIMI_API_KEY` | Yes | `kimi-k2.7-code` |
 | `kimi-code` | `KIMI_CODE_API_KEY` | Yes | `kimi-for-coding` |
 | `qwen` | `QWEN_API_KEY` | Yes | `qwen3.5-plus` |
 | `zhipu` | `ZHIPU_API_KEY` | Yes | `glm-5` |
@@ -43,10 +43,12 @@ Capability 数据的单一来源是 `src/providers/provider-capabilities.json`�
 | `gemini-cli` | `GEMINI_API_KEY` | No | CLI bridge default |
 | `codex-cli` | `OPENAI_API_KEY` | No | CLI bridge default |
 
-2026-06-14 模型快照重点：
+2026-07-16 模型快照重点：
 
 - OpenAI 默认 `gpt-5.3-codex`，并提供 `gpt-5.4` / `gpt-5.3-codex-spark`。
-- Kimi 默认 `kimi-k2.6`，并提供 `kimi-k2.7-code`（256K）/ `k2.5`。
+- Kimi 默认 `kimi-k2.7-code`（思考始终开启），并提供同模型高速路由 `kimi-k2.7-code-highspeed`，以及可切换思考的 `kimi-k2.6` / `kimi-k2.5`；四者上下文均为 262,144 token。
+- Kimi Code 保持 `kimi-for-coding` 为稳定默认模型，并提供 `/model` 可选的 `k3`（最高 1,048,576 token，依订阅档位而定）与 `kimi-for-coding-highspeed`。K3 默认使用 `max` 思考强度，也支持显式关闭思考。
+- `kimi` 使用开放平台 `KIMI_API_KEY`；`kimi-code` 是独立的 Kimi For Coding 订阅端点和 `KIMI_CODE_API_KEY`，两类密钥不可互换。
 - Zhipu / Zhipu Coding 默认 `glm-5`，并提供 `glm-5.2`（1M context, 131072 max output）/ `glm-5.1` / `glm-5-turbo`。
 - MiniMax Coding 默认 `MiniMax-M2.7`，并保留 `MiniMax-M3`（Frontier Coding, native multimodal, 1M context）/ `MiniMax-M2.7-highspeed`；旧 M2.5/M2.1/M2 路由已移除。
 - Ark Coding 默认 `glm-5.1`，同一 gateway 暴露 GLM、Kimi K2.6、MiniMax M3/M2.7、DeepSeek V3.2/V4、Doubao Seed 2.0 Code/Pro/Lite。

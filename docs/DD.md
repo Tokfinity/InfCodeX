@@ -200,6 +200,12 @@ zhipu-coding, zai-coding, minimax-coding, mimo-coding, mimo, ark-coding,
 gemini-cli, codex-cli
 ```
 
+For `kimi`, `providers/provider-capabilities.json`, `cost-rates.ts`, and the
+OpenAI-compatible request serializer jointly define the public K2.7
+Code/HighSpeed and K2.6/K2.5 contract. K2.7 rejects thinking-disable requests;
+K2.6 emits the required wire toggle. Optional live-key tests are gated and do
+not run during the default offline suite.
+
 Custom provider design must remain data-driven: protocol, base URL, API key env
 var, default model, reasoning preset/profile, multimodal support, forced tool
 support, timeout normalization, and session semantics belong in provider
@@ -337,7 +343,7 @@ Coding consumes validation/enqueue helpers from this layer; file and video
 artifact contracts remain stable even when a provider route is not wired for
 send.
 
-## 13. MCP
+## 13. MCP And A2A
 
 MCP lives under `packages/agent/src/capabilities/mcp`.
 
@@ -353,6 +359,27 @@ Core modules:
 The published `@kodax-ai/kodax/mcp` subpath exposes a focused MCP surface.
 Coding tools consume MCP through capability providers rather than duplicating
 connection logic.
+
+A2A lives under `src/a2a` and is published through `@kodax-ai/kodax/a2a`:
+
+- `config.ts` reads version 1 compatibility input and writes version 2; a
+  non-empty legacy file needs an explicit stopped-daemon migration.
+- `client-auth.ts`, `security.ts`, and `client-executor.ts` select one complete
+  advertised security alternative, resolve fixed Bearer or OAuth 2.0 Client
+  Credentials just in time, and keep Card/RPC/token origins separate.
+- `server-auth.ts` validates external-issuer RFC 9068 JWT access tokens/JWKS;
+  the compatibility Bearer profile and custom authentication adapters expose a
+  stable `securityRealm` for task ownership.
+- `runtime-config.ts` applies disables/removals before discovery and mutates
+  only source-owned registrations with revision/owner preconditions.
+- `server.ts` authenticates before body/task lookup, reserves global admission,
+  replays after subscription, drains admitted handlers on close, and enforces
+  fixed per-task/per-server/per-stream SSE limits.
+
+The external-Agent plane persists an internal immutable registration snapshot
+for each admitted route. It is not part of the public task DTO and contains no
+resolved credential; it keeps input/cancel/reconcile routing stable across
+registration replacement/removal and Runtime restart.
 
 ## 14. Governed Memory Runtime
 

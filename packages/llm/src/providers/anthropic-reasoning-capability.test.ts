@@ -441,6 +441,65 @@ describe('anthropic reasoning capability', () => {
     expect(create.mock.calls[0]?.[0].thinking).toEqual({ type: 'enabled' });
   });
 
+  it('sends Kimi K3 effort inside thinking and defaults omitted reasoning to max', async () => {
+    const create = vi.fn().mockResolvedValue(createCompletedAnthropicStream());
+    const provider = new TestAnthropicProvider('native-effort', {
+      messages: { create },
+    }, {
+      model: 'k3',
+      reasoningProfile: {
+        reasoningPreset: 'kimi-k3',
+        effortStrategy: 'anthropic-reasoning-effort',
+        thinkingStrategy: 'provider-toggle',
+        defaultEffort: 'max',
+        supportedEfforts: [
+          { value: 'none' },
+          { value: 'low', isUserVisible: false },
+          { value: 'high', isUserVisible: false },
+          { value: 'max', isDefault: true },
+        ],
+        disabledEfforts: ['none'],
+        supportsReasoningEffort: true,
+        supportsDisabledThinking: true,
+      },
+    });
+
+    await provider.stream(MESSAGES, TOOLS, 'system');
+
+    expect(create.mock.calls[0]?.[0].thinking).toEqual({
+      type: 'enabled',
+      effort: 'max',
+    });
+    expect(create.mock.calls[0]?.[0]).not.toHaveProperty('reasoning_effort');
+  });
+
+  it('sends explicit Kimi K3 effort aliases and disabled thinking on the K3 wire', async () => {
+    const create = vi.fn().mockResolvedValue(createCompletedAnthropicStream());
+    const provider = new TestAnthropicProvider('native-effort', {
+      messages: { create },
+    }, {
+      model: 'k3',
+      reasoningProfile: {
+        reasoningPreset: 'kimi-k3',
+        effortStrategy: 'anthropic-reasoning-effort',
+        thinkingStrategy: 'provider-toggle',
+        defaultEffort: 'max',
+        supportedEfforts: [{ value: 'none' }, { value: 'low' }, { value: 'high' }, { value: 'max' }],
+        effortAliases: { medium: 'high', xhigh: 'max' },
+        disabledEfforts: ['none'],
+        supportsReasoningEffort: true,
+        supportsDisabledThinking: true,
+      },
+    });
+
+    await provider.stream(MESSAGES, TOOLS, 'system', { ...reasoning, effort: 'xhigh' });
+    await provider.stream(MESSAGES, TOOLS, 'system', { ...reasoning, effort: 'none' });
+
+    expect(create.mock.calls[0]?.[0].thinking).toEqual({ type: 'enabled', effort: 'max' });
+    expect(create.mock.calls[1]?.[0].thinking).toEqual({ type: 'disabled' });
+    expect(create.mock.calls[1]?.[0]).not.toHaveProperty('reasoning_effort');
+  });
+
   it('enables thinking for the always-on MiniMax M2.7 preset (v0.7.57 regression fix)', async () => {
     const create = vi.fn().mockResolvedValue(createCompletedAnthropicStream());
     const provider = new TestAnthropicProvider('native-toggle', {

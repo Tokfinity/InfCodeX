@@ -153,6 +153,10 @@ answer. Sidecar Verifier is out-of-band and only judges termination quality.
 - capability metadata and provider policy gates,
 - side-query support for verifier and other out-of-band LLM calls.
 
+The 2026-07-16 Kimi snapshot makes `kimi-k2.7-code` the public default, keeps
+HighSpeed/K2.6/K2.5 as explicit routes, and treats thinking support as a
+route-specific wire contract rather than a generic compatible-provider toggle.
+
 Provider-specific logic belongs at the provider boundary: request shape,
 reasoning parameters, token caps, image support, forced tool choice support,
 retry behavior, and stream watchdogs. Prompt prose should not fork by provider
@@ -229,7 +233,7 @@ requirements span both product and SDK:
 
 Session management is a product feature, not merely a debug log.
 
-## 9. Skills And MCP
+## 9. Skills, MCP, And A2A
 
 Skills are Markdown-based capabilities discovered from configured paths and
 expanded for the LLM through `packages/agent/src/capabilities/skills`.
@@ -247,6 +251,22 @@ Published SDK subpaths expose focused subsets:
 - `@kodax-ai/kodax/media`
 - `@kodax-ai/kodax/skills`
 - `@kodax-ai/kodax/mcp`
+
+A2A remains a root integration edge rather than an agent-layer wire concern.
+`src/a2a` composes A2A 1.0 Card discovery, JSON-RPC/SSE execution, inbound
+Runtime publication, configuration reconciliation, and the protocol-neutral
+external-Agent plane. Version 2 configuration adds per-Agent desired-state
+activation, outbound OAuth 2.0 Client Credentials, and inbound RFC 9068 JWT
+Resource Server validation while retaining fixed Bearer compatibility.
+
+Trust is split by authority: Card, Agent RPC, and Authorization Server origins
+are independently constrained; a stable authentication realm scopes durable
+task ownership; registration revisions and management ownership fence hot
+reloads; immutable internal route snapshots preserve admitted work after
+registration changes. Inbound authentication precedes task/body disclosure,
+and global admission plus bounded SSE resources prevent one client from
+exhausting the server. KodaX consumes externally issued tokens and never owns
+production signing or issuance.
 
 ## 10. Governed Memory Runtime
 

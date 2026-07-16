@@ -458,7 +458,8 @@ export abstract class KodaXBaseProvider {
     const explicitToolChoiceRejection = mentionsToolChoice && (
       message.includes('unknown parameter') ||
       message.includes('invalid parameter') ||
-      message.includes('unsupported')
+      message.includes('unsupported') ||
+      message.includes('incompatible')
     );
     if (explicitToolChoiceRejection) {
       return true;

@@ -14,6 +14,8 @@ _Last Updated: 2026-07-16_
 
 | ID | Priority | Status | Title | Introduced | Fixed | Created | Resolved |
 |----|----------|--------|-------|------------|-------|---------|----------|
+| 168 | High | Resolved | A2A post-closure review found executor shutdown, daemon ownership, and server admission gaps | v0.7.69 | v0.7.71 | 2026-07-16 | 2026-07-16 |
+| 167 | High | Resolved | A2A OAuth and hot-activation closure could leak credentials or mutate stale registrations | v0.7.69 | v0.7.71 | 2026-07-16 | 2026-07-16 |
 | 166 | High | Resolved | Electron daemon bootstrap mode leaks into user child processes | v0.7.71 RC | v0.7.71 | 2026-07-16 | 2026-07-16 |
 | 165 | High | Resolved | Packaged Electron auto-start relaunches the app instead of executing the daemon CLI | v0.7.70 | v0.7.71 | 2026-07-16 | 2026-07-16 |
 | 164 | High | Resolved | MCP cross-language zero matches can force an avoidable second model/tool round | v0.7.70 RC | v0.7.70 | 2026-07-15 | 2026-07-15 |
@@ -76,6 +78,277 @@ _Last Updated: 2026-07-16_
 
 ## Issue Details
 <!-- Full details for each issue - REQUIRED for all issues -->
+
+### 168: A2A post-closure review found executor shutdown, daemon ownership, and server admission gaps
+
+- **Priority**: High
+- **Status**: Resolved
+- **Introduced**: v0.7.69
+- **Fixed**: v0.7.71
+- **Created**: 2026-07-16
+- **Resolved**: 2026-07-16
+
+#### Original Problem
+
+The final upstream/downstream A2A review found several independent paths where
+the implementation could violate its documented safety or usability contract.
+Executor start/input/cancel/reconcile work could race shutdown or executor
+disposal; an arbitrary `KODAX_HOME` could resolve to different daemon/config
+identities and a daemon could publish ready before initial A2A reconciliation.
+An older healthy daemon could also remain on last-known-good registrations
+after a successful-looking config mutation.
+
+Protocol edges were inconsistent as well. Configured document Agents had no
+usable artifact-reference policy even though the SDK correctly defaulted
+materialization to deny, while unsupported required Agent Card extensions could
+be registered as if supported. `a2a add --allow-private` could persist a target
+that automatic Runtime activation would always reject. Inbound starts from
+different principals were not globally atomic, Runtime replay/subscription had
+event-loss windows, request authentication happened after bounded body
+allocation, media checks accepted substring lookalikes, server close could
+overtake admitted handlers, and SSE subscribers had no aggregate or byte queue
+ceiling.
+
+#### Context
+
+- A2A remains the general Agent protocol; these fixes must not introduce ACP,
+  a gateway, an extension registry, an artifact downloader, or unrestricted
+  private-network discovery.
+- F258 owns protocol-neutral executor durability/lifecycle. F267 owns A2A wire
+  semantics. F268 owns declarative A2A v2 config and activation. F269 owns the
+  shared-daemon capability/ownership boundary.
+- Legal presentation/document Parts can approach the 16 MiB inbound Part limit
+  and expand under base64/JSON/SSE framing, so discovery limits and task-response
+  limits cannot be one value.
+
+#### Root Cause
+
+Lifecycle accounting covered cached executor ownership but did not treat every
+admitted task mutation and event iterator as a close-drained lease. Daemon paths
+were partly derived from a CLI-style home and partly from the resolved config
+home; readiness and config mutation lacked a complete capability/reconciliation
+barrier. A2A Card extensions and configured artifact references were parsed but
+not closed at the discovery/host-policy boundaries.
+
+Inbound task admission used narrower principal lanes without one short global
+reservation transaction. Runtime recovery replayed before subscribing, and
+HTTP lifecycle accounting stopped before all response/handler work had drained.
+The stream producer enqueued without per-task/global admission or a
+byte-measured slow-consumer budget. Media validation used substring matching,
+and authentication was coupled to the already-parsed RPC body.
+
+#### Resolution
+
+The executor plane now serializes each task's mutating operations, leases every
+executor operation, shares one idempotent close promise, rejects new admission
+after the close fence, drains admitted writes/starts/short operations, aborts
+owned streams, waits for iterators, and disposes once. Captured inputs,
+executor config, and reference metadata are JSON-safe; durable registration,
+task, directory, task-ID, and event-sequence conflicts fail closed; persistence
+precedes in-memory publication.
+
+Daemon startup and mutation use the exact resolved config home, persist that
+identity, reconcile A2A before ready, and require every healthy target owner to
+advertise both `externalAgentAdmin: 1` and the independent
+`a2aConfigReconciler: 1`. The daemon strips A2A ownership fields from arbitrary
+capability overrides and derives them from installed owner state, so a client or
+embedder cannot forge config-reconciler ownership. Non-empty A2A v1 files
+require the explicit stopped-owner migration; v2 migration is an idempotent
+read-only no-op. Failed initial reconciliation closes the Runtime/controller
+before ownership release.
+
+Agent Card extensions are validated and any unsupported required extension
+rejects discovery. Configured A2A Runtime wiring admits only bounded A2A-
+provenance `data:`/HTTP(S) references and never downloads remote URLs; the
+general SDK remains default-deny. Direct `kodax a2a call` now uses the same
+restricted reference-only policy. Its task RPC/SSE response budget is 32 MiB,
+while Card/interface/OAuth/security metadata remains under the 2 MiB CLI network
+budget. The non-persistent private-network override was removed from `a2a add`;
+explicit one-shot test/call and SDK policies retain their deliberate operator
+boundary. Public `@kodax-ai/kodax/a2a` configuration exports are limited to
+parse/read/inspect/classify helpers; raw migration and mutation writers remain
+inside the capability-fenced CLI owner.
+
+Inbound authentication now requires a non-empty stable `securityRealm`, and the
+task owner key is the SHA-256 of the canonical `(securityRealm, subject, tenant)`
+tuple. Built-in Bearer derives its realm from the token environment-variable
+name; built-in OAuth derives it from the exact validated issuer. Secret/JWKS
+rotation within one realm and same-realm restart preserve realm-aware task
+access. Changing authority cannot inherit tasks by reusing a subject, custom SDK
+authentication without a realm fails at server creation/hot update, and
+pre-realm persisted task records are not heuristically adopted.
+
+Inbound `SendMessage` now uses one short global dedup/limit/reservation critical
+section while retaining per-principal ordering outside Runtime execution.
+Runtime attachment subscribes first, buffers live events, merges durable replay
+by sequence, and then switches live. Authentication occurs before reading the
+bounded request body; authorization remains method/scope specific afterward.
+JSON/SSE media types are matched exactly. Close rejects new work and awaits
+preparation plus admitted handler tails before resources close. SSE is capped at
+four streams per task, eight per server, and 24 MiB encoded queue bytes per
+stream; overflow or disconnect closes only that stream and releases its slot.
+Configured task responses use a separate 32 MiB limit while Card/OAuth/JWKS
+traffic retains its smaller safe-network ceiling.
+
+#### Files Changed
+
+- `packages/agent/src/external-agents/executor-plane.ts`
+- `packages/agent/src/external-agents/memory-store.ts`
+- `packages/agent/src/external-agents/types.ts`
+- `src/runtime-agent-store.ts`
+- `src/a2a/client-executor.ts`
+- `src/a2a/index.ts`
+- `src/a2a/product.ts`
+- `src/a2a/schemas.ts`
+- `src/a2a/server.ts`
+- `src/a2a/server-auth.ts`
+- `src/a2a/types.ts`
+- `src/a2a/config.ts`
+- `src/a2a/runtime-config.ts`
+- `src/sdk-a2a.ts`
+- `src/integration-cli.ts`
+- `src/runtime-daemon/state.ts`
+- `src/runtime-daemon/process.ts`
+- `src/runtime-daemon/manager.ts`
+- `src/runtime-daemon/host.ts`
+- `src/runtime-daemon/server.ts`
+- `src/sdk-runtime.ts`
+
+#### Tests Added / Verification Coverage
+
+- Executor/store regressions cover concurrent close callers, admitted
+  registration/task writes, in-flight start/cancel/reconcile, event iterator
+  drain, invalid JSON capture, persistence failure, duplicate durable IDs,
+  directory hashes, and strict event task/sequence identity.
+- Daemon/config regressions cover arbitrary `KODAX_HOME`, explicit `homeDir`,
+  multi-profile ownership, capability refusal, readiness fencing, stopped-owner
+  v1 migration, idempotent v2 migration, initial-reconcile cleanup, the
+  independent `a2aConfigReconciler` requirement, and rejection of forged A2A
+  ownership capability overrides.
+- A2A protocol regressions cover required/optional Card extensions, configured
+  inline/remote artifact references without fetch, exact JSON/SSE media types,
+  authentication-before-body, cross-principal admission, subscribe-first replay,
+  admitted-handler close drain, per-task/global stream caps, HTTP disconnect,
+  slow-consumer isolation, and near-limit presentation artifacts.
+- Authentication regressions cover issuer hot switch, Bearer-to-OAuth authority
+  change, same-realm/same-`dataDir` restart, secret/JWKS rotation, pre-realm task
+  isolation, and missing custom-auth `securityRealm` at creation and hot update.
+- CLI coverage rejects the removed non-persistent `a2a add --allow-private`
+  path, proves direct-call reference-only/no-fetch behavior, and keeps task
+  responses at 32 MiB while rejecting oversized metadata at 2 MiB.
+- SDK-surface coverage proves public `/a2a` exposes read-only config helpers but
+  not raw writer/migration functions. Final server-boundary coverage pins the
+  global admission reservation, subscribe-first replay, authentication-before-
+  body, exact media matching, close drain, and 4/8/24 MiB SSE contract.
+
+### 167: A2A OAuth and hot-activation closure could leak credentials or mutate stale registrations
+
+- **Priority**: High
+- **Status**: Resolved
+- **Introduced**: v0.7.69
+- **Fixed**: v0.7.71
+- **Created**: 2026-07-16
+- **Resolved**: 2026-07-16
+
+#### Original Problem
+
+The standards-aligned OAuth closure and per-Agent hot activation review found
+several security and authority gaps. Rotated bearer tokens reflected by a slow
+remote response could outlive the bounded redaction history; direct SDK callers
+could bypass the integration-file OAuth URL validation; an authority-changing
+refresh could leave an old registration dispatchable after discovery failure;
+and a config reconciler could disable or remove a same-ID SDK replacement
+between its list and mutation operations.
+
+#### Context
+
+- KodaX is the OAuth client for outbound A2A calls and a resource server for
+  inbound calls; token issuance remains the responsibility of an external
+  Authorization Server.
+- `enabled` is desired configuration. The Runtime owner applies it to the
+  durable registration plane and must fence new dispatch before replacing
+  credentials, endpoints, or effects.
+- Disabling a registration must preserve its complete executor payload so an
+  already-admitted durable task can still resume.
+- Config-owned registrations coexist with registrations created directly by
+  SDK embedders.
+
+#### Root Cause
+
+Token redaction remembered only a small number of recently used values without
+retaining the credential used by every in-flight JSON-RPC attempt. OAuth URL
+checks lived primarily in the config parser instead of the public auth
+factories. Config reconciliation inferred ownership from a revision marker and
+performed list-then-mutate operations by Agent ID without a mutation-time
+revision condition. Its original disabled fence also reconstructed a partial
+registration from a summary, dropping durable executor details.
+
+#### Resolution
+
+Each ordinary RPC attempt and SSE stream now retains its exact Authorization
+value through response parsing and redaction, then releases it in `finally`;
+successful messages, tasks, artifacts, streams, and errors are redacted. A
+compare-and-clear retry prevents one 401 from invalidating a newer token.
+Shared OAuth validators enforce issuer, token endpoint, JWKS endpoint, scope,
+and resource syntax at config and direct-SDK boundaries while preserving exact
+issuer comparison.
+
+The registration plane now supports persistence-first, serialized mutations
+conditioned on both the observed revision and management owner, plus an atomic
+enabled mutation that preserves the full registration. Config reconciliation
+records explicit management ownership, fences changed authority before
+discovery, repairs live drift, leaves unrelated SDK registrations intact, and
+performs independent Agent discovery in parallel. Disabling blocks new
+admission without canceling an admitted task.
+
+Before task admission the plane durably retains an internal immutable full
+route snapshot. It validates that snapshot against the public task summary on
+restart, keeps update/removed routes usable for input, cancellation, and
+reconciliation, and garbage-collects only after terminal task persistence.
+The snapshot is not exposed through task/daemon DTOs and contains references,
+not resolved credentials. Same-revision execution-content reuse is rejected;
+management owner, enabled state, and health remain independently mutable.
+
+The final review also closed shared-plane races around this path. Global task
+ID uniqueness is rechecked inside serialized admission; task state is
+published to memory only after the durable write succeeds; terminal event
+failure still settles waiters and releases snapshots; summaries are detached
+from live registration objects; and executor cache keys use structured tuples
+rather than delimiter concatenation. Reconciliation isolates per-entry owner
+conflicts and observer failures and awaits every refresh it starts.
+
+#### Files Changed
+
+- `src/a2a/client-auth.ts`
+- `src/a2a/client-executor.ts`
+- `src/a2a/security.ts`
+- `src/a2a/server-auth.ts`
+- `src/a2a/config.ts`
+- `src/a2a/runtime-config.ts`
+- `packages/agent/src/external-agents/types.ts`
+- `packages/agent/src/external-agents/executor-plane.ts`
+- `src/runtime-daemon/protocol.ts`
+- `src/runtime-daemon/schema.ts`
+- `src/runtime-daemon/client.ts`
+- `src/runtime-daemon/server.ts`
+
+#### Verification
+
+- OAuth tests cover client-credentials authentication, exact issuer/audience
+  validation, scope and URL rejection, token caching/singleflight, concurrent
+  401 recovery, and direct SDK construction.
+- Redaction tests hold slow message/task/artifact responses across at least five
+  token rotations and cover SSE lifecycle cleanup.
+- Registration tests cover persistence failure, durable-task continuation,
+  update/removal plus restart recovery, snapshot crash-window cleanup,
+  revision-and-owner conflicts, live drift, fail-closed authority changes,
+  parallel discovery, disabled zero-fetch behavior, and same-ID replacement
+  races. Adversarial coverage also exercises cross-Agent/local task-ID
+  collisions, caller mutation of returned/input objects, terminal event-store
+  failure, per-entry owner isolation, observer failure, and delimiter-bearing
+  cache identities.
+- Runtime-daemon tests exercise the new conditional registration mutation path
+  across its protocol boundary.
 
 ### 166: Electron daemon bootstrap mode leaks into user child processes
 
@@ -3588,11 +3861,20 @@ Commit `ef085fc` 把 V1 精简到 V2 时没区分"信息载体"和"脚手架"，
 ---
 
 ## Summary
-- Total: 53 (24 Open, 29 Resolved, 0 Partially Resolved, 0 Won't Fix)
+- Total: 55 (24 Open, 31 Resolved, 0 Partially Resolved, 0 Won't Fix)
 - Highest Priority Open: 091 - 缺少一等公民 MCP / Web Search / Code Search 工具体系 (High)
 - Historical archived issues are maintained in ISSUES_ARCHIVED.md
 
 ## Changelog
+
+### 2026-07-16: Issue 168 added and resolved (v0.7.71)
+- Closed A2A executor shutdown/durability, daemon ownership/readiness,
+  extension/artifact policy, inbound admission/replay/close/auth/media, and SSE
+  resource-boundary gaps found by the final cross-chain review.
+
+### 2026-07-16: Issue 167 added and resolved (v0.7.71)
+- Closed A2A OAuth validation/redaction gaps and made config-owned hot
+  activation persistence-first, ownership-aware, and revision-conditional.
 
 ### 2026-07-15: Issue 164 added and resolved (v0.7.70)
 - Added cost-admitted, lossless zero-match MCP recovery and compact CJK query

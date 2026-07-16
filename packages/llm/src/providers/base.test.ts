@@ -199,6 +199,11 @@ describe('KodaXBaseProvider', () => {
     ).toBe(true);
     expect(
       provider.exposeShouldFallbackForForcedToolChoiceError(
+        new Error("tool_choice 'specified' is incompatible with thinking enabled"),
+      ),
+    ).toBe(true);
+    expect(
+      provider.exposeShouldFallbackForForcedToolChoiceError(
         new Error('network disconnected'),
       ),
     ).toBe(false);

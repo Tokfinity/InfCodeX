@@ -9,7 +9,11 @@ import type {
   AgentTaskState,
   ExternalAgentRegistration,
 } from '@kodax-ai/agent';
-import { createKodaXRuntime, type KodaXRuntime } from './sdk-runtime.js';
+import {
+  connectKodaXRuntime,
+  createKodaXRuntime,
+  type KodaXRuntime,
+} from './sdk-runtime.js';
 import { createRuntimeDaemonClient } from './runtime-daemon/client.js';
 import {
   createRuntimeDaemonRequest,
@@ -214,6 +218,21 @@ describe('FEATURE_258 Embedded Runtime agent services', () => {
     });
     expect(runtime.identity).toMatchObject({ mode: 'daemon', isolation: 'inline' });
     expect(runtime.agents.enabled).toBe(true);
+    expect(runtime.capabilities?.a2aConfigReconciler).toBeUndefined();
+    const configOwnerRequirement = await connectKodaXRuntime({
+      homeDir,
+      profile,
+      autoStart: false,
+      requirements: { externalAgentAdmin: 1, a2aConfigReconciler: 1 },
+    }).then(
+      async (connected) => {
+        await connected.close();
+        return undefined;
+      },
+      (error: unknown) => error,
+    );
+    expect(configOwnerRequirement).toBeInstanceOf(Error);
+    expect((configOwnerRequirement as Error).message).toMatch(/a2aConfigReconciler/i);
     await assertRuntimeAgentServiceConformance(runtime, 'daemon-sdk-host', 'daemon-sdk-parent');
     await expect(createKodaXRuntime({
       mode: 'daemon',
@@ -229,8 +248,12 @@ describe('FEATURE_258 Embedded Runtime agent services', () => {
     homeDir = fs.mkdtempSync(path.join(os.tmpdir(), 'kodax-runtime-no-agents-'));
     await expect(createKodaXRuntime({
       homeDir,
-      requirements: { externalAgents: true },
+      requirements: { externalAgents: true, externalAgentAdmin: 1 },
     })).rejects.toThrow(/required externalAgents capability/i);
+    await expect(createKodaXRuntime({
+      homeDir,
+      requirements: { externalAgentAdmin: 1 },
+    })).rejects.toThrow(/externalAgentAdmin capability/i);
     const runtime = await createKodaXRuntime({ homeDir });
     expect((await runtime.agents.listDispatchable({ actorId: 'runtime-host' }))
       .map((entry) => entry.descriptor.agentId)).toEqual(['native:kodax-child']);

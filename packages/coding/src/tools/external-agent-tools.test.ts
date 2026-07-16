@@ -34,7 +34,7 @@ import {
   _resetMessageQueueForTests,
 } from '@kodax-ai/agent';
 
-import type { ExternalAgentRegistration } from '@kodax-ai/agent';
+import type { AgentJsonObject, ExternalAgentRegistration } from '@kodax-ai/agent';
 import type { KodaXToolExecutionContext } from '../types.js';
 import { toolDispatchChildTask } from './dispatch-child-tasks.js';
 import { toolListDispatchableAgents } from './list-dispatchable-agents.js';
@@ -45,7 +45,7 @@ import { getActiveToolDefinitions } from '../agent-runtime/tool-resolution.js';
 
 function registration(
   agentId: string,
-  config: Readonly<Record<string, unknown>>,
+  config: AgentJsonObject,
 ): ExternalAgentRegistration {
   return {
     agentId,

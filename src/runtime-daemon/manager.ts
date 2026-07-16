@@ -13,7 +13,8 @@ import { startRuntimeDaemonHost, type RuntimeDaemonHost } from './host.js';
 import {
   assertRuntimeDaemonOwnerAllowed,
   releaseRuntimeDaemonLock,
-  resolveRuntimeDaemonPaths,
+  resolveRuntimeDaemonEndpointScope,
+  resolveRuntimeDaemonPathsFromConfigHome,
   type RuntimeDaemonPaths,
 } from './state.js';
 import {
@@ -24,12 +25,15 @@ import {
 
 export interface RuntimeDaemonLeaseOptions {
   readonly homeDir?: string;
+  readonly configHome?: string;
   readonly profile?: string;
   readonly endpoint?: RuntimeDaemonEndpoint;
   readonly connectTimeoutMs?: number;
   readonly startupTimeoutMs?: number;
   readonly pollIntervalMs?: number;
   readonly healthCheck?: RuntimeDaemonHealthCheckOptions;
+  /** True only when this host owns the live A2A config reconciler. */
+  readonly ownsA2AConfigReconciler?: boolean;
   createRuntime(runtimeId: string): Promise<KodaXRuntime>;
 }
 
@@ -48,9 +52,13 @@ export async function acquireRuntimeDaemonLease(
 ): Promise<RuntimeDaemonLease> {
   const profile = options.profile ?? 'default';
   const homeDir = resolveRuntimeDaemonHomeDir(options.homeDir);
-  const paths = resolveRuntimeDaemonPaths(homeDir, profile);
+  const configHome = path.resolve(options.configHome ?? path.join(homeDir, '.kodax'));
+  const paths = resolveRuntimeDaemonPathsFromConfigHome(configHome, profile);
   assertRuntimeDaemonOwnerAllowed(paths);
-  const endpoint = options.endpoint ?? defaultRuntimeDaemonEndpoint(profile, homeDir);
+  const endpoint = options.endpoint ?? defaultRuntimeDaemonEndpoint(
+    profile,
+    resolveRuntimeDaemonEndpointScope(homeDir, configHome),
+  );
   const owner = {
     runtimeId: `rt_${randomUUID().replace(/-/g, '').slice(0, 12)}`,
     pid: process.pid,
@@ -124,7 +132,15 @@ async function createClaimedDaemonLease(
       throw new Error('Runtime factory returned an identity that does not match its owner fence.');
     }
     hostStartAttempted = true;
-    const host = await startRuntimeDaemonHost({ runtime, paths, endpoint, lock });
+    const host = await startRuntimeDaemonHost({
+      runtime,
+      paths,
+      endpoint,
+      lock,
+      ...(options.ownsA2AConfigReconciler === true
+        ? { ownsA2AConfigReconciler: true }
+        : {}),
+    });
     try {
       const transport = await createRuntimeDaemonSocketClientTransport(endpoint, {
         connectTimeoutMs: options.connectTimeoutMs,

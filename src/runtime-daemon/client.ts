@@ -542,12 +542,36 @@ export function createRuntimeDaemonClient(
         list() {
           return request('agentRegistrations.list') as ReturnType<KodaXRuntime['admin']['agentRegistrations']['list']>;
         },
-        upsert(registration) {
+        upsert(registration, options) {
           assertRuntimeTransportSafe(registration, 'agentRegistrations.upsert.registration');
-          return request('agentRegistrations.upsert', { registration }) as ReturnType<KodaXRuntime['admin']['agentRegistrations']['upsert']>;
+          return request('agentRegistrations.upsert', {
+            registration,
+            ...(options?.expectedConfigurationRevision !== undefined
+              ? { expectedConfigurationRevision: options.expectedConfigurationRevision } : {}),
+            ...(options?.expectedManagementOwner !== undefined
+              ? { expectedManagementOwner: options.expectedManagementOwner } : {}),
+          }) as ReturnType<KodaXRuntime['admin']['agentRegistrations']['upsert']>;
         },
-        remove(agentId) {
-          return request('agentRegistrations.remove', { agentId }) as Promise<boolean>;
+        setEnabled(agentId, enabled, options) {
+          return request('agentRegistrations.setEnabled', {
+            agentId,
+            enabled,
+            ...(options?.expectedConfigurationRevision !== undefined
+              ? { expectedConfigurationRevision: options.expectedConfigurationRevision } : {}),
+            ...(options?.expectedManagementOwner !== undefined
+              ? { expectedManagementOwner: options.expectedManagementOwner } : {}),
+            ...(options?.claimOwner !== undefined ? { claimOwner: options.claimOwner } : {}),
+          })
+            .then(nullToUndefined<Awaited<ReturnType<KodaXRuntime['admin']['agentRegistrations']['setEnabled']>>>);
+        },
+        remove(agentId, options) {
+          return request('agentRegistrations.remove', {
+            agentId,
+            ...(options?.expectedConfigurationRevision !== undefined
+              ? { expectedConfigurationRevision: options.expectedConfigurationRevision } : {}),
+            ...(options?.expectedManagementOwner !== undefined
+              ? { expectedManagementOwner: options.expectedManagementOwner } : {}),
+          }) as Promise<boolean>;
         },
       },
     },

@@ -11,6 +11,7 @@ function clone<T>(value: T): T {
 
 export function createMemoryAgentExecutorPlaneStore(): AgentExecutorPlaneStore {
   let registrations: readonly ExternalAgentRegistration[] = [];
+  let taskRegistrationSnapshots: readonly ExternalAgentRegistration[] = [];
   const tasks = new Map<string, AgentTaskSnapshot>();
   const events = new Map<string, AgentTaskEvent[]>();
 
@@ -20,6 +21,12 @@ export function createMemoryAgentExecutorPlaneStore(): AgentExecutorPlaneStore {
     },
     async saveRegistrations(next) {
       registrations = clone(next);
+    },
+    async loadTaskRegistrationSnapshots() {
+      return clone(taskRegistrationSnapshots);
+    },
+    async saveTaskRegistrationSnapshots(next) {
+      taskRegistrationSnapshots = clone(next);
     },
     async loadTasks() {
       return [...tasks.values()].map(clone);

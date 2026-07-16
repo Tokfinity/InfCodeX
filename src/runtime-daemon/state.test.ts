@@ -18,7 +18,9 @@ import {
   releaseRuntimeDaemonLock,
   releaseRuntimeDaemonOwnership,
   removeRuntimeDaemonOwnershipIfUnchanged,
+  resolveRuntimeDaemonEndpointScope,
   resolveRuntimeDaemonPaths,
+  resolveRuntimeDaemonPathsFromConfigHome,
   tryAcquireRuntimeDaemonLock,
   updateRuntimeOwnerPolicy,
   writeRuntimeDaemonState,
@@ -75,10 +77,29 @@ describe('runtime daemon state paths', () => {
     const paths = resolveRuntimeDaemonPaths('C:/Users/test', 'space');
 
     expect(paths.profile).toBe('space');
+    expect(paths.configHome).toBe(path.resolve('C:/Users/test', '.kodax'));
     expect(paths.stateFile.replaceAll('\\', '/')).toContain('/.kodax/runtime/daemon/space/daemon.json');
     expect(paths.lockFile.endsWith('daemon.lock')).toBe(true);
     expect(paths.tokenFile.endsWith('daemon.token')).toBe(true);
     expect(paths.ownerPolicyLockFile.endsWith('owner-policy.lock')).toBe(true);
+  });
+
+  it('resolves daemon files from an explicit config home without basename inference', () => {
+    const configHome = path.join(tempHome(), 'custom-config-home');
+    const paths = resolveRuntimeDaemonPathsFromConfigHome(configHome, 'space');
+
+    expect(paths.configHome).toBe(path.resolve(configHome));
+    expect(paths.rootDir).toBe(path.join(path.resolve(configHome), 'runtime', 'daemon', 'space'));
+    expect(paths.stateFile).toBe(path.join(paths.rootDir, 'daemon.json'));
+  });
+
+  it('preserves the legacy endpoint scope for canonical config and isolates arbitrary config homes', () => {
+    const homeDir = tempHome();
+
+    expect(resolveRuntimeDaemonEndpointScope(homeDir, path.join(homeDir, '.kodax')))
+      .toBe(path.resolve(homeDir));
+    expect(resolveRuntimeDaemonEndpointScope(homeDir, path.join(homeDir, 'custom-config-home')))
+      .toBe(path.resolve(homeDir, 'custom-config-home'));
   });
 
   it('rejects path-like profile names', () => {

@@ -216,11 +216,31 @@
 > bundle/DTS/template checks, npm dry-run contents, and four real daemon CLI
 > smoke tests. The current Windows host correctly reports ASRT setup-required
 > until its explicit one-time sandbox account provisioning is performed; there
-> is no host-shell fallback. Both Features remain InProgress for the
-> independent A2A/TCK and cross-platform release evidence required by their
-> release gates. Their original product paths are implemented; the F269
+> is no host-shell fallback. At this checkpoint both Features remained
+> InProgress for independent A2A/TCK and cross-platform release evidence; the
+> later v0.7.69 release closed the bounded implementation status without
+> claiming official-TCK certification. Their original product paths are implemented; the F269
 > insertion additionally requires the cross-Feature operation/revision
 > integration recorded in the v0.7.69 design before they can ship together.
+>
+> **2026-07-16 F267/F268 standards-authentication and activation closure**:
+> the v0.7.69 feature design now records this post-release amendment, implemented
+> in the v0.7.71 patch; older v0.7.69 binaries did not contain these
+> later OAuth profiles. KodaX outbound can obtain short-lived
+> access tokens from an external Authorization Server with OAuth 2.0 Client
+> Credentials; KodaX inbound can validate RFC 9068 JWT access tokens as a
+> Resource Server. KodaX does not sign or issue production tokens. The same
+> user-level `a2a.json` keeps every third-party declaration and adds one hot
+> `agents.<name>.enabled` desired-state switch, managed by `a2a enable|disable`.
+> Running owners apply disables/removals before network preparation, reconcile
+> only source-owned changed/drifted entries, fence authority changes before
+> parallel discovery, retry failed same-revision activation, preserve durable
+> registration writes, and never cancel already admitted tasks. Card-level and
+> Skill-level security requirements, token/interface origin separation,
+> complete executor revisions, exact issuer/scope validation, compare-and-clear
+> token refresh, and reflected-token redaction across successful/error/SSE paths are part of the
+> closure; groups, schedules, priorities, and a second runtime-only switch are
+> deliberately not added.
 >
 > **2026-07-13 shared-daemon priority insertion**: `FEATURE_269` joins
 > `v0.7.69` as a third Critical Feature without automatically moving
@@ -285,8 +305,10 @@
 > Electron daemon auto-start execute through a bootstrap-only Node boundary,
 > prevent a second GUI launch, scrub Electron Node mode before daemon and user
 > child code loads, and document the `RunAsNode` fuse/attach-only boundary.
-> Windows CRLF template checks are also normalized. These are bounded Runtime
-> and release-tooling fixes; no new Feature enters the slot.
+> Windows CRLF template checks are also normalized. The patch additionally
+> carries the post-release F267/F268 OAuth/activation closure, its Issue 167/168
+> hardening, and the public Kimi K2.7 capability refresh. No new Feature ID
+> enters the slot; F266/F270 remain scheduled together for v0.7.72.
 >
 > **2026-07-12 F225 early cleanup slice**: the Classic readline
 > reverse-video StatusBar was proven write-only (`update()` calls with no
@@ -448,8 +470,8 @@ fixed GitHub binary archive sidecar omission before tagging.
 | ID | Title | Released | Design | Notes |
 |---|---|---|---|---|
 | `269` | Shared Daemon Multi-Client Consistency + Secure Host Bridges | `v0.7.69` | [v0.7.69](features/v0.7.69.md#feature_269-shared-daemon-multi-client-consistency--secure-host-bridges) | Authoritative shared Coder daemon observation/resync, durable operations, transport-safe AskUser/permissions, run-scoped credential and Host Tool bridges, recovery facts, and daemon/inline owner fencing. |
-| `268` | Hot-Reloadable Integration Configuration Split | `v0.7.69` | [v0.7.69](features/v0.7.69.md#feature_268-hot-reloadable-integration-configuration-split) | Split user MCP/A2A/Extension files, canonical templates, lossless migration, last-known-good hot reload, and restart-required classification. |
-| `267` | Bidirectional A2A Client Executor + KodaX Agent Server | `v0.7.69` | [v0.7.69](features/v0.7.69.md#feature_267-bidirectional-a2a-client-executor--kodax-agent-server) | Bounded A2A 1.0 client/server edge, no-code management/serving, trusted Agent/Skill/tool admission, durable tasks, and explicit artifact publication. |
+| `268` | Hot-Reloadable Integration Configuration Split | `v0.7.69` | [v0.7.69](features/v0.7.69.md#feature_268-hot-reloadable-integration-configuration-split) | Base split/template/migration/hot-reload scope shipped in v0.7.69; the v0.7.71 closure adds source-owned, fail-closed per-Agent hot `enabled` reconciliation without peer rediscovery. |
+| `267` | Bidirectional A2A Client Executor + KodaX Agent Server | `v0.7.69` | [v0.7.69](features/v0.7.69.md#feature_267-bidirectional-a2a-client-executor--kodax-agent-server) | Bounded A2A 1.0 client/server base shipped in v0.7.69; the v0.7.71 closure adds external-issuer OAuth Client Credentials/JWT Resource Server profiles and activation hardening alongside trusted Agent/Skill/tool admission, durable tasks, and explicit artifact publication. |
 | `260` | KodaX Memory Agent — Proactive Execution Recall + Scoped Memory Consolidation | `v0.7.68` | [v0.7.68](features/v0.7.68.md#feature_260-kodax-memory-agent--proactive-execution-recall--scoped-memory-consolidation) | Thin experimental agent-layer Memory Agent over F228; exact scoped zero-wait recall, deliberate read-only query, trace-only decision receipts, bounded outcome/review lifecycle, consult-before-write promotion, policy-versioned cache-safe integration, deterministic safety gates, and passing v2 routing eval. |
 | `261` | Searchable Session Resume TUI + Session Listing Pagination | `v0.7.67` | [v0.7.67](features/v0.7.67.md#feature_261-searchable-session-resume-tui--session-listing-pagination) | Bare `-r` searchable/paged keyboard picker with full selected ID, deterministic ID-first/exact-title resume and duplicate disambiguation, meaningful ACP titles, Embedded/Daemon `surface` + cursor listing, zero-message suppression, isolated ACP tests, and preview-first reversible ACP pollution cleanup. |
 | `259` | Cost-Disciplined Agent Build Loop + Review Handoff Optimization | `v0.7.67` | [v0.7.67](features/v0.7.67.md#feature_259-cost-disciplined-agent-build-loop--review-handoff-optimization) | Layer 1 complete; Layer 2 shows material semantic value with no regression after retiring official Kimi; bounded Layer 3 passes 8/8 proposed vs 6/8 baseline, reduces total tokens 16.9%, standard-review median tokens 57.2%, primary starts 75%, and duplicate packet reads 83.3%. Main-session recommendation: `recommend-ship`. |

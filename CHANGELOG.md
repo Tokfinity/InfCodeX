@@ -6,9 +6,86 @@ All notable changes to this project will be documented in this file.
 
 ## [Unreleased]
 
+### Added
+
+- **Kimi Code K3 support.** The `kimi-code` subscription provider now exposes
+  `k3` (up to 1,048,576 context tokens, plan-dependent) and
+  `kimi-for-coding-highspeed` alongside the stable `kimi-for-coding` default.
+  K3 sends its effort through the Anthropic-compatible `thinking.effort` wire,
+  defaults to `max`, and honors explicit disabled thinking. Static capability,
+  reasoning, media, cost-tracking, and opt-in real-wire regressions cover all
+  three subscription routes.
+
 ## [0.7.71] - 2026-07-16
 
+### Added
+
+- **Standards-based A2A authentication and Agent activation (FEATURE_267/268
+  closure).** Outbound A2A entries can use OAuth 2.0 Client Credentials with an
+  external Authorization Server, while inbound KodaX Agents can validate RFC
+  9068 JWT access tokens against an external issuer/JWKS as an OAuth Resource
+  Server. The fixed environment Bearer profile remains available for
+  compatibility. A hot `agents.<name>.enabled` switch plus `kodax a2a
+  enable|disable` lets operators keep many configured third-party Agents while
+  controlling which ones admit new orchestration; in-flight tasks are not
+  cancelled.
+
 ### Fixed
+
+- **A2A authentication and reconciliation hardening.** Card-level and
+  Skill-level security requirements now fail closed unless one complete
+  alternative is satisfiable. Card, RPC, and token origins remain separate;
+  exact credentials used by active RPC/SSE requests remain retained through
+  response parsing and are redacted from errors and successful results;
+  concurrent rejected-token invalidation cannot discard a newer token and each
+  RPC retries at most once. Direct SDK and file configuration now share strict
+  issuer, endpoint, resource, and RFC 6749 scope validation. Task ownership
+  also requires a stable `securityRealm` and hashes the
+  `(realm, subject, tenant)` tuple: built-in Bearer/OAuth derive realms from the
+  token-env name/exact issuer, custom authentication must provide one, authority
+  switches and legacy pre-realm tasks fail closed, and same-realm restart
+  preserves new-format tasks. Authentication/effect changes participate in
+  executor revisions; registration persistence
+  precedes catalog mutation; first-class management ownership plus revision-
+  conditional mutations protects unrelated or concurrently replaced SDK
+  registrations, including same-revision owner takeovers; changed authority is
+  fenced before parallel discovery; live drift is repaired; and a final
+  post-preflight admission check closes disable/removal races without
+  rediscovering unchanged peers. Internal immutable route snapshots preserve
+  admitted task input/cancel/reconcile routing across registration update or
+  removal and Runtime restart without exposing secret material or expanding the
+  public task DTO. Admission now rechecks globally unique task IDs, task writes
+  publish to memory only after durable persistence, and terminal event-write
+  failures cannot strand waiters or route snapshots. Returned registration
+  summaries are detached, executor cache keys are unambiguous tuples, and one
+  ownership conflict or observer failure cannot abort unrelated Agent
+  reconciliation or leave unawaited activation work. Daemon A2A ownership is
+  now bound to the exact resolved config home—`<homeDir>/.kodax` when explicitly
+  selected, otherwise the possibly arbitrary `KODAX_HOME`—recorded in daemon
+  state, and checked across every local profile before mutation. Legacy
+  non-empty version-1 A2A files require an explicit stopped-owner migration,
+  while version-2 migration is a read-only idempotent no-op. Failed initial A2A
+  reconciliation also closes the newly created Runtime before releasing daemon
+  ownership.
+- **A2A post-closure lifecycle and resource correctness.** Executor operations
+  and close now drain without disposal races; configured artifact references
+  and direct `a2a call` use a bounded reference-only/no-fetch policy. CLI task
+  RPC/SSE permits 32 MiB while Card/interface/OAuth/security metadata remains
+  capped at 2 MiB, and unsupported required Card extensions fail discovery.
+  Daemon mutation now requires independently owner-derived
+  `externalAgentAdmin: 1` and `a2aConfigReconciler: 1`; capability overrides
+  cannot forge them. Public `/a2a` config exports are read-only, with raw writers
+  retained inside the fenced CLI owner. Inbound serving now has a global
+  admission reservation, subscribe-first replay, authentication-before-body,
+  exact JSON/SSE media matching, an admitted-handler close barrier, and fixed
+  four-per-task/eight-per-server/24 MiB-per-stream SSE ceilings without
+  terminating the underlying task for one slow subscriber.
+- **Public Kimi Open Platform parity and live coverage.** `kimi` now defaults to
+  `kimi-k2.7-code`, exposes the HighSpeed route and wire-legal K2.5 id, uses the
+  exact 262,144-token limits and current prices, and has gated real-key coverage
+  for credential verification, K2.7 thinking, forced-tool fallback, and K2.6
+  thinking disablement. K2.7 disable requests now fail locally instead of being
+  silently ignored, while K2.6 disable requests emit the required wire toggle.
 
 - **Packaged Electron shared-daemon auto-start.** Runtime SDK embedders running
   from packaged/asar Electron applications now launch the detached daemon child

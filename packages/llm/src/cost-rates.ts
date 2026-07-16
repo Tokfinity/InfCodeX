@@ -15,7 +15,7 @@ export interface CostRate {
 }
 
 // Default rates for all built-in providers (approximate, user can override)
-// Rates are from official pricing pages as of 2026-06
+// Rates are from official pricing pages as of 2026-07
 export const DEFAULT_COST_RATES: Readonly<Record<string, Readonly<Record<string, CostRate>>>> = {
   anthropic: {
     'claude-opus-4-8': {
@@ -68,14 +68,22 @@ export const DEFAULT_COST_RATES: Readonly<Record<string, Readonly<Record<string,
     'deepseek-v4-pro': { inputPer1M: 1.68, outputPer1M: 3.36, cachePer1M: 0.14 },
   },
   kimi: {
-    'k2.5': { inputPer1M: 0.005, outputPer1M: 0.015 },
-    'kimi-k2.6': { inputPer1M: 0.005, outputPer1M: 0.015 },
+    // Official prices are published in CNY; converted at ¥1 ≈ $0.14,
+    // matching the convention used for DeepSeek above. cachePer1M is
+    // the automatic context-cache hit price.
+    'kimi-k2.7-code': { inputPer1M: 0.91, outputPer1M: 3.78, cachePer1M: 0.182 },
+    'kimi-k2.7-code-highspeed': { inputPer1M: 1.82, outputPer1M: 7.56, cachePer1M: 0.364 },
+    'kimi-k2.6': { inputPer1M: 0.91, outputPer1M: 3.78, cachePer1M: 0.154 },
+    'kimi-k2.5': { inputPer1M: 0.56, outputPer1M: 2.94, cachePer1M: 0.098 },
   },
   'kimi-code': {
     // Kimi-for-Coding is a subscription endpoint — the per-token rate
     // shown here is a nominal placeholder for cost-tracker accounting;
     // real-world cost is the flat membership fee plus request-quota.
     'kimi-for-coding': { inputPer1M: 0.005, outputPer1M: 0.015 },
+    'k3': { inputPer1M: 0.005, outputPer1M: 0.015 },
+    // HighSpeed consumes roughly 3x the membership quota of Standard.
+    'kimi-for-coding-highspeed': { inputPer1M: 0.015, outputPer1M: 0.045 },
   },
   qwen: {
     'qwen3.5-plus': { inputPer1M: 0.003, outputPer1M: 0.006 },

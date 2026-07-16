@@ -118,8 +118,10 @@ model, API key env var, effort-first reasoning profile/preset, request timeout
 normalization, and multimodal capability flags where needed. The current
 provider capability snapshot is maintained in
 `packages/llm/src/providers/provider-capabilities.json` and includes the
-2026-06-14 model refresh for GPT-5.4, Kimi K2.7 Code, GLM-5.2, MiniMax M3/M2.7,
-DeepSeek V4, and Doubao Seed 2.0 routes where supported.
+2026-07-16 model refresh for GPT-5.4, Kimi K2.7 Code/HighSpeed/K2.6/K2.5,
+GLM-5.2, MiniMax M3/M2.7, DeepSeek V4, and Doubao Seed 2.0 routes where
+supported. Public Kimi routes use their exact 262,144-token limits and
+route-specific thinking contract.
 
 ### Tools
 
@@ -146,12 +148,27 @@ should preserve durable terminal tool-card replay where sanitized `uiHistory`
 is available, while canonical `messages` / `lineage` remain the source of
 truth.
 
-### Skills And MCP
+### Skills, MCP, And A2A
 
 Markdown skills and MCP capability integration are first-class KodaX
 capabilities. They are source-code subtrees under `packages/agent`, not separate
 workspace packages. Public SDK access is through `@kodax-ai/kodax/skills` and
 `@kodax-ai/kodax/mcp`.
+
+Bidirectional A2A 1.0 is a root integration edge exposed through
+`@kodax-ai/kodax/a2a`. Outbound Agents must fail closed against advertised
+Card/Skill security, keep Card/RPC/token origins separate, and support fixed
+Bearer plus OAuth 2.0 Client Credentials from an external Authorization
+Server. Inbound publication must authenticate before reading task bodies and
+supports fixed Bearer plus externally issued RFC 9068 JWT validation; KodaX is
+a Resource Server and does not issue production tokens.
+
+User A2A configuration is version 2. Legacy non-empty version 1 files require
+an explicit migration while every owning daemon is stopped. Per-Agent
+`enabled` state blocks new admission after owner reconciliation without
+cancelling in-flight work. Durable task routes, authentication realms,
+registration ownership/revisions, metadata limits, and SSE resource ceilings
+must remain fail-closed across reload, daemon restart, and shutdown.
 
 ### Governed Memory
 

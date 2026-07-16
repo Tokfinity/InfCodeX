@@ -17,6 +17,8 @@ function isRegistration(value: unknown): value is ExternalAgentRegistration {
   if (!isRecord(value)) return false;
   return typeof value.agentId === 'string'
     && typeof value.displayName === 'string'
+    && (value.managementOwner === undefined
+      || (typeof value.managementOwner === 'string' && value.managementOwner.length > 0))
     && typeof value.enabled === 'boolean'
     && typeof value.executorId === 'string'
     && (value.protocol === 'a2a' || value.protocol === 'mcp' || value.protocol === 'http')
@@ -82,10 +84,11 @@ function taskDirectory(root: string, taskId: string): string {
   return path.join(root, directoryKey);
 }
 
-function readEvents(file: string): readonly AgentTaskEvent[] {
+function readEvents(file: string, taskId: string): readonly AgentTaskEvent[] {
   if (!fs.existsSync(file)) return [];
   const content = fs.readFileSync(file, 'utf8').trim();
   if (!content) return [];
+  let previousSequence = 0;
   return content.split(/\r?\n/).map((line, index) => {
     let parsed: unknown;
     try {
@@ -95,6 +98,13 @@ function readEvents(file: string): readonly AgentTaskEvent[] {
       throw new Error(`Invalid Runtime agent event at ${file}:${index + 1}: ${message}`);
     }
     if (!isEvent(parsed)) throw new Error(`Invalid Runtime agent event shape at ${file}:${index + 1}`);
+    if (parsed.taskId !== taskId) {
+      throw new Error(`Runtime agent event taskId does not match its ledger at ${file}:${index + 1}`);
+    }
+    if (parsed.seq <= previousSequence) {
+      throw new Error(`Runtime agent events require a strictly increasing positive sequence at ${file}:${index + 1}`);
+    }
+    previousSequence = parsed.seq;
     return parsed;
   });
 }
@@ -104,6 +114,7 @@ export function createRuntimeAgentExecutorPlaneStore(
 ): AgentExecutorPlaneStore {
   const root = path.resolve(agentStoreDir);
   const registrationsFile = path.join(root, 'registrations.json');
+  const taskRegistrationSnapshotsFile = path.join(root, 'task-registration-snapshots.json');
   const tasksDir = path.join(root, 'tasks');
   return {
     async loadRegistrations() {
@@ -112,24 +123,47 @@ export function createRuntimeAgentExecutorPlaneStore(
     async saveRegistrations(registrations) {
       writeJsonAtomic(registrationsFile, registrations);
     },
+    async loadTaskRegistrationSnapshots() {
+      return readList(taskRegistrationSnapshotsFile, isRegistration);
+    },
+    async saveTaskRegistrationSnapshots(registrations) {
+      writeJsonAtomic(taskRegistrationSnapshotsFile, registrations);
+    },
     async loadTasks() {
       if (!fs.existsSync(tasksDir)) return [];
-      const tasks: AgentTaskSnapshot[] = [];
+      const snapshots: Array<{
+        directoryName: string;
+        file: string;
+        task: AgentTaskSnapshot;
+      }> = [];
       for (const entry of fs.readdirSync(tasksDir, { withFileTypes: true })) {
         if (!entry.isDirectory()) continue;
         const file = path.join(tasksDir, entry.name, 'snapshot.json');
         if (!fs.existsSync(file)) continue;
         const parsed = parseJson(file);
         if (!isTask(parsed)) throw new Error(`Invalid Runtime agent task shape: ${file}`);
-        tasks.push(parsed);
+        snapshots.push({ directoryName: entry.name, file, task: parsed });
       }
-      return tasks;
+      const taskIds = new Set<string>();
+      for (const { task } of snapshots) {
+        if (taskIds.has(task.taskId)) {
+          throw new Error(`Duplicate Runtime agent taskId: ${task.taskId}`);
+        }
+        taskIds.add(task.taskId);
+      }
+      for (const { directoryName, file, task } of snapshots) {
+        const expectedDirectoryName = path.basename(taskDirectory(tasksDir, task.taskId));
+        if (directoryName !== expectedDirectoryName) {
+          throw new Error(`Runtime agent task directory does not match taskId hash: ${file}`);
+        }
+      }
+      return snapshots.map(({ task }) => task);
     },
     async saveTask(task) {
       writeJsonAtomic(path.join(taskDirectory(tasksDir, task.taskId), 'snapshot.json'), task);
     },
     async loadEvents(taskId) {
-      return readEvents(path.join(taskDirectory(tasksDir, taskId), 'events.jsonl'));
+      return readEvents(path.join(taskDirectory(tasksDir, taskId), 'events.jsonl'), taskId);
     },
     async appendEvent(event) {
       const file = path.join(taskDirectory(tasksDir, event.taskId), 'events.jsonl');

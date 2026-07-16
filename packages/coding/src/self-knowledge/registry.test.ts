@@ -51,6 +51,17 @@ describe('FEATURE_218 manual registry', () => {
     }
   });
 
+  it('documents the v0.7.71 public Kimi model contract', () => {
+    const content = resolveKodaXManual({ topic: 'providers' }).content;
+
+    expect(content).toContain('kimi-k2.7-code');
+    expect(content).toContain('kimi-k2.7-code-highspeed');
+    expect(content).toContain('262,144');
+    expect(content).toContain('KIMI_API_KEY');
+    expect(content).toContain('KIMI_CODE_API_KEY');
+    expect(content).toContain('cannot disable thinking');
+  });
+
   it('documents the governed runtime and SDK memory surfaces', () => {
     const content = resolveKodaXManual({ topic: 'memory' }).content;
 
@@ -91,17 +102,23 @@ describe('FEATURE_218 manual registry', () => {
     expect(extensions).toContain('config.json#extensions');
   });
 
-  it('documents the v0.7.70 A2A and MCP interoperability boundaries', () => {
+  it('documents the v0.7.71 A2A authentication, activation, and interoperability boundaries', () => {
     const a2a = resolveKodaXManual({ topic: 'a2a' });
     const mcp = resolveKodaXManual({ topic: 'mcp' }).content;
 
     expect(a2a.matchedTopic).toBe('a2a');
     expect(a2a.content).toContain('~/.kodax/integrations/a2a.json');
-    expect(a2a.content).toContain('a2a add|list|test|call|remove');
+    expect(a2a.content).toContain('version 2');
+    expect(a2a.content).toContain('a2a add|list|test|call|enable|disable|remove');
+    expect(a2a.content).toContain('a2a migrate');
     expect(a2a.content).toContain('a2a expose');
     expect(a2a.content).toContain('a2a serve');
     expect(a2a.content).toContain('same trusted origin');
-    expect(a2a.content).toContain('advertised Bearer');
+    expect(a2a.content).toContain('OAuth 2.0 Client Credentials');
+    expect(a2a.content).toContain('OAuth Resource Server');
+    expect(a2a.content).toContain('external Authorization Server');
+    expect(a2a.content).toContain('securityRealm');
+    expect(a2a.content).toContain('does not cancel');
     expect(a2a.content).toContain('original Runtime run');
     expect(a2a.content).toContain('stable opaque cursor');
     expect(a2a.content).toContain('explicitly admitted artifacts');

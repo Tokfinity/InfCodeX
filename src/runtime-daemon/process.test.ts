@@ -47,6 +47,16 @@ describe('runtime daemon child process environment', () => {
     expect(childEnv.ELECTRON_RUN_AS_NODE).toBeUndefined();
   });
 
+  it('passes an arbitrary config home through to the daemon child unchanged', () => {
+    const childEnv = createRuntimeDaemonServeEnvironment({
+      homeDir: 'runtime-home',
+      configHome: 'custom-config-home',
+      parentEnv: {},
+    });
+
+    expect(childEnv.KODAX_HOME).toBe('custom-config-home');
+  });
+
   it('fails before spawning when an embedder bundle omitted the daemon CLI sidecar', () => {
     const missingEntry = path.join('missing-kodax-package', 'dist', 'kodax_cli.js');
 

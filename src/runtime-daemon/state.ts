@@ -18,6 +18,8 @@ export interface RuntimeDaemonState {
   readonly endpoint: string;
   readonly version: string;
   readonly status: RuntimeDaemonStatus;
+  /** Absent only on state written by a pre-binding daemon. */
+  readonly configHome?: string;
   readonly lastError?: string;
 }
 
@@ -32,6 +34,7 @@ export interface RuntimeDaemonLogEntry {
 
 export interface RuntimeDaemonPaths {
   readonly profile: string;
+  readonly configHome: string;
   readonly rootDir: string;
   readonly stateFile: string;
   readonly lockFile: string;
@@ -110,10 +113,19 @@ export function resolveRuntimeDaemonPaths(
   homeDir: string,
   profile = 'default',
 ): RuntimeDaemonPaths {
+  return resolveRuntimeDaemonPathsFromConfigHome(path.join(path.resolve(homeDir), '.kodax'), profile);
+}
+
+export function resolveRuntimeDaemonPathsFromConfigHome(
+  configHome: string,
+  profile = 'default',
+): RuntimeDaemonPaths {
   const normalizedProfile = normalizeRuntimeDaemonProfile(profile);
-  const rootDir = path.join(homeDir, '.kodax', 'runtime', 'daemon', normalizedProfile);
+  const resolvedConfigHome = path.resolve(configHome);
+  const rootDir = path.join(resolvedConfigHome, 'runtime', 'daemon', normalizedProfile);
   return {
     profile: normalizedProfile,
+    configHome: resolvedConfigHome,
     rootDir,
     stateFile: path.join(rootDir, 'daemon.json'),
     lockFile: path.join(rootDir, 'daemon.lock'),
@@ -124,6 +136,24 @@ export function resolveRuntimeDaemonPaths(
     ownerPolicyFile: path.join(rootDir, 'owner-policy.json'),
     ownerPolicyLockFile: path.join(rootDir, 'owner-policy.lock'),
   };
+}
+
+export function isSameRuntimeDaemonPath(left: string, right: string): boolean {
+  const resolveIdentity = (value: string): string => {
+    const resolved = path.resolve(value);
+    return process.platform === 'win32' ? resolved.toLowerCase() : resolved;
+  };
+  return resolveIdentity(left) === resolveIdentity(right);
+}
+
+export function resolveRuntimeDaemonEndpointScope(
+  homeDir: string,
+  configHome: string,
+): string {
+  const resolvedHome = path.resolve(homeDir);
+  return isSameRuntimeDaemonPath(configHome, path.join(resolvedHome, '.kodax'))
+    ? resolvedHome
+    : path.resolve(configHome);
 }
 
 export function readRuntimeOwnerPolicy(paths: RuntimeDaemonPaths): RuntimeOwnerPolicy {
@@ -787,6 +817,7 @@ function sameRuntimeDaemonState(
     && left.endpoint === right.endpoint
     && left.version === right.version
     && left.status === right.status
+    && left.configHome === right.configHome
     && left.lastError === right.lastError;
 }
 
@@ -859,6 +890,7 @@ function isRuntimeDaemonState(value: unknown): value is RuntimeDaemonState {
     && typeof state.endpoint === 'string'
     && typeof state.version === 'string'
     && isRuntimeDaemonStatus(state.status)
+    && (state.configHome === undefined || typeof state.configHome === 'string')
     && (state.lastError === undefined || typeof state.lastError === 'string');
 }
 

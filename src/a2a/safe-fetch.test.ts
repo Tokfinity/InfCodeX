@@ -45,6 +45,31 @@ describe('safe A2A fetch', () => {
     })).resolves.toBeUndefined();
   });
 
+  it('requires localhost DNS results to remain exact loopback addresses', async () => {
+    const policy = {
+      allowedOrigins: ['http://localhost:4000'],
+      allowPrivateAddresses: true,
+      requestTimeoutMs: 1_000,
+      maxResponseBytes: 1_024,
+      maxRedirects: 0,
+    } as const;
+    lookup.mockResolvedValueOnce([{ address: '192.168.1.20', family: 4 }]);
+    await expect(assertSafeA2AUrl(new URL('http://localhost:4000/a2a'), policy))
+      .rejects.toThrow(/localhost.*loopback|loopback.*localhost/i);
+
+    lookup.mockResolvedValueOnce([{ address: '0:0:0:0:0:0:0:1', family: 6 }]);
+    await expect(assertSafeA2AUrl(new URL('http://localhost:4000/a2a'), policy))
+      .resolves.toBeUndefined();
+
+    lookup.mockResolvedValueOnce([{ address: '::ffff:127.0.0.1', family: 6 }]);
+    await expect(assertSafeA2AUrl(new URL('http://localhost:4000/a2a'), policy))
+      .resolves.toBeUndefined();
+
+    lookup.mockResolvedValueOnce([{ address: '::ffff:7f00:1', family: 6 }]);
+    await expect(assertSafeA2AUrl(new URL('http://localhost:4000/a2a'), policy))
+      .resolves.toBeUndefined();
+  });
+
   it('uses the validated DNS address for the network connection', async () => {
     let acceptEncoding: string | undefined;
     const server = createServer((request, response) => {

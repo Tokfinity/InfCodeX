@@ -102,6 +102,7 @@ export type RuntimeDaemonMethod =
   | 'artifact.delete'
   | 'agentRegistrations.list'
   | 'agentRegistrations.upsert'
+  | 'agentRegistrations.setEnabled'
   | 'agentRegistrations.remove'
   | 'agents.listDispatchable'
   | 'agents.describe'
@@ -162,6 +163,7 @@ export type RuntimeDaemonMutationMethod =
   | 'artifact.create'
   | 'artifact.delete'
   | 'agentRegistrations.upsert'
+  | 'agentRegistrations.setEnabled'
   | 'agentRegistrations.remove'
   | 'agentTasks.start'
   | 'agentTasks.sendInput'
@@ -348,6 +350,7 @@ export const RUNTIME_DAEMON_METHODS: readonly RuntimeDaemonMethod[] = [
   'artifact.delete',
   'agentRegistrations.list',
   'agentRegistrations.upsert',
+  'agentRegistrations.setEnabled',
   'agentRegistrations.remove',
   'agents.listDispatchable',
   'agents.describe',
@@ -409,6 +412,7 @@ export const RUNTIME_DAEMON_MUTATION_METHODS: readonly RuntimeDaemonMutationMeth
   'artifact.create',
   'artifact.delete',
   'agentRegistrations.upsert',
+  'agentRegistrations.setEnabled',
   'agentRegistrations.remove',
   'agentTasks.start',
   'agentTasks.sendInput',

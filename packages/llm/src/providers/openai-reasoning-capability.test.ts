@@ -299,6 +299,103 @@ describe('openai reasoning capability', () => {
     expect(create.mock.calls[0]?.[0].thinking).toEqual({ type: 'enabled' });
   });
 
+  it('rejects explicit attempts to disable Kimi K2.7 Code before stream or complete hits the wire', async () => {
+    const create = vi.fn().mockResolvedValue(createCompletedOpenAIStream());
+    const provider = new TestOpenAIProvider('kimi', 'native-toggle', {
+      chat: { completions: { create } },
+    }, {
+      reasoningProfile: {
+        reasoningPreset: 'kimi-k2.7-code',
+        effortStrategy: 'prompt-only',
+        defaultEffort: 'high',
+        localRejectEfforts: ['none', 'minimal'],
+      },
+    });
+    const disabled: KodaXReasoningRequest = {
+      ...reasoning,
+      enabled: false,
+      effort: 'none',
+    };
+
+    await expect(provider.stream(MESSAGES, TOOLS, 'system', disabled)).rejects.toThrow(
+      'does not support reasoning effort "none"',
+    );
+    await expect(provider.complete(MESSAGES, TOOLS, 'system', disabled)).rejects.toThrow(
+      'does not support reasoning effort "none"',
+    );
+    expect(create).not.toHaveBeenCalled();
+  });
+
+  it('sends the Kimi K2.6 disabled-thinking profile when reasoning is explicitly off', async () => {
+    const create = vi.fn().mockImplementation((params: { stream?: boolean }) => (
+      params.stream
+        ? Promise.resolve(createCompletedOpenAIStream())
+        : Promise.resolve({
+            choices: [
+              {
+                message: { role: 'assistant', content: 'ok', tool_calls: [] },
+                finish_reason: 'stop',
+              },
+            ],
+            usage: { prompt_tokens: 1, completion_tokens: 1, total_tokens: 2 },
+          })
+    ));
+    const provider = new TestOpenAIProvider('kimi', 'native-toggle', {
+      chat: { completions: { create } },
+    }, {
+      model: 'kimi-k2.6',
+      reasoningProfile: {
+        reasoningPreset: 'kimi-hybrid-toggle',
+        effortStrategy: 'provider-toggle',
+        thinkingStrategy: 'provider-toggle',
+        supportedEfforts: [
+          { value: 'none' },
+          { value: 'medium', isDefault: true },
+        ],
+        disabledEfforts: ['none'],
+        supportsDisabledThinking: true,
+      },
+    });
+
+    await provider.stream(MESSAGES, TOOLS, 'system', {
+      enabled: false,
+      effort: 'none',
+    });
+    await provider.complete(MESSAGES, TOOLS, 'system', {
+      enabled: false,
+      effort: 'none',
+    });
+
+    expect(create.mock.calls[0]?.[0].thinking).toEqual({ type: 'disabled' });
+    expect(create.mock.calls[1]?.[0].thinking).toEqual({ type: 'disabled' });
+  });
+
+  it('degrades a provider-budget profile when an upstream rejects budget_tokens', async () => {
+    const create = vi.fn()
+      .mockRejectedValueOnce(new Error('budget_tokens is unsupported'))
+      .mockResolvedValueOnce(createCompletedOpenAIStream());
+    const provider = new TestOpenAIProvider('my-relay', 'native-budget', {
+      chat: { completions: { create } },
+    }, {
+      reasoningProfile: {
+        reasoningPreset: 'generic-thinking-toggle',
+        effortStrategy: 'provider-budget',
+        thinkingStrategy: 'provider-budget',
+        supportedEfforts: [{ value: 'medium', isDefault: true }],
+        supportsManualThinkingBudget: true,
+      },
+    });
+
+    await provider.stream(MESSAGES, TOOLS, 'system', reasoning);
+
+    expect(create).toHaveBeenCalledTimes(2);
+    expect(create.mock.calls[0]?.[0].thinking).toMatchObject({
+      type: 'enabled',
+      budget_tokens: expect.any(Number),
+    });
+    expect(create.mock.calls[1]?.[0]).not.toHaveProperty('thinking');
+  });
+
   it('sends DeepSeek V4 thinking plus aliased reasoning_effort through reasoning metadata', async () => {
     const create = vi.fn().mockResolvedValue(createCompletedOpenAIStream());
     const provider = new TestOpenAIProvider('deepseek', 'native-effort', {

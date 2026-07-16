@@ -31,7 +31,7 @@ if (
  * KodaX CLI — Command-line entry point.
  * UI module: Ink-based interactive REPL with managed task lifecycle.
  */
-import { Command } from 'commander';
+import { Command, Option } from 'commander';
 import chalk from 'chalk';
 import { spawn } from 'node:child_process';
 import fs from 'fs/promises';
@@ -57,7 +57,9 @@ import {
   readRuntimeDaemonLockOwner,
   readRuntimeDaemonToken,
   removeRuntimeDaemonOwnershipIfUnchanged,
+  isSameRuntimeDaemonPath,
   resolveRuntimeDaemonPaths,
+  resolveRuntimeDaemonPathsFromConfigHome,
   type RuntimeDaemonHealth,
   type RuntimeDaemonState,
 } from './runtime-daemon/state.js';
@@ -190,6 +192,19 @@ function resolveDefaultRuntimeDaemonHomeDir(): string {
   return os.homedir();
 }
 
+function resolveCliRuntimeDaemonLocation(
+  homeDir: string | undefined,
+  configHome?: string,
+): { readonly homeDir: string; readonly configHome: string } {
+  const resolvedHome = path.resolve(homeDir ?? resolveDefaultRuntimeDaemonHomeDir());
+  return {
+    homeDir: resolvedHome,
+    configHome: path.resolve(
+      configHome ?? (homeDir === undefined ? KODAX_DIR : path.join(resolvedHome, '.kodax')),
+    ),
+  };
+}
+
 async function discoverCliDefaultExtensions(): Promise<string[]> {
   try {
     return await discoverDefaultExtensions();
@@ -297,9 +312,10 @@ interface CliRuntimeSurfaceStatus {
 async function printDaemonStatus(input: {
   readonly profile: string;
   readonly homeDir: string;
+  readonly configHome: string;
   readonly json: boolean;
 }): Promise<void> {
-  const paths = resolveRuntimeDaemonPaths(input.homeDir, input.profile);
+  const paths = resolveRuntimeDaemonPathsFromConfigHome(input.configHome, input.profile);
   const observation = await observeRuntimeDaemonHealth(paths);
   const health = classifyRuntimeDaemonHealth(observation);
   const runtimeStatus = await readDaemonRuntimeStatusSummary(paths, observation.state, health);
@@ -386,14 +402,14 @@ function summarizeDaemonRuntimeStatus(value: unknown): DaemonRuntimeStatusSummar
 
 async function getInteractiveRuntimeStatus(input: {
   readonly runtime: KodaXRuntime;
-  readonly homeDir: string;
+  readonly configHome: string;
   readonly profile: string;
 }): Promise<CliRuntimeSurfaceStatus> {
   const snapshot = await input.runtime.status.snapshot();
   let endpoint: string | undefined;
   let health: string | undefined;
   if (input.runtime.identity.mode === 'daemon') {
-    const paths = resolveRuntimeDaemonPaths(input.homeDir, input.profile);
+    const paths = resolveRuntimeDaemonPathsFromConfigHome(input.configHome, input.profile);
     const observation = await observeRuntimeDaemonHealth(paths);
     health = classifyRuntimeDaemonHealth(observation);
     endpoint = observation.state?.endpoint;
@@ -941,12 +957,13 @@ function arrayLength(value: unknown): number {
 async function startDaemonCommand(input: {
   readonly profile: string;
   readonly homeDir: string;
+  readonly configHome: string;
   readonly provider?: string;
   readonly model?: string;
   readonly timeoutMs: number;
   readonly json: boolean;
 }): Promise<void> {
-  const paths = resolveRuntimeDaemonPaths(input.homeDir, input.profile);
+  const paths = resolveRuntimeDaemonPathsFromConfigHome(input.configHome, input.profile);
   const result = await getDaemonStartResult(input);
   if (input.json) {
     console.log(JSON.stringify(result, null, 2));
@@ -969,11 +986,12 @@ async function startDaemonCommand(input: {
 async function getDaemonStartResult(input: {
   readonly profile: string;
   readonly homeDir: string;
+  readonly configHome: string;
   readonly provider?: string;
   readonly model?: string;
   readonly timeoutMs: number;
 }): Promise<DaemonStartResult> {
-  const paths = resolveRuntimeDaemonPaths(input.homeDir, input.profile);
+  const paths = resolveRuntimeDaemonPathsFromConfigHome(input.configHome, input.profile);
   const before = await observeRuntimeDaemonHealth(paths);
   const beforeHealth = classifyRuntimeDaemonHealth(before);
   if (beforeHealth === 'healthy') {
@@ -987,6 +1005,7 @@ async function getDaemonStartResult(input: {
   const child = spawnDaemonServeProcess({
     profile: paths.profile,
     homeDir: input.homeDir,
+    configHome: input.configHome,
     provider: input.provider,
     model: input.model,
   });
@@ -1003,14 +1022,16 @@ async function getDaemonStartResult(input: {
 async function serveDaemonCommand(input: {
   readonly profile: string;
   readonly homeDir: string;
+  readonly configHome: string;
   readonly provider?: string;
   readonly model?: string;
   readonly sessionsDir?: string;
   readonly permissionTimeoutMs?: number;
 }): Promise<void> {
   const extensions = await createDaemonOwnedExtensionRuntime();
+  const daemonConfigHome = path.resolve(input.configHome);
   const a2aIntegration = createConfiguredA2ARuntimeIntegration({
-    configHome: KODAX_DIR,
+    configHome: daemonConfigHome,
     onEvent: (message) => console.error(chalk.dim(`[integrations] ${message}`)),
   });
   let ownedRuntime: KodaXRuntime | undefined;
@@ -1019,12 +1040,20 @@ async function serveDaemonCommand(input: {
     const lease = await acquireRuntimeDaemonLease({
       profile: input.profile,
       homeDir: input.homeDir,
+      configHome: daemonConfigHome,
+      // The host is created only after createRuntime returns, so this trusted
+      // fact is never observable until reconcile and watcher startup succeed.
+      ownsA2AConfigReconciler: true,
       createRuntime: async (runtimeId) => {
-        ownedRuntime = await createKodaXRuntime({
+        const usesCanonicalHome = isSameRuntimeDaemonPath(
+          daemonConfigHome,
+          path.join(input.homeDir, '.kodax'),
+        );
+        const runtime = await createKodaXRuntime({
           mode: 'embedded',
           profile: input.profile,
-          homeDir: input.homeDir,
-          sessionsDir: input.sessionsDir ?? path.join(input.homeDir, '.kodax', 'sessions'),
+          ...(usesCanonicalHome ? { homeDir: input.homeDir } : {}),
+          sessionsDir: input.sessionsDir ?? path.join(daemonConfigHome, 'sessions'),
           defaultProvider: input.provider,
           defaultModel: input.model,
           permissionTimeoutMs: input.permissionTimeoutMs,
@@ -1032,7 +1061,23 @@ async function serveDaemonCommand(input: {
           daemonHostRuntimeId: runtimeId,
           externalAgents: a2aIntegration.runtimeOptions,
         });
-        return ownedRuntime;
+        ownedRuntime = runtime;
+        try {
+          a2aHandle = await a2aIntegration.start(runtime);
+          return runtime;
+        } catch (error: unknown) {
+          try {
+            await runtime.close();
+          } catch (cleanupError: unknown) {
+            throw new AggregateError(
+              [error, cleanupError],
+              'Runtime daemon A2A initialization failed and Runtime cleanup also failed.',
+            );
+          } finally {
+            ownedRuntime = undefined;
+          }
+          throw error;
+        }
       },
     });
     if (!lease.ownsHost) {
@@ -1043,7 +1088,6 @@ async function serveDaemonCommand(input: {
     }
     if (!ownedRuntime) throw new Error('Runtime daemon owner was not created.');
     try {
-      a2aHandle = await a2aIntegration.start(ownedRuntime);
       await waitForShutdownSignal(() => lease.shutdown(), lease.hostClosed);
     } finally {
       a2aHandle?.close();
@@ -1051,6 +1095,8 @@ async function serveDaemonCommand(input: {
       await lease.shutdown();
     }
   } finally {
+    a2aHandle?.close();
+    a2aHandle = undefined;
     extensions.hotReload.close();
     await extensions.runtime.dispose();
   }
@@ -1096,11 +1142,12 @@ async function createDaemonOwnedExtensionRuntime(): Promise<{
 async function stopDaemonCommand(input: {
   readonly profile: string;
   readonly homeDir: string;
+  readonly configHome: string;
   readonly timeoutMs: number;
   readonly force: boolean;
   readonly json: boolean;
 }): Promise<void> {
-  const paths = resolveRuntimeDaemonPaths(input.homeDir, input.profile);
+  const paths = resolveRuntimeDaemonPathsFromConfigHome(input.configHome, input.profile);
   const result = await getDaemonStopResult(input);
   if (input.json) {
     console.log(JSON.stringify(result, null, 2));
@@ -1124,11 +1171,12 @@ async function stopDaemonCommand(input: {
 async function getDaemonStopResult(input: {
   readonly profile: string;
   readonly homeDir: string;
+  readonly configHome: string;
   readonly timeoutMs: number;
   readonly force?: boolean;
 }): Promise<DaemonStopResult> {
   const deadline = Date.now() + input.timeoutMs;
-  const paths = resolveRuntimeDaemonPaths(input.homeDir, input.profile);
+  const paths = resolveRuntimeDaemonPathsFromConfigHome(input.configHome, input.profile);
   const observation = await observeRuntimeDaemonHealth(paths);
   const health = classifyRuntimeDaemonHealth(observation);
   if (health !== 'healthy' || !observation.state) {
@@ -1244,6 +1292,7 @@ function forceStopDaemonOwnership(
 async function restartDaemonCommand(input: {
   readonly profile: string;
   readonly homeDir: string;
+  readonly configHome: string;
   readonly provider?: string;
   readonly model?: string;
   readonly timeoutMs: number;
@@ -1254,7 +1303,7 @@ async function restartDaemonCommand(input: {
     console.log(JSON.stringify(result, null, 2));
     return;
   }
-  const paths = resolveRuntimeDaemonPaths(input.homeDir, input.profile);
+  const paths = resolveRuntimeDaemonPathsFromConfigHome(input.configHome, input.profile);
   if (!result.restarted) {
     throw new Error(`KodaX runtime daemon restart failed for profile "${paths.profile}".`);
   }
@@ -1268,6 +1317,7 @@ async function restartDaemonCommand(input: {
 async function getDaemonRestartResult(input: {
   readonly profile: string;
   readonly homeDir: string;
+  readonly configHome: string;
   readonly provider?: string;
   readonly model?: string;
   readonly timeoutMs: number;
@@ -1317,6 +1367,7 @@ async function getDaemonRestartResult(input: {
 async function printDaemonLogs(input: {
   readonly profile: string;
   readonly homeDir: string;
+  readonly configHome: string;
   readonly lines: number;
   readonly json: boolean;
 }): Promise<void> {
@@ -1339,9 +1390,10 @@ async function printDaemonLogs(input: {
 function readDaemonLogs(input: {
   readonly profile: string;
   readonly homeDir: string;
+  readonly configHome: string;
   readonly lines: number;
 }): DaemonLogsResult {
-  const paths = resolveRuntimeDaemonPaths(input.homeDir, input.profile);
+  const paths = resolveRuntimeDaemonPathsFromConfigHome(input.configHome, input.profile);
   if (!fsSync.existsSync(paths.logFile)) {
     return {
       profile: paths.profile,
@@ -1369,6 +1421,7 @@ function tailTextFile(file: string, lineCount: number): readonly string[] {
 function spawnDaemonServeProcess(input: {
   readonly profile: string;
   readonly homeDir: string;
+  readonly configHome: string;
   readonly provider?: string;
   readonly model?: string;
 }): ReturnType<typeof spawn> {
@@ -1385,6 +1438,8 @@ function spawnDaemonServeProcess(input: {
     input.profile,
     '--home',
     input.homeDir,
+    '--config-home',
+    input.configHome,
   ];
   if (input.provider !== undefined) {
     args.push('--provider', input.provider);
@@ -1397,7 +1452,7 @@ function spawnDaemonServeProcess(input: {
     env: {
       ...process.env,
       KODAX_DAEMON_SERVE: '1',
-      KODAX_HOME: path.join(input.homeDir, '.kodax'),
+      KODAX_HOME: input.configHome,
     },
     isElectron: process.versions.electron !== undefined,
   });
@@ -2269,7 +2324,7 @@ complete -c kodax -l version -d 'Show version'`);
     .command('start')
     .description('Start the runtime daemon in a detached background process')
     .option('--profile <name>', 'Daemon profile', 'default')
-    .option('--home <dir>', 'Base directory that owns the .kodax runtime daemon state', resolveDefaultRuntimeDaemonHomeDir())
+    .option('--home <dir>', 'Base directory that owns the .kodax runtime daemon state')
     .option('-m, --provider <name>', 'Default provider for hosted runs')
     .option('--model <name>', 'Default model for hosted runs')
     .option('--timeout-ms <n>', 'Milliseconds to wait for daemon health', parseOptionalNonNegativeInt, 5_000)
@@ -2285,7 +2340,7 @@ complete -c kodax -l version -d 'Show version'`);
       const options = mergeCommandOptionsWithGlobals(localOptions, command);
       await startDaemonCommand({
         profile: options.profile ?? 'default',
-        homeDir: options.home ?? resolveDefaultRuntimeDaemonHomeDir(),
+        ...resolveCliRuntimeDaemonLocation(options.home),
         provider: options.provider,
         model: options.model,
         timeoutMs: options.timeoutMs ?? 5_000,
@@ -2297,7 +2352,7 @@ complete -c kodax -l version -d 'Show version'`);
     .command('stop')
     .description('Stop a healthy runtime daemon')
     .option('--profile <name>', 'Daemon profile', 'default')
-    .option('--home <dir>', 'Base directory that owns the .kodax runtime daemon state', resolveDefaultRuntimeDaemonHomeDir())
+    .option('--home <dir>', 'Base directory that owns the .kodax runtime daemon state')
     .option('--timeout-ms <n>', 'Milliseconds to wait for daemon shutdown', parseOptionalNonNegativeInt, 5_000)
     .option('--force', 'Clean verified stale daemon ownership without killing unverified live processes')
     .option('--json', 'Output machine-readable JSON')
@@ -2310,7 +2365,7 @@ complete -c kodax -l version -d 'Show version'`);
     }) => {
       await stopDaemonCommand({
         profile: subOpts.profile ?? 'default',
-        homeDir: subOpts.home ?? resolveDefaultRuntimeDaemonHomeDir(),
+        ...resolveCliRuntimeDaemonLocation(subOpts.home),
         timeoutMs: subOpts.timeoutMs ?? 5_000,
         force: subOpts.force === true,
         json: subOpts.json === true,
@@ -2321,7 +2376,7 @@ complete -c kodax -l version -d 'Show version'`);
     .command('restart')
     .description('Restart the runtime daemon')
     .option('--profile <name>', 'Daemon profile', 'default')
-    .option('--home <dir>', 'Base directory that owns the .kodax runtime daemon state', resolveDefaultRuntimeDaemonHomeDir())
+    .option('--home <dir>', 'Base directory that owns the .kodax runtime daemon state')
     .option('-m, --provider <name>', 'Default provider for hosted runs')
     .option('--model <name>', 'Default model for hosted runs')
     .option('--timeout-ms <n>', 'Milliseconds to wait for daemon shutdown/startup', parseOptionalNonNegativeInt, 5_000)
@@ -2337,7 +2392,7 @@ complete -c kodax -l version -d 'Show version'`);
       const options = mergeCommandOptionsWithGlobals(localOptions, command);
       await restartDaemonCommand({
         profile: options.profile ?? 'default',
-        homeDir: options.home ?? resolveDefaultRuntimeDaemonHomeDir(),
+        ...resolveCliRuntimeDaemonLocation(options.home),
         provider: options.provider,
         model: options.model,
         timeoutMs: options.timeoutMs ?? 5_000,
@@ -2349,13 +2404,13 @@ complete -c kodax -l version -d 'Show version'`);
     .command('logs')
     .description('Print the daemon log path and recent lines')
     .option('--profile <name>', 'Daemon profile', 'default')
-    .option('--home <dir>', 'Base directory that owns the .kodax runtime daemon state', resolveDefaultRuntimeDaemonHomeDir())
+    .option('--home <dir>', 'Base directory that owns the .kodax runtime daemon state')
     .option('--lines <n>', 'Number of log lines to print', parseOptionalNonNegativeInt, 80)
     .option('--json', 'Output machine-readable JSON')
     .action(async (subOpts: { profile?: string; home?: string; lines?: number; json?: boolean }) => {
       await printDaemonLogs({
         profile: subOpts.profile ?? 'default',
-        homeDir: subOpts.home ?? resolveDefaultRuntimeDaemonHomeDir(),
+        ...resolveCliRuntimeDaemonLocation(subOpts.home),
         lines: subOpts.lines ?? 80,
         json: subOpts.json === true,
       });
@@ -2365,19 +2420,20 @@ complete -c kodax -l version -d 'Show version'`);
     .command('serve')
     .description('Run the runtime daemon host in the foreground')
     .option('--profile <name>', 'Daemon profile', 'default')
-    .option('--home <dir>', 'Base directory that owns the .kodax runtime daemon state', resolveDefaultRuntimeDaemonHomeDir())
+    .option('--home <dir>', 'Base directory that owns the .kodax runtime daemon state')
+    .addOption(new Option('--config-home <dir>').hideHelp())
     .option('-m, --provider <name>', 'Default provider for hosted runs')
     .option('--model <name>', 'Default model for hosted runs')
     .option('--sessions-dir <dir>', 'Runtime session storage directory')
     .option('--permission-timeout-ms <n>', 'Permission request timeout', parseOptionalNonNegativeInt)
     .action(async (localOptions: {
       profile?: string; home?: string; provider?: string; model?: string;
-      sessionsDir?: string; permissionTimeoutMs?: number;
+      configHome?: string; sessionsDir?: string; permissionTimeoutMs?: number;
     }, command: Command) => {
       const options = mergeCommandOptionsWithGlobals(localOptions, command);
       await serveDaemonCommand({
         profile: options.profile ?? 'default',
-        homeDir: options.home ?? resolveDefaultRuntimeDaemonHomeDir(),
+        ...resolveCliRuntimeDaemonLocation(options.home, options.configHome),
         provider: options.provider,
         model: options.model,
         sessionsDir: options.sessionsDir,
@@ -2389,12 +2445,12 @@ complete -c kodax -l version -d 'Show version'`);
     .command('status')
     .description('Inspect daemon state and endpoint health')
     .option('--profile <name>', 'Daemon profile', 'default')
-    .option('--home <dir>', 'Base directory that owns the .kodax runtime daemon state', resolveDefaultRuntimeDaemonHomeDir())
+    .option('--home <dir>', 'Base directory that owns the .kodax runtime daemon state')
     .option('--json', 'Output machine-readable JSON')
     .action(async (subOpts: { profile?: string; home?: string; json?: boolean }) => {
       await printDaemonStatus({
         profile: subOpts.profile ?? 'default',
-        homeDir: subOpts.home ?? resolveDefaultRuntimeDaemonHomeDir(),
+        ...resolveCliRuntimeDaemonLocation(subOpts.home),
         json: subOpts.json === true,
       });
     });
@@ -2956,7 +3012,6 @@ complete -c kodax -l version -d 'Show version'`);
       : undefined;
     cliRuntime = await createKodaXRuntime({
       mode,
-      homeDir: resolveDefaultRuntimeDaemonHomeDir(),
       profile: 'default',
       autoStartDaemon: mode === 'daemon',
       defaultProvider: options.provider,
@@ -3197,7 +3252,6 @@ complete -c kodax -l version -d 'Show version'`);
         ));
       }
 
-      const runtimeHomeDir = resolveDefaultRuntimeDaemonHomeDir();
       const runtimeProfile = 'default';
       const interactiveRuntime = await getCliRuntime();
       const runtimeRunner = createInteractiveRuntimeRunner(interactiveRuntime);
@@ -3216,7 +3270,7 @@ complete -c kodax -l version -d 'Show version'`);
         runtimeRunner,
         getRuntimeStatus: () => getInteractiveRuntimeStatus({
           runtime: interactiveRuntime,
-          homeDir: runtimeHomeDir,
+          configHome: KODAX_DIR,
           profile: runtimeProfile,
         }),
         hardExitOnClose: false,

@@ -1,4 +1,10 @@
-import { mkdtempSync, rmSync } from 'node:fs';
+import {
+  mkdirSync,
+  mkdtempSync,
+  readFileSync,
+  rmSync,
+  writeFileSync,
+} from 'node:fs';
 import { tmpdir } from 'node:os';
 import path from 'node:path';
 
@@ -6,9 +12,11 @@ import { afterEach, beforeEach, describe, expect, it } from 'vitest';
 
 import {
   classifyA2AServerChange,
+  migrateA2AIntegrationV1,
   parseA2AIntegrationDocument,
   readA2AIntegration,
   removeA2AOutboundAgent,
+  setA2AOutboundAgentEnabled,
   setA2AServerConfig,
   upsertA2AOutboundAgent,
 } from './config.js';
@@ -50,7 +58,7 @@ function authentication() {
 describe('FEATURE_267/268 A2A integration config', () => {
   it('materializes safe managed-workspace defaults', () => {
     const parsed = parseA2AIntegrationDocument({
-      version: 1,
+      version: 2,
       agents: {},
       server: {
         execution: { kind: 'runtime-default' },
@@ -75,7 +83,7 @@ describe('FEATURE_267/268 A2A integration config', () => {
 
   it('rejects partial policy, wildcard authority, and process/script mismatches', () => {
     const base = {
-      version: 1,
+      version: 2,
       agents: {},
       server: {
         execution: { kind: 'runtime-default' },
@@ -121,7 +129,7 @@ describe('FEATURE_267/268 A2A integration config', () => {
 
   it('rejects credentials embedded in outbound and public A2A URLs', () => {
     expect(() => parseA2AIntegrationDocument({
-      version: 1,
+      version: 2,
       agents: {
         reporting: {
           cardUrl: 'https://user:secret@agents.example.com/.well-known/agent-card.json',
@@ -130,7 +138,7 @@ describe('FEATURE_267/268 A2A integration config', () => {
       },
     })).toThrow(/embedded credentials/i);
     expect(() => parseA2AIntegrationDocument({
-      version: 1,
+      version: 2,
       agents: {},
       server: {
         execution: { kind: 'runtime-default' },
@@ -142,9 +150,321 @@ describe('FEATURE_267/268 A2A integration config', () => {
     })).toThrow(/embedded credentials/i);
   });
 
-  it('forces fixed writable workspaces to serial task admission', () => {
+  it('accepts IPv6 loopback HTTP and rejects endpoint fragments before activation', () => {
+    const parsed = parseA2AIntegrationDocument({
+      version: 2,
+      agents: {
+        local: { cardUrl: 'http://[::1]:8765/card', effect: 'none' },
+      },
+    });
+    expect(parsed.agents.local?.cardUrl).toBe('http://[::1]:8765/card');
+
+    expect(() => parseA2AIntegrationDocument({
+      version: 2,
+      agents: {
+        invalid: {
+          cardUrl: 'https://agents.example.com/card',
+          effect: 'read',
+          authentication: {
+            type: 'oauth2-client-credentials',
+            scheme: 'oauth',
+            issuer: 'https://identity.example.com',
+            tokenUrl: 'https://identity.example.com/token#fragment',
+            clientId: 'kodax',
+            clientSecretEnv: 'CLIENT_SECRET',
+            scopes: [],
+          },
+        },
+      },
+    })).toThrow(/fragment/i);
+  });
+
+  it('applies the shared OAuth URI rules while preserving exact issuer and resource strings', () => {
+    const oauthAuthentication = (overrides: Readonly<Record<string, unknown>> = {}) => ({
+      type: 'oauth2-client-credentials',
+      scheme: 'oauth',
+      issuer: 'https://identity.example.com',
+      tokenUrl: 'https://identity.example.com/token',
+      clientId: 'kodax',
+      clientSecretEnv: 'CLIENT_SECRET',
+      scopes: [],
+      ...overrides,
+    });
+    const outbound = (overrides: Readonly<Record<string, unknown>>) => parseA2AIntegrationDocument({
+      version: 2,
+      agents: {
+        remote: {
+          cardUrl: 'https://agent.example.com/.well-known/agent-card.json',
+          effect: 'read',
+          authentication: oauthAuthentication(overrides),
+        },
+      },
+    });
+
+    const parsed = outbound({
+      issuer: '  https://identity.example.com  ',
+      tokenUrl: 'https://identity.example.com/token?tenant=one',
+      resource: ' urn:example:a2a:agent ',
+    });
+    expect(parsed.agents.remote?.authentication).toMatchObject({
+      issuer: 'https://identity.example.com',
+      tokenUrl: 'https://identity.example.com/token?tenant=one',
+      resource: 'urn:example:a2a:agent',
+    });
+
+    expect(() => outbound({ issuer: 'https://identity.example.com?' })).toThrow(/issuer/i);
+    expect(() => outbound({ tokenUrl: 'https://@identity.example.com/token' })).toThrow(/tokenUrl/i);
+    expect(() => outbound({ resource: 'urn:example:a2a#' })).toThrow(/resource/i);
+
+    expect(() => parseA2AIntegrationDocument({
+      version: 2,
+      agents: {},
+      server: {
+        execution: { kind: 'runtime-default' },
+        published: published(),
+        authentication: {
+          type: 'oauth2-jwt',
+          scheme: 'oauth',
+          issuer: 'https://identity.example.com',
+          audience: 'https://agent.example.com',
+          jwksUrl: 'https://identity.example.com/jwks',
+          tokenUrl: 'https://identity.example.com/token',
+          metadataUrl: 'https://identity.example.com/metadata#',
+          requiredScopes: [],
+        },
+        dataDir: '~/.kodax/a2a/tasks',
+      },
+    })).toThrow(/metadataUrl/i);
+  });
+
+  it('parses explicit activation and OAuth2 client credentials without storing secrets', () => {
+    const parsed = parseA2AIntegrationDocument({
+      version: 2,
+      agents: {
+        reporting: {
+          cardUrl: 'https://agents.example.com/.well-known/agent-card.json',
+          enabled: false,
+          effect: 'read',
+          authentication: {
+            type: 'oauth2-client-credentials',
+            scheme: 'enterprise-oauth',
+            issuer: 'https://identity.example.com',
+            tokenUrl: 'https://identity.example.com/oauth/token',
+            clientId: 'kodax-reporting',
+            clientSecretEnv: 'REPORTING_CLIENT_SECRET',
+            scopes: ['a2a.invoke'],
+            resource: 'https://agents.example.com/',
+            clientAuthentication: 'client-secret-basic',
+          },
+        },
+      },
+    });
+
+    expect(parsed.agents.reporting).toEqual({
+      cardUrl: 'https://agents.example.com/.well-known/agent-card.json',
+      enabled: false,
+      effect: 'read',
+      authentication: {
+        type: 'oauth2-client-credentials',
+        scheme: 'enterprise-oauth',
+        issuer: 'https://identity.example.com',
+        tokenUrl: 'https://identity.example.com/oauth/token',
+        clientId: 'kodax-reporting',
+        clientSecretEnv: 'REPORTING_CLIENT_SECRET',
+        scopes: ['a2a.invoke'],
+        resource: 'https://agents.example.com/',
+        clientAuthentication: 'client-secret-basic',
+      },
+    });
+    expect(JSON.stringify(parsed)).not.toContain('client-secret-value');
+  });
+
+  it('defaults legacy outbound entries to enabled and rejects ambiguous authentication', () => {
+    const parsed = parseA2AIntegrationDocument({
+      version: 1,
+      agents: {
+        legacy: {
+          cardUrl: 'https://agents.example.com/.well-known/agent-card.json',
+          credentialEnv: 'LEGACY_A2A_TOKEN',
+          effect: 'read',
+        },
+      },
+    });
+    expect(parsed.version).toBe(2);
+    expect(parsed.agents.legacy?.enabled).toBe(true);
+
     expect(() => parseA2AIntegrationDocument({
       version: 1,
+      agents: {
+        invalidModernEntry: {
+          cardUrl: 'https://agents.example.com/.well-known/agent-card.json',
+          enabled: false,
+          effect: 'read',
+        },
+      },
+    })).toThrow(/enabled/i);
+
+    expect(() => parseA2AIntegrationDocument({
+      version: 2,
+      agents: {
+        ambiguous: {
+          cardUrl: 'https://agents.example.com/.well-known/agent-card.json',
+          enabled: true,
+          credentialEnv: 'LEGACY_A2A_TOKEN',
+          authentication: {
+            type: 'oauth2-client-credentials',
+            scheme: 'oauth',
+            issuer: 'https://identity.example.com/',
+            tokenUrl: 'https://identity.example.com/token',
+            clientId: 'kodax',
+            clientSecretEnv: 'CLIENT_SECRET',
+            scopes: ['a2a.invoke'],
+          },
+          effect: 'read',
+        },
+      },
+    })).toThrow(/credentialEnv.*authentication/i);
+  });
+
+  it('fails closed on ordinary mutations of a non-empty v1 file until explicit migration', () => {
+    const file = path.join(configHome, 'integrations', 'a2a.json');
+    mkdirSync(path.dirname(file), { recursive: true });
+    const legacy = `${JSON.stringify({
+      version: 1,
+      agents: {
+        legacy: {
+          cardUrl: 'https://agents.example.com/.well-known/agent-card.json',
+          credentialEnv: 'LEGACY_A2A_TOKEN',
+          effect: 'read',
+        },
+      },
+    }, null, 2)}\n`;
+    writeFileSync(file, legacy, 'utf8');
+
+    const operations = [
+      () => upsertA2AOutboundAgent(configHome, 'new-agent', {
+        cardUrl: 'https://new.example.com/.well-known/agent-card.json',
+        effect: 'none',
+      }),
+      () => removeA2AOutboundAgent(configHome, 'legacy'),
+      () => setA2AOutboundAgentEnabled(configHome, 'legacy', false),
+      () => setA2AServerConfig(configHome, undefined),
+    ];
+    for (const operation of operations) {
+      expect(operation).toThrow(/explicit migration|a2a migrate/i);
+      expect(readFileSync(file, 'utf8')).toBe(legacy);
+    }
+
+    const result = migrateA2AIntegrationV1(configHome);
+    expect(result.migrated).toBe(true);
+    expect(JSON.parse(readFileSync(file, 'utf8'))).toMatchObject({
+      version: 2,
+      agents: { legacy: { enabled: true, credentialEnv: 'LEGACY_A2A_TOKEN' } },
+    });
+    expect(migrateA2AIntegrationV1(configHome).migrated).toBe(false);
+  });
+
+  it('allows an empty v1 file to upgrade through the first ordinary write', () => {
+    const file = path.join(configHome, 'integrations', 'a2a.json');
+    mkdirSync(path.dirname(file), { recursive: true });
+    writeFileSync(file, '{"version":1,"agents":{}}\n', 'utf8');
+
+    upsertA2AOutboundAgent(configHome, 'first', {
+      cardUrl: 'https://first.example.com/.well-known/agent-card.json',
+      effect: 'none',
+    });
+
+    expect(JSON.parse(readFileSync(file, 'utf8'))).toMatchObject({
+      version: 2,
+      agents: { first: { enabled: true } },
+    });
+  });
+
+  it('parses an RFC 9068 JWT resource-server authentication profile', () => {
+    expect(() => parseA2AIntegrationDocument({
+      version: 1,
+      agents: {},
+      server: {
+        execution: { kind: 'runtime-default' },
+        published: published(),
+        authentication: { type: 'oauth2-jwt' },
+        dataDir: '~/.kodax/a2a/tasks',
+      },
+    })).toThrow(/requires.*version 2/i);
+
+    const parsed = parseA2AIntegrationDocument({
+      version: 2,
+      agents: {},
+      server: {
+        execution: { kind: 'runtime-default' },
+        published: published(),
+        authentication: {
+          type: 'oauth2-jwt',
+          scheme: 'enterprise-oauth',
+          issuer: 'https://identity.example.com',
+          audience: 'https://agent.example.com/',
+          jwksUrl: 'https://identity.example.com/.well-known/jwks.json',
+          tokenUrl: 'https://identity.example.com/oauth/token',
+          metadataUrl: 'https://identity.example.com/.well-known/oauth-authorization-server',
+          requiredScopes: ['a2a.invoke'],
+        },
+        dataDir: '~/.kodax/a2a/tasks',
+      },
+    });
+    expect(parsed.server?.authentication).toEqual({
+      type: 'oauth2-jwt',
+      scheme: 'enterprise-oauth',
+      issuer: 'https://identity.example.com',
+      audience: 'https://agent.example.com/',
+      jwksUrl: 'https://identity.example.com/.well-known/jwks.json',
+      tokenUrl: 'https://identity.example.com/oauth/token',
+      metadataUrl: 'https://identity.example.com/.well-known/oauth-authorization-server',
+      requiredScopes: ['a2a.invoke'],
+    });
+  });
+
+  it('rejects OAuth scope values that are not RFC 6749 scope-tokens', () => {
+    expect(() => parseA2AIntegrationDocument({
+      version: 2,
+      agents: {
+        invalid: {
+          cardUrl: 'https://agents.example.com/.well-known/agent-card.json',
+          effect: 'read',
+          authentication: {
+            type: 'oauth2-client-credentials',
+            scheme: 'oauth',
+            issuer: 'https://identity.example.com',
+            tokenUrl: 'https://identity.example.com/token',
+            clientId: 'kodax',
+            clientSecretEnv: 'CLIENT_SECRET',
+            scopes: ['a2a.invoke\r\nX-Injected: true'],
+          },
+        },
+      },
+    })).toThrow(/scope-token/i);
+
+    expect(() => parseA2AIntegrationDocument({
+      version: 2,
+      agents: {},
+      server: {
+        execution: { kind: 'runtime-default' },
+        published: published(),
+        authentication: {
+          type: 'oauth2-jwt',
+          scheme: 'oauth',
+          issuer: 'https://identity.example.com',
+          audience: 'https://agent.example.com',
+          jwksUrl: 'https://identity.example.com/jwks',
+          tokenUrl: 'https://identity.example.com/token',
+          requiredScopes: ['bad scope'],
+        },
+      },
+    })).toThrow(/scope-token/i);
+  });
+
+  it('forces fixed writable workspaces to serial task admission', () => {
+    expect(() => parseA2AIntegrationDocument({
+      version: 2,
       agents: {},
       server: {
         execution: {
@@ -174,7 +494,7 @@ describe('FEATURE_267/268 A2A integration config', () => {
 
   it('preserves the inbound singleton across outbound mutations and vice versa', () => {
     const server = parseA2AIntegrationDocument({
-      version: 1,
+      version: 2,
       agents: {},
       server: {
         execution: { kind: 'runtime-default' },
@@ -186,10 +506,18 @@ describe('FEATURE_267/268 A2A integration config', () => {
     setA2AServerConfig(configHome, server);
     upsertA2AOutboundAgent(configHome, 'reporting', {
       cardUrl: 'https://agents.example.com/.well-known/agent-card.json',
+      enabled: true,
       credentialEnv: 'REPORTING_A2A_TOKEN',
       effect: 'read',
     });
+    upsertA2AOutboundAgent(configHome, 'research', {
+      cardUrl: 'https://research.example.com/.well-known/agent-card.json',
+      effect: 'none',
+    });
+    setA2AOutboundAgentEnabled(configHome, 'reporting', false);
     expect(readA2AIntegration(configHome).document.server).toEqual(server);
+    expect(readA2AIntegration(configHome).document.agents.research?.enabled).toBe(true);
+    expect(readA2AIntegration(configHome).document.agents.reporting?.enabled).toBe(false);
     expect(readA2AIntegration(configHome).document.agents.reporting?.credentialEnv)
       .toBe('REPORTING_A2A_TOKEN');
     expect(removeA2AOutboundAgent(configHome, 'reporting')).toBe(true);
@@ -198,7 +526,7 @@ describe('FEATURE_267/268 A2A integration config', () => {
 
   it('classifies publication/auth/limits as hot and execution/store as restart-required', () => {
     const current = parseA2AIntegrationDocument({
-      version: 1,
+      version: 2,
       agents: {},
       server: {
         execution: { kind: 'runtime-default' },

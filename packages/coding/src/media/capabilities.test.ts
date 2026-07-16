@@ -14,8 +14,12 @@ describe('getModelInputCapabilities', () => {
   it('supports documented Kimi model aliases without inferring gateway routes', () => {
     expect(getModelInputCapabilities({ provider: 'kimi', model: 'k2.6' }).image.status).toBe('supported');
     expect(getModelInputCapabilities({ provider: 'kimi', model: 'k2.7-code' }).image.status).toBe('supported');
+    expect(getModelInputCapabilities({ provider: 'kimi', model: 'k2.7-code-highspeed' }).image.status).toBe('supported');
     expect(getModelInputCapabilities({ provider: 'kimi', model: 'kimi-k2.5' }).image.status).toBe('supported');
     expect(getModelInputCapabilities({ provider: 'ark-coding', model: 'kimi-k2.6' }).image.status).toBe('unsupported');
+    expect(getModelInputCapabilities({ provider: 'kimi-code', model: 'k3' }).image.status).toBe('supported');
+    expect(getModelInputCapabilities({ provider: 'kimi-code', model: 'k3' }).video.status).toBe('provider-native-unwired');
+    expect(getModelInputCapabilities({ provider: 'kimi-code', model: 'kimi-for-coding-highspeed' }).image.status).toBe('supported');
   });
 
   it('supports only documented non-official image models, not nearby defaults', () => {

@@ -3,6 +3,18 @@ export type AgentExecutorProtocol = 'native' | 'a2a' | 'mcp' | 'http';
 export type ExternalAgentProtocol = Exclude<AgentExecutorProtocol, 'native'>;
 export type CapabilitySupport = 'supported' | 'unsupported' | 'conditional';
 
+export type AgentJsonValue =
+  | string
+  | number
+  | boolean
+  | null
+  | AgentJsonObject
+  | readonly AgentJsonValue[];
+
+export interface AgentJsonObject {
+  readonly [key: string]: AgentJsonValue;
+}
+
 export interface AgentCapabilityDeclaration {
   readonly streaming: CapabilitySupport;
   readonly durableTasks: CapabilitySupport;
@@ -88,13 +100,21 @@ export interface ExternalAgentRegistration {
   readonly agentId: string;
   readonly displayName: string;
   readonly description?: string;
+  readonly managementOwner?: string;
   readonly enabled: boolean;
   readonly executorId: string;
   readonly protocol: ExternalAgentProtocol;
+  /**
+   * Stable content identity for this execution route. Producers must issue a
+   * new value whenever immutable execution content changes. The same immutable
+   * content may reuse its stable revision after removal or Runtime restart;
+   * different content must never reuse a revision.
+   */
   readonly configurationRevision: string;
   readonly endpointIdentityHash: string;
   readonly credentialRef?: string;
-  readonly executorConfig?: Readonly<Record<string, unknown>>;
+  /** Public, JSON-safe executor configuration. Secrets must remain references. */
+  readonly executorConfig?: AgentJsonObject;
   readonly skills?: readonly string[];
   readonly inputModalities?: readonly string[];
   readonly outputModalities?: readonly string[];
@@ -110,6 +130,7 @@ export interface ExternalAgentRegistrationSummary {
   readonly agentId: string;
   readonly displayName: string;
   readonly description?: string;
+  readonly managementOwner?: string;
   readonly enabled: boolean;
   readonly executorId: string;
   readonly protocol: ExternalAgentProtocol;
@@ -222,7 +243,7 @@ export interface AgentTaskRegistrationSnapshot {
 export interface AgentExecutorTaskReference {
   readonly idempotencyKey: string;
   readonly remoteTaskId?: string;
-  readonly metadata?: Readonly<Record<string, unknown>>;
+  readonly metadata?: AgentJsonObject;
 }
 
 export interface AgentTaskSnapshot extends AgentTaskCorrelation {
@@ -364,16 +385,51 @@ export interface LocalAgentTaskUpdate {
 export interface AgentExecutorPlaneStore {
   loadRegistrations(): Promise<readonly ExternalAgentRegistration[]>;
   saveRegistrations(registrations: readonly ExternalAgentRegistration[]): Promise<void>;
+  /**
+   * Optional compatibility extension for durable executor recovery across a
+   * registration update/removal. Built-in stores implement both hooks. A
+   * custom store that omits them can only recover through a still-current
+   * registration with the same revision; otherwise recovery fails closed.
+   * Implement both hooks or neither. The plane is the single writer and
+   * serializes whole-map replacements. Credential fields in snapshots are
+   * references only; `executorConfig` must likewise contain public data or secret
+   * references, never secret material. A store must never resolve or persist a
+   * referenced secret value.
+   */
+  loadTaskRegistrationSnapshots?(): Promise<readonly ExternalAgentRegistration[]>;
+  saveTaskRegistrationSnapshots?(
+    registrations: readonly ExternalAgentRegistration[],
+  ): Promise<void>;
   loadTasks(): Promise<readonly AgentTaskSnapshot[]>;
   saveTask(task: AgentTaskSnapshot): Promise<void>;
   loadEvents(taskId: string): Promise<readonly AgentTaskEvent[]>;
   appendEvent(event: AgentTaskEvent): Promise<void>;
 }
 
+export interface AgentRegistrationMutationOptions {
+  /** `null` means that no registration may exist; `undefined` disables CAS. */
+  readonly expectedConfigurationRevision?: string | null;
+  /** `null` means that no manager may own the registration; `undefined` disables owner CAS. */
+  readonly expectedManagementOwner?: string | null;
+}
+
+export interface AgentRegistrationEnabledMutationOptions extends AgentRegistrationMutationOptions {
+  /** Atomically claims an unowned registration; a different existing owner is rejected. */
+  readonly claimOwner?: string;
+}
+
 export interface AgentRegistrationService {
   list(): Promise<readonly ExternalAgentRegistrationSummary[]>;
-  upsert(input: ExternalAgentRegistration): Promise<ExternalAgentRegistrationSummary>;
-  remove(agentId: string): Promise<boolean>;
+  upsert(
+    input: ExternalAgentRegistration,
+    options?: AgentRegistrationMutationOptions,
+  ): Promise<ExternalAgentRegistrationSummary>;
+  setEnabled(
+    agentId: string,
+    enabled: boolean,
+    options?: AgentRegistrationEnabledMutationOptions,
+  ): Promise<ExternalAgentRegistrationSummary | undefined>;
+  remove(agentId: string, options?: AgentRegistrationMutationOptions): Promise<boolean>;
 }
 
 export interface AgentTaskService {
@@ -413,11 +469,25 @@ export interface AgentExecutorPlane {
   close(): Promise<void>;
 }
 
+export interface AgentExecutorPlaneBackgroundErrorContext {
+  readonly operation: 'event-pump-recovery' | 'task-admission-event' | 'executor-dispose';
+  readonly taskId?: string;
+  readonly agentId?: string;
+  readonly configurationRevision?: string;
+}
+
+export type AgentExecutorPlaneBackgroundErrorHandler = (
+  error: Error,
+  context: AgentExecutorPlaneBackgroundErrorContext,
+) => void | Promise<void>;
+
 export interface CreateAgentExecutorPlaneOptions {
   readonly factories: readonly AgentExecutorFactory[];
   readonly policy: AgentDispatchPolicy;
   readonly credentialBroker?: AgentCredentialBroker;
   readonly artifactPolicy?: AgentArtifactPolicy;
+  /** Receives failures from detached event handling and best-effort resource cleanup. */
+  readonly onBackgroundError?: AgentExecutorPlaneBackgroundErrorHandler;
   readonly store?: AgentExecutorPlaneStore;
   readonly now?: () => Date;
   readonly createTaskId?: () => string;

@@ -116,7 +116,7 @@ describe('openai message serialization', () => {
       };
     }
     const create = vi.fn()
-      .mockRejectedValueOnce(new Error('unsupported parameter: tool_choice'))
+      .mockRejectedValueOnce(new Error("tool_choice 'specified' is incompatible with thinking enabled"))
       .mockResolvedValueOnce(streamChunks());
     const provider = new TestOpenAIProvider({
       chat: {

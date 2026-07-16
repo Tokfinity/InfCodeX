@@ -23,6 +23,7 @@ describe('FEATURE_267 A2A product authentication', () => {
     await expect(authentication.authenticate(new Request('https://agent.example', {
       headers: { authorization: 'Bearer wrong-token' },
     }))).resolves.toBeNull();
+    expect(authentication.securityRealm).toBe('bearer-env:TEST_A2A_TOKEN');
     expect(authentication.securitySchemes).toEqual({
       bearer: { httpAuthSecurityScheme: { scheme: 'Bearer', bearerFormat: 'opaque' } },
     });
@@ -78,6 +79,47 @@ describe('FEATURE_267 A2A product authentication', () => {
       operation: 'send-message',
     })).resolves.toBe(true);
     await expect(hot.authentication.authenticate(new Request('https://agent.example')))
+      .resolves.toBeNull();
+  });
+
+  it('wires the external OAuth2 JWT resource-server profile into initial and hot options', async () => {
+    const config = parseA2AIntegrationDocument({
+      version: 2,
+      agents: {},
+      server: {
+        execution: { kind: 'runtime-default' },
+        published: {
+          name: 'OAuth Agent', description: 'OAuth tasks', version: '0.7.69',
+          skills: [{ id: 'general', name: 'General', description: 'General tasks', tags: [] }],
+          inputModes: ['text/plain'], outputModes: ['text/plain'],
+        },
+        authentication: {
+          type: 'oauth2-jwt',
+          scheme: 'enterprise-oauth',
+          issuer: 'https://identity.example.com/',
+          audience: 'https://agent.example.com/a2a',
+          jwksUrl: 'https://identity.example.com/jwks',
+          tokenUrl: 'https://identity.example.com/token',
+          requiredScopes: ['a2a.invoke'],
+        },
+        dataDir: '~/.kodax/a2a/tasks',
+      },
+    }).server!;
+    const runtime = {} as KodaXRuntime;
+    const initial = createA2AServerOptionsFromConfig({
+      runtime, config, listenBaseUrl: 'http://127.0.0.1:8765',
+    });
+    const hot = createA2AServerHotOptions({
+      config, listenBaseUrl: 'http://127.0.0.1:8765',
+    });
+
+    expect(initial.authentication.securitySchemes).toEqual(hot.authentication.securitySchemes);
+    expect(initial.authentication.securityRealm)
+      .toBe('oauth2-jwt:https://identity.example.com/');
+    expect(initial.authentication.securityRequirements).toEqual([
+      { schemes: { 'enterprise-oauth': { list: ['a2a.invoke'] } } },
+    ]);
+    await expect(initial.authentication.authenticate(new Request('https://agent.example/a2a')))
       .resolves.toBeNull();
   });
 });

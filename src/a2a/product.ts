@@ -3,7 +3,8 @@ import os from 'node:os';
 import path from 'node:path';
 
 import type { KodaXRuntime } from '../sdk-runtime.js';
-import type { A2AServerConfig } from './config.js';
+import type { A2ABearerAuthenticationConfig, A2AServerConfig } from './config.js';
+import { createOAuth2JwtA2AAuthentication } from './server-auth.js';
 import type {
   A2AAuthentication,
   A2AServerHotOptions,
@@ -29,12 +30,13 @@ function equalSecret(left: string, right: string): boolean {
 }
 
 export function createBearerEnvA2AAuthentication(
-  config: A2AServerConfig['authentication'],
+  config: A2ABearerAuthenticationConfig,
   env: NodeJS.ProcessEnv = process.env,
 ): A2AAuthentication {
   const expected = env[config.tokenEnv];
   if (!expected) throw new Error(`A2A bearer token environment variable is unset: ${config.tokenEnv}.`);
   return {
+    securityRealm: `bearer-env:${config.tokenEnv}`,
     securitySchemes: {
       bearer: { httpAuthSecurityScheme: { scheme: 'Bearer', bearerFormat: 'opaque' } },
     },
@@ -46,6 +48,15 @@ export function createBearerEnvA2AAuthentication(
         : null;
     },
   };
+}
+
+function createConfiguredAuthentication(
+  config: A2AServerConfig['authentication'],
+  env: NodeJS.ProcessEnv | undefined,
+): A2AAuthentication {
+  return config.type === 'bearer-env'
+    ? createBearerEnvA2AAuthentication(config, env)
+    : createOAuth2JwtA2AAuthentication(config);
 }
 
 function publishedAgent(config: A2AServerConfig, baseUrl: string) {
@@ -77,7 +88,7 @@ export function createA2AServerOptionsFromConfig(input: {
     execution: input.config.execution,
     dataDir: expandHome(input.config.dataDir),
     limits: input.config.limits,
-    authentication: createBearerEnvA2AAuthentication(input.config.authentication, input.env),
+    authentication: createConfiguredAuthentication(input.config.authentication, input.env),
     authorize: authorization,
   };
 }
@@ -90,7 +101,7 @@ export function createA2AServerHotOptions(input: {
   return {
     agent: publishedAgent(input.config, input.listenBaseUrl),
     limits: input.config.limits,
-    authentication: createBearerEnvA2AAuthentication(input.config.authentication, input.env),
+    authentication: createConfiguredAuthentication(input.config.authentication, input.env),
     authorize: authorization,
   };
 }

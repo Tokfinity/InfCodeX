@@ -347,14 +347,13 @@ temporary environment override. The same rule applies to other paired settings,
 for example `provider` ↔ `KODAX_PROVIDER` and `effort` ↔ `KODAX_EFFORT`.
 JSON names stay camelCase while environment names use `KODAX_UPPER_SNAKE_CASE`.
 
-By default, daemon state, config, and runtime session storage are scoped under
-the OS user home directory, so `kodax --runtime-mode daemon` and SDK clients
-using `createKodaXRuntime({ mode: 'daemon' })` converge on the same local daemon
-profile. The high-level `createKodaXRuntime({ mode: 'daemon' })` API starts or
+By default, daemon state, config, and runtime session storage use the exact
+resolved `KODAX_HOME` (normally `<OS user home>/.kodax`), so CLI and SDK clients
+converge on the same local daemon even when `KODAX_HOME` is an arbitrary custom
+directory. The high-level `createKodaXRuntime({ mode: 'daemon' })` API starts or
 reuses that daemon unless you pass an explicit endpoint/transport or
-`autoStartDaemon: false`. Pass `--home <dir>` or `homeDir` only when you
-intentionally want an isolated daemon namespace for tests, CI, or project-local
-experiments.
+`autoStartDaemon: false`. An explicit `--home <dir>` or `homeDir` selects the
+isolated `<dir>/.kodax` namespace for tests, CI, or project-local experiments.
 
 **v0.7.71 packaged Electron patch:** packaged/asar Electron hosts can use daemon
 auto-start without relaunching the GUI. `ELECTRON_RUN_AS_NODE` is limited to a
@@ -517,18 +516,28 @@ KodaX has two layers that consumers should understand separately:
 
 **Experimental Memory Agent SDK (FEATURE_260, v0.7.68)**: `/experimental-memory` exposes the thin agent-layer `MemoryAgent` and scoped `MemorySession` lifecycle over the existing governed F228 plane. Passive recall is zero-wait; `query()` is read-only and deliberate; durable changes still require the proposal/preview/fingerprint/apply path. The Action LLM remains the final decision maker, recalled content stays low-authority, and safety/scope gates remain deterministic. See the [direct session and boundary guide](docs/SDK_EMBEDDER_GUIDE.md#21-experimental-governed-memory--experimental-memory-feature_260-v0768).
 
-**Bidirectional A2A 1.0 (FEATURE_267, v0.7.69)**: `/a2a` discovers allowed Agent Cards and installs a JSON-RPC/SSE executor through the existing F258 plane. Configured outbound Agents are also registered automatically as `external:<name>` in embedded CLI and user-daemon Runtimes, so the main Agent can orchestrate them without host code. The same module can publish the Runtime default or one validated `~/.kodax/agents/*.md` Agent behind an authenticated Runtime facade. The built-in listener is loopback-only; public deployment uses `handle()` behind host-owned TLS and authorization. A2A 0.3, gRPC, HTTP+JSON, push notifications, and automatic public exposure are not advertised. See the [client/server recipes and security boundaries](docs/SDK_EMBEDDER_GUIDE.md#22-bidirectional-a2a-10--a2a-feature_267-v0769).
+**Bidirectional A2A 1.0 (FEATURE_267, v0.7.69)**: `/a2a` discovers allowed Agent Cards and installs a JSON-RPC/SSE executor through the existing F258 plane. Configured outbound Agents are also registered automatically as `external:<name>` in embedded CLI and user-daemon Runtimes, so the main Agent can orchestrate them without host code. One `a2a.json` may hold many outbound registrations and at most one inbound server, which publishes either the Runtime default or one validated `~/.kodax/agents/*.md` Agent behind an authenticated Runtime facade. The built-in listener is loopback-only; public deployment uses `handle()` behind host-owned TLS and authorization. A2A 0.3, gRPC, HTTP+JSON, push notifications, and automatic public exposure are not advertised. See the [client/server recipes and security boundaries](docs/SDK_EMBEDDER_GUIDE.md#22-bidirectional-a2a-10--a2a-feature_267-v0769).
 
-**v0.7.70 interoperability hardening** keeps a discovered A2A interface on the
-trusted Agent Card origin and sends a credential only when the Card advertises
-Bearer authentication. `a2a serve` now resolves its provider from CLI, then
-environment, config, and the built-in default; a Markdown Agent can pin its own
-provider. Input continuation resumes the original Runtime run, task history and
-retention are bounded with stable cursor pagination, and authenticated SSE is
-correlated before falling back to polling after an early normal EOF. Only
-direct remote artifacts, broker-staged outputs, and outputs from a successfully
-admitted Skill script can be published; ordinary workspace writes and local
-paths stay private.
+**A2A interoperability and authentication hardening** keeps a discovered
+interface on the trusted Agent Card origin and sends credentials only when one
+complete Card/Skill security requirement is satisfiable. The no-code client
+supports HTTP Bearer compatibility and OAuth 2.0 Client Credentials; for OAuth,
+an external Authorization Server issues short-lived access tokens and KodaX
+caches them only in memory. Inbound `a2a serve` can validate RFC 9068 JWT access
+tokens from an external issuer/JWKS, but never signs or issues production
+tokens itself. It resolves its provider from CLI, then environment, config, and
+the built-in default; a Markdown Agent can pin its own provider. Input
+continuation resumes the original Runtime run, task history and retention are
+bounded with stable cursor pagination, and authenticated SSE is correlated
+before falling back to polling after an early normal EOF. Only direct remote
+artifacts, broker-staged outputs, and outputs from a successfully admitted
+Skill script can be published; ordinary workspace writes and local paths stay
+private.
+
+This authentication and per-Agent activation hardening is a post-release
+closure of the v0.7.69 F267/F268 design and ships in the v0.7.71 patch; it is
+not a claim that older v0.7.69 binaries contained the
+later OAuth profiles.
 
 **v0.7.70 MCP discovery hardening** uses exact capability IDs and revisioned
 cursors while admitting results against real physical capacity. Compact CJK
@@ -545,8 +554,23 @@ kodax a2a add research https://agent.example/.well-known/agent-card.json --effec
 kodax a2a test research
 kodax a2a call research "Summarize this topic"
 
+# Stage an OAuth-protected Agent, then hot-activate/deactivate it
+export RESEARCH_A2A_CLIENT_SECRET='provisioned-by-your-authorization-server'
+# PowerShell: $env:RESEARCH_A2A_CLIENT_SECRET='provisioned-by-your-authorization-server'
+# PowerShell: run the command on one line or replace each trailing \ with a backtick.
+kodax a2a add reviewer https://reviewer.example/.well-known/agent-card.json \
+  --disabled --effect read --oauth-scheme enterprise-oauth \
+  --oauth-issuer https://identity.example/ \
+  --oauth-token-url https://identity.example/oauth/token \
+  --oauth-client-id kodax-reviewer \
+  --oauth-client-secret-env RESEARCH_A2A_CLIENT_SECRET \
+  --oauth-scope a2a.invoke --oauth-resource https://reviewer.example/
+kodax a2a enable reviewer
+kodax a2a disable reviewer       # blocks new dispatch; does not cancel in-flight tasks
+
 # Expose the Runtime default Agent, or pass a name from ~/.kodax/agents/*.md
 export KODAX_A2A_TOKEN='replace-with-a-long-random-token'
+# PowerShell: $env:KODAX_A2A_TOKEN='replace-with-a-long-random-token'
 kodax a2a expose                 # or: kodax a2a expose document-agent
 kodax a2a serve                  # loopback http://127.0.0.1:8765
 ```
@@ -562,12 +586,22 @@ can stage legacy entries. Remove legacy keys only with
 literal-secret warnings. Running
 CLI/daemon hosts retain the
 last valid revision, atomically replace the complete MCP provider, reconcile
-Extensions per entry, and hot-register outbound A2A Agents. `a2a serve` loads
+Extensions per entry, and hot-register outbound A2A Agents. Each A2A entry has
+a desired `enabled` switch; `kodax a2a list` shows configuration, while the
+owning Runtime is authoritative for live applied registrations. Disabled
+entries are not fetched during automatic reconciliation and, after the owning
+Runtime applies the revision, cannot accept new dispatch. The mutation command
+itself is not cross-process acknowledgement. `a2a add --disabled` still checks
+the Card by default unless `--no-test` is supplied, while `a2a test` performs
+discovery/security planning without requesting an OAuth token. The fixed
+`KODAX_A2A_TOKEN` example is an operator-provisioned compatibility credential;
+KodaX does not generate or issue it. Disabled entries remain available for
+later re-enable. `a2a serve` loads
 its configured MCP/Extension capability surface before listening and pins that
 execution authority; it hot-reloads publication, authentication, and limits.
 Agent, Skill, Extension-tool authority, workspace, tool-policy, or task-store
 changes require an explicit server restart. Managed
-A2A contexts default to `~/kodax_a2a_server_workspace/<profile>/contexts/`.
+A2A contexts default to `~/kodax_a2a_server_workspace/<runtime-profile>/contexts/`.
 Exact Skill scripts require the opt-in isolated policy and a passing
 `kodax sandbox doctor` (`kodax sandbox setup` performs the explicit Windows
 one-time provisioning).
@@ -1169,8 +1203,8 @@ await runInkInteractiveMode({ provider: 'zhipu-coding', effort: 'auto' });
 |----------|----------------------|-------------------|---------------|
 | anthropic | `ANTHROPIC_API_KEY` | Native | claude-sonnet-4-6 (`claude-opus-4-6` / `claude-haiku-4-5` via `/model`) |
 | openai | `OPENAI_API_KEY` | Native | gpt-5.3-codex (`gpt-5.4` / `gpt-5.3-codex-spark` via `/model`) |
-| kimi | `KIMI_API_KEY` | Native | kimi-k2.6 (`kimi-k2.7-code` 256K / `k2.5` via `/model`) |
-| kimi-code | `KIMI_CODE_API_KEY` | Native | kimi-for-coding |
+| kimi | `KIMI_API_KEY` | Native | kimi-k2.7-code (262,144-token context; `kimi-k2.7-code-highspeed` / `kimi-k2.6` / `kimi-k2.5` via `/model`) |
+| kimi-code | `KIMI_CODE_API_KEY` | Native | kimi-for-coding (`k3` 1M ctx, plan-dependent / `kimi-for-coding-highspeed` via `/model`) |
 | qwen | `QWEN_API_KEY` | Native | qwen3.5-plus |
 | zhipu | `ZHIPU_API_KEY` | Native | glm-5 (`glm-5.2` 1M ctx / `glm-5.1` / `glm-5-turbo` via `/model`) |
 | zhipu-coding | `ZHIPU_CODING_API_KEY` | Native | glm-5 (`glm-5.2` 1M ctx / `glm-5.1` / `glm-5-turbo` via `/model`) |

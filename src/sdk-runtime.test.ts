@@ -163,6 +163,33 @@ describe('createKodaXRuntime', () => {
     })).rejects.toThrow(/does not support.*daemonManagement/i);
   });
 
+  it('fails closed when an older daemon lacks fenced external Agent administration', async () => {
+    const { connectKodaXRuntime } = await import('./sdk-runtime.js');
+    const transport: RuntimeDaemonClientTransport = {
+      async request(method) {
+        if (method !== 'initialize') return null;
+        return {
+          identity: {
+            runtimeId: 'daemon-with-legacy-external-agents',
+            mode: 'daemon',
+            profile: 'default',
+            startedAt: '2026-07-15T00:00:00.000Z',
+            version: '0.7.70',
+          },
+          capabilities: { externalAgents: true },
+        };
+      },
+      subscribe() {
+        return { close() {} };
+      },
+    };
+
+    await expect(connectKodaXRuntime({
+      transport,
+      requirements: { externalAgentAdmin: 1 },
+    })).rejects.toThrow(/does not support.*externalAgentAdmin/i);
+  });
+
   it('rejects Worker-only options unless Worker isolation is selected', async () => {
     const { createKodaXRuntime } = await import('./sdk-runtime.js');
 

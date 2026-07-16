@@ -579,6 +579,7 @@ function makeRuntime(
       agentRegistrations: {
         async list() { return []; },
         async upsert() { throw new Error('External agents are disabled in this test runtime.'); },
+        async setEnabled() { throw new Error('External agents are disabled in this test runtime.'); },
         async remove() { throw new Error('External agents are disabled in this test runtime.'); },
       },
     },

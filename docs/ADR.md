@@ -7,6 +7,14 @@
 > daemon and user child code loads, requires the default-enabled `RunAsNode`
 > fuse, and keeps fuse-disabled hosts on ordinary Node/CLI plus attach-only mode.
 >
+> **v0.7.71 A2A authentication/activation addendum:** the released F267/F268
+> boundary now uses config version 2 for outbound OAuth 2.0 Client Credentials,
+> inbound RFC 9068 JWT Resource Server validation, and per-Agent desired-state
+> activation. Card/RPC/token origins, authentication realms, durable route
+> snapshots, registration owner/revision fences, daemon config-home ownership,
+> admission ordering, and SSE resource ceilings fail closed. KodaX consumes
+> tokens from an external Authorization Server; it does not issue or sign them.
+>
 > **v0.7.69 planned shared-daemon addendum:** FEATURE_269 extends the released
 > F255 local daemon with atomic session observation/resync, durable operation
 > receipts and revisions, transport-safe AskUser/permission resolution,

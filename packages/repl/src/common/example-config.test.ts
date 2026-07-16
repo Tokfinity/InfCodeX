@@ -71,7 +71,9 @@ describe('ensureExampleConfigFile (F1 first-launch template)', () => {
   it('returns the exact embedded canonical templates', () => {
     expect(getConfigTemplate('core')).toContain('KodaX core configuration template');
     expect(getConfigTemplate('mcp')).toContain('"version": 1');
-    expect(getConfigTemplate('a2a')).toContain('"agents": {}');
+    const a2a = getConfigTemplate('a2a');
+    expect(a2a).toContain('"agents": {');
+    expect(a2a.match(/^\s*"agents": \{/gmu)).toHaveLength(1);
     expect(getConfigTemplate('extensions')).toContain('"paths": []');
   });
 });

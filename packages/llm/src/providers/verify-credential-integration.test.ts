@@ -31,6 +31,7 @@ const CASES: ProviderCase[] = [
   { provider: 'minimax-coding', apiKeyEnv: 'MINIMAX_CODING_API_KEY', expectedStrategy: 'count-tokens' },
   { provider: 'ark-coding',     apiKeyEnv: 'ARK_CODING_API_KEY',     expectedStrategy: 'count-tokens' },
   { provider: 'deepseek',       apiKeyEnv: 'DEEPSEEK_API_KEY',       expectedStrategy: 'models-list' },
+  { provider: 'kimi',           apiKeyEnv: 'KIMI_API_KEY',           expectedStrategy: 'models-list' },
 ];
 
 describe.skipIf(!RUN_INTEGRATION)('FEATURE_216 integration — real provider HTTP', () => {

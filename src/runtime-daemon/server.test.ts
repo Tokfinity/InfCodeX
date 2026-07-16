@@ -3,6 +3,7 @@ import * as os from 'node:os';
 import path from 'node:path';
 
 import { describe, expect, it, vi } from 'vitest';
+import { ExternalAgentRegistrationConflictError } from '@kodax-ai/agent';
 
 import type {
   KodaXRuntime,
@@ -37,6 +38,48 @@ import { createRuntimeDaemonReverseBridgeHub } from './reverse-bridge.js';
 import type { RuntimeDaemonManagementController } from './management.js';
 
 describe('runtime daemon dispatcher', () => {
+  it('maps fenced external Agent registration conflicts to the stable daemon conflict code', async () => {
+    const runtime = makeRuntime();
+    vi.spyOn(runtime.admin.agentRegistrations, 'upsert')
+      .mockRejectedValue(new ExternalAgentRegistrationConflictError('external:stale'));
+    const dispatcher = createRuntimeDaemonDispatcher({
+      runtime,
+      allowAgentRegistrationAdmin: true,
+    });
+    await initializeDispatcher(dispatcher);
+
+    const response = await dispatcher.handle(createRuntimeDaemonRequest(
+      'req-registration-conflict',
+      'agentRegistrations.upsert',
+      {
+        registration: {
+          agentId: 'external:stale',
+          displayName: 'Stale',
+          enabled: true,
+          executorId: 'a2a',
+          protocol: 'a2a',
+          configurationRevision: 'stale-revision',
+          endpointIdentityHash: 'stale-endpoint',
+          capabilities: {},
+          effects: { remote: 'read', workspace: 'proposal' },
+        },
+        expectedConfigurationRevision: 'expected-revision',
+      },
+    ));
+
+    expect(isRuntimeDaemonSuccessResponse(response)).toBe(false);
+    if (!isRuntimeDaemonSuccessResponse(response)) {
+      expect(response.error).toMatchObject({
+        code: 'conflict',
+        data: {
+          agentId: 'external:stale',
+          conflict: 'external_agent_registration_conflict',
+        },
+      });
+    }
+    dispatcher.close();
+  });
+
   it('requires initialize before runtime methods and rejects double initialize', async () => {
     const dispatcher = createRuntimeDaemonDispatcher({ runtime: makeRuntime() });
 
@@ -594,8 +637,19 @@ describe('runtime daemon dispatcher', () => {
   });
 
   it('requires host authorization but never treats client capability claims as authorization', async () => {
-    const hostDenied = createRuntimeDaemonDispatcher({ runtime: makeRuntime() });
-    await initializeDispatcher(hostDenied, { configAdmin: true });
+    const hostDenied = createRuntimeDaemonDispatcher({
+      runtime: makeRuntime(),
+      capabilities: {
+        externalAgentAdmin: { version: 99 },
+        a2aConfigReconciler: { version: 99 },
+      },
+    });
+    const deniedInitialization = await initializeDispatcher(hostDenied, { configAdmin: true });
+    expect(deniedInitialization).toMatchObject({ capabilities: { externalAgents: true } });
+    expect((deniedInitialization.capabilities as Record<string, unknown>).externalAgentAdmin)
+      .toBeUndefined();
+    expect((deniedInitialization.capabilities as Record<string, unknown>).a2aConfigReconciler)
+      .toBeUndefined();
     const denied = await hostDenied.handle(createRuntimeDaemonRequest(
       'req-agent-admin-host-denied',
       'agentRegistrations.list',
@@ -609,12 +663,83 @@ describe('runtime daemon dispatcher', () => {
       runtime: makeRuntime(),
       allowAgentRegistrationAdmin: true,
     });
-    await initializeDispatcher(hostAccepted, {});
+    const acceptedInitialization = await initializeDispatcher(hostAccepted, {});
+    expect(acceptedInitialization).toMatchObject({
+      capabilities: { externalAgentAdmin: { version: 1 } },
+    });
     const accepted = await hostAccepted.handle(createRuntimeDaemonRequest(
       'req-agent-admin-host-accepted',
       'agentRegistrations.list',
     ));
     expect(isRuntimeDaemonSuccessResponse(accepted)).toBe(true);
+  });
+
+  it('forwards registration ownership and revision-CAS mutation fields', async () => {
+    const runtime = makeRuntime();
+    const upsert = vi.spyOn(runtime.admin.agentRegistrations, 'upsert');
+    const setEnabled = vi.spyOn(runtime.admin.agentRegistrations, 'setEnabled');
+    const remove = vi.spyOn(runtime.admin.agentRegistrations, 'remove');
+    const dispatcher = createRuntimeDaemonDispatcher({
+      runtime,
+      allowAgentRegistrationAdmin: true,
+    });
+    await initializeDispatcher(dispatcher);
+
+    const response = await dispatcher.handle(createRuntimeDaemonRequest(
+      'req-agent-set-enabled-cas',
+      'agentRegistrations.setEnabled',
+      {
+        agentId: 'external:smoke',
+        enabled: false,
+        expectedConfigurationRevision: 'rev-1',
+        expectedManagementOwner: null,
+        claimOwner: 'runtime-config-test',
+      },
+    ));
+    expect(isRuntimeDaemonSuccessResponse(response)).toBe(true);
+    expect(setEnabled).toHaveBeenCalledWith('external:smoke', false, {
+      expectedConfigurationRevision: 'rev-1',
+      expectedManagementOwner: null,
+      claimOwner: 'runtime-config-test',
+    });
+
+    await dispatcher.handle(createRuntimeDaemonRequest(
+      'req-agent-upsert-cas',
+      'agentRegistrations.upsert',
+      {
+        registration: METHOD_SMOKE_PARAMS['agentRegistrations.upsert'].registration,
+        expectedConfigurationRevision: null,
+        expectedManagementOwner: null,
+      },
+    ));
+    expect(upsert).toHaveBeenCalledWith(
+      METHOD_SMOKE_PARAMS['agentRegistrations.upsert'].registration,
+      { expectedConfigurationRevision: null, expectedManagementOwner: null },
+    );
+
+    await dispatcher.handle(createRuntimeDaemonRequest(
+      'req-agent-remove-cas',
+      'agentRegistrations.remove',
+      {
+        agentId: 'external:smoke',
+        expectedConfigurationRevision: 'rev-1',
+        expectedManagementOwner: 'runtime-config-test',
+      },
+    ));
+    expect(remove).toHaveBeenCalledWith('external:smoke', {
+      expectedConfigurationRevision: 'rev-1',
+      expectedManagementOwner: 'runtime-config-test',
+    });
+
+    const invalid = await dispatcher.handle(createRuntimeDaemonRequest(
+      'req-agent-set-enabled-empty-owner',
+      'agentRegistrations.setEnabled',
+      { agentId: 'external:smoke', enabled: false, claimOwner: '' },
+    ));
+    expect(isRuntimeDaemonSuccessResponse(invalid)).toBe(false);
+    if (!isRuntimeDaemonSuccessResponse(invalid)) {
+      expect(invalid.error).toMatchObject({ code: 'invalid_request' });
+    }
   });
 
   it('uses server-issued scopes instead of client capability claims for authorization', async () => {
@@ -641,13 +766,23 @@ describe('runtime daemon dispatcher', () => {
     const rootDir = fs.mkdtempSync(path.join(os.tmpdir(), 'kodax-server-capabilities-'));
     try {
       const controlJournal = createRuntimeControlJournal({ rootDir });
-      const dispatcher = createRuntimeDaemonDispatcher({ runtime: makeRuntime(), controlJournal });
+      const dispatcher = createRuntimeDaemonDispatcher({
+        runtime: makeRuntime(),
+        controlJournal,
+        allowAgentRegistrationAdmin: true,
+      });
       const initialized = await initializeDispatcher(dispatcher, { operationDeduplication: true });
 
       expect(initialized).toMatchObject({
         capabilities: {
           sessionObservation: { version: 1 },
           operationDeduplication: { version: 1 },
+          externalAgentAdmin: {
+            version: 1,
+            activation: true,
+            conditionalMutations: true,
+            managementOwner: true,
+          },
           afterTurnInput: { version: 1 },
           askUserTransport: { version: 1 },
           permissionCas: { version: 1 },
@@ -1396,6 +1531,7 @@ const METHOD_SMOKE_PARAMS = {
       effects: { remote: 'read', workspace: 'proposal' },
     },
   },
+  'agentRegistrations.setEnabled': { agentId: 'external:smoke', enabled: false },
   'agentRegistrations.remove': { agentId: 'external:smoke' },
   'agents.listDispatchable': { actorId: 'actor-smoke' },
   'agents.describe': { agentId: 'external:smoke', query: { actorId: 'actor-smoke' } },
@@ -1841,6 +1977,7 @@ function makeRuntime(): KodaXRuntime & { emit(event: RuntimeEvent): void } {
       agentRegistrations: {
         async list() { return [externalRegistration]; },
         async upsert() { return externalRegistration; },
+        async setEnabled() { return { ...externalRegistration, enabled: false as const }; },
         async remove() { return true; },
       },
     },

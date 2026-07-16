@@ -127,6 +127,7 @@
     "is-in-ci": "^2.0.0",
     "jimp": "^1.6.0",
     "js-tiktoken": "^1.0.12",
+    "oauth4webapi": "3.8.6",
     "openai": "^6.32.0",
     "partial-json": "^0.1.7",
     "patch-console": "^2.0.0",

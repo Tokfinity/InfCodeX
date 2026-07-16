@@ -36,6 +36,8 @@ export interface RuntimeDaemonHostOptions {
   readonly paths: RuntimeDaemonPaths;
   readonly endpoint: RuntimeDaemonEndpoint;
   readonly lock: RuntimeDaemonLockHandle;
+  /** Trusted owner fact; never derived from caller-advertised capabilities. */
+  readonly ownsA2AConfigReconciler?: boolean;
 }
 
 export interface RuntimeDaemonHost {
@@ -91,6 +93,9 @@ export async function startRuntimeDaemonHost(
       createDispatcher: (notify) => createRuntimeDaemonDispatcher({
         runtime: options.runtime,
         authToken: token,
+        ...(options.ownsA2AConfigReconciler === true
+          ? { ownsA2AConfigReconciler: true }
+          : {}),
         allowAgentRegistrationAdmin: true,
         notify,
         runResults,
@@ -317,6 +322,7 @@ function createHostState(
     endpoint: options.endpoint.path,
     version: options.runtime.identity.version,
     status,
+    configHome: options.paths.configHome,
   };
 }
 

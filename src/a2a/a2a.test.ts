@@ -1,4 +1,5 @@
 import { mkdirSync, mkdtempSync, rmSync, writeFileSync } from 'node:fs';
+import { request as httpRequest } from 'node:http';
 import { tmpdir } from 'node:os';
 import path from 'node:path';
 
@@ -7,12 +8,14 @@ import { afterEach, describe, expect, it, vi } from 'vitest';
 
 import type {
   KodaXRuntime,
+  RuntimeEvent,
   RuntimeEventFilter,
   RuntimeEventListener,
   RuntimeRunHandle,
   RuntimeRunResult,
 } from '../sdk-runtime.js';
 import {
+  A2AError,
   A2A_EXECUTOR_ID,
   createA2AAgentExecutorFactory,
   createKodaXA2AServer,
@@ -23,6 +26,7 @@ import {
   parseA2ATask,
   type A2AServerEvent,
 } from './index.js';
+import { A2AFileTaskStore } from './task-store.js';
 
 const roots: string[] = [];
 
@@ -224,6 +228,7 @@ function serverOptions(runtime: KodaXRuntime, dataDir: string, events: A2AServer
       outputModes: ['text/plain'],
     },
     authentication: {
+      securityRealm: 'test:realm',
       securitySchemes: { bearer: { httpAuthSecurityScheme: { scheme: 'Bearer' } } },
       securityRequirements: [{ schemes: { bearer: { list: [] } } }],
       async authenticate(request: Request) {
@@ -244,9 +249,26 @@ function serverOptions(runtime: KodaXRuntime, dataDir: string, events: A2AServer
   } as const;
 }
 
+function authenticationForRealm(
+  securityRealm: string,
+  subject = 'caller-1',
+) {
+  return {
+    securityRealm,
+    securitySchemes: { bearer: { httpAuthSecurityScheme: { scheme: 'Bearer' } } },
+    securityRequirements: [{ schemes: { bearer: { list: [] } } }],
+    async authenticate(request: Request) {
+      return request.headers.get('authorization') === 'Bearer test-token'
+        ? { subject, scopes: ['a2a'] }
+        : null;
+    },
+  } as const;
+}
+
 function pendingRuntime(): {
   readonly runtime: KodaXRuntime;
   complete(output?: string): void;
+  emitProgress(seq: number, time?: string): void;
   listenerCount(): number;
 } {
   let resolveResult: ((result: RuntimeRunResult) => void) | undefined;
@@ -285,6 +307,14 @@ function pendingRuntime(): {
   return {
     runtime,
     listenerCount: () => listeners.length,
+    emitProgress(seq: number, time = new Date().toISOString()) {
+      for (const listener of [...listeners]) {
+        listener({
+          id: `event-progress-${seq}`, seq, time,
+          sessionId: 'session-pending', runId: 'run-pending', type: 'run.progress', payload: {},
+        });
+      }
+    },
     complete(output = 'recovered-result') {
       phase = 'completed';
       for (const listener of listeners) {
@@ -297,6 +327,27 @@ function pendingRuntime(): {
         runId: 'run-pending', sessionId: 'session-pending', phase: 'completed',
         result: { success: true, lastText: output, messages: [], sessionId: 'session-pending' },
       });
+    },
+  };
+}
+
+function pendingInputEvent(seq = 1): RuntimeEvent {
+  return {
+    id: `event-input-${seq}`,
+    seq,
+    time: new Date(seq * 1_000).toISOString(),
+    sessionId: 'session-pending',
+    runId: 'run-pending',
+    type: 'user_input.requested',
+    payload: {
+      id: `input-${seq}`,
+      revision: 0,
+      sessionId: 'session-pending',
+      runId: 'run-pending',
+      kind: 'askUserInput',
+      options: { question: 'Continue?' },
+      createdAt: new Date(seq * 1_000).toISOString(),
+      expiresAt: new Date(seq * 1_000 + 60_000).toISOString(),
     },
   };
 }
@@ -319,6 +370,61 @@ async function rpc(
   return { status: response.status, body: await response.json() as Record<string, unknown> };
 }
 
+function directRpcRequest(
+  method: string,
+  params: Readonly<Record<string, unknown>>,
+  id = `${method}-direct`,
+): Request {
+  return new Request('http://127.0.0.1:1/a2a', {
+    method: 'POST',
+    headers: {
+      authorization: 'Bearer test-token',
+      'content-type': 'application/json',
+      'a2a-version': '1.0',
+    },
+    body: JSON.stringify({ jsonrpc: '2.0', id, method, params }),
+  });
+}
+
+async function startPendingTask(
+  server: ReturnType<typeof createKodaXA2AServer>,
+  messageId: string,
+): Promise<string> {
+  const response = await server.handle(directRpcRequest('SendMessage', {
+    message: { messageId, role: 'ROLE_USER', parts: [{ text: messageId }] },
+  }, `start-${messageId}`));
+  expect(response.status).toBe(200);
+  const body = await response.json() as {
+    readonly result: { readonly task: { readonly id: string } };
+  };
+  return body.result.task.id;
+}
+
+function trackStoreSubscriptions(): {
+  readonly active: () => number;
+  restore(): void;
+} {
+  type Subscribe = A2AFileTaskStore['subscribe'];
+  const original = A2AFileTaskStore.prototype.subscribe;
+  let active = 0;
+  const spy = vi.spyOn(A2AFileTaskStore.prototype, 'subscribe').mockImplementation(function (
+    this: A2AFileTaskStore,
+    taskId: Parameters<Subscribe>[0],
+    listener: Parameters<Subscribe>[1],
+  ) {
+    const unsubscribe = original.call(this, taskId, listener);
+    active += 1;
+    let released = false;
+    return () => {
+      if (released) return;
+      released = true;
+      active -= 1;
+      unsubscribe();
+    };
+  });
+  return { active: () => active, restore: () => spy.mockRestore() };
+}
+
 describe('FEATURE_267 bidirectional A2A', () => {
   it('validates the frozen A2A 1.0 Agent Card shape', () => {
     const card = parseA2AAgentCard({
@@ -337,6 +443,68 @@ describe('FEATURE_267 bidirectional A2A', () => {
     });
     expect(card.supportedInterfaces[0]?.protocolVersion).toBe('1.0');
     expect(() => parseA2AAgentCard({ name: 'missing-fields' })).toThrow(/Agent Card/i);
+  });
+
+  it('strictly validates Agent Card extensions and rejects unsupported required extensions', async () => {
+    const card = {
+      name: 'extension-agent',
+      description: 'Agent with an optional protocol extension.',
+      supportedInterfaces: [{
+        url: 'http://127.0.0.1:43126/a2a',
+        protocolBinding: 'JSONRPC',
+        protocolVersion: '1.0',
+      }],
+      version: '1.0.0',
+      capabilities: {
+        extensions: [{
+          uri: 'https://example.com/a2a/extensions/citations/v1',
+          description: 'Adds citation metadata.',
+          required: false,
+          params: { format: 'csl-json' },
+        }],
+      },
+      defaultInputModes: ['text/plain'],
+      defaultOutputModes: ['text/plain'],
+      skills: [],
+    };
+    const parsed = parseA2AAgentCard(card);
+    expect(parsed.capabilities.extensions).toEqual(card.capabilities.extensions);
+    expect(() => parseA2AAgentCard({
+      ...card,
+      capabilities: { extensions: [{ uri: 'not an absolute URI', required: 'yes' }] },
+    })).toThrow(/extension/i);
+
+    let required = false;
+    const fetchImpl = (async () => new Response(JSON.stringify({
+      ...card,
+      capabilities: {
+        extensions: [{
+          ...card.capabilities.extensions[0],
+          required,
+        }],
+      },
+    }), { headers: { 'content-type': 'application/json' } })) as typeof fetch;
+    const discover = () => discoverA2ARegistration({
+      agentId: 'external:extension-agent',
+      agentCardUrl: 'http://127.0.0.1:43126/.well-known/agent-card.json',
+      effects: { remote: 'read' },
+    }, {
+      fetch: fetchImpl,
+      pollIntervalMs: 10,
+      networkPolicy: {
+        allowedOrigins: ['http://127.0.0.1:43126'],
+        allowPrivateAddresses: true,
+        requestTimeoutMs: 1_000,
+        maxResponseBytes: 64 * 1024,
+        maxRedirects: 0,
+      },
+    });
+
+    await expect(discover()).resolves.toMatchObject({
+      registration: { agentId: 'external:extension-agent' },
+    });
+    required = true;
+    await expect(discover()).rejects.toThrow(/(?:required|requires).*extension|extension.*required/i);
   });
 
   it('rejects a Part whose selected content field has the wrong wire type', async () => {
@@ -382,6 +550,152 @@ describe('FEATURE_267 bidirectional A2A', () => {
       name: 'Reloaded General Agent', description: 'New public projection.',
     });
     await server.close();
+  });
+
+  it.each([
+    {
+      label: 'OAuth issuer hot reload',
+      initialRealm: 'oauth2-jwt:https://issuer-a.example',
+      nextRealm: 'oauth2-jwt:https://issuer-b.example',
+    },
+    {
+      label: 'static bearer to OAuth hot reload',
+      initialRealm: 'bearer-env:KODAX_A2A_TOKEN',
+      nextRealm: 'oauth2-jwt:https://issuer.example',
+    },
+  ])('isolates task ownership across $label', async ({ initialRealm, nextRealm }) => {
+    const base = serverOptions(fakeRuntime(), temporaryRoot());
+    const initialAuthentication = authenticationForRealm(initialRealm);
+    const server = createKodaXA2AServer({ ...base, authentication: initialAuthentication });
+    await server.whenReady();
+    try {
+      const sent = await server.handle(directRpcRequest('SendMessage', {
+        message: { messageId: `realm-${initialRealm}`, role: 'ROLE_USER', parts: [{ text: 'private' }] },
+      }));
+      const sentBody = await sent.json() as {
+        readonly result: { readonly task: { readonly id: string } };
+      };
+
+      server.updateHot({
+        agent: base.agent,
+        limits: base.limits,
+        authentication: authenticationForRealm(nextRealm),
+        authorize: base.authorize,
+      });
+      const isolatedList = await server.handle(directRpcRequest('ListTasks', {}));
+      const isolatedBody = await isolatedList.json() as {
+        readonly result: { readonly tasks: readonly unknown[] };
+      };
+      expect(isolatedBody.result.tasks).toEqual([]);
+      const isolatedGet = await server.handle(directRpcRequest('GetTask', { id: sentBody.result.task.id }));
+      expect((await isolatedGet.json() as { readonly error: { readonly code: number } }).error.code)
+        .toBe(-32001);
+
+      server.updateHot({
+        agent: base.agent,
+        limits: base.limits,
+        authentication: initialAuthentication,
+        authorize: base.authorize,
+      });
+      const originalRealmList = await server.handle(directRpcRequest('ListTasks', {}));
+      const originalRealmBody = await originalRealmList.json() as {
+        readonly result: { readonly tasks: readonly unknown[] };
+      };
+      expect(originalRealmBody.result.tasks).toHaveLength(1);
+    } finally {
+      await server.close();
+    }
+  });
+
+  it('preserves task ownership for the same security realm across a dataDir restart', async () => {
+    const dataDir = temporaryRoot();
+    const securityRealm = 'oauth2-jwt:https://issuer.example';
+    const firstBase = serverOptions(fakeRuntime(), dataDir);
+    const first = createKodaXA2AServer({
+      ...firstBase,
+      authentication: authenticationForRealm(securityRealm),
+    });
+    await first.whenReady();
+    const sent = await first.handle(directRpcRequest('SendMessage', {
+      message: { messageId: 'stable-realm-restart', role: 'ROLE_USER', parts: [{ text: 'persist' }] },
+    }));
+    const taskId = (await sent.json() as {
+      readonly result: { readonly task: { readonly id: string } };
+    }).result.task.id;
+    await first.close();
+
+    const secondBase = serverOptions(fakeRuntime(), dataDir);
+    const second = createKodaXA2AServer({
+      ...secondBase,
+      authentication: authenticationForRealm(securityRealm),
+    });
+    await second.whenReady();
+    try {
+      const recovered = await second.handle(directRpcRequest('GetTask', { id: taskId }));
+      expect(recovered.status).toBe(200);
+      expect((await recovered.json() as { readonly result: { readonly id: string } }).result.id)
+        .toBe(taskId);
+    } finally {
+      await second.close();
+    }
+  });
+
+  it('fails closed when custom SDK authentication omits a stable security realm', () => {
+    const base = serverOptions(fakeRuntime(), temporaryRoot());
+    const { securityRealm: _securityRealm, ...legacyAuthentication } = base.authentication;
+    expect(() => createKodaXA2AServer({
+      ...base,
+      authentication: legacyAuthentication as typeof base.authentication,
+    })).toThrow(/securityRealm/i);
+  });
+
+  it('revalidates cached Agent Cards with ETag after hot reload', async () => {
+    const options = serverOptions(fakeRuntime(), temporaryRoot());
+    const server = createKodaXA2AServer(options);
+    const cardUrl = 'http://127.0.0.1/.well-known/agent-card.json';
+    try {
+      const initial = await server.handle(new Request(cardUrl));
+      const initialEtag = initial.headers.get('etag');
+      expect(initial.status).toBe(200);
+      expect(initial.headers.get('cache-control')).toBe('no-cache');
+      expect(initialEtag).toMatch(/^"[a-f0-9]{64}"$/u);
+
+      const unchanged = await server.handle(new Request(cardUrl, {
+        headers: { 'if-none-match': initialEtag! },
+      }));
+      expect(unchanged.status).toBe(304);
+      expect(unchanged.headers.get('etag')).toBe(initialEtag);
+      expect(await unchanged.text()).toBe('');
+
+      server.updateHot({
+        agent: { ...options.agent, name: 'Hot Reloaded Card' },
+        limits: options.limits,
+        authentication: options.authentication,
+        authorize: options.authorize,
+      });
+      const reloaded = await server.handle(new Request(cardUrl, {
+        headers: { 'if-none-match': initialEtag! },
+      }));
+      expect(reloaded.status).toBe(200);
+      expect(reloaded.headers.get('etag')).not.toBe(initialEtag);
+      expect(await reloaded.json()).toMatchObject({ name: 'Hot Reloaded Card' });
+    } finally {
+      await server.close();
+    }
+  });
+
+  it('rejects a published Skill whose security requirements reference an unknown scheme', () => {
+    const options = serverOptions(fakeRuntime(), temporaryRoot());
+    expect(() => createKodaXA2AServer({
+      ...options,
+      agent: {
+        ...options.agent,
+        skills: [{
+          ...options.agent.skills[0]!,
+          securityRequirements: [{ schemes: { missing: { list: [] } } }],
+        }],
+      },
+    })).toThrow(/unknown security scheme "missing"/i);
   });
 
   it('prepares a user Markdown Agent through the Runtime-owned binding capability', async () => {
@@ -492,6 +806,7 @@ describe('FEATURE_267 bidirectional A2A', () => {
         body,
       });
       expect(denied.status).toBe(401);
+      expect(denied.headers.get('www-authenticate')).toBe('Bearer');
 
       const send = () => fetch(`${baseUrl}/a2a`, {
         method: 'POST',
@@ -511,6 +826,62 @@ describe('FEATURE_267 bidirectional A2A', () => {
     }
   });
 
+  it('rejects an unauthenticated oversized stream without reading its body', async () => {
+    const server = createKodaXA2AServer(serverOptions(fakeRuntime(), temporaryRoot()));
+    await server.whenReady();
+    let pulls = 0;
+    const body = new ReadableStream<Uint8Array>({
+      pull(controller) {
+        pulls += 1;
+        controller.enqueue(new Uint8Array(70 * 1024));
+        controller.close();
+      },
+    }, { highWaterMark: 0 });
+    try {
+      const response = await server.handle(new Request('http://127.0.0.1:1/a2a', {
+        method: 'POST',
+        headers: { 'content-type': 'application/json', 'a2a-version': '1.0' },
+        body,
+        duplex: 'half',
+      } as RequestInit & { readonly duplex: 'half' }));
+
+      expect(response.status).toBe(401);
+      expect(pulls).toBe(0);
+    } finally {
+      await server.close();
+    }
+  });
+
+  it('propagates OAuth Bearer challenge headers from authentication failures', async () => {
+    const options = serverOptions(fakeRuntime(), temporaryRoot());
+    const server = createKodaXA2AServer({
+      ...options,
+      authentication: {
+        ...options.authentication,
+        async authenticate() {
+          throw new A2AError(-32600, 'Insufficient OAuth scope.', 403, undefined, {
+            'www-authenticate': 'Bearer error="insufficient_scope", scope="a2a.invoke"',
+          });
+        },
+      },
+    });
+    await server.whenReady();
+    const response = await server.handle(new Request('http://127.0.0.1:1/a2a', {
+      method: 'POST',
+      headers: {
+        authorization: 'Bearer access-token',
+        'content-type': 'application/json',
+        'a2a-version': '1.0',
+      },
+      body: JSON.stringify({ jsonrpc: '2.0', id: 'scope', method: 'ListTasks', params: {} }),
+    }));
+
+    expect(response.status).toBe(403);
+    expect(response.headers.get('www-authenticate'))
+      .toBe('Bearer error="insufficient_scope", scope="a2a.invoke"');
+    await server.close();
+  });
+
   it('passes sanitized message scope to host authorization', async () => {
     const authorize = vi.fn(async () => true);
     const base = serverOptions(fakeRuntime(), temporaryRoot());
@@ -526,6 +897,35 @@ describe('FEATURE_267 bidirectional A2A', () => {
       expect(authorize).toHaveBeenCalledWith(expect.objectContaining({
         operation: 'send-message', contextId: 'caller-context', inputModes: ['text/plain'],
       }));
+    } finally {
+      await server.close();
+    }
+  });
+
+  it('replays Runtime events emitted before a new run subscription is attached', async () => {
+    const controlled = pendingRuntime();
+    const event = pendingInputEvent();
+    const runtime = {
+      ...controlled.runtime,
+      events: {
+        subscribe(filter: RuntimeEventFilter, listener: RuntimeEventListener) {
+          return controlled.runtime.events.subscribe(filter, listener);
+        },
+        async replay() { return [event]; },
+      },
+    } as KodaXRuntime;
+    const base = serverOptions(runtime, temporaryRoot());
+    const server = createKodaXA2AServer({
+      ...base,
+      limits: { ...base.limits, maxTaskWaitMs: 1 },
+    });
+    try {
+      const taskId = await startPendingTask(server, 'early-runtime-event');
+      const response = await server.handle(directRpcRequest('GetTask', { id: taskId }));
+      const body = await response.json() as {
+        readonly result: { readonly status: { readonly state: string } };
+      };
+      expect(body.result.status.state).toBe('TASK_STATE_INPUT_REQUIRED');
     } finally {
       await server.close();
     }
@@ -591,18 +991,139 @@ describe('FEATURE_267 bidirectional A2A', () => {
     }
   });
 
+  it('atomically enforces global task admission across different principals', async () => {
+    const controlled = pendingRuntime();
+    let sessionCreates = 0;
+    let markFirstCreate!: () => void;
+    let releaseFirstCreate!: () => void;
+    const firstCreateEntered = new Promise<void>((resolve) => { markFirstCreate = resolve; });
+    const firstCreateGate = new Promise<void>((resolve) => { releaseFirstCreate = resolve; });
+    const runtime = {
+      ...controlled.runtime,
+      sessions: {
+        async create() {
+          sessionCreates += 1;
+          if (sessionCreates === 1) {
+            markFirstCreate();
+            await firstCreateGate;
+          }
+          return { id: `session-${sessionCreates}`, title: 'admission', surface: 'a2a' };
+        },
+      },
+    } as KodaXRuntime;
+    const base = serverOptions(runtime, temporaryRoot());
+    const server = createKodaXA2AServer({
+      ...base,
+      limits: {
+        ...base.limits,
+        maxConcurrentTasks: 1,
+        maxActiveTasksPerPrincipal: 1,
+      },
+    });
+    await server.whenReady();
+    const request = (messageId: string, authorization: string) => new Request('http://127.0.0.1:1/a2a', {
+      method: 'POST',
+      headers: { authorization, 'content-type': 'application/json', 'a2a-version': '1.0' },
+      body: JSON.stringify({
+        jsonrpc: '2.0', id: messageId, method: 'SendMessage',
+        params: {
+          message: { messageId, role: 'ROLE_USER', parts: [{ text: messageId }] },
+          configuration: { returnImmediately: true },
+        },
+      }),
+    });
+    try {
+      const first = server.handle(request('principal-one', 'Bearer test-token'));
+      await firstCreateEntered;
+      const second = server.handle(request('principal-two', 'Bearer other-token'));
+      await new Promise((resolve) => setTimeout(resolve, 10));
+      releaseFirstCreate();
+
+      const responses = await Promise.all([first, second]);
+      const bodies = await Promise.all(responses.map(async (response) => response.json() as Promise<{
+        readonly result?: unknown;
+        readonly error?: { readonly code: number };
+      }>));
+      expect(bodies.filter((body) => body.result !== undefined)).toHaveLength(1);
+      expect(bodies.filter((body) => body.error?.code === -32004)).toHaveLength(1);
+      expect(sessionCreates).toBe(1);
+    } finally {
+      releaseFirstCreate();
+      await server.close();
+    }
+  });
+
+  it('releases global admission after reserving working state while Runtime replay attaches', async () => {
+    const controlled = pendingRuntime();
+    let markReplayEntered!: () => void;
+    let releaseReplay!: () => void;
+    const replayEntered = new Promise<void>((resolve) => { markReplayEntered = resolve; });
+    const replayGate = new Promise<void>((resolve) => { releaseReplay = resolve; });
+    const runtime = {
+      ...controlled.runtime,
+      events: {
+        subscribe(filter: RuntimeEventFilter, listener: RuntimeEventListener) {
+          return controlled.runtime.events.subscribe(filter, listener);
+        },
+        async replay() {
+          markReplayEntered();
+          await replayGate;
+          return [];
+        },
+      },
+    } as KodaXRuntime;
+    const base = serverOptions(runtime, temporaryRoot());
+    const server = createKodaXA2AServer({
+      ...base,
+      limits: { ...base.limits, maxConcurrentTasks: 1 },
+    });
+    await server.whenReady();
+    const first = server.handle(directRpcRequest('SendMessage', {
+      message: { messageId: 'replay-lock-one', role: 'ROLE_USER', parts: [{ text: 'first' }] },
+      configuration: { returnImmediately: true },
+    }));
+    await replayEntered;
+    const secondRequest = directRpcRequest('SendMessage', {
+      message: { messageId: 'replay-lock-two', role: 'ROLE_USER', parts: [{ text: 'second' }] },
+      configuration: { returnImmediately: true },
+    });
+    secondRequest.headers.set('authorization', 'Bearer other-token');
+    let timeout: ReturnType<typeof setTimeout> | undefined;
+    try {
+      const second = await Promise.race([
+        server.handle(secondRequest),
+        new Promise<never>((_resolve, reject) => {
+          timeout = setTimeout(() => reject(new Error('Global admission remained locked by Runtime replay.')), 1_000);
+        }),
+      ]);
+      const body = await second.json() as { readonly error?: { readonly code: number } };
+      expect(body.error?.code).toBe(-32004);
+    } finally {
+      if (timeout) clearTimeout(timeout);
+      releaseReplay();
+      await first;
+      await server.close();
+    }
+  });
+
   it('publishes explicitly staged run files as inline A2A artifacts and stream updates', async () => {
     const workspace = temporaryRoot();
     const staging = path.join(workspace, '.kodax-a2a-staging');
     const output = path.join(staging, 'report.pptx');
+    const artifactBytes = 16 * 1024 * 1024 - 1024;
     mkdirSync(staging, { recursive: true });
-    writeFileSync(output, 'ppt-content', 'utf8');
+    writeFileSync(output, Buffer.alloc(artifactBytes, 0x5a));
     const runtime = fakeRuntime('presentation ready', [{
       id: 'artifact-1', kind: 'file_created', target: output, timestamp: new Date().toISOString(),
     }]);
     const base = serverOptions(runtime, temporaryRoot());
     const server = createKodaXA2AServer({
       ...base,
+      limits: {
+        ...base.limits,
+        maxRequestBytes: 32 * 1024 * 1024,
+        maxPartBytes: 16 * 1024 * 1024,
+      },
       agent: {
         ...base.agent,
         projectPath: workspace,
@@ -624,9 +1145,13 @@ describe('FEATURE_267 bidirectional A2A', () => {
         }),
       });
       const streamed = await response.text();
-      expect(streamed).toContain('artifactUpdate');
-      expect(streamed).toContain(Buffer.from('ppt-content').toString('base64'));
-      expect(streamed).not.toContain(workspace);
+      expect(streamed.includes('"task"')).toBe(true);
+      expect(streamed.includes('TASK_STATE_COMPLETED')).toBe(true);
+      const rawStart = streamed.indexOf('"raw":"') + '"raw":"'.length;
+      const rawEnd = streamed.indexOf('"', rawStart);
+      expect(rawStart).toBeGreaterThan('"raw":"'.length - 1);
+      expect(rawEnd - rawStart).toBe(Math.ceil(artifactBytes / 3) * 4);
+      expect(streamed.includes(workspace)).toBe(false);
     } finally {
       await server.close();
     }
@@ -729,6 +1254,269 @@ describe('FEATURE_267 bidirectional A2A', () => {
       expect((hidden.body.error as { readonly code: number }).code).toBe(-32001);
     } finally {
       await server.close();
+    }
+  });
+
+  it('keeps multiple task subscribers ordered and releases their listeners at terminal state', async () => {
+    const subscriptions = trackStoreSubscriptions();
+    const controlled = pendingRuntime();
+    const base = serverOptions(controlled.runtime, temporaryRoot());
+    const server = createKodaXA2AServer({
+      ...base,
+      limits: { ...base.limits, maxTaskWaitMs: 1 },
+    });
+    try {
+      const taskId = await startPendingTask(server, 'multi-subscriber-task');
+      const first = await server.handle(directRpcRequest('SubscribeToTask', { id: taskId }, 'subscriber-1'));
+      const second = await server.handle(directRpcRequest('SubscribeToTask', { id: taskId }, 'subscriber-2'));
+      expect(subscriptions.active()).toBe(2);
+
+      controlled.complete('multi-subscriber-result');
+      const [firstBody, secondBody] = await Promise.all([first.text(), second.text()]);
+      for (const body of [firstBody, secondBody]) {
+        const initialTask = body.indexOf('"task"');
+        const artifact = body.indexOf('"artifactUpdate"');
+        const completed = body.lastIndexOf('TASK_STATE_COMPLETED');
+        expect(initialTask).toBeGreaterThanOrEqual(0);
+        expect(artifact).toBeGreaterThan(initialTask);
+        expect(completed).toBeGreaterThan(artifact);
+        expect(body).toContain('multi-subscriber-result');
+      }
+      expect(subscriptions.active()).toBe(0);
+    } finally {
+      try {
+        await server.close();
+        expect(subscriptions.active()).toBe(0);
+      } finally {
+        subscriptions.restore();
+      }
+    }
+  });
+
+  it('does not resend an unchanged initial artifact on later status-only saves', async () => {
+    const controlled = pendingRuntime();
+    const dataDir = temporaryRoot();
+    const base = serverOptions(controlled.runtime, dataDir);
+    const options = { ...base, limits: { ...base.limits, maxTaskWaitMs: 1 } };
+    const first = createKodaXA2AServer(options);
+    const taskId = await startPendingTask(first, 'stable-stream-artifact');
+    await first.close();
+
+    const store = new A2AFileTaskStore(dataDir);
+    const record = store.get(taskId);
+    if (!record) throw new Error('Expected persisted A2A task.');
+    store.save({
+      ...record,
+      task: {
+        ...record.task,
+        artifacts: [{
+          artifactId: 'stable-artifact',
+          name: 'stable.json',
+          parts: [{ data: { stable: true }, mediaType: 'application/json' }],
+        }],
+      },
+    });
+    store.close();
+
+    const second = createKodaXA2AServer(options);
+    try {
+      await second.whenReady();
+      const response = await second.handle(directRpcRequest('SubscribeToTask', { id: taskId }));
+      controlled.emitProgress(1);
+      controlled.complete('stable artifact complete');
+      const streamed = await response.text();
+      expect(streamed.match(/\"artifactId\":\"stable-artifact\"/g) ?? []).toHaveLength(1);
+    } finally {
+      await second.close();
+    }
+  });
+
+  it('bounds concurrent subscriptions per task and releases admission on cancel and server close', async () => {
+    const subscriptions = trackStoreSubscriptions();
+    const controlled = pendingRuntime();
+    const base = serverOptions(controlled.runtime, temporaryRoot());
+    const server = createKodaXA2AServer({
+      ...base,
+      limits: { ...base.limits, maxTaskWaitMs: 1 },
+    });
+    try {
+      const taskId = await startPendingTask(server, 'per-task-stream-limit');
+      const streams: Response[] = [];
+      for (let index = 0; index < 4; index += 1) {
+        const response = await server.handle(directRpcRequest(
+          'SubscribeToTask', { id: taskId }, `per-task-subscriber-${index}`,
+        ));
+        expect(response.status).toBe(200);
+        streams.push(response);
+      }
+      expect(subscriptions.active()).toBe(4);
+
+      const rejected = await server.handle(directRpcRequest(
+        'SubscribeToTask', { id: taskId }, 'per-task-subscriber-rejected',
+      ));
+      expect(rejected.status).toBe(429);
+      expect((await rejected.json() as { readonly error: { readonly code: number } }).error.code).toBe(-32000);
+      expect(subscriptions.active()).toBe(4);
+
+      await streams[0]?.body?.cancel();
+      expect(subscriptions.active()).toBe(3);
+      const replacement = await server.handle(directRpcRequest(
+        'SubscribeToTask', { id: taskId }, 'per-task-subscriber-replacement',
+      ));
+      expect(replacement.status).toBe(200);
+      expect(subscriptions.active()).toBe(4);
+
+      await server.close();
+      expect(subscriptions.active()).toBe(0);
+    } finally {
+      try {
+        await server.close();
+        expect(subscriptions.active()).toBe(0);
+      } finally {
+        subscriptions.restore();
+      }
+    }
+  });
+
+  it('releases a built-in HTTP subscription when its client disconnects', async () => {
+    const subscriptions = trackStoreSubscriptions();
+    const controlled = pendingRuntime();
+    const base = serverOptions(controlled.runtime, temporaryRoot());
+    const server = createKodaXA2AServer({
+      ...base,
+      limits: { ...base.limits, maxTaskWaitMs: 1 },
+    });
+    try {
+      const taskId = await startPendingTask(server, 'http-stream-disconnect');
+      const baseUrl = await server.listen({ hostname: '127.0.0.1', port: 0 });
+      await new Promise<void>((resolve, reject) => {
+        const request = httpRequest(`${baseUrl}/a2a`, {
+          method: 'POST',
+          headers: {
+            authorization: 'Bearer test-token',
+            'content-type': 'application/json',
+            'a2a-version': '1.0',
+          },
+        }, (response) => {
+          try {
+            expect(response.statusCode).toBe(200);
+            expect(subscriptions.active()).toBe(1);
+            response.destroy();
+            resolve();
+          } catch (error: unknown) {
+            reject(error);
+          }
+        });
+        request.once('error', reject);
+        request.end(JSON.stringify({
+          jsonrpc: '2.0', id: 'http-disconnect', method: 'SubscribeToTask', params: { id: taskId },
+        }));
+      });
+      await vi.waitFor(() => expect(subscriptions.active()).toBe(0));
+    } finally {
+      try {
+        await server.close();
+        expect(subscriptions.active()).toBe(0);
+      } finally {
+        subscriptions.restore();
+      }
+    }
+  });
+
+  it('bounds total concurrent subscriptions without letting one task consume the server', async () => {
+    const subscriptions = trackStoreSubscriptions();
+    const controlled = pendingRuntime();
+    const base = serverOptions(controlled.runtime, temporaryRoot());
+    const server = createKodaXA2AServer({
+      ...base,
+      limits: {
+        ...base.limits,
+        maxConcurrentTasks: 8,
+        maxActiveTasksPerPrincipal: 8,
+        maxTaskWaitMs: 1,
+      },
+    });
+    try {
+      const taskIds: string[] = [];
+      for (let index = 0; index < 3; index += 1) {
+        taskIds.push(await startPendingTask(server, `server-stream-limit-${index}`));
+      }
+      const streams: Response[] = [];
+      for (const [taskIndex, count] of [3, 3, 2].entries()) {
+        for (let streamIndex = 0; streamIndex < count; streamIndex += 1) {
+          streams.push(await server.handle(directRpcRequest(
+            'SubscribeToTask', { id: taskIds[taskIndex]! },
+            `server-subscriber-${taskIndex}-${streamIndex}`,
+          )));
+        }
+      }
+      expect(streams).toHaveLength(8);
+      expect(subscriptions.active()).toBe(8);
+
+      const rejected = await server.handle(directRpcRequest(
+        'SubscribeToTask', { id: taskIds[0]! }, 'server-subscriber-rejected',
+      ));
+      expect(rejected.status).toBe(429);
+      expect((await rejected.json() as { readonly error: { readonly code: number } }).error.code).toBe(-32000);
+
+      await Promise.all(streams.map(async (response) => response.body?.cancel()));
+      expect(subscriptions.active()).toBe(0);
+    } finally {
+      try {
+        await server.close();
+        expect(subscriptions.active()).toBe(0);
+      } finally {
+        subscriptions.restore();
+      }
+    }
+  });
+
+  it('closes only a slow subscriber at its byte budget and permits a fresh subscription', async () => {
+    const subscriptions = trackStoreSubscriptions();
+    const controlled = pendingRuntime();
+    const base = serverOptions(controlled.runtime, temporaryRoot());
+    const server = createKodaXA2AServer({
+      ...base,
+      limits: {
+        ...base.limits,
+        maxTaskWaitMs: 1,
+        maxEventsPerTask: 10,
+        maxEventBytesPerTask: 32 * 1024 * 1024,
+      },
+    });
+    try {
+      const taskId = await startPendingTask(server, 'slow-stream-budget');
+      const slow = await server.handle(directRpcRequest('SubscribeToTask', { id: taskId }, 'slow-subscriber'));
+      expect(subscriptions.active()).toBe(1);
+
+      const firstLargeTimestamp = 'a'.repeat(13 * 1024 * 1024);
+      const secondLargeTimestamp = 'b'.repeat(13 * 1024 * 1024);
+      controlled.emitProgress(1, firstLargeTimestamp);
+      expect(subscriptions.active()).toBe(1);
+      controlled.emitProgress(2, secondLargeTimestamp);
+      expect(subscriptions.active()).toBe(0);
+
+      await expect(slow.text()).rejects.toThrow(/buffer budget/i);
+
+      const current = await server.handle(directRpcRequest('GetTask', { id: taskId }, 'slow-task-state'));
+      expect((await current.json() as {
+        readonly result: { readonly status: { readonly state: string } };
+      }).result.status.state).toBe('TASK_STATE_WORKING');
+
+      const replacement = await server.handle(directRpcRequest(
+        'SubscribeToTask', { id: taskId }, 'slow-subscriber-replacement',
+      ));
+      expect(replacement.status).toBe(200);
+      expect(subscriptions.active()).toBe(1);
+      await replacement.body?.cancel();
+      expect(subscriptions.active()).toBe(0);
+    } finally {
+      try {
+        await server.close();
+        expect(subscriptions.active()).toBe(0);
+      } finally {
+        subscriptions.restore();
+      }
     }
   });
 
@@ -917,6 +1705,61 @@ describe('FEATURE_267 bidirectional A2A', () => {
     }
   });
 
+  it('buffers live Runtime events while recovery replay is in progress', async () => {
+    const controlled = pendingRuntime();
+    const listeners = new Set<RuntimeEventListener>();
+    let blockReplay = false;
+    let markReplayEntered!: () => void;
+    let releaseReplay!: () => void;
+    const replayEntered = new Promise<void>((resolve) => { markReplayEntered = resolve; });
+    const replayGate = new Promise<void>((resolve) => { releaseReplay = resolve; });
+    const runtime = {
+      ...controlled.runtime,
+      events: {
+        subscribe(_filter: RuntimeEventFilter, listener: RuntimeEventListener) {
+          listeners.add(listener);
+          return { close: () => listeners.delete(listener) };
+        },
+        async replay() {
+          if (blockReplay) {
+            markReplayEntered();
+            await replayGate;
+          }
+          return [];
+        },
+      },
+    } as KodaXRuntime;
+    const dataDir = temporaryRoot();
+    const base = serverOptions(runtime, dataDir);
+    const first = createKodaXA2AServer({
+      ...base,
+      limits: { ...base.limits, maxTaskWaitMs: 1 },
+    });
+    const taskId = await startPendingTask(first, 'recovery-live-gap');
+    await first.close();
+
+    blockReplay = true;
+    const second = createKodaXA2AServer({
+      ...base,
+      limits: { ...base.limits, maxTaskWaitMs: 1 },
+    });
+    try {
+      await replayEntered;
+      for (const listener of listeners) listener(pendingInputEvent());
+      releaseReplay();
+      await second.whenReady();
+
+      const response = await second.handle(directRpcRequest('GetTask', { id: taskId }));
+      const body = await response.json() as {
+        readonly result: { readonly status: { readonly state: string } };
+      };
+      expect(body.result.status.state).toBe('TASK_STATE_INPUT_REQUIRED');
+    } finally {
+      releaseReplay();
+      await second.close();
+    }
+  });
+
   it('uses A2A SSE from the outbound executor and observes remote completion', async () => {
     const controlled = pendingRuntime();
     const server = createKodaXA2AServer(serverOptions(controlled.runtime, temporaryRoot()));
@@ -952,6 +1795,104 @@ describe('FEATURE_267 bidirectional A2A', () => {
       await plane.close();
     } finally {
       await server.close();
+    }
+  });
+
+  it('uses exact JSON and SSE media type essences for outbound responses', async () => {
+    const origin = 'http://127.0.0.1:43127';
+    const card = {
+      name: 'Media Type Agent',
+      description: 'Exercises response media type validation.',
+      version: '1.0.0',
+      supportedInterfaces: [{ url: `${origin}/a2a`, protocolBinding: 'JSONRPC', protocolVersion: '1.0' }],
+      capabilities: { streaming: true },
+      securitySchemes: {},
+      securityRequirements: [],
+      defaultInputModes: ['text/plain'],
+      defaultOutputModes: ['text/plain'],
+      skills: [],
+    };
+    let cardContentType = 'application/agent+json; charset=utf-8';
+    let rpcContentType = 'application/task+json; charset=utf-8';
+    const methods: string[] = [];
+    const fetchImpl = (async (input, init) => {
+      if (String(input).includes('.well-known/agent-card.json')) {
+        return new Response(JSON.stringify(card), { headers: { 'content-type': cardContentType } });
+      }
+      const request = JSON.parse(String(init?.body)) as {
+        readonly id: string;
+        readonly method: string;
+      };
+      methods.push(request.method);
+      if (request.method === 'SendMessage') {
+        return new Response(JSON.stringify({
+          jsonrpc: '2.0', id: request.id,
+          result: {
+            task: {
+              id: 'remote-media-task', contextId: 'media-context',
+              status: { state: 'TASK_STATE_WORKING' },
+            },
+          },
+        }), { headers: { 'content-type': rpcContentType } });
+      }
+      if (request.method === 'SubscribeToTask') {
+        return new Response(`data: ${JSON.stringify({
+          jsonrpc: '2.0', id: request.id,
+          result: {
+            statusUpdate: {
+              taskId: 'remote-media-task', contextId: 'media-context',
+              status: { state: 'TASK_STATE_COMPLETED' },
+            },
+          },
+        })}\n\n`, { headers: { 'content-type': 'text/event-streamx' } });
+      }
+      return new Response(JSON.stringify({
+        jsonrpc: '2.0', id: request.id,
+        result: {
+          id: 'remote-media-task', contextId: 'media-context',
+          status: { state: 'TASK_STATE_COMPLETED' },
+        },
+      }), { headers: { 'content-type': rpcContentType } });
+    }) as typeof fetch;
+    const clientOptions = {
+      fetch: fetchImpl,
+      pollIntervalMs: 1,
+      networkPolicy: {
+        allowedOrigins: [origin], allowPrivateAddresses: true,
+        requestTimeoutMs: 1_000, maxResponseBytes: 64 * 1024, maxRedirects: 0,
+      },
+    } as const;
+    const discovered = await discoverA2ARegistration({
+      agentId: 'external:media-types',
+      agentCardUrl: `${origin}/.well-known/agent-card.json`,
+      effects: { remote: 'read' },
+    }, clientOptions);
+    const executor = await createA2AAgentExecutorFactory(clientOptions).create(discovered.registration, {
+      async withCredential(_reference, use) { return use('unused'); },
+      async authorizeArtifact() {},
+    });
+    try {
+      const reference = await executor.start({
+        agentId: discovered.registration.agentId,
+        objective: 'validate media types',
+        idempotencyKey: 'media-types',
+        context: { actorId: 'test' },
+      });
+      const events: AgentExecutorEvent[] = [];
+      for await (const event of executor.events(reference)) events.push(event);
+      expect(events.at(-1)?.state).toBe('completed');
+      expect(methods).toContain('GetTask');
+
+      rpcContentType = 'application/jsonp';
+      await expect(executor.reconcile(reference)).rejects.toThrow(/content type/i);
+      cardContentType = 'application/jsonp';
+      await expect(discoverA2ARegistration({
+        agentId: 'external:media-types-jsonp',
+        agentCardUrl: `${origin}/.well-known/agent-card.json`,
+        effects: { remote: 'read' },
+      }, clientOptions)).rejects.toThrow(/not JSON/i);
+    } finally {
+      await executor.dispose();
     }
   });
 
@@ -1516,6 +2457,90 @@ describe('FEATURE_267 bidirectional A2A', () => {
     expect(JSON.stringify(bounded?.body)).toContain('TASK_STATE_WORKING');
   });
 
+  it('drains admitted handle work before an idempotent close releases the store', async () => {
+    const controlled = pendingRuntime();
+    let markSessionEntered!: () => void;
+    let releaseSession!: () => void;
+    const sessionEntered = new Promise<void>((resolve) => { markSessionEntered = resolve; });
+    const sessionGate = new Promise<void>((resolve) => { releaseSession = resolve; });
+    const runtime = {
+      ...controlled.runtime,
+      sessions: {
+        async create() {
+          markSessionEntered();
+          await sessionGate;
+          return { id: 'session-close-drain', title: 'close drain', surface: 'a2a' };
+        },
+      },
+    } as KodaXRuntime;
+    const dataDir = temporaryRoot();
+    const server = createKodaXA2AServer(serverOptions(runtime, dataDir));
+    await server.whenReady();
+    const handling = server.handle(directRpcRequest('SendMessage', {
+      message: { messageId: 'close-drain', role: 'ROLE_USER', parts: [{ text: 'wait for admission' }] },
+      configuration: { returnImmediately: true },
+    }));
+    await sessionEntered;
+
+    const closing = server.close();
+    let handlingStatus = 0;
+    try {
+      expect(server.close()).toBe(closing);
+      let closeSettled = false;
+      void closing.then(() => { closeSettled = true; });
+      await new Promise((resolve) => setTimeout(resolve, 0));
+      expect(closeSettled).toBe(false);
+      expect((await server.handle(directRpcRequest('ListTasks', {}))).status).toBe(503);
+    } finally {
+      releaseSession();
+      handlingStatus = (await handling).status;
+      await closing;
+    }
+    expect(handlingStatus).toBe(200);
+    expect(controlled.listenerCount()).toBe(0);
+    const reopened = new A2AFileTaskStore(dataDir);
+    try {
+      expect(reopened.all()).toHaveLength(1);
+    } finally {
+      reopened.close();
+    }
+  });
+
+  it('ignores a Runtime event callback delivered after server close returns', async () => {
+    const controlled = pendingRuntime();
+    let lateListener: RuntimeEventListener | undefined;
+    const runtime = {
+      ...controlled.runtime,
+      events: {
+        subscribe(_filter: RuntimeEventFilter, listener: RuntimeEventListener) {
+          lateListener = listener;
+          return { close() {} };
+        },
+        async replay() { return []; },
+      },
+    } as KodaXRuntime;
+    const dataDir = temporaryRoot();
+    const server = createKodaXA2AServer(serverOptions(runtime, dataDir));
+    await server.whenReady();
+    const response = await server.handle(directRpcRequest('SendMessage', {
+      message: { messageId: 'late-runtime-event', role: 'ROLE_USER', parts: [{ text: 'start' }] },
+      configuration: { returnImmediately: true },
+    }));
+    const body = await response.json() as {
+      readonly result: { readonly task: { readonly id: string } };
+    };
+    await server.close();
+
+    expect(lateListener).toBeDefined();
+    lateListener?.(pendingInputEvent());
+    const reopened = new A2AFileTaskStore(dataDir);
+    try {
+      expect(reopened.get(body.result.task.id)?.task.status.state).toBe('TASK_STATE_WORKING');
+    } finally {
+      reopened.close();
+    }
+  });
+
   it('uses one hot-option snapshot for authentication and authorization during a request', async () => {
     const initial = serverOptions(fakeRuntime(), temporaryRoot());
     const server = createKodaXA2AServer(initial);
@@ -1637,7 +2662,7 @@ describe('FEATURE_267 bidirectional A2A', () => {
         allowedOrigins: ['http://127.0.0.1:43126'], allowPrivateAddresses: true,
         requestTimeoutMs: 1_000, maxResponseBytes: 64 * 1024, maxRedirects: 0,
       },
-    })).rejects.toThrow(/Bearer security scheme/i);
+    })).rejects.toThrow(/cannot fully satisfy.*security requirements/i);
   });
 
   it('rejects wrong protocol versions, message-ID conflicts, and corrupt durable state', async () => {
@@ -1695,6 +2720,24 @@ describe('FEATURE_267 bidirectional A2A', () => {
         body: '{}',
       });
       expect(wrongContentType.status).toBe(415);
+      const jsonpContentType = await fetch(`${baseUrl}/`, {
+        method: 'POST',
+        headers: {
+          authorization: 'Bearer test-token', 'content-type': 'application/jsonp', 'a2a-version': '1.0',
+        },
+        body: JSON.stringify({ jsonrpc: '2.0', id: 'jsonp', method: 'ListTasks', params: {} }),
+      });
+      expect(jsonpContentType.status).toBe(415);
+      const structuredJson = await fetch(`${baseUrl}/`, {
+        method: 'POST',
+        headers: {
+          authorization: 'Bearer test-token',
+          'content-type': 'application/problem+json; charset=utf-8',
+          'a2a-version': '1.0',
+        },
+        body: JSON.stringify({ jsonrpc: '2.0', id: 'structured-json', method: 'ListTasks', params: {} }),
+      });
+      expect(structuredJson.status).toBe(200);
       const oversized = await fetch(`${baseUrl}/`, {
         method: 'POST',
         headers: {

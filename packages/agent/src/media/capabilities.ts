@@ -58,9 +58,12 @@ export const KODAX_FILE_MEDIA_TYPES: readonly string[] = [];
 const OFFICIAL_IMAGE_PROVIDERS = new Set(['anthropic', 'openai']);
 const SOURCE_BACKED_NATIVE_MEDIA_ROUTES = new Set([
   'kimi-code/kimi-for-coding',
+  'kimi-code/kimi-for-coding-highspeed',
+  'kimi-code/k3',
   'kimi/kimi-k2.5',
   'kimi/kimi-k2.6',
   'kimi/kimi-k2.7-code',
+  'kimi/kimi-k2.7-code-highspeed',
   'minimax-coding/minimax-m3',
   'minimax/minimax-m3',
   'mimo-coding/mimo-v2.5',
@@ -128,6 +131,7 @@ function normalizeModel(provider: string, model: string | undefined): string | u
     if (normalized === 'k2.5') return 'kimi-k2.5';
     if (normalized === 'k2.6') return 'kimi-k2.6';
     if (normalized === 'k2.7-code') return 'kimi-k2.7-code';
+    if (normalized === 'k2.7-code-highspeed') return 'kimi-k2.7-code-highspeed';
   }
   if (provider === 'minimax-coding' || provider === 'minimax') {
     if (normalized === 'minimax-m3') return 'minimax-m3';

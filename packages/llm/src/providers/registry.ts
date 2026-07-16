@@ -211,14 +211,9 @@ class ZaiCodingProvider extends KodaXAnthropicCompatProvider {
 class KimiCodeProvider extends KodaXAnthropicCompatProvider {
   readonly name = 'kimi-code';
   protected readonly config: KodaXProviderConfig = buildProviderConfig('kimi-code', {
-    // api.kimi.com/coding/ is a unified subscription-routed coding endpoint:
-    // the server ignores the request `model` field and always serves the
-    // current K2.x GA model. Listing version-specific labels (K2.5 / K2.6)
-    // here would be misleading — the only honest identifier is the routing
-    // alias `kimi-for-coding`, exposed via the snapshot's default model.
-    // K2 server-side prefix caching is automatic on this endpoint, so
-    // switching to the OpenAI-compat sibling (api.kimi.com/coding/v1) would
-    // yield no cache benefit while losing tool_use schema fidelity.
+    // The subscription endpoint now routes three explicit model ids:
+    // K3 plus K2.7 Code Standard / HighSpeed. Keep the Anthropic-compatible
+    // path for native tool_use and preserved-thinking history fidelity.
     baseUrl: 'https://api.kimi.com/coding/',
   });
 }
@@ -293,9 +288,8 @@ class KimiProvider extends KodaXOpenAICompatProvider {
   protected readonly config: KodaXProviderConfig = buildProviderConfig('kimi', {
     baseUrl: 'https://api.moonshot.cn/v1',
     // Same OpenAI-compat reasoning_content convention as DeepSeek V4.
-    // Empirically unverified for Kimi specifically, but the failure mode
-    // (multi-turn 400 when reasoning_content is stripped from history)
-    // is identical in shape — opting in for max fault-tolerance.
+    // Verified against K2.7 Code multi-turn tool use on 2026-07-16:
+    // preserved thinking requires reasoning_content to remain in history.
     // OpenAI proper stays explicitly off (different protocol).
     replayReasoningContent: true,
   });

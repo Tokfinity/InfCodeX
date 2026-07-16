@@ -17,10 +17,12 @@ import type {
   RuntimeRunResult,
 } from '../sdk-runtime.js';
 import { A2AError, errorMessage } from './errors.js';
-import { isRecord, parseA2AMessage, parseJsonRpcRequest } from './schemas.js';
+import { isJsonMediaType, isRecord, parseA2AMessage, parseJsonRpcRequest } from './schemas.js';
+import { parseA2ASecurity } from './security.js';
 import { A2AFileTaskStore, type A2AServerTaskRecord } from './task-store.js';
 import {
   A2A_PROTOCOL_VERSION,
+  type A2AAuthentication,
   type A2AAgentCard,
   type A2AArtifact,
   type A2AJsonRpcRequest,
@@ -75,6 +77,13 @@ const PUSH_METHODS = new Set([
   'DeleteTaskPushNotificationConfig',
 ]);
 
+// These are protocol-edge safety ceilings, not operator-tuning knobs. A 24 MiB
+// queue admits one default-limit (16 MiB raw, base64-encoded) artifact frame;
+// the stream ceilings keep aggregate queued SSE bytes below roughly 192 MiB.
+const MAX_SSE_STREAMS_PER_TASK = 4;
+const MAX_SSE_STREAMS_PER_SERVER = 8;
+const MAX_SSE_QUEUE_BYTES = 24 * 1024 * 1024;
+
 function nowIso(now: () => Date): string {
   return now().toISOString();
 }
@@ -83,8 +92,16 @@ function sha256(value: string): string {
   return createHash('sha256').update(value).digest('hex');
 }
 
-function principalKey(principal: A2APrincipal): string {
-  return sha256(`${principal.subject}\0${principal.tenant ?? ''}`);
+function securityRealm(authentication: A2AAuthentication): string {
+  const value: unknown = authentication.securityRealm;
+  if (typeof value !== 'string' || value.trim().length === 0) {
+    throw new Error('A2A authentication.securityRealm must be a non-empty stable string.');
+  }
+  return value;
+}
+
+function principalKey(principal: A2APrincipal, realm: string): string {
+  return sha256(JSON.stringify([realm, principal.subject, principal.tenant ?? null]));
 }
 
 function isLoopbackHostname(hostname: string): boolean {
@@ -302,7 +319,7 @@ function safeTaskText(text: string, record: A2AServerTaskRecord, options: Prepar
 
 function buildCard(options: A2AServerOptions, baseUrl = options.agent.publicBaseUrl): A2AAgentCard {
   const url = interfaceUrl(baseUrl);
-  return {
+  const card: A2AAgentCard = {
     name: options.agent.name,
     description: options.agent.description,
     supportedInterfaces: [{ url, protocolBinding: 'JSONRPC', protocolVersion: A2A_PROTOCOL_VERSION }],
@@ -314,6 +331,20 @@ function buildCard(options: A2AServerOptions, baseUrl = options.agent.publicBase
     defaultOutputModes: options.agent.outputModes,
     skills: options.agent.skills,
   };
+  parseA2ASecurity(card.securitySchemes, card.securityRequirements);
+  for (const skill of card.skills) {
+    parseA2ASecurity(card.securitySchemes, skill.securityRequirements);
+  }
+  return card;
+}
+
+function matchesIfNoneMatch(value: string | null, etag: string): boolean {
+  if (value === null) return false;
+  const normalizedEtag = etag.replace(/^W\//iu, '');
+  return value.split(',').some((candidate) => {
+    const normalized = candidate.trim();
+    return normalized === '*' || normalized.replace(/^W\//iu, '') === normalizedEtag;
+  });
 }
 
 function jsonResponse(
@@ -385,7 +416,7 @@ function rpcError(id: string | number | null, error: A2AError): Response {
       message: error.message,
       ...(data !== undefined ? { data } : {}),
     },
-  }, error.httpStatus);
+  }, error.httpStatus, error.headers);
 }
 
 function messageDigest(message: A2AMessage): string {
@@ -443,6 +474,17 @@ interface TaskListCursor {
   readonly taskId: string;
 }
 
+interface MessageAdmissionResult {
+  readonly record: A2AServerTaskRecord;
+  readonly duplicate: boolean;
+  readonly runtimeEventsAttached?: Promise<void>;
+}
+
+interface StartedRun {
+  readonly record: A2AServerTaskRecord;
+  readonly runtimeEventsAttached: Promise<void>;
+}
+
 function parseTaskListCursor(value: string | undefined): TaskListCursor | undefined {
   if (!value) return undefined;
   let decoded: unknown;
@@ -475,14 +517,21 @@ class KodaXA2AServerRuntime implements KodaXA2AServer {
   readonly #now: () => Date;
   readonly #runtimeSubscriptions = new Map<string, { close(): void }>();
   readonly #streamClosers = new Set<() => void>();
+  readonly #taskStreamCounts = new Map<string, number>();
   readonly #messageTails = new Map<string, Promise<void>>();
+  readonly #requestTails = new Set<Promise<void>>();
   readonly #ready: Promise<void>;
+  #messageAdmissionTail = Promise.resolve();
   #nodeServer: Server | undefined;
+  #activeStreamCount = 0;
+  #closing = false;
   #closed = false;
+  #closePromise: Promise<void> | undefined;
   #card: A2AAgentCard;
   #listeningBaseUrl: string | undefined;
 
   constructor(private options: PreparedA2AServerOptions) {
+    securityRealm(options.authentication);
     this.#now = options.now ?? (() => new Date());
     this.#store = new A2AFileTaskStore(options.dataDir);
     this.#card = buildCard(options);
@@ -498,21 +547,37 @@ class KodaXA2AServerRuntime implements KodaXA2AServer {
   }
 
   updateHot(options: A2AServerHotOptions): void {
-    if (this.#closed) throw new Error('A2A server is closed.');
-    this.options = { ...this.options, ...options };
-    this.#card = buildCard(this.options, options.agent.publicBaseUrl);
+    if (this.#closing || this.#closed) throw new Error('A2A server is closed.');
+    securityRealm(options.authentication);
+    const next = { ...this.options, ...options };
+    const nextCard = buildCard(next, options.agent.publicBaseUrl);
+    this.options = next;
+    this.#card = nextCard;
   }
 
-  async handle(request: Request): Promise<Response> {
+  handle(request: Request): Promise<Response> {
+    if (this.#closing || this.#closed) {
+      return Promise.resolve(jsonResponse({ error: 'A2A server is closed.' }, 503));
+    }
+    let release = (): void => undefined;
+    const tail = new Promise<void>((resolve) => { release = resolve; });
+    this.#requestTails.add(tail);
+    return this.handleAdmitted(request).finally(() => {
+      this.#requestTails.delete(tail);
+      release();
+    });
+  }
+
+  private async handleAdmitted(request: Request): Promise<Response> {
     await this.#ready;
-    if (this.#closed) return jsonResponse({ error: 'A2A server is closed.' }, 503);
     const url = new URL(request.url);
     if (request.method === 'GET' && url.pathname === '/.well-known/agent-card.json') {
       const body = JSON.stringify(this.#card);
-      return jsonResponse(this.#card, 200, {
-        etag: `"${sha256(body)}"`,
-        'cache-control': 'public, max-age=300',
-      });
+      const etag = `"${sha256(body)}"`;
+      const headers = { etag, 'cache-control': 'no-cache' };
+      return matchesIfNoneMatch(request.headers.get('if-none-match'), etag)
+        ? new Response(null, { status: 304, headers })
+        : jsonResponse(this.#card, 200, headers);
     }
     if (request.method !== 'POST' || (url.pathname !== '/' && url.pathname !== '/a2a')) {
       return jsonResponse({ error: 'Not found.' }, 404);
@@ -521,6 +586,7 @@ class KodaXA2AServerRuntime implements KodaXA2AServer {
   }
 
   async listen(input: { readonly hostname: string; readonly port: number; readonly publicBaseUrl?: string }): Promise<string> {
+    if (this.#closing || this.#closed) throw new Error('A2A server is closed.');
     if (this.#nodeServer) throw new Error('A2A server is already listening.');
     if (!isLoopbackHostname(input.hostname)) {
       throw new Error('The built-in A2A HTTP listener is loopback-only; use handle() behind TLS for public service.');
@@ -533,7 +599,16 @@ class KodaXA2AServerRuntime implements KodaXA2AServer {
           response.end();
           return;
         }
-        Readable.fromWeb(result.body).pipe(response);
+        const body = Readable.fromWeb(result.body);
+        const closeBody = (): void => {
+          body.destroy();
+        };
+        response.once('close', closeBody);
+        body.once('close', () => response.off('close', closeBody));
+        body.once('error', () => {
+          if (!response.destroyed) response.destroy();
+        });
+        body.pipe(response);
       }).catch((error: unknown) => {
         const diagnosticId = sha256(errorMessage(error)).slice(0, 16);
         this.emit({ type: 'server.request_failed', time: nowIso(this.#now), outcome: 'failed', diagnosticId });
@@ -555,18 +630,36 @@ class KodaXA2AServerRuntime implements KodaXA2AServer {
     return baseUrl;
   }
 
-  async close(): Promise<void> {
-    if (this.#closed) return;
-    this.#closed = true;
-    for (const close of this.#streamClosers) close();
-    this.#streamClosers.clear();
-    for (const subscription of this.#runtimeSubscriptions.values()) subscription.close();
-    this.#runtimeSubscriptions.clear();
+  close(): Promise<void> {
+    if (this.#closePromise) return this.#closePromise;
+    this.#closing = true;
     const server = this.#nodeServer;
     this.#nodeServer = undefined;
-    if (server) await new Promise<void>((resolve, reject) => server.close((error) => error ? reject(error) : resolve()));
-    this.#store.close();
-    await this.options.preparedExecution?.close();
+    const serverClosed = server
+      ? new Promise<void>((resolve, reject) => server.close((error) => error ? reject(error) : resolve()))
+      : Promise.resolve();
+    this.#closePromise = this.closeAdmittedWork(serverClosed);
+    return this.#closePromise;
+  }
+
+  private async closeAdmittedWork(serverClosed: Promise<void>): Promise<void> {
+    const errors: unknown[] = [];
+    try { await this.#ready; } catch (error: unknown) { errors.push(error); }
+    await Promise.all([...this.#requestTails]);
+    this.#closed = true;
+    for (const close of [...this.#streamClosers]) {
+      try { close(); } catch (error: unknown) { errors.push(error); }
+    }
+    this.#streamClosers.clear();
+    for (const subscription of this.#runtimeSubscriptions.values()) {
+      try { subscription.close(); } catch (error: unknown) { errors.push(error); }
+    }
+    this.#runtimeSubscriptions.clear();
+    try { await serverClosed; } catch (error: unknown) { errors.push(error); }
+    try { this.#store.close(); } catch (error: unknown) { errors.push(error); }
+    try { await this.options.preparedExecution?.close(); } catch (error: unknown) { errors.push(error); }
+    if (errors.length === 1) throw errors[0];
+    if (errors.length > 1) throw new AggregateError(errors, 'A2A server close failed.');
   }
 
   private async handleNodeRequest(request: import('node:http').IncomingMessage): Promise<Response> {
@@ -596,8 +689,14 @@ class KodaXA2AServerRuntime implements KodaXA2AServer {
       if (requestedVersion !== A2A_PROTOCOL_VERSION) {
         throw new A2AError(-32009, 'A2A version is not supported.');
       }
-      if (!request.headers.get('content-type')?.toLowerCase().includes('application/json')) {
+      if (!isJsonMediaType(request.headers.get('content-type'))) {
         throw new A2AError(-32600, 'A2A JSON-RPC requests require application/json.', 415);
+      }
+      const principal = await options.authentication.authenticate(request);
+      if (!principal) {
+        throw new A2AError(-32600, 'Authentication required.', 401, undefined, {
+          'www-authenticate': 'Bearer',
+        });
       }
       const body = await readBoundedBody(request, options.limits.maxRequestBytes);
       let parsed: unknown;
@@ -608,8 +707,6 @@ class KodaXA2AServerRuntime implements KodaXA2AServer {
       }
       const rpc = parseJsonRpcRequest(parsed);
       id = rpc.id;
-      const principal = await options.authentication.authenticate(request);
-      if (!principal) throw new A2AError(-32600, 'Authentication required.', 401);
       if (PUSH_METHODS.has(rpc.method)) throw new A2AError(-32003, 'Push notifications are not supported.');
       const operation = operationForMethod(rpc.method);
       const scopedMessage = rpc.method === 'SendMessage' || rpc.method === 'SendStreamingMessage'
@@ -649,18 +746,19 @@ class KodaXA2AServerRuntime implements KodaXA2AServer {
     principal: A2APrincipal,
     options: PreparedA2AServerOptions,
   ): Promise<Response> {
+    const key = principalKey(principal, securityRealm(options.authentication));
     switch (rpc.method) {
       case 'SendMessage': return rpcResult(rpc.id, {
-        task: await this.sendMessage(rpc.params, principal, false, options),
+        task: await this.sendMessage(rpc.params, key, false, options),
       });
       case 'SendStreamingMessage': {
-        const task = await this.sendMessage(rpc.params, principal, true, options);
-        return this.streamTask(rpc.id, task.id, principalKey(principal));
+        const task = await this.sendMessage(rpc.params, key, true, options);
+        return this.streamTask(rpc.id, task.id, key);
       }
-      case 'GetTask': return rpcResult(rpc.id, await this.getTask(rpc.params, principal));
-      case 'ListTasks': return rpcResult(rpc.id, this.listTasks(rpc.params, principal));
-      case 'CancelTask': return rpcResult(rpc.id, await this.cancelTask(rpc.params, principal, options));
-      case 'SubscribeToTask': return this.subscribeTask(rpc.id, rpc.params, principal);
+      case 'GetTask': return rpcResult(rpc.id, await this.getTask(rpc.params, key));
+      case 'ListTasks': return rpcResult(rpc.id, this.listTasks(rpc.params, key));
+      case 'CancelTask': return rpcResult(rpc.id, await this.cancelTask(rpc.params, key, options));
+      case 'SubscribeToTask': return this.subscribeTask(rpc.id, rpc.params, key);
       case 'GetExtendedAgentCard': {
         if (!options.extendedAgentCard) throw new A2AError(-32004, 'Extended Agent Card is not supported.');
         return rpcResult(rpc.id, options.extendedAgentCard);
@@ -671,18 +769,17 @@ class KodaXA2AServerRuntime implements KodaXA2AServer {
 
   private async sendMessage(
     params: Readonly<Record<string, unknown>> | undefined,
-    principal: A2APrincipal,
+    key: string,
     streaming: boolean,
     options: PreparedA2AServerOptions,
   ): Promise<A2ATask> {
-    const key = principalKey(principal);
     const previous = this.#messageTails.get(key) ?? Promise.resolve();
     let release: () => void = () => undefined;
     const tail = new Promise<void>((resolve) => { release = resolve; });
     this.#messageTails.set(key, tail);
     await previous;
     try {
-      return await this.sendMessageUnserialized(params, principal, streaming, options);
+      return await this.sendMessageUnserialized(params, key, streaming, options);
     } finally {
       release();
       if (this.#messageTails.get(key) === tail) this.#messageTails.delete(key);
@@ -691,7 +788,7 @@ class KodaXA2AServerRuntime implements KodaXA2AServer {
 
   private async sendMessageUnserialized(
     params: Readonly<Record<string, unknown>> | undefined,
-    principal: A2APrincipal,
+    key: string,
     streaming: boolean,
     options: PreparedA2AServerOptions,
   ): Promise<A2ATask> {
@@ -717,7 +814,34 @@ class KodaXA2AServerRuntime implements KodaXA2AServer {
         throw new A2AError(-32005, 'No requested output media type is supported.');
       }
     }
-    const key = principalKey(principal);
+    const admission = await this.withMessageAdmission(() => this.admitMessage(
+      message,
+      key,
+      options,
+      configuration.acceptedOutputModes as readonly string[] | undefined,
+    ));
+    if (admission.runtimeEventsAttached) {
+      try {
+        await admission.runtimeEventsAttached;
+      } catch (error: unknown) {
+        this.failTask(admission.record.taskId, 'Task could not be started.', options);
+        throw error;
+      }
+    }
+    const current = this.#store.get(admission.record.taskId) ?? admission.record;
+    const immediate = admission.duplicate || streaming || configuration.returnImmediately === true;
+    const result = immediate
+      ? current
+      : await this.waitForTask(current.taskId, options.limits.maxTaskWaitMs ?? 30_000);
+    return withHistory(result.task, result.history, historyLength);
+  }
+
+  private async admitMessage(
+    message: A2AMessage,
+    key: string,
+    options: PreparedA2AServerOptions,
+    acceptedOutputModes?: readonly string[],
+  ): Promise<MessageAdmissionResult> {
     const digest = messageDigest(message);
     const duplicate = this.#store.findByMessage(key, message.messageId);
     if (duplicate) {
@@ -725,7 +849,7 @@ class KodaXA2AServerRuntime implements KodaXA2AServer {
         throw new A2AError(-32602, 'Message ID was reused with different content.');
       }
       this.emit({ type: 'task.deduplicated', time: nowIso(this.#now), taskId: duplicate.taskId, contextId: duplicate.contextId });
-      return withHistory(duplicate.task, duplicate.history, historyLength);
+      return { record: duplicate, duplicate: true };
     }
     const existing = message.taskId ? this.requireOwnedTask(message.taskId, key) : undefined;
     if (existing && message.contextId !== undefined && message.contextId !== existing.contextId) {
@@ -751,6 +875,7 @@ class KodaXA2AServerRuntime implements KodaXA2AServer {
       throw new A2AError(-32004, 'Server task concurrency limit reached.');
     }
     let started: A2AServerTaskRecord;
+    let runtimeEventsAttached: Promise<void> | undefined;
     if (existing?.task.status.state === 'TASK_STATE_INPUT_REQUIRED') {
       started = await this.resumeUserInput(existing, message, digest, options);
     } else {
@@ -758,21 +883,37 @@ class KodaXA2AServerRuntime implements KodaXA2AServer {
         message,
         key,
         options,
-        configuration.acceptedOutputModes as readonly string[] | undefined,
+        acceptedOutputModes,
       );
       const next = existing ? this.appendMessage(record, message, digest) : record;
       try {
-        started = await this.startRun(next, message, options);
+        const run = await this.startRun(next, message, options);
+        started = run.record;
+        runtimeEventsAttached = run.runtimeEventsAttached;
       } catch (error: unknown) {
         this.failTask(next.taskId, 'Task could not be started.', options);
         throw error;
       }
     }
-    const immediate = streaming || configuration.returnImmediately === true;
-    const result = immediate
-      ? started
-      : await this.waitForTask(started.taskId, options.limits.maxTaskWaitMs ?? 30_000);
-    return withHistory(result.task, result.history, historyLength);
+    return {
+      record: started,
+      duplicate: false,
+      ...(runtimeEventsAttached ? { runtimeEventsAttached } : {}),
+    };
+  }
+
+  private async withMessageAdmission<T>(operation: () => Promise<T>): Promise<T> {
+    const previous = this.#messageAdmissionTail;
+    let release = (): void => undefined;
+    const tail = new Promise<void>((resolve) => { release = resolve; });
+    this.#messageAdmissionTail = tail;
+    await previous;
+    try {
+      return await operation();
+    } finally {
+      release();
+      if (this.#messageAdmissionTail === tail) this.#messageAdmissionTail = Promise.resolve();
+    }
   }
 
   private async resumeUserInput(
@@ -876,7 +1017,7 @@ class KodaXA2AServerRuntime implements KodaXA2AServer {
     record: A2AServerTaskRecord,
     message: A2AMessage,
     options: PreparedA2AServerOptions,
-  ): Promise<A2AServerTaskRecord> {
+  ): Promise<StartedRun> {
     const input = await this.inputsForMessage(record.taskId, message, options);
     const prepared = options.preparedExecution;
     if (prepared && record.executionPolicyRevision !== prepared.binding.executionPolicyRevision) {
@@ -903,12 +1044,12 @@ class KodaXA2AServerRuntime implements KodaXA2AServer {
       updatedAt: nowIso(this.#now),
       eventSeq: record.eventSeq + 1,
     });
-    this.subscribeRuntime(working, handle.runId, options);
     void handle.result.then((result) => this.finishRun(working.taskId, result, options)).catch(() => {
       this.failTask(working.taskId, 'Task execution failed.', options);
     });
+    const runtimeEventsAttached = this.attachRuntimeEvents(working, handle.runId, options);
     this.emit({ type: 'task.started', time: nowIso(this.#now), taskId: working.taskId, contextId: working.contextId, runId: handle.runId, outcome: 'accepted' });
-    return working;
+    return { record: working, runtimeEventsAttached };
   }
 
   private async inputsForMessage(
@@ -965,17 +1106,43 @@ class KodaXA2AServerRuntime implements KodaXA2AServer {
     return { type: 'artifact_ref', artifactId: artifact.id, description: 'Inbound A2A attachment' };
   }
 
-  private subscribeRuntime(
+  private async attachRuntimeEvents(
     record: A2AServerTaskRecord,
     runId: string,
     options: PreparedA2AServerOptions,
-  ): void {
+  ): Promise<void> {
     this.#runtimeSubscriptions.get(record.taskId)?.close();
+    this.#runtimeSubscriptions.delete(record.taskId);
+    const buffered: RuntimeEvent[] = [];
+    let replaying = true;
     const subscription = options.runtime.events.subscribe(
       { runId },
-      (event) => this.onRuntimeEvent(record.taskId, event, options),
+      (event) => {
+        if (replaying) buffered.push(event);
+        else this.onRuntimeEvent(record.taskId, event, options);
+      },
     );
     this.#runtimeSubscriptions.set(record.taskId, subscription);
+    try {
+      const replayed = await options.runtime.events.replay({
+        runId,
+        sinceSeq: record.lastRuntimeEventSeq,
+      });
+      const ordered = [...replayed, ...buffered].sort((left, right) => (
+        left.seq - right.seq
+        || left.time.localeCompare(right.time)
+        || left.id.localeCompare(right.id)
+      ));
+      for (const event of ordered) this.onRuntimeEvent(record.taskId, event, options);
+      replaying = false;
+    } catch (error: unknown) {
+      replaying = false;
+      if (this.#runtimeSubscriptions.get(record.taskId) === subscription) {
+        subscription.close();
+        this.#runtimeSubscriptions.delete(record.taskId);
+      }
+      throw error;
+    }
   }
 
   private onRuntimeEvent(
@@ -983,8 +1150,10 @@ class KodaXA2AServerRuntime implements KodaXA2AServer {
     event: RuntimeEvent,
     options: PreparedA2AServerOptions,
   ): void {
+    if (this.#closed) return;
     const record = this.#store.get(taskId);
-    if (!record || TERMINAL_STATES.has(record.task.status.state)) return;
+    if (!record || TERMINAL_STATES.has(record.task.status.state)
+      || event.seq <= record.lastRuntimeEventSeq) return;
     const eventBytes = Buffer.byteLength(JSON.stringify(event));
     const runtimeEventCount = record.runtimeEventCount + 1;
     const runtimeEventBytes = record.runtimeEventBytes + eventBytes;
@@ -1092,14 +1261,14 @@ class KodaXA2AServerRuntime implements KodaXA2AServer {
     this.#store.pruneTerminal(principal, limit);
   }
 
-  private async getTask(params: Readonly<Record<string, unknown>> | undefined, principal: A2APrincipal): Promise<A2ATask> {
+  private async getTask(params: Readonly<Record<string, unknown>> | undefined, key: string): Promise<A2ATask> {
     const id = requiredTaskId(params);
-    const record = this.requireOwnedTask(id, principalKey(principal));
+    const record = this.requireOwnedTask(id, key);
     const historyLength = parseHistoryLength(params?.historyLength, 'GetTask historyLength');
     return withHistory(record.task, record.history, historyLength);
   }
 
-  private listTasks(params: Readonly<Record<string, unknown>> | undefined, principal: A2APrincipal): unknown {
+  private listTasks(params: Readonly<Record<string, unknown>> | undefined, key: string): unknown {
     const historyLength = parseHistoryLength(params?.historyLength, 'ListTasks historyLength');
     if (params?.includeArtifacts !== undefined && typeof params.includeArtifacts !== 'boolean') {
       throw new A2AError(-32602, 'ListTasks includeArtifacts must be a boolean.');
@@ -1119,7 +1288,7 @@ class KodaXA2AServerRuntime implements KodaXA2AServer {
     if (params?.statusTimestampAfter !== undefined && !Number.isFinite(timestampAfter)) {
       throw new A2AError(-32602, 'ListTasks statusTimestampAfter is invalid.');
     }
-    const records = this.#store.list(principalKey(principal)).filter((record) => {
+    const records = this.#store.list(key).filter((record) => {
       if (typeof params?.contextId === 'string' && record.contextId !== params.contextId) return false;
       if (typeof params?.status === 'string' && record.task.status.state !== params.status) return false;
       if (timestampAfter !== undefined
@@ -1147,11 +1316,11 @@ class KodaXA2AServerRuntime implements KodaXA2AServer {
 
   private async cancelTask(
     params: Readonly<Record<string, unknown>> | undefined,
-    principal: A2APrincipal,
+    key: string,
     options: PreparedA2AServerOptions,
   ): Promise<A2ATask> {
     const id = requiredTaskId(params);
-    const record = this.requireOwnedTask(id, principalKey(principal));
+    const record = this.requireOwnedTask(id, key);
     if (TERMINAL_STATES.has(record.task.status.state)) throw new A2AError(-32002, 'Task is not cancelable.');
     const runId = record.runIds.at(-1);
     if (runId) await options.runtime.runs.abort(runId);
@@ -1170,71 +1339,95 @@ class KodaXA2AServerRuntime implements KodaXA2AServer {
   private subscribeTask(
     id: A2AJsonRpcRequest['id'],
     params: Readonly<Record<string, unknown>> | undefined,
-    principal: A2APrincipal,
+    key: string,
   ): Response {
     const taskId = requiredTaskId(params);
-    const record = this.requireOwnedTask(taskId, principalKey(principal));
+    const record = this.requireOwnedTask(taskId, key);
     if (TERMINAL_STATES.has(record.task.status.state)) throw new A2AError(-32004, 'Cannot subscribe to a terminal task.');
     return this.streamTask(id, taskId, record.principalKey);
   }
 
   private streamTask(id: A2AJsonRpcRequest['id'], taskId: string, key: string): Response {
     const initial = this.requireOwnedTask(taskId, key);
+    const emittedArtifacts = new Map(
+      (initial.task.artifacts ?? []).map((artifact) => [artifact.artifactId, sha256(JSON.stringify(artifact))]),
+    );
+    const releaseStream = this.reserveStream(taskId);
     const encoder = new TextEncoder();
     let unsubscribe: (() => void) | undefined;
-    let cleanup = () => undefined;
+    let cleanup = releaseStream;
     let closed = false;
-    const stream = new ReadableStream<Uint8Array>({
-      start: (controller) => {
-        const close = () => {
+    try {
+      const stream = new ReadableStream<Uint8Array>({
+        start: (controller) => {
+          const close = (error?: Error) => {
+            if (closed) return;
+            closed = true;
+            cleanup();
+            if (error) controller.error(error);
+            else controller.close();
+          };
+          cleanup = () => {
+            unsubscribe?.();
+            unsubscribe = undefined;
+            this.#streamClosers.delete(close);
+            releaseStream();
+          };
+          const enqueue = (result: unknown): boolean => {
+            const chunk = encoder.encode(this.sse(id, result));
+            if (controller.desiredSize === null || controller.desiredSize < chunk.byteLength) {
+              close(new Error('A2A SSE subscriber exceeded its buffer budget.'));
+              return false;
+            }
+            controller.enqueue(chunk);
+            return true;
+          };
+          this.#streamClosers.add(close);
+          if (!enqueue({ task: initial.task })) return;
+          if (TERMINAL_STATES.has(initial.task.status.state)) {
+            close();
+            return;
+          }
+          unsubscribe = this.#store.subscribe(taskId, (record) => {
+            if (!this.enqueueArtifactUpdates(enqueue, record.task, emittedArtifacts)
+              || !enqueue({
+                statusUpdate: { taskId, contextId: record.contextId, status: record.task.status },
+              })) return;
+            if (TERMINAL_STATES.has(record.task.status.state)
+              || record.task.status.state === 'TASK_STATE_INPUT_REQUIRED'
+              || record.task.status.state === 'TASK_STATE_AUTH_REQUIRED') {
+              close();
+            }
+          });
+        },
+        cancel: () => {
           if (closed) return;
           closed = true;
           cleanup();
-          controller.close();
-        };
-        cleanup = () => {
-          unsubscribe?.();
-          this.#streamClosers.delete(close);
-        };
-        this.#streamClosers.add(close);
-        controller.enqueue(encoder.encode(this.sse(id, { task: initial.task })));
-        this.enqueueArtifactUpdates(controller, encoder, id, initial.task);
-        if (TERMINAL_STATES.has(initial.task.status.state)) {
-          close();
-          return;
-        }
-        unsubscribe = this.#store.subscribe(taskId, (record) => {
-          this.enqueueArtifactUpdates(controller, encoder, id, record.task);
-          controller.enqueue(encoder.encode(this.sse(id, {
-            statusUpdate: { taskId, contextId: record.contextId, status: record.task.status },
-          })));
-          if (TERMINAL_STATES.has(record.task.status.state)
-            || record.task.status.state === 'TASK_STATE_INPUT_REQUIRED'
-            || record.task.status.state === 'TASK_STATE_AUTH_REQUIRED') {
-            close();
-          }
-        });
-      },
-      cancel: () => {
-        if (closed) return;
-        closed = true;
-        cleanup();
-      },
-    });
-    return new Response(stream, {
-      status: 200,
-      headers: { 'content-type': 'text/event-stream', 'cache-control': 'no-cache' },
-    });
+        },
+      }, {
+        highWaterMark: MAX_SSE_QUEUE_BYTES,
+        size: (chunk) => chunk.byteLength,
+      });
+      return new Response(stream, {
+        status: 200,
+        headers: { 'content-type': 'text/event-stream', 'cache-control': 'no-cache' },
+      });
+    } catch (error: unknown) {
+      cleanup();
+      throw error;
+    }
   }
 
   private enqueueArtifactUpdates(
-    controller: ReadableStreamDefaultController<Uint8Array>,
-    encoder: InstanceType<typeof TextEncoder>,
-    id: A2AJsonRpcRequest['id'],
+    enqueue: (result: unknown) => boolean,
     task: A2ATask,
-  ): void {
+    emittedArtifacts: Map<string, string>,
+  ): boolean {
     for (const artifact of task.artifacts ?? []) {
-      controller.enqueue(encoder.encode(this.sse(id, {
+      const fingerprint = sha256(JSON.stringify(artifact));
+      if (emittedArtifacts.get(artifact.artifactId) === fingerprint) continue;
+      if (!enqueue({
         artifactUpdate: {
           taskId: task.id,
           contextId: task.contextId,
@@ -1242,8 +1435,31 @@ class KodaXA2AServerRuntime implements KodaXA2AServer {
           append: false,
           lastChunk: true,
         },
-      })));
+      })) return false;
+      emittedArtifacts.set(artifact.artifactId, fingerprint);
     }
+    return true;
+  }
+
+  private reserveStream(taskId: string): () => void {
+    const taskCount = this.#taskStreamCounts.get(taskId) ?? 0;
+    if (taskCount >= MAX_SSE_STREAMS_PER_TASK) {
+      throw new A2AError(-32000, 'Task stream capacity reached.', 429);
+    }
+    if (this.#activeStreamCount >= MAX_SSE_STREAMS_PER_SERVER) {
+      throw new A2AError(-32000, 'Server stream capacity reached.', 429);
+    }
+    this.#activeStreamCount += 1;
+    this.#taskStreamCounts.set(taskId, taskCount + 1);
+    let released = false;
+    return () => {
+      if (released) return;
+      released = true;
+      this.#activeStreamCount -= 1;
+      const remaining = (this.#taskStreamCounts.get(taskId) ?? 1) - 1;
+      if (remaining === 0) this.#taskStreamCounts.delete(taskId);
+      else this.#taskStreamCounts.set(taskId, remaining);
+    };
   }
 
   private sse(id: A2AJsonRpcRequest['id'], result: unknown): string {
@@ -1299,10 +1515,7 @@ class KodaXA2AServerRuntime implements KodaXA2AServer {
       try {
         const status = await options.runtime.runs.get(runId);
         if (status.phase === 'running' || status.phase === 'queued' || status.phase === 'waiting_permission' || status.phase === 'waiting_user_input') {
-          for (const event of await options.runtime.events.replay({ runId, sinceSeq: record.lastRuntimeEventSeq })) {
-            this.onRuntimeEvent(record.taskId, event, options);
-          }
-          this.subscribeRuntime(record, runId, options);
+          await this.attachRuntimeEvents(record, runId, options);
           void options.runtime.runs.await(runId).then((result) => this.finishRun(record.taskId, result, options)).catch(() => {
             this.failTask(record.taskId, 'Runtime execution failed during A2A recovery.', options);
           });

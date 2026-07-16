@@ -1,3 +1,4 @@
+import fs from 'node:fs';
 import path from 'node:path';
 
 import {
@@ -35,26 +36,45 @@ import {
 import type { Command } from 'commander';
 
 import {
+  migrateA2AIntegrationV1,
+  removeA2AOutboundAgent,
+  setA2AOutboundAgentEnabled,
+  setA2AServerConfig,
+  upsertA2AOutboundAgent,
+} from './a2a/config.js';
+import {
   classifyA2AServerChange,
+  CONFIGURED_A2A_TASK_RESPONSE_BYTES,
+  configuredA2AArtifactPolicy,
   createConfiguredA2ARuntimeIntegration,
   createA2AServerHotOptions,
   createA2AServerOptionsFromConfig,
   createA2AAgentExecutorFactory,
   discoverA2ARegistration,
+  inspectA2AIntegration,
   parseA2AIntegrationDocument,
   prepareKodaXA2AServer,
   readA2AIntegration,
-  removeA2AOutboundAgent,
-  setA2AServerConfig,
-  upsertA2AOutboundAgent,
   type A2AAgentCard,
   type A2AIntegrationDocument,
   type A2ANetworkPolicy,
   type A2AOutboundEffect,
+  type A2AOutboundAgentConfig,
   type A2AServerConfig,
 } from './a2a/index.js';
 import { mergeCommandOptionsWithGlobals } from './cli_option_helpers.js';
-import { createKodaXRuntime } from './sdk-runtime.js';
+import { connectKodaXRuntime, createKodaXRuntime } from './sdk-runtime.js';
+import {
+  isRuntimeDaemonPidAlive,
+  observeRuntimeDaemonHealth,
+} from './runtime-daemon/lifecycle.js';
+import {
+  classifyRuntimeDaemonHealth,
+  isSameRuntimeDaemonPath,
+  readRuntimeDaemonLockOwner,
+  readRuntimeDaemonToken,
+  resolveRuntimeDaemonPathsFromConfigHome,
+} from './runtime-daemon/state.js';
 import { doctorSandboxRuntime, setupSandboxRuntime } from './sandbox-runtime.js';
 
 type Output = (value: string) => void;
@@ -69,6 +89,74 @@ function stderr(value: string): void {
 
 function json(value: unknown, output: Output = stdout): void {
   output(JSON.stringify(value, null, 2));
+}
+
+async function assertA2AConfigOwnerCompatible(
+  configHome = KODAX_DIR,
+  requireStopped = false,
+): Promise<void> {
+  const resolvedConfigHome = path.resolve(configHome);
+  const daemonRoot = path.join(resolvedConfigHome, 'runtime', 'daemon');
+  if (!fs.existsSync(daemonRoot)) return;
+  const profiles = fs.readdirSync(daemonRoot, { withFileTypes: true })
+    .filter((entry) => entry.isDirectory())
+    .map((entry) => entry.name);
+  for (const profile of profiles) {
+    const paths = resolveRuntimeDaemonPathsFromConfigHome(resolvedConfigHome, profile);
+    const observation = await observeRuntimeDaemonHealth(paths);
+    if (fs.existsSync(paths.stateFile) && observation.state === undefined) {
+      throw new Error(
+        `Daemon profile "${profile}" has unreadable ownership state; clean or restart it before changing A2A configuration.`,
+      );
+    }
+    const state = observation.state;
+    if (state === undefined) {
+      const lockOwner = readRuntimeDaemonLockOwner(paths.lockFile);
+      if (lockOwner && isRuntimeDaemonPidAlive(lockOwner.pid)) {
+        throw new Error(
+          `Daemon profile "${profile}" is starting without verifiable A2A config ownership; wait for it or stop it before changing A2A configuration.`,
+        );
+      }
+      continue;
+    }
+    if (state.configHome === undefined) {
+      throw new Error(
+        `Running or stale daemon profile "${profile}" does not declare its A2A config home; restart or clean it with the current KodaX version before changing A2A configuration.`,
+      );
+    }
+    if (!isSameRuntimeDaemonPath(state.configHome, resolvedConfigHome)) {
+      throw new Error(
+        `Daemon profile "${profile}" declares a different A2A config home; refuse to mutate ambiguous ownership state.`,
+      );
+    }
+    const health = classifyRuntimeDaemonHealth(observation);
+    if (requireStopped && (health === 'healthy' || observation.pidAlive || observation.endpointReachable)) {
+      throw new Error(
+        `Daemon profile "${profile}" is still running; stop every daemon before explicitly migrating A2A config version 1.`,
+      );
+    }
+    if (health === 'stale' || health === 'missing') continue;
+    if (health !== 'healthy') {
+      throw new Error(
+        `Daemon profile "${profile}" ownership cannot be verified; stop or restart it before changing A2A configuration.`,
+      );
+    }
+    try {
+      const runtime = await connectKodaXRuntime({
+        profile,
+        endpoint: state.endpoint,
+        daemonToken: readRuntimeDaemonToken(paths),
+        autoStart: false,
+        requirements: { externalAgentAdmin: 1, a2aConfigReconciler: 1 },
+      });
+      await runtime.close();
+    } catch (error: unknown) {
+      throw new Error(
+        `Running daemon profile "${profile}" cannot safely apply A2A config version 2; restart it with the current KodaX version before changing A2A configuration.`,
+        { cause: error },
+      );
+    }
+  }
 }
 
 function repeat(value: string, previous: string[] = []): string[] {
@@ -87,7 +175,8 @@ function parsePort(value: string): number {
 }
 
 function privateAllowed(url: URL, explicit: boolean): boolean {
-  return explicit || ['localhost', '127.0.0.1', '::1'].includes(url.hostname);
+  const hostname = url.hostname.toLowerCase().replace(/^\[|\]$/g, '');
+  return explicit || ['localhost', '127.0.0.1', '::1'].includes(hostname);
 }
 
 function assertLoopbackHostname(hostname: string): void {
@@ -106,9 +195,32 @@ function networkPolicy(origins: readonly string[], allowPrivateAddresses: boolea
   };
 }
 
+function configuredRegistrationInput(name: string, config: A2AOutboundAgentConfig) {
+  return {
+    agentId: `external:${name}`,
+    agentCardUrl: config.cardUrl,
+    ...(config.credentialEnv ? { credentialRef: `env:${config.credentialEnv}` } : {}),
+    ...(config.authentication ? {
+      authentication: {
+        type: 'oauth2-client-credentials' as const,
+        scheme: config.authentication.scheme,
+        issuer: config.authentication.issuer,
+        tokenUrl: config.authentication.tokenUrl,
+        clientId: config.authentication.clientId,
+        clientSecretRef: `env:${config.authentication.clientSecretEnv}`,
+        scopes: config.authentication.scopes,
+        ...(config.authentication.resource ? { resource: config.authentication.resource } : {}),
+        clientAuthentication: config.authentication.clientAuthentication,
+      },
+    } : {}),
+    effects: { remote: config.effect },
+  } as const;
+}
+
 async function discoverConfiguredAgent(
   name: string,
   allowPrivate: boolean,
+  requireEnabled = false,
 ): Promise<{
   readonly config: A2AIntegrationDocument['agents'][string];
   readonly card: A2AAgentCard;
@@ -116,14 +228,11 @@ async function discoverConfiguredAgent(
 }> {
   const config = readA2AIntegration(KODAX_DIR).document.agents[name];
   if (!config) throw new Error(`Unknown configured A2A Agent: ${name}.`);
+  if (requireEnabled && !config.enabled) throw new Error(`Configured A2A Agent is disabled: ${name}.`);
   const cardUrl = new URL(config.cardUrl);
-  const discovered = await discoverA2ARegistration({
-    agentId: `external:${name}`,
-    agentCardUrl: config.cardUrl,
-    effects: { remote: config.effect },
-    ...(config.credentialEnv ? { credentialRef: `env:${config.credentialEnv}` } : {}),
-  }, {
-    networkPolicy: networkPolicy([cardUrl.origin], privateAllowed(cardUrl, allowPrivate)),
+  const privateAccess = privateAllowed(cardUrl, allowPrivate);
+  const discovered = await discoverA2ARegistration(configuredRegistrationInput(name, config), {
+    networkPolicy: networkPolicy([cardUrl.origin], privateAccess),
     pollIntervalMs: 500,
   });
   return { config, card: discovered.agentCard, registration: discovered.registration };
@@ -167,21 +276,25 @@ async function waitForA2ATask(
 }
 
 async function callConfiguredAgent(name: string, prompt: string, allowPrivate: boolean): Promise<AgentTaskSnapshot> {
-  const { config, registration } = await discoverConfiguredAgent(name, allowPrivate);
+  const { config, registration } = await discoverConfiguredAgent(name, allowPrivate, true);
   const cardUrl = new URL(config.cardUrl);
   const plane = await createAgentExecutorPlane({
     factories: [createA2AAgentExecutorFactory((active) => {
       const endpointUrl = registrationInterfaceUrl(active);
+      const tokenUrl = config.authentication ? new URL(config.authentication.tokenUrl) : undefined;
       return {
         networkPolicy: networkPolicy(
-          [cardUrl.origin, endpointUrl.origin],
-          privateAllowed(endpointUrl, allowPrivate),
+          [cardUrl.origin, endpointUrl.origin, ...(tokenUrl ? [tokenUrl.origin] : [])],
+          privateAllowed(endpointUrl, allowPrivate)
+            && (tokenUrl === undefined || privateAllowed(tokenUrl, allowPrivate)),
         ),
+        maxTaskResponseBytes: CONFIGURED_A2A_TASK_RESPONSE_BYTES,
         pollIntervalMs: 500,
       };
     })],
     policy: () => ({ allowed: true }),
     credentialBroker: environmentCredentialBroker(),
+    artifactPolicy: configuredA2AArtifactPolicy,
   });
   try {
     await plane.registrations.upsert(registration);
@@ -342,8 +455,16 @@ function configureA2AExpose(command: Command, version: string): void {
     .description('Publish the Runtime default Agent or one ~/.kodax/agents Markdown Agent')
     .option('--name <name>', 'Public Agent Card name', 'KodaX Agent')
     .option('--description <text>', 'Public Agent Card description', 'Completes approved general tasks.')
+    .option('--auth <type>', 'bearer-env or oauth2-jwt', 'bearer-env')
     .option('--token-env <name>', 'Bearer token environment variable', 'KODAX_A2A_TOKEN')
     .option('--principal <id>', 'Authenticated principal id', 'configured-client')
+    .option('--oauth-scheme <name>', 'Published OAuth2 security scheme name')
+    .option('--oauth-issuer <url>', 'Trusted access-token issuer')
+    .option('--oauth-audience <value>', 'Expected access-token audience')
+    .option('--oauth-jwks-url <url>', 'Issuer JWKS endpoint')
+    .option('--oauth-token-url <url>', 'Published client-credentials token endpoint')
+    .option('--oauth-metadata-url <url>', 'Published RFC 8414 metadata URL')
+    .option('--required-scope <scope>', 'Required OAuth2 scope (repeatable)', repeat, [])
     .option('--workspace-mode <mode>', 'managed or fixed', 'managed')
     .option('--workspace-root <path>', 'Absolute root for fixed mode')
     .option('--workspace-access <mode>', 'none, read, or write')
@@ -354,7 +475,10 @@ function configureA2AExpose(command: Command, version: string): void {
     .option('--public-base-url <url>', 'HTTPS public URL when served behind a reverse proxy')
     .option('--data-dir <dir>', 'Durable task store', '~/.kodax/a2a/tasks')
     .action(async (agent: string | undefined, options: {
-      name: string; description: string; tokenEnv: string; principal: string;
+      name: string; description: string; auth: string; tokenEnv: string; principal: string;
+      oauthScheme?: string; oauthIssuer?: string; oauthAudience?: string;
+      oauthJwksUrl?: string; oauthTokenUrl?: string; oauthMetadataUrl?: string;
+      requiredScope: string[];
       workspaceMode: string; workspaceRoot?: string; workspaceAccess?: string;
       tool: string[]; mcp: string[]; skillScript: string[]; networkOrigin: string[];
       publicBaseUrl?: string; dataDir: string;
@@ -403,8 +527,23 @@ function configureA2AExpose(command: Command, version: string): void {
         },
       };
       const current = readA2AIntegration(KODAX_DIR);
+      if (!['bearer-env', 'oauth2-jwt'].includes(options.auth)) {
+        throw new Error('--auth must be bearer-env or oauth2-jwt.');
+      }
+      const authentication = options.auth === 'bearer-env'
+        ? { type: 'bearer-env', tokenEnv: options.tokenEnv, principalId: options.principal }
+        : {
+            type: 'oauth2-jwt',
+            scheme: options.oauthScheme,
+            issuer: options.oauthIssuer,
+            audience: options.oauthAudience,
+            jwksUrl: options.oauthJwksUrl,
+            tokenUrl: options.oauthTokenUrl,
+            ...(options.oauthMetadataUrl ? { metadataUrl: options.oauthMetadataUrl } : {}),
+            requiredScopes: options.requiredScope,
+          };
       const parsed = parseA2AIntegrationDocument({
-        version: 1, agents: current.document.agents,
+        version: 2, agents: current.document.agents,
         server: {
           execution,
           published: {
@@ -413,12 +552,17 @@ function configureA2AExpose(command: Command, version: string): void {
             inputModes: ['text/plain', 'application/json'], outputModes: ['text/plain'],
           },
           ...(options.publicBaseUrl ? { publicBaseUrl: options.publicBaseUrl } : {}),
-          authentication: { type: 'bearer-env', tokenEnv: options.tokenEnv, principalId: options.principal },
+          authentication,
           dataDir: options.dataDir,
         },
       });
+      await assertA2AConfigOwnerCompatible();
       setA2AServerConfig(KODAX_DIR, parsed.server);
-      json({ configured: true, server: parsed.server, token: `env:${options.tokenEnv}` });
+      json({
+        configured: true,
+        server: parsed.server,
+        credential: options.auth === 'bearer-env' ? `env:${options.tokenEnv}` : 'external-oauth2-issuer',
+      });
     });
 }
 
@@ -505,26 +649,110 @@ async function serveA2A(options: {
 
 function configureA2ACommands(program: Command, version: string): void {
   const a2a = program.command('a2a').description('Call third-party A2A Agents or expose KodaX as an A2A Agent');
+  a2a.command('migrate')
+    .description('Explicitly migrate a legacy non-empty A2A version 1 file to version 2')
+    .option('--confirm-daemons-stopped', 'Confirm every daemon using this config home has been stopped')
+    .action(async (options: { confirmDaemonsStopped?: boolean }) => {
+      const inspection = inspectA2AIntegration(KODAX_DIR);
+      if (inspection.sourceVersion === 2) {
+        json({
+          migrated: false,
+          path: inspection.snapshot.path,
+          version: inspection.snapshot.document.version,
+        });
+        return;
+      }
+      if (options.confirmDaemonsStopped !== true) {
+        throw new Error('A2A version 1 migration requires --confirm-daemons-stopped.');
+      }
+      await assertA2AConfigOwnerCompatible(KODAX_DIR, true);
+      const result = migrateA2AIntegrationV1(KODAX_DIR, inspection.snapshot.revision);
+      json({
+        migrated: result.migrated,
+        path: result.snapshot.path,
+        version: result.snapshot.document.version,
+      });
+    });
   a2a.command('list').action(() => json(readA2AIntegration(KODAX_DIR).document));
   a2a.command('add <name> <cardUrl>')
     .option('--credential-env <name>', 'Bearer token environment variable')
+    .option('--oauth-scheme <name>', 'Agent Card OAuth2 security scheme name')
+    .option('--oauth-issuer <url>', 'Trusted OAuth2 issuer identifier')
+    .option('--oauth-token-url <url>', 'Pinned OAuth2 token endpoint (must match the Agent Card)')
+    .option('--oauth-client-id <id>', 'OAuth2 client identifier')
+    .option('--oauth-client-secret-env <name>', 'OAuth2 client secret environment variable')
+    .option('--oauth-scope <scope>', 'OAuth2 scope to request (repeatable)', repeat, [])
+    .option('--oauth-resource <uri>', 'RFC 8707 resource indicator')
+    .option('--oauth-client-auth <method>', 'client-secret-basic or client-secret-post')
+    .option('--disabled', 'Store without activating the Agent for orchestration')
     .option('--effect <effect>', 'none, read, write, or unknown', parseEffect, 'unknown')
-    .option('--allow-private', 'Allow private-network discovery')
     .option('--no-test', 'Store without fetching the Agent Card')
     .action(async (name: string, cardUrl: string, options: {
-      credentialEnv?: string; effect: A2AOutboundEffect; allowPrivate?: boolean; test?: boolean;
+      credentialEnv?: string; oauthScheme?: string; oauthIssuer?: string; oauthTokenUrl?: string;
+      oauthClientId?: string; oauthClientSecretEnv?: string; oauthScope: string[];
+      oauthResource?: string; oauthClientAuth?: string; disabled?: boolean;
+      effect: A2AOutboundEffect; test?: boolean;
     }) => {
-      const candidate = { cardUrl, ...(options.credentialEnv ? { credentialEnv: options.credentialEnv } : {}), effect: options.effect };
+      const oauthRequested = [
+        options.oauthScheme, options.oauthIssuer, options.oauthTokenUrl,
+        options.oauthClientId, options.oauthClientSecretEnv, options.oauthResource,
+        options.oauthClientAuth,
+      ].some((value) => value !== undefined) || options.oauthScope.length > 0;
+      const rawCandidate = {
+        cardUrl,
+        enabled: options.disabled !== true,
+        ...(options.credentialEnv ? { credentialEnv: options.credentialEnv } : {}),
+        ...(oauthRequested ? {
+          authentication: {
+            type: 'oauth2-client-credentials',
+            scheme: options.oauthScheme,
+            issuer: options.oauthIssuer,
+            tokenUrl: options.oauthTokenUrl,
+            clientId: options.oauthClientId,
+            clientSecretEnv: options.oauthClientSecretEnv,
+            scopes: options.oauthScope,
+            ...(options.oauthResource ? { resource: options.oauthResource } : {}),
+            clientAuthentication: options.oauthClientAuth ?? 'client-secret-basic',
+          },
+        } : {}),
+        effect: options.effect,
+      };
+      const candidate = parseA2AIntegrationDocument({
+        version: 2, agents: { [name]: rawCandidate },
+      }).agents[name]!;
       if (options.test !== false) {
         const url = new URL(cardUrl);
-        await discoverA2ARegistration({ agentId: name, agentCardUrl: cardUrl, effects: { remote: options.effect } }, {
-          networkPolicy: networkPolicy([url.origin], privateAllowed(url, options.allowPrivate === true)), pollIntervalMs: 500,
+        await discoverA2ARegistration(configuredRegistrationInput(name, candidate), {
+          networkPolicy: networkPolicy(
+            [url.origin],
+            privateAllowed(url, false),
+          ),
+          pollIntervalMs: 500,
         });
       }
+      await assertA2AConfigOwnerCompatible();
       upsertA2AOutboundAgent(KODAX_DIR, name, candidate);
-      json({ added: name, cardUrl, credential: options.credentialEnv ? `env:${options.credentialEnv}` : 'none' });
+      json({
+        added: name,
+        cardUrl,
+        enabled: candidate.enabled,
+        authentication: candidate.authentication?.type ?? (candidate.credentialEnv ? 'http-bearer' : 'none'),
+      });
     });
-  a2a.command('remove <name>').action((name: string) => json({ name, removed: removeA2AOutboundAgent(KODAX_DIR, name) }));
+  a2a.command('remove <name>').action(async (name: string) => {
+    await assertA2AConfigOwnerCompatible();
+    json({ name, removed: removeA2AOutboundAgent(KODAX_DIR, name) });
+  });
+  a2a.command('enable <name>').description('Hot-activate a configured Agent for new orchestration').action(async (name: string) => {
+    await assertA2AConfigOwnerCompatible();
+    const snapshot = setA2AOutboundAgentEnabled(KODAX_DIR, name, true);
+    json({ name, enabled: snapshot.document.agents[name]?.enabled === true });
+  });
+  a2a.command('disable <name>').description('Stop new orchestration without canceling in-flight tasks').action(async (name: string) => {
+    await assertA2AConfigOwnerCompatible();
+    const snapshot = setA2AOutboundAgentEnabled(KODAX_DIR, name, false);
+    json({ name, enabled: snapshot.document.agents[name]?.enabled === true });
+  });
   a2a.command('test <name>').option('--allow-private').action(async (name: string, options: { allowPrivate?: boolean }) => {
     const result = await discoverConfiguredAgent(name, options.allowPrivate === true);
     json({ ok: true, name: result.card.name, version: result.card.version, skills: result.card.skills });

@@ -128,7 +128,7 @@ describe('anthropic message serialization', () => {
 
   it('retries judge streams without forced tool choice when an upstream rejects tool_choice', async () => {
     const create = vi.fn()
-      .mockRejectedValueOnce(new Error('unsupported parameter: tool_choice'))
+      .mockRejectedValueOnce(new Error("tool_choice 'specified' is incompatible with thinking enabled"))
       .mockResolvedValueOnce(createCompletedAnthropicStream());
     const provider = new TestAnthropicProvider({ messages: { create } });
 

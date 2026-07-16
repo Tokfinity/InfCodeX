@@ -2,11 +2,11 @@ import { describe, expect, it } from 'vitest';
 
 import { createAgentExecutorPlane, createMemoryAgentExecutorPlaneStore } from './executor-plane.js';
 import { createReferenceAgentExecutorFactory } from './reference-executor.js';
-import type { ExternalAgentRegistration } from './types.js';
+import type { AgentJsonObject, ExternalAgentRegistration } from './types.js';
 
 function registration(
   agentId: string,
-  executorConfig: Readonly<Record<string, unknown>>,
+  executorConfig: AgentJsonObject,
 ): ExternalAgentRegistration {
   return {
     agentId,

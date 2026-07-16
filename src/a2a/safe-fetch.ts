@@ -1,11 +1,22 @@
 import { lookup } from 'node:dns/promises';
 import { request as requestHttp } from 'node:http';
 import { request as requestHttps } from 'node:https';
-import { isIP, type LookupFunction } from 'node:net';
+import { BlockList, isIP, type LookupFunction } from 'node:net';
 import { Readable } from 'node:stream';
 
 import { A2AError } from './errors.js';
 import type { A2ANetworkPolicy } from './types.js';
+
+const LOOPBACK_ADDRESSES = new BlockList();
+LOOPBACK_ADDRESSES.addSubnet('127.0.0.0', 8, 'ipv4');
+LOOPBACK_ADDRESSES.addAddress('::1', 'ipv6');
+
+function isLoopbackAddress(address: string): boolean {
+  const family = isIP(address);
+  return family === 4
+    ? LOOPBACK_ADDRESSES.check(address, 'ipv4')
+    : family === 6 && LOOPBACK_ADDRESSES.check(address, 'ipv6');
+}
 
 function isPrivateIpv4(address: string): boolean {
   const octets = address.split('.').map(Number);
@@ -27,6 +38,7 @@ function isPrivateIpv4(address: string): boolean {
 }
 
 function isPrivateIpv6(address: string): boolean {
+  if (isLoopbackAddress(address)) return true;
   const normalized = address.toLowerCase();
   const mappedDotted = /^::ffff:(\d+\.\d+\.\d+\.\d+)$/.exec(normalized)?.[1];
   if (mappedDotted) return isPrivateIpv4(mappedDotted);
@@ -70,6 +82,10 @@ async function validateA2AUrl(url: URL, policy: A2ANetworkPolicy): Promise<Valid
     : url.hostname;
   const addresses = await lookup(hostname, { all: true, verbatim: true });
   if (addresses.length === 0) throw new A2AError(-32602, 'A2A hostname did not resolve.');
+  if (hostname.toLowerCase() === 'localhost'
+    && !addresses.every((entry) => isLoopbackAddress(entry.address))) {
+    throw new A2AError(-32602, 'A2A localhost target must resolve only to loopback addresses.');
+  }
   if (url.protocol === 'http:' && !addresses.every((entry) => isPrivateAddress(entry.address))) {
     throw new A2AError(-32602, 'Public A2A targets must use HTTPS.');
   }

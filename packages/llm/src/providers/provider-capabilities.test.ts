@@ -252,26 +252,45 @@ describe('FEATURE_198 — provider-capabilities loader', () => {
       expect(d.contextWindow).toBe(1_000_000);
     });
 
-    it('kimi-code: KODAX_CAPPED_MAX_OUTPUT_TOKENS resolved to 32000, no models[]', () => {
+    it('kimi-code: exposes K3 plus both K2.7 Code subscription routes', () => {
       const k = getProviderSnapshots()['kimi-code'];
       expect(k.maxOutputTokens).toBe(32000);
-      expect(k.contextWindow).toBe(256000);
-      expect(k.models).toBeUndefined();
+      expect(k.contextWindow).toBe(262_144);
+      expect(k.models?.map((model) => model.id)).toEqual([
+        'k3',
+        'kimi-for-coding-highspeed',
+      ]);
+      expect(k.models?.find((model) => model.id === 'k3')).toEqual(
+        expect.objectContaining({
+          displayName: 'Kimi K3',
+          contextWindow: 1_048_576,
+          reasoningCapability: 'native-effort',
+          reasoningProfile: expect.objectContaining({
+            reasoningPreset: 'kimi-k3',
+            defaultEffort: 'max',
+            disabledEfforts: ['none'],
+          }),
+        }),
+      );
     });
 
-    it('kimi: K2.7 Code model descriptor is available at 256K context', () => {
+    it('kimi: defaults to the complete K2.7 Code lineup at the upstream context limit', () => {
       const k = getProviderSnapshots().kimi;
-      expect(k.models?.find((m) => m.id === 'kimi-k2.7-code')).toEqual(expect.objectContaining({
-        id: 'kimi-k2.7-code',
-        displayName: 'Kimi K2.7 Code',
-        contextWindow: 256_000,
-        reasoningCapability: 'native-toggle',
-        reasoningProfile: expect.objectContaining({
-          reasoningPreset: 'kimi-k2.7-code',
-          effortStrategy: 'prompt-only',
-          localRejectEfforts: ['none', 'minimal'],
-        }),
+      expect(k.model).toBe('kimi-k2.7-code');
+      expect(k.contextWindow).toBe(262_144);
+      expect(k.reasoningProfile).toEqual(expect.objectContaining({
+        reasoningPreset: 'kimi-k2.7-code',
+        effortStrategy: 'prompt-only',
+        localRejectEfforts: ['none', 'minimal'],
       }));
+      expect(k.models?.map((model) => model.id)).toEqual([
+        'kimi-k2.7-code-highspeed',
+        'kimi-k2.6',
+        'kimi-k2.5',
+      ]);
+      expect(k.models?.find((model) => model.id === 'kimi-k2.7-code-highspeed')).toEqual(
+        expect.objectContaining({ displayName: 'Kimi K2.7 Code HighSpeed' }),
+      );
     });
 
     it('zhipu: GLM-5.2 model descriptor carries its 1M context override', () => {

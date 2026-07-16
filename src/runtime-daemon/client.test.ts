@@ -865,12 +865,63 @@ describe('runtime daemon client proxy', () => {
     await expect(client.workflows.get('missing-run')).resolves.toBeUndefined();
     await expect(client.mcp.getServer('missing-server')).resolves.toBeUndefined();
     await expect(client.artifacts.get('missing-artifact')).resolves.toBeUndefined();
+    await expect(client.admin.agentRegistrations.setEnabled('external:missing', false, {
+      expectedConfigurationRevision: 'rev-before',
+      expectedManagementOwner: null,
+      claimOwner: 'runtime-config-test',
+    }))
+      .resolves.toBeUndefined();
+    const registration = {
+      agentId: 'external:managed',
+      displayName: 'Managed',
+      enabled: true,
+      executorId: 'managed-http',
+      protocol: 'http',
+      configurationRevision: 'rev-1',
+      endpointIdentityHash: 'sha256:managed',
+      capabilities: {
+        streaming: 'supported',
+        durableTasks: 'supported',
+        inputRequired: 'supported',
+        cancellation: 'supported',
+        artifacts: 'supported',
+      },
+      effects: { remote: 'read', workspace: 'proposal' },
+    } as const;
+    await client.admin.agentRegistrations.upsert(registration, {
+      expectedConfigurationRevision: null,
+      expectedManagementOwner: null,
+    });
+    await client.admin.agentRegistrations.remove(registration.agentId, {
+      expectedConfigurationRevision: registration.configurationRevision,
+      expectedManagementOwner: 'runtime-config-test',
+    });
 
     expect(calls.map((call) => call.method)).toEqual([
       'workflow.get',
       'mcp.server.get',
       'artifact.get',
+      'agentRegistrations.setEnabled',
+      'agentRegistrations.upsert',
+      'agentRegistrations.remove',
     ]);
+    expect(calls.at(-3)?.params).toEqual({
+      agentId: 'external:missing',
+      enabled: false,
+      expectedConfigurationRevision: 'rev-before',
+      expectedManagementOwner: null,
+      claimOwner: 'runtime-config-test',
+    });
+    expect(calls.at(-2)?.params).toEqual({
+      registration,
+      expectedConfigurationRevision: null,
+      expectedManagementOwner: null,
+    });
+    expect(calls.at(-1)?.params).toEqual({
+      agentId: 'external:managed',
+      expectedConfigurationRevision: 'rev-1',
+      expectedManagementOwner: 'runtime-config-test',
+    });
   });
 });
 
@@ -1102,6 +1153,9 @@ function fakeTransport(
         };
       }
       if (method === 'artifact.get') {
+        return null;
+      }
+      if (method === 'agentRegistrations.setEnabled') {
         return null;
       }
       if (method === 'context.budget.get') {

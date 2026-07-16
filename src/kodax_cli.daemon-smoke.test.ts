@@ -1,5 +1,6 @@
-import { execFile } from 'node:child_process';
+import { execFile, spawn } from 'node:child_process';
 import fs from 'node:fs';
+import { createServer } from 'node:http';
 import os from 'node:os';
 import path from 'node:path';
 
@@ -15,6 +16,7 @@ import {
 
 import {
   resolveRuntimeDaemonPaths,
+  resolveRuntimeDaemonPathsFromConfigHome,
   tryAcquireRuntimeDaemonLock,
   writeRuntimeDaemonState,
 } from './runtime-daemon/state.js';
@@ -29,6 +31,207 @@ afterEach(async () => {
 });
 
 describe('daemon CLI smoke', () => {
+  it('uses an arbitrary KODAX_HOME for default daemon ownership and A2A mutation', async () => {
+    const configHome = fs.mkdtempSync(path.join(os.tmpdir(), 'kodax-daemon-config-home-'));
+    const profile = `custom-config-${process.pid}-${Date.now()}`;
+    const env = { KODAX_HOME: configHome };
+    const integrationDir = path.join(configHome, 'integrations');
+    fs.mkdirSync(integrationDir, { recursive: true });
+    fs.writeFileSync(
+      path.join(integrationDir, 'a2a.json'),
+      JSON.stringify({ version: 2, agents: {} }),
+      'utf8',
+    );
+    try {
+      await expect(runDaemonCommand([
+        'start', '--profile', profile, '--provider', 'mock-provider',
+        '--timeout-ms', '30000', '--json',
+      ], env)).resolves.toMatchObject({ started: true, health: 'healthy' });
+
+      const paths = resolveRuntimeDaemonPathsFromConfigHome(configHome, profile);
+      expect(JSON.parse(fs.readFileSync(paths.stateFile, 'utf8'))).toMatchObject({
+        profile,
+        configHome: path.resolve(configHome),
+        status: 'ready',
+      });
+      await runKodaXCommand([
+        'a2a', 'add', 'configured', 'https://agents.example.com/card',
+        '--disabled', '--no-test', '--effect', 'none',
+      ], env);
+      expect(JSON.parse(fs.readFileSync(path.join(integrationDir, 'a2a.json'), 'utf8')))
+        .toMatchObject({ agents: { configured: { enabled: false } } });
+      await expect(runDaemonCommand(['status', '--profile', profile, '--json'], env))
+        .resolves.toMatchObject({ health: 'healthy', stateFile: paths.stateFile });
+    } finally {
+      await runDaemonCommand([
+        'stop', '--profile', profile, '--timeout-ms', '30000', '--force', '--json',
+      ], env).catch(() => undefined);
+      fs.rmSync(configHome, { recursive: true, force: true });
+    }
+  }, 90_000);
+
+  it('does not become ready before initial A2A reconciliation completes', async () => {
+    const homeDir = fs.mkdtempSync(path.join(os.tmpdir(), 'kodax-daemon-a2a-fence-'));
+    tempRoots.push(homeDir);
+    const profile = `a2a-fence-${process.pid}-${Date.now()}`;
+    let releaseCard: (() => void) | undefined;
+    let observeCardRequest: (() => void) | undefined;
+    const cardRequest = new Promise<void>((resolve) => { observeCardRequest = resolve; });
+    const cardRelease = new Promise<void>((resolve) => { releaseCard = resolve; });
+    const cardServer = createServer(async (request, response) => {
+      if (request.url !== '/.well-known/agent-card.json') {
+        response.writeHead(404).end();
+        return;
+      }
+      observeCardRequest?.();
+      await cardRelease;
+      const address = cardServer.address();
+      if (address === null || typeof address === 'string') throw new Error('Card server address is unavailable.');
+      response.writeHead(200, { 'content-type': 'application/json' });
+      response.end(JSON.stringify({
+        name: 'Startup Fence Agent',
+        description: 'Delayed Agent Card used to verify daemon readiness fencing.',
+        version: '1.0.0',
+        supportedInterfaces: [{
+          url: `http://127.0.0.1:${address.port}/a2a`,
+          protocolBinding: 'JSONRPC',
+          protocolVersion: '1.0',
+        }],
+        capabilities: {},
+        defaultInputModes: ['text/plain'],
+        defaultOutputModes: ['text/plain'],
+        skills: [],
+      }));
+    });
+    await new Promise<void>((resolve, reject) => {
+      cardServer.once('error', reject);
+      cardServer.listen(0, '127.0.0.1', resolve);
+    });
+    try {
+      const address = cardServer.address();
+      if (address === null || typeof address === 'string') throw new Error('Card server address is unavailable.');
+      const configDir = path.join(homeDir, '.kodax', 'integrations');
+      fs.mkdirSync(configDir, { recursive: true });
+      fs.writeFileSync(path.join(configDir, 'a2a.json'), JSON.stringify({
+        version: 2,
+        agents: {
+          delayed: {
+            cardUrl: `http://127.0.0.1:${address.port}/.well-known/agent-card.json`,
+            enabled: true,
+            effect: 'read',
+          },
+        },
+      }), 'utf8');
+
+      const start = runDaemonCommand([
+        'start', '--home', homeDir, '--profile', profile,
+        '--provider', 'mock-provider', '--timeout-ms', '30000', '--json',
+      ]);
+      await Promise.race([
+        cardRequest,
+        start.then(() => {
+          throw new Error('Daemon start completed before initial A2A discovery began.');
+        }),
+      ]);
+      const paths = resolveRuntimeDaemonPaths(homeDir, profile);
+      const state = fs.existsSync(paths.stateFile)
+        ? JSON.parse(fs.readFileSync(paths.stateFile, 'utf8')) as {
+            readonly status?: string;
+            readonly configHome?: string;
+          }
+        : undefined;
+      expect(state?.status).not.toBe('ready');
+
+      releaseCard?.();
+      await expect(start).resolves.toMatchObject({ started: true, health: 'healthy' });
+      expect(JSON.parse(fs.readFileSync(paths.stateFile, 'utf8'))).toMatchObject({
+        configHome: path.resolve(homeDir, '.kodax'),
+      });
+      const runtime = await connectKodaXRuntime({
+        homeDir,
+        profile,
+        autoStart: false,
+        requirements: { externalAgentAdmin: 1, a2aConfigReconciler: 1 },
+      });
+      try {
+        expect(runtime.capabilities).toMatchObject({
+          a2aConfigReconciler: { version: 1 },
+        });
+        await expect(runtime.admin.agentRegistrations.list()).resolves.toEqual([
+          expect.objectContaining({ agentId: 'external:delayed', enabled: true }),
+        ]);
+      } finally {
+        await runtime.close();
+      }
+    } finally {
+      releaseCard?.();
+      await new Promise<void>((resolve, reject) => {
+        cardServer.close((error) => error ? reject(error) : resolve());
+      });
+    }
+  }, 90_000);
+
+  it('binds foreground daemon A2A config to --home and cleans a failed initial reconcile', async () => {
+    const homeDir = fs.mkdtempSync(path.join(os.tmpdir(), 'kodax-daemon-a2a-home-'));
+    const ambientHome = fs.mkdtempSync(path.join(os.tmpdir(), 'kodax-daemon-a2a-ambient-'));
+    tempRoots.push(homeDir, ambientHome);
+    const profile = `a2a-home-${process.pid}-${Date.now()}`;
+    const homeConfigDir = path.join(homeDir, '.kodax', 'integrations');
+    const ambientConfigHome = path.join(ambientHome, 'custom-config-home');
+    fs.mkdirSync(homeConfigDir, { recursive: true });
+    fs.mkdirSync(path.join(ambientConfigHome, 'integrations'), { recursive: true });
+    fs.writeFileSync(path.join(homeConfigDir, 'a2a.json'), JSON.stringify({
+      version: 2,
+      agents: {
+        invalid: {
+          cardUrl: 'https://agents.example.com/.well-known/agent-card.json',
+          enabled: true,
+          effect: 'invalid',
+        },
+      },
+    }), 'utf8');
+    fs.writeFileSync(
+      path.join(ambientConfigHome, 'integrations', 'a2a.json'),
+      JSON.stringify({ version: 2, agents: {} }),
+      'utf8',
+    );
+
+    let stderr = '';
+    const child = spawn(process.execPath, [
+      '--import', 'tsx', path.join(process.cwd(), 'src', 'kodax_cli.ts'),
+      'daemon', 'serve', '--home', homeDir, '--profile', profile,
+      '--provider', 'mock-provider',
+    ], {
+      cwd: process.cwd(),
+      stdio: ['ignore', 'ignore', 'pipe'],
+      windowsHide: true,
+      env: { ...process.env, KODAX_HOME: ambientConfigHome, KODAX_TRACING: '0' },
+    });
+    child.stderr?.on('data', (chunk: Buffer | string) => {
+      stderr += chunk.toString();
+    });
+    const exitCode = await new Promise<number | null>((resolve, reject) => {
+      const timeout = setTimeout(() => {
+        child.kill('SIGTERM');
+        reject(new Error('Foreground daemon ignored the A2A config owned by --home.'));
+      }, 15_000);
+      child.once('error', (error) => {
+        clearTimeout(timeout);
+        reject(error);
+      });
+      child.once('exit', (code) => {
+        clearTimeout(timeout);
+        resolve(code);
+      });
+    });
+
+    expect(exitCode).not.toBe(0);
+    expect(stderr).toMatch(/Integration configuration is invalid/i);
+    const paths = resolveRuntimeDaemonPaths(homeDir, profile);
+    expect(fs.existsSync(paths.stateFile)).toBe(false);
+    expect(fs.existsSync(paths.lockFile)).toBe(false);
+  }, 30_000);
+
   it('SDK auto-start owns a daemon process outside the embedding process', async () => {
     const homeDir = fs.mkdtempSync(path.join(os.tmpdir(), 'kodax-daemon-sdk-smoke-'));
     tempRoots.push(homeDir);
@@ -630,15 +833,30 @@ describe('daemon CLI smoke', () => {
   }, 30_000);
 });
 
-async function runDaemonCommand(args: readonly string[]): Promise<Record<string, unknown>> {
+async function runDaemonCommand(
+  args: readonly string[],
+  env: Readonly<Record<string, string>> = {},
+): Promise<Record<string, unknown>> {
   const stdout = await runNodeProcess([
     '--import',
     'tsx',
     path.join(process.cwd(), 'src', 'kodax_cli.ts'),
     'daemon',
     ...args,
-  ]);
+  ], env);
   return JSON.parse(stdout) as Record<string, unknown>;
+}
+
+async function runKodaXCommand(
+  args: readonly string[],
+  env: Readonly<Record<string, string>> = {},
+): Promise<string> {
+  return runNodeProcess([
+    '--import',
+    'tsx',
+    path.join(process.cwd(), 'src', 'kodax_cli.ts'),
+    ...args,
+  ], env);
 }
 
 async function runSdkProbe(
@@ -660,13 +878,16 @@ async function runSdkProbe(
   return JSON.parse(stdout) as unknown;
 }
 
-function runNodeProcess(args: readonly string[]): Promise<string> {
+function runNodeProcess(
+  args: readonly string[],
+  env: Readonly<Record<string, string>> = {},
+): Promise<string> {
   return new Promise((resolve, reject) => {
     execFile(process.execPath, [...args], {
       cwd: process.cwd(),
       encoding: 'utf8',
       timeout: 90_000,
-      env: { ...process.env, KODAX_TRACING: '0' },
+      env: { ...process.env, KODAX_TRACING: '0', ...env },
     }, (error, stdout) => {
       if (error) {
         reject(error);

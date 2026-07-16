@@ -77,6 +77,43 @@ describe('runtime daemon protocol schema', () => {
     })).toEqual([]);
   });
 
+  it('validates registration ownership and revision-CAS mutation fields', () => {
+    const schema = RUNTIME_DAEMON_METHOD_SCHEMAS['agentRegistrations.setEnabled'].params;
+    expect(validateRuntimeDaemonJsonSchema(schema, {
+      agentId: 'external:managed',
+      enabled: false,
+      expectedConfigurationRevision: 'rev-1',
+      expectedManagementOwner: 'runtime-config-test',
+      claimOwner: 'runtime-config-test',
+    })).toEqual([]);
+    expect(validateRuntimeDaemonJsonSchema(schema, {
+      agentId: 'external:managed',
+      enabled: false,
+      expectedConfigurationRevision: null,
+      expectedManagementOwner: null,
+    })).toEqual([]);
+    expect(validateRuntimeDaemonJsonSchema(schema, {
+      agentId: 'external:managed',
+      enabled: false,
+      claimOwner: 42,
+    })).toContain('$.claimOwner must be string.');
+    expect(validateRuntimeDaemonJsonSchema(schema, {
+      agentId: 'external:managed',
+      enabled: false,
+      expectedManagementOwner: 42,
+    })).toContain('$.expectedManagementOwner must match exactly one allowed schema.');
+    for (const method of ['agentRegistrations.upsert', 'agentRegistrations.remove'] as const) {
+      const mutationSchema = RUNTIME_DAEMON_METHOD_SCHEMAS[method].params;
+      const required = method === 'agentRegistrations.upsert'
+        ? { registration: {} }
+        : { agentId: 'external:managed' };
+      expect(validateRuntimeDaemonJsonSchema(mutationSchema, {
+        ...required,
+        expectedManagementOwner: null,
+      })).toEqual([]);
+    }
+  });
+
   it('publishes and validates the run permission broker wire field', () => {
     const schema = RUNTIME_DAEMON_METHOD_SCHEMAS['run.start'].params;
 

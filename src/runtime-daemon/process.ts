@@ -18,7 +18,8 @@ import {
 import {
   assertRuntimeDaemonOwnerAllowed,
   classifyRuntimeDaemonHealth,
-  resolveRuntimeDaemonPaths,
+  resolveRuntimeDaemonEndpointScope,
+  resolveRuntimeDaemonPathsFromConfigHome,
   type RuntimeDaemonPaths,
 } from './state.js';
 import {
@@ -29,6 +30,7 @@ import {
 
 export interface RuntimeDaemonProcessLeaseOptions {
   readonly homeDir?: string;
+  readonly configHome?: string;
   readonly profile?: string;
   readonly endpoint?: RuntimeDaemonEndpoint;
   readonly defaultProvider?: string;
@@ -55,9 +57,13 @@ export async function acquireRuntimeDaemonProcessLease(
 ): Promise<RuntimeDaemonProcessLease> {
   const profile = options.profile ?? 'default';
   const homeDir = path.resolve(options.homeDir ?? os.homedir());
-  const paths = resolveRuntimeDaemonPaths(homeDir, profile);
+  const configHome = path.resolve(options.configHome ?? path.join(homeDir, '.kodax'));
+  const paths = resolveRuntimeDaemonPathsFromConfigHome(configHome, profile);
   assertRuntimeDaemonOwnerAllowed(paths);
-  const expectedEndpoint = defaultRuntimeDaemonEndpoint(paths.profile, homeDir);
+  const expectedEndpoint = defaultRuntimeDaemonEndpoint(
+    paths.profile,
+    resolveRuntimeDaemonEndpointScope(homeDir, configHome),
+  );
   if (options.endpoint && options.endpoint.path !== expectedEndpoint.path) {
     throw new Error('SDK daemon auto-start only supports the profile default endpoint; use attach-only mode for custom endpoints.');
   }
@@ -74,6 +80,7 @@ export async function acquireRuntimeDaemonProcessLease(
   const child = await spawnRuntimeDaemonServeProcess({
     profile: paths.profile,
     homeDir,
+    configHome,
     defaultProvider: options.defaultProvider,
     defaultModel: options.defaultModel,
     sessionsDir: options.sessionsDir,
@@ -136,6 +143,7 @@ async function waitForHealthyDaemon(
 async function spawnRuntimeDaemonServeProcess(input: {
   readonly profile: string;
   readonly homeDir: string;
+  readonly configHome: string;
   readonly defaultProvider?: string;
   readonly defaultModel?: string;
   readonly sessionsDir?: string;
@@ -152,6 +160,8 @@ async function spawnRuntimeDaemonServeProcess(input: {
     input.profile,
     '--home',
     input.homeDir,
+    '--config-home',
+    input.configHome,
   ];
   if (input.defaultProvider !== undefined) args.push('--provider', input.defaultProvider);
   if (input.defaultModel !== undefined) args.push('--model', input.defaultModel);
@@ -163,6 +173,7 @@ async function spawnRuntimeDaemonServeProcess(input: {
     args,
     env: createRuntimeDaemonServeEnvironment({
       homeDir: input.homeDir,
+      configHome: input.configHome,
       parentEnv: process.env,
     }),
     isElectron: process.versions.electron !== undefined,
@@ -192,12 +203,13 @@ export function assertRuntimeDaemonCliEntryAvailable(entry: string | undefined):
 
 export function createRuntimeDaemonServeEnvironment(input: {
   readonly homeDir: string;
+  readonly configHome?: string;
   readonly parentEnv: NodeJS.ProcessEnv;
 }): NodeJS.ProcessEnv {
   const env: NodeJS.ProcessEnv = {
     ...input.parentEnv,
     KODAX_DAEMON_SERVE: '1',
-    KODAX_HOME: path.join(input.homeDir, '.kodax'),
+    KODAX_HOME: input.configHome ?? path.join(input.homeDir, '.kodax'),
   };
   delete env[ELECTRON_RUN_AS_NODE_ENV];
   return env;

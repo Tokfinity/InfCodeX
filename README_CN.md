@@ -462,8 +462,8 @@ dist/binary/linux-x64/
 |----------|----------|-----------|-----------|
 | anthropic | `ANTHROPIC_API_KEY` | Native | claude-sonnet-4-6（可 `/model` 切换 `claude-opus-4-6` / `claude-haiku-4-5`） |
 | openai | `OPENAI_API_KEY` | Native | gpt-5.3-codex（可 `/model` 切换 `gpt-5.4` / `gpt-5.3-codex-spark`） |
-| kimi | `KIMI_API_KEY` | Native | kimi-k2.6（可 `/model` 切换 `kimi-k2.7-code` 256K / `k2.5`） |
-| kimi-code | `KIMI_CODE_API_KEY` | Native | kimi-for-coding |
+| kimi | `KIMI_API_KEY` | Native | kimi-k2.7-code（262,144 token；可 `/model` 切换 `kimi-k2.7-code-highspeed` / `kimi-k2.6` / `kimi-k2.5`） |
+| kimi-code | `KIMI_CODE_API_KEY` | Native | kimi-for-coding（可 `/model` 切换 `k3`，最高 1M 上下文、依订阅档位而定；或 `kimi-for-coding-highspeed`） |
 | qwen | `QWEN_API_KEY` | Native | qwen3.5-plus |
 | zhipu | `ZHIPU_API_KEY` | Native | glm-5（可 `/model` 切换 `glm-5.2` 1M ctx / `glm-5.1` / `glm-5-turbo`） |
 | zhipu-coding | `ZHIPU_CODING_API_KEY` | Native | glm-5（GLM Coding Plan；可 `/model` 切换 `glm-5.2` 1M ctx / `glm-5.1` / `glm-5-turbo`） |
@@ -597,15 +597,21 @@ KodaX 有两层结构，SDK 用户需要分开理解：
 
 **实验性 Memory Agent SDK（FEATURE_260，v0.7.68）**：`/experimental-memory` 暴露基于既有 F228 治理平面的薄 `MemoryAgent` 与 scoped `MemorySession`。被动 recall 零等待，`query()` 只读且由主 Action LLM 主动选择；持久化仍必须经过 proposal/preview/fingerprint/apply。召回内容保持低权限，安全与 scope 边界仍由确定性代码门禁承担。直接 session 示例与宿主边界见 [SDK Embedder Guide §21](docs/SDK_EMBEDDER_GUIDE.md#21-experimental-governed-memory--experimental-memory-feature_260-v0768)。
 
-**双向 A2A 1.0（FEATURE_267，v0.7.69）**：`/a2a` 可发现 allowlist 内的 Agent Card，并通过既有 F258 plane 安装 JSON-RPC/SSE executor。配置中的出站 Agent 还会作为 `external:<name>` 自动注册到 embedded CLI 与用户 daemon Runtime，因此主 Agent 无需宿主代码即可编排。入站方向可以发布 Runtime 默认 Agent，或发布一个经过验证的 `~/.kodax/agents/*.md` Agent。内置 listener 仅允许 loopback；公网部署必须由宿主用 TLS、鉴权和授权包住 `handle()`。不宣称支持 A2A 0.3、gRPC、HTTP+JSON、push notification，也不会自动把本地 Agent 暴露到网络。详见 [SDK Embedder Guide §22](docs/SDK_EMBEDDER_GUIDE.md#22-bidirectional-a2a-10--a2a-feature_267-v0769)。
+**双向 A2A 1.0（FEATURE_267，v0.7.69）**：`/a2a` 可发现 allowlist 内的 Agent Card，并通过既有 F258 plane 安装 JSON-RPC/SSE executor。配置中的出站 Agent 还会作为 `external:<name>` 自动注册到 embedded CLI 与用户 daemon Runtime，因此主 Agent 无需宿主代码即可编排。一个 `a2a.json` 可保存多个出站注册，但最多只有一个入站 server；入站可发布 Runtime 默认 Agent，或发布一个经过验证的 `~/.kodax/agents/*.md` Agent。内置 listener 仅允许 loopback；公网部署必须由宿主用 TLS、鉴权和授权包住 `handle()`。不宣称支持 A2A 0.3、gRPC、HTTP+JSON、push notification，也不会自动把本地 Agent 暴露到网络。详见 [SDK Embedder Guide §22](docs/SDK_EMBEDDER_GUIDE.md#22-bidirectional-a2a-10--a2a-feature_267-v0769)。
 
-**v0.7.70 互操作加固**：发现得到的 A2A interface 必须与受信 Agent Card
-同源，且只有 Card 宣告 Bearer 鉴权时才会携带凭据。`a2a serve` 按 CLI、环境变量、
-配置、内置默认值的顺序解析 provider，Markdown Agent 也可固定自己的 provider。
-补充输入会继续原 Runtime run；任务历史、保留策略与稳定 cursor 分页均有边界；
-带鉴权的 SSE 会先校验关联信息，流在正常终止但未给出终态时回退 polling。
-仅远端直接 artifact、输出 broker 暂存结果，以及成功授权执行的 Skill 脚本输出
-可以发布；普通工作区写入与本地路径不会暴露。
+**A2A 互操作与认证加固**：发现得到的 interface 必须与受信 Agent Card 同源，且只有
+完整满足 Card/Skill 的一个 security requirement 时才会携带凭据。无代码 client
+支持 HTTP Bearer 兼容模式与 OAuth 2.0 Client Credentials；OAuth 的短期 access
+token 由外部 Authorization Server 签发，KodaX 只在进程内缓存。入站 `a2a serve`
+可以按外部 issuer/JWKS 校验 RFC 9068 JWT access token，但不会自行签发生产 token。
+服务按 CLI、环境变量、配置、内置默认值的顺序解析 provider，Markdown Agent 也可
+固定自己的 provider。补充输入会继续原 Runtime run；任务历史、保留策略与稳定
+cursor 分页均有边界；带鉴权的 SSE 会先校验关联信息，流在正常终止但未给出终态时
+回退 polling。仅远端直接 artifact、输出 broker 暂存结果，以及成功授权执行的 Skill
+脚本输出可以发布；普通工作区写入与本地路径不会暴露。
+
+这里的认证与逐 Agent 激活加固，是对 v0.7.69 F267/F268 设计的发布后补全，
+随 v0.7.71 补丁交付；并不表示早期 v0.7.69 二进制已经包含后续 OAuth profile。
 
 **v0.7.70 MCP 发现加固**：能力使用精确 ID 和带 revision 的 cursor，结果按真实物理
 容量准入。紧凑 CJK 查询会分词；跨语言 lexical 零匹配只会返回容量内的无损分组
@@ -620,8 +626,23 @@ kodax a2a add research https://agent.example/.well-known/agent-card.json --effec
 kodax a2a test research
 kodax a2a call research "总结这个主题"
 
+# 先保存受 OAuth 保护的 Agent，再热启用/停用
+export RESEARCH_A2A_CLIENT_SECRET='由你的授权服务器分配'
+# PowerShell：$env:RESEARCH_A2A_CLIENT_SECRET='由你的授权服务器分配'
+# PowerShell：将命令写成一行，或把每个行尾反斜杠替换为反引号。
+kodax a2a add reviewer https://reviewer.example/.well-known/agent-card.json \
+  --disabled --effect read --oauth-scheme enterprise-oauth \
+  --oauth-issuer https://identity.example/ \
+  --oauth-token-url https://identity.example/oauth/token \
+  --oauth-client-id kodax-reviewer \
+  --oauth-client-secret-env RESEARCH_A2A_CLIENT_SECRET \
+  --oauth-scope a2a.invoke --oauth-resource https://reviewer.example/
+kodax a2a enable reviewer
+kodax a2a disable reviewer       # 只阻止新调度，不取消已运行任务
+
 # 暴露 Runtime 默认 Agent，或指定 ~/.kodax/agents/*.md 中的 Agent 名称
 export KODAX_A2A_TOKEN='请替换为足够长的随机令牌'
+# PowerShell：$env:KODAX_A2A_TOKEN='请替换为足够长的随机令牌'
 kodax a2a expose                 # 或：kodax a2a expose document-agent
 kodax a2a serve                  # 仅监听 http://127.0.0.1:8765
 ```
@@ -635,10 +656,17 @@ MCP、A2A、Extension 分别使用 `~/.kodax/integrations/` 下的一个用户�
 和明文 secret 警告后，才应同时使用 `--apply --cleanup-legacy` 清理旧 key。
 运行中的 CLI/daemon 保留最后一个
 有效版本，完整替换 MCP provider、逐条协调 Extension，并热注册出站 A2A Agent。
+每个 A2A 条目都有期望态 `enabled`；`kodax a2a list` 显示配置，实际已应用注册以
+拥有该 Runtime 的进程为准。自动协调不会获取已停用条目的 Card 或 token；拥有者
+观察并应用该 revision 后，停用条目才会阻止新调度，CLI 写入返回本身不是跨进程生效
+确认。`a2a add --disabled` 默认仍会校验 Card，除非显式使用 `--no-test`；`a2a test`
+只做 discovery/security planning，不会申请 OAuth token。示例中的固定
+`KODAX_A2A_TOKEN` 是运维侧预先提供的兼容凭据，并非 KodaX 自行生成或签发。
+停用条目可随时重新启用。
 `a2a serve` 会在监听前装载已配置的 MCP/Extension 能力并固定执行权威，同时热加载
 公开信息、鉴权和限额。Agent、Skill、Extension 工具权威、工作区、tool policy
 或任务存储变更必须显式重启服务。
-托管 A2A 上下文默认位于 `~/kodax_a2a_server_workspace/<profile>/contexts/`。
+托管 A2A 上下文默认位于 `~/kodax_a2a_server_workspace/<runtime-profile>/contexts/`。
 精确授权的 Skill 脚本必须使用隔离策略，并通过 `kodax sandbox doctor`；
 Windows 的一次性显式初始化由 `kodax sandbox setup` 完成。
 

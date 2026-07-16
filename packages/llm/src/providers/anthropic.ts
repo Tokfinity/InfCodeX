@@ -266,6 +266,22 @@ export abstract class KodaXAnthropicCompatProvider extends KodaXBaseProvider {
       return;
     }
 
+    if (preset === 'kimi-k3') {
+      const useModelDefault =
+        reasoning.effortSource !== 'explicit' && reasoning.effort === 'none';
+      if (intent.disabled && !useModelDefault) {
+        params.thinking = { type: 'disabled' } as Anthropic.Messages.ThinkingConfigParam;
+        return;
+      }
+      params.thinking = {
+        type: 'enabled',
+        effort: useModelDefault
+          ? capability.defaultEffort ?? 'max'
+          : intent.effort ?? capability.defaultEffort ?? 'max',
+      } as unknown as Anthropic.Messages.ThinkingConfigParam;
+      return;
+    }
+
     if (
       preset === 'none' ||
       capability.effortStrategy === 'none' ||

@@ -5,14 +5,14 @@ import {
   createMemoryAgentExecutorPlaneStore,
   createReferenceAgentExecutorFactory,
 } from '@kodax-ai/agent';
-import type { ExternalAgentRegistration } from '@kodax-ai/agent';
+import type { AgentJsonObject, ExternalAgentRegistration } from '@kodax-ai/agent';
 
 import type { KodaXToolExecutionContext } from '../types.js';
 import { createCodingWorkflowBackend } from './agent-adapter.js';
 
 function registration(
   agentId: string,
-  config: Readonly<Record<string, unknown>>,
+  config: AgentJsonObject,
 ): ExternalAgentRegistration {
   return {
     agentId,

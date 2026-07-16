@@ -9,13 +9,39 @@ import {
   type IntegrationConfigSnapshot,
 } from '@kodax-ai/repl';
 
+import {
+  assertOAuthScopeToken,
+  parseOAuthEndpointUrl,
+  parseOAuthIssuerIdentifier,
+  parseOAuthResourceIdentifier,
+} from './security.js';
+
 export type A2AOutboundEffect = 'none' | 'read' | 'write' | 'unknown';
+
+export interface A2AOAuth2ClientCredentialsConfig {
+  readonly type: 'oauth2-client-credentials';
+  readonly scheme: string;
+  readonly issuer: string;
+  readonly tokenUrl: string;
+  readonly clientId: string;
+  readonly clientSecretEnv: string;
+  readonly scopes: readonly string[];
+  readonly resource?: string;
+  readonly clientAuthentication: 'client-secret-basic' | 'client-secret-post';
+}
 
 export interface A2AOutboundAgentConfig {
   readonly cardUrl: string;
+  readonly enabled: boolean;
   readonly credentialEnv?: string;
+  readonly authentication?: A2AOAuth2ClientCredentialsConfig;
   readonly effect: A2AOutboundEffect;
 }
+
+/** Backward-compatible public mutation input; omitted `enabled` means active. */
+export type A2AOutboundAgentInput = Omit<A2AOutboundAgentConfig, 'enabled'> & {
+  readonly enabled?: boolean;
+};
 
 export type A2AWorkspaceConfig =
   | { readonly mode: 'managed' }
@@ -73,6 +99,21 @@ export interface A2ABearerAuthenticationConfig {
   readonly principalId: string;
 }
 
+export interface A2AOAuth2JwtAuthenticationConfig {
+  readonly type: 'oauth2-jwt';
+  readonly scheme: string;
+  readonly issuer: string;
+  readonly audience: string;
+  readonly jwksUrl: string;
+  readonly tokenUrl: string;
+  readonly metadataUrl?: string;
+  readonly requiredScopes: readonly string[];
+}
+
+export type A2AServerAuthenticationConfig =
+  | A2ABearerAuthenticationConfig
+  | A2AOAuth2JwtAuthenticationConfig;
+
 export interface A2AServerLimitsConfig {
   readonly maxRequestBytes: number;
   readonly maxPartBytes: number;
@@ -89,15 +130,25 @@ export interface A2AServerConfig {
   readonly execution: A2AServerExecutionConfig;
   readonly published: A2APublishedAgentConfig;
   readonly publicBaseUrl?: string;
-  readonly authentication: A2ABearerAuthenticationConfig;
+  readonly authentication: A2AServerAuthenticationConfig;
   readonly limits: A2AServerLimitsConfig;
   readonly dataDir: string;
 }
 
 export interface A2AIntegrationDocument {
-  readonly version: 1;
+  readonly version: 2;
   readonly agents: Readonly<Record<string, A2AOutboundAgentConfig>>;
   readonly server?: A2AServerConfig;
+}
+
+export interface A2AIntegrationMigrationResult {
+  readonly migrated: boolean;
+  readonly snapshot: IntegrationConfigSnapshot<A2AIntegrationDocument>;
+}
+
+export interface A2AIntegrationInspection {
+  readonly sourceVersion: 1 | 2;
+  readonly snapshot: IntegrationConfigSnapshot<A2AIntegrationDocument>;
 }
 
 export interface A2AServerConfigChange {
@@ -120,6 +171,11 @@ const LIMIT_DEFAULTS: A2AServerLimitsConfig = {
 const LIMIT_KEYS = Object.keys(LIMIT_DEFAULTS) as readonly (keyof A2AServerLimitsConfig)[];
 const NAME_PATTERN = /^[A-Za-z0-9][A-Za-z0-9._-]{0,127}$/;
 const ENV_PATTERN = /^[A-Za-z_][A-Za-z0-9_]*$/;
+
+function isExactLoopback(hostname: string): boolean {
+  const normalized = hostname.toLowerCase().replace(/^\[|\]$/g, '');
+  return normalized === 'localhost' || normalized === '127.0.0.1' || normalized === '::1';
+}
 
 function record(value: unknown, label: string): Record<string, unknown> {
   if (value === null || typeof value !== 'object' || Array.isArray(value)) {
@@ -174,9 +230,72 @@ function namedExactLists(value: unknown, label: string): Record<string, readonly
   return result;
 }
 
-function parseOutboundAgent(value: unknown, label: string): A2AOutboundAgentConfig {
+function parseSchemeName(value: unknown, label: string): string {
+  const name = text(value, label);
+  if (!NAME_PATTERN.test(name)) throw new Error(`${label} is invalid.`);
+  return name;
+}
+
+function parseIssuer(value: unknown, label: string): string {
+  return parseOAuthIssuerIdentifier(value, label);
+}
+
+function oauthScopeList(value: unknown, label: string): string[] {
+  const scopes = stringList(value, label, true);
+  for (const scope of scopes) assertOAuthScopeToken(scope, label);
+  return scopes;
+}
+
+function parseResource(value: unknown, label: string): string {
+  return parseOAuthResourceIdentifier(value, label);
+}
+
+function parseOAuthEndpoint(value: unknown, label: string): string {
+  return parseOAuthEndpointUrl(value, label).href;
+}
+
+function parseOutboundAuthentication(
+  value: unknown,
+  label: string,
+): A2AOAuth2ClientCredentialsConfig {
   const source = record(value, label);
-  noUnknown(source, ['cardUrl', 'credentialEnv', 'effect'], label);
+  noUnknown(source, [
+    'type', 'scheme', 'issuer', 'tokenUrl', 'clientId', 'clientSecretEnv',
+    'scopes', 'resource', 'clientAuthentication',
+  ], label);
+  if (source.type !== 'oauth2-client-credentials') {
+    throw new Error(`${label}.type must be oauth2-client-credentials.`);
+  }
+  const clientAuthentication = source.clientAuthentication ?? 'client-secret-basic';
+  if (!['client-secret-basic', 'client-secret-post'].includes(String(clientAuthentication))) {
+    throw new Error(`${label}.clientAuthentication is invalid.`);
+  }
+  return {
+    type: 'oauth2-client-credentials',
+    scheme: parseSchemeName(source.scheme, `${label}.scheme`),
+    issuer: parseIssuer(source.issuer, `${label}.issuer`),
+    tokenUrl: parseOAuthEndpoint(source.tokenUrl, `${label}.tokenUrl`),
+    clientId: text(source.clientId, `${label}.clientId`),
+    clientSecretEnv: parseEnvironmentName(source.clientSecretEnv, `${label}.clientSecretEnv`),
+    scopes: oauthScopeList(source.scopes, `${label}.scopes`),
+    ...(source.resource === undefined ? {} : { resource: parseResource(source.resource, `${label}.resource`) }),
+    clientAuthentication: clientAuthentication as A2AOAuth2ClientCredentialsConfig['clientAuthentication'],
+  };
+}
+
+function parseOutboundAgent(
+  value: unknown,
+  label: string,
+  version: 1 | 2,
+): A2AOutboundAgentConfig {
+  const source = record(value, label);
+  noUnknown(
+    source,
+    version === 1
+      ? ['cardUrl', 'credentialEnv', 'effect']
+      : ['cardUrl', 'enabled', 'credentialEnv', 'authentication', 'effect'],
+    label,
+  );
   const cardUrl = parseHttpUrl(source.cardUrl, `${label}.cardUrl`, true);
   const effect = source.effect;
   if (!['none', 'read', 'write', 'unknown'].includes(String(effect))) {
@@ -185,7 +304,20 @@ function parseOutboundAgent(value: unknown, label: string): A2AOutboundAgentConf
   const credentialEnv = source.credentialEnv === undefined
     ? undefined
     : parseEnvironmentName(source.credentialEnv, `${label}.credentialEnv`);
-  return { cardUrl, ...(credentialEnv ? { credentialEnv } : {}), effect: effect as A2AOutboundEffect };
+  if (credentialEnv && source.authentication !== undefined) {
+    throw new Error(`${label}.credentialEnv and ${label}.authentication are mutually exclusive.`);
+  }
+  if (source.enabled !== undefined && typeof source.enabled !== 'boolean') {
+    throw new Error(`${label}.enabled must be a boolean.`);
+  }
+  return {
+    cardUrl,
+    enabled: source.enabled ?? true,
+    ...(credentialEnv ? { credentialEnv } : {}),
+    ...(source.authentication === undefined
+      ? {} : { authentication: parseOutboundAuthentication(source.authentication, `${label}.authentication`) }),
+    effect: effect as A2AOutboundEffect,
+  };
 }
 
 function parseHttpUrl(value: unknown, label: string, requireHttps: boolean): string {
@@ -199,7 +331,8 @@ function parseHttpUrl(value: unknown, label: string, requireHttps: boolean): str
   if (parsed.username || parsed.password) {
     throw new Error(`${label} must not contain embedded credentials.`);
   }
-  const loopback = ['localhost', '127.0.0.1', '::1'].includes(parsed.hostname);
+  if (parsed.hash) throw new Error(`${label} must not contain a fragment.`);
+  const loopback = isExactLoopback(parsed.hostname);
   if (parsed.protocol !== 'https:' && !(parsed.protocol === 'http:' && loopback && requireHttps)) {
     throw new Error(`${label} must use HTTPS or explicit loopback HTTP.`);
   }
@@ -372,14 +505,36 @@ function parsePublished(value: unknown): A2APublishedAgentConfig {
   };
 }
 
-function parseAuthentication(value: unknown): A2ABearerAuthenticationConfig {
+function parseAuthentication(value: unknown, version: 1 | 2): A2AServerAuthenticationConfig {
   const source = record(value, 'A2A server authentication');
-  noUnknown(source, ['type', 'tokenEnv', 'principalId'], 'A2A server authentication');
-  if (source.type !== 'bearer-env') throw new Error('A2A authentication type must be bearer-env.');
+  if (source.type === 'bearer-env') {
+    noUnknown(source, ['type', 'tokenEnv', 'principalId'], 'A2A server authentication');
+    return {
+      type: 'bearer-env',
+      tokenEnv: parseEnvironmentName(source.tokenEnv, 'A2A server authentication.tokenEnv'),
+      principalId: text(source.principalId, 'A2A server authentication.principalId'),
+    };
+  }
+  if (version === 1) {
+    throw new Error('A2A oauth2-jwt authentication requires integration config version 2.');
+  }
+  if (source.type !== 'oauth2-jwt') {
+    throw new Error('A2A authentication type must be bearer-env or oauth2-jwt.');
+  }
+  noUnknown(source, [
+    'type', 'scheme', 'issuer', 'audience', 'jwksUrl', 'tokenUrl',
+    'metadataUrl', 'requiredScopes',
+  ], 'A2A server authentication');
   return {
-    type: 'bearer-env',
-    tokenEnv: parseEnvironmentName(source.tokenEnv, 'A2A server authentication.tokenEnv'),
-    principalId: text(source.principalId, 'A2A server authentication.principalId'),
+    type: 'oauth2-jwt',
+    scheme: parseSchemeName(source.scheme, 'A2A server authentication.scheme'),
+    issuer: parseIssuer(source.issuer, 'A2A server authentication.issuer'),
+    audience: text(source.audience, 'A2A server authentication.audience'),
+    jwksUrl: parseOAuthEndpoint(source.jwksUrl, 'A2A server authentication.jwksUrl'),
+    tokenUrl: parseOAuthEndpoint(source.tokenUrl, 'A2A server authentication.tokenUrl'),
+    ...(source.metadataUrl === undefined
+      ? {} : { metadataUrl: parseOAuthEndpoint(source.metadataUrl, 'A2A server authentication.metadataUrl') }),
+    requiredScopes: oauthScopeList(source.requiredScopes, 'A2A server authentication.requiredScopes'),
   };
 }
 
@@ -410,7 +565,7 @@ function parseLimits(value: unknown, execution: A2AServerExecutionConfig): A2ASe
   return limits;
 }
 
-function parseServer(value: unknown): A2AServerConfig {
+function parseServer(value: unknown, version: 1 | 2): A2AServerConfig {
   const source = record(value, 'A2A server');
   noUnknown(source, ['execution', 'published', 'publicBaseUrl', 'authentication', 'limits', 'dataDir'], 'A2A server');
   const execution = parseExecution(source.execution);
@@ -421,7 +576,7 @@ function parseServer(value: unknown): A2AServerConfig {
     execution,
     published: parsePublished(source.published),
     ...(publicBaseUrl ? { publicBaseUrl } : {}),
-    authentication: parseAuthentication(source.authentication),
+    authentication: parseAuthentication(source.authentication, version),
     limits: parseLimits(source.limits, execution),
     dataDir: text(source.dataDir, 'A2A server.dataDir'),
   };
@@ -430,17 +585,20 @@ function parseServer(value: unknown): A2AServerConfig {
 export function parseA2AIntegrationDocument(value: unknown): A2AIntegrationDocument {
   const source = record(value, 'A2A integration config');
   noUnknown(source, ['version', 'agents', 'server'], 'A2A integration config');
-  if (source.version !== 1) throw new Error('A2A integration config version must be 1.');
+  if (source.version !== 1 && source.version !== 2) {
+    throw new Error('A2A integration config version must be 1 or 2.');
+  }
+  const version = source.version;
   const rawAgents = record(source.agents, 'A2A integration config agents');
   const agents: Record<string, A2AOutboundAgentConfig> = {};
   for (const [name, agent] of Object.entries(rawAgents)) {
     if (!NAME_PATTERN.test(name)) throw new Error(`A2A outbound Agent name "${name}" is invalid.`);
-    agents[name] = parseOutboundAgent(agent, `A2A outbound Agent "${name}"`);
+    agents[name] = parseOutboundAgent(agent, `A2A outbound Agent "${name}"`, version);
   }
   return {
-    version: 1,
+    version: 2,
     agents,
-    ...(source.server === undefined ? {} : { server: parseServer(source.server) }),
+    ...(source.server === undefined ? {} : { server: parseServer(source.server, version) }),
   };
 }
 
@@ -448,26 +606,66 @@ function hash(raw: string): string {
   return createHash('sha256').update(raw).digest('hex');
 }
 
-export function readA2AIntegration(
+interface LoadedA2AIntegration {
+  readonly snapshot: IntegrationConfigSnapshot<A2AIntegrationDocument>;
+  readonly sourceVersion: 1 | 2;
+  readonly nonEmptyLegacy: boolean;
+}
+
+function loadA2AIntegration(
   configHome: string,
-): IntegrationConfigSnapshot<A2AIntegrationDocument> {
+): LoadedA2AIntegration {
   const file = resolveIntegrationConfigPath('a2a', configHome);
   const present = existsSync(file);
-  const raw = present ? readFileSync(file, 'utf8') : JSON.stringify({ version: 1, agents: {} });
+  const raw = present ? readFileSync(file, 'utf8') : JSON.stringify({ version: 2, agents: {} });
   let value: unknown;
   try {
     value = JSON.parse(raw) as unknown;
   } catch (error: unknown) {
     throw new Error('Invalid A2A integration JSON.', { cause: error });
   }
-  return {
+  const document = parseA2AIntegrationDocument(value);
+  const rawDocument = record(value, 'A2A integration config');
+  if (rawDocument.version !== 1 && rawDocument.version !== 2) {
+    throw new Error('A2A integration config version must be 1 or 2.');
+  }
+  const sourceVersion = rawDocument.version;
+  const snapshot = {
     domain: 'a2a',
     source: present ? 'user' : 'default',
     path: file,
     revision: hash(raw),
-    document: parseA2AIntegrationDocument(value),
+    document,
     loadedAt: new Date().toISOString(),
+  } as const;
+  return {
+    snapshot,
+    sourceVersion,
+    nonEmptyLegacy: sourceVersion === 1
+      && (Object.keys(document.agents).length > 0 || document.server !== undefined),
   };
+}
+
+export function readA2AIntegration(
+  configHome: string,
+): IntegrationConfigSnapshot<A2AIntegrationDocument> {
+  return loadA2AIntegration(configHome).snapshot;
+}
+
+export function inspectA2AIntegration(
+  configHome: string,
+): A2AIntegrationInspection {
+  const loaded = loadA2AIntegration(configHome);
+  return { sourceVersion: loaded.sourceVersion, snapshot: loaded.snapshot };
+}
+
+function assertOrdinaryA2AMutationAllowed(loaded: LoadedA2AIntegration): void {
+  if (!loaded.nonEmptyLegacy) return;
+  throw new Error(
+    'A2A integration config version 1 contains active declarations and requires explicit migration. '
+      + 'Stop every daemon that uses this config home, then run '
+      + '`kodax a2a migrate --confirm-daemons-stopped` before changing it.',
+  );
 }
 
 function writeA2AIntegration(
@@ -487,14 +685,17 @@ function writeA2AIntegration(
 export function upsertA2AOutboundAgent(
   configHome: string,
   name: string,
-  agent: A2AOutboundAgentConfig,
+  agent: A2AOutboundAgentInput,
   expectedRevision?: string,
 ): IntegrationConfigSnapshot<A2AIntegrationDocument> {
   if (!NAME_PATTERN.test(name)) throw new Error('A2A outbound Agent name is invalid.');
-  const current = readA2AIntegration(configHome);
+  const loaded = loadA2AIntegration(configHome);
+  assertOrdinaryA2AMutationAllowed(loaded);
+  const current = loaded.snapshot;
+  const normalized = parseOutboundAgent(agent, `A2A outbound Agent "${name}"`, 2);
   return writeA2AIntegration(configHome, {
     ...current.document,
-    agents: { ...current.document.agents, [name]: agent },
+    agents: { ...current.document.agents, [name]: normalized },
   }, expectedRevision ?? (current.source === 'user' ? current.revision : undefined));
 }
 
@@ -503,7 +704,9 @@ export function removeA2AOutboundAgent(
   name: string,
   expectedRevision?: string,
 ): boolean {
-  const current = readA2AIntegration(configHome);
+  const loaded = loadA2AIntegration(configHome);
+  assertOrdinaryA2AMutationAllowed(loaded);
+  const current = loaded.snapshot;
   if (current.document.agents[name] === undefined) return false;
   const agents = { ...current.document.agents };
   delete agents[name];
@@ -515,20 +718,57 @@ export function removeA2AOutboundAgent(
   return true;
 }
 
+export function setA2AOutboundAgentEnabled(
+  configHome: string,
+  name: string,
+  enabled: boolean,
+  expectedRevision?: string,
+): IntegrationConfigSnapshot<A2AIntegrationDocument> {
+  const loaded = loadA2AIntegration(configHome);
+  assertOrdinaryA2AMutationAllowed(loaded);
+  const current = loaded.snapshot;
+  const agent = current.document.agents[name];
+  if (!agent) throw new Error(`Unknown configured A2A Agent: ${name}.`);
+  return writeA2AIntegration(configHome, {
+    ...current.document,
+    agents: { ...current.document.agents, [name]: { ...agent, enabled } },
+  }, expectedRevision ?? (current.source === 'user' ? current.revision : undefined));
+}
+
 export function setA2AServerConfig(
   configHome: string,
   server: A2AServerConfig | undefined,
   expectedRevision?: string,
 ): IntegrationConfigSnapshot<A2AIntegrationDocument> {
-  const current = readA2AIntegration(configHome);
+  const loaded = loadA2AIntegration(configHome);
+  assertOrdinaryA2AMutationAllowed(loaded);
+  const current = loaded.snapshot;
   const document: A2AIntegrationDocument = server === undefined
-    ? { version: 1, agents: current.document.agents }
+    ? { version: 2, agents: current.document.agents }
     : { ...current.document, server };
   return writeA2AIntegration(
     configHome,
     document,
     expectedRevision ?? (current.source === 'user' ? current.revision : undefined),
   );
+}
+
+export function migrateA2AIntegrationV1(
+  configHome: string,
+  expectedRevision?: string,
+): A2AIntegrationMigrationResult {
+  const loaded = loadA2AIntegration(configHome);
+  if (loaded.sourceVersion === 2) {
+    return { migrated: false, snapshot: loaded.snapshot };
+  }
+  return {
+    migrated: true,
+    snapshot: writeA2AIntegration(
+      configHome,
+      loaded.snapshot.document,
+      expectedRevision ?? loaded.snapshot.revision,
+    ),
+  };
 }
 
 export function classifyA2AServerChange(

@@ -45,16 +45,36 @@ describe('built-in provider model capabilities (no API key required)', () => {
     expect(haiku?.maxOutputTokens).toBe(64000);
   });
 
-  it('exposes Kimi K2.7 Code and K2.6 at 256K', () => {
+  it('exposes the current public Kimi lineup at the exact 256 Ki-token limit', () => {
     const k27 = getModelCapabilities('kimi', 'kimi-k2.7-code');
-    expect(k27?.contextWindow).toBe(256_000);
+    expect(k27?.contextWindow).toBe(262_144);
     expect(k27?.maxOutputTokens).toBe(32_768);
+    expect(k27?.isDefault).toBe(true);
+
+    const highspeed = getModelCapabilities('kimi', 'kimi-k2.7-code-highspeed');
+    expect(highspeed?.contextWindow).toBe(262_144);
+    expect(highspeed?.maxOutputTokens).toBe(32_768);
 
     const k26 = getModelCapabilities('kimi', 'kimi-k2.6');
-    expect(k26?.contextWindow).toBe(256_000);
-    // k2.5 inherits the same provider-level 256K — descriptor has no override.
-    const k25 = getModelCapabilities('kimi', 'k2.5');
-    expect(k25?.contextWindow).toBe(256_000);
+    expect(k26?.contextWindow).toBe(262_144);
+    const k25 = getModelCapabilities('kimi', 'kimi-k2.5');
+    expect(k25?.contextWindow).toBe(262_144);
+  });
+
+  it('exposes Kimi Code K3 at 1M without changing the stable K2.7 default', () => {
+    const k3 = getModelCapabilities('kimi-code', 'k3');
+    expect(k3?.contextWindow).toBe(1_048_576);
+    expect(k3?.maxOutputTokens).toBe(32_000);
+    expect(k3?.isDefault).toBe(false);
+    expect(k3?.reasoningProfile).toMatchObject({
+      reasoningPreset: 'kimi-k3',
+      defaultEffort: 'max',
+      disabledEfforts: ['none'],
+    });
+
+    const stable = getModelCapabilities('kimi-code', 'kimi-for-coding');
+    expect(stable?.contextWindow).toBe(262_144);
+    expect(stable?.isDefault).toBe(true);
   });
 
   it('exposes Zhipu GLM-5.2 at 1M context / 128K max output', () => {
@@ -421,7 +441,7 @@ describe('unified dispatcher (resolveModelCapabilities, resolveProviderModelDesc
 
   it('routes built-in names to built-in path', () => {
     const caps = resolveModelCapabilities('kimi', 'kimi-k2.6');
-    expect(caps?.contextWindow).toBe(256_000);
+    expect(caps?.contextWindow).toBe(262_144);
   });
 
   it('routes custom names to custom path', () => {
