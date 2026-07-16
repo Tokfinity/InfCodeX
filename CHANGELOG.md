@@ -67,7 +67,10 @@ All notable changes to this project will be documented in this file.
 - **Faster packaged-Electron gates.** Release jobs build once and reuse that
   output for both the Windows Electron smoke and binary packaging. CI and
   release jobs cache the version-pinned Electron smoke toolchain, whose local
-  directory is now explicitly ignored.
+  directory is now explicitly ignored. Both paths explicitly materialize the
+  Electron binary after cache restore or dependency installation, preventing a
+  successful npm package install with a missing `electron/dist` from bypassing
+  the real packaged-daemon gate.
 - **A2A authentication and reconciliation hardening.** Card-level and
   Skill-level security requirements now fail closed unless one complete
   alternative is satisfiable. Card, RPC, and token origins remain separate;
