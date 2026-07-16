@@ -36,6 +36,16 @@ describe('GitHub release workflow', () => {
     }
   });
 
+  it('writes bounded release notes to a file before publishing', () => {
+    const workflowSource = readFileSync(resolve('.github/workflows/release.yml'), 'utf8');
+
+    expect(workflowSource).toContain('git fetch --force --tags origin');
+    expect(workflowSource).toContain('notes_file="dist/release/RELEASE_NOTES.md"');
+    expect(workflowSource).toContain('git log --max-count=100');
+    expect(workflowSource).toContain('body_path: dist/release/RELEASE_NOTES.md');
+    expect(workflowSource).not.toContain('body: ${{ steps.notes.outputs.body }}');
+  });
+
   it('publishes InfCodeX-branded archives and executables', () => {
     const workflowSource = readFileSync(resolve('.github/workflows/release.yml'), 'utf8');
     const workflow = parse(workflowSource) as ReleaseWorkflow;
