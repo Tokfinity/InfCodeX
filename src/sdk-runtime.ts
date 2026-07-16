@@ -1508,6 +1508,7 @@ export type RuntimeEventListener = (event: RuntimeEvent) => void;
 export type RuntimeTypedEventListener = (event: RuntimeTypedEvent) => void;
 
 export interface RuntimeSubscription {
+  readonly ready?: Promise<void>;
   close(): void;
 }
 

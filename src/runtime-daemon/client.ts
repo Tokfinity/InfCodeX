@@ -922,7 +922,7 @@ function subscribeToDaemonNotification(
     if (payload.subscriptionId !== remoteSubscriptionId) return;
     listener(payload.event);
   });
-  void request(method, params).then((result) => {
+  const ready = request(method, params).then((result) => {
     remoteSubscriptionId = requireStringField(requireRecord(result), 'subscriptionId');
     if (closed) {
       unsubscribeRemote(request, method, remoteSubscriptionId);
@@ -934,11 +934,14 @@ function subscribeToDaemonNotification(
         listener(payload.event);
       }
     }
-  }).catch(() => {
+  }).catch((error: unknown) => {
     pendingNotifications.length = 0;
     local.close();
+    throw error;
   });
+  void ready.catch(() => undefined);
   return {
+    ready,
     close() {
       closed = true;
       local.close();

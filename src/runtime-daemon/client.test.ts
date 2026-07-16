@@ -163,7 +163,8 @@ describe('runtime daemon client proxy', () => {
     const subscription = client.events.subscribe({ sessionId: 'session-1' }, (event) => {
       seen.push(event);
     });
-    await Promise.resolve();
+    if (!subscription.ready) throw new Error('Daemon event subscription did not expose readiness.');
+    await subscription.ready;
 
     const event: RuntimeEvent = {
       id: 'evt-1',
@@ -461,8 +462,9 @@ describe('runtime daemon client proxy', () => {
       transport,
     });
 
-    client.events.subscribe({}, () => undefined);
-    await flushAsyncNotifications();
+    const subscription = client.events.subscribe({}, () => undefined);
+    if (!subscription.ready) throw new Error('Daemon event subscription did not expose readiness.');
+    await expect(subscription.ready).rejects.toThrow('subscribe failed');
 
     // The persistent reverse-capability listener remains; the failed event
     // subscription itself is removed.

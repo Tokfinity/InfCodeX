@@ -20,6 +20,7 @@ import type {
   RuntimeDaemonClientTransport,
   RuntimeEvent,
   RuntimeStartRunInput,
+  RuntimeSubscription,
 } from './sdk-runtime.js';
 import type { RuntimeDaemonEndpoint } from './runtime-daemon/transport.js';
 
@@ -633,6 +634,7 @@ describe('createKodaXRuntime', () => {
     let space: Awaited<ReturnType<typeof connectKodaXRuntime>> | undefined;
     let approvalDone: Promise<unknown> | undefined;
     let responseDone: Promise<boolean> | undefined;
+    let permissionEvents: RuntimeSubscription | undefined;
     const seen: string[] = [];
 
     try {
@@ -649,7 +651,7 @@ describe('createKodaXRuntime', () => {
         profileId: 'space',
       });
 
-      space.events.subscribe({ sessionId: session.id }, (event) => {
+      permissionEvents = space.events.subscribe({ sessionId: session.id }, (event) => {
         seen.push(event.type);
         if (event.type !== 'permission.requested') return;
         const payload = event.payload;
@@ -660,6 +662,8 @@ describe('createKodaXRuntime', () => {
           { runId: payload.runId },
         );
       });
+      if (!permissionEvents.ready) throw new Error('Daemon event subscription did not expose readiness.');
+      await permissionEvents.ready;
 
       approvalDone = worker.permissions.request({
         sessionId: session.id,
@@ -688,6 +692,7 @@ describe('createKodaXRuntime', () => {
         'permission.resolved',
       ]);
     } finally {
+      permissionEvents?.close();
       await space?.close();
       await worker.close();
       await shutdownRuntimeDaemon(tempRoot, profile);

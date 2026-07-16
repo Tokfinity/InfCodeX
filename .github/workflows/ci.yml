@@ -164,6 +164,9 @@ jobs:
       - name: Install packaged Electron smoke toolchain
         run: npm install --no-save --package-lock=false --no-audit --no-fund electron@42.5.0 electron-builder@25.1.8
 
+      - name: Download packaged Electron runtime
+        run: node node_modules/electron/install.js
+
       - name: Packaged Electron daemon gate
         env:
           KODAX_ELECTRON_DIST: ${{ github.workspace }}\node_modules\electron\dist

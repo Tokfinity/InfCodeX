@@ -96,6 +96,10 @@ jobs:
         if: steps.filter.outputs.skip == 'false' && matrix.target == 'win-x64'
         run: npm install --no-save --package-lock=false --no-audit --no-fund electron@42.5.0 electron-builder@25.1.8
 
+      - name: Download packaged Electron runtime
+        if: steps.filter.outputs.skip == 'false' && matrix.target == 'win-x64'
+        run: node node_modules/electron/install.js
+
       - name: Packaged Electron daemon release gate
         if: steps.filter.outputs.skip == 'false' && matrix.target == 'win-x64'
         env:
