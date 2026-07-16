@@ -98,7 +98,7 @@ export default function App() {
     <main className="page-shell">
       <section className="hero-section">
         <div className="hero-copy">
-          <span className="eyebrow">InfFlow AI · 官网首页</span>
+          <span className="eyebrow">InfCodeX · 官网首页</span>
           <h1>让官网咨询入口更清晰，让线索收集更高效</h1>
           <p className="hero-description">
             面向企业官网场景，集中展示产品标题、核心卖点与明确咨询入口，帮助访客快速了解方案并进入留资流程。
