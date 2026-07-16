@@ -1,8 +1,8 @@
 # KodaX High-Level Design
 
-> Last updated: 2026-07-14
+> Last updated: 2026-07-16
 >
-> Current release baseline: `@kodax-ai/kodax@0.7.69`
+> Current release baseline: `@kodax-ai/kodax@0.7.71` release candidate
 >
 > This HLD is intentionally current-state only. The old pre-v0.7.43
 > chain/harness model has been removed from this active design document because
@@ -24,9 +24,9 @@ clients/    optional external clients and protocol adapters
 benchmark/  eval harness, datasets, and prompt-change rules
 ```
 
-The published package is `@kodax-ai/kodax`. It exposes the root API plus ten
+The published package is `@kodax-ai/kodax`. It exposes the root API plus eleven
 SDK subpaths: `/agent`, `/llm`, `/coding`, `/media`, `/repl`, `/skills`,
-`/mcp`, `/session`, `/runtime`, and `/experimental-memory`.
+`/mcp`, `/session`, `/runtime`, `/a2a`, and `/experimental-memory`.
 
 ## 2. Layering
 
@@ -88,6 +88,12 @@ ends the shared owner. Restart marks persisted non-terminal runs interrupted;
 clients reconnect explicitly and KodaX does not pretend to resume an unknown
 in-flight provider/tool operation.
 
+Packaged Electron daemon auto-start uses the application executable only as a
+bootstrap Node host. A preloaded scrub import removes `ELECTRON_RUN_AS_NODE`
+before daemon application code loads, so ordinary children do not inherit it.
+This requires Electron's default-enabled `RunAsNode` fuse; fuse-disabled hosts
+must start an ordinary Node/CLI daemon and attach to it.
+
 Shared Coder daemon control is fact-based rather than connection-owned. One
 atomic `sessions.observe` call returns the authoritative transcript/settings/
 run/interaction projection and installs the post-snapshot event stream without
@@ -101,7 +107,7 @@ domain with a random profile token and user-only pipe/socket access. Host-
 granted scopes gate RPC families; stable client instance IDs provide
 attribution and retry binding, not independent authentication. Per-application
 credentials between mutually distrusting same-user processes are not part of
-v0.7.69.
+the current local-daemon contract.
 
 Space-only integration stays behind two narrow reverse bridges. A keychain
 broker supplies a provider/run-scoped credential directly into an in-memory

@@ -81,6 +81,13 @@ data/session root 下的 inline Runtime，不参与 Coder owner fence。capabili
 fail closed，不能静默退回 inline Coder。完整接入说明见
 [SDK Embedder Guide §23](docs/SDK_EMBEDDER_GUIDE.md#23-shared-coder-daemon-for-space-and-ide-hosts-feature_269-v0769)。
 
+**v0.7.71 Electron 打包修复**：packaged/asar Electron 宿主可以直接自动启动
+daemon，不会再次打开 GUI。`ELECTRON_RUN_AS_NODE` 只存在于子进程启动边界，
+在 daemon 与普通用户子进程代码加载前即被移除。该路径要求 Electron 默认开启的
+`RunAsNode` fuse；主动关闭该 fuse 的宿主必须通过普通 Node/KodaX CLI 启动 daemon，
+再使用 attach-only 模式连接。SDK 的 `homeDir` 是拥有 `.kodax` 的 CLI 风格基础目录，
+不是 `.kodax` 目录本身。
+
 ## 为什么用 KodaX
 
 <table>

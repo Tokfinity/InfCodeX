@@ -6,6 +6,8 @@ All notable changes to this project will be documented in this file.
 
 ## [Unreleased]
 
+## [0.7.71] - 2026-07-16
+
 ### Fixed
 
 - **Packaged Electron shared-daemon auto-start.** Runtime SDK embedders running

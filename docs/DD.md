@@ -1,8 +1,8 @@
 # KodaX Detailed Design
 
-> Last updated: 2026-07-14
+> Last updated: 2026-07-16
 >
-> Current release baseline: `@kodax-ai/kodax@0.7.69`
+> Current release baseline: `@kodax-ai/kodax@0.7.71` release candidate
 >
 > This DD describes current implementation structure. Retired V1 chain details
 > were deleted from this active document; use git history and historical feature
@@ -19,7 +19,7 @@ reference and does not duplicate every type. It should answer three questions:
 
 ## 2. Published Package And Build Entries
 
-The root package is `@kodax-ai/kodax@0.7.69`.
+The root package is `@kodax-ai/kodax@0.7.71`.
 
 `package.json` exposes:
 
@@ -35,6 +35,7 @@ The root package is `@kodax-ai/kodax@0.7.69`.
 | `./mcp` | `dist/sdk-mcp.js` | Focused MCP subset. |
 | `./session` | `dist/sdk-session.js` | Public session-management subset. |
 | `./runtime` | `dist/sdk-runtime.js` | Stable host Runtime facade and daemon protocol/schema exports. |
+| `./a2a` | `dist/sdk-a2a.js` | Bidirectional A2A 1.0 client/server integration edge. |
 | `./experimental-memory` | `dist/sdk-experimental-memory.js` | Opt-in governed Memory Agent and scoped session contracts. |
 
 The build path is:
@@ -77,6 +78,12 @@ runtime protocol over `MessagePort`, and always calls `Worker.terminate()` after
 the shutdown grace period. `mode: 'daemon'` starts or attaches to a detached
 `kodax daemon serve` owner at the profile-default endpoint. Custom daemon
 endpoints are attach-only.
+
+When the host is packaged Electron, daemon auto-start launches through an
+internal Node bootstrap and scrubs `ELECTRON_RUN_AS_NODE` before loading the
+daemon entry. Ordinary user children inherit the scrubbed environment. The
+path requires Electron's `RunAsNode` fuse; disabling it requires an ordinary
+Node/CLI-started daemon and attach-only SDK mode.
 
 All forms expose `identity`, `sessions`, `runs`, `events`, `permissions`,
 `workflows`, `config`, `catalog`, `mcp`, `artifacts`, `status`, and
@@ -126,7 +133,7 @@ Electron Main and never receive the profile token.
 
 Same-session run creation allocates a monotonic `sessionOrder`. `after_turn`
 input is a real queued continuation run and accepts the same operation
-contract. `interrupt` is not advertised in v0.7.69 and returns an explicit
+contract. `interrupt` is not advertised by the current daemon and returns an explicit
 unsupported result. AskUser and permission registries expose pending lists and
 first-winner responses over transport; persistent permission grants have one
 daemon-owned revisioned store.

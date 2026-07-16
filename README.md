@@ -356,6 +356,14 @@ reuses that daemon unless you pass an explicit endpoint/transport or
 intentionally want an isolated daemon namespace for tests, CI, or project-local
 experiments.
 
+**v0.7.71 packaged Electron patch:** packaged/asar Electron hosts can use daemon
+auto-start without relaunching the GUI. `ELECTRON_RUN_AS_NODE` is limited to a
+bootstrap-only child exec boundary and removed before daemon or ordinary user
+child code loads. The default-enabled Electron `RunAsNode` fuse is required;
+hosts that disable it must start the daemon through ordinary Node/KodaX CLI and
+connect in attach-only mode. For SDK calls, `homeDir` is the CLI-style base
+directory that owns `.kodax`, not the `.kodax` path itself.
+
 One daemon owns many sessions. Different sessions may run concurrently; starts
 within the same session are queued so that only one run is active for that
 session. Multiple `kodax` processes can attach to the same daemon and open or

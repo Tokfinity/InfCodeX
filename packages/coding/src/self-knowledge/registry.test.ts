@@ -111,6 +111,17 @@ describe('FEATURE_218 manual registry', () => {
     expect(mcp).toContain('partial provider failure');
   });
 
+  it('documents the v0.7.71 packaged Electron daemon boundary', () => {
+    const sdk = resolveKodaXManual({ topic: 'sdk' });
+
+    expect(sdk.matchedTopic).toBe('sdk');
+    expect(sdk.content).toContain('Packaged/asar Electron');
+    expect(sdk.content).toContain('ELECTRON_RUN_AS_NODE');
+    expect(sdk.content).toContain('RunAsNode fuse');
+    expect(sdk.content).toContain('attach-only');
+    expect(sdk.content).toContain('homeDir');
+  });
+
   it('documents the KAI-FCL boundary from v0.7.70 without rewriting history', () => {
     const result = resolveKodaXManual({ topic: 'license' });
 

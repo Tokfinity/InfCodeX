@@ -1,8 +1,8 @@
 # KodaX Product Requirements
 
-> Last updated: 2026-07-14
+> Last updated: 2026-07-16
 >
-> Current release baseline: `@kodax-ai/kodax@0.7.69`
+> Current release baseline: `@kodax-ai/kodax@0.7.71` release candidate
 >
 > This document describes the current product. Historical pre-v0.7.43
 > chain/harness designs have been removed from this current PRD because they no
@@ -97,6 +97,12 @@ starters must converge on the verified owner rather than start competing
 servers. Process-local callbacks and service objects must fail closed at
 Worker/daemon DTO boundaries. `close()` must terminate private inline/Worker
 ownership but only detach a daemon client.
+
+Packaged Electron hosts may auto-start the shared daemon only through a bounded
+Node bootstrap that cannot relaunch the GUI or leak Electron Node mode into
+daemon-owned user processes. Disabling Electron's `RunAsNode` fuse requires an
+ordinary Node/CLI-started daemon and attach-only SDK mode; no silent inline
+fallback is allowed.
 
 Worker resource limits and termination are fault-isolation features, not an
 untrusted-code sandbox. A caller that requires deterministic V8 disposal must

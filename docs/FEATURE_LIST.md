@@ -11,13 +11,13 @@
 
 | Item | Value |
 |---|---|
-| Current released version | `v0.7.68` |
-| Current package version | `@kodax-ai/kodax@0.7.69` release candidate; npm registry publication has not occurred |
+| Current released version | `v0.7.70` |
+| Current package version | `@kodax-ai/kodax@0.7.71` release candidate; npm registry publication has not occurred |
 | Workspace baseline | `llm / agent / coding / repl` 4 packages |
 | Total tracked features | `55` |
-| InProgress | `4` |
+| InProgress | `1` |
 | Planned | `11` |
-| Completed | `33` |
+| Completed | `36` |
 | Reviewed out of active roadmap | `7` (`105, 108, 231, 232, 235, 238, 244`) |
 | Tracked feature IDs | `007, 030, 093, 105, 108, 113, 139, 174, 211, 221, 224, 225, 228, 229, 230, 231, 232, 233, 234, 235, 236, 237, 238, 239, 240, 241, 242, 243, 244, 245, 246, 247, 248, 249, 250, 251, 252, 253, 254, 255, 256, 257, 258, 259, 260, 261, 262, 263, 264, 265, 266, 267, 268, 269, 270` |
 | Archive cutoff | Shipped / canceled / absorbed / shelved items through `v0.7.49` are archived. |
@@ -26,9 +26,9 @@
 
 | Status | Count | Feature IDs | Next checkpoint |
 |---|---:|---|---|
-| Completed | 33 | `260, 261, 259, 258, 253, 254, 255, 256, 257, 228, 251, 252, 250, 248, 249, 247, 246, 245, 243, 242, 241, 233, 240, 239, 224, 221, 174, 211, 237, 229, 230, 234, 236` | `260` completed for v0.7.68 (2026-07-12) with 9593/9593 passing tests on both Node 20 and Node 22 release CI, full build and artifact validation, 87.58% focused line coverage, and all preregistered v2 memory-routing gates passing. `261`, `259`, and `258` shipped in v0.7.67 (2026-07-11). Earlier completion history is unchanged. |
-| InProgress | 4 | `269, 267, 268, 225` | `267`/`268` source implementation and F269 integration remain in the v0.7.69 slot; they are not automatically rescheduled. `269` is hardened after the Space SDK package review: server admission, complete snapshots, lifecycle/events/transport types, shared settings, stable bridge resume, recovery queries, and preflight are implemented. Node 20/22 focused regression, root type/build/bundle/DTS, fresh-tarball consumer/Worker/CLI/DTS, and Windows binary gates pass locally. GitHub Actions run `29385073422` is green for Node 20/22 build/DTS/full tests and the Node 22 Unix-socket gate. Remaining gates are formal Space smoke, npm publication, and independent F267/F268 release evidence. `225` broader current-HEAD cleanup remains outside this release. |
-| Planned, near-term | 5 | `266, 270, 263, 264, 265` | `v0.7.71` -> `v0.7.85` |
+| Completed | 36 | `269, 268, 267, 260, 261, 259, 258, 253, 254, 255, 256, 257, 228, 251, 252, 250, 248, 249, 247, 246, 245, 243, 242, 241, 233, 240, 239, 224, 221, 174, 211, 237, 229, 230, 234, 236` | `267`, `268`, and `269` shipped together in v0.7.69 (2026-07-15): bidirectional A2A 1.0, split hot-reloadable integrations, and the authoritative shared Coder daemon. `260` shipped in v0.7.68; `261`, `259`, and `258` shipped in v0.7.67. Earlier completion history is unchanged. |
+| InProgress | 1 | `225` | The bounded current-HEAD REPL cleanup remains planned for v0.7.100; its early dead StatusBar slice is already complete. |
+| Planned, near-term | 5 | `266, 270, 263, 264, 265` | `v0.7.72` -> `v0.7.85` |
 | Planned, v0.8.x | 5 | `007, 030, 093, 113, 139` | `v0.8.5+` |
 | Planned, v0.9.x | 1 | `262` | `v0.9.0` |
 | Reviewed out, 2026-07-12 | 7 | `244, 231, 235, 238, 232, 105, 108` | Shelved, deferred, absorbed, or cancelled after the post-v0.7.70 roadmap review. |
@@ -54,8 +54,8 @@
 | `v0.7.68` | `0` |
 | `v0.7.69` | `3` |
 | `v0.7.70` | `0` |
-| `v0.7.71` | `2` |
-| `v0.7.72` | `0` |
+| `v0.7.71` | `0` |
+| `v0.7.72` | `2` |
 | `v0.7.73` | `0` |
 | `v0.7.74` | `0` |
 | `v0.7.75` | `1` |
@@ -262,6 +262,11 @@
 > This schedule correction supersedes the earlier `v0.7.70` target references
 > above without rewriting their historical record.
 >
+> **2026-07-16 second patch deferral**: `FEATURE_266` and `FEATURE_270` move
+> together again from `v0.7.71` to `v0.7.72`. Their scope, priority,
+> dependencies, and acceptance criteria remain unchanged. This is the current
+> target and supersedes the 2026-07-15 `v0.7.71` assignment.
+>
 > **2026-07-15 F269 embedder patch**: the feature-free `v0.7.70` patch fixes
 > logical daemon client accounting and adds a public, revisioned, atomic
 > daemon-to-inline rollback contract. Process-distinct automation proves
@@ -275,6 +280,13 @@
 > The release also begins the KAI-FCL-1.0 license boundary. These are bounded
 > compatibility, correctness, and distribution changes; they do not add a new
 > Feature or move F266/F270 back into this patch slot.
+>
+> **2026-07-16 v0.7.71 patch release**: issues 165 and 166 make packaged/asar
+> Electron daemon auto-start execute through a bootstrap-only Node boundary,
+> prevent a second GUI launch, scrub Electron Node mode before daemon and user
+> child code loads, and document the `RunAsNode` fuse/attach-only boundary.
+> Windows CRLF template checks are also normalized. These are bounded Runtime
+> and release-tooling fixes; no new Feature enters the slot.
 >
 > **2026-07-12 F225 early cleanup slice**: the Classic readline
 > reverse-video StatusBar was proven write-only (`update()` calls with no
@@ -304,41 +316,17 @@
 
 | ID | Title | Category | Priority | Planned | Design |
 |---|---|---|---|---|---|
-| `267` | Bidirectional A2A Client Executor + KodaX Agent Server | Core / Agent Interoperability + Runtime SDK | Critical | `v0.7.69` | [v0.7.69](features/v0.7.69.md#feature_267-bidirectional-a2a-client-executor--kodax-agent-server) |
-| `268` | Hot-Reloadable Integration Configuration Split | Core / Configuration + Runtime | Critical | `v0.7.69` | [v0.7.69](features/v0.7.69.md#feature_268-hot-reloadable-integration-configuration-split) |
-| `269` | Shared Daemon Multi-Client Consistency + Secure Host Bridges | Core / Runtime + SDK + Local Security | Critical | `v0.7.69` | [v0.7.69](features/v0.7.69.md#feature_269-shared-daemon-multi-client-consistency--secure-host-bridges) |
 | `225` | REPL Dead / Legacy Code Cleanup | Internal / Refactor + Tech Debt | Medium | `v0.7.100` | [v0.7.100](features/v0.7.100.md#feature_225-repl-dead--legacy-code-cleanup) |
 
 Recent completion notes:
 
-`267` and `268` implementation and F269 integration are complete for
-`v0.7.69`: the package exposes the bounded A2A 1.0 JSON-RPC/SSE client/server
-edge, no-code A2A management/serving, local Agent and exact Skill-script
-admission, three split user integration files, lossless migration, canonical
-templates, last-known-good hot reload, draining, and restart-required
-classification. They remain InProgress only for independent interoperability,
-cross-platform package/binary, and release-machine evidence; no known source
-implementation item remains open.
-
-`269` source implementation is complete for the unpublished `v0.7.69` release candidate: the existing Runtime daemon now
-provides atomic session observation, durable operation deduplication, stable
-same-session order, settings/grant CAS, transport-safe AskUser/permission,
-structured crash outcomes, Space keychain credential brokerage, run-bound Host
-Tools, and a shared daemon/inline Coder owner fence with sticky rollback. A real
-daemon process plus independent Space-like/observer processes verifies shared
-state and credential non-persistence. The Space package review additionally
-closed server-side Partner admission, complete late-join projection, prompt
-connection lifecycle, typed event parsing, daemon-safe run DTOs,
-`agentMode`/`autoModeEngine` settings CAS, stable-client credential/Host Tool
-resume, durable recovery lookup, and daemon stop preflight. F269 remains
-InProgress for the current GitHub full matrix, formal npm/Space packaged smoke,
-and Windows/Ubuntu release evidence; it does not move F267 or F268. The 2026-07-14 implementation review closed ordering,
-restart reconciliation, event-trim projection, owner-lock/atomic-release,
-Host Tool revoke, credential expiry/configuration/redaction, and legacy
-settings-CAS gaps. Earlier release-candidate evidence remains recorded, but the
-post-review delta passes its local type/build/package/binary gates, and GitHub
-Actions run `29385073422` passes the Node 20/22 full matrix plus Node 22 Unix
-socket gate. Formal Space/package smoke remains required before publication.
+`267`, `268`, and `269` shipped together in `v0.7.69`. The release provides the
+bounded A2A 1.0 JSON-RPC/SSE client/server edge, no-code Agent management and
+serving, exact Agent/Skill-script admission, three split integration files with
+migration and last-known-good hot reload, plus the authoritative shared Coder
+daemon with atomic observation, durable operations, transport-safe interaction,
+run-scoped credential/Host Tool bridges, recovery facts, and owner fencing.
+Their release evidence is historical and no source or publication gate remains.
 
 `260` completed for `v0.7.68`: the thin experimental Memory Agent SDK,
 zero-wait scoped recall, deliberate read-only `memory_recall`, trace-only
@@ -415,8 +403,8 @@ fixed GitHub binary archive sidecar omission before tagging.
 
 | ID | Title | Category | Priority | Planned | Design |
 |---|---|---|---|---|---|
-| `266` | Learning Center + Learned Capability Runtime Control Plane | Core / Agent Learning + Runtime SDK | High | `v0.7.71` | [v0.7.71](features/v0.7.71.md#feature_266-learning-center--learned-capability-runtime-control-plane) |
-| `270` | Ultra-Aligned Adaptive Multi-Agent Actor Control Plane | Core / Agent Orchestration + Runtime | High | `v0.7.71` | [v0.7.71](features/v0.7.71.md#feature_270-ultra-aligned-adaptive-multi-agent-actor-control-plane) |
+| `266` | Learning Center + Learned Capability Runtime Control Plane | Core / Agent Learning + Runtime SDK | High | `v0.7.72` | [v0.7.72](features/v0.7.72.md#feature_266-learning-center--learned-capability-runtime-control-plane) |
+| `270` | Ultra-Aligned Adaptive Multi-Agent Actor Control Plane | Core / Agent Orchestration + Runtime | High | `v0.7.72` | [v0.7.72](features/v0.7.72.md#feature_270-ultra-aligned-adaptive-multi-agent-actor-control-plane) |
 | `263` | Evidence-Gated Background Skill Learning Loop | Core / Skills + Self-Improvement | High | `v0.7.75` | [v0.7.75](features/v0.7.75.md#feature_263-evidence-gated-background-skill-learning-loop) |
 | `264` | Evidence-Gated Extension Learning Loop | Core / Extensions + Self-Improvement | High | `v0.7.80` | [v0.7.80](features/v0.7.80.md#feature_264-evidence-gated-extension-learning-loop) |
 | `265` | Work Fast Path + Coding Assurance Budget | Core / Performance + Agent Quality | High | `v0.7.85` | [v0.7.85](features/v0.7.85.md#feature_265-work-fast-path--coding-assurance-budget) |
@@ -459,6 +447,9 @@ fixed GitHub binary archive sidecar omission before tagging.
 
 | ID | Title | Released | Design | Notes |
 |---|---|---|---|---|
+| `269` | Shared Daemon Multi-Client Consistency + Secure Host Bridges | `v0.7.69` | [v0.7.69](features/v0.7.69.md#feature_269-shared-daemon-multi-client-consistency--secure-host-bridges) | Authoritative shared Coder daemon observation/resync, durable operations, transport-safe AskUser/permissions, run-scoped credential and Host Tool bridges, recovery facts, and daemon/inline owner fencing. |
+| `268` | Hot-Reloadable Integration Configuration Split | `v0.7.69` | [v0.7.69](features/v0.7.69.md#feature_268-hot-reloadable-integration-configuration-split) | Split user MCP/A2A/Extension files, canonical templates, lossless migration, last-known-good hot reload, and restart-required classification. |
+| `267` | Bidirectional A2A Client Executor + KodaX Agent Server | `v0.7.69` | [v0.7.69](features/v0.7.69.md#feature_267-bidirectional-a2a-client-executor--kodax-agent-server) | Bounded A2A 1.0 client/server edge, no-code management/serving, trusted Agent/Skill/tool admission, durable tasks, and explicit artifact publication. |
 | `260` | KodaX Memory Agent — Proactive Execution Recall + Scoped Memory Consolidation | `v0.7.68` | [v0.7.68](features/v0.7.68.md#feature_260-kodax-memory-agent--proactive-execution-recall--scoped-memory-consolidation) | Thin experimental agent-layer Memory Agent over F228; exact scoped zero-wait recall, deliberate read-only query, trace-only decision receipts, bounded outcome/review lifecycle, consult-before-write promotion, policy-versioned cache-safe integration, deterministic safety gates, and passing v2 routing eval. |
 | `261` | Searchable Session Resume TUI + Session Listing Pagination | `v0.7.67` | [v0.7.67](features/v0.7.67.md#feature_261-searchable-session-resume-tui--session-listing-pagination) | Bare `-r` searchable/paged keyboard picker with full selected ID, deterministic ID-first/exact-title resume and duplicate disambiguation, meaningful ACP titles, Embedded/Daemon `surface` + cursor listing, zero-message suppression, isolated ACP tests, and preview-first reversible ACP pollution cleanup. |
 | `259` | Cost-Disciplined Agent Build Loop + Review Handoff Optimization | `v0.7.67` | [v0.7.67](features/v0.7.67.md#feature_259-cost-disciplined-agent-build-loop--review-handoff-optimization) | Layer 1 complete; Layer 2 shows material semantic value with no regression after retiring official Kimi; bounded Layer 3 passes 8/8 proposed vs 6/8 baseline, reduces total tokens 16.9%, standard-review median tokens 57.2%, primary starts 75%, and duplicate packet reads 83.3%. Main-session recommendation: `recommend-ship`. |
