@@ -257,7 +257,7 @@ import { copyTextToClipboard } from "../common/clipboard.js";
 import { formatCompactionPolicy } from "../common/compaction-display.js";
 import { initializeSkillRegistry, getSkillRegistry } from "@kodax-ai/agent";
 import { getTheme } from "./themes/index.js";
-import { KODAX_BANNER_LOGO_LINES } from "./constants/banner-logo.js";
+import { INFCODEX_BANNER_LOGO_LINES } from "./constants/banner-logo.js";
 import chalk from "chalk";
 import {
   ShortcutsProvider,
@@ -1222,7 +1222,7 @@ const Banner: React.FC<BannerProps> = ({
   return (
     <Box flexDirection="column" marginBottom={1}>
       {/* Logo */}
-      {KODAX_BANNER_LOGO_LINES.map((line, i) => (
+      {INFCODEX_BANNER_LOGO_LINES.map((line, i) => (
         <Text key={i} color={theme.colors.primary}>
           {line}
         </Text>
@@ -1318,7 +1318,7 @@ function buildBannerTranscriptSection(props: BannerProps): TranscriptSection {
     });
   };
 
-  KODAX_BANNER_LOGO_LINES.forEach((line, index) => {
+  INFCODEX_BANNER_LOGO_LINES.forEach((line, index) => {
     pushLineRows(`banner-logo-${index}`, line, { color: "primary" });
   });
   pushLineRows("banner-tagline", taglineLine, { color: "primary" });

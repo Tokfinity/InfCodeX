@@ -439,7 +439,7 @@ function buildStatusBarSegments(props: StatusBarProps): StatusBarSegment[] {
   const segments: StatusBarSegment[] = [
     {
       id: "agent-mode",
-      text: `KodaX - ${agentMode.toUpperCase()}`,
+      text: `InfCodeX - ${agentMode.toUpperCase()}`,
       color: "primary",
       bold: true,
     },

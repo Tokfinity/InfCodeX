@@ -1,15 +1,15 @@
 import { describe, expect, it } from "vitest";
-import { KODAX_BANNER_LOGO_LINES } from "./banner-logo.js";
+import { INFCODEX_BANNER_LOGO_LINES } from "./banner-logo.js";
 
-describe("KODAX_BANNER_LOGO_LINES", () => {
-  it("preserves the original six-line block logo", () => {
-    expect(KODAX_BANNER_LOGO_LINES).toEqual([
-      "  ██╗  ██╗  ██████╗  ██████╗    █████╗   ██╗  ██╗",
-      "  ██║ ██╔╝ ██╔═══██╗ ██╔══██╗  ██╔══██╗  ╚██╗██╔╝",
-      "  █████╔╝  ██║   ██║ ██║  ██║  ███████║   ╚███╔╝ ",
-      "  ██╔═██╗  ██║   ██║ ██║  ██║  ██╔══██║   ██╔██╗ ",
-      "  ██║  ██╗ ╚██████╔╝ ██████╔╝  ██║  ██║  ██╔╝ ██╗",
-      "  ╚═╝  ╚═╝  ╚═════╝  ╚═════╝   ╚═╝  ╚═╝  ╚═╝  ╚═╝",
+describe("INFCODEX_BANNER_LOGO_LINES", () => {
+  it("renders the InfCodeX six-line block logo", () => {
+    expect(INFCODEX_BANNER_LOGO_LINES).toEqual([
+      "  ██╗███╗   ██╗███████╗ ██████╗ ██████╗ ██████╗ ███████╗██╗  ██╗",
+      "  ██║████╗  ██║██╔════╝██╔════╝██╔═══██╗██╔══██╗██╔════╝╚██╗██╔╝",
+      "  ██║██╔██╗ ██║█████╗  ██║     ██║   ██║██║  ██║█████╗   ╚███╔╝ ",
+      "  ██║██║╚██╗██║██╔══╝  ██║     ██║   ██║██║  ██║██╔══╝   ██╔██╗ ",
+      "  ██║██║ ╚████║██║     ╚██████╗╚██████╔╝██████╔╝███████╗██╔╝ ██╗",
+      "  ╚═╝╚═╝  ╚═══╝╚═╝      ╚═════╝ ╚═════╝ ╚═════╝ ╚══════╝╚═╝  ╚═╝",
     ]);
   });
 });

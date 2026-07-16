@@ -15,6 +15,7 @@ import { formatWorkspaceTruth } from './workspace-runtime.js';
 import type { InteractiveContext } from './context.js';
 import type { CurrentConfig } from './commands.js';
 import { formatCompactionPolicy } from '../common/compaction-display.js';
+import { INFCODEX_BANNER_LOGO_LINES } from '../ui/constants/banner-logo.js';
 
 export function printWorkspaceEntryNotice(runtimeInfo: InteractiveContext['runtimeInfo']): void {
   if (!runtimeInfo?.workspaceRoot) {
@@ -38,14 +39,7 @@ export function printStartupBanner(config: CurrentConfig, mode: string, compacti
     thinking: config.thinking,
     reasoningMode: config.reasoningMode,
   });
-  // KODAX block character logo - KODAX 方块字符 logo
-  const logo = `
-  ██╗  ██╗  ██████╗  ██████╗    █████╗   ██╗  ██╗
-  ██║ ██╔╝ ██╔═══██╗ ██╔══██╗  ██╔══██╗  ╚██╗██╔╝
-  █████╔╝  ██║   ██║ ██║  ██║  ███████║   ╚███╔╝
-  ██╔═██╗  ██║   ██║ ██║  ██║  ██╔══██║   ██╔██╗
-  ██║  ██╗ ╚██████╔╝ ██████╔╝  ██║  ██║  ██╔╝ ██╗
-  ╚═╝  ╚═╝  ╚═════╝  ╚═════╝   ╚═╝  ╚═╝  ╚═╝  ╚═╝`;
+  const logo = INFCODEX_BANNER_LOGO_LINES.join('\n');
 
   const bar = (color: string): string => chalk.hex(color)('  ▎ ');
   const dot = chalk.hex(theme.colors.dim)('  ·  ');

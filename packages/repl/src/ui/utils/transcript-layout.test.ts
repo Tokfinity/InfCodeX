@@ -136,7 +136,7 @@ describe("splitInlineLedgerModel (FEATURE_214 bounded live + unified line commit
       for (const r of s.rows) expect(passed.has(r.text)).toBe(true); // nothing injected
     }
     const committedText = split.committedSections.flatMap((s) => s.rows.map((r) => r.text)).join("\n");
-    for (const banned of ["Queue a follow-up", "Type a message", "KodaX -", "────"]) {
+    for (const banned of ["Queue a follow-up", "Type a message", "InfCodeX -", "────"]) {
       expect(committedText.includes(banned)).toBe(false);
     }
   });

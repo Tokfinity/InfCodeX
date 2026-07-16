@@ -172,7 +172,7 @@ describe("status-bar (Ink view-model) — auto-mode engine indicator (FEATURE_09
 
   it("renders AMAW as the short status-bar agent label", () => {
     const text = getStatusBarText(baseProps({ agentMode: "amaw" }));
-    expect(text).toContain("KodaX - AMAW");
+    expect(text).toContain("InfCodeX - AMAW");
     expect(text).not.toContain("AMA-workflow");
     expect(text).not.toContain("AMA Workflow");
   });

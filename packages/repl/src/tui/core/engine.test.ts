@@ -997,7 +997,7 @@ describe("inline live-block bounded repaint (FEATURE_214 baseline, ledger OFF)",
     const mkFrame = (n: number): string[] => {
       const rows = ["You 05:19 PM"];
       for (let i = 1; i <= n; i++) rows.push(`Tool line ${i}`);
-      rows.push(SEP, "> Queue a follow-up...", "KodaX - AMA status");
+      rows.push(SEP, "> Queue a follow-up...", "InfCodeX - AMA status");
       return rows;
     };
     const model = driveInline([
@@ -1008,7 +1008,7 @@ describe("inline live-block bounded repaint (FEATURE_214 baseline, ledger OFF)",
     const sb = model.scrollback();
     // UI chrome must NEVER enter scrollback.
     expect(sb.some((r) => r.includes("Queue a follow-up"))).toBe(false);
-    expect(sb.some((r) => r.includes("KodaX -"))).toBe(false);
+    expect(sb.some((r) => r.includes("InfCodeX -"))).toBe(false);
     expect(sb.some((r) => r.includes(SEP))).toBe(false);
     // No transcript line duplicated in scrollback.
     const toolLines = sb.filter((r) => r.startsWith("Tool line "));
@@ -1054,7 +1054,7 @@ describe("inline live-block bounded repaint (FEATURE_214 baseline, ledger OFF)",
     // physically pinned to the bottom by the history above. The resting-cursor
     // newline must NOT scroll a blank row in beneath the status bar.
     const SEP = "--------------------------------";
-    const STATUS = "KodaX - AMA ready";
+    const STATUS = "InfCodeX - AMA ready";
     const model = driveInlineAnchoredToBottom([
       "You 05:19 PM",
       "latest changes",
@@ -1064,9 +1064,9 @@ describe("inline live-block bounded repaint (FEATURE_214 baseline, ledger OFF)",
     ]);
     const visible = model.allRows();
     // The bottom-most visible row is the status bar (no scrolled-in blank line).
-    expect(visible[VH - 1]).toContain("KodaX");
+    expect(visible[VH - 1]).toContain("InfCodeX");
     // And the status bar appears exactly once (it was not duplicated by a scroll).
-    expect(visible.filter((r) => r.includes("KodaX")).length).toBe(1);
+    expect(visible.filter((r) => r.includes("InfCodeX")).length).toBe(1);
   });
 
   it("inline FULL RESET (viewport height shrink) parks the input anchor on the right row — no off-by-one (FEATURE_214)", () => {
