@@ -484,6 +484,7 @@ function validateModelDescriptor(
     throw new Error(`provider-capabilities.json: ${path} must be an object`);
   }
   const id = requireString(raw.id, `${path}.id`);
+  const wireModel = optionalString(raw.wireModel, `${path}.wireModel`);
   const displayName = optionalString(raw.displayName, `${path}.displayName`);
   const contextWindow = optionalNumber(raw.contextWindow, `${path}.contextWindow`);
   const maxOutputTokens = optionalNumber(
@@ -515,6 +516,7 @@ function validateModelDescriptor(
         );
   const reasoningProfile = validateReasoningProfileField(raw, path);
   const descriptor: KodaXModelDescriptor = { id };
+  if (wireModel !== undefined) descriptor.wireModel = wireModel;
   if (displayName !== undefined) descriptor.displayName = displayName;
   if (contextWindow !== undefined) descriptor.contextWindow = contextWindow;
   if (maxOutputTokens !== undefined) descriptor.maxOutputTokens = maxOutputTokens;
@@ -629,6 +631,20 @@ function validateProviderEntry(
     models = raw.models.map((entry, index) =>
       validateModelDescriptor(entry, `providers.${name}.models[${index}]`),
     );
+    const declaredModels = new Set([
+      ...(model === undefined ? [] : [model]),
+      ...models.map((descriptor) => descriptor.id),
+    ]);
+    for (const [index, descriptor] of models.entries()) {
+      if (
+        descriptor.wireModel !== undefined &&
+        !declaredModels.has(descriptor.wireModel)
+      ) {
+        throw new Error(
+          `provider-capabilities.json: providers.${name}.models[${index}].wireModel must reference a declared model, got ${JSON.stringify(descriptor.wireModel)}`,
+        );
+      }
+    }
   }
 
   const entry: ProviderCapabilityJsonEntry = {

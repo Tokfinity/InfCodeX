@@ -131,22 +131,24 @@ describe.skipIf(!RUN_INTEGRATION)('Kimi public API — real provider HTTP', () =
 });
 
 describe.skipIf(!RUN_KIMI_CODE_INTEGRATION)('Kimi Code — real provider HTTP', () => {
-  it('streams K3 with max thinking over the Anthropic-compatible wire', async () => {
+  it('streams the Moderato K3 tier over the upstream k3 wire model', async () => {
     const provider = resolveProvider('kimi-code');
 
     expect(provider.getModel()).toBe('kimi-for-coding');
     expect(provider.getAvailableModels()).toEqual([
       'kimi-for-coding',
       'k3',
+      'k3-256k',
       'kimi-for-coding-highspeed',
     ]);
+    expect(provider.getEffectiveContextWindow('k3-256k')).toBe(262_144);
 
     const result = await provider.stream(
       [{ role: 'user', content: 'Reply with exactly: OK' }],
       [],
       'Follow the user request exactly and keep the answer terse.',
       { enabled: true, effort: 'max' },
-      { modelOverride: 'k3', maxOutputTokensOverride: 512 },
+      { modelOverride: 'k3-256k', maxOutputTokensOverride: 512 },
       AbortSignal.timeout(45_000),
     );
 
@@ -161,14 +163,14 @@ describe.skipIf(!RUN_KIMI_CODE_INTEGRATION)('Kimi Code — real provider HTTP', 
     );
   }, 60_000);
 
-  it('honors explicit disabled thinking on K3', async () => {
+  it('honors the legacy reasoning=false control on K3', async () => {
     const provider = resolveProvider('kimi-code');
 
     const result = await provider.stream(
       [{ role: 'user', content: 'Reply with exactly: OK' }],
       [],
       'Follow the user request exactly and keep the answer terse.',
-      { enabled: false, effort: 'none' },
+      false,
       { modelOverride: 'k3', maxOutputTokensOverride: 512 },
       AbortSignal.timeout(45_000),
     );

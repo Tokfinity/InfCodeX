@@ -368,12 +368,24 @@ export abstract class KodaXBaseProvider {
     // silently resolved to the 200K provider default and fired compaction
     // ~5x early.
     const fromList = this.config.models?.find(m => m.id === id);
-    if (fromList) return fromList;
+    if (fromList) {
+      const wireDescriptor = fromList.wireModel
+        ? this.config.models?.find(m => m.id === fromList.wireModel)
+        : undefined;
+      return wireDescriptor
+        ? { ...wireDescriptor, ...fromList }
+        : fromList;
+    }
     // No per-model descriptor — return a bare default-model marker so the
     // getEffective* cascade drops to the provider-level config; unknown
     // non-default ids resolve to undefined (same as before).
     if (id === this.config.model) return { id: this.config.model };
     return undefined;
+  }
+
+  protected getWireModelId(modelId?: string): string {
+    const id = modelId ?? this.config.model;
+    return this.getModelDescriptor(id)?.wireModel ?? id;
   }
 
   getBaseUrl(): string | undefined {
@@ -630,7 +642,7 @@ export abstract class KodaXBaseProvider {
       // kimi-k2.7-code / minimax-m2-always). Mirrors the explicit-only policy
       // in `validateExplicitReasoningEffort`. An IMPLICIT/default 'none' —
       // produced by `normalizeReasoningRequest(undefined)` when the caller
-      // passes no reasoning at all (effortSource 'legacy'/non-explicit) — must
+      // passes no reasoning at all (effortSource 'omitted'/non-explicit) — must
       // NOT crash the request: an always-on model simply falls back to its
       // `defaultEffort` and thinks. Without this, every caller that omits
       // reasoning (e.g. the eval harness) throws against these models.

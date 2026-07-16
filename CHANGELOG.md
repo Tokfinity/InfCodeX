@@ -9,12 +9,16 @@ All notable changes to this project will be documented in this file.
 ### Added
 
 - **Kimi Code K3 support.** The `kimi-code` subscription provider now exposes
-  `k3` (up to 1,048,576 context tokens, plan-dependent) and
-  `kimi-for-coding-highspeed` alongside the stable `kimi-for-coding` default.
-  K3 sends its effort through the Anthropic-compatible `thinking.effort` wire,
-  defaults to `max`, and honors explicit disabled thinking. Static capability,
-  reasoning, media, cost-tracking, and opt-in real-wire regressions cover all
-  three subscription routes.
+  `k3-256k` (Moderato) and `k3` (1,048,576 context tokens, Allegretto+) as
+  explicit catalog choices, alongside `kimi-for-coding-highspeed` and the
+  stable `kimi-for-coding` default. Both K3 choices send the upstream model id
+  `k3`, so users do not need to override compaction settings for their plan.
+  K3 sends its effort inside `thinking.effort` on both Anthropic- and
+  OpenAI-compatible transports, defaults omitted reasoning to `max`, and
+  preserves both legacy `reasoning=false` and explicit `effort=none` as disabled
+  thinking. Static
+  capability, reasoning, media, cost-tracking, and opt-in real-wire regressions
+  cover the subscription routes and local context-tier mapping.
 
 ### Fixed
 

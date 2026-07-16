@@ -72,6 +72,14 @@ describe('built-in provider model capabilities (no API key required)', () => {
       disabledEfforts: ['none'],
     });
 
+    const k3Moderato = getModelCapabilities('kimi-code', 'k3-256k');
+    expect(k3Moderato?.displayName).toBe('Kimi K3 (256K, Moderato)');
+    expect(k3Moderato?.contextWindow).toBe(262_144);
+    expect(k3Moderato?.reasoningProfile).toMatchObject({
+      reasoningPreset: 'kimi-k3',
+      defaultEffort: 'max',
+    });
+
     const stable = getModelCapabilities('kimi-code', 'kimi-for-coding');
     expect(stable?.contextWindow).toBe(262_144);
     expect(stable?.isDefault).toBe(true);

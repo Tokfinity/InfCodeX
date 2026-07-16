@@ -299,6 +299,33 @@ describe('openai reasoning capability', () => {
     expect(create.mock.calls[0]?.[0].thinking).toEqual({ type: 'enabled' });
   });
 
+  it('preserves K3 default and explicit reasoning controls on the OpenAI-compatible wire', async () => {
+    const create = vi.fn().mockResolvedValue(createCompletedOpenAIStream());
+    const provider = new TestOpenAIProvider('kimi', 'native-effort', {
+      chat: { completions: { create } },
+    }, {
+      model: 'k3',
+      reasoningProfile: {
+        reasoningPreset: 'kimi-k3',
+        effortStrategy: 'provider-toggle',
+        thinkingStrategy: 'provider-toggle',
+        defaultEffort: 'max',
+        supportedEfforts: [{ value: 'none' }, { value: 'max', isDefault: true }],
+        disabledEfforts: ['none'],
+        supportsReasoningEffort: true,
+        supportsDisabledThinking: true,
+      },
+    });
+
+    await provider.stream(MESSAGES, TOOLS, 'system');
+    await provider.stream(MESSAGES, TOOLS, 'system', false);
+    await provider.stream(MESSAGES, TOOLS, 'system', { ...reasoning, effort: 'max' });
+
+    expect(create.mock.calls[0]?.[0].thinking).toEqual({ type: 'enabled', effort: 'max' });
+    expect(create.mock.calls[1]?.[0].thinking).toEqual({ type: 'disabled' });
+    expect(create.mock.calls[2]?.[0].thinking).toEqual({ type: 'enabled', effort: 'max' });
+  });
+
   it('rejects explicit attempts to disable Kimi K2.7 Code before stream or complete hits the wire', async () => {
     const create = vi.fn().mockResolvedValue(createCompletedOpenAIStream());
     const provider = new TestOpenAIProvider('kimi', 'native-toggle', {

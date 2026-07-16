@@ -95,14 +95,17 @@ describe('provider registry', () => {
     expect(kimiCode.getAvailableModels()).toEqual([
       'kimi-for-coding',
       'k3',
+      'k3-256k',
       'kimi-for-coding-highspeed',
     ]);
     expect(kimiCode.getEffectiveContextWindow('kimi-for-coding')).toBe(262_144);
     expect(kimiCode.getEffectiveContextWindow('kimi-for-coding-highspeed')).toBe(262_144);
     expect(kimiCode.getEffectiveContextWindow('k3')).toBe(1_048_576);
+    expect(kimiCode.getEffectiveContextWindow('k3-256k')).toBe(262_144);
     expectReasoningPreset('kimi-code', 'kimi-for-coding', 'kimi-k2.7-code');
     expectReasoningPreset('kimi-code', 'kimi-for-coding-highspeed', 'kimi-k2.7-code');
     expectReasoningPreset('kimi-code', 'k3', 'kimi-k3');
+    expectReasoningPreset('kimi-code', 'k3-256k', 'kimi-k3');
   });
 
   it('registers Volcengine Ark Coding Plan as ark-coding (Anthropic-compat, ARK_CODING_API_KEY)', () => {

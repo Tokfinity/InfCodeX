@@ -133,6 +133,7 @@ function normalizeModel(provider: string, model: string | undefined): string | u
     if (normalized === 'k2.7-code') return 'kimi-k2.7-code';
     if (normalized === 'k2.7-code-highspeed') return 'kimi-k2.7-code-highspeed';
   }
+  if (provider === 'kimi-code' && normalized === 'k3-256k') return 'k3';
   if (provider === 'minimax-coding' || provider === 'minimax') {
     if (normalized === 'minimax-m3') return 'minimax-m3';
   }

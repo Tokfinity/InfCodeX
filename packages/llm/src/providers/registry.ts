@@ -548,6 +548,15 @@ function makeDefaultDescriptor(
   return { id: snapshot.model };
 }
 
+function resolveWireModelDescriptor(
+  snapshot: ProviderSnapshot,
+  descriptor: KodaXModelDescriptor,
+): KodaXModelDescriptor {
+  if (!descriptor.wireModel) return descriptor;
+  const wireDescriptor = snapshot.models?.find((model) => model.id === descriptor.wireModel);
+  return wireDescriptor ? { ...wireDescriptor, ...descriptor } : descriptor;
+}
+
 function effectiveCapabilities(
   providerName: string,
   snapshot: ProviderSnapshot,
@@ -593,7 +602,8 @@ export function getProviderModelDescriptors(
   const models = snapshot.models ?? [];
   const defaultEntry = models.find((m) => m.id === snapshot.model);
   const alternatives = models.filter((m) => m.id !== snapshot.model);
-  return [defaultEntry ?? makeDefaultDescriptor(snapshot), ...alternatives];
+  return [defaultEntry ?? makeDefaultDescriptor(snapshot), ...alternatives]
+    .map((descriptor) => resolveWireModelDescriptor(snapshot, descriptor));
 }
 
 /**
@@ -621,7 +631,11 @@ export function getModelCapabilities(
   // resolveModelCapabilities agrees with getEffectiveContextWindow/MaxOutputTokens.
   const entry = snapshot.models?.find((m) => m.id === modelId);
   if (entry) {
-    return effectiveCapabilities(providerName, snapshot, entry);
+    return effectiveCapabilities(
+      providerName,
+      snapshot,
+      resolveWireModelDescriptor(snapshot, entry),
+    );
   }
   if (modelId === snapshot.model) {
     return effectiveCapabilities(providerName, snapshot, makeDefaultDescriptor(snapshot));

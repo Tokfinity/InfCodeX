@@ -261,7 +261,7 @@
       "models": [
         {
           "id": "k3",
-          "displayName": "Kimi K3",
+          "displayName": "Kimi K3 (1M, Allegretto+)",
           "contextWindow": 1048576,
           "reasoningCapability": "native-effort",
           "reasoningProfile": {
@@ -287,6 +287,12 @@
             "supportsReasoningEffort": true,
             "supportsDisabledThinking": true
           }
+        },
+        {
+          "id": "k3-256k",
+          "wireModel": "k3",
+          "displayName": "Kimi K3 (256K, Moderato)",
+          "contextWindow": 262144
         },
         {
           "id": "kimi-for-coding-highspeed",

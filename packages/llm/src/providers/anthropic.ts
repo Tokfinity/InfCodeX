@@ -268,7 +268,7 @@ export abstract class KodaXAnthropicCompatProvider extends KodaXBaseProvider {
 
     if (preset === 'kimi-k3') {
       const useModelDefault =
-        reasoning.effortSource !== 'explicit' && reasoning.effort === 'none';
+        reasoning.effortSource === 'omitted' && reasoning.effort === 'none';
       if (intent.disabled && !useModelDefault) {
         params.thinking = { type: 'disabled' } as Anthropic.Messages.ThinkingConfigParam;
         return;
@@ -609,6 +609,7 @@ export abstract class KodaXAnthropicCompatProvider extends KodaXBaseProvider {
     return this.withRateLimit(async () => {
       const normalizedReasoning = this.normalizeReasoning(reasoning);
       const model = streamOptions?.modelOverride ?? this.config.model;
+      const wireModel = this.getWireModelId(model);
       this.validateExplicitReasoningEffort(normalizedReasoning, model);
       const maxOutputTokens =
         streamOptions?.maxOutputTokensOverride ?? this.getEffectiveMaxOutputTokens(model);
@@ -649,7 +650,7 @@ export abstract class KodaXAnthropicCompatProvider extends KodaXBaseProvider {
         capability: 'profile' | 'native-budget' | 'native-toggle' | 'native-adaptive' | 'none',
       ): Anthropic.Messages.MessageCreateParams => {
         const kwargs: Anthropic.Messages.MessageCreateParams = {
-          model,
+          model: wireModel,
           max_tokens: maxOutputTokens,
           system: this.applyCacheControlToSystem(this.buildSystemPrompt(system, messages)),
           messages: convertedMessages,
@@ -1052,6 +1053,7 @@ export abstract class KodaXAnthropicCompatProvider extends KodaXBaseProvider {
     return this.withRateLimit(async () => {
       const normalizedReasoning = this.normalizeReasoning(reasoning);
       const model = streamOptions?.modelOverride ?? this.config.model;
+      const wireModel = this.getWireModelId(model);
       this.validateExplicitReasoningEffort(normalizedReasoning, model);
       const maxOutputTokens =
         streamOptions?.maxOutputTokensOverride ?? this.getEffectiveMaxOutputTokens(model);
@@ -1092,7 +1094,7 @@ export abstract class KodaXAnthropicCompatProvider extends KodaXBaseProvider {
         capability: 'profile' | 'native-budget' | 'native-toggle' | 'native-adaptive' | 'none',
       ): Anthropic.Messages.MessageCreateParams => {
         const kwargs: Anthropic.Messages.MessageCreateParams = {
-          model,
+          model: wireModel,
           max_tokens: maxOutputTokens,
           system: this.applyCacheControlToSystem(this.buildSystemPrompt(system, messages)),
           messages: convertedMessages,

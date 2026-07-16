@@ -18,6 +18,7 @@ describe('getModelInputCapabilities', () => {
     expect(getModelInputCapabilities({ provider: 'kimi', model: 'kimi-k2.5' }).image.status).toBe('supported');
     expect(getModelInputCapabilities({ provider: 'ark-coding', model: 'kimi-k2.6' }).image.status).toBe('unsupported');
     expect(getModelInputCapabilities({ provider: 'kimi-code', model: 'k3' }).image.status).toBe('supported');
+    expect(getModelInputCapabilities({ provider: 'kimi-code', model: 'k3-256k' }).image.status).toBe('supported');
     expect(getModelInputCapabilities({ provider: 'kimi-code', model: 'k3' }).video.status).toBe('provider-native-unwired');
     expect(getModelInputCapabilities({ provider: 'kimi-code', model: 'kimi-for-coding-highspeed' }).image.status).toBe('supported');
   });

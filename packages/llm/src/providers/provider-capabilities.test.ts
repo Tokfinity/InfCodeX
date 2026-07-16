@@ -258,11 +258,12 @@ describe('FEATURE_198 — provider-capabilities loader', () => {
       expect(k.contextWindow).toBe(262_144);
       expect(k.models?.map((model) => model.id)).toEqual([
         'k3',
+        'k3-256k',
         'kimi-for-coding-highspeed',
       ]);
       expect(k.models?.find((model) => model.id === 'k3')).toEqual(
         expect.objectContaining({
-          displayName: 'Kimi K3',
+          displayName: 'Kimi K3 (1M, Allegretto+)',
           contextWindow: 1_048_576,
           reasoningCapability: 'native-effort',
           reasoningProfile: expect.objectContaining({
@@ -270,6 +271,13 @@ describe('FEATURE_198 — provider-capabilities loader', () => {
             defaultEffort: 'max',
             disabledEfforts: ['none'],
           }),
+        }),
+      );
+      expect(k.models?.find((model) => model.id === 'k3-256k')).toEqual(
+        expect.objectContaining({
+          displayName: 'Kimi K3 (256K, Moderato)',
+          contextWindow: 262_144,
+          wireModel: 'k3',
         }),
       );
     });
@@ -566,6 +574,26 @@ describe('FEATURE_198 — validator failure modes', () => {
         },
       },
       /id must be a non-empty string/,
+    );
+  });
+
+  it('rejects a wireModel alias whose target is not declared', () => {
+    shouldThrow(
+      {
+        version: 1,
+        updatedAt: 'x',
+        providers: {
+          foo: {
+            apiKeyEnv: 'F',
+            model: 'stable',
+            models: [{ id: 'tier-alias', wireModel: 'missing-target' }],
+            reasoningCapability: 'none',
+            capabilityProfile: 'native',
+            verifyStrategy: 'models-list',
+          },
+        },
+      },
+      /wireModel.*must reference a declared model/,
     );
   });
 

@@ -331,7 +331,11 @@ export function normalizeReasoningRequest(
   return {
     enabled: effort !== 'none',
     effort,
-    effortSource: explicitEffort !== undefined ? 'explicit' : 'legacy',
+    effortSource: explicitEffort !== undefined
+      ? 'explicit'
+      : reasoning === undefined
+        ? 'omitted'
+        : 'legacy',
     taskType: reasoning?.taskType ?? 'unknown',
     executionMode: reasoning?.executionMode ?? 'implementation',
   };

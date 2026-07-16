@@ -587,6 +587,23 @@ export abstract class KodaXOpenAICompatProvider extends KodaXBaseProvider {
       return;
     }
 
+    // Kimi's OpenAI-compatible endpoint uses the same nested thinking.effort shape.
+    if (preset === 'kimi-k3') {
+      const useModelDefault =
+        reasoning.effortSource === 'omitted' && reasoning.effort === 'none';
+      if (intent.disabled && !useModelDefault) {
+        params.thinking = { type: 'disabled' };
+        return;
+      }
+      params.thinking = {
+        type: 'enabled',
+        effort: useModelDefault
+          ? capability.defaultEffort ?? 'max'
+          : intent.effort ?? capability.defaultEffort ?? 'max',
+      };
+      return;
+    }
+
     if (
       preset === 'none' ||
       capability.effortStrategy === 'none' ||

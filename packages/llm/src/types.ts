@@ -535,7 +535,7 @@ export interface KodaXReasoningRequest {
 export interface KodaXNormalizedReasoningRequest {
   enabled: boolean;
   effort: KodaXWireReasoningEffort;
-  effortSource?: 'explicit' | 'legacy';
+  effortSource?: 'explicit' | 'legacy' | 'omitted';
   taskType: KodaXTaskType;
   executionMode: KodaXExecutionMode;
 }
@@ -544,6 +544,8 @@ export interface KodaXNormalizedReasoningRequest {
 
 export interface KodaXModelDescriptor {
   id: string;
+  /** Optional local alias target sent as the upstream API model id. */
+  wireModel?: string;
   displayName?: string;
   contextWindow?: number;
   maxOutputTokens?: number;

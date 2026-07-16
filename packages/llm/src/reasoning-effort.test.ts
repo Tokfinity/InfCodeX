@@ -48,6 +48,12 @@ describe('reasoning effort resolver', () => {
     });
   });
 
+  it('distinguishes omitted reasoning from explicit legacy boolean controls', () => {
+    expect(normalizeReasoningRequest(undefined).effortSource).toBe('omitted');
+    expect(normalizeReasoningRequest(false).effortSource).toBe('legacy');
+    expect(normalizeReasoningRequest({ enabled: false }).effortSource).toBe('legacy');
+  });
+
   it('parses env effort override with auto and unset as clear values', () => {
     expect(parseReasoningEffortEnv(undefined)).toEqual({ kind: 'unset' });
     expect(parseReasoningEffortEnv('')).toEqual({ kind: 'unset' });
