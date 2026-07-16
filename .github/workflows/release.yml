@@ -113,7 +113,7 @@ jobs:
         env:
           KODAX_ELECTRON_DIST: ${{ github.workspace }}\.electron-smoke\node_modules\electron\dist
           KODAX_ELECTRON_BUILDER_CLI: ${{ github.workspace }}\.electron-smoke\node_modules\electron-builder\out\cli\cli.js
-        run: node scripts/test-electron-daemon-smoke.mjs
+        run: npm run test:electron-daemon:built
 
       - name: Build binary (${{ matrix.target }})
         if: steps.filter.outputs.skip == 'false'

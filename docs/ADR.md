@@ -2,11 +2,18 @@
 
 > Last updated: 2026-07-17
 >
-> **v0.7.72 A2A durable-owner/admission correction:** normal RPC handling never
+> **v0.7.71 A2A durable-owner/admission correction:** normal RPC handling never
 > dual-reads pre-realm task keys; a stopped operator may explicitly rekey exact
 > known owners through the CLI or focused SDK migration. New records carry a
 > key-scheme marker. Global capacity uses a synchronous pending reservation, so
 > workspace/session/run preparation is outside any global asynchronous lock.
+>
+> **v0.7.71 provider/lifecycle addendum:** Kimi For Coding keeps
+> `kimi-for-coding` stable while adding `k3-256k` and the 1,048,576-token `k3`
+> tier over the upstream `k3` route with `thinking.effort`. External-Agent
+> owner-plane close has one configurable 30-second default deadline, obsolete
+> cleanup no longer occupies the registration mutation lane, and daemon
+> auto-start owns and terminates abandoned startup children.
 >
 > **v0.7.71 packaged-Electron patch addendum:** SDK daemon auto-start uses a
 > bootstrap-only Electron Node boundary, scrubs `ELECTRON_RUN_AS_NODE` before

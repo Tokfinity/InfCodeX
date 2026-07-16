@@ -301,14 +301,16 @@
 > compatibility, correctness, and distribution changes; they do not add a new
 > Feature or move F266/F270 back into this patch slot.
 >
-> **2026-07-16 v0.7.71 patch release**: issues 165 and 166 make packaged/asar
+> **2026-07-17 v0.7.71 patch release**: issues 165 and 166 make packaged/asar
 > Electron daemon auto-start execute through a bootstrap-only Node boundary,
 > prevent a second GUI launch, scrub Electron Node mode before daemon and user
 > child code loads, and document the `RunAsNode` fuse/attach-only boundary.
 > Windows CRLF template checks are also normalized. The patch additionally
-> carries the post-release F267/F268 OAuth/activation closure, its Issue 167/168
-> hardening, and the public Kimi K2.7 capability refresh. No new Feature ID
-> enters the slot; F266/F270 remain scheduled together for v0.7.72.
+> carries the post-release F267/F268 OAuth/activation closure, Issues 167-170
+> hardening, explicit stopped-server durable-owner migration, concurrent A2A
+> admission, bounded executor/daemon lifecycle, and the public Kimi K2.7 plus
+> Kimi For Coding K3 capability refresh. No new Feature ID enters the slot;
+> F266/F270 remain scheduled together for v0.7.72.
 >
 > **2026-07-12 F225 early cleanup slice**: the Classic readline
 > reverse-video StatusBar was proven write-only (`update()` calls with no

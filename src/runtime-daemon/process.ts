@@ -18,6 +18,7 @@ import {
 import {
   assertRuntimeDaemonOwnerAllowed,
   classifyRuntimeDaemonHealth,
+  readRuntimeDaemonLockOwner,
   resolveRuntimeDaemonEndpointScope,
   resolveRuntimeDaemonPathsFromConfigHome,
   type RuntimeDaemonHealthObservation,
@@ -159,6 +160,7 @@ export async function waitForHealthyDaemonStartup(
       if (remainingMs <= 0) throw runtimeDaemonStartupTimeout(paths);
       await waitForStartupPoll(
         Math.min(Math.max(1, options.pollIntervalMs ?? 100), remainingMs),
+        paths,
         child,
       );
     }
@@ -188,19 +190,38 @@ async function observeStartupHealth(
     })),
     child.exit.then((exit) => ({ kind: 'exit' as const, exit })),
   ]);
-  if (outcome.kind === 'exit') throw runtimeDaemonExitedEarly(outcome.exit);
+  if (outcome.kind === 'exit') {
+    if (hasCompetingStartupOwner(paths, child)) {
+      return observe(paths, options.healthCheck);
+    }
+    throw runtimeDaemonExitedEarly(outcome.exit);
+  }
   return outcome.observation;
 }
 
 async function waitForStartupPoll(
   pollIntervalMs: number,
+  paths: RuntimeDaemonPaths,
   child: RuntimeDaemonStartupProcess,
 ): Promise<void> {
   const outcome = await Promise.race([
     delay(pollIntervalMs).then(() => undefined),
     child.exit,
   ]);
-  if (outcome !== undefined) throw runtimeDaemonExitedEarly(outcome);
+  if (outcome === undefined) return;
+  if (hasCompetingStartupOwner(paths, child)) {
+    await delay(pollIntervalMs);
+    return;
+  }
+  throw runtimeDaemonExitedEarly(outcome);
+}
+
+function hasCompetingStartupOwner(
+  paths: RuntimeDaemonPaths,
+  child: RuntimeDaemonStartupProcess,
+): boolean {
+  const owner = readRuntimeDaemonLockOwner(paths.lockFile);
+  return owner !== undefined && owner.pid !== child.pid;
 }
 
 function runtimeDaemonExitedEarly(exit: RuntimeDaemonStartupExit): Error {

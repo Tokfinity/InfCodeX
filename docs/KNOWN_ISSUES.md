@@ -14,8 +14,8 @@ _Last Updated: 2026-07-17_
 
 | ID | Priority | Status | Title | Introduced | Fixed | Created | Resolved |
 |----|----------|--------|-------|------------|-------|---------|----------|
-| 170 | High | Resolved | A2A realm-key upgrade hid durable tasks and global admission serialized slow preparation | v0.7.71 | v0.7.72 | 2026-07-17 | 2026-07-17 |
-| 169 | High | Resolved | Executor shutdown and daemon auto-start could wait indefinitely or leak startup children | v0.7.67-v0.7.71 | v0.7.72 | 2026-07-17 | 2026-07-17 |
+| 170 | High | Resolved | A2A realm-key upgrade hid durable tasks and global admission serialized slow preparation | v0.7.71 | v0.7.71 | 2026-07-17 | 2026-07-17 |
+| 169 | High | Resolved | Executor shutdown and daemon auto-start could wait indefinitely or leak startup children | v0.7.67-v0.7.71 | v0.7.71 | 2026-07-17 | 2026-07-17 |
 | 168 | High | Resolved | A2A post-closure review found executor shutdown, daemon ownership, and server admission gaps | v0.7.69 | v0.7.71 | 2026-07-16 | 2026-07-16 |
 | 167 | High | Resolved | A2A OAuth and hot-activation closure could leak credentials or mutate stale registrations | v0.7.69 | v0.7.71 | 2026-07-16 | 2026-07-16 |
 | 166 | High | Resolved | Electron daemon bootstrap mode leaks into user child processes | v0.7.71 RC | v0.7.71 | 2026-07-16 | 2026-07-16 |
@@ -86,7 +86,7 @@ _Last Updated: 2026-07-17_
 - **Priority**: High
 - **Status**: Resolved
 - **Introduced**: v0.7.71
-- **Fixed**: v0.7.72
+- **Fixed**: v0.7.71
 - **Created**: 2026-07-17
 - **Resolved**: 2026-07-17
 
@@ -168,7 +168,7 @@ proceeds concurrently up to the configured capacity.
 - **Priority**: High
 - **Status**: Resolved
 - **Introduced**: v0.7.67-v0.7.71
-- **Fixed**: v0.7.72
+- **Fixed**: v0.7.71
 - **Created**: 2026-07-17
 - **Resolved**: 2026-07-17
 
@@ -236,7 +236,10 @@ identity mismatch, and other startup failure terminate the exact spawned child,
 escalate to forced termination if needed, and surface an aggregate cleanup
 error rather than silently orphaning it. The child is unreferenced only after
 its own PID publishes healthy state; if another daemon wins, the spawned child
-is reclaimed before attaching to the winner.
+is reclaimed before attaching to the winner. A candidate that exits after
+observing a different owner PID is treated as having relinquished the race, so
+its SDK caller continues waiting for that owner to become healthy; an exit with
+no competing owner still fails immediately.
 
 Release jobs now run `npm run build` once, execute the Electron smoke directly,
 and package with `--skip-tsc`. CI and release cache the exact Electron 42.5.0 /

@@ -1,3 +1,5 @@
+import { mkdtempSync, rmSync } from 'node:fs';
+import os from 'node:os';
 import path from 'node:path';
 
 import { describe, expect, it, vi } from 'vitest';
@@ -8,7 +10,10 @@ import {
   waitForHealthyDaemonStartup,
   type RuntimeDaemonStartupProcess,
 } from './process.js';
-import { resolveRuntimeDaemonPathsFromConfigHome } from './state.js';
+import {
+  resolveRuntimeDaemonPathsFromConfigHome,
+  tryAcquireRuntimeDaemonLock,
+} from './state.js';
 
 describe('runtime daemon child process environment', () => {
   it('does not retain the Electron bootstrap variable in the daemon environment', () => {
@@ -155,5 +160,45 @@ describe('runtime daemon child startup', () => {
       .resolves.toMatchObject({ state: { pid: 999 } });
     expect(child.terminate).toHaveBeenCalledOnce();
     expect(child.unref).not.toHaveBeenCalled();
+  });
+
+  it('waits for the competing owner when its spawned child exits after losing the race', async () => {
+    const configHome = mkdtempSync(path.join(os.tmpdir(), 'kodax-daemon-startup-race-'));
+    const racePaths = resolveRuntimeDaemonPathsFromConfigHome(configHome, 'race');
+    const winnerPid = 999;
+    const lock = tryAcquireRuntimeDaemonLock(racePaths, {
+      runtimeId: `runtime-${winnerPid}`,
+      pid: winnerPid,
+      createdAt: '2026-07-17T00:00:00.000Z',
+      kind: 'daemon',
+    });
+    expect(lock).toBeDefined();
+    let reportExit: ((exit: { readonly code: number | null; readonly signal: NodeJS.Signals | null }) => void)
+      | undefined;
+    const child: RuntimeDaemonStartupProcess = {
+      pid: 888,
+      exit: new Promise((resolve) => { reportExit = resolve; }),
+      unref: vi.fn(),
+      terminate: vi.fn(async () => undefined),
+    };
+    let healthChecks = 0;
+    const competingHealth = async () => {
+      healthChecks += 1;
+      return healthChecks === 1 ? missingHealth() : healthy(winnerPid)();
+    };
+
+    try {
+      const waiting = waitForHealthyDaemonStartup(racePaths, {
+        startupTimeoutMs: 1_000,
+        pollIntervalMs: 1,
+      }, child, competingHealth);
+      reportExit?.({ code: 1, signal: null });
+
+      await expect(waiting).resolves.toMatchObject({ state: { pid: winnerPid } });
+      expect(child.terminate).toHaveBeenCalledOnce();
+      expect(child.unref).not.toHaveBeenCalled();
+    } finally {
+      rmSync(configHome, { recursive: true, force: true });
+    }
   });
 });

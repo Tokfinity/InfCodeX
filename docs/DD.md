@@ -1,6 +1,6 @@
 # KodaX Detailed Design
 
-> Last updated: 2026-07-16
+> Last updated: 2026-07-17
 >
 > Current release baseline: `@kodax-ai/kodax@0.7.71` release candidate
 >
@@ -206,6 +206,13 @@ Code/HighSpeed and K2.6/K2.5 contract. K2.7 rejects thinking-disable requests;
 K2.6 emits the required wire toggle. Optional live-key tests are gated and do
 not run during the default offline suite.
 
+For `kimi-code`, the stable `kimi-for-coding` default remains available beside
+`k3-256k`, the 1,048,576-token `k3` tier, and
+`kimi-for-coding-highspeed`. Both K3 aliases request upstream `k3`; the
+Anthropic- and OpenAI-compatible serializers carry reasoning through
+`thinking.effort`, default omitted effort to `max`, and preserve explicit
+disable semantics. Public Kimi and Kimi For Coding credentials remain separate.
+
 Custom provider design must remain data-driven: protocol, base URL, API key env
 var, default model, reasoning preset/profile, multimodal support, forced tool
 support, timeout normalization, and session semantics belong in provider
@@ -382,7 +389,11 @@ A2A lives under `src/a2a` and is published through `@kodax-ai/kodax/a2a`:
 The external-Agent plane persists an internal immutable registration snapshot
 for each admitted route. It is not part of the public task DTO and contains no
 resolved credential; it keeps input/cancel/reconcile routing stable across
-registration replacement/removal and Runtime restart.
+registration replacement/removal and Runtime restart. `closeTimeoutMs` is a
+positive finite owner-plane override with a 30-second default shared by admitted
+work and executor disposal. Obsolete executor cleanup happens after the
+serialized persistence/publication lane, while daemon auto-start waits on and
+terminates abandoned child processes.
 
 ## 14. Governed Memory Runtime
 

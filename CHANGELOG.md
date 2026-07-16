@@ -6,6 +6,8 @@ All notable changes to this project will be documented in this file.
 
 ## [Unreleased]
 
+## [0.7.71] - 2026-07-17
+
 ### Added
 
 - **Kimi Code K3 support.** The `kimi-code` subscription provider now exposes
@@ -16,39 +18,9 @@ All notable changes to this project will be documented in this file.
   K3 sends its effort inside `thinking.effort` on both Anthropic- and
   OpenAI-compatible transports, defaults omitted reasoning to `max`, and
   preserves both legacy `reasoning=false` and explicit `effort=none` as disabled
-  thinking. Static
-  capability, reasoning, media, cost-tracking, and opt-in real-wire regressions
-  cover the subscription routes and local context-tier mapping.
-
-### Fixed
-
-- **A2A durable-owner upgrade and admission concurrency.** New inbound tasks
-  persist a non-secret principal-key scheme marker. Pre-realm tasks remain
-  inaccessible during normal serving, but stopped operators can use
-  `kodax a2a migrate-tasks` to dry-run and explicitly apply the configured
-  owner mapping; custom hosts can use the public
-  `migrateA2ALegacyTaskOwners()` SDK with exact mappings. Ambiguous or live-
-  store migration fails closed. Global task capacity now uses a synchronous
-  pending reservation, keeping slow workspace/session/run preparation outside
-  any global lock while preserving exact limits and per-principal ordering.
-- **Bounded External Agent and daemon shutdown/startup.** Executor-plane close
-  now has a 30-second default upper bound (overrideable with `closeTimeoutMs`),
-  obsolete-executor cleanup runs outside the serialized registration mutation
-  lane, and revision tombstones are SHA-256 fingerprints capped at 4,096
-  entries. Current registrations and task snapshots continue to enforce exact
-  revision immutability after older, unreferenced tombstones age out. Daemon
-  auto-start now races health checks against the spawned child's exit, keeps
-  the child referenced until readiness, and terminates it on early exit,
-  timeout, identity mismatch, or when another daemon wins ownership.
-- **Faster packaged-Electron gates.** Release jobs build once and reuse that
-  output for both the Windows Electron smoke and binary packaging. CI and
-  release jobs cache the version-pinned Electron smoke toolchain, whose local
-  directory is now explicitly ignored.
-
-## [0.7.71] - 2026-07-16
-
-### Added
-
+  thinking. Static capability, reasoning, media, cost-tracking, and opt-in
+  real-wire regressions cover the subscription routes and local context-tier
+  mapping.
 - **Standards-based A2A authentication and Agent activation (FEATURE_267/268
   closure).** Outbound A2A entries can use OAuth 2.0 Client Credentials with an
   external Authorization Server, while inbound KodaX Agents can validate RFC
@@ -72,6 +44,30 @@ All notable changes to this project will be documented in this file.
 
 ### Fixed
 
+- **A2A durable-owner upgrade and admission concurrency.** New inbound tasks
+  persist a non-secret principal-key scheme marker. Pre-realm tasks remain
+  inaccessible during normal serving, but stopped operators can use
+  `kodax a2a migrate-tasks` to dry-run and explicitly apply the configured
+  owner mapping; custom hosts can use the public
+  `migrateA2ALegacyTaskOwners()` SDK with exact mappings. Ambiguous or live-
+  store migration fails closed. Global task capacity now uses a synchronous
+  pending reservation, keeping slow workspace/session/run preparation outside
+  any global lock while preserving exact limits and per-principal ordering.
+- **Bounded External Agent and daemon shutdown/startup.** Executor-plane close
+  now has a 30-second default upper bound (overrideable with `closeTimeoutMs`),
+  obsolete-executor cleanup runs outside the serialized registration mutation
+  lane, and revision tombstones are SHA-256 fingerprints capped at 4,096
+  entries. Current registrations and task snapshots continue to enforce exact
+  revision immutability after older, unreferenced tombstones age out. Daemon
+  auto-start now races health checks against the spawned child's exit, keeps
+  the child referenced until readiness, and terminates it on early exit,
+  timeout, identity mismatch, or when another daemon wins ownership. A startup
+  candidate that exits after losing the owner race now lets its SDK caller wait
+  for and attach to the competing owner instead of failing that caller.
+- **Faster packaged-Electron gates.** Release jobs build once and reuse that
+  output for both the Windows Electron smoke and binary packaging. CI and
+  release jobs cache the version-pinned Electron smoke toolchain, whose local
+  directory is now explicitly ignored.
 - **A2A authentication and reconciliation hardening.** Card-level and
   Skill-level security requirements now fail closed unless one complete
   alternative is satisfiable. Card, RPC, and token origins remain separate;

@@ -1,6 +1,6 @@
 # KodaX High-Level Design
 
-> Last updated: 2026-07-16
+> Last updated: 2026-07-17
 >
 > Current release baseline: `@kodax-ai/kodax@0.7.71` release candidate
 >
@@ -156,6 +156,9 @@ answer. Sidecar Verifier is out-of-band and only judges termination quality.
 The 2026-07-16 Kimi snapshot makes `kimi-k2.7-code` the public default, keeps
 HighSpeed/K2.6/K2.5 as explicit routes, and treats thinking support as a
 route-specific wire contract rather than a generic compatible-provider toggle.
+The separate `kimi-code` subscription alias keeps `kimi-for-coding` stable and
+adds `k3-256k` plus a 1,048,576-token `k3` tier. Both K3 choices address the
+upstream `k3` model and use `thinking.effort` for reasoning intent.
 
 Provider-specific logic belongs at the provider boundary: request shape,
 reasoning parameters, token caps, image support, forced tool choice support,
@@ -268,7 +271,11 @@ and synchronous global capacity reservation plus bounded SSE resources prevent
 one client from exhausting the server without serializing slow preparation for
 other principals. Retained pre-realm tasks stay hidden unless a stopped
 operator supplies an exact owner migration. KodaX consumes externally issued
-tokens and never owns production signing or issuance.
+tokens and never owns production signing or issuance. Owner-plane shutdown
+uses one 30-second default deadline across admitted work and executor disposal;
+obsolete cleanup runs after the serialized registration mutation lane. Daemon
+auto-start retains ownership of startup children until readiness and terminates
+abandoned children on timeout or cancellation.
 
 ## 10. Governed Memory Runtime
 

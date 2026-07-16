@@ -2957,9 +2957,13 @@ not equivalent to revoking that credential at its issuer.
 The owner plane has a terminal close contract. Closing it rejects every pending
 `wait()` (including a wait without `timeoutMs`), disposes its executor instances,
 and makes subsequent registration, catalog, preflight, and task calls reject
-with `Agent executor plane is closed.` Repeated `close()` calls are safe. SDK
-hosts should stop accepting work before closing the owner and must not retain a
-plane service as a reusable handle after Runtime shutdown.
+with `Agent executor plane is closed.` One overall deadline covers admitted
+work plus executor disposal: the default is 30 seconds, and direct
+`createAgentExecutorPlane()` hosts may supply a positive finite
+`closeTimeoutMs`. A timeout rejects visibly even though already-admitted cleanup
+may finish in the background. Repeated `close()` calls are safe. SDK hosts
+should stop accepting work before closing the owner and must not retain a plane
+service as a reusable handle after Runtime shutdown.
 
 Restricted Workflow scripts use the same route as direct SDK calls. Both
 `wf.spawnAgent()` and `wf.runAgent()` validate and forward

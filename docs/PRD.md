@@ -1,6 +1,6 @@
 # KodaX Product Requirements
 
-> Last updated: 2026-07-16
+> Last updated: 2026-07-17
 >
 > Current release baseline: `@kodax-ai/kodax@0.7.71` release candidate
 >
@@ -121,7 +121,11 @@ provider capability snapshot is maintained in
 2026-07-16 model refresh for GPT-5.4, Kimi K2.7 Code/HighSpeed/K2.6/K2.5,
 GLM-5.2, MiniMax M3/M2.7, DeepSeek V4, and Doubao Seed 2.0 routes where
 supported. Public Kimi routes use their exact 262,144-token limits and
-route-specific thinking contract.
+route-specific thinking contract. The separate Kimi For Coding subscription
+alias keeps `kimi-for-coding` as its stable default and exposes `k3-256k` plus
+the upstream `k3` route with a 1,048,576-token local context tier;
+`thinking.effort` carries K3 reasoning intent without mixing public and
+subscription credentials.
 
 ### Tools
 
@@ -172,7 +176,9 @@ must remain fail-closed across reload, daemon restart, and shutdown.
 Retained pre-realm task owners require an explicit stopped-server identity
 mapping; normal A2A requests must neither guess nor dual-read legacy ownership.
 Cross-principal capacity reservation must not hold a global lock across
-workspace, session, or Runtime preparation.
+workspace, session, or Runtime preparation. External-Agent owner-plane close
+must use one bounded deadline (30 seconds by default), and daemon auto-start
+must terminate abandoned startup children instead of leaving them detached.
 
 ### Governed Memory
 

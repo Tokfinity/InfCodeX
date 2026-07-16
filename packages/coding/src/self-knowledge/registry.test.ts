@@ -60,6 +60,10 @@ describe('FEATURE_218 manual registry', () => {
     expect(content).toContain('KIMI_API_KEY');
     expect(content).toContain('KIMI_CODE_API_KEY');
     expect(content).toContain('cannot disable thinking');
+    expect(content).toContain('k3-256k');
+    expect(content).toContain('Kimi K3');
+    expect(content).toContain('1,048,576');
+    expect(content).toContain('thinking.effort');
   });
 
   it('documents the governed runtime and SDK memory surfaces', () => {
@@ -118,6 +122,9 @@ describe('FEATURE_218 manual registry', () => {
     expect(a2a.content).toContain('OAuth Resource Server');
     expect(a2a.content).toContain('external Authorization Server');
     expect(a2a.content).toContain('securityRealm');
+    expect(a2a.content).toContain('a2a migrate-tasks');
+    expect(a2a.content).toContain('--confirm-server-stopped');
+    expect(a2a.content).toContain('migrateA2ALegacyTaskOwners()');
     expect(a2a.content).toContain('does not cancel');
     expect(a2a.content).toContain('original Runtime run');
     expect(a2a.content).toContain('stable opaque cursor');
@@ -137,6 +144,8 @@ describe('FEATURE_218 manual registry', () => {
     expect(sdk.content).toContain('RunAsNode fuse');
     expect(sdk.content).toContain('attach-only');
     expect(sdk.content).toContain('homeDir');
+    expect(sdk.content).toContain('closeTimeoutMs');
+    expect(sdk.content).toContain('30-second');
   });
 
   it('documents the KAI-FCL boundary from v0.7.70 without rewriting history', () => {

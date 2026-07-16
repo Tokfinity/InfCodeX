@@ -50,7 +50,7 @@ describe('GitHub release workflow', () => {
 
     expect(steps.find((step) => step.name === 'Build')?.run).toBe('npm run build');
     expect(steps.find((step) => step.name === 'Packaged Electron daemon release gate')?.run)
-      .toBe('node scripts/test-electron-daemon-smoke.mjs');
+      .toBe('npm run test:electron-daemon:built');
     expect(steps.find((step) => step.name?.startsWith('Build binary'))?.run)
       .toContain('--skip-tsc');
   });

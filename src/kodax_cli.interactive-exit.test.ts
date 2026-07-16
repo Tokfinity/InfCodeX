@@ -1,5 +1,5 @@
 import { mkdtemp, rm } from 'node:fs/promises';
-import { homedir, tmpdir } from 'node:os';
+import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
@@ -459,10 +459,10 @@ describe('CLI interactive exit lifecycle', () => {
       expect(harness.createKodaXRuntime).toHaveBeenCalledTimes(1);
       expect(harness.runtimeOptions[0]).toMatchObject({
         mode: 'daemon',
-        homeDir: homedir(),
         profile: 'default',
         autoStartDaemon: true,
       });
+      expect(harness.runtimeOptions[0]).not.toHaveProperty('homeDir');
       const replOptions = harness.runInkInteractiveMode.mock.calls[0]?.[0] as {
         getRuntimeStatus?: () => Promise<unknown>;
       };
