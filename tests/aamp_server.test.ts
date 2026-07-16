@@ -5,7 +5,13 @@ import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
 import type { AampLogger } from '../src/aamp_logger.js';
 import type { AampTaskExecutionResult } from '../src/aamp_runtime.js';
 import type { AgentProcessHandle, AgentProcessSpawner } from '../src/aamp_server.js';
-import type { AampDispatchEnvelope, AampTaskAck, AampTaskResult, AampTransport } from '../src/aamp_types.js';
+import type {
+  AampDispatchEnvelope,
+  AampTaskAck,
+  AampTaskResult,
+  AampTransport,
+  WorkerStreamEventMessage,
+} from '../src/aamp_types.js';
 
 const { runKodaXMock } = vi.hoisted(() => ({
   runKodaXMock: vi.fn(),
@@ -41,10 +47,34 @@ const { FileSessionStorage } = await import('@kodax-ai/repl');
 class MockAampTransport implements AampTransport {
   readonly acks: AampTaskAck[] = [];
   readonly results: AampTaskResult[] = [];
+  readonly streamCreates: Array<{ taskId: string; peerEmail: string }> = [];
+  readonly streamOpened: Array<{
+    to: string;
+    taskId: string;
+    streamId: string;
+    inReplyTo: string;
+  }> = [];
+  readonly streamEvents: Array<{
+    streamId: string;
+    type: string;
+    payload: Record<string, unknown>;
+  }> = [];
+  readonly streamClosures: Array<{
+    streamId: string;
+    payload?: Record<string, unknown>;
+  }> = [];
+  readonly operations: string[] = [];
   private handler: ((dispatch: AampDispatchEnvelope) => Promise<void>) | null = null;
   private cancelHandler: ((targetTaskId: string) => void) | null = null;
   ackError: Error | null = null;
   resultError: Error | null = null;
+  createStreamError: Error | null = null;
+  closeStreamError: Error | null = null;
+  appendStreamFailure: ((event: {
+    streamId: string;
+    type: string;
+    payload: Record<string, unknown>;
+  }) => Error | null) | null = null;
 
   async listen(
     handler: (dispatch: AampDispatchEnvelope) => Promise<void>,
@@ -65,7 +95,48 @@ class MockAampTransport implements AampTransport {
     if (this.resultError) {
       throw this.resultError;
     }
+    this.operations.push('result');
     this.results.push(result);
+  }
+
+  async createStream(opts: { taskId: string; peerEmail: string }): Promise<{ streamId: string }> {
+    this.operations.push('create');
+    if (this.createStreamError) {
+      throw this.createStreamError;
+    }
+    this.streamCreates.push(opts);
+    return { streamId: 'stream-1' };
+  }
+
+  async sendStreamOpened(opts: {
+    to: string;
+    taskId: string;
+    streamId: string;
+    inReplyTo: string;
+  }): Promise<void> {
+    this.operations.push('opened');
+    this.streamOpened.push(opts);
+  }
+
+  async appendStreamEvent(opts: {
+    streamId: string;
+    type: string;
+    payload: Record<string, unknown>;
+  }): Promise<void> {
+    this.operations.push(`append:${opts.type}`);
+    this.streamEvents.push(opts);
+    const failure = this.appendStreamFailure?.(opts);
+    if (failure) {
+      throw failure;
+    }
+  }
+
+  async closeStream(opts: { streamId: string; payload?: Record<string, unknown> }): Promise<void> {
+    this.operations.push('close');
+    this.streamClosures.push(opts);
+    if (this.closeStreamError) {
+      throw this.closeStreamError;
+    }
   }
 
   async dispatch(dispatch: AampDispatchEnvelope): Promise<void> {
@@ -92,6 +163,42 @@ function createResult(overrides: Partial<Awaited<ReturnType<typeof runKodaXMock>
     sessionId: 'session-from-runtime',
     interrupted: false,
     ...overrides,
+  };
+}
+
+const STREAMING_ROLE_MARKER = '你是一名在本地环境中执行开发任务的工程师。';
+
+type TestStreamOptions = Parameters<AgentProcessSpawner>[2];
+
+function createExecutionResult(
+  dispatch: AampDispatchEnvelope,
+  output = 'final answer',
+): AampTaskExecutionResult {
+  return {
+    result: createResult({ lastText: output }),
+    outbound: {
+      taskId: dispatch.taskId,
+      to: dispatch.from,
+      status: 'completed',
+      output,
+      inReplyToMessageId: dispatch.messageId,
+    },
+  };
+}
+
+function createDirectSpawner(
+  execute: (
+    dispatch: AampDispatchEnvelope,
+    streamOptions: TestStreamOptions,
+  ) => Promise<AampTaskExecutionResult>,
+): AgentProcessSpawner {
+  return (dispatch, record, streamOptions) => {
+    void record;
+    return {
+      pid: 24680,
+      kill: vi.fn(),
+      resultPromise: execute(dispatch, streamOptions),
+    };
   };
 }
 
@@ -482,6 +589,201 @@ describe('KodaXAampServer', () => {
     });
   });
 
+
+  it('opens streams only for dispatches carrying the engineering role marker', async () => {
+    const transport = new MockAampTransport();
+    let receivedStreamOptions: TestStreamOptions;
+    const server = new KodaXAampServer({
+      transport,
+      repoRoot: tempDir,
+      logger,
+      taskStore: new FileAampTaskStore(path.join(tempDir, 'tasks.json')),
+      processSpawner: createDirectSpawner(async (dispatch, streamOptions) => {
+        receivedStreamOptions = streamOptions;
+        return createExecutionResult(dispatch);
+      }),
+    });
+
+    await server.start();
+    await transport.dispatch({
+      taskId: 'task-non-streaming',
+      from: 'agent@example.com',
+      bodyText: 'Implement the requested change.',
+      messageId: 'msg-non-streaming',
+    });
+
+    expect(receivedStreamOptions).toBeUndefined();
+    expect(transport.streamCreates).toHaveLength(0);
+    expect(transport.results).toHaveLength(1);
+  });
+
+  it('forwards worker deltas before done/close and keeps the final result separate', async () => {
+    const transport = new MockAampTransport();
+    const clearIntervalSpy = vi.spyOn(globalThis, 'clearInterval');
+    const server = new KodaXAampServer({
+      transport,
+      repoRoot: tempDir,
+      logger,
+      taskStore: new FileAampTaskStore(path.join(tempDir, 'tasks.json')),
+      processSpawner: createDirectSpawner(async (dispatch, streamOptions) => {
+        expect(streamOptions?.streamId).toBe('stream-1');
+        streamOptions?.onStreamEvent({
+          __streamEvent: true,
+          eventType: 'text.delta',
+          payload: { text: 'partial answer' },
+        });
+        return createExecutionResult(dispatch, 'final answer');
+      }),
+    });
+
+    try {
+      await server.start();
+      await transport.dispatch({
+        taskId: 'task-streaming-order',
+        from: 'agent@example.com',
+        bodyText: `${STREAMING_ROLE_MARKER}
+Implement the requested change.`,
+        messageId: 'msg-streaming-order',
+      });
+
+      expect(transport.operations).toEqual([
+        'create',
+        'opened',
+        'append:status',
+        'append:text.delta',
+        'append:done',
+        'close',
+        'result',
+      ]);
+      expect(transport.results[0]?.output).toBe('final answer');
+      expect(transport.results[0]?.output).not.toContain('partial answer');
+      expect(clearIntervalSpy).toHaveBeenCalled();
+    } finally {
+      clearIntervalSpy.mockRestore();
+    }
+  });
+
+  it('continues as a normal task when stream setup fails', async () => {
+    const transport = new MockAampTransport();
+    transport.createStreamError = new Error('stream service unavailable');
+    let receivedStreamOptions: TestStreamOptions;
+    const server = new KodaXAampServer({
+      transport,
+      repoRoot: tempDir,
+      logger,
+      taskStore: new FileAampTaskStore(path.join(tempDir, 'tasks.json')),
+      processSpawner: createDirectSpawner(async (dispatch, streamOptions) => {
+        receivedStreamOptions = streamOptions;
+        return createExecutionResult(dispatch);
+      }),
+    });
+
+    await server.start();
+    await transport.dispatch({
+      taskId: 'task-stream-setup-failed',
+      from: 'agent@example.com',
+      bodyText: `${STREAMING_ROLE_MARKER}
+Implement the requested change.`,
+      messageId: 'msg-stream-setup-failed',
+    });
+
+    expect(receivedStreamOptions).toBeUndefined();
+    expect(transport.results).toHaveLength(1);
+    expect(logger.error).toHaveBeenCalledWith(
+      'stream.setup_failed',
+      'failed to set up stream, proceeding without streaming',
+      expect.objectContaining({ error: 'stream service unavailable' }),
+    );
+  });
+
+  it('suppresses later appends and teardown after the server reports a closed stream', async () => {
+    const transport = new MockAampTransport();
+    transport.appendStreamFailure = (event) => (
+      event.type === 'text.delta' && event.payload.text === 'first'
+        ? new Error('HTTP 409: stream already closed')
+        : null
+    );
+    const server = new KodaXAampServer({
+      transport,
+      repoRoot: tempDir,
+      logger,
+      taskStore: new FileAampTaskStore(path.join(tempDir, 'tasks.json')),
+      processSpawner: createDirectSpawner(async (dispatch, streamOptions) => {
+        const first: WorkerStreamEventMessage = {
+          __streamEvent: true,
+          eventType: 'text.delta',
+          payload: { text: 'first' },
+        };
+        const second: WorkerStreamEventMessage = {
+          __streamEvent: true,
+          eventType: 'text.delta',
+          payload: { text: 'second' },
+        };
+        streamOptions?.onStreamEvent(first);
+        await Promise.resolve();
+        await Promise.resolve();
+        streamOptions?.onStreamEvent(second);
+        await Promise.resolve();
+        return createExecutionResult(dispatch);
+      }),
+    });
+
+    await server.start();
+    await transport.dispatch({
+      taskId: 'task-stream-remotely-closed',
+      from: 'agent@example.com',
+      bodyText: `${STREAMING_ROLE_MARKER}
+Implement the requested change.`,
+      messageId: 'msg-stream-remotely-closed',
+    });
+
+    expect(transport.streamEvents.map((event) => [event.type, event.payload.text])).toEqual([
+      ['status', undefined],
+      ['text.delta', 'first'],
+    ]);
+    expect(transport.streamClosures).toHaveLength(0);
+    expect(logger.info).toHaveBeenCalledWith(
+      'stream.remotely_closed',
+      'stream was closed by server (idle timeout); suppressing further appends',
+      expect.objectContaining({ streamId: 'stream-1' }),
+    );
+  });
+
+  it('logs stream close failures on the task error path without hiding the task result', async () => {
+    const transport = new MockAampTransport();
+    transport.closeStreamError = new Error('close request failed');
+    const server = new KodaXAampServer({
+      transport,
+      repoRoot: tempDir,
+      logger,
+      taskStore: new FileAampTaskStore(path.join(tempDir, 'tasks.json')),
+      processSpawner: createDirectSpawner(async () => {
+        throw new Error('runtime failed');
+      }),
+    });
+
+    await server.start();
+    await transport.dispatch({
+      taskId: 'task-stream-error-close-failed',
+      from: 'agent@example.com',
+      bodyText: `${STREAMING_ROLE_MARKER}
+Implement the requested change.`,
+      messageId: 'msg-stream-error-close-failed',
+    });
+
+    expect(transport.results).toEqual([
+      expect.objectContaining({ status: 'failed', output: 'runtime failed' }),
+    ]);
+    expect(logger.error).toHaveBeenCalledWith(
+      'stream.close_failed',
+      'failed to close stream',
+      expect.objectContaining({
+        taskId: 'task-stream-error-close-failed',
+        streamId: 'stream-1',
+        error: 'close request failed',
+      }),
+    );
+  });
 
   it('skips duplicate completed task dispatches', async () => {
     runKodaXMock.mockResolvedValue(createResult({ lastText: 'done once' }));

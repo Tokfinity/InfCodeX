@@ -609,8 +609,13 @@ export class KodaXAampServer {
             streamId,
             payload: { reason: 'failed', error: message },
           });
-        } catch {
-          // Best-effort; error already logged above.
+        } catch (streamError) {
+          const streamMessage = streamError instanceof Error ? streamError.message : String(streamError);
+          this.logger.error('stream.close_failed', 'failed to close stream', {
+            taskId: dispatch.taskId,
+            streamId,
+            error: streamMessage,
+          });
         }
       }
 
