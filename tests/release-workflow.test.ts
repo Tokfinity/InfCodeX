@@ -68,12 +68,14 @@ describe('GitHub release workflow', () => {
     ]) {
       const cache = steps.find((step) => step.name === 'Cache packaged Electron smoke toolchain');
       const install = steps.find((step) => step.name === 'Install packaged Electron smoke toolchain');
+      const ensureBinary = steps.find((step) => step.name === 'Ensure packaged Electron binary');
       expect(cache).toMatchObject({
         uses: 'actions/cache@v4',
         id: 'electron-smoke-cache',
         with: { path: '.electron-smoke/node_modules' },
       });
       expect(install?.if).toContain("steps.electron-smoke-cache.outputs.cache-hit != 'true'");
+      expect(ensureBinary?.run).toBe('node .electron-smoke/node_modules/electron/install.js');
     }
   });
 });

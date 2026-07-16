@@ -172,6 +172,9 @@ jobs:
         if: steps.electron-smoke-cache.outputs.cache-hit != 'true'
         run: npm install --prefix .electron-smoke --no-save --package-lock=false --no-audit --no-fund electron@42.5.0 electron-builder@25.1.8
 
+      - name: Ensure packaged Electron binary
+        run: node .electron-smoke/node_modules/electron/install.js
+
       - name: Packaged Electron daemon gate
         env:
           KODAX_ELECTRON_DIST: ${{ github.workspace }}\.electron-smoke\node_modules\electron\dist

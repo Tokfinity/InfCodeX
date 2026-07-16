@@ -104,6 +104,10 @@ jobs:
         if: steps.filter.outputs.skip == 'false' && matrix.target == 'win-x64' && steps.electron-smoke-cache.outputs.cache-hit != 'true'
         run: npm install --prefix .electron-smoke --no-save --package-lock=false --no-audit --no-fund electron@42.5.0 electron-builder@25.1.8
 
+      - name: Ensure packaged Electron binary
+        if: steps.filter.outputs.skip == 'false' && matrix.target == 'win-x64'
+        run: node .electron-smoke/node_modules/electron/install.js
+
       - name: Build
         if: steps.filter.outputs.skip == 'false'
         run: npm run build
