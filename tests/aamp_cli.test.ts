@@ -97,14 +97,14 @@ describe('AAMP CLI', () => {
     }
 
     expect(consoleErrorSpy).toHaveBeenCalledWith(
-      expect.stringContaining('[Missing subcommand] `kodax aamp` requires `serve`.'),
+      expect.stringContaining('[Missing subcommand] `infcodex aamp` requires `serve`.'),
     );
     expect(consoleErrorSpy).toHaveBeenCalledWith(
-      expect.stringContaining('Use `kodax aamp serve [options]`.'),
+      expect.stringContaining('Use `infcodex aamp serve [options]`.'),
     );
   });
 
-  it('wires kodax aamp serve into the AAMP transport adapter', async () => {
+  it('wires infcodex aamp serve into the AAMP transport adapter', async () => {
     const argv = process.argv;
     process.argv = [
       'node',

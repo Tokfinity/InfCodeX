@@ -35,4 +35,34 @@ describe('GitHub release workflow', () => {
       expect(packageScript).toContain(required);
     }
   });
+
+  it('publishes InfCodeX-branded archives and executables', () => {
+    const workflowSource = readFileSync(resolve('.github/workflows/release.yml'), 'utf8');
+    const workflow = parse(workflowSource) as ReleaseWorkflow;
+    const packageScript = workflow.jobs?.build?.steps
+      ?.find((step) => step.name === 'Package archive')
+      ?.run;
+    const buildScript = readFileSync(resolve('scripts/build-binary.mjs'), 'utf8');
+    const cliSource = readFileSync(resolve('src/kodax_cli.ts'), 'utf8');
+    const releaseDoc = readFileSync(resolve('docs/release.md'), 'utf8');
+
+    expect(packageScript).toBeTypeOf('string');
+    expect(packageScript).toContain('archive_base="infcodex-v${version}-${target}"');
+    expect(packageScript).toContain('infcodex.exe');
+    expect(packageScript).toContain('tar -czf "$archive_file" infcodex');
+    expect(workflowSource).toContain('name: infcodex-${{ matrix.target }}');
+    expect(workflowSource).toContain(String.raw`run \`./infcodex\` (or \`infcodex.exe\` on Windows)`);
+    expect(buildScript).toContain('const binaryName = `infcodex${spec.ext}`;');
+    expect(buildScript).toContain('InfCodeX binary build');
+    expect(cliSource).toContain(".name('infcodex')");
+    expect(cliSource).toContain('Usage: infcodex [options] [prompt]');
+    expect(cliSource).toContain('compdef _infcodex infcodex');
+    expect(cliSource).toContain('complete -c infcodex');
+    expect(cliSource).toContain('Run InfCodeX as a stdio ACP server');
+    expect(cliSource).toContain('# InfCodeX bash completion');
+    expect(cliSource).toContain('infcodex skill init');
+    expect(cliSource).not.toContain('KodaX runtime daemon');
+    expect(releaseDoc).toContain('xattr -d com.apple.quarantine infcodex');
+    expect(releaseDoc).toContain('reports `infcodex 0.0.0`');
+  });
 });

@@ -1,6 +1,6 @@
 # Release & Binary Distribution
 
-KodaX is distributed as **standalone binaries** built with `bun build --compile`.
+InfCodeX is distributed as **standalone binaries** built with `bun build --compile`.
 Target machines do **not** need Node.js or any runtime installed.
 
 ## Distribution layout
@@ -10,7 +10,7 @@ following side-by-side files. Extract it into a dedicated directory:
 
 ```
 ./
-├── kodax                          # Bun-compiled executable (~60 MB)
+├── infcodex                       # Bun-compiled executable (~60 MB)
 ├── builtin/                       # Built-in skills
 │   ├── code-review/SKILL.md
 │   ├── tdd/SKILL.md
@@ -21,7 +21,7 @@ following side-by-side files. Extract it into a dedicated directory:
 └── constructed-handler-worker.js  # Constructed-tool Worker
 ```
 
-Run `./kodax` (or `kodax.exe`) from any working directory. The binary locates
+Run `./infcodex` (or `infcodex.exe`) from any working directory. The binary locates
 all sidecars relative to `process.execPath`, so the extracted files must be
 moved or archived as one unit.
 
@@ -73,7 +73,7 @@ node scripts/build-binary.mjs --clean
 Output lives under `dist/binary/<target>/`. Smoke-test with:
 
 ```bash
-dist/binary/linux-x64/kodax --version
+dist/binary/linux-x64/infcodex --version
 ```
 
 ## Automated release (CI)
@@ -85,9 +85,9 @@ dist/binary/linux-x64/kodax --version
 
    ```bash
    # 1. Bump version in root package.json (and sync workspaces)
-   # 2. Commit, then:
-   git tag v<version>
-   git push --tags
+   # 2. Commit and merge to main, then:
+   git tag -a v<version> -m "Release v<version>"
+   git push origin v<version>
    ```
 
    Release notes are auto-generated from `git log <prev-tag>..<this-tag>`.
@@ -127,7 +127,7 @@ substituted at compile time as string literals:
 | ---------------------------- | ---------------------- | ------------------------------------------------ |
 | `process.env.NODE_ENV`       | `"production"`         | React strips dev-only profiling code (saves ~100 MB/turn) |
 | `process.env.KODAX_BUNDLED`  | `"true"`               | Switches `getDefaultSkillPaths()` to sidecar mode |
-| `process.env.KODAX_VERSION`  | `<version>`            | Source of truth for `kodax --version` (no fs read) |
+| `process.env.KODAX_VERSION`  | `<version>`            | Source of truth for `infcodex --version` (no fs read) |
 
 These flags only exist in compiled binaries. **npm install / `npm link` /
 `npm run dev` paths are completely unaffected** — they fall through to the
@@ -138,7 +138,7 @@ existing `__dirname`-based resolution.
 **Currently unsigned**, matching common unsigned CLI distribution practice (Bun, Deno,
 ripgrep, fd). Users will see warnings on first run:
 
-- **macOS**: `xattr -d com.apple.quarantine kodax` once after extraction.
+- **macOS**: `xattr -d com.apple.quarantine infcodex` once after extraction.
 - **Windows**: SmartScreen "More info → Run anyway" once.
 - **Linux**: no warning.
 
@@ -158,7 +158,7 @@ did not run, or the agent package's `copy:builtin` step failed. Run
 `npm run build` or `npm run copy:builtin -w @kodax-ai/agent` to verify, then
 retry.
 
-**Binary runs but reports `kodax 0.0.0`** — `KODAX_VERSION` define wasn't
+**Binary runs but reports `infcodex 0.0.0`** — `KODAX_VERSION` define wasn't
 injected. Check `scripts/build-binary.mjs` was used, not raw `bun build`.
 
 **Skill discovery returns empty in compiled binary** — sidecar `builtin/`

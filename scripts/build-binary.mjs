@@ -1,11 +1,11 @@
 #!/usr/bin/env node
 /**
- * KodaX standalone binary build script (Bun --compile).
+ * InfCodeX standalone binary build script (Bun --compile).
  *
  * Produces a sidecar layout under `dist/binary/<target>/`:
  *
  *   dist/binary/linux-x64/
- *     kodax              ← Bun-compiled standalone executable
+ *     infcodex           ← Bun-compiled standalone executable
  *     builtin/           ← built-in skill assets (post-F194 v0.7.43:
  *                          packages/agent/dist/capabilities/skills/builtin/)
  *     provider-capabilities.json
@@ -23,7 +23,7 @@
  * Build-time defines (baked into the binary):
  *   process.env.NODE_ENV     = 'production'   → React strips dev-only code
  *   process.env.KODAX_BUNDLED= 'true'         → enables sidecar path resolution
- *   process.env.KODAX_VERSION= '<x.y.z>'      → kodax --version source of truth
+ *   process.env.KODAX_VERSION= '<x.y.z>'      → infcodex --version source of truth
  *
  * Prerequisites:
  *   - Bun installed and on PATH (`scoop install bun` / `npm i -g bun` /
@@ -74,7 +74,7 @@ function parseCliArgs() {
 }
 
 function printHelpAndExit() {
-  console.log(`KodaX binary build
+  console.log(`InfCodeX binary build
 
 Usage:
   node scripts/build-binary.mjs [options]
@@ -150,7 +150,7 @@ function buildOne(target, version) {
   }
 
   const outDir = join(OUT_ROOT, target);
-  const binaryName = `kodax${spec.ext}`;
+  const binaryName = `infcodex${spec.ext}`;
   const binaryPath = join(outDir, binaryName);
 
   // Reset target dir so each build is hermetic (avoids stale builtin/ across runs).
@@ -246,7 +246,7 @@ async function main() {
   const bunVersion = ensureBunAvailable();
   const version = readVersion();
 
-  console.log(`KodaX binary build`);
+  console.log(`InfCodeX binary build`);
   console.log(`  version : ${version}`);
   console.log(`  bun     : ${bunVersion}`);
   console.log(`  targets : ${targets.join(', ')}`);
@@ -273,7 +273,7 @@ async function main() {
   const hostTarget = (() => { try { return detectCurrentTarget(); } catch { return null; } })();
   if (hostTarget && targets.includes(hostTarget)) {
     const ext = TARGETS[hostTarget].ext;
-    console.log(`    ${join(OUT_ROOT, hostTarget, `kodax${ext}`)} --version`);
+    console.log(`    ${join(OUT_ROOT, hostTarget, `infcodex${ext}`)} --version`);
   }
 }
 

@@ -117,10 +117,10 @@ jobs:
         run: |
           bin_dir="dist/binary/${{ matrix.target }}"
           if [ "${{ matrix.target }}" = "win-x64" ]; then
-            "$bin_dir/kodax.exe" --version
+            "$bin_dir/infcodex.exe" --version
           else
-            chmod +x "$bin_dir/kodax"
-            "$bin_dir/kodax" --version
+            chmod +x "$bin_dir/infcodex"
+            "$bin_dir/infcodex" --version
           fi
 
       - name: Determine version
@@ -145,7 +145,7 @@ jobs:
           set -euo pipefail
           target="${{ matrix.target }}"
           version="${{ steps.version.outputs.version }}"
-          archive_base="kodax-v${version}-${target}"
+          archive_base="infcodex-v${version}-${target}"
 
           cd "dist/binary/${target}"
 
@@ -163,10 +163,10 @@ jobs:
           if [ "${{ matrix.archive }}" = "zip" ]; then
             archive_file="${archive_base}.zip"
             # Windows 10+ ships with bsdtar; powershell Compress-Archive also works.
-            powershell -Command "Compress-Archive -Path kodax.exe,builtin,provider-capabilities.json,semantic-worker.js,runtime-worker.js,constructed-handler-worker.js -DestinationPath '$archive_file' -Force"
+            powershell -Command "Compress-Archive -Path infcodex.exe,builtin,provider-capabilities.json,semantic-worker.js,runtime-worker.js,constructed-handler-worker.js -DestinationPath '$archive_file' -Force"
           else
             archive_file="${archive_base}.tar.gz"
-            tar -czf "$archive_file" kodax "${sidecars[@]}"
+            tar -czf "$archive_file" infcodex "${sidecars[@]}"
           fi
 
           mkdir -p "${GITHUB_WORKSPACE}/dist/release"
@@ -190,7 +190,7 @@ jobs:
         # download-artifact@v7 below.
         uses: actions/upload-artifact@v6
         with:
-          name: kodax-${{ matrix.target }}
+          name: infcodex-${{ matrix.target }}
           path: dist/release/*
           if-no-files-found: error
           retention-days: 14
@@ -252,8 +252,8 @@ jobs:
             echo
             echo "## Downloads"
             echo
-            echo "Each archive contains the \`kodax\` executable, \`builtin/\`, provider metadata, and all required Worker sidecars."
-            echo "Extract anywhere and run \`./kodax\` (or \`kodax.exe\` on Windows). No Node.js required."
+            echo "Each archive contains the \`infcodex\` executable, \`builtin/\`, provider metadata, and all required Worker sidecars."
+            echo "Extract anywhere and run \`./infcodex\` (or \`infcodex.exe\` on Windows). No Node.js required."
             echo
             echo "Verify integrity with the matching \`.sha256\` file or the aggregated \`SHA256SUMS\`."
             echo "EOF"
