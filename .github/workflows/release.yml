@@ -228,26 +228,32 @@ jobs:
           cat SHA256SUMS
 
       - name: Generate release notes from git log
-        id: notes
         shell: bash
         run: |
           tag="${GITHUB_REF#refs/tags/}"
-          # Find previous canonical release tag by date. `--list 'v*'`
-          # restricts to tags matching the release naming convention,
-          # excluding local experiment tags (e.g. 'v0.7.27-DSready') that
-          # would otherwise pollute the changelog range.
-          prev=$(git tag --list 'v[0-9]*' --sort=-creatordate | grep -v "^${tag}$" | head -1 || true)
+          git fetch --force --tags origin
+          # Keep only canonical release tags, excluding experiment tags such as
+          # `v0.7.27-DSready`, then select the most recently created prior tag.
+          prev=$(git tag --list 'v[0-9]*' --sort=-creatordate \
+            | grep -E '^v[0-9]+\.[0-9]+\.[0-9]+$' \
+            | grep -v "^${tag}$" \
+            | head -1 || true)
           if [ -n "$prev" ]; then
             range="${prev}..${tag}"
           else
             range="${tag}"
           fi
 
+          commit_count=$(git rev-list --count "$range" || echo 0)
+          notes_file="dist/release/RELEASE_NOTES.md"
           {
-            echo "body<<EOF"
             echo "## What's changed in ${tag}"
             echo
-            git log --pretty=format:'- %s (%h)' "$range" || true
+            git log --max-count=100 --pretty=format:'- %s (%h)' "$range" || true
+            if [ "$commit_count" -gt 100 ]; then
+              echo
+              echo "- ... and $((commit_count - 100)) more commits"
+            fi
             echo
             echo
             echo "## Downloads"
@@ -256,8 +262,7 @@ jobs:
             echo "Extract anywhere and run \`./infcodex\` (or \`infcodex.exe\` on Windows). No Node.js required."
             echo
             echo "Verify integrity with the matching \`.sha256\` file or the aggregated \`SHA256SUMS\`."
-            echo "EOF"
-          } >> "$GITHUB_OUTPUT"
+          } > "$notes_file"
 
       - name: Create GitHub Release
         uses: softprops/action-gh-release@v3
@@ -267,6 +272,6 @@ jobs:
             dist/release/*.zip
             dist/release/*.sha256
             dist/release/SHA256SUMS
-          body: ${{ steps.notes.outputs.body }}
+          body_path: dist/release/RELEASE_NOTES.md
           draft: false
           prerelease: ${{ contains(github.ref, '-rc') || contains(github.ref, '-beta') || contains(github.ref, '-alpha') }}
